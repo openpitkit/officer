@@ -1,0 +1,64 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://openpit.dev and the OWNERS file for details.
+
+# Binaries and build artifacts
+/pit-officer
+/bin/
+*.exe
+*.test
+*.out
+*.o
+*.a
+
+# Go module cache and coverage output
+coverage.out
+
+# Local databases - never bake runtime state into the image
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Runtime state published by `serve` next to the database.
+officer-runtime.json
+
+# Frontend build dependencies - rebuilt inside the image
+/web/node_modules/
+
+# Frontend build output - rebuilt inside the image by the frontend stage
+/web/dist/
+
+# Git metadata
+.git/
+.gitignore
+
+# Environment files - must not be baked into the image
+.env
+.env.*
+
+# Editor and OS noise
+.DS_Store
+*.swp
+.vscode/
+.idea/
+
+# CI and documentation (not needed in the runtime image)
+.github/
+docs/
+justfile
+Makefile

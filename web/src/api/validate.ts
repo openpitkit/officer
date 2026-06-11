@@ -1,0 +1,242 @@
+// Copyright The Pit Project Owners. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// Please see https://openpit.dev and the OWNERS file for details.
+
+// Client-side mirrors of the backend's domain.Validate* rules. The backend is
+// authoritative; these only catch obvious mistakes before a request goes out
+// and drive the form hints. They must not diverge from the contract.
+
+import type { Limit } from "@/api/types";
+import {
+  ALLOWED_SCOPES,
+  isPolicy,
+  isScope,
+  scopeHasAccount,
+  scopeHasAsset,
+  type Policy,
+  type Scope,
+} from "@/api/vocabulary";
+
+const MAX_ACCOUNT_LEN = 64;
+const MAX_ASSET_LEN = 32;
+const MAX_ORDERS_CAP = 1e9;
+const MAX_WINDOW_HOURS = 24;
+
+/** Validate an account id: non-empty, <= 64 chars, printable, no
+ *  leading/trailing whitespace. Returns an error message or null. */
+export function validateAccountID(id: string): string | null {
+  if (id.length === 0) {
+    return "Account id is required";
+  }
+  if (id.length > MAX_ACCOUNT_LEN) {
+    return `Account id must be at most ${MAX_ACCOUNT_LEN} characters`;
+  }
+  if (id !== id.trim()) {
+    return "Account id must not have leading or trailing whitespace";
+  }
+  // Printable: reject ASCII control characters and DEL.
+  for (const ch of id) {
+    const code = ch.codePointAt(0) ?? 0;
+    if (code < 0x20 || code === 0x7f) {
+      return "Account id must contain only printable characters";
+    }
+  }
+  return null;
+}
+
+/** Validate an asset symbol: non-empty, no whitespace, <= 32 chars. */
+export function validateAsset(asset: string): string | null {
+  if (asset.length === 0) {
+    return "Asset is required for this scope";
+  }
+  if (asset.length > MAX_ASSET_LEN) {
+    return `Asset must be at most ${MAX_ASSET_LEN} characters`;
+  }
+  if (/\s/.test(asset)) {
+    return "Asset must not contain whitespace";
+  }
+  return null;
+}
+
+/** Loose decimal check: optional sign, digits with an optional fraction. */
+function isDecimal(value: string): boolean {
+  return /^[+-]?(\d+\.?\d*|\.\d+)$/.test(value.trim());
+}
+
+function isPositiveDecimal(value: string): boolean {
+  if (!isDecimal(value)) {
+    return false;
+  }
+  return parseFloat(value) > 0;
+}
+
+function isPositiveInteger(value: string): boolean {
+  return /^\d+$/.test(value.trim()) && parseInt(value, 10) > 0;
+}
+
+/** Parse a Go duration string ("1s", "500ms", "2h30m") into seconds, or null
+ *  when it is not a well-formed, strictly-positive duration. */
+export function parseGoDurationSeconds(value: string): number | null {
+  const text = value.trim();
+  if (text.length === 0 || text === "0") {
+    return null;
+  }
+  const unit: Record<string, number> = {
+    ns: 1e-9,
+    us: 1e-6,
+    "µs": 1e-6,
+    ms: 1e-3,
+    s: 1,
+    m: 60,
+    h: 3600,
+  };
+  const re = /(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)/g;
+  let total = 0;
+  let consumed = 0;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(text)) !== null) {
+    consumed += match[0].length;
+    total += parseFloat(match[1]) * unit[match[2]];
+  }
+  if (consumed !== text.length || total <= 0) {
+    return null;
+  }
+  return total;
+}
+
+/** Validate one kind/value pair for a policy. Returns a message or null. */
+export function validateKindValue(
+  _policy: Policy,
+  kind: string,
+  value: string,
+): string | null {
+  switch (kind) {
+    case "max_orders": {
+      if (!isPositiveInteger(value)) {
+        return "max_orders must be an integer greater than 0";
+      }
+      if (parseInt(value, 10) > MAX_ORDERS_CAP) {
+        return "max_orders must be at most 1e9";
+      }
+      return null;
+    }
+    case "window": {
+      const secs = parseGoDurationSeconds(value);
+      if (secs === null) {
+        return "window must be a positive Go duration (e.g. 1s, 500ms)";
+      }
+      if (secs > MAX_WINDOW_HOURS * 3600) {
+        return "window must be at most 24h";
+      }
+      return null;
+    }
+    case "max_quantity":
+    case "max_notional": {
+      if (!isPositiveDecimal(value)) {
+        return `${kind} must be a positive decimal`;
+      }
+      return null;
+    }
+    case "lower_bound":
+    case "upper_bound": {
+      if (!isDecimal(value)) {
+        return `${kind} must be a decimal`;
+      }
+      return null;
+    }
+    default:
+      return `unknown kind ${kind}`;
+  }
+}
+
+/**
+ * Validate a full barrier against the cross-layer vocabulary: policy, scope,
+ * the account/asset axes, and the per-policy kind set. Returns the first error
+ * message, or null when the barrier is well-formed.
+ */
+export function validateLimit(limit: Limit): string | null {
+  if (!isPolicy(limit.policy)) {
+    return `unknown policy ${limit.policy}`;
+  }
+  const policy: Policy = limit.policy;
+
+  if (!isScope(limit.scope)) {
+    return `unknown scope ${limit.scope}`;
+  }
+  const scope: Scope = limit.scope;
+
+  if (!(ALLOWED_SCOPES[policy] as readonly Scope[]).includes(scope)) {
+    return `scope ${scope} is not allowed for ${policy}`;
+  }
+
+  if (scopeHasAccount(scope)) {
+    const err = validateAccountID(limit.account);
+    if (err) {
+      return err;
+    }
+  } else if (limit.account.length > 0) {
+    return `scope ${scope} must not carry an account`;
+  }
+
+  if (scopeHasAsset(scope)) {
+    const err = validateAsset(limit.asset);
+    if (err) {
+      return err;
+    }
+  } else if (limit.asset.length > 0) {
+    return `scope ${scope} must not carry an asset`;
+  }
+
+  const kinds = Object.keys(limit.values).filter(
+    (k) => limit.values[k].trim().length > 0,
+  );
+
+  if (policy === "rate_limit") {
+    if (!kinds.includes("max_orders") || !kinds.includes("window")) {
+      return "rate_limit requires both max_orders and window";
+    }
+  } else if (policy === "order_size_limit") {
+    if (kinds.length === 0) {
+      return "order_size_limit requires max_quantity or max_notional";
+    }
+  } else if (policy === "pnl_bounds_kill_switch") {
+    if (kinds.length === 0) {
+      return "pnl_bounds_kill_switch requires lower_bound or upper_bound";
+    }
+  }
+
+  for (const kind of kinds) {
+    const err = validateKindValue(policy, kind, limit.values[kind]);
+    if (err) {
+      return err;
+    }
+  }
+
+  // pnl: when both bounds are present, lower <= upper.
+  if (
+    policy === "pnl_bounds_kill_switch" &&
+    kinds.includes("lower_bound") &&
+    kinds.includes("upper_bound")
+  ) {
+    const lower = parseFloat(limit.values["lower_bound"]);
+    const upper = parseFloat(limit.values["upper_bound"]);
+    if (Number.isFinite(lower) && Number.isFinite(upper) && lower > upper) {
+      return "lower_bound must be <= upper_bound";
+    }
+  }
+
+  return null;
+}

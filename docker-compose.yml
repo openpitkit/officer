@@ -1,0 +1,94 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://openpit.dev and the OWNERS file for details.
+
+# docker-compose for pit-officer in `serve` mode.
+#
+# CROSS-REPO DYLIB DEPENDENCY
+# ===========================
+# The image must be built before `docker compose up`. The Dockerfile needs the
+# native OpenPit runtime library from the sibling `pit` repository.
+# See the Dockerfile header for full instructions; the quick path is:
+#
+#   # From the workspace root (parent of officer/ and pit/):
+#   docker build \
+#     -f officer/Dockerfile \
+#     --build-arg PIT_REF=main \
+#     -t pit-officer:local \
+#     .
+#
+# Then run:
+#   docker compose up
+
+services:
+  officer:
+    image: pit-officer:local
+    # Uncomment to build directly from source (requires workspace root as
+    # context; see Dockerfile for details):
+    # build:
+    #   context: ..          # workspace root so pit/bindings/go/ is in context
+    #   dockerfile: officer/Dockerfile
+    #   args:
+    #     PIT_REF: main      # git ref of github.com/openpitkit/pit to build
+
+    command: ["serve"]
+
+    ports:
+      # Expose the dashboard + MCP-over-HTTP port.
+      # Bind to 127.0.0.1 on the host so the service is not reachable from
+      # outside the host without an explicit override.
+      - "127.0.0.1:8787:8787"
+
+    environment:
+      # Bind to all container-network interfaces (see Dockerfile note).
+      PIT_OFFICER_HTTP_ADDR: "0.0.0.0:8787"
+      # SQLite database inside the persistent volume.
+      PIT_OFFICER_SQLITE_PATH: "/data/pit-officer.db"
+      # Headless container: never attempt to launch a browser on serve start.
+      PIT_OFFICER_OPEN_BROWSER: "false"
+      # Runtime library location is already set in the image; override here
+      # only if you are injecting a different library via a bind mount.
+      # OPENPIT_RUNTIME_LIBRARY_PATH: /app/lib/libopenpit_ffi.so
+
+    volumes:
+      # Named volume for the SQLite database. The database persists across
+      # container restarts and image upgrades.
+      - officer_data:/data
+
+    restart: unless-stopped
+
+    # Drop all Linux capabilities; the service does not need any.
+    cap_drop:
+      - ALL
+
+    # Read-only root filesystem; /data and /tmp are writable via tmpfs/volume.
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+
+    healthcheck:
+      # Use the binary's own healthcheck subcommand: it probes /healthz and
+      # exits 0 on HTTP 200. wget is not present in debian:bookworm-slim.
+      test: ["CMD", "/app/pit-officer", "healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  # Persistent storage for the Officer SQLite database.
+  officer_data:
+    driver: local

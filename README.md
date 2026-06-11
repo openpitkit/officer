@@ -1,0 +1,170 @@
+# Pit Officer
+
+Pit Officer is an open-source control plane that sits over the
+embeddable [OpenPit](https://openpit.dev) pre-trade risk engine. It exposes the
+engine to operators and to AI agents without putting any risk logic of its own
+in front of the engine: Pit Officer hydrates, observes, and operates the
+engine; the engine alone evaluates orders.
+
+## Surfaces
+
+### REST API
+
+The `serve` mode exposes a REST API under `/api/v1`. Interactive documentation
+is available at `/docs` (Swagger UI) once the service is running. The
+machine-readable OpenAPI 3 spec is at `/api/openapi.yaml`.
+
+All responses use `application/json`; errors return
+`{"error":{"code":"...","message":""}}`.
+
+### MCP tools
+
+The MCP surface is read-only and carries no secrets. Tool names:
+
+| Tool | Parameters | Returns |
+| --- | --- | --- |
+| `health` | - | Liveness state |
+| `get_account_state` | `account` (string) | Account detail and its limits |
+| `get_limits` | `account` (string, optional) | All limits or per-account limits |
+| `get_audit` | `limit` (int, optional, default 50, cap 500) | Audit entries |
+
+JSON shapes are identical to the REST DTOs.
+
+### Dashboard pages
+
+The operator SPA (`serve` mode) provides four pages:
+
+- **Dashboard** - engine status and node health at a glance.
+- **Accounts** - list, create, block, and unblock accounts.
+- **Limits** - browse and edit risk limit barriers across all policies.
+- **Audit** - append-only audit trail of all control-plane actions.
+
+## Run modes
+
+Pit Officer ships as a single binary, `pit-officer`, with four subcommands:
+
+- `pit-officer mcp` - a local stdio [Model Context Protocol (MCP)](https://modelcontextprotocol.io/docs/getting-started/intro)
+  server. Intended to be launched on demand by an MCP client (an editor, an
+  agent runtime) over standard input/output. No network listener is opened.
+- `pit-officer serve` - an always-on service that exposes the same MCP surface
+  over streamable HTTP and serves the operator dashboard (an embedded
+  single-page app under `web/dist`). It binds a free loopback port by default
+  (`127.0.0.1:0`, OS-assigned); binding to a non-loopback address is an
+  explicit, deliberate operator decision.
+- `pit-officer dashboard` - print a running instance's dashboard URL and open
+  it in the browser. It opens no engine or store; it locates the instance via
+  the runtime-state file `serve` writes next to the database, so it must be run
+  with the same configuration (working directory / `PIT_OFFICER_SQLITE_PATH`).
+- `pit-officer healthcheck` - probe a running instance's `/healthz` and exit
+  non-zero if it is not 200. It also reads the runtime-state file, so it too
+  must share the `serve` configuration.
+
+Because `serve` binds a free port by default, the bound port is not known until
+it is listening. `serve` publishes its real address to a runtime-state file
+(`officer-runtime.json`) next to the database; `dashboard` and `healthcheck`
+read that file to find the live URL.
+
+## Configuration
+
+Pit Officer is configured through environment variables (or command-line flags that
+override them). Flags take precedence over the environment; the environment
+takes precedence over built-in defaults.
+
+<!-- markdownlint-disable MD013 -->
+
+| Environment variable | Flag | Default | Description |
+| --- | --- | --- | --- |
+| `PIT_OFFICER_HTTP_ADDR` | `-http-addr` | `127.0.0.1:0` | HTTP listen address used in `serve` mode. The default binds to loopback with an OS-assigned free port; use `pit-officer dashboard` to discover the URL. The container image overrides this to `0.0.0.0:8787` so a fixed, mapped port can be reached. |
+| `PIT_OFFICER_SQLITE_PATH` | `-sqlite-path` | `pit-officer.db` | On-disk path of the SQLite database. The container image sets this to `/data/pit-officer.db` and maps `/data` to a named volume. |
+| `OPENPIT_RUNTIME_LIBRARY_PATH` | `-runtime-library-path` | _(empty)_ | Path to a pre-extracted native OpenPit runtime library. When set the binding skips its own extraction step. The container image pre-sets this to `/app/lib/libopenpit_ffi.so`. |
+
+<!-- markdownlint-enable MD013 -->
+
+### Loopback default vs. container networking
+
+Out of the box, `pit-officer serve` binds to `127.0.0.1:0` - loopback only, with
+an OS-assigned free port. This is deliberate: the service must not be reachable
+from outside the local host without an explicit, operator-visible override, and
+the free port avoids collisions on a developer host. Run `pit-officer dashboard`
+to print the resolved URL and open it.
+
+Inside a container a free port cannot be mapped, so the Dockerfile and
+`docker-compose.yml` both set `PIT_OFFICER_HTTP_ADDR=0.0.0.0:8787` - a fixed port
+bound on all interfaces - and Docker's port-mapping (`-p 127.0.0.1:8787:8787`)
+controls host-side exposure. Production deployments should place a
+TLS-terminating reverse proxy in front rather than exposing the port directly.
+
+## Build
+
+### Prerequisites
+
+The OpenPit Go binding requires cgo and a native OpenPit runtime library at run
+time. Building and running Pit Officer therefore needs:
+
+- cgo enabled (`CGO_ENABLED=1`) and a working C toolchain.
+- The native OpenPit runtime library. The `just` recipes build it from the
+  sibling `pit` checkout and pass its path through `OPENPIT_RUNTIME_LIBRARY_PATH`
+  so the binding skips embedded extraction.
+
+The module pins its dependencies in `go.mod` but does not ship a checked-in
+`go.sum`: run `tidy` once after cloning to generate it. The SPA must be installed
+and built before `go build` so the `//go:embed` directive finds the assets.
+
+With [Just](https://just.systems/):
+
+```bash
+just dylib   # build the native runtime from the sibling pit checkout
+just tidy    # generate go.sum; re-run after editing go.mod
+just build   # build the SPA, then the pit-officer binary
+```
+
+Manual:
+
+```bash
+# Build the native runtime from the sibling pit checkout:
+cargo build -p openpit-ffi --release --locked \
+    --manifest-path ../pit/Cargo.toml
+export OPENPIT_RUNTIME_LIBRARY_PATH="$(pwd)/../pit/target/release/libopenpit_ffi.so"
+# macOS: use libopenpit_ffi.dylib instead.
+
+# Generate go.sum (re-run after editing go.mod):
+CGO_ENABLED=1 go mod tidy
+
+# Install and build the SPA, then build the binary:
+cd web && npm install && npm run build && cd ..
+CGO_ENABLED=1 go build -o pit-officer ./cmd/pit-officer
+```
+
+Once `web/package-lock.json` is committed, replace `npm install` with `npm ci`
+for reproducible, lockfile-pinned installs.
+
+## Run
+
+`serve` binds a free loopback port by default, so the URL is not known ahead of
+time. Start `serve`, then run `dashboard` to print and open it. `dashboard` and
+`healthcheck` locate the running instance through the runtime-state file `serve`
+writes next to the database, so they must use the same configuration (working
+directory / `PIT_OFFICER_SQLITE_PATH`) as the `serve` process.
+
+With [Just](https://just.systems/):
+
+```bash
+just run-mcp     # local stdio MCP server (rebuilds first)
+just run-serve   # always-on dashboard + MCP-over-HTTP (rebuilds first)
+just dashboard   # print and open the running serve URL (no rebuild)
+```
+
+Manual:
+
+```bash
+export OPENPIT_RUNTIME_LIBRARY_PATH="$(pwd)/../pit/target/release/libopenpit_ffi.so"
+
+./pit-officer mcp           # local stdio MCP server
+./pit-officer serve         # always-on dashboard + MCP-over-HTTP
+./pit-officer dashboard     # print and open the running serve URL
+./pit-officer healthcheck   # probe /healthz; exit non-zero if unhealthy
+```
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).

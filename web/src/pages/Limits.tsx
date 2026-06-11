@@ -1,0 +1,436 @@
+// Copyright The Pit Project Owners. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// Please see https://openpit.dev and the OWNERS file for details.
+
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { ExternalLink, Pencil, Plus, Trash2 } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
+
+import { ApiError, deleteLimit } from "@/api/client";
+import type { Limit } from "@/api/types";
+import { useAccounts } from "@/api/useAccounts";
+import { useBalances } from "@/api/useBalances";
+import { useLimits } from "@/api/useLimits";
+import {
+  POLICIES,
+  POLICY_LABELS,
+  SCOPE_LABELS,
+  getPolicyCatalogEntry,
+  isPolicy,
+  isScope,
+  type Policy,
+} from "@/api/vocabulary";
+import { Autocomplete } from "@/components/Autocomplete";
+import { EmptyState, ErrorBanner, ErrorState, TableSkeleton } from "@/components/PageStates";
+import { Page } from "@/components/Page";
+import { RefreshButton } from "@/components/RefreshButton";
+import { ValueChips } from "@/components/ValueChips";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { LimitDialog } from "@/pages/LimitDialog";
+
+const ALL = "__all__";
+
+function errMessage(err: unknown): string {
+  if (err instanceof ApiError) {
+    return err.message;
+  }
+  return err instanceof Error ? err.message : String(err);
+}
+
+function policyLabel(policy: string): string {
+  return isPolicy(policy) ? POLICY_LABELS[policy] : policy;
+}
+
+function scopeLabel(scope: string): string {
+  return isScope(scope) ? SCOPE_LABELS[scope] : scope;
+}
+
+// Policy description strip shown near the filter when a single policy is selected.
+function PolicyDescription({ policy }: { policy: Policy | typeof ALL }) {
+  if (policy === ALL) {
+    return null;
+  }
+  const entry = getPolicyCatalogEntry(policy);
+  if (!entry) {
+    return null;
+  }
+  return (
+    <p className="text-xs text-muted-lt">
+      {entry.description}{" "}
+      <a
+        href={entry.wikiUrl}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-flex items-center gap-0.5 text-accent hover:underline"
+      >
+        Details
+        <ExternalLink className="h-3 w-3" />
+      </a>
+    </p>
+  );
+}
+
+function DeleteConfirm({
+  target,
+  open,
+  onOpenChange,
+  onDone,
+}: {
+  target: Limit | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onDone: () => void;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    if (!target) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await deleteLimit({
+        policy: target.policy,
+        scope: target.scope,
+        account: target.account,
+        asset: target.asset,
+      });
+      onOpenChange(false);
+      onDone();
+    } catch (err) {
+      setError(errMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete policy barrier?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This removes the {policyLabel(target?.policy ?? "")} barrier on{" "}
+            {scopeLabel(target?.scope ?? "")}
+            {target?.account ? ` account ${target.account}` : ""}
+            {target?.asset ? ` asset ${target.asset}` : ""}. The engine is
+            reconfigured immediately.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={(e) => {
+              e.preventDefault();
+              void submit();
+            }}
+            disabled={busy}
+            className="bg-[var(--danger)] hover:opacity-90"
+          >
+            Delete
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+function PoliciesTable({
+  limits,
+  onEdit,
+  onDelete,
+}: {
+  limits: Limit[];
+  onEdit: (limit: Limit) => void;
+  onDelete: (limit: Limit) => void;
+}) {
+  return (
+    <Card>
+      <Table>
+        <TableHeader>
+          <TableRow className="hover:bg-transparent">
+            <TableHead>Policy</TableHead>
+            <TableHead>Scope</TableHead>
+            <TableHead>Account</TableHead>
+            <TableHead>Asset</TableHead>
+            <TableHead>Values</TableHead>
+            <TableHead className="text-right">Actions</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {limits.map((limit) => (
+            <TableRow
+              key={`${limit.policy}|${limit.scope}|${limit.account}|${limit.asset}`}
+              className="hover:bg-transparent"
+            >
+              <TableCell>
+                <Badge variant="accent">{policyLabel(limit.policy)}</Badge>
+              </TableCell>
+              <TableCell className="text-xs text-muted-lt">
+                {scopeLabel(limit.scope)}
+              </TableCell>
+              <TableCell className="nums text-xs">
+                {limit.account || "—"}
+              </TableCell>
+              <TableCell className="nums text-xs">
+                {limit.asset || "—"}
+              </TableCell>
+              <TableCell>
+                <ValueChips values={limit.values} />
+              </TableCell>
+              <TableCell>
+                <div className="flex justify-end gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onEdit(limit)}
+                    aria-label="Edit policy barrier"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                    Edit
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onDelete(limit)}
+                    aria-label="Delete policy barrier"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </Card>
+  );
+}
+
+export function Limits() {
+  const [searchParams] = useSearchParams();
+  const initialAccount = searchParams.get("account") ?? "";
+
+  const [accountFilter, setAccountFilter] = useState(initialAccount);
+  const [policyFilter, setPolicyFilter] = useState<Policy | typeof ALL>(ALL);
+
+  // Sync initial account from URL only on first render.
+  useEffect(() => {
+    if (initialAccount) {
+      setAccountFilter(initialAccount);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Defer the account filter so server-side polling does not refire on every
+  // keystroke; the input stays responsive while the fetch debounces.
+  const deferredAccount = useDeferredValue(accountFilter.trim());
+  const { load, reload } = useLimits(deferredAccount);
+
+  // Account suggestions from the accounts hook.
+  const accountsLoad = useAccounts();
+  const accountSuggestions = useMemo(() => {
+    if (accountsLoad.load.state !== "ready") {
+      return [];
+    }
+    return accountsLoad.load.data.map((a) => a.id);
+  }, [accountsLoad.load]);
+
+  // Asset suggestions: union of assets from limits and balances.
+  const balancesLoad = useBalances();
+  const assetSuggestions = useMemo(() => {
+    const set = new Set<string>();
+    if (load.state === "ready") {
+      for (const l of load.data) {
+        if (l.asset) {
+          set.add(l.asset);
+        }
+      }
+    }
+    if (balancesLoad.load.state === "ready") {
+      for (const b of balancesLoad.load.data) {
+        if (b.asset) {
+          set.add(b.asset);
+        }
+      }
+    }
+    return Array.from(set).sort();
+  }, [load, balancesLoad.load]);
+
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editing, setEditing] = useState<Limit | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Limit | null>(null);
+
+  const visible = useMemo(() => {
+    if (load.state !== "ready") {
+      return [];
+    }
+    if (policyFilter === ALL) {
+      return load.data;
+    }
+    return load.data.filter((l) => l.policy === policyFilter);
+  }, [load, policyFilter]);
+
+  const openAdd = () => {
+    setEditing(null);
+    setDialogOpen(true);
+  };
+
+  const openEdit = (limit: Limit) => {
+    setEditing(limit);
+    setDialogOpen(true);
+  };
+
+  return (
+    <Page
+      title="Policies"
+      actions={
+        <>
+          <RefreshButton onClick={reload} busy={load.state === "loading"} />
+          <Button size="sm" onClick={openAdd}>
+            <Plus className="h-3.5 w-3.5" />
+            Add policy
+          </Button>
+        </>
+      }
+    >
+      <p className="text-xs text-muted-lt">
+        Relational risk-policy barriers persisted in the control plane and
+        applied to the OpenPit engine per policy. Each row is one barrier for a
+        target.
+      </p>
+
+      <Card className="flex flex-wrap items-end gap-4 p-4">
+        <div className="space-y-1.5">
+          <Label htmlFor="filter-account">Filter by account</Label>
+          <Autocomplete
+            id="filter-account"
+            value={accountFilter}
+            spellCheck={false}
+            placeholder="acc-1"
+            className="h-8 w-48 text-xs"
+            suggestions={accountSuggestions}
+            onChange={setAccountFilter}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label>Filter by policy</Label>
+          <Select
+            value={policyFilter}
+            onValueChange={(v) => setPolicyFilter(v as Policy | typeof ALL)}
+          >
+            <SelectTrigger className="h-8 w-52 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL}>All policies</SelectItem>
+              {POLICIES.map((p) => (
+                <SelectItem key={p} value={p}>
+                  {POLICY_LABELS[p]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </Card>
+
+      <PolicyDescription policy={policyFilter} />
+
+      {load.state === "loading" && <TableSkeleton cols={6} />}
+      {load.state === "error" && (
+        <ErrorState message={load.error} onRetry={reload} />
+      )}
+      {load.state === "ready" &&
+        (visible.length === 0 ? (
+          <EmptyState
+            title={
+              load.data.length === 0 ? "No policies yet" : "No matching policies"
+            }
+            hint={
+              load.data.length === 0
+                ? "Add the first barrier to start constraining order flow."
+                : "No barrier matches the current account or policy filter."
+            }
+            action={
+              load.data.length === 0 ? (
+                <Button size="sm" onClick={openAdd}>
+                  <Plus className="h-3.5 w-3.5" />
+                  Add policy
+                </Button>
+              ) : undefined
+            }
+          />
+        ) : (
+          <PoliciesTable
+            limits={visible}
+            onEdit={openEdit}
+            onDelete={setDeleteTarget}
+          />
+        ))}
+
+      <LimitDialog
+        open={dialogOpen}
+        editing={editing}
+        initialAccount={initialAccount}
+        assetSuggestions={assetSuggestions}
+        accountSuggestions={accountSuggestions}
+        onOpenChange={setDialogOpen}
+        onSaved={reload}
+      />
+      <DeleteConfirm
+        target={deleteTarget}
+        open={deleteTarget !== null}
+        onOpenChange={(next) => {
+          if (!next) {
+            setDeleteTarget(null);
+          }
+        }}
+        onDone={reload}
+      />
+    </Page>
+  );
+}

@@ -1,0 +1,66 @@
+# Copyright The Pit Project Owners. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Please see https://openpit.dev and the OWNERS file for details.
+
+# Binaries and build output
+/pit-officer
+/bin/
+*.exe
+*.test
+*.out
+
+# Native runtime library dropped here for Docker Strategy B builds (see
+# justfile docker-build-local recipe and Dockerfile DYLIB_PATH comment).
+/libopenpit_ffi.so
+/libopenpit_ffi.dylib
+
+# Go build/test cache artifacts
+*.o
+*.a
+
+# Go workspace file: opt-in local-dev override that points officer at a local
+# pit binding checkout (created by `just use-local`). Never committed so the
+# default build resolves the released go.openpit.dev/openpit version.
+go.work
+go.work.sum
+
+# Local databases
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Runtime state published by `serve` next to the database.
+officer-runtime.json
+
+# Frontend
+/web/node_modules/
+# The dist bundle is a build artifact, but a committed placeholder index.html
+# (and .gitkeep) must stay tracked so the Go `go:embed web/dist` compiles on a
+# fresh clone before the SPA has been built. Real build output overwrites the
+# placeholder locally and is otherwise ignored.
+/web/dist/*
+!/web/dist/.gitkeep
+!/web/dist/index.html
+
+# Environment overrides
+.env
+.env.*
+
+# Editor and OS noise
+.DS_Store
+*.swp

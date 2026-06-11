@@ -1,0 +1,1632 @@
+openapi: "3.1.0"
+
+info:
+  title: Pit Officer REST API
+  version: "1"
+  description: >
+    Control-plane REST API for the Pit Officer service. The public surface is
+    mounted at `/api/v1`; an identical mirror at `/app/api/v1` is reserved for
+    the operator dashboard. All responses are `application/json`. Errors use the
+    envelope `{"error":{"code":"...","message":"..."}}`. Money and size values
+    are exact decimal strings — never IEEE 754 floats.
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+
+servers:
+  - url: /api/v1
+    description: Public REST API
+
+tags:
+  - name: health
+    description: Liveness and deployment status
+  - name: accounts
+    description: Account lifecycle and admin
+  - name: groups
+    description: Account group lifecycle and admin
+  - name: balances
+    description: Spot-funds balance snapshots
+  - name: adjustments
+    description: Balance adjustments (apply and list)
+  - name: orders
+    description: Order submission and retrieval
+  - name: trades
+    description: Trade records
+  - name: limits
+    description: Risk limit barriers
+  - name: audit
+    description: Append-only audit trail
+  - name: dashboard
+    description: Overview and service information
+
+paths:
+
+  # ---------------------------------------------------------------------------
+  # Health / status
+  # ---------------------------------------------------------------------------
+
+  /health:
+    get:
+      operationId: getHealth
+      summary: JSON liveness probe
+      tags: [health]
+      responses:
+        "200":
+          description: Service is alive.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+
+  /status:
+    get:
+      operationId: getStatus
+      summary: Engine and store health across all nodes
+      tags: [health]
+      responses:
+        "200":
+          description: Status retrieved (even when unhealthy the body is returned with 200).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
+        "503":
+          description: Status unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ---------------------------------------------------------------------------
+  # Accounts
+  # ---------------------------------------------------------------------------
+
+  /accounts:
+    get:
+      operationId: listAccounts
+      summary: List all accounts
+      tags: [accounts]
+      responses:
+        "200":
+          description: Account list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [accounts]
+                properties:
+                  accounts:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Account"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    post:
+      operationId: createAccount
+      summary: Create an account
+      tags: [accounts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id:
+                  type: string
+                  description: Account identifier.
+      responses:
+        "201":
+          description: Account created.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [account]
+                properties:
+                  account:
+                    $ref: "#/components/schemas/Account"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /accounts/{id}:
+    parameters:
+      - $ref: "#/components/parameters/AccountID"
+    get:
+      operationId: getAccount
+      summary: Get account detail and its relational limits
+      tags: [accounts]
+      responses:
+        "200":
+          description: Account and its limits.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [account, limits]
+                properties:
+                  account:
+                    $ref: "#/components/schemas/Account"
+                  limits:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Limit"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /accounts/{id}/block:
+    parameters:
+      - $ref: "#/components/parameters/AccountID"
+    post:
+      operationId: blockAccount
+      summary: Block an account
+      tags: [accounts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                  description: Human-readable reason for the block.
+      responses:
+        "200":
+          description: Account after blocking.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [account]
+                properties:
+                  account:
+                    $ref: "#/components/schemas/Account"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /accounts/{id}/unblock:
+    parameters:
+      - $ref: "#/components/parameters/AccountID"
+    post:
+      operationId: unblockAccount
+      summary: Unblock an account
+      tags: [accounts]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Account after unblocking.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [account]
+                properties:
+                  account:
+                    $ref: "#/components/schemas/Account"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /accounts/{id}/group:
+    parameters:
+      - $ref: "#/components/parameters/AccountID"
+    put:
+      operationId: setAccountGroup
+      summary: Set (or clear) account group membership
+      description: >
+        Assigns the account to a group. Pass an empty string to clear group
+        membership.
+      tags: [accounts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [group]
+              properties:
+                group:
+                  type: string
+                  description: Group identifier. Empty string clears membership.
+      responses:
+        "200":
+          description: Account after update.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [account]
+                properties:
+                  account:
+                    $ref: "#/components/schemas/Account"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /accounts/{id}/notes:
+    parameters:
+      - $ref: "#/components/parameters/AccountID"
+    put:
+      operationId: setAccountNotes
+      summary: Set operator notes on an account
+      tags: [accounts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [notes]
+              properties:
+                notes:
+                  type: string
+      responses:
+        "200":
+          description: Account after update.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [account]
+                properties:
+                  account:
+                    $ref: "#/components/schemas/Account"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /accounts/{id}/adjustments:
+    parameters:
+      - $ref: "#/components/parameters/AccountID"
+    get:
+      operationId: listAccountAdjustments
+      summary: List adjustments for an account
+      tags: [adjustments]
+      parameters:
+        - $ref: "#/components/parameters/SourceFilter"
+        - $ref: "#/components/parameters/LimitParam"
+      responses:
+        "200":
+          description: Adjustment list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [adjustments]
+                properties:
+                  adjustments:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Adjustment"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    post:
+      operationId: applyAdjustment
+      summary: Apply a balance adjustment to an account
+      description: >
+        Runs the adjustment through the engine. A policy reject is a successful
+        call: the rejected record is returned in the body with `status` =
+        `"rejected"`. HTTP errors indicate only system-level failures.
+      tags: [adjustments]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdjustmentRequest"
+      responses:
+        "200":
+          description: Adjustment record (accepted or rejected).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [adjustment]
+                properties:
+                  adjustment:
+                    $ref: "#/components/schemas/Adjustment"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ---------------------------------------------------------------------------
+  # Groups
+  # ---------------------------------------------------------------------------
+
+  /groups:
+    get:
+      operationId: listGroups
+      summary: List all account groups
+      tags: [groups]
+      responses:
+        "200":
+          description: Group list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [groups]
+                properties:
+                  groups:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Group"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    post:
+      operationId: createGroup
+      summary: Create an account group
+      tags: [groups]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id:
+                  type: string
+                  description: Group identifier.
+                notes:
+                  type: string
+      responses:
+        "201":
+          description: Group created.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [group]
+                properties:
+                  group:
+                    $ref: "#/components/schemas/Group"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /groups/{id}:
+    parameters:
+      - $ref: "#/components/parameters/GroupID"
+    get:
+      operationId: getGroup
+      summary: Get group detail and its member accounts
+      tags: [groups]
+      responses:
+        "200":
+          description: Group and its member accounts.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [group, accounts]
+                properties:
+                  group:
+                    $ref: "#/components/schemas/Group"
+                  accounts:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Account"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    delete:
+      operationId: deleteGroup
+      summary: Delete a group
+      tags: [groups]
+      responses:
+        "204":
+          description: Group deleted.
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /groups/{id}/notes:
+    parameters:
+      - $ref: "#/components/parameters/GroupID"
+    put:
+      operationId: setGroupNotes
+      summary: Set operator notes on a group
+      tags: [groups]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [notes]
+              properties:
+                notes:
+                  type: string
+      responses:
+        "200":
+          description: Group after update.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [group]
+                properties:
+                  group:
+                    $ref: "#/components/schemas/Group"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /groups/{id}/block:
+    parameters:
+      - $ref: "#/components/parameters/GroupID"
+    post:
+      operationId: blockGroup
+      summary: Block all accounts in a group
+      tags: [groups]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                  description: Human-readable reason for the block.
+      responses:
+        "200":
+          description: Group after blocking.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [group]
+                properties:
+                  group:
+                    $ref: "#/components/schemas/Group"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /groups/{id}/unblock:
+    parameters:
+      - $ref: "#/components/parameters/GroupID"
+    post:
+      operationId: unblockGroup
+      summary: Unblock all accounts in a group
+      tags: [groups]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Group after unblocking.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [group]
+                properties:
+                  group:
+                    $ref: "#/components/schemas/Group"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ---------------------------------------------------------------------------
+  # Balances
+  # ---------------------------------------------------------------------------
+
+  /balances:
+    get:
+      operationId: listBalances
+      summary: List spot-funds balance snapshots
+      tags: [balances]
+      parameters:
+        - name: account
+          in: query
+          description: Filter by account identifier.
+          schema:
+            type: string
+        - name: asset
+          in: query
+          description: Filter by asset symbol.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Balance list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [balances]
+                properties:
+                  balances:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Balance"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ---------------------------------------------------------------------------
+  # Global adjustments list
+  # ---------------------------------------------------------------------------
+
+  /adjustments:
+    get:
+      operationId: listAdjustments
+      summary: List adjustments across all accounts
+      tags: [adjustments]
+      parameters:
+        - name: account
+          in: query
+          description: Filter by account identifier.
+          schema:
+            type: string
+        - $ref: "#/components/parameters/SourceFilter"
+        - $ref: "#/components/parameters/LimitParam"
+      responses:
+        "200":
+          description: Adjustment list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [adjustments]
+                properties:
+                  adjustments:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Adjustment"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ---------------------------------------------------------------------------
+  # Orders
+  # ---------------------------------------------------------------------------
+
+  /orders:
+    get:
+      operationId: listOrders
+      summary: List orders
+      tags: [orders]
+      parameters:
+        - name: account
+          in: query
+          description: Filter by account identifier.
+          schema:
+            type: string
+        - $ref: "#/components/parameters/SourceFilter"
+        - $ref: "#/components/parameters/LimitParam"
+      responses:
+        "200":
+          description: Order list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [orders]
+                properties:
+                  orders:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Order"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    post:
+      operationId: submitOrder
+      summary: Submit an order through pre-trade risk evaluation
+      description: >
+        Runs the order through the engine pre-trade checks and records the result.
+        An engine reject is a successful call: the returned order carries
+        `status` = `"rejected"`. HTTP errors indicate only system-level failures.
+      tags: [orders]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [account, baseAsset, quoteAsset, side, amountKind, amountValue]
+              properties:
+                account:
+                  type: string
+                baseAsset:
+                  type: string
+                quoteAsset:
+                  type: string
+                side:
+                  type: string
+                  description: "`buy` or `sell`."
+                amountKind:
+                  type: string
+                  description: "Kind of amount — e.g. `base` or `quote`."
+                amountValue:
+                  type: string
+                  description: Exact decimal string.
+                price:
+                  type: string
+                  description: Exact decimal string. Omit for market orders.
+      responses:
+        "200":
+          description: Order record (accepted or rejected by the engine).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [order]
+                properties:
+                  order:
+                    $ref: "#/components/schemas/Order"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /orders/{id}:
+    parameters:
+      - $ref: "#/components/parameters/OrderID"
+    get:
+      operationId: getOrder
+      summary: Get an order with its lifecycle events and trades
+      tags: [orders]
+      responses:
+        "200":
+          description: Order, events, and trades.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [order, events, trades]
+                properties:
+                  order:
+                    $ref: "#/components/schemas/Order"
+                  events:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/OrderEvent"
+                  trades:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Trade"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /orders/{id}/execution-reports:
+    parameters:
+      - $ref: "#/components/parameters/OrderID"
+    post:
+      operationId: applyExecutionReport
+      summary: Apply an execution report (fill) to an order
+      description: >
+        Records a fill against the parent order. The instrument, account, and
+        side are taken from the parent order; only the fill fields are required
+        in the body. Returns account blocks the engine recorded plus per-asset
+        adjustment outcomes.
+      tags: [orders]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [quantity, price, final]
+              properties:
+                quantity:
+                  type: string
+                  description: Fill quantity — exact decimal string.
+                price:
+                  type: string
+                  description: Fill price — exact decimal string.
+                lockPrice:
+                  type: string
+                  description: Lock price used for fund reservation — exact decimal string.
+                final:
+                  type: boolean
+                  description: Whether this is the last fill for the order.
+      responses:
+        "200":
+          description: Execution result.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [result]
+                properties:
+                  result:
+                    $ref: "#/components/schemas/ExecutionResult"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ---------------------------------------------------------------------------
+  # Trades
+  # ---------------------------------------------------------------------------
+
+  /trades:
+    get:
+      operationId: listTrades
+      summary: List trade records
+      tags: [trades]
+      parameters:
+        - name: account
+          in: query
+          description: Filter by account identifier.
+          schema:
+            type: string
+        - $ref: "#/components/parameters/SourceFilter"
+        - $ref: "#/components/parameters/LimitParam"
+      responses:
+        "200":
+          description: Trade list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [trades]
+                properties:
+                  trades:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Trade"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ---------------------------------------------------------------------------
+  # Limits
+  # ---------------------------------------------------------------------------
+
+  /limits:
+    get:
+      operationId: listLimits
+      summary: List risk limit barriers
+      tags: [limits]
+      parameters:
+        - name: account
+          in: query
+          description: Filter by account identifier.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Limit list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [limits]
+                properties:
+                  limits:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Limit"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    put:
+      operationId: putLimit
+      summary: Upsert a risk limit barrier
+      tags: [limits]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Limit"
+      responses:
+        "200":
+          description: Normalized form of the stored limit.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [limit]
+                properties:
+                  limit:
+                    $ref: "#/components/schemas/Limit"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    delete:
+      operationId: deleteLimit
+      summary: Delete a risk limit barrier
+      tags: [limits]
+      parameters:
+        - name: policy
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: scope
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: account
+          in: query
+          schema:
+            type: string
+        - name: asset
+          in: query
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Limit deleted.
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ---------------------------------------------------------------------------
+  # Audit
+  # ---------------------------------------------------------------------------
+
+  /audit:
+    get:
+      operationId: listAudit
+      summary: List audit trail entries
+      description: >
+        Returns audit rows in reverse chronological order. Optional `account`
+        and `source` filters narrow the trail. `source` values: `panel`, `api`,
+        `mcp`, `system`.
+      tags: [audit]
+      parameters:
+        - name: account
+          in: query
+          description: Filter by account identifier.
+          schema:
+            type: string
+        - name: source
+          in: query
+          description: "Filter by originating surface: `panel`, `api`, `mcp`, or `system`."
+          schema:
+            type: string
+            enum: [panel, api, mcp, system]
+        - name: limit
+          in: query
+          description: Maximum rows to return (default 100, capped at 1000).
+          schema:
+            type: integer
+            default: 100
+            maximum: 1000
+      responses:
+        "200":
+          description: Audit entries.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [entries]
+                properties:
+                  entries:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AuditEntry"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ---------------------------------------------------------------------------
+  # Dashboard / service
+  # ---------------------------------------------------------------------------
+
+  /overview:
+    get:
+      operationId: getOverview
+      summary: Dashboard overview — headline counts and recent activity
+      tags: [dashboard]
+      responses:
+        "200":
+          description: Overview.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Overview"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /service:
+    get:
+      operationId: getService
+      summary: Service identity and build information
+      tags: [dashboard]
+      responses:
+        "200":
+          description: Service info.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Service"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+# =============================================================================
+# Components
+# =============================================================================
+
+components:
+
+  # ---------------------------------------------------------------------------
+  # Parameters
+  # ---------------------------------------------------------------------------
+
+  parameters:
+    AccountID:
+      name: id
+      in: path
+      required: true
+      description: URL-encoded account identifier.
+      schema:
+        type: string
+
+    GroupID:
+      name: id
+      in: path
+      required: true
+      description: URL-encoded group identifier.
+      schema:
+        type: string
+
+    OrderID:
+      name: id
+      in: path
+      required: true
+      description: Integer order identifier.
+      schema:
+        type: integer
+        format: int64
+
+    SourceFilter:
+      name: source
+      in: query
+      description: "Filter by originating surface: `panel`, `api`, `mcp`, or `system`."
+      schema:
+        type: string
+        enum: [panel, api, mcp, system]
+
+    LimitParam:
+      name: limit
+      in: query
+      description: Maximum rows to return (default 100, capped at 1000).
+      schema:
+        type: integer
+        default: 100
+        maximum: 1000
+
+  # ---------------------------------------------------------------------------
+  # Responses
+  # ---------------------------------------------------------------------------
+
+  responses:
+    ValidationError:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    NotFoundError:
+      description: Resource not found.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    ConflictError:
+      description: Resource already exists.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    NotImplementedError:
+      description: Engine capability not yet available.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    InternalError:
+      description: Internal server error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  # ---------------------------------------------------------------------------
+  # Schemas
+  # ---------------------------------------------------------------------------
+
+  schemas:
+
+    # Error envelope
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: >
+                Machine-readable code: `validation`, `not_found`, `conflict`,
+                `not_implemented`, or `internal`.
+              example: not_found
+            message:
+              type: string
+              example: account not found
+
+    # Health / status
+
+    Health:
+      type: object
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+
+    Status:
+      type: object
+      required: [healthy, nodes]
+      properties:
+        healthy:
+          type: boolean
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/NodeHealth"
+
+    NodeHealth:
+      type: object
+      required: [engine, store]
+      properties:
+        engine:
+          $ref: "#/components/schemas/EngineHealth"
+        store:
+          $ref: "#/components/schemas/StoreHealth"
+
+    EngineHealth:
+      type: object
+      required: [version, buildProfile, running]
+      properties:
+        version:
+          type: string
+        buildProfile:
+          type: string
+        running:
+          type: boolean
+
+    StoreHealth:
+      type: object
+      required: [path, schemaVersion, reachable]
+      properties:
+        path:
+          type: string
+        schemaVersion:
+          type: integer
+        reachable:
+          type: boolean
+
+    # Account
+
+    Account:
+      type: object
+      required: [id, group, notes, blocked, blockReason]
+      properties:
+        id:
+          type: string
+        group:
+          type: string
+          description: Group identifier, or empty string when not in a group.
+        notes:
+          type: string
+        blocked:
+          type: boolean
+        blockReason:
+          type: string
+          description: Non-empty when `blocked` is true.
+
+    # Group
+
+    Group:
+      type: object
+      required: [id, notes, blocked, blockReason]
+      properties:
+        id:
+          type: string
+        notes:
+          type: string
+        blocked:
+          type: boolean
+        blockReason:
+          type: string
+
+    # Balance
+
+    Balance:
+      type: object
+      required: [account, asset, available, held, incoming, averageEntryPrice, updatedAt]
+      properties:
+        account:
+          type: string
+        asset:
+          type: string
+        available:
+          type: string
+          description: Exact decimal string.
+        held:
+          type: string
+          description: Exact decimal string.
+        incoming:
+          type: string
+          description: Exact decimal string.
+        averageEntryPrice:
+          type: string
+          description: Exact decimal string.
+        updatedAt:
+          type: string
+          format: date-time
+
+    # Adjustment
+
+    AdjustmentAmount:
+      type: object
+      required: [mode, value]
+      properties:
+        mode:
+          type: string
+          description: Adjustment mode (e.g. `set`, `delta`).
+        value:
+          type: string
+          description: Exact decimal string.
+
+    AdjustmentBounds:
+      type: object
+      properties:
+        lower:
+          type: string
+          description: Inclusive lower bound — exact decimal string.
+        upper:
+          type: string
+          description: Inclusive upper bound — exact decimal string.
+
+    AdjustmentRequest:
+      type: object
+      required: [asset]
+      properties:
+        asset:
+          type: string
+        averageEntryPrice:
+          type: string
+          description: Exact decimal string.
+        balance:
+          $ref: "#/components/schemas/AdjustmentAmount"
+        balanceBounds:
+          $ref: "#/components/schemas/AdjustmentBounds"
+        held:
+          $ref: "#/components/schemas/AdjustmentAmount"
+        heldBounds:
+          $ref: "#/components/schemas/AdjustmentBounds"
+        incoming:
+          $ref: "#/components/schemas/AdjustmentAmount"
+        incomingBounds:
+          $ref: "#/components/schemas/AdjustmentBounds"
+
+    AdjustmentAccepted:
+      type: object
+      required: [balanceDelta, balanceResult, heldDelta, heldResult, incomingDelta, incomingResult]
+      properties:
+        balanceDelta:
+          type: string
+          description: Exact decimal string.
+        balanceResult:
+          type: string
+          description: Exact decimal string.
+        heldDelta:
+          type: string
+          description: Exact decimal string.
+        heldResult:
+          type: string
+          description: Exact decimal string.
+        incomingDelta:
+          type: string
+          description: Exact decimal string.
+        incomingResult:
+          type: string
+          description: Exact decimal string.
+
+    AdjustmentRejected:
+      type: object
+      required: [code, reason]
+      properties:
+        code:
+          type: string
+        scope:
+          type: string
+        policy:
+          type: string
+        reason:
+          type: string
+        details:
+          type: string
+
+    AdjustmentOutcome:
+      type: object
+      description: Exactly one of `accepted` or `rejected` is present.
+      properties:
+        accepted:
+          $ref: "#/components/schemas/AdjustmentAccepted"
+        rejected:
+          $ref: "#/components/schemas/AdjustmentRejected"
+
+    Adjustment:
+      type: object
+      required: [id, at, account, source, status, request, outcome]
+      properties:
+        id:
+          type: integer
+          format: int64
+        at:
+          type: string
+          format: date-time
+        account:
+          type: string
+        source:
+          type: string
+          description: "Originating surface: `panel`, `api`, `mcp`, or `system`."
+          enum: [panel, api, mcp, system]
+        status:
+          type: string
+          description: "`accepted` or `rejected`."
+          enum: [accepted, rejected]
+        request:
+          $ref: "#/components/schemas/AdjustmentRequest"
+        outcome:
+          $ref: "#/components/schemas/AdjustmentOutcome"
+
+    # Order
+
+    Order:
+      type: object
+      required: [id, at, account, baseAsset, quoteAsset, side, amountKind, amountValue, price, status, source, lockPrices]
+      properties:
+        id:
+          type: integer
+          format: int64
+        at:
+          type: string
+          format: date-time
+        account:
+          type: string
+        baseAsset:
+          type: string
+        quoteAsset:
+          type: string
+        side:
+          type: string
+        amountKind:
+          type: string
+        amountValue:
+          type: string
+          description: Exact decimal string.
+        price:
+          type: string
+          description: Exact decimal string.
+        status:
+          type: string
+        source:
+          type: string
+          description: "Originating surface: `panel`, `api`, `mcp`, or `system`."
+          enum: [panel, api, mcp, system]
+        lockPrices:
+          type: array
+          items:
+            type: string
+          description: Lock prices used for fund reservation — exact decimal strings.
+
+    # Order event
+
+    OrderEvent:
+      type: object
+      required: [id, orderId, at, type, source]
+      properties:
+        id:
+          type: integer
+          format: int64
+        orderId:
+          type: integer
+          format: int64
+        at:
+          type: string
+          format: date-time
+        type:
+          type: string
+        source:
+          type: string
+          enum: [panel, api, mcp, system]
+        rejectCode:
+          type: string
+        rejectScope:
+          type: string
+        rejectPolicy:
+          type: string
+        rejectReason:
+          type: string
+        rejectDetails:
+          type: string
+        fillQuantity:
+          type: string
+          description: Exact decimal string; present on fill events.
+        fillPrice:
+          type: string
+          description: Exact decimal string; present on fill events.
+        fillLockPrice:
+          type: string
+          description: Exact decimal string; present on fill events.
+
+    # Trade
+
+    Trade:
+      type: object
+      required: [id, orderId, at, account, baseAsset, quoteAsset, side, quantity, price, lockPrice, source]
+      properties:
+        id:
+          type: integer
+          format: int64
+        orderId:
+          type: integer
+          format: int64
+        at:
+          type: string
+          format: date-time
+        account:
+          type: string
+        baseAsset:
+          type: string
+        quoteAsset:
+          type: string
+        side:
+          type: string
+        quantity:
+          type: string
+          description: Exact decimal string.
+        price:
+          type: string
+          description: Exact decimal string.
+        lockPrice:
+          type: string
+          description: Exact decimal string.
+        source:
+          type: string
+          enum: [panel, api, mcp, system]
+
+    # Execution report result
+
+    ExecutionBlock:
+      type: object
+      required: [account, code, reason, details]
+      properties:
+        account:
+          type: string
+        code:
+          type: string
+        reason:
+          type: string
+        details:
+          type: string
+
+    ExecutionResult:
+      type: object
+      required: [blocks, outcomes]
+      properties:
+        blocks:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExecutionBlock"
+          description: Account blocks the engine recorded during this report.
+        outcomes:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdjustmentAccepted"
+          description: Per-asset adjustment outcomes.
+
+    # Limit
+
+    Limit:
+      type: object
+      required: [policy, scope, account, asset, values]
+      properties:
+        policy:
+          type: string
+          description: Risk policy name (e.g. `rate_limit`, `order_size_limit`).
+        scope:
+          type: string
+          description: Policy scope discriminator.
+        account:
+          type: string
+          description: Account this limit applies to, or empty for a global limit.
+        asset:
+          type: string
+          description: Asset this limit applies to, or empty when not asset-scoped.
+        values:
+          type: object
+          additionalProperties:
+            type: string
+          description: Policy-specific key/value pairs with exact decimal strings.
+
+    # Audit
+
+    AuditEntry:
+      type: object
+      required: [id, at, actor, action, account, detail, source]
+      properties:
+        id:
+          type: integer
+          format: int64
+        at:
+          type: string
+          format: date-time
+        actor:
+          type: string
+          description: Principal that performed the action.
+        action:
+          type: string
+        account:
+          type: string
+          description: Account the action applied to, or empty for global actions.
+        detail:
+          type: string
+        source:
+          type: string
+          description: "Originating surface: `panel`, `api`, `mcp`, or `system`."
+          enum: [panel, api, mcp, system]
+
+    # Overview
+
+    Counts:
+      type: object
+      required: [accounts, groups, limits]
+      properties:
+        accounts:
+          type: integer
+        groups:
+          type: integer
+        limits:
+          type: integer
+
+    Activity:
+      type: object
+      required: [at, source, kind, ref, summary]
+      properties:
+        at:
+          type: string
+          format: date-time
+        source:
+          type: string
+          enum: [panel, api, mcp, system]
+        kind:
+          type: string
+        ref:
+          type: string
+        summary:
+          type: string
+
+    Overview:
+      type: object
+      required: [counts, activity]
+      properties:
+        counts:
+          $ref: "#/components/schemas/Counts"
+        activity:
+          type: array
+          items:
+            $ref: "#/components/schemas/Activity"
+
+    # Service
+
+    ServiceDatabase:
+      type: object
+      required: [path, reachable]
+      properties:
+        path:
+          type: string
+        reachable:
+          type: boolean
+
+    Service:
+      type: object
+      required: [name, engineBuildProfile, release, database]
+      properties:
+        name:
+          type: string
+        engineBuildProfile:
+          type: string
+        release:
+          type: boolean
+        database:
+          $ref: "#/components/schemas/ServiceDatabase"
