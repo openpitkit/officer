@@ -94,7 +94,7 @@ type Account struct {
 	// ID is the account identifier, unique within Tenant.
 	ID AccountID
 	// GroupID is the operator-facing group identifier; empty means no group.
-	// This is NOT the engine's group hash — it is the human-readable id
+	// This is NOT the engine's group hash - it is the human-readable id
 	// stored in AccountGroup.ID and resolved to a hash by the node layer.
 	GroupID string
 	// Notes is a free-form reference string. Never forwarded to the engine.
@@ -242,6 +242,17 @@ func ValidateAsset(asset string) error {
 	return validateAsset(asset)
 }
 
+// ValidateMarketDataMark returns an error wrapping ErrInvalid when mark is a
+// non-empty, non-positive, or non-decimal mark price. An empty string is valid
+// and means "no manual price". A mark is a price, so zero and negative values
+// are rejected.
+func ValidateMarketDataMark(mark string) error {
+	if mark == "" {
+		return nil
+	}
+	return validatePositiveDecimal(mark)
+}
+
 // validateAsset returns an error when the asset string is not well-formed:
 // non-empty, no whitespace, at most 32 chars.
 func validateAsset(asset string) error {
@@ -325,9 +336,9 @@ func validateScopeAxes(t LimitTarget) error {
 	return nil
 }
 
-// validateValues enforces the kind+value rules per policy. The scope is threaded
-// through because some kinds are scope-specific (e.g. pnl_bounds initial_pnl is
-// only valid for the account_asset scope).
+// validateValues enforces the kind+value rules per policy. The scope is
+// threaded through because some kinds are scope-specific (e.g. pnl_bounds
+// initial_pnl is only valid for the account_asset scope).
 func validateValues(policy, scope string, vals []LimitValue) error {
 	kindSet := make(map[string]string, len(vals))
 	for _, v := range vals {
@@ -526,7 +537,8 @@ func ValidateAdjustmentRequest(req AdjustmentRequest) error {
 }
 
 // isDecimalString reports whether s is a syntactically valid decimal number:
-// an optional leading '-', one or more digits, and at most one '.'. It never
+// an optional leading '-', at least one digit, and at most one '.', with the
+// dot permitted in any position (e.g. ".5" and "1." are accepted). It never
 // allocates and adds no dependencies; it is used for boundary pre-validation
 // only (the engine performs the authoritative parse).
 func isDecimalString(s string) bool {

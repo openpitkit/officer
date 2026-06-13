@@ -974,22 +974,46 @@ func executionBlocksFrom(
 	return out
 }
 
-// accountBlockFrom maps a single nilable engine account block onto a domain
+// accountBlockFrom maps a dry-run report's would-be account block onto a domain
 // block, stamping it with account (the binding's block record does not name the
-// account). A nil block yields nil. It is the single-block counterpart of
-// executionBlocksFrom, used by the pre-trade dry-run.
+// account). It is the single-block counterpart of executionBlocksFrom, used by
+// the pre-trade dry-run.
+//
+// The new core signals a would-be account block in two ways, and this maps both
+// onto the single WouldBlock field:
+//   - block (report.AccountBlock()) is non-nil when an account-scope reject
+//     would have latched a fresh block during this dry-run (e.g. a kill-switch
+//     policy tripping on the probe); it is preferred.
+//   - when no fresh block would latch but the report carries an account-scope
+//     reject (the probe account is already kill-switched, so the core re-emits
+//     the standing block as an account-scope reject rather than latching a new
+//     one), the would-block is derived from that reject.
+//
+// Returns nil when neither signal is present. This is faithful delegation: it
+// reads only what the core emitted and adds no officer-side validation.
 func accountBlockFrom(
-	block *reject.AccountBlock, account domain.AccountID,
+	block *reject.AccountBlock, rejects []reject.Reject, account domain.AccountID,
 ) *domain.ExecutionAccountBlock {
-	if block == nil {
-		return nil
+	if block != nil {
+		return &domain.ExecutionAccountBlock{
+			Account: account,
+			Code:    rejectCodeName(block.Code),
+			Reason:  sanitizeText(block.Reason),
+			Details: sanitizeText(block.Details),
+		}
 	}
-	return &domain.ExecutionAccountBlock{
-		Account: account,
-		Code:    rejectCodeName(block.Code),
-		Reason:  sanitizeText(block.Reason),
-		Details: sanitizeText(block.Details),
+	for _, r := range rejects {
+		if r.Scope != reject.ScopeAccount {
+			continue
+		}
+		return &domain.ExecutionAccountBlock{
+			Account: account,
+			Code:    rejectCodeName(r.Code),
+			Reason:  sanitizeText(r.Reason),
+			Details: sanitizeText(r.Details),
+		}
 	}
+	return nil
 }
 
 // --- reject code/scope naming -----------------------------------------------
@@ -1009,12 +1033,34 @@ func sanitizeText(s string) string {
 		return ""
 	}
 	valid := strings.ToValidUTF8(s, "")
-	return strings.Map(func(r rune) rune {
+	cleaned := strings.TrimSpace(strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {
 			return -1
 		}
 		return r
-	}, valid)
+	}, valid))
+	if looksLikeShortGarbledText(cleaned) {
+		return ""
+	}
+	return cleaned
+}
+
+func looksLikeShortGarbledText(s string) bool {
+	if s == "" {
+		return false
+	}
+	allDigits := true
+	count := 0
+	for _, r := range s {
+		count++
+		if unicode.IsLetter(r) {
+			return false
+		}
+		if !unicode.IsDigit(r) {
+			allDigits = false
+		}
+	}
+	return count <= 4 && !allDigits
 }
 
 // rejectCodeName maps a binding reject code onto a stable lower-snake string for

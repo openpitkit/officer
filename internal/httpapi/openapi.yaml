@@ -8,7 +8,7 @@ info:
     mounted at `/api/v1`; an identical mirror at `/app/api/v1` is reserved for
     the operator dashboard. All responses are `application/json`. Errors use the
     envelope `{"error":{"code":"...","message":"..."}}`. Money and size values
-    are exact decimal strings — never IEEE 754 floats.
+    are exact decimal strings - never IEEE 754 floats.
   license:
     name: Apache 2.0
     url: https://www.apache.org/licenses/LICENSE-2.0
@@ -707,7 +707,7 @@ paths:
                   description: "`buy` or `sell`."
                 amountKind:
                   type: string
-                  description: "Kind of amount — e.g. `base` or `quote`."
+                  description: "Kind of amount - e.g. `base` or `quote`."
                 amountValue:
                   type: string
                   description: Exact decimal string.
@@ -843,13 +843,13 @@ paths:
               properties:
                 quantity:
                   type: string
-                  description: Fill quantity — exact decimal string.
+                  description: Fill quantity - exact decimal string.
                 price:
                   type: string
-                  description: Fill price — exact decimal string.
+                  description: Fill price - exact decimal string.
                 lockPrice:
                   type: string
-                  description: Lock price used for fund reservation — exact decimal string.
+                  description: Lock price used for fund reservation - exact decimal string.
                 final:
                   type: boolean
                   description: Whether this is the last fill for the order.
@@ -1148,6 +1148,29 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /market-data/restart:
+    post:
+      operationId: restartMarketData
+      summary: Re-apply market-data configuration by restarting the connectors
+      description: >-
+        Stops the running connectors and starts them again from the current
+        store configuration, so config changes take effect without a process
+        restart. Returns the refreshed market-data snapshot.
+      tags: [market-data]
+      responses:
+        "200":
+          description: Connectors restarted; returns the refreshed market-data snapshot.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [marketData]
+                properties:
+                  marketData:
+                    $ref: "#/components/schemas/MarketData"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /market-data/instances:
     post:
       operationId: createMarketDataInstance
@@ -1342,7 +1365,7 @@ paths:
   /overview:
     get:
       operationId: getOverview
-      summary: Dashboard overview — headline counts and recent activity
+      summary: Dashboard overview - headline counts and recent activity
       tags: [dashboard]
       parameters:
         - name: since
@@ -1627,10 +1650,10 @@ components:
       properties:
         lower:
           type: string
-          description: Inclusive lower bound — exact decimal string.
+          description: Inclusive lower bound - exact decimal string.
         upper:
           type: string
-          description: Inclusive upper bound — exact decimal string.
+          description: Inclusive upper bound - exact decimal string.
 
     AdjustmentRequest:
       type: object
@@ -1764,7 +1787,7 @@ components:
           type: array
           items:
             type: string
-          description: Lock prices used for fund reservation — exact decimal strings.
+          description: Lock prices used for fund reservation - exact decimal strings.
 
     # Order event
 
@@ -2069,7 +2092,7 @@ components:
 
     MarketDataInstance:
       type: object
-      required: [id, type, label, credentials, enabled]
+      required: [id, type, label, credentials, state, enabled]
       properties:
         id:
           type: string
@@ -2084,6 +2107,17 @@ components:
         credentials:
           type: string
           description: Raw provider credentials JSON, or empty for providers that need none.
+        state:
+          type: string
+          description: >
+            Current subscription state: `disabled` (instance disabled),
+            `pending` (enabled in the store but not yet applied; restart to
+            apply), `ok` (subscribed), or `error` (subscription failed). Empty
+            when no connector runtime is wired.
+          enum: ["", disabled, pending, ok, error]
+        error:
+          type: string
+          description: Short operator-facing message present only when `state` is `error`.
         enabled:
           type: boolean
         instruments:

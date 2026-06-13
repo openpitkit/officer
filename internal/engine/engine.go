@@ -37,8 +37,8 @@
 // dropping a broker barrier of rate_limit or order_size_limit while other
 // barriers remain - each returns an error wrapping domain.ErrNotImplemented.
 // That error is surfaced to the caller (which reverts the store), never absorbed
-// by rebuilding a fresh handle: such a gap is closed engine-side in the SDK
-// It is not worked around in officer.
+// by rebuilding a fresh handle: such a gap is closed engine-side in the SDK,
+// not worked around in officer.
 package engine
 
 import (

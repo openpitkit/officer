@@ -59,9 +59,9 @@ type Caller struct {
 	Role string
 }
 
-// AccountGroup is the control-plane view of a named account grouping. Membership
-// is expressed via Account.GroupID; an account belongs to at most one group,
-// matching the engine's group-hash semantics.
+// AccountGroup is the control-plane view of a named account grouping.
+// Membership is expressed via Account.GroupID; an account belongs to at most
+// one group, matching the engine's group-hash semantics.
 type AccountGroup struct {
 	// Tenant is the isolation boundary that owns the group.
 	Tenant TenantID
@@ -77,7 +77,7 @@ type AccountGroup struct {
 
 // ValidateGroupID returns ErrInvalid for group IDs that are empty, exceed 64
 // chars, have leading/trailing whitespace, or contain non-printable characters.
-// Mirrors ValidateAccountID — groups and accounts share the same id contract.
+// Mirrors ValidateAccountID - groups and accounts share the same id contract.
 func ValidateGroupID(id string) error {
 	if id == "" {
 		return fmt.Errorf("group id is empty: %w", ErrInvalid)
@@ -135,8 +135,9 @@ type Balance struct {
 
 // --- Market-data config -----------------------------------------------------
 
-// Market-data provider types. Each value is the `type` discriminator stored on a
-// MarketDataInstance and the switch key the connector manager constructs from.
+// Market-data provider types. Each value is the `type` discriminator stored
+// on a MarketDataInstance and the switch key the connector manager constructs
+// from.
 const (
 	// MarketDataProviderBYO is the bring-your-own provider: the customer pushes
 	// their own quotes.
@@ -147,10 +148,10 @@ const (
 	MarketDataProviderMock = "mock"
 )
 
-// MarketDataInstance is one configured market-data source. Multiple instances of
-// the same Type may coexist (e.g. two BYO feeds). Credentials is an opaque JSON
-// blob, unencrypted for now; BYO and mock
-// leave it empty.
+// MarketDataInstance is one configured market-data source. Multiple instances
+// of the same Type may coexist (e.g. two BYO feeds). Credentials is an opaque
+// JSON blob, unencrypted for now (credentials encryption not yet implemented);
+// BYO and mock leave it empty.
 type MarketDataInstance struct {
 	// ID is the operator-facing instance identifier, unique across instances.
 	ID string
@@ -177,6 +178,12 @@ type MarketDataInstrument struct {
 	BaseAsset string
 	// QuoteAsset is the instrument settlement asset (e.g. "USD").
 	QuoteAsset string
+	// ManualPrice is the operator-set mark price as an exact decimal string;
+	// empty when none. It applies only to bring-your-own (manual) instruments:
+	// the operator sets it once and the manager pushes it into the engine as a
+	// single quote at startup and on upsert. Streaming providers ignore it -
+	// their marks come from the source.
+	ManualPrice string
 	// Enabled reports whether this instrument is subscribed at runtime.
 	Enabled bool
 }
@@ -399,14 +406,14 @@ const (
 // OrderEventPayload is the JSON-marshalled variant payload for an order event.
 // Only the fields relevant to the event type are populated.
 type OrderEventPayload struct {
-	// Reject fields — populated for pre_trade_rejected events.
+	// Reject fields - populated for pre_trade_rejected events.
 	RejectCode    string `json:"reject_code,omitempty"`
 	RejectScope   string `json:"reject_scope,omitempty"`
 	RejectPolicy  string `json:"reject_policy,omitempty"`
 	RejectReason  string `json:"reject_reason,omitempty"`
 	RejectDetails string `json:"reject_details,omitempty"`
 
-	// Fill fields — populated for fill events.
+	// Fill fields - populated for fill events.
 	FillQuantity  string `json:"fill_quantity,omitempty"`
 	FillPrice     string `json:"fill_price,omitempty"`
 	FillLockPrice string `json:"fill_lock_price,omitempty"`

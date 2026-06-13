@@ -1,7 +1,8 @@
 {
   "title": "Рыночные данные",
   "instances": {
-    "title": "Источники"
+    "title": "Источники",
+    "restartHint": "Изменения в конфигурации вступают в силу после перезапуска."
   },
   "instance": {
     "id": "ID инстанса",
@@ -12,7 +13,8 @@
   "instrument": {
     "externalSymbol": "Внешний символ",
     "baseAsset": "Base",
-    "quoteAsset": "Quote"
+    "quoteAsset": "Quote",
+    "manualPrice": "Ручная цена"
   },
   "actions": {
     "addInstance": "Добавить источник",
@@ -20,21 +22,51 @@
     "enable": "Включить",
     "disable": "Выключить",
     "deleteInstance": "Удалить источник",
-    "deleteInstrument": "Удалить инструмент"
+    "deleteInstrument": "Удалить инструмент",
+    "restart": "Перезапустить фиды"
   },
   "state": {
     "enabled": "Включён",
     "disabled": "Выключен",
-    "stale": "Отстаёт"
+    "stale": "Отстаёт",
+    "live": "Активен",
+    "notApplied": "Не применено - перезапустите",
+    "error": "Ошибка"
   },
+  "instanceError": "Ошибка: {{message}}",
   "table": {
     "external": "Внешний",
     "instrument": "Инструмент",
+    "manualPrice": "Ручная цена",
     "price": "Цена",
     "asOf": "As-of",
     "state": "Состояние",
     "actions": "Действия"
   },
   "emptyInstances": "Источники рыночных данных не настроены",
-  "emptyInstruments": "Инструменты не настроены"
+  "emptyInstruments": "Инструменты не настроены",
+  "diagnostics": {
+    "title": "Проблемы",
+    "levelError": "ошибка",
+    "levelWarn": "предупреждение",
+    "levelInfo": "инфо",
+    "groupActionNeeded": "Требуется действие",
+    "groupProvider": "Соединение / провайдер",
+    "howToFix": "Как исправить:",
+    "actionRestart": "Перезапустить фиды",
+    "actionDocs": "Документация провайдера",
+    "actionSymbols": "Список символов",
+    "actionRemove": "Удалить инструмент"
+  },
+  "references": {
+    "docs": "Документация провайдера",
+    "symbols": "Список символов"
+  },
+  "verify": {
+    "action": "Проверить символ",
+    "unsupported": "Этот провайдер не умеет проверять символы",
+    "exists": "Символ существует",
+    "notFound": "Символ не найден",
+    "didYouMean": "Возможно, вы имели в виду {{suggestion}}?"
+  }
 }

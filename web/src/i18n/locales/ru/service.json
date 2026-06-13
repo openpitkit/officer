@@ -11,7 +11,20 @@
   "engine": {
     "title": "Движок",
     "version": "Версия",
-    "profile": "Профиль"
+    "profile": "Профиль сборки",
+    "buildPosture": "Тип сборки",
+    "stableRelease": "стабильный релиз",
+    "developmentBuild": "разрабочая сборка",
+    "modifiedSources": "изменённые исходники",
+    "profileParams": {
+      "version": "Версия",
+      "profile": "Профиль",
+      "opt_level": "Уровень оптимизации",
+      "debug_assertions": "Отладочные проверки",
+      "target": "Цель",
+      "target_cpu": "Целевой CPU",
+      "lto": "LTO"
+    }
   },
   "database": {
     "title": "База данных",

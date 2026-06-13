@@ -62,7 +62,7 @@ export function scopeHasAsset(scope: Scope): boolean {
 }
 
 /** The kinds accepted for one policy. rate_limit needs both kinds; the others
- *  need at least one. The per-kind unit/format hint is domain text — read it
+ *  need at least one. The per-kind unit/format hint is domain text - read it
  *  with {@link kindHint}. */
 export interface KindSpec {
   kind: string;

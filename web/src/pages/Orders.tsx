@@ -18,7 +18,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Plus } from "lucide-react";
+import { Copy, Plus } from "lucide-react";
 
 import {
   ApiError,
@@ -199,6 +199,21 @@ function CheckPreview({ state }: { state: CheckState }) {
     );
   }
   const { result } = state;
+  const wouldBlock = result.wouldBlock;
+  let wouldBlockMessage = "";
+  if (wouldBlock) {
+    if (wouldBlock.code === "account_blocked") {
+      wouldBlockMessage = t("check.accountBlocked", { account: wouldBlock.account });
+    } else if (wouldBlock.reason) {
+      wouldBlockMessage = t("check.wouldBlockReason", {
+        account: wouldBlock.account,
+        reason: wouldBlock.reason,
+      });
+    } else {
+      wouldBlockMessage = t("check.wouldBlock", { account: wouldBlock.account });
+    }
+  }
+
   return (
     <div
       className={[
@@ -217,13 +232,21 @@ function CheckPreview({ state }: { state: CheckState }) {
       </div>
       {result.rejects.length > 0 && (
         <ul className="space-y-1">
-          {result.rejects.map((r, i) => (
-            <li key={i} className="flex flex-wrap gap-x-2 gap-y-0.5 text-[var(--danger)]">
-              {r.reason && <span className="font-medium">{r.reason}</span>}
-              {r.details && <span>{r.details}</span>}
-              <span className="text-muted-lt text-[11px]">{r.code}{r.policy ? ` · ${r.policy}` : ""}</span>
-            </li>
-          ))}
+          {result.rejects.map((r, i) => {
+            const localizedReason = t(`check.rejectReasons.${r.code}`, { defaultValue: "" });
+            const reason = localizedReason || r.reason || r.details || r.code;
+            const details =
+              r.details && r.details !== r.reason && r.details !== reason ? r.details : "";
+            return (
+              <li key={i} className="flex flex-wrap gap-x-2 gap-y-0.5 text-[var(--danger)]">
+                <span className="font-medium">{reason}</span>
+                {details && <span>{details}</span>}
+                {r.code && r.code !== reason && (
+                  <span className="text-muted-lt text-[11px]">{r.code}</span>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
       {result.wouldLockPrices.length > 0 && (
@@ -231,14 +254,9 @@ function CheckPreview({ state }: { state: CheckState }) {
           {t("check.lockPrices", { prices: result.wouldLockPrices.join(", ") })}
         </div>
       )}
-      {result.wouldBlock && (
+      {wouldBlock && (
         <div className="text-[var(--danger)]">
-          {result.wouldBlock.reason
-            ? t("check.wouldBlockReason", {
-                account: result.wouldBlock.account,
-                reason: result.wouldBlock.reason,
-              })
-            : t("check.wouldBlock", { account: result.wouldBlock.account })}
+          {wouldBlockMessage}
         </div>
       )}
     </div>
@@ -249,6 +267,17 @@ function CheckPreview({ state }: { state: CheckState }) {
 // Submit Order dialog
 // ---------------------------------------------------------------------------
 
+/** Input fields that can be preseeded when cloning an order. */
+interface OrderInitialValues {
+  account: string;
+  baseAsset: string;
+  quoteAsset: string;
+  side: string;
+  amountKind: string;
+  amountValue: string;
+  price: string;
+}
+
 interface SubmitOrderDialogProps {
   open: boolean;
   onClose: () => void;
@@ -256,6 +285,8 @@ interface SubmitOrderDialogProps {
   onOpenDetail: (id: number) => void;
   accountSuggestions: string[];
   assetSuggestions: string[];
+  /** Pre-seed all input fields (clone path). */
+  initialValues?: OrderInitialValues;
 }
 
 function SubmitOrderDialog({
@@ -265,17 +296,18 @@ function SubmitOrderDialog({
   onOpenDetail,
   accountSuggestions,
   assetSuggestions,
+  initialValues,
 }: SubmitOrderDialogProps) {
   const { t } = useTranslation("orders");
   const { t: tc } = useTranslation();
 
-  const [account, setAccount] = useState("");
-  const [baseAsset, setBaseAsset] = useState("");
-  const [quoteAsset, setQuoteAsset] = useState("");
-  const [side, setSide] = useState<string>("buy");
-  const [amountKind, setAmountKind] = useState<string>("quantity");
-  const [amountValue, setAmountValue] = useState("");
-  const [price, setPrice] = useState("");
+  const [account, setAccount] = useState(initialValues?.account ?? "");
+  const [baseAsset, setBaseAsset] = useState(initialValues?.baseAsset ?? "");
+  const [quoteAsset, setQuoteAsset] = useState(initialValues?.quoteAsset ?? "");
+  const [side, setSide] = useState<string>(initialValues?.side ?? "buy");
+  const [amountKind, setAmountKind] = useState<string>(initialValues?.amountKind ?? "quantity");
+  const [amountValue, setAmountValue] = useState(initialValues?.amountValue ?? "");
+  const [price, setPrice] = useState(initialValues?.price ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [checkState, setCheckState] = useState<CheckState>({ phase: "idle" });
@@ -332,14 +364,43 @@ function SubmitOrderDialog({
     };
   }, [account, baseAsset, quoteAsset, side, amountKind, amountValue, price]);
 
+  // Reseed from initialValues whenever the dialog opens (clone path).
+  useEffect(() => {
+    if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setAccount(initialValues?.account ?? "");
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setBaseAsset(initialValues?.baseAsset ?? "");
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setQuoteAsset(initialValues?.quoteAsset ?? "");
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSide(initialValues?.side ?? "buy");
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setAmountKind(initialValues?.amountKind ?? "quantity");
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setAmountValue(initialValues?.amountValue ?? "");
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setPrice(initialValues?.price ?? "");
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setBusy(false);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setError(null);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setCheckState({ phase: "idle" });
+      checkAbortRef.current?.abort();
+      checkAbortRef.current = null;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
   function reset() {
-    setAccount("");
-    setBaseAsset("");
-    setQuoteAsset("");
-    setSide("buy");
-    setAmountKind("quantity");
-    setAmountValue("");
-    setPrice("");
+    setAccount(initialValues?.account ?? "");
+    setBaseAsset(initialValues?.baseAsset ?? "");
+    setQuoteAsset(initialValues?.quoteAsset ?? "");
+    setSide(initialValues?.side ?? "buy");
+    setAmountKind(initialValues?.amountKind ?? "quantity");
+    setAmountValue(initialValues?.amountValue ?? "");
+    setPrice(initialValues?.price ?? "");
     setBusy(false);
     setError(null);
     setCheckState({ phase: "idle" });
@@ -502,28 +563,58 @@ function SubmitOrderDialog({
 // Execution Report dialog
 // ---------------------------------------------------------------------------
 
+/** Input fields that can be preseeded when cloning an execution report. */
+interface ExecReportInitialValues {
+  quantity: string;
+  price: string;
+  lockPrice: string;
+}
+
 interface ExecReportDialogProps {
   orderId: number | null;
   onClose: () => void;
   onSubmitted: () => void;
+  /** Pre-seed all input fields (clone path). */
+  initialValues?: ExecReportInitialValues;
 }
 
-function ExecReportDialog({ orderId, onClose, onSubmitted }: ExecReportDialogProps) {
+function ExecReportDialog({ orderId, onClose, onSubmitted, initialValues }: ExecReportDialogProps) {
   const { t } = useTranslation("orders");
   const { t: tc } = useTranslation();
 
-  const [quantity, setQuantity] = useState("");
-  const [price, setPrice] = useState("");
-  const [lockPrice, setLockPrice] = useState("");
+  const [quantity, setQuantity] = useState(initialValues?.quantity ?? "");
+  const [price, setPrice] = useState(initialValues?.price ?? "");
+  const [lockPrice, setLockPrice] = useState(initialValues?.lockPrice ?? "");
   const [final, setFinal] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
 
+  // Reseed from initialValues whenever the dialog opens (clone path).
+  useEffect(() => {
+    if (orderId !== null) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setQuantity(initialValues?.quantity ?? "");
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setPrice(initialValues?.price ?? "");
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setLockPrice(initialValues?.lockPrice ?? "");
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setFinal(true);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setBusy(false);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setError(null);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setDone(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderId]);
+
   function reset() {
-    setQuantity("");
-    setPrice("");
-    setLockPrice("");
+    setQuantity(initialValues?.quantity ?? "");
+    setPrice(initialValues?.price ?? "");
+    setLockPrice(initialValues?.lockPrice ?? "");
     setFinal(true);
     setBusy(false);
     setError(null);
@@ -658,6 +749,8 @@ interface OrderDetailDialogProps {
   orderId: number | null;
   onClose: () => void;
   onExecReport: (orderId: number) => void;
+  onCloneOrder: (values: OrderInitialValues) => void;
+  onCloneExecReport: (orderId: number, values: ExecReportInitialValues) => void;
   successBanner?: string;
 }
 
@@ -666,7 +759,7 @@ type DetailState =
   | { phase: "error"; message: string }
   | { phase: "ready"; order: Order; events: OrderEvent[]; trades: Trade[] };
 
-function OrderDetailDialog({ orderId, onClose, onExecReport, successBanner }: OrderDetailDialogProps) {
+function OrderDetailDialog({ orderId, onClose, onExecReport, onCloneOrder, onCloneExecReport, successBanner }: OrderDetailDialogProps) {
   const { t } = useTranslation("orders");
   const { t: tc } = useTranslation();
 
@@ -777,15 +870,11 @@ function OrderDetailDialog({ orderId, onClose, onExecReport, successBanner }: Or
                 <span className="text-muted-lt">{t("detail.dialog.fieldSubmitted")}</span>
                 <div className="nums mt-0.5 text-muted-lt">{formatDateTime(state.order.at)}</div>
               </div>
-              {Object.keys(state.order.lockPrices).length > 0 && (
+              {state.order.lockPrices.length > 0 && (
                 <div className="col-span-3">
                   <span className="text-muted-lt">{t("detail.dialog.fieldLockPrices")}</span>
-                  <div className="mt-0.5 flex flex-wrap gap-2">
-                    {Object.entries(state.order.lockPrices).map(([asset, lp]) => (
-                      <span key={asset} className="nums text-text">
-                        {asset}: {lp}
-                      </span>
-                    ))}
+                  <div className="nums mt-0.5 text-text">
+                    {state.order.lockPrices.join(", ")}
                   </div>
                 </div>
               )}
@@ -879,6 +968,7 @@ function OrderDetailDialog({ orderId, onClose, onExecReport, successBanner }: Or
                         <TableHead>{t("table.lockPrice")}</TableHead>
                         <TableHead>{t("table.source")}</TableHead>
                         <TableHead>{t("table.time")}</TableHead>
+                        <TableHead />
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -898,6 +988,22 @@ function OrderDetailDialog({ orderId, onClose, onExecReport, successBanner }: Or
                           <TableCell className="nums whitespace-nowrap text-xs text-muted-lt">
                             {formatDateTime(trade.at)}
                           </TableCell>
+                          <TableCell>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              aria-label={t("clone.execReportAriaLabel", { tradeId: trade.id })}
+                              onClick={() =>
+                                onCloneExecReport(orderId, {
+                                  quantity: trade.quantity,
+                                  price: trade.price,
+                                  lockPrice: trade.lockPrice,
+                                })
+                              }
+                            >
+                              <Copy className="h-3.5 w-3.5" />
+                            </Button>
+                          </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -914,8 +1020,30 @@ function OrderDetailDialog({ orderId, onClose, onExecReport, successBanner }: Or
               >
                 {t("detail.dialog.trades.submitExecReport")}
               </Button>
+              {state.phase === "ready" && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  aria-label={t("clone.orderAriaLabel", { orderId })}
+                  onClick={() => {
+                    onCloneOrder({
+                      account: state.order.account,
+                      baseAsset: state.order.baseAsset,
+                      quoteAsset: state.order.quoteAsset,
+                      side: state.order.side,
+                      amountKind: state.order.amountKind,
+                      amountValue: state.order.amountValue,
+                      price: state.order.price === "0" ? "" : state.order.price,
+                    });
+                    onClose();
+                  }}
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                  {t("clone.orderButton")}
+                </Button>
+              )}
               <Button size="sm" onClick={onClose}>
-                {tc("actions.cancel")}
+                {tc("actions.close")}
               </Button>
             </DialogFooter>
           </div>
@@ -932,10 +1060,12 @@ function OrderDetailDialog({ orderId, onClose, onExecReport, successBanner }: Or
 interface OrdersTableProps {
   orders: Order[];
   onRowClick: (order: Order) => void;
+  onClone: (values: OrderInitialValues) => void;
 }
 
-function OrdersTable({ orders, onRowClick }: OrdersTableProps) {
+function OrdersTable({ orders, onRowClick, onClone }: OrdersTableProps) {
   const { t } = useTranslation("orders");
+  const { t: tc } = useTranslation();
 
   // Amount label: "100 qty" or "500 vol".
   function amountLabel(kind: string, value: string): string {
@@ -963,9 +1093,11 @@ function OrdersTable({ orders, onRowClick }: OrdersTableProps) {
             <TableHead>{t("table.side")}</TableHead>
             <TableHead>{t("table.amount")}</TableHead>
             <TableHead>{t("table.price")}</TableHead>
+            <TableHead>{t("table.lockPrices")}</TableHead>
             <TableHead>{t("table.status")}</TableHead>
             <TableHead>{t("table.source")}</TableHead>
             <TableHead>{t("table.time")}</TableHead>
+            <TableHead />
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -993,6 +1125,11 @@ function OrdersTable({ orders, onRowClick }: OrdersTableProps) {
               <TableCell className="nums text-xs">
                 {priceLabel(order.price)}
               </TableCell>
+              <TableCell className="nums text-xs text-muted-lt">
+                {order.lockPrices.length > 0
+                  ? order.lockPrices.join(", ")
+                  : tc("value.none")}
+              </TableCell>
               <TableCell>
                 <Badge variant={statusVariant(order.status)}>{order.status}</Badge>
               </TableCell>
@@ -1001,6 +1138,27 @@ function OrdersTable({ orders, onRowClick }: OrdersTableProps) {
               </TableCell>
               <TableCell className="nums whitespace-nowrap text-xs text-muted-lt">
                 {formatDateTime(order.at)}
+              </TableCell>
+              <TableCell>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label={t("clone.orderAriaLabel", { orderId: order.id })}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onClone({
+                      account: order.account,
+                      baseAsset: order.baseAsset,
+                      quoteAsset: order.quoteAsset,
+                      side: order.side,
+                      amountKind: order.amountKind,
+                      amountValue: order.amountValue,
+                      price: order.price === "0" ? "" : order.price,
+                    });
+                  }}
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                </Button>
               </TableCell>
             </TableRow>
           ))}
@@ -1017,9 +1175,10 @@ function OrdersTable({ orders, onRowClick }: OrdersTableProps) {
 interface TradesTableProps {
   trades: Trade[];
   onOrderClick: (orderId: number) => void;
+  onCloneExecReport: (orderId: number, values: ExecReportInitialValues) => void;
 }
 
-function TradesTable({ trades, onOrderClick }: TradesTableProps) {
+function TradesTable({ trades, onOrderClick, onCloneExecReport }: TradesTableProps) {
   const { t } = useTranslation("orders");
   const { t: tc } = useTranslation();
 
@@ -1038,6 +1197,7 @@ function TradesTable({ trades, onOrderClick }: TradesTableProps) {
             <TableHead>{t("table.lockPrice")}</TableHead>
             <TableHead>{t("table.source")}</TableHead>
             <TableHead>{t("table.time")}</TableHead>
+            <TableHead />
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -1074,6 +1234,22 @@ function TradesTable({ trades, onOrderClick }: TradesTableProps) {
               </TableCell>
               <TableCell className="nums whitespace-nowrap text-xs text-muted-lt">
                 {formatDateTime(trade.at)}
+              </TableCell>
+              <TableCell>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label={t("clone.execReportAriaLabel", { tradeId: trade.id })}
+                  onClick={() =>
+                    onCloneExecReport(trade.orderId, {
+                      quantity: trade.quantity,
+                      price: trade.price,
+                      lockPrice: trade.lockPrice,
+                    })
+                  }
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                </Button>
               </TableCell>
             </TableRow>
           ))}
@@ -1230,9 +1406,11 @@ export function Orders() {
 
   // Dialog state
   const [submitOpen, setSubmitOpen] = useState(false);
+  const [submitInitialValues, setSubmitInitialValues] = useState<OrderInitialValues | undefined>(undefined);
   const [detailOrderId, setDetailOrderId] = useState<number | null>(null);
   const [detailSuccessBanner, setDetailSuccessBanner] = useState<string | undefined>(undefined);
   const [execReportOrderId, setExecReportOrderId] = useState<number | null>(null);
+  const [execReportInitialValues, setExecReportInitialValues] = useState<ExecReportInitialValues | undefined>(undefined);
 
   function openDetail(id: number) {
     setDetailSuccessBanner(undefined);
@@ -1252,10 +1430,23 @@ export function Orders() {
   function openExecReport(id: number) {
     setDetailOrderId(null);
     setExecReportOrderId(id);
+    setExecReportInitialValues(undefined);
   }
 
   function closeExecReport() {
     setExecReportOrderId(null);
+    setExecReportInitialValues(undefined);
+  }
+
+  function openCloneOrder(values: OrderInitialValues) {
+    setSubmitInitialValues(values);
+    setSubmitOpen(true);
+  }
+
+  function openCloneExecReport(orderId: number, values: ExecReportInitialValues) {
+    setDetailOrderId(null);
+    setExecReportInitialValues(values);
+    setExecReportOrderId(orderId);
   }
 
   const activeLoad = tab === "orders" ? ordersResult : tradesResult;
@@ -1266,7 +1457,7 @@ export function Orders() {
       title={t("title")}
       actions={
         <div className="flex items-center gap-2">
-          <Button size="sm" onClick={() => setSubmitOpen(true)}>
+          <Button size="sm" onClick={() => { setSubmitInitialValues(undefined); setSubmitOpen(true); }}>
             <Plus className="h-3.5 w-3.5" />
             {t("addOrder.button")}
           </Button>
@@ -1326,7 +1517,7 @@ export function Orders() {
       {/* Orders view */}
       {tab === "orders" && (
         <>
-          {ordersResult.load.state === "loading" && <TableSkeleton cols={9} />}
+          {ordersResult.load.state === "loading" && <TableSkeleton cols={10} />}
           {ordersResult.load.state === "error" && (
             <ErrorState
               message={ordersResult.load.error}
@@ -1339,7 +1530,7 @@ export function Orders() {
                 title={t("empty.orders.title")}
                 hint={t("empty.orders.hint")}
                 action={
-                  <Button size="sm" onClick={() => setSubmitOpen(true)}>
+                  <Button size="sm" onClick={() => { setSubmitInitialValues(undefined); setSubmitOpen(true); }}>
                     <Plus className="h-3.5 w-3.5" />
                     {t("addOrder.button")}
                   </Button>
@@ -1349,6 +1540,7 @@ export function Orders() {
               <OrdersTable
                 orders={ordersResult.load.data}
                 onRowClick={(o) => openDetail(o.id)}
+                onClone={openCloneOrder}
               />
             ))}
         </>
@@ -1374,6 +1566,7 @@ export function Orders() {
               <TradesTable
                 trades={tradesResult.load.data}
                 onOrderClick={openDetail}
+                onCloneExecReport={openCloneExecReport}
               />
             ))}
         </>
@@ -1382,17 +1575,20 @@ export function Orders() {
       {/* Dialogs */}
       <SubmitOrderDialog
         open={submitOpen}
-        onClose={() => setSubmitOpen(false)}
+        onClose={() => { setSubmitOpen(false); setSubmitInitialValues(undefined); }}
         onCreated={ordersResult.reload}
         onOpenDetail={(id) => openDetailWithBanner(id, t("addOrder.added"))}
         accountSuggestions={allAccountSuggestions}
         assetSuggestions={assetSuggestions}
+        initialValues={submitInitialValues}
       />
 
       <OrderDetailDialog
         orderId={detailOrderId}
         onClose={closeDetail}
         onExecReport={openExecReport}
+        onCloneOrder={openCloneOrder}
+        onCloneExecReport={openCloneExecReport}
         successBanner={detailSuccessBanner}
       />
 
@@ -1403,6 +1599,7 @@ export function Orders() {
           ordersResult.reload();
           tradesResult.reload();
         }}
+        initialValues={execReportInitialValues}
       />
     </Page>
   );

@@ -18,9 +18,12 @@
 package mcp
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
+
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // TestDisabledCommandReturnsNonErrorNotice verifies that a command the operator
@@ -114,6 +117,29 @@ func TestCommandEnabledErrorFailsOpen(t *testing.T) {
 	requireNotToolError(t, res.IsError)
 	if got := textContent(res.Content); !strings.Contains(got, "officer healthy") {
 		t.Fatalf("expected handler to run despite access error, got %q", got)
+	}
+}
+
+// TestMutatingCommandEnabledErrorFailsClosed verifies that a transient
+// access-store error blocks a mutating command (fail-closed): the gate must not
+// allow the mutation when it cannot determine whether the command is enabled.
+func TestMutatingCommandEnabledErrorFailsClosed(t *testing.T) {
+	src := &fakeSource{
+		cmdEnabledErr: errors.New("access store down"),
+	}
+	h := setMarketDataInstrumentHandler(src)
+	res, err := h(context.Background(), nil,
+		&sdkmcp.CallToolParamsFor[setMarketDataInstrumentInput]{
+			Arguments: setMarketDataInstrumentInput{
+				InstanceID: "mock-1", ExternalSymbol: "AAPL", Enabled: true,
+			},
+		})
+	if err != nil {
+		t.Fatalf("handler protocol error: %v", err)
+	}
+	requireToolError(t, res.IsError)
+	if len(src.setMDCalls) != 0 {
+		t.Fatalf("mutating command must not execute when gate check fails: %+v", src.setMDCalls)
 	}
 }
 

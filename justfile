@@ -87,6 +87,10 @@ frontend-install:
 frontend-lint:
     cd web && npm run lint
 
+# Run the SPA unit tests (Vitest).
+frontend-test:
+    cd web && npx vitest run
+
 # Build the Docker image (Strategy A: dylib built inside Docker).
 docker-build PIT_REF="main":
     docker build \
@@ -100,8 +104,16 @@ docker-build-local: dylib
     #!/usr/bin/env bash
     set -euo pipefail
     # Docker images are Linux; a macOS dylib cannot run inside the container.
+    # On macOS, cross-compile for Linux first:
+    #   cargo build -p openpit-ffi --release --locked \
+    #       --target x86_64-unknown-linux-gnu \
+    #       --manifest-path ../pit/Cargo.toml
+    # then set OPENPIT_RUNTIME_LIBRARY_PATH to the .so and re-run.
     case "$(uname -s)" in
-      Darwin) lib="{{ pit_dir }}/target/release/libopenpit_ffi.dylib" ;;
+      Darwin)
+        echo "error: macOS dylib cannot run in a Linux container." >&2
+        echo "Cross-compile for Linux first; see comment above." >&2
+        exit 1 ;;
       Linux)  lib="{{ pit_dir }}/target/release/libopenpit_ffi.so" ;;
       *) echo "unsupported OS" >&2; exit 1 ;;
     esac

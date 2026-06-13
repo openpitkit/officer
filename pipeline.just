@@ -23,5 +23,5 @@ import 'justfile'
 # Go build, vet, and test (cgo against the downloaded dylib).
 ci-go: tidy build-go vet test
 
-# Frontend SPA build.
-ci-frontend: frontend-build
+# Frontend SPA lint, build, and unit tests.
+ci-frontend: frontend-lint frontend-build frontend-test

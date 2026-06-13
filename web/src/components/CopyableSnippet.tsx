@@ -62,42 +62,31 @@ export function CopyableSnippet({
     setTimeout(() => setCopied(false), 1500);
   }
 
+  const copyBtn = (
+    <Button
+      variant="outline"
+      size="sm"
+      onClick={handleCopy}
+      aria-label={t("actions.copy")}
+    >
+      {copied ? (
+        <Check className="h-3.5 w-3.5 text-accent" />
+      ) : (
+        <Copy className="h-3.5 w-3.5" />
+      )}
+      {copied ? t("actions.copied") : t("actions.copy")}
+    </Button>
+  );
+
   return (
     <div className={cn("space-y-1.5", className)}>
-      {label && (
+      {label ? (
         <div className="flex items-center justify-between gap-3">
           <p className="text-xs text-muted">{label}</p>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleCopy}
-            aria-label={t("actions.copy")}
-          >
-            {copied ? (
-              <Check className="h-3.5 w-3.5 text-accent" />
-            ) : (
-              <Copy className="h-3.5 w-3.5" />
-            )}
-            {copied ? t("actions.copied") : t("actions.copy")}
-          </Button>
+          {copyBtn}
         </div>
-      )}
-      {!label && (
-        <div className="flex justify-end">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleCopy}
-            aria-label={t("actions.copy")}
-          >
-            {copied ? (
-              <Check className="h-3.5 w-3.5 text-accent" />
-            ) : (
-              <Copy className="h-3.5 w-3.5" />
-            )}
-            {copied ? t("actions.copied") : t("actions.copy")}
-          </Button>
-        </div>
+      ) : (
+        <div className="flex justify-end">{copyBtn}</div>
       )}
       <textarea
         ref={taRef}

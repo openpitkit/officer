@@ -4,6 +4,7 @@
     "not_found": "The requested resource was not found.",
     "conflict": "The request conflicts with the current state.",
     "precondition": "A precondition for the request was not met.",
+    "not_implemented": "The requested operation is not implemented.",
     "internal": "The service encountered an internal error.",
     "network": "Could not reach the service."
   },

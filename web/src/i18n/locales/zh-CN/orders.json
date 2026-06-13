@@ -22,12 +22,14 @@
     "side": "方向",
     "amount": "数量",
     "price": "价格",
+    "lockPrices": "锁定价格",
     "status": "状态",
     "source": "来源",
     "time": "时间",
     "order": "订单",
     "qty": "数量",
-    "lockPrice": "锁定价格"
+    "lockPrice": "锁定价格",
+    "lockPrices": "锁定价格"
   },
 
   "amount": {
@@ -89,7 +91,11 @@
     "wouldReject": "预览：将被拒绝",
     "lockPrices": "锁定价格：{{prices}}",
     "wouldBlock": "将封锁账户 {{account}}",
-    "wouldBlockReason": "将封锁账户 {{account}} - {{reason}}"
+    "wouldBlockReason": "将封锁账户 {{account}} - {{reason}}",
+    "accountBlocked": "账户 {{account}} 已被封锁",
+    "rejectReasons": {
+      "account_blocked": "账户已被封锁"
+    }
   },
 
   "execReport": {
@@ -109,6 +115,12 @@
       "done": "完成",
       "validationError": "数量和价格为必填项。"
     }
+  },
+
+  "clone": {
+    "orderButton": "克隆",
+    "orderAriaLabel": "克隆订单 #{{orderId}}",
+    "execReportAriaLabel": "克隆成交 #{{tradeId}} 的执行报告"
   },
 
   "detail": {

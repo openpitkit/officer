@@ -39,7 +39,7 @@ const MAX_WINDOW_HOURS = 24;
  * A localizable validation failure. `key` names a key in the `validation`
  * namespace; `values` carries the i18next interpolation values. Callers render
  * it with `t(err.key, err.values)`. Returning a key instead of an English
- * string keeps these client-side mirrors language-agnostic — the rules and
+ * string keeps these client-side mirrors language-agnostic - the rules and
  * thresholds stay here, the wording lives in the catalog.
  */
 export type FieldError = { key: string; values?: Record<string, string | number> };
@@ -85,15 +85,78 @@ function isDecimal(value: string): boolean {
   return /^[+-]?(\d+\.?\d*|\.\d+)$/.test(value.trim());
 }
 
+/** True when a validated decimal string has at least one non-zero digit. The
+ *  sign and decimal point carry no magnitude, so a value is zero iff every
+ *  digit is "0". Works on the string directly to avoid float rounding on
+ *  financial values. */
+function isZeroDecimal(value: string): boolean {
+  return !/[1-9]/.test(value);
+}
+
 function isPositiveDecimal(value: string): boolean {
   if (!isDecimal(value)) {
     return false;
   }
-  return parseFloat(value) > 0;
+  const trimmed = value.trim();
+  return !trimmed.startsWith("-") && !isZeroDecimal(trimmed);
 }
 
 function isPositiveInteger(value: string): boolean {
-  return /^\d+$/.test(value.trim()) && parseInt(value, 10) > 0;
+  return /^\d+$/.test(value.trim()) && /[1-9]/.test(value.trim());
+}
+
+/** Compare two validated decimal strings without parsing to float, so exact
+ *  financial values keep full precision. Returns a negative number when
+ *  `a < b`, zero when equal, and a positive number when `a > b`. Inputs must
+ *  already satisfy {@link isDecimal}. */
+function compareDecimal(a: string, b: string): number {
+  const sign = (value: string): number => {
+    const t = value.trim();
+    if (isZeroDecimal(t)) {
+      return 0;
+    }
+    return t.startsWith("-") ? -1 : 1;
+  };
+  const signA = sign(a);
+  const signB = sign(b);
+  if (signA !== signB) {
+    return signA - signB;
+  }
+  if (signA === 0) {
+    return 0;
+  }
+  return signA * compareMagnitude(a, b);
+}
+
+/** Compare the magnitudes of two validated decimal strings, ignoring sign.
+ *  Returns -1, 0, or 1. */
+function compareMagnitude(a: string, b: string): number {
+  const split = (value: string): [string, string] => {
+    const t = value.trim().replace(/^[+-]/, "");
+    const dot = t.indexOf(".");
+    if (dot < 0) {
+      return [t, ""];
+    }
+    return [t.slice(0, dot), t.slice(dot + 1)];
+  };
+  const [intA, fracA] = split(a);
+  const [intB, fracB] = split(b);
+  const trimLeadZeros = (s: string): string => s.replace(/^0+/, "");
+  const wholeA = trimLeadZeros(intA);
+  const wholeB = trimLeadZeros(intB);
+  if (wholeA.length !== wholeB.length) {
+    return wholeA.length < wholeB.length ? -1 : 1;
+  }
+  if (wholeA !== wholeB) {
+    return wholeA < wholeB ? -1 : 1;
+  }
+  const width = Math.max(fracA.length, fracB.length);
+  const padA = fracA.padEnd(width, "0");
+  const padB = fracB.padEnd(width, "0");
+  if (padA === padB) {
+    return 0;
+  }
+  return padA < padB ? -1 : 1;
 }
 
 /** Parse a Go duration string ("1s", "500ms", "2h30m") into seconds, or null
@@ -239,15 +302,16 @@ export function validateLimit(limit: Limit): FieldError | null {
     }
   }
 
-  // pnl: when both bounds are present, lower <= upper.
+  // pnl: when both bounds are present, lower <= upper. Compared as exact
+  // decimal strings so high-precision bounds keep full precision.
   if (
     policy === "pnl_bounds_kill_switch" &&
     kinds.includes("lower_bound") &&
     kinds.includes("upper_bound")
   ) {
-    const lower = parseFloat(limit.values["lower_bound"]);
-    const upper = parseFloat(limit.values["upper_bound"]);
-    if (Number.isFinite(lower) && Number.isFinite(upper) && lower > upper) {
+    const lower = limit.values["lower_bound"];
+    const upper = limit.values["upper_bound"];
+    if (compareDecimal(lower, upper) > 0) {
       return { key: "limit.pnlBoundOrder" };
     }
   }

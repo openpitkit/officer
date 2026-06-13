@@ -27,6 +27,56 @@ import (
 	"time"
 )
 
+const (
+	DiagError = "error"
+	DiagWarn  = "warn"
+	DiagInfo  = "info"
+
+	// Diagnostic kinds - who resolves the problem.
+	DiagKindConfig      = "config"      // operator configuration
+	DiagKindEnvironment = "environment" // network/region/reachability
+	DiagKindProvider    = "provider"    // provider-side or internal
+
+	// Diagnostic codes.
+	CodeUnknownSymbol        = "unknown_symbol"
+	CodeNoEnabledInstruments = "no_enabled_instruments"
+	CodeUnsupportedProvider  = "unsupported_provider"
+	CodeConnectionError      = "connection_error"
+	CodeNoData               = "no_data"
+	CodeInternalError        = "internal_error"
+	CodeSelfDiagnosisFailed  = "self_diagnosis_failed"
+	CodeUnparsableData       = "unparsable_data"
+
+	// Action types - the UI maps these to buttons.
+	ActionRestart          = "restart"
+	ActionOpenDocs         = "open_docs"
+	ActionOpenSymbols      = "open_symbols"
+	ActionRemoveInstrument = "remove_instrument"
+)
+
+// DiagnosticAction is a machine-readable remediation step the UI turns into a
+// button. Target is the affected external symbol for instrument actions.
+type DiagnosticAction struct {
+	Type   string
+	Target string
+}
+
+// Diagnostic is one structured, resolution-oriented problem for an instance.
+// Code and Kind are machine-readable; Title and Detail are human-readable.
+// Instrument is the affected external symbol (empty when instance-wide).
+// At is the most-recent occurrence time.
+type Diagnostic struct {
+	At          time.Time
+	Actions     []DiagnosticAction
+	Level       string
+	Code        string
+	Kind        string
+	Title       string
+	Detail      string
+	Remediation string
+	Instrument  string
+}
+
 // QuoteUpdate is one quote normalized to an instrument, ready for the sink.
 // Price fields are exact decimal strings (empty means absent), matching
 // param.NewPriceFromString; only the fields the engine consumes are carried
@@ -72,6 +122,80 @@ type Connector interface {
 	// Close releases the connector's resources and stops any background work.
 	// It is safe to call once; further reads from the channel drain and end.
 	Close()
+}
+
+// ProviderReferences are operator help links a connector can expose: provider
+// technical/API docs and the authoritative list of valid symbols. Either field
+// may be empty.
+type ProviderReferences struct {
+	DocsURL    string
+	SymbolsURL string
+}
+
+// Referenceable is the optional capability a connector implements to expose
+// help links. ok=false means the provider offers none (the UI prints nothing).
+type Referenceable interface {
+	References() (refs ProviderReferences, ok bool)
+}
+
+// SymbolVerification is the outcome of checking one external symbol against the
+// provider's catalogue. Exists is true when the symbol is present as typed. When
+// Exists is false, Suggestion optionally carries a case-folded catalogue variant
+// the operator likely meant (e.g. "ETHUSDT" for "ethusdt"); it is empty when no
+// variant matches.
+type SymbolVerification struct {
+	Exists     bool
+	Suggestion string
+}
+
+// SymbolVerifier is the optional capability a connector implements to check
+// whether an external symbol exists in the provider's catalogue. A connector
+// that cannot answer this (no symbol catalogue) does not implement it, so the
+// capability is absent. VerifySymbol returns an error only on a catalogue-fetch
+// or transport failure, never to signal that the symbol is unknown.
+type SymbolVerifier interface {
+	VerifySymbol(ctx context.Context, external string) (SymbolVerification, error)
+}
+
+// DiagnosticReporter lets a connector push a structured diagnostic to the
+// manager at any time (config validation, dropped symbols, runtime issues).
+type DiagnosticReporter func(diag Diagnostic)
+
+// DiagnosticReporting is the optional capability a connector implements to
+// receive a DiagnosticReporter from the manager.
+type DiagnosticReporting interface {
+	SetDiagnosticReporter(report DiagnosticReporter)
+}
+
+// Diagnosable is the optional capability a connector implements to perform
+// active self-diagnosis against the provider. The manager calls it once when a
+// live feed has been silent for diagnoseGrace. Returning an error means the
+// diagnosis itself failed (not that any symbol is bad); returning an empty
+// slice means the provider sees the symbols as valid.
+type Diagnosable interface {
+	Diagnose(ctx context.Context) ([]Diagnostic, error)
+}
+
+// StatusReporter receives a connector's runtime connection state. ok=true means
+// connected/receiving; ok=false carries a short failure message. It is called
+// from the connector's background goroutine, never synchronously from Subscribe.
+type StatusReporter func(ok bool, errMsg string)
+
+// StatusReporting is the optional capability a connector implements to report
+// its runtime connection state back to the manager. Connectors that cannot fail
+// at connection time (push-based BYO, in-memory mock) need not implement it.
+type StatusReporting interface {
+	SetStatusReporter(report StatusReporter)
+}
+
+// Pushable is the optional capability a connector implements to accept a quote
+// pushed by the operator rather than pulled from a source. The bring-your-own
+// connector implements it; streaming providers do not. The manager uses it to
+// deliver an operator-set manual mark price once - at startup and on upsert -
+// onto the connector's subscription channel, from where it drains into the sink
+// like any other quote.
+type Pushable interface {
+	Push(update QuoteUpdate)
 }
 
 // Sink receives normalized quotes and forwards them to the engine. It is

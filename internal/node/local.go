@@ -39,10 +39,10 @@ import (
 //
 // Officer builds the engine exactly once per process and never rebuilds it. The
 // engine is reconfigured in place through the runtime Configure surface; a
-// change that surface cannot express is an SDK gap,
-// surfaced to the caller as an error wrapping domain.ErrNotImplemented, not
-// worked around by rebuilding a fresh handle here. The handle therefore never
-// changes after construction, so n.engine is fixed for the node's lifetime.
+// change that surface cannot express is an SDK gap surfaced to the caller as
+// an error wrapping domain.ErrNotImplemented, not worked around by rebuilding
+// a fresh handle here. The handle therefore never changes after construction,
+// so n.engine is fixed for the node's lifetime.
 type localNode struct {
 	engine engine.Engine
 	store  store.Store
@@ -57,24 +57,24 @@ type localNode struct {
 //
 // Officer builds the engine exactly once. build is a one-time constructor used
 // only here; it is not retained on the node, because the engine is never
-// rebuilt. Later mutations reconfigure the engine in place; a change the runtime
-// Configure surface cannot express is an SDK gap, not a trigger to
+// rebuilt. Later mutations reconfigure the engine in place; a change the
+// runtime Configure surface cannot express is an SDK gap, not a trigger to
 // rebuild.
 //
 // It returns the node and the engine handle. The node owns the engine and
-// store: Close stops the engine and closes the store. The returned handle is the
-// permanent handle, but live version/health should still be read through the
-// node (Health, EngineVersion) for a uniform access path. It returns an error if
-// any dependency is nil, if the seed cannot be loaded, or if the engine cannot
-// be built.
+// store: Close stops the engine and closes the store. The returned handle is
+// the permanent handle, but live version/health should still be read through
+// the node (Health, EngineVersion) for a uniform access path. It returns an
+// error if any dependency is nil, if the seed cannot be loaded, or if the
+// engine cannot be built.
 func NewLocalNode(
 	ctx context.Context, st store.Store, build engine.BuildFunc,
 ) (Node, engine.Engine, error) {
 	if st == nil {
-		return nil, nil, fmt.Errorf("node: nil store")
+		return nil, nil, fmt.Errorf("nil store")
 	}
 	if build == nil {
-		return nil, nil, fmt.Errorf("node: nil engine build func")
+		return nil, nil, fmt.Errorf("nil engine build func")
 	}
 
 	n := &localNode{store: st}
@@ -86,10 +86,10 @@ func NewLocalNode(
 
 	eng, err := build(snap)
 	if err != nil {
-		return nil, nil, fmt.Errorf("node: build engine: %w", err)
+		return nil, nil, fmt.Errorf("build engine: %w", err)
 	}
 	if eng == nil {
-		return nil, nil, fmt.Errorf("node: build returned nil engine")
+		return nil, nil, fmt.Errorf("build returned nil engine")
 	}
 	n.engine = eng
 
@@ -100,7 +100,7 @@ func NewLocalNode(
 		Source: domain.SourceSystem,
 	}); err != nil {
 		eng.Stop()
-		return nil, nil, fmt.Errorf("node: audit build: %w", err)
+		return nil, nil, fmt.Errorf("audit build: %w", err)
 	}
 
 	return n, eng, nil
@@ -114,19 +114,19 @@ func NewLocalNode(
 func (n *localNode) loadSnapshot(ctx context.Context) (engine.Snapshot, string, error) {
 	accounts, err := n.store.ListAccounts(ctx)
 	if err != nil {
-		return engine.Snapshot{}, "", fmt.Errorf("node: load accounts for build: %w", err)
+		return engine.Snapshot{}, "", fmt.Errorf("load accounts for build: %w", err)
 	}
 	limits, err := n.store.ListLimits(ctx, "")
 	if err != nil {
-		return engine.Snapshot{}, "", fmt.Errorf("node: load limits for build: %w", err)
+		return engine.Snapshot{}, "", fmt.Errorf("load limits for build: %w", err)
 	}
 	groups, err := n.store.ListGroups(ctx, domain.DefaultTenant)
 	if err != nil {
-		return engine.Snapshot{}, "", fmt.Errorf("node: load groups for build: %w", err)
+		return engine.Snapshot{}, "", fmt.Errorf("load groups for build: %w", err)
 	}
 	balances, err := n.store.ListBalances(ctx, domain.DefaultTenant, "", "")
 	if err != nil {
-		return engine.Snapshot{}, "", fmt.Errorf("node: load balances for build: %w", err)
+		return engine.Snapshot{}, "", fmt.Errorf("load balances for build: %w", err)
 	}
 
 	snap := engine.Snapshot{
@@ -169,13 +169,10 @@ func (n *localNode) Health(ctx context.Context) (Health, error) {
 	return Health{Engine: engineHealth, Store: storeHealth}, nil
 }
 
-// EngineVersion returns the version of the node's engine. It reads n.engine
-// under mutate for a uniform serialized access path; the handle is permanent
-// (officer never rebuilds the engine), so the version is stable for the node's
-// lifetime. The MCP version source routes through here.
+// EngineVersion returns the version of the node's engine. The engine handle is
+// permanent (officer never rebuilds the engine), so the version is stable for
+// the node's lifetime. The MCP version source routes through here.
 func (n *localNode) EngineVersion() string {
-	n.mutate.Lock()
-	defer n.mutate.Unlock()
 	return n.engine.Version()
 }
 
@@ -187,7 +184,7 @@ func (n *localNode) Owns(Key) bool { return true }
 func (n *localNode) ListAccounts(ctx context.Context) ([]domain.Account, error) {
 	accounts, err := n.store.ListAccounts(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("node: list accounts: %w", err)
+		return nil, fmt.Errorf("list accounts: %w", err)
 	}
 	return accounts, nil
 }
@@ -203,7 +200,7 @@ func (n *localNode) CreateAccount(
 
 	account := domain.Account{Tenant: key.Tenant, ID: key.Account}
 	if err := n.store.CreateAccount(ctx, account); err != nil {
-		return domain.Account{}, fmt.Errorf("node: create account: %w", err)
+		return domain.Account{}, fmt.Errorf("create account: %w", err)
 	}
 
 	if err := n.audit(ctx, caller, store.AuditEntry{
@@ -212,7 +209,7 @@ func (n *localNode) CreateAccount(
 		Account: key.Account,
 		Detail:  fmt.Sprintf("create account %s", key.Account),
 	}); err != nil {
-		return domain.Account{}, fmt.Errorf("node: audit create account: %w", err)
+		return domain.Account{}, fmt.Errorf("audit create account: %w", err)
 	}
 	return account, nil
 }
@@ -227,16 +224,16 @@ func (n *localNode) SetAccountBlocked(
 
 	prev, ok, err := n.store.GetAccount(ctx, key.Tenant, key.Account)
 	if err != nil {
-		return fmt.Errorf("node: read account for block: %w", err)
+		return fmt.Errorf("read account for block: %w", err)
 	}
 	if !ok {
-		return fmt.Errorf("node: account %q: %w", key.Account, domain.ErrNotFound)
+		return fmt.Errorf("account %q: %w", key.Account, domain.ErrNotFound)
 	}
 
 	if err := n.store.SetAccountBlocked(
 		ctx, key.Tenant, key.Account, blocked, reason,
 	); err != nil {
-		return fmt.Errorf("node: set account blocked: %w", err)
+		return fmt.Errorf("set account blocked: %w", err)
 	}
 
 	if applyErr := n.applyBlock(ctx, key.Account, blocked, reason); applyErr != nil {
@@ -244,7 +241,7 @@ func (n *localNode) SetAccountBlocked(
 		_ = n.store.SetAccountBlocked(
 			ctx, key.Tenant, key.Account, prev.Blocked, prev.BlockReason,
 		)
-		return fmt.Errorf("node: apply account block: %w", applyErr)
+		return fmt.Errorf("apply account block: %w", applyErr)
 	}
 
 	action := domain.AuditActionBlock
@@ -259,7 +256,7 @@ func (n *localNode) SetAccountBlocked(
 		Account: key.Account,
 		Detail:  detail,
 	}); err != nil {
-		return fmt.Errorf("node: audit account block: %w", err)
+		return fmt.Errorf("audit account block: %w", err)
 	}
 	return nil
 }
@@ -290,15 +287,15 @@ func (n *localNode) GetAccountState(
 ) (domain.Account, []domain.Limit, error) {
 	account, ok, err := n.store.GetAccount(ctx, key.Tenant, key.Account)
 	if err != nil {
-		return domain.Account{}, nil, fmt.Errorf("node: get account: %w", err)
+		return domain.Account{}, nil, fmt.Errorf("get account: %w", err)
 	}
 	if !ok {
 		return domain.Account{}, nil, fmt.Errorf(
-			"node: account %q: %w", key.Account, domain.ErrNotFound)
+			"account %q: %w", key.Account, domain.ErrNotFound)
 	}
 	limits, err := n.store.ListLimits(ctx, key.Account)
 	if err != nil {
-		return domain.Account{}, nil, fmt.Errorf("node: list account limits: %w", err)
+		return domain.Account{}, nil, fmt.Errorf("list account limits: %w", err)
 	}
 	return account, limits, nil
 }
@@ -310,7 +307,7 @@ func (n *localNode) ListLimits(
 ) ([]domain.Limit, error) {
 	limits, err := n.store.ListLimits(ctx, account)
 	if err != nil {
-		return nil, fmt.Errorf("node: list limits: %w", err)
+		return nil, fmt.Errorf("list limits: %w", err)
 	}
 	return limits, nil
 }
@@ -331,12 +328,12 @@ func (n *localNode) PutLimit(
 	}
 
 	if err := n.store.PutLimit(ctx, limit); err != nil {
-		return fmt.Errorf("node: put limit: %w", err)
+		return fmt.Errorf("put limit: %w", err)
 	}
 
 	if applyErr := n.applyPolicyChangeLocked(ctx, target.Policy); applyErr != nil {
 		n.revertBarrier(ctx, target, prev, hadPrev)
-		return fmt.Errorf("node: apply limit: %w", applyErr)
+		return fmt.Errorf("apply limit: %w", applyErr)
 	}
 
 	if err := n.audit(ctx, caller, store.AuditEntry{
@@ -345,7 +342,7 @@ func (n *localNode) PutLimit(
 		Account: target.Account,
 		Detail:  setLimitDetail(limit),
 	}); err != nil {
-		return fmt.Errorf("node: audit set limit: %w", err)
+		return fmt.Errorf("audit set limit: %w", err)
 	}
 	return nil
 }
@@ -365,12 +362,12 @@ func (n *localNode) DeleteLimit(
 	}
 
 	if err := n.store.DeleteLimit(ctx, target); err != nil {
-		return fmt.Errorf("node: delete limit: %w", err)
+		return fmt.Errorf("delete limit: %w", err)
 	}
 
 	if applyErr := n.applyPolicyChangeLocked(ctx, target.Policy); applyErr != nil {
 		n.revertBarrier(ctx, target, prev, hadPrev)
-		return fmt.Errorf("node: apply delete limit: %w", applyErr)
+		return fmt.Errorf("apply delete limit: %w", applyErr)
 	}
 
 	if err := n.audit(ctx, caller, store.AuditEntry{
@@ -379,23 +376,23 @@ func (n *localNode) DeleteLimit(
 		Account: target.Account,
 		Detail:  deleteLimitDetail(target),
 	}); err != nil {
-		return fmt.Errorf("node: audit delete limit: %w", err)
+		return fmt.Errorf("audit delete limit: %w", err)
 	}
 	return nil
 }
 
-// applyPolicyChangeLocked applies a just-persisted barrier change for policy to
-// the engine via the runtime Configure surface. Any error, including one
-// wrapping domain.ErrNotImplemented, is returned unchanged so the caller reverts
-// the already-written store row.
+// applyPolicyChangeLocked applies a just-persisted barrier change for policy
+// to the engine via the runtime Configure surface. Any error, including one
+// wrapping domain.ErrNotImplemented, is returned unchanged so the caller
+// reverts the already-written store row.
 //
 // Officer never rebuilds the engine. A change the runtime Configure surface
-// cannot express (e.g. configuring an unregistered policy, or clearing a broker
-// barrier the surface cannot drop in isolation) is an SDK gap to be closed
-// engine-side, not worked around by reconstructing a fresh
-// handle here. Reintroducing a rebuild fallback at this site is therefore wrong:
-// it would mask the gap and rebuild a native handle the process is meant to keep
-// for its whole lifetime. Callers must hold mutate.
+// cannot express (e.g. configuring an unregistered policy, or clearing a
+// broker barrier the surface cannot drop in isolation) is an SDK gap, not a
+// trigger to reconstruct a fresh handle. Reintroducing a rebuild fallback at
+// this site is therefore wrong: it would mask the gap and rebuild a native
+// handle the process is meant to keep for its whole lifetime. Callers must
+// hold mutate.
 func (n *localNode) applyPolicyChangeLocked(ctx context.Context, policy string) error {
 	return n.reconfigurePolicy(ctx, policy)
 }
@@ -407,7 +404,7 @@ func (n *localNode) applyPolicyChangeLocked(ctx context.Context, policy string) 
 func (n *localNode) reconfigurePolicy(ctx context.Context, policy string) error {
 	limits, err := n.store.ListPolicyLimits(ctx, policy)
 	if err != nil {
-		return fmt.Errorf("node: read policy limits: %w", err)
+		return fmt.Errorf("read policy limits: %w", err)
 	}
 	return n.engine.ConfigurePolicy(ctx, policy, limits)
 }
@@ -419,7 +416,7 @@ func (n *localNode) readBarrier(
 ) (domain.Limit, bool, error) {
 	limits, err := n.store.ListPolicyLimits(ctx, target.Policy)
 	if err != nil {
-		return domain.Limit{}, false, fmt.Errorf("node: read barrier: %w", err)
+		return domain.Limit{}, false, fmt.Errorf("read barrier: %w", err)
 	}
 	for _, limit := range limits {
 		if limit.Target == target {
@@ -435,9 +432,11 @@ func (n *localNode) revertBarrier(
 	ctx context.Context, target domain.LimitTarget, prev domain.Limit, hadPrev bool,
 ) {
 	if hadPrev {
+		// Best-effort revert; the caller already surfaces the primary error.
 		_ = n.store.PutLimit(ctx, prev)
 		return
 	}
+	// Best-effort revert; the caller already surfaces the primary error.
 	_ = n.store.DeleteLimit(ctx, target)
 }
 
@@ -447,7 +446,7 @@ func (n *localNode) ListAudit(
 ) ([]domain.AuditRow, error) {
 	rows, err := n.store.ListAudit(ctx, count)
 	if err != nil {
-		return nil, fmt.Errorf("node: list audit: %w", err)
+		return nil, fmt.Errorf("list audit: %w", err)
 	}
 	return rows, nil
 }
@@ -455,20 +454,20 @@ func (n *localNode) ListAudit(
 // --- MCP access control -----------------------------------------------------
 
 // ListMcpAccess returns the stored per-command MCP overrides keyed by command.
-// MCP access is a control-plane-wide setting with no engine side-effect, so this
-// is a plain store read.
+// MCP access is a control-plane-wide setting with no engine side-effect, so
+// this is a plain store read.
 func (n *localNode) ListMcpAccess(ctx context.Context) (map[string]bool, error) {
 	access, err := n.store.ListMcpAccess(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("node: list mcp access: %w", err)
+		return nil, fmt.Errorf("list mcp access: %w", err)
 	}
 	return access, nil
 }
 
 // SetMcpAccess upserts the enabled state for one MCP command and audits the
-// action. There is no engine side-effect: gating happens in the MCP surface, so
-// the store is the sole authority and nothing is applied to or reverted from the
-// engine.
+// action. There is no engine side-effect: gating happens in the MCP surface,
+// so the store is the sole authority and nothing is applied to or reverted
+// from the engine.
 func (n *localNode) SetMcpAccess(
 	ctx context.Context, command string, enabled bool, caller domain.Caller,
 ) error {
@@ -476,13 +475,13 @@ func (n *localNode) SetMcpAccess(
 	defer n.mutate.Unlock()
 
 	if err := n.store.SetMcpAccess(ctx, command, enabled); err != nil {
-		return fmt.Errorf("node: set mcp access: %w", err)
+		return fmt.Errorf("set mcp access: %w", err)
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action: domain.AuditActionSetMcpAccess,
 		Detail: setMcpAccessDetail(command, enabled),
 	}); err != nil {
-		return fmt.Errorf("node: audit set mcp access: %w", err)
+		return fmt.Errorf("audit set mcp access: %w", err)
 	}
 	return nil
 }
@@ -494,9 +493,19 @@ func (n *localNode) ListMarketDataInstances(
 ) ([]domain.MarketDataInstance, error) {
 	instances, err := n.store.ListMarketDataInstances(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("node: list market-data instances: %w", err)
+		return nil, fmt.Errorf("list market-data instances: %w", err)
 	}
 	return instances, nil
+}
+
+func (n *localNode) GetMarketDataInstance(
+	ctx context.Context, id string,
+) (domain.MarketDataInstance, bool, error) {
+	instance, ok, err := n.store.GetMarketDataInstance(ctx, id)
+	if err != nil {
+		return domain.MarketDataInstance{}, false, fmt.Errorf("get market-data instance: %w", err)
+	}
+	return instance, ok, nil
 }
 
 func (n *localNode) CreateMarketDataInstance(
@@ -506,13 +515,13 @@ func (n *localNode) CreateMarketDataInstance(
 	defer n.mutate.Unlock()
 
 	if err := n.store.CreateMarketDataInstance(ctx, instance); err != nil {
-		return fmt.Errorf("node: create market-data instance: %w", err)
+		return fmt.Errorf("create market-data instance: %w", err)
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action: domain.AuditActionSetMarketData,
 		Detail: fmt.Sprintf("create market-data instance %s", instance.ID),
 	}); err != nil {
-		return fmt.Errorf("node: audit create market-data instance: %w", err)
+		return fmt.Errorf("audit create market-data instance: %w", err)
 	}
 	return nil
 }
@@ -524,13 +533,13 @@ func (n *localNode) SetMarketDataInstanceEnabled(
 	defer n.mutate.Unlock()
 
 	if err := n.store.SetMarketDataInstanceEnabled(ctx, id, enabled); err != nil {
-		return fmt.Errorf("node: set market-data instance enabled: %w", err)
+		return fmt.Errorf("set market-data instance enabled: %w", err)
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action: domain.AuditActionSetMarketData,
 		Detail: marketDataToggleDetail("instance", id, enabled),
 	}); err != nil {
-		return fmt.Errorf("node: audit set market-data instance enabled: %w", err)
+		return fmt.Errorf("audit set market-data instance enabled: %w", err)
 	}
 	return nil
 }
@@ -542,13 +551,13 @@ func (n *localNode) DeleteMarketDataInstance(
 	defer n.mutate.Unlock()
 
 	if err := n.store.DeleteMarketDataInstance(ctx, id); err != nil {
-		return fmt.Errorf("node: delete market-data instance: %w", err)
+		return fmt.Errorf("delete market-data instance: %w", err)
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action: domain.AuditActionSetMarketData,
 		Detail: fmt.Sprintf("delete market-data instance %s", id),
 	}); err != nil {
-		return fmt.Errorf("node: audit delete market-data instance: %w", err)
+		return fmt.Errorf("audit delete market-data instance: %w", err)
 	}
 	return nil
 }
@@ -558,7 +567,7 @@ func (n *localNode) ListMarketDataInstruments(
 ) ([]domain.MarketDataInstrument, error) {
 	instruments, err := n.store.ListMarketDataInstruments(ctx, instanceID)
 	if err != nil {
-		return nil, fmt.Errorf("node: list market-data instruments: %w", err)
+		return nil, fmt.Errorf("list market-data instruments: %w", err)
 	}
 	return instruments, nil
 }
@@ -570,14 +579,14 @@ func (n *localNode) UpsertMarketDataInstrument(
 	defer n.mutate.Unlock()
 
 	if err := n.store.UpsertMarketDataInstrument(ctx, instrument); err != nil {
-		return fmt.Errorf("node: upsert market-data instrument: %w", err)
+		return fmt.Errorf("upsert market-data instrument: %w", err)
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action: domain.AuditActionSetMarketData,
 		Detail: fmt.Sprintf("upsert market-data instrument %s/%s",
 			instrument.InstanceID, instrument.ExternalSymbol),
 	}); err != nil {
-		return fmt.Errorf("node: audit upsert market-data instrument: %w", err)
+		return fmt.Errorf("audit upsert market-data instrument: %w", err)
 	}
 	return nil
 }
@@ -591,13 +600,13 @@ func (n *localNode) SetMarketDataInstrumentEnabled(
 	if err := n.store.SetMarketDataInstrumentEnabled(
 		ctx, instanceID, externalSymbol, enabled,
 	); err != nil {
-		return fmt.Errorf("node: set market-data instrument enabled: %w", err)
+		return fmt.Errorf("set market-data instrument enabled: %w", err)
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action: domain.AuditActionSetMarketData,
 		Detail: marketDataToggleDetail("instrument", instanceID+"/"+externalSymbol, enabled),
 	}); err != nil {
-		return fmt.Errorf("node: audit set market-data instrument enabled: %w", err)
+		return fmt.Errorf("audit set market-data instrument enabled: %w", err)
 	}
 	return nil
 }
@@ -609,13 +618,13 @@ func (n *localNode) DeleteMarketDataInstrument(
 	defer n.mutate.Unlock()
 
 	if err := n.store.DeleteMarketDataInstrument(ctx, instanceID, externalSymbol); err != nil {
-		return fmt.Errorf("node: delete market-data instrument: %w", err)
+		return fmt.Errorf("delete market-data instrument: %w", err)
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action: domain.AuditActionSetMarketData,
 		Detail: fmt.Sprintf("delete market-data instrument %s/%s", instanceID, externalSymbol),
 	}); err != nil {
-		return fmt.Errorf("node: audit delete market-data instrument: %w", err)
+		return fmt.Errorf("audit delete market-data instrument: %w", err)
 	}
 	return nil
 }
@@ -625,16 +634,16 @@ func (n *localNode) ListMarketDataQuotes(
 ) ([]domain.MarketDataQuote, error) {
 	quotes, err := n.store.ListMarketDataQuotes(ctx, instanceID)
 	if err != nil {
-		return nil, fmt.Errorf("node: list market-data quotes: %w", err)
+		return nil, fmt.Errorf("list market-data quotes: %w", err)
 	}
 	return quotes, nil
 }
 
 // --- account group & notes --------------------------------------------------
 
-// SetAccountGroup sets or clears the account's group in the store, then moves it
-// on the engine (unregister from the old group, register into the new), reverts
-// the store on engine failure, and audits the action.
+// SetAccountGroup sets or clears the account's group in the store, then moves
+// it on the engine (unregister from the old group, register into the new),
+// reverts the store on engine failure, and audits the action.
 func (n *localNode) SetAccountGroup(
 	ctx context.Context, key Key, groupID string, caller domain.Caller,
 ) error {
@@ -643,22 +652,23 @@ func (n *localNode) SetAccountGroup(
 
 	prev, ok, err := n.store.GetAccount(ctx, key.Tenant, key.Account)
 	if err != nil {
-		return fmt.Errorf("node: read account for set group: %w", err)
+		return fmt.Errorf("read account for set group: %w", err)
 	}
 	if !ok {
-		return fmt.Errorf("node: account %q: %w", key.Account, domain.ErrNotFound)
+		return fmt.Errorf("account %q: %w", key.Account, domain.ErrNotFound)
 	}
 	if prev.GroupID == groupID {
 		return nil
 	}
 
 	if err := n.store.SetAccountGroup(ctx, key.Tenant, key.Account, groupID); err != nil {
-		return fmt.Errorf("node: set account group: %w", err)
+		return fmt.Errorf("set account group: %w", err)
 	}
 
 	if applyErr := n.applyGroupMove(ctx, key.Account, prev.GroupID, groupID); applyErr != nil {
+		// Best-effort revert; the caller already surfaces the primary error.
 		_ = n.store.SetAccountGroup(ctx, key.Tenant, key.Account, prev.GroupID)
-		return fmt.Errorf("node: apply account group: %w", applyErr)
+		return fmt.Errorf("apply account group: %w", applyErr)
 	}
 
 	// Ensure a group record exists for the new group so it appears in
@@ -670,7 +680,7 @@ func (n *localNode) SetAccountGroup(
 			ID:     groupID,
 		})
 		if createErr != nil && !errors.Is(createErr, domain.ErrAlreadyExists) {
-			return fmt.Errorf("node: ensure group record on set: %w", createErr)
+			return fmt.Errorf("ensure group record on set: %w", createErr)
 		}
 	}
 
@@ -680,15 +690,15 @@ func (n *localNode) SetAccountGroup(
 		Account: key.Account,
 		Detail:  setAccountGroupDetail(key.Account, groupID),
 	}); err != nil {
-		return fmt.Errorf("node: audit set account group: %w", err)
+		return fmt.Errorf("audit set account group: %w", err)
 	}
 	return nil
 }
 
-// applyGroupMove moves one account between groups on the engine: it unregisters
-// from oldGroup when set and registers into newGroup when set. An empty group id
-// means "no group", so clearing only unregisters and setting from none only
-// registers.
+// applyGroupMove moves one account between groups on the engine: it
+// unregisters from oldGroup when set and registers into newGroup when set. An
+// empty group id means "no group", so clearing only unregisters and setting
+// from none only registers.
 func (n *localNode) applyGroupMove(
 	ctx context.Context, id domain.AccountID, oldGroup, newGroup string,
 ) error {
@@ -719,7 +729,7 @@ func (n *localNode) SetAccountNotes(
 	defer n.mutate.Unlock()
 
 	if err := n.store.SetAccountNotes(ctx, key.Tenant, key.Account, notes); err != nil {
-		return fmt.Errorf("node: set account notes: %w", err)
+		return fmt.Errorf("set account notes: %w", err)
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action:  domain.AuditActionSetNotes,
@@ -727,7 +737,7 @@ func (n *localNode) SetAccountNotes(
 		Account: key.Account,
 		Detail:  fmt.Sprintf("set notes account %s", key.Account),
 	}); err != nil {
-		return fmt.Errorf("node: audit set account notes: %w", err)
+		return fmt.Errorf("audit set account notes: %w", err)
 	}
 	return nil
 }
@@ -735,8 +745,8 @@ func (n *localNode) SetAccountNotes(
 // --- groups -----------------------------------------------------------------
 
 // CreateGroup persists a new account group and audits the action. A group is
-// store-only: membership lives on accounts, so there is no engine side-effect at
-// creation.
+// store-only: membership lives on accounts, so there is no engine side-effect
+// at creation.
 func (n *localNode) CreateGroup(
 	ctx context.Context, group domain.AccountGroup, caller domain.Caller,
 ) error {
@@ -744,14 +754,14 @@ func (n *localNode) CreateGroup(
 	defer n.mutate.Unlock()
 
 	if err := n.store.CreateGroup(ctx, group); err != nil {
-		return fmt.Errorf("node: create group: %w", err)
+		return fmt.Errorf("create group: %w", err)
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action: domain.AuditActionCreateGroup,
 		Tenant: group.Tenant,
 		Detail: fmt.Sprintf("create group %s", group.ID),
 	}); err != nil {
-		return fmt.Errorf("node: audit create group: %w", err)
+		return fmt.Errorf("audit create group: %w", err)
 	}
 	return nil
 }
@@ -762,7 +772,7 @@ func (n *localNode) ListGroups(
 ) ([]domain.AccountGroup, error) {
 	groups, err := n.store.ListGroups(ctx, tenant)
 	if err != nil {
-		return nil, fmt.Errorf("node: list groups: %w", err)
+		return nil, fmt.Errorf("list groups: %w", err)
 	}
 	return groups, nil
 }
@@ -774,14 +784,14 @@ func (n *localNode) GetGroup(
 ) (domain.AccountGroup, []domain.Account, bool, error) {
 	group, ok, err := n.store.GetGroup(ctx, tenant, id)
 	if err != nil {
-		return domain.AccountGroup{}, nil, false, fmt.Errorf("node: get group: %w", err)
+		return domain.AccountGroup{}, nil, false, fmt.Errorf("get group: %w", err)
 	}
 	if !ok {
 		return domain.AccountGroup{}, nil, false, nil
 	}
 	members, err := n.store.ListGroupAccounts(ctx, tenant, id)
 	if err != nil {
-		return domain.AccountGroup{}, nil, false, fmt.Errorf("node: list group accounts: %w", err)
+		return domain.AccountGroup{}, nil, false, fmt.Errorf("list group accounts: %w", err)
 	}
 	return group, members, true, nil
 }
@@ -796,18 +806,18 @@ func (n *localNode) SetGroupNotes(
 	defer n.mutate.Unlock()
 
 	if err := n.ensureGroupRecordLocked(ctx, tenant, id); err != nil {
-		return fmt.Errorf("node: ensure group for set notes: %w", err)
+		return fmt.Errorf("ensure group for set notes: %w", err)
 	}
 
 	if err := n.store.SetGroupNotes(ctx, tenant, id, notes); err != nil {
-		return fmt.Errorf("node: set group notes: %w", err)
+		return fmt.Errorf("set group notes: %w", err)
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action: domain.AuditActionSetGroupNotes,
 		Tenant: tenant,
 		Detail: fmt.Sprintf("set notes group %s", id),
 	}); err != nil {
-		return fmt.Errorf("node: audit set group notes: %w", err)
+		return fmt.Errorf("audit set group notes: %w", err)
 	}
 	return nil
 }
@@ -823,24 +833,25 @@ func (n *localNode) SetGroupBlocked(
 	defer n.mutate.Unlock()
 
 	if err := n.ensureGroupRecordLocked(ctx, tenant, id); err != nil {
-		return fmt.Errorf("node: ensure group for block: %w", err)
+		return fmt.Errorf("ensure group for block: %w", err)
 	}
 
 	prev, ok, err := n.store.GetGroup(ctx, tenant, id)
 	if err != nil {
-		return fmt.Errorf("node: read group for block: %w", err)
+		return fmt.Errorf("read group for block: %w", err)
 	}
 	if !ok {
-		return fmt.Errorf("node: group %q: %w", id, domain.ErrNotFound)
+		return fmt.Errorf("group %q: %w", id, domain.ErrNotFound)
 	}
 
 	if err := n.store.SetGroupBlocked(ctx, tenant, id, blocked, reason); err != nil {
-		return fmt.Errorf("node: set group blocked: %w", err)
+		return fmt.Errorf("set group blocked: %w", err)
 	}
 
 	if applyErr := n.applyGroupBlock(ctx, id, blocked, reason); applyErr != nil {
+		// Best-effort revert; the caller already surfaces the primary error.
 		_ = n.store.SetGroupBlocked(ctx, tenant, id, prev.Blocked, prev.BlockReason)
-		return fmt.Errorf("node: apply group block: %w", applyErr)
+		return fmt.Errorf("apply group block: %w", applyErr)
 	}
 
 	action := domain.AuditActionBlockGroup
@@ -854,7 +865,7 @@ func (n *localNode) SetGroupBlocked(
 		Tenant: tenant,
 		Detail: detail,
 	}); err != nil {
-		return fmt.Errorf("node: audit group block: %w", err)
+		return fmt.Errorf("audit group block: %w", err)
 	}
 	return nil
 }
@@ -882,8 +893,9 @@ func (n *localNode) applyGroupBlock(
 	return n.engine.UnblockGroup(ctx, id)
 }
 
-// DeleteGroup removes the group from the store and audits the action. A group is
-// store-only (membership lives on accounts), so there is no engine side-effect.
+// DeleteGroup removes the group from the store and audits the action. A group
+// is store-only (membership lives on accounts), so there is no engine
+// side-effect.
 func (n *localNode) DeleteGroup(
 	ctx context.Context, tenant domain.TenantID, id string, caller domain.Caller,
 ) error {
@@ -891,24 +903,25 @@ func (n *localNode) DeleteGroup(
 	defer n.mutate.Unlock()
 
 	if err := n.store.DeleteGroup(ctx, tenant, id); err != nil {
-		return fmt.Errorf("node: delete group: %w", err)
+		return fmt.Errorf("delete group: %w", err)
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action: domain.AuditActionDeleteGroup,
 		Tenant: tenant,
 		Detail: fmt.Sprintf("delete group %s", id),
 	}); err != nil {
-		return fmt.Errorf("node: audit delete group: %w", err)
+		return fmt.Errorf("audit delete group: %w", err)
 	}
 	return nil
 }
 
 // --- spot funds -------------------------------------------------------------
 
-// ApplyAdjustment applies one spot-funds adjustment through the engine, which is
-// the authority for the resulting holdings. On accept it writes the recomputed
-// balance snapshot and the accepted record; on reject it records the rejected
-// adjustment and leaves balances unchanged. Either way it audits the action.
+// ApplyAdjustment applies one spot-funds adjustment through the engine, which
+// is the authority for the resulting holdings. On accept it writes the
+// recomputed balance snapshot and the accepted record; on reject it records
+// the rejected adjustment and leaves balances unchanged. Either way it audits
+// the action.
 func (n *localNode) ApplyAdjustment(
 	ctx context.Context, key Key, req domain.AdjustmentRequest, caller domain.Caller,
 ) (domain.AccountAdjustmentRecord, error) {
@@ -917,7 +930,7 @@ func (n *localNode) ApplyAdjustment(
 
 	result, err := n.engine.ApplyAccountAdjustment(ctx, key.Account, req)
 	if err != nil {
-		return domain.AccountAdjustmentRecord{}, fmt.Errorf("node: apply adjustment: %w", err)
+		return domain.AccountAdjustmentRecord{}, fmt.Errorf("apply adjustment: %w", err)
 	}
 
 	rec := domain.AccountAdjustmentRecord{
@@ -938,7 +951,7 @@ func (n *localNode) ApplyAdjustment(
 
 	stored, err := n.store.AppendAdjustment(ctx, rec)
 	if err != nil {
-		return domain.AccountAdjustmentRecord{}, fmt.Errorf("node: append adjustment: %w", err)
+		return domain.AccountAdjustmentRecord{}, fmt.Errorf("append adjustment: %w", err)
 	}
 
 	if err := n.audit(ctx, caller, store.AuditEntry{
@@ -947,7 +960,7 @@ func (n *localNode) ApplyAdjustment(
 		Account: key.Account,
 		Detail:  adjustmentDetail(key.Account, req.Asset, result.Accepted != nil),
 	}); err != nil {
-		return domain.AccountAdjustmentRecord{}, fmt.Errorf("node: audit adjustment: %w", err)
+		return domain.AccountAdjustmentRecord{}, fmt.Errorf("audit adjustment: %w", err)
 	}
 	return stored, nil
 }
@@ -965,11 +978,11 @@ func (n *localNode) persistAdjustedBalance(
 ) error {
 	prev, _, err := n.store.GetBalance(ctx, key.Tenant, key.Account, req.Asset)
 	if err != nil {
-		return fmt.Errorf("node: read balance for adjustment: %w", err)
+		return fmt.Errorf("read balance for adjustment: %w", err)
 	}
 	realizedPnl, err := domain.AddDecimals(prev.RealizedPnl, outcome.RealizedPnlDelta)
 	if err != nil {
-		return fmt.Errorf("node: accumulate realized pnl: %w", err)
+		return fmt.Errorf("accumulate realized pnl: %w", err)
 	}
 	balance := domain.Balance{
 		Tenant:            key.Tenant,
@@ -982,7 +995,7 @@ func (n *localNode) persistAdjustedBalance(
 		AverageEntryPrice: pick(req.AverageEntryPrice, prev.AverageEntryPrice),
 	}
 	if err := n.store.UpsertBalance(ctx, balance); err != nil {
-		return fmt.Errorf("node: upsert balance: %w", err)
+		return fmt.Errorf("upsert balance: %w", err)
 	}
 	return nil
 }
@@ -997,11 +1010,11 @@ func (n *localNode) persistFillBalance(
 ) error {
 	prev, _, err := n.store.GetBalance(ctx, key.Tenant, key.Account, asset)
 	if err != nil {
-		return fmt.Errorf("node: read balance for fill: %w", err)
+		return fmt.Errorf("read balance for fill: %w", err)
 	}
 	realizedPnl, err := domain.AddDecimals(prev.RealizedPnl, outcome.RealizedPnlDelta)
 	if err != nil {
-		return fmt.Errorf("node: accumulate realized pnl: %w", err)
+		return fmt.Errorf("accumulate realized pnl: %w", err)
 	}
 	balance := domain.Balance{
 		Tenant:            key.Tenant,
@@ -1014,7 +1027,7 @@ func (n *localNode) persistFillBalance(
 		AverageEntryPrice: prev.AverageEntryPrice,
 	}
 	if err := n.store.UpsertBalance(ctx, balance); err != nil {
-		return fmt.Errorf("node: upsert fill balance: %w", err)
+		return fmt.Errorf("upsert fill balance: %w", err)
 	}
 	return nil
 }
@@ -1028,14 +1041,14 @@ func pick(next, prev string) string {
 	return prev
 }
 
-// ListBalances returns the balance rows for the tenant filtered by the non-empty
-// account and asset.
+// ListBalances returns the balance rows for the tenant filtered by the
+// non-empty account and asset.
 func (n *localNode) ListBalances(
 	ctx context.Context, tenant domain.TenantID, account domain.AccountID, asset string,
 ) ([]domain.Balance, error) {
 	balances, err := n.store.ListBalances(ctx, tenant, account, asset)
 	if err != nil {
-		return nil, fmt.Errorf("node: list balances: %w", err)
+		return nil, fmt.Errorf("list balances: %w", err)
 	}
 	return balances, nil
 }
@@ -1046,7 +1059,7 @@ func (n *localNode) GetBalance(
 ) (domain.Balance, bool, error) {
 	balance, ok, err := n.store.GetBalance(ctx, tenant, account, asset)
 	if err != nil {
-		return domain.Balance{}, false, fmt.Errorf("node: get balance: %w", err)
+		return domain.Balance{}, false, fmt.Errorf("get balance: %w", err)
 	}
 	return balance, ok, nil
 }
@@ -1057,7 +1070,7 @@ func (n *localNode) ListAdjustments(
 ) ([]domain.AccountAdjustmentRecord, error) {
 	records, err := n.store.ListAdjustments(ctx, tenant, account, source, count)
 	if err != nil {
-		return nil, fmt.Errorf("node: list adjustments: %w", err)
+		return nil, fmt.Errorf("list adjustments: %w", err)
 	}
 	return records, nil
 }
@@ -1084,7 +1097,7 @@ func (n *localNode) SubmitOrder(
 
 	order, err := n.store.CreateOrder(ctx, o)
 	if err != nil {
-		return domain.Order{}, fmt.Errorf("node: create order: %w", err)
+		return domain.Order{}, fmt.Errorf("create order: %w", err)
 	}
 	if err := n.appendOrderEvent(ctx, order.ID, domain.OrderEventSubmitted, caller, domain.OrderEventPayload{}); err != nil {
 		return domain.Order{}, err
@@ -1092,7 +1105,7 @@ func (n *localNode) SubmitOrder(
 
 	result, err := n.engine.SubmitOrder(ctx, order)
 	if err != nil {
-		return domain.Order{}, fmt.Errorf("node: submit order: %w", err)
+		return domain.Order{}, fmt.Errorf("submit order: %w", err)
 	}
 
 	if result.Accepted {
@@ -1110,7 +1123,7 @@ func (n *localNode) SubmitOrder(
 		Account: key.Account,
 		Detail:  submitOrderDetail(order, result.Accepted),
 	}); err != nil {
-		return domain.Order{}, fmt.Errorf("node: audit submit order: %w", err)
+		return domain.Order{}, fmt.Errorf("audit submit order: %w", err)
 	}
 	return order, nil
 }
@@ -1128,10 +1141,10 @@ func (n *localNode) recordOrderAccepted(
 		return domain.Order{}, err
 	}
 	if err := n.store.SetOrderLockPrices(ctx, key.Tenant, order.ID, result.LockPrices); err != nil {
-		return domain.Order{}, fmt.Errorf("node: persist lock prices: %w", err)
+		return domain.Order{}, fmt.Errorf("persist lock prices: %w", err)
 	}
 	if err := n.store.UpdateOrderStatus(ctx, key.Tenant, order.ID, domain.OrderStatusCommitted); err != nil {
-		return domain.Order{}, fmt.Errorf("node: order status committed: %w", err)
+		return domain.Order{}, fmt.Errorf("order status committed: %w", err)
 	}
 	order.LockPrices = result.LockPrices
 	order.Status = domain.OrderStatusCommitted
@@ -1156,7 +1169,7 @@ func (n *localNode) recordOrderRejected(
 		return domain.Order{}, err
 	}
 	if err := n.store.UpdateOrderStatus(ctx, key.Tenant, order.ID, domain.OrderStatusRejected); err != nil {
-		return domain.Order{}, fmt.Errorf("node: order status rejected: %w", err)
+		return domain.Order{}, fmt.Errorf("order status rejected: %w", err)
 	}
 	order.Status = domain.OrderStatusRejected
 	return order, nil
@@ -1175,7 +1188,7 @@ func (n *localNode) ApplyExecutionReport(
 	in.Account = key.Account
 	result, err := n.engine.ApplyExecutionReport(ctx, in)
 	if err != nil {
-		return engine.ExecutionReportResult{}, fmt.Errorf("node: apply execution report: %w", err)
+		return engine.ExecutionReportResult{}, fmt.Errorf("apply execution report: %w", err)
 	}
 
 	if err := n.appendOrderEvent(ctx, in.OrderID, domain.OrderEventFill, caller, domain.OrderEventPayload{
@@ -1199,7 +1212,7 @@ func (n *localNode) ApplyExecutionReport(
 		Price:      in.FillPrice,
 		LockPrice:  in.LockPrice,
 	}); err != nil {
-		return engine.ExecutionReportResult{}, fmt.Errorf("node: create trade: %w", err)
+		return engine.ExecutionReportResult{}, fmt.Errorf("create trade: %w", err)
 	}
 
 	// Persist the fill's spot-funds outcomes: balance/held/incoming follow the
@@ -1218,7 +1231,7 @@ func (n *localNode) ApplyExecutionReport(
 		if err := n.store.SetAccountBlocked(
 			ctx, key.Tenant, block.Account, true, block.Reason,
 		); err != nil {
-			return engine.ExecutionReportResult{}, fmt.Errorf("node: mirror account block: %w", err)
+			return engine.ExecutionReportResult{}, fmt.Errorf("mirror account block: %w", err)
 		}
 	}
 
@@ -1227,7 +1240,7 @@ func (n *localNode) ApplyExecutionReport(
 		status = domain.OrderStatusFilled
 	}
 	if err := n.store.UpdateOrderStatus(ctx, key.Tenant, in.OrderID, status); err != nil {
-		return engine.ExecutionReportResult{}, fmt.Errorf("node: order status fill: %w", err)
+		return engine.ExecutionReportResult{}, fmt.Errorf("order status fill: %w", err)
 	}
 
 	if err := n.audit(ctx, caller, store.AuditEntry{
@@ -1236,7 +1249,7 @@ func (n *localNode) ApplyExecutionReport(
 		Account: key.Account,
 		Detail:  executionReportDetail(in, len(result.Blocks)),
 	}); err != nil {
-		return engine.ExecutionReportResult{}, fmt.Errorf("node: audit execution report: %w", err)
+		return engine.ExecutionReportResult{}, fmt.Errorf("audit execution report: %w", err)
 	}
 	return result, nil
 }
@@ -1252,7 +1265,7 @@ func (n *localNode) appendOrderEvent(
 		Principal: caller.Principal,
 		Payload:   payload,
 	}); err != nil {
-		return fmt.Errorf("node: append order event %s: %w", typ, err)
+		return fmt.Errorf("append order event %s: %w", typ, err)
 	}
 	return nil
 }
@@ -1263,7 +1276,7 @@ func (n *localNode) GetOrder(
 ) (domain.OrderDetail, error) {
 	detail, err := n.store.GetOrder(ctx, tenant, id)
 	if err != nil {
-		return domain.OrderDetail{}, fmt.Errorf("node: get order: %w", err)
+		return domain.OrderDetail{}, fmt.Errorf("get order: %w", err)
 	}
 	return detail, nil
 }
@@ -1274,7 +1287,7 @@ func (n *localNode) ListOrders(
 ) ([]domain.Order, error) {
 	orders, err := n.store.ListOrders(ctx, tenant, account, source, count)
 	if err != nil {
-		return nil, fmt.Errorf("node: list orders: %w", err)
+		return nil, fmt.Errorf("list orders: %w", err)
 	}
 	return orders, nil
 }
@@ -1285,18 +1298,19 @@ func (n *localNode) CountOrders(
 ) (int, error) {
 	count, err := n.store.CountOrders(ctx, tenant)
 	if err != nil {
-		return 0, fmt.Errorf("node: count orders: %w", err)
+		return 0, fmt.Errorf("count orders: %w", err)
 	}
 	return count, nil
 }
 
-// CountOrdersSince returns the number of orders for the tenant at or after since.
+// CountOrdersSince returns the number of orders for the tenant at or after
+// since.
 func (n *localNode) CountOrdersSince(
 	ctx context.Context, tenant domain.TenantID, since time.Time,
 ) (int, error) {
 	count, err := n.store.CountOrdersSince(ctx, tenant, since)
 	if err != nil {
-		return 0, fmt.Errorf("node: count orders since: %w", err)
+		return 0, fmt.Errorf("count orders since: %w", err)
 	}
 	return count, nil
 }
@@ -1307,7 +1321,7 @@ func (n *localNode) ListOrderEvents(
 ) ([]domain.OrderEvent, error) {
 	events, err := n.store.ListOrderEvents(ctx, tenant, orderID)
 	if err != nil {
-		return nil, fmt.Errorf("node: list order events: %w", err)
+		return nil, fmt.Errorf("list order events: %w", err)
 	}
 	return events, nil
 }
@@ -1318,7 +1332,7 @@ func (n *localNode) ListTrades(
 ) ([]domain.Trade, error) {
 	trades, err := n.store.ListTrades(ctx, tenant, account, source, count)
 	if err != nil {
-		return nil, fmt.Errorf("node: list trades: %w", err)
+		return nil, fmt.Errorf("list trades: %w", err)
 	}
 	return trades, nil
 }
@@ -1336,7 +1350,7 @@ func (n *localNode) CheckOrder(
 func (n *localNode) Close() error {
 	n.engine.Stop()
 	if err := n.store.Close(); err != nil {
-		return fmt.Errorf("node: close store: %w", err)
+		return fmt.Errorf("close store: %w", err)
 	}
 	return nil
 }
@@ -1352,13 +1366,13 @@ type localRouter struct {
 // returns an error if n is nil.
 func NewLocalRouter(n Node) (NodeRouter, error) {
 	if n == nil {
-		return nil, fmt.Errorf("node: nil node for router")
+		return nil, fmt.Errorf("nil node for router")
 	}
 	return &localRouter{node: n}, nil
 }
 
 // ErrNoOwner is returned by Route when no node owns the requested key.
-var ErrNoOwner = errors.New("node: no node owns key")
+var ErrNoOwner = errors.New("no node owns key")
 
 // Route returns the single node when it owns key, otherwise ErrNoOwner.
 func (r *localRouter) Route(key Key) (Node, error) {

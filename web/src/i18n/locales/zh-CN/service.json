@@ -11,7 +11,20 @@
   "engine": {
     "title": "引擎",
     "version": "版本",
-    "profile": "配置文件"
+    "profile": "构建配置",
+    "buildPosture": "构建类型",
+    "stableRelease": "稳定版本",
+    "developmentBuild": "开发版本",
+    "modifiedSources": "已修改源码",
+    "profileParams": {
+      "version": "版本",
+      "profile": "配置",
+      "opt_level": "优化级别",
+      "debug_assertions": "调试断言",
+      "target": "目标平台",
+      "target_cpu": "目标CPU",
+      "lto": "LTO"
+    }
   },
   "database": {
     "title": "数据库",

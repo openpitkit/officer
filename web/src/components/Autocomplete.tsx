@@ -44,7 +44,7 @@ export interface AutocompleteProps
   maxSuggestions?: number;
 }
 
-/** Prefix-match filter — case-insensitive, empty query shows nothing. */
+/** Prefix-match filter - case-insensitive, empty query shows nothing. */
 function filterSuggestions(
   query: string,
   suggestions: string[],
@@ -88,10 +88,13 @@ const Autocomplete = forwardRef<HTMLInputElement, AutocompleteProps>(
     const filtered = filterSuggestions(value, suggestions, maxSuggestions);
     const visible = open && filtered.length > 0;
 
-    // Reset active index whenever the filtered list changes.
+    // Reset active index whenever the query or candidate set changes. Tracking
+    // only filtered.length would miss cases where the length is stable but the
+    // items themselves change (e.g. "fo"→[foo,food] then "ba"→[bar,baz]):
+    // the persisted index would silently point at a different item.
     useEffect(() => {
       setActiveIndex(-1);
-    }, [filtered.length]);
+    }, [value, suggestions]);
 
     function select(suggestion: string) {
       onChange(suggestion);

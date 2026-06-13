@@ -20,12 +20,23 @@
       "avgEntryPrice": "Avg entry price",
       "realizedPnl": "Realized PnL",
       "updated": "Updated",
-      "actions": "Actions"
+      "adjust": "Adjust"
     },
     "empty": {
       "title": "No balances",
       "hint": "Use Adjust to seed spot-funds balances for an account and asset."
     }
+  },
+  "inline": {
+    "apply": "Apply",
+    "applyWithLimits": "Apply with limits",
+    "amountPlaceholder": "amount",
+    "newRowHint": "New row",
+    "amountAriaLabel": "Adjustment amount for {{account}} {{asset}}",
+    "applyAriaLabel": "Apply adjustment to {{account}} {{asset}}",
+    "applyWithLimitsAriaLabel": "Apply adjustment with limits to {{account}} {{asset}}",
+    "accountAriaLabel": "New adjustment account",
+    "assetAriaLabel": "New adjustment asset"
   },
   "history": {
     "sectionLabel": "Adjustment history",
@@ -56,6 +67,9 @@
     "status": {
       "rejected": "rejected",
       "accepted": "accepted"
+    },
+    "clone": {
+      "ariaLabel": "Clone adjustment #{{id}}"
     }
   },
   "dialog": {

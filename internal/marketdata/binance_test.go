@@ -105,6 +105,13 @@ func TestBinanceConnector_ReconnectsAndResubscribes(t *testing.T) {
 			}
 			return second, nil
 		},
+		fetchSymbols: func(context.Context) (map[string]struct{}, error) {
+			known := make(map[string]struct{}, len(subs))
+			for _, s := range subs {
+				known[s.symbol] = struct{}{}
+			}
+			return known, nil
+		},
 		sleep:        func(context.Context, time.Duration) error { return nil },
 		reconnectMin: time.Millisecond,
 		reconnectMax: 2 * time.Millisecond,
@@ -181,6 +188,78 @@ func TestBackoffCaps(t *testing.T) {
 	}
 	if got := backoff(10, time.Second, 8*time.Second); got != 8*time.Second {
 		t.Fatalf("backoff(10) = %s", got)
+	}
+}
+
+func TestBinanceConnector_VerifySymbolExists(t *testing.T) {
+	t.Parallel()
+
+	connector := &binanceConnector{
+		fetchSymbols: func(context.Context) (map[string]struct{}, error) {
+			return map[string]struct{}{"BTCUSDT": {}, "ETHUSDT": {}}, nil
+		},
+	}
+
+	got, err := connector.VerifySymbol(context.Background(), "ETHUSDT")
+	if err != nil {
+		t.Fatalf("VerifySymbol: %v", err)
+	}
+	if !got.Exists || got.Suggestion != "" {
+		t.Fatalf("VerifySymbol = %+v, want Exists=true, no suggestion", got)
+	}
+}
+
+func TestBinanceConnector_VerifySymbolNotFound(t *testing.T) {
+	t.Parallel()
+
+	connector := &binanceConnector{
+		fetchSymbols: func(context.Context) (map[string]struct{}, error) {
+			return map[string]struct{}{"BTCUSDT": {}}, nil
+		},
+	}
+
+	got, err := connector.VerifySymbol(context.Background(), "DOGEUSDT")
+	if err != nil {
+		t.Fatalf("VerifySymbol: %v", err)
+	}
+	if got.Exists || got.Suggestion != "" {
+		t.Fatalf("VerifySymbol = %+v, want Exists=false, no suggestion", got)
+	}
+}
+
+func TestBinanceConnector_VerifySymbolCaseFoldSuggestion(t *testing.T) {
+	t.Parallel()
+
+	connector := &binanceConnector{
+		fetchSymbols: func(context.Context) (map[string]struct{}, error) {
+			return map[string]struct{}{"ETHUSDT": {}}, nil
+		},
+	}
+
+	got, err := connector.VerifySymbol(context.Background(), "ethusdt")
+	if err != nil {
+		t.Fatalf("VerifySymbol: %v", err)
+	}
+	if got.Exists {
+		t.Fatalf("VerifySymbol = %+v, want Exists=false", got)
+	}
+	if got.Suggestion != "ETHUSDT" {
+		t.Fatalf("VerifySymbol suggestion = %q, want %q", got.Suggestion, "ETHUSDT")
+	}
+}
+
+func TestBinanceConnector_VerifySymbolFetchError(t *testing.T) {
+	t.Parallel()
+
+	wantErr := errors.New("exchangeInfo down")
+	connector := &binanceConnector{
+		fetchSymbols: func(context.Context) (map[string]struct{}, error) {
+			return nil, wantErr
+		},
+	}
+
+	if _, err := connector.VerifySymbol(context.Background(), "BTCUSDT"); !errors.Is(err, wantErr) {
+		t.Fatalf("VerifySymbol error = %v, want %v", err, wantErr)
 	}
 }
 

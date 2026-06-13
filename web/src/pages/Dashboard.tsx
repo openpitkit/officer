@@ -141,6 +141,12 @@ function McpAccessCard() {
 // Market-data card
 // ---------------------------------------------------------------------------
 
+// Packing limits for the dashboard market-data card:
+//   - stale (laggard) pairs: show up to 4, then "+N stale" counter
+//   - ok pairs per datasource: show up to 3, then "+N OK" counter
+const MD_STALE_LIMIT = 4;
+const MD_OK_LIMIT = 3;
+
 function MarketDataCard() {
   const { t } = useTranslation("dashboard");
   const navigate = useNavigate();
@@ -163,11 +169,6 @@ function MarketDataCard() {
           )}
           {load.state === "ready" && (() => {
             const enabled = load.data.instances.filter((i) => i.enabled);
-            const stale = enabled.flatMap((i) =>
-              i.instruments
-                .filter((instrument) => instrument.stale)
-                .map((instrument) => `${i.id}/${instrument.externalSymbol}`),
-            );
             if (enabled.length === 0) {
               return (
                 <span className="text-xs text-muted-lt">
@@ -175,22 +176,108 @@ function MarketDataCard() {
                 </span>
               );
             }
+
+            // Collect all stale pairs across all instances for global cap.
+            const allStale = enabled.flatMap((inst) =>
+              inst.state === "error"
+                ? []
+                : inst.instruments
+                    .filter((instr) => instr.stale)
+                    .map((instr) => ({
+                      key: `${inst.id}/${instr.externalSymbol}`,
+                      label: `${instr.baseAsset}/${instr.quoteAsset}`,
+                    })),
+            );
+            const shownStale = allStale.slice(0, MD_STALE_LIMIT);
+            const extraStale = allStale.length - shownStale.length;
+
+            // Track how many stale we've already consumed from the global cap.
+            let staleConsumed = 0;
+
             return (
               <>
-                {enabled.map((instance) => (
-                  <Badge key={instance.id} variant="ok">
-                    {instance.id}
-                  </Badge>
-                ))}
-                {stale.length > 0 &&
-                  stale.slice(0, 4).map((item) => (
-                    <Badge key={item} variant="warn">
-                      {item}
-                    </Badge>
-                  ))}
-                {stale.length > 4 && (
+                {enabled.map((inst) => {
+                  const label = inst.label || inst.id;
+
+                  if (inst.state === "error") {
+                    const errSuffix = inst.error
+                      ? `: ${inst.error.slice(0, 40)}${inst.error.length > 40 ? "…" : ""}`
+                      : "";
+                    const latest = inst.diagnostics.length > 0
+                      ? inst.diagnostics[inst.diagnostics.length - 1]
+                      : null;
+                    const diagSuffix = latest
+                      ? ` — ${latest.title.slice(0, 40)}${latest.title.length > 40 ? "…" : ""}`
+                      : "";
+                    return (
+                      <Badge key={inst.id} variant="danger">
+                        {t("marketData.instanceError")} {label}{errSuffix || diagSuffix}
+                      </Badge>
+                    );
+                  }
+
+                  if (inst.state === "pending") {
+                    return (
+                      <Badge key={inst.id} variant="warn">
+                        {label} — {t("marketData.instanceNotApplied")}
+                      </Badge>
+                    );
+                  }
+
+                  const instStale = inst.instruments.filter((i) => i.stale);
+                  const instOk = inst.instruments.filter(
+                    (i) => i.enabled && !i.stale,
+                  );
+
+                  // Stale pairs for this instance, limited by remaining global cap.
+                  const instStaleSlot = Math.max(
+                    0,
+                    MD_STALE_LIMIT - staleConsumed,
+                  );
+                  const shownInstStale = instStale.slice(0, instStaleSlot);
+                  staleConsumed += shownInstStale.length;
+
+                  const shownOk = instOk.slice(0, MD_OK_LIMIT);
+                  const extraOk = instOk.length - shownOk.length;
+
+                  return (
+                    <span
+                      key={inst.id}
+                      className="flex flex-wrap items-center gap-1"
+                    >
+                      <Badge variant="neutral">{label}</Badge>
+                      {shownInstStale.map((instr) => (
+                        <Badge
+                          key={instr.externalSymbol}
+                          variant="warn"
+                        >
+                          {instr.baseAsset}/{instr.quoteAsset}
+                        </Badge>
+                      ))}
+                      {shownOk.map((instr) => (
+                        <Badge
+                          key={instr.externalSymbol}
+                          variant="ok"
+                        >
+                          {instr.baseAsset}/{instr.quoteAsset}
+                        </Badge>
+                      ))}
+                      {extraOk > 0 && (
+                        <span className="text-xs text-muted-lt">
+                          {t("marketData.moreOk", { count: extraOk })}
+                        </span>
+                      )}
+                      {inst.diagnostics.length > 0 && (
+                        <span className="text-xs text-[var(--warn)]">
+                          {t("marketData.issues", { count: inst.diagnostics.length })}
+                        </span>
+                      )}
+                    </span>
+                  );
+                })}
+                {extraStale > 0 && (
                   <span className="text-xs text-muted-lt">
-                    {t("marketData.moreStale", { count: stale.length - 4 })}
+                    {t("marketData.moreStale", { count: extraStale })}
                   </span>
                 )}
               </>
@@ -251,8 +338,8 @@ function ActivityColumn({ group }: { group: ActivityGroup }) {
         <CardTitle className="text-xs">{t(group.labelKey)}</CardTitle>
       </CardHeader>
       <CardContent className="flex-1 space-y-0 pb-2">
-        {group.entries.map((e, i) => (
-          <ActivityItem key={i} entry={e} route={group.route} />
+        {group.entries.map((e) => (
+          <ActivityItem key={e.ref} entry={e} route={group.route} />
         ))}
       </CardContent>
     </Card>

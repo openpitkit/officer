@@ -21,12 +21,16 @@ All responses use `application/json`; errors return
 
 The MCP surface is read-only and carries no secrets. Tool names:
 
+<!-- markdownlint-disable MD013 -->
+
 | Tool | Parameters | Returns |
 | --- | --- | --- |
 | `health` | - | Liveness state |
 | `get_account_state` | `account` (string) | Account detail and its limits |
 | `get_limits` | `account` (string, optional) | All limits or per-account limits |
 | `get_audit` | `limit` (int, optional, default 50, cap 500) | Audit entries |
+
+<!-- markdownlint-enable MD013 -->
 
 JSON shapes are identical to the REST DTOs.
 

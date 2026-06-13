@@ -38,6 +38,26 @@ import {
   type Policy,
   type Scope,
 } from "@/api/vocabulary";
+import { Autocomplete } from "@/components/Autocomplete";
+import { ErrorBanner } from "@/components/PageStates";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 // ---------------------------------------------------------------------------
 // Duration picker helpers (for the rate_limit `window` field)
@@ -87,26 +107,6 @@ function validateDurationString(s: string): string | null {
   if (n * toMs[parts.unit] > 86_400_000) return "duration.mustNotExceed24h";
   return null;
 }
-import { Autocomplete } from "@/components/Autocomplete";
-import { ErrorBanner } from "@/components/PageStates";
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 
 // ---------------------------------------------------------------------------
 // Duration picker component

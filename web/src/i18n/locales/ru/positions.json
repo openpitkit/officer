@@ -20,12 +20,23 @@
       "avgEntryPrice": "Средняя цена входа",
       "realizedPnl": "Реализованный P&L",
       "updated": "Обновлено",
-      "actions": "Действия"
+      "adjust": "Корректировка"
     },
     "empty": {
       "title": "Балансов нет",
       "hint": "Используйте «Корректировать» для задания спот-балансов по счёту и активу."
     }
+  },
+  "inline": {
+    "apply": "Применить",
+    "applyWithLimits": "Применить с границами",
+    "amountPlaceholder": "сумма",
+    "newRowHint": "Новая строка",
+    "amountAriaLabel": "Сумма корректировки для {{account}} {{asset}}",
+    "applyAriaLabel": "Применить корректировку к {{account}} {{asset}}",
+    "applyWithLimitsAriaLabel": "Применить корректировку с границами к {{account}} {{asset}}",
+    "accountAriaLabel": "Счёт новой корректировки",
+    "assetAriaLabel": "Актив новой корректировки"
   },
   "history": {
     "sectionLabel": "История корректировок",
@@ -56,6 +67,9 @@
     "status": {
       "rejected": "отклонено",
       "accepted": "принято"
+    },
+    "clone": {
+      "ariaLabel": "Клонировать корректировку #{{id}}"
     }
   },
   "dialog": {

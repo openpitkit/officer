@@ -39,10 +39,10 @@ type callerContextKey struct{}
 // ContextWithCaller); an unstamped context is therefore system-initiated.
 var systemCaller = domain.Caller{Source: domain.SourceSystem, Principal: "system"}
 
-// ContextWithCaller returns a copy of ctx carrying caller. Each surface resolves
-// the caller server-side and stamps it here; the source is never read from a
-// client-supplied header or body. Once authentication lands, the resolved
-// principal (and role) ride the same value.
+// ContextWithCaller returns a copy of ctx carrying caller. Each surface
+// resolves the caller server-side and stamps it here; the source is never read
+// from a client-supplied header or body. Once authentication lands, the
+// resolved principal (and role) ride the same value.
 func ContextWithCaller(ctx context.Context, caller domain.Caller) context.Context {
 	return context.WithValue(ctx, callerContextKey{}, caller)
 }

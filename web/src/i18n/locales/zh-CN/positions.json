@@ -20,12 +20,23 @@
       "avgEntryPrice": "平均建仓价",
       "realizedPnl": "已实现盈亏",
       "updated": "更新时间",
-      "actions": "操作"
+      "adjust": "调整"
     },
     "empty": {
       "title": "暂无余额",
       "hint": "使用「调整」功能为账户和资产设定现货资金余额。"
     }
+  },
+  "inline": {
+    "apply": "应用",
+    "applyWithLimits": "应用并设边界",
+    "amountPlaceholder": "金额",
+    "newRowHint": "新建行",
+    "amountAriaLabel": "{{account}} {{asset}} 的调整金额",
+    "applyAriaLabel": "对 {{account}} {{asset}} 应用调整",
+    "applyWithLimitsAriaLabel": "对 {{account}} {{asset}} 应用调整并设边界",
+    "accountAriaLabel": "新建调整的账户",
+    "assetAriaLabel": "新建调整的资产"
   },
   "history": {
     "sectionLabel": "调整历史",
@@ -56,6 +67,9 @@
     "status": {
       "rejected": "已拒绝",
       "accepted": "已接受"
+    },
+    "clone": {
+      "ariaLabel": "克隆调整记录 #{{id}}"
     }
   },
   "dialog": {

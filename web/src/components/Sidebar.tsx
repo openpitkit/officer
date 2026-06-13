@@ -135,13 +135,13 @@ export function Sidebar() {
                   cn(
                     "group flex items-center gap-2.5 rounded-card px-3 py-2 text-xs transition-colors",
                     isActive
-                      ? "bg-accent-dim text-muted"
-                      : "text-muted hover:bg-accent-dim hover:text-muted-lt",
+                      ? "bg-accent-dim text-accent"
+                      : "text-muted opacity-60 hover:bg-accent-dim hover:text-muted-lt hover:opacity-100",
                   )
                 }
               >
-                <Icon className="h-3.5 w-3.5 shrink-0 opacity-60" />
-                <span className="flex-1 text-left opacity-60">{t(item.labelKey)}</span>
+                <Icon className="h-3.5 w-3.5 shrink-0" />
+                <span className="flex-1 text-left">{t(item.labelKey)}</span>
               </NavLink>
             );
           })}

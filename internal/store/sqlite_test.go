@@ -56,8 +56,8 @@ func TestMigration_Chain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaVersion: %v", err)
 	}
-	if v != 1 {
-		t.Fatalf("want schema version 1, got %d", v)
+	if v != 2 {
+		t.Fatalf("want schema version 2, got %d", v)
 	}
 }
 
@@ -74,8 +74,8 @@ func TestMigration_Idempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaVersion: %v", err)
 	}
-	if v != 1 {
-		t.Fatalf("want schema version 1, got %d", v)
+	if v != 2 {
+		t.Fatalf("want schema version 2, got %d", v)
 	}
 }
 
@@ -821,6 +821,73 @@ func TestMarketDataInstrument_UpsertListEnabledDelete(t *testing.T) {
 	}
 	if err := s.DeleteMarketDataInstrument(ctx, "inst", "MSFT"); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("delete missing instrument: want ErrNotFound, got %v", err)
+	}
+}
+
+// TestMarketDataInstrument_ManualPriceRoundTrip verifies the operator-set manual
+// mark persists and reads back exactly, that an upsert overwrites it in place,
+// and that an instrument with no manual price reads back as the empty string.
+func TestMarketDataInstrument_ManualPriceRoundTrip(t *testing.T) {
+	t.Parallel()
+	s := openStore(t)
+	ctx := context.Background()
+
+	if err := s.CreateMarketDataInstance(ctx, mdInstance("byo", true)); err != nil {
+		t.Fatalf("CreateMarketDataInstance: %v", err)
+	}
+
+	priced := mdInstrument("byo", "USDT/USD", true)
+	priced.BaseAsset = "USDT"
+	priced.ManualPrice = "1.0005"
+	if err := s.UpsertMarketDataInstrument(ctx, priced); err != nil {
+		t.Fatalf("UpsertMarketDataInstrument priced: %v", err)
+	}
+
+	unpriced := mdInstrument("byo", "ETH/USD", true)
+	unpriced.BaseAsset = "ETH"
+	if err := s.UpsertMarketDataInstrument(ctx, unpriced); err != nil {
+		t.Fatalf("UpsertMarketDataInstrument unpriced: %v", err)
+	}
+
+	all, err := s.ListMarketDataInstruments(ctx, "byo")
+	if err != nil {
+		t.Fatalf("ListMarketDataInstruments: %v", err)
+	}
+	got := map[string]string{}
+	for _, inst := range all {
+		got[inst.ExternalSymbol] = inst.ManualPrice
+	}
+	if got["USDT/USD"] != "1.0005" {
+		t.Fatalf("manual price not persisted: got %q, want \"1.0005\"", got["USDT/USD"])
+	}
+	if got["ETH/USD"] != "" {
+		t.Fatalf("absent manual price should read empty, got %q", got["ETH/USD"])
+	}
+
+	// The enabled query carries the price too.
+	enabled, err := s.ListEnabledMarketDataInstruments(ctx, "byo")
+	if err != nil {
+		t.Fatalf("ListEnabledMarketDataInstruments: %v", err)
+	}
+	for _, inst := range enabled {
+		if inst.ExternalSymbol == "USDT/USD" && inst.ManualPrice != "1.0005" {
+			t.Fatalf("enabled query lost manual price: %+v", inst)
+		}
+	}
+
+	// Upsert overwrites the manual price in place.
+	priced.ManualPrice = "0.9998"
+	if err := s.UpsertMarketDataInstrument(ctx, priced); err != nil {
+		t.Fatalf("UpsertMarketDataInstrument overwrite: %v", err)
+	}
+	all, err = s.ListMarketDataInstruments(ctx, "byo")
+	if err != nil {
+		t.Fatalf("ListMarketDataInstruments after overwrite: %v", err)
+	}
+	for _, inst := range all {
+		if inst.ExternalSymbol == "USDT/USD" && inst.ManualPrice != "0.9998" {
+			t.Fatalf("manual price overwrite not applied: %+v", inst)
+		}
 	}
 }
 

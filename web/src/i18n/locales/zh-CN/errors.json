@@ -4,6 +4,7 @@
     "not_found": "请求的资源未找到。",
     "conflict": "请求与当前状态冲突。",
     "precondition": "请求的前提条件未满足。",
+    "not_implemented": "请求的操作尚未实现。",
     "internal": "服务遇到内部错误。",
     "network": "无法连接到服务。"
   },

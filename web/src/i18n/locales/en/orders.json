@@ -22,12 +22,14 @@
     "side": "Side",
     "amount": "Amount",
     "price": "Price",
+    "lockPrices": "Lock prices",
     "status": "Status",
     "source": "Source",
     "time": "Time",
     "order": "Order",
     "qty": "Qty",
-    "lockPrice": "Lock price"
+    "lockPrice": "Lock price",
+    "lockPrices": "Lock prices"
   },
 
   "amount": {
@@ -89,7 +91,11 @@
     "wouldReject": "Preview: would reject",
     "lockPrices": "Lock prices: {{prices}}",
     "wouldBlock": "Would block account {{account}}",
-    "wouldBlockReason": "Would block account {{account}} - {{reason}}"
+    "wouldBlockReason": "Would block account {{account}} - {{reason}}",
+    "accountBlocked": "Account {{account}} is blocked",
+    "rejectReasons": {
+      "account_blocked": "Account is blocked"
+    }
   },
 
   "execReport": {
@@ -109,6 +115,12 @@
       "done": "Done",
       "validationError": "Quantity and price are required."
     }
+  },
+
+  "clone": {
+    "orderButton": "Clone",
+    "orderAriaLabel": "Clone order #{{orderId}}",
+    "execReportAriaLabel": "Clone execution report for trade #{{tradeId}}"
   },
 
   "detail": {

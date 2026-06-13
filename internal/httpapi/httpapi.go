@@ -49,6 +49,11 @@ import (
 // auditCapREST is the maximum number of audit rows the REST endpoint returns.
 const auditCapREST = 1000
 
+// maxRequestBody bounds a request body the v1 surface will read. The control
+// plane bodies are small (a handful of decimal strings or flags), so 1 MiB is
+// generous; the cap stops an unbounded read from exhausting memory.
+const maxRequestBody = 1 << 20
+
 // listDefaultLimit is the default page size for the orders, trades, and
 // adjustments list endpoints; listCapREST bounds an explicit ?limit=.
 const (
@@ -79,6 +84,10 @@ type Service interface {
 	SetMcpAccess(ctx context.Context, command string, enabled bool) error
 
 	ListMarketData(ctx context.Context) (backend.MarketDataStatus, error)
+	RestartMarketData(ctx context.Context) error
+	VerifyMarketDataSymbol(
+		ctx context.Context, id, externalSymbol string,
+	) (backend.MarketDataSymbolVerification, error)
 	CreateMarketDataInstance(ctx context.Context, instance domain.MarketDataInstance) error
 	SetMarketDataInstanceEnabled(ctx context.Context, id string, enabled bool) error
 	DeleteMarketDataInstance(ctx context.Context, id string) error
@@ -161,10 +170,12 @@ func NewRouter(opts Options) (http.Handler, error) {
 	// phase); /app/api/v1 is the operator-panel mirror (the SPA switches its base
 	// path to it in a later phase). Per-mount authentication attaches here later.
 	router.Route("/api/v1", func(v1 chi.Router) {
+		v1.Use(limitBody)
 		v1.Use(stampSource(domain.SourceAPI))
 		mountV1(v1, opts.Service)
 	})
 	router.Route("/app/api/v1", func(v1 chi.Router) {
+		v1.Use(limitBody)
 		v1.Use(stampSource(domain.SourcePanel))
 		mountV1(v1, opts.Service)
 	})
@@ -173,7 +184,7 @@ func NewRouter(opts Options) (http.Handler, error) {
 		router.Mount("/mcp", opts.MCP)
 	}
 
-	// OpenAPI spec and Swagger UI — registered before the SPA NotFound so they
+	// OpenAPI spec and Swagger UI - registered before the SPA NotFound so they
 	// are served by these handlers, not the SPA catch-all.
 	router.Get("/api/openapi.yaml", serveOpenAPISpec)
 	router.Get("/docs", serveSwaggerUI)
@@ -237,6 +248,7 @@ func mountV1(r chi.Router, svc Service) {
 	r.Put("/mcp-access/{command}", handleSetMcpAccess(svc))
 
 	r.Get("/market-data", handleListMarketData(svc))
+	r.Post("/market-data/restart", handleRestartMarketData(svc))
 	r.Post("/market-data/instances", handleCreateMarketDataInstance(svc))
 	r.Put("/market-data/instances/{id}/enabled", handleSetMarketDataInstanceEnabled(svc))
 	r.Delete("/market-data/instances/{id}", handleDeleteMarketDataInstance(svc))
@@ -244,13 +256,14 @@ func mountV1(r chi.Router, svc Service) {
 	r.Put("/market-data/instances/{id}/instruments/enabled",
 		handleSetMarketDataInstrumentEnabled(svc))
 	r.Delete("/market-data/instances/{id}/instruments", handleDeleteMarketDataInstrument(svc))
+	r.Post("/market-data/instances/{id}/verify-symbol", handleVerifyMarketDataSymbol(svc))
 }
 
 // stampSource is middleware that stamps the given source onto the request
 // context's caller so the backend attributes mutations to the surface the
 // request arrived on. The source is fixed per mount and never read from a
 // request header or body. The principal is the placeholder "operator" until
-// authentication lands; this is the authorization seam — the resolved principal
+// authentication lands; this is the authorization seam - the resolved principal
 // (and role) will be filled here once per-mount auth is attached.
 func stampSource(source domain.Source) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -260,6 +273,18 @@ func stampSource(source domain.Source) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// limitBody is middleware that caps the request body at maxRequestBody. A body
+// over the cap fails the next Decode with an error, which the handler reports
+// as a 400, so an oversized or unbounded body cannot exhaust memory.
+func limitBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // handleHealthz is the plain-text liveness endpoint.
@@ -610,6 +635,27 @@ func handleListMarketData(svc Service) http.HandlerFunc {
 	}
 }
 
+// handleRestartMarketData handles POST /api/v1/market-data/restart. It
+// re-applies the market-data configuration by restarting the connector manager,
+// then returns the refreshed snapshot in the same envelope as the other
+// market-data mutations.
+func handleRestartMarketData(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := svc.RestartMarketData(r.Context()); err != nil {
+			writeErr(w, err)
+			return
+		}
+		status, err := svc.ListMarketData(r.Context())
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"marketData": toMarketDataDTO(status),
+		})
+	}
+}
+
 func handleCreateMarketDataInstance(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req marketDataInstanceDTO
@@ -693,6 +739,7 @@ func handleUpsertMarketDataInstrument(svc Service) http.HandlerFunc {
 			ExternalSymbol: req.ExternalSymbol,
 			BaseAsset:      req.BaseAsset,
 			QuoteAsset:     req.QuoteAsset,
+			ManualPrice:    req.ManualPrice,
 			Enabled:        req.Enabled,
 		}
 		if err := svc.UpsertMarketDataInstrument(r.Context(), instrument); err != nil {
@@ -748,6 +795,36 @@ func handleDeleteMarketDataInstrument(svc Service) http.HandlerFunc {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// handleVerifyMarketDataSymbol handles POST
+// /api/v1/market-data/instances/{id}/verify-symbol. It runs a stateless,
+// non-mutating check of whether the external symbol exists on the instance's
+// provider; live feeds are untouched. A provider that cannot verify symbols is a
+// successful call returning supported=false, not an HTTP error.
+func handleVerifyMarketDataSymbol(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := pathID(r)
+		if err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		var req struct {
+			ExternalSymbol string `json:"externalSymbol"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			return
+		}
+		out, err := svc.VerifyMarketDataSymbol(r.Context(), id, req.ExternalSymbol)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"verification": toMarketDataSymbolVerificationDTO(out),
+		})
 	}
 }
 

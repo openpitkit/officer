@@ -97,7 +97,7 @@ func TestOrderSizeFromValues_ParsesBoth(t *testing.T) {
 
 func TestPnlBoundsFromValues_Optionals(t *testing.T) {
 	t.Parallel()
-	lower, upper, err := pnlBoundsFromValues([]domain.LimitValue{
+	lower, upper, initial, err := pnlBoundsFromValues([]domain.LimitValue{
 		{Kind: domain.KindLowerBound, Value: "-100"},
 	})
 	if err != nil {
@@ -108,6 +108,9 @@ func TestPnlBoundsFromValues_Optionals(t *testing.T) {
 	}
 	if _, ok := upper.Get(); ok {
 		t.Fatalf("want upper bound absent")
+	}
+	if _, ok := initial.Get(); ok {
+		t.Fatalf("want initial pnl absent")
 	}
 }
 
@@ -595,6 +598,47 @@ func TestEngine_CheckOrderWouldBlock(t *testing.T) {
 	if out.WouldBlock.Account != "acc-1" {
 		t.Fatalf("would-block must be stamped with the probe account, got %q", out.WouldBlock.Account)
 	}
+	if out.WouldBlock.Reason != "risk" {
+		t.Fatalf("would-block reason = %q, want risk", out.WouldBlock.Reason)
+	}
+}
+
+func TestEngine_CheckOrderDropsGarbledAccountBlockReason(t *testing.T) {
+	t.Parallel()
+	snap := Snapshot{
+		Accounts: []domain.Account{
+			{Tenant: domain.DefaultTenant, ID: "acc-1", Blocked: true, BlockReason: "0}"},
+		},
+		Balances: []domain.Balance{
+			fundedBalance("acc-1", "USD", "1000000"),
+			fundedBalance("acc-1", "AAPL", "1000000"),
+		},
+	}
+	eng, err := BuildOpenPitEngine("", snap)
+	if err != nil {
+		t.Fatalf("BuildOpenPitEngine: %v", err)
+	}
+	defer eng.Stop()
+
+	out, err := eng.CheckOrder(context.Background(), checkProbe("acc-1", domain.OrderSideBuy, "1", "100"))
+	if err != nil {
+		t.Fatalf("CheckOrder: %v", err)
+	}
+	if out.Passed {
+		t.Fatalf("want reject for blocked account")
+	}
+	if len(out.Rejects) != 1 {
+		t.Fatalf("rejects len = %d, want 1", len(out.Rejects))
+	}
+	if out.Rejects[0].Reason != "" || out.Rejects[0].Details != "" {
+		t.Fatalf("garbled reject text must be empty, got %+v", out.Rejects[0])
+	}
+	if out.WouldBlock == nil {
+		t.Fatalf("blocked account must surface a would-be block")
+	}
+	if out.WouldBlock.Reason != "" || out.WouldBlock.Details != "" {
+		t.Fatalf("garbled would-block text must be empty, got %+v", out.WouldBlock)
+	}
 }
 
 // TestEngine_CheckOrderIsNonMutating is the ticket's headline acceptance test.
@@ -670,21 +714,24 @@ func hasRejectCode(rejects []domain.OrderReject, code string) bool {
 	return false
 }
 
-// TestNewAsset_BadFormatIsInvalid checks a malformed asset code (caller input)
-// wraps domain.ErrInvalid so the HTTP surface reports 400, not 500.
+// TestNewAsset_BadFormatIsInvalid checks a core-rejected asset code (caller
+// input) wraps domain.ErrInvalid so the HTTP surface reports 400, not 500. The
+// core rejects a blank/empty asset (ErrAssetEmpty); the mapper must wrap that as
+// ErrInvalid.
 func TestNewAsset_BadFormatIsInvalid(t *testing.T) {
 	t.Parallel()
-	if _, err := newAsset("bad asset"); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("want ErrInvalid for bad asset, got %v", err)
+	if _, err := newAsset(" "); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("want ErrInvalid for blank asset, got %v", err)
 	}
 }
 
-// TestNewAccountID_BadFormatIsInvalid checks a malformed account id (caller
-// input) wraps domain.ErrInvalid.
+// TestNewAccountID_BadFormatIsInvalid checks a core-rejected account id (caller
+// input) wraps domain.ErrInvalid. The core rejects a blank/empty id
+// (ErrAccountIdEmpty); the mapper must wrap that as ErrInvalid.
 func TestNewAccountID_BadFormatIsInvalid(t *testing.T) {
 	t.Parallel()
-	if _, err := newAccountID(domain.AccountID("bad account")); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("want ErrInvalid for bad account id, got %v", err)
+	if _, err := newAccountID(domain.AccountID(" ")); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("want ErrInvalid for blank account id, got %v", err)
 	}
 }
 
@@ -723,9 +770,9 @@ func TestOrderModelFrom_InvalidInputs(t *testing.T) {
 	}
 
 	badAsset := base
-	badAsset.BaseAsset = "bad asset"
+	badAsset.BaseAsset = " "
 	if _, err := orderModelFrom(badAsset); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("want ErrInvalid for bad base asset, got %v", err)
+		t.Fatalf("want ErrInvalid for blank base asset, got %v", err)
 	}
 
 	badAmount := base
@@ -795,9 +842,9 @@ func TestAccountAdjustmentFromRequest_InvalidInputs(t *testing.T) {
 		return &domain.AdjustmentAmount{Mode: domain.AdjustmentModeDelta, Value: v}
 	}
 
-	badAsset := domain.AdjustmentRequest{Asset: "bad asset", Balance: delta("1")}
+	badAsset := domain.AdjustmentRequest{Asset: " ", Balance: delta("1")}
 	if _, err := accountAdjustmentFromRequest(badAsset); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("want ErrInvalid for bad asset, got %v", err)
+		t.Fatalf("want ErrInvalid for blank asset, got %v", err)
 	}
 
 	badPrice := domain.AdjustmentRequest{
@@ -846,9 +893,15 @@ func TestSanitizeText_CleansInvalidUTF8AndControls(t *testing.T) {
 	if got := sanitizeText("insufficient funds"); got != "insufficient funds" {
 		t.Fatalf("clean text must pass through, got %q", got)
 	}
-	// Fully garbage input collapses to empty, which is acceptable.
-	if got := sanitizeText("\x80\xff\x01"); got != "" {
-		t.Fatalf("all-garbage text must sanitize to empty, got %q", got)
+	if got := sanitizeText("404"); got != "404" {
+		t.Fatalf("clean numeric text must pass through, got %q", got)
+	}
+	// Fully garbage and short printable leftovers collapse to empty, which is
+	// acceptable for optional reason/detail fields.
+	for _, input := range []string{"\x80\xff\x01", "0}", "}"} {
+		if got := sanitizeText(input); got != "" {
+			t.Fatalf("garbage text %q must sanitize to empty, got %q", input, got)
+		}
 	}
 }
 

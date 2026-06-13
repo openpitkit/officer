@@ -33,9 +33,24 @@ import (
 	"go.openpit.dev/officer/internal/auth"
 	"go.openpit.dev/officer/internal/domain"
 	"go.openpit.dev/officer/internal/engine"
+	"go.openpit.dev/officer/internal/marketdata"
 	"go.openpit.dev/officer/internal/mcpcatalog"
 	"go.openpit.dev/officer/internal/node"
 )
+
+// MarketDataRuntime is the live view of the connector manager the backend
+// needs: the current per-instance subscription state, a way to re-apply
+// configuration, and a way to push an operator-set manual mark into a running
+// instance after an upsert. The *marketdata.Manager satisfies it.
+type MarketDataRuntime interface {
+	InstanceStatuses() map[string]marketdata.InstanceRuntimeStatus
+	Restart() error
+	// PushManual delivers one instrument's operator-set manual mark into the
+	// running instance as a single quote. It is a no-op when the instance is not
+	// running, its connector is not push-capable, or the instrument is disabled
+	// or has no manual price.
+	PushManual(instanceID string, instrument domain.MarketDataInstrument)
+}
 
 // Status is the aggregate health of the whole deployment, assembled for the
 // operator dashboard from the health of every node behind the router.
@@ -51,13 +66,16 @@ type Status struct {
 // and is safe for concurrent use by the surface handlers.
 type Service struct {
 	router node.NodeRouter
+	md     MarketDataRuntime
 }
 
-// New constructs a Service over the given node router. The router is the only
-// dependency: it is the seam through which the service reaches every execution
-// target.
-func New(router node.NodeRouter) *Service {
-	return &Service{router: router}
+// New constructs a Service over the given node router and market-data runtime.
+// The router is the seam through which the service reaches every execution
+// target; md is the live connector-manager view used to surface per-instance
+// subscription state and to re-apply configuration. md may be nil, in which
+// case market-data state resolves to empty and RestartMarketData is a no-op.
+func New(router node.NodeRouter, md MarketDataRuntime) *Service {
+	return &Service{router: router, md: md}
 }
 
 // Status returns the aggregate health of every node behind the router, for the
@@ -183,11 +201,6 @@ func (s *Service) PutLimit(ctx context.Context, limit domain.Limit) error {
 		return fmt.Errorf("backend: route limit: %w", err)
 	}
 
-	if limit.Target.Account != "" {
-		if _, _, err := n.GetAccountState(ctx, keyFor(limit.Target.Account)); err != nil {
-			return err
-		}
-	}
 	return n.PutLimit(ctx, limit, auth.CallerFromContext(ctx))
 }
 
@@ -244,10 +257,11 @@ func (s *Service) ListAudit(
 	return rows, nil
 }
 
-// ListAuditFiltered returns the most recent rows audit entries, newest first,
-// optionally narrowed to an account and/or a source. The node surface exposes
-// no audit filters, so the rows are aggregated and filtered here; count bounds
-// the result after filtering. An empty account or source disables that filter.
+// ListAuditFiltered returns audit entries, newest first, optionally narrowed
+// to an account and/or a source. The node surface exposes no audit filters, so
+// the rows are aggregated and filtered here. count is the fetch limit passed to
+// each node; the filtered result may be smaller. An empty account or source
+// disables that filter.
 func (s *Service) ListAuditFiltered(
 	ctx context.Context, account domain.AccountID, source domain.Source, count int,
 ) ([]domain.AuditRow, error) {
@@ -274,8 +288,8 @@ func (s *Service) ListAuditFiltered(
 // --- MCP access control -----------------------------------------------------
 
 // McpCommand is one MCP command's catalogue metadata paired with its resolved
-// effective enabled state, for the operator panel. It is the surface-facing view
-// the HTTP layer maps onto its wire DTO.
+// effective enabled state, for the operator panel. It is the surface-facing
+// view the HTTP layer maps onto its wire DTO.
 type McpCommand struct {
 	// Command is the catalogue entry (identity, agent description, risk flags,
 	// implemented flag, default enabled state).
@@ -286,8 +300,8 @@ type McpCommand struct {
 }
 
 // MarketDataFreshnessTTL is the current hard-coded quote freshness window.
-// Later work will make it configurable; until then it mirrors the engine's
-// default market-data TTL.
+// Configurable quote freshness is not yet implemented; this mirrors the
+// engine's default market-data TTL.
 const MarketDataFreshnessTTL = 10 * time.Second
 
 // MarketDataProvider is one built-in provider type the operator can configure.
@@ -304,10 +318,20 @@ type MarketDataInstrumentStatus struct {
 	Stale      bool
 }
 
-// MarketDataInstanceStatus is one configured source and all of its instruments.
+// MarketDataInstanceStatus is one configured source, all of its instruments,
+// and its current subscription state. State is one of "disabled", "pending",
+// "ok", or "error" (empty when no runtime is wired); Error carries the short
+// operator-facing message when State is "error". References is nil when the
+// connector exposes no help links. VerifiesSymbols is true when the provider
+// can check whether an external symbol exists in its catalogue.
 type MarketDataInstanceStatus struct {
-	Instance    domain.MarketDataInstance
-	Instruments []MarketDataInstrumentStatus
+	Instance        domain.MarketDataInstance
+	Instruments     []MarketDataInstrumentStatus
+	References      *marketdata.ProviderReferences
+	VerifiesSymbols bool
+	State           string
+	Error           string
+	Diagnostics     []marketdata.Diagnostic
 }
 
 // MarketDataStatus is the operator-facing market-data control-plane snapshot.
@@ -319,8 +343,9 @@ type MarketDataStatus struct {
 
 // ListMcpAccess returns the full MCP command catalogue, each entry paired with
 // its effective enabled state. The stored per-command overrides are read from
-// the group node (MCP access is a control-plane-wide setting, not account-scoped)
-// and merged over the catalogue defaults so every command resolves to a bool.
+// the group node (MCP access is a control-plane-wide setting, not
+// account-scoped) and merged over the catalogue defaults so every command
+// resolves to a bool.
 func (s *Service) ListMcpAccess(ctx context.Context) ([]McpCommand, error) {
 	n, err := s.groupNode()
 	if err != nil {
@@ -391,6 +416,11 @@ func (s *Service) ListMarketData(ctx context.Context) (MarketDataStatus, error) 
 		quoteByInstrument[marketDataKey(quote.InstanceID, quote.ExternalSymbol)] = quote
 	}
 
+	var runtimeStatuses map[string]marketdata.InstanceRuntimeStatus
+	if s.md != nil {
+		runtimeStatuses = s.md.InstanceStatuses()
+	}
+
 	now := time.Now().UTC()
 	statuses := make([]MarketDataInstanceStatus, 0, len(instances))
 	for _, instance := range instances {
@@ -411,9 +441,16 @@ func (s *Service) ListMarketData(ctx context.Context) (MarketDataStatus, error) 
 				Stale:      marketDataInstrumentStale(instrument, quotePtr, now),
 			})
 		}
+		rt := runtimeStatuses[instance.ID]
+		state, errMsg := marketDataInstanceState(instance, s.md, runtimeStatuses)
 		statuses = append(statuses, MarketDataInstanceStatus{
-			Instance:    instance,
-			Instruments: instStatuses,
+			Instance:        instance,
+			Instruments:     instStatuses,
+			References:      rt.References,
+			VerifiesSymbols: marketdata.ProviderVerifiesSymbols(instance.Type),
+			State:           state,
+			Error:           errMsg,
+			Diagnostics:     rt.Diagnostics,
 		})
 	}
 	return MarketDataStatus{
@@ -421,6 +458,86 @@ func (s *Service) ListMarketData(ctx context.Context) (MarketDataStatus, error) 
 		Instances:        statuses,
 		FreshnessSeconds: int(MarketDataFreshnessTTL.Seconds()),
 	}, nil
+}
+
+// RestartMarketData re-applies the market-data configuration by stopping and
+// restarting the connector manager. With no runtime wired it is a no-op.
+func (s *Service) RestartMarketData(ctx context.Context) error {
+	if s.md == nil {
+		return nil
+	}
+	return s.md.Restart()
+}
+
+// MarketDataSymbolVerification is the outcome of a one-shot symbol check for
+// one instance. Supported is false when the instance's provider cannot verify
+// symbols, in which case Exists and Suggestion are zero and the call still
+// succeeds. Suggestion is a case-folded catalogue variant when the symbol was
+// not found as typed.
+type MarketDataSymbolVerification struct {
+	Supported  bool
+	Exists     bool
+	Suggestion string
+}
+
+// VerifyMarketDataSymbol checks whether externalSymbol exists on the identified
+// instance's provider. It loads the instance config and runs a stateless probe
+// (a fresh connector that is never subscribed), so live feeds are untouched. A
+// provider that cannot verify symbols yields Supported=false with no error; an
+// error is reserved for an unknown instance or a catalogue-fetch failure.
+func (s *Service) VerifyMarketDataSymbol(
+	ctx context.Context, id, externalSymbol string,
+) (MarketDataSymbolVerification, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return MarketDataSymbolVerification{}, fmt.Errorf("market-data instance id: %w", domain.ErrInvalid)
+	}
+	n, err := s.groupNode()
+	if err != nil {
+		return MarketDataSymbolVerification{}, err
+	}
+	instance, ok, err := n.GetMarketDataInstance(ctx, id)
+	if err != nil {
+		return MarketDataSymbolVerification{}, fmt.Errorf("backend: get market-data instance: %w", err)
+	}
+	if !ok {
+		return MarketDataSymbolVerification{}, fmt.Errorf("market-data instance %q: %w", id, domain.ErrNotFound)
+	}
+	result, supported, err := marketdata.VerifySymbol(ctx, instance, strings.TrimSpace(externalSymbol))
+	if err != nil {
+		return MarketDataSymbolVerification{}, fmt.Errorf("backend: verify market-data symbol: %w", err)
+	}
+	return MarketDataSymbolVerification{
+		Supported:  supported,
+		Exists:     result.Exists,
+		Suggestion: result.Suggestion,
+	}, nil
+}
+
+// marketDataInstanceState resolves one instance's operator-facing state: a
+// disabled instance is "disabled"; with no runtime wired the state is empty; an
+// enabled instance the manager has applied reports the manager's state (and
+// error message on error); an enabled instance the manager has not yet applied
+// is "pending", signalling the operator must restart.
+func marketDataInstanceState(
+	instance domain.MarketDataInstance,
+	md MarketDataRuntime,
+	runtimeStatuses map[string]marketdata.InstanceRuntimeStatus,
+) (string, string) {
+	if !instance.Enabled {
+		return "disabled", ""
+	}
+	if md == nil {
+		return "", ""
+	}
+	status, ok := runtimeStatuses[instance.ID]
+	if !ok {
+		return "pending", ""
+	}
+	if status.State == marketdata.StateError {
+		return status.State, status.Error
+	}
+	return status.State, ""
 }
 
 // CreateMarketDataInstance validates and persists one source instance.
@@ -469,7 +586,11 @@ func (s *Service) DeleteMarketDataInstance(ctx context.Context, id string) error
 	return n.DeleteMarketDataInstance(ctx, id, auth.CallerFromContext(ctx))
 }
 
-// UpsertMarketDataInstrument validates and persists one instrument mapping.
+// UpsertMarketDataInstrument validates and persists one instrument mapping,
+// then pushes its operator-set manual mark once into the running instance. The
+// push is a no-op for streaming providers and for instruments without a manual
+// price (see MarketDataRuntime.PushManual), so only a manual instrument with a
+// price reaches the engine, and exactly once per upsert.
 func (s *Service) UpsertMarketDataInstrument(
 	ctx context.Context, instrument domain.MarketDataInstrument,
 ) error {
@@ -477,6 +598,7 @@ func (s *Service) UpsertMarketDataInstrument(
 	instrument.ExternalSymbol = strings.TrimSpace(instrument.ExternalSymbol)
 	instrument.BaseAsset = strings.TrimSpace(instrument.BaseAsset)
 	instrument.QuoteAsset = strings.TrimSpace(instrument.QuoteAsset)
+	instrument.ManualPrice = strings.TrimSpace(instrument.ManualPrice)
 	if err := validateMarketDataInstrument(instrument); err != nil {
 		return err
 	}
@@ -484,7 +606,13 @@ func (s *Service) UpsertMarketDataInstrument(
 	if err != nil {
 		return err
 	}
-	return n.UpsertMarketDataInstrument(ctx, instrument, auth.CallerFromContext(ctx))
+	if err := n.UpsertMarketDataInstrument(ctx, instrument, auth.CallerFromContext(ctx)); err != nil {
+		return err
+	}
+	if s.md != nil {
+		s.md.PushManual(instrument.InstanceID, instrument)
+	}
+	return nil
 }
 
 // SetMarketDataInstrumentEnabled toggles one instrument mapping.
@@ -552,6 +680,9 @@ func validateMarketDataInstrument(instrument domain.MarketDataInstrument) error 
 		return err
 	}
 	if err := domain.ValidateAsset(instrument.QuoteAsset); err != nil {
+		return err
+	}
+	if err := domain.ValidateMarketDataMark(instrument.ManualPrice); err != nil {
 		return err
 	}
 	return nil
@@ -704,7 +835,8 @@ func (s *Service) SetGroupNotes(ctx context.Context, id, notes string) error {
 	return n.SetGroupNotes(ctx, domain.DefaultTenant, id, notes, auth.CallerFromContext(ctx))
 }
 
-// SetGroupBlocked validates the id and blocks or unblocks the group with reason.
+// SetGroupBlocked validates the id and blocks or unblocks the group with
+// reason.
 func (s *Service) SetGroupBlocked(
 	ctx context.Context, id string, blocked bool, reason string,
 ) error {
@@ -784,8 +916,9 @@ func (s *Service) ListAdjustments(
 	return target.ListAdjustments(ctx, domain.DefaultTenant, account, source, n)
 }
 
-// ListAllAdjustments returns the most recent n adjustments aggregated across all
-// nodes and accounts, optionally narrowed to a non-empty account and/or source.
+// ListAllAdjustments returns the most recent n adjustments aggregated across
+// all nodes and accounts, optionally narrowed to a non-empty account and/or
+// source.
 // It backs GET /adjustments. Per-node results are already newest-first; the
 // merged slice is sorted newest-first and bounded to n.
 func (s *Service) ListAllAdjustments(

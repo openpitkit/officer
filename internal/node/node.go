@@ -62,8 +62,8 @@ type Health struct {
 // from the re-read full policy set, the store is reverted on engine failure,
 // and an audit row is appended last. The engine is built once and reconfigured
 // in place; officer never rebuilds it. A barrier change the runtime Configure
-// surface cannot express is an SDK gap surfaced as an error, not
-// worked around by reconstructing a fresh handle.
+// surface cannot express is an SDK gap surfaced as an error, not worked around
+// by reconstructing a fresh handle.
 type Node interface {
 	// Health returns the current aggregate health of the node's engine and
 	// store.
@@ -217,6 +217,12 @@ type Node interface {
 	// ListMarketDataInstances returns all configured market-data source instances.
 	ListMarketDataInstances(ctx context.Context) ([]domain.MarketDataInstance, error)
 
+	// GetMarketDataInstance returns the configured instance identified by id. The
+	// bool is false when no such instance exists.
+	GetMarketDataInstance(
+		ctx context.Context, id string,
+	) (domain.MarketDataInstance, bool, error)
+
 	// CreateMarketDataInstance persists one market-data source instance and
 	// audits the action. It has no engine side-effect.
 	CreateMarketDataInstance(
@@ -232,7 +238,8 @@ type Node interface {
 	// audits the action.
 	DeleteMarketDataInstance(ctx context.Context, id string, caller domain.Caller) error
 
-	// ListMarketDataInstruments returns every configured instrument of an instance.
+	// ListMarketDataInstruments returns every configured instrument of an
+	// instance.
 	ListMarketDataInstruments(
 		ctx context.Context, instanceID string,
 	) ([]domain.MarketDataInstrument, error)
@@ -249,7 +256,8 @@ type Node interface {
 		ctx context.Context, instanceID, externalSymbol string, enabled bool, caller domain.Caller,
 	) error
 
-	// DeleteMarketDataInstrument removes one instrument mapping and audits the action.
+	// DeleteMarketDataInstrument removes one instrument mapping and audits the
+	// action.
 	DeleteMarketDataInstrument(
 		ctx context.Context, instanceID, externalSymbol string, caller domain.Caller,
 	) error

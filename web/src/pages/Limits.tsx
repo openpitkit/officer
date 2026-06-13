@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useMemo, useState } from "react";
 import { ExternalLink, Pencil, Plus, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
@@ -263,16 +263,6 @@ export function Limits() {
 
   const [accountFilter, setAccountFilter] = useState(initialAccount);
   const [policyFilter, setPolicyFilter] = useState<Policy | typeof ALL>(ALL);
-
-  // Sync initial account from URL only on first render.
-  useEffect(() => {
-    if (initialAccount) {
-      // Seed the filter once from the URL query on mount.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setAccountFilter(initialAccount);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   // Defer the account filter so server-side polling does not refire on every
   // keystroke; the input stays responsive while the fetch debounces.

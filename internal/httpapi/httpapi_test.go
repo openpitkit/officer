@@ -54,6 +54,8 @@ type fakeService struct {
 	overview    backend.Overview
 	serviceInfo backend.ServiceInfo
 	marketData  backend.MarketDataStatus
+	mdVerify    backend.MarketDataSymbolVerification
+	mdVerifyErr error
 	status      backend.Status
 	statusErr   error
 	createErr   error
@@ -65,6 +67,14 @@ type fakeService struct {
 	delLimErr   error
 	auditErr    error
 	groupErr    error
+
+	// Error fields for list handlers whose service methods otherwise return a
+	// hardcoded nil; default nil so existing tests are unaffected.
+	listAccountsErr error
+	balancesErr     error
+	ordersErr       error
+	tradesErr       error
+	allAdjErr       error
 
 	mcpCommands  []backend.McpCommand
 	mcpAccessErr error
@@ -82,7 +92,7 @@ func (f *fakeService) Status(_ context.Context) (backend.Status, error) {
 	return f.status, f.statusErr
 }
 func (f *fakeService) ListAccounts(_ context.Context) ([]domain.Account, error) {
-	return f.accounts, nil
+	return f.accounts, f.listAccountsErr
 }
 func (f *fakeService) CreateAccount(_ context.Context, id domain.AccountID) (domain.Account, error) {
 	if f.createErr != nil {
@@ -172,6 +182,12 @@ func (f *fakeService) DeleteMarketDataInstrument(
 	f.mdCalls = append(f.mdCalls, "delete-instrument:"+instanceID+"/"+externalSymbol)
 	return f.stateErr
 }
+func (f *fakeService) VerifyMarketDataSymbol(
+	_ context.Context, id, externalSymbol string,
+) (backend.MarketDataSymbolVerification, error) {
+	f.mdCalls = append(f.mdCalls, "verify-symbol:"+id+"/"+externalSymbol)
+	return f.mdVerify, f.mdVerifyErr
+}
 func (f *fakeService) SetAccountGroup(_ context.Context, _ domain.AccountID, _ string) error {
 	return f.stateErr
 }
@@ -218,7 +234,7 @@ func (f *fakeService) ApplyAdjustment(
 func (f *fakeService) ListBalances(
 	_ context.Context, _ domain.AccountID, _ string,
 ) ([]domain.Balance, error) {
-	return f.balances, nil
+	return f.balances, f.balancesErr
 }
 func (f *fakeService) ListAdjustments(
 	_ context.Context, _ domain.AccountID, _ domain.Source, _ int,
@@ -228,7 +244,7 @@ func (f *fakeService) ListAdjustments(
 func (f *fakeService) ListAllAdjustments(
 	_ context.Context, _ domain.AccountID, _ domain.Source, _ int,
 ) ([]domain.AccountAdjustmentRecord, error) {
-	return f.adjustments, nil
+	return f.adjustments, f.allAdjErr
 }
 func (f *fakeService) SubmitOrder(_ context.Context, _ domain.Order) (domain.Order, error) {
 	return f.submitOrder, f.stateErr
@@ -247,18 +263,21 @@ func (f *fakeService) GetOrder(_ context.Context, _ int64) (domain.OrderDetail, 
 func (f *fakeService) ListOrders(
 	_ context.Context, _ domain.AccountID, _ domain.Source, _ int,
 ) ([]domain.Order, error) {
-	return f.orders, nil
+	return f.orders, f.ordersErr
 }
 func (f *fakeService) ListTrades(
 	_ context.Context, _ domain.AccountID, _ domain.Source, _ int,
 ) ([]domain.Trade, error) {
-	return f.trades, nil
+	return f.trades, f.tradesErr
 }
 func (f *fakeService) Overview(_ context.Context, _ time.Time) (backend.Overview, error) {
 	return f.overview, f.statusErr
 }
 func (f *fakeService) ServiceInfo(_ context.Context) (backend.ServiceInfo, error) {
 	return f.serviceInfo, f.statusErr
+}
+func (f *fakeService) RestartMarketData(_ context.Context) error {
+	return f.stateErr
 }
 
 // fakeSPA returns a minimal in-memory filesystem for the SPA option.
@@ -423,6 +442,67 @@ func TestCreateAccount_Conflict(t *testing.T) {
 	errObj, _ := m["error"].(map[string]any)
 	if errObj["code"] != "conflict" {
 		t.Fatalf("want code=conflict, got %v", errObj["code"])
+	}
+}
+
+func TestVerifyMarketDataSymbol_Unsupported(t *testing.T) {
+	svc := &fakeService{
+		mdVerify: backend.MarketDataSymbolVerification{Supported: false},
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"externalSymbol":"AAPL"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/market-data/instances/byo-1/verify-symbol",
+		body,
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	v, ok := m["verification"].(map[string]any)
+	if !ok {
+		t.Fatalf("want verification object, got %v", m["verification"])
+	}
+	if v["supported"] != false {
+		t.Fatalf("want supported=false, got %v", v["supported"])
+	}
+	if len(svc.mdCalls) != 1 || svc.mdCalls[0] != "verify-symbol:byo-1/AAPL" {
+		t.Fatalf("unexpected service calls: %v", svc.mdCalls)
+	}
+}
+
+func TestVerifyMarketDataSymbol_SuggestionFlows(t *testing.T) {
+	svc := &fakeService{
+		mdVerify: backend.MarketDataSymbolVerification{
+			Supported: true, Exists: false, Suggestion: "ETHUSDT",
+		},
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"externalSymbol":"ethusdt"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/market-data/instances/bn-1/verify-symbol",
+		body,
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	v, _ := m["verification"].(map[string]any)
+	if v["supported"] != true || v["exists"] != false {
+		t.Fatalf("want supported=true exists=false, got %v", v)
+	}
+	if v["suggestion"] != "ETHUSDT" {
+		t.Fatalf("want suggestion=ETHUSDT, got %v", v["suggestion"])
 	}
 }
 

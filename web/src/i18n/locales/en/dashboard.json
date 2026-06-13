@@ -26,7 +26,11 @@
   "marketData": {
     "title": "Market data",
     "none": "No sources enabled",
-    "moreStale": "+{{count}} stale"
+    "moreStale": "+{{count}} stale",
+    "moreOk": "+{{count}} OK",
+    "instanceError": "Error",
+    "instanceNotApplied": "Not applied",
+    "issues": "{{count}} issue(s)"
   },
   "audit": {
     "title": "Recent audit",

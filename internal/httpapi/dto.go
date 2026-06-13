@@ -206,13 +206,50 @@ type marketDataProviderDTO struct {
 	Title string `json:"title"`
 }
 
+type marketDataReferencesDTO struct {
+	DocsURL    string `json:"docsUrl,omitempty"`
+	SymbolsURL string `json:"symbolsUrl,omitempty"`
+}
+
 type marketDataInstanceDTO struct {
-	ID          string                    `json:"id"`
-	Type        string                    `json:"type"`
-	Label       string                    `json:"label"`
-	Credentials string                    `json:"credentials"`
-	Enabled     bool                      `json:"enabled"`
-	Instruments []marketDataInstrumentDTO `json:"instruments,omitempty"`
+	ID              string                    `json:"id"`
+	Type            string                    `json:"type"`
+	Label           string                    `json:"label"`
+	Credentials     string                    `json:"credentials"`
+	State           string                    `json:"state"`
+	Error           string                    `json:"error,omitempty"`
+	Enabled         bool                      `json:"enabled"`
+	VerifiesSymbols bool                      `json:"verifiesSymbols"`
+	References      *marketDataReferencesDTO  `json:"references,omitempty"`
+	Instruments     []marketDataInstrumentDTO `json:"instruments,omitempty"`
+	Diagnostics     []marketDataDiagnosticDTO `json:"diagnostics,omitempty"`
+}
+
+// marketDataSymbolVerificationDTO is the body of POST
+// .../instances/{id}/verify-symbol. Supported is false when the provider cannot
+// verify symbols; Suggestion carries a case-folded catalogue variant when the
+// symbol was not found as typed.
+type marketDataSymbolVerificationDTO struct {
+	Supported  bool   `json:"supported"`
+	Exists     bool   `json:"exists"`
+	Suggestion string `json:"suggestion,omitempty"`
+}
+
+type marketDataDiagnosticActionDTO struct {
+	Type   string `json:"type"`
+	Target string `json:"target,omitempty"`
+}
+
+type marketDataDiagnosticDTO struct {
+	Level       string                          `json:"level"`
+	Code        string                          `json:"code"`
+	Kind        string                          `json:"kind"`
+	Title       string                          `json:"title"`
+	Detail      string                          `json:"detail"`
+	Remediation string                          `json:"remediation,omitempty"`
+	Instrument  string                          `json:"instrument,omitempty"`
+	Actions     []marketDataDiagnosticActionDTO `json:"actions,omitempty"`
+	At          string                          `json:"at"`
 }
 
 type marketDataInstrumentDTO struct {
@@ -220,6 +257,7 @@ type marketDataInstrumentDTO struct {
 	ExternalSymbol string              `json:"externalSymbol"`
 	BaseAsset      string              `json:"baseAsset"`
 	QuoteAsset     string              `json:"quoteAsset"`
+	ManualPrice    string              `json:"manualPrice"`
 	Enabled        bool                `json:"enabled"`
 	Stale          bool                `json:"stale"`
 	Quote          *marketDataQuoteDTO `json:"quote,omitempty"`
@@ -257,13 +295,59 @@ func toMarketDataInstanceDTO(status backend.MarketDataInstanceStatus) marketData
 	for _, instrument := range status.Instruments {
 		instruments = append(instruments, toMarketDataInstrumentDTO(instrument))
 	}
+	diagnostics := make([]marketDataDiagnosticDTO, 0, len(status.Diagnostics))
+	for _, diag := range status.Diagnostics {
+		var actions []marketDataDiagnosticActionDTO
+		if len(diag.Actions) > 0 {
+			actions = make([]marketDataDiagnosticActionDTO, 0, len(diag.Actions))
+			for _, a := range diag.Actions {
+				actions = append(actions, marketDataDiagnosticActionDTO{
+					Type:   a.Type,
+					Target: a.Target,
+				})
+			}
+		}
+		diagnostics = append(diagnostics, marketDataDiagnosticDTO{
+			Level:       diag.Level,
+			Code:        diag.Code,
+			Kind:        diag.Kind,
+			Title:       diag.Title,
+			Detail:      diag.Detail,
+			Remediation: diag.Remediation,
+			Instrument:  diag.Instrument,
+			Actions:     actions,
+			At:          diag.At.Format(time.RFC3339Nano),
+		})
+	}
+	var refs *marketDataReferencesDTO
+	if r := status.References; r != nil && (r.DocsURL != "" || r.SymbolsURL != "") {
+		refs = &marketDataReferencesDTO{
+			DocsURL:    r.DocsURL,
+			SymbolsURL: r.SymbolsURL,
+		}
+	}
 	return marketDataInstanceDTO{
-		ID:          status.Instance.ID,
-		Type:        status.Instance.Type,
-		Label:       status.Instance.Label,
-		Credentials: status.Instance.Credentials,
-		Enabled:     status.Instance.Enabled,
-		Instruments: instruments,
+		ID:              status.Instance.ID,
+		Type:            status.Instance.Type,
+		Label:           status.Instance.Label,
+		Credentials:     status.Instance.Credentials,
+		State:           status.State,
+		Error:           status.Error,
+		Enabled:         status.Instance.Enabled,
+		VerifiesSymbols: status.VerifiesSymbols,
+		References:      refs,
+		Instruments:     instruments,
+		Diagnostics:     diagnostics,
+	}
+}
+
+func toMarketDataSymbolVerificationDTO(
+	v backend.MarketDataSymbolVerification,
+) marketDataSymbolVerificationDTO {
+	return marketDataSymbolVerificationDTO{
+		Supported:  v.Supported,
+		Exists:     v.Exists,
+		Suggestion: v.Suggestion,
 	}
 }
 
@@ -275,6 +359,7 @@ func toMarketDataInstrumentDTO(
 		ExternalSymbol: status.Instrument.ExternalSymbol,
 		BaseAsset:      status.Instrument.BaseAsset,
 		QuoteAsset:     status.Instrument.QuoteAsset,
+		ManualPrice:    status.Instrument.ManualPrice,
 		Enabled:        status.Instrument.Enabled,
 		Stale:          status.Stale,
 		Quote:          toMarketDataQuoteDTO(status.Quote),

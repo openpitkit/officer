@@ -26,7 +26,11 @@
   "marketData": {
     "title": "Рыночные данные",
     "none": "Источники не включены",
-    "moreStale": "+{{count}} отстаёт"
+    "moreStale": "+{{count}} отстаёт",
+    "moreOk": "+{{count}} ОК",
+    "instanceError": "Ошибка",
+    "instanceNotApplied": "Не применено",
+    "issues": "{{count}} проблем(а)"
   },
   "audit": {
     "title": "Последние записи аудита",

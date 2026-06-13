@@ -1,7 +1,8 @@
 {
   "title": "Market Data",
   "instances": {
-    "title": "Sources"
+    "title": "Sources",
+    "restartHint": "Configuration changes take effect after Restart."
   },
   "instance": {
     "id": "Instance ID",
@@ -12,7 +13,8 @@
   "instrument": {
     "externalSymbol": "External symbol",
     "baseAsset": "Base",
-    "quoteAsset": "Quote"
+    "quoteAsset": "Quote",
+    "manualPrice": "Manual price"
   },
   "actions": {
     "addInstance": "Add source",
@@ -20,21 +22,51 @@
     "enable": "Enable",
     "disable": "Disable",
     "deleteInstance": "Delete source",
-    "deleteInstrument": "Delete instrument"
+    "deleteInstrument": "Delete instrument",
+    "restart": "Restart feeds"
   },
   "state": {
     "enabled": "Enabled",
     "disabled": "Disabled",
-    "stale": "Stale"
+    "stale": "Stale",
+    "live": "Live",
+    "notApplied": "Not applied - restart to apply",
+    "error": "Error"
   },
+  "instanceError": "Error: {{message}}",
   "table": {
     "external": "External",
     "instrument": "Instrument",
+    "manualPrice": "Manual price",
     "price": "Price",
     "asOf": "As-of",
     "state": "State",
     "actions": "Actions"
   },
   "emptyInstances": "No market-data sources configured",
-  "emptyInstruments": "No instruments configured"
+  "emptyInstruments": "No instruments configured",
+  "diagnostics": {
+    "title": "Problems",
+    "levelError": "error",
+    "levelWarn": "warn",
+    "levelInfo": "info",
+    "groupActionNeeded": "Action needed",
+    "groupProvider": "Connection / provider",
+    "howToFix": "How to fix:",
+    "actionRestart": "Restart feeds",
+    "actionDocs": "Provider docs",
+    "actionSymbols": "Valid symbols",
+    "actionRemove": "Remove instrument"
+  },
+  "references": {
+    "docs": "Provider docs",
+    "symbols": "Valid symbols"
+  },
+  "verify": {
+    "action": "Verify symbol",
+    "unsupported": "This provider can't verify symbols",
+    "exists": "Symbol exists",
+    "notFound": "Symbol not found",
+    "didYouMean": "Did you mean {{suggestion}}?"
+  }
 }

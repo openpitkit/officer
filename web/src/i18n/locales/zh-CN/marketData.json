@@ -1,7 +1,8 @@
 {
   "title": "行情数据",
   "instances": {
-    "title": "来源"
+    "title": "来源",
+    "restartHint": "配置更改在重启后生效。"
   },
   "instance": {
     "id": "实例 ID",
@@ -12,7 +13,8 @@
   "instrument": {
     "externalSymbol": "外部代码",
     "baseAsset": "基础资产",
-    "quoteAsset": "计价资产"
+    "quoteAsset": "计价资产",
+    "manualPrice": "手动价格"
   },
   "actions": {
     "addInstance": "添加来源",
@@ -20,21 +22,51 @@
     "enable": "启用",
     "disable": "停用",
     "deleteInstance": "删除来源",
-    "deleteInstrument": "删除工具"
+    "deleteInstrument": "删除工具",
+    "restart": "重启数据源"
   },
   "state": {
     "enabled": "已启用",
     "disabled": "已停用",
-    "stale": "滞后"
+    "stale": "滞后",
+    "live": "实时",
+    "notApplied": "未应用 - 请重启",
+    "error": "错误"
   },
+  "instanceError": "错误：{{message}}",
   "table": {
     "external": "外部",
     "instrument": "工具",
+    "manualPrice": "手动价格",
     "price": "价格",
     "asOf": "截至",
     "state": "状态",
     "actions": "操作"
   },
   "emptyInstances": "未配置行情数据来源",
-  "emptyInstruments": "未配置工具"
+  "emptyInstruments": "未配置工具",
+  "diagnostics": {
+    "title": "问题",
+    "levelError": "错误",
+    "levelWarn": "警告",
+    "levelInfo": "信息",
+    "groupActionNeeded": "需要操作",
+    "groupProvider": "连接 / 提供方",
+    "howToFix": "解决方法：",
+    "actionRestart": "重启数据源",
+    "actionDocs": "提供方文档",
+    "actionSymbols": "有效代码列表",
+    "actionRemove": "删除工具"
+  },
+  "references": {
+    "docs": "提供方文档",
+    "symbols": "有效代码列表"
+  },
+  "verify": {
+    "action": "校验代码",
+    "unsupported": "此提供方无法校验代码",
+    "exists": "代码存在",
+    "notFound": "未找到代码",
+    "didYouMean": "您是否想输入 {{suggestion}}？"
+  }
 }

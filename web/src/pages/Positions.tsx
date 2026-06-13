@@ -21,7 +21,7 @@ import {
   useMemo,
   useState,
 } from "react";
-import { Coins, Plus, RefreshCw } from "lucide-react";
+import { Coins, Copy, Plus, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
@@ -113,15 +113,253 @@ function dash(v: string | undefined): string {
 }
 
 // ---------------------------------------------------------------------------
-// Balances table
+// Balances table — inline editing
 // ---------------------------------------------------------------------------
+
+/** A seed for the dialog's "apply with limits" path, carried from a row. */
+interface AdjustSeed {
+  account: string;
+  asset: string;
+  mode: AdjustmentMode;
+  value: string;
+}
+
+/** The simple, no-extra-limits apply path: a balance amount on (account, asset).
+ *  Returns the settled record so the row can show its outcome. */
+type InlineApply = (
+  account: string,
+  asset: string,
+  mode: AdjustmentMode,
+  value: string,
+) => Promise<Adjustment>;
+
+/** Shared inline editor: balance mode + amount, then Apply (simple path) and
+ *  Apply with limits (opens the dialog prefilled). Used by both existing
+ *  balance rows and the draft add-row. The row supplies account + asset. */
+function InlineAdjustEditor({
+  account,
+  asset,
+  onInlineApply,
+  onApplyWithLimits,
+  onApplied,
+  applyLabel,
+}: {
+  account: string;
+  asset: string;
+  onInlineApply: InlineApply;
+  onApplyWithLimits: (seed: AdjustSeed) => void;
+  /** Called after a successful inline apply (e.g. to reload + reset a draft). */
+  onApplied?: () => void;
+  /** Label for the simple Apply button (add-row reuses this slot). */
+  applyLabel?: string;
+}) {
+  const { t } = useTranslation("positions");
+  const [mode, setMode] = useState<AdjustmentMode>("absolute");
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [outcome, setOutcome] = useState<Adjustment | null>(null);
+
+  const canApply = account.trim() !== "" && asset.trim() !== "" && value.trim() !== "";
+
+  const apply = async () => {
+    if (!canApply) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setOutcome(null);
+    try {
+      const result = await onInlineApply(
+        account.trim(),
+        asset.trim(),
+        mode,
+        value.trim(),
+      );
+      setOutcome(result);
+      onApplied?.();
+    } catch (err) {
+      setError(errMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-end gap-2">
+        <Select value={mode} onValueChange={(v) => setMode(v as AdjustmentMode)}>
+          <SelectTrigger className="h-7 w-24 text-xs" disabled={busy}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="absolute">{t("dialog.mode.absolute")}</SelectItem>
+            <SelectItem value="delta">{t("dialog.mode.delta")}</SelectItem>
+          </SelectContent>
+        </Select>
+        <Input
+          value={value}
+          spellCheck={false}
+          placeholder={t("inline.amountPlaceholder")}
+          className="h-7 w-28 text-right text-xs"
+          disabled={busy}
+          aria-label={t("inline.amountAriaLabel", { account, asset })}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && canApply && !busy) {
+              void apply();
+            }
+          }}
+        />
+        <Button
+          size="sm"
+          onClick={() => void apply()}
+          disabled={busy || !canApply}
+          aria-label={t("inline.applyAriaLabel", { account, asset })}
+        >
+          {applyLabel ?? t("inline.apply")}
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() =>
+            onApplyWithLimits({
+              account: account.trim(),
+              asset: asset.trim(),
+              mode,
+              value: value.trim(),
+            })
+          }
+          disabled={busy}
+          aria-label={t("inline.applyWithLimitsAriaLabel", { account, asset })}
+        >
+          {t("inline.applyWithLimits")}
+        </Button>
+      </div>
+      {outcome && <AdjustOutcomeView adjustment={outcome} />}
+      {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+    </div>
+  );
+}
+
+function BalanceEditRow({
+  balance,
+  onInlineApply,
+  onApplyWithLimits,
+  onApplied,
+}: {
+  balance: Balance;
+  onInlineApply: InlineApply;
+  onApplyWithLimits: (seed: AdjustSeed) => void;
+  onApplied: () => void;
+}) {
+  const b = balance;
+  return (
+    <TableRow className="hover:bg-transparent">
+      <TableCell className="nums text-xs">{b.account}</TableCell>
+      <TableCell className="nums text-xs">{b.asset}</TableCell>
+      <TableCell className="nums text-right text-xs">{b.available}</TableCell>
+      <TableCell className="nums text-right text-xs">{b.held}</TableCell>
+      <TableCell className="nums text-right text-xs">{b.incoming}</TableCell>
+      <TableCell className="nums text-right text-xs">
+        {dash(b.averageEntryPrice)}
+      </TableCell>
+      <TableCell className="nums text-right text-xs">
+        {dash(b.realizedPnl)}
+      </TableCell>
+      <TableCell className="text-xs text-muted-lt">
+        <SplitTime iso={b.updatedAt} />
+      </TableCell>
+      <TableCell>
+        <InlineAdjustEditor
+          account={b.account}
+          asset={b.asset}
+          onInlineApply={onInlineApply}
+          onApplyWithLimits={onApplyWithLimits}
+          onApplied={onApplied}
+        />
+      </TableCell>
+    </TableRow>
+  );
+}
+
+/** A draft row to seed a balance for an account/asset not yet listed. */
+function BalanceDraftRow({
+  accountSuggestions,
+  assetSuggestions,
+  onInlineApply,
+  onApplyWithLimits,
+  onApplied,
+}: {
+  accountSuggestions: string[];
+  assetSuggestions: string[];
+  onInlineApply: InlineApply;
+  onApplyWithLimits: (seed: AdjustSeed) => void;
+  onApplied: () => void;
+}) {
+  const { t } = useTranslation("positions");
+  const [account, setAccount] = useState("");
+  const [asset, setAsset] = useState("");
+
+  return (
+    <TableRow className="hover:bg-transparent">
+      <TableCell className="text-xs">
+        <Autocomplete
+          value={account}
+          spellCheck={false}
+          placeholder="acc-1"
+          className="h-7 text-xs"
+          suggestions={accountSuggestions}
+          aria-label={t("inline.accountAriaLabel")}
+          onChange={setAccount}
+        />
+      </TableCell>
+      <TableCell className="text-xs">
+        <Autocomplete
+          value={asset}
+          spellCheck={false}
+          placeholder="AAPL"
+          className="h-7 text-xs"
+          suggestions={assetSuggestions}
+          aria-label={t("inline.assetAriaLabel")}
+          onChange={setAsset}
+        />
+      </TableCell>
+      <TableCell className="text-right text-xs text-muted-lt" colSpan={5}>
+        {t("inline.newRowHint")}
+      </TableCell>
+      <TableCell />
+      <TableCell>
+        <InlineAdjustEditor
+          account={account}
+          asset={asset}
+          onInlineApply={onInlineApply}
+          onApplyWithLimits={onApplyWithLimits}
+          onApplied={() => {
+            setAccount("");
+            setAsset("");
+            onApplied();
+          }}
+        />
+      </TableCell>
+    </TableRow>
+  );
+}
 
 function BalancesTable({
   balances,
-  onAdjust,
+  accountSuggestions,
+  assetSuggestions,
+  onInlineApply,
+  onApplyWithLimits,
+  onApplied,
 }: {
   balances: Balance[];
-  onAdjust: (b: Balance) => void;
+  accountSuggestions: string[];
+  assetSuggestions: string[];
+  onInlineApply: InlineApply;
+  onApplyWithLimits: (seed: AdjustSeed) => void;
+  onApplied: () => void;
 }) {
   const { t } = useTranslation("positions");
   return (
@@ -137,43 +375,26 @@ function BalancesTable({
             <TableHead className="text-right">{t("balances.columns.avgEntryPrice")}</TableHead>
             <TableHead className="text-right">{t("balances.columns.realizedPnl")}</TableHead>
             <TableHead>{t("balances.columns.updated")}</TableHead>
-            <TableHead className="text-right">{t("balances.columns.actions")}</TableHead>
+            <TableHead className="text-right">{t("balances.columns.adjust")}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {balances.map((b) => (
-            <TableRow
+            <BalanceEditRow
               key={`${b.account}|${b.asset}`}
-              className="hover:bg-transparent"
-            >
-              <TableCell className="nums text-xs">{b.account}</TableCell>
-              <TableCell className="nums text-xs">{b.asset}</TableCell>
-              <TableCell className="nums text-right text-xs">{b.available}</TableCell>
-              <TableCell className="nums text-right text-xs">{b.held}</TableCell>
-              <TableCell className="nums text-right text-xs">{b.incoming}</TableCell>
-              <TableCell className="nums text-right text-xs">
-                {dash(b.averageEntryPrice)}
-              </TableCell>
-              <TableCell className="nums text-right text-xs">
-                {dash(b.realizedPnl)}
-              </TableCell>
-              <TableCell className="text-xs text-muted-lt">
-                <SplitTime iso={b.updatedAt} />
-              </TableCell>
-              <TableCell>
-                <div className="flex justify-end">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => onAdjust(b)}
-                    aria-label={t("actions.adjustAriaLabel", { account: b.account, asset: b.asset })}
-                  >
-                    {t("actions.adjust")}
-                  </Button>
-                </div>
-              </TableCell>
-            </TableRow>
+              balance={b}
+              onInlineApply={onInlineApply}
+              onApplyWithLimits={onApplyWithLimits}
+              onApplied={onApplied}
+            />
           ))}
+          <BalanceDraftRow
+            accountSuggestions={accountSuggestions}
+            assetSuggestions={assetSuggestions}
+            onInlineApply={onInlineApply}
+            onApplyWithLimits={onApplyWithLimits}
+            onApplied={onApplied}
+          />
         </TableBody>
       </Table>
     </Card>
@@ -307,10 +528,12 @@ interface BoundsFieldState {
 }
 
 function BoundsField({
+  id,
   label,
   field,
   onChange,
 }: {
+  id: string;
   label: string;
   field: BoundsFieldState;
   onChange: (next: BoundsFieldState) => void;
@@ -321,12 +544,12 @@ function BoundsField({
       <div className="flex items-center gap-2">
         <input
           type="checkbox"
-          id={`chkb-${label}`}
+          id={`chkb-${id}`}
           checked={field.enabled}
           onChange={(e) => onChange({ ...field, enabled: e.target.checked })}
           className="h-3.5 w-3.5 cursor-pointer accent-[var(--accent)]"
         />
-        <Label htmlFor={`chkb-${label}`} className="cursor-pointer capitalize">
+        <Label htmlFor={`chkb-${id}`} className="cursor-pointer capitalize">
           {label}
         </Label>
       </div>
@@ -375,6 +598,21 @@ interface AdjustDialogProps {
   onOpenChange: (open: boolean) => void;
   initialAccount: string;
   initialAsset: string;
+  /** Balance amount to preseed from a row (empty leaves the field disabled). */
+  initialBalanceMode: AdjustmentMode;
+  initialBalanceValue: string;
+  /** Full-clone prefill for held, incoming, avgPrice, and bounds. */
+  initialHeldMode?: AdjustmentMode;
+  initialHeldValue?: string;
+  initialIncomingMode?: AdjustmentMode;
+  initialIncomingValue?: string;
+  initialAvgPrice?: string;
+  initialBalanceBoundsLower?: string;
+  initialBalanceBoundsUpper?: string;
+  initialHeldBoundsLower?: string;
+  initialHeldBoundsUpper?: string;
+  initialIncomingBoundsLower?: string;
+  initialIncomingBoundsUpper?: string;
   assetSuggestions: string[];
   accountSuggestions: string[];
   onDone: () => void;
@@ -385,19 +623,44 @@ function AdjustDialog({
   onOpenChange,
   initialAccount,
   initialAsset,
+  initialBalanceMode,
+  initialBalanceValue,
+  initialHeldMode,
+  initialHeldValue,
+  initialIncomingMode,
+  initialIncomingValue,
+  initialAvgPrice,
+  initialBalanceBoundsLower,
+  initialBalanceBoundsUpper,
+  initialHeldBoundsLower,
+  initialHeldBoundsUpper,
+  initialIncomingBoundsLower,
+  initialIncomingBoundsUpper,
   assetSuggestions,
   accountSuggestions,
   onDone,
 }: AdjustDialogProps) {
+  // A preseeded amount (e.g. from an inline row or clone) opens the field
+  // already enabled so the operator only adjusts what they need.
+  const seedAmount = (mode: AdjustmentMode | undefined, value: string | undefined): AmountFieldState =>
+    value
+      ? { enabled: true, mode: mode ?? "absolute", value }
+      : emptyAmount();
+
+  const seedBounds = (lower: string | undefined, upper: string | undefined): BoundsFieldState =>
+    lower || upper
+      ? { enabled: true, lower: lower ?? "", upper: upper ?? "" }
+      : emptyBounds();
+
   const [account, setAccount] = useState(initialAccount);
   const [asset, setAsset] = useState(initialAsset);
-  const [avgPrice, setAvgPrice] = useState("");
-  const [balance, setBalance] = useState<AmountFieldState>(emptyAmount);
-  const [held, setHeld] = useState<AmountFieldState>(emptyAmount);
-  const [incoming, setIncoming] = useState<AmountFieldState>(emptyAmount);
-  const [balanceBounds, setBalanceBounds] = useState<BoundsFieldState>(emptyBounds);
-  const [heldBounds, setHeldBounds] = useState<BoundsFieldState>(emptyBounds);
-  const [incomingBounds, setIncomingBounds] = useState<BoundsFieldState>(emptyBounds);
+  const [avgPrice, setAvgPrice] = useState(initialAvgPrice ?? "");
+  const [balance, setBalance] = useState<AmountFieldState>(() => seedAmount(initialBalanceMode, initialBalanceValue));
+  const [held, setHeld] = useState<AmountFieldState>(() => seedAmount(initialHeldMode, initialHeldValue));
+  const [incoming, setIncoming] = useState<AmountFieldState>(() => seedAmount(initialIncomingMode, initialIncomingValue));
+  const [balanceBounds, setBalanceBounds] = useState<BoundsFieldState>(() => seedBounds(initialBalanceBoundsLower, initialBalanceBoundsUpper));
+  const [heldBounds, setHeldBounds] = useState<BoundsFieldState>(() => seedBounds(initialHeldBoundsLower, initialHeldBoundsUpper));
+  const [incomingBounds, setIncomingBounds] = useState<BoundsFieldState>(() => seedBounds(initialIncomingBoundsLower, initialIncomingBoundsUpper));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<Adjustment | null>(null);
@@ -408,19 +671,41 @@ function AdjustDialog({
       // Reset all form fields from props each time the dialog opens.
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setAccount(initialAccount);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setAsset(initialAsset);
-      setAvgPrice("");
-      setBalance(emptyAmount());
-      setHeld(emptyAmount());
-      setIncoming(emptyAmount());
-      setBalanceBounds(emptyBounds());
-      setHeldBounds(emptyBounds());
-      setIncomingBounds(emptyBounds());
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setAvgPrice(initialAvgPrice ?? "");
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setBalance(seedAmount(initialBalanceMode, initialBalanceValue));
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setHeld(seedAmount(initialHeldMode, initialHeldValue));
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setIncoming(seedAmount(initialIncomingMode, initialIncomingValue));
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setBalanceBounds(seedBounds(initialBalanceBoundsLower, initialBalanceBoundsUpper));
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setHeldBounds(seedBounds(initialHeldBoundsLower, initialHeldBoundsUpper));
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setIncomingBounds(seedBounds(initialIncomingBoundsLower, initialIncomingBoundsUpper));
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setBusy(false);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setError(null);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setOutcome(null);
     }
-  }, [open, initialAccount, initialAsset]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    open,
+    initialAccount, initialAsset,
+    initialBalanceMode, initialBalanceValue,
+    initialHeldMode, initialHeldValue,
+    initialIncomingMode, initialIncomingValue,
+    initialAvgPrice,
+    initialBalanceBoundsLower, initialBalanceBoundsUpper,
+    initialHeldBoundsLower, initialHeldBoundsUpper,
+    initialIncomingBoundsLower, initialIncomingBoundsUpper,
+  ]);
 
   function buildBounds(f: BoundsFieldState): BoundsPair | undefined {
     if (!f.enabled) {
@@ -563,16 +848,19 @@ function AdjustDialog({
               {t("dialog.bounds.sectionLabel")}
             </p>
             <BoundsField
+              id="balance"
               label={t("dialog.bounds.balanceLabel")}
               field={balanceBounds}
               onChange={setBalanceBounds}
             />
             <BoundsField
+              id="held"
               label={t("dialog.bounds.heldLabel")}
               field={heldBounds}
               onChange={setHeldBounds}
             />
             <BoundsField
+              id="incoming"
               label={t("dialog.bounds.incomingLabel")}
               field={incomingBounds}
               onChange={setIncomingBounds}
@@ -616,6 +904,7 @@ function AdjustDialog({
 // ---------------------------------------------------------------------------
 
 function HistoryRowOutcome({ adj }: { adj: Adjustment }) {
+  const { t } = useTranslation("positions");
   const { accepted, rejected } = adj;
   if (rejected) {
     return (
@@ -627,13 +916,19 @@ function HistoryRowOutcome({ adj }: { adj: Adjustment }) {
   if (accepted) {
     const parts: string[] = [];
     if (accepted.balanceDelta || accepted.balanceResult) {
-      parts.push(`balance Δ${accepted.balanceDelta} → ${accepted.balanceResult}`);
+      parts.push(
+        `${t("dialog.outcome.fieldBalance")} Δ${accepted.balanceDelta} → ${accepted.balanceResult}`,
+      );
     }
     if (accepted.heldDelta || accepted.heldResult) {
-      parts.push(`held Δ${accepted.heldDelta} → ${accepted.heldResult}`);
+      parts.push(
+        `${t("dialog.outcome.fieldHeld")} Δ${accepted.heldDelta} → ${accepted.heldResult}`,
+      );
     }
     if (accepted.incomingDelta || accepted.incomingResult) {
-      parts.push(`incoming Δ${accepted.incomingDelta} → ${accepted.incomingResult}`);
+      parts.push(
+        `${t("dialog.outcome.fieldIncoming")} Δ${accepted.incomingDelta} → ${accepted.incomingResult}`,
+      );
     }
     return (
       <span className="nums text-text">
@@ -644,7 +939,7 @@ function HistoryRowOutcome({ adj }: { adj: Adjustment }) {
   return <span className="text-muted-lt">—</span>;
 }
 
-function HistoryRow({ adj }: { adj: Adjustment }) {
+function HistoryRow({ adj, onClone }: { adj: Adjustment; onClone: (adj: Adjustment) => void }) {
   const { t } = useTranslation("positions");
   const isRejected = !!adj.rejected;
   const isAccepted = !!adj.accepted && !isRejected;
@@ -701,6 +996,16 @@ function HistoryRow({ adj }: { adj: Adjustment }) {
       <TableCell className="text-xs">
         <HistoryRowOutcome adj={adj} />
       </TableCell>
+      <TableCell>
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-label={t("history.clone.ariaLabel", { id: adj.id })}
+          onClick={() => onClone(adj)}
+        >
+          <Copy className="h-3.5 w-3.5" />
+        </Button>
+      </TableCell>
     </TableRow>
   );
 }
@@ -723,6 +1028,21 @@ export function Positions() {
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [adjustAccount, setAdjustAccount] = useState("");
   const [adjustAsset, setAdjustAsset] = useState("");
+  const [adjustBalanceMode, setAdjustBalanceMode] =
+    useState<AdjustmentMode>("absolute");
+  const [adjustBalanceValue, setAdjustBalanceValue] = useState("");
+  // Extended clone-prefill props (undefined = leave empty / disabled).
+  const [adjustHeldMode, setAdjustHeldMode] = useState<AdjustmentMode | undefined>(undefined);
+  const [adjustHeldValue, setAdjustHeldValue] = useState<string | undefined>(undefined);
+  const [adjustIncomingMode, setAdjustIncomingMode] = useState<AdjustmentMode | undefined>(undefined);
+  const [adjustIncomingValue, setAdjustIncomingValue] = useState<string | undefined>(undefined);
+  const [adjustAvgPrice, setAdjustAvgPrice] = useState<string | undefined>(undefined);
+  const [adjustBalanceBoundsLower, setAdjustBalanceBoundsLower] = useState<string | undefined>(undefined);
+  const [adjustBalanceBoundsUpper, setAdjustBalanceBoundsUpper] = useState<string | undefined>(undefined);
+  const [adjustHeldBoundsLower, setAdjustHeldBoundsLower] = useState<string | undefined>(undefined);
+  const [adjustHeldBoundsUpper, setAdjustHeldBoundsUpper] = useState<string | undefined>(undefined);
+  const [adjustIncomingBoundsLower, setAdjustIncomingBoundsLower] = useState<string | undefined>(undefined);
+  const [adjustIncomingBoundsUpper, setAdjustIncomingBoundsUpper] = useState<string | undefined>(undefined);
 
   const deferredAccount = useDeferredValue(accountFilter.trim());
   const deferredAsset = useDeferredValue(assetFilter.trim());
@@ -769,17 +1089,64 @@ export function Positions() {
     return Array.from(set).sort();
   }, [balancesLoad.load, adjustmentsLoad.load]);
 
-  const openAdjust = (b: Balance) => {
-    setAdjustAccount(b.account);
-    setAdjustAsset(b.asset);
+  /** Clear the extended clone-only props so they don't bleed into a fresh dialog. */
+  const clearCloneExtras = () => {
+    setAdjustHeldMode(undefined);
+    setAdjustHeldValue(undefined);
+    setAdjustIncomingMode(undefined);
+    setAdjustIncomingValue(undefined);
+    setAdjustAvgPrice(undefined);
+    setAdjustBalanceBoundsLower(undefined);
+    setAdjustBalanceBoundsUpper(undefined);
+    setAdjustHeldBoundsLower(undefined);
+    setAdjustHeldBoundsUpper(undefined);
+    setAdjustIncomingBoundsLower(undefined);
+    setAdjustIncomingBoundsUpper(undefined);
+  };
+
+  // "Apply with limits" — open the dialog prefilled from the row's draft.
+  const openAdjustWithLimits = (seed: AdjustSeed) => {
+    setAdjustAccount(seed.account);
+    setAdjustAsset(seed.asset);
+    setAdjustBalanceMode(seed.mode);
+    setAdjustBalanceValue(seed.value);
+    clearCloneExtras();
     setAdjustOpen(true);
   };
 
   const openNewAdjust = () => {
     setAdjustAccount(accountFilter.trim());
     setAdjustAsset(assetFilter.trim());
+    setAdjustBalanceMode("absolute");
+    setAdjustBalanceValue("");
+    clearCloneExtras();
     setAdjustOpen(true);
   };
+
+  // Clone an adjustment record — open dialog prefilled with all request fields.
+  const openCloneAdjust = (adj: Adjustment) => {
+    const req = adj.request;
+    setAdjustAccount(adj.account);
+    setAdjustAsset(adj.asset);
+    setAdjustBalanceMode(req.balance?.mode ?? "absolute");
+    setAdjustBalanceValue(req.balance?.value ?? "");
+    setAdjustHeldMode(req.held?.mode);
+    setAdjustHeldValue(req.held?.value);
+    setAdjustIncomingMode(req.incoming?.mode);
+    setAdjustIncomingValue(req.incoming?.value);
+    setAdjustAvgPrice(req.averageEntryPrice);
+    setAdjustBalanceBoundsLower(req.balanceBounds?.lower);
+    setAdjustBalanceBoundsUpper(req.balanceBounds?.upper);
+    setAdjustHeldBoundsLower(req.heldBounds?.lower);
+    setAdjustHeldBoundsUpper(req.heldBounds?.upper);
+    setAdjustIncomingBoundsLower(req.incomingBounds?.lower);
+    setAdjustIncomingBoundsUpper(req.incomingBounds?.upper);
+    setAdjustOpen(true);
+  };
+
+  // The simple, no-extra-limits inline apply: just a balance amount.
+  const inlineApply: InlineApply = (account, asset, mode, value) =>
+    createAdjustment(account, { asset, balance: { mode, value } });
 
   const handleAdjustDone = () => {
     balancesLoad.reload();
@@ -853,20 +1220,36 @@ export function Positions() {
       )}
       {balancesLoad.load.state === "ready" &&
         (balancesLoad.load.data.length === 0 ? (
-          <EmptyState
-            title={t("balances.empty.title")}
-            hint={t("balances.empty.hint")}
-            action={
-              <Button size="sm" onClick={openNewAdjust}>
-                <Plus className="h-3.5 w-3.5" />
-                {t("actions.adjust")}
-              </Button>
-            }
-          />
+          // No balances yet: keep the guidance hint, but still offer the inline
+          // add-row table so the first balance can be seeded right here.
+          <>
+            <EmptyState
+              title={t("balances.empty.title")}
+              hint={t("balances.empty.hint")}
+              action={
+                <Button size="sm" onClick={openNewAdjust}>
+                  <Plus className="h-3.5 w-3.5" />
+                  {t("actions.adjust")}
+                </Button>
+              }
+            />
+            <BalancesTable
+              balances={[]}
+              accountSuggestions={accountSuggestions}
+              assetSuggestions={assetSuggestions}
+              onInlineApply={inlineApply}
+              onApplyWithLimits={openAdjustWithLimits}
+              onApplied={handleAdjustDone}
+            />
+          </>
         ) : (
           <BalancesTable
             balances={balancesLoad.load.data}
-            onAdjust={openAdjust}
+            accountSuggestions={accountSuggestions}
+            assetSuggestions={assetSuggestions}
+            onInlineApply={inlineApply}
+            onApplyWithLimits={openAdjustWithLimits}
+            onApplied={handleAdjustDone}
           />
         ))}
 
@@ -934,11 +1317,12 @@ export function Positions() {
                   <TableHead>{t("history.columns.request")}</TableHead>
                   <TableHead>{t("history.columns.status")}</TableHead>
                   <TableHead>{t("history.columns.outcome")}</TableHead>
+                  <TableHead />
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {adjustmentsLoad.load.data.map((adj) => (
-                  <HistoryRow key={adj.id} adj={adj} />
+                  <HistoryRow key={adj.id} adj={adj} onClone={openCloneAdjust} />
                 ))}
               </TableBody>
             </Table>
@@ -950,6 +1334,19 @@ export function Positions() {
         onOpenChange={setAdjustOpen}
         initialAccount={adjustAccount}
         initialAsset={adjustAsset}
+        initialBalanceMode={adjustBalanceMode}
+        initialBalanceValue={adjustBalanceValue}
+        initialHeldMode={adjustHeldMode}
+        initialHeldValue={adjustHeldValue}
+        initialIncomingMode={adjustIncomingMode}
+        initialIncomingValue={adjustIncomingValue}
+        initialAvgPrice={adjustAvgPrice}
+        initialBalanceBoundsLower={adjustBalanceBoundsLower}
+        initialBalanceBoundsUpper={adjustBalanceBoundsUpper}
+        initialHeldBoundsLower={adjustHeldBoundsLower}
+        initialHeldBoundsUpper={adjustHeldBoundsUpper}
+        initialIncomingBoundsLower={adjustIncomingBoundsLower}
+        initialIncomingBoundsUpper={adjustIncomingBoundsUpper}
         assetSuggestions={assetSuggestions}
         accountSuggestions={accountSuggestions}
         onDone={handleAdjustDone}

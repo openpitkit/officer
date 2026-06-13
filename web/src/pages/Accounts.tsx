@@ -371,7 +371,8 @@ account_id,group,notes`}
 // Create account dialog
 // ---------------------------------------------------------------------------
 
-function CreateAccountDialog({
+// Exported for unit tests; rendered standalone inside Accounts otherwise.
+export function CreateAccountDialog({
   groupSuggestions,
   onCreated,
 }: {

@@ -266,6 +266,17 @@ func (n *fakeNode) ListMarketDataInstances(
 	return n.mdInstances, nil
 }
 
+func (n *fakeNode) GetMarketDataInstance(
+	_ context.Context, id string,
+) (domain.MarketDataInstance, bool, error) {
+	for _, instance := range n.mdInstances {
+		if instance.ID == id {
+			return instance, true, nil
+		}
+	}
+	return domain.MarketDataInstance{}, false, nil
+}
+
 func (n *fakeNode) CreateMarketDataInstance(
 	_ context.Context, instance domain.MarketDataInstance, _ domain.Caller,
 ) error {
@@ -363,7 +374,7 @@ func (r *fakeRouter) All() []node.Node                  { return []node.Node{r.n
 
 func newTestService() (*backend.Service, *fakeNode) {
 	fn := &fakeNode{}
-	return backend.New(&fakeRouter{node: fn}), fn
+	return backend.New(&fakeRouter{node: fn}, nil), fn
 }
 
 func TestService_CreateAccountValidates(t *testing.T) {
@@ -488,17 +499,19 @@ func TestService_PutLimitValidatesBeforeRouting(t *testing.T) {
 	}
 }
 
-func TestService_PutLimitChecksAccountExists(t *testing.T) {
+func TestService_PutLimitAcceptsNonExistentAccount(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService()
-	fn.getAccountErr = domain.ErrNotFound
 	ctx := context.Background()
 
+	// Account "acc-new" does not exist in the fake node (getAccountErr is not set,
+	// but no account record exists either). PutLimit must succeed regardless: a
+	// policy rule may be created before the account is ever registered.
 	limit := domain.Limit{
 		Target: domain.LimitTarget{
 			Policy:  domain.PolicyRateLimit,
 			Scope:   domain.ScopeAccountAsset,
-			Account: "acc-1",
+			Account: "acc-new",
 			Asset:   "AAPL",
 		},
 		Values: []domain.LimitValue{
@@ -506,11 +519,11 @@ func TestService_PutLimitChecksAccountExists(t *testing.T) {
 			{Kind: domain.KindWindow, Value: "1s"},
 		},
 	}
-	if err := svc.PutLimit(ctx, limit); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("want ErrNotFound for missing account, got %v", err)
+	if err := svc.PutLimit(ctx, limit); err != nil {
+		t.Fatalf("PutLimit for non-existent account: %v", err)
 	}
-	if len(fn.putLimitCalls) != 0 {
-		t.Fatalf("missing account must not reach PutLimit")
+	if len(fn.putLimitCalls) != 1 {
+		t.Fatalf("want 1 PutLimit call, got %d", len(fn.putLimitCalls))
 	}
 }
 
@@ -722,6 +735,58 @@ func TestService_ListMarketDataBuildsStatus(t *testing.T) {
 	}
 	if !second.Stale {
 		t.Fatalf("enabled instrument without quote should be stale: %+v", second)
+	}
+}
+
+func TestService_ListMarketDataSurfacesVerifyCapability(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService()
+	fn.mdInstances = []domain.MarketDataInstance{
+		{ID: "mock-1", Type: domain.MarketDataProviderMock, Enabled: true},
+		{ID: "bn-1", Type: domain.MarketDataProviderBinance, Enabled: false},
+	}
+
+	status, err := svc.ListMarketData(context.Background())
+	if err != nil {
+		t.Fatalf("ListMarketData: %v", err)
+	}
+	byID := make(map[string]backend.MarketDataInstanceStatus, len(status.Instances))
+	for _, instance := range status.Instances {
+		byID[instance.Instance.ID] = instance
+	}
+	if byID["mock-1"].VerifiesSymbols {
+		t.Fatalf("mock instance VerifiesSymbols = true, want false")
+	}
+	// Binance is verify-capable even though the instance is disabled: the flag is
+	// provider-derived, not runtime-derived.
+	if !byID["bn-1"].VerifiesSymbols {
+		t.Fatalf("binance instance VerifiesSymbols = false, want true")
+	}
+}
+
+func TestService_VerifyMarketDataSymbolUnsupported(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService()
+	fn.mdInstances = []domain.MarketDataInstance{
+		{ID: "mock-1", Type: domain.MarketDataProviderMock, Enabled: true},
+	}
+
+	got, err := svc.VerifyMarketDataSymbol(context.Background(), "mock-1", "AAPL")
+	if err != nil {
+		t.Fatalf("VerifyMarketDataSymbol: %v", err)
+	}
+	if got.Supported || got.Exists || got.Suggestion != "" {
+		t.Fatalf("verification = %+v, want unsupported zero result", got)
+	}
+}
+
+func TestService_VerifyMarketDataSymbolUnknownInstance(t *testing.T) {
+	t.Parallel()
+	svc, _ := newTestService()
+
+	_, err := svc.VerifyMarketDataSymbol(context.Background(), "missing", "AAPL")
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("VerifyMarketDataSymbol(missing) err = %v, want ErrNotFound", err)
 	}
 }
 

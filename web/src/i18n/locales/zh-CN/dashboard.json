@@ -26,7 +26,11 @@
   "marketData": {
     "title": "行情数据",
     "none": "无已启用来源",
-    "moreStale": "+{{count}} 滞后"
+    "moreStale": "+{{count}} 滞后",
+    "moreOk": "+{{count}} 正常",
+    "instanceError": "错误",
+    "instanceNotApplied": "未应用",
+    "issues": "{{count}} 个问题"
   },
   "audit": {
     "title": "近期审计",

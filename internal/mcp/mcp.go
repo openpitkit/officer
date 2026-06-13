@@ -22,9 +22,10 @@
 // transport used by the `serve` run mode.
 //
 // All SDK-specific types stay confined to this package, behind the Source
-// seam. The AI surface is read-only: it exposes deployment status, account
-// state, risk limits, and audit log. It carries no secrets, no credentials,
-// and no order-flow control.
+// seam. The AI surface exposes deployment status, account state, risk limits,
+// and audit log (read-only tools), plus a small set of operator-gated mutating
+// commands (market-data instrument toggle). It carries no secrets, no
+// credentials, and no order-flow control.
 //
 // The MCP SDK (github.com/modelcontextprotocol/go-sdk) is pre-1.0 and pinned
 // in go.mod; reconcile this package's calls if a different minor is resolved.
@@ -437,6 +438,22 @@ func commandGate[Out any](
 	return true, nil
 }
 
+// commandGateMutating is like commandGate but fails closed on an access-store
+// error. Mutating commands must not execute when the gate cannot be checked: the
+// safe default is to deny the operation rather than risk an unintended mutation.
+func commandGateMutating[Out any](
+	ctx context.Context, src Source, command string,
+) (bool, *sdkmcp.CallToolResultFor[Out]) {
+	enabled, err := src.CommandEnabled(ctx, command)
+	if err != nil {
+		return false, toolErr[Out]("command access check failed; command not executed")
+	}
+	if !enabled {
+		return false, toolDisabled[Out](command)
+	}
+	return true, nil
+}
+
 // -- NewServer --
 
 // NewServer builds the Pit Officer MCP server: it names the server
@@ -624,10 +641,10 @@ func checkOrderHandler(src Source) func(
 			Account:     account,
 			BaseAsset:   strings.TrimSpace(p.Arguments.BaseAsset),
 			QuoteAsset:  strings.TrimSpace(p.Arguments.QuoteAsset),
-			Side:        domain.OrderSide(p.Arguments.Side),
-			AmountKind:  domain.OrderAmountKind(p.Arguments.AmountKind),
-			AmountValue: p.Arguments.AmountValue,
-			Price:       p.Arguments.Price,
+			Side:        domain.OrderSide(strings.TrimSpace(p.Arguments.Side)),
+			AmountKind:  domain.OrderAmountKind(strings.TrimSpace(p.Arguments.AmountKind)),
+			AmountValue: strings.TrimSpace(p.Arguments.AmountValue),
+			Price:       strings.TrimSpace(p.Arguments.Price),
 		}
 		result, err := src.CheckOrder(ctx, probe)
 		if err != nil {
@@ -653,7 +670,7 @@ func setMarketDataInstrumentHandler(src Source) func(
 		p *sdkmcp.CallToolParamsFor[setMarketDataInstrumentInput],
 	) (*sdkmcp.CallToolResultFor[setMarketDataInstrumentOutput], error) {
 		ctx = auth.ContextWithCaller(ctx, mcpCaller)
-		if ok, disabled := commandGate[setMarketDataInstrumentOutput](
+		if ok, disabled := commandGateMutating[setMarketDataInstrumentOutput](
 			ctx, src, setMarketDataInstrumentToolName,
 		); !ok {
 			return disabled, nil

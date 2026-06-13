@@ -170,11 +170,6 @@ export type OrderSide = "buy" | "sell";
 /** How the order amount is denominated. */
 export type AmountKind = "quantity" | "volume";
 
-/** Lock prices captured on order submission. */
-export interface LockPrices {
-  [asset: string]: string;
-}
-
 /** An order record. */
 export interface Order {
   id: number;
@@ -188,7 +183,8 @@ export interface Order {
   amountValue: string;
   price: string;
   status: string;
-  lockPrices: LockPrices;
+  /** Prices locked at order submission, as exact decimal strings. */
+  lockPrices: string[];
 }
 
 /** An event on an order's lifecycle. */
@@ -292,9 +288,35 @@ export interface MarketDataInstrument {
   externalSymbol: string;
   baseAsset: string;
   quoteAsset: string;
+  /** Operator-set manual mark price (exact decimal string); empty when none.
+   *  Applies only to bring-your-own (manual) instruments. */
+  manualPrice: string;
   enabled: boolean;
   stale: boolean;
   quote?: MarketDataQuote;
+}
+
+export interface MarketDataDiagnosticAction {
+  type: string;
+  target?: string;
+}
+
+export interface MarketDataDiagnostic {
+  level: string;
+  code: string;
+  kind: string;
+  title: string;
+  detail: string;
+  remediation?: string;
+  instrument?: string;
+  actions: MarketDataDiagnosticAction[];
+  at: string;
+}
+
+/** Provider help links exposed by a feed instance. */
+export interface MarketDataReferences {
+  docsUrl?: string;
+  symbolsUrl?: string;
 }
 
 export interface MarketDataInstance {
@@ -303,7 +325,24 @@ export interface MarketDataInstance {
   label: string;
   credentials: string;
   enabled: boolean;
+  state: string;
+  error?: string;
+  /** Whether the provider can verify external-symbol existence (gates the
+   *  verify button without making a call). */
+  verifiesSymbols: boolean;
   instruments: MarketDataInstrument[];
+  diagnostics: MarketDataDiagnostic[];
+  references?: MarketDataReferences;
+}
+
+/** Outcome of POST /market-data/instances/{id}/verify-symbol. */
+export interface MarketDataSymbolVerification {
+  /** False when the provider cannot verify symbols. */
+  supported: boolean;
+  /** Whether the external symbol exists in the provider's catalogue. */
+  exists: boolean;
+  /** Case-folded catalogue variant the operator likely meant, when present. */
+  suggestion?: string;
 }
 
 export interface MarketDataStatus {
@@ -320,6 +359,10 @@ export interface ServiceInfo {
   engineVersion: string;
   engineBuildProfile: string;
   release: boolean;
+  /** Whether the engine was built from a clean source tree. Absent until the
+   *  SDK exposes a precise dirty-sources flag; when present and false the build
+   *  posture badge reflects "modified sources". */
+  buildClean?: boolean;
   database: {
     path: string;
     reachable: boolean;

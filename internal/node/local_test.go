@@ -361,12 +361,12 @@ func TestLocalNode_PutLimitEngineFailureRevertsStore(t *testing.T) {
 	}
 }
 
-// TestLocalNode_PutLimitNotImplementedSurfacesAndReverts verifies the new
+// TestLocalNode_PutLimitNotImplementedSurfacesAndReverts verifies the
 // no-rebuild contract: when the runtime Configure surface reports the
 // not-implemented stub, the node surfaces that error (it does NOT rebuild) and
-// reverts the already-written store row, so the barrier does not persist and no
-// mutation audit is written. Closing that gap is engine-side SDK work
-// It is not an officer rebuild.
+// reverts the already-written store row, so the barrier does not persist and
+// no mutation audit is written. Closing that gap is engine-side SDK work, not
+// an officer rebuild.
 func TestLocalNode_PutLimitNotImplementedSurfacesAndReverts(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
@@ -727,10 +727,10 @@ func TestLocalNode_CheckOrderDelegatesToEngine(t *testing.T) {
 	}
 }
 
-// TestLocalNode_CheckOrderWritesNoAudit asserts the non-mutating check writes no
-// audit row and is side-effect-free across repeated calls: the audit count is
-// unchanged from before the first check, and the engine is only ever asked to
-// dry-run (the node never calls SubmitOrder/commit for a check).
+// TestLocalNode_CheckOrderWritesNoAudit asserts the non-mutating check writes
+// no audit row and is side-effect-free across repeated calls: the audit count
+// is unchanged from before the first check, and the engine is only ever asked
+// to dry-run (the node never calls SubmitOrder/commit for a check).
 func TestLocalNode_CheckOrderWritesNoAudit(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
@@ -769,5 +769,68 @@ func TestLocalNode_CheckOrderWritesNoAudit(t *testing.T) {
 	}
 	if len(eng.checkProbes) != 3 {
 		t.Fatalf("want 3 dry-run calls, got %d", len(eng.checkProbes))
+	}
+}
+
+func TestLocalNode_PutLimitNoAccountRequired(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, _ := newTestNode(t, eng)
+	ctx := context.Background()
+
+	// The account "acc-never-created" was never registered. PutLimit must
+	// succeed: policy rules are valid before the account exists.
+	limit := domain.Limit{
+		Target: domain.LimitTarget{
+			Tenant:  domain.DefaultTenant,
+			Policy:  domain.PolicyRateLimit,
+			Scope:   domain.ScopeAccountAsset,
+			Account: "acc-never-created",
+			Asset:   "AAPL",
+		},
+		Values: []domain.LimitValue{
+			{Kind: domain.KindMaxOrders, Value: "50"},
+			{Kind: domain.KindWindow, Value: "1s"},
+		},
+	}
+	if err := n.PutLimit(ctx, limit, testCaller); err != nil {
+		t.Fatalf("PutLimit for non-existent account: %v", err)
+	}
+	if len(eng.configureCalls) != 1 {
+		t.Fatalf("want 1 configure call, got %d", len(eng.configureCalls))
+	}
+}
+
+func TestLocalNode_ErrorMessagesNoNodePrefix(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, _ := newTestNode(t, eng)
+	ctx := context.Background()
+
+	// GetAccountState on a missing account must surface a not-found error whose
+	// message does not start with "node: ".
+	_, _, err := n.GetAccountState(ctx, testKey("no-such-account"))
+	if err == nil {
+		t.Fatal("want error for missing account, got nil")
+	}
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+	msg := err.Error()
+	if len(msg) >= 6 && msg[:6] == "node: " {
+		t.Fatalf("error message must not start with \"node: \", got: %s", msg)
+	}
+
+	// SetAccountBlocked on a missing account must also not carry "node: ".
+	err = n.SetAccountBlocked(ctx, testKey("no-such-account"), true, "test", testCaller)
+	if err == nil {
+		t.Fatal("want error for missing account on block, got nil")
+	}
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+	msg = err.Error()
+	if len(msg) >= 6 && msg[:6] == "node: " {
+		t.Fatalf("error message must not start with \"node: \", got: %s", msg)
 	}
 }

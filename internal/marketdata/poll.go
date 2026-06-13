@@ -31,7 +31,7 @@ type FetchFunc func(ctx context.Context, subs []Subscription) ([]QuoteUpdate, er
 // Poller drives a REST-only source on a fixed interval, coalescing each tick's
 // fetched quotes and emitting only the ones that changed since the last tick.
 // It is the shared base for adapters that have no streaming endpoint
-// (later work builds on it); no real REST source ships yet.
+// (future REST sources build on it); no real REST source ships yet.
 //
 // The poller keeps the last emitted quote per instrument so an unchanged value
 // is not re-emitted. A non-nil errFn observes fetch errors (for logging) without

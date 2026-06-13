@@ -104,8 +104,8 @@ func run(args []string, logger *slog.Logger) error {
 // modes share one setup path and one shutdown path. It does not hold an engine
 // handle directly: live engine state is reached through the node (Health,
 // EngineVersion), never a captured handle. It holds the market-data manager so
-// close can stop the quote producers before the node stops the engine and closes
-// the market-data service.
+// close can stop the quote producers before the node stops the engine and
+// closes the market-data service.
 type controlPlane struct {
 	service    *backend.Service
 	node       node.Node
@@ -133,6 +133,15 @@ func setup(ctx context.Context, cfg config.Config, logger *slog.Logger) (
 		return nil, fmt.Errorf("migrate store: %w", err)
 	}
 	logger.Info("store migrated", "path", st.Path())
+
+	// Seed the predefined stablecoin cross-rates on first run, before the manager
+	// starts, so the enabled source and its 1:1 marks are applied by the normal
+	// startup push. Idempotent: re-running is a no-op and never overrides operator
+	// edits.
+	if err := store.SeedMarketDataDefaults(ctx, st); err != nil {
+		_ = st.Close()
+		return nil, fmt.Errorf("seed market-data defaults: %w", err)
+	}
 
 	build := func(snap engine.Snapshot) (engine.Engine, error) {
 		return engine.BuildOpenPitEngine(cfg.RuntimeLibraryPath, snap)
@@ -163,7 +172,7 @@ func setup(ctx context.Context, cfg config.Config, logger *slog.Logger) (
 	}
 
 	return &controlPlane{
-		service:    backend.New(router),
+		service:    backend.New(router, manager),
 		node:       localNode,
 		marketData: manager,
 		cfg:        cfg,
@@ -172,7 +181,7 @@ func setup(ctx context.Context, cfg config.Config, logger *slog.Logger) (
 
 // close shuts the control plane down. The market-data manager is stopped first
 // so quote producers stop before node.Close stops the engine and closes the
-// market-data service (pushing into a closed service would be a use-after-free).
+// market-data service (pushing into a closed service would be use-after-free).
 // Closing the node then stops the engine and closes the store. Both steps are
 // idempotent.
 func (cp *controlPlane) close() error {
@@ -419,7 +428,7 @@ func runDashboard(args []string, logger *slog.Logger) error {
 	}
 
 	fmt.Printf("Dashboard: %s\n", joinURL(state.URL, "/"))
-	fmt.Printf("API:       %s\n", joinURL(state.URL, "/api/v1")) // Public programmatic surface
+	fmt.Printf("API:       %s\n", joinURL(state.URL, "/api/v1"))
 	fmt.Printf("API docs:  %s\n", joinURL(state.URL, "/docs"))
 	fmt.Printf("MCP:       %s\n", joinURL(state.URL, "/mcp"))
 	fmt.Printf("Addr:      %s\n", state.Addr)
@@ -470,8 +479,8 @@ func openBrowser(url string) error {
 }
 
 // nodeVersionSource adapts a node.Node to the MCP surface's VersionSource seam.
-// It reads the engine version through the node rather than a captured handle, so
-// access goes through one serialized path; the handle is permanent (officer
+// It reads the engine version through the node rather than a captured handle,
+// so access goes through one serialized path; the handle is permanent (officer
 // never rebuilds the engine).
 type nodeVersionSource struct {
 	node node.Node

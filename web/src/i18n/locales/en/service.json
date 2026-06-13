@@ -11,7 +11,20 @@
   "engine": {
     "title": "Engine",
     "version": "Version",
-    "profile": "Profile"
+    "profile": "Build profile",
+    "buildPosture": "Build posture",
+    "stableRelease": "stable release",
+    "developmentBuild": "development build",
+    "modifiedSources": "modified sources",
+    "profileParams": {
+      "version": "Version",
+      "profile": "Profile",
+      "opt_level": "Opt level",
+      "debug_assertions": "Debug assertions",
+      "target": "Target",
+      "target_cpu": "Target CPU",
+      "lto": "LTO"
+    }
   },
   "database": {
     "title": "Database",

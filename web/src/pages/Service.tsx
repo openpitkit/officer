@@ -41,6 +41,45 @@ import {
 // chrome (placeholders, generic verbs) comes from "common". Subsequent pages
 // copy this shape. Domain identifiers and route paths stay literal.
 
+/** One row in the build-profile parameter table. */
+interface ProfileRow {
+  param: string;
+  value: string;
+}
+
+/**
+ * Parse the engine build-profile string into parameter rows.
+ *
+ * The C ABI documents the value as a stable `key=value;`-delimited string
+ * (keys: version, profile, opt_level, debug_assertions, target, target_cpu,
+ * lto). Tolerant: any unexpected shape falls back to a single raw-value row.
+ */
+function parseProfileRows(raw: string): ProfileRow[] {
+  if (!raw) {
+    return [];
+  }
+  // Split on semicolons and parse each non-empty token as "key=value".
+  const rows: ProfileRow[] = [];
+  for (const token of raw.split(";")) {
+    const trimmed = token.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const eq = trimmed.indexOf("=");
+    if (eq > 0) {
+      rows.push({ param: trimmed.slice(0, eq), value: trimmed.slice(eq + 1) });
+    } else {
+      // Unexpected shape: surface the whole token as a raw value.
+      rows.push({ param: trimmed, value: "" });
+    }
+  }
+  // Fallback: if nothing parsed, treat the whole string as a single scalar.
+  if (rows.length === 0) {
+    return [{ param: raw, value: "" }];
+  }
+  return rows;
+}
+
 function ServiceCard({ info }: { info: ServiceInfo }) {
   const { t } = useTranslation("service");
   const { t: tc } = useTranslation();
@@ -80,21 +119,50 @@ function ServiceCard({ info }: { info: ServiceInfo }) {
             value={info.engineVersion || tc("value.none")}
           />
           <StatRow
-            label={t("engine.profile")}
-            value={
-              info.engineBuildProfile ? (
-                <span className="flex items-center gap-1.5">
-                  {info.engineBuildProfile}
-                  {!info.release && (
-                    <Badge variant="warn">{t("application.nonRelease")}</Badge>
-                  )}
-                </span>
-              ) : (
-                tc("value.none")
-              )
-            }
+            label={t("engine.buildPosture")}
             mono={false}
+            value={
+              <span className="flex items-center gap-1.5">
+                <Badge variant={info.release ? "ok" : "warn"}>
+                  {info.release
+                    ? t("engine.stableRelease")
+                    : t("engine.developmentBuild")}
+                </Badge>
+                {/* buildClean is absent until the SDK exposes a precise
+                    dirty-sources flag; when it arrives and is false, surface it. */}
+                {info.buildClean === false && (
+                  <Badge variant="warn">{t("engine.modifiedSources")}</Badge>
+                )}
+              </span>
+            }
           />
+          {info.engineBuildProfile ? (
+            <>
+              <div className="pb-1 pt-3">
+                <p className="text-xs font-medium text-muted">
+                  {t("engine.profile")}
+                </p>
+              </div>
+              {parseProfileRows(info.engineBuildProfile).map((row) => (
+                <StatRow
+                  key={row.param}
+                  label={
+                    t(`engine.profileParams.${row.param}`, {
+                      defaultValue: row.param,
+                    })
+                  }
+                  value={row.value || tc("value.none")}
+                  mono={false}
+                />
+              ))}
+            </>
+          ) : (
+            <StatRow
+              label={t("engine.profile")}
+              value={tc("value.none")}
+              mono={false}
+            />
+          )}
         </CardContent>
       </Card>
 

@@ -49,7 +49,7 @@ RUN git clone --branch "${PIT_REF}" --depth 1 \
     && cp target/release/libopenpit_ffi.so /libopenpit_ffi.so
 
 # Stage 3: build the pit-officer binary (cgo required by the openpit binding).
-FROM golang:1.23-bookworm AS gobuild
+FROM golang:1.25-bookworm AS gobuild
 
 # Path to a pre-built dylib relative to the build context. Empty uses the
 # library compiled in the dylib stage.

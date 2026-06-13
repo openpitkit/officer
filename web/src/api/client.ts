@@ -33,12 +33,15 @@ import type {
   Group,
   Health,
   Limit,
-  LockPrices,
+  MarketDataDiagnostic,
+  MarketDataDiagnosticAction,
   MarketDataInstrument,
   MarketDataInstance,
   MarketDataProvider,
   MarketDataQuote,
+  MarketDataReferences,
   MarketDataStatus,
+  MarketDataSymbolVerification,
   McpCommand,
   NodeHealth,
   Order,
@@ -59,6 +62,7 @@ export type ApiErrorCode =
   | "not_found"
   | "conflict"
   | "precondition"
+  | "not_implemented"
   | "internal"
   | "network";
 
@@ -113,6 +117,7 @@ function asCode(v: unknown): ApiErrorCode {
     case "not_found":
     case "conflict":
     case "precondition":
+    case "not_implemented":
     case "internal":
       return v;
     default:
@@ -336,18 +341,9 @@ function normalizeAdjustment(v: unknown): Adjustment {
   };
 }
 
-function normalizeLockPrices(v: unknown): LockPrices {
-  const out: LockPrices = {};
-  if (isObject(v)) {
-    for (const [key, raw] of Object.entries(v)) {
-      out[key] = asString(raw);
-    }
-  }
-  return out;
-}
-
 function normalizeOrder(v: unknown): Order {
   const o = isObject(v) ? v : {};
+  const rawLock = pick(o, "lockPrices", "LockPrices", "lock_prices");
   return {
     id: asInt(pick(o, "id", "Id", "ID")),
     account: asString(pick(o, "account", "Account")),
@@ -360,7 +356,7 @@ function normalizeOrder(v: unknown): Order {
     amountValue: asString(pick(o, "amountValue", "AmountValue", "amount_value")),
     price: asString(pick(o, "price", "Price")),
     status: asString(pick(o, "status", "Status")),
-    lockPrices: normalizeLockPrices(pick(o, "lockPrices", "LockPrices", "lock_prices")),
+    lockPrices: Array.isArray(rawLock) ? rawLock.map(asString) : [],
   };
 }
 
@@ -521,6 +517,7 @@ function normalizeMarketDataInstrument(v: unknown): MarketDataInstrument {
     ),
     baseAsset: asString(pick(o, "baseAsset", "BaseAsset", "base_asset")),
     quoteAsset: asString(pick(o, "quoteAsset", "QuoteAsset", "quote_asset")),
+    manualPrice: asString(pick(o, "manualPrice", "ManualPrice", "manual_price")),
     enabled: asBool(pick(o, "enabled", "Enabled")),
     stale: asBool(pick(o, "stale", "Stale")),
   };
@@ -530,19 +527,98 @@ function normalizeMarketDataInstrument(v: unknown): MarketDataInstrument {
   return instrument;
 }
 
+function normalizeMarketDataDiagnosticAction(
+  v: unknown,
+): MarketDataDiagnosticAction {
+  const o = isObject(v) ? v : {};
+  const action: MarketDataDiagnosticAction = {
+    type: asString(pick(o, "type", "Type")),
+  };
+  const target = pick(o, "target", "Target");
+  if (typeof target === "string" && target.length > 0) {
+    action.target = target;
+  }
+  return action;
+}
+
+function normalizeMarketDataDiagnostic(v: unknown): MarketDataDiagnostic {
+  const o = isObject(v) ? v : {};
+  const diag: MarketDataDiagnostic = {
+    level: asString(pick(o, "level", "Level")),
+    code: asString(pick(o, "code", "Code")),
+    kind: asString(pick(o, "kind", "Kind")),
+    title: asString(pick(o, "title", "Title")),
+    detail: asString(pick(o, "detail", "Detail")),
+    actions: normalizeArray(
+      pick(o, "actions", "Actions"),
+      normalizeMarketDataDiagnosticAction,
+    ),
+    at: asString(pick(o, "at", "At")),
+  };
+  const remediation = pick(o, "remediation", "Remediation");
+  if (typeof remediation === "string" && remediation.length > 0) {
+    diag.remediation = remediation;
+  }
+  const instrument = pick(o, "instrument", "Instrument");
+  if (typeof instrument === "string" && instrument.length > 0) {
+    diag.instrument = instrument;
+  }
+  return diag;
+}
+
+function normalizeMarketDataReferences(
+  v: unknown,
+): MarketDataReferences | undefined {
+  if (!isObject(v)) {
+    return undefined;
+  }
+  const docsUrl = pick(v, "docsUrl", "DocsUrl", "docs_url");
+  const symbolsUrl = pick(v, "symbolsUrl", "SymbolsUrl", "symbols_url");
+  if (docsUrl === undefined && symbolsUrl === undefined) {
+    return undefined;
+  }
+  const refs: MarketDataReferences = {};
+  if (typeof docsUrl === "string" && docsUrl.length > 0) {
+    refs.docsUrl = docsUrl;
+  }
+  if (typeof symbolsUrl === "string" && symbolsUrl.length > 0) {
+    refs.symbolsUrl = symbolsUrl;
+  }
+  return refs;
+}
+
 function normalizeMarketDataInstance(v: unknown): MarketDataInstance {
   const o = isObject(v) ? v : {};
-  return {
+  const instance: MarketDataInstance = {
     id: asString(pick(o, "id", "ID")),
     type: asString(pick(o, "type", "Type")),
     label: asString(pick(o, "label", "Label")),
     credentials: asString(pick(o, "credentials", "Credentials")),
     enabled: asBool(pick(o, "enabled", "Enabled")),
+    state: asString(pick(o, "state", "State")),
+    verifiesSymbols: asBool(
+      pick(o, "verifiesSymbols", "VerifiesSymbols", "verifies_symbols"),
+    ),
     instruments: normalizeArray(
       pick(o, "instruments", "Instruments"),
       normalizeMarketDataInstrument,
     ),
+    diagnostics: normalizeArray(
+      pick(o, "diagnostics", "Diagnostics"),
+      normalizeMarketDataDiagnostic,
+    ),
   };
+  const err = pick(o, "error", "Error");
+  if (err !== undefined) {
+    instance.error = asString(err);
+  }
+  const refs = normalizeMarketDataReferences(
+    pick(o, "references", "References"),
+  );
+  if (refs !== undefined) {
+    instance.references = refs;
+  }
+  return instance;
 }
 
 function normalizeMarketDataStatus(v: unknown): MarketDataStatus {
@@ -562,12 +638,27 @@ function normalizeMarketDataStatus(v: unknown): MarketDataStatus {
   };
 }
 
+function normalizeMarketDataSymbolVerification(
+  v: unknown,
+): MarketDataSymbolVerification {
+  const o = isObject(v) ? v : {};
+  const result: MarketDataSymbolVerification = {
+    supported: asBool(pick(o, "supported", "Supported")),
+    exists: asBool(pick(o, "exists", "Exists")),
+  };
+  const suggestion = pick(o, "suggestion", "Suggestion");
+  if (typeof suggestion === "string" && suggestion.length > 0) {
+    result.suggestion = suggestion;
+  }
+  return result;
+}
+
 function normalizeServiceInfo(v: unknown): ServiceInfo {
   const o = isObject(v) ? v : {};
   const db = isObject(pick(o, "database", "Database"))
     ? (pick(o, "database", "Database") as Json)
     : {};
-  return {
+  const info: ServiceInfo = {
     name: asString(pick(o, "name", "Name")),
     engineVersion: asString(
       pick(o, "engineVersion", "EngineVersion", "engine_version"),
@@ -581,6 +672,12 @@ function normalizeServiceInfo(v: unknown): ServiceInfo {
       reachable: asBool(pick(db, "reachable", "Reachable")),
     },
   };
+  // Tolerate the optional SDK-provided precise dirty-sources flag when present.
+  const rawClean = pick(o, "buildClean", "BuildClean", "build_clean");
+  if (typeof rawClean === "boolean") {
+    info.buildClean = rawClean;
+  }
+  return info;
 }
 
 function normalizeArray<T>(v: unknown, one: (x: unknown) => T): T[] {
@@ -620,6 +717,8 @@ async function toApiError(res: Response, path: string): Promise<ApiError> {
       code = "conflict";
     } else if (res.status === 422) {
       code = "precondition";
+    } else if (res.status === 501) {
+      code = "not_implemented";
     }
   }
   // Prefer the backend's human message; otherwise a localized per-code default,
@@ -770,6 +869,7 @@ export async function upsertMarketDataInstrument(
     externalSymbol: string;
     baseAsset: string;
     quoteAsset: string;
+    manualPrice: string;
     enabled: boolean;
   },
 ): Promise<MarketDataStatus> {
@@ -802,6 +902,29 @@ export async function deleteMarketDataInstrument(
   await request(
     `${BASE}/market-data/instances/${encode(instanceId)}/instruments?${params.toString()}`,
     { method: "DELETE" },
+  );
+}
+
+/** POST /market-data/restart - stop and restart all feed subscriptions. */
+export async function restartMarketData(): Promise<MarketDataStatus> {
+  const v = await request(`${BASE}/market-data/restart`, { method: "POST" });
+  const o = isObject(v) ? v : {};
+  return normalizeMarketDataStatus(pick(o, "marketData", "MarketData"));
+}
+
+/** POST /market-data/instances/{id}/verify-symbol - stateless symbol check.
+ *  Never disturbs live feeds; supported=false when the provider can't verify. */
+export async function verifyMarketDataSymbol(
+  instanceId: string,
+  externalSymbol: string,
+): Promise<MarketDataSymbolVerification> {
+  const v = await request(
+    `${BASE}/market-data/instances/${encode(instanceId)}/verify-symbol`,
+    { method: "POST", body: { externalSymbol } },
+  );
+  const o = isObject(v) ? v : {};
+  return normalizeMarketDataSymbolVerification(
+    pick(o, "verification", "Verification"),
   );
 }
 
@@ -1136,7 +1259,7 @@ interface CheckOrderBody {
   price?: string;
 }
 
-/** POST /orders/check — pre-trade dry-run; never mutates state. */
+/** POST /orders/check - pre-trade dry-run; never mutates state. */
 export async function checkOrder(
   body: CheckOrderBody,
   signal?: AbortSignal,
@@ -1299,7 +1422,7 @@ function normalizeMcpCommand(v: unknown): McpCommand {
   };
 }
 
-/** GET /mcp-access — returns the full MCP command catalogue. */
+/** GET /mcp-access - returns the full MCP command catalogue. */
 export async function getMcpCommands(
   signal?: AbortSignal,
 ): Promise<McpCommand[]> {
@@ -1308,7 +1431,7 @@ export async function getMcpCommands(
   return normalizeArray(pick(o, "commands", "Commands"), normalizeMcpCommand);
 }
 
-/** PUT /mcp-access/{command} — enable or disable one MCP command. */
+/** PUT /mcp-access/{command} - enable or disable one MCP command. */
 export async function setMcpCommand(
   name: string,
   enabled: boolean,

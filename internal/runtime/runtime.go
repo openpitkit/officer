@@ -117,8 +117,10 @@ func Remove(cfg config.Config) error {
 }
 
 // ClientURL turns a bind address into a client-reachable URL of the form
-// "http://host:port/". Wildcard bind hosts (0.0.0.0, empty, "::", "[::]") are
-// not reachable as a destination, so they map to loopback 127.0.0.1.
+// "http://host:port/". Wildcard bind hosts (0.0.0.0, empty, "::") are not
+// reachable as a destination, so they map to loopback 127.0.0.1.
+// net.SplitHostPort strips the brackets from bracketed IPv6 addresses, so
+// "[::]:port" yields host "::" and is covered by the "::" case.
 func ClientURL(addr string) string {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -126,7 +128,7 @@ func ClientURL(addr string) string {
 		return "http://" + addr + "/"
 	}
 	switch host {
-	case "0.0.0.0", "", "::", "[::]":
+	case "0.0.0.0", "", "::":
 		host = "127.0.0.1"
 	}
 	return "http://" + net.JoinHostPort(host, port) + "/"

@@ -22,12 +22,14 @@
     "side": "Направление",
     "amount": "Объём",
     "price": "Цена",
+    "lockPrices": "Цены блокировки",
     "status": "Статус",
     "source": "Источник",
     "time": "Время",
     "order": "Ордер",
     "qty": "Кол-во",
-    "lockPrice": "Цена блокировки"
+    "lockPrice": "Цена блокировки",
+    "lockPrices": "Цены блокировки"
   },
 
   "amount": {
@@ -89,7 +91,11 @@
     "wouldReject": "Предпросмотр: будет отклонён",
     "lockPrices": "Цены блокировки: {{prices}}",
     "wouldBlock": "Заблокирует счёт {{account}}",
-    "wouldBlockReason": "Заблокирует счёт {{account}} — {{reason}}"
+    "wouldBlockReason": "Заблокирует счёт {{account}} — {{reason}}",
+    "accountBlocked": "Счёт {{account}} заблокирован",
+    "rejectReasons": {
+      "account_blocked": "Счёт заблокирован"
+    }
   },
 
   "execReport": {
@@ -109,6 +115,12 @@
       "done": "Готово",
       "validationError": "Количество и цена обязательны."
     }
+  },
+
+  "clone": {
+    "orderButton": "Клонировать",
+    "orderAriaLabel": "Клонировать ордер #{{orderId}}",
+    "execReportAriaLabel": "Клонировать отчёт об исполнении для сделки #{{tradeId}}"
   },
 
   "detail": {

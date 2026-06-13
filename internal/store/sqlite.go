@@ -781,10 +781,11 @@ func (s *sqliteStore) UpsertMarketDataInstrument(
 	_, err := s.db.ExecContext(
 		ctx,
 		`INSERT OR REPLACE INTO market_data_instruments
-		 (instance_id, external_symbol, base_asset, quote_asset, enabled)
-		 VALUES (?, ?, ?, ?, ?)`,
+		 (instance_id, external_symbol, base_asset, quote_asset, manual_price, enabled)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
 		instrument.InstanceID, instrument.ExternalSymbol,
-		instrument.BaseAsset, instrument.QuoteAsset, instrument.Enabled,
+		instrument.BaseAsset, instrument.QuoteAsset,
+		instrument.ManualPrice, instrument.Enabled,
 	)
 	if err != nil {
 		return fmt.Errorf("store: upsert market-data instrument: %w", err)
@@ -797,7 +798,7 @@ func (s *sqliteStore) ListMarketDataInstruments(
 	ctx context.Context, instanceID string,
 ) ([]domain.MarketDataInstrument, error) {
 	return s.queryMarketDataInstruments(ctx,
-		`SELECT instance_id, external_symbol, base_asset, quote_asset, enabled
+		`SELECT instance_id, external_symbol, base_asset, quote_asset, manual_price, enabled
 		 FROM market_data_instruments WHERE instance_id = ? ORDER BY external_symbol`,
 		instanceID)
 }
@@ -808,7 +809,7 @@ func (s *sqliteStore) ListEnabledMarketDataInstruments(
 	ctx context.Context, instanceID string,
 ) ([]domain.MarketDataInstrument, error) {
 	return s.queryMarketDataInstruments(ctx,
-		`SELECT instance_id, external_symbol, base_asset, quote_asset, enabled
+		`SELECT instance_id, external_symbol, base_asset, quote_asset, manual_price, enabled
 		 FROM market_data_instruments WHERE instance_id = ? AND enabled = 1
 		 ORDER BY external_symbol`,
 		instanceID)
@@ -996,11 +997,13 @@ func scanMarketDataInstanceRow(row *sql.Row) (domain.MarketDataInstance, error) 
 
 // scanMarketDataInstrument scans one instrument row from a *sql.Rows cursor.
 // Expects columns: instance_id, external_symbol, base_asset, quote_asset,
-// enabled.
+// manual_price, enabled.
 func scanMarketDataInstrument(rows *sql.Rows) (domain.MarketDataInstrument, error) {
-	var instanceID, externalSymbol, baseAsset, quoteAsset string
+	var instanceID, externalSymbol, baseAsset, quoteAsset, manualPrice string
 	var enabled bool
-	if err := rows.Scan(&instanceID, &externalSymbol, &baseAsset, &quoteAsset, &enabled); err != nil {
+	if err := rows.Scan(
+		&instanceID, &externalSymbol, &baseAsset, &quoteAsset, &manualPrice, &enabled,
+	); err != nil {
 		return domain.MarketDataInstrument{}, fmt.Errorf("store: scan market-data instrument: %w", err)
 	}
 	return domain.MarketDataInstrument{
@@ -1008,6 +1011,7 @@ func scanMarketDataInstrument(rows *sql.Rows) (domain.MarketDataInstrument, erro
 		ExternalSymbol: externalSymbol,
 		BaseAsset:      baseAsset,
 		QuoteAsset:     quoteAsset,
+		ManualPrice:    manualPrice,
 		Enabled:        enabled,
 	}, nil
 }

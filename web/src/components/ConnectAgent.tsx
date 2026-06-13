@@ -75,7 +75,7 @@ export function ConnectAgent() {
         <p className="text-xs text-muted-lt">{t("connect.subtitle")}</p>
       </div>
 
-      {/* Tab toggle — mirrors the Orders page pattern. */}
+      {/* Tab toggle - mirrors the Orders page pattern. */}
       <div className="flex w-fit gap-1 rounded-card border border-border bg-bg p-1">
         {(["claude", "chatgpt", "prompt"] as TabId[]).map((tabId) => (
           <button

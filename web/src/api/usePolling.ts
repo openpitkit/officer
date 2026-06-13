@@ -17,8 +17,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-/** Async load lifecycle for a value of type T. Mirrors LoadState in useStatus
- *  but is shared by every polling page hook. */
+/** Async load lifecycle for a value of type T. */
 export type LoadState<T> =
   | { state: "loading"; data: null; error: null }
   | { state: "ready"; data: T; error: null }

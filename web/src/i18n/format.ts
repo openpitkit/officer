@@ -24,7 +24,7 @@ import i18n from "@/i18n";
 //
 // IMPORTANT: `formatNumber` is for counts and derived numbers only. API
 // decimals (prices, quantities, P&L) arrive as strings to preserve precision
-// and MUST NOT be re-parsed through `Number(...)` here — that would lose
+// and MUST NOT be re-parsed through `Number(...)` here - that would lose
 // precision. Render those strings as-is (optionally grouped on the string
 // side), never via this helper.
 
@@ -70,7 +70,7 @@ export function formatDateTime(iso: string): string {
 }
 
 /** Format a count or derived number in the active locale. Not for API
- *  decimals — see the module note. */
+ *  decimals - see the module note. */
 export function formatNumber(
   value: number,
   opts?: Intl.NumberFormatOptions,

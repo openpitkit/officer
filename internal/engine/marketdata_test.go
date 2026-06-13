@@ -55,14 +55,14 @@ func readMark(t *testing.T, service *bindmd.Service, instrument param.Instrument
 	if !ok {
 		t.Fatalf("Resolve: instrument not registered")
 	}
-	quote, err := service.GetOrErr(
+	quote, err := service.Get(
 		id,
 		param.NewAccountIDFromUint64(1),
 		noGroupAccountInfo{},
 		bindmd.QuoteResolutionAccountThenGroupThenDefault,
 	)
 	if err != nil {
-		t.Fatalf("GetOrErr: %v", err)
+		t.Fatalf("Get: %v", err)
 	}
 	mark, ok := quote.Mark().Get()
 	if !ok {

@@ -40,6 +40,11 @@ import (
 // than this reads as absent. Making it configurable is planned.
 var defaultQuoteTTL = bindmd.WithinTTL(10 * time.Second)
 
+// defaultMarketOrderSlippageBps is the worst-case slippage applied when sizing
+// market-order reservations in the spot-funds policy (1500 bps = 15%, the
+// binding's documented conservative default).
+const defaultMarketOrderSlippageBps uint16 = 1500
+
 // envRuntimeLibraryPath is the binding environment variable that pins the
 // native runtime library to an explicit pre-extracted path, bypassing the
 // binding's own extraction. Pit Officer sets it from
@@ -684,10 +689,11 @@ func (e *openPitEngine) CheckOrder(
 	defer report.Close()
 
 	if !report.IsPass() {
+		rejects := report.Rejects()
 		return domain.CheckResult{
 			Passed:     false,
-			Rejects:    orderRejectsFrom(report.Rejects()),
-			WouldBlock: accountBlockFrom(report.AccountBlock(), probe.Account),
+			Rejects:    orderRejectsFrom(rejects),
+			WouldBlock: accountBlockFrom(report.AccountBlock(), rejects, probe.Account),
 		}, nil
 	}
 
@@ -757,12 +763,11 @@ func policyName(policy string) string {
 // resource never leaks. On success the caller owns the returned service and must
 // close it (via Engine.Stop).
 //
-// The spot-funds policy is always registered with its default settings: it is
-// the authority for spot balances, so balance seeding and spot-holdings
-// reservations depend on it. It stays limit-only - the service is NOT wired into
-// it (no WithMarketOrders) this phase, so market orders still reject
-// UnsupportedOrderType and price-free behavior is unchanged. Dynamic
-// price-dependent consumption is planned.
+// The spot-funds policy is always registered and wired to the market-data
+// service via WithMarketOrders(service, defaultMarketOrderSlippageBps): market
+// orders are priced off the mark quote rather than rejected. Instruments without
+// a live quote reject with MarkPriceUnavailable instead of UnsupportedOrderType.
+// Operator-configurable slippage and runtime enable/disable remain future work.
 func buildEngine(
 	byPolicy map[string][]domain.Limit,
 ) (*openpit.Engine, *bindmd.Service, map[string]struct{}, error) {
@@ -774,14 +779,15 @@ func buildEngine(
 		return nil, nil, nil, fmt.Errorf("engine: build market-data service: %w", err)
 	}
 
-	// OrderValidation first, then SpotFunds (default settings, limit-only), then
-	// the conditional risk policies. SpotFunds must be registered for balance
-	// seeding and spot holdings to take effect. PolicyGroupID(0) reaches the
-	// ready builder without WithMarketOrders, keeping the policy limit-only.
+	// OrderValidation first, then SpotFunds, then the conditional risk policies.
+	// SpotFunds must be registered for balance seeding and spot holdings to take
+	// effect. WithMarketOrders wires the already-built service so market orders
+	// are priced off the mark quote; runtime slippage config remains future work.
 	builder := eb.
 		Builtin(policies.BuildOrderValidation()).
-		Builtin(policies.BuildSpotFunds().PolicyGroupID(0))
-	// TODO: price-dependent policy consumption
+		Builtin(policies.BuildSpotFunds().
+			WithMarketOrders(service, defaultMarketOrderSlippageBps).
+			PolicyGroupID(0))
 
 	// SpotFunds is always registered by the build path above.
 	registered := map[string]struct{}{nameSpotFunds: {}}

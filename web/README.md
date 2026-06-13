@@ -34,12 +34,6 @@ npm install      # package.json gained react-router-dom + Radix dialog/select
 npm run dev      # Vite dev server on :5173, proxies /api -> 127.0.0.1:8787
 ```
 
-`package-lock.json` is stale until `npm install` is re-run, because new
-dependencies (`react-router-dom`, `@radix-ui/react-dialog`,
-`@radix-ui/react-alert-dialog`, `@radix-ui/react-select`,
-`@radix-ui/react-label`) were added to `package.json` without running the
-installer.
-
 Run the Go backend pinned to the proxied port alongside, so the dashboard has a
 live `/api/v1/status` to read:
 
@@ -62,7 +56,7 @@ placeholder (and `dist/.gitkeep`) are kept in version control so the Go
 
 ## Theme
 
-Three modes — dark (default palette), light, and system — selected from the top
+Three modes - dark (default palette), light, and system - selected from the top
 bar and persisted to `localStorage` under `pit-officer-theme`. `ThemeProvider`
 toggles a `.dark` / `.light` class on `<html>`; in system mode it follows
 `prefers-color-scheme`. `index.html` applies the stored theme before first paint
