@@ -39,36 +39,38 @@ import (
 
 // fakeService is a fake Service for handler tests.
 type fakeService struct {
-	accounts     []domain.Account
-	limits       []domain.Limit
-	auditRows    []domain.AuditRow
-	groups       []domain.AccountGroup
-	balances     []domain.Balance
-	adjustments  []domain.AccountAdjustmentRecord
-	orders       []domain.Order
-	trades       []domain.Trade
-	orderDetail  domain.OrderDetail
-	adjustment   domain.AccountAdjustmentRecord
-	submitOrder  domain.Order
-	checkResult  domain.CheckResult
-	overview     backend.Overview
-	serviceInfo  backend.ServiceInfo
-	status       backend.Status
-	statusErr    error
-	createErr    error
-	blockErr     error
-	unblockErr   error
-	stateErr     error
-	listLimErr   error
-	putLimErr    error
-	delLimErr    error
-	auditErr     error
-	groupErr     error
+	accounts    []domain.Account
+	limits      []domain.Limit
+	auditRows   []domain.AuditRow
+	groups      []domain.AccountGroup
+	balances    []domain.Balance
+	adjustments []domain.AccountAdjustmentRecord
+	orders      []domain.Order
+	trades      []domain.Trade
+	orderDetail domain.OrderDetail
+	adjustment  domain.AccountAdjustmentRecord
+	submitOrder domain.Order
+	checkResult domain.CheckResult
+	overview    backend.Overview
+	serviceInfo backend.ServiceInfo
+	marketData  backend.MarketDataStatus
+	status      backend.Status
+	statusErr   error
+	createErr   error
+	blockErr    error
+	unblockErr  error
+	stateErr    error
+	listLimErr  error
+	putLimErr   error
+	delLimErr   error
+	auditErr    error
+	groupErr    error
 
-	mcpCommands   []backend.McpCommand
-	mcpAccessErr  error
-	setMcpErr     error
-	setMcpCalls   []setMcpCall
+	mcpCommands  []backend.McpCommand
+	mcpAccessErr error
+	setMcpErr    error
+	setMcpCalls  []setMcpCall
+	mdCalls      []string
 }
 
 type setMcpCall struct {
@@ -131,6 +133,44 @@ func (f *fakeService) SetMcpAccess(_ context.Context, command string, enabled bo
 	}
 	f.setMcpCalls = append(f.setMcpCalls, setMcpCall{command: command, enabled: enabled})
 	return nil
+}
+func (f *fakeService) ListMarketData(_ context.Context) (backend.MarketDataStatus, error) {
+	return f.marketData, f.stateErr
+}
+func (f *fakeService) CreateMarketDataInstance(
+	_ context.Context, instance domain.MarketDataInstance,
+) error {
+	f.mdCalls = append(f.mdCalls, "create:"+instance.ID)
+	return f.stateErr
+}
+func (f *fakeService) SetMarketDataInstanceEnabled(
+	_ context.Context, id string, enabled bool,
+) error {
+	f.mdCalls = append(f.mdCalls, fmt.Sprintf("instance:%s:%v", id, enabled))
+	return f.stateErr
+}
+func (f *fakeService) DeleteMarketDataInstance(_ context.Context, id string) error {
+	f.mdCalls = append(f.mdCalls, "delete-instance:"+id)
+	return f.stateErr
+}
+func (f *fakeService) UpsertMarketDataInstrument(
+	_ context.Context, instrument domain.MarketDataInstrument,
+) error {
+	f.mdCalls = append(f.mdCalls, "upsert-instrument:"+instrument.ExternalSymbol)
+	return f.stateErr
+}
+func (f *fakeService) SetMarketDataInstrumentEnabled(
+	_ context.Context, instanceID, externalSymbol string, enabled bool,
+) error {
+	f.mdCalls = append(f.mdCalls,
+		fmt.Sprintf("instrument:%s/%s:%v", instanceID, externalSymbol, enabled))
+	return f.stateErr
+}
+func (f *fakeService) DeleteMarketDataInstrument(
+	_ context.Context, instanceID, externalSymbol string,
+) error {
+	f.mdCalls = append(f.mdCalls, "delete-instrument:"+instanceID+"/"+externalSymbol)
+	return f.stateErr
 }
 func (f *fakeService) SetAccountGroup(_ context.Context, _ domain.AccountID, _ string) error {
 	return f.stateErr
@@ -568,7 +608,7 @@ func TestPutLimit(t *testing.T) {
 	}
 	body := bytes.NewBufferString(`{
 		"policy":"rate_limit","scope":"account_asset",
-		"account":"acc-1","asset":"BTC",
+		"account":"acc-1","asset":"AAPL",
 		"values":{"max_orders":"100","window":"1s"}
 	}`)
 	rec := httptest.NewRecorder()
@@ -612,7 +652,7 @@ func TestPutLimit_NotImplemented(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bytes.NewBufferString(`{
-		"policy":"rate_limit","scope":"asset","asset":"BTC",
+		"policy":"rate_limit","scope":"asset","asset":"AAPL",
 		"values":{"max_orders":"100","window":"1s"}
 	}`)
 	rec := httptest.NewRecorder()
@@ -729,7 +769,7 @@ func TestLimitDTO_JSONShape(t *testing.T) {
 			Policy:  domain.PolicyRateLimit,
 			Scope:   domain.ScopeAccountAsset,
 			Account: "acc-1",
-			Asset:   "BTC",
+			Asset:   "AAPL",
 			Tenant:  domain.DefaultTenant,
 		},
 		Values: []domain.LimitValue{
@@ -762,7 +802,7 @@ func TestAuditDTO_JSONShape(t *testing.T) {
 	row := domain.AuditRow{
 		ID: 12, At: ts, Actor: "operator",
 		Action: domain.AuditActionSetLimit, Account: "acc-1",
-		Detail: "set limit rate_limit asset=BTC max_orders=100 window=1s",
+		Detail: "set limit rate_limit asset=AAPL max_orders=100 window=1s",
 	}
 	b, err := json.Marshal(toAuditDTO(row))
 	if err != nil {
@@ -808,7 +848,7 @@ func TestCheckOrder_Pass(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bytes.NewBufferString(
-		`{"account":"acc-1","baseAsset":"BTC","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"1","price":"100"}`)
+		`{"account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"1","price":"100"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders/check", body))
 	if rec.Code != http.StatusOK {
@@ -844,7 +884,7 @@ func TestCheckOrder_Reject(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bytes.NewBufferString(
-		`{"account":"acc-1","baseAsset":"BTC","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"1"}`)
+		`{"account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"1"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders/check", body))
 	// An engine reject is a successful 200, not an HTTP error.
@@ -910,7 +950,7 @@ func TestCheckOrder_ValidationError(t *testing.T) {
 // creating POST is a 201 Created carrying the order.
 func TestSubmitOrder_Created(t *testing.T) {
 	svc := &fakeService{submitOrder: domain.Order{
-		ID: 7, Account: "acc-1", BaseAsset: "BTC", QuoteAsset: "USD",
+		ID: 7, Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
 		Side: domain.OrderSideBuy, Status: domain.OrderStatusCommitted,
 	}}
 	r, err := newRouter(svc)
@@ -918,7 +958,7 @@ func TestSubmitOrder_Created(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bytes.NewBufferString(
-		`{"account":"acc-1","baseAsset":"BTC","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"1","price":"100"}`)
+		`{"account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"1","price":"100"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders", body))
 	if rec.Code != http.StatusCreated {
@@ -941,7 +981,7 @@ func TestSubmitOrder_ValidationError(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bytes.NewBufferString(
-		`{"account":"acc-1","baseAsset":"BTC","quoteAsset":"USD","side":"buy","amountKind":"base","amountValue":"1"}`)
+		`{"account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD","side":"buy","amountKind":"base","amountValue":"1"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders", body))
 	if rec.Code != http.StatusBadRequest {
@@ -985,7 +1025,7 @@ func TestApplyAdjustment_Created(t *testing.T) {
 func TestApplyExecutionReport_Created(t *testing.T) {
 	svc := &fakeService{orderDetail: domain.OrderDetail{
 		Order: domain.Order{
-			ID: 9, Account: "acc-1", BaseAsset: "BTC", QuoteAsset: "USD",
+			ID: 9, Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
 			Side: domain.OrderSideBuy,
 		},
 	}}

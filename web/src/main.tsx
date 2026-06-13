@@ -15,12 +15,14 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { StrictMode } from "react";
+import { StrictMode, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 
 import App from "@/App";
+import { LocaleProvider } from "@/i18n/LocaleProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
+import "@/i18n";
 import "@/index.css";
 
 const container = document.getElementById("root");
@@ -28,12 +30,18 @@ if (!container) {
   throw new Error("root element #root not found");
 }
 
+// Resources are bundled eagerly (see i18n/index.ts glob), so i18next is ready
+// synchronously and Suspense only guards the edge case of a not-yet-ready tree.
 createRoot(container).render(
   <StrictMode>
     <ThemeProvider storageKey="pit-officer-theme" defaultMode="system">
-      <BrowserRouter>
-        <App />
-      </BrowserRouter>
+      <LocaleProvider>
+        <Suspense fallback={null}>
+          <BrowserRouter>
+            <App />
+          </BrowserRouter>
+        </Suspense>
+      </LocaleProvider>
     </ThemeProvider>
   </StrictMode>,
 );

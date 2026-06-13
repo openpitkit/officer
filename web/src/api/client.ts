@@ -15,6 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
+import i18n from "@/i18n";
 import type {
   Account,
   Adjustment,
@@ -33,6 +34,11 @@ import type {
   Health,
   Limit,
   LockPrices,
+  MarketDataInstrument,
+  MarketDataInstance,
+  MarketDataProvider,
+  MarketDataQuote,
+  MarketDataStatus,
   McpCommand,
   NodeHealth,
   Order,
@@ -484,6 +490,78 @@ function normalizeOverview(v: unknown): Overview {
   };
 }
 
+function normalizeMarketDataProvider(v: unknown): MarketDataProvider {
+  const o = isObject(v) ? v : {};
+  return {
+    type: asString(pick(o, "type", "Type")),
+    title: asString(pick(o, "title", "Title")),
+  };
+}
+
+function normalizeMarketDataQuote(v: unknown): MarketDataQuote | undefined {
+  if (!isObject(v)) {
+    return undefined;
+  }
+  return {
+    asOf: asString(pick(v, "asOf", "AsOf", "as_of")),
+    receivedAt: asString(pick(v, "receivedAt", "ReceivedAt", "received_at")),
+    mark: asString(pick(v, "mark", "Mark")),
+    bid: asString(pick(v, "bid", "Bid")),
+    ask: asString(pick(v, "ask", "Ask")),
+  };
+}
+
+function normalizeMarketDataInstrument(v: unknown): MarketDataInstrument {
+  const o = isObject(v) ? v : {};
+  const quote = normalizeMarketDataQuote(pick(o, "quote", "Quote"));
+  const instrument: MarketDataInstrument = {
+    instanceId: asString(pick(o, "instanceId", "InstanceID", "instance_id")),
+    externalSymbol: asString(
+      pick(o, "externalSymbol", "ExternalSymbol", "external_symbol"),
+    ),
+    baseAsset: asString(pick(o, "baseAsset", "BaseAsset", "base_asset")),
+    quoteAsset: asString(pick(o, "quoteAsset", "QuoteAsset", "quote_asset")),
+    enabled: asBool(pick(o, "enabled", "Enabled")),
+    stale: asBool(pick(o, "stale", "Stale")),
+  };
+  if (quote) {
+    instrument.quote = quote;
+  }
+  return instrument;
+}
+
+function normalizeMarketDataInstance(v: unknown): MarketDataInstance {
+  const o = isObject(v) ? v : {};
+  return {
+    id: asString(pick(o, "id", "ID")),
+    type: asString(pick(o, "type", "Type")),
+    label: asString(pick(o, "label", "Label")),
+    credentials: asString(pick(o, "credentials", "Credentials")),
+    enabled: asBool(pick(o, "enabled", "Enabled")),
+    instruments: normalizeArray(
+      pick(o, "instruments", "Instruments"),
+      normalizeMarketDataInstrument,
+    ),
+  };
+}
+
+function normalizeMarketDataStatus(v: unknown): MarketDataStatus {
+  const o = isObject(v) ? v : {};
+  return {
+    providers: normalizeArray(
+      pick(o, "providers", "Providers"),
+      normalizeMarketDataProvider,
+    ),
+    instances: normalizeArray(
+      pick(o, "instances", "Instances"),
+      normalizeMarketDataInstance,
+    ),
+    freshnessSeconds: asInt(
+      pick(o, "freshnessSeconds", "FreshnessSeconds", "freshness_seconds"),
+    ),
+  };
+}
+
 function normalizeServiceInfo(v: unknown): ServiceInfo {
   const o = isObject(v) ? v : {};
   const db = isObject(pick(o, "database", "Database"))
@@ -509,25 +587,28 @@ function normalizeArray<T>(v: unknown, one: (x: unknown) => T): T[] {
   return Array.isArray(v) ? v.map(one) : [];
 }
 
+/** The localized fallback message for a stable error code. The backend's own
+ *  message, when present, is preferred; this is what the UI shows otherwise. */
+function defaultMessage(code: ApiErrorCode): string {
+  return i18n.t(`errors:code.${code}`);
+}
+
 /** Turn a non-2xx response into a typed ApiError, decoding the JSON error body
  *  shape {"error":{"code","message"}} when present. */
 async function toApiError(res: Response, path: string): Promise<ApiError> {
   let code = asCode(undefined);
-  let message = `request to ${path} failed with HTTP ${res.status}`;
+  let bodyMessage = "";
   try {
     const body = (await res.json()) as unknown;
     if (isObject(body)) {
       const err = pick(body, "error", "Error");
       if (isObject(err)) {
         code = asCode(pick(err, "code", "Code"));
-        const m = asString(pick(err, "message", "Message"));
-        if (m.length > 0) {
-          message = m;
-        }
+        bodyMessage = asString(pick(err, "message", "Message"));
       }
     }
   } catch {
-    /* No JSON body; keep the generic message and the inferred code below. */
+    /* No JSON body; infer the code from the status and use a localized message. */
   }
   // Fall back to the HTTP status when the body carried no code.
   if (code === "internal") {
@@ -541,6 +622,14 @@ async function toApiError(res: Response, path: string): Promise<ApiError> {
       code = "precondition";
     }
   }
+  // Prefer the backend's human message; otherwise a localized per-code default,
+  // falling back to the generic HTTP line when the code is still unspecific.
+  const message =
+    bodyMessage.length > 0
+      ? bodyMessage
+      : code === "internal"
+        ? i18n.t("errors:http", { path, status: res.status })
+        : defaultMessage(code);
   return new ApiError(message, code, res.status);
 }
 
@@ -572,9 +661,10 @@ async function request(
       throw err;
     }
     throw new ApiError(
-      `network error contacting ${path}: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
+      i18n.t("errors:network", {
+        path,
+        detail: err instanceof Error ? err.message : String(err),
+      }),
       "network",
     );
   }
@@ -591,7 +681,7 @@ async function request(
     return (await res.json()) as unknown;
   } catch {
     throw new ApiError(
-      `response from ${path} was not valid JSON`,
+      i18n.t("errors:invalidJson", { path }),
       "internal",
       res.status,
     );
@@ -625,6 +715,93 @@ export async function fetchOverview(signal?: AbortSignal): Promise<Overview> {
   const since = d.toISOString();
   return normalizeOverview(
     await request(`${BASE}/overview?since=${encodeURIComponent(since)}`, { signal }),
+  );
+}
+
+// --- Market data ---
+
+/** GET /market-data. */
+export async function fetchMarketData(
+  signal?: AbortSignal,
+): Promise<MarketDataStatus> {
+  const v = await request(`${BASE}/market-data`, { signal });
+  const o = isObject(v) ? v : {};
+  return normalizeMarketDataStatus(pick(o, "marketData", "MarketData"));
+}
+
+/** POST /market-data/instances. */
+export async function createMarketDataInstance(body: {
+  id: string;
+  type: string;
+  label: string;
+  credentials: string;
+  enabled: boolean;
+}): Promise<MarketDataStatus> {
+  const v = await request(`${BASE}/market-data/instances`, {
+    method: "POST",
+    body,
+  });
+  const o = isObject(v) ? v : {};
+  return normalizeMarketDataStatus(pick(o, "marketData", "MarketData"));
+}
+
+/** PUT /market-data/instances/{id}/enabled. */
+export async function setMarketDataInstanceEnabled(
+  id: string,
+  enabled: boolean,
+): Promise<void> {
+  await request(`${BASE}/market-data/instances/${encode(id)}/enabled`, {
+    method: "PUT",
+    body: { enabled },
+  });
+}
+
+/** DELETE /market-data/instances/{id}. */
+export async function deleteMarketDataInstance(id: string): Promise<void> {
+  await request(`${BASE}/market-data/instances/${encode(id)}`, {
+    method: "DELETE",
+  });
+}
+
+/** PUT /market-data/instances/{id}/instruments. */
+export async function upsertMarketDataInstrument(
+  instanceId: string,
+  body: {
+    externalSymbol: string;
+    baseAsset: string;
+    quoteAsset: string;
+    enabled: boolean;
+  },
+): Promise<MarketDataStatus> {
+  const v = await request(
+    `${BASE}/market-data/instances/${encode(instanceId)}/instruments`,
+    { method: "PUT", body },
+  );
+  const o = isObject(v) ? v : {};
+  return normalizeMarketDataStatus(pick(o, "marketData", "MarketData"));
+}
+
+/** PUT /market-data/instances/{id}/instruments/enabled. */
+export async function setMarketDataInstrumentEnabled(
+  instanceId: string,
+  externalSymbol: string,
+  enabled: boolean,
+): Promise<void> {
+  await request(
+    `${BASE}/market-data/instances/${encode(instanceId)}/instruments/enabled`,
+    { method: "PUT", body: { externalSymbol, enabled } },
+  );
+}
+
+/** DELETE /market-data/instances/{id}/instruments?externalSymbol=. */
+export async function deleteMarketDataInstrument(
+  instanceId: string,
+  externalSymbol: string,
+): Promise<void> {
+  const params = new URLSearchParams({ externalSymbol });
+  await request(
+    `${BASE}/market-data/instances/${encode(instanceId)}/instruments?${params.toString()}`,
+    { method: "DELETE" },
   );
 }
 

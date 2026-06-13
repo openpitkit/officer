@@ -3,6 +3,7 @@ module go.openpit.dev/officer
 go 1.25.0
 
 require (
+	github.com/coder/websocket v1.8.14
 	github.com/go-chi/chi/v5 v5.2.1
 	github.com/modelcontextprotocol/go-sdk v0.2.0
 	github.com/shopspring/decimal v1.4.0

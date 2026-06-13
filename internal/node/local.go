@@ -37,37 +37,36 @@ import (
 // revert-on-failure, and audit-append steps run atomically with respect to each
 // other. Reads do not take it.
 //
-// The engine is normally reconfigured in place; only a change the runtime
-// Configure surface cannot express (it reports domain.ErrNotImplemented)
-// triggers a rebuild from the current store snapshot via build. A rebuild swaps
-// n.engine for a fresh handle and stops the old one, so any access of n.engine
-// must hold mutate.
+// Officer builds the engine exactly once per process and never rebuilds it. The
+// engine is reconfigured in place through the runtime Configure surface; a
+// change that surface cannot express is an SDK gap,
+// surfaced to the caller as an error wrapping domain.ErrNotImplemented, not
+// worked around by rebuilding a fresh handle here. The handle therefore never
+// changes after construction, so n.engine is fixed for the node's lifetime.
 type localNode struct {
 	engine engine.Engine
 	store  store.Store
-	build  engine.BuildFunc
 
 	mutate sync.Mutex
 }
 
 // NewLocalNode builds the single in-process Node: it loads the seed snapshot
 // from the store (accounts, the full barrier set, groups, and balances), builds
-// the one engine from it via build, bundles the engine, store, and build func,
-// and appends one startup audit row.
+// the one engine from it via build, bundles the engine and store, and appends
+// one startup audit row.
 //
-// The engine is reconfigured in place on later mutations. It is rebuilt only as
-// a fallback when the runtime Configure surface cannot express a change (it
-// reports domain.ErrNotImplemented); the store is the source of truth and is
-// written before the engine is touched, so a rebuild from the current snapshot
-// applies the change correctly. build is retained for that path.
+// Officer builds the engine exactly once. build is a one-time constructor used
+// only here; it is not retained on the node, because the engine is never
+// rebuilt. Later mutations reconfigure the engine in place; a change the runtime
+// Configure surface cannot express is an SDK gap, not a trigger to
+// rebuild.
 //
-// It returns the node and the current engine handle. The handle is a startup
-// snapshot used only for the one-time MCP server version stamp; it is stopped
-// and replaced on a rebuild, so live version/health must be read through the
-// node (Health, EngineVersion), not this handle. The node owns the engine and
-// store: Close stops the current engine and closes the store. It returns an
-// error if any dependency is nil, if the seed cannot be loaded, or if the
-// engine cannot be built.
+// It returns the node and the engine handle. The node owns the engine and
+// store: Close stops the engine and closes the store. The returned handle is the
+// permanent handle, but live version/health should still be read through the
+// node (Health, EngineVersion) for a uniform access path. It returns an error if
+// any dependency is nil, if the seed cannot be loaded, or if the engine cannot
+// be built.
 func NewLocalNode(
 	ctx context.Context, st store.Store, build engine.BuildFunc,
 ) (Node, engine.Engine, error) {
@@ -78,7 +77,7 @@ func NewLocalNode(
 		return nil, nil, fmt.Errorf("node: nil engine build func")
 	}
 
-	n := &localNode{store: st, build: build}
+	n := &localNode{store: st}
 
 	snap, counts, err := n.loadSnapshot(ctx)
 	if err != nil {
@@ -110,9 +109,8 @@ func NewLocalNode(
 // loadSnapshot reads the full engine seed from the store: accounts (with their
 // blocked state and group membership), the complete barrier set, groups, and
 // balances. It returns the assembled snapshot and a human-readable counts
-// summary for the hydrate audit detail. Both NewLocalNode and
-// rebuildEngineLocked build from it, so the rebuild seeds from the same shape
-// as the initial build.
+// summary for the hydrate audit detail. It runs once, at NewLocalNode, to seed
+// the single engine build.
 func (n *localNode) loadSnapshot(ctx context.Context) (engine.Snapshot, string, error) {
 	accounts, err := n.store.ListAccounts(ctx)
 	if err != nil {
@@ -144,32 +142,6 @@ func (n *localNode) loadSnapshot(ctx context.Context) (engine.Snapshot, string, 
 	return snap, counts, nil
 }
 
-// rebuildEngineLocked rebuilds the engine from the current store snapshot and
-// swaps it in for the live handle. It is the fallback for a barrier change the
-// runtime Configure surface cannot express (the store is already written, so
-// the fresh build reflects the change). On success it stops the old engine and
-// points n.engine at the new one; on build failure it keeps the old engine and
-// returns the error, so the node is never left engine-less. Callers must hold
-// mutate, which also guarantees no other goroutine is touching n.engine during
-// the swap.
-func (n *localNode) rebuildEngineLocked(ctx context.Context) error {
-	snap, _, err := n.loadSnapshot(ctx)
-	if err != nil {
-		return err
-	}
-	eng, err := n.build(snap)
-	if err != nil {
-		return fmt.Errorf("node: rebuild engine: %w", err)
-	}
-	if eng == nil {
-		return fmt.Errorf("node: rebuild returned nil engine")
-	}
-	old := n.engine
-	n.engine = eng
-	old.Stop()
-	return nil
-}
-
 // Health returns the aggregate health of the node's engine and store. The store
 // leg runs a Ping so StoreHealth.Reachable reflects the live connection; a
 // failed Ping is reported as unreachable rather than returned as an error, so
@@ -197,10 +169,10 @@ func (n *localNode) Health(ctx context.Context) (Health, error) {
 	return Health{Engine: engineHealth, Store: storeHealth}, nil
 }
 
-// EngineVersion returns the version of the node's CURRENT engine. It reads
-// n.engine under mutate so it follows a rebuild that swapped the handle, rather
-// than reporting a stale stopped engine. The MCP version source routes through
-// here for that reason.
+// EngineVersion returns the version of the node's engine. It reads n.engine
+// under mutate for a uniform serialized access path; the handle is permanent
+// (officer never rebuilds the engine), so the version is stable for the node's
+// lifetime. The MCP version source routes through here.
 func (n *localNode) EngineVersion() string {
 	n.mutate.Lock()
 	defer n.mutate.Unlock()
@@ -413,32 +385,25 @@ func (n *localNode) DeleteLimit(
 }
 
 // applyPolicyChangeLocked applies a just-persisted barrier change for policy to
-// the engine. It first tries the runtime Configure path (reconfigurePolicy);
-// when that reports domain.ErrNotImplemented - the change adds the first barrier
-// of an unregistered policy, or otherwise exceeds what Configure can express -
-// it falls back to rebuilding the engine from the current store snapshot, which
-// the store already reflects. Any other engine error is returned unchanged so
-// the caller reverts the store. Callers must hold mutate.
+// the engine via the runtime Configure surface. Any error, including one
+// wrapping domain.ErrNotImplemented, is returned unchanged so the caller reverts
+// the already-written store row.
+//
+// Officer never rebuilds the engine. A change the runtime Configure surface
+// cannot express (e.g. configuring an unregistered policy, or clearing a broker
+// barrier the surface cannot drop in isolation) is an SDK gap to be closed
+// engine-side, not worked around by reconstructing a fresh
+// handle here. Reintroducing a rebuild fallback at this site is therefore wrong:
+// it would mask the gap and rebuild a native handle the process is meant to keep
+// for its whole lifetime. Callers must hold mutate.
 func (n *localNode) applyPolicyChangeLocked(ctx context.Context, policy string) error {
-	err := n.reconfigurePolicy(ctx, policy)
-	if err == nil {
-		return nil
-	}
-	if !errors.Is(err, domain.ErrNotImplemented) {
-		return err
-	}
-	// The runtime Configure surface cannot express this change; rebuild from the
-	// already-written store snapshot so the change still takes effect.
-	if rebuildErr := n.rebuildEngineLocked(ctx); rebuildErr != nil {
-		return rebuildErr
-	}
-	return nil
+	return n.reconfigurePolicy(ctx, policy)
 }
 
 // reconfigurePolicy re-reads the full barrier set for policy from the store and
 // applies it to the engine via the runtime Configure surface. It returns the
 // engine error verbatim (including a domain.ErrNotImplemented wrap) so the
-// caller can decide whether to fall back to a rebuild.
+// caller reverts the store; the wrap is surfaced, never absorbed by a rebuild.
 func (n *localNode) reconfigurePolicy(ctx context.Context, policy string) error {
 	limits, err := n.store.ListPolicyLimits(ctx, policy)
 	if err != nil {
@@ -520,6 +485,149 @@ func (n *localNode) SetMcpAccess(
 		return fmt.Errorf("node: audit set mcp access: %w", err)
 	}
 	return nil
+}
+
+// --- market-data control plane ---------------------------------------------
+
+func (n *localNode) ListMarketDataInstances(
+	ctx context.Context,
+) ([]domain.MarketDataInstance, error) {
+	instances, err := n.store.ListMarketDataInstances(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("node: list market-data instances: %w", err)
+	}
+	return instances, nil
+}
+
+func (n *localNode) CreateMarketDataInstance(
+	ctx context.Context, instance domain.MarketDataInstance, caller domain.Caller,
+) error {
+	n.mutate.Lock()
+	defer n.mutate.Unlock()
+
+	if err := n.store.CreateMarketDataInstance(ctx, instance); err != nil {
+		return fmt.Errorf("node: create market-data instance: %w", err)
+	}
+	if err := n.audit(ctx, caller, store.AuditEntry{
+		Action: domain.AuditActionSetMarketData,
+		Detail: fmt.Sprintf("create market-data instance %s", instance.ID),
+	}); err != nil {
+		return fmt.Errorf("node: audit create market-data instance: %w", err)
+	}
+	return nil
+}
+
+func (n *localNode) SetMarketDataInstanceEnabled(
+	ctx context.Context, id string, enabled bool, caller domain.Caller,
+) error {
+	n.mutate.Lock()
+	defer n.mutate.Unlock()
+
+	if err := n.store.SetMarketDataInstanceEnabled(ctx, id, enabled); err != nil {
+		return fmt.Errorf("node: set market-data instance enabled: %w", err)
+	}
+	if err := n.audit(ctx, caller, store.AuditEntry{
+		Action: domain.AuditActionSetMarketData,
+		Detail: marketDataToggleDetail("instance", id, enabled),
+	}); err != nil {
+		return fmt.Errorf("node: audit set market-data instance enabled: %w", err)
+	}
+	return nil
+}
+
+func (n *localNode) DeleteMarketDataInstance(
+	ctx context.Context, id string, caller domain.Caller,
+) error {
+	n.mutate.Lock()
+	defer n.mutate.Unlock()
+
+	if err := n.store.DeleteMarketDataInstance(ctx, id); err != nil {
+		return fmt.Errorf("node: delete market-data instance: %w", err)
+	}
+	if err := n.audit(ctx, caller, store.AuditEntry{
+		Action: domain.AuditActionSetMarketData,
+		Detail: fmt.Sprintf("delete market-data instance %s", id),
+	}); err != nil {
+		return fmt.Errorf("node: audit delete market-data instance: %w", err)
+	}
+	return nil
+}
+
+func (n *localNode) ListMarketDataInstruments(
+	ctx context.Context, instanceID string,
+) ([]domain.MarketDataInstrument, error) {
+	instruments, err := n.store.ListMarketDataInstruments(ctx, instanceID)
+	if err != nil {
+		return nil, fmt.Errorf("node: list market-data instruments: %w", err)
+	}
+	return instruments, nil
+}
+
+func (n *localNode) UpsertMarketDataInstrument(
+	ctx context.Context, instrument domain.MarketDataInstrument, caller domain.Caller,
+) error {
+	n.mutate.Lock()
+	defer n.mutate.Unlock()
+
+	if err := n.store.UpsertMarketDataInstrument(ctx, instrument); err != nil {
+		return fmt.Errorf("node: upsert market-data instrument: %w", err)
+	}
+	if err := n.audit(ctx, caller, store.AuditEntry{
+		Action: domain.AuditActionSetMarketData,
+		Detail: fmt.Sprintf("upsert market-data instrument %s/%s",
+			instrument.InstanceID, instrument.ExternalSymbol),
+	}); err != nil {
+		return fmt.Errorf("node: audit upsert market-data instrument: %w", err)
+	}
+	return nil
+}
+
+func (n *localNode) SetMarketDataInstrumentEnabled(
+	ctx context.Context, instanceID, externalSymbol string, enabled bool, caller domain.Caller,
+) error {
+	n.mutate.Lock()
+	defer n.mutate.Unlock()
+
+	if err := n.store.SetMarketDataInstrumentEnabled(
+		ctx, instanceID, externalSymbol, enabled,
+	); err != nil {
+		return fmt.Errorf("node: set market-data instrument enabled: %w", err)
+	}
+	if err := n.audit(ctx, caller, store.AuditEntry{
+		Action: domain.AuditActionSetMarketData,
+		Detail: marketDataToggleDetail("instrument", instanceID+"/"+externalSymbol, enabled),
+	}); err != nil {
+		return fmt.Errorf("node: audit set market-data instrument enabled: %w", err)
+	}
+	return nil
+}
+
+func (n *localNode) DeleteMarketDataInstrument(
+	ctx context.Context, instanceID, externalSymbol string, caller domain.Caller,
+) error {
+	n.mutate.Lock()
+	defer n.mutate.Unlock()
+
+	if err := n.store.DeleteMarketDataInstrument(ctx, instanceID, externalSymbol); err != nil {
+		return fmt.Errorf("node: delete market-data instrument: %w", err)
+	}
+	if err := n.audit(ctx, caller, store.AuditEntry{
+		Action: domain.AuditActionSetMarketData,
+		Detail: fmt.Sprintf("delete market-data instrument %s/%s", instanceID, externalSymbol),
+	}); err != nil {
+		return fmt.Errorf("node: audit delete market-data instrument: %w", err)
+	}
+	return nil
+}
+
+func (n *localNode) ListMarketDataQuotes(
+	ctx context.Context, instanceID string,
+) ([]domain.MarketDataQuote, error) {
+	quotes, err := n.store.ListMarketDataQuotes(ctx, instanceID)
+	if err != nil {
+		return nil, fmt.Errorf("node: list market-data quotes: %w", err)
+	}
+	return quotes, nil
 }
 
 // --- account group & notes --------------------------------------------------

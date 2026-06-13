@@ -272,6 +272,46 @@ export interface Overview {
   activity: ActivityEntry[];
 }
 
+// --- Market data ---
+
+export interface MarketDataProvider {
+  type: string;
+  title: string;
+}
+
+export interface MarketDataQuote {
+  asOf: string;
+  receivedAt: string;
+  mark: string;
+  bid: string;
+  ask: string;
+}
+
+export interface MarketDataInstrument {
+  instanceId: string;
+  externalSymbol: string;
+  baseAsset: string;
+  quoteAsset: string;
+  enabled: boolean;
+  stale: boolean;
+  quote?: MarketDataQuote;
+}
+
+export interface MarketDataInstance {
+  id: string;
+  type: string;
+  label: string;
+  credentials: string;
+  enabled: boolean;
+  instruments: MarketDataInstrument[];
+}
+
+export interface MarketDataStatus {
+  providers: MarketDataProvider[];
+  instances: MarketDataInstance[];
+  freshnessSeconds: number;
+}
+
 // --- Service info ---
 
 /** Response from GET /service. */

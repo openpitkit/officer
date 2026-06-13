@@ -1,0 +1,107 @@
+{
+  "access": {
+    "title": "Доступ MCP",
+    "descriptionPre": "Управляет тем, какие MCP-команды может вызывать ИИ-агент. Отключённые команды возвращают агенту уведомление «отключено в панели» и не влияют на движок. Команды, помеченные как",
+    "descriptionProtected": "защищённые",
+    "descriptionPost": "предоставляют агенту доступ на запись и требуют явного подтверждения для включения. Конечная точка MCP доступна по адресу",
+    "descriptionEnd": "."
+  },
+  "table": {
+    "on": "Вкл",
+    "command": "Команда",
+    "description": "Описание",
+    "flags": "Флаги",
+    "enableAriaLabel": "Включить {{name}}",
+    "disabledNotice": "Отключено — агенту возвращается уведомление «отключено в панели».",
+    "noDescription": "—"
+  },
+  "flags": {
+    "protected": "защищённая",
+    "mutating": "изменяющая",
+    "notImplemented": "не реализована"
+  },
+  "dialog": {
+    "title": "Включить защищённую команду?",
+    "body1Pre": "Команда",
+    "body1Mid": "помечена как",
+    "body1Flag": "защищённая",
+    "body1Post": ". Её включение предоставляет ИИ-агенту возможность изменять базу данных способами, которые оператор не может контролировать в реальном времени.",
+    "body2": "Это защитный барьер против автономных действий ИИ. Включайте её только если намеренно предоставляете агенту такие полномочия и принимаете связанные риски.",
+    "body3Pre": "Если не уверены, нажмите",
+    "body3Post": "— команда останется отключённой.",
+    "confirm": "Включить всё равно"
+  },
+  "command": {
+    "health": {
+      "description": "Сообщить о состоянии развёртывания Pit Officer (версия/профиль/работоспособность движка, доступность хранилища)."
+    },
+    "get_account_state": {
+      "description": "Прочитать запись счёта и его риск-барьеры на уровне счёта."
+    },
+    "get_limits": {
+      "description": "Получить список настроенных риск-барьеров с опциональной фильтрацией по счёту."
+    },
+    "get_audit": {
+      "description": "Прочитать последние записи журнала аудита плоскости управления."
+    },
+    "check_order": {
+      "description": "Выполнить немутирующий пробный прогон пре-трейд проверки для приказа (проход/отклонение + причины); состояние не изменяется."
+    },
+    "set_limit": {
+      "description": "Создать или изменить риск-лимит / политику-барьер."
+    },
+    "arm_killswitch": {
+      "description": "Активировать килл-свич P&L для счёта/актива."
+    },
+    "disarm_killswitch": {
+      "description": "Деактивировать килл-свич P&L для счёта/актива."
+    },
+    "submit_order": {
+      "description": "Подать намерение на выставление приказа через пре-трейд проверку и получить подписанный токен подтверждения."
+    },
+    "confirm_execution": {
+      "description": "Подтвердить исполнение (зафиксировать) ранее одобренного приказа."
+    },
+    "cancel": {
+      "description": "Отменить / отозвать ожидающий токен подтверждения или резервирование."
+    },
+    "get_next_token": {
+      "description": "Получить следующий токен подтверждения для сделки из реестра."
+    },
+    "report_fill": {
+      "description": "Сообщить движку о исполнении сделки (пост-трейд)."
+    }
+  },
+  "connect": {
+    "title": "Подключить агента",
+    "subtitle": "Подключите ИИ-агента к этому экземпляру Pit Officer через MCP или загрузите готовый артефакт.",
+    "tab": {
+      "claude": "Claude",
+      "chatgpt": "ChatGPT",
+      "prompt": "Промпт"
+    },
+    "claude": {
+      "cliLabel": "Добавить коннектор через Claude CLI",
+      "desktopLabel": "Или добавьте эту запись в конфигурацию Claude Desktop",
+      "skillHint": "Предпочитаете упакованный скилл? Загрузите готовый Claude Agent Skill.",
+      "skillButton": "Скачать Claude Skill"
+    },
+    "chatgpt": {
+      "urlLabel": "URL MCP-коннектора",
+      "step1": "Откройте настройки вашего пользовательского GPT или коннектора ChatGPT.",
+      "step2": "Добавьте MCP-коннектор, указывающий на URL выше.",
+      "step3": "Или создайте действие ChatGPT на основе описания OpenAPI по адресу /docs.",
+      "publicUrlCaveat": "Размещённый ChatGPT может обращаться только к публично доступному HTTPS-URL. Loopback или localhost-экземпляр Officer недоступен — сначала опубликуйте сервис на публичном HTTPS-эндпоинте.",
+      "instructionsHint": "Скачайте текст инструкций для пользовательского GPT.",
+      "instructionsButton": "Скачать инструкции для GPT"
+    },
+    "prompt": {
+      "label": "Вставьте в промпт вашего агента"
+    }
+  },
+  "prompt": {
+    "intro": "You have access to the Pit Officer MCP server - a pre-trade risk and\ncompliance control plane for trading operations.\n\nTransport: streamable HTTP at the /mcp endpoint of this service.\nAlternatively available as `pit-officer mcp` over stdio.\n\nPrinciples:\n- Least-privilege surface. The server carries no secrets or credentials.\n- Most tools are read-only. Treat any mutating tool with extra care.\n- Any trading action or mutation must go through pre-trade checks and\n  approval tokens. Never bypass the pre-trade step.",
+    "discover": "Discover the available commands at runtime: call the MCP tool list\n(`tools/list`) after connecting and rely on each tool's self-described\ninput schema. Do not assume a fixed set of commands - the surface is\nself-describing and can change as the operator adjusts access.",
+    "footer": "The operator controls which commands are enabled, and this can change at\nany time without notice. If a tool call returns a notice that the command\nis disabled in the panel, do NOT retry it — ask your orchestrator to\nextend or change your prompt/instructions accordingly (or to have the\noperator enable the command in Pit Officer)."
+  }
+}

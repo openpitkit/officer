@@ -17,6 +17,7 @@
 
 import { Check, Copy } from "lucide-react";
 import { useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -35,6 +36,7 @@ export function CopyableSnippet({
   rows?: number;
   className?: string;
 }) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
@@ -49,7 +51,6 @@ export function CopyableSnippet({
       if (ta) {
         ta.select();
         // execCommand is deprecated but universally supported as fallback.
-        // eslint-disable-next-line @typescript-eslint/no-deprecated
         document.execCommand("copy");
       }
       showCopied();
@@ -70,14 +71,14 @@ export function CopyableSnippet({
             variant="outline"
             size="sm"
             onClick={handleCopy}
-            aria-label="Copy to clipboard"
+            aria-label={t("actions.copy")}
           >
             {copied ? (
               <Check className="h-3.5 w-3.5 text-accent" />
             ) : (
               <Copy className="h-3.5 w-3.5" />
             )}
-            {copied ? "Copied" : "Copy"}
+            {copied ? t("actions.copied") : t("actions.copy")}
           </Button>
         </div>
       )}
@@ -87,14 +88,14 @@ export function CopyableSnippet({
             variant="outline"
             size="sm"
             onClick={handleCopy}
-            aria-label="Copy to clipboard"
+            aria-label={t("actions.copy")}
           >
             {copied ? (
               <Check className="h-3.5 w-3.5 text-accent" />
             ) : (
               <Copy className="h-3.5 w-3.5" />
             )}
-            {copied ? "Copied" : "Copy"}
+            {copied ? t("actions.copied") : t("actions.copy")}
           </Button>
         </div>
       )}
@@ -105,7 +106,7 @@ export function CopyableSnippet({
         value={text}
         spellCheck={false}
         className="w-full rounded-card border border-border bg-muted/30 p-2 font-mono text-[0.6875rem] text-muted-lt focus:outline-none focus:ring-1 focus:ring-accent/40 resize-none select-all"
-        aria-label={label ?? "Copyable snippet"}
+        aria-label={label ?? t("states.copyableSnippet")}
       />
     </div>
   );

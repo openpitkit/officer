@@ -1,0 +1,34 @@
+{
+  "title": "Audit",
+  "description": "Control-plane audit log: every account and limit change, newest first. The actor, action, source, and a short human-readable summary are recorded for each operation.",
+  "actions": {
+    "pageSize": {
+      "ariaLabel": "Page size",
+      "rowCount": "{{count}} rows"
+    }
+  },
+  "filter": {
+    "account": {
+      "placeholder": "Filter by account…"
+    },
+    "source": {
+      "ariaLabel": "Source",
+      "all": "All sources"
+    }
+  },
+  "table": {
+    "time": "Time",
+    "actor": "Actor",
+    "action": "Action",
+    "account": "Account",
+    "source": "Source",
+    "detail": "Detail"
+  },
+  "empty": {
+    "title": "No audit entries",
+    "hint": {
+      "filtered": "No entries match the current filters.",
+      "blank": "Account and limit changes will appear here as operators make them."
+    }
+  }
+}

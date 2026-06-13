@@ -16,12 +16,13 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 import { ExternalLink, Loader2, RefreshCw } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
 import type { ServiceInfo } from "@/api/types";
 import { useService } from "@/api/useService";
 import { useMcpAccess } from "@/api/useMcpAccess";
-import { CopyableSnippet } from "@/components/CopyableSnippet";
+import { ConnectAgent } from "@/components/ConnectAgent";
 import { ErrorState } from "@/components/PageStates";
 import { Page } from "@/components/Page";
 import { StatRow } from "@/components/StatRow";
@@ -34,9 +35,15 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { buildMcpAgentPrompt } from "@/lib/mcpAgentPrompt";
+
+// This page is the canonical i18n pattern (phase 1 pilot): user-facing text
+// goes through useTranslation with a per-area "service" namespace; shared
+// chrome (placeholders, generic verbs) comes from "common". Subsequent pages
+// copy this shape. Domain identifiers and route paths stay literal.
 
 function ServiceCard({ info }: { info: ServiceInfo }) {
+  const { t } = useTranslation("service");
+  const { t: tc } = useTranslation();
   const { load: mcpLoad } = useMcpAccess();
   const mcpCommands = mcpLoad.state === "ready" ? mcpLoad.data : null;
 
@@ -44,15 +51,19 @@ function ServiceCard({ info }: { info: ServiceInfo }) {
     <div className="space-y-4 animate-fade-in">
       <Card>
         <CardHeader>
-          <CardTitle>Application</CardTitle>
+          <CardTitle>{t("application.title")}</CardTitle>
         </CardHeader>
         <CardContent>
-          <StatRow label="Name" value={info.name || "Pit Officer"} mono={false} />
+          <StatRow
+            label={t("application.name")}
+            value={info.name || t("application.defaultName")}
+            mono={false}
+          />
           {!info.release && (
             <StatRow
-              label="Build"
+              label={t("application.build")}
               value={
-                <Badge variant="warn">non-release</Badge>
+                <Badge variant="warn">{t("application.nonRelease")}</Badge>
               }
             />
           )}
@@ -61,25 +72,25 @@ function ServiceCard({ info }: { info: ServiceInfo }) {
 
       <Card>
         <CardHeader>
-          <CardTitle>Engine</CardTitle>
+          <CardTitle>{t("engine.title")}</CardTitle>
         </CardHeader>
         <CardContent>
           <StatRow
-            label="Version"
-            value={info.engineVersion || "—"}
+            label={t("engine.version")}
+            value={info.engineVersion || tc("value.none")}
           />
           <StatRow
-            label="Profile"
+            label={t("engine.profile")}
             value={
               info.engineBuildProfile ? (
                 <span className="flex items-center gap-1.5">
                   {info.engineBuildProfile}
                   {!info.release && (
-                    <Badge variant="warn">non-release</Badge>
+                    <Badge variant="warn">{t("application.nonRelease")}</Badge>
                   )}
                 </span>
               ) : (
-                "—"
+                tc("value.none")
               )
             }
             mono={false}
@@ -89,23 +100,25 @@ function ServiceCard({ info }: { info: ServiceInfo }) {
 
       <Card>
         <CardHeader className="flex-row items-center justify-between gap-2">
-          <CardTitle>Database</CardTitle>
+          <CardTitle>{t("database.title")}</CardTitle>
           <Badge variant={info.database.reachable ? "ok" : "danger"}>
             <StatusDot
               tone={info.database.reachable ? "ok" : "danger"}
               pulse={info.database.reachable}
             />
-            {info.database.reachable ? "reachable" : "unreachable"}
+            {info.database.reachable
+              ? t("database.reachable")
+              : t("database.unreachable")}
           </Badge>
         </CardHeader>
         <CardContent>
           <StatRow
-            label="Reachable"
-            value={info.database.reachable ? "yes" : "no"}
+            label={t("database.reachableLabel")}
+            value={info.database.reachable ? tc("value.yes") : tc("value.no")}
           />
           <StatRow
-            label="Path"
-            value={info.database.path || "—"}
+            label={t("database.path")}
+            value={info.database.path || tc("value.none")}
             mono={false}
           />
         </CardContent>
@@ -113,15 +126,17 @@ function ServiceCard({ info }: { info: ServiceInfo }) {
 
       <Card>
         <CardHeader>
-          <CardTitle>API</CardTitle>
+          <CardTitle>{t("api.title")}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           {/* REST API */}
           <div>
-            <p className="mb-1.5 text-xs font-medium text-muted">REST API</p>
+            <p className="mb-1.5 text-xs font-medium text-muted">
+              {t("api.rest")}
+            </p>
             <div className="flex items-center justify-between gap-4 py-1">
               <span className="text-xs text-muted-lt">
-                OpenAPI / Swagger docs
+                {t("api.openApiDocs")}
               </span>
               <a
                 href="/docs"
@@ -138,21 +153,25 @@ function ServiceCard({ info }: { info: ServiceInfo }) {
           {/* MCP API */}
           <div>
             <div className="mb-1.5 flex items-center justify-between gap-2">
-              <p className="text-xs font-medium text-muted">MCP API</p>
+              <p className="text-xs font-medium text-muted">{t("api.mcp")}</p>
               <div className="flex items-center gap-2">
                 <span className="nums text-[0.6875rem] text-muted-lt">/mcp</span>
                 <Link
                   to="/mcp-access"
                   className="text-[0.6875rem] text-accent hover:underline"
                 >
-                  Configure access
+                  {t("api.configureAccess")}
                 </Link>
               </div>
             </div>
             {mcpCommands === null ? (
-              <p className="text-xs text-muted-lt italic">Loading commands…</p>
+              <p className="text-xs text-muted-lt italic">
+                {t("api.loadingCommands")}
+              </p>
             ) : mcpCommands.length === 0 ? (
-              <p className="text-xs text-muted-lt italic">No commands defined.</p>
+              <p className="text-xs text-muted-lt italic">
+                {t("api.noCommands")}
+              </p>
             ) : (
               <div className="space-y-3">
                 <div className="space-y-1">
@@ -171,16 +190,12 @@ function ServiceCard({ info }: { info: ServiceInfo }) {
                         {cmd.name}
                       </span>
                       <span className="text-muted-lt">
-                        {cmd.agentDescription || "—"}
+                        {cmd.agentDescription || tc("value.none")}
                       </span>
                     </div>
                   ))}
                 </div>
-                <CopyableSnippet
-                  label="Agent instructions"
-                  text={buildMcpAgentPrompt(mcpCommands)}
-                  rows={4}
-                />
+                <ConnectAgent />
               </div>
             )}
           </div>
@@ -191,26 +206,28 @@ function ServiceCard({ info }: { info: ServiceInfo }) {
 }
 
 export function Service() {
+  const { t } = useTranslation("service");
+  const { t: tc } = useTranslation();
   const { load, reload } = useService();
   const refreshing = load.state === "loading";
 
   return (
     <Page
-      title="Service"
+      title={t("title")}
       actions={
         <Button
           variant="ghost"
           size="sm"
           onClick={reload}
           disabled={refreshing}
-          aria-label="Refresh service info"
+          aria-label={t("refreshAriaLabel")}
         >
           {refreshing ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
           ) : (
             <RefreshCw className="h-3.5 w-3.5" />
           )}
-          Refresh
+          {tc("actions.refresh")}
         </Button>
       }
     >

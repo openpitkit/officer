@@ -1,0 +1,51 @@
+{
+  "language": {
+    "label": "Language",
+    "ariaLabel": "Change language"
+  },
+  "actions": {
+    "refresh": "Refresh",
+    "retry": "Retry",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "copy": "Copy",
+    "copied": "Copied",
+    "close": "Close",
+    "dismissError": "Dismiss error"
+  },
+  "value": {
+    "none": "—",
+    "yes": "yes",
+    "no": "no"
+  },
+  "nav": {
+    "dashboard": "Dashboard",
+    "accounts": "Accounts",
+    "positions": "Positions",
+    "orders": "Orders",
+    "policies": "Policies",
+    "audit": "Audit",
+    "mcpAccess": "MCP access",
+    "marketData": "Market Data",
+    "service": "Service"
+  },
+  "brand": {
+    "name": "Pit Officer",
+    "logoAriaLabel": "Pit logo",
+    "nonRelease": "non-release"
+  },
+  "theme": {
+    "label": "Theme",
+    "ariaLabel": "Theme: {{mode}}",
+    "dark": "Dark",
+    "light": "Light",
+    "system": "System"
+  },
+  "states": {
+    "loadError": "Could not load data",
+    "copyableSnippet": "Copyable snippet"
+  },
+  "topBar": {
+    "toggleNav": "Toggle navigation"
+  }
+}

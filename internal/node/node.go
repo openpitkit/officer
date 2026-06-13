@@ -60,18 +60,18 @@ type Health struct {
 // engine and store. Every mutation follows one protocol (see localNode): the
 // store is the source of truth and is written first, the engine is applied
 // from the re-read full policy set, the store is reverted on engine failure,
-// and an audit row is appended last. The engine is normally reconfigured in
-// place; only a barrier change the runtime Configure surface cannot express
-// triggers a rebuild from the current store snapshot, after which the node's
-// engine handle is swapped (see localNode.rebuildEngineLocked).
+// and an audit row is appended last. The engine is built once and reconfigured
+// in place; officer never rebuilds it. A barrier change the runtime Configure
+// surface cannot express is an SDK gap surfaced as an error, not
+// worked around by reconstructing a fresh handle.
 type Node interface {
 	// Health returns the current aggregate health of the node's engine and
 	// store.
 	Health(ctx context.Context) (Health, error)
 
-	// EngineVersion returns the version string of the node's current engine. It
-	// reflects the live handle, so it follows a rebuild rather than reporting a
-	// stopped engine; it is the source for the MCP server version stamp.
+	// EngineVersion returns the version string of the node's engine. The handle
+	// is permanent (officer never rebuilds the engine), so the version is stable
+	// for the node's lifetime; it is the source for the MCP server version stamp.
 	EngineVersion() string
 
 	// Owns reports whether this node is responsible for the given routing key.
@@ -213,6 +213,50 @@ type Node interface {
 	// SetMcpAccess upserts the enabled state for one MCP command. The command is
 	// validated against the catalogue by the backend before it reaches here.
 	SetMcpAccess(ctx context.Context, command string, enabled bool, caller domain.Caller) error
+
+	// ListMarketDataInstances returns all configured market-data source instances.
+	ListMarketDataInstances(ctx context.Context) ([]domain.MarketDataInstance, error)
+
+	// CreateMarketDataInstance persists one market-data source instance and
+	// audits the action. It has no engine side-effect.
+	CreateMarketDataInstance(
+		ctx context.Context, instance domain.MarketDataInstance, caller domain.Caller,
+	) error
+
+	// SetMarketDataInstanceEnabled toggles one market-data source instance and
+	// audits the action. It changes persisted config only; runtime refresh is a
+	// separate concern.
+	SetMarketDataInstanceEnabled(ctx context.Context, id string, enabled bool, caller domain.Caller) error
+
+	// DeleteMarketDataInstance removes one market-data source instance and
+	// audits the action.
+	DeleteMarketDataInstance(ctx context.Context, id string, caller domain.Caller) error
+
+	// ListMarketDataInstruments returns every configured instrument of an instance.
+	ListMarketDataInstruments(
+		ctx context.Context, instanceID string,
+	) ([]domain.MarketDataInstrument, error)
+
+	// UpsertMarketDataInstrument inserts or replaces one instrument mapping and
+	// audits the action. It has no engine side-effect.
+	UpsertMarketDataInstrument(
+		ctx context.Context, instrument domain.MarketDataInstrument, caller domain.Caller,
+	) error
+
+	// SetMarketDataInstrumentEnabled toggles one instrument mapping and audits
+	// the action.
+	SetMarketDataInstrumentEnabled(
+		ctx context.Context, instanceID, externalSymbol string, enabled bool, caller domain.Caller,
+	) error
+
+	// DeleteMarketDataInstrument removes one instrument mapping and audits the action.
+	DeleteMarketDataInstrument(
+		ctx context.Context, instanceID, externalSymbol string, caller domain.Caller,
+	) error
+
+	// ListMarketDataQuotes returns latest quote snapshots for one instance, or
+	// every instance when instanceID is empty.
+	ListMarketDataQuotes(ctx context.Context, instanceID string) ([]domain.MarketDataQuote, error)
 
 	// CheckOrder runs a non-mutating pre-trade dry-run for probe against the
 	// engine, returning whether the order would pass plus the would-be lock or

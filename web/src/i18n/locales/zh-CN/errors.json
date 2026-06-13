@@ -1,0 +1,13 @@
+{
+  "code": {
+    "validation": "请求因无效而被拒绝。",
+    "not_found": "请求的资源未找到。",
+    "conflict": "请求与当前状态冲突。",
+    "precondition": "请求的前提条件未满足。",
+    "internal": "服务遇到内部错误。",
+    "network": "无法连接到服务。"
+  },
+  "http": "请求 {{path}} 失败，HTTP 状态码 {{status}}",
+  "network": "连接 {{path}} 时发生网络错误：{{detail}}",
+  "invalidJson": "来自 {{path}} 的响应不是有效的 JSON"
+}

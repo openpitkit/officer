@@ -26,6 +26,7 @@ import (
 
 	"go.openpit.dev/officer/internal/domain"
 	"go.openpit.dev/officer/internal/engine"
+	"go.openpit.dev/officer/internal/marketdata"
 	"go.openpit.dev/officer/internal/store"
 )
 
@@ -226,7 +227,17 @@ func (e *fakeEngine) CheckOrder(
 	return e.checkResult, nil
 }
 
+// MarketDataSink returns a no-op sink: the node tests do not exercise quote
+// ingestion, and the fake engine carries no market-data service.
+func (e *fakeEngine) MarketDataSink() marketdata.Sink { return nopSink{} }
+
 func (e *fakeEngine) Stop() { e.running = false }
+
+// nopSink is a Sink that drops every quote; it stands in for the engine's sink
+// in node tests that never push.
+type nopSink struct{}
+
+func (nopSink) Push(marketdata.QuoteUpdate) error { return nil }
 
 // newTestNode builds a localNode over a real temp SQLite store and the fake
 // engine. NewLocalNode seeds the build from the (freshly migrated, empty) store
@@ -350,11 +361,13 @@ func TestLocalNode_PutLimitEngineFailureRevertsStore(t *testing.T) {
 	}
 }
 
-// TestLocalNode_PutLimitNotImplementedRebuildsFromStore verifies that when the
-// runtime Configure surface reports the not-implemented stub, the node falls
-// back to rebuilding the engine from the already-written store snapshot: the
-// store keeps the barrier, the mutation succeeds, and it is audited.
-func TestLocalNode_PutLimitNotImplementedRebuildsFromStore(t *testing.T) {
+// TestLocalNode_PutLimitNotImplementedSurfacesAndReverts verifies the new
+// no-rebuild contract: when the runtime Configure surface reports the
+// not-implemented stub, the node surfaces that error (it does NOT rebuild) and
+// reverts the already-written store row, so the barrier does not persist and no
+// mutation audit is written. Closing that gap is engine-side SDK work
+// It is not an officer rebuild.
+func TestLocalNode_PutLimitNotImplementedSurfacesAndReverts(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
 	eng.configureErr = fmt.Errorf(
@@ -373,34 +386,33 @@ func TestLocalNode_PutLimitNotImplementedRebuildsFromStore(t *testing.T) {
 			{Kind: domain.KindWindow, Value: "1s"},
 		},
 	}
-	if err := n.PutLimit(ctx, limit, testCaller); err != nil {
-		t.Fatalf("PutLimit: %v", err)
+	err := n.PutLimit(ctx, limit, testCaller)
+	if err == nil {
+		t.Fatalf("PutLimit: want error surfacing the not-implemented stub")
+	}
+	if !errors.Is(err, domain.ErrNotImplemented) {
+		t.Fatalf("PutLimit error = %v, want it to wrap ErrNotImplemented", err)
 	}
 
-	// The Configure surface refused, so the barrier reached the engine only via
-	// the rebuild fallback, not an in-place ConfigurePolicy.
-	if len(eng.configureCalls) != 0 {
-		t.Fatalf("want no in-place configure calls, got %d", len(eng.configureCalls))
-	}
-
+	// The store row is reverted, so the barrier does not persist.
 	stored, err := st.ListPolicyLimits(ctx, domain.PolicyRateLimit)
 	if err != nil {
 		t.Fatalf("ListPolicyLimits: %v", err)
 	}
-	if len(stored) != 1 {
-		t.Fatalf("want store to keep the barrier, got %d barriers", len(stored))
+	if len(stored) != 0 {
+		t.Fatalf("want store reverted to 0 barriers, got %d", len(stored))
 	}
 
 	rows, err := st.ListAudit(ctx, 10)
 	if err != nil {
 		t.Fatalf("ListAudit: %v", err)
 	}
-	// The startup hydrate row plus the successful set-limit mutation.
-	if len(rows) != 2 {
-		t.Fatalf("want hydrate + set-limit audit rows, got %+v", rows)
+	// Only the startup hydrate row: the failed mutation writes no audit.
+	if len(rows) != 1 {
+		t.Fatalf("want only the hydrate audit row, got %+v", rows)
 	}
-	if rows[0].Action != domain.AuditActionSetLimit {
-		t.Fatalf("want newest row to be set-limit, got %q", rows[0].Action)
+	if rows[0].Action != domain.AuditActionHydrate {
+		t.Fatalf("want the only row to be hydrate, got %q", rows[0].Action)
 	}
 }
 
@@ -699,7 +711,7 @@ func TestLocalNode_CheckOrderDelegatesToEngine(t *testing.T) {
 	ctx := context.Background()
 
 	probe := domain.OrderProbe{
-		Account: "acc-1", BaseAsset: "BTC", QuoteAsset: "USD",
+		Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
 		Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity,
 		AmountValue: "1", Price: "100",
 	}
@@ -735,7 +747,7 @@ func TestLocalNode_CheckOrderWritesNoAudit(t *testing.T) {
 	}
 
 	probe := domain.OrderProbe{
-		Account: "acc-1", BaseAsset: "BTC", QuoteAsset: "USD",
+		Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
 		Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1",
 	}
 	for i := 0; i < 3; i++ {

@@ -331,6 +331,72 @@ type Store interface {
 		n int,
 	) ([]domain.Trade, error)
 
+	// --- Market-data instances ---
+
+	// CreateMarketDataInstance persists a new instance. Returns
+	// domain.ErrAlreadyExists when an instance with the same id already exists.
+	CreateMarketDataInstance(ctx context.Context, instance domain.MarketDataInstance) error
+
+	// GetMarketDataInstance returns the instance identified by id. The bool is
+	// false when no such instance exists.
+	GetMarketDataInstance(
+		ctx context.Context, id string,
+	) (domain.MarketDataInstance, bool, error)
+
+	// ListMarketDataInstances returns every persisted instance, ordered by id.
+	ListMarketDataInstances(ctx context.Context) ([]domain.MarketDataInstance, error)
+
+	// ListEnabledMarketDataInstances returns the enabled instances, ordered by id.
+	ListEnabledMarketDataInstances(ctx context.Context) ([]domain.MarketDataInstance, error)
+
+	// SetMarketDataInstanceEnabled toggles the enabled flag of an instance.
+	// Returns domain.ErrNotFound when no such instance exists.
+	SetMarketDataInstanceEnabled(ctx context.Context, id string, enabled bool) error
+
+	// DeleteMarketDataInstance removes the instance and (by cascade) its
+	// instruments. Returns domain.ErrNotFound when no such instance exists.
+	DeleteMarketDataInstance(ctx context.Context, id string) error
+
+	// --- Market-data instruments ---
+
+	// UpsertMarketDataInstrument inserts or replaces one instrument of an
+	// instance, keyed by (instance_id, external_symbol).
+	UpsertMarketDataInstrument(
+		ctx context.Context, instrument domain.MarketDataInstrument,
+	) error
+
+	// ListMarketDataInstruments returns every instrument of the instance, ordered
+	// by external symbol.
+	ListMarketDataInstruments(
+		ctx context.Context, instanceID string,
+	) ([]domain.MarketDataInstrument, error)
+
+	// ListEnabledMarketDataInstruments returns the enabled instruments of the
+	// instance, ordered by external symbol.
+	ListEnabledMarketDataInstruments(
+		ctx context.Context, instanceID string,
+	) ([]domain.MarketDataInstrument, error)
+
+	// SetMarketDataInstrumentEnabled toggles the enabled flag of one instrument.
+	// Returns domain.ErrNotFound when no such instrument exists.
+	SetMarketDataInstrumentEnabled(
+		ctx context.Context, instanceID, externalSymbol string, enabled bool,
+	) error
+
+	// DeleteMarketDataInstrument removes one instrument of an instance. Returns
+	// domain.ErrNotFound when no such instrument exists.
+	DeleteMarketDataInstrument(
+		ctx context.Context, instanceID, externalSymbol string,
+	) error
+
+	// UpsertMarketDataQuote records the latest normalized quote for one
+	// configured instrument.
+	UpsertMarketDataQuote(ctx context.Context, quote domain.MarketDataQuote) error
+
+	// ListMarketDataQuotes returns latest quotes for one instance, ordered by
+	// external symbol. An empty instanceID returns quotes for all instances.
+	ListMarketDataQuotes(ctx context.Context, instanceID string) ([]domain.MarketDataQuote, error)
+
 	// Close releases the database connection. It is idempotent.
 	Close() error
 }

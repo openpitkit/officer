@@ -151,6 +151,7 @@ const (
 	AuditActionSubmitOrder     AuditAction = "submit_order"
 	AuditActionExecutionReport AuditAction = "execution_report"
 	AuditActionSetMcpAccess    AuditAction = "set_mcp_access"
+	AuditActionSetMarketData   AuditAction = "set_market_data"
 )
 
 // AuditRow is the persisted, immutable record of a single control-plane action.
@@ -576,4 +577,3 @@ func validateGoDuration(s string) error {
 func SortLimitValues(vals []LimitValue) {
 	sort.Slice(vals, func(i, j int) bool { return vals[i].Kind < vals[j].Kind })
 }
-

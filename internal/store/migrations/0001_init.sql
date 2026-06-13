@@ -62,6 +62,10 @@ CREATE INDEX idx_limits_account ON limits (tenant, account);
 -- never REAL. updated_at is RFC3339Nano UTC (TEXT, same as audit.at).
 -- Seam: a future margin "positions" table will live beside this one; the
 -- schema is kept spot-only intentionally.
+-- realized_pnl is delta-accumulated: each operation's realized-PnL delta is
+-- added to the stored value, never overwritten with the engine's reported
+-- absolute. A fresh row starts at '0', so accumulated deltas equal the
+-- cumulative.
 CREATE TABLE balances (
     tenant               TEXT NOT NULL,
     account              TEXT NOT NULL,
@@ -70,6 +74,7 @@ CREATE TABLE balances (
     held                 TEXT NOT NULL DEFAULT '0',
     incoming             TEXT NOT NULL DEFAULT '0',
     average_entry_price  TEXT NOT NULL DEFAULT '',
+    realized_pnl         TEXT NOT NULL DEFAULT '0',
     updated_at           TEXT NOT NULL,
     PRIMARY KEY (tenant, account, asset)
 );
@@ -167,3 +172,56 @@ CREATE TABLE audit (
 );
 
 CREATE INDEX idx_audit_at ON audit (at DESC, id DESC);
+
+-- Market-data connector configuration. One row per configured
+-- source instance; per-instance instrument selection lives in
+-- market_data_instruments. `credentials` is an opaque provider-specific JSON
+-- blob, unencrypted for now; BYO/mock leave
+-- it empty. `enabled` is a 0/1 flag gating runtime participation.
+CREATE TABLE market_data_instances (
+    id          TEXT    PRIMARY KEY,
+    type        TEXT    NOT NULL,
+    label       TEXT    NOT NULL DEFAULT '',
+    credentials TEXT    NOT NULL DEFAULT '',
+    enabled     INTEGER NOT NULL DEFAULT 0
+);
+
+-- Per-instrument selection for an instance: the external source symbol mapped
+-- to an engine instrument (base, quote). Per-instrument enable/disable lives
+-- here. The instance reference cascades on delete so removing an instance drops
+-- its instruments.
+CREATE TABLE market_data_instruments (
+    instance_id     TEXT    NOT NULL REFERENCES market_data_instances(id) ON DELETE CASCADE,
+    external_symbol TEXT    NOT NULL,
+    base_asset      TEXT    NOT NULL,
+    quote_asset     TEXT    NOT NULL,
+    enabled         INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (instance_id, external_symbol)
+);
+
+-- Latest normalized quote per configured instrument. This is an operational
+-- snapshot, not a tick history: the connector manager overwrites a row on every
+-- update so the panel and dashboard can show current mark/bid/ask + as-of.
+CREATE TABLE market_data_quotes (
+    instance_id     TEXT    NOT NULL,
+    external_symbol TEXT    NOT NULL,
+    base_asset      TEXT    NOT NULL,
+    quote_asset     TEXT    NOT NULL,
+    mark            TEXT    NOT NULL DEFAULT '',
+    bid             TEXT    NOT NULL DEFAULT '',
+    ask             TEXT    NOT NULL DEFAULT '',
+    as_of           TEXT    NOT NULL,
+    received_at     TEXT    NOT NULL,
+    PRIMARY KEY (instance_id, external_symbol),
+    FOREIGN KEY (instance_id, external_symbol)
+        REFERENCES market_data_instruments(instance_id, external_symbol)
+        ON DELETE CASCADE
+);
+
+-- Per-command MCP access control. One row per command the operator has
+-- explicitly toggled away from its catalogue default; commands without a row
+-- resolve to their default in the catalogue. `enabled` is a 0/1 flag.
+CREATE TABLE mcp_access (
+    command TEXT PRIMARY KEY,
+    enabled INTEGER NOT NULL
+);

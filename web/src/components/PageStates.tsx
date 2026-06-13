@@ -17,6 +17,7 @@
 
 import { AlertTriangle, Inbox, RefreshCw, X } from "lucide-react";
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -43,23 +44,24 @@ export function TableSkeleton({ rows = 5, cols = 4 }: { rows?: number; cols?: nu
 export function ErrorState({
   message,
   onRetry,
-  title = "Could not load data",
+  title,
 }: {
   message: string;
   onRetry: () => void;
   title?: string;
 }) {
+  const { t } = useTranslation();
   return (
     <Card className="animate-fade-in">
       <CardContent className="flex flex-col items-center gap-4 py-12 text-center">
         <AlertTriangle className="h-8 w-8 text-[var(--danger)]" />
         <div className="space-y-1">
-          <p className="text-sm font-bold text-text">{title}</p>
+          <p className="text-sm font-bold text-text">{title ?? t("states.loadError")}</p>
           <p className="max-w-md text-xs text-muted-lt">{message}</p>
         </div>
         <Button variant="outline" size="sm" onClick={onRetry}>
           <RefreshCw className="h-3.5 w-3.5" />
-          Retry
+          {t("actions.retry")}
         </Button>
       </CardContent>
     </Card>
@@ -100,6 +102,7 @@ export function ErrorBanner({
   onDismiss?: () => void;
   className?: string;
 }) {
+  const { t } = useTranslation();
   return (
     <div
       role="alert"
@@ -115,7 +118,7 @@ export function ErrorBanner({
         <button
           type="button"
           onClick={onDismiss}
-          aria-label="Dismiss error"
+          aria-label={t("actions.dismissError")}
           className="shrink-0 rounded-[3px] p-0.5 hover:bg-[var(--danger)]/10"
         >
           <X className="h-3.5 w-3.5" />

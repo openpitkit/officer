@@ -56,8 +56,8 @@ func TestMigration_Chain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaVersion: %v", err)
 	}
-	if v != 3 {
-		t.Fatalf("want schema version 3, got %d", v)
+	if v != 1 {
+		t.Fatalf("want schema version 1, got %d", v)
 	}
 }
 
@@ -74,8 +74,8 @@ func TestMigration_Idempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaVersion: %v", err)
 	}
-	if v != 3 {
-		t.Fatalf("want schema version 3, got %d", v)
+	if v != 1 {
+		t.Fatalf("want schema version 1, got %d", v)
 	}
 }
 
@@ -405,12 +405,12 @@ func TestLimits_GroupingOrder(t *testing.T) {
 
 	// Insert three barriers in non-alphabetical order.
 	barriers := []domain.Limit{
-		makeLimit(domain.PolicyPnlBoundsKillSwitch, domain.ScopeAsset, "", "ETH",
+		makeLimit(domain.PolicyPnlBoundsKillSwitch, domain.ScopeAsset, "", "MSFT",
 			domain.LimitValue{Kind: domain.KindUpperBound, Value: "1000"}),
 		makeLimit(domain.PolicyRateLimit, domain.ScopeBroker, "", "",
 			domain.LimitValue{Kind: domain.KindMaxOrders, Value: "10"},
 			domain.LimitValue{Kind: domain.KindWindow, Value: "1s"}),
-		makeLimit(domain.PolicyOrderSizeLimit, domain.ScopeAsset, "", "BTC",
+		makeLimit(domain.PolicyOrderSizeLimit, domain.ScopeAsset, "", "AAPL",
 			domain.LimitValue{Kind: domain.KindMaxQuantity, Value: "5"}),
 	}
 	for _, b := range barriers {
@@ -426,8 +426,8 @@ func TestLimits_GroupingOrder(t *testing.T) {
 	if len(got) != 3 {
 		t.Fatalf("want 3 barriers, got %d", len(got))
 	}
-	// Expected order: order_size_limit/asset/BTC,
-	// pnl_bounds_kill_switch/asset/ETH, rate_limit/broker
+	// Expected order: order_size_limit/asset/AAPL,
+	// pnl_bounds_kill_switch/asset/MSFT, rate_limit/broker
 	if got[0].Target.Policy != domain.PolicyOrderSizeLimit {
 		t.Errorf("pos 0: want order_size_limit, got %s", got[0].Target.Policy)
 	}
@@ -480,7 +480,7 @@ func TestLimits_ListPolicy(t *testing.T) {
 	rl := makeLimit(domain.PolicyRateLimit, domain.ScopeBroker, "", "",
 		domain.LimitValue{Kind: domain.KindMaxOrders, Value: "10"},
 		domain.LimitValue{Kind: domain.KindWindow, Value: "1s"})
-	osl := makeLimit(domain.PolicyOrderSizeLimit, domain.ScopeAsset, "", "BTC",
+	osl := makeLimit(domain.PolicyOrderSizeLimit, domain.ScopeAsset, "", "AAPL",
 		domain.LimitValue{Kind: domain.KindMaxQuantity, Value: "1"})
 
 	for _, b := range []domain.Limit{rl, osl} {
@@ -665,5 +665,259 @@ func TestMcpAccess_UpsertAndList(t *testing.T) {
 	}
 	if len(access) != 2 {
 		t.Fatalf("want 2 overrides after overwrite, got %d", len(access))
+	}
+}
+
+// --- Market-data ---
+
+func mdInstance(id string, enabled bool) domain.MarketDataInstance {
+	return domain.MarketDataInstance{
+		ID:      id,
+		Type:    domain.MarketDataProviderMock,
+		Label:   "label-" + id,
+		Enabled: enabled,
+	}
+}
+
+func TestMarketDataInstance_CreateGetListDelete(t *testing.T) {
+	t.Parallel()
+	s := openStore(t)
+	ctx := context.Background()
+
+	if err := s.CreateMarketDataInstance(ctx, mdInstance("a", false)); err != nil {
+		t.Fatalf("CreateMarketDataInstance: %v", err)
+	}
+	if err := s.CreateMarketDataInstance(ctx, mdInstance("b", true)); err != nil {
+		t.Fatalf("CreateMarketDataInstance: %v", err)
+	}
+
+	// Duplicate id maps to ErrAlreadyExists.
+	if err := s.CreateMarketDataInstance(ctx, mdInstance("a", false)); !errors.Is(err, domain.ErrAlreadyExists) {
+		t.Fatalf("duplicate create: want ErrAlreadyExists, got %v", err)
+	}
+
+	got, ok, err := s.GetMarketDataInstance(ctx, "a")
+	if err != nil || !ok {
+		t.Fatalf("GetMarketDataInstance: ok=%v err=%v", ok, err)
+	}
+	if got.Type != domain.MarketDataProviderMock || got.Label != "label-a" || got.Enabled {
+		t.Fatalf("instance mismatch: %+v", got)
+	}
+
+	if _, ok, _ := s.GetMarketDataInstance(ctx, "missing"); ok {
+		t.Fatal("GetMarketDataInstance(missing): want ok=false")
+	}
+
+	all, err := s.ListMarketDataInstances(ctx)
+	if err != nil {
+		t.Fatalf("ListMarketDataInstances: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("want 2 instances, got %d", len(all))
+	}
+
+	enabled, err := s.ListEnabledMarketDataInstances(ctx)
+	if err != nil {
+		t.Fatalf("ListEnabledMarketDataInstances: %v", err)
+	}
+	if len(enabled) != 1 || enabled[0].ID != "b" {
+		t.Fatalf("want only enabled instance b, got %+v", enabled)
+	}
+
+	if err := s.DeleteMarketDataInstance(ctx, "a"); err != nil {
+		t.Fatalf("DeleteMarketDataInstance: %v", err)
+	}
+	if err := s.DeleteMarketDataInstance(ctx, "a"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("delete missing: want ErrNotFound, got %v", err)
+	}
+}
+
+func TestMarketDataInstance_SetEnabled(t *testing.T) {
+	t.Parallel()
+	s := openStore(t)
+	ctx := context.Background()
+
+	if err := s.CreateMarketDataInstance(ctx, mdInstance("a", false)); err != nil {
+		t.Fatalf("CreateMarketDataInstance: %v", err)
+	}
+	if err := s.SetMarketDataInstanceEnabled(ctx, "a", true); err != nil {
+		t.Fatalf("SetMarketDataInstanceEnabled: %v", err)
+	}
+	got, _, _ := s.GetMarketDataInstance(ctx, "a")
+	if !got.Enabled {
+		t.Fatal("instance should be enabled after SetMarketDataInstanceEnabled(true)")
+	}
+	if err := s.SetMarketDataInstanceEnabled(ctx, "missing", true); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("set enabled on missing: want ErrNotFound, got %v", err)
+	}
+}
+
+func mdInstrument(instanceID, symbol string, enabled bool) domain.MarketDataInstrument {
+	return domain.MarketDataInstrument{
+		InstanceID:     instanceID,
+		ExternalSymbol: symbol,
+		BaseAsset:      "AAPL",
+		QuoteAsset:     "USD",
+		Enabled:        enabled,
+	}
+}
+
+func TestMarketDataInstrument_UpsertListEnabledDelete(t *testing.T) {
+	t.Parallel()
+	s := openStore(t)
+	ctx := context.Background()
+
+	if err := s.CreateMarketDataInstance(ctx, mdInstance("inst", true)); err != nil {
+		t.Fatalf("CreateMarketDataInstance: %v", err)
+	}
+
+	if err := s.UpsertMarketDataInstrument(ctx, mdInstrument("inst", "AAPL", true)); err != nil {
+		t.Fatalf("UpsertMarketDataInstrument: %v", err)
+	}
+	if err := s.UpsertMarketDataInstrument(ctx, mdInstrument("inst", "MSFT", false)); err != nil {
+		t.Fatalf("UpsertMarketDataInstrument: %v", err)
+	}
+
+	// Upsert overwrites in place rather than duplicating.
+	updated := mdInstrument("inst", "AAPL", true)
+	updated.QuoteAsset = "EUR"
+	if err := s.UpsertMarketDataInstrument(ctx, updated); err != nil {
+		t.Fatalf("UpsertMarketDataInstrument overwrite: %v", err)
+	}
+
+	all, err := s.ListMarketDataInstruments(ctx, "inst")
+	if err != nil {
+		t.Fatalf("ListMarketDataInstruments: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("want 2 instruments, got %d", len(all))
+	}
+	if all[0].ExternalSymbol != "AAPL" || all[0].QuoteAsset != "EUR" {
+		t.Fatalf("overwrite not applied: %+v", all[0])
+	}
+
+	enabled, err := s.ListEnabledMarketDataInstruments(ctx, "inst")
+	if err != nil {
+		t.Fatalf("ListEnabledMarketDataInstruments: %v", err)
+	}
+	if len(enabled) != 1 || enabled[0].ExternalSymbol != "AAPL" {
+		t.Fatalf("want only enabled AAPL, got %+v", enabled)
+	}
+
+	if err := s.SetMarketDataInstrumentEnabled(ctx, "inst", "MSFT", true); err != nil {
+		t.Fatalf("SetMarketDataInstrumentEnabled: %v", err)
+	}
+	enabled, _ = s.ListEnabledMarketDataInstruments(ctx, "inst")
+	if len(enabled) != 2 {
+		t.Fatalf("want 2 enabled after toggle, got %d", len(enabled))
+	}
+
+	if err := s.SetMarketDataInstrumentEnabled(ctx, "inst", "missing", true); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("toggle missing instrument: want ErrNotFound, got %v", err)
+	}
+
+	if err := s.DeleteMarketDataInstrument(ctx, "inst", "MSFT"); err != nil {
+		t.Fatalf("DeleteMarketDataInstrument: %v", err)
+	}
+	if err := s.DeleteMarketDataInstrument(ctx, "inst", "MSFT"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("delete missing instrument: want ErrNotFound, got %v", err)
+	}
+}
+
+func TestMarketDataQuote_UpsertListAndDeleteInstrument(t *testing.T) {
+	t.Parallel()
+	s := openStore(t)
+	ctx := context.Background()
+	asOf := time.Date(2026, 6, 16, 10, 0, 0, 0, time.UTC)
+	receivedAt := asOf.Add(time.Second)
+
+	if err := s.CreateMarketDataInstance(ctx, mdInstance("inst", true)); err != nil {
+		t.Fatalf("CreateMarketDataInstance: %v", err)
+	}
+	if err := s.UpsertMarketDataInstrument(ctx, mdInstrument("inst", "AAPL", true)); err != nil {
+		t.Fatalf("UpsertMarketDataInstrument: %v", err)
+	}
+	quote := domain.MarketDataQuote{
+		InstanceID:     "inst",
+		ExternalSymbol: "AAPL",
+		BaseAsset:      "AAPL",
+		QuoteAsset:     "USD",
+		Mark:           "100",
+		Bid:            "99",
+		Ask:            "101",
+		AsOf:           asOf,
+		ReceivedAt:     receivedAt,
+	}
+	if err := s.UpsertMarketDataQuote(ctx, quote); err != nil {
+		t.Fatalf("UpsertMarketDataQuote: %v", err)
+	}
+	quote.Mark = "102"
+	if err := s.UpsertMarketDataQuote(ctx, quote); err != nil {
+		t.Fatalf("UpsertMarketDataQuote overwrite: %v", err)
+	}
+
+	quotes, err := s.ListMarketDataQuotes(ctx, "inst")
+	if err != nil {
+		t.Fatalf("ListMarketDataQuotes: %v", err)
+	}
+	if len(quotes) != 1 || quotes[0].Mark != "102" || !quotes[0].AsOf.Equal(asOf) {
+		t.Fatalf("unexpected quotes: %+v", quotes)
+	}
+
+	if err := s.DeleteMarketDataInstrument(ctx, "inst", "AAPL"); err != nil {
+		t.Fatalf("DeleteMarketDataInstrument: %v", err)
+	}
+	quotes, err = s.ListMarketDataQuotes(ctx, "inst")
+	if err != nil {
+		t.Fatalf("ListMarketDataQuotes after delete: %v", err)
+	}
+	if len(quotes) != 0 {
+		t.Fatalf("quote should be deleted with instrument, got %+v", quotes)
+	}
+}
+
+func TestMarketDataInstance_DeleteRemovesInstruments(t *testing.T) {
+	t.Parallel()
+	s := openStore(t)
+	ctx := context.Background()
+
+	if err := s.CreateMarketDataInstance(ctx, mdInstance("inst", true)); err != nil {
+		t.Fatalf("CreateMarketDataInstance: %v", err)
+	}
+	if err := s.UpsertMarketDataInstrument(ctx, mdInstrument("inst", "AAPL", true)); err != nil {
+		t.Fatalf("UpsertMarketDataInstrument: %v", err)
+	}
+	if err := s.UpsertMarketDataInstrument(ctx, mdInstrument("inst", "MSFT", false)); err != nil {
+		t.Fatalf("UpsertMarketDataInstrument: %v", err)
+	}
+
+	if err := s.DeleteMarketDataInstance(ctx, "inst"); err != nil {
+		t.Fatalf("DeleteMarketDataInstance: %v", err)
+	}
+
+	// The instance's instruments must be gone, not orphaned: DeleteMarketDataInstance
+	// removes them in the same transaction rather than relying on FK cascade,
+	// which the modernc.org/sqlite driver does not enforce by default.
+	instruments, err := s.ListMarketDataInstruments(ctx, "inst")
+	if err != nil {
+		t.Fatalf("ListMarketDataInstruments: %v", err)
+	}
+	if len(instruments) != 0 {
+		t.Fatalf("want no instruments after instance delete, got %d: %+v", len(instruments), instruments)
+	}
+}
+
+func TestMarketDataInstrument_EmptyListsAreNonNil(t *testing.T) {
+	t.Parallel()
+	s := openStore(t)
+	ctx := context.Background()
+
+	instances, err := s.ListMarketDataInstances(ctx)
+	if err != nil || instances == nil {
+		t.Fatalf("ListMarketDataInstances: want non-nil empty, err=%v", err)
+	}
+	instruments, err := s.ListMarketDataInstruments(ctx, "none")
+	if err != nil || instruments == nil {
+		t.Fatalf("ListMarketDataInstruments: want non-nil empty, err=%v", err)
 	}
 }

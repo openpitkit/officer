@@ -17,6 +17,12 @@
 
 import type { ReactNode } from "react";
 
+import { Menu } from "lucide-react";
+import { useTranslation } from "react-i18next";
+
+import { Button } from "@/components/ui/button";
+import { useSidebar } from "@/components/sidebar-context";
+import { LanguageSwitch } from "@/components/LanguageSwitch";
 import { ThemeSwitch } from "@/components/ThemeSwitch";
 
 interface TopBarProps {
@@ -26,11 +32,25 @@ interface TopBarProps {
 }
 
 export function TopBar({ title, actions }: TopBarProps) {
+  const { t } = useTranslation();
+  const { toggle } = useSidebar();
   return (
     <header className="flex h-14 shrink-0 items-center justify-between border-b border-border bg-surface px-6">
-      <h1 className="text-base font-bold tracking-tight text-text">{title}</h1>
+      <div className="flex items-center gap-2">
+        <Button
+          variant="outline"
+          size="icon"
+          className="md:hidden"
+          aria-label={t("topBar.toggleNav")}
+          onClick={toggle}
+        >
+          <Menu />
+        </Button>
+        <h1 className="text-base font-bold tracking-tight text-text">{title}</h1>
+      </div>
       <div className="flex items-center gap-2">
         {actions}
+        <LanguageSwitch />
         <ThemeSwitch />
       </div>
     </header>

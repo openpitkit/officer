@@ -17,6 +17,7 @@
 
 import { Monitor, Moon, Sun } from "lucide-react";
 import type { ComponentType } from "react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -28,23 +29,25 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useTheme, type ThemeMode } from "@/theme/ThemeProvider";
+import { useTheme, type ThemeMode } from "@/theme/theme-context";
 
-const MODES: { value: ThemeMode; label: string; icon: ComponentType<{ className?: string }> }[] = [
-  { value: "dark", label: "Dark", icon: Moon },
-  { value: "light", label: "Light", icon: Sun },
-  { value: "system", label: "System", icon: Monitor },
+const MODES: { value: ThemeMode; labelKey: string; icon: ComponentType<{ className?: string }> }[] = [
+  { value: "dark", labelKey: "theme.dark", icon: Moon },
+  { value: "light", labelKey: "theme.light", icon: Sun },
+  { value: "system", labelKey: "theme.system", icon: Monitor },
 ];
 
 /**
  * Tri-state theme selector: dark / light / system, persisted to localStorage.
  */
 export function ThemeSwitch() {
+  const { t } = useTranslation();
   const { mode, resolved, setMode } = useTheme();
 
   // The trigger glyph reflects the *effective* palette so the icon is honest in
   // system mode, while the menu shows the persisted preference.
   const TriggerIcon = resolved === "dark" ? Moon : Sun;
+  const ariaLabel = t("theme.ariaLabel", { mode: t(`theme.${mode}`) });
 
   return (
     <DropdownMenu>
@@ -52,23 +55,23 @@ export function ThemeSwitch() {
         <Button
           variant="outline"
           size="icon"
-          aria-label={`Theme: ${mode}`}
-          title={`Theme: ${mode}`}
+          aria-label={ariaLabel}
+          title={ariaLabel}
         >
           <TriggerIcon />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuLabel>Theme</DropdownMenuLabel>
+        <DropdownMenuLabel>{t("theme.label")}</DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuRadioGroup
           value={mode}
           onValueChange={(v) => setMode(v as ThemeMode)}
         >
-          {MODES.map(({ value, label, icon: Icon }) => (
+          {MODES.map(({ value, labelKey, icon: Icon }) => (
             <DropdownMenuRadioItem key={value} value={value}>
               <Icon className="h-3.5 w-3.5" />
-              <span>{label}</span>
+              <span>{t(labelKey)}</span>
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>

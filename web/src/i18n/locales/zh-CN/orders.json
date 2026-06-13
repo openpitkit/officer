@@ -1,0 +1,140 @@
+{
+  "title": "订单",
+  "subtitle": "数据平面视图：流经 Officer 的订单、其生命周期事件及成交记录。点击订单行可查看事件时间线与成交明细。",
+
+  "tab": {
+    "orders": "订单",
+    "trades": "成交"
+  },
+
+  "filter": {
+    "accountPlaceholder": "按账户筛选…",
+    "sourceAll": "所有来源",
+    "sourceAriaLabel": "来源",
+    "sizeAriaLabel": "每页行数",
+    "sizeRows": "{{count}} 行"
+  },
+
+  "table": {
+    "id": "ID",
+    "account": "账户",
+    "instrument": "标的",
+    "side": "方向",
+    "amount": "数量",
+    "price": "价格",
+    "status": "状态",
+    "source": "来源",
+    "time": "时间",
+    "order": "订单",
+    "qty": "数量",
+    "lockPrice": "锁定价格"
+  },
+
+  "amount": {
+    "qty": "{{value}} 数量",
+    "vol": "{{value}} 成交额"
+  },
+
+  "price": {
+    "market": "市价"
+  },
+
+  "empty": {
+    "orders": {
+      "title": "暂无订单",
+      "hint": "通过面板、API 或 MCP 提交的订单将显示于此。"
+    },
+    "trades": {
+      "title": "暂无成交",
+      "hint": "成交由针对订单提交的执行报告产生。"
+    }
+  },
+
+  "addOrder": {
+    "button": "添加订单",
+    "added": "订单已添加",
+    "dialog": {
+      "title": "添加订单",
+      "description": "添加订单以对风控引擎进行评估。这是模拟操作，不会向任何市场发送任何内容。未指定价格时视为市价单，可能被拒绝。",
+      "account": "账户",
+      "accountPlaceholder": "如 desk-alpha",
+      "baseAsset": "基础资产",
+      "baseAssetPlaceholder": "如 AAPL",
+      "quoteAsset": "计价资产",
+      "quoteAssetPlaceholder": "如 USD",
+      "side": "方向",
+      "sideOptions": {
+        "buy": "买入",
+        "sell": "卖出"
+      },
+      "amountKind": "数量类型",
+      "amountKindOptions": {
+        "quantity": "数量（基础资产）",
+        "volume": "成交额（计价资产）"
+      },
+      "amount": "数量",
+      "amountPlaceholder": "如 100",
+      "limitPrice": "限价（可选）",
+      "limitPricePlaceholder": "留空 = 市价",
+      "submitBusy": "添加中…",
+      "submit": "添加订单",
+      "validationError": "账户、标的和数量为必填项。"
+    }
+  },
+
+  "check": {
+    "checking": "检查中...",
+    "previewUnavailable": "预览不可用",
+    "wouldPass": "预览：将通过",
+    "wouldReject": "预览：将被拒绝",
+    "lockPrices": "锁定价格：{{prices}}",
+    "wouldBlock": "将封锁账户 {{account}}",
+    "wouldBlockReason": "将封锁账户 {{account}} - {{reason}}"
+  },
+
+  "execReport": {
+    "dialog": {
+      "title": "提交执行报告",
+      "description": "订单 #{{orderId}} — 记录成交以模拟部分或完全执行。",
+      "fillQty": "成交数量",
+      "fillQtyPlaceholder": "如 50",
+      "fillPrice": "成交价格",
+      "fillPricePlaceholder": "如 192.40",
+      "lockPrice": "锁定价格（可选）",
+      "lockPricePlaceholder": "可选",
+      "finalFill": "最终成交（关闭订单）",
+      "submitBusy": "提交中…",
+      "submit": "提交",
+      "accepted": "执行报告已接受。",
+      "done": "完成",
+      "validationError": "数量和价格为必填项。"
+    }
+  },
+
+  "detail": {
+    "dialog": {
+      "title": "订单 #{{orderId}}",
+      "fieldAccount": "账户",
+      "fieldStatus": "状态",
+      "fieldSource": "来源",
+      "fieldSubmitted": "提交时间",
+      "fieldLockPrices": "锁定价格",
+      "timeline": {
+        "sectionTitle": "事件时间线",
+        "empty": "暂无事件记录。",
+        "by": "由 {{principal}}",
+        "fillQty": "数量 {{qty}}",
+        "fillAt": "@ {{price}}",
+        "fillLock": "（锁定 {{price}}）",
+        "rejectCode": "代码 {{code}}",
+        "rejectScope": "范围 {{scope}}",
+        "rejectPolicy": "策略 {{policy}}"
+      },
+      "trades": {
+        "sectionTitle": "该订单的成交记录",
+        "empty": "暂无成交记录。提交执行报告以创建成交。",
+        "submitExecReport": "提交执行报告"
+      }
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "title": "服务",
+  "refreshAriaLabel": "刷新服务信息",
+  "application": {
+    "title": "应用",
+    "name": "名称",
+    "defaultName": "Pit Officer",
+    "build": "构建版本",
+    "nonRelease": "非正式版本"
+  },
+  "engine": {
+    "title": "引擎",
+    "version": "版本",
+    "profile": "配置文件"
+  },
+  "database": {
+    "title": "数据库",
+    "reachable": "可达",
+    "unreachable": "不可达",
+    "reachableLabel": "可达性",
+    "path": "路径"
+  },
+  "api": {
+    "title": "API",
+    "rest": "REST API",
+    "openApiDocs": "OpenAPI / Swagger 文档",
+    "mcp": "MCP API",
+    "configureAccess": "配置访问权限",
+    "loadingCommands": "加载命令中…",
+    "noCommands": "未定义命令。"
+  }
+}

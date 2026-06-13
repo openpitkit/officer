@@ -28,6 +28,7 @@ func TestCatalogueContract(t *testing.T) {
 		{Name: "get_audit", Mutating: false, Protective: false, Implemented: true, DefaultEnabled: true},
 		{Name: "check_order", Mutating: false, Protective: false, Implemented: true, DefaultEnabled: true},
 		{Name: "set_limit", Mutating: true, Protective: true, Implemented: false, DefaultEnabled: false},
+		{Name: "set_market_data_instrument", Mutating: true, Protective: true, Implemented: true, DefaultEnabled: false},
 		{Name: "arm_killswitch", Mutating: true, Protective: true, Implemented: false, DefaultEnabled: false},
 		{Name: "disarm_killswitch", Mutating: true, Protective: true, Implemented: false, DefaultEnabled: false},
 		{Name: "submit_order", Mutating: true, Protective: true, Implemented: false, DefaultEnabled: false},

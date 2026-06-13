@@ -17,6 +17,7 @@
 
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { ExternalLink, Pencil, Plus, Trash2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import { ApiError, deleteLimit } from "@/api/client";
@@ -26,11 +27,10 @@ import { useBalances } from "@/api/useBalances";
 import { useLimits } from "@/api/useLimits";
 import {
   POLICIES,
-  POLICY_LABELS,
-  SCOPE_LABELS,
   getPolicyCatalogEntry,
-  isPolicy,
-  isScope,
+  policyCatalogDescription,
+  policyLabel,
+  scopeLabel,
   type Policy,
 } from "@/api/vocabulary";
 import { Autocomplete } from "@/components/Autocomplete";
@@ -78,16 +78,9 @@ function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function policyLabel(policy: string): string {
-  return isPolicy(policy) ? POLICY_LABELS[policy] : policy;
-}
-
-function scopeLabel(scope: string): string {
-  return isScope(scope) ? SCOPE_LABELS[scope] : scope;
-}
-
 // Policy description strip shown near the filter when a single policy is selected.
 function PolicyDescription({ policy }: { policy: Policy | typeof ALL }) {
+  const { t } = useTranslation("policies");
   if (policy === ALL) {
     return null;
   }
@@ -97,14 +90,14 @@ function PolicyDescription({ policy }: { policy: Policy | typeof ALL }) {
   }
   return (
     <p className="text-xs text-muted-lt">
-      {entry.description}{" "}
+      {policyCatalogDescription(t, entry.id)}{" "}
       <a
         href={entry.wikiUrl}
         target="_blank"
         rel="noreferrer"
         className="inline-flex items-center gap-0.5 text-accent hover:underline"
       >
-        Details
+        {t("wikiDetails")}
         <ExternalLink className="h-3 w-3" />
       </a>
     </p>
@@ -122,6 +115,8 @@ function DeleteConfirm({
   onOpenChange: (open: boolean) => void;
   onDone: () => void;
 }) {
+  const { t } = useTranslation("policies");
+  const { t: tc } = useTranslation();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -151,18 +146,25 @@ function DeleteConfirm({
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Delete policy barrier?</AlertDialogTitle>
+          <AlertDialogTitle>{t("delete.title")}</AlertDialogTitle>
           <AlertDialogDescription>
-            This removes the {policyLabel(target?.policy ?? "")} barrier on{" "}
-            {scopeLabel(target?.scope ?? "")}
-            {target?.account ? ` account ${target.account}` : ""}
-            {target?.asset ? ` asset ${target.asset}` : ""}. The engine is
-            reconfigured immediately.
+            {t("delete.description", {
+              policy: policyLabel(tc, target?.policy ?? ""),
+              scope: scopeLabel(tc, target?.scope ?? ""),
+              account: target?.account
+                ? t("delete.accountFragment", { account: target.account })
+                : "",
+              asset: target?.asset
+                ? t("delete.assetFragment", { asset: target.asset })
+                : "",
+            })}
           </AlertDialogDescription>
         </AlertDialogHeader>
         {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+          <AlertDialogCancel disabled={busy}>
+            {tc("actions.cancel")}
+          </AlertDialogCancel>
           <AlertDialogAction
             onClick={(e) => {
               e.preventDefault();
@@ -171,7 +173,7 @@ function DeleteConfirm({
             disabled={busy}
             className="bg-[var(--danger)] hover:opacity-90"
           >
-            Delete
+            {tc("actions.delete")}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
@@ -188,17 +190,19 @@ function PoliciesTable({
   onEdit: (limit: Limit) => void;
   onDelete: (limit: Limit) => void;
 }) {
+  const { t } = useTranslation("policies");
+  const { t: tc } = useTranslation();
   return (
     <Card>
       <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
-            <TableHead>Policy</TableHead>
-            <TableHead>Scope</TableHead>
-            <TableHead>Account</TableHead>
-            <TableHead>Asset</TableHead>
-            <TableHead>Values</TableHead>
-            <TableHead className="text-right">Actions</TableHead>
+            <TableHead>{t("table.policy")}</TableHead>
+            <TableHead>{t("table.scope")}</TableHead>
+            <TableHead>{t("table.account")}</TableHead>
+            <TableHead>{t("table.asset")}</TableHead>
+            <TableHead>{t("table.values")}</TableHead>
+            <TableHead className="text-right">{t("table.actions")}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -208,16 +212,16 @@ function PoliciesTable({
               className="hover:bg-transparent"
             >
               <TableCell>
-                <Badge variant="accent">{policyLabel(limit.policy)}</Badge>
+                <Badge variant="accent">{policyLabel(tc, limit.policy)}</Badge>
               </TableCell>
               <TableCell className="text-xs text-muted-lt">
-                {scopeLabel(limit.scope)}
+                {scopeLabel(tc, limit.scope)}
               </TableCell>
               <TableCell className="nums text-xs">
-                {limit.account || "—"}
+                {limit.account || tc("value.none")}
               </TableCell>
               <TableCell className="nums text-xs">
-                {limit.asset || "—"}
+                {limit.asset || tc("value.none")}
               </TableCell>
               <TableCell>
                 <ValueChips values={limit.values} />
@@ -228,16 +232,16 @@ function PoliciesTable({
                     variant="outline"
                     size="sm"
                     onClick={() => onEdit(limit)}
-                    aria-label="Edit policy barrier"
+                    aria-label={t("table.editAriaLabel")}
                   >
                     <Pencil className="h-3.5 w-3.5" />
-                    Edit
+                    {t("table.edit")}
                   </Button>
                   <Button
                     variant="outline"
                     size="sm"
                     onClick={() => onDelete(limit)}
-                    aria-label="Delete policy barrier"
+                    aria-label={t("table.deleteAriaLabel")}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
@@ -252,6 +256,8 @@ function PoliciesTable({
 }
 
 export function Limits() {
+  const { t } = useTranslation("policies");
+  const { t: tc } = useTranslation();
   const [searchParams] = useSearchParams();
   const initialAccount = searchParams.get("account") ?? "";
 
@@ -261,6 +267,8 @@ export function Limits() {
   // Sync initial account from URL only on first render.
   useEffect(() => {
     if (initialAccount) {
+      // Seed the filter once from the URL query on mount.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setAccountFilter(initialAccount);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -327,38 +335,34 @@ export function Limits() {
 
   return (
     <Page
-      title="Policies"
+      title={t("title")}
       actions={
         <>
           <RefreshButton onClick={reload} busy={load.state === "loading"} />
           <Button size="sm" onClick={openAdd}>
             <Plus className="h-3.5 w-3.5" />
-            Add policy
+            {t("addPolicy")}
           </Button>
         </>
       }
     >
-      <p className="text-xs text-muted-lt">
-        Relational risk-policy barriers persisted in the control plane and
-        applied to the OpenPit engine per policy. Each row is one barrier for a
-        target.
-      </p>
+      <p className="text-xs text-muted-lt">{t("intro")}</p>
 
       <Card className="flex flex-wrap items-end gap-4 p-4">
         <div className="space-y-1.5">
-          <Label htmlFor="filter-account">Filter by account</Label>
+          <Label htmlFor="filter-account">{t("filter.account")}</Label>
           <Autocomplete
             id="filter-account"
             value={accountFilter}
             spellCheck={false}
-            placeholder="acc-1"
+            placeholder={t("filter.accountPlaceholder")}
             className="h-8 w-48 text-xs"
             suggestions={accountSuggestions}
             onChange={setAccountFilter}
           />
         </div>
         <div className="space-y-1.5">
-          <Label>Filter by policy</Label>
+          <Label>{t("filter.policy")}</Label>
           <Select
             value={policyFilter}
             onValueChange={(v) => setPolicyFilter(v as Policy | typeof ALL)}
@@ -367,10 +371,10 @@ export function Limits() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value={ALL}>All policies</SelectItem>
+              <SelectItem value={ALL}>{t("filter.allPolicies")}</SelectItem>
               {POLICIES.map((p) => (
                 <SelectItem key={p} value={p}>
-                  {POLICY_LABELS[p]}
+                  {policyLabel(tc, p)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -388,18 +392,20 @@ export function Limits() {
         (visible.length === 0 ? (
           <EmptyState
             title={
-              load.data.length === 0 ? "No policies yet" : "No matching policies"
+              load.data.length === 0
+                ? t("empty.noPolicies")
+                : t("empty.noMatching")
             }
             hint={
               load.data.length === 0
-                ? "Add the first barrier to start constraining order flow."
-                : "No barrier matches the current account or policy filter."
+                ? t("empty.noPoliciesHint")
+                : t("empty.noMatchingHint")
             }
             action={
               load.data.length === 0 ? (
                 <Button size="sm" onClick={openAdd}>
                   <Plus className="h-3.5 w-3.5" />
-                  Add policy
+                  {t("addPolicy")}
                 </Button>
               ) : undefined
             }

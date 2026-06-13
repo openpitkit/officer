@@ -108,7 +108,7 @@ func TestValidateLimit_RateLimit(t *testing.T) {
 		},
 		{
 			"asset",
-			limit(domain.PolicyRateLimit, domain.ScopeAsset, "", "BTC",
+			limit(domain.PolicyRateLimit, domain.ScopeAsset, "", "AAPL",
 				kv(domain.KindMaxOrders, "1"), kv(domain.KindWindow, "24h")),
 		},
 		{
@@ -118,7 +118,7 @@ func TestValidateLimit_RateLimit(t *testing.T) {
 		},
 		{
 			"account_asset",
-			limit(domain.PolicyRateLimit, domain.ScopeAccountAsset, "acc-1", "ETH",
+			limit(domain.PolicyRateLimit, domain.ScopeAccountAsset, "acc-1", "MSFT",
 				kv(domain.KindMaxOrders, "50"), kv(domain.KindWindow, "1m")),
 		},
 	}
@@ -284,12 +284,12 @@ func TestValidateLimit_OrderSizeLimit(t *testing.T) {
 		},
 		{
 			"account_asset both",
-			limit(domain.PolicyOrderSizeLimit, domain.ScopeAccountAsset, "acc-1", "BTC",
+			limit(domain.PolicyOrderSizeLimit, domain.ScopeAccountAsset, "acc-1", "AAPL",
 				kv(domain.KindMaxQuantity, "1"), kv(domain.KindMaxNotional, "999")),
 		},
 		{
 			"asset",
-			limit(domain.PolicyOrderSizeLimit, domain.ScopeAsset, "", "ETH",
+			limit(domain.PolicyOrderSizeLimit, domain.ScopeAsset, "", "MSFT",
 				kv(domain.KindMaxQuantity, "0.5")),
 		},
 	}
@@ -356,22 +356,22 @@ func TestValidateLimit_PnlBounds(t *testing.T) {
 	}{
 		{
 			"asset lower only",
-			limit(domain.PolicyPnlBoundsKillSwitch, domain.ScopeAsset, "", "BTC",
+			limit(domain.PolicyPnlBoundsKillSwitch, domain.ScopeAsset, "", "AAPL",
 				kv(domain.KindLowerBound, "-1000")),
 		},
 		{
 			"asset upper only",
-			limit(domain.PolicyPnlBoundsKillSwitch, domain.ScopeAsset, "", "BTC",
+			limit(domain.PolicyPnlBoundsKillSwitch, domain.ScopeAsset, "", "AAPL",
 				kv(domain.KindUpperBound, "5000")),
 		},
 		{
 			"account_asset both equal",
-			limit(domain.PolicyPnlBoundsKillSwitch, domain.ScopeAccountAsset, "acc-1", "ETH",
+			limit(domain.PolicyPnlBoundsKillSwitch, domain.ScopeAccountAsset, "acc-1", "MSFT",
 				kv(domain.KindLowerBound, "0"), kv(domain.KindUpperBound, "0")),
 		},
 		{
 			"account_asset both valid",
-			limit(domain.PolicyPnlBoundsKillSwitch, domain.ScopeAccountAsset, "acc-1", "BTC",
+			limit(domain.PolicyPnlBoundsKillSwitch, domain.ScopeAccountAsset, "acc-1", "AAPL",
 				kv(domain.KindLowerBound, "-500"), kv(domain.KindUpperBound, "1000")),
 		},
 	}
@@ -390,16 +390,16 @@ func TestValidateLimit_PnlBounds(t *testing.T) {
 	}{
 		{
 			"neither bound",
-			limit(domain.PolicyPnlBoundsKillSwitch, domain.ScopeAsset, "", "BTC"),
+			limit(domain.PolicyPnlBoundsKillSwitch, domain.ScopeAsset, "", "AAPL"),
 		},
 		{
 			"lower > upper",
-			limit(domain.PolicyPnlBoundsKillSwitch, domain.ScopeAsset, "", "BTC",
+			limit(domain.PolicyPnlBoundsKillSwitch, domain.ScopeAsset, "", "AAPL",
 				kv(domain.KindLowerBound, "100"), kv(domain.KindUpperBound, "50")),
 		},
 		{
 			"lower not decimal",
-			limit(domain.PolicyPnlBoundsKillSwitch, domain.ScopeAsset, "", "BTC",
+			limit(domain.PolicyPnlBoundsKillSwitch, domain.ScopeAsset, "", "AAPL",
 				kv(domain.KindLowerBound, "abc")),
 		},
 		{
@@ -414,7 +414,7 @@ func TestValidateLimit_PnlBounds(t *testing.T) {
 		},
 		{
 			"unknown kind",
-			limit(domain.PolicyPnlBoundsKillSwitch, domain.ScopeAsset, "", "BTC",
+			limit(domain.PolicyPnlBoundsKillSwitch, domain.ScopeAsset, "", "AAPL",
 				kv(domain.KindLowerBound, "-100"), kv("extra", "x")),
 		},
 	}

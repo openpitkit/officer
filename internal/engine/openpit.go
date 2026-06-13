@@ -22,15 +22,23 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	"go.openpit.dev/openpit"
+	bindmd "go.openpit.dev/openpit/marketdata"
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pretrade/policies"
 	"go.openpit.dev/openpit/reject"
 
 	"go.openpit.dev/officer/internal/domain"
+	"go.openpit.dev/officer/internal/marketdata"
 )
+
+// defaultQuoteTTL is the service-wide quote lifetime the engine's market-data
+// service is built with. Risk-grade freshness (seconds-fresh): a quote older
+// than this reads as absent. Making it configurable is planned.
+var defaultQuoteTTL = bindmd.WithinTTL(10 * time.Second)
 
 // envRuntimeLibraryPath is the binding environment variable that pins the
 // native runtime library to an explicit pre-extracted path, bypassing the
@@ -49,22 +57,26 @@ const (
 )
 
 // openPitEngine is the concrete Engine adapter wrapping one OpenPit engine
-// handle.
+// handle and its market-data service.
 //
-// The handle is built by BuildOpenPitEngine and lives until Stop. Limit changes
-// are applied dynamically through the binding's Configure surface; this adapter
-// never builds a second handle. rate_limit, order_size_limit, and
-// pnl_bounds_kill_switch retune their axes wholesale (barriers added and removed
-// at runtime). The spot-funds policy is registered with its default settings and
-// is not reconfigured at runtime. The
-// residual changes the Configure surface cannot express are exactly: configuring
-// a policy that was not registered at build time (no runtime registration API),
-// removing the last barrier of a registered policy (the SDK cannot unregister),
-// and dropping a broker barrier of rate_limit or order_size while other barriers
-// remain (broker is an Option the surface cannot clear in isolation). Each of
-// those returns an error wrapping domain.ErrNotImplemented; the node then
-// rebuilds a fresh engine from the store and stops this one (the adapter itself
-// stays single-handle).
+// The handle is built by BuildOpenPitEngine and lives until Stop; officer never
+// rebuilds it. Limit changes are applied dynamically through the binding's
+// Configure surface. rate_limit, order_size_limit, and pnl_bounds_kill_switch
+// retune their axes wholesale (barriers added and removed at runtime). The
+// spot-funds policy is registered with its default settings and is not
+// reconfigured at runtime. The residual changes the Configure surface cannot
+// express are exactly: configuring a policy that was not registered at build
+// time (no runtime registration API), removing the last barrier of a registered
+// policy (the SDK cannot unregister), and dropping a broker barrier of
+// rate_limit or order_size while other barriers remain (broker is an Option the
+// surface cannot clear in isolation). Each returns an error wrapping
+// domain.ErrNotImplemented, which the node surfaces to its caller; closing such
+// a gap is engine-side SDK work, not an officer rebuild.
+//
+// The adapter owns the market-data service for the whole process life (the
+// engine is never rebuilt, so the service handle is stable). The service is
+// built unconditionally and Stop closes it after stopping the engine, so
+// connector producers must stop before Stop.
 //
 // The adapter tracks the minimal state this requires: the set of policies
 // registered at build time, and per-policy whether a broker barrier is currently
@@ -76,6 +88,14 @@ const (
 // in this environment).
 type openPitEngine struct {
 	eng *openpit.Engine
+
+	// sink publishes normalized quotes into marketDataService. It owns the
+	// first-sight register cache and is safe for concurrent Push (the connector
+	// manager drains multiple feeds into it).
+	sink *marketDataSink
+	// marketDataService is the engine's quote registry, built before the engine
+	// and closed by Stop after the engine stops.
+	marketDataService *bindmd.Service
 
 	// registered is the set of policy names live on the handle. ConfigurePolicy
 	// of an unregistered policy is a not-implemented stub: there is no runtime
@@ -93,15 +113,17 @@ type openPitEngine struct {
 	running bool
 }
 
-// newOpenPitEngine wraps an already-built *openpit.Engine into the Engine
-// adapter. registered is the set of policy names live on the handle and
-// brokerPresent records, per policy, whether it was built with a broker barrier;
-// both are taken over by the adapter. The adapter takes ownership of the
-// handle's lifecycle: it must not be stopped directly afterwards; use
-// Engine.Stop instead. BuildOpenPitEngine is the only caller; it assembles the
-// tracked state.
+// newOpenPitEngine wraps an already-built *openpit.Engine and its market-data
+// service into the Engine adapter. registered is the set of policy names live on
+// the handle and brokerPresent records, per policy, whether it was built with a
+// broker barrier; both are taken over by the adapter. The adapter takes
+// ownership of both the handle and the service lifecycle: neither must be
+// stopped/closed directly afterwards; use Engine.Stop instead, which stops the
+// engine and then closes the service. BuildOpenPitEngine is the only caller; it
+// assembles the tracked state and owns the service before the engine is built.
 func newOpenPitEngine(
 	eng *openpit.Engine,
+	service *bindmd.Service,
 	registered map[string]struct{},
 	brokerPresent map[string]bool,
 ) Engine {
@@ -112,27 +134,30 @@ func newOpenPitEngine(
 		brokerPresent = make(map[string]bool)
 	}
 	return &openPitEngine{
-		eng:           eng,
-		registered:    registered,
-		brokerPresent: brokerPresent,
-		running:       eng != nil,
+		eng:               eng,
+		sink:              newMarketDataSink(service),
+		marketDataService: service,
+		registered:        registered,
+		brokerPresent:     brokerPresent,
+		running:           eng != nil,
 	}
 }
 
-// BuildOpenPitEngine builds the one stage-2 OpenPit engine and returns it
-// wrapped as an Engine. The engine uses the FullSync mode so that binding calls
-// are safe under goroutine migration: Go does not guarantee that a goroutine
-// stays on the OS thread that built the handle, so NoSync would fault
-// intermittently on the multi-cgo SubmitOrder path. It always registers the
-// built-in order-validation policy, and registers each risk policy that has at
-// least one barrier in snap.Limits (reusing the mapping.go ready builders).
-// Blocked accounts from snap.Accounts are then applied with their persisted
-// reasons.
+// BuildOpenPitEngine builds the one stage-2 OpenPit engine plus its market-data
+// service and returns them wrapped as an Engine. The engine uses the FullSync
+// mode so that binding calls are safe under goroutine migration: Go does not
+// guarantee that a goroutine stays on the OS thread that built the handle, so
+// NoSync would fault intermittently on the multi-cgo SubmitOrder path. It always
+// registers the built-in order-validation policy, and registers each risk policy
+// that has at least one barrier in snap.Limits (reusing the mapping.go ready
+// builders). Blocked accounts from snap.Accounts are then applied with their
+// persisted reasons.
 //
-// The handle lives until Stop. This builder does not reconfigure or rebuild in
-// place; when the node needs a change the runtime Configure surface cannot
-// express, it calls BuildOpenPitEngine again for a fresh handle and stops the
-// old one.
+// The handle and the market-data service live until Stop. Officer builds the
+// engine exactly once and never rebuilds it: a change the runtime Configure
+// surface cannot express is an SDK gap, surfaced as an error, not
+// a trigger to call BuildOpenPitEngine again. On any seeding failure both the
+// engine and the already-built service are released so no native resource leaks.
 //
 // runtimeLibraryPath, when non-empty, is exported as
 // OPENPIT_RUNTIME_LIBRARY_PATH before the engine is built so the binding loads
@@ -152,33 +177,37 @@ func BuildOpenPitEngine(runtimeLibraryPath string, snap Snapshot) (Engine, error
 		byPolicy[policy] = append(byPolicy[policy], limit)
 	}
 
-	eng, registered, err := buildEngine(byPolicy)
+	eng, service, registered, err := buildEngine(byPolicy)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := applyBlocks(eng, snap.Accounts); err != nil {
+	// On any seeding failure stop the engine and close the service: the adapter
+	// is not yet constructed, so its Stop would not run.
+	releaseOnErr := func(err error) (Engine, error) {
 		eng.Stop()
+		service.Close()
 		return nil, err
+	}
+
+	if err := applyBlocks(eng, snap.Accounts); err != nil {
+		return releaseOnErr(err)
 	}
 	if err := hydrateGroups(eng, snap.Accounts); err != nil {
-		eng.Stop()
-		return nil, err
+		return releaseOnErr(err)
 	}
 	if err := blockGroups(eng, snap.Groups); err != nil {
-		eng.Stop()
-		return nil, err
+		return releaseOnErr(err)
 	}
 	if err := seedBalances(eng, snap.Balances); err != nil {
-		eng.Stop()
-		return nil, err
+		return releaseOnErr(err)
 	}
 
 	brokerPresent := map[string]bool{
 		nameRateLimit:      hasBrokerBarrier(byPolicy[domain.PolicyRateLimit]),
 		nameOrderSizeLimit: hasBrokerBarrier(byPolicy[domain.PolicyOrderSizeLimit]),
 	}
-	return newOpenPitEngine(eng, registered, brokerPresent), nil
+	return newOpenPitEngine(eng, service, registered, brokerPresent), nil
 }
 
 // hasBrokerBarrier reports whether a barrier set contains a broker-scoped
@@ -673,7 +702,16 @@ func (e *openPitEngine) CheckOrder(
 	return domain.CheckResult{Passed: true, WouldLockPrices: lockPrices}, nil
 }
 
-// Stop halts the engine and releases native resources. It is idempotent.
+// MarketDataSink returns the quote sink backed by the engine's market-data
+// service. It is valid for the whole process: the engine is never rebuilt, so
+// the backing service handle is stable until Stop closes it.
+func (e *openPitEngine) MarketDataSink() marketdata.Sink {
+	return e.sink
+}
+
+// Stop halts the engine and releases native resources. It stops the engine
+// first, then closes the market-data service, so quote producers (the connector
+// manager) must be stopped before Stop. It is idempotent.
 func (e *openPitEngine) Stop() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -683,6 +721,10 @@ func (e *openPitEngine) Stop() {
 	e.running = false
 	if e.eng != nil {
 		e.eng.Stop()
+	}
+	if e.marketDataService != nil {
+		e.marketDataService.Close()
+		e.marketDataService = nil
 	}
 }
 
@@ -700,27 +742,46 @@ func policyName(policy string) string {
 	}
 }
 
-// buildEngine constructs an OpenPit engine registering the order-validation
-// policy plus each risk policy that has at least one barrier in byPolicy. It
-// returns the engine and the set of registered policy names. byPolicy may be
-// nil. The risk policies validate their barrier topology at build time, so a
-// policy with no barriers is simply not registered.
+// buildEngine constructs an OpenPit engine plus its market-data service,
+// registering the order-validation policy plus each risk policy that has at
+// least one barrier in byPolicy. It returns the engine, the service, and the set
+// of registered policy names. byPolicy may be nil. The risk policies validate
+// their barrier topology at build time, so a policy with no barriers is simply
+// not registered.
+//
+// The market-data service is built unconditionally and before the engine (the
+// engine builder requires the service to exist first), even when nothing is
+// configured: an empty service is a harmless registry the connector manager
+// fills at runtime. On a service-build failure the engine build fails; on an
+// engine-build failure the already-created service is closed so the native
+// resource never leaks. On success the caller owns the returned service and must
+// close it (via Engine.Stop).
 //
 // The spot-funds policy is always registered with its default settings: it is
 // the authority for spot balances, so balance seeding and spot-holdings
-// reservations depend on it. It stays limit-only (no market-data service this
-// phase: market orders reject UnsupportedOrderType).
+// reservations depend on it. It stays limit-only - the service is NOT wired into
+// it (no WithMarketOrders) this phase, so market orders still reject
+// UnsupportedOrderType and price-free behavior is unchanged. Dynamic
+// price-dependent consumption is planned.
 func buildEngine(
 	byPolicy map[string][]domain.Limit,
-) (*openpit.Engine, map[string]struct{}, error) {
+) (*openpit.Engine, *bindmd.Service, map[string]struct{}, error) {
+	// The market-data service is built from the engine builder so its sync mode
+	// is derived (FullSync), and it must be built before the engine.
+	eb := openpit.NewEngineBuilder().FullSync()
+	service, err := eb.MarketData(defaultQuoteTTL).Build()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("engine: build market-data service: %w", err)
+	}
+
 	// OrderValidation first, then SpotFunds (default settings, limit-only), then
 	// the conditional risk policies. SpotFunds must be registered for balance
 	// seeding and spot holdings to take effect. PolicyGroupID(0) reaches the
 	// ready builder without WithMarketOrders, keeping the policy limit-only.
-	builder := openpit.NewEngineBuilder().
-		FullSync().
+	builder := eb.
 		Builtin(policies.BuildOrderValidation()).
 		Builtin(policies.BuildSpotFunds().PolicyGroupID(0))
+	// TODO: price-dependent policy consumption
 
 	// SpotFunds is always registered by the build path above.
 	registered := map[string]struct{}{nameSpotFunds: {}}
@@ -728,7 +789,8 @@ func buildEngine(
 		ready, err := rateLimitReady(rate)
 		if err != nil {
 			builder.Close()
-			return nil, nil, err
+			service.Close()
+			return nil, nil, nil, err
 		}
 		builder = builder.Builtin(ready)
 		registered[nameRateLimit] = struct{}{}
@@ -737,7 +799,8 @@ func buildEngine(
 		ready, err := orderSizeReady(size)
 		if err != nil {
 			builder.Close()
-			return nil, nil, err
+			service.Close()
+			return nil, nil, nil, err
 		}
 		builder = builder.Builtin(ready)
 		registered[nameOrderSizeLimit] = struct{}{}
@@ -746,7 +809,8 @@ func buildEngine(
 		ready, err := pnlBoundsReady(pnl)
 		if err != nil {
 			builder.Close()
-			return nil, nil, err
+			service.Close()
+			return nil, nil, nil, err
 		}
 		builder = builder.Builtin(ready)
 		registered[namePnlBoundsKillSwitch] = struct{}{}
@@ -754,9 +818,10 @@ func buildEngine(
 
 	eng, err := builder.Build()
 	if err != nil {
-		return nil, nil, fmt.Errorf("engine: build openpit engine: %w", err)
+		service.Close()
+		return nil, nil, nil, fmt.Errorf("engine: build openpit engine: %w", err)
 	}
-	return eng, registered, nil
+	return eng, service, registered, nil
 }
 
 // applyBlocks blocks every blocked account in accounts on the engine with its

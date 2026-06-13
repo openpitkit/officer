@@ -1,0 +1,34 @@
+{
+  "title": "审计",
+  "description": "控制平面审计日志：所有账户与限制的变更记录，最新在前。每条操作均记录执行者、动作、来源及简明摘要。",
+  "actions": {
+    "pageSize": {
+      "ariaLabel": "每页行数",
+      "rowCount": "{{count}} 行"
+    }
+  },
+  "filter": {
+    "account": {
+      "placeholder": "按账户筛选…"
+    },
+    "source": {
+      "ariaLabel": "来源",
+      "all": "所有来源"
+    }
+  },
+  "table": {
+    "time": "时间",
+    "actor": "执行者",
+    "action": "动作",
+    "account": "账户",
+    "source": "来源",
+    "detail": "详情"
+  },
+  "empty": {
+    "title": "暂无审计记录",
+    "hint": {
+      "filtered": "当前筛选条件下无匹配记录。",
+      "blank": "操作员执行账户和限制变更后，记录将显示于此。"
+    }
+  }
+}

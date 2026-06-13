@@ -1,0 +1,54 @@
+{
+  "title": "Панель",
+  "refreshAriaLabel": "Обновить панель",
+  "counts": {
+    "accounts": "Счета",
+    "groups": "Группы",
+    "orders": "Ордера"
+  },
+  "activity": {
+    "noRecent": "Нет последней активности",
+    "bucket": {
+      "trading": "Ордера и сделки",
+      "accounts": "Счета",
+      "limits": "Лимиты",
+      "groups": "Группы",
+      "adjustments": "Корректировки",
+      "other": "Прочее"
+    }
+  },
+  "mcp": {
+    "title": "Доступ MCP",
+    "none": "Команды не разрешены",
+    "loading": "Загрузка…",
+    "error": "Ошибка загрузки"
+  },
+  "marketData": {
+    "title": "Рыночные данные",
+    "none": "Источники не включены",
+    "moreStale": "+{{count}} отстаёт"
+  },
+  "audit": {
+    "title": "Последние записи аудита",
+    "noEntries": "Записей в журнале нет",
+    "action": {
+      "createAccount": "Создание счёта",
+      "blockAccount": "Блокировка счёта",
+      "unblockAccount": "Разблокировка счёта",
+      "updateAccount": "Обновление счёта",
+      "deleteAccount": "Удаление счёта",
+      "createGroup": "Создание группы",
+      "blockGroup": "Блокировка группы",
+      "unblockGroup": "Разблокировка группы",
+      "updateGroup": "Обновление группы",
+      "deleteGroup": "Удаление группы",
+      "setLimit": "Установка лимита",
+      "deleteLimit": "Удаление лимита",
+      "updateLimit": "Обновление лимита",
+      "adjustment": "Корректировка",
+      "balanceUpdate": "Обновление баланса",
+      "order": "Ордер",
+      "tradeFill": "Сделка / исполнение"
+    }
+  }
+}

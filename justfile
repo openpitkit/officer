@@ -83,6 +83,10 @@ frontend-build:
 frontend-install:
     cd web && npm install
 
+# Lint the SPA (ESLint, incl. the i18n no-literal-string guardrail).
+frontend-lint:
+    cd web && npm run lint
+
 # Build the Docker image (Strategy A: dylib built inside Docker).
 docker-build PIT_REF="main":
     docker build \

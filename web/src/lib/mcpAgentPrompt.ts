@@ -15,44 +15,23 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import type { McpCommand } from "@/api/types";
+import i18n from "@/i18n";
 
 /**
- * Build a plain-text instruction block for an AI agent describing how to use
- * the Pit Officer MCP server. Pass the live command catalogue; the function
- * lists all commands regardless of enabled state, since the text is pasted
- * once and does not automatically re-sync with operator access toggles.
+ * Build a plain-text orientation block for an AI agent connecting to the Pit
+ * Officer MCP server. The text is intentionally evergreen: it does not
+ * enumerate commands, since MCP self-describes its tools. The agent discovers
+ * the available command surface via the MCP tool list (`tools/list`), so the
+ * prompt never drifts from the operator's current access toggles.
+ *
+ * The agent-facing copy stays English in every locale.
  */
-export function buildMcpAgentPrompt(commands: McpCommand[]): string {
-  const lines: string[] = [
-    "You have access to the Pit Officer MCP server - a pre-trade risk and",
-    "compliance control plane for trading operations.",
+export function buildMcpAgentPrompt(): string {
+  return [
+    i18n.t("mcp:prompt.intro"),
     "",
-    "Transport: streamable HTTP at the /mcp endpoint of this service.",
-    "Alternatively available as `pit-officer mcp` over stdio.",
+    i18n.t("mcp:prompt.discover"),
     "",
-    "Principles:",
-    "- Least-privilege surface. The server carries no secrets or credentials.",
-    "- Most tools are read-only. Treat any mutating tool with extra care.",
-    "- Any trading action or mutation must go through pre-trade checks and",
-    "  approval tokens. Never bypass the pre-trade step.",
-    "",
-    "Commands (each is subject to operator access control):",
-  ];
-
-  for (const cmd of commands) {
-    const desc = cmd.agentDescription || cmd.title || cmd.name;
-    lines.push(`- ${cmd.name}: ${desc}`);
-  }
-
-  lines.push("");
-  lines.push(
-    "The operator controls which commands are enabled, and this can change at",
-    "any time without notice. If a tool call returns a notice that the command",
-    "is disabled in the panel, do NOT retry it — ask your orchestrator to",
-    "extend or change your prompt/instructions accordingly (or to have the",
-    "operator enable the command in Pit Officer).",
-  );
-
-  return lines.join("\n");
+    i18n.t("mcp:prompt.footer"),
+  ].join("\n");
 }

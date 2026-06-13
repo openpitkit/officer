@@ -1,0 +1,37 @@
+{
+  "account": {
+    "required": "Account id is required",
+    "tooLong": "Account id must be at most {{max}} characters",
+    "whitespace": "Account id must not have leading or trailing whitespace",
+    "printable": "Account id must contain only printable characters"
+  },
+  "asset": {
+    "required": "Asset is required for this scope",
+    "tooLong": "Asset must be at most {{max}} characters",
+    "whitespace": "Asset must not contain whitespace"
+  },
+  "kind": {
+    "maxOrders": {
+      "integer": "max_orders must be an integer greater than 0",
+      "cap": "max_orders must be at most 1e9"
+    },
+    "window": {
+      "duration": "window must be a positive Go duration (e.g. 1s, 500ms)",
+      "cap": "window must be at most 24h"
+    },
+    "positiveDecimal": "{{kind}} must be a positive decimal",
+    "decimal": "{{kind}} must be a decimal",
+    "unknown": "unknown kind {{kind}}"
+  },
+  "limit": {
+    "unknownPolicy": "unknown policy {{policy}}",
+    "unknownScope": "unknown scope {{scope}}",
+    "scopeNotAllowed": "scope {{scope}} is not allowed for {{policy}}",
+    "scopeNoAccount": "scope {{scope}} must not carry an account",
+    "scopeNoAsset": "scope {{scope}} must not carry an asset",
+    "rateLimitRequires": "rate_limit requires both max_orders and window",
+    "orderSizeRequires": "order_size_limit requires max_quantity or max_notional",
+    "pnlRequires": "pnl_bounds_kill_switch requires lower_bound or upper_bound",
+    "pnlBoundOrder": "lower_bound must be <= upper_bound"
+  }
+}

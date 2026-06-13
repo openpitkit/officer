@@ -17,6 +17,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { Plus } from "lucide-react";
 
 import {
@@ -31,6 +32,7 @@ import type { Balance, CheckResult, Order, OrderEvent, Source, Trade } from "@/a
 import { useBalances } from "@/api/useBalances";
 import { useOrders } from "@/api/useOrders";
 import { useTrades } from "@/api/useTrades";
+import { formatDateTime } from "@/i18n/format";
 import { Autocomplete } from "@/components/Autocomplete";
 import {
   EmptyState,
@@ -78,15 +80,6 @@ function errMessage(err: unknown): string {
     return err.message;
   }
   return err instanceof Error ? err.message : String(err);
-}
-
-/** Render an ISO timestamp as a compact UTC string. */
-function formatUtc(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) {
-    return iso;
-  }
-  return date.toISOString().replace("T", " ").replace("Z", " UTC");
 }
 
 /** Order status → badge variant. */
@@ -140,20 +133,6 @@ function instrument(baseAsset: string, quoteAsset: string): string {
   return `${baseAsset} / ${quoteAsset}`;
 }
 
-/** Amount label: "100 qty" or "500 vol". */
-function amountLabel(kind: string, value: string): string {
-  const tag = kind === "quantity" ? "qty" : "vol";
-  return `${value} ${tag}`;
-}
-
-/** Price display: empty string or "0" → "market". */
-function priceLabel(price: string): string {
-  if (!price || price === "0") {
-    return "market";
-  }
-  return price;
-}
-
 // ---------------------------------------------------------------------------
 // Asset pool — collect distinct base/quote assets from loaded data
 // ---------------------------------------------------------------------------
@@ -200,20 +179,22 @@ type CheckState =
   | { phase: "error"; message: string };
 
 function CheckPreview({ state }: { state: CheckState }) {
+  const { t } = useTranslation("orders");
+
   if (state.phase === "idle") {
     return null;
   }
   if (state.phase === "checking") {
     return (
       <div className="rounded-card border border-border bg-bg px-3 py-2 text-xs text-muted-lt animate-pulse">
-        Checking...
+        {t("check.checking")}
       </div>
     );
   }
   if (state.phase === "error") {
     return (
       <div className="rounded-card border border-border bg-bg px-3 py-2 text-xs text-muted-lt">
-        Preview unavailable
+        {t("check.previewUnavailable")}
       </div>
     );
   }
@@ -231,7 +212,7 @@ function CheckPreview({ state }: { state: CheckState }) {
         <span
           className={result.passed ? "text-[var(--ok)] font-medium" : "text-[var(--danger)] font-medium"}
         >
-          {result.passed ? "Preview: would pass" : "Preview: would reject"}
+          {result.passed ? t("check.wouldPass") : t("check.wouldReject")}
         </span>
       </div>
       {result.rejects.length > 0 && (
@@ -247,13 +228,17 @@ function CheckPreview({ state }: { state: CheckState }) {
       )}
       {result.wouldLockPrices.length > 0 && (
         <div className="text-muted-lt">
-          Lock prices: {result.wouldLockPrices.join(", ")}
+          {t("check.lockPrices", { prices: result.wouldLockPrices.join(", ") })}
         </div>
       )}
       {result.wouldBlock && (
         <div className="text-[var(--danger)]">
-          Would block account {result.wouldBlock.account}
-          {result.wouldBlock.reason ? ` - ${result.wouldBlock.reason}` : ""}
+          {result.wouldBlock.reason
+            ? t("check.wouldBlockReason", {
+                account: result.wouldBlock.account,
+                reason: result.wouldBlock.reason,
+              })
+            : t("check.wouldBlock", { account: result.wouldBlock.account })}
         </div>
       )}
     </div>
@@ -281,6 +266,9 @@ function SubmitOrderDialog({
   accountSuggestions,
   assetSuggestions,
 }: SubmitOrderDialogProps) {
+  const { t } = useTranslation("orders");
+  const { t: tc } = useTranslation();
+
   const [account, setAccount] = useState("");
   const [baseAsset, setBaseAsset] = useState("");
   const [quoteAsset, setQuoteAsset] = useState("");
@@ -301,6 +289,8 @@ function SubmitOrderDialog({
     const amountT = amountValue.trim();
     // Skip when required fields are absent.
     if (!accountT || !baseT || !quoteT || !amountT) {
+      // Reset to idle when the form is incomplete; intentional sync.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setCheckState({ phase: "idle" });
       return;
     }
@@ -364,7 +354,7 @@ function SubmitOrderDialog({
 
   async function submit() {
     if (!account.trim() || !baseAsset.trim() || !quoteAsset.trim() || !amountValue.trim()) {
-      setError("Account, instrument, and amount are required.");
+      setError(t("addOrder.dialog.validationError"));
       return;
     }
     setBusy(true);
@@ -397,94 +387,92 @@ function SubmitOrderDialog({
     <Dialog open={open} onOpenChange={(v) => { if (!v) handleClose(); }}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Add order</DialogTitle>
+          <DialogTitle>{t("addOrder.dialog.title")}</DialogTitle>
           <DialogDescription>
-            Add an order to evaluate it against the risk engine. This is an
-            emulation - nothing is sent to any market. Without a price it is
-            treated as a market order and may be rejected.
+            {t("addOrder.dialog.description")}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
           <div className="space-y-1.5">
-            <Label htmlFor="so-account">Account</Label>
+            <Label htmlFor="so-account">{t("addOrder.dialog.account")}</Label>
             <Autocomplete
               id="so-account"
               value={account}
               onChange={setAccount}
               suggestions={accountSuggestions}
-              placeholder="e.g. desk-alpha"
+              placeholder={t("addOrder.dialog.accountPlaceholder")}
               disabled={busy}
             />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label htmlFor="so-base">Base asset</Label>
+              <Label htmlFor="so-base">{t("addOrder.dialog.baseAsset")}</Label>
               <Autocomplete
                 id="so-base"
                 value={baseAsset}
                 onChange={setBaseAsset}
                 suggestions={assetSuggestions}
-                placeholder="e.g. AAPL"
+                placeholder={t("addOrder.dialog.baseAssetPlaceholder")}
                 disabled={busy}
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="so-quote">Quote asset</Label>
+              <Label htmlFor="so-quote">{t("addOrder.dialog.quoteAsset")}</Label>
               <Autocomplete
                 id="so-quote"
                 value={quoteAsset}
                 onChange={setQuoteAsset}
                 suggestions={assetSuggestions}
-                placeholder="e.g. USD"
+                placeholder={t("addOrder.dialog.quoteAssetPlaceholder")}
                 disabled={busy}
               />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label htmlFor="so-side">Side</Label>
+              <Label htmlFor="so-side">{t("addOrder.dialog.side")}</Label>
               <Select value={side} onValueChange={setSide} disabled={busy}>
                 <SelectTrigger id="so-side" className="h-9 text-sm">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="buy">Buy</SelectItem>
-                  <SelectItem value="sell">Sell</SelectItem>
+                  <SelectItem value="buy">{t("addOrder.dialog.sideOptions.buy")}</SelectItem>
+                  <SelectItem value="sell">{t("addOrder.dialog.sideOptions.sell")}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="so-kind">Amount kind</Label>
+              <Label htmlFor="so-kind">{t("addOrder.dialog.amountKind")}</Label>
               <Select value={amountKind} onValueChange={setAmountKind} disabled={busy}>
                 <SelectTrigger id="so-kind" className="h-9 text-sm">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="quantity">Quantity (base)</SelectItem>
-                  <SelectItem value="volume">Volume (quote)</SelectItem>
+                  <SelectItem value="quantity">{t("addOrder.dialog.amountKindOptions.quantity")}</SelectItem>
+                  <SelectItem value="volume">{t("addOrder.dialog.amountKindOptions.volume")}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label htmlFor="so-amount">Amount</Label>
+              <Label htmlFor="so-amount">{t("addOrder.dialog.amount")}</Label>
               <Input
                 id="so-amount"
                 value={amountValue}
                 onChange={(e) => setAmountValue(e.target.value)}
-                placeholder="e.g. 100"
+                placeholder={t("addOrder.dialog.amountPlaceholder")}
                 disabled={busy}
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="so-price">Limit price (optional)</Label>
+              <Label htmlFor="so-price">{t("addOrder.dialog.limitPrice")}</Label>
               <Input
                 id="so-price"
                 value={price}
                 onChange={(e) => setPrice(e.target.value)}
-                placeholder="leave empty = market"
+                placeholder={t("addOrder.dialog.limitPricePlaceholder")}
                 disabled={busy}
               />
             </div>
@@ -498,10 +486,10 @@ function SubmitOrderDialog({
 
           <DialogFooter>
             <Button variant="outline" size="sm" onClick={handleClose} disabled={busy}>
-              Cancel
+              {tc("actions.cancel")}
             </Button>
             <Button size="sm" onClick={submit} disabled={busy}>
-              {busy ? "Adding…" : "Add Order"}
+              {busy ? t("addOrder.dialog.submitBusy") : t("addOrder.dialog.submit")}
             </Button>
           </DialogFooter>
         </div>
@@ -521,6 +509,9 @@ interface ExecReportDialogProps {
 }
 
 function ExecReportDialog({ orderId, onClose, onSubmitted }: ExecReportDialogProps) {
+  const { t } = useTranslation("orders");
+  const { t: tc } = useTranslation();
+
   const [quantity, setQuantity] = useState("");
   const [price, setPrice] = useState("");
   const [lockPrice, setLockPrice] = useState("");
@@ -546,7 +537,7 @@ function ExecReportDialog({ orderId, onClose, onSubmitted }: ExecReportDialogPro
 
   async function submit() {
     if (!quantity.trim() || !price.trim()) {
-      setError("Quantity and price are required.");
+      setError(t("execReport.dialog.validationError"));
       return;
     }
     if (orderId === null) {
@@ -582,50 +573,50 @@ function ExecReportDialog({ orderId, onClose, onSubmitted }: ExecReportDialogPro
     <Dialog open={orderId !== null} onOpenChange={(v) => { if (!v) handleClose(); }}>
       <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle>Submit execution report</DialogTitle>
+          <DialogTitle>{t("execReport.dialog.title")}</DialogTitle>
           <DialogDescription>
-            Order #{orderId} — record a fill to emulate a partial or full execution.
+            {t("execReport.dialog.description", { orderId })}
           </DialogDescription>
         </DialogHeader>
 
         {done ? (
           <div className="space-y-3">
-            <p className="text-xs text-[var(--ok)]">Execution report accepted.</p>
+            <p className="text-xs text-[var(--ok)]">{t("execReport.dialog.accepted")}</p>
             <DialogFooter>
-              <Button size="sm" onClick={handleClose}>Done</Button>
+              <Button size="sm" onClick={handleClose}>{t("execReport.dialog.done")}</Button>
             </DialogFooter>
           </div>
         ) : (
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label htmlFor="er-qty">Fill quantity</Label>
+                <Label htmlFor="er-qty">{t("execReport.dialog.fillQty")}</Label>
                 <Input
                   id="er-qty"
                   value={quantity}
                   onChange={(e) => setQuantity(e.target.value)}
-                  placeholder="e.g. 50"
+                  placeholder={t("execReport.dialog.fillQtyPlaceholder")}
                   disabled={busy}
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="er-price">Fill price</Label>
+                <Label htmlFor="er-price">{t("execReport.dialog.fillPrice")}</Label>
                 <Input
                   id="er-price"
                   value={price}
                   onChange={(e) => setPrice(e.target.value)}
-                  placeholder="e.g. 192.40"
+                  placeholder={t("execReport.dialog.fillPricePlaceholder")}
                   disabled={busy}
                 />
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="er-lock">Lock price (optional)</Label>
+              <Label htmlFor="er-lock">{t("execReport.dialog.lockPrice")}</Label>
               <Input
                 id="er-lock"
                 value={lockPrice}
                 onChange={(e) => setLockPrice(e.target.value)}
-                placeholder="optional"
+                placeholder={t("execReport.dialog.lockPricePlaceholder")}
                 disabled={busy}
               />
             </div>
@@ -637,7 +628,7 @@ function ExecReportDialog({ orderId, onClose, onSubmitted }: ExecReportDialogPro
                 disabled={busy}
                 className="accent-[var(--accent)]"
               />
-              Final fill (closes the order)
+              {t("execReport.dialog.finalFill")}
             </label>
 
             {error && (
@@ -646,10 +637,10 @@ function ExecReportDialog({ orderId, onClose, onSubmitted }: ExecReportDialogPro
 
             <DialogFooter>
               <Button variant="outline" size="sm" onClick={handleClose} disabled={busy}>
-                Cancel
+                {tc("actions.cancel")}
               </Button>
               <Button size="sm" onClick={submit} disabled={busy}>
-                {busy ? "Submitting…" : "Submit"}
+                {busy ? t("execReport.dialog.submitBusy") : t("execReport.dialog.submit")}
               </Button>
             </DialogFooter>
           </div>
@@ -676,12 +667,17 @@ type DetailState =
   | { phase: "ready"; order: Order; events: OrderEvent[]; trades: Trade[] };
 
 function OrderDetailDialog({ orderId, onClose, onExecReport, successBanner }: OrderDetailDialogProps) {
+  const { t } = useTranslation("orders");
+  const { t: tc } = useTranslation();
+
   const [state, setState] = useState<DetailState>({ phase: "loading" });
 
   useEffect(() => {
     if (orderId === null) {
       return;
     }
+    // Show the loading state before the detail fetch starts; intentional.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setState({ phase: "loading" });
     const controller = new AbortController();
     fetchOrderDetail(orderId, controller.signal)
@@ -702,11 +698,26 @@ function OrderDetailDialog({ orderId, onClose, onExecReport, successBanner }: Or
     return null;
   }
 
+  // Amount label: "100 qty" or "500 vol".
+  function amountLabel(kind: string, value: string): string {
+    return kind === "quantity"
+      ? t("amount.qty", { value })
+      : t("amount.vol", { value });
+  }
+
+  // Price display: empty string or "0" → "market".
+  function priceLabel(price: string): string {
+    if (!price || price === "0") {
+      return t("price.market");
+    }
+    return price;
+  }
+
   return (
     <Dialog open onOpenChange={(v) => { if (!v) onClose(); }}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Order #{orderId}</DialogTitle>
+          <DialogTitle>{t("detail.dialog.title", { orderId })}</DialogTitle>
           {state.phase === "ready" && (
             <DialogDescription>
               {instrument(state.order.baseAsset, state.order.quoteAsset)}
@@ -743,11 +754,11 @@ function OrderDetailDialog({ orderId, onClose, onExecReport, successBanner }: Or
             {/* Order header fields */}
             <div className="grid grid-cols-3 gap-2 rounded-card border border-border bg-bg p-3 text-xs">
               <div>
-                <span className="text-muted-lt">Account</span>
+                <span className="text-muted-lt">{t("detail.dialog.fieldAccount")}</span>
                 <div className="nums mt-0.5 text-text">{state.order.account}</div>
               </div>
               <div>
-                <span className="text-muted-lt">Status</span>
+                <span className="text-muted-lt">{t("detail.dialog.fieldStatus")}</span>
                 <div className="mt-0.5">
                   <Badge variant={statusVariant(state.order.status)}>
                     {state.order.status}
@@ -755,7 +766,7 @@ function OrderDetailDialog({ orderId, onClose, onExecReport, successBanner }: Or
                 </div>
               </div>
               <div>
-                <span className="text-muted-lt">Source</span>
+                <span className="text-muted-lt">{t("detail.dialog.fieldSource")}</span>
                 <div className="mt-0.5">
                   <Badge variant={sourceVariant(state.order.source)}>
                     {state.order.source}
@@ -763,12 +774,12 @@ function OrderDetailDialog({ orderId, onClose, onExecReport, successBanner }: Or
                 </div>
               </div>
               <div className="col-span-3">
-                <span className="text-muted-lt">Submitted</span>
-                <div className="nums mt-0.5 text-muted-lt">{formatUtc(state.order.at)}</div>
+                <span className="text-muted-lt">{t("detail.dialog.fieldSubmitted")}</span>
+                <div className="nums mt-0.5 text-muted-lt">{formatDateTime(state.order.at)}</div>
               </div>
               {Object.keys(state.order.lockPrices).length > 0 && (
                 <div className="col-span-3">
-                  <span className="text-muted-lt">Lock prices</span>
+                  <span className="text-muted-lt">{t("detail.dialog.fieldLockPrices")}</span>
                   <div className="mt-0.5 flex flex-wrap gap-2">
                     {Object.entries(state.order.lockPrices).map(([asset, lp]) => (
                       <span key={asset} className="nums text-text">
@@ -783,10 +794,10 @@ function OrderDetailDialog({ orderId, onClose, onExecReport, successBanner }: Or
             {/* Event timeline */}
             <div>
               <p className="mb-2 text-[0.6875rem] font-bold uppercase tracking-[0.07em] text-muted">
-                Event timeline
+                {t("detail.dialog.timeline.sectionTitle")}
               </p>
               {state.events.length === 0 ? (
-                <p className="text-xs text-muted-lt">No events recorded.</p>
+                <p className="text-xs text-muted-lt">{t("detail.dialog.timeline.empty")}</p>
               ) : (
                 <ol className="space-y-2">
                   {state.events.map((ev) => (
@@ -795,24 +806,26 @@ function OrderDetailDialog({ orderId, onClose, onExecReport, successBanner }: Or
                       className="flex gap-3 rounded-card border border-border bg-bg p-2.5 text-xs"
                     >
                       <div className="w-32 shrink-0">
-                        <div className="nums text-muted-lt">{formatUtc(ev.at)}</div>
+                        <div className="nums text-muted-lt">{formatDateTime(ev.at)}</div>
                       </div>
                       <div className="flex flex-1 flex-wrap items-start gap-x-3 gap-y-1">
                         <Badge variant={eventTypeVariant(ev.type)}>{ev.type}</Badge>
                         <Badge variant={sourceVariant(ev.source)}>{ev.source}</Badge>
                         {ev.principal && (
                           <span className="text-muted-lt">
-                            by <span className="text-text">{ev.principal}</span>
+                            {t("detail.dialog.timeline.by", { principal: ev.principal })}
                           </span>
                         )}
                         {/* Fill payload */}
                         {ev.fillQuantity !== undefined && (
                           <span className="text-text">
-                            qty&nbsp;{ev.fillQuantity}
-                            {ev.fillPrice !== undefined && <> @ {ev.fillPrice}</>}
+                            {t("detail.dialog.timeline.fillQty", { qty: ev.fillQuantity })}
+                            {ev.fillPrice !== undefined && (
+                              <>{" "}{t("detail.dialog.timeline.fillAt", { price: ev.fillPrice })}</>
+                            )}
                             {ev.fillLockPrice !== undefined && (
                               <span className="text-muted-lt">
-                                {" "}(lock&nbsp;{ev.fillLockPrice})
+                                {" "}{t("detail.dialog.timeline.fillLock", { price: ev.fillLockPrice })}
                               </span>
                             )}
                           </span>
@@ -820,14 +833,18 @@ function OrderDetailDialog({ orderId, onClose, onExecReport, successBanner }: Or
                         {/* Reject payload */}
                         {ev.rejectCode !== undefined && (
                           <span className="text-[var(--danger)]">
-                            code&nbsp;{ev.rejectCode}
+                            {t("detail.dialog.timeline.rejectCode", { code: ev.rejectCode })}
                           </span>
                         )}
                         {ev.rejectScope !== undefined && (
-                          <span className="text-muted-lt">scope&nbsp;{ev.rejectScope}</span>
+                          <span className="text-muted-lt">
+                            {t("detail.dialog.timeline.rejectScope", { scope: ev.rejectScope })}
+                          </span>
                         )}
                         {ev.rejectPolicy !== undefined && (
-                          <span className="text-muted-lt">policy&nbsp;{ev.rejectPolicy}</span>
+                          <span className="text-muted-lt">
+                            {t("detail.dialog.timeline.rejectPolicy", { policy: ev.rejectPolicy })}
+                          </span>
                         )}
                         {ev.rejectReason !== undefined && (
                           <span className="text-muted-lt">{ev.rejectReason}</span>
@@ -845,41 +862,41 @@ function OrderDetailDialog({ orderId, onClose, onExecReport, successBanner }: Or
             {/* Trades — always shown so the order→trades grouping is clear */}
             <div>
               <p className="mb-2 text-[0.6875rem] font-bold uppercase tracking-[0.07em] text-muted">
-                Trades for this order
+                {t("detail.dialog.trades.sectionTitle")}
               </p>
               {state.trades.length === 0 ? (
                 <p className="text-xs text-muted-lt">
-                  No fills recorded yet. Submit an execution report to create a trade.
+                  {t("detail.dialog.trades.empty")}
                 </p>
               ) : (
                 <Card>
                   <Table>
                     <TableHeader>
                       <TableRow className="hover:bg-transparent">
-                        <TableHead>ID</TableHead>
-                        <TableHead>Qty</TableHead>
-                        <TableHead>Price</TableHead>
-                        <TableHead>Lock price</TableHead>
-                        <TableHead>Source</TableHead>
-                        <TableHead>Time</TableHead>
+                        <TableHead>{t("table.id")}</TableHead>
+                        <TableHead>{t("table.qty")}</TableHead>
+                        <TableHead>{t("table.price")}</TableHead>
+                        <TableHead>{t("table.lockPrice")}</TableHead>
+                        <TableHead>{t("table.source")}</TableHead>
+                        <TableHead>{t("table.time")}</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {state.trades.map((t) => (
-                        <TableRow key={t.id} className="hover:bg-transparent">
+                      {state.trades.map((trade) => (
+                        <TableRow key={trade.id} className="hover:bg-transparent">
                           <TableCell className="nums text-xs text-muted-lt">
-                            #{t.id}
+                            #{trade.id}
                           </TableCell>
-                          <TableCell className="nums text-xs">{t.quantity}</TableCell>
-                          <TableCell className="nums text-xs">{t.price}</TableCell>
+                          <TableCell className="nums text-xs">{trade.quantity}</TableCell>
+                          <TableCell className="nums text-xs">{trade.price}</TableCell>
                           <TableCell className="nums text-xs text-muted-lt">
-                            {t.lockPrice || "—"}
+                            {trade.lockPrice || tc("value.none")}
                           </TableCell>
                           <TableCell>
-                            <Badge variant={sourceVariant(t.source)}>{t.source}</Badge>
+                            <Badge variant={sourceVariant(trade.source)}>{trade.source}</Badge>
                           </TableCell>
                           <TableCell className="nums whitespace-nowrap text-xs text-muted-lt">
-                            {formatUtc(t.at)}
+                            {formatDateTime(trade.at)}
                           </TableCell>
                         </TableRow>
                       ))}
@@ -895,10 +912,10 @@ function OrderDetailDialog({ orderId, onClose, onExecReport, successBanner }: Or
                 size="sm"
                 onClick={() => onExecReport(orderId)}
               >
-                Submit execution report
+                {t("detail.dialog.trades.submitExecReport")}
               </Button>
               <Button size="sm" onClick={onClose}>
-                Close
+                {tc("actions.cancel")}
               </Button>
             </DialogFooter>
           </div>
@@ -918,20 +935,37 @@ interface OrdersTableProps {
 }
 
 function OrdersTable({ orders, onRowClick }: OrdersTableProps) {
+  const { t } = useTranslation("orders");
+
+  // Amount label: "100 qty" or "500 vol".
+  function amountLabel(kind: string, value: string): string {
+    return kind === "quantity"
+      ? t("amount.qty", { value })
+      : t("amount.vol", { value });
+  }
+
+  // Price display: empty string or "0" → "market".
+  function priceLabel(price: string): string {
+    if (!price || price === "0") {
+      return t("price.market");
+    }
+    return price;
+  }
+
   return (
     <Card>
       <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
-            <TableHead>ID</TableHead>
-            <TableHead>Account</TableHead>
-            <TableHead>Instrument</TableHead>
-            <TableHead>Side</TableHead>
-            <TableHead>Amount</TableHead>
-            <TableHead>Price</TableHead>
-            <TableHead>Status</TableHead>
-            <TableHead>Source</TableHead>
-            <TableHead>Time</TableHead>
+            <TableHead>{t("table.id")}</TableHead>
+            <TableHead>{t("table.account")}</TableHead>
+            <TableHead>{t("table.instrument")}</TableHead>
+            <TableHead>{t("table.side")}</TableHead>
+            <TableHead>{t("table.amount")}</TableHead>
+            <TableHead>{t("table.price")}</TableHead>
+            <TableHead>{t("table.status")}</TableHead>
+            <TableHead>{t("table.source")}</TableHead>
+            <TableHead>{t("table.time")}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -966,7 +1000,7 @@ function OrdersTable({ orders, onRowClick }: OrdersTableProps) {
                 <Badge variant={sourceVariant(order.source)}>{order.source}</Badge>
               </TableCell>
               <TableCell className="nums whitespace-nowrap text-xs text-muted-lt">
-                {formatUtc(order.at)}
+                {formatDateTime(order.at)}
               </TableCell>
             </TableRow>
           ))}
@@ -986,21 +1020,24 @@ interface TradesTableProps {
 }
 
 function TradesTable({ trades, onOrderClick }: TradesTableProps) {
+  const { t } = useTranslation("orders");
+  const { t: tc } = useTranslation();
+
   return (
     <Card>
       <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
-            <TableHead>ID</TableHead>
-            <TableHead>Order</TableHead>
-            <TableHead>Account</TableHead>
-            <TableHead>Instrument</TableHead>
-            <TableHead>Side</TableHead>
-            <TableHead>Qty</TableHead>
-            <TableHead>Price</TableHead>
-            <TableHead>Lock price</TableHead>
-            <TableHead>Source</TableHead>
-            <TableHead>Time</TableHead>
+            <TableHead>{t("table.id")}</TableHead>
+            <TableHead>{t("table.order")}</TableHead>
+            <TableHead>{t("table.account")}</TableHead>
+            <TableHead>{t("table.instrument")}</TableHead>
+            <TableHead>{t("table.side")}</TableHead>
+            <TableHead>{t("table.qty")}</TableHead>
+            <TableHead>{t("table.price")}</TableHead>
+            <TableHead>{t("table.lockPrice")}</TableHead>
+            <TableHead>{t("table.source")}</TableHead>
+            <TableHead>{t("table.time")}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -1030,13 +1067,13 @@ function TradesTable({ trades, onOrderClick }: TradesTableProps) {
               <TableCell className="nums text-xs">{trade.quantity}</TableCell>
               <TableCell className="nums text-xs">{trade.price}</TableCell>
               <TableCell className="nums text-xs text-muted-lt">
-                {trade.lockPrice || "—"}
+                {trade.lockPrice || tc("value.none")}
               </TableCell>
               <TableCell>
                 <Badge variant={sourceVariant(trade.source)}>{trade.source}</Badge>
               </TableCell>
               <TableCell className="nums whitespace-nowrap text-xs text-muted-lt">
-                {formatUtc(trade.at)}
+                {formatDateTime(trade.at)}
               </TableCell>
             </TableRow>
           ))}
@@ -1072,6 +1109,8 @@ function FilterBar({
   onSource,
   onSize,
 }: FilterBarProps) {
+  const { t } = useTranslation("orders");
+
   return (
     <div className="flex flex-wrap items-center gap-2">
       <div className="w-48">
@@ -1079,16 +1118,16 @@ function FilterBar({
           value={account}
           onChange={onAccount}
           suggestions={accountSuggestions}
-          placeholder="Filter by account…"
+          placeholder={t("filter.accountPlaceholder")}
           className="h-8 text-xs"
         />
       </div>
       <Select value={source || "_all"} onValueChange={(v) => onSource(v === "_all" ? "" : v)}>
-        <SelectTrigger className="h-8 w-32 text-xs" aria-label="Source">
-          <SelectValue placeholder="All sources" />
+        <SelectTrigger className="h-8 w-32 text-xs" aria-label={t("filter.sourceAriaLabel")}>
+          <SelectValue placeholder={t("filter.sourceAll")} />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="_all">All sources</SelectItem>
+          <SelectItem value="_all">{t("filter.sourceAll")}</SelectItem>
           {SOURCES.filter(Boolean).map((s) => (
             <SelectItem key={s} value={s}>
               {s}
@@ -1097,13 +1136,13 @@ function FilterBar({
         </SelectContent>
       </Select>
       <Select value={String(size)} onValueChange={(v) => onSize(Number(v))}>
-        <SelectTrigger className="h-8 w-28 text-xs" aria-label="Page size">
+        <SelectTrigger className="h-8 w-28 text-xs" aria-label={t("filter.sizeAriaLabel")}>
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
           {PAGE_SIZES.map((n) => (
             <SelectItem key={n} value={String(n)}>
-              {n} rows
+              {t("filter.sizeRows", { count: n })}
             </SelectItem>
           ))}
         </SelectContent>
@@ -1119,6 +1158,8 @@ function FilterBar({
 type TabId = "orders" | "trades";
 
 export function Orders() {
+  const { t } = useTranslation("orders");
+
   const [params] = useSearchParams();
   const [tab, setTab] = useState<TabId>("orders");
 
@@ -1157,9 +1198,9 @@ export function Orders() {
       }
     }
     if (tradesResult.load.state === "ready") {
-      for (const t of tradesResult.load.data) {
-        if (t.account) {
-          set.add(t.account);
+      for (const tr of tradesResult.load.data) {
+        if (tr.account) {
+          set.add(tr.account);
         }
       }
     }
@@ -1222,12 +1263,12 @@ export function Orders() {
 
   return (
     <Page
-      title="Orders"
+      title={t("title")}
       actions={
         <div className="flex items-center gap-2">
           <Button size="sm" onClick={() => setSubmitOpen(true)}>
             <Plus className="h-3.5 w-3.5" />
-            Add Order
+            {t("addOrder.button")}
           </Button>
           <RefreshButton
             onClick={activeReload}
@@ -1237,26 +1278,24 @@ export function Orders() {
       }
     >
       <p className="text-xs text-muted-lt">
-        Data-plane view: orders flowing through Officer, their lifecycle events,
-        and the resulting trades. Select an order row to see its event timeline
-        and fills.
+        {t("subtitle")}
       </p>
 
       {/* Tab toggle */}
       <div className="flex gap-1 rounded-card border border-border bg-bg p-1 w-fit">
-        {(["orders", "trades"] as TabId[]).map((t) => (
+        {(["orders", "trades"] as TabId[]).map((tabId) => (
           <button
-            key={t}
+            key={tabId}
             type="button"
-            onClick={() => setTab(t)}
+            onClick={() => setTab(tabId)}
             className={[
               "rounded-[4px] px-3 py-1 text-xs font-medium capitalize transition-colors",
-              tab === t
+              tab === tabId
                 ? "bg-surface text-text shadow-sm"
                 : "text-muted-lt hover:text-text",
             ].join(" ")}
           >
-            {t}
+            {t(`tab.${tabId}`)}
           </button>
         ))}
       </div>
@@ -1297,12 +1336,12 @@ export function Orders() {
           {ordersResult.load.state === "ready" &&
             (ordersResult.load.data.length === 0 ? (
               <EmptyState
-                title="No orders yet"
-                hint="Orders submitted through the panel, API, or MCP will appear here."
+                title={t("empty.orders.title")}
+                hint={t("empty.orders.hint")}
                 action={
                   <Button size="sm" onClick={() => setSubmitOpen(true)}>
                     <Plus className="h-3.5 w-3.5" />
-                    Add Order
+                    {t("addOrder.button")}
                   </Button>
                 }
               />
@@ -1328,8 +1367,8 @@ export function Orders() {
           {tradesResult.load.state === "ready" &&
             (tradesResult.load.data.length === 0 ? (
               <EmptyState
-                title="No trades yet"
-                hint="Trades result from execution reports submitted against orders."
+                title={t("empty.trades.title")}
+                hint={t("empty.trades.hint")}
               />
             ) : (
               <TradesTable
@@ -1345,7 +1384,7 @@ export function Orders() {
         open={submitOpen}
         onClose={() => setSubmitOpen(false)}
         onCreated={ordersResult.reload}
-        onOpenDetail={(id) => openDetailWithBanner(id, "Order added")}
+        onOpenDetail={(id) => openDetailWithBanner(id, t("addOrder.added"))}
         accountSuggestions={allAccountSuggestions}
         assetSuggestions={assetSuggestions}
       />

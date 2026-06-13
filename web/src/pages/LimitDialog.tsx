@@ -17,6 +17,27 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { ExternalLink } from "lucide-react";
+import { useTranslation } from "react-i18next";
+
+import { ApiError, putLimit } from "@/api/client";
+import type { Limit } from "@/api/types";
+import { validateLimit } from "@/api/validate";
+import {
+  ALLOWED_SCOPES,
+  POLICIES,
+  POLICY_KINDS,
+  getPolicyCatalogEntry,
+  kindHint,
+  policyCatalogDescription,
+  policyFieldHint,
+  policyFieldLabel,
+  policyLabel,
+  scopeHasAccount,
+  scopeHasAsset,
+  scopeLabel,
+  type Policy,
+  type Scope,
+} from "@/api/vocabulary";
 
 // ---------------------------------------------------------------------------
 // Duration picker helpers (for the rate_limit `window` field)
@@ -29,12 +50,7 @@ interface DurationParts {
   unit: DurationUnit;
 }
 
-const DURATION_UNITS: { value: DurationUnit; label: string }[] = [
-  { value: "ms", label: "milliseconds" },
-  { value: "s", label: "seconds" },
-  { value: "m", label: "minutes" },
-  { value: "h", label: "hours" },
-];
+const DURATION_UNITS: DurationUnit[] = ["ms", "s", "m", "h"];
 
 /** Parse a Go-duration string (e.g. "500ms", "12s", "2m", "1h") into parts.
  *  Returns null when the string is not a recognised single-unit duration. */
@@ -57,35 +73,20 @@ function assembleDuration(parts: DurationParts): string {
   return `${parts.amount}${parts.unit}`;
 }
 
-/** Validate a fully assembled Go-duration string for the window field:
- *  must be > 0 and <= 24h (86400 seconds). Returns an error string or null. */
+/** Validate a fully assembled Go-duration string for the window field: must be
+ *  > 0 and <= 24h (86400 seconds). Returns a key in the `policies.duration`
+ *  group (rendered via `t`) or null. */
 function validateDurationString(s: string): string | null {
-  if (!s) return "Required.";
+  if (!s) return "duration.required";
   const parts = parseDuration(s);
-  if (!parts) return "Invalid duration.";
+  if (!parts) return "duration.invalid";
   const n = Number(parts.amount);
-  if (!Number.isFinite(n) || n <= 0) return "Must be greater than 0.";
+  if (!Number.isFinite(n) || n <= 0) return "duration.mustBePositive";
   // Convert to ms for the 24h ceiling check.
   const toMs: Record<DurationUnit, number> = { ms: 1, s: 1000, m: 60_000, h: 3_600_000 };
-  if (n * toMs[parts.unit] > 86_400_000) return "Must not exceed 24 hours.";
+  if (n * toMs[parts.unit] > 86_400_000) return "duration.mustNotExceed24h";
   return null;
 }
-
-import { ApiError, putLimit } from "@/api/client";
-import type { Limit } from "@/api/types";
-import { validateLimit } from "@/api/validate";
-import {
-  ALLOWED_SCOPES,
-  POLICIES,
-  POLICY_KINDS,
-  POLICY_LABELS,
-  SCOPE_LABELS,
-  getPolicyCatalogEntry,
-  scopeHasAccount,
-  scopeHasAsset,
-  type Policy,
-  type Scope,
-} from "@/api/vocabulary";
 import { Autocomplete } from "@/components/Autocomplete";
 import { ErrorBanner } from "@/components/PageStates";
 import { Button } from "@/components/ui/button";
@@ -120,6 +121,7 @@ function DurationPicker({
   value: string; // Go-duration string (may be empty)
   onChange: (goStr: string) => void;
 }) {
+  const { t } = useTranslation("policies");
   const initial = parseDuration(value) ?? { amount: "", unit: "s" as DurationUnit };
   const [parts, setParts] = useState<DurationParts>(initial);
 
@@ -127,6 +129,8 @@ function DurationPicker({
   useEffect(() => {
     const parsed = parseDuration(value);
     if (parsed) {
+      // Intentional inward sync from the external Go-duration string.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setParts(parsed);
     } else if (!value) {
       setParts({ amount: "", unit: "s" });
@@ -151,7 +155,7 @@ function DurationPicker({
           value={parts.amount}
           spellCheck={false}
           className="w-28"
-          placeholder="e.g. 30"
+          placeholder={t("duration.amountPlaceholder")}
           onChange={(e) => update({ ...parts, amount: e.target.value })}
         />
         <Select
@@ -162,16 +166,16 @@ function DurationPicker({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {DURATION_UNITS.map(({ value: v, label }) => (
+            {DURATION_UNITS.map((v) => (
               <SelectItem key={v} value={v}>
-                {label}
+                {t(`duration.unit.${v}`)}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
       </div>
       {durationError && (
-        <p className="text-[0.6875rem] text-[var(--danger)]">{durationError}</p>
+        <p className="text-[0.6875rem] text-[var(--danger)]">{t(durationError)}</p>
       )}
     </div>
   );
@@ -238,6 +242,8 @@ export function LimitDialog({
   onOpenChange: (open: boolean) => void;
   onSaved: () => void;
 }) {
+  const { t } = useTranslation("policies");
+  const { t: tc } = useTranslation();
   const [form, setForm] = useState<FormState>(() => emptyForm(initialAccount));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -245,6 +251,8 @@ export function LimitDialog({
   // Reset the form whenever the dialog opens, seeding from the edited barrier.
   useEffect(() => {
     if (open) {
+      // Reseed the form from the edited barrier each time the dialog opens.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setForm(editing ? fromLimit(editing) : emptyForm(initialAccount));
       setError(null);
       setBusy(false);
@@ -310,7 +318,7 @@ export function LimitDialog({
 
   const submit = async () => {
     if (validation) {
-      setError(validation);
+      setError(t(validation.key, validation.values));
       return;
     }
     setBusy(true);
@@ -329,17 +337,19 @@ export function LimitDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{isEdit ? "Edit policy" : "Add policy"}</DialogTitle>
+          <DialogTitle>
+            {isEdit ? t("dialog.editTitle") : t("dialog.addTitle")}
+          </DialogTitle>
           {catalogEntry && (
             <DialogDescription>
-              {catalogEntry.description}{" "}
+              {policyCatalogDescription(t, catalogEntry.id)}{" "}
               <a
                 href={catalogEntry.wikiUrl}
                 target="_blank"
                 rel="noreferrer"
                 className="inline-flex items-center gap-0.5 text-accent hover:underline"
               >
-                Details
+                {t("wikiDetails")}
                 <ExternalLink className="h-3 w-3" />
               </a>
             </DialogDescription>
@@ -349,7 +359,7 @@ export function LimitDialog({
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label>Policy</Label>
+              <Label>{t("dialog.policy")}</Label>
               <Select
                 value={form.policy}
                 onValueChange={(v) => setPolicy(v as Policy)}
@@ -361,7 +371,7 @@ export function LimitDialog({
                 <SelectContent>
                   {POLICIES.map((p) => (
                     <SelectItem key={p} value={p}>
-                      {POLICY_LABELS[p]}
+                      {policyLabel(tc, p)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -369,7 +379,7 @@ export function LimitDialog({
             </div>
 
             <div className="space-y-1.5">
-              <Label>Scope</Label>
+              <Label>{t("dialog.scope")}</Label>
               <Select
                 value={form.scope}
                 onValueChange={(v) => setScope(v as Scope)}
@@ -381,7 +391,7 @@ export function LimitDialog({
                 <SelectContent>
                   {allowedScopes.map((s) => (
                     <SelectItem key={s} value={s}>
-                      {SCOPE_LABELS[s]}
+                      {scopeLabel(tc, s)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -393,12 +403,12 @@ export function LimitDialog({
             <div className="grid grid-cols-2 gap-3">
               {scopeHasAccount(form.scope) && (
                 <div className="space-y-1.5">
-                  <Label htmlFor="limit-account">Account</Label>
+                  <Label htmlFor="limit-account">{t("dialog.account")}</Label>
                   <Autocomplete
                     id="limit-account"
                     value={form.account}
                     spellCheck={false}
-                    placeholder="acc-1"
+                    placeholder={t("dialog.accountPlaceholder")}
                     disabled={isEdit}
                     suggestions={accountSuggestions}
                     onChange={(v) =>
@@ -409,12 +419,12 @@ export function LimitDialog({
               )}
               {scopeHasAsset(form.scope) && (
                 <div className="space-y-1.5">
-                  <Label htmlFor="limit-asset">Asset</Label>
+                  <Label htmlFor="limit-asset">{t("dialog.asset")}</Label>
                   <Autocomplete
                     id="limit-asset"
                     value={form.asset}
                     spellCheck={false}
-                    placeholder="AAPL"
+                    placeholder={t("dialog.assetPlaceholder")}
                     disabled={isEdit}
                     suggestions={assetSuggestions}
                     onChange={(v) =>
@@ -428,15 +438,16 @@ export function LimitDialog({
 
           <div className="space-y-3 rounded-card border border-border p-3">
             <p className="text-[0.6875rem] uppercase tracking-[0.07em] text-muted">
-              Values
+              {t("dialog.values")}
             </p>
-            {kinds.map(({ kind, hint }) => {
-              // Use the human label from the catalog if available; fall back to
-              // the mnemonic key so unknown policies still render.
-              const fieldLabel =
-                catalogEntry?.fields.find((f) => f.key === kind)?.label ?? kind;
-              const fieldHint =
-                catalogEntry?.fields.find((f) => f.key === kind)?.hint ?? hint;
+            {kinds.map(({ kind }) => {
+              // Human label/hint come from the policy catalog (domain ns), keyed
+              // by policy id + field key; the field-label helper falls back to
+              // the mnemonic key, and the hint falls back to the kind hint, so
+              // unknown fields still render.
+              const fieldLabel = policyFieldLabel(t, form.policy, kind);
+              const catalogHint = policyFieldHint(t, form.policy, kind);
+              const fieldHint = catalogHint || kindHint(t, form.policy, kind);
               const isDuration = kind === "window";
               return (
                 <div key={kind} className="space-y-1.5">
@@ -463,13 +474,15 @@ export function LimitDialog({
             })}
             <p className="text-[0.6875rem] text-muted">
               {form.policy === "rate_limit"
-                ? "Both max orders and window are required."
-                : "At least one value is required."}
+                ? t("dialog.rateLimitFootnote")
+                : t("dialog.atLeastOneFootnote")}
             </p>
           </div>
 
           {validation && (
-            <p className="text-[0.6875rem] text-[var(--danger)]">{validation}</p>
+            <p className="text-[0.6875rem] text-[var(--danger)]">
+              {t(validation.key, validation.values)}
+            </p>
           )}
           {error && (
             <ErrorBanner message={error} onDismiss={() => setError(null)} />
@@ -483,14 +496,14 @@ export function LimitDialog({
             onClick={() => onOpenChange(false)}
             disabled={busy}
           >
-            Cancel
+            {tc("actions.cancel")}
           </Button>
           <Button
             size="sm"
             onClick={() => void submit()}
             disabled={busy || validation !== null}
           >
-            {isEdit ? "Save" : "Add policy"}
+            {isEdit ? t("dialog.save") : t("dialog.addTitle")}
           </Button>
         </DialogFooter>
       </DialogContent>

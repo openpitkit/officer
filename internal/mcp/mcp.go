@@ -87,6 +87,11 @@ const checkOrderToolDescription = "Run a non-mutating pre-trade dry-run for an "
 	"would-be account block on reject). Submits nothing and changes no state - " +
 	"no order is placed, no funds are reserved."
 
+const setMarketDataInstrumentToolName = "set_market_data_instrument"
+const setMarketDataInstrumentToolDescription = "Enable or disable one " +
+	"configured market-data instrument. Mutates Officer control-plane config " +
+	"only; protected and disabled by default."
+
 // Source is the Pit Officer-facing seam the MCP surface reads from. It is
 // satisfied by *backend.Service via an adapter in main.go; keeping it an
 // interface keeps this package free of a dependency on the concrete
@@ -109,6 +114,11 @@ type Source interface {
 	// whether the order would pass plus the would-be lock or block. It mutates
 	// no state.
 	CheckOrder(ctx context.Context, probe domain.OrderProbe) (domain.CheckResult, error)
+	// SetMarketDataInstrumentEnabled toggles one configured market-data
+	// instrument in the Officer control-plane store.
+	SetMarketDataInstrumentEnabled(
+		ctx context.Context, instanceID, externalSymbol string, enabled bool,
+	) error
 	// CommandEnabled reports whether the operator has the named MCP command
 	// enabled in the Pit Officer panel. A false result means the operator has
 	// turned the command off; the surface returns a non-error disabled notice
@@ -229,6 +239,18 @@ type checkOrderOutput struct {
 	Rejects         []checkOrderRejectDTO `json:"rejects"`
 	WouldLockPrices []string              `json:"wouldLockPrices"`
 	Passed          bool                  `json:"passed"`
+}
+
+type setMarketDataInstrumentInput struct {
+	InstanceID     string `json:"instanceId" jsonschema:"Market-data instance identifier"`
+	ExternalSymbol string `json:"externalSymbol" jsonschema:"Provider-side instrument symbol"`
+	Enabled        bool   `json:"enabled" jsonschema:"Whether the instrument should be enabled"`
+}
+
+type setMarketDataInstrumentOutput struct {
+	InstanceID     string `json:"instanceId"`
+	ExternalSymbol string `json:"externalSymbol"`
+	Enabled        bool   `json:"enabled"`
 }
 
 // accountDTO is the wire shape of a single account (identical to httpapi).
@@ -459,6 +481,11 @@ func NewServer(src Source, version VersionSource) (*sdkmcp.Server, error) {
 		Description: checkOrderToolDescription,
 	}, checkOrderHandler(src))
 
+	sdkmcp.AddTool(server, &sdkmcp.Tool{
+		Name:        setMarketDataInstrumentToolName,
+		Description: setMarketDataInstrumentToolDescription,
+	}, setMarketDataInstrumentHandler(src))
+
 	return server, nil
 }
 
@@ -612,6 +639,52 @@ func checkOrderHandler(src Source) func(
 			summary = fmt.Sprintf("check %s: reject - %d reason(s)", account, len(result.Rejects))
 		}
 		return toolOK(summary, out), nil
+	}
+}
+
+func setMarketDataInstrumentHandler(src Source) func(
+	context.Context,
+	*sdkmcp.ServerSession,
+	*sdkmcp.CallToolParamsFor[setMarketDataInstrumentInput],
+) (*sdkmcp.CallToolResultFor[setMarketDataInstrumentOutput], error) {
+	return func(
+		ctx context.Context,
+		_ *sdkmcp.ServerSession,
+		p *sdkmcp.CallToolParamsFor[setMarketDataInstrumentInput],
+	) (*sdkmcp.CallToolResultFor[setMarketDataInstrumentOutput], error) {
+		ctx = auth.ContextWithCaller(ctx, mcpCaller)
+		if ok, disabled := commandGate[setMarketDataInstrumentOutput](
+			ctx, src, setMarketDataInstrumentToolName,
+		); !ok {
+			return disabled, nil
+		}
+		instanceID := strings.TrimSpace(p.Arguments.InstanceID)
+		externalSymbol := strings.TrimSpace(p.Arguments.ExternalSymbol)
+		if instanceID == "" {
+			return toolErr[setMarketDataInstrumentOutput]("instanceId is required"), nil
+		}
+		if externalSymbol == "" {
+			return toolErr[setMarketDataInstrumentOutput]("externalSymbol is required"), nil
+		}
+		if err := src.SetMarketDataInstrumentEnabled(
+			ctx, instanceID, externalSymbol, p.Arguments.Enabled,
+		); err != nil {
+			return toolErr[setMarketDataInstrumentOutput]("set market-data instrument failed"), nil
+		}
+		out := setMarketDataInstrumentOutput{
+			InstanceID:     instanceID,
+			ExternalSymbol: externalSymbol,
+			Enabled:        p.Arguments.Enabled,
+		}
+		state := "disabled"
+		if p.Arguments.Enabled {
+			state = "enabled"
+		}
+		return toolOK(
+			fmt.Sprintf("market-data instrument %s/%s %s",
+				instanceID, externalSymbol, state),
+			out,
+		), nil
 	}
 }
 

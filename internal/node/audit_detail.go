@@ -25,7 +25,7 @@ import (
 )
 
 // setLimitDetail renders a barrier upsert as a short human-readable audit
-// detail, e.g. "set limit rate_limit asset=BTC max_orders=100 window=1s".
+// detail, e.g. "set limit rate_limit asset=AAPL max_orders=100 window=1s".
 // Values is already sorted by kind.
 func setLimitDetail(limit domain.Limit) string {
 	var b strings.Builder
@@ -71,6 +71,15 @@ func setMcpAccessDetail(command string, enabled bool) string {
 		state = "enable"
 	}
 	return fmt.Sprintf("%s mcp command %s", state, command)
+}
+
+// marketDataToggleDetail renders one market-data enable/disable toggle.
+func marketDataToggleDetail(kind, id string, enabled bool) string {
+	state := "disable"
+	if enabled {
+		state = "enable"
+	}
+	return fmt.Sprintf("%s market-data %s %s", state, kind, id)
 }
 
 // submitOrderDetail renders one order submission and its accept/reject

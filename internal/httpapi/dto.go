@@ -193,6 +193,107 @@ func toMcpCommandDTO(c backend.McpCommand) mcpCommandDTO {
 	}
 }
 
+// --- market data ------------------------------------------------------------
+
+type marketDataDTO struct {
+	Providers        []marketDataProviderDTO `json:"providers"`
+	Instances        []marketDataInstanceDTO `json:"instances"`
+	FreshnessSeconds int                     `json:"freshnessSeconds"`
+}
+
+type marketDataProviderDTO struct {
+	Type  string `json:"type"`
+	Title string `json:"title"`
+}
+
+type marketDataInstanceDTO struct {
+	ID          string                    `json:"id"`
+	Type        string                    `json:"type"`
+	Label       string                    `json:"label"`
+	Credentials string                    `json:"credentials"`
+	Enabled     bool                      `json:"enabled"`
+	Instruments []marketDataInstrumentDTO `json:"instruments,omitempty"`
+}
+
+type marketDataInstrumentDTO struct {
+	InstanceID     string              `json:"instanceId,omitempty"`
+	ExternalSymbol string              `json:"externalSymbol"`
+	BaseAsset      string              `json:"baseAsset"`
+	QuoteAsset     string              `json:"quoteAsset"`
+	Enabled        bool                `json:"enabled"`
+	Stale          bool                `json:"stale"`
+	Quote          *marketDataQuoteDTO `json:"quote,omitempty"`
+}
+
+type marketDataQuoteDTO struct {
+	AsOf       string `json:"asOf"`
+	ReceivedAt string `json:"receivedAt"`
+	Mark       string `json:"mark"`
+	Bid        string `json:"bid"`
+	Ask        string `json:"ask"`
+}
+
+func toMarketDataDTO(status backend.MarketDataStatus) marketDataDTO {
+	providers := make([]marketDataProviderDTO, 0, len(status.Providers))
+	for _, provider := range status.Providers {
+		providers = append(providers, marketDataProviderDTO{
+			Type:  provider.Type,
+			Title: provider.Title,
+		})
+	}
+	instances := make([]marketDataInstanceDTO, 0, len(status.Instances))
+	for _, instance := range status.Instances {
+		instances = append(instances, toMarketDataInstanceDTO(instance))
+	}
+	return marketDataDTO{
+		Providers:        providers,
+		Instances:        instances,
+		FreshnessSeconds: status.FreshnessSeconds,
+	}
+}
+
+func toMarketDataInstanceDTO(status backend.MarketDataInstanceStatus) marketDataInstanceDTO {
+	instruments := make([]marketDataInstrumentDTO, 0, len(status.Instruments))
+	for _, instrument := range status.Instruments {
+		instruments = append(instruments, toMarketDataInstrumentDTO(instrument))
+	}
+	return marketDataInstanceDTO{
+		ID:          status.Instance.ID,
+		Type:        status.Instance.Type,
+		Label:       status.Instance.Label,
+		Credentials: status.Instance.Credentials,
+		Enabled:     status.Instance.Enabled,
+		Instruments: instruments,
+	}
+}
+
+func toMarketDataInstrumentDTO(
+	status backend.MarketDataInstrumentStatus,
+) marketDataInstrumentDTO {
+	return marketDataInstrumentDTO{
+		InstanceID:     status.Instrument.InstanceID,
+		ExternalSymbol: status.Instrument.ExternalSymbol,
+		BaseAsset:      status.Instrument.BaseAsset,
+		QuoteAsset:     status.Instrument.QuoteAsset,
+		Enabled:        status.Instrument.Enabled,
+		Stale:          status.Stale,
+		Quote:          toMarketDataQuoteDTO(status.Quote),
+	}
+}
+
+func toMarketDataQuoteDTO(quote *domain.MarketDataQuote) *marketDataQuoteDTO {
+	if quote == nil {
+		return nil
+	}
+	return &marketDataQuoteDTO{
+		AsOf:       quote.AsOf.Format(time.RFC3339Nano),
+		ReceivedAt: quote.ReceivedAt.Format(time.RFC3339Nano),
+		Mark:       quote.Mark,
+		Bid:        quote.Bid,
+		Ask:        quote.Ask,
+	}
+}
+
 // --- group ------------------------------------------------------------------
 
 // groupDTO is the wire shape of a single account group.

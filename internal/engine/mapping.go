@@ -188,8 +188,8 @@ func pnlBoundsAxes(limits []domain.Limit) (
 		}
 		// The runtime Configure path applies the barrier-update shape, which
 		// cannot reseed the live accumulated P&L. initial_pnl can only be honored
-		// at barrier construction (the rebuild path), so reject it here rather
-		// than silently dropping it.
+		// when the barrier is first created at the one-time engine build, so reject
+		// it here rather than silently dropping it.
 		if _, ok := initial.Get(); ok {
 			return nil, nil, fmt.Errorf(
 				"engine: pnl_bounds initial_pnl cannot be set on a runtime barrier "+

@@ -43,8 +43,8 @@ import type { ActivityEntry } from "@/api/types";
 // ---------------------------------------------------------------------------
 
 export type ActivityGroup = {
-  /** Display label for the column header. */
-  label: string;
+  /** i18n key under the "dashboard" namespace for the column header. */
+  labelKey: string;
   /** Route prefix for navigation: "trading" or "audit". */
   route: "trading" | "audit";
   entries: ActivityEntry[];
@@ -73,14 +73,14 @@ function kindBucket(kind: string): "trading" | "accounts" | "limits" | "groups" 
 
 const BUCKET_META: Record<
   ReturnType<typeof kindBucket>,
-  { label: string; route: "trading" | "audit" }
+  { labelKey: string; route: "trading" | "audit" }
 > = {
-  trading:     { label: "Orders & Trades",  route: "trading" },
-  accounts:    { label: "Accounts",          route: "audit"   },
-  limits:      { label: "Limits",            route: "audit"   },
-  groups:      { label: "Groups",            route: "audit"   },
-  adjustments: { label: "Adjustments",       route: "audit"   },
-  other:       { label: "Other",             route: "audit"   },
+  trading:     { labelKey: "activity.bucket.trading",     route: "trading" },
+  accounts:    { labelKey: "activity.bucket.accounts",    route: "audit"   },
+  limits:      { labelKey: "activity.bucket.limits",      route: "audit"   },
+  groups:      { labelKey: "activity.bucket.groups",      route: "audit"   },
+  adjustments: { labelKey: "activity.bucket.adjustments", route: "audit"   },
+  other:       { labelKey: "activity.bucket.other",       route: "audit"   },
 };
 
 /** Bucket ordering — determines column order. */
@@ -101,7 +101,7 @@ export function groupActivity(entries: ActivityEntry[]): ActivityGroup[] {
   return BUCKET_ORDER
     .filter((b) => map.has(b))
     .map((b) => ({
-      label: BUCKET_META[b].label,
+      labelKey: BUCKET_META[b].labelKey,
       route: BUCKET_META[b].route,
       entries: map.get(b)!,
     }));
@@ -114,60 +114,63 @@ export function groupActivity(entries: ActivityEntry[]): ActivityGroup[] {
 export type AuditIconMeta = {
   Icon: ComponentType<{ className?: string }>;
   variant: "neutral" | "ok" | "warn" | "danger" | "accent";
-  title: string;
+  /** i18n key under the "dashboard" namespace, or a raw fallback string. */
+  titleKey: string;
 };
 
-/** Map an `AuditEntry.action` string to an icon + badge variant. */
+/** Map an `AuditEntry.action` string to an icon + badge variant.
+ *  `titleKey` is an i18n key under "dashboard:audit.action.*", or the raw
+ *  action string for unrecognised actions (used as i18n defaultValue). */
 export function auditActionMeta(action: string): AuditIconMeta {
   const a = action.toLowerCase();
 
   // Account lifecycle
   if (a === "create_account" || a === "add_account")
-    return { Icon: PlusCircle,       variant: "ok",      title: "Create account" };
+    return { Icon: PlusCircle,       variant: "ok",      titleKey: "audit.action.createAccount" };
   if (a === "block_account")
-    return { Icon: Ban,              variant: "danger",  title: "Block account" };
+    return { Icon: Ban,              variant: "danger",  titleKey: "audit.action.blockAccount" };
   if (a === "unblock_account")
-    return { Icon: LockOpen,         variant: "ok",      title: "Unblock account" };
+    return { Icon: LockOpen,         variant: "ok",      titleKey: "audit.action.unblockAccount" };
   if (a === "update_account" || a === "edit_account")
-    return { Icon: UserCog,          variant: "accent",  title: "Update account" };
+    return { Icon: UserCog,          variant: "accent",  titleKey: "audit.action.updateAccount" };
   if (a === "delete_account")
-    return { Icon: Trash2,           variant: "danger",  title: "Delete account" };
+    return { Icon: Trash2,           variant: "danger",  titleKey: "audit.action.deleteAccount" };
 
   // Group lifecycle
   if (a === "create_group" || a === "add_group")
-    return { Icon: PlusCircle,       variant: "ok",      title: "Create group" };
+    return { Icon: PlusCircle,       variant: "ok",      titleKey: "audit.action.createGroup" };
   if (a === "block_group")
-    return { Icon: ShieldOff,        variant: "danger",  title: "Block group" };
+    return { Icon: ShieldOff,        variant: "danger",  titleKey: "audit.action.blockGroup" };
   if (a === "unblock_group")
-    return { Icon: LockOpen,         variant: "ok",      title: "Unblock group" };
+    return { Icon: LockOpen,         variant: "ok",      titleKey: "audit.action.unblockGroup" };
   if (a === "update_group" || a === "edit_group")
-    return { Icon: Users,            variant: "accent",  title: "Update group" };
+    return { Icon: Users,            variant: "accent",  titleKey: "audit.action.updateGroup" };
   if (a === "delete_group")
-    return { Icon: Trash2,           variant: "danger",  title: "Delete group" };
+    return { Icon: Trash2,           variant: "danger",  titleKey: "audit.action.deleteGroup" };
 
   // Limits / policies
   if (a === "set_limit" || a === "create_limit" || a === "add_limit")
-    return { Icon: Lock,             variant: "warn",    title: "Set limit" };
+    return { Icon: Lock,             variant: "warn",    titleKey: "audit.action.setLimit" };
   if (a === "delete_limit" || a === "remove_limit")
-    return { Icon: Trash2,           variant: "danger",  title: "Delete limit" };
+    return { Icon: Trash2,           variant: "danger",  titleKey: "audit.action.deleteLimit" };
   if (a === "update_limit" || a === "edit_limit")
-    return { Icon: Sliders,          variant: "accent",  title: "Update limit" };
+    return { Icon: Sliders,          variant: "accent",  titleKey: "audit.action.updateLimit" };
 
   // Adjustments / balances
   if (a === "adjustment" || a === "apply_adjustment")
-    return { Icon: Coins,            variant: "accent",  title: "Adjustment" };
+    return { Icon: Coins,            variant: "accent",  titleKey: "audit.action.adjustment" };
   if (a === "balance" || a === "update_balance")
-    return { Icon: CircleDollarSign, variant: "neutral", title: "Balance update" };
+    return { Icon: CircleDollarSign, variant: "neutral", titleKey: "audit.action.balanceUpdate" };
 
   // Orders / trades
   if (a === "order" || a === "submit_order" || a === "create_order")
-    return { Icon: ClipboardList,    variant: "neutral", title: "Order" };
+    return { Icon: ClipboardList,    variant: "neutral", titleKey: "audit.action.order" };
   if (a === "trade" || a === "fill")
-    return { Icon: ArrowLeftRight,   variant: "ok",      title: "Trade / fill" };
+    return { Icon: ArrowLeftRight,   variant: "ok",      titleKey: "audit.action.tradeFill" };
 
-  // Policy / config
+  // Policy / config and unknown — raw action string as fallback key.
   if (a.includes("policy") || a.includes("config"))
-    return { Icon: Layers,           variant: "accent",  title: action };
+    return { Icon: Layers,           variant: "accent",  titleKey: action };
 
-  return { Icon: HelpCircle,         variant: "neutral", title: action };
+  return { Icon: HelpCircle,         variant: "neutral", titleKey: action };
 }

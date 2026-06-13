@@ -51,4 +51,7 @@ function Badge({ className, variant, ...props }: BadgeProps) {
   );
 }
 
+// `badgeVariants` is a cva() result, not a literal constant, so it is not
+// covered by `allowConstantExport`; shadcn/ui co-locates it with the component.
+// eslint-disable-next-line react-refresh/only-export-components
 export { Badge, badgeVariants };

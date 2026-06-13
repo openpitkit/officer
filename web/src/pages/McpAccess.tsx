@@ -16,16 +16,16 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { ApiError, setMcpCommand } from "@/api/client";
 import type { McpCommand } from "@/api/types";
 import { useMcpAccess } from "@/api/useMcpAccess";
-import { CopyableSnippet } from "@/components/CopyableSnippet";
+import { ConnectAgent } from "@/components/ConnectAgent";
 import { ErrorBanner, ErrorState, TableSkeleton } from "@/components/PageStates";
 import { Page } from "@/components/Page";
 import { RefreshButton } from "@/components/RefreshButton";
 import { Badge } from "@/components/ui/badge";
-import { buildMcpAgentPrompt } from "@/lib/mcpAgentPrompt";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -72,40 +72,39 @@ function ProtectiveEnableDialog({
   onOpenChange: (open: boolean) => void;
   onConfirm: () => void;
 }) {
+  const { t } = useTranslation("mcp");
+  const { t: tc } = useTranslation();
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle className="text-[var(--danger)]">
-            Enable protected command?
+            {t("dialog.title")}
           </AlertDialogTitle>
           <AlertDialogDescription asChild>
             <div className="space-y-2 text-xs text-muted-lt">
               <p>
-                The command{" "}
+                {t("dialog.body1Pre")}{" "}
                 <span className="nums font-medium text-text">
                   {command?.name}
                 </span>{" "}
-                is marked <span className="font-medium text-[var(--danger)]">
-                  protective
-                </span>. Enabling it grants the AI agent the ability to change
-                the database in ways the operator cannot supervise or control in
-                real time.
+                {t("dialog.body1Mid")}{" "}
+                <span className="font-medium text-[var(--danger)]">
+                  {t("dialog.body1Flag")}
+                </span>
+                {t("dialog.body1Post")}
               </p>
+              <p>{t("dialog.body2")}</p>
               <p>
-                This is a protective barrier against autonomous AI actions. Only
-                enable it if you intend to grant the agent that power and accept
-                the associated risk.
-              </p>
-              <p>
-                If you are unsure, press <strong>Cancel</strong> — the command
-                will remain disabled.
+                {t("dialog.body3Pre")}{" "}
+                <strong>{tc("actions.cancel")}</strong>{" "}
+                {t("dialog.body3Post")}
               </p>
             </div>
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogCancel>{tc("actions.cancel")}</AlertDialogCancel>
           <AlertDialogAction
             onClick={(e) => {
               e.preventDefault();
@@ -113,7 +112,7 @@ function ProtectiveEnableDialog({
             }}
             className="bg-[var(--danger)] text-white hover:bg-[var(--danger)]/90"
           >
-            Enable anyway
+            {t("dialog.confirm")}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
@@ -132,15 +131,16 @@ function CommandsTable({
   commands: McpCommand[];
   onToggle: (cmd: McpCommand, next: boolean) => void;
 }) {
+  const { t } = useTranslation("mcp");
   return (
     <Card>
       <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
-            <TableHead className="w-8">On</TableHead>
-            <TableHead>Command</TableHead>
-            <TableHead>Description</TableHead>
-            <TableHead>Flags</TableHead>
+            <TableHead className="w-8">{t("table.on")}</TableHead>
+            <TableHead>{t("table.command")}</TableHead>
+            <TableHead>{t("table.description")}</TableHead>
+            <TableHead>{t("table.flags")}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -152,7 +152,7 @@ function CommandsTable({
                   checked={cmd.enabled}
                   onChange={(e) => onToggle(cmd, e.target.checked)}
                   className="accent-[var(--accent)] h-4 w-4 cursor-pointer"
-                  aria-label={`Enable ${cmd.name}`}
+                  aria-label={t("table.enableAriaLabel", { name: cmd.name })}
                 />
               </TableCell>
 
@@ -172,27 +172,29 @@ function CommandsTable({
                   </p>
                   {!cmd.enabled && (
                     <p className="text-[0.6875rem] text-muted-lt italic">
-                      Disabled — returns a "disabled in panel" notice to the
-                      agent.
+                      {t("table.disabledNotice")}
                     </p>
                   )}
                 </div>
               </TableCell>
 
               <TableCell className="max-w-xs text-xs text-muted-lt">
-                {cmd.agentDescription || "—"}
+                {t("command." + cmd.name + ".description", {
+                  defaultValue:
+                    cmd.agentDescription || t("table.noDescription"),
+                })}
               </TableCell>
 
               <TableCell>
                 <div className="flex flex-wrap gap-1">
                   {cmd.protective && (
-                    <Badge variant="danger">protected</Badge>
+                    <Badge variant="danger">{t("flags.protected")}</Badge>
                   )}
                   {cmd.mutating && (
-                    <Badge variant="warn">mutating</Badge>
+                    <Badge variant="warn">{t("flags.mutating")}</Badge>
                   )}
                   {!cmd.implemented && (
-                    <Badge variant="neutral">not implemented</Badge>
+                    <Badge variant="neutral">{t("flags.notImplemented")}</Badge>
                   )}
                 </div>
               </TableCell>
@@ -252,11 +254,13 @@ export function McpAccess() {
     void doToggle(cmd, next);
   }
 
+  const { t } = useTranslation("mcp");
+
   const isLoading = load.state === "loading";
 
   return (
     <Page
-      title="MCP access"
+      title={t("access.title")}
       actions={
         <RefreshButton
           onClick={() => {
@@ -267,24 +271,16 @@ export function McpAccess() {
         />
       }
     >
-      {commands !== null && (
-        <div className="space-y-1.5">
-          <p className="text-xs font-medium text-muted">Agent instructions</p>
-          <CopyableSnippet
-            label="Paste into your agent's prompt"
-            text={buildMcpAgentPrompt(commands)}
-            rows={8}
-          />
-        </div>
-      )}
+      <ConnectAgent />
 
       <p className="text-xs text-muted-lt">
-        Controls which MCP commands the AI agent may invoke. Disabled commands
-        return a "disabled in panel" notice to the agent and have no effect on
-        the engine. Commands marked{" "}
-        <span className="font-medium text-[var(--danger)]">protected</span>{" "}
-        grant the agent write access and require explicit confirmation to enable.
-        The MCP endpoint is served at <span className="nums">/mcp</span>.
+        {t("access.descriptionPre")}{" "}
+        <span className="font-medium text-[var(--danger)]">
+          {t("access.descriptionProtected")}
+        </span>{" "}
+        {t("access.descriptionPost")}{" "}
+        <span className="nums">/mcp</span>
+        {t("access.descriptionEnd")}
       </p>
 
       {error && (

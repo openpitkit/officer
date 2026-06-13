@@ -22,9 +22,11 @@ import {
   useState,
 } from "react";
 import { Coins, Plus, RefreshCw } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import { ApiError, createAdjustment } from "@/api/client";
+import { formatDate, formatTime } from "@/i18n/format";
 import type {
   Adjustment,
   AdjustmentMode,
@@ -93,9 +95,8 @@ function SplitTime({ iso }: { iso: string }) {
   let date: string;
   let time: string;
   try {
-    const d = new Date(iso);
-    date = d.toLocaleDateString();
-    time = d.toLocaleTimeString();
+    date = formatDate(iso);
+    time = formatTime(iso);
   } catch {
     return <span>{iso}</span>;
   }
@@ -122,20 +123,21 @@ function BalancesTable({
   balances: Balance[];
   onAdjust: (b: Balance) => void;
 }) {
+  const { t } = useTranslation("positions");
   return (
     <Card>
       <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
-            <TableHead>Account</TableHead>
-            <TableHead>Asset</TableHead>
-            <TableHead className="text-right">Available</TableHead>
-            <TableHead className="text-right">Held</TableHead>
-            <TableHead className="text-right">Incoming</TableHead>
-            <TableHead className="text-right">Avg entry price</TableHead>
-            <TableHead className="text-right">Realized PnL</TableHead>
-            <TableHead>Updated</TableHead>
-            <TableHead className="text-right">Actions</TableHead>
+            <TableHead>{t("balances.columns.account")}</TableHead>
+            <TableHead>{t("balances.columns.asset")}</TableHead>
+            <TableHead className="text-right">{t("balances.columns.available")}</TableHead>
+            <TableHead className="text-right">{t("balances.columns.held")}</TableHead>
+            <TableHead className="text-right">{t("balances.columns.incoming")}</TableHead>
+            <TableHead className="text-right">{t("balances.columns.avgEntryPrice")}</TableHead>
+            <TableHead className="text-right">{t("balances.columns.realizedPnl")}</TableHead>
+            <TableHead>{t("balances.columns.updated")}</TableHead>
+            <TableHead className="text-right">{t("balances.columns.actions")}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -164,9 +166,9 @@ function BalancesTable({
                     variant="outline"
                     size="sm"
                     onClick={() => onAdjust(b)}
-                    aria-label={`Adjust ${b.account} ${b.asset}`}
+                    aria-label={t("actions.adjustAriaLabel", { account: b.account, asset: b.asset })}
                   >
-                    Adjust
+                    {t("actions.adjust")}
                   </Button>
                 </div>
               </TableCell>
@@ -187,11 +189,12 @@ interface AdjustOutcome {
 }
 
 function AdjustOutcomeView({ adjustment }: AdjustOutcome) {
+  const { t } = useTranslation("positions");
   const { accepted, rejected } = adjustment;
   if (rejected) {
     return (
       <div className="rounded-card border border-[var(--danger)] bg-accent-dim p-3 text-xs text-[var(--danger)]">
-        <p className="font-medium">Rejected</p>
+        <p className="font-medium">{t("dialog.outcome.rejectedTitle")}</p>
         <p className="mt-1 text-[var(--danger)]">{rejected.reason}</p>
       </div>
     );
@@ -199,17 +202,17 @@ function AdjustOutcomeView({ adjustment }: AdjustOutcome) {
   if (accepted) {
     const rows: { label: string; delta: string; result: string }[] = [];
     if (accepted.balanceDelta || accepted.balanceResult) {
-      rows.push({ label: "balance", delta: accepted.balanceDelta, result: accepted.balanceResult });
+      rows.push({ label: t("dialog.outcome.fieldBalance"), delta: accepted.balanceDelta, result: accepted.balanceResult });
     }
     if (accepted.heldDelta || accepted.heldResult) {
-      rows.push({ label: "held", delta: accepted.heldDelta, result: accepted.heldResult });
+      rows.push({ label: t("dialog.outcome.fieldHeld"), delta: accepted.heldDelta, result: accepted.heldResult });
     }
     if (accepted.incomingDelta || accepted.incomingResult) {
-      rows.push({ label: "incoming", delta: accepted.incomingDelta, result: accepted.incomingResult });
+      rows.push({ label: t("dialog.outcome.fieldIncoming"), delta: accepted.incomingDelta, result: accepted.incomingResult });
     }
     return (
       <div className="rounded-card border border-[var(--ok)] bg-accent-dim p-3 text-xs">
-        <p className="font-medium text-[var(--ok)]">Accepted</p>
+        <p className="font-medium text-[var(--ok)]">{t("dialog.outcome.acceptedTitle")}</p>
         {rows.length > 0 && (
           <div className="mt-2 space-y-1">
             {rows.map((r) => (
@@ -239,25 +242,28 @@ interface AmountFieldState {
 }
 
 function AmountField({
+  id,
   label,
   field,
   onChange,
 }: {
+  id: string;
   label: string;
   field: AmountFieldState;
   onChange: (next: AmountFieldState) => void;
 }) {
+  const { t } = useTranslation("positions");
   return (
     <div className="space-y-1.5">
       <div className="flex items-center gap-2">
         <input
           type="checkbox"
-          id={`chk-${label}`}
+          id={`chk-${id}`}
           checked={field.enabled}
           onChange={(e) => onChange({ ...field, enabled: e.target.checked })}
           className="h-3.5 w-3.5 cursor-pointer accent-[var(--accent)]"
         />
-        <Label htmlFor={`chk-${label}`} className="cursor-pointer capitalize">
+        <Label htmlFor={`chk-${id}`} className="cursor-pointer capitalize">
           {label}
         </Label>
       </div>
@@ -273,8 +279,8 @@ function AmountField({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="absolute">absolute</SelectItem>
-              <SelectItem value="delta">delta</SelectItem>
+              <SelectItem value="absolute">{t("dialog.mode.absolute")}</SelectItem>
+              <SelectItem value="delta">{t("dialog.mode.delta")}</SelectItem>
             </SelectContent>
           </Select>
           <Input
@@ -309,6 +315,7 @@ function BoundsField({
   field: BoundsFieldState;
   onChange: (next: BoundsFieldState) => void;
 }) {
+  const { t } = useTranslation("positions");
   return (
     <div className="space-y-1.5">
       <div className="flex items-center gap-2">
@@ -320,13 +327,13 @@ function BoundsField({
           className="h-3.5 w-3.5 cursor-pointer accent-[var(--accent)]"
         />
         <Label htmlFor={`chkb-${label}`} className="cursor-pointer capitalize">
-          {label} bounds
+          {label}
         </Label>
       </div>
       {field.enabled && (
         <div className="ml-5 grid grid-cols-2 gap-2">
           <div className="space-y-1">
-            <Label className="text-[0.6875rem] text-muted">Lower</Label>
+            <Label className="text-[0.6875rem] text-muted">{t("dialog.bounds.lower")}</Label>
             <Input
               value={field.lower}
               spellCheck={false}
@@ -336,7 +343,7 @@ function BoundsField({
             />
           </div>
           <div className="space-y-1">
-            <Label className="text-[0.6875rem] text-muted">Upper</Label>
+            <Label className="text-[0.6875rem] text-muted">{t("dialog.bounds.upper")}</Label>
             <Input
               value={field.upper}
               spellCheck={false}
@@ -398,6 +405,8 @@ function AdjustDialog({
   // Reseed whenever the dialog opens.
   useEffect(() => {
     if (open) {
+      // Reset all form fields from props each time the dialog opens.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setAccount(initialAccount);
       setAsset(initialAsset);
       setAvgPrice("");
@@ -430,15 +439,17 @@ function AdjustDialog({
     return pair;
   }
 
+  const { t } = useTranslation("positions");
+
   const submit = async () => {
     const trimAccount = account.trim();
     const trimAsset = asset.trim();
     if (!trimAccount) {
-      setError("Account is required.");
+      setError(t("dialog.error.accountRequired"));
       return;
     }
     if (!trimAsset) {
-      setError("Asset is required.");
+      setError(t("dialog.error.assetRequired"));
       return;
     }
     setBusy(true);
@@ -484,10 +495,9 @@ function AdjustDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Adjust position</DialogTitle>
+          <DialogTitle>{t("dialog.title")}</DialogTitle>
           <DialogDescription>
-            Seed or update spot-funds balances for an account and asset. Use
-            absolute mode to set a specific value, delta to add or subtract.
+            {t("dialog.description")}
           </DialogDescription>
         </DialogHeader>
 
@@ -495,7 +505,7 @@ function AdjustDialog({
           {/* Account + asset */}
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label htmlFor="adj-account">Account</Label>
+              <Label htmlFor="adj-account">{t("dialog.fields.account")}</Label>
               <Autocomplete
                 id="adj-account"
                 value={account}
@@ -507,7 +517,7 @@ function AdjustDialog({
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="adj-asset">Asset</Label>
+              <Label htmlFor="adj-asset">{t("dialog.fields.asset")}</Label>
               <Autocomplete
                 id="adj-asset"
                 value={asset}
@@ -522,7 +532,7 @@ function AdjustDialog({
 
           {/* Average entry price */}
           <div className="space-y-1.5">
-            <Label htmlFor="adj-aep">Average entry price (optional)</Label>
+            <Label htmlFor="adj-aep">{t("dialog.fields.avgEntryPrice")}</Label>
             <Input
               id="adj-aep"
               value={avgPrice}
@@ -533,37 +543,37 @@ function AdjustDialog({
               onChange={(e) => setAvgPrice(e.target.value)}
             />
             <p className="text-[0.6875rem] text-muted">
-              Positive decimal. Leave blank to keep the current value.
+              {t("dialog.fields.avgEntryPriceHint")}
             </p>
           </div>
 
           {/* Amount fields */}
           <div className="space-y-3 rounded-card border border-border p-3">
             <p className="text-[0.6875rem] uppercase tracking-[0.07em] text-muted">
-              Amounts
+              {t("dialog.amounts.sectionLabel")}
             </p>
-            <AmountField label="balance" field={balance} onChange={setBalance} />
-            <AmountField label="held" field={held} onChange={setHeld} />
-            <AmountField label="incoming" field={incoming} onChange={setIncoming} />
+            <AmountField id="balance" label={t("dialog.amounts.balance")} field={balance} onChange={setBalance} />
+            <AmountField id="held" label={t("dialog.amounts.held")} field={held} onChange={setHeld} />
+            <AmountField id="incoming" label={t("dialog.amounts.incoming")} field={incoming} onChange={setIncoming} />
           </div>
 
           {/* Bounds fields */}
           <div className="space-y-3 rounded-card border border-border p-3">
             <p className="text-[0.6875rem] uppercase tracking-[0.07em] text-muted">
-              Bounds (optional)
+              {t("dialog.bounds.sectionLabel")}
             </p>
             <BoundsField
-              label="balance"
+              label={t("dialog.bounds.balanceLabel")}
               field={balanceBounds}
               onChange={setBalanceBounds}
             />
             <BoundsField
-              label="held"
+              label={t("dialog.bounds.heldLabel")}
               field={heldBounds}
               onChange={setHeldBounds}
             />
             <BoundsField
-              label="incoming"
+              label={t("dialog.bounds.incomingLabel")}
               field={incomingBounds}
               onChange={setIncomingBounds}
             />
@@ -584,7 +594,7 @@ function AdjustDialog({
             onClick={() => onOpenChange(false)}
             disabled={busy}
           >
-            {outcome ? "Close" : "Cancel"}
+            {outcome ? t("dialog.footer.close") : t("actions.cancel", { ns: "common" })}
           </Button>
           {!outcome && (
             <Button
@@ -592,7 +602,7 @@ function AdjustDialog({
               onClick={() => void submit()}
               disabled={busy}
             >
-              Submit
+              {t("dialog.footer.submit")}
             </Button>
           )}
         </DialogFooter>
@@ -635,6 +645,7 @@ function HistoryRowOutcome({ adj }: { adj: Adjustment }) {
 }
 
 function HistoryRow({ adj }: { adj: Adjustment }) {
+  const { t } = useTranslation("positions");
   const isRejected = !!adj.rejected;
   const isAccepted = !!adj.accepted && !isRejected;
 
@@ -642,21 +653,27 @@ function HistoryRow({ adj }: { adj: Adjustment }) {
   const reqParts: string[] = [];
   if (req.balance) {
     reqParts.push(
-      `balance ${req.balance.mode === "delta" ? "Δ" : "="}${req.balance.value}`,
+      req.balance.mode === "delta"
+        ? t("history.request.balanceDelta", { value: req.balance.value })
+        : t("history.request.balanceAbsolute", { value: req.balance.value }),
     );
   }
   if (req.held) {
     reqParts.push(
-      `held ${req.held.mode === "delta" ? "Δ" : "="}${req.held.value}`,
+      req.held.mode === "delta"
+        ? t("history.request.heldDelta", { value: req.held.value })
+        : t("history.request.heldAbsolute", { value: req.held.value }),
     );
   }
   if (req.incoming) {
     reqParts.push(
-      `incoming ${req.incoming.mode === "delta" ? "Δ" : "="}${req.incoming.value}`,
+      req.incoming.mode === "delta"
+        ? t("history.request.incomingDelta", { value: req.incoming.value })
+        : t("history.request.incomingAbsolute", { value: req.incoming.value }),
     );
   }
   if (req.averageEntryPrice) {
-    reqParts.push(`avg ${req.averageEntryPrice}`);
+    reqParts.push(t("history.request.avgPrice", { value: req.averageEntryPrice }));
   }
 
   return (
@@ -674,9 +691,9 @@ function HistoryRow({ adj }: { adj: Adjustment }) {
       </TableCell>
       <TableCell>
         {isRejected ? (
-          <Badge variant="danger">rejected</Badge>
+          <Badge variant="danger">{t("history.status.rejected")}</Badge>
         ) : isAccepted ? (
-          <Badge variant="ok">accepted</Badge>
+          <Badge variant="ok">{t("history.status.accepted")}</Badge>
         ) : (
           <Badge variant="neutral">{adj.status}</Badge>
         )}
@@ -695,6 +712,7 @@ function HistoryRow({ adj }: { adj: Adjustment }) {
 const SOURCES: Source[] = ["panel", "api", "mcp", "system"];
 
 export function Positions() {
+  const { t } = useTranslation("positions");
   const [searchParams] = useSearchParams();
   const initialAccount = searchParams.get("account") ?? "";
 
@@ -770,7 +788,7 @@ export function Positions() {
 
   return (
     <Page
-      title="Positions"
+      title={t("title")}
       actions={
         <>
           <RefreshButton
@@ -785,7 +803,7 @@ export function Positions() {
           />
           <Button size="sm" onClick={openNewAdjust}>
             <Plus className="h-3.5 w-3.5" />
-            Adjust
+            {t("actions.adjust")}
           </Button>
         </>
       }
@@ -793,7 +811,7 @@ export function Positions() {
       {/* Filters */}
       <Card className="flex flex-wrap items-end gap-4 p-4">
         <div className="space-y-1.5">
-          <Label htmlFor="pos-account">Filter by account</Label>
+          <Label htmlFor="pos-account">{t("filters.byAccount")}</Label>
           <Autocomplete
             id="pos-account"
             value={accountFilter}
@@ -805,7 +823,7 @@ export function Positions() {
           />
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="pos-asset">Filter by asset</Label>
+          <Label htmlFor="pos-asset">{t("filters.byAsset")}</Label>
           <Autocomplete
             id="pos-asset"
             value={assetFilter}
@@ -822,7 +840,7 @@ export function Positions() {
       <div className="flex items-center gap-2">
         <Coins className="h-3.5 w-3.5 text-muted" />
         <p className="text-[0.6875rem] uppercase tracking-[0.07em] text-muted">
-          Balances
+          {t("balances.sectionLabel")}
         </p>
       </div>
 
@@ -836,12 +854,12 @@ export function Positions() {
       {balancesLoad.load.state === "ready" &&
         (balancesLoad.load.data.length === 0 ? (
           <EmptyState
-            title="No balances"
-            hint="Use Adjust to seed spot-funds balances for an account and asset."
+            title={t("balances.empty.title")}
+            hint={t("balances.empty.hint")}
             action={
               <Button size="sm" onClick={openNewAdjust}>
                 <Plus className="h-3.5 w-3.5" />
-                Adjust
+                {t("actions.adjust")}
               </Button>
             }
           />
@@ -855,10 +873,10 @@ export function Positions() {
       {/* Adjustment history */}
       <div className="flex flex-wrap items-center gap-3">
         <p className="text-[0.6875rem] uppercase tracking-[0.07em] text-muted">
-          Adjustment history
+          {t("history.sectionLabel")}
         </p>
         <div className="ml-auto flex items-center gap-2">
-          <Label className="text-xs">Source</Label>
+          <Label className="text-xs">{t("history.sourceLabel")}</Label>
           <Select
             value={sourceFilter}
             onValueChange={(v) =>
@@ -869,7 +887,7 @@ export function Positions() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="__all__">All</SelectItem>
+              <SelectItem value="__all__">{t("history.sourceAll")}</SelectItem>
               {SOURCES.map((s) => (
                 <SelectItem key={s} value={s}>
                   {s}
@@ -882,7 +900,7 @@ export function Positions() {
             size="sm"
             onClick={adjustmentsLoad.reload}
             disabled={adjustmentsLoad.load.state === "loading"}
-            aria-label="Refresh history"
+            aria-label={t("actions.refreshHistoryAriaLabel")}
           >
             <RefreshCw className="h-3.5 w-3.5" />
           </Button>
@@ -901,21 +919,21 @@ export function Positions() {
       {adjustmentsLoad.load.state === "ready" &&
         (adjustmentsLoad.load.data.length === 0 ? (
           <EmptyState
-            title="No adjustments"
-            hint="Adjustment records appear here after each submit."
+            title={t("history.empty.title")}
+            hint={t("history.empty.hint")}
           />
         ) : (
           <Card>
             <Table>
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
-                  <TableHead>Time</TableHead>
-                  <TableHead>Account</TableHead>
-                  <TableHead>Asset</TableHead>
-                  <TableHead>Source</TableHead>
-                  <TableHead>Request</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Outcome</TableHead>
+                  <TableHead>{t("history.columns.time")}</TableHead>
+                  <TableHead>{t("history.columns.account")}</TableHead>
+                  <TableHead>{t("history.columns.asset")}</TableHead>
+                  <TableHead>{t("history.columns.source")}</TableHead>
+                  <TableHead>{t("history.columns.request")}</TableHead>
+                  <TableHead>{t("history.columns.status")}</TableHead>
+                  <TableHead>{t("history.columns.outcome")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

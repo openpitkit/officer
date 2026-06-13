@@ -1,0 +1,37 @@
+{
+  "account": {
+    "required": "Идентификатор счёта обязателен",
+    "tooLong": "Идентификатор счёта должен быть не длиннее {{max}} символов",
+    "whitespace": "Идентификатор счёта не должен начинаться или заканчиваться пробелом",
+    "printable": "Идентификатор счёта должен содержать только печатаемые символы"
+  },
+  "asset": {
+    "required": "Актив обязателен для данного скопа",
+    "tooLong": "Актив должен быть не длиннее {{max}} символов",
+    "whitespace": "Актив не должен содержать пробелов"
+  },
+  "kind": {
+    "maxOrders": {
+      "integer": "max_orders должен быть целым числом больше 0",
+      "cap": "max_orders должен быть не более 1e9"
+    },
+    "window": {
+      "duration": "window должен быть положительной длительностью Go (например, 1s, 500ms)",
+      "cap": "window должен быть не более 24h"
+    },
+    "positiveDecimal": "{{kind}} должен быть положительным десятичным числом",
+    "decimal": "{{kind}} должен быть десятичным числом",
+    "unknown": "неизвестный тип {{kind}}"
+  },
+  "limit": {
+    "unknownPolicy": "неизвестная политика {{policy}}",
+    "unknownScope": "неизвестный скоп {{scope}}",
+    "scopeNotAllowed": "скоп {{scope}} не допускается для {{policy}}",
+    "scopeNoAccount": "скоп {{scope}} не должен содержать счёт",
+    "scopeNoAsset": "скоп {{scope}} не должен содержать актив",
+    "rateLimitRequires": "rate_limit требует указания max_orders и window",
+    "orderSizeRequires": "order_size_limit требует max_quantity или max_notional",
+    "pnlRequires": "pnl_bounds_kill_switch требует lower_bound или upper_bound",
+    "pnlBoundOrder": "lower_bound должен быть <= upper_bound"
+  }
+}

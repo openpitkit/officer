@@ -1,0 +1,13 @@
+{
+  "code": {
+    "validation": "The request was rejected as invalid.",
+    "not_found": "The requested resource was not found.",
+    "conflict": "The request conflicts with the current state.",
+    "precondition": "A precondition for the request was not met.",
+    "internal": "The service encountered an internal error.",
+    "network": "Could not reach the service."
+  },
+  "http": "request to {{path}} failed with HTTP {{status}}",
+  "network": "network error contacting {{path}}: {{detail}}",
+  "invalidJson": "response from {{path}} was not valid JSON"
+}

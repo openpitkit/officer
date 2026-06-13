@@ -1,0 +1,40 @@
+{
+  "title": "行情数据",
+  "instances": {
+    "title": "来源"
+  },
+  "instance": {
+    "id": "实例 ID",
+    "type": "提供方",
+    "label": "标签",
+    "credentials": "凭据 JSON"
+  },
+  "instrument": {
+    "externalSymbol": "外部代码",
+    "baseAsset": "基础资产",
+    "quoteAsset": "计价资产"
+  },
+  "actions": {
+    "addInstance": "添加来源",
+    "addInstrument": "添加工具",
+    "enable": "启用",
+    "disable": "停用",
+    "deleteInstance": "删除来源",
+    "deleteInstrument": "删除工具"
+  },
+  "state": {
+    "enabled": "已启用",
+    "disabled": "已停用",
+    "stale": "滞后"
+  },
+  "table": {
+    "external": "外部",
+    "instrument": "工具",
+    "price": "价格",
+    "asOf": "截至",
+    "state": "状态",
+    "actions": "操作"
+  },
+  "emptyInstances": "未配置行情数据来源",
+  "emptyInstruments": "未配置工具"
+}

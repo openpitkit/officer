@@ -1,0 +1,32 @@
+{
+  "title": "Сервис",
+  "refreshAriaLabel": "Обновить информацию о сервисе",
+  "application": {
+    "title": "Приложение",
+    "name": "Название",
+    "defaultName": "Pit Officer",
+    "build": "Сборка",
+    "nonRelease": "не-релиз"
+  },
+  "engine": {
+    "title": "Движок",
+    "version": "Версия",
+    "profile": "Профиль"
+  },
+  "database": {
+    "title": "База данных",
+    "reachable": "доступна",
+    "unreachable": "недоступна",
+    "reachableLabel": "Доступность",
+    "path": "Путь"
+  },
+  "api": {
+    "title": "API",
+    "rest": "REST API",
+    "openApiDocs": "Документация OpenAPI / Swagger",
+    "mcp": "MCP API",
+    "configureAccess": "Настроить доступ",
+    "loadingCommands": "Загрузка команд…",
+    "noCommands": "Команды не определены."
+  }
+}

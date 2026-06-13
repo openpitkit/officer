@@ -1,0 +1,51 @@
+{
+  "language": {
+    "label": "Язык",
+    "ariaLabel": "Изменить язык"
+  },
+  "actions": {
+    "refresh": "Обновить",
+    "retry": "Повторить",
+    "cancel": "Отмена",
+    "delete": "Удалить",
+    "copy": "Копировать",
+    "copied": "Скопировано",
+    "close": "Закрыть",
+    "dismissError": "Скрыть ошибку"
+  },
+  "value": {
+    "none": "—",
+    "yes": "да",
+    "no": "нет"
+  },
+  "nav": {
+    "dashboard": "Панель",
+    "accounts": "Счета",
+    "positions": "Позиции",
+    "orders": "Ордера",
+    "policies": "Политики",
+    "audit": "Аудит",
+    "mcpAccess": "Доступ MCP",
+    "marketData": "Рыночные данные",
+    "service": "Сервис"
+  },
+  "brand": {
+    "name": "Pit Officer",
+    "logoAriaLabel": "Логотип Pit",
+    "nonRelease": "не-релиз"
+  },
+  "theme": {
+    "label": "Тема",
+    "ariaLabel": "Тема: {{mode}}",
+    "dark": "Тёмная",
+    "light": "Светлая",
+    "system": "Системная"
+  },
+  "states": {
+    "loadError": "Не удалось загрузить данные",
+    "copyableSnippet": "Копируемый фрагмент"
+  },
+  "topBar": {
+    "toggleNav": "Переключить навигацию"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "title": "Service",
+  "refreshAriaLabel": "Refresh service info",
+  "application": {
+    "title": "Application",
+    "name": "Name",
+    "defaultName": "Pit Officer",
+    "build": "Build",
+    "nonRelease": "non-release"
+  },
+  "engine": {
+    "title": "Engine",
+    "version": "Version",
+    "profile": "Profile"
+  },
+  "database": {
+    "title": "Database",
+    "reachable": "reachable",
+    "unreachable": "unreachable",
+    "reachableLabel": "Reachable",
+    "path": "Path"
+  },
+  "api": {
+    "title": "API",
+    "rest": "REST API",
+    "openApiDocs": "OpenAPI / Swagger docs",
+    "mcp": "MCP API",
+    "configureAccess": "Configure access",
+    "loadingCommands": "Loading commands…",
+    "noCommands": "No commands defined."
+  }
+}

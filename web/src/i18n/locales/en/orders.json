@@ -1,0 +1,140 @@
+{
+  "title": "Orders",
+  "subtitle": "Data-plane view: orders flowing through Officer, their lifecycle events, and the resulting trades. Select an order row to see its event timeline and fills.",
+
+  "tab": {
+    "orders": "Orders",
+    "trades": "Trades"
+  },
+
+  "filter": {
+    "accountPlaceholder": "Filter by account…",
+    "sourceAll": "All sources",
+    "sourceAriaLabel": "Source",
+    "sizeAriaLabel": "Page size",
+    "sizeRows": "{{count}} rows"
+  },
+
+  "table": {
+    "id": "ID",
+    "account": "Account",
+    "instrument": "Instrument",
+    "side": "Side",
+    "amount": "Amount",
+    "price": "Price",
+    "status": "Status",
+    "source": "Source",
+    "time": "Time",
+    "order": "Order",
+    "qty": "Qty",
+    "lockPrice": "Lock price"
+  },
+
+  "amount": {
+    "qty": "{{value}} qty",
+    "vol": "{{value}} vol"
+  },
+
+  "price": {
+    "market": "market"
+  },
+
+  "empty": {
+    "orders": {
+      "title": "No orders yet",
+      "hint": "Orders submitted through the panel, API, or MCP will appear here."
+    },
+    "trades": {
+      "title": "No trades yet",
+      "hint": "Trades result from execution reports submitted against orders."
+    }
+  },
+
+  "addOrder": {
+    "button": "Add Order",
+    "added": "Order added",
+    "dialog": {
+      "title": "Add order",
+      "description": "Add an order to evaluate it against the risk engine. This is an emulation - nothing is sent to any market. Without a price it is treated as a market order and may be rejected.",
+      "account": "Account",
+      "accountPlaceholder": "e.g. desk-alpha",
+      "baseAsset": "Base asset",
+      "baseAssetPlaceholder": "e.g. AAPL",
+      "quoteAsset": "Quote asset",
+      "quoteAssetPlaceholder": "e.g. USD",
+      "side": "Side",
+      "sideOptions": {
+        "buy": "Buy",
+        "sell": "Sell"
+      },
+      "amountKind": "Amount kind",
+      "amountKindOptions": {
+        "quantity": "Quantity (base)",
+        "volume": "Volume (quote)"
+      },
+      "amount": "Amount",
+      "amountPlaceholder": "e.g. 100",
+      "limitPrice": "Limit price (optional)",
+      "limitPricePlaceholder": "leave empty = market",
+      "submitBusy": "Adding…",
+      "submit": "Add Order",
+      "validationError": "Account, instrument, and amount are required."
+    }
+  },
+
+  "check": {
+    "checking": "Checking...",
+    "previewUnavailable": "Preview unavailable",
+    "wouldPass": "Preview: would pass",
+    "wouldReject": "Preview: would reject",
+    "lockPrices": "Lock prices: {{prices}}",
+    "wouldBlock": "Would block account {{account}}",
+    "wouldBlockReason": "Would block account {{account}} - {{reason}}"
+  },
+
+  "execReport": {
+    "dialog": {
+      "title": "Submit execution report",
+      "description": "Order #{{orderId}} — record a fill to emulate a partial or full execution.",
+      "fillQty": "Fill quantity",
+      "fillQtyPlaceholder": "e.g. 50",
+      "fillPrice": "Fill price",
+      "fillPricePlaceholder": "e.g. 192.40",
+      "lockPrice": "Lock price (optional)",
+      "lockPricePlaceholder": "optional",
+      "finalFill": "Final fill (closes the order)",
+      "submitBusy": "Submitting…",
+      "submit": "Submit",
+      "accepted": "Execution report accepted.",
+      "done": "Done",
+      "validationError": "Quantity and price are required."
+    }
+  },
+
+  "detail": {
+    "dialog": {
+      "title": "Order #{{orderId}}",
+      "fieldAccount": "Account",
+      "fieldStatus": "Status",
+      "fieldSource": "Source",
+      "fieldSubmitted": "Submitted",
+      "fieldLockPrices": "Lock prices",
+      "timeline": {
+        "sectionTitle": "Event timeline",
+        "empty": "No events recorded.",
+        "by": "by {{principal}}",
+        "fillQty": "qty {{qty}}",
+        "fillAt": "@ {{price}}",
+        "fillLock": "(lock {{price}})",
+        "rejectCode": "code {{code}}",
+        "rejectScope": "scope {{scope}}",
+        "rejectPolicy": "policy {{policy}}"
+      },
+      "trades": {
+        "sectionTitle": "Trades for this order",
+        "empty": "No fills recorded yet. Submit an execution report to create a trade.",
+        "submitExecReport": "Submit execution report"
+      }
+    }
+  }
+}

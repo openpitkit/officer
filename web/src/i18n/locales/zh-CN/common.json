@@ -1,0 +1,51 @@
+{
+  "language": {
+    "label": "语言",
+    "ariaLabel": "切换语言"
+  },
+  "actions": {
+    "refresh": "刷新",
+    "retry": "重试",
+    "cancel": "取消",
+    "delete": "删除",
+    "copy": "复制",
+    "copied": "已复制",
+    "close": "关闭",
+    "dismissError": "关闭错误"
+  },
+  "value": {
+    "none": "—",
+    "yes": "是",
+    "no": "否"
+  },
+  "nav": {
+    "dashboard": "仪表盘",
+    "accounts": "账户",
+    "positions": "持仓",
+    "orders": "订单",
+    "policies": "策略",
+    "audit": "审计",
+    "mcpAccess": "MCP 访问",
+    "marketData": "行情数据",
+    "service": "服务"
+  },
+  "brand": {
+    "name": "Pit Officer",
+    "logoAriaLabel": "Pit 标志",
+    "nonRelease": "非正式版本"
+  },
+  "theme": {
+    "label": "主题",
+    "ariaLabel": "主题：{{mode}}",
+    "dark": "深色",
+    "light": "浅色",
+    "system": "跟随系统"
+  },
+  "states": {
+    "loadError": "数据加载失败",
+    "copyableSnippet": "可复制片段"
+  },
+  "topBar": {
+    "toggleNav": "切换导航"
+  }
+}

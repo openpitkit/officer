@@ -15,15 +15,18 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
+import { useTranslation } from "react-i18next";
+
 /** The Pit bar-chart glyph, in the current accent color. Mirrors the website
  *  favicon (pit/docs/favicon-*.svg) but recolored to follow the theme
  *  accent. */
 export function BrandMark({ className }: { className?: string }) {
+  const { t } = useTranslation();
   return (
     <svg
       viewBox="-4 -4 72 72"
       role="img"
-      aria-label="Pit logo"
+      aria-label={t("brand.logoAriaLabel")}
       className={className}
       fill="none"
     >

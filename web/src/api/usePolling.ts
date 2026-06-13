@@ -48,8 +48,11 @@ export function usePolling<T>(
   const [nonce, setNonce] = useState(0);
 
   // Hold the latest fetcher so the polling effect does not restart when an
-  // inline closure identity changes between renders.
+  // inline closure identity changes between renders. The render-phase write
+  // is intentional: the running interval must call the current fetcher
+  // without re-subscribing, so the ref cannot lag behind in an effect.
   const fetcherRef = useRef(fetcher);
+  // eslint-disable-next-line react-hooks/refs
   fetcherRef.current = fetcher;
 
   const reload = useCallback(() => {

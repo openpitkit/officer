@@ -53,6 +53,7 @@ import (
 	"go.openpit.dev/officer/internal/domain"
 	"go.openpit.dev/officer/internal/engine"
 	"go.openpit.dev/officer/internal/httpapi"
+	"go.openpit.dev/officer/internal/marketdata"
 	officermcp "go.openpit.dev/officer/internal/mcp"
 	"go.openpit.dev/officer/internal/node"
 	officerruntime "go.openpit.dev/officer/internal/runtime"
@@ -101,13 +102,15 @@ func run(args []string, logger *slog.Logger) error {
 
 // controlPlane bundles the assembled control-plane components so the two run
 // modes share one setup path and one shutdown path. It does not hold an engine
-// handle directly: the engine can be swapped on a rebuild, so its live state is
-// reached only through the node (Health, EngineVersion), never a captured
-// handle.
+// handle directly: live engine state is reached through the node (Health,
+// EngineVersion), never a captured handle. It holds the market-data manager so
+// close can stop the quote producers before the node stops the engine and closes
+// the market-data service.
 type controlPlane struct {
-	service *backend.Service
-	node    node.Node
-	cfg     config.Config
+	service    *backend.Service
+	node       node.Node
+	marketData *marketdata.Manager
+	cfg        config.Config
 }
 
 // setup performs the shared startup for the mcp and serve modes: open the
@@ -140,8 +143,6 @@ func setup(ctx context.Context, cfg config.Config, logger *slog.Logger) (
 		_ = st.Close()
 		return nil, fmt.Errorf("build node: %w", err)
 	}
-	// eng is a startup snapshot used only for this log line; the node owns the
-	// live handle and may swap it on a rebuild, so nothing else captures it.
 	logger.Info("engine built and seeded from store",
 		"version", eng.Version(), "profile", eng.BuildProfile())
 
@@ -151,16 +152,33 @@ func setup(ctx context.Context, cfg config.Config, logger *slog.Logger) (
 		return nil, fmt.Errorf("build router: %w", err)
 	}
 
+	// The engine sink is valid for the whole process (the engine is never
+	// rebuilt). The manager brings up the enabled connectors and drains their
+	// quotes into the sink; nothing enabled is a clean no-op, and a bad instance
+	// is logged and skipped, so Start never fails setup on configuration alone.
+	manager := marketdata.NewManager(st, eng.MarketDataSink(), logger)
+	if err := manager.Start(ctx); err != nil {
+		_ = localNode.Close()
+		return nil, fmt.Errorf("start market-data manager: %w", err)
+	}
+
 	return &controlPlane{
-		service: backend.New(router),
-		node:    localNode,
-		cfg:     cfg,
+		service:    backend.New(router),
+		node:       localNode,
+		marketData: manager,
+		cfg:        cfg,
 	}, nil
 }
 
-// close shuts the control plane down: closing the node stops the engine and
-// closes the store (node.Close is idempotent and orders the two correctly).
+// close shuts the control plane down. The market-data manager is stopped first
+// so quote producers stop before node.Close stops the engine and closes the
+// market-data service (pushing into a closed service would be a use-after-free).
+// Closing the node then stops the engine and closes the store. Both steps are
+// idempotent.
 func (cp *controlPlane) close() error {
+	if cp.marketData != nil {
+		cp.marketData.Stop()
+	}
 	if err := cp.node.Close(); err != nil {
 		return fmt.Errorf("close node: %w", err)
 	}
@@ -452,9 +470,9 @@ func openBrowser(url string) error {
 }
 
 // nodeVersionSource adapts a node.Node to the MCP surface's VersionSource seam.
-// It reads the node's CURRENT engine version, so the version survives an engine
-// rebuild that swapped the handle - capturing the engine handle directly would
-// go stale after a rebuild.
+// It reads the engine version through the node rather than a captured handle, so
+// access goes through one serialized path; the handle is permanent (officer
+// never rebuilds the engine).
 type nodeVersionSource struct {
 	node node.Node
 }
@@ -519,6 +537,13 @@ func (a sourceAdapter) CheckOrder(
 	ctx context.Context, probe domain.OrderProbe,
 ) (domain.CheckResult, error) {
 	return a.service.CheckOrder(ctx, probe)
+}
+
+// SetMarketDataInstrumentEnabled delegates to the backend service.
+func (a sourceAdapter) SetMarketDataInstrumentEnabled(
+	ctx context.Context, instanceID, externalSymbol string, enabled bool,
+) error {
+	return a.service.SetMarketDataInstrumentEnabled(ctx, instanceID, externalSymbol, enabled)
 }
 
 // CommandEnabled delegates to the backend's effective MCP-access read so the

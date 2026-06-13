@@ -1,0 +1,175 @@
+{
+  "page": {
+    "title": "Accounts",
+    "description": "Operator accounts persisted in the control plane and applied to the engine. Block an account or group to halt orders via the kill switch."
+  },
+  "groups": {
+    "heading": "Groups",
+    "clearFilter": "(clear filter)",
+    "defaultGroup": "Default group",
+    "defaultGroupNote": "All accounts without an assigned group.",
+    "columns": {
+      "group": "Group",
+      "accounts": "Accounts",
+      "status": "Status",
+      "notes": "Notes",
+      "actions": "Actions"
+    },
+    "status": {
+      "blocked": "blocked",
+      "active": "active"
+    },
+    "actions": {
+      "notes": "Notes",
+      "editNotesTitle": "Edit notes",
+      "block": "Block",
+      "unblock": "Unblock",
+      "delete": "Delete",
+      "deleteTitle": "Delete group"
+    }
+  },
+  "accounts": {
+    "heading": "Accounts",
+    "filteredTo": "— filtered to",
+    "filteredToDefault": "default group",
+    "columns": {
+      "account": "Account",
+      "group": "Group",
+      "status": "Status",
+      "notes": "Notes",
+      "actions": "Actions"
+    },
+    "status": {
+      "blocked": "blocked",
+      "active": "active"
+    },
+    "groupCell": {
+      "title": "Group — click to change",
+      "titleNoGroups": "Group — click to change (no groups yet)",
+      "noGroup": "none"
+    },
+    "links": {
+      "positions": "Positions — spot limits for this account",
+      "trading": "Trading — orders & trades",
+      "policies": "Policies — risk barriers",
+      "audit": "Audit — log for this account"
+    },
+    "actions": {
+      "notes": "Notes",
+      "editNotesTitle": "Edit reference notes",
+      "block": "Block",
+      "unblock": "Unblock"
+    },
+    "empty": {
+      "title": "No accounts",
+      "hintFiltered": "No accounts are assigned to this group.",
+      "hintEmpty": "Create the first account to start applying risk limits to it."
+    }
+  },
+  "createAccount": {
+    "trigger": "New account",
+    "title": "Create account",
+    "idLabel": "Account id",
+    "idHint": "Up to 64 printable characters, no leading or trailing whitespace.",
+    "groupLabel": "Group (optional)",
+    "groupHint": "Choose an existing group or type a new id. Leave blank to create an ungrouped account.",
+    "cancel": "Cancel",
+    "submit": "Create"
+  },
+  "createGroup": {
+    "trigger": "New group",
+    "title": "Create group",
+    "idLabel": "Group id",
+    "notesLabel": "Notes (optional)",
+    "notesPlaceholder": "Accounts belonging to the US equity trading desks.",
+    "notesHint": "Reference notes — stored in the control plane only, not sent to the engine.",
+    "cancel": "Cancel",
+    "submit": "Create"
+  },
+  "loadAccounts": {
+    "trigger": "Load accounts",
+    "title": "Load accounts from CSV",
+    "formatHeading": "CSV format",
+    "formatLine1": "One account per line:",
+    "formatCode1": "account_id[,group[,notes]]",
+    "formatLine2prefix": "is required;",
+    "formatLine2middle": "and",
+    "formatLine2suffix": "are optional.",
+    "formatLine3prefix": "A header row (",
+    "formatLine3code": "account_id,group,notes",
+    "formatLine3suffix": ") is allowed and skipped automatically.",
+    "examplesHeading": "Examples",
+    "chooseFile": "Choose file…",
+    "orPasteBelow": "or paste below",
+    "parsedRows_one": "{{count}} row parsed.",
+    "parsedRows_other": "{{count}} rows parsed.",
+    "results": {
+      "summary": "Results — {{created}} created, {{skipped}} skipped, {{errors}} errors"
+    },
+    "import_one": "Import {{count}} row",
+    "import_other": "Import {{count}} rows",
+    "importEmpty": "Import",
+    "close": "Close",
+    "cancel": "Cancel",
+    "alreadyExists": "already exists"
+  },
+  "blockAccount": {
+    "titlePrefix": "Block account",
+    "description": "Blocking halts new orders for this account. A reason is required and is recorded in the audit log.",
+    "reasonLabel": "Reason",
+    "reasonPlaceholder": "Kill-switch: risk limit breach during incident #42",
+    "cancel": "Cancel",
+    "submit": "Block"
+  },
+  "unblockAccount": {
+    "title": "Unblock account?",
+    "descriptionPrefix": "Account",
+    "descriptionSuffix": "will accept new orders again. This is recorded in the audit log.",
+    "cancel": "Cancel",
+    "submit": "Unblock"
+  },
+  "blockGroup": {
+    "titlePrefix": "Block group",
+    "description": "Blocking halts new orders for all accounts in this group. A reason is required and is recorded in the audit log.",
+    "reasonLabel": "Reason",
+    "reasonPlaceholder": "Kill-switch: risk limit breach during incident #42",
+    "cancel": "Cancel",
+    "submit": "Block"
+  },
+  "unblockGroup": {
+    "title": "Unblock group?",
+    "descriptionPrefix": "Group",
+    "descriptionSuffix": "accounts will accept new orders again. This is recorded in the audit log.",
+    "cancel": "Cancel",
+    "submit": "Unblock"
+  },
+  "deleteGroup": {
+    "title": "Delete group?",
+    "descriptionPrefix": "Group",
+    "descriptionSuffix": "will be permanently removed. Accounts currently assigned to this group will have their group assignment cleared.",
+    "cancel": "Cancel",
+    "submit": "Delete"
+  },
+  "editGroupNotes": {
+    "titlePrefix": "Notes — group",
+    "description": "Reference notes stored in the control plane. Not sent to the engine and have no effect on risk evaluation.",
+    "notesLabel": "Notes",
+    "cancel": "Cancel",
+    "submit": "Save"
+  },
+  "editAccountNotes": {
+    "titlePrefix": "Notes —",
+    "description": "Reference notes stored in the control plane. Not sent to the engine and have no effect on risk evaluation.",
+    "notesLabel": "Notes",
+    "cancel": "Cancel",
+    "submit": "Save"
+  },
+  "assignGroup": {
+    "titlePrefix": "Assign group —",
+    "description": "Choose an existing group or type a new id. Leave blank to clear the group assignment.",
+    "groupLabel": "Group",
+    "cancel": "Cancel",
+    "assign": "Assign",
+    "clear": "Clear"
+  }
+}

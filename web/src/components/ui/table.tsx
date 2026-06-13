@@ -19,6 +19,14 @@ import { forwardRef, type HTMLAttributes, type TdHTMLAttributes, type ThHTMLAttr
 
 import { cn } from "@/lib/utils";
 
+// Column visibility by breakpoint: pass hideBelow="md" on secondary columns to
+// drop them on mobile; primary columns omit the prop.
+const HIDE_BELOW = {
+  sm: "hidden sm:table-cell",
+  md: "hidden md:table-cell",
+  lg: "hidden lg:table-cell",
+} as const;
+
 const Table = forwardRef<
   HTMLTableElement,
   HTMLAttributes<HTMLTableElement>
@@ -70,12 +78,13 @@ TableRow.displayName = "TableRow";
 
 const TableHead = forwardRef<
   HTMLTableCellElement,
-  ThHTMLAttributes<HTMLTableCellElement>
->(({ className, ...props }, ref) => (
+  ThHTMLAttributes<HTMLTableCellElement> & { hideBelow?: "sm" | "md" | "lg" }
+>(({ className, hideBelow, ...props }, ref) => (
   <th
     ref={ref}
     className={cn(
       "h-9 px-3 text-left align-middle text-[0.6875rem] font-bold uppercase tracking-[0.07em] text-muted",
+      hideBelow && HIDE_BELOW[hideBelow],
       className,
     )}
     {...props}
@@ -85,11 +94,15 @@ TableHead.displayName = "TableHead";
 
 const TableCell = forwardRef<
   HTMLTableCellElement,
-  TdHTMLAttributes<HTMLTableCellElement>
->(({ className, ...props }, ref) => (
+  TdHTMLAttributes<HTMLTableCellElement> & { hideBelow?: "sm" | "md" | "lg" }
+>(({ className, hideBelow, ...props }, ref) => (
   <td
     ref={ref}
-    className={cn("px-3 py-2 align-middle text-text", className)}
+    className={cn(
+      "px-3 py-2 align-middle text-text",
+      hideBelow && HIDE_BELOW[hideBelow],
+      className,
+    )}
     {...props}
   />
 ));

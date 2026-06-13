@@ -1,0 +1,104 @@
+{
+  "title": "持仓",
+  "actions": {
+    "adjust": "调整",
+    "adjustAriaLabel": "调整 {{account}} {{asset}}",
+    "refreshHistoryAriaLabel": "刷新历史记录"
+  },
+  "filters": {
+    "byAccount": "按账户筛选",
+    "byAsset": "按资产筛选"
+  },
+  "balances": {
+    "sectionLabel": "余额",
+    "columns": {
+      "account": "账户",
+      "asset": "资产",
+      "available": "可用",
+      "held": "冻结",
+      "incoming": "待入账",
+      "avgEntryPrice": "平均建仓价",
+      "realizedPnl": "已实现盈亏",
+      "updated": "更新时间",
+      "actions": "操作"
+    },
+    "empty": {
+      "title": "暂无余额",
+      "hint": "使用「调整」功能为账户和资产设定现货资金余额。"
+    }
+  },
+  "history": {
+    "sectionLabel": "调整历史",
+    "sourceLabel": "来源",
+    "sourceAll": "全部",
+    "columns": {
+      "time": "时间",
+      "account": "账户",
+      "asset": "资产",
+      "source": "来源",
+      "request": "请求",
+      "status": "状态",
+      "outcome": "结果"
+    },
+    "empty": {
+      "title": "暂无调整记录",
+      "hint": "每次提交后，调整记录将显示于此。"
+    },
+    "request": {
+      "balanceDelta": "余额 Δ{{value}}",
+      "balanceAbsolute": "余额 ={{value}}",
+      "heldDelta": "冻结 Δ{{value}}",
+      "heldAbsolute": "冻结 ={{value}}",
+      "incomingDelta": "待入账 Δ{{value}}",
+      "incomingAbsolute": "待入账 ={{value}}",
+      "avgPrice": "均价 {{value}}"
+    },
+    "status": {
+      "rejected": "已拒绝",
+      "accepted": "已接受"
+    }
+  },
+  "dialog": {
+    "title": "调整持仓",
+    "description": "为账户和资产设定或更新现货资金余额。使用绝对模式设定具体数值，使用增量模式进行加减。",
+    "fields": {
+      "account": "账户",
+      "asset": "资产",
+      "avgEntryPrice": "平均建仓价（可选）",
+      "avgEntryPriceHint": "正小数。留空则保留当前值。"
+    },
+    "amounts": {
+      "sectionLabel": "金额",
+      "balance": "余额",
+      "held": "冻结",
+      "incoming": "待入账"
+    },
+    "bounds": {
+      "sectionLabel": "边界（可选）",
+      "balanceLabel": "余额边界",
+      "heldLabel": "冻结边界",
+      "incomingLabel": "待入账边界",
+      "lower": "下限",
+      "upper": "上限"
+    },
+    "mode": {
+      "absolute": "绝对值",
+      "delta": "增量"
+    },
+    "outcome": {
+      "rejectedTitle": "已拒绝",
+      "acceptedTitle": "已接受",
+      "fieldBalance": "余额",
+      "fieldHeld": "冻结",
+      "fieldIncoming": "待入账"
+    },
+    "footer": {
+      "close": "关闭",
+      "submit": "提交"
+    },
+    "error": {
+      "accountRequired": "账户为必填项。",
+      "assetRequired": "资产为必填项。"
+    }
+  }
+}

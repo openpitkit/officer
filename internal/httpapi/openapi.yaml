@@ -36,6 +36,10 @@ tags:
     description: Risk limit barriers
   - name: audit
     description: Append-only audit trail
+  - name: mcp-access
+    description: MCP command access control
+  - name: market-data
+    description: Market-data source configuration and latest quote snapshots
   - name: dashboard
     description: Overview and service information
 
@@ -1122,6 +1126,216 @@ paths:
           $ref: "#/components/responses/InternalError"
 
   # ---------------------------------------------------------------------------
+  # Market data
+  # ---------------------------------------------------------------------------
+
+  /market-data:
+    get:
+      operationId: listMarketData
+      summary: List market-data providers, source instances, instruments, and latest quotes
+      tags: [market-data]
+      responses:
+        "200":
+          description: Market-data control-plane snapshot.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [marketData]
+                properties:
+                  marketData:
+                    $ref: "#/components/schemas/MarketData"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /market-data/instances:
+    post:
+      operationId: createMarketDataInstance
+      summary: Create a market-data source instance
+      tags: [market-data]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MarketDataInstance"
+      responses:
+        "201":
+          description: Instance created; returns the refreshed market-data snapshot.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [marketData]
+                properties:
+                  marketData:
+                    $ref: "#/components/schemas/MarketData"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /market-data/instances/{id}/enabled:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: URL-encoded market-data instance identifier.
+        schema:
+          type: string
+    put:
+      operationId: setMarketDataInstanceEnabled
+      summary: Enable or disable a market-data source instance
+      tags: [market-data]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled:
+                  type: boolean
+      responses:
+        "200":
+          description: Enabled flag persisted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [enabled]
+                properties:
+                  enabled:
+                    type: boolean
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /market-data/instances/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: URL-encoded market-data instance identifier.
+        schema:
+          type: string
+    delete:
+      operationId: deleteMarketDataInstance
+      summary: Delete a market-data source instance
+      tags: [market-data]
+      responses:
+        "204":
+          description: Instance deleted.
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /market-data/instances/{id}/instruments:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: URL-encoded market-data instance identifier.
+        schema:
+          type: string
+    put:
+      operationId: upsertMarketDataInstrument
+      summary: Add or replace one market-data instrument mapping
+      tags: [market-data]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MarketDataInstrument"
+      responses:
+        "200":
+          description: Instrument persisted; returns the refreshed market-data snapshot.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [marketData]
+                properties:
+                  marketData:
+                    $ref: "#/components/schemas/MarketData"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    delete:
+      operationId: deleteMarketDataInstrument
+      summary: Delete one market-data instrument mapping
+      tags: [market-data]
+      parameters:
+        - name: externalSymbol
+          in: query
+          required: true
+          description: Provider-side symbol to delete.
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Instrument deleted.
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /market-data/instances/{id}/instruments/enabled:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: URL-encoded market-data instance identifier.
+        schema:
+          type: string
+    put:
+      operationId: setMarketDataInstrumentEnabled
+      summary: Enable or disable one market-data instrument mapping
+      tags: [market-data]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [externalSymbol, enabled]
+              properties:
+                externalSymbol:
+                  type: string
+                enabled:
+                  type: boolean
+      responses:
+        "200":
+          description: Enabled flag persisted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [enabled]
+                properties:
+                  enabled:
+                    type: boolean
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ---------------------------------------------------------------------------
   # Dashboard / service
   # ---------------------------------------------------------------------------
 
@@ -1821,6 +2035,105 @@ components:
           type: boolean
         database:
           $ref: "#/components/schemas/ServiceDatabase"
+
+    # Market data
+
+    MarketData:
+      type: object
+      required: [providers, instances, freshnessSeconds]
+      properties:
+        providers:
+          type: array
+          items:
+            $ref: "#/components/schemas/MarketDataProvider"
+        instances:
+          type: array
+          items:
+            $ref: "#/components/schemas/MarketDataInstance"
+        freshnessSeconds:
+          type: integer
+          description: >
+            Quote freshness window in seconds. An enabled instrument is stale
+            when no quote has been received or the latest quote is older.
+
+    MarketDataProvider:
+      type: object
+      required: [type, title]
+      properties:
+        type:
+          type: string
+          description: Provider type identifier.
+          enum: [byo, binance, mock]
+        title:
+          type: string
+
+    MarketDataInstance:
+      type: object
+      required: [id, type, label, credentials, enabled]
+      properties:
+        id:
+          type: string
+          description: Market-data source instance identifier.
+        type:
+          type: string
+          description: Provider type identifier.
+          enum: [byo, binance, mock]
+        label:
+          type: string
+          description: Human-readable label shown in the operator panel.
+        credentials:
+          type: string
+          description: Raw provider credentials JSON, or empty for providers that need none.
+        enabled:
+          type: boolean
+        instruments:
+          type: array
+          items:
+            $ref: "#/components/schemas/MarketDataInstrument"
+
+    MarketDataInstrument:
+      type: object
+      required: [externalSymbol, baseAsset, quoteAsset, enabled]
+      properties:
+        instanceId:
+          type: string
+          description: Present on read responses; the path id is authoritative on writes.
+        externalSymbol:
+          type: string
+          description: Provider-side instrument symbol.
+        baseAsset:
+          type: string
+        quoteAsset:
+          type: string
+        enabled:
+          type: boolean
+        stale:
+          type: boolean
+          description: Whether the latest quote is missing or older than `freshnessSeconds`.
+        quote:
+          $ref: "#/components/schemas/MarketDataQuote"
+
+    MarketDataQuote:
+      type: object
+      required: [asOf, receivedAt, mark, bid, ask]
+      properties:
+        asOf:
+          type: string
+          format: date-time
+          description: Provider quote timestamp.
+        receivedAt:
+          type: string
+          format: date-time
+          description: Time the Officer connector manager received the quote.
+        mark:
+          type: string
+          description: Exact decimal string.
+        bid:
+          type: string
+          description: Exact decimal string.
+        ask:
+          type: string
+          description: Exact decimal string.
 
     # MCP access control
 

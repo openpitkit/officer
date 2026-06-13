@@ -16,6 +16,7 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import {
   ArrowLeftRight,
@@ -166,6 +167,7 @@ interface RowResult {
 }
 
 function LoadAccountsDialog({ onLoaded }: { onLoaded: () => void }) {
+  const { t } = useTranslation("accounts");
   const [open, setOpen] = useState(false);
   const [csvText, setCsvText] = useState("");
   const [results, setResults] = useState<RowResult[] | null>(null);
@@ -199,7 +201,7 @@ function LoadAccountsDialog({ onLoaded }: { onLoaded: () => void }) {
         await createAccount(row.id);
       } catch (err) {
         if (err instanceof ApiError && err.code === "conflict") {
-          out.push({ id: row.id, status: "skipped", detail: "already exists" });
+          out.push({ id: row.id, status: "skipped", detail: t("loadAccounts.alreadyExists") });
           // Still apply group/notes updates on an existing account.
         } else {
           out.push({ id: row.id, status: "error", detail: errMessage(err) });
@@ -260,19 +262,21 @@ function LoadAccountsDialog({ onLoaded }: { onLoaded: () => void }) {
     >
       <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
         <Upload className="h-3.5 w-3.5" />
-        Load accounts
+        {t("loadAccounts.trigger")}
       </Button>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Load accounts from CSV</DialogTitle>
+          <DialogTitle>{t("loadAccounts.title")}</DialogTitle>
         </DialogHeader>
 
         <div className="rounded-card border border-border bg-muted/30 p-3 text-[0.6875rem] text-muted space-y-1">
-          <p className="font-medium text-text">CSV format</p>
-          <p>One account per line: <code>account_id[,group[,notes]]</code></p>
-          <p><code>account_id</code> is required; <code>group</code> and <code>notes</code> are optional.</p>
-          <p>A header row (<code>account_id,group,notes</code>) is allowed and skipped automatically.</p>
-          <p className="pt-1 font-medium text-text">Examples</p>
+          <p className="font-medium text-text">{t("loadAccounts.formatHeading")}</p>
+          <p>{t("loadAccounts.formatLine1")} <code>{t("loadAccounts.formatCode1")}</code></p>
+          {/* account_id/group/notes are literal CSV column identifiers, not UI copy. */}
+          {/* eslint-disable-next-line i18next/no-literal-string */}
+          <p><code>account_id</code> {t("loadAccounts.formatLine2prefix")} <code>group</code> {t("loadAccounts.formatLine2middle")} <code>notes</code> {t("loadAccounts.formatLine2suffix")}</p>
+          <p>{t("loadAccounts.formatLine3prefix")}<code>{t("loadAccounts.formatLine3code")}</code>{t("loadAccounts.formatLine3suffix")}</p>
+          <p className="pt-1 font-medium text-text">{t("loadAccounts.examplesHeading")}</p>
           <pre className="overflow-x-auto whitespace-pre">
 {`desk-alpha,equity-desks,Primary cash desk
 desk-beta,equity-desks
@@ -296,9 +300,9 @@ account_id,group,notes`}
               onClick={() => fileRef.current?.click()}
               disabled={busy}
             >
-              Choose file…
+              {t("loadAccounts.chooseFile")}
             </Button>
-            <span className="text-[0.6875rem] text-muted-lt">or paste below</span>
+            <span className="text-[0.6875rem] text-muted-lt">{t("loadAccounts.orPasteBelow")}</span>
           </div>
           <textarea
             className="min-h-[7rem] w-full rounded-card border border-border bg-background p-2 font-mono text-[0.75rem] text-text placeholder:text-muted-lt focus:outline-none focus:ring-1 focus:ring-accent/40"
@@ -310,7 +314,7 @@ account_id,group,notes`}
           />
           {parsedCount > 0 && !results && (
             <p className="text-[0.6875rem] text-muted-lt">
-              {parsedCount} row{parsedCount !== 1 ? "s" : ""} parsed.
+              {t("loadAccounts.parsedRows", { count: parsedCount })}
             </p>
           )}
         </div>
@@ -318,15 +322,17 @@ account_id,group,notes`}
         {results && (
           <div className="space-y-1 rounded-card border border-border p-3">
             <p className="text-[0.6875rem] font-medium text-muted">
-              Results — {results.filter((r) => r.status === "created").length} created,{" "}
-              {results.filter((r) => r.status === "skipped").length} skipped,{" "}
-              {results.filter((r) => r.status === "error").length} errors
+              {t("loadAccounts.results.summary", {
+                created: results.filter((r) => r.status === "created").length,
+                skipped: results.filter((r) => r.status === "skipped").length,
+                errors: results.filter((r) => r.status === "error").length,
+              })}
             </p>
             <ul className="max-h-40 overflow-y-auto space-y-0.5">
               {results.map((r, i) => (
                 <li key={i} className={`flex items-baseline gap-1.5 text-[0.6875rem] ${statusColor[r.status]}`}>
                   <span className="shrink-0">
-                    {r.status === "created" ? "✓" : r.status === "skipped" ? "–" : "✗"}
+                    {r.status === "created" ? t("loadAccounts.results.created") : r.status === "skipped" ? t("loadAccounts.results.skipped") : t("loadAccounts.results.error")}
                   </span>
                   <span className="nums">{r.id}</span>
                   {r.detail && <span className="text-muted-lt">— {r.detail}</span>}
@@ -343,7 +349,7 @@ account_id,group,notes`}
             onClick={() => setOpen(false)}
             disabled={busy}
           >
-            {results ? "Close" : "Cancel"}
+            {results ? t("loadAccounts.close") : t("loadAccounts.cancel")}
           </Button>
           {!results && (
             <Button
@@ -352,7 +358,7 @@ account_id,group,notes`}
               disabled={busy || parsedCount === 0}
             >
               <Upload className="h-3.5 w-3.5" />
-              Import {parsedCount > 0 ? `${parsedCount} row${parsedCount !== 1 ? "s" : ""}` : ""}
+              {parsedCount > 0 ? t("loadAccounts.import", { count: parsedCount }) : t("loadAccounts.importEmpty")}
             </Button>
           )}
         </DialogFooter>
@@ -372,6 +378,8 @@ function CreateAccountDialog({
   groupSuggestions: string[];
   onCreated: () => void;
 }) {
+  const { t } = useTranslation("validation");
+  const { t: ta } = useTranslation("accounts");
   const [open, setOpen] = useState(false);
   const [id, setId] = useState("");
   const [group, setGroup] = useState("");
@@ -390,7 +398,7 @@ function CreateAccountDialog({
   const submit = async () => {
     const v = validateAccountID(id);
     if (v) {
-      setError(v);
+      setError(t(v.key, v.values));
       return;
     }
     setBusy(true);
@@ -419,15 +427,15 @@ function CreateAccountDialog({
     >
       <Button size="sm" onClick={() => setOpen(true)}>
         <Plus className="h-3.5 w-3.5" />
-        New account
+        {ta("createAccount.trigger")}
       </Button>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Create account</DialogTitle>
+          <DialogTitle>{ta("createAccount.title")}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="account-id">Account id</Label>
+            <Label htmlFor="account-id">{ta("createAccount.idLabel")}</Label>
             <Input
               id="account-id"
               value={id}
@@ -442,14 +450,16 @@ function CreateAccountDialog({
               }}
             />
             <p className="text-[0.6875rem] text-muted">
-              Up to 64 printable characters, no leading or trailing whitespace.
+              {ta("createAccount.idHint")}
             </p>
             {validation && (
-              <p className="text-[0.6875rem] text-[var(--danger)]">{validation}</p>
+              <p className="text-[0.6875rem] text-[var(--danger)]">
+                {t(validation.key, validation.values)}
+              </p>
             )}
           </div>
           <div className="space-y-2">
-            <Label htmlFor="create-account-group">Group (optional)</Label>
+            <Label htmlFor="create-account-group">{ta("createAccount.groupLabel")}</Label>
             <Autocomplete
               id="create-account-group"
               value={group}
@@ -459,8 +469,7 @@ function CreateAccountDialog({
               spellCheck={false}
             />
             <p className="text-[0.6875rem] text-muted">
-              Choose an existing group or type a new id. Leave blank to create
-              an ungrouped account.
+              {ta("createAccount.groupHint")}
             </p>
           </div>
         </div>
@@ -472,14 +481,14 @@ function CreateAccountDialog({
             onClick={() => setOpen(false)}
             disabled={busy}
           >
-            Cancel
+            {ta("createAccount.cancel")}
           </Button>
           <Button
             size="sm"
             onClick={() => void submit()}
             disabled={busy || id.length === 0 || validation !== null}
           >
-            Create
+            {ta("createAccount.submit")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -492,6 +501,7 @@ function CreateAccountDialog({
 // ---------------------------------------------------------------------------
 
 function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
+  const { t } = useTranslation("accounts");
   const [open, setOpen] = useState(false);
   const [id, setId] = useState("");
   const [notes, setNotes] = useState("");
@@ -532,15 +542,15 @@ function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
     >
       <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
         <Plus className="h-3.5 w-3.5" />
-        New group
+        {t("createGroup.trigger")}
       </Button>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Create group</DialogTitle>
+          <DialogTitle>{t("createGroup.title")}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="group-id">Group id</Label>
+            <Label htmlFor="group-id">{t("createGroup.idLabel")}</Label>
             <Input
               id="group-id"
               value={id}
@@ -556,16 +566,15 @@ function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="group-notes">Notes (optional)</Label>
+            <Label htmlFor="group-notes">{t("createGroup.notesLabel")}</Label>
             <Textarea
               id="group-notes"
               value={notes}
-              placeholder="Accounts belonging to the US equity trading desks."
+              placeholder={t("createGroup.notesPlaceholder")}
               onChange={(e) => setNotes(e.target.value)}
             />
             <p className="text-[0.6875rem] text-muted">
-              Reference notes — stored in the control plane only, not sent to
-              the engine.
+              {t("createGroup.notesHint")}
             </p>
           </div>
         </div>
@@ -577,14 +586,14 @@ function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
             onClick={() => setOpen(false)}
             disabled={busy}
           >
-            Cancel
+            {t("createGroup.cancel")}
           </Button>
           <Button
             size="sm"
             onClick={() => void submit()}
             disabled={busy || idTrimmed.length === 0}
           >
-            Create
+            {t("createGroup.submit")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -607,6 +616,7 @@ function BlockAccountDialog({
   onOpenChange: (open: boolean) => void;
   onDone: (updated: Account) => void;
 }) {
+  const { t } = useTranslation("accounts");
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -643,21 +653,20 @@ function BlockAccountDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>
-            Block account{" "}
+            {t("blockAccount.titlePrefix")}{" "}
             <span className="nums text-accent">{account?.id}</span>
           </DialogTitle>
         </DialogHeader>
         <p className="text-xs text-muted-lt">
-          Blocking halts new orders for this account. A reason is required and
-          is recorded in the audit log.
+          {t("blockAccount.description")}
         </p>
         <div className="space-y-2">
-          <Label htmlFor="block-account-reason">Reason</Label>
+          <Label htmlFor="block-account-reason">{t("blockAccount.reasonLabel")}</Label>
           <Textarea
             id="block-account-reason"
             value={reason}
             autoFocus
-            placeholder="Kill-switch: risk limit breach during incident #42"
+            placeholder={t("blockAccount.reasonPlaceholder")}
             onChange={(e) => setReason(e.target.value)}
           />
         </div>
@@ -669,7 +678,7 @@ function BlockAccountDialog({
             onClick={() => onOpenChange(false)}
             disabled={busy}
           >
-            Cancel
+            {t("blockAccount.cancel")}
           </Button>
           <Button
             size="sm"
@@ -677,7 +686,7 @@ function BlockAccountDialog({
             disabled={busy || trimmed.length === 0}
           >
             <Ban className="h-3.5 w-3.5" />
-            Block
+            {t("blockAccount.submit")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -696,6 +705,7 @@ function UnblockAccountConfirm({
   onOpenChange: (open: boolean) => void;
   onDone: (updated: Account) => void;
 }) {
+  const { t } = useTranslation("accounts");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -718,16 +728,16 @@ function UnblockAccountConfirm({
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Unblock account?</AlertDialogTitle>
+          <AlertDialogTitle>{t("unblockAccount.title")}</AlertDialogTitle>
           <AlertDialogDescription>
-            Account{" "}
-            <span className="nums text-accent">{account?.id}</span> will accept
-            new orders again. This is recorded in the audit log.
+            {t("unblockAccount.descriptionPrefix")}{" "}
+            <span className="nums text-accent">{account?.id}</span>{" "}
+            {t("unblockAccount.descriptionSuffix")}
           </AlertDialogDescription>
         </AlertDialogHeader>
         {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+          <AlertDialogCancel disabled={busy}>{t("unblockAccount.cancel")}</AlertDialogCancel>
           <AlertDialogAction
             onClick={(e) => {
               e.preventDefault();
@@ -735,7 +745,7 @@ function UnblockAccountConfirm({
             }}
             disabled={busy}
           >
-            Unblock
+            {t("unblockAccount.submit")}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
@@ -758,6 +768,7 @@ function BlockGroupDialog({
   onOpenChange: (open: boolean) => void;
   onDone: (updated: Group) => void;
 }) {
+  const { t } = useTranslation("accounts");
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -794,21 +805,20 @@ function BlockGroupDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>
-            Block group{" "}
+            {t("blockGroup.titlePrefix")}{" "}
             <span className="nums text-accent">{group?.id}</span>
           </DialogTitle>
         </DialogHeader>
         <p className="text-xs text-muted-lt">
-          Blocking halts new orders for all accounts in this group. A reason is
-          required and is recorded in the audit log.
+          {t("blockGroup.description")}
         </p>
         <div className="space-y-2">
-          <Label htmlFor="block-group-reason">Reason</Label>
+          <Label htmlFor="block-group-reason">{t("blockGroup.reasonLabel")}</Label>
           <Textarea
             id="block-group-reason"
             value={reason}
             autoFocus
-            placeholder="Kill-switch: risk limit breach during incident #42"
+            placeholder={t("blockGroup.reasonPlaceholder")}
             onChange={(e) => setReason(e.target.value)}
           />
         </div>
@@ -820,7 +830,7 @@ function BlockGroupDialog({
             onClick={() => onOpenChange(false)}
             disabled={busy}
           >
-            Cancel
+            {t("blockGroup.cancel")}
           </Button>
           <Button
             size="sm"
@@ -828,7 +838,7 @@ function BlockGroupDialog({
             disabled={busy || trimmed.length === 0}
           >
             <Ban className="h-3.5 w-3.5" />
-            Block
+            {t("blockGroup.submit")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -847,6 +857,7 @@ function UnblockGroupConfirm({
   onOpenChange: (open: boolean) => void;
   onDone: (updated: Group) => void;
 }) {
+  const { t } = useTranslation("accounts");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -869,16 +880,16 @@ function UnblockGroupConfirm({
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Unblock group?</AlertDialogTitle>
+          <AlertDialogTitle>{t("unblockGroup.title")}</AlertDialogTitle>
           <AlertDialogDescription>
-            Group{" "}
-            <span className="nums text-accent">{group?.id}</span> accounts will
-            accept new orders again. This is recorded in the audit log.
+            {t("unblockGroup.descriptionPrefix")}{" "}
+            <span className="nums text-accent">{group?.id}</span>{" "}
+            {t("unblockGroup.descriptionSuffix")}
           </AlertDialogDescription>
         </AlertDialogHeader>
         {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+          <AlertDialogCancel disabled={busy}>{t("unblockGroup.cancel")}</AlertDialogCancel>
           <AlertDialogAction
             onClick={(e) => {
               e.preventDefault();
@@ -886,7 +897,7 @@ function UnblockGroupConfirm({
             }}
             disabled={busy}
           >
-            Unblock
+            {t("unblockGroup.submit")}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
@@ -909,6 +920,7 @@ function DeleteGroupConfirm({
   onOpenChange: (open: boolean) => void;
   onDone: () => void;
 }) {
+  const { t } = useTranslation("accounts");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -931,16 +943,16 @@ function DeleteGroupConfirm({
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Delete group?</AlertDialogTitle>
+          <AlertDialogTitle>{t("deleteGroup.title")}</AlertDialogTitle>
           <AlertDialogDescription>
-            Group <span className="nums text-accent">{group?.id}</span> will be
-            permanently removed. Accounts currently assigned to this group will
-            have their group assignment cleared.
+            {t("deleteGroup.descriptionPrefix")}{" "}
+            <span className="nums text-accent">{group?.id}</span>{" "}
+            {t("deleteGroup.descriptionSuffix")}
           </AlertDialogDescription>
         </AlertDialogHeader>
         {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+          <AlertDialogCancel disabled={busy}>{t("deleteGroup.cancel")}</AlertDialogCancel>
           <AlertDialogAction
             onClick={(e) => {
               e.preventDefault();
@@ -950,7 +962,7 @@ function DeleteGroupConfirm({
             className="bg-[var(--danger)] text-white hover:bg-[var(--danger)]/90"
           >
             <Trash2 className="h-3.5 w-3.5" />
-            Delete
+            {t("deleteGroup.submit")}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
@@ -973,11 +985,16 @@ function EditGroupNotesDialog({
   onOpenChange: (open: boolean) => void;
   onDone: (updated: Group) => void;
 }) {
+  const { t } = useTranslation("accounts");
   const [notes, setNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => { if (open) setNotes(group?.notes ?? ""); }, [open, group]);
+  useEffect(() => {
+    // Reseed the notes field from the edited group when the dialog opens.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (open) setNotes(group?.notes ?? "");
+  }, [open, group]);
 
   const handleOpenChange = (next: boolean) => {
     if (!next) {
@@ -1008,16 +1025,15 @@ function EditGroupNotesDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>
-            Notes — group{" "}
+            {t("editGroupNotes.titlePrefix")}{" "}
             <span className="nums text-accent">{group?.id}</span>
           </DialogTitle>
         </DialogHeader>
         <p className="text-xs text-muted-lt">
-          Reference notes stored in the control plane. Not sent to the engine
-          and have no effect on risk evaluation.
+          {t("editGroupNotes.description")}
         </p>
         <div className="space-y-2">
-          <Label htmlFor="group-notes-edit">Notes</Label>
+          <Label htmlFor="group-notes-edit">{t("editGroupNotes.notesLabel")}</Label>
           <Textarea
             id="group-notes-edit"
             value={notes}
@@ -1034,10 +1050,10 @@ function EditGroupNotesDialog({
             onClick={() => onOpenChange(false)}
             disabled={busy}
           >
-            Cancel
+            {t("editGroupNotes.cancel")}
           </Button>
           <Button size="sm" onClick={() => void submit()} disabled={busy}>
-            Save
+            {t("editGroupNotes.submit")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1062,6 +1078,7 @@ function AssignGroupDialog({
   onOpenChange: (open: boolean) => void;
   onDone: (updated: Account) => void;
 }) {
+  const { t } = useTranslation("accounts");
   const [group, setGroup] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1098,16 +1115,15 @@ function AssignGroupDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>
-            Assign group —{" "}
+            {t("assignGroup.titlePrefix")}{" "}
             <span className="nums text-accent">{account?.id}</span>
           </DialogTitle>
         </DialogHeader>
         <p className="text-xs text-muted-lt">
-          Choose an existing group or type a new id. Leave blank to clear the
-          group assignment.
+          {t("assignGroup.description")}
         </p>
         <div className="space-y-2">
-          <Label htmlFor="assign-group">Group</Label>
+          <Label htmlFor="assign-group">{t("assignGroup.groupLabel")}</Label>
           <Autocomplete
             id="assign-group"
             value={group}
@@ -1126,11 +1142,11 @@ function AssignGroupDialog({
             onClick={() => onOpenChange(false)}
             disabled={busy}
           >
-            Cancel
+            {t("assignGroup.cancel")}
           </Button>
           <Button size="sm" onClick={() => void submit()} disabled={busy}>
             <Folder className="h-3.5 w-3.5" />
-            {group.trim().length > 0 ? "Assign" : "Clear"}
+            {group.trim().length > 0 ? t("assignGroup.assign") : t("assignGroup.clear")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1153,11 +1169,16 @@ function EditAccountNotesDialog({
   onOpenChange: (open: boolean) => void;
   onDone: (updated: Account) => void;
 }) {
+  const { t } = useTranslation("accounts");
   const [notes, setNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => { if (open) setNotes(account?.notes ?? ""); }, [open, account]);
+  useEffect(() => {
+    // Reseed the notes field from the edited account when the dialog opens.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (open) setNotes(account?.notes ?? "");
+  }, [open, account]);
 
   const handleOpenChange = (next: boolean) => {
     if (!next) {
@@ -1188,16 +1209,15 @@ function EditAccountNotesDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>
-            Notes —{" "}
+            {t("editAccountNotes.titlePrefix")}{" "}
             <span className="nums text-accent">{account?.id}</span>
           </DialogTitle>
         </DialogHeader>
         <p className="text-xs text-muted-lt">
-          Reference notes stored in the control plane. Not sent to the engine
-          and have no effect on risk evaluation.
+          {t("editAccountNotes.description")}
         </p>
         <div className="space-y-2">
-          <Label htmlFor="account-notes">Notes</Label>
+          <Label htmlFor="account-notes">{t("editAccountNotes.notesLabel")}</Label>
           <Textarea
             id="account-notes"
             value={notes}
@@ -1214,10 +1234,10 @@ function EditAccountNotesDialog({
             onClick={() => onOpenChange(false)}
             disabled={busy}
           >
-            Cancel
+            {t("editAccountNotes.cancel")}
           </Button>
           <Button size="sm" onClick={() => void submit()} disabled={busy}>
-            Save
+            {t("editAccountNotes.submit")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1253,16 +1273,17 @@ function GroupsPanel({
   onUnblock: (group: Group) => void;
   onDelete: (group: Group) => void;
 }) {
+  const { t } = useTranslation("accounts");
   return (
     <Card>
       <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
-            <TableHead>Group</TableHead>
-            <TableHead>Accounts</TableHead>
-            <TableHead>Status</TableHead>
-            <TableHead>Notes</TableHead>
-            <TableHead className="text-right">Actions</TableHead>
+            <TableHead>{t("groups.columns.group")}</TableHead>
+            <TableHead>{t("groups.columns.accounts")}</TableHead>
+            <TableHead>{t("groups.columns.status")}</TableHead>
+            <TableHead>{t("groups.columns.notes")}</TableHead>
+            <TableHead className="text-right">{t("groups.columns.actions")}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -1282,7 +1303,7 @@ function GroupsPanel({
               >
                 <TableCell className="font-medium">
                   {row.kind === "default" ? (
-                    <span className="text-muted-lt italic">Default group</span>
+                    <span className="text-muted-lt italic">{t("groups.defaultGroup")}</span>
                   ) : (
                     <span className="nums text-accent">{row.group.id}</span>
                   )}
@@ -1296,12 +1317,12 @@ function GroupsPanel({
                   {row.kind === "real" && row.group.blocked ? (
                     <Badge variant="danger">
                       <StatusDot tone="danger" />
-                      blocked
+                      {t("groups.status.blocked")}
                     </Badge>
                   ) : (
                     <Badge variant="ok">
                       <StatusDot tone="ok" />
-                      active
+                      {t("groups.status.active")}
                     </Badge>
                   )}
                 </TableCell>
@@ -1316,7 +1337,7 @@ function GroupsPanel({
                     row.group.notes || "—"
                   ) : (
                     <span className="italic">
-                      All accounts without an assigned group.
+                      {t("groups.defaultGroupNote")}
                     </span>
                   )}
                 </TableCell>
@@ -1331,9 +1352,9 @@ function GroupsPanel({
                         variant="ghost"
                         size="sm"
                         onClick={() => onEditNotes(row.group)}
-                        title="Edit notes"
+                        title={t("groups.actions.editNotesTitle")}
                       >
-                        Notes
+                        {t("groups.actions.notes")}
                       </Button>
                       {row.group.blocked ? (
                         <Button
@@ -1342,7 +1363,7 @@ function GroupsPanel({
                           onClick={() => onUnblock(row.group)}
                         >
                           <CircleCheck className="h-3.5 w-3.5" />
-                          Unblock
+                          {t("groups.actions.unblock")}
                         </Button>
                       ) : (
                         <Button
@@ -1351,18 +1372,18 @@ function GroupsPanel({
                           onClick={() => onBlock(row.group)}
                         >
                           <Ban className="h-3.5 w-3.5" />
-                          Block
+                          {t("groups.actions.block")}
                         </Button>
                       )}
                       <Button
                         variant="ghost"
                         size="sm"
                         onClick={() => onDelete(row.group)}
-                        title="Delete group"
+                        title={t("groups.actions.deleteTitle")}
                         className="text-[var(--danger)] hover:text-[var(--danger)]"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
-                        Delete
+                        {t("groups.actions.delete")}
                       </Button>
                     </div>
                   )}
@@ -1395,16 +1416,17 @@ function AccountsTable({
   onAssignGroup: (account: Account) => void;
   onEditNotes: (account: Account) => void;
 }) {
+  const { t } = useTranslation("accounts");
   return (
     <Card>
       <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
-            <TableHead>Account</TableHead>
-            <TableHead>Group</TableHead>
-            <TableHead>Status</TableHead>
-            <TableHead>Notes</TableHead>
-            <TableHead className="text-right">Actions</TableHead>
+            <TableHead>{t("accounts.columns.account")}</TableHead>
+            <TableHead>{t("accounts.columns.group")}</TableHead>
+            <TableHead>{t("accounts.columns.status")}</TableHead>
+            <TableHead>{t("accounts.columns.notes")}</TableHead>
+            <TableHead className="text-right">{t("accounts.columns.actions")}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -1423,13 +1445,13 @@ function AccountsTable({
                   onClick={() => onAssignGroup(account)}
                   title={
                     groupSuggestions.length > 0
-                      ? "Group — click to change"
-                      : "Group — click to change (no groups yet)"
+                      ? t("accounts.groupCell.title")
+                      : t("accounts.groupCell.titleNoGroups")
                   }
                 >
                   <Folder className="h-3.5 w-3.5 shrink-0" />
                   <span className="nums">
-                    {account.group || <span className="italic">none</span>}
+                    {account.group || <span className="italic">{t("accounts.groupCell.noGroup")}</span>}
                   </span>
                 </button>
               </TableCell>
@@ -1438,12 +1460,12 @@ function AccountsTable({
                 {account.blocked ? (
                   <Badge variant="danger">
                     <StatusDot tone="danger" />
-                    blocked
+                    {t("accounts.status.blocked")}
                   </Badge>
                 ) : (
                   <Badge variant="ok">
                     <StatusDot tone="ok" />
-                    active
+                    {t("accounts.status.active")}
                   </Badge>
                 )}
               </TableCell>
@@ -1460,32 +1482,32 @@ function AccountsTable({
                   {/* Quick-links: Positions → Trading → Policies → Audit */}
                   <Link
                     to={`/positions?account=${encodeURIComponent(account.id)}`}
-                    title="Positions — spot limits for this account"
-                    aria-label="Positions — spot limits for this account"
+                    title={t("accounts.links.positions")}
+                    aria-label={t("accounts.links.positions")}
                     className="inline-flex h-7 w-7 items-center justify-center rounded hover:bg-accent-dim"
                   >
                     <Coins className="h-3.5 w-3.5 text-muted" />
                   </Link>
                   <Link
                     to={`/trading?account=${encodeURIComponent(account.id)}`}
-                    title="Trading — orders & trades"
-                    aria-label="Trading — orders & trades"
+                    title={t("accounts.links.trading")}
+                    aria-label={t("accounts.links.trading")}
                     className="inline-flex h-7 w-7 items-center justify-center rounded hover:bg-accent-dim"
                   >
                     <ArrowLeftRight className="h-3.5 w-3.5 text-muted" />
                   </Link>
                   <Link
                     to={`/policies?account=${encodeURIComponent(account.id)}`}
-                    title="Policies — risk barriers"
-                    aria-label="Policies — risk barriers"
+                    title={t("accounts.links.policies")}
+                    aria-label={t("accounts.links.policies")}
                     className="inline-flex h-7 w-7 items-center justify-center rounded hover:bg-accent-dim"
                   >
                     <ShieldCheck className="h-3.5 w-3.5 text-muted" />
                   </Link>
                   <Link
                     to={`/audit?account=${encodeURIComponent(account.id)}`}
-                    title="Audit — log for this account"
-                    aria-label="Audit — log for this account"
+                    title={t("accounts.links.audit")}
+                    aria-label={t("accounts.links.audit")}
                     className="inline-flex h-7 w-7 items-center justify-center rounded hover:bg-accent-dim"
                   >
                     <History className="h-3.5 w-3.5 text-muted" />
@@ -1496,9 +1518,9 @@ function AccountsTable({
                     variant="ghost"
                     size="sm"
                     onClick={() => onEditNotes(account)}
-                    title="Edit reference notes"
+                    title={t("accounts.actions.editNotesTitle")}
                   >
-                    Notes
+                    {t("accounts.actions.notes")}
                   </Button>
 
                   {/* Block / Unblock */}
@@ -1509,7 +1531,7 @@ function AccountsTable({
                       onClick={() => onUnblock(account)}
                     >
                       <CircleCheck className="h-3.5 w-3.5" />
-                      Unblock
+                      {t("accounts.actions.unblock")}
                     </Button>
                   ) : (
                     <Button
@@ -1518,7 +1540,7 @@ function AccountsTable({
                       onClick={() => onBlock(account)}
                     >
                       <Ban className="h-3.5 w-3.5" />
-                      Block
+                      {t("accounts.actions.block")}
                     </Button>
                   )}
                 </div>
@@ -1548,6 +1570,7 @@ function replaceGroup(list: Group[], updated: Group): Group[] {
 // ---------------------------------------------------------------------------
 
 export function Accounts() {
+  const { t } = useTranslation("accounts");
   const { load: accountsLoad, reload: reloadAccounts } = useAccounts();
   const { load: groupsLoad, reload: reloadGroups } = useGroups();
 
@@ -1655,7 +1678,7 @@ export function Accounts() {
 
   return (
     <Page
-      title="Accounts"
+      title={t("page.title")}
       actions={
         <>
           <RefreshButton onClick={reloadAll} busy={isLoading} />
@@ -1682,8 +1705,7 @@ export function Accounts() {
       }
     >
       <p className="text-xs text-muted-lt">
-        Operator accounts persisted in the control plane and applied to the
-        engine. Block an account or group to halt orders via the kill switch.
+        {t("page.description")}
       </p>
 
       {/* Groups panel */}
@@ -1696,14 +1718,14 @@ export function Accounts() {
       {(accounts !== null || groups !== null) && (
         <div className="space-y-1">
           <p className="text-xs font-medium text-muted">
-            Groups{" "}
+            {t("groups.heading")}{" "}
             {selectedGroupId !== null && (
               <button
                 type="button"
                 className="ml-1 text-accent hover:underline"
                 onClick={() => setSelectedGroupId(null)}
               >
-                (clear filter)
+                {t("groups.clearFilter")}
               </button>
             )}
           </p>
@@ -1723,23 +1745,23 @@ export function Accounts() {
       {visibleAccounts !== null && (
         <div className="space-y-1">
           <p className="text-xs font-medium text-muted">
-            Accounts
+            {t("accounts.heading")}
             {selectedGroupId !== null && (
               <span className="ml-1 text-muted-lt">
-                — filtered to{" "}
+                {t("accounts.filteredTo")}{" "}
                 {selectedGroupId === DEFAULT_GROUP_ID
-                  ? "default group"
+                  ? t("accounts.filteredToDefault")
                   : <span className="nums">{selectedGroupId}</span>}
               </span>
             )}
           </p>
           {visibleAccounts.length === 0 ? (
             <EmptyState
-              title="No accounts"
+              title={t("accounts.empty.title")}
               hint={
                 selectedGroupId !== null
-                  ? "No accounts are assigned to this group."
-                  : "Create the first account to start applying risk limits to it."
+                  ? t("accounts.empty.hintFiltered")
+                  : t("accounts.empty.hintEmpty")
               }
               action={
                 selectedGroupId === null ? (

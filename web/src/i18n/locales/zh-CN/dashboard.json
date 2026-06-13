@@ -1,0 +1,54 @@
+{
+  "title": "仪表盘",
+  "refreshAriaLabel": "刷新仪表盘",
+  "counts": {
+    "accounts": "账户",
+    "groups": "分组",
+    "orders": "订单"
+  },
+  "activity": {
+    "noRecent": "暂无近期活动",
+    "bucket": {
+      "trading": "订单与成交",
+      "accounts": "账户",
+      "limits": "限制",
+      "groups": "分组",
+      "adjustments": "调整",
+      "other": "其他"
+    }
+  },
+  "mcp": {
+    "title": "MCP 访问",
+    "none": "无已启用命令",
+    "loading": "加载中…",
+    "error": "加载失败"
+  },
+  "marketData": {
+    "title": "行情数据",
+    "none": "无已启用来源",
+    "moreStale": "+{{count}} 滞后"
+  },
+  "audit": {
+    "title": "近期审计",
+    "noEntries": "暂无审计记录",
+    "action": {
+      "createAccount": "创建账户",
+      "blockAccount": "封锁账户",
+      "unblockAccount": "解封账户",
+      "updateAccount": "更新账户",
+      "deleteAccount": "删除账户",
+      "createGroup": "创建分组",
+      "blockGroup": "封锁分组",
+      "unblockGroup": "解封分组",
+      "updateGroup": "更新分组",
+      "deleteGroup": "删除分组",
+      "setLimit": "设置限制",
+      "deleteLimit": "删除限制",
+      "updateLimit": "更新限制",
+      "adjustment": "调整",
+      "balanceUpdate": "余额更新",
+      "order": "订单",
+      "tradeFill": "成交"
+    }
+  }
+}

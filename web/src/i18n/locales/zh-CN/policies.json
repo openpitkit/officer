@@ -1,0 +1,62 @@
+{
+  "title": "策略",
+  "intro": "持久化于控制平面并按策略应用于 OpenPit 引擎的关系型风控屏障。每行为某目标的一条屏障配置。",
+  "addPolicy": "添加策略",
+  "wikiDetails": "详情",
+  "filter": {
+    "account": "按账户筛选",
+    "accountPlaceholder": "acc-1",
+    "policy": "按策略筛选",
+    "allPolicies": "所有策略"
+  },
+  "table": {
+    "policy": "策略",
+    "scope": "范围",
+    "account": "账户",
+    "asset": "资产",
+    "values": "参数值",
+    "actions": "操作",
+    "edit": "编辑",
+    "editAriaLabel": "编辑风控屏障",
+    "deleteAriaLabel": "删除风控屏障"
+  },
+  "empty": {
+    "noPolicies": "暂无策略",
+    "noPoliciesHint": "添加第一条屏障以开始约束订单流。",
+    "noMatching": "无匹配策略",
+    "noMatchingHint": "当前账户或策略筛选条件下无匹配屏障。"
+  },
+  "delete": {
+    "title": "删除风控屏障？",
+    "description": "此操作将删除 {{scope}}{{account}}{{asset}} 上的 {{policy}} 屏障，引擎将立即重新配置。",
+    "accountFragment": " 账户 {{account}}",
+    "assetFragment": " 资产 {{asset}}"
+  },
+  "dialog": {
+    "editTitle": "编辑策略",
+    "addTitle": "添加策略",
+    "policy": "策略",
+    "scope": "范围",
+    "account": "账户",
+    "accountPlaceholder": "acc-1",
+    "asset": "资产",
+    "assetPlaceholder": "AAPL",
+    "values": "参数值",
+    "rateLimitFootnote": "最大订单数和时间窗口均为必填项。",
+    "atLeastOneFootnote": "至少需填写一个参数值。",
+    "save": "保存"
+  },
+  "duration": {
+    "amountPlaceholder": "如 30",
+    "unit": {
+      "ms": "毫秒",
+      "s": "秒",
+      "m": "分钟",
+      "h": "小时"
+    },
+    "required": "必填。",
+    "invalid": "时长格式无效。",
+    "mustBePositive": "必须大于 0。",
+    "mustNotExceed24h": "不得超过 24 小时。"
+  }
+}

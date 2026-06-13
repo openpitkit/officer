@@ -36,6 +36,7 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 
 import { Sidebar } from "@/components/Sidebar";
+import { SidebarProvider } from "@/components/SidebarContext";
 import { Accounts } from "@/pages/Accounts";
 import { Audit } from "@/pages/Audit";
 import { Dashboard } from "@/pages/Dashboard";
@@ -48,26 +49,28 @@ import { Service } from "@/pages/Service";
 
 export default function App() {
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-bg text-text">
-      <Sidebar />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/accounts" element={<Accounts />} />
-          {/* /policies is the new name; /limits redirects for any bookmarks. */}
-          <Route path="/policies" element={<Limits />} />
-          <Route path="/limits" element={<Navigate to="/policies" replace />} />
-          <Route path="/positions" element={<Positions />} />
-          <Route path="/orders" element={<Orders />} />
-          {/* /trading redirects for any bookmarks. */}
-          <Route path="/trading" element={<Navigate to="/orders" replace />} />
-          <Route path="/market-data" element={<MarketData />} />
-          <Route path="/audit" element={<Audit />} />
-          <Route path="/mcp-access" element={<McpAccess />} />
-          <Route path="/service" element={<Service />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+    <SidebarProvider>
+      <div className="flex h-screen w-screen overflow-hidden bg-bg text-text">
+        <Sidebar />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/accounts" element={<Accounts />} />
+            {/* /policies is the new name; /limits redirects for any bookmarks. */}
+            <Route path="/policies" element={<Limits />} />
+            <Route path="/limits" element={<Navigate to="/policies" replace />} />
+            <Route path="/positions" element={<Positions />} />
+            <Route path="/orders" element={<Orders />} />
+            {/* /trading redirects for any bookmarks. */}
+            <Route path="/trading" element={<Navigate to="/orders" replace />} />
+            <Route path="/market-data" element={<MarketData />} />
+            <Route path="/audit" element={<Audit />} />
+            <Route path="/mcp-access" element={<McpAccess />} />
+            <Route path="/service" element={<Service />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </div>
       </div>
-    </div>
+    </SidebarProvider>
   );
 }

@@ -16,6 +16,7 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 import { Loader2, RefreshCw } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 
@@ -27,20 +28,21 @@ export function RefreshButton({
   onClick: () => void;
   busy: boolean;
 }) {
+  const { t } = useTranslation();
   return (
     <Button
       variant="ghost"
       size="sm"
       onClick={onClick}
       disabled={busy}
-      aria-label="Refresh"
+      aria-label={t("actions.refresh")}
     >
       {busy ? (
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
       ) : (
         <RefreshCw className="h-3.5 w-3.5" />
       )}
-      Refresh
+      {t("actions.refresh")}
     </Button>
   );
 }

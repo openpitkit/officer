@@ -545,7 +545,7 @@ func (s *sqliteStore) ListAudit(ctx context.Context, n int) ([]domain.AuditRow, 
 	audit := make([]domain.AuditRow, 0, n)
 	for rows.Next() {
 		var (
-			id                                                int64
+			id                                              int64
 			at, actor, action, tenant, account, detail, src string
 		)
 		if err := rows.Scan(
@@ -614,6 +614,431 @@ func (s *sqliteStore) SetMcpAccess(
 		return fmt.Errorf("store: set mcp access: %w", err)
 	}
 	return nil
+}
+
+// --- Market-data instances --------------------------------------------------
+
+// CreateMarketDataInstance persists a new market-data instance.
+func (s *sqliteStore) CreateMarketDataInstance(
+	ctx context.Context, instance domain.MarketDataInstance,
+) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO market_data_instances (id, type, label, credentials, enabled)
+		 VALUES (?, ?, ?, ?, ?)`,
+		instance.ID, instance.Type, instance.Label, instance.Credentials, instance.Enabled,
+	)
+	if err != nil {
+		if isSQLiteUnique(err) {
+			return fmt.Errorf("market-data instance %q: %w", instance.ID, domain.ErrAlreadyExists)
+		}
+		return fmt.Errorf("store: create market-data instance: %w", err)
+	}
+	return nil
+}
+
+// GetMarketDataInstance returns the instance identified by id.
+func (s *sqliteStore) GetMarketDataInstance(
+	ctx context.Context, id string,
+) (domain.MarketDataInstance, bool, error) {
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, type, label, credentials, enabled FROM market_data_instances
+		 WHERE id = ?`,
+		id,
+	)
+	instance, err := scanMarketDataInstanceRow(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.MarketDataInstance{}, false, nil
+	}
+	if err != nil {
+		return domain.MarketDataInstance{}, false, fmt.Errorf("store: get market-data instance: %w", err)
+	}
+	return instance, true, nil
+}
+
+// ListMarketDataInstances returns every instance, ordered by id.
+func (s *sqliteStore) ListMarketDataInstances(
+	ctx context.Context,
+) ([]domain.MarketDataInstance, error) {
+	return s.queryMarketDataInstances(ctx,
+		`SELECT id, type, label, credentials, enabled FROM market_data_instances
+		 ORDER BY id`)
+}
+
+// ListEnabledMarketDataInstances returns the enabled instances, ordered by id.
+func (s *sqliteStore) ListEnabledMarketDataInstances(
+	ctx context.Context,
+) ([]domain.MarketDataInstance, error) {
+	return s.queryMarketDataInstances(ctx,
+		`SELECT id, type, label, credentials, enabled FROM market_data_instances
+		 WHERE enabled = 1 ORDER BY id`)
+}
+
+// queryMarketDataInstances runs query (no parameters) and scans the instance
+// rows into a non-nil slice.
+func (s *sqliteStore) queryMarketDataInstances(
+	ctx context.Context, query string,
+) ([]domain.MarketDataInstance, error) {
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("store: list market-data instances: %w", err)
+	}
+	defer rows.Close()
+
+	instances := make([]domain.MarketDataInstance, 0)
+	for rows.Next() {
+		instance, err := scanMarketDataInstance(rows)
+		if err != nil {
+			return nil, err
+		}
+		instances = append(instances, instance)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: iterate market-data instances: %w", err)
+	}
+	return instances, nil
+}
+
+// SetMarketDataInstanceEnabled toggles the enabled flag of an instance.
+func (s *sqliteStore) SetMarketDataInstanceEnabled(
+	ctx context.Context, id string, enabled bool,
+) error {
+	res, err := s.db.ExecContext(
+		ctx,
+		`UPDATE market_data_instances SET enabled = ? WHERE id = ?`,
+		enabled, id,
+	)
+	if err != nil {
+		return fmt.Errorf("store: set market-data instance enabled: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: set market-data instance enabled rows: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("market-data instance %q: %w", id, domain.ErrNotFound)
+	}
+	return nil
+}
+
+// DeleteMarketDataInstance removes the instance and its instruments in one
+// transaction. Instruments are deleted explicitly rather than relying on the
+// ON DELETE CASCADE foreign key, because the modernc.org/sqlite driver leaves
+// foreign-key enforcement off by default. Returns domain.ErrNotFound when no
+// such instance exists.
+func (s *sqliteStore) DeleteMarketDataInstance(ctx context.Context, id string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: begin delete market-data instance: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`DELETE FROM market_data_quotes WHERE instance_id = ?`,
+		id,
+	); err != nil {
+		return fmt.Errorf("store: delete market-data quotes: %w", err)
+	}
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`DELETE FROM market_data_instruments WHERE instance_id = ?`,
+		id,
+	); err != nil {
+		return fmt.Errorf("store: delete market-data instruments: %w", err)
+	}
+
+	res, err := tx.ExecContext(
+		ctx,
+		`DELETE FROM market_data_instances WHERE id = ?`,
+		id,
+	)
+	if err != nil {
+		return fmt.Errorf("store: delete market-data instance: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: delete market-data instance rows: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("market-data instance %q: %w", id, domain.ErrNotFound)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit delete market-data instance: %w", err)
+	}
+	return nil
+}
+
+// --- Market-data instruments ------------------------------------------------
+
+// UpsertMarketDataInstrument inserts or replaces one instrument of an instance.
+func (s *sqliteStore) UpsertMarketDataInstrument(
+	ctx context.Context, instrument domain.MarketDataInstrument,
+) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT OR REPLACE INTO market_data_instruments
+		 (instance_id, external_symbol, base_asset, quote_asset, enabled)
+		 VALUES (?, ?, ?, ?, ?)`,
+		instrument.InstanceID, instrument.ExternalSymbol,
+		instrument.BaseAsset, instrument.QuoteAsset, instrument.Enabled,
+	)
+	if err != nil {
+		return fmt.Errorf("store: upsert market-data instrument: %w", err)
+	}
+	return nil
+}
+
+// ListMarketDataInstruments returns every instrument of the instance.
+func (s *sqliteStore) ListMarketDataInstruments(
+	ctx context.Context, instanceID string,
+) ([]domain.MarketDataInstrument, error) {
+	return s.queryMarketDataInstruments(ctx,
+		`SELECT instance_id, external_symbol, base_asset, quote_asset, enabled
+		 FROM market_data_instruments WHERE instance_id = ? ORDER BY external_symbol`,
+		instanceID)
+}
+
+// ListEnabledMarketDataInstruments returns the enabled instruments of the
+// instance.
+func (s *sqliteStore) ListEnabledMarketDataInstruments(
+	ctx context.Context, instanceID string,
+) ([]domain.MarketDataInstrument, error) {
+	return s.queryMarketDataInstruments(ctx,
+		`SELECT instance_id, external_symbol, base_asset, quote_asset, enabled
+		 FROM market_data_instruments WHERE instance_id = ? AND enabled = 1
+		 ORDER BY external_symbol`,
+		instanceID)
+}
+
+// queryMarketDataInstruments runs query with instanceID and scans the
+// instrument rows into a non-nil slice.
+func (s *sqliteStore) queryMarketDataInstruments(
+	ctx context.Context, query, instanceID string,
+) ([]domain.MarketDataInstrument, error) {
+	rows, err := s.db.QueryContext(ctx, query, instanceID)
+	if err != nil {
+		return nil, fmt.Errorf("store: list market-data instruments: %w", err)
+	}
+	defer rows.Close()
+
+	instruments := make([]domain.MarketDataInstrument, 0)
+	for rows.Next() {
+		instrument, err := scanMarketDataInstrument(rows)
+		if err != nil {
+			return nil, err
+		}
+		instruments = append(instruments, instrument)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: iterate market-data instruments: %w", err)
+	}
+	return instruments, nil
+}
+
+// SetMarketDataInstrumentEnabled toggles the enabled flag of one instrument.
+func (s *sqliteStore) SetMarketDataInstrumentEnabled(
+	ctx context.Context, instanceID, externalSymbol string, enabled bool,
+) error {
+	res, err := s.db.ExecContext(
+		ctx,
+		`UPDATE market_data_instruments SET enabled = ?
+		 WHERE instance_id = ? AND external_symbol = ?`,
+		enabled, instanceID, externalSymbol,
+	)
+	if err != nil {
+		return fmt.Errorf("store: set market-data instrument enabled: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: set market-data instrument enabled rows: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("market-data instrument %q/%q: %w",
+			instanceID, externalSymbol, domain.ErrNotFound)
+	}
+	return nil
+}
+
+// DeleteMarketDataInstrument removes one instrument of an instance.
+func (s *sqliteStore) DeleteMarketDataInstrument(
+	ctx context.Context, instanceID, externalSymbol string,
+) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: begin delete market-data instrument: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`DELETE FROM market_data_quotes
+		 WHERE instance_id = ? AND external_symbol = ?`,
+		instanceID, externalSymbol,
+	); err != nil {
+		return fmt.Errorf("store: delete market-data quote: %w", err)
+	}
+
+	res, err := tx.ExecContext(
+		ctx,
+		`DELETE FROM market_data_instruments
+		 WHERE instance_id = ? AND external_symbol = ?`,
+		instanceID, externalSymbol,
+	)
+	if err != nil {
+		return fmt.Errorf("store: delete market-data instrument: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: delete market-data instrument rows: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("market-data instrument %q/%q: %w",
+			instanceID, externalSymbol, domain.ErrNotFound)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit delete market-data instrument: %w", err)
+	}
+	return nil
+}
+
+// UpsertMarketDataQuote records the latest quote for a configured instrument.
+func (s *sqliteStore) UpsertMarketDataQuote(
+	ctx context.Context, quote domain.MarketDataQuote,
+) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT OR REPLACE INTO market_data_quotes
+		 (instance_id, external_symbol, base_asset, quote_asset,
+		  mark, bid, ask, as_of, received_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		quote.InstanceID, quote.ExternalSymbol, quote.BaseAsset, quote.QuoteAsset,
+		quote.Mark, quote.Bid, quote.Ask,
+		quote.AsOf.UTC().Format(time.RFC3339Nano),
+		quote.ReceivedAt.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return fmt.Errorf("store: upsert market-data quote: %w", err)
+	}
+	return nil
+}
+
+// ListMarketDataQuotes returns latest quotes, ordered by instance and symbol.
+func (s *sqliteStore) ListMarketDataQuotes(
+	ctx context.Context, instanceID string,
+) ([]domain.MarketDataQuote, error) {
+	query := `SELECT instance_id, external_symbol, base_asset, quote_asset,
+		mark, bid, ask, as_of, received_at
+		FROM market_data_quotes`
+	args := []any{}
+	if instanceID != "" {
+		query += ` WHERE instance_id = ?`
+		args = append(args, instanceID)
+	}
+	query += ` ORDER BY instance_id, external_symbol`
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: list market-data quotes: %w", err)
+	}
+	defer rows.Close()
+
+	quotes := make([]domain.MarketDataQuote, 0)
+	for rows.Next() {
+		quote, err := scanMarketDataQuote(rows)
+		if err != nil {
+			return nil, err
+		}
+		quotes = append(quotes, quote)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: iterate market-data quotes: %w", err)
+	}
+	return quotes, nil
+}
+
+// scanMarketDataInstance scans one instance row from a *sql.Rows cursor.
+// Expects columns: id, type, label, credentials, enabled.
+func scanMarketDataInstance(rows *sql.Rows) (domain.MarketDataInstance, error) {
+	var id, typ, label, credentials string
+	var enabled bool
+	if err := rows.Scan(&id, &typ, &label, &credentials, &enabled); err != nil {
+		return domain.MarketDataInstance{}, fmt.Errorf("store: scan market-data instance: %w", err)
+	}
+	return domain.MarketDataInstance{
+		ID:          id,
+		Type:        typ,
+		Label:       label,
+		Credentials: credentials,
+		Enabled:     enabled,
+	}, nil
+}
+
+// scanMarketDataInstanceRow scans one instance from a *sql.Row (single-row
+// query). Expects columns: id, type, label, credentials, enabled.
+func scanMarketDataInstanceRow(row *sql.Row) (domain.MarketDataInstance, error) {
+	var id, typ, label, credentials string
+	var enabled bool
+	if err := row.Scan(&id, &typ, &label, &credentials, &enabled); err != nil {
+		return domain.MarketDataInstance{}, err
+	}
+	return domain.MarketDataInstance{
+		ID:          id,
+		Type:        typ,
+		Label:       label,
+		Credentials: credentials,
+		Enabled:     enabled,
+	}, nil
+}
+
+// scanMarketDataInstrument scans one instrument row from a *sql.Rows cursor.
+// Expects columns: instance_id, external_symbol, base_asset, quote_asset,
+// enabled.
+func scanMarketDataInstrument(rows *sql.Rows) (domain.MarketDataInstrument, error) {
+	var instanceID, externalSymbol, baseAsset, quoteAsset string
+	var enabled bool
+	if err := rows.Scan(&instanceID, &externalSymbol, &baseAsset, &quoteAsset, &enabled); err != nil {
+		return domain.MarketDataInstrument{}, fmt.Errorf("store: scan market-data instrument: %w", err)
+	}
+	return domain.MarketDataInstrument{
+		InstanceID:     instanceID,
+		ExternalSymbol: externalSymbol,
+		BaseAsset:      baseAsset,
+		QuoteAsset:     quoteAsset,
+		Enabled:        enabled,
+	}, nil
+}
+
+func scanMarketDataQuote(rows *sql.Rows) (domain.MarketDataQuote, error) {
+	var quote domain.MarketDataQuote
+	var asOf, receivedAt string
+	if err := rows.Scan(
+		&quote.InstanceID,
+		&quote.ExternalSymbol,
+		&quote.BaseAsset,
+		&quote.QuoteAsset,
+		&quote.Mark,
+		&quote.Bid,
+		&quote.Ask,
+		&asOf,
+		&receivedAt,
+	); err != nil {
+		return domain.MarketDataQuote{}, fmt.Errorf("store: scan market-data quote: %w", err)
+	}
+	parsedAsOf, err := time.Parse(time.RFC3339Nano, asOf)
+	if err != nil {
+		return domain.MarketDataQuote{}, fmt.Errorf("store: parse market-data quote as-of: %w", err)
+	}
+	parsedReceivedAt, err := time.Parse(time.RFC3339Nano, receivedAt)
+	if err != nil {
+		return domain.MarketDataQuote{}, fmt.Errorf("store: parse market-data quote received-at: %w", err)
+	}
+	quote.AsOf = parsedAsOf
+	quote.ReceivedAt = parsedReceivedAt
+	return quote, nil
 }
 
 // --- Account groups ---------------------------------------------------------
@@ -1355,10 +1780,10 @@ func (s *sqliteStore) CountOrdersSince(
 
 func scanOrder(rows *sql.Rows) (domain.Order, error) {
 	var (
-		id                                                              int64
-		ten, acc, at, src, principal                                   string
-		baseAsset, quoteAsset, side, amtKind, amtVal, price, status   string
-		lockJSON                                                        string
+		id                                                          int64
+		ten, acc, at, src, principal                                string
+		baseAsset, quoteAsset, side, amtKind, amtVal, price, status string
+		lockJSON                                                    string
 	)
 	if err := rows.Scan(
 		&id, &ten, &acc, &at, &src, &principal,
@@ -1373,10 +1798,10 @@ func scanOrder(rows *sql.Rows) (domain.Order, error) {
 
 func scanOrderRow(row *sql.Row) (domain.Order, error) {
 	var (
-		id                                                              int64
-		ten, acc, at, src, principal                                   string
-		baseAsset, quoteAsset, side, amtKind, amtVal, price, status   string
-		lockJSON                                                        string
+		id                                                          int64
+		ten, acc, at, src, principal                                string
+		baseAsset, quoteAsset, side, amtKind, amtVal, price, status string
+		lockJSON                                                    string
 	)
 	if err := row.Scan(
 		&id, &ten, &acc, &at, &src, &principal,
@@ -1486,7 +1911,7 @@ func (s *sqliteStore) ListOrderEvents(
 
 func scanOrderEvent(rows *sql.Rows) (domain.OrderEvent, error) {
 	var (
-		id, orderID                        int64
+		id, orderID                         int64
 		at, typ, src, principal, payloadStr string
 	)
 	if err := rows.Scan(
@@ -1626,8 +2051,8 @@ func (s *sqliteStore) listTradesByOrder(
 
 func scanTrade(rows *sql.Rows) (domain.Trade, error) {
 	var (
-		id, orderID                                                              int64
-		ten, acc, at, src, principal                                             string
+		id, orderID                                             int64
+		ten, acc, at, src, principal                            string
 		baseAsset, quoteAsset, side, quantity, price, lockPrice string
 	)
 	if err := rows.Scan(

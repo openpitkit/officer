@@ -16,33 +16,19 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 import {
-  createContext,
   useCallback,
-  useContext,
   useEffect,
   useMemo,
   useState,
   type ReactNode,
 } from "react";
 
-/**
- * The user-selected theme preference. "system" follows prefers-color-scheme.
- */
-export type ThemeMode = "dark" | "light" | "system";
-
-/** The concrete palette actually applied to the document. */
-export type ResolvedTheme = "dark" | "light";
-
-interface ThemeContextValue {
-  /** The persisted preference: dark, light, or system. */
-  mode: ThemeMode;
-  /** The palette currently applied, with "system" already resolved. */
-  resolved: ResolvedTheme;
-  /** Update and persist the preference. */
-  setMode: (mode: ThemeMode) => void;
-}
-
-const ThemeContext = createContext<ThemeContextValue | null>(null);
+import {
+  ThemeContext,
+  type ResolvedTheme,
+  type ThemeContextValue,
+  type ThemeMode,
+} from "@/theme/theme-context";
 
 const MQ_DARK = "(prefers-color-scheme: dark)";
 
@@ -106,6 +92,9 @@ export function ThemeProvider({
   // sync with the OS when the preference is "system".
   useEffect(() => {
     const next = resolve(mode);
+    // Re-resolve "system" against the live OS preference on each mode change;
+    // the initializer only ran once. Intentional and behavior-critical.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setResolved(next);
     applyToDocument(next);
 
@@ -142,13 +131,4 @@ export function ThemeProvider({
   return (
     <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
   );
-}
-
-/** Access the current theme preference and switcher. */
-export function useTheme(): ThemeContextValue {
-  const ctx = useContext(ThemeContext);
-  if (!ctx) {
-    throw new Error("useTheme must be used within a ThemeProvider");
-  }
-  return ctx;
 }

@@ -1,0 +1,104 @@
+{
+  "title": "Positions",
+  "actions": {
+    "adjust": "Adjust",
+    "adjustAriaLabel": "Adjust {{account}} {{asset}}",
+    "refreshHistoryAriaLabel": "Refresh history"
+  },
+  "filters": {
+    "byAccount": "Filter by account",
+    "byAsset": "Filter by asset"
+  },
+  "balances": {
+    "sectionLabel": "Balances",
+    "columns": {
+      "account": "Account",
+      "asset": "Asset",
+      "available": "Available",
+      "held": "Held",
+      "incoming": "Incoming",
+      "avgEntryPrice": "Avg entry price",
+      "realizedPnl": "Realized PnL",
+      "updated": "Updated",
+      "actions": "Actions"
+    },
+    "empty": {
+      "title": "No balances",
+      "hint": "Use Adjust to seed spot-funds balances for an account and asset."
+    }
+  },
+  "history": {
+    "sectionLabel": "Adjustment history",
+    "sourceLabel": "Source",
+    "sourceAll": "All",
+    "columns": {
+      "time": "Time",
+      "account": "Account",
+      "asset": "Asset",
+      "source": "Source",
+      "request": "Request",
+      "status": "Status",
+      "outcome": "Outcome"
+    },
+    "empty": {
+      "title": "No adjustments",
+      "hint": "Adjustment records appear here after each submit."
+    },
+    "request": {
+      "balanceDelta": "balance Δ{{value}}",
+      "balanceAbsolute": "balance ={{value}}",
+      "heldDelta": "held Δ{{value}}",
+      "heldAbsolute": "held ={{value}}",
+      "incomingDelta": "incoming Δ{{value}}",
+      "incomingAbsolute": "incoming ={{value}}",
+      "avgPrice": "avg {{value}}"
+    },
+    "status": {
+      "rejected": "rejected",
+      "accepted": "accepted"
+    }
+  },
+  "dialog": {
+    "title": "Adjust position",
+    "description": "Seed or update spot-funds balances for an account and asset. Use absolute mode to set a specific value, delta to add or subtract.",
+    "fields": {
+      "account": "Account",
+      "asset": "Asset",
+      "avgEntryPrice": "Average entry price (optional)",
+      "avgEntryPriceHint": "Positive decimal. Leave blank to keep the current value."
+    },
+    "amounts": {
+      "sectionLabel": "Amounts",
+      "balance": "balance",
+      "held": "held",
+      "incoming": "incoming"
+    },
+    "bounds": {
+      "sectionLabel": "Bounds (optional)",
+      "balanceLabel": "balance bounds",
+      "heldLabel": "held bounds",
+      "incomingLabel": "incoming bounds",
+      "lower": "Lower",
+      "upper": "Upper"
+    },
+    "mode": {
+      "absolute": "absolute",
+      "delta": "delta"
+    },
+    "outcome": {
+      "rejectedTitle": "Rejected",
+      "acceptedTitle": "Accepted",
+      "fieldBalance": "balance",
+      "fieldHeld": "held",
+      "fieldIncoming": "incoming"
+    },
+    "footer": {
+      "close": "Close",
+      "submit": "Submit"
+    },
+    "error": {
+      "accountRequired": "Account is required.",
+      "assetRequired": "Asset is required."
+    }
+  }
+}

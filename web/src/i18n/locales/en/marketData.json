@@ -1,0 +1,40 @@
+{
+  "title": "Market Data",
+  "instances": {
+    "title": "Sources"
+  },
+  "instance": {
+    "id": "Instance ID",
+    "type": "Provider",
+    "label": "Label",
+    "credentials": "Credentials JSON"
+  },
+  "instrument": {
+    "externalSymbol": "External symbol",
+    "baseAsset": "Base",
+    "quoteAsset": "Quote"
+  },
+  "actions": {
+    "addInstance": "Add source",
+    "addInstrument": "Add instrument",
+    "enable": "Enable",
+    "disable": "Disable",
+    "deleteInstance": "Delete source",
+    "deleteInstrument": "Delete instrument"
+  },
+  "state": {
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "stale": "Stale"
+  },
+  "table": {
+    "external": "External",
+    "instrument": "Instrument",
+    "price": "Price",
+    "asOf": "As-of",
+    "state": "State",
+    "actions": "Actions"
+  },
+  "emptyInstances": "No market-data sources configured",
+  "emptyInstruments": "No instruments configured"
+}

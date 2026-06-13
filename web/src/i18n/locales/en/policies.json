@@ -1,0 +1,62 @@
+{
+  "title": "Policies",
+  "intro": "Relational risk-policy barriers persisted in the control plane and applied to the OpenPit engine per policy. Each row is one barrier for a target.",
+  "addPolicy": "Add policy",
+  "wikiDetails": "Details",
+  "filter": {
+    "account": "Filter by account",
+    "accountPlaceholder": "acc-1",
+    "policy": "Filter by policy",
+    "allPolicies": "All policies"
+  },
+  "table": {
+    "policy": "Policy",
+    "scope": "Scope",
+    "account": "Account",
+    "asset": "Asset",
+    "values": "Values",
+    "actions": "Actions",
+    "edit": "Edit",
+    "editAriaLabel": "Edit policy barrier",
+    "deleteAriaLabel": "Delete policy barrier"
+  },
+  "empty": {
+    "noPolicies": "No policies yet",
+    "noPoliciesHint": "Add the first barrier to start constraining order flow.",
+    "noMatching": "No matching policies",
+    "noMatchingHint": "No barrier matches the current account or policy filter."
+  },
+  "delete": {
+    "title": "Delete policy barrier?",
+    "description": "This removes the {{policy}} barrier on {{scope}}{{account}}{{asset}}. The engine is reconfigured immediately.",
+    "accountFragment": " account {{account}}",
+    "assetFragment": " asset {{asset}}"
+  },
+  "dialog": {
+    "editTitle": "Edit policy",
+    "addTitle": "Add policy",
+    "policy": "Policy",
+    "scope": "Scope",
+    "account": "Account",
+    "accountPlaceholder": "acc-1",
+    "asset": "Asset",
+    "assetPlaceholder": "AAPL",
+    "values": "Values",
+    "rateLimitFootnote": "Both max orders and window are required.",
+    "atLeastOneFootnote": "At least one value is required.",
+    "save": "Save"
+  },
+  "duration": {
+    "amountPlaceholder": "e.g. 30",
+    "unit": {
+      "ms": "milliseconds",
+      "s": "seconds",
+      "m": "minutes",
+      "h": "hours"
+    },
+    "required": "Required.",
+    "invalid": "Invalid duration.",
+    "mustBePositive": "Must be greater than 0.",
+    "mustNotExceed24h": "Must not exceed 24 hours."
+  }
+}

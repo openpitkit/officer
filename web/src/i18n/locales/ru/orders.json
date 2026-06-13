@@ -1,0 +1,140 @@
+{
+  "title": "Ордера",
+  "subtitle": "Вид плоскости данных: ордера, проходящие через Officer, их события жизненного цикла и результирующие сделки. Выберите строку ордера, чтобы увидеть хронологию событий и исполнения.",
+
+  "tab": {
+    "orders": "Ордера",
+    "trades": "Сделки"
+  },
+
+  "filter": {
+    "accountPlaceholder": "Фильтр по счёту…",
+    "sourceAll": "Все источники",
+    "sourceAriaLabel": "Источник",
+    "sizeAriaLabel": "Размер страницы",
+    "sizeRows": "{{count}} строк"
+  },
+
+  "table": {
+    "id": "ID",
+    "account": "Счёт",
+    "instrument": "Инструмент",
+    "side": "Направление",
+    "amount": "Объём",
+    "price": "Цена",
+    "status": "Статус",
+    "source": "Источник",
+    "time": "Время",
+    "order": "Ордер",
+    "qty": "Кол-во",
+    "lockPrice": "Цена блокировки"
+  },
+
+  "amount": {
+    "qty": "{{value}} шт.",
+    "vol": "{{value}} об."
+  },
+
+  "price": {
+    "market": "рыночная"
+  },
+
+  "empty": {
+    "orders": {
+      "title": "Ордеров пока нет",
+      "hint": "Ордера, поданные через панель, API или MCP, будут отображаться здесь."
+    },
+    "trades": {
+      "title": "Сделок пока нет",
+      "hint": "Сделки формируются из отчётов об исполнении, переданных по ордерам."
+    }
+  },
+
+  "addOrder": {
+    "button": "Добавить ордер",
+    "added": "Ордер добавлен",
+    "dialog": {
+      "title": "Добавить ордер",
+      "description": "Добавьте ордер для проверки в риск-движке. Это эмуляция — на биржу ничего не отправляется. Без указания цены ордер считается рыночным и может быть отклонён.",
+      "account": "Счёт",
+      "accountPlaceholder": "например, desk-alpha",
+      "baseAsset": "Базовый актив",
+      "baseAssetPlaceholder": "например, AAPL",
+      "quoteAsset": "Котируемый актив",
+      "quoteAssetPlaceholder": "например, USD",
+      "side": "Направление",
+      "sideOptions": {
+        "buy": "Купить",
+        "sell": "Продать"
+      },
+      "amountKind": "Тип объёма",
+      "amountKindOptions": {
+        "quantity": "Количество (базовый)",
+        "volume": "Объём (котируемый)"
+      },
+      "amount": "Объём",
+      "amountPlaceholder": "например, 100",
+      "limitPrice": "Лимитная цена (необязательно)",
+      "limitPricePlaceholder": "не заполнять = рыночный",
+      "submitBusy": "Добавление…",
+      "submit": "Добавить ордер",
+      "validationError": "Счёт, инструмент и объём обязательны."
+    }
+  },
+
+  "check": {
+    "checking": "Проверка...",
+    "previewUnavailable": "Предпросмотр недоступен",
+    "wouldPass": "Предпросмотр: пройдёт",
+    "wouldReject": "Предпросмотр: будет отклонён",
+    "lockPrices": "Цены блокировки: {{prices}}",
+    "wouldBlock": "Заблокирует счёт {{account}}",
+    "wouldBlockReason": "Заблокирует счёт {{account}} — {{reason}}"
+  },
+
+  "execReport": {
+    "dialog": {
+      "title": "Отправить отчёт об исполнении",
+      "description": "Ордер #{{orderId}} — зафиксируйте исполнение для эмуляции частичного или полного заполнения.",
+      "fillQty": "Количество в сделке",
+      "fillQtyPlaceholder": "например, 50",
+      "fillPrice": "Цена исполнения",
+      "fillPricePlaceholder": "например, 192.40",
+      "lockPrice": "Цена блокировки (необязательно)",
+      "lockPricePlaceholder": "необязательно",
+      "finalFill": "Финальное исполнение (закрывает ордер)",
+      "submitBusy": "Отправка…",
+      "submit": "Отправить",
+      "accepted": "Отчёт об исполнении принят.",
+      "done": "Готово",
+      "validationError": "Количество и цена обязательны."
+    }
+  },
+
+  "detail": {
+    "dialog": {
+      "title": "Ордер #{{orderId}}",
+      "fieldAccount": "Счёт",
+      "fieldStatus": "Статус",
+      "fieldSource": "Источник",
+      "fieldSubmitted": "Отправлен",
+      "fieldLockPrices": "Цены блокировки",
+      "timeline": {
+        "sectionTitle": "Хронология событий",
+        "empty": "События не записаны.",
+        "by": "от {{principal}}",
+        "fillQty": "кол-во {{qty}}",
+        "fillAt": "@ {{price}}",
+        "fillLock": "(блок. {{price}})",
+        "rejectCode": "код {{code}}",
+        "rejectScope": "скоп {{scope}}",
+        "rejectPolicy": "политика {{policy}}"
+      },
+      "trades": {
+        "sectionTitle": "Сделки по ордеру",
+        "empty": "Исполнений пока нет. Отправьте отчёт об исполнении для создания сделки.",
+        "submitExecReport": "Отправить отчёт об исполнении"
+      }
+    }
+  }
+}

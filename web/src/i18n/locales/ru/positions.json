@@ -1,0 +1,104 @@
+{
+  "title": "Позиции",
+  "actions": {
+    "adjust": "Корректировать",
+    "adjustAriaLabel": "Корректировать {{account}} {{asset}}",
+    "refreshHistoryAriaLabel": "Обновить историю"
+  },
+  "filters": {
+    "byAccount": "Фильтр по счёту",
+    "byAsset": "Фильтр по активу"
+  },
+  "balances": {
+    "sectionLabel": "Балансы",
+    "columns": {
+      "account": "Счёт",
+      "asset": "Актив",
+      "available": "Доступно",
+      "held": "Заблокировано",
+      "incoming": "Входящие",
+      "avgEntryPrice": "Средняя цена входа",
+      "realizedPnl": "Реализованный P&L",
+      "updated": "Обновлено",
+      "actions": "Действия"
+    },
+    "empty": {
+      "title": "Балансов нет",
+      "hint": "Используйте «Корректировать» для задания спот-балансов по счёту и активу."
+    }
+  },
+  "history": {
+    "sectionLabel": "История корректировок",
+    "sourceLabel": "Источник",
+    "sourceAll": "Все",
+    "columns": {
+      "time": "Время",
+      "account": "Счёт",
+      "asset": "Актив",
+      "source": "Источник",
+      "request": "Запрос",
+      "status": "Статус",
+      "outcome": "Результат"
+    },
+    "empty": {
+      "title": "Корректировок нет",
+      "hint": "Записи о корректировках появляются здесь после каждой отправки."
+    },
+    "request": {
+      "balanceDelta": "баланс Δ{{value}}",
+      "balanceAbsolute": "баланс ={{value}}",
+      "heldDelta": "заблок. Δ{{value}}",
+      "heldAbsolute": "заблок. ={{value}}",
+      "incomingDelta": "входящие Δ{{value}}",
+      "incomingAbsolute": "входящие ={{value}}",
+      "avgPrice": "средн. {{value}}"
+    },
+    "status": {
+      "rejected": "отклонено",
+      "accepted": "принято"
+    }
+  },
+  "dialog": {
+    "title": "Корректировать позицию",
+    "description": "Задайте или обновите спот-балансы для счёта и актива. В абсолютном режиме устанавливается конкретное значение, в режиме дельты — добавляется или вычитается.",
+    "fields": {
+      "account": "Счёт",
+      "asset": "Актив",
+      "avgEntryPrice": "Средняя цена входа (необязательно)",
+      "avgEntryPriceHint": "Положительное десятичное число. Оставьте пустым для сохранения текущего значения."
+    },
+    "amounts": {
+      "sectionLabel": "Суммы",
+      "balance": "баланс",
+      "held": "заблокировано",
+      "incoming": "входящие"
+    },
+    "bounds": {
+      "sectionLabel": "Границы (необязательно)",
+      "balanceLabel": "границы баланса",
+      "heldLabel": "границы заблокированного",
+      "incomingLabel": "границы входящих",
+      "lower": "Нижняя",
+      "upper": "Верхняя"
+    },
+    "mode": {
+      "absolute": "абсолютный",
+      "delta": "дельта"
+    },
+    "outcome": {
+      "rejectedTitle": "Отклонено",
+      "acceptedTitle": "Принято",
+      "fieldBalance": "баланс",
+      "fieldHeld": "заблокировано",
+      "fieldIncoming": "входящие"
+    },
+    "footer": {
+      "close": "Закрыть",
+      "submit": "Отправить"
+    },
+    "error": {
+      "accountRequired": "Счёт обязателен.",
+      "assetRequired": "Актив обязателен."
+    }
+  }
+}

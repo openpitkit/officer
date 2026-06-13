@@ -1,0 +1,78 @@
+{
+  "policyLabel": {
+    "rate_limit": "Rate limit",
+    "order_size_limit": "Order size limit",
+    "pnl_bounds_kill_switch": "PnL bounds kill-switch"
+  },
+  "scope": {
+    "broker": "Broker",
+    "asset": "Asset",
+    "account": "Account",
+    "account_asset": "Account + asset"
+  },
+  "kindHint": {
+    "rate_limit": {
+      "max_orders": "integer > 0, <= 1e9",
+      "window": "Go duration, > 0, <= 24h (e.g. 1s, 500ms)"
+    },
+    "order_size_limit": {
+      "max_quantity": "positive decimal",
+      "max_notional": "positive decimal"
+    },
+    "pnl_bounds_kill_switch": {
+      "lower_bound": "decimal",
+      "upper_bound": "decimal",
+      "initial_pnl": "decimal, sets the starting realized PnL; only on creation"
+    }
+  },
+  "policy": {
+    "rate_limit": {
+      "label": "Rate limit",
+      "description": "Counts order attempts within a time window and rejects bursts beyond the cap. Rejected attempts still count, so retries cannot bypass it."
+    },
+    "order_size_limit": {
+      "label": "Order size limit",
+      "description": "Caps the size of a single order by quantity and notional value to prevent fat-finger errors."
+    },
+    "pnl_bounds_kill_switch": {
+      "label": "P&L kill switch",
+      "description": "Tracks accumulated realized P&L and blocks the account when it crosses a configured lower or upper bound."
+    }
+  },
+  "policyField": {
+    "rate_limit": {
+      "max_orders": {
+        "label": "max orders",
+        "hint": "integer greater than 0"
+      },
+      "window": {
+        "label": "window",
+        "hint": "duration up to 24h, e.g. 1s, 500ms"
+      }
+    },
+    "order_size_limit": {
+      "max_quantity": {
+        "label": "max quantity",
+        "hint": "positive decimal"
+      },
+      "max_notional": {
+        "label": "max notional",
+        "hint": "positive decimal"
+      }
+    },
+    "pnl_bounds_kill_switch": {
+      "lower_bound": {
+        "label": "lower bound",
+        "hint": "decimal, e.g. -1000"
+      },
+      "upper_bound": {
+        "label": "upper bound",
+        "hint": "decimal, e.g. 500"
+      },
+      "initial_pnl": {
+        "label": "initial PnL",
+        "hint": "decimal — seeds the starting realized PnL; settable only when creating an account+asset barrier"
+      }
+    }
+  }
+}

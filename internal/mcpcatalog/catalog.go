@@ -115,6 +115,15 @@ func All() []Command {
 			DefaultEnabled:   false,
 		},
 		{
+			Name:             "set_market_data_instrument",
+			Title:            "Set market-data instrument",
+			AgentDescription: "Enable or disable one configured market-data instrument.",
+			Mutating:         true,
+			Protective:       true,
+			Implemented:      true,
+			DefaultEnabled:   false,
+		},
+		{
 			Name:             "arm_killswitch",
 			Title:            "Arm kill-switch",
 			AgentDescription: "Arm the P&L kill-switch for an account/asset.",

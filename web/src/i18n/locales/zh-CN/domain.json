@@ -1,0 +1,78 @@
+{
+  "policyLabel": {
+    "rate_limit": "频率限制",
+    "order_size_limit": "订单规模限制",
+    "pnl_bounds_kill_switch": "盈亏熔断 (kill-switch)"
+  },
+  "scope": {
+    "broker": "经纪商",
+    "asset": "资产",
+    "account": "账户",
+    "account_asset": "账户 + 资产"
+  },
+  "kindHint": {
+    "rate_limit": {
+      "max_orders": "integer > 0, <= 1e9",
+      "window": "Go duration, > 0, <= 24h (e.g. 1s, 500ms)"
+    },
+    "order_size_limit": {
+      "max_quantity": "positive decimal",
+      "max_notional": "positive decimal"
+    },
+    "pnl_bounds_kill_switch": {
+      "lower_bound": "decimal",
+      "upper_bound": "decimal",
+      "initial_pnl": "decimal, sets the starting realized PnL; only on creation"
+    }
+  },
+  "policy": {
+    "rate_limit": {
+      "label": "频率限制",
+      "description": "统计时间窗口内的下单次数，超出上限则拒绝。被拒绝的尝试仍计入计数，重试无法绕过限制。"
+    },
+    "order_size_limit": {
+      "label": "订单规模限制",
+      "description": "按数量和名义价值限制单笔订单的规模，防止误操作（fat-finger）。"
+    },
+    "pnl_bounds_kill_switch": {
+      "label": "盈亏熔断 (kill-switch)",
+      "description": "追踪累计已实现盈亏，当盈亏超出配置的下限或上限时封锁账户。"
+    }
+  },
+  "policyField": {
+    "rate_limit": {
+      "max_orders": {
+        "label": "最大订单数",
+        "hint": "大于 0 的整数"
+      },
+      "window": {
+        "label": "时间窗口",
+        "hint": "时长，最长 24h，如 1s、500ms"
+      }
+    },
+    "order_size_limit": {
+      "max_quantity": {
+        "label": "最大数量",
+        "hint": "正小数"
+      },
+      "max_notional": {
+        "label": "最大名义价值",
+        "hint": "正小数"
+      }
+    },
+    "pnl_bounds_kill_switch": {
+      "lower_bound": {
+        "label": "下限",
+        "hint": "小数，如 -1000"
+      },
+      "upper_bound": {
+        "label": "上限",
+        "hint": "小数，如 500"
+      },
+      "initial_pnl": {
+        "label": "初始盈亏",
+        "hint": "小数 — 设定已实现盈亏的起始值；仅在创建账户+资产屏障时可设"
+      }
+    }
+  }
+}

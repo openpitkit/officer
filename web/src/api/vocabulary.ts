@@ -19,7 +19,13 @@
 // cross-layer vocabulary shared byte-identical with the Go domain constants,
 // the SQL data, the REST/MCP JSON, and this SPA. No layer renames or re-cases
 // them.
+//
+// Identifiers and structure (ids, allowed scopes, field keys, wiki URLs) live
+// here. Their human display text lives in the `domain` namespace keyed by the
+// same identifiers; read it through the helper functions below, which take a
+// `t` and an identifier and return the localized label/description/hint.
 
+import type { TFunction } from "i18next";
 
 export const POLICIES = [
   "rate_limit",
@@ -55,44 +61,39 @@ export function scopeHasAsset(scope: Scope): boolean {
   return scope === "asset" || scope === "account_asset";
 }
 
-/** The kinds accepted for one policy, with a flag for whether all are
- *  required. rate_limit needs both kinds; the others need at least one. */
+/** The kinds accepted for one policy. rate_limit needs both kinds; the others
+ *  need at least one. The per-kind unit/format hint is domain text — read it
+ *  with {@link kindHint}. */
 export interface KindSpec {
   kind: string;
-  /** A short unit/format hint shown next to the value input. */
-  hint: string;
 }
 
 export const POLICY_KINDS: Record<Policy, KindSpec[]> = {
-  rate_limit: [
-    { kind: "max_orders", hint: "integer > 0, <= 1e9" },
-    { kind: "window", hint: "Go duration, > 0, <= 24h (e.g. 1s, 500ms)" },
-  ],
-  order_size_limit: [
-    { kind: "max_quantity", hint: "positive decimal" },
-    { kind: "max_notional", hint: "positive decimal" },
-  ],
+  rate_limit: [{ kind: "max_orders" }, { kind: "window" }],
+  order_size_limit: [{ kind: "max_quantity" }, { kind: "max_notional" }],
   pnl_bounds_kill_switch: [
-    { kind: "lower_bound", hint: "decimal" },
-    { kind: "upper_bound", hint: "decimal" },
-    { kind: "initial_pnl", hint: "decimal, sets the starting realized PnL; only on creation" },
+    { kind: "lower_bound" },
+    { kind: "upper_bound" },
+    { kind: "initial_pnl" },
   ],
 };
 
-/** Human-readable policy labels for selects and chips. */
-export const POLICY_LABELS: Record<Policy, string> = {
-  rate_limit: "Rate limit",
-  order_size_limit: "Order size limit",
-  pnl_bounds_kill_switch: "PnL bounds kill-switch",
-};
+/** Localized policy label for selects and chips. Falls back to the raw
+ *  identifier for unknown ids so they still render. */
+export function policyLabel(t: TFunction, id: string): string {
+  return isPolicy(id) ? t(`domain:policyLabel.${id}`) : id;
+}
 
-/** Human-readable scope labels for selects and chips. */
-export const SCOPE_LABELS: Record<Scope, string> = {
-  broker: "Broker",
-  asset: "Asset",
-  account: "Account",
-  account_asset: "Account + asset",
-};
+/** Localized scope label for selects and chips. Falls back to the raw
+ *  identifier for unknown ids. */
+export function scopeLabel(t: TFunction, id: string): string {
+  return isScope(id) ? t(`domain:scope.${id}`) : id;
+}
+
+/** Localized unit/format hint shown next to a policy's `kind` value input. */
+export function kindHint(t: TFunction, policy: Policy, kind: string): string {
+  return t(`domain:kindHint.${policy}.${kind}`);
+}
 
 export function isPolicy(value: string): value is Policy {
   return (POLICIES as readonly string[]).includes(value);
@@ -103,21 +104,20 @@ export function isScope(value: string): value is Scope {
 }
 
 // --- Policy catalog ---
-// Rich metadata for the Policies page. One entry per policy.
+// Structural metadata for the Policies page. One entry per policy. The human
+// text (entry label/description, field label/hint) is domain text in the
+// `domain` namespace, keyed by these ids; read it with the helpers below.
 
-/** One field descriptor inside a policy catalog entry. */
+/** One field descriptor inside a policy catalog entry. Only the identifier
+ *  `key` lives here; the human label/hint are read via {@link policyFieldLabel}
+ *  / {@link policyFieldHint}. */
 export interface PolicyField {
   key: string;
-  /** Human words, not the mnemonic key. */
-  label: string;
-  hint: string;
 }
 
 /** Full catalog entry for a policy or pseudo-policy. */
 export interface PolicyCatalogEntry {
   id: string;
-  label: string;
-  description: string;
   /** Canonical wiki URL. */
   wikiUrl: string;
   fields: PolicyField[];
@@ -126,66 +126,23 @@ export interface PolicyCatalogEntry {
 export const POLICY_CATALOG: PolicyCatalogEntry[] = [
   {
     id: "rate_limit",
-    label: "Rate limit",
-    description:
-      "Counts order attempts within a time window and rejects bursts beyond the cap. Rejected attempts still count, so retries cannot bypass it.",
     wikiUrl: "https://github.com/openpitkit/pit/wiki/Policies#ratelimitpolicy",
-    fields: [
-      {
-        key: "max_orders",
-        label: "max orders",
-        hint: "integer greater than 0",
-      },
-      {
-        key: "window",
-        label: "window",
-        hint: "duration up to 24h, e.g. 1s, 500ms",
-      },
-    ],
+    fields: [{ key: "max_orders" }, { key: "window" }],
   },
   {
     id: "order_size_limit",
-    label: "Order size limit",
-    description:
-      "Caps the size of a single order by quantity and notional value to prevent fat-finger errors.",
     wikiUrl:
       "https://github.com/openpitkit/pit/wiki/Policies#ordersizelimitpolicy",
-    fields: [
-      {
-        key: "max_quantity",
-        label: "max quantity",
-        hint: "positive decimal",
-      },
-      {
-        key: "max_notional",
-        label: "max notional",
-        hint: "positive decimal",
-      },
-    ],
+    fields: [{ key: "max_quantity" }, { key: "max_notional" }],
   },
   {
     id: "pnl_bounds_kill_switch",
-    label: "P&L kill switch",
-    description:
-      "Tracks accumulated realized P&L and blocks the account when it crosses a configured lower or upper bound.",
     wikiUrl:
       "https://github.com/openpitkit/pit/wiki/Policies#pnlboundskillswitchpolicy",
     fields: [
-      {
-        key: "lower_bound",
-        label: "lower bound",
-        hint: "decimal, e.g. -1000",
-      },
-      {
-        key: "upper_bound",
-        label: "upper bound",
-        hint: "decimal, e.g. 500",
-      },
-      {
-        key: "initial_pnl",
-        label: "initial PnL",
-        hint: "decimal — seeds the starting realized PnL; settable only when creating an account+asset barrier",
-      },
+      { key: "lower_bound" },
+      { key: "upper_bound" },
+      { key: "initial_pnl" },
     ],
   },
 ];
@@ -195,5 +152,40 @@ export function getPolicyCatalogEntry(
   id: string,
 ): PolicyCatalogEntry | undefined {
   return POLICY_CATALOG.find((e) => e.id === id);
+}
+
+/** Localized rich label for a catalog policy (e.g. the dialog heading text).
+ *  Distinct from {@link policyLabel}, which is the terse select/chip label. */
+export function policyCatalogLabel(t: TFunction, id: string): string {
+  return t(`domain:policy.${id}.label`);
+}
+
+/** Localized prose description for a catalog policy. */
+export function policyCatalogDescription(t: TFunction, id: string): string {
+  return t(`domain:policy.${id}.description`);
+}
+
+/** Localized human label for a policy catalog field, by policy id + field key.
+ *  Falls back to the raw field key for unknown keys. */
+export function policyFieldLabel(
+  t: TFunction,
+  policyId: string,
+  fieldKey: string,
+): string {
+  return t(`domain:policyField.${policyId}.${fieldKey}.label`, {
+    defaultValue: fieldKey,
+  });
+}
+
+/** Localized format hint for a policy catalog field, by policy id + field key.
+ *  Returns the empty string for unknown keys (no hint to show). */
+export function policyFieldHint(
+  t: TFunction,
+  policyId: string,
+  fieldKey: string,
+): string {
+  return t(`domain:policyField.${policyId}.${fieldKey}.hint`, {
+    defaultValue: "",
+  });
 }
 

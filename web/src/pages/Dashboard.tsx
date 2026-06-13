@@ -15,11 +15,15 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
+import type { ReactNode } from "react";
 import { Activity, Inbox, Loader2, RefreshCw } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
-import type { ActivityEntry, AuditEntry, Overview } from "@/api/types";
+import type { ActivityEntry, AuditEntry, McpCommand, Overview } from "@/api/types";
 import { useAudit } from "@/api/useAudit";
+import { useMarketData } from "@/api/useMarketData";
+import { useMcpAccess } from "@/api/useMcpAccess";
 import { useOverview } from "@/api/useOverview";
 import { Page } from "@/components/Page";
 import { ErrorState, TableSkeleton } from "@/components/PageStates";
@@ -31,6 +35,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { formatDateTime } from "@/i18n/format";
 import {
   auditActionMeta,
   groupActivity,
@@ -38,49 +43,162 @@ import {
 } from "@/pages/dashboardActivity";
 
 // ---------------------------------------------------------------------------
-// Utilities
-// ---------------------------------------------------------------------------
-
-/** Render an ISO timestamp as a compact UTC string. */
-function formatUtc(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toISOString().replace("T", " ").replace("Z", " UTC");
-}
-
-// ---------------------------------------------------------------------------
-// Counts row (unchanged)
+// Counts row
 // ---------------------------------------------------------------------------
 
 function CountsRow({ counts }: { counts: Overview["counts"] }) {
-  const items = [
-    { label: "Accounts", value: counts.accounts },
-    { label: "Groups",   value: counts.groups   },
-    { label: "Policies", value: counts.limits   },
+  const { t } = useTranslation("dashboard");
+  const navigate = useNavigate();
+  const tiles: { label: string; value: ReactNode; route: string }[] = [
+    { label: t("counts.accounts"), value: counts.accounts, route: "/accounts" },
+    { label: t("counts.groups"),   value: counts.groups,   route: "/accounts" },
+    {
+      label: t("counts.orders"),
+      value: (
+        <>
+          {counts.ordersToday}
+          <span className="text-xl font-normal text-muted-lt"> / </span>
+          {counts.ordersTotal}
+        </>
+      ),
+      route: "/orders",
+    },
   ];
   return (
-    <div className="grid grid-cols-4 gap-4">
-      {items.map(({ label, value }) => (
-        <Card key={label} className="animate-fade-in">
-          <CardContent className="flex flex-col items-center gap-1 py-6 text-center">
-            <span className="nums text-3xl font-bold tracking-tight text-text">
-              {value}
-            </span>
-            <span className="text-xs text-muted">{label}</span>
-          </CardContent>
-        </Card>
+    <div className="grid grid-cols-3 gap-4">
+      {tiles.map(({ label, value, route }) => (
+        <button
+          key={label}
+          type="button"
+          onClick={() => navigate(route)}
+          className="animate-fade-in rounded-xl text-left hover:bg-accent-dim focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <Card className="h-full pointer-events-none">
+            <CardContent className="flex flex-col items-center gap-1 py-4 text-center">
+              <span className="nums text-2xl font-bold tracking-tight text-text">
+                {value}
+              </span>
+              <span className="text-xs text-muted">{label}</span>
+            </CardContent>
+          </Card>
+        </button>
       ))}
-      <Card className="animate-fade-in">
-        <CardContent className="flex flex-col items-center gap-1 py-6 text-center">
-          <span className="nums text-3xl font-bold tracking-tight text-text">
-            {counts.ordersToday}
-            <span className="text-xl font-normal text-muted-lt"> / </span>
-            {counts.ordersTotal}
-          </span>
-          <span className="text-xs text-muted">Orders</span>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// MCP access card
+// ---------------------------------------------------------------------------
+
+/** Chip variant for a single enabled MCP command. */
+function mcpChipVariant(cmd: McpCommand): "danger" | "warn" | "neutral" {
+  if (cmd.protective) return "danger";
+  if (cmd.mutating) return "warn";
+  return "neutral";
+}
+
+/** Full-width card: title + enabled-command chips on one line. */
+function McpAccessCard() {
+  const { t } = useTranslation("dashboard");
+  const navigate = useNavigate();
+  const { load } = useMcpAccess();
+
+  return (
+    <button
+      type="button"
+      onClick={() => navigate("/mcp-access")}
+      className="animate-fade-in w-full cursor-pointer rounded-xl text-left hover:bg-accent-dim focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <Card className="pointer-events-none">
+        <CardContent className="flex flex-wrap items-center gap-2 py-3">
+          <CardTitle className="shrink-0">{t("mcp.title")}</CardTitle>
+          {load.state === "loading" && (
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-muted" />
+          )}
+          {load.state === "error" && (
+            <span className="text-xs text-muted-lt">{load.error}</span>
+          )}
+          {load.state === "ready" && (() => {
+            const enabled = load.data.filter((c) => c.enabled);
+            return enabled.length === 0 ? (
+              <span className="text-xs text-muted-lt">{t("mcp.none")}</span>
+            ) : (
+              enabled.map((cmd) => (
+                <Badge key={cmd.name} variant={mcpChipVariant(cmd)}>
+                  {cmd.name}
+                </Badge>
+              ))
+            );
+          })()}
         </CardContent>
       </Card>
-    </div>
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Market-data card
+// ---------------------------------------------------------------------------
+
+function MarketDataCard() {
+  const { t } = useTranslation("dashboard");
+  const navigate = useNavigate();
+  const { load } = useMarketData();
+
+  return (
+    <button
+      type="button"
+      onClick={() => navigate("/market-data")}
+      className="animate-fade-in w-full cursor-pointer rounded-xl text-left hover:bg-accent-dim focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <Card className="pointer-events-none">
+        <CardContent className="flex flex-wrap items-center gap-2 py-3">
+          <CardTitle className="shrink-0">{t("marketData.title")}</CardTitle>
+          {load.state === "loading" && (
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-muted" />
+          )}
+          {load.state === "error" && (
+            <span className="text-xs text-muted-lt">{load.error}</span>
+          )}
+          {load.state === "ready" && (() => {
+            const enabled = load.data.instances.filter((i) => i.enabled);
+            const stale = enabled.flatMap((i) =>
+              i.instruments
+                .filter((instrument) => instrument.stale)
+                .map((instrument) => `${i.id}/${instrument.externalSymbol}`),
+            );
+            if (enabled.length === 0) {
+              return (
+                <span className="text-xs text-muted-lt">
+                  {t("marketData.none")}
+                </span>
+              );
+            }
+            return (
+              <>
+                {enabled.map((instance) => (
+                  <Badge key={instance.id} variant="ok">
+                    {instance.id}
+                  </Badge>
+                ))}
+                {stale.length > 0 &&
+                  stale.slice(0, 4).map((item) => (
+                    <Badge key={item} variant="warn">
+                      {item}
+                    </Badge>
+                  ))}
+                {stale.length > 4 && (
+                  <span className="text-xs text-muted-lt">
+                    {t("marketData.moreStale", { count: stale.length - 4 })}
+                  </span>
+                )}
+              </>
+            );
+          })()}
+        </CardContent>
+      </Card>
+    </button>
   );
 }
 
@@ -116,7 +234,7 @@ function ActivityItem({
           {entry.summary || entry.kind}
         </span>
         <span className="nums block text-[0.6875rem] text-muted-lt">
-          {formatUtc(entry.at)}
+          {formatDateTime(entry.at)}
         </span>
       </span>
     </button>
@@ -125,11 +243,12 @@ function ActivityItem({
 
 /** One column for a single entity-type group. */
 function ActivityColumn({ group }: { group: ActivityGroup }) {
+  const { t } = useTranslation("dashboard");
   return (
     <Card className="animate-fade-in flex flex-col">
       <CardHeader className="flex-row items-center gap-2 pb-2">
         <Activity className="h-3.5 w-3.5 shrink-0 text-muted" />
-        <CardTitle className="text-xs">{group.label}</CardTitle>
+        <CardTitle className="text-xs">{t(group.labelKey)}</CardTitle>
       </CardHeader>
       <CardContent className="flex-1 space-y-0 pb-2">
         {group.entries.map((e, i) => (
@@ -142,6 +261,7 @@ function ActivityColumn({ group }: { group: ActivityGroup }) {
 
 /** Responsive multi-column grid of activity groups. */
 function ActivityColumns({ activity }: { activity: ActivityEntry[] }) {
+  const { t } = useTranslation("dashboard");
   const groups = groupActivity(activity);
 
   if (groups.length === 0) {
@@ -149,7 +269,7 @@ function ActivityColumns({ activity }: { activity: ActivityEntry[] }) {
       <Card className="animate-fade-in">
         <CardContent className="flex flex-col items-center gap-3 py-10 text-center">
           <Inbox className="h-7 w-7 text-muted" />
-          <p className="text-sm text-muted">No recent activity</p>
+          <p className="text-sm text-muted">{t("activity.noRecent")}</p>
         </CardContent>
       </Card>
     );
@@ -162,7 +282,7 @@ function ActivityColumns({ activity }: { activity: ActivityEntry[] }) {
       style={{ gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}
     >
       {groups.map((g) => (
-        <ActivityColumn key={g.label} group={g} />
+        <ActivityColumn key={g.labelKey} group={g} />
       ))}
     </div>
   );
@@ -174,8 +294,9 @@ function ActivityColumns({ activity }: { activity: ActivityEntry[] }) {
 
 /** One row in the audit strip. */
 function AuditRow({ entry }: { entry: AuditEntry }) {
+  const { t } = useTranslation("dashboard");
   const navigate = useNavigate();
-  const { Icon, variant, title } = auditActionMeta(entry.action);
+  const { Icon, variant, titleKey } = auditActionMeta(entry.action);
 
   return (
     <button
@@ -186,7 +307,7 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
       {/* Action icon / badge */}
       <Badge variant={variant} className="shrink-0 gap-1 px-1.5 py-0.5">
         <Icon className="h-3 w-3" />
-        <span className="sr-only">{title}</span>
+        <span className="sr-only">{t(titleKey, { defaultValue: titleKey })}</span>
       </Badge>
 
       {/* Account */}
@@ -204,7 +325,7 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
         {entry.source}
       </span>
       <span className="nums w-36 shrink-0 text-right text-[0.6875rem] text-muted-lt">
-        {formatUtc(entry.at)}
+        {formatDateTime(entry.at)}
       </span>
     </button>
   );
@@ -214,13 +335,14 @@ const AUDIT_LIMIT = 15;
 
 /** Full-width recent audit strip. */
 function AuditStrip() {
+  const { t } = useTranslation("dashboard");
   const { load } = useAudit(AUDIT_LIMIT);
 
   return (
     <Card className="animate-fade-in">
       <CardHeader className="flex-row items-center gap-2">
         <Activity className="h-4 w-4 text-muted" />
-        <CardTitle>Recent audit</CardTitle>
+        <CardTitle>{t("audit.title")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-0 pb-2">
         {load.state === "loading" && (
@@ -234,7 +356,7 @@ function AuditStrip() {
         {load.state === "ready" && load.data.length === 0 && (
           <div className="flex flex-col items-center gap-2 py-6 text-center">
             <Inbox className="h-6 w-6 text-muted" />
-            <p className="text-xs text-muted">No audit entries</p>
+            <p className="text-xs text-muted">{t("audit.noEntries")}</p>
           </div>
         )}
         {load.state === "ready" &&
@@ -249,26 +371,28 @@ function AuditStrip() {
 // ---------------------------------------------------------------------------
 
 export function Dashboard() {
+  const { t } = useTranslation("dashboard");
+  const { t: tc } = useTranslation();
   const { load, reload } = useOverview();
   const refreshing = load.state === "loading";
 
   return (
     <Page
-      title="Dashboard"
+      title={t("title")}
       actions={
         <Button
           variant="ghost"
           size="sm"
           onClick={reload}
           disabled={refreshing}
-          aria-label="Refresh"
+          aria-label={t("refreshAriaLabel")}
         >
           {refreshing ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
           ) : (
             <RefreshCw className="h-3.5 w-3.5" />
           )}
-          Refresh
+          {tc("actions.refresh")}
         </Button>
       }
     >
@@ -279,6 +403,8 @@ export function Dashboard() {
       {load.state === "ready" && (
         <>
           <CountsRow counts={load.data.counts} />
+          <McpAccessCard />
+          <MarketDataCard />
           <ActivityColumns activity={load.data.activity} />
         </>
       )}

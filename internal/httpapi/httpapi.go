@@ -78,6 +78,16 @@ type Service interface {
 	ListMcpAccess(ctx context.Context) ([]backend.McpCommand, error)
 	SetMcpAccess(ctx context.Context, command string, enabled bool) error
 
+	ListMarketData(ctx context.Context) (backend.MarketDataStatus, error)
+	CreateMarketDataInstance(ctx context.Context, instance domain.MarketDataInstance) error
+	SetMarketDataInstanceEnabled(ctx context.Context, id string, enabled bool) error
+	DeleteMarketDataInstance(ctx context.Context, id string) error
+	UpsertMarketDataInstrument(ctx context.Context, instrument domain.MarketDataInstrument) error
+	SetMarketDataInstrumentEnabled(
+		ctx context.Context, instanceID, externalSymbol string, enabled bool,
+	) error
+	DeleteMarketDataInstrument(ctx context.Context, instanceID, externalSymbol string) error
+
 	CreateGroup(ctx context.Context, group domain.AccountGroup) error
 	ListGroups(ctx context.Context) ([]domain.AccountGroup, error)
 	GetGroup(ctx context.Context, id string) (domain.AccountGroup, []domain.Account, error)
@@ -225,6 +235,15 @@ func mountV1(r chi.Router, svc Service) {
 
 	r.Get("/mcp-access", handleListMcpAccess(svc))
 	r.Put("/mcp-access/{command}", handleSetMcpAccess(svc))
+
+	r.Get("/market-data", handleListMarketData(svc))
+	r.Post("/market-data/instances", handleCreateMarketDataInstance(svc))
+	r.Put("/market-data/instances/{id}/enabled", handleSetMarketDataInstanceEnabled(svc))
+	r.Delete("/market-data/instances/{id}", handleDeleteMarketDataInstance(svc))
+	r.Put("/market-data/instances/{id}/instruments", handleUpsertMarketDataInstrument(svc))
+	r.Put("/market-data/instances/{id}/instruments/enabled",
+		handleSetMarketDataInstrumentEnabled(svc))
+	r.Delete("/market-data/instances/{id}/instruments", handleDeleteMarketDataInstrument(svc))
 }
 
 // stampSource is middleware that stamps the given source onto the request
@@ -573,6 +592,162 @@ func handleSetMcpAccess(svc Service) http.HandlerFunc {
 		// The backend validated the command, so it must be present; treat its
 		// absence as an internal inconsistency rather than a 404.
 		writeErrMsg(w, http.StatusInternalServerError, "internal", "internal error")
+	}
+}
+
+// --- market data ------------------------------------------------------------
+
+func handleListMarketData(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		status, err := svc.ListMarketData(r.Context())
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"marketData": toMarketDataDTO(status),
+		})
+	}
+}
+
+func handleCreateMarketDataInstance(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req marketDataInstanceDTO
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			return
+		}
+		instance := domain.MarketDataInstance{
+			ID:          req.ID,
+			Type:        req.Type,
+			Label:       req.Label,
+			Credentials: req.Credentials,
+			Enabled:     req.Enabled,
+		}
+		if err := svc.CreateMarketDataInstance(r.Context(), instance); err != nil {
+			writeErr(w, err)
+			return
+		}
+		status, err := svc.ListMarketData(r.Context())
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"marketData": toMarketDataDTO(status),
+		})
+	}
+}
+
+func handleSetMarketDataInstanceEnabled(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := pathID(r)
+		if err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		var req struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			return
+		}
+		if err := svc.SetMarketDataInstanceEnabled(r.Context(), id, req.Enabled); err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"enabled": req.Enabled})
+	}
+}
+
+func handleDeleteMarketDataInstance(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := pathID(r)
+		if err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		if err := svc.DeleteMarketDataInstance(r.Context(), id); err != nil {
+			writeErr(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func handleUpsertMarketDataInstrument(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := pathID(r)
+		if err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		var req marketDataInstrumentDTO
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			return
+		}
+		instrument := domain.MarketDataInstrument{
+			InstanceID:     id,
+			ExternalSymbol: req.ExternalSymbol,
+			BaseAsset:      req.BaseAsset,
+			QuoteAsset:     req.QuoteAsset,
+			Enabled:        req.Enabled,
+		}
+		if err := svc.UpsertMarketDataInstrument(r.Context(), instrument); err != nil {
+			writeErr(w, err)
+			return
+		}
+		status, err := svc.ListMarketData(r.Context())
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"marketData": toMarketDataDTO(status),
+		})
+	}
+}
+
+func handleSetMarketDataInstrumentEnabled(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := pathID(r)
+		if err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		var req struct {
+			ExternalSymbol string `json:"externalSymbol"`
+			Enabled        bool   `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			return
+		}
+		if err := svc.SetMarketDataInstrumentEnabled(
+			r.Context(), id, req.ExternalSymbol, req.Enabled,
+		); err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"enabled": req.Enabled})
+	}
+}
+
+func handleDeleteMarketDataInstrument(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := pathID(r)
+		if err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		symbol := r.URL.Query().Get("externalSymbol")
+		if err := svc.DeleteMarketDataInstrument(r.Context(), id, symbol); err != nil {
+			writeErr(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 

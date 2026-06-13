@@ -40,12 +40,19 @@ type fakeSource struct {
 	listLimitsErr error
 	listAuditErr  error
 	checkErr      error
+	setMDCalls    []setMDCall
 
 	// disabledCommands lists command names the fake reports as disabled; any
 	// command not listed is enabled. cmdEnabledErr, when set, is returned from
 	// CommandEnabled so the fail-open path can be exercised.
 	disabledCommands map[string]bool
 	cmdEnabledErr    error
+}
+
+type setMDCall struct {
+	instanceID     string
+	externalSymbol string
+	enabled        bool
 }
 
 func (f *fakeSource) CommandEnabled(_ context.Context, command string) (bool, error) {
@@ -92,6 +99,17 @@ func (f *fakeSource) CheckOrder(
 	}
 	f.checkProbes = append(f.checkProbes, probe)
 	return f.checkResult, nil
+}
+
+func (f *fakeSource) SetMarketDataInstrumentEnabled(
+	_ context.Context, instanceID, externalSymbol string, enabled bool,
+) error {
+	f.setMDCalls = append(f.setMDCalls, setMDCall{
+		instanceID:     instanceID,
+		externalSymbol: externalSymbol,
+		enabled:        enabled,
+	})
+	return nil
 }
 
 // callHealth invokes the health tool handler directly.
@@ -257,9 +275,9 @@ func TestGetAccountStateHappyPath(t *testing.T) {
 		limits: []domain.Limit{
 			{
 				Target: domain.LimitTarget{
-					Tenant: domain.DefaultTenant,
-					Policy: domain.PolicyRateLimit,
-					Scope:  domain.ScopeAccount,
+					Tenant:  domain.DefaultTenant,
+					Policy:  domain.PolicyRateLimit,
+					Scope:   domain.ScopeAccount,
 					Account: "acc-1",
 				},
 				Values: []domain.LimitValue{
@@ -356,7 +374,7 @@ func TestGetLimitsHappyPath(t *testing.T) {
 				Target: domain.LimitTarget{
 					Policy: domain.PolicyRateLimit,
 					Scope:  domain.ScopeAsset,
-					Asset:  "BTC",
+					Asset:  "AAPL",
 				},
 				Values: []domain.LimitValue{
 					{Kind: domain.KindMaxOrders, Value: "10"},
@@ -420,12 +438,12 @@ func TestGetAuditHappyPath(t *testing.T) {
 	src := &fakeSource{
 		auditRows: []domain.AuditRow{
 			{
-				ID:     12,
-				At:     ts,
-				Actor:  "operator",
-				Action: domain.AuditActionSetLimit,
+				ID:      12,
+				At:      ts,
+				Actor:   "operator",
+				Action:  domain.AuditActionSetLimit,
 				Account: "acc-1",
-				Detail: "set limit rate_limit account=acc-1 max_orders=100 window=1s",
+				Detail:  "set limit rate_limit account=acc-1 max_orders=100 window=1s",
 			},
 		},
 	}
@@ -519,6 +537,14 @@ func (c *captureNSource) CheckOrder(_ context.Context, _ domain.OrderProbe) (
 	domain.CheckResult, error) {
 	return domain.CheckResult{}, nil
 }
+func (c *captureNSource) SetMarketDataInstrumentEnabled(
+	context.Context, string, string, bool,
+) error {
+	return nil
+}
+func (c *captureNSource) CommandEnabled(context.Context, string) (bool, error) {
+	return true, nil
+}
 
 // -- check_order --
 
@@ -528,7 +554,7 @@ func TestCheckOrderPass(t *testing.T) {
 		Passed: true, WouldLockPrices: []string{"100"},
 	}}
 	res := callCheckOrder(t, src, checkOrderInput{
-		Account: "acc-1", BaseAsset: "BTC", QuoteAsset: "USD",
+		Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
 		Side: "buy", AmountKind: "quantity", AmountValue: "1", Price: "100",
 	})
 	requireNotToolError(t, res.IsError)
@@ -556,7 +582,7 @@ func TestCheckOrderReject(t *testing.T) {
 		WouldBlock: &domain.ExecutionAccountBlock{Account: "acc-1", Code: "account_blocked"},
 	}}
 	res := callCheckOrder(t, src, checkOrderInput{
-		Account: "acc-1", BaseAsset: "BTC", QuoteAsset: "USD",
+		Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
 		Side: "buy", AmountKind: "quantity", AmountValue: "1", Price: "100",
 	})
 	requireNotToolError(t, res.IsError)
@@ -590,10 +616,53 @@ func TestCheckOrderSourceFailure(t *testing.T) {
 	t.Parallel()
 	src := &fakeSource{checkErr: fmt.Errorf("boom")}
 	res := callCheckOrder(t, src, checkOrderInput{
-		Account: "acc-1", BaseAsset: "BTC", QuoteAsset: "USD",
+		Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
 		Side: "buy", AmountKind: "quantity", AmountValue: "1",
 	})
 	requireToolError(t, res.IsError)
+}
+
+// -- set_market_data_instrument --
+
+func TestSetMarketDataInstrumentGatedAndDelegates(t *testing.T) {
+	t.Parallel()
+	disabled := &fakeSource{
+		disabledCommands: map[string]bool{setMarketDataInstrumentToolName: true},
+	}
+	h := setMarketDataInstrumentHandler(disabled)
+	res, err := h(context.Background(), nil,
+		&sdkmcp.CallToolParamsFor[setMarketDataInstrumentInput]{
+			Arguments: setMarketDataInstrumentInput{
+				InstanceID: "mock-1", ExternalSymbol: "AAPL", Enabled: true,
+			},
+		})
+	if err != nil {
+		t.Fatalf("handler protocol error: %v", err)
+	}
+	requireNotToolError(t, res.IsError)
+	if got := textContent(res.Content); got == "" {
+		t.Fatalf("disabled command should return a notice")
+	}
+	if len(disabled.setMDCalls) != 0 {
+		t.Fatalf("disabled command must not mutate: %+v", disabled.setMDCalls)
+	}
+
+	enabled := &fakeSource{}
+	h = setMarketDataInstrumentHandler(enabled)
+	res, err = h(context.Background(), nil,
+		&sdkmcp.CallToolParamsFor[setMarketDataInstrumentInput]{
+			Arguments: setMarketDataInstrumentInput{
+				InstanceID: "mock-1", ExternalSymbol: "AAPL", Enabled: true,
+			},
+		})
+	if err != nil {
+		t.Fatalf("handler protocol error: %v", err)
+	}
+	requireNotToolError(t, res.IsError)
+	if len(enabled.setMDCalls) != 1 || enabled.setMDCalls[0].instanceID != "mock-1" ||
+		enabled.setMDCalls[0].externalSymbol != "AAPL" || !enabled.setMDCalls[0].enabled {
+		t.Fatalf("toggle not delegated: %+v", enabled.setMDCalls)
+	}
 }
 
 // -- NewServer construction --

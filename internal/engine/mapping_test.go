@@ -183,10 +183,11 @@ func TestBuildEngine_RegistersRiskPolicies(t *testing.T) {
 			pnlBounds(domain.ScopeAsset, "", "USD", "-100", "100"),
 		},
 	}
-	eng, registered, err := buildEngine(byPolicy)
+	eng, service, registered, err := buildEngine(byPolicy)
 	if err != nil {
 		t.Fatalf("buildEngine: %v", err)
 	}
+	defer service.Close()
 	defer eng.Stop()
 
 	for _, name := range []string{
@@ -498,7 +499,7 @@ func fundedBalance(account, asset, available string) domain.Balance {
 func checkProbe(account string, side domain.OrderSide, qty, price string) domain.OrderProbe {
 	return domain.OrderProbe{
 		Account:     domain.AccountID(account),
-		BaseAsset:   "BTC",
+		BaseAsset:   "AAPL",
 		QuoteAsset:  "USD",
 		Side:        side,
 		AmountKind:  domain.OrderAmountKindQuantity,
@@ -515,7 +516,7 @@ func TestEngine_CheckOrderPassCapturesLock(t *testing.T) {
 	snap := Snapshot{
 		Balances: []domain.Balance{
 			fundedBalance("acc-1", "USD", "1000000"),
-			fundedBalance("acc-1", "BTC", "1000000"),
+			fundedBalance("acc-1", "AAPL", "1000000"),
 		},
 	}
 	eng, err := BuildOpenPitEngine("", snap)
@@ -572,7 +573,7 @@ func TestEngine_CheckOrderWouldBlock(t *testing.T) {
 		},
 		Balances: []domain.Balance{
 			fundedBalance("acc-1", "USD", "1000000"),
-			fundedBalance("acc-1", "BTC", "1000000"),
+			fundedBalance("acc-1", "AAPL", "1000000"),
 		},
 	}
 	eng, err := BuildOpenPitEngine("", snap)
@@ -609,7 +610,7 @@ func TestEngine_CheckOrderIsNonMutating(t *testing.T) {
 		Limits: []domain.Limit{rateLimit(domain.ScopeBroker, "", "", "1", "1m")},
 		Balances: []domain.Balance{
 			fundedBalance("acc-1", "USD", "1000000"),
-			fundedBalance("acc-1", "BTC", "1000000"),
+			fundedBalance("acc-1", "AAPL", "1000000"),
 		},
 	}
 	eng, err := BuildOpenPitEngine("", snap)
@@ -631,7 +632,7 @@ func TestEngine_CheckOrderIsNonMutating(t *testing.T) {
 	}
 
 	order := domain.Order{
-		Tenant: domain.DefaultTenant, Account: "acc-1", BaseAsset: "BTC", QuoteAsset: "USD",
+		Tenant: domain.DefaultTenant, Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
 		Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity,
 		AmountValue: "1", Price: "100",
 	}
@@ -717,7 +718,7 @@ func TestTradeAmountFrom_InvalidInputs(t *testing.T) {
 func TestOrderModelFrom_InvalidInputs(t *testing.T) {
 	t.Parallel()
 	base := domain.Order{
-		Account: "acc-1", BaseAsset: "BTC", QuoteAsset: "USD",
+		Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
 		Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1",
 	}
 
@@ -746,7 +747,7 @@ func TestOrderModelFrom_InvalidInputs(t *testing.T) {
 func TestExecutionReportFrom_InvalidInputs(t *testing.T) {
 	t.Parallel()
 	base := domain.ExecutionReportInput{
-		BaseAsset: "BTC", QuoteAsset: "USD", Account: "acc-1", Side: domain.OrderSideBuy,
+		BaseAsset: "AAPL", QuoteAsset: "USD", Account: "acc-1", Side: domain.OrderSideBuy,
 		FillQuantity: "1", FillPrice: "100", OrderID: 1,
 	}
 

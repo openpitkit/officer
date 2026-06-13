@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"go.openpit.dev/officer/internal/backend"
 	"go.openpit.dev/officer/internal/domain"
@@ -47,6 +48,9 @@ type fakeNode struct {
 
 	mcpAccess        map[string]bool
 	setMcpAccessCall []setMcpAccessCall
+	mdInstances      []domain.MarketDataInstance
+	mdInstruments    map[string][]domain.MarketDataInstrument
+	mdQuotes         []domain.MarketDataQuote
 
 	getAccountErr error
 }
@@ -207,6 +211,16 @@ func (n *fakeNode) ListOrders(
 	return nil, nil
 }
 
+func (n *fakeNode) CountOrders(context.Context, domain.TenantID) (int, error) {
+	return 0, nil
+}
+
+func (n *fakeNode) CountOrdersSince(
+	context.Context, domain.TenantID, time.Time,
+) (int, error) {
+	return 0, nil
+}
+
 func (n *fakeNode) ListOrderEvents(
 	context.Context, domain.TenantID, int64,
 ) ([]domain.OrderEvent, error) {
@@ -244,6 +258,99 @@ func (n *fakeNode) SetMcpAccess(
 	}
 	n.mcpAccess[command] = enabled
 	return nil
+}
+
+func (n *fakeNode) ListMarketDataInstances(
+	context.Context,
+) ([]domain.MarketDataInstance, error) {
+	return n.mdInstances, nil
+}
+
+func (n *fakeNode) CreateMarketDataInstance(
+	_ context.Context, instance domain.MarketDataInstance, _ domain.Caller,
+) error {
+	n.mdInstances = append(n.mdInstances, instance)
+	return nil
+}
+
+func (n *fakeNode) SetMarketDataInstanceEnabled(
+	_ context.Context, id string, enabled bool, _ domain.Caller,
+) error {
+	for i := range n.mdInstances {
+		if n.mdInstances[i].ID == id {
+			n.mdInstances[i].Enabled = enabled
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+
+func (n *fakeNode) DeleteMarketDataInstance(
+	_ context.Context, id string, _ domain.Caller,
+) error {
+	for i := range n.mdInstances {
+		if n.mdInstances[i].ID == id {
+			n.mdInstances = append(n.mdInstances[:i], n.mdInstances[i+1:]...)
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+
+func (n *fakeNode) ListMarketDataInstruments(
+	_ context.Context, instanceID string,
+) ([]domain.MarketDataInstrument, error) {
+	return n.mdInstruments[instanceID], nil
+}
+
+func (n *fakeNode) UpsertMarketDataInstrument(
+	_ context.Context, instrument domain.MarketDataInstrument, _ domain.Caller,
+) error {
+	if n.mdInstruments == nil {
+		n.mdInstruments = make(map[string][]domain.MarketDataInstrument)
+	}
+	n.mdInstruments[instrument.InstanceID] = append(n.mdInstruments[instrument.InstanceID], instrument)
+	return nil
+}
+
+func (n *fakeNode) SetMarketDataInstrumentEnabled(
+	_ context.Context, instanceID, externalSymbol string, enabled bool, _ domain.Caller,
+) error {
+	for i := range n.mdInstruments[instanceID] {
+		if n.mdInstruments[instanceID][i].ExternalSymbol == externalSymbol {
+			n.mdInstruments[instanceID][i].Enabled = enabled
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+
+func (n *fakeNode) DeleteMarketDataInstrument(
+	_ context.Context, instanceID, externalSymbol string, _ domain.Caller,
+) error {
+	instruments := n.mdInstruments[instanceID]
+	for i := range instruments {
+		if instruments[i].ExternalSymbol == externalSymbol {
+			n.mdInstruments[instanceID] = append(instruments[:i], instruments[i+1:]...)
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+
+func (n *fakeNode) ListMarketDataQuotes(
+	_ context.Context, instanceID string,
+) ([]domain.MarketDataQuote, error) {
+	if instanceID == "" {
+		return n.mdQuotes, nil
+	}
+	out := make([]domain.MarketDataQuote, 0)
+	for _, quote := range n.mdQuotes {
+		if quote.InstanceID == instanceID {
+			out = append(out, quote)
+		}
+	}
+	return out, nil
 }
 
 func (n *fakeNode) Close() error { return nil }
@@ -284,9 +391,9 @@ func TestService_CheckOrderValidatesBeforeRouting(t *testing.T) {
 	ctx := context.Background()
 
 	bad := []domain.OrderProbe{
-		{Account: "", BaseAsset: "BTC", QuoteAsset: "USD"},
+		{Account: "", BaseAsset: "AAPL", QuoteAsset: "USD"},
 		{Account: "acc-1", BaseAsset: "", QuoteAsset: "USD"},
-		{Account: "acc-1", BaseAsset: "BTC", QuoteAsset: "bad asset"},
+		{Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "bad asset"},
 	}
 	for _, probe := range bad {
 		svc, fn := newTestService()
@@ -307,7 +414,7 @@ func TestService_CheckOrderRoutesAndReturnsPass(t *testing.T) {
 
 	probe := domain.OrderProbe{
 		Account:     "acc-1",
-		BaseAsset:   "BTC",
+		BaseAsset:   "AAPL",
 		QuoteAsset:  "USD",
 		Side:        domain.OrderSideBuy,
 		AmountKind:  domain.OrderAmountKindQuantity,
@@ -341,7 +448,7 @@ func TestService_CheckOrderReturnsRejectAndBlock(t *testing.T) {
 	ctx := context.Background()
 
 	out, err := svc.CheckOrder(ctx, domain.OrderProbe{
-		Account: "acc-1", BaseAsset: "BTC", QuoteAsset: "USD",
+		Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
 		Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1",
 	})
 	if err != nil {
@@ -392,7 +499,7 @@ func TestService_PutLimitChecksAccountExists(t *testing.T) {
 			Policy:  domain.PolicyRateLimit,
 			Scope:   domain.ScopeAccountAsset,
 			Account: "acc-1",
-			Asset:   "BTC",
+			Asset:   "AAPL",
 		},
 		Values: []domain.LimitValue{
 			{Kind: domain.KindMaxOrders, Value: "100"},
@@ -556,6 +663,75 @@ func TestService_SetMcpAccessValidatesCommand(t *testing.T) {
 		fn.setMcpAccessCall[0].enabled != false {
 		t.Fatalf("valid set must route to node: %+v", fn.setMcpAccessCall)
 	}
+}
+
+func TestService_ListMarketDataBuildsStatus(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService()
+	now := time.Now().UTC()
+	fn.mdInstances = []domain.MarketDataInstance{
+		{ID: "mock-1", Type: domain.MarketDataProviderMock, Enabled: true},
+	}
+	fn.mdInstruments = map[string][]domain.MarketDataInstrument{
+		"mock-1": {
+			{
+				InstanceID:     "mock-1",
+				ExternalSymbol: "AAPL",
+				BaseAsset:      "AAPL",
+				QuoteAsset:     "USD",
+				Enabled:        true,
+			},
+			{
+				InstanceID:     "mock-1",
+				ExternalSymbol: "MSFT",
+				BaseAsset:      "MSFT",
+				QuoteAsset:     "USD",
+				Enabled:        true,
+			},
+		},
+	}
+	fn.mdQuotes = []domain.MarketDataQuote{
+		{
+			InstanceID:     "mock-1",
+			ExternalSymbol: "AAPL",
+			BaseAsset:      "AAPL",
+			QuoteAsset:     "USD",
+			Mark:           "100",
+			AsOf:           now,
+			ReceivedAt:     now,
+		},
+	}
+
+	status, err := svc.ListMarketData(context.Background())
+	if err != nil {
+		t.Fatalf("ListMarketData: %v", err)
+	}
+	if status.FreshnessSeconds != int(backend.MarketDataFreshnessTTL.Seconds()) {
+		t.Fatalf("freshness seconds mismatch: %+v", status)
+	}
+	if !containsProviderType(status.Providers, domain.MarketDataProviderBinance) {
+		t.Fatalf("providers = %+v, want binance", status.Providers)
+	}
+	if len(status.Instances) != 1 || len(status.Instances[0].Instruments) != 2 {
+		t.Fatalf("unexpected status: %+v", status)
+	}
+	first := status.Instances[0].Instruments[0]
+	second := status.Instances[0].Instruments[1]
+	if first.Quote == nil || first.Stale {
+		t.Fatalf("fresh quoted instrument should not be stale: %+v", first)
+	}
+	if !second.Stale {
+		t.Fatalf("enabled instrument without quote should be stale: %+v", second)
+	}
+}
+
+func containsProviderType(providers []backend.MarketDataProvider, want string) bool {
+	for _, provider := range providers {
+		if provider.Type == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestService_CommandEnabledResolves(t *testing.T) {

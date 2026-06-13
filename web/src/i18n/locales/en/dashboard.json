@@ -1,0 +1,54 @@
+{
+  "title": "Dashboard",
+  "refreshAriaLabel": "Refresh dashboard",
+  "counts": {
+    "accounts": "Accounts",
+    "groups": "Groups",
+    "orders": "Orders"
+  },
+  "activity": {
+    "noRecent": "No recent activity",
+    "bucket": {
+      "trading": "Orders & Trades",
+      "accounts": "Accounts",
+      "limits": "Limits",
+      "groups": "Groups",
+      "adjustments": "Adjustments",
+      "other": "Other"
+    }
+  },
+  "mcp": {
+    "title": "MCP access",
+    "none": "No commands enabled",
+    "loading": "Loading…",
+    "error": "Failed to load"
+  },
+  "marketData": {
+    "title": "Market data",
+    "none": "No sources enabled",
+    "moreStale": "+{{count}} stale"
+  },
+  "audit": {
+    "title": "Recent audit",
+    "noEntries": "No audit entries",
+    "action": {
+      "createAccount": "Create account",
+      "blockAccount": "Block account",
+      "unblockAccount": "Unblock account",
+      "updateAccount": "Update account",
+      "deleteAccount": "Delete account",
+      "createGroup": "Create group",
+      "blockGroup": "Block group",
+      "unblockGroup": "Unblock group",
+      "updateGroup": "Update group",
+      "deleteGroup": "Delete group",
+      "setLimit": "Set limit",
+      "deleteLimit": "Delete limit",
+      "updateLimit": "Update limit",
+      "adjustment": "Adjustment",
+      "balanceUpdate": "Balance update",
+      "order": "Order",
+      "tradeFill": "Trade / fill"
+    }
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "account": {
+    "required": "账户 ID 为必填项",
+    "tooLong": "账户 ID 最多 {{max}} 个字符",
+    "whitespace": "账户 ID 首尾不得有空格",
+    "printable": "账户 ID 只能包含可打印字符"
+  },
+  "asset": {
+    "required": "该范围下资产为必填项",
+    "tooLong": "资产最多 {{max}} 个字符",
+    "whitespace": "资产不得包含空格"
+  },
+  "kind": {
+    "maxOrders": {
+      "integer": "max_orders 必须为大于 0 的整数",
+      "cap": "max_orders 最大为 1e9"
+    },
+    "window": {
+      "duration": "window 必须为正 Go 时长（如 1s、500ms）",
+      "cap": "window 最大为 24h"
+    },
+    "positiveDecimal": "{{kind}} 必须为正小数",
+    "decimal": "{{kind}} 必须为小数",
+    "unknown": "未知类型 {{kind}}"
+  },
+  "limit": {
+    "unknownPolicy": "未知策略 {{policy}}",
+    "unknownScope": "未知范围 {{scope}}",
+    "scopeNotAllowed": "范围 {{scope}} 不允许用于 {{policy}}",
+    "scopeNoAccount": "范围 {{scope}} 不得携带账户",
+    "scopeNoAsset": "范围 {{scope}} 不得携带资产",
+    "rateLimitRequires": "rate_limit 需要同时指定 max_orders 和 window",
+    "orderSizeRequires": "order_size_limit 需要指定 max_quantity 或 max_notional",
+    "pnlRequires": "pnl_bounds_kill_switch 需要指定 lower_bound 或 upper_bound",
+    "pnlBoundOrder": "lower_bound 必须 <= upper_bound"
+  }
+}

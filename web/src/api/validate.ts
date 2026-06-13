@@ -35,38 +35,47 @@ const MAX_ASSET_LEN = 32;
 const MAX_ORDERS_CAP = 1e9;
 const MAX_WINDOW_HOURS = 24;
 
+/**
+ * A localizable validation failure. `key` names a key in the `validation`
+ * namespace; `values` carries the i18next interpolation values. Callers render
+ * it with `t(err.key, err.values)`. Returning a key instead of an English
+ * string keeps these client-side mirrors language-agnostic — the rules and
+ * thresholds stay here, the wording lives in the catalog.
+ */
+export type FieldError = { key: string; values?: Record<string, string | number> };
+
 /** Validate an account id: non-empty, <= 64 chars, printable, no
- *  leading/trailing whitespace. Returns an error message or null. */
-export function validateAccountID(id: string): string | null {
+ *  leading/trailing whitespace. Returns a {@link FieldError} or null. */
+export function validateAccountID(id: string): FieldError | null {
   if (id.length === 0) {
-    return "Account id is required";
+    return { key: "account.required" };
   }
   if (id.length > MAX_ACCOUNT_LEN) {
-    return `Account id must be at most ${MAX_ACCOUNT_LEN} characters`;
+    return { key: "account.tooLong", values: { max: MAX_ACCOUNT_LEN } };
   }
   if (id !== id.trim()) {
-    return "Account id must not have leading or trailing whitespace";
+    return { key: "account.whitespace" };
   }
   // Printable: reject ASCII control characters and DEL.
   for (const ch of id) {
     const code = ch.codePointAt(0) ?? 0;
     if (code < 0x20 || code === 0x7f) {
-      return "Account id must contain only printable characters";
+      return { key: "account.printable" };
     }
   }
   return null;
 }
 
 /** Validate an asset symbol: non-empty, no whitespace, <= 32 chars. */
-export function validateAsset(asset: string): string | null {
+export function validateAsset(asset: string): FieldError | null {
   if (asset.length === 0) {
-    return "Asset is required for this scope";
+    return { key: "asset.required" };
   }
   if (asset.length > MAX_ASSET_LEN) {
-    return `Asset must be at most ${MAX_ASSET_LEN} characters`;
+    return { key: "asset.tooLong", values: { max: MAX_ASSET_LEN } };
   }
   if (/\s/.test(asset)) {
-    return "Asset must not contain whitespace";
+    return { key: "asset.whitespace" };
   }
   return null;
 }
@@ -117,36 +126,37 @@ export function parseGoDurationSeconds(value: string): number | null {
   return total;
 }
 
-/** Validate one kind/value pair for a policy. Returns a message or null. */
+/** Validate one kind/value pair for a policy. Returns a {@link FieldError} or
+ *  null. */
 export function validateKindValue(
   _policy: Policy,
   kind: string,
   value: string,
-): string | null {
+): FieldError | null {
   switch (kind) {
     case "max_orders": {
       if (!isPositiveInteger(value)) {
-        return "max_orders must be an integer greater than 0";
+        return { key: "kind.maxOrders.integer" };
       }
       if (parseInt(value, 10) > MAX_ORDERS_CAP) {
-        return "max_orders must be at most 1e9";
+        return { key: "kind.maxOrders.cap" };
       }
       return null;
     }
     case "window": {
       const secs = parseGoDurationSeconds(value);
       if (secs === null) {
-        return "window must be a positive Go duration (e.g. 1s, 500ms)";
+        return { key: "kind.window.duration" };
       }
       if (secs > MAX_WINDOW_HOURS * 3600) {
-        return "window must be at most 24h";
+        return { key: "kind.window.cap" };
       }
       return null;
     }
     case "max_quantity":
     case "max_notional": {
       if (!isPositiveDecimal(value)) {
-        return `${kind} must be a positive decimal`;
+        return { key: "kind.positiveDecimal", values: { kind } };
       }
       return null;
     }
@@ -154,33 +164,33 @@ export function validateKindValue(
     case "upper_bound":
     case "initial_pnl": {
       if (!isDecimal(value)) {
-        return `${kind} must be a decimal`;
+        return { key: "kind.decimal", values: { kind } };
       }
       return null;
     }
     default:
-      return `unknown kind ${kind}`;
+      return { key: "kind.unknown", values: { kind } };
   }
 }
 
 /**
  * Validate a full barrier against the cross-layer vocabulary: policy, scope,
- * the account/asset axes, and the per-policy kind set. Returns the first error
- * message, or null when the barrier is well-formed.
+ * the account/asset axes, and the per-policy kind set. Returns the first
+ * {@link FieldError}, or null when the barrier is well-formed.
  */
-export function validateLimit(limit: Limit): string | null {
+export function validateLimit(limit: Limit): FieldError | null {
   if (!isPolicy(limit.policy)) {
-    return `unknown policy ${limit.policy}`;
+    return { key: "limit.unknownPolicy", values: { policy: limit.policy } };
   }
   const policy: Policy = limit.policy;
 
   if (!isScope(limit.scope)) {
-    return `unknown scope ${limit.scope}`;
+    return { key: "limit.unknownScope", values: { scope: limit.scope } };
   }
   const scope: Scope = limit.scope;
 
   if (!(ALLOWED_SCOPES[policy] as readonly Scope[]).includes(scope)) {
-    return `scope ${scope} is not allowed for ${policy}`;
+    return { key: "limit.scopeNotAllowed", values: { scope, policy } };
   }
 
   if (scopeHasAccount(scope)) {
@@ -189,7 +199,7 @@ export function validateLimit(limit: Limit): string | null {
       return err;
     }
   } else if (limit.account.length > 0) {
-    return `scope ${scope} must not carry an account`;
+    return { key: "limit.scopeNoAccount", values: { scope } };
   }
 
   if (scopeHasAsset(scope)) {
@@ -198,7 +208,7 @@ export function validateLimit(limit: Limit): string | null {
       return err;
     }
   } else if (limit.asset.length > 0) {
-    return `scope ${scope} must not carry an asset`;
+    return { key: "limit.scopeNoAsset", values: { scope } };
   }
 
   const kinds = Object.keys(limit.values).filter(
@@ -207,18 +217,18 @@ export function validateLimit(limit: Limit): string | null {
 
   if (policy === "rate_limit") {
     if (!kinds.includes("max_orders") || !kinds.includes("window")) {
-      return "rate_limit requires both max_orders and window";
+      return { key: "limit.rateLimitRequires" };
     }
   } else if (policy === "order_size_limit") {
     if (kinds.length === 0) {
-      return "order_size_limit requires max_quantity or max_notional";
+      return { key: "limit.orderSizeRequires" };
     }
   } else if (policy === "pnl_bounds_kill_switch") {
     // initial_pnl alone is not sufficient; at least one bound is always required.
     const hasBound =
       kinds.includes("lower_bound") || kinds.includes("upper_bound");
     if (!hasBound) {
-      return "pnl_bounds_kill_switch requires lower_bound or upper_bound";
+      return { key: "limit.pnlRequires" };
     }
   }
 
@@ -238,7 +248,7 @@ export function validateLimit(limit: Limit): string | null {
     const lower = parseFloat(limit.values["lower_bound"]);
     const upper = parseFloat(limit.values["upper_bound"]);
     if (Number.isFinite(lower) && Number.isFinite(upper) && lower > upper) {
-      return "lower_bound must be <= upper_bound";
+      return { key: "limit.pnlBoundOrder" };
     }
   }
 

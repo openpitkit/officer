@@ -25,28 +25,27 @@
 // one engine at process start, configures policies, blocks accounts, observes,
 // and stops the engine. All policy evaluation stays inside the engine.
 //
-// One engine handle is constructed by BuildOpenPitEngine and lives until Stop.
-// Later changes are applied dynamically through the binding's runtime Configure
-// surface; the adapter never rebuilds its own handle. rate_limit,
-// order_size_limit, and pnl_bounds_kill_switch retune their axes wholesale
-// (barriers added and removed at runtime). The spot-funds policy is registered
-// with its default settings and is not reconfigured at runtime. The residual
-// changes the SDK cannot express are exactly:
-// configuring an unregistered policy, removing the last barrier of a registered
-// policy, and dropping a broker barrier of rate_limit or order_size_limit while
-// other barriers remain - each returns an error wrapping
-// domain.ErrNotImplemented. The control-plane node treats that as a signal to
-// rebuild the engine from the current store snapshot and swap the handle (see
-// node.localNode). A rebuild is safe here because the control plane holds no
-// externally-observable in-flight reservations: pre-trade reservations never
-// escape SubmitOrder, so a fresh handle reconstructed from the persisted
-// snapshot is equivalent to the old one.
+// Officer builds the engine exactly once per process and never rebuilds it. The
+// single handle is constructed by BuildOpenPitEngine and lives until Stop, and
+// the adapter owns one market-data service for that whole lifetime. Later
+// changes are applied dynamically through the binding's runtime Configure
+// surface. rate_limit, order_size_limit, and pnl_bounds_kill_switch retune their
+// axes wholesale (barriers added and removed at runtime). The spot-funds policy
+// is registered with its default settings and is not reconfigured at runtime.
+// The residual changes the SDK cannot express are exactly: configuring an
+// unregistered policy, removing the last barrier of a registered policy, and
+// dropping a broker barrier of rate_limit or order_size_limit while other
+// barriers remain - each returns an error wrapping domain.ErrNotImplemented.
+// That error is surfaced to the caller (which reverts the store), never absorbed
+// by rebuilding a fresh handle: such a gap is closed engine-side in the SDK
+// It is not worked around in officer.
 package engine
 
 import (
 	"context"
 
 	"go.openpit.dev/officer/internal/domain"
+	"go.openpit.dev/officer/internal/marketdata"
 )
 
 // Snapshot is the engine state the control plane builds the engine from at
@@ -101,8 +100,9 @@ type ExecutionReportResult struct {
 }
 
 // BuildFunc builds the one engine from the seed snapshot. The local node calls
-// it once during construction; production wires it to BuildOpenPitEngine bound
-// to a runtime-library path. Tests substitute a fake.
+// it once during construction and never again - officer does not rebuild the
+// engine. Production wires it to BuildOpenPitEngine bound to a runtime-library
+// path. Tests substitute a fake.
 type BuildFunc func(snap Snapshot) (Engine, error)
 
 // Health reports the observable condition of an engine adapter for the
@@ -147,8 +147,10 @@ type Engine interface {
 	// domain.ErrNotImplemented when they would drop a broker barrier, which the
 	// Configure surface cannot clear in isolation. Configuring a policy that was
 	// not registered at build time, or removing the last barrier of a registered
-	// policy, likewise returns domain.ErrNotImplemented. It returns an error if the
-	// engine is not running or if the configuration cannot be applied.
+	// policy, likewise returns domain.ErrNotImplemented. The caller reverts the
+	// store on that error; it is an SDK gap to close engine-side,
+	// not a trigger to rebuild. It returns an error if the engine is not running
+	// or if the configuration cannot be applied.
 	ConfigurePolicy(ctx context.Context, policy string, limits []domain.Limit) error
 
 	// BlockAccount kill-switches the account in the engine, gating its pre-trade
@@ -204,7 +206,15 @@ type Engine interface {
 	// idempotent and safe to call repeatedly.
 	CheckOrder(ctx context.Context, probe domain.OrderProbe) (domain.CheckResult, error)
 
-	// Stop halts the engine and releases the underlying native resources. After
-	// Stop the engine is no longer usable. Stop is idempotent.
+	// MarketDataSink returns the quote sink backed by the engine's market-data
+	// service. The connector manager drains normalized quotes into it; the sink
+	// registers instruments on first sight and pushes quotes through the binding.
+	// It is valid for the whole process: the engine is never rebuilt, so the
+	// backing service handle is stable until Stop closes it.
+	MarketDataSink() marketdata.Sink
+
+	// Stop halts the engine and releases the underlying native resources,
+	// including the owned market-data service (closed after the engine stops).
+	// After Stop the engine is no longer usable. Stop is idempotent.
 	Stop()
 }

@@ -1,0 +1,107 @@
+{
+  "access": {
+    "title": "MCP 访问",
+    "descriptionPre": "控制 AI Agent 可调用的 MCP 命令。已禁用的命令将向 Agent 返回「面板已禁用」提示，对引擎无影响。标记为",
+    "descriptionProtected": "受保护",
+    "descriptionPost": "的命令授予 Agent 写入权限，启用前需明确确认。MCP 端点服务地址为",
+    "descriptionEnd": "。"
+  },
+  "table": {
+    "on": "开启",
+    "command": "命令",
+    "description": "描述",
+    "flags": "标记",
+    "enableAriaLabel": "启用 {{name}}",
+    "disabledNotice": "已禁用 — 将向 Agent 返回「面板已禁用」提示。",
+    "noDescription": "—"
+  },
+  "flags": {
+    "protected": "受保护",
+    "mutating": "写入操作",
+    "notImplemented": "未实现"
+  },
+  "dialog": {
+    "title": "启用受保护命令？",
+    "body1Pre": "命令",
+    "body1Mid": "已标记为",
+    "body1Flag": "受保护",
+    "body1Post": "。启用后将授予 AI Agent 修改数据库的能力，操作员无法实时监督或控制。",
+    "body2": "这是防止 AI 自主操作的保护屏障。仅在您明确授权 Agent 该权限且接受相应风险时方可启用。",
+    "body3Pre": "如有疑虑，请按",
+    "body3Post": "— 命令将保持禁用。",
+    "confirm": "仍然启用"
+  },
+  "command": {
+    "health": {
+      "description": "报告 Pit Officer 部署健康状态（引擎版本/配置/存活性、存储可达性）。"
+    },
+    "get_account_state": {
+      "description": "读取账户记录及其账户级风险屏障。"
+    },
+    "get_limits": {
+      "description": "列出已配置的风险屏障，可按账户过滤。"
+    },
+    "get_audit": {
+      "description": "读取控制面近期审计日志条目。"
+    },
+    "check_order": {
+      "description": "对订单执行非变更性的盘前模拟校验（通过/拒绝 + 原因），不改变任何状态。"
+    },
+    "set_limit": {
+      "description": "创建或修改风险限额 / 策略屏障。"
+    },
+    "arm_killswitch": {
+      "description": "为账户/资产激活 P&L 熔断开关。"
+    },
+    "disarm_killswitch": {
+      "description": "为账户/资产解除 P&L 熔断开关。"
+    },
+    "submit_order": {
+      "description": "通过盘前校验提交订单意向，并获取已签名的审批令牌。"
+    },
+    "confirm_execution": {
+      "description": "确认（提交）此前已审批订单的执行。"
+    },
+    "cancel": {
+      "description": "取消 / 撤销待处理的审批令牌或预留。"
+    },
+    "get_next_token": {
+      "description": "从注册表中获取下一个交易审批令牌。"
+    },
+    "report_fill": {
+      "description": "向引擎报告交易成交情况（盘后）。"
+    }
+  },
+  "connect": {
+    "title": "连接您的 Agent",
+    "subtitle": "通过 MCP 将 AI Agent 连接至本 Pit Officer 实例，或下载预制集成包。",
+    "tab": {
+      "claude": "Claude",
+      "chatgpt": "ChatGPT",
+      "prompt": "提示词"
+    },
+    "claude": {
+      "cliLabel": "通过 Claude CLI 添加连接器",
+      "desktopLabel": "或将此条目添加至您的 Claude Desktop 配置",
+      "skillHint": "偏好打包好的 Skill？下载自包含的 Claude Agent Skill。",
+      "skillButton": "下载 Claude Skill"
+    },
+    "chatgpt": {
+      "urlLabel": "MCP 连接器 URL",
+      "step1": "打开您的自定义 GPT 或 ChatGPT 连接器设置。",
+      "step2": "添加指向上方 URL 的 MCP 连接器。",
+      "step3": "或通过 /docs 的 OpenAPI 描述构建 ChatGPT Action。",
+      "publicUrlCaveat": "托管版 ChatGPT 仅能访问可公开解析的 HTTPS URL。回环地址或 localhost 的 Officer 实例无法被访问——请先将服务发布至公开的 HTTPS 端点。",
+      "instructionsHint": "下载用于自定义 GPT 的指令文本。",
+      "instructionsButton": "下载 GPT 指令"
+    },
+    "prompt": {
+      "label": "粘贴到您的 Agent 提示词中"
+    }
+  },
+  "prompt": {
+    "intro": "You have access to the Pit Officer MCP server - a pre-trade risk and\ncompliance control plane for trading operations.\n\nTransport: streamable HTTP at the /mcp endpoint of this service.\nAlternatively available as `pit-officer mcp` over stdio.\n\nPrinciples:\n- Least-privilege surface. The server carries no secrets or credentials.\n- Most tools are read-only. Treat any mutating tool with extra care.\n- Any trading action or mutation must go through pre-trade checks and\n  approval tokens. Never bypass the pre-trade step.",
+    "discover": "Discover the available commands at runtime: call the MCP tool list\n(`tools/list`) after connecting and rely on each tool's self-described\ninput schema. Do not assume a fixed set of commands - the surface is\nself-describing and can change as the operator adjusts access.",
+    "footer": "The operator controls which commands are enabled, and this can change at\nany time without notice. If a tool call returns a notice that the command\nis disabled in the panel, do NOT retry it — ask your orchestrator to\nextend or change your prompt/instructions accordingly (or to have the\noperator enable the command in Pit Officer)."
+  }
+}

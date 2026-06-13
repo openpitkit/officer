@@ -16,6 +16,7 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import type { AuditEntry } from "@/api/types";
@@ -41,6 +42,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { formatDateTime } from "@/i18n/format";
 
 const PAGE_SIZES = [50, 100, 500] as const;
 const SOURCES = ["panel", "api", "mcp", "system"] as const;
@@ -76,38 +78,30 @@ function sourceVariant(source: string): BadgeProps["variant"] {
   }
 }
 
-/** Render an ISO timestamp as a compact UTC string; fall back to the raw
- *  value when it does not parse. */
-function formatUtc(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) {
-    return iso;
-  }
-  return date.toISOString().replace("T", " ").replace("Z", " UTC");
-}
-
 function AuditTable({ entries }: { entries: AuditEntry[] }) {
+  const { t } = useTranslation("audit");
+  const { t: tc } = useTranslation();
   return (
     <Card>
       <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
-            <TableHead>Time (UTC)</TableHead>
-            <TableHead>Actor</TableHead>
-            <TableHead>Action</TableHead>
-            <TableHead>Account</TableHead>
-            <TableHead>Source</TableHead>
-            <TableHead>Detail</TableHead>
+            <TableHead>{t("table.time")}</TableHead>
+            <TableHead>{t("table.actor")}</TableHead>
+            <TableHead>{t("table.action")}</TableHead>
+            <TableHead>{t("table.account")}</TableHead>
+            <TableHead>{t("table.source")}</TableHead>
+            <TableHead>{t("table.detail")}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {entries.map((entry) => (
             <TableRow key={entry.id} className="hover:bg-transparent">
               <TableCell className="nums whitespace-nowrap text-xs text-muted-lt">
-                {formatUtc(entry.at)}
+                {formatDateTime(entry.at)}
               </TableCell>
               <TableCell className="text-xs text-muted-lt">
-                {entry.actor || "—"}
+                {entry.actor || tc("value.none")}
               </TableCell>
               <TableCell>
                 <Badge variant={actionVariant(entry.action)}>
@@ -115,7 +109,7 @@ function AuditTable({ entries }: { entries: AuditEntry[] }) {
                 </Badge>
               </TableCell>
               <TableCell className="nums text-xs">
-                {entry.account || "—"}
+                {entry.account || tc("value.none")}
               </TableCell>
               <TableCell>
                 {entry.source ? (
@@ -123,11 +117,11 @@ function AuditTable({ entries }: { entries: AuditEntry[] }) {
                     {entry.source}
                   </Badge>
                 ) : (
-                  <span className="text-xs text-muted-lt">—</span>
+                  <span className="text-xs text-muted-lt">{tc("value.none")}</span>
                 )}
               </TableCell>
               <TableCell className="text-xs text-text">
-                {entry.detail || "—"}
+                {entry.detail || tc("value.none")}
               </TableCell>
             </TableRow>
           ))}
@@ -138,6 +132,7 @@ function AuditTable({ entries }: { entries: AuditEntry[] }) {
 }
 
 export function Audit() {
+  const { t } = useTranslation("audit");
   const [params] = useSearchParams();
 
   // Seed filter state from URL so dashboard activity links and per-account
@@ -168,20 +163,23 @@ export function Audit() {
 
   return (
     <Page
-      title="Audit"
+      title={t("title")}
       actions={
         <>
           <Select
             value={String(size)}
             onValueChange={(v) => setSize(Number(v))}
           >
-            <SelectTrigger className="h-8 w-28 text-xs" aria-label="Page size">
+            <SelectTrigger
+              className="h-8 w-28 text-xs"
+              aria-label={t("actions.pageSize.ariaLabel")}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               {PAGE_SIZES.map((n) => (
                 <SelectItem key={n} value={String(n)}>
-                  {n} rows
+                  {t("actions.pageSize.rowCount", { count: n })}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -190,11 +188,7 @@ export function Audit() {
         </>
       }
     >
-      <p className="text-xs text-muted-lt">
-        Control-plane audit log: every account and limit change, newest first.
-        The actor, action, source, and a short human-readable summary are
-        recorded for each operation.
-      </p>
+      <p className="text-xs text-muted-lt">{t("description")}</p>
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-2">
@@ -203,7 +197,7 @@ export function Audit() {
             value={account}
             onChange={setAccount}
             suggestions={accountSuggestions}
-            placeholder="Filter by account…"
+            placeholder={t("filter.account.placeholder")}
             className="h-8 text-xs"
           />
         </div>
@@ -211,11 +205,14 @@ export function Audit() {
           value={source || "_all"}
           onValueChange={(v) => setSource(v === "_all" ? "" : v)}
         >
-          <SelectTrigger className="h-8 w-32 text-xs" aria-label="Source">
-            <SelectValue placeholder="All sources" />
+          <SelectTrigger
+            className="h-8 w-32 text-xs"
+            aria-label={t("filter.source.ariaLabel")}
+          >
+            <SelectValue placeholder={t("filter.source.all")} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="_all">All sources</SelectItem>
+            <SelectItem value="_all">{t("filter.source.all")}</SelectItem>
             {SOURCES.map((s) => (
               <SelectItem key={s} value={s}>
                 {s}
@@ -232,11 +229,11 @@ export function Audit() {
       {load.state === "ready" &&
         (load.data.length === 0 ? (
           <EmptyState
-            title="No audit entries"
+            title={t("empty.title")}
             hint={
               account || source
-                ? "No entries match the current filters."
-                : "Account and limit changes will appear here as operators make them."
+                ? t("empty.hint.filtered")
+                : t("empty.hint.blank")
             }
           />
         ) : (

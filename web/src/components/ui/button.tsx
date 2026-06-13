@@ -65,4 +65,7 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
 );
 Button.displayName = "Button";
 
+// `buttonVariants` is a cva() result, not a literal constant, so it is not
+// covered by `allowConstantExport`; shadcn/ui co-locates it with the component.
+// eslint-disable-next-line react-refresh/only-export-components
 export { Button, buttonVariants };

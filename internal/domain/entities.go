@@ -133,6 +133,77 @@ type Balance struct {
 	Tenant TenantID
 }
 
+// --- Market-data config -----------------------------------------------------
+
+// Market-data provider types. Each value is the `type` discriminator stored on a
+// MarketDataInstance and the switch key the connector manager constructs from.
+const (
+	// MarketDataProviderBYO is the bring-your-own provider: the customer pushes
+	// their own quotes.
+	MarketDataProviderBYO = "byo"
+	// MarketDataProviderBinance is the public Binance spot feed.
+	MarketDataProviderBinance = "binance"
+	// MarketDataProviderMock is the synthetic provider used for demos and tests.
+	MarketDataProviderMock = "mock"
+)
+
+// MarketDataInstance is one configured market-data source. Multiple instances of
+// the same Type may coexist (e.g. two BYO feeds). Credentials is an opaque JSON
+// blob, unencrypted for now; BYO and mock
+// leave it empty.
+type MarketDataInstance struct {
+	// ID is the operator-facing instance identifier, unique across instances.
+	ID string
+	// Type is the provider discriminator (e.g. MarketDataProviderBYO).
+	Type string
+	// Label is a free-form human-readable name; may be empty.
+	Label string
+	// Credentials is an opaque provider-specific JSON blob; empty for BYO/mock.
+	Credentials string
+	// Enabled reports whether the instance participates in the runtime.
+	Enabled bool
+}
+
+// MarketDataInstrument is one instrument of an instance: the external source
+// symbol mapped to an engine instrument (base, quote). Per-instrument
+// enable/disable lives here, so an instance can carry instruments that are
+// configured but not yet streaming.
+type MarketDataInstrument struct {
+	// InstanceID is the owning instance.
+	InstanceID string
+	// ExternalSymbol is the source-side symbol (e.g. "AAPL").
+	ExternalSymbol string
+	// BaseAsset is the instrument underlying asset (e.g. "AAPL").
+	BaseAsset string
+	// QuoteAsset is the instrument settlement asset (e.g. "USD").
+	QuoteAsset string
+	// Enabled reports whether this instrument is subscribed at runtime.
+	Enabled bool
+}
+
+// MarketDataQuote is the latest normalized quote observed for one configured
+// market-data instrument.
+type MarketDataQuote struct {
+	// AsOf is the source observation time.
+	AsOf time.Time
+	// ReceivedAt is when Officer received and persisted the quote.
+	ReceivedAt time.Time
+	// InstanceID is the owning instance.
+	InstanceID string
+	// ExternalSymbol is the source-side symbol.
+	ExternalSymbol string
+	// BaseAsset is the instrument underlying asset.
+	BaseAsset string
+	// QuoteAsset is the instrument settlement asset.
+	QuoteAsset string
+	// Mark is the mark price as an exact decimal string; empty when absent.
+	Mark string
+	// Bid is the best-bid price as an exact decimal string; empty when absent.
+	Bid string
+	// Ask is the best-ask price as an exact decimal string; empty when absent.
+	Ask string
+}
+
 // --- Adjustment types -------------------------------------------------------
 
 // AdjustmentAmountMode describes how a per-field adjustment value is applied.
@@ -316,13 +387,13 @@ type Order struct {
 type OrderEventType string
 
 const (
-	OrderEventSubmitted            OrderEventType = "submitted"
-	OrderEventPreTradeAccepted     OrderEventType = "pre_trade_accepted"
-	OrderEventPreTradeRejected     OrderEventType = "pre_trade_rejected"
-	OrderEventReservationCommitted OrderEventType = "reservation_committed"
+	OrderEventSubmitted             OrderEventType = "submitted"
+	OrderEventPreTradeAccepted      OrderEventType = "pre_trade_accepted"
+	OrderEventPreTradeRejected      OrderEventType = "pre_trade_rejected"
+	OrderEventReservationCommitted  OrderEventType = "reservation_committed"
 	OrderEventReservationRolledBack OrderEventType = "reservation_rolled_back"
-	OrderEventFill                 OrderEventType = "fill"
-	OrderEventCancelled            OrderEventType = "cancelled"
+	OrderEventFill                  OrderEventType = "fill"
+	OrderEventCancelled             OrderEventType = "cancelled"
 )
 
 // OrderEventPayload is the JSON-marshalled variant payload for an order event.

@@ -1,0 +1,40 @@
+{
+  "title": "Рыночные данные",
+  "instances": {
+    "title": "Источники"
+  },
+  "instance": {
+    "id": "ID инстанса",
+    "type": "Провайдер",
+    "label": "Метка",
+    "credentials": "Credentials JSON"
+  },
+  "instrument": {
+    "externalSymbol": "Внешний символ",
+    "baseAsset": "Base",
+    "quoteAsset": "Quote"
+  },
+  "actions": {
+    "addInstance": "Добавить источник",
+    "addInstrument": "Добавить инструмент",
+    "enable": "Включить",
+    "disable": "Выключить",
+    "deleteInstance": "Удалить источник",
+    "deleteInstrument": "Удалить инструмент"
+  },
+  "state": {
+    "enabled": "Включён",
+    "disabled": "Выключен",
+    "stale": "Отстаёт"
+  },
+  "table": {
+    "external": "Внешний",
+    "instrument": "Инструмент",
+    "price": "Цена",
+    "asOf": "As-of",
+    "state": "Состояние",
+    "actions": "Действия"
+  },
+  "emptyInstances": "Источники рыночных данных не настроены",
+  "emptyInstruments": "Инструменты не настроены"
+}
