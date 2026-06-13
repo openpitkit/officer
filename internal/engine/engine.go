@@ -26,30 +26,28 @@
 // and stops the engine. All policy evaluation stays inside the engine.
 //
 // One engine handle is constructed by BuildOpenPitEngine and lives until Stop.
-// Later limit changes are applied dynamically through the binding's runtime
-// Configure surface; the adapter never rebuilds its own handle. Where the SDK
-// cannot yet express a change (for example adding the first barrier of an
-// unregistered policy, or adding/removing a rate-limit barrier, which is
-// patch-only), ConfigurePolicy returns an error wrapping domain.ErrNotImplemented.
-// The control-plane node treats that as a signal to rebuild the engine from the
-// current store snapshot and swap the handle (see node.localNode). A rebuild is
-// safe here because the control plane holds no externally-observable in-flight
-// reservations: pre-trade reservations never escape SubmitOrder, so a fresh
-// handle reconstructed from the persisted snapshot is equivalent to the old one.
+// Later changes are applied dynamically through the binding's runtime Configure
+// surface; the adapter never rebuilds its own handle. rate_limit,
+// order_size_limit, and pnl_bounds_kill_switch retune their axes wholesale
+// (barriers added and removed at runtime). The spot-funds policy is registered
+// with its default settings and is not reconfigured at runtime. The residual
+// changes the SDK cannot express are exactly:
+// configuring an unregistered policy, removing the last barrier of a registered
+// policy, and dropping a broker barrier of rate_limit or order_size_limit while
+// other barriers remain - each returns an error wrapping
+// domain.ErrNotImplemented. The control-plane node treats that as a signal to
+// rebuild the engine from the current store snapshot and swap the handle (see
+// node.localNode). A rebuild is safe here because the control plane holds no
+// externally-observable in-flight reservations: pre-trade reservations never
+// escape SubmitOrder, so a fresh handle reconstructed from the persisted
+// snapshot is equivalent to the old one.
 package engine
 
 import (
 	"context"
-	"fmt"
 
 	"go.openpit.dev/officer/internal/domain"
 )
-
-// ErrCheckUnsupported is returned by Engine.CheckOrder. The OpenPit SDK has no
-// non-mutating dry-run yet, so the check seam is a stub on every adapter. It
-// wraps domain.ErrNotImplemented so the surface layers map it uniformly.
-var ErrCheckUnsupported = fmt.Errorf(
-	"engine: non-mutating order check unsupported: %w", domain.ErrNotImplemented)
 
 // Snapshot is the engine state the control plane builds the engine from at
 // process start: accounts' blocked state and the complete set of risk barriers.
@@ -143,16 +141,14 @@ type Engine interface {
 	// policy is one of the domain policy ids.
 	//
 	// The change is applied dynamically: the engine is never rebuilt. For
-	// order_size_limit and pnl_bounds_kill_switch the supplied axes are replaced
-	// wholesale; order_size_limit additionally returns an error wrapping
-	// domain.ErrNotImplemented when it would drop a broker barrier, which the
-	// Configure surface cannot clear in isolation. For rate_limit, whose
-	// Configure is patch-only, an unchanged barrier-key set is retuned; a key set
-	// that gained or lost a barrier returns an error wrapping
-	// domain.ErrNotImplemented. Configuring a policy that was not registered at
-	// build time, or removing the last barrier of a registered policy, likewise
-	// returns domain.ErrNotImplemented. It returns an error if the engine is not
-	// running or if the configuration cannot be applied.
+	// rate_limit, order_size_limit, and pnl_bounds_kill_switch the supplied axes
+	// are replaced wholesale, adding and removing barriers at runtime. rate_limit
+	// and order_size_limit additionally return an error wrapping
+	// domain.ErrNotImplemented when they would drop a broker barrier, which the
+	// Configure surface cannot clear in isolation. Configuring a policy that was
+	// not registered at build time, or removing the last barrier of a registered
+	// policy, likewise returns domain.ErrNotImplemented. It returns an error if the
+	// engine is not running or if the configuration cannot be applied.
 	ConfigurePolicy(ctx context.Context, policy string, limits []domain.Limit) error
 
 	// BlockAccount kill-switches the account in the engine, gating its pre-trade
@@ -200,9 +196,12 @@ type Engine interface {
 	// group is a no-op.
 	UnblockGroup(ctx context.Context, groupID string) error
 
-	// CheckOrder runs a non-mutating order check. It is a stub: it always
-	// returns ErrCheckUnsupported because the SDK has no non-mutating dry-run
-	// yet. It is not wired to any surface.
+	// CheckOrder runs the pre-trade pipeline for probe as a non-mutating
+	// dry-run on the live engine. It returns whether the order would pass plus
+	// the reasons: on pass the would-be reservation lock prices, on reject the
+	// engine rejects and the account block the engine would record. It commits
+	// nothing - no reservation is taken and no account state changes - so it is
+	// idempotent and safe to call repeatedly.
 	CheckOrder(ctx context.Context, probe domain.OrderProbe) (domain.CheckResult, error)
 
 	// Stop halts the engine and releases the underlying native resources. After

@@ -42,7 +42,18 @@ type fakeNode struct {
 	createCalls      []node.Key
 	blockCalls       []blockCall
 
+	checkResult domain.CheckResult
+	checkProbes []domain.OrderProbe
+
+	mcpAccess        map[string]bool
+	setMcpAccessCall []setMcpAccessCall
+
 	getAccountErr error
+}
+
+type setMcpAccessCall struct {
+	command string
+	enabled bool
 }
 
 type blockCall struct {
@@ -213,9 +224,26 @@ func (n *fakeNode) ListAudit(context.Context, int) ([]domain.AuditRow, error) {
 }
 
 func (n *fakeNode) CheckOrder(
-	context.Context, node.Key, domain.OrderProbe,
+	_ context.Context, _ node.Key, probe domain.OrderProbe,
 ) (domain.CheckResult, error) {
-	return domain.CheckResult{}, nil
+	n.checkProbes = append(n.checkProbes, probe)
+	return n.checkResult, nil
+}
+
+func (n *fakeNode) ListMcpAccess(context.Context) (map[string]bool, error) {
+	return n.mcpAccess, nil
+}
+
+func (n *fakeNode) SetMcpAccess(
+	_ context.Context, command string, enabled bool, _ domain.Caller,
+) error {
+	n.setMcpAccessCall = append(n.setMcpAccessCall,
+		setMcpAccessCall{command: command, enabled: enabled})
+	if n.mcpAccess == nil {
+		n.mcpAccess = make(map[string]bool)
+	}
+	n.mcpAccess[command] = enabled
+	return nil
 }
 
 func (n *fakeNode) Close() error { return nil }
@@ -248,6 +276,85 @@ func TestService_CreateAccountValidates(t *testing.T) {
 	}
 	if len(fn.createCalls) != 1 {
 		t.Fatalf("valid create must route to node")
+	}
+}
+
+func TestService_CheckOrderValidatesBeforeRouting(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	bad := []domain.OrderProbe{
+		{Account: "", BaseAsset: "BTC", QuoteAsset: "USD"},
+		{Account: "acc-1", BaseAsset: "", QuoteAsset: "USD"},
+		{Account: "acc-1", BaseAsset: "BTC", QuoteAsset: "bad asset"},
+	}
+	for _, probe := range bad {
+		svc, fn := newTestService()
+		if _, err := svc.CheckOrder(ctx, probe); !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("want ErrInvalid for %+v, got %v", probe, err)
+		}
+		if len(fn.checkProbes) != 0 {
+			t.Fatalf("invalid probe must not reach the node")
+		}
+	}
+}
+
+func TestService_CheckOrderRoutesAndReturnsPass(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService()
+	fn.checkResult = domain.CheckResult{Passed: true, WouldLockPrices: []string{"100"}}
+	ctx := context.Background()
+
+	probe := domain.OrderProbe{
+		Account:     "acc-1",
+		BaseAsset:   "BTC",
+		QuoteAsset:  "USD",
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "1",
+		Price:       "100",
+	}
+	out, err := svc.CheckOrder(ctx, probe)
+	if err != nil {
+		t.Fatalf("CheckOrder: %v", err)
+	}
+	if !out.Passed || len(out.WouldLockPrices) != 1 || out.WouldLockPrices[0] != "100" {
+		t.Fatalf("pass result not propagated: %+v", out)
+	}
+	if len(fn.checkProbes) != 1 || fn.checkProbes[0].Account != "acc-1" {
+		t.Fatalf("valid probe must route to node once with the account preserved")
+	}
+}
+
+func TestService_CheckOrderReturnsRejectAndBlock(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService()
+	fn.checkResult = domain.CheckResult{
+		Passed: false,
+		Rejects: []domain.OrderReject{
+			{Code: "rate_limit_exceeded", Scope: "account", Policy: "rate_limit"},
+		},
+		WouldBlock: &domain.ExecutionAccountBlock{
+			Account: "acc-1", Code: "account_blocked", Reason: "kill switch",
+		},
+	}
+	ctx := context.Background()
+
+	out, err := svc.CheckOrder(ctx, domain.OrderProbe{
+		Account: "acc-1", BaseAsset: "BTC", QuoteAsset: "USD",
+		Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1",
+	})
+	if err != nil {
+		t.Fatalf("CheckOrder: %v", err)
+	}
+	if out.Passed {
+		t.Fatalf("want passed=false")
+	}
+	if len(out.Rejects) != 1 || out.Rejects[0].Code != "rate_limit_exceeded" {
+		t.Fatalf("reject not propagated: %+v", out.Rejects)
+	}
+	if out.WouldBlock == nil || out.WouldBlock.Account != "acc-1" {
+		t.Fatalf("would-block not propagated: %+v", out.WouldBlock)
 	}
 }
 
@@ -398,5 +505,72 @@ func TestService_AggregatesReads(t *testing.T) {
 	rows, err := svc.ListAudit(ctx, 100)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("ListAudit: %v len=%d", err, len(rows))
+	}
+}
+
+func TestService_ListMcpAccessMergesDefaults(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService()
+	// Override one default-on command off and one default-off command on.
+	fn.mcpAccess = map[string]bool{"health": false, "set_limit": true}
+	ctx := context.Background()
+
+	commands, err := svc.ListMcpAccess(ctx)
+	if err != nil {
+		t.Fatalf("ListMcpAccess: %v", err)
+	}
+	got := make(map[string]bool, len(commands))
+	for _, c := range commands {
+		got[c.Command.Name] = c.Enabled
+	}
+	if got["health"] != false {
+		t.Errorf("health override not applied: %v", got["health"])
+	}
+	if got["set_limit"] != true {
+		t.Errorf("set_limit override not applied: %v", got["set_limit"])
+	}
+	if got["get_limits"] != true {
+		t.Errorf("get_limits should default on, got %v", got["get_limits"])
+	}
+	if got["arm_killswitch"] != false {
+		t.Errorf("arm_killswitch should default off, got %v", got["arm_killswitch"])
+	}
+}
+
+func TestService_SetMcpAccessValidatesCommand(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService()
+	ctx := context.Background()
+
+	if err := svc.SetMcpAccess(ctx, "not_a_command", true); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("want ErrNotFound for unknown command, got %v", err)
+	}
+	if len(fn.setMcpAccessCall) != 0 {
+		t.Fatalf("unknown command must not reach the node")
+	}
+
+	if err := svc.SetMcpAccess(ctx, "health", false); err != nil {
+		t.Fatalf("SetMcpAccess: %v", err)
+	}
+	if len(fn.setMcpAccessCall) != 1 || fn.setMcpAccessCall[0].command != "health" ||
+		fn.setMcpAccessCall[0].enabled != false {
+		t.Fatalf("valid set must route to node: %+v", fn.setMcpAccessCall)
+	}
+}
+
+func TestService_CommandEnabledResolves(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService()
+	fn.mcpAccess = map[string]bool{"check_order": false}
+	ctx := context.Background()
+
+	if enabled, err := svc.CommandEnabled(ctx, "check_order"); err != nil || enabled {
+		t.Fatalf("check_order override should disable: enabled=%v err=%v", enabled, err)
+	}
+	if enabled, err := svc.CommandEnabled(ctx, "health"); err != nil || !enabled {
+		t.Fatalf("health should default enabled: enabled=%v err=%v", enabled, err)
+	}
+	if enabled, err := svc.CommandEnabled(ctx, "submit_order"); err != nil || enabled {
+		t.Fatalf("submit_order should default disabled: enabled=%v err=%v", enabled, err)
 	}
 }

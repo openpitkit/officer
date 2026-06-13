@@ -119,6 +119,10 @@ type Balance struct {
 	Held string
 	// Incoming is funds in-flight (e.g. pending settlement).
 	Incoming string
+	// RealizedPnl is the cumulative settlement-asset realized P&L for this
+	// (account, asset). It is delta-accumulated from operation outcomes, never
+	// overwritten with an engine-reported absolute; a fresh row starts at "0".
+	RealizedPnl string
 	// AverageEntryPrice is optional; empty when not applicable.
 	AverageEntryPrice string
 	// Asset identifies the asset, e.g. "AAPL".
@@ -193,6 +197,13 @@ type AdjustmentOutcomeAccepted struct {
 	IncomingDelta string `json:"incoming_delta"`
 	// IncomingResult is the resulting absolute incoming value.
 	IncomingResult string `json:"incoming_result"`
+	// RealizedPnlDelta is the signed change applied to the settlement-asset
+	// realized P&L by this operation. It is accumulated onto the stored
+	// balance; the engine's reported absolute is for display/cross-check only.
+	RealizedPnlDelta string `json:"realized_pnl_delta"`
+	// RealizedPnlResult is the engine-reported cumulative realized P&L after the
+	// operation. Display/cross-check only; never persisted as an absolute.
+	RealizedPnlResult string `json:"realized_pnl_result"`
 }
 
 // AdjustmentOutcomeRejected carries the structured rejection reason.

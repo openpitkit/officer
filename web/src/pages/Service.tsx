@@ -16,9 +16,12 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 import { ExternalLink, Loader2, RefreshCw } from "lucide-react";
+import { Link } from "react-router-dom";
 
 import type { ServiceInfo } from "@/api/types";
 import { useService } from "@/api/useService";
+import { useMcpAccess } from "@/api/useMcpAccess";
+import { CopyableSnippet } from "@/components/CopyableSnippet";
 import { ErrorState } from "@/components/PageStates";
 import { Page } from "@/components/Page";
 import { StatRow } from "@/components/StatRow";
@@ -31,8 +34,12 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { buildMcpAgentPrompt } from "@/lib/mcpAgentPrompt";
 
 function ServiceCard({ info }: { info: ServiceInfo }) {
+  const { load: mcpLoad } = useMcpAccess();
+  const mcpCommands = mcpLoad.state === "ready" ? mcpLoad.data : null;
+
   return (
     <div className="space-y-4 animate-fade-in">
       <Card>
@@ -108,18 +115,74 @@ function ServiceCard({ info }: { info: ServiceInfo }) {
         <CardHeader>
           <CardTitle>API</CardTitle>
         </CardHeader>
-        <CardContent>
-          <div className="flex items-center justify-between gap-4 py-2">
-            <span className="text-xs text-muted">Documentation</span>
-            <a
-              href="/docs"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-sm text-accent hover:underline"
-            >
-              /docs
-              <ExternalLink className="h-3 w-3 opacity-70" />
-            </a>
+        <CardContent className="space-y-4">
+          {/* REST API */}
+          <div>
+            <p className="mb-1.5 text-xs font-medium text-muted">REST API</p>
+            <div className="flex items-center justify-between gap-4 py-1">
+              <span className="text-xs text-muted-lt">
+                OpenAPI / Swagger docs
+              </span>
+              <a
+                href="/docs"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-sm text-accent hover:underline"
+              >
+                /docs
+                <ExternalLink className="h-3 w-3 opacity-70" />
+              </a>
+            </div>
+          </div>
+
+          {/* MCP API */}
+          <div>
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+              <p className="text-xs font-medium text-muted">MCP API</p>
+              <div className="flex items-center gap-2">
+                <span className="nums text-[0.6875rem] text-muted-lt">/mcp</span>
+                <Link
+                  to="/mcp-access"
+                  className="text-[0.6875rem] text-accent hover:underline"
+                >
+                  Configure access
+                </Link>
+              </div>
+            </div>
+            {mcpCommands === null ? (
+              <p className="text-xs text-muted-lt italic">Loading commands…</p>
+            ) : mcpCommands.length === 0 ? (
+              <p className="text-xs text-muted-lt italic">No commands defined.</p>
+            ) : (
+              <div className="space-y-3">
+                <div className="space-y-1">
+                  {mcpCommands.map((cmd) => (
+                    <div
+                      key={cmd.name}
+                      className="flex items-start gap-2 text-xs"
+                    >
+                      <span
+                        className={
+                          cmd.protective
+                            ? "nums shrink-0 font-medium text-[var(--danger)]"
+                            : "nums shrink-0 font-medium text-text"
+                        }
+                      >
+                        {cmd.name}
+                      </span>
+                      <span className="text-muted-lt">
+                        {cmd.agentDescription || "—"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <CopyableSnippet
+                  label="Agent instructions"
+                  text={buildMcpAgentPrompt(mcpCommands)}
+                  rows={4}
+                />
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>

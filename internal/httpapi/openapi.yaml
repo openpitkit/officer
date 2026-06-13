@@ -348,8 +348,8 @@ paths:
             schema:
               $ref: "#/components/schemas/AdjustmentRequest"
       responses:
-        "200":
-          description: Adjustment record (accepted or rejected).
+        "201":
+          description: Adjustment record created (accepted or rejected).
           content:
             application/json:
               schema:
@@ -711,8 +711,8 @@ paths:
                   type: string
                   description: Exact decimal string. Omit for market orders.
       responses:
-        "200":
-          description: Order record (accepted or rejected by the engine).
+        "201":
+          description: Order record created (accepted or rejected by the engine).
           content:
             application/json:
               schema:
@@ -721,6 +721,62 @@ paths:
                 properties:
                   order:
                     $ref: "#/components/schemas/Order"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /orders/check:
+    post:
+      operationId: checkOrder
+      summary: Check an order against pre-trade risk evaluation (non-mutating)
+      description: >
+        Runs the order through the engine pre-trade checks as a dry-run and
+        reports whether it would pass. Nothing is recorded and no state changes:
+        no order is placed and no funds are reserved. An engine reject is a
+        successful call returning `passed` = `false` with the reasons; HTTP
+        errors indicate only system-level failures. The request body is
+        identical to `POST /orders`.
+      tags: [orders]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [account, baseAsset, quoteAsset, side, amountKind, amountValue]
+              properties:
+                account:
+                  type: string
+                baseAsset:
+                  type: string
+                quoteAsset:
+                  type: string
+                side:
+                  type: string
+                  description: "`buy` or `sell`."
+                amountKind:
+                  type: string
+                  description: "Kind of amount - e.g. `base` or `quote`."
+                amountValue:
+                  type: string
+                  description: Exact decimal string.
+                price:
+                  type: string
+                  description: Exact decimal string. Omit for market orders.
+      responses:
+        "200":
+          description: Dry-run outcome (would-pass or would-reject).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [check]
+                properties:
+                  check:
+                    $ref: "#/components/schemas/CheckResult"
         "400":
           $ref: "#/components/responses/ValidationError"
         "404":
@@ -794,8 +850,8 @@ paths:
                   type: boolean
                   description: Whether this is the last fill for the order.
       responses:
-        "200":
-          description: Execution result.
+        "201":
+          description: Execution result; the fill (trade) record was created.
           content:
             application/json:
               schema:
@@ -989,6 +1045,83 @@ paths:
           $ref: "#/components/responses/InternalError"
 
   # ---------------------------------------------------------------------------
+  # MCP access control
+  # ---------------------------------------------------------------------------
+
+  /mcp-access:
+    get:
+      operationId: listMcpAccess
+      summary: List the MCP command catalogue and per-command enabled state
+      description: >
+        Returns every MCP command Pit Officer exposes - both the implemented
+        read-only tools and the designed-but-not-yet-built mutating ones - with
+        its metadata and current effective enabled state. A command with no
+        stored override resolves to its catalogue default (read-only commands
+        on, protective commands off).
+      tags: [mcp-access]
+      responses:
+        "200":
+          description: MCP command catalogue with effective enabled state.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [commands]
+                properties:
+                  commands:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/McpCommand"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /mcp-access/{command}:
+    parameters:
+      - name: command
+        in: path
+        required: true
+        description: MCP command name (must be in the catalogue).
+        schema:
+          type: string
+    put:
+      operationId: setMcpAccess
+      summary: Enable or disable one MCP command
+      description: >
+        Persists the enabled state for one catalogue command. A disabled command
+        stays callable over MCP but returns a non-error "disabled in panel"
+        notice instead of running. Confirmation-on-enable for protective commands
+        is a UI concern; the backend just persists.
+      tags: [mcp-access]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled:
+                  type: boolean
+                  description: Whether the command is enabled.
+      responses:
+        "200":
+          description: The updated command with its persisted enabled state.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [command]
+                properties:
+                  command:
+                    $ref: "#/components/schemas/McpCommand"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ---------------------------------------------------------------------------
   # Dashboard / service
   # ---------------------------------------------------------------------------
 
@@ -997,6 +1130,16 @@ paths:
       operationId: getOverview
       summary: Dashboard overview — headline counts and recent activity
       tags: [dashboard]
+      parameters:
+        - name: since
+          in: query
+          required: false
+          description: >-
+            RFC3339 boundary for the orders-today tally. When absent or
+            unparseable the server uses its local start of day.
+          schema:
+            type: string
+            format: date-time
       responses:
         "200":
           description: Overview.
@@ -1135,7 +1278,7 @@ components:
               type: string
               description: >
                 Machine-readable code: `validation`, `not_found`, `conflict`,
-                `not_implemented`, or `internal`.
+                `precondition`, `not_implemented`, or `internal`.
               example: not_found
             message:
               type: string
@@ -1485,6 +1628,46 @@ components:
           type: string
           enum: [panel, api, mcp, system]
 
+    # Order check (pre-trade dry-run)
+
+    OrderReject:
+      type: object
+      required: [code, scope, policy, reason, details]
+      properties:
+        code:
+          type: string
+        scope:
+          type: string
+        policy:
+          type: string
+        reason:
+          type: string
+        details:
+          type: string
+
+    CheckResult:
+      type: object
+      required: [passed, rejects, wouldLockPrices, wouldBlock]
+      properties:
+        passed:
+          type: boolean
+          description: Whether the order would pass pre-trade.
+        rejects:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderReject"
+          description: Engine pre-trade rejects; empty when the check passed.
+        wouldLockPrices:
+          type: array
+          items:
+            type: string
+          description: Reservation lock prices the order would lock - exact decimal strings.
+        wouldBlock:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ExecutionBlock"
+          description: Account block the engine would record; null when none.
+
     # Execution report result
 
     ExecutionBlock:
@@ -1570,7 +1753,7 @@ components:
 
     Counts:
       type: object
-      required: [accounts, groups, limits]
+      required: [accounts, groups, limits, ordersToday, ordersTotal]
       properties:
         accounts:
           type: integer
@@ -1578,6 +1761,14 @@ components:
           type: integer
         limits:
           type: integer
+        ordersToday:
+          type: integer
+          description: >-
+            Orders recorded since the today boundary (the optional `since`
+            query parameter, else server-local start of day).
+        ordersTotal:
+          type: integer
+          description: Total orders recorded.
 
     Activity:
       type: object
@@ -1630,3 +1821,36 @@ components:
           type: boolean
         database:
           $ref: "#/components/schemas/ServiceDatabase"
+
+    # MCP access control
+
+    McpCommand:
+      type: object
+      required:
+        [name, title, agentDescription, mutating, protective, implemented, enabled]
+      properties:
+        name:
+          type: string
+          description: Wire name of the MCP tool.
+        title:
+          type: string
+          description: Human-readable label for the operator panel.
+        agentDescription:
+          type: string
+          description: One-line description of what an AI agent does with the command.
+        mutating:
+          type: boolean
+          description: Whether the command changes control-plane or engine state.
+        protective:
+          type: boolean
+          description: >
+            Whether the command guards capital or risk posture, so the panel can
+            require confirmation before enabling it.
+        implemented:
+          type: boolean
+          description: Whether a handler backs the command yet.
+        enabled:
+          type: boolean
+          description: >
+            Effective enabled state: the stored override when present, otherwise
+            the catalogue default.

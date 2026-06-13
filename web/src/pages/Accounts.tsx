@@ -1312,7 +1312,13 @@ function GroupsPanel({
                     row.kind === "real" ? (row.group.notes || undefined) : undefined
                   }
                 >
-                  {row.kind === "real" ? (row.group.notes || "—") : "—"}
+                  {row.kind === "real" ? (
+                    row.group.notes || "—"
+                  ) : (
+                    <span className="italic">
+                      All accounts without an assigned group.
+                    </span>
+                  )}
                 </TableCell>
 
                 <TableCell className="text-right">
@@ -1806,7 +1812,6 @@ export function Accounts() {
           applyAccountUpdate(updated);
         }}
       />
-
       {/* Group dialogs */}
       <EditGroupNotesDialog
         group={groupNotesTarget}

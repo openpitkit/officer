@@ -34,9 +34,28 @@ type fakeSource struct {
 	account       domain.Account
 	limits        []domain.Limit
 	auditRows     []domain.AuditRow
+	checkResult   domain.CheckResult
+	checkProbes   []domain.OrderProbe
 	accStateErr   error
 	listLimitsErr error
 	listAuditErr  error
+	checkErr      error
+
+	// disabledCommands lists command names the fake reports as disabled; any
+	// command not listed is enabled. cmdEnabledErr, when set, is returned from
+	// CommandEnabled so the fail-open path can be exercised.
+	disabledCommands map[string]bool
+	cmdEnabledErr    error
+}
+
+func (f *fakeSource) CommandEnabled(_ context.Context, command string) (bool, error) {
+	if f.cmdEnabledErr != nil {
+		return false, f.cmdEnabledErr
+	}
+	if f.disabledCommands[command] {
+		return false, nil
+	}
+	return true, nil
 }
 
 func (f *fakeSource) Status(_ context.Context) (Status, error) {
@@ -63,6 +82,16 @@ func (f *fakeSource) ListLimits(
 
 func (f *fakeSource) ListAudit(_ context.Context, _ int) ([]domain.AuditRow, error) {
 	return f.auditRows, f.listAuditErr
+}
+
+func (f *fakeSource) CheckOrder(
+	_ context.Context, probe domain.OrderProbe,
+) (domain.CheckResult, error) {
+	if f.checkErr != nil {
+		return domain.CheckResult{}, f.checkErr
+	}
+	f.checkProbes = append(f.checkProbes, probe)
+	return f.checkResult, nil
 }
 
 // callHealth invokes the health tool handler directly.
@@ -121,6 +150,20 @@ func callGetAudit(
 		})
 	if err != nil {
 		t.Fatalf("getAuditHandler returned protocol error: %v", err)
+	}
+	return res
+}
+
+// callCheckOrder invokes the check_order handler directly.
+func callCheckOrder(
+	t *testing.T, src Source, in checkOrderInput,
+) *sdkmcp.CallToolResultFor[checkOrderOutput] {
+	t.Helper()
+	h := checkOrderHandler(src)
+	res, err := h(context.Background(), nil,
+		&sdkmcp.CallToolParamsFor[checkOrderInput]{Arguments: in})
+	if err != nil {
+		t.Fatalf("checkOrderHandler returned protocol error: %v", err)
 	}
 	return res
 }
@@ -471,6 +514,86 @@ func (c *captureNSource) ListLimits(_ context.Context, _ domain.AccountID) (
 func (c *captureNSource) ListAudit(_ context.Context, n int) ([]domain.AuditRow, error) {
 	c.lastN = n
 	return nil, nil
+}
+func (c *captureNSource) CheckOrder(_ context.Context, _ domain.OrderProbe) (
+	domain.CheckResult, error) {
+	return domain.CheckResult{}, nil
+}
+
+// -- check_order --
+
+func TestCheckOrderPass(t *testing.T) {
+	t.Parallel()
+	src := &fakeSource{checkResult: domain.CheckResult{
+		Passed: true, WouldLockPrices: []string{"100"},
+	}}
+	res := callCheckOrder(t, src, checkOrderInput{
+		Account: "acc-1", BaseAsset: "BTC", QuoteAsset: "USD",
+		Side: "buy", AmountKind: "quantity", AmountValue: "1", Price: "100",
+	})
+	requireNotToolError(t, res.IsError)
+	if !res.StructuredContent.Passed {
+		t.Fatalf("want passed:true")
+	}
+	if len(res.StructuredContent.WouldLockPrices) != 1 {
+		t.Fatalf("want 1 lock price, got %d", len(res.StructuredContent.WouldLockPrices))
+	}
+	if len(src.checkProbes) != 1 || src.checkProbes[0].Side != domain.OrderSideBuy {
+		t.Fatalf("probe not forwarded with mapped fields: %+v", src.checkProbes)
+	}
+	if got := textContent(res.Content); got != "check acc-1: pass" {
+		t.Fatalf("unexpected text: %q", got)
+	}
+}
+
+func TestCheckOrderReject(t *testing.T) {
+	t.Parallel()
+	src := &fakeSource{checkResult: domain.CheckResult{
+		Passed: false,
+		Rejects: []domain.OrderReject{
+			{Code: "insufficient_funds", Scope: "account", Policy: "spot_funds"},
+		},
+		WouldBlock: &domain.ExecutionAccountBlock{Account: "acc-1", Code: "account_blocked"},
+	}}
+	res := callCheckOrder(t, src, checkOrderInput{
+		Account: "acc-1", BaseAsset: "BTC", QuoteAsset: "USD",
+		Side: "buy", AmountKind: "quantity", AmountValue: "1", Price: "100",
+	})
+	requireNotToolError(t, res.IsError)
+	if res.StructuredContent.Passed {
+		t.Fatalf("want passed:false")
+	}
+	if len(res.StructuredContent.Rejects) != 1 ||
+		res.StructuredContent.Rejects[0].Code != "insufficient_funds" {
+		t.Fatalf("reject not mapped: %+v", res.StructuredContent.Rejects)
+	}
+	if res.StructuredContent.WouldBlock == nil ||
+		res.StructuredContent.WouldBlock.Account != "acc-1" {
+		t.Fatalf("would-block not mapped: %+v", res.StructuredContent.WouldBlock)
+	}
+	if got := textContent(res.Content); got != "check acc-1: reject - 1 reason(s)" {
+		t.Fatalf("unexpected text: %q", got)
+	}
+}
+
+func TestCheckOrderMissingAccount(t *testing.T) {
+	t.Parallel()
+	src := &fakeSource{}
+	res := callCheckOrder(t, src, checkOrderInput{Account: "  "})
+	requireToolError(t, res.IsError)
+	if len(src.checkProbes) != 0 {
+		t.Fatalf("missing account must not reach the source")
+	}
+}
+
+func TestCheckOrderSourceFailure(t *testing.T) {
+	t.Parallel()
+	src := &fakeSource{checkErr: fmt.Errorf("boom")}
+	res := callCheckOrder(t, src, checkOrderInput{
+		Account: "acc-1", BaseAsset: "BTC", QuoteAsset: "USD",
+		Side: "buy", AmountKind: "quantity", AmountValue: "1",
+	})
+	requireToolError(t, res.IsError)
 }
 
 // -- NewServer construction --

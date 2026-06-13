@@ -72,6 +72,7 @@ const (
 	KindMaxNotional = "max_notional"
 	KindLowerBound  = "lower_bound"
 	KindUpperBound  = "upper_bound"
+	KindInitialPnl  = "initial_pnl"
 )
 
 // AccountID identifies a single trading account within a tenant.
@@ -149,6 +150,7 @@ const (
 	AuditActionDeleteGroup     AuditAction = "delete_group"
 	AuditActionSubmitOrder     AuditAction = "submit_order"
 	AuditActionExecutionReport AuditAction = "execution_report"
+	AuditActionSetMcpAccess    AuditAction = "set_mcp_access"
 )
 
 // AuditRow is the persisted, immutable record of a single control-plane action.
@@ -171,21 +173,42 @@ type AuditRow struct {
 	ID int64
 }
 
-// OrderProbe carries the parameters for a non-mutating order check.
-// Provisional: SDK has no non-mutating dry-run yet.
+// OrderProbe carries the submit-order inputs for a non-mutating order check.
+// It mirrors the SubmitOrder request fields exactly; the engine runs the same
+// pre-trade pipeline as a dry-run, mutating nothing. All monetary/size values
+// are exact decimal strings.
 type OrderProbe struct {
-	Account    AccountID
-	Instrument string
-	Side       string
-	Quantity   string
-	Price      string // optional; empty means market/unpriced
+	// Account is the account the order would be placed for.
+	Account AccountID
+	// BaseAsset is the asset that would be bought or sold.
+	BaseAsset string
+	// QuoteAsset is the asset used for pricing.
+	QuoteAsset string
+	// AmountValue is the size of the order (exact decimal string).
+	AmountValue string
+	// Price is the limit price (exact decimal string); empty means
+	// market/unpriced.
+	Price string
+	// Side is buy or sell.
+	Side OrderSide
+	// AmountKind distinguishes quantity-based from volume-based sizing.
+	AmountKind OrderAmountKind
 }
 
-// CheckResult is the outcome of a non-mutating order check.
-// Provisional: SDK has no non-mutating dry-run yet.
+// CheckResult is the outcome of a non-mutating order check (pre-trade dry-run).
+// On pass WouldLockPrices holds the prices the engine would lock at reservation
+// time; on reject Rejects holds the structured engine rejects and WouldBlock,
+// when non-nil, is the account block the engine would record.
 type CheckResult struct {
-	Passed  bool
-	Rejects []string
+	// WouldBlock is the account block the engine would record; nil when none.
+	WouldBlock *ExecutionAccountBlock
+	// Rejects are the engine pre-trade rejects; empty when the check passed.
+	Rejects []OrderReject
+	// WouldLockPrices are the reservation lock prices the order would lock
+	// (exact decimal strings); empty when nothing would be locked.
+	WouldLockPrices []string
+	// Passed reports whether the order would pass pre-trade.
+	Passed bool
 }
 
 // ValidateAccountID returns an error wrapping ErrInvalid when id is not a
@@ -253,7 +276,7 @@ func ValidateLimit(l Limit) error {
 	if len(l.Values) == 0 {
 		return fmt.Errorf("limit has no values: %w", ErrInvalid)
 	}
-	return validateValues(t.Policy, l.Values)
+	return validateValues(t.Policy, t.Scope, l.Values)
 }
 
 // validateScope checks the policy/scope combination is allowed.
@@ -301,8 +324,10 @@ func validateScopeAxes(t LimitTarget) error {
 	return nil
 }
 
-// validateValues enforces the kind+value rules per policy.
-func validateValues(policy string, vals []LimitValue) error {
+// validateValues enforces the kind+value rules per policy. The scope is threaded
+// through because some kinds are scope-specific (e.g. pnl_bounds initial_pnl is
+// only valid for the account_asset scope).
+func validateValues(policy, scope string, vals []LimitValue) error {
 	kindSet := make(map[string]string, len(vals))
 	for _, v := range vals {
 		if _, dup := kindSet[v.Kind]; dup {
@@ -317,7 +342,7 @@ func validateValues(policy string, vals []LimitValue) error {
 	case PolicyOrderSizeLimit:
 		return validateOrderSizeLimit(kindSet)
 	case PolicyPnlBoundsKillSwitch:
-		return validatePnlBounds(kindSet)
+		return validatePnlBounds(scope, kindSet)
 	}
 	return nil
 }
@@ -374,9 +399,21 @@ func validateOrderSizeLimit(kinds map[string]string) error {
 	return nil
 }
 
-func validatePnlBounds(kinds map[string]string) error {
+func validatePnlBounds(scope string, kinds map[string]string) error {
 	for k := range kinds {
-		if k != KindLowerBound && k != KindUpperBound {
+		switch k {
+		case KindLowerBound, KindUpperBound:
+		case KindInitialPnl:
+			// initial_pnl seeds the per-account accumulated P&L at barrier
+			// construction; it only exists on the account-asset barrier, so it is
+			// rejected for any other scope.
+			if scope != ScopeAccountAsset {
+				return fmt.Errorf(
+					"initial_pnl is only valid for the account_asset scope, not %q: %w",
+					scope, ErrInvalid,
+				)
+			}
+		default:
 			return fmt.Errorf("unknown kind %q for pnl_bounds_kill_switch: %w", k, ErrInvalid)
 		}
 	}
@@ -405,7 +442,37 @@ func validatePnlBounds(kinds map[string]string) error {
 	if hasLower && hasUpper && lowerD.GreaterThan(upperD) {
 		return fmt.Errorf("lower_bound must be <= upper_bound: %w", ErrInvalid)
 	}
+	if initialStr, ok := kinds[KindInitialPnl]; ok {
+		if _, err := decimal.NewFromString(initialStr); err != nil {
+			return fmt.Errorf("initial_pnl is not a valid decimal: %w", ErrInvalid)
+		}
+	}
 	return nil
+}
+
+// AddDecimals returns the exact decimal sum of base and delta as a string. An
+// empty operand is treated as zero so a fresh accumulator (or an absent delta)
+// is handled without a special case. It is used to accumulate balance
+// quantities (realized P&L) by applying the per-operation delta to the stored
+// value rather than overwriting with an absolute. Returns ErrInvalid when
+// either operand is a non-empty, non-decimal string.
+func AddDecimals(base, delta string) (string, error) {
+	baseD := decimal.Zero
+	deltaD := decimal.Zero
+	var err error
+	if base != "" {
+		baseD, err = decimal.NewFromString(base)
+		if err != nil {
+			return "", fmt.Errorf("base %q is not a valid decimal: %w", base, ErrInvalid)
+		}
+	}
+	if delta != "" {
+		deltaD, err = decimal.NewFromString(delta)
+		if err != nil {
+			return "", fmt.Errorf("delta %q is not a valid decimal: %w", delta, ErrInvalid)
+		}
+	}
+	return baseD.Add(deltaD).String(), nil
 }
 
 // validatePositiveDecimal returns an error when s is not a positive decimal.

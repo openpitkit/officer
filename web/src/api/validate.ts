@@ -151,7 +151,8 @@ export function validateKindValue(
       return null;
     }
     case "lower_bound":
-    case "upper_bound": {
+    case "upper_bound":
+    case "initial_pnl": {
       if (!isDecimal(value)) {
         return `${kind} must be a decimal`;
       }
@@ -213,7 +214,10 @@ export function validateLimit(limit: Limit): string | null {
       return "order_size_limit requires max_quantity or max_notional";
     }
   } else if (policy === "pnl_bounds_kill_switch") {
-    if (kinds.length === 0) {
+    // initial_pnl alone is not sufficient; at least one bound is always required.
+    const hasBound =
+      kinds.includes("lower_bound") || kinds.includes("upper_bound");
+    if (!hasBound) {
       return "pnl_bounds_kill_switch requires lower_bound or upper_bound";
     }
   }

@@ -31,6 +31,7 @@ import (
 	"go.openpit.dev/officer/internal/auth"
 	"go.openpit.dev/officer/internal/domain"
 	"go.openpit.dev/officer/internal/engine"
+	"go.openpit.dev/officer/internal/mcpcatalog"
 	"go.openpit.dev/officer/internal/node"
 )
 
@@ -266,6 +267,74 @@ func (s *Service) ListAuditFiltered(
 		out = append(out, row)
 	}
 	return out, nil
+}
+
+// --- MCP access control -----------------------------------------------------
+
+// McpCommand is one MCP command's catalogue metadata paired with its resolved
+// effective enabled state, for the operator panel. It is the surface-facing view
+// the HTTP layer maps onto its wire DTO.
+type McpCommand struct {
+	// Command is the catalogue entry (identity, agent description, risk flags,
+	// implemented flag, default enabled state).
+	Command mcpcatalog.Command
+	// Enabled is the resolved effective state: the stored override when present,
+	// otherwise the catalogue default.
+	Enabled bool
+}
+
+// ListMcpAccess returns the full MCP command catalogue, each entry paired with
+// its effective enabled state. The stored per-command overrides are read from
+// the group node (MCP access is a control-plane-wide setting, not account-scoped)
+// and merged over the catalogue defaults so every command resolves to a bool.
+func (s *Service) ListMcpAccess(ctx context.Context) ([]McpCommand, error) {
+	n, err := s.groupNode()
+	if err != nil {
+		return nil, err
+	}
+	stored, err := n.ListMcpAccess(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("backend: list mcp access: %w", err)
+	}
+	effective := mcpcatalog.Effective(stored)
+	catalogue := mcpcatalog.All()
+	out := make([]McpCommand, 0, len(catalogue))
+	for _, cmd := range catalogue {
+		out = append(out, McpCommand{Command: cmd, Enabled: effective[cmd.Name]})
+	}
+	return out, nil
+}
+
+// CommandEnabled resolves the effective enabled state of one MCP command: the
+// stored override when present, otherwise the catalogue default. An unknown
+// command resolves to false. It is the read the MCP surface consults to gate a
+// tool call.
+func (s *Service) CommandEnabled(ctx context.Context, command string) (bool, error) {
+	n, err := s.groupNode()
+	if err != nil {
+		return false, err
+	}
+	stored, err := n.ListMcpAccess(ctx)
+	if err != nil {
+		return false, fmt.Errorf("backend: read mcp access: %w", err)
+	}
+	return mcpcatalog.EnabledFor(command, stored), nil
+}
+
+// SetMcpAccess validates the command against the catalogue and upserts its
+// enabled state on the group node. An unknown command is rejected with
+// domain.ErrNotFound so the surface can map it onto a 404.
+func (s *Service) SetMcpAccess(
+	ctx context.Context, command string, enabled bool,
+) error {
+	if _, ok := mcpcatalog.Lookup(command); !ok {
+		return fmt.Errorf("mcp command %q: %w", command, domain.ErrNotFound)
+	}
+	n, err := s.groupNode()
+	if err != nil {
+		return err
+	}
+	return n.SetMcpAccess(ctx, command, enabled, auth.CallerFromContext(ctx))
 }
 
 // --- Account group and notes -----------------------------------------------
@@ -527,6 +596,31 @@ func (s *Service) SubmitOrder(
 	return n.SubmitOrder(ctx, keyFor(o.Account), o, auth.CallerFromContext(ctx))
 }
 
+// CheckOrder validates the probe's account and assets, routes to the owning
+// node, and runs the engine pre-trade as a non-mutating dry-run. It mutates no
+// state and writes no audit row; an engine reject is a successful call carrying
+// the reasons, not an error.
+func (s *Service) CheckOrder(
+	ctx context.Context, probe domain.OrderProbe,
+) (domain.CheckResult, error) {
+	// Officer validates only the boundary id/asset formats; the engine enforces
+	// the real trading rules. Existence is never checked, mirroring SubmitOrder.
+	if err := domain.ValidateAccountID(probe.Account); err != nil {
+		return domain.CheckResult{}, err
+	}
+	if err := domain.ValidateAsset(probe.BaseAsset); err != nil {
+		return domain.CheckResult{}, err
+	}
+	if err := domain.ValidateAsset(probe.QuoteAsset); err != nil {
+		return domain.CheckResult{}, err
+	}
+	n, err := s.router.Route(keyFor(probe.Account))
+	if err != nil {
+		return domain.CheckResult{}, fmt.Errorf("backend: route check: %w", err)
+	}
+	return n.CheckOrder(ctx, keyFor(probe.Account), probe)
+}
+
 // ApplyExecutionReport validates the fill's account and assets, routes to the
 // owning node, and settles the fill through the engine.
 func (s *Service) ApplyExecutionReport(
@@ -621,6 +715,11 @@ type Counts struct {
 	Groups int
 	// Limits is the number of risk barriers.
 	Limits int
+	// OrdersToday is the number of orders recorded since the caller-supplied
+	// today boundary, aggregated across nodes.
+	OrdersToday int
+	// OrdersTotal is the total number of orders recorded, aggregated across nodes.
+	OrdersTotal int
 }
 
 // ActivityKind classifies one recent-activity entry on the overview feed.
@@ -664,10 +763,13 @@ type Overview struct {
 const overviewActivityCap = 20
 
 // Overview assembles the operator dashboard summary: the counts of accounts,
-// groups, and barriers, and a source-attributed recent-activity feed merged
-// from the most recent audit rows, orders, and adjustments. The feed is derived
-// from the persisted log (newest first, capped), not an in-memory registry.
-func (s *Service) Overview(ctx context.Context) (Overview, error) {
+// groups, barriers, and orders (today / total), and a source-attributed
+// recent-activity feed merged from the most recent audit rows, orders, and
+// adjustments. The feed is derived from the persisted log (newest first,
+// capped), not an in-memory registry. The since boundary delimits "today" for
+// the OrdersToday tally; the caller supplies it (request-local or server-local
+// start-of-day).
+func (s *Service) Overview(ctx context.Context, since time.Time) (Overview, error) {
 	accounts, err := s.ListAccounts(ctx)
 	if err != nil {
 		return Overview{}, err
@@ -679,6 +781,20 @@ func (s *Service) Overview(ctx context.Context) (Overview, error) {
 	limits, err := s.ListLimits(ctx, "")
 	if err != nil {
 		return Overview{}, err
+	}
+
+	var ordersTotal, ordersToday int
+	for i, target := range s.router.All() {
+		total, err := target.CountOrders(ctx, domain.DefaultTenant)
+		if err != nil {
+			return Overview{}, fmt.Errorf("backend: node %d count orders: %w", i, err)
+		}
+		today, err := target.CountOrdersSince(ctx, domain.DefaultTenant, since)
+		if err != nil {
+			return Overview{}, fmt.Errorf("backend: node %d count orders since: %w", i, err)
+		}
+		ordersTotal += total
+		ordersToday += today
 	}
 
 	audit, err := s.ListAudit(ctx, overviewActivityCap)
@@ -697,9 +813,11 @@ func (s *Service) Overview(ctx context.Context) (Overview, error) {
 	activity := mergeActivity(audit, orders, adjustments)
 	return Overview{
 		Counts: Counts{
-			Accounts: len(accounts),
-			Groups:   len(groups),
-			Limits:   len(limits),
+			Accounts:    len(accounts),
+			Groups:      len(groups),
+			Limits:      len(limits),
+			OrdersToday: ordersToday,
+			OrdersTotal: ordersTotal,
 		},
 		Activity: activity,
 	}, nil

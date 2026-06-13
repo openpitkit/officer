@@ -25,11 +25,15 @@ import type {
   AuditEntry,
   Balance,
   BoundsPair,
+  CheckReject,
+  CheckResult,
+  CheckWouldBlock,
   EngineHealth,
   Group,
   Health,
   Limit,
   LockPrices,
+  McpCommand,
   NodeHealth,
   Order,
   OrderEvent,
@@ -48,6 +52,7 @@ export type ApiErrorCode =
   | "validation"
   | "not_found"
   | "conflict"
+  | "precondition"
   | "internal"
   | "network";
 
@@ -101,6 +106,7 @@ function asCode(v: unknown): ApiErrorCode {
     case "validation":
     case "not_found":
     case "conflict":
+    case "precondition":
     case "internal":
       return v;
     default:
@@ -191,6 +197,9 @@ function normalizeBalance(v: unknown): Balance {
     incoming: asString(pick(o, "incoming", "Incoming")),
     averageEntryPrice: asString(
       pick(o, "averageEntryPrice", "AverageEntryPrice", "average_entry_price"),
+    ),
+    realizedPnl: asString(
+      pick(o, "realizedPnl", "RealizedPnl", "realized_pnl"),
     ),
     updatedAt: asString(pick(o, "updatedAt", "UpdatedAt", "updated_at")),
   };
@@ -468,6 +477,8 @@ function normalizeOverview(v: unknown): Overview {
       accounts: asInt(pick(counts, "accounts", "Accounts")),
       groups: asInt(pick(counts, "groups", "Groups")),
       limits: asInt(pick(counts, "limits", "Limits")),
+      ordersToday: asInt(pick(counts, "ordersToday", "OrdersToday", "orders_today")),
+      ordersTotal: asInt(pick(counts, "ordersTotal", "OrdersTotal", "orders_total")),
     },
     activity,
   };
@@ -526,6 +537,8 @@ async function toApiError(res: Response, path: string): Promise<ApiError> {
       code = "not_found";
     } else if (res.status === 409) {
       code = "conflict";
+    } else if (res.status === 422) {
+      code = "precondition";
     }
   }
   return new ApiError(message, code, res.status);
@@ -607,7 +620,12 @@ export async function fetchHealth(signal?: AbortSignal): Promise<Health> {
 
 /** GET /overview. */
 export async function fetchOverview(signal?: AbortSignal): Promise<Overview> {
-  return normalizeOverview(await request(`${BASE}/overview`, { signal }));
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  const since = d.toISOString();
+  return normalizeOverview(
+    await request(`${BASE}/overview?since=${encodeURIComponent(since)}`, { signal }),
+  );
 }
 
 // --- Service info ---
@@ -894,6 +912,63 @@ export async function createOrder(body: CreateOrderBody): Promise<Order> {
   return normalizeOrder(pick(o, "order", "Order"));
 }
 
+function normalizeCheckReject(v: unknown): CheckReject {
+  const o = isObject(v) ? v : {};
+  return {
+    code: asString(pick(o, "code", "Code")),
+    scope: asString(pick(o, "scope", "Scope")),
+    policy: asString(pick(o, "policy", "Policy")),
+    reason: asString(pick(o, "reason", "Reason")),
+    details: asString(pick(o, "details", "Details")),
+  };
+}
+
+function normalizeCheckWouldBlock(v: unknown): CheckWouldBlock | null {
+  if (!isObject(v)) {
+    return null;
+  }
+  return {
+    account: asString(pick(v, "account", "Account")),
+    code: asString(pick(v, "code", "Code")),
+    reason: asString(pick(v, "reason", "Reason")),
+    details: asString(pick(v, "details", "Details")),
+  };
+}
+
+function normalizeCheckResult(v: unknown): CheckResult {
+  const o = isObject(v) ? v : {};
+  return {
+    passed: asBool(pick(o, "passed", "Passed")),
+    rejects: normalizeArray(pick(o, "rejects", "Rejects"), normalizeCheckReject),
+    wouldLockPrices: Array.isArray(pick(o, "wouldLockPrices", "WouldLockPrices"))
+      ? (pick(o, "wouldLockPrices", "WouldLockPrices") as unknown[]).map(asString)
+      : [],
+    wouldBlock: normalizeCheckWouldBlock(
+      pick(o, "wouldBlock", "WouldBlock", "would_block"),
+    ),
+  };
+}
+
+interface CheckOrderBody {
+  account: string;
+  baseAsset: string;
+  quoteAsset: string;
+  side: string;
+  amountKind: string;
+  amountValue: string;
+  price?: string;
+}
+
+/** POST /orders/check — pre-trade dry-run; never mutates state. */
+export async function checkOrder(
+  body: CheckOrderBody,
+  signal?: AbortSignal,
+): Promise<CheckResult> {
+  const v = await request(`${BASE}/orders/check`, { method: "POST", body, signal });
+  const o = isObject(v) ? v : {};
+  return normalizeCheckResult(pick(o, "check", "Check"));
+}
+
 interface OrdersFilter {
   account?: string;
   source?: string;
@@ -1029,6 +1104,47 @@ interface AuditFilter {
   source?: string;
   limit?: number;
 }
+
+// --- MCP access ---
+
+function normalizeMcpCommand(v: unknown): McpCommand {
+  const o = isObject(v) ? v : {};
+  return {
+    name: asString(pick(o, "name", "Name")),
+    title: asString(pick(o, "title", "Title")),
+    agentDescription: asString(
+      pick(o, "agentDescription", "AgentDescription", "agent_description"),
+    ),
+    mutating: asBool(pick(o, "mutating", "Mutating")),
+    protective: asBool(pick(o, "protective", "Protective")),
+    implemented: asBool(pick(o, "implemented", "Implemented")),
+    enabled: asBool(pick(o, "enabled", "Enabled")),
+  };
+}
+
+/** GET /mcp-access — returns the full MCP command catalogue. */
+export async function getMcpCommands(
+  signal?: AbortSignal,
+): Promise<McpCommand[]> {
+  const v = await request(`${BASE}/mcp-access`, { signal });
+  const o = isObject(v) ? v : {};
+  return normalizeArray(pick(o, "commands", "Commands"), normalizeMcpCommand);
+}
+
+/** PUT /mcp-access/{command} — enable or disable one MCP command. */
+export async function setMcpCommand(
+  name: string,
+  enabled: boolean,
+): Promise<McpCommand> {
+  const v = await request(`${BASE}/mcp-access/${encode(name)}`, {
+    method: "PUT",
+    body: { enabled },
+  });
+  const o = isObject(v) ? v : {};
+  return normalizeMcpCommand(pick(o, "command", "Command"));
+}
+
+// --- Audit ---
 
 /** GET /audit, newest first; the backend caps the limit at 1000. */
 export async function fetchAudit(

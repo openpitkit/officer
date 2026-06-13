@@ -42,9 +42,10 @@ const envRuntimeLibraryPath = "OPENPIT_RUNTIME_LIBRARY_PATH"
 // Registered policy names. The built-in risk policies register under these
 // fixed names; the Configure surface targets a policy by name.
 const (
-	nameRateLimit           = "RateLimitPolicy"
-	nameOrderSizeLimit      = "OrderSizeLimitPolicy"
-	namePnlBoundsKillSwitch = "PnlBoundsKillSwitchPolicy"
+	nameRateLimit           = policies.RateLimitPolicyName
+	nameOrderSizeLimit      = policies.OrderSizeLimitPolicyName
+	namePnlBoundsKillSwitch = policies.PnlBoundsKillSwitchPolicyName
+	nameSpotFunds           = policies.SpotFundsPolicyName
 )
 
 // openPitEngine is the concrete Engine adapter wrapping one OpenPit engine
@@ -52,21 +53,27 @@ const (
 //
 // The handle is built by BuildOpenPitEngine and lives until Stop. Limit changes
 // are applied dynamically through the binding's Configure surface; this adapter
-// never builds a second handle. The built-in risk policies cannot be registered
-// or left empty, and the rate-limit Configure is patch-only - it can retune
-// existing barriers but cannot add or remove them. A change the Configure
-// surface cannot express returns an error wrapping domain.ErrNotImplemented; the
-// node then rebuilds a fresh engine from the store and stops this one (the
-// adapter itself stays single-handle).
+// never builds a second handle. rate_limit, order_size_limit, and
+// pnl_bounds_kill_switch retune their axes wholesale (barriers added and removed
+// at runtime). The spot-funds policy is registered with its default settings and
+// is not reconfigured at runtime. The
+// residual changes the Configure surface cannot express are exactly: configuring
+// a policy that was not registered at build time (no runtime registration API),
+// removing the last barrier of a registered policy (the SDK cannot unregister),
+// and dropping a broker barrier of rate_limit or order_size while other barriers
+// remain (broker is an Option the surface cannot clear in isolation). Each of
+// those returns an error wrapping domain.ErrNotImplemented; the node then
+// rebuilds a fresh engine from the store and stops this one (the adapter itself
+// stays single-handle).
 //
 // The adapter tracks the minimal state this requires: the set of policies
-// registered at build time, the rate-limit barrier-key set, and whether the
-// order-size policy currently carries a broker barrier, all updated only on a
-// successful call. All handle access and this state are serialized behind mu:
-// the mu gives store+engine+audit atomicity across multi-step operations; the
-// engine itself is built FullSync so individual binding calls are safe under
-// goroutine migration across OS threads (Go does not pin goroutines, making
-// NoSync unsafe in this environment).
+// registered at build time, and per-policy whether a broker barrier is currently
+// live (for the broker-drop guard), all updated only on a successful call. All
+// handle access and this state are serialized behind mu: the mu gives
+// store+engine+audit atomicity across multi-step operations; the engine itself
+// is built FullSync so individual binding calls are safe under goroutine
+// migration across OS threads (Go does not pin goroutines, making NoSync unsafe
+// in this environment).
 type openPitEngine struct {
 	eng *openpit.Engine
 
@@ -74,86 +81,41 @@ type openPitEngine struct {
 	// of an unregistered policy is a not-implemented stub: there is no runtime
 	// policy-registration API.
 	registered map[string]struct{}
-	// rateKeys is the rate-limit barrier-key set currently configured on the
-	// handle. A ConfigurePolicy whose key set differs is an add/remove the
-	// patch-only rate-limit Configure cannot express.
-	rateKeys map[barrierKey]struct{}
+	// brokerPresent reports, per policy name, whether that policy currently
+	// carries a broker barrier on the handle. Only rate_limit and order_size_limit
+	// have a broker axis the Configure surface cannot clear in isolation (a nil
+	// broker leaves it unchanged), so a reconfigure that drops the broker barrier
+	// while other barriers remain is a not-implemented stub rather than a silent
+	// store/engine divergence. Updated only on a successful Configure.
+	brokerPresent map[string]bool
 
-	mu sync.Mutex
-	// orderSizeBroker reports whether the order-size policy currently carries a
-	// broker barrier on the handle. The Configure surface can set or retune a
-	// broker barrier but cannot clear one in isolation (a nil broker leaves it
-	// unchanged), so dropping it while other barriers remain is a not-implemented
-	// stub rather than a silent store/engine divergence.
-	orderSizeBroker bool
-	running         bool
-}
-
-// barrierKey identifies one barrier within a policy by its scope and axes. It
-// is the comparable key the adapter diffs the rate-limit barrier set on.
-type barrierKey struct {
-	scope   string
-	account domain.AccountID
-	asset   string
-}
-
-// keyOf returns the barrier key of a limit target.
-func keyOf(target domain.LimitTarget) barrierKey {
-	return barrierKey{
-		scope:   target.Scope,
-		account: target.Account,
-		asset:   target.Asset,
-	}
-}
-
-// keySet returns the barrier-key set of a barrier slice.
-func keySet(limits []domain.Limit) map[barrierKey]struct{} {
-	set := make(map[barrierKey]struct{}, len(limits))
-	for _, limit := range limits {
-		set[keyOf(limit.Target)] = struct{}{}
-	}
-	return set
-}
-
-// keySetsEqual reports whether two barrier-key sets are equal.
-func keySetsEqual(a, b map[barrierKey]struct{}) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k := range a {
-		if _, ok := b[k]; !ok {
-			return false
-		}
-	}
-	return true
+	mu      sync.Mutex
+	running bool
 }
 
 // newOpenPitEngine wraps an already-built *openpit.Engine into the Engine
-// adapter. registered is the set of policy names live on the handle, rateKeys
-// is the rate-limit barrier-key set the handle was built with, and
-// orderSizeBroker reports whether the order-size policy was built with a broker
-// barrier; all are taken over by the adapter. The adapter takes ownership of
-// the handle's lifecycle: it must not be stopped directly afterwards; use
+// adapter. registered is the set of policy names live on the handle and
+// brokerPresent records, per policy, whether it was built with a broker barrier;
+// both are taken over by the adapter. The adapter takes ownership of the
+// handle's lifecycle: it must not be stopped directly afterwards; use
 // Engine.Stop instead. BuildOpenPitEngine is the only caller; it assembles the
 // tracked state.
 func newOpenPitEngine(
 	eng *openpit.Engine,
 	registered map[string]struct{},
-	rateKeys map[barrierKey]struct{},
-	orderSizeBroker bool,
+	brokerPresent map[string]bool,
 ) Engine {
 	if registered == nil {
 		registered = make(map[string]struct{})
 	}
-	if rateKeys == nil {
-		rateKeys = make(map[barrierKey]struct{})
+	if brokerPresent == nil {
+		brokerPresent = make(map[string]bool)
 	}
 	return &openPitEngine{
-		eng:             eng,
-		registered:      registered,
-		rateKeys:        rateKeys,
-		orderSizeBroker: orderSizeBroker,
-		running:         eng != nil,
+		eng:           eng,
+		registered:    registered,
+		brokerPresent: brokerPresent,
+		running:       eng != nil,
 	}
 }
 
@@ -212,12 +174,11 @@ func BuildOpenPitEngine(runtimeLibraryPath string, snap Snapshot) (Engine, error
 		return nil, err
 	}
 
-	return newOpenPitEngine(
-		eng,
-		registered,
-		keySet(byPolicy[domain.PolicyRateLimit]),
-		hasBrokerBarrier(byPolicy[domain.PolicyOrderSizeLimit]),
-	), nil
+	brokerPresent := map[string]bool{
+		nameRateLimit:      hasBrokerBarrier(byPolicy[domain.PolicyRateLimit]),
+		nameOrderSizeLimit: hasBrokerBarrier(byPolicy[domain.PolicyOrderSizeLimit]),
+	}
+	return newOpenPitEngine(eng, registered, brokerPresent), nil
 }
 
 // hasBrokerBarrier reports whether a barrier set contains a broker-scoped
@@ -247,15 +208,13 @@ func (e *openPitEngine) Running() bool {
 // ConfigurePolicy applies the change to the live handle via the Configure
 // surface. limits is the complete barrier set for policy.
 //
-// order_size_limit / pnl_bounds_kill_switch: the full axes are rebuilt from the
-// complete barrier set and replaced in one Configure call. order_size_limit
-// additionally returns a not-implemented stub when it would drop a broker
-// barrier the Configure surface cannot clear in isolation. rate_limit: when the
-// barrier-key set is unchanged the barriers are retuned; an added or removed
-// key returns a not-implemented stub (the rate-limit Configure is patch-only).
-// Configuring an unregistered policy, or removing the last barrier of a
-// registered policy, returns a not-implemented stub. The tracked state is
-// updated only on success.
+// rate_limit / order_size_limit / pnl_bounds_kill_switch: the full axes are
+// rebuilt from the complete barrier set and replaced in one Configure call;
+// barriers are added and removed at runtime. rate_limit and order_size_limit
+// additionally return a not-implemented stub when the reconfigure would drop a
+// broker barrier the Configure surface cannot clear in isolation. Configuring an
+// unregistered policy, or removing the last barrier of a registered policy,
+// returns a not-implemented stub. The tracked state is updated only on success.
 func (e *openPitEngine) ConfigurePolicy(
 	ctx context.Context, policy string, limits []domain.Limit,
 ) error {
@@ -294,16 +253,20 @@ func (e *openPitEngine) ConfigurePolicy(
 	}
 }
 
-// configureRateLimitLocked retunes the rate-limit barriers on the live handle.
-// When the barrier-key set is unchanged it patches every axis with the supplied
-// barriers; when a key was added or removed it returns a not-implemented stub,
-// since the rate-limit Configure is patch-only. Callers must hold e.mu.
+// configureRateLimitLocked replaces the rate-limit axes on the live handle from
+// the complete barrier set. The asset/account/account-asset axes are passed as
+// non-nil (possibly empty) slices so each is replaced wholesale; barriers are
+// added and removed at runtime and a surviving key keeps its live counter. The
+// broker axis is a pointer (nil = unchanged), so dropping the broker barrier
+// while other barriers remain is a not-implemented stub - the Configure surface
+// cannot clear it in isolation, and silently leaving the old broker barrier on
+// the handle would diverge the engine from the store. Callers must hold e.mu.
 func (e *openPitEngine) configureRateLimitLocked(limits []domain.Limit) error {
-	next := keySet(limits)
-	if !keySetsEqual(next, e.rateKeys) {
+	nextBroker := hasBrokerBarrier(limits)
+	if e.brokerPresent[nameRateLimit] && !nextBroker {
 		return fmt.Errorf(
-			"engine: cannot add or remove a rate_limit barrier: the SDK's "+
-				"rate-limit configure is patch-only (retune existing barriers): %w",
+			"engine: cannot remove a rate_limit broker barrier: the SDK's "+
+				"rate-limit configure cannot clear a broker barrier in isolation: %w",
 			domain.ErrNotImplemented)
 	}
 
@@ -316,7 +279,7 @@ func (e *openPitEngine) configureRateLimitLocked(limits []domain.Limit) error {
 	); err != nil {
 		return fmt.Errorf("engine: configure rate_limit: %w", err)
 	}
-	e.rateKeys = next
+	e.brokerPresent[nameRateLimit] = nextBroker
 	return nil
 }
 
@@ -329,7 +292,7 @@ func (e *openPitEngine) configureRateLimitLocked(limits []domain.Limit) error {
 // would diverge the engine from the store. Callers must hold e.mu.
 func (e *openPitEngine) configureOrderSizeLocked(limits []domain.Limit) error {
 	nextBroker := hasBrokerBarrier(limits)
-	if e.orderSizeBroker && !nextBroker {
+	if e.brokerPresent[nameOrderSizeLimit] && !nextBroker {
 		return fmt.Errorf(
 			"engine: cannot remove an order_size_limit broker barrier: the SDK's "+
 				"order-size configure cannot clear a broker barrier in isolation: %w",
@@ -345,13 +308,15 @@ func (e *openPitEngine) configureOrderSizeLocked(limits []domain.Limit) error {
 	); err != nil {
 		return fmt.Errorf("engine: configure order_size_limit: %w", err)
 	}
-	e.orderSizeBroker = nextBroker
+	e.brokerPresent[nameOrderSizeLimit] = nextBroker
 	return nil
 }
 
 // configurePnlBoundsLocked replaces the P&L bounds axes on the live handle from
 // the complete barrier set. Empty axes are passed as empty non-nil slices so
-// they are cleared rather than left unchanged. Callers must hold e.mu.
+// they are cleared rather than left unchanged. The account axis uses the Update
+// shape: it retunes bounds without resetting the live accumulated P&L. Callers
+// must hold e.mu.
 func (e *openPitEngine) configurePnlBoundsLocked(limits []domain.Limit) error {
 	brokers, accounts, err := pnlBoundsAxes(limits)
 	if err != nil {
@@ -650,12 +615,62 @@ func accountIDs(accounts []domain.AccountID) ([]param.AccountID, error) {
 	return ids, nil
 }
 
-// CheckOrder is a stub: it always returns ErrCheckUnsupported because the SDK
-// has no non-mutating dry-run yet.
+// CheckOrder runs the pre-trade pipeline for probe as a non-mutating dry-run.
+// It builds the same model.Order as SubmitOrder and runs ExecutePreTradeDryRun,
+// which evaluates every policy but commits nothing: no reservation is taken and
+// no account state changes. On pass it captures the would-be reservation lock
+// prices exactly as SubmitOrder captures them; on reject it returns the engine
+// rejects plus the account block the engine would record. The dry-run report
+// owns native memory and never escapes the adapter.
 func (e *openPitEngine) CheckOrder(
-	context.Context, domain.OrderProbe,
+	ctx context.Context, probe domain.OrderProbe,
 ) (domain.CheckResult, error) {
-	return domain.CheckResult{}, ErrCheckUnsupported
+	if err := ctx.Err(); err != nil {
+		return domain.CheckResult{}, fmt.Errorf("engine: check order cancelled: %w", err)
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.running {
+		return domain.CheckResult{}, fmt.Errorf("engine: check order on stopped engine")
+	}
+
+	order, err := orderModelFrom(domain.Order{
+		Account:     probe.Account,
+		BaseAsset:   probe.BaseAsset,
+		QuoteAsset:  probe.QuoteAsset,
+		Side:        probe.Side,
+		AmountKind:  probe.AmountKind,
+		AmountValue: probe.AmountValue,
+		Price:       probe.Price,
+	})
+	if err != nil {
+		return domain.CheckResult{}, err
+	}
+
+	report, err := e.eng.ExecutePreTradeDryRun(order)
+	if err != nil {
+		return domain.CheckResult{}, fmt.Errorf("engine: execute pre-trade dry-run: %w", err)
+	}
+	defer report.Close()
+
+	if !report.IsPass() {
+		return domain.CheckResult{
+			Passed:     false,
+			Rejects:    orderRejectsFrom(report.Rejects()),
+			WouldBlock: accountBlockFrom(report.AccountBlock(), probe.Account),
+		}, nil
+	}
+
+	prices, err := report.Lock().Prices()
+	if err != nil {
+		return domain.CheckResult{}, fmt.Errorf("engine: read dry-run lock: %w", err)
+	}
+	lockPrices := make([]string, 0, len(prices))
+	for _, price := range prices {
+		lockPrices = append(lockPrices, price.String())
+	}
+	return domain.CheckResult{Passed: true, WouldLockPrices: lockPrices}, nil
 }
 
 // Stop halts the engine and releases native resources. It is idempotent.
@@ -690,19 +705,25 @@ func policyName(policy string) string {
 // returns the engine and the set of registered policy names. byPolicy may be
 // nil. The risk policies validate their barrier topology at build time, so a
 // policy with no barriers is simply not registered.
+//
+// The spot-funds policy is always registered with its default settings: it is
+// the authority for spot balances, so balance seeding and spot-holdings
+// reservations depend on it. It stays limit-only (no market-data service this
+// phase: market orders reject UnsupportedOrderType).
 func buildEngine(
 	byPolicy map[string][]domain.Limit,
 ) (*openpit.Engine, map[string]struct{}, error) {
-	// OrderValidation first, then SpotFunds (limit-only, no market data this
-	// phase: market orders reject UnsupportedOrderType), then the conditional
-	// risk policies. SpotFunds must be registered for balance seeding and spot
-	// holdings to take effect.
+	// OrderValidation first, then SpotFunds (default settings, limit-only), then
+	// the conditional risk policies. SpotFunds must be registered for balance
+	// seeding and spot holdings to take effect. PolicyGroupID(0) reaches the
+	// ready builder without WithMarketOrders, keeping the policy limit-only.
 	builder := openpit.NewEngineBuilder().
 		FullSync().
 		Builtin(policies.BuildOrderValidation()).
-		Builtin(policies.BuildSpotFunds())
+		Builtin(policies.BuildSpotFunds().PolicyGroupID(0))
 
-	registered := make(map[string]struct{})
+	// SpotFunds is always registered by the build path above.
+	registered := map[string]struct{}{nameSpotFunds: {}}
 	if rate := byPolicy[domain.PolicyRateLimit]; len(rate) > 0 {
 		ready, err := rateLimitReady(rate)
 		if err != nil {
@@ -867,5 +888,5 @@ func seedRejectReason(batch reject.AccountAdjustmentBatchError) string {
 		return "no reject detail"
 	}
 	r := batch.Rejects[0]
-	return fmt.Sprintf("%s %s", rejectCodeName(r.Code), r.Reason)
+	return fmt.Sprintf("%s %s", rejectCodeName(r.Code), sanitizeText(r.Reason))
 }

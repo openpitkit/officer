@@ -80,6 +80,13 @@ const getAuditToolName = "get_audit"
 const getAuditToolDescription = "Return recent control-plane audit entries " +
 	"(default 50, max 500). Read-only - no secrets, no order-flow control."
 
+const checkOrderToolName = "check_order"
+const checkOrderToolDescription = "Run a non-mutating pre-trade dry-run for an " +
+	"order: report whether it would pass the engine's risk checks plus the " +
+	"reasons (would-be lock prices on pass, structured rejects and any " +
+	"would-be account block on reject). Submits nothing and changes no state - " +
+	"no order is placed, no funds are reserved."
+
 // Source is the Pit Officer-facing seam the MCP surface reads from. It is
 // satisfied by *backend.Service via an adapter in main.go; keeping it an
 // interface keeps this package free of a dependency on the concrete
@@ -98,6 +105,17 @@ type Source interface {
 		[]domain.Limit, error)
 	// ListAudit returns the most recent n audit rows.
 	ListAudit(ctx context.Context, n int) ([]domain.AuditRow, error)
+	// CheckOrder runs a non-mutating pre-trade dry-run for probe, returning
+	// whether the order would pass plus the would-be lock or block. It mutates
+	// no state.
+	CheckOrder(ctx context.Context, probe domain.OrderProbe) (domain.CheckResult, error)
+	// CommandEnabled reports whether the operator has the named MCP command
+	// enabled in the Pit Officer panel. A false result means the operator has
+	// turned the command off; the surface returns a non-error disabled notice
+	// rather than running it. An error is a transient access-store failure, on
+	// which the surface fails open (treats the command as enabled) so reads are
+	// not blocked by a flaky access read.
+	CommandEnabled(ctx context.Context, command string) (bool, error)
 }
 
 // VersionSource reports the engine version used as the MCP server version. It
@@ -196,6 +214,23 @@ type getAuditOutput struct {
 	Entries []auditDTO `json:"entries"`
 }
 
+type checkOrderInput struct {
+	Account     string `json:"account" jsonschema:"Account identifier"`
+	BaseAsset   string `json:"baseAsset" jsonschema:"Asset being bought or sold"`
+	QuoteAsset  string `json:"quoteAsset" jsonschema:"Asset used for pricing"`
+	Side        string `json:"side" jsonschema:"buy or sell"`
+	AmountKind  string `json:"amountKind" jsonschema:"quantity or volume"`
+	AmountValue string `json:"amountValue" jsonschema:"Order size as an exact decimal string"`
+	Price       string `json:"price,omitempty" jsonschema:"Limit price as an exact decimal string; omit for market/unpriced"`
+}
+
+type checkOrderOutput struct {
+	WouldBlock      *checkOrderBlockDTO   `json:"wouldBlock"`
+	Rejects         []checkOrderRejectDTO `json:"rejects"`
+	WouldLockPrices []string              `json:"wouldLockPrices"`
+	Passed          bool                  `json:"passed"`
+}
+
 // accountDTO is the wire shape of a single account (identical to httpapi).
 type accountDTO struct {
 	ID          string `json:"id"`
@@ -220,6 +255,25 @@ type auditDTO struct {
 	Account string    `json:"account"`
 	Detail  string    `json:"detail"`
 	ID      int64     `json:"id"`
+}
+
+// checkOrderRejectDTO is the wire shape of one engine pre-trade reject from a
+// dry-run (identical to httpapi).
+type checkOrderRejectDTO struct {
+	Code    string `json:"code"`
+	Scope   string `json:"scope"`
+	Policy  string `json:"policy"`
+	Reason  string `json:"reason"`
+	Details string `json:"details"`
+}
+
+// checkOrderBlockDTO is the wire shape of the account block a dry-run reports
+// the engine would record (identical to httpapi).
+type checkOrderBlockDTO struct {
+	Account string `json:"account"`
+	Code    string `json:"code"`
+	Reason  string `json:"reason"`
+	Details string `json:"details"`
 }
 
 // -- mappers --
@@ -273,6 +327,38 @@ func toAuditDTOs(rows []domain.AuditRow) []auditDTO {
 	return out
 }
 
+func toCheckOrderOutput(r domain.CheckResult) checkOrderOutput {
+	rejects := make([]checkOrderRejectDTO, 0, len(r.Rejects))
+	for _, rej := range r.Rejects {
+		rejects = append(rejects, checkOrderRejectDTO{
+			Code:    rej.Code,
+			Scope:   rej.Scope,
+			Policy:  rej.Policy,
+			Reason:  rej.Reason,
+			Details: rej.Details,
+		})
+	}
+	prices := r.WouldLockPrices
+	if prices == nil {
+		prices = []string{}
+	}
+	var block *checkOrderBlockDTO
+	if r.WouldBlock != nil {
+		block = &checkOrderBlockDTO{
+			Account: string(r.WouldBlock.Account),
+			Code:    r.WouldBlock.Code,
+			Reason:  r.WouldBlock.Reason,
+			Details: r.WouldBlock.Details,
+		}
+	}
+	return checkOrderOutput{
+		WouldBlock:      block,
+		Rejects:         rejects,
+		WouldLockPrices: prices,
+		Passed:          r.Passed,
+	}
+}
+
 // -- tool result helpers --
 
 func toolErr[Out any](msg string) *sdkmcp.CallToolResultFor[Out] {
@@ -289,6 +375,44 @@ func toolOK[Out any](text string, out Out) *sdkmcp.CallToolResultFor[Out] {
 		Content:           []sdkmcp.Content{&sdkmcp.TextContent{Text: text}},
 		StructuredContent: out,
 	}
+}
+
+// toolDisabled returns a NON-error result telling the calling agent the command
+// has been turned off in the Pit Officer panel by the operator. It is not an
+// IsError result: the call succeeded, the command is simply unavailable, so the
+// agent can report back to its orchestrator rather than treating it as a fault.
+// The typed Out is left at its zero value; the text message carries the notice.
+func toolDisabled[Out any](command string) *sdkmcp.CallToolResultFor[Out] {
+	msg := fmt.Sprintf(
+		"Command %q is disabled in the Pit Officer panel by the operator. It is "+
+			"currently unavailable. Report this to your orchestrator: either adjust "+
+			"the task to avoid this command, or ask the operator to enable it in the "+
+			"panel.",
+		command,
+	)
+	return &sdkmcp.CallToolResultFor[Out]{
+		Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: msg}},
+	}
+}
+
+// commandGate reports whether handler execution for command should proceed. It
+// consults the access source: an explicit false returns a disabled notice (so
+// the caller short-circuits with a non-error result); on an access-store error
+// it fails open (proceeds) so a transient read failure never blocks a read tool.
+// The bool is true when the handler should run; the result is non-nil only when
+// it should not.
+func commandGate[Out any](
+	ctx context.Context, src Source, command string,
+) (bool, *sdkmcp.CallToolResultFor[Out]) {
+	enabled, err := src.CommandEnabled(ctx, command)
+	if err != nil {
+		// Fail open: a transient access-store error must not block a read.
+		return true, nil
+	}
+	if !enabled {
+		return false, toolDisabled[Out](command)
+	}
+	return true, nil
 }
 
 // -- NewServer --
@@ -330,6 +454,11 @@ func NewServer(src Source, version VersionSource) (*sdkmcp.Server, error) {
 		Description: getAuditToolDescription,
 	}, getAuditHandler(src))
 
+	sdkmcp.AddTool(server, &sdkmcp.Tool{
+		Name:        checkOrderToolName,
+		Description: checkOrderToolDescription,
+	}, checkOrderHandler(src))
+
 	return server, nil
 }
 
@@ -346,6 +475,9 @@ func healthHandler(src Source) func(
 		_ *sdkmcp.CallToolParamsFor[healthInput],
 	) (*sdkmcp.CallToolResultFor[healthOutput], error) {
 		ctx = auth.ContextWithCaller(ctx, mcpCaller)
+		if ok, disabled := commandGate[healthOutput](ctx, src, healthToolName); !ok {
+			return disabled, nil
+		}
 		status, err := src.Status(ctx)
 		if err != nil {
 			return toolErr[healthOutput]("officer status unavailable"), nil
@@ -366,6 +498,9 @@ func getAccountStateHandler(src Source) func(
 		p *sdkmcp.CallToolParamsFor[getAccountStateInput],
 	) (*sdkmcp.CallToolResultFor[getAccountStateOutput], error) {
 		ctx = auth.ContextWithCaller(ctx, mcpCaller)
+		if ok, disabled := commandGate[getAccountStateOutput](ctx, src, getAccountStateToolName); !ok {
+			return disabled, nil
+		}
 		id := domain.AccountID(strings.TrimSpace(p.Arguments.Account))
 		if id == "" {
 			return toolErr[getAccountStateOutput]("account is required"), nil
@@ -397,6 +532,9 @@ func getLimitsHandler(src Source) func(
 		p *sdkmcp.CallToolParamsFor[getLimitsInput],
 	) (*sdkmcp.CallToolResultFor[getLimitsOutput], error) {
 		ctx = auth.ContextWithCaller(ctx, mcpCaller)
+		if ok, disabled := commandGate[getLimitsOutput](ctx, src, getLimitsToolName); !ok {
+			return disabled, nil
+		}
 		account := domain.AccountID(strings.TrimSpace(p.Arguments.Account))
 		limits, err := src.ListLimits(ctx, account)
 		if err != nil {
@@ -418,6 +556,9 @@ func getAuditHandler(src Source) func(
 		p *sdkmcp.CallToolParamsFor[getAuditInput],
 	) (*sdkmcp.CallToolResultFor[getAuditOutput], error) {
 		ctx = auth.ContextWithCaller(ctx, mcpCaller)
+		if ok, disabled := commandGate[getAuditOutput](ctx, src, getAuditToolName); !ok {
+			return disabled, nil
+		}
 		n := p.Arguments.Limit
 		if n <= 0 {
 			n = auditDefaultLimit
@@ -431,6 +572,46 @@ func getAuditHandler(src Source) func(
 		}
 		out := getAuditOutput{Entries: toAuditDTOs(rows)}
 		return toolOK(fmt.Sprintf("%d audit entry/entries", len(rows)), out), nil
+	}
+}
+
+func checkOrderHandler(src Source) func(
+	context.Context,
+	*sdkmcp.ServerSession,
+	*sdkmcp.CallToolParamsFor[checkOrderInput],
+) (*sdkmcp.CallToolResultFor[checkOrderOutput], error) {
+	return func(
+		ctx context.Context,
+		_ *sdkmcp.ServerSession,
+		p *sdkmcp.CallToolParamsFor[checkOrderInput],
+	) (*sdkmcp.CallToolResultFor[checkOrderOutput], error) {
+		ctx = auth.ContextWithCaller(ctx, mcpCaller)
+		if ok, disabled := commandGate[checkOrderOutput](ctx, src, checkOrderToolName); !ok {
+			return disabled, nil
+		}
+		account := domain.AccountID(strings.TrimSpace(p.Arguments.Account))
+		if account == "" {
+			return toolErr[checkOrderOutput]("account is required"), nil
+		}
+		probe := domain.OrderProbe{
+			Account:     account,
+			BaseAsset:   strings.TrimSpace(p.Arguments.BaseAsset),
+			QuoteAsset:  strings.TrimSpace(p.Arguments.QuoteAsset),
+			Side:        domain.OrderSide(p.Arguments.Side),
+			AmountKind:  domain.OrderAmountKind(p.Arguments.AmountKind),
+			AmountValue: p.Arguments.AmountValue,
+			Price:       p.Arguments.Price,
+		}
+		result, err := src.CheckOrder(ctx, probe)
+		if err != nil {
+			return toolErr[checkOrderOutput]("check order failed"), nil
+		}
+		out := toCheckOrderOutput(result)
+		summary := fmt.Sprintf("check %s: pass", account)
+		if !result.Passed {
+			summary = fmt.Sprintf("check %s: reject - %d reason(s)", account, len(result.Rejects))
+		}
+		return toolOK(summary, out), nil
 	}
 }
 

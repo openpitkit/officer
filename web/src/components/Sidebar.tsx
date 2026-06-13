@@ -21,6 +21,7 @@ import {
   Database,
   LayoutDashboard,
   Settings,
+  ShieldCheck,
   SlidersHorizontal,
   TrendingUp,
   Users,
@@ -43,11 +44,17 @@ interface NavItem {
 const NAV: NavItem[] = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
   { to: "/accounts", label: "Accounts", icon: Users, end: false },
-  { to: "/policies", label: "Policies", icon: SlidersHorizontal, end: false },
   { to: "/positions", label: "Positions", icon: Coins, end: false },
-  { to: "/trading", label: "Trading", icon: TrendingUp, end: false },
-  { to: "/market-data", label: "Market Data", icon: Database, end: false },
+  { to: "/orders", label: "Orders", icon: TrendingUp, end: false },
+  { to: "/policies", label: "Policies", icon: SlidersHorizontal, end: false },
+];
+
+// Secondary section pinned to the bottom, in display order.
+const FOOTER: NavItem[] = [
   { to: "/audit", label: "Audit", icon: ClipboardList, end: false },
+  { to: "/mcp-access", label: "MCP access", icon: ShieldCheck, end: false },
+  { to: "/market-data", label: "Market Data", icon: Database, end: false },
+  { to: "/service", label: "Service", icon: Settings, end: false },
 ];
 
 export function Sidebar() {
@@ -96,21 +103,27 @@ export function Sidebar() {
       </nav>
 
       <div className="border-t border-border p-2">
-        <NavLink
-          to="/service"
-          end={false}
-          className={({ isActive }) =>
-            cn(
-              "group flex items-center gap-2.5 rounded-card px-3 py-2 text-xs transition-colors",
-              isActive
-                ? "bg-accent-dim text-muted"
-                : "text-muted hover:bg-accent-dim hover:text-muted-lt",
-            )
-          }
-        >
-          <Settings className="h-3.5 w-3.5 shrink-0 opacity-60" />
-          <span className="flex-1 text-left opacity-60">Service</span>
-        </NavLink>
+        {FOOTER.map((item) => {
+          const Icon = item.icon;
+          return (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.end}
+              className={({ isActive }) =>
+                cn(
+                  "group flex items-center gap-2.5 rounded-card px-3 py-2 text-xs transition-colors",
+                  isActive
+                    ? "bg-accent-dim text-muted"
+                    : "text-muted hover:bg-accent-dim hover:text-muted-lt",
+                )
+              }
+            >
+              <Icon className="h-3.5 w-3.5 shrink-0 opacity-60" />
+              <span className="flex-1 text-left opacity-60">{item.label}</span>
+            </NavLink>
+          );
+        })}
       </div>
     </aside>
   );

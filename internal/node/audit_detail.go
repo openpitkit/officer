@@ -64,6 +64,15 @@ func adjustmentDetail(id domain.AccountID, asset string, accepted bool) string {
 	return fmt.Sprintf("adjustment account %s asset=%s %s", id, asset, disposition)
 }
 
+// setMcpAccessDetail renders one MCP command access toggle.
+func setMcpAccessDetail(command string, enabled bool) string {
+	state := "disable"
+	if enabled {
+		state = "enable"
+	}
+	return fmt.Sprintf("%s mcp command %s", state, command)
+}
+
 // submitOrderDetail renders one order submission and its accept/reject
 // disposition.
 func submitOrderDetail(order domain.Order, accepted bool) string {

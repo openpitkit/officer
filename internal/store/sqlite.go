@@ -574,6 +574,48 @@ func (s *sqliteStore) ListAudit(ctx context.Context, n int) ([]domain.AuditRow, 
 	return audit, nil
 }
 
+// --- MCP access control -----------------------------------------------------
+
+// ListMcpAccess returns the stored per-command MCP overrides keyed by command.
+func (s *sqliteStore) ListMcpAccess(ctx context.Context) (map[string]bool, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT command, enabled FROM mcp_access`)
+	if err != nil {
+		return nil, fmt.Errorf("store: list mcp access: %w", err)
+	}
+	defer rows.Close()
+
+	access := make(map[string]bool)
+	for rows.Next() {
+		var (
+			command string
+			enabled bool
+		)
+		if err := rows.Scan(&command, &enabled); err != nil {
+			return nil, fmt.Errorf("store: scan mcp access row: %w", err)
+		}
+		access[command] = enabled
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: iterate mcp access rows: %w", err)
+	}
+	return access, nil
+}
+
+// SetMcpAccess upserts the enabled state for one command.
+func (s *sqliteStore) SetMcpAccess(
+	ctx context.Context, command string, enabled bool,
+) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT OR REPLACE INTO mcp_access (command, enabled) VALUES (?, ?)`,
+		command, enabled,
+	)
+	if err != nil {
+		return fmt.Errorf("store: set mcp access: %w", err)
+	}
+	return nil
+}
+
 // --- Account groups ---------------------------------------------------------
 
 // CreateGroup persists a new account group.
@@ -805,14 +847,16 @@ func (s *sqliteStore) UpsertBalance(ctx context.Context, b domain.Balance) error
 	_, err := s.db.ExecContext(
 		ctx,
 		`INSERT OR REPLACE INTO balances
-		 (tenant, account, asset, available, held, incoming, average_entry_price, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		 (tenant, account, asset, available, held, incoming, realized_pnl,
+		  average_entry_price, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		b.Tenant.String(),
 		b.Account.String(),
 		b.Asset,
 		orZero(b.Available),
 		orZero(b.Held),
 		orZero(b.Incoming),
+		orZero(b.RealizedPnl),
 		b.AverageEntryPrice,
 		b.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	)
@@ -831,7 +875,7 @@ func (s *sqliteStore) GetBalance(
 ) (domain.Balance, bool, error) {
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT tenant, account, asset, available, held, incoming,
+		`SELECT tenant, account, asset, available, held, incoming, realized_pnl,
 		        average_entry_price, updated_at
 		 FROM balances WHERE tenant = ? AND account = ? AND asset = ?`,
 		tenant.String(), account.String(), asset,
@@ -853,7 +897,7 @@ func (s *sqliteStore) ListBalances(
 	account domain.AccountID,
 	asset string,
 ) ([]domain.Balance, error) {
-	q := `SELECT tenant, account, asset, available, held, incoming,
+	q := `SELECT tenant, account, asset, available, held, incoming, realized_pnl,
 	             average_entry_price, updated_at
 	      FROM balances WHERE tenant = ?`
 	args := []any{tenant.String()}
@@ -876,10 +920,10 @@ func (s *sqliteStore) ListBalances(
 	balances := make([]domain.Balance, 0)
 	for rows.Next() {
 		var (
-			ten, acc, ast, avail, held, incoming, avgPx, updatedAt string
+			ten, acc, ast, avail, held, incoming, realizedPnl, avgPx, updatedAt string
 		)
 		if err := rows.Scan(
-			&ten, &acc, &ast, &avail, &held, &incoming, &avgPx, &updatedAt,
+			&ten, &acc, &ast, &avail, &held, &incoming, &realizedPnl, &avgPx, &updatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("store: scan balance: %w", err)
 		}
@@ -894,6 +938,7 @@ func (s *sqliteStore) ListBalances(
 			Available:         avail,
 			Held:              held,
 			Incoming:          incoming,
+			RealizedPnl:       realizedPnl,
 			AverageEntryPrice: avgPx,
 			UpdatedAt:         t,
 		})
@@ -930,9 +975,9 @@ func (s *sqliteStore) DeleteBalance(
 }
 
 func scanBalanceRow(row *sql.Row) (domain.Balance, error) {
-	var ten, acc, ast, avail, held, incoming, avgPx, updatedAt string
+	var ten, acc, ast, avail, held, incoming, realizedPnl, avgPx, updatedAt string
 	if err := row.Scan(
-		&ten, &acc, &ast, &avail, &held, &incoming, &avgPx, &updatedAt,
+		&ten, &acc, &ast, &avail, &held, &incoming, &realizedPnl, &avgPx, &updatedAt,
 	); err != nil {
 		return domain.Balance{}, err
 	}
@@ -947,6 +992,7 @@ func scanBalanceRow(row *sql.Row) (domain.Balance, error) {
 		Available:         avail,
 		Held:              held,
 		Incoming:          incoming,
+		RealizedPnl:       realizedPnl,
 		AverageEntryPrice: avgPx,
 		UpdatedAt:         t,
 	}, nil
@@ -1273,6 +1319,38 @@ func (s *sqliteStore) ListOrders(
 		return nil, fmt.Errorf("store: iterate orders: %w", err)
 	}
 	return result, nil
+}
+
+// CountOrders returns the total number of orders recorded for the tenant.
+func (s *sqliteStore) CountOrders(
+	ctx context.Context, tenant domain.TenantID,
+) (int, error) {
+	var n int
+	if err := s.db.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*) FROM orders WHERE tenant = ?`,
+		tenant.String(),
+	).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count orders: %w", err)
+	}
+	return n, nil
+}
+
+// CountOrdersSince returns the number of orders for the tenant whose `at`
+// timestamp is at or after since. `at` is stored as RFC3339Nano UTC text, so the
+// boundary is formatted the same way for a lexicographic comparison.
+func (s *sqliteStore) CountOrdersSince(
+	ctx context.Context, tenant domain.TenantID, since time.Time,
+) (int, error) {
+	var n int
+	if err := s.db.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*) FROM orders WHERE tenant = ? AND at >= ?`,
+		tenant.String(), since.UTC().Format(time.RFC3339Nano),
+	).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count orders since: %w", err)
+	}
+	return n, nil
 }
 
 func scanOrder(rows *sql.Rows) (domain.Order, error) {

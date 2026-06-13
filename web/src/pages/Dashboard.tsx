@@ -59,7 +59,7 @@ function CountsRow({ counts }: { counts: Overview["counts"] }) {
     { label: "Policies", value: counts.limits   },
   ];
   return (
-    <div className="grid grid-cols-3 gap-4">
+    <div className="grid grid-cols-4 gap-4">
       {items.map(({ label, value }) => (
         <Card key={label} className="animate-fade-in">
           <CardContent className="flex flex-col items-center gap-1 py-6 text-center">
@@ -70,6 +70,16 @@ function CountsRow({ counts }: { counts: Overview["counts"] }) {
           </CardContent>
         </Card>
       ))}
+      <Card className="animate-fade-in">
+        <CardContent className="flex flex-col items-center gap-1 py-6 text-center">
+          <span className="nums text-3xl font-bold tracking-tight text-text">
+            {counts.ordersToday}
+            <span className="text-xl font-normal text-muted-lt"> / </span>
+            {counts.ordersTotal}
+          </span>
+          <span className="text-xs text-muted">Orders</span>
+        </CardContent>
+      </Card>
     </div>
   );
 }

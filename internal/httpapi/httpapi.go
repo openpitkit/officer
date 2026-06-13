@@ -31,9 +31,11 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -73,6 +75,9 @@ type Service interface {
 		ctx context.Context, account domain.AccountID, source domain.Source, count int,
 	) ([]domain.AuditRow, error)
 
+	ListMcpAccess(ctx context.Context) ([]backend.McpCommand, error)
+	SetMcpAccess(ctx context.Context, command string, enabled bool) error
+
 	CreateGroup(ctx context.Context, group domain.AccountGroup) error
 	ListGroups(ctx context.Context) ([]domain.AccountGroup, error)
 	GetGroup(ctx context.Context, id string) (domain.AccountGroup, []domain.Account, error)
@@ -83,6 +88,7 @@ type Service interface {
 	ApplyAdjustment(
 		ctx context.Context, account domain.AccountID, req domain.AdjustmentRequest,
 	) (domain.AccountAdjustmentRecord, error)
+
 	ListBalances(ctx context.Context, account domain.AccountID, asset string) ([]domain.Balance, error)
 	ListAdjustments(
 		ctx context.Context, account domain.AccountID, source domain.Source, n int,
@@ -92,6 +98,7 @@ type Service interface {
 	) ([]domain.AccountAdjustmentRecord, error)
 
 	SubmitOrder(ctx context.Context, o domain.Order) (domain.Order, error)
+	CheckOrder(ctx context.Context, probe domain.OrderProbe) (domain.CheckResult, error)
 	ApplyExecutionReport(
 		ctx context.Context, in domain.ExecutionReportInput,
 	) (engine.ExecutionReportResult, error)
@@ -103,7 +110,7 @@ type Service interface {
 		ctx context.Context, account domain.AccountID, source domain.Source, n int,
 	) ([]domain.Trade, error)
 
-	Overview(ctx context.Context) (backend.Overview, error)
+	Overview(ctx context.Context, since time.Time) (backend.Overview, error)
 	ServiceInfo(ctx context.Context) (backend.ServiceInfo, error)
 }
 
@@ -204,6 +211,7 @@ func mountV1(r chi.Router, svc Service) {
 	r.Get("/adjustments", handleListAdjustments(svc))
 
 	r.Post("/orders", handleSubmitOrder(svc))
+	r.Post("/orders/check", handleCheckOrder(svc))
 	r.Get("/orders", handleListOrders(svc))
 	r.Get("/orders/{id}", handleGetOrder(svc))
 	r.Post("/orders/{id}/execution-reports", handleApplyExecutionReport(svc))
@@ -214,6 +222,9 @@ func mountV1(r chi.Router, svc Service) {
 	r.Delete("/limits", handleDeleteLimit(svc))
 
 	r.Get("/audit", handleListAudit(svc))
+
+	r.Get("/mcp-access", handleListMcpAccess(svc))
+	r.Put("/mcp-access/{command}", handleSetMcpAccess(svc))
 }
 
 // stampSource is middleware that stamps the given source onto the request
@@ -285,7 +296,12 @@ func handleCreateAccount(svc Service) http.HandlerFunc {
 			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
-		account, err := svc.CreateAccount(r.Context(), domain.AccountID(req.ID))
+		id := domain.AccountID(req.ID)
+		if err := domain.ValidateAccountID(id); err != nil {
+			writeErr(w, err)
+			return
+		}
+		account, err := svc.CreateAccount(r.Context(), id)
 		if err != nil {
 			writeErr(w, err)
 			return
@@ -499,6 +515,67 @@ func handleListAudit(svc Service) http.HandlerFunc {
 	}
 }
 
+// --- MCP access control -----------------------------------------------------
+
+// handleListMcpAccess handles GET /api/v1/mcp-access. It returns the full MCP
+// command catalogue, each entry carrying its metadata and current effective
+// enabled state.
+func handleListMcpAccess(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		commands, err := svc.ListMcpAccess(r.Context())
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		dtos := make([]mcpCommandDTO, 0, len(commands))
+		for _, c := range commands {
+			dtos = append(dtos, toMcpCommandDTO(c))
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"commands": dtos})
+	}
+}
+
+// handleSetMcpAccess handles PUT /api/v1/mcp-access/{command}. The body carries
+// the new enabled flag. An unknown command maps onto a 404 via the backend's
+// domain.ErrNotFound. The confirmation-on-enable for protective commands is a UI
+// concern handled elsewhere; the backend just persists.
+func handleSetMcpAccess(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		command, err := pathCommand(r)
+		if err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		var req struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			return
+		}
+		if err := svc.SetMcpAccess(r.Context(), command, req.Enabled); err != nil {
+			writeErr(w, err)
+			return
+		}
+		// Re-read the catalogue so the response reflects the persisted state and
+		// the unchanged metadata of the toggled command.
+		commands, err := svc.ListMcpAccess(r.Context())
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		for _, c := range commands {
+			if c.Command.Name == command {
+				writeJSON(w, http.StatusOK, map[string]any{"command": toMcpCommandDTO(c)})
+				return
+			}
+		}
+		// The backend validated the command, so it must be present; treat its
+		// absence as an internal inconsistency rather than a 404.
+		writeErrMsg(w, http.StatusInternalServerError, "internal", "internal error")
+	}
+}
+
 // --- groups -----------------------------------------------------------------
 
 // handleListGroups handles GET /api/v1/groups.
@@ -690,7 +767,7 @@ func handleApplyAdjustment(svc Service) http.HandlerFunc {
 			writeErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"adjustment": toAdjustmentDTO(record)})
+		writeJSON(w, http.StatusCreated, map[string]any{"adjustment": toAdjustmentDTO(record)})
 	}
 }
 
@@ -780,7 +857,44 @@ func handleSubmitOrder(svc Service) http.HandlerFunc {
 			writeErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"order": toOrderDTO(out)})
+		writeJSON(w, http.StatusCreated, map[string]any{"order": toOrderDTO(out)})
+	}
+}
+
+// handleCheckOrder handles POST /api/v1/orders/check. It runs the engine
+// pre-trade as a non-mutating dry-run and reports whether the order would pass.
+// An engine reject is a successful call returning passed=false with the
+// reasons, not an HTTP error; nothing is recorded and no state changes.
+func handleCheckOrder(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Account     string `json:"account"`
+			BaseAsset   string `json:"baseAsset"`
+			QuoteAsset  string `json:"quoteAsset"`
+			Side        string `json:"side"`
+			AmountKind  string `json:"amountKind"`
+			AmountValue string `json:"amountValue"`
+			Price       string `json:"price"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			return
+		}
+		probe := domain.OrderProbe{
+			Account:     domain.AccountID(req.Account),
+			BaseAsset:   req.BaseAsset,
+			QuoteAsset:  req.QuoteAsset,
+			Side:        domain.OrderSide(req.Side),
+			AmountKind:  domain.OrderAmountKind(req.AmountKind),
+			AmountValue: req.AmountValue,
+			Price:       req.Price,
+		}
+		out, err := svc.CheckOrder(r.Context(), probe)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"check": toCheckResultDTO(out)})
 	}
 }
 
@@ -879,7 +993,7 @@ func handleApplyExecutionReport(svc Service) http.HandlerFunc {
 			writeErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"result": toExecutionResultDTO(result)})
+		writeJSON(w, http.StatusCreated, map[string]any{"result": toExecutionResultDTO(result)})
 	}
 }
 
@@ -908,16 +1022,32 @@ func handleListTrades(svc Service) http.HandlerFunc {
 
 // --- dashboard / service ----------------------------------------------------
 
-// handleOverview handles GET /api/v1/overview.
+// handleOverview handles GET /api/v1/overview. The optional ?since= query
+// parameter (RFC3339) sets the "today" boundary for the orders-today tally;
+// when absent or unparseable it falls back to the server-local start of day.
 func handleOverview(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		overview, err := svc.Overview(r.Context())
+		since := startOfTodayLocal()
+		if s := r.URL.Query().Get("since"); s != "" {
+			if t, err := time.Parse(time.RFC3339, s); err == nil {
+				since = t
+			}
+		}
+		overview, err := svc.Overview(r.Context(), since)
 		if err != nil {
 			writeErr(w, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, toOverviewDTO(overview))
 	}
+}
+
+// startOfTodayLocal returns the server-local start of the current day
+// (00:00:00 in the local time zone). It is the default "today" boundary for the
+// overview orders tally when the request omits a usable ?since= parameter.
+func startOfTodayLocal() time.Time {
+	now := time.Now().Local()
+	return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 }
 
 // handleServiceInfo handles GET /api/v1/service.
@@ -962,6 +1092,17 @@ func pathID(r *http.Request) (string, error) {
 	return decoded, nil
 }
 
+// pathCommand reads the {command} chi path parameter and URL-decodes it. It is
+// the MCP-access counterpart to pathID.
+func pathCommand(r *http.Request) (string, error) {
+	raw := chi.URLParam(r, "command")
+	decoded, err := url.PathUnescape(raw)
+	if err != nil {
+		return "", errors.New("invalid URL encoding in command")
+	}
+	return decoded, nil
+}
+
 // pathInt64 reads the {id} chi path parameter as an int64 (order identifier).
 func pathInt64(r *http.Request) (int64, error) {
 	raw := chi.URLParam(r, "id")
@@ -986,8 +1127,8 @@ func pathAccountID(r *http.Request) (domain.AccountID, error) {
 // JSON error body. The codes are: ErrInvalid -> 400 validation, ErrNotFound ->
 // 404 not_found, ErrAlreadyExists -> 409 conflict, ErrNotImplemented -> 501
 // not_implemented (the message is surfaced so the operator sees which SDK
-// capability is missing), and anything else -> 500 internal. ErrNotImplemented
-// takes precedence over the generic 500 path.
+// capability is missing), and anything else -> 500 internal. The specific
+// sentinels take precedence over the generic 500 path.
 func writeErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, domain.ErrInvalid):
@@ -999,6 +1140,7 @@ func writeErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, domain.ErrNotImplemented):
 		writeErrMsg(w, http.StatusNotImplemented, "not_implemented", err.Error())
 	default:
+		slog.Error("unhandled internal error serving request", "error", err)
 		writeErrMsg(w, http.StatusInternalServerError, "internal", "internal error")
 	}
 }

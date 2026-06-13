@@ -49,7 +49,7 @@ DialogOverlay.displayName = DialogPrimitive.Overlay.displayName;
 const DialogContent = forwardRef<
   ElementRef<typeof DialogPrimitive.Content>,
   ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
->(({ className, children, ...props }, ref) => (
+>(({ className, children, onCloseAutoFocus, ...props }, ref) => (
   <DialogPrimitive.Portal>
     <DialogOverlay />
     <DialogPrimitive.Content
@@ -61,6 +61,13 @@ const DialogContent = forwardRef<
         "max-h-[90vh] overflow-y-auto",
         className,
       )}
+      onCloseAutoFocus={(e) => {
+        // Radix leaves pointer-events:none on body when a popover/select inside
+        // the dialog is open at the moment the dialog closes (Escape race).
+        // Restore it on the next tick so the page stays interactive.
+        setTimeout(() => { document.body.style.pointerEvents = ""; }, 0);
+        onCloseAutoFocus?.(e);
+      }}
       {...props}
     >
       {children}

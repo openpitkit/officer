@@ -54,6 +54,10 @@ type fakeEngine struct {
 	submitReject       *domain.OrderReject
 	execReportBlocks   []domain.ExecutionAccountBlock
 
+	// Canned dry-run outcome and recorded probes for the check path.
+	checkResult domain.CheckResult
+	checkProbes []domain.OrderProbe
+
 	// configureErr, when set, is returned by ConfigurePolicy instead of the
 	// generic failure; it lets a test assert a specific wrapped sentinel
 	// propagates through the node.
@@ -216,9 +220,10 @@ func (e *fakeEngine) UnblockGroup(_ context.Context, groupID string) error {
 }
 
 func (e *fakeEngine) CheckOrder(
-	context.Context, domain.OrderProbe,
+	_ context.Context, probe domain.OrderProbe,
 ) (domain.CheckResult, error) {
-	return domain.CheckResult{}, engine.ErrCheckUnsupported
+	e.checkProbes = append(e.checkProbes, probe)
+	return e.checkResult, nil
 }
 
 func (e *fakeEngine) Stop() { e.running = false }
@@ -345,10 +350,11 @@ func TestLocalNode_PutLimitEngineFailureRevertsStore(t *testing.T) {
 	}
 }
 
-// TestLocalNode_PutLimitNotImplementedRevertsAndPropagates verifies that when
-// the engine returns the not-implemented stub, the store write is reverted and
-// the wrapped sentinel propagates to the caller (so the surface maps it to 501).
-func TestLocalNode_PutLimitNotImplementedRevertsAndPropagates(t *testing.T) {
+// TestLocalNode_PutLimitNotImplementedRebuildsFromStore verifies that when the
+// runtime Configure surface reports the not-implemented stub, the node falls
+// back to rebuilding the engine from the already-written store snapshot: the
+// store keeps the barrier, the mutation succeeds, and it is audited.
+func TestLocalNode_PutLimitNotImplementedRebuildsFromStore(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
 	eng.configureErr = fmt.Errorf(
@@ -367,25 +373,34 @@ func TestLocalNode_PutLimitNotImplementedRevertsAndPropagates(t *testing.T) {
 			{Kind: domain.KindWindow, Value: "1s"},
 		},
 	}
-	err := n.PutLimit(ctx, limit, testCaller)
-	if !errors.Is(err, domain.ErrNotImplemented) {
-		t.Fatalf("want wrapped ErrNotImplemented, got %v", err)
+	if err := n.PutLimit(ctx, limit, testCaller); err != nil {
+		t.Fatalf("PutLimit: %v", err)
+	}
+
+	// The Configure surface refused, so the barrier reached the engine only via
+	// the rebuild fallback, not an in-place ConfigurePolicy.
+	if len(eng.configureCalls) != 0 {
+		t.Fatalf("want no in-place configure calls, got %d", len(eng.configureCalls))
 	}
 
 	stored, err := st.ListPolicyLimits(ctx, domain.PolicyRateLimit)
 	if err != nil {
 		t.Fatalf("ListPolicyLimits: %v", err)
 	}
-	if len(stored) != 0 {
-		t.Fatalf("want store reverted to empty, got %d barriers", len(stored))
+	if len(stored) != 1 {
+		t.Fatalf("want store to keep the barrier, got %d barriers", len(stored))
 	}
 
 	rows, err := st.ListAudit(ctx, 10)
 	if err != nil {
 		t.Fatalf("ListAudit: %v", err)
 	}
-	if len(rows) != 1 || rows[0].Action != domain.AuditActionHydrate {
-		t.Fatalf("want only the startup hydrate row, got %+v", rows)
+	// The startup hydrate row plus the successful set-limit mutation.
+	if len(rows) != 2 {
+		t.Fatalf("want hydrate + set-limit audit rows, got %+v", rows)
+	}
+	if rows[0].Action != domain.AuditActionSetLimit {
+		t.Fatalf("want newest row to be set-limit, got %q", rows[0].Action)
 	}
 }
 
@@ -676,14 +691,71 @@ func TestNewLocalNode_NilArgs(t *testing.T) {
 	}
 }
 
-func TestLocalNode_CheckOrderUnsupported(t *testing.T) {
+func TestLocalNode_CheckOrderDelegatesToEngine(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
+	eng.checkResult = domain.CheckResult{Passed: true, WouldLockPrices: []string{"100"}}
 	n, _ := newTestNode(t, eng)
 	ctx := context.Background()
 
-	_, err := n.CheckOrder(ctx, testKey("acc-1"), domain.OrderProbe{})
-	if !errors.Is(err, engine.ErrCheckUnsupported) {
-		t.Fatalf("want ErrCheckUnsupported, got %v", err)
+	probe := domain.OrderProbe{
+		Account: "acc-1", BaseAsset: "BTC", QuoteAsset: "USD",
+		Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity,
+		AmountValue: "1", Price: "100",
+	}
+	out, err := n.CheckOrder(ctx, testKey("acc-1"), probe)
+	if err != nil {
+		t.Fatalf("CheckOrder: %v", err)
+	}
+	if !out.Passed || len(out.WouldLockPrices) != 1 {
+		t.Fatalf("engine result not propagated: %+v", out)
+	}
+	if len(eng.checkProbes) != 1 || eng.checkProbes[0].Account != "acc-1" {
+		t.Fatalf("probe must be forwarded to the engine once")
+	}
+}
+
+// TestLocalNode_CheckOrderWritesNoAudit asserts the non-mutating check writes no
+// audit row and is side-effect-free across repeated calls: the audit count is
+// unchanged from before the first check, and the engine is only ever asked to
+// dry-run (the node never calls SubmitOrder/commit for a check).
+func TestLocalNode_CheckOrderWritesNoAudit(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.checkResult = domain.CheckResult{
+		Passed:  false,
+		Rejects: []domain.OrderReject{{Code: "rate_limit_exceeded", Scope: "account"}},
+	}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	before, err := st.ListAudit(ctx, 1000)
+	if err != nil {
+		t.Fatalf("ListAudit before: %v", err)
+	}
+
+	probe := domain.OrderProbe{
+		Account: "acc-1", BaseAsset: "BTC", QuoteAsset: "USD",
+		Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1",
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := n.CheckOrder(ctx, testKey("acc-1"), probe); err != nil {
+			t.Fatalf("CheckOrder #%d: %v", i, err)
+		}
+	}
+
+	after, err := st.ListAudit(ctx, 1000)
+	if err != nil {
+		t.Fatalf("ListAudit after: %v", err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("check must write no audit row: before=%d after=%d", len(before), len(after))
+	}
+	if len(eng.submitCalls) != 0 || len(eng.execReportCalls) != 0 {
+		t.Fatalf("check must not submit or settle: submit=%d exec=%d",
+			len(eng.submitCalls), len(eng.execReportCalls))
+	}
+	if len(eng.checkProbes) != 3 {
+		t.Fatalf("want 3 dry-run calls, got %d", len(eng.checkProbes))
 	}
 }

@@ -26,6 +26,7 @@ package node
 
 import (
 	"context"
+	"time"
 
 	"go.openpit.dev/officer/internal/domain"
 	"go.openpit.dev/officer/internal/engine"
@@ -185,6 +186,13 @@ type Node interface {
 		ctx context.Context, tenant domain.TenantID, account domain.AccountID, source domain.Source, n int,
 	) ([]domain.Order, error)
 
+	// CountOrders returns the total number of orders recorded for the tenant.
+	CountOrders(ctx context.Context, tenant domain.TenantID) (int, error)
+
+	// CountOrdersSince returns the number of orders recorded for the tenant whose
+	// timestamp is at or after since.
+	CountOrdersSince(ctx context.Context, tenant domain.TenantID, since time.Time) (int, error)
+
 	// ListOrderEvents returns all events for the identified order, oldest first.
 	ListOrderEvents(ctx context.Context, tenant domain.TenantID, orderID int64) ([]domain.OrderEvent, error)
 
@@ -197,9 +205,18 @@ type Node interface {
 	// ListAudit returns the most recent n audit rows, newest first.
 	ListAudit(ctx context.Context, n int) ([]domain.AuditRow, error)
 
-	// CheckOrder runs a non-mutating order check against the engine. It
-	// delegates to the engine stub and currently returns
-	// engine.ErrCheckUnsupported.
+	// ListMcpAccess returns the stored per-command MCP enable/disable overrides
+	// keyed by command name. MCP access is a control-plane-wide setting with no
+	// engine side-effect, so it is a store passthrough.
+	ListMcpAccess(ctx context.Context) (map[string]bool, error)
+
+	// SetMcpAccess upserts the enabled state for one MCP command. The command is
+	// validated against the catalogue by the backend before it reaches here.
+	SetMcpAccess(ctx context.Context, command string, enabled bool, caller domain.Caller) error
+
+	// CheckOrder runs a non-mutating pre-trade dry-run for probe against the
+	// engine, returning whether the order would pass plus the would-be lock or
+	// block. It mutates nothing and writes no audit row.
 	CheckOrder(
 		ctx context.Context, key Key, probe domain.OrderProbe,
 	) (domain.CheckResult, error)

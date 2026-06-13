@@ -21,7 +21,7 @@ import {
   useMemo,
   useState,
 } from "react";
-import { Coins, ExternalLink, Plus, RefreshCw } from "lucide-react";
+import { Coins, Plus, RefreshCw } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
 import { ApiError, createAdjustment } from "@/api/client";
@@ -35,7 +35,6 @@ import type {
 import { useAccounts } from "@/api/useAccounts";
 import { useAdjustments } from "@/api/useAdjustments";
 import { useBalances } from "@/api/useBalances";
-import { getPolicyCatalogEntry } from "@/api/vocabulary";
 import { Autocomplete } from "@/components/Autocomplete";
 import {
   EmptyState,
@@ -85,44 +84,31 @@ function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function fmtTime(iso: string): string {
+/** Split a localized timestamp so the date and time are rendered as
+ *  separate unbreakable units that wrap as a whole, never split mid-value. */
+function SplitTime({ iso }: { iso: string }) {
   if (!iso) {
-    return "—";
+    return <span className="text-muted-lt">—</span>;
   }
+  let date: string;
+  let time: string;
   try {
-    return new Date(iso).toLocaleString();
+    const d = new Date(iso);
+    date = d.toLocaleDateString();
+    time = d.toLocaleTimeString();
   } catch {
-    return iso;
+    return <span>{iso}</span>;
   }
+  return (
+    <span>
+      <span className="inline-block whitespace-nowrap">{date}</span>{" "}
+      <span className="inline-block whitespace-nowrap">{time}</span>
+    </span>
+  );
 }
 
 function dash(v: string | undefined): string {
   return v && v !== "" ? v : "—";
-}
-
-// ---------------------------------------------------------------------------
-// Spot-funds catalog description banner
-// ---------------------------------------------------------------------------
-
-function SpotFundsInfo() {
-  const entry = getPolicyCatalogEntry("spot_funds");
-  if (!entry) {
-    return null;
-  }
-  return (
-    <p className="text-xs text-muted-lt">
-      {entry.description}{" "}
-      <a
-        href={entry.wikiUrl}
-        target="_blank"
-        rel="noreferrer"
-        className="inline-flex items-center gap-0.5 text-accent hover:underline"
-      >
-        Details
-        <ExternalLink className="h-3 w-3" />
-      </a>
-    </p>
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -147,6 +133,7 @@ function BalancesTable({
             <TableHead className="text-right">Held</TableHead>
             <TableHead className="text-right">Incoming</TableHead>
             <TableHead className="text-right">Avg entry price</TableHead>
+            <TableHead className="text-right">Realized PnL</TableHead>
             <TableHead>Updated</TableHead>
             <TableHead className="text-right">Actions</TableHead>
           </TableRow>
@@ -165,8 +152,11 @@ function BalancesTable({
               <TableCell className="nums text-right text-xs">
                 {dash(b.averageEntryPrice)}
               </TableCell>
+              <TableCell className="nums text-right text-xs">
+                {dash(b.realizedPnl)}
+              </TableCell>
               <TableCell className="text-xs text-muted-lt">
-                {fmtTime(b.updatedAt)}
+                <SplitTime iso={b.updatedAt} />
               </TableCell>
               <TableCell>
                 <div className="flex justify-end">
@@ -671,7 +661,7 @@ function HistoryRow({ adj }: { adj: Adjustment }) {
 
   return (
     <TableRow className="hover:bg-transparent">
-      <TableCell className="text-xs text-muted-lt">{fmtTime(adj.at)}</TableCell>
+      <TableCell className="text-xs text-muted-lt"><SplitTime iso={adj.at} /></TableCell>
       <TableCell className="nums text-xs">{adj.account}</TableCell>
       <TableCell className="nums text-xs">{adj.asset}</TableCell>
       <TableCell>
@@ -800,8 +790,6 @@ export function Positions() {
         </>
       }
     >
-      <SpotFundsInfo />
-
       {/* Filters */}
       <Card className="flex flex-wrap items-end gap-4 p-4">
         <div className="space-y-1.5">
@@ -838,7 +826,7 @@ export function Positions() {
         </p>
       </div>
 
-      {balancesLoad.load.state === "loading" && <TableSkeleton cols={8} />}
+      {balancesLoad.load.state === "loading" && <TableSkeleton cols={9} />}
       {balancesLoad.load.state === "error" && (
         <ErrorState
           message={balancesLoad.load.error}

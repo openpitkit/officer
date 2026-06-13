@@ -166,6 +166,33 @@ func toAuditDTO(row domain.AuditRow) auditDTO {
 	}
 }
 
+// --- MCP access control -----------------------------------------------------
+
+// mcpCommandDTO is the wire shape of one MCP catalogue command paired with its
+// current effective enabled state.
+type mcpCommandDTO struct {
+	Name             string `json:"name"`
+	Title            string `json:"title"`
+	AgentDescription string `json:"agentDescription"`
+	Mutating         bool   `json:"mutating"`
+	Protective       bool   `json:"protective"`
+	Implemented      bool   `json:"implemented"`
+	Enabled          bool   `json:"enabled"`
+}
+
+// toMcpCommandDTO maps a backend.McpCommand onto the wire DTO.
+func toMcpCommandDTO(c backend.McpCommand) mcpCommandDTO {
+	return mcpCommandDTO{
+		Name:             c.Command.Name,
+		Title:            c.Command.Title,
+		AgentDescription: c.Command.AgentDescription,
+		Mutating:         c.Command.Mutating,
+		Protective:       c.Command.Protective,
+		Implemented:      c.Command.Implemented,
+		Enabled:          c.Enabled,
+	}
+}
+
 // --- group ------------------------------------------------------------------
 
 // groupDTO is the wire shape of a single account group.
@@ -197,6 +224,7 @@ type balanceDTO struct {
 	Available         string    `json:"available"`
 	Held              string    `json:"held"`
 	Incoming          string    `json:"incoming"`
+	RealizedPnl       string    `json:"realizedPnl"`
 	AverageEntryPrice string    `json:"averageEntryPrice"`
 }
 
@@ -209,6 +237,7 @@ func toBalanceDTO(b domain.Balance) balanceDTO {
 		Available:         b.Available,
 		Held:              b.Held,
 		Incoming:          b.Incoming,
+		RealizedPnl:       b.RealizedPnl,
 		AverageEntryPrice: b.AverageEntryPrice,
 	}
 }
@@ -414,6 +443,62 @@ func toOrderDTO(o domain.Order) orderDTO {
 	}
 }
 
+// --- order check ------------------------------------------------------------
+
+// orderRejectDTO is the wire shape of one engine pre-trade reject from a
+// non-mutating order check.
+type orderRejectDTO struct {
+	Code    string `json:"code"`
+	Scope   string `json:"scope"`
+	Policy  string `json:"policy"`
+	Reason  string `json:"reason"`
+	Details string `json:"details"`
+}
+
+// checkResultDTO is the wire shape of a non-mutating order-check outcome: the
+// would-be lock prices on pass, or the structured rejects and any would-be
+// account block on reject. Monetary values are exact decimal strings.
+type checkResultDTO struct {
+	WouldBlock      *executionBlockDTO `json:"wouldBlock"`
+	Rejects         []orderRejectDTO   `json:"rejects"`
+	WouldLockPrices []string           `json:"wouldLockPrices"`
+	Passed          bool               `json:"passed"`
+}
+
+// toCheckResultDTO maps a domain.CheckResult onto the wire DTO. It reuses the
+// execution-block shape for the would-be block.
+func toCheckResultDTO(r domain.CheckResult) checkResultDTO {
+	rejects := make([]orderRejectDTO, 0, len(r.Rejects))
+	for _, rej := range r.Rejects {
+		rejects = append(rejects, orderRejectDTO{
+			Code:    rej.Code,
+			Scope:   rej.Scope,
+			Policy:  rej.Policy,
+			Reason:  rej.Reason,
+			Details: rej.Details,
+		})
+	}
+	prices := r.WouldLockPrices
+	if prices == nil {
+		prices = []string{}
+	}
+	var block *executionBlockDTO
+	if r.WouldBlock != nil {
+		block = &executionBlockDTO{
+			Account: string(r.WouldBlock.Account),
+			Code:    r.WouldBlock.Code,
+			Reason:  r.WouldBlock.Reason,
+			Details: r.WouldBlock.Details,
+		}
+	}
+	return checkResultDTO{
+		WouldBlock:      block,
+		Rejects:         rejects,
+		WouldLockPrices: prices,
+		Passed:          r.Passed,
+	}
+}
+
 // --- order event ------------------------------------------------------------
 
 // orderEventDTO is the wire shape of one immutable order lifecycle event. The
@@ -538,9 +623,11 @@ type overviewDTO struct {
 
 // countsDTO is the headline tally on the overview.
 type countsDTO struct {
-	Accounts int `json:"accounts"`
-	Groups   int `json:"groups"`
-	Limits   int `json:"limits"`
+	Accounts    int `json:"accounts"`
+	Groups      int `json:"groups"`
+	Limits      int `json:"limits"`
+	OrdersToday int `json:"ordersToday"`
+	OrdersTotal int `json:"ordersTotal"`
 }
 
 // activityDTO is one recent-activity entry on the overview feed.
@@ -566,9 +653,11 @@ func toOverviewDTO(o backend.Overview) overviewDTO {
 	}
 	return overviewDTO{
 		Counts: countsDTO{
-			Accounts: o.Counts.Accounts,
-			Groups:   o.Counts.Groups,
-			Limits:   o.Counts.Limits,
+			Accounts:    o.Counts.Accounts,
+			Groups:      o.Counts.Groups,
+			Limits:      o.Counts.Limits,
+			OrdersToday: o.Counts.OrdersToday,
+			OrdersTotal: o.Counts.OrdersTotal,
 		},
 		Activity: activity,
 	}

@@ -32,36 +32,48 @@ import (
 	"go.openpit.dev/officer/internal/backend"
 	"go.openpit.dev/officer/internal/domain"
 	"go.openpit.dev/officer/internal/engine"
+	"go.openpit.dev/officer/internal/mcpcatalog"
 	"go.openpit.dev/officer/internal/node"
 	"go.openpit.dev/officer/internal/store"
 )
 
 // fakeService is a fake Service for handler tests.
 type fakeService struct {
-	accounts    []domain.Account
-	limits      []domain.Limit
-	auditRows   []domain.AuditRow
-	groups      []domain.AccountGroup
-	balances    []domain.Balance
-	adjustments []domain.AccountAdjustmentRecord
-	orders      []domain.Order
-	trades      []domain.Trade
-	orderDetail domain.OrderDetail
-	adjustment  domain.AccountAdjustmentRecord
-	submitOrder domain.Order
-	overview    backend.Overview
-	serviceInfo backend.ServiceInfo
-	status      backend.Status
-	statusErr   error
-	createErr   error
-	blockErr    error
-	unblockErr  error
-	stateErr    error
-	listLimErr  error
-	putLimErr   error
-	delLimErr   error
-	auditErr    error
-	groupErr    error
+	accounts     []domain.Account
+	limits       []domain.Limit
+	auditRows    []domain.AuditRow
+	groups       []domain.AccountGroup
+	balances     []domain.Balance
+	adjustments  []domain.AccountAdjustmentRecord
+	orders       []domain.Order
+	trades       []domain.Trade
+	orderDetail  domain.OrderDetail
+	adjustment   domain.AccountAdjustmentRecord
+	submitOrder  domain.Order
+	checkResult  domain.CheckResult
+	overview     backend.Overview
+	serviceInfo  backend.ServiceInfo
+	status       backend.Status
+	statusErr    error
+	createErr    error
+	blockErr     error
+	unblockErr   error
+	stateErr     error
+	listLimErr   error
+	putLimErr    error
+	delLimErr    error
+	auditErr     error
+	groupErr     error
+
+	mcpCommands   []backend.McpCommand
+	mcpAccessErr  error
+	setMcpErr     error
+	setMcpCalls   []setMcpCall
+}
+
+type setMcpCall struct {
+	command string
+	enabled bool
 }
 
 func (f *fakeService) Status(_ context.Context) (backend.Status, error) {
@@ -109,6 +121,16 @@ func (f *fakeService) ListAuditFiltered(
 	_ context.Context, _ domain.AccountID, _ domain.Source, _ int,
 ) ([]domain.AuditRow, error) {
 	return f.auditRows, f.auditErr
+}
+func (f *fakeService) ListMcpAccess(_ context.Context) ([]backend.McpCommand, error) {
+	return f.mcpCommands, f.mcpAccessErr
+}
+func (f *fakeService) SetMcpAccess(_ context.Context, command string, enabled bool) error {
+	if f.setMcpErr != nil {
+		return f.setMcpErr
+	}
+	f.setMcpCalls = append(f.setMcpCalls, setMcpCall{command: command, enabled: enabled})
+	return nil
 }
 func (f *fakeService) SetAccountGroup(_ context.Context, _ domain.AccountID, _ string) error {
 	return f.stateErr
@@ -171,6 +193,9 @@ func (f *fakeService) ListAllAdjustments(
 func (f *fakeService) SubmitOrder(_ context.Context, _ domain.Order) (domain.Order, error) {
 	return f.submitOrder, f.stateErr
 }
+func (f *fakeService) CheckOrder(_ context.Context, _ domain.OrderProbe) (domain.CheckResult, error) {
+	return f.checkResult, f.stateErr
+}
 func (f *fakeService) ApplyExecutionReport(
 	_ context.Context, _ domain.ExecutionReportInput,
 ) (engine.ExecutionReportResult, error) {
@@ -189,7 +214,7 @@ func (f *fakeService) ListTrades(
 ) ([]domain.Trade, error) {
 	return f.trades, nil
 }
-func (f *fakeService) Overview(_ context.Context) (backend.Overview, error) {
+func (f *fakeService) Overview(_ context.Context, _ time.Time) (backend.Overview, error) {
 	return f.overview, f.statusErr
 }
 func (f *fakeService) ServiceInfo(_ context.Context) (backend.ServiceInfo, error) {
@@ -771,5 +796,303 @@ func TestNewRouter_MissingSPA(t *testing.T) {
 	_, err := NewRouter(Options{Service: &fakeService{}})
 	if err == nil {
 		t.Fatal("want error for nil SPA")
+	}
+}
+
+func TestCheckOrder_Pass(t *testing.T) {
+	svc := &fakeService{checkResult: domain.CheckResult{
+		Passed: true, WouldLockPrices: []string{"100"},
+	}}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(
+		`{"account":"acc-1","baseAsset":"BTC","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"1","price":"100"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders/check", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	check, ok := m["check"].(map[string]any)
+	if !ok {
+		t.Fatalf("want check object, got %v", m["check"])
+	}
+	if check["passed"] != true {
+		t.Fatalf("want passed=true, got %v", check["passed"])
+	}
+	prices, ok := check["wouldLockPrices"].([]any)
+	if !ok || len(prices) != 1 || prices[0] != "100" {
+		t.Fatalf("want wouldLockPrices=[100], got %v", check["wouldLockPrices"])
+	}
+	if check["wouldBlock"] != nil {
+		t.Fatalf("want wouldBlock=null, got %v", check["wouldBlock"])
+	}
+}
+
+func TestCheckOrder_Reject(t *testing.T) {
+	svc := &fakeService{checkResult: domain.CheckResult{
+		Passed: false,
+		Rejects: []domain.OrderReject{
+			{Code: "insufficient_funds", Scope: "account", Policy: "spot_funds", Reason: "no funds"},
+		},
+		WouldBlock: &domain.ExecutionAccountBlock{Account: "acc-1", Code: "account_blocked"},
+	}}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(
+		`{"account":"acc-1","baseAsset":"BTC","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"1"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders/check", body))
+	// An engine reject is a successful 200, not an HTTP error.
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	check, _ := m["check"].(map[string]any)
+	if check["passed"] != false {
+		t.Fatalf("want passed=false, got %v", check["passed"])
+	}
+	rejects, ok := check["rejects"].([]any)
+	if !ok || len(rejects) != 1 {
+		t.Fatalf("want 1 reject, got %v", check["rejects"])
+	}
+	rej, _ := rejects[0].(map[string]any)
+	if rej["code"] != "insufficient_funds" || rej["scope"] != "account" {
+		t.Fatalf("reject fields not on the wire: %v", rej)
+	}
+	block, ok := check["wouldBlock"].(map[string]any)
+	if !ok || block["account"] != "acc-1" || block["code"] != "account_blocked" {
+		t.Fatalf("wouldBlock not on the wire: %v", check["wouldBlock"])
+	}
+}
+
+func TestCheckOrder_InvalidJSON(t *testing.T) {
+	r, err := newRouter(&fakeService{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders/check", body))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+}
+
+func TestCheckOrder_ValidationError(t *testing.T) {
+	// The backend rejects a malformed account/asset with ErrInvalid; the handler
+	// maps it to 400, mirroring submit.
+	svc := &fakeService{stateErr: domain.ErrInvalid}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(
+		`{"account":"acc-1","baseAsset":"bad asset","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"1"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders/check", body))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "validation" {
+		t.Fatalf("want code=validation, got %v", errObj["code"])
+	}
+}
+
+// TestSubmitOrder_Created checks the submit path returns 201: the order row is
+// persisted on every success path (even an engine reject), so the resource-
+// creating POST is a 201 Created carrying the order.
+func TestSubmitOrder_Created(t *testing.T) {
+	svc := &fakeService{submitOrder: domain.Order{
+		ID: 7, Account: "acc-1", BaseAsset: "BTC", QuoteAsset: "USD",
+		Side: domain.OrderSideBuy, Status: domain.OrderStatusCommitted,
+	}}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(
+		`{"account":"acc-1","baseAsset":"BTC","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"1","price":"100"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders", body))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	if _, ok := m["order"].(map[string]any); !ok {
+		t.Fatalf("want order object, got %v", m["order"])
+	}
+}
+
+// TestSubmitOrder_ValidationError checks malformed order input (a bad enum,
+// decimal, or asset the engine mapper rejects with domain.ErrInvalid) surfaces
+// as 400, not the 500 default. The fake stands in for the engine mapper raising
+// ErrInvalid for, e.g., an unknown amount kind or a non-decimal amount.
+func TestSubmitOrder_ValidationError(t *testing.T) {
+	svc := &fakeService{stateErr: domain.ErrInvalid}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(
+		`{"account":"acc-1","baseAsset":"BTC","quoteAsset":"USD","side":"buy","amountKind":"base","amountValue":"1"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders", body))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "validation" {
+		t.Fatalf("want code=validation, got %v", errObj["code"])
+	}
+}
+
+// TestApplyAdjustment_Created checks the adjustment path returns 201: the
+// adjustment record is appended on every success path (accept or reject), so the
+// resource-creating POST is a 201 Created carrying the record.
+func TestApplyAdjustment_Created(t *testing.T) {
+	svc := &fakeService{adjustment: domain.AccountAdjustmentRecord{
+		ID: 3, Tenant: domain.DefaultTenant, Account: "acc-1",
+		Request: domain.AdjustmentRequest{Asset: "USD"},
+	}}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(
+		`{"asset":"USD","balance":{"mode":"delta","value":"100"}}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/accounts/acc-1/adjustments", body))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	if _, ok := m["adjustment"].(map[string]any); !ok {
+		t.Fatalf("want adjustment object, got %v", m["adjustment"])
+	}
+}
+
+// TestApplyExecutionReport_Created checks the execution-report path returns 201:
+// the trade row is created on the success path, so the resource-creating POST is
+// a 201 Created carrying the result.
+func TestApplyExecutionReport_Created(t *testing.T) {
+	svc := &fakeService{orderDetail: domain.OrderDetail{
+		Order: domain.Order{
+			ID: 9, Account: "acc-1", BaseAsset: "BTC", QuoteAsset: "USD",
+			Side: domain.OrderSideBuy,
+		},
+	}}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"quantity":"1","price":"100","final":true}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/api/v1/orders/9/execution-reports", body))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	if _, ok := m["result"].(map[string]any); !ok {
+		t.Fatalf("want result object, got %v", m["result"])
+	}
+}
+
+func TestListMcpAccess(t *testing.T) {
+	svc := &fakeService{
+		mcpCommands: []backend.McpCommand{
+			{Command: mcpcatalog.Command{
+				Name: "health", Title: "Health", AgentDescription: "desc",
+				Implemented: true, DefaultEnabled: true,
+			}, Enabled: false},
+			{Command: mcpcatalog.Command{
+				Name: "set_limit", Title: "Set limit", AgentDescription: "desc",
+				Mutating: true, Protective: true,
+			}, Enabled: true},
+		},
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/mcp-access", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	commands, ok := m["commands"].([]any)
+	if !ok || len(commands) != 2 {
+		t.Fatalf("want 2 commands, got %v", m["commands"])
+	}
+	first := commands[0].(map[string]any)
+	if first["name"] != "health" || first["enabled"] != false || first["implemented"] != true {
+		t.Fatalf("unexpected first command: %v", first)
+	}
+}
+
+func TestSetMcpAccess_Persists(t *testing.T) {
+	svc := &fakeService{
+		mcpCommands: []backend.McpCommand{
+			{Command: mcpcatalog.Command{Name: "health", Title: "Health", AgentDescription: "d"}, Enabled: false},
+		},
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"enabled":false}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/mcp-access/health", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	if len(svc.setMcpCalls) != 1 || svc.setMcpCalls[0].command != "health" ||
+		svc.setMcpCalls[0].enabled != false {
+		t.Fatalf("expected persisted toggle, got %+v", svc.setMcpCalls)
+	}
+	m := bodyMap(t, rec.Result())
+	cmd, ok := m["command"].(map[string]any)
+	if !ok || cmd["name"] != "health" {
+		t.Fatalf("expected command in body, got %v", m)
+	}
+}
+
+func TestSetMcpAccess_UnknownCommandNotFound(t *testing.T) {
+	svc := &fakeService{setMcpErr: fmt.Errorf("mcp command %q: %w", "nope", domain.ErrNotFound)}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"enabled":true}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/mcp-access/nope", body))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d", rec.Code)
+	}
+}
+
+func TestSetMcpAccess_InvalidJSON(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{bad`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/mcp-access/health", body))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+	if len(svc.setMcpCalls) != 0 {
+		t.Fatalf("invalid JSON must not persist")
 	}
 }

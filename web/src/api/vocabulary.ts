@@ -20,6 +20,7 @@
 // the SQL data, the REST/MCP JSON, and this SPA. No layer renames or re-cases
 // them.
 
+
 export const POLICIES = [
   "rate_limit",
   "order_size_limit",
@@ -74,6 +75,7 @@ export const POLICY_KINDS: Record<Policy, KindSpec[]> = {
   pnl_bounds_kill_switch: [
     { kind: "lower_bound", hint: "decimal" },
     { kind: "upper_bound", hint: "decimal" },
+    { kind: "initial_pnl", hint: "decimal, sets the starting realized PnL; only on creation" },
   ],
 };
 
@@ -101,8 +103,7 @@ export function isScope(value: string): value is Scope {
 }
 
 // --- Policy catalog ---
-// Rich metadata for the Policies and Positions pages. One entry per policy
-// (plus the spot_funds pseudo-policy for Positions).
+// Rich metadata for the Policies page. One entry per policy.
 
 /** One field descriptor inside a policy catalog entry. */
 export interface PolicyField {
@@ -180,15 +181,12 @@ export const POLICY_CATALOG: PolicyCatalogEntry[] = [
         label: "upper bound",
         hint: "decimal, e.g. 500",
       },
+      {
+        key: "initial_pnl",
+        label: "initial PnL",
+        hint: "decimal — seeds the starting realized PnL; settable only when creating an account+asset barrier",
+      },
     ],
-  },
-  {
-    id: "spot_funds",
-    label: "Spot funds",
-    description:
-      "Real-time solvency gate: reserves the exact funds each order needs and rejects anything the account cannot pay for. Balances are seeded and edited here through account adjustments.",
-    wikiUrl: "https://github.com/openpitkit/pit/wiki/Spot-Funds",
-    fields: [],
   },
 ];
 
@@ -198,3 +196,4 @@ export function getPolicyCatalogEntry(
 ): PolicyCatalogEntry | undefined {
   return POLICY_CATALOG.find((e) => e.id === id);
 }
+

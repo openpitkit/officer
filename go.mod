@@ -27,3 +27,7 @@ require (
 	modernc.org/strutil v1.2.0 // indirect
 	modernc.org/token v1.1.0 // indirect
 )
+
+// Local dev: resolve the openpit binding from the dev tree (dry-run SDK) until
+// it is published; mirrors the workspace go.work `use ./pit/bindings/go`.
+replace go.openpit.dev/openpit => ../pit/bindings/go

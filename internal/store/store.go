@@ -23,6 +23,7 @@ package store
 
 import (
 	"context"
+	"time"
 
 	"go.openpit.dev/officer/internal/domain"
 )
@@ -136,6 +137,18 @@ type Store interface {
 	// ListAudit returns the most recent n audit rows, newest first. A
 	// non-positive n returns an empty slice.
 	ListAudit(ctx context.Context, n int) ([]domain.AuditRow, error)
+
+	// --- MCP access control ---
+
+	// ListMcpAccess returns the stored per-command MCP enable/disable overrides,
+	// keyed by command name. Only rows the operator has explicitly toggled are
+	// returned; commands without a row resolve to their catalogue default at a
+	// higher layer. An empty store returns a non-nil empty map.
+	ListMcpAccess(ctx context.Context) (map[string]bool, error)
+
+	// SetMcpAccess upserts the enabled state for one command. It does not
+	// validate the command against any catalogue; that is the caller's concern.
+	SetMcpAccess(ctx context.Context, command string, enabled bool) error
 
 	// --- Account groups ---
 
@@ -278,6 +291,16 @@ type Store interface {
 		source domain.Source,
 		n int,
 	) ([]domain.Order, error)
+
+	// CountOrders returns the total number of orders recorded for the tenant.
+	CountOrders(ctx context.Context, tenant domain.TenantID) (int, error)
+
+	// CountOrdersSince returns the number of orders recorded for the tenant whose
+	// `at` timestamp is at or after since. Timestamps are compared as RFC3339Nano
+	// UTC text, matching how orders are stored.
+	CountOrdersSince(
+		ctx context.Context, tenant domain.TenantID, since time.Time,
+	) (int, error)
 
 	// --- Order events ---
 

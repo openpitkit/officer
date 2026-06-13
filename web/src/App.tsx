@@ -19,10 +19,13 @@
 //   /              → Dashboard
 //   /accounts      → Accounts
 //   /policies      → Policies (renamed Limits; 2C edits pages/Limits.tsx in place)
+//   /limits        → redirect /policies
 //   /positions     → Positions
-//   /trading       → Trading
+//   /orders        → Orders (renamed Trading)
+//   /trading       → redirect /orders
 //   /market-data   → Market Data
 //   /audit         → Audit
+//   /mcp-access    → MCP access
 //   /service       → Service
 //
 // Per-account filtering uses query params (?account=, ?source=) rather than
@@ -38,9 +41,10 @@ import { Audit } from "@/pages/Audit";
 import { Dashboard } from "@/pages/Dashboard";
 import { Limits } from "@/pages/Limits";
 import { MarketData } from "@/pages/MarketData";
+import { McpAccess } from "@/pages/McpAccess";
 import { Positions } from "@/pages/Positions";
+import { Orders } from "@/pages/Orders";
 import { Service } from "@/pages/Service";
-import { Trading } from "@/pages/Trading";
 
 export default function App() {
   return (
@@ -54,9 +58,12 @@ export default function App() {
           <Route path="/policies" element={<Limits />} />
           <Route path="/limits" element={<Navigate to="/policies" replace />} />
           <Route path="/positions" element={<Positions />} />
-          <Route path="/trading" element={<Trading />} />
+          <Route path="/orders" element={<Orders />} />
+          {/* /trading redirects for any bookmarks. */}
+          <Route path="/trading" element={<Navigate to="/orders" replace />} />
           <Route path="/market-data" element={<MarketData />} />
           <Route path="/audit" element={<Audit />} />
+          <Route path="/mcp-access" element={<McpAccess />} />
           <Route path="/service" element={<Service />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

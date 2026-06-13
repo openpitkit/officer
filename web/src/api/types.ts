@@ -86,7 +86,7 @@ export interface Limit {
   values: Record<string, string>;
 }
 
-// --- Balances / Spot Funds ---
+// --- Balances ---
 
 /** Adjustment amount mode. */
 export type AdjustmentMode = "absolute" | "delta";
@@ -111,6 +111,7 @@ export interface Balance {
   held: string;
   incoming: string;
   averageEntryPrice: string;
+  realizedPnl: string;
   updatedAt: string;
 }
 
@@ -167,7 +168,7 @@ export type Source = "panel" | "api" | "mcp" | "system";
 export type OrderSide = "buy" | "sell";
 
 /** How the order amount is denominated. */
-export type AmountKind = "base" | "quote";
+export type AmountKind = "quantity" | "volume";
 
 /** Lock prices captured on order submission. */
 export interface LockPrices {
@@ -223,6 +224,31 @@ export interface Trade {
   lockPrice: string;
 }
 
+/** One pre-trade check reject entry (mirrors the checkRejectDTO wire shape). */
+export interface CheckReject {
+  code: string;
+  scope: string;
+  policy: string;
+  reason: string;
+  details: string;
+}
+
+/** Would-be account block from a pre-trade check. */
+export interface CheckWouldBlock {
+  account: string;
+  code: string;
+  reason: string;
+  details: string;
+}
+
+/** Result of a POST /orders/check dry-run (mirrors the checkDTO wire shape). */
+export interface CheckResult {
+  passed: boolean;
+  rejects: CheckReject[];
+  wouldLockPrices: string[];
+  wouldBlock: CheckWouldBlock | null;
+}
+
 // --- Dashboard / Overview ---
 
 /** One activity entry from GET /overview. */
@@ -240,6 +266,8 @@ export interface Overview {
     accounts: number;
     groups: number;
     limits: number;
+    ordersToday: number;
+    ordersTotal: number;
   };
   activity: ActivityEntry[];
 }
@@ -256,6 +284,19 @@ export interface ServiceInfo {
     path: string;
     reachable: boolean;
   };
+}
+
+// --- MCP access ---
+
+/** One entry from GET /mcp-access (mirrors the mcpCommandDTO wire shape). */
+export interface McpCommand {
+  name: string;
+  title: string;
+  agentDescription: string;
+  mutating: boolean;
+  protective: boolean;
+  implemented: boolean;
+  enabled: boolean;
 }
 
 // --- Audit ---

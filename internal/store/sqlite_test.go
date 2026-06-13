@@ -56,8 +56,8 @@ func TestMigration_Chain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaVersion: %v", err)
 	}
-	if v != 1 {
-		t.Fatalf("want schema version 1, got %d", v)
+	if v != 3 {
+		t.Fatalf("want schema version 3, got %d", v)
 	}
 }
 
@@ -74,8 +74,8 @@ func TestMigration_Idempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaVersion: %v", err)
 	}
-	if v != 1 {
-		t.Fatalf("want schema version 1, got %d", v)
+	if v != 3 {
+		t.Fatalf("want schema version 3, got %d", v)
 	}
 }
 
@@ -610,3 +610,60 @@ func TestClose_Idempotent(t *testing.T) {
 	}
 }
 
+// --- MCP access ---
+
+func TestMcpAccess_EmptyIsNonNil(t *testing.T) {
+	t.Parallel()
+	s := openStore(t)
+	ctx := context.Background()
+
+	access, err := s.ListMcpAccess(ctx)
+	if err != nil {
+		t.Fatalf("ListMcpAccess: %v", err)
+	}
+	if access == nil {
+		t.Fatal("ListMcpAccess must return a non-nil map")
+	}
+	if len(access) != 0 {
+		t.Fatalf("fresh store should have no overrides, got %d", len(access))
+	}
+}
+
+func TestMcpAccess_UpsertAndList(t *testing.T) {
+	t.Parallel()
+	s := openStore(t)
+	ctx := context.Background()
+
+	if err := s.SetMcpAccess(ctx, "health", false); err != nil {
+		t.Fatalf("SetMcpAccess: %v", err)
+	}
+	if err := s.SetMcpAccess(ctx, "set_limit", true); err != nil {
+		t.Fatalf("SetMcpAccess: %v", err)
+	}
+
+	access, err := s.ListMcpAccess(ctx)
+	if err != nil {
+		t.Fatalf("ListMcpAccess: %v", err)
+	}
+	if got := access["health"]; got != false {
+		t.Errorf("health override: want false, got %v", got)
+	}
+	if got := access["set_limit"]; got != true {
+		t.Errorf("set_limit override: want true, got %v", got)
+	}
+
+	// Upsert overwrites in place rather than duplicating.
+	if err := s.SetMcpAccess(ctx, "health", true); err != nil {
+		t.Fatalf("SetMcpAccess overwrite: %v", err)
+	}
+	access, err = s.ListMcpAccess(ctx)
+	if err != nil {
+		t.Fatalf("ListMcpAccess after overwrite: %v", err)
+	}
+	if got := access["health"]; got != true {
+		t.Errorf("health after overwrite: want true, got %v", got)
+	}
+	if len(access) != 2 {
+		t.Fatalf("want 2 overrides after overwrite, got %d", len(access))
+	}
+}

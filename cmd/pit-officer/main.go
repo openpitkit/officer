@@ -513,3 +513,18 @@ func (a sourceAdapter) ListLimits(
 func (a sourceAdapter) ListAudit(ctx context.Context, n int) ([]domain.AuditRow, error) {
 	return a.service.ListAudit(ctx, n)
 }
+
+// CheckOrder delegates to the backend service.
+func (a sourceAdapter) CheckOrder(
+	ctx context.Context, probe domain.OrderProbe,
+) (domain.CheckResult, error) {
+	return a.service.CheckOrder(ctx, probe)
+}
+
+// CommandEnabled delegates to the backend's effective MCP-access read so the
+// MCP surface can gate each tool by the operator's panel toggles.
+func (a sourceAdapter) CommandEnabled(
+	ctx context.Context, command string,
+) (bool, error) {
+	return a.service.CommandEnabled(ctx, command)
+}

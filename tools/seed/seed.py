@@ -251,6 +251,42 @@ ACCOUNTS = [
     },
 ]
 
+# Risk policies: each entry maps directly to the PUT /api/v1/limits body.
+# Fields: policy, scope, account, asset, values (kind -> value string).
+# Scope axes: account required for account/account_asset; asset required for
+# asset/account_asset; both empty for broker/asset scopes without per-account
+# targeting. Kinds and valid scopes are validated by the engine on apply.
+POLICIES = [
+    {
+        # Burst guard for the runaway-algo desk — at most 10 orders per second.
+        # The Knightmare Capital exhibit proves exactly why this exists.
+        "policy": "rate_limit",
+        "scope": "account",
+        "account": "Knightmare Capital",
+        "asset": "",
+        "values": {"max_orders": "10", "window": "1s"},
+    },
+    {
+        # Kill-switch: halt Diamond Hands Capital if realized USD P&L sinks
+        # below half a million in the red.  They never sell, until they do.
+        "policy": "pnl_bounds_kill_switch",
+        "scope": "account_asset",
+        "account": "Diamond Hands Capital",
+        "asset": "USD",
+        "values": {"lower_bound": "-500000"},
+    },
+    {
+        # Global fat-finger ceiling: no single order may exceed 10 000 units
+        # or 5 000 000 notional, regardless of account.  Broker-scope means
+        # it applies to every order that passes through the engine.
+        "policy": "order_size_limit",
+        "scope": "broker",
+        "account": "",
+        "asset": "",
+        "values": {"max_quantity": "10000", "max_notional": "5000000"},
+    },
+]
+
 # Orders: account, baseAsset, quoteAsset, side, amountKind, amountValue, price.
 # execution_reports: quantity, price, final.  lockPrice is taken from order.lockPrices[0].
 ORDERS = [
@@ -407,6 +443,7 @@ ORDERS = [
 def seed(base: str) -> None:
     groups_created = 0
     accounts_created = 0
+    policies_created = 0
     orders_submitted = 0
     trades_created = 0
     errors: list[str] = []
@@ -474,6 +511,35 @@ def seed(base: str) -> None:
             _post(base, f"/accounts/{url_id}/block", {"reason": reason}, conflict_ok=False)
             print(f"    blocked: {reason}")
 
+    # --- Policies -------------------------------------------------------------
+    print("\n=== Policies ===")
+    for pol in POLICIES:
+        body: dict[str, Any] = {
+            "policy": pol["policy"],
+            "scope": pol["scope"],
+            "account": pol["account"],
+            "asset": pol["asset"],
+            "values": pol["values"],
+        }
+        label = f"{pol['policy']} / {pol['scope']}"
+        if pol["account"]:
+            label += f" / {pol['account']}"
+        if pol["asset"]:
+            label += f" / {pol['asset']}"
+        try:
+            resp = _put(base, "/limits", body)
+            if "limit" in resp:
+                print(f"  [+] {label}")
+                policies_created += 1
+            else:
+                msg = f"put policy {label}: {resp}"
+                print(f"  [!] {msg}", file=sys.stderr)
+                errors.append(msg)
+        except Exception as exc:
+            msg = f"put policy {label}: {exc}"
+            print(f"  [!] {msg}", file=sys.stderr)
+            errors.append(msg)
+
     # --- Orders + execution reports ------------------------------------------
     print("\n=== Orders ===")
     for order_def in ORDERS:
@@ -534,6 +600,7 @@ def seed(base: str) -> None:
     print("\n=== Seed complete ===")
     print(f"  Groups   created : {groups_created}")
     print(f"  Accounts created : {accounts_created}")
+    print(f"  Policies created : {policies_created}")
     print(f"  Orders submitted : {orders_submitted}")
     print(f"  Fills posted     : {trades_created}")
     if errors:

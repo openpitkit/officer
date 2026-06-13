@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"go.openpit.dev/officer/internal/domain"
 	"go.openpit.dev/officer/internal/engine"
@@ -136,8 +137,10 @@ func (n *localNode) loadSnapshot(ctx context.Context) (engine.Snapshot, string, 
 		Groups:   groups,
 		Balances: balances,
 	}
-	counts := fmt.Sprintf("hydrate %d accounts %d barriers %d groups %d balances",
-		len(accounts), len(limits), len(groups), len(balances))
+	counts := fmt.Sprintf(
+		"hydrate %d accounts %d barriers %d groups %d balances",
+		len(accounts), len(limits), len(groups), len(balances),
+	)
 	return snap, counts, nil
 }
 
@@ -484,6 +487,41 @@ func (n *localNode) ListAudit(
 	return rows, nil
 }
 
+// --- MCP access control -----------------------------------------------------
+
+// ListMcpAccess returns the stored per-command MCP overrides keyed by command.
+// MCP access is a control-plane-wide setting with no engine side-effect, so this
+// is a plain store read.
+func (n *localNode) ListMcpAccess(ctx context.Context) (map[string]bool, error) {
+	access, err := n.store.ListMcpAccess(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("node: list mcp access: %w", err)
+	}
+	return access, nil
+}
+
+// SetMcpAccess upserts the enabled state for one MCP command and audits the
+// action. There is no engine side-effect: gating happens in the MCP surface, so
+// the store is the sole authority and nothing is applied to or reverted from the
+// engine.
+func (n *localNode) SetMcpAccess(
+	ctx context.Context, command string, enabled bool, caller domain.Caller,
+) error {
+	n.mutate.Lock()
+	defer n.mutate.Unlock()
+
+	if err := n.store.SetMcpAccess(ctx, command, enabled); err != nil {
+		return fmt.Errorf("node: set mcp access: %w", err)
+	}
+	if err := n.audit(ctx, caller, store.AuditEntry{
+		Action: domain.AuditActionSetMcpAccess,
+		Detail: setMcpAccessDetail(command, enabled),
+	}); err != nil {
+		return fmt.Errorf("node: audit set mcp access: %w", err)
+	}
+	return nil
+}
+
 // --- account group & notes --------------------------------------------------
 
 // SetAccountGroup sets or clears the account's group in the store, then moves it
@@ -806,16 +844,24 @@ func (n *localNode) ApplyAdjustment(
 	return stored, nil
 }
 
-// persistAdjustedBalance writes the new (account, asset) balance snapshot from
-// the accepted outcome's absolutes, carrying forward any field the outcome did
-// not report. The average-entry-price follows the request when it set one, else
-// the previous stored value.
+// persistAdjustedBalance writes the new (account, asset) balance snapshot. The
+// available/held/incoming fields are the engine-reported resulting absolutes
+// (carried forward when the outcome did not report them). Realized P&L is the
+// one accumulator: the outcome's per-operation delta is added to the stored
+// value rather than overwritten with the engine's reported absolute, so the
+// stored figure stays correct across operations (a fresh row starts at "0", so
+// accumulated deltas equal the cumulative). The average-entry-price follows the
+// request when it set one, else the previous stored value.
 func (n *localNode) persistAdjustedBalance(
 	ctx context.Context, key Key, req domain.AdjustmentRequest, outcome domain.AdjustmentOutcomeAccepted,
 ) error {
 	prev, _, err := n.store.GetBalance(ctx, key.Tenant, key.Account, req.Asset)
 	if err != nil {
 		return fmt.Errorf("node: read balance for adjustment: %w", err)
+	}
+	realizedPnl, err := domain.AddDecimals(prev.RealizedPnl, outcome.RealizedPnlDelta)
+	if err != nil {
+		return fmt.Errorf("node: accumulate realized pnl: %w", err)
 	}
 	balance := domain.Balance{
 		Tenant:            key.Tenant,
@@ -824,10 +870,43 @@ func (n *localNode) persistAdjustedBalance(
 		Available:         pick(outcome.BalanceResult, prev.Available),
 		Held:              pick(outcome.HeldResult, prev.Held),
 		Incoming:          pick(outcome.IncomingResult, prev.Incoming),
+		RealizedPnl:       realizedPnl,
 		AverageEntryPrice: pick(req.AverageEntryPrice, prev.AverageEntryPrice),
 	}
 	if err := n.store.UpsertBalance(ctx, balance); err != nil {
 		return fmt.Errorf("node: upsert balance: %w", err)
+	}
+	return nil
+}
+
+// persistFillBalance writes the (account, asset) balance snapshot from a fill's
+// accepted spot-funds outcome. Like persistAdjustedBalance, available/held/
+// incoming follow the engine's resulting absolutes (carried forward when not
+// reported) and realized P&L is delta-accumulated onto the stored value. The
+// average-entry-price is carried forward: a fill does not restate it.
+func (n *localNode) persistFillBalance(
+	ctx context.Context, key Key, asset string, outcome domain.AdjustmentOutcomeAccepted,
+) error {
+	prev, _, err := n.store.GetBalance(ctx, key.Tenant, key.Account, asset)
+	if err != nil {
+		return fmt.Errorf("node: read balance for fill: %w", err)
+	}
+	realizedPnl, err := domain.AddDecimals(prev.RealizedPnl, outcome.RealizedPnlDelta)
+	if err != nil {
+		return fmt.Errorf("node: accumulate realized pnl: %w", err)
+	}
+	balance := domain.Balance{
+		Tenant:            key.Tenant,
+		Account:           key.Account,
+		Asset:             asset,
+		Available:         pick(outcome.BalanceResult, prev.Available),
+		Held:              pick(outcome.HeldResult, prev.Held),
+		Incoming:          pick(outcome.IncomingResult, prev.Incoming),
+		RealizedPnl:       realizedPnl,
+		AverageEntryPrice: prev.AverageEntryPrice,
+	}
+	if err := n.store.UpsertBalance(ctx, balance); err != nil {
+		return fmt.Errorf("node: upsert fill balance: %w", err)
 	}
 	return nil
 }
@@ -1015,6 +1094,16 @@ func (n *localNode) ApplyExecutionReport(
 		return engine.ExecutionReportResult{}, fmt.Errorf("node: create trade: %w", err)
 	}
 
+	// Persist the fill's spot-funds outcomes: balance/held/incoming follow the
+	// engine's resulting absolutes, while realized P&L is delta-accumulated onto
+	// the stored value (never overwritten with the reported absolute). The fill
+	// outcome is keyed on the base asset, matching the engine outcome mapper.
+	for _, outcome := range result.Outcomes {
+		if err := n.persistFillBalance(ctx, key, in.BaseAsset, outcome); err != nil {
+			return engine.ExecutionReportResult{}, err
+		}
+	}
+
 	// Mirror engine-recorded blocks: the engine already blocked the account, so
 	// the store write only follows it (no engine re-apply on this path).
 	for _, block := range result.Blocks {
@@ -1082,6 +1171,28 @@ func (n *localNode) ListOrders(
 	return orders, nil
 }
 
+// CountOrders returns the total number of orders recorded for the tenant.
+func (n *localNode) CountOrders(
+	ctx context.Context, tenant domain.TenantID,
+) (int, error) {
+	count, err := n.store.CountOrders(ctx, tenant)
+	if err != nil {
+		return 0, fmt.Errorf("node: count orders: %w", err)
+	}
+	return count, nil
+}
+
+// CountOrdersSince returns the number of orders for the tenant at or after since.
+func (n *localNode) CountOrdersSince(
+	ctx context.Context, tenant domain.TenantID, since time.Time,
+) (int, error) {
+	count, err := n.store.CountOrdersSince(ctx, tenant, since)
+	if err != nil {
+		return 0, fmt.Errorf("node: count orders since: %w", err)
+	}
+	return count, nil
+}
+
 // ListOrderEvents returns all events for the identified order, oldest first.
 func (n *localNode) ListOrderEvents(
 	ctx context.Context, tenant domain.TenantID, orderID int64,
@@ -1104,7 +1215,8 @@ func (n *localNode) ListTrades(
 	return trades, nil
 }
 
-// CheckOrder delegates the non-mutating order check to the engine stub.
+// CheckOrder delegates the non-mutating pre-trade dry-run to the engine. The
+// check mutates no state, so it takes no mutate lock and writes no audit row.
 func (n *localNode) CheckOrder(
 	ctx context.Context, _ Key, probe domain.OrderProbe,
 ) (domain.CheckResult, error) {

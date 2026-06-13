@@ -253,7 +253,16 @@ export function LimitDialog({
 
   const isEdit = editing !== null;
   const allowedScopes = ALLOWED_SCOPES[form.policy];
-  const kinds = POLICY_KINDS[form.policy];
+  // Filter initial_pnl: only visible (and sendable) when creating an
+  // account_asset pnl_bounds_kill_switch barrier.
+  const kinds = POLICY_KINDS[form.policy].filter(({ kind }) => {
+    if (kind !== "initial_pnl") return true;
+    return (
+      !isEdit &&
+      form.policy === "pnl_bounds_kill_switch" &&
+      form.scope === "account_asset"
+    );
+  });
 
   // Pull the catalog entry for the current policy for descriptions + human labels.
   const catalogEntry = getPolicyCatalogEntry(form.policy);

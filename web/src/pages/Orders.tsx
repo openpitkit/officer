@@ -15,18 +15,19 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Plus } from "lucide-react";
 
 import {
   ApiError,
+  checkOrder,
   createOrder,
   fetchAccounts,
   fetchOrderDetail,
   submitExecutionReport,
 } from "@/api/client";
-import type { Balance, Order, OrderEvent, Source, Trade } from "@/api/types";
+import type { Balance, CheckResult, Order, OrderEvent, Source, Trade } from "@/api/types";
 import { useBalances } from "@/api/useBalances";
 import { useOrders } from "@/api/useOrders";
 import { useTrades } from "@/api/useTrades";
@@ -141,7 +142,7 @@ function instrument(baseAsset: string, quoteAsset: string): string {
 
 /** Amount label: "100 qty" or "500 vol". */
 function amountLabel(kind: string, value: string): string {
-  const tag = kind === "base" ? "qty" : "vol";
+  const tag = kind === "quantity" ? "qty" : "vol";
   return `${value} ${tag}`;
 }
 
@@ -189,6 +190,77 @@ function collectAssets(
 }
 
 // ---------------------------------------------------------------------------
+// Order check preview
+// ---------------------------------------------------------------------------
+
+type CheckState =
+  | { phase: "idle" }
+  | { phase: "checking" }
+  | { phase: "done"; result: CheckResult }
+  | { phase: "error"; message: string };
+
+function CheckPreview({ state }: { state: CheckState }) {
+  if (state.phase === "idle") {
+    return null;
+  }
+  if (state.phase === "checking") {
+    return (
+      <div className="rounded-card border border-border bg-bg px-3 py-2 text-xs text-muted-lt animate-pulse">
+        Checking...
+      </div>
+    );
+  }
+  if (state.phase === "error") {
+    return (
+      <div className="rounded-card border border-border bg-bg px-3 py-2 text-xs text-muted-lt">
+        Preview unavailable
+      </div>
+    );
+  }
+  const { result } = state;
+  return (
+    <div
+      className={[
+        "rounded-card border px-3 py-2 space-y-2 text-xs",
+        result.passed
+          ? "border-[var(--ok)] bg-accent-dim"
+          : "border-[var(--danger)] bg-accent-dim",
+      ].join(" ")}
+    >
+      <div className="flex items-center gap-2">
+        <span
+          className={result.passed ? "text-[var(--ok)] font-medium" : "text-[var(--danger)] font-medium"}
+        >
+          {result.passed ? "Preview: would pass" : "Preview: would reject"}
+        </span>
+      </div>
+      {result.rejects.length > 0 && (
+        <ul className="space-y-1">
+          {result.rejects.map((r, i) => (
+            <li key={i} className="flex flex-wrap gap-x-2 gap-y-0.5 text-[var(--danger)]">
+              {r.reason && <span className="font-medium">{r.reason}</span>}
+              {r.details && <span>{r.details}</span>}
+              <span className="text-muted-lt text-[11px]">{r.code}{r.policy ? ` · ${r.policy}` : ""}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {result.wouldLockPrices.length > 0 && (
+        <div className="text-muted-lt">
+          Lock prices: {result.wouldLockPrices.join(", ")}
+        </div>
+      )}
+      {result.wouldBlock && (
+        <div className="text-[var(--danger)]">
+          Would block account {result.wouldBlock.account}
+          {result.wouldBlock.reason ? ` - ${result.wouldBlock.reason}` : ""}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Submit Order dialog
 // ---------------------------------------------------------------------------
 
@@ -196,6 +268,7 @@ interface SubmitOrderDialogProps {
   open: boolean;
   onClose: () => void;
   onCreated: () => void;
+  onOpenDetail: (id: number) => void;
   accountSuggestions: string[];
   assetSuggestions: string[];
 }
@@ -204,6 +277,7 @@ function SubmitOrderDialog({
   open,
   onClose,
   onCreated,
+  onOpenDetail,
   accountSuggestions,
   assetSuggestions,
 }: SubmitOrderDialogProps) {
@@ -211,24 +285,76 @@ function SubmitOrderDialog({
   const [baseAsset, setBaseAsset] = useState("");
   const [quoteAsset, setQuoteAsset] = useState("");
   const [side, setSide] = useState<string>("buy");
-  const [amountKind, setAmountKind] = useState<string>("base");
+  const [amountKind, setAmountKind] = useState<string>("quantity");
   const [amountValue, setAmountValue] = useState("");
   const [price, setPrice] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<Order | null>(null);
+  const [checkState, setCheckState] = useState<CheckState>({ phase: "idle" });
+  const checkAbortRef = useRef<AbortController | null>(null);
+
+  // Debounced live check: fires ~350ms after any form field changes.
+  useEffect(() => {
+    const accountT = account.trim();
+    const baseT = baseAsset.trim();
+    const quoteT = quoteAsset.trim();
+    const amountT = amountValue.trim();
+    // Skip when required fields are absent.
+    if (!accountT || !baseT || !quoteT || !amountT) {
+      setCheckState({ phase: "idle" });
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      checkAbortRef.current?.abort();
+      const controller = new AbortController();
+      checkAbortRef.current = controller;
+      setCheckState({ phase: "checking" });
+      const body: Parameters<typeof checkOrder>[0] = {
+        account: accountT,
+        baseAsset: baseT,
+        quoteAsset: quoteT,
+        side,
+        amountKind,
+        amountValue: amountT,
+      };
+      if (price.trim()) {
+        body.price = price.trim();
+      }
+      checkOrder(body, controller.signal)
+        .then((res) => {
+          if (!controller.signal.aborted) {
+            setCheckState({ phase: "done", result: res });
+          }
+        })
+        .catch((err: unknown) => {
+          if (controller.signal.aborted) {
+            return;
+          }
+          if (err instanceof DOMException && err.name === "AbortError") {
+            return;
+          }
+          setCheckState({ phase: "error", message: errMessage(err) });
+        });
+    }, 350);
+    return () => {
+      window.clearTimeout(timer);
+      checkAbortRef.current?.abort();
+    };
+  }, [account, baseAsset, quoteAsset, side, amountKind, amountValue, price]);
 
   function reset() {
     setAccount("");
     setBaseAsset("");
     setQuoteAsset("");
     setSide("buy");
-    setAmountKind("base");
+    setAmountKind("quantity");
     setAmountValue("");
     setPrice("");
     setBusy(false);
     setError(null);
-    setResult(null);
+    setCheckState({ phase: "idle" });
+    checkAbortRef.current?.abort();
+    checkAbortRef.current = null;
   }
 
   function handleClose() {
@@ -243,7 +369,6 @@ function SubmitOrderDialog({
     }
     setBusy(true);
     setError(null);
-    setResult(null);
     try {
       const body: Parameters<typeof createOrder>[0] = {
         account: account.trim(),
@@ -257,8 +382,10 @@ function SubmitOrderDialog({
         body.price = price.trim();
       }
       const order = await createOrder(body);
-      setResult(order);
       onCreated();
+      reset();
+      onClose();
+      onOpenDetail(order.id);
     } catch (err) {
       setError(errMessage(err));
     } finally {
@@ -270,142 +397,114 @@ function SubmitOrderDialog({
     <Dialog open={open} onOpenChange={(v) => { if (!v) handleClose(); }}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Submit order</DialogTitle>
+          <DialogTitle>Add order</DialogTitle>
           <DialogDescription>
-            Imitate an order from the panel source. Market orders (no price) are
-            forwarded to the engine and may come back rejected.
+            Add an order to evaluate it against the risk engine. This is an
+            emulation - nothing is sent to any market. Without a price it is
+            treated as a market order and may be rejected.
           </DialogDescription>
         </DialogHeader>
 
-        {result ? (
-          <div className="space-y-3">
-            <div className="rounded-card border border-border bg-bg p-3 space-y-2 text-xs">
-              <div className="flex items-center gap-2">
-                <span className="text-muted-lt">Order</span>
-                <span className="nums font-medium text-text">#{result.id}</span>
-                <Badge variant={statusVariant(result.status)}>{result.status}</Badge>
-              </div>
-              <div className="flex gap-4">
-                <span className="text-muted-lt">Instrument</span>
-                <span className="text-text">{instrument(result.baseAsset, result.quoteAsset)}</span>
-              </div>
-              <div className="flex gap-4">
-                <span className="text-muted-lt">Side</span>
-                <span className="text-text capitalize">{result.side}</span>
-              </div>
-              <div className="flex gap-4">
-                <span className="text-muted-lt">Amount</span>
-                <span className="text-text">{amountLabel(result.amountKind, result.amountValue)}</span>
-              </div>
-              <div className="flex gap-4">
-                <span className="text-muted-lt">Price</span>
-                <span className="text-text">{priceLabel(result.price)}</span>
-              </div>
-            </div>
-            <DialogFooter>
-              <Button size="sm" onClick={handleClose}>Done</Button>
-            </DialogFooter>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="so-account">Account</Label>
+            <Autocomplete
+              id="so-account"
+              value={account}
+              onChange={setAccount}
+              suggestions={accountSuggestions}
+              placeholder="e.g. desk-alpha"
+              disabled={busy}
+            />
           </div>
-        ) : (
-          <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label htmlFor="so-account">Account</Label>
+              <Label htmlFor="so-base">Base asset</Label>
               <Autocomplete
-                id="so-account"
-                value={account}
-                onChange={setAccount}
-                suggestions={accountSuggestions}
-                placeholder="e.g. desk-alpha"
+                id="so-base"
+                value={baseAsset}
+                onChange={setBaseAsset}
+                suggestions={assetSuggestions}
+                placeholder="e.g. AAPL"
                 disabled={busy}
               />
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="so-base">Base asset</Label>
-                <Autocomplete
-                  id="so-base"
-                  value={baseAsset}
-                  onChange={setBaseAsset}
-                  suggestions={assetSuggestions}
-                  placeholder="e.g. AAPL"
-                  disabled={busy}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="so-quote">Quote asset</Label>
-                <Autocomplete
-                  id="so-quote"
-                  value={quoteAsset}
-                  onChange={setQuoteAsset}
-                  suggestions={assetSuggestions}
-                  placeholder="e.g. USD"
-                  disabled={busy}
-                />
-              </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="so-quote">Quote asset</Label>
+              <Autocomplete
+                id="so-quote"
+                value={quoteAsset}
+                onChange={setQuoteAsset}
+                suggestions={assetSuggestions}
+                placeholder="e.g. USD"
+                disabled={busy}
+              />
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="so-side">Side</Label>
-                <Select value={side} onValueChange={setSide} disabled={busy}>
-                  <SelectTrigger id="so-side" className="h-9 text-sm">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="buy">Buy</SelectItem>
-                    <SelectItem value="sell">Sell</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="so-kind">Amount kind</Label>
-                <Select value={amountKind} onValueChange={setAmountKind} disabled={busy}>
-                  <SelectTrigger id="so-kind" className="h-9 text-sm">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="base">Quantity (base)</SelectItem>
-                    <SelectItem value="quote">Volume (quote)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="so-amount">Amount</Label>
-                <Input
-                  id="so-amount"
-                  value={amountValue}
-                  onChange={(e) => setAmountValue(e.target.value)}
-                  placeholder="e.g. 100"
-                  disabled={busy}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="so-price">Limit price (optional)</Label>
-                <Input
-                  id="so-price"
-                  value={price}
-                  onChange={(e) => setPrice(e.target.value)}
-                  placeholder="leave empty = market"
-                  disabled={busy}
-                />
-              </div>
-            </div>
-
-            {error && (
-              <ErrorBanner message={error} onDismiss={() => setError(null)} />
-            )}
-
-            <DialogFooter>
-              <Button variant="outline" size="sm" onClick={handleClose} disabled={busy}>
-                Cancel
-              </Button>
-              <Button size="sm" onClick={submit} disabled={busy}>
-                {busy ? "Submitting…" : "Submit"}
-              </Button>
-            </DialogFooter>
           </div>
-        )}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="so-side">Side</Label>
+              <Select value={side} onValueChange={setSide} disabled={busy}>
+                <SelectTrigger id="so-side" className="h-9 text-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="buy">Buy</SelectItem>
+                  <SelectItem value="sell">Sell</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="so-kind">Amount kind</Label>
+              <Select value={amountKind} onValueChange={setAmountKind} disabled={busy}>
+                <SelectTrigger id="so-kind" className="h-9 text-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="quantity">Quantity (base)</SelectItem>
+                  <SelectItem value="volume">Volume (quote)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="so-amount">Amount</Label>
+              <Input
+                id="so-amount"
+                value={amountValue}
+                onChange={(e) => setAmountValue(e.target.value)}
+                placeholder="e.g. 100"
+                disabled={busy}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="so-price">Limit price (optional)</Label>
+              <Input
+                id="so-price"
+                value={price}
+                onChange={(e) => setPrice(e.target.value)}
+                placeholder="leave empty = market"
+                disabled={busy}
+              />
+            </div>
+          </div>
+
+          <CheckPreview state={checkState} />
+
+          {error && (
+            <ErrorBanner message={error} onDismiss={() => setError(null)} />
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={handleClose} disabled={busy}>
+              Cancel
+            </Button>
+            <Button size="sm" onClick={submit} disabled={busy}>
+              {busy ? "Adding…" : "Add Order"}
+            </Button>
+          </DialogFooter>
+        </div>
       </DialogContent>
     </Dialog>
   );
@@ -485,7 +584,7 @@ function ExecReportDialog({ orderId, onClose, onSubmitted }: ExecReportDialogPro
         <DialogHeader>
           <DialogTitle>Submit execution report</DialogTitle>
           <DialogDescription>
-            Order #{orderId} — record a fill from the venue.
+            Order #{orderId} — record a fill to emulate a partial or full execution.
           </DialogDescription>
         </DialogHeader>
 
@@ -568,6 +667,7 @@ interface OrderDetailDialogProps {
   orderId: number | null;
   onClose: () => void;
   onExecReport: (orderId: number) => void;
+  successBanner?: string;
 }
 
 type DetailState =
@@ -575,7 +675,7 @@ type DetailState =
   | { phase: "error"; message: string }
   | { phase: "ready"; order: Order; events: OrderEvent[]; trades: Trade[] };
 
-function OrderDetailDialog({ orderId, onClose, onExecReport }: OrderDetailDialogProps) {
+function OrderDetailDialog({ orderId, onClose, onExecReport, successBanner }: OrderDetailDialogProps) {
   const [state, setState] = useState<DetailState>({ phase: "loading" });
 
   useEffect(() => {
@@ -619,6 +719,12 @@ function OrderDetailDialog({ orderId, onClose, onExecReport }: OrderDetailDialog
             </DialogDescription>
           )}
         </DialogHeader>
+
+        {successBanner && (
+          <div className="rounded-card border border-[var(--ok)] bg-accent-dim px-3 py-2 text-xs text-[var(--ok)] font-medium">
+            {successBanner}
+          </div>
+        )}
 
         {state.phase === "loading" && (
           <div className="space-y-2 py-4">
@@ -1012,7 +1118,7 @@ function FilterBar({
 
 type TabId = "orders" | "trades";
 
-export function Trading() {
+export function Orders() {
   const [params] = useSearchParams();
   const [tab, setTab] = useState<TabId>("orders");
 
@@ -1084,14 +1190,22 @@ export function Trading() {
   // Dialog state
   const [submitOpen, setSubmitOpen] = useState(false);
   const [detailOrderId, setDetailOrderId] = useState<number | null>(null);
+  const [detailSuccessBanner, setDetailSuccessBanner] = useState<string | undefined>(undefined);
   const [execReportOrderId, setExecReportOrderId] = useState<number | null>(null);
 
   function openDetail(id: number) {
+    setDetailSuccessBanner(undefined);
+    setDetailOrderId(id);
+  }
+
+  function openDetailWithBanner(id: number, banner: string) {
+    setDetailSuccessBanner(banner);
     setDetailOrderId(id);
   }
 
   function closeDetail() {
     setDetailOrderId(null);
+    setDetailSuccessBanner(undefined);
   }
 
   function openExecReport(id: number) {
@@ -1108,12 +1222,12 @@ export function Trading() {
 
   return (
     <Page
-      title="Trading"
+      title="Orders"
       actions={
         <div className="flex items-center gap-2">
           <Button size="sm" onClick={() => setSubmitOpen(true)}>
             <Plus className="h-3.5 w-3.5" />
-            Submit order
+            Add Order
           </Button>
           <RefreshButton
             onClick={activeReload}
@@ -1188,7 +1302,7 @@ export function Trading() {
                 action={
                   <Button size="sm" onClick={() => setSubmitOpen(true)}>
                     <Plus className="h-3.5 w-3.5" />
-                    Submit order
+                    Add Order
                   </Button>
                 }
               />
@@ -1231,6 +1345,7 @@ export function Trading() {
         open={submitOpen}
         onClose={() => setSubmitOpen(false)}
         onCreated={ordersResult.reload}
+        onOpenDetail={(id) => openDetailWithBanner(id, "Order added")}
         accountSuggestions={allAccountSuggestions}
         assetSuggestions={assetSuggestions}
       />
@@ -1239,6 +1354,7 @@ export function Trading() {
         orderId={detailOrderId}
         onClose={closeDetail}
         onExecReport={openExecReport}
+        successBanner={detailSuccessBanner}
       />
 
       <ExecReportDialog

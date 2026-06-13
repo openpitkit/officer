@@ -21,7 +21,9 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 	"time"
+	"unicode"
 
 	"go.openpit.dev/openpit/accountadjustment"
 	"go.openpit.dev/openpit/model"
@@ -36,10 +38,13 @@ import (
 
 // rateLimitAxes maps a rate-limit barrier set onto the public Configure axes:
 // an optional broker barrier and per-asset/account/account-asset slices. The
-// slices are always non-nil so the Configure call touches each axis; an empty
-// slice is a no-op for that axis under the patch-only rate-limit semantics. The
-// caller has already verified the barrier-key set is unchanged, so every
-// supplied key already exists on the policy.
+// asset/account/account-asset slices are always non-nil so a Configure call
+// replaces each axis wholesale (an empty slice clears the axis); barriers are
+// added and removed at runtime and a surviving key keeps its live counter. A nil
+// broker leaves the broker barrier unchanged: the SDK's Configure surface has no
+// way to clear a rate-limit broker barrier in isolation, so the caller
+// (configureRateLimitLocked) rejects a broker-barrier drop as not-implemented
+// before reaching this point.
 func rateLimitAxes(limits []domain.Limit) (
 	*policies.RateLimitBrokerBarrier,
 	[]policies.RateLimitAssetBarrier,
@@ -163,20 +168,33 @@ func orderSizeAxes(limits []domain.Limit) (
 // broker and account-asset slices. Both slices are always non-nil so a
 // Configure call replaces each axis wholesale (an empty slice clears the axis).
 // The asset scope maps to a broker barrier carrying the settlement asset;
-// account_asset maps to an account barrier. InitialPnl is zero: the Configure
-// surface ignores it, and there is no fill flow yet to seed.
+// account_asset maps to an account barrier-update.
+//
+// The account axis is the Update shape (PnlBoundsAccountAssetBarrierUpdate),
+// which retunes bounds without touching the live accumulated P&L: the runtime
+// configure path must not reset accumulators when only bounds change.
 func pnlBoundsAxes(limits []domain.Limit) (
 	[]policies.PnlBoundsBrokerBarrier,
-	[]policies.PnlBoundsAccountAssetBarrier,
+	[]policies.PnlBoundsAccountAssetBarrierUpdate,
 	error,
 ) {
 	brokers := []policies.PnlBoundsBrokerBarrier{}
-	accounts := []policies.PnlBoundsAccountAssetBarrier{}
+	accounts := []policies.PnlBoundsAccountAssetBarrierUpdate{}
 
 	for _, limit := range limits {
-		lower, upper, err := pnlBoundsFromValues(limit.Values)
+		lower, upper, initial, err := pnlBoundsFromValues(limit.Values)
 		if err != nil {
 			return nil, nil, err
+		}
+		// The runtime Configure path applies the barrier-update shape, which
+		// cannot reseed the live accumulated P&L. initial_pnl can only be honored
+		// at barrier construction (the rebuild path), so reject it here rather
+		// than silently dropping it.
+		if _, ok := initial.Get(); ok {
+			return nil, nil, fmt.Errorf(
+				"engine: pnl_bounds initial_pnl cannot be set on a runtime barrier "+
+					"update; it is only applied when the barrier is first created: %w",
+				domain.ErrInvalid)
 		}
 		switch limit.Target.Scope {
 		case domain.ScopeAsset:
@@ -198,12 +216,13 @@ func pnlBoundsAxes(limits []domain.Limit) (
 			if err != nil {
 				return nil, nil, err
 			}
-			accounts = append(accounts, policies.PnlBoundsAccountAssetBarrier{
-				AccountID:       account,
-				SettlementAsset: asset,
-				LowerBound:      lower,
-				UpperBound:      upper,
-				InitialPnl:      param.NewPnlZero(),
+			accounts = append(accounts, policies.PnlBoundsAccountAssetBarrierUpdate{
+				AccountID: account,
+				Barrier: policies.PnlBoundsBrokerBarrier{
+					SettlementAsset: asset,
+					LowerBound:      lower,
+					UpperBound:      upper,
+				},
 			})
 		default:
 			return nil, nil, fmt.Errorf(
@@ -338,8 +357,11 @@ func orderSizeReady(limits []domain.Limit) (*policies.OrderSizeLimitReadyBuilder
 
 // pnlBoundsReady maps a P&L bounds barrier set onto a ready builder. The asset
 // scope maps to a broker barrier carrying the settlement asset; account_asset
-// maps to an account barrier. InitialPnl is zero: there is no fill flow yet, so
-// no accumulated P&L is seeded.
+// maps to an account barrier. This is the construction path: an account barrier
+// is created fresh, so its InitialPnl seed is honored here (from the optional
+// initial_pnl value, else zero). Domain validation guarantees initial_pnl only
+// reaches the account-asset scope; the runtime Configure path cannot reseed and
+// rejects it instead.
 func pnlBoundsReady(limits []domain.Limit) (*policies.PnlBoundsKillswitchReadyBuilder, error) {
 	builder := policies.BuildPnlBoundsKillswitch()
 	ready := builder.PolicyGroupID(0)
@@ -349,7 +371,7 @@ func pnlBoundsReady(limits []domain.Limit) (*policies.PnlBoundsKillswitchReadyBu
 		accounts []policies.PnlBoundsAccountAssetBarrier
 	)
 	for _, limit := range limits {
-		lower, upper, err := pnlBoundsFromValues(limit.Values)
+		lower, upper, initial, err := pnlBoundsFromValues(limit.Values)
 		if err != nil {
 			return nil, err
 		}
@@ -373,12 +395,18 @@ func pnlBoundsReady(limits []domain.Limit) (*policies.PnlBoundsKillswitchReadyBu
 			if err != nil {
 				return nil, err
 			}
+			initialPnl := param.NewPnlZero()
+			if seed, ok := initial.Get(); ok {
+				initialPnl = seed
+			}
 			accounts = append(accounts, policies.PnlBoundsAccountAssetBarrier{
-				AccountID:       account,
-				SettlementAsset: asset,
-				LowerBound:      lower,
-				UpperBound:      upper,
-				InitialPnl:      param.NewPnlZero(),
+				Barrier: policies.PnlBoundsBrokerBarrier{
+					SettlementAsset: asset,
+					LowerBound:      lower,
+					UpperBound:      upper,
+				},
+				AccountID:  account,
+				InitialPnl: initialPnl,
 			})
 		default:
 			return nil, fmt.Errorf("engine: pnl_bounds_kill_switch unsupported scope %q",
@@ -470,35 +498,46 @@ func orderSizeFromValues(values []domain.LimitValue) (policies.OrderSizeLimit, e
 	return limit, nil
 }
 
-// pnlBoundsFromValues extracts the optional lower and upper P&L bounds from a
-// barrier's values.
+// pnlBoundsFromValues extracts the optional lower and upper P&L bounds plus the
+// optional initial P&L seed from a barrier's values. initial_pnl is only honored
+// by the construction path (account-asset barrier); the runtime-update path must
+// reject it separately, since the binding's barrier-update shape cannot reseed
+// the live accumulator.
 func pnlBoundsFromValues(
 	values []domain.LimitValue,
-) (lower, upper optional.Option[param.Pnl], err error) {
+) (lower, upper, initial optional.Option[param.Pnl], err error) {
 	lower = optional.None[param.Pnl]()
 	upper = optional.None[param.Pnl]()
+	initial = optional.None[param.Pnl]()
 	for _, v := range values {
 		switch v.Kind {
 		case domain.KindLowerBound:
 			p, perr := param.NewPnlFromString(v.Value)
 			if perr != nil {
-				return lower, upper, fmt.Errorf(
+				return lower, upper, initial, fmt.Errorf(
 					"engine: pnl_bounds lower_bound %q: %w", v.Value, perr)
 			}
 			lower = optional.Some(p)
 		case domain.KindUpperBound:
 			p, perr := param.NewPnlFromString(v.Value)
 			if perr != nil {
-				return lower, upper, fmt.Errorf(
+				return lower, upper, initial, fmt.Errorf(
 					"engine: pnl_bounds upper_bound %q: %w", v.Value, perr)
 			}
 			upper = optional.Some(p)
+		case domain.KindInitialPnl:
+			p, perr := param.NewPnlFromString(v.Value)
+			if perr != nil {
+				return lower, upper, initial, fmt.Errorf(
+					"engine: pnl_bounds initial_pnl %q: %w", v.Value, perr)
+			}
+			initial = optional.Some(p)
 		default:
-			return lower, upper, fmt.Errorf(
+			return lower, upper, initial, fmt.Errorf(
 				"engine: pnl_bounds unexpected kind %q", v.Kind)
 		}
 	}
-	return lower, upper, nil
+	return lower, upper, initial, nil
 }
 
 // parseMaxOrders parses an integer max_orders string into a uint64. Domain
@@ -511,20 +550,26 @@ func parseMaxOrders(s string) (uint64, error) {
 	return n, nil
 }
 
-// newAccountID parses a domain account id into a param.AccountID.
+// newAccountID parses a caller-supplied domain account id into a
+// param.AccountID. A bad format is caller input, so it wraps domain.ErrInvalid
+// (HTTP 400); the internal seeding paths use param.NewAccountIDFromString
+// directly so a corrupt stored id stays an internal error.
 func newAccountID(id domain.AccountID) (param.AccountID, error) {
 	account, err := param.NewAccountIDFromString(id.String())
 	if err != nil {
-		return param.AccountID{}, fmt.Errorf("engine: account %q: %w", id, err)
+		return param.AccountID{}, fmt.Errorf("engine: account %q: %w: %w", id, err, domain.ErrInvalid)
 	}
 	return account, nil
 }
 
-// newAsset parses an asset code into a param.Asset.
+// newAsset parses a caller-supplied asset code into a param.Asset. A bad format
+// is caller input, so it wraps domain.ErrInvalid (HTTP 400); the internal
+// seeding paths use param.NewAsset directly so a corrupt stored asset stays an
+// internal error.
 func newAsset(code string) (param.Asset, error) {
 	asset, err := param.NewAsset(code)
 	if err != nil {
-		return param.Asset{}, fmt.Errorf("engine: asset %q: %w", code, err)
+		return param.Asset{}, fmt.Errorf("engine: asset %q: %w: %w", code, err, domain.ErrInvalid)
 	}
 	return asset, nil
 }
@@ -560,7 +605,8 @@ func accountAdjustmentFromRequest(
 		price, perr := param.NewPriceFromString(req.AverageEntryPrice)
 		if perr != nil {
 			return model.AccountAdjustment{}, fmt.Errorf(
-				"engine: adjustment average_entry_price %q: %w", req.AverageEntryPrice, perr)
+				"engine: adjustment average_entry_price %q: %w: %w",
+				req.AverageEntryPrice, perr, domain.ErrInvalid)
 		}
 		balanceOp.AverageEntryPrice = optional.Some(price)
 	}
@@ -628,7 +674,7 @@ func adjustmentAmountFrom(
 	size, err := param.NewPositionSizeFromString(a.Value)
 	if err != nil {
 		return param.AdjustmentAmount{}, fmt.Errorf(
-			"engine: adjustment %s value %q: %w", field, a.Value, err)
+			"engine: adjustment %s value %q: %w: %w", field, a.Value, err, domain.ErrInvalid)
 	}
 	switch a.Mode {
 	case domain.AdjustmentModeAbsolute:
@@ -637,7 +683,7 @@ func adjustmentAmountFrom(
 		return param.NewDeltaAdjustmentAmount(size), nil
 	default:
 		return param.AdjustmentAmount{}, fmt.Errorf(
-			"engine: adjustment %s unknown mode %q", field, a.Mode)
+			"engine: adjustment %s unknown mode %q: %w", field, a.Mode, domain.ErrInvalid)
 	}
 }
 
@@ -657,7 +703,8 @@ func adjustmentBoundsValues(
 		if b.Lower != "" {
 			v, err := param.NewPositionSizeFromString(b.Lower)
 			if err != nil {
-				return fmt.Errorf("engine: adjustment %s lower bound %q: %w", field, b.Lower, err)
+				return fmt.Errorf(
+					"engine: adjustment %s lower bound %q: %w: %w", field, b.Lower, err, domain.ErrInvalid)
 			}
 			*lower = optional.Some(v)
 			hasBound = true
@@ -665,7 +712,8 @@ func adjustmentBoundsValues(
 		if b.Upper != "" {
 			v, err := param.NewPositionSizeFromString(b.Upper)
 			if err != nil {
-				return fmt.Errorf("engine: adjustment %s upper bound %q: %w", field, b.Upper, err)
+				return fmt.Errorf(
+					"engine: adjustment %s upper bound %q: %w: %w", field, b.Upper, err, domain.ErrInvalid)
 			}
 			*upper = optional.Some(v)
 			hasBound = true
@@ -685,9 +733,10 @@ func adjustmentBoundsValues(
 }
 
 // outcomeAcceptedFromList extracts the accepted outcome for asset from a binding
-// outcome list: the per-field delta and resulting absolute. A field absent in
-// every outcome reports as the empty string (it was not adjusted). The spot-funds
-// policy emits one outcome carrying the single adjusted asset's entry.
+// outcome list: the per-field delta and resulting absolute, including the
+// settlement-asset realized P&L. A field absent in every outcome reports as the
+// empty string (it was not adjusted). The spot-funds policy emits one outcome
+// carrying the single adjusted asset's entry.
 func outcomeAcceptedFromList(
 	outcomes []accountadjustment.Outcome, asset string,
 ) domain.AdjustmentOutcomeAccepted {
@@ -708,6 +757,10 @@ func outcomeAcceptedFromList(
 		if amt, ok := entry.Incoming.Get(); ok {
 			result.IncomingDelta = amt.Delta.String()
 			result.IncomingResult = amt.Absolute.String()
+		}
+		if amt, ok := entry.RealizedPnl.Get(); ok {
+			result.RealizedPnlDelta = amt.Delta.String()
+			result.RealizedPnlResult = amt.Absolute.String()
 		}
 	}
 	return result
@@ -731,8 +784,8 @@ func adjustmentRejectFrom(r reject.Reject) domain.AdjustmentOutcomeRejected {
 		Code:    rejectCodeName(r.Code),
 		Scope:   rejectScopeName(r.Scope),
 		Policy:  r.Policy,
-		Reason:  r.Reason,
-		Details: r.Details,
+		Reason:  sanitizeText(r.Reason),
+		Details: sanitizeText(r.Details),
 	}
 }
 
@@ -772,7 +825,8 @@ func orderModelFrom(o domain.Order) (model.Order, error) {
 	if o.Price != "" {
 		price, perr := param.NewPriceFromString(o.Price)
 		if perr != nil {
-			return model.Order{}, fmt.Errorf("engine: order price %q: %w", o.Price, perr)
+			return model.Order{}, fmt.Errorf(
+				"engine: order price %q: %w: %w", o.Price, perr, domain.ErrInvalid)
 		}
 		view.SetPrice(price)
 	}
@@ -787,7 +841,7 @@ func orderSide(side domain.OrderSide) (param.Side, error) {
 	case domain.OrderSideSell:
 		return param.SideSell, nil
 	default:
-		return 0, fmt.Errorf("engine: unknown order side %q", side)
+		return 0, fmt.Errorf("engine: unknown order side %q: %w", side, domain.ErrInvalid)
 	}
 }
 
@@ -797,17 +851,20 @@ func tradeAmountFrom(kind domain.OrderAmountKind, value string) (param.TradeAmou
 	case domain.OrderAmountKindQuantity:
 		q, err := param.NewQuantityFromString(value)
 		if err != nil {
-			return param.TradeAmount{}, fmt.Errorf("engine: order quantity %q: %w", value, err)
+			return param.TradeAmount{}, fmt.Errorf(
+				"engine: order quantity %q: %w: %w", value, err, domain.ErrInvalid)
 		}
 		return param.NewQuantityTradeAmount(q), nil
 	case domain.OrderAmountKindVolume:
 		v, err := param.NewVolumeFromString(value)
 		if err != nil {
-			return param.TradeAmount{}, fmt.Errorf("engine: order volume %q: %w", value, err)
+			return param.TradeAmount{}, fmt.Errorf(
+				"engine: order volume %q: %w: %w", value, err, domain.ErrInvalid)
 		}
 		return param.NewVolumeTradeAmount(v), nil
 	default:
-		return param.TradeAmount{}, fmt.Errorf("engine: unknown order amount kind %q", kind)
+		return param.TradeAmount{}, fmt.Errorf(
+			"engine: unknown order amount kind %q: %w", kind, domain.ErrInvalid)
 	}
 }
 
@@ -819,8 +876,8 @@ func orderRejectsFrom(rejects []reject.Reject) []domain.OrderReject {
 			Code:    rejectCodeName(r.Code),
 			Scope:   rejectScopeName(r.Scope),
 			Policy:  r.Policy,
-			Reason:  r.Reason,
-			Details: r.Details,
+			Reason:  sanitizeText(r.Reason),
+			Details: sanitizeText(r.Details),
 		})
 	}
 	return out
@@ -851,12 +908,13 @@ func executionReportFrom(in domain.ExecutionReportInput) (model.ExecutionReport,
 	}
 	price, err := param.NewPriceFromString(in.FillPrice)
 	if err != nil {
-		return model.ExecutionReport{}, fmt.Errorf("engine: fill price %q: %w", in.FillPrice, err)
+		return model.ExecutionReport{}, fmt.Errorf(
+			"engine: fill price %q: %w: %w", in.FillPrice, err, domain.ErrInvalid)
 	}
 	quantity, err := param.NewQuantityFromString(in.FillQuantity)
 	if err != nil {
 		return model.ExecutionReport{}, fmt.Errorf(
-			"engine: fill quantity %q: %w", in.FillQuantity, err)
+			"engine: fill quantity %q: %w: %w", in.FillQuantity, err, domain.ErrInvalid)
 	}
 
 	lockBytes, err := lockBytesFromPrice(in.LockPrice)
@@ -887,7 +945,7 @@ func lockBytesFromPrice(lockPrice string) ([]byte, error) {
 	}
 	price, err := param.NewPriceFromString(lockPrice)
 	if err != nil {
-		return nil, fmt.Errorf("engine: lock price %q: %w", lockPrice, err)
+		return nil, fmt.Errorf("engine: lock price %q: %w: %w", lockPrice, err, domain.ErrInvalid)
 	}
 	lock, err := pretrade.NewLockFromEntries([]pretrade.Entry{
 		{PolicyGroupID: model.DefaultPolicyGroupID, Price: price},
@@ -909,14 +967,55 @@ func executionBlocksFrom(
 		out = append(out, domain.ExecutionAccountBlock{
 			Account: account,
 			Code:    rejectCodeName(b.Code),
-			Reason:  b.Reason,
-			Details: b.Details,
+			Reason:  sanitizeText(b.Reason),
+			Details: sanitizeText(b.Details),
 		})
 	}
 	return out
 }
 
+// accountBlockFrom maps a single nilable engine account block onto a domain
+// block, stamping it with account (the binding's block record does not name the
+// account). A nil block yields nil. It is the single-block counterpart of
+// executionBlocksFrom, used by the pre-trade dry-run.
+func accountBlockFrom(
+	block *reject.AccountBlock, account domain.AccountID,
+) *domain.ExecutionAccountBlock {
+	if block == nil {
+		return nil
+	}
+	return &domain.ExecutionAccountBlock{
+		Account: account,
+		Code:    rejectCodeName(block.Code),
+		Reason:  sanitizeText(block.Reason),
+		Details: sanitizeText(block.Details),
+	}
+}
+
 // --- reject code/scope naming -----------------------------------------------
+
+// sanitizeText coerces a binding-supplied reject/block string to valid,
+// printable UTF-8: invalid byte sequences are dropped and control characters
+// (including the C1 range) are stripped, preserving normal text and spaces. It
+// is applied defensively at the officer boundary to every reject/block
+// Reason/Details the engine surfaces.
+//
+// Root cause is upstream: the SDK Go binding returns garbage (non-UTF-8) reason/
+// details for an account-blocked (Engine-scope) dry-run reject, so the control
+// plane scrubs them here rather than render mojibake. An empty result is fine
+// when the field was entirely garbage.
+func sanitizeText(s string) string {
+	if s == "" {
+		return ""
+	}
+	valid := strings.ToValidUTF8(s, "")
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, valid)
+}
 
 // rejectCodeName maps a binding reject code onto a stable lower-snake string for
 // the control plane's persisted records. Unknown codes fall back to a numeric
