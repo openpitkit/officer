@@ -18,6 +18,8 @@
 package httpapi
 
 import (
+	"encoding/json"
+	"strings"
 	"time"
 
 	"go.openpit.dev/officer/internal/backend"
@@ -199,6 +201,7 @@ type marketDataDTO struct {
 	Providers        []marketDataProviderDTO `json:"providers"`
 	Instances        []marketDataInstanceDTO `json:"instances"`
 	FreshnessSeconds int                     `json:"freshnessSeconds"`
+	RestartRequired  bool                    `json:"restartRequired"`
 }
 
 type marketDataProviderDTO struct {
@@ -212,27 +215,64 @@ type marketDataReferencesDTO struct {
 }
 
 type marketDataInstanceDTO struct {
-	ID              string                    `json:"id"`
-	Type            string                    `json:"type"`
-	Label           string                    `json:"label"`
+	ID    string `json:"id"`
+	Type  string `json:"type"`
+	Label string `json:"label"`
+	// Credentials is accepted on create requests but redacted from responses.
 	Credentials     string                    `json:"credentials"`
 	State           string                    `json:"state"`
 	Error           string                    `json:"error,omitempty"`
 	Enabled         bool                      `json:"enabled"`
 	VerifiesSymbols bool                      `json:"verifiesSymbols"`
+	SearchesSymbols bool                      `json:"searchesSymbols"`
+	Settings        map[string]any            `json:"settings,omitempty"`
+	Secrets         map[string]bool           `json:"secrets,omitempty"`
 	References      *marketDataReferencesDTO  `json:"references,omitempty"`
 	Instruments     []marketDataInstrumentDTO `json:"instruments,omitempty"`
 	Diagnostics     []marketDataDiagnosticDTO `json:"diagnostics,omitempty"`
 }
 
+type marketDataCreateInstanceRequestDTO struct {
+	Type        string `json:"type"`
+	Label       string `json:"label"`
+	Credentials string `json:"credentials"`
+	Enabled     bool   `json:"enabled"`
+}
+
+type marketDataUpdateInstanceSettingsRequestDTO struct {
+	Label       string `json:"label"`
+	Credentials string `json:"credentials"`
+}
+
 // marketDataSymbolVerificationDTO is the body of POST
 // .../instances/{id}/verify-symbol. Supported is false when the provider cannot
-// verify symbols; Suggestion carries a case-folded catalogue variant when the
-// symbol was not found as typed.
+// verify symbols; Details carries optional provider metadata for the matched
+// symbol. Suggestion carries a case-folded catalogue variant when the symbol was
+// not found as typed.
 type marketDataSymbolVerificationDTO struct {
 	Supported  bool   `json:"supported"`
 	Exists     bool   `json:"exists"`
 	Suggestion string `json:"suggestion,omitempty"`
+	Details    string `json:"details,omitempty"`
+}
+
+// marketDataSymbolMatchDTO is one contract returned by POST
+// .../instances/{id}/search-symbols. Name is the resolved long name; every
+// field except symbol/secType is omitted when empty.
+type marketDataSymbolMatchDTO struct {
+	Symbol                       string `json:"symbol"`
+	Name                         string `json:"name,omitempty"`
+	SecType                      string `json:"secType"`
+	Exchange                     string `json:"exchange,omitempty"`
+	PrimaryExchange              string `json:"primaryExchange,omitempty"`
+	Currency                     string `json:"currency,omitempty"`
+	LastTradeDateOrContractMonth string `json:"lastTradeDateOrContractMonth,omitempty"`
+	Right                        string `json:"right,omitempty"`
+	Multiplier                   string `json:"multiplier,omitempty"`
+	LocalSymbol                  string `json:"localSymbol,omitempty"`
+	TradingClass                 string `json:"tradingClass,omitempty"`
+	ConID                        string `json:"conId,omitempty"`
+	Strike                       string `json:"strike,omitempty"`
 }
 
 type marketDataDiagnosticActionDTO struct {
@@ -253,14 +293,19 @@ type marketDataDiagnosticDTO struct {
 }
 
 type marketDataInstrumentDTO struct {
-	InstanceID     string              `json:"instanceId,omitempty"`
-	ExternalSymbol string              `json:"externalSymbol"`
-	BaseAsset      string              `json:"baseAsset"`
-	QuoteAsset     string              `json:"quoteAsset"`
-	ManualPrice    string              `json:"manualPrice"`
-	Enabled        bool                `json:"enabled"`
-	Stale          bool                `json:"stale"`
-	Quote          *marketDataQuoteDTO `json:"quote,omitempty"`
+	InstanceID     string `json:"instanceId,omitempty"`
+	ExternalSymbol string `json:"externalSymbol"`
+	BaseAsset      string `json:"baseAsset"`
+	QuoteAsset     string `json:"quoteAsset"`
+	ManualPrice    string `json:"manualPrice"`
+	// UpdateIntervalMs is the elapsed time, in milliseconds, between the two most
+	// recent ticks of this instrument's quote. Omitted while it is unknown (fewer
+	// than two ticks since the last (re)subscribe). It is a fixed measurement,
+	// not an age that grows between ticks.
+	UpdateIntervalMs int                 `json:"updateIntervalMs,omitempty"`
+	Enabled          bool                `json:"enabled"`
+	Stale            bool                `json:"stale"`
+	Quote            *marketDataQuoteDTO `json:"quote,omitempty"`
 }
 
 type marketDataQuoteDTO struct {
@@ -287,6 +332,7 @@ func toMarketDataDTO(status backend.MarketDataStatus) marketDataDTO {
 		Providers:        providers,
 		Instances:        instances,
 		FreshnessSeconds: status.FreshnessSeconds,
+		RestartRequired:  status.RestartRequired,
 	}
 }
 
@@ -330,15 +376,107 @@ func toMarketDataInstanceDTO(status backend.MarketDataInstanceStatus) marketData
 		ID:              status.Instance.ID,
 		Type:            status.Instance.Type,
 		Label:           status.Instance.Label,
-		Credentials:     status.Instance.Credentials,
+		Credentials:     "",
 		State:           status.State,
 		Error:           status.Error,
 		Enabled:         status.Instance.Enabled,
 		VerifiesSymbols: status.VerifiesSymbols,
+		SearchesSymbols: status.SearchesSymbols,
+		Settings:        marketDataSafeSettings(status.Instance),
+		Secrets:         marketDataSecretState(status.Instance),
 		References:      refs,
 		Instruments:     instruments,
 		Diagnostics:     diagnostics,
 	}
+}
+
+func marketDataSafeSettings(instance domain.MarketDataInstance) map[string]any {
+	credentials := marketDataCredentialsObject(instance.Credentials)
+	if len(credentials) == 0 {
+		return nil
+	}
+	settings := make(map[string]any)
+	switch instance.Type {
+	case domain.MarketDataProviderIB:
+		copyStringSetting(settings, credentials, "host")
+		copyNumberSetting(settings, credentials, "port")
+		copyNumberSetting(settings, credentials, "clientId")
+		copyStringSetting(settings, credentials, "marketDataType")
+		copyNumberSetting(settings, credentials, "marketDataType")
+		copyObjectSetting(settings, credentials, "contracts")
+	case domain.MarketDataProviderBybit:
+		copyStringSetting(settings, credentials, "category")
+	case domain.MarketDataProviderOANDA:
+		copyStringSetting(settings, credentials, "accountID")
+		copyStringSetting(settings, credentials, "environment")
+	}
+	if len(settings) == 0 {
+		return nil
+	}
+	return settings
+}
+
+func marketDataSecretState(instance domain.MarketDataInstance) map[string]bool {
+	credentials := marketDataCredentialsObject(instance.Credentials)
+	if len(credentials) == 0 {
+		return nil
+	}
+	secrets := make(map[string]bool)
+	switch instance.Type {
+	case domain.MarketDataProviderAlpaca:
+		secrets["apiKey"] = stringCredentialPresent(credentials, "apiKey") ||
+			stringCredentialPresent(credentials, "key")
+		secrets["apiSecret"] = stringCredentialPresent(credentials, "apiSecret") ||
+			stringCredentialPresent(credentials, "secret")
+	case domain.MarketDataProviderOANDA, domain.MarketDataProviderFinnhub:
+		secrets["token"] = stringCredentialPresent(credentials, "token")
+	}
+	for _, present := range secrets {
+		if present {
+			return secrets
+		}
+	}
+	return nil
+}
+
+func marketDataCredentialsObject(raw string) map[string]any {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var credentials map[string]any
+	if err := json.Unmarshal([]byte(raw), &credentials); err != nil {
+		return nil
+	}
+	return credentials
+}
+
+func copyStringSetting(dst, src map[string]any, key string) {
+	value, ok := src[key].(string)
+	if ok && strings.TrimSpace(value) != "" {
+		dst[key] = value
+	}
+}
+
+func copyNumberSetting(dst, src map[string]any, key string) {
+	value, ok := src[key].(float64)
+	if ok {
+		dst[key] = value
+	}
+}
+
+// copyObjectSetting copies a non-empty nested object/map value verbatim. It is
+// used for non-secret structured settings (the IB contract overrides), which
+// carry no credentials.
+func copyObjectSetting(dst, src map[string]any, key string) {
+	if v, ok := src[key].(map[string]any); ok && len(v) > 0 {
+		dst[key] = v
+	}
+}
+
+func stringCredentialPresent(credentials map[string]any, key string) bool {
+	value, ok := credentials[key].(string)
+	return ok && strings.TrimSpace(value) != ""
 }
 
 func toMarketDataSymbolVerificationDTO(
@@ -348,21 +486,51 @@ func toMarketDataSymbolVerificationDTO(
 		Supported:  v.Supported,
 		Exists:     v.Exists,
 		Suggestion: v.Suggestion,
+		Details:    v.Details,
 	}
+}
+
+func toMarketDataSymbolMatchDTOs(
+	in []backend.MarketDataSymbolMatch,
+) []marketDataSymbolMatchDTO {
+	out := make([]marketDataSymbolMatchDTO, 0, len(in))
+	for _, match := range in {
+		out = append(out, marketDataSymbolMatchDTO{
+			Symbol:                       match.Symbol,
+			Name:                         match.Name,
+			SecType:                      match.SecType,
+			Exchange:                     match.Exchange,
+			PrimaryExchange:              match.PrimaryExchange,
+			Currency:                     match.Currency,
+			LastTradeDateOrContractMonth: match.LastTradeDateOrContractMonth,
+			Right:                        match.Right,
+			Multiplier:                   match.Multiplier,
+			LocalSymbol:                  match.LocalSymbol,
+			TradingClass:                 match.TradingClass,
+			ConID:                        match.ConID,
+			Strike:                       match.Strike,
+		})
+	}
+	return out
 }
 
 func toMarketDataInstrumentDTO(
 	status backend.MarketDataInstrumentStatus,
 ) marketDataInstrumentDTO {
+	var intervalMs int
+	if status.UpdateInterval != nil {
+		intervalMs = int(status.UpdateInterval.Milliseconds())
+	}
 	return marketDataInstrumentDTO{
-		InstanceID:     status.Instrument.InstanceID,
-		ExternalSymbol: status.Instrument.ExternalSymbol,
-		BaseAsset:      status.Instrument.BaseAsset,
-		QuoteAsset:     status.Instrument.QuoteAsset,
-		ManualPrice:    status.Instrument.ManualPrice,
-		Enabled:        status.Instrument.Enabled,
-		Stale:          status.Stale,
-		Quote:          toMarketDataQuoteDTO(status.Quote),
+		InstanceID:       status.Instrument.InstanceID,
+		ExternalSymbol:   status.Instrument.ExternalSymbol,
+		BaseAsset:        status.Instrument.BaseAsset,
+		QuoteAsset:       status.Instrument.QuoteAsset,
+		ManualPrice:      status.Instrument.ManualPrice,
+		UpdateIntervalMs: intervalMs,
+		Enabled:          status.Instrument.Enabled,
+		Stale:            status.Stale,
+		Quote:            toMarketDataQuoteDTO(status.Quote),
 	}
 }
 
@@ -864,6 +1032,14 @@ type serviceDTO struct {
 type serviceDatabaseDTO struct {
 	Path      string `json:"path"`
 	Reachable bool   `json:"reachable"`
+}
+
+// serviceLogsDTO is the body of GET /service/logs: the buffered log tail oldest
+// line first, with the line count. Lines is always a JSON array (never null) so
+// the dashboard can render it without a presence check.
+type serviceLogsDTO struct {
+	Lines []string `json:"lines"`
+	Count int      `json:"count"`
 }
 
 // toServiceDTO maps a backend.ServiceInfo onto the wire DTO.

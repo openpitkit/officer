@@ -34,7 +34,7 @@ import { LOCALES } from "@/i18n/locales";
  * Language selector. Each entry is labeled by its own endonym, never
  * translated into the current UI language, so a user reached by wrong
  * auto-detection can still recognize their language. Selecting one calls
- * i18n.changeLanguage; the detector caches the choice to localStorage and
+ * i18n.changeLanguage; the detector caches the choice in browser storage and
  * LocaleProvider mirrors it onto <html lang>.
  */
 export function LanguageSwitch() {

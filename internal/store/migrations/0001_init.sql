@@ -177,11 +177,12 @@ CREATE INDEX idx_audit_at ON audit (at DESC, id DESC);
 -- source instance; per-instance instrument selection lives in
 -- market_data_instruments. `credentials` is an opaque provider-specific JSON
 -- blob, unencrypted for now (at-rest encryption is planned); BYO/mock leave
--- it empty. `enabled` is a 0/1 flag gating runtime participation.
+-- it empty. `label` is a unique operator-facing source name, case-insensitive.
+-- `enabled` is a 0/1 flag gating runtime participation.
 CREATE TABLE market_data_instances (
     id          TEXT    PRIMARY KEY,
     type        TEXT    NOT NULL,
-    label       TEXT    NOT NULL DEFAULT '',
+    label       TEXT    NOT NULL DEFAULT '' COLLATE NOCASE UNIQUE,
     credentials TEXT    NOT NULL DEFAULT '',
     enabled     INTEGER NOT NULL DEFAULT 0
 );

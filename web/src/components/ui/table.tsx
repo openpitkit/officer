@@ -31,11 +31,11 @@ const Table = forwardRef<
   HTMLTableElement,
   HTMLAttributes<HTMLTableElement>
 >(({ className, ...props }, ref) => (
-  <div className="w-full overflow-x-auto">
+  <div className="ledger-table-wrap w-full overflow-x-auto">
     <table
       ref={ref}
       className={cn(
-        "w-full caption-bottom border-collapse text-[length:var(--dens-table-fz)]",
+        "ledger-table w-full caption-bottom border-collapse text-[length:var(--dens-table-fz)]",
         className,
       )}
       {...props}
@@ -50,7 +50,7 @@ const TableHeader = forwardRef<
 >(({ className, ...props }, ref) => (
   <thead
     ref={ref}
-    className={cn("[&_tr]:border-b [&_tr]:border-border", className)}
+    className={cn("bg-bg [&_tr]:border-b [&_tr]:border-border", className)}
     {...props}
   />
 ));
@@ -90,7 +90,7 @@ const TableHead = forwardRef<
   <th
     ref={ref}
     className={cn(
-      "h-[var(--dens-head-h)] px-[var(--dens-cell-px)] text-left align-middle text-[0.6875rem] font-bold uppercase tracking-[0.07em] text-muted",
+      "h-[var(--dens-head-h)] bg-bg px-[var(--dens-cell-px)] text-left align-middle text-[0.6875rem] font-bold uppercase tracking-[0.07em] text-muted",
       hideBelow && HIDE_BELOW[hideBelow],
       className,
     )}

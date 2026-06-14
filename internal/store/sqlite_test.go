@@ -695,6 +695,11 @@ func TestMarketDataInstance_CreateGetListDelete(t *testing.T) {
 	if err := s.CreateMarketDataInstance(ctx, mdInstance("a", false)); !errors.Is(err, domain.ErrAlreadyExists) {
 		t.Fatalf("duplicate create: want ErrAlreadyExists, got %v", err)
 	}
+	dupeLabel := mdInstance("c", false)
+	dupeLabel.Label = "LABEL-A"
+	if err := s.CreateMarketDataInstance(ctx, dupeLabel); !errors.Is(err, domain.ErrAlreadyExists) {
+		t.Fatalf("duplicate label create: want ErrAlreadyExists, got %v", err)
+	}
 
 	got, ok, err := s.GetMarketDataInstance(ctx, "a")
 	if err != nil || !ok {
@@ -749,6 +754,45 @@ func TestMarketDataInstance_SetEnabled(t *testing.T) {
 	}
 	if err := s.SetMarketDataInstanceEnabled(ctx, "missing", true); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("set enabled on missing: want ErrNotFound, got %v", err)
+	}
+}
+
+func TestMarketDataInstance_UpdateSettings(t *testing.T) {
+	t.Parallel()
+	s := openStore(t)
+	ctx := context.Background()
+
+	first := mdInstance("a", false)
+	first.Credentials = `{"token":"old"}`
+	if err := s.CreateMarketDataInstance(ctx, first); err != nil {
+		t.Fatalf("CreateMarketDataInstance: %v", err)
+	}
+	if err := s.CreateMarketDataInstance(ctx, mdInstance("b", false)); err != nil {
+		t.Fatalf("CreateMarketDataInstance b: %v", err)
+	}
+
+	if err := s.UpdateMarketDataInstanceSettings(
+		ctx, "a", "new-label", `{"token":"new"}`,
+	); err != nil {
+		t.Fatalf("UpdateMarketDataInstanceSettings: %v", err)
+	}
+	got, ok, err := s.GetMarketDataInstance(ctx, "a")
+	if err != nil || !ok {
+		t.Fatalf("GetMarketDataInstance: ok=%v err=%v", ok, err)
+	}
+	if got.Label != "new-label" || got.Credentials != `{"token":"new"}` {
+		t.Fatalf("updated instance = %+v", got)
+	}
+
+	if err := s.UpdateMarketDataInstanceSettings(
+		ctx, "missing", "label", "{}",
+	); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("update missing: want ErrNotFound, got %v", err)
+	}
+	if err := s.UpdateMarketDataInstanceSettings(
+		ctx, "a", "label-b", "{}",
+	); !errors.Is(err, domain.ErrAlreadyExists) {
+		t.Fatalf("update duplicate label: want ErrAlreadyExists, got %v", err)
 	}
 }
 

@@ -30,6 +30,7 @@
     "moreOk": "+{{count}} 正常",
     "instanceError": "错误",
     "instanceNotApplied": "未应用",
+    "restartRequired": "需要重启",
     "issues": "{{count}} 个问题"
   },
   "audit": {

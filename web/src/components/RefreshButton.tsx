@@ -42,7 +42,7 @@ export function RefreshButton({
       ) : (
         <RefreshCw className="h-3.5 w-3.5" />
       )}
-      {t("actions.refresh")}
+      <span className="hidden sm:inline">{t("actions.refresh")}</span>
     </Button>
   );
 }

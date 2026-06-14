@@ -27,7 +27,7 @@ const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
 const DropdownMenuContent = forwardRef<
   ElementRef<typeof DropdownMenuPrimitive.Content>,
   ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Content>
->(({ className, sideOffset = 6, ...props }, ref) => (
+>(({ className, onCloseAutoFocus, sideOffset = 6, ...props }, ref) => (
   <DropdownMenuPrimitive.Portal>
     <DropdownMenuPrimitive.Content
       ref={ref}
@@ -37,6 +37,12 @@ const DropdownMenuContent = forwardRef<
         "data-[state=open]:animate-fade-in",
         className,
       )}
+      onCloseAutoFocus={(event) => {
+        setTimeout(() => {
+          document.body.style.pointerEvents = "";
+        }, 0);
+        onCloseAutoFocus?.(event);
+      }}
       {...props}
     />
   </DropdownMenuPrimitive.Portal>

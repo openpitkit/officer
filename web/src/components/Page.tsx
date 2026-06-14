@@ -17,11 +17,9 @@
 
 import type { ReactNode } from "react";
 
+import { PendingRestartBanner } from "@/components/PendingRestartBanner";
 import { TopBar } from "@/components/TopBar";
 
-/** Standard page chrome: a TopBar with title/actions over a scrollable,
- *  width-capped content column. Mirrors the Dashboard layout so every page
- *  shares the same density and rhythm. */
 export function Page({
   title,
   actions,
@@ -34,8 +32,9 @@ export function Page({
   return (
     <div className="flex h-full flex-col">
       <TopBar title={title} actions={actions} />
-      <main className="flex-1 overflow-y-auto bg-bg p-[var(--dens-page-pad)]">
+      <main className="flex-1 overflow-y-auto bg-bg px-[var(--dens-page-pad)] py-[calc(var(--dens-page-pad)*0.75)]">
         <div className="mx-auto w-full max-w-[var(--content-max)] space-y-[var(--dens-row-gap)]">
+          <PendingRestartBanner />
           {children}
         </div>
       </main>

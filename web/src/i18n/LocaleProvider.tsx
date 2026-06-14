@@ -19,10 +19,10 @@ import { useEffect, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 // Keeps <html lang> in sync with the active i18next language. The detector
-// owns detection and localStorage persistence (see i18n/index.ts); this only
-// mirrors the resolved language onto the document, the same way ThemeProvider
-// mirrors the resolved palette. Mounting `@/i18n` initializes i18next, so this
-// provider just observes and applies.
+// owns detection and browser persistence (see i18n/index.ts); this only mirrors
+// the resolved language onto the document, the same way ThemeProvider mirrors
+// the resolved palette. Mounting `@/i18n` initializes i18next, so this provider
+// just observes and applies.
 export function LocaleProvider({ children }: { children: ReactNode }) {
   const { i18n } = useTranslation();
 

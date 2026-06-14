@@ -29,6 +29,10 @@ import {
   type DisplayPreferencesContextValue,
   type TradeStyle,
 } from "@/theme/display-context";
+import {
+  readStoredPreference,
+  writeStoredPreference,
+} from "@/lib/browserStorage";
 
 function isDensityMode(value: string | null): value is DensityMode {
   return (
@@ -50,23 +54,15 @@ function readStored<T extends string>(
   if (typeof window === "undefined") {
     return fallback;
   }
-  try {
-    const stored = window.localStorage.getItem(storageKey);
-    if (guard(stored)) {
-      return stored;
-    }
-  } catch {
-    return fallback;
+  const stored = readStoredPreference(storageKey);
+  if (guard(stored)) {
+    return stored;
   }
   return fallback;
 }
 
 function persist(storageKey: string, value: string): void {
-  try {
-    window.localStorage.setItem(storageKey, value);
-  } catch {
-    /* Best-effort only; the live preference still applies. */
-  }
+  writeStoredPreference(storageKey, value);
 }
 
 interface DisplayPreferencesProviderProps {

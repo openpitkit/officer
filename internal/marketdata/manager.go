@@ -19,8 +19,10 @@ package marketdata
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -57,17 +59,33 @@ type Manager struct {
 	sink   Sink
 	logger *slog.Logger
 
-	mu         sync.Mutex
-	baseCtx    context.Context
-	started    bool
-	cancel     context.CancelFunc
-	wg         sync.WaitGroup
-	connectors []Connector
+	mu            sync.Mutex
+	baseCtx       context.Context
+	started       bool
+	cancel        context.CancelFunc
+	wg            sync.WaitGroup
+	connectors    []Connector
+	appliedConfig map[string]AppliedInstanceConfig
 	// byInstance maps an instance id to its live connector, so a manual quote
 	// can be pushed into a specific running instance's connector after startup.
 	// Only push-capable (Pushable) connectors are entered.
 	byInstance map[string]Connector
 	statuses   map[string]InstanceRuntimeStatus
+
+	// intervalMu guards the inter-update interval state below. It is a dedicated
+	// lock, not mu, so the per-tick update on the drain hot path never contends
+	// with status reads under mu. Keyed by intervalKey(instanceID, external).
+	intervalMu   sync.Mutex
+	lastArrival  map[string]time.Time
+	lastInterval map[string]time.Duration
+}
+
+// AppliedInstanceConfig is the enabled market-data configuration the manager
+// applied during the latest Start. Backend status compares it to the stored
+// configuration to decide whether a feed restart is required.
+type AppliedInstanceConfig struct {
+	Type          string
+	Subscriptions []Subscription
 }
 
 // InstanceRuntimeStatus is the current (not historical) runtime state of one
@@ -77,11 +95,14 @@ type Manager struct {
 // the connector implements Referenceable and returned at least one non-empty URL;
 // it is nil otherwise. VerifiesSymbols is true when the connector implements
 // SymbolVerifier, i.e. the provider can check whether an external symbol exists.
+// SearchesSymbols is true when the connector implements SymbolSearcher, i.e. the
+// provider can search its catalogue for matching instruments.
 type InstanceRuntimeStatus struct {
 	State           string
 	Error           string
 	References      *ProviderReferences
 	VerifiesSymbols bool
+	SearchesSymbols bool
 	Diagnostics     []Diagnostic
 }
 
@@ -97,6 +118,15 @@ const diagBufferCap = 20
 // diagnoseGrace is the idle window after Subscribe before the framework checks
 // whether any data has arrived and (if not) triggers one-shot self-diagnosis.
 const diagnoseGrace = 20 * time.Second
+
+var errUnsupportedProvider = errors.New("unsupported market-data provider")
+
+// ValidateProviderConfig checks whether the provider-specific instance
+// configuration can build a connector. It does not open network connections.
+func ValidateProviderConfig(instance domain.MarketDataInstance) error {
+	_, err := newConnector(instance)
+	return err
+}
 
 // NewManager builds a manager over the store, sink, and logger. logger may be
 // nil, in which case a discarding default is used.
@@ -130,6 +160,12 @@ func (m *Manager) Start(ctx context.Context) error {
 	m.started = true
 	m.statuses = make(map[string]InstanceRuntimeStatus, len(instances))
 	m.byInstance = make(map[string]Connector, len(instances))
+	m.appliedConfig = make(map[string]AppliedInstanceConfig, len(instances))
+
+	m.intervalMu.Lock()
+	m.lastArrival = make(map[string]time.Time)
+	m.lastInterval = make(map[string]time.Duration)
+	m.intervalMu.Unlock()
 
 	for _, instance := range instances {
 		m.startInstanceLocked(runCtx, instance)
@@ -138,13 +174,15 @@ func (m *Manager) Start(ctx context.Context) error {
 }
 
 // startInstanceLocked brings up one instance: read its enabled instruments,
-// build the connector, subscribe, and drain into the sink. Any failure for this
-// instance is logged and the instance skipped. Callers must hold mu.
+// build the connector, subscribe, and drain into the sink. Any failure records
+// a diagnostic (logged via recordDiagLocked) and skips the instance. Callers
+// must hold mu.
 func (m *Manager) startInstanceLocked(ctx context.Context, instance domain.MarketDataInstance) {
+	// Drop any interval state from a prior run of this instance so a restart
+	// never surfaces a pre-restart gap.
+	m.clearInstanceIntervals(instance.ID)
 	instruments, err := m.store.ListEnabledMarketDataInstruments(ctx, instance.ID)
 	if err != nil {
-		m.logger.Error("marketdata: read instruments, skipping instance",
-			"instance", instance.ID, "err", err)
 		msg := fmt.Sprintf("read instruments: %v", err)
 		m.statuses[instance.ID] = InstanceRuntimeStatus{State: StateError, Error: msg}
 		m.recordDiagLocked(instance.ID, Diagnostic{
@@ -159,8 +197,10 @@ func (m *Manager) startInstanceLocked(ctx context.Context, instance domain.Marke
 		return
 	}
 	if len(instruments) == 0 {
-		m.logger.Info("marketdata: instance has no enabled instruments, skipping",
-			"instance", instance.ID, "type", instance.Type)
+		m.appliedConfig[instance.ID] = AppliedInstanceConfig{
+			Type:          instance.Type,
+			Subscriptions: nil,
+		}
 		m.statuses[instance.ID] = InstanceRuntimeStatus{
 			State: StateError,
 			Error: "no enabled instruments",
@@ -170,7 +210,7 @@ func (m *Manager) startInstanceLocked(ctx context.Context, instance domain.Marke
 			Code:        CodeNoEnabledInstruments,
 			Kind:        DiagKindConfig,
 			Title:       "No instruments enabled",
-			Detail:      "The source has no enabled instruments.",
+			Detail:      fmt.Sprintf("Provider %q has no enabled instruments.", instance.Type),
 			Remediation: "Add or enable at least one instrument, then Restart feeds.",
 			Actions:     []DiagnosticAction{{Type: ActionRestart}},
 		})
@@ -179,17 +219,30 @@ func (m *Manager) startInstanceLocked(ctx context.Context, instance domain.Marke
 
 	connector, err := newConnector(instance)
 	if err != nil {
-		m.logger.Warn("marketdata: unsupported instance, skipping",
-			"instance", instance.ID, "type", instance.Type, "err", err)
-		msg := fmt.Sprintf("unsupported provider type %q", instance.Type)
+		if errors.Is(err, errUnsupportedProvider) {
+			msg := fmt.Sprintf("unsupported provider type %q", instance.Type)
+			m.statuses[instance.ID] = InstanceRuntimeStatus{State: StateError, Error: msg}
+			m.recordDiagLocked(instance.ID, Diagnostic{
+				Level:       DiagError,
+				Code:        CodeUnsupportedProvider,
+				Kind:        DiagKindConfig,
+				Title:       "Unsupported provider",
+				Detail:      fmt.Sprintf("Provider type %q is not supported.", instance.Type),
+				Remediation: "Choose a supported provider.",
+			})
+			return
+		}
+
+		msg := fmt.Sprintf("connector config: %v", err)
 		m.statuses[instance.ID] = InstanceRuntimeStatus{State: StateError, Error: msg}
 		m.recordDiagLocked(instance.ID, Diagnostic{
 			Level:       DiagError,
-			Code:        CodeUnsupportedProvider,
+			Code:        CodeInvalidProviderConfig,
 			Kind:        DiagKindConfig,
-			Title:       "Unsupported provider",
-			Detail:      fmt.Sprintf("Provider type %q is not supported.", instance.Type),
-			Remediation: "Choose a supported provider.",
+			Title:       "Invalid provider configuration",
+			Detail:      fmt.Sprintf("Provider %q: connector config: %v", instance.Type, err),
+			Remediation: "Update this provider's credentials or settings, then Restart feeds.",
+			Actions:     []DiagnosticAction{{Type: ActionRestart}},
 		})
 		return
 	}
@@ -204,6 +257,7 @@ func (m *Manager) startInstanceLocked(ctx context.Context, instance domain.Marke
 		}
 	}
 	_, verifiesSymbols := connector.(SymbolVerifier)
+	_, searchesSymbols := connector.(SymbolSearcher)
 
 	// Wire reporters before Subscribe so messages from the connector's background
 	// goroutine route correctly from the first instant. Both reporters lock mu
@@ -220,15 +274,18 @@ func (m *Manager) startInstanceLocked(ctx context.Context, instance domain.Marke
 	}
 
 	subs := subscriptionsFor(instruments)
+	m.appliedConfig[instance.ID] = AppliedInstanceConfig{
+		Type:          instance.Type,
+		Subscriptions: cloneSubscriptions(subs),
+	}
 	symbols := externalSymbolsFor(subs)
 	ch, err := connector.Subscribe(ctx, subs)
 	if err != nil {
-		m.logger.Error("marketdata: subscribe failed, skipping instance",
-			"instance", instance.ID, "type", instance.Type, "err", err)
 		connector.Close()
 		msg := fmt.Sprintf("subscribe failed: %v", err)
 		m.statuses[instance.ID] = InstanceRuntimeStatus{
-			State: StateError, Error: msg, References: refs, VerifiesSymbols: verifiesSymbols,
+			State: StateError, Error: msg, References: refs,
+			VerifiesSymbols: verifiesSymbols, SearchesSymbols: searchesSymbols,
 		}
 		m.recordDiagLocked(instance.ID, Diagnostic{
 			Level:       DiagError,
@@ -256,7 +313,8 @@ func (m *Manager) startInstanceLocked(ctx context.Context, instance domain.Marke
 	m.wg.Add(1)
 	go m.drain(instance.ID, symbols, ch, received)
 	m.statuses[instance.ID] = InstanceRuntimeStatus{
-		State: StateOK, References: refs, VerifiesSymbols: verifiesSymbols,
+		State: StateOK, References: refs,
+		VerifiesSymbols: verifiesSymbols, SearchesSymbols: searchesSymbols,
 	}
 
 	// Push-capable connectors (BYO) accept operator-set manual marks. Record the
@@ -264,7 +322,8 @@ func (m *Manager) startInstanceLocked(ctx context.Context, instance domain.Marke
 	// every stored manual price now as a single quote each. The push drains
 	// through the same channel as any quote; streaming connectors are not
 	// Pushable and carry no manual prices, so they are untouched.
-	if pushable, ok := connector.(Pushable); ok {
+	pushable, pushableOK := connector.(Pushable)
+	if pushableOK {
 		m.byInstance[instance.ID] = connector
 		for _, inst := range instruments {
 			if inst.ManualPrice == "" {
@@ -272,6 +331,9 @@ func (m *Manager) startInstanceLocked(ctx context.Context, instance domain.Marke
 			}
 			pushable.Push(manualQuote(inst))
 		}
+	}
+	if pushableOK {
+		return
 	}
 
 	// One-shot no-data watchdog: after diagnoseGrace, if any expected instrument
@@ -313,6 +375,13 @@ func (m *Manager) startInstanceLocked(ctx context.Context, instance domain.Marke
 				return
 			}
 			if len(findings) == 0 {
+				// A provider that tolerates silence (e.g. equities outside
+				// market hours) treats a quiet-but-valid feed as normal, so the
+				// generic no-data warning would only be noise; liveness is
+				// confirmed on demand via the per-symbol verify button.
+				if st, ok := connector.(SilenceTolerant); ok && st.ToleratesSilence() {
+					return
+				}
 				m.recordDiag(id, Diagnostic{
 					Level: DiagWarn,
 					Code:  CodeNoData,
@@ -386,12 +455,13 @@ func (m *Manager) recordDiag(instanceID string, diag Diagnostic) {
 	m.recordDiagLocked(instanceID, diag)
 }
 
-// recordDiagLocked appends a diagnostic for instanceID. Callers must hold mu.
-// A nil m.statuses (no live run) drops the write. At is set to time.Now().UTC()
-// when zero. Consecutive identical (Code, Instrument, Detail) entries are
-// deduped (refreshing At) so reconnect/backoff loops cannot flood the buffer;
-// only the most recent diagBufferCap entries are kept. References on the status
-// are preserved across writes.
+// recordDiagLocked appends a diagnostic for instanceID and emits one slog
+// record at the matching level (Routine→Debug; DiagError→Error; DiagWarn→Warn;
+// everything else→Info). Callers must hold mu. A nil m.statuses (no live run)
+// drops the write. At is set to time.Now().UTC() when zero. Consecutive
+// identical (Code, Instrument, Detail) entries are deduped (refreshing At
+// only) so reconnect/backoff loops cannot flood the buffer or the log; only
+// the most recent diagBufferCap entries are kept.
 func (m *Manager) recordDiagLocked(instanceID string, diag Diagnostic) {
 	if m.statuses == nil {
 		return
@@ -410,6 +480,24 @@ func (m *Manager) recordDiagLocked(instanceID string, diag Diagnostic) {
 			return
 		}
 	}
+	// Emit exactly one log record per new (non-deduped) diagnostic.
+	attrs := []any{"instance", instanceID, "code", diag.Code}
+	if diag.Instrument != "" {
+		attrs = append(attrs, "instrument", diag.Instrument)
+	}
+	if diag.Detail != "" {
+		attrs = append(attrs, "detail", diag.Detail)
+	}
+	switch {
+	case diag.Routine:
+		m.logger.Debug(diag.Title, attrs...)
+	case diag.Level == DiagError:
+		m.logger.Error(diag.Title, attrs...)
+	case diag.Level == DiagWarn:
+		m.logger.Warn(diag.Title, attrs...)
+	default:
+		m.logger.Info(diag.Title, attrs...)
+	}
 	status.Diagnostics = append(status.Diagnostics, diag)
 	if len(status.Diagnostics) > diagBufferCap {
 		status.Diagnostics = status.Diagnostics[len(status.Diagnostics)-diagBufferCap:]
@@ -417,10 +505,11 @@ func (m *Manager) recordDiagLocked(instanceID string, diag Diagnostic) {
 	m.statuses[instanceID] = status
 }
 
-// drain forwards every quote from ch into the sink, logging push errors without
-// stopping (one bad quote must not tear down a feed). It records each delivered
-// instrument key into received so the watchdog goroutine can check coverage.
-// It ends when ch closes.
+// drain forwards every quote from ch into the sink. Errors are recorded as
+// diagnostics (and thus logged via recordDiag) without stopping the loop: one
+// bad quote must not tear down a feed. It records each delivered instrument key
+// into received so the watchdog goroutine can check coverage. It ends when ch
+// closes.
 func (m *Manager) drain(
 	instanceID string,
 	symbols map[quoteInstrumentKey]string,
@@ -430,11 +519,11 @@ func (m *Manager) drain(
 	defer m.wg.Done()
 	for update := range ch {
 		received.Store(update.Base+"\x00"+update.Quote, true)
+		external := symbols[quoteInstrumentKey{base: update.Base, quote: update.Quote}]
+		m.recordQuoteArrival(instanceID, external, time.Now())
 		if err := m.store.UpsertMarketDataQuote(
 			context.Background(), quoteSnapshot(instanceID, symbols, update),
 		); err != nil {
-			m.logger.Error("marketdata: persist quote failed",
-				"instance", instanceID, "base", update.Base, "quote", update.Quote, "err", err)
 			m.recordDiag(instanceID, Diagnostic{
 				Level:       DiagWarn,
 				Code:        CodeInternalError,
@@ -446,8 +535,6 @@ func (m *Manager) drain(
 			})
 		}
 		if err := m.sink.Push(update); err != nil {
-			m.logger.Error("marketdata: push quote failed",
-				"instance", instanceID, "base", update.Base, "quote", update.Quote, "err", err)
 			m.recordDiag(instanceID, Diagnostic{
 				Level:       DiagWarn,
 				Code:        CodeInternalError,
@@ -479,6 +566,64 @@ func quoteSnapshot(
 		Mark:           update.Mark,
 		Bid:            update.Bid,
 		Ask:            update.Ask,
+	}
+}
+
+// intervalKey is the per-(instance, external symbol) key for the interval maps.
+func intervalKey(instanceID, external string) string {
+	return instanceID + "\x00" + external
+}
+
+// recordQuoteArrival records the arrival time of one tick and, when a previous
+// arrival is known for the same (instance, external) key, the gap between them.
+// The first tick for a key records only the arrival, leaving the interval
+// unknown until a second tick arrives. Called from drain on the per-tick hot
+// path, so it locks the dedicated intervalMu, never mu.
+func (m *Manager) recordQuoteArrival(instanceID, external string, arrival time.Time) {
+	key := intervalKey(instanceID, external)
+	m.intervalMu.Lock()
+	defer m.intervalMu.Unlock()
+	if m.lastArrival == nil {
+		m.lastArrival = make(map[string]time.Time)
+	}
+	if m.lastInterval == nil {
+		m.lastInterval = make(map[string]time.Duration)
+	}
+	if prev, ok := m.lastArrival[key]; ok {
+		if gap := arrival.Sub(prev); gap > 0 {
+			m.lastInterval[key] = gap
+		}
+	}
+	m.lastArrival[key] = arrival
+}
+
+// QuoteUpdateInterval returns the elapsed time between the two most recent ticks
+// of the identified instrument's quote, and whether that interval is known. It
+// is unknown (ok=false) until at least two ticks have arrived since the last
+// (re)subscribe. The value is fixed between ticks; it does not grow with age.
+func (m *Manager) QuoteUpdateInterval(instanceID, external string) (time.Duration, bool) {
+	m.intervalMu.Lock()
+	defer m.intervalMu.Unlock()
+	interval, ok := m.lastInterval[intervalKey(instanceID, external)]
+	return interval, ok
+}
+
+// clearInstanceIntervals drops every interval entry belonging to instanceID so a
+// restart of that instance starts from "unknown" again. Keys are prefixed with
+// the instance id, so all of the instance's entries share the prefix.
+func (m *Manager) clearInstanceIntervals(instanceID string) {
+	prefix := instanceID + "\x00"
+	m.intervalMu.Lock()
+	defer m.intervalMu.Unlock()
+	for key := range m.lastArrival {
+		if strings.HasPrefix(key, prefix) {
+			delete(m.lastArrival, key)
+		}
+	}
+	for key := range m.lastInterval {
+		if strings.HasPrefix(key, prefix) {
+			delete(m.lastInterval, key)
+		}
 	}
 }
 
@@ -519,6 +664,18 @@ func (m *Manager) InstanceStatuses() map[string]InstanceRuntimeStatus {
 			status.Diagnostics = diags
 		}
 		out[id] = status
+	}
+	return out
+}
+
+// AppliedConfig returns a copy of the enabled config applied by the last Start.
+func (m *Manager) AppliedConfig() map[string]AppliedInstanceConfig {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string]AppliedInstanceConfig, len(m.appliedConfig))
+	for id, cfg := range m.appliedConfig {
+		cfg.Subscriptions = cloneSubscriptions(cfg.Subscriptions)
+		out[id] = cfg
 	}
 	return out
 }
@@ -589,6 +746,15 @@ func subscriptionsFor(instruments []domain.MarketDataInstrument) []Subscription 
 	return subs
 }
 
+func cloneSubscriptions(subs []Subscription) []Subscription {
+	if len(subs) == 0 {
+		return nil
+	}
+	out := make([]Subscription, len(subs))
+	copy(out, subs)
+	return out
+}
+
 type quoteInstrumentKey struct {
 	base  string
 	quote string
@@ -602,20 +768,40 @@ func externalSymbolsFor(subs []Subscription) map[quoteInstrumentKey]string {
 	return symbols
 }
 
-// newConnector constructs the connector for one instance by its type. The two
-// known types are constructed directly; there is no generic provider registry
-// (the external-author contract is deferred). An unknown type returns
-// an error so the manager skips the instance.
+// newConnector constructs the connector for one instance by its type. The
+// built-in provider types are constructed directly; there is no generic
+// provider registry (the external-author contract is deferred). An
+// unknown type returns an error so the manager skips the instance.
 func newConnector(instance domain.MarketDataInstance) (Connector, error) {
 	switch instance.Type {
 	case domain.MarketDataProviderBYO:
 		return NewBYOConnector(0), nil
 	case domain.MarketDataProviderBinance:
 		return NewBinanceConnector(), nil
+	case domain.MarketDataProviderIB:
+		connector := NewIBConnector(instance.ID, instance.Credentials)
+		if connector.configErr != nil {
+			return nil, connector.configErr
+		}
+		return connector, nil
+	case domain.MarketDataProviderKraken:
+		return NewKrakenConnector(), nil
+	case domain.MarketDataProviderCoinbase:
+		return NewCoinbaseConnector(), nil
+	case domain.MarketDataProviderAlpaca:
+		return NewAlpacaConnector(instance)
+	case domain.MarketDataProviderOKX:
+		return NewOKXConnector(), nil
+	case domain.MarketDataProviderBybit:
+		return NewBybitConnector(instance.Credentials)
+	case domain.MarketDataProviderOANDA:
+		return NewOANDAConnector(instance)
+	case domain.MarketDataProviderFinnhub:
+		return NewFinnhubConnector(instance)
 	case domain.MarketDataProviderMock:
 		return NewMockConnector(0), nil
 	default:
-		return nil, fmt.Errorf("unknown market-data provider type %q", instance.Type)
+		return nil, fmt.Errorf("%w: %q", errUnsupportedProvider, instance.Type)
 	}
 }
 
@@ -625,6 +811,9 @@ func newConnector(instance domain.MarketDataInstance) (Connector, error) {
 // without subscribing), so the UI can enable or disable the verify control even
 // for a disabled or not-yet-applied instance. An unknown type reports false.
 func ProviderVerifiesSymbols(instanceType string) bool {
+	if instanceType == domain.MarketDataProviderFinnhub {
+		return true
+	}
 	connector, err := newConnector(domain.MarketDataInstance{Type: instanceType})
 	if err != nil {
 		return false
@@ -660,6 +849,53 @@ func VerifySymbol(
 		return SymbolVerification{}, true, err
 	}
 	return result, true, nil
+}
+
+// ProviderSearchesSymbols reports whether a connector of the given provider type
+// supports symbol search, i.e. implements SymbolSearcher. It is a static,
+// runtime-independent capability probe (a fresh connector is built and discarded
+// without subscribing), so the UI can enable or disable the search control even
+// for a disabled or not-yet-applied instance. An unknown type reports false.
+func ProviderSearchesSymbols(instanceType string) bool {
+	if instanceType == domain.MarketDataProviderFinnhub {
+		return true
+	}
+	connector, err := newConnector(domain.MarketDataInstance{Type: instanceType})
+	if err != nil {
+		return false
+	}
+	defer connector.Close()
+	_, ok := connector.(SymbolSearcher)
+	return ok
+}
+
+// SearchSymbols searches the instance's provider catalogue for instruments
+// matching query without touching the running manager. It builds a fresh
+// connector for the instance, type-asserts the optional SymbolSearcher
+// capability, and (when supported) runs one search before closing the
+// connector. supported is false when the provider cannot search symbols (the
+// connector does not implement SymbolSearcher); callers map that to an empty
+// result, not an error. A non-nil error is a transport/timeout failure; no
+// matches is an empty slice with supported=true. Because the connector is never
+// subscribed, live feeds are unaffected.
+func SearchSymbols(
+	ctx context.Context, instance domain.MarketDataInstance, query SymbolSearchQuery,
+) (matches []SymbolMatch, supported bool, err error) {
+	connector, err := newConnector(instance)
+	if err != nil {
+		return nil, false, err
+	}
+	defer connector.Close()
+
+	searcher, ok := connector.(SymbolSearcher)
+	if !ok {
+		return nil, false, nil
+	}
+	matches, err = searcher.SearchSymbols(ctx, query)
+	if err != nil {
+		return nil, true, err
+	}
+	return matches, true, nil
 }
 
 // discard is an io.Writer that drops everything, backing the manager's default

@@ -100,8 +100,8 @@
     }
   },
   "prompt": {
-    "intro": "You have access to the Pit Officer MCP server - a pre-trade risk and\ncompliance control plane for trading operations.\n\nTransport: streamable HTTP at the /mcp endpoint of this service.\nAlternatively available as `pit-officer mcp` over stdio.\n\nPrinciples:\n- Least-privilege surface. The server carries no secrets or credentials.\n- Most tools are read-only. Treat any mutating tool with extra care.\n- Any trading action or mutation must go through pre-trade checks and\n  approval tokens. Never bypass the pre-trade step.",
-    "discover": "Discover the available commands at runtime: call the MCP tool list\n(`tools/list`) after connecting and rely on each tool's self-described\ninput schema. Do not assume a fixed set of commands - the surface is\nself-describing and can change as the operator adjusts access.",
-    "footer": "The operator controls which commands are enabled, and this can change at\nany time without notice. If a tool call returns a notice that the command\nis disabled in the panel, do NOT retry it — ask your orchestrator to\nextend or change your prompt/instructions accordingly (or to have the\noperator enable the command in Pit Officer)."
+    "intro": "您可以访问 Pit Officer MCP 服务器，它是用于交易操作的盘前风控与合规控制平面。\n\n传输方式：此服务 /mcp 端点上的 streamable HTTP。\n也可通过 `pit-officer mcp` 使用 stdio。\n\n原则：\n- 最小权限暴露面。服务器不携带密钥或凭据。\n- 大多数工具为只读。对任何变更型工具都要格外谨慎。\n- 任何交易动作或状态变更都必须通过盘前检查和审批令牌。不要绕过盘前步骤。",
+    "discover": "在运行时发现可用命令：连接后调用 MCP 工具列表（`tools/list`），并依赖每个工具自描述的输入 schema。不要假设命令集合固定；该接口是自描述的，可能随操作员调整访问权限而变化。",
+    "footer": "操作员控制哪些命令处于启用状态，这可能随时无通知变化。如果工具调用返回该命令已在面板中禁用的提示，不要重试；请让 orchestrator 扩展或修改 prompt/instructions，或让操作员在 Pit Officer 中启用该命令。"
   }
 }

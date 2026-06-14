@@ -144,6 +144,22 @@ const (
 	MarketDataProviderBYO = "byo"
 	// MarketDataProviderBinance is the public Binance spot feed.
 	MarketDataProviderBinance = "binance"
+	// MarketDataProviderIB is the Interactive Brokers TWS/Gateway feed.
+	MarketDataProviderIB = "ib"
+	// MarketDataProviderKraken is the public Kraken spot feed.
+	MarketDataProviderKraken = "kraken"
+	// MarketDataProviderCoinbase is the public Coinbase market-data feed.
+	MarketDataProviderCoinbase = "coinbase"
+	// MarketDataProviderAlpaca is the Alpaca IEX market-data feed.
+	MarketDataProviderAlpaca = "alpaca"
+	// MarketDataProviderOKX is the public OKX market-data feed.
+	MarketDataProviderOKX = "okx"
+	// MarketDataProviderBybit is the public Bybit market-data feed.
+	MarketDataProviderBybit = "bybit"
+	// MarketDataProviderOANDA is the OANDA pricing-stream feed.
+	MarketDataProviderOANDA = "oanda"
+	// MarketDataProviderFinnhub is the Finnhub market-data feed.
+	MarketDataProviderFinnhub = "finnhub"
 	// MarketDataProviderMock is the synthetic provider used for demos and tests.
 	MarketDataProviderMock = "mock"
 )

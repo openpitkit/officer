@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"os"
 	"sync"
-	"time"
 
 	"go.openpit.dev/openpit"
 	bindmd "go.openpit.dev/openpit/marketdata"
@@ -35,10 +34,16 @@ import (
 	"go.openpit.dev/officer/internal/marketdata"
 )
 
+// MarketDataFreshnessTTL is the quote lifetime the engine's market-data service
+// is built with. It mirrors marketdata.FreshnessTTL so the engine and backend
+// use one officer-wide freshness contract.
+const MarketDataFreshnessTTL = marketdata.FreshnessTTL
+
 // defaultQuoteTTL is the service-wide quote lifetime the engine's market-data
 // service is built with. Risk-grade freshness (seconds-fresh): a quote older
-// than this reads as absent. Making it configurable is planned.
-var defaultQuoteTTL = bindmd.WithinTTL(10 * time.Second)
+// than this reads as absent. Making it configurable is planned. It is built from
+// the single market-data freshness window shared with backend.
+var defaultQuoteTTL = bindmd.WithinTTL(MarketDataFreshnessTTL)
 
 // defaultMarketOrderSlippageBps is the worst-case slippage applied when sizing
 // market-order reservations in the spot-funds policy (1500 bps = 15%, the

@@ -25,6 +25,7 @@
     "orders": "Orders",
     "policies": "Policies",
     "audit": "Audit",
+    "restartRequired": "Restart needed",
     "mcpAccess": "MCP access",
     "marketData": "Market Data",
     "service": "Service"
@@ -34,6 +35,19 @@
     "logoAriaLabel": "Pit logo",
     "controlPlane": "Control plane",
     "nonRelease": "non-release"
+  },
+  "about": {
+    "title": "About",
+    "description": "Pit Officer is a local-first control plane for pre-trade risk.",
+    "product": "Product",
+    "copyrightLabel": "Copyright",
+    "copyright": "Copyright The Pit Project Owners. All rights reserved.",
+    "links": {
+      "website": "Officer website",
+      "issues": "Issue tracker",
+      "discussions": "GitHub discussions",
+      "openpit": "OpenPit website"
+    }
   },
   "display": {
     "density": {

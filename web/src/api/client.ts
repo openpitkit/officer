@@ -41,6 +41,8 @@ import type {
   MarketDataQuote,
   MarketDataReferences,
   MarketDataStatus,
+  MarketDataSymbolMatch,
+  MarketDataSymbolSearch,
   MarketDataSymbolVerification,
   McpCommand,
   NodeHealth,
@@ -48,6 +50,7 @@ import type {
   OrderEvent,
   Overview,
   ServiceInfo,
+  ServiceLogs,
   Source,
   Status,
   StoreHealth,
@@ -521,6 +524,14 @@ function normalizeMarketDataInstrument(v: unknown): MarketDataInstrument {
     enabled: asBool(pick(o, "enabled", "Enabled")),
     stale: asBool(pick(o, "stale", "Stale")),
   };
+  // Omitted (omitempty) on the wire when unknown; keep it undefined then so the
+  // UI can tell "no interval yet" from a real zero.
+  const intervalMs = asInt(
+    pick(o, "updateIntervalMs", "UpdateIntervalMs", "update_interval_ms"),
+  );
+  if (intervalMs > 0) {
+    instrument.updateIntervalMs = intervalMs;
+  }
   if (quote) {
     instrument.quote = quote;
   }
@@ -599,6 +610,9 @@ function normalizeMarketDataInstance(v: unknown): MarketDataInstance {
     verifiesSymbols: asBool(
       pick(o, "verifiesSymbols", "VerifiesSymbols", "verifies_symbols"),
     ),
+    searchesSymbols: asBool(
+      pick(o, "searchesSymbols", "SearchesSymbols", "searches_symbols"),
+    ),
     instruments: normalizeArray(
       pick(o, "instruments", "Instruments"),
       normalizeMarketDataInstrument,
@@ -608,6 +622,18 @@ function normalizeMarketDataInstance(v: unknown): MarketDataInstance {
       normalizeMarketDataDiagnostic,
     ),
   };
+  const settings = pick(o, "settings", "Settings");
+  if (isObject(settings)) {
+    instance.settings = settings;
+  }
+  const secrets = pick(o, "secrets", "Secrets");
+  if (isObject(secrets)) {
+    const normalized: Record<string, boolean> = {};
+    for (const [key, value] of Object.entries(secrets)) {
+      normalized[key] = value === true;
+    }
+    instance.secrets = normalized;
+  }
   const err = pick(o, "error", "Error");
   if (err !== undefined) {
     instance.error = asString(err);
@@ -635,6 +661,9 @@ function normalizeMarketDataStatus(v: unknown): MarketDataStatus {
     freshnessSeconds: asInt(
       pick(o, "freshnessSeconds", "FreshnessSeconds", "freshness_seconds"),
     ),
+    restartRequired: asBool(
+      pick(o, "restartRequired", "RestartRequired", "restart_required"),
+    ),
   };
 }
 
@@ -650,7 +679,93 @@ function normalizeMarketDataSymbolVerification(
   if (typeof suggestion === "string" && suggestion.length > 0) {
     result.suggestion = suggestion;
   }
+  const details = pick(o, "details", "Details");
+  if (typeof details === "string" && details.length > 0) {
+    result.details = details;
+  }
   return result;
+}
+
+function normalizeMarketDataSymbolMatch(v: unknown): MarketDataSymbolMatch {
+  const o = isObject(v) ? v : {};
+  const match: MarketDataSymbolMatch = {
+    symbol: asString(pick(o, "symbol", "Symbol")),
+    secType: asString(pick(o, "secType", "SecType", "sec_type")),
+  };
+  const name = pick(o, "name", "Name");
+  if (typeof name === "string" && name.length > 0) {
+    match.name = name;
+  }
+  const exchange = pick(o, "exchange", "Exchange");
+  if (typeof exchange === "string" && exchange.length > 0) {
+    match.exchange = exchange;
+  }
+  const primaryExchange = pick(
+    o,
+    "primaryExchange",
+    "PrimaryExchange",
+    "primary_exchange",
+  );
+  if (typeof primaryExchange === "string" && primaryExchange.length > 0) {
+    match.primaryExchange = primaryExchange;
+  }
+  const currency = pick(o, "currency", "Currency");
+  if (typeof currency === "string" && currency.length > 0) {
+    match.currency = currency;
+  }
+  const conId = pick(o, "conId", "ConId", "ConID", "con_id");
+  if (typeof conId === "string" && conId.trim() !== "") {
+    match.conId = conId.trim();
+  } else if (typeof conId === "number" && Number.isFinite(conId)) {
+    match.conId = String(conId);
+  }
+  const expiry = pick(
+    o,
+    "lastTradeDateOrContractMonth",
+    "LastTradeDateOrContractMonth",
+    "last_trade_date_or_contract_month",
+  );
+  if (typeof expiry === "string" && expiry.length > 0) {
+    match.lastTradeDateOrContractMonth = expiry;
+  }
+  const strike = pick(o, "strike", "Strike");
+  if (typeof strike === "string" && strike.trim() !== "") {
+    match.strike = strike.trim();
+  }
+  // A numeric strike is intentionally ignored: financial decimals must never
+  // be represented as JS numbers (lossless string is the only safe wire
+  // format). The backend always sends strike as a decimal string, so a number
+  // here would be an unexpected wire-format bug — omit rather than coerce.
+  const right = pick(o, "right", "Right");
+  if (typeof right === "string" && right.length > 0) {
+    match.right = right;
+  }
+  const multiplier = pick(o, "multiplier", "Multiplier");
+  if (typeof multiplier === "string" && multiplier.length > 0) {
+    match.multiplier = multiplier;
+  }
+  const localSymbol = pick(o, "localSymbol", "LocalSymbol", "local_symbol");
+  if (typeof localSymbol === "string" && localSymbol.length > 0) {
+    match.localSymbol = localSymbol;
+  }
+  const tradingClass = pick(o, "tradingClass", "TradingClass", "trading_class");
+  if (typeof tradingClass === "string" && tradingClass.length > 0) {
+    match.tradingClass = tradingClass;
+  }
+  return match;
+}
+
+function normalizeMarketDataSymbolSearch(
+  v: unknown,
+): MarketDataSymbolSearch {
+  const o = isObject(v) ? v : {};
+  return {
+    supported: asBool(pick(o, "supported", "Supported")),
+    matches: normalizeArray(
+      pick(o, "matches", "Matches"),
+      normalizeMarketDataSymbolMatch,
+    ),
+  };
 }
 
 function normalizeServiceInfo(v: unknown): ServiceInfo {
@@ -678,6 +793,18 @@ function normalizeServiceInfo(v: unknown): ServiceInfo {
     info.buildClean = rawClean;
   }
   return info;
+}
+
+function normalizeServiceLogs(v: unknown): ServiceLogs {
+  const o = isObject(v) ? v : {};
+  const rawLines = pick(o, "lines", "Lines");
+  const lines = Array.isArray(rawLines)
+    ? rawLines.map((x) => asString(x))
+    : [];
+  const rawCount = pick(o, "count", "Count");
+  // Trust the server count when present; otherwise fall back to the line total.
+  const count = typeof rawCount === "number" ? asInt(rawCount) : lines.length;
+  return { lines, count };
 }
 
 function normalizeArray<T>(v: unknown, one: (x: unknown) => T): T[] {
@@ -830,14 +957,29 @@ export async function fetchMarketData(
 
 /** POST /market-data/instances. */
 export async function createMarketDataInstance(body: {
-  id: string;
   type: string;
   label: string;
-  credentials: string;
+  credentials?: string;
   enabled: boolean;
 }): Promise<MarketDataStatus> {
   const v = await request(`${BASE}/market-data/instances`, {
     method: "POST",
+    body,
+  });
+  const o = isObject(v) ? v : {};
+  return normalizeMarketDataStatus(pick(o, "marketData", "MarketData"));
+}
+
+/** PUT /market-data/instances/{id}/settings. */
+export async function updateMarketDataInstanceSettings(
+  id: string,
+  body: {
+    label: string;
+    credentials: string;
+  },
+): Promise<MarketDataStatus> {
+  const v = await request(`${BASE}/market-data/instances/${encode(id)}/settings`, {
+    method: "PUT",
     body,
   });
   const o = isObject(v) ? v : {};
@@ -928,12 +1070,65 @@ export async function verifyMarketDataSymbol(
   );
 }
 
+/** Resolve inputs for a symbol search: the typed symbol plus the contract
+ *  criteria (secType/exchange/currency and, for derivatives, expiry/strike/
+ *  right) the backend feeds to reqContractDetails. */
+export interface MarketDataSymbolSearchInput {
+  query: string;
+  secType?: string;
+  exchange?: string;
+  currency?: string;
+  lastTradeDateOrContractMonth?: string;
+  strike?: string;
+  right?: string;
+}
+
+/** POST /market-data/instances/{id}/search-symbols - stateless contract
+ *  resolve. Never disturbs live feeds; supported=false when the provider can't
+ *  search. The secType/exchange/currency criteria scope the resolve so crypto,
+ *  forex, and futures resolve to an exact contract. */
+export async function searchMarketDataSymbols(
+  instanceId: string,
+  input: MarketDataSymbolSearchInput,
+): Promise<MarketDataSymbolSearch> {
+  const body: Record<string, string> = { query: input.query };
+  const putStr = (key: string, value: string | undefined) => {
+    if (value !== undefined && value.trim() !== "") {
+      body[key] = value.trim();
+    }
+  };
+  putStr("secType", input.secType);
+  putStr("exchange", input.exchange);
+  putStr("currency", input.currency);
+  putStr("lastTradeDateOrContractMonth", input.lastTradeDateOrContractMonth);
+  putStr("right", input.right);
+  putStr("strike", input.strike);
+  const v = await request(
+    `${BASE}/market-data/instances/${encode(instanceId)}/search-symbols`,
+    { method: "POST", body },
+  );
+  const o = isObject(v) ? v : {};
+  const wrapped = pick(o, "search", "Search");
+  return normalizeMarketDataSymbolSearch(wrapped === undefined ? o : wrapped);
+}
+
 // --- Service info ---
 
 /** GET /service. */
 export async function fetchServiceInfo(signal?: AbortSignal): Promise<ServiceInfo> {
   return normalizeServiceInfo(await request(`${BASE}/service`, { signal }));
 }
+
+/** GET /service/logs - the captured log tail, oldest line first. */
+export async function fetchServiceLogs(
+  signal?: AbortSignal,
+): Promise<ServiceLogs> {
+  return normalizeServiceLogs(await request(`${BASE}/service/logs`, { signal }));
+}
+
+/** Same-origin URL for the full-buffer log download, used as an anchor href so
+ *  the browser downloads it under the route's shared middleware. */
+export const serviceLogsDownloadUrl = `${BASE}/service/logs/download`;
 
 // --- Accounts ---
 

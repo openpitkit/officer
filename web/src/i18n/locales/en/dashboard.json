@@ -30,6 +30,7 @@
     "moreOk": "+{{count}} OK",
     "instanceError": "Error",
     "instanceNotApplied": "Not applied",
+    "restartRequired": "Restart needed",
     "issues": "{{count}} issue(s)"
   },
   "audit": {

@@ -26,7 +26,6 @@ import { EmptyState, ErrorState, TableSkeleton } from "@/components/PageStates";
 import { Page } from "@/components/Page";
 import { RefreshButton } from "@/components/RefreshButton";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
-import { Card } from "@/components/ui/card";
 import {
   Select,
   SelectContent,
@@ -82,8 +81,7 @@ function AuditTable({ entries }: { entries: AuditEntry[] }) {
   const { t } = useTranslation("audit");
   const { t: tc } = useTranslation();
   return (
-    <Card>
-      <Table>
+    <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead>{t("table.time")}</TableHead>
@@ -126,8 +124,7 @@ function AuditTable({ entries }: { entries: AuditEntry[] }) {
             </TableRow>
           ))}
         </TableBody>
-      </Table>
-    </Card>
+    </Table>
   );
 }
 

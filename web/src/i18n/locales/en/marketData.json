@@ -1,20 +1,25 @@
 {
   "title": "Market Data",
   "instances": {
-    "title": "Sources",
-    "restartHint": "Configuration changes take effect after Restart."
+    "title": "Sources"
   },
   "instance": {
     "id": "Instance ID",
     "type": "Provider",
-    "label": "Label",
-    "credentials": "Credentials JSON"
+    "label": "Label"
   },
   "instrument": {
     "externalSymbol": "External symbol",
     "baseAsset": "Base",
     "quoteAsset": "Quote",
-    "manualPrice": "Manual price"
+    "manualPrice": "Manual price",
+    "manualPriceFor": "Manual price for {{symbol}}",
+    "pairAlreadyUsed": "This base/quote pair is already used by {{feeds}}"
+  },
+  "instrumentDialog": {
+    "ibTitle": "Add Interactive Brokers instrument",
+    "ibDescription": "Choose a resolved contract or fill the contract fields manually before adding the instrument.",
+    "contract": "Contract"
   },
   "actions": {
     "addInstance": "Add source",
@@ -23,23 +28,166 @@
     "disable": "Disable",
     "deleteInstance": "Delete source",
     "deleteInstrument": "Delete instrument",
-    "restart": "Restart feeds"
+    "editSettings": "Edit settings",
+    "restart": "Restart feeds",
+    "sendPrice": "Send price",
+    "saveSettings": "Save settings",
+    "cancel": "Cancel"
+  },
+  "create": {
+    "title": "Add {{provider}} source",
+    "defaultHint": "Create a source, then add instruments to it.",
+    "duplicateLabel": "A source with this name already exists.",
+    "binanceHint": "Create a Binance source for live spot prices. No credentials are needed for public ticker streams.",
+    "byoHint": "Create a manual source. After creation, add instruments and send operator-maintained prices.",
+    "mockHint": "Create a synthetic source for demos and local tests."
+  },
+  "providers": {
+    "guideTitle": "Provider guide",
+    "addSource": "Add a market-data source",
+    "count": "{{n}} providers",
+    "site": "Site",
+    "docs": "Docs",
+    "symbols": "Symbols",
+    "ib": {
+      "title": "Interactive Brokers",
+      "description": "Live market data from Interactive Brokers TWS or IB Gateway. Use contract settings when a plain symbol is ambiguous.",
+      "createHint": "Create an Interactive Brokers source connected to TWS/Gateway. Configure host, port, client ID, and market-data mode."
+    },
+    "binance": {
+      "title": "Binance",
+      "description": "Live spot-market prices streamed from Binance. External symbols use Binance notation such as BTCUSDT.",
+      "createHint": "Create a Binance source for live spot prices. No credentials are needed for public ticker streams."
+    },
+    "kraken": {
+      "title": "Kraken",
+      "description": "Live spot-market prices streamed from Kraken WebSocket v2. External symbols use Kraken pair notation such as BTC/USD.",
+      "createHint": "Create a Kraken source for live spot prices. No credentials are needed for public ticker streams."
+    },
+    "coinbase": {
+      "title": "Coinbase",
+      "description": "Live product tickers from Coinbase Exchange. External symbols use product IDs such as BTC-USD.",
+      "createHint": "Create a Coinbase source for live exchange tickers. No credentials are needed for the public feed."
+    },
+    "alpaca": {
+      "title": "Alpaca",
+      "description": "Live US equity prices from Alpaca IEX. Requires API key credentials; external symbols use stock tickers such as AAPL.",
+      "createHint": "Create an Alpaca source for IEX equity prices. Add the API key and secret."
+    },
+    "okx": {
+      "title": "OKX",
+      "description": "Live spot tickers from OKX. External symbols use OKX instrument IDs such as BTC-USDT.",
+      "createHint": "Create an OKX source for public spot tickers. No credentials are needed for the public feed."
+    },
+    "bybit": {
+      "title": "Bybit",
+      "description": "Live tickers from Bybit v5. External symbols use Bybit symbols; category can be configured in credentials.",
+      "createHint": "Create a Bybit source for public v5 tickers. Choose the market category."
+    },
+    "oanda": {
+      "title": "OANDA",
+      "description": "Live FX pricing from OANDA v20. Requires account credentials; external symbols use instruments such as EUR_USD.",
+      "createHint": "Create an OANDA source for FX prices. Add the token, account ID, and environment."
+    },
+    "finnhub": {
+      "title": "Finnhub",
+      "description": "Live trade prices from Finnhub WebSocket. Requires an API token; external symbols use Finnhub-supported symbols. Crypto and FX need an exchange-qualified symbol such as BINANCE:ETHUSDT.",
+      "createHint": "Create a Finnhub source for live trade prices. Add the API token."
+    },
+    "byo": {
+      "title": "BYO",
+      "description": "Manual marks maintained by the operator. Use it for static FX, test marks, or feeds that are injected by another system.",
+      "createHint": "Create a manual source. After creation, add instruments and send operator-maintained prices."
+    },
+    "mock": {
+      "title": "Mock",
+      "description": "Synthetic market data for demos and local testing. It does not connect to an external venue.",
+      "createHint": "Create a synthetic source for demos and local tests."
+    }
+  },
+  "restart": {
+    "requiredTitle": "Restart needed to apply market-data changes",
+    "requiredDetail": "Saved source or instrument settings differ from the running feeds. Restart feeds to apply them.",
+    "button": "Restart feeds"
   },
   "state": {
     "enabled": "Enabled",
     "disabled": "Disabled",
+    "feedDisabled": "Feed disabled",
     "stale": "Stale",
+    "staleTooltip": "Quote older than the freshness window",
     "live": "Live",
-    "notApplied": "Not applied - restart to apply",
+    "notApplied": "Pending restart",
     "error": "Error"
   },
   "instanceError": "Error: {{message}}",
+  "settings": {
+    "title": "Connection settings",
+    "editTitle": "Edit source settings",
+    "editDescription": "Blank secret fields keep the stored value. Restart feeds to apply saved connection changes.",
+    "host": "Host",
+    "port": "Port",
+    "clientId": "Client ID",
+    "autoClientId": "Auto",
+    "marketDataType": "Market data type",
+    "secType": "Security type",
+    "exchange": "Exchange",
+    "currency": "Currency",
+    "contractSymbol": "Contract symbol",
+    "conId": "Con ID",
+    "localSymbol": "Local symbol",
+    "tradingClass": "Trading class",
+    "multiplier": "Multiplier",
+    "includeExpired": "Include expired",
+    "primaryExchange": "Primary exchange",
+    "lastTradeDate": "Expiry (YYYYMMDD)",
+    "strike": "Strike",
+    "right": "Right",
+    "apiKey": "API key",
+    "apiSecret": "API secret",
+    "getApiKeys": "Get API keys",
+    "getApiToken": "Get API token",
+    "token": "Token",
+    "accountID": "Account ID",
+    "environment": "Environment",
+    "category": "Category",
+    "keepStoredSecret": "Keep stored secret",
+    "marketData": {
+      "live": "Live",
+      "frozen": "Frozen",
+      "delayed": "Delayed",
+      "delayedFrozen": "Delayed frozen"
+    },
+    "secTypes": {
+      "STK": "Stock (STK)",
+      "CASH": "Forex (CASH)",
+      "CRYPTO": "Crypto (CRYPTO)",
+      "FUT": "Future (FUT)",
+      "IND": "Index (IND)",
+      "OPT": "Option (OPT)"
+    },
+    "rights": {
+      "C": "Call",
+      "P": "Put"
+    },
+    "environments": {
+      "practice": "Practice",
+      "live": "Live"
+    },
+    "categories": {
+      "spot": "Spot",
+      "linear": "Linear",
+      "inverse": "Inverse",
+      "option": "Option"
+    }
+  },
   "table": {
     "external": "External",
     "instrument": "Instrument",
     "manualPrice": "Manual price",
     "price": "Price",
     "asOf": "As-of",
+    "updateIntervalTooltip": "Interval since the previous update",
     "state": "State",
     "actions": "Actions"
   },
@@ -47,6 +195,11 @@
   "emptyInstruments": "No instruments configured",
   "diagnostics": {
     "title": "Problems",
+    "summary": "{{count}} active",
+    "collapsedSummary": "Problems: {{count}}",
+    "collapse": "Collapse",
+    "expand": "Open",
+    "actions": "Problem actions",
     "levelError": "error",
     "levelWarn": "warn",
     "levelInfo": "info",
@@ -56,9 +209,12 @@
     "actionRestart": "Restart feeds",
     "actionDocs": "Provider docs",
     "actionSymbols": "Valid symbols",
-    "actionRemove": "Remove instrument"
+    "actionRemove": "Remove instrument",
+    "actionRemoveTarget": "Remove {{target}}",
+    "actionLogs": "Service logs"
   },
   "references": {
+    "site": "Provider site",
     "docs": "Provider docs",
     "symbols": "Valid symbols"
   },
@@ -66,7 +222,29 @@
     "action": "Verify symbol",
     "unsupported": "This provider can't verify symbols",
     "exists": "Symbol exists",
+    "unavailable": "No fresh price for symbol",
     "notFound": "Symbol not found",
-    "didYouMean": "Did you mean {{suggestion}}?"
+    "didYouMean": "Did you mean {{suggestion}}?",
+    "failed": "Verification failed"
+  },
+  "search": {
+    "action": "Search symbols",
+    "placeholder": "Search by name or symbol",
+    "searching": "Searching…",
+    "noResults": "No matching symbols",
+    "unsupported": "This provider can't search symbols",
+    "resultLabel": "{{symbol}} · {{secType}} · {{exchange}} · {{currency}}",
+    "pick": "Use"
+  },
+  "resolve": {
+    "label": "Resolve symbol in this feed",
+    "action": "Resolve",
+    "placeholder": "Type EUR, EUR/USD, BTC, or AAPL",
+    "filterLabel": "Filter resolved symbols",
+    "filterPlaceholder": "Filter resolved symbols",
+    "searching": "Resolving…",
+    "noResults": "No matching symbols in this feed",
+    "noFilteredResults": "No results match the filter",
+    "resultLabel": "{{symbol}} · {{secType}} · {{exchange}} · {{currency}}"
   }
 }

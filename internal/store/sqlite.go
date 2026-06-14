@@ -630,7 +630,8 @@ func (s *sqliteStore) CreateMarketDataInstance(
 	)
 	if err != nil {
 		if isSQLiteUnique(err) {
-			return fmt.Errorf("market-data instance %q: %w", instance.ID, domain.ErrAlreadyExists)
+			return fmt.Errorf("market-data instance %q label %q: %w",
+				instance.ID, instance.Label, domain.ErrAlreadyExists)
 		}
 		return fmt.Errorf("store: create market-data instance: %w", err)
 	}
@@ -715,6 +716,32 @@ func (s *sqliteStore) SetMarketDataInstanceEnabled(
 	n, err := res.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("store: set market-data instance enabled rows: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("market-data instance %q: %w", id, domain.ErrNotFound)
+	}
+	return nil
+}
+
+// UpdateMarketDataInstanceSettings replaces editable settings of an instance.
+func (s *sqliteStore) UpdateMarketDataInstanceSettings(
+	ctx context.Context, id, label, credentials string,
+) error {
+	res, err := s.db.ExecContext(
+		ctx,
+		`UPDATE market_data_instances SET label = ?, credentials = ? WHERE id = ?`,
+		label, credentials, id,
+	)
+	if err != nil {
+		if isSQLiteUnique(err) {
+			return fmt.Errorf("market-data instance %q label %q: %w",
+				id, label, domain.ErrAlreadyExists)
+		}
+		return fmt.Errorf("store: update market-data instance settings: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: update market-data instance settings rows: %w", err)
 	}
 	if n == 0 {
 		return fmt.Errorf("market-data instance %q: %w", id, domain.ErrNotFound)

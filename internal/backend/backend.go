@@ -23,6 +23,8 @@ package backend
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -44,6 +46,10 @@ import (
 // instance after an upsert. The *marketdata.Manager satisfies it.
 type MarketDataRuntime interface {
 	InstanceStatuses() map[string]marketdata.InstanceRuntimeStatus
+	AppliedConfig() map[string]marketdata.AppliedInstanceConfig
+	// QuoteUpdateInterval returns the elapsed time between the two most recent
+	// ticks of the identified instrument's quote, and whether it is known yet.
+	QuoteUpdateInterval(instanceID, external string) (time.Duration, bool)
 	Restart() error
 	// PushManual delivers one instrument's operator-set manual mark into the
 	// running instance as a single quote. It is a no-op when the instance is not
@@ -299,10 +305,12 @@ type McpCommand struct {
 	Enabled bool
 }
 
-// MarketDataFreshnessTTL is the current hard-coded quote freshness window.
-// Configurable quote freshness is not yet implemented; this mirrors the
-// engine's default market-data TTL.
-const MarketDataFreshnessTTL = 10 * time.Second
+// MarketDataFreshnessTTL is the quote freshness threshold surfaced to the panel.
+// A quote older than this is flagged as stale (Stale == true in the status) but
+// is still returned so the last known price remains visible. Configurable
+// freshness is not yet implemented; it is the single market-data freshness
+// window (marketdata.FreshnessTTL) shared with engine.MarketDataFreshnessTTL.
+const MarketDataFreshnessTTL = marketdata.FreshnessTTL
 
 // MarketDataProvider is one built-in provider type the operator can configure.
 type MarketDataProvider struct {
@@ -311,11 +319,16 @@ type MarketDataProvider struct {
 }
 
 // MarketDataInstrumentStatus is one configured instrument plus its latest quote
-// snapshot, when one has been received.
+// snapshot, when one has been received. Stale is only true when both the source
+// and instrument are enabled. UpdateInterval, when non-nil, is the elapsed time
+// between the two most recent ticks of this instrument's quote, as observed by
+// the running manager; it is nil until a second tick has arrived since the last
+// (re)subscribe.
 type MarketDataInstrumentStatus struct {
-	Instrument domain.MarketDataInstrument
-	Quote      *domain.MarketDataQuote
-	Stale      bool
+	Instrument     domain.MarketDataInstrument
+	Quote          *domain.MarketDataQuote
+	UpdateInterval *time.Duration
+	Stale          bool
 }
 
 // MarketDataInstanceStatus is one configured source, all of its instruments,
@@ -323,12 +336,14 @@ type MarketDataInstrumentStatus struct {
 // "ok", or "error" (empty when no runtime is wired); Error carries the short
 // operator-facing message when State is "error". References is nil when the
 // connector exposes no help links. VerifiesSymbols is true when the provider
-// can check whether an external symbol exists in its catalogue.
+// can check whether an external symbol exists in its catalogue. SearchesSymbols
+// is true when the provider can search its catalogue for matching instruments.
 type MarketDataInstanceStatus struct {
 	Instance        domain.MarketDataInstance
 	Instruments     []MarketDataInstrumentStatus
 	References      *marketdata.ProviderReferences
 	VerifiesSymbols bool
+	SearchesSymbols bool
 	State           string
 	Error           string
 	Diagnostics     []marketdata.Diagnostic
@@ -339,6 +354,7 @@ type MarketDataStatus struct {
 	Providers        []MarketDataProvider
 	Instances        []MarketDataInstanceStatus
 	FreshnessSeconds int
+	RestartRequired  bool
 }
 
 // ListMcpAccess returns the full MCP command catalogue, each entry paired with
@@ -417,16 +433,22 @@ func (s *Service) ListMarketData(ctx context.Context) (MarketDataStatus, error) 
 	}
 
 	var runtimeStatuses map[string]marketdata.InstanceRuntimeStatus
+	var appliedConfig map[string]marketdata.AppliedInstanceConfig
 	if s.md != nil {
 		runtimeStatuses = s.md.InstanceStatuses()
+		appliedConfig = s.md.AppliedConfig()
 	}
 
 	now := time.Now().UTC()
 	statuses := make([]MarketDataInstanceStatus, 0, len(instances))
+	currentConfig := make(map[string]marketdata.AppliedInstanceConfig, len(instances))
 	for _, instance := range instances {
 		instruments, err := n.ListMarketDataInstruments(ctx, instance.ID)
 		if err != nil {
 			return MarketDataStatus{}, fmt.Errorf("backend: list market-data instruments: %w", err)
+		}
+		if instance.Enabled {
+			currentConfig[instance.ID] = marketDataAppliedConfig(instance, instruments)
 		}
 		instStatuses := make([]MarketDataInstrumentStatus, 0, len(instruments))
 		for _, instrument := range instruments {
@@ -435,10 +457,22 @@ func (s *Service) ListMarketData(ctx context.Context) (MarketDataStatus, error) 
 				q := quote
 				quotePtr = &q
 			}
+			stale := marketDataInstrumentStale(
+				instance.Enabled, instrument, quotePtr, now,
+			)
+			var interval *time.Duration
+			if s.md != nil {
+				if d, ok := s.md.QuoteUpdateInterval(
+					instance.ID, instrument.ExternalSymbol,
+				); ok {
+					interval = &d
+				}
+			}
 			instStatuses = append(instStatuses, MarketDataInstrumentStatus{
-				Instrument: instrument,
-				Quote:      quotePtr,
-				Stale:      marketDataInstrumentStale(instrument, quotePtr, now),
+				Instrument:     instrument,
+				Quote:          quotePtr,
+				UpdateInterval: interval,
+				Stale:          stale,
 			})
 		}
 		rt := runtimeStatuses[instance.ID]
@@ -448,6 +482,7 @@ func (s *Service) ListMarketData(ctx context.Context) (MarketDataStatus, error) 
 			Instruments:     instStatuses,
 			References:      rt.References,
 			VerifiesSymbols: marketdata.ProviderVerifiesSymbols(instance.Type),
+			SearchesSymbols: marketdata.ProviderSearchesSymbols(instance.Type),
 			State:           state,
 			Error:           errMsg,
 			Diagnostics:     rt.Diagnostics,
@@ -457,6 +492,7 @@ func (s *Service) ListMarketData(ctx context.Context) (MarketDataStatus, error) 
 		Providers:        marketDataProviders(),
 		Instances:        statuses,
 		FreshnessSeconds: int(MarketDataFreshnessTTL.Seconds()),
+		RestartRequired:  marketDataRestartRequired(s.md, currentConfig, appliedConfig),
 	}, nil
 }
 
@@ -472,12 +508,14 @@ func (s *Service) RestartMarketData(ctx context.Context) error {
 // MarketDataSymbolVerification is the outcome of a one-shot symbol check for
 // one instance. Supported is false when the instance's provider cannot verify
 // symbols, in which case Exists and Suggestion are zero and the call still
-// succeeds. Suggestion is a case-folded catalogue variant when the symbol was
-// not found as typed.
+// succeeds. Details carries optional provider metadata for the matched symbol.
+// Suggestion is a case-folded catalogue variant when the symbol was not found
+// as typed.
 type MarketDataSymbolVerification struct {
 	Supported  bool
 	Exists     bool
 	Suggestion string
+	Details    string
 }
 
 // VerifyMarketDataSymbol checks whether externalSymbol exists on the identified
@@ -505,13 +543,121 @@ func (s *Service) VerifyMarketDataSymbol(
 	}
 	result, supported, err := marketdata.VerifySymbol(ctx, instance, strings.TrimSpace(externalSymbol))
 	if err != nil {
-		return MarketDataSymbolVerification{}, fmt.Errorf("backend: verify market-data symbol: %w", err)
+		// A verify reaches the external provider; a provider/transport failure is
+		// an expected operational condition, not a server bug, so it is surfaced
+		// as upstream (502 + plain message) rather than a 500.
+		return MarketDataSymbolVerification{}, fmt.Errorf(
+			"%w: verify market-data symbol: %v", domain.ErrUpstream, err)
 	}
 	return MarketDataSymbolVerification{
 		Supported:  supported,
 		Exists:     result.Exists,
 		Suggestion: result.Suggestion,
+		Details:    result.Details,
 	}, nil
+}
+
+// MarketDataSymbolMatch is one contract a symbol resolve returned. Name is the
+// provider long name when available (empty otherwise); the remaining fields
+// carry the resolved contract specifics.
+type MarketDataSymbolMatch struct {
+	Symbol                       string
+	Name                         string
+	SecType                      string
+	Exchange                     string
+	PrimaryExchange              string
+	Currency                     string
+	LastTradeDateOrContractMonth string
+	Right                        string
+	Multiplier                   string
+	LocalSymbol                  string
+	TradingClass                 string
+	ConID                        string
+	Strike                       string
+}
+
+// MarketDataSymbolSearch is the outcome of a symbol search for one instance.
+// Supported is false when the instance's provider cannot search symbols, in
+// which case Matches is empty and the call still succeeds.
+type MarketDataSymbolSearch struct {
+	Supported bool
+	Matches   []MarketDataSymbolMatch
+}
+
+// MarketDataSymbolSearchInput carries the resolve criteria for one search: the
+// typed Query (the symbol) plus the contract specifics that scope the resolve.
+// Empty optional fields apply no constraint.
+type MarketDataSymbolSearchInput struct {
+	Query                        string
+	SecType                      string
+	Exchange                     string
+	Currency                     string
+	LastTradeDateOrContractMonth string
+	Right                        string
+	Strike                       string
+}
+
+// SearchMarketDataSymbols resolves the identified instance's provider catalogue
+// for contracts matching the input criteria. It loads the instance config and
+// runs a stateless probe (a fresh connector that is never subscribed), so live
+// feeds are untouched. A provider that cannot search symbols yields
+// Supported=false with no error; an error is reserved for an unknown instance or
+// a transport failure. No matches is an empty slice with Supported=true.
+func (s *Service) SearchMarketDataSymbols(
+	ctx context.Context, id string, input MarketDataSymbolSearchInput,
+) (MarketDataSymbolSearch, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return MarketDataSymbolSearch{}, fmt.Errorf("market-data instance id: %w", domain.ErrInvalid)
+	}
+	n, err := s.groupNode()
+	if err != nil {
+		return MarketDataSymbolSearch{}, err
+	}
+	instance, ok, err := n.GetMarketDataInstance(ctx, id)
+	if err != nil {
+		return MarketDataSymbolSearch{}, fmt.Errorf("backend: get market-data instance: %w", err)
+	}
+	if !ok {
+		return MarketDataSymbolSearch{}, fmt.Errorf("market-data instance %q: %w", id, domain.ErrNotFound)
+	}
+	matches, supported, err := marketdata.SearchSymbols(ctx, instance, marketdata.SymbolSearchQuery{
+		Query:                        strings.TrimSpace(input.Query),
+		SecType:                      strings.TrimSpace(input.SecType),
+		Exchange:                     strings.TrimSpace(input.Exchange),
+		Currency:                     strings.TrimSpace(input.Currency),
+		LastTradeDateOrContractMonth: strings.TrimSpace(input.LastTradeDateOrContractMonth),
+		Right:                        strings.TrimSpace(input.Right),
+		Strike:                       input.Strike,
+	})
+	if err != nil {
+		// Like verify, a resolve hits the external provider; a provider/transport
+		// failure is upstream (502 + plain message), not a 500.
+		return MarketDataSymbolSearch{}, fmt.Errorf(
+			"%w: search market-data symbols: %v", domain.ErrUpstream, err)
+	}
+	out := MarketDataSymbolSearch{Supported: supported}
+	if len(matches) > 0 {
+		out.Matches = make([]MarketDataSymbolMatch, 0, len(matches))
+		for _, match := range matches {
+			out.Matches = append(out.Matches, MarketDataSymbolMatch{
+				Symbol:                       match.Symbol,
+				Name:                         match.Name,
+				SecType:                      match.SecType,
+				Exchange:                     match.Exchange,
+				PrimaryExchange:              match.PrimaryExchange,
+				Currency:                     match.Currency,
+				LastTradeDateOrContractMonth: match.LastTradeDateOrContractMonth,
+				Right:                        match.Right,
+				Multiplier:                   match.Multiplier,
+				LocalSymbol:                  match.LocalSymbol,
+				TradingClass:                 match.TradingClass,
+				ConID:                        match.ConID,
+				Strike:                       match.Strike,
+			})
+		}
+	}
+	return out, nil
 }
 
 // marketDataInstanceState resolves one instance's operator-facing state: a
@@ -540,19 +686,107 @@ func marketDataInstanceState(
 	return status.State, ""
 }
 
+func marketDataAppliedConfig(
+	instance domain.MarketDataInstance,
+	instruments []domain.MarketDataInstrument,
+) marketdata.AppliedInstanceConfig {
+	subs := make([]marketdata.Subscription, 0, len(instruments))
+	for _, instrument := range instruments {
+		if !instrument.Enabled {
+			continue
+		}
+		subs = append(subs, marketdata.Subscription{
+			External: instrument.ExternalSymbol,
+			Base:     instrument.BaseAsset,
+			Quote:    instrument.QuoteAsset,
+		})
+	}
+	return marketdata.AppliedInstanceConfig{
+		Type:          instance.Type,
+		Subscriptions: subs,
+	}
+}
+
+func marketDataRestartRequired(
+	md MarketDataRuntime,
+	current, applied map[string]marketdata.AppliedInstanceConfig,
+) bool {
+	if md == nil {
+		return false
+	}
+	if len(current) != len(applied) {
+		return true
+	}
+	for id, currentConfig := range current {
+		appliedConfig, ok := applied[id]
+		if !ok {
+			return true
+		}
+		if currentConfig.Type != appliedConfig.Type {
+			return true
+		}
+		if !sameMarketDataSubscriptions(
+			currentConfig.Subscriptions, appliedConfig.Subscriptions,
+		) {
+			return true
+		}
+	}
+	return false
+}
+
+func sameMarketDataSubscriptions(a, b []marketdata.Subscription) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	left := marketDataSubscriptionKeys(a)
+	right := marketDataSubscriptionKeys(b)
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func marketDataSubscriptionKeys(subs []marketdata.Subscription) []string {
+	keys := make([]string, 0, len(subs))
+	for _, sub := range subs {
+		keys = append(keys, sub.External+"\x00"+sub.Base+"\x00"+sub.Quote)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // CreateMarketDataInstance validates and persists one source instance.
 func (s *Service) CreateMarketDataInstance(
 	ctx context.Context, instance domain.MarketDataInstance,
 ) error {
-	instance.ID = strings.TrimSpace(instance.ID)
 	instance.Type = strings.TrimSpace(instance.Type)
 	instance.Label = strings.TrimSpace(instance.Label)
 	instance.Credentials = strings.TrimSpace(instance.Credentials)
-	if err := validateMarketDataInstance(instance); err != nil {
-		return err
+	title, ok := marketDataProviderTitle(instance.Type)
+	if !ok {
+		return fmt.Errorf("market-data provider %q: %w", instance.Type, domain.ErrInvalid)
+	}
+	if instance.Label == "" {
+		instance.Label = title
 	}
 	n, err := s.groupNode()
 	if err != nil {
+		return err
+	}
+	instances, err := n.ListMarketDataInstances(ctx)
+	if err != nil {
+		return fmt.Errorf("backend: list market-data instances: %w", err)
+	}
+	if marketDataLabelTaken(instances, instance.Label) {
+		return fmt.Errorf("market-data source label %q: %w", instance.Label, domain.ErrAlreadyExists)
+	}
+	instance.ID, err = newMarketDataInstanceID(instance.Type)
+	if err != nil {
+		return err
+	}
+	if err := validateMarketDataInstance(instance); err != nil {
 		return err
 	}
 	return n.CreateMarketDataInstance(ctx, instance, auth.CallerFromContext(ctx))
@@ -571,6 +805,53 @@ func (s *Service) SetMarketDataInstanceEnabled(
 		return err
 	}
 	return n.SetMarketDataInstanceEnabled(ctx, id, enabled, auth.CallerFromContext(ctx))
+}
+
+// UpdateMarketDataInstanceSettings validates and persists editable source
+// settings. Empty values in the credentials update preserve existing keys so
+// the UI can submit blank password fields without fetching stored secrets.
+func (s *Service) UpdateMarketDataInstanceSettings(
+	ctx context.Context, id, label, credentials string,
+) error {
+	id = strings.TrimSpace(id)
+	label = strings.TrimSpace(label)
+	credentials = strings.TrimSpace(credentials)
+	if id == "" {
+		return fmt.Errorf("market-data instance id: %w", domain.ErrInvalid)
+	}
+	n, err := s.groupNode()
+	if err != nil {
+		return err
+	}
+	instance, ok, err := n.GetMarketDataInstance(ctx, id)
+	if err != nil {
+		return fmt.Errorf("backend: get market-data instance: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("market-data instance %q: %w", id, domain.ErrNotFound)
+	}
+	if label == "" {
+		label = instance.Label
+	}
+	instances, err := n.ListMarketDataInstances(ctx)
+	if err != nil {
+		return fmt.Errorf("backend: list market-data instances: %w", err)
+	}
+	if marketDataLabelTakenExcept(instances, id, label) {
+		return fmt.Errorf("market-data source label %q: %w", label, domain.ErrAlreadyExists)
+	}
+	mergedCredentials, err := mergeMarketDataCredentials(instance.Credentials, credentials)
+	if err != nil {
+		return err
+	}
+	instance.Label = label
+	instance.Credentials = mergedCredentials
+	if err := validateMarketDataInstance(instance); err != nil {
+		return err
+	}
+	return n.UpdateMarketDataInstanceSettings(
+		ctx, id, instance.Label, instance.Credentials, auth.CallerFromContext(ctx),
+	)
 }
 
 // DeleteMarketDataInstance removes one source instance and its instruments.
@@ -653,21 +934,111 @@ func (s *Service) DeleteMarketDataInstrument(
 
 func marketDataProviders() []MarketDataProvider {
 	return []MarketDataProvider{
-		{Type: domain.MarketDataProviderBYO, Title: "Bring your own"},
+		{Type: domain.MarketDataProviderIB, Title: "Interactive Brokers"},
 		{Type: domain.MarketDataProviderBinance, Title: "Binance"},
+		{Type: domain.MarketDataProviderKraken, Title: "Kraken"},
+		{Type: domain.MarketDataProviderCoinbase, Title: "Coinbase"},
+		{Type: domain.MarketDataProviderAlpaca, Title: "Alpaca"},
+		{Type: domain.MarketDataProviderOKX, Title: "OKX"},
+		{Type: domain.MarketDataProviderBybit, Title: "Bybit"},
+		{Type: domain.MarketDataProviderOANDA, Title: "OANDA"},
+		{Type: domain.MarketDataProviderFinnhub, Title: "Finnhub"},
+		{Type: domain.MarketDataProviderBYO, Title: "BYO"},
 		{Type: domain.MarketDataProviderMock, Title: "Mock"},
 	}
+}
+
+func marketDataProviderTitle(typ string) (string, bool) {
+	for _, provider := range marketDataProviders() {
+		if typ == provider.Type {
+			return provider.Title, true
+		}
+	}
+	return "", false
+}
+
+func newMarketDataInstanceID(typ string) (string, error) {
+	var buf [8]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return "", fmt.Errorf("market-data instance id: %w", err)
+	}
+	return "md-" + typ + "-" + hex.EncodeToString(buf[:]), nil
+}
+
+func marketDataLabelTaken(instances []domain.MarketDataInstance, label string) bool {
+	label = strings.TrimSpace(label)
+	for _, instance := range instances {
+		if strings.EqualFold(strings.TrimSpace(instance.Label), label) {
+			return true
+		}
+	}
+	return false
+}
+
+func marketDataLabelTakenExcept(
+	instances []domain.MarketDataInstance, id, label string,
+) bool {
+	label = strings.TrimSpace(label)
+	for _, instance := range instances {
+		if instance.ID == id {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(instance.Label), label) {
+			return true
+		}
+	}
+	return false
+}
+
+func mergeMarketDataCredentials(existing, update string) (string, error) {
+	existing = strings.TrimSpace(existing)
+	update = strings.TrimSpace(update)
+	if update == "" {
+		return existing, nil
+	}
+	merged := make(map[string]any)
+	if existing != "" {
+		if err := json.Unmarshal([]byte(existing), &merged); err != nil {
+			return "", fmt.Errorf("market-data stored credentials: %w", domain.ErrInvalid)
+		}
+	}
+	var incoming map[string]any
+	if err := json.Unmarshal([]byte(update), &incoming); err != nil {
+		return "", fmt.Errorf("market-data credentials: %w", domain.ErrInvalid)
+	}
+	for key, value := range incoming {
+		if text, ok := value.(string); ok && strings.TrimSpace(text) == "" {
+			if _, exists := merged[key]; exists {
+				continue
+			}
+		}
+		merged[key] = value
+	}
+	if len(merged) == 0 {
+		return "", nil
+	}
+	out, err := json.Marshal(merged)
+	if err != nil {
+		return "", fmt.Errorf("market-data credentials: %w", err)
+	}
+	return string(out), nil
 }
 
 func validateMarketDataInstance(instance domain.MarketDataInstance) error {
 	if instance.ID == "" {
 		return fmt.Errorf("market-data instance id: %w", domain.ErrInvalid)
 	}
+	if instance.Label == "" {
+		return fmt.Errorf("market-data source label: %w", domain.ErrInvalid)
+	}
 	if !marketDataProviderKnown(instance.Type) {
 		return fmt.Errorf("market-data provider %q: %w", instance.Type, domain.ErrInvalid)
 	}
 	if instance.Credentials != "" && !json.Valid([]byte(instance.Credentials)) {
 		return fmt.Errorf("market-data credentials: %w", domain.ErrInvalid)
+	}
+	if err := marketdata.ValidateProviderConfig(instance); err != nil {
+		return fmt.Errorf("market-data credentials: %v: %w", err, domain.ErrInvalid)
 	}
 	return nil
 }
@@ -698,9 +1069,12 @@ func marketDataProviderKnown(typ string) bool {
 }
 
 func marketDataInstrumentStale(
-	instrument domain.MarketDataInstrument, quote *domain.MarketDataQuote, now time.Time,
+	instanceEnabled bool,
+	instrument domain.MarketDataInstrument,
+	quote *domain.MarketDataQuote,
+	now time.Time,
 ) bool {
-	if !instrument.Enabled {
+	if !instanceEnabled || !instrument.Enabled {
 		return false
 	}
 	if quote == nil {

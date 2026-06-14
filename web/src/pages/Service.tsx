@@ -15,12 +15,21 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { ExternalLink, Loader2, RefreshCw } from "lucide-react";
+import {
+  Download,
+  ExternalLink,
+  Loader2,
+  RefreshCw,
+  RotateCcw,
+} from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 
+import { restartMarketData, serviceLogsDownloadUrl } from "@/api/client";
 import type { ServiceInfo } from "@/api/types";
 import { useService } from "@/api/useService";
+import { useServiceLogs } from "@/api/useServiceLogs";
 import { useMcpAccess } from "@/api/useMcpAccess";
 import { ConnectAgent } from "@/components/ConnectAgent";
 import { ErrorState } from "@/components/PageStates";
@@ -80,9 +89,64 @@ function parseProfileRows(raw: string): ProfileRow[] {
   return rows;
 }
 
+/**
+ * The captured service log tail with a download affordance. The recent lines
+ * render in a height-capped monospace block (oldest first); the Download button
+ * fetches the full buffer over the same-origin download route.
+ */
+function LogsCard() {
+  const { t } = useTranslation("service");
+  const { t: tc } = useTranslation();
+  const { load, reload } = useServiceLogs();
+  const refreshing = load.state === "loading";
+  const lines = load.state === "ready" ? load.data.lines : [];
+
+  return (
+    <Card id="logs" className="scroll-mt-4">
+      <CardHeader className="flex-row items-center justify-between gap-2">
+        <CardTitle>{t("logs.title")}</CardTitle>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={reload}
+            disabled={refreshing}
+            aria-label={t("logs.refreshAriaLabel")}
+          >
+            {refreshing ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="h-3.5 w-3.5" />
+            )}
+            {tc("actions.refresh")}
+          </Button>
+          <Button asChild variant="ghost" size="sm">
+            <a href={serviceLogsDownloadUrl} download>
+              <Download className="h-3.5 w-3.5" />
+              {t("logs.download")}
+            </a>
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {load.state === "error" ? (
+          <p className="text-xs text-muted-lt italic">{load.error}</p>
+        ) : lines.length === 0 ? (
+          <p className="text-xs text-muted-lt italic">{t("logs.empty")}</p>
+        ) : (
+          <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-all rounded bg-surface-2 p-3 font-mono text-xs text-muted">
+            {lines.join("\n")}
+          </pre>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function ServiceCard({ info }: { info: ServiceInfo }) {
   const { t } = useTranslation("service");
   const { t: tc } = useTranslation();
+  const { t: tmcp } = useTranslation("mcp");
   const { load: mcpLoad } = useMcpAccess();
   const mcpCommands = mcpLoad.state === "ready" ? mcpLoad.data : null;
 
@@ -116,7 +180,23 @@ function ServiceCard({ info }: { info: ServiceInfo }) {
         <CardContent>
           <StatRow
             label={t("engine.version")}
-            value={info.engineVersion || tc("value.none")}
+            mono={false}
+            value={
+              <span className="flex flex-wrap items-center gap-2">
+                <span className="nums font-mono">
+                  {info.engineVersion || tc("value.none")}
+                </span>
+                <a
+                  href="https://github.com/openpitkit/pit?officer"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-xs text-accent hover:underline"
+                >
+                  {t("engine.sdk")}
+                  <ExternalLink className="h-3 w-3 opacity-70" />
+                </a>
+              </span>
+            }
           />
           <StatRow
             label={t("engine.buildPosture")}
@@ -258,7 +338,9 @@ function ServiceCard({ info }: { info: ServiceInfo }) {
                         {cmd.name}
                       </span>
                       <span className="text-muted-lt">
-                        {cmd.agentDescription || tc("value.none")}
+                        {tmcp(`command.${cmd.name}.description`, {
+                          defaultValue: cmd.agentDescription || tc("value.none"),
+                        })}
                       </span>
                     </div>
                   ))}
@@ -269,6 +351,8 @@ function ServiceCard({ info }: { info: ServiceInfo }) {
           </div>
         </CardContent>
       </Card>
+
+      <LogsCard />
     </div>
   );
 }
@@ -276,27 +360,71 @@ function ServiceCard({ info }: { info: ServiceInfo }) {
 export function Service() {
   const { t } = useTranslation("service");
   const { t: tc } = useTranslation();
+  const { t: tm } = useTranslation("marketData");
   const { load, reload } = useService();
+  const location = useLocation();
+  const [restarting, setRestarting] = useState(false);
+  const scrolledToLogs = useRef(false);
   const refreshing = load.state === "loading";
+
+  useEffect(() => {
+    if (location.hash !== "#logs") {
+      scrolledToLogs.current = false;
+      return;
+    }
+    if (scrolledToLogs.current || load.state !== "ready") {
+      return;
+    }
+    scrolledToLogs.current = true;
+    window.requestAnimationFrame(() => {
+      document.getElementById("logs")?.scrollIntoView({ block: "start" });
+    });
+  }, [load.state, location.hash]);
+  const restartFeeds = async () => {
+    setRestarting(true);
+    try {
+      await restartMarketData();
+    } finally {
+      setRestarting(false);
+    }
+  };
 
   return (
     <Page
       title={t("title")}
       actions={
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={reload}
-          disabled={refreshing}
-          aria-label={t("refreshAriaLabel")}
-        >
-          {refreshing ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <RefreshCw className="h-3.5 w-3.5" />
-          )}
-          {tc("actions.refresh")}
-        </Button>
+        <>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              void restartFeeds();
+            }}
+            disabled={restarting}
+            aria-label={t("restartFeedsAriaLabel")}
+          >
+            {restarting ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RotateCcw className="h-3.5 w-3.5" />
+            )}
+            {tm("actions.restart")}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={reload}
+            disabled={refreshing}
+            aria-label={t("refreshAriaLabel")}
+          >
+            {refreshing ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="h-3.5 w-3.5" />
+            )}
+            {tc("actions.refresh")}
+          </Button>
+        </>
       }
     >
       {load.state === "loading" && (

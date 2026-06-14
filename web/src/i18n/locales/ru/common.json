@@ -25,6 +25,7 @@
     "orders": "Ордера",
     "policies": "Политики",
     "audit": "Аудит",
+    "restartRequired": "Нужен рестарт",
     "mcpAccess": "Доступ MCP",
     "marketData": "Рыночные данные",
     "service": "Сервис"
@@ -34,6 +35,19 @@
     "logoAriaLabel": "Логотип Pit",
     "controlPlane": "Контур контроля",
     "nonRelease": "не-релиз"
+  },
+  "about": {
+    "title": "О продукте",
+    "description": "Pit Officer - локальный контур контроля pre-trade risk.",
+    "product": "Продукт",
+    "copyrightLabel": "Копирайт",
+    "copyright": "Copyright The Pit Project Owners. All rights reserved.",
+    "links": {
+      "website": "Сайт Officer",
+      "issues": "Issue tracker",
+      "discussions": "GitHub discussions",
+      "openpit": "Сайт OpenPit"
+    }
   },
   "display": {
     "density": {

@@ -47,6 +47,12 @@ var (
 	// (for example adding or removing a barrier where only retuning is
 	// supported) wraps this sentinel instead of silently rebuilding.
 	ErrNotImplemented = errors.New("not implemented")
+	// ErrUpstream marks a failure to reach or get a usable answer from an
+	// external provider (e.g. a market-data REST call returning 403/429 or
+	// timing out). It is an expected operational condition, not a server bug, so
+	// handlers surface it as a 502 with a plain message instead of a 500
+	// "unhandled internal error".
+	ErrUpstream = errors.New("upstream provider error")
 )
 
 // Policy identifiers.
@@ -251,6 +257,21 @@ func ValidateMarketDataMark(mark string) error {
 		return nil
 	}
 	return validatePositiveDecimal(mark)
+}
+
+// ValidateMarketDataStrike returns an error wrapping ErrInvalid when strike is a
+// non-empty, non-decimal search criterion (e.g. "abc", "NaN", "Inf"). An empty
+// string is valid and applies no constraint. Unlike a mark, a strike is a search
+// filter rather than a price, so it is checked for decimal syntax only; zero and
+// negative values are not rejected here, mirroring the connector's accepted form.
+func ValidateMarketDataStrike(strike string) error {
+	if strike == "" {
+		return nil
+	}
+	if _, err := decimal.NewFromString(strike); err != nil {
+		return fmt.Errorf("strike %q is not a valid decimal: %w", strike, ErrInvalid)
+	}
+	return nil
 }
 
 // validateAsset returns an error when the asset string is not well-formed:

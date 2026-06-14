@@ -39,34 +39,37 @@ import (
 
 // fakeService is a fake Service for handler tests.
 type fakeService struct {
-	accounts    []domain.Account
-	limits      []domain.Limit
-	auditRows   []domain.AuditRow
-	groups      []domain.AccountGroup
-	balances    []domain.Balance
-	adjustments []domain.AccountAdjustmentRecord
-	orders      []domain.Order
-	trades      []domain.Trade
-	orderDetail domain.OrderDetail
-	adjustment  domain.AccountAdjustmentRecord
-	submitOrder domain.Order
-	checkResult domain.CheckResult
-	overview    backend.Overview
-	serviceInfo backend.ServiceInfo
-	marketData  backend.MarketDataStatus
-	mdVerify    backend.MarketDataSymbolVerification
-	mdVerifyErr error
-	status      backend.Status
-	statusErr   error
-	createErr   error
-	blockErr    error
-	unblockErr  error
-	stateErr    error
-	listLimErr  error
-	putLimErr   error
-	delLimErr   error
-	auditErr    error
-	groupErr    error
+	accounts      []domain.Account
+	limits        []domain.Limit
+	auditRows     []domain.AuditRow
+	groups        []domain.AccountGroup
+	balances      []domain.Balance
+	adjustments   []domain.AccountAdjustmentRecord
+	orders        []domain.Order
+	trades        []domain.Trade
+	orderDetail   domain.OrderDetail
+	adjustment    domain.AccountAdjustmentRecord
+	submitOrder   domain.Order
+	checkResult   domain.CheckResult
+	overview      backend.Overview
+	serviceInfo   backend.ServiceInfo
+	marketData    backend.MarketDataStatus
+	mdVerify      backend.MarketDataSymbolVerification
+	mdVerifyErr   error
+	mdSearch      backend.MarketDataSymbolSearch
+	mdSearchInput backend.MarketDataSymbolSearchInput
+	mdSearchErr   error
+	status        backend.Status
+	statusErr     error
+	createErr     error
+	blockErr      error
+	unblockErr    error
+	stateErr      error
+	listLimErr    error
+	putLimErr     error
+	delLimErr     error
+	auditErr      error
+	groupErr      error
 
 	// Error fields for list handlers whose service methods otherwise return a
 	// hardcoded nil; default nil so existing tests are unaffected.
@@ -150,13 +153,22 @@ func (f *fakeService) ListMarketData(_ context.Context) (backend.MarketDataStatu
 func (f *fakeService) CreateMarketDataInstance(
 	_ context.Context, instance domain.MarketDataInstance,
 ) error {
-	f.mdCalls = append(f.mdCalls, "create:"+instance.ID)
+	f.mdCalls = append(f.mdCalls,
+		fmt.Sprintf("create:%s:%s:%s:%v",
+			instance.Type, instance.Label, instance.Credentials, instance.Enabled))
 	return f.stateErr
 }
 func (f *fakeService) SetMarketDataInstanceEnabled(
 	_ context.Context, id string, enabled bool,
 ) error {
 	f.mdCalls = append(f.mdCalls, fmt.Sprintf("instance:%s:%v", id, enabled))
+	return f.stateErr
+}
+func (f *fakeService) UpdateMarketDataInstanceSettings(
+	_ context.Context, id, label, credentials string,
+) error {
+	f.mdCalls = append(f.mdCalls,
+		fmt.Sprintf("settings:%s:%s:%s", id, label, credentials))
 	return f.stateErr
 }
 func (f *fakeService) DeleteMarketDataInstance(_ context.Context, id string) error {
@@ -187,6 +199,13 @@ func (f *fakeService) VerifyMarketDataSymbol(
 ) (backend.MarketDataSymbolVerification, error) {
 	f.mdCalls = append(f.mdCalls, "verify-symbol:"+id+"/"+externalSymbol)
 	return f.mdVerify, f.mdVerifyErr
+}
+func (f *fakeService) SearchMarketDataSymbols(
+	_ context.Context, id string, input backend.MarketDataSymbolSearchInput,
+) (backend.MarketDataSymbolSearch, error) {
+	f.mdCalls = append(f.mdCalls, "search-symbols:"+id+"/"+input.Query)
+	f.mdSearchInput = input
+	return f.mdSearch, f.mdSearchErr
 }
 func (f *fakeService) SetAccountGroup(_ context.Context, _ domain.AccountID, _ string) error {
 	return f.stateErr

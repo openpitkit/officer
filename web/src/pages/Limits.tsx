@@ -193,8 +193,7 @@ function PoliciesTable({
   const { t } = useTranslation("policies");
   const { t: tc } = useTranslation();
   return (
-    <Card>
-      <Table>
+    <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead>{t("table.policy")}</TableHead>
@@ -250,8 +249,7 @@ function PoliciesTable({
             </TableRow>
           ))}
         </TableBody>
-      </Table>
-    </Card>
+    </Table>
   );
 }
 

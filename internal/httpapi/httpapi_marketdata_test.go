@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"go.openpit.dev/officer/internal/backend"
@@ -39,15 +40,17 @@ func sampleMarketData() backend.MarketDataStatus {
 		Instances: []backend.MarketDataInstanceStatus{
 			{
 				Instance: domain.MarketDataInstance{
-					ID:      "bn-1",
-					Type:    "binance",
-					Label:   "Primary",
-					Enabled: true,
+					ID:          "bn-1",
+					Type:        "finnhub",
+					Label:       "Primary",
+					Credentials: `{"token":"secret"}`,
+					Enabled:     true,
 				},
 				State: "ok",
 			},
 		},
 		FreshnessSeconds: 30,
+		RestartRequired:  true,
 	}
 }
 
@@ -81,8 +84,18 @@ func TestListMarketData_OK(t *testing.T) {
 	if inst["id"] != "bn-1" || inst["state"] != "ok" {
 		t.Fatalf("unexpected instance: %v", inst)
 	}
+	if inst["credentials"] != "" {
+		t.Fatalf("credentials = %q, want redacted empty string", inst["credentials"])
+	}
+	secrets, _ := inst["secrets"].(map[string]any)
+	if secrets["token"] != true {
+		t.Fatalf("secret state = %v, want token=true", secrets)
+	}
 	if md["freshnessSeconds"].(float64) != 30 {
 		t.Fatalf("want freshnessSeconds=30, got %v", md["freshnessSeconds"])
+	}
+	if md["restartRequired"] != true {
+		t.Fatalf("want restartRequired=true, got %v", md["restartRequired"])
 	}
 }
 
@@ -151,7 +164,7 @@ func TestCreateMarketDataInstance_Created(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bytes.NewBufferString(
-		`{"id":"bn-2","type":"binance","label":"Backup","enabled":true}`)
+		`{"type":"ib","label":"Backup","credentials":"{\"host\":\"127.0.0.1\",\"port\":7496}","enabled":true}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/market-data/instances", body))
@@ -162,8 +175,9 @@ func TestCreateMarketDataInstance_Created(t *testing.T) {
 	if _, ok := m["marketData"].(map[string]any); !ok {
 		t.Fatalf("want marketData object, got %v", m["marketData"])
 	}
-	// The instance id off the decoded body reaches the service verbatim.
-	if len(svc.mdCalls) != 1 || svc.mdCalls[0] != "create:bn-2" {
+	// The public create request carries no instance id; the backend assigns it.
+	want := `create:ib:Backup:{"host":"127.0.0.1","port":7496}:true`
+	if len(svc.mdCalls) != 1 || svc.mdCalls[0] != want {
 		t.Fatalf("unexpected service calls: %v", svc.mdCalls)
 	}
 }
@@ -197,7 +211,7 @@ func TestCreateMarketDataInstance_ServiceError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := bytes.NewBufferString(`{"id":"bn-2","type":"binance"}`)
+	body := bytes.NewBufferString(`{"type":"binance"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/market-data/instances", body))
@@ -207,6 +221,65 @@ func TestCreateMarketDataInstance_ServiceError(t *testing.T) {
 	errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
 	if errObj["code"] != "validation" {
 		t.Fatalf("want code=validation, got %v", errObj["code"])
+	}
+}
+
+// --- PUT /market-data/instances/{id}/settings -------------------------------
+
+func TestUpdateMarketDataInstanceSettings_OK(t *testing.T) {
+	svc := &fakeService{marketData: sampleMarketData()}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(
+		`{"label":"Primary IB","credentials":"{\"host\":\"127.0.0.1\",\"clientId\":7}"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut,
+		"/api/v1/market-data/instances/ib-1/settings", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	if _, ok := m["marketData"].(map[string]any); !ok {
+		t.Fatalf("want marketData object, got %v", m["marketData"])
+	}
+	want := `settings:ib-1:Primary IB:{"host":"127.0.0.1","clientId":7}`
+	if len(svc.mdCalls) != 1 || svc.mdCalls[0] != want {
+		t.Fatalf("unexpected service calls: %v", svc.mdCalls)
+	}
+}
+
+func TestUpdateMarketDataInstanceSettings_InvalidJSON(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut,
+		"/api/v1/market-data/instances/ib-1/settings",
+		bytes.NewBufferString(`{bad`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+	if len(svc.mdCalls) != 0 {
+		t.Fatalf("invalid JSON must not reach service: %v", svc.mdCalls)
+	}
+}
+
+func TestUpdateMarketDataInstanceSettings_NotFound(t *testing.T) {
+	svc := &fakeService{stateErr: domain.ErrNotFound}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut,
+		"/api/v1/market-data/instances/missing/settings",
+		bytes.NewBufferString(`{"label":"Missing","credentials":"{}"}`)))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d", rec.Code)
 	}
 }
 
@@ -539,7 +612,7 @@ func TestVerifyMarketDataSymbol_Exists(t *testing.T) {
 	// suggestion (omitempty drops the field).
 	svc := &fakeService{
 		mdVerify: backend.MarketDataSymbolVerification{
-			Supported: true, Exists: true,
+			Supported: true, Exists: true, Details: "APPLE INC, Common Stock",
 		},
 	}
 	r, err := newRouter(svc)
@@ -559,6 +632,9 @@ func TestVerifyMarketDataSymbol_Exists(t *testing.T) {
 	}
 	if _, ok := v["suggestion"]; ok {
 		t.Fatalf("want suggestion omitted, got %v", v["suggestion"])
+	}
+	if v["details"] != "APPLE INC, Common Stock" {
+		t.Fatalf("want details, got %v", v["details"])
 	}
 	if len(svc.mdCalls) != 1 || svc.mdCalls[0] != "verify-symbol:bn-1/BTCUSDT" {
 		t.Fatalf("unexpected service calls: %v", svc.mdCalls)
@@ -609,6 +685,37 @@ func TestVerifyMarketDataSymbol_ServiceError(t *testing.T) {
 	}
 }
 
+func TestVerifyMarketDataSymbol_Upstream(t *testing.T) {
+	// A provider/transport failure wraps domain.ErrUpstream and must map to a
+	// 502/upstream with a plain message, not a 500 "unhandled internal error",
+	// so the operator gets an actionable reaction instead of a cryptic failure.
+	svc := &fakeService{
+		mdVerifyErr: fmt.Errorf(
+			"%w: verify market-data symbol: finnhub quote: unexpected status 403",
+			domain.ErrUpstream,
+		),
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"externalSymbol":"EUR.WA"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/api/v1/market-data/instances/bn-1/verify-symbol", body))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("want 502, got %d", rec.Code)
+	}
+	errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
+	if errObj["code"] != "upstream" {
+		t.Fatalf("want code=upstream, got %v", errObj["code"])
+	}
+	msg, _ := errObj["message"].(string)
+	if strings.Contains(msg, "403") || strings.Contains(msg, "finnhub") {
+		t.Fatalf("message leaks provider jargon: %q", msg)
+	}
+}
+
 func TestVerifyMarketDataSymbol_NotFound(t *testing.T) {
 	// A wrapped ErrNotFound (e.g. unknown instance id) maps to 404/not_found.
 	svc := &fakeService{
@@ -628,5 +735,272 @@ func TestVerifyMarketDataSymbol_NotFound(t *testing.T) {
 	errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
 	if errObj["code"] != "not_found" {
 		t.Fatalf("want code=not_found, got %v", errObj["code"])
+	}
+}
+
+func TestMarketDataSafeSettings_IBExposesContracts(t *testing.T) {
+	// Per-instrument IB contract overrides carry no secrets, so contracts are
+	// exposed verbatim through the safe settings. The user-facing contractDefaults
+	// is no longer a setting and is never surfaced even if present in credentials.
+	instance := domain.MarketDataInstance{
+		Type: domain.MarketDataProviderIB,
+		Credentials: `{
+			"host": "127.0.0.1",
+			"clientId": 7,
+			"contractDefaults": {"secType": "STK", "exchange": "SMART"},
+			"contracts": {"AAPL": {"secType": "STK", "primaryExchange": "NASDAQ"}}
+		}`,
+	}
+	settings := marketDataSafeSettings(instance)
+	if _, ok := settings["contractDefaults"]; ok {
+		t.Fatalf("contractDefaults present, want absent: %v", settings["contractDefaults"])
+	}
+	contracts, ok := settings["contracts"].(map[string]any)
+	if !ok {
+		t.Fatalf("contracts = %v", settings["contracts"])
+	}
+	aapl, ok := contracts["AAPL"].(map[string]any)
+	if !ok || aapl["secType"] != "STK" || aapl["primaryExchange"] != "NASDAQ" {
+		t.Fatalf("contracts[AAPL] = %v", contracts["AAPL"])
+	}
+}
+
+func TestMarketDataSafeSettings_IBOmitsAbsentContracts(t *testing.T) {
+	// With no contract overrides stored, the contracts key is absent
+	// (copyObjectSetting only copies non-empty maps).
+	instance := domain.MarketDataInstance{
+		Type:        domain.MarketDataProviderIB,
+		Credentials: `{"host": "127.0.0.1", "clientId": 7}`,
+	}
+	settings := marketDataSafeSettings(instance)
+	if _, ok := settings["contracts"]; ok {
+		t.Fatalf("contracts present, want absent: %v", settings)
+	}
+}
+
+// --- POST /market-data/instances/{id}/search-symbols ------------------------
+
+func TestSearchMarketDataSymbols_OK(t *testing.T) {
+	// Happy path: supported=true with one resolved contract; the secType/exchange/
+	// currency criteria reach the service and the match round-trips through the
+	// DTO with its contract specifics.
+	svc := &fakeService{
+		mdSearch: backend.MarketDataSymbolSearch{
+			Supported: true,
+			Matches: []backend.MarketDataSymbolMatch{{
+				Symbol:       "BTC",
+				Name:         "Bitcoin",
+				SecType:      "CRYPTO",
+				Exchange:     "PAXOS",
+				Currency:     "USD",
+				ConID:        "12345",
+				LocalSymbol:  "BTC.USD",
+				TradingClass: "BTC",
+			}},
+		},
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(
+		`{"query":"BTC","secType":"CRYPTO","exchange":"PAXOS","currency":"USD"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/api/v1/market-data/instances/bn-1/search-symbols", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	out := bodyMap(t, rec.Result())
+	if out["supported"] != true {
+		t.Fatalf("want supported=true, got %v", out["supported"])
+	}
+	matches, _ := out["matches"].([]any)
+	if len(matches) != 1 {
+		t.Fatalf("want 1 match, got %v", out["matches"])
+	}
+	match, _ := matches[0].(map[string]any)
+	if match["symbol"] != "BTC" || match["secType"] != "CRYPTO" ||
+		match["exchange"] != "PAXOS" || match["currency"] != "USD" ||
+		match["localSymbol"] != "BTC.USD" {
+		t.Fatalf("unexpected match: %v", match)
+	}
+	if svc.mdSearchInput.SecType != "CRYPTO" ||
+		svc.mdSearchInput.Exchange != "PAXOS" ||
+		svc.mdSearchInput.Currency != "USD" {
+		t.Fatalf("decoded search input = %+v", svc.mdSearchInput)
+	}
+	if len(svc.mdCalls) != 1 || svc.mdCalls[0] != "search-symbols:bn-1/BTC" {
+		t.Fatalf("unexpected service calls: %v", svc.mdCalls)
+	}
+}
+
+func TestSearchMarketDataSymbols_InvalidJSON(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/api/v1/market-data/instances/bn-1/search-symbols",
+		bytes.NewBufferString(`{bad`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+	errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
+	if errObj["code"] != "validation" {
+		t.Fatalf("want code=validation, got %v", errObj["code"])
+	}
+	if len(svc.mdCalls) != 0 {
+		t.Fatalf("invalid JSON must not reach service: %v", svc.mdCalls)
+	}
+}
+
+func TestSearchMarketDataSymbols_EmptyQuery(t *testing.T) {
+	// An empty (whitespace-only) query is a validation error and never reaches
+	// the service.
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"query":"   ","secType":"STK"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/api/v1/market-data/instances/bn-1/search-symbols", body))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+	errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
+	if errObj["code"] != "validation" {
+		t.Fatalf("want code=validation, got %v", errObj["code"])
+	}
+	if len(svc.mdCalls) != 0 {
+		t.Fatalf("empty query must not reach service: %v", svc.mdCalls)
+	}
+}
+
+func TestSearchMarketDataSymbols_ServiceError(t *testing.T) {
+	// A generic service error (e.g. TWS unreachable) maps to 500/internal.
+	svc := &fakeService{mdSearchErr: fmt.Errorf("boom")}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"query":"AAPL"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/api/v1/market-data/instances/bn-1/search-symbols", body))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d", rec.Code)
+	}
+	errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
+	if errObj["code"] != "internal" {
+		t.Fatalf("want code=internal, got %v", errObj["code"])
+	}
+}
+
+func TestSearchMarketDataSymbols_NotFound(t *testing.T) {
+	// A wrapped ErrNotFound (unknown instance id) maps to 404/not_found.
+	svc := &fakeService{
+		mdSearchErr: fmt.Errorf("instance %q: %w", "bn-x", domain.ErrNotFound),
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"query":"AAPL"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/api/v1/market-data/instances/bn-x/search-symbols", body))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d", rec.Code)
+	}
+	errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
+	if errObj["code"] != "not_found" {
+		t.Fatalf("want code=not_found, got %v", errObj["code"])
+	}
+}
+
+func TestSearchMarketDataSymbols_InvalidStrike(t *testing.T) {
+	// A malformed client-supplied strike is a pure input error: the boundary
+	// rejects it as 400/validation and the request never reaches the service, so
+	// it cannot be mislabelled as a 502 upstream/provider failure.
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"query":"AAPL","secType":"OPT","strike":"abc"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/api/v1/market-data/instances/bn-1/search-symbols", body))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+	errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
+	if errObj["code"] != "validation" {
+		t.Fatalf("want code=validation, got %v", errObj["code"])
+	}
+	msg, _ := errObj["message"].(string)
+	if !strings.Contains(msg, "strike") {
+		t.Fatalf("message should name the offending field: %q", msg)
+	}
+	if len(svc.mdCalls) != 0 {
+		t.Fatalf("invalid strike must not reach service: %v", svc.mdCalls)
+	}
+}
+
+func TestSearchMarketDataSymbols_NonFiniteStrike(t *testing.T) {
+	// A non-finite strike (e.g. "NaN", "Inf") is also a client input error and
+	// must map to 400, never reaching the service or surfacing as upstream.
+	for _, strike := range []string{"NaN", "Inf"} {
+		svc := &fakeService{}
+		r, err := newRouter(svc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := bytes.NewBufferString(
+			fmt.Sprintf(`{"query":"AAPL","secType":"OPT","strike":%q}`, strike))
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+			"/api/v1/market-data/instances/bn-1/search-symbols", body))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("strike %q: want 400, got %d", strike, rec.Code)
+		}
+		errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
+		if errObj["code"] != "validation" {
+			t.Fatalf("strike %q: want code=validation, got %v", strike, errObj["code"])
+		}
+		if len(svc.mdCalls) != 0 {
+			t.Fatalf("strike %q must not reach service: %v", strike, svc.mdCalls)
+		}
+	}
+}
+
+func TestSearchMarketDataSymbols_ValidStrike(t *testing.T) {
+	// A well-formed decimal strike is a legitimate criterion: it passes the
+	// boundary check, reaches the service, and round-trips on the search input.
+	svc := &fakeService{
+		mdSearch: backend.MarketDataSymbolSearch{Supported: true},
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(
+		`{"query":"AAPL","secType":"OPT","right":"C","strike":"185.5"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/api/v1/market-data/instances/bn-1/search-symbols", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	if svc.mdSearchInput.Strike != "185.5" {
+		t.Fatalf("decoded strike = %q, want 185.5", svc.mdSearchInput.Strike)
+	}
+	if len(svc.mdCalls) != 1 || svc.mdCalls[0] != "search-symbols:bn-1/AAPL" {
+		t.Fatalf("unexpected service calls: %v", svc.mdCalls)
 	}
 }

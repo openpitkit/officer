@@ -144,6 +144,119 @@ func TestBinanceConnector_ReconnectsAndResubscribes(t *testing.T) {
 	}
 }
 
+func TestBinanceConnector_ResetsBackoffAfterRead(t *testing.T) {
+	t.Parallel()
+
+	subs := mustNormalizeBinanceSubscriptions(t, []Subscription{
+		{External: "BTCUSDT", Base: "BTC", Quote: "USDT"},
+	})
+	conns := []*fakeBinanceConn{
+		{
+			messages: [][]byte{
+				[]byte(`{"stream":"btcusdt@ticker","data":{"E":1710000000123,"s":"BTCUSDT","c":"1","b":"0.9","a":"1.1"}}`),
+			},
+			err: errors.New("disconnect 1"),
+		},
+		{
+			messages: [][]byte{
+				[]byte(`{"stream":"btcusdt@ticker","data":{"E":1710000001123,"s":"BTCUSDT","c":"2","b":"1.9","a":"2.1"}}`),
+			},
+			err: errors.New("disconnect 2"),
+		},
+		{
+			messages: [][]byte{
+				[]byte(`{"stream":"btcusdt@ticker","data":{"E":1710000002123,"s":"BTCUSDT","c":"3","b":"2.9","a":"3.1"}}`),
+			},
+			err: context.Canceled,
+		},
+	}
+
+	var (
+		mu     sync.Mutex
+		dials  int
+		delays []time.Duration
+	)
+	connector := &binanceConnector{
+		dial: func(context.Context, string) (binanceConn, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			conn := conns[dials]
+			dials++
+			return conn, nil
+		},
+		fetchSymbols: func(context.Context) (map[string]struct{}, error) {
+			return map[string]struct{}{"BTCUSDT": {}}, nil
+		},
+		sleep: func(_ context.Context, delay time.Duration) error {
+			mu.Lock()
+			defer mu.Unlock()
+			delays = append(delays, delay)
+			return nil
+		},
+		reconnectMin: time.Millisecond,
+		reconnectMax: 4 * time.Millisecond,
+	}
+
+	ch := make(chan QuoteUpdate)
+	go func() {
+		connector.run(context.Background(), subs, ch)
+		close(ch)
+	}()
+
+	var got []QuoteUpdate
+	for update := range ch {
+		got = append(got, update)
+	}
+	if len(got) != 3 {
+		t.Fatalf("len(got) = %d, want 3", len(got))
+	}
+	if len(delays) != 2 {
+		t.Fatalf("delays = %v, want two reconnect sleeps", delays)
+	}
+	for i, delay := range delays {
+		if delay != time.Millisecond {
+			t.Fatalf("delay[%d] = %s, want %s", i, delay, time.Millisecond)
+		}
+	}
+}
+
+func TestBinanceConnector_AllInvalidSymbolsReportsStatusError(t *testing.T) {
+	t.Parallel()
+
+	subs := mustNormalizeBinanceSubscriptions(t, []Subscription{
+		{External: "NOPEUSDT", Base: "NOPE", Quote: "USDT"},
+	})
+	var (
+		statusOK bool
+		status   string
+		diags    []Diagnostic
+	)
+	connector := &binanceConnector{
+		fetchSymbols: func(context.Context) (map[string]struct{}, error) {
+			return map[string]struct{}{"BTCUSDT": {}}, nil
+		},
+		report: func(ok bool, errMsg string) {
+			statusOK = ok
+			status = errMsg
+		},
+		diagReport: func(diag Diagnostic) {
+			diags = append(diags, diag)
+		},
+	}
+
+	connector.run(context.Background(), subs, make(chan QuoteUpdate))
+
+	if statusOK {
+		t.Fatal("status ok = true, want false")
+	}
+	if status != "binance: no valid symbols" {
+		t.Fatalf("status = %q, want no valid symbols", status)
+	}
+	if len(diags) != 1 || diags[0].Code != CodeUnknownSymbol {
+		t.Fatalf("diags = %+v, want one unknown-symbol diagnostic", diags)
+	}
+}
+
 func TestBinanceConnector_CloseStopsSubscription(t *testing.T) {
 	t.Parallel()
 
@@ -166,6 +279,48 @@ func TestBinanceConnector_CloseStopsSubscription(t *testing.T) {
 
 	connector.Close()
 	connector.Close()
+
+	select {
+	case _, ok := <-ch:
+		if ok {
+			t.Fatal("channel should be closed")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for connector shutdown")
+	}
+}
+
+func TestBinanceConnector_CloseBeforeSubscribeDoesNotBreakLaterClose(t *testing.T) {
+	t.Parallel()
+
+	blocked := &fakeBinanceConn{blockRead: make(chan struct{})}
+	connector := &binanceConnector{
+		dial: func(context.Context, string) (binanceConn, error) {
+			return blocked, nil
+		},
+		sleep:        func(context.Context, time.Duration) error { return nil },
+		reconnectMin: time.Millisecond,
+		reconnectMax: time.Millisecond,
+	}
+
+	connector.Close()
+	ch, err := connector.Subscribe(context.Background(), []Subscription{
+		{External: "BTCUSDT", Base: "BTC", Quote: "USDT"},
+	})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		connector.Close()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Close")
+	}
 
 	select {
 	case _, ok := <-ch:

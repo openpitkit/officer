@@ -234,6 +234,13 @@ type Node interface {
 	// separate concern.
 	SetMarketDataInstanceEnabled(ctx context.Context, id string, enabled bool, caller domain.Caller) error
 
+	// UpdateMarketDataInstanceSettings replaces editable source settings and
+	// audits the action. It changes persisted config only; runtime refresh is a
+	// separate concern.
+	UpdateMarketDataInstanceSettings(
+		ctx context.Context, id, label, credentials string, caller domain.Caller,
+	) error
+
 	// DeleteMarketDataInstance removes one market-data source instance and
 	// audits the action.
 	DeleteMarketDataInstance(ctx context.Context, id string, caller domain.Caller) error

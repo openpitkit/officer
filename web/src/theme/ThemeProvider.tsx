@@ -29,6 +29,10 @@ import {
   type ThemeContextValue,
   type ThemeMode,
 } from "@/theme/theme-context";
+import {
+  readStoredPreference,
+  writeStoredPreference,
+} from "@/lib/browserStorage";
 
 const MQ_DARK = "(prefers-color-scheme: dark)";
 
@@ -69,19 +73,15 @@ interface ThemeProviderProps {
 export function ThemeProvider({
   children,
   storageKey = "pit-officer-theme",
-  defaultMode = "dark",
+  defaultMode = "system",
 }: ThemeProviderProps) {
   const [mode, setModeState] = useState<ThemeMode>(() => {
     if (typeof window === "undefined") {
       return defaultMode;
     }
-    try {
-      const stored = window.localStorage.getItem(storageKey);
-      if (isThemeMode(stored)) {
-        return stored;
-      }
-    } catch {
-      /* localStorage may be blocked (private mode); use the default. */
+    const stored = readStoredPreference(storageKey);
+    if (isThemeMode(stored)) {
+      return stored;
     }
     return defaultMode;
   });
@@ -114,11 +114,7 @@ export function ThemeProvider({
   const setMode = useCallback(
     (next: ThemeMode) => {
       setModeState(next);
-      try {
-        window.localStorage.setItem(storageKey, next);
-      } catch {
-        /* Persisting is best-effort; the in-memory preference still applies. */
-      }
+      writeStoredPreference(storageKey, next);
     },
     [storageKey],
   );

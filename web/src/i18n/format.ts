@@ -77,3 +77,19 @@ export function formatNumber(
 ): string {
   return new Intl.NumberFormat(activeLocale(), opts).format(value);
 }
+
+/** Format a fixed duration (milliseconds) compactly, choosing the largest
+ *  fitting unit: `-Ns`, `-Nm`, `-Nh`, `-Nd` (floored). Returns "" for a
+ *  non-positive, NaN, or undefined input. Used to show the interval between the
+ *  two most recent quote updates - a fixed value, not a growing age. */
+export function formatCompactDuration(ms: number | undefined): string {
+  if (ms === undefined || isNaN(ms) || ms <= 0) return "";
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `-${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `-${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `-${h}h`;
+  const d = Math.floor(h / 24);
+  return `-${d}d`;
+}

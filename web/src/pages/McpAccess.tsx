@@ -36,7 +36,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Card } from "@/components/ui/card";
 import {
   Table,
   TableBody,
@@ -133,8 +132,7 @@ function CommandsTable({
 }) {
   const { t } = useTranslation("mcp");
   return (
-    <Card>
-      <Table>
+    <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead className="w-8">{t("table.on")}</TableHead>
@@ -201,8 +199,7 @@ function CommandsTable({
             </TableRow>
           ))}
         </TableBody>
-      </Table>
-    </Card>
+    </Table>
   );
 }
 

@@ -21,9 +21,9 @@ import { initReactI18next } from "react-i18next";
 
 import { DEFAULT_LOCALE, LOCALE_CODES } from "@/i18n/locales";
 
-// localStorage key the detected/selected language is cached under. The
-// language switcher persists the manual choice through this same cache, so
-// a manual pick overrides auto-detection on the next load.
+// Storage key the detected/selected language is cached under. The detector
+// mirrors the value to localStorage and cookie, so preferences survive a
+// service restart even if the UI is later served from a different port.
 const STORAGE_KEY = "pit-officer-lang";
 
 // Resource catalogs are discovered by glob: every locales/<locale>/<ns>.json
@@ -57,9 +57,10 @@ void i18n
     nonExplicitSupportedLngs: false,
     defaultNS: "common",
     detection: {
-      order: ["localStorage", "navigator"],
-      caches: ["localStorage"],
+      order: ["localStorage", "cookie", "navigator"],
+      caches: ["localStorage", "cookie"],
       lookupLocalStorage: STORAGE_KEY,
+      lookupCookie: STORAGE_KEY,
     },
     interpolation: {
       // React already escapes interpolated values against XSS.

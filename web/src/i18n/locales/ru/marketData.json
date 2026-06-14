@@ -1,20 +1,25 @@
 {
   "title": "Рыночные данные",
   "instances": {
-    "title": "Источники",
-    "restartHint": "Изменения в конфигурации вступают в силу после перезапуска."
+    "title": "Источники"
   },
   "instance": {
     "id": "ID инстанса",
     "type": "Провайдер",
-    "label": "Метка",
-    "credentials": "Credentials JSON"
+    "label": "Метка"
   },
   "instrument": {
     "externalSymbol": "Внешний символ",
     "baseAsset": "Base",
     "quoteAsset": "Quote",
-    "manualPrice": "Ручная цена"
+    "manualPrice": "Ручная цена",
+    "manualPriceFor": "Ручная цена для {{symbol}}",
+    "pairAlreadyUsed": "Эта пара base/quote уже используется: {{feeds}}"
+  },
+  "instrumentDialog": {
+    "ibTitle": "Добавить инструмент Interactive Brokers",
+    "ibDescription": "Выберите найденный контракт или заполните поля контракта вручную перед добавлением инструмента.",
+    "contract": "Контракт"
   },
   "actions": {
     "addInstance": "Добавить источник",
@@ -23,23 +28,166 @@
     "disable": "Выключить",
     "deleteInstance": "Удалить источник",
     "deleteInstrument": "Удалить инструмент",
-    "restart": "Перезапустить фиды"
+    "editSettings": "Изменить настройки",
+    "restart": "Перезапустить фиды",
+    "sendPrice": "Отправить цену",
+    "saveSettings": "Сохранить настройки",
+    "cancel": "Отмена"
+  },
+  "create": {
+    "title": "Добавить источник {{provider}}",
+    "defaultHint": "Создайте источник, затем добавьте в него инструменты.",
+    "duplicateLabel": "Источник с таким именем уже существует.",
+    "binanceHint": "Создайте источник Binance для живых spot-цен. Credentials для публичных ticker streams не нужны.",
+    "byoHint": "Создайте ручной источник. После создания добавьте инструменты и отправьте цены, которые ведёт оператор.",
+    "mockHint": "Создайте синтетический источник для демо и локальных тестов."
+  },
+  "providers": {
+    "guideTitle": "Справка по провайдерам",
+    "addSource": "Добавить источник рыночных данных",
+    "count": "Провайдеров: {{n}}",
+    "site": "Сайт",
+    "docs": "Документация",
+    "symbols": "Символы",
+    "ib": {
+      "title": "Interactive Brokers",
+      "description": "Живые рыночные данные из Interactive Brokers TWS или IB Gateway. Если простого символа недостаточно, используйте настройки контракта.",
+      "createHint": "Создайте источник Interactive Brokers, подключенный к TWS/Gateway. Настройте host, port, client ID и режим market data."
+    },
+    "binance": {
+      "title": "Binance",
+      "description": "Живые spot-цены из Binance. Внешние символы пишутся в формате Binance, например BTCUSDT.",
+      "createHint": "Создайте источник Binance для живых spot-цен. Credentials для публичных ticker streams не нужны."
+    },
+    "kraken": {
+      "title": "Kraken",
+      "description": "Живые spot-цены из Kraken WebSocket v2. Внешние символы используют формат пар Kraken, например BTC/USD.",
+      "createHint": "Создайте источник Kraken для живых spot-цен. Credentials для публичных ticker streams не нужны."
+    },
+    "coinbase": {
+      "title": "Coinbase",
+      "description": "Живые product tickers из Coinbase Exchange. Внешние символы используют product IDs, например BTC-USD.",
+      "createHint": "Создайте источник Coinbase для живых exchange tickers. Credentials для публичного фида не нужны."
+    },
+    "alpaca": {
+      "title": "Alpaca",
+      "description": "Живые цены акций США из Alpaca IEX. Нужны API credentials; внешние символы используют stock tickers, например AAPL.",
+      "createHint": "Создайте источник Alpaca для IEX equity prices. Добавьте API key и secret."
+    },
+    "okx": {
+      "title": "OKX",
+      "description": "Живые spot tickers из OKX. Внешние символы используют OKX instrument IDs, например BTC-USDT.",
+      "createHint": "Создайте источник OKX для публичных spot tickers. Credentials для публичного фида не нужны."
+    },
+    "bybit": {
+      "title": "Bybit",
+      "description": "Живые tickers из Bybit v5. Внешние символы используют формат Bybit; category можно настроить в credentials.",
+      "createHint": "Создайте источник Bybit для публичных v5 tickers. Выберите market category."
+    },
+    "oanda": {
+      "title": "OANDA",
+      "description": "Живые FX-цены из OANDA v20. Нужны account credentials; внешние символы используют instruments вроде EUR_USD.",
+      "createHint": "Создайте источник OANDA для FX-цен. Добавьте token, account ID и environment."
+    },
+    "finnhub": {
+      "title": "Finnhub",
+      "description": "Живые trade prices из Finnhub WebSocket. Нужен API token; внешние символы должны поддерживаться Finnhub. Крипта и FX требуют символа с биржей, например BINANCE:ETHUSDT.",
+      "createHint": "Создайте источник Finnhub для живых trade prices. Добавьте API token."
+    },
+    "byo": {
+      "title": "BYO",
+      "description": "Ручные цены, которые ведёт оператор. Используйте для static FX, тестовых котировок или фидов, которые подаёт другая система.",
+      "createHint": "Создайте ручной источник. После создания добавьте инструменты и отправьте цены, которые ведёт оператор."
+    },
+    "mock": {
+      "title": "Mock",
+      "description": "Синтетические рыночные данные для демо и локальных тестов. Не подключается к внешней площадке.",
+      "createHint": "Создайте синтетический источник для демо и локальных тестов."
+    }
+  },
+  "restart": {
+    "requiredTitle": "Нужен перезапуск, чтобы применить изменения market data",
+    "requiredDetail": "Сохранённые настройки источников или инструментов отличаются от запущенных фидов. Перезапустите фиды, чтобы применить их.",
+    "button": "Перезапустить фиды"
   },
   "state": {
     "enabled": "Включён",
     "disabled": "Выключен",
-    "stale": "Отстаёт",
+    "feedDisabled": "Фид выключен",
+    "stale": "Устар.",
+    "staleTooltip": "Котировка старше окна свежести",
     "live": "Активен",
-    "notApplied": "Не применено - перезапустите",
+    "notApplied": "Ждёт перезапуска",
     "error": "Ошибка"
   },
   "instanceError": "Ошибка: {{message}}",
+  "settings": {
+    "title": "Настройки соединения",
+    "editTitle": "Настройки источника",
+    "editDescription": "Пустые секретные поля сохраняют уже записанное значение. Чтобы применить сохранённые изменения соединения, перезапустите фиды.",
+    "host": "Host",
+    "port": "Port",
+    "clientId": "Client ID",
+    "autoClientId": "Авто",
+    "marketDataType": "Тип market data",
+    "secType": "Тип инструмента",
+    "exchange": "Биржа",
+    "currency": "Валюта",
+    "contractSymbol": "Символ контракта",
+    "conId": "Con ID",
+    "localSymbol": "Локальный символ",
+    "tradingClass": "Торговый класс",
+    "multiplier": "Множитель",
+    "includeExpired": "Включать истёкшие",
+    "primaryExchange": "Основная биржа",
+    "lastTradeDate": "Экспирация (ГГГГММДД)",
+    "strike": "Страйк",
+    "right": "Тип опциона",
+    "apiKey": "API key",
+    "apiSecret": "API secret",
+    "getApiKeys": "Получить API keys",
+    "getApiToken": "Получить API token",
+    "token": "Token",
+    "accountID": "Account ID",
+    "environment": "Окружение",
+    "category": "Категория",
+    "keepStoredSecret": "Сохранить текущий секрет",
+    "marketData": {
+      "live": "Живые",
+      "frozen": "Замороженные",
+      "delayed": "Задержанные",
+      "delayedFrozen": "Задержанные замороженные"
+    },
+    "secTypes": {
+      "STK": "Акция (STK)",
+      "CASH": "Форекс (CASH)",
+      "CRYPTO": "Крипто (CRYPTO)",
+      "FUT": "Фьючерс (FUT)",
+      "IND": "Индекс (IND)",
+      "OPT": "Опцион (OPT)"
+    },
+    "rights": {
+      "C": "Call",
+      "P": "Put"
+    },
+    "environments": {
+      "practice": "Практика",
+      "live": "Боевой"
+    },
+    "categories": {
+      "spot": "Спот",
+      "linear": "Линейные",
+      "inverse": "Инверсные",
+      "option": "Опционы"
+    }
+  },
   "table": {
     "external": "Внешний",
     "instrument": "Инструмент",
     "manualPrice": "Ручная цена",
     "price": "Цена",
     "asOf": "As-of",
+    "updateIntervalTooltip": "Интервал с предыдущего обновления",
     "state": "Состояние",
     "actions": "Действия"
   },
@@ -47,6 +195,11 @@
   "emptyInstruments": "Инструменты не настроены",
   "diagnostics": {
     "title": "Проблемы",
+    "summary": "Активно: {{count}}",
+    "collapsedSummary": "Проблем: {{count}}",
+    "collapse": "Свернуть",
+    "expand": "Открыть",
+    "actions": "Действия по проблемам",
     "levelError": "ошибка",
     "levelWarn": "предупреждение",
     "levelInfo": "инфо",
@@ -56,9 +209,12 @@
     "actionRestart": "Перезапустить фиды",
     "actionDocs": "Документация провайдера",
     "actionSymbols": "Список символов",
-    "actionRemove": "Удалить инструмент"
+    "actionRemove": "Удалить инструмент",
+    "actionRemoveTarget": "Удалить {{target}}",
+    "actionLogs": "Логи сервиса"
   },
   "references": {
+    "site": "Сайт провайдера",
     "docs": "Документация провайдера",
     "symbols": "Список символов"
   },
@@ -66,7 +222,29 @@
     "action": "Проверить символ",
     "unsupported": "Этот провайдер не умеет проверять символы",
     "exists": "Символ существует",
+    "unavailable": "Нет свежей цены для символа",
     "notFound": "Символ не найден",
-    "didYouMean": "Возможно, вы имели в виду {{suggestion}}?"
+    "didYouMean": "Возможно, вы имели в виду {{suggestion}}?",
+    "failed": "Не удалось проверить"
+  },
+  "search": {
+    "action": "Поиск символов",
+    "placeholder": "Поиск по названию или символу",
+    "searching": "Поиск…",
+    "noResults": "Подходящих символов не найдено",
+    "unsupported": "Этот провайдер не умеет искать символы",
+    "resultLabel": "{{symbol}} · {{secType}} · {{exchange}} · {{currency}}",
+    "pick": "Выбрать"
+  },
+  "resolve": {
+    "label": "Найти символ в этом фиде",
+    "action": "Найти",
+    "placeholder": "Введите EUR, EUR/USD, BTC или AAPL",
+    "filterLabel": "Фильтр найденных символов",
+    "filterPlaceholder": "Фильтр найденных символов",
+    "searching": "Поиск…",
+    "noResults": "В этом фиде подходящих символов не найдено",
+    "noFilteredResults": "Под фильтр ничего не подходит",
+    "resultLabel": "{{symbol}} · {{secType}} · {{exchange}} · {{currency}}"
   }
 }

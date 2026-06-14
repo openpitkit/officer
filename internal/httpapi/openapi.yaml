@@ -1181,7 +1181,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/MarketDataInstance"
+              $ref: "#/components/schemas/MarketDataInstanceCreate"
       responses:
         "201":
           description: Instance created; returns the refreshed market-data snapshot.
@@ -1240,6 +1240,44 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /market-data/instances/{id}/settings:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: URL-encoded market-data instance identifier.
+        schema:
+          type: string
+    put:
+      operationId: updateMarketDataInstanceSettings
+      summary: Update market-data source connection settings
+      tags: [market-data]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MarketDataInstanceSettingsUpdate"
+      responses:
+        "200":
+          description: Settings persisted; returns the refreshed market-data snapshot.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [marketData]
+                properties:
+                  marketData:
+                    $ref: "#/components/schemas/MarketData"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /market-data/instances/{id}:
     parameters:
       - name: id
@@ -1259,6 +1297,78 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /market-data/instances/{id}/verify-symbol:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: URL-encoded market-data instance identifier.
+        schema:
+          type: string
+    post:
+      operationId: verifyMarketDataSymbol
+      summary: Verify one provider-side market-data symbol
+      tags: [market-data]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MarketDataSymbolVerificationRequest"
+      responses:
+        "200":
+          description: Symbol verification result.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [verification]
+                properties:
+                  verification:
+                    $ref: "#/components/schemas/MarketDataSymbolVerification"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "502":
+          $ref: "#/components/responses/UpstreamError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /market-data/instances/{id}/search-symbols:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: URL-encoded market-data instance identifier.
+        schema:
+          type: string
+    post:
+      operationId: searchMarketDataSymbols
+      summary: Search provider-side market-data symbols
+      tags: [market-data]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MarketDataSymbolSearchRequest"
+      responses:
+        "200":
+          description: Symbol search result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarketDataSymbolSearch"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "502":
+          $ref: "#/components/responses/UpstreamError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -1402,6 +1512,44 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /service/logs:
+    get:
+      operationId: getServiceLogs
+      summary: Recent service log lines
+      description: >
+        The captured tail of the service's structured log, oldest line first.
+        The tail is a bounded in-memory ring buffer, so it holds only the most
+        recent lines.
+      tags: [dashboard]
+      responses:
+        "200":
+          description: Buffered log tail.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceLogs"
+
+  /service/logs/download:
+    get:
+      operationId: downloadServiceLogs
+      summary: Download the full service log buffer
+      description: >
+        The full captured log buffer as a plain-text attachment, lines joined by
+        newlines, oldest line first.
+      tags: [dashboard]
+      responses:
+        "200":
+          description: Log buffer as a text attachment.
+          headers:
+            Content-Disposition:
+              description: Attachment with filename pit-officer.log.
+              schema:
+                type: string
+          content:
+            text/plain:
+              schema:
+                type: string
+
 # =============================================================================
 # Components
 # =============================================================================
@@ -1476,6 +1624,13 @@ components:
 
     ConflictError:
       description: Resource already exists.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    UpstreamError:
+      description: Upstream provider request failed.
       content:
         application/json:
           schema:
@@ -2059,11 +2214,24 @@ components:
         database:
           $ref: "#/components/schemas/ServiceDatabase"
 
+    ServiceLogs:
+      type: object
+      required: [lines, count]
+      properties:
+        lines:
+          type: array
+          description: Buffered log lines, oldest first.
+          items:
+            type: string
+        count:
+          type: integer
+          description: Number of lines returned.
+
     # Market data
 
     MarketData:
       type: object
-      required: [providers, instances, freshnessSeconds]
+      required: [providers, instances, freshnessSeconds, restartRequired]
       properties:
         providers:
           type: array
@@ -2076,8 +2244,14 @@ components:
         freshnessSeconds:
           type: integer
           description: >
-            Quote freshness window in seconds. An enabled instrument is stale
-            when no quote has been received or the latest quote is older.
+            Quote freshness window in seconds. An instrument is stale only when
+            both its source and the instrument are enabled and no quote has been
+            received or the latest quote is older.
+        restartRequired:
+          type: boolean
+          description: >
+            True when stored market-data configuration no longer matches the
+            feed runtime and the operator must restart feeds to apply it.
 
     MarketDataProvider:
       type: object
@@ -2086,13 +2260,53 @@ components:
         type:
           type: string
           description: Provider type identifier.
-          enum: [byo, binance, mock]
+          enum: [ib, binance, kraken, coinbase, alpaca, okx, bybit, oanda, finnhub, byo, mock]
         title:
           type: string
 
+    MarketDataInstanceCreate:
+      type: object
+      required: [type, enabled]
+      properties:
+        type:
+          type: string
+          description: Provider type identifier. The service assigns the internal instance id.
+          enum: [ib, binance, kraken, coinbase, alpaca, okx, bybit, oanda, finnhub, byo, mock]
+        label:
+          type: string
+          description: Unique human-readable label shown in the operator panel.
+        credentials:
+          type: string
+          description: Opaque provider-specific connection settings JSON.
+        enabled:
+          type: boolean
+
+    MarketDataInstanceSettingsUpdate:
+      type: object
+      properties:
+        label:
+          type: string
+          description: Unique human-readable label shown in the operator panel.
+        credentials:
+          type: string
+          description: >
+            Opaque provider-specific connection settings JSON. During update,
+            blank string fields preserve existing stored values so secret
+            placeholders can be submitted without exposing stored secrets.
+
     MarketDataInstance:
       type: object
-      required: [id, type, label, credentials, state, enabled]
+      required:
+        [
+          id,
+          type,
+          label,
+          credentials,
+          state,
+          enabled,
+          verifiesSymbols,
+          searchesSymbols,
+        ]
       properties:
         id:
           type: string
@@ -2100,13 +2314,33 @@ components:
         type:
           type: string
           description: Provider type identifier.
-          enum: [byo, binance, mock]
+          enum:
+            - ib
+            - binance
+            - kraken
+            - coinbase
+            - alpaca
+            - okx
+            - bybit
+            - oanda
+            - finnhub
+            - byo
+            - mock
         label:
           type: string
           description: Human-readable label shown in the operator panel.
         credentials:
           type: string
-          description: Raw provider credentials JSON, or empty for providers that need none.
+          description: Always redacted to an empty string in responses.
+        settings:
+          type: object
+          additionalProperties: true
+          description: Non-secret provider settings safe to display in edit forms.
+        secrets:
+          type: object
+          additionalProperties:
+            type: boolean
+          description: Stored-secret presence flags; never contains secret values.
         state:
           type: string
           description: >
@@ -2120,6 +2354,12 @@ components:
           description: Short operator-facing message present only when `state` is `error`.
         enabled:
           type: boolean
+        verifiesSymbols:
+          type: boolean
+          description: Whether this provider can verify configured symbols.
+        searchesSymbols:
+          type: boolean
+          description: Whether this provider can search provider-side symbols.
         instruments:
           type: array
           items:
@@ -2127,7 +2367,7 @@ components:
 
     MarketDataInstrument:
       type: object
-      required: [externalSymbol, baseAsset, quoteAsset, enabled]
+      required: [externalSymbol, baseAsset, quoteAsset, manualPrice, enabled]
       properties:
         instanceId:
           type: string
@@ -2139,13 +2379,114 @@ components:
           type: string
         quoteAsset:
           type: string
+        manualPrice:
+          type: string
+          description: >
+            Exact decimal manual mark used by BYO/manual providers. On write,
+            use an empty string "" for instruments or providers without a manual mark.
         enabled:
           type: boolean
+        updateIntervalMs:
+          type: integer
+          description: >
+            Elapsed milliseconds between the two most recent quote updates,
+            present on read responses when available.
         stale:
           type: boolean
-          description: Whether the latest quote is missing or older than `freshnessSeconds`.
+          description: >
+            Whether the latest quote is missing or older than `freshnessSeconds`.
+            False when the source or instrument is disabled.
         quote:
           $ref: "#/components/schemas/MarketDataQuote"
+
+    MarketDataSymbolVerificationRequest:
+      type: object
+      required: [externalSymbol]
+      properties:
+        externalSymbol:
+          type: string
+          description: Provider-side symbol to verify.
+
+    MarketDataSymbolVerification:
+      type: object
+      required: [supported, exists]
+      properties:
+        supported:
+          type: boolean
+          description: Whether the provider supports symbol verification.
+        exists:
+          type: boolean
+          description: Whether the symbol exists as typed.
+        suggestion:
+          type: string
+          description: Case-folded provider symbol variant when available.
+        details:
+          type: string
+          description: Provider metadata for the matched symbol.
+
+    MarketDataSymbolSearchRequest:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+        secType:
+          type: string
+        exchange:
+          type: string
+        currency:
+          type: string
+        lastTradeDateOrContractMonth:
+          type: string
+        right:
+          type: string
+        strike:
+          type: string
+          description: Exact decimal string.
+
+    MarketDataSymbolSearch:
+      type: object
+      required: [supported, matches]
+      properties:
+        supported:
+          type: boolean
+          description: Whether the provider supports symbol search.
+        matches:
+          type: array
+          items:
+            $ref: "#/components/schemas/MarketDataSymbolMatch"
+
+    MarketDataSymbolMatch:
+      type: object
+      required: [symbol, secType]
+      properties:
+        symbol:
+          type: string
+        name:
+          type: string
+        secType:
+          type: string
+        exchange:
+          type: string
+        primaryExchange:
+          type: string
+        currency:
+          type: string
+        conId:
+          type: string
+        lastTradeDateOrContractMonth:
+          type: string
+        strike:
+          type: string
+          description: Exact decimal string.
+        right:
+          type: string
+        multiplier:
+          type: string
+        localSymbol:
+          type: string
+        tradingClass:
+          type: string
 
     MarketDataQuote:
       type: object

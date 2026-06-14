@@ -30,6 +30,7 @@
     "moreOk": "+{{count}} ОК",
     "instanceError": "Ошибка",
     "instanceNotApplied": "Не применено",
+    "restartRequired": "Нужен перезапуск",
     "issues": "{{count}} проблем(а)"
   },
   "audit": {

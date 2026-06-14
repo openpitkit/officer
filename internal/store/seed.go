@@ -26,38 +26,39 @@ import (
 )
 
 // SeedFXStablecoinsInstanceID is the id of the predefined bring-your-own source
-// that carries the default stablecoin cross-rates. It is also the idempotency
+// that carries the default static FX cross-rates. It is also the idempotency
 // guard: seeding is skipped once an instance with this id exists.
 const SeedFXStablecoinsInstanceID = "fx-stablecoins"
 
 // seedFXStablecoinsLabel is the operator-facing label of the predefined source.
-const seedFXStablecoinsLabel = "FX (stablecoins)"
+const seedFXStablecoinsLabel = "FX (static)"
 
-// seedStablecoinPairs are the predefined cross-rates, all at 1:1. They are
-// ordinary editable bring-your-own instruments: the operator can change the
-// mark, disable, or remove them. The external symbol mirrors the base/quote
-// pair so the manual source carries a sensible non-empty symbol.
+// seedStablecoinPairs are the predefined static cross-rates. They are ordinary
+// editable bring-your-own instruments: the operator can change the mark,
+// disable, or remove them. The external symbol mirrors the base/quote pair so
+// the manual source carries a sensible non-empty symbol.
 var seedStablecoinPairs = []struct {
 	base  string
 	quote string
+	mark  string
 }{
-	{"USDT", "USD"},
-	{"USDC", "USD"},
-	{"USDT", "USDC"},
-	{"EURC", "EUR"},
-	{"EURT", "EUR"},
-	{"EURC", "EURT"},
+	{"USDT", "USD", "1.0006"},
+	{"USDC", "USD", "0.9999"},
+	{"USDT", "USDC", "1.0007"},
+	{"EURC", "EUR", "0.9990"},
+	{"EURT", "EUR", "1.0002"},
+	{"EURC", "EURT", "0.9988"},
 }
 
-// SeedMarketDataDefaults seeds the predefined stablecoin cross-rates the first
+// SeedMarketDataDefaults seeds the predefined static FX cross-rates the first
 // time it runs, then never again. It creates one enabled bring-your-own source
-// labelled "FX (stablecoins)" carrying the stablecoin pairs at a manual mark of
-// "1". The presence of the source's id is the guard, so re-running is a no-op
-// and an operator who edits or deletes the seeded rows is never overridden.
+// labelled "FX (static)" carrying stablecoin pairs at approximate manual marks.
+// The presence of the source's id is the guard, so re-running is a no-op and an
+// operator who edits or deletes the seeded rows is never overridden.
 //
 // It runs in the bootstrap path after Migrate and before the connector manager
-// starts, so the enabled source and its 1:1 marks are applied by the manager's
-// normal startup push - the seed adds no separate engine path.
+// starts, so the enabled source and its static marks are applied by the
+// manager's normal startup push - the seed adds no separate engine path.
 func SeedMarketDataDefaults(ctx context.Context, s Store) error {
 	if _, ok, err := s.GetMarketDataInstance(ctx, SeedFXStablecoinsInstanceID); err != nil {
 		return fmt.Errorf("store: seed market-data defaults: check instance: %w", err)
@@ -87,7 +88,7 @@ func SeedMarketDataDefaults(ctx context.Context, s Store) error {
 			ExternalSymbol: symbol,
 			BaseAsset:      pair.base,
 			QuoteAsset:     pair.quote,
-			ManualPrice:    "1",
+			ManualPrice:    pair.mark,
 			Enabled:        true,
 		}
 		if err := s.UpsertMarketDataInstrument(ctx, instrument); err != nil {

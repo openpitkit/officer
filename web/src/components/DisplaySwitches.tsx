@@ -61,15 +61,20 @@ const TRADE_STYLE_OPTIONS: {
   },
 ];
 
-export function DisplaySwitches() {
+export function DisplaySwitches({ className }: { className?: string }) {
   const { t } = useTranslation();
   const { density, tradeStyle, setDensity, setTradeStyle } =
     useDisplayPreferences();
 
   return (
-    <div className="flex shrink-0 items-center gap-2">
+    <div
+      className={cn(
+        "display-switches flex shrink-0 items-center gap-0.5 sm:gap-2",
+        className,
+      )}
+    >
       <div
-        className="inline-flex h-[var(--dens-control-h)] shrink-0 overflow-hidden rounded-card border border-border bg-bg/70 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
+        className="display-switches__density inline-flex h-[var(--dens-control-h)] shrink-0 overflow-hidden rounded-card border border-border bg-bg/70 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
         role="group"
         aria-label={t("display.density.ariaLabel")}
         title={t("display.density.label")}
@@ -78,8 +83,9 @@ export function DisplaySwitches() {
           <button
             key={value}
             type="button"
+            title={t(labelKey)}
             className={cn(
-              "inline-flex h-[var(--dens-control-h)] items-center gap-[var(--dens-control-gap)] border-l border-border px-[var(--dens-control-px)] text-[length:var(--dens-control-fz)] font-medium transition-colors duration-[180ms] first:border-l-0",
+              "inline-flex h-[var(--dens-control-h)] items-center gap-[var(--dens-control-gap)] border-l border-border px-1 text-[length:var(--dens-control-fz)] font-medium transition-colors duration-[180ms] first:border-l-0 sm:px-[var(--dens-control-px)]",
               density === value
                 ? "bg-accent-dim text-accent"
                 : "text-muted-lt hover:bg-surface-hover hover:text-accent",
@@ -88,20 +94,24 @@ export function DisplaySwitches() {
             onClick={() => setDensity(value)}
           >
             <Icon className="h-[var(--dens-control-icon)] w-[var(--dens-control-icon)]" />
-            <span>{t(labelKey)}</span>
+            <span className="display-switches__density-label">
+              {t(labelKey)}
+            </span>
           </button>
         ))}
       </div>
 
       <div
-        className="inline-flex h-[var(--dens-control-h)] shrink-0 overflow-hidden rounded-card border border-border bg-bg/70 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
+        className="display-switches__trade inline-flex h-[var(--dens-control-h)] shrink-0 overflow-hidden rounded-card border border-border bg-bg/70 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
         role="group"
         aria-label={t("display.tradeStyle.ariaLabel")}
         title={t("display.tradeStyle.label")}
       >
-        <div className="inline-flex h-[var(--dens-control-h)] items-center gap-[var(--dens-control-gap)] border-r border-border px-[var(--dens-control-px)] text-[length:var(--dens-control-fz)] font-bold uppercase tracking-[0.07em] text-muted">
+        <div className="display-switches__trade-heading inline-flex h-[var(--dens-control-h)] items-center gap-[var(--dens-control-gap)] border-r border-border px-[var(--dens-control-px)] text-[length:var(--dens-control-fz)] font-bold uppercase tracking-[0.07em] text-muted">
           <Palette className="h-[var(--dens-control-icon)] w-[var(--dens-control-icon)]" />
-          <span>{t("display.tradeStyle.label")}</span>
+          <span className="display-switches__trade-heading-label">
+            {t("display.tradeStyle.label")}
+          </span>
         </div>
         {TRADE_STYLE_OPTIONS.map(({ value, labelKey, titleKey, swatchClassName }) => (
           <button
@@ -109,7 +119,7 @@ export function DisplaySwitches() {
             type="button"
             title={t(titleKey)}
             className={cn(
-              "inline-flex h-[var(--dens-control-h)] items-center gap-[var(--dens-control-gap)] border-l border-border px-[var(--dens-control-px)] text-[length:var(--dens-control-fz)] font-medium transition-colors duration-[180ms] first:border-l-0",
+              "inline-flex h-[var(--dens-control-h)] items-center gap-[var(--dens-control-gap)] border-l border-border px-1 text-[length:var(--dens-control-fz)] font-medium transition-colors duration-[180ms] first:border-l-0 sm:px-[var(--dens-control-px)]",
               tradeStyle === value
                 ? "bg-accent-dim text-accent"
                 : "text-muted-lt hover:bg-surface-hover hover:text-accent",
@@ -123,7 +133,9 @@ export function DisplaySwitches() {
                 swatchClassName,
               )}
             />
-            <span>{t(labelKey)}</span>
+            <span className="display-switches__trade-label">
+              {t(labelKey)}
+            </span>
           </button>
         ))}
       </div>

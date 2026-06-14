@@ -1,6 +1,7 @@
 {
   "title": "Сервис",
   "refreshAriaLabel": "Обновить информацию о сервисе",
+  "restartFeedsAriaLabel": "Перезапустить фиды рыночных данных",
   "application": {
     "title": "Приложение",
     "name": "Название",
@@ -11,10 +12,11 @@
   "engine": {
     "title": "Движок",
     "version": "Версия",
+    "sdk": "Pit SDK",
     "profile": "Профиль сборки",
     "buildPosture": "Тип сборки",
     "stableRelease": "стабильный релиз",
-    "developmentBuild": "разрабочая сборка",
+    "developmentBuild": "сборка для разработки",
     "modifiedSources": "изменённые исходники",
     "profileParams": {
       "version": "Версия",
@@ -41,5 +43,11 @@
     "configureAccess": "Настроить доступ",
     "loadingCommands": "Загрузка команд…",
     "noCommands": "Команды не определены."
+  },
+  "logs": {
+    "title": "Логи",
+    "download": "Скачать",
+    "empty": "Пока нет записей в логе.",
+    "refreshAriaLabel": "Обновить логи"
   }
 }

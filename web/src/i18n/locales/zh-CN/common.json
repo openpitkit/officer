@@ -25,6 +25,7 @@
     "orders": "订单",
     "policies": "策略",
     "audit": "审计",
+    "restartRequired": "需要重启",
     "mcpAccess": "MCP 访问",
     "marketData": "行情数据",
     "service": "服务"
@@ -34,6 +35,19 @@
     "logoAriaLabel": "Pit 标志",
     "controlPlane": "控制平面",
     "nonRelease": "非正式版本"
+  },
+  "about": {
+    "title": "关于",
+    "description": "Pit Officer 是本地优先的盘前风控控制平面。",
+    "product": "产品",
+    "copyrightLabel": "版权",
+    "copyright": "Copyright The Pit Project Owners. All rights reserved.",
+    "links": {
+      "website": "Officer 网站",
+      "issues": "Issue tracker",
+      "discussions": "GitHub discussions",
+      "openpit": "OpenPit 网站"
+    }
   },
   "display": {
     "density": {

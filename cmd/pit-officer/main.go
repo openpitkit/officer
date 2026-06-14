@@ -53,6 +53,7 @@ import (
 	"go.openpit.dev/officer/internal/domain"
 	"go.openpit.dev/officer/internal/engine"
 	"go.openpit.dev/officer/internal/httpapi"
+	"go.openpit.dev/officer/internal/logtail"
 	"go.openpit.dev/officer/internal/marketdata"
 	officermcp "go.openpit.dev/officer/internal/mcp"
 	"go.openpit.dev/officer/internal/node"
@@ -69,16 +70,23 @@ const mcpPath = "/mcp"
 const shutdownTimeout = 10 * time.Second
 
 func main() {
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	// Tee the logger into a bounded in-memory ring buffer so the serve surface
+	// can read back a tail of recent lines. The stderr handler is unchanged; the
+	// buffer is bounded by both an entry count and a byte size, so a runaway log
+	// loop cannot exhaust memory.
+	buf := logtail.New(0, 0)
+	logger := slog.New(logtail.NewHandler(slog.NewTextHandler(os.Stderr, nil), buf))
 
-	if err := run(os.Args[1:], logger); err != nil {
+	if err := run(os.Args[1:], logger, buf); err != nil {
 		logger.Error("pit-officer exited with error", "err", err)
 		os.Exit(1)
 	}
 }
 
 // run dispatches to the requested subcommand. args excludes the program name.
-func run(args []string, logger *slog.Logger) error {
+// buf is the in-memory log tail; only serve reads it back over HTTP, so the
+// other modes ignore it.
+func run(args []string, logger *slog.Logger, buf *logtail.Buffer) error {
 	if len(args) == 0 {
 		return fmt.Errorf("missing subcommand: want one of mcp, serve, " +
 			"dashboard, healthcheck")
@@ -89,7 +97,7 @@ func run(args []string, logger *slog.Logger) error {
 	case "mcp":
 		return runMCP(rest, logger)
 	case "serve":
-		return runServe(rest, logger)
+		return runServe(rest, logger, buf)
 	case "dashboard":
 		return runDashboard(rest, logger)
 	case "healthcheck":
@@ -229,7 +237,7 @@ func runMCP(args []string, logger *slog.Logger) error {
 // runServe loads the serve-mode configuration, assembles the control plane, and
 // runs the HTTP server (dashboard, /api/*, and the streamable-HTTP MCP handler)
 // until the process is signalled, then shuts down gracefully.
-func runServe(args []string, logger *slog.Logger) error {
+func runServe(args []string, logger *slog.Logger, buf *logtail.Buffer) error {
 	cfg, err := config.Load(append([]string{"-mode", string(config.RunModeServe)},
 		args...), os.LookupEnv)
 	if err != nil {
@@ -250,7 +258,7 @@ func runServe(args []string, logger *slog.Logger) error {
 		}
 	}()
 
-	handler, err := buildServeHandler(cp)
+	handler, err := buildServeHandler(cp, buf)
 	if err != nil {
 		return fmt.Errorf("build http handler: %w", err)
 	}
@@ -333,7 +341,8 @@ func runServe(args []string, logger *slog.Logger) error {
 
 // buildServeHandler assembles the serve-mode HTTP handler: the embedded SPA,
 // the dashboard API, and the streamable-HTTP MCP handler mounted under /mcp.
-func buildServeHandler(cp *controlPlane) (http.Handler, error) {
+// buf is the in-memory log tail exposed under the v1 service routes.
+func buildServeHandler(cp *controlPlane, buf *logtail.Buffer) (http.Handler, error) {
 	spa, err := officer.WebDist()
 	if err != nil {
 		return nil, fmt.Errorf("load embedded dashboard: %w", err)
@@ -348,6 +357,7 @@ func buildServeHandler(cp *controlPlane) (http.Handler, error) {
 		Service: cp.service,
 		SPA:     spa,
 		MCP:     http.StripPrefix(mcpPath, mcpHandler),
+		Logs:    buf,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("build router: %w", err)

@@ -122,6 +122,8 @@ Please see https://openpit.dev and the OWNERS file for details.
   :root {
     --radius-card: 6px;
     --radius-badge: 3px;
+    --font-display: "Newsreader", Georgia, "JetBrains Mono", ui-monospace,
+      monospace;
     --sidebar-width: 14rem;
     --topbar-height: 3.5rem;
     --content-max: 72rem;
@@ -229,7 +231,7 @@ Please see https://openpit.dev and the OWNERS file for details.
     --terminal-row-b: #0d0d0d;
     --radius-card: 2px;
     --radius-badge: 1px;
-    --sidebar-width: 12rem;
+    --sidebar-width: 9rem;
     --topbar-height: 2.25rem;
     --content-max: none;
     --dens-page-pad: 6px;
@@ -271,6 +273,27 @@ Please see https://openpit.dev and the OWNERS file for details.
     --dens-control-fz: 0.625rem;
     --dens-control-icon: 10px;
     --dens-swatch: 7px;
+  }
+
+  .light[data-density="terminal"] {
+    color-scheme: light;
+    --bg: #f6f3ec;
+    --surface: #fffdf8;
+    --surface-2: #f1ece0;
+    --border: #d8d3c4;
+    --border-hover: #c25400;
+    --card-hover-bg: #fcf6ec;
+    --surface-hover: rgba(194, 84, 0, 0.08);
+    --card-shadow: none;
+    --tag-border: #d8d3c4;
+    --text: #1a1a1a;
+    --muted: #6b6a64;
+    --muted-lt: #4a4944;
+    --terminal-grid: #cfc6b4;
+    --terminal-head: #e8deca;
+    --terminal-head-text: #1a1a1a;
+    --terminal-row-a: #fffdf8;
+    --terminal-row-b: #f8f1e5;
   }
 
   [data-trade-style="ladder"],
@@ -320,17 +343,7 @@ Please see https://openpit.dev and the OWNERS file for details.
 
   [data-density="terminal"] th {
     background: var(--terminal-head);
-    border-right: 1px solid var(--terminal-grid);
     color: var(--terminal-head-text);
-  }
-
-  [data-density="terminal"] td {
-    border-right: 1px solid var(--terminal-grid);
-  }
-
-  [data-density="terminal"] th:last-child,
-  [data-density="terminal"] td:last-child {
-    border-right: 0;
   }
 
   [data-density="terminal"] tbody tr:nth-child(odd) {
@@ -394,6 +407,91 @@ Please see https://openpit.dev and the OWNERS file for details.
   .nums {
     font-variant-numeric: tabular-nums;
     font-feature-settings: "tnum" 1;
+  }
+
+  .ledger-masthead {
+    border-bottom: 2px solid var(--text);
+  }
+
+  .ledger-title {
+    font-family: var(--font-display);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+
+  .topbar-actions {
+    container: topbar-actions / inline-size;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .display-switches__density-label,
+  .display-switches__trade-heading-label,
+  .display-switches__trade-label {
+    display: inline;
+  }
+
+  [data-topbar-compact-level="1"] .display-switches__density-label,
+  [data-topbar-compact-level="2"] .display-switches__density-label,
+  [data-topbar-compact-level="3"] .display-switches__density-label,
+  [data-topbar-compact-level="4"] .display-switches__density-label {
+    display: none;
+  }
+
+  [data-topbar-compact-level="2"] .display-switches__trade-heading-label,
+  [data-topbar-compact-level="2"] .display-switches__trade-label,
+  [data-topbar-compact-level="3"] .display-switches__trade-heading-label,
+  [data-topbar-compact-level="3"] .display-switches__trade-label,
+  [data-topbar-compact-level="4"] .display-switches__trade-heading-label,
+  [data-topbar-compact-level="4"] .display-switches__trade-label {
+    display: none;
+  }
+
+  [data-topbar-compact-level="3"] .topbar-page-actions button,
+  [data-topbar-compact-level="4"] .topbar-page-actions button {
+    font-size: 0;
+    gap: 0;
+    overflow: hidden;
+    padding-left: 0;
+    padding-right: 0;
+    width: var(--dens-button-icon);
+  }
+
+  [data-topbar-compact-level="4"] .topbar-language {
+    display: none;
+  }
+
+  @media (max-width: 639px) {
+    .display-switches__density-label,
+    .display-switches__trade-heading,
+    .display-switches__trade-label {
+      display: none;
+    }
+  }
+
+  .ledger-rule {
+    border-bottom: 1px solid var(--border);
+  }
+
+  .ledger-table-wrap {
+    border-bottom: 1px solid var(--border);
+    border-top: 1px solid var(--border);
+  }
+
+  .ledger-table th,
+  .ledger-table td {
+    border-right: 1px solid var(--border);
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+  }
+
+  .ledger-table th:last-child,
+  .ledger-table td:last-child {
+    border-right: 0;
+  }
+
+  .ledger-table tbody tr:last-child {
+    border-bottom: 0;
   }
 
   /* Compress older page-level Tailwind utilities in the pro terminal density. */

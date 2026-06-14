@@ -17,8 +17,15 @@
 
 import { useCallback } from "react";
 
-import { fetchMarketData } from "@/api/client";
-import type { MarketDataStatus } from "@/api/types";
+import {
+  fetchMarketData,
+  searchMarketDataSymbols,
+  type MarketDataSymbolSearchInput,
+} from "@/api/client";
+import type {
+  MarketDataStatus,
+  MarketDataSymbolSearch,
+} from "@/api/types";
 import { usePolling, type PollingResult } from "@/api/usePolling";
 
 /** Poll GET /market-data. */
@@ -28,4 +35,14 @@ export function useMarketData(): PollingResult<MarketDataStatus> {
     [],
   );
   return usePolling(fetcher);
+}
+
+/** Non-mutating contract resolve for an instance, mirroring the page-level
+ *  symbol verification helper: it issues a single POST and never disturbs the
+ *  running feed or the polling cycle. */
+export function searchSymbols(
+  instanceId: string,
+  input: MarketDataSymbolSearchInput,
+): Promise<MarketDataSymbolSearch> {
+  return searchMarketDataSymbols(instanceId, input);
 }

@@ -36,9 +36,11 @@ const (
 	binanceStreamBaseURL   = "wss://data-stream.binance.vision/stream"
 	binanceExchangeInfoURL = "https://data-api.binance.vision/api/v3/exchangeInfo"
 	binanceDiagnoseTimeout = 10 * time.Second
+	binanceReadLimit       = 64 << 10
 
 	defaultBinanceReconnectMin = 250 * time.Millisecond
 	defaultBinanceReconnectMax = 5 * time.Second
+	defaultBinanceReadTimeout  = 30 * time.Second
 )
 
 type binanceConnector struct {
@@ -49,14 +51,17 @@ type binanceConnector struct {
 	diagReport   DiagnosticReporter
 	reconnectMin time.Duration
 	reconnectMax time.Duration
+	readTimeout  time.Duration
 
-	// subs is set by Subscribe and read by run; both happen in the same
-	// goroutine lifecycle (Subscribe before run), so no extra lock is needed.
+	// subs is the full normalized subscription set Diagnose reads from the
+	// watchdog goroutine. Subscribe assigns it before starting run, so Diagnose
+	// observes a stable slice; runtime filtering must not mutate this backing
+	// array.
 	subs []binanceSubscription
 
 	cancel context.CancelFunc
+	mu     sync.Mutex
 	wg     sync.WaitGroup
-	once   sync.Once
 }
 
 type binanceConn interface {
@@ -110,6 +115,7 @@ func NewBinanceConnector() *binanceConnector {
 		fetchSymbols: fetchBinanceSymbols,
 		reconnectMin: defaultBinanceReconnectMin,
 		reconnectMax: defaultBinanceReconnectMax,
+		readTimeout:  defaultBinanceReadTimeout,
 	}
 }
 
@@ -118,6 +124,7 @@ func dialBinance(ctx context.Context, streamURL string) (binanceConn, error) {
 	if err != nil {
 		return nil, err
 	}
+	conn.SetReadLimit(binanceReadLimit)
 	return liveBinanceConn{conn: conn}, nil
 }
 
@@ -225,6 +232,19 @@ func (c *binanceConnector) VerifySymbol(
 	return SymbolVerification{}, nil
 }
 
+func (c *binanceConnector) SearchSymbols(
+	ctx context.Context, query SymbolSearchQuery,
+) ([]SymbolMatch, error) {
+	searchCtx, cancel := context.WithTimeout(ctx, binanceDiagnoseTimeout)
+	defer cancel()
+
+	known, err := c.fetchSymbols(searchCtx)
+	if err != nil {
+		return nil, err
+	}
+	return searchSymbolsFromSet(known, query, "SPOT"), nil
+}
+
 func (c *binanceConnector) Subscribe(
 	ctx context.Context, subs []Subscription,
 ) (<-chan QuoteUpdate, error) {
@@ -235,7 +255,9 @@ func (c *binanceConnector) Subscribe(
 	c.subs = normalized
 
 	runCtx, cancel := context.WithCancel(ctx)
+	c.mu.Lock()
 	c.cancel = cancel
+	c.mu.Unlock()
 
 	out := make(chan QuoteUpdate)
 	c.wg.Add(1)
@@ -255,14 +277,18 @@ func (c *binanceConnector) run(
 	// the manager internally and is safe to call from here.
 	subs = c.validateSymbols(ctx, subs)
 	if len(subs) == 0 {
+		c.reportStatus(false, "binance: no valid symbols")
 		return
 	}
 
 	attempt := 0
 	for {
-		err := c.stream(ctx, subs, out)
+		delivered, err := c.stream(ctx, subs, out)
 		if err == nil || errors.Is(err, context.Canceled) {
 			return
+		}
+		if delivered {
+			attempt = 0
 		}
 
 		// A real failure (dial/stream): surface it before backing off; clean
@@ -306,7 +332,9 @@ func (c *binanceConnector) validateSymbols(
 		return subs
 	}
 
-	valid := subs[:0:0]
+	// Keep c.subs intact for Diagnose: it may run concurrently later and must see
+	// every configured symbol, including the ones this runtime pass drops.
+	valid := make([]binanceSubscription, 0, len(subs))
 	for _, sub := range subs {
 		if _, ok := known[sub.symbol]; ok {
 			valid = append(valid, sub)
@@ -353,12 +381,14 @@ func binanceUnknownSymbolDiag(sub binanceSubscription, known map[string]struct{}
 	}
 }
 
+// stream dials, reads messages, and forwards parsed quotes to out. It returns
+// true when at least one quote was parsed; run uses it to reset the backoff.
 func (c *binanceConnector) stream(
 	ctx context.Context, subs []binanceSubscription, out chan<- QuoteUpdate,
-) error {
+) (bool, error) {
 	conn, err := c.dial(ctx, binanceStreamURL(subs))
 	if err != nil {
-		return err
+		return false, err
 	}
 	// Connected (or recovered after a prior failure): clear any error state.
 	c.reportStatus(true, "")
@@ -370,13 +400,13 @@ func (c *binanceConnector) stream(
 	// most once per stream call: after unparsableThreshold frames arrive with
 	// zero successfully parsed, we fire the diagnostic and stop counting.
 	const unparsableThreshold = 3
-	var framesReceived, framesParsed int
+	var unparsableSeen, framesParsed int
 	unparsableReported := false
 
 	for {
-		payload, err := conn.Read(ctx)
+		payload, err := readStreamFrame(ctx, c.readTimeout, conn.Read)
 		if err != nil {
-			return err
+			return framesParsed > 0, err
 		}
 
 		// A persistent config problem (e.g. invalid symbol) keeps the WS open
@@ -393,8 +423,8 @@ func (c *binanceConnector) stream(
 		update, ok := parseBinanceQuoteUpdate(payload, subs)
 		if !ok {
 			if !unparsableReported {
-				framesReceived++
-				if framesReceived >= unparsableThreshold && framesParsed == 0 {
+				unparsableSeen++
+				if unparsableSeen >= unparsableThreshold && framesParsed == 0 {
 					unparsableReported = true
 					c.reportDiag(Diagnostic{
 						Level:       DiagError,
@@ -413,18 +443,19 @@ func (c *binanceConnector) stream(
 		framesParsed++
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return framesParsed > 0, ctx.Err()
 		case out <- update:
 		}
 	}
 }
 
 func (c *binanceConnector) Close() {
-	c.once.Do(func() {
-		if c.cancel != nil {
-			c.cancel()
-		}
-	})
+	c.mu.Lock()
+	cancel := c.cancel
+	c.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 	c.wg.Wait()
 }
 
@@ -519,6 +550,19 @@ func rawInt64(raw json.RawMessage) int64 {
 		return 0
 	}
 	return n
+}
+
+// rawBool unmarshals a json.RawMessage as a bool and reports whether decoding
+// succeeded.
+func rawBool(raw json.RawMessage) (bool, bool) {
+	if len(raw) == 0 {
+		return false, false
+	}
+	var value bool
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return false, false
+	}
+	return value, true
 }
 
 func parseBinanceQuoteUpdate(

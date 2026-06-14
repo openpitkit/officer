@@ -20,6 +20,8 @@ package marketdata
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -199,18 +201,136 @@ func TestManager_StartIdempotent(t *testing.T) {
 	m.Stop() // idempotent
 }
 
-func TestNewConnector_BinanceRegistered(t *testing.T) {
+func TestNewConnector_ProviderTypesRegistered(t *testing.T) {
 	t.Parallel()
 
-	connector, err := newConnector(domain.MarketDataInstance{
-		ID:   "binance-1",
-		Type: domain.MarketDataProviderBinance,
-	})
-	if err != nil {
-		t.Fatalf("newConnector: %v", err)
+	tests := []struct {
+		name     string
+		instance domain.MarketDataInstance
+		wantType any
+	}{
+		{
+			name:     "byo",
+			instance: domain.MarketDataInstance{Type: domain.MarketDataProviderBYO},
+			wantType: (*byoConnector)(nil),
+		},
+		{
+			name:     "binance",
+			instance: domain.MarketDataInstance{Type: domain.MarketDataProviderBinance},
+			wantType: (*binanceConnector)(nil),
+		},
+		{
+			name: "ib",
+			instance: domain.MarketDataInstance{
+				Type:        domain.MarketDataProviderIB,
+				Credentials: `{"clientId":109}`,
+			},
+			wantType: (*ibConnector)(nil),
+		},
+		{
+			name:     "kraken",
+			instance: domain.MarketDataInstance{Type: domain.MarketDataProviderKraken},
+			wantType: (*krakenConnector)(nil),
+		},
+		{
+			name:     "coinbase",
+			instance: domain.MarketDataInstance{Type: domain.MarketDataProviderCoinbase},
+			wantType: (*coinbaseConnector)(nil),
+		},
+		{
+			name: "alpaca",
+			instance: domain.MarketDataInstance{
+				Type:        domain.MarketDataProviderAlpaca,
+				Credentials: `{"apiKey":"key","apiSecret":"secret"}`,
+			},
+			wantType: (*alpacaConnector)(nil),
+		},
+		{
+			name:     "okx",
+			instance: domain.MarketDataInstance{Type: domain.MarketDataProviderOKX},
+			wantType: (*okxConnector)(nil),
+		},
+		{
+			name: "bybit",
+			instance: domain.MarketDataInstance{
+				Type:        domain.MarketDataProviderBybit,
+				Credentials: `{"category":"linear"}`,
+			},
+			wantType: (*bybitConnector)(nil),
+		},
+		{
+			name: "oanda",
+			instance: domain.MarketDataInstance{
+				Type:        domain.MarketDataProviderOANDA,
+				Credentials: `{"token":"token","accountID":"account","environment":"practice"}`,
+			},
+			wantType: (*oandaConnector)(nil),
+		},
+		{
+			name: "finnhub",
+			instance: domain.MarketDataInstance{
+				Type:        domain.MarketDataProviderFinnhub,
+				Credentials: `{"token":"token"}`,
+			},
+			wantType: (*finnhubConnector)(nil),
+		},
+		{
+			name:     "mock",
+			instance: domain.MarketDataInstance{Type: domain.MarketDataProviderMock},
+			wantType: (*mockConnector)(nil),
+		},
 	}
-	if _, ok := connector.(*binanceConnector); !ok {
-		t.Fatalf("connector type = %T, want *binanceConnector", connector)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			tt.instance.ID = tt.name + "-1"
+			connector, err := newConnector(tt.instance)
+			if err != nil {
+				t.Fatalf("newConnector: %v", err)
+			}
+			defer connector.Close()
+			if reflect.TypeOf(connector) != reflect.TypeOf(tt.wantType) {
+				t.Fatalf("connector type = %T, want %T", connector, tt.wantType)
+			}
+		})
+	}
+}
+
+func TestManager_InvalidProviderConfigIsNotUnsupported(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeStore{
+		instances: []domain.MarketDataInstance{
+			{ID: "alpaca-1", Type: domain.MarketDataProviderAlpaca, Enabled: true},
+		},
+		instruments: map[string][]domain.MarketDataInstrument{
+			"alpaca-1": {{
+				InstanceID: "alpaca-1", ExternalSymbol: "AAPL",
+				BaseAsset: "AAPL", QuoteAsset: "USD", Enabled: true,
+			}},
+		},
+	}
+	m := NewManager(store, &fakeSink{}, nil)
+
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer m.Stop()
+
+	status := m.InstanceStatuses()["alpaca-1"]
+	if status.State != StateError {
+		t.Fatalf("state = %q, want error", status.State)
+	}
+	if len(status.Diagnostics) != 1 {
+		t.Fatalf("diagnostics = %+v, want one", status.Diagnostics)
+	}
+	if status.Diagnostics[0].Code != CodeInvalidProviderConfig {
+		t.Fatalf("diag code = %q, want %q", status.Diagnostics[0].Code, CodeInvalidProviderConfig)
+	}
+	if status.Diagnostics[0].Code == CodeUnsupportedProvider {
+		t.Fatal("invalid credentials were reported as unsupported provider")
 	}
 }
 
@@ -244,6 +364,7 @@ func TestVerifySymbol_UnsupportedProvider(t *testing.T) {
 	// unsupported: supported=false, zero result, no error, no network.
 	for _, providerType := range []string{
 		domain.MarketDataProviderBYO,
+		domain.MarketDataProviderIB,
 		domain.MarketDataProviderMock,
 	} {
 		instance := domain.MarketDataInstance{ID: "i", Type: providerType}
@@ -261,6 +382,33 @@ func TestVerifySymbol_UnsupportedProvider(t *testing.T) {
 			t.Fatalf("%s: ProviderVerifiesSymbols = true, want false", providerType)
 		}
 	}
+
+	for _, instance := range []domain.MarketDataInstance{
+		{
+			ID:          "alpaca-1",
+			Type:        domain.MarketDataProviderAlpaca,
+			Credentials: `{"apiKey":"key","apiSecret":"secret"}`,
+		},
+		{
+			ID:          "oanda-1",
+			Type:        domain.MarketDataProviderOANDA,
+			Credentials: `{"token":"token","accountID":"account","environment":"practice"}`,
+		},
+	} {
+		result, supported, err := VerifySymbol(context.Background(), instance, "BTCUSDT")
+		if err != nil {
+			t.Fatalf("%s: VerifySymbol err = %v", instance.Type, err)
+		}
+		if supported {
+			t.Fatalf("%s: supported = true, want false", instance.Type)
+		}
+		if result.Exists || result.Suggestion != "" {
+			t.Fatalf("%s: result = %+v, want zero", instance.Type, result)
+		}
+		if ProviderVerifiesSymbols(instance.Type) {
+			t.Fatalf("%s: ProviderVerifiesSymbols = true, want false", instance.Type)
+		}
+	}
 }
 
 func TestVerifySymbol_UnknownProvider(t *testing.T) {
@@ -275,13 +423,71 @@ func TestVerifySymbol_UnknownProvider(t *testing.T) {
 	}
 }
 
-func TestProviderVerifiesSymbols_Binance(t *testing.T) {
+func TestSearchSymbolsUnsupportedProvider(t *testing.T) {
 	t.Parallel()
 
-	// Binance implements SymbolVerifier; the static probe never touches the
-	// network (it builds and discards a connector without subscribing).
-	if !ProviderVerifiesSymbols(domain.MarketDataProviderBinance) {
-		t.Fatal("ProviderVerifiesSymbols(binance) = false, want true")
+	// BYO accepts operator-pushed quotes and has no external catalogue, so
+	// search is unsupported: supported=false, no matches, no error, no network.
+	instance := domain.MarketDataInstance{ID: "byo-1", Type: domain.MarketDataProviderBYO}
+	matches, supported, err := SearchSymbols(
+		context.Background(), instance, SymbolSearchQuery{Query: "BTC"},
+	)
+	if err != nil {
+		t.Fatalf("SearchSymbols err = %v", err)
+	}
+	if supported {
+		t.Fatal("supported = true, want false")
+	}
+	if matches != nil {
+		t.Fatalf("matches = %+v, want nil", matches)
+	}
+	if ProviderSearchesSymbols(domain.MarketDataProviderBYO) {
+		t.Fatal("ProviderSearchesSymbols(byo) = true, want false")
+	}
+}
+
+func TestSearchSymbolsUnknownInstanceType(t *testing.T) {
+	t.Parallel()
+
+	instance := domain.MarketDataInstance{ID: "i", Type: "nope"}
+	if _, _, err := SearchSymbols(
+		context.Background(), instance, SymbolSearchQuery{Query: "BTC"},
+	); err == nil {
+		t.Fatal("SearchSymbols(unknown provider) err = nil, want error")
+	}
+	if ProviderSearchesSymbols("nope") {
+		t.Fatal("ProviderSearchesSymbols(unknown) = true, want false")
+	}
+}
+
+func TestProviderVerifiesSymbols_ProviderCatalogues(t *testing.T) {
+	t.Parallel()
+
+	// These providers implement SymbolVerifier; the static probe never touches
+	// the network (it builds and discards a connector without subscribing).
+	for _, providerType := range []string{
+		domain.MarketDataProviderBinance,
+		domain.MarketDataProviderKraken,
+		domain.MarketDataProviderCoinbase,
+		domain.MarketDataProviderOKX,
+		domain.MarketDataProviderBybit,
+		domain.MarketDataProviderFinnhub,
+	} {
+		if !ProviderVerifiesSymbols(providerType) {
+			t.Fatalf("ProviderVerifiesSymbols(%s) = false, want true", providerType)
+		}
+	}
+	for _, providerType := range []string{
+		domain.MarketDataProviderBinance,
+		domain.MarketDataProviderKraken,
+		domain.MarketDataProviderCoinbase,
+		domain.MarketDataProviderOKX,
+		domain.MarketDataProviderBybit,
+		domain.MarketDataProviderFinnhub,
+	} {
+		if !ProviderSearchesSymbols(providerType) {
+			t.Fatalf("ProviderSearchesSymbols(%s) = false, want true", providerType)
+		}
 	}
 }
 
@@ -440,6 +646,92 @@ func TestManager_PushManualNonByoUntouched(t *testing.T) {
 	}
 }
 
+// TestManager_QuoteUpdateIntervalUnknownThenGap verifies the inter-update
+// interval is unknown after the first tick and equals the arrival gap after the
+// second, and that clearing the instance resets it to unknown. It drives the
+// arrival recorder directly with controlled timestamps so the gap is exact.
+func TestManager_QuoteUpdateIntervalUnknownThenGap(t *testing.T) {
+	t.Parallel()
+	m := &Manager{}
+	base := time.Now()
+
+	m.recordQuoteArrival("inst-1", "AAPL", base)
+	if _, ok := m.QuoteUpdateInterval("inst-1", "AAPL"); ok {
+		t.Fatal("interval should be unknown after one tick")
+	}
+
+	m.recordQuoteArrival("inst-1", "AAPL", base.Add(12*time.Second))
+	interval, ok := m.QuoteUpdateInterval("inst-1", "AAPL")
+	if !ok {
+		t.Fatal("interval should be known after two ticks")
+	}
+	if interval != 12*time.Second {
+		t.Fatalf("interval = %v, want 12s", interval)
+	}
+
+	// A different instrument is independent and still unknown.
+	if _, ok := m.QuoteUpdateInterval("inst-2", "AAPL"); ok {
+		t.Fatal("unrelated instrument interval should be unknown")
+	}
+
+	// A restart of the instance clears its interval.
+	m.clearInstanceIntervals("inst-1")
+	if _, ok := m.QuoteUpdateInterval("inst-1", "AAPL"); ok {
+		t.Fatal("interval should be unknown after instance reset")
+	}
+}
+
+// TestManager_QuoteUpdateIntervalFromDrain verifies the interval is wired
+// through the live drain path: a BYO instance with two operator pushes yields a
+// known, positive interval for the pushed instrument keyed by external symbol.
+func TestManager_QuoteUpdateIntervalFromDrain(t *testing.T) {
+	t.Parallel()
+	store := &fakeStore{
+		instances: []domain.MarketDataInstance{
+			{ID: "byo-1", Type: domain.MarketDataProviderBYO, Enabled: true},
+		},
+		instruments: map[string][]domain.MarketDataInstrument{
+			"byo-1": {
+				{
+					InstanceID: "byo-1", ExternalSymbol: "EURUSD",
+					BaseAsset: "EUR", QuoteAsset: "USD", Enabled: true,
+				},
+			},
+		},
+	}
+	sink := &fakeSink{}
+	m := NewManager(store, sink, nil)
+
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer m.Stop()
+
+	// First push (tick 1): interval still unknown.
+	m.PushManual("byo-1", domain.MarketDataInstrument{
+		InstanceID: "byo-1", ExternalSymbol: "EURUSD",
+		BaseAsset: "EUR", QuoteAsset: "USD",
+		ManualPrice: "1.05", Enabled: true,
+	})
+	waitFor(t, time.Second, func() bool { return sink.count() >= 1 })
+
+	// Second push (tick 2): interval becomes known.
+	m.PushManual("byo-1", domain.MarketDataInstrument{
+		InstanceID: "byo-1", ExternalSymbol: "EURUSD",
+		BaseAsset: "EUR", QuoteAsset: "USD",
+		ManualPrice: "1.06", Enabled: true,
+	})
+	waitFor(t, time.Second, func() bool {
+		_, ok := m.QuoteUpdateInterval("byo-1", "EURUSD")
+		return ok
+	})
+
+	interval, ok := m.QuoteUpdateInterval("byo-1", "EURUSD")
+	if !ok || interval <= 0 {
+		t.Fatalf("interval after two pushes = %v (known=%v), want positive", interval, ok)
+	}
+}
+
 // waitFor polls cond until it returns true or the timeout elapses.
 func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 	t.Helper()
@@ -451,4 +743,151 @@ func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 		time.Sleep(2 * time.Millisecond)
 	}
 	t.Fatal("condition not met within timeout")
+}
+
+// capturingHandler collects slog records into a slice under a mutex.
+type capturingHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+	attrs   []slog.Attr
+}
+
+func (h *capturingHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+
+func (h *capturingHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r.Clone())
+	return nil
+}
+
+func (h *capturingHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	h2 := &capturingHandler{records: h.records}
+	h2.attrs = append(h2.attrs, attrs...)
+	return h2
+}
+
+func (h *capturingHandler) WithGroup(name string) slog.Handler { return h }
+
+func (h *capturingHandler) count() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.records)
+}
+
+// TestRecordDiagLocked_NewDiagLogsOnce verifies that recording a genuinely new
+// diagnostic emits exactly one slog record at the mapped level.
+func TestRecordDiagLocked_NewDiagLogsOnce(t *testing.T) {
+	t.Parallel()
+	h := &capturingHandler{}
+	logger := slog.New(h)
+
+	m := &Manager{
+		logger:   logger,
+		statuses: map[string]InstanceRuntimeStatus{"inst-1": {}},
+	}
+
+	m.recordDiagLocked("inst-1", Diagnostic{
+		Level:  DiagError,
+		Code:   CodeConnectionError,
+		Kind:   DiagKindEnvironment,
+		Title:  "Connection error",
+		Detail: "dial tcp: connection refused",
+	})
+
+	if n := h.count(); n != 1 {
+		t.Fatalf("want 1 log record for new diagnostic, got %d", n)
+	}
+	h.mu.Lock()
+	rec := h.records[0]
+	h.mu.Unlock()
+	if rec.Level != slog.LevelError {
+		t.Fatalf("log level = %v, want Error", rec.Level)
+	}
+	if rec.Message != "Connection error" {
+		t.Fatalf("log message = %q, want %q", rec.Message, "Connection error")
+	}
+}
+
+func TestRecordDiagLocked_LevelMapping(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		diag      Diagnostic
+		wantLevel slog.Level
+	}{
+		{
+			name:      "Routine→Debug",
+			diag:      Diagnostic{Level: DiagInfo, Routine: true, Code: CodeDataFreshness, Kind: DiagKindProvider, Title: "routine notice", Detail: "some detail"},
+			wantLevel: slog.LevelDebug,
+		},
+		{
+			name:      "DiagInfo→Info",
+			diag:      Diagnostic{Level: DiagInfo, Code: CodeConnectionError, Kind: DiagKindProvider, Title: "test diagnostic", Detail: "some detail"},
+			wantLevel: slog.LevelInfo,
+		},
+		{
+			name:      "DiagWarn→Warn",
+			diag:      Diagnostic{Level: DiagWarn, Code: CodeConnectionError, Kind: DiagKindProvider, Title: "test diagnostic", Detail: "some detail"},
+			wantLevel: slog.LevelWarn,
+		},
+		{
+			name:      "DiagError→Error",
+			diag:      Diagnostic{Level: DiagError, Code: CodeConnectionError, Kind: DiagKindProvider, Title: "test diagnostic", Detail: "some detail"},
+			wantLevel: slog.LevelError,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := &capturingHandler{}
+			m := &Manager{
+				logger:   slog.New(h),
+				statuses: map[string]InstanceRuntimeStatus{"inst": {}},
+			}
+			m.recordDiagLocked("inst", tc.diag)
+			if n := h.count(); n != 1 {
+				t.Fatalf("want 1 log record, got %d", n)
+			}
+			h.mu.Lock()
+			rec := h.records[0]
+			h.mu.Unlock()
+			if rec.Level != tc.wantLevel {
+				t.Fatalf("log level = %v, want %v", rec.Level, tc.wantLevel)
+			}
+			if got := m.statuses["inst"].Diagnostics[0].Level; got != tc.diag.Level {
+				t.Fatalf("stored diagnostic level = %q, want %q", got, tc.diag.Level)
+			}
+		})
+	}
+}
+
+// TestRecordDiagLocked_DedupedDiagNoLog verifies that recording a repeated
+// diagnostic (same Code+Instrument+Detail) does not produce an additional log
+// record — the dedup early-return must precede the logging path.
+func TestRecordDiagLocked_DedupedDiagNoLog(t *testing.T) {
+	t.Parallel()
+	h := &capturingHandler{}
+	logger := slog.New(h)
+
+	m := &Manager{
+		logger:   logger,
+		statuses: map[string]InstanceRuntimeStatus{"inst-1": {}},
+	}
+
+	diag := Diagnostic{
+		Level:  DiagWarn,
+		Code:   CodeNoData,
+		Kind:   DiagKindProvider,
+		Title:  "No market data",
+		Detail: "no quotes arriving",
+	}
+
+	m.recordDiagLocked("inst-1", diag) // first: new → logs
+	m.recordDiagLocked("inst-1", diag) // second: dedup → must not log
+
+	if n := h.count(); n != 1 {
+		t.Fatalf("want 1 log record after deduped repeat, got %d", n)
+	}
 }

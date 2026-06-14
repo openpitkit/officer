@@ -146,6 +146,7 @@ function McpAccessCard() {
 //   - ok pairs per datasource: show up to 3, then "+N OK" counter
 const MD_STALE_LIMIT = 4;
 const MD_OK_LIMIT = 3;
+const MANUAL_PROVIDER = "byo";
 
 function MarketDataCard() {
   const { t } = useTranslation("dashboard");
@@ -179,7 +180,7 @@ function MarketDataCard() {
 
             // Collect all stale pairs across all instances for global cap.
             const allStale = enabled.flatMap((inst) =>
-              inst.state === "error"
+              inst.state === "error" || inst.type === MANUAL_PROVIDER
                 ? []
                 : inst.instruments
                     .filter((instr) => instr.stale)
@@ -196,6 +197,11 @@ function MarketDataCard() {
 
             return (
               <>
+                {load.data.restartRequired && (
+                  <Badge variant="warn">
+                    {t("marketData.restartRequired")}
+                  </Badge>
+                )}
                 {enabled.map((inst) => {
                   const label = inst.label || inst.id;
 
@@ -224,9 +230,12 @@ function MarketDataCard() {
                     );
                   }
 
-                  const instStale = inst.instruments.filter((i) => i.stale);
+                  const isManual = inst.type === MANUAL_PROVIDER;
+                  const instStale = isManual
+                    ? []
+                    : inst.instruments.filter((i) => i.stale);
                   const instOk = inst.instruments.filter(
-                    (i) => i.enabled && !i.stale,
+                    (i) => i.enabled && (isManual || !i.stale),
                   );
 
                   // Stale pairs for this instance, limited by remaining global cap.
@@ -257,7 +266,7 @@ function MarketDataCard() {
                       {shownOk.map((instr) => (
                         <Badge
                           key={instr.externalSymbol}
-                          variant="ok"
+                          variant={isManual ? "neutral" : "ok"}
                         >
                           {instr.baseAsset}/{instr.quoteAsset}
                         </Badge>

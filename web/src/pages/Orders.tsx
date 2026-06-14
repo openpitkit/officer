@@ -44,7 +44,6 @@ import { Page } from "@/components/Page";
 import { RefreshButton } from "@/components/RefreshButton";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -943,8 +942,7 @@ function OrderDetailDialog({ orderId, onClose, onExecReport, onCloneOrder, onClo
                   {t("detail.dialog.trades.empty")}
                 </p>
               ) : (
-                <Card>
-                  <Table>
+                <Table>
                     <TableHeader>
                       <TableRow className="hover:bg-transparent">
                         <TableHead>{t("table.id")}</TableHead>
@@ -992,8 +990,7 @@ function OrderDetailDialog({ orderId, onClose, onExecReport, onCloneOrder, onClo
                         </TableRow>
                       ))}
                     </TableBody>
-                  </Table>
-                </Card>
+                </Table>
               )}
             </div>
 
@@ -1068,8 +1065,7 @@ function OrdersTable({ orders, onRowClick, onClone }: OrdersTableProps) {
   }
 
   return (
-    <Card>
-      <Table>
+    <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead>{t("table.id")}</TableHead>
@@ -1148,8 +1144,7 @@ function OrdersTable({ orders, onRowClick, onClone }: OrdersTableProps) {
             </TableRow>
           ))}
         </TableBody>
-      </Table>
-    </Card>
+    </Table>
   );
 }
 
@@ -1168,8 +1163,7 @@ function TradesTable({ trades, onOrderClick, onCloneExecReport }: TradesTablePro
   const { t: tc } = useTranslation();
 
   return (
-    <Card>
-      <Table>
+    <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead>{t("table.id")}</TableHead>
@@ -1239,8 +1233,7 @@ function TradesTable({ trades, onOrderClick, onCloneExecReport }: TradesTablePro
             </TableRow>
           ))}
         </TableBody>
-      </Table>
-    </Card>
+    </Table>
   );
 }
 

@@ -374,8 +374,7 @@ function BalancesTable({
 }) {
   const { t } = useTranslation("positions");
   return (
-    <Card>
-      <Table>
+    <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead>{t("balances.columns.account")}</TableHead>
@@ -407,8 +406,7 @@ function BalancesTable({
             onApplied={onApplied}
           />
         </TableBody>
-      </Table>
-    </Card>
+    </Table>
   );
 }
 
@@ -1305,8 +1303,7 @@ export function Positions() {
             hint={t("history.empty.hint")}
           />
         ) : (
-          <Card>
-            <Table>
+          <Table>
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
                   <TableHead>{t("history.columns.time")}</TableHead>
@@ -1324,8 +1321,7 @@ export function Positions() {
                   <HistoryRow key={adj.id} adj={adj} onClone={openCloneAdjust} />
                 ))}
               </TableBody>
-            </Table>
-          </Card>
+          </Table>
         ))}
 
       <AdjustDialog

@@ -293,6 +293,10 @@ export interface MarketDataInstrument {
   manualPrice: string;
   enabled: boolean;
   stale: boolean;
+  /** Elapsed milliseconds between the two most recent ticks of this quote, as
+   *  observed by the running manager. Undefined until a second tick has arrived
+   *  since the last (re)subscribe. A fixed measurement, not an age. */
+  updateIntervalMs?: number;
   quote?: MarketDataQuote;
 }
 
@@ -324,12 +328,17 @@ export interface MarketDataInstance {
   type: string;
   label: string;
   credentials: string;
+  settings?: Record<string, unknown>;
+  secrets?: Record<string, boolean>;
   enabled: boolean;
   state: string;
   error?: string;
   /** Whether the provider can verify external-symbol existence (gates the
    *  verify button without making a call). */
   verifiesSymbols: boolean;
+  /** Whether the provider can search its catalogue for matching symbols (gates
+   *  the live-search control without making a call). */
+  searchesSymbols: boolean;
   instruments: MarketDataInstrument[];
   diagnostics: MarketDataDiagnostic[];
   references?: MarketDataReferences;
@@ -343,12 +352,39 @@ export interface MarketDataSymbolVerification {
   exists: boolean;
   /** Case-folded catalogue variant the operator likely meant, when present. */
   suggestion?: string;
+  /** Optional provider metadata for the matched symbol. */
+  details?: string;
+}
+
+/** One resolved contract from a symbol search (mirrors the wire DTO). */
+export interface MarketDataSymbolMatch {
+  symbol: string;
+  name?: string;
+  secType: string;
+  exchange?: string;
+  primaryExchange?: string;
+  currency?: string;
+  conId?: string;
+  lastTradeDateOrContractMonth?: string;
+  strike?: string;
+  right?: string;
+  multiplier?: string;
+  localSymbol?: string;
+  tradingClass?: string;
+}
+
+/** Outcome of POST /market-data/instances/{id}/search-symbols. */
+export interface MarketDataSymbolSearch {
+  /** False when the provider cannot search symbols. */
+  supported: boolean;
+  matches: MarketDataSymbolMatch[];
 }
 
 export interface MarketDataStatus {
   providers: MarketDataProvider[];
   instances: MarketDataInstance[];
   freshnessSeconds: number;
+  restartRequired: boolean;
 }
 
 // --- Service info ---
@@ -367,6 +403,12 @@ export interface ServiceInfo {
     path: string;
     reachable: boolean;
   };
+}
+
+/** Response from GET /service/logs: the captured log tail, oldest line first. */
+export interface ServiceLogs {
+  lines: string[];
+  count: number;
 }
 
 // --- MCP access ---

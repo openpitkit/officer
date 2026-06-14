@@ -15,7 +15,12 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import type { ReactNode } from "react";
+import {
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
 import { Menu } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -32,12 +37,60 @@ interface TopBarProps {
   actions?: ReactNode;
 }
 
+const MAX_COMPACT_LEVEL = 4;
+
 export function TopBar({ title, actions }: TopBarProps) {
   const { t } = useTranslation();
   const { toggle } = useSidebar();
+  const headerRef = useRef<HTMLElement | null>(null);
+  const actionsRef = useRef<HTMLDivElement | null>(null);
+  const [compactLevel, setCompactLevel] = useState(0);
+
+  useLayoutEffect(() => {
+    const header = headerRef.current;
+    const actionsNode = actionsRef.current;
+    if (!header || !actionsNode || typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    let frame = 0;
+    const fits = (level: number) => {
+      header.dataset.topbarCompactLevel = String(level);
+      return actionsNode.scrollWidth <= actionsNode.clientWidth + 1;
+    };
+    const measure = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        const previous = Number(header.dataset.topbarCompactLevel || "0");
+        let next = previous;
+        while (next < MAX_COMPACT_LEVEL && !fits(next)) {
+          next += 1;
+        }
+        while (next > 0 && fits(next - 1)) {
+          next -= 1;
+        }
+        header.dataset.topbarCompactLevel = String(previous);
+        setCompactLevel(next);
+      });
+    };
+
+    const observer = new ResizeObserver(measure);
+    observer.observe(header);
+    observer.observe(actionsNode);
+    measure();
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [actions, title]);
+
   return (
-    <header className="flex h-[var(--topbar-height)] shrink-0 items-center gap-2 overflow-hidden border-b border-border bg-surface px-[var(--dens-shell-x)] shadow-[inset_0_2px_0_var(--accent)]">
-      <div className="flex min-w-[var(--dens-title-min)] shrink-0 items-center gap-2">
+    <header
+      ref={headerRef}
+      data-topbar-compact-level={compactLevel}
+      className="ledger-masthead flex h-[var(--topbar-height)] shrink-0 items-center gap-2 overflow-hidden bg-bg px-[var(--dens-shell-x)]"
+    >
+      <div className="flex min-w-0 shrink-0 items-center gap-2 overflow-hidden">
         <Button
           variant="outline"
           size="icon"
@@ -47,15 +100,22 @@ export function TopBar({ title, actions }: TopBarProps) {
         >
           <Menu />
         </Button>
-        <span className="hidden h-5 w-[3px] rounded-[1px] bg-accent sm:block" />
-        <h1 className="min-w-0 truncate text-[length:var(--dens-title-fz)] font-bold tracking-tight text-text">
+        <span className="hidden h-5 w-px bg-accent sm:block" />
+        <h1 className="ledger-title min-w-0 max-w-[40vw] truncate text-[length:var(--dens-title-fz)] font-bold text-text">
           {title}
         </h1>
       </div>
-      <div className="ml-auto flex min-w-0 flex-1 flex-nowrap items-center justify-end gap-2 overflow-x-auto whitespace-nowrap md:flex-none md:shrink-0 md:overflow-visible">
+      <div
+        ref={actionsRef}
+        className="topbar-actions ml-auto flex min-w-0 flex-1 flex-nowrap items-center justify-end gap-2 overflow-hidden whitespace-nowrap"
+      >
         <DisplaySwitches />
-        {actions}
-        <LanguageSwitch />
+        <div className="topbar-page-actions flex shrink-0 items-center gap-2 [&_button]:max-sm:w-[var(--dens-button-icon)] [&_button]:max-sm:overflow-hidden [&_button]:max-sm:px-0 [&_button]:max-sm:text-[0px]">
+          {actions}
+        </div>
+        <div className="topbar-language hidden shrink-0 sm:block">
+          <LanguageSwitch />
+        </div>
         <ThemeSwitch />
       </div>
     </header>

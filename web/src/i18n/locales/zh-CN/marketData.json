@@ -1,20 +1,25 @@
 {
   "title": "行情数据",
   "instances": {
-    "title": "来源",
-    "restartHint": "配置更改在重启后生效。"
+    "title": "来源"
   },
   "instance": {
     "id": "实例 ID",
     "type": "提供方",
-    "label": "标签",
-    "credentials": "凭据 JSON"
+    "label": "标签"
   },
   "instrument": {
     "externalSymbol": "外部代码",
     "baseAsset": "基础资产",
     "quoteAsset": "计价资产",
-    "manualPrice": "手动价格"
+    "manualPrice": "手动价格",
+    "manualPriceFor": "{{symbol}} 的手动价格",
+    "pairAlreadyUsed": "此 base/quote 组合已被使用：{{feeds}}"
+  },
+  "instrumentDialog": {
+    "ibTitle": "添加 Interactive Brokers 工具",
+    "ibDescription": "选择解析出的合约，或在添加工具前手动填写合约字段。",
+    "contract": "合约"
   },
   "actions": {
     "addInstance": "添加来源",
@@ -23,23 +28,166 @@
     "disable": "停用",
     "deleteInstance": "删除来源",
     "deleteInstrument": "删除工具",
-    "restart": "重启数据源"
+    "editSettings": "编辑设置",
+    "restart": "重启数据源",
+    "sendPrice": "发送价格",
+    "saveSettings": "保存设置",
+    "cancel": "取消"
+  },
+  "create": {
+    "title": "添加 {{provider}} 来源",
+    "defaultHint": "创建来源后，再向其中添加工具。",
+    "duplicateLabel": "已存在同名来源。",
+    "binanceHint": "创建 Binance 来源以接收实时现货价格。公共 ticker streams 不需要凭据。",
+    "byoHint": "创建手动来源。创建后添加工具并发送由操作员维护的价格。",
+    "mockHint": "创建用于演示和本地测试的合成来源。"
+  },
+  "providers": {
+    "guideTitle": "提供方说明",
+    "addSource": "添加行情数据源",
+    "count": "{{n}} 个提供方",
+    "site": "网站",
+    "docs": "文档",
+    "symbols": "代码",
+    "ib": {
+      "title": "Interactive Brokers",
+      "description": "来自 Interactive Brokers TWS 或 IB Gateway 的实时行情。普通代码不明确时，请使用合约设置。",
+      "createHint": "创建连接到 TWS/Gateway 的 Interactive Brokers 来源。配置 host、port、client ID 和 market data 模式。"
+    },
+    "binance": {
+      "title": "Binance",
+      "description": "从 Binance 推送的现货市场实时价格。外部代码使用 Binance 格式，例如 BTCUSDT。",
+      "createHint": "创建 Binance 来源以接收实时现货价格。公共 ticker streams 不需要凭据。"
+    },
+    "kraken": {
+      "title": "Kraken",
+      "description": "来自 Kraken WebSocket v2 的实时现货价格。外部代码使用 Kraken 交易对格式，例如 BTC/USD。",
+      "createHint": "创建 Kraken 来源以接收实时现货价格。公共 ticker streams 不需要凭据。"
+    },
+    "coinbase": {
+      "title": "Coinbase",
+      "description": "来自 Coinbase Exchange 的实时 product tickers。外部代码使用 product IDs，例如 BTC-USD。",
+      "createHint": "创建 Coinbase 来源以接收实时 exchange tickers。公共数据源不需要凭据。"
+    },
+    "alpaca": {
+      "title": "Alpaca",
+      "description": "来自 Alpaca IEX 的美股实时价格。需要 API 凭据；外部代码使用股票代码，例如 AAPL。",
+      "createHint": "创建 Alpaca 来源以接收 IEX 股票价格。填写 API key 和 secret。"
+    },
+    "okx": {
+      "title": "OKX",
+      "description": "来自 OKX 的实时现货 tickers。外部代码使用 OKX instrument IDs，例如 BTC-USDT。",
+      "createHint": "创建 OKX 来源以接收公共现货 tickers。公共数据源不需要凭据。"
+    },
+    "bybit": {
+      "title": "Bybit",
+      "description": "来自 Bybit v5 的实时 tickers。外部代码使用 Bybit 代码；category 可在 credentials 中配置。",
+      "createHint": "创建 Bybit 来源以接收公共 v5 tickers。选择 market category。"
+    },
+    "oanda": {
+      "title": "OANDA",
+      "description": "来自 OANDA v20 的实时外汇价格。需要账户凭据；外部代码使用 EUR_USD 等 instruments。",
+      "createHint": "创建 OANDA 来源以接收外汇价格。填写 token、account ID 和 environment。"
+    },
+    "finnhub": {
+      "title": "Finnhub",
+      "description": "来自 Finnhub WebSocket 的实时成交价格。需要 API token；外部代码必须是 Finnhub 支持的代码。加密货币和外汇需要带交易所前缀的代码，例如 BINANCE:ETHUSDT。",
+      "createHint": "创建 Finnhub 来源以接收实时成交价格。填写 API token。"
+    },
+    "byo": {
+      "title": "BYO",
+      "description": "由操作员维护的手动价格。适用于 static FX、测试价格，或由其他系统注入的行情。",
+      "createHint": "创建手动来源。创建后添加工具并发送由操作员维护的价格。"
+    },
+    "mock": {
+      "title": "Mock",
+      "description": "用于演示和本地测试的合成行情数据，不连接外部交易场所。",
+      "createHint": "创建用于演示和本地测试的合成来源。"
+    }
+  },
+  "restart": {
+    "requiredTitle": "需要重启才能应用行情数据更改",
+    "requiredDetail": "保存的来源或工具设置与正在运行的数据源不同。请重启数据源以应用这些设置。",
+    "button": "重启数据源"
   },
   "state": {
     "enabled": "已启用",
     "disabled": "已停用",
-    "stale": "滞后",
+    "feedDisabled": "数据源已停用",
+    "stale": "过期",
+    "staleTooltip": "报价已超出新鲜度窗口",
     "live": "实时",
-    "notApplied": "未应用 - 请重启",
+    "notApplied": "等待重启",
     "error": "错误"
   },
   "instanceError": "错误：{{message}}",
+  "settings": {
+    "title": "连接设置",
+    "editTitle": "编辑来源设置",
+    "editDescription": "留空的密钥字段会保留已保存的值。保存连接变更后请重启数据源以应用。",
+    "host": "Host",
+    "port": "Port",
+    "clientId": "Client ID",
+    "autoClientId": "自动",
+    "marketDataType": "Market data 类型",
+    "secType": "证券类型",
+    "exchange": "交易所",
+    "currency": "货币",
+    "contractSymbol": "合约代码",
+    "conId": "Con ID",
+    "localSymbol": "本地代码",
+    "tradingClass": "交易类别",
+    "multiplier": "乘数",
+    "includeExpired": "包含已到期合约",
+    "primaryExchange": "主交易所",
+    "lastTradeDate": "到期日 (YYYYMMDD)",
+    "strike": "行权价",
+    "right": "期权类型",
+    "apiKey": "API key",
+    "apiSecret": "API secret",
+    "getApiKeys": "获取 API key",
+    "getApiToken": "获取 API token",
+    "token": "Token",
+    "accountID": "Account ID",
+    "environment": "环境",
+    "category": "类别",
+    "keepStoredSecret": "保留已保存密钥",
+    "marketData": {
+      "live": "实时",
+      "frozen": "冻结",
+      "delayed": "延迟",
+      "delayedFrozen": "延迟冻结"
+    },
+    "secTypes": {
+      "STK": "股票 (STK)",
+      "CASH": "外汇 (CASH)",
+      "CRYPTO": "加密货币 (CRYPTO)",
+      "FUT": "期货 (FUT)",
+      "IND": "指数 (IND)",
+      "OPT": "期权 (OPT)"
+    },
+    "rights": {
+      "C": "看涨",
+      "P": "看跌"
+    },
+    "environments": {
+      "practice": "模拟",
+      "live": "实盘"
+    },
+    "categories": {
+      "spot": "现货",
+      "linear": "线性",
+      "inverse": "反向",
+      "option": "期权"
+    }
+  },
   "table": {
     "external": "外部",
     "instrument": "工具",
     "manualPrice": "手动价格",
     "price": "价格",
     "asOf": "截至",
+    "updateIntervalTooltip": "距上次更新的间隔",
     "state": "状态",
     "actions": "操作"
   },
@@ -47,6 +195,11 @@
   "emptyInstruments": "未配置工具",
   "diagnostics": {
     "title": "问题",
+    "summary": "当前：{{count}}",
+    "collapsedSummary": "问题：{{count}}",
+    "collapse": "收起",
+    "expand": "打开",
+    "actions": "问题操作",
     "levelError": "错误",
     "levelWarn": "警告",
     "levelInfo": "信息",
@@ -56,9 +209,12 @@
     "actionRestart": "重启数据源",
     "actionDocs": "提供方文档",
     "actionSymbols": "有效代码列表",
-    "actionRemove": "删除工具"
+    "actionRemove": "删除工具",
+    "actionRemoveTarget": "删除 {{target}}",
+    "actionLogs": "服务日志"
   },
   "references": {
+    "site": "提供方网站",
     "docs": "提供方文档",
     "symbols": "有效代码列表"
   },
@@ -66,7 +222,29 @@
     "action": "校验代码",
     "unsupported": "此提供方无法校验代码",
     "exists": "代码存在",
+    "unavailable": "该代码没有新鲜价格",
     "notFound": "未找到代码",
-    "didYouMean": "您是否想输入 {{suggestion}}？"
+    "didYouMean": "您是否想输入 {{suggestion}}？",
+    "failed": "校验失败"
+  },
+  "search": {
+    "action": "搜索代码",
+    "placeholder": "按名称或代码搜索",
+    "searching": "搜索中…",
+    "noResults": "未找到匹配的代码",
+    "unsupported": "此提供方无法搜索代码",
+    "resultLabel": "{{symbol}} · {{secType}} · {{exchange}} · {{currency}}",
+    "pick": "使用"
+  },
+  "resolve": {
+    "label": "在此数据源中解析代码",
+    "action": "解析",
+    "placeholder": "输入 EUR、EUR/USD、BTC 或 AAPL",
+    "filterLabel": "筛选解析结果",
+    "filterPlaceholder": "筛选解析结果",
+    "searching": "解析中…",
+    "noResults": "此数据源中没有匹配代码",
+    "noFilteredResults": "没有结果匹配筛选条件",
+    "resultLabel": "{{symbol}} · {{secType}} · {{exchange}} · {{currency}}"
   }
 }

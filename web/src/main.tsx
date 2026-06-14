@@ -35,7 +35,7 @@ if (!container) {
 // synchronously and Suspense only guards the edge case of a not-yet-ready tree.
 createRoot(container).render(
   <StrictMode>
-    <ThemeProvider storageKey="pit-officer-theme" defaultMode="dark">
+    <ThemeProvider storageKey="pit-officer-theme" defaultMode="system">
       <DisplayPreferencesProvider>
         <LocaleProvider>
           <Suspense fallback={null}>

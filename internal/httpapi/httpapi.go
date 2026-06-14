@@ -35,6 +35,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -88,8 +89,14 @@ type Service interface {
 	VerifyMarketDataSymbol(
 		ctx context.Context, id, externalSymbol string,
 	) (backend.MarketDataSymbolVerification, error)
+	SearchMarketDataSymbols(
+		ctx context.Context, id string, input backend.MarketDataSymbolSearchInput,
+	) (backend.MarketDataSymbolSearch, error)
 	CreateMarketDataInstance(ctx context.Context, instance domain.MarketDataInstance) error
 	SetMarketDataInstanceEnabled(ctx context.Context, id string, enabled bool) error
+	UpdateMarketDataInstanceSettings(
+		ctx context.Context, id, label, credentials string,
+	) error
 	DeleteMarketDataInstance(ctx context.Context, id string) error
 	UpsertMarketDataInstrument(ctx context.Context, instrument domain.MarketDataInstrument) error
 	SetMarketDataInstrumentEnabled(
@@ -133,6 +140,12 @@ type Service interface {
 	ServiceInfo(ctx context.Context) (backend.ServiceInfo, error)
 }
 
+// LogSource is the read seam over the in-memory log tail. It is satisfied by
+// *logtail.Buffer. Snapshot returns the buffered lines oldest to newest.
+type LogSource interface {
+	Snapshot() []string
+}
+
 // Options configures the router built by NewRouter.
 type Options struct {
 	// Service is the control-plane service backing /api/v1. Required.
@@ -143,6 +156,10 @@ type Options struct {
 	// MCP is the streamable-HTTP MCP handler mounted under /mcp. When nil the
 	// /mcp route is not registered; the dashboard and API are unaffected.
 	MCP http.Handler
+	// Logs is the in-memory log tail backing the service log routes. When nil the
+	// /service/logs routes are not registered; the rest of the surface is
+	// unaffected.
+	Logs LogSource
 }
 
 // NewRouter builds the serve-mode HTTP handler. It wires the liveness probe,
@@ -172,12 +189,12 @@ func NewRouter(opts Options) (http.Handler, error) {
 	router.Route("/api/v1", func(v1 chi.Router) {
 		v1.Use(limitBody)
 		v1.Use(stampSource(domain.SourceAPI))
-		mountV1(v1, opts.Service)
+		mountV1(v1, opts.Service, opts.Logs)
 	})
 	router.Route("/app/api/v1", func(v1 chi.Router) {
 		v1.Use(limitBody)
 		v1.Use(stampSource(domain.SourcePanel))
-		mountV1(v1, opts.Service)
+		mountV1(v1, opts.Service, opts.Logs)
 	})
 
 	if opts.MCP != nil {
@@ -204,10 +221,16 @@ func NewRouter(opts Options) (http.Handler, error) {
 // truth for the v1 surface so both the /api/v1 and /app/api/v1 mounts expose
 // exactly the same handlers; the mounting middleware decides the attributed
 // source.
-func mountV1(r chi.Router, svc Service) {
+func mountV1(r chi.Router, svc Service, logs LogSource) {
 	r.Get("/health", handleV1Health)
 	r.Get("/status", handleV1Status(svc))
 	r.Get("/service", handleServiceInfo(svc))
+	// The log tail is optional: only the serve path supplies it, so the routes
+	// register only when a source is present.
+	if logs != nil {
+		r.Get("/service/logs", handleServiceLogs(logs))
+		r.Get("/service/logs/download", handleServiceLogsDownload(logs))
+	}
 	r.Get("/overview", handleOverview(svc))
 
 	r.Get("/accounts", handleListAccounts(svc))
@@ -251,12 +274,14 @@ func mountV1(r chi.Router, svc Service) {
 	r.Post("/market-data/restart", handleRestartMarketData(svc))
 	r.Post("/market-data/instances", handleCreateMarketDataInstance(svc))
 	r.Put("/market-data/instances/{id}/enabled", handleSetMarketDataInstanceEnabled(svc))
+	r.Put("/market-data/instances/{id}/settings", handleUpdateMarketDataInstanceSettings(svc))
 	r.Delete("/market-data/instances/{id}", handleDeleteMarketDataInstance(svc))
 	r.Put("/market-data/instances/{id}/instruments", handleUpsertMarketDataInstrument(svc))
 	r.Put("/market-data/instances/{id}/instruments/enabled",
 		handleSetMarketDataInstrumentEnabled(svc))
 	r.Delete("/market-data/instances/{id}/instruments", handleDeleteMarketDataInstrument(svc))
 	r.Post("/market-data/instances/{id}/verify-symbol", handleVerifyMarketDataSymbol(svc))
+	r.Post("/market-data/instances/{id}/search-symbols", handleSearchMarketDataSymbols(svc))
 }
 
 // stampSource is middleware that stamps the given source onto the request
@@ -658,13 +683,12 @@ func handleRestartMarketData(svc Service) http.HandlerFunc {
 
 func handleCreateMarketDataInstance(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req marketDataInstanceDTO
+		var req marketDataCreateInstanceRequestDTO
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		instance := domain.MarketDataInstance{
-			ID:          req.ID,
 			Type:        req.Type,
 			Label:       req.Label,
 			Credentials: req.Credentials,
@@ -680,6 +704,35 @@ func handleCreateMarketDataInstance(svc Service) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusCreated, map[string]any{
+			"marketData": toMarketDataDTO(status),
+		})
+	}
+}
+
+func handleUpdateMarketDataInstanceSettings(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := pathID(r)
+		if err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		var req marketDataUpdateInstanceSettingsRequestDTO
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			return
+		}
+		if err := svc.UpdateMarketDataInstanceSettings(
+			r.Context(), id, req.Label, req.Credentials,
+		); err != nil {
+			writeErr(w, err)
+			return
+		}
+		status, err := svc.ListMarketData(r.Context())
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
 			"marketData": toMarketDataDTO(status),
 		})
 	}
@@ -824,6 +877,63 @@ func handleVerifyMarketDataSymbol(svc Service) http.HandlerFunc {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"verification": toMarketDataSymbolVerificationDTO(out),
+		})
+	}
+}
+
+// handleSearchMarketDataSymbols handles POST
+// /api/v1/market-data/instances/{id}/search-symbols. It runs a stateless,
+// non-mutating search of the instance's provider catalogue; live feeds are
+// untouched. An empty query (after trimming) is a validation error and never
+// reaches the service. A provider that cannot search symbols is a successful
+// call returning supported=false, not an HTTP error.
+func handleSearchMarketDataSymbols(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := pathID(r)
+		if err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		var req struct {
+			Query                        string `json:"query"`
+			SecType                      string `json:"secType"`
+			Exchange                     string `json:"exchange"`
+			Currency                     string `json:"currency"`
+			LastTradeDateOrContractMonth string `json:"lastTradeDateOrContractMonth"`
+			Right                        string `json:"right"`
+			Strike                       string `json:"strike"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			return
+		}
+		if strings.TrimSpace(req.Query) == "" {
+			writeErrMsg(w, http.StatusBadRequest, "validation", "query is required")
+			return
+		}
+		// The strike is an optional, caller-supplied decimal criterion. Validate it
+		// here so a malformed value (e.g. "abc") is a 400 from the boundary, not a
+		// false upstream 502 from the connector's deep decimal parse.
+		if err := domain.ValidateMarketDataStrike(strings.TrimSpace(req.Strike)); err != nil {
+			writeErr(w, err)
+			return
+		}
+		out, err := svc.SearchMarketDataSymbols(r.Context(), id, backend.MarketDataSymbolSearchInput{
+			Query:                        req.Query,
+			SecType:                      req.SecType,
+			Exchange:                     req.Exchange,
+			Currency:                     req.Currency,
+			LastTradeDateOrContractMonth: req.LastTradeDateOrContractMonth,
+			Right:                        req.Right,
+			Strike:                       req.Strike,
+		})
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"supported": out.Supported,
+			"matches":   toMarketDataSymbolMatchDTOs(out.Matches),
 		})
 	}
 }
@@ -1314,6 +1424,32 @@ func handleServiceInfo(svc Service) http.HandlerFunc {
 	}
 }
 
+// handleServiceLogs handles GET /api/v1/service/logs. It returns the buffered
+// log tail as JSON, oldest line first, alongside the line count.
+func handleServiceLogs(logs LogSource) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		lines := logs.Snapshot()
+		writeJSON(w, http.StatusOK, serviceLogsDTO{Lines: lines, Count: len(lines)})
+	}
+}
+
+// handleServiceLogsDownload handles GET /api/v1/service/logs/download. It serves
+// the full buffer as a plain-text attachment, lines joined by newlines.
+func handleServiceLogsDownload(logs LogSource) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		lines := logs.Snapshot()
+		body := strings.Join(lines, "\n")
+		if len(lines) > 0 {
+			body += "\n"
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Content-Disposition",
+			`attachment; filename="pit-officer.log"`)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(body))
+	}
+}
+
 // --- request helpers --------------------------------------------------------
 
 // limitParam reads the ?limit= query parameter, defaulting to def and capping at
@@ -1391,6 +1527,15 @@ func writeErr(w http.ResponseWriter, err error) {
 		writeErrMsg(w, http.StatusConflict, "conflict", err.Error())
 	case errors.Is(err, domain.ErrNotImplemented):
 		writeErrMsg(w, http.StatusNotImplemented, "not_implemented", err.Error())
+	case errors.Is(err, domain.ErrUpstream):
+		// An external provider failed (e.g. a market-data 403/timeout). This is
+		// an expected operational condition, so it is logged at WARN with the
+		// detail for operators and answered with a plain, actionable message
+		// rather than a scary 500 "unhandled internal error".
+		slog.Warn("upstream provider request failed", "error", err)
+		writeErrMsg(w, http.StatusBadGateway, "upstream",
+			"The market-data provider couldn't complete the request. "+
+				"Check the symbol and your provider access, then try again.")
 	default:
 		slog.Error("unhandled internal error serving request", "error", err)
 		writeErrMsg(w, http.StatusInternalServerError, "internal", "internal error")

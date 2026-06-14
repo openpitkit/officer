@@ -544,6 +544,24 @@ func (n *localNode) SetMarketDataInstanceEnabled(
 	return nil
 }
 
+func (n *localNode) UpdateMarketDataInstanceSettings(
+	ctx context.Context, id, label, credentials string, caller domain.Caller,
+) error {
+	n.mutate.Lock()
+	defer n.mutate.Unlock()
+
+	if err := n.store.UpdateMarketDataInstanceSettings(ctx, id, label, credentials); err != nil {
+		return fmt.Errorf("update market-data instance settings: %w", err)
+	}
+	if err := n.audit(ctx, caller, store.AuditEntry{
+		Action: domain.AuditActionSetMarketData,
+		Detail: fmt.Sprintf("update market-data instance settings %s", id),
+	}); err != nil {
+		return fmt.Errorf("audit update market-data instance settings: %w", err)
+	}
+	return nil
+}
+
 func (n *localNode) DeleteMarketDataInstance(
 	ctx context.Context, id string, caller domain.Caller,
 ) error {

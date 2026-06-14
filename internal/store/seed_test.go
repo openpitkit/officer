@@ -25,19 +25,19 @@ import (
 	"go.openpit.dev/officer/internal/store"
 )
 
-// wantSeedPairs are the external symbols the seed must create, each at mark "1".
-var wantSeedPairs = map[string]struct{ base, quote string }{
-	"USDT/USD":  {"USDT", "USD"},
-	"USDC/USD":  {"USDC", "USD"},
-	"USDT/USDC": {"USDT", "USDC"},
-	"EURC/EUR":  {"EURC", "EUR"},
-	"EURT/EUR":  {"EURT", "EUR"},
-	"EURC/EURT": {"EURC", "EURT"},
+// wantSeedPairs are the external symbols the seed must create.
+var wantSeedPairs = map[string]struct{ base, quote, mark string }{
+	"USDT/USD":  {"USDT", "USD", "1.0006"},
+	"USDC/USD":  {"USDC", "USD", "0.9999"},
+	"USDT/USDC": {"USDT", "USDC", "1.0007"},
+	"EURC/EUR":  {"EURC", "EUR", "0.9990"},
+	"EURT/EUR":  {"EURT", "EUR", "1.0002"},
+	"EURC/EURT": {"EURC", "EURT", "0.9988"},
 }
 
 // TestSeedMarketDataDefaults_SeedsStablecoinCrossRates verifies the first seed
-// creates one enabled BYO source with the predefined stablecoin pairs at a
-// manual mark of "1".
+// creates one enabled BYO source with the predefined stablecoin pairs at
+// approximate static manual marks.
 func TestSeedMarketDataDefaults_SeedsStablecoinCrossRates(t *testing.T) {
 	t.Parallel()
 	s := openStore(t)
@@ -57,6 +57,9 @@ func TestSeedMarketDataDefaults_SeedsStablecoinCrossRates(t *testing.T) {
 	if instance.Type != domain.MarketDataProviderBYO || !instance.Enabled {
 		t.Fatalf("seed instance = %+v, want BYO and enabled", instance)
 	}
+	if instance.Label != "FX (static)" {
+		t.Fatalf("seed instance label = %q, want FX (static)", instance.Label)
+	}
 
 	instruments, err := s.ListMarketDataInstruments(ctx, store.SeedFXStablecoinsInstanceID)
 	if err != nil {
@@ -74,9 +77,9 @@ func TestSeedMarketDataDefaults_SeedsStablecoinCrossRates(t *testing.T) {
 			t.Fatalf("instrument %q = %s/%s, want %s/%s",
 				inst.ExternalSymbol, inst.BaseAsset, inst.QuoteAsset, want.base, want.quote)
 		}
-		if inst.ManualPrice != "1" {
-			t.Fatalf("instrument %q manual price = %q, want \"1\"",
-				inst.ExternalSymbol, inst.ManualPrice)
+		if inst.ManualPrice != want.mark {
+			t.Fatalf("instrument %q manual price = %q, want %q",
+				inst.ExternalSymbol, inst.ManualPrice, want.mark)
 		}
 		if !inst.Enabled {
 			t.Fatalf("instrument %q not enabled", inst.ExternalSymbol)

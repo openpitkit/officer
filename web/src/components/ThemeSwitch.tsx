@@ -31,14 +31,22 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useTheme, type ThemeMode } from "@/theme/theme-context";
 
-const MODES: { value: ThemeMode; labelKey: string; icon: ComponentType<{ className?: string }> }[] = [
+const MODES: {
+  value: ThemeMode;
+  labelKey: string;
+  icon: ComponentType<{ className?: string }>;
+}[] = [
   { value: "dark", labelKey: "theme.dark", icon: Moon },
   { value: "light", labelKey: "theme.light", icon: Sun },
   { value: "system", labelKey: "theme.system", icon: Monitor },
 ];
 
+function isThemeMode(value: string): value is ThemeMode {
+  return MODES.some((mode) => mode.value === value);
+}
+
 /**
- * Tri-state theme selector: dark / light / system, persisted to localStorage.
+ * Tri-state theme selector: dark / light / system, persisted in the browser.
  */
 export function ThemeSwitch() {
   const { t } = useTranslation();
@@ -55,10 +63,11 @@ export function ThemeSwitch() {
         <Button
           variant="outline"
           size="icon"
+          className="shrink-0"
           aria-label={ariaLabel}
           title={ariaLabel}
         >
-          <TriggerIcon />
+          <TriggerIcon className="h-4 w-4" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
@@ -66,7 +75,11 @@ export function ThemeSwitch() {
         <DropdownMenuSeparator />
         <DropdownMenuRadioGroup
           value={mode}
-          onValueChange={(v) => setMode(v as ThemeMode)}
+          onValueChange={(v) => {
+            if (isThemeMode(v)) {
+              setMode(v);
+            }
+          }}
         >
           {MODES.map(({ value, labelKey, icon: Icon }) => (
             <DropdownMenuRadioItem key={value} value={value}>

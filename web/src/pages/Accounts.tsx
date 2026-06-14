@@ -65,7 +65,6 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -1280,8 +1279,7 @@ function GroupsPanel({
 }) {
   const { t } = useTranslation("accounts");
   return (
-    <Card>
-      <Table>
+    <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead>{t("groups.columns.group")}</TableHead>
@@ -1397,8 +1395,7 @@ function GroupsPanel({
             );
           })}
         </TableBody>
-      </Table>
-    </Card>
+    </Table>
   );
 }
 
@@ -1423,8 +1420,7 @@ function AccountsTable({
 }) {
   const { t } = useTranslation("accounts");
   return (
-    <Card>
-      <Table>
+    <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead>{t("accounts.columns.account")}</TableHead>
@@ -1553,8 +1549,7 @@ function AccountsTable({
             </TableRow>
           ))}
         </TableBody>
-      </Table>
-    </Card>
+    </Table>
   );
 }
 

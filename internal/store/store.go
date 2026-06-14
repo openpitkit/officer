@@ -353,6 +353,12 @@ type Store interface {
 	// Returns domain.ErrNotFound when no such instance exists.
 	SetMarketDataInstanceEnabled(ctx context.Context, id string, enabled bool) error
 
+	// UpdateMarketDataInstanceSettings replaces the editable settings of an
+	// instance. Returns domain.ErrNotFound when no such instance exists.
+	UpdateMarketDataInstanceSettings(
+		ctx context.Context, id, label, credentials string,
+	) error
+
 	// DeleteMarketDataInstance removes the instance and (by cascade) its
 	// instruments. Returns domain.ErrNotFound when no such instance exists.
 	DeleteMarketDataInstance(ctx context.Context, id string) error
