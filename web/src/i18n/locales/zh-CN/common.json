@@ -32,7 +32,25 @@
   "brand": {
     "name": "Pit Officer",
     "logoAriaLabel": "Pit 标志",
+    "controlPlane": "控制平面",
     "nonRelease": "非正式版本"
+  },
+  "display": {
+    "density": {
+      "label": "密度",
+      "ariaLabel": "密度",
+      "comfortable": "宽松",
+      "compact": "紧凑",
+      "terminal": "密集"
+    },
+    "tradeStyle": {
+      "label": "风格",
+      "ariaLabel": "交易风格",
+      "tape": "Tape",
+      "tapeTitle": "Tape：现金、现货、外汇和组合交易台风格",
+      "ladder": "Ladder",
+      "ladderTitle": "Ladder：期货、期权、DOM 和价格梯交易台风格"
+    }
   },
   "theme": {
     "label": "主题",

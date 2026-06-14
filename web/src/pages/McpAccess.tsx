@@ -110,7 +110,7 @@ function ProtectiveEnableDialog({
               e.preventDefault();
               onConfirm();
             }}
-            className="bg-[var(--danger)] text-white hover:bg-[var(--danger)]/90"
+            className="border-[var(--danger)] bg-[var(--danger)] text-bg hover:border-[var(--danger)] hover:bg-[var(--danger)]"
           >
             {t("dialog.confirm")}
           </AlertDialogAction>

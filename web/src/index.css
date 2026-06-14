@@ -42,6 +42,7 @@ Please see https://openpit.dev and the OWNERS file for details.
     --border: rgba(231, 226, 213, 0.08);
     --border-hover: #ff7a00;
     --card-hover-bg: rgba(255, 122, 0, 0.06);
+    --surface-hover: rgba(255, 122, 0, 0.08);
     --card-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
     --tag-border: rgba(231, 226, 213, 0.12);
     --text: #e8e6df;
@@ -50,6 +51,28 @@ Please see https://openpit.dev and the OWNERS file for details.
     --ok: #4ec77a;
     --warn: #ffb347;
     --danger: #ff5d52;
+    --ok-dim: rgba(78, 199, 122, 0.12);
+    --warn-dim: rgba(255, 179, 71, 0.14);
+    --danger-dim: rgba(255, 93, 82, 0.14);
+    --ring: #ff7a00;
+    --buy: #3fb950;
+    --buy-dim: rgba(63, 185, 80, 0.14);
+    --sell: #ff5d52;
+    --sell-dim: rgba(255, 93, 82, 0.14);
+    --long: var(--buy);
+    --short: var(--sell);
+    --pnl-pos: #4ec77a;
+    --pnl-neg: #ff5d52;
+    --pnl-flat: var(--muted-lt);
+    --util-ok: var(--ok);
+    --util-warn: var(--warn);
+    --util-breach: var(--danger);
+    --util-track: var(--surface-2);
+    --terminal-grid: rgba(255, 255, 255, 0.14);
+    --terminal-head: #303034;
+    --terminal-head-text: #e8e8e8;
+    --terminal-row-a: #030303;
+    --terminal-row-b: #101010;
   }
 
   .light {
@@ -63,6 +86,7 @@ Please see https://openpit.dev and the OWNERS file for details.
     --border: #d8d3c4;
     --border-hover: #c25400;
     --card-hover-bg: #fcf6ec;
+    --surface-hover: rgba(194, 84, 0, 0.08);
     --card-shadow: 0 10px 28px rgba(40, 30, 15, 0.1);
     --tag-border: #d8d3c4;
     --text: #1a1a1a;
@@ -71,6 +95,195 @@ Please see https://openpit.dev and the OWNERS file for details.
     --ok: #1f8a4c;
     --warn: #8a5a00;
     --danger: #b22a1f;
+    --ok-dim: rgba(31, 138, 76, 0.1);
+    --warn-dim: rgba(138, 90, 0, 0.12);
+    --danger-dim: rgba(178, 42, 31, 0.1);
+    --ring: #c25400;
+    --buy: #1f8a4c;
+    --buy-dim: rgba(31, 138, 76, 0.12);
+    --sell: #b22a1f;
+    --sell-dim: rgba(178, 42, 31, 0.1);
+    --long: var(--buy);
+    --short: var(--sell);
+    --pnl-pos: #1f8a4c;
+    --pnl-neg: #b22a1f;
+    --pnl-flat: var(--muted-lt);
+    --util-ok: var(--ok);
+    --util-warn: var(--warn);
+    --util-breach: var(--danger);
+    --util-track: var(--surface-2);
+    --terminal-grid: #cfc6b4;
+    --terminal-head: #e8deca;
+    --terminal-head-text: #1a1a1a;
+    --terminal-row-a: #fffdf8;
+    --terminal-row-b: #f8f1e5;
+  }
+
+  :root {
+    --radius-card: 6px;
+    --radius-badge: 3px;
+    --sidebar-width: 14rem;
+    --topbar-height: 3.5rem;
+    --content-max: 72rem;
+    --dens-page-pad: 24px;
+    --dens-shell-x: 24px;
+    --dens-title-min: 9rem;
+    --dens-title-fz: 1rem;
+    --dens-sidebar-pad: 8px;
+    --dens-sidebar-brand-py: 12px;
+    --dens-brand-logo: 24px;
+    --dens-brand-title-fz: 0.875rem;
+    --dens-brand-label-fz: 0.625rem;
+    --dens-nav-px: 12px;
+    --dens-nav-gap: 10px;
+    --dens-nav-icon: 16px;
+    --dens-footer-icon: 14px;
+    --dens-nav-fz: 0.875rem;
+    --dens-footer-fz: 0.75rem;
+    --dens-card-head-gap: 12px;
+    --dens-card-pad: 20px;
+    --dens-cell-px: 12px;
+    --dens-cell-py: 8px;
+    --dens-head-h: 36px;
+    --dens-table-fz: 0.875rem;
+    --dens-nav-py: 8px;
+    --dens-row-gap: 16px;
+    --dens-button-h: 36px;
+    --dens-button-sm-h: 32px;
+    --dens-button-icon: 36px;
+    --dens-button-glyph: 16px;
+    --dens-button-px: 16px;
+    --dens-button-sm-px: 12px;
+    --dens-field-h: 36px;
+    --dens-field-px: 12px;
+    --dens-field-fz: 0.875rem;
+    --dens-textarea-min-h: 72px;
+    --dens-control-h: 32px;
+    --dens-control-px: 10px;
+    --dens-control-gap: 6px;
+    --dens-control-fz: 0.75rem;
+    --dens-control-icon: 14px;
+    --dens-swatch: 10px;
+  }
+
+  [data-density="comfortable"] {
+    --dens-page-pad: 28px;
+    --dens-shell-x: 24px;
+    --dens-title-min: 10rem;
+    --dens-title-fz: 1rem;
+    --dens-sidebar-pad: 10px;
+    --dens-sidebar-brand-py: 14px;
+    --dens-brand-logo: 26px;
+    --dens-brand-title-fz: 0.9375rem;
+    --dens-brand-label-fz: 0.625rem;
+    --dens-nav-px: 14px;
+    --dens-nav-gap: 10px;
+    --dens-nav-icon: 16px;
+    --dens-footer-icon: 14px;
+    --dens-nav-fz: 0.875rem;
+    --dens-footer-fz: 0.75rem;
+    --dens-card-head-gap: 14px;
+    --dens-card-pad: 26px;
+    --dens-cell-px: 16px;
+    --dens-cell-py: 13px;
+    --dens-head-h: 42px;
+    --dens-table-fz: 0.9375rem;
+    --dens-nav-py: 11px;
+    --dens-row-gap: 20px;
+    --dens-button-h: 40px;
+    --dens-button-sm-h: 34px;
+    --dens-button-icon: 40px;
+    --dens-button-glyph: 16px;
+    --dens-button-px: 18px;
+    --dens-button-sm-px: 14px;
+    --dens-field-h: 40px;
+    --dens-field-px: 14px;
+    --dens-field-fz: 0.9375rem;
+    --dens-textarea-min-h: 88px;
+    --dens-control-h: 34px;
+    --dens-control-px: 12px;
+    --dens-control-gap: 7px;
+    --dens-control-fz: 0.75rem;
+    --dens-control-icon: 14px;
+    --dens-swatch: 10px;
+  }
+
+  [data-density="terminal"] {
+    color-scheme: dark;
+    --bg: #000000;
+    --surface: #050505;
+    --surface-2: #0f0f0f;
+    --border: rgba(255, 255, 255, 0.14);
+    --border-hover: #ff7a00;
+    --card-hover-bg: rgba(255, 122, 0, 0.1);
+    --surface-hover: rgba(255, 122, 0, 0.12);
+    --card-shadow: none;
+    --tag-border: rgba(255, 255, 255, 0.22);
+    --text: #e8e8e8;
+    --muted: #8c8c8c;
+    --muted-lt: #c7c7c7;
+    --terminal-grid: rgba(255, 255, 255, 0.16);
+    --terminal-head: #303034;
+    --terminal-head-text: #f4f4f4;
+    --terminal-row-a: #020202;
+    --terminal-row-b: #0d0d0d;
+    --radius-card: 2px;
+    --radius-badge: 1px;
+    --sidebar-width: 12rem;
+    --topbar-height: 2.25rem;
+    --content-max: none;
+    --dens-page-pad: 6px;
+    --dens-shell-x: 6px;
+    --dens-title-min: 6rem;
+    --dens-title-fz: 0.75rem;
+    --dens-sidebar-pad: 4px;
+    --dens-sidebar-brand-py: 4px;
+    --dens-brand-logo: 18px;
+    --dens-brand-title-fz: 0.75rem;
+    --dens-brand-label-fz: 0.5625rem;
+    --dens-nav-px: 6px;
+    --dens-nav-gap: 6px;
+    --dens-nav-icon: 12px;
+    --dens-footer-icon: 11px;
+    --dens-nav-fz: 0.6875rem;
+    --dens-footer-fz: 0.6875rem;
+    --dens-card-head-gap: 4px;
+    --dens-card-pad: 8px;
+    --dens-cell-px: 6px;
+    --dens-cell-py: 2px;
+    --dens-head-h: 22px;
+    --dens-table-fz: 0.75rem;
+    --dens-nav-py: 3px;
+    --dens-row-gap: 6px;
+    --dens-button-h: 22px;
+    --dens-button-sm-h: 20px;
+    --dens-button-icon: 22px;
+    --dens-button-glyph: 12px;
+    --dens-button-px: 7px;
+    --dens-button-sm-px: 6px;
+    --dens-field-h: 22px;
+    --dens-field-px: 6px;
+    --dens-field-fz: 0.75rem;
+    --dens-textarea-min-h: 44px;
+    --dens-control-h: 20px;
+    --dens-control-px: 5px;
+    --dens-control-gap: 3px;
+    --dens-control-fz: 0.625rem;
+    --dens-control-icon: 10px;
+    --dens-swatch: 7px;
+  }
+
+  [data-trade-style="ladder"],
+  [data-trade-style="ladder"].dark {
+    --buy: #4d9fff;
+    --buy-dim: rgba(77, 159, 255, 0.16);
+    --long: var(--buy);
+  }
+
+  [data-trade-style="ladder"].light {
+    --buy: #1f63c9;
+    --buy-dim: rgba(31, 99, 201, 0.12);
+    --long: var(--buy);
   }
 
   * {
@@ -82,12 +295,72 @@ Please see https://openpit.dev and the OWNERS file for details.
       "JetBrains Mono", ui-monospace, "Cascadia Code", "Fira Code", monospace;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    letter-spacing: 0;
   }
 
   body {
     background: var(--bg);
     color: var(--text);
     min-height: 100vh;
+    font-size: 14px;
+  }
+
+  [data-density="terminal"] body {
+    font-size: 12px;
+  }
+
+  [data-density="terminal"] table {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+  }
+
+  [data-density="terminal"] thead {
+    background: var(--terminal-head);
+  }
+
+  [data-density="terminal"] th {
+    background: var(--terminal-head);
+    border-right: 1px solid var(--terminal-grid);
+    color: var(--terminal-head-text);
+  }
+
+  [data-density="terminal"] td {
+    border-right: 1px solid var(--terminal-grid);
+  }
+
+  [data-density="terminal"] th:last-child,
+  [data-density="terminal"] td:last-child {
+    border-right: 0;
+  }
+
+  [data-density="terminal"] tbody tr:nth-child(odd) {
+    background: var(--terminal-row-a);
+  }
+
+  [data-density="terminal"] tbody tr:nth-child(even) {
+    background: var(--terminal-row-b);
+  }
+
+  [data-density="terminal"] tbody tr:hover {
+    background: var(--surface-hover);
+  }
+
+  [data-density="terminal"] button,
+  [data-density="terminal"] input,
+  [data-density="terminal"] textarea,
+  [data-density="terminal"] [role="combobox"] {
+    box-shadow: none;
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
+
+  .tracking-tight {
+    letter-spacing: 0;
   }
 
   /* Thin, theme-aware scrollbars to keep the dense admin feel consistent. */
@@ -103,6 +376,14 @@ Please see https://openpit.dev and the OWNERS file for details.
     background: var(--border);
     border-radius: 6px;
   }
+  [data-density="terminal"] *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  [data-density="terminal"] *::-webkit-scrollbar-thumb {
+    background: #505050;
+    border-radius: 2px;
+  }
   *::-webkit-scrollbar-track {
     background: transparent;
   }
@@ -113,5 +394,106 @@ Please see https://openpit.dev and the OWNERS file for details.
   .nums {
     font-variant-numeric: tabular-nums;
     font-feature-settings: "tnum" 1;
+  }
+
+  /* Compress older page-level Tailwind utilities in the pro terminal density. */
+  [data-density="terminal"] .h-8,
+  [data-density="terminal"] .h-9 {
+    height: var(--dens-field-h);
+  }
+
+  [data-density="terminal"] .min-h-\[7rem\] {
+    min-height: var(--dens-textarea-min-h);
+  }
+
+  [data-density="terminal"] .p-1 {
+    padding: 2px;
+  }
+  [data-density="terminal"] .p-2,
+  [data-density="terminal"] .p-2\.5 {
+    padding: 4px;
+  }
+  [data-density="terminal"] .p-3,
+  [data-density="terminal"] .p-4,
+  [data-density="terminal"] .p-6 {
+    padding: var(--dens-card-pad);
+  }
+
+  [data-density="terminal"] .px-1\.5,
+  [data-density="terminal"] .px-2 {
+    padding-left: 4px;
+    padding-right: 4px;
+  }
+  [data-density="terminal"] .px-3 {
+    padding-left: var(--dens-field-px);
+    padding-right: var(--dens-field-px);
+  }
+
+  [data-density="terminal"] .py-0\.5,
+  [data-density="terminal"] .py-1,
+  [data-density="terminal"] .py-1\.5 {
+    padding-bottom: 2px;
+    padding-top: 2px;
+  }
+  [data-density="terminal"] .py-2,
+  [data-density="terminal"] .py-3,
+  [data-density="terminal"] .py-4,
+  [data-density="terminal"] .py-5,
+  [data-density="terminal"] .py-6,
+  [data-density="terminal"] .py-8,
+  [data-density="terminal"] .py-10,
+  [data-density="terminal"] .py-12 {
+    padding-bottom: var(--dens-card-pad);
+    padding-top: var(--dens-card-pad);
+  }
+
+  [data-density="terminal"] .gap-1\.5,
+  [data-density="terminal"] .gap-2 {
+    gap: 4px;
+  }
+  [data-density="terminal"] .gap-3,
+  [data-density="terminal"] .gap-4 {
+    gap: var(--dens-row-gap);
+  }
+
+  [data-density="terminal"] .space-y-1 > :not([hidden]) ~ :not([hidden]),
+  [data-density="terminal"] .space-y-1\.5 > :not([hidden]) ~ :not([hidden]) {
+    --tw-space-y-reverse: 0;
+    margin-bottom: calc(2px * var(--tw-space-y-reverse));
+    margin-top: calc(2px * calc(1 - var(--tw-space-y-reverse)));
+  }
+  [data-density="terminal"] .space-y-2 > :not([hidden]) ~ :not([hidden]),
+  [data-density="terminal"] .space-y-3 > :not([hidden]) ~ :not([hidden]) {
+    --tw-space-y-reverse: 0;
+    margin-bottom: calc(4px * var(--tw-space-y-reverse));
+    margin-top: calc(4px * calc(1 - var(--tw-space-y-reverse)));
+  }
+  [data-density="terminal"] .space-y-4 > :not([hidden]) ~ :not([hidden]),
+  [data-density="terminal"] .space-y-5 > :not([hidden]) ~ :not([hidden]) {
+    --tw-space-y-reverse: 0;
+    margin-bottom: calc(var(--dens-row-gap) * var(--tw-space-y-reverse));
+    margin-top: calc(
+      var(--dens-row-gap) * calc(1 - var(--tw-space-y-reverse))
+    );
+  }
+
+  [data-density="terminal"] .text-sm {
+    font-size: 0.75rem;
+    line-height: 1.25;
+  }
+  [data-density="terminal"] .text-base {
+    font-size: 0.8125rem;
+    line-height: 1.25;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      scroll-behavior: auto !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 }

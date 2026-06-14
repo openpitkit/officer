@@ -69,6 +69,7 @@
   "createAccount": {
     "trigger": "新建账户",
     "title": "创建账户",
+    "description": "在控制平面创建账户，并可选择将其分配到分组。",
     "idLabel": "账户 ID",
     "idHint": "最多 64 个可打印字符，首尾不得有空格。",
     "groupLabel": "分组（可选）",

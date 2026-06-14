@@ -34,6 +34,16 @@ export default defineConfig({
     outDir: "dist",
     emptyOutDir: true,
     sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return undefined;
+          if (id.includes("@radix-ui")) return "radix";
+          if (id.includes("i18next") || id.includes("react-i18next")) return "i18n";
+          return "vendor";
+        },
+      },
+    },
   },
   server: {
     port: 5173,

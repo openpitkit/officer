@@ -71,7 +71,7 @@ function CountsRow({ counts }: { counts: Overview["counts"] }) {
           key={label}
           type="button"
           onClick={() => navigate(route)}
-          className="animate-fade-in rounded-xl text-left hover:bg-accent-dim focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="animate-fade-in rounded-card text-left hover:bg-accent-dim focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <Card className="h-full pointer-events-none">
             <CardContent className="flex flex-col items-center gap-1 py-4 text-center">
@@ -108,7 +108,7 @@ function McpAccessCard() {
     <button
       type="button"
       onClick={() => navigate("/mcp-access")}
-      className="animate-fade-in w-full cursor-pointer rounded-xl text-left hover:bg-accent-dim focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="animate-fade-in w-full cursor-pointer rounded-card text-left hover:bg-accent-dim focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <Card className="pointer-events-none">
         <CardContent className="flex flex-wrap items-center gap-2 py-3">
@@ -156,7 +156,7 @@ function MarketDataCard() {
     <button
       type="button"
       onClick={() => navigate("/market-data")}
-      className="animate-fade-in w-full cursor-pointer rounded-xl text-left hover:bg-accent-dim focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="animate-fade-in w-full cursor-pointer rounded-card text-left hover:bg-accent-dim focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <Card className="pointer-events-none">
         <CardContent className="flex flex-wrap items-center gap-2 py-3">
@@ -313,7 +313,7 @@ function ActivityItem({
       onClick={() => navigate(href)}
       className="flex w-full items-start gap-2 border-b border-border py-2 text-left last:border-0 hover:bg-accent-dim"
     >
-      <span className="mt-0.5 shrink-0 rounded-[3px] border border-border px-1.5 py-0.5 text-[0.6rem] uppercase tracking-wide text-muted">
+      <span className="mt-0.5 shrink-0 rounded-badge border border-border px-1.5 py-0.5 text-[0.6rem] uppercase tracking-wide text-muted">
         {entry.source}
       </span>
       <span className="min-w-0 flex-1">
@@ -408,7 +408,7 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
       </span>
 
       {/* Source + time */}
-      <span className="shrink-0 rounded-[3px] border border-border px-1.5 py-0.5 text-[0.6rem] uppercase tracking-wide text-muted">
+      <span className="shrink-0 rounded-badge border border-border px-1.5 py-0.5 text-[0.6rem] uppercase tracking-wide text-muted">
         {entry.source}
       </span>
       <span className="nums w-36 shrink-0 text-right text-[0.6875rem] text-muted-lt">

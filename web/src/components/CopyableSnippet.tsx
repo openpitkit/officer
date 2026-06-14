@@ -94,7 +94,7 @@ export function CopyableSnippet({
         rows={rows}
         value={text}
         spellCheck={false}
-        className="w-full rounded-card border border-border bg-muted/30 p-2 font-mono text-[0.6875rem] text-muted-lt focus:outline-none focus:ring-1 focus:ring-accent/40 resize-none select-all"
+        className="w-full resize-none select-all rounded-card border border-border bg-surface-2 p-2 font-mono text-[0.6875rem] text-muted-lt focus:outline-none focus:ring-1 focus:ring-ring"
         aria-label={label ?? t("states.copyableSnippet")}
       />
     </div>

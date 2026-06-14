@@ -15,55 +15,45 @@
 #
 # Please see https://openpit.dev and the OWNERS file for details.
 
-# BuildKit reads <Dockerfile>.dockerignore next to the Dockerfile; this applies
-# when the build context is the workspace root. Paths are relative to that root.
+# BuildKit reads <Dockerfile>.dockerignore next to the Dockerfile. Paths are
+# relative to the officer module root build context.
 
-# --- officer subtree ---
-
-# Rebuilt inside the image.
-officer/web/node_modules/
-# Excluded wholesale: the frontend stage rebuilds dist before go build. The
-# committed index.html placeholder only matters for a non-Docker go:embed build.
-officer/web/dist/
+# Binaries and build artifacts produced by local builds.
+/pit-officer
+/bin/
+*.exe
+*.test
+*.out
+*.o
+*.a
+coverage.out
 
 # Local databases - never bake runtime state into the image.
-officer/*.db
-officer/*.db-shm
-officer/*.db-wal
-officer/*.sqlite
-officer/*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
 
 # Runtime state published by `serve` next to the database.
-officer/officer-runtime.json
+officer-runtime.json
 
-# Binaries and build artifacts produced by a local `just build`.
-officer/pit-officer
-officer/bin/
-officer/*.exe
-officer/*.test
-officer/*.out
-officer/*.o
-officer/*.a
-officer/coverage.out
+# Rebuilt inside the image.
+/web/node_modules/
+/web/dist/
 
 # Environment files - must not be baked into the image.
-officer/.env
-officer/.env.*
+.env
+.env.*
 
 # CI and documentation (not needed in the runtime image).
-officer/.github/
-officer/docs/
-officer/justfile
-officer/Makefile
+.github/
+docs/
+justfile
+Makefile
 
 # Editor and OS noise.
-officer/.DS_Store
-officer/.vscode/
-officer/.idea/
-officer/**/*.swp
-
-# --- pit subtree ---
-# The pit directory is only needed for pit/bindings/go/; exclude heavy
-# subdirectories that are never referenced by the Go build.
-pit/target/
-pit/.git/
+.DS_Store
+.vscode/
+.idea/
+**/*.swp

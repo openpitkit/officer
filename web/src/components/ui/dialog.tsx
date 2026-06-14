@@ -38,7 +38,7 @@ const DialogOverlay = forwardRef<
   <DialogPrimitive.Overlay
     ref={ref}
     className={cn(
-      "fixed inset-0 z-50 bg-black/60 backdrop-blur-sm",
+      "fixed inset-0 z-50 bg-black/70",
       "data-[state=open]:animate-fade-in",
       className,
     )}
@@ -76,9 +76,9 @@ const DialogContent = forwardRef<
         {children}
         <DialogPrimitive.Close
           className={cn(
-            "absolute right-4 top-4 rounded-[4px] p-1 text-muted transition-colors",
+            "absolute right-4 top-4 rounded-badge p-1 text-muted transition-colors",
             "hover:bg-accent-dim hover:text-accent focus-visible:outline-none",
-            "focus-visible:ring-2 focus-visible:ring-accent",
+            "focus-visible:ring-2 focus-visible:ring-ring",
           )}
           aria-label={t("actions.close")}
         >

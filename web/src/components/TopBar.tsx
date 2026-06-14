@@ -22,6 +22,7 @@ import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { useSidebar } from "@/components/sidebar-context";
+import { DisplaySwitches } from "@/components/DisplaySwitches";
 import { LanguageSwitch } from "@/components/LanguageSwitch";
 import { ThemeSwitch } from "@/components/ThemeSwitch";
 
@@ -35,8 +36,8 @@ export function TopBar({ title, actions }: TopBarProps) {
   const { t } = useTranslation();
   const { toggle } = useSidebar();
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between border-b border-border bg-surface px-6">
-      <div className="flex items-center gap-2">
+    <header className="flex h-[var(--topbar-height)] shrink-0 items-center gap-2 overflow-hidden border-b border-border bg-surface px-[var(--dens-shell-x)] shadow-[inset_0_2px_0_var(--accent)]">
+      <div className="flex min-w-[var(--dens-title-min)] shrink-0 items-center gap-2">
         <Button
           variant="outline"
           size="icon"
@@ -46,9 +47,13 @@ export function TopBar({ title, actions }: TopBarProps) {
         >
           <Menu />
         </Button>
-        <h1 className="text-base font-bold tracking-tight text-text">{title}</h1>
+        <span className="hidden h-5 w-[3px] rounded-[1px] bg-accent sm:block" />
+        <h1 className="min-w-0 truncate text-[length:var(--dens-title-fz)] font-bold tracking-tight text-text">
+          {title}
+        </h1>
       </div>
-      <div className="flex items-center gap-2">
+      <div className="ml-auto flex min-w-0 flex-1 flex-nowrap items-center justify-end gap-2 overflow-x-auto whitespace-nowrap md:flex-none md:shrink-0 md:overflow-visible">
+        <DisplaySwitches />
         {actions}
         <LanguageSwitch />
         <ThemeSwitch />

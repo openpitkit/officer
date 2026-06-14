@@ -32,7 +32,25 @@
   "brand": {
     "name": "Pit Officer",
     "logoAriaLabel": "Логотип Pit",
+    "controlPlane": "Контур контроля",
     "nonRelease": "не-релиз"
+  },
+  "display": {
+    "density": {
+      "label": "Плотность",
+      "ariaLabel": "Плотность",
+      "comfortable": "Шире",
+      "compact": "Компакт",
+      "terminal": "Плотно"
+    },
+    "tradeStyle": {
+      "label": "Стиль",
+      "ariaLabel": "Торговый стиль",
+      "tape": "Tape",
+      "tapeTitle": "Tape: стиль cash, spot, FX и portfolio-десков",
+      "ladder": "Ladder",
+      "ladderTitle": "Ladder: стиль futures, options, DOM и price-ladder десков"
+    }
   },
   "theme": {
     "label": "Тема",

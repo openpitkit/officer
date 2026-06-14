@@ -17,32 +17,17 @@
 
 # docker-compose for pit-officer in `serve` mode.
 #
-# CROSS-REPO DYLIB DEPENDENCY
-# ===========================
-# The image must be built before `docker compose up`. The Dockerfile needs the
-# native OpenPit runtime library from the sibling `pit` repository.
-# See the Dockerfile header for full instructions; the quick path is:
+# Build the stable image from the officer module root before `docker compose up`:
 #
-#   # From the workspace root (parent of officer/ and pit/):
-#   docker build \
-#     -f officer/Dockerfile \
-#     --build-arg PIT_REF=main \
-#     -t pit-officer:local \
-#     .
-#
-# Then run:
-#   docker compose up
+#   just docker-build
 
 services:
   officer:
     image: pit-officer:local
-    # Uncomment to build directly from source (requires workspace root as
-    # context; see Dockerfile for details):
+    # Uncomment to build directly from source:
     # build:
-    #   context: ..          # workspace root so pit/bindings/go/ is in context
-    #   dockerfile: officer/Dockerfile
-    #   args:
-    #     PIT_REF: main      # git ref of github.com/openpitkit/pit to build
+    #   context: .
+    #   dockerfile: Dockerfile
 
     command: ["serve"]
 
@@ -59,8 +44,7 @@ services:
       PIT_OFFICER_SQLITE_PATH: "/data/pit-officer.db"
       # Headless container: never attempt to launch a browser on serve start.
       PIT_OFFICER_OPEN_BROWSER: "false"
-      # Runtime library location is already set in the image; override here
-      # only if you are injecting a different library via a bind mount.
+      # Optional: pin a pre-extracted OpenPit runtime library via a bind mount.
       # OPENPIT_RUNTIME_LIBRARY_PATH: /app/lib/libopenpit_ffi.so
 
     volumes:

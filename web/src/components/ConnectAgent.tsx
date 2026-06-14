@@ -76,17 +76,17 @@ export function ConnectAgent() {
       </div>
 
       {/* Tab toggle - mirrors the Orders page pattern. */}
-      <div className="flex w-fit gap-1 rounded-card border border-border bg-bg p-1">
+      <div className="flex w-fit gap-1 rounded-card border border-border bg-surface-2 p-1">
         {(["claude", "chatgpt", "prompt"] as TabId[]).map((tabId) => (
           <button
             key={tabId}
             type="button"
             onClick={() => setTab(tabId)}
             className={[
-              "rounded-[4px] px-3 py-1 text-xs font-medium transition-colors",
+              "rounded-badge px-3 py-1 text-xs font-medium transition-colors duration-[180ms]",
               tab === tabId
-                ? "bg-surface text-text shadow-sm"
-                : "text-muted-lt hover:text-text",
+                ? "bg-accent-dim text-accent"
+                : "text-muted-lt hover:bg-surface-hover hover:text-text",
             ].join(" ")}
           >
             {t(`connect.tab.${tabId}`)}
@@ -138,7 +138,7 @@ export function ConnectAgent() {
             <li>{t("connect.chatgpt.step2")}</li>
             <li>{t("connect.chatgpt.step3")}</li>
           </ol>
-          <p className="rounded-card border border-[var(--warn)] bg-accent-dim px-3 py-2 text-xs text-muted-lt">
+          <p className="rounded-card border border-[var(--warn)] bg-[var(--warn-dim)] px-3 py-2 text-xs text-muted-lt">
             {t("connect.chatgpt.publicUrlCaveat")}
           </p>
           <div className="flex items-center justify-between gap-3">

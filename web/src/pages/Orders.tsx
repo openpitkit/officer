@@ -186,14 +186,14 @@ function CheckPreview({ state }: { state: CheckState }) {
   }
   if (state.phase === "checking") {
     return (
-      <div className="rounded-card border border-border bg-bg px-3 py-2 text-xs text-muted-lt animate-pulse">
+      <div className="animate-pulse rounded-card border border-border bg-surface-2 px-3 py-2 text-xs text-muted-lt">
         {t("check.checking")}
       </div>
     );
   }
   if (state.phase === "error") {
     return (
-      <div className="rounded-card border border-border bg-bg px-3 py-2 text-xs text-muted-lt">
+      <div className="rounded-card border border-border bg-surface-2 px-3 py-2 text-xs text-muted-lt">
         {t("check.previewUnavailable")}
       </div>
     );
@@ -219,8 +219,8 @@ function CheckPreview({ state }: { state: CheckState }) {
       className={[
         "rounded-card border px-3 py-2 space-y-2 text-xs",
         result.passed
-          ? "border-[var(--ok)] bg-accent-dim"
-          : "border-[var(--danger)] bg-accent-dim",
+          ? "border-[var(--ok)] bg-[var(--ok-dim)]"
+          : "border-[var(--danger)] bg-[var(--danger-dim)]",
       ].join(" ")}
     >
       <div className="flex items-center gap-2">
@@ -369,23 +369,14 @@ function SubmitOrderDialog({
     if (open) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setAccount(initialValues?.account ?? "");
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setBaseAsset(initialValues?.baseAsset ?? "");
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setQuoteAsset(initialValues?.quoteAsset ?? "");
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSide(initialValues?.side ?? "buy");
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setAmountKind(initialValues?.amountKind ?? "quantity");
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setAmountValue(initialValues?.amountValue ?? "");
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setPrice(initialValues?.price ?? "");
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setBusy(false);
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setError(null);
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setCheckState({ phase: "idle" });
       checkAbortRef.current?.abort();
       checkAbortRef.current = null;
@@ -595,17 +586,11 @@ function ExecReportDialog({ orderId, onClose, onSubmitted, initialValues }: Exec
     if (orderId !== null) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setQuantity(initialValues?.quantity ?? "");
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setPrice(initialValues?.price ?? "");
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setLockPrice(initialValues?.lockPrice ?? "");
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setFinal(true);
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setBusy(false);
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setError(null);
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setDone(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -825,7 +810,7 @@ function OrderDetailDialog({ orderId, onClose, onExecReport, onCloneOrder, onClo
         </DialogHeader>
 
         {successBanner && (
-          <div className="rounded-card border border-[var(--ok)] bg-accent-dim px-3 py-2 text-xs text-[var(--ok)] font-medium">
+          <div className="rounded-card border border-[var(--ok)] bg-[var(--ok-dim)] px-3 py-2 text-xs font-medium text-[var(--ok)]">
             {successBanner}
           </div>
         )}
@@ -845,7 +830,7 @@ function OrderDetailDialog({ orderId, onClose, onExecReport, onCloneOrder, onClo
         {state.phase === "ready" && (
           <div className="space-y-5">
             {/* Order header fields */}
-            <div className="grid grid-cols-3 gap-2 rounded-card border border-border bg-bg p-3 text-xs">
+            <div className="grid grid-cols-3 gap-2 rounded-card border border-border bg-surface-2 p-3 text-xs">
               <div>
                 <span className="text-muted-lt">{t("detail.dialog.fieldAccount")}</span>
                 <div className="nums mt-0.5 text-text">{state.order.account}</div>
@@ -892,7 +877,7 @@ function OrderDetailDialog({ orderId, onClose, onExecReport, onCloneOrder, onClo
                   {state.events.map((ev) => (
                     <li
                       key={ev.id}
-                      className="flex gap-3 rounded-card border border-border bg-bg p-2.5 text-xs"
+                      className="flex gap-3 rounded-card border border-border bg-surface-2 p-2.5 text-xs"
                     >
                       <div className="w-32 shrink-0">
                         <div className="nums text-muted-lt">{formatDateTime(ev.at)}</div>
@@ -1115,7 +1100,7 @@ function OrdersTable({ orders, onRowClick, onClone }: OrdersTableProps) {
                 {instrument(order.baseAsset, order.quoteAsset)}
               </TableCell>
               <TableCell>
-                <Badge variant={order.side === "buy" ? "ok" : "danger"}>
+                <Badge variant={order.side === "buy" ? "buy" : "sell"}>
                   {order.side}
                 </Badge>
               </TableCell>
@@ -1220,7 +1205,7 @@ function TradesTable({ trades, onOrderClick, onCloneExecReport }: TradesTablePro
                 {instrument(trade.baseAsset, trade.quoteAsset)}
               </TableCell>
               <TableCell>
-                <Badge variant={trade.side === "buy" ? "ok" : "danger"}>
+                <Badge variant={trade.side === "buy" ? "buy" : "sell"}>
                   {trade.side}
                 </Badge>
               </TableCell>
@@ -1473,17 +1458,17 @@ export function Orders() {
       </p>
 
       {/* Tab toggle */}
-      <div className="flex gap-1 rounded-card border border-border bg-bg p-1 w-fit">
+      <div className="flex w-fit gap-1 rounded-card border border-border bg-surface-2 p-1">
         {(["orders", "trades"] as TabId[]).map((tabId) => (
           <button
             key={tabId}
             type="button"
             onClick={() => setTab(tabId)}
             className={[
-              "rounded-[4px] px-3 py-1 text-xs font-medium capitalize transition-colors",
+              "rounded-badge px-3 py-1 text-xs font-medium capitalize transition-colors duration-[180ms]",
               tab === tabId
-                ? "bg-surface text-text shadow-sm"
-                : "text-muted-lt hover:text-text",
+                ? "bg-accent-dim text-accent"
+                : "text-muted-lt hover:bg-surface-hover hover:text-text",
             ].join(" ")}
           >
             {t(`tab.${tabId}`)}

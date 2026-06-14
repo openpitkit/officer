@@ -16,12 +16,12 @@
 # Please see https://openpit.dev and the OWNERS file for details.
 
 # CI-only aggregate recipes, invoked from .github/workflows/* via:
-#   just --justfile pipeline.just <recipe>. Imports the dev justfile.
+#   just --justfile pipeline.just <recipe>. Imports the project justfile.
 
 import 'justfile'
 
-# Go build, vet, and test (cgo against the downloaded dylib).
-ci-go: tidy build-go vet test
+# Go build, lint, and test against the published OpenPit module.
+ci-go: tidy-check build-go lint-go test-go test-go-race
 
-# Frontend SPA lint, build, and unit tests.
-ci-frontend: frontend-lint frontend-build frontend-test
+# Frontend SPA lint, typecheck, build, and unit tests.
+ci-frontend: frontend-ci-install frontend-lint frontend-typecheck frontend-build-ready frontend-test

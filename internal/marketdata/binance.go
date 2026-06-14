@@ -446,7 +446,7 @@ func fetchBinanceSymbols(ctx context.Context) (map[string]struct{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("binance exchangeInfo: unexpected status %d", resp.StatusCode)
 	}

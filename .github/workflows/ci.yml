@@ -34,89 +34,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  dylib:
-    name: Build OpenPit dylib
-    runs-on: ubuntu-latest
-
-    outputs:
-      pit-sha: ${{ steps.pit-sha.outputs.sha }}
-
-    steps:
-      - name: Check out officer (primary)
-        uses: actions/checkout@v4
-
-      # Sibling checkout so the justfile's ../pit resolves.
-      - name: Check out openpitkit/pit
-        uses: actions/checkout@v4
-        with:
-          repository: openpitkit/pit
-          ref: main
-          path: ${{ github.workspace }}/../pit
-
-      - name: Record pit HEAD SHA
-        id: pit-sha
-        working-directory: ${{ github.workspace }}/../pit
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      # Skip the Rust build when the engine code is unchanged.
-      - name: Restore dylib cache
-        id: cache-dylib
-        uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}/../pit/target/release/libopenpit_ffi.so
-          key: dylib-linux-amd64-${{ steps.pit-sha.outputs.sha }}
-
-      - name: Set up Rust toolchain
-        if: steps.cache-dylib.outputs.cache-hit != 'true'
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Restore Cargo cache
-        if: steps.cache-dylib.outputs.cache-hit != 'true'
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            ${{ github.workspace }}/../pit/target
-          key: cargo-${{ runner.os }}-${{ steps.pit-sha.outputs.sha }}
-          restore-keys: |
-            cargo-${{ runner.os }}-
-
-      - name: Setup just
-        if: steps.cache-dylib.outputs.cache-hit != 'true'
-        uses: extractions/setup-just@v3
-
-      - name: Build dylib
-        if: steps.cache-dylib.outputs.cache-hit != 'true'
-        run: just --justfile "$JUSTFILE" dylib
-
-      - name: Upload dylib artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: libopenpit_ffi
-          path: ${{ github.workspace }}/../pit/target/release/libopenpit_ffi.so
-          retention-days: 1
-
   go:
     name: Go (build / vet / test)
     runs-on: ubuntu-latest
-    needs: dylib
-
-    # The justfile picks this up via OPENPIT_RUNTIME_LIBRARY_PATH override.
-    env:
-      OPENPIT_RUNTIME_LIBRARY_PATH: /tmp/openpit/libopenpit_ffi.so
 
     steps:
       - name: Check out officer (primary)
         uses: actions/checkout@v4
-
-      # Sibling checkout so the go.mod ../pit/bindings/go replace resolves.
-      - name: Check out openpitkit/pit
-        uses: actions/checkout@v4
-        with:
-          repository: openpitkit/pit
-          ref: main
-          path: ${{ github.workspace }}/../pit
 
       - name: Load CI versions
         shell: bash
@@ -128,14 +52,11 @@ jobs:
           go-version: ${{ env.CI_GO }}
           cache: true
 
-      - name: Download dylib artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: libopenpit_ffi
-          path: /tmp/openpit
-
-      - name: Make dylib executable
-        run: chmod +x /tmp/openpit/libopenpit_ffi.so
+      - name: Install golangci-lint
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
+            | sh -s -- -b "$(go env GOPATH)/bin" "v${CI_GOLANGCI_LINT}"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Setup just
         uses: extractions/setup-just@v3
@@ -159,6 +80,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.CI_NODE }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
 
       - name: Setup just
         uses: extractions/setup-just@v3
@@ -169,41 +92,14 @@ jobs:
   docker:
     name: Docker build (serve mode)
     runs-on: ubuntu-latest
-    needs: [dylib]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
-      # Build context is the workspace root holding officer/ and pit/.
-      - name: Check out officer into workspace/officer
+      - name: Check out officer
         uses: actions/checkout@v4
-        with:
-          path: workspace/officer
 
-      - name: Check out openpitkit/pit into workspace/pit
-        uses: actions/checkout@v4
-        with:
-          repository: openpitkit/pit
-          ref: main
-          path: workspace/pit
+      - name: Setup just
+        uses: extractions/setup-just@v3
 
-      # Land the dylib in officer/ for the COPY officer/ gobuild layer.
-      - name: Download dylib artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: libopenpit_ffi
-          path: workspace/officer
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Docker build (pre-built dylib)
-        uses: docker/build-push-action@v6
-        with:
-          context: workspace
-          file: workspace/officer/Dockerfile
-          push: false
-          build-args: |
-            DYLIB_PATH=libopenpit_ffi.so
-          tags: pit-officer:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Docker build
+        run: just --justfile "$JUSTFILE" docker-build pit-officer:ci

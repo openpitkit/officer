@@ -142,7 +142,7 @@ func (s *sqliteStore) appliedVersions(ctx context.Context) (map[int]bool, error)
 	if err != nil {
 		return nil, fmt.Errorf("store: read schema_migrations: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	applied := make(map[int]bool)
 	for rows.Next() {
@@ -198,7 +198,7 @@ func (s *sqliteStore) ListAccounts(ctx context.Context) ([]domain.Account, error
 	if err != nil {
 		return nil, fmt.Errorf("store: list accounts: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	accounts := make([]domain.Account, 0)
 	for rows.Next() {
@@ -364,7 +364,7 @@ func (s *sqliteStore) ListLimits(
 	if err != nil {
 		return nil, fmt.Errorf("store: list limits: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return groupLimitRows(rows)
 }
 
@@ -383,7 +383,7 @@ func (s *sqliteStore) ListPolicyLimits(
 	if err != nil {
 		return nil, fmt.Errorf("store: list policy limits: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return groupLimitRows(rows)
 }
 
@@ -540,7 +540,7 @@ func (s *sqliteStore) ListAudit(ctx context.Context, n int) ([]domain.AuditRow, 
 	if err != nil {
 		return nil, fmt.Errorf("store: list audit: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	audit := make([]domain.AuditRow, 0, n)
 	for rows.Next() {
@@ -582,7 +582,7 @@ func (s *sqliteStore) ListMcpAccess(ctx context.Context) (map[string]bool, error
 	if err != nil {
 		return nil, fmt.Errorf("store: list mcp access: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	access := make(map[string]bool)
 	for rows.Next() {
@@ -684,7 +684,7 @@ func (s *sqliteStore) queryMarketDataInstances(
 	if err != nil {
 		return nil, fmt.Errorf("store: list market-data instances: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	instances := make([]domain.MarketDataInstance, 0)
 	for rows.Next() {
@@ -824,7 +824,7 @@ func (s *sqliteStore) queryMarketDataInstruments(
 	if err != nil {
 		return nil, fmt.Errorf("store: list market-data instruments: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	instruments := make([]domain.MarketDataInstrument, 0)
 	for rows.Next() {
@@ -945,7 +945,7 @@ func (s *sqliteStore) ListMarketDataQuotes(
 	if err != nil {
 		return nil, fmt.Errorf("store: list market-data quotes: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	quotes := make([]domain.MarketDataQuote, 0)
 	for rows.Next() {
@@ -1103,7 +1103,7 @@ func (s *sqliteStore) ListGroups(
 	if err != nil {
 		return nil, fmt.Errorf("store: list groups: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	groups := make([]domain.AccountGroup, 0)
 	for rows.Next() {
@@ -1210,7 +1210,7 @@ func (s *sqliteStore) ListGroupAccounts(
 	if err != nil {
 		return nil, fmt.Errorf("store: list group accounts: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	accounts := make([]domain.Account, 0)
 	for rows.Next() {
@@ -1344,7 +1344,7 @@ func (s *sqliteStore) ListBalances(
 	if err != nil {
 		return nil, fmt.Errorf("store: list balances: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	balances := make([]domain.Balance, 0)
 	for rows.Next() {
@@ -1514,7 +1514,7 @@ func (s *sqliteStore) ListAdjustments(
 	if err != nil {
 		return nil, fmt.Errorf("store: list adjustments: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := make([]domain.AccountAdjustmentRecord, 0, n)
 	for rows.Next() {
@@ -1734,7 +1734,7 @@ func (s *sqliteStore) ListOrders(
 	if err != nil {
 		return nil, fmt.Errorf("store: list orders: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := make([]domain.Order, 0, n)
 	for rows.Next() {
@@ -1897,7 +1897,7 @@ func (s *sqliteStore) ListOrderEvents(
 	if err != nil {
 		return nil, fmt.Errorf("store: list order events: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := make([]domain.OrderEvent, 0)
 	for rows.Next() {
@@ -2006,7 +2006,7 @@ func (s *sqliteStore) ListTrades(
 	if err != nil {
 		return nil, fmt.Errorf("store: list trades: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := make([]domain.Trade, 0, n)
 	for rows.Next() {
@@ -2037,7 +2037,7 @@ func (s *sqliteStore) listTradesByOrder(
 	if err != nil {
 		return nil, fmt.Errorf("store: list trades by order: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := make([]domain.Trade, 0)
 	for rows.Next() {

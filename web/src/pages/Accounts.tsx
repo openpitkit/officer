@@ -69,6 +69,7 @@ import { Card } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -269,7 +270,7 @@ function LoadAccountsDialog({ onLoaded }: { onLoaded: () => void }) {
           <DialogTitle>{t("loadAccounts.title")}</DialogTitle>
         </DialogHeader>
 
-        <div className="rounded-card border border-border bg-muted/30 p-3 text-[0.6875rem] text-muted space-y-1">
+        <div className="space-y-1 rounded-card border border-border bg-surface-2 p-3 text-[0.6875rem] text-muted">
           <p className="font-medium text-text">{t("loadAccounts.formatHeading")}</p>
           <p>{t("loadAccounts.formatLine1")} <code>{t("loadAccounts.formatCode1")}</code></p>
           {/* account_id/group/notes are literal CSV column identifiers, not UI copy. */}
@@ -305,7 +306,7 @@ account_id,group,notes`}
             <span className="text-[0.6875rem] text-muted-lt">{t("loadAccounts.orPasteBelow")}</span>
           </div>
           <textarea
-            className="min-h-[7rem] w-full rounded-card border border-border bg-background p-2 font-mono text-[0.75rem] text-text placeholder:text-muted-lt focus:outline-none focus:ring-1 focus:ring-accent/40"
+            className="min-h-[7rem] w-full rounded-card border border-border bg-surface-2 p-2 font-mono text-[0.75rem] text-text placeholder:text-muted-lt focus:outline-none focus:ring-1 focus:ring-ring"
             placeholder={"desk-alpha,equity-desks,Primary cash desk\ndesk-beta,equity-desks\nspx-arb,,SPX arb desk"}
             value={csvText}
             spellCheck={false}
@@ -433,6 +434,9 @@ export function CreateAccountDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{ta("createAccount.title")}</DialogTitle>
+          <DialogDescription>
+            {ta("createAccount.description")}
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
           <div className="space-y-2">
@@ -960,7 +964,7 @@ function DeleteGroupConfirm({
               void submit();
             }}
             disabled={busy}
-            className="bg-[var(--danger)] text-white hover:bg-[var(--danger)]/90"
+            className="border-[var(--danger)] bg-[var(--danger)] text-bg hover:border-[var(--danger)] hover:bg-[var(--danger)]"
           >
             <Trash2 className="h-3.5 w-3.5" />
             {t("deleteGroup.submit")}
@@ -1297,7 +1301,7 @@ function GroupsPanel({
                 key={id === DEFAULT_GROUP_ID ? "__default__" : id}
                 className={cn(
                   isBlocked && "bg-accent-dim",
-                  isSelected && "ring-1 ring-inset ring-accent/40",
+                  isSelected && "ring-1 ring-inset ring-ring",
                   "cursor-pointer",
                 )}
                 onClick={() => onSelect(isSelected ? null : id)}
@@ -1485,7 +1489,7 @@ function AccountsTable({
                     to={`/positions?account=${encodeURIComponent(account.id)}`}
                     title={t("accounts.links.positions")}
                     aria-label={t("accounts.links.positions")}
-                    className="inline-flex h-7 w-7 items-center justify-center rounded hover:bg-accent-dim"
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-badge transition-colors hover:bg-accent-dim"
                   >
                     <Coins className="h-3.5 w-3.5 text-muted" />
                   </Link>
@@ -1493,7 +1497,7 @@ function AccountsTable({
                     to={`/trading?account=${encodeURIComponent(account.id)}`}
                     title={t("accounts.links.trading")}
                     aria-label={t("accounts.links.trading")}
-                    className="inline-flex h-7 w-7 items-center justify-center rounded hover:bg-accent-dim"
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-badge transition-colors hover:bg-accent-dim"
                   >
                     <ArrowLeftRight className="h-3.5 w-3.5 text-muted" />
                   </Link>
@@ -1501,7 +1505,7 @@ function AccountsTable({
                     to={`/policies?account=${encodeURIComponent(account.id)}`}
                     title={t("accounts.links.policies")}
                     aria-label={t("accounts.links.policies")}
-                    className="inline-flex h-7 w-7 items-center justify-center rounded hover:bg-accent-dim"
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-badge transition-colors hover:bg-accent-dim"
                   >
                     <ShieldCheck className="h-3.5 w-3.5 text-muted" />
                   </Link>
@@ -1509,7 +1513,7 @@ function AccountsTable({
                     to={`/audit?account=${encodeURIComponent(account.id)}`}
                     title={t("accounts.links.audit")}
                     aria-label={t("accounts.links.audit")}
-                    className="inline-flex h-7 w-7 items-center justify-center rounded hover:bg-accent-dim"
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-badge transition-colors hover:bg-accent-dim"
                   >
                     <History className="h-3.5 w-3.5 text-muted" />
                   </Link>

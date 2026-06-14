@@ -15,8 +15,7 @@
 #
 # Please see https://openpit.dev and the OWNERS file for details.
 
-# Build context must be the workspace root (parent of officer/ and pit/): the
-# replace directive in officer/go.mod points to ../pit/bindings/go.
+# Build context is the officer module root.
 
 # Stage 1: build the dashboard SPA.
 FROM node:20-alpine AS frontend
@@ -24,75 +23,38 @@ FROM node:20-alpine AS frontend
 WORKDIR /app/web
 
 # Install dependencies in their own layer for caching.
-COPY officer/web/package.json ./
+COPY web/package.json web/package-lock.json ./
 RUN npm install
 
-COPY officer/web/ ./
+COPY web/ ./
 RUN npm run build
 
-# Stage 2: build the native runtime library by checking out and compiling pit.
-# Used only when DYLIB_PATH is empty; otherwise overridden in the Go stage.
-FROM rust:1.87-slim AS dylib
-
-ARG PIT_REF=main
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /pit
-
-RUN git clone --branch "${PIT_REF}" --depth 1 \
-    https://github.com/openpitkit/pit.git . \
-    && cargo build -p openpit-ffi --release --locked \
-    && cp target/release/libopenpit_ffi.so /libopenpit_ffi.so
-
-# Stage 3: build the pit-officer binary (cgo required by the openpit binding).
+# Stage 2: build the pit-officer binary (cgo required by the openpit binding).
 FROM golang:1.25-bookworm AS gobuild
-
-# Path to a pre-built dylib relative to the build context. Empty uses the
-# library compiled in the dylib stage.
-ARG DYLIB_PATH=
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libc6-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Replicate officer/go.mod's sibling layout (replace -> ../pit/bindings/go).
-COPY pit/bindings/go/ /workspace/pit/bindings/go/
-
 # go.mod/go.sum first for a cacheable download layer.
-COPY officer/go.mod officer/go.sum* /workspace/officer/
+COPY go.mod go.sum* /workspace/officer/
 
 WORKDIR /workspace/officer
 
 RUN go mod download
 
-COPY officer/ /workspace/officer/
+COPY . /workspace/officer/
 
 COPY --from=frontend /app/web/dist /workspace/officer/web/dist
 
-RUN mkdir -p /runtime
-
-COPY --from=dylib /libopenpit_ffi.so /runtime/libopenpit_ffi.so
-
-# Override with an injected dylib when DYLIB_PATH is set (resolved relative to
-# the officer module root); a no-op when empty.
-RUN if [ -n "${DYLIB_PATH}" ]; then \
-    cp "/workspace/officer/${DYLIB_PATH}" /runtime/libopenpit_ffi.so; \
-    fi
-
 # -ldflags "-s -w" strips debug symbols for a smaller binary.
-RUN CGO_ENABLED=1 \
-    OPENPIT_RUNTIME_LIBRARY_PATH=/runtime/libopenpit_ffi.so \
-    go build \
+RUN CGO_ENABLED=1 go build \
     -ldflags="-s -w" \
     -o /pit-officer \
     ./cmd/pit-officer
 
-# Stage 4: runtime image.
+# Stage 3: runtime image.
 FROM debian:bookworm-slim AS runtime
 
 # C runtime required by the openpit binding (libgcc / glibc).
@@ -108,14 +70,9 @@ RUN mkdir -p /data && chown officer:officer /data
 
 WORKDIR /app
 
-COPY --from=gobuild /runtime/libopenpit_ffi.so /app/lib/libopenpit_ffi.so
-
 COPY --from=gobuild /pit-officer /app/pit-officer
 
 COPY --from=frontend /app/web/dist /app/web/dist
-
-# Pin the binding to the pre-extracted library so it skips embedded extraction.
-ENV OPENPIT_RUNTIME_LIBRARY_PATH=/app/lib/libopenpit_ffi.so
 
 # The default 127.0.0.1 is unreachable across the container boundary; bind all
 # interfaces and rely on Docker port-mapping. Front with a TLS reverse proxy.

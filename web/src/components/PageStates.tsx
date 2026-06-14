@@ -108,7 +108,7 @@ export function ErrorBanner({
       role="alert"
       className={cn(
         "flex items-start gap-2 rounded-card border border-[var(--danger)]",
-        "bg-accent-dim px-3 py-2 text-xs text-[var(--danger)]",
+        "bg-[var(--danger-dim)] px-3 py-2 text-xs text-[var(--danger)]",
         className,
       )}
     >
@@ -119,7 +119,7 @@ export function ErrorBanner({
           type="button"
           onClick={onDismiss}
           aria-label={t("actions.dismissError")}
-          className="shrink-0 rounded-[3px] p-0.5 hover:bg-[var(--danger)]/10"
+          className="shrink-0 rounded-badge p-0.5 hover:bg-[var(--danger-dim)]"
         >
           <X className="h-3.5 w-3.5" />
         </button>

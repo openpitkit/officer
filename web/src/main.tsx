@@ -21,6 +21,7 @@ import { BrowserRouter } from "react-router-dom";
 
 import App from "@/App";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
+import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
 import "@/i18n";
 import "@/index.css";
@@ -34,14 +35,16 @@ if (!container) {
 // synchronously and Suspense only guards the edge case of a not-yet-ready tree.
 createRoot(container).render(
   <StrictMode>
-    <ThemeProvider storageKey="pit-officer-theme" defaultMode="system">
-      <LocaleProvider>
-        <Suspense fallback={null}>
-          <BrowserRouter>
-            <App />
-          </BrowserRouter>
-        </Suspense>
-      </LocaleProvider>
+    <ThemeProvider storageKey="pit-officer-theme" defaultMode="dark">
+      <DisplayPreferencesProvider>
+        <LocaleProvider>
+          <Suspense fallback={null}>
+            <BrowserRouter>
+              <App />
+            </BrowserRouter>
+          </Suspense>
+        </LocaleProvider>
+      </DisplayPreferencesProvider>
     </ThemeProvider>
   </StrictMode>,
 );

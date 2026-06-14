@@ -24,7 +24,7 @@ const Card = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(
     <div
       ref={ref}
       className={cn(
-        "rounded-card border border-border bg-surface text-text shadow-card",
+        "rounded-card border border-border bg-surface text-text shadow-card transition-[background-color,border-color] duration-[180ms]",
         className,
       )}
       {...props}
@@ -37,7 +37,10 @@ const CardHeader = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(
   ({ className, ...props }, ref) => (
     <div
       ref={ref}
-      className={cn("flex flex-col gap-1 px-5 pt-5 pb-3", className)}
+      className={cn(
+        "flex flex-col gap-1 px-[var(--dens-card-pad)] pb-[var(--dens-card-head-gap)] pt-[var(--dens-card-pad)]",
+        className,
+      )}
       {...props}
     />
   ),
@@ -61,7 +64,14 @@ CardTitle.displayName = "CardTitle";
 
 const CardContent = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(
   ({ className, ...props }, ref) => (
-    <div ref={ref} className={cn("px-5 pb-5", className)} {...props} />
+    <div
+      ref={ref}
+      className={cn(
+        "px-[var(--dens-card-pad)] pb-[var(--dens-card-pad)]",
+        className,
+      )}
+      {...props}
+    />
   ),
 );
 CardContent.displayName = "CardContent";
@@ -71,7 +81,7 @@ const CardFooter = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(
     <div
       ref={ref}
       className={cn(
-        "flex items-center border-t border-border px-5 py-3 text-xs text-muted",
+        "flex items-center border-t border-border px-[var(--dens-card-pad)] py-[var(--dens-card-head-gap)] text-xs text-muted",
         className,
       )}
       {...props}

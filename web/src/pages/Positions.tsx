@@ -112,6 +112,17 @@ function dash(v: string | undefined): string {
   return v && v !== "" ? v : "—";
 }
 
+function pnlClass(v: string | undefined): string {
+  const value = (v ?? "").trim();
+  if (value === "" || /^0+(\.0+)?$/.test(value)) {
+    return "text-[var(--pnl-flat)]";
+  }
+  if (value.startsWith("-") || value.startsWith("−")) {
+    return "text-[var(--pnl-neg)]";
+  }
+  return "text-[var(--pnl-pos)]";
+}
+
 // ---------------------------------------------------------------------------
 // Balances table — inline editing
 // ---------------------------------------------------------------------------
@@ -264,7 +275,7 @@ function BalanceEditRow({
       <TableCell className="nums text-right text-xs">
         {dash(b.averageEntryPrice)}
       </TableCell>
-      <TableCell className="nums text-right text-xs">
+      <TableCell className={`nums text-right text-xs ${pnlClass(b.realizedPnl)}`}>
         {dash(b.realizedPnl)}
       </TableCell>
       <TableCell className="text-xs text-muted-lt">
@@ -414,7 +425,7 @@ function AdjustOutcomeView({ adjustment }: AdjustOutcome) {
   const { accepted, rejected } = adjustment;
   if (rejected) {
     return (
-      <div className="rounded-card border border-[var(--danger)] bg-accent-dim p-3 text-xs text-[var(--danger)]">
+      <div className="rounded-card border border-[var(--danger)] bg-[var(--danger-dim)] p-3 text-xs text-[var(--danger)]">
         <p className="font-medium">{t("dialog.outcome.rejectedTitle")}</p>
         <p className="mt-1 text-[var(--danger)]">{rejected.reason}</p>
       </div>
@@ -432,7 +443,7 @@ function AdjustOutcomeView({ adjustment }: AdjustOutcome) {
       rows.push({ label: t("dialog.outcome.fieldIncoming"), delta: accepted.incomingDelta, result: accepted.incomingResult });
     }
     return (
-      <div className="rounded-card border border-[var(--ok)] bg-accent-dim p-3 text-xs">
+      <div className="rounded-card border border-[var(--ok)] bg-[var(--ok-dim)] p-3 text-xs">
         <p className="font-medium text-[var(--ok)]">{t("dialog.outcome.acceptedTitle")}</p>
         {rows.length > 0 && (
           <div className="mt-2 space-y-1">
@@ -671,30 +682,18 @@ function AdjustDialog({
       // Reset all form fields from props each time the dialog opens.
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setAccount(initialAccount);
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setAsset(initialAsset);
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setAvgPrice(initialAvgPrice ?? "");
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setBalance(seedAmount(initialBalanceMode, initialBalanceValue));
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setHeld(seedAmount(initialHeldMode, initialHeldValue));
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setIncoming(seedAmount(initialIncomingMode, initialIncomingValue));
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setBalanceBounds(seedBounds(initialBalanceBoundsLower, initialBalanceBoundsUpper));
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setHeldBounds(seedBounds(initialHeldBoundsLower, initialHeldBoundsUpper));
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setIncomingBounds(seedBounds(initialIncomingBoundsLower, initialIncomingBoundsUpper));
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setBusy(false);
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setError(null);
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setOutcome(null);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     open,
     initialAccount, initialAsset,

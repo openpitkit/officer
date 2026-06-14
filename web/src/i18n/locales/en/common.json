@@ -32,7 +32,25 @@
   "brand": {
     "name": "Pit Officer",
     "logoAriaLabel": "Pit logo",
+    "controlPlane": "Control plane",
     "nonRelease": "non-release"
+  },
+  "display": {
+    "density": {
+      "label": "Density",
+      "ariaLabel": "Density",
+      "comfortable": "Roomy",
+      "compact": "Compact",
+      "terminal": "Dense"
+    },
+    "tradeStyle": {
+      "label": "Style",
+      "ariaLabel": "Trading style",
+      "tape": "Tape",
+      "tapeTitle": "Tape: cash, spot, FX, and portfolio desk dialect",
+      "ladder": "Ladder",
+      "ladderTitle": "Ladder: futures, options, DOM, and price-ladder desk dialect"
+    }
   },
   "theme": {
     "label": "Theme",

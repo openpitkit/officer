@@ -7,7 +7,7 @@ require (
 	github.com/go-chi/chi/v5 v5.2.1
 	github.com/modelcontextprotocol/go-sdk v0.2.0
 	github.com/shopspring/decimal v1.4.0
-	go.openpit.dev/openpit v0.4.0
+	go.openpit.dev/openpit v0.5.0
 	modernc.org/sqlite v1.34.4
 )
 
@@ -28,7 +28,3 @@ require (
 	modernc.org/strutil v1.2.0 // indirect
 	modernc.org/token v1.1.0 // indirect
 )
-
-// Local dev: resolve the openpit binding from the dev tree (dry-run SDK) until
-// it is published; mirrors the workspace go.work `use ./pit/bindings/go`.
-replace go.openpit.dev/openpit => ../pit/bindings/go

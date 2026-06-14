@@ -21,7 +21,7 @@ import type { HTMLAttributes } from "react";
 import { cn } from "@/lib/utils";
 
 const badgeVariants = cva(
-  "inline-flex items-center gap-1.5 rounded-[3px] border px-2 py-0.5 text-[0.6875rem] font-medium uppercase tracking-[0.07em]",
+  "inline-flex items-center gap-1.5 rounded-badge border px-2 py-0.5 text-[0.6875rem] font-medium uppercase tracking-[0.07em]",
   {
     variants: {
       // Tones use solid borders + the accent-dim wash rather than Tailwind
@@ -30,9 +30,12 @@ const badgeVariants = cva(
       variant: {
         neutral: "border-[var(--tag-border)] text-muted",
         accent: "border-[var(--border-hover)] bg-accent-dim text-accent",
-        ok: "border-[var(--ok)] bg-accent-dim text-[var(--ok)]",
-        warn: "border-[var(--warn)] bg-accent-dim text-[var(--warn)]",
-        danger: "border-[var(--danger)] bg-accent-dim text-[var(--danger)]",
+        ok: "border-[var(--ok)] bg-[var(--ok-dim)] text-[var(--ok)]",
+        warn: "border-[var(--warn)] bg-[var(--warn-dim)] text-[var(--warn)]",
+        danger:
+          "border-[var(--danger)] bg-[var(--danger-dim)] text-[var(--danger)]",
+        buy: "border-[var(--buy)] bg-[var(--buy-dim)] text-[var(--buy)]",
+        sell: "border-[var(--sell)] bg-[var(--sell-dim)] text-[var(--sell)]",
       },
     },
     defaultVariants: {

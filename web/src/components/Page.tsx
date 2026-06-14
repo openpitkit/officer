@@ -34,8 +34,10 @@ export function Page({
   return (
     <div className="flex h-full flex-col">
       <TopBar title={title} actions={actions} />
-      <main className="flex-1 overflow-y-auto p-4 md:p-6">
-        <div className="mx-auto max-w-6xl space-y-4">{children}</div>
+      <main className="flex-1 overflow-y-auto bg-bg p-[var(--dens-page-pad)]">
+        <div className="mx-auto w-full max-w-[var(--content-max)] space-y-[var(--dens-row-gap)]">
+          {children}
+        </div>
       </main>
     </div>
   );

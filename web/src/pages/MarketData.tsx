@@ -139,7 +139,7 @@ function DiagnosticGroup({
         {items.map((d, i) => (
           <div
             key={i}
-            className="rounded border border-border bg-surface p-3 text-sm"
+            className="rounded-card border border-border bg-surface p-3 text-sm"
           >
             <div className="flex flex-wrap items-start gap-2">
               <Badge
@@ -196,7 +196,7 @@ function DiagnosticGroup({
                         href={instance.references.docsUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex h-8 items-center rounded border border-border bg-transparent px-3 text-xs hover:bg-surface-hover"
+                        className="inline-flex h-8 items-center rounded-card border border-border bg-transparent px-3 text-xs transition-colors hover:bg-surface-hover"
                       >
                         <ExternalLink className="mr-1 h-3 w-3" />
                         {t("diagnostics.actionDocs")}
@@ -213,7 +213,7 @@ function DiagnosticGroup({
                         href={instance.references.symbolsUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex h-8 items-center rounded border border-border bg-transparent px-3 text-xs hover:bg-surface-hover"
+                        className="inline-flex h-8 items-center rounded-card border border-border bg-transparent px-3 text-xs transition-colors hover:bg-surface-hover"
                       >
                         <ExternalLink className="mr-1 h-3 w-3" />
                         {t("diagnostics.actionSymbols")}

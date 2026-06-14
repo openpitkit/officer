@@ -27,7 +27,7 @@ export function ValueChips({ values }: { values: Record<string, string> }) {
       {entries.map(([kind, value]) => (
         <span
           key={kind}
-          className="inline-flex items-center gap-1 rounded-[3px] border border-[var(--tag-border)] px-1.5 py-0.5 text-[0.6875rem]"
+          className="inline-flex items-center gap-1 rounded-badge border border-[var(--tag-border)] px-1.5 py-0.5 text-[0.6875rem]"
         >
           <span className="text-muted">{kind}</span>
           <span className="text-muted">=</span>

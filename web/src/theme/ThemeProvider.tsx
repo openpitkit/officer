@@ -69,7 +69,7 @@ interface ThemeProviderProps {
 export function ThemeProvider({
   children,
   storageKey = "pit-officer-theme",
-  defaultMode = "system",
+  defaultMode = "dark",
 }: ThemeProviderProps) {
   const [mode, setModeState] = useState<ThemeMode>(() => {
     if (typeof window === "undefined") {

@@ -69,6 +69,7 @@
   "createAccount": {
     "trigger": "New account",
     "title": "Create account",
+    "description": "Create an account in the control plane and optionally assign it to a group.",
     "idLabel": "Account id",
     "idHint": "Up to 64 printable characters, no leading or trailing whitespace.",
     "groupLabel": "Group (optional)",

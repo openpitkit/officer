@@ -80,7 +80,7 @@ takes precedence over built-in defaults.
 | --- | --- | --- | --- |
 | `PIT_OFFICER_HTTP_ADDR` | `-http-addr` | `127.0.0.1:0` | HTTP listen address used in `serve` mode. The default binds to loopback with an OS-assigned free port; use `pit-officer dashboard` to discover the URL. The container image overrides this to `0.0.0.0:8787` so a fixed, mapped port can be reached. |
 | `PIT_OFFICER_SQLITE_PATH` | `-sqlite-path` | `pit-officer.db` | On-disk path of the SQLite database. The container image sets this to `/data/pit-officer.db` and maps `/data` to a named volume. |
-| `OPENPIT_RUNTIME_LIBRARY_PATH` | `-runtime-library-path` | _(empty)_ | Path to a pre-extracted native OpenPit runtime library. When set the binding skips its own extraction step. The container image pre-sets this to `/app/lib/libopenpit_ffi.so`. |
+| `OPENPIT_RUNTIME_LIBRARY_PATH` | `-runtime-library-path` | _(empty)_ | Path to a pre-extracted native OpenPit runtime library. When set, the binding skips its own extraction step. The stable container image leaves this unset. |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -102,36 +102,41 @@ TLS-terminating reverse proxy in front rather than exposing the port directly.
 
 ### Prerequisites
 
-The OpenPit Go binding requires cgo and a native OpenPit runtime library at run
-time. Building and running Pit Officer therefore needs:
+The OpenPit Go binding requires cgo. Stable builds use the published
+`go.openpit.dev/openpit v0.5.0` module pinned in `go.mod`, the same dependency
+users get with `go get`.
 
 - cgo enabled (`CGO_ENABLED=1`) and a working C toolchain.
-- The native OpenPit runtime library. The `just` recipes build it from the
-  sibling `pit` checkout and pass its path through `OPENPIT_RUNTIME_LIBRARY_PATH`
-  so the binding skips embedded extraction.
 
-The module pins its dependencies in `go.mod` but does not ship a checked-in
-`go.sum`: run `tidy` once after cloning to generate it. The SPA must be installed
-and built before `go build` so the `//go:embed` directive finds the assets.
+By default, the `just` recipes do not use a sibling Pit checkout and do not set
+`OPENPIT_RUNTIME_LIBRARY_PATH`. If that environment variable is already set by
+the caller, the binding still honors it in the normal Go way. The SPA must be
+installed and built before `go build` so the `//go:embed` directive finds the
+assets.
 
 With [Just](https://just.systems/):
 
 ```bash
-just dylib   # build the native runtime from the sibling pit checkout
-just tidy    # generate go.sum; re-run after editing go.mod
-just build   # build the SPA, then the pit-officer binary
+just tidy      # update go.sum after editing go.mod
+just build-go  # build all Go packages without rebuilding the SPA
+just build     # build the SPA, then the pit-officer binary
 ```
 
-Manual:
+Local OpenPit developer mode is explicit. These recipes build the native runtime
+from a local Pit checkout, resolve the Go binding from that same checkout via a
+temporary `go.work`, and leave the stable `go.mod` / `go.sum` unchanged. The
+default checkout path is `../pit` from this `officer/` directory; pass a path to
+override it.
 
 ```bash
-# Build the native runtime from the sibling pit checkout:
-cargo build -p openpit-ffi --release --locked \
-    --manifest-path ../pit/Cargo.toml
-export OPENPIT_RUNTIME_LIBRARY_PATH="$(pwd)/../pit/target/release/libopenpit_ffi.so"
-# macOS: use libopenpit_ffi.dylib instead.
+just build-go-dev           # uses ../pit
+just build-dev              # uses ../pit
+just build-dev /path/to/pit # uses an explicit Pit checkout
+```
 
-# Generate go.sum (re-run after editing go.mod):
+Manual stable build:
+
+```bash
 CGO_ENABLED=1 go mod tidy
 
 # Install and build the SPA, then build the binary:
@@ -158,11 +163,17 @@ just run-serve   # always-on dashboard + MCP-over-HTTP (rebuilds first)
 just dashboard   # print and open the running serve URL (no rebuild)
 ```
 
+Local OpenPit developer mode:
+
+```bash
+just run-mcp-dev             # uses ../pit
+just run-serve-dev           # uses ../pit
+just run-serve-dev /path/to/pit
+```
+
 Manual:
 
 ```bash
-export OPENPIT_RUNTIME_LIBRARY_PATH="$(pwd)/../pit/target/release/libopenpit_ffi.so"
-
 ./pit-officer mcp           # local stdio MCP server
 ./pit-officer serve         # always-on dashboard + MCP-over-HTTP
 ./pit-officer dashboard     # print and open the running serve URL

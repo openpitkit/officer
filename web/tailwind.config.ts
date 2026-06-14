@@ -29,6 +29,8 @@ const config: Config = {
         bg: "var(--bg)",
         surface: "var(--surface)",
         "surface-2": "var(--surface-2)",
+        "surface-hover": "var(--surface-hover)",
+        "card-hover-bg": "var(--card-hover-bg)",
         border: "var(--border)",
         "border-hover": "var(--border-hover)",
         text: "var(--text)",
@@ -42,6 +44,18 @@ const config: Config = {
         ok: "var(--ok)",
         warn: "var(--warn)",
         danger: "var(--danger)",
+        ring: "var(--ring)",
+        buy: "var(--buy)",
+        sell: "var(--sell)",
+        long: "var(--long)",
+        short: "var(--short)",
+        "pnl-pos": "var(--pnl-pos)",
+        "pnl-neg": "var(--pnl-neg)",
+        "pnl-flat": "var(--pnl-flat)",
+        "util-ok": "var(--util-ok)",
+        "util-warn": "var(--util-warn)",
+        "util-breach": "var(--util-breach)",
+        "util-track": "var(--util-track)",
       },
       fontFamily: {
         mono: [
@@ -53,7 +67,8 @@ const config: Config = {
         ],
       },
       borderRadius: {
-        card: "6px",
+        card: "var(--radius-card)",
+        badge: "var(--radius-badge)",
       },
       boxShadow: {
         card: "var(--card-shadow)",

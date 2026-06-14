@@ -78,26 +78,30 @@ export function Sidebar() {
 
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-50 w-56 shrink-0 transition-transform md:static md:translate-x-0",
+          "fixed inset-y-0 left-0 z-50 w-[var(--sidebar-width)] shrink-0 transition-transform md:static md:translate-x-0",
           "flex flex-col border-r border-border bg-surface",
           open ? "translate-x-0" : "-translate-x-full",
         )}
       >
-        <div className="flex items-center gap-2.5 border-b border-border px-4 py-4">
-          <BrandMark className="h-6 w-6" />
+        <div className="flex min-h-[var(--topbar-height)] items-center gap-[var(--dens-nav-gap)] border-b border-border bg-bg/30 px-[var(--dens-shell-x)] py-[var(--dens-sidebar-brand-py)] shadow-[inset_0_2px_0_var(--accent)]">
+          <BrandMark className="h-[var(--dens-brand-logo)] w-[var(--dens-brand-logo)]" />
           <div className="leading-tight">
-            <div className="text-sm font-bold tracking-tight text-text">
+            <div className="text-[length:var(--dens-brand-title-fz)] font-bold tracking-tight text-text">
               {t("brand.name")}
             </div>
-            {isNonRelease && (
-              <div className="text-[0.625rem] uppercase tracking-[0.12em] text-muted">
-                {t("brand.nonRelease")}
-              </div>
-            )}
+            <div className="flex items-center gap-1.5 text-[length:var(--dens-brand-label-fz)] uppercase tracking-[0.12em] text-muted">
+              <span>{t("brand.controlPlane")}</span>
+              {isNonRelease && (
+                <>
+                  <span className="text-border">/</span>
+                  <span>{t("brand.nonRelease")}</span>
+                </>
+              )}
+            </div>
           </div>
         </div>
 
-        <nav className="flex flex-1 flex-col gap-0.5 p-2">
+        <nav className="flex flex-1 flex-col gap-0.5 p-[var(--dens-sidebar-pad)]">
           {NAV.map((item) => {
             const Icon = item.icon;
             return (
@@ -108,21 +112,21 @@ export function Sidebar() {
                 onClick={close}
                 className={({ isActive }) =>
                   cn(
-                    "group flex items-center gap-2.5 rounded-card px-3 py-2 text-sm transition-colors",
+                    "group flex items-center gap-[var(--dens-nav-gap)] rounded-card px-[var(--dens-nav-px)] py-[var(--dens-nav-py)] text-[length:var(--dens-nav-fz)] transition-colors",
                     isActive
                       ? "bg-accent-dim text-accent"
-                      : "text-muted-lt hover:bg-accent-dim hover:text-accent",
+                      : "text-muted-lt hover:bg-surface-hover hover:text-accent",
                   )
                 }
               >
-                <Icon className="h-4 w-4 shrink-0" />
+                <Icon className="h-[var(--dens-nav-icon)] w-[var(--dens-nav-icon)] shrink-0" />
                 <span className="flex-1 text-left">{t(item.labelKey)}</span>
               </NavLink>
             );
           })}
         </nav>
 
-        <div className="border-t border-border p-2">
+        <div className="border-t border-border p-[var(--dens-sidebar-pad)]">
           {FOOTER.map((item) => {
             const Icon = item.icon;
             return (
@@ -133,14 +137,14 @@ export function Sidebar() {
                 onClick={close}
                 className={({ isActive }) =>
                   cn(
-                    "group flex items-center gap-2.5 rounded-card px-3 py-2 text-xs transition-colors",
+                    "group flex items-center gap-[var(--dens-nav-gap)] rounded-card px-[var(--dens-nav-px)] py-[var(--dens-nav-py)] text-[length:var(--dens-footer-fz)] transition-colors",
                     isActive
                       ? "bg-accent-dim text-accent"
-                      : "text-muted opacity-60 hover:bg-accent-dim hover:text-muted-lt hover:opacity-100",
+                      : "text-muted hover:bg-surface-hover hover:text-muted-lt",
                   )
                 }
               >
-                <Icon className="h-3.5 w-3.5 shrink-0" />
+                <Icon className="h-[var(--dens-footer-icon)] w-[var(--dens-footer-icon)] shrink-0" />
                 <span className="flex-1 text-left">{t(item.labelKey)}</span>
               </NavLink>
             );

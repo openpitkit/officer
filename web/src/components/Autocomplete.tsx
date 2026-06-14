@@ -157,9 +157,9 @@ const Autocomplete = forwardRef<HTMLInputElement, AutocompleteProps>(
           }}
           onKeyDown={handleKeyDown}
           className={cn(
-            "flex h-9 w-full rounded-card border border-border bg-bg px-3 py-1 text-sm text-text",
+            "flex h-9 w-full rounded-card border border-border bg-surface-2 px-3 py-1 text-sm text-text",
             "placeholder:text-muted focus-visible:border-border-hover focus-visible:outline-none",
-            "focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg",
+            "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg",
             "disabled:cursor-not-allowed disabled:opacity-50",
             className,
           )}
@@ -187,10 +187,10 @@ const Autocomplete = forwardRef<HTMLInputElement, AutocompleteProps>(
                 }}
                 onMouseEnter={() => setActiveIndex(i)}
                 className={cn(
-                  "cursor-pointer px-3 py-1.5 text-xs",
+                  "cursor-pointer px-3 py-1.5 text-xs transition-colors duration-[180ms]",
                   i === activeIndex
                     ? "bg-accent-dim text-accent"
-                    : "text-text hover:bg-accent-dim hover:text-accent",
+                    : "text-text hover:bg-surface-hover hover:text-accent",
                 )}
               >
                 {s}
