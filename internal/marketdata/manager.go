@@ -652,6 +652,19 @@ func (m *Manager) Stop() {
 	m.wg.Wait()
 }
 
+// UseSink replaces the quote sink used by the next Start. It must be called
+// while the manager is stopped; changing the sink while drain goroutines are
+// active would route one feed run into two engine instances.
+func (m *Manager) UseSink(sink Sink) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.started {
+		return fmt.Errorf("marketdata: cannot replace sink while running")
+	}
+	m.sink = sink
+	return nil
+}
+
 // InstanceStatuses returns a copy of the current per-instance runtime statuses.
 func (m *Manager) InstanceStatuses() map[string]InstanceRuntimeStatus {
 	m.mu.Lock()

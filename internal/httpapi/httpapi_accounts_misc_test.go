@@ -18,16 +18,31 @@
 package httpapi
 
 import (
+	"archive/zip"
 	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"go.openpit.dev/officer/internal/backend"
+	"go.openpit.dev/officer/internal/backup"
 	"go.openpit.dev/officer/internal/domain"
 )
+
+type endlessSpaces struct{}
+
+func (endlessSpaces) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = ' '
+	}
+	return len(p), nil
+}
 
 // --- GET /api/v1/service ----------------------------------------------------
 
@@ -91,6 +106,744 @@ func TestServiceInfo_ServiceError(t *testing.T) {
 	}
 	if errObj["message"] != "internal error" {
 		t.Fatalf("want generic message, got %v", errObj["message"])
+	}
+}
+
+// --- POST /api/v1/backup/export --------------------------------------------
+
+func TestBackupExport(t *testing.T) {
+	createdAt := time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC)
+	svc := &fakeService{
+		backupFilename: "pit-officer-backup-20260622T100000Z.json",
+		backupArchive: backup.NewArchive(
+			createdAt,
+			"test",
+			2,
+			backup.Scope{All: true},
+			backup.Data{Accounts: []domain.Account{{
+				Tenant: domain.DefaultTenant,
+				ID:     "acc-1",
+			}}},
+		),
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"scope":{"all":true}}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost, "/api/v1/backup/export", body,
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	disposition := rec.Result().Header.Get("Content-Disposition")
+	if disposition != `attachment; filename="pit-officer-backup-20260622T100000Z.json"` {
+		t.Fatalf("unexpected content disposition: %q", disposition)
+	}
+	m := bodyMap(t, rec.Result())
+	manifest := m["manifest"].(map[string]any)
+	if manifest["format"] != backup.Format ||
+		manifest["formatVersion"] != float64(backup.CurrentFormatVersion) {
+		t.Fatalf("unexpected manifest: %v", manifest)
+	}
+}
+
+func TestBackupExportZip(t *testing.T) {
+	createdAt := time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC)
+	svc := &fakeService{
+		backupFilename: "pit-officer-backup-20260622T100000Z.json",
+		backupArchive: backup.NewArchive(
+			createdAt,
+			"test",
+			2,
+			backup.Scope{All: true},
+			backup.Data{Accounts: []domain.Account{{
+				Tenant: domain.DefaultTenant,
+				ID:     "acc-1",
+			}}},
+		),
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"scope":{"all":true},"zip":true}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost, "/api/v1/backup/export", body,
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	if got := rec.Result().Header.Get("Content-Type"); got != "application/zip" {
+		t.Fatalf("content type = %q, want application/zip", got)
+	}
+	disposition := rec.Result().Header.Get("Content-Disposition")
+	if disposition != `attachment; filename="pit-officer-backup-20260622T100000Z.zip"` {
+		t.Fatalf("unexpected content disposition: %q", disposition)
+	}
+	zr, err := zip.NewReader(
+		bytes.NewReader(rec.Body.Bytes()),
+		int64(rec.Body.Len()),
+	)
+	if err != nil {
+		t.Fatalf("zip.NewReader: %v", err)
+	}
+	if len(zr.File) != 1 || zr.File[0].Name != svc.backupFilename {
+		t.Fatalf("unexpected zip files: %+v", zr.File)
+	}
+	rc, err := zr.File[0].Open()
+	if err != nil {
+		t.Fatalf("open zip entry: %v", err)
+	}
+	defer func() { _ = rc.Close() }()
+	var archive backup.Archive
+	if err := json.NewDecoder(rc).Decode(&archive); err != nil {
+		t.Fatalf("decode zip archive: %v", err)
+	}
+	if archive.Manifest.Format != backup.Format {
+		t.Fatalf("unexpected manifest: %+v", archive.Manifest)
+	}
+}
+
+func TestBackupExport_RequiresScope(t *testing.T) {
+	r, err := newRouter(&fakeService{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost, "/api/v1/backup/export",
+		bytes.NewBufferString(`{"scope":{}}`),
+	))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+}
+
+func TestBackupExportRejectsUnknownSection(t *testing.T) {
+	r, err := newRouter(&fakeService{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost, "/api/v1/backup/export",
+		bytes.NewBufferString(`{"scope":{"sections":["unknown"]}}`),
+	))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+}
+
+func TestBackupExportServiceErrorReturnsInternal(t *testing.T) {
+	r, err := newRouter(&fakeService{backupErr: fmt.Errorf("boom")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost, "/api/v1/backup/export",
+		bytes.NewBufferString(`{"scope":{"all":true}}`),
+	))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d", rec.Code)
+	}
+}
+
+// --- POST /api/v1/backup/restore -------------------------------------------
+
+func TestBackupRestoreRequiresMode(t *testing.T) {
+	r, err := newRouter(&fakeService{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]any{
+		"archive": backup.Archive{},
+		"scope":   backup.Scope{All: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost, "/api/v1/backup/restore", bytes.NewReader(body),
+	))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+}
+
+func TestBackupRestoreRejectsUnknownMode(t *testing.T) {
+	r, err := newRouter(&fakeService{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]any{
+		"archive": backup.Archive{},
+		"scope":   backup.Scope{All: true},
+		"mode":    "bogus",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost, "/api/v1/backup/restore", bytes.NewReader(body),
+	))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+}
+
+func TestBackupRestore(t *testing.T) {
+	summary := backup.NewSummary()
+	summary.AddApplied(backup.SectionAccountsGroups, 1)
+	svc := &fakeService{backupSummary: summary}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := backup.NewArchive(
+		time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC),
+		"test",
+		2,
+		backup.Scope{All: true},
+		backup.Data{},
+	)
+	body, err := json.Marshal(map[string]any{
+		"archive": archive,
+		"scope":   backup.Scope{All: true},
+		"mode":    backup.RestoreModeOverwrite,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost, "/api/v1/backup/restore", bytes.NewReader(body),
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	got := m["summary"].(map[string]any)
+	applied := got["applied"].(map[string]any)
+	if applied[string(backup.SectionAccountsGroups)] != float64(1) {
+		t.Fatalf("unexpected summary: %v", got)
+	}
+	if svc.restoreArchive.Manifest.Source != "test" ||
+		svc.restoreOptions.Mode != backup.RestoreModeOverwrite ||
+		!svc.restoreOptions.Scope.All {
+		t.Fatalf("restore call = archive %+v options %+v",
+			svc.restoreArchive.Manifest, svc.restoreOptions)
+	}
+}
+
+func TestBackupRestoreJSONFile(t *testing.T) {
+	summary := backup.NewSummary()
+	summary.AddApplied(backup.SectionAccountsGroups, 1)
+	svc := &fakeService{backupSummary: summary}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := backup.NewArchive(
+		time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC),
+		"json-file-test",
+		2,
+		backup.Scope{All: true},
+		backup.Data{Accounts: []domain.Account{{
+			Tenant: domain.DefaultTenant,
+			ID:     "acc-json",
+		}}},
+	)
+	payload, err := json.Marshal(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]any{
+		"archiveFile":     base64.StdEncoding.EncodeToString(payload),
+		"archiveFilename": "pit-officer-backup-20260622T100000Z.json",
+		"scope":           backup.Scope{All: true},
+		"mode":            backup.RestoreModeReplaceAll,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost, "/api/v1/backup/restore", bytes.NewReader(body),
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	if svc.restoreArchive.Manifest.Source != "json-file-test" ||
+		len(svc.restoreArchive.Data.Accounts) != 1 ||
+		svc.restoreArchive.Data.Accounts[0].ID != "acc-json" ||
+		svc.restoreOptions.Mode != backup.RestoreModeReplaceAll ||
+		!svc.restoreOptions.Scope.All {
+		t.Fatalf("restore call = archive %+v options %+v",
+			svc.restoreArchive, svc.restoreOptions)
+	}
+}
+
+func TestBackupRestoreZipFile(t *testing.T) {
+	summary := backup.NewSummary()
+	summary.AddApplied(backup.SectionAccountsGroups, 1)
+	svc := &fakeService{backupSummary: summary}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := backup.NewArchive(
+		time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC),
+		"test",
+		2,
+		backup.Scope{All: true},
+		backup.Data{Accounts: []domain.Account{{
+			Tenant: domain.DefaultTenant,
+			ID:     "acc-zip",
+		}}},
+	)
+	payload, filename, err := zipBackupArchive(
+		archive,
+		"pit-officer-backup-20260622T100000Z.json",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]any{
+		"archiveFile":     base64.StdEncoding.EncodeToString(payload),
+		"archiveFilename": filename,
+		"scope":           backup.Scope{All: true},
+		"mode":            backup.RestoreModeOverwrite,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost, "/api/v1/backup/restore", bytes.NewReader(body),
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	got := m["summary"].(map[string]any)
+	applied := got["applied"].(map[string]any)
+	if applied[string(backup.SectionAccountsGroups)] != float64(1) {
+		t.Fatalf("unexpected summary: %v", got)
+	}
+	if svc.restoreArchive.Manifest.Source != "test" ||
+		len(svc.restoreArchive.Data.Accounts) != 1 ||
+		svc.restoreArchive.Data.Accounts[0].ID != "acc-zip" ||
+		svc.restoreOptions.Mode != backup.RestoreModeOverwrite ||
+		!svc.restoreOptions.Scope.All {
+		t.Fatalf("restore call = archive %+v options %+v",
+			svc.restoreArchive, svc.restoreOptions)
+	}
+}
+
+func TestBackupRestoreFileValidation(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		encoded  string
+		want     string
+	}{
+		{
+			name:     "invalid base64",
+			filename: "backup.json",
+			encoded:  "not base64",
+			want:     "invalid backup file encoding",
+		},
+		{
+			name:     "corrupt zip",
+			filename: "backup.zip",
+			encoded: base64.StdEncoding.EncodeToString(
+				[]byte{'P', 'K', 0x03, 0x04, 'x'},
+			),
+			want: "invalid backup zip archive",
+		},
+		{
+			name:     "zip without json",
+			filename: "backup.zip",
+			encoded: base64.StdEncoding.EncodeToString(
+				testZipPayload(t, map[string]string{"notes.txt": "x"}),
+			),
+			want: "backup zip contains no JSON archive",
+		},
+		{
+			name:     "zip with multiple json files",
+			filename: "backup.zip",
+			encoded: base64.StdEncoding.EncodeToString(
+				testZipPayload(t, map[string]string{
+					"one.json": "{}",
+					"two.json": "{}",
+				}),
+			),
+			want: "backup zip contains multiple JSON files",
+		},
+		{
+			name:     "oversized zip json",
+			filename: "backup.zip",
+			encoded: base64.StdEncoding.EncodeToString(
+				testZipPayload(t, map[string]string{
+					"backup.json": strings.Repeat(" ", int(maxBackupRestoreBody)+1),
+				}),
+			),
+			want: "backup JSON in zip exceeds size limit",
+		},
+		{
+			name:     "invalid json file",
+			filename: "backup.json",
+			encoded:  base64.StdEncoding.EncodeToString([]byte("{")),
+			want:     "invalid backup archive JSON in backup.json",
+		},
+		{
+			name:    "invalid json file without filename",
+			encoded: base64.StdEncoding.EncodeToString([]byte("{")),
+			want:    "invalid backup archive JSON",
+		},
+		{
+			name:     "invalid json in zip",
+			filename: "backup.zip",
+			encoded: base64.StdEncoding.EncodeToString(
+				testZipPayload(t, map[string]string{"backup.json": "{"}),
+			),
+			want: "invalid backup archive JSON in backup.zip",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &fakeService{}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := json.Marshal(map[string]any{
+				"archiveFile":     tt.encoded,
+				"archiveFilename": tt.filename,
+				"scope":           backup.Scope{All: true},
+				"mode":            backup.RestoreModeOverwrite,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(
+				http.MethodPost, "/api/v1/backup/restore", bytes.NewReader(body),
+			))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("want 400, got %d", rec.Code)
+			}
+			errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
+			if errObj["code"] != "validation" || errObj["message"] != tt.want {
+				t.Fatalf("error = %v, want validation %q", errObj, tt.want)
+			}
+			if svc.restoreOptions.Mode != "" {
+				t.Fatalf("RestoreBackup was called with options %+v",
+					svc.restoreOptions)
+			}
+		})
+	}
+}
+
+func TestBackupRestoreInvalidArchiveReturnsBadRequest(t *testing.T) {
+	r, err := newRouter(&fakeService{
+		backupErr: fmt.Errorf("bad backup: %w", domain.ErrInvalid),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]any{
+		"archive": backup.NewArchive(
+			time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC),
+			"test",
+			2,
+			backup.Scope{All: true},
+			backup.Data{},
+		),
+		"scope": backup.Scope{All: true},
+		"mode":  backup.RestoreModeOverwrite,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost, "/api/v1/backup/restore", bytes.NewReader(body),
+	))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+}
+
+func TestBackupRestoreRequiresArchive(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]any{
+		"scope": backup.Scope{All: true},
+		"mode":  backup.RestoreModeOverwrite,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost, "/api/v1/backup/restore", bytes.NewReader(body),
+	))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+	errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
+	if errObj["code"] != "validation" ||
+		errObj["message"] != "backup archive is required" {
+		t.Fatalf("unexpected error: %v", errObj)
+	}
+	if svc.restoreOptions.Mode != "" {
+		t.Fatalf("RestoreBackup was called with options %+v",
+			svc.restoreOptions)
+	}
+}
+
+func TestBackupRestoreRejectsEmptyScope(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]any{
+		"archive": backup.NewArchive(
+			time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC),
+			"test",
+			2,
+			backup.Scope{All: true},
+			backup.Data{},
+		),
+		"scope": backup.Scope{},
+		"mode":  backup.RestoreModeOverwrite,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost, "/api/v1/backup/restore", bytes.NewReader(body),
+	))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+	errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
+	if errObj["code"] != "validation" ||
+		errObj["message"] !=
+			"restore scope must include all or at least one section" {
+		t.Fatalf("unexpected error: %v", errObj)
+	}
+	if svc.restoreOptions.Mode != "" {
+		t.Fatalf("RestoreBackup was called with options %+v",
+			svc.restoreOptions)
+	}
+}
+
+func TestBackupRestoreFilePayloadOverridesInlineArchive(t *testing.T) {
+	svc := &fakeService{backupSummary: backup.NewSummary()}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inline := backup.NewArchive(
+		time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC),
+		"inline",
+		2,
+		backup.Scope{All: true},
+		backup.Data{},
+	)
+	fileArchive := backup.NewArchive(
+		time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC),
+		"file",
+		2,
+		backup.Scope{All: true},
+		backup.Data{},
+	)
+	payload, err := json.Marshal(fileArchive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]any{
+		"archive":         inline,
+		"archiveFile":     base64.StdEncoding.EncodeToString(payload),
+		"archiveFilename": "backup.json",
+		"scope":           backup.Scope{All: true},
+		"mode":            backup.RestoreModeOverwrite,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost, "/api/v1/backup/restore", bytes.NewReader(body),
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	if svc.restoreArchive.Manifest.Source != "file" {
+		t.Fatalf("restore archive source = %q, want file",
+			svc.restoreArchive.Manifest.Source)
+	}
+}
+
+func testZipPayload(t *testing.T, entries map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for name, body := range entries {
+		w, err := zw.Create(name)
+		if err != nil {
+			t.Fatalf("create zip entry %s: %v", name, err)
+		}
+		if _, err := io.WriteString(w, body); err != nil {
+			t.Fatalf("write zip entry %s: %v", name, err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("close zip: %v", err)
+	}
+	return buf.Bytes()
+}
+
+func TestBackupRestoreServiceErrorReturnsInternal(t *testing.T) {
+	r, err := newRouter(&fakeService{backupErr: fmt.Errorf("boom")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]any{
+		"archive": backup.NewArchive(
+			time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC),
+			"test",
+			2,
+			backup.Scope{All: true},
+			backup.Data{},
+		),
+		"scope": backup.Scope{All: true},
+		"mode":  backup.RestoreModeOverwrite,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost, "/api/v1/backup/restore", bytes.NewReader(body),
+	))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d", rec.Code)
+	}
+}
+
+func TestBackupRestoreBodyLimit(t *testing.T) {
+	r, err := newRouter(&fakeService{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost, "/api/v1/backup/restore",
+		io.LimitReader(endlessSpaces{}, maxBackupRestoreBody+1),
+	))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+}
+
+func TestOrdinaryEndpointBodyLimitRemainsSmall(t *testing.T) {
+	r, err := newRouter(&fakeService{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost, "/api/v1/accounts",
+		strings.NewReader(strings.Repeat(" ", maxRequestBody+1)),
+	))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+}
+
+func TestResetDatabaseRequiresConfirmation(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]any{"confirm": false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost, "/api/v1/database/reset", bytes.NewReader(body),
+	))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+	errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
+	if errObj["code"] != "validation" ||
+		errObj["message"] != "database reset confirmation is required" {
+		t.Fatalf("unexpected error: %v", errObj)
+	}
+	if svc.resetCalled {
+		t.Fatalf("ResetDatabase was called without confirmation")
+	}
+}
+
+func TestResetDatabase(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]any{"confirm": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost, "/api/v1/database/reset", bytes.NewReader(body),
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	if !svc.resetCalled {
+		t.Fatalf("ResetDatabase was not called")
+	}
+	m := bodyMap(t, rec.Result())
+	if m["ok"] != true {
+		t.Fatalf("unexpected response: %v", m)
+	}
+}
+
+func TestResetDatabaseServiceErrorReturnsInternal(t *testing.T) {
+	r, err := newRouter(&fakeService{resetErr: fmt.Errorf("boom")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]any{"confirm": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost, "/api/v1/database/reset", bytes.NewReader(body),
+	))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d", rec.Code)
 	}
 }
 

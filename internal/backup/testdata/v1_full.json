@@ -1,0 +1,192 @@
+{
+  "manifest": {
+    "createdAt": "2026-06-22T10:00:00Z",
+    "format": "openpit.officer.backup",
+    "source": "fixture",
+    "schemaVersion": 2,
+    "formatVersion": 1,
+    "sections": [
+      "accounts_groups",
+      "positions",
+      "risk_limits",
+      "market_data_settings",
+      "market_data_quotes",
+      "general_settings",
+      "activity_history",
+      "audit_log"
+    ]
+  },
+  "data": {
+    "mcpAccess": {
+      "submit_order": true
+    },
+    "accounts": [
+      {
+        "Tenant": "default",
+        "ID": "acc-1",
+        "Blocked": false,
+        "BlockReason": "",
+        "GroupID": "grp-1",
+        "Notes": "primary"
+      }
+    ],
+    "groups": [
+      {
+        "Tenant": "default",
+        "ID": "grp-1",
+        "Notes": "desk",
+        "Blocked": false,
+        "BlockReason": ""
+      }
+    ],
+    "limits": [
+      {
+        "Target": {
+          "Tenant": "default",
+          "Policy": "order_size_limit",
+          "Scope": "account_asset",
+          "Account": "acc-1",
+          "Asset": "AAPL"
+        },
+        "Values": [
+          {
+            "Kind": "max_quantity",
+            "Value": "100"
+          }
+        ]
+      }
+    ],
+    "balances": [
+      {
+        "Tenant": "default",
+        "Account": "acc-1",
+        "Asset": "USD",
+        "Available": "10",
+        "Held": "1",
+        "Incoming": "0",
+        "AverageEntryPrice": "",
+        "RealizedPnl": "0",
+        "UpdatedAt": "2026-06-22T10:00:00Z"
+      }
+    ],
+    "adjustments": [
+      {
+        "At": "2026-06-22T10:00:00Z",
+        "Request": {
+          "asset": "USD",
+          "balance": {
+            "mode": "absolute",
+            "value": "10"
+          }
+        },
+        "Accepted": {
+          "balance_delta": "10",
+          "balance_result": "10",
+          "held_delta": "0",
+          "held_result": "0",
+          "incoming_delta": "0",
+          "incoming_result": "0",
+          "realized_pnl_delta": "0",
+          "realized_pnl_result": "0"
+        },
+        "Principal": "operator",
+        "Tenant": "default",
+        "Account": "acc-1",
+        "Source": "panel",
+        "ID": 1
+      }
+    ],
+    "orders": [
+      {
+        "ID": 1,
+        "Tenant": "default",
+        "Account": "acc-1",
+        "At": "2026-06-22T10:01:00Z",
+        "Source": "panel",
+        "Principal": "operator",
+        "BaseAsset": "AAPL",
+        "QuoteAsset": "USD",
+        "Side": "buy",
+        "AmountKind": "quantity",
+        "AmountValue": "1",
+        "Price": "100",
+        "Status": "committed",
+        "LockPrices": [
+          "100"
+        ]
+      }
+    ],
+    "orderEvents": [
+      {
+        "At": "2026-06-22T10:01:00Z",
+        "Payload": {},
+        "Type": "submitted",
+        "Source": "panel",
+        "Principal": "operator",
+        "OrderID": 1,
+        "ID": 1
+      }
+    ],
+    "trades": [
+      {
+        "ID": 1,
+        "OrderID": 1,
+        "Tenant": "default",
+        "Account": "acc-1",
+        "At": "2026-06-22T10:02:00Z",
+        "Source": "panel",
+        "Principal": "operator",
+        "BaseAsset": "AAPL",
+        "QuoteAsset": "USD",
+        "Side": "buy",
+        "Quantity": "1",
+        "Price": "100",
+        "LockPrice": "100"
+      }
+    ],
+    "audit": [
+      {
+        "At": "2026-06-22T10:00:00Z",
+        "Actor": "operator",
+        "Action": "create_account",
+        "Tenant": "default",
+        "Account": "acc-1",
+        "Detail": "create account acc-1",
+        "Source": "panel",
+        "ID": 1
+      }
+    ],
+    "marketDataInstances": [
+      {
+        "ID": "manual-1",
+        "Type": "byo",
+        "Label": "Manual",
+        "Credentials": "",
+        "Enabled": true
+      }
+    ],
+    "marketDataInstruments": [
+      {
+        "InstanceID": "manual-1",
+        "ExternalSymbol": "AAPLUSD",
+        "BaseAsset": "AAPL",
+        "QuoteAsset": "USD",
+        "ManualPrice": "100",
+        "Enabled": true
+      }
+    ],
+    "marketDataQuotes": [
+      {
+        "InstanceID": "manual-1",
+        "ExternalSymbol": "AAPLUSD",
+        "BaseAsset": "AAPL",
+        "QuoteAsset": "USD",
+        "Mark": "100",
+        "Bid": "",
+        "Ask": "",
+        "AsOf": "2026-06-22T10:00:00Z",
+        "ReceivedAt": "2026-06-22T10:00:00Z"
+      }
+    ]
+  }
+}

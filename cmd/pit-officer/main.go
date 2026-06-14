@@ -169,10 +169,10 @@ func setup(ctx context.Context, cfg config.Config, logger *slog.Logger) (
 		return nil, fmt.Errorf("build router: %w", err)
 	}
 
-	// The engine sink is valid for the whole process (the engine is never
-	// rebuilt). The manager brings up the enabled connectors and drains their
-	// quotes into the sink; nothing enabled is a clean no-op, and a bad instance
-	// is logged and skipped, so Start never fails setup on configuration alone.
+	// The manager brings up the enabled connectors and drains their quotes into
+	// the current engine sink; restore can swap the sink and restart the manager.
+	// Nothing enabled is a clean no-op, and a bad instance is logged and skipped,
+	// so Start never fails setup on configuration alone.
 	manager := marketdata.NewManager(st, eng.MarketDataSink(), logger)
 	if err := manager.Start(ctx); err != nil {
 		_ = localNode.Close()
@@ -490,8 +490,7 @@ func openBrowser(url string) error {
 
 // nodeVersionSource adapts a node.Node to the MCP surface's VersionSource seam.
 // It reads the engine version through the node rather than a captured handle,
-// so access goes through one serialized path; the handle is permanent (officer
-// never rebuilds the engine).
+// so access observes the current engine even after a backup restore rebuild.
 type nodeVersionSource struct {
 	node node.Node
 }

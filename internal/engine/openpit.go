@@ -83,10 +83,9 @@ const (
 // domain.ErrNotImplemented, which the node surfaces to its caller; closing such
 // a gap is engine-side SDK work, not an officer rebuild.
 //
-// The adapter owns the market-data service for the whole process life (the
-// engine is never rebuilt, so the service handle is stable). The service is
-// built unconditionally and Stop closes it after stopping the engine, so
-// connector producers must stop before Stop.
+// The adapter owns the market-data service for its engine handle lifetime. The
+// service is built unconditionally and Stop closes it after stopping the engine,
+// so connector producers must stop before Stop.
 //
 // The adapter tracks the minimal state this requires: the set of policies
 // registered at build time, and per-policy whether a broker barrier is currently
@@ -714,8 +713,7 @@ func (e *openPitEngine) CheckOrder(
 }
 
 // MarketDataSink returns the quote sink backed by the engine's market-data
-// service. It is valid for the whole process: the engine is never rebuilt, so
-// the backing service handle is stable until Stop closes it.
+// service. It is valid until Stop closes this engine handle.
 func (e *openPitEngine) MarketDataSink() marketdata.Sink {
 	return e.sink
 }

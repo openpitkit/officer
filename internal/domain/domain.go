@@ -158,6 +158,9 @@ const (
 	AuditActionExecutionReport AuditAction = "execution_report"
 	AuditActionSetMcpAccess    AuditAction = "set_mcp_access"
 	AuditActionSetMarketData   AuditAction = "set_market_data"
+	AuditActionExportBackup    AuditAction = "export_backup"
+	AuditActionRestoreBackup   AuditAction = "restore_backup"
+	AuditActionResetDatabase   AuditAction = "reset_database"
 )
 
 // AuditRow is the persisted, immutable record of a single control-plane action.

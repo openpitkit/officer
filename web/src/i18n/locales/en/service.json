@@ -2,6 +2,13 @@
   "title": "Service",
   "refreshAriaLabel": "Refresh service info",
   "restartFeedsAriaLabel": "Restart market-data feeds",
+  "tabs": {
+    "ariaLabel": "Service sections",
+    "application": "Application",
+    "api": "API",
+    "database": "Database",
+    "logs": "Logs"
+  },
   "application": {
     "title": "Application",
     "name": "Name",
@@ -33,7 +40,12 @@
     "reachable": "reachable",
     "unreachable": "unreachable",
     "reachableLabel": "Reachable",
-    "path": "Path"
+    "path": "Path",
+    "resetTitle": "Danger zone",
+    "resetDescription": "Delete every row, recreate the database from scratch, and rebuild the engine. Export a backup first if you may need the current data.",
+    "resetButton": "Delete all data",
+    "resetConfirm": "Delete all data and recreate the database from scratch? Export a backup first if you may need the current data.",
+    "resetDone": "Database reset."
   },
   "api": {
     "title": "API",
@@ -43,6 +55,53 @@
     "configureAccess": "Configure access",
     "loadingCommands": "Loading commands…",
     "noCommands": "No commands defined."
+  },
+  "backup": {
+    "title": "Database backup",
+    "tabs": {
+      "ariaLabel": "Backup workflow",
+      "export": "Export",
+      "restore": "Restore"
+    },
+    "all": "All data",
+    "zip": "Archive as ZIP",
+    "export": "Export",
+    "restore": "Restore",
+    "accountsPlaceholder": "accounts, comma-separated",
+    "groupsPlaceholder": "groups, comma-separated",
+    "positionsAccountsPlaceholder": "position accounts, comma-separated",
+    "positionsGroupsPlaceholder": "position groups, comma-separated",
+    "restartRequired": "runtime restarted",
+    "summary": "Applied {{applied}}, skipped {{skipped}} · {{restart}}",
+    "confirmReplaceAll": "Delete all selected data and restore this backup?",
+    "restoreScopeWarningTitle": "Only selected sections are affected.",
+    "restoreScopeWarning": "Restore modes apply to the data selected above, not to the entire database unless All data is checked.",
+    "sections": {
+      "accounts_groups": "Accounts and groups",
+      "positions": "Positions",
+      "risk_limits": "Risk limits",
+      "market_data_settings": "Market-data settings",
+      "market_data_quotes": "Latest market-data quotes",
+      "general_settings": "General settings",
+      "activity_history": "Orders, trades, adjustments",
+      "audit_log": "Audit log"
+    },
+    "accounts": {
+      "title": "Accounts and groups",
+      "all": "All accounts and groups"
+    },
+    "positions": {
+      "title": "Positions",
+      "all": "All position accounts"
+    },
+    "modes": {
+      "replace_all": "Delete selected data, then restore",
+      "overwrite": "Restore and overwrite matches",
+      "insert_missing": "Restore only missing rows"
+    },
+    "errors": {
+      "fileRequired": "Choose a backup file."
+    }
   },
   "logs": {
     "title": "Logs",

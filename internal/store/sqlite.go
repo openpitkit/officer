@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -68,19 +69,35 @@ type sqliteStore struct {
 // identity on a path it cannot resolve only via the error branch, where the
 // original string is kept.
 func NewSQLiteStore(path string) (Store, error) {
-	db, err := sql.Open(driverName, path)
+	db, err := openSQLiteDB(path)
 	if err != nil {
 		return nil, fmt.Errorf("store: open sqlite at %q: %w", path, err)
 	}
-	// Single open connection avoids "database is locked" under SQLite's
-	// file locking.
-	db.SetMaxOpenConns(1)
 
 	displayPath := path
 	if abs, absErr := filepath.Abs(path); absErr == nil {
 		displayPath = abs
 	}
 	return &sqliteStore{db: db, path: displayPath}, nil
+}
+
+func openSQLiteDB(path string) (*sql.DB, error) {
+	db, err := sql.Open(driverName, sqliteDSN(path))
+	if err != nil {
+		return nil, err
+	}
+	// Single open connection avoids "database is locked" under SQLite's
+	// file locking.
+	db.SetMaxOpenConns(1)
+	return db, nil
+}
+
+func sqliteDSN(path string) string {
+	separator := "?"
+	if strings.Contains(path, "?") {
+		separator = "&"
+	}
+	return path + separator + "_pragma=foreign_keys(1)"
 }
 
 // Migrate brings the schema up to the version this build expects. Idempotent.
@@ -183,6 +200,33 @@ func (s *sqliteStore) Ping(ctx context.Context) error {
 		return fmt.Errorf("store: ping: %w", err)
 	}
 	return nil
+}
+
+// Reset recreates the SQLite file and reapplies every bundled migration.
+func (s *sqliteStore) Reset(ctx context.Context) error {
+	path := s.path
+	if err := s.Close(); err != nil {
+		return fmt.Errorf("store: reset close sqlite: %w", err)
+	}
+	for _, candidate := range sqliteResetPaths(path) {
+		if err := os.Remove(candidate); err != nil &&
+			!errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("store: reset remove %q: %w", candidate, err)
+		}
+	}
+	db, err := openSQLiteDB(path)
+	if err != nil {
+		return fmt.Errorf("store: reset open sqlite at %q: %w", path, err)
+	}
+	s.db = db
+	if err := s.Migrate(ctx); err != nil {
+		return fmt.Errorf("store: reset migrate: %w", err)
+	}
+	return nil
+}
+
+func sqliteResetPaths(path string) []string {
+	return []string{path, path + "-wal", path + "-shm", path + "-journal"}
 }
 
 // Path returns the on-disk location of the database.

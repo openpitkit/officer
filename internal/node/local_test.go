@@ -23,7 +23,9 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"go.openpit.dev/officer/internal/backup"
 	"go.openpit.dev/officer/internal/domain"
 	"go.openpit.dev/officer/internal/engine"
 	"go.openpit.dev/officer/internal/marketdata"
@@ -238,6 +240,40 @@ func (e *fakeEngine) Stop() { e.running = false }
 type nopSink struct{}
 
 func (nopSink) Push(marketdata.QuoteUpdate) error { return nil }
+
+type failRestoreAuditStore struct {
+	store.Store
+}
+
+var errRestoreAuditFailed = errors.New("restore audit failed")
+
+func (s *failRestoreAuditStore) AppendAudit(
+	ctx context.Context,
+	entry store.AuditEntry,
+) error {
+	if entry.Action == domain.AuditActionRestoreBackup {
+		return errRestoreAuditFailed
+	}
+	return s.Store.AppendAudit(ctx, entry)
+}
+
+type failRollbackRestoreStore struct {
+	store.Store
+	rollbackErr  error
+	restoreCalls int
+}
+
+func (s *failRollbackRestoreStore) RestoreBackup(
+	ctx context.Context,
+	archive backup.Archive,
+	opts backup.RestoreOptions,
+) (backup.RestoreSummary, error) {
+	s.restoreCalls++
+	if s.restoreCalls > 1 {
+		return backup.RestoreSummary{}, s.rollbackErr
+	}
+	return s.Store.RestoreBackup(ctx, archive, opts)
+}
 
 // newTestNode builds a localNode over a real temp SQLite store and the fake
 // engine. NewLocalNode seeds the build from the (freshly migrated, empty) store
@@ -799,6 +835,373 @@ func TestLocalNode_PutLimitNoAccountRequired(t *testing.T) {
 	if len(eng.configureCalls) != 1 {
 		t.Fatalf("want 1 configure call, got %d", len(eng.configureCalls))
 	}
+}
+
+func TestLocalNode_ExportBackupAudits(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	n, st := newTestNode(t, newFakeEngine())
+
+	if _, err := n.ExportBackup(ctx, backup.Scope{All: true}, testCaller); err != nil {
+		t.Fatalf("ExportBackup: %v", err)
+	}
+
+	rows, err := st.ListAudit(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	if rows[0].Action != domain.AuditActionExportBackup {
+		t.Fatalf("latest action = %q, want export_backup", rows[0].Action)
+	}
+	if rows[0].Actor != testCaller.Principal ||
+		rows[0].Source != testCaller.Source {
+		t.Fatalf("audit attribution = %+v, want %+v", rows[0], testCaller)
+	}
+}
+
+func TestLocalNode_RestoreBackupRebuildsEngineFromRestoredStore(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	oldEngine := newFakeEngine()
+	n, st := newTestNode(t, oldEngine)
+	nextEngine := newFakeEngine()
+	var captured engine.Snapshot
+	n.build = fakeBuild(nextEngine, &captured)
+	archive := backup.NewArchive(
+		backupTestTime(),
+		"test",
+		2,
+		backup.Scope{All: true},
+		backup.Data{Accounts: []domain.Account{{
+			Tenant: domain.DefaultTenant,
+			ID:     "restored",
+		}}},
+	)
+
+	summary, _, err := n.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true},
+		Mode:  backup.RestoreModeReplaceAll,
+	}, testCaller)
+	if err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	if !summary.RestartRequired {
+		t.Fatalf("RestartRequired = false, want true")
+	}
+	if oldEngine.running {
+		t.Fatalf("old engine still running after restore swap")
+	}
+	if !nextEngine.running {
+		t.Fatalf("next engine not running after restore")
+	}
+	if len(captured.Accounts) != 1 || captured.Accounts[0].ID != "restored" {
+		t.Fatalf("build snapshot accounts = %+v", captured.Accounts)
+	}
+	rows, err := st.ListAudit(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	if rows[0].Action != domain.AuditActionRestoreBackup {
+		t.Fatalf("latest action = %q, want restore_backup", rows[0].Action)
+	}
+}
+
+func TestLocalNode_RestoreBackupRollsBackStoreOnRebuildFailure(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	oldEngine := newFakeEngine()
+	n, st := newTestNode(t, oldEngine)
+	if _, err := n.CreateAccount(ctx, testKey("keep"), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	n.build = func(engine.Snapshot) (engine.Engine, error) {
+		return nil, errors.New("build failed")
+	}
+	archive := backup.NewArchive(
+		backupTestTime(),
+		"test",
+		2,
+		backup.Scope{All: true},
+		backup.Data{Accounts: []domain.Account{{
+			Tenant: domain.DefaultTenant,
+			ID:     "new",
+		}}},
+	)
+
+	if _, _, err := n.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true},
+		Mode:  backup.RestoreModeReplaceAll,
+	}, testCaller); err == nil {
+		t.Fatal("RestoreBackup succeeded, want rebuild failure")
+	}
+	if !oldEngine.running {
+		t.Fatalf("old engine stopped after failed rebuild")
+	}
+	if _, ok, err := st.GetAccount(ctx, domain.DefaultTenant, "keep"); err != nil || !ok {
+		t.Fatalf("keep account ok=%v err=%v, want present", ok, err)
+	}
+	if _, ok, err := st.GetAccount(ctx, domain.DefaultTenant, "new"); err != nil || ok {
+		t.Fatalf("new account ok=%v err=%v, want absent", ok, err)
+	}
+}
+
+func TestLocalNode_RestoreBackupRollsBackStoreAndEngineOnAuditFailure(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	oldEngine := newFakeEngine()
+	n, st := newTestNode(t, oldEngine)
+	if _, err := n.CreateAccount(ctx, testKey("keep"), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	nextEngine := newFakeEngine()
+	rollbackEngine := newFakeEngine()
+	var buildCount int
+	var rollbackSnapshot engine.Snapshot
+	n.build = func(snap engine.Snapshot) (engine.Engine, error) {
+		buildCount++
+		if buildCount == 1 {
+			return nextEngine, nil
+		}
+		rollbackSnapshot = snap
+		return rollbackEngine, nil
+	}
+	n.store = &failRestoreAuditStore{Store: n.store}
+	archive := backup.NewArchive(
+		backupTestTime(),
+		"test",
+		2,
+		backup.Scope{All: true},
+		backup.Data{Accounts: []domain.Account{{
+			Tenant: domain.DefaultTenant,
+			ID:     "new",
+		}}},
+	)
+
+	if _, _, err := n.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true},
+		Mode:  backup.RestoreModeReplaceAll,
+	}, testCaller); err == nil {
+		t.Fatal("RestoreBackup succeeded, want audit failure")
+	}
+	if nextEngine.running {
+		t.Fatalf("restored engine still running after rollback")
+	}
+	if !rollbackEngine.running {
+		t.Fatalf("rollback engine not running")
+	}
+	if _, ok, err := st.GetAccount(ctx, domain.DefaultTenant, "keep"); err != nil || !ok {
+		t.Fatalf("keep account ok=%v err=%v, want present", ok, err)
+	}
+	if _, ok, err := st.GetAccount(ctx, domain.DefaultTenant, "new"); err != nil || ok {
+		t.Fatalf("new account ok=%v err=%v, want absent", ok, err)
+	}
+	if len(rollbackSnapshot.Accounts) != 1 || rollbackSnapshot.Accounts[0].ID != "keep" {
+		t.Fatalf("rollback snapshot accounts = %+v", rollbackSnapshot.Accounts)
+	}
+}
+
+func TestLocalNode_RestoreBackupRollsBackStoreOnAuditFailureWithoutRuntime(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	oldEngine := newFakeEngine()
+	n, st := newTestNode(t, oldEngine)
+	if err := st.SetMcpAccess(ctx, "submit_order", true); err != nil {
+		t.Fatalf("SetMcpAccess: %v", err)
+	}
+	n.store = &failRestoreAuditStore{Store: n.store}
+	archive := backup.NewArchive(
+		backupTestTime(),
+		"test",
+		2,
+		backup.Scope{Sections: []backup.Section{backup.SectionGeneralSettings}},
+		backup.Data{McpAccess: map[string]bool{"submit_order": false}},
+	)
+
+	if _, _, err := n.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{Sections: []backup.Section{backup.SectionGeneralSettings}},
+		Mode:  backup.RestoreModeReplaceAll,
+	}, testCaller); err == nil {
+		t.Fatal("RestoreBackup succeeded, want audit failure")
+	}
+	if !oldEngine.running {
+		t.Fatalf("engine stopped for non-runtime rollback")
+	}
+	access, err := st.ListMcpAccess(ctx)
+	if err != nil {
+		t.Fatalf("ListMcpAccess: %v", err)
+	}
+	if access["submit_order"] != true {
+		t.Fatalf("mcp access = %+v, want rollback to true", access)
+	}
+}
+
+func TestLocalNode_RestoreBackupJoinsRollbackRestoreFailure(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	n, st := newTestNode(t, newFakeEngine())
+	if err := st.SetMcpAccess(ctx, "submit_order", true); err != nil {
+		t.Fatalf("SetMcpAccess: %v", err)
+	}
+	rollbackErr := errors.New("rollback restore failed")
+	n.store = &failRollbackRestoreStore{
+		Store: &failRestoreAuditStore{
+			Store: n.store,
+		},
+		rollbackErr: rollbackErr,
+	}
+	archive := backup.NewArchive(
+		backupTestTime(),
+		"test",
+		2,
+		backup.Scope{Sections: []backup.Section{backup.SectionGeneralSettings}},
+		backup.Data{McpAccess: map[string]bool{"submit_order": false}},
+	)
+
+	_, _, err := n.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{Sections: []backup.Section{backup.SectionGeneralSettings}},
+		Mode:  backup.RestoreModeReplaceAll,
+	}, testCaller)
+	if err == nil {
+		t.Fatal("RestoreBackup succeeded, want audit and rollback failure")
+	}
+	if !errors.Is(err, rollbackErr) {
+		t.Fatalf("RestoreBackup error = %v, want rollback restore error", err)
+	}
+	if !errors.Is(err, errRestoreAuditFailed) {
+		t.Fatalf("RestoreBackup error = %v, want audit failure", err)
+	}
+}
+
+func TestLocalNode_ResetDatabaseRecreatesStoreAndAudits(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "reset.db")
+	st, err := store.NewSQLiteStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	oldEngine := newFakeEngine()
+	nextEngine := newFakeEngine()
+	builds := 0
+	build := func(engine.Snapshot) (engine.Engine, error) {
+		builds++
+		if builds == 1 {
+			return oldEngine, nil
+		}
+		return nextEngine, nil
+	}
+	nn, _, err := NewLocalNode(ctx, st, build)
+	if err != nil {
+		t.Fatalf("NewLocalNode: %v", err)
+	}
+	n := nn.(*localNode)
+	if _, err := n.CreateAccount(ctx, testKey("reset-me"), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+
+	sink, err := n.ResetDatabase(ctx, testCaller)
+	if err != nil {
+		t.Fatalf("ResetDatabase: %v", err)
+	}
+	if sink == nil {
+		t.Fatalf("ResetDatabase returned nil sink")
+	}
+	if builds != 2 {
+		t.Fatalf("build calls = %d, want 2", builds)
+	}
+	if oldEngine.running {
+		t.Fatalf("old engine still running after reset")
+	}
+	if !nextEngine.running {
+		t.Fatalf("next engine is not running after reset")
+	}
+	accounts, err := st.ListAccounts(ctx)
+	if err != nil {
+		t.Fatalf("ListAccounts: %v", err)
+	}
+	if len(accounts) != 0 {
+		t.Fatalf("accounts after reset = %+v, want none", accounts)
+	}
+	rows, err := st.ListAudit(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Action != domain.AuditActionResetDatabase {
+		t.Fatalf("audit after reset = %+v, want reset row only", rows)
+	}
+	if rows[0].Actor != testCaller.Principal ||
+		rows[0].Source != testCaller.Source {
+		t.Fatalf("audit attribution = %+v, want %+v", rows[0], testCaller)
+	}
+}
+
+func TestLocalNode_ConcurrentRestoreSwapAndReads(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	n, _ := newTestNode(t, newFakeEngine())
+	probe := domain.OrderProbe{
+		Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
+		Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1",
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	errs := make(chan error, 1)
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if _, err := n.CheckOrder(ctx, testKey("acc-1"), probe); err != nil {
+				errs <- err
+				return
+			}
+			if _, err := n.Health(ctx); err != nil {
+				errs <- err
+				return
+			}
+			_ = n.EngineVersion()
+		}
+	}()
+	for i := 0; i < 25; i++ {
+		n.build = func(engine.Snapshot) (engine.Engine, error) {
+			return newFakeEngine(), nil
+		}
+		archive := backup.NewArchive(
+			backupTestTime().Add(time.Duration(i)*time.Second),
+			"test",
+			2,
+			backup.Scope{All: true},
+			backup.Data{Accounts: []domain.Account{{
+				Tenant: domain.DefaultTenant,
+				ID:     domain.AccountID(fmt.Sprintf("acc-%d", i)),
+			}}},
+		)
+		if _, _, err := n.RestoreBackup(ctx, archive, backup.RestoreOptions{
+			Scope: backup.Scope{All: true},
+			Mode:  backup.RestoreModeReplaceAll,
+		}, testCaller); err != nil {
+			close(stop)
+			t.Fatalf("RestoreBackup #%d: %v", i, err)
+		}
+	}
+	close(stop)
+	<-done
+	select {
+	case err := <-errs:
+		t.Fatalf("concurrent read error: %v", err)
+	default:
+	}
+}
+
+func backupTestTime() time.Time {
+	return time.Date(2026, 6, 22, 12, 0, 0, 0, time.UTC)
 }
 
 func TestLocalNode_ErrorMessagesNoNodePrefix(t *testing.T) {

@@ -411,6 +411,69 @@ export interface ServiceLogs {
   count: number;
 }
 
+// --- Backup / restore ---
+
+export type BackupSection =
+  | "accounts_groups"
+  | "positions"
+  | "risk_limits"
+  | "market_data_settings"
+  | "market_data_quotes"
+  | "general_settings"
+  | "activity_history"
+  | "audit_log";
+
+export type RestoreMode = "replace_all" | "overwrite" | "insert_missing";
+
+export interface BackupEntitySelector {
+  all?: boolean;
+  accounts?: string[];
+  groups?: string[];
+}
+
+export interface BackupScope {
+  all?: boolean;
+  sections?: BackupSection[];
+  accounts?: BackupEntitySelector;
+  positions?: BackupEntitySelector;
+}
+
+export interface BackupManifest {
+  format: "openpit.officer.backup";
+  formatVersion: number;
+  schemaVersion: number;
+  createdAt: string;
+  source?: string;
+  sections: BackupSection[];
+}
+
+export interface BackupData {
+  mcpAccess?: Record<string, boolean>;
+  accounts?: Record<string, unknown>[];
+  groups?: Record<string, unknown>[];
+  limits?: Record<string, unknown>[];
+  balances?: Record<string, unknown>[];
+  adjustments?: Record<string, unknown>[];
+  orders?: Record<string, unknown>[];
+  orderEvents?: Record<string, unknown>[];
+  trades?: Record<string, unknown>[];
+  audit?: Record<string, unknown>[];
+  marketDataInstances?: Record<string, unknown>[];
+  marketDataInstruments?: Record<string, unknown>[];
+  marketDataQuotes?: Record<string, unknown>[];
+}
+
+export interface BackupArchive {
+  manifest: BackupManifest;
+  data: BackupData;
+}
+
+export interface BackupRestoreSummary {
+  applied: Partial<Record<BackupSection, number>>;
+  skipped: Partial<Record<BackupSection, number>>;
+  restartRequired: boolean;
+}
+
 // --- MCP access ---
 
 /** One entry from GET /mcp-access (mirrors the mcpCommandDTO wire shape). */

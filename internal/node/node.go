@@ -28,8 +28,10 @@ import (
 	"context"
 	"time"
 
+	"go.openpit.dev/officer/internal/backup"
 	"go.openpit.dev/officer/internal/domain"
 	"go.openpit.dev/officer/internal/engine"
+	"go.openpit.dev/officer/internal/marketdata"
 	"go.openpit.dev/officer/internal/store"
 )
 
@@ -60,18 +62,18 @@ type Health struct {
 // engine and store. Every mutation follows one protocol (see localNode): the
 // store is the source of truth and is written first, the engine is applied
 // from the re-read full policy set, the store is reverted on engine failure,
-// and an audit row is appended last. The engine is built once and reconfigured
-// in place; officer never rebuilds it. A barrier change the runtime Configure
-// surface cannot express is an SDK gap surfaced as an error, not worked around
-// by reconstructing a fresh handle.
+// and an audit row is appended last. Ordinary mutations reconfigure the engine
+// in place and do not rebuild it; full restore is the administrative exception
+// that rebuilds from the restored store snapshot. A barrier change the runtime
+// Configure surface cannot express is an SDK gap surfaced as an error, not
+// worked around by reconstructing a fresh handle.
 type Node interface {
 	// Health returns the current aggregate health of the node's engine and
 	// store.
 	Health(ctx context.Context) (Health, error)
 
-	// EngineVersion returns the version string of the node's engine. The handle
-	// is permanent (officer never rebuilds the engine), so the version is stable
-	// for the node's lifetime; it is the source for the MCP server version stamp.
+	// EngineVersion returns the version string of the node's current engine. The
+	// version is the source for the MCP server version stamp.
 	EngineVersion() string
 
 	// Owns reports whether this node is responsible for the given routing key.
@@ -79,6 +81,28 @@ type Node interface {
 
 	// ListAccounts returns every persisted account owned by this node.
 	ListAccounts(ctx context.Context) ([]domain.Account, error)
+
+	// ExportBackup returns a portable archive for the node's persisted state and
+	// audits the action.
+	ExportBackup(
+		ctx context.Context,
+		scope backup.Scope,
+		caller domain.Caller,
+	) (backup.Archive, error)
+
+	// RestoreBackup imports a portable archive and rehydrates the live engine
+	// from the restored state. The returned sink belongs to the new engine when
+	// market-data runtime needs to reconnect after restore.
+	RestoreBackup(
+		ctx context.Context,
+		archive backup.Archive,
+		opts backup.RestoreOptions,
+		caller domain.Caller,
+	) (backup.RestoreSummary, marketdata.Sink, error)
+
+	// ResetDatabase recreates the store from scratch, rebuilds the live engine,
+	// and audits the reset in the new database.
+	ResetDatabase(ctx context.Context, caller domain.Caller) (marketdata.Sink, error)
 
 	// CreateAccount persists a new account and audits the action. The account
 	// is identified by key; caller carries the attribution stamped on the audit.

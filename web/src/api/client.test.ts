@@ -19,10 +19,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createMarketDataInstance,
+  exportBackup,
+  resetDatabase,
+  restoreBackup,
   searchMarketDataSymbols,
   updateMarketDataInstanceSettings,
   verifyMarketDataSymbol,
 } from "@/api/client";
+import type { BackupArchive } from "@/api/types";
 
 function okMarketDataResponse(): Response {
   return new Response(
@@ -51,6 +55,222 @@ function jsonResponse(body: unknown): Response {
 beforeEach(() => {
   vi.restoreAllMocks();
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(okMarketDataResponse()));
+});
+
+const backupArchive: BackupArchive = {
+  manifest: {
+    format: "openpit.officer.backup",
+    formatVersion: 1,
+    schemaVersion: 2,
+    createdAt: "2026-06-22T10:00:00Z",
+    sections: ["accounts_groups"],
+  },
+  data: { accounts: [] },
+};
+
+describe("backup client", () => {
+  it("exports a backup and parses RFC 5987 filenames", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(JSON.stringify(backupArchive), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Disposition": "attachment; filename*=UTF-8''pit%20backup.json",
+        },
+      }),
+    );
+
+    const signal = new AbortController().signal;
+    const result = await exportBackup({ all: true }, signal);
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/backup/export",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Accept: "application/json",
+        }),
+        body: JSON.stringify({ scope: { all: true } }),
+        signal,
+      }),
+    );
+    expect(result.filename).toBe("pit backup.json");
+    expect(result.blob.size).toBe(JSON.stringify(backupArchive).length);
+  });
+
+  it("requests a zipped backup when enabled", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response("zip-bytes", {
+        status: 200,
+        headers: {
+          "Content-Type": "application/zip",
+          "Content-Disposition": "attachment; filename=\"pit backup.zip\"",
+        },
+      }),
+    );
+
+    const result = await exportBackup({ all: true }, undefined, true);
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/backup/export",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Accept: "application/zip",
+        }),
+        body: JSON.stringify({ scope: { all: true }, zip: true }),
+      }),
+    );
+    expect(result.filename).toBe("pit backup.zip");
+  });
+
+  it("uses a json fallback filename for unzipped backups without a header", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(JSON.stringify(backupArchive), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const result = await exportBackup({ all: true });
+
+    expect(result.filename).toBe("pit-officer-backup.json");
+  });
+
+  it("uses a zip fallback filename for zipped backups without a header", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response("zip-bytes", {
+        status: 200,
+        headers: { "Content-Type": "application/zip" },
+      }),
+    );
+
+    const result = await exportBackup({ all: true }, undefined, true);
+
+    expect(result.filename).toBe("pit-officer-backup.zip");
+  });
+
+  it("surfaces export HTTP errors", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: { code: "validation", message: "bad scope" },
+        }),
+        {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    await expect(exportBackup({ all: false })).rejects.toThrow("bad scope");
+  });
+
+  it("surfaces export network errors", async () => {
+    vi.mocked(fetch).mockRejectedValue(new Error("connection refused"));
+
+    await expect(exportBackup({ all: true })).rejects.toThrow(
+      "connection refused",
+    );
+  });
+
+  it("restores with a typed mode and normalizes the summary", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        summary: {
+          applied: { accounts_groups: 1 },
+          skipped: {},
+          restartRequired: true,
+        },
+      }),
+    );
+
+    const signal = new AbortController().signal;
+    const result = await restoreBackup({
+      archive: backupArchive,
+      scope: { all: true },
+      mode: "overwrite",
+      signal,
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/backup/restore",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          scope: { all: true },
+          mode: "overwrite",
+          archive: backupArchive,
+        }),
+        signal,
+      }),
+    );
+    expect(result.applied.accounts_groups).toBe(1);
+    expect(result.restartRequired).toBe(true);
+  });
+
+  it("restores from an uploaded backup file payload", async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ summary: {} }));
+
+    await restoreBackup({
+      archiveFile: { base64: "UEsDBA==", filename: "pit backup.zip" },
+      scope: { all: true },
+      mode: "overwrite",
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/backup/restore",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          scope: { all: true },
+          mode: "overwrite",
+          archiveFile: "UEsDBA==",
+          archiveFilename: "pit backup.zip",
+        }),
+      }),
+    );
+  });
+
+  it("defaults missing restore summary maps", async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ summary: {} }));
+
+    const result = await restoreBackup({
+      archive: backupArchive,
+      scope: { all: true },
+      mode: "insert_missing",
+    });
+
+    expect(result.applied).toEqual({});
+    expect(result.skipped).toEqual({});
+    expect(result.restartRequired).toBe(false);
+  });
+
+  it("rejects a non-object restore response distinctly from bad summaries", async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse(null));
+
+    await expect(
+      restoreBackup({
+        archive: backupArchive,
+        scope: { all: true },
+        mode: "insert_missing",
+      }),
+    ).rejects.toThrow("Invalid backup restore response.");
+  });
+
+  it("resets the database with explicit confirmation", async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ ok: true }));
+
+    await resetDatabase();
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/database/reset",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ confirm: true }),
+      }),
+    );
+  });
 });
 
 describe("market-data client settings payloads", () => {

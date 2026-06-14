@@ -21,10 +21,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
+	"go.openpit.dev/officer/internal/auth"
 	"go.openpit.dev/officer/internal/backend"
+	"go.openpit.dev/officer/internal/backup"
 	"go.openpit.dev/officer/internal/domain"
 	"go.openpit.dev/officer/internal/engine"
 	"go.openpit.dev/officer/internal/marketdata"
@@ -54,6 +57,18 @@ type fakeNode struct {
 	mdInstruments    map[string][]domain.MarketDataInstrument
 	mdQuotes         []domain.MarketDataQuote
 
+	backupArchive  backup.Archive
+	backupScope    backup.Scope
+	backupCaller   domain.Caller
+	backupErr      error
+	restoreOpts    backup.RestoreOptions
+	restoreSummary backup.RestoreSummary
+	restoreSink    marketdata.Sink
+	restoreErr     error
+	resetCaller    domain.Caller
+	resetSink      marketdata.Sink
+	resetErr       error
+
 	getAccountErr error
 }
 
@@ -76,6 +91,38 @@ func (n *fakeNode) Owns(node.Key) bool    { return true }
 
 func (n *fakeNode) ListAccounts(context.Context) ([]domain.Account, error) {
 	return n.accounts, nil
+}
+
+func (n *fakeNode) ExportBackup(
+	_ context.Context,
+	scope backup.Scope,
+	caller domain.Caller,
+) (backup.Archive, error) {
+	n.backupScope = scope
+	n.backupCaller = caller
+	return n.backupArchive, n.backupErr
+}
+
+func (n *fakeNode) RestoreBackup(
+	_ context.Context,
+	_ backup.Archive,
+	opts backup.RestoreOptions,
+	_ domain.Caller,
+) (backup.RestoreSummary, marketdata.Sink, error) {
+	n.restoreOpts = opts
+	summary := n.restoreSummary
+	if summary.Applied == nil {
+		summary = backup.NewSummary()
+	}
+	return summary, n.restoreSink, n.restoreErr
+}
+
+func (n *fakeNode) ResetDatabase(
+	_ context.Context,
+	caller domain.Caller,
+) (marketdata.Sink, error) {
+	n.resetCaller = caller
+	return n.resetSink, n.resetErr
 }
 
 func (n *fakeNode) CreateAccount(
@@ -382,18 +429,31 @@ func (n *fakeNode) ListMarketDataQuotes(
 func (n *fakeNode) Close() error { return nil }
 
 // fakeRouter routes every key to the single fake node.
-type fakeRouter struct{ node *fakeNode }
+type fakeRouter struct {
+	node     *fakeNode
+	routeErr error
+}
 
-func (r *fakeRouter) Route(node.Key) (node.Node, error) { return r.node, nil }
-func (r *fakeRouter) All() []node.Node                  { return []node.Node{r.node} }
+func (r *fakeRouter) Route(node.Key) (node.Node, error) {
+	return r.node, r.routeErr
+}
+func (r *fakeRouter) All() []node.Node { return []node.Node{r.node} }
 
 type fakeMarketDataRuntime struct {
-	statuses  map[string]marketdata.InstanceRuntimeStatus
-	applied   map[string]marketdata.AppliedInstanceConfig
-	intervals map[string]time.Duration
-	pushed    []domain.MarketDataInstrument
-	restarts  int
+	statuses   map[string]marketdata.InstanceRuntimeStatus
+	applied    map[string]marketdata.AppliedInstanceConfig
+	intervals  map[string]time.Duration
+	pushed     []domain.MarketDataInstrument
+	restarts   int
+	stops      int
+	sink       marketdata.Sink
+	restartErr error
+	useSinkErr error
 }
+
+type backendTestSink struct{}
+
+func (*backendTestSink) Push(marketdata.QuoteUpdate) error { return nil }
 
 func (r *fakeMarketDataRuntime) InstanceStatuses() map[string]marketdata.InstanceRuntimeStatus {
 	return r.statuses
@@ -412,6 +472,18 @@ func (r *fakeMarketDataRuntime) QuoteUpdateInterval(
 
 func (r *fakeMarketDataRuntime) Restart() error {
 	r.restarts++
+	return r.restartErr
+}
+
+func (r *fakeMarketDataRuntime) Stop() {
+	r.stops++
+}
+
+func (r *fakeMarketDataRuntime) UseSink(sink marketdata.Sink) error {
+	if r.useSinkErr != nil {
+		return r.useSinkErr
+	}
+	r.sink = sink
 	return nil
 }
 
@@ -431,6 +503,229 @@ func newTestServiceWithMarketDataRuntime(
 ) (*backend.Service, *fakeNode) {
 	fn := &fakeNode{}
 	return backend.New(&fakeRouter{node: fn}, md), fn
+}
+
+func TestService_ExportBackupRoutesScopeCallerAndFilename(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService()
+	createdAt := time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC)
+	fn.backupArchive = backup.NewArchive(
+		createdAt,
+		"test",
+		2,
+		backup.Scope{All: true},
+		backup.Data{},
+	)
+	scope := backup.Scope{
+		Sections: []backup.Section{backup.SectionAccountsGroups},
+	}
+	caller := domain.Caller{
+		Principal: "operator",
+		Source:    domain.SourceAPI,
+	}
+
+	archive, filename, err := svc.ExportBackup(
+		auth.ContextWithCaller(context.Background(), caller),
+		scope,
+	)
+	if err != nil {
+		t.Fatalf("ExportBackup: %v", err)
+	}
+	if archive.Manifest.Source != "test" {
+		t.Fatalf("archive source = %q, want test", archive.Manifest.Source)
+	}
+	if filename != backup.Filename(createdAt) {
+		t.Fatalf("filename = %q, want %q", filename, backup.Filename(createdAt))
+	}
+	if !reflect.DeepEqual(fn.backupScope, scope) {
+		t.Fatalf("backup scope = %+v, want %+v", fn.backupScope, scope)
+	}
+	if fn.backupCaller != caller {
+		t.Fatalf("backup caller = %+v, want %+v", fn.backupCaller, caller)
+	}
+}
+
+func TestService_ExportBackupRouteError(t *testing.T) {
+	t.Parallel()
+	routeErr := errors.New("route failed")
+	svc := backend.New(&fakeRouter{routeErr: routeErr}, nil)
+
+	if _, _, err := svc.ExportBackup(
+		context.Background(),
+		backup.Scope{All: true},
+	); !errors.Is(err, routeErr) {
+		t.Fatalf("ExportBackup error = %v, want route error", err)
+	}
+}
+
+func TestService_ExportBackupNodeError(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService()
+	exportErr := errors.New("export failed")
+	fn.backupErr = exportErr
+
+	if _, _, err := svc.ExportBackup(
+		context.Background(),
+		backup.Scope{All: true},
+	); !errors.Is(err, exportErr) {
+		t.Fatalf("ExportBackup error = %v, want export error", err)
+	}
+}
+
+func TestService_ResetDatabaseRoutesCallerAndRestartsMarketData(t *testing.T) {
+	t.Parallel()
+	md := &fakeMarketDataRuntime{}
+	svc, fn := newTestServiceWithMarketDataRuntime(md)
+	sink := &backendTestSink{}
+	fn.resetSink = sink
+	caller := domain.Caller{
+		Principal: "operator",
+		Source:    domain.SourcePanel,
+	}
+
+	if err := svc.ResetDatabase(
+		auth.ContextWithCaller(context.Background(), caller),
+	); err != nil {
+		t.Fatalf("ResetDatabase: %v", err)
+	}
+	if fn.resetCaller != caller {
+		t.Fatalf("reset caller = %+v, want %+v", fn.resetCaller, caller)
+	}
+	if md.stops != 1 || md.restarts != 1 {
+		t.Fatalf("market-data stops/restarts = %d/%d, want 1/1",
+			md.stops, md.restarts)
+	}
+	if md.sink != sink {
+		t.Fatalf("market-data sink = %T, want reset sink", md.sink)
+	}
+}
+
+func TestService_ResetDatabaseRouteError(t *testing.T) {
+	t.Parallel()
+	routeErr := errors.New("route failed")
+	svc := backend.New(&fakeRouter{routeErr: routeErr}, nil)
+
+	if err := svc.ResetDatabase(context.Background()); !errors.Is(err, routeErr) {
+		t.Fatalf("ResetDatabase error = %v, want route error", err)
+	}
+}
+
+func TestService_ResetDatabaseNodeError(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService()
+	resetErr := errors.New("reset failed")
+	fn.resetErr = resetErr
+
+	if err := svc.ResetDatabase(context.Background()); !errors.Is(err, resetErr) {
+		t.Fatalf("ResetDatabase error = %v, want reset error", err)
+	}
+}
+
+func TestService_RestoreBackupGeneralSettingsDoesNotStopMarketData(t *testing.T) {
+	t.Parallel()
+	md := &fakeMarketDataRuntime{}
+	svc, _ := newTestServiceWithMarketDataRuntime(md)
+	_, err := svc.RestoreBackup(context.Background(), backup.Archive{}, backup.RestoreOptions{
+		Scope: backup.Scope{Sections: []backup.Section{backup.SectionGeneralSettings}},
+		Mode:  backup.RestoreModeOverwrite,
+	})
+	if err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	if md.stops != 0 || md.restarts != 0 || md.sink != nil {
+		t.Fatalf("market-data touched for non-runtime restore: %+v", md)
+	}
+}
+
+func TestService_RestoreBackupRuntimeReconnectsMarketData(t *testing.T) {
+	t.Parallel()
+	md := &fakeMarketDataRuntime{}
+	svc, fn := newTestServiceWithMarketDataRuntime(md)
+	sink := &backendTestSink{}
+	fn.restoreSink = sink
+	fn.restoreSummary = backup.RestoreSummary{
+		Applied:         map[backup.Section]int{},
+		Skipped:         map[backup.Section]int{},
+		RestartRequired: true,
+	}
+	_, err := svc.RestoreBackup(context.Background(), backup.Archive{}, backup.RestoreOptions{
+		Scope: backup.Scope{Sections: []backup.Section{backup.SectionPositions}},
+		Mode:  backup.RestoreModeOverwrite,
+	})
+	if err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	if md.stops != 1 || md.restarts != 1 || md.sink != sink {
+		t.Fatalf("market-data lifecycle stops=%d restarts=%d sink=%#v",
+			md.stops, md.restarts, md.sink)
+	}
+}
+
+func TestService_RestoreBackupRuntimeErrorRestartsReturnedSink(t *testing.T) {
+	t.Parallel()
+	md := &fakeMarketDataRuntime{}
+	svc, fn := newTestServiceWithMarketDataRuntime(md)
+	sink := &backendTestSink{}
+	fn.restoreSink = sink
+	fn.restoreErr = errors.New("restore failed")
+	_, err := svc.RestoreBackup(context.Background(), backup.Archive{}, backup.RestoreOptions{
+		Scope: backup.Scope{Sections: []backup.Section{backup.SectionPositions}},
+		Mode:  backup.RestoreModeOverwrite,
+	})
+	if err == nil {
+		t.Fatal("RestoreBackup succeeded, want error")
+	}
+	if md.stops != 1 || md.restarts != 1 || md.sink != sink {
+		t.Fatalf("market-data recovery stops=%d restarts=%d sink=%#v",
+			md.stops, md.restarts, md.sink)
+	}
+}
+
+func TestService_RestoreBackupRuntimeUseSinkErrorStillRestarts(t *testing.T) {
+	t.Parallel()
+	md := &fakeMarketDataRuntime{useSinkErr: errors.New("use sink failed")}
+	svc, fn := newTestServiceWithMarketDataRuntime(md)
+	fn.restoreSink = &backendTestSink{}
+	fn.restoreSummary = backup.RestoreSummary{
+		Applied:         map[backup.Section]int{},
+		Skipped:         map[backup.Section]int{},
+		RestartRequired: true,
+	}
+	_, err := svc.RestoreBackup(context.Background(), backup.Archive{}, backup.RestoreOptions{
+		Scope: backup.Scope{Sections: []backup.Section{backup.SectionPositions}},
+		Mode:  backup.RestoreModeOverwrite,
+	})
+	if err == nil {
+		t.Fatal("RestoreBackup succeeded, want UseSink error")
+	}
+	if md.stops != 1 || md.restarts != 1 {
+		t.Fatalf("market-data recovery stops=%d restarts=%d",
+			md.stops, md.restarts)
+	}
+}
+
+func TestService_RestoreBackupRuntimeRestartErrorIsReturned(t *testing.T) {
+	t.Parallel()
+	md := &fakeMarketDataRuntime{restartErr: errors.New("restart failed")}
+	svc, fn := newTestServiceWithMarketDataRuntime(md)
+	sink := &backendTestSink{}
+	fn.restoreSink = sink
+	fn.restoreSummary = backup.RestoreSummary{
+		Applied:         map[backup.Section]int{},
+		Skipped:         map[backup.Section]int{},
+		RestartRequired: true,
+	}
+	_, err := svc.RestoreBackup(context.Background(), backup.Archive{}, backup.RestoreOptions{
+		Scope: backup.Scope{Sections: []backup.Section{backup.SectionPositions}},
+		Mode:  backup.RestoreModeOverwrite,
+	})
+	if err == nil {
+		t.Fatal("RestoreBackup succeeded, want Restart error")
+	}
+	if md.stops != 1 || md.restarts != 1 || md.sink != sink {
+		t.Fatalf("market-data recovery stops=%d restarts=%d sink=%#v",
+			md.stops, md.restarts, md.sink)
+	}
 }
 
 func TestService_CreateAccountValidates(t *testing.T) {

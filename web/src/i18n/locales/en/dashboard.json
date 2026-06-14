@@ -53,7 +53,8 @@
       "adjustment": "Adjustment",
       "balanceUpdate": "Balance update",
       "order": "Order",
-      "tradeFill": "Trade / fill"
+      "tradeFill": "Trade / fill",
+      "resetDatabase": "Reset database"
     }
   }
 }

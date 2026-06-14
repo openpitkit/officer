@@ -53,7 +53,8 @@
       "adjustment": "Корректировка",
       "balanceUpdate": "Обновление баланса",
       "order": "Ордер",
-      "tradeFill": "Сделка / исполнение"
+      "tradeFill": "Сделка / исполнение",
+      "resetDatabase": "Ресет базы"
     }
   }
 }

@@ -2,6 +2,13 @@
   "title": "Сервис",
   "refreshAriaLabel": "Обновить информацию о сервисе",
   "restartFeedsAriaLabel": "Перезапустить фиды рыночных данных",
+  "tabs": {
+    "ariaLabel": "Разделы сервиса",
+    "application": "Приложение",
+    "api": "API",
+    "database": "База данных",
+    "logs": "Логи"
+  },
   "application": {
     "title": "Приложение",
     "name": "Название",
@@ -33,7 +40,12 @@
     "reachable": "доступна",
     "unreachable": "недоступна",
     "reachableLabel": "Доступность",
-    "path": "Путь"
+    "path": "Путь",
+    "resetTitle": "Опасная зона",
+    "resetDescription": "Удалит все строки, пересоздаст базу с нуля и пересоберёт движок. Сначала сделай бекап, если текущие данные могут понадобиться.",
+    "resetButton": "Удалить все данные",
+    "resetConfirm": "Удалить все данные и пересоздать базу с нуля? Сначала сделай бекап, если текущие данные могут понадобиться.",
+    "resetDone": "База пересоздана."
   },
   "api": {
     "title": "API",
@@ -43,6 +55,53 @@
     "configureAccess": "Настроить доступ",
     "loadingCommands": "Загрузка команд…",
     "noCommands": "Команды не определены."
+  },
+  "backup": {
+    "title": "Бекап базы",
+    "tabs": {
+      "ariaLabel": "Операция бекапа",
+      "export": "Экспорт",
+      "restore": "Восстановление"
+    },
+    "all": "Все данные",
+    "zip": "Упаковать в ZIP",
+    "export": "Экспорт",
+    "restore": "Восстановить",
+    "accountsPlaceholder": "счета через запятую",
+    "groupsPlaceholder": "группы через запятую",
+    "positionsAccountsPlaceholder": "счета позиций через запятую",
+    "positionsGroupsPlaceholder": "группы позиций через запятую",
+    "restartRequired": "runtime перезапущен",
+    "summary": "Применено {{applied}}, пропущено {{skipped}} · {{restart}}",
+    "confirmReplaceAll": "Удалить все выбранные данные и восстановить этот бекап?",
+    "restoreScopeWarningTitle": "Будут затронуты только выбранные секции.",
+    "restoreScopeWarning": "Режим восстановления применяется к данным, выбранным выше, а не ко всей базе, если не включена галка «Все данные».",
+    "sections": {
+      "accounts_groups": "Счета и группы",
+      "positions": "Позиции",
+      "risk_limits": "Риск-лимиты",
+      "market_data_settings": "Настройки market-data",
+      "market_data_quotes": "Последние market-data quotes",
+      "general_settings": "Общие настройки",
+      "activity_history": "Ордера, сделки, корректировки",
+      "audit_log": "Аудит"
+    },
+    "accounts": {
+      "title": "Счета и группы",
+      "all": "Все счета и группы"
+    },
+    "positions": {
+      "title": "Позиции",
+      "all": "Все счета с позициями"
+    },
+    "modes": {
+      "replace_all": "Удалить выбранное и восстановить",
+      "overwrite": "Восстановить и перетереть совпадения",
+      "insert_missing": "Восстановить только отсутствующее"
+    },
+    "errors": {
+      "fileRequired": "Выбери файл бекапа."
+    }
   },
   "logs": {
     "title": "Логи",

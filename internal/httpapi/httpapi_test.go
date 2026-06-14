@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"go.openpit.dev/officer/internal/backend"
+	"go.openpit.dev/officer/internal/backup"
 	"go.openpit.dev/officer/internal/domain"
 	"go.openpit.dev/officer/internal/engine"
 	"go.openpit.dev/officer/internal/mcpcatalog"
@@ -39,37 +40,45 @@ import (
 
 // fakeService is a fake Service for handler tests.
 type fakeService struct {
-	accounts      []domain.Account
-	limits        []domain.Limit
-	auditRows     []domain.AuditRow
-	groups        []domain.AccountGroup
-	balances      []domain.Balance
-	adjustments   []domain.AccountAdjustmentRecord
-	orders        []domain.Order
-	trades        []domain.Trade
-	orderDetail   domain.OrderDetail
-	adjustment    domain.AccountAdjustmentRecord
-	submitOrder   domain.Order
-	checkResult   domain.CheckResult
-	overview      backend.Overview
-	serviceInfo   backend.ServiceInfo
-	marketData    backend.MarketDataStatus
-	mdVerify      backend.MarketDataSymbolVerification
-	mdVerifyErr   error
-	mdSearch      backend.MarketDataSymbolSearch
-	mdSearchInput backend.MarketDataSymbolSearchInput
-	mdSearchErr   error
-	status        backend.Status
-	statusErr     error
-	createErr     error
-	blockErr      error
-	unblockErr    error
-	stateErr      error
-	listLimErr    error
-	putLimErr     error
-	delLimErr     error
-	auditErr      error
-	groupErr      error
+	accounts       []domain.Account
+	limits         []domain.Limit
+	auditRows      []domain.AuditRow
+	groups         []domain.AccountGroup
+	balances       []domain.Balance
+	adjustments    []domain.AccountAdjustmentRecord
+	orders         []domain.Order
+	trades         []domain.Trade
+	orderDetail    domain.OrderDetail
+	adjustment     domain.AccountAdjustmentRecord
+	submitOrder    domain.Order
+	checkResult    domain.CheckResult
+	overview       backend.Overview
+	serviceInfo    backend.ServiceInfo
+	backupArchive  backup.Archive
+	backupFilename string
+	backupSummary  backup.RestoreSummary
+	backupErr      error
+	restoreArchive backup.Archive
+	restoreOptions backup.RestoreOptions
+	resetCalled    bool
+	resetErr       error
+	marketData     backend.MarketDataStatus
+	mdVerify       backend.MarketDataSymbolVerification
+	mdVerifyErr    error
+	mdSearch       backend.MarketDataSymbolSearch
+	mdSearchInput  backend.MarketDataSymbolSearchInput
+	mdSearchErr    error
+	status         backend.Status
+	statusErr      error
+	createErr      error
+	blockErr       error
+	unblockErr     error
+	stateErr       error
+	listLimErr     error
+	putLimErr      error
+	delLimErr      error
+	auditErr       error
+	groupErr       error
 
 	// Error fields for list handlers whose service methods otherwise return a
 	// hardcoded nil; default nil so existing tests are unaffected.
@@ -96,6 +105,24 @@ func (f *fakeService) Status(_ context.Context) (backend.Status, error) {
 }
 func (f *fakeService) ListAccounts(_ context.Context) ([]domain.Account, error) {
 	return f.accounts, f.listAccountsErr
+}
+func (f *fakeService) ExportBackup(
+	_ context.Context, _ backup.Scope,
+) (backup.Archive, string, error) {
+	return f.backupArchive, f.backupFilename, f.backupErr
+}
+func (f *fakeService) RestoreBackup(
+	_ context.Context,
+	archive backup.Archive,
+	opts backup.RestoreOptions,
+) (backup.RestoreSummary, error) {
+	f.restoreArchive = archive
+	f.restoreOptions = opts
+	return f.backupSummary, f.backupErr
+}
+func (f *fakeService) ResetDatabase(_ context.Context) error {
+	f.resetCalled = true
+	return f.resetErr
 }
 func (f *fakeService) CreateAccount(_ context.Context, id domain.AccountID) (domain.Account, error) {
 	if f.createErr != nil {

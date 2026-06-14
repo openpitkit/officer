@@ -40,6 +40,8 @@ tags:
     description: MCP command access control
   - name: market-data
     description: Market-data source configuration and latest quote snapshots
+  - name: backup
+    description: Portable database backup and restore
   - name: dashboard
     description: Overview and service information
 
@@ -80,6 +82,123 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+
+  # ---------------------------------------------------------------------------
+  # Backup / restore
+  # ---------------------------------------------------------------------------
+
+  /backup/export:
+    post:
+      operationId: exportBackup
+      summary: Export a portable database backup
+      tags: [backup]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scope]
+              properties:
+                scope:
+                  $ref: "#/components/schemas/BackupScope"
+                zip:
+                  type: boolean
+                  description: Return a ZIP archive containing the JSON backup.
+      responses:
+        "200":
+          description: Portable backup archive, as JSON or ZIP.
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+              description: Timestamped backup filename.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupArchive"
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /backup/restore:
+    post:
+      operationId: restoreBackup
+      summary: Restore a portable database backup
+      tags: [backup]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scope, mode]
+              properties:
+                archive:
+                  $ref: "#/components/schemas/BackupArchive"
+                archiveFile:
+                  type: string
+                  format: byte
+                  description: Base64-encoded JSON backup or ZIP containing one JSON backup.
+                archiveFilename:
+                  type: string
+                  description: Original uploaded filename for diagnostics.
+                scope:
+                  $ref: "#/components/schemas/BackupScope"
+                mode:
+                  $ref: "#/components/schemas/BackupRestoreMode"
+      responses:
+        "200":
+          description: Restore completed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [summary]
+                properties:
+                  summary:
+                    $ref: "#/components/schemas/BackupRestoreSummary"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /database/reset:
+    post:
+      operationId: resetDatabase
+      summary: Delete all data and recreate the database
+      tags: [backup]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirm]
+              properties:
+                confirm:
+                  type: boolean
+                  description: Must be true to confirm the destructive reset.
+      responses:
+        "200":
+          description: Database recreated from scratch.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok:
+                    type: boolean
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
 
   # ---------------------------------------------------------------------------
   # Accounts
@@ -1675,6 +1794,157 @@ components:
             message:
               type: string
               example: account not found
+
+    # Backup / restore
+
+    BackupSection:
+      type: string
+      enum:
+        - accounts_groups
+        - positions
+        - risk_limits
+        - market_data_settings
+        - market_data_quotes
+        - general_settings
+        - activity_history
+        - audit_log
+
+    BackupRestoreMode:
+      type: string
+      enum: [replace_all, overwrite, insert_missing]
+
+    BackupEntitySelector:
+      type: object
+      properties:
+        all:
+          type: boolean
+        accounts:
+          type: array
+          items:
+            type: string
+        groups:
+          type: array
+          items:
+            type: string
+
+    BackupScope:
+      type: object
+      properties:
+        all:
+          type: boolean
+          description: Include every section when true.
+        sections:
+          type: array
+          items:
+            $ref: "#/components/schemas/BackupSection"
+        accounts:
+          $ref: "#/components/schemas/BackupEntitySelector"
+        positions:
+          $ref: "#/components/schemas/BackupEntitySelector"
+
+    BackupArchive:
+      type: object
+      required: [manifest, data]
+      properties:
+        manifest:
+          $ref: "#/components/schemas/BackupManifest"
+        data:
+          $ref: "#/components/schemas/BackupData"
+
+    BackupManifest:
+      type: object
+      required: [format, formatVersion, schemaVersion, createdAt, sections]
+      properties:
+        format:
+          type: string
+          enum: [openpit.officer.backup]
+        formatVersion:
+          type: integer
+          description: Archive format version used by restore migrations.
+        schemaVersion:
+          type: integer
+          description: Source database schema version.
+        createdAt:
+          type: string
+          format: date-time
+        source:
+          type: string
+        sections:
+          type: array
+          items:
+            $ref: "#/components/schemas/BackupSection"
+
+    BackupData:
+      type: object
+      additionalProperties: false
+      properties:
+        mcpAccess:
+          type: object
+          additionalProperties:
+            type: boolean
+        accounts:
+          type: array
+          items:
+            type: object
+        groups:
+          type: array
+          items:
+            type: object
+        limits:
+          type: array
+          items:
+            type: object
+        balances:
+          type: array
+          items:
+            type: object
+        adjustments:
+          type: array
+          items:
+            type: object
+        orders:
+          type: array
+          items:
+            type: object
+        orderEvents:
+          type: array
+          items:
+            type: object
+        trades:
+          type: array
+          items:
+            type: object
+        audit:
+          type: array
+          items:
+            type: object
+        marketDataInstances:
+          type: array
+          items:
+            type: object
+        marketDataInstruments:
+          type: array
+          items:
+            type: object
+        marketDataQuotes:
+          type: array
+          items:
+            type: object
+
+    BackupRestoreSummary:
+      type: object
+      required: [applied, skipped, restartRequired]
+      properties:
+        applied:
+          type: object
+          additionalProperties:
+            type: integer
+        skipped:
+          type: object
+          additionalProperties:
+            type: integer
+        restartRequired:
+          type: boolean
 
     # Health / status
 

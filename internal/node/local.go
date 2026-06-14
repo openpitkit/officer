@@ -24,8 +24,10 @@ import (
 	"sync"
 	"time"
 
+	"go.openpit.dev/officer/internal/backup"
 	"go.openpit.dev/officer/internal/domain"
 	"go.openpit.dev/officer/internal/engine"
+	"go.openpit.dev/officer/internal/marketdata"
 	"go.openpit.dev/officer/internal/store"
 )
 
@@ -37,15 +39,17 @@ import (
 // revert-on-failure, and audit-append steps run atomically with respect to each
 // other. Reads do not take it.
 //
-// Officer builds the engine exactly once per process and never rebuilds it. The
-// engine is reconfigured in place through the runtime Configure surface; a
-// change that surface cannot express is an SDK gap surfaced to the caller as
-// an error wrapping domain.ErrNotImplemented, not worked around by rebuilding
-// a fresh handle here. The handle therefore never changes after construction,
-// so n.engine is fixed for the node's lifetime.
+// Ordinary mutations reconfigure the engine in place through the runtime
+// Configure surface; a change that surface cannot express is an SDK gap
+// surfaced to the caller as an error wrapping domain.ErrNotImplemented, not
+// worked around by rebuilding a fresh handle. Full backup restore is the
+// administrative exception: after the store import succeeds, n.engine is
+// rebuilt from the restored snapshot.
 type localNode struct {
-	engine engine.Engine
-	store  store.Store
+	engineMu sync.RWMutex
+	engine   engine.Engine
+	build    engine.BuildFunc
+	store    store.Store
 
 	mutate sync.Mutex
 }
@@ -55,18 +59,16 @@ type localNode struct {
 // the one engine from it via build, bundles the engine and store, and appends
 // one startup audit row.
 //
-// Officer builds the engine exactly once. build is a one-time constructor used
-// only here; it is not retained on the node, because the engine is never
-// rebuilt. Later mutations reconfigure the engine in place; a change the
-// runtime Configure surface cannot express is an SDK gap, not a trigger to
-// rebuild.
+// build is retained only for full backup restore. Later ordinary mutations
+// reconfigure the engine in place; a change the runtime Configure surface
+// cannot express is an SDK gap, not a trigger to rebuild.
 //
 // It returns the node and the engine handle. The node owns the engine and
 // store: Close stops the engine and closes the store. The returned handle is
 // the permanent handle, but live version/health should still be read through
-// the node (Health, EngineVersion) for a uniform access path. It returns an
-// error if any dependency is nil, if the seed cannot be loaded, or if the
-// engine cannot be built.
+// the node (Health, EngineVersion) for a uniform access path, because restore
+// can swap the current engine. It returns an error if any dependency is nil, if
+// the seed cannot be loaded, or if the engine cannot be built.
 func NewLocalNode(
 	ctx context.Context, st store.Store, build engine.BuildFunc,
 ) (Node, engine.Engine, error) {
@@ -77,7 +79,7 @@ func NewLocalNode(
 		return nil, nil, fmt.Errorf("nil engine build func")
 	}
 
-	n := &localNode{store: st}
+	n := &localNode{store: st, build: build}
 
 	snap, counts, err := n.loadSnapshot(ctx)
 	if err != nil {
@@ -147,11 +149,13 @@ func (n *localNode) loadSnapshot(ctx context.Context) (engine.Snapshot, string, 
 // failed Ping is reported as unreachable rather than returned as an error, so
 // the dashboard can show a degraded-but-running node.
 func (n *localNode) Health(ctx context.Context) (Health, error) {
+	n.engineMu.RLock()
 	engineHealth := engine.Health{
 		Version:      n.engine.Version(),
 		BuildProfile: n.engine.BuildProfile(),
 		Running:      n.engine.Running(),
 	}
+	n.engineMu.RUnlock()
 
 	schemaVersion, schemaErr := n.store.SchemaVersion(ctx)
 	reachable := n.store.Ping(ctx) == nil
@@ -169,10 +173,11 @@ func (n *localNode) Health(ctx context.Context) (Health, error) {
 	return Health{Engine: engineHealth, Store: storeHealth}, nil
 }
 
-// EngineVersion returns the version of the node's engine. The engine handle is
-// permanent (officer never rebuilds the engine), so the version is stable for
-// the node's lifetime. The MCP version source routes through here.
+// EngineVersion returns the version of the node's current engine. The MCP
+// version source routes through here so restore-swapped engines are observed.
 func (n *localNode) EngineVersion() string {
+	n.engineMu.RLock()
+	defer n.engineMu.RUnlock()
 	return n.engine.Version()
 }
 
@@ -187,6 +192,160 @@ func (n *localNode) ListAccounts(ctx context.Context) ([]domain.Account, error) 
 		return nil, fmt.Errorf("list accounts: %w", err)
 	}
 	return accounts, nil
+}
+
+// ExportBackup returns a portable archive of this node's persisted state.
+func (n *localNode) ExportBackup(
+	ctx context.Context,
+	scope backup.Scope,
+	caller domain.Caller,
+) (backup.Archive, error) {
+	n.mutate.Lock()
+	defer n.mutate.Unlock()
+
+	archive, err := n.store.ExportBackup(ctx, scope)
+	if err != nil {
+		return backup.Archive{}, fmt.Errorf("export backup: %w", err)
+	}
+	if err := n.audit(ctx, caller, store.AuditEntry{
+		Action: domain.AuditActionExportBackup,
+		Detail: fmt.Sprintf(
+			"export backup format v%d sections %d",
+			archive.Manifest.FormatVersion,
+			len(archive.Manifest.Sections),
+		),
+	}); err != nil {
+		return backup.Archive{}, fmt.Errorf("audit export backup: %w", err)
+	}
+	return archive, nil
+}
+
+// RestoreBackup imports a portable archive and rebuilds the live engine from
+// the restored store snapshot when the restored sections affect runtime state.
+func (n *localNode) RestoreBackup(
+	ctx context.Context,
+	archive backup.Archive,
+	opts backup.RestoreOptions,
+	caller domain.Caller,
+) (backup.RestoreSummary, marketdata.Sink, error) {
+	n.mutate.Lock()
+	defer n.mutate.Unlock()
+
+	before, err := n.store.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		return backup.RestoreSummary{}, n.currentMarketDataSink(),
+			fmt.Errorf("capture restore rollback backup: %w", err)
+	}
+
+	summary, err := n.store.RestoreBackup(ctx, archive, opts)
+	if err != nil {
+		return backup.RestoreSummary{}, n.currentMarketDataSink(),
+			fmt.Errorf("restore backup: %w", err)
+	}
+
+	if summary.RestartRequired {
+		if err := n.rebuildEngineFromStore(ctx); err != nil {
+			return backup.RestoreSummary{}, n.currentMarketDataSink(),
+				n.rollbackStore(ctx, before, err)
+		}
+	}
+
+	if err := n.audit(ctx, caller, store.AuditEntry{
+		Action: domain.AuditActionRestoreBackup,
+		Detail: fmt.Sprintf(
+			"restore backup format v%d mode %s",
+			archive.Manifest.FormatVersion,
+			opts.Mode,
+		),
+	}); err != nil {
+		err = fmt.Errorf("audit restore backup: %w", err)
+		if summary.RestartRequired {
+			return backup.RestoreSummary{}, n.currentMarketDataSink(),
+				n.rollbackStoreAndEngine(ctx, before, err)
+		}
+		return backup.RestoreSummary{}, n.currentMarketDataSink(),
+			n.rollbackStore(ctx, before, err)
+	}
+
+	return summary, n.currentMarketDataSink(), nil
+}
+
+func (n *localNode) ResetDatabase(
+	ctx context.Context,
+	caller domain.Caller,
+) (marketdata.Sink, error) {
+	n.mutate.Lock()
+	defer n.mutate.Unlock()
+
+	if err := n.store.Reset(ctx); err != nil {
+		return n.currentMarketDataSink(), fmt.Errorf("reset database: %w", err)
+	}
+	if err := n.rebuildEngineFromStore(ctx); err != nil {
+		return n.currentMarketDataSink(), err
+	}
+	if err := n.audit(ctx, caller, store.AuditEntry{
+		Action: domain.AuditActionResetDatabase,
+		Detail: "reset database from scratch",
+	}); err != nil {
+		return n.currentMarketDataSink(),
+			fmt.Errorf("audit reset database: %w", err)
+	}
+	return n.currentMarketDataSink(), nil
+}
+
+func (n *localNode) rebuildEngineFromStore(ctx context.Context) error {
+	snap, _, err := n.loadSnapshot(ctx)
+	if err != nil {
+		return fmt.Errorf("load restored snapshot: %w", err)
+	}
+	next, err := n.build(snap)
+	if err != nil {
+		return fmt.Errorf("build restored engine: %w", err)
+	}
+	if next == nil {
+		return fmt.Errorf("build restored engine returned nil")
+	}
+	n.swapEngine(next)
+	return nil
+}
+
+func (n *localNode) swapEngine(next engine.Engine) {
+	n.engineMu.Lock()
+	prev := n.engine
+	n.engine = next
+	n.engineMu.Unlock()
+	if prev != nil {
+		prev.Stop()
+	}
+}
+
+func (n *localNode) currentMarketDataSink() marketdata.Sink {
+	n.engineMu.RLock()
+	defer n.engineMu.RUnlock()
+	return n.engine.MarketDataSink()
+}
+
+func (n *localNode) rollbackStore(ctx context.Context, rollback backup.Archive, err error) error {
+	_, restoreErr := n.store.RestoreBackup(ctx, rollback, backup.RestoreOptions{
+		Scope: backup.Scope{All: true},
+		Mode:  backup.RestoreModeReplaceAll,
+	})
+	if restoreErr != nil {
+		return errors.Join(err, fmt.Errorf("rollback restore backup: %w", restoreErr))
+	}
+	return err
+}
+
+func (n *localNode) rollbackStoreAndEngine(
+	ctx context.Context,
+	rollback backup.Archive,
+	err error,
+) error {
+	err = n.rollbackStore(ctx, rollback, err)
+	if rebuildErr := n.rebuildEngineFromStore(ctx); rebuildErr != nil {
+		return errors.Join(err, fmt.Errorf("rollback restored engine: %w", rebuildErr))
+	}
+	return err
 }
 
 // CreateAccount persists a new account and audits the action. The account has
@@ -1360,13 +1519,19 @@ func (n *localNode) ListTrades(
 func (n *localNode) CheckOrder(
 	ctx context.Context, _ Key, probe domain.OrderProbe,
 ) (domain.CheckResult, error) {
+	n.engineMu.RLock()
+	defer n.engineMu.RUnlock()
 	return n.engine.CheckOrder(ctx, probe)
 }
 
 // Close stops the engine and closes the store. It is idempotent: the engine's
 // Stop and the store's Close are both idempotent.
 func (n *localNode) Close() error {
+	n.mutate.Lock()
+	defer n.mutate.Unlock()
+	n.engineMu.Lock()
 	n.engine.Stop()
+	n.engineMu.Unlock()
 	if err := n.store.Close(); err != nil {
 		return fmt.Errorf("close store: %w", err)
 	}

@@ -2,6 +2,13 @@
   "title": "服务",
   "refreshAriaLabel": "刷新服务信息",
   "restartFeedsAriaLabel": "重启行情数据源",
+  "tabs": {
+    "ariaLabel": "服务分区",
+    "application": "应用",
+    "api": "API",
+    "database": "数据库",
+    "logs": "日志"
+  },
   "application": {
     "title": "应用",
     "name": "名称",
@@ -33,7 +40,12 @@
     "reachable": "可达",
     "unreachable": "不可达",
     "reachableLabel": "可达性",
-    "path": "路径"
+    "path": "路径",
+    "resetTitle": "危险区域",
+    "resetDescription": "删除所有行，从零重新创建数据库，并重建引擎。如果可能需要当前数据，请先导出备份。",
+    "resetButton": "删除所有数据",
+    "resetConfirm": "删除所有数据并从零重新创建数据库？如果可能需要当前数据，请先导出备份。",
+    "resetDone": "数据库已重置。"
   },
   "api": {
     "title": "API",
@@ -43,6 +55,53 @@
     "configureAccess": "配置访问权限",
     "loadingCommands": "加载命令中…",
     "noCommands": "未定义命令。"
+  },
+  "backup": {
+    "title": "数据库备份",
+    "tabs": {
+      "ariaLabel": "备份流程",
+      "export": "导出",
+      "restore": "恢复"
+    },
+    "all": "所有数据",
+    "zip": "打包为 ZIP",
+    "export": "导出",
+    "restore": "恢复",
+    "accountsPlaceholder": "账户，用逗号分隔",
+    "groupsPlaceholder": "分组，用逗号分隔",
+    "positionsAccountsPlaceholder": "持仓账户，用逗号分隔",
+    "positionsGroupsPlaceholder": "持仓分组，用逗号分隔",
+    "restartRequired": "运行时已重启",
+    "summary": "已应用 {{applied}}，已跳过 {{skipped}} · {{restart}}",
+    "confirmReplaceAll": "删除所有选定数据并恢复此备份？",
+    "restoreScopeWarningTitle": "只会影响选定分区。",
+    "restoreScopeWarning": "恢复模式只应用于上面选择的数据；除非勾选“所有数据”，否则不会作用于整个数据库。",
+    "sections": {
+      "accounts_groups": "账户和分组",
+      "positions": "持仓",
+      "risk_limits": "风险限制",
+      "market_data_settings": "行情数据设置",
+      "market_data_quotes": "最新行情报价",
+      "general_settings": "通用设置",
+      "activity_history": "订单、成交、调整",
+      "audit_log": "审计日志"
+    },
+    "accounts": {
+      "title": "账户和分组",
+      "all": "所有账户和分组"
+    },
+    "positions": {
+      "title": "持仓",
+      "all": "所有持仓账户"
+    },
+    "modes": {
+      "replace_all": "删除所选数据后恢复",
+      "overwrite": "恢复并覆盖匹配项",
+      "insert_missing": "只恢复缺失行"
+    },
+    "errors": {
+      "fileRequired": "请选择备份文件。"
+    }
   },
   "logs": {
     "title": "日志",

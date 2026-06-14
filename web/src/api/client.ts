@@ -25,6 +25,9 @@ import type {
   AdjustmentRequest,
   AuditEntry,
   Balance,
+  BackupArchive,
+  BackupRestoreSummary,
+  BackupScope,
   BoundsPair,
   CheckReject,
   CheckResult,
@@ -49,6 +52,7 @@ import type {
   Order,
   OrderEvent,
   Overview,
+  RestoreMode,
   ServiceInfo,
   ServiceLogs,
   Source,
@@ -807,8 +811,48 @@ function normalizeServiceLogs(v: unknown): ServiceLogs {
   return { lines, count };
 }
 
+function normalizeBackupSummary(v: unknown): BackupRestoreSummary {
+  if (!isObject(v)) {
+    throw new ApiError(i18n.t("errors:code.internal"), "internal");
+  }
+  const o = v;
+  const applied = pick(o, "applied", "Applied");
+  const skipped = pick(o, "skipped", "Skipped");
+  return {
+    applied: isObject(applied)
+      ? (applied as BackupRestoreSummary["applied"])
+      : {},
+    skipped: isObject(skipped)
+      ? (skipped as BackupRestoreSummary["skipped"])
+      : {},
+    restartRequired: asBool(
+      pick(o, "restartRequired", "RestartRequired", "restart_required"),
+    ),
+  };
+}
+
 function normalizeArray<T>(v: unknown, one: (x: unknown) => T): T[] {
   return Array.isArray(v) ? v.map(one) : [];
+}
+
+function filenameFromDisposition(value: string | null): string {
+  if (!value) {
+    return "";
+  }
+  const encoded = /(?:^|;)\s*filename\*=UTF-8''([^;]+)/i.exec(value);
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded[1]);
+    } catch {
+      return encoded[1];
+    }
+  }
+  const quoted = /(?:^|;)\s*filename="([^"]+)"/i.exec(value);
+  if (quoted) {
+    return quoted[1];
+  }
+  const bare = /(?:^|;)\s*filename=([^;]+)/i.exec(value);
+  return bare ? bare[1].trim() : "";
 }
 
 /** The localized fallback message for a stable error code. The backend's own
@@ -1124,6 +1168,96 @@ export async function fetchServiceLogs(
   signal?: AbortSignal,
 ): Promise<ServiceLogs> {
   return normalizeServiceLogs(await request(`${BASE}/service/logs`, { signal }));
+}
+
+/** POST /backup/export - returns a portable backup archive and filename. */
+export async function exportBackup(
+  scope: BackupScope,
+  signal?: AbortSignal,
+  zip?: boolean,
+): Promise<{ blob: Blob; filename: string }> {
+  const headers: Record<string, string> = {
+    Accept: zip ? "application/zip" : "application/json",
+    "Content-Type": "application/json",
+  };
+  const body: { scope: BackupScope; zip?: boolean } = { scope };
+  if (zip) {
+    body.zip = true;
+  }
+  const path = `${BASE}/backup/export`;
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      signal,
+    });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw err;
+    }
+    throw new ApiError(
+      i18n.t("errors:network", {
+        path,
+        detail: err instanceof Error ? err.message : String(err),
+      }),
+      "network",
+    );
+  }
+  if (!res.ok) {
+    throw await toApiError(res, path);
+  }
+  const filename = filenameFromDisposition(
+    res.headers.get("Content-Disposition"),
+  );
+  const blob = await res.blob();
+  return {
+    blob,
+    filename: filename || (zip ? "pit-officer-backup.zip" : "pit-officer-backup.json"),
+  };
+}
+
+/** POST /backup/restore - imports a portable backup archive. */
+export async function restoreBackup(input: {
+  archive?: BackupArchive;
+  archiveFile?: {
+    base64: string;
+    filename: string;
+  };
+  scope: BackupScope;
+  mode: RestoreMode;
+  signal?: AbortSignal;
+}): Promise<BackupRestoreSummary> {
+  const body: Record<string, unknown> = {
+    scope: input.scope,
+    mode: input.mode,
+  };
+  if (input.archive !== undefined) {
+    body.archive = input.archive;
+  }
+  if (input.archiveFile !== undefined) {
+    body.archiveFile = input.archiveFile.base64;
+    body.archiveFilename = input.archiveFile.filename;
+  }
+  const v = await request(`${BASE}/backup/restore`, {
+    method: "POST",
+    body,
+    signal: input.signal,
+  });
+  if (!isObject(v)) {
+    throw new ApiError("Invalid backup restore response.", "internal");
+  }
+  const o = v;
+  return normalizeBackupSummary(pick(o, "summary", "Summary"));
+}
+
+/** POST /database/reset - recreates the database from scratch. */
+export async function resetDatabase(): Promise<void> {
+  await request(`${BASE}/database/reset`, {
+    method: "POST",
+    body: { confirm: true },
+  });
 }
 
 /** Same-origin URL for the full-buffer log download, used as an anchor href so

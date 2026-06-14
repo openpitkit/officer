@@ -56,6 +56,11 @@ type MarketDataRuntime interface {
 	// running, its connector is not push-capable, or the instrument is disabled
 	// or has no manual price.
 	PushManual(instanceID string, instrument domain.MarketDataInstrument)
+	// Stop halts running connectors before a control-plane restore swaps the
+	// underlying engine sink.
+	Stop()
+	// UseSink replaces the quote sink used by the next Start/Restart.
+	UseSink(sink marketdata.Sink) error
 }
 
 // Status is the aggregate health of the whole deployment, assembled for the

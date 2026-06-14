@@ -79,6 +79,51 @@ func TestMigration_Idempotent(t *testing.T) {
 	}
 }
 
+func TestReset_RecreatesDatabase(t *testing.T) {
+	t.Parallel()
+	s := openStore(t)
+	ctx := context.Background()
+	if err := s.CreateAccount(ctx, domain.Account{
+		Tenant: domain.DefaultTenant,
+		ID:     "acc-reset",
+	}); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if err := s.AppendAudit(ctx, store.AuditEntry{
+		Actor:  "operator",
+		Action: domain.AuditActionCreateAccount,
+		Source: domain.SourcePanel,
+		Detail: "seed account",
+	}); err != nil {
+		t.Fatalf("AppendAudit: %v", err)
+	}
+
+	if err := s.Reset(ctx); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	v, err := s.SchemaVersion(ctx)
+	if err != nil {
+		t.Fatalf("SchemaVersion: %v", err)
+	}
+	if v != 2 {
+		t.Fatalf("want schema version 2, got %d", v)
+	}
+	accounts, err := s.ListAccounts(ctx)
+	if err != nil {
+		t.Fatalf("ListAccounts: %v", err)
+	}
+	if len(accounts) != 0 {
+		t.Fatalf("accounts after reset = %+v, want none", accounts)
+	}
+	audit, err := s.ListAudit(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	if len(audit) != 0 {
+		t.Fatalf("audit after reset = %+v, want none", audit)
+	}
+}
+
 // --- Ping / Path ---
 
 func TestPingAndPath(t *testing.T) {

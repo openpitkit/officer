@@ -27,13 +27,21 @@
 package httpapi
 
 import (
+	"archive/zip"
+	"bytes"
+	"compress/flate"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -43,6 +51,7 @@ import (
 
 	"go.openpit.dev/officer/internal/auth"
 	"go.openpit.dev/officer/internal/backend"
+	"go.openpit.dev/officer/internal/backup"
 	"go.openpit.dev/officer/internal/domain"
 	"go.openpit.dev/officer/internal/engine"
 )
@@ -50,10 +59,13 @@ import (
 // auditCapREST is the maximum number of audit rows the REST endpoint returns.
 const auditCapREST = 1000
 
-// maxRequestBody bounds a request body the v1 surface will read. The control
-// plane bodies are small (a handful of decimal strings or flags), so 1 MiB is
-// generous; the cap stops an unbounded read from exhausting memory.
+// maxRequestBody bounds ordinary v1 request bodies. Most control-plane bodies
+// are tiny (a handful of decimal strings or flags), so 1 MiB is generous.
 const maxRequestBody = 1 << 20
+
+// maxBackupRestoreBody bounds the one route that accepts an uploaded backup
+// archive. Keeping this separate avoids widening every v1 endpoint's body cap.
+const maxBackupRestoreBody = 64 << 20
 
 // listDefaultLimit is the default page size for the orders, trades, and
 // adjustments list endpoints; listCapREST bounds an explicit ?limit=.
@@ -67,6 +79,13 @@ const (
 type Service interface {
 	Status(ctx context.Context) (backend.Status, error)
 	ListAccounts(ctx context.Context) ([]domain.Account, error)
+	ExportBackup(ctx context.Context, scope backup.Scope) (backup.Archive, string, error)
+	RestoreBackup(
+		ctx context.Context,
+		archive backup.Archive,
+		opts backup.RestoreOptions,
+	) (backup.RestoreSummary, error)
+	ResetDatabase(ctx context.Context) error
 	CreateAccount(ctx context.Context, id domain.AccountID) (domain.Account, error)
 	GetAccountState(ctx context.Context, id domain.AccountID) (domain.Account, []domain.Limit, error)
 	BlockAccount(ctx context.Context, id domain.AccountID, reason string) error
@@ -233,6 +252,10 @@ func mountV1(r chi.Router, svc Service, logs LogSource) {
 	}
 	r.Get("/overview", handleOverview(svc))
 
+	r.Post("/backup/export", handleExportBackup(svc))
+	r.Post("/backup/restore", handleRestoreBackup(svc))
+	r.Post("/database/reset", handleResetDatabase(svc))
+
 	r.Get("/accounts", handleListAccounts(svc))
 	r.Post("/accounts", handleCreateAccount(svc))
 	r.Get("/accounts/{id}", handleGetAccount(svc))
@@ -300,16 +323,26 @@ func stampSource(source domain.Source) func(http.Handler) http.Handler {
 	}
 }
 
-// limitBody is middleware that caps the request body at maxRequestBody. A body
-// over the cap fails the next Decode with an error, which the handler reports
-// as a 400, so an oversized or unbounded body cannot exhaust memory.
+// limitBody caps request bodies. Backup restore has a larger cap for archive
+// uploads; every other v1 endpoint keeps the ordinary small control-plane cap.
+// A body over the cap fails the next Decode with an error, which the handler
+// reports as a 400, so an oversized or unbounded body cannot exhaust memory.
 func limitBody(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Body != nil {
-			r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
+			r.Body = http.MaxBytesReader(w, r.Body, requestBodyLimit(r))
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func requestBodyLimit(r *http.Request) int64 {
+	switch r.URL.Path {
+	case "/api/v1/backup/restore", "/app/api/v1/backup/restore":
+		return maxBackupRestoreBody
+	default:
+		return maxRequestBody
+	}
 }
 
 // handleHealthz is the plain-text liveness endpoint.
@@ -336,6 +369,253 @@ func handleV1Status(svc Service) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, toStatusDTO(status))
+	}
+}
+
+// handleExportBackup handles POST /api/v1/backup/export.
+func handleExportBackup(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Scope backup.Scope `json:"scope"`
+			Zip   bool         `json:"zip"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			return
+		}
+		if !validBackupScope(req.Scope) {
+			writeErrMsg(w, http.StatusBadRequest, "validation",
+				"backup scope must include all or at least one section")
+			return
+		}
+		archive, filename, err := svc.ExportBackup(r.Context(), req.Scope)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		if req.Zip {
+			payload, zipFilename, err := zipBackupArchive(archive, filename)
+			if err != nil {
+				writeErr(w, err)
+				return
+			}
+			w.Header().Set("Content-Disposition",
+				`attachment; filename="`+zipFilename+`"`)
+			w.Header().Set("Content-Type", "application/zip")
+			_, _ = w.Write(payload)
+			return
+		}
+		w.Header().Set("Content-Disposition",
+			`attachment; filename="`+filename+`"`)
+		writeJSON(w, http.StatusOK, archive)
+	}
+}
+
+// handleRestoreBackup handles POST /api/v1/backup/restore.
+func handleRestoreBackup(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Archive         backup.Archive     `json:"archive"`
+			ArchiveFile     string             `json:"archiveFile"`
+			ArchiveFilename string             `json:"archiveFilename"`
+			Scope           backup.Scope       `json:"scope"`
+			Mode            backup.RestoreMode `json:"mode"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			return
+		}
+		if req.Mode == "" {
+			writeErrMsg(w, http.StatusBadRequest, "validation",
+				"restore mode is required")
+			return
+		}
+		if !validRestoreMode(req.Mode) {
+			writeErrMsg(w, http.StatusBadRequest, "validation",
+				"unknown restore mode")
+			return
+		}
+		if !validBackupScope(req.Scope) {
+			writeErrMsg(w, http.StatusBadRequest, "validation",
+				"restore scope must include all or at least one section")
+			return
+		}
+		if req.ArchiveFile == "" && req.Archive.Manifest.Format == "" {
+			writeErrMsg(w, http.StatusBadRequest, "validation",
+				"backup archive is required")
+			return
+		}
+		archive := req.Archive
+		if req.ArchiveFile != "" {
+			parsed, err := parseBackupArchiveFile(req.ArchiveFilename,
+				req.ArchiveFile)
+			if err != nil {
+				writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+				return
+			}
+			archive = parsed
+		}
+		summary, err := svc.RestoreBackup(r.Context(), archive,
+			backup.RestoreOptions{Scope: req.Scope, Mode: req.Mode})
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"summary": summary})
+	}
+}
+
+// handleResetDatabase handles POST /api/v1/database/reset.
+func handleResetDatabase(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Confirm bool `json:"confirm"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			return
+		}
+		if !req.Confirm {
+			writeErrMsg(w, http.StatusBadRequest, "validation",
+				"database reset confirmation is required")
+			return
+		}
+		if err := svc.ResetDatabase(r.Context()); err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	}
+}
+
+func zipBackupArchive(
+	archive backup.Archive,
+	jsonFilename string,
+) ([]byte, string, error) {
+	body, err := json.Marshal(archive)
+	if err != nil {
+		return nil, "", fmt.Errorf("backup export marshal: %w", err)
+	}
+	var out bytes.Buffer
+	zw := zip.NewWriter(&out)
+	zw.RegisterCompressor(zip.Deflate, func(w io.Writer) (io.WriteCloser, error) {
+		return flate.NewWriter(w, flate.BestCompression)
+	})
+	fw, err := zw.CreateHeader(&zip.FileHeader{
+		Name:   jsonFilename,
+		Method: zip.Deflate,
+	})
+	if err != nil {
+		_ = zw.Close()
+		return nil, "", fmt.Errorf("backup export zip entry: %w", err)
+	}
+	if _, err := fw.Write(body); err != nil {
+		_ = zw.Close()
+		return nil, "", fmt.Errorf("backup export zip write: %w", err)
+	}
+	if err := zw.Close(); err != nil {
+		return nil, "", fmt.Errorf("backup export zip close: %w", err)
+	}
+	return out.Bytes(), backupZipFilename(jsonFilename), nil
+}
+
+func backupZipFilename(jsonFilename string) string {
+	if filepath.Ext(jsonFilename) == ".json" {
+		return strings.TrimSuffix(jsonFilename, ".json") + ".zip"
+	}
+	return jsonFilename + ".zip"
+}
+
+func parseBackupArchiveFile(
+	filename string,
+	encoded string,
+) (backup.Archive, error) {
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return backup.Archive{}, fmt.Errorf("invalid backup file encoding")
+	}
+	if isZipPayload(raw) {
+		raw, err = readBackupJSONFromZip(raw)
+		if err != nil {
+			return backup.Archive{}, err
+		}
+	}
+	var archive backup.Archive
+	if err := json.Unmarshal(raw, &archive); err != nil {
+		if filename == "" {
+			return backup.Archive{}, fmt.Errorf("invalid backup archive JSON")
+		}
+		return backup.Archive{},
+			fmt.Errorf("invalid backup archive JSON in %s", filename)
+	}
+	return archive, nil
+}
+
+func isZipPayload(raw []byte) bool {
+	return len(raw) >= 4 &&
+		raw[0] == 'P' &&
+		raw[1] == 'K' &&
+		raw[2] == 0x03 &&
+		raw[3] == 0x04
+}
+
+func readBackupJSONFromZip(raw []byte) ([]byte, error) {
+	zr, err := zip.NewReader(bytes.NewReader(raw), int64(len(raw)))
+	if err != nil {
+		return nil, fmt.Errorf("invalid backup zip archive")
+	}
+	var candidate *zip.File
+	for _, file := range zr.File {
+		if file.FileInfo().IsDir() || filepath.Ext(file.Name) != ".json" {
+			continue
+		}
+		if candidate != nil {
+			return nil, fmt.Errorf("backup zip contains multiple JSON files")
+		}
+		candidate = file
+	}
+	if candidate == nil {
+		return nil, fmt.Errorf("backup zip contains no JSON archive")
+	}
+	rc, err := candidate.Open()
+	if err != nil {
+		return nil, fmt.Errorf("open backup JSON from zip: %w", err)
+	}
+	defer func() { _ = rc.Close() }()
+	body, err := io.ReadAll(io.LimitReader(rc, maxBackupRestoreBody+1))
+	if err != nil {
+		return nil, fmt.Errorf("read backup JSON from zip: %w", err)
+	}
+	if int64(len(body)) > maxBackupRestoreBody {
+		return nil, fmt.Errorf("backup JSON in zip exceeds size limit")
+	}
+	return body, nil
+}
+
+func validBackupScope(scope backup.Scope) bool {
+	scope = scope.Normalize()
+	if scope.All {
+		return true
+	}
+	if len(scope.Sections) == 0 {
+		return false
+	}
+	for _, section := range scope.Sections {
+		if !slices.Contains(backup.AllSections, section) {
+			return false
+		}
+	}
+	return true
+}
+
+func validRestoreMode(mode backup.RestoreMode) bool {
+	switch mode {
+	case backup.RestoreModeReplaceAll,
+		backup.RestoreModeOverwrite,
+		backup.RestoreModeInsertMissing:
+		return true
+	default:
+		return false
 	}
 }
 

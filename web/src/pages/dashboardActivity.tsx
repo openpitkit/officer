@@ -168,6 +168,9 @@ export function auditActionMeta(action: string): AuditIconMeta {
   if (a === "trade" || a === "fill")
     return { Icon: ArrowLeftRight,   variant: "ok",      titleKey: "audit.action.tradeFill" };
 
+  if (a === "reset_database")
+    return { Icon: Trash2,           variant: "danger",  titleKey: "audit.action.resetDatabase" };
+
   // Policy / config and unknown — raw action string as fallback key.
   if (a.includes("policy") || a.includes("config"))
     return { Icon: Layers,           variant: "accent",  titleKey: action };

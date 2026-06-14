@@ -25,6 +25,7 @@ import (
 	"context"
 	"time"
 
+	"go.openpit.dev/officer/internal/backup"
 	"go.openpit.dev/officer/internal/domain"
 )
 
@@ -74,6 +75,20 @@ type Store interface {
 
 	// Path returns the on-disk location of the database.
 	Path() string
+
+	// Reset closes, recreates, and migrates the backing database from scratch.
+	Reset(ctx context.Context) error
+
+	// ExportBackup returns a portable domain archive independent of the concrete
+	// database backend.
+	ExportBackup(ctx context.Context, scope backup.Scope) (backup.Archive, error)
+
+	// RestoreBackup imports a portable domain archive into the concrete store.
+	RestoreBackup(
+		ctx context.Context,
+		archive backup.Archive,
+		opts backup.RestoreOptions,
+	) (backup.RestoreSummary, error)
 
 	// ListAccounts returns every persisted account across all tenants.
 	ListAccounts(ctx context.Context) ([]domain.Account, error)

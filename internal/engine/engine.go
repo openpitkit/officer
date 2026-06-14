@@ -25,13 +25,13 @@
 // one engine at process start, configures policies, blocks accounts, observes,
 // and stops the engine. All policy evaluation stays inside the engine.
 //
-// Officer builds the engine exactly once per process and never rebuilds it. The
-// single handle is constructed by BuildOpenPitEngine and lives until Stop, and
-// the adapter owns one market-data service for that whole lifetime. Later
-// changes are applied dynamically through the binding's runtime Configure
-// surface. rate_limit, order_size_limit, and pnl_bounds_kill_switch retune their
-// axes wholesale (barriers added and removed at runtime). The spot-funds policy
-// is registered with its default settings and is not reconfigured at runtime.
+// Officer normally keeps one engine handle and applies changes dynamically
+// through the binding's runtime Configure surface. Full backup restore is the
+// explicit node-level exception: the node builds a replacement engine from the
+// restored store snapshot and reconnects market-data feeds to its sink.
+// rate_limit, order_size_limit, and pnl_bounds_kill_switch retune their axes
+// wholesale (barriers added and removed at runtime). The spot-funds policy is
+// registered with its default settings and is not reconfigured at runtime.
 // The residual changes the SDK cannot express are exactly: configuring an
 // unregistered policy, removing the last barrier of a registered policy, and
 // dropping a broker barrier of rate_limit or order_size_limit while other
@@ -99,10 +99,9 @@ type ExecutionReportResult struct {
 	Outcomes []domain.AdjustmentOutcomeAccepted
 }
 
-// BuildFunc builds the one engine from the seed snapshot. The local node calls
-// it once during construction and never again - officer does not rebuild the
-// engine. Production wires it to BuildOpenPitEngine bound to a runtime-library
-// path. Tests substitute a fake.
+// BuildFunc builds an engine from a seed snapshot. The local node calls it at
+// construction and again only for full backup restore. Production wires it to
+// BuildOpenPitEngine bound to a runtime-library path. Tests substitute a fake.
 type BuildFunc func(snap Snapshot) (Engine, error)
 
 // Health reports the observable condition of an engine adapter for the
@@ -209,8 +208,8 @@ type Engine interface {
 	// MarketDataSink returns the quote sink backed by the engine's market-data
 	// service. The connector manager drains normalized quotes into it; the sink
 	// registers instruments on first sight and pushes quotes through the binding.
-	// It is valid for the whole process: the engine is never rebuilt, so the
-	// backing service handle is stable until Stop closes it.
+	// It is valid until Stop closes this engine handle; backup restore swaps the
+	// engine and reconnects feeds to the replacement handle's sink.
 	MarketDataSink() marketdata.Sink
 
 	// Stop halts the engine and releases the underlying native resources,
