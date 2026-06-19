@@ -26,6 +26,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -38,6 +39,7 @@ import (
 	"go.openpit.dev/officer/internal/marketdata"
 	"go.openpit.dev/officer/internal/mcpcatalog"
 	"go.openpit.dev/officer/internal/node"
+	"go.openpit.dev/officer/internal/signing"
 )
 
 // MarketDataRuntime is the live view of the connector manager the backend
@@ -63,6 +65,22 @@ type MarketDataRuntime interface {
 	UseSink(sink marketdata.Sink) error
 }
 
+// SigningService is the signing-and-verification facet the backend needs to
+// issue and check approval tokens. The *signing.Service satisfies it. It is the
+// seam through which the backend reaches the persisted Ed25519 key set and the
+// global eSign flag; the backend never holds private key material itself.
+type SigningService interface {
+	GenerateKey(ctx context.Context) (domain.SigningKey, error)
+	ImportKey(ctx context.Context, material, format string) (domain.SigningKey, error)
+	ListKeys(ctx context.Context) ([]domain.SigningKey, error)
+	ActivePublicKey(format string) (string, error)
+	Fingerprint(pub []byte) string
+	Sign(payload domain.ApprovalPayload) (string, error)
+	Verify(ctx context.Context, token string, expect signing.VerifyParams) (signing.VerifyResult, error)
+	NoESign(ctx context.Context) (bool, error)
+	SetNoESign(ctx context.Context, off bool) error
+}
+
 // Status is the aggregate health of the whole deployment, assembled for the
 // operator dashboard from the health of every node behind the router.
 type Status struct {
@@ -78,15 +96,19 @@ type Status struct {
 type Service struct {
 	router node.NodeRouter
 	md     MarketDataRuntime
+	signer SigningService
 }
 
-// New constructs a Service over the given node router and market-data runtime.
-// The router is the seam through which the service reaches every execution
-// target; md is the live connector-manager view used to surface per-instance
-// subscription state and to re-apply configuration. md may be nil, in which
-// case market-data state resolves to empty and RestartMarketData is a no-op.
-func New(router node.NodeRouter, md MarketDataRuntime) *Service {
-	return &Service{router: router, md: md}
+// New constructs a Service over the given node router, market-data runtime, and
+// signing service. The router is the seam through which the service reaches
+// every execution target; md is the live connector-manager view used to surface
+// per-instance subscription state and to re-apply configuration; signer is the
+// Ed25519 signing-and-verification facet backing the approval-token flow. md may
+// be nil (market-data state resolves to empty and RestartMarketData is a no-op);
+// signer may be nil (the signing and approval-token methods then report the
+// feature unconfigured).
+func New(router node.NodeRouter, md MarketDataRuntime, signer SigningService) *Service {
+	return &Service{router: router, md: md, signer: signer}
 }
 
 // Status returns the aggregate health of every node behind the router, for the
@@ -212,7 +234,8 @@ func (s *Service) PutLimit(ctx context.Context, limit domain.Limit) error {
 		return fmt.Errorf("backend: route limit: %w", err)
 	}
 
-	return n.PutLimit(ctx, limit, auth.CallerFromContext(ctx))
+	sink, err := n.PutLimit(ctx, limit, auth.CallerFromContext(ctx))
+	return s.finishLimitChange(sink, err)
 }
 
 // DeleteLimit validates the target, routes to the owning node, and removes the
@@ -230,7 +253,20 @@ func (s *Service) DeleteLimit(ctx context.Context, target domain.LimitTarget) er
 	if err != nil {
 		return fmt.Errorf("backend: route limit: %w", err)
 	}
-	return n.DeleteLimit(ctx, target, auth.CallerFromContext(ctx))
+	sink, err := n.DeleteLimit(ctx, target, auth.CallerFromContext(ctx))
+	return s.finishLimitChange(sink, err)
+}
+
+func (s *Service) finishLimitChange(sink marketdata.Sink, err error) error {
+	if sink == nil || s.md == nil {
+		return err
+	}
+	s.md.Stop()
+	restoreErr := s.restoreMarketDataAfterBackup(sink)
+	if err != nil {
+		return errors.Join(err, restoreErr)
+	}
+	return restoreErr
 }
 
 // placeholderValues returns a minimal valid value set for policy so the target
@@ -268,32 +304,22 @@ func (s *Service) ListAudit(
 	return rows, nil
 }
 
-// ListAuditFiltered returns audit entries, newest first, optionally narrowed
-// to an account and/or a source. The node surface exposes no audit filters, so
-// the rows are aggregated and filtered here. count is the fetch limit passed to
-// each node; the filtered result may be smaller. An empty account or source
-// disables that filter.
+// ListAuditFiltered returns audit entries, newest first, narrowed by the
+// filter. The account, source, and action filters are applied in each node's
+// query so count bounds the already-filtered set; the per-node results are then
+// aggregated. A zero-value filter matches all rows.
 func (s *Service) ListAuditFiltered(
-	ctx context.Context, account domain.AccountID, source domain.Source, count int,
+	ctx context.Context, filter domain.AuditFilter, count int,
 ) ([]domain.AuditRow, error) {
-	rows, err := s.ListAudit(ctx, count)
-	if err != nil {
-		return nil, err
-	}
-	if account == "" && source == "" {
-		return rows, nil
-	}
-	out := make([]domain.AuditRow, 0, len(rows))
-	for _, row := range rows {
-		if account != "" && row.Account != account {
-			continue
+	rows := make([]domain.AuditRow, 0)
+	for i, n := range s.router.All() {
+		part, err := n.ListAuditFiltered(ctx, filter, count)
+		if err != nil {
+			return nil, fmt.Errorf("backend: node %d list audit filtered: %w", i, err)
 		}
-		if source != "" && row.Source != source {
-			continue
-		}
-		out = append(out, row)
+		rows = append(rows, part...)
 	}
-	return out, nil
+	return rows, nil
 }
 
 // --- MCP access control -----------------------------------------------------
@@ -1468,8 +1494,12 @@ func (s *Service) ListTrades(
 type Counts struct {
 	// Accounts is the number of accounts across all nodes.
 	Accounts int
+	// AccountsActive is the number of accounts that are not blocked.
+	AccountsActive int
 	// Groups is the number of account groups.
 	Groups int
+	// GroupsActive is the number of account groups that are not blocked.
+	GroupsActive int
 	// Limits is the number of risk barriers.
 	Limits int
 	// OrdersToday is the number of orders recorded since the caller-supplied
@@ -1567,14 +1597,29 @@ func (s *Service) Overview(ctx context.Context, since time.Time) (Overview, erro
 		return Overview{}, err
 	}
 
+	accountsActive := 0
+	for _, account := range accounts {
+		if !account.Blocked {
+			accountsActive++
+		}
+	}
+	groupsActive := 0
+	for _, group := range groups {
+		if !group.Blocked {
+			groupsActive++
+		}
+	}
+
 	activity := mergeActivity(audit, orders, adjustments)
 	return Overview{
 		Counts: Counts{
-			Accounts:    len(accounts),
-			Groups:      len(groups),
-			Limits:      len(limits),
-			OrdersToday: ordersToday,
-			OrdersTotal: ordersTotal,
+			Accounts:       len(accounts),
+			AccountsActive: accountsActive,
+			Groups:         len(groups),
+			GroupsActive:   groupsActive,
+			Limits:         len(limits),
+			OrdersToday:    ordersToday,
+			OrdersTotal:    ordersTotal,
 		},
 		Activity: activity,
 	}, nil

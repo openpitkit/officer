@@ -51,6 +51,10 @@ import type {
   NodeHealth,
   Order,
   OrderEvent,
+  SigningKey,
+  SigningKeyFormat,
+  SigningKeysStatus,
+  SigningKeyResult,
   Overview,
   RestoreMode,
   ServiceInfo,
@@ -69,9 +73,11 @@ export type ApiErrorCode =
   | "not_found"
   | "conflict"
   | "precondition"
+  | "engine_restarting"
   | "not_implemented"
   | "internal"
-  | "network";
+  | "network"
+  | "signing";
 
 /** A failed API call, carrying the HTTP status and decoded error code. */
 export class ApiError extends Error {
@@ -124,8 +130,10 @@ function asCode(v: unknown): ApiErrorCode {
     case "not_found":
     case "conflict":
     case "precondition":
+    case "engine_restarting":
     case "not_implemented":
     case "internal":
+    case "signing":
       return v;
     default:
       return "internal";
@@ -351,7 +359,7 @@ function normalizeAdjustment(v: unknown): Adjustment {
 function normalizeOrder(v: unknown): Order {
   const o = isObject(v) ? v : {};
   const rawLock = pick(o, "lockPrices", "LockPrices", "lock_prices");
-  return {
+  const order: Order = {
     id: asInt(pick(o, "id", "Id", "ID")),
     account: asString(pick(o, "account", "Account")),
     at: asString(pick(o, "at", "At")),
@@ -365,6 +373,11 @@ function normalizeOrder(v: unknown): Order {
     status: asString(pick(o, "status", "Status")),
     lockPrices: Array.isArray(rawLock) ? rawLock.map(asString) : [],
   };
+  const submitMode = asString(pick(o, "submitMode", "SubmitMode", "submit_mode"));
+  if (submitMode === "hold" || submitMode === "immediate") {
+    order.submitMode = submitMode;
+  }
+  return order;
 }
 
 function normalizeOrderEvent(v: unknown): OrderEvent {
@@ -481,10 +494,16 @@ function normalizeOverview(v: unknown): Overview {
         };
       })
     : [];
+  const accountsTotal = asInt(pick(counts, "accounts", "Accounts"));
+  const groupsTotal = asInt(pick(counts, "groups", "Groups"));
+  const accountsActiveRaw = pick(counts, "accountsActive", "AccountsActive");
+  const groupsActiveRaw = pick(counts, "groupsActive", "GroupsActive");
   return {
     counts: {
-      accounts: asInt(pick(counts, "accounts", "Accounts")),
-      groups: asInt(pick(counts, "groups", "Groups")),
+      accounts: accountsTotal,
+      accountsActive: typeof accountsActiveRaw === "number" ? asInt(accountsActiveRaw) : accountsTotal,
+      groups: groupsTotal,
+      groupsActive: typeof groupsActiveRaw === "number" ? asInt(groupsActiveRaw) : groupsTotal,
       limits: asInt(pick(counts, "limits", "Limits")),
       ordersToday: asInt(pick(counts, "ordersToday", "OrdersToday", "orders_today")),
       ordersTotal: asInt(pick(counts, "ordersTotal", "OrdersTotal", "orders_total")),
@@ -888,6 +907,8 @@ async function toApiError(res: Response, path: string): Promise<ApiError> {
       code = "conflict";
     } else if (res.status === 422) {
       code = "precondition";
+    } else if (res.status === 503) {
+      code = "engine_restarting";
     } else if (res.status === 501) {
       code = "not_implemented";
     }
@@ -1524,7 +1545,7 @@ export async function fetchAdjustments(
 
 // --- Orders / Trading ---
 
-interface CreateOrderBody {
+export interface CreateOrderBody {
   account: string;
   baseAsset: string;
   quoteAsset: string;
@@ -1532,6 +1553,8 @@ interface CreateOrderBody {
   amountKind: string;
   amountValue: string;
   price?: string;
+  /** Only sent when "hold"; omitted for "immediate" to stay backward-compatible. */
+  submitMode?: "hold";
 }
 
 /** POST /orders. */
@@ -1731,6 +1754,9 @@ export async function deleteLimit(target: {
 interface AuditFilter {
   account?: string;
   source?: string;
+  /** Action types to include. Undefined sends no action filter (server
+   *  default: control only); an empty array selects nothing. */
+  actions?: string[];
   limit?: number;
 }
 
@@ -1784,11 +1810,18 @@ export async function fetchAudit(
   if (typeof limitOrFilter === "number") {
     params.set("limit", String(limitOrFilter));
   } else {
+    // An empty action selection matches nothing; skip the round-trip.
+    if (limitOrFilter.actions && limitOrFilter.actions.length === 0) {
+      return [];
+    }
     if (limitOrFilter.account) {
       params.set("account", limitOrFilter.account);
     }
     if (limitOrFilter.source) {
       params.set("source", limitOrFilter.source);
+    }
+    if (limitOrFilter.actions && limitOrFilter.actions.length > 0) {
+      params.set("actions", limitOrFilter.actions.join(","));
     }
     if (limitOrFilter.limit !== undefined) {
       params.set("limit", String(limitOrFilter.limit));
@@ -1798,4 +1831,98 @@ export async function fetchAudit(
   const v = await request(`${BASE}/audit${query}`, { signal });
   const o = isObject(v) ? v : {};
   return normalizeArray(pick(o, "entries", "Entries"), normalizeAudit);
+}
+
+// --- Signing keys ---
+
+function normalizeSigningKey(v: unknown): SigningKey {
+  const o = isObject(v) ? v : {};
+  return {
+    keyId: asString(pick(o, "keyId", "KeyId", "key_id")),
+    fingerprint: asString(pick(o, "fingerprint", "Fingerprint")),
+    createdAt: asString(pick(o, "createdAt", "CreatedAt", "created_at")),
+    active: asBool(pick(o, "active", "Active")),
+  };
+}
+
+// asFlag reads a flag the Go handler emits as a boolean but the store persists as
+// a "0"/"1" text column, so both wire forms (boolean true, string "1"/"true")
+// read truthy.
+function asFlag(v: unknown): boolean {
+  return v === true || v === "1" || v === "true";
+}
+
+export function normalizeSigningKeysStatus(v: unknown): SigningKeysStatus {
+  const o = isObject(v) ? v : {};
+  const cfg = isObject(pick(o, "config", "Config")) ? pick(o, "config", "Config") : {};
+  return {
+    keys: normalizeArray(pick(o, "keys", "Keys"), normalizeSigningKey),
+    eSignEnabled: !asFlag(
+      pick(cfg as Record<string, unknown>, "noESign", "NoESign", "no_esign"),
+    ),
+  };
+}
+
+function normalizeSigningKeyResult(v: unknown): SigningKeyResult {
+  const o = isObject(v) ? v : {};
+  return {
+    key: normalizeSigningKey(pick(o, "key", "Key")),
+    publicKey: asString(pick(o, "publicKey", "PublicKey", "public_key")),
+  };
+}
+
+/** GET /signing/keys — list all keys (including inactive) + global config. */
+export async function fetchSigningKeys(
+  signal?: AbortSignal,
+): Promise<SigningKeysStatus> {
+  const [keysV, cfgV] = await Promise.all([
+    request(`${BASE}/signing/keys`, { signal }),
+    request(`${BASE}/signing/config`, { signal }),
+  ]);
+  const keysO = isObject(keysV) ? keysV : {};
+  const cfgO = isObject(cfgV) ? cfgV : {};
+  const combined = {
+    keys: pick(keysO, "keys", "Keys"),
+    config: cfgO,
+  };
+  return normalizeSigningKeysStatus(combined);
+}
+
+/** POST /signing/keys/generate — create a new Ed25519 key pair. */
+export async function generateSigningKey(): Promise<SigningKeyResult> {
+  const v = await request(`${BASE}/signing/keys/generate`, { method: "POST" });
+  return normalizeSigningKeyResult(v);
+}
+
+/** POST /signing/keys/import — import a BYOK private key. */
+export async function importSigningKey(
+  key: string,
+  format: SigningKeyFormat,
+): Promise<SigningKeyResult> {
+  const v = await request(`${BASE}/signing/keys/import`, {
+    method: "POST",
+    body: { key, format },
+  });
+  return normalizeSigningKeyResult(v);
+}
+
+/** GET /signing/keys/active/public?format= — export the active public key. */
+export async function exportPublicKey(
+  format: SigningKeyFormat,
+  signal?: AbortSignal,
+): Promise<string> {
+  const v = await request(
+    `${BASE}/signing/keys/active/public?format=${encode(format)}`,
+    { signal },
+  );
+  const o = isObject(v) ? v : {};
+  return asString(pick(o, "publicKey", "PublicKey", "public_key"));
+}
+
+/** PUT /signing/config — toggle the global eSign flag. */
+export async function setESignEnabled(enabled: boolean): Promise<void> {
+  await request(`${BASE}/signing/config`, {
+    method: "PUT",
+    body: { noESign: !enabled },
+  });
 }

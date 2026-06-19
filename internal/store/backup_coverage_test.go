@@ -34,8 +34,11 @@ import (
 )
 
 var backupCoverageSQLiteExcludedTables = map[string]string{
-	"schema_migrations": "migration version bookkeeping",
-	"sqlite_sequence":   "SQLite AUTOINCREMENT bookkeeping, filtered by sqlite_%",
+	"reservation_intents": "ephemeral approval state rebuilt from live runtime",
+	"schema_migrations":   "migration version bookkeeping",
+	"signing_config":      "signing configuration is excluded from portable backups",
+	"signing_keys":        "private signing key material is excluded from portable backups",
+	"sqlite_sequence":     "SQLite AUTOINCREMENT bookkeeping, filtered by sqlite_%",
 }
 
 // TestBackupRegistryCoversSQLiteTables introspects SQLite only. The backup

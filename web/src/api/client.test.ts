@@ -20,9 +20,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createMarketDataInstance,
   exportBackup,
+  fetchSigningKeys,
+  generateSigningKey,
+  importSigningKey,
+  normalizeSigningKeysStatus,
   resetDatabase,
   restoreBackup,
   searchMarketDataSymbols,
+  setESignEnabled,
   updateMarketDataInstanceSettings,
   verifyMarketDataSymbol,
 } from "@/api/client";
@@ -566,5 +571,300 @@ describe("verifyMarketDataSymbol", () => {
       exists: true,
       details: "BTC DIGITAL LTD, Common Stock",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Signing keys — normalizer unit tests
+// ---------------------------------------------------------------------------
+
+describe("normalizeSigningKeysStatus", () => {
+  it("normalizes camelCase wire shape", () => {
+    const result = normalizeSigningKeysStatus({
+      keys: [
+        {
+          keyId: "key-1",
+          fingerprint: "aa:bb",
+          createdAt: "2026-01-01T00:00:00Z",
+          active: true,
+        },
+      ],
+      config: { noESign: false },
+    });
+    expect(result.keys).toHaveLength(1);
+    expect(result.keys[0].keyId).toBe("key-1");
+    expect(result.keys[0].active).toBe(true);
+    expect(result.eSignEnabled).toBe(true);
+  });
+
+  it("normalizes snake_case wire shape", () => {
+    const result = normalizeSigningKeysStatus({
+      keys: [
+        {
+          key_id: "key-2",
+          fingerprint: "cc:dd",
+          created_at: "2026-02-01T00:00:00Z",
+          active: false,
+        },
+      ],
+      config: { no_esign: "1" },
+    });
+    expect(result.keys[0].keyId).toBe("key-2");
+    expect(result.keys[0].active).toBe(false);
+    expect(result.eSignEnabled).toBe(false);
+  });
+
+  it("returns empty keys and eSignEnabled=true for empty input", () => {
+    const result = normalizeSigningKeysStatus({});
+    expect(result.keys).toHaveLength(0);
+    expect(result.eSignEnabled).toBe(true);
+  });
+
+  it("tolerates PascalCase wire shape", () => {
+    const result = normalizeSigningKeysStatus({
+      keys: [
+        {
+          KeyId: "key-3",
+          Fingerprint: "ee:ff",
+          CreatedAt: "2026-03-01T00:00:00Z",
+          Active: true,
+        },
+      ],
+      config: { NoESign: false },
+    });
+    expect(result.keys[0].keyId).toBe("key-3");
+    expect(result.eSignEnabled).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Signing keys — HTTP call tests
+// ---------------------------------------------------------------------------
+
+describe("signing-keys HTTP calls", () => {
+  function signingKeysResponse(): Response {
+    return new Response(
+      JSON.stringify({
+        keys: [
+          {
+            keyId: "k1",
+            fingerprint: "11:22",
+            createdAt: "2026-01-01T00:00:00Z",
+            active: true,
+          },
+        ],
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  }
+
+  function signingConfigResponse(): Response {
+    return new Response(
+      JSON.stringify({ noESign: false }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  }
+
+  function generateResponse(): Response {
+    return new Response(
+      JSON.stringify({
+        key: {
+          keyId: "new-key",
+          fingerprint: "33:44",
+          createdAt: "2026-01-01T00:00:00Z",
+          active: true,
+        },
+        publicKey: "-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----",
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  }
+
+  it("fetchSigningKeys calls GET /signing/keys and GET /signing/config", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(signingKeysResponse())
+      .mockResolvedValueOnce(signingConfigResponse());
+    const result = await fetchSigningKeys();
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/signing/keys",
+      expect.any(Object),
+    );
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/signing/config",
+      expect.any(Object),
+    );
+    expect(result.keys).toHaveLength(1);
+    expect(result.eSignEnabled).toBe(true);
+  });
+
+  it("generateSigningKey calls POST /signing/keys/generate", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(generateResponse());
+    const result = await generateSigningKey();
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/signing/keys/generate",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(result.key.keyId).toBe("new-key");
+    expect(result.publicKey).toContain("BEGIN PUBLIC KEY");
+  });
+
+  it("importSigningKey calls POST /signing/keys/import with key and format", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(generateResponse());
+    await importSigningKey("-----BEGIN PRIVATE KEY-----\ntest", "pem-pkcs8");
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/signing/keys/import",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          key: "-----BEGIN PRIVATE KEY-----\ntest",
+          format: "pem-pkcs8",
+        }),
+      }),
+    );
+  });
+
+  it("preserves signing error codes", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ error: { code: "signing", message: "bad key" } }),
+        { status: 400, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    await expect(importSigningKey("bad", "pem-pkcs8")).rejects.toMatchObject({
+      code: "signing",
+      message: "bad key",
+    });
+  });
+
+  it("setESignEnabled(true) sends noESign=false", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    await setESignEnabled(true);
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/signing/config",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ noESign: false }),
+      }),
+    );
+  });
+
+  it("setESignEnabled(false) sends noESign=true", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    await setESignEnabled(false);
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/signing/config",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ noESign: true }),
+      }),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Orders — submit mode tests
+// ---------------------------------------------------------------------------
+
+describe("Orders createOrder submit-mode", () => {
+  function orderResponse(submitMode?: "hold" | "immediate"): Response {
+    return new Response(
+      JSON.stringify({
+        order: {
+          id: 1,
+          account: "desk-alpha",
+          at: "2026-01-01T00:00:00Z",
+          source: "panel",
+          baseAsset: "AAPL",
+          quoteAsset: "USD",
+          side: "buy",
+          amountKind: "quantity",
+          amountValue: "100",
+          price: "0",
+          status: "accepted",
+          lockPrices: [],
+          ...(submitMode ? { submitMode } : {}),
+        },
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  }
+
+  it("does not send submitMode when immediate (default)", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(orderResponse());
+    const { createOrder } = await import("@/api/client");
+    await createOrder({
+      account: "desk-alpha",
+      baseAsset: "AAPL",
+      quoteAsset: "USD",
+      side: "buy",
+      amountKind: "quantity",
+      amountValue: "100",
+    });
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/orders",
+      expect.objectContaining({
+        body: JSON.stringify({
+          account: "desk-alpha",
+          baseAsset: "AAPL",
+          quoteAsset: "USD",
+          side: "buy",
+          amountKind: "quantity",
+          amountValue: "100",
+        }),
+      }),
+    );
+  });
+
+  it("sends submitMode=hold when hold mode is specified", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(orderResponse());
+    const { createOrder } = await import("@/api/client");
+    await createOrder({
+      account: "desk-alpha",
+      baseAsset: "AAPL",
+      quoteAsset: "USD",
+      side: "buy",
+      amountKind: "quantity",
+      amountValue: "100",
+      submitMode: "hold",
+    });
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/orders",
+      expect.objectContaining({
+        body: JSON.stringify({
+          account: "desk-alpha",
+          baseAsset: "AAPL",
+          quoteAsset: "USD",
+          side: "buy",
+          amountKind: "quantity",
+          amountValue: "100",
+          submitMode: "hold",
+        }),
+      }),
+    );
+  });
+
+  it("normalizes submitMode from order responses", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(orderResponse("hold"));
+    const { createOrder } = await import("@/api/client");
+    const order = await createOrder({
+      account: "desk-alpha",
+      baseAsset: "AAPL",
+      quoteAsset: "USD",
+      side: "buy",
+      amountKind: "quantity",
+      amountValue: "100",
+    });
+    expect(order.submitMode).toBe("hold");
   });
 });

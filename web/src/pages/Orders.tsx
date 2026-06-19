@@ -18,7 +18,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Copy, Plus } from "lucide-react";
+import { Copy, ExternalLink, Plus } from "lucide-react";
 
 import {
   ApiError,
@@ -307,6 +307,7 @@ function SubmitOrderDialog({
   const [amountKind, setAmountKind] = useState<string>(initialValues?.amountKind ?? "quantity");
   const [amountValue, setAmountValue] = useState(initialValues?.amountValue ?? "");
   const [price, setPrice] = useState(initialValues?.price ?? "");
+  const [submitMode, setSubmitMode] = useState<"immediate" | "hold">("immediate");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [checkState, setCheckState] = useState<CheckState>({ phase: "idle" });
@@ -374,6 +375,7 @@ function SubmitOrderDialog({
       setAmountKind(initialValues?.amountKind ?? "quantity");
       setAmountValue(initialValues?.amountValue ?? "");
       setPrice(initialValues?.price ?? "");
+      setSubmitMode("immediate");
       setBusy(false);
       setError(null);
       setCheckState({ phase: "idle" });
@@ -391,6 +393,7 @@ function SubmitOrderDialog({
     setAmountKind(initialValues?.amountKind ?? "quantity");
     setAmountValue(initialValues?.amountValue ?? "");
     setPrice(initialValues?.price ?? "");
+    setSubmitMode("immediate");
     setBusy(false);
     setError(null);
     setCheckState({ phase: "idle" });
@@ -421,6 +424,9 @@ function SubmitOrderDialog({
       };
       if (price.trim()) {
         body.price = price.trim();
+      }
+      if (submitMode === "hold") {
+        body.submitMode = "hold";
       }
       const order = await createOrder(body);
       onCreated();
@@ -506,6 +512,57 @@ function SubmitOrderDialog({
               </Select>
             </div>
           </div>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <Label id="so-mode-label">{t("addOrder.dialog.submitMode")}</Label>
+              <a
+                href="/api/openapi.yaml"
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-[0.6875rem] font-medium text-muted-lt underline-offset-2 hover:text-accent hover:underline"
+              >
+                {t("addOrder.dialog.openApi")}
+                <ExternalLink className="h-3 w-3" />
+              </a>
+            </div>
+            <div
+              role="radiogroup"
+              aria-labelledby="so-mode-label"
+              className="grid grid-cols-2 gap-2"
+            >
+              {(["immediate", "hold"] as const).map((mode) => {
+                const selected = submitMode === mode;
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    onClick={() => setSubmitMode(mode)}
+                    disabled={busy}
+                    className={[
+                      "min-h-[4.5rem] rounded-card border px-3 py-2 text-left transition-colors",
+                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                      selected
+                        ? "border-accent bg-accent-dim text-text"
+                        : "border-border bg-surface-2 text-muted-lt hover:bg-surface-hover hover:text-text",
+                    ].join(" ")}
+                  >
+                    <span className="block text-xs font-semibold text-text">
+                      {mode === "immediate"
+                        ? t("addOrder.dialog.submitModeImmediate")
+                        : t("addOrder.dialog.submitModeHold")}
+                    </span>
+                    <span className="mt-1 block text-[0.6875rem] leading-snug">
+                      {mode === "immediate"
+                        ? t("addOrder.dialog.submitModeImmediateHelp")
+                        : t("addOrder.dialog.submitModeHoldHelp")}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label htmlFor="so-amount">{t("addOrder.dialog.amount")}</Label>
@@ -558,6 +615,17 @@ interface ExecReportInitialValues {
   quantity: string;
   price: string;
   lockPrice: string;
+}
+
+function execReportInitialValuesFromOrder(order: Order): ExecReportInitialValues {
+  const lockPrice = order.lockPrices.length > 0
+    ? order.lockPrices[order.lockPrices.length - 1]
+    : "";
+  return {
+    quantity: "",
+    price: lockPrice,
+    lockPrice,
+  };
 }
 
 interface ExecReportDialogProps {
@@ -732,7 +800,7 @@ function ExecReportDialog({ orderId, onClose, onSubmitted, initialValues }: Exec
 interface OrderDetailDialogProps {
   orderId: number | null;
   onClose: () => void;
-  onExecReport: (orderId: number) => void;
+  onExecReport: (orderId: number, values?: ExecReportInitialValues) => void;
   onCloneOrder: (values: OrderInitialValues) => void;
   onCloneExecReport: (orderId: number, values: ExecReportInitialValues) => void;
   successBanner?: string;
@@ -998,7 +1066,7 @@ function OrderDetailDialog({ orderId, onClose, onExecReport, onCloneOrder, onClo
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => onExecReport(orderId)}
+                onClick={() => onExecReport(orderId, execReportInitialValuesFromOrder(state.order))}
               >
                 {t("detail.dialog.trades.submitExecReport")}
               </Button>
@@ -1405,10 +1473,10 @@ export function Orders() {
     setDetailSuccessBanner(undefined);
   }
 
-  function openExecReport(id: number) {
+  function openExecReport(id: number, values?: ExecReportInitialValues) {
     setDetailOrderId(null);
     setExecReportOrderId(id);
-    setExecReportInitialValues(undefined);
+    setExecReportInitialValues(values);
   }
 
   function closeExecReport() {

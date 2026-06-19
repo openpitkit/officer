@@ -21,16 +21,25 @@ import { fetchAudit } from "@/api/client";
 import type { AuditEntry } from "@/api/types";
 import { usePolling, type PollingResult } from "@/api/usePolling";
 
-/** Poll GET /audit for the newest `limit` entries, optionally filtered. */
+/** Poll GET /audit for the newest `limit` entries, optionally filtered. The
+ *  actions array is the include-set of event types; an empty array selects
+ *  nothing. The key derived from it keeps the fetcher stable across renders. */
 export function useAudit(
   limit: number,
   account?: string,
   source?: string,
+  actions?: string[],
 ): PollingResult<AuditEntry[]> {
+  const actionsKey = actions?.join(",") ?? "";
   const fetcher = useCallback(
     (signal: AbortSignal) =>
-      fetchAudit({ limit, account, source }, signal),
-    [limit, account, source],
+      fetchAudit(
+        { limit, account, source, actions: actions ? [...actions] : undefined },
+        signal,
+      ),
+    // actionsKey stands in for the actions array identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [limit, account, source, actionsKey],
   );
   return usePolling(fetcher);
 }

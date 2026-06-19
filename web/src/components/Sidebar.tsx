@@ -22,6 +22,7 @@ import {
   Database,
   ExternalLink,
   Info,
+  KeyRound,
   LayoutDashboard,
   Settings,
   ShieldCheck,
@@ -67,6 +68,7 @@ const NAV: NavItem[] = [
 const FOOTER: NavItem[] = [
   { to: "/audit", labelKey: "nav.audit", icon: ClipboardList, end: false },
   { to: "/mcp-access", labelKey: "nav.mcpAccess", icon: ShieldCheck, end: false },
+  { to: "/signing-keys", labelKey: "nav.signingKeys", icon: KeyRound, end: false },
   { to: "/market-data", labelKey: "nav.marketData", icon: Database, end: false },
   { to: "/service", labelKey: "nav.service", icon: Settings, end: false },
 ];

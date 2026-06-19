@@ -1,0 +1,51 @@
+{
+  "title": "Signing Keys",
+
+  "currentKey": {
+    "sectionTitle": "Active Key",
+    "keyId": "Key ID",
+    "fingerprint": "Fingerprint",
+    "createdAt": "Created",
+    "status": "Status",
+    "statusActive": "active",
+    "empty": "No signing key configured. Generate or import one below.",
+    "export": {
+      "label": "Export public key",
+      "formatLabel": "Format",
+      "formats": {
+        "pem-pkcs8": "PEM PKCS#8",
+        "openssh": "OpenSSH (authorized_keys)",
+        "raw-base64": "Raw base64 seed"
+      }
+    }
+  },
+
+  "manageKey": {
+    "sectionTitle": "Generate or Import",
+    "modeGenerate": "Generate new key",
+    "modeImport": "Import your key",
+    "generateButton": "Generate",
+    "importButton": "Import",
+    "importFormat": "Key format",
+    "importKeyLabel": "Private key",
+    "importKeyPlaceholder": "Paste your private key here…",
+    "importBusy": "Importing…",
+    "generateDialog": {
+      "title": "Generate new signing key",
+      "description": "This will create a fresh Ed25519 key pair. The current active key will be deactivated. Connectors verifying in-flight tokens will still find the old public key until those tokens expire.",
+      "confirm": "Generate"
+    },
+    "errors": {
+      "generateFailed": "Key generation failed.",
+      "importEmpty": "Paste a private key before importing.",
+      "importFailed": "Import failed."
+    }
+  },
+
+  "eSign": {
+    "sectionTitle": "Electronic Signature",
+    "label": "Require signature on approval tokens",
+    "description": "When enabled, every approval token is signed with the active Ed25519 key. Connectors verify the signature before executing. When disabled, tokens carry the full payload and binding but no cryptographic signature — replay and expiry checks still apply.",
+    "busy": "Saving…"
+  }
+}

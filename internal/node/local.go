@@ -19,10 +19,14 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/shopspring/decimal"
 
 	"go.openpit.dev/officer/internal/backup"
 	"go.openpit.dev/officer/internal/domain"
@@ -39,19 +43,18 @@ import (
 // revert-on-failure, and audit-append steps run atomically with respect to each
 // other. Reads do not take it.
 //
-// Ordinary mutations reconfigure the engine in place through the runtime
-// Configure surface; a change that surface cannot express is an SDK gap
-// surfaced to the caller as an error wrapping domain.ErrNotImplemented, not
-// worked around by rebuilding a fresh handle. Full backup restore is the
-// administrative exception: after the store import succeeds, n.engine is
-// rebuilt from the restored snapshot.
+// Administrative snapshot changes and policy changes the SDK cannot reconfigure
+// dynamically rebuild the engine from persisted state. While that rebuild
+// window is open, new mutating requests are rejected rather than queued behind
+// the rebuild.
 type localNode struct {
 	engineMu sync.RWMutex
 	engine   engine.Engine
 	build    engine.BuildFunc
 	store    store.Store
 
-	mutate sync.Mutex
+	mutate     sync.Mutex
+	restarting atomic.Bool
 }
 
 // NewLocalNode builds the single in-process Node: it loads the seed snapshot
@@ -59,9 +62,9 @@ type localNode struct {
 // the one engine from it via build, bundles the engine and store, and appends
 // one startup audit row.
 //
-// build is retained only for full backup restore. Later ordinary mutations
-// reconfigure the engine in place; a change the runtime Configure surface
-// cannot express is an SDK gap, not a trigger to rebuild.
+// build is retained for administrative rebuilds after persisted snapshot
+// changes such as backup restore, database reset, or unsupported dynamic policy
+// changes.
 //
 // It returns the node and the engine handle. The node owns the engine and
 // store: Close stops the engine and closes the store. The returned handle is
@@ -200,8 +203,10 @@ func (n *localNode) ExportBackup(
 	scope backup.Scope,
 	caller domain.Caller,
 ) (backup.Archive, error) {
-	n.mutate.Lock()
-	defer n.mutate.Unlock()
+	if err := n.beginMutation(); err != nil {
+		return backup.Archive{}, err
+	}
+	defer n.endMutation()
 
 	archive, err := n.store.ExportBackup(ctx, scope)
 	if err != nil {
@@ -228,8 +233,17 @@ func (n *localNode) RestoreBackup(
 	opts backup.RestoreOptions,
 	caller domain.Caller,
 ) (backup.RestoreSummary, marketdata.Sink, error) {
-	n.mutate.Lock()
-	defer n.mutate.Unlock()
+	if backup.TouchesRuntime(opts.Scope) {
+		if err := n.beginEngineRestart(); err != nil {
+			return backup.RestoreSummary{}, n.currentMarketDataSink(), err
+		}
+		defer n.endEngineRestart()
+	} else {
+		if err := n.beginMutation(); err != nil {
+			return backup.RestoreSummary{}, n.currentMarketDataSink(), err
+		}
+		defer n.endMutation()
+	}
 
 	before, err := n.store.ExportBackup(ctx, backup.Scope{All: true})
 	if err != nil {
@@ -274,8 +288,10 @@ func (n *localNode) ResetDatabase(
 	ctx context.Context,
 	caller domain.Caller,
 ) (marketdata.Sink, error) {
-	n.mutate.Lock()
-	defer n.mutate.Unlock()
+	if err := n.beginEngineRestart(); err != nil {
+		return n.currentMarketDataSink(), err
+	}
+	defer n.endEngineRestart()
 
 	if err := n.store.Reset(ctx); err != nil {
 		return n.currentMarketDataSink(), fmt.Errorf("reset database: %w", err)
@@ -305,6 +321,7 @@ func (n *localNode) rebuildEngineFromStore(ctx context.Context) error {
 	if next == nil {
 		return fmt.Errorf("build restored engine returned nil")
 	}
+	next.SetReservationStore(n.store)
 	n.swapEngine(next)
 	return nil
 }
@@ -323,6 +340,54 @@ func (n *localNode) currentMarketDataSink() marketdata.Sink {
 	n.engineMu.RLock()
 	defer n.engineMu.RUnlock()
 	return n.engine.MarketDataSink()
+}
+
+func (n *localNode) beginMutation() error {
+	if n.restarting.Load() {
+		return fmt.Errorf(
+			"engine restart in progress; mutating requests are rejected until rebuild completes: %w",
+			domain.ErrEngineRestarting)
+	}
+	n.mutate.Lock()
+	if n.restarting.Load() {
+		n.mutate.Unlock()
+		return fmt.Errorf(
+			"engine restart in progress; mutating requests are rejected until rebuild completes: %w",
+			domain.ErrEngineRestarting)
+	}
+	return nil
+}
+
+func (n *localNode) endMutation() {
+	n.mutate.Unlock()
+}
+
+func (n *localNode) beginEngineRestart() error {
+	if !n.restarting.CompareAndSwap(false, true) {
+		return fmt.Errorf(
+			"engine restart in progress; mutating requests are rejected until rebuild completes: %w",
+			domain.ErrEngineRestarting)
+	}
+	n.mutate.Lock()
+	return nil
+}
+
+func (n *localNode) endEngineRestart() {
+	n.mutate.Unlock()
+	n.restarting.Store(false)
+}
+
+func (n *localNode) beginEngineRestartLocked() error {
+	if !n.restarting.CompareAndSwap(false, true) {
+		return fmt.Errorf(
+			"engine restart in progress; mutating requests are rejected until rebuild completes: %w",
+			domain.ErrEngineRestarting)
+	}
+	return nil
+}
+
+func (n *localNode) endEngineRestartLocked() {
+	n.restarting.Store(false)
 }
 
 func (n *localNode) rollbackStore(ctx context.Context, rollback backup.Archive, err error) error {
@@ -354,8 +419,10 @@ func (n *localNode) rollbackStoreAndEngine(
 func (n *localNode) CreateAccount(
 	ctx context.Context, key Key, caller domain.Caller,
 ) (domain.Account, error) {
-	n.mutate.Lock()
-	defer n.mutate.Unlock()
+	if err := n.beginMutation(); err != nil {
+		return domain.Account{}, err
+	}
+	defer n.endMutation()
 
 	account := domain.Account{Tenant: key.Tenant, ID: key.Account}
 	if err := n.store.CreateAccount(ctx, account); err != nil {
@@ -378,8 +445,10 @@ func (n *localNode) CreateAccount(
 func (n *localNode) SetAccountBlocked(
 	ctx context.Context, key Key, blocked bool, reason string, caller domain.Caller,
 ) error {
-	n.mutate.Lock()
-	defer n.mutate.Unlock()
+	if err := n.beginMutation(); err != nil {
+		return err
+	}
+	defer n.endMutation()
 
 	prev, ok, err := n.store.GetAccount(ctx, key.Tenant, key.Account)
 	if err != nil {
@@ -430,6 +499,35 @@ func (n *localNode) applyBlock(
 	return n.engine.UnblockAccount(ctx, id)
 }
 
+// mirrorEngineBlocks persists each engine-recorded account block and writes a
+// system-sourced audit row naming the triggering order and the engine's reason.
+// The engine already blocked the account in its own state during settlement, so
+// the store write only follows it; the audit row makes the kill-switch visible
+// to operators, who otherwise see a blocked account with no recorded cause.
+func (n *localNode) mirrorEngineBlocks(
+	ctx context.Context, tenant domain.TenantID, orderID int64,
+	blocks []domain.ExecutionAccountBlock,
+) error {
+	for _, block := range blocks {
+		if err := n.store.SetAccountBlocked(
+			ctx, tenant, block.Account, true, block.Reason,
+		); err != nil {
+			return fmt.Errorf("mirror account block: %w", err)
+		}
+		if err := n.store.AppendAudit(ctx, store.AuditEntry{
+			Actor:   "engine",
+			Source:  domain.SourceSystem,
+			Action:  domain.AuditActionBlock,
+			Tenant:  tenant,
+			Account: block.Account,
+			Detail:  engineBlockDetail(orderID, block),
+		}); err != nil {
+			return fmt.Errorf("audit engine block: %w", err)
+		}
+	}
+	return nil
+}
+
 // audit appends one audit row, stamping the caller's principal and source onto
 // the entry. Every mutation routes its audit through here so attribution is
 // applied uniformly.
@@ -437,6 +535,16 @@ func (n *localNode) audit(ctx context.Context, caller domain.Caller, entry store
 	entry.Actor = caller.Principal
 	entry.Source = caller.Source
 	return n.store.AppendAudit(ctx, entry)
+}
+
+// AppendAudit persists one audit row stamped with the caller. It is the seam
+// the backend uses for control-plane actions that have no node-mutating
+// counterpart (signing-key management, signing config, approval issue/confirm/
+// cancel).
+func (n *localNode) AppendAudit(
+	ctx context.Context, entry store.AuditEntry, caller domain.Caller,
+) error {
+	return n.audit(ctx, caller, entry)
 }
 
 // GetAccountState returns the account row and the barriers whose scope has the
@@ -471,28 +579,32 @@ func (n *localNode) ListLimits(
 	return limits, nil
 }
 
-// PutLimit upserts the whole barrier in the store, applies the affected policy
-// to the engine from the re-read full policy set, reverts the store on engine
-// failure, and audits the action.
+// PutLimit upserts the whole barrier in the store, reconfigures its policy from
+// the persisted full barrier set, reverts the store on engine-apply failure, and
+// audits the action. It returns a replacement market-data sink only when the
+// policy change had to rebuild the engine.
 func (n *localNode) PutLimit(
 	ctx context.Context, limit domain.Limit, caller domain.Caller,
-) error {
-	n.mutate.Lock()
-	defer n.mutate.Unlock()
+) (marketdata.Sink, error) {
+	if err := n.beginMutation(); err != nil {
+		return nil, err
+	}
+	defer n.endMutation()
 
 	target := limit.Target
 	prev, hadPrev, err := n.readBarrier(ctx, target)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if err := n.store.PutLimit(ctx, limit); err != nil {
-		return fmt.Errorf("put limit: %w", err)
+		return nil, fmt.Errorf("put limit: %w", err)
 	}
 
-	if applyErr := n.applyPolicyChangeLocked(ctx, target.Policy); applyErr != nil {
+	sink, applyErr := n.applyPolicyChangeLocked(ctx, target.Policy)
+	if applyErr != nil {
 		n.revertBarrier(ctx, target, prev, hadPrev)
-		return fmt.Errorf("apply limit: %w", applyErr)
+		return nil, fmt.Errorf("configure policy after limit: %w", applyErr)
 	}
 
 	if err := n.audit(ctx, caller, store.AuditEntry{
@@ -501,32 +613,36 @@ func (n *localNode) PutLimit(
 		Account: target.Account,
 		Detail:  setLimitDetail(limit),
 	}); err != nil {
-		return fmt.Errorf("audit set limit: %w", err)
+		return sink, fmt.Errorf("audit set limit: %w", err)
 	}
-	return nil
+	return sink, nil
 }
 
-// DeleteLimit removes the barrier from the store, applies the affected policy
-// to the engine from the re-read full policy set, reverts the store on engine
-// failure, and audits the action.
+// DeleteLimit removes the barrier from the store, reconfigures its policy from
+// the persisted full barrier set, reverts the store on engine-apply failure, and
+// audits the action. It returns a replacement market-data sink only when the
+// policy change had to rebuild the engine.
 func (n *localNode) DeleteLimit(
 	ctx context.Context, target domain.LimitTarget, caller domain.Caller,
-) error {
-	n.mutate.Lock()
-	defer n.mutate.Unlock()
+) (marketdata.Sink, error) {
+	if err := n.beginMutation(); err != nil {
+		return nil, err
+	}
+	defer n.endMutation()
 
 	prev, hadPrev, err := n.readBarrier(ctx, target)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if err := n.store.DeleteLimit(ctx, target); err != nil {
-		return fmt.Errorf("delete limit: %w", err)
+		return nil, fmt.Errorf("delete limit: %w", err)
 	}
 
-	if applyErr := n.applyPolicyChangeLocked(ctx, target.Policy); applyErr != nil {
+	sink, applyErr := n.applyPolicyChangeLocked(ctx, target.Policy)
+	if applyErr != nil {
 		n.revertBarrier(ctx, target, prev, hadPrev)
-		return fmt.Errorf("apply delete limit: %w", applyErr)
+		return nil, fmt.Errorf("configure policy after delete limit: %w", applyErr)
 	}
 
 	if err := n.audit(ctx, caller, store.AuditEntry{
@@ -535,31 +651,37 @@ func (n *localNode) DeleteLimit(
 		Account: target.Account,
 		Detail:  deleteLimitDetail(target),
 	}); err != nil {
-		return fmt.Errorf("audit delete limit: %w", err)
+		return sink, fmt.Errorf("audit delete limit: %w", err)
 	}
-	return nil
+	return sink, nil
 }
 
 // applyPolicyChangeLocked applies a just-persisted barrier change for policy
-// to the engine via the runtime Configure surface. Any error, including one
-// wrapping domain.ErrNotImplemented, is returned unchanged so the caller
-// reverts the already-written store row.
-//
-// Officer never rebuilds the engine. A change the runtime Configure surface
-// cannot express (e.g. configuring an unregistered policy, or clearing a
-// broker barrier the surface cannot drop in isolation) is an SDK gap, not a
-// trigger to reconstruct a fresh handle. Reintroducing a rebuild fallback at
-// this site is therefore wrong: it would mask the gap and rebuild a native
-// handle the process is meant to keep for its whole lifetime. Callers must
-// hold mutate.
-func (n *localNode) applyPolicyChangeLocked(ctx context.Context, policy string) error {
-	return n.reconfigurePolicy(ctx, policy)
+// to the engine via the runtime Configure surface. If the SDK cannot express
+// the change dynamically, the persisted snapshot becomes the source of truth and
+// the engine is rebuilt. Callers must hold mutate.
+func (n *localNode) applyPolicyChangeLocked(
+	ctx context.Context, policy string,
+) (marketdata.Sink, error) {
+	if err := n.reconfigurePolicy(ctx, policy); err != nil {
+		if !errors.Is(err, domain.ErrNotImplemented) {
+			return nil, err
+		}
+		if err := n.beginEngineRestartLocked(); err != nil {
+			return nil, err
+		}
+		defer n.endEngineRestartLocked()
+		if err := n.rebuildEngineFromStore(ctx); err != nil {
+			return nil, err
+		}
+		return n.currentMarketDataSink(), nil
+	}
+	return nil, nil
 }
 
 // reconfigurePolicy re-reads the full barrier set for policy from the store and
 // applies it to the engine via the runtime Configure surface. It returns the
-// engine error verbatim (including a domain.ErrNotImplemented wrap) so the
-// caller reverts the store; the wrap is surfaced, never absorbed by a rebuild.
+// engine error verbatim so the caller can decide whether to revert or rebuild.
 func (n *localNode) reconfigurePolicy(ctx context.Context, policy string) error {
 	limits, err := n.store.ListPolicyLimits(ctx, policy)
 	if err != nil {
@@ -610,6 +732,18 @@ func (n *localNode) ListAudit(
 	return rows, nil
 }
 
+// ListAuditFiltered returns the most recent count audit rows matching the
+// filter, newest first.
+func (n *localNode) ListAuditFiltered(
+	ctx context.Context, filter domain.AuditFilter, count int,
+) ([]domain.AuditRow, error) {
+	rows, err := n.store.ListAuditFiltered(ctx, filter, count)
+	if err != nil {
+		return nil, fmt.Errorf("list audit filtered: %w", err)
+	}
+	return rows, nil
+}
+
 // --- MCP access control -----------------------------------------------------
 
 // ListMcpAccess returns the stored per-command MCP overrides keyed by command.
@@ -630,8 +764,10 @@ func (n *localNode) ListMcpAccess(ctx context.Context) (map[string]bool, error) 
 func (n *localNode) SetMcpAccess(
 	ctx context.Context, command string, enabled bool, caller domain.Caller,
 ) error {
-	n.mutate.Lock()
-	defer n.mutate.Unlock()
+	if err := n.beginMutation(); err != nil {
+		return err
+	}
+	defer n.endMutation()
 
 	if err := n.store.SetMcpAccess(ctx, command, enabled); err != nil {
 		return fmt.Errorf("set mcp access: %w", err)
@@ -670,8 +806,10 @@ func (n *localNode) GetMarketDataInstance(
 func (n *localNode) CreateMarketDataInstance(
 	ctx context.Context, instance domain.MarketDataInstance, caller domain.Caller,
 ) error {
-	n.mutate.Lock()
-	defer n.mutate.Unlock()
+	if err := n.beginMutation(); err != nil {
+		return err
+	}
+	defer n.endMutation()
 
 	if err := n.store.CreateMarketDataInstance(ctx, instance); err != nil {
 		return fmt.Errorf("create market-data instance: %w", err)
@@ -688,8 +826,10 @@ func (n *localNode) CreateMarketDataInstance(
 func (n *localNode) SetMarketDataInstanceEnabled(
 	ctx context.Context, id string, enabled bool, caller domain.Caller,
 ) error {
-	n.mutate.Lock()
-	defer n.mutate.Unlock()
+	if err := n.beginMutation(); err != nil {
+		return err
+	}
+	defer n.endMutation()
 
 	if err := n.store.SetMarketDataInstanceEnabled(ctx, id, enabled); err != nil {
 		return fmt.Errorf("set market-data instance enabled: %w", err)
@@ -706,8 +846,10 @@ func (n *localNode) SetMarketDataInstanceEnabled(
 func (n *localNode) UpdateMarketDataInstanceSettings(
 	ctx context.Context, id, label, credentials string, caller domain.Caller,
 ) error {
-	n.mutate.Lock()
-	defer n.mutate.Unlock()
+	if err := n.beginMutation(); err != nil {
+		return err
+	}
+	defer n.endMutation()
 
 	if err := n.store.UpdateMarketDataInstanceSettings(ctx, id, label, credentials); err != nil {
 		return fmt.Errorf("update market-data instance settings: %w", err)
@@ -724,8 +866,10 @@ func (n *localNode) UpdateMarketDataInstanceSettings(
 func (n *localNode) DeleteMarketDataInstance(
 	ctx context.Context, id string, caller domain.Caller,
 ) error {
-	n.mutate.Lock()
-	defer n.mutate.Unlock()
+	if err := n.beginMutation(); err != nil {
+		return err
+	}
+	defer n.endMutation()
 
 	if err := n.store.DeleteMarketDataInstance(ctx, id); err != nil {
 		return fmt.Errorf("delete market-data instance: %w", err)
@@ -752,8 +896,10 @@ func (n *localNode) ListMarketDataInstruments(
 func (n *localNode) UpsertMarketDataInstrument(
 	ctx context.Context, instrument domain.MarketDataInstrument, caller domain.Caller,
 ) error {
-	n.mutate.Lock()
-	defer n.mutate.Unlock()
+	if err := n.beginMutation(); err != nil {
+		return err
+	}
+	defer n.endMutation()
 
 	if err := n.store.UpsertMarketDataInstrument(ctx, instrument); err != nil {
 		return fmt.Errorf("upsert market-data instrument: %w", err)
@@ -771,8 +917,10 @@ func (n *localNode) UpsertMarketDataInstrument(
 func (n *localNode) SetMarketDataInstrumentEnabled(
 	ctx context.Context, instanceID, externalSymbol string, enabled bool, caller domain.Caller,
 ) error {
-	n.mutate.Lock()
-	defer n.mutate.Unlock()
+	if err := n.beginMutation(); err != nil {
+		return err
+	}
+	defer n.endMutation()
 
 	if err := n.store.SetMarketDataInstrumentEnabled(
 		ctx, instanceID, externalSymbol, enabled,
@@ -791,8 +939,10 @@ func (n *localNode) SetMarketDataInstrumentEnabled(
 func (n *localNode) DeleteMarketDataInstrument(
 	ctx context.Context, instanceID, externalSymbol string, caller domain.Caller,
 ) error {
-	n.mutate.Lock()
-	defer n.mutate.Unlock()
+	if err := n.beginMutation(); err != nil {
+		return err
+	}
+	defer n.endMutation()
 
 	if err := n.store.DeleteMarketDataInstrument(ctx, instanceID, externalSymbol); err != nil {
 		return fmt.Errorf("delete market-data instrument: %w", err)
@@ -824,8 +974,10 @@ func (n *localNode) ListMarketDataQuotes(
 func (n *localNode) SetAccountGroup(
 	ctx context.Context, key Key, groupID string, caller domain.Caller,
 ) error {
-	n.mutate.Lock()
-	defer n.mutate.Unlock()
+	if err := n.beginMutation(); err != nil {
+		return err
+	}
+	defer n.endMutation()
 
 	prev, ok, err := n.store.GetAccount(ctx, key.Tenant, key.Account)
 	if err != nil {
@@ -902,8 +1054,10 @@ func (n *localNode) applyGroupMove(
 func (n *localNode) SetAccountNotes(
 	ctx context.Context, key Key, notes string, caller domain.Caller,
 ) error {
-	n.mutate.Lock()
-	defer n.mutate.Unlock()
+	if err := n.beginMutation(); err != nil {
+		return err
+	}
+	defer n.endMutation()
 
 	if err := n.store.SetAccountNotes(ctx, key.Tenant, key.Account, notes); err != nil {
 		return fmt.Errorf("set account notes: %w", err)
@@ -927,8 +1081,10 @@ func (n *localNode) SetAccountNotes(
 func (n *localNode) CreateGroup(
 	ctx context.Context, group domain.AccountGroup, caller domain.Caller,
 ) error {
-	n.mutate.Lock()
-	defer n.mutate.Unlock()
+	if err := n.beginMutation(); err != nil {
+		return err
+	}
+	defer n.endMutation()
 
 	if err := n.store.CreateGroup(ctx, group); err != nil {
 		return fmt.Errorf("create group: %w", err)
@@ -979,8 +1135,10 @@ func (n *localNode) GetGroup(
 func (n *localNode) SetGroupNotes(
 	ctx context.Context, tenant domain.TenantID, id, notes string, caller domain.Caller,
 ) error {
-	n.mutate.Lock()
-	defer n.mutate.Unlock()
+	if err := n.beginMutation(); err != nil {
+		return err
+	}
+	defer n.endMutation()
 
 	if err := n.ensureGroupRecordLocked(ctx, tenant, id); err != nil {
 		return fmt.Errorf("ensure group for set notes: %w", err)
@@ -1006,8 +1164,10 @@ func (n *localNode) SetGroupNotes(
 func (n *localNode) SetGroupBlocked(
 	ctx context.Context, tenant domain.TenantID, id string, blocked bool, reason string, caller domain.Caller,
 ) error {
-	n.mutate.Lock()
-	defer n.mutate.Unlock()
+	if err := n.beginMutation(); err != nil {
+		return err
+	}
+	defer n.endMutation()
 
 	if err := n.ensureGroupRecordLocked(ctx, tenant, id); err != nil {
 		return fmt.Errorf("ensure group for block: %w", err)
@@ -1076,8 +1236,10 @@ func (n *localNode) applyGroupBlock(
 func (n *localNode) DeleteGroup(
 	ctx context.Context, tenant domain.TenantID, id string, caller domain.Caller,
 ) error {
-	n.mutate.Lock()
-	defer n.mutate.Unlock()
+	if err := n.beginMutation(); err != nil {
+		return err
+	}
+	defer n.endMutation()
 
 	if err := n.store.DeleteGroup(ctx, tenant, id); err != nil {
 		return fmt.Errorf("delete group: %w", err)
@@ -1102,8 +1264,10 @@ func (n *localNode) DeleteGroup(
 func (n *localNode) ApplyAdjustment(
 	ctx context.Context, key Key, req domain.AdjustmentRequest, caller domain.Caller,
 ) (domain.AccountAdjustmentRecord, error) {
-	n.mutate.Lock()
-	defer n.mutate.Unlock()
+	if err := n.beginMutation(); err != nil {
+		return domain.AccountAdjustmentRecord{}, err
+	}
+	defer n.endMutation()
 
 	result, err := n.engine.ApplyAccountAdjustment(ctx, key.Account, req)
 	if err != nil {
@@ -1263,8 +1427,10 @@ func (n *localNode) ListAdjustments(
 func (n *localNode) SubmitOrder(
 	ctx context.Context, key Key, o domain.Order, caller domain.Caller,
 ) (domain.Order, error) {
-	n.mutate.Lock()
-	defer n.mutate.Unlock()
+	if err := n.beginMutation(); err != nil {
+		return domain.Order{}, err
+	}
+	defer n.endMutation()
 
 	o.Tenant = key.Tenant
 	o.Account = key.Account
@@ -1352,6 +1518,372 @@ func (n *localNode) recordOrderRejected(
 	return order, nil
 }
 
+// SubmitHold records the order, runs the engine pre-trade keeping the
+// reservation held, and persists the accept/reject lifecycle. On accept the
+// held amount stays reserved on engine storage; the order is left accepted and
+// the result carries the approval id, lock prices, and settlement estimate. On
+// reject the order is recorded rejected. The backend audits the issued approval.
+func (n *localNode) SubmitHold(
+	ctx context.Context, key Key, o domain.Order, caller domain.Caller,
+) (domain.Order, engine.HoldResult, error) {
+	if err := n.beginMutation(); err != nil {
+		return domain.Order{}, engine.HoldResult{}, err
+	}
+	defer n.endMutation()
+
+	order, err := n.recordSubmittedOrder(ctx, key, o, caller)
+	if err != nil {
+		return domain.Order{}, engine.HoldResult{}, err
+	}
+
+	result, err := n.engine.ReserveHold(ctx, order)
+	if err != nil {
+		return domain.Order{}, engine.HoldResult{}, fmt.Errorf("reserve hold: %w", err)
+	}
+
+	if !result.Accepted {
+		order, err = n.recordOrderRejected(ctx, key, order, engine.OrderResult{Rejects: result.Rejects}, caller)
+		if err != nil {
+			return domain.Order{}, engine.HoldResult{}, err
+		}
+		return order, result, nil
+	}
+
+	if err := n.appendOrderEvent(ctx, order.ID, domain.OrderEventPreTradeAccepted, caller, domain.OrderEventPayload{}); err != nil {
+		return domain.Order{}, engine.HoldResult{}, err
+	}
+	if err := n.store.SetOrderLockPrices(ctx, key.Tenant, order.ID, result.LockPrices); err != nil {
+		return domain.Order{}, engine.HoldResult{}, fmt.Errorf("persist lock prices: %w", err)
+	}
+	for _, outcome := range result.Outcomes {
+		if err := n.persistFillBalance(ctx, key, outcome.Asset, outcome.Outcome); err != nil {
+			return domain.Order{}, engine.HoldResult{}, err
+		}
+	}
+	if err := n.store.UpdateOrderStatus(ctx, key.Tenant, order.ID, domain.OrderStatusAccepted); err != nil {
+		return domain.Order{}, engine.HoldResult{}, fmt.Errorf("order status accepted: %w", err)
+	}
+	order.LockPrices = result.LockPrices
+	order.Status = domain.OrderStatusAccepted
+	return order, result, nil
+}
+
+// SubmitImmediate records the order, runs the engine pre-trade and, on accept,
+// commits and settles the fill in the same engine call at the captured lock
+// price so the held amount nets to zero, then persists the filled lifecycle. On
+// reject the order is recorded rejected. The backend audits the issued approval.
+func (n *localNode) SubmitImmediate(
+	ctx context.Context, key Key, o domain.Order, caller domain.Caller,
+) (domain.Order, engine.ImmediateResult, error) {
+	if err := n.beginMutation(); err != nil {
+		return domain.Order{}, engine.ImmediateResult{}, err
+	}
+	defer n.endMutation()
+
+	order, err := n.recordSubmittedOrder(ctx, key, o, caller)
+	if err != nil {
+		return domain.Order{}, engine.ImmediateResult{}, err
+	}
+
+	result, err := n.engine.SubmitImmediate(ctx, order)
+	if err != nil {
+		return domain.Order{}, engine.ImmediateResult{}, fmt.Errorf("submit immediate: %w", err)
+	}
+
+	if !result.Accepted {
+		order, err = n.recordOrderRejected(ctx, key, order, engine.OrderResult{Rejects: result.Rejects}, caller)
+		if err != nil {
+			return domain.Order{}, engine.ImmediateResult{}, err
+		}
+		return order, result, nil
+	}
+
+	if err := n.appendOrderEvent(ctx, order.ID, domain.OrderEventPreTradeAccepted, caller, domain.OrderEventPayload{}); err != nil {
+		return domain.Order{}, engine.ImmediateResult{}, err
+	}
+	if err := n.appendOrderEvent(ctx, order.ID, domain.OrderEventReservationCommitted, caller, domain.OrderEventPayload{}); err != nil {
+		return domain.Order{}, engine.ImmediateResult{}, err
+	}
+	fillQuantity := result.FillQuantity
+	if fillQuantity == "" {
+		fillQuantity = order.AmountValue
+	}
+	if err := n.appendOrderEvent(ctx, order.ID, domain.OrderEventFill, caller, domain.OrderEventPayload{
+		FillQuantity:  fillQuantity,
+		FillPrice:     result.SettlementLockPrice,
+		FillLockPrice: result.SettlementLockPrice,
+	}); err != nil {
+		return domain.Order{}, engine.ImmediateResult{}, err
+	}
+	if _, err := n.store.CreateTrade(ctx, domain.Trade{
+		OrderID:    order.ID,
+		Tenant:     key.Tenant,
+		Account:    key.Account,
+		Source:     caller.Source,
+		Principal:  caller.Principal,
+		BaseAsset:  order.BaseAsset,
+		QuoteAsset: order.QuoteAsset,
+		Side:       order.Side,
+		Quantity:   fillQuantity,
+		Price:      result.SettlementLockPrice,
+		LockPrice:  result.SettlementLockPrice,
+	}); err != nil {
+		return domain.Order{}, engine.ImmediateResult{}, fmt.Errorf("create trade: %w", err)
+	}
+	for _, outcome := range result.Outcomes {
+		if err := n.persistFillBalance(ctx, key, outcome.Asset, outcome.Outcome); err != nil {
+			return domain.Order{}, engine.ImmediateResult{}, err
+		}
+	}
+	if err := n.mirrorEngineBlocks(ctx, key.Tenant, order.ID, result.Blocks); err != nil {
+		return domain.Order{}, engine.ImmediateResult{}, err
+	}
+	if err := n.store.SetOrderLockPrices(ctx, key.Tenant, order.ID, result.LockPrices); err != nil {
+		return domain.Order{}, engine.ImmediateResult{}, fmt.Errorf("persist lock prices: %w", err)
+	}
+	if err := n.store.UpdateOrderStatus(ctx, key.Tenant, order.ID, domain.OrderStatusFilled); err != nil {
+		return domain.Order{}, engine.ImmediateResult{}, fmt.Errorf("order status filled: %w", err)
+	}
+	order.LockPrices = result.LockPrices
+	order.Status = domain.OrderStatusFilled
+	return order, result, nil
+}
+
+// ConfirmHeld commits the held reservation through the engine and records the
+// committed lifecycle on the order. The backend audits the confirmation.
+func (n *localNode) ConfirmHeld(
+	ctx context.Context, tenant domain.TenantID, orderID int64, approvalID string, caller domain.Caller,
+) (domain.Order, error) {
+	if err := n.beginMutation(); err != nil {
+		return domain.Order{}, err
+	}
+	defer n.endMutation()
+
+	if err := n.engine.CommitHeld(ctx, approvalID); err != nil {
+		if !errors.Is(err, domain.ErrNotFound) {
+			return domain.Order{}, fmt.Errorf("commit held: %w", err)
+		}
+		if err := n.commitHeldIntentFallback(ctx, approvalID); err != nil {
+			return domain.Order{}, err
+		}
+	}
+	if err := n.appendOrderEvent(ctx, orderID, domain.OrderEventReservationCommitted, caller, domain.OrderEventPayload{}); err != nil {
+		return domain.Order{}, err
+	}
+	if err := n.store.UpdateOrderStatus(ctx, tenant, orderID, domain.OrderStatusCommitted); err != nil {
+		return domain.Order{}, fmt.Errorf("order status committed: %w", err)
+	}
+	detail, err := n.store.GetOrder(ctx, tenant, orderID)
+	if err != nil {
+		return domain.Order{}, fmt.Errorf("get order: %w", err)
+	}
+	return detail.Order, nil
+}
+
+// CancelHeld rolls back the held reservation through the engine and records the
+// cancelled lifecycle on the order. The backend audits the cancellation.
+func (n *localNode) CancelHeld(
+	ctx context.Context, tenant domain.TenantID, orderID int64, approvalID string, caller domain.Caller,
+) (domain.Order, error) {
+	if err := n.beginMutation(); err != nil {
+		return domain.Order{}, err
+	}
+	defer n.endMutation()
+
+	if err := n.engine.RollbackHeld(ctx, approvalID); err != nil {
+		if !errors.Is(err, domain.ErrNotFound) {
+			return domain.Order{}, fmt.Errorf("rollback held: %w", err)
+		}
+		if err := n.rollbackHeldIntentFallback(ctx, tenant, approvalID); err != nil {
+			return domain.Order{}, err
+		}
+	}
+	if err := n.appendOrderEvent(ctx, orderID, domain.OrderEventReservationRolledBack, caller, domain.OrderEventPayload{}); err != nil {
+		return domain.Order{}, err
+	}
+	if err := n.appendOrderEvent(ctx, orderID, domain.OrderEventCancelled, caller, domain.OrderEventPayload{}); err != nil {
+		return domain.Order{}, err
+	}
+	if err := n.store.UpdateOrderStatus(ctx, tenant, orderID, domain.OrderStatusCancelled); err != nil {
+		return domain.Order{}, fmt.Errorf("order status cancelled: %w", err)
+	}
+	detail, err := n.store.GetOrder(ctx, tenant, orderID)
+	if err != nil {
+		return domain.Order{}, fmt.Errorf("get order: %w", err)
+	}
+	return detail.Order, nil
+}
+
+// ReconcileOrphans reports persisted held reservation intents after boot. It
+// runs once after the engine is built; held balance effects remain durable in
+// the store and are not rolled back here.
+func (n *localNode) ReconcileOrphans(ctx context.Context) (int, error) {
+	if err := n.beginMutation(); err != nil {
+		return 0, err
+	}
+	defer n.endMutation()
+
+	count, err := n.engine.ReconcileOrphans(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func (n *localNode) commitHeldIntentFallback(ctx context.Context, approvalID string) error {
+	if _, err := n.openReservationIntent(ctx, approvalID); err != nil {
+		return fmt.Errorf("commit held after engine restart: %w", err)
+	}
+	if err := n.store.SetReservationIntentState(
+		ctx, approvalID, domain.ReservationIntentStateCommitted,
+	); err != nil {
+		return fmt.Errorf("commit held after engine restart: %w", err)
+	}
+	return nil
+}
+
+func (n *localNode) rollbackHeldIntentFallback(
+	ctx context.Context, tenant domain.TenantID, approvalID string,
+) error {
+	intent, err := n.openReservationIntent(ctx, approvalID)
+	if err != nil {
+		return fmt.Errorf("rollback held after engine restart: %w", err)
+	}
+	_, outcomes, err := decodeReservationIntentPayload(intent.ParamsJSON)
+	if err != nil {
+		return fmt.Errorf("decode held reservation payload: %w", err)
+	}
+	if len(outcomes) == 0 {
+		return fmt.Errorf(
+			"held reservation %q has no persisted balance outcomes to release: %w",
+			approvalID, domain.ErrConflict)
+	}
+	key := Key{Tenant: tenant, Account: intent.Account}
+	for _, outcome := range outcomes {
+		if err := n.releaseHeldBalance(ctx, key, outcome); err != nil {
+			return err
+		}
+	}
+	if err := n.store.SetReservationIntentState(
+		ctx, approvalID, domain.ReservationIntentStateRolledBack,
+	); err != nil {
+		return fmt.Errorf("rollback held after engine restart: %w", err)
+	}
+	return nil
+}
+
+func (n *localNode) openReservationIntent(
+	ctx context.Context, approvalID string,
+) (domain.ReservationIntent, error) {
+	intents, err := n.store.ListOpenReservationIntents(ctx)
+	if err != nil {
+		return domain.ReservationIntent{}, fmt.Errorf("list open reservation intents: %w", err)
+	}
+	for _, intent := range intents {
+		if intent.ApprovalID == approvalID {
+			return intent, nil
+		}
+	}
+	return domain.ReservationIntent{}, fmt.Errorf(
+		"reservation %q: %w", approvalID, domain.ErrNotFound)
+}
+
+type reservationIntentPayload struct {
+	Order    domain.Order            `json:"order"`
+	Outcomes []engine.BalanceOutcome `json:"outcomes,omitempty"`
+}
+
+func decodeReservationIntentPayload(raw string) (
+	domain.Order, []engine.BalanceOutcome, error,
+) {
+	var payload reservationIntentPayload
+	if err := json.Unmarshal([]byte(raw), &payload); err == nil {
+		if payload.Order.ID != 0 || payload.Order.Account != "" || payload.Outcomes != nil {
+			return payload.Order, payload.Outcomes, nil
+		}
+	}
+	var order domain.Order
+	if err := json.Unmarshal([]byte(raw), &order); err != nil {
+		return domain.Order{}, nil, err
+	}
+	return order, nil, nil
+}
+
+func (n *localNode) releaseHeldBalance(
+	ctx context.Context, key Key, held engine.BalanceOutcome,
+) error {
+	req, err := releaseHeldRequest(held)
+	if err != nil {
+		return err
+	}
+	if req.Balance == nil && req.Held == nil && req.Incoming == nil {
+		return nil
+	}
+	result, err := n.engine.ApplyAccountAdjustment(ctx, key.Account, req)
+	if err != nil {
+		return fmt.Errorf("release held through engine: %w", err)
+	}
+	if result.Rejected != nil {
+		return fmt.Errorf(
+			"release held rejected by engine: %s: %w",
+			result.Rejected.Reason, domain.ErrConflict)
+	}
+	if result.Accepted == nil {
+		return fmt.Errorf("release held produced no accepted outcome: %w", domain.ErrConflict)
+	}
+	return n.persistAdjustedBalance(ctx, key, req, *result.Accepted)
+}
+
+func releaseHeldRequest(held engine.BalanceOutcome) (domain.AdjustmentRequest, error) {
+	req := domain.AdjustmentRequest{Asset: held.Asset}
+	var err error
+	if req.Balance, err = inverseAdjustmentAmount(held.Outcome.BalanceDelta); err != nil {
+		return domain.AdjustmentRequest{}, fmt.Errorf("release held available: %w", err)
+	}
+	if req.Held, err = inverseAdjustmentAmount(held.Outcome.HeldDelta); err != nil {
+		return domain.AdjustmentRequest{}, fmt.Errorf("release held amount: %w", err)
+	}
+	if req.Incoming, err = inverseAdjustmentAmount(held.Outcome.IncomingDelta); err != nil {
+		return domain.AdjustmentRequest{}, fmt.Errorf("release held incoming: %w", err)
+	}
+	return req, nil
+}
+
+func inverseAdjustmentAmount(delta string) (*domain.AdjustmentAmount, error) {
+	if delta == "" {
+		return nil, nil
+	}
+	parsed, err := decimal.NewFromString(delta)
+	if err != nil {
+		return nil, fmt.Errorf("delta %q is not a valid decimal: %w", delta, domain.ErrInvalid)
+	}
+	return &domain.AdjustmentAmount{
+		Mode:  domain.AdjustmentModeDelta,
+		Value: parsed.Neg().String(),
+	}, nil
+}
+
+// recordSubmittedOrder creates the order record and its submitted event, stamped
+// with the caller and routing key. Callers hold n.mutate.
+func (n *localNode) recordSubmittedOrder(
+	ctx context.Context, key Key, o domain.Order, caller domain.Caller,
+) (domain.Order, error) {
+	o.Tenant = key.Tenant
+	o.Account = key.Account
+	o.Source = caller.Source
+	o.Principal = caller.Principal
+	o.Status = domain.OrderStatusSubmitted
+
+	order, err := n.store.CreateOrder(ctx, o)
+	if err != nil {
+		return domain.Order{}, fmt.Errorf("create order: %w", err)
+	}
+	if err := n.appendOrderEvent(ctx, order.ID, domain.OrderEventSubmitted, caller, domain.OrderEventPayload{}); err != nil {
+		return domain.Order{}, err
+	}
+	return order, nil
+}
+
 // ApplyExecutionReport settles a fill through the engine, then records the fill
 // event and trade and mirrors any engine-recorded account blocks into the store
 // (the engine already applied the block, so the store only follows). The order
@@ -1359,8 +1891,10 @@ func (n *localNode) recordOrderRejected(
 func (n *localNode) ApplyExecutionReport(
 	ctx context.Context, key Key, in domain.ExecutionReportInput, caller domain.Caller,
 ) (engine.ExecutionReportResult, error) {
-	n.mutate.Lock()
-	defer n.mutate.Unlock()
+	if err := n.beginMutation(); err != nil {
+		return engine.ExecutionReportResult{}, err
+	}
+	defer n.endMutation()
 
 	in.Account = key.Account
 	result, err := n.engine.ApplyExecutionReport(ctx, in)
@@ -1394,22 +1928,17 @@ func (n *localNode) ApplyExecutionReport(
 
 	// Persist the fill's spot-funds outcomes: balance/held/incoming follow the
 	// engine's resulting absolutes, while realized P&L is delta-accumulated onto
-	// the stored value (never overwritten with the reported absolute). The fill
-	// outcome is keyed on the base asset, matching the engine outcome mapper.
+	// the stored value (never overwritten with the reported absolute). A spot
+	// fill settles both legs, so each outcome is keyed on its own asset (base
+	// and quote), not collapsed onto the base.
 	for _, outcome := range result.Outcomes {
-		if err := n.persistFillBalance(ctx, key, in.BaseAsset, outcome); err != nil {
+		if err := n.persistFillBalance(ctx, key, outcome.Asset, outcome.Outcome); err != nil {
 			return engine.ExecutionReportResult{}, err
 		}
 	}
 
-	// Mirror engine-recorded blocks: the engine already blocked the account, so
-	// the store write only follows it (no engine re-apply on this path).
-	for _, block := range result.Blocks {
-		if err := n.store.SetAccountBlocked(
-			ctx, key.Tenant, block.Account, true, block.Reason,
-		); err != nil {
-			return engine.ExecutionReportResult{}, fmt.Errorf("mirror account block: %w", err)
-		}
+	if err := n.mirrorEngineBlocks(ctx, key.Tenant, in.OrderID, result.Blocks); err != nil {
+		return engine.ExecutionReportResult{}, err
 	}
 
 	status := domain.OrderStatusPartiallyFilled

@@ -91,6 +91,31 @@ const DropdownMenuRadioItem = forwardRef<
 DropdownMenuRadioItem.displayName =
   DropdownMenuPrimitive.RadioItem.displayName;
 
+const DropdownMenuCheckboxItem = forwardRef<
+  ElementRef<typeof DropdownMenuPrimitive.CheckboxItem>,
+  ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.CheckboxItem>
+>(({ className, children, checked, ...props }, ref) => (
+  <DropdownMenuPrimitive.CheckboxItem
+    ref={ref}
+    checked={checked}
+    className={cn(
+      "relative flex cursor-pointer select-none items-center gap-2 rounded-badge py-1.5 pl-7 pr-2 text-sm outline-none transition-colors duration-[180ms]",
+      "focus:bg-accent-dim focus:text-accent data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+      className,
+    )}
+    {...props}
+  >
+    <span className="absolute left-2 flex h-3.5 w-3.5 items-center justify-center">
+      <DropdownMenuPrimitive.ItemIndicator>
+        <Check className="h-3.5 w-3.5 text-accent" />
+      </DropdownMenuPrimitive.ItemIndicator>
+    </span>
+    {children}
+  </DropdownMenuPrimitive.CheckboxItem>
+));
+DropdownMenuCheckboxItem.displayName =
+  DropdownMenuPrimitive.CheckboxItem.displayName;
+
 const DropdownMenuLabel = forwardRef<
   ElementRef<typeof DropdownMenuPrimitive.Label>,
   ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Label>
@@ -124,6 +149,7 @@ export {
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuCheckboxItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuRadioGroup,

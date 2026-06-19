@@ -80,8 +80,8 @@ const (
 // policy (the SDK cannot unregister), and dropping a broker barrier of
 // rate_limit or order_size while other barriers remain (broker is an Option the
 // surface cannot clear in isolation). Each returns an error wrapping
-// domain.ErrNotImplemented, which the node surfaces to its caller; closing such
-// a gap is engine-side SDK work, not an officer rebuild.
+// domain.ErrNotImplemented, which tells the node to rebuild from the persisted
+// store snapshot for policy CRUD instead of keeping store and engine divergent.
 //
 // The adapter owns the market-data service for its engine handle lifetime. The
 // service is built unconditionally and Stop closes it after stopping the engine,
@@ -118,6 +118,19 @@ type openPitEngine struct {
 	// store/engine divergence. Updated only on a successful Configure.
 	brokerPresent map[string]bool
 
+	// registry tracks live held reservations by approval id. Its mutex is the
+	// outer lock of the two-lock discipline (registry.mu -> e.mu); native handles
+	// in it are only touched under e.mu during resolution and the shutdown drain.
+	registry *reservationRegistry
+	// resStore persists reservation intents across the hold lifecycle. It is
+	// attached once at boot by the backend via SetReservationStore; nil leaves
+	// holds in memory only. Guarded by mu.
+	resStore ReservationStore
+
+	// stopSweep signals the TTL sweeper goroutine to exit; sweepWG waits for it.
+	stopSweep chan struct{}
+	sweepWG   sync.WaitGroup
+
 	mu      sync.Mutex
 	running bool
 }
@@ -142,14 +155,20 @@ func newOpenPitEngine(
 	if brokerPresent == nil {
 		brokerPresent = make(map[string]bool)
 	}
-	return &openPitEngine{
+	adapter := &openPitEngine{
 		eng:               eng,
 		sink:              newMarketDataSink(service),
 		marketDataService: service,
 		registered:        registered,
 		brokerPresent:     brokerPresent,
+		registry:          newReservationRegistry(),
+		stopSweep:         make(chan struct{}),
 		running:           eng != nil,
 	}
+	if adapter.running {
+		adapter.startSweeper()
+	}
+	return adapter
 }
 
 // BuildOpenPitEngine builds the one stage-2 OpenPit engine plus its market-data
@@ -523,14 +542,9 @@ func (e *openPitEngine) ApplyExecutionReport(
 		return ExecutionReportResult{}, fmt.Errorf("engine: apply execution report: %w", err)
 	}
 
-	outcomes := make([]domain.AdjustmentOutcomeAccepted, 0, len(result.AccountAdjustmentOutcomes))
-	if len(result.AccountAdjustmentOutcomes) > 0 {
-		outcomes = append(outcomes, outcomeAcceptedFromList(
-			result.AccountAdjustmentOutcomes, in.BaseAsset))
-	}
 	return ExecutionReportResult{
 		Blocks:   executionBlocksFrom(result.AccountBlocks, in.Account),
-		Outcomes: outcomes,
+		Outcomes: balanceOutcomesFromList(result.AccountAdjustmentOutcomes),
 	}, nil
 }
 
@@ -718,16 +732,34 @@ func (e *openPitEngine) MarketDataSink() marketdata.Sink {
 	return e.sink
 }
 
-// Stop halts the engine and releases native resources. It stops the engine
-// first, then closes the market-data service, so quote producers (the connector
-// manager) must be stopped before Stop. It is idempotent.
+// Stop halts the engine and releases native resources. It first stops the TTL
+// sweeper goroutine (which takes e.mu, so it must be quiesced before Stop holds
+// it), then under e.mu drains the reservation registry - rolling back and
+// closing every non-terminal held reservation so no native handle leaks across
+// teardown - before stopping the engine and closing the market-data service.
+// Quote producers (the connector manager) must be stopped before Stop. It is
+// idempotent.
 func (e *openPitEngine) Stop() {
+	// Quiesce the sweeper before taking e.mu: the sweeper also takes e.mu, so
+	// signalling and waiting here avoids a deadlock and a rollback racing the
+	// drain. The close is guarded so a second Stop does not close a closed
+	// channel.
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	if !e.running {
+		e.mu.Unlock()
 		return
 	}
 	e.running = false
+	close(e.stopSweep)
+	e.mu.Unlock()
+
+	e.sweepWG.Wait()
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	// Drain held reservations before the engine stops so the rollbacks reach a
+	// live handle.
+	e.drainHeldLocked()
 	if e.eng != nil {
 		e.eng.Stop()
 	}

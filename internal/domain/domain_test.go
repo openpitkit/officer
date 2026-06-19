@@ -441,3 +441,45 @@ func TestValidateLimit_UnknownPolicy(t *testing.T) {
 		t.Fatalf("expected ErrInvalid, got %v", err)
 	}
 }
+
+// --- Audit categories ---
+
+func TestAuditAction_Category(t *testing.T) {
+	t.Parallel()
+	trading := map[domain.AuditAction]bool{
+		domain.AuditActionSubmitOrder:     true,
+		domain.AuditActionExecutionReport: true,
+	}
+	for _, action := range domain.AllAuditActions() {
+		want := domain.AuditCategoryControl
+		if trading[action] {
+			want = domain.AuditCategoryTrading
+		}
+		if got := action.Category(); got != want {
+			t.Errorf("Category(%q) = %q, want %q", action, got, want)
+		}
+	}
+}
+
+func TestAuditActionsByCategory_PartitionsCatalogue(t *testing.T) {
+	t.Parallel()
+	all := domain.AllAuditActions()
+	control := domain.AuditActionsByCategory(domain.AuditCategoryControl)
+	trading := domain.AuditActionsByCategory(domain.AuditCategoryTrading)
+
+	if len(control)+len(trading) != len(all) {
+		t.Fatalf("partition sizes %d+%d != %d", len(control), len(trading), len(all))
+	}
+	if len(trading) != 2 {
+		t.Fatalf("trading category = %d actions, want 2: %+v", len(trading), trading)
+	}
+	seen := make(map[domain.AuditAction]int, len(all))
+	for _, action := range append(append([]domain.AuditAction{}, control...), trading...) {
+		seen[action]++
+	}
+	for _, action := range all {
+		if seen[action] != 1 {
+			t.Errorf("action %q appears %d times across categories, want 1", action, seen[action])
+		}
+	}
+}

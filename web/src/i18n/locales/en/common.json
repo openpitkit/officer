@@ -28,7 +28,8 @@
     "restartRequired": "Restart needed",
     "mcpAccess": "MCP access",
     "marketData": "Market Data",
-    "service": "Service"
+    "service": "Service",
+    "signingKeys": "Signing Keys"
   },
   "brand": {
     "name": "Pit Officer",

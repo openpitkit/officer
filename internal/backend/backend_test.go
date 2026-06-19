@@ -32,6 +32,7 @@ import (
 	"go.openpit.dev/officer/internal/engine"
 	"go.openpit.dev/officer/internal/marketdata"
 	"go.openpit.dev/officer/internal/node"
+	"go.openpit.dev/officer/internal/store"
 )
 
 // fakeNode records the commands routed to it and returns canned data. It never
@@ -57,17 +58,30 @@ type fakeNode struct {
 	mdInstruments    map[string][]domain.MarketDataInstrument
 	mdQuotes         []domain.MarketDataQuote
 
-	backupArchive  backup.Archive
-	backupScope    backup.Scope
-	backupCaller   domain.Caller
-	backupErr      error
-	restoreOpts    backup.RestoreOptions
-	restoreSummary backup.RestoreSummary
-	restoreSink    marketdata.Sink
-	restoreErr     error
-	resetCaller    domain.Caller
-	resetSink      marketdata.Sink
-	resetErr       error
+	backupArchive   backup.Archive
+	backupScope     backup.Scope
+	backupCaller    domain.Caller
+	backupErr       error
+	restoreOpts     backup.RestoreOptions
+	restoreSummary  backup.RestoreSummary
+	restoreSink     marketdata.Sink
+	restoreErr      error
+	resetCaller     domain.Caller
+	resetSink       marketdata.Sink
+	resetErr        error
+	orders          map[int64]domain.Order
+	nextOrderID     int64
+	holdResult      *engine.HoldResult
+	immediateResult *engine.ImmediateResult
+	submitErr       error
+	confirmErr      error
+	cancelErr       error
+	getOrderErr     error
+	reconciled      int
+	holdCalls       []string
+	confirmCalls    []string
+	cancelCalls     []string
+	auditCalls      []store.AuditEntry
 
 	getAccountErr error
 }
@@ -156,16 +170,18 @@ func (n *fakeNode) ListLimits(
 	return n.limits, nil
 }
 
-func (n *fakeNode) PutLimit(_ context.Context, limit domain.Limit, _ domain.Caller) error {
+func (n *fakeNode) PutLimit(
+	_ context.Context, limit domain.Limit, _ domain.Caller,
+) (marketdata.Sink, error) {
 	n.putLimitCalls = append(n.putLimitCalls, limit)
-	return nil
+	return n.restoreSink, nil
 }
 
 func (n *fakeNode) DeleteLimit(
 	_ context.Context, target domain.LimitTarget, _ domain.Caller,
-) error {
+) (marketdata.Sink, error) {
 	n.deleteLimitCalls = append(n.deleteLimitCalls, target)
-	return nil
+	return n.restoreSink, nil
 }
 
 func (n *fakeNode) SetAccountGroup(
@@ -242,6 +258,101 @@ func (n *fakeNode) SubmitOrder(
 	return domain.Order{}, nil
 }
 
+func (n *fakeNode) SubmitHold(
+	_ context.Context, key node.Key, o domain.Order, _ domain.Caller,
+) (domain.Order, engine.HoldResult, error) {
+	if n.submitErr != nil {
+		return domain.Order{}, engine.HoldResult{}, n.submitErr
+	}
+	n.nextOrderID++
+	order := o
+	order.ID = n.nextOrderID
+	order.Tenant = key.Tenant
+	order.Account = key.Account
+	if n.holdResult != nil {
+		if !n.holdResult.Accepted {
+			order.Status = domain.OrderStatusRejected
+			return order, *n.holdResult, nil
+		}
+		order.Status = domain.OrderStatusAccepted
+		order.LockPrices = n.holdResult.LockPrices
+		n.orders[order.ID] = order
+		return order, *n.holdResult, nil
+	}
+	order.Status = domain.OrderStatusAccepted
+	n.orders[order.ID] = order
+	result := engine.HoldResult{
+		Accepted:            true,
+		ApprovalID:          "approval-1",
+		SettlementLockPrice: "100",
+		EstimateSource:      domain.EstimateSourceLimit,
+		ExpiresAt:           time.Now().UTC().Add(2 * time.Minute),
+	}
+	n.holdCalls = append(n.holdCalls, result.ApprovalID)
+	return order, result, nil
+}
+
+func (n *fakeNode) SubmitImmediate(
+	_ context.Context, key node.Key, o domain.Order, _ domain.Caller,
+) (domain.Order, engine.ImmediateResult, error) {
+	if n.submitErr != nil {
+		return domain.Order{}, engine.ImmediateResult{}, n.submitErr
+	}
+	n.nextOrderID++
+	order := o
+	order.ID = n.nextOrderID
+	order.Tenant = key.Tenant
+	order.Account = key.Account
+	if n.immediateResult != nil {
+		if !n.immediateResult.Accepted {
+			order.Status = domain.OrderStatusRejected
+			return order, *n.immediateResult, nil
+		}
+		order.Status = domain.OrderStatusFilled
+		order.LockPrices = n.immediateResult.LockPrices
+		n.orders[order.ID] = order
+		return order, *n.immediateResult, nil
+	}
+	order.Status = domain.OrderStatusFilled
+	n.orders[order.ID] = order
+	return order, engine.ImmediateResult{
+		Accepted:            true,
+		SettlementLockPrice: "100",
+		FillQuantity:        o.AmountValue,
+		EstimateSource:      domain.EstimateSourceLimit,
+	}, nil
+}
+
+func (n *fakeNode) ConfirmHeld(
+	_ context.Context, _ domain.TenantID, orderID int64, approvalID string, _ domain.Caller,
+) (domain.Order, error) {
+	n.confirmCalls = append(n.confirmCalls, approvalID)
+	if n.confirmErr != nil {
+		return domain.Order{}, n.confirmErr
+	}
+	order := n.orders[orderID]
+	order.Status = domain.OrderStatusCommitted
+	n.orders[orderID] = order
+	return order, nil
+}
+
+func (n *fakeNode) CancelHeld(
+	_ context.Context, _ domain.TenantID, orderID int64, approvalID string, _ domain.Caller,
+) (domain.Order, error) {
+	n.cancelCalls = append(n.cancelCalls, approvalID)
+	if n.cancelErr != nil {
+		return domain.Order{}, n.cancelErr
+	}
+	order := n.orders[orderID]
+	order.Status = domain.OrderStatusCancelled
+	n.orders[orderID] = order
+	return order, nil
+}
+
+func (n *fakeNode) ReconcileOrphans(context.Context) (int, error) {
+	return n.reconciled, nil
+}
+
 func (n *fakeNode) ApplyExecutionReport(
 	context.Context, node.Key, domain.ExecutionReportInput, domain.Caller,
 ) (engine.ExecutionReportResult, error) {
@@ -249,9 +360,16 @@ func (n *fakeNode) ApplyExecutionReport(
 }
 
 func (n *fakeNode) GetOrder(
-	context.Context, domain.TenantID, int64,
+	_ context.Context, _ domain.TenantID, id int64,
 ) (domain.OrderDetail, error) {
-	return domain.OrderDetail{}, nil
+	if n.getOrderErr != nil {
+		return domain.OrderDetail{}, n.getOrderErr
+	}
+	order, ok := n.orders[id]
+	if !ok {
+		return domain.OrderDetail{}, domain.ErrNotFound
+	}
+	return domain.OrderDetail{Order: order}, nil
 }
 
 func (n *fakeNode) ListOrders(
@@ -284,6 +402,38 @@ func (n *fakeNode) ListTrades(
 
 func (n *fakeNode) ListAudit(context.Context, int) ([]domain.AuditRow, error) {
 	return n.audit, nil
+}
+
+func (n *fakeNode) ListAuditFiltered(
+	_ context.Context, filter domain.AuditFilter, _ int,
+) ([]domain.AuditRow, error) {
+	actions := make(map[domain.AuditAction]struct{}, len(filter.Actions))
+	for _, action := range filter.Actions {
+		actions[action] = struct{}{}
+	}
+	out := make([]domain.AuditRow, 0, len(n.audit))
+	for _, row := range n.audit {
+		if filter.Account != "" && row.Account != filter.Account {
+			continue
+		}
+		if filter.Source != "" && row.Source != filter.Source {
+			continue
+		}
+		if len(actions) > 0 {
+			if _, ok := actions[row.Action]; !ok {
+				continue
+			}
+		}
+		out = append(out, row)
+	}
+	return out, nil
+}
+
+func (n *fakeNode) AppendAudit(
+	_ context.Context, entry store.AuditEntry, _ domain.Caller,
+) error {
+	n.auditCalls = append(n.auditCalls, entry)
+	return nil
 }
 
 func (n *fakeNode) CheckOrder(
@@ -494,15 +644,22 @@ func (r *fakeMarketDataRuntime) PushManual(
 }
 
 func newTestService() (*backend.Service, *fakeNode) {
-	fn := &fakeNode{}
-	return backend.New(&fakeRouter{node: fn}, nil), fn
+	fn := &fakeNode{orders: make(map[int64]domain.Order)}
+	return backend.New(&fakeRouter{node: fn}, nil, nil), fn
 }
 
 func newTestServiceWithMarketDataRuntime(
 	md backend.MarketDataRuntime,
 ) (*backend.Service, *fakeNode) {
-	fn := &fakeNode{}
-	return backend.New(&fakeRouter{node: fn}, md), fn
+	fn := &fakeNode{orders: make(map[int64]domain.Order)}
+	return backend.New(&fakeRouter{node: fn}, md, nil), fn
+}
+
+// newTestServiceWithSigner builds a service with a fake signer for the approval
+// flow tests.
+func newTestServiceWithSigner(signer backend.SigningService) (*backend.Service, *fakeNode) {
+	fn := &fakeNode{orders: make(map[int64]domain.Order)}
+	return backend.New(&fakeRouter{node: fn}, nil, signer), fn
 }
 
 func TestService_ExportBackupRoutesScopeCallerAndFilename(t *testing.T) {
@@ -548,7 +705,7 @@ func TestService_ExportBackupRoutesScopeCallerAndFilename(t *testing.T) {
 func TestService_ExportBackupRouteError(t *testing.T) {
 	t.Parallel()
 	routeErr := errors.New("route failed")
-	svc := backend.New(&fakeRouter{routeErr: routeErr}, nil)
+	svc := backend.New(&fakeRouter{routeErr: routeErr}, nil, nil)
 
 	if _, _, err := svc.ExportBackup(
 		context.Background(),
@@ -603,7 +760,7 @@ func TestService_ResetDatabaseRoutesCallerAndRestartsMarketData(t *testing.T) {
 func TestService_ResetDatabaseRouteError(t *testing.T) {
 	t.Parallel()
 	routeErr := errors.New("route failed")
-	svc := backend.New(&fakeRouter{routeErr: routeErr}, nil)
+	svc := backend.New(&fakeRouter{routeErr: routeErr}, nil, nil)
 
 	if err := svc.ResetDatabase(context.Background()); !errors.Is(err, routeErr) {
 		t.Fatalf("ResetDatabase error = %v, want route error", err)
@@ -904,6 +1061,33 @@ func TestService_PutLimitSetsDefaultTenant(t *testing.T) {
 	}
 }
 
+func TestService_PutLimitReconnectsMarketDataOnRebuild(t *testing.T) {
+	t.Parallel()
+	md := &fakeMarketDataRuntime{}
+	svc, fn := newTestServiceWithMarketDataRuntime(md)
+	sink := &backendTestSink{}
+	fn.restoreSink = sink
+	ctx := context.Background()
+
+	limit := domain.Limit{
+		Target: domain.LimitTarget{
+			Policy: domain.PolicyRateLimit,
+			Scope:  domain.ScopeBroker,
+		},
+		Values: []domain.LimitValue{
+			{Kind: domain.KindMaxOrders, Value: "100"},
+			{Kind: domain.KindWindow, Value: "1s"},
+		},
+	}
+	if err := svc.PutLimit(ctx, limit); err != nil {
+		t.Fatalf("PutLimit: %v", err)
+	}
+	if md.stops != 1 || md.restarts != 1 || md.sink != sink {
+		t.Fatalf("market-data reconnect = stops:%d restarts:%d sink:%T",
+			md.stops, md.restarts, md.sink)
+	}
+}
+
 func TestService_DeleteLimitValidatesTarget(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService()
@@ -933,6 +1117,27 @@ func TestService_DeleteLimitValidatesTarget(t *testing.T) {
 	}
 	if fn.deleteLimitCalls[0].Tenant != domain.DefaultTenant {
 		t.Fatalf("tenant not defaulted on delete")
+	}
+}
+
+func TestService_DeleteLimitReconnectsMarketDataOnRebuild(t *testing.T) {
+	t.Parallel()
+	md := &fakeMarketDataRuntime{}
+	svc, fn := newTestServiceWithMarketDataRuntime(md)
+	sink := &backendTestSink{}
+	fn.restoreSink = sink
+	ctx := context.Background()
+
+	target := domain.LimitTarget{
+		Policy: domain.PolicyRateLimit,
+		Scope:  domain.ScopeBroker,
+	}
+	if err := svc.DeleteLimit(ctx, target); err != nil {
+		t.Fatalf("DeleteLimit: %v", err)
+	}
+	if md.stops != 1 || md.restarts != 1 || md.sink != sink {
+		t.Fatalf("market-data reconnect = stops:%d restarts:%d sink:%T",
+			md.stops, md.restarts, md.sink)
 	}
 }
 

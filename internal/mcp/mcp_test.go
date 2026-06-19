@@ -34,6 +34,7 @@ type fakeSource struct {
 	account       domain.Account
 	limits        []domain.Limit
 	auditRows     []domain.AuditRow
+	auditFilter   domain.AuditFilter
 	checkResult   domain.CheckResult
 	checkProbes   []domain.OrderProbe
 	accStateErr   error
@@ -91,6 +92,13 @@ func (f *fakeSource) ListAudit(_ context.Context, _ int) ([]domain.AuditRow, err
 	return f.auditRows, f.listAuditErr
 }
 
+func (f *fakeSource) ListAuditFiltered(
+	_ context.Context, filter domain.AuditFilter, _ int,
+) ([]domain.AuditRow, error) {
+	f.auditFilter = filter
+	return f.auditRows, f.listAuditErr
+}
+
 func (f *fakeSource) CheckOrder(
 	_ context.Context, probe domain.OrderProbe,
 ) (domain.CheckResult, error) {
@@ -110,6 +118,26 @@ func (f *fakeSource) SetMarketDataInstrumentEnabled(
 		enabled:        enabled,
 	})
 	return nil
+}
+
+// fakeSource stubs for the approval-token methods. They are never called in
+// the existing tests; approval_test.go overrides them via approvalFakeSource.
+func (f *fakeSource) SubmitOrderToken(
+	_ context.Context, _ domain.Order, _ string,
+) (SubmitOrderTokenResult, error) {
+	return SubmitOrderTokenResult{}, nil
+}
+
+func (f *fakeSource) ConfirmExecution(
+	_ context.Context, _ int64, _ string,
+) (domain.Order, error) {
+	return domain.Order{}, nil
+}
+
+func (f *fakeSource) CancelOrder(
+	_ context.Context, _ int64, _, _ string,
+) (domain.Order, error) {
+	return domain.Order{}, nil
 }
 
 // callHealth invokes the health tool handler directly.
@@ -533,6 +561,12 @@ func (c *captureNSource) ListAudit(_ context.Context, n int) ([]domain.AuditRow,
 	c.lastN = n
 	return nil, nil
 }
+func (c *captureNSource) ListAuditFiltered(
+	_ context.Context, _ domain.AuditFilter, n int,
+) ([]domain.AuditRow, error) {
+	c.lastN = n
+	return nil, nil
+}
 func (c *captureNSource) CheckOrder(_ context.Context, _ domain.OrderProbe) (
 	domain.CheckResult, error) {
 	return domain.CheckResult{}, nil
@@ -544,6 +578,21 @@ func (c *captureNSource) SetMarketDataInstrumentEnabled(
 }
 func (c *captureNSource) CommandEnabled(context.Context, string) (bool, error) {
 	return true, nil
+}
+func (c *captureNSource) SubmitOrderToken(
+	context.Context, domain.Order, string,
+) (SubmitOrderTokenResult, error) {
+	return SubmitOrderTokenResult{}, nil
+}
+func (c *captureNSource) ConfirmExecution(
+	context.Context, int64, string,
+) (domain.Order, error) {
+	return domain.Order{}, nil
+}
+func (c *captureNSource) CancelOrder(
+	context.Context, int64, string, string,
+) (domain.Order, error) {
+	return domain.Order{}, nil
 }
 
 // -- check_order --

@@ -14,6 +14,17 @@
     "source": {
       "ariaLabel": "Источник",
       "all": "Все источники"
+    },
+    "types": {
+      "label": "Типы событий",
+      "ariaLabel": "Фильтр по типу события",
+      "all": "Все",
+      "controlOnly": "Управление",
+      "count": "Выбрано: {{count}}",
+      "group": {
+        "control": "Управление",
+        "trading": "Торговля"
+      }
     }
   },
   "table": {

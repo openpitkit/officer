@@ -28,7 +28,8 @@
     "restartRequired": "Нужен рестарт",
     "mcpAccess": "Доступ MCP",
     "marketData": "Рыночные данные",
-    "service": "Сервис"
+    "service": "Сервис",
+    "signingKeys": "Ключи подписи"
   },
   "brand": {
     "name": "Pit Officer",

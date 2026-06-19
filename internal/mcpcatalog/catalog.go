@@ -147,7 +147,7 @@ func All() []Command {
 			AgentDescription: "Submit an order intent through pre-trade and obtain a signed approval token.",
 			Mutating:         true,
 			Protective:       true,
-			Implemented:      false,
+			Implemented:      true,
 			DefaultEnabled:   false,
 		},
 		{
@@ -156,7 +156,7 @@ func All() []Command {
 			AgentDescription: "Confirm execution (commit) of a previously approved order.",
 			Mutating:         true,
 			Protective:       true,
-			Implemented:      false,
+			Implemented:      true,
 			DefaultEnabled:   false,
 		},
 		{
@@ -165,7 +165,7 @@ func All() []Command {
 			AgentDescription: "Cancel / revoke a pending approval token or reservation.",
 			Mutating:         true,
 			Protective:       true,
-			Implemented:      false,
+			Implemented:      true,
 			DefaultEnabled:   false,
 		},
 		{

@@ -118,6 +118,12 @@ func (s *setMDErrSource) ListAudit(
 	return nil, nil
 }
 
+func (s *setMDErrSource) ListAuditFiltered(
+	context.Context, domain.AuditFilter, int,
+) ([]domain.AuditRow, error) {
+	return nil, nil
+}
+
 func (s *setMDErrSource) CheckOrder(
 	context.Context, domain.OrderProbe,
 ) (domain.CheckResult, error) {
@@ -132,6 +138,24 @@ func (s *setMDErrSource) SetMarketDataInstrumentEnabled(
 
 func (s *setMDErrSource) CommandEnabled(context.Context, string) (bool, error) {
 	return true, nil
+}
+
+func (s *setMDErrSource) SubmitOrderToken(
+	context.Context, domain.Order, string,
+) (SubmitOrderTokenResult, error) {
+	return SubmitOrderTokenResult{}, nil
+}
+
+func (s *setMDErrSource) ConfirmExecution(
+	context.Context, int64, string,
+) (domain.Order, error) {
+	return domain.Order{}, nil
+}
+
+func (s *setMDErrSource) CancelOrder(
+	context.Context, int64, string, string,
+) (domain.Order, error) {
+	return domain.Order{}, nil
 }
 
 // TestSetMarketDataInstrumentSourceFailure covers the path where the gate

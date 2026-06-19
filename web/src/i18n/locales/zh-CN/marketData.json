@@ -91,7 +91,7 @@
     },
     "finnhub": {
       "title": "Finnhub",
-      "description": "来自 Finnhub WebSocket 的实时成交价格。需要 API token；外部代码必须是 Finnhub 支持的代码。加密货币和外汇需要带交易所前缀的代码，例如 BINANCE:ETHUSDT。",
+      "description": "来自 Finnhub WebSocket 的实时成交价格。需要 API token；外部代码必须是 Finnhub 支持的代码。",
       "createHint": "创建 Finnhub 来源以接收实时成交价格。填写 API token。"
     },
     "byo": {

@@ -31,9 +31,9 @@ func TestCatalogueContract(t *testing.T) {
 		{Name: "set_market_data_instrument", Mutating: true, Protective: true, Implemented: true, DefaultEnabled: false},
 		{Name: "arm_killswitch", Mutating: true, Protective: true, Implemented: false, DefaultEnabled: false},
 		{Name: "disarm_killswitch", Mutating: true, Protective: true, Implemented: false, DefaultEnabled: false},
-		{Name: "submit_order", Mutating: true, Protective: true, Implemented: false, DefaultEnabled: false},
-		{Name: "confirm_execution", Mutating: true, Protective: true, Implemented: false, DefaultEnabled: false},
-		{Name: "cancel", Mutating: true, Protective: true, Implemented: false, DefaultEnabled: false},
+		{Name: "submit_order", Mutating: true, Protective: true, Implemented: true, DefaultEnabled: false},
+		{Name: "confirm_execution", Mutating: true, Protective: true, Implemented: true, DefaultEnabled: false},
+		{Name: "cancel", Mutating: true, Protective: true, Implemented: true, DefaultEnabled: false},
 		{Name: "get_next_token", Mutating: true, Protective: true, Implemented: false, DefaultEnabled: false},
 		{Name: "report_fill", Mutating: true, Protective: true, Implemented: false, DefaultEnabled: false},
 	}

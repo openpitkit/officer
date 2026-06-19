@@ -1,0 +1,51 @@
+{
+  "title": "签名密钥",
+
+  "currentKey": {
+    "sectionTitle": "当前活跃密钥",
+    "keyId": "密钥 ID",
+    "fingerprint": "指纹",
+    "createdAt": "创建时间",
+    "status": "状态",
+    "statusActive": "活跃",
+    "empty": "尚未配置签名密钥，请在下方生成或导入。",
+    "export": {
+      "label": "导出公钥",
+      "formatLabel": "格式",
+      "formats": {
+        "pem-pkcs8": "PEM PKCS#8",
+        "openssh": "OpenSSH (authorized_keys)",
+        "raw-base64": "原始 base64"
+      }
+    }
+  },
+
+  "manageKey": {
+    "sectionTitle": "生成或导入",
+    "modeGenerate": "生成新密钥",
+    "modeImport": "导入自有密钥",
+    "generateButton": "生成",
+    "importButton": "导入",
+    "importFormat": "密钥格式",
+    "importKeyLabel": "私钥",
+    "importKeyPlaceholder": "粘贴私钥至此…",
+    "importBusy": "导入中…",
+    "generateDialog": {
+      "title": "生成新签名密钥",
+      "description": "这将创建一个全新的 Ed25519 密钥对。当前活跃密钥将被停用。正在处理中的令牌所用的旧公钥在其过期前仍对连接器可见。",
+      "confirm": "生成"
+    },
+    "errors": {
+      "generateFailed": "密钥生成失败。",
+      "importEmpty": "请先粘贴私钥再导入。",
+      "importFailed": "导入失败。"
+    }
+  },
+
+  "eSign": {
+    "sectionTitle": "电子签名",
+    "label": "对审批令牌要求签名",
+    "description": "启用后，每个审批令牌都使用活跃的 Ed25519 密钥签名，连接器在执行前验证签名。禁用后，令牌携带完整载荷和绑定参数，但不含密码学签名——重放与有效期检查仍然生效。",
+    "busy": "保存中…"
+  }
+}

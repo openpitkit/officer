@@ -50,8 +50,16 @@ function CountsRow({ counts }: { counts: Overview["counts"] }) {
   const { t } = useTranslation("dashboard");
   const navigate = useNavigate();
   const tiles: { label: string; value: ReactNode; route: string }[] = [
-    { label: t("counts.accounts"), value: counts.accounts, route: "/accounts" },
-    { label: t("counts.groups"),   value: counts.groups,   route: "/accounts" },
+    {
+      label: t("counts.accounts"),
+      value: <SlashCount active={counts.accountsActive} total={counts.accounts} />,
+      route: "/accounts",
+    },
+    {
+      label: t("counts.groups"),
+      value: <SlashCount active={counts.groupsActive} total={counts.groups} />,
+      route: "/accounts",
+    },
     {
       label: t("counts.orders"),
       value: (
@@ -84,6 +92,16 @@ function CountsRow({ counts }: { counts: Overview["counts"] }) {
         </button>
       ))}
     </div>
+  );
+}
+
+function SlashCount({ active, total }: { active: number; total: number }) {
+  return (
+    <>
+      {active}
+      <span className="text-xl font-normal text-muted-lt"> / </span>
+      {total}
+    </>
   );
 }
 

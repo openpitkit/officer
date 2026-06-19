@@ -25,6 +25,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -43,6 +44,7 @@ type fakeService struct {
 	accounts       []domain.Account
 	limits         []domain.Limit
 	auditRows      []domain.AuditRow
+	auditFilter    domain.AuditFilter
 	groups         []domain.AccountGroup
 	balances       []domain.Balance
 	adjustments    []domain.AccountAdjustmentRecord
@@ -93,6 +95,17 @@ type fakeService struct {
 	setMcpErr    error
 	setMcpCalls  []setMcpCall
 	mdCalls      []string
+
+	// Signing / approval fields.
+	signingKey            domain.SigningKey
+	signingKeys           []domain.SigningKey
+	activePublicKey       string
+	activePublicKeyFormat string
+	noESign               bool
+	noESignSet            bool
+	approvalToken         backend.ApprovalToken
+	submitTokenMode       string
+	signingErr            error
 }
 
 type setMcpCall struct {
@@ -160,8 +173,9 @@ func (f *fakeService) ListAudit(_ context.Context, _ int) ([]domain.AuditRow, er
 	return f.auditRows, f.auditErr
 }
 func (f *fakeService) ListAuditFiltered(
-	_ context.Context, _ domain.AccountID, _ domain.Source, _ int,
+	_ context.Context, filter domain.AuditFilter, _ int,
 ) ([]domain.AuditRow, error) {
+	f.auditFilter = filter
 	return f.auditRows, f.auditErr
 }
 func (f *fakeService) ListMcpAccess(_ context.Context) ([]backend.McpCommand, error) {
@@ -324,6 +338,38 @@ func (f *fakeService) ServiceInfo(_ context.Context) (backend.ServiceInfo, error
 }
 func (f *fakeService) RestartMarketData(_ context.Context) error {
 	return f.stateErr
+}
+func (f *fakeService) GenerateSigningKey(_ context.Context) (domain.SigningKey, error) {
+	return f.signingKey, f.signingErr
+}
+func (f *fakeService) ImportSigningKey(_ context.Context, _, _ string) (domain.SigningKey, error) {
+	return f.signingKey, f.signingErr
+}
+func (f *fakeService) ListSigningKeys(_ context.Context) ([]domain.SigningKey, error) {
+	return f.signingKeys, f.signingErr
+}
+func (f *fakeService) ActivePublicKey(format string) (string, error) {
+	f.activePublicKeyFormat = format
+	return f.activePublicKey, f.signingErr
+}
+func (f *fakeService) GetNoESign(_ context.Context) (bool, error) {
+	return f.noESign, f.signingErr
+}
+func (f *fakeService) SetNoESign(_ context.Context, off bool) error {
+	f.noESignSet = off
+	return f.signingErr
+}
+func (f *fakeService) SubmitOrderToken(
+	_ context.Context, _ domain.Order, mode string,
+) (backend.ApprovalToken, error) {
+	f.submitTokenMode = mode
+	return f.approvalToken, f.signingErr
+}
+func (f *fakeService) ConfirmExecution(_ context.Context, _ int64, _ string) (domain.Order, error) {
+	return f.submitOrder, f.signingErr
+}
+func (f *fakeService) CancelOrder(_ context.Context, _ int64, _, _ string) (domain.Order, error) {
+	return f.submitOrder, f.signingErr
 }
 
 // fakeSPA returns a minimal in-memory filesystem for the SPA option.
@@ -796,6 +842,34 @@ func TestPutLimit_NotImplemented(t *testing.T) {
 	}
 }
 
+func TestPutLimit_EngineRestarting(t *testing.T) {
+	const msg = "engine restart in progress; mutating requests are rejected until rebuild completes"
+	svc := &fakeService{
+		putLimErr: fmt.Errorf("%s: %w", msg, domain.ErrEngineRestarting),
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{
+		"policy":"rate_limit","scope":"asset","asset":"AAPL",
+		"values":{"max_orders":"100","window":"1s"}
+	}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits", body))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("want 503, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "engine_restarting" {
+		t.Fatalf("want code=engine_restarting, got %v", errObj["code"])
+	}
+	if errObj["message"] != fmt.Sprintf("%s: %s", msg, domain.ErrEngineRestarting) {
+		t.Fatalf("want wrapped message, got %v", errObj["message"])
+	}
+}
+
 func TestDeleteLimit(t *testing.T) {
 	r, err := newRouter(&fakeService{})
 	if err != nil {
@@ -859,6 +933,52 @@ func TestListAudit(t *testing.T) {
 	}
 	if e["actor"] != "operator" {
 		t.Fatalf("want actor=operator, got %v", e["actor"])
+	}
+}
+
+func TestListAudit_FilterResolution(t *testing.T) {
+	tradingActions := domain.AuditActionsByCategory(domain.AuditCategoryTrading)
+	controlActions := domain.AuditActionsByCategory(domain.AuditCategoryControl)
+	cases := []struct {
+		name  string
+		query string
+		want  []domain.AuditAction
+	}{
+		{"default hides trading", "/api/v1/audit", controlActions},
+		{"category control", "/api/v1/audit?category=control", controlActions},
+		{"category trading", "/api/v1/audit?category=trading", tradingActions},
+		{"category all", "/api/v1/audit?category=all", nil},
+		{"explicit actions", "/api/v1/audit?actions=block,submit_order",
+			[]domain.AuditAction{domain.AuditActionBlock, domain.AuditActionSubmitOrder}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeService{}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tc.query, nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("want 200, got %d", rec.Code)
+			}
+			if !slices.Equal(svc.auditFilter.Actions, tc.want) {
+				t.Fatalf("actions = %+v, want %+v", svc.auditFilter.Actions, tc.want)
+			}
+		})
+	}
+}
+
+func TestListAudit_UnknownActionRejected(t *testing.T) {
+	r, err := newRouter(&fakeService{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/audit?actions=bogus", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 for unknown action, got %d", rec.Code)
 	}
 }
 

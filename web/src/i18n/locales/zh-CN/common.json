@@ -28,7 +28,8 @@
     "restartRequired": "需要重启",
     "mcpAccess": "MCP 访问",
     "marketData": "行情数据",
-    "service": "服务"
+    "service": "服务",
+    "signingKeys": "签名密钥"
   },
   "brand": {
     "name": "Pit Officer",

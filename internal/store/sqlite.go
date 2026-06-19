@@ -572,15 +572,47 @@ func (s *sqliteStore) AppendAudit(ctx context.Context, entry AuditEntry) error {
 
 // ListAudit returns the most recent n audit rows, newest first.
 func (s *sqliteStore) ListAudit(ctx context.Context, n int) ([]domain.AuditRow, error) {
+	return s.ListAuditFiltered(ctx, domain.AuditFilter{}, n)
+}
+
+// ListAuditFiltered returns the most recent n audit rows matching the filter,
+// newest first. The account, source, and action include-set are applied in SQL
+// so the LIMIT bounds the already-filtered set: control rows are not crowded out
+// by trading volume. A zero-value filter matches all rows.
+func (s *sqliteStore) ListAuditFiltered(
+	ctx context.Context, filter domain.AuditFilter, n int,
+) ([]domain.AuditRow, error) {
 	if n <= 0 {
 		return make([]domain.AuditRow, 0), nil
 	}
-	rows, err := s.db.QueryContext(
-		ctx,
-		`SELECT id, at, actor, action, tenant, account, detail, source FROM audit
-		 ORDER BY id DESC LIMIT ?`,
-		n,
+	var (
+		where []string
+		args  []any
 	)
+	if filter.Account != "" {
+		where = append(where, "account = ?")
+		args = append(args, string(filter.Account))
+	}
+	if filter.Source != "" {
+		where = append(where, "source = ?")
+		args = append(args, string(filter.Source))
+	}
+	if len(filter.Actions) > 0 {
+		placeholders := make([]string, len(filter.Actions))
+		for i, action := range filter.Actions {
+			placeholders[i] = "?"
+			args = append(args, string(action))
+		}
+		where = append(where, "action IN ("+strings.Join(placeholders, ",")+")")
+	}
+	query := "SELECT id, at, actor, action, tenant, account, detail, source FROM audit"
+	if len(where) > 0 {
+		query += " WHERE " + strings.Join(where, " AND ")
+	}
+	query += " ORDER BY id DESC LIMIT ?"
+	args = append(args, n)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: list audit: %w", err)
 	}
@@ -2277,4 +2309,298 @@ func scanAccountRow(row *sql.Row) (domain.Account, error) {
 // "UNIQUE constraint failed".
 func isSQLiteUnique(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
+}
+
+// --- Signing keys -----------------------------------------------------------
+
+// UpsertSigningKey inserts or replaces a signing key.
+func (s *sqliteStore) UpsertSigningKey(
+	ctx context.Context, key domain.SigningKey,
+) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT OR REPLACE INTO signing_keys
+		 (key_id, alg, private_key, public_key, created_at, active)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		key.KeyID, key.Alg, key.PrivateKey, key.PublicKey,
+		key.CreatedAt.UTC().Format(time.RFC3339Nano),
+		key.Active,
+	)
+	if err != nil {
+		return fmt.Errorf("store: upsert signing key: %w", err)
+	}
+	return nil
+}
+
+// GetActiveSigningKey returns the active key with PrivateKey populated.
+func (s *sqliteStore) GetActiveSigningKey(
+	ctx context.Context,
+) (domain.SigningKey, bool, error) {
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT key_id, alg, private_key, public_key, created_at, active
+		 FROM signing_keys WHERE active = 1 LIMIT 1`,
+	)
+	k, err := scanSigningKeyRow(row, true)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.SigningKey{}, false, nil
+	}
+	if err != nil {
+		return domain.SigningKey{}, false, fmt.Errorf("store: get active signing key: %w", err)
+	}
+	return k, true, nil
+}
+
+// GetSigningKey returns the key identified by keyID with PrivateKey populated.
+func (s *sqliteStore) GetSigningKey(
+	ctx context.Context, keyID string,
+) (domain.SigningKey, error) {
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT key_id, alg, private_key, public_key, created_at, active
+		 FROM signing_keys WHERE key_id = ?`,
+		keyID,
+	)
+	k, err := scanSigningKeyRow(row, true)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.SigningKey{}, fmt.Errorf("signing key %q: %w", keyID, domain.ErrNotFound)
+	}
+	if err != nil {
+		return domain.SigningKey{}, fmt.Errorf("store: get signing key: %w", err)
+	}
+	return k, nil
+}
+
+// ListSigningKeys returns all keys ordered by created_at DESC. PrivateKey is
+// NOT populated.
+func (s *sqliteStore) ListSigningKeys(ctx context.Context) ([]domain.SigningKey, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT key_id, alg, public_key, created_at, active
+		 FROM signing_keys ORDER BY created_at DESC`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("store: list signing keys: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	keys := make([]domain.SigningKey, 0)
+	for rows.Next() {
+		k, err := scanSigningKeyPublic(rows)
+		if err != nil {
+			return nil, err
+		}
+		keys = append(keys, k)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: iterate signing keys: %w", err)
+	}
+	return keys, nil
+}
+
+// DeactivateAllSigningKeys sets active=0 for every key.
+func (s *sqliteStore) DeactivateAllSigningKeys(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE signing_keys SET active = 0`)
+	if err != nil {
+		return fmt.Errorf("store: deactivate signing keys: %w", err)
+	}
+	return nil
+}
+
+// GetSigningConfig returns the value for key. The bool is false when absent.
+func (s *sqliteStore) GetSigningConfig(
+	ctx context.Context, key string,
+) (string, bool, error) {
+	var value string
+	err := s.db.QueryRowContext(
+		ctx,
+		`SELECT value FROM signing_config WHERE key = ?`,
+		key,
+	).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("store: get signing config %q: %w", key, err)
+	}
+	return value, true, nil
+}
+
+// SetSigningConfig upserts a signing config value.
+func (s *sqliteStore) SetSigningConfig(
+	ctx context.Context, key, value string,
+) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT OR REPLACE INTO signing_config (key, value) VALUES (?, ?)`,
+		key, value,
+	)
+	if err != nil {
+		return fmt.Errorf("store: set signing config %q: %w", key, err)
+	}
+	return nil
+}
+
+// scanSigningKeyRow scans one signing key from a *sql.Row.
+// withPrivate controls whether PrivateKey is populated in the result.
+func scanSigningKeyRow(row *sql.Row, withPrivate bool) (domain.SigningKey, error) {
+	var keyID, alg, createdAt string
+	var privateKey, publicKey []byte
+	var active bool
+	if err := row.Scan(&keyID, &alg, &privateKey, &publicKey, &createdAt, &active); err != nil {
+		return domain.SigningKey{}, err
+	}
+	return buildSigningKey(keyID, alg, privateKey, publicKey, createdAt, active, withPrivate)
+}
+
+// scanSigningKey scans one signing key from a *sql.Rows cursor.
+// withPrivate controls whether PrivateKey is populated in the result.
+func scanSigningKey(rows *sql.Rows, withPrivate bool) (domain.SigningKey, error) {
+	var keyID, alg, createdAt string
+	var privateKey, publicKey []byte
+	var active bool
+	if err := rows.Scan(&keyID, &alg, &privateKey, &publicKey, &createdAt, &active); err != nil {
+		return domain.SigningKey{}, fmt.Errorf("store: scan signing key: %w", err)
+	}
+	return buildSigningKey(keyID, alg, privateKey, publicKey, createdAt, active, withPrivate)
+}
+
+func scanSigningKeyPublic(rows *sql.Rows) (domain.SigningKey, error) {
+	var keyID, alg, createdAt string
+	var publicKey []byte
+	var active bool
+	if err := rows.Scan(&keyID, &alg, &publicKey, &createdAt, &active); err != nil {
+		return domain.SigningKey{}, fmt.Errorf("store: scan signing key: %w", err)
+	}
+	return buildSigningKey(keyID, alg, nil, publicKey, createdAt, active, false)
+}
+
+func buildSigningKey(
+	keyID, alg string,
+	privateKey, publicKey []byte,
+	createdAt string,
+	active, withPrivate bool,
+) (domain.SigningKey, error) {
+	t, err := time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return domain.SigningKey{}, fmt.Errorf("store: parse signing key created_at: %w", err)
+	}
+	k := domain.SigningKey{
+		CreatedAt: t,
+		KeyID:     keyID,
+		Alg:       alg,
+		PublicKey: publicKey,
+		Active:    active,
+	}
+	if withPrivate {
+		k.PrivateKey = privateKey
+	}
+	return k, nil
+}
+
+// --- Reservation intents ----------------------------------------------------
+
+// UpsertReservationIntent inserts or replaces a reservation intent row.
+func (s *sqliteStore) UpsertReservationIntent(
+	ctx context.Context, intent domain.ReservationIntent,
+) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT OR REPLACE INTO reservation_intents
+		 (approval_id, order_id, account, params_json, lock_prices_json, issued_at, expires_at, state)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		intent.ApprovalID,
+		intent.OrderID,
+		string(intent.Account),
+		intent.ParamsJSON,
+		intent.LockPricesJSON,
+		intent.IssuedAt.UTC().Format(time.RFC3339Nano),
+		intent.ExpiresAt.UTC().Format(time.RFC3339Nano),
+		string(intent.State),
+	)
+	if err != nil {
+		return fmt.Errorf("store: upsert reservation intent: %w", err)
+	}
+	return nil
+}
+
+// ListOpenReservationIntents returns all intents in the 'held' state.
+func (s *sqliteStore) ListOpenReservationIntents(
+	ctx context.Context,
+) ([]domain.ReservationIntent, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT approval_id, order_id, account, params_json, lock_prices_json, issued_at, expires_at, state
+		 FROM reservation_intents WHERE state = 'held'`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("store: list open reservation intents: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	intents := make([]domain.ReservationIntent, 0)
+	for rows.Next() {
+		intent, err := scanReservationIntent(rows)
+		if err != nil {
+			return nil, err
+		}
+		intents = append(intents, intent)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: iterate reservation intents: %w", err)
+	}
+	return intents, nil
+}
+
+// SetReservationIntentState updates the state of the identified intent.
+func (s *sqliteStore) SetReservationIntentState(
+	ctx context.Context,
+	approvalID string,
+	state domain.ReservationIntentState,
+) error {
+	res, err := s.db.ExecContext(
+		ctx,
+		`UPDATE reservation_intents SET state = ? WHERE approval_id = ?`,
+		string(state), approvalID,
+	)
+	if err != nil {
+		return fmt.Errorf("store: set reservation intent state: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: set reservation intent state rows: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("reservation intent %q: %w", approvalID, domain.ErrNotFound)
+	}
+	return nil
+}
+
+// scanReservationIntent scans one reservation intent from a *sql.Rows cursor.
+func scanReservationIntent(rows *sql.Rows) (domain.ReservationIntent, error) {
+	var approvalID, account, paramsJSON, lockPricesJSON, issuedAt, expiresAt, state string
+	var orderID int64
+	if err := rows.Scan(
+		&approvalID, &orderID, &account, &paramsJSON, &lockPricesJSON, &issuedAt, &expiresAt, &state,
+	); err != nil {
+		return domain.ReservationIntent{}, fmt.Errorf("store: scan reservation intent: %w", err)
+	}
+	issued, err := time.Parse(time.RFC3339Nano, issuedAt)
+	if err != nil {
+		return domain.ReservationIntent{}, fmt.Errorf("store: parse reservation intent issued_at: %w", err)
+	}
+	expires, err := time.Parse(time.RFC3339Nano, expiresAt)
+	if err != nil {
+		return domain.ReservationIntent{}, fmt.Errorf("store: parse reservation intent expires_at: %w", err)
+	}
+	return domain.ReservationIntent{
+		IssuedAt:       issued,
+		ExpiresAt:      expires,
+		ApprovalID:     approvalID,
+		OrderID:        orderID,
+		Account:        domain.AccountID(account),
+		ParamsJSON:     paramsJSON,
+		LockPricesJSON: lockPricesJSON,
+		State:          domain.ReservationIntentState(state),
+	}, nil
 }

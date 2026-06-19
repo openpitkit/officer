@@ -104,6 +104,18 @@ func executionReportDetail(in domain.ExecutionReportInput, blocks int) string {
 		in.OrderID, in.Account, in.BaseAsset, in.QuoteAsset, in.FillQuantity, status, blocks)
 }
 
+// engineBlockDetail renders one engine-initiated (kill-switch) account block,
+// naming the triggering order and the engine's stable reject code and reason so
+// an operator can see why the account was blocked.
+func engineBlockDetail(orderID int64, block domain.ExecutionAccountBlock) string {
+	detail := fmt.Sprintf("engine blocked account %s order %d code=%s: %s",
+		block.Account, orderID, block.Code, block.Reason)
+	if block.Details != "" {
+		detail += " (" + block.Details + ")"
+	}
+	return detail
+}
+
 // targetDetail renders the policy/scope/account/asset axes of a target.
 func targetDetail(target domain.LimitTarget) string {
 	var b strings.Builder

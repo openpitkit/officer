@@ -26,6 +26,7 @@
 //   /market-data   → Market Data
 //   /audit         → Audit
 //   /mcp-access    → MCP access
+//   /signing-keys  → Signing Keys
 //   /service       → Service
 //
 // Per-account filtering uses query params (?account=, ?source=) rather than
@@ -46,6 +47,7 @@ import { McpAccess } from "@/pages/McpAccess";
 import { Positions } from "@/pages/Positions";
 import { Orders } from "@/pages/Orders";
 import { Service } from "@/pages/Service";
+import { SigningKeys } from "@/pages/SigningKeys";
 
 export default function App() {
   return (
@@ -66,6 +68,7 @@ export default function App() {
             <Route path="/market-data" element={<MarketData />} />
             <Route path="/audit" element={<Audit />} />
             <Route path="/mcp-access" element={<McpAccess />} />
+            <Route path="/signing-keys" element={<SigningKeys />} />
             <Route path="/service" element={<Service />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

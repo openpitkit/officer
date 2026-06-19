@@ -107,11 +107,13 @@ function PolicyDescription({ policy }: { policy: Policy | typeof ALL }) {
 function DeleteConfirm({
   target,
   open,
+  requiresEngineRebuild,
   onOpenChange,
   onDone,
 }: {
   target: Limit | null;
   open: boolean;
+  requiresEngineRebuild: boolean;
   onOpenChange: (open: boolean) => void;
   onDone: () => void;
 }) {
@@ -148,16 +150,23 @@ function DeleteConfirm({
         <AlertDialogHeader>
           <AlertDialogTitle>{t("delete.title")}</AlertDialogTitle>
           <AlertDialogDescription>
-            {t("delete.description", {
-              policy: policyLabel(tc, target?.policy ?? ""),
-              scope: scopeLabel(tc, target?.scope ?? ""),
-              account: target?.account
-                ? t("delete.accountFragment", { account: target.account })
-                : "",
-              asset: target?.asset
-                ? t("delete.assetFragment", { asset: target.asset })
-                : "",
-            })}
+            <span className="block">
+              {t("delete.description", {
+                policy: policyLabel(tc, target?.policy ?? ""),
+                scope: scopeLabel(tc, target?.scope ?? ""),
+                account: target?.account
+                  ? t("delete.accountFragment", { account: target.account })
+                  : "",
+                asset: target?.asset
+                  ? t("delete.assetFragment", { asset: target.asset })
+                  : "",
+              })}
+            </span>
+            {requiresEngineRebuild && (
+              <span className="mt-2 block">
+                {t("restartConfirm.description")}
+              </span>
+            )}
           </AlertDialogDescription>
         </AlertDialogHeader>
         {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
@@ -311,6 +320,22 @@ export function Limits() {
     return load.data.filter((l) => l.policy === policyFilter);
   }, [load, policyFilter]);
 
+  const policyCounts = useMemo<Partial<Record<Policy, number>>>(() => {
+    const counts: Partial<Record<Policy, number>> = {};
+    if (load.state !== "ready") {
+      return counts;
+    }
+    for (const limit of load.data) {
+      const policy = limit.policy as Policy;
+      counts[policy] = (counts[policy] ?? 0) + 1;
+    }
+    return counts;
+  }, [load]);
+
+  const deleteRequiresEngineRebuild =
+    deleteTarget !== null &&
+    (policyCounts[deleteTarget.policy as Policy] ?? 0) === 1;
+
   const openAdd = () => {
     setEditing(null);
     setDialogOpen(true);
@@ -412,12 +437,14 @@ export function Limits() {
         initialAccount={initialAccount}
         assetSuggestions={assetSuggestions}
         accountSuggestions={accountSuggestions}
+        policyCounts={policyCounts}
         onOpenChange={setDialogOpen}
         onSaved={reload}
       />
       <DeleteConfirm
         target={deleteTarget}
         open={deleteTarget !== null}
+        requiresEngineRebuild={deleteRequiresEngineRebuild}
         onOpenChange={(next) => {
           if (!next) {
             setDeleteTarget(null);

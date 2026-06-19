@@ -97,7 +97,7 @@ type Service interface {
 	DeleteLimit(ctx context.Context, target domain.LimitTarget) error
 	ListAudit(ctx context.Context, count int) ([]domain.AuditRow, error)
 	ListAuditFiltered(
-		ctx context.Context, account domain.AccountID, source domain.Source, count int,
+		ctx context.Context, filter domain.AuditFilter, count int,
 	) ([]domain.AuditRow, error)
 
 	ListMcpAccess(ctx context.Context) ([]backend.McpCommand, error)
@@ -157,6 +157,19 @@ type Service interface {
 
 	Overview(ctx context.Context, since time.Time) (backend.Overview, error)
 	ServiceInfo(ctx context.Context) (backend.ServiceInfo, error)
+
+	// Signing key management.
+	GenerateSigningKey(ctx context.Context) (domain.SigningKey, error)
+	ImportSigningKey(ctx context.Context, material, format string) (domain.SigningKey, error)
+	ListSigningKeys(ctx context.Context) ([]domain.SigningKey, error)
+	ActivePublicKey(format string) (string, error)
+	GetNoESign(ctx context.Context) (bool, error)
+	SetNoESign(ctx context.Context, off bool) error
+
+	// Approval token flow.
+	SubmitOrderToken(ctx context.Context, o domain.Order, mode string) (backend.ApprovalToken, error)
+	ConfirmExecution(ctx context.Context, orderID int64, token string) (domain.Order, error)
+	CancelOrder(ctx context.Context, orderID int64, token, reason string) (domain.Order, error)
 }
 
 // LogSource is the read seam over the in-memory log tail. It is satisfied by
@@ -292,6 +305,16 @@ func mountV1(r chi.Router, svc Service, logs LogSource) {
 
 	r.Get("/mcp-access", handleListMcpAccess(svc))
 	r.Put("/mcp-access/{command}", handleSetMcpAccess(svc))
+
+	r.Post("/signing/keys/generate", handleGenerateSigningKey(svc))
+	r.Post("/signing/keys/import", handleImportSigningKey(svc))
+	r.Get("/signing/keys", handleListSigningKeys(svc))
+	r.Get("/signing/keys/active/public", handleGetActivePublicKey(svc))
+	r.Get("/signing/config", handleGetSigningConfig(svc))
+	r.Put("/signing/config", handleSetSigningConfig(svc))
+	r.Post("/orders/{id}/submit", handleSubmitOrderToken(svc))
+	r.Post("/orders/{id}/confirm", handleConfirmExecution(svc))
+	r.Post("/orders/{id}/cancel", handleCancelOrder(svc))
 
 	r.Get("/market-data", handleListMarketData(svc))
 	r.Post("/market-data/restart", handleRestartMarketData(svc))
@@ -838,10 +861,12 @@ func handleDeleteLimit(svc Service) http.HandlerFunc {
 	}
 }
 
-// handleListAudit handles GET /api/v1/audit[?account=&source=&limit=100]. The
-// optional account and source filters narrow the trail; trading entities are
-// served by the orders/trades/adjustments endpoints, keeping audit and
-// trading-ops separated.
+// handleListAudit handles
+// GET /api/v1/audit[?account=&source=&actions=&category=&limit=100]. account
+// and source narrow the trail. The action filter resolves from an explicit
+// ?actions=a,b include-list when present, else from ?category (control |
+// trading | all); it defaults to control so the high-volume trading stream
+// (order submissions and execution reports) is hidden unless asked for.
 func handleListAudit(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		n, err := limitParam(r, 100, auditCapREST)
@@ -850,8 +875,17 @@ func handleListAudit(svc Service) http.HandlerFunc {
 			return
 		}
 		q := r.URL.Query()
-		rows, err := svc.ListAuditFiltered(r.Context(),
-			domain.AccountID(q.Get("account")), domain.Source(q.Get("source")), n)
+		actions, err := auditActionsFromQuery(q)
+		if err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		filter := domain.AuditFilter{
+			Account: domain.AccountID(q.Get("account")),
+			Source:  domain.Source(q.Get("source")),
+			Actions: actions,
+		}
+		rows, err := svc.ListAuditFiltered(r.Context(), filter, n)
 		if err != nil {
 			writeErr(w, err)
 			return
@@ -861,6 +895,41 @@ func handleListAudit(svc Service) http.HandlerFunc {
 			dtos = append(dtos, toAuditDTO(row))
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"entries": dtos})
+	}
+}
+
+// auditActionsFromQuery resolves the audit action include-set from the request.
+// An explicit ?actions=a,b list wins (each name validated); otherwise ?category
+// selects a group - "all" disables the action filter, "trading" or "control"
+// pick a category - defaulting to control when both are absent. A nil result
+// means no action filter (all actions).
+func auditActionsFromQuery(q url.Values) ([]domain.AuditAction, error) {
+	if raw := strings.TrimSpace(q.Get("actions")); raw != "" {
+		valid := make(map[domain.AuditAction]struct{})
+		for _, action := range domain.AllAuditActions() {
+			valid[action] = struct{}{}
+		}
+		var actions []domain.AuditAction
+		for _, name := range strings.Split(raw, ",") {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+			action := domain.AuditAction(name)
+			if _, ok := valid[action]; !ok {
+				return nil, fmt.Errorf("unknown audit action %q", name)
+			}
+			actions = append(actions, action)
+		}
+		return actions, nil
+	}
+	switch q.Get("category") {
+	case "all":
+		return nil, nil
+	case string(domain.AuditCategoryTrading):
+		return domain.AuditActionsByCategory(domain.AuditCategoryTrading), nil
+	default:
+		return domain.AuditActionsByCategory(domain.AuditCategoryControl), nil
 	}
 }
 
@@ -1662,6 +1731,223 @@ func handleListTrades(svc Service) http.HandlerFunc {
 	}
 }
 
+// --- signing keys -----------------------------------------------------------
+
+// handleGenerateSigningKey handles POST /api/v1/signing/keys/generate. It
+// generates a fresh Ed25519 keypair, makes it the sole active signing key, and
+// returns it without private material.
+func handleGenerateSigningKey(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		key, err := svc.GenerateSigningKey(r.Context())
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"key": toSigningKeyDTO(key)})
+	}
+}
+
+// handleImportSigningKey handles POST /api/v1/signing/keys/import. The body
+// carries the raw key material and the format (pem-pkcs8 | openssh | raw-base64).
+func handleImportSigningKey(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req signingKeyImportRequestDTO
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			return
+		}
+		if req.Key == "" {
+			writeErrMsg(w, http.StatusBadRequest, "signing", "key material is required")
+			return
+		}
+		if req.Format == "" {
+			writeErrMsg(w, http.StatusBadRequest, "signing", "format is required")
+			return
+		}
+		key, err := svc.ImportSigningKey(r.Context(), req.Key, req.Format)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"key": toSigningKeyDTO(key)})
+	}
+}
+
+// handleListSigningKeys handles GET /api/v1/signing/keys. It returns all keys
+// including inactive ones (connectors need public keys to verify in-flight
+// tokens). Private material is never returned.
+func handleListSigningKeys(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		keys, err := svc.ListSigningKeys(r.Context())
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		dtos := make([]signingKeyDTO, 0, len(keys))
+		for _, k := range keys {
+			dtos = append(dtos, toSigningKeyDTO(k))
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"keys": dtos})
+	}
+}
+
+// handleGetActivePublicKey handles GET /api/v1/signing/keys/active/public. The
+// optional ?format= parameter selects the export format
+// (pem-pkcs8 | openssh | raw-base64); the default is pem-pkcs8.
+func handleGetActivePublicKey(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		format := r.URL.Query().Get("format")
+		if format == "" {
+			format = "pem-pkcs8"
+		}
+		switch format {
+		case "pem-pkcs8", "openssh", "raw-base64":
+			// valid
+		default:
+			writeErrMsg(w, http.StatusBadRequest, "signing",
+				"format must be pem-pkcs8, openssh, or raw-base64")
+			return
+		}
+		pub, err := svc.ActivePublicKey(format)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, publicKeyDTO{PublicKey: pub})
+	}
+}
+
+// handleGetSigningConfig handles GET /api/v1/signing/config. It returns the
+// current signing configuration (the global eSign-off flag).
+func handleGetSigningConfig(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		noESign, err := svc.GetNoESign(r.Context())
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, signingConfigDTO{NoESign: noESign})
+	}
+}
+
+// handleSetSigningConfig handles PUT /api/v1/signing/config. The body carries
+// the new eSign-off state.
+func handleSetSigningConfig(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req signingConfigDTO
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			return
+		}
+		if err := svc.SetNoESign(r.Context(), req.NoESign); err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, signingConfigDTO{NoESign: req.NoESign})
+	}
+}
+
+// --- approval token ---------------------------------------------------------
+
+// handleSubmitOrderToken handles POST /api/v1/orders/{id}/submit. The body
+// carries the submit mode (hold | immediate). It resolves the stored order,
+// runs the engine pre-trade in the given mode, and issues a signed approval
+// token on accept.
+func handleSubmitOrderToken(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		orderID, err := pathInt64(r)
+		if err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		var req submitOrderTokenRequestDTO
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			return
+		}
+		mode := req.Mode
+		if mode == "" {
+			mode = "immediate"
+		}
+		if mode != "hold" && mode != "immediate" {
+			writeErrMsg(w, http.StatusBadRequest, "signing", "mode must be hold or immediate")
+			return
+		}
+		detail, err := svc.GetOrder(r.Context(), orderID)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		tok, err := svc.SubmitOrderToken(r.Context(), detail.Order, mode)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, approvalTokenDTO{
+			Token:     tok.Token,
+			KeyID:     tok.KeyID,
+			ExpiresAt: tok.ExpiresAt.Format(time.RFC3339Nano),
+			OrderID:   tok.OrderID,
+		})
+	}
+}
+
+// handleConfirmExecution handles POST /api/v1/orders/{id}/confirm. The body
+// carries the approval token; the handler verifies it and commits the held
+// reservation.
+func handleConfirmExecution(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		orderID, err := pathInt64(r)
+		if err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		var req confirmExecutionRequestDTO
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			return
+		}
+		if req.Token == "" {
+			writeErrMsg(w, http.StatusBadRequest, "signing", "token is required")
+			return
+		}
+		order, err := svc.ConfirmExecution(r.Context(), orderID, req.Token)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"order": toOrderDTO(order)})
+	}
+}
+
+// handleCancelOrder handles POST /api/v1/orders/{id}/cancel. The body carries
+// the approval token and an optional reason; the handler verifies the token and
+// rolls back the held reservation.
+func handleCancelOrder(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		orderID, err := pathInt64(r)
+		if err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		var req cancelOrderRequestDTO
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			return
+		}
+		if req.Token == "" {
+			writeErrMsg(w, http.StatusBadRequest, "signing", "token is required")
+			return
+		}
+		order, err := svc.CancelOrder(r.Context(), orderID, req.Token, req.Reason)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"order": toOrderDTO(order)})
+	}
+}
+
 // --- dashboard / service ----------------------------------------------------
 
 // handleOverview handles GET /api/v1/overview. The optional ?since= query
@@ -1793,7 +2079,8 @@ func pathAccountID(r *http.Request) (domain.AccountID, error) {
 
 // writeErr maps a domain sentinel error to the appropriate HTTP status and
 // JSON error body. The codes are: ErrInvalid -> 400 validation, ErrNotFound ->
-// 404 not_found, ErrAlreadyExists -> 409 conflict, ErrNotImplemented -> 501
+// 404 not_found, ErrAlreadyExists/ErrConflict -> 409 conflict,
+// ErrEngineRestarting -> 503 engine_restarting, ErrNotImplemented -> 501
 // not_implemented (the message is surfaced so the operator sees which SDK
 // capability is missing), and anything else -> 500 internal. The specific
 // sentinels take precedence over the generic 500 path.
@@ -1805,6 +2092,10 @@ func writeErr(w http.ResponseWriter, err error) {
 		writeErrMsg(w, http.StatusNotFound, "not_found", err.Error())
 	case errors.Is(err, domain.ErrAlreadyExists):
 		writeErrMsg(w, http.StatusConflict, "conflict", err.Error())
+	case errors.Is(err, domain.ErrConflict):
+		writeErrMsg(w, http.StatusConflict, "conflict", err.Error())
+	case errors.Is(err, domain.ErrEngineRestarting):
+		writeErrMsg(w, http.StatusServiceUnavailable, "engine_restarting", err.Error())
 	case errors.Is(err, domain.ErrNotImplemented):
 		writeErrMsg(w, http.StatusNotImplemented, "not_implemented", err.Error())
 	case errors.Is(err, domain.ErrUpstream):

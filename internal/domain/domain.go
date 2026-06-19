@@ -41,12 +41,19 @@ var (
 	ErrNotFound      = errors.New("not found")
 	ErrAlreadyExists = errors.New("already exists")
 	ErrInvalid       = errors.New("invalid")
+	// ErrConflict marks an operation that cannot proceed because the target is
+	// already in a terminal or incompatible state - for example confirming an
+	// approval whose held reservation was already rolled back or expired. The
+	// surface layer maps it to an HTTP 409.
+	ErrConflict = errors.New("conflict")
 	// ErrNotImplemented marks an operation that needs an engine SDK capability
-	// that is not available yet. The engine is built once at process start and
-	// never rebuilt, so a change the runtime configure surface cannot express
-	// (for example adding or removing a barrier where only retuning is
-	// supported) wraps this sentinel instead of silently rebuilding.
+	// that is not available yet and cannot be represented as a full engine
+	// rebuild from persisted state.
 	ErrNotImplemented = errors.New("not implemented")
+	// ErrEngineRestarting marks a short administrative restart window where the
+	// live engine is being rebuilt from persisted state. Mutating surfaces reject
+	// new requests during that window instead of queuing work behind the restart.
+	ErrEngineRestarting = errors.New("engine restarting")
 	// ErrUpstream marks a failure to reach or get a usable answer from an
 	// external provider (e.g. a market-data REST call returning 403/429 or
 	// timing out). It is an expected operational condition, not a server bug, so
@@ -161,7 +168,97 @@ const (
 	AuditActionExportBackup    AuditAction = "export_backup"
 	AuditActionRestoreBackup   AuditAction = "restore_backup"
 	AuditActionResetDatabase   AuditAction = "reset_database"
+
+	// Signing-key lifecycle.
+	AuditActionGenerateSigningKey AuditAction = "generate_signing_key"
+	AuditActionImportSigningKey   AuditAction = "import_signing_key"
+	AuditActionSetSigningConfig   AuditAction = "set_signing_config"
+
+	// Approval token lifecycle.
+	AuditActionApprovalIssued    AuditAction = "approval_issued"
+	AuditActionApprovalConfirmed AuditAction = "approval_confirmed"
+	AuditActionApprovalCancelled AuditAction = "approval_cancelled"
 )
+
+// AuditCategory groups audit actions by operator relevance. Trading actions are
+// the high-volume order/fill stream; control actions are everything else
+// (account administration, limits, blocks, keys, backups), which an operator
+// usually wants to read without trading noise.
+type AuditCategory string
+
+const (
+	// AuditCategoryControl is the control-plane administration stream.
+	AuditCategoryControl AuditCategory = "control"
+	// AuditCategoryTrading is the high-volume order/execution stream.
+	AuditCategoryTrading AuditCategory = "trading"
+)
+
+// Category classifies an audit action. Order submissions and execution reports
+// are trading activity; every other action is control-plane.
+func (a AuditAction) Category() AuditCategory {
+	switch a {
+	case AuditActionSubmitOrder, AuditActionExecutionReport:
+		return AuditCategoryTrading
+	default:
+		return AuditCategoryControl
+	}
+}
+
+// AllAuditActions returns every audit action constant, control actions first.
+// It is the source of truth for the audit filter catalogue; new actions must be
+// added here so the default control-only listing keeps excluding trading noise.
+func AllAuditActions() []AuditAction {
+	return []AuditAction{
+		AuditActionHydrate,
+		AuditActionCreateAccount,
+		AuditActionBlock,
+		AuditActionUnblock,
+		AuditActionSetLimit,
+		AuditActionDeleteLimit,
+		AuditActionSetGroupNotes,
+		AuditActionBlockGroup,
+		AuditActionUnblockGroup,
+		AuditActionSetNotes,
+		AuditActionSetGroup,
+		AuditActionAdjustment,
+		AuditActionCreateGroup,
+		AuditActionDeleteGroup,
+		AuditActionSetMcpAccess,
+		AuditActionSetMarketData,
+		AuditActionExportBackup,
+		AuditActionRestoreBackup,
+		AuditActionResetDatabase,
+		AuditActionGenerateSigningKey,
+		AuditActionImportSigningKey,
+		AuditActionSetSigningConfig,
+		AuditActionApprovalIssued,
+		AuditActionApprovalConfirmed,
+		AuditActionApprovalCancelled,
+		AuditActionSubmitOrder,
+		AuditActionExecutionReport,
+	}
+}
+
+// AuditActionsByCategory returns every audit action in the given category,
+// in the canonical order of AllAuditActions.
+func AuditActionsByCategory(category AuditCategory) []AuditAction {
+	var out []AuditAction
+	for _, action := range AllAuditActions() {
+		if action.Category() == category {
+			out = append(out, action)
+		}
+	}
+	return out
+}
+
+// AuditFilter narrows an audit listing. A zero value disables every filter and
+// matches all rows: an empty Account or Source matches any, and a nil/empty
+// Actions matches any action; otherwise only the listed actions are returned.
+type AuditFilter struct {
+	Account AccountID
+	Source  Source
+	Actions []AuditAction
+}
 
 // AuditRow is the persisted, immutable record of a single control-plane action.
 type AuditRow struct {

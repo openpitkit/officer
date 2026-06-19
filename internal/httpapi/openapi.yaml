@@ -1081,6 +1081,8 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "501":
           $ref: "#/components/responses/NotImplementedError"
+        "503":
+          $ref: "#/components/responses/EngineRestartingError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -1114,6 +1116,8 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "503":
+          $ref: "#/components/responses/EngineRestartingError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -1128,7 +1132,12 @@ paths:
       description: >
         Returns audit rows in reverse chronological order. Optional `account`
         and `source` filters narrow the trail. `source` values: `panel`, `api`,
-        `mcp`, `system`.
+        `mcp`, `system`. The action filter resolves from an explicit
+        `actions` include-list when present, otherwise from `category`; it
+        defaults to `control`, so the high-volume trading stream (`submit_order`,
+        `execution_report`) is hidden unless requested. The action filter is
+        applied before the limit, so control rows are never crowded out by
+        trading volume.
       tags: [audit]
       parameters:
         - name: account
@@ -1142,6 +1151,23 @@ paths:
           schema:
             type: string
             enum: [panel, api, mcp, system]
+        - name: category
+          in: query
+          description: >
+            Action category shortcut, used when `actions` is absent: `control`
+            (default) hides trading, `trading` shows only the order/execution
+            stream, `all` disables the action filter.
+          schema:
+            type: string
+            enum: [control, trading, all]
+        - name: actions
+          in: query
+          description: >
+            Comma-separated list of audit action types to include (for example
+            `block,set_limit`). Overrides `category` when present. Unknown action
+            names are rejected with 400.
+          schema:
+            type: string
         - name: limit
           in: query
           description: Maximum rows to return (default 100, capped at 1000).
@@ -1762,6 +1788,13 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
 
+    EngineRestartingError:
+      description: Engine is being rebuilt; mutating requests are rejected.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
     InternalError:
       description: Internal server error.
       content:
@@ -1789,7 +1822,8 @@ components:
               type: string
               description: >
                 Machine-readable code: `validation`, `not_found`, `conflict`,
-                `precondition`, `not_implemented`, or `internal`.
+                `precondition`, `engine_restarting`, `not_implemented`, or
+                `internal`.
               example: not_found
             message:
               type: string
@@ -2125,6 +2159,32 @@ components:
           type: string
           description: Exact decimal string.
 
+    ExecutionOutcome:
+      type: object
+      required: [asset, balanceDelta, balanceResult, heldDelta, heldResult, incomingDelta, incomingResult]
+      properties:
+        asset:
+          type: string
+          description: Asset this balance effect applies to (base or quote leg).
+        balanceDelta:
+          type: string
+          description: Exact decimal string.
+        balanceResult:
+          type: string
+          description: Exact decimal string.
+        heldDelta:
+          type: string
+          description: Exact decimal string.
+        heldResult:
+          type: string
+          description: Exact decimal string.
+        incomingDelta:
+          type: string
+          description: Exact decimal string.
+        incomingResult:
+          type: string
+          description: Exact decimal string.
+
     AdjustmentRejected:
       type: object
       required: [code, reason]
@@ -2357,8 +2417,11 @@ components:
         outcomes:
           type: array
           items:
-            $ref: "#/components/schemas/AdjustmentAccepted"
-          description: Per-asset adjustment outcomes.
+            $ref: "#/components/schemas/ExecutionOutcome"
+          description: >
+            Per-asset balance effects of the fill. A spot fill settles both
+            legs, so each outcome is tagged with its own asset (the base asset
+            bought and the quote asset spent).
 
     # Limit
 
@@ -2415,12 +2478,20 @@ components:
 
     Counts:
       type: object
-      required: [accounts, groups, limits, ordersToday, ordersTotal]
+      required: [accounts, accountsActive, groups, groupsActive, limits, ordersToday, ordersTotal]
       properties:
         accounts:
           type: integer
+          description: Total accounts.
+        accountsActive:
+          type: integer
+          description: Accounts that are not blocked.
         groups:
           type: integer
+          description: Total account groups.
+        groupsActive:
+          type: integer
+          description: Account groups that are not blocked.
         limits:
           type: integer
         ordersToday:

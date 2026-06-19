@@ -153,6 +153,14 @@ type Store interface {
 	// non-positive n returns an empty slice.
 	ListAudit(ctx context.Context, n int) ([]domain.AuditRow, error)
 
+	// ListAuditFiltered returns the most recent n audit rows matching the filter,
+	// newest first, applying the account, source, and action filters in the query
+	// so the limit bounds the filtered set. A zero-value filter matches all rows;
+	// a non-positive n returns an empty slice.
+	ListAuditFiltered(
+		ctx context.Context, filter domain.AuditFilter, n int,
+	) ([]domain.AuditRow, error)
+
 	// --- MCP access control ---
 
 	// ListMcpAccess returns the stored per-command MCP enable/disable overrides,
@@ -417,6 +425,51 @@ type Store interface {
 	// ListMarketDataQuotes returns latest quotes for one instance, ordered by
 	// external symbol. An empty instanceID returns quotes for all instances.
 	ListMarketDataQuotes(ctx context.Context, instanceID string) ([]domain.MarketDataQuote, error)
+
+	// --- Signing keys ---
+
+	// UpsertSigningKey inserts or replaces a signing key row. PrivateKey must
+	// be populated; it is stored as a BLOB.
+	UpsertSigningKey(ctx context.Context, key domain.SigningKey) error
+
+	// GetActiveSigningKey returns the currently active key with PrivateKey
+	// populated. The bool is false when no active key exists.
+	GetActiveSigningKey(ctx context.Context) (domain.SigningKey, bool, error)
+
+	// GetSigningKey returns the key identified by keyID with PrivateKey
+	// populated. Returns domain.ErrNotFound when absent.
+	GetSigningKey(ctx context.Context, keyID string) (domain.SigningKey, error)
+
+	// ListSigningKeys returns all keys ordered by created_at DESC. PrivateKey
+	// is NOT populated; callers must use GetSigningKey/GetActiveSigningKey
+	// for private-key access.
+	ListSigningKeys(ctx context.Context) ([]domain.SigningKey, error)
+
+	// DeactivateAllSigningKeys sets active=0 for every signing key.
+	DeactivateAllSigningKeys(ctx context.Context) error
+
+	// GetSigningConfig returns the value for the given config key. The bool is
+	// false when no such key exists.
+	GetSigningConfig(ctx context.Context, key string) (string, bool, error)
+
+	// SetSigningConfig upserts the value for the given config key.
+	SetSigningConfig(ctx context.Context, key, value string) error
+
+	// --- Reservation intents ---
+
+	// UpsertReservationIntent inserts or replaces a reservation intent row.
+	UpsertReservationIntent(ctx context.Context, intent domain.ReservationIntent) error
+
+	// ListOpenReservationIntents returns all intents whose state is 'held'.
+	ListOpenReservationIntents(ctx context.Context) ([]domain.ReservationIntent, error)
+
+	// SetReservationIntentState updates the state of the identified intent.
+	// Returns domain.ErrNotFound when absent.
+	SetReservationIntentState(
+		ctx context.Context,
+		approvalID string,
+		state domain.ReservationIntentState,
+	) error
 
 	// Close releases the database connection. It is idempotent.
 	Close() error

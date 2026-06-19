@@ -91,7 +91,7 @@
     },
     "finnhub": {
       "title": "Finnhub",
-      "description": "Живые trade prices из Finnhub WebSocket. Нужен API token; внешние символы должны поддерживаться Finnhub. Крипта и FX требуют символа с биржей, например BINANCE:ETHUSDT.",
+      "description": "Живые trade prices из Finnhub WebSocket. Нужен API token; внешние символы должны поддерживаться Finnhub.",
       "createHint": "Создайте источник Finnhub для живых trade prices. Добавьте API token."
     },
     "byo": {

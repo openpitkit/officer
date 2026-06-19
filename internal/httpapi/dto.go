@@ -18,6 +18,8 @@
 package httpapi
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"time"
@@ -930,8 +932,20 @@ func toTradeDTO(t domain.Trade) tradeDTO {
 // executionResultDTO is the wire shape of one execution-report outcome: the
 // account blocks the engine recorded and the per-asset adjustment outcomes.
 type executionResultDTO struct {
-	Blocks   []executionBlockDTO     `json:"blocks"`
-	Outcomes []adjustmentAcceptedDTO `json:"outcomes"`
+	Blocks   []executionBlockDTO   `json:"blocks"`
+	Outcomes []executionOutcomeDTO `json:"outcomes"`
+}
+
+// executionOutcomeDTO is one per-asset balance effect of a fill, tagged with its
+// asset so the base and quote legs of a spot fill can be told apart.
+type executionOutcomeDTO struct {
+	Asset          string `json:"asset"`
+	BalanceDelta   string `json:"balanceDelta"`
+	BalanceResult  string `json:"balanceResult"`
+	HeldDelta      string `json:"heldDelta"`
+	HeldResult     string `json:"heldResult"`
+	IncomingDelta  string `json:"incomingDelta"`
+	IncomingResult string `json:"incomingResult"`
 }
 
 // executionBlockDTO is one engine-recorded account block from a report.
@@ -953,18 +967,90 @@ func toExecutionResultDTO(r engine.ExecutionReportResult) executionResultDTO {
 			Details: b.Details,
 		})
 	}
-	outcomes := make([]adjustmentAcceptedDTO, 0, len(r.Outcomes))
+	outcomes := make([]executionOutcomeDTO, 0, len(r.Outcomes))
 	for _, o := range r.Outcomes {
-		outcomes = append(outcomes, adjustmentAcceptedDTO{
-			BalanceDelta:   o.BalanceDelta,
-			BalanceResult:  o.BalanceResult,
-			HeldDelta:      o.HeldDelta,
-			HeldResult:     o.HeldResult,
-			IncomingDelta:  o.IncomingDelta,
-			IncomingResult: o.IncomingResult,
+		outcomes = append(outcomes, executionOutcomeDTO{
+			Asset:          o.Asset,
+			BalanceDelta:   o.Outcome.BalanceDelta,
+			BalanceResult:  o.Outcome.BalanceResult,
+			HeldDelta:      o.Outcome.HeldDelta,
+			HeldResult:     o.Outcome.HeldResult,
+			IncomingDelta:  o.Outcome.IncomingDelta,
+			IncomingResult: o.Outcome.IncomingResult,
 		})
 	}
 	return executionResultDTO{Blocks: blocks, Outcomes: outcomes}
+}
+
+// --- signing keys -----------------------------------------------------------
+
+// signingKeyDTO is the wire shape of one Ed25519 signing key entry. Private
+// material is NEVER present.
+type signingKeyDTO struct {
+	KeyID       string `json:"keyId"`
+	Alg         string `json:"alg"`
+	CreatedAt   string `json:"createdAt"`
+	Fingerprint string `json:"fingerprint"`
+	Active      bool   `json:"active"`
+}
+
+// signingKeyImportRequestDTO is the body of POST /signing/keys/import.
+type signingKeyImportRequestDTO struct {
+	// Key is the raw key material in the given format. Write-only on the wire.
+	Key    string `json:"key"`
+	Format string `json:"format"`
+}
+
+// signingConfigDTO is the body of GET/PUT /signing/config.
+type signingConfigDTO struct {
+	NoESign bool `json:"noESign"`
+}
+
+// publicKeyDTO is the body of GET /signing/keys/active/public.
+type publicKeyDTO struct {
+	PublicKey string `json:"publicKey"`
+}
+
+// submitOrderTokenRequestDTO is the body of POST /orders/{id}/submit.
+type submitOrderTokenRequestDTO struct {
+	Mode string `json:"mode"`
+}
+
+// approvalTokenDTO is the response of POST /orders/{id}/submit.
+type approvalTokenDTO struct {
+	Token     string `json:"token"`
+	KeyID     string `json:"keyId"`
+	ExpiresAt string `json:"expiresAt"`
+	OrderID   int64  `json:"orderId"`
+}
+
+// confirmExecutionRequestDTO is the body of POST /orders/{id}/confirm.
+type confirmExecutionRequestDTO struct {
+	Token string `json:"token"`
+}
+
+// cancelOrderRequestDTO is the body of POST /orders/{id}/cancel.
+type cancelOrderRequestDTO struct {
+	Token  string `json:"token"`
+	Reason string `json:"reason"`
+}
+
+// toSigningKeyDTO maps a domain.SigningKey onto the wire DTO. It NEVER copies
+// PrivateKey. The fingerprint is the first 8 bytes of the SHA-256 of the
+// public key, hex-encoded — the same derivation used by the signing package.
+func toSigningKeyDTO(k domain.SigningKey) signingKeyDTO {
+	fp := ""
+	if len(k.PublicKey) > 0 {
+		sum := sha256.Sum256(k.PublicKey)
+		fp = hex.EncodeToString(sum[:8])
+	}
+	return signingKeyDTO{
+		KeyID:       k.KeyID,
+		Alg:         k.Alg,
+		CreatedAt:   k.CreatedAt.UTC().Format(time.RFC3339Nano),
+		Fingerprint: fp,
+		Active:      k.Active,
+	}
 }
 
 // --- overview / service -----------------------------------------------------
@@ -977,11 +1063,13 @@ type overviewDTO struct {
 
 // countsDTO is the headline tally on the overview.
 type countsDTO struct {
-	Accounts    int `json:"accounts"`
-	Groups      int `json:"groups"`
-	Limits      int `json:"limits"`
-	OrdersToday int `json:"ordersToday"`
-	OrdersTotal int `json:"ordersTotal"`
+	Accounts       int `json:"accounts"`
+	AccountsActive int `json:"accountsActive"`
+	Groups         int `json:"groups"`
+	GroupsActive   int `json:"groupsActive"`
+	Limits         int `json:"limits"`
+	OrdersToday    int `json:"ordersToday"`
+	OrdersTotal    int `json:"ordersTotal"`
 }
 
 // activityDTO is one recent-activity entry on the overview feed.
@@ -1007,11 +1095,13 @@ func toOverviewDTO(o backend.Overview) overviewDTO {
 	}
 	return overviewDTO{
 		Counts: countsDTO{
-			Accounts:    o.Counts.Accounts,
-			Groups:      o.Counts.Groups,
-			Limits:      o.Counts.Limits,
-			OrdersToday: o.Counts.OrdersToday,
-			OrdersTotal: o.Counts.OrdersTotal,
+			Accounts:       o.Counts.Accounts,
+			AccountsActive: o.Counts.AccountsActive,
+			Groups:         o.Counts.Groups,
+			GroupsActive:   o.Counts.GroupsActive,
+			Limits:         o.Counts.Limits,
+			OrdersToday:    o.Counts.OrdersToday,
+			OrdersTotal:    o.Counts.OrdersTotal,
 		},
 		Activity: activity,
 	}

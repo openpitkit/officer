@@ -87,20 +87,20 @@ const serviceTabs: {
   labelKey: string;
   icon: LucideIcon;
 }[] = [
-  { id: "application", labelKey: "tabs.application", icon: Server },
-  { id: "api", labelKey: "tabs.api", icon: Plug },
-  { id: "database", labelKey: "tabs.database", icon: Database },
-  { id: "logs", labelKey: "tabs.logs", icon: Logs },
-];
+    { id: "application", labelKey: "tabs.application", icon: Server },
+    { id: "api", labelKey: "tabs.api", icon: Plug },
+    { id: "database", labelKey: "tabs.database", icon: Database },
+    { id: "logs", labelKey: "tabs.logs", icon: Logs },
+  ];
 
 const backupWorkflowTabs: {
   id: BackupWorkflow;
   labelKey: string;
   icon: LucideIcon;
 }[] = [
-  { id: "export", labelKey: "backup.tabs.export", icon: Download },
-  { id: "restore", labelKey: "backup.tabs.restore", icon: Upload },
-];
+    { id: "export", labelKey: "backup.tabs.export", icon: Download },
+    { id: "restore", labelKey: "backup.tabs.restore", icon: Upload },
+  ];
 
 const backupSections: BackupSection[] = [
   "accounts_groups",
@@ -912,7 +912,7 @@ export function ServiceCard({
                       {info.engineVersion || tc("value.none")}
                     </span>
                     <a
-                      href="https://github.com/openpitkit/pit?officer"
+                      href="https://openpit.dev?officer"
                       target="_blank"
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-1 text-xs text-accent hover:underline"

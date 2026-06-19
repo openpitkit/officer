@@ -93,6 +93,21 @@ const setMarketDataInstrumentToolDescription = "Enable or disable one " +
 	"configured market-data instrument. Mutates Officer control-plane config " +
 	"only; protected and disabled by default."
 
+const submitOrderToolName = "submit_order"
+const submitOrderToolDescription = "Submit an order intent through pre-trade " +
+	"and obtain a signed approval token. Mutates engine state (holds or commits " +
+	"funds); protected and disabled by default."
+
+const confirmExecutionToolName = "confirm_execution"
+const confirmExecutionToolDescription = "Confirm execution (commit) of a " +
+	"previously approved hold-mode order by presenting the approval token. " +
+	"Mutates engine state; protected and disabled by default."
+
+const cancelToolName = "cancel"
+const cancelToolDescription = "Cancel / revoke a pending approval token or " +
+	"held reservation by presenting the token. Releases held funds. " +
+	"Mutates engine state; protected and disabled by default."
+
 // Source is the Pit Officer-facing seam the MCP surface reads from. It is
 // satisfied by *backend.Service via an adapter in main.go; keeping it an
 // interface keeps this package free of a dependency on the concrete
@@ -111,6 +126,10 @@ type Source interface {
 		[]domain.Limit, error)
 	// ListAudit returns the most recent n audit rows.
 	ListAudit(ctx context.Context, n int) ([]domain.AuditRow, error)
+	// ListAuditFiltered returns the most recent n audit rows matching the filter.
+	ListAuditFiltered(
+		ctx context.Context, filter domain.AuditFilter, n int,
+	) ([]domain.AuditRow, error)
 	// CheckOrder runs a non-mutating pre-trade dry-run for probe, returning
 	// whether the order would pass plus the would-be lock or block. It mutates
 	// no state.
@@ -127,6 +146,26 @@ type Source interface {
 	// which the surface fails open (treats the command as enabled) so reads are
 	// not blocked by a flaky access read.
 	CommandEnabled(ctx context.Context, command string) (bool, error)
+	// SubmitOrderToken runs the pre-trade pipeline for o in the given mode and,
+	// on accept, issues a signed approval token. mode "hold" or "immediate".
+	SubmitOrderToken(ctx context.Context, o domain.Order, mode string) (SubmitOrderTokenResult, error)
+	// ConfirmExecution verifies the token and commits the held reservation.
+	ConfirmExecution(ctx context.Context, orderID int64, token string) (domain.Order, error)
+	// CancelOrder verifies the token and rolls back the held reservation.
+	CancelOrder(ctx context.Context, orderID int64, token, reason string) (domain.Order, error)
+}
+
+// SubmitOrderTokenResult is the surface-agnostic result of issuing an approval
+// token; the MCP adapter maps it from the backend's ApprovalToken.
+type SubmitOrderTokenResult struct {
+	// Token is the base64url-encoded approval envelope.
+	Token string
+	// KeyID is the signing key id; empty under eSign-off.
+	KeyID string
+	// ExpiresAt is when the token (and held reservation) expires.
+	ExpiresAt time.Time
+	// OrderID is the store-assigned order identifier.
+	OrderID int64
 }
 
 // VersionSource reports the engine version used as the MCP server version. It
@@ -218,7 +257,13 @@ type getLimitsOutput struct {
 }
 
 type getAuditInput struct {
-	Limit int `json:"limit,omitempty" jsonschema:"Max rows to return (default 50 cap 500)"`
+	// Category selects the audit stream: "control" (default) hides the
+	// high-volume trading activity, "trading" shows only order/execution rows,
+	// "all" shows everything.
+	Category string `json:"category,omitempty" jsonschema:"Audit stream: control (default) | trading | all"`
+	// Account narrows the trail to one account; empty matches any.
+	Account string `json:"account,omitempty" jsonschema:"Account identifier filter (optional)"`
+	Limit   int    `json:"limit,omitempty" jsonschema:"Max rows to return (default 50 cap 500)"`
 }
 
 type getAuditOutput struct {
@@ -252,6 +297,45 @@ type setMarketDataInstrumentOutput struct {
 	InstanceID     string `json:"instanceId"`
 	ExternalSymbol string `json:"externalSymbol"`
 	Enabled        bool   `json:"enabled"`
+}
+
+type submitOrderInput struct {
+	Account     string `json:"account" jsonschema:"Account identifier"`
+	BaseAsset   string `json:"baseAsset" jsonschema:"Asset being bought or sold"`
+	QuoteAsset  string `json:"quoteAsset" jsonschema:"Asset used for pricing"`
+	Side        string `json:"side" jsonschema:"buy or sell"`
+	AmountKind  string `json:"amountKind" jsonschema:"quantity or volume"`
+	AmountValue string `json:"amountValue" jsonschema:"Order size as an exact decimal string"`
+	Price       string `json:"price,omitempty" jsonschema:"Limit price as an exact decimal string; omit for market"`
+	Mode        string `json:"mode,omitempty" jsonschema:"hold or immediate (default immediate)"`
+}
+
+type submitOrderOutput struct {
+	Token     string `json:"token"`
+	KeyID     string `json:"keyId"`
+	ExpiresAt string `json:"expiresAt"`
+	OrderID   int64  `json:"orderId"`
+}
+
+type confirmExecutionInput struct {
+	OrderID int64  `json:"orderId" jsonschema:"Order identifier returned by submit_order"`
+	Token   string `json:"token" jsonschema:"Approval token returned by submit_order"`
+}
+
+type confirmExecutionOutput struct {
+	OrderID int64  `json:"orderId"`
+	Status  string `json:"status"`
+}
+
+type cancelInput struct {
+	OrderID int64  `json:"orderId" jsonschema:"Order identifier returned by submit_order"`
+	Token   string `json:"token" jsonschema:"Approval token returned by submit_order"`
+	Reason  string `json:"reason,omitempty" jsonschema:"Human-readable cancellation reason"`
+}
+
+type cancelOutput struct {
+	OrderID int64  `json:"orderId"`
+	Status  string `json:"status"`
 }
 
 // accountDTO is the wire shape of a single account (identical to httpapi).
@@ -503,6 +587,21 @@ func NewServer(src Source, version VersionSource) (*sdkmcp.Server, error) {
 		Description: setMarketDataInstrumentToolDescription,
 	}, setMarketDataInstrumentHandler(src))
 
+	sdkmcp.AddTool(server, &sdkmcp.Tool{
+		Name:        submitOrderToolName,
+		Description: submitOrderToolDescription,
+	}, submitOrderHandler(src))
+
+	sdkmcp.AddTool(server, &sdkmcp.Tool{
+		Name:        confirmExecutionToolName,
+		Description: confirmExecutionToolDescription,
+	}, confirmExecutionHandler(src))
+
+	sdkmcp.AddTool(server, &sdkmcp.Tool{
+		Name:        cancelToolName,
+		Description: cancelToolDescription,
+	}, cancelHandler(src))
+
 	return server, nil
 }
 
@@ -589,6 +688,21 @@ func getLimitsHandler(src Source) func(
 	}
 }
 
+// auditCategoryActions resolves the get_audit category argument to an action
+// include-set. "all" disables the action filter; "trading" or "control" pick a
+// category; an empty or unknown value defaults to control so trading noise is
+// hidden unless asked for.
+func auditCategoryActions(category string) []domain.AuditAction {
+	switch strings.TrimSpace(category) {
+	case "all":
+		return nil
+	case string(domain.AuditCategoryTrading):
+		return domain.AuditActionsByCategory(domain.AuditCategoryTrading)
+	default:
+		return domain.AuditActionsByCategory(domain.AuditCategoryControl)
+	}
+}
+
 func getAuditHandler(src Source) func(
 	context.Context,
 	*sdkmcp.ServerSession,
@@ -610,7 +724,11 @@ func getAuditHandler(src Source) func(
 		if n > auditMaxLimit {
 			n = auditMaxLimit
 		}
-		rows, err := src.ListAudit(ctx, n)
+		filter := domain.AuditFilter{
+			Account: domain.AccountID(strings.TrimSpace(p.Arguments.Account)),
+			Actions: auditCategoryActions(p.Arguments.Category),
+		}
+		rows, err := src.ListAuditFiltered(ctx, filter, n)
 		if err != nil {
 			return toolErr[getAuditOutput]("list audit failed"), nil
 		}
@@ -700,6 +818,122 @@ func setMarketDataInstrumentHandler(src Source) func(
 		return toolOK(
 			fmt.Sprintf("market-data instrument %s/%s %s",
 				instanceID, externalSymbol, state),
+			out,
+		), nil
+	}
+}
+
+func submitOrderHandler(src Source) func(
+	context.Context,
+	*sdkmcp.ServerSession,
+	*sdkmcp.CallToolParamsFor[submitOrderInput],
+) (*sdkmcp.CallToolResultFor[submitOrderOutput], error) {
+	return func(
+		ctx context.Context,
+		_ *sdkmcp.ServerSession,
+		p *sdkmcp.CallToolParamsFor[submitOrderInput],
+	) (*sdkmcp.CallToolResultFor[submitOrderOutput], error) {
+		ctx = auth.ContextWithCaller(ctx, mcpCaller)
+		if ok, disabled := commandGateMutating[submitOrderOutput](ctx, src, submitOrderToolName); !ok {
+			return disabled, nil
+		}
+		account := domain.AccountID(strings.TrimSpace(p.Arguments.Account))
+		if account == "" {
+			return toolErr[submitOrderOutput]("account is required"), nil
+		}
+		o := domain.Order{
+			Account:     account,
+			BaseAsset:   strings.TrimSpace(p.Arguments.BaseAsset),
+			QuoteAsset:  strings.TrimSpace(p.Arguments.QuoteAsset),
+			Side:        domain.OrderSide(strings.TrimSpace(p.Arguments.Side)),
+			AmountKind:  domain.OrderAmountKind(strings.TrimSpace(p.Arguments.AmountKind)),
+			AmountValue: strings.TrimSpace(p.Arguments.AmountValue),
+			Price:       strings.TrimSpace(p.Arguments.Price),
+		}
+		mode := strings.TrimSpace(p.Arguments.Mode)
+		res, err := src.SubmitOrderToken(ctx, o, mode)
+		if err != nil {
+			return toolErr[submitOrderOutput](fmt.Sprintf("submit order failed: %s", err)), nil
+		}
+		out := submitOrderOutput{
+			Token:     res.Token,
+			KeyID:     res.KeyID,
+			ExpiresAt: res.ExpiresAt.UTC().Format(time.RFC3339),
+			OrderID:   res.OrderID,
+		}
+		return toolOK(
+			fmt.Sprintf("order %d approved token issued (expires %s)", res.OrderID, out.ExpiresAt),
+			out,
+		), nil
+	}
+}
+
+func confirmExecutionHandler(src Source) func(
+	context.Context,
+	*sdkmcp.ServerSession,
+	*sdkmcp.CallToolParamsFor[confirmExecutionInput],
+) (*sdkmcp.CallToolResultFor[confirmExecutionOutput], error) {
+	return func(
+		ctx context.Context,
+		_ *sdkmcp.ServerSession,
+		p *sdkmcp.CallToolParamsFor[confirmExecutionInput],
+	) (*sdkmcp.CallToolResultFor[confirmExecutionOutput], error) {
+		ctx = auth.ContextWithCaller(ctx, mcpCaller)
+		if ok, disabled := commandGateMutating[confirmExecutionOutput](ctx, src, confirmExecutionToolName); !ok {
+			return disabled, nil
+		}
+		if p.Arguments.OrderID == 0 {
+			return toolErr[confirmExecutionOutput]("orderId is required"), nil
+		}
+		if strings.TrimSpace(p.Arguments.Token) == "" {
+			return toolErr[confirmExecutionOutput]("token is required"), nil
+		}
+		order, err := src.ConfirmExecution(ctx, p.Arguments.OrderID, p.Arguments.Token)
+		if err != nil {
+			return toolErr[confirmExecutionOutput](fmt.Sprintf("confirm execution failed: %s", err)), nil
+		}
+		out := confirmExecutionOutput{
+			OrderID: order.ID,
+			Status:  string(order.Status),
+		}
+		return toolOK(
+			fmt.Sprintf("order %d confirmed: %s", order.ID, order.Status),
+			out,
+		), nil
+	}
+}
+
+func cancelHandler(src Source) func(
+	context.Context,
+	*sdkmcp.ServerSession,
+	*sdkmcp.CallToolParamsFor[cancelInput],
+) (*sdkmcp.CallToolResultFor[cancelOutput], error) {
+	return func(
+		ctx context.Context,
+		_ *sdkmcp.ServerSession,
+		p *sdkmcp.CallToolParamsFor[cancelInput],
+	) (*sdkmcp.CallToolResultFor[cancelOutput], error) {
+		ctx = auth.ContextWithCaller(ctx, mcpCaller)
+		if ok, disabled := commandGateMutating[cancelOutput](ctx, src, cancelToolName); !ok {
+			return disabled, nil
+		}
+		if p.Arguments.OrderID == 0 {
+			return toolErr[cancelOutput]("orderId is required"), nil
+		}
+		if strings.TrimSpace(p.Arguments.Token) == "" {
+			return toolErr[cancelOutput]("token is required"), nil
+		}
+		order, err := src.CancelOrder(ctx, p.Arguments.OrderID, p.Arguments.Token,
+			strings.TrimSpace(p.Arguments.Reason))
+		if err != nil {
+			return toolErr[cancelOutput](fmt.Sprintf("cancel failed: %s", err)), nil
+		}
+		out := cancelOutput{
+			OrderID: order.ID,
+			Status:  string(order.Status),
+		}
+		return toolOK(
+			fmt.Sprintf("order %d cancelled: %s", order.ID, order.Status),
 			out,
 		), nil
 	}

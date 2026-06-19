@@ -746,22 +746,46 @@ func outcomeAcceptedFromList(
 		if entry.Asset.String() != asset {
 			continue
 		}
-		if amt, ok := entry.Balance.Get(); ok {
-			result.BalanceDelta = amt.Delta.String()
-			result.BalanceResult = amt.Absolute.String()
+		result = outcomeAcceptedFromEntry(entry)
+	}
+	return result
+}
+
+func balanceOutcomesFromList(outcomes []accountadjustment.Outcome) []BalanceOutcome {
+	result := make([]BalanceOutcome, 0, len(outcomes))
+	for _, outcome := range outcomes {
+		entry := outcome.Entry
+		asset := entry.Asset.String()
+		if asset == "" {
+			continue
 		}
-		if amt, ok := entry.Held.Get(); ok {
-			result.HeldDelta = amt.Delta.String()
-			result.HeldResult = amt.Absolute.String()
-		}
-		if amt, ok := entry.Incoming.Get(); ok {
-			result.IncomingDelta = amt.Delta.String()
-			result.IncomingResult = amt.Absolute.String()
-		}
-		if amt, ok := entry.RealizedPnl.Get(); ok {
-			result.RealizedPnlDelta = amt.Delta.String()
-			result.RealizedPnlResult = amt.Absolute.String()
-		}
+		result = append(result, BalanceOutcome{
+			Asset:   asset,
+			Outcome: outcomeAcceptedFromEntry(entry),
+		})
+	}
+	return result
+}
+
+func outcomeAcceptedFromEntry(
+	entry accountadjustment.AccountOutcomeEntry,
+) domain.AdjustmentOutcomeAccepted {
+	var result domain.AdjustmentOutcomeAccepted
+	if amt, ok := entry.Balance.Get(); ok {
+		result.BalanceDelta = amt.Delta.String()
+		result.BalanceResult = amt.Absolute.String()
+	}
+	if amt, ok := entry.Held.Get(); ok {
+		result.HeldDelta = amt.Delta.String()
+		result.HeldResult = amt.Absolute.String()
+	}
+	if amt, ok := entry.Incoming.Get(); ok {
+		result.IncomingDelta = amt.Delta.String()
+		result.IncomingResult = amt.Absolute.String()
+	}
+	if amt, ok := entry.RealizedPnl.Get(); ok {
+		result.RealizedPnlDelta = amt.Delta.String()
+		result.RealizedPnlResult = amt.Absolute.String()
 	}
 	return result
 }
@@ -934,6 +958,67 @@ func executionReportFrom(in domain.ExecutionReportInput) (model.ExecutionReport,
 		fill.SetLock(lockBytes)
 	}
 	return report, nil
+}
+
+// immediateExecutionReport builds the synthetic fill that settles an immediate
+// order at the captured settlement lock price. The fill quantity is the order's
+// base quantity so the reservation's held amount nets to zero: a quantity order
+// fills its quantity directly; a volume order's base quantity is the volume
+// divided by the settlement price. The fill price and the lock are both the
+// settlement price, so the post-trade settlement realizes exactly what the
+// reservation held. Settle is final (the immediate fill closes the order).
+func immediateExecutionReport(o domain.Order, settlementPrice string) (model.ExecutionReport, error) {
+	quantity, err := immediateFillQuantity(o, settlementPrice)
+	if err != nil {
+		return model.ExecutionReport{}, err
+	}
+	return executionReportFrom(domain.ExecutionReportInput{
+		BaseAsset:    o.BaseAsset,
+		QuoteAsset:   o.QuoteAsset,
+		FillQuantity: quantity,
+		FillPrice:    settlementPrice,
+		LockPrice:    settlementPrice,
+		Account:      o.Account,
+		Side:         o.Side,
+		OrderID:      o.ID,
+		Final:        true,
+	})
+}
+
+// immediateFillQuantity resolves the base quantity an immediate fill settles.
+// For a quantity order it is the order amount; for a volume order it is the
+// volume converted to base quantity at the settlement price (Volume divided by
+// price). An empty settlement price on a volume order is an error: a fill cannot
+// be sized without a price.
+func immediateFillQuantity(o domain.Order, settlementPrice string) (string, error) {
+	switch o.AmountKind {
+	case domain.OrderAmountKindQuantity:
+		return o.AmountValue, nil
+	case domain.OrderAmountKindVolume:
+		if settlementPrice == "" {
+			return "", fmt.Errorf(
+				"engine: cannot size volume fill without a settlement price: %w",
+				domain.ErrInvalid)
+		}
+		volume, err := param.NewVolumeFromString(o.AmountValue)
+		if err != nil {
+			return "", fmt.Errorf(
+				"engine: order volume %q: %w: %w", o.AmountValue, err, domain.ErrInvalid)
+		}
+		price, err := param.NewPriceFromString(settlementPrice)
+		if err != nil {
+			return "", fmt.Errorf(
+				"engine: settlement price %q: %w: %w", settlementPrice, err, domain.ErrInvalid)
+		}
+		quantity, err := volume.CalculateQuantity(price)
+		if err != nil {
+			return "", fmt.Errorf("engine: size volume fill: %w", err)
+		}
+		return quantity.String(), nil
+	default:
+		return "", fmt.Errorf(
+			"engine: unknown order amount kind %q: %w", o.AmountKind, domain.ErrInvalid)
+	}
 }
 
 // lockBytesFromPrice reconstructs a default-group pre-trade lock carrying one

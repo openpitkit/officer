@@ -19,9 +19,11 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -54,8 +56,11 @@ type fakeEngine struct {
 	adjustmentAccepted *domain.AdjustmentOutcomeAccepted
 	adjustmentReject   *domain.AdjustmentOutcomeRejected
 	submitLockPrices   []string
+	holdOutcomes       []engine.BalanceOutcome
 	submitReject       *domain.OrderReject
 	execReportBlocks   []domain.ExecutionAccountBlock
+	execReportOutcomes []engine.BalanceOutcome
+	reconcileCount     int
 
 	// Canned dry-run outcome and recorded probes for the check path.
 	checkResult domain.CheckResult
@@ -70,6 +75,8 @@ type fakeEngine struct {
 	failBlock      bool
 	failAdjustment bool
 	failSubmit     bool
+	commitErr      error
+	rollbackErr    error
 	failExecReport bool
 	failGroup      bool
 }
@@ -176,6 +183,53 @@ func (e *fakeEngine) SubmitOrder(
 	return engine.OrderResult{Accepted: true, LockPrices: e.submitLockPrices}, nil
 }
 
+// ReserveHold, CommitHeld, RollbackHeld, SubmitImmediate, and ReconcileOrphans
+// satisfy the held-reservation surface of the Engine interface. The node tests
+// do not exercise the approval flow, so these are minimal stand-ins.
+func (e *fakeEngine) ReserveHold(
+	_ context.Context, o domain.Order,
+) (engine.HoldResult, error) {
+	if e.failSubmit {
+		return engine.HoldResult{}, errors.New("reserve hold failed")
+	}
+	e.submitCalls = append(e.submitCalls, o)
+	if e.submitReject != nil {
+		return engine.HoldResult{Accepted: false, Rejects: []domain.OrderReject{*e.submitReject}}, nil
+	}
+	return engine.HoldResult{
+		Accepted:   true,
+		LockPrices: e.submitLockPrices,
+		Outcomes:   e.holdOutcomes,
+	}, nil
+}
+
+func (e *fakeEngine) CommitHeld(_ context.Context, _ string) error { return e.commitErr }
+
+func (e *fakeEngine) RollbackHeld(_ context.Context, _ string) error { return e.rollbackErr }
+
+func (e *fakeEngine) SubmitImmediate(
+	_ context.Context, o domain.Order,
+) (engine.ImmediateResult, error) {
+	if e.failSubmit {
+		return engine.ImmediateResult{}, errors.New("submit immediate failed")
+	}
+	e.submitCalls = append(e.submitCalls, o)
+	if e.submitReject != nil {
+		return engine.ImmediateResult{Accepted: false, Rejects: []domain.OrderReject{*e.submitReject}}, nil
+	}
+	return engine.ImmediateResult{
+		Accepted:     true,
+		LockPrices:   e.submitLockPrices,
+		FillQuantity: o.AmountValue,
+	}, nil
+}
+
+func (e *fakeEngine) SetReservationStore(_ engine.ReservationStore) {}
+
+func (e *fakeEngine) ReconcileOrphans(_ context.Context) (int, error) {
+	return e.reconcileCount, nil
+}
+
 func (e *fakeEngine) ApplyExecutionReport(
 	_ context.Context, in domain.ExecutionReportInput,
 ) (engine.ExecutionReportResult, error) {
@@ -183,7 +237,10 @@ func (e *fakeEngine) ApplyExecutionReport(
 		return engine.ExecutionReportResult{}, errors.New("exec report failed")
 	}
 	e.execReportCalls = append(e.execReportCalls, in)
-	return engine.ExecutionReportResult{Blocks: e.execReportBlocks}, nil
+	return engine.ExecutionReportResult{
+		Blocks:   e.execReportBlocks,
+		Outcomes: e.execReportOutcomes,
+	}, nil
 }
 
 func (e *fakeEngine) RegisterGroup(
@@ -307,6 +364,209 @@ func testKey(id domain.AccountID) Key {
 // testCaller is the attribution the node tests stamp on mutations.
 var testCaller = domain.Caller{Source: domain.SourceAPI, Principal: "operator"}
 
+func TestLocalNode_ReconcileOrphansPreservesOrders(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.reconcileCount = 1
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	order, err := st.CreateOrder(ctx, domain.Order{
+		Tenant:      domain.DefaultTenant,
+		Account:     "acc-1",
+		Source:      domain.SourceAPI,
+		Principal:   "operator",
+		BaseAsset:   "AAPL",
+		QuoteAsset:  "USD",
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "10",
+		Price:       "100",
+		Status:      domain.OrderStatusAccepted,
+	})
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+	if err := st.UpsertReservationIntent(ctx, domain.ReservationIntent{
+		ApprovalID:     "approval-1",
+		OrderID:        order.ID,
+		Account:        order.Account,
+		ParamsJSON:     `{"id":1}`,
+		LockPricesJSON: `["100"]`,
+		IssuedAt:       time.Now().UTC(),
+		ExpiresAt:      time.Now().UTC().Add(2 * time.Minute),
+		State:          domain.ReservationIntentStateHeld,
+	}); err != nil {
+		t.Fatalf("UpsertReservationIntent: %v", err)
+	}
+
+	count, err := n.ReconcileOrphans(ctx)
+	if err != nil {
+		t.Fatalf("ReconcileOrphans: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("held intents = %d, want 1", count)
+	}
+	detail, err := st.GetOrder(ctx, domain.DefaultTenant, order.ID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if detail.Order.Status != domain.OrderStatusAccepted {
+		t.Fatalf("order status = %q, want accepted", detail.Order.Status)
+	}
+	events, err := st.ListOrderEvents(ctx, domain.DefaultTenant, order.ID)
+	if err != nil {
+		t.Fatalf("ListOrderEvents: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want no rollback events", events)
+	}
+}
+
+func TestLocalNode_SubmitHoldPersistsHeldBalances(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.submitLockPrices = []string{"100"}
+	eng.holdOutcomes = []engine.BalanceOutcome{{
+		Asset: "USD",
+		Outcome: domain.AdjustmentOutcomeAccepted{
+			BalanceDelta:  "-2000",
+			BalanceResult: "8000",
+			HeldDelta:     "2000",
+			HeldResult:    "2000",
+		},
+	}}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	if _, err := n.CreateAccount(ctx, testKey("acc-1"), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if err := st.UpsertBalance(ctx, domain.Balance{
+		Tenant:    domain.DefaultTenant,
+		Account:   "acc-1",
+		Asset:     "USD",
+		Available: "10000",
+	}); err != nil {
+		t.Fatalf("UpsertBalance: %v", err)
+	}
+
+	order, result, err := n.SubmitHold(ctx, testKey("acc-1"), domain.Order{
+		BaseAsset:   "AAPL",
+		QuoteAsset:  "USD",
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "20",
+		Price:       "100",
+	}, testCaller)
+	if err != nil {
+		t.Fatalf("SubmitHold: %v", err)
+	}
+	if !result.Accepted || order.Status != domain.OrderStatusAccepted {
+		t.Fatalf("hold not accepted: order=%+v result=%+v", order, result)
+	}
+	balance, ok, err := st.GetBalance(ctx, domain.DefaultTenant, "acc-1", "USD")
+	if err != nil || !ok {
+		t.Fatalf("GetBalance: %v ok=%v", err, ok)
+	}
+	if balance.Available != "8000" || balance.Held != "2000" {
+		t.Fatalf("balance = %+v, want available=8000 held=2000", balance)
+	}
+}
+
+func TestLocalNode_CancelHeldFallbackReleasesPersistedHold(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.rollbackErr = fmt.Errorf("engine: reservation %q: %w", "approval-1", domain.ErrNotFound)
+	eng.adjustmentAccepted = &domain.AdjustmentOutcomeAccepted{
+		BalanceResult: "10000",
+		HeldResult:    "0",
+	}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	order, err := st.CreateOrder(ctx, domain.Order{
+		Tenant:      domain.DefaultTenant,
+		Account:     "acc-1",
+		Source:      domain.SourceAPI,
+		Principal:   "operator",
+		BaseAsset:   "AAPL",
+		QuoteAsset:  "USD",
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "20",
+		Price:       "100",
+		Status:      domain.OrderStatusAccepted,
+	})
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+	if err := st.UpsertBalance(ctx, domain.Balance{
+		Tenant:    domain.DefaultTenant,
+		Account:   "acc-1",
+		Asset:     "USD",
+		Available: "8000",
+		Held:      "2000",
+	}); err != nil {
+		t.Fatalf("UpsertBalance: %v", err)
+	}
+	outcomes := []engine.BalanceOutcome{{
+		Asset: "USD",
+		Outcome: domain.AdjustmentOutcomeAccepted{
+			BalanceDelta: "-2000",
+			HeldDelta:    "2000",
+		},
+	}}
+	payload, err := json.Marshal(reservationIntentPayload{
+		Order:    order,
+		Outcomes: outcomes,
+	})
+	if err != nil {
+		t.Fatalf("Marshal payload: %v", err)
+	}
+	if err := st.UpsertReservationIntent(ctx, domain.ReservationIntent{
+		ApprovalID:     "approval-1",
+		OrderID:        order.ID,
+		Account:        order.Account,
+		ParamsJSON:     string(payload),
+		LockPricesJSON: `["100"]`,
+		IssuedAt:       time.Now().UTC(),
+		ExpiresAt:      time.Now().UTC().Add(2 * time.Minute),
+		State:          domain.ReservationIntentStateHeld,
+	}); err != nil {
+		t.Fatalf("UpsertReservationIntent: %v", err)
+	}
+
+	cancelled, err := n.CancelHeld(
+		ctx, domain.DefaultTenant, order.ID, "approval-1", testCaller)
+	if err != nil {
+		t.Fatalf("CancelHeld: %v", err)
+	}
+	if cancelled.Status != domain.OrderStatusCancelled {
+		t.Fatalf("order status = %q, want cancelled", cancelled.Status)
+	}
+	balance, ok, err := st.GetBalance(ctx, domain.DefaultTenant, "acc-1", "USD")
+	if err != nil || !ok {
+		t.Fatalf("GetBalance: %v ok=%v", err, ok)
+	}
+	if balance.Available != "10000" || balance.Held != "0" {
+		t.Fatalf("balance = %+v, want available=10000 held=0", balance)
+	}
+	if len(eng.adjustmentCalls) != 1 {
+		t.Fatalf("engine adjustment calls = %d, want 1", len(eng.adjustmentCalls))
+	}
+	req := eng.adjustmentCalls[0].req
+	if req.Balance == nil || req.Balance.Value != "2000" ||
+		req.Held == nil || req.Held.Value != "-2000" {
+		t.Fatalf("release request = %+v, want balance +2000 held -2000", req)
+	}
+	open, err := st.ListOpenReservationIntents(ctx)
+	if err != nil {
+		t.Fatalf("ListOpenReservationIntents: %v", err)
+	}
+	if len(open) != 0 {
+		t.Fatalf("open intents = %+v, want none", open)
+	}
+}
+
 func TestLocalNode_PutLimitAppliesAndAudits(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
@@ -324,19 +584,8 @@ func TestLocalNode_PutLimitAppliesAndAudits(t *testing.T) {
 			{Kind: domain.KindWindow, Value: "1s"},
 		},
 	}
-	if err := n.PutLimit(ctx, limit, testCaller); err != nil {
+	if _, err := n.PutLimit(ctx, limit, testCaller); err != nil {
 		t.Fatalf("PutLimit: %v", err)
-	}
-
-	if len(eng.configureCalls) != 1 {
-		t.Fatalf("want 1 configure call, got %d", len(eng.configureCalls))
-	}
-	if eng.configureCalls[0].policy != domain.PolicyRateLimit {
-		t.Fatalf("configured wrong policy: %q", eng.configureCalls[0].policy)
-	}
-	if len(eng.configureCalls[0].limits) != 1 {
-		t.Fatalf("want full barrier set of 1, got %d",
-			len(eng.configureCalls[0].limits))
 	}
 
 	stored, err := st.ListPolicyLimits(ctx, domain.PolicyRateLimit)
@@ -375,7 +624,7 @@ func TestLocalNode_PutLimitEngineFailureRevertsStore(t *testing.T) {
 			{Kind: domain.KindWindow, Value: "1s"},
 		},
 	}
-	if err := n.PutLimit(ctx, limit, testCaller); err == nil {
+	if _, err := n.PutLimit(ctx, limit, testCaller); err == nil {
 		t.Fatalf("PutLimit: want error on engine failure")
 	}
 
@@ -397,18 +646,10 @@ func TestLocalNode_PutLimitEngineFailureRevertsStore(t *testing.T) {
 	}
 }
 
-// TestLocalNode_PutLimitNotImplementedSurfacesAndReverts verifies the
-// no-rebuild contract: when the runtime Configure surface reports the
-// not-implemented stub, the node surfaces that error (it does NOT rebuild) and
-// reverts the already-written store row, so the barrier does not persist and
-// no mutation audit is written. Closing that gap is engine-side SDK work, not
-// an officer rebuild.
-func TestLocalNode_PutLimitNotImplementedSurfacesAndReverts(t *testing.T) {
+func TestLocalNode_PutLimitConfiguresPolicyFromStore(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
-	eng.configureErr = fmt.Errorf(
-		"engine: rate_limit add not supported: %w", domain.ErrNotImplemented)
-	n, st := newTestNode(t, eng)
+	n, _ := newTestNode(t, eng)
 	ctx := context.Background()
 
 	limit := domain.Limit{
@@ -422,33 +663,125 @@ func TestLocalNode_PutLimitNotImplementedSurfacesAndReverts(t *testing.T) {
 			{Kind: domain.KindWindow, Value: "1s"},
 		},
 	}
-	err := n.PutLimit(ctx, limit, testCaller)
-	if err == nil {
-		t.Fatalf("PutLimit: want error surfacing the not-implemented stub")
-	}
-	if !errors.Is(err, domain.ErrNotImplemented) {
-		t.Fatalf("PutLimit error = %v, want it to wrap ErrNotImplemented", err)
+	if _, err := n.PutLimit(ctx, limit, testCaller); err != nil {
+		t.Fatalf("PutLimit: %v", err)
 	}
 
-	// The store row is reverted, so the barrier does not persist.
-	stored, err := st.ListPolicyLimits(ctx, domain.PolicyRateLimit)
-	if err != nil {
-		t.Fatalf("ListPolicyLimits: %v", err)
+	if len(eng.configureCalls) != 1 {
+		t.Fatalf("configure calls = %d, want 1", len(eng.configureCalls))
 	}
-	if len(stored) != 0 {
-		t.Fatalf("want store reverted to 0 barriers, got %d", len(stored))
+	if eng.configureCalls[0].policy != domain.PolicyRateLimit {
+		t.Fatalf("configured policy = %q, want rate_limit", eng.configureCalls[0].policy)
+	}
+	if len(eng.configureCalls[0].limits) != 1 {
+		t.Fatalf("configured limits = %d, want 1", len(eng.configureCalls[0].limits))
+	}
+	if eng.configureCalls[0].limits[0].Target != limit.Target {
+		t.Fatalf("configured wrong target: %+v", eng.configureCalls[0].limits[0].Target)
+	}
+}
+
+func TestLocalNode_PutLimitNotImplementedRebuildsFromStore(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.configureErr = fmt.Errorf("engine: unregistered policy: %w",
+		domain.ErrNotImplemented)
+	n, _ := newTestNode(t, eng)
+	ctx := context.Background()
+	next := newFakeEngine()
+	var rebuilt engine.Snapshot
+	n.build = fakeBuild(next, &rebuilt)
+
+	limit := domain.Limit{
+		Target: domain.LimitTarget{
+			Tenant: domain.DefaultTenant,
+			Policy: domain.PolicyRateLimit,
+			Scope:  domain.ScopeBroker,
+		},
+		Values: []domain.LimitValue{
+			{Kind: domain.KindMaxOrders, Value: "100"},
+			{Kind: domain.KindWindow, Value: "1s"},
+		},
+	}
+	sink, err := n.PutLimit(ctx, limit, testCaller)
+	if err != nil {
+		t.Fatalf("PutLimit: %v", err)
+	}
+	if sink == nil {
+		t.Fatal("PutLimit returned nil sink after rebuild")
+	}
+	if eng.running {
+		t.Fatal("old engine still running after rebuild")
+	}
+	if !next.running {
+		t.Fatal("replacement engine is not running after rebuild")
+	}
+	if len(rebuilt.Limits) != 1 || rebuilt.Limits[0].Target != limit.Target {
+		t.Fatalf("rebuilt limits = %+v, want the new barrier", rebuilt.Limits)
+	}
+}
+
+func TestLocalNode_PutLimitSamePolicyDifferentAccountsRetunesOnePolicy(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, _ := newTestNode(t, eng)
+	ctx := context.Background()
+	buildCalls := 0
+	n.build = func(engine.Snapshot) (engine.Engine, error) {
+		buildCalls++
+		return newFakeEngine(), nil
 	}
 
-	rows, err := st.ListAudit(ctx, 10)
-	if err != nil {
-		t.Fatalf("ListAudit: %v", err)
+	first := domain.Limit{
+		Target: domain.LimitTarget{
+			Tenant:  domain.DefaultTenant,
+			Policy:  domain.PolicyRateLimit,
+			Scope:   domain.ScopeAccount,
+			Account: "acc-1",
+		},
+		Values: []domain.LimitValue{
+			{Kind: domain.KindMaxOrders, Value: "100"},
+			{Kind: domain.KindWindow, Value: "1s"},
+		},
 	}
-	// Only the startup hydrate row: the failed mutation writes no audit.
-	if len(rows) != 1 {
-		t.Fatalf("want only the hydrate audit row, got %+v", rows)
+	second := domain.Limit{
+		Target: domain.LimitTarget{
+			Tenant:  domain.DefaultTenant,
+			Policy:  domain.PolicyRateLimit,
+			Scope:   domain.ScopeAccount,
+			Account: "acc-2",
+		},
+		Values: []domain.LimitValue{
+			{Kind: domain.KindMaxOrders, Value: "10"},
+			{Kind: domain.KindWindow, Value: "1s"},
+		},
 	}
-	if rows[0].Action != domain.AuditActionHydrate {
-		t.Fatalf("want the only row to be hydrate, got %q", rows[0].Action)
+	if _, err := n.PutLimit(ctx, first, testCaller); err != nil {
+		t.Fatalf("PutLimit first: %v", err)
+	}
+	if _, err := n.PutLimit(ctx, second, testCaller); err != nil {
+		t.Fatalf("PutLimit second: %v", err)
+	}
+
+	if buildCalls != 0 {
+		t.Fatalf("build calls = %d, want 0", buildCalls)
+	}
+	if len(eng.configureCalls) != 2 {
+		t.Fatalf("configure calls = %d, want 2", len(eng.configureCalls))
+	}
+	last := eng.configureCalls[1]
+	if last.policy != domain.PolicyRateLimit {
+		t.Fatalf("configured policy = %q, want rate_limit", last.policy)
+	}
+	if len(last.limits) != 2 {
+		t.Fatalf("configured barriers = %d, want 2", len(last.limits))
+	}
+	got := map[domain.AccountID]bool{}
+	for _, limit := range last.limits {
+		got[limit.Target.Account] = true
+	}
+	if !got["acc-1"] || !got["acc-2"] {
+		t.Fatalf("configured accounts = %+v, want acc-1 and acc-2", got)
 	}
 }
 
@@ -470,7 +803,7 @@ func TestLocalNode_PutLimitEngineFailureRestoresPrevious(t *testing.T) {
 			{Kind: domain.KindWindow, Value: "1s"},
 		},
 	}
-	if err := n.PutLimit(ctx, first, testCaller); err != nil {
+	if _, err := n.PutLimit(ctx, first, testCaller); err != nil {
 		t.Fatalf("PutLimit first: %v", err)
 	}
 
@@ -482,7 +815,7 @@ func TestLocalNode_PutLimitEngineFailureRestoresPrevious(t *testing.T) {
 			{Kind: domain.KindWindow, Value: "2s"},
 		},
 	}
-	if err := n.PutLimit(ctx, second, testCaller); err == nil {
+	if _, err := n.PutLimit(ctx, second, testCaller); err == nil {
 		t.Fatalf("PutLimit second: want error")
 	}
 
@@ -513,7 +846,7 @@ func TestLocalNode_DeleteLimitAppliesAndAudits(t *testing.T) {
 		Policy: domain.PolicyRateLimit,
 		Scope:  domain.ScopeBroker,
 	}
-	if err := n.PutLimit(ctx, domain.Limit{
+	if _, err := n.PutLimit(ctx, domain.Limit{
 		Target: target,
 		Values: []domain.LimitValue{
 			{Kind: domain.KindMaxOrders, Value: "100"},
@@ -523,7 +856,7 @@ func TestLocalNode_DeleteLimitAppliesAndAudits(t *testing.T) {
 		t.Fatalf("PutLimit: %v", err)
 	}
 
-	if err := n.DeleteLimit(ctx, target, testCaller); err != nil {
+	if _, err := n.DeleteLimit(ctx, target, testCaller); err != nil {
 		t.Fatalf("DeleteLimit: %v", err)
 	}
 
@@ -542,6 +875,57 @@ func TestLocalNode_DeleteLimitAppliesAndAudits(t *testing.T) {
 	// Startup hydrate, set_limit, delete_limit = 3 rows, newest first.
 	if len(rows) != 3 || rows[0].Action != domain.AuditActionDeleteLimit {
 		t.Fatalf("want newest row delete_limit, got %+v", rows)
+	}
+}
+
+func TestLocalNode_DeleteLastLimitRebuildsFromStore(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	target := domain.LimitTarget{
+		Tenant: domain.DefaultTenant,
+		Policy: domain.PolicyRateLimit,
+		Scope:  domain.ScopeBroker,
+	}
+	if _, err := n.PutLimit(ctx, domain.Limit{
+		Target: target,
+		Values: []domain.LimitValue{
+			{Kind: domain.KindMaxOrders, Value: "100"},
+			{Kind: domain.KindWindow, Value: "1s"},
+		},
+	}, testCaller); err != nil {
+		t.Fatalf("PutLimit: %v", err)
+	}
+
+	eng.configureErr = fmt.Errorf("engine: empty policy settings: %w",
+		domain.ErrNotImplemented)
+	next := newFakeEngine()
+	var rebuilt engine.Snapshot
+	n.build = fakeBuild(next, &rebuilt)
+	sink, err := n.DeleteLimit(ctx, target, testCaller)
+	if err != nil {
+		t.Fatalf("DeleteLimit: %v", err)
+	}
+	if sink == nil {
+		t.Fatal("DeleteLimit returned nil sink after rebuild")
+	}
+	if eng.running {
+		t.Fatal("old engine still running after rebuild")
+	}
+	if !next.running {
+		t.Fatal("replacement engine is not running after rebuild")
+	}
+	if len(rebuilt.Limits) != 0 {
+		t.Fatalf("rebuilt limits = %+v, want no barriers", rebuilt.Limits)
+	}
+	stored, err := st.ListPolicyLimits(ctx, domain.PolicyRateLimit)
+	if err != nil {
+		t.Fatalf("ListPolicyLimits: %v", err)
+	}
+	if len(stored) != 0 {
+		t.Fatalf("stored limits = %+v, want none", stored)
 	}
 }
 
@@ -610,6 +994,133 @@ func TestLocalNode_BlockEngineFailureRevertsStore(t *testing.T) {
 	}
 	if account.Blocked {
 		t.Fatalf("store not reverted: account still blocked")
+	}
+}
+
+// testOrder records a committed buy order so an execution report has a parent
+// order row to attach its event and trade to.
+func testOrder(t *testing.T, st store.Store, id domain.AccountID) domain.Order {
+	t.Helper()
+	order, err := st.CreateOrder(context.Background(), domain.Order{
+		Tenant:      domain.DefaultTenant,
+		Account:     id,
+		Source:      domain.SourceAPI,
+		Principal:   "operator",
+		BaseAsset:   "AAPL",
+		QuoteAsset:  "USD",
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "2",
+		Price:       "400",
+		Status:      domain.OrderStatusCommitted,
+	})
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+	return order
+}
+
+// TestLocalNode_ApplyExecutionReportPersistsBothLegs verifies a spot fill
+// settles both the base (bought) and quote (cash) legs into their own balance
+// rows, not collapsed onto the base asset.
+func TestLocalNode_ApplyExecutionReportPersistsBothLegs(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.execReportOutcomes = []engine.BalanceOutcome{
+		{Asset: "AAPL", Outcome: domain.AdjustmentOutcomeAccepted{BalanceResult: "2"}},
+		{Asset: "USD", Outcome: domain.AdjustmentOutcomeAccepted{BalanceResult: "800"}},
+	}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, testKey(id), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	order := testOrder(t, st, id)
+
+	if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+		OrderID:      order.ID,
+		BaseAsset:    "AAPL",
+		QuoteAsset:   "USD",
+		Side:         domain.OrderSideBuy,
+		FillQuantity: "2",
+		FillPrice:    "400",
+		LockPrice:    "400",
+		Final:        true,
+	}, testCaller); err != nil {
+		t.Fatalf("ApplyExecutionReport: %v", err)
+	}
+
+	base, ok, err := st.GetBalance(ctx, domain.DefaultTenant, id, "AAPL")
+	if err != nil || !ok {
+		t.Fatalf("GetBalance base: %v ok=%v", err, ok)
+	}
+	if base.Available != "2" {
+		t.Fatalf("base available = %q, want 2", base.Available)
+	}
+	quote, ok, err := st.GetBalance(ctx, domain.DefaultTenant, id, "USD")
+	if err != nil || !ok {
+		t.Fatalf("GetBalance quote: %v ok=%v", err, ok)
+	}
+	if quote.Available != "800" {
+		t.Fatalf("quote available = %q, want 800", quote.Available)
+	}
+}
+
+// TestLocalNode_ApplyExecutionReportAuditsEngineBlock verifies an engine-
+// initiated block during settlement is mirrored to the account and recorded as
+// a system-sourced block audit row carrying the engine reason.
+func TestLocalNode_ApplyExecutionReportAuditsEngineBlock(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.execReportBlocks = []domain.ExecutionAccountBlock{
+		{Account: "acc-1", Code: "pnl_kill_switch", Reason: "loss limit breached"},
+	}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, testKey(id), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	order := testOrder(t, st, id)
+
+	if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+		OrderID:      order.ID,
+		BaseAsset:    "AAPL",
+		QuoteAsset:   "USD",
+		Side:         domain.OrderSideBuy,
+		FillQuantity: "2",
+		FillPrice:    "400",
+		LockPrice:    "400",
+		Final:        true,
+	}, testCaller); err != nil {
+		t.Fatalf("ApplyExecutionReport: %v", err)
+	}
+
+	acc, ok, err := st.GetAccount(ctx, domain.DefaultTenant, id)
+	if err != nil || !ok {
+		t.Fatalf("GetAccount: %v ok=%v", err, ok)
+	}
+	if !acc.Blocked || acc.BlockReason != "loss limit breached" {
+		t.Fatalf("account not mirrored blocked: %+v", acc)
+	}
+
+	rows, err := st.ListAuditFiltered(ctx, domain.AuditFilter{
+		Actions: []domain.AuditAction{domain.AuditActionBlock},
+	}, 10)
+	if err != nil {
+		t.Fatalf("ListAuditFiltered: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("want 1 block audit row, got %d: %+v", len(rows), rows)
+	}
+	if rows[0].Source != domain.SourceSystem || rows[0].Actor != "engine" {
+		t.Fatalf("block not attributed to engine/system: %+v", rows[0])
+	}
+	if !strings.Contains(rows[0].Detail, "loss limit breached") {
+		t.Fatalf("block detail missing reason: %q", rows[0].Detail)
 	}
 }
 
@@ -829,11 +1340,11 @@ func TestLocalNode_PutLimitNoAccountRequired(t *testing.T) {
 			{Kind: domain.KindWindow, Value: "1s"},
 		},
 	}
-	if err := n.PutLimit(ctx, limit, testCaller); err != nil {
+	if _, err := n.PutLimit(ctx, limit, testCaller); err != nil {
 		t.Fatalf("PutLimit for non-existent account: %v", err)
 	}
 	if len(eng.configureCalls) != 1 {
-		t.Fatalf("want 1 configure call, got %d", len(eng.configureCalls))
+		t.Fatalf("configure calls = %d, want 1", len(eng.configureCalls))
 	}
 }
 
@@ -870,7 +1381,7 @@ func TestLocalNode_RestoreBackupRebuildsEngineFromRestoredStore(t *testing.T) {
 	archive := backup.NewArchive(
 		backupTestTime(),
 		"test",
-		2,
+		3,
 		backup.Scope{All: true},
 		backup.Data{Accounts: []domain.Account{{
 			Tenant: domain.DefaultTenant,
@@ -920,7 +1431,7 @@ func TestLocalNode_RestoreBackupRollsBackStoreOnRebuildFailure(t *testing.T) {
 	archive := backup.NewArchive(
 		backupTestTime(),
 		"test",
-		2,
+		3,
 		backup.Scope{All: true},
 		backup.Data{Accounts: []domain.Account{{
 			Tenant: domain.DefaultTenant,
@@ -969,7 +1480,7 @@ func TestLocalNode_RestoreBackupRollsBackStoreAndEngineOnAuditFailure(t *testing
 	archive := backup.NewArchive(
 		backupTestTime(),
 		"test",
-		2,
+		3,
 		backup.Scope{All: true},
 		backup.Data{Accounts: []domain.Account{{
 			Tenant: domain.DefaultTenant,
@@ -1012,7 +1523,7 @@ func TestLocalNode_RestoreBackupRollsBackStoreOnAuditFailureWithoutRuntime(t *te
 	archive := backup.NewArchive(
 		backupTestTime(),
 		"test",
-		2,
+		3,
 		backup.Scope{Sections: []backup.Section{backup.SectionGeneralSettings}},
 		backup.Data{McpAccess: map[string]bool{"submit_order": false}},
 	)
@@ -1052,7 +1563,7 @@ func TestLocalNode_RestoreBackupJoinsRollbackRestoreFailure(t *testing.T) {
 	archive := backup.NewArchive(
 		backupTestTime(),
 		"test",
-		2,
+		3,
 		backup.Scope{Sections: []backup.Section{backup.SectionGeneralSettings}},
 		backup.Data{McpAccess: map[string]bool{"submit_order": false}},
 	)
@@ -1176,7 +1687,7 @@ func TestLocalNode_ConcurrentRestoreSwapAndReads(t *testing.T) {
 		archive := backup.NewArchive(
 			backupTestTime().Add(time.Duration(i)*time.Second),
 			"test",
-			2,
+			3,
 			backup.Scope{All: true},
 			backup.Data{Accounts: []domain.Account{{
 				Tenant: domain.DefaultTenant,

@@ -185,6 +185,8 @@ export interface Order {
   status: string;
   /** Prices locked at order submission, as exact decimal strings. */
   lockPrices: string[];
+  /** Submission mode; present only for held orders. */
+  submitMode?: "hold" | "immediate";
 }
 
 /** An event on an order's lifecycle. */
@@ -260,7 +262,9 @@ export interface ActivityEntry {
 export interface Overview {
   counts: {
     accounts: number;
+    accountsActive: number;
     groups: number;
+    groupsActive: number;
     limits: number;
     ordersToday: number;
     ordersTotal: number;
@@ -485,6 +489,33 @@ export interface McpCommand {
   protective: boolean;
   implemented: boolean;
   enabled: boolean;
+}
+
+// --- Signing keys ---
+
+/** Public-key export format. */
+export type SigningKeyFormat = "pem-pkcs8" | "openssh" | "raw-base64";
+
+/** One signing key entry (mirrors the signingKeyDTO wire shape). PrivateKey is
+ *  never present in any DTO. */
+export interface SigningKey {
+  keyId: string;
+  fingerprint: string;
+  createdAt: string;
+  active: boolean;
+}
+
+/** GET /signing/keys response: list of known public keys + global config. */
+export interface SigningKeysStatus {
+  keys: SigningKey[];
+  eSignEnabled: boolean;
+}
+
+/** Response for generate/import: the new key entry plus its exported public key
+ *  in the default (pem-pkcs8) format. */
+export interface SigningKeyResult {
+  key: SigningKey;
+  publicKey: string;
 }
 
 // --- Audit ---

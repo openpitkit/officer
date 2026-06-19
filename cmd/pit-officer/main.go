@@ -58,6 +58,7 @@ import (
 	officermcp "go.openpit.dev/officer/internal/mcp"
 	"go.openpit.dev/officer/internal/node"
 	officerruntime "go.openpit.dev/officer/internal/runtime"
+	"go.openpit.dev/officer/internal/signing"
 	"go.openpit.dev/officer/internal/store"
 )
 
@@ -163,6 +164,27 @@ func setup(ctx context.Context, cfg config.Config, logger *slog.Logger) (
 	logger.Info("engine built and seeded from store",
 		"version", eng.Version(), "profile", eng.BuildProfile())
 
+	// Attach the durable reservation-intent store and report any holds preserved
+	// by a prior restart. Native reservation handles do not survive restart, but
+	// held balances reseed from stored balances and later confirm/cancel can fall
+	// back to the persisted intent. This must run before the first hold and before
+	// the surfaces serve.
+	eng.SetReservationStore(st)
+	if reconciled, err := localNode.ReconcileOrphans(ctx); err != nil {
+		_ = localNode.Close()
+		return nil, fmt.Errorf("inspect restarted reservations: %w", err)
+	} else if reconciled > 0 {
+		logger.Info("preserved held reservations after restart", "count", reconciled)
+	}
+
+	// The signing service backs the approval-token flow: it loads the active
+	// Ed25519 key (if any) and the global eSign flag from the store.
+	signer, err := signing.New(st)
+	if err != nil {
+		_ = localNode.Close()
+		return nil, fmt.Errorf("build signing service: %w", err)
+	}
+
 	router, err := node.NewLocalRouter(localNode)
 	if err != nil {
 		_ = localNode.Close()
@@ -180,7 +202,7 @@ func setup(ctx context.Context, cfg config.Config, logger *slog.Logger) (
 	}
 
 	return &controlPlane{
-		service:    backend.New(router, manager),
+		service:    backend.New(router, manager, signer),
 		node:       localNode,
 		marketData: manager,
 		cfg:        cfg,
@@ -266,7 +288,9 @@ func runServe(args []string, logger *slog.Logger, buf *logtail.Buffer) error {
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           handler,
+		ReadTimeout:       15 * time.Second,
 		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      30 * time.Second,
 	}
 
 	listener, err := net.Listen("tcp", cfg.HTTPAddr)
@@ -550,6 +574,13 @@ func (a sourceAdapter) ListAudit(ctx context.Context, n int) ([]domain.AuditRow,
 	return a.service.ListAudit(ctx, n)
 }
 
+// ListAuditFiltered delegates to the backend service.
+func (a sourceAdapter) ListAuditFiltered(
+	ctx context.Context, filter domain.AuditFilter, n int,
+) ([]domain.AuditRow, error) {
+	return a.service.ListAuditFiltered(ctx, filter, n)
+}
+
 // CheckOrder delegates to the backend service.
 func (a sourceAdapter) CheckOrder(
 	ctx context.Context, probe domain.OrderProbe,
@@ -570,4 +601,35 @@ func (a sourceAdapter) CommandEnabled(
 	ctx context.Context, command string,
 ) (bool, error) {
 	return a.service.CommandEnabled(ctx, command)
+}
+
+// SubmitOrderToken delegates to the backend approval flow and adapts the
+// result onto the MCP surface's token result type.
+func (a sourceAdapter) SubmitOrderToken(
+	ctx context.Context, o domain.Order, mode string,
+) (officermcp.SubmitOrderTokenResult, error) {
+	tok, err := a.service.SubmitOrderToken(ctx, o, mode)
+	if err != nil {
+		return officermcp.SubmitOrderTokenResult{}, err
+	}
+	return officermcp.SubmitOrderTokenResult{
+		Token:     tok.Token,
+		KeyID:     tok.KeyID,
+		ExpiresAt: tok.ExpiresAt,
+		OrderID:   tok.OrderID,
+	}, nil
+}
+
+// ConfirmExecution delegates to the backend confirm flow.
+func (a sourceAdapter) ConfirmExecution(
+	ctx context.Context, orderID int64, token string,
+) (domain.Order, error) {
+	return a.service.ConfirmExecution(ctx, orderID, token)
+}
+
+// CancelOrder delegates to the backend cancel flow.
+func (a sourceAdapter) CancelOrder(
+	ctx context.Context, orderID int64, token, reason string,
+) (domain.Order, error) {
+	return a.service.CancelOrder(ctx, orderID, token, reason)
 }

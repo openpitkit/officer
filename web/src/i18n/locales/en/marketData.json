@@ -91,7 +91,7 @@
     },
     "finnhub": {
       "title": "Finnhub",
-      "description": "Live trade prices from Finnhub WebSocket. Requires an API token; external symbols use Finnhub-supported symbols. Crypto and FX need an exchange-qualified symbol such as BINANCE:ETHUSDT.",
+      "description": "Live trade prices from Finnhub WebSocket. Requires an API token; external symbols use Finnhub-supported symbols.",
       "createHint": "Create a Finnhub source for live trade prices. Add the API token."
     },
     "byo": {

@@ -28,9 +28,14 @@
   },
   "delete": {
     "title": "删除风控屏障？",
-    "description": "此操作将删除 {{scope}}{{account}}{{asset}} 上的 {{policy}} 屏障，引擎将立即重新配置。",
+    "description": "此操作将删除 {{scope}}{{account}}{{asset}} 上的 {{policy}} 屏障。",
     "accountFragment": " 账户 {{account}}",
     "assetFragment": " 资产 {{asset}}"
+  },
+  "restartConfirm": {
+    "title": "重建风控引擎？",
+    "description": "此策略变更会从已保存的账户、限额、规则和余额重建风控引擎。重建期间，传入的变更请求会被拒绝。",
+    "confirm": "重建并应用"
   },
   "dialog": {
     "editTitle": "编辑策略",

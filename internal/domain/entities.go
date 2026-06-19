@@ -548,3 +548,103 @@ type ExecutionAccountBlock struct {
 	// Details is the case-specific block detail.
 	Details string
 }
+
+// --- Signing keys -----------------------------------------------------------
+
+// SigningKey is the control-plane view of one Ed25519 signing keypair.
+// PrivateKey is populated only in contexts that need signing (never in DTOs).
+type SigningKey struct {
+	// CreatedAt is the wall-clock time the key was generated or imported.
+	CreatedAt time.Time
+	// KeyID is the server-assigned UUID identifying the key.
+	KeyID string
+	// Alg is the signing algorithm; currently always "ed25519".
+	Alg string
+	// PublicKey is the raw 32-byte Ed25519 public key.
+	PublicKey []byte
+	// PrivateKey is the raw 32-byte Ed25519 private key seed; nil when omitted.
+	PrivateKey []byte
+	// Active reports whether this is the current signing key.
+	Active bool
+}
+
+// EstimateSource names how the engine derived an approval's estimate/lock
+// price: the order's limit price when present, otherwise the market mark quote
+// (plus slippage). It is the EstimateSource value carried in ApprovalPayload.
+const (
+	EstimateSourceLimit      = "limit"
+	EstimateSourceMarketMark = "market_mark"
+)
+
+// ApprovalPayload is the canonical signed payload embedded in an approval
+// token. Field declaration order is the canonical wire order (Go json.Marshal
+// emits fields in declaration order). All price/quantity fields are decimal
+// strings; never float.
+type ApprovalPayload struct {
+	Version       int    `json:"version"`    // =1
+	ApprovalID    string `json:"approvalId"` // server UUID == reservationId
+	ReservationID string `json:"reservationId"`
+	Mode          string `json:"mode"` // "hold" | "immediate"
+	OrderID       int64  `json:"orderId"`
+
+	// Bound order params — connector re-binds against the order it executes.
+	Instrument     string `json:"instrument"`
+	Venue          string `json:"venue,omitempty"`
+	Side           string `json:"side"`       // "buy" | "sell"
+	Quantity       string `json:"quantity"`   // decimal string, never float
+	AmountKind     string `json:"amountKind"` // "quantity" | "volume"
+	OrderType      string `json:"orderType"`  // "limit" | "market"
+	LimitPrice     string `json:"limitPrice"` // decimal string; "" for market
+	PriceCurrency  string `json:"priceCurrency"`
+	TimeInForce    string `json:"timeInForce"`
+	AccountID      string `json:"accountId"`
+	AccountGroupID string `json:"accountGroupId,omitempty"`
+
+	// Verdict / estimate.
+	Verdict        string `json:"verdict"` // always "accept"
+	PolicySummary  string `json:"policySummary"`
+	EstimatePrice  string `json:"estimatePrice"`  // decimal string = engine lock price
+	EstimateSource string `json:"estimateSource"` // "limit" | "market_mark"
+
+	// Lifecycle / anti-replay.
+	IssuedAt  string `json:"issuedAt"`  // RFC3339Nano UTC
+	ExpiresAt string `json:"expiresAt"` // RFC3339Nano UTC (TTL)
+	Nonce     string `json:"nonce"`     // single-use, 128-bit base64url
+
+	// Key binding.
+	KeyID string `json:"keyId"`
+	Alg   string `json:"alg"` // "ed25519" | "none"
+}
+
+// --- Reservation intents ----------------------------------------------------
+
+// ReservationIntentState is the lifecycle state of a persisted reservation intent.
+type ReservationIntentState string
+
+const (
+	ReservationIntentStateHeld       ReservationIntentState = "held"
+	ReservationIntentStateCommitted  ReservationIntentState = "committed"
+	ReservationIntentStateRolledBack ReservationIntentState = "rolled_back"
+)
+
+// ReservationIntent is the persistence record for a held pre-trade reservation.
+// It survives process restart. Native handles do not survive restart, so later
+// confirm/cancel may resolve the row through persisted balance effects instead.
+type ReservationIntent struct {
+	// IssuedAt is when the reservation was issued.
+	IssuedAt time.Time
+	// ExpiresAt is when the TTL sweeper should roll this back.
+	ExpiresAt time.Time
+	// ApprovalID is the server UUID identifying the reservation (PK).
+	ApprovalID string
+	// OrderID is the persisted order authorised by this reservation.
+	OrderID int64
+	// Account is the account that placed the order.
+	Account AccountID
+	// ParamsJSON is the bound order params plus persisted balance outcomes.
+	ParamsJSON string
+	// LockPricesJSON is the engine lock prices serialized as JSON array.
+	LockPricesJSON string
+	// State is the current lifecycle state.
+	State ReservationIntentState
+}

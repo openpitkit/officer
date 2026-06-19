@@ -40,6 +40,16 @@ import {
 } from "@/api/vocabulary";
 import { Autocomplete } from "@/components/Autocomplete";
 import { ErrorBanner } from "@/components/PageStates";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -231,6 +241,7 @@ export function LimitDialog({
   initialAccount = "",
   assetSuggestions = [],
   accountSuggestions = [],
+  policyCounts = {},
   onOpenChange,
   onSaved,
 }: {
@@ -239,6 +250,7 @@ export function LimitDialog({
   initialAccount?: string;
   assetSuggestions?: string[];
   accountSuggestions?: string[];
+  policyCounts?: Partial<Record<Policy, number>>;
   onOpenChange: (open: boolean) => void;
   onSaved: () => void;
 }) {
@@ -247,6 +259,7 @@ export function LimitDialog({
   const [form, setForm] = useState<FormState>(() => emptyForm(initialAccount));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   // Reset the form whenever the dialog opens, seeding from the edited barrier.
   useEffect(() => {
@@ -256,6 +269,7 @@ export function LimitDialog({
       setForm(editing ? fromLimit(editing) : emptyForm(initialAccount));
       setError(null);
       setBusy(false);
+      setConfirmOpen(false);
     }
   }, [open, editing, initialAccount]);
 
@@ -293,6 +307,8 @@ export function LimitDialog({
   }, [form, kinds]);
 
   const validation = validateLimit(candidate);
+  const requiresEngineRebuild =
+    !isEdit && (policyCounts[form.policy] ?? 0) === 0;
 
   const setPolicy = (policy: Policy) => {
     // Switching policy resets scope to the first allowed one and clears values,
@@ -316,15 +332,29 @@ export function LimitDialog({
     }));
   };
 
+  const requestSubmit = () => {
+    if (validation) {
+      setError(t(validation.key, validation.values));
+      return;
+    }
+    if (requiresEngineRebuild) {
+      setConfirmOpen(true);
+      return;
+    }
+    void submit();
+  };
+
   const submit = async () => {
     if (validation) {
       setError(t(validation.key, validation.values));
+      setConfirmOpen(false);
       return;
     }
     setBusy(true);
     setError(null);
     try {
       await putLimit(candidate);
+      setConfirmOpen(false);
       onOpenChange(false);
       onSaved();
     } catch (err) {
@@ -334,6 +364,7 @@ export function LimitDialog({
   };
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
@@ -500,7 +531,7 @@ export function LimitDialog({
           </Button>
           <Button
             size="sm"
-            onClick={() => void submit()}
+            onClick={requestSubmit}
             disabled={busy || validation !== null}
           >
             {isEdit ? t("dialog.save") : t("dialog.addTitle")}
@@ -508,5 +539,30 @@ export function LimitDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{t("restartConfirm.title")}</AlertDialogTitle>
+          <AlertDialogDescription>
+            {t("restartConfirm.description")}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={busy}>
+            {tc("actions.cancel")}
+          </AlertDialogCancel>
+          <AlertDialogAction
+            onClick={(e) => {
+              e.preventDefault();
+              void submit();
+            }}
+            disabled={busy}
+          >
+            {t("restartConfirm.confirm")}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    </>
   );
 }

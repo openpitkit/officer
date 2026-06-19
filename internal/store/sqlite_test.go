@@ -56,8 +56,8 @@ func TestMigration_Chain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaVersion: %v", err)
 	}
-	if v != 2 {
-		t.Fatalf("want schema version 2, got %d", v)
+	if v != 3 {
+		t.Fatalf("want schema version 3, got %d", v)
 	}
 }
 
@@ -74,8 +74,8 @@ func TestMigration_Idempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaVersion: %v", err)
 	}
-	if v != 2 {
-		t.Fatalf("want schema version 2, got %d", v)
+	if v != 3 {
+		t.Fatalf("want schema version 3, got %d", v)
 	}
 }
 
@@ -105,8 +105,8 @@ func TestReset_RecreatesDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaVersion: %v", err)
 	}
-	if v != 2 {
-		t.Fatalf("want schema version 2, got %d", v)
+	if v != 3 {
+		t.Fatalf("want schema version 3, got %d", v)
 	}
 	accounts, err := s.ListAccounts(ctx)
 	if err != nil {
@@ -632,6 +632,115 @@ func TestAudit_NonPositiveN(t *testing.T) {
 	}
 	if len(rows) != 0 {
 		t.Fatalf("want 0 rows, got %d", len(rows))
+	}
+}
+
+func TestAudit_ListFilteredByAction(t *testing.T) {
+	t.Parallel()
+	s := openStore(t)
+	ctx := context.Background()
+
+	rows := []store.AuditEntry{
+		{Actor: "operator", Action: domain.AuditActionBlock, Account: "acc-1", Source: domain.SourceSystem},
+		{Actor: "operator", Action: domain.AuditActionSubmitOrder, Account: "acc-1", Source: domain.SourceAPI},
+		{Actor: "operator", Action: domain.AuditActionExecutionReport, Account: "acc-1", Source: domain.SourceAPI},
+		{Actor: "operator", Action: domain.AuditActionSetLimit, Account: "acc-2", Source: domain.SourcePanel},
+	}
+	for _, entry := range rows {
+		if err := s.AppendAudit(ctx, entry); err != nil {
+			t.Fatalf("AppendAudit: %v", err)
+		}
+	}
+
+	control, err := s.ListAuditFiltered(ctx, domain.AuditFilter{
+		Actions: domain.AuditActionsByCategory(domain.AuditCategoryControl),
+	}, 10)
+	if err != nil {
+		t.Fatalf("ListAuditFiltered control: %v", err)
+	}
+	if len(control) != 2 {
+		t.Fatalf("control rows = %d, want 2 (block, set_limit): %+v", len(control), control)
+	}
+	for _, row := range control {
+		if row.Action.Category() != domain.AuditCategoryControl {
+			t.Fatalf("trading row leaked into control listing: %+v", row)
+		}
+	}
+
+	account, err := s.ListAuditFiltered(ctx, domain.AuditFilter{
+		Account: "acc-1",
+		Actions: []domain.AuditAction{domain.AuditActionBlock},
+	}, 10)
+	if err != nil {
+		t.Fatalf("ListAuditFiltered account: %v", err)
+	}
+	if len(account) != 1 || account[0].Action != domain.AuditActionBlock {
+		t.Fatalf("account+action filter = %+v, want 1 block row", account)
+	}
+}
+
+// TestAudit_FilterBoundsLimitToFilteredSet verifies the limit bounds the
+// already-filtered set: a burst of trading rows must not crowd a control row out
+// of a small-limit control listing.
+func TestAudit_FilterBoundsLimitToFilteredSet(t *testing.T) {
+	t.Parallel()
+	s := openStore(t)
+	ctx := context.Background()
+
+	if err := s.AppendAudit(ctx, store.AuditEntry{
+		Actor: "operator", Action: domain.AuditActionBlock, Source: domain.SourceSystem,
+	}); err != nil {
+		t.Fatalf("AppendAudit block: %v", err)
+	}
+	for range 50 {
+		if err := s.AppendAudit(ctx, store.AuditEntry{
+			Actor: "operator", Action: domain.AuditActionSubmitOrder, Source: domain.SourceAPI,
+		}); err != nil {
+			t.Fatalf("AppendAudit order: %v", err)
+		}
+	}
+
+	rows, err := s.ListAuditFiltered(ctx, domain.AuditFilter{
+		Actions: domain.AuditActionsByCategory(domain.AuditCategoryControl),
+	}, 5)
+	if err != nil {
+		t.Fatalf("ListAuditFiltered: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Action != domain.AuditActionBlock {
+		t.Fatalf("control row crowded out by trading volume: got %+v", rows)
+	}
+}
+
+func TestReservationIntent_RoundTripIncludesOrderID(t *testing.T) {
+	t.Parallel()
+	s := openStore(t)
+	ctx := context.Background()
+
+	intent := domain.ReservationIntent{
+		ApprovalID:     "approval-1",
+		OrderID:        42,
+		Account:        "acc-1",
+		ParamsJSON:     `{"id":42}`,
+		LockPricesJSON: `["100"]`,
+		IssuedAt:       time.Now().UTC(),
+		ExpiresAt:      time.Now().UTC().Add(2 * time.Minute),
+		State:          domain.ReservationIntentStateHeld,
+	}
+	if err := s.UpsertReservationIntent(ctx, intent); err != nil {
+		t.Fatalf("UpsertReservationIntent: %v", err)
+	}
+	intents, err := s.ListOpenReservationIntents(ctx)
+	if err != nil {
+		t.Fatalf("ListOpenReservationIntents: %v", err)
+	}
+	if len(intents) != 1 {
+		t.Fatalf("intents len = %d, want 1", len(intents))
+	}
+	if intents[0].OrderID != 42 {
+		t.Fatalf("OrderID = %d, want 42", intents[0].OrderID)
+	}
+	if intents[0].Account != "acc-1" || intents[0].ParamsJSON != intent.ParamsJSON {
+		t.Fatalf("intent round-trip mismatch: %+v", intents[0])
 	}
 }
 

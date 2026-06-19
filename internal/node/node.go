@@ -60,13 +60,10 @@ type Health struct {
 // The command methods below are the operations a future shard serves over RPC.
 // In the single-binary deployment they all run in-process against the local
 // engine and store. Every mutation follows one protocol (see localNode): the
-// store is the source of truth and is written first, the engine is applied
-// from the re-read full policy set, the store is reverted on engine failure,
-// and an audit row is appended last. Ordinary mutations reconfigure the engine
-// in place and do not rebuild it; full restore is the administrative exception
-// that rebuilds from the restored store snapshot. A barrier change the runtime
-// Configure surface cannot express is an SDK gap surfaced as an error, not
-// worked around by reconstructing a fresh handle.
+// store is the source of truth and is written first, the engine is applied from
+// persisted state, the store is reverted on engine failure, and an audit row is
+// appended last. Runtime administrative changes rebuild the engine and reject
+// new mutating requests while the rebuild is in progress.
 type Node interface {
 	// Health returns the current aggregate health of the node's engine and
 	// store.
@@ -131,13 +128,15 @@ type Node interface {
 	// barriers when account is empty.
 	ListLimits(ctx context.Context, account domain.AccountID) ([]domain.Limit, error)
 
-	// PutLimit upserts the whole barrier in the store, reconfigures the engine
-	// for the affected policy, and audits the action.
-	PutLimit(ctx context.Context, limit domain.Limit, caller domain.Caller) error
+	// PutLimit upserts the whole barrier in the store, reconfigures the live
+	// policy from the persisted full barrier set, audits the action, and returns
+	// a replacement market-data sink only when the engine was rebuilt.
+	PutLimit(ctx context.Context, limit domain.Limit, caller domain.Caller) (marketdata.Sink, error)
 
-	// DeleteLimit removes the barrier from the store, reconfigures the engine
-	// for the affected policy, and audits the action.
-	DeleteLimit(ctx context.Context, target domain.LimitTarget, caller domain.Caller) error
+	// DeleteLimit removes the barrier from the store, reconfigures the live
+	// policy from the persisted full barrier set, audits the action, and returns
+	// a replacement market-data sink only when the engine was rebuilt.
+	DeleteLimit(ctx context.Context, target domain.LimitTarget, caller domain.Caller) (marketdata.Sink, error)
 
 	// CreateGroup persists a new account group (store-only; membership lives on
 	// accounts) and audits the action.
@@ -194,6 +193,49 @@ type Node interface {
 	// lifecycle events and final status, and audits the action.
 	SubmitOrder(ctx context.Context, key Key, o domain.Order, caller domain.Caller) (domain.Order, error)
 
+	// SubmitHold records the order, runs the engine pre-trade keeping the
+	// reservation held, persists the accept/reject lifecycle, and returns the
+	// recorded order with the engine hold result. On accept the held amount stays
+	// reserved on engine storage until ConfirmHeld or CancelHeld resolves it (or
+	// the engine's TTL sweeper auto-rolls it back); the order status is left
+	// accepted. On reject the order is recorded rejected and the result carries the
+	// engine rejects. It does not audit; the backend audits approval_issued.
+	SubmitHold(
+		ctx context.Context, key Key, o domain.Order, caller domain.Caller,
+	) (domain.Order, engine.HoldResult, error)
+
+	// SubmitImmediate records the order, runs the engine pre-trade and, on accept,
+	// commits and settles the fill in the same engine call at the captured lock
+	// price, persists the lifecycle (filled on accept, rejected on reject), and
+	// returns the recorded order with the engine immediate result. It does not
+	// audit; the backend audits approval_issued.
+	SubmitImmediate(
+		ctx context.Context, key Key, o domain.Order, caller domain.Caller,
+	) (domain.Order, engine.ImmediateResult, error)
+
+	// ConfirmHeld commits the held reservation identified by approvalID through the
+	// engine, records the reservation_committed event and committed status on the
+	// order, and audits nothing (the backend audits approval_confirmed). A second
+	// confirm on an already-resolved reservation returns domain.ErrConflict; an
+	// unknown reservation returns domain.ErrNotFound.
+	ConfirmHeld(
+		ctx context.Context, tenant domain.TenantID, orderID int64, approvalID string, caller domain.Caller,
+	) (domain.Order, error)
+
+	// CancelHeld rolls back the held reservation identified by approvalID through
+	// the engine, records the reservation_rolled_back event and cancelled status on
+	// the order, and audits nothing (the backend audits approval_cancelled). It is
+	// tolerant of an already-resolved reservation (idempotent).
+	CancelHeld(
+		ctx context.Context, tenant domain.TenantID, orderID int64, approvalID string, caller domain.Caller,
+	) (domain.Order, error)
+
+	// ReconcileOrphans reports persisted reservation intents still held after
+	// restart. Held balance effects are durable, and confirm/cancel can fall
+	// back to the persisted intent when the native handle is gone. It returns the
+	// number found.
+	ReconcileOrphans(ctx context.Context) (int, error)
+
 	// ApplyExecutionReport settles a fill through the engine, records the fill
 	// event and trade, mirrors any engine-recorded account blocks into the store,
 	// reflects the order status, and audits the action.
@@ -228,6 +270,18 @@ type Node interface {
 
 	// ListAudit returns the most recent n audit rows, newest first.
 	ListAudit(ctx context.Context, n int) ([]domain.AuditRow, error)
+
+	// ListAuditFiltered returns the most recent n audit rows matching the filter,
+	// newest first. A zero-value filter matches all rows.
+	ListAuditFiltered(
+		ctx context.Context, filter domain.AuditFilter, n int,
+	) ([]domain.AuditRow, error)
+
+	// AppendAudit persists one audit row stamped with the caller. It is the seam
+	// the backend uses to record control-plane actions that have no node-mutating
+	// counterpart (signing-key management, signing config, and approval token
+	// issue/confirm/cancel). The entry's Actor and Source are taken from caller.
+	AppendAudit(ctx context.Context, entry store.AuditEntry, caller domain.Caller) error
 
 	// ListMcpAccess returns the stored per-command MCP enable/disable overrides
 	// keyed by command name. MCP access is a control-plane-wide setting with no

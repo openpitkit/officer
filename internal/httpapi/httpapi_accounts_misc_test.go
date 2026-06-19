@@ -854,11 +854,13 @@ func TestOverview(t *testing.T) {
 	svc := &fakeService{
 		overview: backend.Overview{
 			Counts: backend.Counts{
-				Accounts:    3,
-				Groups:      1,
-				Limits:      5,
-				OrdersToday: 2,
-				OrdersTotal: 9,
+				Accounts:       3,
+				AccountsActive: 2,
+				Groups:         4,
+				GroupsActive:   3,
+				Limits:         5,
+				OrdersToday:    2,
+				OrdersTotal:    9,
 			},
 			Activity: []backend.Activity{
 				{
@@ -886,7 +888,11 @@ func TestOverview(t *testing.T) {
 		t.Fatalf("want counts object, got %v", m["counts"])
 	}
 	// JSON numbers decode to float64.
-	if counts["accounts"] != float64(3) || counts["ordersTotal"] != float64(9) {
+	if counts["accounts"] != float64(3) ||
+		counts["accountsActive"] != float64(2) ||
+		counts["groups"] != float64(4) ||
+		counts["groupsActive"] != float64(3) ||
+		counts["ordersTotal"] != float64(9) {
 		t.Fatalf("unexpected counts: %v", counts)
 	}
 	activity, ok := m["activity"].([]any)

@@ -25,24 +25,16 @@
 // one engine at process start, configures policies, blocks accounts, observes,
 // and stops the engine. All policy evaluation stays inside the engine.
 //
-// Officer normally keeps one engine handle and applies changes dynamically
-// through the binding's runtime Configure surface. Full backup restore is the
-// explicit node-level exception: the node builds a replacement engine from the
-// restored store snapshot and reconnects market-data feeds to its sink.
-// rate_limit, order_size_limit, and pnl_bounds_kill_switch retune their axes
-// wholesale (barriers added and removed at runtime). The spot-funds policy is
-// registered with its default settings and is not reconfigured at runtime.
-// The residual changes the SDK cannot express are exactly: configuring an
-// unregistered policy, removing the last barrier of a registered policy, and
-// dropping a broker barrier of rate_limit or order_size_limit while other
-// barriers remain - each returns an error wrapping domain.ErrNotImplemented.
-// That error is surfaced to the caller (which reverts the store), never absorbed
-// by rebuilding a fresh handle: such a gap is closed engine-side in the SDK,
-// not worked around in officer.
+// Officer keeps one engine handle and applies policy-limit edits dynamically
+// through the binding's runtime Configure surface when the SDK supports the
+// change. Full backup restore, database reset, and policy changes the runtime
+// Configure surface cannot express rebuild a replacement engine from the
+// persisted store snapshot before making it live.
 package engine
 
 import (
 	"context"
+	"time"
 
 	"go.openpit.dev/officer/internal/domain"
 	"go.openpit.dev/officer/internal/marketdata"
@@ -89,18 +81,86 @@ type OrderResult struct {
 	Accepted bool
 }
 
+// BalanceOutcome is one per-asset account-adjustment outcome produced by the
+// engine. The asset is carried next to the outcome because the accepted payload
+// intentionally contains only values and deltas.
+type BalanceOutcome struct {
+	Asset   string                           `json:"asset"`
+	Outcome domain.AdjustmentOutcomeAccepted `json:"outcome"`
+}
+
+// HoldResult is the outcome of one ReserveHold call on accept. The native
+// reservation stays held inside the engine adapter's registry, keyed by
+// ApprovalID, until CommitHeld or RollbackHeld resolves it (or the TTL sweeper
+// rolls it back). On reject ReserveHold returns Rejects with Accepted false and
+// holds nothing.
+type HoldResult struct {
+	// ExpiresAt is when the TTL sweeper auto-rolls the hold back.
+	ExpiresAt time.Time
+	// ApprovalID is the server UUID identifying the held reservation; it is the
+	// reservation id surfaced to clients. Empty when not accepted.
+	ApprovalID string
+	// LockPrices are the reservation lock prices captured at issue as decimal
+	// strings (caller-owned snapshot). Empty when the order locked nothing.
+	LockPrices []string
+	// SettlementLockPrice is the settlement-leg lock price (the price a fill
+	// settles at) as a decimal string; empty when no price was locked.
+	SettlementLockPrice string
+	// EstimateSource is how the lock price was derived: domain.EstimateSourceLimit
+	// when the order carried a limit price, else domain.EstimateSourceMarketMark.
+	EstimateSource string
+	// Outcomes are the per-asset balance effects produced by the reservation.
+	// They must be persisted so a later engine rebuild can seed the held amounts.
+	Outcomes []BalanceOutcome
+	// Rejects are the engine pre-trade rejects; non-empty only when not accepted.
+	Rejects []domain.OrderReject
+	// Accepted reports whether the pre-trade passed and the hold was registered.
+	Accepted bool
+}
+
+// ImmediateResult is the outcome of one SubmitImmediate call. On accept the
+// reservation is committed and settled in the same call via a synthetic
+// ApplyExecutionReport at the captured lock price, so the held amount nets to
+// zero; on reject Rejects holds the engine rejects and nothing settles.
+type ImmediateResult struct {
+	// LockPrices are the reservation lock prices captured before commit as
+	// decimal strings. Empty when the order locked nothing.
+	LockPrices []string
+	// Blocks are the account blocks the engine recorded while settling the
+	// immediate fill.
+	Blocks []domain.ExecutionAccountBlock
+	// Outcomes are the per-asset adjustment outcomes produced by the immediate
+	// fill settlement, each tagged with its asset (both the base and the quote
+	// leg of a spot fill settle).
+	Outcomes []BalanceOutcome
+	// SettlementLockPrice is the settlement-leg lock price the fill settled at as
+	// a decimal string; empty when no price was locked.
+	SettlementLockPrice string
+	// FillQuantity is the base quantity settled by the immediate fill.
+	FillQuantity string
+	// EstimateSource is how the lock price was derived: domain.EstimateSourceLimit
+	// when the order carried a limit price, else domain.EstimateSourceMarketMark.
+	EstimateSource string
+	// Rejects are the engine pre-trade rejects; non-empty only when not accepted.
+	Rejects []domain.OrderReject
+	// Accepted reports whether the pre-trade passed and the fill settled.
+	Accepted bool
+}
+
 // ExecutionReportResult is the outcome of one ApplyExecutionReport call: the
 // account blocks the engine recorded and any per-asset adjustment outcomes
 // policies produced.
 type ExecutionReportResult struct {
 	// Blocks are the account blocks the engine recorded for this report.
 	Blocks []domain.ExecutionAccountBlock
-	// Outcomes are the per-asset adjustment outcomes policies produced.
-	Outcomes []domain.AdjustmentOutcomeAccepted
+	// Outcomes are the per-asset adjustment outcomes policies produced, each
+	// tagged with its asset (both the base and the quote leg of a spot fill
+	// settle).
+	Outcomes []BalanceOutcome
 }
 
 // BuildFunc builds an engine from a seed snapshot. The local node calls it at
-// construction and again only for full backup restore. Production wires it to
+// construction and for administrative rebuilds. Production wires it to
 // BuildOpenPitEngine bound to a runtime-library path. Tests substitute a fake.
 type BuildFunc func(snap Snapshot) (Engine, error)
 
@@ -135,21 +195,7 @@ type Engine interface {
 	Running() bool
 
 	// ConfigurePolicy reconfigures one policy from its complete barrier set on
-	// the live engine handle via the binding's Configure surface. limits is the
-	// full set of barriers for policy (every target whose policy equals it);
-	// policy is one of the domain policy ids.
-	//
-	// The change is applied dynamically: the engine is never rebuilt. For
-	// rate_limit, order_size_limit, and pnl_bounds_kill_switch the supplied axes
-	// are replaced wholesale, adding and removing barriers at runtime. rate_limit
-	// and order_size_limit additionally return an error wrapping
-	// domain.ErrNotImplemented when they would drop a broker barrier, which the
-	// Configure surface cannot clear in isolation. Configuring a policy that was
-	// not registered at build time, or removing the last barrier of a registered
-	// policy, likewise returns domain.ErrNotImplemented. The caller reverts the
-	// store on that error; it is an SDK gap to close engine-side,
-	// not a trigger to rebuild. It returns an error if the engine is not running
-	// or if the configuration cannot be applied.
+	// the live engine handle via the binding's Configure surface.
 	ConfigurePolicy(ctx context.Context, policy string, limits []domain.Limit) error
 
 	// BlockAccount kill-switches the account in the engine, gating its pre-trade
@@ -173,6 +219,51 @@ type Engine interface {
 	// returns Accepted with those prices; on reject it returns the engine rejects.
 	// The native reservation never escapes the adapter.
 	SubmitOrder(ctx context.Context, o domain.Order) (OrderResult, error)
+
+	// ReserveHold runs the pre-trade pipeline for o on the live engine and, on
+	// accept, keeps the reservation held: the held amount stays reserved on
+	// engine storage until CommitHeld or RollbackHeld resolves it, or the TTL
+	// sweeper auto-rolls it back. It registers the held reservation under a fresh
+	// approval id and persists a reservation intent, then returns that id, the
+	// captured lock prices, the settlement-leg price and estimate source, and the
+	// expiry. On reject it holds nothing and returns the engine rejects. A held
+	// reservation holds no engine/storage lock between calls, so a multi-minute
+	// TTL blocks nothing.
+	ReserveHold(ctx context.Context, o domain.Order) (HoldResult, error)
+
+	// CommitHeld commits the held reservation identified by approvalID, realizing
+	// its reservation permanently, and marks the persisted intent committed. The
+	// Held->Resolving flip happens before the native commit, so a concurrent or
+	// repeated resolve cannot trigger the binding's double-commit panic: a second
+	// CommitHeld on an already-resolved id returns domain.ErrConflict. An unknown
+	// id returns domain.ErrNotFound.
+	CommitHeld(ctx context.Context, approvalID string) error
+
+	// RollbackHeld rolls back the held reservation identified by approvalID,
+	// returning the held amount to available, and marks the persisted intent
+	// rolled-back. It is tolerant of an already-resolved id (idempotent no-op for
+	// a terminal entry). An unknown id returns domain.ErrNotFound.
+	RollbackHeld(ctx context.Context, approvalID string) error
+
+	// SubmitImmediate runs the pre-trade pipeline for o and, on accept, commits
+	// the reservation and settles a fill in the same call via a synthetic
+	// ApplyExecutionReport at the captured settlement lock price, so the held
+	// amount nets to zero. It returns the lock prices, settlement price, and
+	// estimate source; on reject it returns the engine rejects and settles
+	// nothing.
+	SubmitImmediate(ctx context.Context, o domain.Order) (ImmediateResult, error)
+
+	// SetReservationStore attaches the persistence layer the adapter uses to keep
+	// reservation intents durable across the hold lifecycle. It is called once at
+	// boot, before the first ReserveHold and before ReconcileOrphans. A nil store
+	// keeps holds in memory only.
+	SetReservationStore(store ReservationStore)
+
+	// ReconcileOrphans reports every persisted reservation intent still in the
+	// held state. Native reservation handles do not survive a restart, but held
+	// balance effects reseed from the store and resolution can fall back to the
+	// persisted intent. It returns the number found.
+	ReconcileOrphans(ctx context.Context) (int, error)
 
 	// ApplyExecutionReport settles a fill on the live engine and returns the
 	// account blocks the engine recorded plus any adjustment outcomes.
