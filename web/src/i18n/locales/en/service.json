@@ -83,6 +83,7 @@
       "market_data_settings": "Market-data settings",
       "market_data_quotes": "Latest market-data quotes",
       "general_settings": "General settings",
+      "user_settings": "User settings",
       "activity_history": "Orders, trades, adjustments",
       "audit_log": "Audit log"
     },

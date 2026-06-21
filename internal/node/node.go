@@ -214,18 +214,25 @@ type Node interface {
 	) (domain.Order, engine.ImmediateResult, error)
 
 	// ConfirmHeld commits the held reservation identified by approvalID through the
-	// engine, records the reservation_committed event and committed status on the
-	// order, and audits nothing (the backend audits approval_confirmed). A second
-	// confirm on an already-resolved reservation returns domain.ErrConflict; an
-	// unknown reservation returns domain.ErrNotFound.
+	// engine, then atomically flips the intent, advances the order to committed,
+	// and records the reservation_committed event in one store transaction (the
+	// backend audits approval_confirmed). The order status advance is guarded
+	// against the accepted state: a fill that already moved the order to a terminal
+	// status (e.g. filled) yields domain.ErrConflict and nothing is written,
+	// preserving the fill. A second confirm on an already-resolved reservation
+	// returns domain.ErrConflict; an unknown reservation returns domain.ErrNotFound.
 	ConfirmHeld(
 		ctx context.Context, tenant domain.TenantID, orderID int64, approvalID string, caller domain.Caller,
 	) (domain.Order, error)
 
 	// CancelHeld rolls back the held reservation identified by approvalID through
-	// the engine, records the reservation_rolled_back event and cancelled status on
-	// the order, and audits nothing (the backend audits approval_cancelled). It is
-	// tolerant of an already-resolved reservation (idempotent).
+	// the engine, then atomically flips the intent, advances the order to
+	// cancelled, and records the reservation_rolled_back and cancelled events in
+	// one store transaction (the backend audits approval_cancelled). The order
+	// status advance is guarded against the accepted state: a late fill that
+	// already moved the order to filled yields domain.ErrConflict and nothing is
+	// written, so the fill is never clobbered. It is tolerant of an already-
+	// resolved reservation in the engine (idempotent native rollback).
 	CancelHeld(
 		ctx context.Context, tenant domain.TenantID, orderID int64, approvalID string, caller domain.Caller,
 	) (domain.Order, error)
@@ -236,9 +243,10 @@ type Node interface {
 	// number found.
 	ReconcileOrphans(ctx context.Context) (int, error)
 
-	// ApplyExecutionReport settles a fill through the engine, records the fill
-	// event and trade, mirrors any engine-recorded account blocks into the store,
-	// reflects the order status, and audits the action.
+	// ApplyExecutionReport settles a fill through the engine, then persists the
+	// fill event, trade, per-asset balances, engine-block UPDATEs, and the
+	// reflected order status in one atomic store transaction; the observational
+	// block-audit rows are written post-commit, and the action is audited.
 	ApplyExecutionReport(
 		ctx context.Context, key Key, in domain.ExecutionReportInput, caller domain.Caller,
 	) (engine.ExecutionReportResult, error)
@@ -291,6 +299,15 @@ type Node interface {
 	// SetMcpAccess upserts the enabled state for one MCP command. The command is
 	// validated against the catalogue by the backend before it reaches here.
 	SetMcpAccess(ctx context.Context, command string, enabled bool, caller domain.Caller) error
+
+	// GetUserSetting returns the stored value for (userID, key); ok is false when
+	// no such setting exists. User settings are a store passthrough with no engine
+	// side-effect.
+	GetUserSetting(ctx context.Context, userID, key string) (value string, ok bool, err error)
+
+	// SetUserSetting upserts one per-user key-value setting. Like MCP access it has
+	// no engine side-effect; unlike it, personal UI preferences are not audited.
+	SetUserSetting(ctx context.Context, userID, key, value string) error
 
 	// ListMarketDataInstances returns all configured market-data source instances.
 	ListMarketDataInstances(ctx context.Context) ([]domain.MarketDataInstance, error)

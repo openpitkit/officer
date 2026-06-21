@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -54,6 +55,7 @@ type fakeNode struct {
 
 	mcpAccess        map[string]bool
 	setMcpAccessCall []setMcpAccessCall
+	userSettings     map[string]string
 	mdInstances      []domain.MarketDataInstance
 	mdInstruments    map[string][]domain.MarketDataInstrument
 	mdQuotes         []domain.MarketDataQuote
@@ -84,6 +86,10 @@ type fakeNode struct {
 	auditCalls      []store.AuditEntry
 
 	getAccountErr error
+
+	// getOrderCount counts GetOrder invocations; the order-resolving flows must
+	// fetch the stored order at most once per operation.
+	getOrderCount atomic.Int64
 }
 
 type setMcpAccessCall struct {
@@ -362,6 +368,7 @@ func (n *fakeNode) ApplyExecutionReport(
 func (n *fakeNode) GetOrder(
 	_ context.Context, _ domain.TenantID, id int64,
 ) (domain.OrderDetail, error) {
+	n.getOrderCount.Add(1)
 	if n.getOrderErr != nil {
 		return domain.OrderDetail{}, n.getOrderErr
 	}
@@ -456,6 +463,26 @@ func (n *fakeNode) SetMcpAccess(
 		n.mcpAccess = make(map[string]bool)
 	}
 	n.mcpAccess[command] = enabled
+	return nil
+}
+
+func (n *fakeNode) GetUserSetting(
+	_ context.Context, _, key string,
+) (string, bool, error) {
+	if n.userSettings == nil {
+		return "", false, nil
+	}
+	value, ok := n.userSettings[key]
+	return value, ok, nil
+}
+
+func (n *fakeNode) SetUserSetting(
+	_ context.Context, _, key, value string,
+) error {
+	if n.userSettings == nil {
+		n.userSettings = make(map[string]string)
+	}
+	n.userSettings[key] = value
 	return nil
 }
 
@@ -582,9 +609,14 @@ func (n *fakeNode) Close() error { return nil }
 type fakeRouter struct {
 	node     *fakeNode
 	routeErr error
+
+	// routeCount counts Route invocations; the order-resolving flows must route
+	// exactly once per operation.
+	routeCount atomic.Int64
 }
 
 func (r *fakeRouter) Route(node.Key) (node.Node, error) {
+	r.routeCount.Add(1)
 	return r.node, r.routeErr
 }
 func (r *fakeRouter) All() []node.Node { return []node.Node{r.node} }
@@ -1771,6 +1803,160 @@ func containsProviderType(providers []backend.MarketDataProvider, want string) b
 		}
 	}
 	return false
+}
+
+// TestService_OrderFlowsRouteOnceFetchAtMostOnce locks the resolve-once
+// invariant: every order-resolving flow must route exactly once and fetch the
+// stored order at most once per operation. It instruments the fake router/node
+// call counters so a regression to double routing or double fetching fails here.
+func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		// run drives one operation. mustHold and any other multi-step setup happen
+		// before the measured operation; the case calls reset() to zero the counters
+		// just before the operation under test so the assertion covers only it. It
+		// returns the number of order fetches expected (submit fetches none,
+		// confirm/cancel fetch once).
+		run func(t *testing.T, svc *backend.Service, fn *fakeNode, reset func()) int
+	}{
+		{
+			name: "submit hold",
+			run: func(t *testing.T, svc *backend.Service, _ *fakeNode, reset func()) int {
+				t.Helper()
+				reset()
+				if _, err := svc.SubmitOrderToken(
+					context.Background(), sampleOrder(), backend.SubmitModeHold,
+				); err != nil {
+					t.Fatalf("SubmitOrderToken hold: %v", err)
+				}
+				return 0
+			},
+		},
+		{
+			name: "submit immediate",
+			run: func(t *testing.T, svc *backend.Service, _ *fakeNode, reset func()) int {
+				t.Helper()
+				reset()
+				if _, err := svc.SubmitOrderToken(
+					context.Background(), sampleOrder(), backend.SubmitModeImmediate,
+				); err != nil {
+					t.Fatalf("SubmitOrderToken immediate: %v", err)
+				}
+				return 0
+			},
+		},
+		{
+			name: "confirm accepted",
+			run: func(t *testing.T, svc *backend.Service, _ *fakeNode, reset func()) int {
+				t.Helper()
+				tok := mustHold(t, svc)
+				reset()
+				if _, err := svc.ConfirmExecution(
+					context.Background(), tok.OrderID, tok.Token,
+				); err != nil {
+					t.Fatalf("ConfirmExecution: %v", err)
+				}
+				return 1
+			},
+		},
+		{
+			name: "confirm already committed idempotent",
+			run: func(t *testing.T, svc *backend.Service, fn *fakeNode, reset func()) int {
+				t.Helper()
+				tok := mustHold(t, svc)
+				if _, err := svc.ConfirmExecution(
+					context.Background(), tok.OrderID, tok.Token,
+				); err != nil {
+					t.Fatalf("first confirm: %v", err)
+				}
+				reset()
+				fn.confirmErr = domain.ErrConflict
+				if _, err := svc.ConfirmExecution(
+					context.Background(), tok.OrderID, tok.Token,
+				); err != nil {
+					t.Fatalf("idempotent confirm: %v", err)
+				}
+				return 1
+			},
+		},
+		{
+			name: "confirm conflict",
+			run: func(t *testing.T, svc *backend.Service, fn *fakeNode, reset func()) int {
+				t.Helper()
+				tok := mustHold(t, svc)
+				if _, err := svc.CancelOrder(
+					context.Background(), tok.OrderID, tok.Token, "operator",
+				); err != nil {
+					t.Fatalf("cancel setup: %v", err)
+				}
+				reset()
+				fn.confirmErr = domain.ErrConflict
+				if _, err := svc.ConfirmExecution(
+					context.Background(), tok.OrderID, tok.Token,
+				); !errors.Is(err, domain.ErrConflict) {
+					t.Fatalf("confirm after cancel = %v, want conflict", err)
+				}
+				return 1
+			},
+		},
+		{
+			name: "cancel accepted",
+			run: func(t *testing.T, svc *backend.Service, _ *fakeNode, reset func()) int {
+				t.Helper()
+				tok := mustHold(t, svc)
+				reset()
+				if _, err := svc.CancelOrder(
+					context.Background(), tok.OrderID, tok.Token, "stale price",
+				); err != nil {
+					t.Fatalf("CancelOrder: %v", err)
+				}
+				return 1
+			},
+		},
+		{
+			name: "cancel conflict",
+			run: func(t *testing.T, svc *backend.Service, fn *fakeNode, reset func()) int {
+				t.Helper()
+				tok := mustHold(t, svc)
+				if _, err := svc.ConfirmExecution(
+					context.Background(), tok.OrderID, tok.Token,
+				); err != nil {
+					t.Fatalf("confirm setup: %v", err)
+				}
+				reset()
+				if _, err := svc.CancelOrder(
+					context.Background(), tok.OrderID, tok.Token, "too late",
+				); !errors.Is(err, domain.ErrConflict) {
+					t.Fatalf("cancel after confirm = %v, want conflict", err)
+				}
+				return 1
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			router := &fakeRouter{node: &fakeNode{orders: make(map[int64]domain.Order)}}
+			svc := backend.New(router, nil, &fakeSigner{})
+			fn := router.node
+			reset := func() {
+				router.routeCount.Store(0)
+				fn.getOrderCount.Store(0)
+			}
+
+			wantFetches := tc.run(t, svc, fn, reset)
+
+			if got := router.routeCount.Load(); got != 1 {
+				t.Fatalf("Route calls = %d, want exactly 1", got)
+			}
+			if got := fn.getOrderCount.Load(); got > int64(wantFetches) {
+				t.Fatalf("GetOrder calls = %d, want at most %d", got, wantFetches)
+			}
+		})
+	}
 }
 
 func TestService_CommandEnabledResolves(t *testing.T) {

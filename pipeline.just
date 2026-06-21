@@ -20,8 +20,8 @@
 
 import 'justfile'
 
-# Go build, lint, and test against the published OpenPit module.
-ci-go: tidy-check build-go lint-go test-go test-go-race
+# Go lint, build, and test against the published OpenPit module.
+ci-go: check-go-dry
 
-# Frontend SPA lint, typecheck, build, and unit tests.
-ci-frontend: frontend-ci-install frontend-lint frontend-typecheck frontend-build-ready frontend-test
+# JS/TypeScript install, lint, build, and unit tests.
+ci-js: frontend-ci-install check-js

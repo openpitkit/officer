@@ -34,10 +34,13 @@
 // an account detail context to /policies, /audit, or /trading. The pages read
 // the param with useSearchParams().
 
-import { Navigate, Route, Routes } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 
+import { fetchWelcomeSeen } from "@/api/client";
 import { Sidebar } from "@/components/Sidebar";
 import { SidebarProvider } from "@/components/SidebarContext";
+import { WelcomeDialog } from "@/components/WelcomeDialog";
 import { Accounts } from "@/pages/Accounts";
 import { Audit } from "@/pages/Audit";
 import { Dashboard } from "@/pages/Dashboard";
@@ -49,7 +52,34 @@ import { Orders } from "@/pages/Orders";
 import { Service } from "@/pages/Service";
 import { SigningKeys } from "@/pages/SigningKeys";
 
+// Redirect to a canonical path while preserving the query string and hash, so
+// per-account links like /trading?account=<id> keep their filter on arrival.
+function RedirectPreservingQuery({ to }: { to: string }) {
+  const { search, hash } = useLocation();
+  return <Navigate to={{ pathname: to, search, hash }} replace />;
+}
+
 export default function App() {
+  // The welcome dialog shows on every load until the operator dismisses it with
+  // "don't show again", which the backend persists in user settings.
+  const [welcomeOpen, setWelcomeOpen] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchWelcomeSeen()
+      .then((seen) => {
+        if (!cancelled && !seen) {
+          setWelcomeOpen(true);
+        }
+      })
+      .catch(() => {
+        // On a transient failure, leave the dialog closed rather than nag.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <SidebarProvider>
       <div className="flex h-screen w-screen overflow-hidden bg-bg text-text">
@@ -60,11 +90,11 @@ export default function App() {
             <Route path="/accounts" element={<Accounts />} />
             {/* /policies is the new name; /limits redirects for any bookmarks. */}
             <Route path="/policies" element={<Limits />} />
-            <Route path="/limits" element={<Navigate to="/policies" replace />} />
+            <Route path="/limits" element={<RedirectPreservingQuery to="/policies" />} />
             <Route path="/positions" element={<Positions />} />
             <Route path="/orders" element={<Orders />} />
             {/* /trading redirects for any bookmarks. */}
-            <Route path="/trading" element={<Navigate to="/orders" replace />} />
+            <Route path="/trading" element={<RedirectPreservingQuery to="/orders" />} />
             <Route path="/market-data" element={<MarketData />} />
             <Route path="/audit" element={<Audit />} />
             <Route path="/mcp-access" element={<McpAccess />} />
@@ -74,6 +104,7 @@ export default function App() {
           </Routes>
         </div>
       </div>
+      <WelcomeDialog open={welcomeOpen} onOpenChange={setWelcomeOpen} />
     </SidebarProvider>
   );
 }

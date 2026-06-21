@@ -512,8 +512,11 @@ func (e *openPitEngine) SubmitOrder(
 	for _, price := range prices {
 		lockPrices = append(lockPrices, price.String())
 	}
+	// Capture the reservation's balance effects (held funds, incoming quantity)
+	// before closing, so the caller can mirror them into the balance snapshot.
+	outcomes := balanceOutcomesFromList(reservation.AccountAdjustments())
 	reservation.CommitAndClose()
-	return OrderResult{Accepted: true, LockPrices: lockPrices}, nil
+	return OrderResult{Accepted: true, LockPrices: lockPrices, Outcomes: outcomes}, nil
 }
 
 // ApplyExecutionReport settles a fill and returns the account blocks the engine

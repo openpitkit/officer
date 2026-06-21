@@ -226,3 +226,14 @@ CREATE TABLE mcp_access (
     command TEXT PRIMARY KEY,
     enabled INTEGER NOT NULL
 );
+
+-- Per-user application/UI settings as a generic key-value store. `user_id` is a
+-- constant placeholder until real users exist. One row per (user, key); a key
+-- without a row resolves to its application default. `setting_value` is opaque
+-- text interpreted by the consuming surface.
+CREATE TABLE user_settings (
+    user_id       TEXT NOT NULL,
+    setting_key   TEXT NOT NULL,
+    setting_value TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (user_id, setting_key)
+);

@@ -289,7 +289,8 @@ func placeholderValues(policy string) []domain.LimitValue {
 }
 
 // ListAudit returns the most recent count audit rows aggregated across all
-// nodes, newest first.
+// nodes, newest first. Per-node results are merged, sorted by id desc, then
+// bounded to count.
 func (s *Service) ListAudit(
 	ctx context.Context, count int,
 ) ([]domain.AuditRow, error) {
@@ -301,13 +302,18 @@ func (s *Service) ListAudit(
 		}
 		rows = append(rows, part...)
 	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].ID > rows[j].ID })
+	if count > 0 && len(rows) > count {
+		rows = rows[:count]
+	}
 	return rows, nil
 }
 
 // ListAuditFiltered returns audit entries, newest first, narrowed by the
 // filter. The account, source, and action filters are applied in each node's
-// query so count bounds the already-filtered set; the per-node results are then
-// aggregated. A zero-value filter matches all rows.
+// query so count bounds the already-filtered set; the per-node results are
+// merged, sorted by id desc, then bounded to count. A zero-value filter
+// matches all rows.
 func (s *Service) ListAuditFiltered(
 	ctx context.Context, filter domain.AuditFilter, count int,
 ) ([]domain.AuditRow, error) {
@@ -318,6 +324,10 @@ func (s *Service) ListAuditFiltered(
 			return nil, fmt.Errorf("backend: node %d list audit filtered: %w", i, err)
 		}
 		rows = append(rows, part...)
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].ID > rows[j].ID })
+	if count > 0 && len(rows) > count {
+		rows = rows[:count]
 	}
 	return rows, nil
 }
@@ -441,6 +451,43 @@ func (s *Service) SetMcpAccess(
 		return err
 	}
 	return n.SetMcpAccess(ctx, command, enabled, auth.CallerFromContext(ctx))
+}
+
+// --- User settings ----------------------------------------------------------
+
+// WelcomeSeen reports whether the operator has dismissed the first-run welcome
+// dialog with "don't show again". Until then the dialog is shown on every load.
+func (s *Service) WelcomeSeen(ctx context.Context) (bool, error) {
+	n, err := s.groupNode()
+	if err != nil {
+		return false, err
+	}
+	value, ok, err := n.GetUserSetting(
+		ctx, domain.DefaultUserID, domain.UserSettingWelcomeSeen,
+	)
+	if err != nil {
+		return false, fmt.Errorf("backend: read welcome seen: %w", err)
+	}
+	return ok && value == "1", nil
+}
+
+// SetWelcomeSeen records (or clears) the operator's "don't show again" choice
+// for the first-run welcome dialog.
+func (s *Service) SetWelcomeSeen(ctx context.Context, seen bool) error {
+	n, err := s.groupNode()
+	if err != nil {
+		return err
+	}
+	value := ""
+	if seen {
+		value = "1"
+	}
+	if err := n.SetUserSetting(
+		ctx, domain.DefaultUserID, domain.UserSettingWelcomeSeen, value,
+	); err != nil {
+		return fmt.Errorf("backend: set welcome seen: %w", err)
+	}
+	return nil
 }
 
 // ListMarketData returns configured providers, instances, instruments, and the

@@ -14,7 +14,7 @@
     "quoteAsset": "计价资产",
     "manualPrice": "手动价格",
     "manualPriceFor": "{{symbol}} 的手动价格",
-    "pairAlreadyUsed": "此 base/quote 组合已被使用：{{feeds}}"
+    "pairAlreadyUsed": "此 基础/计价 组合已被使用：{{feeds}}"
   },
   "instrumentDialog": {
     "ibTitle": "添加 Interactive Brokers 工具",
@@ -38,7 +38,7 @@
     "title": "添加 {{provider}} 来源",
     "defaultHint": "创建来源后，再向其中添加工具。",
     "duplicateLabel": "已存在同名来源。",
-    "binanceHint": "创建 Binance 来源以接收实时现货价格。公共 ticker streams 不需要凭据。",
+    "binanceHint": "创建 Binance 来源以接收实时现货价格。公共行情推送不需要凭据。",
     "byoHint": "创建手动来源。创建后添加工具并发送由操作员维护的价格。",
     "mockHint": "创建用于演示和本地测试的合成来源。"
   },
@@ -52,42 +52,42 @@
     "ib": {
       "title": "Interactive Brokers",
       "description": "来自 Interactive Brokers TWS 或 IB Gateway 的实时行情。普通代码不明确时，请使用合约设置。",
-      "createHint": "创建连接到 TWS/Gateway 的 Interactive Brokers 来源。配置 host、port、client ID 和 market data 模式。"
+      "createHint": "创建连接到 TWS/Gateway 的 Interactive Brokers 来源。配置 host、port、client ID 和行情数据模式。"
     },
     "binance": {
       "title": "Binance",
       "description": "从 Binance 推送的现货市场实时价格。外部代码使用 Binance 格式，例如 BTCUSDT。",
-      "createHint": "创建 Binance 来源以接收实时现货价格。公共 ticker streams 不需要凭据。"
+      "createHint": "创建 Binance 来源以接收实时现货价格。公共行情推送不需要凭据。"
     },
     "kraken": {
       "title": "Kraken",
       "description": "来自 Kraken WebSocket v2 的实时现货价格。外部代码使用 Kraken 交易对格式，例如 BTC/USD。",
-      "createHint": "创建 Kraken 来源以接收实时现货价格。公共 ticker streams 不需要凭据。"
+      "createHint": "创建 Kraken 来源以接收实时现货价格。公共行情推送不需要凭据。"
     },
     "coinbase": {
       "title": "Coinbase",
-      "description": "来自 Coinbase Exchange 的实时 product tickers。外部代码使用 product IDs，例如 BTC-USD。",
-      "createHint": "创建 Coinbase 来源以接收实时 exchange tickers。公共数据源不需要凭据。"
+      "description": "来自 Coinbase Exchange 的实时产品行情。外部代码使用产品 ID，例如 BTC-USD。",
+      "createHint": "创建 Coinbase 来源以接收实时交易所行情。公共数据源不需要凭据。"
     },
     "alpaca": {
       "title": "Alpaca",
       "description": "来自 Alpaca IEX 的美股实时价格。需要 API 凭据；外部代码使用股票代码，例如 AAPL。",
-      "createHint": "创建 Alpaca 来源以接收 IEX 股票价格。填写 API key 和 secret。"
+      "createHint": "创建 Alpaca 来源以接收 IEX 股票价格。填写 API key 和 API secret。"
     },
     "okx": {
       "title": "OKX",
-      "description": "来自 OKX 的实时现货 tickers。外部代码使用 OKX instrument IDs，例如 BTC-USDT。",
-      "createHint": "创建 OKX 来源以接收公共现货 tickers。公共数据源不需要凭据。"
+      "description": "来自 OKX 的实时现货行情。外部代码使用 OKX 工具 ID，例如 BTC-USDT。",
+      "createHint": "创建 OKX 来源以接收公共现货行情。公共数据源不需要凭据。"
     },
     "bybit": {
       "title": "Bybit",
-      "description": "来自 Bybit v5 的实时 tickers。外部代码使用 Bybit 代码；category 可在 credentials 中配置。",
-      "createHint": "创建 Bybit 来源以接收公共 v5 tickers。选择 market category。"
+      "description": "来自 Bybit v5 的实时行情。外部代码使用 Bybit 代码；类别可在凭据中配置。",
+      "createHint": "创建 Bybit 来源以接收公共 v5 行情。选择市场类别。"
     },
     "oanda": {
       "title": "OANDA",
-      "description": "来自 OANDA v20 的实时外汇价格。需要账户凭据；外部代码使用 EUR_USD 等 instruments。",
-      "createHint": "创建 OANDA 来源以接收外汇价格。填写 token、account ID 和 environment。"
+      "description": "来自 OANDA v20 的实时外汇价格。需要账户凭据；外部代码使用 EUR_USD 等工具。",
+      "createHint": "创建 OANDA 来源以接收外汇价格。填写 token、account ID 和环境。"
     },
     "finnhub": {
       "title": "Finnhub",
@@ -96,7 +96,7 @@
     },
     "byo": {
       "title": "BYO",
-      "description": "由操作员维护的手动价格。适用于 static FX、测试价格，或由其他系统注入的行情。",
+      "description": "由操作员维护的手动价格。适用于静态外汇、测试价格，或由其他系统注入的行情。",
       "createHint": "创建手动来源。创建后添加工具并发送由操作员维护的价格。"
     },
     "mock": {
@@ -129,7 +129,7 @@
     "port": "Port",
     "clientId": "Client ID",
     "autoClientId": "自动",
-    "marketDataType": "Market data 类型",
+    "marketDataType": "行情数据类型",
     "secType": "证券类型",
     "exchange": "交易所",
     "currency": "货币",
@@ -145,8 +145,8 @@
     "right": "期权类型",
     "apiKey": "API key",
     "apiSecret": "API secret",
-    "getApiKeys": "获取 API key",
-    "getApiToken": "获取 API token",
+    "getApiKeys": "获取 API 密钥",
+    "getApiToken": "获取 API 令牌",
     "token": "Token",
     "accountID": "Account ID",
     "environment": "环境",

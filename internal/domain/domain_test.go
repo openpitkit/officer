@@ -19,6 +19,8 @@ package domain_test
 
 import (
 	"errors"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -480,6 +482,38 @@ func TestAuditActionsByCategory_PartitionsCatalogue(t *testing.T) {
 	for _, action := range all {
 		if seen[action] != 1 {
 			t.Errorf("action %q appears %d times across categories, want 1", action, seen[action])
+		}
+	}
+}
+
+// TestAllAuditActionsCoversEveryConstant guards that AllAuditActions includes
+// every AuditAction constant declared in domain.go. It scans the source file
+// for lines of the form `AuditActionXxx AuditAction = "literal"` and verifies
+// each literal appears in the AllAuditActions slice.
+func TestAllAuditActionsCoversEveryConstant(t *testing.T) {
+	t.Parallel()
+
+	src, err := os.ReadFile("domain.go")
+	if err != nil {
+		t.Fatalf("read domain.go: %v", err)
+	}
+
+	// Matches: AuditActionXxx  AuditAction = "literal"
+	re := regexp.MustCompile(`AuditAction\w+\s+AuditAction\s*=\s*"([^"]+)"`)
+	matches := re.FindAllSubmatch(src, -1)
+	if len(matches) < 10 {
+		t.Fatalf("regexp found only %d AuditAction constants - check the pattern", len(matches))
+	}
+
+	inSlice := make(map[string]struct{}, len(domain.AllAuditActions()))
+	for _, action := range domain.AllAuditActions() {
+		inSlice[string(action)] = struct{}{}
+	}
+
+	for _, m := range matches {
+		literal := strings.TrimSpace(string(m[1]))
+		if _, ok := inSlice[literal]; !ok {
+			t.Errorf("audit action %q is declared but missing from AllAuditActions()", literal)
 		}
 	}
 }

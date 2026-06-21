@@ -77,6 +77,10 @@ type OrderResult struct {
 	LockPrices []string
 	// Rejects are the engine pre-trade rejects; non-empty only when not accepted.
 	Rejects []domain.OrderReject
+	// Outcomes are the per-asset balance effects the reservation produced (held
+	// funds and incoming quantity). They must be persisted so the balance
+	// snapshot reflects the committed reservation before any fill arrives.
+	Outcomes []BalanceOutcome
 	// Accepted reports whether the pre-trade passed and was committed.
 	Accepted bool
 }
@@ -84,6 +88,12 @@ type OrderResult struct {
 // BalanceOutcome is one per-asset account-adjustment outcome produced by the
 // engine. The asset is carried next to the outcome because the accepted payload
 // intentionally contains only values and deltas.
+//
+// Invariant: the engine emits at most one BalanceOutcome per asset. Downstream
+// persistence keys balance updates by asset on that basis (the node maps these
+// onto domain.BalanceSettlement for the atomic RecordOrderSettlement tx), so
+// duplicate-asset outcomes would double-count realized P&L. Aggregating multiple
+// per-asset outcomes is a deferred outcome-model rework.
 type BalanceOutcome struct {
 	Asset   string                           `json:"asset"`
 	Outcome domain.AdjustmentOutcomeAccepted `json:"outcome"`
@@ -232,17 +242,22 @@ type Engine interface {
 	ReserveHold(ctx context.Context, o domain.Order) (HoldResult, error)
 
 	// CommitHeld commits the held reservation identified by approvalID, realizing
-	// its reservation permanently, and marks the persisted intent committed. The
-	// Held->Resolving flip happens before the native commit, so a concurrent or
-	// repeated resolve cannot trigger the binding's double-commit panic: a second
-	// CommitHeld on an already-resolved id returns domain.ErrConflict. An unknown
-	// id returns domain.ErrNotFound.
+	// its reservation permanently. It does the native commit and the in-memory
+	// single-resolve guard only; durable persistence (intent flip + order status +
+	// event) is the node's atomic ResolveOrderReservation. The Held->Resolving flip
+	// happens before the native commit, so a concurrent or repeated resolve cannot
+	// trigger the binding's double-commit panic: a second CommitHeld on an
+	// already-resolved id returns domain.ErrConflict. An unknown id returns
+	// domain.ErrNotFound.
 	CommitHeld(ctx context.Context, approvalID string) error
 
 	// RollbackHeld rolls back the held reservation identified by approvalID,
-	// returning the held amount to available, and marks the persisted intent
-	// rolled-back. It is tolerant of an already-resolved id (idempotent no-op for
-	// a terminal entry). An unknown id returns domain.ErrNotFound.
+	// returning the held amount to available. Like CommitHeld it does the native
+	// rollback and the in-memory guard only; the node persists the resolution
+	// atomically via ResolveOrderReservation. (The TTL sweeper, by contrast, owns
+	// its swept rollback end to end and persists through the engine's own store
+	// handle.) It is tolerant of an already-resolved id (idempotent no-op for a
+	// terminal entry). An unknown id returns domain.ErrNotFound.
 	RollbackHeld(ctx context.Context, approvalID string) error
 
 	// SubmitImmediate runs the pre-trade pipeline for o and, on accept, commits

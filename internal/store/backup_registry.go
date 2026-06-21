@@ -33,6 +33,7 @@ type backupTableCoverage struct {
 // market_data_settings -> market_data_instances, market_data_instruments
 // market_data_quotes -> market_data_quotes
 // general_settings -> mcp_access
+// user_settings -> user_settings
 // activity_history -> orders, order_events, trades, adjustments
 // audit_log -> audit
 var backupCoverageRegistry = []backupTableCoverage{
@@ -148,6 +149,12 @@ var backupCoverageRegistry = []backupTableCoverage{
 		Columns:         []string{"command", "enabled"},
 		ConflictColumns: []string{"command"},
 		Section:         backup.SectionGeneralSettings,
+	},
+	{
+		Table:           "user_settings",
+		Columns:         []string{"user_id", "setting_key", "setting_value"},
+		ConflictColumns: []string{"user_id", "setting_key"},
+		Section:         backup.SectionUserSettings,
 	},
 }
 

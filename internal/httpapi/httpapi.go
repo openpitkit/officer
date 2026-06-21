@@ -103,6 +103,9 @@ type Service interface {
 	ListMcpAccess(ctx context.Context) ([]backend.McpCommand, error)
 	SetMcpAccess(ctx context.Context, command string, enabled bool) error
 
+	WelcomeSeen(ctx context.Context) (bool, error)
+	SetWelcomeSeen(ctx context.Context, seen bool) error
+
 	ListMarketData(ctx context.Context) (backend.MarketDataStatus, error)
 	RestartMarketData(ctx context.Context) error
 	VerifyMarketDataSymbol(
@@ -302,9 +305,13 @@ func mountV1(r chi.Router, svc Service, logs LogSource) {
 	r.Delete("/limits", handleDeleteLimit(svc))
 
 	r.Get("/audit", handleListAudit(svc))
+	r.Get("/audit/actions", handleListAuditActions())
 
 	r.Get("/mcp-access", handleListMcpAccess(svc))
 	r.Put("/mcp-access/{command}", handleSetMcpAccess(svc))
+
+	r.Get("/user-settings", handleGetUserSettings(svc))
+	r.Put("/user-settings", handleSetUserSettings(svc))
 
 	r.Post("/signing/keys/generate", handleGenerateSigningKey(svc))
 	r.Post("/signing/keys/import", handleImportSigningKey(svc))
@@ -899,10 +906,12 @@ func handleListAudit(svc Service) http.HandlerFunc {
 }
 
 // auditActionsFromQuery resolves the audit action include-set from the request.
-// An explicit ?actions=a,b list wins (each name validated); otherwise ?category
-// selects a group - "all" disables the action filter, "trading" or "control"
-// pick a category - defaulting to control when both are absent. A nil result
-// means no action filter (all actions).
+// An explicit ?actions=a,b list wins (each name validated against the catalogue;
+// a non-empty value that resolves to zero valid names is rejected). Otherwise
+// ?category selects a group via domain.AuditActionsForCategory; an unknown
+// category is rejected with a 400 error. Absent category defaults to control so
+// the high-volume trading stream is hidden unless asked for. A nil result means
+// no action filter (all actions).
 func auditActionsFromQuery(q url.Values) ([]domain.AuditAction, error) {
 	if raw := strings.TrimSpace(q.Get("actions")); raw != "" {
 		valid := make(map[domain.AuditAction]struct{})
@@ -921,15 +930,37 @@ func auditActionsFromQuery(q url.Values) ([]domain.AuditAction, error) {
 			}
 			actions = append(actions, action)
 		}
+		if len(actions) == 0 {
+			return nil, fmt.Errorf("no valid audit actions in %q", raw)
+		}
 		return actions, nil
 	}
-	switch q.Get("category") {
-	case "all":
-		return nil, nil
-	case string(domain.AuditCategoryTrading):
-		return domain.AuditActionsByCategory(domain.AuditCategoryTrading), nil
-	default:
-		return domain.AuditActionsByCategory(domain.AuditCategoryControl), nil
+	actions, known := domain.AuditActionsForCategory(strings.TrimSpace(q.Get("category")))
+	if !known {
+		return nil, fmt.Errorf("unknown audit category %q", q.Get("category"))
+	}
+	return actions, nil
+}
+
+// handleListAuditActions handles GET /api/v1/audit/actions. It returns the
+// audit-action catalogue grouped by category, control first, in canonical
+// order. It is the single source the web uses to build the audit type filter,
+// so the classification lives only in the domain. It reads no service state.
+func handleListAuditActions() http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		groups := []auditActionGroupDTO{
+			{
+				Category: string(domain.AuditCategoryControl),
+				Actions: auditActionStrings(
+					domain.AuditActionsByCategory(domain.AuditCategoryControl)),
+			},
+			{
+				Category: string(domain.AuditCategoryTrading),
+				Actions: auditActionStrings(
+					domain.AuditActionsByCategory(domain.AuditCategoryTrading)),
+			},
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"groups": groups})
 	}
 }
 
@@ -991,6 +1022,42 @@ func handleSetMcpAccess(svc Service) http.HandlerFunc {
 		// The backend validated the command, so it must be present; treat its
 		// absence as an internal inconsistency rather than a 404.
 		writeErrMsg(w, http.StatusInternalServerError, "internal", "internal error")
+	}
+}
+
+// --- user settings ----------------------------------------------------------
+
+type userSettingsDTO struct {
+	WelcomeSeen bool `json:"welcomeSeen"`
+}
+
+// handleGetUserSettings handles GET /api/v1/user-settings, returning the current
+// operator's UI preferences.
+func handleGetUserSettings(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		seen, err := svc.WelcomeSeen(r.Context())
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, userSettingsDTO{WelcomeSeen: seen})
+	}
+}
+
+// handleSetUserSettings handles PUT /api/v1/user-settings, persisting the
+// operator's UI preferences and echoing the stored state.
+func handleSetUserSettings(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req userSettingsDTO
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			return
+		}
+		if err := svc.SetWelcomeSeen(r.Context(), req.WelcomeSeen); err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, userSettingsDTO{WelcomeSeen: req.WelcomeSeen})
 	}
 }
 

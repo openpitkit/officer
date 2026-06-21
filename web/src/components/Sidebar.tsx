@@ -31,13 +31,16 @@ import {
   Users,
   type LucideIcon,
 } from "lucide-react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, NavLink } from "react-router-dom";
 
 import { useMarketData } from "@/api/useMarketData";
 import { useService } from "@/api/useService";
 import { BrandMark } from "@/components/BrandMark";
+import { WelcomeDialog } from "@/components/WelcomeDialog";
 import { useSidebar } from "@/components/sidebar-context";
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -78,6 +81,7 @@ export function Sidebar() {
   const { load } = useService();
   const { load: marketDataLoad } = useMarketData();
   const { open, close } = useSidebar();
+  const [welcomeOpen, setWelcomeOpen] = useState(false);
   const isNonRelease =
     load.state === "ready" && load.data.release === false;
   const restartRequired =
@@ -242,9 +246,21 @@ export function Sidebar() {
                     </a>
                   ))}
                 </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => {
+                    setWelcomeOpen(true);
+                  }}
+                >
+                  <Info />
+                  {t("about.openWelcome")}
+                </Button>
               </div>
             </DialogContent>
           </Dialog>
+          <WelcomeDialog open={welcomeOpen} onOpenChange={setWelcomeOpen} />
         </div>
       </aside>
     </>

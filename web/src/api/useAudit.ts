@@ -17,8 +17,8 @@
 
 import { useCallback } from "react";
 
-import { fetchAudit } from "@/api/client";
-import type { AuditEntry } from "@/api/types";
+import { fetchAudit, fetchAuditActions } from "@/api/client";
+import type { AuditActionGroup, AuditEntry } from "@/api/types";
 import { usePolling, type PollingResult } from "@/api/usePolling";
 
 /** Poll GET /audit for the newest `limit` entries, optionally filtered. The
@@ -40,6 +40,17 @@ export function useAudit(
     // actionsKey stands in for the actions array identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [limit, account, source, actionsKey],
+  );
+  return usePolling(fetcher);
+}
+
+/** Poll GET /audit/actions for the action catalogue used to build the type
+ *  filter. The catalogue is small and static, but polling reuses the shared
+ *  load lifecycle so the page can gate on it like any other fetch. */
+export function useAuditActions(): PollingResult<AuditActionGroup[]> {
+  const fetcher = useCallback(
+    (signal: AbortSignal) => fetchAuditActions(signal),
+    [],
   );
   return usePolling(fetcher);
 }

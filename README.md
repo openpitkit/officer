@@ -117,9 +117,10 @@ assets.
 With [Just](https://just.systems/):
 
 ```bash
-just tidy      # update go.sum after editing go.mod
-just build-go  # build all Go packages without rebuilding the SPA
-just build     # build the SPA, then the pit-officer binary
+go mod tidy   # update go.sum after editing go.mod
+just check    # format, lint, build, and test
+just build-go # build all Go packages without rebuilding the SPA
+just build    # build the SPA, then the pit-officer binary
 ```
 
 Local OpenPit developer mode is explicit. These recipes build the native runtime

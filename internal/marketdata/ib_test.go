@@ -1204,7 +1204,7 @@ func TestLiveIBClientConnectTimeoutClosesPartialHandshake(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	accepted := make(chan net.Conn, 1)
 	acceptErr := make(chan error, 1)

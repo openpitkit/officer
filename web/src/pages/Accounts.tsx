@@ -1459,10 +1459,20 @@ function AccountsTable({
 
               <TableCell>
                 {account.blocked ? (
-                  <Badge variant="danger">
-                    <StatusDot tone="danger" />
-                    {t("accounts.status.blocked")}
-                  </Badge>
+                  <div className="flex flex-col items-start gap-1">
+                    <Badge variant="danger">
+                      <StatusDot tone="danger" />
+                      {t("accounts.status.blocked")}
+                    </Badge>
+                    {account.blockReason && (
+                      <span
+                        className="max-w-[18rem] truncate text-[0.6875rem] text-muted-lt"
+                        title={account.blockReason}
+                      >
+                        {account.blockReason}
+                      </span>
+                    )}
+                  </div>
                 ) : (
                   <Badge variant="ok">
                     <StatusDot tone="ok" />

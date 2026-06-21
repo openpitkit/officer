@@ -189,7 +189,9 @@ export interface Order {
   submitMode?: "hold" | "immediate";
 }
 
-/** An event on an order's lifecycle. */
+/** An event on an order's lifecycle.
+ * Reject fields are present on rejected events and account-blocking fill events.
+ */
 export interface OrderEvent {
   id: number;
   orderId: number;
@@ -245,6 +247,19 @@ export interface CheckResult {
   rejects: CheckReject[];
   wouldLockPrices: string[];
   wouldBlock: CheckWouldBlock | null;
+}
+
+/** One account block the engine recorded while settling an execution report. */
+export interface ExecutionBlock {
+  account: string;
+  code: string;
+  reason: string;
+  details: string;
+}
+
+/** Result of POST /orders/{id}/execution-reports (the blocks the fill caused). */
+export interface ExecutionReportResult {
+  blocks: ExecutionBlock[];
 }
 
 // --- Dashboard / Overview ---
@@ -424,6 +439,7 @@ export type BackupSection =
   | "market_data_settings"
   | "market_data_quotes"
   | "general_settings"
+  | "user_settings"
   | "activity_history"
   | "audit_log";
 
@@ -529,4 +545,12 @@ export interface AuditEntry {
   account: string;
   detail: string;
   source: Source;
+}
+
+/** One category of the audit action catalogue (mirrors the wire shape from
+ *  GET /audit/actions). Category is a stable key (e.g. "control", "trading"),
+ *  control first in canonical order; labels stay in i18n. */
+export interface AuditActionGroup {
+  category: string;
+  actions: string[];
 }

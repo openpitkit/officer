@@ -38,6 +38,8 @@ tags:
     description: Append-only audit trail
   - name: mcp-access
     description: MCP command access control
+  - name: user-settings
+    description: Operator UI preferences
   - name: market-data
     description: Market-data source configuration and latest quote snapshots
   - name: backup
@@ -1193,6 +1195,31 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /audit/actions:
+    get:
+      operationId: listAuditActions
+      summary: List the audit-action catalogue grouped by category
+      description: >
+        Returns every audit action grouped by category, control first, in the
+        domain canonical order. It is the single source the web uses to build the
+        audit type filter, so the classification is never hardcoded client-side.
+      tags: [audit]
+      responses:
+        "200":
+          description: Audit-action catalogue grouped by category.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [groups]
+                properties:
+                  groups:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AuditActionGroup"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   # ---------------------------------------------------------------------------
   # MCP access control
   # ---------------------------------------------------------------------------
@@ -1267,6 +1294,46 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ---------------------------------------------------------------------------
+  # User settings
+  # ---------------------------------------------------------------------------
+
+  /user-settings:
+    get:
+      operationId: getUserSettings
+      summary: Read the current operator's UI preferences
+      tags: [user-settings]
+      responses:
+        "200":
+          description: Current operator UI preferences.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserSettings"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: setUserSettings
+      summary: Persist the current operator's UI preferences
+      tags: [user-settings]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserSettings"
+      responses:
+        "200":
+          description: Preferences persisted; returns the stored state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserSettings"
+        "400":
+          $ref: "#/components/responses/ValidationError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -2296,14 +2363,19 @@ components:
           enum: [panel, api, mcp, system]
         rejectCode:
           type: string
+          description: Present on rejected events and account-blocking fill events.
         rejectScope:
           type: string
+          description: Present on rejected events and account-blocking fill events.
         rejectPolicy:
           type: string
+          description: Present on rejected events.
         rejectReason:
           type: string
+          description: Present on rejected events and account-blocking fill events.
         rejectDetails:
           type: string
+          description: Present on rejected events and account-blocking fill events.
         fillQuantity:
           type: string
           description: Exact decimal string; present on fill events.
@@ -2474,6 +2546,20 @@ components:
           description: "Originating surface: `panel`, `api`, `mcp`, or `system`."
           enum: [panel, api, mcp, system]
 
+    AuditActionGroup:
+      type: object
+      required: [category, actions]
+      properties:
+        category:
+          type: string
+          description: Audit action category.
+          enum: [control, trading]
+        actions:
+          type: array
+          description: Action names in the category, in canonical order.
+          items:
+            type: string
+
     # Overview
 
     Counts:
@@ -2567,6 +2653,16 @@ components:
         count:
           type: integer
           description: Number of lines returned.
+
+    # User settings
+
+    UserSettings:
+      type: object
+      required: [welcomeSeen]
+      properties:
+        welcomeSeen:
+          type: boolean
+          description: Whether the operator dismissed the first-run welcome dialog.
 
     # Market data
 

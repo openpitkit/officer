@@ -372,6 +372,27 @@ const (
 	OrderStatusCancelled       OrderStatus = "cancelled"
 )
 
+// OrderStatusesEligibleForFill returns the statuses a fill may legally advance
+// FROM. A fill arriving on an order in a truly terminal status (rejected,
+// rolled_back, filled, or cancelled) is a clobber and must be rejected with
+// ErrConflict. This list is the single source of truth used by every fill path
+// (SubmitImmediate and ApplyExecutionReport) to build their AllowedFrom guard on
+// RecordOrderSettlement.
+//
+// Eligible sources:
+//   - submitted: immediate order just created, fill closes it in one step
+//   - accepted: held order accepted by the engine, awaiting venue fill
+//   - committed: held reservation confirmed - venue fills arrive after commit
+//   - partially_filled: mid-fill, advancing to the next partial or final fill
+func OrderStatusesEligibleForFill() []OrderStatus {
+	return []OrderStatus{
+		OrderStatusSubmitted,
+		OrderStatusAccepted,
+		OrderStatusCommitted,
+		OrderStatusPartiallyFilled,
+	}
+}
+
 // Order is the Officer-side record of an order that passed through the system,
 // including rejected ones. All monetary/size values are exact decimal strings.
 type Order struct {
@@ -422,7 +443,8 @@ const (
 // OrderEventPayload is the JSON-marshalled variant payload for an order event.
 // Only the fields relevant to the event type are populated.
 type OrderEventPayload struct {
-	// Reject fields - populated for pre_trade_rejected events.
+	// Reject fields - populated for pre_trade_rejected events and for fill
+	// events that record an account block caused by the execution report.
 	RejectCode    string `json:"reject_code,omitempty"`
 	RejectScope   string `json:"reject_scope,omitempty"`
 	RejectPolicy  string `json:"reject_policy,omitempty"`
@@ -549,6 +571,63 @@ type ExecutionAccountBlock struct {
 	Details string
 }
 
+// BalanceSettlement is one per-asset balance outcome of a fill, expressed as a
+// plain data carrier so the store can persist it without importing the engine.
+// It mirrors the engine's per-asset balance outcome (engine.BalanceOutcome);
+// the node maps each engine outcome onto this type when building an
+// OrderSettlement. RealizedPnl is delta-accumulated onto the stored row inside
+// the settlement tx (prev + RealizedPnlDelta), never overwritten with an
+// engine-reported absolute; available/held/incoming follow the *Result fields
+// with prev carried forward when a result is empty; average_entry_price is
+// carried forward (a fill does not restate it).
+type BalanceSettlement struct {
+	// Asset identifies the asset whose balance the fill moves.
+	Asset string
+	// Outcome carries the per-asset deltas and results from the engine.
+	Outcome AdjustmentOutcomeAccepted
+}
+
+// OrderSettlement is one atomic fill/settlement persisted in a single store
+// transaction: per-asset balances, the order status, fill event(s), the optional
+// trade, account blocks the engine already applied, and the optional lock-price
+// rewrite are all committed together or not at all. It moves the node's former
+// read-modify-write fill persistence (GetBalance + UpsertBalance + UpdateOrder
+// Status + AppendOrderEvent + CreateTrade + SetAccountBlocked) inside one tx so a
+// crash can never leave a half-settled order. It is a plain data carrier: no
+// methods, no engine/store imports.
+type OrderSettlement struct {
+	// Trade is the optional trade row to create in the same tx; nil to skip.
+	Trade *Trade
+	// Tenant is the isolation boundary.
+	Tenant TenantID
+	// Account is the account the fill settled against.
+	Account AccountID
+	// OrderStatus is the target status (e.g. filled, partially_filled, or
+	// accepted for the hold-accept path).
+	OrderStatus OrderStatus
+	// LockPrices is the order's reservation lock prices to write when
+	// SetLockPrices is true; an empty slice clears them, nil leaves them.
+	LockPrices []string
+	// AllowedFrom is an optional status WHERE-guard: when non-empty the order
+	// status UPDATE only advances rows already in one of these statuses, and a
+	// disallowed current status yields domain.ErrConflict with nothing written.
+	// Empty means unguarded (fill paths that may run from submitted/accepted/
+	// partially_filled).
+	AllowedFrom []OrderStatus
+	// Balances are the per-asset fill outcomes to persist.
+	Balances []BalanceSettlement
+	// Events are the lifecycle events to append (e.g. fill).
+	Events []OrderEvent
+	// Blocks are engine-already-applied account blocks to mirror in the same tx
+	// (the block UPDATE only; the observational audit row stays outside).
+	Blocks []ExecutionAccountBlock
+	// OrderID is the order being settled.
+	OrderID int64
+	// SetLockPrices distinguishes a nil LockPrices ("leave unchanged") from an
+	// empty slice ("clear"); only when true is the lock-price column rewritten.
+	SetLockPrices bool
+}
+
 // --- Signing keys -----------------------------------------------------------
 
 // SigningKey is the control-plane view of one Ed25519 signing keypair.
@@ -647,4 +726,39 @@ type ReservationIntent struct {
 	LockPricesJSON string
 	// State is the current lifecycle state.
 	State ReservationIntentState
+}
+
+// ReservationResolution is one atomic reservation resolve persisted in a single
+// store transaction: the intent state flip, the order status advance, and the
+// lifecycle event(s) are all committed together or not at all. It replaces the
+// former two-write SetReservationIntentState + (AppendOrderEvent + UpdateOrder
+// Status) pattern on the confirm/cancel/sweeper paths so a crash can never leave
+// the intent flipped without the matching status/event. It is a plain data
+// carrier: no methods, no engine/store imports.
+//
+// The store only ever advances accepted->terminal: AllowedFrom is a status
+// WHERE-guard (callers pass {OrderStatusAccepted}); a current status outside it
+// yields domain.ErrConflict with nothing written (TOCTOU-safe against a fill
+// that lands before the tx). An empty AllowedFrom disables the guard. OrderID==0
+// (an in-memory-only hold with no order row) skips the order/event writes and
+// only flips the intent. A missing intent row is tolerated (no-op), mirroring
+// SetReservationIntentState's NotFound tolerance.
+type ReservationResolution struct {
+	// Tenant is the isolation boundary.
+	Tenant TenantID
+	// ApprovalID identifies the reservation intent row to flip.
+	ApprovalID string
+	// IntentState is the target intent state (committed or rolled_back).
+	IntentState ReservationIntentState
+	// OrderStatus is the target order status (e.g. committed, cancelled,
+	// rolled_back).
+	OrderStatus OrderStatus
+	// AllowedFrom is the status WHERE-guard; empty disables guarding.
+	AllowedFrom []OrderStatus
+	// Events are the lifecycle events to append in the same tx (e.g.
+	// reservation_committed, or reservation_rolled_back + cancelled).
+	Events []OrderEvent
+	// OrderID is the order authorised by the reservation; 0 for in-memory-only
+	// holds with no order row.
+	OrderID int64
 }

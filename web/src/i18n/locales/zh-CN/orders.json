@@ -81,7 +81,9 @@
       "submitModeImmediate": "记录已成交",
       "submitModeImmediateHelp": "交易已发生：立即在 Officer 中记录成交。",
       "submitModeHold": "锁定并等待",
-      "submitModeHoldHelp": "锁定资金并等待 post-trade 报告。",
+      "submitModeHoldHelp": "锁定资金并等待盘后报告。",
+      "submitModeRequired": "请选择提交模式。",
+      "amountKindRequired": "请选择数量类型。",
       "openApi": "OpenAPI",
       "submitBusy": "添加中…",
       "submit": "添加订单",
@@ -117,6 +119,7 @@
       "submitBusy": "提交中…",
       "submit": "提交",
       "accepted": "执行报告已接受。",
+      "accountBlocked": "账户 {{account}} 已被封锁：",
       "done": "完成",
       "validationError": "数量和价格为必填项。"
     }
@@ -125,12 +128,15 @@
   "clone": {
     "orderButton": "克隆",
     "orderAriaLabel": "克隆订单 #{{orderId}}",
-    "execReportAriaLabel": "克隆成交 #{{tradeId}} 的执行报告"
+    "execReportAriaLabel": "克隆成交 #{{tradeId}} 的执行报告",
+    "execReportEventAriaLabel": "从订单 #{{orderId}} 克隆执行报告"
   },
 
   "detail": {
     "dialog": {
       "title": "订单 #{{orderId}}",
+      "loading": "正在加载订单详情…",
+      "accountBlocked": "账户 {{account}} 已被封锁：",
       "fieldAccount": "账户",
       "fieldStatus": "状态",
       "fieldSource": "来源",

@@ -79,9 +79,11 @@
       "limitPricePlaceholder": "не заполнять = рыночный",
       "submitMode": "Режим подачи",
       "submitModeImmediate": "Учесть сделку",
-      "submitModeImmediateHelp": "Операция уже совершена: сразу записать fill в Officer.",
-      "submitModeHold": "Залочить и ждать",
-      "submitModeHoldHelp": "Зарезервировать средства и ждать post-trade отчёт.",
+      "submitModeImmediateHelp": "Операция уже совершена: сразу записать исполнение в Officer.",
+      "submitModeHold": "Удержать и ждать",
+      "submitModeHoldHelp": "Зарезервировать средства и ждать пост-трейд отчёт.",
+      "submitModeRequired": "Выберите режим подачи.",
+      "amountKindRequired": "Выберите вид объёма.",
       "openApi": "OpenAPI",
       "submitBusy": "Добавление…",
       "submit": "Добавить ордер",
@@ -117,6 +119,7 @@
       "submitBusy": "Отправка…",
       "submit": "Отправить",
       "accepted": "Отчёт об исполнении принят.",
+      "accountBlocked": "Счёт {{account}} заблокирован:",
       "done": "Готово",
       "validationError": "Количество и цена обязательны."
     }
@@ -125,12 +128,15 @@
   "clone": {
     "orderButton": "Клонировать",
     "orderAriaLabel": "Клонировать ордер #{{orderId}}",
-    "execReportAriaLabel": "Клонировать отчёт об исполнении для сделки #{{tradeId}}"
+    "execReportAriaLabel": "Клонировать отчёт об исполнении для сделки #{{tradeId}}",
+    "execReportEventAriaLabel": "Клонировать отчёт об исполнении из ордера #{{orderId}}"
   },
 
   "detail": {
     "dialog": {
       "title": "Ордер #{{orderId}}",
+      "loading": "Загрузка деталей ордера…",
+      "accountBlocked": "Счёт {{account}} заблокирован:",
       "fieldAccount": "Счёт",
       "fieldStatus": "Статус",
       "fieldSource": "Источник",

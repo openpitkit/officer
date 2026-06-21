@@ -689,18 +689,15 @@ func getLimitsHandler(src Source) func(
 }
 
 // auditCategoryActions resolves the get_audit category argument to an action
-// include-set. "all" disables the action filter; "trading" or "control" pick a
-// category; an empty or unknown value defaults to control so trading noise is
-// hidden unless asked for.
+// include-set via domain.AuditActionsForCategory. Unknown or empty category
+// falls back to the control set so trading noise is hidden unless asked for;
+// this tool is LLM-facing and stays lenient rather than erroring.
 func auditCategoryActions(category string) []domain.AuditAction {
-	switch strings.TrimSpace(category) {
-	case "all":
-		return nil
-	case string(domain.AuditCategoryTrading):
-		return domain.AuditActionsByCategory(domain.AuditCategoryTrading)
-	default:
+	actions, known := domain.AuditActionsForCategory(strings.TrimSpace(category))
+	if !known {
 		return domain.AuditActionsByCategory(domain.AuditCategoryControl)
 	}
+	return actions
 }
 
 func getAuditHandler(src Source) func(

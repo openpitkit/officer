@@ -21,7 +21,14 @@ import {
   useMemo,
   useState,
 } from "react";
-import { Coins, Copy, Plus, RefreshCw } from "lucide-react";
+import {
+  Coins,
+  Copy,
+  Plus,
+  RefreshCw,
+  SlidersHorizontal,
+  X,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
@@ -57,8 +64,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { NumberStepper } from "@/components/ui/number-stepper";
 import {
   Select,
   SelectContent,
@@ -74,6 +81,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { cn } from "@/lib/utils";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -123,84 +131,198 @@ function pnlClass(v: string | undefined): string {
   return "text-[var(--pnl-pos)]";
 }
 
+interface ParsedDecimal {
+  units: bigint;
+  scale: number;
+}
+
+function parseDecimal(value: string): ParsedDecimal | null {
+  const trimmed = value.trim();
+  const match = /^([+-]?)(\d+)(?:\.(\d+))?$/.exec(trimmed);
+  if (!match) {
+    return null;
+  }
+  const sign = match[1] === "-" ? -1n : 1n;
+  const integer = match[2];
+  const fraction = match[3] ?? "";
+  return {
+    units: sign * BigInt(`${integer}${fraction}`),
+    scale: fraction.length,
+  };
+}
+
+function pow10(exponent: number): bigint {
+  let result = 1n;
+  for (let i = 0; i < exponent; i += 1) {
+    result *= 10n;
+  }
+  return result;
+}
+
+function alignDecimal(value: ParsedDecimal, scale: number): bigint {
+  return value.units * pow10(scale - value.scale);
+}
+
+function formatScaledDecimal(units: bigint, scale: number): string {
+  const sign = units < 0n ? "-" : "";
+  const abs = units < 0n ? -units : units;
+  if (scale === 0) {
+    return `${sign}${abs.toString()}`;
+  }
+  const padded = abs.toString().padStart(scale + 1, "0");
+  const whole = padded.slice(0, -scale);
+  const fraction = padded.slice(-scale);
+  return `${sign}${whole}.${fraction}`;
+}
+
+function addDecimalStrings(left: string, right: string): string | null {
+  const parsedLeft = parseDecimal(left);
+  const parsedRight = parseDecimal(right);
+  if (!parsedLeft || !parsedRight) {
+    return null;
+  }
+  const scale = Math.max(parsedLeft.scale, parsedRight.scale);
+  return formatScaledDecimal(
+    alignDecimal(parsedLeft, scale) + alignDecimal(parsedRight, scale),
+    scale,
+  );
+}
+
+function isDecimal(value: string): boolean {
+  return parseDecimal(value) !== null;
+}
+
+function hasValue(value: string | undefined): boolean {
+  return (value ?? "").trim() !== "";
+}
+
 // ---------------------------------------------------------------------------
-// Balances table — inline editing
+// Balances table — adjustment panel
 // ---------------------------------------------------------------------------
 
-/** A seed for the dialog's "apply with limits" path, carried from a row. */
-interface AdjustSeed {
-  account: string;
-  asset: string;
+const BALANCE_TABLE_COLS = 9;
+const DRAFT_ADJUSTMENT_KEY = "__draft__";
+
+interface AmountDraftState {
   mode: AdjustmentMode;
   value: string;
 }
 
-/** The simple, no-extra-limits apply path: a balance amount on (account, asset).
- *  Returns the settled record so the row can show its outcome. */
-type InlineApply = (
-  account: string,
-  asset: string,
-  mode: AdjustmentMode,
-  value: string,
-) => Promise<Adjustment>;
+interface BoundsDraftState {
+  lower: string;
+  upper: string;
+}
 
-/** Shared inline editor: balance mode + amount, then Apply (simple path) and
- *  Apply with limits (opens the dialog prefilled). Used by both existing
- *  balance rows and the draft add-row. The row supplies account + asset. */
-function InlineAdjustEditor({
-  account,
-  asset,
-  onInlineApply,
-  onApplyWithLimits,
-  onApplied,
-  applyLabel,
+function emptyAmountDraft(): AmountDraftState {
+  return { mode: "absolute", value: "" };
+}
+
+function emptyBoundsDraft(): BoundsDraftState {
+  return { lower: "", upper: "" };
+}
+
+function amountResult(
+  current: string | undefined,
+  field: AmountDraftState,
+): string | null {
+  const value = field.value.trim();
+  if (!value || !isDecimal(value)) {
+    return null;
+  }
+  if (field.mode === "absolute") {
+    return value;
+  }
+  return addDecimalStrings(hasValue(current) ? current ?? "0" : "0", value);
+}
+
+function boundsHaveValue(bounds: BoundsDraftState): boolean {
+  return hasValue(bounds.lower) || hasValue(bounds.upper);
+}
+
+function boundsAreValid(bounds: BoundsDraftState): boolean {
+  return (
+    (!hasValue(bounds.lower) || isDecimal(bounds.lower)) &&
+    (!hasValue(bounds.upper) || isDecimal(bounds.upper))
+  );
+}
+
+function buildBoundsDraft(bounds: BoundsDraftState): BoundsPair | undefined {
+  const pair: BoundsPair = {};
+  if (hasValue(bounds.lower)) {
+    pair.lower = bounds.lower.trim();
+  }
+  if (hasValue(bounds.upper)) {
+    pair.upper = bounds.upper.trim();
+  }
+  return pair.lower || pair.upper ? pair : undefined;
+}
+
+function AdjustmentSnapshot({
+  label,
+  value,
+  className,
 }: {
-  account: string;
-  asset: string;
-  onInlineApply: InlineApply;
-  onApplyWithLimits: (seed: AdjustSeed) => void;
-  /** Called after a successful inline apply (e.g. to reload + reset a draft). */
-  onApplied?: () => void;
-  /** Label for the simple Apply button (add-row reuses this slot). */
-  applyLabel?: string;
+  label: string;
+  value: string | undefined;
+  className?: string;
+}) {
+  return (
+    <div className="border-r border-border px-3 py-2 last:border-r-0">
+      <p className="text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted">
+        {label}
+      </p>
+      <p className={cn("nums mt-1 text-sm text-text", className)}>
+        {dash(value)}
+      </p>
+    </div>
+  );
+}
+
+function AmountIntentRow({
+  id,
+  label,
+  current,
+  field,
+  disabled,
+  onChange,
+  onSubmit,
+}: {
+  id: string;
+  label: string;
+  current: string | undefined;
+  field: AmountDraftState;
+  disabled: boolean;
+  onChange: (next: AmountDraftState) => void;
+  onSubmit: () => void;
 }) {
   const { t } = useTranslation("positions");
-  const [mode, setMode] = useState<AdjustmentMode>("absolute");
-  const [value, setValue] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [outcome, setOutcome] = useState<Adjustment | null>(null);
-
-  const canApply = account.trim() !== "" && asset.trim() !== "" && value.trim() !== "";
-
-  const apply = async () => {
-    if (!canApply) {
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    setOutcome(null);
-    try {
-      const result = await onInlineApply(
-        account.trim(),
-        asset.trim(),
-        mode,
-        value.trim(),
-      );
-      setOutcome(result);
-      onApplied?.();
-    } catch (err) {
-      setError(errMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const result = amountResult(current, field);
+  const invalid = hasValue(field.value) && result === null;
 
   return (
-    <div className="space-y-1.5">
-      <div className="flex items-center justify-end gap-2">
-        <Select value={mode} onValueChange={(v) => setMode(v as AdjustmentMode)}>
-          <SelectTrigger className="h-7 w-24 text-xs" disabled={busy}>
+    <div className="grid gap-2 border-t border-border px-3 py-3 md:grid-cols-[minmax(8rem,1fr)_8rem_minmax(10rem,1.2fr)_minmax(8rem,1fr)] md:items-end">
+      <div>
+        <p className="text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted">
+          {label}
+        </p>
+        <p className="nums mt-1 text-sm text-text">{dash(current)}</p>
+      </div>
+      <div className="space-y-1">
+        <Label htmlFor={`adjust-${id}-mode`} className="md:hidden">
+          {t("panel.columns.intent")}
+        </Label>
+        <Select
+          value={field.mode}
+          onValueChange={(v) =>
+            onChange({ ...field, mode: v as AdjustmentMode })
+          }
+          disabled={disabled}
+        >
+          <SelectTrigger
+            id={`adjust-${id}-mode`}
+            className="h-8 text-xs"
+            aria-label={t("panel.modeAriaLabel", { field: label })}
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -208,171 +330,647 @@ function InlineAdjustEditor({
             <SelectItem value="delta">{t("dialog.mode.delta")}</SelectItem>
           </SelectContent>
         </Select>
-        <Input
-          value={value}
+      </div>
+      <div className="space-y-1">
+        <Label htmlFor={`adjust-${id}-value`} className="md:hidden">
+          {t("panel.columns.amount")}
+        </Label>
+        <NumberStepper
+          id={`adjust-${id}-value`}
+          value={field.value}
+          min={null}
           spellCheck={false}
-          placeholder={t("inline.amountPlaceholder")}
-          className="h-7 w-28 text-right text-xs"
-          disabled={busy}
-          aria-label={t("inline.amountAriaLabel", { account, asset })}
-          onChange={(e) => setValue(e.target.value)}
+          placeholder={t("panel.noChange")}
+          inputClassName="h-8 text-right text-xs"
+          disabled={disabled}
+          aria-label={t("panel.amountAriaLabel", { field: label })}
+          onChange={(value) => onChange({ ...field, value })}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && canApply && !busy) {
-              void apply();
+            if (e.key === "Enter") {
+              onSubmit();
             }
           }}
         />
-        <Button
-          size="sm"
-          onClick={() => void apply()}
-          disabled={busy || !canApply}
-          aria-label={t("inline.applyAriaLabel", { account, asset })}
+      </div>
+      <div>
+        <p className="text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted md:hidden">
+          {t("panel.columns.result")}
+        </p>
+        <p
+          className={cn(
+            "nums mt-1 text-sm",
+            invalid
+              ? "text-[var(--danger)]"
+              : result
+                ? "text-text"
+                : "text-muted-lt",
+          )}
         >
-          {applyLabel ?? t("inline.apply")}
-        </Button>
+          {invalid
+            ? t("panel.invalidDecimal")
+            : result
+              ? result
+              : t("panel.noChange")}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function BoundsIntentRow({
+  id,
+  label,
+  field,
+  disabled,
+  onChange,
+  onSubmit,
+}: {
+  id: string;
+  label: string;
+  field: BoundsDraftState;
+  disabled: boolean;
+  onChange: (next: BoundsDraftState) => void;
+  onSubmit: () => void;
+}) {
+  const { t } = useTranslation("positions");
+  const invalid = boundsHaveValue(field) && !boundsAreValid(field);
+
+  return (
+    <div className="grid gap-2 border-t border-border px-3 py-3 md:grid-cols-[minmax(8rem,1fr)_minmax(8rem,1fr)_minmax(8rem,1fr)] md:items-end">
+      <div>
+        <p className="text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted">
+          {label}
+        </p>
+        <p className="mt-1 text-xs text-muted-lt">
+          {t("panel.boundsOptional")}
+        </p>
+      </div>
+      <div className="space-y-1">
+        <Label htmlFor={`adjust-${id}-lower`}>
+          {t("dialog.bounds.lower")}
+        </Label>
+        <NumberStepper
+          id={`adjust-${id}-lower`}
+          value={field.lower}
+          min={null}
+          spellCheck={false}
+          placeholder={t("panel.noChange")}
+          inputClassName="h-8 text-right text-xs"
+          disabled={disabled}
+          onChange={(lower) => onChange({ ...field, lower })}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              onSubmit();
+            }
+          }}
+        />
+      </div>
+      <div className="space-y-1">
+        <Label htmlFor={`adjust-${id}-upper`}>
+          {t("dialog.bounds.upper")}
+        </Label>
+        <NumberStepper
+          id={`adjust-${id}-upper`}
+          value={field.upper}
+          min={null}
+          spellCheck={false}
+          placeholder={t("panel.noChange")}
+          inputClassName="h-8 text-right text-xs"
+          disabled={disabled}
+          onChange={(upper) => onChange({ ...field, upper })}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              onSubmit();
+            }
+          }}
+        />
+        {invalid && (
+          <p className="text-[0.6875rem] text-[var(--danger)]">
+            {t("panel.invalidDecimal")}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AdjustmentPanel({
+  balance,
+  initialAccount,
+  initialAsset,
+  accountSuggestions,
+  assetSuggestions,
+  lockIdentity,
+  onDone,
+  onClose,
+}: {
+  balance?: Balance;
+  initialAccount: string;
+  initialAsset: string;
+  accountSuggestions: string[];
+  assetSuggestions: string[];
+  lockIdentity: boolean;
+  onDone: () => void;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation("positions");
+  const { t: tc } = useTranslation();
+  const [account, setAccount] = useState(initialAccount);
+  const [asset, setAsset] = useState(initialAsset);
+  const [available, setAvailable] =
+    useState<AmountDraftState>(emptyAmountDraft);
+  const [held, setHeld] = useState<AmountDraftState>(emptyAmountDraft);
+  const [incoming, setIncoming] = useState<AmountDraftState>(emptyAmountDraft);
+  const [avgPrice, setAvgPrice] = useState("");
+  const [balanceBounds, setBalanceBounds] =
+    useState<BoundsDraftState>(emptyBoundsDraft);
+  const [heldBounds, setHeldBounds] =
+    useState<BoundsDraftState>(emptyBoundsDraft);
+  const [incomingBounds, setIncomingBounds] =
+    useState<BoundsDraftState>(emptyBoundsDraft);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [outcome, setOutcome] = useState<Adjustment | null>(null);
+
+  const trimAccount = account.trim();
+  const trimAsset = asset.trim();
+  const amountFields = [
+    { current: balance?.available, field: available },
+    { current: balance?.held, field: held },
+    { current: balance?.incoming, field: incoming },
+  ];
+  const hasAmountChange = amountFields.some(({ field }) =>
+    hasValue(field.value),
+  );
+  const amountFieldsValid = amountFields.every(({ current, field }) => {
+    if (!hasValue(field.value)) {
+      return true;
+    }
+    return amountResult(current, field) !== null;
+  });
+  const avgPriceValid = !hasValue(avgPrice) || isDecimal(avgPrice);
+  const allBoundsValid =
+    boundsAreValid(balanceBounds) &&
+    boundsAreValid(heldBounds) &&
+    boundsAreValid(incomingBounds);
+  const hasBoundsChange =
+    boundsHaveValue(balanceBounds) ||
+    boundsHaveValue(heldBounds) ||
+    boundsHaveValue(incomingBounds);
+  const hasChanges =
+    hasAmountChange || hasValue(avgPrice) || hasBoundsChange;
+  const canSubmit =
+    trimAccount !== "" &&
+    trimAsset !== "" &&
+    hasChanges &&
+    amountFieldsValid &&
+    avgPriceValid &&
+    allBoundsValid &&
+    !busy &&
+    outcome === null;
+
+  const submit = async () => {
+    if (!trimAccount) {
+      setError(t("dialog.error.accountRequired"));
+      return;
+    }
+    if (!trimAsset) {
+      setError(t("dialog.error.assetRequired"));
+      return;
+    }
+    if (!hasChanges) {
+      setError(t("panel.noChangesError"));
+      return;
+    }
+    if (!amountFieldsValid || !avgPriceValid || !allBoundsValid) {
+      setError(t("panel.invalidDecimal"));
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setOutcome(null);
+    try {
+      const body: Parameters<typeof createAdjustment>[1] = {
+        asset: trimAsset,
+      };
+      if (hasValue(available.value)) {
+        body.balance = {
+          mode: available.mode,
+          value: available.value.trim(),
+        };
+      }
+      if (hasValue(held.value)) {
+        body.held = { mode: held.mode, value: held.value.trim() };
+      }
+      if (hasValue(incoming.value)) {
+        body.incoming = {
+          mode: incoming.mode,
+          value: incoming.value.trim(),
+        };
+      }
+      if (hasValue(avgPrice)) {
+        body.averageEntryPrice = avgPrice.trim();
+      }
+      const bb = buildBoundsDraft(balanceBounds);
+      if (bb) {
+        body.balanceBounds = bb;
+      }
+      const hb = buildBoundsDraft(heldBounds);
+      if (hb) {
+        body.heldBounds = hb;
+      }
+      const ib = buildBoundsDraft(incomingBounds);
+      if (ib) {
+        body.incomingBounds = ib;
+      }
+      const result = await createAdjustment(trimAccount, body);
+      setOutcome(result);
+      onDone();
+    } catch (err) {
+      setError(errMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const disabled = busy || outcome !== null;
+
+  return (
+    <div
+      role="region"
+      aria-label={t("panel.title")}
+      className="space-y-4 border-l-2 border-l-accent bg-surface-2 px-4 py-4"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <SlidersHorizontal className="h-3.5 w-3.5 text-accent" />
+            <p className="text-sm font-bold text-text">
+              {t("panel.title")}
+            </p>
+            <Badge variant="neutral">{trimAccount || t("panel.emptyAccount")}</Badge>
+            <Badge variant="neutral">{trimAsset || t("panel.emptyAsset")}</Badge>
+          </div>
+          <p className="mt-1 text-xs text-muted-lt">
+            {balance ? t("panel.descriptionExisting") : t("panel.descriptionDraft")}
+          </p>
+        </div>
         <Button
-          variant="outline"
+          variant="ghost"
           size="sm"
-          onClick={() =>
-            onApplyWithLimits({
-              account: account.trim(),
-              asset: asset.trim(),
-              mode,
-              value: value.trim(),
-            })
-          }
-          disabled={busy}
-          aria-label={t("inline.applyWithLimitsAriaLabel", { account, asset })}
+          onClick={onClose}
+          aria-label={tc("actions.close")}
         >
-          {t("inline.applyWithLimits")}
+          <X className="h-3.5 w-3.5" />
         </Button>
       </div>
+
+      {lockIdentity ? null : (
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="adjust-panel-account">
+              {t("dialog.fields.account")}
+            </Label>
+            <Autocomplete
+              id="adjust-panel-account"
+              value={account}
+              spellCheck={false}
+              placeholder="acc-1"
+              suggestions={accountSuggestions}
+              disabled={disabled}
+              onChange={setAccount}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="adjust-panel-asset">
+              {t("dialog.fields.asset")}
+            </Label>
+            <Autocomplete
+              id="adjust-panel-asset"
+              value={asset}
+              spellCheck={false}
+              placeholder="AAPL"
+              suggestions={assetSuggestions}
+              disabled={disabled}
+              onChange={setAsset}
+            />
+          </div>
+        </div>
+      )}
+
+      <div className="grid overflow-hidden border border-border md:grid-cols-5">
+        <AdjustmentSnapshot
+          label={t("balances.columns.available")}
+          value={balance?.available}
+        />
+        <AdjustmentSnapshot
+          label={t("balances.columns.held")}
+          value={balance?.held}
+        />
+        <AdjustmentSnapshot
+          label={t("balances.columns.incoming")}
+          value={balance?.incoming}
+        />
+        <AdjustmentSnapshot
+          label={t("balances.columns.avgEntryPrice")}
+          value={balance?.averageEntryPrice}
+        />
+        <AdjustmentSnapshot
+          label={t("balances.columns.realizedPnl")}
+          value={balance?.realizedPnl}
+          className={pnlClass(balance?.realizedPnl)}
+        />
+      </div>
+
+      <div className="border border-border bg-bg">
+        <div className="grid grid-cols-[minmax(8rem,1fr)_8rem_minmax(10rem,1.2fr)_minmax(8rem,1fr)] gap-2 px-3 py-2 text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted max-md:hidden">
+          <span>{t("panel.columns.current")}</span>
+          <span>{t("panel.columns.intent")}</span>
+          <span>{t("panel.columns.amount")}</span>
+          <span>{t("panel.columns.result")}</span>
+        </div>
+        <AmountIntentRow
+          id="available"
+          label={t("balances.columns.available")}
+          current={balance?.available}
+          field={available}
+          disabled={disabled}
+          onChange={setAvailable}
+          onSubmit={() => void submit()}
+        />
+        <AmountIntentRow
+          id="held"
+          label={t("balances.columns.held")}
+          current={balance?.held}
+          field={held}
+          disabled={disabled}
+          onChange={setHeld}
+          onSubmit={() => void submit()}
+        />
+        <AmountIntentRow
+          id="incoming"
+          label={t("balances.columns.incoming")}
+          current={balance?.incoming}
+          field={incoming}
+          disabled={disabled}
+          onChange={setIncoming}
+          onSubmit={() => void submit()}
+        />
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-[minmax(12rem,1fr)_minmax(16rem,2fr)]">
+        <div className="space-y-1.5">
+          <Label htmlFor="adjust-panel-avg">
+            {t("dialog.fields.avgEntryPrice")}
+          </Label>
+          <NumberStepper
+            id="adjust-panel-avg"
+            value={avgPrice}
+            spellCheck={false}
+            placeholder={t("panel.keepCurrent")}
+            inputClassName="h-8 text-right text-xs"
+            disabled={disabled}
+            onChange={setAvgPrice}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                void submit();
+              }
+            }}
+          />
+          <p
+            className={cn(
+              "text-[0.6875rem]",
+              avgPriceValid ? "text-muted-lt" : "text-[var(--danger)]",
+            )}
+          >
+            {avgPriceValid
+              ? t("panel.avgPreview", {
+                  current: dash(balance?.averageEntryPrice),
+                  result: hasValue(avgPrice) ? avgPrice.trim() : t("panel.noChange"),
+                })
+              : t("panel.invalidDecimal")}
+          </p>
+        </div>
+        <div className="border border-border bg-bg">
+          <p className="px-3 py-2 text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted">
+            {t("dialog.bounds.sectionLabel")}
+          </p>
+          <BoundsIntentRow
+            id="balance-bounds"
+            label={t("dialog.bounds.balanceLabel")}
+            field={balanceBounds}
+            disabled={disabled}
+            onChange={setBalanceBounds}
+            onSubmit={() => void submit()}
+          />
+          <BoundsIntentRow
+            id="held-bounds"
+            label={t("dialog.bounds.heldLabel")}
+            field={heldBounds}
+            disabled={disabled}
+            onChange={setHeldBounds}
+            onSubmit={() => void submit()}
+          />
+          <BoundsIntentRow
+            id="incoming-bounds"
+            label={t("dialog.bounds.incomingLabel")}
+            field={incomingBounds}
+            disabled={disabled}
+            onChange={setIncomingBounds}
+            onSubmit={() => void submit()}
+          />
+        </div>
+      </div>
+
       {outcome && <AdjustOutcomeView adjustment={outcome} />}
       {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+
+      <div className="flex justify-end gap-2 border-t border-border pt-3">
+        <Button variant="outline" size="sm" onClick={onClose} disabled={busy}>
+          {outcome ? t("dialog.footer.close") : t("actions.cancel", { ns: "common" })}
+        </Button>
+        {!outcome && (
+          <Button size="sm" onClick={() => void submit()} disabled={!canSubmit}>
+            {busy ? t("panel.saving") : t("panel.submit")}
+          </Button>
+        )}
+      </div>
     </div>
   );
 }
 
 function BalanceEditRow({
   balance,
-  onInlineApply,
-  onApplyWithLimits,
+  expanded,
+  onToggle,
+  onClose,
+  accountSuggestions,
+  assetSuggestions,
   onApplied,
 }: {
   balance: Balance;
-  onInlineApply: InlineApply;
-  onApplyWithLimits: (seed: AdjustSeed) => void;
+  expanded: boolean;
+  onToggle: () => void;
+  onClose: () => void;
+  accountSuggestions: string[];
+  assetSuggestions: string[];
   onApplied: () => void;
 }) {
+  const { t } = useTranslation("positions");
   const b = balance;
   return (
-    <TableRow className="hover:bg-transparent">
-      <TableCell className="nums text-xs">{b.account}</TableCell>
-      <TableCell className="nums text-xs">{b.asset}</TableCell>
-      <TableCell className="nums text-right text-xs">{b.available}</TableCell>
-      <TableCell className="nums text-right text-xs">{b.held}</TableCell>
-      <TableCell className="nums text-right text-xs">{b.incoming}</TableCell>
-      <TableCell className="nums text-right text-xs">
-        {dash(b.averageEntryPrice)}
-      </TableCell>
-      <TableCell className={`nums text-right text-xs ${pnlClass(b.realizedPnl)}`}>
-        {dash(b.realizedPnl)}
-      </TableCell>
-      <TableCell className="text-xs text-muted-lt">
-        <SplitTime iso={b.updatedAt} />
-      </TableCell>
-      <TableCell>
-        <InlineAdjustEditor
-          account={b.account}
-          asset={b.asset}
-          onInlineApply={onInlineApply}
-          onApplyWithLimits={onApplyWithLimits}
-          onApplied={onApplied}
-        />
-      </TableCell>
-    </TableRow>
+    <>
+      <TableRow className={cn("hover:bg-transparent", expanded && "bg-accent-dim")}>
+        <TableCell className="nums text-xs">{b.account}</TableCell>
+        <TableCell className="nums text-xs">{b.asset}</TableCell>
+        <TableCell className="nums text-right text-xs">{b.available}</TableCell>
+        <TableCell className="nums text-right text-xs">{b.held}</TableCell>
+        <TableCell className="nums text-right text-xs">{b.incoming}</TableCell>
+        <TableCell className="nums text-right text-xs">
+          {dash(b.averageEntryPrice)}
+        </TableCell>
+        <TableCell
+          className={cn("nums text-right text-xs", pnlClass(b.realizedPnl))}
+        >
+          {dash(b.realizedPnl)}
+        </TableCell>
+        <TableCell className="text-xs text-muted-lt">
+          <SplitTime iso={b.updatedAt} />
+        </TableCell>
+        <TableCell className="text-right">
+          <Button
+            variant="outline"
+            size="sm"
+            className={cn(expanded && "border-accent bg-accent-dim text-accent")}
+            onClick={onToggle}
+            aria-expanded={expanded}
+            aria-label={t("panel.openAriaLabel", {
+              account: b.account,
+              asset: b.asset,
+            })}
+          >
+            <SlidersHorizontal className="h-3.5 w-3.5" />
+            {t("panel.open")}
+          </Button>
+        </TableCell>
+      </TableRow>
+      {expanded && (
+        <TableRow className="hover:bg-transparent">
+          <TableCell colSpan={BALANCE_TABLE_COLS} className="p-0">
+            <AdjustmentPanel
+              balance={b}
+              initialAccount={b.account}
+              initialAsset={b.asset}
+              accountSuggestions={accountSuggestions}
+              assetSuggestions={assetSuggestions}
+              lockIdentity
+              onDone={onApplied}
+              onClose={onClose}
+            />
+          </TableCell>
+        </TableRow>
+      )}
+    </>
   );
 }
 
 /** A draft row to seed a balance for an account/asset not yet listed. */
 function BalanceDraftRow({
+  defaultAccount,
+  defaultAsset,
+  expanded,
+  requestId,
   accountSuggestions,
   assetSuggestions,
-  onInlineApply,
-  onApplyWithLimits,
+  onToggle,
+  onClose,
   onApplied,
 }: {
+  defaultAccount: string;
+  defaultAsset: string;
+  expanded: boolean;
+  requestId: number;
   accountSuggestions: string[];
   assetSuggestions: string[];
-  onInlineApply: InlineApply;
-  onApplyWithLimits: (seed: AdjustSeed) => void;
+  onToggle: () => void;
+  onClose: () => void;
   onApplied: () => void;
 }) {
   const { t } = useTranslation("positions");
-  const [account, setAccount] = useState("");
-  const [asset, setAsset] = useState("");
 
   return (
-    <TableRow className="hover:bg-transparent">
-      <TableCell className="text-xs">
-        <Autocomplete
-          value={account}
-          spellCheck={false}
-          placeholder="acc-1"
-          className="h-7 text-xs"
-          suggestions={accountSuggestions}
-          aria-label={t("inline.accountAriaLabel")}
-          onChange={setAccount}
-        />
-      </TableCell>
-      <TableCell className="text-xs">
-        <Autocomplete
-          value={asset}
-          spellCheck={false}
-          placeholder="AAPL"
-          className="h-7 text-xs"
-          suggestions={assetSuggestions}
-          aria-label={t("inline.assetAriaLabel")}
-          onChange={setAsset}
-        />
-      </TableCell>
-      <TableCell className="text-right text-xs text-muted-lt" colSpan={5}>
-        {t("inline.newRowHint")}
-      </TableCell>
-      <TableCell />
-      <TableCell>
-        <InlineAdjustEditor
-          account={account}
-          asset={asset}
-          onInlineApply={onInlineApply}
-          onApplyWithLimits={onApplyWithLimits}
-          onApplied={() => {
-            setAccount("");
-            setAsset("");
-            onApplied();
-          }}
-        />
-      </TableCell>
-    </TableRow>
+    <>
+      <TableRow className={cn("hover:bg-transparent", expanded && "bg-accent-dim")}>
+        <TableCell className="nums text-xs text-muted-lt">
+          {defaultAccount || t("panel.emptyAccount")}
+        </TableCell>
+        <TableCell className="nums text-xs text-muted-lt">
+          {defaultAsset || t("panel.emptyAsset")}
+        </TableCell>
+        <TableCell className="text-right text-xs text-muted-lt" colSpan={6}>
+          {t("inline.newRowHint")}
+        </TableCell>
+        <TableCell className="text-right">
+          <Button
+            variant="outline"
+            size="sm"
+            className={cn(expanded && "border-accent bg-accent-dim text-accent")}
+            onClick={onToggle}
+            aria-expanded={expanded}
+            aria-label={t("panel.openDraftAriaLabel")}
+          >
+            <SlidersHorizontal className="h-3.5 w-3.5" />
+            {t("panel.open")}
+          </Button>
+        </TableCell>
+      </TableRow>
+      {expanded && (
+        <TableRow className="hover:bg-transparent">
+          <TableCell colSpan={BALANCE_TABLE_COLS} className="p-0">
+            <AdjustmentPanel
+              key={requestId}
+              initialAccount={defaultAccount}
+              initialAsset={defaultAsset}
+              accountSuggestions={accountSuggestions}
+              assetSuggestions={assetSuggestions}
+              lockIdentity={false}
+              onDone={onApplied}
+              onClose={onClose}
+            />
+          </TableCell>
+        </TableRow>
+      )}
+    </>
   );
 }
 
 function BalancesTable({
   balances,
+  defaultDraftAccount,
+  defaultDraftAsset,
+  draftOpenRequest,
   accountSuggestions,
   assetSuggestions,
-  onInlineApply,
-  onApplyWithLimits,
   onApplied,
 }: {
   balances: Balance[];
+  defaultDraftAccount: string;
+  defaultDraftAsset: string;
+  draftOpenRequest: number;
   accountSuggestions: string[];
   assetSuggestions: string[];
-  onInlineApply: InlineApply;
-  onApplyWithLimits: (seed: AdjustSeed) => void;
   onApplied: () => void;
 }) {
   const { t } = useTranslation("positions");
+  const [openKey, setOpenKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (draftOpenRequest > 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setOpenKey(DRAFT_ADJUSTMENT_KEY);
+    }
+  }, [draftOpenRequest]);
+
   return (
     <Table>
         <TableHeader>
@@ -393,16 +991,35 @@ function BalancesTable({
             <BalanceEditRow
               key={`${b.account}|${b.asset}`}
               balance={b}
-              onInlineApply={onInlineApply}
-              onApplyWithLimits={onApplyWithLimits}
+              expanded={openKey === `${b.account}|${b.asset}`}
+              onToggle={() =>
+                setOpenKey((current) =>
+                  current === `${b.account}|${b.asset}`
+                    ? null
+                    : `${b.account}|${b.asset}`,
+                )
+              }
+              onClose={() => setOpenKey(null)}
+              accountSuggestions={accountSuggestions}
+              assetSuggestions={assetSuggestions}
               onApplied={onApplied}
             />
           ))}
           <BalanceDraftRow
+            defaultAccount={defaultDraftAccount}
+            defaultAsset={defaultDraftAsset}
+            expanded={openKey === DRAFT_ADJUSTMENT_KEY}
+            requestId={draftOpenRequest}
             accountSuggestions={accountSuggestions}
             assetSuggestions={assetSuggestions}
-            onInlineApply={onInlineApply}
-            onApplyWithLimits={onApplyWithLimits}
+            onToggle={() =>
+              setOpenKey((current) =>
+                current === DRAFT_ADJUSTMENT_KEY
+                  ? null
+                  : DRAFT_ADJUSTMENT_KEY,
+              )
+            }
+            onClose={() => setOpenKey(null)}
             onApplied={onApplied}
           />
         </TableBody>
@@ -513,12 +1130,14 @@ function AmountField({
               <SelectItem value="delta">{t("dialog.mode.delta")}</SelectItem>
             </SelectContent>
           </Select>
-          <Input
+          <NumberStepper
             value={field.value}
+            min={null}
             spellCheck={false}
             placeholder="0"
-            className="h-7 text-xs"
-            onChange={(e) => onChange({ ...field, value: e.target.value })}
+            className="flex-1"
+            inputClassName="h-7 text-xs"
+            onChange={(value) => onChange({ ...field, value })}
           />
         </div>
       )}
@@ -566,22 +1185,24 @@ function BoundsField({
         <div className="ml-5 grid grid-cols-2 gap-2">
           <div className="space-y-1">
             <Label className="text-[0.6875rem] text-muted">{t("dialog.bounds.lower")}</Label>
-            <Input
+            <NumberStepper
               value={field.lower}
+              min={null}
               spellCheck={false}
               placeholder="—"
-              className="h-7 text-xs"
-              onChange={(e) => onChange({ ...field, lower: e.target.value })}
+              inputClassName="h-7 text-xs"
+              onChange={(lower) => onChange({ ...field, lower })}
             />
           </div>
           <div className="space-y-1">
             <Label className="text-[0.6875rem] text-muted">{t("dialog.bounds.upper")}</Label>
-            <Input
+            <NumberStepper
               value={field.upper}
+              min={null}
               spellCheck={false}
               placeholder="—"
-              className="h-7 text-xs"
-              onChange={(e) => onChange({ ...field, upper: e.target.value })}
+              inputClassName="h-7 text-xs"
+              onChange={(upper) => onChange({ ...field, upper })}
             />
           </div>
         </div>
@@ -815,14 +1436,14 @@ function AdjustDialog({
           {/* Average entry price */}
           <div className="space-y-1.5">
             <Label htmlFor="adj-aep">{t("dialog.fields.avgEntryPrice")}</Label>
-            <Input
+            <NumberStepper
               id="adj-aep"
               value={avgPrice}
               spellCheck={false}
               placeholder="e.g. 142.50"
-              className="text-xs"
+              inputClassName="text-xs"
               disabled={busy || outcome !== null}
-              onChange={(e) => setAvgPrice(e.target.value)}
+              onChange={setAvgPrice}
             />
             <p className="text-[0.6875rem] text-muted">
               {t("dialog.fields.avgEntryPriceHint")}
@@ -1021,6 +1642,7 @@ export function Positions() {
   const [accountFilter, setAccountFilter] = useState(initialAccount);
   const [assetFilter, setAssetFilter] = useState("");
   const [sourceFilter, setSourceFilter] = useState<Source | "__all__">("__all__");
+  const [draftOpenRequest, setDraftOpenRequest] = useState(0);
 
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [adjustAccount, setAdjustAccount] = useState("");
@@ -1086,38 +1708,8 @@ export function Positions() {
     return Array.from(set).sort();
   }, [balancesLoad.load, adjustmentsLoad.load]);
 
-  /** Clear the extended clone-only props so they don't bleed into a fresh dialog. */
-  const clearCloneExtras = () => {
-    setAdjustHeldMode(undefined);
-    setAdjustHeldValue(undefined);
-    setAdjustIncomingMode(undefined);
-    setAdjustIncomingValue(undefined);
-    setAdjustAvgPrice(undefined);
-    setAdjustBalanceBoundsLower(undefined);
-    setAdjustBalanceBoundsUpper(undefined);
-    setAdjustHeldBoundsLower(undefined);
-    setAdjustHeldBoundsUpper(undefined);
-    setAdjustIncomingBoundsLower(undefined);
-    setAdjustIncomingBoundsUpper(undefined);
-  };
-
-  // "Apply with limits" — open the dialog prefilled from the row's draft.
-  const openAdjustWithLimits = (seed: AdjustSeed) => {
-    setAdjustAccount(seed.account);
-    setAdjustAsset(seed.asset);
-    setAdjustBalanceMode(seed.mode);
-    setAdjustBalanceValue(seed.value);
-    clearCloneExtras();
-    setAdjustOpen(true);
-  };
-
   const openNewAdjust = () => {
-    setAdjustAccount(accountFilter.trim());
-    setAdjustAsset(assetFilter.trim());
-    setAdjustBalanceMode("absolute");
-    setAdjustBalanceValue("");
-    clearCloneExtras();
-    setAdjustOpen(true);
+    setDraftOpenRequest((current) => current + 1);
   };
 
   // Clone an adjustment record — open dialog prefilled with all request fields.
@@ -1140,10 +1732,6 @@ export function Positions() {
     setAdjustIncomingBoundsUpper(req.incomingBounds?.upper);
     setAdjustOpen(true);
   };
-
-  // The simple, no-extra-limits inline apply: just a balance amount.
-  const inlineApply: InlineApply = (account, asset, mode, value) =>
-    createAdjustment(account, { asset, balance: { mode, value } });
 
   const handleAdjustDone = () => {
     balancesLoad.reload();
@@ -1232,20 +1820,22 @@ export function Positions() {
             />
             <BalancesTable
               balances={[]}
+              defaultDraftAccount={accountFilter.trim()}
+              defaultDraftAsset={assetFilter.trim()}
+              draftOpenRequest={draftOpenRequest}
               accountSuggestions={accountSuggestions}
               assetSuggestions={assetSuggestions}
-              onInlineApply={inlineApply}
-              onApplyWithLimits={openAdjustWithLimits}
               onApplied={handleAdjustDone}
             />
           </>
         ) : (
           <BalancesTable
             balances={balancesLoad.load.data}
+            defaultDraftAccount={accountFilter.trim()}
+            defaultDraftAsset={assetFilter.trim()}
+            draftOpenRequest={draftOpenRequest}
             accountSuggestions={accountSuggestions}
             assetSuggestions={assetSuggestions}
-            onInlineApply={inlineApply}
-            onApplyWithLimits={openAdjustWithLimits}
             onApplied={handleAdjustDone}
           />
         ))}

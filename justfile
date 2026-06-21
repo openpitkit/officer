@@ -26,32 +26,59 @@ go_cache := env_var_or_default("GOCACHE", "/tmp/pit-officer-go-build-cache")
 golangci_lint_cache := env_var_or_default("GOLANGCI_LINT_CACHE", "/tmp/pit-officer-golangci-lint-cache")
 go_packages := ". ./cmd/... ./internal/..."
 
-# Regenerate go.sum and tidy indirect dependencies.
-tidy:
-    GOCACHE={{ go_cache }} CGO_ENABLED=1 go mod tidy
-
-# Verify go.mod and go.sum are already tidy.
-tidy-check:
-    GOCACHE={{ go_cache }} CGO_ENABLED=1 go mod tidy
-    git diff --exit-code -- go.mod go.sum
-
 # Build the pit-officer binary.
-build: frontend-build
+build: frontend-install build-js
     GOCACHE={{ go_cache }} CGO_ENABLED=1 go build -o pit-officer ./cmd/pit-officer
 
 # Build all Go packages (no frontend; uses the committed web/dist placeholder).
 build-go:
     GOCACHE={{ go_cache }} CGO_ENABLED=1 go build {{ go_packages }}
 
+# Build the SPA using already-installed frontend dependencies.
+build-js:
+    cd web && npm run build
+
+# Format, lint, build, and test the result.
+check: fmt-all check-dry build-js
+
+# Lint and test the result (non-mutating).
+check-dry: lint-all test-all
+
+# Format, lint, build, and test Go.
+check-go: fmt-all check-go-dry
+
+# Lint, build, and test Go (non-mutating).
+check-go-dry: lint-go build-go test-go test-go-race
+
+# Lint, build, and test JS/TypeScript.
+check-js: lint-js build-js test-js
+
+# Lint and test JS/TypeScript (non-mutating).
+check-js-dry: lint-js test-js
+
 # Run go vet across all packages.
 vet:
     GOCACHE={{ go_cache }} CGO_ENABLED=1 go vet -all {{ go_packages }}
 
+# Lint all.
+[parallel]
+lint-all: lint-go lint-js
+
 # Lint Go sources.
 lint-go:
     gofmt -l webdist.go cmd internal | (! grep .)
+    GOCACHE={{ go_cache }} CGO_ENABLED=1 go mod tidy -diff
     GOCACHE={{ go_cache }} CGO_ENABLED=1 go vet -all {{ go_packages }}
     GOCACHE={{ go_cache }} GOLANGCI_LINT_CACHE={{ golangci_lint_cache }} golangci-lint run --timeout=5m {{ go_packages }}
+
+# Lint and typecheck JS/TypeScript sources.
+lint-js:
+    cd web && npm run lint
+    cd web && npm run typecheck
+
+# Run all tests.
+[parallel]
+test-all: test-go test-go-race test-js
 
 # Run all Go tests.
 test-go:
@@ -61,8 +88,20 @@ test-go:
 test-go-race:
     GOCACHE={{ go_cache }} CGO_ENABLED=1 go test -race -count=1 {{ go_packages }}
 
-# Run all tests with the race detector.
-test: test-go-race
+# Run JS/TypeScript tests.
+test-js:
+    cd web && npm run test
+
+# Run all tests.
+test: test-all
+
+# Format all.
+[parallel]
+fmt-all: fmt-go
+
+# Format Go.
+fmt-go:
+    gofmt -w webdist.go cmd internal
 
 # Run pit-officer in local stdio MCP mode.
 run-mcp: build
@@ -76,14 +115,6 @@ run-serve: build
 dashboard:
     ./pit-officer dashboard
 
-# Install frontend deps and build the SPA into web/dist/.
-frontend-build:
-    cd web && npm install && npm run build
-
-# Build the SPA using already-installed frontend dependencies.
-frontend-build-ready:
-    cd web && npm run build
-
 # Install frontend dependencies only (no build).
 frontend-install:
     cd web && npm install
@@ -91,18 +122,6 @@ frontend-install:
 # Install frontend dependencies from the committed lockfile.
 frontend-ci-install:
     cd web && npm ci
-
-# Lint the SPA (ESLint, incl. the i18n no-literal-string guardrail).
-frontend-lint:
-    cd web && npm run lint
-
-# Typecheck the SPA without emitting build artifacts.
-frontend-typecheck:
-    cd web && npm run typecheck
-
-# Run the SPA unit tests (Vitest).
-frontend-test:
-    cd web && npm run test
 
 # Build the stable Docker image from the published OpenPit module.
 docker-build tag="pit-officer:local":
@@ -121,7 +140,7 @@ dylib-dev pit_checkout="../pit":
         --manifest-path "$pit_dir/Cargo.toml"
 
 # Build the pit-officer binary against a local Pit checkout.
-build-dev pit_checkout="../pit": frontend-build (dylib-dev pit_checkout) (_go-dev pit_checkout "build" "-o" "pit-officer" "./cmd/pit-officer")
+build-dev pit_checkout="../pit": frontend-install build-js (dylib-dev pit_checkout) (_go-dev pit_checkout "build" "-o" "pit-officer" "./cmd/pit-officer")
 
 # Build all Go packages against a local Pit checkout.
 build-go-dev pit_checkout="../pit": (dylib-dev pit_checkout) (_go-dev pit_checkout "build" "./...")

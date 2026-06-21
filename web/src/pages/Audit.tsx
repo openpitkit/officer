@@ -20,8 +20,8 @@ import { ListFilter } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
-import type { AuditEntry } from "@/api/types";
-import { useAudit } from "@/api/useAudit";
+import type { AuditActionGroup, AuditEntry } from "@/api/types";
+import { useAudit, useAuditActions } from "@/api/useAudit";
 import { Autocomplete } from "@/components/Autocomplete";
 import { EmptyState, ErrorState, TableSkeleton } from "@/components/PageStates";
 import { Page } from "@/components/Page";
@@ -54,51 +54,7 @@ import { formatDateTime } from "@/i18n/format";
 
 const PAGE_SIZES = [50, 100, 500] as const;
 const SOURCES = ["panel", "api", "mcp", "system"] as const;
-
-// Audit action catalogue, grouped by category. Mirrors the server-side
-// classification in internal/domain (AuditAction.Category): trading is the
-// high-volume order/execution stream, control is everything else. New server
-// actions must be added here so the type filter keeps offering them.
-const TRADING_ACTIONS = ["submit_order", "execution_report"] as const;
-const CONTROL_ACTIONS = [
-  "hydrate",
-  "create_account",
-  "block",
-  "unblock",
-  "set_limit",
-  "delete_limit",
-  "set_group_notes",
-  "block_group",
-  "unblock_group",
-  "set_notes",
-  "set_group",
-  "adjustment",
-  "create_group",
-  "delete_group",
-  "set_mcp_access",
-  "set_market_data",
-  "export_backup",
-  "restore_backup",
-  "reset_database",
-  "generate_signing_key",
-  "import_signing_key",
-  "set_signing_config",
-  "approval_issued",
-  "approval_confirmed",
-  "approval_cancelled",
-] as const;
-
-const ACTION_GROUPS = [
-  { key: "control", actions: CONTROL_ACTIONS },
-  { key: "trading", actions: TRADING_ACTIONS },
-] as const;
-
-const ALL_ACTIONS: readonly string[] = [...CONTROL_ACTIONS, ...TRADING_ACTIONS];
-
-// Trading activity is hidden by default; an operator opts into it explicitly.
-function defaultActions(): Set<string> {
-  return new Set<string>(CONTROL_ACTIONS);
-}
+const EMPTY_ACTION_GROUPS: AuditActionGroup[] = [];
 
 /** Map an audit action to a badge tone. Blocking and deletions read as
  *  destructive; creations and unblocks as positive. */
@@ -189,19 +145,28 @@ function AuditTable({ entries }: { entries: AuditEntry[] }) {
 function ActionTypeFilter({
   selected,
   onChange,
+  groups,
+  allActions,
+  controlActions,
+  loading,
 }: {
   selected: Set<string>;
   onChange: (next: Set<string>) => void;
+  groups: AuditActionGroup[];
+  allActions: string[];
+  controlActions: string[];
+  loading: boolean;
 }) {
   const { t } = useTranslation("audit");
 
   const summary = (() => {
-    if (selected.size === ALL_ACTIONS.length) {
+    if (allActions.length > 0 && selected.size === allActions.length) {
       return t("filter.types.all");
     }
     if (
-      selected.size === CONTROL_ACTIONS.length &&
-      CONTROL_ACTIONS.every((a) => selected.has(a))
+      controlActions.length > 0 &&
+      selected.size === controlActions.length &&
+      controlActions.every((a) => selected.has(a))
     ) {
       return t("filter.types.controlOnly");
     }
@@ -239,6 +204,7 @@ function ActionTypeFilter({
           size="sm"
           className="h-8 gap-1.5 text-xs"
           aria-label={t("filter.types.ariaLabel")}
+          disabled={loading}
         >
           <ListFilter className="h-3.5 w-3.5" />
           {t("filter.types.label")}
@@ -249,10 +215,10 @@ function ActionTypeFilter({
         align="start"
         className="max-h-96 w-60 overflow-y-auto"
       >
-        {ACTION_GROUPS.map((group, i) => {
+        {groups.map((group, i) => {
           const allOn = group.actions.every((a) => selected.has(a));
           return (
-            <div key={group.key}>
+            <div key={group.category}>
               {i > 0 && <DropdownMenuSeparator />}
               <DropdownMenuCheckboxItem
                 checked={allOn}
@@ -262,7 +228,7 @@ function ActionTypeFilter({
                 }}
                 className="font-bold uppercase tracking-[0.05em]"
               >
-                {t(`filter.types.group.${group.key}`)}
+                {t(`filter.types.group.${group.category}`)}
               </DropdownMenuCheckboxItem>
               {group.actions.map((action) => (
                 <DropdownMenuCheckboxItem
@@ -293,18 +259,48 @@ export function Audit() {
   const [account, setAccount] = useState(params.get("account") ?? "");
   const [source, setSource] = useState(params.get("source") ?? "");
   const [size, setSize] = useState<number>(50);
-  const [selectedActions, setSelectedActions] =
-    useState<Set<string>>(defaultActions);
+  const [selectedActions, setSelectedActions] = useState<Set<string> | null>(
+    null,
+  );
 
-  const actions = useMemo(() => Array.from(selectedActions), [selectedActions]);
+  // Load the action catalogue from the server; the type filter is built
+  // entirely from it.
+  const catalogue = useAuditActions();
+  const actionGroups =
+    catalogue.load.state === "ready"
+      ? catalogue.load.data
+      : EMPTY_ACTION_GROUPS;
+  const allActions = useMemo(
+    () => actionGroups.flatMap((g) => g.actions),
+    [actionGroups],
+  );
+  const controlActions = useMemo(
+    () => actionGroups.find((g) => g.category === "control")?.actions ?? [],
+    [actionGroups],
+  );
+  // Trading activity is hidden by default, unless the operator has already
+  // changed the selection.
+  const effectiveSelectedActions = useMemo(
+    () => selectedActions ?? new Set<string>(controlActions),
+    [controlActions, selectedActions],
+  );
+  const actions = useMemo(
+    () => Array.from(effectiveSelectedActions),
+    [effectiveSelectedActions],
+  );
   const isFiltered =
-    !!account || !!source || selectedActions.size !== ALL_ACTIONS.length;
+    !!account ||
+    !!source ||
+    (allActions.length > 0 &&
+      effectiveSelectedActions.size !== allActions.length);
 
+  // Hold the audit fetch until the catalogue has seeded the selection so the
+  // first call carries the control default, not an empty (match-nothing) set.
   const { load, reload } = useAudit(
     size,
     account || undefined,
     source || undefined,
-    actions,
+    catalogue.load.state === "ready" ? actions : undefined,
   );
 
   // Build account suggestions from loaded entries.
@@ -381,16 +377,31 @@ export function Audit() {
           </SelectContent>
         </Select>
         <ActionTypeFilter
-          selected={selectedActions}
-          onChange={setSelectedActions}
+          selected={effectiveSelectedActions}
+          onChange={(next) => {
+            setSelectedActions(next);
+          }}
+          groups={actionGroups}
+          allActions={allActions}
+          controlActions={controlActions}
+          loading={catalogue.load.state !== "ready"}
         />
       </div>
 
-      {load.state === "loading" && <TableSkeleton cols={6} />}
-      {load.state === "error" && (
-        <ErrorState message={load.error} onRetry={reload} />
+      {/* Gate the list on the catalogue so the first audit fetch carries the
+          seeded control default rather than flashing an empty result. */}
+      {(catalogue.load.state === "loading" || load.state === "loading") && (
+        <TableSkeleton cols={6} />
       )}
-      {load.state === "ready" &&
+      {catalogue.load.state === "error" && (
+        <ErrorState message={catalogue.load.error} onRetry={catalogue.reload} />
+      )}
+      {catalogue.load.state === "ready" &&
+        load.state === "error" && (
+          <ErrorState message={load.error} onRetry={reload} />
+        )}
+      {catalogue.load.state === "ready" &&
+        load.state === "ready" &&
         (load.data.length === 0 ? (
           <EmptyState
             title={t("empty.title")}

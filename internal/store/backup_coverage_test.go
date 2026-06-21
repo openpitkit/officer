@@ -457,6 +457,11 @@ func backupRoundTripValues(t *testing.T) map[string]map[string]string {
 			"command": "submit_order",
 			"enabled": "1",
 		},
+		"user_settings": {
+			"user_id":       "default",
+			"setting_key":   "welcome_seen",
+			"setting_value": "1",
+		},
 	}
 }
 

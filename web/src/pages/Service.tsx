@@ -109,6 +109,7 @@ const backupSections: BackupSection[] = [
   "market_data_settings",
   "market_data_quotes",
   "general_settings",
+  "user_settings",
   "activity_history",
   "audit_log",
 ];
@@ -632,20 +633,29 @@ function BackupScopeControls(props: {
         {t("backup.all")}
       </label>
 
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-        {backupSections.map((section) => (
-          <label
-            key={section}
-            className="inline-flex w-fit items-center gap-2 whitespace-nowrap text-xs text-muted"
-          >
-            <input
-              type="checkbox"
-              checked={props.all || props.sections.includes(section)}
-              disabled={props.all}
-              onChange={() => props.toggleSection(section)}
-            />
-            {t(`backup.sections.${section}`)}
-          </label>
+      {/* Two adjacent columns: fill the first, then the second sits right
+          beside it (content-width, not stretched across the row). */}
+      <div className="flex gap-x-10">
+        {[
+          backupSections.slice(0, Math.ceil(backupSections.length / 2)),
+          backupSections.slice(Math.ceil(backupSections.length / 2)),
+        ].map((column) => (
+          <div key={column[0]} className="flex flex-col gap-y-2">
+            {column.map((section) => (
+              <label
+                key={section}
+                className="flex w-fit items-center gap-2 whitespace-nowrap text-xs text-muted"
+              >
+                <input
+                  type="checkbox"
+                  checked={props.all || props.sections.includes(section)}
+                  disabled={props.all}
+                  onChange={() => props.toggleSection(section)}
+                />
+                {t(`backup.sections.${section}`)}
+              </label>
+            ))}
+          </div>
         ))}
       </div>
 

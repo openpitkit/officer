@@ -212,12 +212,12 @@ function ManageKeyCard({
     setGenerateError(null);
     try {
       await generateSigningKey();
+      setGenerateDialogOpen(false);
       onDone();
     } catch (err) {
       setGenerateError(errMessage(err) || t("manageKey.errors.generateFailed"));
     } finally {
       setGenerateBusy(false);
-      setGenerateDialogOpen(false);
     }
   }
 
@@ -338,7 +338,7 @@ function ManageKeyCard({
         )}
 
         {/* Generate confirm dialog */}
-        <AlertDialog open={generateDialogOpen} onOpenChange={setGenerateDialogOpen}>
+        <AlertDialog open={generateDialogOpen} onOpenChange={(open) => { setGenerateDialogOpen(open); if (!open) setGenerateError(null); }}>
           <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogTitle>
@@ -348,6 +348,9 @@ function ManageKeyCard({
                 {t("manageKey.generateDialog.description")}
               </AlertDialogDescription>
             </AlertDialogHeader>
+            {generateError && (
+              <p className="text-xs text-[var(--danger)]">{generateError}</p>
+            )}
             <AlertDialogFooter>
               <AlertDialogCancel disabled={generateBusy}>
                 {tc("actions.cancel")}

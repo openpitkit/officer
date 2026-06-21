@@ -2,7 +2,7 @@
   "title": "持仓",
   "actions": {
     "adjust": "调整",
-    "adjustAriaLabel": "调整 {{account}} {{asset}}",
+    "adjustAriaLabel": "打开 {{account}} {{asset}} 的调整",
     "refreshHistoryAriaLabel": "刷新历史记录"
   },
   "filters": {
@@ -37,6 +37,32 @@
     "applyWithLimitsAriaLabel": "对 {{account}} {{asset}} 应用调整并设边界",
     "accountAriaLabel": "新建调整的账户",
     "assetAriaLabel": "新建调整的资产"
+  },
+  "panel": {
+    "open": "调整",
+    "openAriaLabel": "打开 {{account}} {{asset}} 的调整面板",
+    "openDraftAriaLabel": "打开新建调整面板",
+    "title": "调整",
+    "descriptionExisting": "提交前，请对照当前持仓与拟提交数值。",
+    "descriptionDraft": "提交前，请设置账户、资产、拟提交数值和可选边界。",
+    "emptyAccount": "未指定账户",
+    "emptyAsset": "未指定资产",
+    "boundsOptional": "本次调整可选提交的边界。",
+    "keepCurrent": "保留当前值",
+    "noChange": "不变",
+    "invalidDecimal": "无效的小数",
+    "noChangesError": "请至少输入一个金额、平均价格或边界。",
+    "submit": "提交调整",
+    "saving": "正在提交",
+    "avgPreview": "当前 {{current}} → {{result}}",
+    "modeAriaLabel": "{{field}} 调整模式",
+    "amountAriaLabel": "{{field}} 调整金额",
+    "columns": {
+      "current": "当前",
+      "intent": "意图",
+      "amount": "金额",
+      "result": "结果"
+    }
   },
   "history": {
     "sectionLabel": "调整历史",

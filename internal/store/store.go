@@ -173,6 +173,19 @@ type Store interface {
 	// validate the command against any catalogue; that is the caller's concern.
 	SetMcpAccess(ctx context.Context, command string, enabled bool) error
 
+	// --- User settings ---
+
+	// GetUserSetting returns the stored value for (userID, key). The bool is
+	// false when no such setting exists; callers then apply their default.
+	GetUserSetting(ctx context.Context, userID, key string) (string, bool, error)
+
+	// SetUserSetting upserts one per-user key-value setting.
+	SetUserSetting(ctx context.Context, userID, key, value string) error
+
+	// ListUserSettings returns every persisted user setting across all users,
+	// ordered for stable backups. An empty store returns a non-nil empty slice.
+	ListUserSettings(ctx context.Context) ([]domain.UserSetting, error)
+
 	// --- Account groups ---
 
 	// CreateGroup persists a new account group. Returns domain.ErrAlreadyExists
@@ -296,6 +309,17 @@ type Store interface {
 		id int64,
 		prices []string,
 	) error
+
+	// RecordOrderSettlement persists one fill/settlement atomically in a single
+	// transaction: per-asset balances (realized P&L delta-accumulated inside the
+	// tx), the optional trade, the engine-applied account blocks, the optional
+	// lock-price rewrite, the fill event(s), and the order status advance are all
+	// committed together or rolled back together. When st.AllowedFrom is non-empty
+	// the status UPDATE is guarded and a disallowed current status yields
+	// domain.ErrConflict with nothing written; otherwise a missing order row
+	// yields domain.ErrNotFound. The block-audit row is NOT part of this tx (it is
+	// observational); callers write it separately after a successful commit.
+	RecordOrderSettlement(ctx context.Context, st domain.OrderSettlement) error
 
 	// GetOrder returns the order with its events and trades.
 	// Returns domain.ErrNotFound when absent.
@@ -460,6 +484,13 @@ type Store interface {
 	// UpsertReservationIntent inserts or replaces a reservation intent row.
 	UpsertReservationIntent(ctx context.Context, intent domain.ReservationIntent) error
 
+	// GetReservationIntent returns the reservation intent for the given
+	// approvalID regardless of state; found=false when no row exists.
+	GetReservationIntent(
+		ctx context.Context,
+		approvalID string,
+	) (domain.ReservationIntent, bool, error)
+
 	// ListOpenReservationIntents returns all intents whose state is 'held'.
 	ListOpenReservationIntents(ctx context.Context) ([]domain.ReservationIntent, error)
 
@@ -470,6 +501,18 @@ type Store interface {
 		approvalID string,
 		state domain.ReservationIntentState,
 	) error
+
+	// ResolveOrderReservation resolves one reservation atomically in a single
+	// transaction: the intent state flip, the order status advance, and the
+	// lifecycle event(s) are all committed together or rolled back together. The
+	// order status UPDATE is guarded by r.AllowedFrom (callers pass
+	// {OrderStatusAccepted}): a current status outside the guard yields
+	// domain.ErrConflict with nothing written (TOCTOU-safe against a fill landing
+	// before the tx), and a missing order row yields domain.ErrNotFound. A missing
+	// intent row is tolerated as a no-op (mirroring SetReservationIntentState's
+	// NotFound tolerance); r.OrderID==0 skips the order/event writes and only
+	// flips the intent.
+	ResolveOrderReservation(ctx context.Context, r domain.ReservationResolution) error
 
 	// Close releases the database connection. It is idempotent.
 	Close() error

@@ -168,6 +168,9 @@ func exportBackupData(ctx context.Context, q backupQueryer) (backup.Data, error)
 	if data.McpAccess, err = listBackupMcpAccess(ctx, q); err != nil {
 		return backup.Data{}, err
 	}
+	if data.UserSettings, err = listBackupUserSettings(ctx, q); err != nil {
+		return backup.Data{}, err
+	}
 	if data.MarketDataInstances, err = listBackupMarketDataInstances(ctx, q); err != nil {
 		return backup.Data{}, err
 	}
@@ -445,6 +448,29 @@ func listBackupMcpAccess(
 	return access, nil
 }
 
+func listBackupUserSettings(
+	ctx context.Context, q backupQueryer,
+) ([]domain.UserSetting, error) {
+	rows, err := q.QueryContext(ctx, backupSelectQuery("user_settings", "user_id, setting_key"))
+	if err != nil {
+		return nil, fmt.Errorf("store: list user settings for backup: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	settings := make([]domain.UserSetting, 0)
+	for rows.Next() {
+		var setting domain.UserSetting
+		if err := rows.Scan(&setting.UserID, &setting.Key, &setting.Value); err != nil {
+			return nil, fmt.Errorf("store: scan backup user setting row: %w", err)
+		}
+		settings = append(settings, setting)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: iterate backup user setting rows: %w", err)
+	}
+	return settings, nil
+}
+
 func listBackupMarketDataInstances(
 	ctx context.Context, q backupQueryer,
 ) ([]domain.MarketDataInstance, error) {
@@ -595,6 +621,11 @@ func deleteRestoreSections(
 	}
 	if scope.Included(backup.SectionGeneralSettings) {
 		if err := deleteAll(ctx, tx, "mcp_access"); err != nil {
+			return err
+		}
+	}
+	if scope.Included(backup.SectionUserSettings) {
+		if err := deleteAll(ctx, tx, "user_settings"); err != nil {
 			return err
 		}
 	}
@@ -782,6 +813,11 @@ func restoreBackupData(
 		return err
 	}
 	if err := restoreMcpAccess(ctx, tx, data.McpAccess, mode, summary); err != nil {
+		return err
+	}
+	if err := restoreUserSettings(
+		ctx, tx, data.UserSettings, mode, summary,
+	); err != nil {
 		return err
 	}
 	if err := restoreAdjustments(
@@ -1110,6 +1146,32 @@ func restoreMcpAccess(
 		)
 		if err != nil {
 			return fmt.Errorf("store: restore mcp access %q: %w", command, err)
+		}
+		addRestoreCount(summary, backupTableSection(table), n)
+	}
+	return nil
+}
+
+func restoreUserSettings(
+	ctx context.Context,
+	tx *sql.Tx,
+	settings []domain.UserSetting,
+	mode backup.RestoreMode,
+	summary backup.RestoreSummary,
+) error {
+	const table = "user_settings"
+	query, err := restoreInsertQueryForTable(mode, table)
+	if err != nil {
+		return err
+	}
+	for _, setting := range settings {
+		n, err := execCount(ctx, tx,
+			query,
+			setting.UserID, setting.Key, setting.Value,
+		)
+		if err != nil {
+			return fmt.Errorf("store: restore user setting %q/%q: %w",
+				setting.UserID, setting.Key, err)
 		}
 		addRestoreCount(summary, backupTableSection(table), n)
 	}

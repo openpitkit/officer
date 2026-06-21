@@ -11,7 +11,9 @@
     "copy": "复制",
     "copied": "已复制",
     "close": "关闭",
-    "dismissError": "关闭错误"
+    "dismissError": "关闭错误",
+    "increment": "增加",
+    "decrement": "减少"
   },
   "value": {
     "none": "—",
@@ -43,12 +45,78 @@
     "product": "产品",
     "copyrightLabel": "版权",
     "copyright": "Copyright The Pit Project Owners. All rights reserved.",
+    "openWelcome": "打开首次运行指南",
     "links": {
-      "website": "Officer 网站",
+      "website": "Pit Officer 网站",
       "issues": "Issue tracker",
       "discussions": "GitHub discussions",
       "openpit": "OpenPit 网站"
     }
+  },
+  "welcome": {
+    "badgeLocal": "本地服务",
+    "title": "欢迎使用 Pit Officer",
+    "description": "请有意识地设置控制平面。除非您选择数据源和工作流，否则应用不会交易或连接外部系统。",
+    "sections": {
+      "product": "这个应用是什么",
+      "uses": "可用方式",
+      "preTrade": "Pre-trade 设置",
+      "marketData": "行情数据",
+      "optional": "控制可选时"
+    },
+    "product": {
+      "copy": "Pit Officer 是风控的操作面板。账户、余额、策略、行情源、审计记录、REST 访问、MCP 命令和签名密钥都保存在同一个本地服务中。"
+    },
+    "useCases": {
+      "dropCopy": {
+        "title": "Drop-copy 登记",
+        "copy": "在执行后记录订单、成交、账户状态和审计事件，不阻塞上游 venue。"
+      },
+      "preTrade": {
+        "title": "Pre-trade gate",
+        "copy": "订单离开系统前先应用账户余额和 policy barriers，然后允许或拒绝。"
+      },
+      "surfaces": {
+        "title": "REST、MCP 和 FIX",
+        "copy": "可通过面板、REST 客户端、MCP agents 以及启用后的 FIX-oriented 流程操作。"
+      },
+      "operations": {
+        "title": "Operator ledger",
+        "copy": "查看持仓、冻结资金、breaches、策略变更、approvals、日志和服务状态。"
+      }
+    },
+    "preTrade": {
+      "copy": "如果要做允许或禁止的 pre-trade 控制，请创建账户，分配持仓或现金余额，然后定义 policy barriers。如果不需要 buying power 控制，可以不创建账户和余额。"
+    },
+    "marketData": {
+      "copy": "Market orders、locked prices、跨币种敞口和 realized PnL 需要行情源。您可以稍后连接 live provider，也可以现在安装静态 BYO preset。"
+    },
+    "optional": {
+      "copy": "纯登记或审计工作流可以不配置账户、余额和 feeds。只有当订单路径必须由 Pit 允许或阻止时，再添加这些控制。"
+    },
+    "actions": {
+      "demoAccount": "创建演示账户和持仓",
+      "policyPreset": "添加 starter policy barriers",
+      "marketDataPreset": "安装 FX 和 crypto 静态价格",
+      "binancePreset": "从 Binance 获取 FX 和 crypto rates",
+      "or": "或",
+      "openAccounts": "打开账户",
+      "openPolicies": "打开策略",
+      "openMarketData": "打开行情数据",
+      "start": "开始使用 Pit Officer"
+    },
+    "presets": {
+      "accountNote": "由首次运行指南创建。生产使用前请替换为真实账户标识。"
+    },
+    "status": {
+      "applied": "{{label}} 已应用：更新 {{count}} 行。",
+      "failed": "{{label}} 失败：{{message}}",
+      "partialFailed": "{{label}} 已部分应用：失败前已更新 {{count}} 行：{{message}}",
+      "marketDataInstanceMissing": "服务器没有返回静态行情数据实例。",
+      "binanceInstanceMissing": "服务器没有返回 Binance 行情数据实例。"
+    },
+    "returnHint": "您可以从“关于”对话框回到此对话框。",
+    "dontShowAgain": "不再显示"
   },
   "display": {
     "density": {

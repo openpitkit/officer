@@ -83,6 +83,7 @@
       "market_data_settings": "行情数据设置",
       "market_data_quotes": "最新行情报价",
       "general_settings": "通用设置",
+      "user_settings": "用户设置",
       "activity_history": "订单、成交、调整",
       "audit_log": "审计日志"
     },

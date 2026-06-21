@@ -1,8 +1,8 @@
 {
   "title": "Позиции",
   "actions": {
-    "adjust": "Корректировать",
-    "adjustAriaLabel": "Корректировать {{account}} {{asset}}",
+    "adjust": "Корректировка",
+    "adjustAriaLabel": "Открыть корректировку для {{account}} {{asset}}",
     "refreshHistoryAriaLabel": "Обновить историю"
   },
   "filters": {
@@ -37,6 +37,32 @@
     "applyWithLimitsAriaLabel": "Применить корректировку с границами к {{account}} {{asset}}",
     "accountAriaLabel": "Счёт новой корректировки",
     "assetAriaLabel": "Актив новой корректировки"
+  },
+  "panel": {
+    "open": "Корректировка",
+    "openAriaLabel": "Открыть панель корректировки для {{account}} {{asset}}",
+    "openDraftAriaLabel": "Открыть панель новой корректировки",
+    "title": "Корректировка",
+    "descriptionExisting": "Сверьте текущую позицию с намерением перед отправкой.",
+    "descriptionDraft": "Укажите счёт, актив, значения и необязательные границы перед отправкой.",
+    "emptyAccount": "Счёт не указан",
+    "emptyAsset": "Актив не указан",
+    "boundsOptional": "Необязательные границы для отправляемой корректировки.",
+    "keepCurrent": "Сохранить текущее",
+    "noChange": "Без изменения",
+    "invalidDecimal": "Некорректное десятичное число",
+    "noChangesError": "Укажите хотя бы одну сумму, среднюю цену или границу.",
+    "submit": "Отправить корректировку",
+    "saving": "Отправка",
+    "avgPreview": "Текущее {{current}} → {{result}}",
+    "modeAriaLabel": "{{field}}: режим корректировки",
+    "amountAriaLabel": "{{field}}: сумма корректировки",
+    "columns": {
+      "current": "Текущее",
+      "intent": "Намерение",
+      "amount": "Сумма",
+      "result": "Результат"
+    }
   },
   "history": {
     "sectionLabel": "История корректировок",

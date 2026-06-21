@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -744,6 +745,53 @@ func TestReservationIntent_RoundTripIncludesOrderID(t *testing.T) {
 	}
 }
 
+// TestGetReservationIntent verifies that GetReservationIntent returns intents
+// regardless of state and reports found=false for unknown approval ids.
+func TestGetReservationIntent(t *testing.T) {
+	t.Parallel()
+	s := openStore(t)
+	ctx := context.Background()
+
+	// not found: unknown approval id.
+	_, found, err := s.GetReservationIntent(ctx, "no-such-approval")
+	if err != nil {
+		t.Fatalf("GetReservationIntent (absent): %v", err)
+	}
+	if found {
+		t.Fatal("found=true for unknown approval id, want false")
+	}
+
+	// found: held state.
+	orderID := seedOrder(t, s, "acc-1", domain.OrderStatusAccepted)
+	seedHeldIntent(t, s, "approval-held", orderID, "acc-1")
+
+	intent, found, err := s.GetReservationIntent(ctx, "approval-held")
+	if err != nil {
+		t.Fatalf("GetReservationIntent (held): %v", err)
+	}
+	if !found {
+		t.Fatal("found=false for held intent, want true")
+	}
+	if intent.State != domain.ReservationIntentStateHeld {
+		t.Fatalf("state = %q, want held", intent.State)
+	}
+
+	// found: rolled_back state (simulates a TTL-swept intent).
+	if err := s.SetReservationIntentState(ctx, "approval-held", domain.ReservationIntentStateRolledBack); err != nil {
+		t.Fatalf("SetReservationIntentState: %v", err)
+	}
+	intent, found, err = s.GetReservationIntent(ctx, "approval-held")
+	if err != nil {
+		t.Fatalf("GetReservationIntent (rolled_back): %v", err)
+	}
+	if !found {
+		t.Fatal("found=false for rolled_back intent, want true")
+	}
+	if intent.State != domain.ReservationIntentStateRolledBack {
+		t.Fatalf("state = %q, want rolled_back", intent.State)
+	}
+}
+
 // --- Close idempotent ---
 
 func TestClose_Idempotent(t *testing.T) {
@@ -819,6 +867,76 @@ func TestMcpAccess_UpsertAndList(t *testing.T) {
 	}
 	if len(access) != 2 {
 		t.Fatalf("want 2 overrides after overwrite, got %d", len(access))
+	}
+}
+
+// --- User settings ---
+
+func TestUserSettings_MissingReturnsNotOk(t *testing.T) {
+	t.Parallel()
+	s := openStore(t)
+	ctx := context.Background()
+
+	value, ok, err := s.GetUserSetting(ctx, "default", "welcome_seen")
+	if err != nil {
+		t.Fatalf("GetUserSetting: %v", err)
+	}
+	if ok || value != "" {
+		t.Fatalf("missing setting: want (\"\", false), got (%q, %v)", value, ok)
+	}
+}
+
+func TestUserSettings_UpsertGetAndList(t *testing.T) {
+	t.Parallel()
+	s := openStore(t)
+	ctx := context.Background()
+
+	if err := s.SetUserSetting(ctx, "default", "welcome_seen", "1"); err != nil {
+		t.Fatalf("SetUserSetting: %v", err)
+	}
+	if err := s.SetUserSetting(ctx, "default", "theme", "dark"); err != nil {
+		t.Fatalf("SetUserSetting: %v", err)
+	}
+
+	value, ok, err := s.GetUserSetting(ctx, "default", "welcome_seen")
+	if err != nil || !ok || value != "1" {
+		t.Fatalf("GetUserSetting welcome_seen = (%q, %v, %v), want (\"1\", true, nil)", value, ok, err)
+	}
+
+	// Upsert overwrites in place rather than duplicating.
+	if err := s.SetUserSetting(ctx, "default", "welcome_seen", ""); err != nil {
+		t.Fatalf("SetUserSetting overwrite: %v", err)
+	}
+	value, ok, err = s.GetUserSetting(ctx, "default", "welcome_seen")
+	if err != nil || !ok || value != "" {
+		t.Fatalf("GetUserSetting after overwrite = (%q, %v, %v), want (\"\", true, nil)", value, ok, err)
+	}
+
+	settings, err := s.ListUserSettings(ctx)
+	if err != nil {
+		t.Fatalf("ListUserSettings: %v", err)
+	}
+	// Ordered by user then key: theme before welcome_seen.
+	want := []domain.UserSetting{
+		{UserID: "default", Key: "theme", Value: "dark"},
+		{UserID: "default", Key: "welcome_seen", Value: ""},
+	}
+	if !reflect.DeepEqual(settings, want) {
+		t.Fatalf("ListUserSettings = %+v, want %+v", settings, want)
+	}
+}
+
+func TestUserSettings_EmptyListIsNonNil(t *testing.T) {
+	t.Parallel()
+	s := openStore(t)
+	ctx := context.Background()
+
+	settings, err := s.ListUserSettings(ctx)
+	if err != nil {
+		t.Fatalf("ListUserSettings: %v", err)
+	}
+	if settings == nil {
+		t.Fatal("ListUserSettings must return a non-nil slice")
 	}
 }
 
@@ -1184,5 +1302,564 @@ func TestMarketDataInstrument_EmptyListsAreNonNil(t *testing.T) {
 	instruments, err := s.ListMarketDataInstruments(ctx, "none")
 	if err != nil || instruments == nil {
 		t.Fatalf("ListMarketDataInstruments: want non-nil empty, err=%v", err)
+	}
+}
+
+// --- Atomic reservation resolution / settlement ------------------------------
+
+// seedOrder inserts an order at the given status and returns its store-assigned
+// id. The order carries one base/quote pair so settlement events/trades that
+// reference it satisfy the order_events/trades FKs.
+func seedOrder(t *testing.T, s store.Store, account domain.AccountID, status domain.OrderStatus) int64 {
+	t.Helper()
+	o, err := s.CreateOrder(context.Background(), domain.Order{
+		Tenant:      domain.DefaultTenant,
+		Account:     account,
+		Source:      domain.SourceAPI,
+		Principal:   "operator",
+		BaseAsset:   "AAPL",
+		QuoteAsset:  "USD",
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "1",
+		Price:       "100",
+		Status:      status,
+	})
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+	return o.ID
+}
+
+// seedHeldIntent inserts a held reservation intent bound to orderID.
+func seedHeldIntent(t *testing.T, s store.Store, approvalID string, orderID int64, account domain.AccountID) {
+	t.Helper()
+	if err := s.UpsertReservationIntent(context.Background(), domain.ReservationIntent{
+		ApprovalID: approvalID,
+		OrderID:    orderID,
+		Account:    account,
+		ParamsJSON: "{}",
+		IssuedAt:   time.Now().UTC(),
+		ExpiresAt:  time.Now().UTC().Add(time.Minute),
+		State:      domain.ReservationIntentStateHeld,
+	}); err != nil {
+		t.Fatalf("UpsertReservationIntent: %v", err)
+	}
+}
+
+// intentHeld reports whether the named intent is still in the open (held) set.
+func intentHeld(t *testing.T, s store.Store, approvalID string) bool {
+	t.Helper()
+	intents, err := s.ListOpenReservationIntents(context.Background())
+	if err != nil {
+		t.Fatalf("ListOpenReservationIntents: %v", err)
+	}
+	for _, i := range intents {
+		if i.ApprovalID == approvalID {
+			return true
+		}
+	}
+	return false
+}
+
+// orderStatus reads back the current status of orderID.
+func orderStatus(t *testing.T, s store.Store, orderID int64) domain.OrderStatus {
+	t.Helper()
+	od, err := s.GetOrder(context.Background(), domain.DefaultTenant, orderID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	return od.Order.Status
+}
+
+// orderEventCount counts the events recorded for orderID.
+func orderEventCount(t *testing.T, s store.Store, orderID int64) int {
+	t.Helper()
+	evs, err := s.ListOrderEvents(context.Background(), domain.DefaultTenant, orderID)
+	if err != nil {
+		t.Fatalf("ListOrderEvents: %v", err)
+	}
+	return len(evs)
+}
+
+// TestResolveOrderReservation_HappyPathPersistsAll proves the confirm path
+// commits the intent flip, the status advance, and the lifecycle event together.
+func TestResolveOrderReservation_HappyPathPersistsAll(t *testing.T) {
+	t.Parallel()
+	s := openStore(t)
+	ctx := context.Background()
+
+	orderID := seedOrder(t, s, "acc-1", domain.OrderStatusAccepted)
+	seedHeldIntent(t, s, "approval-1", orderID, "acc-1")
+
+	if err := s.ResolveOrderReservation(ctx, domain.ReservationResolution{
+		Tenant:      domain.DefaultTenant,
+		ApprovalID:  "approval-1",
+		IntentState: domain.ReservationIntentStateCommitted,
+		OrderStatus: domain.OrderStatusCommitted,
+		AllowedFrom: []domain.OrderStatus{domain.OrderStatusAccepted},
+		OrderID:     orderID,
+		Events: []domain.OrderEvent{{
+			OrderID:   orderID,
+			Type:      domain.OrderEventReservationCommitted,
+			Source:    domain.SourceAPI,
+			Principal: "operator",
+		}},
+	}); err != nil {
+		t.Fatalf("ResolveOrderReservation: %v", err)
+	}
+
+	if got := orderStatus(t, s, orderID); got != domain.OrderStatusCommitted {
+		t.Fatalf("status = %q, want committed", got)
+	}
+	if intentHeld(t, s, "approval-1") {
+		t.Fatal("intent still held, want flipped to committed")
+	}
+	if n := orderEventCount(t, s, orderID); n != 1 {
+		t.Fatalf("event count = %d, want 1 (reservation_committed)", n)
+	}
+}
+
+// TestResolveOrderReservation_MidTxFailureRollsBackAll injects a constraint
+// violation in the event insert (an event row whose OrderID has no order) after
+// the status UPDATE has already matched the real order, and asserts the whole tx
+// rolls back: status unchanged, intent still held, no event written.
+func TestResolveOrderReservation_MidTxFailureRollsBackAll(t *testing.T) {
+	t.Parallel()
+	s := openStore(t)
+	ctx := context.Background()
+
+	orderID := seedOrder(t, s, "acc-1", domain.OrderStatusAccepted)
+	seedHeldIntent(t, s, "approval-1", orderID, "acc-1")
+
+	// The order status UPDATE targets the real order (matches), but the event
+	// references a non-existent order id, violating the order_events FK and
+	// failing the tx after the status row was already updated in-tx.
+	err := s.ResolveOrderReservation(ctx, domain.ReservationResolution{
+		Tenant:      domain.DefaultTenant,
+		ApprovalID:  "approval-1",
+		IntentState: domain.ReservationIntentStateCommitted,
+		OrderStatus: domain.OrderStatusCommitted,
+		AllowedFrom: []domain.OrderStatus{domain.OrderStatusAccepted},
+		OrderID:     orderID,
+		Events: []domain.OrderEvent{{
+			OrderID:   orderID + 100000, // dangling FK -> insert fails mid-tx
+			Type:      domain.OrderEventReservationCommitted,
+			Source:    domain.SourceAPI,
+			Principal: "operator",
+		}},
+	})
+	if err == nil {
+		t.Fatal("ResolveOrderReservation: want error from mid-tx FK violation")
+	}
+
+	if got := orderStatus(t, s, orderID); got != domain.OrderStatusAccepted {
+		t.Fatalf("status = %q after rollback, want accepted (unchanged)", got)
+	}
+	if !intentHeld(t, s, "approval-1") {
+		t.Fatal("intent flipped despite rollback, want still held")
+	}
+	if n := orderEventCount(t, s, orderID); n != 0 {
+		t.Fatalf("event count = %d after rollback, want 0", n)
+	}
+}
+
+// TestResolveOrderReservation_LateCancelAfterFilledConflict proves a cancel that
+// races a fill is rejected by the status WHERE-guard with nothing written: the
+// Filled status, the held intent, and the empty event stream all stand.
+func TestResolveOrderReservation_LateCancelAfterFilledConflict(t *testing.T) {
+	t.Parallel()
+	s := openStore(t)
+	ctx := context.Background()
+
+	orderID := seedOrder(t, s, "acc-1", domain.OrderStatusFilled)
+	seedHeldIntent(t, s, "approval-1", orderID, "acc-1")
+
+	err := s.ResolveOrderReservation(ctx, domain.ReservationResolution{
+		Tenant:      domain.DefaultTenant,
+		ApprovalID:  "approval-1",
+		IntentState: domain.ReservationIntentStateRolledBack,
+		OrderStatus: domain.OrderStatusCancelled,
+		AllowedFrom: []domain.OrderStatus{domain.OrderStatusAccepted},
+		OrderID:     orderID,
+		Events: []domain.OrderEvent{
+			{OrderID: orderID, Type: domain.OrderEventReservationRolledBack, Source: domain.SourceAPI},
+			{OrderID: orderID, Type: domain.OrderEventCancelled, Source: domain.SourceAPI},
+		},
+	})
+	if !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("want ErrConflict, got %v", err)
+	}
+
+	if got := orderStatus(t, s, orderID); got != domain.OrderStatusFilled {
+		t.Fatalf("status = %q, want filled preserved", got)
+	}
+	if !intentHeld(t, s, "approval-1") {
+		t.Fatal("intent flipped despite conflict, want still held")
+	}
+	if n := orderEventCount(t, s, orderID); n != 0 {
+		t.Fatalf("event count = %d, want 0 (no cancel events on conflict)", n)
+	}
+}
+
+// TestResolveOrderReservation_InMemoryOnlyHoldTolerated proves an OrderID==0
+// resolution with no matching intent row is a tolerated no-op (NotFound is
+// swallowed like SetReservationIntentState), returning nil with nothing written.
+// It also seeds an unrelated held intent to confirm that the no-op does not
+// disturb other intents.
+func TestResolveOrderReservation_InMemoryOnlyHoldTolerated(t *testing.T) {
+	t.Parallel()
+	s := openStore(t)
+	ctx := context.Background()
+
+	// Seed an unrelated held intent; it must be undisturbed after the no-op.
+	bystander := seedOrder(t, s, "acc-bystander", domain.OrderStatusAccepted)
+	seedHeldIntent(t, s, "bystander-approval", bystander, "acc-bystander")
+
+	if err := s.ResolveOrderReservation(ctx, domain.ReservationResolution{
+		Tenant:      domain.DefaultTenant,
+		ApprovalID:  "ghost-approval",
+		IntentState: domain.ReservationIntentStateRolledBack,
+		OrderStatus: domain.OrderStatusRolledBack,
+		AllowedFrom: []domain.OrderStatus{domain.OrderStatusAccepted},
+		OrderID:     0,
+	}); err != nil {
+		t.Fatalf("ResolveOrderReservation in-memory-only: want nil, got %v", err)
+	}
+
+	// Nothing written: ghost-approval must not appear in the open intent set.
+	if intentHeld(t, s, "ghost-approval") {
+		t.Fatal("ghost-approval appeared in open intents after in-memory-only no-op")
+	}
+	// Bystander intent must still be held.
+	if !intentHeld(t, s, "bystander-approval") {
+		t.Fatal("bystander-approval was disturbed by the in-memory-only no-op")
+	}
+	// Bystander order status must be unchanged.
+	if got := orderStatus(t, s, bystander); got != domain.OrderStatusAccepted {
+		t.Fatalf("bystander order status = %q, want accepted (unchanged)", got)
+	}
+}
+
+// TestRecordOrderSettlement_RealizedPnlAccumulatedInTx proves the fill path
+// accumulates realized P&L by delta inside the tx, follows the outcome *Result
+// fields, carries average_entry_price forward, advances the status, and records
+// the fill event and trade - all committed together.
+func TestRecordOrderSettlement_RealizedPnlAccumulatedInTx(t *testing.T) {
+	t.Parallel()
+	s := openStore(t)
+	ctx := context.Background()
+
+	orderID := seedOrder(t, s, "acc-1", domain.OrderStatusAccepted)
+	// Pre-existing balance with realized_pnl=5 and an average entry price to carry.
+	if err := s.UpsertBalance(ctx, domain.Balance{
+		Tenant:            domain.DefaultTenant,
+		Account:           "acc-1",
+		Asset:             "USD",
+		Available:         "1000",
+		Held:              "0",
+		Incoming:          "0",
+		RealizedPnl:       "5",
+		AverageEntryPrice: "99",
+		UpdatedAt:         time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("UpsertBalance: %v", err)
+	}
+
+	if err := s.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		Tenant:      domain.DefaultTenant,
+		Account:     "acc-1",
+		OrderID:     orderID,
+		OrderStatus: domain.OrderStatusFilled,
+		Balances: []domain.BalanceSettlement{{
+			Asset: "USD",
+			Outcome: domain.AdjustmentOutcomeAccepted{
+				BalanceResult:    "900",
+				HeldResult:       "0",
+				IncomingResult:   "0",
+				RealizedPnlDelta: "3",
+			},
+		}},
+		Events: []domain.OrderEvent{{
+			OrderID: orderID, Type: domain.OrderEventFill, Source: domain.SourceAPI,
+		}},
+		Trade: &domain.Trade{
+			OrderID:    orderID,
+			Tenant:     domain.DefaultTenant,
+			Account:    "acc-1",
+			Source:     domain.SourceAPI,
+			BaseAsset:  "AAPL",
+			QuoteAsset: "USD",
+			Side:       domain.OrderSideBuy,
+			Quantity:   "1",
+			Price:      "100",
+		},
+	}); err != nil {
+		t.Fatalf("RecordOrderSettlement: %v", err)
+	}
+
+	bal, ok, err := s.GetBalance(ctx, domain.DefaultTenant, "acc-1", "USD")
+	if err != nil || !ok {
+		t.Fatalf("GetBalance: ok=%v err=%v", ok, err)
+	}
+	if bal.RealizedPnl != "8" {
+		t.Fatalf("realized_pnl = %q, want 8 (5+3 accumulated in tx)", bal.RealizedPnl)
+	}
+	if bal.Available != "900" || bal.Held != "0" {
+		t.Fatalf("balance result not applied: %+v", bal)
+	}
+	if bal.AverageEntryPrice != "99" {
+		t.Fatalf("average_entry_price = %q, want 99 carried forward", bal.AverageEntryPrice)
+	}
+	if got := orderStatus(t, s, orderID); got != domain.OrderStatusFilled {
+		t.Fatalf("status = %q, want filled", got)
+	}
+	if n := orderEventCount(t, s, orderID); n != 1 {
+		t.Fatalf("event count = %d, want 1 (fill)", n)
+	}
+	trades, err := s.ListTrades(ctx, domain.DefaultTenant, "acc-1", domain.SourceAPI, 10)
+	if err != nil {
+		t.Fatalf("ListTrades: %v", err)
+	}
+	if len(trades) != 1 {
+		t.Fatalf("trade count = %d, want 1", len(trades))
+	}
+}
+
+// TestRecordOrderSettlement_MidTxFailureNoPartialPersist injects a constraint
+// violation (a fill event referencing a non-existent order) after the balance
+// write has run in-tx, and asserts the whole settlement rolls back: balance
+// unchanged, status unchanged, no trade, no event.
+func TestRecordOrderSettlement_MidTxFailureNoPartialPersist(t *testing.T) {
+	t.Parallel()
+	s := openStore(t)
+	ctx := context.Background()
+
+	orderID := seedOrder(t, s, "acc-1", domain.OrderStatusAccepted)
+	if err := s.UpsertBalance(ctx, domain.Balance{
+		Tenant:      domain.DefaultTenant,
+		Account:     "acc-1",
+		Asset:       "USD",
+		Available:   "1000",
+		RealizedPnl: "5",
+		UpdatedAt:   time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("UpsertBalance: %v", err)
+	}
+
+	err := s.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		Tenant:      domain.DefaultTenant,
+		Account:     "acc-1",
+		OrderID:     orderID,
+		OrderStatus: domain.OrderStatusFilled,
+		Balances: []domain.BalanceSettlement{{
+			Asset: "USD",
+			Outcome: domain.AdjustmentOutcomeAccepted{
+				BalanceResult:    "900",
+				RealizedPnlDelta: "3",
+			},
+		}},
+		Events: []domain.OrderEvent{{
+			OrderID: orderID + 100000, // dangling FK -> fails the tx mid-flight
+			Type:    domain.OrderEventFill,
+			Source:  domain.SourceAPI,
+		}},
+	})
+	if err == nil {
+		t.Fatal("RecordOrderSettlement: want error from mid-tx FK violation")
+	}
+
+	bal, ok, err := s.GetBalance(ctx, domain.DefaultTenant, "acc-1", "USD")
+	if err != nil || !ok {
+		t.Fatalf("GetBalance: ok=%v err=%v", ok, err)
+	}
+	if bal.Available != "1000" || bal.RealizedPnl != "5" {
+		t.Fatalf("balance changed despite rollback: %+v", bal)
+	}
+	if got := orderStatus(t, s, orderID); got != domain.OrderStatusAccepted {
+		t.Fatalf("status = %q after rollback, want accepted", got)
+	}
+	if n := orderEventCount(t, s, orderID); n != 0 {
+		t.Fatalf("event count = %d after rollback, want 0", n)
+	}
+	trades, err := s.ListTrades(ctx, domain.DefaultTenant, "acc-1", domain.SourceAPI, 10)
+	if err != nil {
+		t.Fatalf("ListTrades: %v", err)
+	}
+	if len(trades) != 0 {
+		t.Fatalf("trade count = %d after rollback, want 0", len(trades))
+	}
+}
+
+// fillSettlement builds a minimal RecordOrderSettlement call that moves orderID
+// from its current status to targetStatus. It writes one balance outcome,
+// one fill event, and one trade row so the FK constraints are satisfied.
+func fillSettlement(
+	orderID int64, account domain.AccountID, targetStatus domain.OrderStatus,
+	allowedFrom []domain.OrderStatus,
+) domain.OrderSettlement {
+	return domain.OrderSettlement{
+		Tenant:      domain.DefaultTenant,
+		Account:     account,
+		OrderID:     orderID,
+		OrderStatus: targetStatus,
+		AllowedFrom: allowedFrom,
+		Balances: []domain.BalanceSettlement{{
+			Asset: "USD",
+			Outcome: domain.AdjustmentOutcomeAccepted{
+				BalanceResult:    "900",
+				RealizedPnlDelta: "1",
+			},
+		}},
+		Events: []domain.OrderEvent{{
+			OrderID: orderID,
+			Type:    domain.OrderEventFill,
+			Source:  domain.SourceAPI,
+		}},
+		Trade: &domain.Trade{
+			OrderID:    orderID,
+			Tenant:     domain.DefaultTenant,
+			Account:    account,
+			Source:     domain.SourceAPI,
+			BaseAsset:  "AAPL",
+			QuoteAsset: "USD",
+			Side:       domain.OrderSideBuy,
+			Quantity:   "1",
+			Price:      "100",
+		},
+	}
+}
+
+// TestRecordOrderSettlement_FillAfterTerminalConflict proves the AllowedFrom
+// guard rejects a fill arriving on an order already in a terminal status: it
+// returns ErrConflict, leaves the status unchanged, and writes no balance,
+// trade, or event rows.
+func TestRecordOrderSettlement_FillAfterTerminalConflict(t *testing.T) {
+	t.Parallel()
+
+	terminalStatuses := []domain.OrderStatus{
+		domain.OrderStatusCancelled,
+		domain.OrderStatusRolledBack,
+		domain.OrderStatusFilled,
+		domain.OrderStatusRejected,
+	}
+
+	for _, terminal := range terminalStatuses {
+		terminal := terminal
+		t.Run(string(terminal), func(t *testing.T) {
+			t.Parallel()
+			s := openStore(t)
+			ctx := context.Background()
+
+			account := domain.AccountID("acc-" + string(terminal))
+			if err := s.UpsertBalance(ctx, domain.Balance{
+				Tenant:      domain.DefaultTenant,
+				Account:     account,
+				Asset:       "USD",
+				Available:   "1000",
+				RealizedPnl: "0",
+				UpdatedAt:   time.Now().UTC(),
+			}); err != nil {
+				t.Fatalf("UpsertBalance: %v", err)
+			}
+			orderID := seedOrder(t, s, account, terminal)
+
+			err := s.RecordOrderSettlement(ctx, fillSettlement(
+				orderID, account, domain.OrderStatusFilled,
+				domain.OrderStatusesEligibleForFill(),
+			))
+			if !errors.Is(err, domain.ErrConflict) {
+				t.Fatalf("want ErrConflict for fill on %q order, got %v", terminal, err)
+			}
+
+			// Status must be preserved.
+			if got := orderStatus(t, s, orderID); got != terminal {
+				t.Fatalf("status changed from %q to %q despite conflict", terminal, got)
+			}
+			// No event written.
+			if n := orderEventCount(t, s, orderID); n != 0 {
+				t.Fatalf("event count = %d after conflict, want 0", n)
+			}
+			// No trade written.
+			trades, err := s.ListTrades(ctx, domain.DefaultTenant, account, domain.SourceAPI, 10)
+			if err != nil {
+				t.Fatalf("ListTrades: %v", err)
+			}
+			if len(trades) != 0 {
+				t.Fatalf("trade count = %d after conflict, want 0", len(trades))
+			}
+			// Balance must be unchanged.
+			bal, ok, err := s.GetBalance(ctx, domain.DefaultTenant, account, "USD")
+			if err != nil || !ok {
+				t.Fatalf("GetBalance: ok=%v err=%v", ok, err)
+			}
+			if bal.Available != "1000" {
+				t.Fatalf("balance changed despite conflict: available=%q", bal.Available)
+			}
+		})
+	}
+}
+
+// TestRecordOrderSettlement_FillFromEligibleStatuses proves that each
+// pre/mid-fill status (submitted, accepted, partially_filled) is an accepted
+// AllowedFrom source: the fill advances the order and writes all rows.
+func TestRecordOrderSettlement_FillFromEligibleStatuses(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		from domain.OrderStatus
+		to   domain.OrderStatus
+	}{
+		{domain.OrderStatusSubmitted, domain.OrderStatusFilled},
+		{domain.OrderStatusAccepted, domain.OrderStatusFilled},
+		{domain.OrderStatusCommitted, domain.OrderStatusFilled},
+		{domain.OrderStatusPartiallyFilled, domain.OrderStatusFilled},
+		{domain.OrderStatusAccepted, domain.OrderStatusPartiallyFilled},
+		{domain.OrderStatusCommitted, domain.OrderStatusPartiallyFilled},
+		{domain.OrderStatusPartiallyFilled, domain.OrderStatusPartiallyFilled},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		name := string(tc.from) + "_to_" + string(tc.to)
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := openStore(t)
+			ctx := context.Background()
+
+			account := domain.AccountID("acc-" + name)
+			if err := s.UpsertBalance(ctx, domain.Balance{
+				Tenant:      domain.DefaultTenant,
+				Account:     account,
+				Asset:       "USD",
+				Available:   "1000",
+				RealizedPnl: "0",
+				UpdatedAt:   time.Now().UTC(),
+			}); err != nil {
+				t.Fatalf("UpsertBalance: %v", err)
+			}
+			orderID := seedOrder(t, s, account, tc.from)
+
+			if err := s.RecordOrderSettlement(ctx, fillSettlement(
+				orderID, account, tc.to,
+				domain.OrderStatusesEligibleForFill(),
+			)); err != nil {
+				t.Fatalf("RecordOrderSettlement %q->%q: %v", tc.from, tc.to, err)
+			}
+
+			if got := orderStatus(t, s, orderID); got != tc.to {
+				t.Fatalf("status = %q, want %q", got, tc.to)
+			}
+			if n := orderEventCount(t, s, orderID); n != 1 {
+				t.Fatalf("event count = %d, want 1", n)
+			}
+			trades, err := s.ListTrades(ctx, domain.DefaultTenant, account, domain.SourceAPI, 10)
+			if err != nil {
+				t.Fatalf("ListTrades: %v", err)
+			}
+			if len(trades) != 1 {
+				t.Fatalf("trade count = %d, want 1", len(trades))
+			}
+		})
 	}
 }

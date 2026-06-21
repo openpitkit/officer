@@ -10,11 +10,11 @@
   },
   "instrument": {
     "externalSymbol": "Внешний символ",
-    "baseAsset": "Base",
-    "quoteAsset": "Quote",
+    "baseAsset": "База",
+    "quoteAsset": "Котировка",
     "manualPrice": "Ручная цена",
     "manualPriceFor": "Ручная цена для {{symbol}}",
-    "pairAlreadyUsed": "Эта пара base/quote уже используется: {{feeds}}"
+    "pairAlreadyUsed": "Эта пара база/котировка уже используется: {{feeds}}"
   },
   "instrumentDialog": {
     "ibTitle": "Добавить инструмент Interactive Brokers",
@@ -38,7 +38,7 @@
     "title": "Добавить источник {{provider}}",
     "defaultHint": "Создайте источник, затем добавьте в него инструменты.",
     "duplicateLabel": "Источник с таким именем уже существует.",
-    "binanceHint": "Создайте источник Binance для живых spot-цен. Credentials для публичных ticker streams не нужны.",
+    "binanceHint": "Создайте источник Binance для живых spot-цен. Учётные данные для публичных потоков тикеров не нужны.",
     "byoHint": "Создайте ручной источник. После создания добавьте инструменты и отправьте цены, которые ведёт оператор.",
     "mockHint": "Создайте синтетический источник для демо и локальных тестов."
   },
@@ -52,51 +52,51 @@
     "ib": {
       "title": "Interactive Brokers",
       "description": "Живые рыночные данные из Interactive Brokers TWS или IB Gateway. Если простого символа недостаточно, используйте настройки контракта.",
-      "createHint": "Создайте источник Interactive Brokers, подключенный к TWS/Gateway. Настройте host, port, client ID и режим market data."
+      "createHint": "Создайте источник Interactive Brokers, подключённый к TWS/Gateway. Настройте host, port, client ID и режим рыночных данных."
     },
     "binance": {
       "title": "Binance",
       "description": "Живые spot-цены из Binance. Внешние символы пишутся в формате Binance, например BTCUSDT.",
-      "createHint": "Создайте источник Binance для живых spot-цен. Credentials для публичных ticker streams не нужны."
+      "createHint": "Создайте источник Binance для живых spot-цен. Учётные данные для публичных потоков тикеров не нужны."
     },
     "kraken": {
       "title": "Kraken",
       "description": "Живые spot-цены из Kraken WebSocket v2. Внешние символы используют формат пар Kraken, например BTC/USD.",
-      "createHint": "Создайте источник Kraken для живых spot-цен. Credentials для публичных ticker streams не нужны."
+      "createHint": "Создайте источник Kraken для живых spot-цен. Учётные данные для публичных потоков тикеров не нужны."
     },
     "coinbase": {
       "title": "Coinbase",
-      "description": "Живые product tickers из Coinbase Exchange. Внешние символы используют product IDs, например BTC-USD.",
-      "createHint": "Создайте источник Coinbase для живых exchange tickers. Credentials для публичного фида не нужны."
+      "description": "Живые тикеры продуктов с биржи Coinbase Exchange. Внешние символы используют идентификаторы продуктов, например BTC-USD.",
+      "createHint": "Создайте источник Coinbase для живых биржевых тикеров. Учётные данные для публичного фида не нужны."
     },
     "alpaca": {
       "title": "Alpaca",
-      "description": "Живые цены акций США из Alpaca IEX. Нужны API credentials; внешние символы используют stock tickers, например AAPL.",
-      "createHint": "Создайте источник Alpaca для IEX equity prices. Добавьте API key и secret."
+      "description": "Живые цены акций США из Alpaca IEX. Нужны учётные данные API; внешние символы используют тикеры акций, например AAPL.",
+      "createHint": "Создайте источник Alpaca для котировок акций IEX. Добавьте ключ и секрет API."
     },
     "okx": {
       "title": "OKX",
-      "description": "Живые spot tickers из OKX. Внешние символы используют OKX instrument IDs, например BTC-USDT.",
-      "createHint": "Создайте источник OKX для публичных spot tickers. Credentials для публичного фида не нужны."
+      "description": "Живые спотовые тикеры из OKX. Внешние символы используют идентификаторы инструментов OKX, например BTC-USDT.",
+      "createHint": "Создайте источник OKX для публичных спотовых тикеров. Учётные данные для публичного фида не нужны."
     },
     "bybit": {
       "title": "Bybit",
-      "description": "Живые tickers из Bybit v5. Внешние символы используют формат Bybit; category можно настроить в credentials.",
-      "createHint": "Создайте источник Bybit для публичных v5 tickers. Выберите market category."
+      "description": "Живые тикеры из Bybit v5. Внешние символы используют формат Bybit; категорию можно настроить в учётных данных.",
+      "createHint": "Создайте источник Bybit для публичных тикеров v5. Выберите категорию рынка."
     },
     "oanda": {
       "title": "OANDA",
-      "description": "Живые FX-цены из OANDA v20. Нужны account credentials; внешние символы используют instruments вроде EUR_USD.",
-      "createHint": "Создайте источник OANDA для FX-цен. Добавьте token, account ID и environment."
+      "description": "Живые FX-цены из OANDA v20. Нужны учётные данные аккаунта; внешние символы используют инструменты вроде EUR_USD.",
+      "createHint": "Создайте источник OANDA для FX-цен. Добавьте token, account ID и окружение."
     },
     "finnhub": {
       "title": "Finnhub",
-      "description": "Живые trade prices из Finnhub WebSocket. Нужен API token; внешние символы должны поддерживаться Finnhub.",
-      "createHint": "Создайте источник Finnhub для живых trade prices. Добавьте API token."
+      "description": "Живые цены сделок из Finnhub WebSocket. Нужен токен API; внешние символы должны поддерживаться Finnhub.",
+      "createHint": "Создайте источник Finnhub для живых цен сделок. Добавьте токен API."
     },
     "byo": {
       "title": "BYO",
-      "description": "Ручные цены, которые ведёт оператор. Используйте для static FX, тестовых котировок или фидов, которые подаёт другая система.",
+      "description": "Ручные цены, которые ведёт оператор. Используйте для статичного FX, тестовых котировок или фидов, которые подаёт другая система.",
       "createHint": "Создайте ручной источник. После создания добавьте инструменты и отправьте цены, которые ведёт оператор."
     },
     "mock": {
@@ -106,7 +106,7 @@
     }
   },
   "restart": {
-    "requiredTitle": "Нужен перезапуск, чтобы применить изменения market data",
+    "requiredTitle": "Нужен перезапуск, чтобы применить изменения рыночных данных",
     "requiredDetail": "Сохранённые настройки источников или инструментов отличаются от запущенных фидов. Перезапустите фиды, чтобы применить их.",
     "button": "Перезапустить фиды"
   },
@@ -129,7 +129,7 @@
     "port": "Port",
     "clientId": "Client ID",
     "autoClientId": "Авто",
-    "marketDataType": "Тип market data",
+    "marketDataType": "Тип рыночных данных",
     "secType": "Тип инструмента",
     "exchange": "Биржа",
     "currency": "Валюта",
@@ -145,8 +145,8 @@
     "right": "Тип опциона",
     "apiKey": "API key",
     "apiSecret": "API secret",
-    "getApiKeys": "Получить API keys",
-    "getApiToken": "Получить API token",
+    "getApiKeys": "Получить ключи API",
+    "getApiToken": "Получить токен API",
     "token": "Token",
     "accountID": "Account ID",
     "environment": "Окружение",

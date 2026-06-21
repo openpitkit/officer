@@ -65,7 +65,7 @@ jobs:
         run: just --justfile "$JUSTFILE" ci-go
 
   frontend:
-    name: Frontend (build)
+    name: JS/TypeScript checks
     runs-on: ubuntu-latest
 
     steps:
@@ -86,8 +86,8 @@ jobs:
       - name: Setup just
         uses: extractions/setup-just@v3
 
-      - name: Check frontend
-        run: just --justfile "$JUSTFILE" ci-frontend
+      - name: Check JS/TypeScript
+        run: just --justfile "$JUSTFILE" ci-js
 
   docker:
     name: Docker build (serve mode)

@@ -11,7 +11,9 @@
     "copy": "Copy",
     "copied": "Copied",
     "close": "Close",
-    "dismissError": "Dismiss error"
+    "dismissError": "Dismiss error",
+    "increment": "Increase",
+    "decrement": "Decrease"
   },
   "value": {
     "none": "—",
@@ -43,12 +45,78 @@
     "product": "Product",
     "copyrightLabel": "Copyright",
     "copyright": "Copyright The Pit Project Owners. All rights reserved.",
+    "openWelcome": "Open first-run guide",
     "links": {
-      "website": "Officer website",
+      "website": "Pit Officer website",
       "issues": "Issue tracker",
       "discussions": "GitHub discussions",
       "openpit": "OpenPit website"
     }
+  },
+  "welcome": {
+    "badgeLocal": "local service",
+    "title": "Welcome to Pit Officer",
+    "description": "Set up the control plane deliberately. Nothing is traded or connected until you choose a source and a workflow.",
+    "sections": {
+      "product": "What this app is",
+      "uses": "How it can be used",
+      "preTrade": "Pre-trade setup",
+      "marketData": "Market data",
+      "optional": "When controls are optional"
+    },
+    "product": {
+      "copy": "Pit Officer is the operator panel for risk control. It keeps accounts, balances, policies, market-data sources, audit records, REST access, MCP commands, and signing keys in one local service."
+    },
+    "useCases": {
+      "dropCopy": {
+        "title": "Drop-copy registrar",
+        "copy": "Record orders, fills, account state, and audit events after execution without blocking the upstream venue."
+      },
+      "preTrade": {
+        "title": "Pre-trade gate",
+        "copy": "Approve or reject orders before they leave the system, with account balances and policy barriers applied first."
+      },
+      "surfaces": {
+        "title": "REST, MCP, and FIX",
+        "copy": "Operate from the panel, REST clients, MCP agents, and FIX-oriented flows as they are enabled."
+      },
+      "operations": {
+        "title": "Operator ledger",
+        "copy": "Inspect positions, held funds, breaches, policy changes, approvals, logs, and service health."
+      }
+    },
+    "preTrade": {
+      "copy": "For allow-or-deny pre-trade control, create accounts, assign positions or cash balances, then define policy barriers. If buying-power control is not needed, accounts and balances can stay empty."
+    },
+    "marketData": {
+      "copy": "Market orders, locked prices, cross-currency exposure, and realized PnL need a market-data source. You can connect a live provider later or install a static BYO preset now."
+    },
+    "optional": {
+      "copy": "A pure registry or audit workflow can start without accounts, balances, or feeds. Add the controls only when the order path must be allowed or blocked by Pit."
+    },
+    "actions": {
+      "demoAccount": "Create demo account and positions",
+      "policyPreset": "Add starter policy barriers",
+      "marketDataPreset": "Install FX and crypto static prices",
+      "binancePreset": "Get FX and crypto rates from Binance",
+      "or": "or",
+      "openAccounts": "Open accounts",
+      "openPolicies": "Open policies",
+      "openMarketData": "Open market data",
+      "start": "Start working in Pit Officer"
+    },
+    "presets": {
+      "accountNote": "Created from the first-run guide. Replace with the real account identifier before production use."
+    },
+    "status": {
+      "applied": "{{label}} applied: {{count}} rows updated.",
+      "failed": "{{label}} failed: {{message}}",
+      "partialFailed": "{{label}} partially applied: {{count}} rows updated before failure: {{message}}",
+      "marketDataInstanceMissing": "Static market-data instance was not returned by the server.",
+      "binanceInstanceMissing": "Binance market-data instance was not returned by the server."
+    },
+    "returnHint": "You can return to this dialog from the About dialog.",
+    "dontShowAgain": "Don't show this again"
   },
   "display": {
     "density": {

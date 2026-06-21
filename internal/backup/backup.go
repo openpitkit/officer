@@ -46,6 +46,7 @@ const (
 	SectionMarketData       Section = "market_data_settings"
 	SectionMarketDataQuotes Section = "market_data_quotes"
 	SectionGeneralSettings  Section = "general_settings"
+	SectionUserSettings     Section = "user_settings"
 	SectionActivityHistory  Section = "activity_history"
 	SectionAuditLog         Section = "audit_log"
 )
@@ -58,6 +59,7 @@ var AllSections = []Section{
 	SectionMarketData,
 	SectionMarketDataQuotes,
 	SectionGeneralSettings,
+	SectionUserSettings,
 	SectionActivityHistory,
 	SectionAuditLog,
 }
@@ -105,6 +107,7 @@ type Manifest struct {
 // Data carries portable domain rows. It intentionally contains no SQL.
 type Data struct {
 	McpAccess             map[string]bool                  `json:"mcpAccess,omitempty"`
+	UserSettings          []domain.UserSetting             `json:"userSettings,omitempty"`
 	Accounts              []domain.Account                 `json:"accounts,omitempty"`
 	Groups                []domain.AccountGroup            `json:"groups,omitempty"`
 	Limits                []domain.Limit                   `json:"limits,omitempty"`
@@ -305,6 +308,9 @@ func FilterData(data Data, scope Scope) Data {
 		for command, enabled := range data.McpAccess {
 			out.McpAccess[command] = enabled
 		}
+	}
+	if scope.Included(SectionUserSettings) && data.UserSettings != nil {
+		out.UserSettings = append([]domain.UserSetting(nil), data.UserSettings...)
 	}
 	if scope.Included(SectionActivityHistory) {
 		out.Adjustments = filterAdjustments(data.Adjustments, scope.Accounts, accountByID)

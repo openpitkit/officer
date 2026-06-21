@@ -49,45 +49,56 @@ DialogOverlay.displayName = DialogPrimitive.Overlay.displayName;
 
 const DialogContent = forwardRef<
   ElementRef<typeof DialogPrimitive.Content>,
-  ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
->(({ className, children, onCloseAutoFocus, ...props }, ref) => {
-  const { t } = useTranslation();
-  return (
-    <DialogPrimitive.Portal>
-      <DialogOverlay />
-      <DialogPrimitive.Content
-        ref={ref}
-        className={cn(
-          "fixed left-1/2 top-1/2 z-50 grid w-full max-w-lg -translate-x-1/2",
-          "-translate-y-1/2 gap-4 rounded-card border border-border bg-surface p-6",
-          "text-text shadow-card data-[state=open]:animate-fade-in",
-          "max-h-[90vh] overflow-y-auto",
-          className,
-        )}
-        onCloseAutoFocus={(e) => {
-          // Radix leaves pointer-events:none on body when a popover/select inside
-          // the dialog is open at the moment the dialog closes (Escape race).
-          // Restore it on the next tick so the page stays interactive.
-          setTimeout(() => { document.body.style.pointerEvents = ""; }, 0);
-          onCloseAutoFocus?.(e);
-        }}
-        {...props}
-      >
-        {children}
-        <DialogPrimitive.Close
+  ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & {
+    hideClose?: boolean;
+  }
+>(
+  (
+    { className, children, hideClose = false, onCloseAutoFocus, ...props },
+    ref,
+  ) => {
+    const { t } = useTranslation();
+    return (
+      <DialogPrimitive.Portal>
+        <DialogOverlay />
+        <DialogPrimitive.Content
+          ref={ref}
           className={cn(
-            "absolute right-4 top-4 rounded-badge p-1 text-muted transition-colors",
-            "hover:bg-accent-dim hover:text-accent focus-visible:outline-none",
-            "focus-visible:ring-2 focus-visible:ring-ring",
+            "fixed left-1/2 top-1/2 z-50 grid w-full max-w-lg -translate-x-1/2",
+            "-translate-y-1/2 gap-4 rounded-card border border-border bg-surface p-6",
+            "text-text shadow-card data-[state=open]:animate-fade-in",
+            "max-h-[90vh] overflow-y-auto",
+            className,
           )}
-          aria-label={t("actions.close")}
+          onCloseAutoFocus={(e) => {
+            // Radix leaves pointer-events:none on body when a popover/select inside
+            // the dialog is open at the moment the dialog closes (Escape race).
+            // Restore it on the next tick so the page stays interactive.
+            setTimeout(() => {
+              document.body.style.pointerEvents = "";
+            }, 0);
+            onCloseAutoFocus?.(e);
+          }}
+          {...props}
         >
-          <X className="h-4 w-4" />
-        </DialogPrimitive.Close>
-      </DialogPrimitive.Content>
-    </DialogPrimitive.Portal>
-  );
-});
+          {children}
+          {!hideClose && (
+            <DialogPrimitive.Close
+              className={cn(
+                "absolute right-4 top-4 rounded-badge p-1 text-muted transition-colors",
+                "hover:bg-accent-dim hover:text-accent focus-visible:outline-none",
+                "focus-visible:ring-2 focus-visible:ring-ring",
+              )}
+              aria-label={t("actions.close")}
+            >
+              <X className="h-4 w-4" />
+            </DialogPrimitive.Close>
+          )}
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    );
+  },
+);
 DialogContent.displayName = DialogPrimitive.Content.displayName;
 
 function DialogHeader({ className, ...props }: HTMLAttributes<HTMLDivElement>) {

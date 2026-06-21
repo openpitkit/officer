@@ -499,21 +499,18 @@ func (n *localNode) applyBlock(
 	return n.engine.UnblockAccount(ctx, id)
 }
 
-// mirrorEngineBlocks persists each engine-recorded account block and writes a
-// system-sourced audit row naming the triggering order and the engine's reason.
-// The engine already blocked the account in its own state during settlement, so
-// the store write only follows it; the audit row makes the kill-switch visible
-// to operators, who otherwise see a blocked account with no recorded cause.
-func (n *localNode) mirrorEngineBlocks(
+// mirrorEngineBlocksAudit writes one system-sourced audit row per engine-recorded
+// account block, naming the triggering order and the engine's reason. The block
+// UPDATE itself is folded into RecordOrderSettlement's tx (atomic with the fill);
+// this audit row is observational and runs post-commit as a best-effort write, so
+// a crash between commit and audit leaves the account blocked but the audit cause
+// briefly missing - an accepted weak-consistency window, since the audit is not
+// part of the financial invariant.
+func (n *localNode) mirrorEngineBlocksAudit(
 	ctx context.Context, tenant domain.TenantID, orderID int64,
 	blocks []domain.ExecutionAccountBlock,
 ) error {
 	for _, block := range blocks {
-		if err := n.store.SetAccountBlocked(
-			ctx, tenant, block.Account, true, block.Reason,
-		); err != nil {
-			return fmt.Errorf("mirror account block: %w", err)
-		}
 		if err := n.store.AppendAudit(ctx, store.AuditEntry{
 			Actor:   "engine",
 			Source:  domain.SourceSystem,
@@ -777,6 +774,34 @@ func (n *localNode) SetMcpAccess(
 		Detail: setMcpAccessDetail(command, enabled),
 	}); err != nil {
 		return fmt.Errorf("audit set mcp access: %w", err)
+	}
+	return nil
+}
+
+// GetUserSetting returns the stored value for (userID, key). User settings are
+// a plain store read with no engine side-effect.
+func (n *localNode) GetUserSetting(
+	ctx context.Context, userID, key string,
+) (string, bool, error) {
+	value, ok, err := n.store.GetUserSetting(ctx, userID, key)
+	if err != nil {
+		return "", false, fmt.Errorf("get user setting: %w", err)
+	}
+	return value, ok, nil
+}
+
+// SetUserSetting upserts one per-user setting. There is no engine side-effect
+// and personal UI preferences are not audited, so this is a guarded store write.
+func (n *localNode) SetUserSetting(
+	ctx context.Context, userID, key, value string,
+) error {
+	if err := n.beginMutation(); err != nil {
+		return err
+	}
+	defer n.endMutation()
+
+	if err := n.store.SetUserSetting(ctx, userID, key, value); err != nil {
+		return fmt.Errorf("set user setting: %w", err)
 	}
 	return nil
 }
@@ -1341,36 +1366,68 @@ func (n *localNode) persistAdjustedBalance(
 	return nil
 }
 
-// persistFillBalance writes the (account, asset) balance snapshot from a fill's
-// accepted spot-funds outcome. Like persistAdjustedBalance, available/held/
-// incoming follow the engine's resulting absolutes (carried forward when not
-// reported) and realized P&L is delta-accumulated onto the stored value. The
-// average-entry-price is carried forward: a fill does not restate it.
-func (n *localNode) persistFillBalance(
-	ctx context.Context, key Key, asset string, outcome domain.AdjustmentOutcomeAccepted,
-) error {
-	prev, _, err := n.store.GetBalance(ctx, key.Tenant, key.Account, asset)
-	if err != nil {
-		return fmt.Errorf("read balance for fill: %w", err)
+// balanceSettlementsFrom maps the engine's per-asset fill outcomes onto the
+// domain settlement carrier RecordOrderSettlement consumes. The store applies the
+// same balance/held/incoming carry-forward and realized-pnl accumulation the
+// former persistFillBalance did, but inside the settlement tx. The engine emits
+// at most one outcome per asset (see engine.BalanceOutcome), so the slice carries
+// no duplicate-asset entries that would double-count realized P&L.
+func balanceSettlementsFrom(outcomes []engine.BalanceOutcome) []domain.BalanceSettlement {
+	if len(outcomes) == 0 {
+		return nil
 	}
-	realizedPnl, err := domain.AddDecimals(prev.RealizedPnl, outcome.RealizedPnlDelta)
-	if err != nil {
-		return fmt.Errorf("accumulate realized pnl: %w", err)
+	settlements := make([]domain.BalanceSettlement, 0, len(outcomes))
+	for _, outcome := range outcomes {
+		settlements = append(settlements, domain.BalanceSettlement{
+			Asset:   outcome.Asset,
+			Outcome: outcome.Outcome,
+		})
 	}
-	balance := domain.Balance{
-		Tenant:            key.Tenant,
-		Account:           key.Account,
-		Asset:             asset,
-		Available:         pick(outcome.BalanceResult, prev.Available),
-		Held:              pick(outcome.HeldResult, prev.Held),
-		Incoming:          pick(outcome.IncomingResult, prev.Incoming),
-		RealizedPnl:       realizedPnl,
-		AverageEntryPrice: prev.AverageEntryPrice,
+	return settlements
+}
+
+func accountBlockSettlementsFrom(
+	orderID int64, blocks []domain.ExecutionAccountBlock,
+) []domain.ExecutionAccountBlock {
+	if len(blocks) == 0 {
+		return nil
 	}
-	if err := n.store.UpsertBalance(ctx, balance); err != nil {
-		return fmt.Errorf("upsert fill balance: %w", err)
+	settlements := make([]domain.ExecutionAccountBlock, 0, len(blocks))
+	for _, block := range blocks {
+		block.Reason = engineBlockReason(orderID, block)
+		settlements = append(settlements, block)
 	}
-	return nil
+	return settlements
+}
+
+// fillSettlementEvent builds one lifecycle event stamped with the caller for a
+// fill/settlement tx. The store assigns the id and timestamp on append.
+func fillSettlementEvent(
+	orderID int64, typ domain.OrderEventType, caller domain.Caller, payload domain.OrderEventPayload,
+) domain.OrderEvent {
+	return domain.OrderEvent{
+		OrderID:   orderID,
+		Type:      typ,
+		Source:    caller.Source,
+		Principal: caller.Principal,
+		Payload:   payload,
+	}
+}
+
+func accountBlockPayload(blocks []domain.ExecutionAccountBlock) domain.OrderEventPayload {
+	if len(blocks) == 0 {
+		return domain.OrderEventPayload{}
+	}
+	// The engine currently emits at most one account block per fill. Keep the
+	// event payload singular and raw: account state stores engineBlockReason
+	// with order context, while this event preserves the engine block contract.
+	block := blocks[0]
+	return domain.OrderEventPayload{
+		RejectCode:    block.Code,
+		RejectScope:   "account",
+		RejectReason:  block.Reason,
+		RejectDetails: block.Details,
+	}
 }
 
 // pick returns next when it is non-empty, otherwise prev. It carries an
@@ -1477,17 +1534,20 @@ func (n *localNode) SubmitOrder(
 func (n *localNode) recordOrderAccepted(
 	ctx context.Context, key Key, order domain.Order, result engine.OrderResult, caller domain.Caller,
 ) (domain.Order, error) {
-	if err := n.appendOrderEvent(ctx, order.ID, domain.OrderEventPreTradeAccepted, caller, domain.OrderEventPayload{}); err != nil {
-		return domain.Order{}, err
-	}
-	if err := n.appendOrderEvent(ctx, order.ID, domain.OrderEventReservationCommitted, caller, domain.OrderEventPayload{}); err != nil {
-		return domain.Order{}, err
-	}
-	if err := n.store.SetOrderLockPrices(ctx, key.Tenant, order.ID, result.LockPrices); err != nil {
-		return domain.Order{}, fmt.Errorf("persist lock prices: %w", err)
-	}
-	if err := n.store.UpdateOrderStatus(ctx, key.Tenant, order.ID, domain.OrderStatusCommitted); err != nil {
-		return domain.Order{}, fmt.Errorf("order status committed: %w", err)
+	if err := n.store.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		Tenant:      key.Tenant,
+		Account:     key.Account,
+		OrderID:     order.ID,
+		OrderStatus: domain.OrderStatusCommitted,
+		Balances:    balanceSettlementsFrom(result.Outcomes),
+		Events: []domain.OrderEvent{
+			fillSettlementEvent(order.ID, domain.OrderEventPreTradeAccepted, caller, domain.OrderEventPayload{}),
+			fillSettlementEvent(order.ID, domain.OrderEventReservationCommitted, caller, domain.OrderEventPayload{}),
+		},
+		LockPrices:    result.LockPrices,
+		SetLockPrices: true,
+	}); err != nil {
+		return domain.Order{}, fmt.Errorf("record order accepted: %w", err)
 	}
 	order.LockPrices = result.LockPrices
 	order.Status = domain.OrderStatusCommitted
@@ -1549,19 +1609,22 @@ func (n *localNode) SubmitHold(
 		return order, result, nil
 	}
 
-	if err := n.appendOrderEvent(ctx, order.ID, domain.OrderEventPreTradeAccepted, caller, domain.OrderEventPayload{}); err != nil {
-		return domain.Order{}, engine.HoldResult{}, err
-	}
-	if err := n.store.SetOrderLockPrices(ctx, key.Tenant, order.ID, result.LockPrices); err != nil {
-		return domain.Order{}, engine.HoldResult{}, fmt.Errorf("persist lock prices: %w", err)
-	}
-	for _, outcome := range result.Outcomes {
-		if err := n.persistFillBalance(ctx, key, outcome.Asset, outcome.Outcome); err != nil {
-			return domain.Order{}, engine.HoldResult{}, err
-		}
-	}
-	if err := n.store.UpdateOrderStatus(ctx, key.Tenant, order.ID, domain.OrderStatusAccepted); err != nil {
-		return domain.Order{}, engine.HoldResult{}, fmt.Errorf("order status accepted: %w", err)
+	// One atomic store transaction: pre_trade_accepted event, per-asset held
+	// balances (realized-pnl accumulated inside the tx), lock prices, and the
+	// accepted status. No trade, no blocks on the hold-accept path. AllowedFrom is
+	// left empty: the order is fresh (submitted) so the status advance is
+	// unguarded.
+	if err := n.store.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		Tenant:        key.Tenant,
+		Account:       key.Account,
+		OrderID:       order.ID,
+		OrderStatus:   domain.OrderStatusAccepted,
+		Balances:      balanceSettlementsFrom(result.Outcomes),
+		Events:        []domain.OrderEvent{fillSettlementEvent(order.ID, domain.OrderEventPreTradeAccepted, caller, domain.OrderEventPayload{})},
+		LockPrices:    result.LockPrices,
+		SetLockPrices: true,
+	}); err != nil {
+		return domain.Order{}, engine.HoldResult{}, fmt.Errorf("record hold accept: %w", err)
 	}
 	order.LockPrices = result.LockPrices
 	order.Status = domain.OrderStatusAccepted
@@ -1598,51 +1661,53 @@ func (n *localNode) SubmitImmediate(
 		return order, result, nil
 	}
 
-	if err := n.appendOrderEvent(ctx, order.ID, domain.OrderEventPreTradeAccepted, caller, domain.OrderEventPayload{}); err != nil {
-		return domain.Order{}, engine.ImmediateResult{}, err
-	}
-	if err := n.appendOrderEvent(ctx, order.ID, domain.OrderEventReservationCommitted, caller, domain.OrderEventPayload{}); err != nil {
-		return domain.Order{}, engine.ImmediateResult{}, err
-	}
 	fillQuantity := result.FillQuantity
 	if fillQuantity == "" {
 		fillQuantity = order.AmountValue
 	}
-	if err := n.appendOrderEvent(ctx, order.ID, domain.OrderEventFill, caller, domain.OrderEventPayload{
-		FillQuantity:  fillQuantity,
-		FillPrice:     result.SettlementLockPrice,
-		FillLockPrice: result.SettlementLockPrice,
+	fillPayload := accountBlockPayload(result.Blocks)
+	fillPayload.FillQuantity = fillQuantity
+	fillPayload.FillPrice = result.SettlementLockPrice
+	fillPayload.FillLockPrice = result.SettlementLockPrice
+	// One atomic store transaction: pre_trade_accepted + reservation_committed +
+	// fill events, per-asset balances (realized-pnl accumulated in-tx), the trade,
+	// engine-block UPDATEs, lock prices, and the filled status. AllowedFrom guards
+	// against terminal-status clobber (e.g. a duplicate fill for an already-filled
+	// order). The block-audit rows are observational and stay a post-commit
+	// best-effort write below.
+	if err := n.store.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		Tenant:      key.Tenant,
+		Account:     key.Account,
+		OrderID:     order.ID,
+		OrderStatus: domain.OrderStatusFilled,
+		AllowedFrom: domain.OrderStatusesEligibleForFill(),
+		Balances:    balanceSettlementsFrom(result.Outcomes),
+		Events: []domain.OrderEvent{
+			fillSettlementEvent(order.ID, domain.OrderEventPreTradeAccepted, caller, domain.OrderEventPayload{}),
+			fillSettlementEvent(order.ID, domain.OrderEventReservationCommitted, caller, domain.OrderEventPayload{}),
+			fillSettlementEvent(order.ID, domain.OrderEventFill, caller, fillPayload),
+		},
+		Trade: &domain.Trade{
+			OrderID:    order.ID,
+			Tenant:     key.Tenant,
+			Account:    key.Account,
+			Source:     caller.Source,
+			Principal:  caller.Principal,
+			BaseAsset:  order.BaseAsset,
+			QuoteAsset: order.QuoteAsset,
+			Side:       order.Side,
+			Quantity:   fillQuantity,
+			Price:      result.SettlementLockPrice,
+			LockPrice:  result.SettlementLockPrice,
+		},
+		Blocks:        accountBlockSettlementsFrom(order.ID, result.Blocks),
+		LockPrices:    result.LockPrices,
+		SetLockPrices: true,
 	}); err != nil {
+		return domain.Order{}, engine.ImmediateResult{}, fmt.Errorf("record immediate fill: %w", err)
+	}
+	if err := n.mirrorEngineBlocksAudit(ctx, key.Tenant, order.ID, result.Blocks); err != nil {
 		return domain.Order{}, engine.ImmediateResult{}, err
-	}
-	if _, err := n.store.CreateTrade(ctx, domain.Trade{
-		OrderID:    order.ID,
-		Tenant:     key.Tenant,
-		Account:    key.Account,
-		Source:     caller.Source,
-		Principal:  caller.Principal,
-		BaseAsset:  order.BaseAsset,
-		QuoteAsset: order.QuoteAsset,
-		Side:       order.Side,
-		Quantity:   fillQuantity,
-		Price:      result.SettlementLockPrice,
-		LockPrice:  result.SettlementLockPrice,
-	}); err != nil {
-		return domain.Order{}, engine.ImmediateResult{}, fmt.Errorf("create trade: %w", err)
-	}
-	for _, outcome := range result.Outcomes {
-		if err := n.persistFillBalance(ctx, key, outcome.Asset, outcome.Outcome); err != nil {
-			return domain.Order{}, engine.ImmediateResult{}, err
-		}
-	}
-	if err := n.mirrorEngineBlocks(ctx, key.Tenant, order.ID, result.Blocks); err != nil {
-		return domain.Order{}, engine.ImmediateResult{}, err
-	}
-	if err := n.store.SetOrderLockPrices(ctx, key.Tenant, order.ID, result.LockPrices); err != nil {
-		return domain.Order{}, engine.ImmediateResult{}, fmt.Errorf("persist lock prices: %w", err)
-	}
-	if err := n.store.UpdateOrderStatus(ctx, key.Tenant, order.ID, domain.OrderStatusFilled); err != nil {
-		return domain.Order{}, engine.ImmediateResult{}, fmt.Errorf("order status filled: %w", err)
 	}
 	order.LockPrices = result.LockPrices
 	order.Status = domain.OrderStatusFilled
@@ -1663,15 +1728,35 @@ func (n *localNode) ConfirmHeld(
 		if !errors.Is(err, domain.ErrNotFound) {
 			return domain.Order{}, fmt.Errorf("commit held: %w", err)
 		}
+		// The native handle is gone (post-restart): fall back to the persisted
+		// intent. The fallback verifies the intent then drives the same atomic
+		// resolve below, so the status guard still protects a fill that landed in
+		// the crash window.
 		if err := n.commitHeldIntentFallback(ctx, approvalID); err != nil {
 			return domain.Order{}, err
 		}
 	}
-	if err := n.appendOrderEvent(ctx, orderID, domain.OrderEventReservationCommitted, caller, domain.OrderEventPayload{}); err != nil {
-		return domain.Order{}, err
-	}
-	if err := n.store.UpdateOrderStatus(ctx, tenant, orderID, domain.OrderStatusCommitted); err != nil {
-		return domain.Order{}, fmt.Errorf("order status committed: %w", err)
+	// One atomic store transaction: intent flip + order status advance + the
+	// reservation_committed event. The AllowedFrom={accepted} guard is TOCTOU-safe
+	// - a fill that flipped the order to filled before this tx yields ErrConflict
+	// (surfaced as the node's conflict error) and writes nothing, preserving the
+	// filled status. The native commit already happened; a store failure here does
+	// not re-resolve the handle (the engine's finishResolve already ran).
+	if err := n.store.ResolveOrderReservation(ctx, domain.ReservationResolution{
+		Tenant:      tenant,
+		ApprovalID:  approvalID,
+		IntentState: domain.ReservationIntentStateCommitted,
+		OrderStatus: domain.OrderStatusCommitted,
+		AllowedFrom: []domain.OrderStatus{domain.OrderStatusAccepted},
+		Events: []domain.OrderEvent{{
+			OrderID:   orderID,
+			Type:      domain.OrderEventReservationCommitted,
+			Source:    caller.Source,
+			Principal: caller.Principal,
+		}},
+		OrderID: orderID,
+	}); err != nil {
+		return domain.Order{}, fmt.Errorf("resolve confirm: %w", err)
 	}
 	detail, err := n.store.GetOrder(ctx, tenant, orderID)
 	if err != nil {
@@ -1694,18 +1779,41 @@ func (n *localNode) CancelHeld(
 		if !errors.Is(err, domain.ErrNotFound) {
 			return domain.Order{}, fmt.Errorf("rollback held: %w", err)
 		}
+		// Native handle gone (post-restart): release the held balance effects
+		// through the engine from the persisted intent. The intent flip + order
+		// status + events are still done by the atomic resolve below.
 		if err := n.rollbackHeldIntentFallback(ctx, tenant, approvalID); err != nil {
 			return domain.Order{}, err
 		}
 	}
-	if err := n.appendOrderEvent(ctx, orderID, domain.OrderEventReservationRolledBack, caller, domain.OrderEventPayload{}); err != nil {
-		return domain.Order{}, err
-	}
-	if err := n.appendOrderEvent(ctx, orderID, domain.OrderEventCancelled, caller, domain.OrderEventPayload{}); err != nil {
-		return domain.Order{}, err
-	}
-	if err := n.store.UpdateOrderStatus(ctx, tenant, orderID, domain.OrderStatusCancelled); err != nil {
-		return domain.Order{}, fmt.Errorf("order status cancelled: %w", err)
+	// One atomic store transaction: intent flip + cancelled status +
+	// reservation_rolled_back and cancelled events. AllowedFrom={accepted} is
+	// TOCTOU-safe: a late fill that flipped the order to filled before this tx
+	// yields ErrConflict (surfaced as the node's conflict error) and writes
+	// nothing, so a filled order is never clobbered into cancelled.
+	if err := n.store.ResolveOrderReservation(ctx, domain.ReservationResolution{
+		Tenant:      tenant,
+		ApprovalID:  approvalID,
+		IntentState: domain.ReservationIntentStateRolledBack,
+		OrderStatus: domain.OrderStatusCancelled,
+		AllowedFrom: []domain.OrderStatus{domain.OrderStatusAccepted},
+		Events: []domain.OrderEvent{
+			{
+				OrderID:   orderID,
+				Type:      domain.OrderEventReservationRolledBack,
+				Source:    caller.Source,
+				Principal: caller.Principal,
+			},
+			{
+				OrderID:   orderID,
+				Type:      domain.OrderEventCancelled,
+				Source:    caller.Source,
+				Principal: caller.Principal,
+			},
+		},
+		OrderID: orderID,
+	}); err != nil {
+		return domain.Order{}, fmt.Errorf("resolve cancel: %w", err)
 	}
 	detail, err := n.store.GetOrder(ctx, tenant, orderID)
 	if err != nil {
@@ -1730,13 +1838,29 @@ func (n *localNode) ReconcileOrphans(ctx context.Context) (int, error) {
 	return count, nil
 }
 
+// commitHeldIntentFallback handles a confirm whose native handle is gone (post
+// restart): it verifies the persisted held intent still exists. The intent flip
+// itself is left to the caller's atomic ResolveOrderReservation, so the fallback
+// confirm has the same all-or-nothing guarantee and status guard as the normal
+// path.
+//
+// If the TTL sweeper already rolled back the intent, openReservationIntent
+// returns ErrNotFound. GetReservationIntent is then used to distinguish a
+// swept (terminal) intent from one that never existed: the former returns
+// ErrConflict (409) and the latter keeps ErrNotFound (404).
 func (n *localNode) commitHeldIntentFallback(ctx context.Context, approvalID string) error {
 	if _, err := n.openReservationIntent(ctx, approvalID); err != nil {
-		return fmt.Errorf("commit held after engine restart: %w", err)
-	}
-	if err := n.store.SetReservationIntentState(
-		ctx, approvalID, domain.ReservationIntentStateCommitted,
-	); err != nil {
+		if !errors.Is(err, domain.ErrNotFound) {
+			return fmt.Errorf("commit held after engine restart: %w", err)
+		}
+		// Not in the open set - check whether it exists in a terminal state.
+		swept, found, lookupErr := n.store.GetReservationIntent(ctx, approvalID)
+		if lookupErr != nil {
+			return fmt.Errorf("commit held after engine restart: %w", lookupErr)
+		}
+		if found && isTerminalIntentState(swept.State) {
+			return fmt.Errorf("confirm reservation %q: %w", approvalID, domain.ErrConflict)
+		}
 		return fmt.Errorf("commit held after engine restart: %w", err)
 	}
 	return nil
@@ -1747,6 +1871,17 @@ func (n *localNode) rollbackHeldIntentFallback(
 ) error {
 	intent, err := n.openReservationIntent(ctx, approvalID)
 	if err != nil {
+		if !errors.Is(err, domain.ErrNotFound) {
+			return fmt.Errorf("rollback held after engine restart: %w", err)
+		}
+		// Not in the open set - check whether it exists in a terminal state.
+		swept, found, lookupErr := n.store.GetReservationIntent(ctx, approvalID)
+		if lookupErr != nil {
+			return fmt.Errorf("rollback held after engine restart: %w", lookupErr)
+		}
+		if found && isTerminalIntentState(swept.State) {
+			return fmt.Errorf("cancel reservation %q: %w", approvalID, domain.ErrConflict)
+		}
 		return fmt.Errorf("rollback held after engine restart: %w", err)
 	}
 	_, outcomes, err := decodeReservationIntentPayload(intent.ParamsJSON)
@@ -1764,12 +1899,18 @@ func (n *localNode) rollbackHeldIntentFallback(
 			return err
 		}
 	}
-	if err := n.store.SetReservationIntentState(
-		ctx, approvalID, domain.ReservationIntentStateRolledBack,
-	); err != nil {
-		return fmt.Errorf("rollback held after engine restart: %w", err)
-	}
+	// The intent flip and order status/events are left to the caller's atomic
+	// ResolveOrderReservation. The balance release above stays outside that tx: it
+	// is an engine adjustment with its own outcome and its own persistence, and it
+	// is idempotent once the native handle is gone.
 	return nil
+}
+
+// isTerminalIntentState reports whether s is a terminal reservation state
+// (committed or rolled_back).
+func isTerminalIntentState(s domain.ReservationIntentState) bool {
+	return s == domain.ReservationIntentStateCommitted ||
+		s == domain.ReservationIntentStateRolledBack
 }
 
 func (n *localNode) openReservationIntent(
@@ -1884,10 +2025,12 @@ func (n *localNode) recordSubmittedOrder(
 	return order, nil
 }
 
-// ApplyExecutionReport settles a fill through the engine, then records the fill
-// event and trade and mirrors any engine-recorded account blocks into the store
-// (the engine already applied the block, so the store only follows). The order
-// status is reflected from in.Final.
+// ApplyExecutionReport settles a fill through the engine, then persists the fill
+// event, trade, per-asset balances, engine-block UPDATEs, and the reflected
+// status (from in.Final) in one atomic RecordOrderSettlement transaction so a
+// crash never leaves a half-settled fill. The engine already applied the block,
+// so the store UPDATE only follows; the observational block-audit row is written
+// post-commit.
 func (n *localNode) ApplyExecutionReport(
 	ctx context.Context, key Key, in domain.ExecutionReportInput, caller domain.Caller,
 ) (engine.ExecutionReportResult, error) {
@@ -1902,51 +2045,53 @@ func (n *localNode) ApplyExecutionReport(
 		return engine.ExecutionReportResult{}, fmt.Errorf("apply execution report: %w", err)
 	}
 
-	if err := n.appendOrderEvent(ctx, in.OrderID, domain.OrderEventFill, caller, domain.OrderEventPayload{
-		FillQuantity:  in.FillQuantity,
-		FillPrice:     in.FillPrice,
-		FillLockPrice: in.LockPrice,
-	}); err != nil {
-		return engine.ExecutionReportResult{}, err
-	}
-
-	if _, err := n.store.CreateTrade(ctx, domain.Trade{
-		OrderID:    in.OrderID,
-		Tenant:     key.Tenant,
-		Account:    key.Account,
-		Source:     caller.Source,
-		Principal:  caller.Principal,
-		BaseAsset:  in.BaseAsset,
-		QuoteAsset: in.QuoteAsset,
-		Side:       in.Side,
-		Quantity:   in.FillQuantity,
-		Price:      in.FillPrice,
-		LockPrice:  in.LockPrice,
-	}); err != nil {
-		return engine.ExecutionReportResult{}, fmt.Errorf("create trade: %w", err)
-	}
-
-	// Persist the fill's spot-funds outcomes: balance/held/incoming follow the
-	// engine's resulting absolutes, while realized P&L is delta-accumulated onto
-	// the stored value (never overwritten with the reported absolute). A spot
-	// fill settles both legs, so each outcome is keyed on its own asset (base
-	// and quote), not collapsed onto the base.
-	for _, outcome := range result.Outcomes {
-		if err := n.persistFillBalance(ctx, key, outcome.Asset, outcome.Outcome); err != nil {
-			return engine.ExecutionReportResult{}, err
-		}
-	}
-
-	if err := n.mirrorEngineBlocks(ctx, key.Tenant, in.OrderID, result.Blocks); err != nil {
-		return engine.ExecutionReportResult{}, err
-	}
-
 	status := domain.OrderStatusPartiallyFilled
 	if in.Final {
 		status = domain.OrderStatusFilled
 	}
-	if err := n.store.UpdateOrderStatus(ctx, key.Tenant, in.OrderID, status); err != nil {
-		return engine.ExecutionReportResult{}, fmt.Errorf("order status fill: %w", err)
+	fillPayload := accountBlockPayload(result.Blocks)
+	fillPayload.FillQuantity = in.FillQuantity
+	fillPayload.FillPrice = in.FillPrice
+	fillPayload.FillLockPrice = in.LockPrice
+
+	// One atomic store transaction: the fill event, per-asset balances (balance/
+	// held/incoming follow the engine's resulting absolutes; realized P&L is
+	// delta-accumulated in-tx, never overwritten with the reported absolute - a
+	// spot fill settles both legs, so each outcome is keyed on its own asset), the
+	// trade, engine-block UPDATEs, and the fill status. AllowedFrom guards against
+	// terminal-status clobber (a duplicate or late execution report for an order
+	// already in a terminal state returns ErrConflict and writes nothing). The
+	// block-audit rows are observational and stay a post-commit best-effort write below.
+	if err := n.store.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		Tenant:      key.Tenant,
+		Account:     key.Account,
+		OrderID:     in.OrderID,
+		OrderStatus: status,
+		AllowedFrom: domain.OrderStatusesEligibleForFill(),
+		Balances:    balanceSettlementsFrom(result.Outcomes),
+		Events: []domain.OrderEvent{
+			fillSettlementEvent(in.OrderID, domain.OrderEventFill, caller, fillPayload),
+		},
+		Trade: &domain.Trade{
+			OrderID:    in.OrderID,
+			Tenant:     key.Tenant,
+			Account:    key.Account,
+			Source:     caller.Source,
+			Principal:  caller.Principal,
+			BaseAsset:  in.BaseAsset,
+			QuoteAsset: in.QuoteAsset,
+			Side:       in.Side,
+			Quantity:   in.FillQuantity,
+			Price:      in.FillPrice,
+			LockPrice:  in.LockPrice,
+		},
+		Blocks: accountBlockSettlementsFrom(in.OrderID, result.Blocks),
+	}); err != nil {
+		return engine.ExecutionReportResult{}, fmt.Errorf("record execution report: %w", err)
+	}
+
+	if err := n.mirrorEngineBlocksAudit(ctx, key.Tenant, in.OrderID, result.Blocks); err != nil {
+		return engine.ExecutionReportResult{}, err
 	}
 
 	if err := n.audit(ctx, caller, store.AuditEntry{

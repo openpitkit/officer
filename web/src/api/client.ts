@@ -23,6 +23,7 @@ import type {
   AdjustmentAmount,
   AdjustmentRejected,
   AdjustmentRequest,
+  AuditActionGroup,
   AuditEntry,
   Balance,
   BackupArchive,
@@ -33,6 +34,8 @@ import type {
   CheckResult,
   CheckWouldBlock,
   EngineHealth,
+  ExecutionBlock,
+  ExecutionReportResult,
   Group,
   Health,
   Limit,
@@ -1669,17 +1672,31 @@ interface ExecutionReportBody {
   final: boolean;
 }
 
-/** POST /orders/{id}/execution-reports. */
+function normalizeExecutionBlock(v: unknown): ExecutionBlock {
+  const o = isObject(v) ? v : {};
+  return {
+    account: asString(pick(o, "account", "Account")),
+    code: asString(pick(o, "code", "Code")),
+    reason: asString(pick(o, "reason", "Reason")),
+    details: asString(pick(o, "details", "Details")),
+  };
+}
+
+/** POST /orders/{id}/execution-reports. Returns the account blocks the fill caused. */
 export async function submitExecutionReport(
   orderId: number,
   body: ExecutionReportBody,
-): Promise<unknown> {
+): Promise<ExecutionReportResult> {
   const v = await request(`${BASE}/orders/${orderId}/execution-reports`, {
     method: "POST",
     body,
   });
   const o = isObject(v) ? v : {};
-  return pick(o, "result", "Result");
+  const result = pick(o, "result", "Result");
+  const ro = isObject(result) ? result : {};
+  return {
+    blocks: normalizeArray(pick(ro, "blocks", "Blocks"), normalizeExecutionBlock),
+  };
 }
 
 interface TradesFilter {
@@ -1799,6 +1816,25 @@ export async function setMcpCommand(
   return normalizeMcpCommand(pick(o, "command", "Command"));
 }
 
+// --- User settings ---
+
+/** GET /user-settings - the current operator's UI preferences. */
+export async function fetchWelcomeSeen(signal?: AbortSignal): Promise<boolean> {
+  const v = await request(`${BASE}/user-settings`, { signal });
+  const o = isObject(v) ? v : {};
+  return asBool(pick(o, "welcomeSeen", "WelcomeSeen", "welcome_seen"));
+}
+
+/** PUT /user-settings - persist the "don't show the welcome again" choice. */
+export async function setWelcomeSeen(seen: boolean): Promise<boolean> {
+  const v = await request(`${BASE}/user-settings`, {
+    method: "PUT",
+    body: { welcomeSeen: seen },
+  });
+  const o = isObject(v) ? v : {};
+  return asBool(pick(o, "welcomeSeen", "WelcomeSeen", "welcome_seen"));
+}
+
 // --- Audit ---
 
 /** GET /audit, newest first; the backend caps the limit at 1000. */
@@ -1831,6 +1867,24 @@ export async function fetchAudit(
   const v = await request(`${BASE}/audit${query}`, { signal });
   const o = isObject(v) ? v : {};
   return normalizeArray(pick(o, "entries", "Entries"), normalizeAudit);
+}
+
+function normalizeAuditActionGroup(v: unknown): AuditActionGroup {
+  const o = isObject(v) ? v : {};
+  return {
+    category: asString(pick(o, "category", "Category")),
+    actions: normalizeArray(pick(o, "actions", "Actions"), asString),
+  };
+}
+
+/** GET /audit/actions - the audit action catalogue, grouped by category
+ *  (control first, canonical order). */
+export async function fetchAuditActions(
+  signal?: AbortSignal,
+): Promise<AuditActionGroup[]> {
+  const v = await request(`${BASE}/audit/actions`, { signal });
+  const o = isObject(v) ? v : {};
+  return normalizeArray(pick(o, "groups", "Groups"), normalizeAuditActionGroup);
 }
 
 // --- Signing keys ---

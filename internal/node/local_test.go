@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -56,6 +57,7 @@ type fakeEngine struct {
 	adjustmentAccepted *domain.AdjustmentOutcomeAccepted
 	adjustmentReject   *domain.AdjustmentOutcomeRejected
 	submitLockPrices   []string
+	submitOutcomes     []engine.BalanceOutcome
 	holdOutcomes       []engine.BalanceOutcome
 	submitReject       *domain.OrderReject
 	execReportBlocks   []domain.ExecutionAccountBlock
@@ -79,6 +81,12 @@ type fakeEngine struct {
 	rollbackErr    error
 	failExecReport bool
 	failGroup      bool
+
+	// resolveMu guards the held-resolution call logs so concurrent
+	// ConfirmHeld/CancelHeld goroutines can record under the race detector.
+	resolveMu         sync.Mutex
+	commitHeldCalls   []string
+	rollbackHeldCalls []string
 }
 
 type configureCall struct {
@@ -180,7 +188,11 @@ func (e *fakeEngine) SubmitOrder(
 	if e.submitReject != nil {
 		return engine.OrderResult{Accepted: false, Rejects: []domain.OrderReject{*e.submitReject}}, nil
 	}
-	return engine.OrderResult{Accepted: true, LockPrices: e.submitLockPrices}, nil
+	return engine.OrderResult{
+		Accepted:   true,
+		LockPrices: e.submitLockPrices,
+		Outcomes:   e.submitOutcomes,
+	}, nil
 }
 
 // ReserveHold, CommitHeld, RollbackHeld, SubmitImmediate, and ReconcileOrphans
@@ -203,9 +215,19 @@ func (e *fakeEngine) ReserveHold(
 	}, nil
 }
 
-func (e *fakeEngine) CommitHeld(_ context.Context, _ string) error { return e.commitErr }
+func (e *fakeEngine) CommitHeld(_ context.Context, approvalID string) error {
+	e.resolveMu.Lock()
+	e.commitHeldCalls = append(e.commitHeldCalls, approvalID)
+	e.resolveMu.Unlock()
+	return e.commitErr
+}
 
-func (e *fakeEngine) RollbackHeld(_ context.Context, _ string) error { return e.rollbackErr }
+func (e *fakeEngine) RollbackHeld(_ context.Context, approvalID string) error {
+	e.resolveMu.Lock()
+	e.rollbackHeldCalls = append(e.rollbackHeldCalls, approvalID)
+	e.resolveMu.Unlock()
+	return e.rollbackErr
+}
 
 func (e *fakeEngine) SubmitImmediate(
 	_ context.Context, o domain.Order,
@@ -473,6 +495,73 @@ func TestLocalNode_SubmitHoldPersistsHeldBalances(t *testing.T) {
 	}
 }
 
+// TestLocalNode_SubmitOrderPersistsReservationBalances verifies the direct
+// submit path mirrors the reservation's balance effects into the snapshot, so
+// held funds and incoming quantity show up before any fill settles.
+func TestLocalNode_SubmitOrderPersistsReservationBalances(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.submitLockPrices = []string{"100"}
+	eng.submitOutcomes = []engine.BalanceOutcome{
+		{
+			Asset: "USD",
+			Outcome: domain.AdjustmentOutcomeAccepted{
+				BalanceResult: "8000",
+				HeldResult:    "2000",
+			},
+		},
+		{
+			Asset: "AAPL",
+			Outcome: domain.AdjustmentOutcomeAccepted{
+				IncomingResult: "20",
+			},
+		},
+	}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	if _, err := n.CreateAccount(ctx, testKey("acc-1"), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if err := st.UpsertBalance(ctx, domain.Balance{
+		Tenant:    domain.DefaultTenant,
+		Account:   "acc-1",
+		Asset:     "USD",
+		Available: "10000",
+	}); err != nil {
+		t.Fatalf("UpsertBalance: %v", err)
+	}
+
+	order, err := n.SubmitOrder(ctx, testKey("acc-1"), domain.Order{
+		BaseAsset:   "AAPL",
+		QuoteAsset:  "USD",
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "20",
+		Price:       "100",
+	}, testCaller)
+	if err != nil {
+		t.Fatalf("SubmitOrder: %v", err)
+	}
+	if order.Status != domain.OrderStatusCommitted {
+		t.Fatalf("order status = %q, want committed", order.Status)
+	}
+
+	quote, ok, err := st.GetBalance(ctx, domain.DefaultTenant, "acc-1", "USD")
+	if err != nil || !ok {
+		t.Fatalf("GetBalance USD: %v ok=%v", err, ok)
+	}
+	if quote.Held != "2000" {
+		t.Fatalf("USD held = %q, want 2000", quote.Held)
+	}
+	base, ok, err := st.GetBalance(ctx, domain.DefaultTenant, "acc-1", "AAPL")
+	if err != nil || !ok {
+		t.Fatalf("GetBalance AAPL: %v ok=%v", err, ok)
+	}
+	if base.Incoming != "20" {
+		t.Fatalf("AAPL incoming = %q, want 20", base.Incoming)
+	}
+}
+
 func TestLocalNode_CancelHeldFallbackReleasesPersistedHold(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
@@ -564,6 +653,117 @@ func TestLocalNode_CancelHeldFallbackReleasesPersistedHold(t *testing.T) {
 	}
 	if len(open) != 0 {
 		t.Fatalf("open intents = %+v, want none", open)
+	}
+}
+
+// TestLocalNode_ConcurrentResolveNoDeadlockSingleResolution drives ConfirmHeld
+// and a sweeper-style CancelHeld concurrently on sibling orders. Both paths take
+// n.beginMutation, so they serialize on the node's mutate lock rather than
+// deadlock: if a rollback path ever re-entered that lock (e.g. the engine
+// regaining a node reference and calling back through CancelHeld), the two
+// goroutines would hang. The test bounds the fan-out with a timeout and asserts
+// each order's reservation resolves exactly once through the engine.
+func TestLocalNode_ConcurrentResolveNoDeadlockSingleResolution(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	// Two committed-buy orders, each with its own held reservation intent. One is
+	// confirmed, the sibling is cancelled, concurrently.
+	type held struct {
+		order      domain.Order
+		approvalID string
+	}
+	mk := func(i int) held {
+		order, err := st.CreateOrder(ctx, domain.Order{
+			Tenant:      domain.DefaultTenant,
+			Account:     domain.AccountID(fmt.Sprintf("acc-%d", i)),
+			Source:      domain.SourceAPI,
+			Principal:   "operator",
+			BaseAsset:   "AAPL",
+			QuoteAsset:  "USD",
+			Side:        domain.OrderSideBuy,
+			AmountKind:  domain.OrderAmountKindQuantity,
+			AmountValue: "1",
+			Price:       "100",
+			Status:      domain.OrderStatusAccepted,
+		})
+		if err != nil {
+			t.Fatalf("CreateOrder %d: %v", i, err)
+		}
+		approval := fmt.Sprintf("approval-%d", i)
+		if err := st.UpsertReservationIntent(ctx, domain.ReservationIntent{
+			ApprovalID: approval,
+			OrderID:    order.ID,
+			Account:    order.Account,
+			ParamsJSON: `{"id":1}`,
+			IssuedAt:   time.Now().UTC(),
+			ExpiresAt:  time.Now().UTC().Add(2 * time.Minute),
+			State:      domain.ReservationIntentStateHeld,
+		}); err != nil {
+			t.Fatalf("UpsertReservationIntent %d: %v", i, err)
+		}
+		return held{order: order, approvalID: approval}
+	}
+	confirmTarget := mk(1)
+	cancelTarget := mk(2)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	errs := make([]error, 2)
+	go func() {
+		defer wg.Done()
+		_, errs[0] = n.ConfirmHeld(
+			ctx, domain.DefaultTenant, confirmTarget.order.ID, confirmTarget.approvalID, testCaller)
+	}()
+	go func() {
+		defer wg.Done()
+		_, errs[1] = n.CancelHeld(
+			ctx, domain.DefaultTenant, cancelTarget.order.ID, cancelTarget.approvalID, testCaller)
+	}()
+
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("concurrent ConfirmHeld/CancelHeld deadlocked")
+	}
+
+	if errs[0] != nil {
+		t.Fatalf("ConfirmHeld: %v", errs[0])
+	}
+	if errs[1] != nil {
+		t.Fatalf("CancelHeld: %v", errs[1])
+	}
+
+	// Each reservation resolved exactly once through the engine, on the right path.
+	eng.resolveMu.Lock()
+	commits := append([]string(nil), eng.commitHeldCalls...)
+	rollbacks := append([]string(nil), eng.rollbackHeldCalls...)
+	eng.resolveMu.Unlock()
+	if len(commits) != 1 || commits[0] != confirmTarget.approvalID {
+		t.Fatalf("commit calls = %+v, want exactly [%s]", commits, confirmTarget.approvalID)
+	}
+	if len(rollbacks) != 1 || rollbacks[0] != cancelTarget.approvalID {
+		t.Fatalf("rollback calls = %+v, want exactly [%s]", rollbacks, cancelTarget.approvalID)
+	}
+
+	// Durable resolution: committed and cancelled statuses landed in the store.
+	confirmed, err := st.GetOrder(ctx, domain.DefaultTenant, confirmTarget.order.ID)
+	if err != nil {
+		t.Fatalf("GetOrder confirmed: %v", err)
+	}
+	if confirmed.Order.Status != domain.OrderStatusCommitted {
+		t.Fatalf("confirmed status = %q, want committed", confirmed.Order.Status)
+	}
+	cancelled, err := st.GetOrder(ctx, domain.DefaultTenant, cancelTarget.order.ID)
+	if err != nil {
+		t.Fatalf("GetOrder cancelled: %v", err)
+	}
+	if cancelled.Order.Status != domain.OrderStatusCancelled {
+		t.Fatalf("cancelled status = %q, want cancelled", cancelled.Order.Status)
 	}
 }
 
@@ -1103,8 +1303,23 @@ func TestLocalNode_ApplyExecutionReportAuditsEngineBlock(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("GetAccount: %v ok=%v", err, ok)
 	}
-	if !acc.Blocked || acc.BlockReason != "loss limit breached" {
-		t.Fatalf("account not mirrored blocked: %+v", acc)
+	wantReason := fmt.Sprintf("loss limit breached [code=pnl_kill_switch, order #%d]", order.ID)
+	if !acc.Blocked || acc.BlockReason != wantReason {
+		t.Fatalf("account block reason = %q, want %q", acc.BlockReason, wantReason)
+	}
+
+	detail, err := st.GetOrder(ctx, domain.DefaultTenant, order.ID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if len(detail.Events) != 1 {
+		t.Fatalf("events = %d, want 1 fill event", len(detail.Events))
+	}
+	payload := detail.Events[0].Payload
+	if payload.RejectCode != "pnl_kill_switch" ||
+		payload.RejectScope != "account" ||
+		payload.RejectReason != "loss limit breached" {
+		t.Fatalf("fill event reject payload = %+v", payload)
 	}
 
 	rows, err := st.ListAuditFiltered(ctx, domain.AuditFilter{
@@ -1121,6 +1336,46 @@ func TestLocalNode_ApplyExecutionReportAuditsEngineBlock(t *testing.T) {
 	}
 	if !strings.Contains(rows[0].Detail, "loss limit breached") {
 		t.Fatalf("block detail missing reason: %q", rows[0].Detail)
+	}
+}
+
+// TestEngineBlockReason verifies the account block_reason composed for an
+// engine-initiated block carries the engine reason plus the cause (code and
+// triggering order), falling back to the code when no reason is given and
+// appending details when present.
+func TestEngineBlockReason(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		order int64
+		block domain.ExecutionAccountBlock
+		want  string
+	}{
+		{
+			name:  "reason and code",
+			order: 7,
+			block: domain.ExecutionAccountBlock{Account: "acc-1", Code: "pnl_kill_switch", Reason: "loss limit breached"},
+			want:  "loss limit breached [code=pnl_kill_switch, order #7]",
+		},
+		{
+			name:  "empty reason falls back to code",
+			order: 9,
+			block: domain.ExecutionAccountBlock{Account: "acc-1", Code: "pnl_kill_switch"},
+			want:  "pnl_kill_switch [code=pnl_kill_switch, order #9]",
+		},
+		{
+			name:  "details appended",
+			order: 3,
+			block: domain.ExecutionAccountBlock{Account: "acc-1", Code: "pnl_kill_switch", Reason: "loss limit breached", Details: "upper bound 1000"},
+			want:  "loss limit breached [code=pnl_kill_switch, order #3, upper bound 1000]",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := engineBlockReason(tc.order, tc.block); got != tc.want {
+				t.Fatalf("engineBlockReason = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -1747,4 +2002,426 @@ func TestLocalNode_ErrorMessagesNoNodePrefix(t *testing.T) {
 	if len(msg) >= 6 && msg[:6] == "node: " {
 		t.Fatalf("error message must not start with \"node: \", got: %s", msg)
 	}
+}
+
+// --- Atomic held-resolution / settlement at the node layer -------------------
+
+// failResolveStore wraps a real store and fails ResolveOrderReservation with a
+// canned error. It lets a node test assert that a store failure on the atomic
+// resolve leaves no partial persistence and does not re-resolve the native
+// handle.
+type failResolveStore struct {
+	store.Store
+	err error
+}
+
+func (s *failResolveStore) ResolveOrderReservation(
+	_ context.Context, _ domain.ReservationResolution,
+) error {
+	return s.err
+}
+
+// newTestNodeWithStore builds a localNode over the supplied store (typically a
+// wrapper around a real temp SQLite store) and the fake engine. It mirrors
+// newTestNode but lets a test inject a failing store decorator.
+func newTestNodeWithStore(t *testing.T, st store.Store, eng engine.Engine) *localNode {
+	t.Helper()
+	var seed engine.Snapshot
+	n, _, err := NewLocalNode(context.Background(), st, fakeBuild(eng, &seed))
+	if err != nil {
+		t.Fatalf("NewLocalNode: %v", err)
+	}
+	return n.(*localNode)
+}
+
+// seedHeldOrder creates an accepted order plus a held reservation intent bound to
+// it, returning the order. It mirrors the seeding the backend would have done at
+// hold time so the node's confirm/cancel paths have a durable intent to resolve.
+func seedHeldOrder(t *testing.T, st store.Store, account domain.AccountID, approvalID string) domain.Order {
+	t.Helper()
+	ctx := context.Background()
+	order, err := st.CreateOrder(ctx, domain.Order{
+		Tenant:      domain.DefaultTenant,
+		Account:     account,
+		Source:      domain.SourceAPI,
+		Principal:   "operator",
+		BaseAsset:   "AAPL",
+		QuoteAsset:  "USD",
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "1",
+		Price:       "100",
+		Status:      domain.OrderStatusAccepted,
+	})
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+	if err := st.UpsertReservationIntent(ctx, domain.ReservationIntent{
+		ApprovalID: approvalID,
+		OrderID:    order.ID,
+		Account:    order.Account,
+		ParamsJSON: "{}",
+		IssuedAt:   time.Now().UTC(),
+		ExpiresAt:  time.Now().UTC().Add(2 * time.Minute),
+		State:      domain.ReservationIntentStateHeld,
+	}); err != nil {
+		t.Fatalf("UpsertReservationIntent: %v", err)
+	}
+	return order
+}
+
+func eventTypes(t *testing.T, st store.Store, orderID int64) []domain.OrderEventType {
+	t.Helper()
+	evs, err := st.ListOrderEvents(context.Background(), domain.DefaultTenant, orderID)
+	if err != nil {
+		t.Fatalf("ListOrderEvents: %v", err)
+	}
+	types := make([]domain.OrderEventType, len(evs))
+	for i, ev := range evs {
+		types[i] = ev.Type
+	}
+	return types
+}
+
+func intentStillHeld(t *testing.T, st store.Store, approvalID string) bool {
+	t.Helper()
+	open, err := st.ListOpenReservationIntents(context.Background())
+	if err != nil {
+		t.Fatalf("ListOpenReservationIntents: %v", err)
+	}
+	for _, i := range open {
+		if i.ApprovalID == approvalID {
+			return true
+		}
+	}
+	return false
+}
+
+// TestConfirmHeld_AtomicSingleResolve proves the confirm path advances the order
+// to committed with exactly one reservation_committed event, flips the intent,
+// and resolves the native handle exactly once.
+func TestConfirmHeld_AtomicSingleResolve(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	order := seedHeldOrder(t, st, "acc-1", "approval-1")
+
+	confirmed, err := n.ConfirmHeld(ctx, domain.DefaultTenant, order.ID, "approval-1", testCaller)
+	if err != nil {
+		t.Fatalf("ConfirmHeld: %v", err)
+	}
+	if confirmed.Status != domain.OrderStatusCommitted {
+		t.Fatalf("status = %q, want committed", confirmed.Status)
+	}
+	if intentStillHeld(t, st, "approval-1") {
+		t.Fatal("intent still held, want committed")
+	}
+	types := eventTypes(t, st, order.ID)
+	if len(types) != 1 || types[0] != domain.OrderEventReservationCommitted {
+		t.Fatalf("events = %+v, want exactly [reservation_committed]", types)
+	}
+	eng.resolveMu.Lock()
+	commits := append([]string(nil), eng.commitHeldCalls...)
+	eng.resolveMu.Unlock()
+	if len(commits) != 1 || commits[0] != "approval-1" {
+		t.Fatalf("commit calls = %+v, want exactly [approval-1]", commits)
+	}
+}
+
+// TestConfirmHeld_StoreFailureNoPartialAndSingleNativeResolve proves that when
+// the atomic ResolveOrderReservation fails after the native CommitHeld already
+// succeeded, ConfirmHeld returns an error, leaves the order accepted and the
+// intent held (nothing persisted), and does NOT re-resolve the native handle -
+// finishResolve already ran inside the single CommitHeld.
+func TestConfirmHeld_StoreFailureNoPartialAndSingleNativeResolve(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+
+	path := filepath.Join(t.TempDir(), "node.db")
+	real, err := store.NewSQLiteStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	ctx := context.Background()
+	if err := real.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = real.Close() })
+
+	resolveErr := errors.New("resolve boom")
+	st := &failResolveStore{Store: real, err: resolveErr}
+	n := newTestNodeWithStore(t, st, eng)
+
+	order := seedHeldOrder(t, real, "acc-1", "approval-1")
+
+	_, err = n.ConfirmHeld(ctx, domain.DefaultTenant, order.ID, "approval-1", testCaller)
+	if err == nil {
+		t.Fatal("ConfirmHeld: want error from failing ResolveOrderReservation")
+	}
+	if !errors.Is(err, resolveErr) {
+		t.Fatalf("ConfirmHeld error = %v, want wrapping resolve boom", err)
+	}
+
+	// No partial persistence: status accepted, intent held, no events (read the
+	// underlying real store, not the failing wrapper).
+	detail, err := real.GetOrder(ctx, domain.DefaultTenant, order.ID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if detail.Order.Status != domain.OrderStatusAccepted {
+		t.Fatalf("status = %q, want accepted (nothing persisted)", detail.Order.Status)
+	}
+	if !intentStillHeld(t, real, "approval-1") {
+		t.Fatal("intent flipped despite store failure, want still held")
+	}
+	if len(detail.Events) != 0 {
+		t.Fatalf("events = %+v, want none", detail.Events)
+	}
+	// Native handle resolved exactly once: the store failure must not trigger a
+	// second CommitHeld.
+	eng.resolveMu.Lock()
+	commits := append([]string(nil), eng.commitHeldCalls...)
+	eng.resolveMu.Unlock()
+	if len(commits) != 1 {
+		t.Fatalf("commit calls = %+v, want exactly one native resolve", commits)
+	}
+}
+
+// TestCancelHeld_AtomicConsistency proves the cancel path advances the order to
+// cancelled with both reservation_rolled_back and cancelled events and flips the
+// intent - all together.
+func TestCancelHeld_AtomicConsistency(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	order := seedHeldOrder(t, st, "acc-1", "approval-1")
+
+	cancelled, err := n.CancelHeld(ctx, domain.DefaultTenant, order.ID, "approval-1", testCaller)
+	if err != nil {
+		t.Fatalf("CancelHeld: %v", err)
+	}
+	if cancelled.Status != domain.OrderStatusCancelled {
+		t.Fatalf("status = %q, want cancelled", cancelled.Status)
+	}
+	if intentStillHeld(t, st, "approval-1") {
+		t.Fatal("intent still held, want rolled_back")
+	}
+	types := eventTypes(t, st, order.ID)
+	if len(types) != 2 ||
+		types[0] != domain.OrderEventReservationRolledBack ||
+		types[1] != domain.OrderEventCancelled {
+		t.Fatalf("events = %+v, want [reservation_rolled_back cancelled]", types)
+	}
+}
+
+// TestConfirmHeld_AfterSweepReturnsConflict proves that a ConfirmHeld whose
+// native handle is gone (post-restart) and whose intent has been swept to
+// rolled_back by the TTL sweeper returns ErrConflict (409), not ErrNotFound
+// (404). A genuinely unknown approval id still returns ErrNotFound.
+func TestConfirmHeld_AfterSweepReturnsConflict(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	eng := newFakeEngine()
+	// Native handle is gone: CommitHeld reports ErrNotFound.
+	eng.commitErr = fmt.Errorf("engine: reservation %q: %w", "approval-swept", domain.ErrNotFound)
+
+	path := filepath.Join(t.TempDir(), "node.db")
+	real, err := store.NewSQLiteStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	if err := real.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = real.Close() })
+
+	n := newTestNodeWithStore(t, real, eng)
+	order := seedHeldOrder(t, real, "acc-1", "approval-swept")
+
+	// Simulate TTL sweeper: flip intent to rolled_back without resolving the order.
+	if err := real.SetReservationIntentState(
+		ctx, "approval-swept", domain.ReservationIntentStateRolledBack,
+	); err != nil {
+		t.Fatalf("SetReservationIntentState: %v", err)
+	}
+
+	// Confirm after sweep must return ErrConflict.
+	_, err = n.ConfirmHeld(ctx, domain.DefaultTenant, order.ID, "approval-swept", testCaller)
+	if !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("ConfirmHeld after sweep: want ErrConflict, got %v", err)
+	}
+
+	// A genuinely unknown approval id must still return ErrNotFound.
+	_, err = n.ConfirmHeld(ctx, domain.DefaultTenant, order.ID, "approval-unknown", testCaller)
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("ConfirmHeld unknown: want ErrNotFound, got %v", err)
+	}
+}
+
+// TestCancelHeld_AfterSweepReturnsConflict proves that a CancelHeld whose
+// native handle is gone (post-restart) and whose intent has been swept to
+// rolled_back returns ErrConflict (409), not ErrNotFound (404).
+func TestCancelHeld_AfterSweepReturnsConflict(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	eng := newFakeEngine()
+	// Native handle is gone: RollbackHeld reports ErrNotFound.
+	eng.rollbackErr = fmt.Errorf("engine: reservation %q: %w", "approval-swept", domain.ErrNotFound)
+
+	path := filepath.Join(t.TempDir(), "node.db")
+	real, err := store.NewSQLiteStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	if err := real.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = real.Close() })
+
+	n := newTestNodeWithStore(t, real, eng)
+	order := seedHeldOrder(t, real, "acc-1", "approval-swept")
+
+	// Simulate TTL sweeper: flip intent to rolled_back without resolving the order.
+	if err := real.SetReservationIntentState(
+		ctx, "approval-swept", domain.ReservationIntentStateRolledBack,
+	); err != nil {
+		t.Fatalf("SetReservationIntentState: %v", err)
+	}
+
+	// Cancel after sweep must return ErrConflict.
+	_, err = n.CancelHeld(ctx, domain.DefaultTenant, order.ID, "approval-swept", testCaller)
+	if !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("CancelHeld after sweep: want ErrConflict, got %v", err)
+	}
+
+	// A genuinely unknown approval id must still return ErrNotFound.
+	_, err = n.CancelHeld(ctx, domain.DefaultTenant, order.ID, "approval-unknown", testCaller)
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("CancelHeld unknown: want ErrNotFound, got %v", err)
+	}
+}
+
+// TestCancelHeld_AfterFillConflictPreservesFilled proves a cancel that races a
+// fill is rejected: the order was flipped to filled (via a direct settlement),
+// so the cancel's AllowedFrom={accepted} guard returns ErrConflict, the filled
+// status stands, and no cancel events are written.
+func TestCancelHeld_AfterFillConflictPreservesFilled(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	order := seedHeldOrder(t, st, "acc-1", "approval-1")
+
+	// Simulate a fill landing before the cancel: settle the order to filled
+	// directly through the store (the same atomic method the fill path uses).
+	if err := st.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		Tenant:      domain.DefaultTenant,
+		Account:     "acc-1",
+		OrderID:     order.ID,
+		OrderStatus: domain.OrderStatusFilled,
+		Events: []domain.OrderEvent{{
+			OrderID: order.ID, Type: domain.OrderEventFill, Source: domain.SourceAPI,
+		}},
+	}); err != nil {
+		t.Fatalf("RecordOrderSettlement (simulated fill): %v", err)
+	}
+
+	_, err := n.CancelHeld(ctx, domain.DefaultTenant, order.ID, "approval-1", testCaller)
+	if !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("CancelHeld after fill: want ErrConflict, got %v", err)
+	}
+
+	detail, err := st.GetOrder(ctx, domain.DefaultTenant, order.ID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if detail.Order.Status != domain.OrderStatusFilled {
+		t.Fatalf("status = %q, want filled preserved", detail.Order.Status)
+	}
+	types := eventTypes(t, st, order.ID)
+	if len(types) != 1 || types[0] != domain.OrderEventFill {
+		t.Fatalf("events = %+v, want only the fill (no cancel events)", types)
+	}
+}
+
+// TestReconcileAfterCrash_LeavesFullyHeldOrFullyResolved proves the reconcile/
+// retry contract across a simulated crash. A crash that aborts the resolve tx
+// leaves intent=held + status=accepted (a clean retry point); a fresh ConfirmHeld
+// (driven through the post-restart intent fallback, native handle gone) then ends
+// fully committed. A crash AFTER commit leaves intent=committed + status=committed
+// with no half state.
+func TestReconcileAfterCrash_LeavesFullyHeldOrFullyResolved(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// --- Crash BEFORE commit: nothing persisted, then retry completes. ---
+	t.Run("crash_before_commit_then_retry_completes", func(t *testing.T) {
+		eng := newFakeEngine()
+		// The native handle is gone post-restart: CommitHeld reports NotFound so the
+		// node drives the intent fallback + the same atomic resolve.
+		eng.commitErr = fmt.Errorf("engine: reservation %q: %w", "approval-1", domain.ErrNotFound)
+
+		path := filepath.Join(t.TempDir(), "node.db")
+		real, err := store.NewSQLiteStore(path)
+		if err != nil {
+			t.Fatalf("NewSQLiteStore: %v", err)
+		}
+		if err := real.Migrate(ctx); err != nil {
+			t.Fatalf("Migrate: %v", err)
+		}
+		t.Cleanup(func() { _ = real.Close() })
+
+		// Simulate the crash: the resolve tx never committed, so the durable state
+		// is exactly intent=held + status=accepted (what seedHeldOrder leaves).
+		n := newTestNodeWithStore(t, real, eng)
+		order := seedHeldOrder(t, real, "acc-1", "approval-1")
+
+		// Retry: a fresh confirm drives the fallback and the atomic resolve, ending
+		// fully committed.
+		confirmed, err := n.ConfirmHeld(ctx, domain.DefaultTenant, order.ID, "approval-1", testCaller)
+		if err != nil {
+			t.Fatalf("retry ConfirmHeld: %v", err)
+		}
+		if confirmed.Status != domain.OrderStatusCommitted {
+			t.Fatalf("status = %q, want committed after retry", confirmed.Status)
+		}
+		if intentStillHeld(t, real, "approval-1") {
+			t.Fatal("intent still held after retry, want committed")
+		}
+		types := eventTypes(t, real, order.ID)
+		if len(types) != 1 || types[0] != domain.OrderEventReservationCommitted {
+			t.Fatalf("events = %+v, want [reservation_committed]", types)
+		}
+	})
+
+	// --- Crash AFTER commit: fully resolved, no half state. ---
+	t.Run("crash_after_commit_is_fully_resolved", func(t *testing.T) {
+		eng := newFakeEngine()
+		n, st := newTestNode(t, eng)
+		order := seedHeldOrder(t, st, "acc-1", "approval-1")
+
+		if _, err := n.ConfirmHeld(ctx, domain.DefaultTenant, order.ID, "approval-1", testCaller); err != nil {
+			t.Fatalf("ConfirmHeld: %v", err)
+		}
+		// The committed state is durable: status committed, intent committed (absent
+		// from the open/held set), one event. No accepted+held half-state remains.
+		detail, err := st.GetOrder(ctx, domain.DefaultTenant, order.ID)
+		if err != nil {
+			t.Fatalf("GetOrder: %v", err)
+		}
+		if detail.Order.Status != domain.OrderStatusCommitted {
+			t.Fatalf("status = %q, want committed", detail.Order.Status)
+		}
+		if intentStillHeld(t, st, "approval-1") {
+			t.Fatal("intent still held, want committed")
+		}
+		if len(detail.Events) != 1 {
+			t.Fatalf("events = %+v, want exactly one", detail.Events)
+		}
+	})
 }

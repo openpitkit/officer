@@ -116,6 +116,23 @@ func engineBlockDetail(orderID int64, block domain.ExecutionAccountBlock) string
 	return detail
 }
 
+// engineBlockReason composes the block_reason persisted on the account for an
+// engine-initiated (kill-switch) block: the engine's human reason plus the
+// cause (stable reject code and triggering order). Persisting the cause on the
+// account itself - not only in the audit log - lets the Accounts surface show
+// what blocked the account and why.
+func engineBlockReason(orderID int64, block domain.ExecutionAccountBlock) string {
+	reason := block.Reason
+	if reason == "" {
+		reason = block.Code
+	}
+	cause := fmt.Sprintf("code=%s, order #%d", block.Code, orderID)
+	if block.Details != "" {
+		cause += ", " + block.Details
+	}
+	return fmt.Sprintf("%s [%s]", reason, cause)
+}
+
 // targetDetail renders the policy/scope/account/asset axes of a target.
 func targetDetail(target domain.LimitTarget) string {
 	var b strings.Builder

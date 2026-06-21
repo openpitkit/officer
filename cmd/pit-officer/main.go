@@ -143,15 +143,6 @@ func setup(ctx context.Context, cfg config.Config, logger *slog.Logger) (
 	}
 	logger.Info("store migrated", "path", st.Path())
 
-	// Seed the predefined stablecoin cross-rates on first run, before the manager
-	// starts, so the enabled source and its 1:1 marks are applied by the normal
-	// startup push. Idempotent: re-running is a no-op and never overrides operator
-	// edits.
-	if err := store.SeedMarketDataDefaults(ctx, st); err != nil {
-		_ = st.Close()
-		return nil, fmt.Errorf("seed market-data defaults: %w", err)
-	}
-
 	build := func(snap engine.Snapshot) (engine.Engine, error) {
 		return engine.BuildOpenPitEngine(cfg.RuntimeLibraryPath, snap)
 	}

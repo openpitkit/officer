@@ -112,13 +112,13 @@ func newReservationRegistry() *reservationRegistry {
 type ReservationStore interface {
 	UpsertReservationIntent(ctx context.Context, intent domain.ReservationIntent) error
 	ListOpenReservationIntents(ctx context.Context) ([]domain.ReservationIntent, error)
-	SetReservationIntentState(
-		ctx context.Context, approvalID string, state domain.ReservationIntentState,
-	) error
-	AppendOrderEvent(ctx context.Context, ev domain.OrderEvent) (domain.OrderEvent, error)
-	UpdateOrderStatus(
-		ctx context.Context, tenant domain.TenantID, id int64, status domain.OrderStatus,
-	) error
+	// ResolveOrderReservation flips the intent state, advances the order status
+	// under an AllowedFrom WHERE-guard, and appends the lifecycle event(s) in one
+	// atomic store transaction. The TTL sweeper calls it directly so a swept
+	// rollback is all-or-nothing; the node drives confirm/cancel through the same
+	// method. F1 (no node->engine coupling) is preserved: the engine resolves via
+	// its own store handle, never a node reference.
+	ResolveOrderReservation(ctx context.Context, r domain.ReservationResolution) error
 }
 
 // SetReservationStore attaches the persistence layer used to keep reservation
@@ -275,13 +275,13 @@ func (e *openPitEngine) CommitHeld(ctx context.Context, approvalID string) error
 		return fmt.Errorf("engine: commit held on stopped engine")
 	}
 	held.res.CommitAndClose()
-	store := e.resStore
 	e.mu.Unlock()
 
+	// The in-memory single-resolve guard and native commit are the engine's only
+	// job here. Durable persistence (intent flip + order status + event) is the
+	// node's atomic ResolveOrderReservation; the engine no longer touches the
+	// store on the node-driven commit path.
 	e.finishResolve(approvalID, reservationStateCommitted, true)
-	if store != nil {
-		return setIntentState(ctx, store, approvalID, domain.ReservationIntentStateCommitted)
-	}
 	return nil
 }
 
@@ -318,15 +318,18 @@ func (e *openPitEngine) rollbackHeld(ctx context.Context, approvalID string, rec
 	e.mu.Unlock()
 
 	e.finishResolve(approvalID, reservationStateRolledBack, record)
-	if store != nil {
-		if err := setIntentState(ctx, store, approvalID, domain.ReservationIntentStateRolledBack); err != nil {
-			return err
-		}
-		if !record {
-			return markSweptOrderRolledBack(ctx, store, held)
-		}
+
+	// record==true is the node-driven cancel: the node performs the atomic
+	// ResolveOrderReservation (intent flip + status + events), so the engine does
+	// not touch the store. record==false is the TTL sweeper, which the engine owns
+	// end to end: it resolves atomically through its own store handle here. A late
+	// confirm that won the in-memory guard already removed the entry, so only one
+	// of {confirm, sweep} reaches this point; if the order moved on meanwhile the
+	// store's status guard returns ErrConflict, which the sweeper swallows.
+	if record || store == nil {
+		return nil
 	}
-	return nil
+	return resolveSweptRollback(ctx, store, held)
 }
 
 // errAlreadyResolved is the internal sentinel beginResolve returns when the
@@ -572,43 +575,48 @@ type reservationIntentPayload struct {
 	Outcomes []BalanceOutcome `json:"outcomes,omitempty"`
 }
 
-// setIntentState marks a persisted intent terminal, tolerating an absent row
-// (an in-memory-only hold left no row to update).
-func setIntentState(
-	ctx context.Context, store ReservationStore,
-	approvalID string, state domain.ReservationIntentState,
-) error {
-	if err := store.SetReservationIntentState(ctx, approvalID, state); err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			return nil
-		}
-		return fmt.Errorf("engine: persist reservation state: %w", err)
-	}
-	return nil
-}
-
-func markSweptOrderRolledBack(
+// resolveSweptRollback atomically resolves a TTL-swept hold: it flips the intent
+// to rolled-back, advances the order accepted->rolled_back, and appends one
+// system-sourced reservation_rolled_back event in a single store transaction. An
+// in-memory-only hold (no order row) carries OrderID==0, so the store skips the
+// order/event writes and only flips the intent (tolerating its absence too). The
+// status WHERE-guard (AllowedFrom={accepted}) is TOCTOU-safe: if a confirm/fill
+// advanced the order between collection and this tx, the store returns
+// ErrConflict and writes nothing; the caller (sweeper) swallows it, leaving the
+// winning resolution intact.
+func resolveSweptRollback(
 	ctx context.Context, store ReservationStore, held *heldReservation,
 ) error {
-	if held.params.ID == 0 {
-		return nil
-	}
 	tenant := held.params.Tenant
 	if tenant == "" {
 		tenant = domain.DefaultTenant
 	}
-	if _, err := store.AppendOrderEvent(ctx, domain.OrderEvent{
-		OrderID:   held.params.ID,
-		Type:      domain.OrderEventReservationRolledBack,
-		Source:    domain.SourceSystem,
-		Principal: "system",
-	}); err != nil {
-		return fmt.Errorf("engine: append swept reservation rollback event: %w", err)
+	var events []domain.OrderEvent
+	if held.params.ID != 0 {
+		events = []domain.OrderEvent{{
+			OrderID:   held.params.ID,
+			Type:      domain.OrderEventReservationRolledBack,
+			Source:    domain.SourceSystem,
+			Principal: "system",
+		}}
 	}
-	if err := store.UpdateOrderStatus(
-		ctx, tenant, held.params.ID, domain.OrderStatusRolledBack,
-	); err != nil {
-		return fmt.Errorf("engine: mark swept order rolled back: %w", err)
+	err := store.ResolveOrderReservation(ctx, domain.ReservationResolution{
+		Tenant:      tenant,
+		ApprovalID:  held.approvalID,
+		IntentState: domain.ReservationIntentStateRolledBack,
+		OrderStatus: domain.OrderStatusRolledBack,
+		AllowedFrom: []domain.OrderStatus{domain.OrderStatusAccepted},
+		Events:      events,
+		OrderID:     held.params.ID,
+	})
+	if err != nil {
+		// A swept order may have been committed/filled meanwhile: the status guard
+		// returns ErrConflict and an unknown order returns ErrNotFound. Both are
+		// expected races the sweeper tolerates - the winning resolution stands.
+		if errors.Is(err, domain.ErrConflict) || errors.Is(err, domain.ErrNotFound) {
+			return nil
+		}
+		return fmt.Errorf("engine: resolve swept reservation: %w", err)
 	}
 	return nil
 }

@@ -72,6 +72,7 @@ type fakeService struct {
 	mdSearchErr    error
 	status         backend.Status
 	statusErr      error
+	welcomeSeen    bool
 	createErr      error
 	blockErr       error
 	unblockErr     error
@@ -186,6 +187,13 @@ func (f *fakeService) SetMcpAccess(_ context.Context, command string, enabled bo
 		return f.setMcpErr
 	}
 	f.setMcpCalls = append(f.setMcpCalls, setMcpCall{command: command, enabled: enabled})
+	return nil
+}
+func (f *fakeService) WelcomeSeen(_ context.Context) (bool, error) {
+	return f.welcomeSeen, nil
+}
+func (f *fakeService) SetWelcomeSeen(_ context.Context, seen bool) error {
+	f.welcomeSeen = seen
 	return nil
 }
 func (f *fakeService) ListMarketData(_ context.Context) (backend.MarketDataStatus, error) {
@@ -1009,6 +1017,69 @@ func TestListAudit_InvalidLimit(t *testing.T) {
 	}
 }
 
+func TestListAuditActions(t *testing.T) {
+	r, err := newRouter(&fakeService{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/audit/actions", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	groups, ok := m["groups"].([]any)
+	if !ok || len(groups) != 2 {
+		t.Fatalf("want 2 groups, got %v", m["groups"])
+	}
+
+	// auditGroup decodes one group entry into its category and ordered actions.
+	auditGroup := func(v any) (string, []string) {
+		g := v.(map[string]any)
+		category, _ := g["category"].(string)
+		raw, _ := g["actions"].([]any)
+		actions := make([]string, 0, len(raw))
+		for _, a := range raw {
+			actions = append(actions, a.(string))
+		}
+		return category, actions
+	}
+
+	controlCat, controlActions := auditGroup(groups[0])
+	tradingCat, tradingActions := auditGroup(groups[1])
+	if controlCat != string(domain.AuditCategoryControl) {
+		t.Fatalf("groups[0].category = %q, want control", controlCat)
+	}
+	if tradingCat != string(domain.AuditCategoryTrading) {
+		t.Fatalf("groups[1].category = %q, want trading", tradingCat)
+	}
+
+	wantControl := auditActionStrings(
+		domain.AuditActionsByCategory(domain.AuditCategoryControl))
+	wantTrading := auditActionStrings(
+		domain.AuditActionsByCategory(domain.AuditCategoryTrading))
+	if !slices.Equal(controlActions, wantControl) {
+		t.Fatalf("control actions = %v, want %v", controlActions, wantControl)
+	}
+	if !slices.Equal(tradingActions, wantTrading) {
+		t.Fatalf("trading actions = %v, want %v", tradingActions, wantTrading)
+	}
+
+	// The trading group is exactly the high-volume order/execution stream.
+	if !slices.Equal(tradingActions, []string{"submit_order", "execution_report"}) {
+		t.Fatalf("trading group = %v, want [submit_order execution_report]", tradingActions)
+	}
+
+	// The concatenation of all groups equals the full canonical catalogue in
+	// order; this guards against future drift between the grouped endpoint and
+	// domain.AllAuditActions.
+	got := append(append([]string{}, controlActions...), tradingActions...)
+	want := auditActionStrings(domain.AllAuditActions())
+	if !slices.Equal(got, want) {
+		t.Fatalf("concatenated actions = %v, want %v", got, want)
+	}
+}
+
 func TestLimitDTO_JSONShape(t *testing.T) {
 	l := domain.Limit{
 		Target: domain.LimitTarget{
@@ -1380,5 +1451,54 @@ func TestSetMcpAccess_InvalidJSON(t *testing.T) {
 	}
 	if len(svc.setMcpCalls) != 0 {
 		t.Fatalf("invalid JSON must not persist")
+	}
+}
+
+func TestUserSettings_GetAndPut(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Fresh store reports the welcome dialog as not yet dismissed.
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/user-settings", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET want 200, got %d", rec.Code)
+	}
+	if m := bodyMap(t, rec.Result()); m["welcomeSeen"] != false {
+		t.Fatalf("GET welcomeSeen = %v, want false", m["welcomeSeen"])
+	}
+
+	// Persisting the choice round-trips through the service.
+	body := bytes.NewBufferString(`{"welcomeSeen":true}`)
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/user-settings", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT want 200, got %d", rec.Code)
+	}
+	if !svc.welcomeSeen {
+		t.Fatalf("PUT did not persist welcomeSeen")
+	}
+
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/user-settings", nil))
+	if m := bodyMap(t, rec.Result()); m["welcomeSeen"] != true {
+		t.Fatalf("GET after PUT welcomeSeen = %v, want true", m["welcomeSeen"])
+	}
+}
+
+func TestUserSettings_PutInvalidJSON(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{bad`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/user-settings", body))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
 	}
 }

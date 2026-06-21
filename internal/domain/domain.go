@@ -36,6 +36,27 @@ import (
 // DefaultTenant is the implicit tenant used in single-process deployments.
 const DefaultTenant TenantID = "default"
 
+// DefaultUserID is the implicit user used until real users exist; every user
+// setting is currently stored under it. It is a fixed, well-known UUID rather
+// than a plain label so that once settings are shared across nodes, databases,
+// and clusters, user ids are globally unique and never collide between users.
+const DefaultUserID = "00000000-0000-4000-8000-000000000001"
+
+// User-setting keys. Values are opaque strings interpreted by the surface that
+// owns the setting.
+const (
+	// UserSettingWelcomeSeen records that the operator dismissed the first-run
+	// welcome dialog with "don't show again". Value "1" means seen.
+	UserSettingWelcomeSeen = "welcome_seen"
+)
+
+// UserSetting is one persisted per-user key-value preference.
+type UserSetting struct {
+	UserID string
+	Key    string
+	Value  string
+}
+
 // Sentinel errors returned by all layers; callers check with errors.Is.
 var (
 	ErrNotFound      = errors.New("not found")
@@ -249,6 +270,24 @@ func AuditActionsByCategory(category AuditCategory) []AuditAction {
 		}
 	}
 	return out
+}
+
+// AuditActionsForCategory resolves a category query value to an action
+// include-set. "" and "control" select the control plane; "trading" selects the
+// trading stream; "all" disables the action filter (nil). known is false for any
+// other value, so callers can choose to reject or default it. A nil action slice
+// means no filter (all actions).
+func AuditActionsForCategory(category string) (actions []AuditAction, known bool) {
+	switch category {
+	case "", string(AuditCategoryControl):
+		return AuditActionsByCategory(AuditCategoryControl), true
+	case string(AuditCategoryTrading):
+		return AuditActionsByCategory(AuditCategoryTrading), true
+	case "all":
+		return nil, true
+	default:
+		return nil, false
+	}
 }
 
 // AuditFilter narrows an audit listing. A zero value disables every filter and

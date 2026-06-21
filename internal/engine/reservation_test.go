@@ -246,10 +246,19 @@ func TestSweepExpired_AutoRollsBackAndConfirmConflicts(t *testing.T) {
 	}
 }
 
-func TestSweepExpired_MarksPersistedOrderRolledBack(t *testing.T) {
+// TestSweepExpired_AtomicResolution proves the TTL sweeper resolves the durable
+// state through the store in ONE atomic ResolveOrderReservation call (not the
+// former separate SetReservationIntentState + AppendOrderEvent + UpdateOrder
+// Status writes): the intent flips to rolled_back, the order advances accepted->
+// rolled_back, and a single reservation_rolled_back event is appended together.
+func TestSweepExpired_AtomicResolution(t *testing.T) {
 	e := newTestEngine(t)
 	ctx := context.Background()
-	store := &fakeReservationStore{intents: make(map[string]domain.ReservationIntent)}
+	store := &fakeReservationStore{
+		intents: make(map[string]domain.ReservationIntent),
+		// The held order starts accepted so the AllowedFrom={accepted} guard passes.
+		status: map[int64]domain.OrderStatus{99: domain.OrderStatusAccepted},
+	}
 	e.SetReservationStore(store)
 
 	order := testOrder()
@@ -264,6 +273,9 @@ func TestSweepExpired_MarksPersistedOrderRolledBack(t *testing.T) {
 
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	if store.resolveCalls != 1 {
+		t.Fatalf("ResolveOrderReservation calls = %d, want exactly 1 (atomic)", store.resolveCalls)
+	}
 	if got := store.intents[res.ApprovalID].State; got != domain.ReservationIntentStateRolledBack {
 		t.Fatalf("intent state = %q, want rolled_back", got)
 	}
@@ -271,7 +283,207 @@ func TestSweepExpired_MarksPersistedOrderRolledBack(t *testing.T) {
 		t.Fatalf("order status = %q, want rolled_back", got)
 	}
 	if len(store.events) != 1 || store.events[0].Type != domain.OrderEventReservationRolledBack {
-		t.Fatalf("events = %+v, want reservation_rolled_back", store.events)
+		t.Fatalf("events = %+v, want one reservation_rolled_back", store.events)
+	}
+}
+
+// recordingReservationStore wraps fakeReservationStore and records the names of
+// every ReservationStore method the sweeper invokes. It exists to lock in the
+// structural fact that the TTL sweeper writes only through the ReservationStore
+// and never re-enters node code: the engine constructor takes no node callback,
+// so there is no node seam to assert against directly.
+type recordingReservationStore struct {
+	fakeReservationStore
+	calls []string
+}
+
+func (s *recordingReservationStore) record(name string) {
+	s.mu.Lock()
+	s.calls = append(s.calls, name)
+	s.mu.Unlock()
+}
+
+func (s *recordingReservationStore) UpsertReservationIntent(
+	ctx context.Context, intent domain.ReservationIntent,
+) error {
+	s.record("UpsertReservationIntent")
+	return s.fakeReservationStore.UpsertReservationIntent(ctx, intent)
+}
+
+func (s *recordingReservationStore) ListOpenReservationIntents(
+	ctx context.Context,
+) ([]domain.ReservationIntent, error) {
+	s.record("ListOpenReservationIntents")
+	return s.fakeReservationStore.ListOpenReservationIntents(ctx)
+}
+
+func (s *recordingReservationStore) ResolveOrderReservation(
+	ctx context.Context, r domain.ReservationResolution,
+) error {
+	s.record("ResolveOrderReservation")
+	return s.fakeReservationStore.ResolveOrderReservation(ctx, r)
+}
+
+// TestSweepExpired_ConcurrentWithResolveNoDeadlockSingleResolution races the TTL
+// sweeper against synchronous CommitHeld/RollbackHeld calls on a batch of held
+// reservations. It asserts the whole fan-out completes within a generous timeout
+// (a deadlock would hang the select) and that every reservation resolves at most
+// once: the native handle is committed-or-rolled-back exactly once, so a double
+// resolve would panic the binding and crash the test rather than return an error.
+// This regresses against the engine ever taking n.mutate or a node reference from
+// the sweeper path: such re-entrancy would deadlock against the synchronous
+// resolve holding the same lock.
+func TestSweepExpired_ConcurrentWithResolveNoDeadlockSingleResolution(t *testing.T) {
+	e := newTestEngine(t)
+	ctx := context.Background()
+
+	// Two held reservations: the 1000-quote balance funds exactly two.
+	first, err := e.ReserveHold(ctx, testOrder())
+	if err != nil || !first.Accepted {
+		t.Fatalf("first ReserveHold: %v accepted=%v", err, first.Accepted)
+	}
+	second, err := e.ReserveHold(ctx, testOrder())
+	if err != nil || !second.Accepted {
+		t.Fatalf("second ReserveHold: %v accepted=%v", err, second.Accepted)
+	}
+
+	// Sweep at a time past both TTLs so the sweeper contends for the same entries
+	// the synchronous resolves target. Each goroutine races a distinct path
+	// against the sweeper; none must panic (double native resolve) or hang.
+	sweepAt := first.ExpiresAt.Add(time.Second)
+	if second.ExpiresAt.Add(time.Second).After(sweepAt) {
+		sweepAt = second.ExpiresAt.Add(time.Second)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() { defer wg.Done(); e.sweepExpired(ctx, sweepAt) }()
+	go func() { defer wg.Done(); _ = e.CommitHeld(ctx, first.ApprovalID) }()
+	go func() { defer wg.Done(); _ = e.RollbackHeld(ctx, second.ApprovalID) }()
+
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("sweep raced with resolve deadlocked")
+	}
+
+	// Both reservations are terminal exactly once: the registry is drained and a
+	// follow-up resolve cannot find either entry.
+	if got := e.registrySize(); got != 0 {
+		t.Fatalf("registry size after race = %d, want 0", got)
+	}
+	if err := e.CommitHeld(ctx, first.ApprovalID); !errors.Is(err, domain.ErrNotFound) &&
+		!errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("re-resolve first = %v, want ErrNotFound or ErrConflict", err)
+	}
+	if err := e.RollbackHeld(ctx, second.ApprovalID); err != nil &&
+		!errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("re-resolve second = %v, want nil or ErrNotFound", err)
+	}
+}
+
+// TestSweepExpired_WritesOnlyThroughReservationStore asserts the sweeper's
+// auto-rollback touches state exclusively via the ReservationStore: it records
+// every store method the sweep invokes and confirms the set is a subset of the
+// ReservationStore surface. The engine holds no node handle (its constructor
+// takes none), so a node callback from this path is structurally impossible;
+// this test guards that the sweep does not grow one through some other seam.
+func TestSweepExpired_WritesOnlyThroughReservationStore(t *testing.T) {
+	e := newTestEngine(t)
+	ctx := context.Background()
+	store := &recordingReservationStore{
+		fakeReservationStore: fakeReservationStore{
+			intents: make(map[string]domain.ReservationIntent),
+			status:  map[int64]domain.OrderStatus{7: domain.OrderStatusAccepted},
+		},
+	}
+	e.SetReservationStore(store)
+
+	order := testOrder()
+	order.Tenant = domain.DefaultTenant
+	order.ID = 7
+	res, err := e.ReserveHold(ctx, order)
+	if err != nil || !res.Accepted {
+		t.Fatalf("ReserveHold: %v accepted=%v", err, res.Accepted)
+	}
+
+	e.sweepExpired(ctx, res.ExpiresAt.Add(time.Second))
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.calls) == 0 {
+		t.Fatal("sweep recorded no ReservationStore writes")
+	}
+	allowed := map[string]bool{
+		"UpsertReservationIntent":    true,
+		"ListOpenReservationIntents": true,
+		"ResolveOrderReservation":    true,
+	}
+	for _, name := range store.calls {
+		if !allowed[name] {
+			t.Fatalf("sweep invoked non-ReservationStore method %q", name)
+		}
+	}
+}
+
+// TestSweepExpired_RaceWithConfirmNoDoubleResolveNoClobber proves the sweeper's
+// store resolve is TOCTOU-safe against a confirm that already committed the order
+// durably. The fake store shows the order committed before the sweep; the
+// sweeper's ResolveOrderReservation then hits the AllowedFrom={accepted} guard,
+// returns domain.ErrConflict, and writes nothing - the committed status and the
+// held intent both stand. The sweep swallows the conflict (no panic, no error
+// surfaced) and drains the in-memory entry; the native handle is resolved exactly
+// once (a double native resolve would panic the binding and crash the test).
+func TestSweepExpired_RaceWithConfirmNoDoubleResolveNoClobber(t *testing.T) {
+	e := newTestEngine(t)
+	ctx := context.Background()
+	store := &fakeReservationStore{
+		intents: make(map[string]domain.ReservationIntent),
+		// The order was already committed durably (a confirm won); the held intent
+		// row still reads held until the winning resolution flips it.
+		status: map[int64]domain.OrderStatus{42: domain.OrderStatusCommitted},
+	}
+	e.SetReservationStore(store)
+
+	order := testOrder()
+	order.Tenant = domain.DefaultTenant
+	order.ID = 42
+	res, err := e.ReserveHold(ctx, order)
+	if err != nil || !res.Accepted {
+		t.Fatalf("ReserveHold: %v accepted=%v", err, res.Accepted)
+	}
+	// The intent row reads held (as it would until the winning confirm flips it).
+	store.mu.Lock()
+	store.intents[res.ApprovalID] = domain.ReservationIntent{
+		ApprovalID: res.ApprovalID,
+		OrderID:    order.ID,
+		State:      domain.ReservationIntentStateHeld,
+	}
+	store.mu.Unlock()
+
+	// Sweep the expired-but-already-committed entry: the store guard must reject
+	// the rollback and the sweeper must tolerate it.
+	e.sweepExpired(ctx, res.ExpiresAt.Add(time.Second))
+
+	if got := e.registrySize(); got != 0 {
+		t.Fatalf("registry size after sweep = %d, want 0 (entry drained)", got)
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.resolveCalls != 1 {
+		t.Fatalf("ResolveOrderReservation calls = %d, want exactly 1", store.resolveCalls)
+	}
+	if got := store.status[order.ID]; got != domain.OrderStatusCommitted {
+		t.Fatalf("order status = %q, want committed preserved (no clobber)", got)
+	}
+	if got := store.intents[res.ApprovalID].State; got != domain.ReservationIntentStateHeld {
+		t.Fatalf("intent state = %q, want held (conflict wrote nothing)", got)
+	}
+	if len(store.events) != 0 {
+		t.Fatalf("events = %+v, want none (conflict wrote nothing)", store.events)
 	}
 }
 
@@ -429,12 +641,20 @@ func TestImmediateExecutionReport_VolumeSizing(t *testing.T) {
 	}
 }
 
-// fakeReservationStore is an in-memory ReservationStore for reconcile tests.
+// fakeReservationStore is an in-memory ReservationStore for reconcile and
+// sweeper tests. It applies ResolveOrderReservation atomically against its own
+// maps: a single call flips the intent, advances the order status, and records
+// the events together (mirroring the real store's all-or-nothing tx). The status
+// WHERE-guard is honoured so a sweeper resolve that races a committed order
+// yields domain.ErrConflict and writes nothing, exactly like the real store.
 type fakeReservationStore struct {
 	mu      sync.Mutex
 	intents map[string]domain.ReservationIntent
 	events  []domain.OrderEvent
 	status  map[int64]domain.OrderStatus
+	// resolveCalls counts ResolveOrderReservation invocations - the single atomic
+	// entry point the sweeper/confirm/cancel paths use.
+	resolveCalls int
 }
 
 func (s *fakeReservationStore) UpsertReservationIntent(
@@ -460,37 +680,46 @@ func (s *fakeReservationStore) ListOpenReservationIntents(
 	return out, nil
 }
 
-func (s *fakeReservationStore) SetReservationIntentState(
-	_ context.Context, approvalID string, state domain.ReservationIntentState,
+// ResolveOrderReservation applies one resolution atomically: it enforces the
+// AllowedFrom status guard first (no writes on conflict), then flips the intent,
+// advances the order status, and appends the events. OrderID==0 skips the order/
+// event writes and only flips the intent; a missing intent row is tolerated.
+func (s *fakeReservationStore) ResolveOrderReservation(
+	_ context.Context, r domain.ReservationResolution,
 ) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	intent, ok := s.intents[approvalID]
-	if !ok {
-		return domain.ErrNotFound
-	}
-	intent.State = state
-	s.intents[approvalID] = intent
-	return nil
-}
-
-func (s *fakeReservationStore) AppendOrderEvent(
-	_ context.Context, ev domain.OrderEvent,
-) (domain.OrderEvent, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.events = append(s.events, ev)
-	return ev, nil
-}
-
-func (s *fakeReservationStore) UpdateOrderStatus(
-	_ context.Context, _ domain.TenantID, id int64, status domain.OrderStatus,
-) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.resolveCalls++
 	if s.status == nil {
 		s.status = make(map[int64]domain.OrderStatus)
 	}
-	s.status[id] = status
+
+	if r.OrderID != 0 && len(r.AllowedFrom) > 0 {
+		cur, known := s.status[r.OrderID]
+		if known {
+			allowed := false
+			for _, a := range r.AllowedFrom {
+				if cur == a {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				// Disallowed current status: conflict, nothing written.
+				return domain.ErrConflict
+			}
+		}
+	}
+
+	// Intent flip (tolerate a missing row, like the real store inside the tx).
+	if intent, ok := s.intents[r.ApprovalID]; ok {
+		intent.State = r.IntentState
+		s.intents[r.ApprovalID] = intent
+	}
+
+	if r.OrderID != 0 {
+		s.status[r.OrderID] = r.OrderStatus
+		s.events = append(s.events, r.Events...)
+	}
 	return nil
 }

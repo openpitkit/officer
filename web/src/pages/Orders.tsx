@@ -28,7 +28,15 @@ import {
   fetchOrderDetail,
   submitExecutionReport,
 } from "@/api/client";
-import type { Balance, CheckResult, Order, OrderEvent, Source, Trade } from "@/api/types";
+import type {
+  Balance,
+  CheckResult,
+  ExecutionBlock,
+  Order,
+  OrderEvent,
+  Source,
+  Trade,
+} from "@/api/types";
 import { useBalances } from "@/api/useBalances";
 import { useOrders } from "@/api/useOrders";
 import { useTrades } from "@/api/useTrades";
@@ -52,8 +60,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { NumberStepper } from "@/components/ui/number-stepper";
 import {
   Select,
   SelectContent,
@@ -304,10 +312,10 @@ function SubmitOrderDialog({
   const [baseAsset, setBaseAsset] = useState(initialValues?.baseAsset ?? "");
   const [quoteAsset, setQuoteAsset] = useState(initialValues?.quoteAsset ?? "");
   const [side, setSide] = useState<string>(initialValues?.side ?? "buy");
-  const [amountKind, setAmountKind] = useState<string>(initialValues?.amountKind ?? "quantity");
+  const [amountKind, setAmountKind] = useState<string>(initialValues?.amountKind ?? "");
   const [amountValue, setAmountValue] = useState(initialValues?.amountValue ?? "");
   const [price, setPrice] = useState(initialValues?.price ?? "");
-  const [submitMode, setSubmitMode] = useState<"immediate" | "hold">("immediate");
+  const [submitMode, setSubmitMode] = useState<"immediate" | "hold" | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [checkState, setCheckState] = useState<CheckState>({ phase: "idle" });
@@ -320,7 +328,7 @@ function SubmitOrderDialog({
     const quoteT = quoteAsset.trim();
     const amountT = amountValue.trim();
     // Skip when required fields are absent.
-    if (!accountT || !baseT || !quoteT || !amountT) {
+    if (!accountT || !baseT || !quoteT || !amountT || !amountKind) {
       // Reset to idle when the form is incomplete; intentional sync.
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setCheckState({ phase: "idle" });
@@ -372,10 +380,10 @@ function SubmitOrderDialog({
       setBaseAsset(initialValues?.baseAsset ?? "");
       setQuoteAsset(initialValues?.quoteAsset ?? "");
       setSide(initialValues?.side ?? "buy");
-      setAmountKind(initialValues?.amountKind ?? "quantity");
+      setAmountKind(initialValues?.amountKind ?? "");
       setAmountValue(initialValues?.amountValue ?? "");
       setPrice(initialValues?.price ?? "");
-      setSubmitMode("immediate");
+      setSubmitMode(null);
       setBusy(false);
       setError(null);
       setCheckState({ phase: "idle" });
@@ -390,10 +398,10 @@ function SubmitOrderDialog({
     setBaseAsset(initialValues?.baseAsset ?? "");
     setQuoteAsset(initialValues?.quoteAsset ?? "");
     setSide(initialValues?.side ?? "buy");
-    setAmountKind(initialValues?.amountKind ?? "quantity");
+    setAmountKind(initialValues?.amountKind ?? "");
     setAmountValue(initialValues?.amountValue ?? "");
     setPrice(initialValues?.price ?? "");
-    setSubmitMode("immediate");
+    setSubmitMode(null);
     setBusy(false);
     setError(null);
     setCheckState({ phase: "idle" });
@@ -409,6 +417,14 @@ function SubmitOrderDialog({
   async function submit() {
     if (!account.trim() || !baseAsset.trim() || !quoteAsset.trim() || !amountValue.trim()) {
       setError(t("addOrder.dialog.validationError"));
+      return;
+    }
+    if (!amountKind) {
+      setError(t("addOrder.dialog.amountKindRequired"));
+      return;
+    }
+    if (submitMode === null) {
+      setError(t("addOrder.dialog.submitModeRequired"));
       return;
     }
     setBusy(true);
@@ -439,6 +455,16 @@ function SubmitOrderDialog({
       setBusy(false);
     }
   }
+
+  // Every required choice must be made before the order can be submitted; the
+  // button stays disabled until then so nothing slips through without a mode.
+  const canSubmit =
+    account.trim() !== "" &&
+    baseAsset.trim() !== "" &&
+    quoteAsset.trim() !== "" &&
+    amountValue.trim() !== "" &&
+    amountKind !== "" &&
+    submitMode !== null;
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) handleClose(); }}>
@@ -486,39 +512,48 @@ function SubmitOrderDialog({
               />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="so-side">{t("addOrder.dialog.side")}</Label>
-              <Select value={side} onValueChange={setSide} disabled={busy}>
-                <SelectTrigger id="so-side" className="h-9 text-sm">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="buy">{t("addOrder.dialog.sideOptions.buy")}</SelectItem>
-                  <SelectItem value="sell">{t("addOrder.dialog.sideOptions.sell")}</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="so-kind">{t("addOrder.dialog.amountKind")}</Label>
-              <Select value={amountKind} onValueChange={setAmountKind} disabled={busy}>
-                <SelectTrigger id="so-kind" className="h-9 text-sm">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="quantity">{t("addOrder.dialog.amountKindOptions.quantity")}</SelectItem>
-                  <SelectItem value="volume">{t("addOrder.dialog.amountKindOptions.volume")}</SelectItem>
-                </SelectContent>
-              </Select>
+          <div className="space-y-1.5">
+            <Label id="so-side-label">{t("addOrder.dialog.side")}</Label>
+            <div
+              role="radiogroup"
+              aria-labelledby="so-side-label"
+              className="grid grid-cols-2 gap-2"
+            >
+              {(["buy", "sell"] as const).map((value) => {
+                const selected = side === value;
+                const selectedClass =
+                  value === "buy"
+                    ? "border-[var(--buy)] bg-[var(--buy-dim)] text-[var(--buy)]"
+                    : "border-[var(--sell)] bg-[var(--sell-dim)] text-[var(--sell)]";
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    onClick={() => setSide(value)}
+                    disabled={busy}
+                    className={[
+                      "h-9 rounded-card border px-3 text-sm font-semibold transition-colors",
+                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                      selected
+                        ? selectedClass
+                        : "border-border bg-surface-2 text-muted-lt hover:bg-surface-hover hover:text-text",
+                    ].join(" ")}
+                  >
+                    {t(`addOrder.dialog.sideOptions.${value}`)}
+                  </button>
+                );
+              })}
             </div>
           </div>
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-3">
               <Label id="so-mode-label">{t("addOrder.dialog.submitMode")}</Label>
               <a
-                href="/api/openapi.yaml"
+                href="/docs"
                 target="_blank"
-                rel="noreferrer"
+                rel="noopener noreferrer"
                 className="inline-flex items-center gap-1 text-[0.6875rem] font-medium text-muted-lt underline-offset-2 hover:text-accent hover:underline"
               >
                 {t("addOrder.dialog.openApi")}
@@ -563,27 +598,56 @@ function SubmitOrderDialog({
               })}
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="so-amount">{t("addOrder.dialog.amount")}</Label>
-              <Input
+          <div className="space-y-1.5">
+            <Label htmlFor="so-amount">{t("addOrder.dialog.amount")}</Label>
+            <div className="flex gap-2">
+              <div
+                role="radiogroup"
+                aria-label={t("addOrder.dialog.amountKind")}
+                className="flex shrink-0 gap-1"
+              >
+                {(["quantity", "volume"] as const).map((value) => {
+                  const selected = amountKind === value;
+                  return (
+                    <button
+                      key={value}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      onClick={() => setAmountKind(value)}
+                      disabled={busy}
+                      className={[
+                        "h-9 rounded-card border px-2.5 text-xs font-medium transition-colors",
+                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                        selected
+                          ? "border-accent bg-accent-dim text-text"
+                          : "border-border bg-surface-2 text-muted-lt hover:bg-surface-hover hover:text-text",
+                      ].join(" ")}
+                    >
+                      {t(`addOrder.dialog.amountKindOptions.${value}`)}
+                    </button>
+                  );
+                })}
+              </div>
+              <NumberStepper
                 id="so-amount"
                 value={amountValue}
-                onChange={(e) => setAmountValue(e.target.value)}
+                onChange={setAmountValue}
                 placeholder={t("addOrder.dialog.amountPlaceholder")}
                 disabled={busy}
+                className="flex-1"
               />
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="so-price">{t("addOrder.dialog.limitPrice")}</Label>
-              <Input
-                id="so-price"
-                value={price}
-                onChange={(e) => setPrice(e.target.value)}
-                placeholder={t("addOrder.dialog.limitPricePlaceholder")}
-                disabled={busy}
-              />
-            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="so-price">{t("addOrder.dialog.limitPrice")}</Label>
+            <NumberStepper
+              id="so-price"
+              value={price}
+              onChange={setPrice}
+              placeholder={t("addOrder.dialog.limitPricePlaceholder")}
+              disabled={busy}
+            />
           </div>
 
           <CheckPreview state={checkState} />
@@ -596,7 +660,7 @@ function SubmitOrderDialog({
             <Button variant="outline" size="sm" onClick={handleClose} disabled={busy}>
               {tc("actions.cancel")}
             </Button>
-            <Button size="sm" onClick={submit} disabled={busy}>
+            <Button size="sm" onClick={submit} disabled={busy || !canSubmit}>
               {busy ? t("addOrder.dialog.submitBusy") : t("addOrder.dialog.submit")}
             </Button>
           </DialogFooter>
@@ -647,6 +711,7 @@ function ExecReportDialog({ orderId, onClose, onSubmitted, initialValues }: Exec
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  const [blocks, setBlocks] = useState<ExecutionBlock[]>([]);
 
   // Reseed from initialValues whenever the dialog opens (clone path).
   useEffect(() => {
@@ -659,6 +724,7 @@ function ExecReportDialog({ orderId, onClose, onSubmitted, initialValues }: Exec
       setBusy(false);
       setError(null);
       setDone(false);
+      setBlocks([]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orderId]);
@@ -671,6 +737,7 @@ function ExecReportDialog({ orderId, onClose, onSubmitted, initialValues }: Exec
     setBusy(false);
     setError(null);
     setDone(false);
+    setBlocks([]);
   }
 
   function handleClose() {
@@ -702,7 +769,8 @@ function ExecReportDialog({ orderId, onClose, onSubmitted, initialValues }: Exec
       if (lockPrice.trim()) {
         body.lockPrice = lockPrice.trim();
       }
-      await submitExecutionReport(orderId, body);
+      const result = await submitExecutionReport(orderId, body);
+      setBlocks(result.blocks);
       setDone(true);
       onSubmitted();
     } catch (err) {
@@ -725,6 +793,18 @@ function ExecReportDialog({ orderId, onClose, onSubmitted, initialValues }: Exec
         {done ? (
           <div className="space-y-3">
             <p className="text-xs text-[var(--ok)]">{t("execReport.dialog.accepted")}</p>
+            {blocks.length > 0 && (
+              <div className="space-y-1 rounded-card border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-xs">
+                {blocks.map((block, i) => (
+                  <div key={i} className="text-[var(--danger)]">
+                    <span className="font-medium">
+                      {t("execReport.dialog.accountBlocked", { account: block.account })}
+                    </span>{" "}
+                    {block.reason || block.code}
+                  </div>
+                ))}
+              </div>
+            )}
             <DialogFooter>
               <Button size="sm" onClick={handleClose}>{t("execReport.dialog.done")}</Button>
             </DialogFooter>
@@ -734,20 +814,20 @@ function ExecReportDialog({ orderId, onClose, onSubmitted, initialValues }: Exec
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label htmlFor="er-qty">{t("execReport.dialog.fillQty")}</Label>
-                <Input
+                <NumberStepper
                   id="er-qty"
                   value={quantity}
-                  onChange={(e) => setQuantity(e.target.value)}
+                  onChange={setQuantity}
                   placeholder={t("execReport.dialog.fillQtyPlaceholder")}
                   disabled={busy}
                 />
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="er-price">{t("execReport.dialog.fillPrice")}</Label>
-                <Input
+                <NumberStepper
                   id="er-price"
                   value={price}
-                  onChange={(e) => setPrice(e.target.value)}
+                  onChange={setPrice}
                   placeholder={t("execReport.dialog.fillPricePlaceholder")}
                   disabled={busy}
                 />
@@ -755,10 +835,10 @@ function ExecReportDialog({ orderId, onClose, onSubmitted, initialValues }: Exec
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="er-lock">{t("execReport.dialog.lockPrice")}</Label>
-              <Input
+              <NumberStepper
                 id="er-lock"
                 value={lockPrice}
-                onChange={(e) => setLockPrice(e.target.value)}
+                onChange={setLockPrice}
                 placeholder={t("execReport.dialog.lockPricePlaceholder")}
                 disabled={busy}
               />
@@ -811,6 +891,24 @@ type DetailState =
   | { phase: "error"; message: string }
   | { phase: "ready"; order: Order; events: OrderEvent[]; trades: Trade[] };
 
+function accountBlockReason(ev: OrderEvent): string | null {
+  if (ev.rejectScope !== "account") {
+    return null;
+  }
+  const reason = ev.rejectReason || ev.rejectCode;
+  if (!reason) {
+    return null;
+  }
+  const details: string[] = [];
+  if (ev.rejectCode) {
+    details.push(`code=${ev.rejectCode}`);
+  }
+  if (ev.rejectDetails) {
+    details.push(ev.rejectDetails);
+  }
+  return details.length > 0 ? `${reason} [${details.join(", ")}]` : reason;
+}
+
 function OrderDetailDialog({ orderId, onClose, onExecReport, onCloneOrder, onCloneExecReport, successBanner }: OrderDetailDialogProps) {
   const { t } = useTranslation("orders");
   const { t: tc } = useTranslation();
@@ -827,9 +925,10 @@ function OrderDetailDialog({ orderId, onClose, onExecReport, onCloneOrder, onClo
     const controller = new AbortController();
     fetchOrderDetail(orderId, controller.signal)
       .then(({ order, events, trades }) => {
-        if (!controller.signal.aborted) {
-          setState({ phase: "ready", order, events, trades });
+        if (controller.signal.aborted) {
+          return;
         }
+        setState({ phase: "ready", order, events, trades });
       })
       .catch((err: unknown) => {
         if (!controller.signal.aborted) {
@@ -863,17 +962,21 @@ function OrderDetailDialog({ orderId, onClose, onExecReport, onCloneOrder, onClo
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>{t("detail.dialog.title", { orderId })}</DialogTitle>
-          {state.phase === "ready" && (
-            <DialogDescription>
-              {instrument(state.order.baseAsset, state.order.quoteAsset)}
-              {" · "}
-              <span className="capitalize">{state.order.side}</span>
-              {" · "}
-              {amountLabel(state.order.amountKind, state.order.amountValue)}
-              {" · "}
-              {priceLabel(state.order.price)}
-            </DialogDescription>
-          )}
+          <DialogDescription>
+            {state.phase === "ready" ? (
+              <>
+                {instrument(state.order.baseAsset, state.order.quoteAsset)}
+                {" · "}
+                <span className="capitalize">{state.order.side}</span>
+                {" · "}
+                {amountLabel(state.order.amountKind, state.order.amountValue)}
+                {" · "}
+                {priceLabel(state.order.price)}
+              </>
+            ) : (
+              t("detail.dialog.loading")
+            )}
+          </DialogDescription>
         </DialogHeader>
 
         {successBanner && (
@@ -941,11 +1044,13 @@ function OrderDetailDialog({ orderId, onClose, onExecReport, onCloneOrder, onClo
                 <p className="text-xs text-muted-lt">{t("detail.dialog.timeline.empty")}</p>
               ) : (
                 <ol className="space-y-2">
-                  {state.events.map((ev) => (
-                    <li
-                      key={ev.id}
-                      className="flex gap-3 rounded-card border border-border bg-surface-2 p-2.5 text-xs"
-                    >
+                  {state.events.map((ev) => {
+                    const blockReason = accountBlockReason(ev);
+                    return (
+                      <li
+                        key={ev.id}
+                        className="flex gap-3 rounded-card border border-border bg-surface-2 p-2.5 text-xs"
+                      >
                       <div className="w-32 shrink-0">
                         <div className="nums text-muted-lt">{formatDateTime(ev.at)}</div>
                       </div>
@@ -972,30 +1077,87 @@ function OrderDetailDialog({ orderId, onClose, onExecReport, onCloneOrder, onClo
                           </span>
                         )}
                         {/* Reject payload */}
-                        {ev.rejectCode !== undefined && (
+                        {blockReason === null &&
+                          ev.rejectCode !== undefined && (
                           <span className="text-[var(--danger)]">
                             {t("detail.dialog.timeline.rejectCode", { code: ev.rejectCode })}
                           </span>
                         )}
-                        {ev.rejectScope !== undefined && (
+                        {blockReason === null &&
+                          ev.rejectScope !== undefined && (
                           <span className="text-muted-lt">
                             {t("detail.dialog.timeline.rejectScope", { scope: ev.rejectScope })}
                           </span>
                         )}
-                        {ev.rejectPolicy !== undefined && (
+                        {blockReason === null &&
+                          ev.rejectPolicy !== undefined && (
                           <span className="text-muted-lt">
                             {t("detail.dialog.timeline.rejectPolicy", { policy: ev.rejectPolicy })}
                           </span>
                         )}
-                        {ev.rejectReason !== undefined && (
+                        {blockReason === null &&
+                          ev.rejectReason !== undefined && (
                           <span className="text-muted-lt">{ev.rejectReason}</span>
                         )}
-                        {ev.rejectDetails !== undefined && (
+                        {blockReason === null &&
+                          ev.rejectDetails !== undefined && (
                           <span className="text-muted-lt">{ev.rejectDetails}</span>
                         )}
+                        {blockReason !== null && (
+                          <div className="w-full rounded-card border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-[var(--danger)]">
+                            <span className="font-medium">
+                              {t("detail.dialog.accountBlocked", {
+                                account: state.order.account,
+                              })}
+                            </span>
+                            <> {blockReason}</>
+                          </div>
+                        )}
                       </div>
-                    </li>
-                  ))}
+                      {/* Re-issue the engine action this event recorded:
+                          a submission clones the order, a fill clones the report. */}
+                      {ev.type === "submitted" && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="shrink-0 self-start"
+                          aria-label={t("clone.orderAriaLabel", { orderId })}
+                          onClick={() => {
+                            onCloneOrder({
+                              account: state.order.account,
+                              baseAsset: state.order.baseAsset,
+                              quoteAsset: state.order.quoteAsset,
+                              side: state.order.side,
+                              amountKind: state.order.amountKind,
+                              amountValue: state.order.amountValue,
+                              price: state.order.price === "0" ? "" : state.order.price,
+                            });
+                            onClose();
+                          }}
+                        >
+                          <Copy className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                      {ev.type === "fill" && ev.fillQuantity !== undefined && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="shrink-0 self-start"
+                          aria-label={t("clone.execReportEventAriaLabel", { orderId })}
+                          onClick={() =>
+                            onCloneExecReport(orderId, {
+                              quantity: ev.fillQuantity ?? "",
+                              price: ev.fillPrice ?? "",
+                              lockPrice: ev.fillLockPrice ?? "",
+                            })
+                          }
+                        >
+                          <Copy className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                      </li>
+                    );
+                  })}
                 </ol>
               )}
             </div>
@@ -1498,12 +1660,33 @@ export function Orders() {
   const activeLoad = tab === "orders" ? ordersResult : tradesResult;
   const activeReload = tab === "orders" ? ordersResult.reload : tradesResult.reload;
 
+  // When the active tab is filtered to a single account, opening "Add order"
+  // pre-fills that account; with no account filter, the form opens blank.
+  const activeAccountFilter = (tab === "orders" ? orderAccount : tradeAccount).trim();
+
+  function openAddOrder() {
+    setSubmitInitialValues(
+      activeAccountFilter
+        ? {
+            account: activeAccountFilter,
+            baseAsset: "",
+            quoteAsset: "",
+            side: "buy",
+            amountKind: "quantity",
+            amountValue: "",
+            price: "",
+          }
+        : undefined,
+    );
+    setSubmitOpen(true);
+  }
+
   return (
     <Page
       title={t("title")}
       actions={
         <div className="flex items-center gap-2">
-          <Button size="sm" onClick={() => { setSubmitInitialValues(undefined); setSubmitOpen(true); }}>
+          <Button size="sm" onClick={openAddOrder}>
             <Plus className="h-3.5 w-3.5" />
             {t("addOrder.button")}
           </Button>
@@ -1576,7 +1759,7 @@ export function Orders() {
                 title={t("empty.orders.title")}
                 hint={t("empty.orders.hint")}
                 action={
-                  <Button size="sm" onClick={() => { setSubmitInitialValues(undefined); setSubmitOpen(true); }}>
+                  <Button size="sm" onClick={openAddOrder}>
                     <Plus className="h-3.5 w-3.5" />
                     {t("addOrder.button")}
                   </Button>

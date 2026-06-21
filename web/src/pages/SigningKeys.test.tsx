@@ -44,6 +44,15 @@ beforeAll(() => {
 });
 
 vi.mock("@/api/useSigningKeys");
+// The page chrome renders PendingRestartBanner, which polls market data on
+// mount. Stub it to a settled, no-restart state so its async update does not
+// fire outside act() in tests that render synchronously.
+vi.mock("@/api/useMarketData", () => ({
+  useMarketData: () => ({
+    load: { state: "ready", data: { restartRequired: false }, error: null },
+    reload: () => {},
+  }),
+}));
 vi.mock("@/api/client", async () => {
   const actual = await vi.importActual<typeof import("@/api/client")>("@/api/client");
   return {

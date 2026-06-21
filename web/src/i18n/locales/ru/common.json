@@ -11,7 +11,9 @@
     "copy": "Копировать",
     "copied": "Скопировано",
     "close": "Закрыть",
-    "dismissError": "Скрыть ошибку"
+    "dismissError": "Скрыть ошибку",
+    "increment": "Увеличить",
+    "decrement": "Уменьшить"
   },
   "value": {
     "none": "—",
@@ -43,12 +45,78 @@
     "product": "Продукт",
     "copyrightLabel": "Копирайт",
     "copyright": "Copyright The Pit Project Owners. All rights reserved.",
+    "openWelcome": "Открыть стартовый гид",
     "links": {
-      "website": "Сайт Officer",
+      "website": "Сайт Pit Officer",
       "issues": "Issue tracker",
       "discussions": "GitHub discussions",
       "openpit": "Сайт OpenPit"
     }
+  },
+  "welcome": {
+    "badgeLocal": "локальный сервис",
+    "title": "Добро пожаловать в Pit Officer",
+    "description": "Настройте контур контроля явно. Приложение ничего не торгует и никуда не подключается, пока вы не выберете источник и сценарий работы.",
+    "sections": {
+      "product": "Что это за приложение",
+      "uses": "Как его использовать",
+      "preTrade": "Настройка pre-trade",
+      "marketData": "Рыночные данные",
+      "optional": "Когда контроль не нужен"
+    },
+    "product": {
+      "copy": "Pit Officer - операторская панель для риск-контроля. В одном локальном сервисе живут счета, балансы, политики, источники рыночных данных, аудит, REST-доступ, MCP-команды и ключи подписи."
+    },
+    "useCases": {
+      "dropCopy": {
+        "title": "Регистратор drop-copy",
+        "copy": "Записывает ордера, исполнения, состояние счетов и аудит после исполнения, не блокируя внешний venue."
+      },
+      "preTrade": {
+        "title": "Разрешающий pre-trade gate",
+        "copy": "Разрешает или отклоняет ордера до отправки наружу, сначала применяя балансы счетов и policy barriers."
+      },
+      "surfaces": {
+        "title": "REST, MCP и FIX",
+        "copy": "Работает из панели, REST-клиентов, MCP-агентов и FIX-oriented сценариев по мере их включения."
+      },
+      "operations": {
+        "title": "Операторский ledger",
+        "copy": "Показывает позиции, удержанные средства, breaches, изменения политик, approvals, логи и состояние сервиса."
+      }
+    },
+    "preTrade": {
+      "copy": "Для разрешающего или запрещающего pre-trade контроля создайте счета, назначьте им позиции или cash balances, затем определите policy barriers. Если контроль buying power не нужен, счета и балансы можно не создавать."
+    },
+    "marketData": {
+      "copy": "Market-заявки, locked prices, кросс-валютная экспозиция и realized PnL требуют источник рыночных данных. Можно подключить live-провайдера позже или сразу поставить статический BYO preset."
+    },
+    "optional": {
+      "copy": "Сценарий чистого регистратора или аудита может стартовать без счетов, балансов и фидов. Добавляйте контроли только когда Pit должен разрешать или блокировать order path."
+    },
+    "actions": {
+      "demoAccount": "Создать демо-счёт и позиции",
+      "policyPreset": "Добавить стартовые политики",
+      "marketDataPreset": "Поставить FX и crypto static prices",
+      "binancePreset": "Получать FX crypto rates с Binance",
+      "or": "или",
+      "openAccounts": "Открыть счета",
+      "openPolicies": "Открыть политики",
+      "openMarketData": "Открыть рыночные данные",
+      "start": "Начать работу в Pit Officer"
+    },
+    "presets": {
+      "accountNote": "Создано из стартового гида. Перед production замените на реальный идентификатор счёта."
+    },
+    "status": {
+      "applied": "{{label}} применено: обновлено строк - {{count}}.",
+      "failed": "{{label}} не применилось: {{message}}",
+      "partialFailed": "{{label}} применено частично: до сбоя обновлено строк - {{count}}. Причина: {{message}}",
+      "marketDataInstanceMissing": "Сервер не вернул статический источник market data.",
+      "binanceInstanceMissing": "Сервер не вернул источник Binance market data."
+    },
+    "returnHint": "К этому диалогу можно вернуться через диалог «О продукте».",
+    "dontShowAgain": "Больше не показывать"
   },
   "display": {
     "density": {

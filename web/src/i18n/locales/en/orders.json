@@ -82,6 +82,8 @@
       "submitModeImmediateHelp": "The trade already happened: record the fill in Officer now.",
       "submitModeHold": "Reserve and wait",
       "submitModeHoldHelp": "Lock funds and wait for the post-trade report.",
+      "submitModeRequired": "Select a submit mode.",
+      "amountKindRequired": "Select an amount kind.",
       "openApi": "OpenAPI",
       "submitBusy": "Adding…",
       "submit": "Add Order",
@@ -117,6 +119,7 @@
       "submitBusy": "Submitting…",
       "submit": "Submit",
       "accepted": "Execution report accepted.",
+      "accountBlocked": "Account {{account}} blocked:",
       "done": "Done",
       "validationError": "Quantity and price are required."
     }
@@ -125,12 +128,15 @@
   "clone": {
     "orderButton": "Clone",
     "orderAriaLabel": "Clone order #{{orderId}}",
-    "execReportAriaLabel": "Clone execution report for trade #{{tradeId}}"
+    "execReportAriaLabel": "Clone execution report for trade #{{tradeId}}",
+    "execReportEventAriaLabel": "Clone execution report from order #{{orderId}}"
   },
 
   "detail": {
     "dialog": {
       "title": "Order #{{orderId}}",
+      "loading": "Loading order details…",
+      "accountBlocked": "Account {{account}} blocked:",
       "fieldAccount": "Account",
       "fieldStatus": "Status",
       "fieldSource": "Source",

@@ -170,6 +170,23 @@ func toAuditDTO(row domain.AuditRow) auditDTO {
 	}
 }
 
+// auditActionGroupDTO is the wire shape of one audit-action category paired with
+// its actions, in domain canonical order.
+type auditActionGroupDTO struct {
+	Category string   `json:"category"`
+	Actions  []string `json:"actions"`
+}
+
+// auditActionStrings maps a slice of domain.AuditAction onto plain strings,
+// preserving order. The result is always a non-nil slice.
+func auditActionStrings(actions []domain.AuditAction) []string {
+	out := make([]string, 0, len(actions))
+	for _, a := range actions {
+		out = append(out, string(a))
+	}
+	return out
+}
+
 // --- MCP access control -----------------------------------------------------
 
 // mcpCommandDTO is the wire shape of one MCP catalogue command paired with its
@@ -859,6 +876,7 @@ func toCheckResultDTO(r domain.CheckResult) checkResultDTO {
 
 // orderEventDTO is the wire shape of one immutable order lifecycle event. The
 // payload fields are flattened in; only the ones relevant to the type are set.
+// Reject fields can also be present on fill events that caused an account block.
 type orderEventDTO struct {
 	At            time.Time `json:"at"`
 	Type          string    `json:"type"`

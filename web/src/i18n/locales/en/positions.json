@@ -1,7 +1,7 @@
 {
   "title": "Positions",
   "actions": {
-    "adjust": "Adjust",
+    "adjust": "Adjustment",
     "adjustAriaLabel": "Adjust {{account}} {{asset}}",
     "refreshHistoryAriaLabel": "Refresh history"
   },
@@ -20,7 +20,7 @@
       "avgEntryPrice": "Avg entry price",
       "realizedPnl": "Realized PnL",
       "updated": "Updated",
-      "adjust": "Adjust"
+      "adjust": "Adjustment"
     },
     "empty": {
       "title": "No balances",
@@ -37,6 +37,32 @@
     "applyWithLimitsAriaLabel": "Apply adjustment with limits to {{account}} {{asset}}",
     "accountAriaLabel": "New adjustment account",
     "assetAriaLabel": "New adjustment asset"
+  },
+  "panel": {
+    "open": "Adjustment",
+    "openAriaLabel": "Open adjustment panel for {{account}} {{asset}}",
+    "openDraftAriaLabel": "Open new adjustment panel",
+    "title": "Adjustment",
+    "descriptionExisting": "Compare the current position with the intended values before submitting.",
+    "descriptionDraft": "Set the account, asset, intended values, and optional bounds before submitting.",
+    "emptyAccount": "No account",
+    "emptyAsset": "No asset",
+    "boundsOptional": "Optional bounds for the submitted adjustment.",
+    "keepCurrent": "Keep current",
+    "noChange": "No change",
+    "invalidDecimal": "Invalid decimal",
+    "noChangesError": "Enter at least one amount, average price, or bound.",
+    "submit": "Submit adjustment",
+    "saving": "Submitting",
+    "avgPreview": "Current {{current}} → {{result}}",
+    "modeAriaLabel": "{{field}} adjustment mode",
+    "amountAriaLabel": "{{field}} adjustment amount",
+    "columns": {
+      "current": "Current",
+      "intent": "Intent",
+      "amount": "Amount",
+      "result": "Result"
+    }
   },
   "history": {
     "sectionLabel": "Adjustment history",

@@ -515,7 +515,7 @@ export function LimitDialog({
               {t(validation.key, validation.values)}
             </p>
           )}
-          {error && (
+          {error && !confirmOpen && (
             <ErrorBanner message={error} onDismiss={() => setError(null)} />
           )}
         </div>
@@ -547,6 +547,9 @@ export function LimitDialog({
             {t("restartConfirm.description")}
           </AlertDialogDescription>
         </AlertDialogHeader>
+        {error && (
+          <ErrorBanner message={error} onDismiss={() => setError(null)} />
+        )}
         <AlertDialogFooter>
           <AlertDialogCancel disabled={busy}>
             {tc("actions.cancel")}

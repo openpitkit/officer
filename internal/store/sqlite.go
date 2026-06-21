@@ -692,6 +692,73 @@ func (s *sqliteStore) SetMcpAccess(
 	return nil
 }
 
+// --- User settings ----------------------------------------------------------
+
+// GetUserSetting returns the stored value for (userID, key); ok is false when
+// no such row exists.
+func (s *sqliteStore) GetUserSetting(
+	ctx context.Context, userID, key string,
+) (string, bool, error) {
+	var value string
+	err := s.db.QueryRowContext(
+		ctx,
+		`SELECT setting_value FROM user_settings WHERE user_id = ? AND setting_key = ?`,
+		userID, key,
+	).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("store: get user setting: %w", err)
+	}
+	return value, true, nil
+}
+
+// SetUserSetting upserts one per-user key-value setting.
+func (s *sqliteStore) SetUserSetting(
+	ctx context.Context, userID, key, value string,
+) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT OR REPLACE INTO user_settings (user_id, setting_key, setting_value)
+		 VALUES (?, ?, ?)`,
+		userID, key, value,
+	)
+	if err != nil {
+		return fmt.Errorf("store: set user setting: %w", err)
+	}
+	return nil
+}
+
+// ListUserSettings returns every persisted user setting, ordered by user then
+// key for stable backups.
+func (s *sqliteStore) ListUserSettings(
+	ctx context.Context,
+) ([]domain.UserSetting, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT user_id, setting_key, setting_value FROM user_settings
+		 ORDER BY user_id, setting_key`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("store: list user settings: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	settings := make([]domain.UserSetting, 0)
+	for rows.Next() {
+		var setting domain.UserSetting
+		if err := rows.Scan(&setting.UserID, &setting.Key, &setting.Value); err != nil {
+			return nil, fmt.Errorf("store: scan user setting row: %w", err)
+		}
+		settings = append(settings, setting)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: iterate user setting rows: %w", err)
+	}
+	return settings, nil
+}
+
 // --- Market-data instances --------------------------------------------------
 
 // CreateMarketDataInstance persists a new market-data instance.
@@ -2453,18 +2520,6 @@ func scanSigningKeyRow(row *sql.Row, withPrivate bool) (domain.SigningKey, error
 	return buildSigningKey(keyID, alg, privateKey, publicKey, createdAt, active, withPrivate)
 }
 
-// scanSigningKey scans one signing key from a *sql.Rows cursor.
-// withPrivate controls whether PrivateKey is populated in the result.
-func scanSigningKey(rows *sql.Rows, withPrivate bool) (domain.SigningKey, error) {
-	var keyID, alg, createdAt string
-	var privateKey, publicKey []byte
-	var active bool
-	if err := rows.Scan(&keyID, &alg, &privateKey, &publicKey, &createdAt, &active); err != nil {
-		return domain.SigningKey{}, fmt.Errorf("store: scan signing key: %w", err)
-	}
-	return buildSigningKey(keyID, alg, privateKey, publicKey, createdAt, active, withPrivate)
-}
-
 func scanSigningKeyPublic(rows *sql.Rows) (domain.SigningKey, error) {
 	var keyID, alg, createdAt string
 	var publicKey []byte
@@ -2522,6 +2577,35 @@ func (s *sqliteStore) UpsertReservationIntent(
 		return fmt.Errorf("store: upsert reservation intent: %w", err)
 	}
 	return nil
+}
+
+// GetReservationIntent returns the intent for approvalID regardless of state.
+// found=false when no row exists.
+func (s *sqliteStore) GetReservationIntent(
+	ctx context.Context,
+	approvalID string,
+) (domain.ReservationIntent, bool, error) {
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT approval_id, order_id, account, params_json, lock_prices_json, issued_at, expires_at, state
+		 FROM reservation_intents WHERE approval_id = ?`,
+		approvalID,
+	)
+	if err != nil {
+		return domain.ReservationIntent{}, false, fmt.Errorf("store: get reservation intent: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return domain.ReservationIntent{}, false, fmt.Errorf("store: get reservation intent: %w", err)
+		}
+		return domain.ReservationIntent{}, false, nil
+	}
+	intent, err := scanReservationIntent(rows)
+	if err != nil {
+		return domain.ReservationIntent{}, false, err
+	}
+	return intent, true, nil
 }
 
 // ListOpenReservationIntents returns all intents in the 'held' state.
@@ -2603,4 +2687,276 @@ func scanReservationIntent(rows *sql.Rows) (domain.ReservationIntent, error) {
 		LockPricesJSON: lockPricesJSON,
 		State:          domain.ReservationIntentState(state),
 	}, nil
+}
+
+// --- Atomic reservation/settlement ------------------------------------------
+
+// ResolveOrderReservation resolves one reservation in a single transaction:
+// intent flip + status advance + lifecycle events, all-or-nothing. See the
+// store.Store contract for the conflict/NotFound/tolerance rules.
+func (s *sqliteStore) ResolveOrderReservation(
+	ctx context.Context, r domain.ReservationResolution,
+) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: begin resolve_order_reservation: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Flip the intent. A missing intent row is tolerated (in-memory-only hold
+	// left no row); mirror SetReservationIntentState's NotFound tolerance, but
+	// inside the tx - do not error on 0 rows.
+	if _, err := tx.ExecContext(
+		ctx,
+		`UPDATE reservation_intents SET state = ? WHERE approval_id = ?`,
+		string(r.IntentState), r.ApprovalID,
+	); err != nil {
+		return fmt.Errorf("store: resolve intent state: %w", err)
+	}
+
+	// Order id 0 is an in-memory-only hold: nothing to advance or append.
+	if r.OrderID != 0 {
+		if err := guardedOrderStatus(
+			ctx, tx, r.Tenant, r.OrderID, r.OrderStatus, r.AllowedFrom,
+		); err != nil {
+			return err
+		}
+		for _, ev := range r.Events {
+			if err := appendOrderEventTx(ctx, tx, ev); err != nil {
+				return err
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit resolve_order_reservation: %w", err)
+	}
+	return nil
+}
+
+// RecordOrderSettlement persists one fill/settlement in a single transaction:
+// balances -> blocks -> events -> lock_prices -> status. See the store.Store
+// contract for the conflict/NotFound rules. Status is written last so the
+// optional WHERE-guard is the final gate.
+func (s *sqliteStore) RecordOrderSettlement(
+	ctx context.Context, st domain.OrderSettlement,
+) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: begin record_order_settlement: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Per-asset balances: read-modify-write inside the tx so the realized-P&L
+	// accumulate is consistent under the tx snapshot (SQLite serializes writers).
+	for _, bal := range st.Balances {
+		if err := settleBalanceTx(ctx, tx, st.Tenant, st.Account, bal); err != nil {
+			return err
+		}
+	}
+
+	// Mirror engine-applied account blocks (the block UPDATE only; the audit row
+	// stays a post-commit write owned by the caller).
+	for _, blk := range st.Blocks {
+		if _, err := tx.ExecContext(
+			ctx,
+			`UPDATE accounts SET blocked = ?, block_reason = ? WHERE tenant = ? AND id = ?`,
+			true, blk.Reason, st.Tenant.String(), blk.Account.String(),
+		); err != nil {
+			return fmt.Errorf("store: settlement mirror block %q: %w", blk.Account, err)
+		}
+	}
+
+	// Trade row.
+	if st.Trade != nil {
+		if err := createTradeTx(ctx, tx, *st.Trade); err != nil {
+			return err
+		}
+	}
+
+	// Fill event(s).
+	for _, ev := range st.Events {
+		if err := appendOrderEventTx(ctx, tx, ev); err != nil {
+			return err
+		}
+	}
+
+	// Lock-price rewrite: only when explicitly requested (nil-vs-empty matters).
+	if st.SetLockPrices {
+		lockJSON, err := json.Marshal(st.LockPrices)
+		if err != nil {
+			return fmt.Errorf("store: settlement marshal lock_prices: %w", err)
+		}
+		if _, err := tx.ExecContext(
+			ctx,
+			`UPDATE orders SET lock_prices = ? WHERE tenant = ? AND id = ?`,
+			string(lockJSON), st.Tenant.String(), st.OrderID,
+		); err != nil {
+			return fmt.Errorf("store: settlement lock_prices: %w", err)
+		}
+	}
+
+	// Status advance last; guarded only when AllowedFrom is set.
+	if err := guardedOrderStatus(
+		ctx, tx, st.Tenant, st.OrderID, st.OrderStatus, st.AllowedFrom,
+	); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit record_order_settlement: %w", err)
+	}
+	return nil
+}
+
+// guardedOrderStatus advances an order's status inside tx. When allowedFrom is
+// non-empty the UPDATE only matches rows already in one of those statuses; a
+// 0-rows result then means either the order is missing (domain.ErrNotFound) or
+// its current status is disallowed (domain.ErrConflict), distinguished by a
+// follow-up SELECT in the same tx. When allowedFrom is empty the UPDATE is
+// unguarded and 0 rows means a missing order (domain.ErrNotFound).
+func guardedOrderStatus(
+	ctx context.Context,
+	tx *sql.Tx,
+	tenant domain.TenantID,
+	id int64,
+	status domain.OrderStatus,
+	allowedFrom []domain.OrderStatus,
+) error {
+	args := []any{string(status), tenant.String(), id}
+	q := `UPDATE orders SET status = ? WHERE tenant = ? AND id = ?`
+	if len(allowedFrom) > 0 {
+		placeholders := strings.Repeat("?,", len(allowedFrom))
+		placeholders = placeholders[:len(placeholders)-1]
+		q += fmt.Sprintf(` AND status IN (%s)`, placeholders)
+		for _, st := range allowedFrom {
+			args = append(args, string(st))
+		}
+	}
+	res, err := tx.ExecContext(ctx, q, args...)
+	if err != nil {
+		return fmt.Errorf("store: resolve order %d status: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: resolve order %d status rows: %w", id, err)
+	}
+	if n > 0 {
+		return nil
+	}
+	// No row advanced: distinguish missing order from disallowed status.
+	var cur string
+	err = tx.QueryRowContext(
+		ctx,
+		`SELECT status FROM orders WHERE tenant = ? AND id = ?`,
+		tenant.String(), id,
+	).Scan(&cur)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("order %d: %w", id, domain.ErrNotFound)
+	}
+	if err != nil {
+		return fmt.Errorf("store: resolve order %d status probe: %w", id, err)
+	}
+	return fmt.Errorf("store: resolve order %d: status %q: %w", id, cur, domain.ErrConflict)
+}
+
+// appendOrderEventTx inserts one order event inside tx, mirroring
+// AppendOrderEvent's column list and timestamp handling.
+func appendOrderEventTx(ctx context.Context, tx *sql.Tx, ev domain.OrderEvent) error {
+	payloadJSON, err := json.Marshal(ev.Payload)
+	if err != nil {
+		return fmt.Errorf("store: marshal event payload: %w", err)
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO order_events (order_id, at, type, source, principal, payload)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		ev.OrderID, nowStr(),
+		string(ev.Type), string(ev.Source), ev.Principal,
+		string(payloadJSON),
+	); err != nil {
+		return fmt.Errorf("store: append order event: %w", err)
+	}
+	return nil
+}
+
+// createTradeTx inserts one trade inside tx, mirroring CreateTrade's column
+// list and timestamp handling.
+func createTradeTx(ctx context.Context, tx *sql.Tx, t domain.Trade) error {
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO trades
+		 (order_id, tenant, account, at, source, principal,
+		  base_asset, quote_asset, side, quantity, price, lock_price)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		t.OrderID,
+		t.Tenant.String(), t.Account.String(),
+		nowStr(),
+		string(t.Source), t.Principal,
+		t.BaseAsset, t.QuoteAsset,
+		string(t.Side), t.Quantity, t.Price, t.LockPrice,
+	); err != nil {
+		return fmt.Errorf("store: create trade: %w", err)
+	}
+	return nil
+}
+
+// settleBalanceTx applies one per-asset fill outcome inside tx. It reads the
+// prior row (zero-value on absence), accumulates realized P&L by delta, takes
+// available/held/incoming from the outcome's *Result with the prior value
+// carried forward when a result is empty, carries average_entry_price forward
+// (a fill does not restate it), and writes the row back. This is the former
+// node persistFillBalance read-modify-write moved inside the tx so the
+// accumulate cannot lose an update.
+func settleBalanceTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	tenant domain.TenantID,
+	account domain.AccountID,
+	bal domain.BalanceSettlement,
+) error {
+	var prevAvail, prevHeld, prevIncoming, prevRealized, prevAvgPx string
+	err := tx.QueryRowContext(
+		ctx,
+		`SELECT available, held, incoming, realized_pnl, average_entry_price
+		 FROM balances WHERE tenant = ? AND account = ? AND asset = ?`,
+		tenant.String(), account.String(), bal.Asset,
+	).Scan(&prevAvail, &prevHeld, &prevIncoming, &prevRealized, &prevAvgPx)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("store: settle balance %q read: %w", bal.Asset, err)
+	}
+
+	realized, err := domain.AddDecimals(prevRealized, bal.Outcome.RealizedPnlDelta)
+	if err != nil {
+		return fmt.Errorf("store: settle balance %q realized_pnl: %w", bal.Asset, err)
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT OR REPLACE INTO balances
+		 (tenant, account, asset, available, held, incoming, realized_pnl,
+		  average_entry_price, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		tenant.String(),
+		account.String(),
+		bal.Asset,
+		orZero(pick(bal.Outcome.BalanceResult, prevAvail)),
+		orZero(pick(bal.Outcome.HeldResult, prevHeld)),
+		orZero(pick(bal.Outcome.IncomingResult, prevIncoming)),
+		orZero(realized),
+		prevAvgPx,
+		nowStr(),
+	); err != nil {
+		return fmt.Errorf("store: settle balance %q write: %w", bal.Asset, err)
+	}
+	return nil
+}
+
+// pick returns next when it is non-empty, otherwise the carried-forward prev.
+// A fill outcome leaves a field's *Result empty when the fill did not move that
+// field, so the prior stored value is retained.
+func pick(next, prev string) string {
+	if next != "" {
+		return next
+	}
+	return prev
 }

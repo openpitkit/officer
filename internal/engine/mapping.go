@@ -737,6 +737,14 @@ func adjustmentBoundsValues(
 // settlement-asset realized P&L. A field absent in every outcome reports as the
 // empty string (it was not adjusted). The spot-funds policy emits one outcome
 // carrying the single adjusted asset's entry.
+//
+// Load-bearing invariant: the engine emits at most one account-adjustment
+// outcome per asset. This function collapses per-asset entries by last-wins, and
+// balanceOutcomesFromList emits one BalanceOutcome per outcome without merging,
+// so both rely on that engine guarantee. Handling multiple outcomes for the same
+// asset would require reworking the outcome model end to end (summing deltas and
+// reconciling absolutes through the engine adapter and node persistence); that
+// rework is intentionally deferred.
 func outcomeAcceptedFromList(
 	outcomes []accountadjustment.Outcome, asset string,
 ) domain.AdjustmentOutcomeAccepted {
@@ -751,6 +759,8 @@ func outcomeAcceptedFromList(
 	return result
 }
 
+// balanceOutcomesFromList relies on the at-most-one-outcome-per-asset invariant
+// documented on outcomeAcceptedFromList and performs no per-asset dedup.
 func balanceOutcomesFromList(outcomes []accountadjustment.Outcome) []BalanceOutcome {
 	result := make([]BalanceOutcome, 0, len(outcomes))
 	for _, outcome := range outcomes {
