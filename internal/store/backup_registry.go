@@ -87,6 +87,8 @@ var backupCoverageRegistry = []backupTableCoverage{
 			"id", "tenant", "account", "at", "source", "principal",
 			"base_asset", "quote_asset", "side", "amount_kind", "amount_value",
 			"price", "status", "lock_prices",
+			"approval_token", "approval_key_id", "approval_alg",
+			"approval_mode", "approval_issued_at", "approval_expires_at",
 		},
 		ConflictColumns: []string{"id"},
 		Section:         backup.SectionActivityHistory,

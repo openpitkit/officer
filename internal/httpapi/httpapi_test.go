@@ -53,6 +53,7 @@ type fakeService struct {
 	orderDetail    domain.OrderDetail
 	adjustment     domain.AccountAdjustmentRecord
 	submitOrder    domain.Order
+	execReportIn   domain.ExecutionReportInput
 	checkResult    domain.CheckResult
 	overview       backend.Overview
 	serviceInfo    backend.ServiceInfo
@@ -106,6 +107,8 @@ type fakeService struct {
 	noESignSet            bool
 	approvalToken         backend.ApprovalToken
 	submitTokenMode       string
+	confirmForce          bool
+	cancelForce           bool
 	signingErr            error
 }
 
@@ -321,8 +324,9 @@ func (f *fakeService) CheckOrder(_ context.Context, _ domain.OrderProbe) (domain
 	return f.checkResult, f.stateErr
 }
 func (f *fakeService) ApplyExecutionReport(
-	_ context.Context, _ domain.ExecutionReportInput,
+	_ context.Context, in domain.ExecutionReportInput,
 ) (engine.ExecutionReportResult, error) {
+	f.execReportIn = in
 	return engine.ExecutionReportResult{}, f.stateErr
 }
 func (f *fakeService) GetOrder(_ context.Context, _ int64) (domain.OrderDetail, error) {
@@ -373,10 +377,16 @@ func (f *fakeService) SubmitOrderToken(
 	f.submitTokenMode = mode
 	return f.approvalToken, f.signingErr
 }
-func (f *fakeService) ConfirmExecution(_ context.Context, _ int64, _ string) (domain.Order, error) {
+func (f *fakeService) ConfirmExecution(
+	_ context.Context, _ int64, _ string, force bool,
+) (domain.Order, error) {
+	f.confirmForce = force
 	return f.submitOrder, f.signingErr
 }
-func (f *fakeService) CancelOrder(_ context.Context, _ int64, _, _ string) (domain.Order, error) {
+func (f *fakeService) CancelOrder(
+	_ context.Context, _ int64, _, _ string, force bool,
+) (domain.Order, error) {
+	f.cancelForce = force
 	return f.submitOrder, f.signingErr
 }
 
@@ -1350,7 +1360,8 @@ func TestApplyExecutionReport_Created(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := bytes.NewBufferString(`{"quantity":"1","price":"100","final":true}`)
+	body := bytes.NewBufferString(
+		`{"quantity":"1","price":"100","force":true,"final":true}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/orders/9/execution-reports", body))
@@ -1360,6 +1371,9 @@ func TestApplyExecutionReport_Created(t *testing.T) {
 	m := bodyMap(t, rec.Result())
 	if _, ok := m["result"].(map[string]any); !ok {
 		t.Fatalf("want result object, got %v", m["result"])
+	}
+	if !svc.execReportIn.Force {
+		t.Fatal("force was not forwarded to ApplyExecutionReport")
 	}
 }
 

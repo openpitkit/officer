@@ -1423,7 +1423,156 @@ func (s *Service) SubmitOrder(
 	if err != nil {
 		return domain.Order{}, fmt.Errorf("backend: route order: %w", err)
 	}
-	return n.SubmitOrder(ctx, keyFor(o.Account), o, auth.CallerFromContext(ctx))
+	key := keyFor(o.Account)
+	order, err := n.SubmitOrder(ctx, key, o, auth.CallerFromContext(ctx))
+	if err != nil {
+		return domain.Order{}, err
+	}
+	// Sign the engine's pre-trade verdict (accept or reject) and stamp the signed
+	// envelope onto the recorded order. Signing is additive: money/commit behaviour
+	// is unchanged, and the recorded order is already durable, so a signing or
+	// persistence failure never rolls the order back — the envelope is best-effort.
+	if s.signer != nil {
+		order = s.signOrderVerdict(ctx, n, key, order)
+	}
+	return order, nil
+}
+
+// signOrderVerdict signs the recorded order's pre-trade verdict and persists the
+// envelope (write-once) plus an approval_issued audit. It returns the order with
+// its Approval* fields populated on success; on any signing or persistence error
+// it swallows the error and returns the order unchanged (the order is already
+// durable — the envelope is best-effort and must not fail the submit).
+func (s *Service) signOrderVerdict(
+	ctx context.Context, n node.Node, key node.Key, order domain.Order,
+) domain.Order {
+	signed, err := s.buildOrderEnvelope(ctx, n, order)
+	if err != nil {
+		return order
+	}
+	if err := n.PersistOrderApproval(ctx, key, order.ID, signed); err != nil {
+		return order
+	}
+	order.ApprovalToken = signed.Token
+	order.ApprovalKeyID = signed.KeyID
+	order.ApprovalAlg = signed.Alg
+	order.ApprovalMode = signed.Mode
+	order.ApprovalIssuedAt = signed.IssuedAt
+	order.ApprovalExpiresAt = signed.ExpiresAt
+	_ = s.auditApproval(ctx, n, key, domain.AuditActionApprovalIssued,
+		fmt.Sprintf("issue approval order %d verdict=%s", order.ID, orderVerdict(order.Status)))
+	return order
+}
+
+// buildOrderEnvelope assembles, signs, and returns the approval envelope for the
+// recorded order's verdict. Accept binds the order's settlement lock price as the
+// estimate; reject reads the first pre-trade reject from the order's events and
+// binds it onto the payload. The payload mode is always "immediate": the decision
+// is final now (this is the commit-only panel path, not a held approval).
+func (s *Service) buildOrderEnvelope(
+	ctx context.Context, n node.Node, order domain.Order,
+) (domain.OrderApproval, error) {
+	approvalID, err := newNonce()
+	if err != nil {
+		return domain.OrderApproval{}, err
+	}
+	nonce, err := newNonce()
+	if err != nil {
+		return domain.OrderApproval{}, err
+	}
+	issuedAt := time.Now().UTC()
+	expiresAt := issuedAt.Add(defaultTokenTTL)
+
+	var payload domain.ApprovalPayload
+	if order.Status == domain.OrderStatusRejected {
+		reject, rerr := s.firstOrderReject(ctx, n, order.ID)
+		if rerr != nil {
+			return domain.OrderApproval{}, rerr
+		}
+		payload = buildRejectApprovalPayload(
+			order, SubmitModeImmediate, approvalID, reject, issuedAt, expiresAt, nonce)
+	} else {
+		// Accept: the order's settlement lock price is the estimate. The engine
+		// captured a single lock price for the spot order; LockPrices[0] is that
+		// settlement decimal string.
+		estimate := ""
+		if len(order.LockPrices) > 0 {
+			estimate = order.LockPrices[0]
+		}
+		// Estimate source mirrors the order type buildApprovalPayload derives: a
+		// priced order locks at its limit, a market order at the mark.
+		estimateSource := domain.EstimateSourceLimit
+		if order.Price == "" {
+			estimateSource = domain.EstimateSourceMarketMark
+		}
+		payload = buildApprovalPayload(
+			order, SubmitModeImmediate, approvalID, estimate,
+			estimateSource, issuedAt, expiresAt, nonce)
+	}
+
+	off, err := s.signer.NoESign(ctx)
+	if err != nil {
+		return domain.OrderApproval{}, err
+	}
+	var token, keyID string
+	if off {
+		payload.Alg = signing.AlgNone
+		token, err = signing.SignNone(payload)
+		if err != nil {
+			return domain.OrderApproval{}, err
+		}
+	} else {
+		token, err = s.signer.Sign(payload)
+		if err != nil {
+			return domain.OrderApproval{}, err
+		}
+		keys, kerr := s.signer.ListKeys(ctx)
+		if kerr != nil {
+			return domain.OrderApproval{}, kerr
+		}
+		keyID = activeKeyID(keys)
+		payload.Alg = signing.AlgEd25519
+	}
+	return domain.OrderApproval{
+		Token:     token,
+		KeyID:     keyID,
+		Alg:       payload.Alg,
+		Mode:      payload.Mode,
+		IssuedAt:  payload.IssuedAt,
+		ExpiresAt: payload.ExpiresAt,
+	}, nil
+}
+
+// firstOrderReject reads the order's pre_trade_rejected event and returns the
+// first engine reject it carries. The order returned by node.SubmitOrder does not
+// carry the rejects, so they are read back from the persisted event stream.
+func (s *Service) firstOrderReject(
+	ctx context.Context, n node.Node, orderID int64,
+) (domain.OrderReject, error) {
+	detail, err := n.GetOrder(ctx, domain.DefaultTenant, orderID)
+	if err != nil {
+		return domain.OrderReject{}, err
+	}
+	for _, e := range detail.Events {
+		if e.Type == domain.OrderEventPreTradeRejected {
+			return domain.OrderReject{
+				Code:    e.Payload.RejectCode,
+				Scope:   e.Payload.RejectScope,
+				Policy:  e.Payload.RejectPolicy,
+				Reason:  e.Payload.RejectReason,
+				Details: e.Payload.RejectDetails,
+			}, nil
+		}
+	}
+	return domain.OrderReject{}, nil
+}
+
+// orderVerdict maps a recorded order status onto the signed verdict label.
+func orderVerdict(status domain.OrderStatus) string {
+	if status == domain.OrderStatusRejected {
+		return "reject"
+	}
+	return "accept"
 }
 
 // CheckOrder validates the probe's account and assets, routes to the owning
@@ -1468,6 +1617,20 @@ func (s *Service) ApplyExecutionReport(
 	n, err := s.router.Route(keyFor(in.Account))
 	if err != nil {
 		return engine.ExecutionReportResult{}, fmt.Errorf("backend: route report: %w", err)
+	}
+	if !in.Force {
+		// This second read is the authoritative status check, independent of the
+		// HTTP handler's payload fetch, and returns friendly terminal_order
+		// instead of the store's generic ErrConflict.
+		detail, err := n.GetOrder(ctx, domain.DefaultTenant, in.OrderID)
+		if err != nil {
+			return engine.ExecutionReportResult{}, err
+		}
+		if domain.OrderStatusTerminal(detail.Order.Status) {
+			return engine.ExecutionReportResult{}, fmt.Errorf(
+				"backend: order %d is in terminal status %q: %w",
+				in.OrderID, detail.Order.Status, domain.ErrTerminalOrder)
+		}
 	}
 	return n.ApplyExecutionReport(ctx, keyFor(in.Account), in, auth.CallerFromContext(ctx))
 }

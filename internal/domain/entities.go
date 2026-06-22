@@ -393,6 +393,20 @@ func OrderStatusesEligibleForFill() []OrderStatus {
 	}
 }
 
+// OrderStatusTerminal reports whether the status hits Officer's remaining
+// terminal-order safety net, which callers can bypass with force.
+func OrderStatusTerminal(status OrderStatus) bool {
+	switch status {
+	case OrderStatusRejected,
+		OrderStatusRolledBack,
+		OrderStatusFilled,
+		OrderStatusCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
 // Order is the Officer-side record of an order that passed through the system,
 // including rejected ones. All monetary/size values are exact decimal strings.
 type Order struct {
@@ -423,8 +437,39 @@ type Order struct {
 	AmountKind OrderAmountKind
 	// Status is the current lifecycle state.
 	Status OrderStatus
+	// ApprovalToken is the exact base64url-encoded signed approval envelope
+	// stamped onto the order's pre-trade verdict; empty when no envelope was
+	// issued (signer not wired, or a pre-migration row).
+	ApprovalToken string `json:"approvalToken"`
+	// ApprovalKeyID is the signing key id that produced ApprovalToken; empty
+	// under eSign-off or when unsigned.
+	ApprovalKeyID string `json:"approvalKeyId"`
+	// ApprovalAlg is the envelope signing algorithm ("ed25519" | "none"); empty
+	// when no envelope was issued.
+	ApprovalAlg string `json:"approvalAlg"`
+	// ApprovalMode is the payload mode the envelope carries ("immediate").
+	ApprovalMode string `json:"approvalMode"`
+	// ApprovalIssuedAt is the envelope issue time (RFC3339Nano UTC); empty when
+	// no envelope was issued.
+	ApprovalIssuedAt string `json:"approvalIssuedAt"`
+	// ApprovalExpiresAt is the envelope expiry (RFC3339Nano UTC); empty when no
+	// envelope was issued.
+	ApprovalExpiresAt string `json:"approvalExpiresAt"`
 	// ID is the store-assigned order identifier (string of int64).
 	ID int64
+}
+
+// OrderApproval is the persisted signed approval envelope stamped onto an
+// order's pre-trade verdict (accept or reject). Token is the exact base64url
+// envelope bytes issued by the signer; the remaining fields are the envelope
+// metadata carried for read-back without decoding the token.
+type OrderApproval struct {
+	Token     string
+	KeyID     string
+	Alg       string
+	Mode      string
+	IssuedAt  string
+	ExpiresAt string
 }
 
 // OrderEventType classifies a single event in an order's lifecycle.
@@ -438,6 +483,11 @@ const (
 	OrderEventReservationRolledBack OrderEventType = "reservation_rolled_back"
 	OrderEventFill                  OrderEventType = "fill"
 	OrderEventCancelled             OrderEventType = "cancelled"
+	// OrderEventApprovalIssued records that a signed approval envelope was
+	// stamped onto the order's pre-trade verdict (accept or reject). It reuses the
+	// approval_issued audit string for consistency across the audit and event
+	// streams.
+	OrderEventApprovalIssued OrderEventType = "approval_issued"
 )
 
 // OrderEventPayload is the JSON-marshalled variant payload for an order event.
@@ -551,6 +601,8 @@ type ExecutionReportInput struct {
 	// trade reference it (order_events/trades are NOT NULL FKs to orders), and
 	// the order's status is reflected from the fill.
 	OrderID int64
+	// Force bypasses Officer's safety checks and routes straight to the engine.
+	Force bool
 	// Final reports whether this fill closes the order: true reflects status
 	// filled, false reflects partially_filled.
 	Final bool
@@ -680,7 +732,7 @@ type ApprovalPayload struct {
 	AccountGroupID string `json:"accountGroupId,omitempty"`
 
 	// Verdict / estimate.
-	Verdict        string `json:"verdict"` // always "accept"
+	Verdict        string `json:"verdict"` // "accept" | "reject"
 	PolicySummary  string `json:"policySummary"`
 	EstimatePrice  string `json:"estimatePrice"`  // decimal string = engine lock price
 	EstimateSource string `json:"estimateSource"` // "limit" | "market_mark"
@@ -693,6 +745,14 @@ type ApprovalPayload struct {
 	// Key binding.
 	KeyID string `json:"keyId"`
 	Alg   string `json:"alg"` // "ed25519" | "none"
+
+	// Reject verdict — appended at the very end with omitempty so an accept
+	// envelope (Verdict="accept", these empty) stays byte-identical to the
+	// pre-reject canonical wire shape. Populated only when Verdict="reject".
+	RejectCode   string `json:"rejectCode,omitempty"`
+	RejectScope  string `json:"rejectScope,omitempty"`
+	RejectPolicy string `json:"rejectPolicy,omitempty"`
+	RejectReason string `json:"rejectReason,omitempty"`
 }
 
 // --- Reservation intents ----------------------------------------------------

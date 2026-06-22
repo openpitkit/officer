@@ -60,30 +60,32 @@ type fakeNode struct {
 	mdInstruments    map[string][]domain.MarketDataInstrument
 	mdQuotes         []domain.MarketDataQuote
 
-	backupArchive   backup.Archive
-	backupScope     backup.Scope
-	backupCaller    domain.Caller
-	backupErr       error
-	restoreOpts     backup.RestoreOptions
-	restoreSummary  backup.RestoreSummary
-	restoreSink     marketdata.Sink
-	restoreErr      error
-	resetCaller     domain.Caller
-	resetSink       marketdata.Sink
-	resetErr        error
-	orders          map[int64]domain.Order
-	nextOrderID     int64
-	holdResult      *engine.HoldResult
-	immediateResult *engine.ImmediateResult
-	submitErr       error
-	confirmErr      error
-	cancelErr       error
-	getOrderErr     error
-	reconciled      int
-	holdCalls       []string
-	confirmCalls    []string
-	cancelCalls     []string
-	auditCalls      []store.AuditEntry
+	backupArchive        backup.Archive
+	backupScope          backup.Scope
+	backupCaller         domain.Caller
+	backupErr            error
+	restoreOpts          backup.RestoreOptions
+	restoreSummary       backup.RestoreSummary
+	restoreSink          marketdata.Sink
+	restoreErr           error
+	resetCaller          domain.Caller
+	resetSink            marketdata.Sink
+	resetErr             error
+	orders               map[int64]domain.Order
+	nextOrderID          int64
+	holdResult           *engine.HoldResult
+	immediateResult      *engine.ImmediateResult
+	execReports          []domain.ExecutionReportInput
+	submitErr            error
+	confirmErr           error
+	cancelErr            error
+	getOrderErr          error
+	reconciled           int
+	holdCalls            []string
+	confirmCalls         []string
+	cancelCalls          []string
+	persistApprovalCalls []int64
+	auditCalls           []store.AuditEntry
 
 	getAccountErr error
 
@@ -330,7 +332,8 @@ func (n *fakeNode) SubmitImmediate(
 }
 
 func (n *fakeNode) ConfirmHeld(
-	_ context.Context, _ domain.TenantID, orderID int64, approvalID string, _ domain.Caller,
+	_ context.Context, _ domain.TenantID, orderID int64,
+	approvalID string, _ domain.Caller, _ bool,
 ) (domain.Order, error) {
 	n.confirmCalls = append(n.confirmCalls, approvalID)
 	if n.confirmErr != nil {
@@ -343,7 +346,8 @@ func (n *fakeNode) ConfirmHeld(
 }
 
 func (n *fakeNode) CancelHeld(
-	_ context.Context, _ domain.TenantID, orderID int64, approvalID string, _ domain.Caller,
+	_ context.Context, _ domain.TenantID, orderID int64,
+	approvalID string, _ domain.Caller, _ bool,
 ) (domain.Order, error) {
 	n.cancelCalls = append(n.cancelCalls, approvalID)
 	if n.cancelErr != nil {
@@ -360,8 +364,9 @@ func (n *fakeNode) ReconcileOrphans(context.Context) (int, error) {
 }
 
 func (n *fakeNode) ApplyExecutionReport(
-	context.Context, node.Key, domain.ExecutionReportInput, domain.Caller,
+	_ context.Context, _ node.Key, in domain.ExecutionReportInput, _ domain.Caller,
 ) (engine.ExecutionReportResult, error) {
+	n.execReports = append(n.execReports, in)
 	return engine.ExecutionReportResult{}, nil
 }
 
@@ -377,6 +382,22 @@ func (n *fakeNode) GetOrder(
 		return domain.OrderDetail{}, domain.ErrNotFound
 	}
 	return domain.OrderDetail{Order: order}, nil
+}
+
+func (n *fakeNode) PersistOrderApproval(
+	_ context.Context, _ node.Key, orderID int64, env domain.OrderApproval,
+) error {
+	n.persistApprovalCalls = append(n.persistApprovalCalls, orderID)
+	if order, ok := n.orders[orderID]; ok && order.ApprovalToken == "" {
+		order.ApprovalToken = env.Token
+		order.ApprovalKeyID = env.KeyID
+		order.ApprovalAlg = env.Alg
+		order.ApprovalMode = env.Mode
+		order.ApprovalIssuedAt = env.IssuedAt
+		order.ApprovalExpiresAt = env.ExpiresAt
+		n.orders[orderID] = order
+	}
+	return nil
 }
 
 func (n *fakeNode) ListOrders(
@@ -692,6 +713,45 @@ func newTestServiceWithMarketDataRuntime(
 func newTestServiceWithSigner(signer backend.SigningService) (*backend.Service, *fakeNode) {
 	fn := &fakeNode{orders: make(map[int64]domain.Order)}
 	return backend.New(&fakeRouter{node: fn}, nil, signer), fn
+}
+
+func TestService_ApplyExecutionReportTerminalRequiresForce(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService()
+	fn.orders[4] = domain.Order{
+		ID:         4,
+		Account:    "acc-1",
+		BaseAsset:  "AAPL",
+		QuoteAsset: "USD",
+		Side:       domain.OrderSideBuy,
+		Status:     domain.OrderStatusFilled,
+	}
+	report := domain.ExecutionReportInput{
+		OrderID:      4,
+		Account:      "acc-1",
+		BaseAsset:    "AAPL",
+		QuoteAsset:   "USD",
+		Side:         domain.OrderSideBuy,
+		FillQuantity: "1",
+		FillPrice:    "100",
+		Final:        true,
+	}
+
+	_, err := svc.ApplyExecutionReport(context.Background(), report)
+	if !errors.Is(err, domain.ErrTerminalOrder) {
+		t.Fatalf("ApplyExecutionReport without force = %v, want terminal order", err)
+	}
+	if len(fn.execReports) != 0 {
+		t.Fatalf("terminal preflight reached node: %+v", fn.execReports)
+	}
+
+	report.Force = true
+	if _, err := svc.ApplyExecutionReport(context.Background(), report); err != nil {
+		t.Fatalf("ApplyExecutionReport with force: %v", err)
+	}
+	if len(fn.execReports) != 1 || !fn.execReports[0].Force {
+		t.Fatalf("forced report not forwarded: %+v", fn.execReports)
+	}
 }
 
 func TestService_ExportBackupRoutesScopeCallerAndFilename(t *testing.T) {
@@ -1854,7 +1914,7 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 				tok := mustHold(t, svc)
 				reset()
 				if _, err := svc.ConfirmExecution(
-					context.Background(), tok.OrderID, tok.Token,
+					context.Background(), tok.OrderID, tok.Token, false,
 				); err != nil {
 					t.Fatalf("ConfirmExecution: %v", err)
 				}
@@ -1867,14 +1927,14 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 				t.Helper()
 				tok := mustHold(t, svc)
 				if _, err := svc.ConfirmExecution(
-					context.Background(), tok.OrderID, tok.Token,
+					context.Background(), tok.OrderID, tok.Token, false,
 				); err != nil {
 					t.Fatalf("first confirm: %v", err)
 				}
 				reset()
 				fn.confirmErr = domain.ErrConflict
 				if _, err := svc.ConfirmExecution(
-					context.Background(), tok.OrderID, tok.Token,
+					context.Background(), tok.OrderID, tok.Token, false,
 				); err != nil {
 					t.Fatalf("idempotent confirm: %v", err)
 				}
@@ -1887,16 +1947,16 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 				t.Helper()
 				tok := mustHold(t, svc)
 				if _, err := svc.CancelOrder(
-					context.Background(), tok.OrderID, tok.Token, "operator",
+					context.Background(), tok.OrderID, tok.Token, "operator", false,
 				); err != nil {
 					t.Fatalf("cancel setup: %v", err)
 				}
 				reset()
 				fn.confirmErr = domain.ErrConflict
 				if _, err := svc.ConfirmExecution(
-					context.Background(), tok.OrderID, tok.Token,
-				); !errors.Is(err, domain.ErrConflict) {
-					t.Fatalf("confirm after cancel = %v, want conflict", err)
+					context.Background(), tok.OrderID, tok.Token, false,
+				); !errors.Is(err, domain.ErrTerminalOrder) {
+					t.Fatalf("confirm after cancel = %v, want terminal order", err)
 				}
 				return 1
 			},
@@ -1908,7 +1968,7 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 				tok := mustHold(t, svc)
 				reset()
 				if _, err := svc.CancelOrder(
-					context.Background(), tok.OrderID, tok.Token, "stale price",
+					context.Background(), tok.OrderID, tok.Token, "stale price", false,
 				); err != nil {
 					t.Fatalf("CancelOrder: %v", err)
 				}
@@ -1921,13 +1981,13 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 				t.Helper()
 				tok := mustHold(t, svc)
 				if _, err := svc.ConfirmExecution(
-					context.Background(), tok.OrderID, tok.Token,
+					context.Background(), tok.OrderID, tok.Token, false,
 				); err != nil {
 					t.Fatalf("confirm setup: %v", err)
 				}
 				reset()
 				if _, err := svc.CancelOrder(
-					context.Background(), tok.OrderID, tok.Token, "too late",
+					context.Background(), tok.OrderID, tok.Token, "too late", false,
 				); !errors.Is(err, domain.ErrConflict) {
 					t.Fatalf("cancel after confirm = %v, want conflict", err)
 				}

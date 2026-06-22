@@ -310,6 +310,18 @@ type Store interface {
 		prices []string,
 	) error
 
+	// UpdateOrderApproval stamps the signed approval envelope onto the identified
+	// order, write-once: it sets the envelope columns only when the order carries
+	// none yet (approval_token = ''), so a retry or a later write never clobbers an
+	// already-issued envelope. A no-op match (already stamped, or missing row) is
+	// not an error: the envelope is best-effort and the order is the durable trail.
+	UpdateOrderApproval(
+		ctx context.Context,
+		tenant domain.TenantID,
+		id int64,
+		env domain.OrderApproval,
+	) error
+
 	// RecordOrderSettlement persists one fill/settlement atomically in a single
 	// transaction: per-asset balances (realized P&L delta-accumulated inside the
 	// tx), the optional trade, the engine-applied account blocks, the optional

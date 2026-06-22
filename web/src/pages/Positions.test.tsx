@@ -144,14 +144,22 @@ describe("Positions adjustment panel", () => {
     const scope = within(panel);
 
     expect(scope.getAllByText("500").length).toBeGreaterThan(0);
-    expect(scope.getAllByRole("button", { name: /increase/i }).length).toBeGreaterThan(0);
-    expect(scope.getAllByRole("button", { name: /decrease/i }).length).toBeGreaterThan(0);
+    expect(
+      scope.getAllByRole("button", { name: /increase/i }).length,
+    ).toBeGreaterThan(0);
+    expect(
+      scope.getAllByRole("button", { name: /decrease/i }).length,
+    ).toBeGreaterThan(0);
+    expect(scope.queryByLabelText("Lower")).not.toBeInTheDocument();
 
     await user.type(scope.getByLabelText("Available adjustment amount"), "600");
     await user.type(scope.getByLabelText("Held adjustment amount"), "10");
     await user.clear(scope.getByLabelText("Incoming adjustment amount"));
     await user.type(scope.getByLabelText("Incoming adjustment amount"), "-50");
     await user.type(scope.getByLabelText("Average entry price (optional)"), "142.50");
+    await user.click(
+      scope.getByRole("button", { name: /bounds \(optional\)/i }),
+    );
     await user.type(scope.getAllByLabelText("Lower")[0], "-100");
     await user.type(scope.getAllByLabelText("Upper")[0], "1000");
 

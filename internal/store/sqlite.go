@@ -1758,13 +1758,18 @@ func (s *sqliteStore) CreateOrder(
 		return o, fmt.Errorf("store: marshal lock_prices: %w", err)
 	}
 	at := nowStr()
+	// The approval_* envelope columns are left at their '' defaults here: the
+	// signed envelope is stamped later (write-once) by UpdateOrderApproval, after
+	// the pre-trade verdict is known and signed.
 	res, err := s.db.ExecContext(
 		ctx,
 		`INSERT INTO orders
 		 (tenant, account, at, source, principal,
 		  base_asset, quote_asset, side, amount_kind, amount_value,
-		  price, status, lock_prices)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  price, status, lock_prices,
+		  approval_token, approval_key_id, approval_alg,
+		  approval_mode, approval_issued_at, approval_expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '', '', '', '')`,
 		o.Tenant.String(), o.Account.String(), at,
 		string(o.Source), o.Principal,
 		o.BaseAsset, o.QuoteAsset,
@@ -1840,6 +1845,33 @@ func (s *sqliteStore) SetOrderLockPrices(
 	return nil
 }
 
+// UpdateOrderApproval stamps the signed approval envelope onto an order,
+// write-once: the UPDATE matches only rows with an empty approval_token, so
+// an already-stamped order is left untouched and a retry is idempotent. A
+// no-op match (already stamped, or missing row) is not an error: the envelope is
+// best-effort and the order remains the durable trail. Mirrors UpdateOrderStatus
+// in addressing the row by (tenant, id).
+func (s *sqliteStore) UpdateOrderApproval(
+	ctx context.Context,
+	tenant domain.TenantID,
+	id int64,
+	env domain.OrderApproval,
+) error {
+	if _, err := s.db.ExecContext(
+		ctx,
+		`UPDATE orders SET
+		   approval_token = ?, approval_key_id = ?, approval_alg = ?,
+		   approval_mode = ?, approval_issued_at = ?, approval_expires_at = ?
+		 WHERE tenant = ? AND id = ? AND approval_token = ''`,
+		env.Token, env.KeyID, env.Alg,
+		env.Mode, env.IssuedAt, env.ExpiresAt,
+		tenant.String(), id,
+	); err != nil {
+		return fmt.Errorf("store: update order approval: %w", err)
+	}
+	return nil
+}
+
 // GetOrder returns the order with its events and trades.
 func (s *sqliteStore) GetOrder(
 	ctx context.Context,
@@ -1850,7 +1882,9 @@ func (s *sqliteStore) GetOrder(
 		ctx,
 		`SELECT id, tenant, account, at, source, principal,
 		        base_asset, quote_asset, side, amount_kind, amount_value,
-		        price, status, lock_prices
+		        price, status, lock_prices,
+		        approval_token, approval_key_id, approval_alg,
+		        approval_mode, approval_issued_at, approval_expires_at
 		 FROM orders WHERE tenant = ? AND id = ?`,
 		tenant.String(), id,
 	)
@@ -1886,7 +1920,9 @@ func (s *sqliteStore) ListOrders(
 	}
 	q := `SELECT id, tenant, account, at, source, principal,
 	             base_asset, quote_asset, side, amount_kind, amount_value,
-	             price, status, lock_prices
+	             price, status, lock_prices,
+	             approval_token, approval_key_id, approval_alg,
+	             approval_mode, approval_issued_at, approval_expires_at
 	      FROM orders WHERE tenant = ?`
 	args := []any{tenant.String()}
 	if account != "" {
@@ -1958,16 +1994,18 @@ func scanOrder(rows *sql.Rows) (domain.Order, error) {
 		ten, acc, at, src, principal                                string
 		baseAsset, quoteAsset, side, amtKind, amtVal, price, status string
 		lockJSON                                                    string
+		apv                                                         orderApprovalCols
 	)
 	if err := rows.Scan(
 		&id, &ten, &acc, &at, &src, &principal,
 		&baseAsset, &quoteAsset, &side, &amtKind, &amtVal,
 		&price, &status, &lockJSON,
+		&apv.token, &apv.keyID, &apv.alg, &apv.mode, &apv.issuedAt, &apv.expiresAt,
 	); err != nil {
 		return domain.Order{}, fmt.Errorf("store: scan order: %w", err)
 	}
 	return buildOrder(id, ten, acc, at, src, principal,
-		baseAsset, quoteAsset, side, amtKind, amtVal, price, status, lockJSON)
+		baseAsset, quoteAsset, side, amtKind, amtVal, price, status, lockJSON, apv)
 }
 
 func scanOrderRow(row *sql.Row) (domain.Order, error) {
@@ -1976,22 +2014,31 @@ func scanOrderRow(row *sql.Row) (domain.Order, error) {
 		ten, acc, at, src, principal                                string
 		baseAsset, quoteAsset, side, amtKind, amtVal, price, status string
 		lockJSON                                                    string
+		apv                                                         orderApprovalCols
 	)
 	if err := row.Scan(
 		&id, &ten, &acc, &at, &src, &principal,
 		&baseAsset, &quoteAsset, &side, &amtKind, &amtVal,
 		&price, &status, &lockJSON,
+		&apv.token, &apv.keyID, &apv.alg, &apv.mode, &apv.issuedAt, &apv.expiresAt,
 	); err != nil {
 		return domain.Order{}, err
 	}
 	return buildOrder(id, ten, acc, at, src, principal,
-		baseAsset, quoteAsset, side, amtKind, amtVal, price, status, lockJSON)
+		baseAsset, quoteAsset, side, amtKind, amtVal, price, status, lockJSON, apv)
+}
+
+// orderApprovalCols carries the six approval_* envelope columns scanned from an
+// order row. They are empty for orders that carry no signed envelope.
+type orderApprovalCols struct {
+	token, keyID, alg, mode, issuedAt, expiresAt string
 }
 
 func buildOrder(
 	id int64,
 	ten, acc, at, src, principal,
 	baseAsset, quoteAsset, side, amtKind, amtVal, price, status, lockJSON string,
+	apv orderApprovalCols,
 ) (domain.Order, error) {
 	parsedAt, err := time.Parse(time.RFC3339Nano, at)
 	if err != nil {
@@ -2002,20 +2049,26 @@ func buildOrder(
 		return domain.Order{}, fmt.Errorf("store: unmarshal lock_prices: %w", err)
 	}
 	return domain.Order{
-		ID:          id,
-		Tenant:      domain.TenantID(ten),
-		Account:     domain.AccountID(acc),
-		At:          parsedAt,
-		Source:      domain.Source(src),
-		Principal:   principal,
-		BaseAsset:   baseAsset,
-		QuoteAsset:  quoteAsset,
-		Side:        domain.OrderSide(side),
-		AmountKind:  domain.OrderAmountKind(amtKind),
-		AmountValue: amtVal,
-		Price:       price,
-		Status:      domain.OrderStatus(status),
-		LockPrices:  lockPrices,
+		ID:                id,
+		Tenant:            domain.TenantID(ten),
+		Account:           domain.AccountID(acc),
+		At:                parsedAt,
+		Source:            domain.Source(src),
+		Principal:         principal,
+		BaseAsset:         baseAsset,
+		QuoteAsset:        quoteAsset,
+		Side:              domain.OrderSide(side),
+		AmountKind:        domain.OrderAmountKind(amtKind),
+		AmountValue:       amtVal,
+		Price:             price,
+		Status:            domain.OrderStatus(status),
+		LockPrices:        lockPrices,
+		ApprovalToken:     apv.token,
+		ApprovalKeyID:     apv.keyID,
+		ApprovalAlg:       apv.alg,
+		ApprovalMode:      apv.mode,
+		ApprovalIssuedAt:  apv.issuedAt,
+		ApprovalExpiresAt: apv.expiresAt,
 	}, nil
 }
 

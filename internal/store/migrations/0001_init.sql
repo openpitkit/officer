@@ -15,11 +15,14 @@
 --
 -- Please see https://openpit.dev and the OWNERS file for details.
 
--- Initial control-plane schema, created from scratch in one migration:
--- accounts, account groups, risk-limit barriers, spot-funds balances,
--- account-adjustment history, the trading ledger (orders, order events,
--- trades), and the append-only audit trail. The schema_migrations bookkeeping
--- table (version + applied_at) is created by the Go migration harness, not here.
+-- Initial control-plane schema, created from scratch in a single migration:
+-- accounts and account groups, risk-limit barriers, spot-funds balances,
+-- account-adjustment history, the trading ledger (orders with their signed
+-- approval envelope, order events, trades), the append-only audit trail,
+-- market-data connector config (instances, instruments with manual price,
+-- quotes), MCP access control, user settings, Ed25519 signing keys and config,
+-- and reservation intents. The schema_migrations bookkeeping table
+-- (version + applied_at) is created by the Go migration harness, not here.
 
 CREATE TABLE accounts (
     tenant       TEXT    NOT NULL,
@@ -118,7 +121,17 @@ CREATE TABLE orders (
     amount_value TEXT    NOT NULL,
     price        TEXT    NOT NULL DEFAULT '',
     status       TEXT    NOT NULL,
-    lock_prices  TEXT    NOT NULL DEFAULT '[]'
+    lock_prices  TEXT    NOT NULL DEFAULT '[]',
+    -- Signed approval envelope stamped on the order when its pre-trade verdict
+    -- (accept or reject) is signed. approval_token is the exact base64url
+    -- envelope (ASCII, never re-marshalled); the rest is metadata for read-back.
+    -- Empty when no envelope was persisted (no signer configured).
+    approval_token       TEXT NOT NULL DEFAULT '',
+    approval_key_id      TEXT NOT NULL DEFAULT '',
+    approval_alg         TEXT NOT NULL DEFAULT '',
+    approval_mode        TEXT NOT NULL DEFAULT '',
+    approval_issued_at   TEXT NOT NULL DEFAULT '',
+    approval_expires_at  TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX idx_orders_account ON orders (tenant, account, at DESC, id DESC);
@@ -197,6 +210,11 @@ CREATE TABLE market_data_instruments (
     base_asset      TEXT    NOT NULL,
     quote_asset     TEXT    NOT NULL,
     enabled         INTEGER NOT NULL DEFAULT 0,
+    -- Operator-set manual mark for bring-your-own (manual) instruments; pushed
+    -- into the engine as a single quote at startup and on upsert. Exact TEXT
+    -- decimal, never REAL; empty means no manual price. Streaming providers
+    -- ignore it.
+    manual_price    TEXT    NOT NULL DEFAULT '',
     PRIMARY KEY (instance_id, external_symbol)
 );
 
@@ -237,3 +255,35 @@ CREATE TABLE user_settings (
     setting_value TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (user_id, setting_key)
 );
+
+-- Ed25519 signing keypairs. Private key is stored as a plaintext BLOB (at-rest
+-- encryption is deferred). active=1 means this key signs new approvals; inactive
+-- keys are retained so connectors can verify in-flight envelopes.
+CREATE TABLE signing_keys (
+    key_id      TEXT    PRIMARY KEY,
+    alg         TEXT    NOT NULL,
+    private_key BLOB    NOT NULL,
+    public_key  BLOB    NOT NULL,
+    created_at  TEXT    NOT NULL,
+    active      INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_signing_keys_active ON signing_keys (active);
+
+-- Global signing configuration. Currently a single key: no_esign ("0"/"1").
+CREATE TABLE signing_config ( key TEXT PRIMARY KEY, value TEXT NOT NULL );
+INSERT OR IGNORE INTO signing_config (key, value) VALUES ('no_esign', '0');
+
+-- Reservation intent rows survive process restart. On boot any non-terminal
+-- (state='held') row is orphaned and rolled back; the native reservation handle
+-- does not survive restart. params_json and lock_prices_json are compact JSON.
+CREATE TABLE reservation_intents (
+    approval_id      TEXT PRIMARY KEY,
+    order_id         INTEGER NOT NULL,
+    account          TEXT NOT NULL,
+    params_json      TEXT NOT NULL,
+    lock_prices_json TEXT NOT NULL,
+    issued_at        TEXT NOT NULL,
+    expires_at       TEXT NOT NULL,
+    state            TEXT NOT NULL DEFAULT 'held'
+);
+CREATE INDEX idx_reservation_intents_state ON reservation_intents (state);

@@ -778,6 +778,29 @@ func TestApplyExecutionReport_ServiceError(t *testing.T) {
 	}
 }
 
+func TestApplyExecutionReport_TerminalOrder(t *testing.T) {
+	svc := &fakeService{stateErr: domain.ErrTerminalOrder}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"quantity":"1","price":"100","final":true}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/api/v1/orders/9/execution-reports", body))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "terminal_order" {
+		t.Fatalf("want code=terminal_order, got %v", errObj["code"])
+	}
+	if errObj["message"] != domain.ErrTerminalOrder.Error() {
+		t.Fatalf("want terminal message, got %v", errObj["message"])
+	}
+}
+
 func TestApplyExecutionReport_NotFound(t *testing.T) {
 	// A missing parent order surfaces as 404 from the GetOrder lookup.
 	svc := &fakeService{stateErr: domain.ErrNotFound}

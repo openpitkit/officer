@@ -103,6 +103,7 @@ paths:
               required: [scope]
               properties:
                 scope:
+                  description: Backup scope that selects sections and entities to export.
                   $ref: "#/components/schemas/BackupScope"
                 zip:
                   type: boolean
@@ -142,6 +143,7 @@ paths:
               required: [scope, mode]
               properties:
                 archive:
+                  description: Inline JSON backup archive to restore.
                   $ref: "#/components/schemas/BackupArchive"
                 archiveFile:
                   type: string
@@ -151,8 +153,10 @@ paths:
                   type: string
                   description: Original uploaded filename for diagnostics.
                 scope:
+                  description: Restore scope that selects sections and entities to apply.
                   $ref: "#/components/schemas/BackupScope"
                 mode:
+                  description: Restore conflict handling mode.
                   $ref: "#/components/schemas/BackupRestoreMode"
       responses:
         "200":
@@ -412,6 +416,7 @@ paths:
               properties:
                 notes:
                   type: string
+                  description: Free-form operator notes stored on the account.
       responses:
         "200":
           description: Account after update.
@@ -532,6 +537,7 @@ paths:
                   description: Group identifier.
                 notes:
                   type: string
+                  description: Free-form operator notes stored on the group.
       responses:
         "201":
           description: Group created.
@@ -610,6 +616,7 @@ paths:
               properties:
                 notes:
                   type: string
+                  description: Free-form operator notes stored on the group.
       responses:
         "200":
           description: Group after update.
@@ -819,10 +826,13 @@ paths:
               properties:
                 account:
                   type: string
+                  description: Account identifier that owns the order.
                 baseAsset:
                   type: string
+                  description: Asset being bought or sold.
                 quoteAsset:
                   type: string
+                  description: Asset used for pricing and settlement.
                 side:
                   type: string
                   description: "`buy` or `sell`."
@@ -875,10 +885,13 @@ paths:
               properties:
                 account:
                   type: string
+                  description: Account identifier to evaluate without mutation.
                 baseAsset:
                   type: string
+                  description: Asset being bought or sold.
                 quoteAsset:
                   type: string
+                  description: Asset used for pricing and settlement.
                 side:
                   type: string
                   description: "`buy` or `sell`."
@@ -971,6 +984,12 @@ paths:
                 lockPrice:
                   type: string
                   description: Lock price used for fund reservation - exact decimal string.
+                force:
+                  type: boolean
+                  description: >
+                    Bypass Officer's safety checks and route straight to the
+                    engine. When omitted or false, a terminal order returns 409
+                    terminal_order.
                 final:
                   type: boolean
                   description: Whether this is the last fill for the order.
@@ -1096,19 +1115,23 @@ paths:
         - name: policy
           in: query
           required: true
+          description: Risk policy name whose barrier should be deleted.
           schema:
             type: string
         - name: scope
           in: query
           required: true
+          description: Policy scope discriminator of the barrier to delete.
           schema:
             type: string
         - name: account
           in: query
+          description: Account-scoped barrier owner, or omit for a global barrier.
           schema:
             type: string
         - name: asset
           in: query
+          description: Asset-scoped barrier asset, or omit when not asset-scoped.
           schema:
             type: string
       responses:
@@ -1434,6 +1457,7 @@ paths:
               properties:
                 enabled:
                   type: boolean
+                  description: Whether this market-data source instance is enabled.
       responses:
         "200":
           description: Enabled flag persisted.
@@ -1660,8 +1684,10 @@ paths:
               properties:
                 externalSymbol:
                   type: string
+                  description: Provider-side instrument symbol to toggle.
                 enabled:
                   type: boolean
+                  description: Whether this instrument mapping is enabled.
       responses:
         "200":
           description: Enabled flag persisted.
@@ -1889,8 +1915,8 @@ components:
               type: string
               description: >
                 Machine-readable code: `validation`, `not_found`, `conflict`,
-                `precondition`, `engine_restarting`, `not_implemented`, or
-                `internal`.
+                `terminal_order`, `precondition`, `engine_restarting`,
+                `not_implemented`, or `internal`.
               example: not_found
             message:
               type: string
@@ -1919,12 +1945,15 @@ components:
       properties:
         all:
           type: boolean
+          description: Select every entity in the selector's category.
         accounts:
           type: array
+          description: Account identifiers to include.
           items:
             type: string
         groups:
           type: array
+          description: Group identifiers to include.
           items:
             type: string
 
@@ -1936,11 +1965,14 @@ components:
           description: Include every section when true.
         sections:
           type: array
+          description: Backup sections to include when `all` is false.
           items:
             $ref: "#/components/schemas/BackupSection"
         accounts:
+          description: Account and group selector for account-owned data.
           $ref: "#/components/schemas/BackupEntitySelector"
         positions:
+          description: Account and group selector for position-related data.
           $ref: "#/components/schemas/BackupEntitySelector"
 
     BackupArchive:
@@ -1948,8 +1980,10 @@ components:
       required: [manifest, data]
       properties:
         manifest:
+          description: Archive metadata used to validate and route restore.
           $ref: "#/components/schemas/BackupManifest"
         data:
+          description: Serialized backup payload grouped by table family.
           $ref: "#/components/schemas/BackupData"
 
     BackupManifest:
@@ -1958,6 +1992,7 @@ components:
       properties:
         format:
           type: string
+          description: Backup archive format identifier.
           enum: [openpit.officer.backup]
         formatVersion:
           type: integer
@@ -1968,10 +2003,13 @@ components:
         createdAt:
           type: string
           format: date-time
+          description: Time the backup archive was created.
         source:
           type: string
+          description: Source service or deployment that produced the archive.
         sections:
           type: array
+          description: Backup sections present in the archive data.
           items:
             $ref: "#/components/schemas/BackupSection"
 
@@ -1981,54 +2019,67 @@ components:
       properties:
         mcpAccess:
           type: object
+          description: Persisted MCP command enablement overrides.
           additionalProperties:
             type: boolean
         accounts:
           type: array
+          description: Serialized account rows.
           items:
             type: object
         groups:
           type: array
+          description: Serialized account group rows.
           items:
             type: object
         limits:
           type: array
+          description: Serialized risk limit rows.
           items:
             type: object
         balances:
           type: array
+          description: Serialized balance snapshot rows.
           items:
             type: object
         adjustments:
           type: array
+          description: Serialized balance adjustment rows.
           items:
             type: object
         orders:
           type: array
+          description: Serialized order rows.
           items:
             type: object
         orderEvents:
           type: array
+          description: Serialized order event rows.
           items:
             type: object
         trades:
           type: array
+          description: Serialized trade rows.
           items:
             type: object
         audit:
           type: array
+          description: Serialized audit log rows.
           items:
             type: object
         marketDataInstances:
           type: array
+          description: Serialized market-data source instance rows.
           items:
             type: object
         marketDataInstruments:
           type: array
+          description: Serialized market-data instrument mapping rows.
           items:
             type: object
         marketDataQuotes:
           type: array
+          description: Serialized latest market-data quote rows.
           items:
             type: object
 
@@ -2142,6 +2193,7 @@ components:
           type: string
         asset:
           type: string
+          description: Balance asset symbol.
         available:
           type: string
           description: Exact decimal string.
@@ -2187,20 +2239,27 @@ components:
       properties:
         asset:
           type: string
+          description: Asset whose spot-funds balances are adjusted.
         averageEntryPrice:
           type: string
           description: Exact decimal string.
         balance:
+          description: Requested available-balance change or target.
           $ref: "#/components/schemas/AdjustmentAmount"
         balanceBounds:
+          description: Optional guardrail for the resulting available balance.
           $ref: "#/components/schemas/AdjustmentBounds"
         held:
+          description: Requested held-balance change or target.
           $ref: "#/components/schemas/AdjustmentAmount"
         heldBounds:
+          description: Optional guardrail for the resulting held balance.
           $ref: "#/components/schemas/AdjustmentBounds"
         incoming:
+          description: Requested incoming-balance change or target.
           $ref: "#/components/schemas/AdjustmentAmount"
         incomingBounds:
+          description: Optional guardrail for the resulting incoming balance.
           $ref: "#/components/schemas/AdjustmentBounds"
 
     AdjustmentAccepted:
@@ -2717,6 +2776,7 @@ components:
           description: Opaque provider-specific connection settings JSON.
         enabled:
           type: boolean
+          description: Whether the source instance should start enabled.
 
     MarketDataInstanceSettingsUpdate:
       type: object
@@ -2814,8 +2874,10 @@ components:
           description: Provider-side instrument symbol.
         baseAsset:
           type: string
+          description: Asset being bought or sold for this mapping.
         quoteAsset:
           type: string
+          description: Asset used for pricing and settlement for this mapping.
         manualPrice:
           type: string
           description: >
@@ -2823,6 +2885,7 @@ components:
             use an empty string "" for instruments or providers without a manual mark.
         enabled:
           type: boolean
+          description: Whether this instrument mapping is enabled.
         updateIntervalMs:
           type: integer
           description: >
@@ -2834,6 +2897,7 @@ components:
             Whether the latest quote is missing or older than `freshnessSeconds`.
             False when the source or instrument is disabled.
         quote:
+          description: Latest quote for this mapping on read responses.
           $ref: "#/components/schemas/MarketDataQuote"
 
     MarketDataSymbolVerificationRequest:
@@ -2867,16 +2931,22 @@ components:
       properties:
         query:
           type: string
+          description: Symbol text to search for on the provider.
         secType:
           type: string
+          description: Optional provider security type filter, such as `STK` or `CASH`.
         exchange:
           type: string
+          description: Optional exchange or venue filter.
         currency:
           type: string
+          description: Optional settlement currency filter.
         lastTradeDateOrContractMonth:
           type: string
+          description: Optional futures or options expiry in provider format.
         right:
           type: string
+          description: Optional option right filter, such as `C` or `P`.
         strike:
           type: string
           description: Exact decimal string.

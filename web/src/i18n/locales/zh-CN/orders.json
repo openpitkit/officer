@@ -116,6 +116,7 @@
       "lockPrice": "锁定价格（可选）",
       "lockPricePlaceholder": "可选",
       "finalFill": "最终成交（关闭订单）",
+      "force": "强制：绕过 Officer 检查，直接发送至引擎",
       "submitBusy": "提交中…",
       "submit": "提交",
       "accepted": "执行报告已接受。",
@@ -157,6 +158,25 @@
         "sectionTitle": "该订单的成交记录",
         "empty": "暂无成交记录。提交执行报告以创建成交。",
         "submitExecReport": "提交执行报告"
+      },
+      "signedPayload": {
+        "sectionTitle": "已签名的 API 载荷",
+        "dialogDescription": "此订单记录的批准信封、规范令牌和签名验证。",
+        "openButton": "查看签名",
+        "tokenLabel": "信封令牌（base64url）",
+        "decodedLabel": "已解码的批准内容",
+        "verifyButton": "验证签名",
+        "verifying": "验证中…",
+        "badgeVerified": "VERIFIED",
+        "badgeInvalid": "INVALID",
+        "badgeUnverified": "UNVERIFIED",
+        "badgeUnsigned": "UNSIGNED",
+        "unsignedNote": "无加密签名 — 签名服务已配置，但未设置密钥。",
+        "verifiedNote": "已通过当前活跃公钥验证签名。",
+        "invalidNote": "签名不匹配。信封可能已被篡改。",
+        "verifyError": "验证失败。活跃密钥可能与签名密钥不符，或浏览器不支持 Ed25519。",
+        "issuedAt": "签发时间：",
+        "expiresAt": "到期时间："
       }
     }
   }

@@ -534,6 +534,29 @@ export interface SigningKeyResult {
   publicKey: string;
 }
 
+// --- Order approval / signed pre-trade verdict ---
+
+/** Signing algorithm used in the approval envelope. */
+export type ApprovalAlg = "ed25519" | "none";
+
+/** The signed pre-trade verdict envelope attached to an order, or null when the
+ *  order has no envelope (no signer configured / pre-existing order). */
+export interface OrderApproval {
+  /** Base64url-encoded envelope JSON: { approval, signature, keyId, alg }. */
+  token: string;
+  /** UUID of the signing key, or empty string when alg is "none". */
+  keyId: string;
+  alg: ApprovalAlg;
+  /** Submission mode; currently always "immediate". */
+  mode: string;
+  /** RFC3339Nano timestamp at which the envelope was issued. May be empty. */
+  issuedAt: string;
+  /** RFC3339Nano expiry timestamp. May be empty. */
+  expiresAt: string;
+  /** Whether the envelope carries a real cryptographic signature. */
+  signed: boolean;
+}
+
 // --- Audit ---
 
 /** One audit-log entry (mirrors the auditDTO wire shape). */

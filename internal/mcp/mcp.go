@@ -150,9 +150,13 @@ type Source interface {
 	// on accept, issues a signed approval token. mode "hold" or "immediate".
 	SubmitOrderToken(ctx context.Context, o domain.Order, mode string) (SubmitOrderTokenResult, error)
 	// ConfirmExecution verifies the token and commits the held reservation.
-	ConfirmExecution(ctx context.Context, orderID int64, token string) (domain.Order, error)
+	ConfirmExecution(
+		ctx context.Context, orderID int64, token string, force bool,
+	) (domain.Order, error)
 	// CancelOrder verifies the token and rolls back the held reservation.
-	CancelOrder(ctx context.Context, orderID int64, token, reason string) (domain.Order, error)
+	CancelOrder(
+		ctx context.Context, orderID int64, token, reason string, force bool,
+	) (domain.Order, error)
 }
 
 // SubmitOrderTokenResult is the surface-agnostic result of issuing an approval
@@ -320,6 +324,7 @@ type submitOrderOutput struct {
 type confirmExecutionInput struct {
 	OrderID int64  `json:"orderId" jsonschema:"Order identifier returned by submit_order"`
 	Token   string `json:"token" jsonschema:"Approval token returned by submit_order"`
+	Force   bool   `json:"force,omitempty" jsonschema:"Bypass Officer's safety checks and route the operation straight to the engine"`
 }
 
 type confirmExecutionOutput struct {
@@ -331,6 +336,7 @@ type cancelInput struct {
 	OrderID int64  `json:"orderId" jsonschema:"Order identifier returned by submit_order"`
 	Token   string `json:"token" jsonschema:"Approval token returned by submit_order"`
 	Reason  string `json:"reason,omitempty" jsonschema:"Human-readable cancellation reason"`
+	Force   bool   `json:"force,omitempty" jsonschema:"Bypass Officer's safety checks and route the operation straight to the engine"`
 }
 
 type cancelOutput struct {
@@ -885,7 +891,8 @@ func confirmExecutionHandler(src Source) func(
 		if strings.TrimSpace(p.Arguments.Token) == "" {
 			return toolErr[confirmExecutionOutput]("token is required"), nil
 		}
-		order, err := src.ConfirmExecution(ctx, p.Arguments.OrderID, p.Arguments.Token)
+		order, err := src.ConfirmExecution(
+			ctx, p.Arguments.OrderID, p.Arguments.Token, p.Arguments.Force)
 		if err != nil {
 			return toolErr[confirmExecutionOutput](fmt.Sprintf("confirm execution failed: %s", err)), nil
 		}
@@ -921,7 +928,7 @@ func cancelHandler(src Source) func(
 			return toolErr[cancelOutput]("token is required"), nil
 		}
 		order, err := src.CancelOrder(ctx, p.Arguments.OrderID, p.Arguments.Token,
-			strings.TrimSpace(p.Arguments.Reason))
+			strings.TrimSpace(p.Arguments.Reason), p.Arguments.Force)
 		if err != nil {
 			return toolErr[cancelOutput](fmt.Sprintf("cancel failed: %s", err)), nil
 		}

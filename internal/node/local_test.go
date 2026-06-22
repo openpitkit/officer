@@ -625,7 +625,7 @@ func TestLocalNode_CancelHeldFallbackReleasesPersistedHold(t *testing.T) {
 	}
 
 	cancelled, err := n.CancelHeld(
-		ctx, domain.DefaultTenant, order.ID, "approval-1", testCaller)
+		ctx, domain.DefaultTenant, order.ID, "approval-1", testCaller, false)
 	if err != nil {
 		t.Fatalf("CancelHeld: %v", err)
 	}
@@ -715,12 +715,14 @@ func TestLocalNode_ConcurrentResolveNoDeadlockSingleResolution(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		_, errs[0] = n.ConfirmHeld(
-			ctx, domain.DefaultTenant, confirmTarget.order.ID, confirmTarget.approvalID, testCaller)
+			ctx, domain.DefaultTenant, confirmTarget.order.ID,
+			confirmTarget.approvalID, testCaller, false)
 	}()
 	go func() {
 		defer wg.Done()
 		_, errs[1] = n.CancelHeld(
-			ctx, domain.DefaultTenant, cancelTarget.order.ID, cancelTarget.approvalID, testCaller)
+			ctx, domain.DefaultTenant, cancelTarget.order.ID,
+			cancelTarget.approvalID, testCaller, false)
 	}()
 
 	done := make(chan struct{})
@@ -1339,6 +1341,53 @@ func TestLocalNode_ApplyExecutionReportAuditsEngineBlock(t *testing.T) {
 	}
 }
 
+func TestLocalNode_ApplyExecutionReportForce(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, testKey(id), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	order := testOrder(t, st, id)
+	if err := st.UpdateOrderStatus(ctx, domain.DefaultTenant, order.ID, domain.OrderStatusFilled); err != nil {
+		t.Fatalf("UpdateOrderStatus: %v", err)
+	}
+
+	if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+		OrderID:      order.ID,
+		BaseAsset:    "AAPL",
+		QuoteAsset:   "USD",
+		Side:         domain.OrderSideBuy,
+		FillQuantity: "1",
+		FillPrice:    "400",
+		LockPrice:    "400",
+		Force:        true,
+		Final:        true,
+	}, testCaller); err != nil {
+		t.Fatalf("ApplyExecutionReport force: %v", err)
+	}
+
+	trades, err := st.ListTrades(ctx, domain.DefaultTenant, id, domain.SourceAPI, 10)
+	if err != nil {
+		t.Fatalf("ListTrades: %v", err)
+	}
+	if len(trades) != 1 {
+		t.Fatalf("trade count = %d, want 1", len(trades))
+	}
+	rows, err := st.ListAuditFiltered(ctx, domain.AuditFilter{
+		Actions: []domain.AuditAction{domain.AuditActionExecutionReport},
+	}, 10)
+	if err != nil {
+		t.Fatalf("ListAuditFiltered: %v", err)
+	}
+	if len(rows) != 1 || !strings.Contains(rows[0].Detail, "forced=true") {
+		t.Fatalf("audit rows = %+v, want forced=true execution report", rows)
+	}
+}
+
 // TestEngineBlockReason verifies the account block_reason composed for an
 // engine-initiated block carries the engine reason plus the cause (code and
 // triggering order), falling back to the code when no reason is given and
@@ -1636,7 +1685,7 @@ func TestLocalNode_RestoreBackupRebuildsEngineFromRestoredStore(t *testing.T) {
 	archive := backup.NewArchive(
 		backupTestTime(),
 		"test",
-		3,
+		1,
 		backup.Scope{All: true},
 		backup.Data{Accounts: []domain.Account{{
 			Tenant: domain.DefaultTenant,
@@ -1686,7 +1735,7 @@ func TestLocalNode_RestoreBackupRollsBackStoreOnRebuildFailure(t *testing.T) {
 	archive := backup.NewArchive(
 		backupTestTime(),
 		"test",
-		3,
+		1,
 		backup.Scope{All: true},
 		backup.Data{Accounts: []domain.Account{{
 			Tenant: domain.DefaultTenant,
@@ -1735,7 +1784,7 @@ func TestLocalNode_RestoreBackupRollsBackStoreAndEngineOnAuditFailure(t *testing
 	archive := backup.NewArchive(
 		backupTestTime(),
 		"test",
-		3,
+		1,
 		backup.Scope{All: true},
 		backup.Data{Accounts: []domain.Account{{
 			Tenant: domain.DefaultTenant,
@@ -1778,7 +1827,7 @@ func TestLocalNode_RestoreBackupRollsBackStoreOnAuditFailureWithoutRuntime(t *te
 	archive := backup.NewArchive(
 		backupTestTime(),
 		"test",
-		3,
+		1,
 		backup.Scope{Sections: []backup.Section{backup.SectionGeneralSettings}},
 		backup.Data{McpAccess: map[string]bool{"submit_order": false}},
 	)
@@ -1818,7 +1867,7 @@ func TestLocalNode_RestoreBackupJoinsRollbackRestoreFailure(t *testing.T) {
 	archive := backup.NewArchive(
 		backupTestTime(),
 		"test",
-		3,
+		1,
 		backup.Scope{Sections: []backup.Section{backup.SectionGeneralSettings}},
 		backup.Data{McpAccess: map[string]bool{"submit_order": false}},
 	)
@@ -1942,7 +1991,7 @@ func TestLocalNode_ConcurrentRestoreSwapAndReads(t *testing.T) {
 		archive := backup.NewArchive(
 			backupTestTime().Add(time.Duration(i)*time.Second),
 			"test",
-			3,
+			1,
 			backup.Scope{All: true},
 			backup.Data{Accounts: []domain.Account{{
 				Tenant: domain.DefaultTenant,
@@ -2108,7 +2157,8 @@ func TestConfirmHeld_AtomicSingleResolve(t *testing.T) {
 
 	order := seedHeldOrder(t, st, "acc-1", "approval-1")
 
-	confirmed, err := n.ConfirmHeld(ctx, domain.DefaultTenant, order.ID, "approval-1", testCaller)
+	confirmed, err := n.ConfirmHeld(
+		ctx, domain.DefaultTenant, order.ID, "approval-1", testCaller, false)
 	if err != nil {
 		t.Fatalf("ConfirmHeld: %v", err)
 	}
@@ -2156,7 +2206,8 @@ func TestConfirmHeld_StoreFailureNoPartialAndSingleNativeResolve(t *testing.T) {
 
 	order := seedHeldOrder(t, real, "acc-1", "approval-1")
 
-	_, err = n.ConfirmHeld(ctx, domain.DefaultTenant, order.ID, "approval-1", testCaller)
+	_, err = n.ConfirmHeld(
+		ctx, domain.DefaultTenant, order.ID, "approval-1", testCaller, false)
 	if err == nil {
 		t.Fatal("ConfirmHeld: want error from failing ResolveOrderReservation")
 	}
@@ -2200,7 +2251,8 @@ func TestCancelHeld_AtomicConsistency(t *testing.T) {
 
 	order := seedHeldOrder(t, st, "acc-1", "approval-1")
 
-	cancelled, err := n.CancelHeld(ctx, domain.DefaultTenant, order.ID, "approval-1", testCaller)
+	cancelled, err := n.CancelHeld(
+		ctx, domain.DefaultTenant, order.ID, "approval-1", testCaller, false)
 	if err != nil {
 		t.Fatalf("CancelHeld: %v", err)
 	}
@@ -2250,13 +2302,15 @@ func TestConfirmHeld_AfterSweepReturnsConflict(t *testing.T) {
 	}
 
 	// Confirm after sweep must return ErrConflict.
-	_, err = n.ConfirmHeld(ctx, domain.DefaultTenant, order.ID, "approval-swept", testCaller)
+	_, err = n.ConfirmHeld(
+		ctx, domain.DefaultTenant, order.ID, "approval-swept", testCaller, false)
 	if !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("ConfirmHeld after sweep: want ErrConflict, got %v", err)
 	}
 
 	// A genuinely unknown approval id must still return ErrNotFound.
-	_, err = n.ConfirmHeld(ctx, domain.DefaultTenant, order.ID, "approval-unknown", testCaller)
+	_, err = n.ConfirmHeld(
+		ctx, domain.DefaultTenant, order.ID, "approval-unknown", testCaller, false)
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("ConfirmHeld unknown: want ErrNotFound, got %v", err)
 	}
@@ -2293,13 +2347,15 @@ func TestCancelHeld_AfterSweepReturnsConflict(t *testing.T) {
 	}
 
 	// Cancel after sweep must return ErrConflict.
-	_, err = n.CancelHeld(ctx, domain.DefaultTenant, order.ID, "approval-swept", testCaller)
+	_, err = n.CancelHeld(
+		ctx, domain.DefaultTenant, order.ID, "approval-swept", testCaller, false)
 	if !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("CancelHeld after sweep: want ErrConflict, got %v", err)
 	}
 
 	// A genuinely unknown approval id must still return ErrNotFound.
-	_, err = n.CancelHeld(ctx, domain.DefaultTenant, order.ID, "approval-unknown", testCaller)
+	_, err = n.CancelHeld(
+		ctx, domain.DefaultTenant, order.ID, "approval-unknown", testCaller, false)
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("CancelHeld unknown: want ErrNotFound, got %v", err)
 	}
@@ -2331,7 +2387,8 @@ func TestCancelHeld_AfterFillConflictPreservesFilled(t *testing.T) {
 		t.Fatalf("RecordOrderSettlement (simulated fill): %v", err)
 	}
 
-	_, err := n.CancelHeld(ctx, domain.DefaultTenant, order.ID, "approval-1", testCaller)
+	_, err := n.CancelHeld(
+		ctx, domain.DefaultTenant, order.ID, "approval-1", testCaller, false)
 	if !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("CancelHeld after fill: want ErrConflict, got %v", err)
 	}
@@ -2346,6 +2403,64 @@ func TestCancelHeld_AfterFillConflictPreservesFilled(t *testing.T) {
 	types := eventTypes(t, st, order.ID)
 	if len(types) != 1 || types[0] != domain.OrderEventFill {
 		t.Fatalf("events = %+v, want only the fill (no cancel events)", types)
+	}
+}
+
+func TestConfirmHeld_AfterFillForceCommits(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	order := seedHeldOrder(t, st, "acc-1", "approval-1")
+	if err := st.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		Tenant:      domain.DefaultTenant,
+		Account:     "acc-1",
+		OrderID:     order.ID,
+		OrderStatus: domain.OrderStatusFilled,
+		Events: []domain.OrderEvent{{
+			OrderID: order.ID, Type: domain.OrderEventFill, Source: domain.SourceAPI,
+		}},
+	}); err != nil {
+		t.Fatalf("RecordOrderSettlement (simulated fill): %v", err)
+	}
+
+	committed, err := n.ConfirmHeld(
+		ctx, domain.DefaultTenant, order.ID, "approval-1", testCaller, true)
+	if err != nil {
+		t.Fatalf("ConfirmHeld force: %v", err)
+	}
+	if committed.Status != domain.OrderStatusCommitted {
+		t.Fatalf("status = %q, want committed", committed.Status)
+	}
+}
+
+func TestCancelHeld_AfterFillForceCancels(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	order := seedHeldOrder(t, st, "acc-1", "approval-1")
+	if err := st.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		Tenant:      domain.DefaultTenant,
+		Account:     "acc-1",
+		OrderID:     order.ID,
+		OrderStatus: domain.OrderStatusFilled,
+		Events: []domain.OrderEvent{{
+			OrderID: order.ID, Type: domain.OrderEventFill, Source: domain.SourceAPI,
+		}},
+	}); err != nil {
+		t.Fatalf("RecordOrderSettlement (simulated fill): %v", err)
+	}
+
+	cancelled, err := n.CancelHeld(
+		ctx, domain.DefaultTenant, order.ID, "approval-1", testCaller, true)
+	if err != nil {
+		t.Fatalf("CancelHeld force: %v", err)
+	}
+	if cancelled.Status != domain.OrderStatusCancelled {
+		t.Fatalf("status = %q, want cancelled", cancelled.Status)
 	}
 }
 
@@ -2383,7 +2498,8 @@ func TestReconcileAfterCrash_LeavesFullyHeldOrFullyResolved(t *testing.T) {
 
 		// Retry: a fresh confirm drives the fallback and the atomic resolve, ending
 		// fully committed.
-		confirmed, err := n.ConfirmHeld(ctx, domain.DefaultTenant, order.ID, "approval-1", testCaller)
+		confirmed, err := n.ConfirmHeld(
+			ctx, domain.DefaultTenant, order.ID, "approval-1", testCaller, false)
 		if err != nil {
 			t.Fatalf("retry ConfirmHeld: %v", err)
 		}
@@ -2405,7 +2521,9 @@ func TestReconcileAfterCrash_LeavesFullyHeldOrFullyResolved(t *testing.T) {
 		n, st := newTestNode(t, eng)
 		order := seedHeldOrder(t, st, "acc-1", "approval-1")
 
-		if _, err := n.ConfirmHeld(ctx, domain.DefaultTenant, order.ID, "approval-1", testCaller); err != nil {
+		if _, err := n.ConfirmHeld(
+			ctx, domain.DefaultTenant, order.ID, "approval-1", testCaller, false,
+		); err != nil {
 			t.Fatalf("ConfirmHeld: %v", err)
 		}
 		// The committed state is durable: status committed, intent committed (absent

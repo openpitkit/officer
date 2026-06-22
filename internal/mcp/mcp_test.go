@@ -129,13 +129,13 @@ func (f *fakeSource) SubmitOrderToken(
 }
 
 func (f *fakeSource) ConfirmExecution(
-	_ context.Context, _ int64, _ string,
+	_ context.Context, _ int64, _ string, _ bool,
 ) (domain.Order, error) {
 	return domain.Order{}, nil
 }
 
 func (f *fakeSource) CancelOrder(
-	_ context.Context, _ int64, _, _ string,
+	_ context.Context, _ int64, _, _ string, _ bool,
 ) (domain.Order, error) {
 	return domain.Order{}, nil
 }
@@ -585,12 +585,12 @@ func (c *captureNSource) SubmitOrderToken(
 	return SubmitOrderTokenResult{}, nil
 }
 func (c *captureNSource) ConfirmExecution(
-	context.Context, int64, string,
+	context.Context, int64, string, bool,
 ) (domain.Order, error) {
 	return domain.Order{}, nil
 }
 func (c *captureNSource) CancelOrder(
-	context.Context, int64, string, string,
+	context.Context, int64, string, string, bool,
 ) (domain.Order, error) {
 	return domain.Order{}, nil
 }

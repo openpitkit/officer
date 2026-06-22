@@ -57,8 +57,8 @@ func TestMigration_Chain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaVersion: %v", err)
 	}
-	if v != 3 {
-		t.Fatalf("want schema version 3, got %d", v)
+	if v != 1 {
+		t.Fatalf("want schema version 1, got %d", v)
 	}
 }
 
@@ -75,8 +75,8 @@ func TestMigration_Idempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaVersion: %v", err)
 	}
-	if v != 3 {
-		t.Fatalf("want schema version 3, got %d", v)
+	if v != 1 {
+		t.Fatalf("want schema version 1, got %d", v)
 	}
 }
 
@@ -106,8 +106,8 @@ func TestReset_RecreatesDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SchemaVersion: %v", err)
 	}
-	if v != 3 {
-		t.Fatalf("want schema version 3, got %d", v)
+	if v != 1 {
+		t.Fatalf("want schema version 1, got %d", v)
 	}
 	accounts, err := s.ListAccounts(ctx)
 	if err != nil {

@@ -16,14 +16,16 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactElement } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Copy, ExternalLink, Plus } from "lucide-react";
+import { Copy, ExternalLink, Plus, ShieldCheck } from "lucide-react";
 
 import {
   ApiError,
   checkOrder,
   createOrder,
+  exportPublicKey,
   fetchAccounts,
   fetchOrderDetail,
   submitExecutionReport,
@@ -33,6 +35,7 @@ import type {
   CheckResult,
   ExecutionBlock,
   Order,
+  OrderApproval,
   OrderEvent,
   Source,
   Trade,
@@ -52,6 +55,7 @@ import { Page } from "@/components/Page";
 import { RefreshButton } from "@/components/RefreshButton";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { CopyableSnippet } from "@/components/CopyableSnippet";
 import {
   Dialog,
   DialogContent,
@@ -708,6 +712,7 @@ function ExecReportDialog({ orderId, onClose, onSubmitted, initialValues }: Exec
   const [price, setPrice] = useState(initialValues?.price ?? "");
   const [lockPrice, setLockPrice] = useState(initialValues?.lockPrice ?? "");
   const [final, setFinal] = useState(true);
+  const [force, setForce] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
@@ -721,6 +726,7 @@ function ExecReportDialog({ orderId, onClose, onSubmitted, initialValues }: Exec
       setPrice(initialValues?.price ?? "");
       setLockPrice(initialValues?.lockPrice ?? "");
       setFinal(true);
+      setForce(false);
       setBusy(false);
       setError(null);
       setDone(false);
@@ -734,6 +740,7 @@ function ExecReportDialog({ orderId, onClose, onSubmitted, initialValues }: Exec
     setPrice(initialValues?.price ?? "");
     setLockPrice(initialValues?.lockPrice ?? "");
     setFinal(true);
+    setForce(false);
     setBusy(false);
     setError(null);
     setDone(false);
@@ -760,12 +767,16 @@ function ExecReportDialog({ orderId, onClose, onSubmitted, initialValues }: Exec
         quantity: string;
         price: string;
         lockPrice?: string;
+        force?: boolean;
         final: boolean;
       } = {
         quantity: quantity.trim(),
         price: price.trim(),
         final,
       };
+      if (force) {
+        body.force = true;
+      }
       if (lockPrice.trim()) {
         body.lockPrice = lockPrice.trim();
       }
@@ -853,6 +864,16 @@ function ExecReportDialog({ orderId, onClose, onSubmitted, initialValues }: Exec
               />
               {t("execReport.dialog.finalFill")}
             </label>
+            <label className="flex items-center gap-2 text-xs text-text cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={force}
+                onChange={(e) => setForce(e.target.checked)}
+                disabled={busy}
+                className="accent-[var(--accent)]"
+              />
+              {t("execReport.dialog.force")}
+            </label>
 
             {error && (
               <ErrorBanner message={error} onDismiss={() => setError(null)} />
@@ -874,6 +895,280 @@ function ExecReportDialog({ orderId, onClose, onSubmitted, initialValues }: Exec
 }
 
 // ---------------------------------------------------------------------------
+// Signed pre-trade verdict helpers + section component
+// ---------------------------------------------------------------------------
+
+/** Decode a base64url string to a Uint8Array (no padding required). */
+function base64urlToBytes(s: string): Uint8Array {
+  // base64url → base64: replace URL-safe chars and pad to 4-char boundary.
+  const b64 = s.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+/** Decode a standard base64 string (with padding) to a Uint8Array. */
+function base64StdToBytes(s: string): Uint8Array {
+  const binary = atob(s);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+/** Extract the verbatim JSON value substring for "approval" from the envelope
+ *  JSON string. The approval object is flat (no nested objects), so we scan
+ *  forward from the opening '{' to the matching '}', honoring string literals
+ *  and backslash escapes. Returns the canonical bytes that were signed. */
+function approvalValueSubstring(envJson: string): string {
+  // Match the "approval" KEY (preceded by { or , in compact Go JSON), never the
+  // same text occurring inside a string value.
+  let keyIdx = -1;
+  for (let from = 0; ; ) {
+    const idx = envJson.indexOf('"approval"', from);
+    if (idx === -1) {
+      break;
+    }
+    const prev = envJson[idx - 1];
+    if (prev === "{" || prev === ",") {
+      keyIdx = idx;
+      break;
+    }
+    from = idx + 1;
+  }
+  if (keyIdx === -1) {
+    throw new Error("approval key not found in envelope");
+  }
+  // Skip past the key and its colon.
+  let i = keyIdx + '"approval"'.length;
+  while (i < envJson.length && envJson[i] !== "{") {
+    i++;
+  }
+  if (i >= envJson.length) {
+    throw new Error("approval object not found");
+  }
+  const start = i;
+  let depth = 0;
+  while (i < envJson.length) {
+    const ch = envJson[i];
+    if (ch === "{") {
+      depth++;
+      i++;
+    } else if (ch === "}") {
+      depth--;
+      i++;
+      if (depth === 0) {
+        break;
+      }
+    } else if (ch === '"') {
+      // Skip over string literals, honoring backslash escapes.
+      i++;
+      while (i < envJson.length) {
+        if (envJson[i] === "\\") {
+          i += 2; // skip escaped char
+        } else if (envJson[i] === '"') {
+          i++;
+          break;
+        } else {
+          i++;
+        }
+      }
+    } else {
+      i++;
+    }
+  }
+  return envJson.slice(start, i);
+}
+
+type VerifyState =
+  | { phase: "idle" }
+  | { phase: "verifying" }
+  | { phase: "verified" }
+  | { phase: "invalid" }
+  | { phase: "error"; message: string };
+
+/** Dialog that shows the signed approval envelope for an order. */
+function SignedPayloadDialog({
+  approval,
+  open,
+  onOpenChange,
+}: {
+  approval: OrderApproval;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const { t } = useTranslation("orders");
+
+  const [verifyState, setVerifyState] = useState<VerifyState>({ phase: "idle" });
+
+  // Decode the token to get the approval payload for display purposes.
+  const decodedApproval = useMemo(() => {
+    try {
+      const envJson = new TextDecoder().decode(base64urlToBytes(approval.token));
+      const env = JSON.parse(envJson) as { approval?: unknown };
+      return JSON.stringify(env.approval, null, 2);
+    } catch {
+      return "";
+    }
+  }, [approval.token]);
+
+  // RFC3339 timestamps for display.
+  const issuedAtDisplay = approval.issuedAt
+    ? formatDateTime(approval.issuedAt)
+    : "";
+  const expiresAtDisplay = approval.expiresAt
+    ? formatDateTime(approval.expiresAt)
+    : "";
+
+  async function runVerify() {
+    setVerifyState({ phase: "verifying" });
+    try {
+      const pubBase64 = await exportPublicKey("raw-base64");
+      const envJson = new TextDecoder().decode(base64urlToBytes(approval.token));
+      const env = JSON.parse(envJson) as { alg?: string; signature?: string };
+      if (env.alg === "none") {
+        // Should not reach here (the section hides the button for alg=none),
+        // but guard defensively.
+        setVerifyState({ phase: "idle" });
+        return;
+      }
+      const canonical = new TextEncoder().encode(approvalValueSubstring(envJson));
+      const sig = base64StdToBytes(env.signature ?? "");
+      const keyBytes = base64StdToBytes(pubBase64);
+      if (keyBytes.length !== 32) {
+        throw new Error("active public key is not a 32-byte Ed25519 key");
+      }
+      const cryptoKey = await crypto.subtle.importKey(
+        "raw",
+        keyBytes,
+        { name: "Ed25519" },
+        false,
+        ["verify"],
+      );
+      const ok = await crypto.subtle.verify(
+        { name: "Ed25519" },
+        cryptoKey,
+        sig,
+        canonical,
+      );
+      setVerifyState(ok ? { phase: "verified" } : { phase: "invalid" });
+    } catch (err) {
+      setVerifyState({
+        phase: "error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // Badge for the current verification state.
+  let badge: ReactElement;
+  if (approval.alg === "none") {
+    badge = <Badge variant="neutral">{t("detail.dialog.signedPayload.badgeUnsigned")}</Badge>;
+  } else if (verifyState.phase === "verified") {
+    badge = <Badge variant="ok">{t("detail.dialog.signedPayload.badgeVerified")}</Badge>;
+  } else if (verifyState.phase === "invalid") {
+    badge = <Badge variant="danger">{t("detail.dialog.signedPayload.badgeInvalid")}</Badge>;
+  } else {
+    badge = <Badge variant="neutral">{t("detail.dialog.signedPayload.badgeUnverified")}</Badge>;
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{t("detail.dialog.signedPayload.sectionTitle")}</DialogTitle>
+          <DialogDescription>
+            {t("detail.dialog.signedPayload.dialogDescription")}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center gap-3">
+            {badge}
+            {approval.alg === "ed25519" && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => { void runVerify(); }}
+                disabled={verifyState.phase === "verifying"}
+              >
+                <ShieldCheck className="h-3.5 w-3.5" />
+                {verifyState.phase === "verifying"
+                  ? t("detail.dialog.signedPayload.verifying")
+                  : t("detail.dialog.signedPayload.verifyButton")}
+              </Button>
+            )}
+            {approval.alg === "none" && (
+              <span className="text-xs text-muted-lt">
+                {t("detail.dialog.signedPayload.unsignedNote")}
+              </span>
+            )}
+          </div>
+
+          {verifyState.phase === "verified" && (
+            <p className="text-xs text-[var(--ok)]">
+              {t("detail.dialog.signedPayload.verifiedNote")}
+            </p>
+          )}
+          {verifyState.phase === "invalid" && (
+            <p className="text-xs text-[var(--danger)]">
+              {t("detail.dialog.signedPayload.invalidNote")}
+            </p>
+          )}
+          {verifyState.phase === "error" && (
+            <p className="text-xs text-[var(--danger)]">
+              {t("detail.dialog.signedPayload.verifyError")}
+            </p>
+          )}
+
+          {(issuedAtDisplay || expiresAtDisplay) && (
+            <div className="flex flex-wrap gap-4 text-xs text-muted-lt">
+              {issuedAtDisplay && (
+                <span>
+                  <span className="font-medium text-muted">
+                    {t("detail.dialog.signedPayload.issuedAt")}
+                  </span>
+                  {" "}
+                  <span className="nums">{issuedAtDisplay}</span>
+                </span>
+              )}
+              {expiresAtDisplay && (
+                <span>
+                  <span className="font-medium text-muted">
+                    {t("detail.dialog.signedPayload.expiresAt")}
+                  </span>
+                  {" "}
+                  <span className="nums">{expiresAtDisplay}</span>
+                </span>
+              )}
+            </div>
+          )}
+
+          <CopyableSnippet
+            label={t("detail.dialog.signedPayload.tokenLabel")}
+            text={approval.token}
+            rows={3}
+          />
+
+          {decodedApproval && (
+            <CopyableSnippet
+              label={t("detail.dialog.signedPayload.decodedLabel")}
+              text={decodedApproval}
+              rows={10}
+            />
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Order Detail dialog — header + event timeline + trades
 // ---------------------------------------------------------------------------
 
@@ -889,7 +1184,7 @@ interface OrderDetailDialogProps {
 type DetailState =
   | { phase: "loading" }
   | { phase: "error"; message: string }
-  | { phase: "ready"; order: Order; events: OrderEvent[]; trades: Trade[] };
+  | { phase: "ready"; order: Order; events: OrderEvent[]; trades: Trade[]; approval: OrderApproval | null };
 
 function accountBlockReason(ev: OrderEvent): string | null {
   if (ev.rejectScope !== "account") {
@@ -914,6 +1209,7 @@ function OrderDetailDialog({ orderId, onClose, onExecReport, onCloneOrder, onClo
   const { t: tc } = useTranslation();
 
   const [state, setState] = useState<DetailState>({ phase: "loading" });
+  const [signatureOpen, setSignatureOpen] = useState(false);
 
   useEffect(() => {
     if (orderId === null) {
@@ -922,13 +1218,14 @@ function OrderDetailDialog({ orderId, onClose, onExecReport, onCloneOrder, onClo
     // Show the loading state before the detail fetch starts; intentional.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setState({ phase: "loading" });
+    setSignatureOpen(false);
     const controller = new AbortController();
     fetchOrderDetail(orderId, controller.signal)
-      .then(({ order, events, trades }) => {
+      .then(({ order, events, trades, approval }) => {
         if (controller.signal.aborted) {
           return;
         }
-        setState({ phase: "ready", order, events, trades });
+        setState({ phase: "ready", order, events, trades, approval });
       })
       .catch((err: unknown) => {
         if (!controller.signal.aborted) {
@@ -958,8 +1255,17 @@ function OrderDetailDialog({ orderId, onClose, onExecReport, onCloneOrder, onClo
   }
 
   return (
-    <Dialog open onOpenChange={(v) => { if (!v) onClose(); }}>
-      <DialogContent className="max-w-2xl">
+    <>
+      <Dialog
+        open
+        onOpenChange={(v) => {
+          if (!v) {
+            setSignatureOpen(false);
+            onClose();
+          }
+        }}
+      >
+        <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>{t("detail.dialog.title", { orderId })}</DialogTitle>
           <DialogDescription>
@@ -1225,6 +1531,17 @@ function OrderDetailDialog({ orderId, onClose, onExecReport, onCloneOrder, onClo
             </div>
 
             <DialogFooter>
+              {state.approval !== null && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="sm:mr-auto"
+                  onClick={() => setSignatureOpen(true)}
+                >
+                  <ShieldCheck className="h-3.5 w-3.5" />
+                  {t("detail.dialog.signedPayload.openButton")}
+                </Button>
+              )}
               <Button
                 variant="outline"
                 size="sm"
@@ -1260,8 +1577,17 @@ function OrderDetailDialog({ orderId, onClose, onExecReport, onCloneOrder, onClo
             </DialogFooter>
           </div>
         )}
-      </DialogContent>
-    </Dialog>
+        </DialogContent>
+      </Dialog>
+
+      {state.phase === "ready" && state.approval !== null && (
+        <SignedPayloadDialog
+          approval={state.approval}
+          open={signatureOpen}
+          onOpenChange={setSignatureOpen}
+        />
+      )}
+    </>
   );
 }
 

@@ -67,6 +67,9 @@ var (
 	// approval whose held reservation was already rolled back or expired. The
 	// surface layer maps it to an HTTP 409.
 	ErrConflict = errors.New("conflict")
+	// ErrTerminalOrder marks the remaining Officer safety net for terminal
+	// orders; callers can bypass it with force and route straight to the engine.
+	ErrTerminalOrder = errors.New("order in terminal status")
 	// ErrNotImplemented marks an operation that needs an engine SDK capability
 	// that is not available yet and cannot be represented as a full engine
 	// rebuild from persisted state.

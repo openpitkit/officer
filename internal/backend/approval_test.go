@@ -20,6 +20,7 @@ package backend_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -247,7 +248,7 @@ func TestService_ConfirmExecutionCommits(t *testing.T) {
 	svc, fn := newTestServiceWithSigner(signer)
 	tok := mustHold(t, svc)
 
-	order, err := svc.ConfirmExecution(context.Background(), tok.OrderID, tok.Token)
+	order, err := svc.ConfirmExecution(context.Background(), tok.OrderID, tok.Token, false)
 	if err != nil {
 		t.Fatalf("ConfirmExecution: %v", err)
 	}
@@ -268,13 +269,13 @@ func TestService_ConfirmExecutionIdempotent(t *testing.T) {
 	svc, fn := newTestServiceWithSigner(signer)
 	tok := mustHold(t, svc)
 
-	if _, err := svc.ConfirmExecution(context.Background(), tok.OrderID, tok.Token); err != nil {
+	if _, err := svc.ConfirmExecution(context.Background(), tok.OrderID, tok.Token, false); err != nil {
 		t.Fatalf("first confirm: %v", err)
 	}
 	// The engine guards the double-commit panic by returning a conflict; the
 	// backend treats a re-confirm of an already-committed order as success.
 	fn.confirmErr = domain.ErrConflict
-	order, err := svc.ConfirmExecution(context.Background(), tok.OrderID, tok.Token)
+	order, err := svc.ConfirmExecution(context.Background(), tok.OrderID, tok.Token, false)
 	if err != nil {
 		t.Fatalf("second confirm must be idempotent success, got %v", err)
 	}
@@ -289,15 +290,47 @@ func TestService_ConfirmAfterCancelConflicts(t *testing.T) {
 	svc, fn := newTestServiceWithSigner(signer)
 	tok := mustHold(t, svc)
 
-	if _, err := svc.CancelOrder(context.Background(), tok.OrderID, tok.Token, "operator"); err != nil {
+	if _, err := svc.CancelOrder(
+		context.Background(), tok.OrderID, tok.Token, "operator", false,
+	); err != nil {
 		t.Fatalf("cancel: %v", err)
 	}
-	// The cancelled order is no longer committed; a conflict from the engine must
-	// propagate rather than report idempotent success.
+	// The cancelled order is terminal, so the default safety gate rejects before
+	// the engine commit path.
 	fn.confirmErr = domain.ErrConflict
-	_, err := svc.ConfirmExecution(context.Background(), tok.OrderID, tok.Token)
-	if !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("confirm after cancel must conflict, got %v", err)
+	_, err := svc.ConfirmExecution(context.Background(), tok.OrderID, tok.Token, false)
+	if !errors.Is(err, domain.ErrTerminalOrder) {
+		t.Fatalf("confirm after cancel must report terminal order, got %v", err)
+	}
+	if len(fn.confirmCalls) != 0 {
+		t.Fatalf("confirm after cancel must not reach engine commit: %+v", fn.confirmCalls)
+	}
+}
+
+func TestService_ConfirmAfterCancelForceReachesEngine(t *testing.T) {
+	t.Parallel()
+	signer := &fakeSigner{}
+	svc, fn := newTestServiceWithSigner(signer)
+	tok := mustHold(t, svc)
+
+	if _, err := svc.CancelOrder(
+		context.Background(), tok.OrderID, tok.Token, "operator", false,
+	); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+
+	order, err := svc.ConfirmExecution(context.Background(), tok.OrderID, tok.Token, true)
+	if err != nil {
+		t.Fatalf("forced confirm after cancel: %v", err)
+	}
+	if order.Status != domain.OrderStatusCommitted {
+		t.Fatalf("forced confirm status = %q, want committed", order.Status)
+	}
+	if len(fn.confirmCalls) != 1 || fn.confirmCalls[0] != "approval-1" {
+		t.Fatalf("forced confirm did not reach engine: %+v", fn.confirmCalls)
+	}
+	if !hasAuditDetail(fn.auditCalls, domain.AuditActionApprovalConfirmed, "forced=true") {
+		t.Fatalf("forced confirm must audit forced=true: %+v", fn.auditCalls)
 	}
 }
 
@@ -307,15 +340,48 @@ func TestService_CancelAfterConfirmConflictsBeforeRollback(t *testing.T) {
 	svc, fn := newTestServiceWithSigner(signer)
 	tok := mustHold(t, svc)
 
-	if _, err := svc.ConfirmExecution(context.Background(), tok.OrderID, tok.Token); err != nil {
+	if _, err := svc.ConfirmExecution(context.Background(), tok.OrderID, tok.Token, false); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
-	_, err := svc.CancelOrder(context.Background(), tok.OrderID, tok.Token, "too late")
+	_, err := svc.CancelOrder(context.Background(), tok.OrderID, tok.Token, "too late", false)
 	if !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("cancel after confirm must conflict, got %v", err)
 	}
 	if len(fn.cancelCalls) != 0 {
 		t.Fatalf("cancel after confirm must not reach engine rollback: %+v", fn.cancelCalls)
+	}
+}
+
+func TestService_CancelFilledOrderRequiresForce(t *testing.T) {
+	t.Parallel()
+	signer := &fakeSigner{}
+	svc, fn := newTestServiceWithSigner(signer)
+	tok := mustHold(t, svc)
+
+	order := fn.orders[tok.OrderID]
+	order.Status = domain.OrderStatusFilled
+	fn.orders[tok.OrderID] = order
+
+	_, err := svc.CancelOrder(context.Background(), tok.OrderID, tok.Token, "late", false)
+	if !errors.Is(err, domain.ErrTerminalOrder) {
+		t.Fatalf("cancel filled without force = %v, want terminal order", err)
+	}
+	if len(fn.cancelCalls) != 0 {
+		t.Fatalf("cancel filled without force reached engine: %+v", fn.cancelCalls)
+	}
+
+	order, err = svc.CancelOrder(context.Background(), tok.OrderID, tok.Token, "late", true)
+	if err != nil {
+		t.Fatalf("forced cancel filled: %v", err)
+	}
+	if order.Status != domain.OrderStatusCancelled {
+		t.Fatalf("forced cancel status = %q, want cancelled", order.Status)
+	}
+	if len(fn.cancelCalls) != 1 || fn.cancelCalls[0] != "approval-1" {
+		t.Fatalf("forced cancel did not reach engine: %+v", fn.cancelCalls)
+	}
+	if !hasAuditDetail(fn.auditCalls, domain.AuditActionApprovalCancelled, "forced=true") {
+		t.Fatalf("forced cancel must audit forced=true: %+v", fn.auditCalls)
 	}
 }
 
@@ -325,7 +391,7 @@ func TestService_CancelOrderRollsBack(t *testing.T) {
 	svc, fn := newTestServiceWithSigner(signer)
 	tok := mustHold(t, svc)
 
-	order, err := svc.CancelOrder(context.Background(), tok.OrderID, tok.Token, "stale price")
+	order, err := svc.CancelOrder(context.Background(), tok.OrderID, tok.Token, "stale price", false)
 	if err != nil {
 		t.Fatalf("CancelOrder: %v", err)
 	}
@@ -347,7 +413,7 @@ func TestService_ConfirmRejectsBadToken(t *testing.T) {
 	tok := mustHold(t, svc)
 	fn.confirmCalls = nil
 
-	_, err := svc.ConfirmExecution(context.Background(), tok.OrderID, tok.Token)
+	_, err := svc.ConfirmExecution(context.Background(), tok.OrderID, tok.Token, false)
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("bad token must reject before commit, got %v", err)
 	}
@@ -374,7 +440,7 @@ func TestService_ConfirmImmediateTokenConflictsBeforeEngine(t *testing.T) {
 		t.Fatalf("hold setup: %v", err)
 	}
 
-	_, err = svc.ConfirmExecution(context.Background(), tok.OrderID, tok.Token)
+	_, err = svc.ConfirmExecution(context.Background(), tok.OrderID, tok.Token, false)
 	if !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("confirm immediate token must conflict, got %v", err)
 	}
@@ -454,6 +520,17 @@ func mustHold(t *testing.T, svc *backend.Service) backend.ApprovalToken {
 func hasAudit(entries []store.AuditEntry, action domain.AuditAction) bool {
 	for _, e := range entries {
 		if e.Action == action {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAuditDetail(
+	entries []store.AuditEntry, action domain.AuditAction, detail string,
+) bool {
+	for _, e := range entries {
+		if e.Action == action && strings.Contains(e.Detail, detail) {
 			return true
 		}
 	}

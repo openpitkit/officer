@@ -372,7 +372,7 @@ func TestConfirmExecution_HappyPath(t *testing.T) {
 	svc := &fakeService{
 		submitOrder: domain.Order{ID: 42, Status: domain.OrderStatusCommitted},
 	}
-	body, _ := json.Marshal(map[string]any{"token": "mytoken"})
+	body, _ := json.Marshal(map[string]any{"token": "mytoken", "force": true})
 	r, err := newRouter(svc)
 	if err != nil {
 		t.Fatal(err)
@@ -388,6 +388,9 @@ func TestConfirmExecution_HappyPath(t *testing.T) {
 	ord, _ := m["order"].(map[string]any)
 	if ord["id"] != float64(42) {
 		t.Errorf("want orderId=42, got %v", ord["id"])
+	}
+	if !svc.confirmForce {
+		t.Fatal("force was not forwarded to ConfirmExecution")
 	}
 }
 
@@ -414,7 +417,9 @@ func TestCancelOrder_HappyPath(t *testing.T) {
 	svc := &fakeService{
 		submitOrder: domain.Order{ID: 42, Status: domain.OrderStatusRejected},
 	}
-	body, _ := json.Marshal(map[string]any{"token": "mytoken", "reason": "user request"})
+	body, _ := json.Marshal(map[string]any{
+		"token": "mytoken", "reason": "user request", "force": true,
+	})
 	r, err := newRouter(svc)
 	if err != nil {
 		t.Fatal(err)
@@ -430,6 +435,9 @@ func TestCancelOrder_HappyPath(t *testing.T) {
 	ord, _ := m["order"].(map[string]any)
 	if ord["id"] != float64(42) {
 		t.Errorf("want orderId=42, got %v", ord["id"])
+	}
+	if !svc.cancelForce {
+		t.Fatal("force was not forwarded to CancelOrder")
 	}
 }
 

@@ -116,6 +116,7 @@
       "lockPrice": "Lock price (optional)",
       "lockPricePlaceholder": "optional",
       "finalFill": "Final fill (closes the order)",
+      "force": "Force: bypass Officer checks, send straight to the engine",
       "submitBusy": "Submitting…",
       "submit": "Submit",
       "accepted": "Execution report accepted.",
@@ -157,6 +158,25 @@
         "sectionTitle": "Trades for this order",
         "empty": "No fills recorded yet. Submit an execution report to create a trade.",
         "submitExecReport": "Submit execution report"
+      },
+      "signedPayload": {
+        "sectionTitle": "Signed API payload",
+        "dialogDescription": "Approval envelope, canonical token, and signature verification for this order record.",
+        "openButton": "View signature",
+        "tokenLabel": "Envelope token (base64url)",
+        "decodedLabel": "Decoded approval",
+        "verifyButton": "Verify signature",
+        "verifying": "Verifying…",
+        "badgeVerified": "VERIFIED",
+        "badgeInvalid": "INVALID",
+        "badgeUnverified": "UNVERIFIED",
+        "badgeUnsigned": "UNSIGNED",
+        "unsignedNote": "No cryptographic signature — the signer is configured without a key.",
+        "verifiedNote": "Signature verified against the active public key.",
+        "invalidNote": "Signature does not match. The envelope may have been tampered with.",
+        "verifyError": "Verification failed. The active key may not match the signing key, or the browser does not support Ed25519.",
+        "issuedAt": "Issued:",
+        "expiresAt": "Expires:"
       }
     }
   }

@@ -3,7 +3,7 @@
     "createdAt": "2026-06-22T10:00:00Z",
     "format": "openpit.officer.backup",
     "source": "fixture",
-    "schemaVersion": 3,
+    "schemaVersion": 1,
     "formatVersion": 1,
     "sections": [
       "accounts_groups",

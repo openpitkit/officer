@@ -171,8 +171,12 @@ type Service interface {
 
 	// Approval token flow.
 	SubmitOrderToken(ctx context.Context, o domain.Order, mode string) (backend.ApprovalToken, error)
-	ConfirmExecution(ctx context.Context, orderID int64, token string) (domain.Order, error)
-	CancelOrder(ctx context.Context, orderID int64, token, reason string) (domain.Order, error)
+	ConfirmExecution(
+		ctx context.Context, orderID int64, token string, force bool,
+	) (domain.Order, error)
+	CancelOrder(
+		ctx context.Context, orderID int64, token, reason string, force bool,
+	) (domain.Order, error)
 }
 
 // LogSource is the read seam over the in-memory log tail. It is satisfied by
@@ -1721,9 +1725,10 @@ func handleGetOrder(svc Service) http.HandlerFunc {
 			trades = append(trades, toTradeDTO(t))
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"order":  toOrderDTO(detail.Order),
-			"events": events,
-			"trades": trades,
+			"order":    toOrderDTO(detail.Order),
+			"events":   events,
+			"trades":   trades,
+			"approval": toOrderApprovalDTO(detail.Order),
 		})
 	}
 }
@@ -1742,6 +1747,7 @@ func handleApplyExecutionReport(svc Service) http.HandlerFunc {
 			Quantity  string `json:"quantity"`
 			Price     string `json:"price"`
 			LockPrice string `json:"lockPrice"`
+			Force     bool   `json:"force"`
 			Final     bool   `json:"final"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1764,6 +1770,7 @@ func handleApplyExecutionReport(svc Service) http.HandlerFunc {
 			Account:      detail.Order.Account,
 			Side:         detail.Order.Side,
 			OrderID:      id,
+			Force:        req.Force,
 			Final:        req.Final,
 		}
 		result, err := svc.ApplyExecutionReport(r.Context(), in)
@@ -1978,7 +1985,8 @@ func handleConfirmExecution(svc Service) http.HandlerFunc {
 			writeErrMsg(w, http.StatusBadRequest, "signing", "token is required")
 			return
 		}
-		order, err := svc.ConfirmExecution(r.Context(), orderID, req.Token)
+		order, err := svc.ConfirmExecution(
+			r.Context(), orderID, req.Token, req.Force)
 		if err != nil {
 			writeErr(w, err)
 			return
@@ -2006,7 +2014,8 @@ func handleCancelOrder(svc Service) http.HandlerFunc {
 			writeErrMsg(w, http.StatusBadRequest, "signing", "token is required")
 			return
 		}
-		order, err := svc.CancelOrder(r.Context(), orderID, req.Token, req.Reason)
+		order, err := svc.CancelOrder(
+			r.Context(), orderID, req.Token, req.Reason, req.Force)
 		if err != nil {
 			writeErr(w, err)
 			return
@@ -2147,6 +2156,7 @@ func pathAccountID(r *http.Request) (domain.AccountID, error) {
 // writeErr maps a domain sentinel error to the appropriate HTTP status and
 // JSON error body. The codes are: ErrInvalid -> 400 validation, ErrNotFound ->
 // 404 not_found, ErrAlreadyExists/ErrConflict -> 409 conflict,
+// ErrTerminalOrder -> 409 terminal_order,
 // ErrEngineRestarting -> 503 engine_restarting, ErrNotImplemented -> 501
 // not_implemented (the message is surfaced so the operator sees which SDK
 // capability is missing), and anything else -> 500 internal. The specific
@@ -2159,6 +2169,8 @@ func writeErr(w http.ResponseWriter, err error) {
 		writeErrMsg(w, http.StatusNotFound, "not_found", err.Error())
 	case errors.Is(err, domain.ErrAlreadyExists):
 		writeErrMsg(w, http.StatusConflict, "conflict", err.Error())
+	case errors.Is(err, domain.ErrTerminalOrder):
+		writeErrMsg(w, http.StatusConflict, "terminal_order", domain.ErrTerminalOrder.Error())
 	case errors.Is(err, domain.ErrConflict):
 		writeErrMsg(w, http.StatusConflict, "conflict", err.Error())
 	case errors.Is(err, domain.ErrEngineRestarting):

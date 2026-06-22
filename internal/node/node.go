@@ -222,7 +222,8 @@ type Node interface {
 	// preserving the fill. A second confirm on an already-resolved reservation
 	// returns domain.ErrConflict; an unknown reservation returns domain.ErrNotFound.
 	ConfirmHeld(
-		ctx context.Context, tenant domain.TenantID, orderID int64, approvalID string, caller domain.Caller,
+		ctx context.Context, tenant domain.TenantID, orderID int64,
+		approvalID string, caller domain.Caller, force bool,
 	) (domain.Order, error)
 
 	// CancelHeld rolls back the held reservation identified by approvalID through
@@ -234,7 +235,8 @@ type Node interface {
 	// written, so the fill is never clobbered. It is tolerant of an already-
 	// resolved reservation in the engine (idempotent native rollback).
 	CancelHeld(
-		ctx context.Context, tenant domain.TenantID, orderID int64, approvalID string, caller domain.Caller,
+		ctx context.Context, tenant domain.TenantID, orderID int64,
+		approvalID string, caller domain.Caller, force bool,
 	) (domain.Order, error)
 
 	// ReconcileOrphans reports persisted reservation intents still held after
@@ -250,6 +252,15 @@ type Node interface {
 	ApplyExecutionReport(
 		ctx context.Context, key Key, in domain.ExecutionReportInput, caller domain.Caller,
 	) (engine.ExecutionReportResult, error)
+
+	// PersistOrderApproval stamps the signed approval envelope onto the order's
+	// pre-trade verdict and records an approval_issued event. It is write-once:
+	// the envelope is set only when the order carries none yet, so a retry or a
+	// later fill never clobbers the issued envelope. Signing is additive and runs
+	// after the order is already durable, so this never mutates money or status.
+	PersistOrderApproval(
+		ctx context.Context, key Key, orderID int64, env domain.OrderApproval,
+	) error
 
 	// GetOrder returns the order with its events and trades.
 	GetOrder(ctx context.Context, tenant domain.TenantID, id int64) (domain.OrderDetail, error)

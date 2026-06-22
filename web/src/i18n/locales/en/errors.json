@@ -3,6 +3,7 @@
     "validation": "The request was rejected as invalid.",
     "not_found": "The requested resource was not found.",
     "conflict": "The request conflicts with the current state.",
+    "terminal_order": "The order is in a terminal status.",
     "precondition": "A precondition for the request was not met.",
     "engine_restarting": "The risk engine is restarting; retry after it finishes.",
     "not_implemented": "The requested operation is not implemented.",

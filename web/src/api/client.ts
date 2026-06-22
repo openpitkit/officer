@@ -53,6 +53,7 @@ import type {
   McpCommand,
   NodeHealth,
   Order,
+  OrderApproval,
   OrderEvent,
   SigningKey,
   SigningKeyFormat,
@@ -75,6 +76,7 @@ export type ApiErrorCode =
   | "validation"
   | "not_found"
   | "conflict"
+  | "terminal_order"
   | "precondition"
   | "engine_restarting"
   | "not_implemented"
@@ -132,6 +134,7 @@ function asCode(v: unknown): ApiErrorCode {
     case "validation":
     case "not_found":
     case "conflict":
+    case "terminal_order":
     case "precondition":
     case "engine_restarting":
     case "not_implemented":
@@ -916,10 +919,12 @@ async function toApiError(res: Response, path: string): Promise<ApiError> {
       code = "not_implemented";
     }
   }
-  // Prefer the backend's human message; otherwise a localized per-code default,
-  // falling back to the generic HTTP line when the code is still unspecific.
+  // Prefer the backend's human message except for terminal_order, where the UI
+  // owns localized operator copy. Otherwise fall back to per-code defaults.
   const message =
-    bodyMessage.length > 0
+    code === "terminal_order"
+      ? defaultMessage(code)
+      : bodyMessage.length > 0
       ? bodyMessage
       : code === "internal"
         ? i18n.t("errors:http", { path, status: res.status })
@@ -1651,17 +1656,35 @@ export async function fetchOrders(
   return normalizeArray(pick(o, "orders", "Orders"), normalizeOrder);
 }
 
-/** GET /orders/{id}: the order plus its events and trades. */
+function normalizeOrderApproval(v: unknown): OrderApproval | null {
+  if (!isObject(v)) {
+    return null;
+  }
+  const rawAlg = asString(pick(v, "alg", "Alg"));
+  const alg: OrderApproval["alg"] = rawAlg === "none" ? "none" : "ed25519";
+  return {
+    token: asString(pick(v, "token", "Token")),
+    keyId: asString(pick(v, "keyId", "KeyId", "key_id")),
+    alg,
+    mode: asString(pick(v, "mode", "Mode")),
+    issuedAt: asString(pick(v, "issuedAt", "IssuedAt", "issued_at")),
+    expiresAt: asString(pick(v, "expiresAt", "ExpiresAt", "expires_at")),
+    signed: asBool(pick(v, "signed", "Signed")),
+  };
+}
+
+/** GET /orders/{id}: the order plus its events, trades, and approval envelope. */
 export async function fetchOrderDetail(
   id: number,
   signal?: AbortSignal,
-): Promise<{ order: Order; events: OrderEvent[]; trades: Trade[] }> {
+): Promise<{ order: Order; events: OrderEvent[]; trades: Trade[]; approval: OrderApproval | null }> {
   const v = await request(`${BASE}/orders/${id}`, { signal });
   const o = isObject(v) ? v : {};
   return {
     order: normalizeOrder(pick(o, "order", "Order")),
     events: normalizeArray(pick(o, "events", "Events"), normalizeOrderEvent),
     trades: normalizeArray(pick(o, "trades", "Trades"), normalizeTrade),
+    approval: normalizeOrderApproval(pick(o, "approval", "Approval")),
   };
 }
 
@@ -1669,6 +1692,7 @@ interface ExecutionReportBody {
   quantity: string;
   price: string;
   lockPrice?: string;
+  force?: boolean;
   final: boolean;
 }
 

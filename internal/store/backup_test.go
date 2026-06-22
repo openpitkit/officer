@@ -57,8 +57,8 @@ func TestBackupExportCarriesVersionAndScope(t *testing.T) {
 		t.Fatalf("format version = %d, want %d",
 			archive.Manifest.FormatVersion, backup.CurrentFormatVersion)
 	}
-	if archive.Manifest.SchemaVersion != 3 {
-		t.Fatalf("schema version = %d, want 3", archive.Manifest.SchemaVersion)
+	if archive.Manifest.SchemaVersion != 1 {
+		t.Fatalf("schema version = %d, want 1", archive.Manifest.SchemaVersion)
 	}
 	if len(archive.Data.Accounts) != 1 || archive.Data.Accounts[0].ID != "acc-1" {
 		t.Fatalf("unexpected accounts: %+v", archive.Data.Accounts)
@@ -462,7 +462,7 @@ func TestBackupRestoreRollsBackOnFailure(t *testing.T) {
 	target := openStore(t)
 	seedBackupStore(t, ctx, target, "target")
 	now := time.Date(2026, 6, 22, 12, 0, 0, 0, time.UTC)
-	archive := backup.NewArchive(now, "test", 3, backup.Scope{All: true}, backup.Data{
+	archive := backup.NewArchive(now, "test", 1, backup.Scope{All: true}, backup.Data{
 		Groups: []domain.AccountGroup{{
 			Tenant: domain.DefaultTenant,
 			ID:     "grp-rollback",
@@ -513,7 +513,7 @@ func TestBackupRestoreSkipsOrphanMarketDataQuotes(t *testing.T) {
 			CreatedAt:     now,
 			Format:        backup.Format,
 			Source:        "test",
-			SchemaVersion: 3,
+			SchemaVersion: 1,
 			FormatVersion: backup.CurrentFormatVersion,
 			Sections:      backup.AllSections,
 		},
@@ -563,7 +563,7 @@ func TestBackupRestoreCountsMixedMarketDataQuotes(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	now := time.Date(2026, 6, 22, 12, 45, 0, 0, time.UTC)
-	archive := backup.NewArchive(now, "test", 3, backup.Scope{All: true},
+	archive := backup.NewArchive(now, "test", 1, backup.Scope{All: true},
 		backup.Data{
 			MarketDataInstances: []domain.MarketDataInstance{{
 				ID:      "manual-1",
@@ -656,7 +656,7 @@ func TestBackupRestoreReplaceAllQuotesOnlySkipsMissingTargetInstruments(t *testi
 	}); err != nil {
 		t.Fatalf("UpsertMarketDataQuote: %v", err)
 	}
-	archive := backup.NewArchive(now, "test", 3,
+	archive := backup.NewArchive(now, "test", 1,
 		backup.Scope{Sections: []backup.Section{backup.SectionMarketDataQuotes}},
 		backup.Data{MarketDataQuotes: []domain.MarketDataQuote{{
 			InstanceID:     "manual-1",
@@ -699,7 +699,7 @@ func TestBackupRestoreRejectsOrphanMarketDataInstrumentsAndRollsBack(t *testing.
 	} {
 		t.Run(string(mode), func(t *testing.T) {
 			target := openStore(t)
-			archive := backup.NewArchive(now, "test", 3,
+			archive := backup.NewArchive(now, "test", 1,
 				backup.Scope{All: true}, backup.Data{
 					Accounts: []domain.Account{{
 						Tenant: domain.DefaultTenant,
@@ -736,7 +736,7 @@ func TestBackupRestoreDropsOrphanActivityChildrenBeforeSQL(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	now := time.Date(2026, 6, 22, 13, 30, 0, 0, time.UTC)
-	archive := backup.NewArchive(now, "test", 3, backup.Scope{All: true},
+	archive := backup.NewArchive(now, "test", 1, backup.Scope{All: true},
 		backup.Data{
 			Accounts: []domain.Account{{
 				Tenant: domain.DefaultTenant,
@@ -801,7 +801,7 @@ func TestBackupRestoreReplaceAllResetsAutoSequences(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 6, 22, 14, 0, 0, 0, time.UTC)
 	target := openStore(t)
-	archive := backup.NewArchive(now, "test", 3, backup.Scope{All: true},
+	archive := backup.NewArchive(now, "test", 1, backup.Scope{All: true},
 		backup.Data{
 			Accounts: []domain.Account{{
 				Tenant: domain.DefaultTenant,

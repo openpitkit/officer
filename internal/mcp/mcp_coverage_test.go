@@ -147,13 +147,13 @@ func (s *setMDErrSource) SubmitOrderToken(
 }
 
 func (s *setMDErrSource) ConfirmExecution(
-	context.Context, int64, string,
+	context.Context, int64, string, bool,
 ) (domain.Order, error) {
 	return domain.Order{}, nil
 }
 
 func (s *setMDErrSource) CancelOrder(
-	context.Context, int64, string, string,
+	context.Context, int64, string, string, bool,
 ) (domain.Order, error) {
 	return domain.Order{}, nil
 }

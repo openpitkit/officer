@@ -52,12 +52,14 @@ type submitCall struct {
 type confirmCall struct {
 	orderID int64
 	token   string
+	force   bool
 }
 
 type cancelCallRecord struct {
 	orderID int64
 	token   string
 	reason  string
+	force   bool
 }
 
 func (f *approvalFakeSource) SubmitOrderToken(
@@ -68,16 +70,25 @@ func (f *approvalFakeSource) SubmitOrderToken(
 }
 
 func (f *approvalFakeSource) ConfirmExecution(
-	_ context.Context, orderID int64, token string,
+	_ context.Context, orderID int64, token string, force bool,
 ) (domain.Order, error) {
-	f.confirmCalls = append(f.confirmCalls, confirmCall{orderID: orderID, token: token})
+	f.confirmCalls = append(f.confirmCalls, confirmCall{
+		orderID: orderID,
+		token:   token,
+		force:   force,
+	})
 	return f.confirmOrder, f.confirmErr
 }
 
 func (f *approvalFakeSource) CancelOrder(
-	_ context.Context, orderID int64, token, reason string,
+	_ context.Context, orderID int64, token, reason string, force bool,
 ) (domain.Order, error) {
-	f.cancelCalls = append(f.cancelCalls, cancelCallRecord{orderID: orderID, token: token, reason: reason})
+	f.cancelCalls = append(f.cancelCalls, cancelCallRecord{
+		orderID: orderID,
+		token:   token,
+		reason:  reason,
+		force:   force,
+	})
 	return f.cancelOrder, f.cancelErr
 }
 
@@ -307,7 +318,9 @@ func TestConfirmExecutionHappyPath(t *testing.T) {
 		confirmOrder: domain.Order{ID: 7, Status: domain.OrderStatusCommitted},
 	}
 
-	res := callConfirmExecution(t, src, confirmExecutionInput{OrderID: 7, Token: "tok-abc"})
+	res := callConfirmExecution(t, src, confirmExecutionInput{
+		OrderID: 7, Token: "tok-abc", Force: true,
+	})
 
 	if res.IsError {
 		t.Fatalf("unexpected error: %v", res.Content)
@@ -325,6 +338,9 @@ func TestConfirmExecutionHappyPath(t *testing.T) {
 	}
 	if src.confirmCalls[0].token != "tok-abc" {
 		t.Errorf("token: want tok-abc got %q", src.confirmCalls[0].token)
+	}
+	if !src.confirmCalls[0].force {
+		t.Error("force: want true")
 	}
 }
 
@@ -358,7 +374,9 @@ func TestCancelHappyPath(t *testing.T) {
 		cancelOrder: domain.Order{ID: 9, Status: domain.OrderStatusRolledBack},
 	}
 
-	res := callCancel(t, src, cancelInput{OrderID: 9, Token: "tok-xyz", Reason: "operator"})
+	res := callCancel(t, src, cancelInput{
+		OrderID: 9, Token: "tok-xyz", Reason: "operator", Force: true,
+	})
 
 	if res.IsError {
 		t.Fatalf("unexpected error: %v", res.Content)
@@ -377,6 +395,9 @@ func TestCancelHappyPath(t *testing.T) {
 	c := src.cancelCalls[0]
 	if c.reason != "operator" {
 		t.Errorf("reason: want operator got %q", c.reason)
+	}
+	if !c.force {
+		t.Error("force: want true")
 	}
 }
 

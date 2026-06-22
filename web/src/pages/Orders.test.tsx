@@ -52,6 +52,7 @@ vi.mock("@/api/client", async () => {
     checkOrder: vi.fn(),
     createOrder: vi.fn(),
     fetchOrderDetail: vi.fn(),
+    submitExecutionReport: vi.fn().mockResolvedValue({ blocks: [] }),
   };
 });
 
@@ -59,6 +60,7 @@ import {
   checkOrder,
   createOrder,
   fetchOrderDetail,
+  submitExecutionReport,
 } from "@/api/client";
 import { useBalances } from "@/api/useBalances";
 import { useOrders } from "@/api/useOrders";
@@ -74,6 +76,7 @@ const useBalancesMock = vi.mocked(useBalances);
 const checkOrderMock = vi.mocked(checkOrder);
 const createOrderMock = vi.mocked(createOrder);
 const fetchOrderDetailMock = vi.mocked(fetchOrderDetail);
+const submitExecutionReportMock = vi.mocked(submitExecutionReport);
 
 const sampleOrder: Order = {
   id: 1,
@@ -122,7 +125,13 @@ beforeEach(async () => {
     wouldBlock: null,
   });
   createOrderMock.mockResolvedValue(sampleOrder);
-  fetchOrderDetailMock.mockResolvedValue({ order: sampleOrder, events: [], trades: [] });
+  submitExecutionReportMock.mockResolvedValue({ blocks: [] });
+  fetchOrderDetailMock.mockResolvedValue({
+    order: sampleOrder,
+    events: [],
+    trades: [],
+    approval: null,
+  });
 });
 
 describe("Orders account pre-fill", () => {
@@ -282,6 +291,7 @@ describe("Order detail account block placement", () => {
       order,
       events,
       trades: [],
+      approval: null,
     });
     renderOrders("/orders");
 
@@ -303,5 +313,67 @@ describe("Order detail account block placement", () => {
         /failed to access required field/i,
       ),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("Execution report force submit", () => {
+  it("sends force when submitting a cloned execution report with force enabled", async () => {
+    const user = userEvent.setup();
+    const order = {
+      ...sampleOrder,
+      id: 4,
+      status: "filled",
+      price: "12",
+      lockPrices: ["12"],
+    };
+    const trades: Trade[] = [
+      {
+        id: 9,
+        orderId: 4,
+        account: "desk-alpha",
+        at: "2026-06-24T11:08:00Z",
+        source: "panel",
+        baseAsset: "AAPL",
+        quoteAsset: "USD",
+        side: "buy",
+        quantity: "2",
+        price: "12",
+        lockPrice: "12",
+      },
+    ];
+
+    useOrdersMock.mockReturnValue(readyEmpty<Order[]>([order]));
+    fetchOrderDetailMock.mockResolvedValueOnce({
+      order,
+      events: [],
+      trades,
+      approval: null,
+    });
+    renderOrders("/orders");
+
+    await user.click(screen.getByText("#4"));
+    await screen.findByRole("dialog", { name: "Order #4" });
+    await user.click(
+      screen.getByLabelText("Clone execution report for trade #9"),
+    );
+    await user.click(
+      await screen.findByLabelText(
+        "Force: bypass Officer checks, send straight to the engine",
+      ),
+    );
+    await user.click(screen.getByRole("button", { name: "Submit" }));
+
+    await waitFor(() =>
+      expect(submitExecutionReportMock).toHaveBeenCalledWith(
+        4,
+        expect.objectContaining({
+          quantity: "2",
+          price: "12",
+          lockPrice: "12",
+          force: true,
+          final: true,
+        }),
+      ),
+    );
   });
 });

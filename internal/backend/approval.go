@@ -303,7 +303,7 @@ func (s *Service) SubmitOrderToken(
 // an idempotent success; a confirm of a cancelled or expired reservation is a
 // conflict. The confirmation is audited as approval_confirmed.
 func (s *Service) ConfirmExecution(
-	ctx context.Context, orderID int64, token string,
+	ctx context.Context, orderID int64, token string, force bool,
 ) (domain.Order, error) {
 	signer, err := s.signerOrErr()
 	if err != nil {
@@ -323,6 +323,14 @@ func (s *Service) ConfirmExecution(
 		return stored.Order, nil
 	case domain.OrderStatusAccepted:
 	default:
+		if domain.OrderStatusTerminal(stored.Order.Status) {
+			if !force {
+				return domain.Order{}, fmt.Errorf(
+					"backend: order %d is in terminal status %q: %w",
+					orderID, stored.Order.Status, domain.ErrTerminalOrder)
+			}
+			break
+		}
 		return domain.Order{}, fmt.Errorf(
 			"backend: order %d status %q cannot confirm held approval: %w",
 			orderID, stored.Order.Status, domain.ErrConflict)
@@ -338,7 +346,8 @@ func (s *Service) ConfirmExecution(
 	}
 
 	caller := auth.CallerFromContext(ctx)
-	order, err := n.ConfirmHeld(ctx, domain.DefaultTenant, orderID, result.Payload.ApprovalID, caller)
+	order, err := n.ConfirmHeld(
+		ctx, domain.DefaultTenant, orderID, result.Payload.ApprovalID, caller, force)
 	if err != nil {
 		// The engine guards the double-commit panic by returning a conflict on an
 		// already-resolved reservation. A confirm of an already-committed order is
@@ -350,8 +359,13 @@ func (s *Service) ConfirmExecution(
 		}
 		return domain.Order{}, err
 	}
-	_ = s.auditApproval(ctx, n, keyFor(order.Account), domain.AuditActionApprovalConfirmed,
-		fmt.Sprintf("confirm approval %s order %d", result.Payload.ApprovalID, orderID))
+	detail := fmt.Sprintf(
+		"confirm approval %s order %d", result.Payload.ApprovalID, orderID)
+	if force && domain.OrderStatusTerminal(stored.Order.Status) {
+		detail += " forced=true"
+	}
+	_ = s.auditApproval(
+		ctx, n, keyFor(order.Account), domain.AuditActionApprovalConfirmed, detail)
 	return order, nil
 }
 
@@ -361,7 +375,7 @@ func (s *Service) ConfirmExecution(
 // engine side and still records the cancelled lifecycle. The cancellation is
 // audited as approval_cancelled, with reason.
 func (s *Service) CancelOrder(
-	ctx context.Context, orderID int64, token, reason string,
+	ctx context.Context, orderID int64, token, reason string, force bool,
 ) (domain.Order, error) {
 	signer, err := s.signerOrErr()
 	if err != nil {
@@ -377,9 +391,17 @@ func (s *Service) CancelOrder(
 		return domain.Order{}, err
 	}
 	if stored.Order.Status != domain.OrderStatusAccepted {
-		return domain.Order{}, fmt.Errorf(
-			"backend: order %d status %q cannot cancel held approval: %w",
-			orderID, stored.Order.Status, domain.ErrConflict)
+		if domain.OrderStatusTerminal(stored.Order.Status) {
+			if !force {
+				return domain.Order{}, fmt.Errorf(
+					"backend: order %d is in terminal status %q: %w",
+					orderID, stored.Order.Status, domain.ErrTerminalOrder)
+			}
+		} else {
+			return domain.Order{}, fmt.Errorf(
+				"backend: order %d status %q cannot cancel held approval: %w",
+				orderID, stored.Order.Status, domain.ErrConflict)
+		}
 	}
 	result, err := signer.Verify(ctx, token, verifyParamsFor(stored.Order))
 	if err != nil {
@@ -392,12 +414,18 @@ func (s *Service) CancelOrder(
 	}
 
 	caller := auth.CallerFromContext(ctx)
-	order, err := n.CancelHeld(ctx, domain.DefaultTenant, orderID, result.Payload.ApprovalID, caller)
+	order, err := n.CancelHeld(
+		ctx, domain.DefaultTenant, orderID, result.Payload.ApprovalID, caller, force)
 	if err != nil {
 		return domain.Order{}, err
 	}
-	_ = s.auditApproval(ctx, n, keyFor(order.Account), domain.AuditActionApprovalCancelled,
-		fmt.Sprintf("cancel approval %s order %d reason=%s", result.Payload.ApprovalID, orderID, reason))
+	detail := fmt.Sprintf(
+		"cancel approval %s order %d reason=%s", result.Payload.ApprovalID, orderID, reason)
+	if force && domain.OrderStatusTerminal(stored.Order.Status) {
+		detail += " forced=true"
+	}
+	_ = s.auditApproval(
+		ctx, n, keyFor(order.Account), domain.AuditActionApprovalCancelled, detail)
 	return order, nil
 }
 
@@ -485,6 +513,45 @@ func buildApprovalPayload(
 		IssuedAt:       issuedAt.Format(time.RFC3339Nano),
 		ExpiresAt:      expiresAt.Format(time.RFC3339Nano),
 		Nonce:          nonce,
+	}
+}
+
+// buildRejectApprovalPayload assembles the canonical approval payload for a
+// rejected pre-trade verdict. It binds the same order params as the accept path
+// (so the envelope re-binds against the order it records), carries an empty
+// estimate, and stamps the first engine reject onto the Reject* fields.
+func buildRejectApprovalPayload(
+	order domain.Order, mode, approvalID string, reject domain.OrderReject,
+	issuedAt, expiresAt time.Time, nonce string,
+) domain.ApprovalPayload {
+	orderType := "market"
+	if order.Price != "" {
+		orderType = "limit"
+	}
+	return domain.ApprovalPayload{
+		Version:       approvalPayloadVersion,
+		ApprovalID:    approvalID,
+		ReservationID: approvalID,
+		Mode:          mode,
+		OrderID:       order.ID,
+		Instrument:    order.BaseAsset + "/" + order.QuoteAsset,
+		Side:          string(order.Side),
+		Quantity:      order.AmountValue,
+		AmountKind:    string(order.AmountKind),
+		OrderType:     orderType,
+		LimitPrice:    order.Price,
+		PriceCurrency: order.QuoteAsset,
+		AccountID:     string(order.Account),
+		Verdict:       "reject",
+		PolicySummary: "rejected",
+		EstimatePrice: "",
+		IssuedAt:      issuedAt.Format(time.RFC3339Nano),
+		ExpiresAt:     expiresAt.Format(time.RFC3339Nano),
+		Nonce:         nonce,
+		RejectCode:    reject.Code,
+		RejectScope:   reject.Scope,
+		RejectPolicy:  reject.Policy,
+		RejectReason:  reject.Reason,
 	}
 }
 

@@ -22,6 +22,8 @@ import {
   useState,
 } from "react";
 import {
+  ChevronDown,
+  ChevronRight,
   Coins,
   Copy,
   Plus,
@@ -257,23 +259,86 @@ function buildBoundsDraft(bounds: BoundsDraftState): BoundsPair | undefined {
   return pair.lower || pair.upper ? pair : undefined;
 }
 
-function AdjustmentSnapshot({
-  label,
+function AveragePriceIntentRow({
+  current,
   value,
-  className,
+  valid,
+  disabled,
+  onChange,
+  onSubmit,
 }: {
-  label: string;
-  value: string | undefined;
-  className?: string;
+  current: string | undefined;
+  value: string;
+  valid: boolean;
+  disabled: boolean;
+  onChange: (next: string) => void;
+  onSubmit: () => void;
 }) {
+  const { t } = useTranslation("positions");
+  const invalid = hasValue(value) && !valid;
+  const result = hasValue(value) ? value.trim() : null;
+  const label = t("balances.columns.avgEntryPrice");
+
   return (
-    <div className="border-r border-border px-3 py-2 last:border-r-0">
-      <p className="text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted">
-        {label}
-      </p>
-      <p className={cn("nums mt-1 text-sm text-text", className)}>
-        {dash(value)}
-      </p>
+    <div className="grid gap-2 border-t border-border px-3 py-3 md:grid-cols-[minmax(8rem,1fr)_8rem_minmax(10rem,1.2fr)_minmax(8rem,1fr)] md:items-end">
+      <div>
+        <p className="text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted">
+          {label}
+        </p>
+        <p className="nums mt-1 text-sm text-text">{dash(current)}</p>
+      </div>
+      <div className="space-y-1">
+        <p className="text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted md:hidden">
+          {t("panel.columns.intent")}
+        </p>
+        <div
+          className="flex h-8 items-center rounded-card border border-border bg-surface px-3 text-xs text-muted-lt"
+          aria-label={t("panel.modeAriaLabel", { field: label })}
+        >
+          {t("dialog.mode.absolute")}
+        </div>
+      </div>
+      <div className="space-y-1">
+        <Label htmlFor="adjust-average-entry-price" className="md:hidden">
+          {t("panel.columns.amount")}
+        </Label>
+        <NumberStepper
+          id="adjust-average-entry-price"
+          value={value}
+          spellCheck={false}
+          placeholder={t("panel.noChange")}
+          inputClassName="h-8 text-right text-xs"
+          disabled={disabled}
+          aria-label={t("dialog.fields.avgEntryPrice")}
+          onChange={onChange}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              onSubmit();
+            }
+          }}
+        />
+      </div>
+      <div>
+        <p className="text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted md:hidden">
+          {t("panel.columns.result")}
+        </p>
+        <p
+          className={cn(
+            "nums mt-1 text-sm",
+            invalid
+              ? "text-[var(--danger)]"
+              : result
+                ? "text-text"
+                : "text-muted-lt",
+          )}
+        >
+          {invalid
+            ? t("panel.invalidDecimal")
+            : result
+              ? result
+              : t("panel.noChange")}
+        </p>
+      </div>
     </div>
   );
 }
@@ -401,9 +466,6 @@ function BoundsIntentRow({
         <p className="text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted">
           {label}
         </p>
-        <p className="mt-1 text-xs text-muted-lt">
-          {t("panel.boundsOptional")}
-        </p>
       </div>
       <div className="space-y-1">
         <Label htmlFor={`adjust-${id}-lower`}>
@@ -488,6 +550,7 @@ function AdjustmentPanel({
     useState<BoundsDraftState>(emptyBoundsDraft);
   const [incomingBounds, setIncomingBounds] =
     useState<BoundsDraftState>(emptyBoundsDraft);
+  const [boundsOpen, setBoundsOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<Adjustment | null>(null);
@@ -517,6 +580,11 @@ function AdjustmentPanel({
     boundsHaveValue(balanceBounds) ||
     boundsHaveValue(heldBounds) ||
     boundsHaveValue(incomingBounds);
+  const boundsChangeCount = [
+    balanceBounds,
+    heldBounds,
+    incomingBounds,
+  ].filter(boundsHaveValue).length;
   const hasChanges =
     hasAmountChange || hasValue(avgPrice) || hasBoundsChange;
   const canSubmit =
@@ -608,12 +676,13 @@ function AdjustmentPanel({
             <p className="text-sm font-bold text-text">
               {t("panel.title")}
             </p>
-            <Badge variant="neutral">{trimAccount || t("panel.emptyAccount")}</Badge>
-            <Badge variant="neutral">{trimAsset || t("panel.emptyAsset")}</Badge>
+            <Badge variant="neutral">
+              {trimAccount || t("panel.emptyAccount")}
+            </Badge>
+            <Badge variant="neutral">
+              {trimAsset || t("panel.emptyAsset")}
+            </Badge>
           </div>
-          <p className="mt-1 text-xs text-muted-lt">
-            {balance ? t("panel.descriptionExisting") : t("panel.descriptionDraft")}
-          </p>
         </div>
         <Button
           variant="ghost"
@@ -658,30 +727,6 @@ function AdjustmentPanel({
         </div>
       )}
 
-      <div className="grid overflow-hidden border border-border md:grid-cols-5">
-        <AdjustmentSnapshot
-          label={t("balances.columns.available")}
-          value={balance?.available}
-        />
-        <AdjustmentSnapshot
-          label={t("balances.columns.held")}
-          value={balance?.held}
-        />
-        <AdjustmentSnapshot
-          label={t("balances.columns.incoming")}
-          value={balance?.incoming}
-        />
-        <AdjustmentSnapshot
-          label={t("balances.columns.avgEntryPrice")}
-          value={balance?.averageEntryPrice}
-        />
-        <AdjustmentSnapshot
-          label={t("balances.columns.realizedPnl")}
-          value={balance?.realizedPnl}
-          className={pnlClass(balance?.realizedPnl)}
-        />
-      </div>
-
       <div className="border border-border bg-bg">
         <div className="grid grid-cols-[minmax(8rem,1fr)_8rem_minmax(10rem,1.2fr)_minmax(8rem,1fr)] gap-2 px-3 py-2 text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted max-md:hidden">
           <span>{t("panel.columns.current")}</span>
@@ -716,70 +761,78 @@ function AdjustmentPanel({
           onChange={setIncoming}
           onSubmit={() => void submit()}
         />
+        <AveragePriceIntentRow
+          current={balance?.averageEntryPrice}
+          value={avgPrice}
+          valid={avgPriceValid}
+          disabled={disabled}
+          onChange={setAvgPrice}
+          onSubmit={() => void submit()}
+        />
       </div>
 
-      <div className="grid gap-3 md:grid-cols-[minmax(12rem,1fr)_minmax(16rem,2fr)]">
-        <div className="space-y-1.5">
-          <Label htmlFor="adjust-panel-avg">
-            {t("dialog.fields.avgEntryPrice")}
-          </Label>
-          <NumberStepper
-            id="adjust-panel-avg"
-            value={avgPrice}
-            spellCheck={false}
-            placeholder={t("panel.keepCurrent")}
-            inputClassName="h-8 text-right text-xs"
-            disabled={disabled}
-            onChange={setAvgPrice}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                void submit();
-              }
-            }}
-          />
-          <p
-            className={cn(
-              "text-[0.6875rem]",
-              avgPriceValid ? "text-muted-lt" : "text-[var(--danger)]",
+      <div className="border border-border bg-bg">
+        <button
+          type="button"
+          className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition-colors hover:bg-surface-hover"
+          aria-expanded={boundsOpen}
+          aria-controls="adjust-bounds-panel"
+          onClick={() => setBoundsOpen((open) => !open)}
+        >
+          <span className="flex items-center gap-2">
+            {boundsOpen ? (
+              <ChevronDown className="h-3.5 w-3.5 text-muted-lt" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5 text-muted-lt" />
             )}
+            <span className="text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted">
+              {t("dialog.bounds.sectionLabel")}
+            </span>
+          </span>
+          <Badge
+            variant={
+              allBoundsValid
+                ? boundsChangeCount > 0
+                  ? "accent"
+                  : "neutral"
+                : "danger"
+            }
           >
-            {avgPriceValid
-              ? t("panel.avgPreview", {
-                  current: dash(balance?.averageEntryPrice),
-                  result: hasValue(avgPrice) ? avgPrice.trim() : t("panel.noChange"),
-                })
+            {allBoundsValid
+              ? boundsChangeCount > 0
+                ? `${boundsChangeCount}/3`
+                : t("panel.noChange")
               : t("panel.invalidDecimal")}
-          </p>
-        </div>
-        <div className="border border-border bg-bg">
-          <p className="px-3 py-2 text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted">
-            {t("dialog.bounds.sectionLabel")}
-          </p>
-          <BoundsIntentRow
-            id="balance-bounds"
-            label={t("dialog.bounds.balanceLabel")}
-            field={balanceBounds}
-            disabled={disabled}
-            onChange={setBalanceBounds}
-            onSubmit={() => void submit()}
-          />
-          <BoundsIntentRow
-            id="held-bounds"
-            label={t("dialog.bounds.heldLabel")}
-            field={heldBounds}
-            disabled={disabled}
-            onChange={setHeldBounds}
-            onSubmit={() => void submit()}
-          />
-          <BoundsIntentRow
-            id="incoming-bounds"
-            label={t("dialog.bounds.incomingLabel")}
-            field={incomingBounds}
-            disabled={disabled}
-            onChange={setIncomingBounds}
-            onSubmit={() => void submit()}
-          />
-        </div>
+          </Badge>
+        </button>
+        {boundsOpen && (
+          <div id="adjust-bounds-panel">
+            <BoundsIntentRow
+              id="balance-bounds"
+              label={t("dialog.bounds.balanceLabel")}
+              field={balanceBounds}
+              disabled={disabled}
+              onChange={setBalanceBounds}
+              onSubmit={() => void submit()}
+            />
+            <BoundsIntentRow
+              id="held-bounds"
+              label={t("dialog.bounds.heldLabel")}
+              field={heldBounds}
+              disabled={disabled}
+              onChange={setHeldBounds}
+              onSubmit={() => void submit()}
+            />
+            <BoundsIntentRow
+              id="incoming-bounds"
+              label={t("dialog.bounds.incomingLabel")}
+              field={incomingBounds}
+              disabled={disabled}
+              onChange={setIncomingBounds}
+              onSubmit={() => void submit()}
+            />
+          </div>
+        )}
       </div>
 
       {outcome && <AdjustOutcomeView adjustment={outcome} />}

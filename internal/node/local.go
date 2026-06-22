@@ -28,6 +28,7 @@ import (
 
 	"github.com/shopspring/decimal"
 
+	"go.openpit.dev/officer/internal/auth"
 	"go.openpit.dev/officer/internal/backup"
 	"go.openpit.dev/officer/internal/domain"
 	"go.openpit.dev/officer/internal/engine"
@@ -1717,7 +1718,8 @@ func (n *localNode) SubmitImmediate(
 // ConfirmHeld commits the held reservation through the engine and records the
 // committed lifecycle on the order. The backend audits the confirmation.
 func (n *localNode) ConfirmHeld(
-	ctx context.Context, tenant domain.TenantID, orderID int64, approvalID string, caller domain.Caller,
+	ctx context.Context, tenant domain.TenantID, orderID int64,
+	approvalID string, caller domain.Caller, force bool,
 ) (domain.Order, error) {
 	if err := n.beginMutation(); err != nil {
 		return domain.Order{}, err
@@ -1737,17 +1739,22 @@ func (n *localNode) ConfirmHeld(
 		}
 	}
 	// One atomic store transaction: intent flip + order status advance + the
-	// reservation_committed event. The AllowedFrom={accepted} guard is TOCTOU-safe
-	// - a fill that flipped the order to filled before this tx yields ErrConflict
-	// (surfaced as the node's conflict error) and writes nothing, preserving the
-	// filled status. The native commit already happened; a store failure here does
-	// not re-resolve the handle (the engine's finishResolve already ran).
+	// reservation_committed event. Without force, AllowedFrom={accepted} is
+	// TOCTOU-safe: a concurrent fill that flipped the order to filled before this
+	// tx yields ErrConflict and writes nothing. Force drops the entire
+	// AllowedFrom store guard, including that concurrent-fill protection, because
+	// it means straight to the engine with no Officer checks. The native commit
+	// already happened; a store failure here does not re-resolve the handle.
+	allowedFrom := []domain.OrderStatus{domain.OrderStatusAccepted}
+	if force {
+		allowedFrom = nil
+	}
 	if err := n.store.ResolveOrderReservation(ctx, domain.ReservationResolution{
 		Tenant:      tenant,
 		ApprovalID:  approvalID,
 		IntentState: domain.ReservationIntentStateCommitted,
 		OrderStatus: domain.OrderStatusCommitted,
-		AllowedFrom: []domain.OrderStatus{domain.OrderStatusAccepted},
+		AllowedFrom: allowedFrom,
 		Events: []domain.OrderEvent{{
 			OrderID:   orderID,
 			Type:      domain.OrderEventReservationCommitted,
@@ -1768,7 +1775,8 @@ func (n *localNode) ConfirmHeld(
 // CancelHeld rolls back the held reservation through the engine and records the
 // cancelled lifecycle on the order. The backend audits the cancellation.
 func (n *localNode) CancelHeld(
-	ctx context.Context, tenant domain.TenantID, orderID int64, approvalID string, caller domain.Caller,
+	ctx context.Context, tenant domain.TenantID, orderID int64,
+	approvalID string, caller domain.Caller, force bool,
 ) (domain.Order, error) {
 	if err := n.beginMutation(); err != nil {
 		return domain.Order{}, err
@@ -1787,16 +1795,21 @@ func (n *localNode) CancelHeld(
 		}
 	}
 	// One atomic store transaction: intent flip + cancelled status +
-	// reservation_rolled_back and cancelled events. AllowedFrom={accepted} is
-	// TOCTOU-safe: a late fill that flipped the order to filled before this tx
-	// yields ErrConflict (surfaced as the node's conflict error) and writes
-	// nothing, so a filled order is never clobbered into cancelled.
+	// reservation_rolled_back and cancelled events. Without force,
+	// AllowedFrom={accepted} is TOCTOU-safe: a concurrent fill that flipped the
+	// order to filled before this tx yields ErrConflict and writes nothing. Force
+	// drops the entire AllowedFrom store guard, including that concurrent-fill
+	// protection, because it means straight to the engine with no Officer checks.
+	allowedFrom := []domain.OrderStatus{domain.OrderStatusAccepted}
+	if force {
+		allowedFrom = nil
+	}
 	if err := n.store.ResolveOrderReservation(ctx, domain.ReservationResolution{
 		Tenant:      tenant,
 		ApprovalID:  approvalID,
 		IntentState: domain.ReservationIntentStateRolledBack,
 		OrderStatus: domain.OrderStatusCancelled,
-		AllowedFrom: []domain.OrderStatus{domain.OrderStatusAccepted},
+		AllowedFrom: allowedFrom,
 		Events: []domain.OrderEvent{
 			{
 				OrderID:   orderID,
@@ -2058,16 +2071,21 @@ func (n *localNode) ApplyExecutionReport(
 	// held/incoming follow the engine's resulting absolutes; realized P&L is
 	// delta-accumulated in-tx, never overwritten with the reported absolute - a
 	// spot fill settles both legs, so each outcome is keyed on its own asset), the
-	// trade, engine-block UPDATEs, and the fill status. AllowedFrom guards against
-	// terminal-status clobber (a duplicate or late execution report for an order
-	// already in a terminal state returns ErrConflict and writes nothing). The
-	// block-audit rows are observational and stay a post-commit best-effort write below.
+	// trade, engine-block UPDATEs, and the fill status. Without force, AllowedFrom
+	// guards terminal-status clobber. Force drops the entire AllowedFrom store
+	// guard, including TOCTOU protection against a concurrent fill, because it
+	// means straight to the engine with no Officer checks. The block-audit rows
+	// are observational and stay a post-commit best-effort write below.
+	allowedFrom := domain.OrderStatusesEligibleForFill()
+	if in.Force {
+		allowedFrom = nil
+	}
 	if err := n.store.RecordOrderSettlement(ctx, domain.OrderSettlement{
 		Tenant:      key.Tenant,
 		Account:     key.Account,
 		OrderID:     in.OrderID,
 		OrderStatus: status,
-		AllowedFrom: domain.OrderStatusesEligibleForFill(),
+		AllowedFrom: allowedFrom,
 		Balances:    balanceSettlementsFrom(result.Outcomes),
 		Events: []domain.OrderEvent{
 			fillSettlementEvent(in.OrderID, domain.OrderEventFill, caller, fillPayload),
@@ -2094,11 +2112,15 @@ func (n *localNode) ApplyExecutionReport(
 		return engine.ExecutionReportResult{}, err
 	}
 
+	detail := executionReportDetail(in, len(result.Blocks))
+	if in.Force {
+		detail += " forced=true"
+	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action:  domain.AuditActionExecutionReport,
 		Tenant:  key.Tenant,
 		Account: key.Account,
-		Detail:  executionReportDetail(in, len(result.Blocks)),
+		Detail:  detail,
 	}); err != nil {
 		return engine.ExecutionReportResult{}, fmt.Errorf("audit execution report: %w", err)
 	}
@@ -2117,6 +2139,31 @@ func (n *localNode) appendOrderEvent(
 		Payload:   payload,
 	}); err != nil {
 		return fmt.Errorf("append order event %s: %w", typ, err)
+	}
+	return nil
+}
+
+// PersistOrderApproval stamps the signed approval envelope onto the order and
+// records the approval_issued event. It is write-once: store.UpdateOrderApproval
+// sets the envelope only when none is present, so a retry or a later fill never
+// clobbers it. The order is already durable, so this mutation only adds the
+// envelope; it never touches money or status.
+func (n *localNode) PersistOrderApproval(
+	ctx context.Context, key Key, orderID int64, env domain.OrderApproval,
+) error {
+	if err := n.beginMutation(); err != nil {
+		return err
+	}
+	defer n.endMutation()
+
+	if err := n.store.UpdateOrderApproval(ctx, key.Tenant, orderID, env); err != nil {
+		return fmt.Errorf("persist order approval: %w", err)
+	}
+	caller := auth.CallerFromContext(ctx)
+	if err := n.appendOrderEvent(
+		ctx, orderID, domain.OrderEventApprovalIssued, caller, domain.OrderEventPayload{},
+	); err != nil {
+		return err
 	}
 	return nil
 }

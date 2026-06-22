@@ -613,14 +613,14 @@ func (a sourceAdapter) SubmitOrderToken(
 
 // ConfirmExecution delegates to the backend confirm flow.
 func (a sourceAdapter) ConfirmExecution(
-	ctx context.Context, orderID int64, token string,
+	ctx context.Context, orderID int64, token string, force bool,
 ) (domain.Order, error) {
-	return a.service.ConfirmExecution(ctx, orderID, token)
+	return a.service.ConfirmExecution(ctx, orderID, token, force)
 }
 
 // CancelOrder delegates to the backend cancel flow.
 func (a sourceAdapter) CancelOrder(
-	ctx context.Context, orderID int64, token, reason string,
+	ctx context.Context, orderID int64, token, reason string, force bool,
 ) (domain.Order, error) {
-	return a.service.CancelOrder(ctx, orderID, token, reason)
+	return a.service.CancelOrder(ctx, orderID, token, reason, force)
 }

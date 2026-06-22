@@ -816,6 +816,37 @@ func toOrderDTO(o domain.Order) orderDTO {
 	}
 }
 
+// orderApprovalDTO is the wire shape of an order's persisted signed approval
+// envelope. Token is the exact base64url envelope bytes; the rest is the
+// envelope metadata. Signed reports whether the envelope carries an Ed25519
+// signature (alg "ed25519") versus an eSign-off envelope (alg "none").
+type orderApprovalDTO struct {
+	Token     string `json:"token"`
+	KeyID     string `json:"keyId"`
+	Alg       string `json:"alg"`
+	Mode      string `json:"mode"`
+	IssuedAt  string `json:"issuedAt"`
+	ExpiresAt string `json:"expiresAt"`
+	Signed    bool   `json:"signed"`
+}
+
+// toOrderApprovalDTO maps an order's persisted envelope onto the wire DTO, or
+// returns nil when the order carries no envelope (approval token empty).
+func toOrderApprovalDTO(o domain.Order) *orderApprovalDTO {
+	if o.ApprovalToken == "" {
+		return nil
+	}
+	return &orderApprovalDTO{
+		Token:     o.ApprovalToken,
+		KeyID:     o.ApprovalKeyID,
+		Alg:       o.ApprovalAlg,
+		Mode:      o.ApprovalMode,
+		IssuedAt:  o.ApprovalIssuedAt,
+		ExpiresAt: o.ApprovalExpiresAt,
+		Signed:    o.ApprovalAlg == "ed25519",
+	}
+}
+
 // --- order check ------------------------------------------------------------
 
 // orderRejectDTO is the wire shape of one engine pre-trade reject from a
@@ -1045,12 +1076,14 @@ type approvalTokenDTO struct {
 // confirmExecutionRequestDTO is the body of POST /orders/{id}/confirm.
 type confirmExecutionRequestDTO struct {
 	Token string `json:"token"`
+	Force bool   `json:"force"`
 }
 
 // cancelOrderRequestDTO is the body of POST /orders/{id}/cancel.
 type cancelOrderRequestDTO struct {
 	Token  string `json:"token"`
 	Reason string `json:"reason"`
+	Force  bool   `json:"force"`
 }
 
 // toSigningKeyDTO maps a domain.SigningKey onto the wire DTO. It NEVER copies

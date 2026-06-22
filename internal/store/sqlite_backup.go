@@ -1257,6 +1257,8 @@ func restoreOrders(
 			order.BaseAsset, order.QuoteAsset, string(order.Side),
 			string(order.AmountKind), order.AmountValue,
 			order.Price, string(order.Status), string(lockPrices),
+			order.ApprovalToken, order.ApprovalKeyID, order.ApprovalAlg,
+			order.ApprovalMode, order.ApprovalIssuedAt, order.ApprovalExpiresAt,
 		)
 		if err != nil {
 			return fmt.Errorf("store: restore order %d: %w", order.ID, err)
