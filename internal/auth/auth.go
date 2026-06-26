@@ -36,8 +36,12 @@ type callerContextKey struct{}
 
 // systemCaller is the attribution used when no caller was stamped: a startup or
 // internal system action. Surfaces stamp their own caller (see
-// ContextWithCaller); an unstamped context is therefore system-initiated.
-var systemCaller = domain.Caller{Source: domain.SourceSystem, Principal: "system"}
+// ContextWithCaller); an unstamped context is therefore system-initiated. It
+// carries SourceSystem and NO principal: a system action has no actor, so its
+// audit/record rows store a NULL actor reference (Source=system marks the
+// channel). A literal "system" principal would reference a non-existent
+// dictionary row and be rejected by the strict actor resolution.
+var systemCaller = domain.Caller{Source: domain.SourceSystem}
 
 // ContextWithCaller returns a copy of ctx carrying caller. Each surface
 // resolves the caller server-side and stamps it here; the source is never read

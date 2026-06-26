@@ -40,8 +40,8 @@ func sampleMarketData() backend.MarketDataStatus {
 		Instances: []backend.MarketDataInstanceStatus{
 			{
 				Instance: domain.MarketDataInstance{
-					ID:          "bn-1",
-					Type:        "finnhub",
+					ExternalID:  extID("bn-1"),
+					Provider:    "finnhub",
 					Label:       "Primary",
 					Credentials: `{"token":"secret"}`,
 					Enabled:     true,
@@ -81,7 +81,7 @@ func TestListMarketData_OK(t *testing.T) {
 		t.Fatalf("want 1 instance, got %v", md["instances"])
 	}
 	inst := instances[0].(map[string]any)
-	if inst["id"] != "bn-1" || inst["state"] != "ok" {
+	if inst["externalId"] != extID("bn-1").String() || inst["state"] != "ok" {
 		t.Fatalf("unexpected instance: %v", inst)
 	}
 	if inst["credentials"] != "" {
@@ -158,13 +158,19 @@ func TestRestartMarketData_ServiceError(t *testing.T) {
 // --- POST /market-data/instances --------------------------------------------
 
 func TestCreateMarketDataInstance_Created(t *testing.T) {
-	svc := &fakeService{marketData: sampleMarketData()}
+	created := domain.MarketDataInstance{
+		ExternalID: extID("md-created"),
+		Provider:   "ib",
+		Label:      "Backup",
+		Enabled:    true,
+	}
+	svc := &fakeService{mdCreateResult: created}
 	r, err := newRouter(svc)
 	if err != nil {
 		t.Fatal(err)
 	}
 	body := bytes.NewBufferString(
-		`{"type":"ib","label":"Backup","credentials":"{\"host\":\"127.0.0.1\",\"port\":7496}","enabled":true}`)
+		`{"provider":"ib","label":"Backup","credentials":"{\"host\":\"127.0.0.1\",\"port\":7496}","enabled":true}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/market-data/instances", body))
@@ -172,8 +178,12 @@ func TestCreateMarketDataInstance_Created(t *testing.T) {
 		t.Fatalf("want 201, got %d", rec.Code)
 	}
 	m := bodyMap(t, rec.Result())
-	if _, ok := m["marketData"].(map[string]any); !ok {
-		t.Fatalf("want marketData object, got %v", m["marketData"])
+	instance, ok := m["instance"].(map[string]any)
+	if !ok {
+		t.Fatalf("want instance object, got %v", m["instance"])
+	}
+	if instance["externalId"] != created.ExternalID.String() {
+		t.Fatalf("want created externalId, got %v", instance["externalId"])
 	}
 	// The public create request carries no instance id; the backend assigns it.
 	want := `create:ib:Backup:{"host":"127.0.0.1","port":7496}:true`
@@ -211,7 +221,7 @@ func TestCreateMarketDataInstance_ServiceError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := bytes.NewBufferString(`{"type":"binance"}`)
+	body := bytes.NewBufferString(`{"provider":"binance"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/market-data/instances", body))
@@ -221,6 +231,96 @@ func TestCreateMarketDataInstance_ServiceError(t *testing.T) {
 	errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
 	if errObj["code"] != "validation" {
 		t.Fatalf("want code=validation, got %v", errObj["code"])
+	}
+}
+
+// TestCreateMarketDataInstance_SuppliedExternalID checks an optional supplied id
+// is threaded onto the instance entity as-is.
+func TestCreateMarketDataInstance_SuppliedExternalID(t *testing.T) {
+	supplied := extID("md-supplied")
+	svc := &fakeService{marketData: sampleMarketData()}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(fmt.Sprintf(
+		`{"externalId":%q,"provider":"ib","label":"Backup"}`, supplied.String()))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/api/v1/market-data/instances", body))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if svc.mdCreateInstance.ExternalID != supplied {
+		t.Errorf("supplied id not threaded: got %s, want %s",
+			svc.mdCreateInstance.ExternalID, supplied)
+	}
+}
+
+// TestCreateMarketDataInstance_AbsentExternalID checks omitting the id leaves the
+// backend to generate one (a zero id is passed through).
+func TestCreateMarketDataInstance_AbsentExternalID(t *testing.T) {
+	svc := &fakeService{marketData: sampleMarketData()}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"provider":"ib","label":"Backup"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/api/v1/market-data/instances", body))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !svc.mdCreateInstance.ExternalID.IsZero() {
+		t.Errorf("absent id should pass a zero id to the backend, got %s",
+			svc.mdCreateInstance.ExternalID)
+	}
+}
+
+// TestCreateMarketDataInstance_DuplicateConflict checks a duplicate supplied id
+// maps to 409 (the backend rejects with domain.ErrAlreadyExists).
+func TestCreateMarketDataInstance_DuplicateConflict(t *testing.T) {
+	svc := &fakeService{stateErr: domain.ErrAlreadyExists}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(fmt.Sprintf(
+		`{"externalId":%q,"provider":"ib","label":"Backup"}`, extID("md-dup").String()))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/api/v1/market-data/instances", body))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+	errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
+	if errObj["code"] != "conflict" {
+		t.Errorf("want code=conflict, got %v", errObj["code"])
+	}
+}
+
+// TestCreateMarketDataInstance_MalformedExternalID checks a malformed supplied id
+// maps to 400 before any backend call.
+func TestCreateMarketDataInstance_MalformedExternalID(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"externalId":"bad-id","provider":"ib","label":"Backup"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/api/v1/market-data/instances", body))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
+	if errObj["code"] != "validation" {
+		t.Errorf("want code=validation, got %v", errObj["code"])
+	}
+	if len(svc.mdCalls) != 0 {
+		t.Errorf("malformed id must not reach service: %v", svc.mdCalls)
 	}
 }
 
@@ -287,31 +387,34 @@ func TestUpdateMarketDataInstanceSettings_NotFound(t *testing.T) {
 
 func TestSetMarketDataInstanceEnabled_Toggle(t *testing.T) {
 	tests := []struct {
-		name    string
-		body    string
-		enabled bool
+		name             string
+		body             string
+		persistedEnabled bool
 	}{
 		{"enable", `{"enabled":true}`, true},
-		{"disable", `{"enabled":false}`, false},
+		{"disable response uses persisted enabled", `{"enabled":false}`, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			svc := &fakeService{}
+			status := sampleMarketData()
+			status.Instances[0].Instance.Enabled = tc.persistedEnabled
+			id := status.Instances[0].Instance.ExternalID.String()
+			svc := &fakeService{marketData: status}
 			r, err := newRouter(svc)
 			if err != nil {
 				t.Fatal(err)
 			}
 			rec := httptest.NewRecorder()
 			r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut,
-				"/api/v1/market-data/instances/bn-1/enabled",
+				"/api/v1/market-data/instances/"+id+"/enabled",
 				bytes.NewBufferString(tc.body)))
 			if rec.Code != http.StatusOK {
 				t.Fatalf("want 200, got %d", rec.Code)
 			}
-			if bodyMap(t, rec.Result())["enabled"] != tc.enabled {
-				t.Fatalf("want enabled=%v body", tc.enabled)
+			if bodyMap(t, rec.Result())["enabled"] != tc.persistedEnabled {
+				t.Fatalf("want persisted enabled=%v body", tc.persistedEnabled)
 			}
-			want := fmt.Sprintf("instance:bn-1:%v", tc.enabled)
+			want := fmt.Sprintf("instance:%s:%v", id, strings.Contains(tc.body, "true"))
 			if len(svc.mdCalls) != 1 || svc.mdCalls[0] != want {
 				t.Fatalf("unexpected service calls: %v", svc.mdCalls)
 			}
@@ -339,8 +442,9 @@ func TestSetMarketDataInstanceEnabled_InvalidJSON(t *testing.T) {
 
 func TestSetMarketDataInstanceEnabled_NotFound(t *testing.T) {
 	// A wrapped ErrNotFound from the service maps to 404/not_found.
+	id := extID("bn-x").String()
 	svc := &fakeService{
-		stateErr: fmt.Errorf("instance %q: %w", "bn-x", domain.ErrNotFound),
+		stateErr: fmt.Errorf("instance %q: %w", id, domain.ErrNotFound),
 	}
 	r, err := newRouter(svc)
 	if err != nil {
@@ -348,7 +452,7 @@ func TestSetMarketDataInstanceEnabled_NotFound(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut,
-		"/api/v1/market-data/instances/bn-x/enabled",
+		"/api/v1/market-data/instances/"+id+"/enabled",
 		bytes.NewBufferString(`{"enabled":true}`)))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d", rec.Code)
@@ -373,7 +477,7 @@ func TestDeleteMarketDataInstance_NoContent(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("want 204, got %d", rec.Code)
 	}
-	if len(svc.mdCalls) != 1 || svc.mdCalls[0] != "delete-instance:bn-1" {
+	if len(svc.mdCalls) != 1 || svc.mdCalls[0] != "delete-instance:bn-1:false" {
 		t.Fatalf("unexpected service calls: %v", svc.mdCalls)
 	}
 }
@@ -392,7 +496,7 @@ func TestDeleteMarketDataInstance_URLEncodedID(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("want 204, got %d", rec.Code)
 	}
-	if len(svc.mdCalls) != 1 || svc.mdCalls[0] != "delete-instance:bn/1" {
+	if len(svc.mdCalls) != 1 || svc.mdCalls[0] != "delete-instance:bn/1:false" {
 		t.Fatalf("unexpected service calls: %v", svc.mdCalls)
 	}
 }
@@ -424,8 +528,10 @@ func TestUpsertMarketDataInstrument_OK(t *testing.T) {
 	body := bytes.NewBufferString(
 		`{"externalSymbol":"BTCUSDT","baseAsset":"BTC","quoteAsset":"USDT","enabled":true}`)
 	rec := httptest.NewRecorder()
+	// The upsert-instrument route parses the path id as the instance's opaque
+	// external id, so the path carries a valid external-id wire form.
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut,
-		"/api/v1/market-data/instances/bn-1/instruments", body))
+		"/api/v1/market-data/instances/"+extID("bn-1").String()+"/instruments", body))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
@@ -465,8 +571,10 @@ func TestUpsertMarketDataInstrument_ServiceError(t *testing.T) {
 	}
 	body := bytes.NewBufferString(`{"externalSymbol":"BTCUSDT"}`)
 	rec := httptest.NewRecorder()
+	// A valid external-id path reaches the service so the ErrInvalid the backend
+	// returns drives the 400, not the path-parse guard.
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut,
-		"/api/v1/market-data/instances/bn-1/instruments", body))
+		"/api/v1/market-data/instances/"+extID("bn-1").String()+"/instruments", body))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
@@ -743,7 +851,7 @@ func TestMarketDataSafeSettings_IBExposesContracts(t *testing.T) {
 	// exposed verbatim through the safe settings. The user-facing contractDefaults
 	// is no longer a setting and is never surfaced even if present in credentials.
 	instance := domain.MarketDataInstance{
-		Type: domain.MarketDataProviderIB,
+		Provider: domain.MarketDataProviderIB,
 		Credentials: `{
 			"host": "127.0.0.1",
 			"clientId": 7,
@@ -769,7 +877,7 @@ func TestMarketDataSafeSettings_IBOmitsAbsentContracts(t *testing.T) {
 	// With no contract overrides stored, the contracts key is absent
 	// (copyObjectSetting only copies non-empty maps).
 	instance := domain.MarketDataInstance{
-		Type:        domain.MarketDataProviderIB,
+		Provider:    domain.MarketDataProviderIB,
 		Credentials: `{"host": "127.0.0.1", "clientId": 7}`,
 	}
 	settings := marketDataSafeSettings(instance)

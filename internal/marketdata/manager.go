@@ -38,7 +38,7 @@ type Store interface {
 	// ListEnabledMarketDataInstruments returns the enabled instruments of the
 	// identified instance.
 	ListEnabledMarketDataInstruments(
-		ctx context.Context, instanceID string,
+		ctx context.Context, instance domain.ExternalID,
 	) ([]domain.MarketDataInstrument, error)
 	// UpsertMarketDataQuote records the latest quote snapshot for panel and
 	// dashboard observability.
@@ -84,7 +84,7 @@ type Manager struct {
 // applied during the latest Start. Backend status compares it to the stored
 // configuration to decide whether a feed restart is required.
 type AppliedInstanceConfig struct {
-	Type          string
+	Provider      string
 	Subscriptions []Subscription
 }
 
@@ -178,14 +178,17 @@ func (m *Manager) Start(ctx context.Context) error {
 // a diagnostic (logged via recordDiagLocked) and skips the instance. Callers
 // must hold mu.
 func (m *Manager) startInstanceLocked(ctx context.Context, instance domain.MarketDataInstance) {
+	// Use the 22-char string form of the external id as the runtime map key.
+	instanceID := instance.ExternalID.String()
+
 	// Drop any interval state from a prior run of this instance so a restart
 	// never surfaces a pre-restart gap.
-	m.clearInstanceIntervals(instance.ID)
-	instruments, err := m.store.ListEnabledMarketDataInstruments(ctx, instance.ID)
+	m.clearInstanceIntervals(instanceID)
+	instruments, err := m.store.ListEnabledMarketDataInstruments(ctx, instance.ExternalID)
 	if err != nil {
 		msg := fmt.Sprintf("read instruments: %v", err)
-		m.statuses[instance.ID] = InstanceRuntimeStatus{State: StateError, Error: msg}
-		m.recordDiagLocked(instance.ID, Diagnostic{
+		m.statuses[instanceID] = InstanceRuntimeStatus{State: StateError, Error: msg}
+		m.recordDiagLocked(instanceID, Diagnostic{
 			Level:       DiagError,
 			Code:        CodeInternalError,
 			Kind:        DiagKindProvider,
@@ -197,20 +200,22 @@ func (m *Manager) startInstanceLocked(ctx context.Context, instance domain.Marke
 		return
 	}
 	if len(instruments) == 0 {
-		m.appliedConfig[instance.ID] = AppliedInstanceConfig{
-			Type:          instance.Type,
-			Subscriptions: nil,
+		m.appliedConfig[instanceID] = AppliedInstanceConfig{
+			Provider: instance.Provider,
+			// No enabled instruments still applies a config: carry a non-nil empty
+			// subscription slice so the applied shape stays a slice, never nil.
+			Subscriptions: []Subscription{},
 		}
-		m.statuses[instance.ID] = InstanceRuntimeStatus{
+		m.statuses[instanceID] = InstanceRuntimeStatus{
 			State: StateError,
 			Error: "no enabled instruments",
 		}
-		m.recordDiagLocked(instance.ID, Diagnostic{
+		m.recordDiagLocked(instanceID, Diagnostic{
 			Level:       DiagError,
 			Code:        CodeNoEnabledInstruments,
 			Kind:        DiagKindConfig,
 			Title:       "No instruments enabled",
-			Detail:      fmt.Sprintf("Provider %q has no enabled instruments.", instance.Type),
+			Detail:      fmt.Sprintf("Provider %q has no enabled instruments.", instance.Provider),
 			Remediation: "Add or enable at least one instrument, then Restart feeds.",
 			Actions:     []DiagnosticAction{{Type: ActionRestart}},
 		})
@@ -220,27 +225,27 @@ func (m *Manager) startInstanceLocked(ctx context.Context, instance domain.Marke
 	connector, err := newConnector(instance)
 	if err != nil {
 		if errors.Is(err, errUnsupportedProvider) {
-			msg := fmt.Sprintf("unsupported provider type %q", instance.Type)
-			m.statuses[instance.ID] = InstanceRuntimeStatus{State: StateError, Error: msg}
-			m.recordDiagLocked(instance.ID, Diagnostic{
+			msg := fmt.Sprintf("unsupported provider type %q", instance.Provider)
+			m.statuses[instanceID] = InstanceRuntimeStatus{State: StateError, Error: msg}
+			m.recordDiagLocked(instanceID, Diagnostic{
 				Level:       DiagError,
 				Code:        CodeUnsupportedProvider,
 				Kind:        DiagKindConfig,
 				Title:       "Unsupported provider",
-				Detail:      fmt.Sprintf("Provider type %q is not supported.", instance.Type),
+				Detail:      fmt.Sprintf("Provider type %q is not supported.", instance.Provider),
 				Remediation: "Choose a supported provider.",
 			})
 			return
 		}
 
 		msg := fmt.Sprintf("connector config: %v", err)
-		m.statuses[instance.ID] = InstanceRuntimeStatus{State: StateError, Error: msg}
-		m.recordDiagLocked(instance.ID, Diagnostic{
+		m.statuses[instanceID] = InstanceRuntimeStatus{State: StateError, Error: msg}
+		m.recordDiagLocked(instanceID, Diagnostic{
 			Level:       DiagError,
 			Code:        CodeInvalidProviderConfig,
 			Kind:        DiagKindConfig,
 			Title:       "Invalid provider configuration",
-			Detail:      fmt.Sprintf("Provider %q: connector config: %v", instance.Type, err),
+			Detail:      fmt.Sprintf("Provider %q: connector config: %v", instance.Provider, err),
 			Remediation: "Update this provider's credentials or settings, then Restart feeds.",
 			Actions:     []DiagnosticAction{{Type: ActionRestart}},
 		})
@@ -264,18 +269,18 @@ func (m *Manager) startInstanceLocked(ctx context.Context, instance domain.Marke
 	// themselves; they are only called from the background goroutine, never
 	// synchronously from Set* or Subscribe, so there is no re-entrant lock.
 	if sr, ok := connector.(StatusReporting); ok {
-		sr.SetStatusReporter(m.reporterFor(instance.ID))
+		sr.SetStatusReporter(m.reporterFor(instanceID))
 	}
 	if dr, ok := connector.(DiagnosticReporting); ok {
-		id := instance.ID
+		id := instanceID
 		dr.SetDiagnosticReporter(func(diag Diagnostic) {
 			m.recordDiag(id, diag)
 		})
 	}
 
 	subs := subscriptionsFor(instruments)
-	m.appliedConfig[instance.ID] = AppliedInstanceConfig{
-		Type:          instance.Type,
+	m.appliedConfig[instanceID] = AppliedInstanceConfig{
+		Provider:      instance.Provider,
 		Subscriptions: cloneSubscriptions(subs),
 	}
 	symbols := externalSymbolsFor(subs)
@@ -283,11 +288,11 @@ func (m *Manager) startInstanceLocked(ctx context.Context, instance domain.Marke
 	if err != nil {
 		connector.Close()
 		msg := fmt.Sprintf("subscribe failed: %v", err)
-		m.statuses[instance.ID] = InstanceRuntimeStatus{
+		m.statuses[instanceID] = InstanceRuntimeStatus{
 			State: StateError, Error: msg, References: refs,
 			VerifiesSymbols: verifiesSymbols, SearchesSymbols: searchesSymbols,
 		}
-		m.recordDiagLocked(instance.ID, Diagnostic{
+		m.recordDiagLocked(instanceID, Diagnostic{
 			Level:       DiagError,
 			Code:        CodeConnectionError,
 			Kind:        DiagKindEnvironment,
@@ -311,8 +316,8 @@ func (m *Manager) startInstanceLocked(ctx context.Context, instance domain.Marke
 	received := &sync.Map{}
 	m.connectors = append(m.connectors, connector)
 	m.wg.Add(1)
-	go m.drain(instance.ID, symbols, ch, received)
-	m.statuses[instance.ID] = InstanceRuntimeStatus{
+	go m.drain(instanceID, symbols, ch, received)
+	m.statuses[instanceID] = InstanceRuntimeStatus{
 		State: StateOK, References: refs,
 		VerifiesSymbols: verifiesSymbols, SearchesSymbols: searchesSymbols,
 	}
@@ -324,7 +329,7 @@ func (m *Manager) startInstanceLocked(ctx context.Context, instance domain.Marke
 	// Pushable and carry no manual prices, so they are untouched.
 	pushable, pushableOK := connector.(Pushable)
 	if pushableOK {
-		m.byInstance[instance.ID] = connector
+		m.byInstance[instanceID] = connector
 		for _, inst := range instruments {
 			if inst.ManualPrice == "" {
 				continue
@@ -339,7 +344,7 @@ func (m *Manager) startInstanceLocked(ctx context.Context, instance domain.Marke
 	// One-shot no-data watchdog: after diagnoseGrace, if any expected instrument
 	// has not delivered a quote, run self-diagnosis (if available) or record a
 	// generic no-data warning. Runs once; tracked on m.wg so Stop waits for it.
-	id := instance.ID
+	id := instanceID
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
@@ -556,10 +561,14 @@ func quoteSnapshot(
 	if asOf.IsZero() {
 		asOf = receivedAt
 	}
+	// instanceID is the 22-char string form; parse it back to the typed handle.
+	// The value was produced by ExternalID.String() so parsing always succeeds;
+	// a parse failure yields a zero ExternalID which is the safe fallback.
+	instance, _ := domain.ParseExternalID(instanceID)
 	return domain.MarketDataQuote{
 		AsOf:           asOf.UTC(),
 		ReceivedAt:     receivedAt,
-		InstanceID:     instanceID,
+		Instance:       instance,
 		ExternalSymbol: symbols[quoteInstrumentKey{base: update.Base, quote: update.Quote}],
 		BaseAsset:      update.Base,
 		QuoteAsset:     update.Quote,
@@ -781,18 +790,18 @@ func externalSymbolsFor(subs []Subscription) map[quoteInstrumentKey]string {
 	return symbols
 }
 
-// newConnector constructs the connector for one instance by its type. The
+// newConnector constructs the connector for one instance by its provider. The
 // built-in provider types are constructed directly; there is no generic
 // provider registry (the external-author contract is deferred). An
-// unknown type returns an error so the manager skips the instance.
+// unknown provider returns an error so the manager skips the instance.
 func newConnector(instance domain.MarketDataInstance) (Connector, error) {
-	switch instance.Type {
+	switch instance.Provider {
 	case domain.MarketDataProviderBYO:
 		return NewBYOConnector(0), nil
 	case domain.MarketDataProviderBinance:
 		return NewBinanceConnector(), nil
 	case domain.MarketDataProviderIB:
-		connector := NewIBConnector(instance.ID, instance.Credentials)
+		connector := NewIBConnector(instance.ExternalID.String(), instance.Credentials)
 		if connector.configErr != nil {
 			return nil, connector.configErr
 		}
@@ -814,7 +823,7 @@ func newConnector(instance domain.MarketDataInstance) (Connector, error) {
 	case domain.MarketDataProviderMock:
 		return NewMockConnector(0), nil
 	default:
-		return nil, fmt.Errorf("%w: %q", errUnsupportedProvider, instance.Type)
+		return nil, fmt.Errorf("%w: %q", errUnsupportedProvider, instance.Provider)
 	}
 }
 
@@ -827,7 +836,7 @@ func ProviderVerifiesSymbols(instanceType string) bool {
 	if instanceType == domain.MarketDataProviderFinnhub {
 		return true
 	}
-	connector, err := newConnector(domain.MarketDataInstance{Type: instanceType})
+	connector, err := newConnector(domain.MarketDataInstance{Provider: instanceType})
 	if err != nil {
 		return false
 	}
@@ -873,7 +882,7 @@ func ProviderSearchesSymbols(instanceType string) bool {
 	if instanceType == domain.MarketDataProviderFinnhub {
 		return true
 	}
-	connector, err := newConnector(domain.MarketDataInstance{Type: instanceType})
+	connector, err := newConnector(domain.MarketDataInstance{Provider: instanceType})
 	if err != nil {
 		return false
 	}

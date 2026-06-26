@@ -3,6 +3,16 @@
     "title": "Счета",
     "description": "Счета операторов, хранящиеся в плоскости управления и применяемые к движку. Заблокируйте счёт или группу, чтобы остановить ордера через kill-switch."
   },
+  "tabs": {
+    "accounts": "Счета",
+    "groups": "Группы"
+  },
+  "pagination": {
+    "pageSize": {
+      "ariaLabel": "Размер страницы",
+      "rowCount": "{{count}} записей на страницу"
+    }
+  },
   "groups": {
     "heading": "Группы",
     "clearFilter": "(сбросить фильтр)",
@@ -58,7 +68,8 @@
       "notes": "Примечания",
       "editNotesTitle": "Редактировать справочные примечания",
       "block": "Заблокировать",
-      "unblock": "Разблокировать"
+      "unblock": "Разблокировать",
+      "deleteTitle": "Удалить счёт"
     },
     "empty": {
       "title": "Счетов нет",
@@ -70,34 +81,41 @@
     "trigger": "Новый счёт",
     "title": "Создать счёт",
     "description": "Создайте счёт в плоскости управления и при необходимости назначьте его в группу.",
-    "idLabel": "Идентификатор счёта",
-    "idHint": "До 64 печатаемых символов, без пробелов в начале и конце.",
+    "codeLabel": "Код счёта",
+    "codeHint": "До 64 печатаемых символов, без пробелов в начале и конце.",
     "groupLabel": "Группа (необязательно)",
-    "groupHint": "Выберите существующую группу или введите новый идентификатор. Оставьте пустым для создания счёта без группы.",
+    "groupHint": "Выберите существующую группу или введите новый код. Оставьте пустым для создания счёта без группы.",
     "cancel": "Отмена",
     "submit": "Создать"
   },
   "createGroup": {
     "trigger": "Новая группа",
     "title": "Создать группу",
-    "idLabel": "Идентификатор группы",
+    "codeLabel": "Код группы",
+    "titleLabel": "Отображаемое название",
+    "titlePlaceholder": "Американские equity-дески",
     "notesLabel": "Примечания (необязательно)",
     "notesPlaceholder": "Счета торговых деск-команд по американским акциям.",
     "notesHint": "Справочные примечания — хранятся только в плоскости управления, в движок не передаются.",
     "cancel": "Отмена",
     "submit": "Создать"
   },
+  "businessCsv": {
+    "importCsv": "Импорт CSV",
+    "exportGroupsCsv": "Экспорт групп CSV",
+    "exportAccountsCsv": "Экспорт счетов CSV"
+  },
   "loadAccounts": {
     "trigger": "Загрузить счета",
     "title": "Загрузить счета из CSV",
     "formatHeading": "Формат CSV",
     "formatLine1": "Один счёт на строку:",
-    "formatCode1": "account_id[,group[,notes]]",
+    "formatCode1": "code[,title[,group_code[,notes]]]",
     "formatLine2prefix": "обязателен;",
     "formatLine2middle": "и",
     "formatLine2suffix": "необязательны.",
     "formatLine3prefix": "Заголовочная строка (",
-    "formatLine3code": "account_id,group,notes",
+    "formatLine3code": "code,title,group_code,notes",
     "formatLine3suffix": ") допускается и пропускается автоматически.",
     "examplesHeading": "Примеры",
     "chooseFile": "Выбрать файл…",
@@ -150,6 +168,27 @@
     "descriptionSuffix": "будет удалена без возможности восстановления. У счетов, назначенных этой группе, привязка к группе будет снята.",
     "cancel": "Отмена",
     "submit": "Удалить"
+  },
+  "deleteAccount": {
+    "title": "Удалить счёт?",
+    "descriptionPrefix": "Счёт",
+    "descriptionSuffix": "будет удалён без возможности восстановления. Зависимые торговые записи удаляются только после явного подтверждения принудительного удаления.",
+    "dependentsTitle": "Зависимые строки блокируют удаление",
+    "dependentKinds": {
+      "balances": "Балансы",
+      "orders": "Ордера",
+      "order_events": "События ордеров",
+      "trades": "Сделки",
+      "order_approvals": "Подтверждения ордеров",
+      "adjustments": "Корректировки",
+      "limit_rate": "Лимиты частоты",
+      "limit_order_size": "Лимиты размера ордера",
+      "limit_pnl_bounds": "Лимиты границ P&L",
+      "reservation_intents": "Намерения резервирования"
+    },
+    "cancel": "Отмена",
+    "submit": "Удалить",
+    "forceSubmit": "Принудительно удалить"
   },
   "editGroupNotes": {
     "titlePrefix": "Примечания — группа",

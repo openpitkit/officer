@@ -3,7 +3,21 @@
   "actions": {
     "adjust": "Корректировка",
     "adjustAriaLabel": "Открыть корректировку для {{account}} {{asset}}",
-    "refreshHistoryAriaLabel": "Обновить историю"
+    "refreshHistoryAriaLabel": "Обновить историю",
+    "importCsv": "Импорт позиций CSV",
+    "exportCsv": "Экспорт позиций CSV",
+    "exportHistoryCsv": "Экспорт истории CSV",
+    "historyExporting": "Экспорт"
+  },
+  "pagination": {
+    "pageSize": {
+      "ariaLabel": "Размер страницы",
+      "rowCount": "{{count}} записей на страницу"
+    }
+  },
+  "tabs": {
+    "positions": "Позиции",
+    "history": "История"
   },
   "filters": {
     "byAccount": "Фильтр по счёту",
@@ -95,7 +109,7 @@
       "accepted": "принято"
     },
     "clone": {
-      "ariaLabel": "Клонировать корректировку #{{id}}"
+      "ariaLabel": "Клонировать корректировку {{id}}"
     }
   },
   "dialog": {

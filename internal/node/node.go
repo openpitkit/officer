@@ -17,11 +17,16 @@
 
 // Package node defines the seam between the Pit Officer control plane and an
 // execution target. An execution target bundles one engine and its backing
-// store. In the single-binary deployment there is exactly one node, a
-// LocalNode running the engine and store in-process. In a future distributed
-// deployment a routing node fans requests out to shards; the control plane
-// reaches all of them only through a NodeRouter, so backend code never
-// assumes a single node.
+// store, bound to a single realm. In the single-binary deployment there is
+// exactly one node, a LocalNode running the engine and the realm-scoped store
+// in-process. In a future distributed deployment a routing node fans requests
+// out to shards; the control plane reaches all of them only through a
+// NodeRouter, so backend code never assumes a single node.
+//
+// Identity at this seam follows the store: accounts and groups are addressed by
+// their immutable code, machine records (orders, order events) by their opaque
+// external id. The realm is bound once when the node is built and never appears
+// as a method parameter; the single-binary node binds domain.DefaultRealm.
 package node
 
 import (
@@ -35,13 +40,11 @@ import (
 	"go.openpit.dev/officer/internal/store"
 )
 
-// Key is the routing key that identifies which node owns a given account. It is
-// the {tenant, account} pair: a single account always resolves to exactly one
-// node.
+// Key is the routing key that identifies which node owns a given account. With
+// the realm bound on the node, the account code alone resolves an account to
+// exactly one node, so the key carries only the account code.
 type Key struct {
-	// Tenant is the isolation boundary that owns the account.
-	Tenant domain.TenantID
-	// Account is the account identifier within the tenant.
+	// Account is the immutable code of the account being routed.
 	Account domain.AccountID
 }
 
@@ -54,16 +57,43 @@ type Health struct {
 	Store store.StoreHealth
 }
 
-// Node is one execution target: an engine plus its backing store, behind a
+// AccountLimits bundles the three typed barrier sets returned by the account-
+// addressed limit reads. Each slice holds the barriers of one policy; an empty
+// slice means the policy carries no matching barrier. It is the read-side
+// counterpart of the typed Put* mutators on the Node surface.
+type AccountLimits struct {
+	// RateLimits are the matching rate-limit barriers.
+	RateLimits []domain.LimitRate
+	// OrderSizeLimits are the matching order-size barriers.
+	OrderSizeLimits []domain.LimitOrderSize
+	// PnlBoundsLimits are the matching P&L-bounds barriers.
+	PnlBoundsLimits []domain.LimitPnlBounds
+}
+
+// LimitTarget addresses a single typed barrier for deletion: the policy it
+// belongs to plus the (scope, account, asset) composite the store keys it by.
+// The optional Account/Asset axes are present exactly when Scope carries them.
+type LimitTarget struct {
+	// Policy is the policy the barrier belongs to (e.g. domain.PolicyRateLimit).
+	Policy string
+	// Scope is the axis combination the barrier applies to.
+	Scope domain.LimitScope
+	// Account is the account axis; empty unless Scope carries it.
+	Account domain.AccountID
+	// Asset is the asset axis; empty unless Scope carries it.
+	Asset string
+}
+
+// Node is one execution target: an engine plus its realm-scoped store, behind a
 // stable address the control plane can route to.
 //
 // The command methods below are the operations a future shard serves over RPC.
 // In the single-binary deployment they all run in-process against the local
-// engine and store. Every mutation follows one protocol (see localNode): the
-// store is the source of truth and is written first, the engine is applied from
-// persisted state, the store is reverted on engine failure, and an audit row is
-// appended last. Runtime administrative changes rebuild the engine and reject
-// new mutating requests while the rebuild is in progress.
+// engine and the bound realm store. Every mutation follows one protocol (see
+// localNode): the store is the source of truth and is written first, the engine
+// is applied from persisted state, the store is reverted on engine failure, and
+// an audit row is appended last. Runtime administrative changes rebuild the
+// engine and reject new mutating requests while the rebuild is in progress.
 type Node interface {
 	// Health returns the current aggregate health of the node's engine and
 	// store.
@@ -103,6 +133,7 @@ type Node interface {
 
 	// CreateAccount persists a new account and audits the action. The account
 	// is identified by key; caller carries the attribution stamped on the audit.
+	// It returns the stored account with its engine account id populated.
 	CreateAccount(ctx context.Context, key Key, caller domain.Caller) (domain.Account, error)
 
 	// SetAccountBlocked blocks or unblocks the account in the store and engine
@@ -113,80 +144,125 @@ type Node interface {
 
 	// SetAccountGroup sets or clears the account's group membership in the store
 	// and engine (unregistering from the old group and registering into the new),
-	// then audits the action. An empty groupID clears membership.
-	SetAccountGroup(ctx context.Context, key Key, groupID string, caller domain.Caller) error
+	// then audits the action. An empty groupCode clears membership.
+	SetAccountGroup(ctx context.Context, key Key, groupCode string, caller domain.Caller) error
 
 	// SetAccountNotes replaces the account's free-form notes in the store and
 	// audits the action. Notes never reach the engine.
 	SetAccountNotes(ctx context.Context, key Key, notes string, caller domain.Caller) error
 
+	// DeleteAccount removes the account and audits the action. Destructive
+	// cascades require force.
+	DeleteAccount(ctx context.Context, key Key, force bool, caller domain.Caller) error
+
 	// GetAccountState returns the account row and the barriers whose scope has
 	// the account axis and matches the account.
-	GetAccountState(ctx context.Context, key Key) (domain.Account, []domain.Limit, error)
+	GetAccountState(ctx context.Context, key Key) (domain.Account, AccountLimits, error)
 
 	// ListLimits returns the barriers that reference the account, or all
 	// barriers when account is empty.
-	ListLimits(ctx context.Context, account domain.AccountID) ([]domain.Limit, error)
+	ListLimits(ctx context.Context, account domain.AccountID) (AccountLimits, error)
 
-	// PutLimit upserts the whole barrier in the store, reconfigures the live
-	// policy from the persisted full barrier set, audits the action, and returns
-	// a replacement market-data sink only when the engine was rebuilt.
-	PutLimit(ctx context.Context, limit domain.Limit, caller domain.Caller) (marketdata.Sink, error)
+	// PutRateLimit upserts the whole rate-limit barrier in the store,
+	// reconfigures the live rate-limit policy from the persisted full barrier
+	// set, audits the action, and returns a replacement market-data sink only
+	// when the engine was rebuilt.
+	PutRateLimit(
+		ctx context.Context, limit domain.LimitRate, caller domain.Caller,
+	) (marketdata.Sink, error)
 
-	// DeleteLimit removes the barrier from the store, reconfigures the live
-	// policy from the persisted full barrier set, audits the action, and returns
-	// a replacement market-data sink only when the engine was rebuilt.
-	DeleteLimit(ctx context.Context, target domain.LimitTarget, caller domain.Caller) (marketdata.Sink, error)
+	// PutOrderSizeLimit upserts the whole order-size barrier and reconfigures the
+	// live order-size policy, as PutRateLimit does for the rate policy.
+	PutOrderSizeLimit(
+		ctx context.Context, limit domain.LimitOrderSize, caller domain.Caller,
+	) (marketdata.Sink, error)
+
+	// PutPnlBoundsLimit upserts the whole P&L-bounds barrier and reconfigures the
+	// live P&L-bounds policy, as PutRateLimit does for the rate policy.
+	PutPnlBoundsLimit(
+		ctx context.Context, limit domain.LimitPnlBounds, caller domain.Caller,
+	) (marketdata.Sink, error)
+
+	// DeleteLimit removes the barrier addressed by (policy, scope, account,
+	// asset) from the store, reconfigures the named policy from the persisted
+	// full barrier set, audits the action, and returns a replacement market-data
+	// sink only when the engine was rebuilt.
+	DeleteLimit(
+		ctx context.Context, target LimitTarget, caller domain.Caller,
+	) (marketdata.Sink, error)
 
 	// CreateGroup persists a new account group (store-only; membership lives on
-	// accounts) and audits the action.
-	CreateGroup(ctx context.Context, group domain.AccountGroup, caller domain.Caller) error
+	// accounts) and audits the action. It returns the stored group with its
+	// engine group id populated.
+	CreateGroup(
+		ctx context.Context, group domain.AccountGroup, caller domain.Caller,
+	) (domain.AccountGroup, error)
 
-	// ListGroups returns every persisted group for the tenant.
-	ListGroups(ctx context.Context, tenant domain.TenantID) ([]domain.AccountGroup, error)
+	// ListGroups returns every persisted group.
+	ListGroups(ctx context.Context) ([]domain.AccountGroup, error)
 
 	// GetGroup returns the group and its member accounts. The bool is false when
 	// no such group exists.
 	GetGroup(
-		ctx context.Context, tenant domain.TenantID, id string,
+		ctx context.Context, code string,
 	) (domain.AccountGroup, []domain.Account, bool, error)
 
 	// SetGroupNotes replaces a group's notes in the store and audits the action.
-	SetGroupNotes(ctx context.Context, tenant domain.TenantID, id, notes string, caller domain.Caller) error
+	SetGroupNotes(ctx context.Context, code, notes string, caller domain.Caller) error
 
 	// SetGroupBlocked blocks or unblocks the group in the store and engine and
 	// audits the action.
 	SetGroupBlocked(
-		ctx context.Context, tenant domain.TenantID, id string, blocked bool, reason string, caller domain.Caller,
+		ctx context.Context, code string, blocked bool, reason string, caller domain.Caller,
 	) error
 
 	// DeleteGroup removes the group (store-only) and audits the action.
-	DeleteGroup(ctx context.Context, tenant domain.TenantID, id string, caller domain.Caller) error
+	DeleteGroup(ctx context.Context, code string, caller domain.Caller) error
+
+	// ApplyBusinessCSVImport persists a prepared business CSV import and its
+	// per-row audit records atomically in the store, then applies the matching
+	// live-engine projection changes.
+	ApplyBusinessCSVImport(
+		ctx context.Context,
+		in store.BusinessCSVImport,
+		caller domain.Caller,
+	) error
 
 	// ApplyAdjustment applies one spot-funds adjustment through the engine,
 	// persists the resulting balance snapshot and adjustment record, and audits
 	// the action. On reject the balances are left unchanged and the rejected
-	// record is recorded.
+	// record is recorded. externalID is the caller-supplied id for the adjustment
+	// record: when non-zero it is carried onto the record verbatim (the store
+	// rejects a duplicate with domain.ErrAlreadyExists); when zero the store mints
+	// one.
 	ApplyAdjustment(
-		ctx context.Context, key Key, req domain.AdjustmentRequest, caller domain.Caller,
+		ctx context.Context, key Key, externalID domain.ExternalID,
+		req domain.AdjustmentRequest, caller domain.Caller,
 	) (domain.AccountAdjustmentRecord, error)
 
-	// ListBalances returns the balance rows for the tenant filtered by the
-	// non-empty account and asset.
+	// ImportPositionSnapshot applies the engine-relevant fields of a persisted
+	// position snapshot through the spot-funds adjustment path, then stores the
+	// full snapshot and audits the import operation.
+	ImportPositionSnapshot(
+		ctx context.Context, key Key, snapshot domain.Balance, caller domain.Caller,
+	) (domain.AccountAdjustmentRecord, error)
+
+	// ListBalances returns the balance rows filtered by the non-empty account and
+	// asset.
 	ListBalances(
-		ctx context.Context, tenant domain.TenantID, account domain.AccountID, asset string,
+		ctx context.Context, account domain.AccountID, asset string,
 	) ([]domain.Balance, error)
 
-	// GetBalance returns the balance for (tenant, account, asset). The bool is
-	// false when no row exists.
+	// GetBalance returns the balance for (account, asset). The bool is false when
+	// no row exists.
 	GetBalance(
-		ctx context.Context, tenant domain.TenantID, account domain.AccountID, asset string,
+		ctx context.Context, account domain.AccountID, asset string,
 	) (domain.Balance, bool, error)
 
 	// ListAdjustments returns the most recent n adjustments for an account,
 	// newest first; an empty source returns all sources.
 	ListAdjustments(
-		ctx context.Context, tenant domain.TenantID, account domain.AccountID, source domain.Source, n int,
+		ctx context.Context, account domain.AccountID, source domain.Source, n int,
 	) ([]domain.AccountAdjustmentRecord, error)
 
 	// SubmitOrder records the order, runs the engine pre-trade, persists the
@@ -216,26 +292,28 @@ type Node interface {
 	// ConfirmHeld commits the held reservation identified by approvalID through the
 	// engine, then atomically flips the intent, advances the order to committed,
 	// and records the reservation_committed event in one store transaction (the
-	// backend audits approval_confirmed). The order status advance is guarded
-	// against the accepted state: a fill that already moved the order to a terminal
-	// status (e.g. filled) yields domain.ErrConflict and nothing is written,
-	// preserving the fill. A second confirm on an already-resolved reservation
-	// returns domain.ErrConflict; an unknown reservation returns domain.ErrNotFound.
+	// backend audits approval_confirmed). The order is addressed by its opaque
+	// external id. The order status advance is guarded against the accepted state: a
+	// fill that already moved the order to a terminal status (e.g. filled) yields
+	// domain.ErrConflict and nothing is written, preserving the fill. A second
+	// confirm on an already-resolved reservation returns domain.ErrConflict; an
+	// unknown reservation returns domain.ErrNotFound.
 	ConfirmHeld(
-		ctx context.Context, tenant domain.TenantID, orderID int64,
+		ctx context.Context, order domain.ExternalID,
 		approvalID string, caller domain.Caller, force bool,
 	) (domain.Order, error)
 
 	// CancelHeld rolls back the held reservation identified by approvalID through
 	// the engine, then atomically flips the intent, advances the order to
 	// cancelled, and records the reservation_rolled_back and cancelled events in
-	// one store transaction (the backend audits approval_cancelled). The order
-	// status advance is guarded against the accepted state: a late fill that
-	// already moved the order to filled yields domain.ErrConflict and nothing is
-	// written, so the fill is never clobbered. It is tolerant of an already-
-	// resolved reservation in the engine (idempotent native rollback).
+	// one store transaction (the backend audits approval_cancelled). The order is
+	// addressed by its opaque external id. The order status advance is guarded
+	// against the accepted state: a late fill that already moved the order to filled
+	// yields domain.ErrConflict and nothing is written, so the fill is never
+	// clobbered. It is tolerant of an already-resolved reservation in the engine
+	// (idempotent native rollback).
 	CancelHeld(
-		ctx context.Context, tenant domain.TenantID, orderID int64,
+		ctx context.Context, order domain.ExternalID,
 		approvalID string, caller domain.Caller, force bool,
 	) (domain.Order, error)
 
@@ -254,37 +332,50 @@ type Node interface {
 	) (engine.ExecutionReportResult, error)
 
 	// PersistOrderApproval stamps the signed approval envelope onto the order's
-	// pre-trade verdict and records an approval_issued event. It is write-once:
-	// the envelope is set only when the order carries none yet, so a retry or a
-	// later fill never clobbers the issued envelope. Signing is additive and runs
-	// after the order is already durable, so this never mutates money or status.
+	// pre-trade verdict and records an approval_issued event. The order is
+	// addressed by its opaque external id. It is write-once: the envelope is set
+	// only when the order carries none yet, so a retry or a later fill never
+	// clobbers the issued envelope. Signing is additive and runs after the order is
+	// already durable, so this never mutates money or status.
 	PersistOrderApproval(
-		ctx context.Context, key Key, orderID int64, env domain.OrderApproval,
+		ctx context.Context, key Key, order domain.ExternalID, env domain.OrderApproval,
 	) error
 
-	// GetOrder returns the order with its events and trades.
-	GetOrder(ctx context.Context, tenant domain.TenantID, id int64) (domain.OrderDetail, error)
+	// GetOrder returns the order with its 1:1 signed approval (when issued), its
+	// events and trades, addressed by the order's opaque external id.
+	GetOrder(ctx context.Context, order domain.ExternalID) (domain.OrderDetail, error)
 
 	// ListOrders returns the most recent n orders for an account, newest first;
 	// an empty source returns all sources.
 	ListOrders(
-		ctx context.Context, tenant domain.TenantID, account domain.AccountID, source domain.Source, n int,
+		ctx context.Context, account domain.AccountID, source domain.Source, n int,
 	) ([]domain.Order, error)
 
-	// CountOrders returns the total number of orders recorded for the tenant.
-	CountOrders(ctx context.Context, tenant domain.TenantID) (int, error)
+	// ListAllOrders returns every order matching filters, newest first.
+	ListAllOrders(
+		ctx context.Context, account domain.AccountID, source domain.Source,
+	) ([]domain.Order, error)
 
-	// CountOrdersSince returns the number of orders recorded for the tenant whose
+	// CountOrders returns the total number of orders recorded in the realm.
+	CountOrders(ctx context.Context) (int, error)
+
+	// CountOrdersSince returns the number of orders recorded in the realm whose
 	// timestamp is at or after since.
-	CountOrdersSince(ctx context.Context, tenant domain.TenantID, since time.Time) (int, error)
+	CountOrdersSince(ctx context.Context, since time.Time) (int, error)
 
-	// ListOrderEvents returns all events for the identified order, oldest first.
-	ListOrderEvents(ctx context.Context, tenant domain.TenantID, orderID int64) ([]domain.OrderEvent, error)
+	// ListOrderEvents returns all events for the identified order, oldest first,
+	// addressed by the order's opaque external id.
+	ListOrderEvents(ctx context.Context, order domain.ExternalID) ([]domain.OrderEvent, error)
 
 	// ListTrades returns the most recent n trades for an account, newest first;
 	// an empty source returns all sources.
 	ListTrades(
-		ctx context.Context, tenant domain.TenantID, account domain.AccountID, source domain.Source, n int,
+		ctx context.Context, account domain.AccountID, source domain.Source, n int,
+	) ([]domain.Trade, error)
+
+	// ListAllTrades returns every trade matching filters, newest first.
+	ListAllTrades(
+		ctx context.Context, account domain.AccountID, source domain.Source,
 	) ([]domain.Trade, error)
 
 	// ListAudit returns the most recent n audit rows, newest first.
@@ -323,38 +414,43 @@ type Node interface {
 	// ListMarketDataInstances returns all configured market-data source instances.
 	ListMarketDataInstances(ctx context.Context) ([]domain.MarketDataInstance, error)
 
-	// GetMarketDataInstance returns the configured instance identified by id. The
-	// bool is false when no such instance exists.
+	// GetMarketDataInstance returns the configured instance identified by its
+	// external id. The bool is false when no such instance exists.
 	GetMarketDataInstance(
-		ctx context.Context, id string,
+		ctx context.Context, id domain.ExternalID,
 	) (domain.MarketDataInstance, bool, error)
 
 	// CreateMarketDataInstance persists one market-data source instance and
-	// audits the action. It has no engine side-effect.
+	// audits the action. It returns the stored instance with its external id
+	// populated. It has no engine side-effect.
 	CreateMarketDataInstance(
 		ctx context.Context, instance domain.MarketDataInstance, caller domain.Caller,
-	) error
+	) (domain.MarketDataInstance, error)
 
 	// SetMarketDataInstanceEnabled toggles one market-data source instance and
 	// audits the action. It changes persisted config only; runtime refresh is a
 	// separate concern.
-	SetMarketDataInstanceEnabled(ctx context.Context, id string, enabled bool, caller domain.Caller) error
+	SetMarketDataInstanceEnabled(
+		ctx context.Context, id domain.ExternalID, enabled bool, caller domain.Caller,
+	) error
 
 	// UpdateMarketDataInstanceSettings replaces editable source settings and
 	// audits the action. It changes persisted config only; runtime refresh is a
 	// separate concern.
 	UpdateMarketDataInstanceSettings(
-		ctx context.Context, id, label, credentials string, caller domain.Caller,
+		ctx context.Context, id domain.ExternalID, label, credentials string, caller domain.Caller,
 	) error
 
 	// DeleteMarketDataInstance removes one market-data source instance and
 	// audits the action.
-	DeleteMarketDataInstance(ctx context.Context, id string, caller domain.Caller) error
+	DeleteMarketDataInstance(
+		ctx context.Context, id domain.ExternalID, force bool, caller domain.Caller,
+	) error
 
 	// ListMarketDataInstruments returns every configured instrument of an
-	// instance.
+	// instance, addressed by the instance's external id.
 	ListMarketDataInstruments(
-		ctx context.Context, instanceID string,
+		ctx context.Context, instance domain.ExternalID,
 	) ([]domain.MarketDataInstrument, error)
 
 	// UpsertMarketDataInstrument inserts or replaces one instrument mapping and
@@ -366,18 +462,20 @@ type Node interface {
 	// SetMarketDataInstrumentEnabled toggles one instrument mapping and audits
 	// the action.
 	SetMarketDataInstrumentEnabled(
-		ctx context.Context, instanceID, externalSymbol string, enabled bool, caller domain.Caller,
+		ctx context.Context, instance domain.ExternalID, externalSymbol string, enabled bool, caller domain.Caller,
 	) error
 
 	// DeleteMarketDataInstrument removes one instrument mapping and audits the
 	// action.
 	DeleteMarketDataInstrument(
-		ctx context.Context, instanceID, externalSymbol string, caller domain.Caller,
+		ctx context.Context, instance domain.ExternalID, externalSymbol string, caller domain.Caller,
 	) error
 
 	// ListMarketDataQuotes returns latest quote snapshots for one instance, or
-	// every instance when instanceID is empty.
-	ListMarketDataQuotes(ctx context.Context, instanceID string) ([]domain.MarketDataQuote, error)
+	// every instance when instance is the zero external id.
+	ListMarketDataQuotes(
+		ctx context.Context, instance domain.ExternalID,
+	) ([]domain.MarketDataQuote, error)
 
 	// CheckOrder runs a non-mutating pre-trade dry-run for probe against the
 	// engine, returning whether the order would pass plus the would-be lock or

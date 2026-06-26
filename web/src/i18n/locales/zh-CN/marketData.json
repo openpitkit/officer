@@ -246,5 +246,18 @@
     "noResults": "此数据源中没有匹配代码",
     "noFilteredResults": "没有结果匹配筛选条件",
     "resultLabel": "{{symbol}} · {{secType}} · {{exchange}} · {{currency}}"
+  },
+  "deleteInstance": {
+    "title": "删除行情数据来源？",
+    "description": "{{label}} 将被永久删除。仅在明确强制确认后才会删除已配置工具。",
+    "cancel": "取消",
+    "submit": "删除",
+    "forceSubmit": "强制删除"
+  },
+  "deleteInstrument": {
+    "title": "删除工具？",
+    "description": "{{symbol}} 将从此来源中永久删除。",
+    "cancel": "取消",
+    "submit": "删除"
   }
 }

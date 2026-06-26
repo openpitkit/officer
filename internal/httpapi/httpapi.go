@@ -52,8 +52,10 @@ import (
 	"go.openpit.dev/officer/internal/auth"
 	"go.openpit.dev/officer/internal/backend"
 	"go.openpit.dev/officer/internal/backup"
+	"go.openpit.dev/officer/internal/businesscsv"
 	"go.openpit.dev/officer/internal/domain"
 	"go.openpit.dev/officer/internal/engine"
+	"go.openpit.dev/officer/internal/node"
 )
 
 // auditCapREST is the maximum number of audit rows the REST endpoint returns.
@@ -66,6 +68,11 @@ const maxRequestBody = 1 << 20
 // maxBackupRestoreBody bounds the one route that accepts an uploaded backup
 // archive. Keeping this separate avoids widening every v1 endpoint's body cap.
 const maxBackupRestoreBody = 64 << 20
+
+// maxImportBody admits a base64-encoded MaxImportBytes payload plus a small
+// JSON envelope so the handler can return the domain 413 instead of the
+// transport cap's generic decode failure.
+const maxImportBody = 192 << 20
 
 // listDefaultLimit is the default page size for the orders, trades, and
 // adjustments list endpoints; listCapREST bounds an explicit ?limit=.
@@ -85,16 +92,31 @@ type Service interface {
 		archive backup.Archive,
 		opts backup.RestoreOptions,
 	) (backup.RestoreSummary, error)
+	ExportBusinessCSV(
+		ctx context.Context,
+		req backend.BusinessCSVExportRequest,
+	) (businesscsv.ExportFile, error)
+	PreviewBusinessCSVImport(
+		ctx context.Context,
+		req backend.BusinessCSVImportRequest,
+	) (backend.BusinessCSVImportPreview, error)
+	ImportBusinessCSV(
+		ctx context.Context,
+		req backend.BusinessCSVImportRequest,
+	) (backend.BusinessCSVImportResult, error)
 	ResetDatabase(ctx context.Context) error
 	CreateAccount(ctx context.Context, id domain.AccountID) (domain.Account, error)
-	GetAccountState(ctx context.Context, id domain.AccountID) (domain.Account, []domain.Limit, error)
+	GetAccountState(ctx context.Context, id domain.AccountID) (domain.Account, node.AccountLimits, error)
 	BlockAccount(ctx context.Context, id domain.AccountID, reason string) error
 	UnblockAccount(ctx context.Context, id domain.AccountID) error
-	SetAccountGroup(ctx context.Context, id domain.AccountID, groupID string) error
+	DeleteAccount(ctx context.Context, id domain.AccountID, force bool) error
+	SetAccountGroup(ctx context.Context, id domain.AccountID, groupCode string) error
 	SetAccountNotes(ctx context.Context, id domain.AccountID, notes string) error
-	ListLimits(ctx context.Context, account domain.AccountID) ([]domain.Limit, error)
-	PutLimit(ctx context.Context, limit domain.Limit) error
-	DeleteLimit(ctx context.Context, target domain.LimitTarget) error
+	ListLimits(ctx context.Context, account domain.AccountID) (node.AccountLimits, error)
+	PutRateLimit(ctx context.Context, limit domain.LimitRate) error
+	PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize) error
+	PutPnlBoundsLimit(ctx context.Context, limit domain.LimitPnlBounds) error
+	DeleteLimit(ctx context.Context, target node.LimitTarget) error
 	ListAudit(ctx context.Context, count int) ([]domain.AuditRow, error)
 	ListAuditFiltered(
 		ctx context.Context, filter domain.AuditFilter, count int,
@@ -114,27 +136,32 @@ type Service interface {
 	SearchMarketDataSymbols(
 		ctx context.Context, id string, input backend.MarketDataSymbolSearchInput,
 	) (backend.MarketDataSymbolSearch, error)
-	CreateMarketDataInstance(ctx context.Context, instance domain.MarketDataInstance) error
+	CreateMarketDataInstance(
+		ctx context.Context, instance domain.MarketDataInstance,
+	) (domain.MarketDataInstance, error)
 	SetMarketDataInstanceEnabled(ctx context.Context, id string, enabled bool) error
 	UpdateMarketDataInstanceSettings(
 		ctx context.Context, id, label, credentials string,
 	) error
-	DeleteMarketDataInstance(ctx context.Context, id string) error
+	DeleteMarketDataInstance(ctx context.Context, id string, force bool) error
 	UpsertMarketDataInstrument(ctx context.Context, instrument domain.MarketDataInstrument) error
 	SetMarketDataInstrumentEnabled(
 		ctx context.Context, instanceID, externalSymbol string, enabled bool,
 	) error
 	DeleteMarketDataInstrument(ctx context.Context, instanceID, externalSymbol string) error
 
-	CreateGroup(ctx context.Context, group domain.AccountGroup) error
+	CreateGroup(ctx context.Context, group domain.AccountGroup) (domain.AccountGroup, error)
 	ListGroups(ctx context.Context) ([]domain.AccountGroup, error)
-	GetGroup(ctx context.Context, id string) (domain.AccountGroup, []domain.Account, error)
-	SetGroupNotes(ctx context.Context, id, notes string) error
-	SetGroupBlocked(ctx context.Context, id string, blocked bool, reason string) error
-	DeleteGroup(ctx context.Context, id string) error
+	GetGroup(ctx context.Context, code string) (domain.AccountGroup, []domain.Account, error)
+	SetGroupNotes(ctx context.Context, code, notes string) error
+	SetGroupBlocked(ctx context.Context, code string, blocked bool, reason string) error
+	DeleteGroup(ctx context.Context, code string) error
 
 	ApplyAdjustment(
-		ctx context.Context, account domain.AccountID, req domain.AdjustmentRequest,
+		ctx context.Context,
+		account domain.AccountID,
+		externalID domain.ExternalID,
+		req domain.AdjustmentRequest,
 	) (domain.AccountAdjustmentRecord, error)
 
 	ListBalances(ctx context.Context, account domain.AccountID, asset string) ([]domain.Balance, error)
@@ -150,7 +177,7 @@ type Service interface {
 	ApplyExecutionReport(
 		ctx context.Context, in domain.ExecutionReportInput,
 	) (engine.ExecutionReportResult, error)
-	GetOrder(ctx context.Context, id int64) (domain.OrderDetail, error)
+	GetOrder(ctx context.Context, id string) (domain.OrderDetail, error)
 	ListOrders(
 		ctx context.Context, account domain.AccountID, source domain.Source, n int,
 	) ([]domain.Order, error)
@@ -172,10 +199,10 @@ type Service interface {
 	// Approval token flow.
 	SubmitOrderToken(ctx context.Context, o domain.Order, mode string) (backend.ApprovalToken, error)
 	ConfirmExecution(
-		ctx context.Context, orderID int64, token string, force bool,
+		ctx context.Context, orderID string, token string, force bool,
 	) (domain.Order, error)
 	CancelOrder(
-		ctx context.Context, orderID int64, token, reason string, force bool,
+		ctx context.Context, orderID string, token, reason string, force bool,
 	) (domain.Order, error)
 }
 
@@ -274,25 +301,29 @@ func mountV1(r chi.Router, svc Service, logs LogSource) {
 
 	r.Post("/backup/export", handleExportBackup(svc))
 	r.Post("/backup/restore", handleRestoreBackup(svc))
+	r.Post("/business-csv/export", handleExportBusinessCSV(svc))
+	r.Post("/business-csv/import/preview", handlePreviewBusinessCSVImport(svc))
+	r.Post("/business-csv/import", handleImportBusinessCSV(svc))
 	r.Post("/database/reset", handleResetDatabase(svc))
 
 	r.Get("/accounts", handleListAccounts(svc))
 	r.Post("/accounts", handleCreateAccount(svc))
-	r.Get("/accounts/{id}", handleGetAccount(svc))
-	r.Post("/accounts/{id}/block", handleBlockAccount(svc))
-	r.Post("/accounts/{id}/unblock", handleUnblockAccount(svc))
-	r.Put("/accounts/{id}/group", handleSetAccountGroup(svc))
-	r.Put("/accounts/{id}/notes", handleSetAccountNotes(svc))
-	r.Get("/accounts/{id}/adjustments", handleListAccountAdjustments(svc))
-	r.Post("/accounts/{id}/adjustments", handleApplyAdjustment(svc))
+	r.Get("/accounts/{code}", handleGetAccount(svc))
+	r.Post("/accounts/{code}/block", handleBlockAccount(svc))
+	r.Post("/accounts/{code}/unblock", handleUnblockAccount(svc))
+	r.Delete("/accounts/{code}", handleDeleteAccount(svc))
+	r.Put("/accounts/{code}/group", handleSetAccountGroup(svc))
+	r.Put("/accounts/{code}/notes", handleSetAccountNotes(svc))
+	r.Get("/accounts/{code}/adjustments", handleListAccountAdjustments(svc))
+	r.Post("/accounts/{code}/adjustments", handleApplyAdjustment(svc))
 
 	r.Get("/groups", handleListGroups(svc))
 	r.Post("/groups", handleCreateGroup(svc))
-	r.Get("/groups/{id}", handleGetGroup(svc))
-	r.Put("/groups/{id}/notes", handleSetGroupNotes(svc))
-	r.Post("/groups/{id}/block", handleBlockGroup(svc))
-	r.Post("/groups/{id}/unblock", handleUnblockGroup(svc))
-	r.Delete("/groups/{id}", handleDeleteGroup(svc))
+	r.Get("/groups/{code}", handleGetGroup(svc))
+	r.Put("/groups/{code}/notes", handleSetGroupNotes(svc))
+	r.Post("/groups/{code}/block", handleBlockGroup(svc))
+	r.Post("/groups/{code}/unblock", handleUnblockGroup(svc))
+	r.Delete("/groups/{code}", handleDeleteGroup(svc))
 
 	r.Get("/balances", handleListBalances(svc))
 	r.Get("/adjustments", handleListAdjustments(svc))
@@ -300,12 +331,14 @@ func mountV1(r chi.Router, svc Service, logs LogSource) {
 	r.Post("/orders", handleSubmitOrder(svc))
 	r.Post("/orders/check", handleCheckOrder(svc))
 	r.Get("/orders", handleListOrders(svc))
-	r.Get("/orders/{id}", handleGetOrder(svc))
-	r.Post("/orders/{id}/execution-reports", handleApplyExecutionReport(svc))
+	r.Get("/orders/{externalId}", handleGetOrder(svc))
+	r.Post("/orders/{externalId}/execution-reports", handleApplyExecutionReport(svc))
 	r.Get("/trades", handleListTrades(svc))
 
 	r.Get("/limits", handleListLimits(svc))
-	r.Put("/limits", handlePutLimit(svc))
+	r.Put("/limits/rate", handlePutRateLimit(svc))
+	r.Put("/limits/order-size", handlePutOrderSizeLimit(svc))
+	r.Put("/limits/pnl-bounds", handlePutPnlBoundsLimit(svc))
 	r.Delete("/limits", handleDeleteLimit(svc))
 
 	r.Get("/audit", handleListAudit(svc))
@@ -323,9 +356,9 @@ func mountV1(r chi.Router, svc Service, logs LogSource) {
 	r.Get("/signing/keys/active/public", handleGetActivePublicKey(svc))
 	r.Get("/signing/config", handleGetSigningConfig(svc))
 	r.Put("/signing/config", handleSetSigningConfig(svc))
-	r.Post("/orders/{id}/submit", handleSubmitOrderToken(svc))
-	r.Post("/orders/{id}/confirm", handleConfirmExecution(svc))
-	r.Post("/orders/{id}/cancel", handleCancelOrder(svc))
+	r.Post("/orders/submit", handleSubmitOrderToken(svc))
+	r.Post("/orders/{externalId}/confirm", handleConfirmExecution(svc))
+	r.Post("/orders/{externalId}/cancel", handleCancelOrder(svc))
 
 	r.Get("/market-data", handleListMarketData(svc))
 	r.Post("/market-data/restart", handleRestartMarketData(svc))
@@ -357,10 +390,10 @@ func stampSource(source domain.Source) func(http.Handler) http.Handler {
 	}
 }
 
-// limitBody caps request bodies. Backup restore has a larger cap for archive
-// uploads; every other v1 endpoint keeps the ordinary small control-plane cap.
-// A body over the cap fails the next Decode with an error, which the handler
-// reports as a 400, so an oversized or unbounded body cannot exhaust memory.
+// limitBody caps request bodies. Backup restore and business-CSV import have
+// larger caps for uploaded files; every other v1 endpoint keeps the ordinary
+// small control-plane cap. A body over the cap fails the next Decode, so an
+// oversized or unbounded body cannot exhaust memory.
 func limitBody(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Body != nil {
@@ -374,6 +407,11 @@ func requestBodyLimit(r *http.Request) int64 {
 	switch r.URL.Path {
 	case "/api/v1/backup/restore", "/app/api/v1/backup/restore":
 		return maxBackupRestoreBody
+	case "/api/v1/business-csv/import",
+		"/app/api/v1/business-csv/import",
+		"/api/v1/business-csv/import/preview",
+		"/app/api/v1/business-csv/import/preview":
+		return maxImportBody
 	default:
 		return maxRequestBody
 	}
@@ -445,6 +483,150 @@ func handleExportBackup(svc Service) http.HandlerFunc {
 	}
 }
 
+// handleExportBusinessCSV handles POST /api/v1/business-csv/export.
+func handleExportBusinessCSV(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Entity    string `json:"entity"`
+			Delimiter string `json:"delimiter"`
+			Filters   struct {
+				GroupCode *string `json:"groupCode"`
+				Account   string  `json:"account"`
+				Asset     string  `json:"asset"`
+				Source    string  `json:"source"`
+			} `json:"filters"`
+			Zip bool `json:"zip"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			return
+		}
+		file, err := svc.ExportBusinessCSV(r.Context(), backend.BusinessCSVExportRequest{
+			Entity:    businesscsv.Entity(req.Entity),
+			Delimiter: businesscsv.Delimiter(req.Delimiter),
+			Zip:       req.Zip,
+			Filter: businesscsv.ExportFilter{
+				GroupCode:    businessCSVGroupCode(req.Filters.GroupCode),
+				Account:      domain.AccountID(req.Filters.Account),
+				Asset:        req.Filters.Asset,
+				Source:       domain.Source(req.Filters.Source),
+				GroupCodeSet: req.Filters.GroupCode != nil,
+			},
+		})
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		w.Header().Set("Content-Disposition",
+			`attachment; filename="`+file.Name+`"`)
+		w.Header().Set("Content-Type", file.ContentType)
+		_, _ = w.Write(file.Body)
+	}
+}
+
+func businessCSVGroupCode(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+// handlePreviewBusinessCSVImport handles
+// POST /api/v1/business-csv/import/preview.
+func handlePreviewBusinessCSVImport(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		req, ok := readBusinessCSVImportRequest(w, r, false)
+		if !ok {
+			return
+		}
+		preview, err := svc.PreviewBusinessCSVImport(r.Context(), req)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"preview": preview})
+	}
+}
+
+// handleImportBusinessCSV handles POST /api/v1/business-csv/import.
+// Imports are atomic: any row error rolls back the whole import. The stop
+// policy deliberately commits rows applied before the first conflict and returns
+// 200 with counts.stopped=true and conflicts; 409 is reserved for concurrent
+// create races.
+func handleImportBusinessCSV(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		req, ok := readBusinessCSVImportRequest(w, r, true)
+		if !ok {
+			return
+		}
+		result, err := svc.ImportBusinessCSV(r.Context(), req)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"result": result})
+	}
+}
+
+func readBusinessCSVImportRequest(
+	w http.ResponseWriter, r *http.Request, requirePolicy bool,
+) (backend.BusinessCSVImportRequest, bool) {
+	var req struct {
+		Entity         string `json:"entity"`
+		Delimiter      string `json:"delimiter"`
+		Filename       string `json:"filename"`
+		PayloadBase64  string `json:"payloadBase64"`
+		ConflictPolicy string `json:"conflictPolicy"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		return backend.BusinessCSVImportRequest{}, false
+	}
+	if req.PayloadBase64 == "" {
+		writeErrMsg(w, http.StatusBadRequest, "validation",
+			"payloadBase64 is required")
+		return backend.BusinessCSVImportRequest{}, false
+	}
+	if requirePolicy && req.ConflictPolicy == "" {
+		writeErrMsg(w, http.StatusBadRequest, "validation",
+			"conflictPolicy is required")
+		return backend.BusinessCSVImportRequest{}, false
+	}
+	payload, err := decodeBusinessCSVPayloadBase64(
+		req.PayloadBase64, businesscsv.MaxImportBytes,
+	)
+	if err != nil {
+		if errors.Is(err, domain.ErrTooLarge) {
+			writeErr(w, err)
+			return backend.BusinessCSVImportRequest{}, false
+		}
+		writeErrMsg(w, http.StatusBadRequest, "validation",
+			"invalid business CSV file encoding")
+		return backend.BusinessCSVImportRequest{}, false
+	}
+	return backend.BusinessCSVImportRequest{
+		Entity:         businesscsv.Entity(req.Entity),
+		Delimiter:      businesscsv.Delimiter(req.Delimiter),
+		Filename:       req.Filename,
+		Payload:        payload,
+		ConflictPolicy: businesscsv.ConflictPolicy(req.ConflictPolicy),
+	}, true
+}
+
+func decodeBusinessCSVPayloadBase64(encoded string, maxBytes int) ([]byte, error) {
+	if len(encoded) > base64.StdEncoding.EncodedLen(maxBytes) {
+		return nil, businesscsv.NewTooLargeError(false)
+	}
+	payload, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, err
+	}
+	if len(payload) > maxBytes {
+		return nil, businesscsv.NewTooLargeError(false)
+	}
+	return payload, nil
+}
+
 // handleRestoreBackup handles POST /api/v1/backup/restore.
 func handleRestoreBackup(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -474,7 +656,7 @@ func handleRestoreBackup(svc Service) http.HandlerFunc {
 				"restore scope must include all or at least one section")
 			return
 		}
-		if req.ArchiveFile == "" && req.Archive.Manifest.Format == "" {
+		if req.ArchiveFile == "" && len(req.Archive.Manifest.Sections) == 0 {
 			writeErrMsg(w, http.StatusBadRequest, "validation",
 				"backup archive is required")
 			return
@@ -669,17 +851,19 @@ func handleListAccounts(svc Service) http.HandlerFunc {
 	}
 }
 
-// handleCreateAccount handles POST /api/v1/accounts.
+// handleCreateAccount handles POST /api/v1/accounts. The body carries the
+// account's public code; the engine assigns its internal id, which is never
+// exposed.
 func handleCreateAccount(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			ID string `json:"id"`
+			Code string `json:"code"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
-		id := domain.AccountID(req.ID)
+		id := domain.AccountID(req.Code)
 		if err := domain.ValidateAccountID(id); err != nil {
 			writeErr(w, err)
 			return
@@ -706,13 +890,9 @@ func handleGetAccount(svc Service) http.HandlerFunc {
 			writeErr(w, err)
 			return
 		}
-		limitDTOs := make([]limitDTO, 0, len(limits))
-		for _, l := range limits {
-			limitDTOs = append(limitDTOs, toLimitDTO(l))
-		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"account": toAccountDTO(account),
-			"limits":  limitDTOs,
+			"limits":  toAccountLimitsDTO(limits),
 		})
 	}
 }
@@ -753,6 +933,22 @@ func handleUnblockAccount(svc Service) http.HandlerFunc {
 			return
 		}
 		writeAccount(w, svc, r, id)
+	}
+}
+
+// handleDeleteAccount handles DELETE /api/v1/accounts/{id}.
+func handleDeleteAccount(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := pathAccountID(r)
+		if err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		if err := svc.DeleteAccount(r.Context(), id, forceQuery(r)); err != nil {
+			writeErr(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
@@ -816,7 +1012,9 @@ func handleSetAccountNotes(svc Service) http.HandlerFunc {
 	}
 }
 
-// handleListLimits handles GET /api/v1/limits[?account=].
+// handleListLimits handles GET /api/v1/limits[?account=]. It returns the three
+// typed barrier shapes (rate / order-size / pnl-bounds) per policy. Barriers
+// reference accounts by code; no surrogate or engine id is involved.
 func handleListLimits(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		account := domain.AccountID(r.URL.Query().Get("account"))
@@ -825,40 +1023,161 @@ func handleListLimits(svc Service) http.HandlerFunc {
 			writeErr(w, err)
 			return
 		}
-		dtos := make([]limitDTO, 0, len(limits))
-		for _, l := range limits {
-			dtos = append(dtos, toLimitDTO(l))
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"limits": dtos})
+		writeJSON(w, http.StatusOK, map[string]any{"limits": toAccountLimitsDTO(limits)})
 	}
 }
 
-// handlePutLimit handles PUT /api/v1/limits.
-func handlePutLimit(svc Service) http.HandlerFunc {
+// handlePutRateLimit handles PUT /api/v1/limits/rate. The body is the typed
+// rate-limit barrier; the backend validates scope/axes and upserts it.
+func handlePutRateLimit(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req limitDTO
+		var req rateLimitDTO
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
-		limit := fromLimitDTO(req)
-		if err := svc.PutLimit(r.Context(), limit); err != nil {
+		limit := domain.LimitRate{
+			Scope:     req.Scope,
+			Account:   domain.AccountID(req.Account),
+			Asset:     req.Asset,
+			Window:    time.Duration(req.WindowMs) * time.Millisecond,
+			MaxOrders: req.MaxOrders,
+		}
+		if err := svc.PutRateLimit(r.Context(), limit); err != nil {
 			writeErr(w, err)
 			return
 		}
-		// Re-read back from store is not done here: return the normalized form of
-		// what was sent (the backend validates and normalizes; on success the
-		// caller knows what was stored).
-		writeJSON(w, http.StatusOK, map[string]any{"limit": toLimitDTO(limit)})
+		persisted, err := persistedRateLimit(r.Context(), svc, limit)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"rateLimit": toRateLimitDTO(persisted)})
 	}
 }
 
+// handlePutOrderSizeLimit handles PUT /api/v1/limits/order-size. The body is the
+// typed order-size barrier; the backend validates scope/axes and upserts it.
+func handlePutOrderSizeLimit(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req orderSizeLimitDTO
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			return
+		}
+		limit := domain.LimitOrderSize{
+			Scope:       req.Scope,
+			Account:     domain.AccountID(req.Account),
+			Asset:       req.Asset,
+			MaxQuantity: req.MaxQuantity,
+			MaxNotional: req.MaxNotional,
+		}
+		if err := svc.PutOrderSizeLimit(r.Context(), limit); err != nil {
+			writeErr(w, err)
+			return
+		}
+		persisted, err := persistedOrderSizeLimit(r.Context(), svc, limit)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"orderSizeLimit": toOrderSizeLimitDTO(persisted)})
+	}
+}
+
+// handlePutPnlBoundsLimit handles PUT /api/v1/limits/pnl-bounds. The body is the
+// typed P&L-bounds kill-switch barrier; the backend validates scope/axes and
+// upserts it.
+func handlePutPnlBoundsLimit(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req pnlBoundsLimitDTO
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			return
+		}
+		limit := domain.LimitPnlBounds{
+			Scope:      req.Scope,
+			Account:    domain.AccountID(req.Account),
+			Asset:      req.Asset,
+			LowerBound: req.LowerBound,
+			UpperBound: req.UpperBound,
+			InitialPnl: req.InitialPnl,
+		}
+		if err := svc.PutPnlBoundsLimit(r.Context(), limit); err != nil {
+			writeErr(w, err)
+			return
+		}
+		persisted, err := persistedPnlBoundsLimit(r.Context(), svc, limit)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"pnlBoundsLimit": toPnlBoundsLimitDTO(persisted)})
+	}
+}
+
+func persistedRateLimit(
+	ctx context.Context, svc Service, target domain.LimitRate,
+) (domain.LimitRate, error) {
+	limits, err := svc.ListLimits(ctx, target.Account)
+	if err != nil {
+		return domain.LimitRate{}, err
+	}
+	for _, limit := range limits.RateLimits {
+		if sameLimitAddress(limit.Scope, limit.Account, limit.Asset,
+			target.Scope, target.Account, target.Asset) {
+			return limit, nil
+		}
+	}
+	return domain.LimitRate{}, domain.ErrNotFound
+}
+
+func persistedOrderSizeLimit(
+	ctx context.Context, svc Service, target domain.LimitOrderSize,
+) (domain.LimitOrderSize, error) {
+	limits, err := svc.ListLimits(ctx, target.Account)
+	if err != nil {
+		return domain.LimitOrderSize{}, err
+	}
+	for _, limit := range limits.OrderSizeLimits {
+		if sameLimitAddress(limit.Scope, limit.Account, limit.Asset,
+			target.Scope, target.Account, target.Asset) {
+			return limit, nil
+		}
+	}
+	return domain.LimitOrderSize{}, domain.ErrNotFound
+}
+
+func persistedPnlBoundsLimit(
+	ctx context.Context, svc Service, target domain.LimitPnlBounds,
+) (domain.LimitPnlBounds, error) {
+	limits, err := svc.ListLimits(ctx, target.Account)
+	if err != nil {
+		return domain.LimitPnlBounds{}, err
+	}
+	for _, limit := range limits.PnlBoundsLimits {
+		if sameLimitAddress(limit.Scope, limit.Account, limit.Asset,
+			target.Scope, target.Account, target.Asset) {
+			return limit, nil
+		}
+	}
+	return domain.LimitPnlBounds{}, domain.ErrNotFound
+}
+
+func sameLimitAddress(
+	leftScope string, leftAccount domain.AccountID, leftAsset string,
+	rightScope string, rightAccount domain.AccountID, rightAsset string,
+) bool {
+	return leftScope == rightScope && leftAccount == rightAccount && leftAsset == rightAsset
+}
+
 // handleDeleteLimit handles
-// DELETE /api/v1/limits?policy=&scope=&account=&asset=.
+// DELETE /api/v1/limits?policy=&scope=&account=&asset=. The barrier is addressed
+// by its (policy, scope, account-code, asset) composite.
 func handleDeleteLimit(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
-		target := domain.LimitTarget{
+		target := node.LimitTarget{
 			Policy:  q.Get("policy"),
 			Scope:   q.Get("scope"),
 			Account: domain.AccountID(q.Get("account")),
@@ -1109,22 +1428,32 @@ func handleCreateMarketDataInstance(svc Service) http.HandlerFunc {
 			return
 		}
 		instance := domain.MarketDataInstance{
-			Type:        req.Type,
+			Provider:    req.Provider,
 			Label:       req.Label,
 			Credentials: req.Credentials,
 			Enabled:     req.Enabled,
 		}
-		if err := svc.CreateMarketDataInstance(r.Context(), instance); err != nil {
-			writeErr(w, err)
-			return
+		// A caller-supplied external id is optional. When present it must be a
+		// well-formed wire form (a malformed one is a 400); the backend uses it
+		// verbatim and rejects a duplicate with 409. When absent the backend
+		// generates one and returns it on the instance.
+		if req.ExternalID != "" {
+			id, err := domain.ParseExternalID(req.ExternalID)
+			if err != nil {
+				writeErr(w, err)
+				return
+			}
+			instance.ExternalID = id
 		}
-		status, err := svc.ListMarketData(r.Context())
+		created, err := svc.CreateMarketDataInstance(r.Context(), instance)
 		if err != nil {
 			writeErr(w, err)
 			return
 		}
 		writeJSON(w, http.StatusCreated, map[string]any{
-			"marketData": toMarketDataDTO(status),
+			"instance": toMarketDataInstanceDTO(backend.MarketDataInstanceStatus{
+				Instance: created,
+			}),
 		})
 	}
 }
@@ -1165,6 +1494,11 @@ func handleSetMarketDataInstanceEnabled(svc Service) http.HandlerFunc {
 			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
+		instanceID, err := domain.ParseExternalID(id)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
 		var req struct {
 			Enabled bool `json:"enabled"`
 		}
@@ -1176,7 +1510,20 @@ func handleSetMarketDataInstanceEnabled(svc Service) http.HandlerFunc {
 			writeErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"enabled": req.Enabled})
+		status, err := svc.ListMarketData(r.Context())
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		for _, instance := range status.Instances {
+			if instance.Instance.ExternalID == instanceID {
+				writeJSON(w, http.StatusOK, map[string]any{
+					"enabled": instance.Instance.Enabled,
+				})
+				return
+			}
+		}
+		writeErr(w, domain.ErrNotFound)
 	}
 }
 
@@ -1187,12 +1534,16 @@ func handleDeleteMarketDataInstance(svc Service) http.HandlerFunc {
 			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
-		if err := svc.DeleteMarketDataInstance(r.Context(), id); err != nil {
+		if err := svc.DeleteMarketDataInstance(r.Context(), id, forceQuery(r)); err != nil {
 			writeErr(w, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+func forceQuery(r *http.Request) bool {
+	return r.URL.Query().Get("force") == "true"
 }
 
 func handleUpsertMarketDataInstrument(svc Service) http.HandlerFunc {
@@ -1207,8 +1558,13 @@ func handleUpsertMarketDataInstrument(svc Service) http.HandlerFunc {
 			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
+		instanceID, err := domain.ParseExternalID(id)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
 		instrument := domain.MarketDataInstrument{
-			InstanceID:     id,
+			Instance:       instanceID,
 			ExternalSymbol: req.ExternalSymbol,
 			BaseAsset:      req.BaseAsset,
 			QuoteAsset:     req.QuoteAsset,
@@ -1376,35 +1732,38 @@ func handleListGroups(svc Service) http.HandlerFunc {
 	}
 }
 
-// handleCreateGroup handles POST /api/v1/groups.
+// handleCreateGroup handles POST /api/v1/groups. The body carries the group's
+// public code, an optional title, and optional notes; the engine assigns its
+// internal group id, which is never exposed.
 func handleCreateGroup(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			ID    string `json:"id"`
+			Code  string `json:"code"`
+			Title string `json:"title"`
 			Notes string `json:"notes"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
-		group := domain.AccountGroup{ID: req.ID, Notes: req.Notes}
-		if err := svc.CreateGroup(r.Context(), group); err != nil {
+		group := domain.AccountGroup{Code: req.Code, Title: req.Title, Notes: req.Notes}
+		if _, err := svc.CreateGroup(r.Context(), group); err != nil {
 			writeErr(w, err)
 			return
 		}
-		writeGroup(w, svc, r, req.ID, http.StatusCreated)
+		writeGroup(w, svc, r, req.Code, http.StatusCreated)
 	}
 }
 
-// handleGetGroup handles GET /api/v1/groups/{id}.
+// handleGetGroup handles GET /api/v1/groups/{code}.
 func handleGetGroup(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
+		code, err := pathGroupCode(r)
 		if err != nil {
 			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
-		group, accounts, err := svc.GetGroup(r.Context(), id)
+		group, accounts, err := svc.GetGroup(r.Context(), code)
 		if err != nil {
 			writeErr(w, err)
 			return
@@ -1420,10 +1779,10 @@ func handleGetGroup(svc Service) http.HandlerFunc {
 	}
 }
 
-// handleSetGroupNotes handles PUT /api/v1/groups/{id}/notes.
+// handleSetGroupNotes handles PUT /api/v1/groups/{code}/notes.
 func handleSetGroupNotes(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
+		code, err := pathGroupCode(r)
 		if err != nil {
 			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
@@ -1435,18 +1794,18 @@ func handleSetGroupNotes(svc Service) http.HandlerFunc {
 			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
-		if err := svc.SetGroupNotes(r.Context(), id, req.Notes); err != nil {
+		if err := svc.SetGroupNotes(r.Context(), code, req.Notes); err != nil {
 			writeErr(w, err)
 			return
 		}
-		writeGroup(w, svc, r, id, http.StatusOK)
+		writeGroup(w, svc, r, code, http.StatusOK)
 	}
 }
 
-// handleBlockGroup handles POST /api/v1/groups/{id}/block.
+// handleBlockGroup handles POST /api/v1/groups/{code}/block.
 func handleBlockGroup(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
+		code, err := pathGroupCode(r)
 		if err != nil {
 			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
@@ -1458,39 +1817,39 @@ func handleBlockGroup(svc Service) http.HandlerFunc {
 			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
-		if err := svc.SetGroupBlocked(r.Context(), id, true, req.Reason); err != nil {
+		if err := svc.SetGroupBlocked(r.Context(), code, true, req.Reason); err != nil {
 			writeErr(w, err)
 			return
 		}
-		writeGroup(w, svc, r, id, http.StatusOK)
+		writeGroup(w, svc, r, code, http.StatusOK)
 	}
 }
 
-// handleUnblockGroup handles POST /api/v1/groups/{id}/unblock.
+// handleUnblockGroup handles POST /api/v1/groups/{code}/unblock.
 func handleUnblockGroup(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
+		code, err := pathGroupCode(r)
 		if err != nil {
 			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
-		if err := svc.SetGroupBlocked(r.Context(), id, false, ""); err != nil {
+		if err := svc.SetGroupBlocked(r.Context(), code, false, ""); err != nil {
 			writeErr(w, err)
 			return
 		}
-		writeGroup(w, svc, r, id, http.StatusOK)
+		writeGroup(w, svc, r, code, http.StatusOK)
 	}
 }
 
-// handleDeleteGroup handles DELETE /api/v1/groups/{id}.
+// handleDeleteGroup handles DELETE /api/v1/groups/{code}.
 func handleDeleteGroup(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
+		code, err := pathGroupCode(r)
 		if err != nil {
 			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
-		if err := svc.DeleteGroup(r.Context(), id); err != nil {
+		if err := svc.DeleteGroup(r.Context(), code); err != nil {
 			writeErr(w, err)
 			return
 		}
@@ -1501,8 +1860,8 @@ func handleDeleteGroup(svc Service) http.HandlerFunc {
 // writeGroup re-reads the group and writes it as {"group": {...}} with status,
 // so group-mutating handlers return valid JSON reflecting real server state.
 // The member accounts returned alongside the group are ignored here.
-func writeGroup(w http.ResponseWriter, svc Service, r *http.Request, id string, status int) {
-	group, _, err := svc.GetGroup(r.Context(), id)
+func writeGroup(w http.ResponseWriter, svc Service, r *http.Request, code string, status int) {
+	group, _, err := svc.GetGroup(r.Context(), code)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -1544,7 +1903,20 @@ func handleApplyAdjustment(svc Service) http.HandlerFunc {
 			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
-		record, err := svc.ApplyAdjustment(r.Context(), id, fromAdjustmentRequestDTO(req))
+		// A caller-supplied external id is optional. When present it must be a
+		// well-formed wire form (a malformed one is a 400); the backend uses it
+		// verbatim and rejects a duplicate with 409. When absent the backend
+		// generates one and returns it on the record.
+		var externalID domain.ExternalID
+		if req.ExternalID != "" {
+			externalID, err = domain.ParseExternalID(req.ExternalID)
+			if err != nil {
+				writeErr(w, err)
+				return
+			}
+		}
+		record, err := svc.ApplyAdjustment(
+			r.Context(), id, externalID, fromAdjustmentRequestDTO(req))
 		if err != nil {
 			writeErr(w, err)
 			return
@@ -1703,10 +2075,12 @@ func handleListOrders(svc Service) http.HandlerFunc {
 	}
 }
 
-// handleGetOrder handles GET /api/v1/orders/{id}.
+// handleGetOrder handles GET /api/v1/orders/{externalId}. It returns the order,
+// its 1:1 approval envelope (omitted when unsigned), its events, and its trades,
+// all addressed by opaque external ids.
 func handleGetOrder(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathInt64(r)
+		id, err := pathOrderExternalID(r)
 		if err != nil {
 			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
@@ -1724,12 +2098,17 @@ func handleGetOrder(svc Service) http.HandlerFunc {
 		for _, t := range detail.Trades {
 			trades = append(trades, toTradeDTO(t))
 		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"order":    toOrderDTO(detail.Order),
-			"events":   events,
-			"trades":   trades,
-			"approval": toOrderApprovalDTO(detail.Order),
-		})
+		body := map[string]any{
+			"order":  toOrderDTO(detail.Order),
+			"events": events,
+			"trades": trades,
+		}
+		// The approval envelope is omitted entirely when the order is unsigned, so
+		// the wire shape distinguishes "no envelope" from a present one.
+		if approval := toOrderApprovalDTO(detail.Approval); approval != nil {
+			body["approval"] = approval
+		}
+		writeJSON(w, http.StatusOK, body)
 	}
 }
 
@@ -1738,7 +2117,7 @@ func handleGetOrder(svc Service) http.HandlerFunc {
 // and side are taken from the parent order; the body carries only the fill.
 func handleApplyExecutionReport(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathInt64(r)
+		id, err := pathOrderExternalID(r)
 		if err != nil {
 			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
@@ -1769,7 +2148,7 @@ func handleApplyExecutionReport(svc Service) http.HandlerFunc {
 			LockPrice:    req.LockPrice,
 			Account:      detail.Order.Account,
 			Side:         detail.Order.Side,
-			OrderID:      id,
+			Order:        detail.Order.ExternalID,
 			Force:        req.Force,
 			Final:        req.Final,
 		}
@@ -1923,17 +2302,15 @@ func handleSetSigningConfig(svc Service) http.HandlerFunc {
 
 // --- approval token ---------------------------------------------------------
 
-// handleSubmitOrderToken handles POST /api/v1/orders/{id}/submit. The body
-// carries the submit mode (hold | immediate). It resolves the stored order,
-// runs the engine pre-trade in the given mode, and issues a signed approval
-// token on accept.
+// handleSubmitOrderToken handles POST /api/v1/orders/submit. The body carries
+// the order fields, an optional caller-supplied external id, and the submit mode
+// (hold | immediate). Submit CREATES the order exactly once: it runs the engine
+// pre-trade in the given mode and records the order, then issues a signed
+// approval token on accept. The returned orderExternalId is the id actually used
+// (the supplied one when valid, else a generated one), so confirm/cancel resolve
+// the same order. There is no separate persisting create before submit.
 func handleSubmitOrderToken(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		orderID, err := pathInt64(r)
-		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
-			return
-		}
 		var req submitOrderTokenRequestDTO
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
@@ -1947,21 +2324,37 @@ func handleSubmitOrderToken(svc Service) http.HandlerFunc {
 			writeErrMsg(w, http.StatusBadRequest, "signing", "mode must be hold or immediate")
 			return
 		}
-		detail, err := svc.GetOrder(r.Context(), orderID)
-		if err != nil {
-			writeErr(w, err)
-			return
+		order := domain.Order{
+			Account:     domain.AccountID(req.Account),
+			BaseAsset:   req.BaseAsset,
+			QuoteAsset:  req.QuoteAsset,
+			Side:        domain.OrderSide(req.Side),
+			AmountKind:  domain.OrderAmountKind(req.AmountKind),
+			AmountValue: req.AmountValue,
+			Price:       req.Price,
 		}
-		tok, err := svc.SubmitOrderToken(r.Context(), detail.Order, mode)
+		// A caller-supplied external id is optional. When present it must be a
+		// well-formed wire form (a malformed one is a 400); the backend uses it
+		// verbatim and rejects a duplicate with 409. When absent the backend
+		// generates one and returns it.
+		if req.ExternalID != "" {
+			id, err := domain.ParseExternalID(req.ExternalID)
+			if err != nil {
+				writeErr(w, err)
+				return
+			}
+			order.ExternalID = id
+		}
+		tok, err := svc.SubmitOrderToken(r.Context(), order, mode)
 		if err != nil {
 			writeErr(w, err)
 			return
 		}
 		writeJSON(w, http.StatusCreated, approvalTokenDTO{
-			Token:     tok.Token,
-			KeyID:     tok.KeyID,
-			ExpiresAt: tok.ExpiresAt.Format(time.RFC3339Nano),
-			OrderID:   tok.OrderID,
+			Token:           tok.Token,
+			KeyID:           tok.KeyID,
+			ExpiresAt:       tok.ExpiresAt.Format(time.RFC3339Nano),
+			OrderExternalID: tok.OrderExternalID,
 		})
 	}
 }
@@ -1971,7 +2364,7 @@ func handleSubmitOrderToken(svc Service) http.HandlerFunc {
 // reservation.
 func handleConfirmExecution(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		orderID, err := pathInt64(r)
+		orderID, err := pathOrderExternalID(r)
 		if err != nil {
 			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
@@ -2000,7 +2393,7 @@ func handleConfirmExecution(svc Service) http.HandlerFunc {
 // rolls back the held reservation.
 func handleCancelOrder(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		orderID, err := pathInt64(r)
+		orderID, err := pathOrderExternalID(r)
 		if err != nil {
 			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
@@ -2111,13 +2504,25 @@ func limitParam(r *http.Request, def, capN int) (int, error) {
 	return n, nil
 }
 
-// pathID reads the {id} chi path parameter and URL-decodes it. It is the group
-// counterpart to pathAccountID.
+// pathID reads the {id} chi path parameter and URL-decodes it. It is used by the
+// market-data routes, whose {id} is the instance's opaque external id (a string
+// the backend parses), never a surrogate or engine id.
 func pathID(r *http.Request) (string, error) {
 	raw := chi.URLParam(r, "id")
 	decoded, err := url.PathUnescape(raw)
 	if err != nil {
 		return "", errors.New("invalid URL encoding in id")
+	}
+	return decoded, nil
+}
+
+// pathGroupCode reads the {code} chi path parameter and URL-decodes it. A group
+// is addressed by its public code.
+func pathGroupCode(r *http.Request) (string, error) {
+	raw := chi.URLParam(r, "code")
+	decoded, err := url.PathUnescape(raw)
+	if err != nil {
+		return "", errors.New("invalid URL encoding in code")
 	}
 	return decoded, nil
 }
@@ -2133,29 +2538,34 @@ func pathCommand(r *http.Request) (string, error) {
 	return decoded, nil
 }
 
-// pathInt64 reads the {id} chi path parameter as an int64 (order identifier).
-func pathInt64(r *http.Request) (int64, error) {
-	raw := chi.URLParam(r, "id")
-	v, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil {
-		return 0, errors.New("id must be an integer")
-	}
-	return v, nil
-}
-
-// pathAccountID reads the {id} chi path parameter and URL-decodes it.
-func pathAccountID(r *http.Request) (domain.AccountID, error) {
-	raw := chi.URLParam(r, "id")
+// pathOrderExternalID reads the {externalId} chi path parameter and URL-decodes
+// it. An order is addressed by its opaque external id, never a surrogate id; the
+// backend validates the string against the external-id codec.
+func pathOrderExternalID(r *http.Request) (string, error) {
+	raw := chi.URLParam(r, "externalId")
 	decoded, err := url.PathUnescape(raw)
 	if err != nil {
-		return "", errors.New("invalid URL encoding in account id")
+		return "", errors.New("invalid URL encoding in order external id")
+	}
+	return decoded, nil
+}
+
+// pathAccountID reads the {code} chi path parameter and URL-decodes it. An
+// account is addressed by its public code.
+func pathAccountID(r *http.Request) (domain.AccountID, error) {
+	raw := chi.URLParam(r, "code")
+	decoded, err := url.PathUnescape(raw)
+	if err != nil {
+		return "", errors.New("invalid URL encoding in account code")
 	}
 	return domain.AccountID(decoded), nil
 }
 
 // writeErr maps a domain sentinel error to the appropriate HTTP status and
-// JSON error body. The codes are: ErrInvalid -> 400 validation, ErrNotFound ->
-// 404 not_found, ErrAlreadyExists/ErrConflict -> 409 conflict,
+// JSON error body. The codes are: ErrTooLarge -> 413 too_large,
+// ErrInvalid -> 400 validation, ErrNotFound -> 404 not_found,
+// ErrAlreadyExists/ErrConflict -> 409 conflict,
+// ErrHasDependents -> 409 has_dependents,
 // ErrTerminalOrder -> 409 terminal_order,
 // ErrEngineRestarting -> 503 engine_restarting, ErrNotImplemented -> 501
 // not_implemented (the message is surfaced so the operator sees which SDK
@@ -2163,12 +2573,16 @@ func pathAccountID(r *http.Request) (domain.AccountID, error) {
 // sentinels take precedence over the generic 500 path.
 func writeErr(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, domain.ErrTooLarge):
+		writeErrMsg(w, http.StatusRequestEntityTooLarge, "too_large", err.Error())
 	case errors.Is(err, domain.ErrInvalid):
 		writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 	case errors.Is(err, domain.ErrNotFound):
 		writeErrMsg(w, http.StatusNotFound, "not_found", err.Error())
 	case errors.Is(err, domain.ErrAlreadyExists):
 		writeErrMsg(w, http.StatusConflict, "conflict", err.Error())
+	case errors.Is(err, domain.ErrHasDependents):
+		writeHasDependentsErr(w, err)
 	case errors.Is(err, domain.ErrTerminalOrder):
 		writeErrMsg(w, http.StatusConflict, "terminal_order", domain.ErrTerminalOrder.Error())
 	case errors.Is(err, domain.ErrConflict):
@@ -2190,6 +2604,27 @@ func writeErr(w http.ResponseWriter, err error) {
 		slog.Error("unhandled internal error serving request", "error", err)
 		writeErrMsg(w, http.StatusInternalServerError, "internal", "internal error")
 	}
+}
+
+func writeHasDependentsErr(w http.ResponseWriter, err error) {
+	var typed domain.HasDependentsError
+	if !errors.As(err, &typed) {
+		typed = domain.HasDependentsError{}
+	}
+	dependents := make([]map[string]any, 0, len(typed.Dependents))
+	for _, dep := range typed.Dependents {
+		dependents = append(dependents, map[string]any{
+			"kind":  dep.Kind,
+			"count": dep.Count,
+		})
+	}
+	writeJSON(w, http.StatusConflict, map[string]any{
+		"error": map[string]any{
+			"code":       "has_dependents",
+			"message":    domain.ErrHasDependents.Error(),
+			"dependents": dependents,
+		},
+	})
 }
 
 // writeErrMsg writes a JSON error body with the given HTTP status, code and

@@ -1,9 +1,9 @@
 {
   "account": {
-    "required": "Account id is required",
-    "tooLong": "Account id must be at most {{max}} characters",
-    "whitespace": "Account id must not have leading or trailing whitespace",
-    "printable": "Account id must contain only printable characters"
+    "required": "Account code is required",
+    "tooLong": "Account code must be at most {{max}} characters",
+    "whitespace": "Account code must not have leading or trailing whitespace",
+    "printable": "Account code must contain only printable characters"
   },
   "asset": {
     "required": "Asset is required for this scope",

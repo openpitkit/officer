@@ -243,11 +243,11 @@ function findBinanceMarketDataInstance(
 
 function findMarketDataInstance(
   instances: MarketDataInstance[],
-  type: string,
+  provider: string,
   label: string,
 ): MarketDataInstance | undefined {
   return instances.find(
-    (instance) => instance.type === type && instance.label === label,
+    (instance) => instance.provider === provider && instance.label === label,
   );
 }
 
@@ -377,7 +377,7 @@ export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
     let applied = 0;
     try {
       const accounts = await fetchAccounts();
-      if (!accounts.some((account) => account.id === DEMO_ACCOUNT_ID)) {
+      if (!accounts.some((account) => account.code === DEMO_ACCOUNT_ID)) {
         await createAccount(DEMO_ACCOUNT_ID);
         applied += 1;
       }
@@ -413,27 +413,26 @@ export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
   const applyMarketDataPreset = async () => {
     let applied = 0;
     try {
-      let status = await fetchMarketData();
+      const status = await fetchMarketData();
       let instance = findStaticMarketDataInstance(status.instances);
       if (instance === undefined) {
-        status = await createMarketDataInstance({
-          type: MANUAL_PROVIDER,
+        instance = await createMarketDataInstance({
+          provider: MANUAL_PROVIDER,
           label: STATIC_MARKET_DATA_LABEL,
           credentials: "",
           enabled: true,
         });
         applied += 1;
-        instance = findStaticMarketDataInstance(status.instances);
       }
       if (instance === undefined) {
         throw new Error(t("welcome.status.marketDataInstanceMissing"));
       }
       if (!instance.enabled) {
-        await setMarketDataInstanceEnabled(instance.id, true);
+        await setMarketDataInstanceEnabled(instance.externalId, true);
         applied += 1;
       }
       for (const instrument of STATIC_MARKET_DATA_PRESET) {
-        await upsertMarketDataInstrument(instance.id, {
+        await upsertMarketDataInstrument(instance.externalId, {
           ...instrument,
           enabled: true,
         });
@@ -449,27 +448,26 @@ export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
   const applyBinancePreset = async () => {
     let applied = 0;
     try {
-      let status = await fetchMarketData();
+      const status = await fetchMarketData();
       let instance = findBinanceMarketDataInstance(status.instances);
       if (instance === undefined) {
-        status = await createMarketDataInstance({
-          type: BINANCE_PROVIDER,
+        instance = await createMarketDataInstance({
+          provider: BINANCE_PROVIDER,
           label: BINANCE_MARKET_DATA_LABEL,
           credentials: "",
           enabled: true,
         });
         applied += 1;
-        instance = findBinanceMarketDataInstance(status.instances);
       }
       if (instance === undefined) {
         throw new Error(t("welcome.status.binanceInstanceMissing"));
       }
       if (!instance.enabled) {
-        await setMarketDataInstanceEnabled(instance.id, true);
+        await setMarketDataInstanceEnabled(instance.externalId, true);
         applied += 1;
       }
       for (const instrument of BINANCE_MARKET_DATA_PRESET) {
-        await upsertMarketDataInstrument(instance.id, {
+        await upsertMarketDataInstrument(instance.externalId, {
           ...instrument,
           enabled: true,
         });

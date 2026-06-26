@@ -54,8 +54,9 @@ type ApprovalToken struct {
 	Token string
 	// KeyID is the signing key id; empty under eSign-off.
 	KeyID string
-	// OrderID is the recorded order the token authorises.
-	OrderID int64
+	// OrderExternalID is the opaque public handle of the recorded order the token
+	// authorises. It is the order's external id, never a surrogate or engine id.
+	OrderExternalID string
 	// Signed reports whether the envelope carries an Ed25519 signature.
 	Signed bool
 }
@@ -182,16 +183,14 @@ func (s *Service) SubmitOrderToken(
 		return ApprovalToken{}, fmt.Errorf("backend: submit mode %q: %w", mode, domain.ErrInvalid)
 	}
 
-	o.Tenant = domain.DefaultTenant
-	if err := domain.ValidateAccountID(o.Account); err != nil {
-		return ApprovalToken{}, err
-	}
-	if err := domain.ValidateAsset(o.BaseAsset); err != nil {
-		return ApprovalToken{}, err
-	}
-	if err := domain.ValidateAsset(o.QuoteAsset); err != nil {
-		return ApprovalToken{}, err
-	}
+	// Officer applies no boundary id/asset format checks; the engine seam parses
+	// the account and assets and enforces the real trading rules.
+	//
+	// A caller-supplied order external id is used verbatim when valid: the order
+	// is created exactly once below (submitHold/submitImmediate record it), and
+	// the returned OrderExternalID is that created id, so confirm/cancel resolve
+	// the same order. Surface layers parse the wire string before this boundary;
+	// a duplicate id is rejected by the store with domain.ErrAlreadyExists.
 
 	n, err := s.router.Route(keyFor(o.Account))
 	if err != nil {
@@ -285,14 +284,15 @@ func (s *Service) SubmitOrderToken(
 	}
 
 	_ = s.auditApproval(ctx, n, key, domain.AuditActionApprovalIssued,
-		fmt.Sprintf("issue approval %s order %d mode=%s", approvalID, order.ID, mode))
+		fmt.Sprintf("issue approval %s order %s mode=%s",
+			approvalID, order.ExternalID.String(), mode))
 
 	return ApprovalToken{
-		ExpiresAt: expiresAt,
-		Token:     token,
-		KeyID:     keyID,
-		OrderID:   order.ID,
-		Signed:    signed,
+		ExpiresAt:       expiresAt,
+		Token:           token,
+		KeyID:           keyID,
+		OrderExternalID: order.ExternalID.String(),
+		Signed:          signed,
 	}, nil
 }
 
@@ -303,9 +303,13 @@ func (s *Service) SubmitOrderToken(
 // an idempotent success; a confirm of a cancelled or expired reservation is a
 // conflict. The confirmation is audited as approval_confirmed.
 func (s *Service) ConfirmExecution(
-	ctx context.Context, orderID int64, token string, force bool,
+	ctx context.Context, orderID string, token string, force bool,
 ) (domain.Order, error) {
 	signer, err := s.signerOrErr()
+	if err != nil {
+		return domain.Order{}, err
+	}
+	order, err := domain.ParseExternalID(orderID)
 	if err != nil {
 		return domain.Order{}, err
 	}
@@ -314,7 +318,7 @@ func (s *Service) ConfirmExecution(
 		return domain.Order{}, fmt.Errorf("backend: route confirm: %w", err)
 	}
 
-	stored, err := n.GetOrder(ctx, domain.DefaultTenant, orderID)
+	stored, err := n.GetOrder(ctx, order)
 	if err != nil {
 		return domain.Order{}, err
 	}
@@ -326,13 +330,13 @@ func (s *Service) ConfirmExecution(
 		if domain.OrderStatusTerminal(stored.Order.Status) {
 			if !force {
 				return domain.Order{}, fmt.Errorf(
-					"backend: order %d is in terminal status %q: %w",
+					"backend: order %s is in terminal status %q: %w",
 					orderID, stored.Order.Status, domain.ErrTerminalOrder)
 			}
 			break
 		}
 		return domain.Order{}, fmt.Errorf(
-			"backend: order %d status %q cannot confirm held approval: %w",
+			"backend: order %s status %q cannot confirm held approval: %w",
 			orderID, stored.Order.Status, domain.ErrConflict)
 	}
 	result, err := signer.Verify(ctx, token, verifyParamsFor(stored.Order))
@@ -346,8 +350,8 @@ func (s *Service) ConfirmExecution(
 	}
 
 	caller := auth.CallerFromContext(ctx)
-	order, err := n.ConfirmHeld(
-		ctx, domain.DefaultTenant, orderID, result.Payload.ApprovalID, caller, force)
+	confirmed, err := n.ConfirmHeld(
+		ctx, order, result.Payload.ApprovalID, caller, force)
 	if err != nil {
 		// The engine guards the double-commit panic by returning a conflict on an
 		// already-resolved reservation. A confirm of an already-committed order is
@@ -360,13 +364,13 @@ func (s *Service) ConfirmExecution(
 		return domain.Order{}, err
 	}
 	detail := fmt.Sprintf(
-		"confirm approval %s order %d", result.Payload.ApprovalID, orderID)
+		"confirm approval %s order %s", result.Payload.ApprovalID, orderID)
 	if force && domain.OrderStatusTerminal(stored.Order.Status) {
 		detail += " forced=true"
 	}
 	_ = s.auditApproval(
-		ctx, n, keyFor(order.Account), domain.AuditActionApprovalConfirmed, detail)
-	return order, nil
+		ctx, n, keyFor(confirmed.Account), domain.AuditActionApprovalConfirmed, detail)
+	return confirmed, nil
 }
 
 // CancelOrder verifies token against the stored order, then rolls back the held
@@ -375,9 +379,13 @@ func (s *Service) ConfirmExecution(
 // engine side and still records the cancelled lifecycle. The cancellation is
 // audited as approval_cancelled, with reason.
 func (s *Service) CancelOrder(
-	ctx context.Context, orderID int64, token, reason string, force bool,
+	ctx context.Context, orderID string, token, reason string, force bool,
 ) (domain.Order, error) {
 	signer, err := s.signerOrErr()
+	if err != nil {
+		return domain.Order{}, err
+	}
+	order, err := domain.ParseExternalID(orderID)
 	if err != nil {
 		return domain.Order{}, err
 	}
@@ -386,7 +394,7 @@ func (s *Service) CancelOrder(
 		return domain.Order{}, fmt.Errorf("backend: route cancel: %w", err)
 	}
 
-	stored, err := n.GetOrder(ctx, domain.DefaultTenant, orderID)
+	stored, err := n.GetOrder(ctx, order)
 	if err != nil {
 		return domain.Order{}, err
 	}
@@ -394,12 +402,12 @@ func (s *Service) CancelOrder(
 		if domain.OrderStatusTerminal(stored.Order.Status) {
 			if !force {
 				return domain.Order{}, fmt.Errorf(
-					"backend: order %d is in terminal status %q: %w",
+					"backend: order %s is in terminal status %q: %w",
 					orderID, stored.Order.Status, domain.ErrTerminalOrder)
 			}
 		} else {
 			return domain.Order{}, fmt.Errorf(
-				"backend: order %d status %q cannot cancel held approval: %w",
+				"backend: order %s status %q cannot cancel held approval: %w",
 				orderID, stored.Order.Status, domain.ErrConflict)
 		}
 	}
@@ -414,19 +422,20 @@ func (s *Service) CancelOrder(
 	}
 
 	caller := auth.CallerFromContext(ctx)
-	order, err := n.CancelHeld(
-		ctx, domain.DefaultTenant, orderID, result.Payload.ApprovalID, caller, force)
+	cancelled, err := n.CancelHeld(
+		ctx, order, result.Payload.ApprovalID, caller, force)
 	if err != nil {
 		return domain.Order{}, err
 	}
 	detail := fmt.Sprintf(
-		"cancel approval %s order %d reason=%s", result.Payload.ApprovalID, orderID, reason)
+		"cancel approval %s order %s reason=%s",
+		result.Payload.ApprovalID, orderID, reason)
 	if force && domain.OrderStatusTerminal(stored.Order.Status) {
 		detail += " forced=true"
 	}
 	_ = s.auditApproval(
-		ctx, n, keyFor(order.Account), domain.AuditActionApprovalCancelled, detail)
-	return order, nil
+		ctx, n, keyFor(cancelled.Account), domain.AuditActionApprovalCancelled, detail)
+	return cancelled, nil
 }
 
 // defaultTokenTTL is how long an issued approval token stays valid. For a hold
@@ -493,27 +502,38 @@ func buildApprovalPayload(
 		orderType = "limit"
 	}
 	return domain.ApprovalPayload{
-		Version:        approvalPayloadVersion,
-		ApprovalID:     approvalID,
-		ReservationID:  approvalID,
-		Mode:           mode,
-		OrderID:        order.ID,
-		Instrument:     order.BaseAsset + "/" + order.QuoteAsset,
-		Side:           string(order.Side),
-		Quantity:       order.AmountValue,
-		AmountKind:     string(order.AmountKind),
-		OrderType:      orderType,
-		LimitPrice:     order.Price,
-		PriceCurrency:  order.QuoteAsset,
-		AccountID:      string(order.Account),
-		Verdict:        "accept",
-		PolicySummary:  "accepted",
-		EstimatePrice:  settlement,
-		EstimateSource: estimateSource,
-		IssuedAt:       issuedAt.Format(time.RFC3339Nano),
-		ExpiresAt:      expiresAt.Format(time.RFC3339Nano),
-		Nonce:          nonce,
+		Version:         approvalPayloadVersion,
+		ApprovalID:      approvalID,
+		ReservationID:   approvalID,
+		Mode:            mode,
+		OrderExternalID: orderExternalID(order),
+		Instrument:      order.BaseAsset + "/" + order.QuoteAsset,
+		Side:            string(order.Side),
+		Quantity:        order.AmountValue,
+		AmountKind:      string(order.AmountKind),
+		OrderType:       orderType,
+		LimitPrice:      order.Price,
+		PriceCurrency:   order.QuoteAsset,
+		AccountID:       string(order.Account),
+		Verdict:         "accept",
+		PolicySummary:   "accepted",
+		EstimatePrice:   settlement,
+		EstimateSource:  estimateSource,
+		IssuedAt:        issuedAt.Format(time.RFC3339Nano),
+		ExpiresAt:       expiresAt.Format(time.RFC3339Nano),
+		Nonce:           nonce,
 	}
+}
+
+// orderExternalID renders the order's opaque public handle for an approval
+// payload, never a surrogate or engine id. A zero external id (an in-memory-only
+// held reservation signed before an order row exists) maps to the empty string so
+// the canonical payload omits the order handle entirely.
+func orderExternalID(order domain.Order) string {
+	if order.ExternalID.IsZero() {
+		return ""
+	}
+	return order.ExternalID.String()
 }
 
 // buildRejectApprovalPayload assembles the canonical approval payload for a
@@ -529,29 +549,29 @@ func buildRejectApprovalPayload(
 		orderType = "limit"
 	}
 	return domain.ApprovalPayload{
-		Version:       approvalPayloadVersion,
-		ApprovalID:    approvalID,
-		ReservationID: approvalID,
-		Mode:          mode,
-		OrderID:       order.ID,
-		Instrument:    order.BaseAsset + "/" + order.QuoteAsset,
-		Side:          string(order.Side),
-		Quantity:      order.AmountValue,
-		AmountKind:    string(order.AmountKind),
-		OrderType:     orderType,
-		LimitPrice:    order.Price,
-		PriceCurrency: order.QuoteAsset,
-		AccountID:     string(order.Account),
-		Verdict:       "reject",
-		PolicySummary: "rejected",
-		EstimatePrice: "",
-		IssuedAt:      issuedAt.Format(time.RFC3339Nano),
-		ExpiresAt:     expiresAt.Format(time.RFC3339Nano),
-		Nonce:         nonce,
-		RejectCode:    reject.Code,
-		RejectScope:   reject.Scope,
-		RejectPolicy:  reject.Policy,
-		RejectReason:  reject.Reason,
+		Version:         approvalPayloadVersion,
+		ApprovalID:      approvalID,
+		ReservationID:   approvalID,
+		Mode:            mode,
+		OrderExternalID: orderExternalID(order),
+		Instrument:      order.BaseAsset + "/" + order.QuoteAsset,
+		Side:            string(order.Side),
+		Quantity:        order.AmountValue,
+		AmountKind:      string(order.AmountKind),
+		OrderType:       orderType,
+		LimitPrice:      order.Price,
+		PriceCurrency:   order.QuoteAsset,
+		AccountID:       string(order.Account),
+		Verdict:         "reject",
+		PolicySummary:   "rejected",
+		EstimatePrice:   "",
+		IssuedAt:        issuedAt.Format(time.RFC3339Nano),
+		ExpiresAt:       expiresAt.Format(time.RFC3339Nano),
+		Nonce:           nonce,
+		RejectCode:      reject.Code,
+		RejectScope:     reject.Scope,
+		RejectPolicy:    reject.Policy,
+		RejectReason:    reject.Reason,
 	}
 }
 
@@ -564,15 +584,15 @@ func verifyParamsFor(order domain.Order) signing.VerifyParams {
 		orderType = "limit"
 	}
 	return signing.VerifyParams{
-		OrderID:       order.ID,
-		Instrument:    order.BaseAsset + "/" + order.QuoteAsset,
-		Side:          string(order.Side),
-		Quantity:      order.AmountValue,
-		AmountKind:    string(order.AmountKind),
-		OrderType:     orderType,
-		LimitPrice:    order.Price,
-		PriceCurrency: order.QuoteAsset,
-		AccountID:     string(order.Account),
+		OrderExternalID: orderExternalID(order),
+		Instrument:      order.BaseAsset + "/" + order.QuoteAsset,
+		Side:            string(order.Side),
+		Quantity:        order.AmountValue,
+		AmountKind:      string(order.AmountKind),
+		OrderType:       orderType,
+		LimitPrice:      order.Price,
+		PriceCurrency:   order.QuoteAsset,
+		AccountID:       string(order.Account),
 	}
 }
 
@@ -627,7 +647,6 @@ func (s *Service) auditApproval(
 ) error {
 	if err := n.AppendAudit(ctx, store.AuditEntry{
 		Action:  action,
-		Tenant:  key.Tenant,
 		Account: key.Account,
 		Detail:  detail,
 	}, auth.CallerFromContext(ctx)); err != nil {

@@ -20,6 +20,7 @@ package backend_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -124,8 +125,11 @@ func TestService_SubmitOrderTokenHoldIssuesSignedToken(t *testing.T) {
 	if tok.Token != "signed-token" || !tok.Signed || tok.KeyID != "key-1" {
 		t.Fatalf("token = %+v, want signed token with key-1", tok)
 	}
-	if tok.OrderID == 0 {
-		t.Fatalf("token must carry the recorded order id")
+	if tok.OrderExternalID == "" {
+		t.Fatalf("token must carry the recorded order external id")
+	}
+	if _, err := domain.ParseExternalID(tok.OrderExternalID); err != nil {
+		t.Fatalf("token order handle must be a valid external id: %v", err)
 	}
 	if len(signer.signed) != 1 {
 		t.Fatalf("Sign calls = %d, want 1", len(signer.signed))
@@ -137,8 +141,8 @@ func TestService_SubmitOrderTokenHoldIssuesSignedToken(t *testing.T) {
 	if p.EstimatePrice != "100" || p.EstimateSource != domain.EstimateSourceLimit {
 		t.Fatalf("payload estimate = %q/%q, want engine lock price", p.EstimatePrice, p.EstimateSource)
 	}
-	if p.OrderID != tok.OrderID {
-		t.Fatalf("payload order id = %d, want %d", p.OrderID, tok.OrderID)
+	if p.OrderExternalID != tok.OrderExternalID {
+		t.Fatalf("payload order handle = %q, want %q", p.OrderExternalID, tok.OrderExternalID)
 	}
 	if p.Instrument != "AAPL/USD" || p.Quantity != "10" ||
 		p.AmountKind != string(domain.OrderAmountKindQuantity) || p.LimitPrice != "100" {
@@ -147,8 +151,9 @@ func TestService_SubmitOrderTokenHoldIssuesSignedToken(t *testing.T) {
 	if p.Nonce == "" || p.IssuedAt == "" || p.ExpiresAt == "" {
 		t.Fatalf("payload lifecycle fields missing: %+v", p)
 	}
-	if fn.orders[tok.OrderID].Status != domain.OrderStatusAccepted {
-		t.Fatalf("hold must leave the order accepted (funds held), got %q", fn.orders[tok.OrderID].Status)
+	if orderByToken(t, fn, tok).Status != domain.OrderStatusAccepted {
+		t.Fatalf("hold must leave the order accepted (funds held), got %q",
+			orderByToken(t, fn, tok).Status)
 	}
 	if !hasAudit(fn.auditCalls, domain.AuditActionApprovalIssued) {
 		t.Fatalf("hold must audit approval_issued: %+v", fn.auditCalls)
@@ -164,8 +169,9 @@ func TestService_SubmitOrderTokenImmediateSettles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitOrderToken immediate: %v", err)
 	}
-	if fn.orders[tok.OrderID].Status != domain.OrderStatusFilled {
-		t.Fatalf("immediate must leave the order filled, got %q", fn.orders[tok.OrderID].Status)
+	if orderByToken(t, fn, tok).Status != domain.OrderStatusFilled {
+		t.Fatalf("immediate must leave the order filled, got %q",
+			orderByToken(t, fn, tok).Status)
 	}
 	if len(signer.signed) != 1 || signer.signed[0].Mode != backend.SubmitModeImmediate {
 		t.Fatalf("immediate payload mode wrong: %+v", signer.signed)
@@ -184,8 +190,9 @@ func TestService_SubmitOrderTokenDefaultsImmediate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitOrderToken default: %v", err)
 	}
-	if fn.orders[tok.OrderID].Status != domain.OrderStatusFilled {
-		t.Fatalf("empty mode must default to immediate (filled), got %q", fn.orders[tok.OrderID].Status)
+	if orderByToken(t, fn, tok).Status != domain.OrderStatusFilled {
+		t.Fatalf("empty mode must default to immediate (filled), got %q",
+			orderByToken(t, fn, tok).Status)
 	}
 }
 
@@ -248,7 +255,7 @@ func TestService_ConfirmExecutionCommits(t *testing.T) {
 	svc, fn := newTestServiceWithSigner(signer)
 	tok := mustHold(t, svc)
 
-	order, err := svc.ConfirmExecution(context.Background(), tok.OrderID, tok.Token, false)
+	order, err := svc.ConfirmExecution(context.Background(), tok.OrderExternalID, tok.Token, false)
 	if err != nil {
 		t.Fatalf("ConfirmExecution: %v", err)
 	}
@@ -269,13 +276,13 @@ func TestService_ConfirmExecutionIdempotent(t *testing.T) {
 	svc, fn := newTestServiceWithSigner(signer)
 	tok := mustHold(t, svc)
 
-	if _, err := svc.ConfirmExecution(context.Background(), tok.OrderID, tok.Token, false); err != nil {
+	if _, err := svc.ConfirmExecution(context.Background(), tok.OrderExternalID, tok.Token, false); err != nil {
 		t.Fatalf("first confirm: %v", err)
 	}
 	// The engine guards the double-commit panic by returning a conflict; the
 	// backend treats a re-confirm of an already-committed order as success.
 	fn.confirmErr = domain.ErrConflict
-	order, err := svc.ConfirmExecution(context.Background(), tok.OrderID, tok.Token, false)
+	order, err := svc.ConfirmExecution(context.Background(), tok.OrderExternalID, tok.Token, false)
 	if err != nil {
 		t.Fatalf("second confirm must be idempotent success, got %v", err)
 	}
@@ -291,14 +298,14 @@ func TestService_ConfirmAfterCancelConflicts(t *testing.T) {
 	tok := mustHold(t, svc)
 
 	if _, err := svc.CancelOrder(
-		context.Background(), tok.OrderID, tok.Token, "operator", false,
+		context.Background(), tok.OrderExternalID, tok.Token, "operator", false,
 	); err != nil {
 		t.Fatalf("cancel: %v", err)
 	}
 	// The cancelled order is terminal, so the default safety gate rejects before
 	// the engine commit path.
 	fn.confirmErr = domain.ErrConflict
-	_, err := svc.ConfirmExecution(context.Background(), tok.OrderID, tok.Token, false)
+	_, err := svc.ConfirmExecution(context.Background(), tok.OrderExternalID, tok.Token, false)
 	if !errors.Is(err, domain.ErrTerminalOrder) {
 		t.Fatalf("confirm after cancel must report terminal order, got %v", err)
 	}
@@ -314,12 +321,12 @@ func TestService_ConfirmAfterCancelForceReachesEngine(t *testing.T) {
 	tok := mustHold(t, svc)
 
 	if _, err := svc.CancelOrder(
-		context.Background(), tok.OrderID, tok.Token, "operator", false,
+		context.Background(), tok.OrderExternalID, tok.Token, "operator", false,
 	); err != nil {
 		t.Fatalf("cancel: %v", err)
 	}
 
-	order, err := svc.ConfirmExecution(context.Background(), tok.OrderID, tok.Token, true)
+	order, err := svc.ConfirmExecution(context.Background(), tok.OrderExternalID, tok.Token, true)
 	if err != nil {
 		t.Fatalf("forced confirm after cancel: %v", err)
 	}
@@ -340,10 +347,10 @@ func TestService_CancelAfterConfirmConflictsBeforeRollback(t *testing.T) {
 	svc, fn := newTestServiceWithSigner(signer)
 	tok := mustHold(t, svc)
 
-	if _, err := svc.ConfirmExecution(context.Background(), tok.OrderID, tok.Token, false); err != nil {
+	if _, err := svc.ConfirmExecution(context.Background(), tok.OrderExternalID, tok.Token, false); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
-	_, err := svc.CancelOrder(context.Background(), tok.OrderID, tok.Token, "too late", false)
+	_, err := svc.CancelOrder(context.Background(), tok.OrderExternalID, tok.Token, "too late", false)
 	if !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("cancel after confirm must conflict, got %v", err)
 	}
@@ -358,11 +365,12 @@ func TestService_CancelFilledOrderRequiresForce(t *testing.T) {
 	svc, fn := newTestServiceWithSigner(signer)
 	tok := mustHold(t, svc)
 
-	order := fn.orders[tok.OrderID]
+	oid := orderID(t, tok)
+	order := fn.orders[oid]
 	order.Status = domain.OrderStatusFilled
-	fn.orders[tok.OrderID] = order
+	fn.orders[oid] = order
 
-	_, err := svc.CancelOrder(context.Background(), tok.OrderID, tok.Token, "late", false)
+	_, err := svc.CancelOrder(context.Background(), tok.OrderExternalID, tok.Token, "late", false)
 	if !errors.Is(err, domain.ErrTerminalOrder) {
 		t.Fatalf("cancel filled without force = %v, want terminal order", err)
 	}
@@ -370,7 +378,7 @@ func TestService_CancelFilledOrderRequiresForce(t *testing.T) {
 		t.Fatalf("cancel filled without force reached engine: %+v", fn.cancelCalls)
 	}
 
-	order, err = svc.CancelOrder(context.Background(), tok.OrderID, tok.Token, "late", true)
+	order, err = svc.CancelOrder(context.Background(), tok.OrderExternalID, tok.Token, "late", true)
 	if err != nil {
 		t.Fatalf("forced cancel filled: %v", err)
 	}
@@ -391,7 +399,7 @@ func TestService_CancelOrderRollsBack(t *testing.T) {
 	svc, fn := newTestServiceWithSigner(signer)
 	tok := mustHold(t, svc)
 
-	order, err := svc.CancelOrder(context.Background(), tok.OrderID, tok.Token, "stale price", false)
+	order, err := svc.CancelOrder(context.Background(), tok.OrderExternalID, tok.Token, "stale price", false)
 	if err != nil {
 		t.Fatalf("CancelOrder: %v", err)
 	}
@@ -413,7 +421,7 @@ func TestService_ConfirmRejectsBadToken(t *testing.T) {
 	tok := mustHold(t, svc)
 	fn.confirmCalls = nil
 
-	_, err := svc.ConfirmExecution(context.Background(), tok.OrderID, tok.Token, false)
+	_, err := svc.ConfirmExecution(context.Background(), tok.OrderExternalID, tok.Token, false)
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("bad token must reject before commit, got %v", err)
 	}
@@ -440,7 +448,7 @@ func TestService_ConfirmImmediateTokenConflictsBeforeEngine(t *testing.T) {
 		t.Fatalf("hold setup: %v", err)
 	}
 
-	_, err = svc.ConfirmExecution(context.Background(), tok.OrderID, tok.Token, false)
+	_, err = svc.ConfirmExecution(context.Background(), tok.OrderExternalID, tok.Token, false)
 	if !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("confirm immediate token must conflict, got %v", err)
 	}
@@ -503,6 +511,23 @@ func TestService_GenerateSigningKeyAudits(t *testing.T) {
 	}
 }
 
+// orderID parses the token's order handle into the opaque external id the fake
+// node keys its order map by.
+func orderID(t *testing.T, tok backend.ApprovalToken) domain.ExternalID {
+	t.Helper()
+	id, err := domain.ParseExternalID(tok.OrderExternalID)
+	if err != nil {
+		t.Fatalf("token order handle %q: %v", tok.OrderExternalID, err)
+	}
+	return id
+}
+
+// orderByToken returns the fake node's recorded order for a token.
+func orderByToken(t *testing.T, fn *fakeNode, tok backend.ApprovalToken) domain.Order {
+	t.Helper()
+	return fn.orders[orderID(t, tok)]
+}
+
 // mustHold issues a hold token and fails the test on error.
 func mustHold(t *testing.T, svc *backend.Service) backend.ApprovalToken {
 	t.Helper()
@@ -514,6 +539,203 @@ func mustHold(t *testing.T, svc *backend.Service) backend.ApprovalToken {
 		t.Fatalf("hold token must not be pre-expired: %v", tok.ExpiresAt)
 	}
 	return tok
+}
+
+// TestService_SubmitOrderApprovalReadBack covers the C2 read-back path: a signed
+// submit stamps the approval onto the order's 1:1 companion, and GetOrder returns
+// it via OrderDetail.Approval addressed by the order's external id - never a
+// surrogate or engine id. The payload also carries the order's external id.
+func TestService_SubmitOrderApprovalReadBack(t *testing.T) {
+	t.Parallel()
+	signer := &fakeSigner{}
+	svc, fn := newTestServiceWithSigner(signer)
+	ctx := context.Background()
+
+	order, err := svc.SubmitOrder(ctx, sampleOrder())
+	if err != nil {
+		t.Fatalf("SubmitOrder: %v", err)
+	}
+	if order.ExternalID.IsZero() {
+		t.Fatalf("submitted order must carry an external id")
+	}
+	// The signer recorded the verdict payload; it must bind the order's external
+	// id, not any integer/surrogate handle.
+	if len(signer.signed) != 1 {
+		t.Fatalf("Sign calls = %d, want 1", len(signer.signed))
+	}
+	if signer.signed[0].OrderExternalID != order.ExternalID.String() {
+		t.Fatalf("payload order handle = %q, want %q",
+			signer.signed[0].OrderExternalID, order.ExternalID.String())
+	}
+	if len(fn.persistApprovalCalls) != 1 ||
+		fn.persistApprovalCalls[0] != order.ExternalID {
+		t.Fatalf("approval must persist against the order external id: %+v",
+			fn.persistApprovalCalls)
+	}
+
+	// Read the order back by its external-id handle: the 1:1 approval is surfaced
+	// on OrderDetail.Approval.
+	detail, err := svc.GetOrder(ctx, order.ExternalID.String())
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if detail.Approval == nil {
+		t.Fatalf("order detail must surface the signed approval")
+	}
+	if detail.Approval.Token == "" || detail.Approval.KeyID != "key-1" {
+		t.Fatalf("read-back approval = %+v, want signed envelope", detail.Approval)
+	}
+}
+
+// TestService_SubmitOrderTokenHonorsSuppliedExternalID covers the create-once
+// id-honoring contract: a caller-supplied order external id is created exactly
+// once and the issued token (and the signed payload) carry that same id, so the
+// confirm that follows resolves the same order.
+func TestService_SubmitOrderTokenHonorsSuppliedExternalID(t *testing.T) {
+	t.Parallel()
+	signer := &fakeSigner{}
+	svc, fn := newTestServiceWithSigner(signer)
+
+	supplied := mdID("supplied-order-id")
+	o := sampleOrder()
+	o.ExternalID = supplied
+
+	tok, err := svc.SubmitOrderToken(context.Background(), o, backend.SubmitModeHold)
+	if err != nil {
+		t.Fatalf("SubmitOrderToken hold: %v", err)
+	}
+	if tok.OrderExternalID != supplied.String() {
+		t.Fatalf("token order id = %q, want supplied %q",
+			tok.OrderExternalID, supplied.String())
+	}
+	// Exactly one order row was created under the supplied id.
+	if len(fn.orders) != 1 {
+		t.Fatalf("orders created = %d, want exactly 1", len(fn.orders))
+	}
+	if _, ok := fn.orders[supplied]; !ok {
+		t.Fatalf("no order recorded under supplied id %q", supplied)
+	}
+	if signer.signed[0].OrderExternalID != supplied.String() {
+		t.Fatalf("payload order id = %q, want supplied %q",
+			signer.signed[0].OrderExternalID, supplied.String())
+	}
+
+	// Confirm resolves the very order the token created.
+	confirmed, err := svc.ConfirmExecution(
+		context.Background(), tok.OrderExternalID, tok.Token, false)
+	if err != nil {
+		t.Fatalf("ConfirmExecution: %v", err)
+	}
+	if confirmed.ExternalID != supplied {
+		t.Fatalf("confirmed order id = %q, want supplied %q",
+			confirmed.ExternalID, supplied)
+	}
+	if confirmed.Status != domain.OrderStatusCommitted {
+		t.Fatalf("confirm must commit the supplied order, got %q", confirmed.Status)
+	}
+}
+
+// TestService_SubmitOrderTokenGeneratesExternalIDWhenAbsent covers the absent-id
+// path: with no supplied id the store mints one and the token returns it.
+func TestService_SubmitOrderTokenGeneratesExternalIDWhenAbsent(t *testing.T) {
+	t.Parallel()
+	signer := &fakeSigner{}
+	svc, fn := newTestServiceWithSigner(signer)
+
+	tok, err := svc.SubmitOrderToken(context.Background(), sampleOrder(), backend.SubmitModeHold)
+	if err != nil {
+		t.Fatalf("SubmitOrderToken hold: %v", err)
+	}
+	if tok.OrderExternalID == "" {
+		t.Fatalf("token must carry a generated order id")
+	}
+	id, err := domain.ParseExternalID(tok.OrderExternalID)
+	if err != nil {
+		t.Fatalf("generated order id not canonical: %v", err)
+	}
+	if len(fn.orders) != 1 {
+		t.Fatalf("orders created = %d, want exactly 1", len(fn.orders))
+	}
+	if _, ok := fn.orders[id]; !ok {
+		t.Fatalf("generated order id not recorded")
+	}
+}
+
+// TestService_SubmitOrderTokenDuplicateSuppliedIDConflicts covers the conflict
+// path: a duplicate supplied id surfaces domain.ErrAlreadyExists unchanged from
+// the store, never rewrapped into a generic error.
+func TestService_SubmitOrderTokenDuplicateSuppliedIDConflicts(t *testing.T) {
+	t.Parallel()
+	signer := &fakeSigner{}
+	svc, fn := newTestServiceWithSigner(signer)
+	fn.submitErr = fmt.Errorf("create order: %w", domain.ErrAlreadyExists)
+
+	o := sampleOrder()
+	o.ExternalID = mdID("dup-order-id")
+	_, err := svc.SubmitOrderToken(context.Background(), o, backend.SubmitModeHold)
+	if !errors.Is(err, domain.ErrAlreadyExists) {
+		t.Fatalf("duplicate supplied id error = %v, want ErrAlreadyExists", err)
+	}
+}
+
+// TestService_SubmitOrderHonorsSuppliedExternalID covers the like-the-API submit
+// path (POST /orders): a supplied id is created once and returned verbatim.
+func TestService_SubmitOrderHonorsSuppliedExternalID(t *testing.T) {
+	t.Parallel()
+	signer := &fakeSigner{}
+	svc, fn := newTestServiceWithSigner(signer)
+
+	supplied := mdID("supplied-submit-id")
+	o := sampleOrder()
+	o.ExternalID = supplied
+	order, err := svc.SubmitOrder(context.Background(), o)
+	if err != nil {
+		t.Fatalf("SubmitOrder: %v", err)
+	}
+	if order.ExternalID != supplied {
+		t.Fatalf("returned order id = %q, want supplied %q", order.ExternalID, supplied)
+	}
+	if len(fn.orders) != 1 {
+		t.Fatalf("orders created = %d, want exactly 1", len(fn.orders))
+	}
+}
+
+// TestService_SubmitOrderDuplicateSuppliedIDConflicts covers the POST /orders
+// conflict propagation.
+func TestService_SubmitOrderDuplicateSuppliedIDConflicts(t *testing.T) {
+	t.Parallel()
+	signer := &fakeSigner{}
+	svc, fn := newTestServiceWithSigner(signer)
+	fn.submitErr = fmt.Errorf("create order: %w", domain.ErrAlreadyExists)
+
+	o := sampleOrder()
+	o.ExternalID = mdID("dup-submit-id")
+	_, err := svc.SubmitOrder(context.Background(), o)
+	if !errors.Is(err, domain.ErrAlreadyExists) {
+		t.Fatalf("duplicate supplied id error = %v, want ErrAlreadyExists", err)
+	}
+}
+
+// TestService_GetOrderAddressedByExternalID locks order addressing by the opaque
+// external-id string handle, rejecting a malformed handle before routing.
+func TestService_GetOrderAddressedByExternalID(t *testing.T) {
+	t.Parallel()
+	svc, _ := newTestServiceWithSigner(&fakeSigner{})
+	ctx := context.Background()
+
+	tok := mustHold(t, svc)
+	detail, err := svc.GetOrder(ctx, tok.OrderExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder by external id: %v", err)
+	}
+	if detail.Order.ExternalID != orderID(t, tok) {
+		t.Fatalf("GetOrder returned %q, want %q",
+			detail.Order.ExternalID, orderID(t, tok))
+	}
+
+	if _, err := svc.GetOrder(ctx, "not-an-external-id"); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("malformed order handle = %v, want ErrInvalid", err)
+	}
 }
 
 // hasAudit reports whether the recorded audit entries include one with action.

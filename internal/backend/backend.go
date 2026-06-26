@@ -23,13 +23,10 @@ package backend
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -131,10 +128,11 @@ func (s *Service) Status(ctx context.Context) (Status, error) {
 	return Status{Nodes: healths, Healthy: healthy}, nil
 }
 
-// keyFor builds the routing key for an account in the default tenant. Tenant is
-// an internal axis and is never exposed on a surface.
+// keyFor builds the routing key for an account. With the realm bound on the node
+// the account code alone resolves the owning node; the realm is never exposed on
+// a surface.
 func keyFor(id domain.AccountID) node.Key {
-	return node.Key{Tenant: domain.DefaultTenant, Account: id}
+	return node.Key{Account: id}
 }
 
 // ListAccounts returns every account aggregated across all nodes.
@@ -177,6 +175,21 @@ func (s *Service) UnblockAccount(ctx context.Context, id domain.AccountID) error
 	return s.setAccountBlocked(ctx, id, false, "")
 }
 
+// DeleteAccount validates the id and removes the account. Destructive cascades
+// require force.
+func (s *Service) DeleteAccount(
+	ctx context.Context, id domain.AccountID, force bool,
+) error {
+	if err := domain.ValidateAccountID(id); err != nil {
+		return err
+	}
+	n, err := s.router.Route(keyFor(id))
+	if err != nil {
+		return fmt.Errorf("backend: route account: %w", err)
+	}
+	return n.DeleteAccount(ctx, keyFor(id), force, auth.CallerFromContext(ctx))
+}
+
 func (s *Service) setAccountBlocked(
 	ctx context.Context, id domain.AccountID, blocked bool, reason string,
 ) error {
@@ -191,64 +204,88 @@ func (s *Service) setAccountBlocked(
 }
 
 // GetAccountState validates the id and returns the account row and its
-// account-scoped barriers.
+// account-scoped typed barriers.
 func (s *Service) GetAccountState(
 	ctx context.Context, id domain.AccountID,
-) (domain.Account, []domain.Limit, error) {
+) (domain.Account, node.AccountLimits, error) {
 	if err := domain.ValidateAccountID(id); err != nil {
-		return domain.Account{}, nil, err
+		return domain.Account{}, node.AccountLimits{}, err
 	}
 	n, err := s.router.Route(keyFor(id))
 	if err != nil {
-		return domain.Account{}, nil, fmt.Errorf("backend: route account: %w", err)
+		return domain.Account{}, node.AccountLimits{},
+			fmt.Errorf("backend: route account: %w", err)
 	}
 	return n.GetAccountState(ctx, keyFor(id))
 }
 
-// ListLimits returns the barriers that reference account, aggregated across all
-// nodes. An empty account returns all barriers.
+// ListLimits returns the typed barriers that reference account, aggregated
+// across all nodes. An empty account returns all barriers.
 func (s *Service) ListLimits(
 	ctx context.Context, account domain.AccountID,
-) ([]domain.Limit, error) {
-	limits := make([]domain.Limit, 0)
+) (node.AccountLimits, error) {
+	var out node.AccountLimits
 	for i, n := range s.router.All() {
 		part, err := n.ListLimits(ctx, account)
 		if err != nil {
-			return nil, fmt.Errorf("backend: node %d list limits: %w", i, err)
+			return node.AccountLimits{}, fmt.Errorf("backend: node %d list limits: %w", i, err)
 		}
-		limits = append(limits, part...)
+		out.RateLimits = append(out.RateLimits, part.RateLimits...)
+		out.OrderSizeLimits = append(out.OrderSizeLimits, part.OrderSizeLimits...)
+		out.PnlBoundsLimits = append(out.PnlBoundsLimits, part.PnlBoundsLimits...)
 	}
-	return limits, nil
+	return out, nil
 }
 
-// PutLimit validates the barrier, checks the referenced account exists when the
-// scope has an account axis, routes to the owning node, and upserts it.
-func (s *Service) PutLimit(ctx context.Context, limit domain.Limit) error {
-	limit.Target.Tenant = domain.DefaultTenant
-	if err := domain.ValidateLimit(limit); err != nil {
+// PutRateLimit validates the rate-limit barrier, routes to the owning node, and
+// upserts it. The barrier may name an account that does not exist yet: a policy
+// rule can be created before the account is registered.
+func (s *Service) PutRateLimit(ctx context.Context, limit domain.LimitRate) error {
+	if err := limit.Validate(); err != nil {
 		return err
 	}
-
-	n, err := s.router.Route(keyFor(limit.Target.Account))
+	n, err := s.router.Route(keyFor(limit.Account))
 	if err != nil {
 		return fmt.Errorf("backend: route limit: %w", err)
 	}
-
-	sink, err := n.PutLimit(ctx, limit, auth.CallerFromContext(ctx))
+	sink, err := n.PutRateLimit(ctx, limit, auth.CallerFromContext(ctx))
 	return s.finishLimitChange(sink, err)
 }
 
-// DeleteLimit validates the target, routes to the owning node, and removes the
-// barrier.
-func (s *Service) DeleteLimit(ctx context.Context, target domain.LimitTarget) error {
-	target.Tenant = domain.DefaultTenant
-	if err := domain.ValidateLimit(domain.Limit{
-		Target: target,
-		Values: placeholderValues(target.Policy),
-	}); err != nil {
+// PutOrderSizeLimit validates the order-size barrier, routes to the owning node,
+// and upserts it.
+func (s *Service) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize) error {
+	if err := limit.Validate(); err != nil {
 		return err
 	}
+	n, err := s.router.Route(keyFor(limit.Account))
+	if err != nil {
+		return fmt.Errorf("backend: route limit: %w", err)
+	}
+	sink, err := n.PutOrderSizeLimit(ctx, limit, auth.CallerFromContext(ctx))
+	return s.finishLimitChange(sink, err)
+}
 
+// PutPnlBoundsLimit validates the P&L-bounds barrier, routes to the owning node,
+// and upserts it.
+func (s *Service) PutPnlBoundsLimit(ctx context.Context, limit domain.LimitPnlBounds) error {
+	if err := limit.Validate(); err != nil {
+		return err
+	}
+	n, err := s.router.Route(keyFor(limit.Account))
+	if err != nil {
+		return fmt.Errorf("backend: route limit: %w", err)
+	}
+	sink, err := n.PutPnlBoundsLimit(ctx, limit, auth.CallerFromContext(ctx))
+	return s.finishLimitChange(sink, err)
+}
+
+// DeleteLimit validates the target's scope/axes for its policy, routes to the
+// owning node, and removes the addressed barrier.
+func (s *Service) DeleteLimit(ctx context.Context, target node.LimitTarget) error {
+	if err := validateLimitTarget(target); err != nil {
+		return err
+	}
 	n, err := s.router.Route(keyFor(target.Account))
 	if err != nil {
 		return fmt.Errorf("backend: route limit: %w", err)
@@ -269,22 +306,29 @@ func (s *Service) finishLimitChange(sink marketdata.Sink, err error) error {
 	return restoreErr
 }
 
-// placeholderValues returns a minimal valid value set for policy so the target
-// half of a delete request can be validated by domain.ValidateLimit without the
-// caller supplying values. Delete addresses a barrier by target only.
-func placeholderValues(policy string) []domain.LimitValue {
-	switch policy {
+// validateLimitTarget checks a delete target's policy, scope, and axes without a
+// value payload: it builds a minimal valid typed barrier for the target's policy
+// and validates only its scope/axes, so a delete addresses a barrier by its
+// (policy, scope, account, asset) composite alone. An unknown policy is invalid.
+func validateLimitTarget(target node.LimitTarget) error {
+	switch target.Policy {
 	case domain.PolicyRateLimit:
-		return []domain.LimitValue{
-			{Kind: domain.KindMaxOrders, Value: "1"},
-			{Kind: domain.KindWindow, Value: "1s"},
-		}
+		return domain.LimitRate{
+			Scope: target.Scope, Account: target.Account, Asset: target.Asset,
+			MaxOrders: 1, Window: time.Second,
+		}.Validate()
 	case domain.PolicyOrderSizeLimit:
-		return []domain.LimitValue{{Kind: domain.KindMaxQuantity, Value: "1"}}
+		return domain.LimitOrderSize{
+			Scope: target.Scope, Account: target.Account, Asset: target.Asset,
+			MaxQuantity: "1",
+		}.Validate()
 	case domain.PolicyPnlBoundsKillSwitch:
-		return []domain.LimitValue{{Kind: domain.KindLowerBound, Value: "0"}}
+		return domain.LimitPnlBounds{
+			Scope: target.Scope, Account: target.Account, Asset: target.Asset,
+			LowerBound: "0",
+		}.Validate()
 	default:
-		return nil
+		return fmt.Errorf("unknown policy %q: %w", target.Policy, domain.ErrInvalid)
 	}
 }
 
@@ -302,7 +346,7 @@ func (s *Service) ListAudit(
 		}
 		rows = append(rows, part...)
 	}
-	sort.Slice(rows, func(i, j int) bool { return rows[i].ID > rows[j].ID })
+	sortAuditNewestFirst(rows)
 	if count > 0 && len(rows) > count {
 		rows = rows[:count]
 	}
@@ -325,11 +369,23 @@ func (s *Service) ListAuditFiltered(
 		}
 		rows = append(rows, part...)
 	}
-	sort.Slice(rows, func(i, j int) bool { return rows[i].ID > rows[j].ID })
+	sortAuditNewestFirst(rows)
 	if count > 0 && len(rows) > count {
 		rows = rows[:count]
 	}
 	return rows, nil
+}
+
+// sortAuditNewestFirst orders audit rows newest first by timestamp, breaking
+// ties on the opaque external id (descending) for a stable merge across nodes.
+// Machine records carry no integer id, so the external id is the tiebreaker.
+func sortAuditNewestFirst(rows []domain.AuditRow) {
+	sort.Slice(rows, func(i, j int) bool {
+		if !rows[i].At.Equal(rows[j].At) {
+			return rows[i].At.After(rows[j].At)
+		}
+		return rows[i].ExternalID.String() > rows[j].ExternalID.String()
+	})
 }
 
 // --- MCP access control -----------------------------------------------------
@@ -501,13 +557,13 @@ func (s *Service) ListMarketData(ctx context.Context) (MarketDataStatus, error) 
 	if err != nil {
 		return MarketDataStatus{}, fmt.Errorf("backend: list market-data instances: %w", err)
 	}
-	quotes, err := n.ListMarketDataQuotes(ctx, "")
+	quotes, err := n.ListMarketDataQuotes(ctx, domain.ExternalID{})
 	if err != nil {
 		return MarketDataStatus{}, fmt.Errorf("backend: list market-data quotes: %w", err)
 	}
 	quoteByInstrument := make(map[string]domain.MarketDataQuote, len(quotes))
 	for _, quote := range quotes {
-		quoteByInstrument[marketDataKey(quote.InstanceID, quote.ExternalSymbol)] = quote
+		quoteByInstrument[marketDataKey(quote.Instance.String(), quote.ExternalSymbol)] = quote
 	}
 
 	var runtimeStatuses map[string]marketdata.InstanceRuntimeStatus
@@ -521,17 +577,18 @@ func (s *Service) ListMarketData(ctx context.Context) (MarketDataStatus, error) 
 	statuses := make([]MarketDataInstanceStatus, 0, len(instances))
 	currentConfig := make(map[string]marketdata.AppliedInstanceConfig, len(instances))
 	for _, instance := range instances {
-		instruments, err := n.ListMarketDataInstruments(ctx, instance.ID)
+		instanceID := instance.ExternalID.String()
+		instruments, err := n.ListMarketDataInstruments(ctx, instance.ExternalID)
 		if err != nil {
 			return MarketDataStatus{}, fmt.Errorf("backend: list market-data instruments: %w", err)
 		}
 		if instance.Enabled {
-			currentConfig[instance.ID] = marketDataAppliedConfig(instance, instruments)
+			currentConfig[instanceID] = marketDataAppliedConfig(instance, instruments)
 		}
 		instStatuses := make([]MarketDataInstrumentStatus, 0, len(instruments))
 		for _, instrument := range instruments {
 			var quotePtr *domain.MarketDataQuote
-			if quote, ok := quoteByInstrument[marketDataKey(instrument.InstanceID, instrument.ExternalSymbol)]; ok {
+			if quote, ok := quoteByInstrument[marketDataKey(instrument.Instance.String(), instrument.ExternalSymbol)]; ok {
 				q := quote
 				quotePtr = &q
 			}
@@ -541,7 +598,7 @@ func (s *Service) ListMarketData(ctx context.Context) (MarketDataStatus, error) 
 			var interval *time.Duration
 			if s.md != nil {
 				if d, ok := s.md.QuoteUpdateInterval(
-					instance.ID, instrument.ExternalSymbol,
+					instanceID, instrument.ExternalSymbol,
 				); ok {
 					interval = &d
 				}
@@ -553,14 +610,14 @@ func (s *Service) ListMarketData(ctx context.Context) (MarketDataStatus, error) 
 				Stale:          stale,
 			})
 		}
-		rt := runtimeStatuses[instance.ID]
+		rt := runtimeStatuses[instanceID]
 		state, errMsg := marketDataInstanceState(instance, s.md, runtimeStatuses)
 		statuses = append(statuses, MarketDataInstanceStatus{
 			Instance:        instance,
 			Instruments:     instStatuses,
 			References:      rt.References,
-			VerifiesSymbols: marketdata.ProviderVerifiesSymbols(instance.Type),
-			SearchesSymbols: marketdata.ProviderSearchesSymbols(instance.Type),
+			VerifiesSymbols: marketdata.ProviderVerifiesSymbols(instance.Provider),
+			SearchesSymbols: marketdata.ProviderSearchesSymbols(instance.Provider),
 			State:           state,
 			Error:           errMsg,
 			Diagnostics:     rt.Diagnostics,
@@ -605,14 +662,15 @@ func (s *Service) VerifyMarketDataSymbol(
 	ctx context.Context, id, externalSymbol string,
 ) (MarketDataSymbolVerification, error) {
 	id = strings.TrimSpace(id)
-	if id == "" {
-		return MarketDataSymbolVerification{}, fmt.Errorf("market-data instance id: %w", domain.ErrInvalid)
+	instanceID, err := domain.ParseExternalID(id)
+	if err != nil {
+		return MarketDataSymbolVerification{}, fmt.Errorf("market-data instance id: %w", err)
 	}
 	n, err := s.groupNode()
 	if err != nil {
 		return MarketDataSymbolVerification{}, err
 	}
-	instance, ok, err := n.GetMarketDataInstance(ctx, id)
+	instance, ok, err := n.GetMarketDataInstance(ctx, instanceID)
 	if err != nil {
 		return MarketDataSymbolVerification{}, fmt.Errorf("backend: get market-data instance: %w", err)
 	}
@@ -685,14 +743,15 @@ func (s *Service) SearchMarketDataSymbols(
 	ctx context.Context, id string, input MarketDataSymbolSearchInput,
 ) (MarketDataSymbolSearch, error) {
 	id = strings.TrimSpace(id)
-	if id == "" {
-		return MarketDataSymbolSearch{}, fmt.Errorf("market-data instance id: %w", domain.ErrInvalid)
+	instanceID, err := domain.ParseExternalID(id)
+	if err != nil {
+		return MarketDataSymbolSearch{}, fmt.Errorf("market-data instance id: %w", err)
 	}
 	n, err := s.groupNode()
 	if err != nil {
 		return MarketDataSymbolSearch{}, err
 	}
-	instance, ok, err := n.GetMarketDataInstance(ctx, id)
+	instance, ok, err := n.GetMarketDataInstance(ctx, instanceID)
 	if err != nil {
 		return MarketDataSymbolSearch{}, fmt.Errorf("backend: get market-data instance: %w", err)
 	}
@@ -754,7 +813,7 @@ func marketDataInstanceState(
 	if md == nil {
 		return "", ""
 	}
-	status, ok := runtimeStatuses[instance.ID]
+	status, ok := runtimeStatuses[instance.ExternalID.String()]
 	if !ok {
 		return "pending", ""
 	}
@@ -780,7 +839,7 @@ func marketDataAppliedConfig(
 		})
 	}
 	return marketdata.AppliedInstanceConfig{
-		Type:          instance.Type,
+		Provider:      instance.Provider,
 		Subscriptions: subs,
 	}
 }
@@ -800,7 +859,7 @@ func marketDataRestartRequired(
 		if !ok {
 			return true
 		}
-		if currentConfig.Type != appliedConfig.Type {
+		if currentConfig.Provider != appliedConfig.Provider {
 			return true
 		}
 		if !sameMarketDataSubscriptions(
@@ -835,37 +894,39 @@ func marketDataSubscriptionKeys(subs []marketdata.Subscription) []string {
 	return keys
 }
 
-// CreateMarketDataInstance validates and persists one source instance.
+// CreateMarketDataInstance validates and persists one source instance. The
+// operator may supply the instance's external id, which is used verbatim and
+// must be canonical; a duplicate is rejected by the store with
+// domain.ErrAlreadyExists. When the id is omitted (zero) the store mints one. The
+// persisted instance is returned with its external id populated.
 func (s *Service) CreateMarketDataInstance(
 	ctx context.Context, instance domain.MarketDataInstance,
-) error {
-	instance.Type = strings.TrimSpace(instance.Type)
+) (domain.MarketDataInstance, error) {
+	instance.Provider = strings.TrimSpace(instance.Provider)
 	instance.Label = strings.TrimSpace(instance.Label)
 	instance.Credentials = strings.TrimSpace(instance.Credentials)
-	title, ok := marketDataProviderTitle(instance.Type)
+	title, ok := marketDataProviderTitle(instance.Provider)
 	if !ok {
-		return fmt.Errorf("market-data provider %q: %w", instance.Type, domain.ErrInvalid)
+		return domain.MarketDataInstance{},
+			fmt.Errorf("market-data provider %q: %w", instance.Provider, domain.ErrInvalid)
 	}
 	if instance.Label == "" {
 		instance.Label = title
 	}
 	n, err := s.groupNode()
 	if err != nil {
-		return err
+		return domain.MarketDataInstance{}, err
 	}
 	instances, err := n.ListMarketDataInstances(ctx)
 	if err != nil {
-		return fmt.Errorf("backend: list market-data instances: %w", err)
+		return domain.MarketDataInstance{}, fmt.Errorf("backend: list market-data instances: %w", err)
 	}
 	if marketDataLabelTaken(instances, instance.Label) {
-		return fmt.Errorf("market-data source label %q: %w", instance.Label, domain.ErrAlreadyExists)
-	}
-	instance.ID, err = newMarketDataInstanceID(instance.Type)
-	if err != nil {
-		return err
+		return domain.MarketDataInstance{},
+			fmt.Errorf("market-data source label %q: %w", instance.Label, domain.ErrAlreadyExists)
 	}
 	if err := validateMarketDataInstance(instance); err != nil {
-		return err
+		return domain.MarketDataInstance{}, err
 	}
 	return n.CreateMarketDataInstance(ctx, instance, auth.CallerFromContext(ctx))
 }
@@ -874,15 +935,15 @@ func (s *Service) CreateMarketDataInstance(
 func (s *Service) SetMarketDataInstanceEnabled(
 	ctx context.Context, id string, enabled bool,
 ) error {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return fmt.Errorf("market-data instance id: %w", domain.ErrInvalid)
+	instanceID, err := domain.ParseExternalID(strings.TrimSpace(id))
+	if err != nil {
+		return fmt.Errorf("market-data instance id: %w", err)
 	}
 	n, err := s.groupNode()
 	if err != nil {
 		return err
 	}
-	return n.SetMarketDataInstanceEnabled(ctx, id, enabled, auth.CallerFromContext(ctx))
+	return n.SetMarketDataInstanceEnabled(ctx, instanceID, enabled, auth.CallerFromContext(ctx))
 }
 
 // UpdateMarketDataInstanceSettings validates and persists editable source
@@ -891,17 +952,17 @@ func (s *Service) SetMarketDataInstanceEnabled(
 func (s *Service) UpdateMarketDataInstanceSettings(
 	ctx context.Context, id, label, credentials string,
 ) error {
-	id = strings.TrimSpace(id)
 	label = strings.TrimSpace(label)
 	credentials = strings.TrimSpace(credentials)
-	if id == "" {
-		return fmt.Errorf("market-data instance id: %w", domain.ErrInvalid)
+	instanceID, err := domain.ParseExternalID(strings.TrimSpace(id))
+	if err != nil {
+		return fmt.Errorf("market-data instance id: %w", err)
 	}
 	n, err := s.groupNode()
 	if err != nil {
 		return err
 	}
-	instance, ok, err := n.GetMarketDataInstance(ctx, id)
+	instance, ok, err := n.GetMarketDataInstance(ctx, instanceID)
 	if err != nil {
 		return fmt.Errorf("backend: get market-data instance: %w", err)
 	}
@@ -915,7 +976,7 @@ func (s *Service) UpdateMarketDataInstanceSettings(
 	if err != nil {
 		return fmt.Errorf("backend: list market-data instances: %w", err)
 	}
-	if marketDataLabelTakenExcept(instances, id, label) {
+	if marketDataLabelTakenExcept(instances, instanceID, label) {
 		return fmt.Errorf("market-data source label %q: %w", label, domain.ErrAlreadyExists)
 	}
 	mergedCredentials, err := mergeMarketDataCredentials(instance.Credentials, credentials)
@@ -928,21 +989,23 @@ func (s *Service) UpdateMarketDataInstanceSettings(
 		return err
 	}
 	return n.UpdateMarketDataInstanceSettings(
-		ctx, id, instance.Label, instance.Credentials, auth.CallerFromContext(ctx),
+		ctx, instanceID, instance.Label, instance.Credentials, auth.CallerFromContext(ctx),
 	)
 }
 
 // DeleteMarketDataInstance removes one source instance and its instruments.
-func (s *Service) DeleteMarketDataInstance(ctx context.Context, id string) error {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return fmt.Errorf("market-data instance id: %w", domain.ErrInvalid)
+func (s *Service) DeleteMarketDataInstance(
+	ctx context.Context, id string, force bool,
+) error {
+	instanceID, err := domain.ParseExternalID(strings.TrimSpace(id))
+	if err != nil {
+		return fmt.Errorf("market-data instance id: %w", err)
 	}
 	n, err := s.groupNode()
 	if err != nil {
 		return err
 	}
-	return n.DeleteMarketDataInstance(ctx, id, auth.CallerFromContext(ctx))
+	return n.DeleteMarketDataInstance(ctx, instanceID, force, auth.CallerFromContext(ctx))
 }
 
 // UpsertMarketDataInstrument validates and persists one instrument mapping,
@@ -953,7 +1016,6 @@ func (s *Service) DeleteMarketDataInstance(ctx context.Context, id string) error
 func (s *Service) UpsertMarketDataInstrument(
 	ctx context.Context, instrument domain.MarketDataInstrument,
 ) error {
-	instrument.InstanceID = strings.TrimSpace(instrument.InstanceID)
 	instrument.ExternalSymbol = strings.TrimSpace(instrument.ExternalSymbol)
 	instrument.BaseAsset = strings.TrimSpace(instrument.BaseAsset)
 	instrument.QuoteAsset = strings.TrimSpace(instrument.QuoteAsset)
@@ -969,7 +1031,7 @@ func (s *Service) UpsertMarketDataInstrument(
 		return err
 	}
 	if s.md != nil {
-		s.md.PushManual(instrument.InstanceID, instrument)
+		s.md.PushManual(instrument.Instance.String(), instrument)
 	}
 	return nil
 }
@@ -978,9 +1040,12 @@ func (s *Service) UpsertMarketDataInstrument(
 func (s *Service) SetMarketDataInstrumentEnabled(
 	ctx context.Context, instanceID, externalSymbol string, enabled bool,
 ) error {
-	instanceID = strings.TrimSpace(instanceID)
 	externalSymbol = strings.TrimSpace(externalSymbol)
-	if instanceID == "" || externalSymbol == "" {
+	instance, err := domain.ParseExternalID(strings.TrimSpace(instanceID))
+	if err != nil {
+		return fmt.Errorf("market-data instrument: %w", err)
+	}
+	if externalSymbol == "" {
 		return fmt.Errorf("market-data instrument: %w", domain.ErrInvalid)
 	}
 	n, err := s.groupNode()
@@ -988,7 +1053,7 @@ func (s *Service) SetMarketDataInstrumentEnabled(
 		return err
 	}
 	return n.SetMarketDataInstrumentEnabled(
-		ctx, instanceID, externalSymbol, enabled, auth.CallerFromContext(ctx),
+		ctx, instance, externalSymbol, enabled, auth.CallerFromContext(ctx),
 	)
 }
 
@@ -996,9 +1061,12 @@ func (s *Service) SetMarketDataInstrumentEnabled(
 func (s *Service) DeleteMarketDataInstrument(
 	ctx context.Context, instanceID, externalSymbol string,
 ) error {
-	instanceID = strings.TrimSpace(instanceID)
 	externalSymbol = strings.TrimSpace(externalSymbol)
-	if instanceID == "" || externalSymbol == "" {
+	instance, err := domain.ParseExternalID(strings.TrimSpace(instanceID))
+	if err != nil {
+		return fmt.Errorf("market-data instrument: %w", err)
+	}
+	if externalSymbol == "" {
 		return fmt.Errorf("market-data instrument: %w", domain.ErrInvalid)
 	}
 	n, err := s.groupNode()
@@ -1006,7 +1074,7 @@ func (s *Service) DeleteMarketDataInstrument(
 		return err
 	}
 	return n.DeleteMarketDataInstrument(
-		ctx, instanceID, externalSymbol, auth.CallerFromContext(ctx),
+		ctx, instance, externalSymbol, auth.CallerFromContext(ctx),
 	)
 }
 
@@ -1035,14 +1103,6 @@ func marketDataProviderTitle(typ string) (string, bool) {
 	return "", false
 }
 
-func newMarketDataInstanceID(typ string) (string, error) {
-	var buf [8]byte
-	if _, err := rand.Read(buf[:]); err != nil {
-		return "", fmt.Errorf("market-data instance id: %w", err)
-	}
-	return "md-" + typ + "-" + hex.EncodeToString(buf[:]), nil
-}
-
 func marketDataLabelTaken(instances []domain.MarketDataInstance, label string) bool {
 	label = strings.TrimSpace(label)
 	for _, instance := range instances {
@@ -1054,11 +1114,11 @@ func marketDataLabelTaken(instances []domain.MarketDataInstance, label string) b
 }
 
 func marketDataLabelTakenExcept(
-	instances []domain.MarketDataInstance, id, label string,
+	instances []domain.MarketDataInstance, id domain.ExternalID, label string,
 ) bool {
 	label = strings.TrimSpace(label)
 	for _, instance := range instances {
-		if instance.ID == id {
+		if instance.ExternalID == id {
 			continue
 		}
 		if strings.EqualFold(strings.TrimSpace(instance.Label), label) {
@@ -1103,14 +1163,11 @@ func mergeMarketDataCredentials(existing, update string) (string, error) {
 }
 
 func validateMarketDataInstance(instance domain.MarketDataInstance) error {
-	if instance.ID == "" {
-		return fmt.Errorf("market-data instance id: %w", domain.ErrInvalid)
-	}
 	if instance.Label == "" {
 		return fmt.Errorf("market-data source label: %w", domain.ErrInvalid)
 	}
-	if !marketDataProviderKnown(instance.Type) {
-		return fmt.Errorf("market-data provider %q: %w", instance.Type, domain.ErrInvalid)
+	if !marketDataProviderKnown(instance.Provider) {
+		return fmt.Errorf("market-data provider %q: %w", instance.Provider, domain.ErrInvalid)
 	}
 	if instance.Credentials != "" && !json.Valid([]byte(instance.Credentials)) {
 		return fmt.Errorf("market-data credentials: %w", domain.ErrInvalid)
@@ -1122,7 +1179,7 @@ func validateMarketDataInstance(instance domain.MarketDataInstance) error {
 }
 
 func validateMarketDataInstrument(instrument domain.MarketDataInstrument) error {
-	if instrument.InstanceID == "" || instrument.ExternalSymbol == "" {
+	if instrument.Instance.IsZero() || instrument.ExternalSymbol == "" {
 		return fmt.Errorf("market-data instrument: %w", domain.ErrInvalid)
 	}
 	if err := domain.ValidateAsset(instrument.BaseAsset); err != nil {
@@ -1168,15 +1225,15 @@ func marketDataKey(instanceID, externalSymbol string) string {
 // --- Account group and notes -----------------------------------------------
 
 // SetAccountGroup validates the account id, routes to the owning node, and sets
-// or clears (empty groupID) the account's group membership.
+// or clears (empty groupCode) the account's group membership by the group's code.
 func (s *Service) SetAccountGroup(
-	ctx context.Context, id domain.AccountID, groupID string,
+	ctx context.Context, id domain.AccountID, groupCode string,
 ) error {
 	if err := domain.ValidateAccountID(id); err != nil {
 		return err
 	}
-	if groupID != "" {
-		if err := domain.ValidateGroupID(groupID); err != nil {
+	if groupCode != "" {
+		if err := domain.ValidateGroupID(groupCode); err != nil {
 			return err
 		}
 	}
@@ -1184,7 +1241,7 @@ func (s *Service) SetAccountGroup(
 	if err != nil {
 		return fmt.Errorf("backend: route account: %w", err)
 	}
-	return n.SetAccountGroup(ctx, keyFor(id), groupID, auth.CallerFromContext(ctx))
+	return n.SetAccountGroup(ctx, keyFor(id), groupCode, auth.CallerFromContext(ctx))
 }
 
 // SetAccountNotes validates the account id and notes, routes to the owning
@@ -1207,8 +1264,8 @@ func (s *Service) SetAccountNotes(
 
 // --- Groups ----------------------------------------------------------------
 
-// groupNode resolves the node that owns the default tenant's groups. Groups are
-// a tenant-level concern; in the single-node deployment one node owns them. It
+// groupNode resolves the node that owns the realm's groups. Groups are a
+// realm-level concern; in the single-node deployment one node owns them. It
 // routes via an empty account key, which the local router always owns.
 func (s *Service) groupNode() (node.Node, error) {
 	n, err := s.router.Route(keyFor(""))
@@ -1218,63 +1275,65 @@ func (s *Service) groupNode() (node.Node, error) {
 	return n, nil
 }
 
-// CreateGroup validates the id and notes, defaults the tenant, and creates the
-// group.
+// CreateGroup validates the group metadata and creates the group, returning the
+// stored group with its engine group id populated.
 func (s *Service) CreateGroup(
 	ctx context.Context, group domain.AccountGroup,
-) error {
-	group.Tenant = domain.DefaultTenant
-	if err := domain.ValidateGroupID(group.ID); err != nil {
-		return err
+) (domain.AccountGroup, error) {
+	if err := domain.ValidateGroupID(group.Code); err != nil {
+		return domain.AccountGroup{}, err
+	}
+	if err := domain.ValidateTitle(group.Title); err != nil {
+		return domain.AccountGroup{}, err
 	}
 	if err := domain.ValidateNotes(group.Notes); err != nil {
-		return err
+		return domain.AccountGroup{}, err
 	}
 	n, err := s.groupNode()
 	if err != nil {
-		return err
+		return domain.AccountGroup{}, err
 	}
 	return n.CreateGroup(ctx, group, auth.CallerFromContext(ctx))
 }
 
-// ListGroups returns every group in the default tenant.
+// ListGroups returns every group in the realm.
 func (s *Service) ListGroups(ctx context.Context) ([]domain.AccountGroup, error) {
 	n, err := s.groupNode()
 	if err != nil {
 		return nil, err
 	}
-	groups, err := n.ListGroups(ctx, domain.DefaultTenant)
+	groups, err := n.ListGroups(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("backend: list groups: %w", err)
 	}
 	return groups, nil
 }
 
-// GetGroup validates the id and returns the group and its member accounts. It
+// GetGroup validates the code and returns the group and its member accounts. It
 // maps a missing group onto domain.ErrNotFound.
 func (s *Service) GetGroup(
-	ctx context.Context, id string,
+	ctx context.Context, code string,
 ) (domain.AccountGroup, []domain.Account, error) {
-	if err := domain.ValidateGroupID(id); err != nil {
+	if err := domain.ValidateGroupID(code); err != nil {
 		return domain.AccountGroup{}, nil, err
 	}
 	n, err := s.groupNode()
 	if err != nil {
 		return domain.AccountGroup{}, nil, err
 	}
-	group, accounts, ok, err := n.GetGroup(ctx, domain.DefaultTenant, id)
+	group, accounts, ok, err := n.GetGroup(ctx, code)
 	if err != nil {
 		return domain.AccountGroup{}, nil, fmt.Errorf("backend: get group: %w", err)
 	}
 	if !ok {
-		return domain.AccountGroup{}, nil, fmt.Errorf("group %q: %w", id, domain.ErrNotFound)
+		return domain.AccountGroup{}, nil, fmt.Errorf("group %q: %w", code, domain.ErrNotFound)
 	}
 	return group, accounts, nil
 }
 
-// SetGroupNotes validates the id and notes and replaces the group's notes.
-func (s *Service) SetGroupNotes(ctx context.Context, id, notes string) error {
-	if err := domain.ValidateGroupID(id); err != nil {
+// SetGroupNotes validates the code and notes and replaces the group's notes.
+func (s *Service) SetGroupNotes(ctx context.Context, code, notes string) error {
+	if err := domain.ValidateGroupID(code); err != nil {
 		return err
 	}
 	if err := domain.ValidateNotes(notes); err != nil {
@@ -1284,34 +1343,34 @@ func (s *Service) SetGroupNotes(ctx context.Context, id, notes string) error {
 	if err != nil {
 		return err
 	}
-	return n.SetGroupNotes(ctx, domain.DefaultTenant, id, notes, auth.CallerFromContext(ctx))
+	return n.SetGroupNotes(ctx, code, notes, auth.CallerFromContext(ctx))
 }
 
-// SetGroupBlocked validates the id and blocks or unblocks the group with
+// SetGroupBlocked validates the code and blocks or unblocks the group with
 // reason.
 func (s *Service) SetGroupBlocked(
-	ctx context.Context, id string, blocked bool, reason string,
+	ctx context.Context, code string, blocked bool, reason string,
 ) error {
-	if err := domain.ValidateGroupID(id); err != nil {
+	if err := domain.ValidateGroupID(code); err != nil {
 		return err
 	}
 	n, err := s.groupNode()
 	if err != nil {
 		return err
 	}
-	return n.SetGroupBlocked(ctx, domain.DefaultTenant, id, blocked, reason, auth.CallerFromContext(ctx))
+	return n.SetGroupBlocked(ctx, code, blocked, reason, auth.CallerFromContext(ctx))
 }
 
-// DeleteGroup validates the id and removes the group.
-func (s *Service) DeleteGroup(ctx context.Context, id string) error {
-	if err := domain.ValidateGroupID(id); err != nil {
+// DeleteGroup validates the code and removes the group.
+func (s *Service) DeleteGroup(ctx context.Context, code string) error {
+	if err := domain.ValidateGroupID(code); err != nil {
 		return err
 	}
 	n, err := s.groupNode()
 	if err != nil {
 		return err
 	}
-	return n.DeleteGroup(ctx, domain.DefaultTenant, id, auth.CallerFromContext(ctx))
+	return n.DeleteGroup(ctx, code, auth.CallerFromContext(ctx))
 }
 
 // --- Spot funds ------------------------------------------------------------
@@ -1321,30 +1380,54 @@ func (s *Service) DeleteGroup(ctx context.Context, id string) error {
 // accepted-or-rejected outcome; a policy reject is a successful call, not an
 // error. No existence check is performed on the account: the engine creates the
 // balance on first adjustment.
+//
+// externalID is the caller-supplied external id for the adjustment record. When
+// non-zero it is used verbatim and must be canonical; a duplicate is rejected by
+// the store with domain.ErrAlreadyExists. When zero the store mints one.
 func (s *Service) ApplyAdjustment(
-	ctx context.Context, account domain.AccountID, req domain.AdjustmentRequest,
+	ctx context.Context,
+	account domain.AccountID,
+	externalID domain.ExternalID,
+	req domain.AdjustmentRequest,
 ) (domain.AccountAdjustmentRecord, error) {
 	if err := domain.ValidateAccountID(account); err != nil {
-		return domain.AccountAdjustmentRecord{}, err
-	}
-	if err := domain.ValidateAdjustmentRequest(req); err != nil {
 		return domain.AccountAdjustmentRecord{}, err
 	}
 	n, err := s.router.Route(keyFor(account))
 	if err != nil {
 		return domain.AccountAdjustmentRecord{}, fmt.Errorf("backend: route account: %w", err)
 	}
-	return n.ApplyAdjustment(ctx, keyFor(account), req, auth.CallerFromContext(ctx))
+	return n.ApplyAdjustment(ctx, keyFor(account), externalID, req, auth.CallerFromContext(ctx))
 }
 
-// ListBalances returns the balance rows for the default tenant, optionally
-// narrowed to a non-empty account and/or asset. It aggregates across nodes.
+// ImportPositionSnapshot validates and imports a complete persisted position
+// snapshot. It is intentionally narrower than the public adjustment API: CSV
+// import needs to round-trip realized P&L that the engine adjustment request
+// cannot express as an absolute field.
+func (s *Service) ImportPositionSnapshot(
+	ctx context.Context, snapshot domain.Balance,
+) (domain.AccountAdjustmentRecord, error) {
+	if err := domain.ValidateAccountID(snapshot.Account); err != nil {
+		return domain.AccountAdjustmentRecord{}, err
+	}
+	if _, err := domain.AddDecimals("", snapshot.RealizedPnl); err != nil {
+		return domain.AccountAdjustmentRecord{}, err
+	}
+	n, err := s.router.Route(keyFor(snapshot.Account))
+	if err != nil {
+		return domain.AccountAdjustmentRecord{}, fmt.Errorf("backend: route account: %w", err)
+	}
+	return n.ImportPositionSnapshot(ctx, keyFor(snapshot.Account), snapshot, auth.CallerFromContext(ctx))
+}
+
+// ListBalances returns the balance rows for the realm, optionally narrowed to a
+// non-empty account and/or asset. It aggregates across nodes.
 func (s *Service) ListBalances(
 	ctx context.Context, account domain.AccountID, asset string,
 ) ([]domain.Balance, error) {
 	balances := make([]domain.Balance, 0)
 	for i, n := range s.router.All() {
-		part, err := n.ListBalances(ctx, domain.DefaultTenant, account, asset)
+		part, err := n.ListBalances(ctx, account, asset)
 		if err != nil {
 			return nil, fmt.Errorf("backend: node %d list balances: %w", i, err)
 		}
@@ -1365,7 +1448,7 @@ func (s *Service) ListAdjustments(
 	if err != nil {
 		return nil, fmt.Errorf("backend: route account: %w", err)
 	}
-	return target.ListAdjustments(ctx, domain.DefaultTenant, account, source, n)
+	return target.ListAdjustments(ctx, account, source, n)
 }
 
 // ListAllAdjustments returns the most recent n adjustments aggregated across
@@ -1384,13 +1467,18 @@ func (s *Service) ListAllAdjustments(
 	}
 	recs := make([]domain.AccountAdjustmentRecord, 0)
 	for i, target := range s.router.All() {
-		part, err := target.ListAdjustments(ctx, domain.DefaultTenant, "", source, n)
+		part, err := target.ListAdjustments(ctx, "", source, n)
 		if err != nil {
 			return nil, fmt.Errorf("backend: node %d list adjustments: %w", i, err)
 		}
 		recs = append(recs, part...)
 	}
-	sort.Slice(recs, func(i, j int) bool { return recs[i].ID > recs[j].ID })
+	sort.Slice(recs, func(i, j int) bool {
+		if !recs[i].At.Equal(recs[j].At) {
+			return recs[i].At.After(recs[j].At)
+		}
+		return recs[i].ExternalID.String() > recs[j].ExternalID.String()
+	})
 	if n > 0 && len(recs) > n {
 		recs = recs[:n]
 	}
@@ -1406,19 +1494,12 @@ func (s *Service) ListAllAdjustments(
 func (s *Service) SubmitOrder(
 	ctx context.Context, o domain.Order,
 ) (domain.Order, error) {
-	o.Tenant = domain.DefaultTenant
-	// Officer validates only the boundary id/asset formats; the engine enforces
-	// the real trading rules. Existence is never checked: any well-formed account
-	// or asset is accepted (existing or not), per the surface contract.
-	if err := domain.ValidateAccountID(o.Account); err != nil {
-		return domain.Order{}, err
-	}
-	if err := domain.ValidateAsset(o.BaseAsset); err != nil {
-		return domain.Order{}, err
-	}
-	if err := domain.ValidateAsset(o.QuoteAsset); err != nil {
-		return domain.Order{}, err
-	}
+	// Officer applies no boundary id/asset format checks: the engine seam parses
+	// the account and assets and enforces the real trading rules. Existence is
+	// never checked: any well-formed account or asset is accepted (existing or
+	// not), per the surface contract. A caller-supplied order external id is used
+	// verbatim when valid; the store rejects a duplicate with
+	// domain.ErrAlreadyExists.
 	n, err := s.router.Route(keyFor(o.Account))
 	if err != nil {
 		return domain.Order{}, fmt.Errorf("backend: route order: %w", err)
@@ -1428,10 +1509,11 @@ func (s *Service) SubmitOrder(
 	if err != nil {
 		return domain.Order{}, err
 	}
-	// Sign the engine's pre-trade verdict (accept or reject) and stamp the signed
-	// envelope onto the recorded order. Signing is additive: money/commit behaviour
-	// is unchanged, and the recorded order is already durable, so a signing or
-	// persistence failure never rolls the order back — the envelope is best-effort.
+	// Sign the engine's pre-trade verdict (accept or reject) and persist the
+	// envelope into a separate 1:1 order_approvals row; the recorded order is
+	// returned unchanged. Signing is additive: money/commit behaviour is
+	// unchanged, and the recorded order is already durable, so a signing or
+	// persistence failure never rolls the order back - the envelope is best-effort.
 	if s.signer != nil {
 		order = s.signOrderVerdict(ctx, n, key, order)
 	}
@@ -1439,10 +1521,11 @@ func (s *Service) SubmitOrder(
 }
 
 // signOrderVerdict signs the recorded order's pre-trade verdict and persists the
-// envelope (write-once) plus an approval_issued audit. It returns the order with
-// its Approval* fields populated on success; on any signing or persistence error
-// it swallows the error and returns the order unchanged (the order is already
-// durable — the envelope is best-effort and must not fail the submit).
+// envelope (write-once) plus an approval_issued audit. The signed approval lives
+// in the 1:1 order_approvals row and is read back via OrderDetail.Approval; the
+// returned order is unchanged. On any signing or persistence error it swallows
+// the error and returns the order unchanged (the order is already durable — the
+// envelope is best-effort and must not fail the submit).
 func (s *Service) signOrderVerdict(
 	ctx context.Context, n node.Node, key node.Key, order domain.Order,
 ) domain.Order {
@@ -1450,17 +1533,12 @@ func (s *Service) signOrderVerdict(
 	if err != nil {
 		return order
 	}
-	if err := n.PersistOrderApproval(ctx, key, order.ID, signed); err != nil {
+	if err := n.PersistOrderApproval(ctx, key, order.ExternalID, signed); err != nil {
 		return order
 	}
-	order.ApprovalToken = signed.Token
-	order.ApprovalKeyID = signed.KeyID
-	order.ApprovalAlg = signed.Alg
-	order.ApprovalMode = signed.Mode
-	order.ApprovalIssuedAt = signed.IssuedAt
-	order.ApprovalExpiresAt = signed.ExpiresAt
 	_ = s.auditApproval(ctx, n, key, domain.AuditActionApprovalIssued,
-		fmt.Sprintf("issue approval order %d verdict=%s", order.ID, orderVerdict(order.Status)))
+		fmt.Sprintf("issue approval order %s verdict=%s",
+			order.ExternalID.String(), orderVerdict(order.Status)))
 	return order
 }
 
@@ -1485,7 +1563,7 @@ func (s *Service) buildOrderEnvelope(
 
 	var payload domain.ApprovalPayload
 	if order.Status == domain.OrderStatusRejected {
-		reject, rerr := s.firstOrderReject(ctx, n, order.ID)
+		reject, rerr := s.firstOrderReject(ctx, n, order.ExternalID)
 		if rerr != nil {
 			return domain.OrderApproval{}, rerr
 		}
@@ -1493,17 +1571,12 @@ func (s *Service) buildOrderEnvelope(
 			order, SubmitModeImmediate, approvalID, reject, issuedAt, expiresAt, nonce)
 	} else {
 		// Accept: the order's settlement lock price is the estimate. The engine
-		// captured a single lock price for the spot order; LockPrices[0] is that
-		// settlement decimal string.
-		estimate := ""
-		if len(order.LockPrices) > 0 {
-			estimate = order.LockPrices[0]
-		}
-		// Estimate source mirrors the order type buildApprovalPayload derives: a
-		// priced order locks at its limit, a market order at the mark.
-		estimateSource := domain.EstimateSourceLimit
-		if order.Price == "" {
-			estimateSource = domain.EstimateSourceMarketMark
+		// captured a single lock price for the spot order, persisted as the opaque
+		// SDK lock blob; derive the display prices from it via the lock seam and
+		// take the settlement leg (the last entry) as the estimate.
+		estimate, estimateSource, lerr := engine.LockSettlementEstimate(order.Lock, order)
+		if lerr != nil {
+			return domain.OrderApproval{}, lerr
 		}
 		payload = buildApprovalPayload(
 			order, SubmitModeImmediate, approvalID, estimate,
@@ -1547,9 +1620,9 @@ func (s *Service) buildOrderEnvelope(
 // first engine reject it carries. The order returned by node.SubmitOrder does not
 // carry the rejects, so they are read back from the persisted event stream.
 func (s *Service) firstOrderReject(
-	ctx context.Context, n node.Node, orderID int64,
+	ctx context.Context, n node.Node, orderID domain.ExternalID,
 ) (domain.OrderReject, error) {
-	detail, err := n.GetOrder(ctx, domain.DefaultTenant, orderID)
+	detail, err := n.GetOrder(ctx, orderID)
 	if err != nil {
 		return domain.OrderReject{}, err
 	}
@@ -1582,17 +1655,9 @@ func orderVerdict(status domain.OrderStatus) string {
 func (s *Service) CheckOrder(
 	ctx context.Context, probe domain.OrderProbe,
 ) (domain.CheckResult, error) {
-	// Officer validates only the boundary id/asset formats; the engine enforces
-	// the real trading rules. Existence is never checked, mirroring SubmitOrder.
-	if err := domain.ValidateAccountID(probe.Account); err != nil {
-		return domain.CheckResult{}, err
-	}
-	if err := domain.ValidateAsset(probe.BaseAsset); err != nil {
-		return domain.CheckResult{}, err
-	}
-	if err := domain.ValidateAsset(probe.QuoteAsset); err != nil {
-		return domain.CheckResult{}, err
-	}
+	// Officer applies no boundary id/asset format checks; the engine seam parses
+	// the account and assets and enforces the real trading rules. Existence is
+	// never checked, mirroring SubmitOrder.
 	n, err := s.router.Route(keyFor(probe.Account))
 	if err != nil {
 		return domain.CheckResult{}, fmt.Errorf("backend: route check: %w", err)
@@ -1605,15 +1670,8 @@ func (s *Service) CheckOrder(
 func (s *Service) ApplyExecutionReport(
 	ctx context.Context, in domain.ExecutionReportInput,
 ) (engine.ExecutionReportResult, error) {
-	if err := domain.ValidateAccountID(in.Account); err != nil {
-		return engine.ExecutionReportResult{}, err
-	}
-	if err := domain.ValidateAsset(in.BaseAsset); err != nil {
-		return engine.ExecutionReportResult{}, err
-	}
-	if err := domain.ValidateAsset(in.QuoteAsset); err != nil {
-		return engine.ExecutionReportResult{}, err
-	}
+	// Officer applies no boundary id/asset format checks; the engine seam parses
+	// the account and assets and enforces the real settlement rules.
 	n, err := s.router.Route(keyFor(in.Account))
 	if err != nil {
 		return engine.ExecutionReportResult{}, fmt.Errorf("backend: route report: %w", err)
@@ -1622,29 +1680,34 @@ func (s *Service) ApplyExecutionReport(
 		// This second read is the authoritative status check, independent of the
 		// HTTP handler's payload fetch, and returns friendly terminal_order
 		// instead of the store's generic ErrConflict.
-		detail, err := n.GetOrder(ctx, domain.DefaultTenant, in.OrderID)
+		detail, err := n.GetOrder(ctx, in.Order)
 		if err != nil {
 			return engine.ExecutionReportResult{}, err
 		}
 		if domain.OrderStatusTerminal(detail.Order.Status) {
 			return engine.ExecutionReportResult{}, fmt.Errorf(
-				"backend: order %d is in terminal status %q: %w",
-				in.OrderID, detail.Order.Status, domain.ErrTerminalOrder)
+				"backend: order %s is in terminal status %q: %w",
+				in.Order.String(), detail.Order.Status, domain.ErrTerminalOrder)
 		}
 	}
 	return n.ApplyExecutionReport(ctx, keyFor(in.Account), in, auth.CallerFromContext(ctx))
 }
 
-// GetOrder returns the order with its events and trades. It maps a missing
-// order onto the node's domain.ErrNotFound.
+// GetOrder returns the order with its 1:1 signed approval (when issued), its
+// events and trades, addressed by the order's opaque external id. It maps a
+// missing order onto the node's domain.ErrNotFound.
 func (s *Service) GetOrder(
-	ctx context.Context, id int64,
+	ctx context.Context, id string,
 ) (domain.OrderDetail, error) {
+	order, err := domain.ParseExternalID(id)
+	if err != nil {
+		return domain.OrderDetail{}, err
+	}
 	n, err := s.router.Route(keyFor(""))
 	if err != nil {
 		return domain.OrderDetail{}, fmt.Errorf("backend: route order: %w", err)
 	}
-	return n.GetOrder(ctx, domain.DefaultTenant, id)
+	return n.GetOrder(ctx, order)
 }
 
 // ListOrders returns the most recent n orders, optionally narrowed to a
@@ -1659,17 +1722,28 @@ func (s *Service) ListOrders(
 	}
 	orders := make([]domain.Order, 0)
 	for i, target := range s.router.All() {
-		part, err := target.ListOrders(ctx, domain.DefaultTenant, account, source, n)
+		part, err := target.ListOrders(ctx, account, source, n)
 		if err != nil {
 			return nil, fmt.Errorf("backend: node %d list orders: %w", i, err)
 		}
 		orders = append(orders, part...)
 	}
-	sort.Slice(orders, func(i, j int) bool { return orders[i].ID > orders[j].ID })
+	sortOrdersNewestFirst(orders)
 	if n > 0 && len(orders) > n {
 		orders = orders[:n]
 	}
 	return orders, nil
+}
+
+// sortOrdersNewestFirst orders order rows newest first by timestamp, breaking
+// ties on the opaque external id (descending) for a stable merge across nodes.
+func sortOrdersNewestFirst(orders []domain.Order) {
+	sort.Slice(orders, func(i, j int) bool {
+		if !orders[i].At.Equal(orders[j].At) {
+			return orders[i].At.After(orders[j].At)
+		}
+		return orders[i].ExternalID.String() > orders[j].ExternalID.String()
+	})
 }
 
 // ListTrades returns the most recent n trades, optionally narrowed to a
@@ -1684,17 +1758,28 @@ func (s *Service) ListTrades(
 	}
 	trades := make([]domain.Trade, 0)
 	for i, target := range s.router.All() {
-		part, err := target.ListTrades(ctx, domain.DefaultTenant, account, source, n)
+		part, err := target.ListTrades(ctx, account, source, n)
 		if err != nil {
 			return nil, fmt.Errorf("backend: node %d list trades: %w", i, err)
 		}
 		trades = append(trades, part...)
 	}
-	sort.Slice(trades, func(i, j int) bool { return trades[i].ID > trades[j].ID })
+	sortTradesNewestFirst(trades)
 	if n > 0 && len(trades) > n {
 		trades = trades[:n]
 	}
 	return trades, nil
+}
+
+// sortTradesNewestFirst orders trade rows newest first by timestamp, breaking
+// ties on the opaque external id (descending) for a stable merge across nodes.
+func sortTradesNewestFirst(trades []domain.Trade) {
+	sort.Slice(trades, func(i, j int) bool {
+		if !trades[i].At.Equal(trades[j].At) {
+			return trades[i].At.After(trades[j].At)
+		}
+		return trades[i].ExternalID.String() > trades[j].ExternalID.String()
+	})
 }
 
 // --- Dashboard / service ---------------------------------------------------
@@ -1779,14 +1864,16 @@ func (s *Service) Overview(ctx context.Context, since time.Time) (Overview, erro
 	if err != nil {
 		return Overview{}, err
 	}
+	limitCount := len(limits.RateLimits) +
+		len(limits.OrderSizeLimits) + len(limits.PnlBoundsLimits)
 
 	var ordersTotal, ordersToday int
 	for i, target := range s.router.All() {
-		total, err := target.CountOrders(ctx, domain.DefaultTenant)
+		total, err := target.CountOrders(ctx)
 		if err != nil {
 			return Overview{}, fmt.Errorf("backend: node %d count orders: %w", i, err)
 		}
-		today, err := target.CountOrdersSince(ctx, domain.DefaultTenant, since)
+		today, err := target.CountOrdersSince(ctx, since)
 		if err != nil {
 			return Overview{}, fmt.Errorf("backend: node %d count orders since: %w", i, err)
 		}
@@ -1827,7 +1914,7 @@ func (s *Service) Overview(ctx context.Context, since time.Time) (Overview, erro
 			AccountsActive: accountsActive,
 			Groups:         len(groups),
 			GroupsActive:   groupsActive,
-			Limits:         len(limits),
+			Limits:         limitCount,
 			OrdersToday:    ordersToday,
 			OrdersTotal:    ordersTotal,
 		},
@@ -1855,7 +1942,7 @@ func mergeActivity(
 			At:      o.At,
 			Source:  o.Source,
 			Kind:    ActivityKindOrder,
-			Ref:     strconv.FormatInt(o.ID, 10),
+			Ref:     o.ExternalID.String(),
 			Summary: fmt.Sprintf("%s %s %s/%s %s", o.Side, o.AmountValue, o.BaseAsset, o.QuoteAsset, o.Status),
 		})
 	}

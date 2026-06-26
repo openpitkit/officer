@@ -41,21 +41,67 @@ import (
 )
 
 // Snapshot is the engine state the control plane builds the engine from at
-// process start: accounts' blocked state and the complete set of risk barriers.
-// BuildOpenPitEngine consumes it once. A Snapshot is plain data with no native
-// handles, so the store layer can assemble it without cgo.
+// process start: accounts (and their stored engine ids and blocked state), the
+// account groups, the persisted balances, and the complete set of risk barriers
+// across the three typed limit tables. BuildOpenPitEngine consumes it once. A
+// Snapshot is plain data with no native handles, so the store layer can assemble
+// it without cgo.
+//
+// The accounts and groups carry their stored engine ids (EngineAccountID /
+// EngineGroupID), assigned collision-free by the connector. The engine adapter
+// builds its code-to-engine-id resolver from them, so it never hashes a code
+// into an engine id. The engine is rebuilt from a fresh full Snapshot whenever
+// the account/group/limit set changes, so the resolver always covers every
+// account and group the live handle runs.
 type Snapshot struct {
-	// Accounts are the accounts to apply, including their blocked state and
-	// block reason. Group membership is read from each account's GroupID.
+	// Accounts are the accounts to apply, including their stored engine account
+	// id, blocked state and block reason. Group membership is read from each
+	// account's GroupCode.
 	Accounts []domain.Account
-	// Limits are the complete set of risk barriers across all policies.
-	Limits []domain.Limit
-	// Groups are the persisted account groups, carrying their blocked state and
-	// reason. Membership lives on Accounts; this seeds group blocks only.
+	// RateLimits are the persisted rate-limit barriers.
+	RateLimits []domain.LimitRate
+	// OrderSizeLimits are the persisted order-size barriers.
+	OrderSizeLimits []domain.LimitOrderSize
+	// PnlBoundsLimits are the persisted P&L-bounds barriers.
+	PnlBoundsLimits []domain.LimitPnlBounds
+	// Groups are the persisted account groups, carrying their stored engine group
+	// id, blocked state and reason. Membership lives on Accounts; this seeds group
+	// blocks only.
 	Groups []domain.AccountGroup
 	// Balances are the persisted per-(account, asset) holdings to seed into the
 	// spot-funds policy as absolute adjustments.
 	Balances []domain.Balance
+}
+
+// LimitSet is the complete typed barrier set for one policy, the carrier
+// ConfigurePolicy applies on the live handle. Only the slice matching the named
+// policy is consumed; the others are ignored. It lets a single ConfigurePolicy
+// method retune any of the three risk policies from its own typed table without
+// a per-policy method on the interface.
+type LimitSet struct {
+	// RateLimits is the complete rate-limit barrier set (used for rate_limit).
+	RateLimits []domain.LimitRate
+	// OrderSizeLimits is the complete order-size barrier set (order_size_limit).
+	OrderSizeLimits []domain.LimitOrderSize
+	// PnlBoundsLimits is the complete P&L-bounds barrier set
+	// (pnl_bounds_kill_switch).
+	PnlBoundsLimits []domain.LimitPnlBounds
+}
+
+// barrierCount returns the number of barriers carried for policy. ConfigurePolicy
+// uses it to detect the empty-set case (removing the last barrier of a policy),
+// which the runtime Configure surface cannot express.
+func (s LimitSet) barrierCount(policy string) int {
+	switch policy {
+	case domain.PolicyRateLimit:
+		return len(s.RateLimits)
+	case domain.PolicyOrderSizeLimit:
+		return len(s.OrderSizeLimits)
+	case domain.PolicyPnlBoundsKillSwitch:
+		return len(s.PnlBoundsLimits)
+	default:
+		return 0
+	}
 }
 
 // AdjustmentResult is the outcome of one ApplyAccountAdjustment call. Exactly
@@ -68,13 +114,19 @@ type AdjustmentResult struct {
 	Rejected *domain.AdjustmentOutcomeRejected
 }
 
+// AdjustmentBatchReject is an atomic account-adjustment batch reject from the
+// engine. No per-request outcome is committed when this is returned.
+type AdjustmentBatchReject = domain.AdjustmentOutcomeRejected
+
 // OrderResult is the outcome of one SubmitOrder pre-trade call. On accept the
-// reservation is committed inside the adapter and LockPrices holds the lock
-// prices captured before commit; on reject Rejects holds the engine rejects.
+// reservation is committed inside the adapter and Lock holds the SDK-serialized
+// reservation lock captured before commit; on reject Rejects holds the engine
+// rejects.
 type OrderResult struct {
-	// LockPrices are the reservation lock prices captured as decimal strings
-	// before the reservation was committed. Empty when the order locked nothing.
-	LockPrices []string
+	// Lock is the SDK-serialized reservation lock captured before the reservation
+	// was committed, ready to persist verbatim on the order. Nil when the order
+	// locked nothing. Display prices are derived later via LockDisplayPrices.
+	Lock []byte
 	// Rejects are the engine pre-trade rejects; non-empty only when not accepted.
 	Rejects []domain.OrderReject
 	// Outcomes are the per-asset balance effects the reservation produced (held
@@ -110,9 +162,10 @@ type HoldResult struct {
 	// ApprovalID is the server UUID identifying the held reservation; it is the
 	// reservation id surfaced to clients. Empty when not accepted.
 	ApprovalID string
-	// LockPrices are the reservation lock prices captured at issue as decimal
-	// strings (caller-owned snapshot). Empty when the order locked nothing.
-	LockPrices []string
+	// Lock is the SDK-serialized reservation lock captured at issue, ready to
+	// persist verbatim on the order and reservation intent. Nil when the order
+	// locked nothing. Display prices are derived later via LockDisplayPrices.
+	Lock []byte
 	// SettlementLockPrice is the settlement-leg lock price (the price a fill
 	// settles at) as a decimal string; empty when no price was locked.
 	SettlementLockPrice string
@@ -133,9 +186,10 @@ type HoldResult struct {
 // ApplyExecutionReport at the captured lock price, so the held amount nets to
 // zero; on reject Rejects holds the engine rejects and nothing settles.
 type ImmediateResult struct {
-	// LockPrices are the reservation lock prices captured before commit as
-	// decimal strings. Empty when the order locked nothing.
-	LockPrices []string
+	// Lock is the SDK-serialized reservation lock captured before commit, ready
+	// to persist verbatim on the order. Nil when the order locked nothing. Display
+	// prices are derived later via LockDisplayPrices.
+	Lock []byte
 	// Blocks are the account blocks the engine recorded while settling the
 	// immediate fill.
 	Blocks []domain.ExecutionAccountBlock
@@ -204,9 +258,10 @@ type Engine interface {
 	// stopped).
 	Running() bool
 
-	// ConfigurePolicy reconfigures one policy from its complete barrier set on
-	// the live engine handle via the binding's Configure surface.
-	ConfigurePolicy(ctx context.Context, policy string, limits []domain.Limit) error
+	// ConfigurePolicy reconfigures one policy from its complete typed barrier set
+	// on the live engine handle via the binding's Configure surface. Only the
+	// LimitSet slice matching policy is consumed.
+	ConfigurePolicy(ctx context.Context, policy string, limits LimitSet) error
 
 	// BlockAccount kill-switches the account in the engine, gating its pre-trade
 	// orders until it is unblocked. reason is recorded with the block.
@@ -216,17 +271,23 @@ type Engine interface {
 	// account that is not blocked is a no-op.
 	UnblockAccount(ctx context.Context, id domain.AccountID) error
 
+	// ApplyAccountAdjustmentBatch applies a batch of spot-funds adjustments for
+	// account on the live engine. The SDK batch is atomic for the account: on a
+	// batch reject no per-request outcomes are committed.
+	ApplyAccountAdjustmentBatch(
+		ctx context.Context, account domain.AccountID, reqs []domain.AdjustmentRequest,
+	) ([]AdjustmentResult, *AdjustmentBatchReject, error)
+
 	// ApplyAccountAdjustment applies one spot-funds adjustment for account on the
-	// live engine and returns its accept/reject outcome. req carries one balance
-	// operation on req.Asset with optional average-entry-price and per-field
-	// absolute|delta amounts and optional bounds.
+	// live engine and returns its accept/reject outcome. It delegates to
+	// ApplyAccountAdjustmentBatch with a one-request batch.
 	ApplyAccountAdjustment(
 		ctx context.Context, account domain.AccountID, req domain.AdjustmentRequest,
 	) (AdjustmentResult, error)
 
 	// SubmitOrder runs the pre-trade pipeline for o on the live engine. On accept
-	// it captures the reservation lock prices, commits the reservation, and
-	// returns Accepted with those prices; on reject it returns the engine rejects.
+	// it serializes the reservation lock, commits the reservation, and returns
+	// Accepted with the serialized lock; on reject it returns the engine rejects.
 	// The native reservation never escapes the adapter.
 	SubmitOrder(ctx context.Context, o domain.Order) (OrderResult, error)
 
@@ -235,7 +296,7 @@ type Engine interface {
 	// engine storage until CommitHeld or RollbackHeld resolves it, or the TTL
 	// sweeper auto-rolls it back. It registers the held reservation under a fresh
 	// approval id and persists a reservation intent, then returns that id, the
-	// captured lock prices, the settlement-leg price and estimate source, and the
+	// serialized lock, the settlement-leg price and estimate source, and the
 	// expiry. On reject it holds nothing and returns the engine rejects. A held
 	// reservation holds no engine/storage lock between calls, so a multi-minute
 	// TTL blocks nothing.

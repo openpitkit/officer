@@ -18,11 +18,14 @@
 package domain_test
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
+	"unicode/utf8"
 
 	"go.openpit.dev/officer/internal/domain"
 )
@@ -31,6 +34,14 @@ import (
 
 func TestValidateAccountID(t *testing.T) {
 	t.Parallel()
+
+	// multibyte: 64 Cyrillic code points = 128 bytes — must be accepted.
+	cyrillic64 := strings.Repeat("я", 64)
+	if utf8.RuneCountInString(cyrillic64) != 64 {
+		t.Fatal("test setup: expected 64 code points")
+	}
+	// 65 Cyrillic code points = 130 bytes — must be rejected.
+	cyrillic65 := strings.Repeat("я", 65)
 
 	ok := []struct {
 		name string
@@ -41,6 +52,7 @@ func TestValidateAccountID(t *testing.T) {
 		{"max length", strings.Repeat("x", 64)},
 		{"numbers", "1234567890"},
 		{"symbols", "acc_1.2/3"},
+		{"multibyte 64 code points", cyrillic64},
 	}
 	for _, tc := range ok {
 		t.Run("ok/"+tc.name, func(t *testing.T) {
@@ -57,6 +69,7 @@ func TestValidateAccountID(t *testing.T) {
 	}{
 		{"empty", ""},
 		{"over 64", strings.Repeat("x", 65)},
+		{"multibyte 65 code points", cyrillic65},
 		{"leading space", " acc"},
 		{"trailing space", "acc "},
 		{"non-printable", "acc\x01"},
@@ -75,59 +88,30 @@ func TestValidateAccountID(t *testing.T) {
 	}
 }
 
-// --- ValidateLimit helpers ---
-
-func limit(policy, scope string, account, asset string, vals ...domain.LimitValue) domain.Limit {
-	return domain.Limit{
-		Target: domain.LimitTarget{
-			Tenant:  domain.DefaultTenant,
-			Policy:  policy,
-			Scope:   scope,
-			Account: domain.AccountID(account),
-			Asset:   asset,
-		},
-		Values: vals,
-	}
-}
-
-func kv(kind, value string) domain.LimitValue {
-	return domain.LimitValue{Kind: kind, Value: value}
-}
-
-// --- rate_limit ---
-
-func TestValidateLimit_RateLimit(t *testing.T) {
+func TestValidateTitle(t *testing.T) {
 	t.Parallel()
+
+	// multibyte: 256 CJK code points = 768 bytes — must be accepted.
+	cjk256 := strings.Repeat("字", 256)
+	if utf8.RuneCountInString(cjk256) != 256 {
+		t.Fatal("test setup: expected 256 code points")
+	}
+	// 257 CJK code points = 771 bytes — must be rejected.
+	cjk257 := strings.Repeat("字", 257)
 
 	ok := []struct {
 		name  string
-		limit domain.Limit
+		title string
 	}{
-		{
-			"broker",
-			limit(domain.PolicyRateLimit, domain.ScopeBroker, "", "",
-				kv(domain.KindMaxOrders, "100"), kv(domain.KindWindow, "1s")),
-		},
-		{
-			"asset",
-			limit(domain.PolicyRateLimit, domain.ScopeAsset, "", "AAPL",
-				kv(domain.KindMaxOrders, "1"), kv(domain.KindWindow, "24h")),
-		},
-		{
-			"account",
-			limit(domain.PolicyRateLimit, domain.ScopeAccount, "acc-1", "",
-				kv(domain.KindMaxOrders, "1000000000"), kv(domain.KindWindow, "500ms")),
-		},
-		{
-			"account_asset",
-			limit(domain.PolicyRateLimit, domain.ScopeAccountAsset, "acc-1", "MSFT",
-				kv(domain.KindMaxOrders, "50"), kv(domain.KindWindow, "1m")),
-		},
+		{"empty", ""},
+		{"display", "Desk Alpha"},
+		{"max length ascii", strings.Repeat("x", 256)},
+		{"multibyte 256 code points", cjk256},
 	}
 	for _, tc := range ok {
 		t.Run("ok/"+tc.name, func(t *testing.T) {
 			t.Parallel()
-			if err := domain.ValidateLimit(tc.limit); err != nil {
+			if err := domain.ValidateTitle(tc.title); err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 		})
@@ -135,126 +119,16 @@ func TestValidateLimit_RateLimit(t *testing.T) {
 
 	bad := []struct {
 		name  string
-		limit domain.Limit
+		title string
 	}{
-		{
-			"missing window",
-			limit(domain.PolicyRateLimit, domain.ScopeBroker, "", "",
-				kv(domain.KindMaxOrders, "10")),
-		},
-		{
-			"missing max_orders",
-			limit(domain.PolicyRateLimit, domain.ScopeBroker, "", "",
-				kv(domain.KindWindow, "1s")),
-		},
-		{
-			"max_orders zero",
-			limit(domain.PolicyRateLimit, domain.ScopeBroker, "", "",
-				kv(domain.KindMaxOrders, "0"), kv(domain.KindWindow, "1s")),
-		},
-		{
-			"max_orders over 1e9",
-			limit(domain.PolicyRateLimit, domain.ScopeBroker, "", "",
-				kv(domain.KindMaxOrders, "1000000001"), kv(domain.KindWindow, "1s")),
-		},
-		{
-			"max_orders negative",
-			limit(domain.PolicyRateLimit, domain.ScopeBroker, "", "",
-				kv(domain.KindMaxOrders, "-1"), kv(domain.KindWindow, "1s")),
-		},
-		{
-			"max_orders fractional",
-			limit(domain.PolicyRateLimit, domain.ScopeBroker, "", "",
-				kv(domain.KindMaxOrders, "1.5"), kv(domain.KindWindow, "1s")),
-		},
-		{
-			// Non-canonical integer encodings must be rejected at the domain
-			// layer so they never reach the engine, which parses with
-			// strconv.ParseUint (no exponent, no decimal point).
-			"max_orders scientific notation",
-			limit(domain.PolicyRateLimit, domain.ScopeBroker, "", "",
-				kv(domain.KindMaxOrders, "1e3"), kv(domain.KindWindow, "1s")),
-		},
-		{
-			"max_orders uppercase exponent",
-			limit(domain.PolicyRateLimit, domain.ScopeBroker, "", "",
-				kv(domain.KindMaxOrders, "1E2"), kv(domain.KindWindow, "1s")),
-		},
-		{
-			"max_orders trailing zero decimal",
-			limit(domain.PolicyRateLimit, domain.ScopeBroker, "", "",
-				kv(domain.KindMaxOrders, "100.0"), kv(domain.KindWindow, "1s")),
-		},
-		{
-			"window zero",
-			limit(domain.PolicyRateLimit, domain.ScopeBroker, "", "",
-				kv(domain.KindMaxOrders, "10"), kv(domain.KindWindow, "0s")),
-		},
-		{
-			"window over 24h",
-			limit(domain.PolicyRateLimit, domain.ScopeBroker, "", "",
-				kv(domain.KindMaxOrders, "10"), kv(domain.KindWindow, "25h")),
-		},
-		{
-			"window invalid",
-			limit(domain.PolicyRateLimit, domain.ScopeBroker, "", "",
-				kv(domain.KindMaxOrders, "10"), kv(domain.KindWindow, "bad")),
-		},
-		{
-			"unknown kind",
-			limit(domain.PolicyRateLimit, domain.ScopeBroker, "", "",
-				kv(domain.KindMaxOrders, "10"), kv(domain.KindWindow, "1s"),
-				kv("extra", "x")),
-		},
-		{
-			"scope account_asset missing asset",
-			limit(domain.PolicyRateLimit, domain.ScopeAccountAsset, "acc-1", "",
-				kv(domain.KindMaxOrders, "10"), kv(domain.KindWindow, "1s")),
-		},
-		{
-			"scope broker with account",
-			limit(domain.PolicyRateLimit, domain.ScopeBroker, "acc-1", "",
-				kv(domain.KindMaxOrders, "10"), kv(domain.KindWindow, "1s")),
-		},
-		{
-			"scope asset missing asset",
-			limit(domain.PolicyRateLimit, domain.ScopeAsset, "", "",
-				kv(domain.KindMaxOrders, "10"), kv(domain.KindWindow, "1s")),
-		},
-		{
-			"asset whitespace",
-			limit(domain.PolicyRateLimit, domain.ScopeAsset, "", "B T C",
-				kv(domain.KindMaxOrders, "10"), kv(domain.KindWindow, "1s")),
-		},
-		{
-			"asset over 32",
-			limit(domain.PolicyRateLimit, domain.ScopeAsset, "", strings.Repeat("X", 33),
-				kv(domain.KindMaxOrders, "10"), kv(domain.KindWindow, "1s")),
-		},
-		{
-			"no values",
-			limit(domain.PolicyRateLimit, domain.ScopeBroker, "", ""),
-		},
-		{
-			"duplicate kind",
-			domain.Limit{
-				Target: domain.LimitTarget{
-					Tenant: domain.DefaultTenant,
-					Policy: domain.PolicyRateLimit,
-					Scope:  domain.ScopeBroker,
-				},
-				Values: []domain.LimitValue{
-					kv(domain.KindMaxOrders, "10"),
-					kv(domain.KindMaxOrders, "20"),
-					kv(domain.KindWindow, "1s"),
-				},
-			},
-		},
+		{"over 256 ascii", strings.Repeat("x", 257)},
+		{"multibyte 257 code points", cjk257},
+		{"non-printable", "Desk\x01Alpha"},
 	}
 	for _, tc := range bad {
 		t.Run("err/"+tc.name, func(t *testing.T) {
 			t.Parallel()
-			err := domain.ValidateLimit(tc.limit)
+			err := domain.ValidateTitle(tc.title)
 			if err == nil {
 				t.Fatal("expected error, got nil")
 			}
@@ -265,40 +139,31 @@ func TestValidateLimit_RateLimit(t *testing.T) {
 	}
 }
 
-// --- order_size_limit ---
+// --- ValidateNotes ---
 
-func TestValidateLimit_OrderSizeLimit(t *testing.T) {
+func TestValidateNotes(t *testing.T) {
 	t.Parallel()
+
+	// multibyte: 4096 Cyrillic code points = 8192 bytes — must be accepted.
+	cyrillic4096 := strings.Repeat("я", 4096)
+	if utf8.RuneCountInString(cyrillic4096) != 4096 {
+		t.Fatal("test setup: expected 4096 code points")
+	}
+	// 4097 code points — must be rejected.
+	cyrillic4097 := strings.Repeat("я", 4097)
 
 	ok := []struct {
 		name  string
-		limit domain.Limit
+		notes string
 	}{
-		{
-			"broker max_quantity only",
-			limit(domain.PolicyOrderSizeLimit, domain.ScopeBroker, "", "",
-				kv(domain.KindMaxQuantity, "100")),
-		},
-		{
-			"broker max_notional only",
-			limit(domain.PolicyOrderSizeLimit, domain.ScopeBroker, "", "",
-				kv(domain.KindMaxNotional, "50000.5")),
-		},
-		{
-			"account_asset both",
-			limit(domain.PolicyOrderSizeLimit, domain.ScopeAccountAsset, "acc-1", "AAPL",
-				kv(domain.KindMaxQuantity, "1"), kv(domain.KindMaxNotional, "999")),
-		},
-		{
-			"asset",
-			limit(domain.PolicyOrderSizeLimit, domain.ScopeAsset, "", "MSFT",
-				kv(domain.KindMaxQuantity, "0.5")),
-		},
+		{"empty", ""},
+		{"ascii max", strings.Repeat("x", 4096)},
+		{"multibyte 4096 code points", cyrillic4096},
 	}
 	for _, tc := range ok {
 		t.Run("ok/"+tc.name, func(t *testing.T) {
 			t.Parallel()
-			if err := domain.ValidateLimit(tc.limit); err != nil {
+			if err := domain.ValidateNotes(tc.notes); err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 		})
@@ -306,37 +171,15 @@ func TestValidateLimit_OrderSizeLimit(t *testing.T) {
 
 	bad := []struct {
 		name  string
-		limit domain.Limit
+		notes string
 	}{
-		{
-			"neither kind",
-			limit(domain.PolicyOrderSizeLimit, domain.ScopeBroker, "", ""),
-		},
-		{
-			"max_quantity zero",
-			limit(domain.PolicyOrderSizeLimit, domain.ScopeBroker, "", "",
-				kv(domain.KindMaxQuantity, "0")),
-		},
-		{
-			"max_notional negative",
-			limit(domain.PolicyOrderSizeLimit, domain.ScopeBroker, "", "",
-				kv(domain.KindMaxNotional, "-1")),
-		},
-		{
-			"unknown kind",
-			limit(domain.PolicyOrderSizeLimit, domain.ScopeBroker, "", "",
-				kv(domain.KindMaxQuantity, "1"), kv("bogus", "x")),
-		},
-		{
-			"scope account not allowed",
-			limit(domain.PolicyOrderSizeLimit, domain.ScopeAccount, "acc-1", "",
-				kv(domain.KindMaxQuantity, "1")),
-		},
+		{"over 4096 ascii", strings.Repeat("x", 4097)},
+		{"multibyte 4097 code points", cyrillic4097},
 	}
 	for _, tc := range bad {
 		t.Run("err/"+tc.name, func(t *testing.T) {
 			t.Parallel()
-			err := domain.ValidateLimit(tc.limit)
+			err := domain.ValidateNotes(tc.notes)
 			if err == nil {
 				t.Fatal("expected error, got nil")
 			}
@@ -347,83 +190,51 @@ func TestValidateLimit_OrderSizeLimit(t *testing.T) {
 	}
 }
 
-// --- pnl_bounds_kill_switch ---
+// --- ValidateGroupID ---
 
-func TestValidateLimit_PnlBounds(t *testing.T) {
+func TestValidateGroupID(t *testing.T) {
 	t.Parallel()
 
+	// multibyte: 64 Cyrillic code points = 128 bytes — must be accepted.
+	cyrillic64 := strings.Repeat("я", 64)
+	if utf8.RuneCountInString(cyrillic64) != 64 {
+		t.Fatal("test setup: expected 64 code points")
+	}
+	// 65 Cyrillic code points — must be rejected.
+	cyrillic65 := strings.Repeat("я", 65)
+
 	ok := []struct {
-		name  string
-		limit domain.Limit
+		name string
+		id   string
 	}{
-		{
-			"asset lower only",
-			limit(domain.PolicyPnlBoundsKillSwitch, domain.ScopeAsset, "", "AAPL",
-				kv(domain.KindLowerBound, "-1000")),
-		},
-		{
-			"asset upper only",
-			limit(domain.PolicyPnlBoundsKillSwitch, domain.ScopeAsset, "", "AAPL",
-				kv(domain.KindUpperBound, "5000")),
-		},
-		{
-			"account_asset both equal",
-			limit(domain.PolicyPnlBoundsKillSwitch, domain.ScopeAccountAsset, "acc-1", "MSFT",
-				kv(domain.KindLowerBound, "0"), kv(domain.KindUpperBound, "0")),
-		},
-		{
-			"account_asset both valid",
-			limit(domain.PolicyPnlBoundsKillSwitch, domain.ScopeAccountAsset, "acc-1", "AAPL",
-				kv(domain.KindLowerBound, "-500"), kv(domain.KindUpperBound, "1000")),
-		},
+		{"simple", "grp-1"},
+		{"max length ascii", strings.Repeat("x", 64)},
+		{"multibyte 64 code points", cyrillic64},
 	}
 	for _, tc := range ok {
 		t.Run("ok/"+tc.name, func(t *testing.T) {
 			t.Parallel()
-			if err := domain.ValidateLimit(tc.limit); err != nil {
+			if err := domain.ValidateGroupID(tc.id); err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 		})
 	}
 
 	bad := []struct {
-		name  string
-		limit domain.Limit
+		name string
+		id   string
 	}{
-		{
-			"neither bound",
-			limit(domain.PolicyPnlBoundsKillSwitch, domain.ScopeAsset, "", "AAPL"),
-		},
-		{
-			"lower > upper",
-			limit(domain.PolicyPnlBoundsKillSwitch, domain.ScopeAsset, "", "AAPL",
-				kv(domain.KindLowerBound, "100"), kv(domain.KindUpperBound, "50")),
-		},
-		{
-			"lower not decimal",
-			limit(domain.PolicyPnlBoundsKillSwitch, domain.ScopeAsset, "", "AAPL",
-				kv(domain.KindLowerBound, "abc")),
-		},
-		{
-			"scope broker not allowed",
-			limit(domain.PolicyPnlBoundsKillSwitch, domain.ScopeBroker, "", "",
-				kv(domain.KindLowerBound, "-100")),
-		},
-		{
-			"scope account not allowed",
-			limit(domain.PolicyPnlBoundsKillSwitch, domain.ScopeAccount, "acc-1", "",
-				kv(domain.KindLowerBound, "-100")),
-		},
-		{
-			"unknown kind",
-			limit(domain.PolicyPnlBoundsKillSwitch, domain.ScopeAsset, "", "AAPL",
-				kv(domain.KindLowerBound, "-100"), kv("extra", "x")),
-		},
+		{"empty", ""},
+		{"over 64 ascii", strings.Repeat("x", 65)},
+		{"multibyte 65 code points", cyrillic65},
+		{"leading space", " grp"},
+		{"trailing space", "grp "},
+		{"non-printable", "grp\x01"},
 	}
 	for _, tc := range bad {
 		t.Run("err/"+tc.name, func(t *testing.T) {
 			t.Parallel()
-			err := domain.ValidateLimit(tc.limit)
+			err := domain.ValidateGroupID(tc.id)
 			if err == nil {
 				t.Fatal("expected error, got nil")
 			}
@@ -434,13 +245,328 @@ func TestValidateLimit_PnlBounds(t *testing.T) {
 	}
 }
 
-// --- unknown policy ---
+// --- ExternalID codec ---
 
-func TestValidateLimit_UnknownPolicy(t *testing.T) {
+// TestExternalID_RoundTrip checks that every distinct 16-byte value encodes to
+// the 22-char wire form and decodes back to the same bytes, and that the encoded
+// form has the fixed width.
+func TestExternalID_RoundTrip(t *testing.T) {
 	t.Parallel()
-	err := domain.ValidateLimit(limit("bogus_policy", domain.ScopeBroker, "", ""))
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("expected ErrInvalid, got %v", err)
+
+	cases := [][]byte{
+		bytes.Repeat([]byte{0x00}, domain.ExternalIDByteLen),
+		bytes.Repeat([]byte{0xff}, domain.ExternalIDByteLen),
+		{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15},
+		{0xde, 0xad, 0xbe, 0xef, 0x00, 0x11, 0x22, 0x33,
+			0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb},
+	}
+	for _, raw := range cases {
+		id, err := domain.ExternalIDFromBytes(raw)
+		if err != nil {
+			t.Fatalf("ExternalIDFromBytes(%x): %v", raw, err)
+		}
+		s := id.String()
+		if len(s) != domain.ExternalIDStringLen {
+			t.Fatalf("encoded %q has len %d, want %d", s, len(s), domain.ExternalIDStringLen)
+		}
+		back, err := domain.ParseExternalID(s)
+		if err != nil {
+			t.Fatalf("ParseExternalID(%q): %v", s, err)
+		}
+		if back != id {
+			t.Fatalf("round-trip mismatch: %x -> %q -> %x", raw, s, back.Bytes())
+		}
+		if !bytes.Equal(back.Bytes(), raw) {
+			t.Fatalf("Bytes() = %x, want %x", back.Bytes(), raw)
+		}
+	}
+}
+
+// TestExternalID_Zero checks the unset zero value reports IsZero and that the
+// zero value is rejected by the wire-form validator only via its encoding
+// (a zero value still encodes to a well-formed 22-char string).
+func TestExternalID_Zero(t *testing.T) {
+	t.Parallel()
+	var zero domain.ExternalID
+	if !zero.IsZero() {
+		t.Fatal("zero value must report IsZero")
+	}
+	nonzero, err := domain.ExternalIDFromBytes(
+		[]byte{1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})
+	if err != nil {
+		t.Fatalf("ExternalIDFromBytes: %v", err)
+	}
+	if nonzero.IsZero() {
+		t.Fatal("non-zero value must not report IsZero")
+	}
+}
+
+func TestExternalIDFromBytes_WrongLength(t *testing.T) {
+	t.Parallel()
+	for _, n := range []int{0, 1, 15, 17, 32} {
+		_, err := domain.ExternalIDFromBytes(make([]byte, n))
+		if !errors.Is(err, domain.ErrInvalid) {
+			t.Errorf("len %d: expected ErrInvalid, got %v", n, err)
+		}
+	}
+}
+
+func TestParseExternalID_Invalid(t *testing.T) {
+	t.Parallel()
+	bad := []struct {
+		name string
+		s    string
+	}{
+		{"empty", ""},
+		{"too short", "AAAA"},
+		{"too long", strings.Repeat("A", 23)},
+		{"padded", strings.Repeat("A", 21) + "="},
+		{"standard alphabet plus", strings.Repeat("A", 21) + "+"},
+		{"standard alphabet slash", strings.Repeat("A", 21) + "/"},
+		{"non-base64", strings.Repeat(" ", domain.ExternalIDStringLen)},
+	}
+	for _, tc := range bad {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := domain.ParseExternalID(tc.s); !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("ParseExternalID(%q): expected ErrInvalid, got %v", tc.s, err)
+			}
+			if err := domain.ValidateExternalID(tc.s); !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("ValidateExternalID(%q): expected ErrInvalid, got %v", tc.s, err)
+			}
+		})
+	}
+}
+
+// --- Engine id bounds ---
+
+func TestValidateEngineAccountID(t *testing.T) {
+	t.Parallel()
+	ok := []domain.EngineAccountID{
+		domain.EngineAccountID(domain.EngineAccountIDMin),
+		1,
+		1234567890,
+		domain.EngineAccountID(domain.EngineAccountIDMax),
+	}
+	for _, id := range ok {
+		if err := domain.ValidateEngineAccountID(id); err != nil {
+			t.Errorf("ValidateEngineAccountID(%d): unexpected error %v", id, err)
+		}
+	}
+	bad := []domain.EngineAccountID{
+		0,
+		domain.EngineAccountID(domain.EngineAccountIDMax) + 1,
+		domain.EngineAccountID(1 << 63),
+	}
+	for _, id := range bad {
+		if err := domain.ValidateEngineAccountID(id); !errors.Is(err, domain.ErrInvalid) {
+			t.Errorf("ValidateEngineAccountID(%d): expected ErrInvalid, got %v", id, err)
+		}
+	}
+}
+
+func TestValidateEngineGroupID(t *testing.T) {
+	t.Parallel()
+	ok := []domain.EngineGroupID{
+		domain.EngineGroupID(domain.EngineGroupIDMin),
+		1,
+		65535,
+		domain.EngineGroupID(domain.EngineGroupIDMax),
+	}
+	for _, id := range ok {
+		if err := domain.ValidateEngineGroupID(id); err != nil {
+			t.Errorf("ValidateEngineGroupID(%d): unexpected error %v", id, err)
+		}
+	}
+	if err := domain.ValidateEngineGroupID(0); !errors.Is(err, domain.ErrInvalid) {
+		t.Errorf("ValidateEngineGroupID(0): expected ErrInvalid, got %v", err)
+	}
+}
+
+// --- LimitRate ---
+
+func TestLimitRate_Validate(t *testing.T) {
+	t.Parallel()
+
+	ok := []struct {
+		name  string
+		limit domain.LimitRate
+	}{
+		{"broker", domain.LimitRate{
+			Scope: domain.ScopeBroker, MaxOrders: 100, Window: time.Second}},
+		{"asset", domain.LimitRate{
+			Scope: domain.ScopeAsset, Asset: "AAPL", MaxOrders: 1, Window: 24 * time.Hour}},
+		{"account", domain.LimitRate{
+			Scope: domain.ScopeAccount, Account: "acc-1",
+			MaxOrders: 1_000_000_000, Window: 500 * time.Millisecond}},
+		{"account_asset", domain.LimitRate{
+			Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "MSFT",
+			MaxOrders: 50, Window: time.Minute}},
+		// Officer enforces axis presence only; the asset/account format is parsed
+		// and rejected downstream by the engine barrier build, so an interior-space
+		// or over-length asset passes Officer's scope/axes check.
+		{"asset whitespace", domain.LimitRate{
+			Scope: domain.ScopeAsset, Asset: "B T C",
+			MaxOrders: 10, Window: time.Second}},
+		{"asset over 32", domain.LimitRate{
+			Scope: domain.ScopeAsset, Asset: strings.Repeat("X", 33),
+			MaxOrders: 10, Window: time.Second}},
+	}
+	for _, tc := range ok {
+		t.Run("ok/"+tc.name, func(t *testing.T) {
+			t.Parallel()
+			if err := tc.limit.Validate(); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+
+	bad := []struct {
+		name  string
+		limit domain.LimitRate
+	}{
+		{"max_orders zero", domain.LimitRate{
+			Scope: domain.ScopeBroker, MaxOrders: 0, Window: time.Second}},
+		{"max_orders over 1e9", domain.LimitRate{
+			Scope: domain.ScopeBroker, MaxOrders: 1_000_000_001, Window: time.Second}},
+		{"window zero", domain.LimitRate{
+			Scope: domain.ScopeBroker, MaxOrders: 10, Window: 0}},
+		{"window negative", domain.LimitRate{
+			Scope: domain.ScopeBroker, MaxOrders: 10, Window: -time.Second}},
+		{"window over 24h", domain.LimitRate{
+			Scope: domain.ScopeBroker, MaxOrders: 10, Window: 25 * time.Hour}},
+		{"scope account_asset missing asset", domain.LimitRate{
+			Scope: domain.ScopeAccountAsset, Account: "acc-1",
+			MaxOrders: 10, Window: time.Second}},
+		{"scope broker with account", domain.LimitRate{
+			Scope: domain.ScopeBroker, Account: "acc-1",
+			MaxOrders: 10, Window: time.Second}},
+		{"scope asset missing asset", domain.LimitRate{
+			Scope: domain.ScopeAsset, MaxOrders: 10, Window: time.Second}},
+		{"account missing for account scope", domain.LimitRate{
+			Scope: domain.ScopeAccount, MaxOrders: 10, Window: time.Second}},
+	}
+	for _, tc := range bad {
+		t.Run("err/"+tc.name, func(t *testing.T) {
+			t.Parallel()
+			if err := tc.limit.Validate(); !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("expected ErrInvalid, got %v", err)
+			}
+		})
+	}
+}
+
+// --- LimitOrderSize ---
+
+func TestLimitOrderSize_Validate(t *testing.T) {
+	t.Parallel()
+
+	ok := []struct {
+		name  string
+		limit domain.LimitOrderSize
+	}{
+		{"broker max_quantity only", domain.LimitOrderSize{
+			Scope: domain.ScopeBroker, MaxQuantity: "100"}},
+		{"broker max_notional only", domain.LimitOrderSize{
+			Scope: domain.ScopeBroker, MaxNotional: "50000.5"}},
+		{"account_asset both", domain.LimitOrderSize{
+			Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL",
+			MaxQuantity: "1", MaxNotional: "999"}},
+		{"asset", domain.LimitOrderSize{
+			Scope: domain.ScopeAsset, Asset: "MSFT", MaxQuantity: "0.5"}},
+	}
+	for _, tc := range ok {
+		t.Run("ok/"+tc.name, func(t *testing.T) {
+			t.Parallel()
+			if err := tc.limit.Validate(); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+
+	bad := []struct {
+		name  string
+		limit domain.LimitOrderSize
+	}{
+		{"neither kind", domain.LimitOrderSize{Scope: domain.ScopeBroker}},
+		{"max_quantity zero", domain.LimitOrderSize{
+			Scope: domain.ScopeBroker, MaxQuantity: "0"}},
+		{"max_notional negative", domain.LimitOrderSize{
+			Scope: domain.ScopeBroker, MaxNotional: "-1"}},
+		{"scope account not allowed", domain.LimitOrderSize{
+			Scope: domain.ScopeAccount, Account: "acc-1", MaxQuantity: "1"}},
+	}
+	for _, tc := range bad {
+		t.Run("err/"+tc.name, func(t *testing.T) {
+			t.Parallel()
+			if err := tc.limit.Validate(); !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("expected ErrInvalid, got %v", err)
+			}
+		})
+	}
+}
+
+// --- LimitPnlBounds ---
+
+func TestLimitPnlBounds_Validate(t *testing.T) {
+	t.Parallel()
+
+	ok := []struct {
+		name  string
+		limit domain.LimitPnlBounds
+	}{
+		{"asset lower only", domain.LimitPnlBounds{
+			Scope: domain.ScopeAsset, Asset: "AAPL", LowerBound: "-1000"}},
+		{"asset upper only", domain.LimitPnlBounds{
+			Scope: domain.ScopeAsset, Asset: "AAPL", UpperBound: "5000"}},
+		{"account_asset both equal", domain.LimitPnlBounds{
+			Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "MSFT",
+			LowerBound: "0", UpperBound: "0"}},
+		{"account_asset both valid", domain.LimitPnlBounds{
+			Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL",
+			LowerBound: "-500", UpperBound: "1000"}},
+		{"account_asset initial_pnl", domain.LimitPnlBounds{
+			Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL",
+			LowerBound: "-500", InitialPnl: "10"}},
+	}
+	for _, tc := range ok {
+		t.Run("ok/"+tc.name, func(t *testing.T) {
+			t.Parallel()
+			if err := tc.limit.Validate(); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+
+	bad := []struct {
+		name  string
+		limit domain.LimitPnlBounds
+	}{
+		{"neither bound", domain.LimitPnlBounds{
+			Scope: domain.ScopeAsset, Asset: "AAPL"}},
+		{"lower > upper", domain.LimitPnlBounds{
+			Scope: domain.ScopeAsset, Asset: "AAPL",
+			LowerBound: "100", UpperBound: "50"}},
+		{"lower not decimal", domain.LimitPnlBounds{
+			Scope: domain.ScopeAsset, Asset: "AAPL", LowerBound: "abc"}},
+		{"scope broker not allowed", domain.LimitPnlBounds{
+			Scope: domain.ScopeBroker, LowerBound: "-100"}},
+		{"scope account not allowed", domain.LimitPnlBounds{
+			Scope: domain.ScopeAccount, Account: "acc-1", LowerBound: "-100"}},
+		{"initial_pnl on asset scope", domain.LimitPnlBounds{
+			Scope: domain.ScopeAsset, Asset: "AAPL",
+			LowerBound: "-100", InitialPnl: "10"}},
+		{"initial_pnl not decimal", domain.LimitPnlBounds{
+			Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL",
+			LowerBound: "-100", InitialPnl: "abc"}},
+	}
+	for _, tc := range bad {
+		t.Run("err/"+tc.name, func(t *testing.T) {
+			t.Parallel()
+			if err := tc.limit.Validate(); !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("expected ErrInvalid, got %v", err)
+			}
+		})
 	}
 }
 
@@ -515,5 +641,34 @@ func TestAllAuditActionsCoversEveryConstant(t *testing.T) {
 		if _, ok := inSlice[literal]; !ok {
 			t.Errorf("audit action %q is declared but missing from AllAuditActions()", literal)
 		}
+	}
+}
+
+// --- ValidateMarketDataMark ---
+
+func TestValidateMarketDataMark(t *testing.T) {
+	t.Parallel()
+
+	// The mark maps to the engine Quote mark, a signed Option<Price>, so sign and
+	// zero are accepted; only decimal syntax is enforced here. An empty string
+	// means "no manual price".
+	ok := []string{"", "0", "-1.5", "-0", "42", "0.0001", "100.25"}
+	for _, mark := range ok {
+		t.Run("ok/"+mark, func(t *testing.T) {
+			t.Parallel()
+			if err := domain.ValidateMarketDataMark(mark); err != nil {
+				t.Fatalf("mark %q: unexpected error: %v", mark, err)
+			}
+		})
+	}
+
+	bad := []string{"abc", "NaN", "Inf", "1.2.3", "--1"}
+	for _, mark := range bad {
+		t.Run("err/"+mark, func(t *testing.T) {
+			t.Parallel()
+			if err := domain.ValidateMarketDataMark(mark); !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("mark %q: expected ErrInvalid, got %v", mark, err)
+			}
+		})
 	}
 }

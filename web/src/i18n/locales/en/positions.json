@@ -3,7 +3,21 @@
   "actions": {
     "adjust": "Adjustment",
     "adjustAriaLabel": "Adjust {{account}} {{asset}}",
-    "refreshHistoryAriaLabel": "Refresh history"
+    "refreshHistoryAriaLabel": "Refresh history",
+    "importCsv": "Import positions CSV",
+    "exportCsv": "Export positions CSV",
+    "exportHistoryCsv": "Export history CSV",
+    "historyExporting": "Exporting"
+  },
+  "pagination": {
+    "pageSize": {
+      "ariaLabel": "Page size",
+      "rowCount": "{{count}} rows per page"
+    }
+  },
+  "tabs": {
+    "positions": "Positions",
+    "history": "History"
   },
   "filters": {
     "byAccount": "Filter by account",
@@ -95,7 +109,7 @@
       "accepted": "accepted"
     },
     "clone": {
-      "ariaLabel": "Clone adjustment #{{id}}"
+      "ariaLabel": "Clone adjustment {{id}}"
     }
   },
   "dialog": {

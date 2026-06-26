@@ -21,8 +21,21 @@ import { I18nextProvider } from "react-i18next";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createAdjustment } from "@/api/client";
-import type { Account, Adjustment, Balance } from "@/api/types";
+import {
+  createAdjustment,
+  exportBusinessCsv,
+  fetchAdjustments,
+  importBusinessCsv,
+  previewBusinessCsvImport,
+} from "@/api/client";
+import type {
+  Account,
+  Adjustment,
+  Balance,
+  BusinessCsvEntity,
+  BusinessCsvExportFilters,
+  BusinessCsvImportEntity,
+} from "@/api/types";
 import type { PollingResult } from "@/api/usePolling";
 import { useAccounts } from "@/api/useAccounts";
 import { useAdjustments } from "@/api/useAdjustments";
@@ -42,12 +55,74 @@ vi.mock("@/api/useMarketData", () => ({
     reload: () => {},
   }),
 }));
+vi.mock("@/components/TableControls", async () => {
+  const actual =
+    await vi.importActual<typeof import("@/components/TableControls")>(
+      "@/components/TableControls",
+    );
+  const dialogs =
+    await vi.importActual<typeof import("@/components/BusinessCsvDialogs")>(
+      "@/components/BusinessCsvDialogs",
+    );
+  return {
+    ...actual,
+    CsvTransferMenu: ({
+      exports,
+      imports,
+      onImported,
+    }: {
+      exports?: {
+        entity: BusinessCsvEntity;
+        filters?: BusinessCsvExportFilters;
+        label: string;
+      }[];
+      imports?: {
+        defaultEntity?: BusinessCsvImportEntity;
+        entities: BusinessCsvImportEntity[];
+        label: string;
+      }[];
+      onImported?: () => void;
+    }) => (
+      <>
+        {imports?.map((item) => (
+          <dialogs.BusinessCsvImportDialog
+            key={`import-${item.label}`}
+            defaultEntity={item.defaultEntity}
+            entities={item.entities}
+            onImported={onImported ?? (() => {})}
+            trigger={(open) => (
+              <button type="button" onClick={open}>
+                {item.label}
+              </button>
+            )}
+          />
+        ))}
+        {exports?.map((item) => (
+          <dialogs.BusinessCsvExportDialog
+            key={`export-${item.entity}-${item.label}`}
+            entity={item.entity}
+            filters={item.filters}
+            trigger={(open) => (
+              <button type="button" onClick={open}>
+                {item.label}
+              </button>
+            )}
+          />
+        ))}
+      </>
+    ),
+  };
+});
 vi.mock("@/api/client", async () => {
   const actual =
     await vi.importActual<typeof import("@/api/client")>("@/api/client");
   return {
     ...actual,
     createAdjustment: vi.fn(),
+    exportBusinessCsv: vi.fn(),
+    fetchAdjustments: vi.fn(),
+    importBusinessCsv: vi.fn(),
+    previewBusinessCsvImport: vi.fn(),
   };
 });
 
@@ -59,9 +134,22 @@ const useAccountsMock = vi.mocked(useAccounts);
 const useAdjustmentsMock = vi.mocked(useAdjustments);
 const useBalancesMock = vi.mocked(useBalances);
 const createAdjustmentMock = vi.mocked(createAdjustment);
+const exportBusinessCsvMock = vi.mocked(exportBusinessCsv);
+const fetchAdjustmentsMock = vi.mocked(fetchAdjustments);
+const importBusinessCsvMock = vi.mocked(importBusinessCsv);
+const previewBusinessCsvImportMock = vi.mocked(previewBusinessCsvImport);
+
+const proto = window.HTMLElement.prototype as HTMLElement & {
+  hasPointerCapture?: (pointerId: number) => boolean;
+  setPointerCapture?: (pointerId: number) => void;
+};
+proto.hasPointerCapture = () => false;
+proto.setPointerCapture = () => {};
+proto.scrollIntoView = () => {};
 
 const account: Account = {
-  id: "Bucks McMoneyface",
+  code: "Bucks McMoneyface",
+  title: "Bucks McMoneyface",
   blocked: false,
   blockReason: "",
   group: "",
@@ -81,7 +169,7 @@ const balance: Balance = {
 
 function acceptedAdjustment(request: Adjustment["request"]): Adjustment {
   return {
-    id: 10,
+    externalId: "adj-alpha-10",
     account: "Bucks McMoneyface",
     at: "2026-06-24T16:42:00Z",
     source: "panel",
@@ -127,6 +215,42 @@ beforeEach(async () => {
   createAdjustmentMock.mockImplementation(async (_account, body) =>
     acceptedAdjustment(body as unknown as Adjustment["request"]),
   );
+  exportBusinessCsvMock.mockResolvedValue({
+    blob: new Blob(["csv"]),
+    filename: "positions.csv",
+  });
+  fetchAdjustmentsMock.mockResolvedValue([]);
+  previewBusinessCsvImportMock.mockResolvedValue({
+    file: { name: "positions.csv", type: "csv" },
+    counts: {
+      rows: 1,
+      applied: 0,
+      skipped: 0,
+      conflicts: 0,
+      stopped: false,
+    },
+    conflicts: [],
+  });
+  importBusinessCsvMock.mockResolvedValue({
+    file: { name: "positions.csv", type: "csv" },
+    counts: {
+      rows: 1,
+      applied: 1,
+      skipped: 0,
+      conflicts: 0,
+      stopped: false,
+    },
+    conflicts: [],
+  });
+  Object.defineProperty(URL, "createObjectURL", {
+    configurable: true,
+    value: vi.fn(() => "blob:positions-csv"),
+  });
+  Object.defineProperty(URL, "revokeObjectURL", {
+    configurable: true,
+    value: vi.fn(),
+  });
+  HTMLAnchorElement.prototype.click = () => {};
 });
 
 describe("Positions adjustment panel", () => {
@@ -189,5 +313,97 @@ describe("Positions adjustment panel", () => {
 
     expect(screen.getByLabelText("Account")).toHaveValue("Bucks McMoneyface");
     expect(screen.getByLabelText("Asset")).toHaveValue("AAPL");
+  });
+});
+
+describe("Positions business CSV", () => {
+  it("exports positions with account and asset filters only", async () => {
+    const user = userEvent.setup();
+    renderPositions();
+
+    await user.type(screen.getByLabelText("Filter by account"), "desk-alpha");
+    await user.type(screen.getByLabelText("Filter by asset"), "AAPL");
+    await user.click(screen.getByRole("button", { name: /export positions csv/i }));
+    await user.click(screen.getByRole("button", { name: /^export$/i }));
+
+    await waitFor(() => expect(exportBusinessCsvMock).toHaveBeenCalledTimes(1));
+    expect(exportBusinessCsvMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entity: "positions",
+        filters: {
+          account: "desk-alpha",
+          asset: "AAPL",
+        },
+      }),
+    );
+  });
+
+  it("exports adjustment history with the selected source filter", async () => {
+    const user = userEvent.setup();
+    useAdjustmentsMock.mockReturnValue(
+      ready<Adjustment[]>([
+        acceptedAdjustment({
+          asset: "AAPL",
+          balance: { mode: "absolute", value: "10" },
+        }),
+      ]),
+    );
+    renderPositions();
+
+    await user.click(screen.getByRole("button", { name: "History" }));
+    const sourceControl = screen.getAllByText("Source")[0]!.parentElement!;
+    await user.click(within(sourceControl).getByRole("combobox"));
+    await user.click(screen.getByRole("option", { name: "mcp" }));
+    await user.click(screen.getByRole("button", { name: /export history csv/i }));
+
+    await waitFor(() => expect(fetchAdjustmentsMock).toHaveBeenCalledTimes(1));
+    expect(fetchAdjustmentsMock).toHaveBeenCalledWith({
+      source: "mcp",
+      limit: 1000,
+    });
+  });
+
+  it("imports positions and reloads balances plus history after success", async () => {
+    const user = userEvent.setup();
+    const balancesReload = vi.fn();
+    const adjustmentsReload = vi.fn();
+    useBalancesMock.mockReturnValue({
+      load: { state: "ready", data: [balance], error: null },
+      reload: balancesReload,
+    });
+    useAdjustmentsMock.mockReturnValue({
+      load: { state: "ready", data: [], error: null },
+      reload: adjustmentsReload,
+    });
+    renderPositions();
+
+    await user.click(
+      screen.getByRole("button", { name: /import positions csv/i }),
+    );
+    await user.type(
+      screen.getByPlaceholderText(/paste csv rows here/i),
+      "account_id,asset,available\nBucks McMoneyface,AAPL,10\n",
+    );
+    await user.click(screen.getByRole("button", { name: /preview upload/i }));
+    await waitFor(() =>
+      expect(previewBusinessCsvImportMock).toHaveBeenCalledTimes(1),
+    );
+    expect(previewBusinessCsvImportMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entity: "positions",
+        filename: "pasted.csv",
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: /apply import/i }));
+    await waitFor(() => expect(importBusinessCsvMock).toHaveBeenCalledTimes(1));
+    expect(importBusinessCsvMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entity: "positions",
+        conflictPolicy: "skip",
+      }),
+    );
+    expect(balancesReload).toHaveBeenCalledTimes(1);
+    expect(adjustmentsReload).toHaveBeenCalledTimes(1);
   });
 });

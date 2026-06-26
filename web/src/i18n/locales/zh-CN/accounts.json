@@ -3,6 +3,16 @@
     "title": "账户",
     "description": "在控制平面中持久化并应用于引擎的操作员账户。封锁账户或分组可通过熔断开关停止订单。"
   },
+  "tabs": {
+    "accounts": "账户",
+    "groups": "账户组"
+  },
+  "pagination": {
+    "pageSize": {
+      "ariaLabel": "分页大小",
+      "rowCount": "每页 {{count}} 行"
+    }
+  },
   "groups": {
     "heading": "分组",
     "clearFilter": "（清除筛选）",
@@ -58,7 +68,8 @@
       "notes": "备注",
       "editNotesTitle": "编辑参考备注",
       "block": "封锁",
-      "unblock": "解封"
+      "unblock": "解封",
+      "deleteTitle": "删除账户"
     },
     "empty": {
       "title": "暂无账户",
@@ -70,34 +81,41 @@
     "trigger": "新建账户",
     "title": "创建账户",
     "description": "在控制平面创建账户，并可选择将其分配到分组。",
-    "idLabel": "账户 ID",
-    "idHint": "最多 64 个可打印字符，首尾不得有空格。",
+    "codeLabel": "账户代码",
+    "codeHint": "最多 64 个可打印字符，首尾不得有空格。",
     "groupLabel": "分组（可选）",
-    "groupHint": "选择已有分组或输入新 ID。留空则创建未分组账户。",
+    "groupHint": "选择已有分组或输入新代码。留空则创建未分组账户。",
     "cancel": "取消",
     "submit": "创建"
   },
   "createGroup": {
     "trigger": "新建分组",
     "title": "创建分组",
-    "idLabel": "分组 ID",
+    "codeLabel": "分组代码",
+    "titleLabel": "显示名称",
+    "titlePlaceholder": "美国股票交易组",
     "notesLabel": "备注（可选）",
     "notesPlaceholder": "归属于美国股票交易台的账户。",
     "notesHint": "参考备注 — 仅存储于控制平面，不发送至引擎。",
     "cancel": "取消",
     "submit": "创建"
   },
+  "businessCsv": {
+    "importCsv": "导入 CSV",
+    "exportGroupsCsv": "导出账户组 CSV",
+    "exportAccountsCsv": "导出账户 CSV"
+  },
   "loadAccounts": {
     "trigger": "导入账户",
     "title": "从 CSV 导入账户",
     "formatHeading": "CSV 格式",
     "formatLine1": "每行一个账户：",
-    "formatCode1": "account_id[,group[,notes]]",
+    "formatCode1": "code[,title[,group_code[,notes]]]",
     "formatLine2prefix": "为必填项；",
     "formatLine2middle": "和",
     "formatLine2suffix": "为可选项。",
     "formatLine3prefix": "允许包含表头行（",
-    "formatLine3code": "account_id,group,notes",
+    "formatLine3code": "code,title,group_code,notes",
     "formatLine3suffix": "），将自动跳过。",
     "examplesHeading": "示例",
     "chooseFile": "选择文件…",
@@ -150,6 +168,27 @@
     "descriptionSuffix": "将被永久删除。当前分配至该分组的账户，其分组分配将被清除。",
     "cancel": "取消",
     "submit": "删除"
+  },
+  "deleteAccount": {
+    "title": "删除账户？",
+    "descriptionPrefix": "账户",
+    "descriptionSuffix": "将被永久删除。仅在明确强制确认后才会删除关联交易记录。",
+    "dependentsTitle": "关联行阻止删除",
+    "dependentKinds": {
+      "balances": "余额",
+      "orders": "订单",
+      "order_events": "订单事件",
+      "trades": "成交",
+      "order_approvals": "订单审批",
+      "adjustments": "调整",
+      "limit_rate": "频率限制",
+      "limit_order_size": "订单规模限制",
+      "limit_pnl_bounds": "盈亏边界限制",
+      "reservation_intents": "预留意向"
+    },
+    "cancel": "取消",
+    "submit": "删除",
+    "forceSubmit": "强制删除"
   },
   "editGroupNotes": {
     "titlePrefix": "备注 — 分组",

@@ -25,6 +25,7 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.openpit.dev/officer/internal/domain"
+	"go.openpit.dev/officer/internal/node"
 )
 
 // callSetMarketDataInstrument invokes the set_market_data_instrument handler
@@ -45,7 +46,7 @@ func callSetMarketDataInstrument(
 // -- set_market_data_instrument: required-field validation --
 
 // TestSetMarketDataInstrumentRequiredFields covers the two required-field
-// validation branches: a missing instanceId and a missing externalSymbol each
+// validation branches: a missing instanceExternalId and a missing externalSymbol each
 // yield the matching tool error, and neither reaches the source mutation. The
 // command is enabled (default fakeSource) so the gate passes and validation
 // runs.
@@ -57,16 +58,16 @@ func TestSetMarketDataInstrumentRequiredFields(t *testing.T) {
 		wantMsg string
 	}{
 		{
-			name: "missing instanceId",
+			name: "missing instanceExternalId",
 			in: setMarketDataInstrumentInput{
-				InstanceID: "  ", ExternalSymbol: "AAPL", Enabled: true,
+				InstanceExternalID: "  ", ExternalSymbol: "AAPL", Enabled: true,
 			},
-			wantMsg: "instanceId is required",
+			wantMsg: "instanceExternalId is required",
 		},
 		{
 			name: "missing externalSymbol",
 			in: setMarketDataInstrumentInput{
-				InstanceID: "mock-1", ExternalSymbol: "  ", Enabled: true,
+				InstanceExternalID: "mock-1", ExternalSymbol: "  ", Enabled: true,
 			},
 			wantMsg: "externalSymbol is required",
 		},
@@ -102,14 +103,20 @@ func (s *setMDErrSource) Status(context.Context) (Status, error) {
 
 func (s *setMDErrSource) GetAccountState(
 	context.Context, domain.AccountID,
-) (domain.Account, []domain.Limit, error) {
-	return domain.Account{}, nil, nil
+) (domain.Account, node.AccountLimits, error) {
+	return domain.Account{}, node.AccountLimits{}, nil
 }
 
 func (s *setMDErrSource) ListLimits(
 	context.Context, domain.AccountID,
-) ([]domain.Limit, error) {
-	return nil, nil
+) (node.AccountLimits, error) {
+	return node.AccountLimits{}, nil
+}
+
+func (s *setMDErrSource) GetOrder(
+	context.Context, string,
+) (domain.OrderDetail, error) {
+	return domain.OrderDetail{}, nil
 }
 
 func (s *setMDErrSource) ListAudit(
@@ -147,13 +154,13 @@ func (s *setMDErrSource) SubmitOrderToken(
 }
 
 func (s *setMDErrSource) ConfirmExecution(
-	context.Context, int64, string, bool,
+	context.Context, string, string, bool,
 ) (domain.Order, error) {
 	return domain.Order{}, nil
 }
 
 func (s *setMDErrSource) CancelOrder(
-	context.Context, int64, string, string, bool,
+	context.Context, string, string, string, bool,
 ) (domain.Order, error) {
 	return domain.Order{}, nil
 }
@@ -166,7 +173,7 @@ func TestSetMarketDataInstrumentSourceFailure(t *testing.T) {
 	t.Parallel()
 	src := &setMDErrSource{setMDErr: errors.New("store write rejected")}
 	res := callSetMarketDataInstrument(t, src, setMarketDataInstrumentInput{
-		InstanceID: "mock-1", ExternalSymbol: "AAPL", Enabled: true,
+		InstanceExternalID: "mock-1", ExternalSymbol: "AAPL", Enabled: true,
 	})
 	requireToolError(t, res.IsError)
 	if got := textContent(res.Content); got != "set market-data instrument failed" {

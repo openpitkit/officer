@@ -37,6 +37,10 @@ import { Autocomplete } from "@/components/Autocomplete";
 import { EmptyState, ErrorBanner, ErrorState, TableSkeleton } from "@/components/PageStates";
 import { Page } from "@/components/Page";
 import { RefreshButton } from "@/components/RefreshButton";
+import {
+  PageSizeSelect,
+  TablePagination,
+} from "@/components/TableControls";
 import { ValueChips } from "@/components/ValueChips";
 import {
   AlertDialog,
@@ -67,6 +71,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  hasNextPage,
+  knownPageCount,
+  slicePage,
+} from "@/lib/tablePagination";
+import { usePersistentPageSize } from "@/lib/tablePageSize";
 import { LimitDialog } from "@/pages/LimitDialog";
 
 const ALL = "__all__";
@@ -270,6 +280,10 @@ export function Limits() {
 
   const [accountFilter, setAccountFilter] = useState(initialAccount);
   const [policyFilter, setPolicyFilter] = useState<Policy | typeof ALL>(ALL);
+  const [page, setPage] = useState(0);
+  const [size, setSize] = usePersistentPageSize(
+    "pit-officer-policies-page-size",
+  );
 
   // Defer the account filter so server-side polling does not refire on every
   // keystroke; the input stays responsive while the fetch debounces.
@@ -282,7 +296,7 @@ export function Limits() {
     if (accountsLoad.load.state !== "ready") {
       return [];
     }
-    return accountsLoad.load.data.map((a) => a.id);
+    return accountsLoad.load.data.map((a) => a.code);
   }, [accountsLoad.load]);
 
   // Asset suggestions: union of assets from limits and balances.
@@ -320,6 +334,25 @@ export function Limits() {
     return load.data.filter((l) => l.policy === policyFilter);
   }, [load, policyFilter]);
 
+  const lastPage = Math.max(0, Math.ceil(visible.length / size) - 1);
+  const safePage = Math.min(page, lastPage);
+  const pagedVisible = slicePage(visible, safePage, size);
+  const hasMorePolicies = hasNextPage(visible, safePage, size);
+  const totalPolicyPages = knownPageCount(visible.length, size);
+  const shownFrom = visible.length === 0 ? 0 : safePage * size + 1;
+  const shownTo = Math.min((safePage + 1) * size, visible.length);
+  const pager = (
+    <TablePagination
+      page={safePage}
+      canPrevious={safePage > 0}
+      canNext={hasMorePolicies}
+      knownTotalPages={totalPolicyPages}
+      onPrevious={() => setPage((p) => Math.max(0, Math.min(p, lastPage) - 1))}
+      onNext={() => setPage((p) => Math.min(p, lastPage) + 1)}
+      onPage={setPage}
+    />
+  );
+
   const policyCounts = useMemo<Partial<Record<Policy, number>>>(() => {
     const counts: Partial<Record<Policy, number>> = {};
     if (load.state !== "ready") {
@@ -351,6 +384,17 @@ export function Limits() {
       title={t("title")}
       actions={
         <>
+          <PageSizeSelect
+            value={size}
+            onChange={(value) => {
+              setSize(value);
+              setPage(0);
+            }}
+            ariaLabel={t("pagination.pageSize.ariaLabel")}
+            rowCountLabel={(count) =>
+              t("pagination.pageSize.rowCount", { count })
+            }
+          />
           <RefreshButton onClick={reload} busy={load.state === "loading"} />
           <Button size="sm" onClick={openAdd}>
             <Plus className="h-3.5 w-3.5" />
@@ -371,14 +415,20 @@ export function Limits() {
             placeholder={t("filter.accountPlaceholder")}
             className="h-8 w-48 text-xs"
             suggestions={accountSuggestions}
-            onChange={setAccountFilter}
+            onChange={(value) => {
+              setAccountFilter(value);
+              setPage(0);
+            }}
           />
         </div>
         <div className="space-y-1.5">
           <Label>{t("filter.policy")}</Label>
           <Select
             value={policyFilter}
-            onValueChange={(v) => setPolicyFilter(v as Policy | typeof ALL)}
+            onValueChange={(v) => {
+              setPolicyFilter(v as Policy | typeof ALL);
+              setPage(0);
+            }}
           >
             <SelectTrigger className="h-8 w-52 text-xs">
               <SelectValue />
@@ -424,11 +474,24 @@ export function Limits() {
             }
           />
         ) : (
-          <PoliciesTable
-            limits={visible}
-            onEdit={openEdit}
-            onDelete={setDeleteTarget}
-          />
+          <>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs text-muted-lt">
+                {t("pagination.summary", {
+                  from: shownFrom,
+                  to: shownTo,
+                  total: visible.length,
+                })}
+              </span>
+              {pager}
+            </div>
+            <PoliciesTable
+              limits={pagedVisible}
+              onEdit={openEdit}
+              onDelete={setDeleteTarget}
+            />
+            {pager}
+          </>
         ))}
 
       <LimitDialog

@@ -15,1851 +15,441 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-package store_test
+// Skeleton tests for the rebuilt SQLite store: schema migration and foreign-key
+// enforcement, single-realm ForRealm enforcement, the shared external-id and
+// engine-id helpers, and group-1 (assets, principals, account groups, accounts)
+// round-trips by code. The table groups still stubbed are not covered here.
+
+package store
 
 import (
 	"context"
 	"errors"
 	"path/filepath"
-	"reflect"
 	"testing"
-	"time"
 
 	"go.openpit.dev/officer/internal/domain"
-	"go.openpit.dev/officer/internal/store"
 )
 
-// openStore opens a fresh temp-file SQLite store and migrates it. The caller
-// does not need to call Close; it is registered with t.Cleanup.
-func openStore(t *testing.T) store.Store {
+// newTestStore opens a fresh migrated SQLite store in a temp file and returns it
+// with its default realm handle.
+func newTestStore(t *testing.T) (Store, RealmStore) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "test.db")
-	s, err := store.NewSQLiteStore(path)
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "officer.db")
+	s, err := NewSQLiteStore(path)
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
-	}
-	ctx := context.Background()
-	if err := s.Migrate(ctx); err != nil {
-		t.Fatalf("Migrate: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	return s
-}
-
-// --- Migration ---
-
-func TestMigration_Chain(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-
-	v, err := s.SchemaVersion(ctx)
-	if err != nil {
-		t.Fatalf("SchemaVersion: %v", err)
-	}
-	if v != 1 {
-		t.Fatalf("want schema version 1, got %d", v)
-	}
-}
-
-func TestMigration_Idempotent(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-
-	// Run Migrate a second time; should be a no-op.
-	if err := s.Migrate(ctx); err != nil {
-		t.Fatalf("second Migrate: %v", err)
-	}
-	v, err := s.SchemaVersion(ctx)
-	if err != nil {
-		t.Fatalf("SchemaVersion: %v", err)
-	}
-	if v != 1 {
-		t.Fatalf("want schema version 1, got %d", v)
-	}
-}
-
-func TestReset_RecreatesDatabase(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-	if err := s.CreateAccount(ctx, domain.Account{
-		Tenant: domain.DefaultTenant,
-		ID:     "acc-reset",
-	}); err != nil {
-		t.Fatalf("CreateAccount: %v", err)
-	}
-	if err := s.AppendAudit(ctx, store.AuditEntry{
-		Actor:  "operator",
-		Action: domain.AuditActionCreateAccount,
-		Source: domain.SourcePanel,
-		Detail: "seed account",
-	}); err != nil {
-		t.Fatalf("AppendAudit: %v", err)
-	}
-
-	if err := s.Reset(ctx); err != nil {
-		t.Fatalf("Reset: %v", err)
-	}
-	v, err := s.SchemaVersion(ctx)
-	if err != nil {
-		t.Fatalf("SchemaVersion: %v", err)
-	}
-	if v != 1 {
-		t.Fatalf("want schema version 1, got %d", v)
-	}
-	accounts, err := s.ListAccounts(ctx)
-	if err != nil {
-		t.Fatalf("ListAccounts: %v", err)
-	}
-	if len(accounts) != 0 {
-		t.Fatalf("accounts after reset = %+v, want none", accounts)
-	}
-	audit, err := s.ListAudit(ctx, 10)
-	if err != nil {
-		t.Fatalf("ListAudit: %v", err)
-	}
-	if len(audit) != 0 {
-		t.Fatalf("audit after reset = %+v, want none", audit)
-	}
-}
-
-// --- Ping / Path ---
-
-func TestPingAndPath(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "ping.db")
-	s, err := store.NewSQLiteStore(path)
-	if err != nil {
-		t.Fatalf("NewSQLiteStore: %v", err)
-	}
-	defer func() { _ = s.Close() }()
-	ctx := context.Background()
 	if err := s.Migrate(ctx); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
-	if err := s.Ping(ctx); err != nil {
-		t.Fatalf("Ping: %v", err)
+	rs, err := s.ForRealm(ctx, domain.DefaultRealm)
+	if err != nil {
+		t.Fatalf("ForRealm(default): %v", err)
 	}
-	if s.Path() != path {
-		t.Fatalf("Path: want %q, got %q", path, s.Path())
-	}
+	return s, rs
 }
 
-// --- Account CRUD ---
-
-func TestAccount_Create_Get_List(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
+func TestMigrateAppliesSchemaAndForeignKeys(t *testing.T) {
 	ctx := context.Background()
+	s, rs := newTestStore(t)
 
-	acc := domain.Account{
-		Tenant:      domain.DefaultTenant,
-		ID:          "acc-1",
-		Blocked:     false,
-		BlockReason: "",
-	}
-	if err := s.CreateAccount(ctx, acc); err != nil {
-		t.Fatalf("CreateAccount: %v", err)
-	}
-
-	got, ok, err := s.GetAccount(ctx, domain.DefaultTenant, "acc-1")
+	version, err := s.SchemaVersion(ctx)
 	if err != nil {
-		t.Fatalf("GetAccount: %v", err)
+		t.Fatalf("SchemaVersion: %v", err)
 	}
+	if version != 1 {
+		t.Fatalf("schema version = %d, want 1", version)
+	}
+
+	// Foreign-key enforcement must be ON: inserting an account whose group link
+	// points at a non-existent group surrogate id must be rejected. We reach this
+	// through the public path by referencing an unknown group code, which the
+	// connector rejects as ErrInvalid before any insert; to prove the PRAGMA
+	// itself, run a raw insert with an impossible group_id and expect a failure.
+	sq, ok := s.(*sqliteStore)
 	if !ok {
-		t.Fatal("GetAccount: not found")
+		t.Fatalf("store is not *sqliteStore")
 	}
-	if got != acc {
-		t.Fatalf("GetAccount: want %+v, got %+v", acc, got)
-	}
-
-	list, err := s.ListAccounts(ctx)
-	if err != nil {
-		t.Fatalf("ListAccounts: %v", err)
-	}
-	if len(list) != 1 || list[0] != acc {
-		t.Fatalf("ListAccounts: unexpected %+v", list)
-	}
-}
-
-func TestAccount_GetNotFound(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-	_, ok, err := s.GetAccount(ctx, domain.DefaultTenant, "missing")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if ok {
-		t.Fatal("expected not found")
-	}
-}
-
-func TestAccount_Create_AlreadyExists(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-	acc := domain.Account{Tenant: domain.DefaultTenant, ID: "dup"}
-	if err := s.CreateAccount(ctx, acc); err != nil {
-		t.Fatalf("first CreateAccount: %v", err)
-	}
-	err := s.CreateAccount(ctx, acc)
-	if !errors.Is(err, domain.ErrAlreadyExists) {
-		t.Fatalf("expected ErrAlreadyExists, got %v", err)
-	}
-}
-
-func TestAccount_SetBlocked(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-	acc := domain.Account{Tenant: domain.DefaultTenant, ID: "acc-block"}
-	if err := s.CreateAccount(ctx, acc); err != nil {
-		t.Fatalf("CreateAccount: %v", err)
-	}
-
-	if err := s.SetAccountBlocked(ctx, domain.DefaultTenant, "acc-block", true, "manual"); err != nil {
-		t.Fatalf("SetAccountBlocked: %v", err)
-	}
-	got, _, err := s.GetAccount(ctx, domain.DefaultTenant, "acc-block")
-	if err != nil {
-		t.Fatalf("GetAccount: %v", err)
-	}
-	if !got.Blocked || got.BlockReason != "manual" {
-		t.Fatalf("want blocked=true reason=manual, got %+v", got)
-	}
-
-	if err := s.SetAccountBlocked(ctx, domain.DefaultTenant, "acc-block", false, ""); err != nil {
-		t.Fatalf("SetAccountBlocked unblock: %v", err)
-	}
-	got, _, err = s.GetAccount(ctx, domain.DefaultTenant, "acc-block")
-	if err != nil {
-		t.Fatalf("GetAccount after unblock: %v", err)
-	}
-	if got.Blocked || got.BlockReason != "" {
-		t.Fatalf("want unblocked, got %+v", got)
-	}
-}
-
-func TestAccount_SetBlocked_NotFound(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-	err := s.SetAccountBlocked(ctx, domain.DefaultTenant, "ghost", true, "x")
-	if !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("expected ErrNotFound, got %v", err)
-	}
-}
-
-func TestAccount_ListAccounts_BlockReason(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-	a1 := domain.Account{Tenant: domain.DefaultTenant, ID: "a1"}
-	a2 := domain.Account{Tenant: domain.DefaultTenant, ID: "a2"}
-	if err := s.CreateAccount(ctx, a1); err != nil {
-		t.Fatalf("CreateAccount a1: %v", err)
-	}
-	if err := s.CreateAccount(ctx, a2); err != nil {
-		t.Fatalf("CreateAccount a2: %v", err)
-	}
-	if err := s.SetAccountBlocked(ctx, domain.DefaultTenant, "a2", true, "risk"); err != nil {
-		t.Fatalf("SetAccountBlocked: %v", err)
-	}
-
-	list, err := s.ListAccounts(ctx)
-	if err != nil {
-		t.Fatalf("ListAccounts: %v", err)
-	}
-	if len(list) != 2 {
-		t.Fatalf("want 2 accounts, got %d", len(list))
-	}
-	// ordered by tenant,id
-	if list[0].ID != "a1" || list[0].Blocked {
-		t.Fatalf("unexpected a1: %+v", list[0])
-	}
-	if list[1].ID != "a2" || !list[1].Blocked || list[1].BlockReason != "risk" {
-		t.Fatalf("unexpected a2: %+v", list[1])
-	}
-}
-
-// --- Limits ---
-
-func makeLimit(policy, scope, account, asset string, vals ...domain.LimitValue) domain.Limit {
-	return domain.Limit{
-		Target: domain.LimitTarget{
-			Tenant:  domain.DefaultTenant,
-			Policy:  policy,
-			Scope:   scope,
-			Account: domain.AccountID(account),
-			Asset:   asset,
-		},
-		Values: vals,
-	}
-}
-
-func TestLimits_PutAndList(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-
-	lim := makeLimit(
-		domain.PolicyRateLimit, domain.ScopeBroker, "", "",
-		domain.LimitValue{Kind: domain.KindMaxOrders, Value: "100"},
-		domain.LimitValue{Kind: domain.KindWindow, Value: "1s"},
+	_, err = sq.db.ExecContext(
+		ctx,
+		`INSERT INTO accounts (engine_account_id, code, group_id) VALUES (1, 'x', 999999)`,
 	)
-	if err := s.PutLimit(ctx, lim); err != nil {
-		t.Fatalf("PutLimit: %v", err)
+	if err == nil {
+		t.Fatal("expected foreign-key violation inserting dangling group_id, got nil")
 	}
 
-	got, err := s.ListLimits(ctx, "")
+	// The store handle is usable: an empty dictionary lists as a non-nil empty
+	// slice.
+	assets, err := rs.ListAssets(ctx)
 	if err != nil {
-		t.Fatalf("ListLimits: %v", err)
+		t.Fatalf("ListAssets: %v", err)
 	}
-	if len(got) != 1 {
-		t.Fatalf("want 1 barrier, got %d", len(got))
+	if assets == nil {
+		t.Fatal("ListAssets returned nil, want non-nil empty slice")
 	}
-	if got[0].Target != lim.Target {
-		t.Fatalf("target mismatch: %+v", got[0].Target)
-	}
-	if len(got[0].Values) != 2 {
-		t.Fatalf("want 2 values, got %d", len(got[0].Values))
+	if len(assets) != 0 {
+		t.Fatalf("ListAssets len = %d, want 0", len(assets))
 	}
 }
 
-func TestLimits_Upsert_Replace(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
+func TestForRealmSingleRealmEnforcement(t *testing.T) {
 	ctx := context.Background()
+	s, _ := newTestStore(t)
 
-	lim := makeLimit(
-		domain.PolicyRateLimit, domain.ScopeBroker, "", "",
-		domain.LimitValue{Kind: domain.KindMaxOrders, Value: "100"},
-		domain.LimitValue{Kind: domain.KindWindow, Value: "1s"},
-	)
-	if err := s.PutLimit(ctx, lim); err != nil {
-		t.Fatalf("PutLimit initial: %v", err)
+	// The empty realm id defaults to the served realm.
+	if _, err := s.ForRealm(ctx, ""); err != nil {
+		t.Fatalf("ForRealm(empty) = %v, want nil", err)
 	}
 
-	// Replace with updated window; max_orders stays.
-	lim2 := makeLimit(
-		domain.PolicyRateLimit, domain.ScopeBroker, "", "",
-		domain.LimitValue{Kind: domain.KindMaxOrders, Value: "200"},
-		domain.LimitValue{Kind: domain.KindWindow, Value: "5s"},
-	)
-	if err := s.PutLimit(ctx, lim2); err != nil {
-		t.Fatalf("PutLimit replace: %v", err)
-	}
-
-	got, err := s.ListLimits(ctx, "")
-	if err != nil {
-		t.Fatalf("ListLimits: %v", err)
-	}
-	if len(got) != 1 {
-		t.Fatalf("want 1 barrier, got %d", len(got))
-	}
-	valMap := make(map[string]string)
-	for _, v := range got[0].Values {
-		valMap[v.Kind] = v.Value
-	}
-	if valMap[domain.KindMaxOrders] != "200" || valMap[domain.KindWindow] != "5s" {
-		t.Fatalf("unexpected values: %+v", valMap)
+	// A foreign realm id is rejected with ErrInvalid.
+	_, err := s.ForRealm(ctx, domain.RealmID("other"))
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("ForRealm(other) error = %v, want ErrInvalid", err)
 	}
 }
 
-func TestLimits_Upsert_RemovesOldKinds(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
+func TestForRealmNonDefaultBoundRealm(t *testing.T) {
 	ctx := context.Background()
-
-	lim := makeLimit(
-		domain.PolicyOrderSizeLimit, domain.ScopeBroker, "", "",
-		domain.LimitValue{Kind: domain.KindMaxQuantity, Value: "10"},
-		domain.LimitValue{Kind: domain.KindMaxNotional, Value: "500"},
-	)
-	if err := s.PutLimit(ctx, lim); err != nil {
-		t.Fatalf("PutLimit: %v", err)
-	}
-
-	// Replace keeping only max_quantity; max_notional should be gone.
-	lim2 := makeLimit(
-		domain.PolicyOrderSizeLimit, domain.ScopeBroker, "", "",
-		domain.LimitValue{Kind: domain.KindMaxQuantity, Value: "20"},
-	)
-	if err := s.PutLimit(ctx, lim2); err != nil {
-		t.Fatalf("PutLimit replace: %v", err)
-	}
-
-	got, err := s.ListLimits(ctx, "")
-	if err != nil {
-		t.Fatalf("ListLimits: %v", err)
-	}
-	if len(got) != 1 || len(got[0].Values) != 1 {
-		t.Fatalf("want 1 barrier with 1 value, got %+v", got)
-	}
-	if got[0].Values[0].Kind != domain.KindMaxQuantity {
-		t.Fatalf("unexpected kind: %v", got[0].Values[0].Kind)
-	}
-}
-
-func TestLimits_Delete(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-
-	lim := makeLimit(
-		domain.PolicyRateLimit, domain.ScopeBroker, "", "",
-		domain.LimitValue{Kind: domain.KindMaxOrders, Value: "5"},
-		domain.LimitValue{Kind: domain.KindWindow, Value: "1s"},
-	)
-	if err := s.PutLimit(ctx, lim); err != nil {
-		t.Fatalf("PutLimit: %v", err)
-	}
-	if err := s.DeleteLimit(ctx, lim.Target); err != nil {
-		t.Fatalf("DeleteLimit: %v", err)
-	}
-	got, err := s.ListLimits(ctx, "")
-	if err != nil {
-		t.Fatalf("ListLimits after delete: %v", err)
-	}
-	if len(got) != 0 {
-		t.Fatalf("want 0 barriers, got %d", len(got))
-	}
-}
-
-func TestLimits_Delete_NotFound(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-	err := s.DeleteLimit(ctx, domain.LimitTarget{
-		Tenant: domain.DefaultTenant,
-		Policy: domain.PolicyRateLimit,
-		Scope:  domain.ScopeBroker,
-	})
-	if !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("expected ErrNotFound, got %v", err)
-	}
-}
-
-func TestLimits_GroupingOrder(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-
-	// Insert three barriers in non-alphabetical order.
-	barriers := []domain.Limit{
-		makeLimit(domain.PolicyPnlBoundsKillSwitch, domain.ScopeAsset, "", "MSFT",
-			domain.LimitValue{Kind: domain.KindUpperBound, Value: "1000"}),
-		makeLimit(domain.PolicyRateLimit, domain.ScopeBroker, "", "",
-			domain.LimitValue{Kind: domain.KindMaxOrders, Value: "10"},
-			domain.LimitValue{Kind: domain.KindWindow, Value: "1s"}),
-		makeLimit(domain.PolicyOrderSizeLimit, domain.ScopeAsset, "", "AAPL",
-			domain.LimitValue{Kind: domain.KindMaxQuantity, Value: "5"}),
-	}
-	for _, b := range barriers {
-		if err := s.PutLimit(ctx, b); err != nil {
-			t.Fatalf("PutLimit: %v", err)
-		}
-	}
-
-	got, err := s.ListLimits(ctx, "")
-	if err != nil {
-		t.Fatalf("ListLimits: %v", err)
-	}
-	if len(got) != 3 {
-		t.Fatalf("want 3 barriers, got %d", len(got))
-	}
-	// Expected order: order_size_limit/asset/AAPL,
-	// pnl_bounds_kill_switch/asset/MSFT, rate_limit/broker
-	if got[0].Target.Policy != domain.PolicyOrderSizeLimit {
-		t.Errorf("pos 0: want order_size_limit, got %s", got[0].Target.Policy)
-	}
-	if got[1].Target.Policy != domain.PolicyPnlBoundsKillSwitch {
-		t.Errorf("pos 1: want pnl_bounds_kill_switch, got %s", got[1].Target.Policy)
-	}
-	if got[2].Target.Policy != domain.PolicyRateLimit {
-		t.Errorf("pos 2: want rate_limit, got %s", got[2].Target.Policy)
-	}
-}
-
-func TestLimits_ListByAccount(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-
-	broker := makeLimit(domain.PolicyRateLimit, domain.ScopeBroker, "", "",
-		domain.LimitValue{Kind: domain.KindMaxOrders, Value: "10"},
-		domain.LimitValue{Kind: domain.KindWindow, Value: "1s"})
-	acc1 := makeLimit(domain.PolicyRateLimit, domain.ScopeAccount, "acc-1", "",
-		domain.LimitValue{Kind: domain.KindMaxOrders, Value: "5"},
-		domain.LimitValue{Kind: domain.KindWindow, Value: "1s"})
-	acc2 := makeLimit(domain.PolicyRateLimit, domain.ScopeAccount, "acc-2", "",
-		domain.LimitValue{Kind: domain.KindMaxOrders, Value: "3"},
-		domain.LimitValue{Kind: domain.KindWindow, Value: "1s"})
-
-	for _, b := range []domain.Limit{broker, acc1, acc2} {
-		if err := s.PutLimit(ctx, b); err != nil {
-			t.Fatalf("PutLimit: %v", err)
-		}
-	}
-
-	got, err := s.ListLimits(ctx, "acc-1")
-	if err != nil {
-		t.Fatalf("ListLimits acc-1: %v", err)
-	}
-	if len(got) != 1 {
-		t.Fatalf("want 1 barrier for acc-1, got %d", len(got))
-	}
-	if got[0].Target.Account != "acc-1" {
-		t.Fatalf("unexpected account: %v", got[0].Target.Account)
-	}
-}
-
-func TestLimits_ListPolicy(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-
-	rl := makeLimit(domain.PolicyRateLimit, domain.ScopeBroker, "", "",
-		domain.LimitValue{Kind: domain.KindMaxOrders, Value: "10"},
-		domain.LimitValue{Kind: domain.KindWindow, Value: "1s"})
-	osl := makeLimit(domain.PolicyOrderSizeLimit, domain.ScopeAsset, "", "AAPL",
-		domain.LimitValue{Kind: domain.KindMaxQuantity, Value: "1"})
-
-	for _, b := range []domain.Limit{rl, osl} {
-		if err := s.PutLimit(ctx, b); err != nil {
-			t.Fatalf("PutLimit: %v", err)
-		}
-	}
-
-	got, err := s.ListPolicyLimits(ctx, domain.PolicyRateLimit)
-	if err != nil {
-		t.Fatalf("ListPolicyLimits: %v", err)
-	}
-	if len(got) != 1 || got[0].Target.Policy != domain.PolicyRateLimit {
-		t.Fatalf("unexpected: %+v", got)
-	}
-}
-
-// --- Audit ---
-
-func TestAudit_AppendAndList(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-
-	before := time.Now().Add(-time.Second)
-	entry := store.AuditEntry{
-		Actor:   "operator",
-		Action:  domain.AuditActionSetLimit,
-		Tenant:  domain.DefaultTenant,
-		Account: "acc-1",
-		Detail:  "set limit rate_limit broker max_orders=10 window=1s",
-	}
-	if err := s.AppendAudit(ctx, entry); err != nil {
-		t.Fatalf("AppendAudit: %v", err)
-	}
-	after := time.Now().Add(time.Second)
-
-	rows, err := s.ListAudit(ctx, 10)
-	if err != nil {
-		t.Fatalf("ListAudit: %v", err)
-	}
-	if len(rows) != 1 {
-		t.Fatalf("want 1 row, got %d", len(rows))
-	}
-	r := rows[0]
-	if r.Actor != "operator" {
-		t.Errorf("actor: want operator, got %q", r.Actor)
-	}
-	if r.Action != domain.AuditActionSetLimit {
-		t.Errorf("action: want set_limit, got %q", r.Action)
-	}
-	if r.Account != "acc-1" {
-		t.Errorf("account: want acc-1, got %q", r.Account)
-	}
-	if r.At.Before(before) || r.At.After(after) {
-		t.Errorf("at: %v not in expected range", r.At)
-	}
-	if r.ID <= 0 {
-		t.Errorf("id: want positive, got %d", r.ID)
-	}
-}
-
-func TestAudit_ListNewestFirst(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-
-	for i := range 5 {
-		entry := store.AuditEntry{
-			Actor:  "system",
-			Action: domain.AuditActionHydrate,
-			Detail: "row " + string(rune('0'+i)),
-		}
-		if err := s.AppendAudit(ctx, entry); err != nil {
-			t.Fatalf("AppendAudit: %v", err)
-		}
-	}
-
-	rows, err := s.ListAudit(ctx, 3)
-	if err != nil {
-		t.Fatalf("ListAudit: %v", err)
-	}
-	if len(rows) != 3 {
-		t.Fatalf("want 3 rows, got %d", len(rows))
-	}
-	// Newest first: id should be descending.
-	if rows[0].ID <= rows[1].ID || rows[1].ID <= rows[2].ID {
-		t.Errorf("rows not ordered newest-first: ids %d %d %d",
-			rows[0].ID, rows[1].ID, rows[2].ID)
-	}
-}
-
-func TestAudit_NonPositiveN(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-	_ = s.AppendAudit(ctx, store.AuditEntry{Actor: "x", Action: domain.AuditActionHydrate})
-	rows, err := s.ListAudit(ctx, 0)
-	if err != nil {
-		t.Fatalf("ListAudit(0): %v", err)
-	}
-	if rows == nil {
-		t.Fatal("want non-nil slice for n=0")
-	}
-	if len(rows) != 0 {
-		t.Fatalf("want 0 rows, got %d", len(rows))
-	}
-}
-
-func TestAudit_ListFilteredByAction(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-
-	rows := []store.AuditEntry{
-		{Actor: "operator", Action: domain.AuditActionBlock, Account: "acc-1", Source: domain.SourceSystem},
-		{Actor: "operator", Action: domain.AuditActionSubmitOrder, Account: "acc-1", Source: domain.SourceAPI},
-		{Actor: "operator", Action: domain.AuditActionExecutionReport, Account: "acc-1", Source: domain.SourceAPI},
-		{Actor: "operator", Action: domain.AuditActionSetLimit, Account: "acc-2", Source: domain.SourcePanel},
-	}
-	for _, entry := range rows {
-		if err := s.AppendAudit(ctx, entry); err != nil {
-			t.Fatalf("AppendAudit: %v", err)
-		}
-	}
-
-	control, err := s.ListAuditFiltered(ctx, domain.AuditFilter{
-		Actions: domain.AuditActionsByCategory(domain.AuditCategoryControl),
-	}, 10)
-	if err != nil {
-		t.Fatalf("ListAuditFiltered control: %v", err)
-	}
-	if len(control) != 2 {
-		t.Fatalf("control rows = %d, want 2 (block, set_limit): %+v", len(control), control)
-	}
-	for _, row := range control {
-		if row.Action.Category() != domain.AuditCategoryControl {
-			t.Fatalf("trading row leaked into control listing: %+v", row)
-		}
-	}
-
-	account, err := s.ListAuditFiltered(ctx, domain.AuditFilter{
-		Account: "acc-1",
-		Actions: []domain.AuditAction{domain.AuditActionBlock},
-	}, 10)
-	if err != nil {
-		t.Fatalf("ListAuditFiltered account: %v", err)
-	}
-	if len(account) != 1 || account[0].Action != domain.AuditActionBlock {
-		t.Fatalf("account+action filter = %+v, want 1 block row", account)
-	}
-}
-
-// TestAudit_FilterBoundsLimitToFilteredSet verifies the limit bounds the
-// already-filtered set: a burst of trading rows must not crowd a control row out
-// of a small-limit control listing.
-func TestAudit_FilterBoundsLimitToFilteredSet(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-
-	if err := s.AppendAudit(ctx, store.AuditEntry{
-		Actor: "operator", Action: domain.AuditActionBlock, Source: domain.SourceSystem,
-	}); err != nil {
-		t.Fatalf("AppendAudit block: %v", err)
-	}
-	for range 50 {
-		if err := s.AppendAudit(ctx, store.AuditEntry{
-			Actor: "operator", Action: domain.AuditActionSubmitOrder, Source: domain.SourceAPI,
-		}); err != nil {
-			t.Fatalf("AppendAudit order: %v", err)
-		}
-	}
-
-	rows, err := s.ListAuditFiltered(ctx, domain.AuditFilter{
-		Actions: domain.AuditActionsByCategory(domain.AuditCategoryControl),
-	}, 5)
-	if err != nil {
-		t.Fatalf("ListAuditFiltered: %v", err)
-	}
-	if len(rows) != 1 || rows[0].Action != domain.AuditActionBlock {
-		t.Fatalf("control row crowded out by trading volume: got %+v", rows)
-	}
-}
-
-func TestReservationIntent_RoundTripIncludesOrderID(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-
-	intent := domain.ReservationIntent{
-		ApprovalID:     "approval-1",
-		OrderID:        42,
-		Account:        "acc-1",
-		ParamsJSON:     `{"id":42}`,
-		LockPricesJSON: `["100"]`,
-		IssuedAt:       time.Now().UTC(),
-		ExpiresAt:      time.Now().UTC().Add(2 * time.Minute),
-		State:          domain.ReservationIntentStateHeld,
-	}
-	if err := s.UpsertReservationIntent(ctx, intent); err != nil {
-		t.Fatalf("UpsertReservationIntent: %v", err)
-	}
-	intents, err := s.ListOpenReservationIntents(ctx)
-	if err != nil {
-		t.Fatalf("ListOpenReservationIntents: %v", err)
-	}
-	if len(intents) != 1 {
-		t.Fatalf("intents len = %d, want 1", len(intents))
-	}
-	if intents[0].OrderID != 42 {
-		t.Fatalf("OrderID = %d, want 42", intents[0].OrderID)
-	}
-	if intents[0].Account != "acc-1" || intents[0].ParamsJSON != intent.ParamsJSON {
-		t.Fatalf("intent round-trip mismatch: %+v", intents[0])
-	}
-}
-
-// TestGetReservationIntent verifies that GetReservationIntent returns intents
-// regardless of state and reports found=false for unknown approval ids.
-func TestGetReservationIntent(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-
-	// not found: unknown approval id.
-	_, found, err := s.GetReservationIntent(ctx, "no-such-approval")
-	if err != nil {
-		t.Fatalf("GetReservationIntent (absent): %v", err)
-	}
-	if found {
-		t.Fatal("found=true for unknown approval id, want false")
-	}
-
-	// found: held state.
-	orderID := seedOrder(t, s, "acc-1", domain.OrderStatusAccepted)
-	seedHeldIntent(t, s, "approval-held", orderID, "acc-1")
-
-	intent, found, err := s.GetReservationIntent(ctx, "approval-held")
-	if err != nil {
-		t.Fatalf("GetReservationIntent (held): %v", err)
-	}
-	if !found {
-		t.Fatal("found=false for held intent, want true")
-	}
-	if intent.State != domain.ReservationIntentStateHeld {
-		t.Fatalf("state = %q, want held", intent.State)
-	}
-
-	// found: rolled_back state (simulates a TTL-swept intent).
-	if err := s.SetReservationIntentState(ctx, "approval-held", domain.ReservationIntentStateRolledBack); err != nil {
-		t.Fatalf("SetReservationIntentState: %v", err)
-	}
-	intent, found, err = s.GetReservationIntent(ctx, "approval-held")
-	if err != nil {
-		t.Fatalf("GetReservationIntent (rolled_back): %v", err)
-	}
-	if !found {
-		t.Fatal("found=false for rolled_back intent, want true")
-	}
-	if intent.State != domain.ReservationIntentStateRolledBack {
-		t.Fatalf("state = %q, want rolled_back", intent.State)
-	}
-}
-
-// --- Close idempotent ---
-
-func TestClose_Idempotent(t *testing.T) {
-	t.Parallel()
-	path := filepath.Join(t.TempDir(), "close.db")
-	s, err := store.NewSQLiteStore(path)
+	path := filepath.Join(t.TempDir(), "officer.db")
+	s, err := NewSQLiteStore(path, WithRealm(domain.RealmID("desk-a")))
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	if err := s.Migrate(context.Background()); err != nil {
+	t.Cleanup(func() { _ = s.Close() })
+	if err := s.Migrate(ctx); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
-	if err := s.Close(); err != nil {
-		t.Fatalf("first Close: %v", err)
+
+	if _, err := s.ForRealm(ctx, domain.RealmID("desk-a")); err != nil {
+		t.Fatalf("ForRealm(desk-a) = %v, want nil", err)
 	}
-	if err := s.Close(); err != nil {
-		t.Fatalf("second Close: %v", err)
+	// The default realm is now foreign to a connector bound to desk-a.
+	if _, err := s.ForRealm(ctx, domain.DefaultRealm); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("ForRealm(default) error = %v, want ErrInvalid", err)
 	}
 }
 
-// --- MCP access ---
-
-func TestMcpAccess_EmptyIsNonNil(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-
-	access, err := s.ListMcpAccess(ctx)
+func TestExternalIDHelperRoundTrip(t *testing.T) {
+	id, err := newExternalID()
 	if err != nil {
-		t.Fatalf("ListMcpAccess: %v", err)
+		t.Fatalf("newExternalID: %v", err)
 	}
-	if access == nil {
-		t.Fatal("ListMcpAccess must return a non-nil map")
+	if id.IsZero() {
+		t.Fatal("newExternalID returned the zero value")
 	}
-	if len(access) != 0 {
-		t.Fatalf("fresh store should have no overrides, got %d", len(access))
+	s := id.String()
+	if len(s) != domain.ExternalIDStringLen {
+		t.Fatalf("external id string len = %d, want %d", len(s), domain.ExternalIDStringLen)
 	}
-}
-
-func TestMcpAccess_UpsertAndList(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-
-	if err := s.SetMcpAccess(ctx, "health", false); err != nil {
-		t.Fatalf("SetMcpAccess: %v", err)
-	}
-	if err := s.SetMcpAccess(ctx, "set_limit", true); err != nil {
-		t.Fatalf("SetMcpAccess: %v", err)
-	}
-
-	access, err := s.ListMcpAccess(ctx)
+	parsed, err := domain.ParseExternalID(s)
 	if err != nil {
-		t.Fatalf("ListMcpAccess: %v", err)
+		t.Fatalf("ParseExternalID: %v", err)
 	}
-	if got := access["health"]; got != false {
-		t.Errorf("health override: want false, got %v", got)
-	}
-	if got := access["set_limit"]; got != true {
-		t.Errorf("set_limit override: want true, got %v", got)
+	if parsed != id {
+		t.Fatalf("round-trip mismatch: %v != %v", parsed, id)
 	}
 
-	// Upsert overwrites in place rather than duplicating.
-	if err := s.SetMcpAccess(ctx, "health", true); err != nil {
-		t.Fatalf("SetMcpAccess overwrite: %v", err)
-	}
-	access, err = s.ListMcpAccess(ctx)
+	// Two draws differ with overwhelming probability.
+	other, err := newExternalID()
 	if err != nil {
-		t.Fatalf("ListMcpAccess after overwrite: %v", err)
+		t.Fatalf("newExternalID (second): %v", err)
 	}
-	if got := access["health"]; got != true {
-		t.Errorf("health after overwrite: want true, got %v", got)
-	}
-	if len(access) != 2 {
-		t.Fatalf("want 2 overrides after overwrite, got %d", len(access))
+	if other == id {
+		t.Fatal("two external ids collided")
 	}
 }
 
-// --- User settings ---
-
-func TestUserSettings_MissingReturnsNotOk(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
+func TestAssetRoundTrip(t *testing.T) {
 	ctx := context.Background()
+	_, rs := newTestStore(t)
 
-	value, ok, err := s.GetUserSetting(ctx, "default", "welcome_seen")
-	if err != nil {
-		t.Fatalf("GetUserSetting: %v", err)
-	}
-	if ok || value != "" {
-		t.Fatalf("missing setting: want (\"\", false), got (%q, %v)", value, ok)
-	}
-}
-
-func TestUserSettings_UpsertGetAndList(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-
-	if err := s.SetUserSetting(ctx, "default", "welcome_seen", "1"); err != nil {
-		t.Fatalf("SetUserSetting: %v", err)
-	}
-	if err := s.SetUserSetting(ctx, "default", "theme", "dark"); err != nil {
-		t.Fatalf("SetUserSetting: %v", err)
+	asset := domain.Asset{Code: "AAPL", Title: "Apple", AssetClass: "equity"}
+	if err := rs.CreateAsset(ctx, asset); err != nil {
+		t.Fatalf("CreateAsset: %v", err)
 	}
 
-	value, ok, err := s.GetUserSetting(ctx, "default", "welcome_seen")
-	if err != nil || !ok || value != "1" {
-		t.Fatalf("GetUserSetting welcome_seen = (%q, %v, %v), want (\"1\", true, nil)", value, ok, err)
-	}
-
-	// Upsert overwrites in place rather than duplicating.
-	if err := s.SetUserSetting(ctx, "default", "welcome_seen", ""); err != nil {
-		t.Fatalf("SetUserSetting overwrite: %v", err)
-	}
-	value, ok, err = s.GetUserSetting(ctx, "default", "welcome_seen")
-	if err != nil || !ok || value != "" {
-		t.Fatalf("GetUserSetting after overwrite = (%q, %v, %v), want (\"\", true, nil)", value, ok, err)
-	}
-
-	settings, err := s.ListUserSettings(ctx)
-	if err != nil {
-		t.Fatalf("ListUserSettings: %v", err)
-	}
-	// Ordered by user then key: theme before welcome_seen.
-	want := []domain.UserSetting{
-		{UserID: "default", Key: "theme", Value: "dark"},
-		{UserID: "default", Key: "welcome_seen", Value: ""},
-	}
-	if !reflect.DeepEqual(settings, want) {
-		t.Fatalf("ListUserSettings = %+v, want %+v", settings, want)
-	}
-}
-
-func TestUserSettings_EmptyListIsNonNil(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-
-	settings, err := s.ListUserSettings(ctx)
-	if err != nil {
-		t.Fatalf("ListUserSettings: %v", err)
-	}
-	if settings == nil {
-		t.Fatal("ListUserSettings must return a non-nil slice")
-	}
-}
-
-// --- Market-data ---
-
-func mdInstance(id string, enabled bool) domain.MarketDataInstance {
-	return domain.MarketDataInstance{
-		ID:      id,
-		Type:    domain.MarketDataProviderMock,
-		Label:   "label-" + id,
-		Enabled: enabled,
-	}
-}
-
-func TestMarketDataInstance_CreateGetListDelete(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-
-	if err := s.CreateMarketDataInstance(ctx, mdInstance("a", false)); err != nil {
-		t.Fatalf("CreateMarketDataInstance: %v", err)
-	}
-	if err := s.CreateMarketDataInstance(ctx, mdInstance("b", true)); err != nil {
-		t.Fatalf("CreateMarketDataInstance: %v", err)
-	}
-
-	// Duplicate id maps to ErrAlreadyExists.
-	if err := s.CreateMarketDataInstance(ctx, mdInstance("a", false)); !errors.Is(err, domain.ErrAlreadyExists) {
-		t.Fatalf("duplicate create: want ErrAlreadyExists, got %v", err)
-	}
-	dupeLabel := mdInstance("c", false)
-	dupeLabel.Label = "LABEL-A"
-	if err := s.CreateMarketDataInstance(ctx, dupeLabel); !errors.Is(err, domain.ErrAlreadyExists) {
-		t.Fatalf("duplicate label create: want ErrAlreadyExists, got %v", err)
-	}
-
-	got, ok, err := s.GetMarketDataInstance(ctx, "a")
+	got, ok, err := rs.GetAsset(ctx, "AAPL")
 	if err != nil || !ok {
-		t.Fatalf("GetMarketDataInstance: ok=%v err=%v", ok, err)
+		t.Fatalf("GetAsset: ok=%v err=%v", ok, err)
 	}
-	if got.Type != domain.MarketDataProviderMock || got.Label != "label-a" || got.Enabled {
-		t.Fatalf("instance mismatch: %+v", got)
-	}
-
-	if _, ok, _ := s.GetMarketDataInstance(ctx, "missing"); ok {
-		t.Fatal("GetMarketDataInstance(missing): want ok=false")
+	if got != asset {
+		t.Fatalf("GetAsset = %+v, want %+v", got, asset)
 	}
 
-	all, err := s.ListMarketDataInstances(ctx)
+	// Duplicate code is ErrAlreadyExists.
+	if err := rs.CreateAsset(ctx, asset); !errors.Is(err, domain.ErrAlreadyExists) {
+		t.Fatalf("CreateAsset(dup) error = %v, want ErrAlreadyExists", err)
+	}
+
+	// Update mutates title and class.
+	asset.Title = "Apple Inc."
+	asset.AssetClass = ""
+	if err := rs.UpdateAsset(ctx, asset); err != nil {
+		t.Fatalf("UpdateAsset: %v", err)
+	}
+	got, _, err = rs.GetAsset(ctx, "AAPL")
 	if err != nil {
-		t.Fatalf("ListMarketDataInstances: %v", err)
+		t.Fatalf("GetAsset after update: %v", err)
+	}
+	if got.Title != "Apple Inc." || got.AssetClass != "" {
+		t.Fatalf("UpdateAsset result = %+v", got)
+	}
+
+	// List returns the row.
+	assets, err := rs.ListAssets(ctx)
+	if err != nil {
+		t.Fatalf("ListAssets: %v", err)
+	}
+	if len(assets) != 1 {
+		t.Fatalf("ListAssets len = %d, want 1", len(assets))
+	}
+
+	// Delete removes it.
+	if err := rs.DeleteAsset(ctx, "AAPL", true); err != nil {
+		t.Fatalf("DeleteAsset: %v", err)
+	}
+	if _, ok, _ := rs.GetAsset(ctx, "AAPL"); ok {
+		t.Fatal("GetAsset after delete returned ok=true")
+	}
+	// Delete of a missing asset is ErrNotFound.
+	if err := rs.DeleteAsset(ctx, "AAPL", true); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("DeleteAsset(missing) error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestPrincipalRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+
+	p := domain.Principal{Code: "operator", Title: "Desk Operator"}
+	if err := rs.CreatePrincipal(ctx, p); err != nil {
+		t.Fatalf("CreatePrincipal: %v", err)
+	}
+	got, ok, err := rs.GetPrincipal(ctx, "operator")
+	if err != nil || !ok {
+		t.Fatalf("GetPrincipal: ok=%v err=%v", ok, err)
+	}
+	if got != p {
+		t.Fatalf("GetPrincipal = %+v, want %+v", got, p)
+	}
+	if err := rs.CreatePrincipal(ctx, p); !errors.Is(err, domain.ErrAlreadyExists) {
+		t.Fatalf("CreatePrincipal(dup) error = %v, want ErrAlreadyExists", err)
+	}
+	p.Title = "Senior Operator"
+	if err := rs.UpdatePrincipal(ctx, p); err != nil {
+		t.Fatalf("UpdatePrincipal: %v", err)
+	}
+	list, err := rs.ListPrincipals(ctx)
+	if err != nil {
+		t.Fatalf("ListPrincipals: %v", err)
+	}
+	if len(list) != 1 || list[0].Title != "Senior Operator" {
+		t.Fatalf("ListPrincipals = %+v", list)
+	}
+	if err := rs.DeletePrincipal(ctx, "operator"); err != nil {
+		t.Fatalf("DeletePrincipal: %v", err)
+	}
+	if err := rs.DeletePrincipal(ctx, "operator"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("DeletePrincipal(missing) error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestGroupRoundTripAndEngineID(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+
+	g1, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "alpha", Title: "Alpha"})
+	if err != nil {
+		t.Fatalf("CreateGroup(alpha): %v", err)
+	}
+	if err := domain.ValidateEngineGroupID(g1.EngineGroupID); err != nil {
+		t.Fatalf("assigned engine group id out of range: %v", err)
+	}
+
+	g2, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "beta"})
+	if err != nil {
+		t.Fatalf("CreateGroup(beta): %v", err)
+	}
+	if g1.EngineGroupID == g2.EngineGroupID {
+		t.Fatalf("engine group ids collided: %d", g1.EngineGroupID)
+	}
+
+	// Duplicate code rejected.
+	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "alpha"}); !errors.Is(err, domain.ErrAlreadyExists) {
+		t.Fatalf("CreateGroup(dup) error = %v, want ErrAlreadyExists", err)
+	}
+
+	got, ok, err := rs.GetGroup(ctx, "alpha")
+	if err != nil || !ok {
+		t.Fatalf("GetGroup: ok=%v err=%v", ok, err)
+	}
+	if got.EngineGroupID != g1.EngineGroupID {
+		t.Fatalf("GetGroup engine id = %d, want %d", got.EngineGroupID, g1.EngineGroupID)
+	}
+
+	if err := rs.SetGroupNotes(ctx, "alpha", "vip desk"); err != nil {
+		t.Fatalf("SetGroupNotes: %v", err)
+	}
+	if err := rs.SetGroupBlocked(ctx, "alpha", true, "risk review"); err != nil {
+		t.Fatalf("SetGroupBlocked: %v", err)
+	}
+	got, _, _ = rs.GetGroup(ctx, "alpha")
+	if got.Notes != "vip desk" || !got.Blocked || got.BlockReason != "risk review" {
+		t.Fatalf("group after updates = %+v", got)
+	}
+
+	groups, err := rs.ListGroups(ctx)
+	if err != nil {
+		t.Fatalf("ListGroups: %v", err)
+	}
+	if len(groups) != 2 {
+		t.Fatalf("ListGroups len = %d, want 2", len(groups))
+	}
+
+	if err := rs.SetGroupNotes(ctx, "ghost", "x"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("SetGroupNotes(missing) error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestAccountRoundTripEngineIDAndGroupLink(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+
+	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "alpha"}); err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+
+	a1, err := rs.CreateAccount(ctx, domain.Account{
+		Code: "acc-1", Title: "Account 1", GroupCode: "alpha", Notes: "n",
+	})
+	if err != nil {
+		t.Fatalf("CreateAccount(acc-1): %v", err)
+	}
+	if err := domain.ValidateEngineAccountID(a1.EngineAccountID); err != nil {
+		t.Fatalf("assigned engine account id out of range: %v", err)
+	}
+
+	a2, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-2"})
+	if err != nil {
+		t.Fatalf("CreateAccount(acc-2): %v", err)
+	}
+	if a1.EngineAccountID == a2.EngineAccountID {
+		t.Fatalf("engine account ids collided: %d", a1.EngineAccountID)
+	}
+
+	// Read back surfaces the group code, not a surrogate id.
+	got, ok, err := rs.GetAccount(ctx, "acc-1")
+	if err != nil || !ok {
+		t.Fatalf("GetAccount: ok=%v err=%v", ok, err)
+	}
+	if got.GroupCode != "alpha" {
+		t.Fatalf("GetAccount group code = %q, want alpha", got.GroupCode)
+	}
+	if got.EngineAccountID != a1.EngineAccountID {
+		t.Fatalf("GetAccount engine id = %d, want %d", got.EngineAccountID, a1.EngineAccountID)
+	}
+
+	// acc-2 has no group.
+	got2, _, _ := rs.GetAccount(ctx, "acc-2")
+	if got2.GroupCode != "" {
+		t.Fatalf("acc-2 group code = %q, want empty", got2.GroupCode)
+	}
+
+	// Duplicate account code rejected.
+	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-1"}); !errors.Is(err, domain.ErrAlreadyExists) {
+		t.Fatalf("CreateAccount(dup) error = %v, want ErrAlreadyExists", err)
+	}
+
+	// Unknown group code on create is ErrInvalid.
+	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-3", GroupCode: "ghost"}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("CreateAccount(unknown group) error = %v, want ErrInvalid", err)
+	}
+
+	// ListGroupAccounts returns only acc-1.
+	members, err := rs.ListGroupAccounts(ctx, "alpha")
+	if err != nil {
+		t.Fatalf("ListGroupAccounts: %v", err)
+	}
+	if len(members) != 1 || members[0].Code != "acc-1" {
+		t.Fatalf("ListGroupAccounts = %+v", members)
+	}
+
+	// SetAccountGroup to an unknown group is ErrInvalid; valid clear works.
+	if err := rs.SetAccountGroup(ctx, "acc-2", "ghost"); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("SetAccountGroup(unknown) error = %v, want ErrInvalid", err)
+	}
+	if err := rs.SetAccountGroup(ctx, "acc-1", ""); err != nil {
+		t.Fatalf("SetAccountGroup(clear): %v", err)
+	}
+	got, _, _ = rs.GetAccount(ctx, "acc-1")
+	if got.GroupCode != "" {
+		t.Fatalf("after clear, group code = %q, want empty", got.GroupCode)
+	}
+
+	// Block and notes round-trip.
+	if err := rs.SetAccountBlocked(ctx, "acc-2", true, "kill"); err != nil {
+		t.Fatalf("SetAccountBlocked: %v", err)
+	}
+	if err := rs.SetAccountNotes(ctx, "acc-2", "watch"); err != nil {
+		t.Fatalf("SetAccountNotes: %v", err)
+	}
+	got2, _, _ = rs.GetAccount(ctx, "acc-2")
+	if !got2.Blocked || got2.BlockReason != "kill" || got2.Notes != "watch" {
+		t.Fatalf("acc-2 after updates = %+v", got2)
+	}
+
+	all, err := rs.ListAccounts(ctx)
+	if err != nil {
+		t.Fatalf("ListAccounts: %v", err)
 	}
 	if len(all) != 2 {
-		t.Fatalf("want 2 instances, got %d", len(all))
+		t.Fatalf("ListAccounts len = %d, want 2", len(all))
 	}
 
-	enabled, err := s.ListEnabledMarketDataInstances(ctx)
-	if err != nil {
-		t.Fatalf("ListEnabledMarketDataInstances: %v", err)
-	}
-	if len(enabled) != 1 || enabled[0].ID != "b" {
-		t.Fatalf("want only enabled instance b, got %+v", enabled)
-	}
-
-	if err := s.DeleteMarketDataInstance(ctx, "a"); err != nil {
-		t.Fatalf("DeleteMarketDataInstance: %v", err)
-	}
-	if err := s.DeleteMarketDataInstance(ctx, "a"); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("delete missing: want ErrNotFound, got %v", err)
+	// Missing account on a setter is ErrNotFound.
+	if err := rs.SetAccountNotes(ctx, "ghost", "x"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("SetAccountNotes(missing) error = %v, want ErrNotFound", err)
 	}
 }
 
-func TestMarketDataInstance_SetEnabled(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
+func TestDeleteGroupClearsAccountLink(t *testing.T) {
 	ctx := context.Background()
+	_, rs := newTestStore(t)
 
-	if err := s.CreateMarketDataInstance(ctx, mdInstance("a", false)); err != nil {
-		t.Fatalf("CreateMarketDataInstance: %v", err)
+	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "alpha"}); err != nil {
+		t.Fatalf("CreateGroup: %v", err)
 	}
-	if err := s.SetMarketDataInstanceEnabled(ctx, "a", true); err != nil {
-		t.Fatalf("SetMarketDataInstanceEnabled: %v", err)
-	}
-	got, _, _ := s.GetMarketDataInstance(ctx, "a")
-	if !got.Enabled {
-		t.Fatal("instance should be enabled after SetMarketDataInstanceEnabled(true)")
-	}
-	if err := s.SetMarketDataInstanceEnabled(ctx, "missing", true); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("set enabled on missing: want ErrNotFound, got %v", err)
-	}
-}
-
-func TestMarketDataInstance_UpdateSettings(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-
-	first := mdInstance("a", false)
-	first.Credentials = `{"token":"old"}`
-	if err := s.CreateMarketDataInstance(ctx, first); err != nil {
-		t.Fatalf("CreateMarketDataInstance: %v", err)
-	}
-	if err := s.CreateMarketDataInstance(ctx, mdInstance("b", false)); err != nil {
-		t.Fatalf("CreateMarketDataInstance b: %v", err)
+	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-1", GroupCode: "alpha"}); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
 	}
 
-	if err := s.UpdateMarketDataInstanceSettings(
-		ctx, "a", "new-label", `{"token":"new"}`,
-	); err != nil {
-		t.Fatalf("UpdateMarketDataInstanceSettings: %v", err)
+	// Deleting the group must clear the member's link (ON DELETE SET NULL), not
+	// cascade-delete the account.
+	if err := rs.DeleteGroup(ctx, "alpha"); err != nil {
+		t.Fatalf("DeleteGroup: %v", err)
 	}
-	got, ok, err := s.GetMarketDataInstance(ctx, "a")
+	got, ok, err := rs.GetAccount(ctx, "acc-1")
 	if err != nil || !ok {
-		t.Fatalf("GetMarketDataInstance: ok=%v err=%v", ok, err)
+		t.Fatalf("account should survive group delete: ok=%v err=%v", ok, err)
 	}
-	if got.Label != "new-label" || got.Credentials != `{"token":"new"}` {
-		t.Fatalf("updated instance = %+v", got)
+	if got.GroupCode != "" {
+		t.Fatalf("account group code after group delete = %q, want empty", got.GroupCode)
 	}
 
-	if err := s.UpdateMarketDataInstanceSettings(
-		ctx, "missing", "label", "{}",
-	); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("update missing: want ErrNotFound, got %v", err)
-	}
-	if err := s.UpdateMarketDataInstanceSettings(
-		ctx, "a", "label-b", "{}",
-	); !errors.Is(err, domain.ErrAlreadyExists) {
-		t.Fatalf("update duplicate label: want ErrAlreadyExists, got %v", err)
+	if err := rs.DeleteGroup(ctx, "alpha"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("DeleteGroup(missing) error = %v, want ErrNotFound", err)
 	}
 }
 
-func mdInstrument(instanceID, symbol string, enabled bool) domain.MarketDataInstrument {
-	return domain.MarketDataInstrument{
-		InstanceID:     instanceID,
-		ExternalSymbol: symbol,
-		BaseAsset:      "AAPL",
-		QuoteAsset:     "USD",
-		Enabled:        enabled,
-	}
-}
-
-func TestMarketDataInstrument_UpsertListEnabledDelete(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
+func TestApplyBusinessCSVImport_EmptyBatchIsNoOp(t *testing.T) {
 	ctx := context.Background()
-
-	if err := s.CreateMarketDataInstance(ctx, mdInstance("inst", true)); err != nil {
-		t.Fatalf("CreateMarketDataInstance: %v", err)
-	}
-
-	if err := s.UpsertMarketDataInstrument(ctx, mdInstrument("inst", "AAPL", true)); err != nil {
-		t.Fatalf("UpsertMarketDataInstrument: %v", err)
-	}
-	if err := s.UpsertMarketDataInstrument(ctx, mdInstrument("inst", "MSFT", false)); err != nil {
-		t.Fatalf("UpsertMarketDataInstrument: %v", err)
-	}
-
-	// Upsert overwrites in place rather than duplicating.
-	updated := mdInstrument("inst", "AAPL", true)
-	updated.QuoteAsset = "EUR"
-	if err := s.UpsertMarketDataInstrument(ctx, updated); err != nil {
-		t.Fatalf("UpsertMarketDataInstrument overwrite: %v", err)
-	}
-
-	all, err := s.ListMarketDataInstruments(ctx, "inst")
-	if err != nil {
-		t.Fatalf("ListMarketDataInstruments: %v", err)
-	}
-	if len(all) != 2 {
-		t.Fatalf("want 2 instruments, got %d", len(all))
-	}
-	if all[0].ExternalSymbol != "AAPL" || all[0].QuoteAsset != "EUR" {
-		t.Fatalf("overwrite not applied: %+v", all[0])
-	}
-
-	enabled, err := s.ListEnabledMarketDataInstruments(ctx, "inst")
-	if err != nil {
-		t.Fatalf("ListEnabledMarketDataInstruments: %v", err)
-	}
-	if len(enabled) != 1 || enabled[0].ExternalSymbol != "AAPL" {
-		t.Fatalf("want only enabled AAPL, got %+v", enabled)
-	}
-
-	if err := s.SetMarketDataInstrumentEnabled(ctx, "inst", "MSFT", true); err != nil {
-		t.Fatalf("SetMarketDataInstrumentEnabled: %v", err)
-	}
-	enabled, _ = s.ListEnabledMarketDataInstruments(ctx, "inst")
-	if len(enabled) != 2 {
-		t.Fatalf("want 2 enabled after toggle, got %d", len(enabled))
-	}
-
-	if err := s.SetMarketDataInstrumentEnabled(ctx, "inst", "missing", true); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("toggle missing instrument: want ErrNotFound, got %v", err)
-	}
-
-	if err := s.DeleteMarketDataInstrument(ctx, "inst", "MSFT"); err != nil {
-		t.Fatalf("DeleteMarketDataInstrument: %v", err)
-	}
-	if err := s.DeleteMarketDataInstrument(ctx, "inst", "MSFT"); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("delete missing instrument: want ErrNotFound, got %v", err)
-	}
-}
-
-// TestMarketDataInstrument_ManualPriceRoundTrip verifies the operator-set manual
-// mark persists and reads back exactly, that an upsert overwrites it in place,
-// and that an instrument with no manual price reads back as the empty string.
-func TestMarketDataInstrument_ManualPriceRoundTrip(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-
-	if err := s.CreateMarketDataInstance(ctx, mdInstance("byo", true)); err != nil {
-		t.Fatalf("CreateMarketDataInstance: %v", err)
-	}
-
-	priced := mdInstrument("byo", "USDT/USD", true)
-	priced.BaseAsset = "USDT"
-	priced.ManualPrice = "1.0005"
-	if err := s.UpsertMarketDataInstrument(ctx, priced); err != nil {
-		t.Fatalf("UpsertMarketDataInstrument priced: %v", err)
-	}
-
-	unpriced := mdInstrument("byo", "ETH/USD", true)
-	unpriced.BaseAsset = "ETH"
-	if err := s.UpsertMarketDataInstrument(ctx, unpriced); err != nil {
-		t.Fatalf("UpsertMarketDataInstrument unpriced: %v", err)
-	}
-
-	all, err := s.ListMarketDataInstruments(ctx, "byo")
-	if err != nil {
-		t.Fatalf("ListMarketDataInstruments: %v", err)
-	}
-	got := map[string]string{}
-	for _, inst := range all {
-		got[inst.ExternalSymbol] = inst.ManualPrice
-	}
-	if got["USDT/USD"] != "1.0005" {
-		t.Fatalf("manual price not persisted: got %q, want \"1.0005\"", got["USDT/USD"])
-	}
-	if got["ETH/USD"] != "" {
-		t.Fatalf("absent manual price should read empty, got %q", got["ETH/USD"])
-	}
-
-	// The enabled query carries the price too.
-	enabled, err := s.ListEnabledMarketDataInstruments(ctx, "byo")
-	if err != nil {
-		t.Fatalf("ListEnabledMarketDataInstruments: %v", err)
-	}
-	for _, inst := range enabled {
-		if inst.ExternalSymbol == "USDT/USD" && inst.ManualPrice != "1.0005" {
-			t.Fatalf("enabled query lost manual price: %+v", inst)
-		}
-	}
-
-	// Upsert overwrites the manual price in place.
-	priced.ManualPrice = "0.9998"
-	if err := s.UpsertMarketDataInstrument(ctx, priced); err != nil {
-		t.Fatalf("UpsertMarketDataInstrument overwrite: %v", err)
-	}
-	all, err = s.ListMarketDataInstruments(ctx, "byo")
-	if err != nil {
-		t.Fatalf("ListMarketDataInstruments after overwrite: %v", err)
-	}
-	for _, inst := range all {
-		if inst.ExternalSymbol == "USDT/USD" && inst.ManualPrice != "0.9998" {
-			t.Fatalf("manual price overwrite not applied: %+v", inst)
-		}
-	}
-}
-
-func TestMarketDataQuote_UpsertListAndDeleteInstrument(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-	asOf := time.Date(2026, 6, 16, 10, 0, 0, 0, time.UTC)
-	receivedAt := asOf.Add(time.Second)
-
-	if err := s.CreateMarketDataInstance(ctx, mdInstance("inst", true)); err != nil {
-		t.Fatalf("CreateMarketDataInstance: %v", err)
-	}
-	if err := s.UpsertMarketDataInstrument(ctx, mdInstrument("inst", "AAPL", true)); err != nil {
-		t.Fatalf("UpsertMarketDataInstrument: %v", err)
-	}
-	quote := domain.MarketDataQuote{
-		InstanceID:     "inst",
-		ExternalSymbol: "AAPL",
-		BaseAsset:      "AAPL",
-		QuoteAsset:     "USD",
-		Mark:           "100",
-		Bid:            "99",
-		Ask:            "101",
-		AsOf:           asOf,
-		ReceivedAt:     receivedAt,
-	}
-	if err := s.UpsertMarketDataQuote(ctx, quote); err != nil {
-		t.Fatalf("UpsertMarketDataQuote: %v", err)
-	}
-	quote.Mark = "102"
-	if err := s.UpsertMarketDataQuote(ctx, quote); err != nil {
-		t.Fatalf("UpsertMarketDataQuote overwrite: %v", err)
-	}
-
-	quotes, err := s.ListMarketDataQuotes(ctx, "inst")
-	if err != nil {
-		t.Fatalf("ListMarketDataQuotes: %v", err)
-	}
-	if len(quotes) != 1 || quotes[0].Mark != "102" || !quotes[0].AsOf.Equal(asOf) {
-		t.Fatalf("unexpected quotes: %+v", quotes)
-	}
-
-	if err := s.DeleteMarketDataInstrument(ctx, "inst", "AAPL"); err != nil {
-		t.Fatalf("DeleteMarketDataInstrument: %v", err)
-	}
-	quotes, err = s.ListMarketDataQuotes(ctx, "inst")
-	if err != nil {
-		t.Fatalf("ListMarketDataQuotes after delete: %v", err)
-	}
-	if len(quotes) != 0 {
-		t.Fatalf("quote should be deleted with instrument, got %+v", quotes)
-	}
-}
-
-func TestMarketDataInstance_DeleteRemovesInstruments(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-
-	if err := s.CreateMarketDataInstance(ctx, mdInstance("inst", true)); err != nil {
-		t.Fatalf("CreateMarketDataInstance: %v", err)
-	}
-	if err := s.UpsertMarketDataInstrument(ctx, mdInstrument("inst", "AAPL", true)); err != nil {
-		t.Fatalf("UpsertMarketDataInstrument: %v", err)
-	}
-	if err := s.UpsertMarketDataInstrument(ctx, mdInstrument("inst", "MSFT", false)); err != nil {
-		t.Fatalf("UpsertMarketDataInstrument: %v", err)
-	}
-
-	if err := s.DeleteMarketDataInstance(ctx, "inst"); err != nil {
-		t.Fatalf("DeleteMarketDataInstance: %v", err)
-	}
-
-	// The instance's instruments must be gone, not orphaned: DeleteMarketDataInstance
-	// removes them in the same transaction rather than relying on FK cascade,
-	// which the modernc.org/sqlite driver does not enforce by default.
-	instruments, err := s.ListMarketDataInstruments(ctx, "inst")
-	if err != nil {
-		t.Fatalf("ListMarketDataInstruments: %v", err)
-	}
-	if len(instruments) != 0 {
-		t.Fatalf("want no instruments after instance delete, got %d: %+v", len(instruments), instruments)
-	}
-}
-
-func TestMarketDataInstrument_EmptyListsAreNonNil(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-
-	instances, err := s.ListMarketDataInstances(ctx)
-	if err != nil || instances == nil {
-		t.Fatalf("ListMarketDataInstances: want non-nil empty, err=%v", err)
-	}
-	instruments, err := s.ListMarketDataInstruments(ctx, "none")
-	if err != nil || instruments == nil {
-		t.Fatalf("ListMarketDataInstruments: want non-nil empty, err=%v", err)
-	}
-}
-
-// --- Atomic reservation resolution / settlement ------------------------------
-
-// seedOrder inserts an order at the given status and returns its store-assigned
-// id. The order carries one base/quote pair so settlement events/trades that
-// reference it satisfy the order_events/trades FKs.
-func seedOrder(t *testing.T, s store.Store, account domain.AccountID, status domain.OrderStatus) int64 {
-	t.Helper()
-	o, err := s.CreateOrder(context.Background(), domain.Order{
-		Tenant:      domain.DefaultTenant,
-		Account:     account,
-		Source:      domain.SourceAPI,
-		Principal:   "operator",
-		BaseAsset:   "AAPL",
-		QuoteAsset:  "USD",
-		Side:        domain.OrderSideBuy,
-		AmountKind:  domain.OrderAmountKindQuantity,
-		AmountValue: "1",
-		Price:       "100",
-		Status:      status,
-	})
-	if err != nil {
-		t.Fatalf("CreateOrder: %v", err)
-	}
-	return o.ID
-}
-
-// seedHeldIntent inserts a held reservation intent bound to orderID.
-func seedHeldIntent(t *testing.T, s store.Store, approvalID string, orderID int64, account domain.AccountID) {
-	t.Helper()
-	if err := s.UpsertReservationIntent(context.Background(), domain.ReservationIntent{
-		ApprovalID: approvalID,
-		OrderID:    orderID,
-		Account:    account,
-		ParamsJSON: "{}",
-		IssuedAt:   time.Now().UTC(),
-		ExpiresAt:  time.Now().UTC().Add(time.Minute),
-		State:      domain.ReservationIntentStateHeld,
-	}); err != nil {
-		t.Fatalf("UpsertReservationIntent: %v", err)
-	}
-}
-
-// intentHeld reports whether the named intent is still in the open (held) set.
-func intentHeld(t *testing.T, s store.Store, approvalID string) bool {
-	t.Helper()
-	intents, err := s.ListOpenReservationIntents(context.Background())
-	if err != nil {
-		t.Fatalf("ListOpenReservationIntents: %v", err)
-	}
-	for _, i := range intents {
-		if i.ApprovalID == approvalID {
-			return true
-		}
-	}
-	return false
-}
-
-// orderStatus reads back the current status of orderID.
-func orderStatus(t *testing.T, s store.Store, orderID int64) domain.OrderStatus {
-	t.Helper()
-	od, err := s.GetOrder(context.Background(), domain.DefaultTenant, orderID)
-	if err != nil {
-		t.Fatalf("GetOrder: %v", err)
-	}
-	return od.Order.Status
-}
-
-// orderEventCount counts the events recorded for orderID.
-func orderEventCount(t *testing.T, s store.Store, orderID int64) int {
-	t.Helper()
-	evs, err := s.ListOrderEvents(context.Background(), domain.DefaultTenant, orderID)
-	if err != nil {
-		t.Fatalf("ListOrderEvents: %v", err)
-	}
-	return len(evs)
-}
-
-// TestResolveOrderReservation_HappyPathPersistsAll proves the confirm path
-// commits the intent flip, the status advance, and the lifecycle event together.
-func TestResolveOrderReservation_HappyPathPersistsAll(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-
-	orderID := seedOrder(t, s, "acc-1", domain.OrderStatusAccepted)
-	seedHeldIntent(t, s, "approval-1", orderID, "acc-1")
-
-	if err := s.ResolveOrderReservation(ctx, domain.ReservationResolution{
-		Tenant:      domain.DefaultTenant,
-		ApprovalID:  "approval-1",
-		IntentState: domain.ReservationIntentStateCommitted,
-		OrderStatus: domain.OrderStatusCommitted,
-		AllowedFrom: []domain.OrderStatus{domain.OrderStatusAccepted},
-		OrderID:     orderID,
-		Events: []domain.OrderEvent{{
-			OrderID:   orderID,
-			Type:      domain.OrderEventReservationCommitted,
-			Source:    domain.SourceAPI,
-			Principal: "operator",
-		}},
-	}); err != nil {
-		t.Fatalf("ResolveOrderReservation: %v", err)
-	}
-
-	if got := orderStatus(t, s, orderID); got != domain.OrderStatusCommitted {
-		t.Fatalf("status = %q, want committed", got)
-	}
-	if intentHeld(t, s, "approval-1") {
-		t.Fatal("intent still held, want flipped to committed")
-	}
-	if n := orderEventCount(t, s, orderID); n != 1 {
-		t.Fatalf("event count = %d, want 1 (reservation_committed)", n)
-	}
-}
-
-// TestResolveOrderReservation_MidTxFailureRollsBackAll injects a constraint
-// violation in the event insert (an event row whose OrderID has no order) after
-// the status UPDATE has already matched the real order, and asserts the whole tx
-// rolls back: status unchanged, intent still held, no event written.
-func TestResolveOrderReservation_MidTxFailureRollsBackAll(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-
-	orderID := seedOrder(t, s, "acc-1", domain.OrderStatusAccepted)
-	seedHeldIntent(t, s, "approval-1", orderID, "acc-1")
-
-	// The order status UPDATE targets the real order (matches), but the event
-	// references a non-existent order id, violating the order_events FK and
-	// failing the tx after the status row was already updated in-tx.
-	err := s.ResolveOrderReservation(ctx, domain.ReservationResolution{
-		Tenant:      domain.DefaultTenant,
-		ApprovalID:  "approval-1",
-		IntentState: domain.ReservationIntentStateCommitted,
-		OrderStatus: domain.OrderStatusCommitted,
-		AllowedFrom: []domain.OrderStatus{domain.OrderStatusAccepted},
-		OrderID:     orderID,
-		Events: []domain.OrderEvent{{
-			OrderID:   orderID + 100000, // dangling FK -> insert fails mid-tx
-			Type:      domain.OrderEventReservationCommitted,
-			Source:    domain.SourceAPI,
-			Principal: "operator",
-		}},
-	})
-	if err == nil {
-		t.Fatal("ResolveOrderReservation: want error from mid-tx FK violation")
-	}
-
-	if got := orderStatus(t, s, orderID); got != domain.OrderStatusAccepted {
-		t.Fatalf("status = %q after rollback, want accepted (unchanged)", got)
-	}
-	if !intentHeld(t, s, "approval-1") {
-		t.Fatal("intent flipped despite rollback, want still held")
-	}
-	if n := orderEventCount(t, s, orderID); n != 0 {
-		t.Fatalf("event count = %d after rollback, want 0", n)
-	}
-}
-
-// TestResolveOrderReservation_LateCancelAfterFilledConflict proves a cancel that
-// races a fill is rejected by the status WHERE-guard with nothing written: the
-// Filled status, the held intent, and the empty event stream all stand.
-func TestResolveOrderReservation_LateCancelAfterFilledConflict(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-
-	orderID := seedOrder(t, s, "acc-1", domain.OrderStatusFilled)
-	seedHeldIntent(t, s, "approval-1", orderID, "acc-1")
-
-	err := s.ResolveOrderReservation(ctx, domain.ReservationResolution{
-		Tenant:      domain.DefaultTenant,
-		ApprovalID:  "approval-1",
-		IntentState: domain.ReservationIntentStateRolledBack,
-		OrderStatus: domain.OrderStatusCancelled,
-		AllowedFrom: []domain.OrderStatus{domain.OrderStatusAccepted},
-		OrderID:     orderID,
-		Events: []domain.OrderEvent{
-			{OrderID: orderID, Type: domain.OrderEventReservationRolledBack, Source: domain.SourceAPI},
-			{OrderID: orderID, Type: domain.OrderEventCancelled, Source: domain.SourceAPI},
-		},
-	})
-	if !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("want ErrConflict, got %v", err)
-	}
-
-	if got := orderStatus(t, s, orderID); got != domain.OrderStatusFilled {
-		t.Fatalf("status = %q, want filled preserved", got)
-	}
-	if !intentHeld(t, s, "approval-1") {
-		t.Fatal("intent flipped despite conflict, want still held")
-	}
-	if n := orderEventCount(t, s, orderID); n != 0 {
-		t.Fatalf("event count = %d, want 0 (no cancel events on conflict)", n)
-	}
-}
-
-// TestResolveOrderReservation_InMemoryOnlyHoldTolerated proves an OrderID==0
-// resolution with no matching intent row is a tolerated no-op (NotFound is
-// swallowed like SetReservationIntentState), returning nil with nothing written.
-// It also seeds an unrelated held intent to confirm that the no-op does not
-// disturb other intents.
-func TestResolveOrderReservation_InMemoryOnlyHoldTolerated(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-
-	// Seed an unrelated held intent; it must be undisturbed after the no-op.
-	bystander := seedOrder(t, s, "acc-bystander", domain.OrderStatusAccepted)
-	seedHeldIntent(t, s, "bystander-approval", bystander, "acc-bystander")
-
-	if err := s.ResolveOrderReservation(ctx, domain.ReservationResolution{
-		Tenant:      domain.DefaultTenant,
-		ApprovalID:  "ghost-approval",
-		IntentState: domain.ReservationIntentStateRolledBack,
-		OrderStatus: domain.OrderStatusRolledBack,
-		AllowedFrom: []domain.OrderStatus{domain.OrderStatusAccepted},
-		OrderID:     0,
-	}); err != nil {
-		t.Fatalf("ResolveOrderReservation in-memory-only: want nil, got %v", err)
-	}
-
-	// Nothing written: ghost-approval must not appear in the open intent set.
-	if intentHeld(t, s, "ghost-approval") {
-		t.Fatal("ghost-approval appeared in open intents after in-memory-only no-op")
-	}
-	// Bystander intent must still be held.
-	if !intentHeld(t, s, "bystander-approval") {
-		t.Fatal("bystander-approval was disturbed by the in-memory-only no-op")
-	}
-	// Bystander order status must be unchanged.
-	if got := orderStatus(t, s, bystander); got != domain.OrderStatusAccepted {
-		t.Fatalf("bystander order status = %q, want accepted (unchanged)", got)
-	}
-}
-
-// TestRecordOrderSettlement_RealizedPnlAccumulatedInTx proves the fill path
-// accumulates realized P&L by delta inside the tx, follows the outcome *Result
-// fields, carries average_entry_price forward, advances the status, and records
-// the fill event and trade - all committed together.
-func TestRecordOrderSettlement_RealizedPnlAccumulatedInTx(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-
-	orderID := seedOrder(t, s, "acc-1", domain.OrderStatusAccepted)
-	// Pre-existing balance with realized_pnl=5 and an average entry price to carry.
-	if err := s.UpsertBalance(ctx, domain.Balance{
-		Tenant:            domain.DefaultTenant,
-		Account:           "acc-1",
-		Asset:             "USD",
-		Available:         "1000",
-		Held:              "0",
-		Incoming:          "0",
-		RealizedPnl:       "5",
-		AverageEntryPrice: "99",
-		UpdatedAt:         time.Now().UTC(),
-	}); err != nil {
-		t.Fatalf("UpsertBalance: %v", err)
-	}
-
-	if err := s.RecordOrderSettlement(ctx, domain.OrderSettlement{
-		Tenant:      domain.DefaultTenant,
-		Account:     "acc-1",
-		OrderID:     orderID,
-		OrderStatus: domain.OrderStatusFilled,
-		Balances: []domain.BalanceSettlement{{
-			Asset: "USD",
-			Outcome: domain.AdjustmentOutcomeAccepted{
-				BalanceResult:    "900",
-				HeldResult:       "0",
-				IncomingResult:   "0",
-				RealizedPnlDelta: "3",
-			},
-		}},
-		Events: []domain.OrderEvent{{
-			OrderID: orderID, Type: domain.OrderEventFill, Source: domain.SourceAPI,
-		}},
-		Trade: &domain.Trade{
-			OrderID:    orderID,
-			Tenant:     domain.DefaultTenant,
-			Account:    "acc-1",
-			Source:     domain.SourceAPI,
-			BaseAsset:  "AAPL",
-			QuoteAsset: "USD",
-			Side:       domain.OrderSideBuy,
-			Quantity:   "1",
-			Price:      "100",
-		},
-	}); err != nil {
-		t.Fatalf("RecordOrderSettlement: %v", err)
-	}
-
-	bal, ok, err := s.GetBalance(ctx, domain.DefaultTenant, "acc-1", "USD")
-	if err != nil || !ok {
-		t.Fatalf("GetBalance: ok=%v err=%v", ok, err)
-	}
-	if bal.RealizedPnl != "8" {
-		t.Fatalf("realized_pnl = %q, want 8 (5+3 accumulated in tx)", bal.RealizedPnl)
-	}
-	if bal.Available != "900" || bal.Held != "0" {
-		t.Fatalf("balance result not applied: %+v", bal)
-	}
-	if bal.AverageEntryPrice != "99" {
-		t.Fatalf("average_entry_price = %q, want 99 carried forward", bal.AverageEntryPrice)
-	}
-	if got := orderStatus(t, s, orderID); got != domain.OrderStatusFilled {
-		t.Fatalf("status = %q, want filled", got)
-	}
-	if n := orderEventCount(t, s, orderID); n != 1 {
-		t.Fatalf("event count = %d, want 1 (fill)", n)
-	}
-	trades, err := s.ListTrades(ctx, domain.DefaultTenant, "acc-1", domain.SourceAPI, 10)
-	if err != nil {
-		t.Fatalf("ListTrades: %v", err)
-	}
-	if len(trades) != 1 {
-		t.Fatalf("trade count = %d, want 1", len(trades))
-	}
-}
-
-// TestRecordOrderSettlement_MidTxFailureNoPartialPersist injects a constraint
-// violation (a fill event referencing a non-existent order) after the balance
-// write has run in-tx, and asserts the whole settlement rolls back: balance
-// unchanged, status unchanged, no trade, no event.
-func TestRecordOrderSettlement_MidTxFailureNoPartialPersist(t *testing.T) {
-	t.Parallel()
-	s := openStore(t)
-	ctx := context.Background()
-
-	orderID := seedOrder(t, s, "acc-1", domain.OrderStatusAccepted)
-	if err := s.UpsertBalance(ctx, domain.Balance{
-		Tenant:      domain.DefaultTenant,
-		Account:     "acc-1",
-		Asset:       "USD",
-		Available:   "1000",
-		RealizedPnl: "5",
-		UpdatedAt:   time.Now().UTC(),
-	}); err != nil {
-		t.Fatalf("UpsertBalance: %v", err)
-	}
-
-	err := s.RecordOrderSettlement(ctx, domain.OrderSettlement{
-		Tenant:      domain.DefaultTenant,
-		Account:     "acc-1",
-		OrderID:     orderID,
-		OrderStatus: domain.OrderStatusFilled,
-		Balances: []domain.BalanceSettlement{{
-			Asset: "USD",
-			Outcome: domain.AdjustmentOutcomeAccepted{
-				BalanceResult:    "900",
-				RealizedPnlDelta: "3",
-			},
-		}},
-		Events: []domain.OrderEvent{{
-			OrderID: orderID + 100000, // dangling FK -> fails the tx mid-flight
-			Type:    domain.OrderEventFill,
-			Source:  domain.SourceAPI,
-		}},
-	})
-	if err == nil {
-		t.Fatal("RecordOrderSettlement: want error from mid-tx FK violation")
-	}
-
-	bal, ok, err := s.GetBalance(ctx, domain.DefaultTenant, "acc-1", "USD")
-	if err != nil || !ok {
-		t.Fatalf("GetBalance: ok=%v err=%v", ok, err)
-	}
-	if bal.Available != "1000" || bal.RealizedPnl != "5" {
-		t.Fatalf("balance changed despite rollback: %+v", bal)
-	}
-	if got := orderStatus(t, s, orderID); got != domain.OrderStatusAccepted {
-		t.Fatalf("status = %q after rollback, want accepted", got)
-	}
-	if n := orderEventCount(t, s, orderID); n != 0 {
-		t.Fatalf("event count = %d after rollback, want 0", n)
-	}
-	trades, err := s.ListTrades(ctx, domain.DefaultTenant, "acc-1", domain.SourceAPI, 10)
-	if err != nil {
-		t.Fatalf("ListTrades: %v", err)
-	}
-	if len(trades) != 0 {
-		t.Fatalf("trade count = %d after rollback, want 0", len(trades))
-	}
-}
-
-// fillSettlement builds a minimal RecordOrderSettlement call that moves orderID
-// from its current status to targetStatus. It writes one balance outcome,
-// one fill event, and one trade row so the FK constraints are satisfied.
-func fillSettlement(
-	orderID int64, account domain.AccountID, targetStatus domain.OrderStatus,
-	allowedFrom []domain.OrderStatus,
-) domain.OrderSettlement {
-	return domain.OrderSettlement{
-		Tenant:      domain.DefaultTenant,
-		Account:     account,
-		OrderID:     orderID,
-		OrderStatus: targetStatus,
-		AllowedFrom: allowedFrom,
-		Balances: []domain.BalanceSettlement{{
-			Asset: "USD",
-			Outcome: domain.AdjustmentOutcomeAccepted{
-				BalanceResult:    "900",
-				RealizedPnlDelta: "1",
-			},
-		}},
-		Events: []domain.OrderEvent{{
-			OrderID: orderID,
-			Type:    domain.OrderEventFill,
-			Source:  domain.SourceAPI,
-		}},
-		Trade: &domain.Trade{
-			OrderID:    orderID,
-			Tenant:     domain.DefaultTenant,
-			Account:    account,
-			Source:     domain.SourceAPI,
-			BaseAsset:  "AAPL",
-			QuoteAsset: "USD",
-			Side:       domain.OrderSideBuy,
-			Quantity:   "1",
-			Price:      "100",
-		},
-	}
-}
-
-// TestRecordOrderSettlement_FillAfterTerminalConflict proves the AllowedFrom
-// guard rejects a fill arriving on an order already in a terminal status: it
-// returns ErrConflict, leaves the status unchanged, and writes no balance,
-// trade, or event rows.
-func TestRecordOrderSettlement_FillAfterTerminalConflict(t *testing.T) {
-	t.Parallel()
-
-	terminalStatuses := []domain.OrderStatus{
-		domain.OrderStatusCancelled,
-		domain.OrderStatusRolledBack,
-		domain.OrderStatusFilled,
-		domain.OrderStatusRejected,
-	}
-
-	for _, terminal := range terminalStatuses {
-		terminal := terminal
-		t.Run(string(terminal), func(t *testing.T) {
-			t.Parallel()
-			s := openStore(t)
-			ctx := context.Background()
-
-			account := domain.AccountID("acc-" + string(terminal))
-			if err := s.UpsertBalance(ctx, domain.Balance{
-				Tenant:      domain.DefaultTenant,
-				Account:     account,
-				Asset:       "USD",
-				Available:   "1000",
-				RealizedPnl: "0",
-				UpdatedAt:   time.Now().UTC(),
-			}); err != nil {
-				t.Fatalf("UpsertBalance: %v", err)
-			}
-			orderID := seedOrder(t, s, account, terminal)
-
-			err := s.RecordOrderSettlement(ctx, fillSettlement(
-				orderID, account, domain.OrderStatusFilled,
-				domain.OrderStatusesEligibleForFill(),
-			))
-			if !errors.Is(err, domain.ErrConflict) {
-				t.Fatalf("want ErrConflict for fill on %q order, got %v", terminal, err)
-			}
-
-			// Status must be preserved.
-			if got := orderStatus(t, s, orderID); got != terminal {
-				t.Fatalf("status changed from %q to %q despite conflict", terminal, got)
-			}
-			// No event written.
-			if n := orderEventCount(t, s, orderID); n != 0 {
-				t.Fatalf("event count = %d after conflict, want 0", n)
-			}
-			// No trade written.
-			trades, err := s.ListTrades(ctx, domain.DefaultTenant, account, domain.SourceAPI, 10)
-			if err != nil {
-				t.Fatalf("ListTrades: %v", err)
-			}
-			if len(trades) != 0 {
-				t.Fatalf("trade count = %d after conflict, want 0", len(trades))
-			}
-			// Balance must be unchanged.
-			bal, ok, err := s.GetBalance(ctx, domain.DefaultTenant, account, "USD")
-			if err != nil || !ok {
-				t.Fatalf("GetBalance: ok=%v err=%v", ok, err)
-			}
-			if bal.Available != "1000" {
-				t.Fatalf("balance changed despite conflict: available=%q", bal.Available)
-			}
-		})
-	}
-}
-
-// TestRecordOrderSettlement_FillFromEligibleStatuses proves that each
-// pre/mid-fill status (submitted, accepted, partially_filled) is an accepted
-// AllowedFrom source: the fill advances the order and writes all rows.
-func TestRecordOrderSettlement_FillFromEligibleStatuses(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		from domain.OrderStatus
-		to   domain.OrderStatus
-	}{
-		{domain.OrderStatusSubmitted, domain.OrderStatusFilled},
-		{domain.OrderStatusAccepted, domain.OrderStatusFilled},
-		{domain.OrderStatusCommitted, domain.OrderStatusFilled},
-		{domain.OrderStatusPartiallyFilled, domain.OrderStatusFilled},
-		{domain.OrderStatusAccepted, domain.OrderStatusPartiallyFilled},
-		{domain.OrderStatusCommitted, domain.OrderStatusPartiallyFilled},
-		{domain.OrderStatusPartiallyFilled, domain.OrderStatusPartiallyFilled},
-	}
-
-	for _, tc := range cases {
-		tc := tc
-		name := string(tc.from) + "_to_" + string(tc.to)
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			s := openStore(t)
-			ctx := context.Background()
-
-			account := domain.AccountID("acc-" + name)
-			if err := s.UpsertBalance(ctx, domain.Balance{
-				Tenant:      domain.DefaultTenant,
-				Account:     account,
-				Asset:       "USD",
-				Available:   "1000",
-				RealizedPnl: "0",
-				UpdatedAt:   time.Now().UTC(),
-			}); err != nil {
-				t.Fatalf("UpsertBalance: %v", err)
-			}
-			orderID := seedOrder(t, s, account, tc.from)
-
-			if err := s.RecordOrderSettlement(ctx, fillSettlement(
-				orderID, account, tc.to,
-				domain.OrderStatusesEligibleForFill(),
-			)); err != nil {
-				t.Fatalf("RecordOrderSettlement %q->%q: %v", tc.from, tc.to, err)
-			}
-
-			if got := orderStatus(t, s, orderID); got != tc.to {
-				t.Fatalf("status = %q, want %q", got, tc.to)
-			}
-			if n := orderEventCount(t, s, orderID); n != 1 {
-				t.Fatalf("event count = %d, want 1", n)
-			}
-			trades, err := s.ListTrades(ctx, domain.DefaultTenant, account, domain.SourceAPI, 10)
-			if err != nil {
-				t.Fatalf("ListTrades: %v", err)
-			}
-			if len(trades) != 1 {
-				t.Fatalf("trade count = %d, want 1", len(trades))
-			}
-		})
+	_, rs := newTestStore(t)
+
+	// An empty import batch commits cleanly and produces no rows.
+	if err := rs.ApplyBusinessCSVImport(ctx, BusinessCSVImport{}); err != nil {
+		t.Fatalf("ApplyBusinessCSVImport(empty): %v", err)
 	}
 }

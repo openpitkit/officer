@@ -24,34 +24,64 @@ import (
 	"go.openpit.dev/officer/internal/domain"
 )
 
-// setLimitDetail renders a barrier upsert as a short human-readable audit
-// detail, e.g. "set limit rate_limit asset=AAPL max_orders=100 window=1s".
-// Values is already sorted by kind.
-func setLimitDetail(limit domain.Limit) string {
+// setRateLimitDetail renders a rate-limit upsert as a short human-readable audit
+// detail, e.g. "set limit rate_limit account=acc-1 max_orders=100 window=1s".
+func setRateLimitDetail(limit domain.LimitRate) string {
 	var b strings.Builder
 	b.WriteString("set limit ")
-	b.WriteString(targetDetail(limit.Target))
-	for _, v := range limit.Values {
-		b.WriteByte(' ')
-		b.WriteString(v.Kind)
-		b.WriteByte('=')
-		b.WriteString(v.Value)
+	b.WriteString(axesDetail(domain.PolicyRateLimit, limit.Scope, limit.Account, limit.Asset))
+	fmt.Fprintf(&b, " max_orders=%d window=%s", limit.MaxOrders, limit.Window)
+	return b.String()
+}
+
+// setOrderSizeLimitDetail renders an order-size upsert as a short audit detail.
+func setOrderSizeLimitDetail(limit domain.LimitOrderSize) string {
+	var b strings.Builder
+	b.WriteString("set limit ")
+	b.WriteString(axesDetail(domain.PolicyOrderSizeLimit, limit.Scope, limit.Account, limit.Asset))
+	if limit.MaxQuantity != "" {
+		b.WriteString(" max_quantity=")
+		b.WriteString(limit.MaxQuantity)
+	}
+	if limit.MaxNotional != "" {
+		b.WriteString(" max_notional=")
+		b.WriteString(limit.MaxNotional)
+	}
+	return b.String()
+}
+
+// setPnlBoundsLimitDetail renders a P&L-bounds upsert as a short audit detail.
+func setPnlBoundsLimitDetail(limit domain.LimitPnlBounds) string {
+	var b strings.Builder
+	b.WriteString("set limit ")
+	b.WriteString(axesDetail(domain.PolicyPnlBoundsKillSwitch, limit.Scope, limit.Account, limit.Asset))
+	if limit.LowerBound != "" {
+		b.WriteString(" lower_bound=")
+		b.WriteString(limit.LowerBound)
+	}
+	if limit.UpperBound != "" {
+		b.WriteString(" upper_bound=")
+		b.WriteString(limit.UpperBound)
+	}
+	if limit.InitialPnl != "" {
+		b.WriteString(" initial_pnl=")
+		b.WriteString(limit.InitialPnl)
 	}
 	return b.String()
 }
 
 // deleteLimitDetail renders a barrier deletion as a short audit detail.
-func deleteLimitDetail(target domain.LimitTarget) string {
-	return "delete limit " + targetDetail(target)
+func deleteLimitDetail(target LimitTarget) string {
+	return "delete limit " + axesDetail(target.Policy, target.Scope, target.Account, target.Asset)
 }
 
-// setAccountGroupDetail renders an account group change; an empty groupID is a
+// setAccountGroupDetail renders an account group change; an empty groupCode is a
 // clear.
-func setAccountGroupDetail(id domain.AccountID, groupID string) string {
-	if groupID == "" {
+func setAccountGroupDetail(id domain.AccountID, groupCode string) string {
+	if groupCode == "" {
 		return fmt.Sprintf("clear group account %s", id)
 	}
-	return fmt.Sprintf("set group account %s group=%s", id, groupID)
+	return fmt.Sprintf("set group account %s group=%s", id, groupCode)
 }
 
 // adjustmentDetail renders one spot-funds adjustment and its accept/reject
@@ -62,6 +92,27 @@ func adjustmentDetail(id domain.AccountID, asset string, accepted bool) string {
 		disposition = "accepted"
 	}
 	return fmt.Sprintf("adjustment account %s asset=%s %s", id, asset, disposition)
+}
+
+// importPositionSnapshotDetail renders the internal snapshot-import adjustment
+// with all persisted position values that do not fit in the public adjustment
+// request.
+func importPositionSnapshotDetail(snapshot domain.Balance, accepted bool) string {
+	disposition := "rejected"
+	if accepted {
+		disposition = "accepted"
+	}
+	return fmt.Sprintf(
+		"import position snapshot account %s asset=%s available=%s held=%s incoming=%s realized_pnl=%s average_entry_price=%s %s",
+		snapshot.Account,
+		snapshot.Asset,
+		snapshot.Available,
+		snapshot.Held,
+		snapshot.Incoming,
+		snapshot.RealizedPnl,
+		snapshot.AverageEntryPrice,
+		disposition,
+	)
 }
 
 // setMcpAccessDetail renders one MCP command access toggle.
@@ -83,14 +134,14 @@ func marketDataToggleDetail(kind, id string, enabled bool) string {
 }
 
 // submitOrderDetail renders one order submission and its accept/reject
-// disposition.
+// disposition. The order is named by its opaque external id.
 func submitOrderDetail(order domain.Order, accepted bool) string {
 	disposition := "rejected"
 	if accepted {
 		disposition = "committed"
 	}
-	return fmt.Sprintf("submit order %d account %s %s/%s %s %s",
-		order.ID, order.Account, order.BaseAsset, order.QuoteAsset, order.Side, disposition)
+	return fmt.Sprintf("submit order %s account %s %s/%s %s %s",
+		order.ExternalID, order.Account, order.BaseAsset, order.QuoteAsset, order.Side, disposition)
 }
 
 // executionReportDetail renders one execution report, its fill, and how many
@@ -100,16 +151,16 @@ func executionReportDetail(in domain.ExecutionReportInput, blocks int) string {
 	if in.Final {
 		status = "filled"
 	}
-	return fmt.Sprintf("execution report order %d account %s %s/%s qty=%s %s blocks=%d",
-		in.OrderID, in.Account, in.BaseAsset, in.QuoteAsset, in.FillQuantity, status, blocks)
+	return fmt.Sprintf("execution report order %s account %s %s/%s qty=%s %s blocks=%d",
+		in.Order, in.Account, in.BaseAsset, in.QuoteAsset, in.FillQuantity, status, blocks)
 }
 
 // engineBlockDetail renders one engine-initiated (kill-switch) account block,
-// naming the triggering order and the engine's stable reject code and reason so
-// an operator can see why the account was blocked.
-func engineBlockDetail(orderID int64, block domain.ExecutionAccountBlock) string {
-	detail := fmt.Sprintf("engine blocked account %s order %d code=%s: %s",
-		block.Account, orderID, block.Code, block.Reason)
+// naming the triggering order by its external id and the engine's stable reject
+// code and reason so an operator can see why the account was blocked.
+func engineBlockDetail(order domain.ExternalID, block domain.ExecutionAccountBlock) string {
+	detail := fmt.Sprintf("engine blocked account %s order %s code=%s: %s",
+		block.Account, order, block.Code, block.Reason)
 	if block.Details != "" {
 		detail += " (" + block.Details + ")"
 	}
@@ -121,31 +172,31 @@ func engineBlockDetail(orderID int64, block domain.ExecutionAccountBlock) string
 // cause (stable reject code and triggering order). Persisting the cause on the
 // account itself - not only in the audit log - lets the Accounts surface show
 // what blocked the account and why.
-func engineBlockReason(orderID int64, block domain.ExecutionAccountBlock) string {
+func engineBlockReason(order domain.ExternalID, block domain.ExecutionAccountBlock) string {
 	reason := block.Reason
 	if reason == "" {
 		reason = block.Code
 	}
-	cause := fmt.Sprintf("code=%s, order #%d", block.Code, orderID)
+	cause := fmt.Sprintf("code=%s, order %s", block.Code, order)
 	if block.Details != "" {
 		cause += ", " + block.Details
 	}
 	return fmt.Sprintf("%s [%s]", reason, cause)
 }
 
-// targetDetail renders the policy/scope/account/asset axes of a target.
-func targetDetail(target domain.LimitTarget) string {
+// axesDetail renders the policy/scope/account/asset axes of a typed barrier.
+func axesDetail(policy string, scope domain.LimitScope, account domain.AccountID, asset string) string {
 	var b strings.Builder
-	b.WriteString(target.Policy)
+	b.WriteString(policy)
 	b.WriteByte(' ')
-	b.WriteString(target.Scope)
-	if target.Account != "" {
+	b.WriteString(scope)
+	if account != "" {
 		b.WriteString(" account=")
-		b.WriteString(target.Account.String())
+		b.WriteString(account.String())
 	}
-	if target.Asset != "" {
+	if asset != "" {
 		b.WriteString(" asset=")
-		b.WriteString(target.Asset)
+		b.WriteString(asset)
 	}
 	return b.String()
 }

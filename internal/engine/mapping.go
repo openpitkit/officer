@@ -20,9 +20,7 @@ package engine
 import (
 	"fmt"
 	"math"
-	"strconv"
 	"strings"
-	"time"
 	"unicode"
 
 	"go.openpit.dev/openpit/accountadjustment"
@@ -36,6 +34,114 @@ import (
 	"go.openpit.dev/officer/internal/domain"
 )
 
+// --- engine-id resolution ---------------------------------------------------
+
+// idResolver maps domain dictionary codes onto the stored integer engine ids
+// the engine runs on. It is built once from the build Snapshot (each account /
+// group carries its connector-assigned engine id), so a code is converted to an
+// engine id by lookup rather than by hashing the string: hashing
+// (param.NewAccountIDFromString / NewAccountGroupIDFromString) risks collisions
+// and is never used here. The engine is rebuilt from a fresh full Snapshot when
+// the account/group set changes, so a live handle's resolver always covers every
+// account and group it runs.
+type idResolver struct {
+	accounts map[domain.AccountID]param.AccountID
+	groups   map[string]param.AccountGroupID
+}
+
+// newIDResolver builds the resolver from the snapshot's accounts and groups,
+// converting each stored engine id with the binding's integer constructors
+// (param.NewAccountIDFromUint64 / NewAccountGroupIDFromUint32). An account whose
+// engine id is unassigned (zero) or out of range, or a group whose engine id is
+// unassigned/out of range, is corruption of our own persisted ids and aborts the
+// build.
+func newIDResolver(accounts []domain.Account, groups []domain.AccountGroup) (idResolver, error) {
+	r := idResolver{
+		accounts: make(map[domain.AccountID]param.AccountID, len(accounts)),
+		groups:   make(map[string]param.AccountGroupID, len(groups)),
+	}
+	for _, account := range accounts {
+		id, err := engineAccountID(account.EngineAccountID, account.Code)
+		if err != nil {
+			return idResolver{}, err
+		}
+		r.accounts[account.Code] = id
+	}
+	for _, group := range groups {
+		id, err := engineGroupID(group.EngineGroupID, group.Code)
+		if err != nil {
+			return idResolver{}, err
+		}
+		r.groups[group.Code] = id
+	}
+	return r, nil
+}
+
+// account resolves an account code to its engine account id. An unknown code is
+// caller input (e.g. an order for an account the live engine does not run) and
+// wraps domain.ErrInvalid so the HTTP surface reports 400 rather than 500.
+func (r idResolver) account(code domain.AccountID) (param.AccountID, error) {
+	id, ok := r.accounts[code]
+	if !ok {
+		return param.AccountID{}, fmt.Errorf(
+			"engine: unknown account %q: %w", code, domain.ErrInvalid)
+	}
+	return id, nil
+}
+
+// accountIDs resolves a slice of account codes to engine account ids.
+func (r idResolver) accountIDs(codes []domain.AccountID) ([]param.AccountID, error) {
+	ids := make([]param.AccountID, 0, len(codes))
+	for _, code := range codes {
+		id, err := r.account(code)
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+// group resolves a group code to its engine group id. An unknown code is caller
+// input and wraps domain.ErrInvalid.
+func (r idResolver) group(code string) (param.AccountGroupID, error) {
+	id, ok := r.groups[code]
+	if !ok {
+		return param.AccountGroupID{}, fmt.Errorf(
+			"engine: unknown group %q: %w", code, domain.ErrInvalid)
+	}
+	return id, nil
+}
+
+// engineAccountID converts a stored engine account id into a param.AccountID via
+// the binding's uint64 constructor. A zero or out-of-range value is corruption
+// of our own persisted id, not caller input, so it is an internal error.
+func engineAccountID(id domain.EngineAccountID, code domain.AccountID) (param.AccountID, error) {
+	if err := domain.ValidateEngineAccountID(id); err != nil {
+		return param.AccountID{}, fmt.Errorf(
+			"engine: account %q engine id: %w", code, err)
+	}
+	return param.NewAccountIDFromUint64(id.Uint64()), nil
+}
+
+// engineGroupID converts a stored engine group id into a param.AccountGroupID
+// via the binding's uint32 constructor. A zero or out-of-range value is
+// corruption of our own persisted id, so it is an internal error.
+func engineGroupID(id domain.EngineGroupID, code string) (param.AccountGroupID, error) {
+	if err := domain.ValidateEngineGroupID(id); err != nil {
+		return param.AccountGroupID{}, fmt.Errorf(
+			"engine: group %q engine id: %w", code, err)
+	}
+	group, err := param.NewAccountGroupIDFromUint32(id.Uint32())
+	if err != nil {
+		return param.AccountGroupID{}, fmt.Errorf(
+			"engine: group %q engine id %d: %w", code, id.Uint32(), err)
+	}
+	return group, nil
+}
+
+// --- rate-limit translation -------------------------------------------------
+
 // rateLimitAxes maps a rate-limit barrier set onto the public Configure axes:
 // an optional broker barrier and per-asset/account/account-asset slices. The
 // asset/account/account-asset slices are always non-nil so a Configure call
@@ -45,7 +151,7 @@ import (
 // way to clear a rate-limit broker barrier in isolation, so the caller
 // (configureRateLimitLocked) rejects a broker-barrier drop as not-implemented
 // before reaching this point.
-func rateLimitAxes(limits []domain.Limit) (
+func rateLimitAxes(limits []domain.LimitRate, res idResolver) (
 	*policies.RateLimitBrokerBarrier,
 	[]policies.RateLimitAssetBarrier,
 	[]policies.RateLimitAccountBarrier,
@@ -58,15 +164,15 @@ func rateLimitAxes(limits []domain.Limit) (
 	accountAssets := []policies.RateLimitAccountAssetBarrier{}
 
 	for _, limit := range limits {
-		rate, err := rateLimitFromValues(limit.Values)
+		rate, err := rateLimitValue(limit)
 		if err != nil {
 			return nil, nil, nil, nil, err
 		}
-		switch limit.Target.Scope {
+		switch limit.Scope {
 		case domain.ScopeBroker:
 			broker = &policies.RateLimitBrokerBarrier{Limit: rate}
 		case domain.ScopeAsset:
-			asset, err := newAsset(limit.Target.Asset)
+			asset, err := newAsset(limit.Asset)
 			if err != nil {
 				return nil, nil, nil, nil, err
 			}
@@ -75,7 +181,7 @@ func rateLimitAxes(limits []domain.Limit) (
 				SettlementAsset: asset,
 			})
 		case domain.ScopeAccount:
-			account, err := newAccountID(limit.Target.Account)
+			account, err := res.account(limit.Account)
 			if err != nil {
 				return nil, nil, nil, nil, err
 			}
@@ -84,11 +190,11 @@ func rateLimitAxes(limits []domain.Limit) (
 				AccountID: account,
 			})
 		case domain.ScopeAccountAsset:
-			account, err := newAccountID(limit.Target.Account)
+			account, err := res.account(limit.Account)
 			if err != nil {
 				return nil, nil, nil, nil, err
 			}
-			asset, err := newAsset(limit.Target.Asset)
+			asset, err := newAsset(limit.Asset)
 			if err != nil {
 				return nil, nil, nil, nil, err
 			}
@@ -99,7 +205,7 @@ func rateLimitAxes(limits []domain.Limit) (
 			})
 		default:
 			return nil, nil, nil, nil, fmt.Errorf(
-				"engine: rate_limit unsupported scope %q", limit.Target.Scope)
+				"engine: rate_limit unsupported scope %q", limit.Scope)
 		}
 	}
 	return broker, assets, accounts, accountAssets, nil
@@ -115,7 +221,7 @@ func rateLimitAxes(limits []domain.Limit) (
 // mapping never has to clear a broker barrier. The at-least-one-barrier rule is
 // likewise enforced by the caller, which rejects an empty barrier set as
 // not-implemented.
-func orderSizeAxes(limits []domain.Limit) (
+func orderSizeAxes(limits []domain.LimitOrderSize, res idResolver) (
 	*policies.OrderSizeBrokerBarrier,
 	[]policies.OrderSizeAssetBarrier,
 	[]policies.OrderSizeAccountAssetBarrier,
@@ -126,15 +232,15 @@ func orderSizeAxes(limits []domain.Limit) (
 	accountAssets := []policies.OrderSizeAccountAssetBarrier{}
 
 	for _, limit := range limits {
-		size, err := orderSizeFromValues(limit.Values)
+		size, err := orderSizeValue(limit)
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		switch limit.Target.Scope {
+		switch limit.Scope {
 		case domain.ScopeBroker:
 			broker = &policies.OrderSizeBrokerBarrier{Limit: size}
 		case domain.ScopeAsset:
-			asset, err := newAsset(limit.Target.Asset)
+			asset, err := newAsset(limit.Asset)
 			if err != nil {
 				return nil, nil, nil, err
 			}
@@ -143,11 +249,11 @@ func orderSizeAxes(limits []domain.Limit) (
 				SettlementAsset: asset,
 			})
 		case domain.ScopeAccountAsset:
-			account, err := newAccountID(limit.Target.Account)
+			account, err := res.account(limit.Account)
 			if err != nil {
 				return nil, nil, nil, err
 			}
-			asset, err := newAsset(limit.Target.Asset)
+			asset, err := newAsset(limit.Asset)
 			if err != nil {
 				return nil, nil, nil, err
 			}
@@ -158,7 +264,7 @@ func orderSizeAxes(limits []domain.Limit) (
 			})
 		default:
 			return nil, nil, nil, fmt.Errorf(
-				"engine: order_size_limit unsupported scope %q", limit.Target.Scope)
+				"engine: order_size_limit unsupported scope %q", limit.Scope)
 		}
 	}
 	return broker, assets, accountAssets, nil
@@ -173,7 +279,7 @@ func orderSizeAxes(limits []domain.Limit) (
 // The account axis is the Update shape (PnlBoundsAccountAssetBarrierUpdate),
 // which retunes bounds without touching the live accumulated P&L: the runtime
 // configure path must not reset accumulators when only bounds change.
-func pnlBoundsAxes(limits []domain.Limit) (
+func pnlBoundsAxes(limits []domain.LimitPnlBounds, res idResolver) (
 	[]policies.PnlBoundsBrokerBarrier,
 	[]policies.PnlBoundsAccountAssetBarrierUpdate,
 	error,
@@ -182,7 +288,7 @@ func pnlBoundsAxes(limits []domain.Limit) (
 	accounts := []policies.PnlBoundsAccountAssetBarrierUpdate{}
 
 	for _, limit := range limits {
-		lower, upper, initial, err := pnlBoundsFromValues(limit.Values)
+		lower, upper, initial, err := pnlBoundsValues(limit)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -196,9 +302,9 @@ func pnlBoundsAxes(limits []domain.Limit) (
 					"update; it is only applied when the barrier is first created: %w",
 				domain.ErrInvalid)
 		}
-		switch limit.Target.Scope {
+		switch limit.Scope {
 		case domain.ScopeAsset:
-			asset, err := newAsset(limit.Target.Asset)
+			asset, err := newAsset(limit.Asset)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -208,11 +314,11 @@ func pnlBoundsAxes(limits []domain.Limit) (
 				UpperBound:      upper,
 			})
 		case domain.ScopeAccountAsset:
-			account, err := newAccountID(limit.Target.Account)
+			account, err := res.account(limit.Account)
 			if err != nil {
 				return nil, nil, err
 			}
-			asset, err := newAsset(limit.Target.Asset)
+			asset, err := newAsset(limit.Asset)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -226,7 +332,7 @@ func pnlBoundsAxes(limits []domain.Limit) (
 			})
 		default:
 			return nil, nil, fmt.Errorf(
-				"engine: pnl_bounds_kill_switch unsupported scope %q", limit.Target.Scope)
+				"engine: pnl_bounds_kill_switch unsupported scope %q", limit.Scope)
 		}
 	}
 	return brokers, accounts, nil
@@ -236,7 +342,7 @@ func pnlBoundsAxes(limits []domain.Limit) (
 // domain barrier carries both max_orders and window (domain validation
 // guarantees it), distributed across the broker/asset/account/account-asset
 // axes by scope.
-func rateLimitReady(limits []domain.Limit) (*policies.RateLimitReadyBuilder, error) {
+func rateLimitReady(limits []domain.LimitRate, res idResolver) (*policies.RateLimitReadyBuilder, error) {
 	builder := policies.BuildRateLimit()
 	ready := builder.PolicyGroupID(0)
 
@@ -247,15 +353,15 @@ func rateLimitReady(limits []domain.Limit) (*policies.RateLimitReadyBuilder, err
 		accountAssets []policies.RateLimitAccountAssetBarrier
 	)
 	for _, limit := range limits {
-		rate, err := rateLimitFromValues(limit.Values)
+		rate, err := rateLimitValue(limit)
 		if err != nil {
 			return nil, err
 		}
-		switch limit.Target.Scope {
+		switch limit.Scope {
 		case domain.ScopeBroker:
 			brokers = append(brokers, policies.RateLimitBrokerBarrier{Limit: rate})
 		case domain.ScopeAsset:
-			asset, err := newAsset(limit.Target.Asset)
+			asset, err := newAsset(limit.Asset)
 			if err != nil {
 				return nil, err
 			}
@@ -264,7 +370,7 @@ func rateLimitReady(limits []domain.Limit) (*policies.RateLimitReadyBuilder, err
 				SettlementAsset: asset,
 			})
 		case domain.ScopeAccount:
-			account, err := newAccountID(limit.Target.Account)
+			account, err := res.account(limit.Account)
 			if err != nil {
 				return nil, err
 			}
@@ -273,11 +379,11 @@ func rateLimitReady(limits []domain.Limit) (*policies.RateLimitReadyBuilder, err
 				AccountID: account,
 			})
 		case domain.ScopeAccountAsset:
-			account, err := newAccountID(limit.Target.Account)
+			account, err := res.account(limit.Account)
 			if err != nil {
 				return nil, err
 			}
-			asset, err := newAsset(limit.Target.Asset)
+			asset, err := newAsset(limit.Asset)
 			if err != nil {
 				return nil, err
 			}
@@ -287,8 +393,7 @@ func rateLimitReady(limits []domain.Limit) (*policies.RateLimitReadyBuilder, err
 				SettlementAsset: asset,
 			})
 		default:
-			return nil, fmt.Errorf("engine: rate_limit unsupported scope %q",
-				limit.Target.Scope)
+			return nil, fmt.Errorf("engine: rate_limit unsupported scope %q", limit.Scope)
 		}
 	}
 
@@ -302,7 +407,7 @@ func rateLimitReady(limits []domain.Limit) (*policies.RateLimitReadyBuilder, err
 }
 
 // orderSizeReady maps an order-size-limit barrier set onto a ready builder.
-func orderSizeReady(limits []domain.Limit) (*policies.OrderSizeLimitReadyBuilder, error) {
+func orderSizeReady(limits []domain.LimitOrderSize, res idResolver) (*policies.OrderSizeLimitReadyBuilder, error) {
 	builder := policies.BuildOrderSizeLimit()
 	ready := builder.PolicyGroupID(0)
 
@@ -312,15 +417,15 @@ func orderSizeReady(limits []domain.Limit) (*policies.OrderSizeLimitReadyBuilder
 		accountAssets []policies.OrderSizeAccountAssetBarrier
 	)
 	for _, limit := range limits {
-		size, err := orderSizeFromValues(limit.Values)
+		size, err := orderSizeValue(limit)
 		if err != nil {
 			return nil, err
 		}
-		switch limit.Target.Scope {
+		switch limit.Scope {
 		case domain.ScopeBroker:
 			brokers = append(brokers, policies.OrderSizeBrokerBarrier{Limit: size})
 		case domain.ScopeAsset:
-			asset, err := newAsset(limit.Target.Asset)
+			asset, err := newAsset(limit.Asset)
 			if err != nil {
 				return nil, err
 			}
@@ -329,11 +434,11 @@ func orderSizeReady(limits []domain.Limit) (*policies.OrderSizeLimitReadyBuilder
 				SettlementAsset: asset,
 			})
 		case domain.ScopeAccountAsset:
-			account, err := newAccountID(limit.Target.Account)
+			account, err := res.account(limit.Account)
 			if err != nil {
 				return nil, err
 			}
-			asset, err := newAsset(limit.Target.Asset)
+			asset, err := newAsset(limit.Asset)
 			if err != nil {
 				return nil, err
 			}
@@ -343,8 +448,7 @@ func orderSizeReady(limits []domain.Limit) (*policies.OrderSizeLimitReadyBuilder
 				SettlementAsset: asset,
 			})
 		default:
-			return nil, fmt.Errorf("engine: order_size_limit unsupported scope %q",
-				limit.Target.Scope)
+			return nil, fmt.Errorf("engine: order_size_limit unsupported scope %q", limit.Scope)
 		}
 	}
 
@@ -362,7 +466,7 @@ func orderSizeReady(limits []domain.Limit) (*policies.OrderSizeLimitReadyBuilder
 // initial_pnl value, else zero). Domain validation guarantees initial_pnl only
 // reaches the account-asset scope; the runtime Configure path cannot reseed and
 // rejects it instead.
-func pnlBoundsReady(limits []domain.Limit) (*policies.PnlBoundsKillswitchReadyBuilder, error) {
+func pnlBoundsReady(limits []domain.LimitPnlBounds, res idResolver) (*policies.PnlBoundsKillswitchReadyBuilder, error) {
 	builder := policies.BuildPnlBoundsKillswitch()
 	ready := builder.PolicyGroupID(0)
 
@@ -371,13 +475,13 @@ func pnlBoundsReady(limits []domain.Limit) (*policies.PnlBoundsKillswitchReadyBu
 		accounts []policies.PnlBoundsAccountAssetBarrier
 	)
 	for _, limit := range limits {
-		lower, upper, initial, err := pnlBoundsFromValues(limit.Values)
+		lower, upper, initial, err := pnlBoundsValues(limit)
 		if err != nil {
 			return nil, err
 		}
-		switch limit.Target.Scope {
+		switch limit.Scope {
 		case domain.ScopeAsset:
-			asset, err := newAsset(limit.Target.Asset)
+			asset, err := newAsset(limit.Asset)
 			if err != nil {
 				return nil, err
 			}
@@ -387,11 +491,11 @@ func pnlBoundsReady(limits []domain.Limit) (*policies.PnlBoundsKillswitchReadyBu
 				UpperBound:      upper,
 			})
 		case domain.ScopeAccountAsset:
-			account, err := newAccountID(limit.Target.Account)
+			account, err := res.account(limit.Account)
 			if err != nil {
 				return nil, err
 			}
-			asset, err := newAsset(limit.Target.Asset)
+			asset, err := newAsset(limit.Asset)
 			if err != nil {
 				return nil, err
 			}
@@ -409,8 +513,7 @@ func pnlBoundsReady(limits []domain.Limit) (*policies.PnlBoundsKillswitchReadyBu
 				InitialPnl: initialPnl,
 			})
 		default:
-			return nil, fmt.Errorf("engine: pnl_bounds_kill_switch unsupported scope %q",
-				limit.Target.Scope)
+			return nil, fmt.Errorf("engine: pnl_bounds_kill_switch unsupported scope %q", limit.Scope)
 		}
 	}
 
@@ -418,42 +521,18 @@ func pnlBoundsReady(limits []domain.Limit) (*policies.PnlBoundsKillswitchReadyBu
 	return ready, nil
 }
 
-// rateLimitFromValues extracts the rate limit from a barrier's values.
-func rateLimitFromValues(values []domain.LimitValue) (policies.RateLimit, error) {
-	var (
-		maxOrders uint64
-		window    time.Duration
-		hasMax    bool
-		hasWindow bool
-	)
-	for _, v := range values {
-		switch v.Kind {
-		case domain.KindMaxOrders:
-			n, err := parseMaxOrders(v.Value)
-			if err != nil {
-				return policies.RateLimit{}, err
-			}
-			maxOrders, hasMax = n, true
-		case domain.KindWindow:
-			d, err := time.ParseDuration(v.Value)
-			if err != nil {
-				return policies.RateLimit{}, fmt.Errorf(
-					"engine: rate_limit window %q: %w", v.Value, err)
-			}
-			window, hasWindow = d, true
-		default:
-			return policies.RateLimit{}, fmt.Errorf(
-				"engine: rate_limit unexpected kind %q", v.Kind)
-		}
-	}
-	if !hasMax || !hasWindow {
+// rateLimitValue extracts the engine rate limit from a typed rate barrier.
+// Domain validation already bounds max_orders to (0, 1e9] and window to (0, 24h].
+func rateLimitValue(limit domain.LimitRate) (policies.RateLimit, error) {
+	if limit.MaxOrders > math.MaxUint {
 		return policies.RateLimit{}, fmt.Errorf(
-			"engine: rate_limit requires max_orders and window")
+			"engine: rate_limit max_orders %d exceeds platform uint", limit.MaxOrders)
 	}
-	return policies.RateLimit{MaxOrders: uint(maxOrders), Window: window}, nil
+	return policies.RateLimit{MaxOrders: uint(limit.MaxOrders), Window: limit.Window}, nil
 }
 
-// orderSizeFromValues extracts the order-size limit from a barrier's values.
+// orderSizeValue extracts the engine order-size limit from a typed order-size
+// barrier.
 //
 // The binding's OrderSizeLimit always carries both a quantity and a notional
 // cap and rejects an order when it exceeds either (a strict ">"). The domain
@@ -461,7 +540,7 @@ func rateLimitFromValues(values []domain.LimitValue) (policies.RateLimit, error)
 // dimension must not constrain. The boundary adapter maps an omitted dimension
 // to the largest representable value so it never triggers a reject; this is a
 // transport-only sentinel and never participates in any calculation.
-func orderSizeFromValues(values []domain.LimitValue) (policies.OrderSizeLimit, error) {
+func orderSizeValue(limit domain.LimitOrderSize) (policies.OrderSizeLimit, error) {
 	maxQty, err := param.NewQuantityFromInt64(math.MaxInt64)
 	if err != nil {
 		return policies.OrderSizeLimit{}, fmt.Errorf(
@@ -472,117 +551,73 @@ func orderSizeFromValues(values []domain.LimitValue) (policies.OrderSizeLimit, e
 		return policies.OrderSizeLimit{}, fmt.Errorf(
 			"engine: order_size_limit unbounded notional: %w", err)
 	}
-	limit := policies.OrderSizeLimit{MaxQuantity: maxQty, MaxNotional: maxNotional}
+	out := policies.OrderSizeLimit{MaxQuantity: maxQty, MaxNotional: maxNotional}
 
-	for _, v := range values {
-		switch v.Kind {
-		case domain.KindMaxQuantity:
-			q, err := param.NewQuantityFromString(v.Value)
-			if err != nil {
-				return policies.OrderSizeLimit{}, fmt.Errorf(
-					"engine: order_size_limit max_quantity %q: %w", v.Value, err)
-			}
-			limit.MaxQuantity = q
-		case domain.KindMaxNotional:
-			n, err := param.NewVolumeFromString(v.Value)
-			if err != nil {
-				return policies.OrderSizeLimit{}, fmt.Errorf(
-					"engine: order_size_limit max_notional %q: %w", v.Value, err)
-			}
-			limit.MaxNotional = n
-		default:
+	if limit.MaxQuantity != "" {
+		q, err := param.NewQuantityFromString(limit.MaxQuantity)
+		if err != nil {
 			return policies.OrderSizeLimit{}, fmt.Errorf(
-				"engine: order_size_limit unexpected kind %q", v.Kind)
+				"engine: order_size_limit max_quantity %q: %w", limit.MaxQuantity, err)
 		}
+		out.MaxQuantity = q
 	}
-	return limit, nil
+	if limit.MaxNotional != "" {
+		n, err := param.NewVolumeFromString(limit.MaxNotional)
+		if err != nil {
+			return policies.OrderSizeLimit{}, fmt.Errorf(
+				"engine: order_size_limit max_notional %q: %w", limit.MaxNotional, err)
+		}
+		out.MaxNotional = n
+	}
+	return out, nil
 }
 
-// pnlBoundsFromValues extracts the optional lower and upper P&L bounds plus the
-// optional initial P&L seed from a barrier's values. initial_pnl is only honored
-// by the construction path (account-asset barrier); the runtime-update path must
-// reject it separately, since the binding's barrier-update shape cannot reseed
-// the live accumulator.
-func pnlBoundsFromValues(
-	values []domain.LimitValue,
+// pnlBoundsValues extracts the optional lower and upper P&L bounds plus the
+// optional initial P&L seed from a typed P&L barrier. initial_pnl is only
+// honored by the construction path (account-asset barrier); the runtime-update
+// path rejects it separately, since the binding's barrier-update shape cannot
+// reseed the live accumulator.
+func pnlBoundsValues(
+	limit domain.LimitPnlBounds,
 ) (lower, upper, initial optional.Option[param.Pnl], err error) {
 	lower = optional.None[param.Pnl]()
 	upper = optional.None[param.Pnl]()
 	initial = optional.None[param.Pnl]()
-	for _, v := range values {
-		switch v.Kind {
-		case domain.KindLowerBound:
-			p, perr := param.NewPnlFromString(v.Value)
-			if perr != nil {
-				return lower, upper, initial, fmt.Errorf(
-					"engine: pnl_bounds lower_bound %q: %w", v.Value, perr)
-			}
-			lower = optional.Some(p)
-		case domain.KindUpperBound:
-			p, perr := param.NewPnlFromString(v.Value)
-			if perr != nil {
-				return lower, upper, initial, fmt.Errorf(
-					"engine: pnl_bounds upper_bound %q: %w", v.Value, perr)
-			}
-			upper = optional.Some(p)
-		case domain.KindInitialPnl:
-			p, perr := param.NewPnlFromString(v.Value)
-			if perr != nil {
-				return lower, upper, initial, fmt.Errorf(
-					"engine: pnl_bounds initial_pnl %q: %w", v.Value, perr)
-			}
-			initial = optional.Some(p)
-		default:
+	if limit.LowerBound != "" {
+		p, perr := param.NewPnlFromString(limit.LowerBound)
+		if perr != nil {
 			return lower, upper, initial, fmt.Errorf(
-				"engine: pnl_bounds unexpected kind %q", v.Kind)
+				"engine: pnl_bounds lower_bound %q: %w", limit.LowerBound, perr)
 		}
+		lower = optional.Some(p)
+	}
+	if limit.UpperBound != "" {
+		p, perr := param.NewPnlFromString(limit.UpperBound)
+		if perr != nil {
+			return lower, upper, initial, fmt.Errorf(
+				"engine: pnl_bounds upper_bound %q: %w", limit.UpperBound, perr)
+		}
+		upper = optional.Some(p)
+	}
+	if limit.InitialPnl != "" {
+		p, perr := param.NewPnlFromString(limit.InitialPnl)
+		if perr != nil {
+			return lower, upper, initial, fmt.Errorf(
+				"engine: pnl_bounds initial_pnl %q: %w", limit.InitialPnl, perr)
+		}
+		initial = optional.Some(p)
 	}
 	return lower, upper, initial, nil
 }
 
-// parseMaxOrders parses an integer max_orders string into a uint64. Domain
-// validation already bounds it to (0, 1e9].
-func parseMaxOrders(s string) (uint64, error) {
-	n, err := strconv.ParseUint(s, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("engine: rate_limit max_orders %q: %w", s, err)
-	}
-	return n, nil
-}
-
-// newAccountID parses a caller-supplied domain account id into a
-// param.AccountID. A bad format is caller input, so it wraps domain.ErrInvalid
-// (HTTP 400); the internal seeding paths use param.NewAccountIDFromString
-// directly so a corrupt stored id stays an internal error.
-func newAccountID(id domain.AccountID) (param.AccountID, error) {
-	account, err := param.NewAccountIDFromString(id.String())
-	if err != nil {
-		return param.AccountID{}, fmt.Errorf("engine: account %q: %w: %w", id, err, domain.ErrInvalid)
-	}
-	return account, nil
-}
-
 // newAsset parses a caller-supplied asset code into a param.Asset. A bad format
-// is caller input, so it wraps domain.ErrInvalid (HTTP 400); the internal
-// seeding paths use param.NewAsset directly so a corrupt stored asset stays an
-// internal error.
+// is caller input, so it wraps domain.ErrInvalid (HTTP 400).
 func newAsset(code string) (param.Asset, error) {
 	asset, err := param.NewAsset(code)
 	if err != nil {
 		return param.Asset{}, fmt.Errorf("engine: asset %q: %w: %w", code, err, domain.ErrInvalid)
 	}
 	return asset, nil
-}
-
-// newAccountGroupID hashes a domain group id string into a param.AccountGroupID.
-// The binding hashes with FNV-1a; the same string always yields the same id, so
-// the store's group-id strings map deterministically onto the engine's groups.
-func newAccountGroupID(id string) (param.AccountGroupID, error) {
-	group, err := param.NewAccountGroupIDFromString(id)
-	if err != nil {
-		return param.AccountGroupID{}, fmt.Errorf("engine: group %q: %w", id, err)
-	}
-	return group, nil
 }
 
 // --- account adjustment translation ----------------------------------------
@@ -826,9 +861,10 @@ func adjustmentRejectFrom(r reject.Reject) domain.AdjustmentOutcomeRejected {
 // --- order translation ------------------------------------------------------
 
 // orderModelFrom maps a domain order onto a model.Order operation view:
-// instrument (base/quote), account, side, trade amount (quantity or volume), and
-// the optional limit price (omitted for market orders).
-func orderModelFrom(o domain.Order) (model.Order, error) {
+// instrument (base/quote), account (resolved to its stored engine id), side,
+// trade amount (quantity or volume), and the optional limit price (omitted for
+// market orders).
+func orderModelFrom(o domain.Order, res idResolver) (model.Order, error) {
 	base, err := newAsset(o.BaseAsset)
 	if err != nil {
 		return model.Order{}, err
@@ -837,7 +873,7 @@ func orderModelFrom(o domain.Order) (model.Order, error) {
 	if err != nil {
 		return model.Order{}, err
 	}
-	account, err := newAccountID(o.Account)
+	account, err := res.account(o.Account)
 	if err != nil {
 		return model.Order{}, err
 	}
@@ -922,8 +958,8 @@ func orderRejectsFrom(rejects []reject.Reject) []domain.OrderReject {
 // executionReportFrom maps a domain execution-report input onto a
 // model.ExecutionReport: the operation (instrument/account/side) and the fill
 // (last trade price+quantity, and the lock reconstructed from the single
-// reference price when present).
-func executionReportFrom(in domain.ExecutionReportInput) (model.ExecutionReport, error) {
+// reference price when present). The account is resolved to its stored engine id.
+func executionReportFrom(in domain.ExecutionReportInput, res idResolver) (model.ExecutionReport, error) {
 	base, err := newAsset(in.BaseAsset)
 	if err != nil {
 		return model.ExecutionReport{}, err
@@ -932,7 +968,7 @@ func executionReportFrom(in domain.ExecutionReportInput) (model.ExecutionReport,
 	if err != nil {
 		return model.ExecutionReport{}, err
 	}
-	account, err := newAccountID(in.Account)
+	account, err := res.account(in.Account)
 	if err != nil {
 		return model.ExecutionReport{}, err
 	}
@@ -951,7 +987,7 @@ func executionReportFrom(in domain.ExecutionReportInput) (model.ExecutionReport,
 			"engine: fill quantity %q: %w: %w", in.FillQuantity, err, domain.ErrInvalid)
 	}
 
-	lockBytes, err := lockBytesFromPrice(in.LockPrice)
+	lockBytes, err := fillLockBytes(in.LockPrice)
 	if err != nil {
 		return model.ExecutionReport{}, err
 	}
@@ -977,7 +1013,7 @@ func executionReportFrom(in domain.ExecutionReportInput) (model.ExecutionReport,
 // divided by the settlement price. The fill price and the lock are both the
 // settlement price, so the post-trade settlement realizes exactly what the
 // reservation held. Settle is final (the immediate fill closes the order).
-func immediateExecutionReport(o domain.Order, settlementPrice string) (model.ExecutionReport, error) {
+func immediateExecutionReport(o domain.Order, settlementPrice string, res idResolver) (model.ExecutionReport, error) {
 	quantity, err := immediateFillQuantity(o, settlementPrice)
 	if err != nil {
 		return model.ExecutionReport{}, err
@@ -990,9 +1026,9 @@ func immediateExecutionReport(o domain.Order, settlementPrice string) (model.Exe
 		LockPrice:    settlementPrice,
 		Account:      o.Account,
 		Side:         o.Side,
-		OrderID:      o.ID,
+		Order:        o.ExternalID,
 		Final:        true,
-	})
+	}, res)
 }
 
 // immediateFillQuantity resolves the base quantity an immediate fill settles.
@@ -1031,10 +1067,14 @@ func immediateFillQuantity(o domain.Order, settlementPrice string) (string, erro
 	}
 }
 
-// lockBytesFromPrice reconstructs a default-group pre-trade lock carrying one
-// reference price, returning its raw bytes for an execution-report fill. An
-// empty price yields a nil slice (no lock attached).
-func lockBytesFromPrice(lockPrice string) ([]byte, error) {
+// fillLockBytes reconstructs a default-group pre-trade lock carrying one
+// reference price and returns the in-process bytes an execution-report fill
+// hands to the binding via fill.SetLock. An empty price yields a nil slice (no
+// lock attached). This is NOT the persistence path: the fill lock is consumed by
+// the binding within the same call, so Lock.Bytes() (the in-process layout) is
+// correct here, whereas the durable order/reservation lock is serialized through
+// the lock seam (marshalLock).
+func fillLockBytes(lockPrice string) ([]byte, error) {
 	if lockPrice == "" {
 		return nil, nil
 	}

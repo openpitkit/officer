@@ -20,7 +20,9 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -32,6 +34,7 @@ import (
 
 	"go.openpit.dev/officer/internal/backend"
 	"go.openpit.dev/officer/internal/backup"
+	"go.openpit.dev/officer/internal/businesscsv"
 	"go.openpit.dev/officer/internal/domain"
 	"go.openpit.dev/officer/internal/engine"
 	"go.openpit.dev/officer/internal/mcpcatalog"
@@ -42,7 +45,7 @@ import (
 // fakeService is a fake Service for handler tests.
 type fakeService struct {
 	accounts       []domain.Account
-	limits         []domain.Limit
+	limits         node.AccountLimits
 	auditRows      []domain.AuditRow
 	auditFilter    domain.AuditFilter
 	groups         []domain.AccountGroup
@@ -61,6 +64,13 @@ type fakeService struct {
 	backupFilename string
 	backupSummary  backup.RestoreSummary
 	backupErr      error
+	csvExport      businesscsv.ExportFile
+	csvExportReq   backend.BusinessCSVExportRequest
+	csvPreview     backend.BusinessCSVImportPreview
+	csvPreviewReq  backend.BusinessCSVImportRequest
+	csvImport      backend.BusinessCSVImportResult
+	csvImportReq   backend.BusinessCSVImportRequest
+	csvErr         error
 	restoreArchive backup.Archive
 	restoreOptions backup.RestoreOptions
 	resetCalled    bool
@@ -71,6 +81,7 @@ type fakeService struct {
 	mdSearch       backend.MarketDataSymbolSearch
 	mdSearchInput  backend.MarketDataSymbolSearchInput
 	mdSearchErr    error
+	mdCreateResult domain.MarketDataInstance
 	status         backend.Status
 	statusErr      error
 	welcomeSeen    bool
@@ -83,6 +94,14 @@ type fakeService struct {
 	delLimErr      error
 	auditErr       error
 	groupErr       error
+
+	// Captured typed-limit puts and delete target, for round-trip assertions.
+	rateLimitPut      domain.LimitRate
+	orderSizeLimitPut domain.LimitOrderSize
+	pnlBoundsLimitPut domain.LimitPnlBounds
+	deleteLimitTarget node.LimitTarget
+	// Captured market-data instance create input.
+	mdCreateInstance domain.MarketDataInstance
 
 	// Error fields for list handlers whose service methods otherwise return a
 	// hardcoded nil; default nil so existing tests are unaffected.
@@ -110,6 +129,16 @@ type fakeService struct {
 	confirmForce          bool
 	cancelForce           bool
 	signingErr            error
+
+	// Captured caller-supplied external ids for the user-create surfaces. The
+	// adjustment id is captured on ApplyAdjustment; the order id is captured on
+	// SubmitOrderToken (which CREATES the order once, mirroring the backend).
+	adjustmentExternalID domain.ExternalID
+	submitOrderIn        domain.Order
+
+	// orders submitted-then-resolved, keyed by their used external id, so a fake
+	// SubmitOrderToken can create once and confirm/cancel resolve the same order.
+	submittedOrders map[string]domain.Order
 }
 
 type setMcpCall struct {
@@ -137,6 +166,27 @@ func (f *fakeService) RestoreBackup(
 	f.restoreOptions = opts
 	return f.backupSummary, f.backupErr
 }
+func (f *fakeService) ExportBusinessCSV(
+	_ context.Context,
+	req backend.BusinessCSVExportRequest,
+) (businesscsv.ExportFile, error) {
+	f.csvExportReq = req
+	return f.csvExport, f.csvErr
+}
+func (f *fakeService) PreviewBusinessCSVImport(
+	_ context.Context,
+	req backend.BusinessCSVImportRequest,
+) (backend.BusinessCSVImportPreview, error) {
+	f.csvPreviewReq = req
+	return f.csvPreview, f.csvErr
+}
+func (f *fakeService) ImportBusinessCSV(
+	_ context.Context,
+	req backend.BusinessCSVImportRequest,
+) (backend.BusinessCSVImportResult, error) {
+	f.csvImportReq = req
+	return f.csvImport, f.csvErr
+}
 func (f *fakeService) ResetDatabase(_ context.Context) error {
 	f.resetCalled = true
 	return f.resetErr
@@ -145,18 +195,18 @@ func (f *fakeService) CreateAccount(_ context.Context, id domain.AccountID) (dom
 	if f.createErr != nil {
 		return domain.Account{}, f.createErr
 	}
-	return domain.Account{ID: id, Tenant: domain.DefaultTenant}, nil
+	return domain.Account{Code: id}, nil
 }
-func (f *fakeService) GetAccountState(_ context.Context, id domain.AccountID) (domain.Account, []domain.Limit, error) {
+func (f *fakeService) GetAccountState(_ context.Context, id domain.AccountID) (domain.Account, node.AccountLimits, error) {
 	if f.stateErr != nil {
-		return domain.Account{}, nil, f.stateErr
+		return domain.Account{}, node.AccountLimits{}, f.stateErr
 	}
 	for _, a := range f.accounts {
-		if a.ID == id {
+		if a.Code == id {
 			return a, f.limits, nil
 		}
 	}
-	return domain.Account{}, nil, domain.ErrNotFound
+	return domain.Account{}, node.AccountLimits{}, domain.ErrNotFound
 }
 func (f *fakeService) BlockAccount(_ context.Context, _ domain.AccountID, _ string) error {
 	return f.blockErr
@@ -164,13 +214,28 @@ func (f *fakeService) BlockAccount(_ context.Context, _ domain.AccountID, _ stri
 func (f *fakeService) UnblockAccount(_ context.Context, _ domain.AccountID) error {
 	return f.unblockErr
 }
-func (f *fakeService) ListLimits(_ context.Context, _ domain.AccountID) ([]domain.Limit, error) {
+func (f *fakeService) DeleteAccount(
+	_ context.Context, _ domain.AccountID, _ bool,
+) error {
+	return f.stateErr
+}
+func (f *fakeService) ListLimits(_ context.Context, _ domain.AccountID) (node.AccountLimits, error) {
 	return f.limits, f.listLimErr
 }
-func (f *fakeService) PutLimit(_ context.Context, _ domain.Limit) error {
+func (f *fakeService) PutRateLimit(_ context.Context, l domain.LimitRate) error {
+	f.rateLimitPut = l
 	return f.putLimErr
 }
-func (f *fakeService) DeleteLimit(_ context.Context, _ domain.LimitTarget) error {
+func (f *fakeService) PutOrderSizeLimit(_ context.Context, l domain.LimitOrderSize) error {
+	f.orderSizeLimitPut = l
+	return f.putLimErr
+}
+func (f *fakeService) PutPnlBoundsLimit(_ context.Context, l domain.LimitPnlBounds) error {
+	f.pnlBoundsLimitPut = l
+	return f.putLimErr
+}
+func (f *fakeService) DeleteLimit(_ context.Context, t node.LimitTarget) error {
+	f.deleteLimitTarget = t
 	return f.delLimErr
 }
 func (f *fakeService) ListAudit(_ context.Context, _ int) ([]domain.AuditRow, error) {
@@ -204,11 +269,15 @@ func (f *fakeService) ListMarketData(_ context.Context) (backend.MarketDataStatu
 }
 func (f *fakeService) CreateMarketDataInstance(
 	_ context.Context, instance domain.MarketDataInstance,
-) error {
+) (domain.MarketDataInstance, error) {
+	f.mdCreateInstance = instance
 	f.mdCalls = append(f.mdCalls,
 		fmt.Sprintf("create:%s:%s:%s:%v",
-			instance.Type, instance.Label, instance.Credentials, instance.Enabled))
-	return f.stateErr
+			instance.Provider, instance.Label, instance.Credentials, instance.Enabled))
+	if !f.mdCreateResult.ExternalID.IsZero() {
+		return f.mdCreateResult, f.stateErr
+	}
+	return instance, f.stateErr
 }
 func (f *fakeService) SetMarketDataInstanceEnabled(
 	_ context.Context, id string, enabled bool,
@@ -223,8 +292,10 @@ func (f *fakeService) UpdateMarketDataInstanceSettings(
 		fmt.Sprintf("settings:%s:%s:%s", id, label, credentials))
 	return f.stateErr
 }
-func (f *fakeService) DeleteMarketDataInstance(_ context.Context, id string) error {
-	f.mdCalls = append(f.mdCalls, "delete-instance:"+id)
+func (f *fakeService) DeleteMarketDataInstance(
+	_ context.Context, id string, force bool,
+) error {
+	f.mdCalls = append(f.mdCalls, fmt.Sprintf("delete-instance:%s:%v", id, force))
 	return f.stateErr
 }
 func (f *fakeService) UpsertMarketDataInstrument(
@@ -265,24 +336,26 @@ func (f *fakeService) SetAccountGroup(_ context.Context, _ domain.AccountID, _ s
 func (f *fakeService) SetAccountNotes(_ context.Context, _ domain.AccountID, _ string) error {
 	return f.stateErr
 }
-func (f *fakeService) CreateGroup(_ context.Context, g domain.AccountGroup) error {
+func (f *fakeService) CreateGroup(
+	_ context.Context, g domain.AccountGroup,
+) (domain.AccountGroup, error) {
 	if f.groupErr != nil {
-		return f.groupErr
+		return domain.AccountGroup{}, f.groupErr
 	}
 	f.groups = append(f.groups, g)
-	return nil
+	return g, nil
 }
 func (f *fakeService) ListGroups(_ context.Context) ([]domain.AccountGroup, error) {
 	return f.groups, f.groupErr
 }
 func (f *fakeService) GetGroup(
-	_ context.Context, id string,
+	_ context.Context, code string,
 ) (domain.AccountGroup, []domain.Account, error) {
 	if f.groupErr != nil {
 		return domain.AccountGroup{}, nil, f.groupErr
 	}
 	for _, g := range f.groups {
-		if g.ID == id {
+		if g.Code == code {
 			return g, f.accounts, nil
 		}
 	}
@@ -298,8 +371,10 @@ func (f *fakeService) DeleteGroup(_ context.Context, _ string) error {
 	return f.groupErr
 }
 func (f *fakeService) ApplyAdjustment(
-	_ context.Context, _ domain.AccountID, _ domain.AdjustmentRequest,
+	_ context.Context, _ domain.AccountID, externalID domain.ExternalID,
+	_ domain.AdjustmentRequest,
 ) (domain.AccountAdjustmentRecord, error) {
+	f.adjustmentExternalID = externalID
 	return f.adjustment, f.stateErr
 }
 func (f *fakeService) ListBalances(
@@ -329,7 +404,7 @@ func (f *fakeService) ApplyExecutionReport(
 	f.execReportIn = in
 	return engine.ExecutionReportResult{}, f.stateErr
 }
-func (f *fakeService) GetOrder(_ context.Context, _ int64) (domain.OrderDetail, error) {
+func (f *fakeService) GetOrder(_ context.Context, _ string) (domain.OrderDetail, error) {
 	return f.orderDetail, f.stateErr
 }
 func (f *fakeService) ListOrders(
@@ -371,23 +446,59 @@ func (f *fakeService) SetNoESign(_ context.Context, off bool) error {
 	f.noESignSet = off
 	return f.signingErr
 }
+
+// SubmitOrderToken mirrors the real backend: submit CREATES the order exactly
+// once. It uses the caller-supplied external id when set, otherwise generates a
+// deterministic one, records the created order keyed by that id, and returns an
+// approval token whose OrderExternalID is the id actually used — so a later
+// confirm/cancel resolves the same order. When signingErr is set it surfaces
+// before any create, so duplicate/malformed-id rejection can be exercised.
 func (f *fakeService) SubmitOrderToken(
-	_ context.Context, _ domain.Order, mode string,
+	_ context.Context, o domain.Order, mode string,
 ) (backend.ApprovalToken, error) {
 	f.submitTokenMode = mode
-	return f.approvalToken, f.signingErr
+	f.submitOrderIn = o
+	if f.signingErr != nil {
+		return backend.ApprovalToken{}, f.signingErr
+	}
+	used := o.ExternalID
+	if used.IsZero() {
+		used = extID("generated-order")
+	}
+	o.ExternalID = used
+	if f.submittedOrders == nil {
+		f.submittedOrders = make(map[string]domain.Order)
+	}
+	f.submittedOrders[used.String()] = o
+	tok := f.approvalToken
+	tok.OrderExternalID = used.String()
+	return tok, nil
 }
 func (f *fakeService) ConfirmExecution(
-	_ context.Context, _ int64, _ string, force bool,
+	_ context.Context, orderID string, _ string, force bool,
 ) (domain.Order, error) {
 	f.confirmForce = force
-	return f.submitOrder, f.signingErr
+	if f.signingErr != nil {
+		return domain.Order{}, f.signingErr
+	}
+	if o, ok := f.submittedOrders[orderID]; ok {
+		o.Status = domain.OrderStatusCommitted
+		return o, nil
+	}
+	return f.submitOrder, nil
 }
 func (f *fakeService) CancelOrder(
-	_ context.Context, _ int64, _, _ string, force bool,
+	_ context.Context, orderID string, _, _ string, force bool,
 ) (domain.Order, error) {
 	f.cancelForce = force
-	return f.submitOrder, f.signingErr
+	if f.signingErr != nil {
+		return domain.Order{}, f.signingErr
+	}
+	if o, ok := f.submittedOrders[orderID]; ok {
+		o.Status = domain.OrderStatusRejected
+		return o, nil
+	}
+	return f.submitOrder, nil
 }
 
 // fakeSPA returns a minimal in-memory filesystem for the SPA option.
@@ -409,6 +520,31 @@ func bodyMap(t *testing.T, resp *http.Response) map[string]any {
 		t.Fatalf("decode body: %v", err)
 	}
 	return m
+}
+
+// extID builds a deterministic ExternalID from a short seed for test fixtures.
+// The wire form is the 22-char base64url of the 16 raw bytes.
+func extID(seed string) domain.ExternalID {
+	var b [16]byte
+	copy(b[:], seed)
+	id, err := domain.ExternalIDFromBytes(b[:])
+	if err != nil {
+		panic(err)
+	}
+	return id
+}
+
+// assertNoSurrogateID fails if a decoded response sub-map leaks any forbidden
+// surrogate or engine identifier key. The new identity model addresses resources
+// by their public handle (code / externalId) only; no numeric or engine id is
+// ever serialized.
+func assertNoSurrogateID(t *testing.T, obj map[string]any) {
+	t.Helper()
+	for _, k := range []string{"id", "orderId", "engineId", "engineAccountId", "engineGroupId"} {
+		if _, ok := obj[k]; ok {
+			t.Fatalf("response leaked forbidden key %q: %v", k, obj)
+		}
+	}
 }
 
 func TestHealthz(t *testing.T) {
@@ -464,10 +600,225 @@ func TestV1Status(t *testing.T) {
 	}
 }
 
+func TestBusinessCSVExport(t *testing.T) {
+	svc := &fakeService{csvExport: businesscsv.ExportFile{
+		Name:        "pit-officer-accounts-20260625T100000Z.csv",
+		ContentType: "text/csv; charset=utf-8",
+		Body:        []byte("account_id,group_id\nacc-1,desk-a\n"),
+	}}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{
+		"entity":"accounts",
+		"delimiter":"pipe",
+		"zip":true,
+		"filters":{"groupCode":"desk-a","account":"acc-1","asset":"AAPL","source":"api"}
+	}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost, "/api/v1/business-csv/export", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Disposition"); got !=
+		`attachment; filename="pit-officer-accounts-20260625T100000Z.csv"` {
+		t.Fatalf("content disposition = %q", got)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "text/csv; charset=utf-8" {
+		t.Fatalf("content type = %q", got)
+	}
+	if svc.csvExportReq.Entity != businesscsv.EntityAccounts ||
+		svc.csvExportReq.Delimiter != businesscsv.DelimiterPipe ||
+		!svc.csvExportReq.Zip ||
+		svc.csvExportReq.Filter.GroupCode != "desk-a" ||
+		!svc.csvExportReq.Filter.GroupCodeSet ||
+		svc.csvExportReq.Filter.Account != "acc-1" ||
+		svc.csvExportReq.Filter.Asset != "AAPL" ||
+		svc.csvExportReq.Filter.Source != domain.SourceAPI {
+		t.Fatalf("csvExportReq = %+v", svc.csvExportReq)
+	}
+}
+
+func TestBusinessCSVExportOmittedGroupFilter(t *testing.T) {
+	svc := &fakeService{csvExport: businesscsv.ExportFile{
+		Name:        "pit-officer-accounts-20260625T100000Z.csv",
+		ContentType: "text/csv; charset=utf-8",
+		Body:        []byte("account_id,group_id\n"),
+	}}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{
+		"entity":"accounts",
+		"delimiter":"comma",
+		"filters":{"account":"acc-1"}
+	}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost, "/api/v1/business-csv/export", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if svc.csvExportReq.Filter.GroupCodeSet ||
+		svc.csvExportReq.Filter.GroupCode != "" {
+		t.Fatalf("csvExportReq = %+v", svc.csvExportReq)
+	}
+}
+
+func TestBusinessCSVExportExplicitEmptyGroupFilter(t *testing.T) {
+	svc := &fakeService{csvExport: businesscsv.ExportFile{
+		Name:        "pit-officer-accounts-20260625T100000Z.csv",
+		ContentType: "text/csv; charset=utf-8",
+		Body:        []byte("account_id,group_id\n"),
+	}}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{
+		"entity":"accounts",
+		"delimiter":"comma",
+		"filters":{"groupCode":""}
+	}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost, "/api/v1/business-csv/export", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !svc.csvExportReq.Filter.GroupCodeSet ||
+		svc.csvExportReq.Filter.GroupCode != "" {
+		t.Fatalf("csvExportReq = %+v", svc.csvExportReq)
+	}
+}
+
+func TestBusinessCSVImport(t *testing.T) {
+	svc := &fakeService{csvImport: backend.BusinessCSVImportResult{
+		Counts: businesscsv.ImportCounts{Rows: 1, Applied: 1},
+		File:   businesscsv.ImportFile{Name: "accounts.csv", Type: "csv"},
+	}}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := base64.StdEncoding.EncodeToString([]byte(
+		"account_id,group_id,notes,blocked,block_reason\nacc-1,,note,false,\n",
+	))
+	body := bytes.NewBufferString(fmt.Sprintf(`{
+		"entity":"accounts",
+		"delimiter":"comma",
+		"filename":"accounts.csv",
+		"payloadBase64":%q,
+		"conflictPolicy":"replace"
+	}`, payload))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost, "/api/v1/business-csv/import", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if svc.csvImportReq.Entity != businesscsv.EntityAccounts ||
+		svc.csvImportReq.Delimiter != businesscsv.DelimiterComma ||
+		svc.csvImportReq.Filename != "accounts.csv" ||
+		svc.csvImportReq.ConflictPolicy != businesscsv.ConflictReplace ||
+		!bytes.Contains(svc.csvImportReq.Payload, []byte("acc-1")) {
+		t.Fatalf("csvImportReq = %+v", svc.csvImportReq)
+	}
+}
+
+func TestDecodeBusinessCSVPayloadBase64SizeGuard(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		encoded  string
+		maxBytes int
+		wantErr  bool
+	}{
+		{
+			name:     "pre-decode too large",
+			encoded:  "AAAAAAAAA",
+			maxBytes: 4,
+			wantErr:  true,
+		},
+		{
+			name:     "post-decode too large",
+			encoded:  base64.StdEncoding.EncodeToString([]byte("12345")),
+			maxBytes: 4,
+			wantErr:  true,
+		},
+		{
+			name:     "at limit",
+			encoded:  base64.StdEncoding.EncodeToString([]byte("1234")),
+			maxBytes: 4,
+			wantErr:  false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			payload, err := decodeBusinessCSVPayloadBase64(tc.encoded, tc.maxBytes)
+			if tc.wantErr {
+				if !errors.Is(err, domain.ErrTooLarge) {
+					t.Fatalf("error = %v, want too large", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("decodeBusinessCSVPayloadBase64: %v", err)
+			}
+			if string(payload) != "1234" {
+				t.Fatalf("payload = %q, want 1234", payload)
+			}
+		})
+	}
+}
+
+func TestWriteErrMapsTooLargeTo413(t *testing.T) {
+	t.Parallel()
+	rec := httptest.NewRecorder()
+
+	writeErr(rec, businesscsv.NewTooLargeError(false))
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413 body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Error.Code != "too_large" ||
+		body.Error.Message == "" {
+		t.Fatalf("error body = %+v", body.Error)
+	}
+}
+
+func TestRequestBodyLimitUsesImportEnvelopeCap(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest(
+		http.MethodPost, "/api/v1/business-csv/import/preview", nil,
+	)
+	if got := requestBodyLimit(req); got != maxImportBody {
+		t.Fatalf("requestBodyLimit import = %d, want %d", got, maxImportBody)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/backup/restore", nil)
+	if got := requestBodyLimit(req); got != maxBackupRestoreBody {
+		t.Fatalf("requestBodyLimit backup = %d, want %d", got, maxBackupRestoreBody)
+	}
+}
+
 func TestListAccounts(t *testing.T) {
 	svc := &fakeService{
 		accounts: []domain.Account{
-			{ID: "acc-1", Tenant: domain.DefaultTenant, Blocked: false},
+			{Code: "acc-1", Title: "Account One", Blocked: false},
 		},
 	}
 	r, err := newRouter(svc)
@@ -485,9 +836,14 @@ func TestListAccounts(t *testing.T) {
 		t.Fatalf("want 1 account, got %v", m["accounts"])
 	}
 	a := accounts[0].(map[string]any)
-	if a["id"] != "acc-1" {
-		t.Fatalf("want id=acc-1, got %v", a["id"])
+	// Accounts are addressed by their public code; no surrogate id leaks.
+	if a["code"] != "acc-1" {
+		t.Fatalf("want code=acc-1, got %v", a["code"])
 	}
+	if a["title"] != "Account One" {
+		t.Fatalf("want title=Account One, got %v", a["title"])
+	}
+	assertNoSurrogateID(t, a)
 	if _, ok := a["blocked"]; !ok {
 		t.Fatal("missing blocked field")
 	}
@@ -501,7 +857,7 @@ func TestCreateAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := bytes.NewBufferString(`{"id":"acc-1"}`)
+	body := bytes.NewBufferString(`{"code":"acc-1"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/accounts", body))
 	if rec.Code != http.StatusCreated {
@@ -512,9 +868,10 @@ func TestCreateAccount(t *testing.T) {
 	if !ok {
 		t.Fatalf("want account object, got %v", m["account"])
 	}
-	if acc["id"] != "acc-1" {
-		t.Fatalf("want id=acc-1, got %v", acc["id"])
+	if acc["code"] != "acc-1" {
+		t.Fatalf("want code=acc-1, got %v", acc["code"])
 	}
+	assertNoSurrogateID(t, acc)
 }
 
 func TestCreateAccount_ValidationError(t *testing.T) {
@@ -522,8 +879,8 @@ func TestCreateAccount_ValidationError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Empty id fails ValidateAccountID
-	body := bytes.NewBufferString(`{"id":""}`)
+	// Empty code fails ValidateAccountID
+	body := bytes.NewBufferString(`{"code":""}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/accounts", body))
 	if rec.Code != http.StatusBadRequest {
@@ -542,7 +899,7 @@ func TestCreateAccount_Conflict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := bytes.NewBufferString(`{"id":"acc-1"}`)
+	body := bytes.NewBufferString(`{"code":"acc-1"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/accounts", body))
 	if rec.Code != http.StatusConflict {
@@ -619,19 +976,15 @@ func TestVerifyMarketDataSymbol_SuggestionFlows(t *testing.T) {
 func TestGetAccount(t *testing.T) {
 	svc := &fakeService{
 		accounts: []domain.Account{
-			{ID: "acc-1", Tenant: domain.DefaultTenant},
+			{Code: "acc-1", Title: "Account One"},
 		},
-		limits: []domain.Limit{
-			{
-				Target: domain.LimitTarget{
-					Policy:  domain.PolicyRateLimit,
-					Scope:   domain.ScopeAccount,
-					Account: "acc-1",
-					Tenant:  domain.DefaultTenant,
-				},
-				Values: []domain.LimitValue{
-					{Kind: domain.KindMaxOrders, Value: "100"},
-					{Kind: domain.KindWindow, Value: "1s"},
+		limits: node.AccountLimits{
+			RateLimits: []domain.LimitRate{
+				{
+					Scope:     domain.ScopeAccount,
+					Account:   "acc-1",
+					Window:    time.Second,
+					MaxOrders: 100,
 				},
 			},
 		},
@@ -646,12 +999,27 @@ func TestGetAccount(t *testing.T) {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 	m := bodyMap(t, rec.Result())
-	if _, ok := m["account"]; !ok {
+	acc, ok := m["account"].(map[string]any)
+	if !ok {
 		t.Fatal("missing account field")
 	}
-	limits, _ := m["limits"].([]any)
-	if len(limits) != 1 {
-		t.Fatalf("want 1 limit, got %d", len(limits))
+	if acc["code"] != "acc-1" {
+		t.Fatalf("want code=acc-1, got %v", acc["code"])
+	}
+	assertNoSurrogateID(t, acc)
+	// The per-policy limits view carries the three typed barrier arrays.
+	limits, ok := m["limits"].(map[string]any)
+	if !ok {
+		t.Fatalf("want limits object, got %v", m["limits"])
+	}
+	rates, _ := limits["rateLimits"].([]any)
+	if len(rates) != 1 {
+		t.Fatalf("want 1 rate limit, got %v", limits["rateLimits"])
+	}
+	rate := rates[0].(map[string]any)
+	if rate["scope"] != domain.ScopeAccount || rate["account"] != "acc-1" ||
+		rate["maxOrders"] != float64(100) || rate["windowMs"] != float64(1000) {
+		t.Fatalf("unexpected rate limit: %v", rate)
 	}
 }
 
@@ -677,7 +1045,7 @@ func TestGetAccount_URLEncodedID(t *testing.T) {
 	// before reaching the service. %40 = '@'.
 	svc := &fakeService{
 		accounts: []domain.Account{
-			{ID: "acc@1", Tenant: domain.DefaultTenant},
+			{Code: "acc@1"},
 		},
 	}
 	r, err := newRouter(svc)
@@ -694,7 +1062,7 @@ func TestGetAccount_URLEncodedID(t *testing.T) {
 
 func TestBlockAccount(t *testing.T) {
 	svc := &fakeService{
-		accounts: []domain.Account{{ID: "acc-1", Tenant: domain.DefaultTenant}},
+		accounts: []domain.Account{{Code: "acc-1"}},
 	}
 	r, err := newRouter(svc)
 	if err != nil {
@@ -726,7 +1094,7 @@ func TestBlockAccount_NotFound(t *testing.T) {
 
 func TestUnblockAccount(t *testing.T) {
 	svc := &fakeService{
-		accounts: []domain.Account{{ID: "acc-1", Tenant: domain.DefaultTenant}},
+		accounts: []domain.Account{{Code: "acc-1"}},
 	}
 	r, err := newRouter(svc)
 	if err != nil {
@@ -742,16 +1110,9 @@ func TestUnblockAccount(t *testing.T) {
 
 func TestListLimits(t *testing.T) {
 	svc := &fakeService{
-		limits: []domain.Limit{
-			{
-				Target: domain.LimitTarget{
-					Policy: domain.PolicyOrderSizeLimit,
-					Scope:  domain.ScopeBroker,
-					Tenant: domain.DefaultTenant,
-				},
-				Values: []domain.LimitValue{
-					{Kind: domain.KindMaxQuantity, Value: "500"},
-				},
+		limits: node.AccountLimits{
+			OrderSizeLimits: []domain.LimitOrderSize{
+				{Scope: domain.ScopeBroker, MaxQuantity: "500"},
 			},
 		},
 	}
@@ -765,16 +1126,23 @@ func TestListLimits(t *testing.T) {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 	m := bodyMap(t, rec.Result())
-	limits, _ := m["limits"].([]any)
-	if len(limits) != 1 {
-		t.Fatalf("want 1 limit, got %v", m["limits"])
+	// GET /limits returns the three-array per-policy object, never a flat list.
+	limits, ok := m["limits"].(map[string]any)
+	if !ok {
+		t.Fatalf("want limits object, got %v", m["limits"])
 	}
-	// Verify the limit shape has the camelCase keys contract requires.
-	l := limits[0].(map[string]any)
-	for _, field := range []string{"policy", "scope", "account", "asset", "values"} {
-		if _, ok := l[field]; !ok {
-			t.Fatalf("limit missing field %q", field)
+	for _, field := range []string{"rateLimits", "orderSizeLimits", "pnlBoundsLimits"} {
+		if _, ok := limits[field].([]any); !ok {
+			t.Fatalf("limits missing array field %q: %v", field, limits)
 		}
+	}
+	sizes, _ := limits["orderSizeLimits"].([]any)
+	if len(sizes) != 1 {
+		t.Fatalf("want 1 order-size limit, got %v", limits["orderSizeLimits"])
+	}
+	size := sizes[0].(map[string]any)
+	if size["scope"] != domain.ScopeBroker || size["maxQuantity"] != "500" {
+		t.Fatalf("unexpected order-size limit: %v", size)
 	}
 }
 
@@ -791,45 +1159,157 @@ func TestListLimits_AccountFilter(t *testing.T) {
 	}
 }
 
-func TestPutLimit(t *testing.T) {
-	r, err := newRouter(&fakeService{})
-	if err != nil {
-		t.Fatal(err)
+func TestPutRateLimit(t *testing.T) {
+	svc := &fakeService{
+		limits: node.AccountLimits{
+			RateLimits: []domain.LimitRate{
+				{
+					Scope:     domain.ScopeAccountAsset,
+					Account:   "acc-1",
+					Asset:     "AAPL",
+					Window:    2 * time.Second,
+					MaxOrders: 101,
+				},
+			},
+		},
 	}
-	body := bytes.NewBufferString(`{
-		"policy":"rate_limit","scope":"account_asset",
-		"account":"acc-1","asset":"AAPL",
-		"values":{"max_orders":"100","window":"1s"}
-	}`)
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits", body))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	m := bodyMap(t, rec.Result())
-	if _, ok := m["limit"]; !ok {
-		t.Fatal("response missing limit field")
-	}
-}
-
-func TestPutLimit_ValidationError(t *testing.T) {
-	svc := &fakeService{putLimErr: fmt.Errorf("bad scope: %w", domain.ErrInvalid)}
 	r, err := newRouter(svc)
 	if err != nil {
 		t.Fatal(err)
 	}
 	body := bytes.NewBufferString(`{
-		"policy":"rate_limit","scope":"broker",
-		"values":{"max_orders":"100","window":"1s"}
+		"scope":"account_asset","account":"acc-1","asset":"AAPL",
+		"windowMs":1000,"maxOrders":100
 	}`)
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits", body))
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits/rate", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	// The handler captures the typed barrier and responds from persisted state.
+	if svc.rateLimitPut.Scope != domain.ScopeAccountAsset ||
+		svc.rateLimitPut.Account != "acc-1" ||
+		svc.rateLimitPut.Asset != "AAPL" ||
+		svc.rateLimitPut.Window != time.Second ||
+		svc.rateLimitPut.MaxOrders != 100 {
+		t.Fatalf("captured rate limit = %+v", svc.rateLimitPut)
+	}
+	m := bodyMap(t, rec.Result())
+	rl, ok := m["rateLimit"].(map[string]any)
+	if !ok {
+		t.Fatalf("response missing rateLimit field: %v", m)
+	}
+	if rl["maxOrders"] != float64(101) || rl["windowMs"] != float64(2000) {
+		t.Fatalf("unexpected persisted rateLimit: %v", rl)
+	}
+}
+
+func TestPutOrderSizeLimit(t *testing.T) {
+	svc := &fakeService{
+		limits: node.AccountLimits{
+			OrderSizeLimits: []domain.LimitOrderSize{
+				{
+					Scope:       domain.ScopeAccountAsset,
+					Account:     "acc-1",
+					Asset:       "AAPL",
+					MaxQuantity: "501",
+					MaxNotional: "50001",
+				},
+			},
+		},
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{
+		"scope":"account_asset","account":"acc-1","asset":"AAPL",
+		"maxQuantity":"500","maxNotional":"50000"
+	}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits/order-size", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if svc.orderSizeLimitPut.Scope != domain.ScopeAccountAsset ||
+		svc.orderSizeLimitPut.Account != "acc-1" ||
+		svc.orderSizeLimitPut.Asset != "AAPL" ||
+		svc.orderSizeLimitPut.MaxQuantity != "500" ||
+		svc.orderSizeLimitPut.MaxNotional != "50000" {
+		t.Fatalf("captured order-size limit = %+v", svc.orderSizeLimitPut)
+	}
+	m := bodyMap(t, rec.Result())
+	osl, ok := m["orderSizeLimit"].(map[string]any)
+	if !ok {
+		t.Fatalf("response missing orderSizeLimit field: %v", m)
+	}
+	if osl["maxQuantity"] != "501" || osl["maxNotional"] != "50001" {
+		t.Fatalf("unexpected persisted orderSizeLimit: %v", osl)
+	}
+}
+
+func TestPutPnlBoundsLimit(t *testing.T) {
+	svc := &fakeService{
+		limits: node.AccountLimits{
+			PnlBoundsLimits: []domain.LimitPnlBounds{
+				{
+					Scope:      domain.ScopeAccountAsset,
+					Account:    "acc-1",
+					Asset:      "AAPL",
+					LowerBound: "-999",
+					UpperBound: "5001",
+					InitialPnl: "1",
+				},
+			},
+		},
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{
+		"scope":"account_asset","account":"acc-1","asset":"AAPL",
+		"lowerBound":"-1000","upperBound":"5000","initialPnl":"0"
+	}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits/pnl-bounds", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if svc.pnlBoundsLimitPut.Scope != domain.ScopeAccountAsset ||
+		svc.pnlBoundsLimitPut.Account != "acc-1" ||
+		svc.pnlBoundsLimitPut.Asset != "AAPL" ||
+		svc.pnlBoundsLimitPut.LowerBound != "-1000" ||
+		svc.pnlBoundsLimitPut.UpperBound != "5000" ||
+		svc.pnlBoundsLimitPut.InitialPnl != "0" {
+		t.Fatalf("captured pnl-bounds limit = %+v", svc.pnlBoundsLimitPut)
+	}
+	m := bodyMap(t, rec.Result())
+	pbl, ok := m["pnlBoundsLimit"].(map[string]any)
+	if !ok {
+		t.Fatalf("response missing pnlBoundsLimit field: %v", m)
+	}
+	if pbl["lowerBound"] != "-999" || pbl["upperBound"] != "5001" ||
+		pbl["initialPnl"] != "1" {
+		t.Fatalf("unexpected persisted pnlBoundsLimit: %v", pbl)
+	}
+}
+
+func TestPutRateLimit_ValidationError(t *testing.T) {
+	svc := &fakeService{putLimErr: fmt.Errorf("bad scope: %w", domain.ErrInvalid)}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"scope":"broker","windowMs":1000,"maxOrders":100}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits/rate", body))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 }
 
-func TestPutLimit_NotImplemented(t *testing.T) {
+func TestPutRateLimit_NotImplemented(t *testing.T) {
 	// A wrapped domain.ErrNotImplemented (the engine's not-implemented stub
 	// surfacing through the node and backend) maps to HTTP 501 with the wrapped
 	// message, taking precedence over the generic 500 path.
@@ -841,12 +1321,9 @@ func TestPutLimit_NotImplemented(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := bytes.NewBufferString(`{
-		"policy":"rate_limit","scope":"asset","asset":"AAPL",
-		"values":{"max_orders":"100","window":"1s"}
-	}`)
+	body := bytes.NewBufferString(`{"scope":"asset","asset":"AAPL","windowMs":1000,"maxOrders":100}`)
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits", body))
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits/rate", body))
 	if rec.Code != http.StatusNotImplemented {
 		t.Fatalf("want 501, got %d", rec.Code)
 	}
@@ -860,7 +1337,7 @@ func TestPutLimit_NotImplemented(t *testing.T) {
 	}
 }
 
-func TestPutLimit_EngineRestarting(t *testing.T) {
+func TestPutRateLimit_EngineRestarting(t *testing.T) {
 	const msg = "engine restart in progress; mutating requests are rejected until rebuild completes"
 	svc := &fakeService{
 		putLimErr: fmt.Errorf("%s: %w", msg, domain.ErrEngineRestarting),
@@ -869,12 +1346,9 @@ func TestPutLimit_EngineRestarting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := bytes.NewBufferString(`{
-		"policy":"rate_limit","scope":"asset","asset":"AAPL",
-		"values":{"max_orders":"100","window":"1s"}
-	}`)
+	body := bytes.NewBufferString(`{"scope":"asset","asset":"AAPL","windowMs":1000,"maxOrders":100}`)
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits", body))
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits/rate", body))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("want 503, got %d", rec.Code)
 	}
@@ -889,15 +1363,23 @@ func TestPutLimit_EngineRestarting(t *testing.T) {
 }
 
 func TestDeleteLimit(t *testing.T) {
-	r, err := newRouter(&fakeService{})
+	svc := &fakeService{}
+	r, err := newRouter(svc)
 	if err != nil {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete,
-		"/api/v1/limits?policy=rate_limit&scope=broker", nil))
+		"/api/v1/limits?policy=rate_limit&scope=account_asset&account=acc-1&asset=AAPL", nil))
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("want 204, got %d", rec.Code)
+	}
+	// The delete target round-trips into the typed node.LimitTarget.
+	if svc.deleteLimitTarget.Policy != domain.PolicyRateLimit ||
+		svc.deleteLimitTarget.Scope != domain.ScopeAccountAsset ||
+		svc.deleteLimitTarget.Account != "acc-1" ||
+		svc.deleteLimitTarget.Asset != "AAPL" {
+		t.Fatalf("captured delete target = %+v", svc.deleteLimitTarget)
 	}
 }
 
@@ -915,17 +1397,81 @@ func TestDeleteLimit_NotFound(t *testing.T) {
 	}
 }
 
+// TestDeleteAccount_HasDependents asserts the 409 has_dependents wire shape: a
+// HasDependentsError from the service maps to HTTP 409 with body
+// error.code == "has_dependents" and a dependents array of {kind, count}.
+func TestDeleteAccount_HasDependents(t *testing.T) {
+	svc := &fakeService{stateErr: domain.NewHasDependentsError([]domain.DependentCount{
+		{Kind: "orders", Count: 3},
+	})}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/acc-1", nil))
+	assertHasDependents409(t, rec, "orders", 3)
+}
+
+// TestDeleteMarketDataInstance_HasDependents asserts the same 409 wire shape for
+// the market-data instance delete endpoint.
+func TestDeleteMarketDataInstance_HasDependents(t *testing.T) {
+	svc := &fakeService{stateErr: domain.NewHasDependentsError([]domain.DependentCount{
+		{Kind: "instruments", Count: 2},
+	})}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete,
+		"/api/v1/market-data/instances/inst-1", nil))
+	assertHasDependents409(t, rec, "instruments", 2)
+}
+
+// assertHasDependents409 checks the recorded response is the 409 has_dependents
+// wire shape with a single dependent of the wanted kind/count.
+func assertHasDependents409(t *testing.T, rec *httptest.ResponseRecorder, wantKind string, wantCount int) {
+	t.Helper()
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", rec.Code)
+	}
+	body := bodyMap(t, rec.Result())
+	errObj, ok := body["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing error object: %+v", body)
+	}
+	if errObj["code"] != "has_dependents" {
+		t.Fatalf("error.code = %v, want has_dependents", errObj["code"])
+	}
+	deps, ok := errObj["dependents"].([]any)
+	if !ok || len(deps) != 1 {
+		t.Fatalf("dependents = %v, want one entry", errObj["dependents"])
+	}
+	dep, ok := deps[0].(map[string]any)
+	if !ok {
+		t.Fatalf("dependent[0] not an object: %v", deps[0])
+	}
+	if dep["kind"] != wantKind {
+		t.Fatalf("dependent kind = %v, want %q", dep["kind"], wantKind)
+	}
+	// JSON numbers decode to float64.
+	if count, _ := dep["count"].(float64); int(count) != wantCount {
+		t.Fatalf("dependent count = %v, want %d", dep["count"], wantCount)
+	}
+}
+
 func TestListAudit(t *testing.T) {
 	ts := time.Date(2026, 6, 11, 10, 0, 0, 1, time.UTC)
 	svc := &fakeService{
 		auditRows: []domain.AuditRow{
 			{
-				ID:      12,
-				At:      ts,
-				Actor:   "operator",
-				Action:  domain.AuditActionSetLimit,
-				Account: "acc-1",
-				Detail:  "set limit rate_limit account=acc-1",
+				ExternalID: extID("audit-1"),
+				At:         ts,
+				Actor:      "operator",
+				Action:     domain.AuditActionSetLimit,
+				Account:    "acc-1",
+				Detail:     "set limit rate_limit account=acc-1",
 			},
 		},
 	}
@@ -944,11 +1490,16 @@ func TestListAudit(t *testing.T) {
 		t.Fatalf("want 1 entry, got %v", m["entries"])
 	}
 	e := entries[0].(map[string]any)
-	for _, field := range []string{"id", "at", "actor", "action", "account", "detail"} {
+	for _, field := range []string{"externalId", "at", "actor", "action", "account", "detail"} {
 		if _, ok := e[field]; !ok {
 			t.Fatalf("audit entry missing field %q", field)
 		}
 	}
+	// The audit row is addressed by its opaque external id; no surrogate id leaks.
+	if e["externalId"] != extID("audit-1").String() {
+		t.Fatalf("want externalId=%s, got %v", extID("audit-1").String(), e["externalId"])
+	}
+	assertNoSurrogateID(t, e)
 	if e["actor"] != "operator" {
 		t.Fatalf("want actor=operator, got %v", e["actor"])
 	}
@@ -1091,21 +1642,22 @@ func TestListAuditActions(t *testing.T) {
 }
 
 func TestLimitDTO_JSONShape(t *testing.T) {
-	l := domain.Limit{
-		Target: domain.LimitTarget{
-			Policy:  domain.PolicyRateLimit,
-			Scope:   domain.ScopeAccountAsset,
-			Account: "acc-1",
-			Asset:   "AAPL",
-			Tenant:  domain.DefaultTenant,
+	// The per-policy limits view marshals into the three typed barrier arrays
+	// with the camelCase wire keys the contract requires.
+	limits := node.AccountLimits{
+		RateLimits: []domain.LimitRate{
+			{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL",
+				Window: time.Second, MaxOrders: 100},
 		},
-		Values: []domain.LimitValue{
-			{Kind: domain.KindMaxOrders, Value: "100"},
-			{Kind: domain.KindWindow, Value: "1s"},
+		OrderSizeLimits: []domain.LimitOrderSize{
+			{Scope: domain.ScopeBroker, MaxQuantity: "500", MaxNotional: "50000"},
+		},
+		PnlBoundsLimits: []domain.LimitPnlBounds{
+			{Scope: domain.ScopeAsset, Asset: "AAPL",
+				LowerBound: "-1000", UpperBound: "5000", InitialPnl: "0"},
 		},
 	}
-	dto := toLimitDTO(l)
-	b, err := json.Marshal(dto)
+	b, err := json.Marshal(toAccountLimitsDTO(limits))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1113,21 +1665,39 @@ func TestLimitDTO_JSONShape(t *testing.T) {
 	if err := json.Unmarshal(b, &m); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"policy", "scope", "account", "asset", "values"} {
-		if _, ok := m[key]; !ok {
-			t.Fatalf("limitDTO missing JSON key %q", key)
+	rates, _ := m["rateLimits"].([]any)
+	if len(rates) != 1 {
+		t.Fatalf("want 1 rate limit, got %v", m["rateLimits"])
+	}
+	rate := rates[0].(map[string]any)
+	for _, key := range []string{"scope", "account", "asset", "windowMs", "maxOrders"} {
+		if _, ok := rate[key]; !ok {
+			t.Fatalf("rateLimitDTO missing JSON key %q", key)
 		}
 	}
-	vals, _ := m["values"].(map[string]any)
-	if vals["max_orders"] != "100" || vals["window"] != "1s" {
-		t.Fatalf("unexpected values: %v", vals)
+	if rate["maxOrders"] != float64(100) || rate["windowMs"] != float64(1000) {
+		t.Fatalf("unexpected rate limit: %v", rate)
+	}
+	sizes, _ := m["orderSizeLimits"].([]any)
+	size := sizes[0].(map[string]any)
+	for _, key := range []string{"scope", "account", "asset", "maxQuantity", "maxNotional"} {
+		if _, ok := size[key]; !ok {
+			t.Fatalf("orderSizeLimitDTO missing JSON key %q", key)
+		}
+	}
+	pnls, _ := m["pnlBoundsLimits"].([]any)
+	pnl := pnls[0].(map[string]any)
+	for _, key := range []string{"scope", "account", "asset", "lowerBound", "upperBound", "initialPnl"} {
+		if _, ok := pnl[key]; !ok {
+			t.Fatalf("pnlBoundsLimitDTO missing JSON key %q", key)
+		}
 	}
 }
 
 func TestAuditDTO_JSONShape(t *testing.T) {
 	ts := time.Date(2026, 6, 11, 10, 0, 0, 1, time.UTC)
 	row := domain.AuditRow{
-		ID: 12, At: ts, Actor: "operator",
+		ExternalID: extID("audit-1"), At: ts, Actor: "operator",
 		Action: domain.AuditActionSetLimit, Account: "acc-1",
 		Detail: "set limit rate_limit asset=AAPL max_orders=100 window=1s",
 	}
@@ -1189,9 +1759,9 @@ func TestCheckOrder_Pass(t *testing.T) {
 	if check["passed"] != true {
 		t.Fatalf("want passed=true, got %v", check["passed"])
 	}
-	prices, ok := check["wouldLockPrices"].([]any)
+	prices, ok := check["wouldDisplayPrices"].([]any)
 	if !ok || len(prices) != 1 || prices[0] != "100" {
-		t.Fatalf("want wouldLockPrices=[100], got %v", check["wouldLockPrices"])
+		t.Fatalf("want wouldDisplayPrices=[100], got %v", check["wouldDisplayPrices"])
 	}
 	if check["wouldBlock"] != nil {
 		t.Fatalf("want wouldBlock=null, got %v", check["wouldBlock"])
@@ -1277,8 +1847,9 @@ func TestCheckOrder_ValidationError(t *testing.T) {
 // creating POST is a 201 Created carrying the order.
 func TestSubmitOrder_Created(t *testing.T) {
 	svc := &fakeService{submitOrder: domain.Order{
-		ID: 7, Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
-		Side: domain.OrderSideBuy, Status: domain.OrderStatusCommitted,
+		ExternalID: extID("order-1"), Account: "acc-1", BaseAsset: "AAPL",
+		QuoteAsset: "USD", Side: domain.OrderSideBuy,
+		Status: domain.OrderStatusCommitted,
 	}}
 	r, err := newRouter(svc)
 	if err != nil {
@@ -1326,7 +1897,7 @@ func TestSubmitOrder_ValidationError(t *testing.T) {
 // resource-creating POST is a 201 Created carrying the record.
 func TestApplyAdjustment_Created(t *testing.T) {
 	svc := &fakeService{adjustment: domain.AccountAdjustmentRecord{
-		ID: 3, Tenant: domain.DefaultTenant, Account: "acc-1",
+		ExternalID: extID("adj-1"), Account: "acc-1",
 		Request: domain.AdjustmentRequest{Asset: "USD"},
 	}}
 	r, err := newRouter(svc)
@@ -1341,9 +1912,14 @@ func TestApplyAdjustment_Created(t *testing.T) {
 		t.Fatalf("want 201, got %d", rec.Code)
 	}
 	m := bodyMap(t, rec.Result())
-	if _, ok := m["adjustment"].(map[string]any); !ok {
+	adj, ok := m["adjustment"].(map[string]any)
+	if !ok {
 		t.Fatalf("want adjustment object, got %v", m["adjustment"])
 	}
+	if adj["externalId"] != extID("adj-1").String() {
+		t.Fatalf("want externalId=%s, got %v", extID("adj-1").String(), adj["externalId"])
+	}
+	assertNoSurrogateID(t, adj)
 }
 
 // TestApplyExecutionReport_Created checks the execution-report path returns 201:
@@ -1352,8 +1928,8 @@ func TestApplyAdjustment_Created(t *testing.T) {
 func TestApplyExecutionReport_Created(t *testing.T) {
 	svc := &fakeService{orderDetail: domain.OrderDetail{
 		Order: domain.Order{
-			ID: 9, Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
-			Side: domain.OrderSideBuy,
+			ExternalID: extID("order-1"), Account: "acc-1", BaseAsset: "AAPL",
+			QuoteAsset: "USD", Side: domain.OrderSideBuy,
 		},
 	}}
 	r, err := newRouter(svc)
@@ -1364,7 +1940,7 @@ func TestApplyExecutionReport_Created(t *testing.T) {
 		`{"quantity":"1","price":"100","force":true,"final":true}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-		"/api/v1/orders/9/execution-reports", body))
+		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports", body))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("want 201, got %d", rec.Code)
 	}

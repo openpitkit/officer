@@ -198,12 +198,12 @@ function MarketDataCard() {
 
             // Collect all stale pairs across all instances for global cap.
             const allStale = enabled.flatMap((inst) =>
-              inst.state === "error" || inst.type === MANUAL_PROVIDER
+              inst.state === "error" || inst.provider === MANUAL_PROVIDER
                 ? []
                 : inst.instruments
                     .filter((instr) => instr.stale)
                     .map((instr) => ({
-                      key: `${inst.id}/${instr.externalSymbol}`,
+                      key: `${inst.externalId}/${instr.externalSymbol}`,
                       label: `${instr.baseAsset}/${instr.quoteAsset}`,
                     })),
             );
@@ -221,7 +221,7 @@ function MarketDataCard() {
                   </Badge>
                 )}
                 {enabled.map((inst) => {
-                  const label = inst.label || inst.id;
+                  const label = inst.label || inst.externalId;
 
                   if (inst.state === "error") {
                     const errSuffix = inst.error
@@ -234,7 +234,7 @@ function MarketDataCard() {
                       ? ` — ${latest.title.slice(0, 40)}${latest.title.length > 40 ? "…" : ""}`
                       : "";
                     return (
-                      <Badge key={inst.id} variant="danger">
+                      <Badge key={inst.externalId} variant="danger">
                         {t("marketData.instanceError")} {label}{errSuffix || diagSuffix}
                       </Badge>
                     );
@@ -242,13 +242,13 @@ function MarketDataCard() {
 
                   if (inst.state === "pending") {
                     return (
-                      <Badge key={inst.id} variant="warn">
+                      <Badge key={inst.externalId} variant="warn">
                         {label} — {t("marketData.instanceNotApplied")}
                       </Badge>
                     );
                   }
 
-                  const isManual = inst.type === MANUAL_PROVIDER;
+                  const isManual = inst.provider === MANUAL_PROVIDER;
                   const instStale = isManual
                     ? []
                     : inst.instruments.filter((i) => i.stale);
@@ -269,7 +269,7 @@ function MarketDataCard() {
 
                   return (
                     <span
-                      key={inst.id}
+                      key={inst.externalId}
                       className="flex flex-wrap items-center gap-1"
                     >
                       <Badge variant="neutral">{label}</Badge>
@@ -426,12 +426,12 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
 
       {/* Account */}
       <span className="w-28 shrink-0 truncate text-xs text-text">
-        {entry.account || <span className="text-muted-lt">—</span>}
+        {entry.accountTitle || entry.account || <span className="text-muted-lt">—</span>}
       </span>
 
       {/* Detail */}
       <span className="min-w-0 flex-1 truncate text-xs text-muted">
-        {entry.detail || entry.actor}
+        {entry.detail || entry.actorTitle || entry.actor}
       </span>
 
       {/* Source + time */}
@@ -474,7 +474,7 @@ function AuditStrip() {
           </div>
         )}
         {load.state === "ready" &&
-          load.data.map((e) => <AuditRow key={e.id} entry={e} />)}
+          load.data.map((e) => <AuditRow key={e.externalId} entry={e} />)}
       </CardContent>
     </Card>
   );

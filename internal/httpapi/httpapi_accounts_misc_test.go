@@ -118,12 +118,9 @@ func TestBackupExport(t *testing.T) {
 		backupArchive: backup.NewArchive(
 			createdAt,
 			"test",
-			2,
+			backup.RealmLabel{Code: "test"},
 			backup.Scope{All: true},
-			backup.Data{Accounts: []domain.Account{{
-				Tenant: domain.DefaultTenant,
-				ID:     "acc-1",
-			}}},
+			backup.Data{Accounts: []backup.Account{{Code: "acc-1"}}},
 		),
 	}
 	r, err := newRouter(svc)
@@ -144,9 +141,14 @@ func TestBackupExport(t *testing.T) {
 	}
 	m := bodyMap(t, rec.Result())
 	manifest := m["manifest"].(map[string]any)
-	if manifest["format"] != backup.Format ||
-		manifest["formatVersion"] != float64(backup.CurrentFormatVersion) {
-		t.Fatalf("unexpected manifest: %v", manifest)
+	// The manifest is realm-portable: it carries the source realm label and the
+	// ordered section list, never a format version.
+	realm, ok := manifest["realm"].(map[string]any)
+	if !ok || realm["code"] != "test" {
+		t.Fatalf("unexpected manifest realm: %v", manifest["realm"])
+	}
+	if _, ok := manifest["sections"].([]any); !ok {
+		t.Fatalf("manifest missing sections: %v", manifest)
 	}
 }
 
@@ -157,12 +159,9 @@ func TestBackupExportZip(t *testing.T) {
 		backupArchive: backup.NewArchive(
 			createdAt,
 			"test",
-			2,
+			backup.RealmLabel{Code: "test"},
 			backup.Scope{All: true},
-			backup.Data{Accounts: []domain.Account{{
-				Tenant: domain.DefaultTenant,
-				ID:     "acc-1",
-			}}},
+			backup.Data{Accounts: []backup.Account{{Code: "acc-1"}}},
 		),
 	}
 	r, err := newRouter(svc)
@@ -203,7 +202,8 @@ func TestBackupExportZip(t *testing.T) {
 	if err := json.NewDecoder(rc).Decode(&archive); err != nil {
 		t.Fatalf("decode zip archive: %v", err)
 	}
-	if archive.Manifest.Format != backup.Format {
+	if archive.Manifest.Realm.Code != "test" ||
+		len(archive.Manifest.Sections) == 0 {
 		t.Fatalf("unexpected manifest: %+v", archive.Manifest)
 	}
 }
@@ -309,7 +309,7 @@ func TestBackupRestore(t *testing.T) {
 	archive := backup.NewArchive(
 		time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC),
 		"test",
-		2,
+		backup.RealmLabel{Code: "test"},
 		backup.Scope{All: true},
 		backup.Data{},
 	)
@@ -353,12 +353,9 @@ func TestBackupRestoreJSONFile(t *testing.T) {
 	archive := backup.NewArchive(
 		time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC),
 		"json-file-test",
-		2,
+		backup.RealmLabel{Code: "test"},
 		backup.Scope{All: true},
-		backup.Data{Accounts: []domain.Account{{
-			Tenant: domain.DefaultTenant,
-			ID:     "acc-json",
-		}}},
+		backup.Data{Accounts: []backup.Account{{Code: "acc-json"}}},
 	)
 	payload, err := json.Marshal(archive)
 	if err != nil {
@@ -382,7 +379,7 @@ func TestBackupRestoreJSONFile(t *testing.T) {
 	}
 	if svc.restoreArchive.Manifest.Source != "json-file-test" ||
 		len(svc.restoreArchive.Data.Accounts) != 1 ||
-		svc.restoreArchive.Data.Accounts[0].ID != "acc-json" ||
+		svc.restoreArchive.Data.Accounts[0].Code != "acc-json" ||
 		svc.restoreOptions.Mode != backup.RestoreModeReplaceAll ||
 		!svc.restoreOptions.Scope.All {
 		t.Fatalf("restore call = archive %+v options %+v",
@@ -401,12 +398,9 @@ func TestBackupRestoreZipFile(t *testing.T) {
 	archive := backup.NewArchive(
 		time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC),
 		"test",
-		2,
+		backup.RealmLabel{Code: "test"},
 		backup.Scope{All: true},
-		backup.Data{Accounts: []domain.Account{{
-			Tenant: domain.DefaultTenant,
-			ID:     "acc-zip",
-		}}},
+		backup.Data{Accounts: []backup.Account{{Code: "acc-zip"}}},
 	)
 	payload, filename, err := zipBackupArchive(
 		archive,
@@ -439,7 +433,7 @@ func TestBackupRestoreZipFile(t *testing.T) {
 	}
 	if svc.restoreArchive.Manifest.Source != "test" ||
 		len(svc.restoreArchive.Data.Accounts) != 1 ||
-		svc.restoreArchive.Data.Accounts[0].ID != "acc-zip" ||
+		svc.restoreArchive.Data.Accounts[0].Code != "acc-zip" ||
 		svc.restoreOptions.Mode != backup.RestoreModeOverwrite ||
 		!svc.restoreOptions.Scope.All {
 		t.Fatalf("restore call = archive %+v options %+v",
@@ -563,7 +557,7 @@ func TestBackupRestoreInvalidArchiveReturnsBadRequest(t *testing.T) {
 		"archive": backup.NewArchive(
 			time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC),
 			"test",
-			2,
+			backup.RealmLabel{Code: "test"},
 			backup.Scope{All: true},
 			backup.Data{},
 		),
@@ -623,7 +617,7 @@ func TestBackupRestoreRejectsEmptyScope(t *testing.T) {
 		"archive": backup.NewArchive(
 			time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC),
 			"test",
-			2,
+			backup.RealmLabel{Code: "test"},
 			backup.Scope{All: true},
 			backup.Data{},
 		),
@@ -661,14 +655,14 @@ func TestBackupRestoreFilePayloadOverridesInlineArchive(t *testing.T) {
 	inline := backup.NewArchive(
 		time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC),
 		"inline",
-		2,
+		backup.RealmLabel{Code: "test"},
 		backup.Scope{All: true},
 		backup.Data{},
 	)
 	fileArchive := backup.NewArchive(
 		time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC),
 		"file",
-		2,
+		backup.RealmLabel{Code: "test"},
 		backup.Scope{All: true},
 		backup.Data{},
 	)
@@ -727,7 +721,7 @@ func TestBackupRestoreServiceErrorReturnsInternal(t *testing.T) {
 		"archive": backup.NewArchive(
 			time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC),
 			"test",
-			2,
+			backup.RealmLabel{Code: "test"},
 			backup.Scope{All: true},
 			backup.Data{},
 		),
@@ -1071,7 +1065,6 @@ func TestListBalances(t *testing.T) {
 				Incoming:          "0",
 				RealizedPnl:       "12",
 				AverageEntryPrice: "",
-				Tenant:            domain.DefaultTenant,
 			},
 		},
 	}
@@ -1157,7 +1150,7 @@ func TestSetAccountGroup(t *testing.T) {
 	// writeAccount re-reads the account via GetAccountState, so the account
 	// must be seeded or the success response would itself 404.
 	svc := &fakeService{
-		accounts: []domain.Account{{ID: "acc-1", Tenant: domain.DefaultTenant}},
+		accounts: []domain.Account{{Code: "acc-1"}},
 	}
 	r, err := newRouter(svc)
 	if err != nil {
@@ -1172,7 +1165,7 @@ func TestSetAccountGroup(t *testing.T) {
 	}
 	m := bodyMap(t, rec.Result())
 	acc, ok := m["account"].(map[string]any)
-	if !ok || acc["id"] != "acc-1" {
+	if !ok || acc["code"] != "acc-1" {
 		t.Fatalf("want account object for acc-1, got %v", m["account"])
 	}
 }
@@ -1181,7 +1174,7 @@ func TestSetAccountGroup(t *testing.T) {
 // and still answers 200 (the handler documents the empty-group clear case).
 func TestSetAccountGroup_ClearMembership(t *testing.T) {
 	svc := &fakeService{
-		accounts: []domain.Account{{ID: "acc-1", Tenant: domain.DefaultTenant}},
+		accounts: []domain.Account{{Code: "acc-1"}},
 	}
 	r, err := newRouter(svc)
 	if err != nil {
@@ -1256,7 +1249,7 @@ func TestSetAccountGroup_ServiceError(t *testing.T) {
 
 func TestSetAccountNotes(t *testing.T) {
 	svc := &fakeService{
-		accounts: []domain.Account{{ID: "acc-1", Tenant: domain.DefaultTenant}},
+		accounts: []domain.Account{{Code: "acc-1"}},
 	}
 	r, err := newRouter(svc)
 	if err != nil {
@@ -1271,7 +1264,7 @@ func TestSetAccountNotes(t *testing.T) {
 	}
 	m := bodyMap(t, rec.Result())
 	acc, ok := m["account"].(map[string]any)
-	if !ok || acc["id"] != "acc-1" {
+	if !ok || acc["code"] != "acc-1" {
 		t.Fatalf("want account object for acc-1, got %v", m["account"])
 	}
 }
@@ -1280,7 +1273,7 @@ func TestSetAccountNotes(t *testing.T) {
 // 200.
 func TestSetAccountNotes_Empty(t *testing.T) {
 	svc := &fakeService{
-		accounts: []domain.Account{{ID: "acc-1", Tenant: domain.DefaultTenant}},
+		accounts: []domain.Account{{Code: "acc-1"}},
 	}
 	r, err := newRouter(svc)
 	if err != nil {

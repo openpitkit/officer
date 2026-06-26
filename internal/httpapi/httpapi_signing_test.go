@@ -295,40 +295,39 @@ func TestSetSigningConfig_HappyPath(t *testing.T) {
 	}
 }
 
-// TestSubmitOrderToken_HappyPath verifies POST /orders/{id}/submit returns the
-// approval token envelope.
+// TestSubmitOrderToken_HappyPath verifies POST /orders/submit CREATES the order
+// from a supplied external id and returns that id in the approval envelope. The
+// fake mirrors the real create-once behavior: it does not echo a pre-stored id,
+// so the returned id is the one the caller supplied — and it is the id a later
+// confirm resolves, proving submit created exactly one order.
 func TestSubmitOrderToken_HappyPath(t *testing.T) {
 	exp := time.Now().UTC().Add(2 * time.Minute)
+	supplied := extID("order-1").String()
 	svc := &fakeService{
-		orderDetail: domain.OrderDetail{
-			Order: domain.Order{
-				ID:          42,
-				Account:     "acc-1",
-				BaseAsset:   "BTC",
-				QuoteAsset:  "USDT",
-				Side:        domain.OrderSideBuy,
-				AmountKind:  domain.OrderAmountKindQuantity,
-				AmountValue: "1",
-				Status:      domain.OrderStatusAccepted,
-			},
-		},
 		approvalToken: backend.ApprovalToken{
 			Token:     "eyJhbHQ...",
 			KeyID:     "key-1",
 			ExpiresAt: exp,
-			OrderID:   42,
 			Signed:    true,
 		},
 	}
-	body, _ := json.Marshal(map[string]any{"mode": "immediate"})
+	body, _ := json.Marshal(map[string]any{
+		"externalId":  supplied,
+		"account":     "acc-1",
+		"baseAsset":   "BTC",
+		"quoteAsset":  "USDT",
+		"side":        "buy",
+		"amountKind":  "quantity",
+		"amountValue": "1",
+		"mode":        "immediate",
+	})
 	r, err := newRouter(svc)
 	if err != nil {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec,
-		httptest.NewRequest(http.MethodPost, "/api/v1/orders/42/submit",
-			bytes.NewReader(body)))
+		httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit", bytes.NewReader(body)))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("want 201, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -336,26 +335,143 @@ func TestSubmitOrderToken_HappyPath(t *testing.T) {
 	if m["token"] != "eyJhbHQ..." {
 		t.Errorf("want token in body, got %v", m["token"])
 	}
-	if m["orderId"] != float64(42) {
-		t.Errorf("want orderId=42, got %v", m["orderId"])
+	// The supplied external id is used as-is on the created order.
+	if svc.submitOrderIn.ExternalID.String() != supplied {
+		t.Errorf("supplied id not threaded onto order: got %s", svc.submitOrderIn.ExternalID)
+	}
+	// The authorised order is referenced by its opaque external id, never a surrogate.
+	if m["orderExternalId"] != supplied {
+		t.Errorf("want orderExternalId=%s, got %v", supplied, m["orderExternalId"])
+	}
+	if _, present := m["orderId"]; present {
+		t.Errorf("response leaked surrogate orderId: %v", m)
+	}
+	// The returned id must be the one subsequently confirmable: confirm resolves
+	// the SAME order, proving submit created exactly one and no second order.
+	confirmBody, _ := json.Marshal(map[string]any{"token": "mytoken"})
+	confRec := httptest.NewRecorder()
+	r.ServeHTTP(confRec,
+		httptest.NewRequest(http.MethodPost, "/api/v1/orders/"+supplied+"/confirm",
+			bytes.NewReader(confirmBody)))
+	if confRec.Code != http.StatusOK {
+		t.Fatalf("confirm: want 200, got %d: %s", confRec.Code, confRec.Body.String())
+	}
+	confM := bodyMap(t, confRec.Result())
+	ord, _ := confM["order"].(map[string]any)
+	if ord["externalId"] != supplied {
+		t.Errorf("confirm resolved a different order: want %s, got %v", supplied, ord["externalId"])
 	}
 }
 
-// TestSubmitOrderToken_BadMode verifies that an unrecognised mode yields 400
-// with code "signing".
-func TestSubmitOrderToken_BadMode(t *testing.T) {
+// TestSubmitOrderToken_GeneratesWhenAbsent verifies that omitting externalId has
+// the server generate and return a 22-char id.
+func TestSubmitOrderToken_GeneratesWhenAbsent(t *testing.T) {
 	svc := &fakeService{
-		orderDetail: domain.OrderDetail{Order: domain.Order{ID: 1}},
+		approvalToken: backend.ApprovalToken{Token: "tok", KeyID: "key-1"},
 	}
-	body, _ := json.Marshal(map[string]any{"mode": "unsupported"})
+	body, _ := json.Marshal(map[string]any{
+		"account":     "acc-1",
+		"baseAsset":   "BTC",
+		"quoteAsset":  "USDT",
+		"side":        "buy",
+		"amountKind":  "quantity",
+		"amountValue": "1",
+		"mode":        "immediate",
+	})
 	r, err := newRouter(svc)
 	if err != nil {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec,
-		httptest.NewRequest(http.MethodPost, "/api/v1/orders/1/submit",
-			bytes.NewReader(body)))
+		httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit", bytes.NewReader(body)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !svc.submitOrderIn.ExternalID.IsZero() {
+		t.Errorf("absent id should leave order external id unset for the backend to generate")
+	}
+	m := bodyMap(t, rec.Result())
+	id, _ := m["orderExternalId"].(string)
+	if len(id) != domain.ExternalIDStringLen {
+		t.Errorf("want a generated %d-char id, got %q", domain.ExternalIDStringLen, id)
+	}
+}
+
+// TestSubmitOrderToken_DuplicateConflict verifies a duplicate supplied id yields
+// 409 (the backend rejects with domain.ErrAlreadyExists).
+func TestSubmitOrderToken_DuplicateConflict(t *testing.T) {
+	svc := &fakeService{signingErr: domain.ErrAlreadyExists}
+	body, _ := json.Marshal(map[string]any{
+		"externalId":  extID("order-1").String(),
+		"account":     "acc-1",
+		"baseAsset":   "BTC",
+		"quoteAsset":  "USDT",
+		"side":        "buy",
+		"amountKind":  "quantity",
+		"amountValue": "1",
+		"mode":        "immediate",
+	})
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec,
+		httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit", bytes.NewReader(body)))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+	m := bodyMap(t, rec.Result())
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "conflict" {
+		t.Errorf("want code=conflict, got %v", errObj["code"])
+	}
+}
+
+// TestSubmitOrderToken_MalformedID verifies a malformed supplied id yields 400
+// before any backend call.
+func TestSubmitOrderToken_MalformedID(t *testing.T) {
+	svc := &fakeService{}
+	body, _ := json.Marshal(map[string]any{
+		"externalId":  "not-a-valid-external-id",
+		"account":     "acc-1",
+		"baseAsset":   "BTC",
+		"quoteAsset":  "USDT",
+		"side":        "buy",
+		"amountKind":  "quantity",
+		"amountValue": "1",
+		"mode":        "immediate",
+	})
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec,
+		httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit", bytes.NewReader(body)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	m := bodyMap(t, rec.Result())
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "validation" {
+		t.Errorf("want code=validation, got %v", errObj["code"])
+	}
+}
+
+// TestSubmitOrderToken_BadMode verifies that an unrecognised mode yields 400
+// with code "signing".
+func TestSubmitOrderToken_BadMode(t *testing.T) {
+	svc := &fakeService{}
+	body, _ := json.Marshal(map[string]any{"account": "acc-1", "mode": "unsupported"})
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec,
+		httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit", bytes.NewReader(body)))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
@@ -370,7 +486,9 @@ func TestSubmitOrderToken_BadMode(t *testing.T) {
 // updated order.
 func TestConfirmExecution_HappyPath(t *testing.T) {
 	svc := &fakeService{
-		submitOrder: domain.Order{ID: 42, Status: domain.OrderStatusCommitted},
+		submitOrder: domain.Order{
+			ExternalID: extID("order-1"), Status: domain.OrderStatusCommitted,
+		},
 	}
 	body, _ := json.Marshal(map[string]any{"token": "mytoken", "force": true})
 	r, err := newRouter(svc)
@@ -379,16 +497,17 @@ func TestConfirmExecution_HappyPath(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec,
-		httptest.NewRequest(http.MethodPost, "/api/v1/orders/42/confirm",
+		httptest.NewRequest(http.MethodPost, "/api/v1/orders/"+extID("order-1").String()+"/confirm",
 			bytes.NewReader(body)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 	m := bodyMap(t, rec.Result())
 	ord, _ := m["order"].(map[string]any)
-	if ord["id"] != float64(42) {
-		t.Errorf("want orderId=42, got %v", ord["id"])
+	if ord["externalId"] != extID("order-1").String() {
+		t.Errorf("want externalId=%s, got %v", extID("order-1").String(), ord["externalId"])
 	}
+	assertNoSurrogateID(t, ord)
 	if !svc.confirmForce {
 		t.Fatal("force was not forwarded to ConfirmExecution")
 	}
@@ -404,18 +523,20 @@ func TestConfirmExecution_MissingToken(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec,
-		httptest.NewRequest(http.MethodPost, "/api/v1/orders/1/confirm",
+		httptest.NewRequest(http.MethodPost, "/api/v1/orders/"+extID("order-1").String()+"/confirm",
 			bytes.NewReader(body)))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 }
 
-// TestCancelOrder_HappyPath verifies POST /orders/{id}/cancel returns the
-// updated order.
+// TestCancelOrder_HappyPath verifies POST /orders/{externalId}/cancel returns
+// the updated order.
 func TestCancelOrder_HappyPath(t *testing.T) {
 	svc := &fakeService{
-		submitOrder: domain.Order{ID: 42, Status: domain.OrderStatusRejected},
+		submitOrder: domain.Order{
+			ExternalID: extID("order-1"), Status: domain.OrderStatusRejected,
+		},
 	}
 	body, _ := json.Marshal(map[string]any{
 		"token": "mytoken", "reason": "user request", "force": true,
@@ -426,16 +547,17 @@ func TestCancelOrder_HappyPath(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec,
-		httptest.NewRequest(http.MethodPost, "/api/v1/orders/42/cancel",
+		httptest.NewRequest(http.MethodPost, "/api/v1/orders/"+extID("order-1").String()+"/cancel",
 			bytes.NewReader(body)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 	m := bodyMap(t, rec.Result())
 	ord, _ := m["order"].(map[string]any)
-	if ord["id"] != float64(42) {
-		t.Errorf("want orderId=42, got %v", ord["id"])
+	if ord["externalId"] != extID("order-1").String() {
+		t.Errorf("want externalId=%s, got %v", extID("order-1").String(), ord["externalId"])
 	}
+	assertNoSurrogateID(t, ord)
 	if !svc.cancelForce {
 		t.Fatal("force was not forwarded to CancelOrder")
 	}
@@ -451,7 +573,7 @@ func TestCancelOrder_MissingToken(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec,
-		httptest.NewRequest(http.MethodPost, "/api/v1/orders/1/cancel",
+		httptest.NewRequest(http.MethodPost, "/api/v1/orders/"+extID("order-1").String()+"/cancel",
 			bytes.NewReader(body)))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d", rec.Code)

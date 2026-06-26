@@ -9,6 +9,13 @@
     "policy": "Фильтр по политике",
     "allPolicies": "Все политики"
   },
+  "pagination": {
+    "summary": "Показаны записи {{from}}-{{to}} из {{total}}",
+    "pageSize": {
+      "ariaLabel": "Размер страницы",
+      "rowCount": "{{count}} записей на страницу"
+    }
+  },
   "table": {
     "policy": "Политика",
     "scope": "Скоп",

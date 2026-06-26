@@ -29,9 +29,20 @@ import (
 	"go.openpit.dev/officer/internal/domain"
 )
 
+// testExternalID builds a deterministic domain.ExternalID for tests by copying
+// up to 16 bytes of label into the array. Two distinct labels yield distinct
+// ids; the zero remainder is identical for all labels shorter than 16 bytes,
+// which is fine because the labels themselves differ.
+func testExternalID(label string) domain.ExternalID {
+	var id domain.ExternalID
+	copy(id[:], label)
+	return id
+}
+
 // fakeStore is a fixed in-memory Store for the manager: it returns the enabled
 // instances and, per instance, its enabled instruments. The instrument lists are
 // pre-filtered to "enabled" to mirror the store's WHERE enabled = 1 query.
+// instruments is keyed by the ExternalID string form (ExternalID.String()).
 type fakeStore struct {
 	instances   []domain.MarketDataInstance
 	instruments map[string][]domain.MarketDataInstrument
@@ -46,12 +57,12 @@ func (s *fakeStore) ListEnabledMarketDataInstances(
 }
 
 func (s *fakeStore) ListEnabledMarketDataInstruments(
-	_ context.Context, instanceID string,
+	_ context.Context, instance domain.ExternalID,
 ) ([]domain.MarketDataInstrument, error) {
 	if s.instErr != nil {
 		return nil, s.instErr
 	}
-	return s.instruments[instanceID], nil
+	return s.instruments[instance.String()], nil
 }
 
 func (s *fakeStore) UpsertMarketDataQuote(
@@ -105,13 +116,14 @@ func TestManager_NoEnabledIsCleanNoop(t *testing.T) {
 // its enabled instruments and fans quotes into the sink, then stops cleanly.
 func TestManager_FansMockQuotesToSink(t *testing.T) {
 	t.Parallel()
+	mock1 := testExternalID("mock-1")
 	store := &fakeStore{
 		instances: []domain.MarketDataInstance{
-			{ID: "mock-1", Type: domain.MarketDataProviderMock, Enabled: true},
+			{ExternalID: mock1, Provider: domain.MarketDataProviderMock, Enabled: true},
 		},
 		instruments: map[string][]domain.MarketDataInstrument{
-			"mock-1": {
-				{InstanceID: "mock-1", ExternalSymbol: "AAPL", BaseAsset: "AAPL", QuoteAsset: "USD", Enabled: true},
+			mock1.String(): {
+				{Instance: mock1, ExternalSymbol: "AAPL", BaseAsset: "AAPL", QuoteAsset: "USD", Enabled: true},
 			},
 		},
 	}
@@ -143,7 +155,7 @@ func TestManager_SkipsInstanceWithNoInstruments(t *testing.T) {
 	t.Parallel()
 	store := &fakeStore{
 		instances: []domain.MarketDataInstance{
-			{ID: "mock-1", Type: domain.MarketDataProviderMock, Enabled: true},
+			{ExternalID: testExternalID("mock-1"), Provider: domain.MarketDataProviderMock, Enabled: true},
 		},
 		instruments: map[string][]domain.MarketDataInstrument{}, // none enabled
 	}
@@ -165,14 +177,16 @@ func TestManager_SkipsInstanceWithNoInstruments(t *testing.T) {
 // streams.
 func TestManager_UnknownTypeSkippedNotFailed(t *testing.T) {
 	t.Parallel()
+	weird := testExternalID("weird")
+	mock1 := testExternalID("mock-1")
 	store := &fakeStore{
 		instances: []domain.MarketDataInstance{
-			{ID: "weird", Type: "does-not-exist", Enabled: true},
-			{ID: "mock-1", Type: domain.MarketDataProviderMock, Enabled: true},
+			{ExternalID: weird, Provider: "does-not-exist", Enabled: true},
+			{ExternalID: mock1, Provider: domain.MarketDataProviderMock, Enabled: true},
 		},
 		instruments: map[string][]domain.MarketDataInstrument{
-			"weird":  {{InstanceID: "weird", ExternalSymbol: "X", BaseAsset: "X", QuoteAsset: "Y", Enabled: true}},
-			"mock-1": {{InstanceID: "mock-1", ExternalSymbol: "AAPL", BaseAsset: "AAPL", QuoteAsset: "USD", Enabled: true}},
+			weird.String(): {{Instance: weird, ExternalSymbol: "X", BaseAsset: "X", QuoteAsset: "Y", Enabled: true}},
+			mock1.String(): {{Instance: mock1, ExternalSymbol: "AAPL", BaseAsset: "AAPL", QuoteAsset: "USD", Enabled: true}},
 		},
 	}
 	sink := &fakeSink{}
@@ -211,49 +225,49 @@ func TestNewConnector_ProviderTypesRegistered(t *testing.T) {
 	}{
 		{
 			name:     "byo",
-			instance: domain.MarketDataInstance{Type: domain.MarketDataProviderBYO},
+			instance: domain.MarketDataInstance{Provider: domain.MarketDataProviderBYO},
 			wantType: (*byoConnector)(nil),
 		},
 		{
 			name:     "binance",
-			instance: domain.MarketDataInstance{Type: domain.MarketDataProviderBinance},
+			instance: domain.MarketDataInstance{Provider: domain.MarketDataProviderBinance},
 			wantType: (*binanceConnector)(nil),
 		},
 		{
 			name: "ib",
 			instance: domain.MarketDataInstance{
-				Type:        domain.MarketDataProviderIB,
+				Provider:    domain.MarketDataProviderIB,
 				Credentials: `{"clientId":109}`,
 			},
 			wantType: (*ibConnector)(nil),
 		},
 		{
 			name:     "kraken",
-			instance: domain.MarketDataInstance{Type: domain.MarketDataProviderKraken},
+			instance: domain.MarketDataInstance{Provider: domain.MarketDataProviderKraken},
 			wantType: (*krakenConnector)(nil),
 		},
 		{
 			name:     "coinbase",
-			instance: domain.MarketDataInstance{Type: domain.MarketDataProviderCoinbase},
+			instance: domain.MarketDataInstance{Provider: domain.MarketDataProviderCoinbase},
 			wantType: (*coinbaseConnector)(nil),
 		},
 		{
 			name: "alpaca",
 			instance: domain.MarketDataInstance{
-				Type:        domain.MarketDataProviderAlpaca,
+				Provider:    domain.MarketDataProviderAlpaca,
 				Credentials: `{"apiKey":"key","apiSecret":"secret"}`,
 			},
 			wantType: (*alpacaConnector)(nil),
 		},
 		{
 			name:     "okx",
-			instance: domain.MarketDataInstance{Type: domain.MarketDataProviderOKX},
+			instance: domain.MarketDataInstance{Provider: domain.MarketDataProviderOKX},
 			wantType: (*okxConnector)(nil),
 		},
 		{
 			name: "bybit",
 			instance: domain.MarketDataInstance{
-				Type:        domain.MarketDataProviderBybit,
+				Provider:    domain.MarketDataProviderBybit,
 				Credentials: `{"category":"linear"}`,
 			},
 			wantType: (*bybitConnector)(nil),
@@ -261,7 +275,7 @@ func TestNewConnector_ProviderTypesRegistered(t *testing.T) {
 		{
 			name: "oanda",
 			instance: domain.MarketDataInstance{
-				Type:        domain.MarketDataProviderOANDA,
+				Provider:    domain.MarketDataProviderOANDA,
 				Credentials: `{"token":"token","accountID":"account","environment":"practice"}`,
 			},
 			wantType: (*oandaConnector)(nil),
@@ -269,14 +283,14 @@ func TestNewConnector_ProviderTypesRegistered(t *testing.T) {
 		{
 			name: "finnhub",
 			instance: domain.MarketDataInstance{
-				Type:        domain.MarketDataProviderFinnhub,
+				Provider:    domain.MarketDataProviderFinnhub,
 				Credentials: `{"token":"token"}`,
 			},
 			wantType: (*finnhubConnector)(nil),
 		},
 		{
 			name:     "mock",
-			instance: domain.MarketDataInstance{Type: domain.MarketDataProviderMock},
+			instance: domain.MarketDataInstance{Provider: domain.MarketDataProviderMock},
 			wantType: (*mockConnector)(nil),
 		},
 	}
@@ -285,7 +299,7 @@ func TestNewConnector_ProviderTypesRegistered(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			tt.instance.ID = tt.name + "-1"
+			tt.instance.ExternalID = testExternalID(tt.name + "-1")
 			connector, err := newConnector(tt.instance)
 			if err != nil {
 				t.Fatalf("newConnector: %v", err)
@@ -301,13 +315,14 @@ func TestNewConnector_ProviderTypesRegistered(t *testing.T) {
 func TestManager_InvalidProviderConfigIsNotUnsupported(t *testing.T) {
 	t.Parallel()
 
+	alpaca1 := testExternalID("alpaca-1")
 	store := &fakeStore{
 		instances: []domain.MarketDataInstance{
-			{ID: "alpaca-1", Type: domain.MarketDataProviderAlpaca, Enabled: true},
+			{ExternalID: alpaca1, Provider: domain.MarketDataProviderAlpaca, Enabled: true},
 		},
 		instruments: map[string][]domain.MarketDataInstrument{
-			"alpaca-1": {{
-				InstanceID: "alpaca-1", ExternalSymbol: "AAPL",
+			alpaca1.String(): {{
+				Instance: alpaca1, ExternalSymbol: "AAPL",
 				BaseAsset: "AAPL", QuoteAsset: "USD", Enabled: true,
 			}},
 		},
@@ -319,7 +334,7 @@ func TestManager_InvalidProviderConfigIsNotUnsupported(t *testing.T) {
 	}
 	defer m.Stop()
 
-	status := m.InstanceStatuses()["alpaca-1"]
+	status := m.InstanceStatuses()[alpaca1.String()]
 	if status.State != StateError {
 		t.Fatalf("state = %q, want error", status.State)
 	}
@@ -338,12 +353,13 @@ func TestManager_InvalidProviderConfigIsNotUnsupported(t *testing.T) {
 // the drain keeps running (the manager logs and continues) rather than crashing.
 func TestManager_PushErrorDoesNotStopFeed(t *testing.T) {
 	t.Parallel()
+	mock1 := testExternalID("mock-1")
 	store := &fakeStore{
 		instances: []domain.MarketDataInstance{
-			{ID: "mock-1", Type: domain.MarketDataProviderMock, Enabled: true},
+			{ExternalID: mock1, Provider: domain.MarketDataProviderMock, Enabled: true},
 		},
 		instruments: map[string][]domain.MarketDataInstrument{
-			"mock-1": {{InstanceID: "mock-1", ExternalSymbol: "AAPL", BaseAsset: "AAPL", QuoteAsset: "USD", Enabled: true}},
+			mock1.String(): {{Instance: mock1, ExternalSymbol: "AAPL", BaseAsset: "AAPL", QuoteAsset: "USD", Enabled: true}},
 		},
 	}
 	sink := &fakeSink{pushErr: errors.New("push boom")}
@@ -367,7 +383,7 @@ func TestVerifySymbol_UnsupportedProvider(t *testing.T) {
 		domain.MarketDataProviderIB,
 		domain.MarketDataProviderMock,
 	} {
-		instance := domain.MarketDataInstance{ID: "i", Type: providerType}
+		instance := domain.MarketDataInstance{ExternalID: testExternalID("i"), Provider: providerType}
 		result, supported, err := VerifySymbol(context.Background(), instance, "BTCUSDT")
 		if err != nil {
 			t.Fatalf("%s: VerifySymbol err = %v", providerType, err)
@@ -385,28 +401,28 @@ func TestVerifySymbol_UnsupportedProvider(t *testing.T) {
 
 	for _, instance := range []domain.MarketDataInstance{
 		{
-			ID:          "alpaca-1",
-			Type:        domain.MarketDataProviderAlpaca,
+			ExternalID:  testExternalID("alpaca-1"),
+			Provider:    domain.MarketDataProviderAlpaca,
 			Credentials: `{"apiKey":"key","apiSecret":"secret"}`,
 		},
 		{
-			ID:          "oanda-1",
-			Type:        domain.MarketDataProviderOANDA,
+			ExternalID:  testExternalID("oanda-1"),
+			Provider:    domain.MarketDataProviderOANDA,
 			Credentials: `{"token":"token","accountID":"account","environment":"practice"}`,
 		},
 	} {
 		result, supported, err := VerifySymbol(context.Background(), instance, "BTCUSDT")
 		if err != nil {
-			t.Fatalf("%s: VerifySymbol err = %v", instance.Type, err)
+			t.Fatalf("%s: VerifySymbol err = %v", instance.Provider, err)
 		}
 		if supported {
-			t.Fatalf("%s: supported = true, want false", instance.Type)
+			t.Fatalf("%s: supported = true, want false", instance.Provider)
 		}
 		if result.Exists || result.Suggestion != "" {
-			t.Fatalf("%s: result = %+v, want zero", instance.Type, result)
+			t.Fatalf("%s: result = %+v, want zero", instance.Provider, result)
 		}
-		if ProviderVerifiesSymbols(instance.Type) {
-			t.Fatalf("%s: ProviderVerifiesSymbols = true, want false", instance.Type)
+		if ProviderVerifiesSymbols(instance.Provider) {
+			t.Fatalf("%s: ProviderVerifiesSymbols = true, want false", instance.Provider)
 		}
 	}
 }
@@ -414,7 +430,7 @@ func TestVerifySymbol_UnsupportedProvider(t *testing.T) {
 func TestVerifySymbol_UnknownProvider(t *testing.T) {
 	t.Parallel()
 
-	instance := domain.MarketDataInstance{ID: "i", Type: "nope"}
+	instance := domain.MarketDataInstance{ExternalID: testExternalID("i"), Provider: "nope"}
 	if _, _, err := VerifySymbol(context.Background(), instance, "BTCUSDT"); err == nil {
 		t.Fatal("VerifySymbol(unknown provider) err = nil, want error")
 	}
@@ -428,7 +444,7 @@ func TestSearchSymbolsUnsupportedProvider(t *testing.T) {
 
 	// BYO accepts operator-pushed quotes and has no external catalogue, so
 	// search is unsupported: supported=false, no matches, no error, no network.
-	instance := domain.MarketDataInstance{ID: "byo-1", Type: domain.MarketDataProviderBYO}
+	instance := domain.MarketDataInstance{ExternalID: testExternalID("byo-1"), Provider: domain.MarketDataProviderBYO}
 	matches, supported, err := SearchSymbols(
 		context.Background(), instance, SymbolSearchQuery{Query: "BTC"},
 	)
@@ -449,7 +465,7 @@ func TestSearchSymbolsUnsupportedProvider(t *testing.T) {
 func TestSearchSymbolsUnknownInstanceType(t *testing.T) {
 	t.Parallel()
 
-	instance := domain.MarketDataInstance{ID: "i", Type: "nope"}
+	instance := domain.MarketDataInstance{ExternalID: testExternalID("i"), Provider: "nope"}
 	if _, _, err := SearchSymbols(
 		context.Background(), instance, SymbolSearchQuery{Query: "BTC"},
 	); err == nil {
@@ -498,19 +514,20 @@ func TestProviderVerifiesSymbols_ProviderCatalogues(t *testing.T) {
 // the only quotes.
 func TestManager_PushesStoredManualPriceOnceAtStartup(t *testing.T) {
 	t.Parallel()
+	byo1 := testExternalID("byo-1")
 	store := &fakeStore{
 		instances: []domain.MarketDataInstance{
-			{ID: "byo-1", Type: domain.MarketDataProviderBYO, Enabled: true},
+			{ExternalID: byo1, Provider: domain.MarketDataProviderBYO, Enabled: true},
 		},
 		instruments: map[string][]domain.MarketDataInstrument{
-			"byo-1": {
+			byo1.String(): {
 				{
-					InstanceID: "byo-1", ExternalSymbol: "USDT/USD",
+					Instance: byo1, ExternalSymbol: "USDT/USD",
 					BaseAsset: "USDT", QuoteAsset: "USD",
 					ManualPrice: "1", Enabled: true,
 				},
 				{
-					InstanceID: "byo-1", ExternalSymbol: "ETH/USD",
+					Instance: byo1, ExternalSymbol: "ETH/USD",
 					BaseAsset: "ETH", QuoteAsset: "USD",
 					ManualPrice: "", Enabled: true, // no manual price -> no push
 				},
@@ -546,14 +563,15 @@ func TestManager_PushesStoredManualPriceOnceAtStartup(t *testing.T) {
 // price (no startup push), so the single quote observed is the explicit one.
 func TestManager_PushManualAfterStartupPushesOnce(t *testing.T) {
 	t.Parallel()
+	byo1 := testExternalID("byo-1")
 	store := &fakeStore{
 		instances: []domain.MarketDataInstance{
-			{ID: "byo-1", Type: domain.MarketDataProviderBYO, Enabled: true},
+			{ExternalID: byo1, Provider: domain.MarketDataProviderBYO, Enabled: true},
 		},
 		instruments: map[string][]domain.MarketDataInstrument{
-			"byo-1": {
+			byo1.String(): {
 				{
-					InstanceID: "byo-1", ExternalSymbol: "USDT/USDC",
+					Instance: byo1, ExternalSymbol: "USDT/USDC",
 					BaseAsset: "USDT", QuoteAsset: "USDC",
 					ManualPrice: "", Enabled: true,
 				},
@@ -572,8 +590,8 @@ func TestManager_PushManualAfterStartupPushesOnce(t *testing.T) {
 		t.Fatalf("want no startup push without a stored price, got %d", sink.count())
 	}
 
-	m.PushManual("byo-1", domain.MarketDataInstrument{
-		InstanceID: "byo-1", ExternalSymbol: "USDT/USDC",
+	m.PushManual(byo1.String(), domain.MarketDataInstrument{
+		Instance: byo1, ExternalSymbol: "USDT/USDC",
 		BaseAsset: "USDT", QuoteAsset: "USDC",
 		ManualPrice: "1", Enabled: true,
 	})
@@ -599,14 +617,16 @@ func TestManager_PushManualAfterStartupPushesOnce(t *testing.T) {
 // nothing. PushManual into an unknown instance id is likewise a no-op.
 func TestManager_PushManualNonByoUntouched(t *testing.T) {
 	t.Parallel()
+	mock1 := testExternalID("mock-1")
+	doesNotExist := testExternalID("does-not-exist")
 	store := &fakeStore{
 		instances: []domain.MarketDataInstance{
-			{ID: "mock-1", Type: domain.MarketDataProviderMock, Enabled: true},
+			{ExternalID: mock1, Provider: domain.MarketDataProviderMock, Enabled: true},
 		},
 		instruments: map[string][]domain.MarketDataInstrument{
-			"mock-1": {
+			mock1.String(): {
 				{
-					InstanceID: "mock-1", ExternalSymbol: "AAPL",
+					Instance: mock1, ExternalSymbol: "AAPL",
 					BaseAsset: "AAPL", QuoteAsset: "USD", Enabled: true,
 				},
 			},
@@ -621,13 +641,13 @@ func TestManager_PushManualNonByoUntouched(t *testing.T) {
 	// PushManual must not deliver into the non-push-capable mock connector, nor
 	// into an unknown instance. (The mock still streams its own quotes; we only
 	// assert PushManual itself is inert by checking the unknown-instance case.)
-	m.PushManual("mock-1", domain.MarketDataInstrument{
-		InstanceID: "mock-1", ExternalSymbol: "AAPL",
+	m.PushManual(mock1.String(), domain.MarketDataInstrument{
+		Instance: mock1, ExternalSymbol: "AAPL",
 		BaseAsset: "AAPL", QuoteAsset: "USD",
 		ManualPrice: "1", Enabled: true,
 	})
-	m.PushManual("does-not-exist", domain.MarketDataInstrument{
-		InstanceID: "does-not-exist", ExternalSymbol: "X",
+	m.PushManual(doesNotExist.String(), domain.MarketDataInstrument{
+		Instance: doesNotExist, ExternalSymbol: "X",
 		BaseAsset: "X", QuoteAsset: "Y",
 		ManualPrice: "1", Enabled: true,
 	})
@@ -686,14 +706,15 @@ func TestManager_QuoteUpdateIntervalUnknownThenGap(t *testing.T) {
 // known, positive interval for the pushed instrument keyed by external symbol.
 func TestManager_QuoteUpdateIntervalFromDrain(t *testing.T) {
 	t.Parallel()
+	byo1 := testExternalID("byo-1")
 	store := &fakeStore{
 		instances: []domain.MarketDataInstance{
-			{ID: "byo-1", Type: domain.MarketDataProviderBYO, Enabled: true},
+			{ExternalID: byo1, Provider: domain.MarketDataProviderBYO, Enabled: true},
 		},
 		instruments: map[string][]domain.MarketDataInstrument{
-			"byo-1": {
+			byo1.String(): {
 				{
-					InstanceID: "byo-1", ExternalSymbol: "EURUSD",
+					Instance: byo1, ExternalSymbol: "EURUSD",
 					BaseAsset: "EUR", QuoteAsset: "USD", Enabled: true,
 				},
 			},
@@ -708,25 +729,25 @@ func TestManager_QuoteUpdateIntervalFromDrain(t *testing.T) {
 	defer m.Stop()
 
 	// First push (tick 1): interval still unknown.
-	m.PushManual("byo-1", domain.MarketDataInstrument{
-		InstanceID: "byo-1", ExternalSymbol: "EURUSD",
+	m.PushManual(byo1.String(), domain.MarketDataInstrument{
+		Instance: byo1, ExternalSymbol: "EURUSD",
 		BaseAsset: "EUR", QuoteAsset: "USD",
 		ManualPrice: "1.05", Enabled: true,
 	})
 	waitFor(t, time.Second, func() bool { return sink.count() >= 1 })
 
 	// Second push (tick 2): interval becomes known.
-	m.PushManual("byo-1", domain.MarketDataInstrument{
-		InstanceID: "byo-1", ExternalSymbol: "EURUSD",
+	m.PushManual(byo1.String(), domain.MarketDataInstrument{
+		Instance: byo1, ExternalSymbol: "EURUSD",
 		BaseAsset: "EUR", QuoteAsset: "USD",
 		ManualPrice: "1.06", Enabled: true,
 	})
 	waitFor(t, time.Second, func() bool {
-		_, ok := m.QuoteUpdateInterval("byo-1", "EURUSD")
+		_, ok := m.QuoteUpdateInterval(byo1.String(), "EURUSD")
 		return ok
 	})
 
-	interval, ok := m.QuoteUpdateInterval("byo-1", "EURUSD")
+	interval, ok := m.QuoteUpdateInterval(byo1.String(), "EURUSD")
 	if !ok || interval <= 0 {
 		t.Fatalf("interval after two pushes = %v (known=%v), want positive", interval, ok)
 	}

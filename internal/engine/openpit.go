@@ -98,6 +98,13 @@ const (
 type openPitEngine struct {
 	eng *openpit.Engine
 
+	// res resolves account/group codes to the stored integer engine ids the
+	// handle runs on. It is built once from the build Snapshot and is immutable
+	// for the handle's lifetime: the engine is rebuilt from a fresh Snapshot when
+	// the account/group set changes, so the resolver always covers every account
+	// and group the live handle runs. It replaces the former FNV string-hashing.
+	res idResolver
+
 	// sink publishes normalized quotes into marketDataService. It owns the
 	// first-sight register cache and is safe for concurrent Push (the connector
 	// manager drains multiple feeds into it).
@@ -141,13 +148,15 @@ type openPitEngine struct {
 // broker barrier; both are taken over by the adapter. The adapter takes
 // ownership of both the handle and the service lifecycle: neither must be
 // stopped/closed directly afterwards; use Engine.Stop instead, which stops the
-// engine and then closes the service. BuildOpenPitEngine is the only caller; it
+// engine and then closes the service. res is the code-to-engine-id resolver
+// built from the same Snapshot. BuildOpenPitEngine is the only caller; it
 // assembles the tracked state and owns the service before the engine is built.
 func newOpenPitEngine(
 	eng *openpit.Engine,
 	service *bindmd.Service,
 	registered map[string]struct{},
 	brokerPresent map[string]bool,
+	res idResolver,
 ) Engine {
 	if registered == nil {
 		registered = make(map[string]struct{})
@@ -155,8 +164,15 @@ func newOpenPitEngine(
 	if brokerPresent == nil {
 		brokerPresent = make(map[string]bool)
 	}
+	if res.accounts == nil {
+		res.accounts = make(map[domain.AccountID]param.AccountID)
+	}
+	if res.groups == nil {
+		res.groups = make(map[string]param.AccountGroupID)
+	}
 	adapter := &openPitEngine{
 		eng:               eng,
+		res:               res,
 		sink:              newMarketDataSink(service),
 		marketDataService: service,
 		registered:        registered,
@@ -199,13 +215,15 @@ func BuildOpenPitEngine(runtimeLibraryPath string, snap Snapshot) (Engine, error
 		}
 	}
 
-	byPolicy := make(map[string][]domain.Limit)
-	for _, limit := range snap.Limits {
-		policy := limit.Target.Policy
-		byPolicy[policy] = append(byPolicy[policy], limit)
+	// Build the code-to-engine-id resolver from the snapshot's stored engine ids
+	// before any binding call so seeding and the hot path both use the stored
+	// integer ids, never a hashed string.
+	res, err := newIDResolver(snap.Accounts, snap.Groups)
+	if err != nil {
+		return nil, err
 	}
 
-	eng, service, registered, err := buildEngine(byPolicy)
+	eng, service, registered, err := buildEngine(snap, res)
 	if err != nil {
 		return nil, err
 	}
@@ -221,28 +239,39 @@ func BuildOpenPitEngine(runtimeLibraryPath string, snap Snapshot) (Engine, error
 	if err := applyBlocks(eng, snap.Accounts); err != nil {
 		return releaseOnErr(err)
 	}
-	if err := hydrateGroups(eng, snap.Accounts); err != nil {
+	if err := hydrateGroups(eng, snap.Accounts, res); err != nil {
 		return releaseOnErr(err)
 	}
 	if err := blockGroups(eng, snap.Groups); err != nil {
 		return releaseOnErr(err)
 	}
-	if err := seedBalances(eng, snap.Balances); err != nil {
+	if err := seedBalances(eng, snap.Balances, res); err != nil {
 		return releaseOnErr(err)
 	}
 
 	brokerPresent := map[string]bool{
-		nameRateLimit:      hasBrokerBarrier(byPolicy[domain.PolicyRateLimit]),
-		nameOrderSizeLimit: hasBrokerBarrier(byPolicy[domain.PolicyOrderSizeLimit]),
+		nameRateLimit:      hasRateBrokerBarrier(snap.RateLimits),
+		nameOrderSizeLimit: hasOrderSizeBrokerBarrier(snap.OrderSizeLimits),
 	}
-	return newOpenPitEngine(eng, service, registered, brokerPresent), nil
+	return newOpenPitEngine(eng, service, registered, brokerPresent, res), nil
 }
 
-// hasBrokerBarrier reports whether a barrier set contains a broker-scoped
-// barrier.
-func hasBrokerBarrier(limits []domain.Limit) bool {
+// hasRateBrokerBarrier reports whether a rate-limit barrier set carries a
+// broker-scoped barrier.
+func hasRateBrokerBarrier(limits []domain.LimitRate) bool {
 	for _, limit := range limits {
-		if limit.Target.Scope == domain.ScopeBroker {
+		if limit.Scope == domain.ScopeBroker {
+			return true
+		}
+	}
+	return false
+}
+
+// hasOrderSizeBrokerBarrier reports whether an order-size barrier set carries a
+// broker-scoped barrier.
+func hasOrderSizeBrokerBarrier(limits []domain.LimitOrderSize) bool {
+	for _, limit := range limits {
+		if limit.Scope == domain.ScopeBroker {
 			return true
 		}
 	}
@@ -273,7 +302,7 @@ func (e *openPitEngine) Running() bool {
 // unregistered policy, or removing the last barrier of a registered policy,
 // returns a not-implemented stub. The tracked state is updated only on success.
 func (e *openPitEngine) ConfigurePolicy(
-	ctx context.Context, policy string, limits []domain.Limit,
+	ctx context.Context, policy string, limits LimitSet,
 ) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("engine: configure cancelled: %w", err)
@@ -291,7 +320,7 @@ func (e *openPitEngine) ConfigurePolicy(
 				"registration is not supported by the SDK yet: %w",
 			policy, domain.ErrNotImplemented)
 	}
-	if len(limits) == 0 {
+	if limits.barrierCount(policy) == 0 {
 		return fmt.Errorf(
 			"engine: cannot remove the last barrier of policy %q: empty policy "+
 				"settings are not supported by the SDK yet: %w",
@@ -300,11 +329,11 @@ func (e *openPitEngine) ConfigurePolicy(
 
 	switch policy {
 	case domain.PolicyRateLimit:
-		return e.configureRateLimitLocked(limits)
+		return e.configureRateLimitLocked(limits.RateLimits)
 	case domain.PolicyOrderSizeLimit:
-		return e.configureOrderSizeLocked(limits)
+		return e.configureOrderSizeLocked(limits.OrderSizeLimits)
 	case domain.PolicyPnlBoundsKillSwitch:
-		return e.configurePnlBoundsLocked(limits)
+		return e.configurePnlBoundsLocked(limits.PnlBoundsLimits)
 	default:
 		return fmt.Errorf("engine: configure unknown policy %q", policy)
 	}
@@ -318,8 +347,8 @@ func (e *openPitEngine) ConfigurePolicy(
 // while other barriers remain is a not-implemented stub - the Configure surface
 // cannot clear it in isolation, and silently leaving the old broker barrier on
 // the handle would diverge the engine from the store. Callers must hold e.mu.
-func (e *openPitEngine) configureRateLimitLocked(limits []domain.Limit) error {
-	nextBroker := hasBrokerBarrier(limits)
+func (e *openPitEngine) configureRateLimitLocked(limits []domain.LimitRate) error {
+	nextBroker := hasRateBrokerBarrier(limits)
 	if e.brokerPresent[nameRateLimit] && !nextBroker {
 		return fmt.Errorf(
 			"engine: cannot remove a rate_limit broker barrier: the SDK's "+
@@ -327,7 +356,7 @@ func (e *openPitEngine) configureRateLimitLocked(limits []domain.Limit) error {
 			domain.ErrNotImplemented)
 	}
 
-	broker, assets, accounts, accountAssets, err := rateLimitAxes(limits)
+	broker, assets, accounts, accountAssets, err := rateLimitAxes(limits, e.res)
 	if err != nil {
 		return err
 	}
@@ -347,8 +376,8 @@ func (e *openPitEngine) configureRateLimitLocked(limits []domain.Limit) error {
 // unchanged), so dropping the broker barrier while other barriers remain is a
 // not-implemented stub - silently leaving the old broker barrier on the handle
 // would diverge the engine from the store. Callers must hold e.mu.
-func (e *openPitEngine) configureOrderSizeLocked(limits []domain.Limit) error {
-	nextBroker := hasBrokerBarrier(limits)
+func (e *openPitEngine) configureOrderSizeLocked(limits []domain.LimitOrderSize) error {
+	nextBroker := hasOrderSizeBrokerBarrier(limits)
 	if e.brokerPresent[nameOrderSizeLimit] && !nextBroker {
 		return fmt.Errorf(
 			"engine: cannot remove an order_size_limit broker barrier: the SDK's "+
@@ -356,7 +385,7 @@ func (e *openPitEngine) configureOrderSizeLocked(limits []domain.Limit) error {
 			domain.ErrNotImplemented)
 	}
 
-	broker, assets, accountAssets, err := orderSizeAxes(limits)
+	broker, assets, accountAssets, err := orderSizeAxes(limits, e.res)
 	if err != nil {
 		return err
 	}
@@ -374,8 +403,8 @@ func (e *openPitEngine) configureOrderSizeLocked(limits []domain.Limit) error {
 // they are cleared rather than left unchanged. The account axis uses the Update
 // shape: it retunes bounds without resetting the live accumulated P&L. Callers
 // must hold e.mu.
-func (e *openPitEngine) configurePnlBoundsLocked(limits []domain.Limit) error {
-	brokers, accounts, err := pnlBoundsAxes(limits)
+func (e *openPitEngine) configurePnlBoundsLocked(limits []domain.LimitPnlBounds) error {
+	brokers, accounts, err := pnlBoundsAxes(limits, e.res)
 	if err != nil {
 		return err
 	}
@@ -403,7 +432,7 @@ func (e *openPitEngine) BlockAccount(
 		return fmt.Errorf("engine: block on stopped engine")
 	}
 
-	accountID, err := param.NewAccountIDFromString(id.String())
+	accountID, err := e.res.account(id)
 	if err != nil {
 		return fmt.Errorf("engine: block account %q: %w", id, err)
 	}
@@ -425,7 +454,7 @@ func (e *openPitEngine) UnblockAccount(ctx context.Context, id domain.AccountID)
 		return fmt.Errorf("engine: unblock on stopped engine")
 	}
 
-	accountID, err := param.NewAccountIDFromString(id.String())
+	accountID, err := e.res.account(id)
 	if err != nil {
 		return fmt.Errorf("engine: unblock account %q: %w", id, err)
 	}
@@ -433,48 +462,80 @@ func (e *openPitEngine) UnblockAccount(ctx context.Context, id domain.AccountID)
 	return nil
 }
 
-// ApplyAccountAdjustment applies one spot-funds adjustment for account and
-// returns its accept/reject outcome. The request maps to one balance operation
-// on a single asset, so the outcome reads from that asset's entry.
-func (e *openPitEngine) ApplyAccountAdjustment(
-	ctx context.Context, account domain.AccountID, req domain.AdjustmentRequest,
-) (AdjustmentResult, error) {
+// ApplyAccountAdjustmentBatch applies one atomic SDK account-adjustment batch
+// for account and maps accepted per-asset outcomes back to the request order.
+func (e *openPitEngine) ApplyAccountAdjustmentBatch(
+	ctx context.Context, account domain.AccountID, reqs []domain.AdjustmentRequest,
+) ([]AdjustmentResult, *AdjustmentBatchReject, error) {
 	if err := ctx.Err(); err != nil {
-		return AdjustmentResult{}, fmt.Errorf("engine: adjustment cancelled: %w", err)
+		return nil, nil, fmt.Errorf("engine: adjustment cancelled: %w", err)
+	}
+	if len(reqs) == 0 {
+		return nil, nil, nil
 	}
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if !e.running {
-		return AdjustmentResult{}, fmt.Errorf("engine: adjustment on stopped engine")
+		return nil, nil, fmt.Errorf("engine: adjustment on stopped engine")
 	}
 
-	accountID, err := newAccountID(account)
+	accountID, err := e.res.account(account)
 	if err != nil {
-		return AdjustmentResult{}, err
+		return nil, nil, err
 	}
-	adjustment, err := accountAdjustmentFromRequest(req)
-	if err != nil {
-		return AdjustmentResult{}, err
+	adjustments := make([]model.AccountAdjustment, 0, len(reqs))
+	for _, req := range reqs {
+		adjustment, err := accountAdjustmentFromRequest(req)
+		if err != nil {
+			return nil, nil, err
+		}
+		adjustments = append(adjustments, adjustment)
 	}
 
 	batch, outcomes, err := e.eng.ApplyAccountAdjustment(
-		accountID, []model.AccountAdjustment{adjustment})
+		accountID, adjustments)
 	if err != nil {
-		return AdjustmentResult{}, fmt.Errorf("engine: apply account adjustment: %w", err)
+		return nil, nil, fmt.Errorf("engine: apply account adjustment: %w", err)
 	}
 	if rej, ok := batch.Get(); ok {
 		rejected := outcomeRejectedFrom(rej)
-		return AdjustmentResult{Rejected: &rejected}, nil
+		return nil, &rejected, nil
 	}
-	accepted := outcomeAcceptedFromList(outcomes, req.Asset)
-	return AdjustmentResult{Accepted: &accepted}, nil
+	results := make([]AdjustmentResult, 0, len(reqs))
+	for _, req := range reqs {
+		accepted := outcomeAcceptedFromList(outcomes, req.Asset)
+		results = append(results, AdjustmentResult{Accepted: &accepted})
+	}
+	return results, nil, nil
 }
 
-// SubmitOrder runs the pre-trade pipeline for o. On accept it captures the
-// reservation lock prices as decimal strings before committing the reservation;
-// the native reservation is committed-and-closed (or rolled back on a capture
-// error) and never escapes the adapter.
+// ApplyAccountAdjustment applies one spot-funds adjustment for account and
+// returns its accept/reject outcome.
+func (e *openPitEngine) ApplyAccountAdjustment(
+	ctx context.Context, account domain.AccountID, req domain.AdjustmentRequest,
+) (AdjustmentResult, error) {
+	results, batchReject, err := e.ApplyAccountAdjustmentBatch(
+		ctx, account, []domain.AdjustmentRequest{req},
+	)
+	if err != nil {
+		return AdjustmentResult{}, err
+	}
+	if batchReject != nil {
+		return AdjustmentResult{Rejected: batchReject}, nil
+	}
+	if len(results) != 1 {
+		return AdjustmentResult{}, fmt.Errorf(
+			"engine: adjustment returned %d outcomes", len(results),
+		)
+	}
+	return results[0], nil
+}
+
+// SubmitOrder runs the pre-trade pipeline for o. On accept it serializes the
+// reservation lock through the lock seam before committing the reservation; the
+// native reservation is committed-and-closed (or rolled back on a capture error)
+// and never escapes the adapter.
 func (e *openPitEngine) SubmitOrder(
 	ctx context.Context, o domain.Order,
 ) (OrderResult, error) {
@@ -488,7 +549,7 @@ func (e *openPitEngine) SubmitOrder(
 		return OrderResult{}, fmt.Errorf("engine: submit order on stopped engine")
 	}
 
-	order, err := orderModelFrom(o)
+	order, err := orderModelFrom(o, e.res)
 	if err != nil {
 		return OrderResult{}, err
 	}
@@ -501,22 +562,18 @@ func (e *openPitEngine) SubmitOrder(
 		return OrderResult{Accepted: false, Rejects: orderRejectsFrom(rejects)}, nil
 	}
 
-	// Capture lock prices as decimal strings before closing; the reservation
-	// must not outlive this call.
-	prices, err := reservation.Lock().Prices()
+	// Serialize the lock through the seam before closing; the reservation must
+	// not outlive this call.
+	lockBytes, err := serializeReservationLock(reservation)
 	if err != nil {
 		reservation.RollbackAndClose()
-		return OrderResult{}, fmt.Errorf("engine: read reservation lock: %w", err)
-	}
-	lockPrices := make([]string, 0, len(prices))
-	for _, price := range prices {
-		lockPrices = append(lockPrices, price.String())
+		return OrderResult{}, err
 	}
 	// Capture the reservation's balance effects (held funds, incoming quantity)
 	// before closing, so the caller can mirror them into the balance snapshot.
 	outcomes := balanceOutcomesFromList(reservation.AccountAdjustments())
 	reservation.CommitAndClose()
-	return OrderResult{Accepted: true, LockPrices: lockPrices, Outcomes: outcomes}, nil
+	return OrderResult{Accepted: true, Lock: lockBytes, Outcomes: outcomes}, nil
 }
 
 // ApplyExecutionReport settles a fill and returns the account blocks the engine
@@ -535,7 +592,7 @@ func (e *openPitEngine) ApplyExecutionReport(
 		return ExecutionReportResult{}, fmt.Errorf("engine: execution report on stopped engine")
 	}
 
-	report, err := executionReportFrom(in)
+	report, err := executionReportFrom(in, e.res)
 	if err != nil {
 		return ExecutionReportResult{}, err
 	}
@@ -565,11 +622,11 @@ func (e *openPitEngine) RegisterGroup(
 		return fmt.Errorf("engine: register group on stopped engine")
 	}
 
-	ids, err := accountIDs(accounts)
+	ids, err := e.res.accountIDs(accounts)
 	if err != nil {
 		return err
 	}
-	group, err := newAccountGroupID(groupID)
+	group, err := e.res.group(groupID)
 	if err != nil {
 		return err
 	}
@@ -593,11 +650,11 @@ func (e *openPitEngine) UnregisterGroup(
 		return fmt.Errorf("engine: unregister group on stopped engine")
 	}
 
-	ids, err := accountIDs(accounts)
+	ids, err := e.res.accountIDs(accounts)
 	if err != nil {
 		return err
 	}
-	group, err := newAccountGroupID(groupID)
+	group, err := e.res.group(groupID)
 	if err != nil {
 		return err
 	}
@@ -621,7 +678,7 @@ func (e *openPitEngine) BlockGroup(ctx context.Context, groupID, reason string) 
 		return fmt.Errorf("engine: block group on stopped engine")
 	}
 
-	group, err := newAccountGroupID(groupID)
+	group, err := e.res.group(groupID)
 	if err != nil {
 		return err
 	}
@@ -647,7 +704,7 @@ func (e *openPitEngine) UnblockGroup(ctx context.Context, groupID string) error 
 		return fmt.Errorf("engine: unblock group on stopped engine")
 	}
 
-	group, err := newAccountGroupID(groupID)
+	group, err := e.res.group(groupID)
 	if err != nil {
 		return err
 	}
@@ -655,19 +712,6 @@ func (e *openPitEngine) UnblockGroup(ctx context.Context, groupID string) error 
 		return fmt.Errorf("engine: unblock group %q: %w", groupID, err)
 	}
 	return nil
-}
-
-// accountIDs parses a domain account-id slice into binding account ids.
-func accountIDs(accounts []domain.AccountID) ([]param.AccountID, error) {
-	ids := make([]param.AccountID, 0, len(accounts))
-	for _, account := range accounts {
-		id, err := newAccountID(account)
-		if err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, nil
 }
 
 // CheckOrder runs the pre-trade pipeline for probe as a non-mutating dry-run.
@@ -698,7 +742,7 @@ func (e *openPitEngine) CheckOrder(
 		AmountKind:  probe.AmountKind,
 		AmountValue: probe.AmountValue,
 		Price:       probe.Price,
-	})
+	}, e.res)
 	if err != nil {
 		return domain.CheckResult{}, err
 	}
@@ -788,10 +832,10 @@ func policyName(policy string) string {
 
 // buildEngine constructs an OpenPit engine plus its market-data service,
 // registering the order-validation policy plus each risk policy that has at
-// least one barrier in byPolicy. It returns the engine, the service, and the set
-// of registered policy names. byPolicy may be nil. The risk policies validate
-// their barrier topology at build time, so a policy with no barriers is simply
-// not registered.
+// least one barrier in the snapshot. It returns the engine, the service, and the
+// set of registered policy names. The risk policies validate their barrier
+// topology at build time, so a policy with no barriers is simply not registered.
+// res resolves account/group codes to engine ids for the account-scoped barriers.
 //
 // The market-data service is built unconditionally and before the engine (the
 // engine builder requires the service to exist first), even when nothing is
@@ -807,7 +851,7 @@ func policyName(policy string) string {
 // a live quote reject with MarkPriceUnavailable instead of UnsupportedOrderType.
 // Operator-configurable slippage and runtime enable/disable remain future work.
 func buildEngine(
-	byPolicy map[string][]domain.Limit,
+	snap Snapshot, res idResolver,
 ) (*openpit.Engine, *bindmd.Service, map[string]struct{}, error) {
 	// The market-data service is built from the engine builder so its sync mode
 	// is derived (FullSync), and it must be built before the engine.
@@ -829,8 +873,8 @@ func buildEngine(
 
 	// SpotFunds is always registered by the build path above.
 	registered := map[string]struct{}{nameSpotFunds: {}}
-	if rate := byPolicy[domain.PolicyRateLimit]; len(rate) > 0 {
-		ready, err := rateLimitReady(rate)
+	if len(snap.RateLimits) > 0 {
+		ready, err := rateLimitReady(snap.RateLimits, res)
 		if err != nil {
 			builder.Close()
 			service.Close()
@@ -839,8 +883,8 @@ func buildEngine(
 		builder = builder.Builtin(ready)
 		registered[nameRateLimit] = struct{}{}
 	}
-	if size := byPolicy[domain.PolicyOrderSizeLimit]; len(size) > 0 {
-		ready, err := orderSizeReady(size)
+	if len(snap.OrderSizeLimits) > 0 {
+		ready, err := orderSizeReady(snap.OrderSizeLimits, res)
 		if err != nil {
 			builder.Close()
 			service.Close()
@@ -849,8 +893,8 @@ func buildEngine(
 		builder = builder.Builtin(ready)
 		registered[nameOrderSizeLimit] = struct{}{}
 	}
-	if pnl := byPolicy[domain.PolicyPnlBoundsKillSwitch]; len(pnl) > 0 {
-		ready, err := pnlBoundsReady(pnl)
+	if len(snap.PnlBoundsLimits) > 0 {
+		ready, err := pnlBoundsReady(snap.PnlBoundsLimits, res)
 		if err != nil {
 			builder.Close()
 			service.Close()
@@ -869,70 +913,72 @@ func buildEngine(
 }
 
 // applyBlocks blocks every blocked account in accounts on the engine with its
-// persisted reason.
+// persisted reason, addressing each by its stored engine account id.
 func applyBlocks(eng *openpit.Engine, accounts []domain.Account) error {
 	handle := eng.Accounts()
 	for _, account := range accounts {
 		if !account.Blocked {
 			continue
 		}
-		accountID, err := param.NewAccountIDFromString(account.ID.String())
+		accountID, err := engineAccountID(account.EngineAccountID, account.Code)
 		if err != nil {
-			return fmt.Errorf("engine: block account %q: %w", account.ID, err)
+			return fmt.Errorf("engine: block account %q: %w", account.Code, err)
 		}
 		handle.Block(accountID, account.BlockReason)
 	}
 	return nil
 }
 
-// hydrateGroups registers each account that carries a non-empty GroupID into its
-// group on the engine, one RegisterGroup call per group. RegisterGroup is
-// all-or-nothing; a register error signals corruption of our own persisted
-// membership and aborts startup.
-func hydrateGroups(eng *openpit.Engine, accounts []domain.Account) error {
+// hydrateGroups registers each account that carries a non-empty GroupCode into
+// its group on the engine, one RegisterGroup call per group, addressing accounts
+// and groups by their stored engine ids. RegisterGroup is all-or-nothing; a
+// register error signals corruption of our own persisted membership and aborts
+// startup. The group's engine id is resolved through res, which carries every
+// snapshot group's stored engine group id.
+func hydrateGroups(eng *openpit.Engine, accounts []domain.Account, res idResolver) error {
 	byGroup := make(map[string][]param.AccountID)
 	order := make([]string, 0)
 	for _, account := range accounts {
-		if account.GroupID == "" {
+		if account.GroupCode == "" {
 			continue
 		}
-		id, err := param.NewAccountIDFromString(account.ID.String())
+		id, err := engineAccountID(account.EngineAccountID, account.Code)
 		if err != nil {
-			return fmt.Errorf("engine: hydrate group account %q: %w", account.ID, err)
+			return fmt.Errorf("engine: hydrate group account %q: %w", account.Code, err)
 		}
-		if _, seen := byGroup[account.GroupID]; !seen {
-			order = append(order, account.GroupID)
+		if _, seen := byGroup[account.GroupCode]; !seen {
+			order = append(order, account.GroupCode)
 		}
-		byGroup[account.GroupID] = append(byGroup[account.GroupID], id)
+		byGroup[account.GroupCode] = append(byGroup[account.GroupCode], id)
 	}
 
 	handle := eng.Accounts()
-	for _, groupID := range order {
-		group, err := newAccountGroupID(groupID)
+	for _, groupCode := range order {
+		group, err := res.group(groupCode)
 		if err != nil {
 			return err
 		}
-		if err := handle.RegisterGroup(byGroup[groupID], group); err != nil {
-			return fmt.Errorf("engine: register group %q: %w", groupID, err)
+		if err := handle.RegisterGroup(byGroup[groupCode], group); err != nil {
+			return fmt.Errorf("engine: register group %q: %w", groupCode, err)
 		}
 	}
 	return nil
 }
 
 // blockGroups blocks every blocked group in groups on the engine with its
-// persisted reason.
+// persisted reason, addressing each by its stored engine group id.
 func blockGroups(eng *openpit.Engine, groups []domain.AccountGroup) error {
 	handle := eng.Accounts()
 	for _, group := range groups {
 		if !group.Blocked {
 			continue
 		}
-		id, err := newAccountGroupID(group.ID)
+		id, err := engineGroupID(group.EngineGroupID, group.Code)
 		if err != nil {
 			return err
 		}
 		if err := handle.BlockGroup(id, group.BlockReason); err != nil {
-			return fmt.Errorf("engine: block group %q: %w", group.ID, err)
+			return fmt.Errorf("engine: block group %q: %w", group.Code, err)
 		}
 	}
 	return nil
@@ -942,9 +988,9 @@ func blockGroups(eng *openpit.Engine, groups []domain.AccountGroup) error {
 // adjustment, setting available/held/incoming (and average-entry-price when
 // present) so the spot-funds policy starts from the stored holdings. A reject or
 // error signals corruption of our own persisted values and aborts startup.
-func seedBalances(eng *openpit.Engine, balances []domain.Balance) error {
+func seedBalances(eng *openpit.Engine, balances []domain.Balance, res idResolver) error {
 	for _, balance := range balances {
-		account, err := param.NewAccountIDFromString(balance.Account.String())
+		account, err := res.account(balance.Account)
 		if err != nil {
 			return fmt.Errorf("engine: seed balance account %q: %w", balance.Account, err)
 		}

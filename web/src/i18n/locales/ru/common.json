@@ -20,6 +20,99 @@
     "yes": "да",
     "no": "нет"
   },
+  "table": {
+    "pagination": {
+      "page": "Страница {{page}}",
+      "pageOf": "Страница {{page}} из {{pages}}",
+      "pageOfAtLeast": "Страница {{page}} из {{pages}}+",
+      "pageOfUnknown": "Страница {{page}}",
+      "first": "Первая страница",
+      "firstShort": "Первая",
+      "previous": "Назад",
+      "next": "Вперёд",
+      "last": "Последняя страница",
+      "lastShort": "Последняя",
+      "goToPage": "Перейти на страницу {{page}}",
+      "goToPageInput": "Перейти на страницу",
+      "goToPagePlaceholder": "Страница"
+    }
+  },
+  "businessCsv": {
+    "menu": {
+      "trigger": "Файл",
+      "ariaLabel": "Импорт или экспорт CSV"
+    },
+    "entityLabel": "Сущность",
+    "delimiterLabel": "Разделитель",
+    "format": {
+      "heading": "Формат CSV",
+      "account_groups": {
+        "description": "Одна группа счетов в строке. Первая строка должна быть заголовком.",
+        "columns": "code,title,notes,blocked,block_reason"
+      },
+      "accounts": {
+        "description": "Один счёт в строке. Первая строка должна быть заголовком.",
+        "columns": "code,title,group_code,notes,blocked,block_reason"
+      },
+      "positions": {
+        "description": "Одна позиция спот-баланса в строке. Первая строка должна быть заголовком.",
+        "columns": "account_code,asset,available,held,incoming,realized_pnl,average_entry_price"
+      },
+      "orders": {
+        "description": "Ордера доступны только для экспорта. Первая строка - заголовок.",
+        "columns": "external_id,at,account_code,source,principal,base_asset,quote_asset,side,amount_kind,amount_value,price,status,display_prices"
+      },
+      "trades": {
+        "description": "Сделки доступны только для экспорта. Первая строка - заголовок.",
+        "columns": "external_id,order_external_id,at,account_code,source,principal,base_asset,quote_asset,side,quantity,price,lock_price"
+      }
+    },
+    "entities": {
+      "account_groups": "Группы счетов",
+      "accounts": "Счета",
+      "positions": "Позиции",
+      "orders": "Ордера",
+      "trades": "Сделки"
+    },
+    "delimiters": {
+      "comma": "Запятая",
+      "semicolon": "Точка с запятой",
+      "tab": "Табуляция",
+      "pipe": "Вертикальная черта"
+    },
+    "conflictPolicy": {
+      "skip": "Пропустить конфликты",
+      "replace": "Перезаписать конфликты",
+      "stop": "Остановиться на первом конфликте"
+    },
+    "import": {
+      "trigger": "Импорт CSV",
+      "title": "Импорт CSV бизнес-сущностей",
+      "description": "Загрузите один CSV-файл, ZIP с одним CSV-файлом или вставьте CSV-текст для серверной проверки перед применением.",
+      "chooseFile": "Выбрать CSV или ZIP",
+      "noFile": "Файл не выбран",
+      "pastePlaceholder": "Вставьте строки CSV здесь",
+      "fileTakesPriority": "Выбранный файл используется вместо вставленного текста.",
+      "fileTooLarge": "Файл слишком большой. Выберите файл до {{limit}} МиБ.",
+      "preview": "Предпросмотр",
+      "previewing": "Предпросмотр…",
+      "previewReady": "Предпросмотр готов для {{file}}",
+      "counts": "Строки {{rows}} · применено {{applied}} · пропущено {{skipped}} · конфликты {{conflicts}}",
+      "conflictsFound": "Найдено конфликтов: {{count}}.",
+      "apply": "Применить импорт",
+      "applied": "Импорт применён",
+      "conflictTitle": "Найдены конфликты",
+      "conflictDescription": "{{count}} загруженных строк пересекаются с существующими бизнес-данными. Выберите, как Officer должен применить этот импорт."
+    },
+    "export": {
+      "trigger": "Экспорт CSV",
+      "title": "Экспорт CSV бизнес-сущностей",
+      "description": "Экспорт {{entity}} с учётом текущих фильтров.",
+      "zip": "Скачать как ZIP",
+      "submit": "Экспортировать",
+      "exporting": "Экспорт…"
+    }
+  },
   "nav": {
     "dashboard": "Панель",
     "accounts": "Счета",

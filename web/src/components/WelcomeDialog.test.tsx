@@ -59,8 +59,8 @@ function byoInstance(
   overrides: Partial<MarketDataInstance> = {},
 ): MarketDataInstance {
   return {
-    id: "byo-1",
-    type: "byo",
+    externalId: "byo-1",
+    provider: "byo",
     label: "FX (static)",
     credentials: "",
     settings: {},
@@ -81,8 +81,8 @@ function binanceInstance(
 ): MarketDataInstance {
   return {
     ...byoInstance({
-      id: "binance-1",
-      type: "binance",
+      externalId: "binance-1",
+      provider: "binance",
       label: "Binance spot",
       ...overrides,
     }),
@@ -117,8 +117,8 @@ function renderWelcome(onOpenChange = vi.fn()) {
 beforeEach(() => {
   vi.clearAllMocks();
   fetchMarketDataMock.mockResolvedValue(marketDataStatus());
-  createMarketDataInstanceMock.mockResolvedValue(
-    marketDataStatus({ instances: [byoInstance(), binanceInstance()] }),
+  createMarketDataInstanceMock.mockImplementation(async (body) =>
+    body.provider === "binance" ? binanceInstance() : byoInstance(),
   );
   setMarketDataInstanceEnabledMock.mockResolvedValue(undefined);
   upsertMarketDataInstrumentMock.mockResolvedValue(
@@ -170,7 +170,7 @@ describe("WelcomeDialog", () => {
 
     await waitFor(() => {
       expect(createMarketDataInstanceMock).toHaveBeenCalledWith({
-        type: "byo",
+        provider: "byo",
         label: "FX (static)",
         credentials: "",
         enabled: true,
@@ -257,7 +257,7 @@ describe("WelcomeDialog", () => {
 
     await waitFor(() => {
       expect(createMarketDataInstanceMock).toHaveBeenCalledWith({
-        type: "binance",
+        provider: "binance",
         label: "Binance spot",
         credentials: "",
         enabled: true,

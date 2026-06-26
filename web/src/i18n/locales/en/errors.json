@@ -2,9 +2,11 @@
   "code": {
     "validation": "The request was rejected as invalid.",
     "not_found": "The requested resource was not found.",
+    "has_dependents": "The resource has dependent rows.",
     "conflict": "The request conflicts with the current state.",
     "terminal_order": "The order is in a terminal status.",
     "precondition": "A precondition for the request was not met.",
+    "too_large": "The import exceeds the maximum size of 128 MiB. Split the export into smaller files or use the API for bulk loading.",
     "engine_restarting": "The risk engine is restarting; retry after it finishes.",
     "not_implemented": "The requested operation is not implemented.",
     "internal": "The service encountered an internal error.",

@@ -42,18 +42,21 @@ build-js:
 check: fmt-all check-dry build-js
 
 # Lint and test the result (non-mutating).
+[parallel]
 check-dry: lint-all test-all
 
 # Format, lint, build, and test Go.
 check-go: fmt-all check-go-dry
 
 # Lint, build, and test Go (non-mutating).
+[parallel]
 check-go-dry: lint-go build-go test-go test-go-race
 
 # Lint, build, and test JS/TypeScript.
-check-js: lint-js build-js test-js
+check-js: check-js-dry build-js
 
 # Lint and test JS/TypeScript (non-mutating).
+[parallel]
 check-js-dry: lint-js test-js
 
 # Run go vet across all packages.

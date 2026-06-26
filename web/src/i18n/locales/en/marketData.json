@@ -246,5 +246,18 @@
     "noResults": "No matching symbols in this feed",
     "noFilteredResults": "No results match the filter",
     "resultLabel": "{{symbol}} · {{secType}} · {{exchange}} · {{currency}}"
+  },
+  "deleteInstance": {
+    "title": "Delete market-data source?",
+    "description": "{{label}} will be permanently removed. Configured instruments are deleted only after explicit force confirmation.",
+    "cancel": "Cancel",
+    "submit": "Delete",
+    "forceSubmit": "Force delete"
+  },
+  "deleteInstrument": {
+    "title": "Delete instrument?",
+    "description": "{{symbol}} will be permanently removed from this source.",
+    "cancel": "Cancel",
+    "submit": "Delete"
   }
 }

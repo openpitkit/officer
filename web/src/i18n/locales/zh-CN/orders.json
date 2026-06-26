@@ -7,6 +7,11 @@
     "trades": "成交"
   },
 
+  "businessCsv": {
+    "exportOrdersCsv": "导出订单 CSV",
+    "exportTradesCsv": "导出成交 CSV"
+  },
+
   "filter": {
     "accountPlaceholder": "按账户筛选…",
     "sourceAll": "所有来源",
@@ -16,7 +21,7 @@
   },
 
   "table": {
-    "id": "ID",
+    "externalId": "外部 ID",
     "account": "账户",
     "instrument": "标的",
     "side": "方向",
@@ -28,7 +33,7 @@
     "order": "订单",
     "qty": "数量",
     "lockPrice": "锁定价格",
-    "lockPrices": "锁定价格"
+    "displayPrices": "显示价格"
   },
 
   "amount": {
@@ -63,6 +68,9 @@
       "baseAssetPlaceholder": "如 AAPL",
       "quoteAsset": "计价资产",
       "quoteAssetPlaceholder": "如 USD",
+      "externalId": "外部 ID（可选）",
+      "externalIdPlaceholder": "留空则由服务器生成",
+      "externalIdHint": "如需与外部系统关联此订单，可填写自己的 22 字符 base64url ID。",
       "side": "方向",
       "sideOptions": {
         "buy": "买入",
@@ -96,7 +104,7 @@
     "previewUnavailable": "预览不可用",
     "wouldPass": "预览：将通过",
     "wouldReject": "预览：将被拒绝",
-    "lockPrices": "锁定价格：{{prices}}",
+    "displayPrices": "显示价格：{{prices}}",
     "wouldBlock": "将封锁账户 {{account}}",
     "wouldBlockReason": "将封锁账户 {{account}} - {{reason}}",
     "accountBlocked": "账户 {{account}} 已被封锁",
@@ -108,7 +116,7 @@
   "execReport": {
     "dialog": {
       "title": "提交执行报告",
-      "description": "订单 #{{orderId}} — 记录成交以模拟部分或完全执行。",
+      "description": "订单 {{orderExternalId}} — 记录成交以模拟部分或完全执行。",
       "fillQty": "成交数量",
       "fillQtyPlaceholder": "如 50",
       "fillPrice": "成交价格",
@@ -128,21 +136,21 @@
 
   "clone": {
     "orderButton": "克隆",
-    "orderAriaLabel": "克隆订单 #{{orderId}}",
-    "execReportAriaLabel": "克隆成交 #{{tradeId}} 的执行报告",
-    "execReportEventAriaLabel": "从订单 #{{orderId}} 克隆执行报告"
+    "orderAriaLabel": "克隆订单 {{orderExternalId}}",
+    "execReportAriaLabel": "克隆成交 {{tradeId}} 的执行报告",
+    "execReportEventAriaLabel": "从订单 {{orderExternalId}} 克隆执行报告"
   },
 
   "detail": {
     "dialog": {
-      "title": "订单 #{{orderId}}",
+      "title": "订单 {{orderExternalId}}",
       "loading": "正在加载订单详情…",
       "accountBlocked": "账户 {{account}} 已被封锁：",
       "fieldAccount": "账户",
       "fieldStatus": "状态",
       "fieldSource": "来源",
       "fieldSubmitted": "提交时间",
-      "fieldLockPrices": "锁定价格",
+      "fieldDisplayPrices": "显示价格",
       "timeline": {
         "sectionTitle": "事件时间线",
         "empty": "暂无事件记录。",

@@ -1,0 +1,328 @@
+// Copyright The Pit Project Owners. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// Please see https://openpit.dev and the OWNERS file for details.
+
+// Balances-group tests: upsert/get/list/delete round-trips, realized_pnl
+// semantics (UpsertBalance writes the caller-supplied absolute; settleBalanceTx
+// accumulates), cascade on account/asset delete, and unknown-FK-code error.
+
+package store
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"go.openpit.dev/officer/internal/domain"
+)
+
+// seedBalanceFixtures seeds two assets and an account and returns the realm
+// handle ready for balance tests.
+func seedBalanceFixtures(t *testing.T) (context.Context, RealmStore) {
+	t.Helper()
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+	if err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL", Title: "Apple"}); err != nil {
+		t.Fatalf("CreateAsset(AAPL): %v", err)
+	}
+	if err := rs.CreateAsset(ctx, domain.Asset{Code: "USD", Title: "Dollar"}); err != nil {
+		t.Fatalf("CreateAsset(USD): %v", err)
+	}
+	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-1"}); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	return ctx, rs
+}
+
+func TestBalanceUpsertGetDeleteRoundTrip(t *testing.T) {
+	ctx, rs := seedBalanceFixtures(t)
+
+	bal := domain.Balance{
+		Account:           "acc-1",
+		Asset:             "AAPL",
+		Available:         "100",
+		Held:              "10",
+		Incoming:          "5",
+		RealizedPnl:       "2.5",
+		AverageEntryPrice: "150",
+		UpdatedAt:         time.Now().UTC().Truncate(time.Second),
+	}
+	if err := rs.UpsertBalance(ctx, bal); err != nil {
+		t.Fatalf("UpsertBalance: %v", err)
+	}
+
+	got, ok, err := rs.GetBalance(ctx, "acc-1", "AAPL")
+	if err != nil || !ok {
+		t.Fatalf("GetBalance: ok=%v err=%v", ok, err)
+	}
+	if got.Account != "acc-1" || got.Asset != "AAPL" {
+		t.Fatalf("GetBalance codes = %q/%q, want acc-1/AAPL", got.Account, got.Asset)
+	}
+	if got.Available != "100" || got.Held != "10" || got.Incoming != "5" {
+		t.Fatalf("GetBalance amounts = avail=%q held=%q incoming=%q", got.Available, got.Held, got.Incoming)
+	}
+	if got.RealizedPnl != "2.5" {
+		t.Fatalf("GetBalance realized_pnl = %q, want 2.5", got.RealizedPnl)
+	}
+	if got.AverageEntryPrice != "150" {
+		t.Fatalf("GetBalance avg_entry = %q, want 150", got.AverageEntryPrice)
+	}
+
+	// GetBalance of an absent row returns ok=false.
+	_, ok, err = rs.GetBalance(ctx, "acc-1", "USD")
+	if err != nil || ok {
+		t.Fatalf("GetBalance(missing): ok=%v err=%v, want ok=false err=nil", ok, err)
+	}
+
+	// DeleteBalance removes the row.
+	if err := rs.DeleteBalance(ctx, "acc-1", "AAPL"); err != nil {
+		t.Fatalf("DeleteBalance: %v", err)
+	}
+	_, ok, err = rs.GetBalance(ctx, "acc-1", "AAPL")
+	if err != nil || ok {
+		t.Fatalf("GetBalance after delete: ok=%v err=%v", ok, err)
+	}
+
+	// Second delete is ErrNotFound.
+	if err := rs.DeleteBalance(ctx, "acc-1", "AAPL"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("DeleteBalance(missing) error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestBalanceUpsertOverwritesRealizedPnlAbsolute(t *testing.T) {
+	ctx, rs := seedBalanceFixtures(t)
+
+	// First upsert with realized_pnl = "10".
+	if err := rs.UpsertBalance(ctx, domain.Balance{
+		Account: "acc-1", Asset: "AAPL",
+		Available: "100", RealizedPnl: "10",
+	}); err != nil {
+		t.Fatalf("UpsertBalance (first): %v", err)
+	}
+	// Second upsert overwrites with realized_pnl = "25" (snapshot semantics:
+	// the caller supplies the absolute value; the store does not accumulate).
+	if err := rs.UpsertBalance(ctx, domain.Balance{
+		Account: "acc-1", Asset: "AAPL",
+		Available: "200", RealizedPnl: "25",
+	}); err != nil {
+		t.Fatalf("UpsertBalance (second): %v", err)
+	}
+	got, _, _ := rs.GetBalance(ctx, "acc-1", "AAPL")
+	if got.RealizedPnl != "25" {
+		t.Fatalf("realized_pnl after two upserts = %q, want 25 (absolute overwrite)", got.RealizedPnl)
+	}
+	if got.Available != "200" {
+		t.Fatalf("available after second upsert = %q, want 200", got.Available)
+	}
+}
+
+func TestBalanceSettleAccumulatesRealizedPnl(t *testing.T) {
+	// settleBalanceTx accumulates realized_pnl as a delta, not an absolute.
+	// This test exercises it through RecordOrderSettlement which calls
+	// settleBalanceTx internally.
+	ctx, rs := seedBalanceFixtures(t)
+
+	// Seed an order needed by the settlement path.
+	order, err := rs.CreateOrder(ctx, domain.Order{
+		Account:     "acc-1",
+		BaseAsset:   "AAPL",
+		QuoteAsset:  "USD",
+		Source:      domain.SourcePanel,
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "10",
+		Price:       "150",
+		Status:      domain.OrderStatusSubmitted,
+	})
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+
+	// Seed a starting balance.
+	if err := rs.UpsertBalance(ctx, domain.Balance{
+		Account: "acc-1", Asset: "AAPL",
+		Available: "100", RealizedPnl: "5",
+	}); err != nil {
+		t.Fatalf("UpsertBalance: %v", err)
+	}
+
+	// First settlement: realized_pnl delta = "3".
+	st := domain.OrderSettlement{
+		Account:     "acc-1",
+		Order:       order.ExternalID,
+		OrderStatus: domain.OrderStatusFilled,
+		Balances: []domain.BalanceSettlement{
+			{
+				Asset: "AAPL",
+				Outcome: domain.AdjustmentOutcomeAccepted{
+					BalanceResult:    "90",
+					RealizedPnlDelta: "3",
+				},
+			},
+		},
+		Events: []domain.OrderEvent{
+			{Source: domain.SourcePanel, Type: domain.OrderEventFill},
+		},
+	}
+	if err := rs.RecordOrderSettlement(ctx, st); err != nil {
+		t.Fatalf("RecordOrderSettlement (first): %v", err)
+	}
+	got, _, _ := rs.GetBalance(ctx, "acc-1", "AAPL")
+	if got.RealizedPnl != "8" {
+		t.Fatalf("realized_pnl after first settle = %q, want 8 (5+3)", got.RealizedPnl)
+	}
+}
+
+func TestBalanceListFilters(t *testing.T) {
+	ctx, rs := seedBalanceFixtures(t)
+
+	if err := rs.UpsertBalance(ctx, domain.Balance{
+		Account: "acc-1", Asset: "AAPL", Available: "1", RealizedPnl: "0",
+	}); err != nil {
+		t.Fatalf("UpsertBalance(AAPL): %v", err)
+	}
+	if err := rs.UpsertBalance(ctx, domain.Balance{
+		Account: "acc-1", Asset: "USD", Available: "2", RealizedPnl: "0",
+	}); err != nil {
+		t.Fatalf("UpsertBalance(USD): %v", err)
+	}
+
+	// Both present, empty filter returns all.
+	all, err := rs.ListBalances(ctx, "", "")
+	if err != nil {
+		t.Fatalf("ListBalances(all): %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("ListBalances(all) len = %d, want 2", len(all))
+	}
+
+	// Filter by account.
+	byAcc, err := rs.ListBalances(ctx, "acc-1", "")
+	if err != nil {
+		t.Fatalf("ListBalances(by account): %v", err)
+	}
+	if len(byAcc) != 2 {
+		t.Fatalf("ListBalances(acc-1) len = %d, want 2", len(byAcc))
+	}
+
+	// Filter by asset.
+	byAsset, err := rs.ListBalances(ctx, "", "AAPL")
+	if err != nil {
+		t.Fatalf("ListBalances(by asset): %v", err)
+	}
+	if len(byAsset) != 1 || byAsset[0].Asset != "AAPL" {
+		t.Fatalf("ListBalances(AAPL) = %+v", byAsset)
+	}
+
+	// Non-nil empty slice when nothing matches.
+	none, err := rs.ListBalances(ctx, "acc-1", "EUR")
+	if err != nil {
+		t.Fatalf("ListBalances(no match): %v", err)
+	}
+	if none == nil || len(none) != 0 {
+		t.Fatalf("ListBalances(no match) = %v, want non-nil empty slice", none)
+	}
+}
+
+func TestBalanceCascadeOnAccountDelete(t *testing.T) {
+	ctx, rs := seedBalanceFixtures(t)
+
+	if err := rs.UpsertBalance(ctx, domain.Balance{
+		Account: "acc-1", Asset: "AAPL", Available: "1", RealizedPnl: "0",
+	}); err != nil {
+		t.Fatalf("UpsertBalance: %v", err)
+	}
+
+	if err := rs.DeleteAccount(ctx, "acc-1", false); !errors.Is(err, domain.ErrHasDependents) {
+		t.Fatalf("DeleteAccount(no force) error = %v, want ErrHasDependents", err)
+	}
+	if err := rs.DeleteAccount(ctx, "acc-1", true); err != nil {
+		t.Fatalf("DeleteAccount(force): %v", err)
+	}
+
+	// Balance row must be gone (CASCADE).
+	all, err := rs.ListBalances(ctx, "", "")
+	if err != nil {
+		t.Fatalf("ListBalances after account delete: %v", err)
+	}
+	if len(all) != 0 {
+		t.Fatalf("expected 0 balances after account cascade, got %d", len(all))
+	}
+}
+
+func TestBalanceCascadeOnAssetDelete(t *testing.T) {
+	ctx, rs := seedBalanceFixtures(t)
+
+	if err := rs.UpsertBalance(ctx, domain.Balance{
+		Account: "acc-1", Asset: "AAPL", Available: "1", RealizedPnl: "0",
+	}); err != nil {
+		t.Fatalf("UpsertBalance: %v", err)
+	}
+
+	// DeleteAsset cascades to balances.
+	if err := rs.DeleteAsset(ctx, "AAPL", true); err != nil {
+		t.Fatalf("DeleteAsset: %v", err)
+	}
+
+	all, err := rs.ListBalances(ctx, "", "")
+	if err != nil {
+		t.Fatalf("ListBalances after asset delete: %v", err)
+	}
+	if len(all) != 0 {
+		t.Fatalf("expected 0 balances after asset cascade, got %d", len(all))
+	}
+}
+
+func TestBalanceUnknownAccountIsInvalid(t *testing.T) {
+	ctx, rs := seedBalanceFixtures(t)
+
+	err := rs.UpsertBalance(ctx, domain.Balance{
+		Account: "ghost", Asset: "AAPL", Available: "1", RealizedPnl: "0",
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("UpsertBalance(unknown account) error = %v, want ErrInvalid", err)
+	}
+}
+
+func TestBalanceUnknownAssetIsInvalid(t *testing.T) {
+	ctx, rs := seedBalanceFixtures(t)
+
+	err := rs.UpsertBalance(ctx, domain.Balance{
+		Account: "acc-1", Asset: "GHOST", Available: "1", RealizedPnl: "0",
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("UpsertBalance(unknown asset) error = %v, want ErrInvalid", err)
+	}
+}
+
+func TestBalanceEmptyAmountsDefaultToZero(t *testing.T) {
+	ctx, rs := seedBalanceFixtures(t)
+
+	// Zero-value amounts should persist as "0", not an empty string.
+	if err := rs.UpsertBalance(ctx, domain.Balance{
+		Account: "acc-1", Asset: "AAPL",
+	}); err != nil {
+		t.Fatalf("UpsertBalance(zero amounts): %v", err)
+	}
+	got, ok, err := rs.GetBalance(ctx, "acc-1", "AAPL")
+	if err != nil || !ok {
+		t.Fatalf("GetBalance: ok=%v err=%v", ok, err)
+	}
+	if got.Available != "0" || got.Held != "0" || got.Incoming != "0" || got.RealizedPnl != "0" {
+		t.Fatalf("zero amounts not stored as 0: %+v", got)
+	}
+}

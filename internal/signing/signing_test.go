@@ -97,45 +97,45 @@ func (f *fakeStore) SetSigningConfig(_ context.Context, key, value string) error
 func samplePayload() domain.ApprovalPayload {
 	now := time.Now().UTC()
 	return domain.ApprovalPayload{
-		Version:        1,
-		ApprovalID:     "11111111-1111-1111-1111-111111111111",
-		ReservationID:  "11111111-1111-1111-1111-111111111111",
-		Mode:           "hold",
-		OrderID:        42,
-		Instrument:     "AAPL/USD",
-		Side:           "buy",
-		Quantity:       "10",
-		AmountKind:     "quantity",
-		OrderType:      "limit",
-		LimitPrice:     "150.25",
-		PriceCurrency:  "USD",
-		TimeInForce:    "gtc",
-		AccountID:      "acct-1",
-		Verdict:        "accept",
-		PolicySummary:  "ok",
-		EstimatePrice:  "150.25",
-		EstimateSource: "limit",
-		IssuedAt:       now.Format(time.RFC3339Nano),
-		ExpiresAt:      now.Add(2 * time.Minute).Format(time.RFC3339Nano),
-		Nonce:          "Zm9vYmFyYmF6cXV4MTIzNA",
+		Version:         1,
+		ApprovalID:      "11111111-1111-1111-1111-111111111111",
+		ReservationID:   "11111111-1111-1111-1111-111111111111",
+		Mode:            "hold",
+		OrderExternalID: "AAAAAAAAAAAAAAAAAAAAAA", // 22-char base64url ExternalID handle
+		Instrument:      "AAPL/USD",
+		Side:            "buy",
+		Quantity:        "10",
+		AmountKind:      "quantity",
+		OrderType:       "limit",
+		LimitPrice:      "150.25",
+		PriceCurrency:   "USD",
+		TimeInForce:     "gtc",
+		AccountID:       "acct-1",
+		Verdict:         "accept",
+		PolicySummary:   "ok",
+		EstimatePrice:   "150.25",
+		EstimateSource:  "limit",
+		IssuedAt:        now.Format(time.RFC3339Nano),
+		ExpiresAt:       now.Add(2 * time.Minute).Format(time.RFC3339Nano),
+		Nonce:           "Zm9vYmFyYmF6cXV4MTIzNA",
 	}
 }
 
 // expectFor builds the matching VerifyParams for a payload.
 func expectFor(p domain.ApprovalPayload) VerifyParams {
 	return VerifyParams{
-		OrderID:        p.OrderID,
-		Instrument:     p.Instrument,
-		Venue:          p.Venue,
-		Side:           p.Side,
-		Quantity:       p.Quantity,
-		AmountKind:     p.AmountKind,
-		OrderType:      p.OrderType,
-		LimitPrice:     p.LimitPrice,
-		PriceCurrency:  p.PriceCurrency,
-		TimeInForce:    p.TimeInForce,
-		AccountID:      p.AccountID,
-		AccountGroupID: p.AccountGroupID,
+		OrderExternalID: p.OrderExternalID,
+		Instrument:      p.Instrument,
+		Venue:           p.Venue,
+		Side:            p.Side,
+		Quantity:        p.Quantity,
+		AmountKind:      p.AmountKind,
+		OrderType:       p.OrderType,
+		LimitPrice:      p.LimitPrice,
+		PriceCurrency:   p.PriceCurrency,
+		TimeInForce:     p.TimeInForce,
+		AccountID:       p.AccountID,
+		AccountGroupID:  p.AccountGroupID,
 	}
 }
 
@@ -247,16 +247,16 @@ func TestParamBindingTamperRejected(t *testing.T) {
 		t.Fatalf("Sign: %v", err)
 	}
 	mutators := map[string]func(*VerifyParams){
-		"instrument":    func(e *VerifyParams) { e.Instrument = "MSFT/USD" },
-		"side":          func(e *VerifyParams) { e.Side = "sell" },
-		"quantity":      func(e *VerifyParams) { e.Quantity = "99" },
-		"amountKind":    func(e *VerifyParams) { e.AmountKind = "volume" },
-		"orderType":     func(e *VerifyParams) { e.OrderType = "market" },
-		"limitPrice":    func(e *VerifyParams) { e.LimitPrice = "999.99" },
-		"priceCurrency": func(e *VerifyParams) { e.PriceCurrency = "EUR" },
-		"timeInForce":   func(e *VerifyParams) { e.TimeInForce = "ioc" },
-		"accountId":     func(e *VerifyParams) { e.AccountID = "acct-2" },
-		"orderId":       func(e *VerifyParams) { e.OrderID = 7 },
+		"instrument":      func(e *VerifyParams) { e.Instrument = "MSFT/USD" },
+		"side":            func(e *VerifyParams) { e.Side = "sell" },
+		"quantity":        func(e *VerifyParams) { e.Quantity = "99" },
+		"amountKind":      func(e *VerifyParams) { e.AmountKind = "volume" },
+		"orderType":       func(e *VerifyParams) { e.OrderType = "market" },
+		"limitPrice":      func(e *VerifyParams) { e.LimitPrice = "999.99" },
+		"priceCurrency":   func(e *VerifyParams) { e.PriceCurrency = "EUR" },
+		"timeInForce":     func(e *VerifyParams) { e.TimeInForce = "ioc" },
+		"accountId":       func(e *VerifyParams) { e.AccountID = "acct-2" },
+		"orderExternalId": func(e *VerifyParams) { e.OrderExternalID = "BBBBBBBBBBBBBBBBBBBBBB" },
 	}
 	for name, mut := range mutators {
 		exp := expectFor(p)
@@ -264,6 +264,86 @@ func TestParamBindingTamperRejected(t *testing.T) {
 		if _, err := svc.Verify(context.Background(), token, exp); !errors.Is(err, domain.ErrInvalid) {
 			t.Fatalf("field %s: expected re-bind rejection, got %v", name, err)
 		}
+	}
+}
+
+func TestSignVerifyEmptyOrderExternalID(t *testing.T) {
+	// A held reservation may be signed before an order row exists; the order
+	// handle is then legitimately empty and must still sign and verify.
+	svc, _ := newServiceWithKey(t)
+	p := samplePayload()
+	p.OrderExternalID = ""
+	token, err := svc.Sign(p)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	res, err := svc.Verify(context.Background(), token, expectFor(p))
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if res.Payload.OrderExternalID != "" {
+		t.Fatalf("orderExternalId = %q, want empty", res.Payload.OrderExternalID)
+	}
+	// An empty expectation leaves the bound order handle unchecked; a populated
+	// payload handle verifies against an empty expectation (no surrogate to leak).
+	if _, err := svc.Verify(context.Background(), token, expectFor(p)); err != nil {
+		t.Fatalf("Verify empty handle: %v", err)
+	}
+}
+
+func TestVerifyOrderExternalIDMismatchRejected(t *testing.T) {
+	svc, _ := newServiceWithKey(t)
+	p := samplePayload()
+	token, err := svc.Sign(p)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	exp := expectFor(p)
+	exp.OrderExternalID = "BBBBBBBBBBBBBBBBBBBBBB"
+	if _, err := svc.Verify(context.Background(), token, exp); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("Verify mismatch = %v, want ErrInvalid", err)
+	}
+}
+
+func TestVerifyEmptyPayloadOrderExternalIDRejectedForCreatedOrder(t *testing.T) {
+	svc, _ := newServiceWithKey(t)
+	p := samplePayload()
+	p.OrderExternalID = ""
+	token, err := svc.Sign(p)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	exp := expectFor(p)
+	exp.OrderExternalID = "AAAAAAAAAAAAAAAAAAAAAA"
+	if _, err := svc.Verify(context.Background(), token, exp); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("Verify empty payload order id = %v, want ErrInvalid", err)
+	}
+}
+
+func TestCanonicalBytesNoSurrogateAndCarriesHandle(t *testing.T) {
+	// The canonical bytes must carry the opaque order handle, never an integer
+	// surrogate id field.
+	p := samplePayload()
+	canon, err := CanonicalBytes(p)
+	if err != nil {
+		t.Fatalf("CanonicalBytes: %v", err)
+	}
+	s := string(canon)
+	if !strings.Contains(s, `"orderExternalId":"`+p.OrderExternalID+`"`) {
+		t.Fatalf("canonical bytes missing order handle: %s", s)
+	}
+	if strings.Contains(s, `"orderId"`) {
+		t.Fatalf("canonical bytes leaked surrogate orderId field: %s", s)
+	}
+	// An empty handle is omitted entirely (omitempty), keeping the held-reservation
+	// envelope free of any order reference.
+	p.OrderExternalID = ""
+	canonEmpty, err := CanonicalBytes(p)
+	if err != nil {
+		t.Fatalf("CanonicalBytes empty: %v", err)
+	}
+	if strings.Contains(string(canonEmpty), `"orderExternalId"`) {
+		t.Fatalf("empty order handle should be omitted: %s", canonEmpty)
 	}
 }
 

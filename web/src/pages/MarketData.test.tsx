@@ -103,8 +103,8 @@ function ibInstance(
   overrides: Partial<MarketDataInstance> = {},
 ): MarketDataInstance {
   return {
-    id: "ib-1",
-    type: "ib",
+    externalId: "ib-1",
+    provider: "ib",
     label: "IB Gateway",
     credentials: "",
     settings: {
@@ -214,8 +214,8 @@ describe("provider references", () => {
   it("links Alpaca symbols to the current assets documentation", () => {
     renderCard(
       ibInstance({
-        id: "alpaca-1",
-        type: "alpaca",
+        externalId: "alpaca-1",
+        provider: "alpaca",
         label: "Alpaca",
         searchesSymbols: false,
       }),
@@ -232,14 +232,14 @@ describe("provider references", () => {
   it("hides symbol verification buttons when the feed cannot verify", () => {
     renderCard(
       ibInstance({
-        id: "alpaca-1",
-        type: "alpaca",
+        externalId: "alpaca-1",
+        provider: "alpaca",
         label: "Alpaca",
         verifiesSymbols: false,
         searchesSymbols: false,
         instruments: [
           {
-            instanceId: "alpaca-1",
+            instanceExternalId: "alpaca-1",
             externalSymbol: "AAPL",
             baseAsset: "AAPL",
             quoteAsset: "USD",
@@ -260,8 +260,8 @@ describe("provider references", () => {
     const user = userEvent.setup();
     renderCard(
       ibInstance({
-        id: "binance-1",
-        type: "binance",
+        externalId: "binance-1",
+        provider: "binance",
         label: "Binance",
         searchesSymbols: false,
         references: { docsUrl: "https://docs.example.com" },
@@ -360,7 +360,7 @@ describe("provider references", () => {
       ibInstance({
         instruments: [
           {
-            instanceId: "ib-1",
+            instanceExternalId: "ib-1",
             externalSymbol: "AAPL",
             baseAsset: "AAPL",
             quoteAsset: "USD",
@@ -386,7 +386,7 @@ describe("provider references", () => {
         pairUsageMap: {
           "AAPL/USD": [
             {
-              instanceId: "alpaca-1",
+              instanceExternalId: "alpaca-1",
               instanceLabel: "Alpaca",
               providerType: "alpaca",
               externalSymbol: "AAPL",
@@ -574,8 +574,8 @@ describe("IB feed resolver", () => {
     const onUpsertInstrument = vi.fn().mockResolvedValue(true);
     renderCard(
       ibInstance({
-        id: "bn-1",
-        type: "binance",
+        externalId: "bn-1",
+        provider: "binance",
         label: "Binance",
         searchesSymbols: true,
       }),
@@ -590,7 +590,7 @@ describe("IB feed resolver", () => {
 
     expect(onSearchSymbols).toHaveBeenCalledTimes(1);
     const [searchedInstance, input] = onSearchSymbols.mock.calls[0];
-    expect(searchedInstance.id).toBe("bn-1");
+    expect(searchedInstance.externalId).toBe("bn-1");
     expect(input).toMatchObject({ query: "BTC/USDT" });
 
     const result = await screen.findByRole("button", { name: /BTCUSDT/ });
@@ -628,8 +628,8 @@ describe("IB feed resolver", () => {
     ]);
     renderCard(
       ibInstance({
-        id: "bn-1",
-        type: "binance",
+        externalId: "bn-1",
+        provider: "binance",
         label: "Binance",
         searchesSymbols: true,
       }),
@@ -666,8 +666,8 @@ describe("IB feed resolver", () => {
     const onUpsertInstrument = vi.fn().mockResolvedValue(true);
     renderCard(
       ibInstance({
-        id: "bn-1",
-        type: "binance",
+        externalId: "bn-1",
+        provider: "binance",
         label: "Binance",
         searchesSymbols: true,
       }),
@@ -706,8 +706,8 @@ describe("IB feed resolver", () => {
     const onSearchSymbols = vi.fn().mockResolvedValue([match]);
     renderCard(
       ibInstance({
-        id: "fh-1",
-        type: "finnhub",
+        externalId: "fh-1",
+        provider: "finnhub",
         label: "Finnhub",
         searchesSymbols: true,
       }),
@@ -738,12 +738,12 @@ describe("IB feed resolver", () => {
   it("shows the source venue under an exchange-qualified instrument row", () => {
     renderCard(
       ibInstance({
-        id: "fh-1",
-        type: "finnhub",
+        externalId: "fh-1",
+        provider: "finnhub",
         label: "Finnhub",
         instruments: [
           {
-            instanceId: "fh-1",
+            instanceExternalId: "fh-1",
             externalSymbol: "BINANCE:ETHUSDT",
             baseAsset: "ETH",
             quoteAsset: "USDT",
@@ -789,7 +789,7 @@ describe("IB instrument persistence (full-map send)", () => {
     const instance = ibInstance({
       instruments: [
         {
-          instanceId: "ib-1",
+          instanceExternalId: "ib-1",
           externalSymbol: "MSFT",
           baseAsset: "MSFT",
           quoteAsset: "USD",
@@ -853,7 +853,7 @@ describe("IB instrument persistence (full-map send)", () => {
     const instance = ibInstance({
       instruments: [
         {
-          instanceId: "ib-1",
+          instanceExternalId: "ib-1",
           externalSymbol: "MSFT",
           baseAsset: "MSFT",
           quoteAsset: "USD",
@@ -862,7 +862,7 @@ describe("IB instrument persistence (full-map send)", () => {
           stale: false,
         },
         {
-          instanceId: "ib-1",
+          instanceExternalId: "ib-1",
           externalSymbol: "AAPL",
           baseAsset: "AAPL",
           quoteAsset: "USD",
@@ -891,6 +891,7 @@ describe("IB instrument persistence (full-map send)", () => {
     await user.click(
       within(aaplRow).getByRole("button", { name: /delete instrument/i }),
     );
+    await user.click(await screen.findByRole("button", { name: /^delete$/i }));
 
     await waitFor(() => {
       expect(deleteInstrumentMock).toHaveBeenCalledWith("ib-1", "AAPL");
@@ -945,7 +946,7 @@ describe("stale quote rendering", () => {
       ibInstance({
         instruments: [
           {
-            instanceId: "ib-1",
+            instanceExternalId: "ib-1",
             externalSymbol: "AAPL",
             baseAsset: "AAPL",
             quoteAsset: "USD",
@@ -983,7 +984,7 @@ describe("stale quote rendering", () => {
       ibInstance({
         instruments: [
           {
-            instanceId: "ib-1",
+            instanceExternalId: "ib-1",
             externalSymbol: "AAPL",
             baseAsset: "AAPL",
             quoteAsset: "USD",

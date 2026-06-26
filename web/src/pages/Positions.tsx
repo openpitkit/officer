@@ -26,15 +26,15 @@ import {
   ChevronRight,
   Coins,
   Copy,
+  Download,
   Plus,
-  RefreshCw,
   SlidersHorizontal,
   X,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
-import { ApiError, createAdjustment } from "@/api/client";
+import { ApiError, createAdjustment, fetchAdjustments } from "@/api/client";
 import { formatDate, formatTime } from "@/i18n/format";
 import type {
   Adjustment,
@@ -55,6 +55,11 @@ import {
 } from "@/components/PageStates";
 import { Page } from "@/components/Page";
 import { RefreshButton } from "@/components/RefreshButton";
+import {
+  CsvTransferMenu,
+  PageSizeSelect,
+  TablePagination,
+} from "@/components/TableControls";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -83,6 +88,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  hasNextPage,
+  knownPageCount,
+  pageFetchLimit,
+  slicePage,
+} from "@/lib/tablePagination";
+import { usePersistentPageSize } from "@/lib/tablePageSize";
 import { cn } from "@/lib/utils";
 
 // ---------------------------------------------------------------------------
@@ -120,6 +132,51 @@ function SplitTime({ iso }: { iso: string }) {
 
 function dash(v: string | undefined): string {
   return v && v !== "" ? v : "—";
+}
+
+function csvCell(value: string | number | undefined): string {
+  const text = value === undefined ? "" : String(value);
+  if (/[",\n\r]/.test(text)) {
+    return `"${text.replaceAll("\"", "\"\"")}"`;
+  }
+  return text;
+}
+
+function downloadCsv(filename: string, rows: string[][]): void {
+  const body = rows.map((row) => row.map(csvCell).join(",")).join("\n");
+  const blob = new Blob([body, "\n"], { type: "text/csv;charset=utf-8" });
+  const href = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = href;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(href);
+}
+
+function adjustmentCsvRow(adj: Adjustment): string[] {
+  return [
+    adj.externalId,
+    adj.at,
+    adj.account,
+    adj.asset,
+    adj.source,
+    adj.status,
+    adj.request.balance?.mode ?? "",
+    adj.request.balance?.value ?? "",
+    adj.request.held?.mode ?? "",
+    adj.request.held?.value ?? "",
+    adj.request.incoming?.mode ?? "",
+    adj.request.incoming?.value ?? "",
+    adj.request.averageEntryPrice ?? "",
+    adj.accepted?.balanceResult ?? "",
+    adj.accepted?.heldResult ?? "",
+    adj.accepted?.incomingResult ?? "",
+    adj.rejected?.code ?? "",
+    adj.rejected?.reason ?? "",
+    adj.rejected?.details ?? "",
+  ];
 }
 
 function pnlClass(v: string | undefined): string {
@@ -1671,7 +1728,7 @@ function HistoryRow({ adj, onClone }: { adj: Adjustment; onClone: (adj: Adjustme
         <Button
           variant="ghost"
           size="sm"
-          aria-label={t("history.clone.ariaLabel", { id: adj.id })}
+          aria-label={t("history.clone.ariaLabel", { id: adj.externalId })}
           onClick={() => onClone(adj)}
         >
           <Copy className="h-3.5 w-3.5" />
@@ -1686,16 +1743,30 @@ function HistoryRow({ adj, onClone }: { adj: Adjustment; onClone: (adj: Adjustme
 // ---------------------------------------------------------------------------
 
 const SOURCES: Source[] = ["panel", "api", "mcp", "system"];
+type PositionsTab = "positions" | "history";
 
 export function Positions() {
   const { t } = useTranslation("positions");
   const [searchParams] = useSearchParams();
   const initialAccount = searchParams.get("account") ?? "";
 
+  const [tab, setTab] = useState<PositionsTab>("positions");
   const [accountFilter, setAccountFilter] = useState(initialAccount);
   const [assetFilter, setAssetFilter] = useState("");
   const [sourceFilter, setSourceFilter] = useState<Source | "__all__">("__all__");
   const [draftOpenRequest, setDraftOpenRequest] = useState(0);
+  const [balancePage, setBalancePage] = useState(0);
+  const [historyPage, setHistoryPage] = useState(0);
+  const [balanceSize, setBalanceSize] = usePersistentPageSize(
+    "pit-officer-positions-page-size",
+  );
+  const [historySize, setHistorySize] = usePersistentPageSize(
+    "pit-officer-position-history-page-size",
+  );
+  const [historyExportBusy, setHistoryExportBusy] = useState(false);
+  const [historyExportError, setHistoryExportError] = useState<string | null>(
+    null,
+  );
 
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [adjustAccount, setAdjustAccount] = useState("");
@@ -1729,7 +1800,7 @@ export function Positions() {
   const adjustmentsLoad = useAdjustments(
     deferredAccount || undefined,
     deferredSource,
-    100,
+    pageFetchLimit(historyPage, historySize),
   );
 
   // Account suggestions from the accounts hook.
@@ -1738,7 +1809,7 @@ export function Positions() {
     if (accountsLoad.load.state !== "ready") {
       return [];
     }
-    return accountsLoad.load.data.map((a) => a.id);
+    return accountsLoad.load.data.map((a) => a.code);
   }, [accountsLoad.load]);
 
   // Asset suggestions: union from balances + adjustments history.
@@ -1790,26 +1861,155 @@ export function Positions() {
     balancesLoad.reload();
     adjustmentsLoad.reload();
   };
+  const reloadPositions = () => {
+    balancesLoad.reload();
+    adjustmentsLoad.reload();
+  };
+  const reloadActive = () => {
+    if (tab === "positions") {
+      balancesLoad.reload();
+      return;
+    }
+    adjustmentsLoad.reload();
+  };
+  const exportHistory = async () => {
+    setHistoryExportBusy(true);
+    setHistoryExportError(null);
+    try {
+      const rows = await fetchAdjustments({
+        account: deferredAccount || undefined,
+        source: deferredSource,
+        limit: 1000,
+      });
+      downloadCsv("position-adjustment-history.csv", [
+        [
+          "external_id",
+          "at",
+          "account",
+          "asset",
+          "source",
+          "status",
+          "balance_mode",
+          "balance_value",
+          "held_mode",
+          "held_value",
+          "incoming_mode",
+          "incoming_value",
+          "average_entry_price",
+          "balance_result",
+          "held_result",
+          "incoming_result",
+          "rejected_code",
+          "rejected_reason",
+          "rejected_details",
+        ],
+        ...rows.map(adjustmentCsvRow),
+      ]);
+    } catch (err) {
+      setHistoryExportError(errMessage(err));
+    } finally {
+      setHistoryExportBusy(false);
+    }
+  };
+  const positionCsvFilters = {
+    account: deferredAccount.trim() || undefined,
+    asset: deferredAsset.trim() || undefined,
+  };
+  const balances =
+    balancesLoad.load.state === "ready" ? balancesLoad.load.data : [];
+  const pagedBalances = slicePage(balances, balancePage, balanceSize);
+  const hasMoreBalances = hasNextPage(balances, balancePage, balanceSize);
+  const balancePager = (
+    <TablePagination
+      page={balancePage}
+      canPrevious={balancePage > 0}
+      canNext={hasMoreBalances}
+      knownTotalPages={knownPageCount(balances.length, balanceSize)}
+      onPrevious={() => setBalancePage((p) => Math.max(0, p - 1))}
+      onNext={() => setBalancePage((p) => p + 1)}
+      onPage={setBalancePage}
+    />
+  );
+  const adjustments =
+    adjustmentsLoad.load.state === "ready" ? adjustmentsLoad.load.data : [];
+  const pagedAdjustments = slicePage(adjustments, historyPage, historySize);
+  const hasMoreAdjustments = hasNextPage(adjustments, historyPage, historySize);
+  const historyPager = (
+    <TablePagination
+      page={historyPage}
+      canPrevious={historyPage > 0}
+      canNext={hasMoreAdjustments}
+      onPrevious={() => setHistoryPage((p) => Math.max(0, p - 1))}
+      onNext={() => setHistoryPage((p) => p + 1)}
+      onPage={setHistoryPage}
+    />
+  );
 
   return (
     <Page
       title={t("title")}
       actions={
         <>
-          <RefreshButton
-            onClick={() => {
-              balancesLoad.reload();
-              adjustmentsLoad.reload();
+          <PageSizeSelect
+            value={tab === "positions" ? balanceSize : historySize}
+            onChange={(value) => {
+              if (tab === "positions") {
+                setBalanceSize(value);
+                setBalancePage(0);
+              } else {
+                setHistorySize(value);
+                setHistoryPage(0);
+              }
             }}
-            busy={
-              balancesLoad.load.state === "loading" ||
-              adjustmentsLoad.load.state === "loading"
+            ariaLabel={t("pagination.pageSize.ariaLabel")}
+            rowCountLabel={(count) =>
+              t("pagination.pageSize.rowCount", { count })
             }
           />
-          <Button size="sm" onClick={openNewAdjust}>
-            <Plus className="h-3.5 w-3.5" />
-            {t("actions.adjust")}
-          </Button>
+          <RefreshButton
+            onClick={reloadActive}
+            busy={
+              tab === "positions"
+                ? balancesLoad.load.state === "loading"
+                : adjustmentsLoad.load.state === "loading"
+            }
+          />
+          {tab === "positions" ? (
+            <>
+              <CsvTransferMenu
+                imports={[
+                  {
+                    entities: ["positions"],
+                    label: t("actions.importCsv"),
+                  },
+                ]}
+                exports={[
+                  {
+                    entity: "positions",
+                    filters: positionCsvFilters,
+                    label: t("actions.exportCsv"),
+                  },
+                ]}
+                onImported={reloadPositions}
+              />
+              <Button size="sm" onClick={openNewAdjust}>
+                <Plus className="h-3.5 w-3.5" />
+                {t("actions.adjust")}
+              </Button>
+            </>
+          ) : (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void exportHistory()}
+              disabled={historyExportBusy}
+            >
+              <Download className="h-3.5 w-3.5" />
+              {historyExportBusy
+                ? t("actions.historyExporting")
+                : t("actions.exportHistoryCsv")}
+            </Button>
+          )}
         </>
       }
     >
@@ -1824,7 +2024,11 @@ export function Positions() {
             placeholder="acc-1"
             className="h-8 w-48 text-xs"
             suggestions={accountSuggestions}
-            onChange={setAccountFilter}
+            onChange={(value) => {
+              setAccountFilter(value);
+              setBalancePage(0);
+              setHistoryPage(0);
+            }}
           />
         </div>
         <div className="space-y-1.5">
@@ -1836,136 +2040,170 @@ export function Positions() {
             placeholder="AAPL"
             className="h-8 w-32 text-xs"
             suggestions={assetSuggestions}
-            onChange={setAssetFilter}
+            onChange={(value) => {
+              setAssetFilter(value);
+              setBalancePage(0);
+            }}
           />
         </div>
       </Card>
 
-      {/* Balances */}
-      <div className="flex items-center gap-2">
-        <Coins className="h-3.5 w-3.5 text-muted" />
-        <p className="text-[0.6875rem] uppercase tracking-[0.07em] text-muted">
-          {t("balances.sectionLabel")}
-        </p>
+      <div className="flex w-fit gap-1 rounded-card border border-border bg-surface-2 p-1">
+        {(["positions", "history"] as PositionsTab[]).map((tabId) => (
+          <button
+            key={tabId}
+            type="button"
+            onClick={() => setTab(tabId)}
+            className={[
+              "rounded-badge px-3 py-1 text-xs font-medium transition-colors duration-[180ms]",
+              tab === tabId
+                ? "bg-accent-dim text-accent"
+                : "text-muted-lt hover:bg-surface-hover hover:text-text",
+            ].join(" ")}
+          >
+            {t(`tabs.${tabId}`)}
+          </button>
+        ))}
       </div>
 
-      {balancesLoad.load.state === "loading" && <TableSkeleton cols={9} />}
-      {balancesLoad.load.state === "error" && (
-        <ErrorState
-          message={balancesLoad.load.error}
-          onRetry={balancesLoad.reload}
-        />
-      )}
-      {balancesLoad.load.state === "ready" &&
-        (balancesLoad.load.data.length === 0 ? (
-          // No balances yet: keep the guidance hint, but still offer the inline
-          // add-row table so the first balance can be seeded right here.
-          <>
-            <EmptyState
-              title={t("balances.empty.title")}
-              hint={t("balances.empty.hint")}
-              action={
-                <Button size="sm" onClick={openNewAdjust}>
-                  <Plus className="h-3.5 w-3.5" />
-                  {t("actions.adjust")}
-                </Button>
-              }
-            />
-            <BalancesTable
-              balances={[]}
-              defaultDraftAccount={accountFilter.trim()}
-              defaultDraftAsset={assetFilter.trim()}
-              draftOpenRequest={draftOpenRequest}
-              accountSuggestions={accountSuggestions}
-              assetSuggestions={assetSuggestions}
-              onApplied={handleAdjustDone}
-            />
-          </>
-        ) : (
-          <BalancesTable
-            balances={balancesLoad.load.data}
-            defaultDraftAccount={accountFilter.trim()}
-            defaultDraftAsset={assetFilter.trim()}
-            draftOpenRequest={draftOpenRequest}
-            accountSuggestions={accountSuggestions}
-            assetSuggestions={assetSuggestions}
-            onApplied={handleAdjustDone}
-          />
-        ))}
+      {tab === "positions" && (
+        <>
+          <div className="flex items-center gap-2">
+            <Coins className="h-3.5 w-3.5 text-muted" />
+            <p className="text-[0.6875rem] uppercase tracking-[0.07em] text-muted">
+              {t("balances.sectionLabel")}
+            </p>
+          </div>
 
-      {/* Adjustment history */}
-      <div className="flex flex-wrap items-center gap-3">
-        <p className="text-[0.6875rem] uppercase tracking-[0.07em] text-muted">
-          {t("history.sectionLabel")}
-        </p>
-        <div className="ml-auto flex items-center gap-2">
-          <Label className="text-xs">{t("history.sourceLabel")}</Label>
-          <Select
-            value={sourceFilter}
-            onValueChange={(v) =>
-              setSourceFilter(v as Source | "__all__")
-            }
-          >
-            <SelectTrigger className="h-7 w-28 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__all__">{t("history.sourceAll")}</SelectItem>
-              {SOURCES.map((s) => (
-                <SelectItem key={s} value={s}>
-                  {s}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={adjustmentsLoad.reload}
-            disabled={adjustmentsLoad.load.state === "loading"}
-            aria-label={t("actions.refreshHistoryAriaLabel")}
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-      </div>
+          {balancesLoad.load.state === "loading" && (
+            <TableSkeleton cols={9} />
+          )}
+          {balancesLoad.load.state === "error" && (
+            <ErrorState
+              message={balancesLoad.load.error}
+              onRetry={balancesLoad.reload}
+            />
+          )}
+          {balancesLoad.load.state === "ready" &&
+            (balancesLoad.load.data.length === 0 ? (
+              <>
+                <EmptyState
+                  title={t("balances.empty.title")}
+                  hint={t("balances.empty.hint")}
+                  action={
+                    <Button size="sm" onClick={openNewAdjust}>
+                      <Plus className="h-3.5 w-3.5" />
+                      {t("actions.adjust")}
+                    </Button>
+                  }
+                />
+                <BalancesTable
+                  balances={[]}
+                  defaultDraftAccount={accountFilter.trim()}
+                  defaultDraftAsset={assetFilter.trim()}
+                  draftOpenRequest={draftOpenRequest}
+                  accountSuggestions={accountSuggestions}
+                  assetSuggestions={assetSuggestions}
+                  onApplied={handleAdjustDone}
+                />
+              </>
+            ) : (
+              <>
+                {balancePager}
+                <BalancesTable
+                  balances={pagedBalances}
+                  defaultDraftAccount={accountFilter.trim()}
+                  defaultDraftAsset={assetFilter.trim()}
+                  draftOpenRequest={draftOpenRequest}
+                  accountSuggestions={accountSuggestions}
+                  assetSuggestions={assetSuggestions}
+                  onApplied={handleAdjustDone}
+                />
+                {balancePager}
+              </>
+            ))}
+        </>
+      )}
 
-      {adjustmentsLoad.load.state === "loading" && (
-        <TableSkeleton cols={7} />
+      {tab === "history" && (
+        <>
+          <div className="flex flex-wrap items-center gap-3">
+            <p className="text-[0.6875rem] uppercase tracking-[0.07em] text-muted">
+              {t("history.sectionLabel")}
+            </p>
+            <div className="ml-auto flex items-center gap-2">
+              <Label className="text-xs">{t("history.sourceLabel")}</Label>
+              <Select
+                value={sourceFilter}
+                onValueChange={(v) => {
+                  setSourceFilter(v as Source | "__all__");
+                  setHistoryPage(0);
+                }}
+              >
+                <SelectTrigger className="h-7 w-28 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all__">
+                    {t("history.sourceAll")}
+                  </SelectItem>
+                  {SOURCES.map((s) => (
+                    <SelectItem key={s} value={s}>
+                      {s}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          {historyExportError && <ErrorBanner message={historyExportError} />}
+          {adjustmentsLoad.load.state === "loading" && (
+            <TableSkeleton cols={7} />
+          )}
+          {adjustmentsLoad.load.state === "error" && (
+            <ErrorState
+              message={adjustmentsLoad.load.error}
+              onRetry={adjustmentsLoad.reload}
+            />
+          )}
+          {adjustmentsLoad.load.state === "ready" &&
+            (adjustmentsLoad.load.data.length === 0 ? (
+              <EmptyState
+                title={t("history.empty.title")}
+                hint={t("history.empty.hint")}
+              />
+            ) : (
+              <>
+                {historyPager}
+                <Table>
+                  <TableHeader>
+                    <TableRow className="hover:bg-transparent">
+                      <TableHead>{t("history.columns.time")}</TableHead>
+                      <TableHead>{t("history.columns.account")}</TableHead>
+                      <TableHead>{t("history.columns.asset")}</TableHead>
+                      <TableHead>{t("history.columns.source")}</TableHead>
+                      <TableHead>{t("history.columns.request")}</TableHead>
+                      <TableHead>{t("history.columns.status")}</TableHead>
+                      <TableHead>{t("history.columns.outcome")}</TableHead>
+                      <TableHead />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {pagedAdjustments.map((adj) => (
+                      <HistoryRow
+                        key={adj.externalId}
+                        adj={adj}
+                        onClone={openCloneAdjust}
+                      />
+                    ))}
+                  </TableBody>
+                </Table>
+                {historyPager}
+              </>
+            ))}
+        </>
       )}
-      {adjustmentsLoad.load.state === "error" && (
-        <ErrorState
-          message={adjustmentsLoad.load.error}
-          onRetry={adjustmentsLoad.reload}
-        />
-      )}
-      {adjustmentsLoad.load.state === "ready" &&
-        (adjustmentsLoad.load.data.length === 0 ? (
-          <EmptyState
-            title={t("history.empty.title")}
-            hint={t("history.empty.hint")}
-          />
-        ) : (
-          <Table>
-              <TableHeader>
-                <TableRow className="hover:bg-transparent">
-                  <TableHead>{t("history.columns.time")}</TableHead>
-                  <TableHead>{t("history.columns.account")}</TableHead>
-                  <TableHead>{t("history.columns.asset")}</TableHead>
-                  <TableHead>{t("history.columns.source")}</TableHead>
-                  <TableHead>{t("history.columns.request")}</TableHead>
-                  <TableHead>{t("history.columns.status")}</TableHead>
-                  <TableHead>{t("history.columns.outcome")}</TableHead>
-                  <TableHead />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {adjustmentsLoad.load.data.map((adj) => (
-                  <HistoryRow key={adj.id} adj={adj} onClone={openCloneAdjust} />
-                ))}
-              </TableBody>
-          </Table>
-        ))}
 
       <AdjustDialog
         open={adjustOpen}

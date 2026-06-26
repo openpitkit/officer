@@ -42,6 +42,7 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.openpit.dev/officer/internal/auth"
 	"go.openpit.dev/officer/internal/domain"
+	"go.openpit.dev/officer/internal/node"
 )
 
 // mcpCaller attributes every MCP-originated service call to the MCP surface, so
@@ -77,6 +78,12 @@ const getLimitsToolName = "get_limits"
 const getLimitsToolDescription = "Return risk barriers, optionally filtered " +
 	"by account. Read-only - no secrets, no order-flow control."
 
+const getOrderToolName = "get_order"
+const getOrderToolDescription = "Return one order addressed by its external id: " +
+	"its status, its 1:1 signed approval (when issued), and its fills with their " +
+	"display prices. Read-only - no secrets, no order-flow control. The opaque " +
+	"reservation lock is never exposed; only backend-derived display prices are."
+
 const getAuditToolName = "get_audit"
 const getAuditToolDescription = "Return recent control-plane audit entries " +
 	"(default 50, max 500). Read-only - no secrets, no order-flow control."
@@ -100,8 +107,9 @@ const submitOrderToolDescription = "Submit an order intent through pre-trade " +
 
 const confirmExecutionToolName = "confirm_execution"
 const confirmExecutionToolDescription = "Confirm execution (commit) of a " +
-	"previously approved hold-mode order by presenting the approval token. " +
-	"Mutates engine state; protected and disabled by default."
+	"previously approved hold-mode order, addressed by its external id, by " +
+	"presenting the approval token. Mutates engine state; protected and disabled " +
+	"by default."
 
 const cancelToolName = "cancel"
 const cancelToolDescription = "Cancel / revoke a pending approval token or " +
@@ -118,12 +126,14 @@ const cancelToolDescription = "Cancel / revoke a pending approval token or " +
 type Source interface {
 	// Status returns the aggregate health of every node in the deployment.
 	Status(ctx context.Context) (Status, error)
-	// GetAccountState returns the account row and its account-scoped barriers.
+	// GetAccountState returns the account row (a dictionary entity addressed by
+	// its code) and its account-scoped typed barriers.
 	GetAccountState(ctx context.Context, id domain.AccountID) (
-		domain.Account, []domain.Limit, error)
-	// ListLimits returns barriers filtered by account; empty account = all.
+		domain.Account, node.AccountLimits, error)
+	// ListLimits returns the typed barriers filtered by account code; an empty
+	// account returns all barriers.
 	ListLimits(ctx context.Context, account domain.AccountID) (
-		[]domain.Limit, error)
+		node.AccountLimits, error)
 	// ListAudit returns the most recent n audit rows.
 	ListAudit(ctx context.Context, n int) ([]domain.AuditRow, error)
 	// ListAuditFiltered returns the most recent n audit rows matching the filter.
@@ -134,6 +144,10 @@ type Source interface {
 	// whether the order would pass plus the would-be lock or block. It mutates
 	// no state.
 	CheckOrder(ctx context.Context, probe domain.OrderProbe) (domain.CheckResult, error)
+	// GetOrder returns the order addressed by its opaque external-id handle,
+	// together with its 1:1 signed approval (when issued), events and trades. It
+	// maps a missing order onto domain.ErrNotFound.
+	GetOrder(ctx context.Context, externalID string) (domain.OrderDetail, error)
 	// SetMarketDataInstrumentEnabled toggles one configured market-data
 	// instrument in the Officer control-plane store.
 	SetMarketDataInstrumentEnabled(
@@ -149,13 +163,15 @@ type Source interface {
 	// SubmitOrderToken runs the pre-trade pipeline for o in the given mode and,
 	// on accept, issues a signed approval token. mode "hold" or "immediate".
 	SubmitOrderToken(ctx context.Context, o domain.Order, mode string) (SubmitOrderTokenResult, error)
-	// ConfirmExecution verifies the token and commits the held reservation.
+	// ConfirmExecution verifies the token against the order addressed by its
+	// external-id handle and commits the held reservation.
 	ConfirmExecution(
-		ctx context.Context, orderID int64, token string, force bool,
+		ctx context.Context, orderExternalID, token string, force bool,
 	) (domain.Order, error)
-	// CancelOrder verifies the token and rolls back the held reservation.
+	// CancelOrder verifies the token against the order addressed by its
+	// external-id handle and rolls back the held reservation.
 	CancelOrder(
-		ctx context.Context, orderID int64, token, reason string, force bool,
+		ctx context.Context, orderExternalID, token, reason string, force bool,
 	) (domain.Order, error)
 }
 
@@ -168,8 +184,9 @@ type SubmitOrderTokenResult struct {
 	KeyID string
 	// ExpiresAt is when the token (and held reservation) expires.
 	ExpiresAt time.Time
-	// OrderID is the store-assigned order identifier.
-	OrderID int64
+	// OrderExternalID is the order's opaque public handle (22-char base64url
+	// external id), never a surrogate or engine id.
+	OrderExternalID string
 }
 
 // VersionSource reports the engine version used as the MCP server version. It
@@ -243,21 +260,31 @@ type healthStore struct {
 }
 
 type getAccountStateInput struct {
-	Account string `json:"account" jsonschema:"Account identifier"`
+	Account string `json:"account" jsonschema:"Account code"`
 }
 
 type getAccountStateOutput struct {
 	Account accountDTO `json:"account"`
-	Limits  []limitDTO `json:"limits"`
+	Limits  limitsDTO  `json:"limits"`
 }
 
 type getLimitsInput struct {
 	// jsonschema tag is the plain description - no key=value syntax.
-	Account string `json:"account,omitempty" jsonschema:"Optional account filter; omit to return all barriers"`
+	Account string `json:"account,omitempty" jsonschema:"Optional account-code filter; omit to return all barriers"`
 }
 
 type getLimitsOutput struct {
-	Limits []limitDTO `json:"limits"`
+	Limits limitsDTO `json:"limits"`
+}
+
+type getOrderInput struct {
+	OrderExternalID string `json:"orderExternalId" jsonschema:"Order external id (22-char opaque handle) returned by submit_order"`
+}
+
+type getOrderOutput struct {
+	Order    orderDTO          `json:"order"`
+	Approval *orderApprovalDTO `json:"approval"`
+	Trades   []tradeDTO        `json:"trades"`
 }
 
 type getAuditInput struct {
@@ -266,7 +293,7 @@ type getAuditInput struct {
 	// "all" shows everything.
 	Category string `json:"category,omitempty" jsonschema:"Audit stream: control (default) | trading | all"`
 	// Account narrows the trail to one account; empty matches any.
-	Account string `json:"account,omitempty" jsonschema:"Account identifier filter (optional)"`
+	Account string `json:"account,omitempty" jsonschema:"Account code filter (optional)"`
 	Limit   int    `json:"limit,omitempty" jsonschema:"Max rows to return (default 50 cap 500)"`
 }
 
@@ -275,7 +302,7 @@ type getAuditOutput struct {
 }
 
 type checkOrderInput struct {
-	Account     string `json:"account" jsonschema:"Account identifier"`
+	Account     string `json:"account" jsonschema:"Account code"`
 	BaseAsset   string `json:"baseAsset" jsonschema:"Asset being bought or sold"`
 	QuoteAsset  string `json:"quoteAsset" jsonschema:"Asset used for pricing"`
 	Side        string `json:"side" jsonschema:"buy or sell"`
@@ -285,26 +312,26 @@ type checkOrderInput struct {
 }
 
 type checkOrderOutput struct {
-	WouldBlock      *checkOrderBlockDTO   `json:"wouldBlock"`
-	Rejects         []checkOrderRejectDTO `json:"rejects"`
-	WouldLockPrices []string              `json:"wouldLockPrices"`
-	Passed          bool                  `json:"passed"`
+	WouldBlock         *checkOrderBlockDTO   `json:"wouldBlock"`
+	Rejects            []checkOrderRejectDTO `json:"rejects"`
+	WouldDisplayPrices []string              `json:"wouldDisplayPrices"`
+	Passed             bool                  `json:"passed"`
 }
 
 type setMarketDataInstrumentInput struct {
-	InstanceID     string `json:"instanceId" jsonschema:"Market-data instance identifier"`
-	ExternalSymbol string `json:"externalSymbol" jsonschema:"Provider-side instrument symbol"`
-	Enabled        bool   `json:"enabled" jsonschema:"Whether the instrument should be enabled"`
+	InstanceExternalID string `json:"instanceExternalId" jsonschema:"Market-data instance external identifier"`
+	ExternalSymbol     string `json:"externalSymbol" jsonschema:"Provider-side instrument symbol"`
+	Enabled            bool   `json:"enabled" jsonschema:"Whether the instrument should be enabled"`
 }
 
 type setMarketDataInstrumentOutput struct {
-	InstanceID     string `json:"instanceId"`
-	ExternalSymbol string `json:"externalSymbol"`
-	Enabled        bool   `json:"enabled"`
+	InstanceExternalID string `json:"instanceExternalId"`
+	ExternalSymbol     string `json:"externalSymbol"`
+	Enabled            bool   `json:"enabled"`
 }
 
 type submitOrderInput struct {
-	Account     string `json:"account" jsonschema:"Account identifier"`
+	Account     string `json:"account" jsonschema:"Account code"`
 	BaseAsset   string `json:"baseAsset" jsonschema:"Asset being bought or sold"`
 	QuoteAsset  string `json:"quoteAsset" jsonschema:"Asset used for pricing"`
 	Side        string `json:"side" jsonschema:"buy or sell"`
@@ -312,62 +339,152 @@ type submitOrderInput struct {
 	AmountValue string `json:"amountValue" jsonschema:"Order size as an exact decimal string"`
 	Price       string `json:"price,omitempty" jsonschema:"Limit price as an exact decimal string; omit for market"`
 	Mode        string `json:"mode,omitempty" jsonschema:"hold or immediate (default immediate)"`
+	// ExternalID is optional. Submit creates the order; when supplied this 22-char
+	// opaque handle is used as-is (a duplicate is rejected), and omitting it has
+	// the server generate and return one in orderExternalId. Never a surrogate id.
+	ExternalID string `json:"externalId,omitempty" jsonschema:"Optional caller-supplied order external id (22-char opaque handle); omit to have the server generate one"`
 }
 
 type submitOrderOutput struct {
-	Token     string `json:"token"`
-	KeyID     string `json:"keyId"`
-	ExpiresAt string `json:"expiresAt"`
-	OrderID   int64  `json:"orderId"`
+	Token           string `json:"token"`
+	KeyID           string `json:"keyId"`
+	ExpiresAt       string `json:"expiresAt"`
+	OrderExternalID string `json:"orderExternalId"`
 }
 
 type confirmExecutionInput struct {
-	OrderID int64  `json:"orderId" jsonschema:"Order identifier returned by submit_order"`
-	Token   string `json:"token" jsonschema:"Approval token returned by submit_order"`
-	Force   bool   `json:"force,omitempty" jsonschema:"Bypass Officer's safety checks and route the operation straight to the engine"`
+	OrderExternalID string `json:"orderExternalId" jsonschema:"Order external id returned by submit_order"`
+	Token           string `json:"token" jsonschema:"Approval token returned by submit_order"`
+	Force           bool   `json:"force,omitempty" jsonschema:"Bypass Officer's safety checks and route the operation straight to the engine"`
 }
 
 type confirmExecutionOutput struct {
-	OrderID int64  `json:"orderId"`
-	Status  string `json:"status"`
+	OrderExternalID string `json:"orderExternalId"`
+	Status          string `json:"status"`
 }
 
 type cancelInput struct {
-	OrderID int64  `json:"orderId" jsonschema:"Order identifier returned by submit_order"`
-	Token   string `json:"token" jsonschema:"Approval token returned by submit_order"`
-	Reason  string `json:"reason,omitempty" jsonschema:"Human-readable cancellation reason"`
-	Force   bool   `json:"force,omitempty" jsonschema:"Bypass Officer's safety checks and route the operation straight to the engine"`
+	OrderExternalID string `json:"orderExternalId" jsonschema:"Order external id returned by submit_order"`
+	Token           string `json:"token" jsonschema:"Approval token returned by submit_order"`
+	Reason          string `json:"reason,omitempty" jsonschema:"Human-readable cancellation reason"`
+	Force           bool   `json:"force,omitempty" jsonschema:"Bypass Officer's safety checks and route the operation straight to the engine"`
 }
 
 type cancelOutput struct {
-	OrderID int64  `json:"orderId"`
-	Status  string `json:"status"`
+	OrderExternalID string `json:"orderExternalId"`
+	Status          string `json:"status"`
 }
 
-// accountDTO is the wire shape of a single account (identical to httpapi).
+// accountDTO is the wire shape of a single account. An account is a dictionary
+// entity: its public handle is the immutable Code, displayed under the mutable
+// Title; Group links it to its group by the group's code. No surrogate or
+// engine id is ever carried.
 type accountDTO struct {
-	ID          string `json:"id"`
-	Blocked     bool   `json:"blocked"`
+	Code        string `json:"code"`
+	Title       string `json:"title"`
+	Group       string `json:"group"`
 	BlockReason string `json:"blockReason"`
+	Blocked     bool   `json:"blocked"`
 }
 
-// limitDTO is the wire shape of a single risk barrier (identical to httpapi).
-type limitDTO struct {
-	Policy  string            `json:"policy"`
-	Scope   string            `json:"scope"`
-	Account string            `json:"account"`
-	Asset   string            `json:"asset"`
-	Values  map[string]string `json:"values"`
+// limitsDTO is the wire shape of the three typed risk-barrier sets returned by
+// the account-addressed limit reads. Each slice holds the barriers of one
+// policy; an empty slice means the policy carries no matching barrier.
+type limitsDTO struct {
+	RateLimits      []rateLimitDTO      `json:"rateLimits"`
+	OrderSizeLimits []orderSizeLimitDTO `json:"orderSizeLimits"`
+	PnlBoundsLimits []pnlBoundsLimitDTO `json:"pnlBoundsLimits"`
 }
 
-// auditDTO is the wire shape of a single audit row (identical to httpapi).
+// rateLimitDTO is the wire shape of one typed rate-limit barrier: at most
+// MaxOrders new orders per rolling Window for the addressed scope. Window is a
+// Go duration string (e.g. "1s"). Account is the account code; empty unless the
+// scope carries it.
+type rateLimitDTO struct {
+	Scope     string `json:"scope"`
+	Account   string `json:"account"`
+	Asset     string `json:"asset"`
+	Window    string `json:"window"`
+	MaxOrders uint64 `json:"maxOrders"`
+}
+
+// orderSizeLimitDTO is the wire shape of one typed order-size barrier. Both
+// ceilings are exact decimal strings; an unset ceiling is the empty string.
+type orderSizeLimitDTO struct {
+	Scope       string `json:"scope"`
+	Account     string `json:"account"`
+	Asset       string `json:"asset"`
+	MaxQuantity string `json:"maxQuantity"`
+	MaxNotional string `json:"maxNotional"`
+}
+
+// pnlBoundsLimitDTO is the wire shape of one typed P&L kill-switch barrier. All
+// bounds are exact decimal strings; an unset bound is the empty string.
+type pnlBoundsLimitDTO struct {
+	Scope      string `json:"scope"`
+	Account    string `json:"account"`
+	Asset      string `json:"asset"`
+	LowerBound string `json:"lowerBound"`
+	UpperBound string `json:"upperBound"`
+	InitialPnl string `json:"initialPnl"`
+}
+
+// auditDTO is the wire shape of a single audit row. It is a machine record: its
+// public handle is the opaque external id, never a surrogate id. Account and
+// Actor are dictionary codes.
 type auditDTO struct {
-	At      time.Time `json:"at"`
-	Actor   string    `json:"actor"`
-	Action  string    `json:"action"`
-	Account string    `json:"account"`
-	Detail  string    `json:"detail"`
-	ID      int64     `json:"id"`
+	At         time.Time `json:"at"`
+	Actor      string    `json:"actor"`
+	Action     string    `json:"action"`
+	Account    string    `json:"account"`
+	Detail     string    `json:"detail"`
+	ExternalID string    `json:"externalId"`
+}
+
+// orderDTO is the wire shape of one order record. It is a machine record: its
+// public handle is the opaque external id, never a surrogate or engine id. The
+// opaque reservation lock blob is never serialized; the order's display prices
+// are carried on its trades. All monetary/size values are exact decimal strings.
+type orderDTO struct {
+	At          time.Time `json:"at"`
+	ExternalID  string    `json:"externalId"`
+	Account     string    `json:"account"`
+	BaseAsset   string    `json:"baseAsset"`
+	QuoteAsset  string    `json:"quoteAsset"`
+	Side        string    `json:"side"`
+	AmountKind  string    `json:"amountKind"`
+	AmountValue string    `json:"amountValue"`
+	Price       string    `json:"price"`
+	Status      string    `json:"status"`
+	Source      string    `json:"source"`
+}
+
+// orderApprovalDTO is the wire shape of an order's persisted signed approval
+// envelope, read back from the order's 1:1 OrderApproval. Token is the exact
+// base64url envelope bytes; the rest is the envelope metadata. Signed reports
+// whether the envelope carries an Ed25519 signature (alg "ed25519") versus an
+// eSign-off envelope (alg "none").
+type orderApprovalDTO struct {
+	Token     string `json:"token"`
+	KeyID     string `json:"keyId"`
+	Alg       string `json:"alg"`
+	Mode      string `json:"mode"`
+	IssuedAt  string `json:"issuedAt"`
+	ExpiresAt string `json:"expiresAt"`
+	Signed    bool   `json:"signed"`
+}
+
+// tradeDTO is the wire shape of one fill ("report") of an order. It is a machine
+// record addressed by its opaque external id and linked to its order by the
+// order's external id. Price and LockPrice are backend-derived display prices
+// (exact decimal strings), not the opaque reservation lock.
+type tradeDTO struct {
+	At         time.Time `json:"at"`
+	ExternalID string    `json:"externalId"`
+	Side       string    `json:"side"`
+	Quantity   string    `json:"quantity"`
+	Price      string    `json:"price"`
+	LockPrice  string    `json:"lockPrice"`
 }
 
 // checkOrderRejectDTO is the wire shape of one engine pre-trade reject from a
@@ -393,41 +510,116 @@ type checkOrderBlockDTO struct {
 
 func toAccountDTO(a domain.Account) accountDTO {
 	return accountDTO{
-		ID:          string(a.ID),
-		Blocked:     a.Blocked,
+		Code:        string(a.Code),
+		Title:       a.Title,
+		Group:       a.GroupCode,
 		BlockReason: a.BlockReason,
+		Blocked:     a.Blocked,
 	}
 }
 
-func toLimitDTO(l domain.Limit) limitDTO {
-	vals := make(map[string]string, len(l.Values))
-	for _, v := range l.Values {
-		vals[v.Kind] = v.Value
+// toLimitsDTO maps the three typed barrier sets onto the wire DTO. Each slice is
+// allocated non-nil so the JSON encodes empty arrays rather than null.
+func toLimitsDTO(l node.AccountLimits) limitsDTO {
+	rate := make([]rateLimitDTO, 0, len(l.RateLimits))
+	for _, r := range l.RateLimits {
+		rate = append(rate, rateLimitDTO{
+			Scope:     r.Scope,
+			Account:   string(r.Account),
+			Asset:     r.Asset,
+			Window:    r.Window.String(),
+			MaxOrders: r.MaxOrders,
+		})
 	}
-	return limitDTO{
-		Policy:  l.Target.Policy,
-		Scope:   l.Target.Scope,
-		Account: string(l.Target.Account),
-		Asset:   l.Target.Asset,
-		Values:  vals,
+	size := make([]orderSizeLimitDTO, 0, len(l.OrderSizeLimits))
+	for _, o := range l.OrderSizeLimits {
+		size = append(size, orderSizeLimitDTO{
+			Scope:       o.Scope,
+			Account:     string(o.Account),
+			Asset:       o.Asset,
+			MaxQuantity: o.MaxQuantity,
+			MaxNotional: o.MaxNotional,
+		})
 	}
+	pnl := make([]pnlBoundsLimitDTO, 0, len(l.PnlBoundsLimits))
+	for _, p := range l.PnlBoundsLimits {
+		pnl = append(pnl, pnlBoundsLimitDTO{
+			Scope:      p.Scope,
+			Account:    string(p.Account),
+			Asset:      p.Asset,
+			LowerBound: p.LowerBound,
+			UpperBound: p.UpperBound,
+			InitialPnl: p.InitialPnl,
+		})
+	}
+	return limitsDTO{RateLimits: rate, OrderSizeLimits: size, PnlBoundsLimits: pnl}
+}
+
+// limitsCount returns the total number of typed barriers across the three sets,
+// for the tool's human-readable summary line.
+func limitsCount(l node.AccountLimits) int {
+	return len(l.RateLimits) + len(l.OrderSizeLimits) + len(l.PnlBoundsLimits)
 }
 
 func toAuditDTO(row domain.AuditRow) auditDTO {
 	return auditDTO{
-		ID:      row.ID,
-		At:      row.At,
-		Actor:   row.Actor,
-		Action:  string(row.Action),
-		Account: string(row.Account),
-		Detail:  row.Detail,
+		ExternalID: row.ExternalID.String(),
+		At:         row.At,
+		Actor:      row.Actor,
+		Action:     string(row.Action),
+		Account:    string(row.Account),
+		Detail:     row.Detail,
 	}
 }
 
-func toLimitDTOs(limits []domain.Limit) []limitDTO {
-	out := make([]limitDTO, 0, len(limits))
-	for _, l := range limits {
-		out = append(out, toLimitDTO(l))
+// toOrderDTO maps a domain.Order onto the wire DTO. It addresses the order by
+// its external-id handle and never serializes the opaque reservation lock.
+func toOrderDTO(o domain.Order) orderDTO {
+	return orderDTO{
+		At:          o.At,
+		ExternalID:  o.ExternalID.String(),
+		Account:     string(o.Account),
+		BaseAsset:   o.BaseAsset,
+		QuoteAsset:  o.QuoteAsset,
+		Side:        string(o.Side),
+		AmountKind:  string(o.AmountKind),
+		AmountValue: o.AmountValue,
+		Price:       o.Price,
+		Status:      string(o.Status),
+		Source:      string(o.Source),
+	}
+}
+
+// toOrderApprovalDTO maps an order's 1:1 persisted envelope onto the wire DTO,
+// or returns nil when the order carries no approval.
+func toOrderApprovalDTO(a *domain.OrderApproval) *orderApprovalDTO {
+	if a == nil {
+		return nil
+	}
+	return &orderApprovalDTO{
+		Token:     a.Token,
+		KeyID:     a.KeyID,
+		Alg:       a.Alg,
+		Mode:      a.Mode,
+		IssuedAt:  a.IssuedAt,
+		ExpiresAt: a.ExpiresAt,
+		Signed:    a.Alg == "ed25519",
+	}
+}
+
+// toTradeDTOs maps an order's fills onto the wire DTOs, carrying the
+// backend-derived display prices (never the opaque lock).
+func toTradeDTOs(trades []domain.Trade) []tradeDTO {
+	out := make([]tradeDTO, 0, len(trades))
+	for _, t := range trades {
+		out = append(out, tradeDTO{
+			At:         t.At,
+			ExternalID: t.ExternalID.String(),
+			Side:       string(t.Side),
+			Quantity:   t.Quantity,
+			Price:      t.Price,
+			LockPrice:  t.LockPrice,
+		})
 	}
 	return out
 }
@@ -465,10 +657,10 @@ func toCheckOrderOutput(r domain.CheckResult) checkOrderOutput {
 		}
 	}
 	return checkOrderOutput{
-		WouldBlock:      block,
-		Rejects:         rejects,
-		WouldLockPrices: prices,
-		Passed:          r.Passed,
+		WouldBlock:         block,
+		Rejects:            rejects,
+		WouldDisplayPrices: prices,
+		Passed:             r.Passed,
 	}
 }
 
@@ -579,6 +771,11 @@ func NewServer(src Source, version VersionSource) (*sdkmcp.Server, error) {
 	}, getLimitsHandler(src))
 
 	sdkmcp.AddTool(server, &sdkmcp.Tool{
+		Name:        getOrderToolName,
+		Description: getOrderToolDescription,
+	}, getOrderHandler(src))
+
+	sdkmcp.AddTool(server, &sdkmcp.Tool{
 		Name:        getAuditToolName,
 		Description: getAuditToolDescription,
 	}, getAuditHandler(src))
@@ -664,9 +861,9 @@ func getAccountStateHandler(src Source) func(
 		}
 		out := getAccountStateOutput{
 			Account: toAccountDTO(acc),
-			Limits:  toLimitDTOs(limits),
+			Limits:  toLimitsDTO(limits),
 		}
-		return toolOK(fmt.Sprintf("account %s: %d limit(s)", id, len(limits)), out), nil
+		return toolOK(fmt.Sprintf("account %s: %d limit(s)", id, limitsCount(limits)), out), nil
 	}
 }
 
@@ -689,8 +886,47 @@ func getLimitsHandler(src Source) func(
 		if err != nil {
 			return toolErr[getLimitsOutput]("list limits failed"), nil
 		}
-		out := getLimitsOutput{Limits: toLimitDTOs(limits)}
-		return toolOK(fmt.Sprintf("%d limit(s)", len(limits)), out), nil
+		out := getLimitsOutput{Limits: toLimitsDTO(limits)}
+		return toolOK(fmt.Sprintf("%d limit(s)", limitsCount(limits)), out), nil
+	}
+}
+
+func getOrderHandler(src Source) func(
+	context.Context,
+	*sdkmcp.ServerSession,
+	*sdkmcp.CallToolParamsFor[getOrderInput],
+) (*sdkmcp.CallToolResultFor[getOrderOutput], error) {
+	return func(
+		ctx context.Context,
+		_ *sdkmcp.ServerSession,
+		p *sdkmcp.CallToolParamsFor[getOrderInput],
+	) (*sdkmcp.CallToolResultFor[getOrderOutput], error) {
+		ctx = auth.ContextWithCaller(ctx, mcpCaller)
+		if ok, disabled := commandGate[getOrderOutput](ctx, src, getOrderToolName); !ok {
+			return disabled, nil
+		}
+		id := strings.TrimSpace(p.Arguments.OrderExternalID)
+		if id == "" {
+			return toolErr[getOrderOutput]("orderExternalId is required"), nil
+		}
+		detail, err := src.GetOrder(ctx, id)
+		if err != nil {
+			if isNotFound(err) {
+				return toolErr[getOrderOutput](
+					fmt.Sprintf("order %q not found", id)), nil
+			}
+			return toolErr[getOrderOutput]("get order failed"), nil
+		}
+		out := getOrderOutput{
+			Order:    toOrderDTO(detail.Order),
+			Approval: toOrderApprovalDTO(detail.Approval),
+			Trades:   toTradeDTOs(detail.Trades),
+		}
+		return toolOK(
+			fmt.Sprintf("order %s: %s (%d fill(s))",
+				detail.Order.ExternalID.String(), detail.Order.Status, len(detail.Trades)),
+			out,
+		), nil
 	}
 }
 
@@ -796,10 +1032,10 @@ func setMarketDataInstrumentHandler(src Source) func(
 		); !ok {
 			return disabled, nil
 		}
-		instanceID := strings.TrimSpace(p.Arguments.InstanceID)
+		instanceID := strings.TrimSpace(p.Arguments.InstanceExternalID)
 		externalSymbol := strings.TrimSpace(p.Arguments.ExternalSymbol)
 		if instanceID == "" {
-			return toolErr[setMarketDataInstrumentOutput]("instanceId is required"), nil
+			return toolErr[setMarketDataInstrumentOutput]("instanceExternalId is required"), nil
 		}
 		if externalSymbol == "" {
 			return toolErr[setMarketDataInstrumentOutput]("externalSymbol is required"), nil
@@ -810,9 +1046,9 @@ func setMarketDataInstrumentHandler(src Source) func(
 			return toolErr[setMarketDataInstrumentOutput]("set market-data instrument failed"), nil
 		}
 		out := setMarketDataInstrumentOutput{
-			InstanceID:     instanceID,
-			ExternalSymbol: externalSymbol,
-			Enabled:        p.Arguments.Enabled,
+			InstanceExternalID: instanceID,
+			ExternalSymbol:     externalSymbol,
+			Enabled:            p.Arguments.Enabled,
 		}
 		state := "disabled"
 		if p.Arguments.Enabled {
@@ -853,19 +1089,31 @@ func submitOrderHandler(src Source) func(
 			AmountValue: strings.TrimSpace(p.Arguments.AmountValue),
 			Price:       strings.TrimSpace(p.Arguments.Price),
 		}
+		// A caller-supplied external id is optional. When present it must be a
+		// well-formed wire form (a malformed one is a clear invalid error); the
+		// backend uses it verbatim and rejects a duplicate. When absent the backend
+		// generates one and returns it as orderExternalId.
+		if supplied := strings.TrimSpace(p.Arguments.ExternalID); supplied != "" {
+			id, err := domain.ParseExternalID(supplied)
+			if err != nil {
+				return toolErr[submitOrderOutput](
+					fmt.Sprintf("invalid externalId: %s", err)), nil
+			}
+			o.ExternalID = id
+		}
 		mode := strings.TrimSpace(p.Arguments.Mode)
 		res, err := src.SubmitOrderToken(ctx, o, mode)
 		if err != nil {
 			return toolErr[submitOrderOutput](fmt.Sprintf("submit order failed: %s", err)), nil
 		}
 		out := submitOrderOutput{
-			Token:     res.Token,
-			KeyID:     res.KeyID,
-			ExpiresAt: res.ExpiresAt.UTC().Format(time.RFC3339),
-			OrderID:   res.OrderID,
+			Token:           res.Token,
+			KeyID:           res.KeyID,
+			ExpiresAt:       res.ExpiresAt.UTC().Format(time.RFC3339),
+			OrderExternalID: res.OrderExternalID,
 		}
 		return toolOK(
-			fmt.Sprintf("order %d approved token issued (expires %s)", res.OrderID, out.ExpiresAt),
+			fmt.Sprintf("order %s approved token issued (expires %s)", res.OrderExternalID, out.ExpiresAt),
 			out,
 		), nil
 	}
@@ -885,23 +1133,25 @@ func confirmExecutionHandler(src Source) func(
 		if ok, disabled := commandGateMutating[confirmExecutionOutput](ctx, src, confirmExecutionToolName); !ok {
 			return disabled, nil
 		}
-		if p.Arguments.OrderID == 0 {
-			return toolErr[confirmExecutionOutput]("orderId is required"), nil
+		orderExternalID := strings.TrimSpace(p.Arguments.OrderExternalID)
+		if orderExternalID == "" {
+			return toolErr[confirmExecutionOutput]("orderExternalId is required"), nil
 		}
-		if strings.TrimSpace(p.Arguments.Token) == "" {
+		token := strings.TrimSpace(p.Arguments.Token)
+		if token == "" {
 			return toolErr[confirmExecutionOutput]("token is required"), nil
 		}
 		order, err := src.ConfirmExecution(
-			ctx, p.Arguments.OrderID, p.Arguments.Token, p.Arguments.Force)
+			ctx, orderExternalID, token, p.Arguments.Force)
 		if err != nil {
 			return toolErr[confirmExecutionOutput](fmt.Sprintf("confirm execution failed: %s", err)), nil
 		}
 		out := confirmExecutionOutput{
-			OrderID: order.ID,
-			Status:  string(order.Status),
+			OrderExternalID: order.ExternalID.String(),
+			Status:          string(order.Status),
 		}
 		return toolOK(
-			fmt.Sprintf("order %d confirmed: %s", order.ID, order.Status),
+			fmt.Sprintf("order %s confirmed: %s", order.ExternalID.String(), order.Status),
 			out,
 		), nil
 	}
@@ -921,23 +1171,25 @@ func cancelHandler(src Source) func(
 		if ok, disabled := commandGateMutating[cancelOutput](ctx, src, cancelToolName); !ok {
 			return disabled, nil
 		}
-		if p.Arguments.OrderID == 0 {
-			return toolErr[cancelOutput]("orderId is required"), nil
+		orderExternalID := strings.TrimSpace(p.Arguments.OrderExternalID)
+		if orderExternalID == "" {
+			return toolErr[cancelOutput]("orderExternalId is required"), nil
 		}
-		if strings.TrimSpace(p.Arguments.Token) == "" {
+		token := strings.TrimSpace(p.Arguments.Token)
+		if token == "" {
 			return toolErr[cancelOutput]("token is required"), nil
 		}
-		order, err := src.CancelOrder(ctx, p.Arguments.OrderID, p.Arguments.Token,
+		order, err := src.CancelOrder(ctx, orderExternalID, token,
 			strings.TrimSpace(p.Arguments.Reason), p.Arguments.Force)
 		if err != nil {
 			return toolErr[cancelOutput](fmt.Sprintf("cancel failed: %s", err)), nil
 		}
 		out := cancelOutput{
-			OrderID: order.ID,
-			Status:  string(order.Status),
+			OrderExternalID: order.ExternalID.String(),
+			Status:          string(order.Status),
 		}
 		return toolOK(
-			fmt.Sprintf("order %d cancelled: %s", order.ID, order.Status),
+			fmt.Sprintf("order %s cancelled: %s", order.ExternalID.String(), order.Status),
 			out,
 		), nil
 	}

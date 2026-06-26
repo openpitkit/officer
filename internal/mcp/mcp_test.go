@@ -19,12 +19,15 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.openpit.dev/officer/internal/domain"
+	"go.openpit.dev/officer/internal/node"
 )
 
 // fakeSource is a controllable fake for the Source interface.
@@ -32,7 +35,9 @@ type fakeSource struct {
 	status        Status
 	statusErr     error
 	account       domain.Account
-	limits        []domain.Limit
+	limits        node.AccountLimits
+	orderDetail   domain.OrderDetail
+	getOrderErr   error
 	auditRows     []domain.AuditRow
 	auditFilter   domain.AuditFilter
 	checkResult   domain.CheckResult
@@ -72,20 +77,27 @@ func (f *fakeSource) Status(_ context.Context) (Status, error) {
 
 func (f *fakeSource) GetAccountState(
 	_ context.Context, id domain.AccountID,
-) (domain.Account, []domain.Limit, error) {
+) (domain.Account, node.AccountLimits, error) {
 	if f.accStateErr != nil {
-		return domain.Account{}, nil, f.accStateErr
+		return domain.Account{}, node.AccountLimits{}, f.accStateErr
 	}
-	if f.account.ID != id {
-		return domain.Account{}, nil, fmt.Errorf("account %q: %w", id, domain.ErrNotFound)
+	if f.account.Code != id {
+		return domain.Account{}, node.AccountLimits{},
+			fmt.Errorf("account %q: %w", id, domain.ErrNotFound)
 	}
 	return f.account, f.limits, nil
 }
 
 func (f *fakeSource) ListLimits(
 	_ context.Context, _ domain.AccountID,
-) ([]domain.Limit, error) {
+) (node.AccountLimits, error) {
 	return f.limits, f.listLimitsErr
+}
+
+func (f *fakeSource) GetOrder(
+	_ context.Context, _ string,
+) (domain.OrderDetail, error) {
+	return f.orderDetail, f.getOrderErr
 }
 
 func (f *fakeSource) ListAudit(_ context.Context, _ int) ([]domain.AuditRow, error) {
@@ -129,13 +141,13 @@ func (f *fakeSource) SubmitOrderToken(
 }
 
 func (f *fakeSource) ConfirmExecution(
-	_ context.Context, _ int64, _ string, _ bool,
+	_ context.Context, _ string, _ string, _ bool,
 ) (domain.Order, error) {
 	return domain.Order{}, nil
 }
 
 func (f *fakeSource) CancelOrder(
-	_ context.Context, _ int64, _, _ string, _ bool,
+	_ context.Context, _ string, _, _ string, _ bool,
 ) (domain.Order, error) {
 	return domain.Order{}, nil
 }
@@ -200,6 +212,22 @@ func callGetAudit(
 	return res
 }
 
+// callGetOrder invokes the get_order handler directly.
+func callGetOrder(
+	t *testing.T, src Source, orderExternalID string,
+) *sdkmcp.CallToolResultFor[getOrderOutput] {
+	t.Helper()
+	h := getOrderHandler(src)
+	res, err := h(context.Background(), nil,
+		&sdkmcp.CallToolParamsFor[getOrderInput]{
+			Arguments: getOrderInput{OrderExternalID: orderExternalID},
+		})
+	if err != nil {
+		t.Fatalf("getOrderHandler returned protocol error: %v", err)
+	}
+	return res
+}
+
 // callCheckOrder invokes the check_order handler directly.
 func callCheckOrder(
 	t *testing.T, src Source, in checkOrderInput,
@@ -238,6 +266,46 @@ func textContent(content []sdkmcp.Content) string {
 		}
 	}
 	return ""
+}
+
+// mustExternalID parses a 22-char wire form into an ExternalID, failing the test
+// on a malformed handle. It lets the tests build machine-record fixtures keyed by
+// their opaque public handle, the only id the MCP surface ever speaks.
+func mustExternalID(t *testing.T, s string) domain.ExternalID {
+	t.Helper()
+	id, err := domain.ParseExternalID(s)
+	if err != nil {
+		t.Fatalf("parse external id %q: %v", s, err)
+	}
+	return id
+}
+
+// noSurrogateIDFields are JSON keys that would betray a leaked surrogate or
+// engine id on the MCP wire. The identity model forbids every one of them: only
+// dictionary codes/titles and opaque external ids may appear. structuredContent
+// is asserted against this set so a regression that reintroduces a numeric id is
+// caught at the surface, not in review.
+var noSurrogateIDFields = []string{
+	`"id":`, `"orderId":`, `"engineId":`, `"engineAccountId":`,
+	`"surrogate":`, `"rowId":`,
+}
+
+// assertNoSurrogateID marshals v to JSON and fails if it carries any forbidden
+// id field. It returns true on a clean payload so callers can assert inline.
+func assertNoSurrogateID(t *testing.T, v any) bool {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal for surrogate-id scan: %v", err)
+	}
+	clean := true
+	for _, field := range noSurrogateIDFields {
+		if strings.Contains(string(raw), field) {
+			t.Errorf("forbidden id field %s present in MCP output: %s", field, raw)
+			clean = false
+		}
+	}
+	return clean
 }
 
 // -- health --
@@ -296,47 +364,49 @@ func TestHealthSourceFailure(t *testing.T) {
 func TestGetAccountStateHappyPath(t *testing.T) {
 	src := &fakeSource{
 		account: domain.Account{
-			ID:      "acc-1",
-			Tenant:  domain.DefaultTenant,
+			Code:    "acc-1",
+			Title:   "Desk One",
 			Blocked: false,
 		},
-		limits: []domain.Limit{
-			{
-				Target: domain.LimitTarget{
-					Tenant:  domain.DefaultTenant,
-					Policy:  domain.PolicyRateLimit,
-					Scope:   domain.ScopeAccount,
-					Account: "acc-1",
-				},
-				Values: []domain.LimitValue{
-					{Kind: domain.KindMaxOrders, Value: "100"},
-					{Kind: domain.KindWindow, Value: "1s"},
+		limits: node.AccountLimits{
+			RateLimits: []domain.LimitRate{
+				{
+					Scope:     domain.ScopeAccount,
+					Account:   "acc-1",
+					MaxOrders: 100,
+					Window:    time.Second,
 				},
 			},
 		},
 	}
 	res := callGetAccountState(t, src, "acc-1")
 	requireNotToolError(t, res.IsError)
-	if res.StructuredContent.Account.ID != "acc-1" {
-		t.Errorf("want id acc-1, got %q", res.StructuredContent.Account.ID)
+	if res.StructuredContent.Account.Code != "acc-1" {
+		t.Errorf("want code acc-1, got %q", res.StructuredContent.Account.Code)
+	}
+	if res.StructuredContent.Account.Title != "Desk One" {
+		t.Errorf("want title Desk One, got %q", res.StructuredContent.Account.Title)
 	}
 	if res.StructuredContent.Account.Blocked {
 		t.Error("want blocked:false")
 	}
-	if len(res.StructuredContent.Limits) != 1 {
-		t.Fatalf("want 1 limit, got %d", len(res.StructuredContent.Limits))
+	if len(res.StructuredContent.Limits.RateLimits) != 1 {
+		t.Fatalf("want 1 rate limit, got %d", len(res.StructuredContent.Limits.RateLimits))
 	}
-	lim := res.StructuredContent.Limits[0]
-	if lim.Policy != domain.PolicyRateLimit {
-		t.Errorf("wrong policy: %q", lim.Policy)
+	rate := res.StructuredContent.Limits.RateLimits[0]
+	if rate.MaxOrders != 100 {
+		t.Errorf("wrong max_orders: %d", rate.MaxOrders)
 	}
-	if lim.Values[domain.KindMaxOrders] != "100" {
-		t.Errorf("wrong max_orders: %q", lim.Values[domain.KindMaxOrders])
+	if rate.Account != "acc-1" {
+		t.Errorf("wrong account: %q", rate.Account)
+	}
+	if !assertNoSurrogateID(t, res.StructuredContent.Account) {
+		t.Error("account DTO leaked a surrogate/engine id")
 	}
 }
 
 func TestGetAccountStateNotFound(t *testing.T) {
-	src := &fakeSource{account: domain.Account{ID: "other"}}
+	src := &fakeSource{account: domain.Account{Code: "other"}}
 	res := callGetAccountState(t, src, "acc-1")
 	requireToolError(t, res.IsError)
 	txt := textContent(res.Content)
@@ -348,7 +418,7 @@ func TestGetAccountStateNotFound(t *testing.T) {
 func TestGetAccountStateSourceFailure(t *testing.T) {
 	src := &fakeSource{
 		accStateErr: fmt.Errorf("internal error"),
-		account:     domain.Account{ID: "acc-1"},
+		account:     domain.Account{Code: "acc-1"},
 	}
 	res := callGetAccountState(t, src, "acc-1")
 	requireToolError(t, res.IsError)
@@ -368,8 +438,7 @@ func TestGetAccountStateEmptyAccount(t *testing.T) {
 func TestGetAccountStateBlockedAccount(t *testing.T) {
 	src := &fakeSource{
 		account: domain.Account{
-			ID:          "acc-2",
-			Tenant:      domain.DefaultTenant,
+			Code:        "acc-2",
 			Blocked:     true,
 			BlockReason: "compliance hold",
 		},
@@ -388,65 +457,64 @@ func TestGetAccountStateBlockedAccount(t *testing.T) {
 
 func TestGetLimitsHappyPath(t *testing.T) {
 	src := &fakeSource{
-		limits: []domain.Limit{
-			{
-				Target: domain.LimitTarget{
-					Policy: domain.PolicyOrderSizeLimit,
-					Scope:  domain.ScopeBroker,
-				},
-				Values: []domain.LimitValue{
-					{Kind: domain.KindMaxQuantity, Value: "500"},
+		limits: node.AccountLimits{
+			OrderSizeLimits: []domain.LimitOrderSize{
+				{
+					Scope:       domain.ScopeBroker,
+					MaxQuantity: "500",
 				},
 			},
-			{
-				Target: domain.LimitTarget{
-					Policy: domain.PolicyRateLimit,
-					Scope:  domain.ScopeAsset,
-					Asset:  "AAPL",
-				},
-				Values: []domain.LimitValue{
-					{Kind: domain.KindMaxOrders, Value: "10"},
-					{Kind: domain.KindWindow, Value: "1m"},
+			RateLimits: []domain.LimitRate{
+				{
+					Scope:     domain.ScopeAsset,
+					Asset:     "AAPL",
+					MaxOrders: 10,
+					Window:    time.Minute,
 				},
 			},
 		},
 	}
 	res := callGetLimits(t, src, "")
 	requireNotToolError(t, res.IsError)
-	if len(res.StructuredContent.Limits) != 2 {
-		t.Fatalf("want 2 limits, got %d", len(res.StructuredContent.Limits))
+	got := res.StructuredContent.Limits
+	if len(got.OrderSizeLimits) != 1 {
+		t.Fatalf("want 1 order-size limit, got %d", len(got.OrderSizeLimits))
+	}
+	if len(got.RateLimits) != 1 {
+		t.Fatalf("want 1 rate limit, got %d", len(got.RateLimits))
+	}
+	if got.OrderSizeLimits[0].MaxQuantity != "500" {
+		t.Errorf("wrong max_quantity: %q", got.OrderSizeLimits[0].MaxQuantity)
 	}
 }
 
 func TestGetLimitsWithAccount(t *testing.T) {
-	src := &fakeSource{limits: []domain.Limit{
-		{
-			Target: domain.LimitTarget{
-				Policy:  domain.PolicyRateLimit,
-				Scope:   domain.ScopeAccount,
-				Account: "acc-1",
-			},
-			Values: []domain.LimitValue{
-				{Kind: domain.KindMaxOrders, Value: "5"},
-				{Kind: domain.KindWindow, Value: "1s"},
+	src := &fakeSource{limits: node.AccountLimits{
+		RateLimits: []domain.LimitRate{
+			{
+				Scope:     domain.ScopeAccount,
+				Account:   "acc-1",
+				MaxOrders: 5,
+				Window:    time.Second,
 			},
 		},
 	}}
 	res := callGetLimits(t, src, "acc-1")
 	requireNotToolError(t, res.IsError)
-	if len(res.StructuredContent.Limits) != 1 {
-		t.Fatalf("want 1 limit, got %d", len(res.StructuredContent.Limits))
+	if len(res.StructuredContent.Limits.RateLimits) != 1 {
+		t.Fatalf("want 1 rate limit, got %d", len(res.StructuredContent.Limits.RateLimits))
 	}
-	if res.StructuredContent.Limits[0].Account != "acc-1" {
-		t.Errorf("wrong account: %q", res.StructuredContent.Limits[0].Account)
+	if res.StructuredContent.Limits.RateLimits[0].Account != "acc-1" {
+		t.Errorf("wrong account: %q", res.StructuredContent.Limits.RateLimits[0].Account)
 	}
 }
 
 func TestGetLimitsEmpty(t *testing.T) {
 	res := callGetLimits(t, &fakeSource{}, "")
 	requireNotToolError(t, res.IsError)
-	if len(res.StructuredContent.Limits) != 0 {
-		t.Errorf("want 0 limits, got %d", len(res.StructuredContent.Limits))
+	got := res.StructuredContent.Limits
+	if len(got.RateLimits)+len(got.OrderSizeLimits)+len(got.PnlBoundsLimits) != 0 {
+		t.Errorf("want 0 limits, got %+v", got)
 	}
 }
 
@@ -463,15 +531,16 @@ func TestGetLimitsSourceFailure(t *testing.T) {
 
 func TestGetAuditHappyPath(t *testing.T) {
 	ts := time.Date(2026, 6, 11, 10, 0, 0, 1, time.UTC)
+	auditEID := mustExternalID(t, "AAAAAAAAAAAAAAAAAAAAAQ")
 	src := &fakeSource{
 		auditRows: []domain.AuditRow{
 			{
-				ID:      12,
-				At:      ts,
-				Actor:   "operator",
-				Action:  domain.AuditActionSetLimit,
-				Account: "acc-1",
-				Detail:  "set limit rate_limit account=acc-1 max_orders=100 window=1s",
+				ExternalID: auditEID,
+				At:         ts,
+				Actor:      "operator",
+				Action:     domain.AuditActionSetLimit,
+				Account:    "acc-1",
+				Detail:     "set limit rate_limit account=acc-1 max_orders=100 window=1s",
 			},
 		},
 	}
@@ -481,8 +550,8 @@ func TestGetAuditHappyPath(t *testing.T) {
 		t.Fatalf("want 1 entry, got %d", len(res.StructuredContent.Entries))
 	}
 	e := res.StructuredContent.Entries[0]
-	if e.ID != 12 {
-		t.Errorf("wrong id: %d", e.ID)
+	if e.ExternalID != auditEID.String() {
+		t.Errorf("wrong external id: %q", e.ExternalID)
 	}
 	if e.Actor != "operator" {
 		t.Errorf("wrong actor: %q", e.Actor)
@@ -550,12 +619,16 @@ func (c *captureNSource) Status(_ context.Context) (Status, error) {
 	return Status{}, nil
 }
 func (c *captureNSource) GetAccountState(_ context.Context, _ domain.AccountID) (
-	domain.Account, []domain.Limit, error) {
-	return domain.Account{}, nil, nil
+	domain.Account, node.AccountLimits, error) {
+	return domain.Account{}, node.AccountLimits{}, nil
 }
 func (c *captureNSource) ListLimits(_ context.Context, _ domain.AccountID) (
-	[]domain.Limit, error) {
-	return nil, nil
+	node.AccountLimits, error) {
+	return node.AccountLimits{}, nil
+}
+func (c *captureNSource) GetOrder(_ context.Context, _ string) (
+	domain.OrderDetail, error) {
+	return domain.OrderDetail{}, nil
 }
 func (c *captureNSource) ListAudit(_ context.Context, n int) ([]domain.AuditRow, error) {
 	c.lastN = n
@@ -585,14 +658,150 @@ func (c *captureNSource) SubmitOrderToken(
 	return SubmitOrderTokenResult{}, nil
 }
 func (c *captureNSource) ConfirmExecution(
-	context.Context, int64, string, bool,
+	context.Context, string, string, bool,
 ) (domain.Order, error) {
 	return domain.Order{}, nil
 }
 func (c *captureNSource) CancelOrder(
-	context.Context, int64, string, string, bool,
+	context.Context, string, string, string, bool,
 ) (domain.Order, error) {
 	return domain.Order{}, nil
+}
+
+// -- get_order --
+
+// TestGetOrderHappyPath: get_order returns the order keyed by its external id,
+// its 1:1 approval read back from OrderDetail.Approval, and its fills with their
+// display prices. It asserts the opaque lock is never serialized and no surrogate
+// or engine id appears anywhere in the structured output.
+func TestGetOrderHappyPath(t *testing.T) {
+	orderEID := mustExternalID(t, "b3JkZXItZXh0ZXJuYWwtMQ")
+	tradeEID := mustExternalID(t, "dHJhZGUtZXh0ZXJuYWwtMQ")
+	src := &fakeSource{
+		orderDetail: domain.OrderDetail{
+			Order: domain.Order{
+				ExternalID:  orderEID,
+				Account:     "acc-1",
+				BaseAsset:   "BTC",
+				QuoteAsset:  "USD",
+				Side:        domain.OrderSideBuy,
+				AmountKind:  domain.OrderAmountKindQuantity,
+				AmountValue: "0.5",
+				Price:       "50000",
+				Status:      domain.OrderStatusFilled,
+				// Lock is the opaque reservation blob; it must never reach the wire.
+				Lock: []byte{0x01, 0x02, 0x03, 0x04},
+			},
+			Approval: &domain.OrderApproval{
+				Token:     "eyAPPROVAL",
+				KeyID:     "key-1",
+				Alg:       "ed25519",
+				Mode:      "hold",
+				IssuedAt:  "2026-06-11T10:00:00Z",
+				ExpiresAt: "2026-06-11T10:02:00Z",
+			},
+			Trades: []domain.Trade{
+				{
+					ExternalID: tradeEID,
+					Order:      orderEID,
+					Side:       domain.OrderSideBuy,
+					Quantity:   "0.5",
+					Price:      "49995",
+					LockPrice:  "50000",
+				},
+			},
+		},
+	}
+
+	res := callGetOrder(t, src, orderEID.String())
+	requireNotToolError(t, res.IsError)
+	out := res.StructuredContent
+	if out.Order.ExternalID != orderEID.String() {
+		t.Errorf("order external id: want %q got %q", orderEID.String(), out.Order.ExternalID)
+	}
+	if out.Order.Status != string(domain.OrderStatusFilled) {
+		t.Errorf("status: want filled got %q", out.Order.Status)
+	}
+	if out.Approval == nil {
+		t.Fatal("approval read-back: want non-nil approval")
+	}
+	if out.Approval.Token != "eyAPPROVAL" {
+		t.Errorf("approval token: want eyAPPROVAL got %q", out.Approval.Token)
+	}
+	if !out.Approval.Signed {
+		t.Error("approval signed: want true for alg ed25519")
+	}
+	if len(out.Trades) != 1 {
+		t.Fatalf("want 1 trade, got %d", len(out.Trades))
+	}
+	if out.Trades[0].Price != "49995" || out.Trades[0].LockPrice != "50000" {
+		t.Errorf("display prices not surfaced: %+v", out.Trades[0])
+	}
+
+	// The opaque lock blob must never be serialized.
+	raw, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal output: %v", err)
+	}
+	for _, banned := range []string{`"lock"`, `"Lock"`, "AQIDBA"} {
+		if strings.Contains(string(raw), banned) {
+			t.Errorf("opaque lock leaked into MCP output (%q): %s", banned, raw)
+		}
+	}
+	assertNoSurrogateID(t, out)
+}
+
+// TestGetOrderUnsigned: an order with no approval read-back yields a nil approval
+// (the order is unsigned), not a zero-value envelope.
+func TestGetOrderUnsigned(t *testing.T) {
+	orderEID := mustExternalID(t, "b3JkZXItZXh0ZXJuYWwtMg")
+	src := &fakeSource{
+		orderDetail: domain.OrderDetail{
+			Order: domain.Order{
+				ExternalID: orderEID,
+				Account:    "acc-1",
+				Status:     domain.OrderStatusSubmitted,
+			},
+		},
+	}
+	res := callGetOrder(t, src, orderEID.String())
+	requireNotToolError(t, res.IsError)
+	if res.StructuredContent.Approval != nil {
+		t.Errorf("want nil approval for unsigned order, got %+v", res.StructuredContent.Approval)
+	}
+}
+
+// TestGetOrderMissingID: get_order rejects an empty external id before reaching
+// the source.
+func TestGetOrderMissingID(t *testing.T) {
+	res := callGetOrder(t, &fakeSource{}, "   ")
+	requireToolError(t, res.IsError)
+	if got := textContent(res.Content); got != "orderExternalId is required" {
+		t.Errorf("unexpected error text: %q", got)
+	}
+}
+
+// TestGetOrderNotFound: an unknown external id maps onto a not-found tool error
+// naming the handle, distinct from the generic failure message.
+func TestGetOrderNotFound(t *testing.T) {
+	src := &fakeSource{getOrderErr: fmt.Errorf("order: %w", domain.ErrNotFound)}
+	res := callGetOrder(t, src, "b3JkZXItZXh0ZXJuYWwteA")
+	requireToolError(t, res.IsError)
+	txt := textContent(res.Content)
+	if !strings.Contains(txt, "not found") {
+		t.Errorf("expected not-found message, got %q", txt)
+	}
+}
+
+// TestGetOrderSourceFailure: a non-not-found source error surfaces the generic
+// failure message.
+func TestGetOrderSourceFailure(t *testing.T) {
+	src := &fakeSource{getOrderErr: fmt.Errorf("store down")}
+	res := callGetOrder(t, src, "b3JkZXItZXh0ZXJuYWwteQ")
+	requireToolError(t, res.IsError)
+	if got := textContent(res.Content); got != "get order failed" {
+		t.Errorf("unexpected error text: %q", got)
+	}
 }
 
 // -- check_order --
@@ -610,8 +819,8 @@ func TestCheckOrderPass(t *testing.T) {
 	if !res.StructuredContent.Passed {
 		t.Fatalf("want passed:true")
 	}
-	if len(res.StructuredContent.WouldLockPrices) != 1 {
-		t.Fatalf("want 1 lock price, got %d", len(res.StructuredContent.WouldLockPrices))
+	if len(res.StructuredContent.WouldDisplayPrices) != 1 {
+		t.Fatalf("want 1 display price, got %d", len(res.StructuredContent.WouldDisplayPrices))
 	}
 	if len(src.checkProbes) != 1 || src.checkProbes[0].Side != domain.OrderSideBuy {
 		t.Fatalf("probe not forwarded with mapped fields: %+v", src.checkProbes)
@@ -682,7 +891,7 @@ func TestSetMarketDataInstrumentGatedAndDelegates(t *testing.T) {
 	res, err := h(context.Background(), nil,
 		&sdkmcp.CallToolParamsFor[setMarketDataInstrumentInput]{
 			Arguments: setMarketDataInstrumentInput{
-				InstanceID: "mock-1", ExternalSymbol: "AAPL", Enabled: true,
+				InstanceExternalID: "mock-1", ExternalSymbol: "AAPL", Enabled: true,
 			},
 		})
 	if err != nil {
@@ -701,7 +910,7 @@ func TestSetMarketDataInstrumentGatedAndDelegates(t *testing.T) {
 	res, err = h(context.Background(), nil,
 		&sdkmcp.CallToolParamsFor[setMarketDataInstrumentInput]{
 			Arguments: setMarketDataInstrumentInput{
-				InstanceID: "mock-1", ExternalSymbol: "AAPL", Enabled: true,
+				InstanceExternalID: "mock-1", ExternalSymbol: "AAPL", Enabled: true,
 			},
 		})
 	if err != nil {

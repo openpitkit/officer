@@ -21,7 +21,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
+	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -29,6 +32,7 @@ import (
 	"go.openpit.dev/officer/internal/auth"
 	"go.openpit.dev/officer/internal/backend"
 	"go.openpit.dev/officer/internal/backup"
+	"go.openpit.dev/officer/internal/businesscsv"
 	"go.openpit.dev/officer/internal/domain"
 	"go.openpit.dev/officer/internal/engine"
 	"go.openpit.dev/officer/internal/marketdata"
@@ -42,13 +46,18 @@ import (
 type fakeNode struct {
 	version  string
 	accounts []domain.Account
-	limits   []domain.Limit
+	limits   node.AccountLimits
 	audit    []domain.AuditRow
 
-	putLimitCalls    []domain.Limit
-	deleteLimitCalls []domain.LimitTarget
-	createCalls      []node.Key
-	blockCalls       []blockCall
+	putRateLimitCalls      []domain.LimitRate
+	putOrderSizeLimitCalls []domain.LimitOrderSize
+	putPnlBoundsLimitCalls []domain.LimitPnlBounds
+	deleteLimitCalls       []node.LimitTarget
+	createCalls            []node.Key
+	blockCalls             []blockCall
+	positionSnapshots      []domain.Balance
+	adjustmentExternalIDs  []domain.ExternalID
+	adjustmentErr          error
 
 	checkResult domain.CheckResult
 	checkProbes []domain.OrderProbe
@@ -71,8 +80,9 @@ type fakeNode struct {
 	resetCaller          domain.Caller
 	resetSink            marketdata.Sink
 	resetErr             error
-	orders               map[int64]domain.Order
-	nextOrderID          int64
+	orders               map[domain.ExternalID]domain.Order
+	approvals            map[domain.ExternalID]domain.OrderApproval
+	nextOrderSeq         byte
 	holdResult           *engine.HoldResult
 	immediateResult      *engine.ImmediateResult
 	execReports          []domain.ExecutionReportInput
@@ -84,7 +94,7 @@ type fakeNode struct {
 	holdCalls            []string
 	confirmCalls         []string
 	cancelCalls          []string
-	persistApprovalCalls []int64
+	persistApprovalCalls []domain.ExternalID
 	auditCalls           []store.AuditEntry
 
 	getAccountErr error
@@ -92,6 +102,16 @@ type fakeNode struct {
 	// getOrderCount counts GetOrder invocations; the order-resolving flows must
 	// fetch the stored order at most once per operation.
 	getOrderCount atomic.Int64
+}
+
+// newOrderExternalID returns a deterministic distinct external id for a fake
+// order. Machine records are addressed by an opaque external id, not an integer,
+// so the fake mints a fresh 16-byte id per submit from a monotonic seed.
+func (n *fakeNode) newOrderExternalID() domain.ExternalID {
+	n.nextOrderSeq++
+	var id domain.ExternalID
+	id[0] = n.nextOrderSeq
+	return id
 }
 
 type setMcpAccessCall struct {
@@ -151,7 +171,7 @@ func (n *fakeNode) CreateAccount(
 	_ context.Context, key node.Key, _ domain.Caller,
 ) (domain.Account, error) {
 	n.createCalls = append(n.createCalls, key)
-	account := domain.Account{Tenant: key.Tenant, ID: key.Account}
+	account := domain.Account{Code: key.Account, EngineAccountID: 1}
 	n.accounts = append(n.accounts, account)
 	return account, nil
 }
@@ -165,28 +185,42 @@ func (n *fakeNode) SetAccountBlocked(
 
 func (n *fakeNode) GetAccountState(
 	_ context.Context, key node.Key,
-) (domain.Account, []domain.Limit, error) {
+) (domain.Account, node.AccountLimits, error) {
 	if n.getAccountErr != nil {
-		return domain.Account{}, nil, n.getAccountErr
+		return domain.Account{}, node.AccountLimits{}, n.getAccountErr
 	}
-	return domain.Account{Tenant: key.Tenant, ID: key.Account}, n.limits, nil
+	return domain.Account{Code: key.Account}, n.limits, nil
 }
 
 func (n *fakeNode) ListLimits(
 	context.Context, domain.AccountID,
-) ([]domain.Limit, error) {
+) (node.AccountLimits, error) {
 	return n.limits, nil
 }
 
-func (n *fakeNode) PutLimit(
-	_ context.Context, limit domain.Limit, _ domain.Caller,
+func (n *fakeNode) PutRateLimit(
+	_ context.Context, limit domain.LimitRate, _ domain.Caller,
 ) (marketdata.Sink, error) {
-	n.putLimitCalls = append(n.putLimitCalls, limit)
+	n.putRateLimitCalls = append(n.putRateLimitCalls, limit)
+	return n.restoreSink, nil
+}
+
+func (n *fakeNode) PutOrderSizeLimit(
+	_ context.Context, limit domain.LimitOrderSize, _ domain.Caller,
+) (marketdata.Sink, error) {
+	n.putOrderSizeLimitCalls = append(n.putOrderSizeLimitCalls, limit)
+	return n.restoreSink, nil
+}
+
+func (n *fakeNode) PutPnlBoundsLimit(
+	_ context.Context, limit domain.LimitPnlBounds, _ domain.Caller,
+) (marketdata.Sink, error) {
+	n.putPnlBoundsLimitCalls = append(n.putPnlBoundsLimitCalls, limit)
 	return n.restoreSink, nil
 }
 
 func (n *fakeNode) DeleteLimit(
-	_ context.Context, target domain.LimitTarget, _ domain.Caller,
+	_ context.Context, target node.LimitTarget, _ domain.Caller,
 ) (marketdata.Sink, error) {
 	n.deleteLimitCalls = append(n.deleteLimitCalls, target)
 	return n.restoreSink, nil
@@ -204,66 +238,145 @@ func (n *fakeNode) SetAccountNotes(
 	return nil
 }
 
-func (n *fakeNode) CreateGroup(context.Context, domain.AccountGroup, domain.Caller) error {
+func (n *fakeNode) DeleteAccount(
+	context.Context, node.Key, bool, domain.Caller,
+) error {
 	return nil
 }
 
-func (n *fakeNode) ListGroups(
-	context.Context, domain.TenantID,
-) ([]domain.AccountGroup, error) {
+func (n *fakeNode) CreateGroup(
+	_ context.Context, group domain.AccountGroup, _ domain.Caller,
+) (domain.AccountGroup, error) {
+	group.EngineGroupID = 1
+	return group, nil
+}
+
+func (n *fakeNode) ListGroups(context.Context) ([]domain.AccountGroup, error) {
 	return nil, nil
 }
 
 func (n *fakeNode) GetGroup(
-	context.Context, domain.TenantID, string,
+	context.Context, string,
 ) (domain.AccountGroup, []domain.Account, bool, error) {
 	return domain.AccountGroup{}, nil, false, nil
 }
 
 func (n *fakeNode) SetGroupNotes(
-	context.Context, domain.TenantID, string, string, domain.Caller,
+	context.Context, string, string, domain.Caller,
 ) error {
 	return nil
 }
 
 func (n *fakeNode) SetGroupBlocked(
-	context.Context, domain.TenantID, string, bool, string, domain.Caller,
+	context.Context, string, bool, string, domain.Caller,
 ) error {
 	return nil
 }
 
-func (n *fakeNode) DeleteGroup(context.Context, domain.TenantID, string, domain.Caller) error {
+func (n *fakeNode) DeleteGroup(context.Context, string, domain.Caller) error {
+	return nil
+}
+
+func (n *fakeNode) ApplyBusinessCSVImport(
+	_ context.Context,
+	in store.BusinessCSVImport,
+	_ domain.Caller,
+) error {
+	for _, row := range in.Accounts {
+		if !row.Exists {
+			n.createCalls = append(n.createCalls, node.Key{
+				Account: row.Account.Code,
+			})
+		}
+		found := false
+		for i, account := range n.accounts {
+			if account.Code == row.Account.Code {
+				n.accounts[i] = row.Account
+				found = true
+				break
+			}
+		}
+		if !found {
+			n.accounts = append(n.accounts, row.Account)
+		}
+	}
+	n.positionSnapshots = append(n.positionSnapshots, in.Balances...)
 	return nil
 }
 
 func (n *fakeNode) ApplyAdjustment(
-	context.Context, node.Key, domain.AdjustmentRequest, domain.Caller,
+	_ context.Context, key node.Key, externalID domain.ExternalID,
+	req domain.AdjustmentRequest, caller domain.Caller,
 ) (domain.AccountAdjustmentRecord, error) {
-	return domain.AccountAdjustmentRecord{}, nil
+	n.adjustmentExternalIDs = append(n.adjustmentExternalIDs, externalID)
+	if n.adjustmentErr != nil {
+		return domain.AccountAdjustmentRecord{}, n.adjustmentErr
+	}
+	id := externalID
+	if id.IsZero() {
+		id = n.newOrderExternalID()
+	}
+	return domain.AccountAdjustmentRecord{
+		ExternalID: id,
+		Account:    key.Account,
+		Source:     caller.Source,
+		Principal:  caller.Principal,
+		Request:    req,
+		Asset:      req.Asset,
+		Accepted:   &domain.AdjustmentOutcomeAccepted{},
+	}, nil
+}
+
+func (n *fakeNode) ImportPositionSnapshot(
+	_ context.Context, _ node.Key, snapshot domain.Balance, _ domain.Caller,
+) (domain.AccountAdjustmentRecord, error) {
+	n.positionSnapshots = append(n.positionSnapshots, snapshot)
+	return domain.AccountAdjustmentRecord{
+		Accepted: &domain.AdjustmentOutcomeAccepted{},
+	}, nil
 }
 
 func (n *fakeNode) ListBalances(
-	context.Context, domain.TenantID, domain.AccountID, string,
+	context.Context, domain.AccountID, string,
 ) ([]domain.Balance, error) {
 	return nil, nil
 }
 
 func (n *fakeNode) GetBalance(
-	context.Context, domain.TenantID, domain.AccountID, string,
+	context.Context, domain.AccountID, string,
 ) (domain.Balance, bool, error) {
 	return domain.Balance{}, false, nil
 }
 
 func (n *fakeNode) ListAdjustments(
-	context.Context, domain.TenantID, domain.AccountID, domain.Source, int,
+	context.Context, domain.AccountID, domain.Source, int,
 ) ([]domain.AccountAdjustmentRecord, error) {
 	return nil, nil
 }
 
+// recordedOrderExternalID models the store's supplied-or-generated contract: a
+// caller-supplied (non-zero) order external id is used verbatim, else a fresh id
+// is minted. This keeps the fake faithful to recordSubmittedOrder, so a backend
+// test can prove the id is threaded create-once and the returned id matches.
+func (n *fakeNode) recordedOrderExternalID(o domain.Order) domain.ExternalID {
+	if !o.ExternalID.IsZero() {
+		return o.ExternalID
+	}
+	return n.newOrderExternalID()
+}
+
 func (n *fakeNode) SubmitOrder(
-	context.Context, node.Key, domain.Order, domain.Caller,
+	_ context.Context, key node.Key, o domain.Order, _ domain.Caller,
 ) (domain.Order, error) {
-	return domain.Order{}, nil
+	if n.submitErr != nil {
+		return domain.Order{}, n.submitErr
+	}
+	order := o
+	order.ExternalID = n.recordedOrderExternalID(o)
+	order.Account = key.Account
+	order.Status = domain.OrderStatusAccepted
+	n.orders[order.ExternalID] = order
+	return order, nil
 }
 
 func (n *fakeNode) SubmitHold(
@@ -272,10 +385,8 @@ func (n *fakeNode) SubmitHold(
 	if n.submitErr != nil {
 		return domain.Order{}, engine.HoldResult{}, n.submitErr
 	}
-	n.nextOrderID++
 	order := o
-	order.ID = n.nextOrderID
-	order.Tenant = key.Tenant
+	order.ExternalID = n.recordedOrderExternalID(o)
 	order.Account = key.Account
 	if n.holdResult != nil {
 		if !n.holdResult.Accepted {
@@ -283,12 +394,12 @@ func (n *fakeNode) SubmitHold(
 			return order, *n.holdResult, nil
 		}
 		order.Status = domain.OrderStatusAccepted
-		order.LockPrices = n.holdResult.LockPrices
-		n.orders[order.ID] = order
+		order.Lock = n.holdResult.Lock
+		n.orders[order.ExternalID] = order
 		return order, *n.holdResult, nil
 	}
 	order.Status = domain.OrderStatusAccepted
-	n.orders[order.ID] = order
+	n.orders[order.ExternalID] = order
 	result := engine.HoldResult{
 		Accepted:            true,
 		ApprovalID:          "approval-1",
@@ -306,10 +417,8 @@ func (n *fakeNode) SubmitImmediate(
 	if n.submitErr != nil {
 		return domain.Order{}, engine.ImmediateResult{}, n.submitErr
 	}
-	n.nextOrderID++
 	order := o
-	order.ID = n.nextOrderID
-	order.Tenant = key.Tenant
+	order.ExternalID = n.recordedOrderExternalID(o)
 	order.Account = key.Account
 	if n.immediateResult != nil {
 		if !n.immediateResult.Accepted {
@@ -317,12 +426,12 @@ func (n *fakeNode) SubmitImmediate(
 			return order, *n.immediateResult, nil
 		}
 		order.Status = domain.OrderStatusFilled
-		order.LockPrices = n.immediateResult.LockPrices
-		n.orders[order.ID] = order
+		order.Lock = n.immediateResult.Lock
+		n.orders[order.ExternalID] = order
 		return order, *n.immediateResult, nil
 	}
 	order.Status = domain.OrderStatusFilled
-	n.orders[order.ID] = order
+	n.orders[order.ExternalID] = order
 	return order, engine.ImmediateResult{
 		Accepted:            true,
 		SettlementLockPrice: "100",
@@ -332,7 +441,7 @@ func (n *fakeNode) SubmitImmediate(
 }
 
 func (n *fakeNode) ConfirmHeld(
-	_ context.Context, _ domain.TenantID, orderID int64,
+	_ context.Context, orderID domain.ExternalID,
 	approvalID string, _ domain.Caller, _ bool,
 ) (domain.Order, error) {
 	n.confirmCalls = append(n.confirmCalls, approvalID)
@@ -346,7 +455,7 @@ func (n *fakeNode) ConfirmHeld(
 }
 
 func (n *fakeNode) CancelHeld(
-	_ context.Context, _ domain.TenantID, orderID int64,
+	_ context.Context, orderID domain.ExternalID,
 	approvalID string, _ domain.Caller, _ bool,
 ) (domain.Order, error) {
 	n.cancelCalls = append(n.cancelCalls, approvalID)
@@ -371,7 +480,7 @@ func (n *fakeNode) ApplyExecutionReport(
 }
 
 func (n *fakeNode) GetOrder(
-	_ context.Context, _ domain.TenantID, id int64,
+	_ context.Context, id domain.ExternalID,
 ) (domain.OrderDetail, error) {
 	n.getOrderCount.Add(1)
 	if n.getOrderErr != nil {
@@ -381,49 +490,66 @@ func (n *fakeNode) GetOrder(
 	if !ok {
 		return domain.OrderDetail{}, domain.ErrNotFound
 	}
-	return domain.OrderDetail{Order: order}, nil
+	detail := domain.OrderDetail{Order: order}
+	if env, ok := n.approvals[id]; ok {
+		stamped := env
+		detail.Approval = &stamped
+	}
+	return detail, nil
 }
 
 func (n *fakeNode) PersistOrderApproval(
-	_ context.Context, _ node.Key, orderID int64, env domain.OrderApproval,
+	_ context.Context, _ node.Key, orderID domain.ExternalID, env domain.OrderApproval,
 ) error {
 	n.persistApprovalCalls = append(n.persistApprovalCalls, orderID)
-	if order, ok := n.orders[orderID]; ok && order.ApprovalToken == "" {
-		order.ApprovalToken = env.Token
-		order.ApprovalKeyID = env.KeyID
-		order.ApprovalAlg = env.Alg
-		order.ApprovalMode = env.Mode
-		order.ApprovalIssuedAt = env.IssuedAt
-		order.ApprovalExpiresAt = env.ExpiresAt
-		n.orders[orderID] = order
+	if n.approvals == nil {
+		n.approvals = make(map[domain.ExternalID]domain.OrderApproval)
+	}
+	// Write-once: a retry or later write never clobbers an already-issued envelope.
+	if _, ok := n.approvals[orderID]; !ok {
+		if _, exists := n.orders[orderID]; exists {
+			n.approvals[orderID] = env
+		}
 	}
 	return nil
 }
 
 func (n *fakeNode) ListOrders(
-	context.Context, domain.TenantID, domain.AccountID, domain.Source, int,
+	context.Context, domain.AccountID, domain.Source, int,
 ) ([]domain.Order, error) {
 	return nil, nil
 }
 
-func (n *fakeNode) CountOrders(context.Context, domain.TenantID) (int, error) {
+func (n *fakeNode) ListAllOrders(
+	context.Context, domain.AccountID, domain.Source,
+) ([]domain.Order, error) {
+	return nil, nil
+}
+
+func (n *fakeNode) CountOrders(context.Context) (int, error) {
 	return 0, nil
 }
 
 func (n *fakeNode) CountOrdersSince(
-	context.Context, domain.TenantID, time.Time,
+	context.Context, time.Time,
 ) (int, error) {
 	return 0, nil
 }
 
 func (n *fakeNode) ListOrderEvents(
-	context.Context, domain.TenantID, int64,
+	context.Context, domain.ExternalID,
 ) ([]domain.OrderEvent, error) {
 	return nil, nil
 }
 
 func (n *fakeNode) ListTrades(
-	context.Context, domain.TenantID, domain.AccountID, domain.Source, int,
+	context.Context, domain.AccountID, domain.Source, int,
+) ([]domain.Trade, error) {
+	return nil, nil
+}
+
+func (n *fakeNode) ListAllTrades(
+	context.Context, domain.AccountID, domain.Source,
 ) ([]domain.Trade, error) {
 	return nil, nil
 }
@@ -514,10 +640,10 @@ func (n *fakeNode) ListMarketDataInstances(
 }
 
 func (n *fakeNode) GetMarketDataInstance(
-	_ context.Context, id string,
+	_ context.Context, id domain.ExternalID,
 ) (domain.MarketDataInstance, bool, error) {
 	for _, instance := range n.mdInstances {
-		if instance.ID == id {
+		if instance.ExternalID == id {
 			return instance, true, nil
 		}
 	}
@@ -526,16 +652,19 @@ func (n *fakeNode) GetMarketDataInstance(
 
 func (n *fakeNode) CreateMarketDataInstance(
 	_ context.Context, instance domain.MarketDataInstance, _ domain.Caller,
-) error {
+) (domain.MarketDataInstance, error) {
+	if instance.ExternalID.IsZero() {
+		instance.ExternalID = n.newOrderExternalID()
+	}
 	n.mdInstances = append(n.mdInstances, instance)
-	return nil
+	return instance, nil
 }
 
 func (n *fakeNode) SetMarketDataInstanceEnabled(
-	_ context.Context, id string, enabled bool, _ domain.Caller,
+	_ context.Context, id domain.ExternalID, enabled bool, _ domain.Caller,
 ) error {
 	for i := range n.mdInstances {
-		if n.mdInstances[i].ID == id {
+		if n.mdInstances[i].ExternalID == id {
 			n.mdInstances[i].Enabled = enabled
 			return nil
 		}
@@ -544,10 +673,10 @@ func (n *fakeNode) SetMarketDataInstanceEnabled(
 }
 
 func (n *fakeNode) UpdateMarketDataInstanceSettings(
-	_ context.Context, id, label, credentials string, _ domain.Caller,
+	_ context.Context, id domain.ExternalID, label, credentials string, _ domain.Caller,
 ) error {
 	for i := range n.mdInstances {
-		if n.mdInstances[i].ID == id {
+		if n.mdInstances[i].ExternalID == id {
 			n.mdInstances[i].Label = label
 			n.mdInstances[i].Credentials = credentials
 			return nil
@@ -557,10 +686,10 @@ func (n *fakeNode) UpdateMarketDataInstanceSettings(
 }
 
 func (n *fakeNode) DeleteMarketDataInstance(
-	_ context.Context, id string, _ domain.Caller,
+	_ context.Context, id domain.ExternalID, _ bool, _ domain.Caller,
 ) error {
 	for i := range n.mdInstances {
-		if n.mdInstances[i].ID == id {
+		if n.mdInstances[i].ExternalID == id {
 			n.mdInstances = append(n.mdInstances[:i], n.mdInstances[i+1:]...)
 			return nil
 		}
@@ -569,9 +698,9 @@ func (n *fakeNode) DeleteMarketDataInstance(
 }
 
 func (n *fakeNode) ListMarketDataInstruments(
-	_ context.Context, instanceID string,
+	_ context.Context, instance domain.ExternalID,
 ) ([]domain.MarketDataInstrument, error) {
-	return n.mdInstruments[instanceID], nil
+	return n.mdInstruments[instance.String()], nil
 }
 
 func (n *fakeNode) UpsertMarketDataInstrument(
@@ -580,16 +709,18 @@ func (n *fakeNode) UpsertMarketDataInstrument(
 	if n.mdInstruments == nil {
 		n.mdInstruments = make(map[string][]domain.MarketDataInstrument)
 	}
-	n.mdInstruments[instrument.InstanceID] = append(n.mdInstruments[instrument.InstanceID], instrument)
+	key := instrument.Instance.String()
+	n.mdInstruments[key] = append(n.mdInstruments[key], instrument)
 	return nil
 }
 
 func (n *fakeNode) SetMarketDataInstrumentEnabled(
-	_ context.Context, instanceID, externalSymbol string, enabled bool, _ domain.Caller,
+	_ context.Context, instance domain.ExternalID, externalSymbol string, enabled bool, _ domain.Caller,
 ) error {
-	for i := range n.mdInstruments[instanceID] {
-		if n.mdInstruments[instanceID][i].ExternalSymbol == externalSymbol {
-			n.mdInstruments[instanceID][i].Enabled = enabled
+	key := instance.String()
+	for i := range n.mdInstruments[key] {
+		if n.mdInstruments[key][i].ExternalSymbol == externalSymbol {
+			n.mdInstruments[key][i].Enabled = enabled
 			return nil
 		}
 	}
@@ -597,12 +728,13 @@ func (n *fakeNode) SetMarketDataInstrumentEnabled(
 }
 
 func (n *fakeNode) DeleteMarketDataInstrument(
-	_ context.Context, instanceID, externalSymbol string, _ domain.Caller,
+	_ context.Context, instance domain.ExternalID, externalSymbol string, _ domain.Caller,
 ) error {
-	instruments := n.mdInstruments[instanceID]
+	key := instance.String()
+	instruments := n.mdInstruments[key]
 	for i := range instruments {
 		if instruments[i].ExternalSymbol == externalSymbol {
-			n.mdInstruments[instanceID] = append(instruments[:i], instruments[i+1:]...)
+			n.mdInstruments[key] = append(instruments[:i], instruments[i+1:]...)
 			return nil
 		}
 	}
@@ -610,14 +742,14 @@ func (n *fakeNode) DeleteMarketDataInstrument(
 }
 
 func (n *fakeNode) ListMarketDataQuotes(
-	_ context.Context, instanceID string,
+	_ context.Context, instance domain.ExternalID,
 ) ([]domain.MarketDataQuote, error) {
-	if instanceID == "" {
+	if instance.IsZero() {
 		return n.mdQuotes, nil
 	}
 	out := make([]domain.MarketDataQuote, 0)
 	for _, quote := range n.mdQuotes {
-		if quote.InstanceID == instanceID {
+		if quote.Instance == instance {
 			out = append(out, quote)
 		}
 	}
@@ -697,29 +829,30 @@ func (r *fakeMarketDataRuntime) PushManual(
 }
 
 func newTestService() (*backend.Service, *fakeNode) {
-	fn := &fakeNode{orders: make(map[int64]domain.Order)}
+	fn := &fakeNode{orders: make(map[domain.ExternalID]domain.Order)}
 	return backend.New(&fakeRouter{node: fn}, nil, nil), fn
 }
 
 func newTestServiceWithMarketDataRuntime(
 	md backend.MarketDataRuntime,
 ) (*backend.Service, *fakeNode) {
-	fn := &fakeNode{orders: make(map[int64]domain.Order)}
+	fn := &fakeNode{orders: make(map[domain.ExternalID]domain.Order)}
 	return backend.New(&fakeRouter{node: fn}, md, nil), fn
 }
 
 // newTestServiceWithSigner builds a service with a fake signer for the approval
 // flow tests.
 func newTestServiceWithSigner(signer backend.SigningService) (*backend.Service, *fakeNode) {
-	fn := &fakeNode{orders: make(map[int64]domain.Order)}
+	fn := &fakeNode{orders: make(map[domain.ExternalID]domain.Order)}
 	return backend.New(&fakeRouter{node: fn}, nil, signer), fn
 }
 
 func TestService_ApplyExecutionReportTerminalRequiresForce(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService()
-	fn.orders[4] = domain.Order{
-		ID:         4,
+	orderID := mdID("order-4")
+	fn.orders[orderID] = domain.Order{
+		ExternalID: orderID,
 		Account:    "acc-1",
 		BaseAsset:  "AAPL",
 		QuoteAsset: "USD",
@@ -727,7 +860,7 @@ func TestService_ApplyExecutionReportTerminalRequiresForce(t *testing.T) {
 		Status:     domain.OrderStatusFilled,
 	}
 	report := domain.ExecutionReportInput{
-		OrderID:      4,
+		Order:        orderID,
 		Account:      "acc-1",
 		BaseAsset:    "AAPL",
 		QuoteAsset:   "USD",
@@ -761,7 +894,7 @@ func TestService_ExportBackupRoutesScopeCallerAndFilename(t *testing.T) {
 	fn.backupArchive = backup.NewArchive(
 		createdAt,
 		"test",
-		2,
+		backup.RealmLabel{Code: "default"},
 		backup.Scope{All: true},
 		backup.Data{},
 	)
@@ -997,22 +1130,25 @@ func TestService_CreateAccountValidates(t *testing.T) {
 	}
 }
 
-func TestService_CheckOrderValidatesBeforeRouting(t *testing.T) {
+func TestService_CheckOrderForwardsWithoutFormatValidation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	bad := []domain.OrderProbe{
+	// Officer no longer pre-validates the probe account/asset format; the engine
+	// seam parses and rejects bad values downstream. Every probe now reaches the
+	// node, including ones Officer used to reject (empty/interior-space asset).
+	probes := []domain.OrderProbe{
 		{Account: "", BaseAsset: "AAPL", QuoteAsset: "USD"},
 		{Account: "acc-1", BaseAsset: "", QuoteAsset: "USD"},
 		{Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "bad asset"},
 	}
-	for _, probe := range bad {
+	for _, probe := range probes {
 		svc, fn := newTestService()
-		if _, err := svc.CheckOrder(ctx, probe); !errors.Is(err, domain.ErrInvalid) {
-			t.Fatalf("want ErrInvalid for %+v, got %v", probe, err)
+		if _, err := svc.CheckOrder(ctx, probe); err != nil {
+			t.Fatalf("CheckOrder %+v: unexpected error: %v", probe, err)
 		}
-		if len(fn.checkProbes) != 0 {
-			t.Fatalf("invalid probe must not reach the node")
+		if len(fn.checkProbes) != 1 {
+			t.Fatalf("probe must reach the node, got %d calls", len(fn.checkProbes))
 		}
 	}
 }
@@ -1083,18 +1219,15 @@ func TestService_PutLimitValidatesBeforeRouting(t *testing.T) {
 
 	// account scope on order_size_limit is not allowed - validation must reject
 	// before the node is touched.
-	bad := domain.Limit{
-		Target: domain.LimitTarget{
-			Policy:  domain.PolicyOrderSizeLimit,
-			Scope:   domain.ScopeAccount,
-			Account: "acc-1",
-		},
-		Values: []domain.LimitValue{{Kind: domain.KindMaxQuantity, Value: "1"}},
+	bad := domain.LimitOrderSize{
+		Scope:       domain.ScopeAccount,
+		Account:     "acc-1",
+		MaxQuantity: "1",
 	}
-	if err := svc.PutLimit(ctx, bad); !errors.Is(err, domain.ErrInvalid) {
+	if err := svc.PutOrderSizeLimit(ctx, bad); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid, got %v", err)
 	}
-	if len(fn.putLimitCalls) != 0 {
+	if len(fn.putOrderSizeLimitCalls) != 0 {
 		t.Fatalf("invalid limit must not reach the node")
 	}
 }
@@ -1105,51 +1238,42 @@ func TestService_PutLimitAcceptsNonExistentAccount(t *testing.T) {
 	ctx := context.Background()
 
 	// Account "acc-new" does not exist in the fake node (getAccountErr is not set,
-	// but no account record exists either). PutLimit must succeed regardless: a
+	// but no account record exists either). PutRateLimit must succeed regardless: a
 	// policy rule may be created before the account is ever registered.
-	limit := domain.Limit{
-		Target: domain.LimitTarget{
-			Policy:  domain.PolicyRateLimit,
-			Scope:   domain.ScopeAccountAsset,
-			Account: "acc-new",
-			Asset:   "AAPL",
-		},
-		Values: []domain.LimitValue{
-			{Kind: domain.KindMaxOrders, Value: "100"},
-			{Kind: domain.KindWindow, Value: "1s"},
-		},
+	limit := domain.LimitRate{
+		Scope:     domain.ScopeAccountAsset,
+		Account:   "acc-new",
+		Asset:     "AAPL",
+		MaxOrders: 100,
+		Window:    time.Second,
 	}
-	if err := svc.PutLimit(ctx, limit); err != nil {
-		t.Fatalf("PutLimit for non-existent account: %v", err)
+	if err := svc.PutRateLimit(ctx, limit); err != nil {
+		t.Fatalf("PutRateLimit for non-existent account: %v", err)
 	}
-	if len(fn.putLimitCalls) != 1 {
-		t.Fatalf("want 1 PutLimit call, got %d", len(fn.putLimitCalls))
+	if len(fn.putRateLimitCalls) != 1 {
+		t.Fatalf("want 1 PutRateLimit call, got %d", len(fn.putRateLimitCalls))
 	}
 }
 
-func TestService_PutLimitSetsDefaultTenant(t *testing.T) {
+func TestService_PutLimitForwardsTypedBarrier(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService()
 	ctx := context.Background()
 
-	limit := domain.Limit{
-		Target: domain.LimitTarget{
-			Policy: domain.PolicyRateLimit,
-			Scope:  domain.ScopeBroker,
-		},
-		Values: []domain.LimitValue{
-			{Kind: domain.KindMaxOrders, Value: "100"},
-			{Kind: domain.KindWindow, Value: "1s"},
-		},
+	limit := domain.LimitRate{
+		Scope:     domain.ScopeBroker,
+		MaxOrders: 100,
+		Window:    time.Second,
 	}
-	if err := svc.PutLimit(ctx, limit); err != nil {
-		t.Fatalf("PutLimit: %v", err)
+	if err := svc.PutRateLimit(ctx, limit); err != nil {
+		t.Fatalf("PutRateLimit: %v", err)
 	}
-	if len(fn.putLimitCalls) != 1 {
-		t.Fatalf("want one PutLimit call")
+	if len(fn.putRateLimitCalls) != 1 {
+		t.Fatalf("want one PutRateLimit call")
 	}
-	if fn.putLimitCalls[0].Target.Tenant != domain.DefaultTenant {
-		t.Fatalf("tenant not defaulted: %q", fn.putLimitCalls[0].Target.Tenant)
+	if fn.putRateLimitCalls[0].Scope != domain.ScopeBroker ||
+		fn.putRateLimitCalls[0].MaxOrders != 100 {
+		t.Fatalf("barrier not forwarded: %+v", fn.putRateLimitCalls[0])
 	}
 }
 
@@ -1161,18 +1285,13 @@ func TestService_PutLimitReconnectsMarketDataOnRebuild(t *testing.T) {
 	fn.restoreSink = sink
 	ctx := context.Background()
 
-	limit := domain.Limit{
-		Target: domain.LimitTarget{
-			Policy: domain.PolicyRateLimit,
-			Scope:  domain.ScopeBroker,
-		},
-		Values: []domain.LimitValue{
-			{Kind: domain.KindMaxOrders, Value: "100"},
-			{Kind: domain.KindWindow, Value: "1s"},
-		},
+	limit := domain.LimitRate{
+		Scope:     domain.ScopeBroker,
+		MaxOrders: 100,
+		Window:    time.Second,
 	}
-	if err := svc.PutLimit(ctx, limit); err != nil {
-		t.Fatalf("PutLimit: %v", err)
+	if err := svc.PutRateLimit(ctx, limit); err != nil {
+		t.Fatalf("PutRateLimit: %v", err)
 	}
 	if md.stops != 1 || md.restarts != 1 || md.sink != sink {
 		t.Fatalf("market-data reconnect = stops:%d restarts:%d sink:%T",
@@ -1186,7 +1305,7 @@ func TestService_DeleteLimitValidatesTarget(t *testing.T) {
 	ctx := context.Background()
 
 	// broker scope is not allowed for pnl_bounds; target validation must reject.
-	bad := domain.LimitTarget{
+	bad := node.LimitTarget{
 		Policy: domain.PolicyPnlBoundsKillSwitch,
 		Scope:  domain.ScopeBroker,
 	}
@@ -1197,7 +1316,7 @@ func TestService_DeleteLimitValidatesTarget(t *testing.T) {
 		t.Fatalf("invalid target must not reach the node")
 	}
 
-	good := domain.LimitTarget{
+	good := node.LimitTarget{
 		Policy: domain.PolicyRateLimit,
 		Scope:  domain.ScopeBroker,
 	}
@@ -1207,8 +1326,8 @@ func TestService_DeleteLimitValidatesTarget(t *testing.T) {
 	if len(fn.deleteLimitCalls) != 1 {
 		t.Fatalf("valid delete must route to node")
 	}
-	if fn.deleteLimitCalls[0].Tenant != domain.DefaultTenant {
-		t.Fatalf("tenant not defaulted on delete")
+	if fn.deleteLimitCalls[0].Policy != domain.PolicyRateLimit {
+		t.Fatalf("delete target not forwarded: %+v", fn.deleteLimitCalls[0])
 	}
 }
 
@@ -1220,7 +1339,7 @@ func TestService_DeleteLimitReconnectsMarketDataOnRebuild(t *testing.T) {
 	fn.restoreSink = sink
 	ctx := context.Background()
 
-	target := domain.LimitTarget{
+	target := node.LimitTarget{
 		Policy: domain.PolicyRateLimit,
 		Scope:  domain.ScopeBroker,
 	}
@@ -1257,9 +1376,11 @@ func TestService_BlockAccountValidates(t *testing.T) {
 func TestService_AggregatesReads(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService()
-	fn.accounts = []domain.Account{{ID: "a"}, {ID: "b"}}
-	fn.limits = []domain.Limit{{Target: domain.LimitTarget{Policy: domain.PolicyRateLimit}}}
-	fn.audit = []domain.AuditRow{{ID: 1}}
+	fn.accounts = []domain.Account{{Code: "a"}, {Code: "b"}}
+	fn.limits = node.AccountLimits{
+		RateLimits: []domain.LimitRate{{Scope: domain.ScopeBroker}},
+	}
+	fn.audit = []domain.AuditRow{{ExternalID: domain.ExternalID{1}}}
 	ctx := context.Background()
 
 	accounts, err := svc.ListAccounts(ctx)
@@ -1267,8 +1388,8 @@ func TestService_AggregatesReads(t *testing.T) {
 		t.Fatalf("ListAccounts: %v len=%d", err, len(accounts))
 	}
 	limits, err := svc.ListLimits(ctx, "")
-	if err != nil || len(limits) != 1 {
-		t.Fatalf("ListLimits: %v len=%d", err, len(limits))
+	if err != nil || len(limits.RateLimits) != 1 {
+		t.Fatalf("ListLimits: %v rate=%d", err, len(limits.RateLimits))
 	}
 	rows, err := svc.ListAudit(ctx, 100)
 	if err != nil || len(rows) != 1 {
@@ -1331,29 +1452,29 @@ func TestService_ListMarketDataBuildsStatus(t *testing.T) {
 	svc, fn := newTestService()
 	now := time.Now().UTC()
 	fn.mdInstances = []domain.MarketDataInstance{
-		{ID: "mock-1", Type: domain.MarketDataProviderMock, Enabled: true},
-		{ID: "mock-2", Type: domain.MarketDataProviderMock, Enabled: false},
+		{ExternalID: mdID("mock-1"), Provider: domain.MarketDataProviderMock, Enabled: true},
+		{ExternalID: mdID("mock-2"), Provider: domain.MarketDataProviderMock, Enabled: false},
 	}
 	fn.mdInstruments = map[string][]domain.MarketDataInstrument{
-		"mock-1": {
+		mdID("mock-1").String(): {
 			{
-				InstanceID:     "mock-1",
+				Instance:       mdID("mock-1"),
 				ExternalSymbol: "AAPL",
 				BaseAsset:      "AAPL",
 				QuoteAsset:     "USD",
 				Enabled:        true,
 			},
 			{
-				InstanceID:     "mock-1",
+				Instance:       mdID("mock-1"),
 				ExternalSymbol: "MSFT",
 				BaseAsset:      "MSFT",
 				QuoteAsset:     "USD",
 				Enabled:        true,
 			},
 		},
-		"mock-2": {
+		mdID("mock-2").String(): {
 			{
-				InstanceID:     "mock-2",
+				Instance:       mdID("mock-2"),
 				ExternalSymbol: "TSLA",
 				BaseAsset:      "TSLA",
 				QuoteAsset:     "USD",
@@ -1363,7 +1484,7 @@ func TestService_ListMarketDataBuildsStatus(t *testing.T) {
 	}
 	fn.mdQuotes = []domain.MarketDataQuote{
 		{
-			InstanceID:     "mock-1",
+			Instance:       mdID("mock-1"),
 			ExternalSymbol: "AAPL",
 			BaseAsset:      "AAPL",
 			QuoteAsset:     "USD",
@@ -1442,12 +1563,12 @@ func TestService_ListMarketDataFlagsStaleQuote(t *testing.T) {
 	svc, fn := newTestService()
 	now := time.Now().UTC()
 	fn.mdInstances = []domain.MarketDataInstance{
-		{ID: "mock-1", Type: domain.MarketDataProviderMock, Enabled: true},
+		{ExternalID: mdID("mock-1"), Provider: domain.MarketDataProviderMock, Enabled: true},
 	}
 	fn.mdInstruments = map[string][]domain.MarketDataInstrument{
-		"mock-1": {
+		mdID("mock-1").String(): {
 			{
-				InstanceID:     "mock-1",
+				Instance:       mdID("mock-1"),
 				ExternalSymbol: "AAPL",
 				BaseAsset:      "AAPL",
 				QuoteAsset:     "USD",
@@ -1457,7 +1578,7 @@ func TestService_ListMarketDataFlagsStaleQuote(t *testing.T) {
 	}
 	fn.mdQuotes = []domain.MarketDataQuote{
 		{
-			InstanceID:     "mock-1",
+			Instance:       mdID("mock-1"),
 			ExternalSymbol: "AAPL",
 			BaseAsset:      "AAPL",
 			QuoteAsset:     "USD",
@@ -1488,11 +1609,11 @@ func TestService_ListMarketDataDetectsRestartRequired(t *testing.T) {
 	t.Parallel()
 	md := &fakeMarketDataRuntime{
 		statuses: map[string]marketdata.InstanceRuntimeStatus{
-			"mock-1": {State: marketdata.StateOK},
+			mdID("mock-1").String(): {State: marketdata.StateOK},
 		},
 		applied: map[string]marketdata.AppliedInstanceConfig{
-			"mock-1": {
-				Type: domain.MarketDataProviderMock,
+			mdID("mock-1").String(): {
+				Provider: domain.MarketDataProviderMock,
 				Subscriptions: []marketdata.Subscription{
 					{External: "AAPL", Base: "AAPL", Quote: "USD"},
 				},
@@ -1501,19 +1622,19 @@ func TestService_ListMarketDataDetectsRestartRequired(t *testing.T) {
 	}
 	svc, fn := newTestServiceWithMarketDataRuntime(md)
 	fn.mdInstances = []domain.MarketDataInstance{
-		{ID: "mock-1", Type: domain.MarketDataProviderMock, Enabled: true},
+		{ExternalID: mdID("mock-1"), Provider: domain.MarketDataProviderMock, Enabled: true},
 	}
 	fn.mdInstruments = map[string][]domain.MarketDataInstrument{
-		"mock-1": {
+		mdID("mock-1").String(): {
 			{
-				InstanceID:     "mock-1",
+				Instance:       mdID("mock-1"),
 				ExternalSymbol: "AAPL",
 				BaseAsset:      "AAPL",
 				QuoteAsset:     "USD",
 				Enabled:        true,
 			},
 			{
-				InstanceID:     "mock-1",
+				Instance:       mdID("mock-1"),
 				ExternalSymbol: "MSFT",
 				BaseAsset:      "MSFT",
 				QuoteAsset:     "USD",
@@ -1535,27 +1656,27 @@ func TestService_ListMarketDataSurfacesUpdateInterval(t *testing.T) {
 	t.Parallel()
 	md := &fakeMarketDataRuntime{
 		statuses: map[string]marketdata.InstanceRuntimeStatus{
-			"mock-1": {State: marketdata.StateOK},
+			mdID("mock-1").String(): {State: marketdata.StateOK},
 		},
 		intervals: map[string]time.Duration{
-			"mock-1\x00AAPL": 12 * time.Second,
+			mdID("mock-1").String() + "\x00AAPL": 12 * time.Second,
 		},
 	}
 	svc, fn := newTestServiceWithMarketDataRuntime(md)
 	fn.mdInstances = []domain.MarketDataInstance{
-		{ID: "mock-1", Type: domain.MarketDataProviderMock, Enabled: true},
+		{ExternalID: mdID("mock-1"), Provider: domain.MarketDataProviderMock, Enabled: true},
 	}
 	fn.mdInstruments = map[string][]domain.MarketDataInstrument{
-		"mock-1": {
+		mdID("mock-1").String(): {
 			{
-				InstanceID:     "mock-1",
+				Instance:       mdID("mock-1"),
 				ExternalSymbol: "AAPL",
 				BaseAsset:      "AAPL",
 				QuoteAsset:     "USD",
 				Enabled:        true,
 			},
 			{
-				InstanceID:     "mock-1",
+				Instance:       mdID("mock-1"),
 				ExternalSymbol: "MSFT",
 				BaseAsset:      "MSFT",
 				QuoteAsset:     "USD",
@@ -1582,14 +1703,14 @@ func TestService_ListMarketDataSurfacesUpdateInterval(t *testing.T) {
 	}
 }
 
-func TestService_CreateMarketDataInstanceGeneratesIDAndDefaultLabel(t *testing.T) {
+func TestService_CreateMarketDataInstanceGeneratesExternalIDAndDefaultLabel(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService()
 
-	err := svc.CreateMarketDataInstance(context.Background(), domain.MarketDataInstance{
-		ID:      "operator-supplied",
-		Type:    domain.MarketDataProviderBinance,
-		Enabled: true,
+	// With no supplied id the store mints one and returns it.
+	created, err := svc.CreateMarketDataInstance(context.Background(), domain.MarketDataInstance{
+		Provider: domain.MarketDataProviderBinance,
+		Enabled:  true,
 	})
 	if err != nil {
 		t.Fatalf("CreateMarketDataInstance: %v", err)
@@ -1598,11 +1719,38 @@ func TestService_CreateMarketDataInstanceGeneratesIDAndDefaultLabel(t *testing.T
 		t.Fatalf("created instances = %d, want 1", len(fn.mdInstances))
 	}
 	got := fn.mdInstances[0]
-	if got.ID == "" || got.ID == "operator-supplied" {
-		t.Fatalf("instance ID = %q, want generated internal id", got.ID)
+	if got.ExternalID.IsZero() {
+		t.Fatalf("instance external id is zero, want a generated id")
 	}
-	if got.Type != domain.MarketDataProviderBinance || got.Label != "Binance" || !got.Enabled {
+	if created.ExternalID != got.ExternalID {
+		t.Fatalf("returned external id = %q, want stored %q", created.ExternalID, got.ExternalID)
+	}
+	if got.Provider != domain.MarketDataProviderBinance || got.Label != "Binance" || !got.Enabled {
 		t.Fatalf("created instance = %+v, want Binance default label and enabled", got)
+	}
+}
+
+func TestService_CreateMarketDataInstanceHonorsSuppliedExternalID(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService()
+
+	supplied := mdID("operator-supplied")
+	created, err := svc.CreateMarketDataInstance(context.Background(), domain.MarketDataInstance{
+		ExternalID: supplied,
+		Provider:   domain.MarketDataProviderBinance,
+		Enabled:    true,
+	})
+	if err != nil {
+		t.Fatalf("CreateMarketDataInstance: %v", err)
+	}
+	if len(fn.mdInstances) != 1 {
+		t.Fatalf("created instances = %d, want 1", len(fn.mdInstances))
+	}
+	if fn.mdInstances[0].ExternalID != supplied {
+		t.Fatalf("stored external id = %q, want supplied %q", fn.mdInstances[0].ExternalID, supplied)
+	}
+	if created.ExternalID != supplied {
+		t.Fatalf("returned external id = %q, want supplied %q", created.ExternalID, supplied)
 	}
 }
 
@@ -1610,8 +1758,8 @@ func TestService_CreateMarketDataInstancePassesCredentials(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService()
 
-	err := svc.CreateMarketDataInstance(context.Background(), domain.MarketDataInstance{
-		Type: domain.MarketDataProviderAlpaca,
+	_, err := svc.CreateMarketDataInstance(context.Background(), domain.MarketDataInstance{
+		Provider: domain.MarketDataProviderAlpaca,
 		Credentials: `{
 			"apiKey": "key",
 			"apiSecret": "secret"
@@ -1632,8 +1780,8 @@ func TestService_CreateMarketDataInstanceRejectsInvalidCredentials(t *testing.T)
 	t.Parallel()
 	svc, fn := newTestService()
 
-	err := svc.CreateMarketDataInstance(context.Background(), domain.MarketDataInstance{
-		Type: domain.MarketDataProviderAlpaca,
+	_, err := svc.CreateMarketDataInstance(context.Background(), domain.MarketDataInstance{
+		Provider: domain.MarketDataProviderAlpaca,
 		Credentials: `{
 			"apiKey": "key"
 		}`,
@@ -1650,12 +1798,12 @@ func TestService_CreateMarketDataInstanceRejectsDuplicateLabel(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService()
 	fn.mdInstances = []domain.MarketDataInstance{
-		{ID: "bn-1", Type: domain.MarketDataProviderBinance, Label: "Binance"},
+		{ExternalID: mdID("bn-1"), Provider: domain.MarketDataProviderBinance, Label: "Binance"},
 	}
 
-	err := svc.CreateMarketDataInstance(context.Background(), domain.MarketDataInstance{
-		Type:  domain.MarketDataProviderMock,
-		Label: " binance ",
+	_, err := svc.CreateMarketDataInstance(context.Background(), domain.MarketDataInstance{
+		Provider: domain.MarketDataProviderMock,
+		Label:    " binance ",
 	})
 	if !errors.Is(err, domain.ErrAlreadyExists) {
 		t.Fatalf("CreateMarketDataInstance error = %v, want ErrAlreadyExists", err)
@@ -1670,8 +1818,8 @@ func TestService_UpdateMarketDataInstanceSettingsMergesBlankSecret(t *testing.T)
 	svc, fn := newTestService()
 	fn.mdInstances = []domain.MarketDataInstance{
 		{
-			ID:          "alpaca-1",
-			Type:        domain.MarketDataProviderAlpaca,
+			ExternalID:  mdID("alpaca-1"),
+			Provider:    domain.MarketDataProviderAlpaca,
 			Label:       "Alpaca",
 			Credentials: `{"apiKey":"old-key","apiSecret":"old-secret"}`,
 		},
@@ -1679,7 +1827,7 @@ func TestService_UpdateMarketDataInstanceSettingsMergesBlankSecret(t *testing.T)
 
 	err := svc.UpdateMarketDataInstanceSettings(
 		context.Background(),
-		"alpaca-1",
+		mdID("alpaca-1").String(),
 		"Alpaca live",
 		`{"apiKey":"new-key","apiSecret":""}`,
 	)
@@ -1703,12 +1851,12 @@ func TestService_UpdateMarketDataInstanceSettingsRejectsDuplicateLabel(t *testin
 	t.Parallel()
 	svc, fn := newTestService()
 	fn.mdInstances = []domain.MarketDataInstance{
-		{ID: "a", Type: domain.MarketDataProviderBinance, Label: "Primary"},
-		{ID: "b", Type: domain.MarketDataProviderBinance, Label: "Backup"},
+		{ExternalID: mdID("a"), Provider: domain.MarketDataProviderBinance, Label: "Primary"},
+		{ExternalID: mdID("b"), Provider: domain.MarketDataProviderBinance, Label: "Backup"},
 	}
 
 	err := svc.UpdateMarketDataInstanceSettings(
-		context.Background(), "b", "primary", "",
+		context.Background(), mdID("b").String(), "primary", "",
 	)
 	if !errors.Is(err, domain.ErrAlreadyExists) {
 		t.Fatalf("UpdateMarketDataInstanceSettings error = %v, want ErrAlreadyExists", err)
@@ -1722,11 +1870,11 @@ func TestService_ListMarketDataManualPriceDoesNotRequireRestart(t *testing.T) {
 	t.Parallel()
 	md := &fakeMarketDataRuntime{
 		statuses: map[string]marketdata.InstanceRuntimeStatus{
-			"byo-1": {State: marketdata.StateOK},
+			mdID("byo-1").String(): {State: marketdata.StateOK},
 		},
 		applied: map[string]marketdata.AppliedInstanceConfig{
-			"byo-1": {
-				Type: domain.MarketDataProviderBYO,
+			mdID("byo-1").String(): {
+				Provider: domain.MarketDataProviderBYO,
 				Subscriptions: []marketdata.Subscription{
 					{External: "USDT/USD", Base: "USDT", Quote: "USD"},
 				},
@@ -1735,12 +1883,12 @@ func TestService_ListMarketDataManualPriceDoesNotRequireRestart(t *testing.T) {
 	}
 	svc, fn := newTestServiceWithMarketDataRuntime(md)
 	fn.mdInstances = []domain.MarketDataInstance{
-		{ID: "byo-1", Type: domain.MarketDataProviderBYO, Enabled: true},
+		{ExternalID: mdID("byo-1"), Provider: domain.MarketDataProviderBYO, Enabled: true},
 	}
 	fn.mdInstruments = map[string][]domain.MarketDataInstrument{
-		"byo-1": {
+		mdID("byo-1").String(): {
 			{
-				InstanceID:     "byo-1",
+				Instance:       mdID("byo-1"),
 				ExternalSymbol: "USDT/USD",
 				BaseAsset:      "USDT",
 				QuoteAsset:     "USD",
@@ -1763,13 +1911,13 @@ func TestService_ListMarketDataSurfacesVerifyCapability(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService()
 	fn.mdInstances = []domain.MarketDataInstance{
-		{ID: "mock-1", Type: domain.MarketDataProviderMock, Enabled: true},
-		{ID: "bn-1", Type: domain.MarketDataProviderBinance, Enabled: false},
-		{ID: "ib-1", Type: domain.MarketDataProviderIB, Enabled: false},
-		{ID: "kraken-1", Type: domain.MarketDataProviderKraken, Enabled: false},
-		{ID: "coinbase-1", Type: domain.MarketDataProviderCoinbase, Enabled: false},
-		{ID: "okx-1", Type: domain.MarketDataProviderOKX, Enabled: false},
-		{ID: "bybit-1", Type: domain.MarketDataProviderBybit, Enabled: false},
+		{ExternalID: mdID("mock-1"), Provider: domain.MarketDataProviderMock, Enabled: true},
+		{ExternalID: mdID("bn-1"), Provider: domain.MarketDataProviderBinance, Enabled: false},
+		{ExternalID: mdID("ib-1"), Provider: domain.MarketDataProviderIB, Enabled: false},
+		{ExternalID: mdID("kraken-1"), Provider: domain.MarketDataProviderKraken, Enabled: false},
+		{ExternalID: mdID("coinbase-1"), Provider: domain.MarketDataProviderCoinbase, Enabled: false},
+		{ExternalID: mdID("okx-1"), Provider: domain.MarketDataProviderOKX, Enabled: false},
+		{ExternalID: mdID("bybit-1"), Provider: domain.MarketDataProviderBybit, Enabled: false},
 	}
 
 	status, err := svc.ListMarketData(context.Background())
@@ -1778,22 +1926,22 @@ func TestService_ListMarketDataSurfacesVerifyCapability(t *testing.T) {
 	}
 	byID := make(map[string]backend.MarketDataInstanceStatus, len(status.Instances))
 	for _, instance := range status.Instances {
-		byID[instance.Instance.ID] = instance
+		byID[instance.Instance.ExternalID.String()] = instance
 	}
-	if byID["mock-1"].VerifiesSymbols {
+	if byID[mdID("mock-1").String()].VerifiesSymbols {
 		t.Fatalf("mock instance VerifiesSymbols = true, want false")
 	}
-	if byID["ib-1"].VerifiesSymbols {
+	if byID[mdID("ib-1").String()].VerifiesSymbols {
 		t.Fatalf("ib instance VerifiesSymbols = true, want false")
 	}
 	// Binance is verify-capable even though the instance is disabled: the flag is
 	// provider-derived, not runtime-derived.
-	if !byID["bn-1"].VerifiesSymbols {
+	if !byID[mdID("bn-1").String()].VerifiesSymbols {
 		t.Fatalf("binance instance VerifiesSymbols = false, want true")
 	}
-	for _, id := range []string{"kraken-1", "coinbase-1", "okx-1", "bybit-1"} {
-		if !byID[id].VerifiesSymbols {
-			t.Fatalf("%s VerifiesSymbols = false, want true", id)
+	for _, label := range []string{"kraken-1", "coinbase-1", "okx-1", "bybit-1"} {
+		if !byID[mdID(label).String()].VerifiesSymbols {
+			t.Fatalf("%s VerifiesSymbols = false, want true", label)
 		}
 	}
 }
@@ -1802,10 +1950,10 @@ func TestService_VerifyMarketDataSymbolUnsupported(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService()
 	fn.mdInstances = []domain.MarketDataInstance{
-		{ID: "mock-1", Type: domain.MarketDataProviderMock, Enabled: true},
+		{ExternalID: mdID("mock-1"), Provider: domain.MarketDataProviderMock, Enabled: true},
 	}
 
-	got, err := svc.VerifyMarketDataSymbol(context.Background(), "mock-1", "AAPL")
+	got, err := svc.VerifyMarketDataSymbol(context.Background(), mdID("mock-1").String(), "AAPL")
 	if err != nil {
 		t.Fatalf("VerifyMarketDataSymbol: %v", err)
 	}
@@ -1818,7 +1966,7 @@ func TestService_VerifyMarketDataSymbolUnknownInstance(t *testing.T) {
 	t.Parallel()
 	svc, _ := newTestService()
 
-	_, err := svc.VerifyMarketDataSymbol(context.Background(), "missing", "AAPL")
+	_, err := svc.VerifyMarketDataSymbol(context.Background(), mdID("missing").String(), "AAPL")
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("VerifyMarketDataSymbol(missing) err = %v, want ErrNotFound", err)
 	}
@@ -1828,11 +1976,11 @@ func TestService_SearchMarketDataSymbolsUnsupported(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService()
 	fn.mdInstances = []domain.MarketDataInstance{
-		{ID: "mock-1", Type: domain.MarketDataProviderMock, Enabled: true},
+		{ExternalID: mdID("mock-1"), Provider: domain.MarketDataProviderMock, Enabled: true},
 	}
 
 	got, err := svc.SearchMarketDataSymbols(
-		context.Background(), "mock-1",
+		context.Background(), mdID("mock-1").String(),
 		backend.MarketDataSymbolSearchInput{Query: "AAPL"},
 	)
 	if err != nil {
@@ -1848,12 +1996,86 @@ func TestService_SearchMarketDataSymbolsNotFound(t *testing.T) {
 	svc, _ := newTestService()
 
 	_, err := svc.SearchMarketDataSymbols(
-		context.Background(), "missing",
+		context.Background(), mdID("missing").String(),
 		backend.MarketDataSymbolSearchInput{Query: "AAPL"},
 	)
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("SearchMarketDataSymbols(missing) err = %v, want ErrNotFound", err)
 	}
+}
+
+func sampleAdjustmentRequest() domain.AdjustmentRequest {
+	return domain.AdjustmentRequest{
+		Asset: "USD",
+		Balance: &domain.AdjustmentAmount{
+			Mode: domain.AdjustmentModeDelta, Value: "100",
+		},
+	}
+}
+
+// TestService_ApplyAdjustmentHonorsSuppliedExternalID covers the user-create
+// adjustment path: a caller-supplied external id is threaded onto the record and
+// returned verbatim.
+func TestService_ApplyAdjustmentHonorsSuppliedExternalID(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService()
+
+	supplied := mdID("supplied-adj-id")
+	rec, err := svc.ApplyAdjustment(
+		context.Background(), "acc-1", supplied, sampleAdjustmentRequest())
+	if err != nil {
+		t.Fatalf("ApplyAdjustment: %v", err)
+	}
+	if len(fn.adjustmentExternalIDs) != 1 || fn.adjustmentExternalIDs[0] != supplied {
+		t.Fatalf("threaded ids = %+v, want [%q]", fn.adjustmentExternalIDs, supplied)
+	}
+	if rec.ExternalID != supplied {
+		t.Fatalf("returned record id = %q, want supplied %q", rec.ExternalID, supplied)
+	}
+}
+
+// TestService_ApplyAdjustmentGeneratesExternalIDWhenAbsent covers the absent-id
+// path: a zero id is forwarded so the store mints one.
+func TestService_ApplyAdjustmentGeneratesExternalIDWhenAbsent(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService()
+
+	rec, err := svc.ApplyAdjustment(
+		context.Background(), "acc-1", domain.ExternalID{}, sampleAdjustmentRequest())
+	if err != nil {
+		t.Fatalf("ApplyAdjustment: %v", err)
+	}
+	if len(fn.adjustmentExternalIDs) != 1 || !fn.adjustmentExternalIDs[0].IsZero() {
+		t.Fatalf("threaded ids = %+v, want one zero id", fn.adjustmentExternalIDs)
+	}
+	if rec.ExternalID.IsZero() {
+		t.Fatalf("returned record id is zero, want a generated id")
+	}
+}
+
+// TestService_ApplyAdjustmentDuplicateSuppliedIDConflicts covers the conflict
+// propagation: a duplicate supplied id surfaces domain.ErrAlreadyExists
+// unchanged from the store.
+func TestService_ApplyAdjustmentDuplicateSuppliedIDConflicts(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService()
+	fn.adjustmentErr = fmt.Errorf("append adjustment: %w", domain.ErrAlreadyExists)
+
+	_, err := svc.ApplyAdjustment(
+		context.Background(), "acc-1", mdID("dup-adj-id"), sampleAdjustmentRequest())
+	if !errors.Is(err, domain.ErrAlreadyExists) {
+		t.Fatalf("duplicate supplied id error = %v, want ErrAlreadyExists", err)
+	}
+}
+
+// mdID derives a deterministic, distinct external id from a short label so a
+// test can address a market-data instance by a stable handle. Market-data
+// instances are dictionary rows addressed by their opaque external id, not a
+// human string, so fixtures mint a real ExternalID rather than a synthetic id.
+func mdID(label string) domain.ExternalID {
+	var id domain.ExternalID
+	copy(id[:], label)
+	return id
 }
 
 func containsProviderType(providers []backend.MarketDataProvider, want string) bool {
@@ -1914,7 +2136,7 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 				tok := mustHold(t, svc)
 				reset()
 				if _, err := svc.ConfirmExecution(
-					context.Background(), tok.OrderID, tok.Token, false,
+					context.Background(), tok.OrderExternalID, tok.Token, false,
 				); err != nil {
 					t.Fatalf("ConfirmExecution: %v", err)
 				}
@@ -1927,14 +2149,14 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 				t.Helper()
 				tok := mustHold(t, svc)
 				if _, err := svc.ConfirmExecution(
-					context.Background(), tok.OrderID, tok.Token, false,
+					context.Background(), tok.OrderExternalID, tok.Token, false,
 				); err != nil {
 					t.Fatalf("first confirm: %v", err)
 				}
 				reset()
 				fn.confirmErr = domain.ErrConflict
 				if _, err := svc.ConfirmExecution(
-					context.Background(), tok.OrderID, tok.Token, false,
+					context.Background(), tok.OrderExternalID, tok.Token, false,
 				); err != nil {
 					t.Fatalf("idempotent confirm: %v", err)
 				}
@@ -1947,14 +2169,14 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 				t.Helper()
 				tok := mustHold(t, svc)
 				if _, err := svc.CancelOrder(
-					context.Background(), tok.OrderID, tok.Token, "operator", false,
+					context.Background(), tok.OrderExternalID, tok.Token, "operator", false,
 				); err != nil {
 					t.Fatalf("cancel setup: %v", err)
 				}
 				reset()
 				fn.confirmErr = domain.ErrConflict
 				if _, err := svc.ConfirmExecution(
-					context.Background(), tok.OrderID, tok.Token, false,
+					context.Background(), tok.OrderExternalID, tok.Token, false,
 				); !errors.Is(err, domain.ErrTerminalOrder) {
 					t.Fatalf("confirm after cancel = %v, want terminal order", err)
 				}
@@ -1968,7 +2190,7 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 				tok := mustHold(t, svc)
 				reset()
 				if _, err := svc.CancelOrder(
-					context.Background(), tok.OrderID, tok.Token, "stale price", false,
+					context.Background(), tok.OrderExternalID, tok.Token, "stale price", false,
 				); err != nil {
 					t.Fatalf("CancelOrder: %v", err)
 				}
@@ -1981,13 +2203,13 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 				t.Helper()
 				tok := mustHold(t, svc)
 				if _, err := svc.ConfirmExecution(
-					context.Background(), tok.OrderID, tok.Token, false,
+					context.Background(), tok.OrderExternalID, tok.Token, false,
 				); err != nil {
 					t.Fatalf("confirm setup: %v", err)
 				}
 				reset()
 				if _, err := svc.CancelOrder(
-					context.Background(), tok.OrderID, tok.Token, "too late", false,
+					context.Background(), tok.OrderExternalID, tok.Token, "too late", false,
 				); !errors.Is(err, domain.ErrConflict) {
 					t.Fatalf("cancel after confirm = %v, want conflict", err)
 				}
@@ -1999,7 +2221,7 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			router := &fakeRouter{node: &fakeNode{orders: make(map[int64]domain.Order)}}
+			router := &fakeRouter{node: &fakeNode{orders: make(map[domain.ExternalID]domain.Order)}}
 			svc := backend.New(router, nil, &fakeSigner{})
 			fn := router.node
 			reset := func() {
@@ -2014,6 +2236,465 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 			}
 			if got := fn.getOrderCount.Load(); got > int64(wantFetches) {
 				t.Fatalf("GetOrder calls = %d, want at most %d", got, wantFetches)
+			}
+		})
+	}
+}
+
+func TestService_BusinessCSVImportStopKeepsPreviousRowsAndAudits(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService()
+	fn.accounts = []domain.Account{{
+		Code: "acc-existing",
+	}}
+
+	body := []byte(
+		"code,title,group_code,notes,blocked,block_reason\n" +
+			"acc-new,,desk-a,new note,false,\n" +
+			"acc-existing,,desk-a,old note,false,\n" +
+			"acc-after,,desk-a,after,false,\n",
+	)
+	result, err := svc.ImportBusinessCSV(context.Background(),
+		backend.BusinessCSVImportRequest{
+			Entity:         businesscsv.EntityAccounts,
+			Delimiter:      businesscsv.DelimiterComma,
+			Filename:       "accounts.csv",
+			Payload:        body,
+			ConflictPolicy: businesscsv.ConflictStop,
+		})
+	if err != nil {
+		t.Fatalf("ImportBusinessCSV: %v", err)
+	}
+	if result.Counts.Applied != 1 || result.Counts.Conflicts != 1 ||
+		!result.Counts.Stopped || len(fn.createCalls) != 1 ||
+		fn.createCalls[0].Account != "acc-new" {
+		t.Fatalf("result=%+v createCalls=%+v", result.Counts, fn.createCalls)
+	}
+	if len(fn.auditCalls) != 1 ||
+		fn.auditCalls[0].Action != domain.AuditActionImportBusinessCSV ||
+		!strings.Contains(fn.auditCalls[0].Detail, "policy=stop") {
+		t.Fatalf("auditCalls = %+v", fn.auditCalls)
+	}
+}
+
+func TestService_BusinessCSVPartialImportFailureAuditsFileAttempt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc, st, eng := newBusinessCSVRealService(t)
+
+	body := []byte(
+		"code,title,group_code,notes,blocked,block_reason\n" +
+			"acc-good,,,first note,false,\n" +
+			",,,bad note,false,\n",
+	)
+	_, err := svc.ImportBusinessCSV(ctx, backend.BusinessCSVImportRequest{
+		Entity:         businesscsv.EntityAccounts,
+		Delimiter:      businesscsv.DelimiterComma,
+		Filename:       "accounts.csv",
+		Payload:        body,
+		ConflictPolicy: businesscsv.ConflictReplace,
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("ImportBusinessCSV error = %v, want invalid", err)
+	}
+
+	if _, ok, err := st.GetAccount(ctx, "acc-good"); err != nil || ok {
+		t.Fatalf("GetAccount acc-good after failed import: %v ok=%v, want absent", err, ok)
+	}
+
+	operationAudits, err := st.ListAuditFiltered(ctx, domain.AuditFilter{
+		Actions: []domain.AuditAction{
+			domain.AuditActionCreateAccount,
+			domain.AuditActionSetNotes,
+			domain.AuditActionSetGroup,
+			domain.AuditActionBlock,
+			domain.AuditActionUnblock,
+		},
+		Account: "acc-good",
+	}, 10)
+	if err != nil {
+		t.Fatalf("ListAuditFiltered operations: %v", err)
+	}
+	if len(operationAudits) != 0 {
+		t.Fatalf("operation audits = %+v, want none after rollback", operationAudits)
+	}
+	if len(eng.adjustmentCalls) != 0 {
+		t.Fatalf("engine adjustment calls = %d, want none", len(eng.adjustmentCalls))
+	}
+
+	importAudits, err := st.ListAuditFiltered(ctx, domain.AuditFilter{
+		Actions: []domain.AuditAction{domain.AuditActionImportBusinessCSV},
+	}, 10)
+	if err != nil {
+		t.Fatalf("ListAuditFiltered import: %v", err)
+	}
+	if len(importAudits) != 1 ||
+		!strings.Contains(importAudits[0].Detail, "entity=accounts") ||
+		!strings.Contains(importAudits[0].Detail, "delimiter=comma") ||
+		!strings.Contains(importAudits[0].Detail, "file=accounts.csv") ||
+		!strings.Contains(importAudits[0].Detail, "policy=replace") ||
+		!strings.Contains(importAudits[0].Detail, "rows=2") ||
+		!strings.Contains(importAudits[0].Detail, "applied=0") ||
+		!strings.Contains(importAudits[0].Detail, "error=") {
+		t.Fatalf("import audit rows = %+v", importAudits)
+	}
+}
+
+func TestService_BusinessCSVImportRejectsInvalidTitle(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc, st, _ := newBusinessCSVRealService(t)
+	longTitle := strings.Repeat("x", 257)
+
+	body := []byte(
+		"code,title,group_code,notes,blocked,block_reason\n" +
+			"acc-bad," + longTitle + ",,,false,\n",
+	)
+	_, err := svc.ImportBusinessCSV(ctx, backend.BusinessCSVImportRequest{
+		Entity:         businesscsv.EntityAccounts,
+		Delimiter:      businesscsv.DelimiterComma,
+		Filename:       "accounts.csv",
+		Payload:        body,
+		ConflictPolicy: businesscsv.ConflictReplace,
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("ImportBusinessCSV error = %v, want invalid", err)
+	}
+	if _, ok, err := st.GetAccount(ctx, "acc-bad"); err != nil || ok {
+		t.Fatalf("GetAccount acc-bad after failed import: %v ok=%v, want absent", err, ok)
+	}
+}
+
+func TestService_BusinessCSVPositionsRoundTripPreservesRealizedPnl(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	sourceSvc, sourceStore, _ := newBusinessCSVRealService(t)
+	if err := sourceStore.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
+		t.Fatalf("CreateAsset source: %v", err)
+	}
+	if _, err := sourceStore.CreateAccount(ctx, domain.Account{
+		Code: "acc-1",
+	}); err != nil {
+		t.Fatalf("CreateAccount source: %v", err)
+	}
+	want := domain.Balance{
+		Account:           "acc-1",
+		Asset:             "USD",
+		Available:         "100.25",
+		Held:              "10.5",
+		Incoming:          "2.75",
+		RealizedPnl:       "7.125",
+		AverageEntryPrice: "99.5",
+	}
+	if err := sourceStore.UpsertBalance(ctx, want); err != nil {
+		t.Fatalf("UpsertBalance source: %v", err)
+	}
+
+	file, err := sourceSvc.ExportBusinessCSV(ctx, backend.BusinessCSVExportRequest{
+		Entity:    businesscsv.EntityPositions,
+		Delimiter: businesscsv.DelimiterSemicolon,
+	})
+	if err != nil {
+		t.Fatalf("ExportBusinessCSV: %v", err)
+	}
+	if !strings.Contains(string(file.Body), "7.125") {
+		t.Fatalf("exported body %q does not contain realized_pnl", file.Body)
+	}
+
+	targetSvc, targetStore, targetEngine := newBusinessCSVRealService(t)
+	// Positions reference an existing account and asset by code; the relational
+	// store enforces those foreign keys, so seed the dictionary rows before import.
+	if err := targetStore.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
+		t.Fatalf("CreateAsset target: %v", err)
+	}
+	if _, err := targetStore.CreateAccount(ctx, domain.Account{Code: "acc-1"}); err != nil {
+		t.Fatalf("CreateAccount target: %v", err)
+	}
+	result, err := targetSvc.ImportBusinessCSV(ctx, backend.BusinessCSVImportRequest{
+		Entity:         businesscsv.EntityPositions,
+		Delimiter:      businesscsv.DelimiterSemicolon,
+		Filename:       file.Name,
+		Payload:        file.Body,
+		ConflictPolicy: businesscsv.ConflictReplace,
+	})
+	if err != nil {
+		t.Fatalf("ImportBusinessCSV: %v", err)
+	}
+	if result.Counts.Applied != 1 || result.Counts.Conflicts != 0 {
+		t.Fatalf("import counts = %+v", result.Counts)
+	}
+	if len(targetEngine.adjustmentCalls) != 1 {
+		t.Fatalf("engine adjustment calls = %d, want 1", len(targetEngine.adjustmentCalls))
+	}
+	got, ok, err := targetStore.GetBalance(ctx, "acc-1", "USD")
+	if err != nil || !ok {
+		t.Fatalf("GetBalance target: %v ok=%v", err, ok)
+	}
+	if got.Available != want.Available || got.Held != want.Held ||
+		got.Incoming != want.Incoming || got.RealizedPnl != want.RealizedPnl ||
+		got.AverageEntryPrice != want.AverageEntryPrice {
+		t.Fatalf("target balance = %+v, want %+v", got, want)
+	}
+	audits, err := targetStore.ListAuditFiltered(ctx, domain.AuditFilter{
+		Actions: []domain.AuditAction{domain.AuditActionAdjustment},
+		Account: "acc-1",
+	}, 10)
+	if err != nil {
+		t.Fatalf("ListAuditFiltered adjustment: %v", err)
+	}
+	if len(audits) != 1 ||
+		!strings.Contains(audits[0].Detail, "import position snapshot account acc-1 asset=USD") ||
+		!strings.Contains(audits[0].Detail, "realized_pnl=7.125") {
+		t.Fatalf("adjustment audit rows = %+v", audits)
+	}
+	importAudits, err := targetStore.ListAuditFiltered(ctx, domain.AuditFilter{
+		Actions: []domain.AuditAction{domain.AuditActionImportBusinessCSV},
+	}, 10)
+	if err != nil {
+		t.Fatalf("ListAuditFiltered import: %v", err)
+	}
+	if len(importAudits) != 1 || !strings.Contains(importAudits[0].Detail, "applied=1") {
+		t.Fatalf("import audit rows = %+v", importAudits)
+	}
+}
+
+func TestService_BusinessCSVExportAuditsAndDoesNotReuseBackupAction(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService()
+	fn.accounts = []domain.Account{{
+		Code:      "acc-1",
+		GroupCode: "desk-a",
+	}}
+
+	file, err := svc.ExportBusinessCSV(context.Background(),
+		backend.BusinessCSVExportRequest{
+			Entity:    businesscsv.EntityAccounts,
+			Delimiter: businesscsv.DelimiterPipe,
+			Filter: businesscsv.ExportFilter{
+				GroupCode:    "desk-a",
+				GroupCodeSet: true,
+			},
+		})
+	if err != nil {
+		t.Fatalf("ExportBusinessCSV: %v", err)
+	}
+	if !strings.Contains(string(file.Body), "acc-1||desk-a") {
+		t.Fatalf("body = %q", file.Body)
+	}
+	if len(fn.auditCalls) != 1 ||
+		fn.auditCalls[0].Action != domain.AuditActionExportBusinessCSV ||
+		strings.Contains(string(fn.auditCalls[0].Action), "backup") {
+		t.Fatalf("auditCalls = %+v", fn.auditCalls)
+	}
+}
+
+func newBusinessCSVRealService(
+	t *testing.T,
+) (*backend.Service, store.RealmStore, *businessCSVRoundTripEngine) {
+	t.Helper()
+	ctx := context.Background()
+	st, err := store.NewSQLiteStore(t.TempDir() + "/business-csv.db")
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	// All data access hangs off the realm handle; the single-realm SQLite store
+	// serves domain.DefaultRealm.
+	realm, err := st.ForRealm(ctx, domain.DefaultRealm)
+	if err != nil {
+		t.Fatalf("ForRealm: %v", err)
+	}
+	eng := &businessCSVRoundTripEngine{running: true}
+	n, _, err := node.NewLocalNode(ctx, st, func(engine.Snapshot) (engine.Engine, error) {
+		return eng, nil
+	})
+	if err != nil {
+		t.Fatalf("NewLocalNode: %v", err)
+	}
+	t.Cleanup(func() { _ = n.Close() })
+	router, err := node.NewLocalRouter(n)
+	if err != nil {
+		t.Fatalf("NewLocalRouter: %v", err)
+	}
+	return backend.New(router, nil, nil), realm, eng
+}
+
+type businessCSVRoundTripEngine struct {
+	running              bool
+	adjustmentCalls      []domain.AdjustmentRequest
+	adjustmentBatchCalls [][]domain.AdjustmentRequest
+}
+
+func (e *businessCSVRoundTripEngine) Version() string      { return "fake" }
+func (e *businessCSVRoundTripEngine) BuildProfile() string { return "test" }
+func (e *businessCSVRoundTripEngine) Running() bool        { return e.running }
+func (e *businessCSVRoundTripEngine) ConfigurePolicy(
+	context.Context, string, engine.LimitSet,
+) error {
+	return nil
+}
+func (e *businessCSVRoundTripEngine) BlockAccount(context.Context, domain.AccountID, string) error {
+	return nil
+}
+func (e *businessCSVRoundTripEngine) UnblockAccount(context.Context, domain.AccountID) error {
+	return nil
+}
+func (e *businessCSVRoundTripEngine) ApplyAccountAdjustment(
+	ctx context.Context, account domain.AccountID, req domain.AdjustmentRequest,
+) (engine.AdjustmentResult, error) {
+	results, batchReject, err := e.ApplyAccountAdjustmentBatch(ctx, account,
+		[]domain.AdjustmentRequest{req})
+	if err != nil {
+		return engine.AdjustmentResult{}, err
+	}
+	if batchReject != nil {
+		return engine.AdjustmentResult{Rejected: batchReject}, nil
+	}
+	return results[0], nil
+}
+func (e *businessCSVRoundTripEngine) ApplyAccountAdjustmentBatch(
+	_ context.Context, _ domain.AccountID, reqs []domain.AdjustmentRequest,
+) ([]engine.AdjustmentResult, *engine.AdjustmentBatchReject, error) {
+	e.adjustmentBatchCalls = append(e.adjustmentBatchCalls,
+		append([]domain.AdjustmentRequest(nil), reqs...))
+	results := make([]engine.AdjustmentResult, 0, len(reqs))
+	for _, req := range reqs {
+		e.adjustmentCalls = append(e.adjustmentCalls, req)
+		accepted := &domain.AdjustmentOutcomeAccepted{}
+		if req.Balance != nil {
+			accepted.BalanceResult = req.Balance.Value
+		}
+		if req.Held != nil {
+			accepted.HeldResult = req.Held.Value
+		}
+		if req.Incoming != nil {
+			accepted.IncomingResult = req.Incoming.Value
+		}
+		results = append(results, engine.AdjustmentResult{Accepted: accepted})
+	}
+	return results, nil, nil
+}
+func (e *businessCSVRoundTripEngine) SubmitOrder(
+	context.Context, domain.Order,
+) (engine.OrderResult, error) {
+	return engine.OrderResult{Accepted: true}, nil
+}
+func (e *businessCSVRoundTripEngine) ReserveHold(
+	context.Context, domain.Order,
+) (engine.HoldResult, error) {
+	return engine.HoldResult{Accepted: true}, nil
+}
+func (e *businessCSVRoundTripEngine) CommitHeld(context.Context, string) error {
+	return nil
+}
+func (e *businessCSVRoundTripEngine) RollbackHeld(context.Context, string) error {
+	return nil
+}
+func (e *businessCSVRoundTripEngine) SubmitImmediate(
+	context.Context, domain.Order,
+) (engine.ImmediateResult, error) {
+	return engine.ImmediateResult{Accepted: true}, nil
+}
+func (e *businessCSVRoundTripEngine) SetReservationStore(engine.ReservationStore) {}
+func (e *businessCSVRoundTripEngine) ReconcileOrphans(context.Context) (int, error) {
+	return 0, nil
+}
+func (e *businessCSVRoundTripEngine) ApplyExecutionReport(
+	context.Context, domain.ExecutionReportInput,
+) (engine.ExecutionReportResult, error) {
+	return engine.ExecutionReportResult{}, nil
+}
+func (e *businessCSVRoundTripEngine) RegisterGroup(
+	context.Context, []domain.AccountID, string,
+) error {
+	return nil
+}
+func (e *businessCSVRoundTripEngine) UnregisterGroup(
+	context.Context, []domain.AccountID, string,
+) error {
+	return nil
+}
+func (e *businessCSVRoundTripEngine) BlockGroup(context.Context, string, string) error {
+	return nil
+}
+func (e *businessCSVRoundTripEngine) UnblockGroup(context.Context, string) error {
+	return nil
+}
+func (e *businessCSVRoundTripEngine) CheckOrder(
+	context.Context, domain.OrderProbe,
+) (domain.CheckResult, error) {
+	return domain.CheckResult{}, nil
+}
+func (e *businessCSVRoundTripEngine) MarketDataSink() marketdata.Sink {
+	return &backendTestSink{}
+}
+func (e *businessCSVRoundTripEngine) Stop() { e.running = false }
+
+func TestService_BusinessCSVExportAccountGroupFilterPresence(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService()
+	fn.accounts = []domain.Account{
+		{Code: "acc-none"},
+		{Code: "acc-desk-a", GroupCode: "desk-a"},
+		{Code: "acc-desk-b", GroupCode: "desk-b"},
+	}
+
+	cases := []struct {
+		name       string
+		filter     businesscsv.ExportFilter
+		want       []string
+		wantDetail string
+	}{
+		{
+			name: "omitted group exports all",
+			want: []string{"acc-none", "acc-desk-a", "acc-desk-b"},
+		},
+		{
+			name:       "explicit empty group exports no-group bucket",
+			filter:     businesscsv.ExportFilter{GroupCodeSet: true},
+			want:       []string{"acc-none"},
+			wantDetail: "filters=group=<none>",
+		},
+		{
+			name: "explicit group exports matching group",
+			filter: businesscsv.ExportFilter{
+				GroupCode: "desk-a", GroupCodeSet: true,
+			},
+			want:       []string{"acc-desk-a"},
+			wantDetail: "filters=group=desk-a",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fn.auditCalls = nil
+			file, err := svc.ExportBusinessCSV(context.Background(),
+				backend.BusinessCSVExportRequest{
+					Entity:    businesscsv.EntityAccounts,
+					Delimiter: businesscsv.DelimiterComma,
+					Filter:    tc.filter,
+				})
+			if err != nil {
+				t.Fatalf("ExportBusinessCSV: %v", err)
+			}
+			body := string(file.Body)
+			for _, id := range tc.want {
+				if !strings.Contains(body, id) {
+					t.Fatalf("body %q missing %s", body, id)
+				}
+			}
+			for _, account := range fn.accounts {
+				if slices.Contains(tc.want, string(account.Code)) {
+					continue
+				}
+				if strings.Contains(body, string(account.Code)) {
+					t.Fatalf("body %q unexpectedly contains %s", body, account.Code)
+				}
+			}
+			if tc.wantDetail != "" && (len(fn.auditCalls) != 1 ||
+				!strings.Contains(fn.auditCalls[0].Detail, tc.wantDetail)) {
+				t.Fatalf("auditCalls = %+v, want detail %q", fn.auditCalls, tc.wantDetail)
 			}
 		})
 	}

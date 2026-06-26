@@ -24,17 +24,13 @@ package domain
 import (
 	"errors"
 	"fmt"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/shopspring/decimal"
 )
-
-// DefaultTenant is the implicit tenant used in single-process deployments.
-const DefaultTenant TenantID = "default"
 
 // DefaultUserID is the implicit user used until real users exist; every user
 // setting is currently stored under it. It is a fixed, well-known UUID rather
@@ -62,11 +58,18 @@ var (
 	ErrNotFound      = errors.New("not found")
 	ErrAlreadyExists = errors.New("already exists")
 	ErrInvalid       = errors.New("invalid")
+	// ErrTooLarge marks an input that exceeds a hard server-side size limit.
+	// HTTP surfaces map it to 413 so callers can split bulk payloads instead of
+	// retrying the same request.
+	ErrTooLarge = errors.New("too large")
 	// ErrConflict marks an operation that cannot proceed because the target is
 	// already in a terminal or incompatible state - for example confirming an
 	// approval whose held reservation was already rolled back or expired. The
 	// surface layer maps it to an HTTP 409.
 	ErrConflict = errors.New("conflict")
+	// ErrHasDependents marks a delete that would cascade-delete dependent rows
+	// without an explicit force flag. The concrete error carries the blockers.
+	ErrHasDependents = errors.New("has dependents")
 	// ErrTerminalOrder marks the remaining Officer safety net for terminal
 	// orders; callers can bypass it with force and route straight to the engine.
 	ErrTerminalOrder = errors.New("order in terminal status")
@@ -85,6 +88,28 @@ var (
 	// "unhandled internal error".
 	ErrUpstream = errors.New("upstream provider error")
 )
+
+// DependentCount names one dependent row kind that blocks a destructive delete.
+type DependentCount struct {
+	Kind  string
+	Count int
+}
+
+// HasDependentsError carries the blockers for a destructive delete.
+type HasDependentsError struct {
+	Dependents []DependentCount
+}
+
+// Error returns the stable delete-policy error text.
+func (e HasDependentsError) Error() string { return ErrHasDependents.Error() }
+
+// Unwrap lets callers match the typed error with errors.Is.
+func (e HasDependentsError) Unwrap() error { return ErrHasDependents }
+
+// NewHasDependentsError creates a typed delete-policy error.
+func NewHasDependentsError(dependents []DependentCount) error {
+	return HasDependentsError{Dependents: dependents}
+}
 
 // Policy identifiers.
 const (
@@ -112,86 +137,70 @@ const (
 	KindInitialPnl  = "initial_pnl"
 )
 
-// AccountID identifies a single trading account within a tenant.
+// AccountID is the immutable, operator-chosen account code: the human handle a
+// dictionary account is addressed by. It is unique per realm and does not leak
+// record counts the way an autoincrement would. The engine id and the internal
+// surrogate key are separate and never travel as this code.
 type AccountID string
 
-// String returns the raw account identifier.
+// String returns the raw account code.
 func (id AccountID) String() string { return string(id) }
 
-// TenantID identifies an isolation boundary that owns accounts.
-type TenantID string
-
-// String returns the raw tenant identifier.
-func (id TenantID) String() string { return string(id) }
-
-// Account is the control-plane view of an engine account.
+// Account is the control-plane view of an engine account: a dictionary entity
+// addressed by its immutable Code, displayed under a mutable Title, and run on
+// the engine under EngineAccountID. The surrogate key never appears here.
 type Account struct {
-	// Tenant is the isolation boundary that owns the account.
-	Tenant TenantID
-	// ID is the account identifier, unique within Tenant.
-	ID AccountID
-	// GroupID is the operator-facing group identifier; empty means no group.
-	// This is NOT the engine's group hash - it is the human-readable id
-	// stored in AccountGroup.ID and resolved to a hash by the node layer.
-	GroupID string
+	// Code is the immutable, operator-chosen account code, unique per realm.
+	Code AccountID
+	// Title is the mutable human-readable display name; may be empty.
+	Title string
+	// GroupCode links the account to its group by the group's immutable code;
+	// empty means the account belongs to no group. The store resolves it to the
+	// group's surrogate key; the engine group id is derived from the group.
+	GroupCode string
 	// Notes is a free-form reference string. Never forwarded to the engine.
 	// Max 4096 bytes; validated by ValidateNotes.
 	Notes string
 	// BlockReason is the human-readable reason the account was blocked.
 	// Empty when the account is not blocked.
 	BlockReason string
+	// EngineAccountID is the integer id the engine runs this account on. It is
+	// internal and never serialized on the wire (json:"-"); zero means
+	// unassigned. The engine layer consumes it on read paths, but it is never a
+	// public handle.
+	EngineAccountID EngineAccountID `json:"-"`
 	// Blocked reports whether the account is currently kill-switched.
 	Blocked bool
-}
-
-// LimitTarget identifies the policy+scope+account+asset combination that a
-// single risk barrier applies to. It is the composite key for the limits table.
-type LimitTarget struct {
-	Tenant  TenantID
-	Policy  string
-	Scope   string
-	Account AccountID // empty unless scope has the account axis
-	Asset   string    // empty unless scope has the asset axis
-}
-
-// LimitValue is a single kind=value pair within a barrier.
-type LimitValue struct {
-	Kind  string
-	Value string
-}
-
-// Limit is the control-plane view of one risk barrier: the full set of kinds
-// for one LimitTarget. Values is always sorted by Kind.
-type Limit struct {
-	Target LimitTarget
-	Values []LimitValue
 }
 
 // AuditAction classifies a control-plane action recorded in the audit trail.
 type AuditAction string
 
 const (
-	AuditActionHydrate         AuditAction = "hydrate"
-	AuditActionCreateAccount   AuditAction = "create_account"
-	AuditActionBlock           AuditAction = "block"
-	AuditActionUnblock         AuditAction = "unblock"
-	AuditActionSetLimit        AuditAction = "set_limit"
-	AuditActionDeleteLimit     AuditAction = "delete_limit"
-	AuditActionSetGroupNotes   AuditAction = "set_group_notes"
-	AuditActionBlockGroup      AuditAction = "block_group"
-	AuditActionUnblockGroup    AuditAction = "unblock_group"
-	AuditActionSetNotes        AuditAction = "set_notes"
-	AuditActionSetGroup        AuditAction = "set_group"
-	AuditActionAdjustment      AuditAction = "adjustment"
-	AuditActionCreateGroup     AuditAction = "create_group"
-	AuditActionDeleteGroup     AuditAction = "delete_group"
-	AuditActionSubmitOrder     AuditAction = "submit_order"
-	AuditActionExecutionReport AuditAction = "execution_report"
-	AuditActionSetMcpAccess    AuditAction = "set_mcp_access"
-	AuditActionSetMarketData   AuditAction = "set_market_data"
-	AuditActionExportBackup    AuditAction = "export_backup"
-	AuditActionRestoreBackup   AuditAction = "restore_backup"
-	AuditActionResetDatabase   AuditAction = "reset_database"
+	AuditActionHydrate           AuditAction = "hydrate"
+	AuditActionCreateAccount     AuditAction = "create_account"
+	AuditActionDeleteAccount     AuditAction = "delete_account"
+	AuditActionBlock             AuditAction = "block"
+	AuditActionUnblock           AuditAction = "unblock"
+	AuditActionSetLimit          AuditAction = "set_limit"
+	AuditActionDeleteLimit       AuditAction = "delete_limit"
+	AuditActionSetGroupNotes     AuditAction = "set_group_notes"
+	AuditActionBlockGroup        AuditAction = "block_group"
+	AuditActionUnblockGroup      AuditAction = "unblock_group"
+	AuditActionSetNotes          AuditAction = "set_notes"
+	AuditActionSetGroup          AuditAction = "set_group"
+	AuditActionAdjustment        AuditAction = "adjustment"
+	AuditActionCreateGroup       AuditAction = "create_group"
+	AuditActionDeleteGroup       AuditAction = "delete_group"
+	AuditActionSubmitOrder       AuditAction = "submit_order"
+	AuditActionExecutionReport   AuditAction = "execution_report"
+	AuditActionSetMcpAccess      AuditAction = "set_mcp_access"
+	AuditActionSetMarketData     AuditAction = "set_market_data"
+	AuditActionExportBackup      AuditAction = "export_backup"
+	AuditActionRestoreBackup     AuditAction = "restore_backup"
+	AuditActionExportBusinessCSV AuditAction = "export_business_csv"
+	AuditActionImportBusinessCSV AuditAction = "import_business_csv"
+	AuditActionResetDatabase     AuditAction = "reset_database"
 
 	// Signing-key lifecycle.
 	AuditActionGenerateSigningKey AuditAction = "generate_signing_key"
@@ -235,6 +244,7 @@ func AllAuditActions() []AuditAction {
 	return []AuditAction{
 		AuditActionHydrate,
 		AuditActionCreateAccount,
+		AuditActionDeleteAccount,
 		AuditActionBlock,
 		AuditActionUnblock,
 		AuditActionSetLimit,
@@ -251,6 +261,8 @@ func AllAuditActions() []AuditAction {
 		AuditActionSetMarketData,
 		AuditActionExportBackup,
 		AuditActionRestoreBackup,
+		AuditActionExportBusinessCSV,
+		AuditActionImportBusinessCSV,
 		AuditActionResetDatabase,
 		AuditActionGenerateSigningKey,
 		AuditActionImportSigningKey,
@@ -303,23 +315,29 @@ type AuditFilter struct {
 }
 
 // AuditRow is the persisted, immutable record of a single control-plane action.
+// It is a machine record: its public handle is ExternalID, the surrogate key
+// never appears here. Account and Actor are immutable snapshot strings, so
+// deleting the dictionaries they named does not mutate audit history.
 type AuditRow struct {
 	// At is the wall-clock time the action was recorded, in UTC.
 	At time.Time
-	// Actor identifies who initiated the action (the Principal).
+	// ExternalID is the opaque public handle of this audit row.
+	ExternalID ExternalID
+	// Actor is the code of the principal who initiated the action; empty when
+	// the action was system-initiated.
 	Actor string
+	// ActorTitle is the actor title captured when the row was written.
+	ActorTitle string
 	// Action is the category of the recorded action.
 	Action AuditAction
-	// Tenant is the isolation boundary the action targeted, if any.
-	Tenant TenantID
-	// Account is the account the action targeted, if any.
+	// Account is the code of the account the action targeted; empty when none.
 	Account AccountID
+	// AccountTitle is the account title captured when the row was written.
+	AccountTitle string
 	// Detail is a short human-readable description of the action.
 	Detail string
 	// Source is the channel through which the action was initiated.
 	Source Source
-	// ID is the store-assigned monotonically increasing row identifier.
-	ID int64
 }
 
 // OrderProbe carries the submit-order inputs for a non-mutating order check.
@@ -361,15 +379,15 @@ type CheckResult struct {
 }
 
 // ValidateAccountID returns an error wrapping ErrInvalid when id is not a
-// well-formed account identifier: non-empty, at most 64 chars, printable
-// ASCII, no leading or trailing whitespace.
+// well-formed account identifier: non-empty, at most 64 code points, printable,
+// no leading or trailing whitespace.
 func ValidateAccountID(id AccountID) error {
 	s := string(id)
 	if s == "" {
 		return fmt.Errorf("account id is empty: %w", ErrInvalid)
 	}
-	if len(s) > 64 {
-		return fmt.Errorf("account id exceeds 64 chars: %w", ErrInvalid)
+	if utf8.RuneCountInString(s) > 64 {
+		return fmt.Errorf("account id exceeds 64 code points: %w", ErrInvalid)
 	}
 	if strings.TrimSpace(s) != s {
 		return fmt.Errorf("account id has leading or trailing whitespace: %w", ErrInvalid)
@@ -391,14 +409,17 @@ func ValidateAsset(asset string) error {
 }
 
 // ValidateMarketDataMark returns an error wrapping ErrInvalid when mark is a
-// non-empty, non-positive, or non-decimal mark price. An empty string is valid
-// and means "no manual price". A mark is a price, so zero and negative values
-// are rejected.
+// non-empty, non-decimal mark price. An empty string is valid and means "no
+// manual price". The mark maps to the engine Quote mark, a signed Option<Price>,
+// so sign and zero are accepted; only decimal syntax is checked here.
 func ValidateMarketDataMark(mark string) error {
 	if mark == "" {
 		return nil
 	}
-	return validatePositiveDecimal(mark)
+	if _, err := decimal.NewFromString(mark); err != nil {
+		return fmt.Errorf("mark %q is not a valid decimal: %w", mark, ErrInvalid)
+	}
+	return nil
 }
 
 // ValidateMarketDataStrike returns an error wrapping ErrInvalid when strike is a
@@ -428,198 +449,6 @@ func validateAsset(asset string) error {
 	for _, r := range asset {
 		if unicode.IsSpace(r) {
 			return fmt.Errorf("asset contains whitespace: %w", ErrInvalid)
-		}
-	}
-	return nil
-}
-
-// ValidateLimit enforces the policy/scope/kind vocabulary and value rules.
-func ValidateLimit(l Limit) error {
-	t := l.Target
-	switch t.Policy {
-	case PolicyRateLimit, PolicyOrderSizeLimit, PolicyPnlBoundsKillSwitch:
-	default:
-		return fmt.Errorf("unknown policy %q: %w", t.Policy, ErrInvalid)
-	}
-
-	if err := validateScope(t.Policy, t.Scope); err != nil {
-		return err
-	}
-	if err := validateScopeAxes(t); err != nil {
-		return err
-	}
-	if len(l.Values) == 0 {
-		return fmt.Errorf("limit has no values: %w", ErrInvalid)
-	}
-	return validateValues(t.Policy, t.Scope, l.Values)
-}
-
-// validateScope checks the policy/scope combination is allowed.
-func validateScope(policy, scope string) error {
-	allowed := allowedScopes[policy]
-	for _, s := range allowed {
-		if s == scope {
-			return nil
-		}
-	}
-	return fmt.Errorf("scope %q not allowed for policy %q: %w", scope, policy, ErrInvalid)
-}
-
-// allowedScopes maps each policy to its permitted scopes.
-var allowedScopes = map[string][]string{
-	PolicyRateLimit:           {ScopeBroker, ScopeAsset, ScopeAccount, ScopeAccountAsset},
-	PolicyOrderSizeLimit:      {ScopeBroker, ScopeAsset, ScopeAccountAsset},
-	PolicyPnlBoundsKillSwitch: {ScopeAsset, ScopeAccountAsset},
-}
-
-// validateScopeAxes checks that Account and Asset fields are present/absent
-// consistently with the scope definition.
-func validateScopeAxes(t LimitTarget) error {
-	needsAccount := t.Scope == ScopeAccount || t.Scope == ScopeAccountAsset
-	needsAsset := t.Scope == ScopeAsset || t.Scope == ScopeAccountAsset
-
-	if needsAccount && t.Account == "" {
-		return fmt.Errorf("scope %q requires account: %w", t.Scope, ErrInvalid)
-	}
-	if !needsAccount && t.Account != "" {
-		return fmt.Errorf("scope %q must not have account: %w", t.Scope, ErrInvalid)
-	}
-	if needsAsset {
-		if err := validateAsset(t.Asset); err != nil {
-			return err
-		}
-	} else if t.Asset != "" {
-		return fmt.Errorf("scope %q must not have asset: %w", t.Scope, ErrInvalid)
-	}
-	if needsAccount {
-		if err := ValidateAccountID(t.Account); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// validateValues enforces the kind+value rules per policy. The scope is
-// threaded through because some kinds are scope-specific (e.g. pnl_bounds
-// initial_pnl is only valid for the account_asset scope).
-func validateValues(policy, scope string, vals []LimitValue) error {
-	kindSet := make(map[string]string, len(vals))
-	for _, v := range vals {
-		if _, dup := kindSet[v.Kind]; dup {
-			return fmt.Errorf("duplicate kind %q: %w", v.Kind, ErrInvalid)
-		}
-		kindSet[v.Kind] = v.Value
-	}
-
-	switch policy {
-	case PolicyRateLimit:
-		return validateRateLimit(kindSet)
-	case PolicyOrderSizeLimit:
-		return validateOrderSizeLimit(kindSet)
-	case PolicyPnlBoundsKillSwitch:
-		return validatePnlBounds(scope, kindSet)
-	}
-	return nil
-}
-
-func validateRateLimit(kinds map[string]string) error {
-	for k := range kinds {
-		if k != KindMaxOrders && k != KindWindow {
-			return fmt.Errorf("unknown kind %q for rate_limit: %w", k, ErrInvalid)
-		}
-	}
-	maxOrders, hasMax := kinds[KindMaxOrders]
-	window, hasWindow := kinds[KindWindow]
-	if !hasMax || !hasWindow {
-		return fmt.Errorf("rate_limit requires both max_orders and window: %w", ErrInvalid)
-	}
-	// Require a canonical decimal-digit string: the engine parses max_orders
-	// with strconv.ParseUint, which rejects exponents and decimal points
-	// ("1e9", "100.0"). Validate the same acceptance set here so a contract-
-	// valid value is never rejected later at engine apply time.
-	n, err := strconv.ParseUint(maxOrders, 10, 64)
-	if err != nil || n == 0 || n > 1_000_000_000 {
-		return fmt.Errorf("max_orders must be an integer > 0 and <= 1e9: %w", ErrInvalid)
-	}
-	if err := validateGoDuration(window); err != nil {
-		return fmt.Errorf("window: %w", err)
-	}
-	return nil
-}
-
-func validateOrderSizeLimit(kinds map[string]string) error {
-	for k := range kinds {
-		if k != KindMaxQuantity && k != KindMaxNotional {
-			return fmt.Errorf("unknown kind %q for order_size_limit: %w", k, ErrInvalid)
-		}
-	}
-	_, hasQty := kinds[KindMaxQuantity]
-	_, hasNot := kinds[KindMaxNotional]
-	if !hasQty && !hasNot {
-		return fmt.Errorf(
-			"order_size_limit requires at least max_quantity or max_notional: %w",
-			ErrInvalid,
-		)
-	}
-	if v, ok := kinds[KindMaxQuantity]; ok {
-		if err := validatePositiveDecimal(v); err != nil {
-			return fmt.Errorf("max_quantity: %w", err)
-		}
-	}
-	if v, ok := kinds[KindMaxNotional]; ok {
-		if err := validatePositiveDecimal(v); err != nil {
-			return fmt.Errorf("max_notional: %w", err)
-		}
-	}
-	return nil
-}
-
-func validatePnlBounds(scope string, kinds map[string]string) error {
-	for k := range kinds {
-		switch k {
-		case KindLowerBound, KindUpperBound:
-		case KindInitialPnl:
-			// initial_pnl seeds the per-account accumulated P&L at barrier
-			// construction; it only exists on the account-asset barrier, so it is
-			// rejected for any other scope.
-			if scope != ScopeAccountAsset {
-				return fmt.Errorf(
-					"initial_pnl is only valid for the account_asset scope, not %q: %w",
-					scope, ErrInvalid,
-				)
-			}
-		default:
-			return fmt.Errorf("unknown kind %q for pnl_bounds_kill_switch: %w", k, ErrInvalid)
-		}
-	}
-	lowerStr, hasLower := kinds[KindLowerBound]
-	upperStr, hasUpper := kinds[KindUpperBound]
-	if !hasLower && !hasUpper {
-		return fmt.Errorf(
-			"pnl_bounds_kill_switch requires at least lower_bound or upper_bound: %w",
-			ErrInvalid,
-		)
-	}
-	var lowerD, upperD decimal.Decimal
-	var err error
-	if hasLower {
-		lowerD, err = decimal.NewFromString(lowerStr)
-		if err != nil {
-			return fmt.Errorf("lower_bound is not a valid decimal: %w", ErrInvalid)
-		}
-	}
-	if hasUpper {
-		upperD, err = decimal.NewFromString(upperStr)
-		if err != nil {
-			return fmt.Errorf("upper_bound is not a valid decimal: %w", ErrInvalid)
-		}
-	}
-	if hasLower && hasUpper && lowerD.GreaterThan(upperD) {
-		return fmt.Errorf("lower_bound must be <= upper_bound: %w", ErrInvalid)
-	}
-	if initialStr, ok := kinds[KindInitialPnl]; ok {
-		if _, err := decimal.NewFromString(initialStr); err != nil {
-			return fmt.Errorf("initial_pnl is not a valid decimal: %w", ErrInvalid)
 		}
 	}
 	return nil
@@ -659,96 +488,8 @@ func validatePositiveDecimal(s string) error {
 	return nil
 }
 
-// ValidateAdjustmentRequest returns an error wrapping ErrInvalid when req is
-// not well-formed at the boundary. It checks:
-//   - Asset is present and passes ValidateAsset.
-//   - Each present amount (Balance/Held/Incoming) has a recognised Mode
-//     (absolute or delta) and a non-empty decimal Value.
-//   - Each present bound's Lower/Upper, when non-empty, is a valid decimal.
-//
-// Business rules (whether the resulting balance is legal, etc.) remain the
-// engine's responsibility.
-func ValidateAdjustmentRequest(req AdjustmentRequest) error {
-	if err := validateAsset(req.Asset); err != nil {
-		return err
-	}
-	for _, amt := range []*AdjustmentAmount{req.Balance, req.Held, req.Incoming} {
-		if amt == nil {
-			continue
-		}
-		switch amt.Mode {
-		case AdjustmentModeAbsolute, AdjustmentModeDelta:
-		default:
-			return fmt.Errorf("adjustment amount mode %q is not valid (want absolute or delta): %w", amt.Mode, ErrInvalid)
-		}
-		if !isDecimalString(amt.Value) {
-			return fmt.Errorf("adjustment amount value %q is not a valid decimal: %w", amt.Value, ErrInvalid)
-		}
-	}
-	for _, b := range []*AdjustmentBounds{req.BalanceBounds, req.HeldBounds, req.IncomingBounds} {
-		if b == nil {
-			continue
-		}
-		if b.Lower != "" && !isDecimalString(b.Lower) {
-			return fmt.Errorf("adjustment bounds lower %q is not a valid decimal: %w", b.Lower, ErrInvalid)
-		}
-		if b.Upper != "" && !isDecimalString(b.Upper) {
-			return fmt.Errorf("adjustment bounds upper %q is not a valid decimal: %w", b.Upper, ErrInvalid)
-		}
-	}
-	return nil
-}
-
-// isDecimalString reports whether s is a syntactically valid decimal number:
-// an optional leading '-', at least one digit, and at most one '.', with the
-// dot permitted in any position (e.g. ".5" and "1." are accepted). It never
-// allocates and adds no dependencies; it is used for boundary pre-validation
-// only (the engine performs the authoritative parse).
-func isDecimalString(s string) bool {
-	if s == "" {
-		return false
-	}
-	i := 0
-	if s[i] == '-' {
-		i++
-	}
-	if i == len(s) {
-		return false
-	}
-	hasDot := false
-	hasDigit := false
-	for ; i < len(s); i++ {
-		c := s[i]
-		if c >= '0' && c <= '9' {
-			hasDigit = true
-			continue
-		}
-		if c == '.' && !hasDot {
-			hasDot = true
-			continue
-		}
-		return false
-	}
-	return hasDigit
-}
-
-// validateGoDuration returns an error when s is not a valid Go duration string
-// with value > 0 and <= 24h.
-func validateGoDuration(s string) error {
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		return fmt.Errorf("%q is not a valid Go duration: %w", s, ErrInvalid)
-	}
-	if d <= 0 {
-		return fmt.Errorf("duration must be > 0: %w", ErrInvalid)
-	}
-	if d > 24*time.Hour {
-		return fmt.Errorf("duration must be <= 24h: %w", ErrInvalid)
-	}
-	return nil
-}
-
-// SortLimitValues sorts a slice of LimitValue in place by Kind.
-func SortLimitValues(vals []LimitValue) {
-	sort.Slice(vals, func(i, j int) bool { return vals[i].Kind < vals[j].Kind })
-}
+// Adjustment field formats (asset, amount mode/value, bounds) are validated by
+// the engine seam: NewAsset rejects an empty asset, param.NewPositionSizeFromString
+// rejects a non-decimal amount or bound, and an unrecognised amount mode is
+// rejected there too - all as domain.ErrInvalid. Officer adds no boundary
+// pre-validation for them.

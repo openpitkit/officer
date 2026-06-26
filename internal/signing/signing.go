@@ -252,19 +252,19 @@ func SignNone(payload domain.ApprovalPayload) (string, error) {
 // VerifyParams are the connector-side expectations a token is re-bound against.
 // Empty fields are not checked, except those always present in the payload.
 type VerifyParams struct {
-	OrderID        int64
-	Instrument     string
-	Venue          string
-	Side           string
-	Quantity       string
-	AmountKind     string
-	OrderType      string
-	LimitPrice     string
-	PriceCurrency  string
-	TimeInForce    string
-	AccountID      string
-	AccountGroupID string
-	Now            time.Time // verification clock; zero means time.Now().UTC()
+	OrderExternalID string
+	Instrument      string
+	Venue           string
+	Side            string
+	Quantity        string
+	AmountKind      string
+	OrderType       string
+	LimitPrice      string
+	PriceCurrency   string
+	TimeInForce     string
+	AccountID       string
+	AccountGroupID  string
+	Now             time.Time // verification clock; zero means time.Now().UTC()
 }
 
 // VerifyResult is the structured outcome of a successful Verify.
@@ -417,6 +417,12 @@ func (s *Service) SetNoESign(ctx context.Context, off bool) error {
 // CanonicalBytes returns the canonical wire bytes of payload: json.Marshal of
 // the concrete struct (Go emits fields in declaration order, deterministic). It
 // asserts byte-stability by marshalling twice and comparing.
+//
+// The struct field DECLARATION ORDER in domain.ApprovalPayload is load-bearing:
+// it defines the canonical/signed form, so reordering its fields silently
+// changes these bytes and invalidates every previously issued token (their
+// signatures no longer verify against the re-ordered canonical form). Never
+// reorder ApprovalPayload's fields to "tidy" them.
 func CanonicalBytes(payload domain.ApprovalPayload) ([]byte, error) {
 	b1, err := json.Marshal(payload)
 	if err != nil {
@@ -478,9 +484,15 @@ func rebind(p domain.ApprovalPayload, expect VerifyParams) error {
 			return err
 		}
 	}
-	if expect.OrderID != 0 && expect.OrderID != p.OrderID {
-		return fmt.Errorf("signing: orderId mismatch (token %d != order %d): %w",
-			p.OrderID, expect.OrderID, domain.ErrInvalid)
+	if expect.OrderExternalID != "" {
+		// Once an order row exists, its opaque handle is a required binding.
+		if p.OrderExternalID == "" {
+			return fmt.Errorf("signing: orderExternalId missing for order %q: %w",
+				expect.OrderExternalID, domain.ErrInvalid)
+		}
+		if err := check("orderExternalId", expect.OrderExternalID, p.OrderExternalID); err != nil {
+			return err
+		}
 	}
 	if expect.Venue != "" {
 		if err := check("venue", expect.Venue, p.Venue); err != nil {

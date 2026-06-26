@@ -414,7 +414,7 @@ func (c *finnhubConnector) searchFinnhubCrypto(
 	ctx context.Context, query string,
 ) []SymbolMatch {
 	if c.cryptoSymbols == nil {
-		return nil
+		return []SymbolMatch{}
 	}
 	type ranked struct {
 		match SymbolMatch

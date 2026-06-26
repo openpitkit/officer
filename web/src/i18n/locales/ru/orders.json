@@ -7,6 +7,11 @@
     "trades": "Сделки"
   },
 
+  "businessCsv": {
+    "exportOrdersCsv": "Экспорт ордеров CSV",
+    "exportTradesCsv": "Экспорт сделок CSV"
+  },
+
   "filter": {
     "accountPlaceholder": "Фильтр по счёту…",
     "sourceAll": "Все источники",
@@ -16,7 +21,7 @@
   },
 
   "table": {
-    "id": "ID",
+    "externalId": "Внешний идентификатор",
     "account": "Счёт",
     "instrument": "Инструмент",
     "side": "Направление",
@@ -28,7 +33,7 @@
     "order": "Ордер",
     "qty": "Кол-во",
     "lockPrice": "Цена блокировки",
-    "lockPrices": "Цены блокировки"
+    "displayPrices": "Отображаемые цены"
   },
 
   "amount": {
@@ -63,6 +68,9 @@
       "baseAssetPlaceholder": "например, AAPL",
       "quoteAsset": "Котируемый актив",
       "quoteAssetPlaceholder": "например, USD",
+      "externalId": "Внешний идентификатор (необязательно)",
+      "externalIdPlaceholder": "сервер сгенерирует, если пусто",
+      "externalIdHint": "Укажите свой 22-символьный идентификатор base64url, если ордер нужно связать с внешней системой.",
       "side": "Направление",
       "sideOptions": {
         "buy": "Купить",
@@ -96,7 +104,7 @@
     "previewUnavailable": "Предпросмотр недоступен",
     "wouldPass": "Предпросмотр: пройдёт",
     "wouldReject": "Предпросмотр: будет отклонён",
-    "lockPrices": "Цены блокировки: {{prices}}",
+    "displayPrices": "Отображаемые цены: {{prices}}",
     "wouldBlock": "Заблокирует счёт {{account}}",
     "wouldBlockReason": "Заблокирует счёт {{account}} — {{reason}}",
     "accountBlocked": "Счёт {{account}} заблокирован",
@@ -108,7 +116,7 @@
   "execReport": {
     "dialog": {
       "title": "Отправить отчёт об исполнении",
-      "description": "Ордер #{{orderId}} — зафиксируйте исполнение для эмуляции частичного или полного заполнения.",
+      "description": "Ордер {{orderExternalId}} — зафиксируйте исполнение для эмуляции частичного или полного заполнения.",
       "fillQty": "Количество в сделке",
       "fillQtyPlaceholder": "например, 50",
       "fillPrice": "Цена исполнения",
@@ -128,21 +136,21 @@
 
   "clone": {
     "orderButton": "Клонировать",
-    "orderAriaLabel": "Клонировать ордер #{{orderId}}",
-    "execReportAriaLabel": "Клонировать отчёт об исполнении для сделки #{{tradeId}}",
-    "execReportEventAriaLabel": "Клонировать отчёт об исполнении из ордера #{{orderId}}"
+    "orderAriaLabel": "Клонировать ордер {{orderExternalId}}",
+    "execReportAriaLabel": "Клонировать отчёт об исполнении для сделки {{tradeId}}",
+    "execReportEventAriaLabel": "Клонировать отчёт об исполнении из ордера {{orderExternalId}}"
   },
 
   "detail": {
     "dialog": {
-      "title": "Ордер #{{orderId}}",
+      "title": "Ордер {{orderExternalId}}",
       "loading": "Загрузка деталей ордера…",
       "accountBlocked": "Счёт {{account}} заблокирован:",
       "fieldAccount": "Счёт",
       "fieldStatus": "Статус",
       "fieldSource": "Источник",
       "fieldSubmitted": "Отправлен",
-      "fieldLockPrices": "Цены блокировки",
+      "fieldDisplayPrices": "Отображаемые цены",
       "timeline": {
         "sectionTitle": "Хронология событий",
         "empty": "События не записаны.",

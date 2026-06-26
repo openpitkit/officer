@@ -76,7 +76,14 @@ type heldReservation struct {
 	account    domain.AccountID
 	params     domain.Order
 	approvalID string
-	lockPrices []string
+	// lock is the SDK-serialized reservation lock captured at hold time, ready to
+	// persist verbatim on the order and reservation intent. Nil when the order
+	// locked nothing.
+	lock []byte
+	// settlement is the settlement-leg lock price as a decimal string (display
+	// only); source is how it was derived (limit vs market mark).
+	settlement string
+	source     string
 	outcomes   []BalanceOutcome
 	state      reservationState
 }
@@ -182,7 +189,7 @@ func (e *openPitEngine) ReserveHold(
 		return HoldResult{}, fmt.Errorf("engine: reserve hold cancelled: %w", err)
 	}
 
-	order, err := orderModelFrom(o)
+	order, err := orderModelFrom(o, e.res)
 	if err != nil {
 		return HoldResult{}, err
 	}
@@ -204,8 +211,9 @@ func (e *openPitEngine) ReserveHold(
 		return HoldResult{Accepted: false, Rejects: orderRejectsFrom(rejects)}, nil
 	}
 
-	// Capture the lock prices while the reservation is held; do NOT close it.
-	lockPrices, err := lockPricesFrom(reservation)
+	// Capture the serialized lock and the settlement estimate while the
+	// reservation is held; do NOT close it.
+	lockBytes, settlement, source, err := captureHold(reservation, o)
 	if err != nil {
 		reservation.RollbackAndClose()
 		e.mu.Unlock()
@@ -219,7 +227,9 @@ func (e *openPitEngine) ReserveHold(
 		res:        reservation,
 		account:    o.Account,
 		params:     o,
-		lockPrices: lockPrices,
+		lock:       lockBytes,
+		settlement: settlement,
+		source:     source,
 		outcomes:   outcomes,
 		approvalID: uuid.NewString(),
 		issuedAt:   now,
@@ -240,11 +250,10 @@ func (e *openPitEngine) ReserveHold(
 		}
 	}
 
-	settlement, source := settlementEstimate(lockPrices, o)
 	return HoldResult{
 		Accepted:            true,
 		ApprovalID:          held.approvalID,
-		LockPrices:          lockPrices,
+		Lock:                lockBytes,
 		SettlementLockPrice: settlement,
 		EstimateSource:      source,
 		Outcomes:            outcomes,
@@ -406,7 +415,7 @@ func (e *openPitEngine) SubmitImmediate(
 		return ImmediateResult{}, fmt.Errorf("engine: submit immediate cancelled: %w", err)
 	}
 
-	order, err := orderModelFrom(o)
+	order, err := orderModelFrom(o, e.res)
 	if err != nil {
 		return ImmediateResult{}, err
 	}
@@ -425,12 +434,11 @@ func (e *openPitEngine) SubmitImmediate(
 		return ImmediateResult{Accepted: false, Rejects: orderRejectsFrom(rejects)}, nil
 	}
 
-	lockPrices, err := lockPricesFrom(reservation)
+	lockBytes, settlement, source, err := captureHold(reservation, o)
 	if err != nil {
 		reservation.RollbackAndClose()
 		return ImmediateResult{}, err
 	}
-	settlement, source := settlementEstimate(lockPrices, o)
 
 	fillQuantity, err := immediateFillQuantity(o, settlement)
 	if err != nil {
@@ -445,31 +453,52 @@ func (e *openPitEngine) SubmitImmediate(
 		LockPrice:    settlement,
 		Account:      o.Account,
 		Side:         o.Side,
-		OrderID:      o.ID,
+		Order:        o.ExternalID,
 		Final:        true,
-	})
+	}, e.res)
 	if err != nil {
 		reservation.RollbackAndClose()
 		return ImmediateResult{}, err
 	}
 
-	// Commit realizes the reservation; ApplyExecutionReport at the same lock price
-	// nets the held amount to zero. Commit alone does not realize a fill.
+	// Ordering rationale: the SDK reservation exposes only Commit/Rollback, and a
+	// fill is settled by the engine-level ApplyExecutionReport, not by the
+	// reservation. The execution report settles against the reservation's reserved
+	// state once it is realized, so the commit must happen first - a report applied
+	// against an unrealized reservation would not net the held amount to zero.
+	// Settle-then-commit is therefore not expressible with this SDK.
 	reservation.CommitAndClose()
 
+	// CommitAndClose has already closed the reservation, so there is no
+	// compensating rollback available if the post-trade settlement fails. A
+	// failure here leaves the funds committed but the fill unsettled, which only an
+	// operator can reconcile; surface that explicitly rather than as a bare wrapped
+	// error so the caller does not retry blindly.
 	postTrade, err := e.eng.ApplyExecutionReport(report)
 	if err != nil {
-		return ImmediateResult{}, fmt.Errorf("engine: apply execution report: %w", err)
+		return ImmediateResult{}, fmt.Errorf(
+			"engine: reservation committed but execution report failed for order %s "+
+				"(account %s); funds are committed and the fill is unsettled - the "+
+				"engine needs manual reconciliation: %w",
+			orderExternalIDForError(o.ExternalID), o.Account, err,
+		)
 	}
 	return ImmediateResult{
 		Accepted:            true,
-		LockPrices:          lockPrices,
+		Lock:                lockBytes,
 		Blocks:              executionBlocksFrom(postTrade.AccountBlocks, o.Account),
 		Outcomes:            balanceOutcomesFromList(postTrade.AccountAdjustmentOutcomes),
 		SettlementLockPrice: settlement,
 		FillQuantity:        fillQuantity,
 		EstimateSource:      source,
 	}, nil
+}
+
+func orderExternalIDForError(id domain.ExternalID) string {
+	if id.IsZero() {
+		return "<unassigned>"
+	}
+	return id.String()
 }
 
 // ReconcileOrphans reports persisted held reservation intents after a restart.
@@ -506,19 +535,24 @@ func (e *openPitEngine) drainHeldLocked() {
 	}
 }
 
-// lockPricesFrom reads a reservation's lock prices as decimal strings. The
-// reservation must be held (not yet closed); the caller owns the resulting
-// snapshot.
-func lockPricesFrom(reservation *pretrade.Reservation) ([]string, error) {
+// captureHold serializes a held reservation's lock and derives its settlement
+// estimate while the reservation is still held (not yet closed): the serialized
+// lock bytes (persisted verbatim), the settlement-leg lock price as a decimal
+// string, and the estimate source. The reservation lock is read exactly once,
+// both serialized through the lock seam (for persistence) and read as prices
+// (for the settlement estimate). The caller owns the resulting snapshot and may
+// then commit or roll back the reservation.
+func captureHold(reservation *pretrade.Reservation, o domain.Order) ([]byte, string, string, error) {
+	lockBytes, err := serializeReservationLock(reservation)
+	if err != nil {
+		return nil, "", "", err
+	}
 	prices, err := reservation.Lock().Prices()
 	if err != nil {
-		return nil, fmt.Errorf("engine: read reservation lock: %w", err)
+		return nil, "", "", fmt.Errorf("engine: read reservation lock: %w", err)
 	}
-	out := make([]string, 0, len(prices))
-	for _, price := range prices {
-		out = append(out, price.String())
-	}
-	return out, nil
+	settlement, source := settlementEstimate(pricesToStrings(prices), o)
+	return lockBytes, settlement, source, nil
 }
 
 // settlementEstimate derives the settlement-leg lock price and the estimate
@@ -538,7 +572,10 @@ func settlementEstimate(lockPrices []string, o domain.Order) (string, string) {
 }
 
 // persistIntent writes a reservation intent row for a held reservation in the
-// given state. Params and lock prices are marshalled to JSON.
+// given state. The order params plus persisted balance outcomes are marshalled
+// into the opaque ParamsJSON; the SDK-serialized lock is carried verbatim as the
+// intent's Lock blob (not as a decimal-array JSON). The order ref is the order's
+// opaque external id, zero for an in-memory-only hold.
 func persistIntent(
 	ctx context.Context, store ReservationStore,
 	held *heldReservation, state domain.ReservationIntentState,
@@ -550,19 +587,15 @@ func persistIntent(
 	if err != nil {
 		return fmt.Errorf("engine: marshal reservation params: %w", err)
 	}
-	pricesJSON, err := json.Marshal(held.lockPrices)
-	if err != nil {
-		return fmt.Errorf("engine: marshal reservation lock prices: %w", err)
-	}
 	intent := domain.ReservationIntent{
-		ApprovalID:     held.approvalID,
-		OrderID:        held.params.ID,
-		Account:        held.account,
-		ParamsJSON:     string(paramsJSON),
-		LockPricesJSON: string(pricesJSON),
-		IssuedAt:       held.issuedAt,
-		ExpiresAt:      held.expiresAt,
-		State:          state,
+		ApprovalID: held.approvalID,
+		Order:      held.params.ExternalID,
+		Account:    held.account,
+		ParamsJSON: string(paramsJSON),
+		Lock:       held.lock,
+		IssuedAt:   held.issuedAt,
+		ExpiresAt:  held.expiresAt,
+		State:      state,
 	}
 	if err := store.UpsertReservationIntent(ctx, intent); err != nil {
 		return fmt.Errorf("engine: persist reservation intent: %w", err)
@@ -587,27 +620,25 @@ type reservationIntentPayload struct {
 func resolveSweptRollback(
 	ctx context.Context, store ReservationStore, held *heldReservation,
 ) error {
-	tenant := held.params.Tenant
-	if tenant == "" {
-		tenant = domain.DefaultTenant
-	}
+	order := held.params.ExternalID
 	var events []domain.OrderEvent
-	if held.params.ID != 0 {
+	if !order.IsZero() {
 		events = []domain.OrderEvent{{
-			OrderID:   held.params.ID,
-			Type:      domain.OrderEventReservationRolledBack,
-			Source:    domain.SourceSystem,
-			Principal: "system",
+			Order:  order,
+			Type:   domain.OrderEventReservationRolledBack,
+			Source: domain.SourceSystem,
+			// A TTL-swept rollback is system-initiated: it has no actor principal, so
+			// the event carries an empty principal (a NULL reference). A literal
+			// "system" code would point at a non-existent principal dictionary row.
 		}}
 	}
 	err := store.ResolveOrderReservation(ctx, domain.ReservationResolution{
-		Tenant:      tenant,
 		ApprovalID:  held.approvalID,
 		IntentState: domain.ReservationIntentStateRolledBack,
 		OrderStatus: domain.OrderStatusRolledBack,
 		AllowedFrom: []domain.OrderStatus{domain.OrderStatusAccepted},
 		Events:      events,
-		OrderID:     held.params.ID,
+		Order:       order,
 	})
 	if err != nil {
 		// A swept order may have been committed/filled meanwhile: the status guard

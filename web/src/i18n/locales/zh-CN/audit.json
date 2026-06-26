@@ -3,8 +3,8 @@
   "description": "控制平面审计日志：所有账户与限制的变更记录，最新在前。每条操作均记录执行者、动作、来源及简明摘要。",
   "actions": {
     "pageSize": {
-      "ariaLabel": "每页行数",
-      "rowCount": "{{count}} 行"
+      "ariaLabel": "分页大小",
+      "rowCount": "每页 {{count}} 行"
     }
   },
   "filter": {

@@ -3,6 +3,16 @@
     "title": "Accounts",
     "description": "Operator accounts persisted in the control plane and applied to the engine. Block an account or group to halt orders via the kill switch."
   },
+  "tabs": {
+    "accounts": "Accounts",
+    "groups": "Groups"
+  },
+  "pagination": {
+    "pageSize": {
+      "ariaLabel": "Page size",
+      "rowCount": "{{count}} rows per page"
+    }
+  },
   "groups": {
     "heading": "Groups",
     "clearFilter": "(clear filter)",
@@ -58,7 +68,8 @@
       "notes": "Notes",
       "editNotesTitle": "Edit reference notes",
       "block": "Block",
-      "unblock": "Unblock"
+      "unblock": "Unblock",
+      "deleteTitle": "Delete account"
     },
     "empty": {
       "title": "No accounts",
@@ -70,34 +81,41 @@
     "trigger": "New account",
     "title": "Create account",
     "description": "Create an account in the control plane and optionally assign it to a group.",
-    "idLabel": "Account id",
-    "idHint": "Up to 64 printable characters, no leading or trailing whitespace.",
+    "codeLabel": "Account code",
+    "codeHint": "Up to 64 printable characters, no leading or trailing whitespace.",
     "groupLabel": "Group (optional)",
-    "groupHint": "Choose an existing group or type a new id. Leave blank to create an ungrouped account.",
+    "groupHint": "Choose an existing group or type a new code. Leave blank to create an ungrouped account.",
     "cancel": "Cancel",
     "submit": "Create"
   },
   "createGroup": {
     "trigger": "New group",
     "title": "Create group",
-    "idLabel": "Group id",
+    "codeLabel": "Group code",
+    "titleLabel": "Display title",
+    "titlePlaceholder": "US equity desks",
     "notesLabel": "Notes (optional)",
     "notesPlaceholder": "Accounts belonging to the US equity trading desks.",
     "notesHint": "Reference notes — stored in the control plane only, not sent to the engine.",
     "cancel": "Cancel",
     "submit": "Create"
   },
+  "businessCsv": {
+    "importCsv": "Import CSV",
+    "exportGroupsCsv": "Export groups CSV",
+    "exportAccountsCsv": "Export accounts CSV"
+  },
   "loadAccounts": {
     "trigger": "Load accounts",
     "title": "Load accounts from CSV",
     "formatHeading": "CSV format",
     "formatLine1": "One account per line:",
-    "formatCode1": "account_id[,group[,notes]]",
+    "formatCode1": "code[,title[,group_code[,notes]]]",
     "formatLine2prefix": "is required;",
     "formatLine2middle": "and",
     "formatLine2suffix": "are optional.",
     "formatLine3prefix": "A header row (",
-    "formatLine3code": "account_id,group,notes",
+    "formatLine3code": "code,title,group_code,notes",
     "formatLine3suffix": ") is allowed and skipped automatically.",
     "examplesHeading": "Examples",
     "chooseFile": "Choose file…",
@@ -150,6 +168,27 @@
     "descriptionSuffix": "will be permanently removed. Accounts currently assigned to this group will have their group assignment cleared.",
     "cancel": "Cancel",
     "submit": "Delete"
+  },
+  "deleteAccount": {
+    "title": "Delete account?",
+    "descriptionPrefix": "Account",
+    "descriptionSuffix": "will be permanently removed. Dependent trading records are deleted only after explicit force confirmation.",
+    "dependentsTitle": "Dependent rows block deletion",
+    "dependentKinds": {
+      "balances": "Balances",
+      "orders": "Orders",
+      "order_events": "Order events",
+      "trades": "Trades",
+      "order_approvals": "Order approvals",
+      "adjustments": "Adjustments",
+      "limit_rate": "Rate limits",
+      "limit_order_size": "Order size limits",
+      "limit_pnl_bounds": "P&L bound limits",
+      "reservation_intents": "Reservation intents"
+    },
+    "cancel": "Cancel",
+    "submit": "Delete",
+    "forceSubmit": "Force delete"
   },
   "editGroupNotes": {
     "titlePrefix": "Notes — group",

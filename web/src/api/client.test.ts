@@ -19,11 +19,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createMarketDataInstance,
+  exportBusinessCsv,
   exportBackup,
   fetchSigningKeys,
   generateSigningKey,
+  importBusinessCsv,
   importSigningKey,
   normalizeSigningKeysStatus,
+  previewBusinessCsvImport,
   resetDatabase,
   restoreBackup,
   searchMarketDataSymbols,
@@ -72,6 +75,415 @@ const backupArchive: BackupArchive = {
   },
   data: { accounts: [] },
 };
+
+describe("business CSV client", () => {
+  it("exports CSV with entity, delimiter, zip flag, filters, and filename", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response("account_id\nacc-default\n", {
+        status: 200,
+        headers: {
+          "Content-Type": "text/csv",
+          "Content-Disposition": "attachment; filename=\"accounts.csv\"",
+        },
+      }),
+    );
+
+    const result = await exportBusinessCsv({
+      entity: "accounts",
+      delimiter: "semicolon",
+      zip: false,
+      filters: { groupCode: "" },
+    });
+    const [, init] = vi.mocked(fetch).mock.calls[0];
+    const body = JSON.parse(String((init as RequestInit).body));
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/business-csv/export",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Accept: "text/csv",
+        }),
+      }),
+    );
+    expect(body).toEqual({
+      entity: "accounts",
+      delimiter: "semicolon",
+      zip: false,
+      filters: { groupCode: "" },
+    });
+    expect(result.filename).toBe("accounts.csv");
+    expect(result.blob.size).toBe("account_id\nacc-default\n".length);
+  });
+
+  it("exports ZIP with the returned filename", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response("zip-bytes", {
+        status: 200,
+        headers: {
+          "Content-Type": "application/zip",
+          "Content-Disposition": "attachment; filename*=UTF-8''orders.zip",
+        },
+      }),
+    );
+
+    const result = await exportBusinessCsv({
+      entity: "orders",
+      delimiter: "comma",
+      zip: true,
+      filters: { account: "desk-alpha", source: "panel" },
+    });
+
+    expect(result.filename).toBe("orders.zip");
+    const [, init] = vi.mocked(fetch).mock.calls[0];
+    const body = JSON.parse(String((init as RequestInit).body));
+    expect(body.zip).toBe(true);
+    expect(body.filters).toEqual({
+      account: "desk-alpha",
+      source: "panel",
+    });
+  });
+
+  it("omits undefined filters and never forwards display limits", async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response("id\n", { status: 200 }));
+
+    await exportBusinessCsv({
+      entity: "trades",
+      delimiter: "pipe",
+      filters: {
+        account: "desk-alpha",
+        source: "api",
+        limit: 50,
+      } as never,
+    });
+
+    const [, init] = vi.mocked(fetch).mock.calls[0];
+    const body = JSON.parse(String((init as RequestInit).body));
+    expect(body.filters).toEqual({
+      account: "desk-alpha",
+      source: "api",
+    });
+    expect(body.filters).not.toHaveProperty("limit");
+  });
+
+  it("surfaces business CSV export network errors as ApiError", async () => {
+    vi.mocked(fetch).mockRejectedValue(new Error("connection reset"));
+
+    await expect(
+      exportBusinessCsv({ entity: "accounts", delimiter: "comma" }),
+    ).rejects.toMatchObject({
+      name: "ApiError",
+      code: "network",
+      message: expect.stringContaining("connection reset"),
+    });
+  });
+
+  it("previews and applies imports with payloadBase64 and conflictPolicy", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(
+        jsonResponse({
+          preview: {
+            file: { name: "accounts.csv", type: "csv" },
+            counts: {
+              rows: 2,
+              applied: 0,
+              skipped: 0,
+              conflicts: 1,
+              stopped: false,
+            },
+            conflicts: [{ row: 2, key: "desk-alpha" }],
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          result: {
+            file: { name: "accounts.csv", type: "csv" },
+            counts: {
+              rows: 2,
+              applied: 1,
+              skipped: 1,
+              conflicts: 1,
+              stopped: false,
+            },
+            conflicts: [{ row: 2, key: "desk-alpha" }],
+          },
+        }),
+      );
+
+    const preview = await previewBusinessCsvImport({
+      entity: "accounts",
+      delimiter: "comma",
+      filename: "accounts.csv",
+      payloadBase64: "YWNjb3VudF9pZAo=",
+    });
+    const result = await importBusinessCsv({
+      entity: "accounts",
+      delimiter: "comma",
+      filename: "accounts.csv",
+      payloadBase64: "YWNjb3VudF9pZAo=",
+      conflictPolicy: "replace",
+    });
+
+    const previewBody = JSON.parse(
+      String((vi.mocked(fetch).mock.calls[0][1] as RequestInit).body),
+    );
+    const importBody = JSON.parse(
+      String((vi.mocked(fetch).mock.calls[1][1] as RequestInit).body),
+    );
+    expect(previewBody).toEqual({
+      entity: "accounts",
+      delimiter: "comma",
+      filename: "accounts.csv",
+      payloadBase64: "YWNjb3VudF9pZAo=",
+    });
+    expect(importBody).toEqual({
+      ...previewBody,
+      conflictPolicy: "replace",
+    });
+    expect(preview.conflicts[0]).toEqual({ row: 2, key: "desk-alpha" });
+    expect(result.counts.applied).toBe(1);
+  });
+
+  it("surfaces business CSV HTTP errors as ApiError", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: { code: "validation", message: "bad delimiter" },
+        }),
+        {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    await expect(
+      exportBusinessCsv({ entity: "accounts", delimiter: "comma" }),
+    ).rejects.toMatchObject({
+      name: "ApiError",
+      code: "validation",
+      message: "bad delimiter",
+    });
+  });
+
+  it("surfaces business CSV preview HTTP errors as ApiError", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: { code: "validation", message: "invalid CSV header" },
+        }),
+        {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    await expect(
+      previewBusinessCsvImport({
+        entity: "accounts",
+        delimiter: "comma",
+        filename: "accounts.csv",
+        payloadBase64: "YWNjb3VudF9pZAo=",
+      }),
+    ).rejects.toMatchObject({
+      name: "ApiError",
+      code: "validation",
+      message: "invalid CSV header",
+    });
+  });
+
+  it("surfaces business CSV import HTTP errors as ApiError", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: { code: "conflict", message: "account already exists" },
+        }),
+        {
+          status: 409,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    await expect(
+      importBusinessCsv({
+        entity: "accounts",
+        delimiter: "comma",
+        filename: "accounts.csv",
+        payloadBase64: "YWNjb3VudF9pZAo=",
+        conflictPolicy: "stop",
+      }),
+    ).rejects.toMatchObject({
+      name: "ApiError",
+      code: "conflict",
+      message: "account already exists",
+    });
+  });
+
+  it("localizes known too_large API errors instead of backend prose", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: { code: "too_large", message: "server-side English detail" },
+        }),
+        {
+          status: 413,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    await expect(
+      previewBusinessCsvImport({
+        entity: "accounts",
+        delimiter: "comma",
+        filename: "accounts.csv",
+        payloadBase64: "YWNjb3VudF9pZAo=",
+      }),
+    ).rejects.toMatchObject({
+      name: "ApiError",
+      code: "too_large",
+      message:
+        "The import exceeds the maximum size of 128 MiB. Split the export into smaller files or use the API for bulk loading.",
+    });
+  });
+
+  it("falls back to backend prose for unknown API error codes", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: { code: "new_backend_code", message: "backend detail" },
+        }),
+        {
+          status: 418,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    await expect(
+      previewBusinessCsvImport({
+        entity: "accounts",
+        delimiter: "comma",
+        filename: "accounts.csv",
+        payloadBase64: "YWNjb3VudF9pZAo=",
+      }),
+    ).rejects.toMatchObject({
+      name: "ApiError",
+      code: "internal",
+      message: "backend detail",
+    });
+  });
+});
+
+describe("limits client", () => {
+  it("flattens typed limit-list responses for the dashboard view", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        limits: {
+          rateLimits: [
+            {
+              scope: "account",
+              account: "desk-alpha",
+              asset: "",
+              windowMs: 60000,
+              maxOrders: 20,
+            },
+          ],
+          orderSizeLimits: [
+            {
+              scope: "account_asset",
+              account: "desk-alpha",
+              asset: "AAPL",
+              maxQuantity: "10",
+              maxNotional: "1500",
+            },
+          ],
+          pnlBoundsLimits: [],
+        },
+      }),
+    );
+
+    const { fetchLimits } = await import("@/api/client");
+    const limits = await fetchLimits("desk-alpha");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/limits?account=desk-alpha",
+      expect.any(Object),
+    );
+    expect(limits).toEqual([
+      {
+        policy: "rate_limit",
+        scope: "account",
+        account: "desk-alpha",
+        asset: "",
+        values: { max_orders: "20", window: "1m" },
+      },
+      {
+        policy: "order_size_limit",
+        scope: "account_asset",
+        account: "desk-alpha",
+        asset: "AAPL",
+        values: { max_quantity: "10", max_notional: "1500" },
+      },
+    ]);
+  });
+
+  it("upserts rate limits through the typed policy endpoint", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        rateLimit: {
+          scope: "account",
+          account: "desk-alpha",
+          asset: "",
+          windowMs: 60000,
+          maxOrders: 20,
+        },
+      }),
+    );
+
+    const { putLimit } = await import("@/api/client");
+    const limit = await putLimit({
+      policy: "rate_limit",
+      scope: "account",
+      account: "desk-alpha",
+      asset: "",
+      values: { max_orders: "20", window: "1m" },
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/limits/rate",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          scope: "account",
+          account: "desk-alpha",
+          asset: "",
+          windowMs: 60000,
+          maxOrders: 20,
+        }),
+      }),
+    );
+    expect(limit.values.window).toBe("1m");
+  });
+
+  it("rejects invalid max_orders before sending rate limits", async () => {
+    const { putLimit } = await import("@/api/client");
+
+    await expect(
+      putLimit({
+        policy: "rate_limit",
+        scope: "account",
+        account: "desk-alpha",
+        asset: "",
+        values: { max_orders: "", window: "1m" },
+      }),
+    ).rejects.toThrow("rate limit max_orders must be an integer greater than 0");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});
 
 describe("backup client", () => {
   it("exports a backup and parses RFC 5987 filenames", async () => {
@@ -280,8 +692,25 @@ describe("backup client", () => {
 
 describe("market-data client settings payloads", () => {
   it("sends provider credentials when creating an IB source", async () => {
-    await createMarketDataInstance({
-      type: "ib",
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        instance: {
+          externalId: "md-created",
+          provider: "ib",
+          label: "IB Gateway",
+          credentials: "",
+          enabled: true,
+          state: "",
+          verifiesSymbols: false,
+          searchesSymbols: false,
+          instruments: [],
+          diagnostics: [],
+        },
+      }),
+    );
+
+    const instance = await createMarketDataInstance({
+      provider: "ib",
       label: "IB Gateway",
       credentials: JSON.stringify({
         host: "127.0.0.1",
@@ -296,13 +725,14 @@ describe("market-data client settings payloads", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({
-          type: "ib",
+          provider: "ib",
           label: "IB Gateway",
           credentials: '{"host":"127.0.0.1","port":7496,"clientId":7}',
           enabled: true,
         }),
       }),
     );
+    expect(instance.externalId).toBe("md-created");
   });
 
   it("sends blank secret placeholders on settings update", async () => {
@@ -773,15 +1203,43 @@ describe("signing-keys HTTP calls", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Orders — submit mode tests
+// Orders — submit creates a signed approval token and addresses by external id
 // ---------------------------------------------------------------------------
 
-describe("Orders createOrder submit-mode", () => {
-  function orderResponse(submitMode?: "hold" | "immediate"): Response {
+describe("Orders createOrder submit lifecycle", () => {
+  function approvalResponse(orderExternalId = "ord_alpha_0000000001"): Response {
+    return new Response(
+      JSON.stringify({
+        token: "approval-token",
+        keyId: "key-1",
+        expiresAt: "2026-01-01T00:05:00Z",
+        orderExternalId,
+      }),
+      { status: 201, headers: { "Content-Type": "application/json" } },
+    );
+  }
+
+  function wrappedApprovalResponse(
+    orderExternalId = "ord_alpha_0000000001",
+  ): Response {
+    return new Response(
+      JSON.stringify({
+        approval: {
+          token: "approval-token",
+          keyId: "key-1",
+          expiresAt: "2026-01-01T00:05:00Z",
+          orderExternalId,
+        },
+      }),
+      { status: 201, headers: { "Content-Type": "application/json" } },
+    );
+  }
+
+  function orderResponse(orderExternalId = "ord_alpha_0000000001"): Response {
     return new Response(
       JSON.stringify({
         order: {
-          id: 1,
+          externalId: orderExternalId,
           account: "desk-alpha",
           at: "2026-01-01T00:00:00Z",
           source: "panel",
@@ -792,16 +1250,17 @@ describe("Orders createOrder submit-mode", () => {
           amountValue: "100",
           price: "0",
           status: "accepted",
-          lockPrices: [],
-          ...(submitMode ? { submitMode } : {}),
+          displayPrices: [],
         },
       }),
       { status: 200, headers: { "Content-Type": "application/json" } },
     );
   }
 
-  it("does not send submitMode when immediate (default)", async () => {
-    vi.mocked(fetch).mockResolvedValueOnce(orderResponse());
+  it("submits through /orders/submit and fetches the created external id", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(approvalResponse())
+      .mockResolvedValueOnce(orderResponse());
     const { createOrder } = await import("@/api/client");
     await createOrder({
       account: "desk-alpha",
@@ -811,8 +1270,9 @@ describe("Orders createOrder submit-mode", () => {
       amountKind: "quantity",
       amountValue: "100",
     });
-    expect(fetch).toHaveBeenCalledWith(
-      "/app/api/v1/orders",
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      "/app/api/v1/orders/submit",
       expect.objectContaining({
         body: JSON.stringify({
           account: "desk-alpha",
@@ -824,40 +1284,61 @@ describe("Orders createOrder submit-mode", () => {
         }),
       }),
     );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "/app/api/v1/orders/ord_alpha_0000000001",
+      expect.any(Object),
+    );
   });
 
-  it("sends submitMode=hold when hold mode is specified", async () => {
-    vi.mocked(fetch).mockResolvedValueOnce(orderResponse());
+  it("sends caller-supplied externalId and hold mode", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(approvalResponse("ord_supplied_000001"))
+      .mockResolvedValueOnce(orderResponse("ord_supplied_000001"));
+    const controller = new AbortController();
     const { createOrder } = await import("@/api/client");
     await createOrder({
+      externalId: "ord_supplied_000001",
       account: "desk-alpha",
       baseAsset: "AAPL",
       quoteAsset: "USD",
       side: "buy",
       amountKind: "quantity",
       amountValue: "100",
-      submitMode: "hold",
-    });
-    expect(fetch).toHaveBeenCalledWith(
-      "/app/api/v1/orders",
+      mode: "hold",
+    }, controller.signal);
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      "/app/api/v1/orders/submit",
       expect.objectContaining({
         body: JSON.stringify({
+          externalId: "ord_supplied_000001",
           account: "desk-alpha",
           baseAsset: "AAPL",
           quoteAsset: "USD",
           side: "buy",
           amountKind: "quantity",
           amountValue: "100",
-          submitMode: "hold",
+          mode: "hold",
         }),
+        signal: controller.signal,
+      }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "/app/api/v1/orders/ord_supplied_000001",
+      expect.objectContaining({
+        signal: controller.signal,
       }),
     );
   });
 
-  it("normalizes submitMode from order responses", async () => {
-    vi.mocked(fetch).mockResolvedValueOnce(orderResponse("hold"));
+  it("normalizes wrapped approval tokens", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(wrappedApprovalResponse("ord_wrapped_0000001"))
+      .mockResolvedValueOnce(orderResponse("ord_wrapped_0000001"));
     const { createOrder } = await import("@/api/client");
-    const order = await createOrder({
+    const result = await createOrder({
       account: "desk-alpha",
       baseAsset: "AAPL",
       quoteAsset: "USD",
@@ -865,6 +1346,83 @@ describe("Orders createOrder submit-mode", () => {
       amountKind: "quantity",
       amountValue: "100",
     });
-    expect(order.submitMode).toBe("hold");
+    expect(result.order.externalId).toBe("ord_wrapped_0000001");
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "/app/api/v1/orders/ord_wrapped_0000001",
+      expect.any(Object),
+    );
+  });
+
+  it("normalizes displayPrices from the fetched order", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(approvalResponse())
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            order: {
+              externalId: "ord_alpha_0000000001",
+              account: "desk-alpha",
+              at: "2026-01-01T00:00:00Z",
+              source: "panel",
+              baseAsset: "AAPL",
+              quoteAsset: "USD",
+              side: "buy",
+              amountKind: "quantity",
+              amountValue: "100",
+              price: "0",
+              status: "accepted",
+              displayPrices: ["101.20"],
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    const { createOrder } = await import("@/api/client");
+    const result = await createOrder({
+      account: "desk-alpha",
+      baseAsset: "AAPL",
+      quoteAsset: "USD",
+      side: "buy",
+      amountKind: "quantity",
+      amountValue: "100",
+    });
+    expect(result.order.displayPrices).toEqual(["101.20"]);
+    expect(result.warning).toBeUndefined();
+  });
+
+  it("returns a created-order warning when detail enrichment fails", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(approvalResponse())
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: { message: "store down" } }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    const { createOrder } = await import("@/api/client");
+    const result = await createOrder({
+      account: "desk-alpha",
+      baseAsset: "AAPL",
+      quoteAsset: "USD",
+      side: "buy",
+      amountKind: "quantity",
+      amountValue: "100",
+    });
+
+    expect(result.order).toMatchObject({
+      externalId: "ord_alpha_0000000001",
+      account: "desk-alpha",
+      baseAsset: "AAPL",
+      quoteAsset: "USD",
+      side: "buy",
+      amountKind: "quantity",
+      amountValue: "100",
+      price: "0",
+      status: "submitted",
+    });
+    expect(result.warning).toContain(
+      "Order was created, but detail enrichment failed",
+    );
   });
 });

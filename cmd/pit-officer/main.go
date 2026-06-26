@@ -44,6 +44,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"sync"
 	"syscall"
 	"time"
 
@@ -122,6 +123,22 @@ type controlPlane struct {
 	cfg        config.Config
 }
 
+type fatalShutdown struct {
+	logger *slog.Logger
+	once   sync.Once
+}
+
+func newFatalShutdown(logger *slog.Logger) *fatalShutdown {
+	return &fatalShutdown{logger: logger}
+}
+
+func (f *fatalShutdown) handle(err error) {
+	f.once.Do(func() {
+		f.logger.Error("fatal store error; exiting", "err", err)
+		os.Exit(1)
+	})
+}
+
 // setup performs the shared startup for the mcp and serve modes: open the
 // store, migrate it, then build the single local node. NewLocalNode builds the
 // one engine seeded from the store and the node assembles the single-node
@@ -130,9 +147,16 @@ type controlPlane struct {
 //
 // Order matters: Migrate must run before NewLocalNode, because the build reads
 // the accounts and limits tables the migration creates.
-func setup(ctx context.Context, cfg config.Config, logger *slog.Logger) (
-	*controlPlane, error) {
-	st, err := store.NewSQLiteStore(cfg.SQLitePath)
+func setup(
+	ctx context.Context,
+	cfg config.Config,
+	logger *slog.Logger,
+	fatalHook func(error),
+) (*controlPlane, error) {
+	st, err := store.NewSQLiteStore(
+		cfg.SQLitePath,
+		store.WithFatalShutdownHook(fatalHook),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("open store: %w", err)
 	}
@@ -145,6 +169,16 @@ func setup(ctx context.Context, cfg config.Config, logger *slog.Logger) (
 
 	build := func(snap engine.Snapshot) (engine.Engine, error) {
 		return engine.BuildOpenPitEngine(cfg.RuntimeLibraryPath, snap)
+	}
+
+	// Bind the default realm once; every component that needs direct data access
+	// (reservation store, signing, market-data) receives this handle. node.NewLocalNode
+	// calls ForRealm internally for its own access, so the two handles share the
+	// same underlying connection.
+	realm, err := st.ForRealm(ctx, domain.DefaultRealm)
+	if err != nil {
+		_ = st.Close()
+		return nil, fmt.Errorf("bind realm: %w", err)
 	}
 
 	localNode, eng, err := node.NewLocalNode(ctx, st, build)
@@ -160,7 +194,7 @@ func setup(ctx context.Context, cfg config.Config, logger *slog.Logger) (
 	// held balances reseed from stored balances and later confirm/cancel can fall
 	// back to the persisted intent. This must run before the first hold and before
 	// the surfaces serve.
-	eng.SetReservationStore(st)
+	eng.SetReservationStore(realm)
 	if reconciled, err := localNode.ReconcileOrphans(ctx); err != nil {
 		_ = localNode.Close()
 		return nil, fmt.Errorf("inspect restarted reservations: %w", err)
@@ -170,7 +204,7 @@ func setup(ctx context.Context, cfg config.Config, logger *slog.Logger) (
 
 	// The signing service backs the approval-token flow: it loads the active
 	// Ed25519 key (if any) and the global eSign flag from the store.
-	signer, err := signing.New(st)
+	signer, err := signing.New(realm)
 	if err != nil {
 		_ = localNode.Close()
 		return nil, fmt.Errorf("build signing service: %w", err)
@@ -186,7 +220,7 @@ func setup(ctx context.Context, cfg config.Config, logger *slog.Logger) (
 	// the current engine sink; restore can swap the sink and restart the manager.
 	// Nothing enabled is a clean no-op, and a bad instance is logged and skipped,
 	// so Start never fails setup on configuration alone.
-	manager := marketdata.NewManager(st, eng.MarketDataSink(), logger)
+	manager := marketdata.NewManager(realm, eng.MarketDataSink(), logger)
 	if err := manager.Start(ctx); err != nil {
 		_ = localNode.Close()
 		return nil, fmt.Errorf("start market-data manager: %w", err)
@@ -229,7 +263,8 @@ func runMCP(args []string, logger *slog.Logger) error {
 		syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	cp, err := setup(ctx, cfg, logger)
+	fatal := newFatalShutdown(logger)
+	cp, err := setup(ctx, cfg, logger, fatal.handle)
 	if err != nil {
 		return err
 	}
@@ -261,7 +296,8 @@ func runServe(args []string, logger *slog.Logger, buf *logtail.Buffer) error {
 		syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	cp, err := setup(ctx, cfg, logger)
+	fatal := newFatalShutdown(logger)
+	cp, err := setup(ctx, cfg, logger, fatal.handle)
 	if err != nil {
 		return err
 	}
@@ -549,15 +585,21 @@ func (a sourceAdapter) Status(ctx context.Context) (officermcp.Status, error) {
 // GetAccountState delegates to the backend service.
 func (a sourceAdapter) GetAccountState(
 	ctx context.Context, id domain.AccountID,
-) (domain.Account, []domain.Limit, error) {
+) (domain.Account, node.AccountLimits, error) {
 	return a.service.GetAccountState(ctx, id)
 }
 
 // ListLimits delegates to the backend service.
 func (a sourceAdapter) ListLimits(
 	ctx context.Context, account domain.AccountID,
-) ([]domain.Limit, error) {
+) (node.AccountLimits, error) {
 	return a.service.ListLimits(ctx, account)
+}
+
+// GetOrder delegates to the backend service, returning the order addressed by
+// its external-id handle.
+func (a sourceAdapter) GetOrder(ctx context.Context, externalID string) (domain.OrderDetail, error) {
+	return a.service.GetOrder(ctx, externalID)
 }
 
 // ListAudit delegates to the backend service.
@@ -604,23 +646,23 @@ func (a sourceAdapter) SubmitOrderToken(
 		return officermcp.SubmitOrderTokenResult{}, err
 	}
 	return officermcp.SubmitOrderTokenResult{
-		Token:     tok.Token,
-		KeyID:     tok.KeyID,
-		ExpiresAt: tok.ExpiresAt,
-		OrderID:   tok.OrderID,
+		Token:           tok.Token,
+		KeyID:           tok.KeyID,
+		ExpiresAt:       tok.ExpiresAt,
+		OrderExternalID: tok.OrderExternalID,
 	}, nil
 }
 
 // ConfirmExecution delegates to the backend confirm flow.
 func (a sourceAdapter) ConfirmExecution(
-	ctx context.Context, orderID int64, token string, force bool,
+	ctx context.Context, orderExternalID, token string, force bool,
 ) (domain.Order, error) {
-	return a.service.ConfirmExecution(ctx, orderID, token, force)
+	return a.service.ConfirmExecution(ctx, orderExternalID, token, force)
 }
 
 // CancelOrder delegates to the backend cancel flow.
 func (a sourceAdapter) CancelOrder(
-	ctx context.Context, orderID int64, token, reason string, force bool,
+	ctx context.Context, orderExternalID, token, reason string, force bool,
 ) (domain.Order, error) {
-	return a.service.CancelOrder(ctx, orderID, token, reason, force)
+	return a.service.CancelOrder(ctx, orderExternalID, token, reason, force)
 }

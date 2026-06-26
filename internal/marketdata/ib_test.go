@@ -728,8 +728,8 @@ func TestNewConnectorIBRegistered(t *testing.T) {
 	t.Parallel()
 
 	connector, err := newConnector(domain.MarketDataInstance{
-		ID:   "ib-1",
-		Type: domain.MarketDataProviderIB,
+		ExternalID: testExternalID("ib-1"),
+		Provider:   domain.MarketDataProviderIB,
 	})
 	if err != nil {
 		t.Fatalf("newConnector: %v", err)

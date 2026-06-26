@@ -21,8 +21,16 @@ import { I18nextProvider } from "react-i18next";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type {
+  Balance,
+  BusinessCsvEntity,
+  BusinessCsvExportFilters,
+  BusinessCsvImportEntity,
+  Order,
+  OrderEvent,
+  Trade,
+} from "@/api/types";
 import type { PollingResult } from "@/api/usePolling";
-import type { Balance, Order, OrderEvent, Trade } from "@/api/types";
 import { SidebarProvider } from "@/components/SidebarContext";
 import i18n from "@/i18n";
 import { Orders } from "@/pages/Orders";
@@ -47,6 +55,7 @@ vi.mock("@/api/client", async () => {
   const actual = await vi.importActual<typeof import("@/api/client")>("@/api/client");
   return {
     ...actual,
+    exportBusinessCsv: vi.fn(),
     fetchAccounts: vi.fn().mockResolvedValue([]),
     fetchAccountState: vi.fn(),
     checkOrder: vi.fn(),
@@ -55,10 +64,69 @@ vi.mock("@/api/client", async () => {
     submitExecutionReport: vi.fn().mockResolvedValue({ blocks: [] }),
   };
 });
+vi.mock("@/components/TableControls", async () => {
+  const actual =
+    await vi.importActual<typeof import("@/components/TableControls")>(
+      "@/components/TableControls",
+    );
+  const dialogs =
+    await vi.importActual<typeof import("@/components/BusinessCsvDialogs")>(
+      "@/components/BusinessCsvDialogs",
+    );
+  return {
+    ...actual,
+    CsvTransferMenu: ({
+      exports,
+      imports,
+      onImported,
+    }: {
+      exports?: {
+        entity: BusinessCsvEntity;
+        filters?: BusinessCsvExportFilters;
+        label: string;
+      }[];
+      imports?: {
+        defaultEntity?: BusinessCsvImportEntity;
+        entities: BusinessCsvImportEntity[];
+        label: string;
+      }[];
+      onImported?: () => void;
+    }) => (
+      <>
+        {imports?.map((item) => (
+          <dialogs.BusinessCsvImportDialog
+            key={`import-${item.label}`}
+            defaultEntity={item.defaultEntity}
+            entities={item.entities}
+            onImported={onImported ?? (() => {})}
+            trigger={(open) => (
+              <button type="button" onClick={open}>
+                {item.label}
+              </button>
+            )}
+          />
+        ))}
+        {exports?.map((item) => (
+          <dialogs.BusinessCsvExportDialog
+            key={`export-${item.entity}-${item.label}`}
+            entity={item.entity}
+            filters={item.filters}
+            trigger={(open) => (
+              <button type="button" onClick={open}>
+                {item.label}
+              </button>
+            )}
+          />
+        ))}
+      </>
+    ),
+  };
+});
 
 import {
   checkOrder,
   createOrder,
+  exportBusinessCsv,
   fetchOrderDetail,
   submitExecutionReport,
 } from "@/api/client";
@@ -75,11 +143,20 @@ const useTradesMock = vi.mocked(useTrades);
 const useBalancesMock = vi.mocked(useBalances);
 const checkOrderMock = vi.mocked(checkOrder);
 const createOrderMock = vi.mocked(createOrder);
+const exportBusinessCsvMock = vi.mocked(exportBusinessCsv);
 const fetchOrderDetailMock = vi.mocked(fetchOrderDetail);
 const submitExecutionReportMock = vi.mocked(submitExecutionReport);
 
+const proto = window.HTMLElement.prototype as HTMLElement & {
+  hasPointerCapture?: (pointerId: number) => boolean;
+  setPointerCapture?: (pointerId: number) => void;
+};
+proto.hasPointerCapture = () => false;
+proto.setPointerCapture = () => {};
+proto.scrollIntoView = () => {};
+
 const sampleOrder: Order = {
-  id: 1,
+  externalId: "ord-alpha-1",
   account: "desk-alpha",
   at: "2026-06-24T00:00:00Z",
   source: "panel",
@@ -90,7 +167,7 @@ const sampleOrder: Order = {
   amountValue: "100",
   price: "0",
   status: "accepted",
-  lockPrices: [],
+  displayPrices: [],
 };
 
 function renderOrders(initialEntry: string) {
@@ -121,10 +198,14 @@ beforeEach(async () => {
   checkOrderMock.mockResolvedValue({
     passed: true,
     rejects: [],
-    wouldLockPrices: [],
+    wouldDisplayPrices: [],
     wouldBlock: null,
   });
-  createOrderMock.mockResolvedValue(sampleOrder);
+  createOrderMock.mockResolvedValue({ order: sampleOrder });
+  exportBusinessCsvMock.mockResolvedValue({
+    blob: new Blob(["csv"]),
+    filename: "business.csv",
+  });
   submitExecutionReportMock.mockResolvedValue({ blocks: [] });
   fetchOrderDetailMock.mockResolvedValue({
     order: sampleOrder,
@@ -132,6 +213,15 @@ beforeEach(async () => {
     trades: [],
     approval: null,
   });
+  Object.defineProperty(URL, "createObjectURL", {
+    configurable: true,
+    value: vi.fn(() => "blob:orders-csv"),
+  });
+  Object.defineProperty(URL, "revokeObjectURL", {
+    configurable: true,
+    value: vi.fn(),
+  });
+  HTMLAnchorElement.prototype.click = () => {};
 });
 
 describe("Orders account pre-fill", () => {
@@ -230,6 +320,10 @@ describe("Orders submit mode", () => {
     renderOrders("/orders");
     const dialog = await openDialog(user);
 
+    await user.type(
+      within(dialog).getByLabelText("External ID (optional)"),
+      "ord-supplied-000001",
+    );
     await user.type(within(dialog).getByLabelText("Account"), "desk-alpha");
     await user.type(within(dialog).getByLabelText("Base asset"), "AAPL");
     await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
@@ -252,25 +346,92 @@ describe("Orders submit mode", () => {
 
     await user.click(submitButton);
     await waitFor(() => expect(createOrderMock).toHaveBeenCalledTimes(1));
+    const submitted = createOrderMock.mock.calls[0][0];
+    const signal = createOrderMock.mock.calls[0][1];
+    expect(submitted).toMatchObject({
+      externalId: "ord-supplied-000001",
+      account: "desk-alpha",
+      baseAsset: "AAPL",
+      quoteAsset: "USD",
+      side: "buy",
+      amountKind: "quantity",
+      amountValue: "100",
+      mode: "immediate",
+    });
+    expect(submitted).not.toHaveProperty("submitMode");
+    expect(signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("shows create-order enrichment warnings in the detail dialog", async () => {
+    const user = userEvent.setup();
+    const warning = "Order was created, but detail enrichment failed: store down";
+    createOrderMock.mockResolvedValueOnce({ order: sampleOrder, warning });
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+
+    await user.type(within(dialog).getByLabelText("Account"), "desk-alpha");
+    await user.type(within(dialog).getByLabelText("Base asset"), "AAPL");
+    await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
+    await user.type(within(dialog).getByLabelText("Amount"), "100");
+    await user.click(within(dialog).getByRole("radio", { name: /quantity/i }));
+    await user.click(within(dialog).getByRole("radio", { name: /record executed trade/i }));
+    await user.click(within(dialog).getByRole("button", { name: /add order/i }));
+
+    expect(await screen.findByText(warning)).toBeInTheDocument();
+  });
+
+  it("clears busy after aborting an in-flight submit", async () => {
+    const user = userEvent.setup();
+    createOrderMock.mockImplementation((_body, signal) => (
+      new Promise((_, reject) => {
+        signal?.addEventListener("abort", () => {
+          reject(new DOMException("aborted", "AbortError"));
+        }, { once: true });
+      })
+    ));
+    renderOrders("/orders");
+    let dialog = await openDialog(user);
+
+    await user.type(within(dialog).getByLabelText("Account"), "desk-alpha");
+    await user.type(within(dialog).getByLabelText("Base asset"), "AAPL");
+    await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
+    await user.type(within(dialog).getByLabelText("Amount"), "100");
+    await user.click(within(dialog).getByRole("radio", { name: /quantity/i }));
+    await user.click(within(dialog).getByRole("radio", { name: /record executed trade/i }));
+    await user.click(within(dialog).getByRole("button", { name: /add order/i }));
+    await waitFor(() => expect(createOrderMock).toHaveBeenCalledTimes(1));
+
+    await user.click(within(dialog).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    dialog = await openDialog(user);
+    await user.type(within(dialog).getByLabelText("Account"), "desk-alpha");
+    await user.type(within(dialog).getByLabelText("Base asset"), "AAPL");
+    await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
+    await user.type(within(dialog).getByLabelText("Amount"), "100");
+    await user.click(within(dialog).getByRole("radio", { name: /quantity/i }));
+    await user.click(within(dialog).getByRole("radio", { name: /record executed trade/i }));
+
+    expect(within(dialog).getByRole("button", { name: /add order/i })).toBeEnabled();
   });
 });
 
 describe("Order detail account block placement", () => {
   it("shows the account block reason beside the fill event that caused it", async () => {
     const user = userEvent.setup();
-    const order = { ...sampleOrder, id: 3, status: "filled", price: "99" };
+    const order = { ...sampleOrder, externalId: "ord-alpha-3", status: "filled", price: "99" };
     const events: OrderEvent[] = [
       {
-        id: 1,
-        orderId: 3,
+        externalId: "evt-alpha-1",
+        order: "ord-alpha-3",
         at: "2026-06-24T11:07:00Z",
         type: "submitted",
         source: "panel",
         principal: "",
       },
       {
-        id: 2,
-        orderId: 3,
+        externalId: "evt-alpha-2",
+        order: "ord-alpha-3",
         at: "2026-06-24T11:08:00Z",
         type: "fill",
         source: "panel",
@@ -295,7 +456,7 @@ describe("Order detail account block placement", () => {
     });
     renderOrders("/orders");
 
-    await user.click(screen.getByText("#3"));
+    await user.click(screen.getByText("ord-alpha-3"));
 
     const dialog = await screen.findByRole("dialog");
     const blockReason = await within(dialog).findByText(
@@ -316,20 +477,119 @@ describe("Order detail account block placement", () => {
   });
 });
 
+describe("Orders business CSV export", () => {
+  it("exports orders with account and source filters but no display size", async () => {
+    const user = userEvent.setup();
+    renderOrders("/orders?account=desk-alpha&source=panel");
+
+    await user.click(screen.getByRole("button", { name: /export orders csv/i }));
+    await user.click(screen.getByRole("button", { name: /^export$/i }));
+
+    await waitFor(() => expect(exportBusinessCsvMock).toHaveBeenCalledTimes(1));
+    expect(exportBusinessCsvMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entity: "orders",
+        filters: {
+          account: "desk-alpha",
+          source: "panel",
+        },
+      }),
+    );
+    expect(exportBusinessCsvMock.mock.calls[0][0].filters).not.toHaveProperty(
+      "limit",
+    );
+  });
+
+  it("normalizes URL _all source before loading and exporting orders", async () => {
+    const user = userEvent.setup();
+    renderOrders("/orders?account=desk-alpha&source=_all");
+
+    expect(useOrdersMock).toHaveBeenCalledWith("desk-alpha", undefined, 51);
+    expect(useTradesMock).toHaveBeenCalledWith("desk-alpha", undefined, 51);
+
+    await user.click(screen.getByRole("button", { name: /export orders csv/i }));
+    await user.click(screen.getByRole("button", { name: /^export$/i }));
+
+    await waitFor(() => expect(exportBusinessCsvMock).toHaveBeenCalledTimes(1));
+    expect(exportBusinessCsvMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entity: "orders",
+        filters: { account: "desk-alpha" },
+      }),
+    );
+    expect(exportBusinessCsvMock.mock.calls[0][0].filters).not.toHaveProperty(
+      "source",
+    );
+    expect(exportBusinessCsvMock.mock.calls[0][0].filters).not.toHaveProperty(
+      "limit",
+    );
+  });
+
+  it("exports trades with account and source filters but no display size", async () => {
+    const user = userEvent.setup();
+    renderOrders("/orders?account=desk-alpha&source=api");
+
+    await user.click(screen.getByRole("button", { name: /^trades$/i }));
+    await user.click(screen.getByRole("button", { name: /export trades csv/i }));
+    await user.click(screen.getByRole("button", { name: /^export$/i }));
+
+    await waitFor(() => expect(exportBusinessCsvMock).toHaveBeenCalledTimes(1));
+    expect(exportBusinessCsvMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entity: "trades",
+        filters: {
+          account: "desk-alpha",
+          source: "api",
+        },
+      }),
+    );
+    expect(exportBusinessCsvMock.mock.calls[0][0].filters).not.toHaveProperty(
+      "limit",
+    );
+  });
+
+  it("downloads using the returned business CSV filename", async () => {
+    const user = userEvent.setup();
+    const anchors: HTMLAnchorElement[] = [];
+    const realCreateElement = document.createElement.bind(document);
+    const createElementSpy = vi.spyOn(document, "createElement").mockImplementation(
+      ((tagName: string, options?: ElementCreationOptions) => {
+        const element = realCreateElement(tagName, options);
+        if (tagName === "a") {
+          anchors.push(element as HTMLAnchorElement);
+        }
+        return element;
+      }) as typeof document.createElement,
+    );
+    exportBusinessCsvMock.mockResolvedValueOnce({
+      blob: new Blob(["orders"]),
+      filename: "orders-export.csv",
+    });
+    renderOrders("/orders");
+
+    await user.click(screen.getByRole("button", { name: /export orders csv/i }));
+    await user.click(screen.getByRole("button", { name: /^export$/i }));
+
+    await waitFor(() => expect(exportBusinessCsvMock).toHaveBeenCalledTimes(1));
+    expect(anchors.at(-1)?.download).toBe("orders-export.csv");
+    createElementSpy.mockRestore();
+  });
+});
+
 describe("Execution report force submit", () => {
   it("sends force when submitting a cloned execution report with force enabled", async () => {
     const user = userEvent.setup();
     const order = {
       ...sampleOrder,
-      id: 4,
+      externalId: "ord-alpha-4",
       status: "filled",
       price: "12",
-      lockPrices: ["12"],
+      displayPrices: ["12"],
     };
     const trades: Trade[] = [
       {
-        id: 9,
-        orderId: 4,
+        externalId: "trd-alpha-9",
+        order: "ord-alpha-4",
         account: "desk-alpha",
         at: "2026-06-24T11:08:00Z",
         source: "panel",
@@ -351,10 +611,10 @@ describe("Execution report force submit", () => {
     });
     renderOrders("/orders");
 
-    await user.click(screen.getByText("#4"));
-    await screen.findByRole("dialog", { name: "Order #4" });
+    await user.click(screen.getByText("ord-alpha-4"));
+    await screen.findByRole("dialog", { name: "Order ord-alpha-4" });
     await user.click(
-      screen.getByLabelText("Clone execution report for trade #9"),
+      screen.getByLabelText("Clone execution report for trade trd-alpha-9"),
     );
     await user.click(
       await screen.findByLabelText(
@@ -365,7 +625,7 @@ describe("Execution report force submit", () => {
 
     await waitFor(() =>
       expect(submitExecutionReportMock).toHaveBeenCalledWith(
-        4,
+        "ord-alpha-4",
         expect.objectContaining({
           quantity: "2",
           price: "12",

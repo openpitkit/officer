@@ -40,6 +40,7 @@ import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
 import {
+  ApiError,
   createMarketDataInstance,
   deleteMarketDataInstance,
   deleteMarketDataInstrument,
@@ -53,6 +54,7 @@ import {
   type MarketDataSymbolSearchInput,
 } from "@/api/client";
 import type {
+  ApiErrorDependent,
   MarketDataDiagnostic,
   MarketDataInstance,
   MarketDataProvider,
@@ -85,7 +87,7 @@ import {
 import { formatCompactDuration, formatDateTime } from "@/i18n/format";
 
 interface InstanceForm {
-  type: string;
+  provider: string;
   label: string;
   credentials: string;
   enabled: boolean;
@@ -104,6 +106,12 @@ interface InstrumentDraft {
   quoteAsset: string;
   manualPrice: string;
   enabled: boolean;
+}
+
+interface DeleteInstrumentTarget {
+  instance: MarketDataInstance;
+  externalSymbol: string;
+  ib: boolean;
 }
 
 const emptyInstrument: InstrumentDraft = {
@@ -139,7 +147,7 @@ interface IBContract {
 }
 
 interface PairUsage {
-  instanceId: string;
+  instanceExternalId: string;
   instanceLabel: string;
   providerType: string;
   externalSymbol: string;
@@ -738,7 +746,7 @@ function sortProviders(providers: MarketDataProvider[]): MarketDataProvider[] {
 }
 
 function providerTitle(instance: MarketDataInstance): string {
-  return instance.label || instance.id;
+  return instance.label || instance.externalId;
 }
 
 function instrumentPairKey(baseAsset: string, quoteAsset: string): string {
@@ -760,9 +768,9 @@ function buildPairUsageMap(instances: MarketDataInstance[]): PairUsageMap {
       }
       map[key] ??= [];
       map[key].push({
-        instanceId: instance.id,
+        instanceExternalId: instance.externalId,
         instanceLabel: providerTitle(instance),
-        providerType: instance.type,
+        providerType: instance.provider,
         externalSymbol: instrument.externalSymbol,
       });
     }
@@ -774,7 +782,7 @@ function pairUsages(
   map: PairUsageMap,
   baseAsset: string,
   quoteAsset: string,
-  exclude?: { instanceId: string; externalSymbol: string },
+  exclude?: { instanceExternalId: string; externalSymbol: string },
 ): PairUsage[] {
   const usages = map[instrumentPairKey(baseAsset, quoteAsset)] ?? [];
   if (!exclude) {
@@ -782,7 +790,7 @@ function pairUsages(
   }
   return usages.filter(
     (usage) =>
-      usage.instanceId !== exclude.instanceId ||
+      usage.instanceExternalId !== exclude.instanceExternalId ||
       usage.externalSymbol !== exclude.externalSymbol,
   );
 }
@@ -963,11 +971,11 @@ function instrumentMetadata(
   instance: MarketDataInstance,
   externalSymbol: string,
 ): string {
-  if (instance.type === IB_PROVIDER) {
+  if (instance.provider === IB_PROVIDER) {
     const contract = readIBContractsFromInstance(instance)[externalSymbol] ?? {};
     return ibContractMetadata(contract);
   }
-  if (instance.type === FINNHUB_PROVIDER) {
+  if (instance.provider === FINNHUB_PROVIDER) {
     return finnhubSymbolVenue(externalSymbol);
   }
   return "";
@@ -981,7 +989,7 @@ function instrumentDisplaySymbol(
   instance: MarketDataInstance,
   externalSymbol: string,
 ): string {
-  if (instance.type === FINNHUB_PROVIDER) {
+  if (instance.provider === FINNHUB_PROVIDER) {
     return symbolPairSource(externalSymbol);
   }
   return externalSymbol;
@@ -1736,7 +1744,7 @@ export function CreateInstanceDialog({
       return;
     }
     const ok = await onCreate({
-      type: provider.type,
+      provider: provider.type,
       label: normalizedLabel,
       credentials: buildProviderCredentials(provider.type, settingsDraft),
       enabled: draft.enabled,
@@ -2353,7 +2361,7 @@ export function InstanceSettingsDialog({
     label: instance?.label ?? "",
   });
   const [settingsDraft, setSettingsDraft] = useState<ProviderSettingsDraft>(
-    instance ? initialSettingsDraft(instance.type, instance) : {},
+    instance ? initialSettingsDraft(instance.provider, instance) : {},
   );
   const normalizedLabel = draft.label.trim();
   const labelTaken =
@@ -2371,7 +2379,7 @@ export function InstanceSettingsDialog({
     }
     const ok = await onSave(instance, {
       label: normalizedLabel,
-      credentials: buildProviderCredentials(instance.type, settingsDraft),
+      credentials: buildProviderCredentials(instance.provider, settingsDraft),
     });
     if (ok) {
       close();
@@ -2389,7 +2397,7 @@ export function InstanceSettingsDialog({
     >
       <DialogContent
         className={
-          instance?.type === IB_PROVIDER
+          instance?.provider === IB_PROVIDER
             ? MARKET_DATA_DIALOG_CONTENT_CLASS
             : undefined
         }
@@ -2417,13 +2425,13 @@ export function InstanceSettingsDialog({
                 </p>
               )}
             </div>
-            {providerHasSettings(instance.type) && (
+            {providerHasSettings(instance.provider) && (
               <div className="space-y-3">
                 <p className="text-xs font-medium uppercase tracking-wide text-muted">
                   {t("settings.title")}
                 </p>
                 <ProviderSettingsFields
-                  providerType={instance.type}
+                  providerType={instance.provider}
                   draft={settingsDraft}
                   instance={instance}
                   busy={busy}
@@ -2449,7 +2457,7 @@ export function InstanceSettingsDialog({
               !instance ||
               normalizedLabel === "" ||
               labelTaken ||
-              !providerSettingsReady(instance.type, settingsDraft, instance)
+              !providerSettingsReady(instance.provider, settingsDraft, instance)
             }
           >
             {t("actions.saveSettings")}
@@ -2539,16 +2547,16 @@ export function InstanceCard({
   // Only the manual (bring-your-own) provider exposes the operator-set mark; for
   // streaming providers the price comes from the source, so the input and column
   // are hidden.
-  const isManual = instance.type === MANUAL_PROVIDER;
+  const isManual = instance.provider === MANUAL_PROVIDER;
   // IB instruments carry a structured contract editor alongside the plain
   // feed-scoped resolver.
-  const isIB = instance.type === IB_PROVIDER;
-  const usesInstrumentDialog = providerUsesCustomInstrumentDialog(instance.type);
+  const isIB = instance.provider === IB_PROVIDER;
+  const usesInstrumentDialog = providerUsesCustomInstrumentDialog(instance.provider);
   const canSearch = instance.searchesSymbols;
-  const siteUrl = providerSiteUrl(instance.type);
-  const docsUrl = instance.references?.docsUrl || providerDocsUrl(instance.type);
+  const siteUrl = providerSiteUrl(instance.provider);
+  const docsUrl = instance.references?.docsUrl || providerDocsUrl(instance.provider);
   const symbolsUrl =
-    instance.references?.symbolsUrl || providerSymbolsUrl(instance.type);
+    instance.references?.symbolsUrl || providerSymbolsUrl(instance.provider);
   const draftPairUsages = pairUsages(
     pairUsageMap,
     draft.baseAsset,
@@ -2705,16 +2713,16 @@ export function InstanceCard({
       <CardHeader className="flex-row items-center justify-between gap-3">
         <div className="flex min-w-0 items-start gap-3">
           <ProviderIcon
-            type={instance.type}
+            type={instance.provider}
             className="mt-0.5 h-5 w-5 shrink-0 text-accent"
           />
           <div className="min-w-0">
             <CardTitle className="truncate">{providerTitle(instance)}</CardTitle>
             <p className="mt-1 max-w-3xl text-xs text-muted">
-              {t(`providers.${instance.type}.description`, { defaultValue: "" })}
+              {t(`providers.${instance.provider}.description`, { defaultValue: "" })}
             </p>
             <div className="mt-1 flex flex-wrap items-center gap-2">
-              <Badge variant="neutral">{instance.type}</Badge>
+              <Badge variant="neutral">{instance.provider}</Badge>
               <Badge variant={instance.enabled ? "ok" : "neutral"}>
                 {instance.enabled ? t("state.enabled") : t("state.disabled")}
               </Badge>
@@ -2773,7 +2781,7 @@ export function InstanceCard({
           </div>
         </div>
         <div className="flex shrink-0 gap-2">
-          {providerHasSettings(instance.type) && (
+          {providerHasSettings(instance.provider) && (
             <Button
               type="button"
               variant="ghost"
@@ -2810,7 +2818,7 @@ export function InstanceCard({
       <CardContent className="space-y-4">
         {!usesInstrumentDialog && canSearch && (
           <ResolvePanel
-            id={`md-resolve-${instance.id}`}
+            id={`md-resolve-${instance.externalId}`}
             busy={busy}
             resolving={resolving}
             resolved={resolved}
@@ -2944,7 +2952,7 @@ export function InstanceCard({
               <div className="space-y-4">
                 {canSearch && (
                   <ResolvePanel
-                    id={`md-resolve-dialog-${instance.id}`}
+                    id={`md-resolve-dialog-${instance.externalId}`}
                     busy={busy}
                     resolving={resolving}
                     resolved={resolved}
@@ -2961,11 +2969,11 @@ export function InstanceCard({
                 )}
                 <div className="grid items-end gap-3 md:grid-cols-[1fr_0.7fr_0.7fr_0.5fr]">
                   <div className="space-y-2">
-                    <Label htmlFor={`md-add-${instance.id}-external`}>
+                    <Label htmlFor={`md-add-${instance.externalId}-external`}>
                       {t("instrument.externalSymbol")}
                     </Label>
                     <Input
-                      id={`md-add-${instance.id}-external`}
+                      id={`md-add-${instance.externalId}-external`}
                       value={draft.externalSymbol}
                       onChange={(e) => {
                         const externalSymbol = e.target.value;
@@ -2976,11 +2984,11 @@ export function InstanceCard({
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor={`md-add-${instance.id}-base`}>
+                    <Label htmlFor={`md-add-${instance.externalId}-base`}>
                       {t("instrument.baseAsset")}
                     </Label>
                     <Input
-                      id={`md-add-${instance.id}-base`}
+                      id={`md-add-${instance.externalId}-base`}
                       value={draft.baseAsset}
                       onChange={(e) =>
                         setDraft((d) => ({ ...d, baseAsset: e.target.value }))
@@ -2990,13 +2998,13 @@ export function InstanceCard({
                   </div>
                   <div className="space-y-2">
                     <div className="flex items-center gap-2">
-                      <Label htmlFor={`md-add-${instance.id}-quote`}>
+                      <Label htmlFor={`md-add-${instance.externalId}-quote`}>
                         {t("instrument.quoteAsset")}
                       </Label>
                       <PairUsageWarning usages={draftPairUsages} />
                     </div>
                     <Input
-                      id={`md-add-${instance.id}-quote`}
+                      id={`md-add-${instance.externalId}-quote`}
                       value={draft.quoteAsset}
                       onChange={(e) =>
                         setDraft((d) => ({ ...d, quoteAsset: e.target.value }))
@@ -3005,7 +3013,7 @@ export function InstanceCard({
                     />
                   </div>
                   <StateToggleField
-                    id={`md-add-${instance.id}-enabled`}
+                    id={`md-add-${instance.externalId}-enabled`}
                     enabled={draft.enabled}
                     busy={busy}
                     onToggle={() =>
@@ -3020,7 +3028,7 @@ export function InstanceCard({
                   <IBContractEditor
                     contract={contractDraft}
                     busy={busy}
-                    idPrefix={`md-ib-add-${instance.id}`}
+                    idPrefix={`md-ib-add-${instance.externalId}`}
                     onChange={(patch) =>
                       setContractDraft((prev) => ({ ...prev, ...patch }))
                     }
@@ -3093,7 +3101,7 @@ export function InstanceCard({
                   instrument.baseAsset,
                   instrument.quoteAsset,
                   {
-                    instanceId: instance.id,
+                    instanceExternalId: instance.externalId,
                     externalSymbol: instrument.externalSymbol,
                   },
                 );
@@ -3300,6 +3308,109 @@ export function InstanceCard({
   );
 }
 
+function DependentList({ dependents }: { dependents: ApiErrorDependent[] }) {
+  if (dependents.length === 0) return null;
+  return (
+    <div className="rounded-card border border-[var(--danger)] bg-[var(--danger-dim)] p-3 text-xs">
+      <ul className="space-y-1">
+        {dependents.map((dep) => (
+          <li key={dep.kind} className="flex justify-between gap-4">
+            <span className="nums">{dep.kind}</span>
+            <span className="nums">{dep.count}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function DeleteInstanceDialog({
+  target,
+  dependents,
+  busy,
+  onOpenChange,
+  onSubmit,
+}: {
+  target: MarketDataInstance | null;
+  dependents: ApiErrorDependent[];
+  busy: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSubmit: (force: boolean) => void;
+}) {
+  const { t } = useTranslation("marketData");
+  return (
+    <Dialog open={target !== null} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t("deleteInstance.title")}</DialogTitle>
+          <DialogDescription>
+            {t("deleteInstance.description", {
+              label: target ? providerTitle(target) : "",
+            })}
+          </DialogDescription>
+        </DialogHeader>
+        <DependentList dependents={dependents} />
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
+            {t("deleteInstance.cancel")}
+          </Button>
+          <Button
+            onClick={() => onSubmit(dependents.length > 0)}
+            disabled={busy}
+            className="border-[var(--danger)] bg-[var(--danger)] text-bg hover:border-[var(--danger)] hover:bg-[var(--danger)]"
+          >
+            <Trash2 />
+            {dependents.length > 0
+              ? t("deleteInstance.forceSubmit")
+              : t("deleteInstance.submit")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DeleteInstrumentDialog({
+  target,
+  busy,
+  onOpenChange,
+  onSubmit,
+}: {
+  target: DeleteInstrumentTarget | null;
+  busy: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSubmit: () => void;
+}) {
+  const { t } = useTranslation("marketData");
+  return (
+    <Dialog open={target !== null} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t("deleteInstrument.title")}</DialogTitle>
+          <DialogDescription>
+            {t("deleteInstrument.description", {
+              symbol: target?.externalSymbol ?? "",
+            })}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
+            {t("deleteInstrument.cancel")}
+          </Button>
+          <Button
+            onClick={onSubmit}
+            disabled={busy}
+            className="border-[var(--danger)] bg-[var(--danger)] text-bg hover:border-[var(--danger)] hover:bg-[var(--danger)]"
+          >
+            <Trash2 />
+            {t("deleteInstrument.submit")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 /** Market-data control-plane page. */
 export function MarketData() {
   const { t } = useTranslation("marketData");
@@ -3312,6 +3423,13 @@ export function MarketData() {
   const [settingsInstance, setSettingsInstance] =
     useState<MarketDataInstance | null>(null);
   const [guideOpen, setGuideOpen] = useState(false);
+  const [deleteInstanceTarget, setDeleteInstanceTarget] =
+    useState<MarketDataInstance | null>(null);
+  const [deleteInstanceDependents, setDeleteInstanceDependents] = useState<
+    ApiErrorDependent[]
+  >([]);
+  const [deleteInstrumentTarget, setDeleteInstrumentTarget] =
+    useState<DeleteInstrumentTarget | null>(null);
 
   const providers = load.state === "ready" ? load.data.providers : [];
   const providerOptions = sortProviders(
@@ -3354,7 +3472,7 @@ export function MarketData() {
     form: SettingsForm,
   ) =>
     run(async () => {
-      await updateMarketDataInstanceSettings(instance.id, form);
+      await updateMarketDataInstanceSettings(instance.externalId, form);
     });
 
   const restart = () =>
@@ -3371,7 +3489,7 @@ export function MarketData() {
   ): Promise<MarketDataSymbolVerification | null> => {
     setMutationError("");
     try {
-      return await verifyMarketDataSymbol(instance.id, externalSymbol);
+      return await verifyMarketDataSymbol(instance.externalId, externalSymbol);
     } catch (err) {
       setMutationError(err instanceof Error ? err.message : String(err));
       return null;
@@ -3387,7 +3505,7 @@ export function MarketData() {
   ): Promise<MarketDataSymbolMatch[] | null> => {
     setMutationError("");
     try {
-      const result = await searchMarketDataSymbols(instance.id, input);
+      const result = await searchMarketDataSymbols(instance.externalId, input);
       return result.supported ? result.matches : [];
     } catch (err) {
       setMutationError(err instanceof Error ? err.message : String(err));
@@ -3407,7 +3525,7 @@ export function MarketData() {
   ) =>
     run(async () => {
       const externalSymbol = draft.externalSymbol.trim();
-      await upsertMarketDataInstrument(instance.id, {
+      await upsertMarketDataInstrument(instance.externalId, {
         externalSymbol,
         baseAsset: draft.baseAsset.trim(),
         quoteAsset: draft.quoteAsset.trim(),
@@ -3418,7 +3536,7 @@ export function MarketData() {
         ...readIBContractsFromInstance(instance),
         [externalSymbol]: contract,
       };
-      await updateMarketDataInstanceSettings(instance.id, {
+      await updateMarketDataInstanceSettings(instance.externalId, {
         label: instance.label,
         credentials: buildProviderCredentials(
           IB_PROVIDER,
@@ -3428,24 +3546,51 @@ export function MarketData() {
       });
     });
 
-  // IB delete: remove the instrument, then PUT settings with the full contracts
-  // map minus the removed key (same full-map rule as add).
-  const deleteIBInstrument = (
-    instance: MarketDataInstance,
-    externalSymbol: string,
-  ) =>
+  const submitDeleteInstance = async (force: boolean) => {
+    if (!deleteInstanceTarget) return;
+    setBusy(true);
+    setMutationError("");
+    try {
+      await deleteMarketDataInstance(deleteInstanceTarget.externalId, force);
+      setDeleteInstanceTarget(null);
+      setDeleteInstanceDependents([]);
+      reload();
+    } catch (err) {
+      if (err instanceof ApiError && err.code === "has_dependents") {
+        setDeleteInstanceDependents(err.dependents ?? []);
+      } else {
+        setMutationError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitDeleteInstrument = () =>
     run(async () => {
-      await deleteMarketDataInstrument(instance.id, externalSymbol);
-      const contracts = readIBContractsFromInstance(instance);
-      delete contracts[externalSymbol];
-      await updateMarketDataInstanceSettings(instance.id, {
-        label: instance.label,
-        credentials: buildProviderCredentials(
-          IB_PROVIDER,
-          initialSettingsDraft(IB_PROVIDER, instance),
-          { contracts },
-        ),
-      });
+      if (!deleteInstrumentTarget) return;
+      if (deleteInstrumentTarget.ib) {
+        await deleteMarketDataInstrument(
+          deleteInstrumentTarget.instance.externalId,
+          deleteInstrumentTarget.externalSymbol,
+        );
+        const contracts = readIBContractsFromInstance(deleteInstrumentTarget.instance);
+        delete contracts[deleteInstrumentTarget.externalSymbol];
+        await updateMarketDataInstanceSettings(deleteInstrumentTarget.instance.externalId, {
+          label: deleteInstrumentTarget.instance.label,
+          credentials: buildProviderCredentials(
+            IB_PROVIDER,
+            initialSettingsDraft(IB_PROVIDER, deleteInstrumentTarget.instance),
+            { contracts },
+          ),
+        });
+      } else {
+        await deleteMarketDataInstrument(
+          deleteInstrumentTarget.instance.externalId,
+          deleteInstrumentTarget.externalSymbol,
+        );
+      }
+      setDeleteInstrumentTarget(null);
     });
 
   return (
@@ -3515,7 +3660,7 @@ export function MarketData() {
         onCreate={createInstance}
       />
       <InstanceSettingsDialog
-        key={settingsInstance?.id ?? "settings-none"}
+        key={settingsInstance?.externalId ?? "settings-none"}
         instance={settingsInstance}
         busy={busy}
         existingLabels={existingLabels}
@@ -3544,7 +3689,7 @@ export function MarketData() {
           )}
           {load.data.instances.map((instance) => (
             <InstanceCard
-              key={instance.id}
+              key={instance.externalId}
               instance={instance}
               pairUsageMap={pairUsageMap}
               busy={busy}
@@ -3553,16 +3698,17 @@ export function MarketData() {
               onSearchSymbols={searchSymbols}
               onToggleInstance={(target) =>
                 run(() =>
-                  setMarketDataInstanceEnabled(target.id, !target.enabled),
+                  setMarketDataInstanceEnabled(target.externalId, !target.enabled),
                 )
               }
-              onDeleteInstance={(target) =>
-                run(() => deleteMarketDataInstance(target.id))
-              }
+              onDeleteInstance={(target) => {
+                setDeleteInstanceTarget(target);
+                setDeleteInstanceDependents([]);
+              }}
               onUpsertInstrument={(target, draft, options) =>
                 run(
                   () =>
-                    upsertMarketDataInstrument(target.id, draft).then(() => { }),
+                    upsertMarketDataInstrument(target.externalId, draft).then(() => { }),
                   options,
                 )
               }
@@ -3570,19 +3716,53 @@ export function MarketData() {
               onToggleInstrument={(target, externalSymbol, enabled) =>
                 run(() =>
                   setMarketDataInstrumentEnabled(
-                    target.id,
+                    target.externalId,
                     externalSymbol,
                     enabled,
                   ),
                 )
               }
               onDeleteInstrument={(target, externalSymbol) =>
-                run(() => deleteMarketDataInstrument(target.id, externalSymbol))
+                setDeleteInstrumentTarget({
+                  instance: target,
+                  externalSymbol,
+                  ib: false,
+                })
               }
-              onDeleteIBInstrument={deleteIBInstrument}
+              onDeleteIBInstrument={(target, externalSymbol) =>
+                setDeleteInstrumentTarget({
+                  instance: target,
+                  externalSymbol,
+                  ib: true,
+                })
+              }
               onRestart={restart}
             />
           ))}
+          <DeleteInstanceDialog
+            target={deleteInstanceTarget}
+            dependents={deleteInstanceDependents}
+            busy={busy}
+            onOpenChange={(open) => {
+              if (!open) {
+                setDeleteInstanceTarget(null);
+                setDeleteInstanceDependents([]);
+              }
+            }}
+            onSubmit={(force) => {
+              void submitDeleteInstance(force);
+            }}
+          />
+          <DeleteInstrumentDialog
+            target={deleteInstrumentTarget}
+            busy={busy}
+            onOpenChange={(open) => {
+              if (!open) setDeleteInstrumentTarget(null);
+            }}
+            onSubmit={() => {
+              void submitDeleteInstrument();
+            }}
+          />
         </div>
       )}
     </Page>

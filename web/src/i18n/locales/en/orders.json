@@ -7,6 +7,11 @@
     "trades": "Trades"
   },
 
+  "businessCsv": {
+    "exportOrdersCsv": "Export orders CSV",
+    "exportTradesCsv": "Export trades CSV"
+  },
+
   "filter": {
     "accountPlaceholder": "Filter by account…",
     "sourceAll": "All sources",
@@ -16,7 +21,7 @@
   },
 
   "table": {
-    "id": "ID",
+    "externalId": "External ID",
     "account": "Account",
     "instrument": "Instrument",
     "side": "Side",
@@ -28,7 +33,7 @@
     "order": "Order",
     "qty": "Qty",
     "lockPrice": "Lock price",
-    "lockPrices": "Lock prices"
+    "displayPrices": "Display prices"
   },
 
   "amount": {
@@ -56,13 +61,16 @@
     "added": "Order added",
     "dialog": {
       "title": "Add order",
-      "description": "Add an order to evaluate it against the risk engine. This is an emulation - nothing is sent to any market. Without a price it is treated as a market order and may be rejected.",
+      "description": "Add an order to evaluate it against the risk engine. This is an emulation — nothing is sent to any market. Without a price it is treated as a market order and may be rejected.",
       "account": "Account",
       "accountPlaceholder": "e.g. desk-alpha",
       "baseAsset": "Base asset",
       "baseAssetPlaceholder": "e.g. AAPL",
       "quoteAsset": "Quote asset",
       "quoteAssetPlaceholder": "e.g. USD",
+      "externalId": "External ID (optional)",
+      "externalIdPlaceholder": "server generated when blank",
+      "externalIdHint": "Use your own 22-character base64url id when you need to link this order externally.",
       "side": "Side",
       "sideOptions": {
         "buy": "Buy",
@@ -96,7 +104,7 @@
     "previewUnavailable": "Preview unavailable",
     "wouldPass": "Preview: would pass",
     "wouldReject": "Preview: would reject",
-    "lockPrices": "Lock prices: {{prices}}",
+    "displayPrices": "Display prices: {{prices}}",
     "wouldBlock": "Would block account {{account}}",
     "wouldBlockReason": "Would block account {{account}} - {{reason}}",
     "accountBlocked": "Account {{account}} is blocked",
@@ -108,7 +116,7 @@
   "execReport": {
     "dialog": {
       "title": "Submit execution report",
-      "description": "Order #{{orderId}} — record a fill to emulate a partial or full execution.",
+      "description": "Order {{orderExternalId}} - record a fill to emulate a partial or full execution.",
       "fillQty": "Fill quantity",
       "fillQtyPlaceholder": "e.g. 50",
       "fillPrice": "Fill price",
@@ -128,21 +136,21 @@
 
   "clone": {
     "orderButton": "Clone",
-    "orderAriaLabel": "Clone order #{{orderId}}",
-    "execReportAriaLabel": "Clone execution report for trade #{{tradeId}}",
-    "execReportEventAriaLabel": "Clone execution report from order #{{orderId}}"
+    "orderAriaLabel": "Clone order {{orderExternalId}}",
+    "execReportAriaLabel": "Clone execution report for trade {{tradeId}}",
+    "execReportEventAriaLabel": "Clone execution report from order {{orderExternalId}}"
   },
 
   "detail": {
     "dialog": {
-      "title": "Order #{{orderId}}",
+      "title": "Order {{orderExternalId}}",
       "loading": "Loading order details…",
       "accountBlocked": "Account {{account}} blocked:",
       "fieldAccount": "Account",
       "fieldStatus": "Status",
       "fieldSource": "Source",
       "fieldSubmitted": "Submitted",
-      "fieldLockPrices": "Lock prices",
+      "fieldDisplayPrices": "Display prices",
       "timeline": {
         "sectionTitle": "Event timeline",
         "empty": "No events recorded.",

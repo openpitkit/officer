@@ -1,9 +1,9 @@
 {
   "account": {
-    "required": "账户 ID 为必填项",
-    "tooLong": "账户 ID 最多 {{max}} 个字符",
-    "whitespace": "账户 ID 首尾不得有空格",
-    "printable": "账户 ID 只能包含可打印字符"
+    "required": "账户代码为必填项",
+    "tooLong": "账户代码最多 {{max}} 个字符",
+    "whitespace": "账户代码首尾不得有空格",
+    "printable": "账户代码只能包含可打印字符"
   },
   "asset": {
     "required": "该范围下资产为必填项",

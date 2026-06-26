@@ -88,6 +88,15 @@ func All() []Command {
 			DefaultEnabled:   true,
 		},
 		{
+			Name:             "get_order",
+			Title:            "Get order",
+			AgentDescription: "Read one order by external id with its approval envelope and fills.",
+			Mutating:         false,
+			Protective:       false,
+			Implemented:      true,
+			DefaultEnabled:   true,
+		},
+		{
 			Name:             "get_audit",
 			Title:            "Get audit",
 			AgentDescription: "Read recent control-plane audit-log entries.",

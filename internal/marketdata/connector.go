@@ -253,11 +253,11 @@ func searchSymbolsFromSet(
 ) []SymbolMatch {
 	q := strings.TrimSpace(query.Query)
 	if q == "" {
-		return nil
+		return []SymbolMatch{}
 	}
 	normQuery := normalizedSymbolSearchKey(q)
 	if normQuery == "" {
-		return nil
+		return []SymbolMatch{}
 	}
 	base, quote, hasPair := splitSymbolPair(q)
 	scored := make([]setSymbolMatch, 0)

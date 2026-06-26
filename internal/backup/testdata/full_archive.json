@@ -1,0 +1,344 @@
+{
+  "manifest": {
+    "createdAt": "2026-06-22T10:00:00Z",
+    "source": "fixture",
+    "realm": {
+      "code": "default"
+    },
+    "sections": [
+      "accounts_groups",
+      "positions",
+      "risk_limits",
+      "market_data_settings",
+      "market_data_quotes",
+      "general_settings",
+      "user_settings",
+      "activity_history",
+      "audit_log"
+    ]
+  },
+  "data": {
+    "assets": [
+      {
+        "Code": "AAPL",
+        "Title": "Apple",
+        "AssetClass": "equity"
+      },
+      {
+        "Code": "USD",
+        "Title": "US Dollar",
+        "AssetClass": ""
+      }
+    ],
+    "principals": [
+      {
+        "Code": "operator",
+        "Title": "Operator"
+      }
+    ],
+    "groups": [
+      {
+        "code": "grp-1",
+        "title": "Desk"
+      }
+    ],
+    "accounts": [
+      {
+        "code": "acc-1",
+        "title": "Account 1",
+        "groupCode": "grp-1",
+        "notes": "primary"
+      }
+    ],
+    "balances": [
+      {
+        "UpdatedAt": "2026-06-22T10:00:00Z",
+        "Available": "1000",
+        "Held": "",
+        "Incoming": "",
+        "RealizedPnl": "",
+        "AverageEntryPrice": "",
+        "Asset": "USD",
+        "Account": "acc-1"
+      }
+    ],
+    "orderSizeLimits": [
+      {
+        "Scope": "account_asset",
+        "Account": "acc-1",
+        "Asset": "AAPL",
+        "MaxQuantity": "100",
+        "MaxNotional": ""
+      }
+    ],
+    "adjustments": [
+      {
+        "At": "2026-06-22T10:00:00Z",
+        "ExternalID": [
+          17,
+          17,
+          17,
+          17,
+          17,
+          17,
+          17,
+          17,
+          17,
+          17,
+          17,
+          17,
+          17,
+          17,
+          17,
+          17
+        ],
+        "Request": {
+          "asset": ""
+        },
+        "Accepted": {
+          "balance_delta": "1000",
+          "balance_result": "1000",
+          "held_delta": "",
+          "held_result": "",
+          "incoming_delta": "",
+          "incoming_result": "",
+          "realized_pnl_delta": "",
+          "realized_pnl_result": ""
+        },
+        "Rejected": null,
+        "Principal": "",
+        "Asset": "USD",
+        "Account": "acc-1",
+        "Source": "panel"
+      }
+    ],
+    "orders": [
+      {
+        "order": {
+          "At": "2026-06-22T10:00:00Z",
+          "ExternalID": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "AmountValue": "10",
+          "Price": "150",
+          "Principal": "",
+          "BaseAsset": "AAPL",
+          "QuoteAsset": "USD",
+          "Lock": null,
+          "Account": "acc-1",
+          "Source": "panel",
+          "Side": "buy",
+          "AmountKind": "quantity",
+          "Status": "filled"
+        }
+      }
+    ],
+    "orderEvents": [
+      {
+        "At": "2026-06-22T10:00:00Z",
+        "ExternalID": [
+          33,
+          33,
+          33,
+          33,
+          33,
+          33,
+          33,
+          33,
+          33,
+          33,
+          33,
+          33,
+          33,
+          33,
+          33,
+          33
+        ],
+        "Order": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "Payload": {},
+        "Principal": "",
+        "Source": "panel",
+        "Type": "fill"
+      }
+    ],
+    "trades": [
+      {
+        "At": "2026-06-22T10:00:00Z",
+        "ExternalID": [
+          49,
+          49,
+          49,
+          49,
+          49,
+          49,
+          49,
+          49,
+          49,
+          49,
+          49,
+          49,
+          49,
+          49,
+          49,
+          49
+        ],
+        "Order": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "Quantity": "10",
+        "Price": "150",
+        "LockPrice": "",
+        "Principal": "",
+        "BaseAsset": "AAPL",
+        "QuoteAsset": "USD",
+        "Account": "acc-1",
+        "Source": "panel",
+        "Side": "buy"
+      }
+    ],
+    "audit": [
+      {
+        "At": "2026-06-22T10:00:00Z",
+        "ExternalID": [
+          65,
+          65,
+          65,
+          65,
+          65,
+          65,
+          65,
+          65,
+          65,
+          65,
+          65,
+          65,
+          65,
+          65,
+          65,
+          65
+        ],
+        "Actor": "",
+        "Action": "create_account",
+        "Account": "acc-1",
+        "Detail": "",
+        "Source": "panel"
+      }
+    ],
+    "marketDataInstances": [
+      {
+        "ExternalID": [
+          85,
+          85,
+          85,
+          85,
+          85,
+          85,
+          85,
+          85,
+          85,
+          85,
+          85,
+          85,
+          85,
+          85,
+          85,
+          85
+        ],
+        "Provider": "byo",
+        "Label": "manual",
+        "Credentials": "",
+        "Enabled": true
+      }
+    ],
+    "marketDataInstruments": [
+      {
+        "Instance": [
+          85,
+          85,
+          85,
+          85,
+          85,
+          85,
+          85,
+          85,
+          85,
+          85,
+          85,
+          85,
+          85,
+          85,
+          85,
+          85
+        ],
+        "ExternalSymbol": "AAPLUSD",
+        "BaseAsset": "AAPL",
+        "QuoteAsset": "USD",
+        "ManualPrice": "",
+        "Enabled": true
+      }
+    ],
+    "signingConfig": [
+      {
+        "key": "no_esign",
+        "value": "0"
+      }
+    ],
+    "mcpAccess": {
+      "submit_order": true
+    },
+    "userSettings": [
+      {
+        "UserID": "00000000-0000-4000-8000-000000000001",
+        "Key": "welcome_seen",
+        "Value": "1"
+      }
+    ]
+  }
+}

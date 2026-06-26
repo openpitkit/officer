@@ -131,7 +131,7 @@ func TestMutatingCommandEnabledErrorFailsClosed(t *testing.T) {
 	res, err := h(context.Background(), nil,
 		&sdkmcp.CallToolParamsFor[setMarketDataInstrumentInput]{
 			Arguments: setMarketDataInstrumentInput{
-				InstanceID: "mock-1", ExternalSymbol: "AAPL", Enabled: true,
+				InstanceExternalID: "mock-1", ExternalSymbol: "AAPL", Enabled: true,
 			},
 		})
 	if err != nil {

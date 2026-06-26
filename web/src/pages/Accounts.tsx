@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import {
@@ -28,7 +28,6 @@ import {
   Plus,
   ShieldCheck,
   Trash2,
-  Upload,
 } from "lucide-react";
 
 import {
@@ -37,6 +36,7 @@ import {
   blockGroup,
   createAccount,
   createGroup,
+  deleteAccount,
   deleteGroup,
   setAccountGroup,
   setAccountNotes,
@@ -44,7 +44,7 @@ import {
   unblockAccount,
   unblockGroup,
 } from "@/api/client";
-import type { Account, Group } from "@/api/types";
+import type { Account, ApiErrorDependent, Group } from "@/api/types";
 import { useAccounts } from "@/api/useAccounts";
 import { useGroups } from "@/api/useGroups";
 import { validateAccountID } from "@/api/validate";
@@ -53,6 +53,11 @@ import { EmptyState, ErrorBanner, ErrorState, TableSkeleton } from "@/components
 import { Page } from "@/components/Page";
 import { RefreshButton } from "@/components/RefreshButton";
 import { StatusDot } from "@/components/StatusDot";
+import {
+  CsvTransferMenu,
+  PageSizeSelect,
+  TablePagination,
+} from "@/components/TableControls";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -84,287 +89,21 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  hasNextPage,
+  knownPageCount,
+  slicePage,
+} from "@/lib/tablePagination";
+import { usePersistentPageSize } from "@/lib/tablePageSize";
 import { cn } from "@/lib/utils";
+
+type AccountsTab = "accounts" | "groups";
 
 function errMessage(err: unknown): string {
   if (err instanceof ApiError) {
     return err.message;
   }
   return err instanceof Error ? err.message : String(err);
-}
-
-// ---------------------------------------------------------------------------
-// CSV parse helpers
-// ---------------------------------------------------------------------------
-
-/** Parse one raw CSV line into up to 3 fields, handling basic double-quote
- *  escaping and trimming whitespace from each field. */
-function parseCsvRow(line: string): string[] {
-  const fields: string[] = [];
-  let cur = "";
-  let inQuote = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (inQuote) {
-      if (ch === '"' && line[i + 1] === '"') {
-        cur += '"';
-        i++;
-      } else if (ch === '"') {
-        inQuote = false;
-      } else {
-        cur += ch;
-      }
-    } else if (ch === '"') {
-      inQuote = true;
-    } else if (ch === ",") {
-      fields.push(cur.trim());
-      cur = "";
-    } else {
-      cur += ch;
-    }
-  }
-  fields.push(cur.trim());
-  return fields;
-}
-
-interface CsvRow {
-  id: string;
-  group: string;
-  notes: string;
-}
-
-/** Parse CSV text into rows. Skips blank lines and the header row
- *  (detected when the first field is literally "account_id"). */
-function parseCsv(text: string): CsvRow[] {
-  const rows: CsvRow[] = [];
-  for (const line of text.split(/\r?\n/)) {
-    if (!line.trim()) {
-      continue;
-    }
-    const [id = "", group = "", notes = ""] = parseCsvRow(line);
-    // Skip header line.
-    if (id.toLowerCase() === "account_id") {
-      continue;
-    }
-    if (!id) {
-      continue;
-    }
-    rows.push({ id, group, notes });
-  }
-  return rows;
-}
-
-// ---------------------------------------------------------------------------
-// Load accounts dialog
-// ---------------------------------------------------------------------------
-
-type RowStatus = "created" | "skipped" | "error";
-
-interface RowResult {
-  id: string;
-  status: RowStatus;
-  detail: string;
-}
-
-function LoadAccountsDialog({ onLoaded }: { onLoaded: () => void }) {
-  const { t } = useTranslation("accounts");
-  const [open, setOpen] = useState(false);
-  const [csvText, setCsvText] = useState("");
-  const [results, setResults] = useState<RowResult[] | null>(null);
-  const [busy, setBusy] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
-
-  const reset = () => {
-    setCsvText("");
-    setResults(null);
-    setBusy(false);
-  };
-
-  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      setCsvText(typeof ev.target?.result === "string" ? ev.target.result : "");
-    };
-    reader.readAsText(file);
-  };
-
-  const run = async () => {
-    const rows = parseCsv(csvText);
-    if (rows.length === 0) return;
-    setBusy(true);
-    setResults(null);
-    const out: RowResult[] = [];
-    for (const row of rows) {
-      try {
-        await createAccount(row.id);
-      } catch (err) {
-        if (err instanceof ApiError && err.code === "conflict") {
-          out.push({ id: row.id, status: "skipped", detail: t("loadAccounts.alreadyExists") });
-          // Still apply group/notes updates on an existing account.
-        } else {
-          out.push({ id: row.id, status: "error", detail: errMessage(err) });
-          continue;
-        }
-      }
-      // If we get here the account exists (just created or already existed).
-      const isNew = !out.some((r) => r.id === row.id);
-      try {
-        if (row.group) {
-          await setAccountGroup(row.id, row.group);
-        }
-        if (row.notes) {
-          await setAccountNotes(row.id, row.notes);
-        }
-        if (isNew) {
-          out.push({ id: row.id, status: "created", detail: "" });
-        }
-      } catch (err) {
-        // Replace any earlier entry for this id.
-        const idx = out.findIndex((r) => r.id === row.id);
-        const r: RowResult = {
-          id: row.id,
-          status: "error",
-          detail: errMessage(err),
-        };
-        if (idx >= 0) {
-          out[idx] = r;
-        } else {
-          out.push(r);
-        }
-      }
-    }
-    setResults(out);
-    setBusy(false);
-  };
-
-  const parsedCount = parseCsv(csvText).length;
-
-  const statusColor: Record<RowStatus, string> = {
-    created: "text-[color:var(--ok)]",
-    skipped: "text-muted-lt",
-    error: "text-[var(--danger)]",
-  };
-
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        setOpen(next);
-        if (!next) {
-          reset();
-          if (results?.some((r) => r.status === "created")) {
-            onLoaded();
-          }
-        }
-      }}
-    >
-      <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
-        <Upload className="h-3.5 w-3.5" />
-        {t("loadAccounts.trigger")}
-      </Button>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{t("loadAccounts.title")}</DialogTitle>
-        </DialogHeader>
-
-        <div className="space-y-1 rounded-card border border-border bg-surface-2 p-3 text-[0.6875rem] text-muted">
-          <p className="font-medium text-text">{t("loadAccounts.formatHeading")}</p>
-          <p>{t("loadAccounts.formatLine1")} <code>{t("loadAccounts.formatCode1")}</code></p>
-          {/* account_id/group/notes are literal CSV column identifiers, not UI copy. */}
-          {/* eslint-disable-next-line i18next/no-literal-string */}
-          <p><code>account_id</code> {t("loadAccounts.formatLine2prefix")} <code>group</code> {t("loadAccounts.formatLine2middle")} <code>notes</code> {t("loadAccounts.formatLine2suffix")}</p>
-          <p>{t("loadAccounts.formatLine3prefix")}<code>{t("loadAccounts.formatLine3code")}</code>{t("loadAccounts.formatLine3suffix")}</p>
-          <p className="pt-1 font-medium text-text">{t("loadAccounts.examplesHeading")}</p>
-          <pre className="overflow-x-auto whitespace-pre">
-{`desk-alpha,equity-desks,Primary cash desk
-desk-beta,equity-desks
-spx-arb,,SPX arb desk
-account_id,group,notes`}
-          </pre>
-        </div>
-
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <input
-              ref={fileRef}
-              type="file"
-              accept=".csv,text/csv"
-              className="hidden"
-              onChange={handleFile}
-            />
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => fileRef.current?.click()}
-              disabled={busy}
-            >
-              {t("loadAccounts.chooseFile")}
-            </Button>
-            <span className="text-[0.6875rem] text-muted-lt">{t("loadAccounts.orPasteBelow")}</span>
-          </div>
-          <textarea
-            className="min-h-[7rem] w-full rounded-card border border-border bg-surface-2 p-2 font-mono text-[0.75rem] text-text placeholder:text-muted-lt focus:outline-none focus:ring-1 focus:ring-ring"
-            placeholder={"desk-alpha,equity-desks,Primary cash desk\ndesk-beta,equity-desks\nspx-arb,,SPX arb desk"}
-            value={csvText}
-            spellCheck={false}
-            disabled={busy}
-            onChange={(e) => setCsvText(e.target.value)}
-          />
-          {parsedCount > 0 && !results && (
-            <p className="text-[0.6875rem] text-muted-lt">
-              {t("loadAccounts.parsedRows", { count: parsedCount })}
-            </p>
-          )}
-        </div>
-
-        {results && (
-          <div className="space-y-1 rounded-card border border-border p-3">
-            <p className="text-[0.6875rem] font-medium text-muted">
-              {t("loadAccounts.results.summary", {
-                created: results.filter((r) => r.status === "created").length,
-                skipped: results.filter((r) => r.status === "skipped").length,
-                errors: results.filter((r) => r.status === "error").length,
-              })}
-            </p>
-            <ul className="max-h-40 overflow-y-auto space-y-0.5">
-              {results.map((r, i) => (
-                <li key={i} className={`flex items-baseline gap-1.5 text-[0.6875rem] ${statusColor[r.status]}`}>
-                  <span className="shrink-0">
-                    {r.status === "created" ? t("loadAccounts.results.created") : r.status === "skipped" ? t("loadAccounts.results.skipped") : t("loadAccounts.results.error")}
-                  </span>
-                  <span className="nums">{r.id}</span>
-                  {r.detail && <span className="text-muted-lt">— {r.detail}</span>}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        <DialogFooter>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setOpen(false)}
-            disabled={busy}
-          >
-            {results ? t("loadAccounts.close") : t("loadAccounts.cancel")}
-          </Button>
-          {!results && (
-            <Button
-              size="sm"
-              onClick={() => void run()}
-              disabled={busy || parsedCount === 0}
-            >
-              <Upload className="h-3.5 w-3.5" />
-              {parsedCount > 0 ? t("loadAccounts.import", { count: parsedCount }) : t("loadAccounts.importEmpty")}
-            </Button>
-          )}
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -382,22 +121,22 @@ export function CreateAccountDialog({
   const { t } = useTranslation("validation");
   const { t: ta } = useTranslation("accounts");
   const [open, setOpen] = useState(false);
-  const [id, setId] = useState("");
+  const [code, setCode] = useState("");
   const [group, setGroup] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const validation = id.length > 0 ? validateAccountID(id) : null;
+  const validation = code.length > 0 ? validateAccountID(code) : null;
 
   const reset = () => {
-    setId("");
+    setCode("");
     setGroup("");
     setError(null);
     setBusy(false);
   };
 
   const submit = async () => {
-    const v = validateAccountID(id);
+    const v = validateAccountID(code);
     if (v) {
       setError(t(v.key, v.values));
       return;
@@ -405,9 +144,9 @@ export function CreateAccountDialog({
     setBusy(true);
     setError(null);
     try {
-      await createAccount(id);
+      await createAccount(code);
       if (group.trim().length > 0) {
-        await setAccountGroup(id, group.trim());
+        await setAccountGroup(code, group.trim());
       }
       setOpen(false);
       reset();
@@ -439,14 +178,14 @@ export function CreateAccountDialog({
         </DialogHeader>
         <div className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="account-id">{ta("createAccount.idLabel")}</Label>
+            <Label htmlFor="account-code">{ta("createAccount.codeLabel")}</Label>
             <Input
-              id="account-id"
-              value={id}
+              id="account-code"
+              value={code}
               autoFocus
               spellCheck={false}
               placeholder="acc-aapl-desk"
-              onChange={(e) => setId(e.target.value)}
+              onChange={(e) => setCode(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !validation) {
                   void submit();
@@ -454,7 +193,7 @@ export function CreateAccountDialog({
               }}
             />
             <p className="text-[0.6875rem] text-muted">
-              {ta("createAccount.idHint")}
+              {ta("createAccount.codeHint")}
             </p>
             {validation && (
               <p className="text-[0.6875rem] text-[var(--danger)]">
@@ -490,7 +229,7 @@ export function CreateAccountDialog({
           <Button
             size="sm"
             onClick={() => void submit()}
-            disabled={busy || id.length === 0 || validation !== null}
+            disabled={busy || code.length === 0 || validation !== null}
           >
             {ta("createAccount.submit")}
           </Button>
@@ -507,26 +246,29 @@ export function CreateAccountDialog({
 function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
   const { t } = useTranslation("accounts");
   const [open, setOpen] = useState(false);
-  const [id, setId] = useState("");
+  const [code, setCode] = useState("");
+  const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const idTrimmed = id.trim();
+  const codeTrimmed = code.trim();
+  const titleTrimmed = title.trim();
 
   const reset = () => {
-    setId("");
+    setCode("");
+    setTitle("");
     setNotes("");
     setError(null);
     setBusy(false);
   };
 
   const submit = async () => {
-    if (idTrimmed.length === 0) return;
+    if (codeTrimmed.length === 0 || titleTrimmed.length === 0) return;
     setBusy(true);
     setError(null);
     try {
-      await createGroup(idTrimmed, notes.trim().length > 0 ? notes.trim() : undefined);
+      await createGroup(codeTrimmed, titleTrimmed, notes.trim());
       setOpen(false);
       reset();
       onCreated();
@@ -554,16 +296,31 @@ function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
         </DialogHeader>
         <div className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="group-id">{t("createGroup.idLabel")}</Label>
+            <Label htmlFor="group-code">{t("createGroup.codeLabel")}</Label>
             <Input
-              id="group-id"
-              value={id}
+              id="group-code"
+              value={code}
               autoFocus
               spellCheck={false}
               placeholder="equity-desks"
-              onChange={(e) => setId(e.target.value)}
+              onChange={(e) => setCode(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && idTrimmed.length > 0) {
+                if (e.key === "Enter" && codeTrimmed.length > 0 && titleTrimmed.length > 0) {
+                  void submit();
+                }
+              }}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="group-title">{t("createGroup.titleLabel")}</Label>
+            <Input
+              id="group-title"
+              value={title}
+              spellCheck={false}
+              placeholder={t("createGroup.titlePlaceholder")}
+              onChange={(e) => setTitle(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && codeTrimmed.length > 0 && titleTrimmed.length > 0) {
                   void submit();
                 }
               }}
@@ -595,7 +352,7 @@ function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
           <Button
             size="sm"
             onClick={() => void submit()}
-            disabled={busy || idTrimmed.length === 0}
+            disabled={busy || codeTrimmed.length === 0 || titleTrimmed.length === 0}
           >
             {t("createGroup.submit")}
           </Button>
@@ -632,7 +389,7 @@ function BlockAccountDialog({
     setBusy(true);
     setError(null);
     try {
-      const updated = await blockAccount(account.id, trimmed);
+      const updated = await blockAccount(account.code, trimmed);
       onOpenChange(false);
       setReason("");
       onDone(updated);
@@ -658,7 +415,7 @@ function BlockAccountDialog({
         <DialogHeader>
           <DialogTitle>
             {t("blockAccount.titlePrefix")}{" "}
-            <span className="nums text-accent">{account?.id}</span>
+            <span className="nums text-accent">{account?.code}</span>
           </DialogTitle>
         </DialogHeader>
         <p className="text-xs text-muted-lt">
@@ -718,7 +475,7 @@ function UnblockAccountConfirm({
     setBusy(true);
     setError(null);
     try {
-      const updated = await unblockAccount(account.id);
+      const updated = await unblockAccount(account.code);
       onOpenChange(false);
       onDone(updated);
     } catch (err) {
@@ -735,7 +492,7 @@ function UnblockAccountConfirm({
           <AlertDialogTitle>{t("unblockAccount.title")}</AlertDialogTitle>
           <AlertDialogDescription>
             {t("unblockAccount.descriptionPrefix")}{" "}
-            <span className="nums text-accent">{account?.id}</span>{" "}
+            <span className="nums text-accent">{account?.code}</span>{" "}
             {t("unblockAccount.descriptionSuffix")}
           </AlertDialogDescription>
         </AlertDialogHeader>
@@ -784,7 +541,7 @@ function BlockGroupDialog({
     setBusy(true);
     setError(null);
     try {
-      const updated = await blockGroup(group.id, trimmed);
+      const updated = await blockGroup(group.code, trimmed);
       onOpenChange(false);
       setReason("");
       onDone(updated);
@@ -810,7 +567,7 @@ function BlockGroupDialog({
         <DialogHeader>
           <DialogTitle>
             {t("blockGroup.titlePrefix")}{" "}
-            <span className="nums text-accent">{group?.id}</span>
+            <span className="nums text-accent">{group?.code}</span>
           </DialogTitle>
         </DialogHeader>
         <p className="text-xs text-muted-lt">
@@ -870,7 +627,7 @@ function UnblockGroupConfirm({
     setBusy(true);
     setError(null);
     try {
-      const updated = await unblockGroup(group.id);
+      const updated = await unblockGroup(group.code);
       onOpenChange(false);
       onDone(updated);
     } catch (err) {
@@ -887,7 +644,7 @@ function UnblockGroupConfirm({
           <AlertDialogTitle>{t("unblockGroup.title")}</AlertDialogTitle>
           <AlertDialogDescription>
             {t("unblockGroup.descriptionPrefix")}{" "}
-            <span className="nums text-accent">{group?.id}</span>{" "}
+            <span className="nums text-accent">{group?.code}</span>{" "}
             {t("unblockGroup.descriptionSuffix")}
           </AlertDialogDescription>
         </AlertDialogHeader>
@@ -933,7 +690,7 @@ function DeleteGroupConfirm({
     setBusy(true);
     setError(null);
     try {
-      await deleteGroup(group.id);
+      await deleteGroup(group.code);
       onOpenChange(false);
       onDone();
     } catch (err) {
@@ -950,7 +707,7 @@ function DeleteGroupConfirm({
           <AlertDialogTitle>{t("deleteGroup.title")}</AlertDialogTitle>
           <AlertDialogDescription>
             {t("deleteGroup.descriptionPrefix")}{" "}
-            <span className="nums text-accent">{group?.id}</span>{" "}
+            <span className="nums text-accent">{group?.code}</span>{" "}
             {t("deleteGroup.descriptionSuffix")}
           </AlertDialogDescription>
         </AlertDialogHeader>
@@ -967,6 +724,106 @@ function DeleteGroupConfirm({
           >
             <Trash2 className="h-3.5 w-3.5" />
             {t("deleteGroup.submit")}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Delete account confirm
+// ---------------------------------------------------------------------------
+
+function DeleteAccountConfirm({
+  account,
+  open,
+  onOpenChange,
+  onDone,
+}: {
+  account: Account | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onDone: () => void;
+}) {
+  const { t } = useTranslation("accounts");
+  const [error, setError] = useState<string | null>(null);
+  const [dependents, setDependents] = useState<ApiErrorDependent[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  const changeOpen = (next: boolean) => {
+    if (!next) {
+      setError(null);
+      setDependents([]);
+    }
+    onOpenChange(next);
+  };
+
+  const submit = async (force: boolean) => {
+    if (!account) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await deleteAccount(account.code, force);
+      changeOpen(false);
+      onDone();
+    } catch (err) {
+      if (err instanceof ApiError && err.code === "has_dependents") {
+        setDependents(err.dependents ?? []);
+        setError(null);
+      } else {
+        setError(errMessage(err));
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <AlertDialog open={open} onOpenChange={changeOpen}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{t("deleteAccount.title")}</AlertDialogTitle>
+          <AlertDialogDescription>
+            {t("deleteAccount.descriptionPrefix")}{" "}
+            <span className="nums text-accent">{account?.code}</span>{" "}
+            {t("deleteAccount.descriptionSuffix")}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        {dependents.length > 0 && (
+          <div className="rounded-card border border-[var(--danger)] bg-[var(--danger-dim)] p-3 text-xs">
+            <p className="font-medium text-[var(--danger)]">
+              {t("deleteAccount.dependentsTitle")}
+            </p>
+            <ul className="mt-2 space-y-1">
+              {dependents.map((dep) => (
+                <li key={dep.kind} className="flex justify-between gap-4">
+                  <span>
+                    {t(`deleteAccount.dependentKinds.${dep.kind}`, {
+                      defaultValue: dep.kind,
+                    })}
+                  </span>
+                  <span className="nums">{dep.count}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={busy}>{t("deleteAccount.cancel")}</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={(e) => {
+              e.preventDefault();
+              void submit(dependents.length > 0);
+            }}
+            disabled={busy}
+            className="border-[var(--danger)] bg-[var(--danger)] text-bg hover:border-[var(--danger)] hover:bg-[var(--danger)]"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            {dependents.length > 0
+              ? t("deleteAccount.forceSubmit")
+              : t("deleteAccount.submit")}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
@@ -1013,7 +870,7 @@ function EditGroupNotesDialog({
     setBusy(true);
     setError(null);
     try {
-      const updated = await setGroupNotes(group.id, notes);
+      const updated = await setGroupNotes(group.code, notes);
       onOpenChange(false);
       setNotes("");
       onDone(updated);
@@ -1030,7 +887,7 @@ function EditGroupNotesDialog({
         <DialogHeader>
           <DialogTitle>
             {t("editGroupNotes.titlePrefix")}{" "}
-            <span className="nums text-accent">{group?.id}</span>
+            <span className="nums text-accent">{group?.code}</span>
           </DialogTitle>
         </DialogHeader>
         <p className="text-xs text-muted-lt">
@@ -1103,7 +960,7 @@ function AssignGroupDialog({
     setBusy(true);
     setError(null);
     try {
-      const updated = await setAccountGroup(account.id, group.trim());
+      const updated = await setAccountGroup(account.code, group.trim());
       onOpenChange(false);
       setGroup("");
       onDone(updated);
@@ -1120,7 +977,7 @@ function AssignGroupDialog({
         <DialogHeader>
           <DialogTitle>
             {t("assignGroup.titlePrefix")}{" "}
-            <span className="nums text-accent">{account?.id}</span>
+            <span className="nums text-accent">{account?.code}</span>
           </DialogTitle>
         </DialogHeader>
         <p className="text-xs text-muted-lt">
@@ -1197,7 +1054,7 @@ function EditAccountNotesDialog({
     setBusy(true);
     setError(null);
     try {
-      const updated = await setAccountNotes(account.id, notes);
+      const updated = await setAccountNotes(account.code, notes);
       onOpenChange(false);
       setNotes("");
       onDone(updated);
@@ -1214,7 +1071,7 @@ function EditAccountNotesDialog({
         <DialogHeader>
           <DialogTitle>
             {t("editAccountNotes.titlePrefix")}{" "}
-            <span className="nums text-accent">{account?.id}</span>
+            <span className="nums text-accent">{account?.code}</span>
           </DialogTitle>
         </DialogHeader>
         <p className="text-xs text-muted-lt">
@@ -1253,16 +1110,21 @@ function EditAccountNotesDialog({
 // Groups panel
 // ---------------------------------------------------------------------------
 
-// Sentinel id used internally to represent the "Default group" row.
-const DEFAULT_GROUP_ID = "";
+// Sentinel code used internally to represent the "Default group" row.
+const DEFAULT_GROUP_CODE = "";
 
 type GroupRow =
   | { kind: "default"; memberCount: number }
   | { kind: "real"; group: Group; memberCount: number };
+type RealGroupRow = Extract<GroupRow, { kind: "real" }>;
+
+function groupDisplayTitle(group: Group): string {
+  return group.title !== "" ? group.title : group.code;
+}
 
 function GroupsPanel({
   groupRows,
-  selectedGroupId,
+  selectedGroupCode,
   onSelect,
   onEditNotes,
   onBlock,
@@ -1270,8 +1132,8 @@ function GroupsPanel({
   onDelete,
 }: {
   groupRows: GroupRow[];
-  selectedGroupId: string | null;
-  onSelect: (id: string | null) => void;
+  selectedGroupCode: string | null;
+  onSelect: (code: string | null) => void;
   onEditNotes: (group: Group) => void;
   onBlock: (group: Group) => void;
   onUnblock: (group: Group) => void;
@@ -1291,24 +1153,32 @@ function GroupsPanel({
         </TableHeader>
         <TableBody>
           {groupRows.map((row) => {
-            const id = row.kind === "default" ? DEFAULT_GROUP_ID : row.group.id;
-            const isSelected = selectedGroupId === id;
+            const code = row.kind === "default" ? DEFAULT_GROUP_CODE : row.group.code;
+            const isSelected = selectedGroupCode === code;
             const isBlocked = row.kind === "real" && row.group.blocked;
+            const title = row.kind === "real" ? groupDisplayTitle(row.group) : "";
             return (
               <TableRow
-                key={id === DEFAULT_GROUP_ID ? "__default__" : id}
+                key={code === DEFAULT_GROUP_CODE ? "__default__" : code}
                 className={cn(
                   isBlocked && "bg-accent-dim",
                   isSelected && "ring-1 ring-inset ring-ring",
                   "cursor-pointer",
                 )}
-                onClick={() => onSelect(isSelected ? null : id)}
+                onClick={() => onSelect(isSelected ? null : code)}
               >
                 <TableCell className="font-medium">
                   {row.kind === "default" ? (
                     <span className="text-muted-lt italic">{t("groups.defaultGroup")}</span>
                   ) : (
-                    <span className="nums text-accent">{row.group.id}</span>
+                    <span className="flex flex-col">
+                      <span>{title}</span>
+                      {title !== row.group.code && (
+                        <span className="nums text-[0.6875rem] text-accent">
+                          {row.group.code}
+                        </span>
+                      )}
+                    </span>
                   )}
                 </TableCell>
 
@@ -1410,6 +1280,7 @@ function AccountsTable({
   onUnblock,
   onAssignGroup,
   onEditNotes,
+  onDelete,
 }: {
   accounts: Account[];
   groupSuggestions: string[];
@@ -1417,6 +1288,7 @@ function AccountsTable({
   onUnblock: (account: Account) => void;
   onAssignGroup: (account: Account) => void;
   onEditNotes: (account: Account) => void;
+  onDelete: (account: Account) => void;
 }) {
   const { t } = useTranslation("accounts");
   return (
@@ -1433,10 +1305,17 @@ function AccountsTable({
         <TableBody>
           {accounts.map((account) => (
             <TableRow
-              key={account.id}
+              key={account.code}
               className={cn(account.blocked && "bg-accent-dim")}
             >
-              <TableCell className="nums font-medium">{account.id}</TableCell>
+              <TableCell className="font-medium">
+                <span className="flex flex-col">
+                  <span>{account.title}</span>
+                  <span className="nums text-[0.6875rem] text-accent">
+                    {account.code}
+                  </span>
+                </span>
+              </TableCell>
 
               {/* Group cell — button with single-membership Folder icon */}
               <TableCell>
@@ -1492,7 +1371,7 @@ function AccountsTable({
                 <div className="flex items-center justify-end gap-1">
                   {/* Quick-links: Positions → Trading → Policies → Audit */}
                   <Link
-                    to={`/positions?account=${encodeURIComponent(account.id)}`}
+                    to={`/positions?account=${encodeURIComponent(account.code)}`}
                     title={t("accounts.links.positions")}
                     aria-label={t("accounts.links.positions")}
                     className="inline-flex h-7 w-7 items-center justify-center rounded-badge transition-colors hover:bg-accent-dim"
@@ -1500,7 +1379,7 @@ function AccountsTable({
                     <Coins className="h-3.5 w-3.5 text-muted" />
                   </Link>
                   <Link
-                    to={`/trading?account=${encodeURIComponent(account.id)}`}
+                    to={`/trading?account=${encodeURIComponent(account.code)}`}
                     title={t("accounts.links.trading")}
                     aria-label={t("accounts.links.trading")}
                     className="inline-flex h-7 w-7 items-center justify-center rounded-badge transition-colors hover:bg-accent-dim"
@@ -1508,7 +1387,7 @@ function AccountsTable({
                     <ArrowLeftRight className="h-3.5 w-3.5 text-muted" />
                   </Link>
                   <Link
-                    to={`/policies?account=${encodeURIComponent(account.id)}`}
+                    to={`/policies?account=${encodeURIComponent(account.code)}`}
                     title={t("accounts.links.policies")}
                     aria-label={t("accounts.links.policies")}
                     className="inline-flex h-7 w-7 items-center justify-center rounded-badge transition-colors hover:bg-accent-dim"
@@ -1516,7 +1395,7 @@ function AccountsTable({
                     <ShieldCheck className="h-3.5 w-3.5 text-muted" />
                   </Link>
                   <Link
-                    to={`/audit?account=${encodeURIComponent(account.id)}`}
+                    to={`/audit?account=${encodeURIComponent(account.code)}`}
                     title={t("accounts.links.audit")}
                     aria-label={t("accounts.links.audit")}
                     className="inline-flex h-7 w-7 items-center justify-center rounded-badge transition-colors hover:bg-accent-dim"
@@ -1554,6 +1433,14 @@ function AccountsTable({
                       {t("accounts.actions.block")}
                     </Button>
                   )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => onDelete(account)}
+                    title={t("accounts.actions.deleteTitle")}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
                 </div>
               </TableCell>
             </TableRow>
@@ -1568,11 +1455,11 @@ function AccountsTable({
 // ---------------------------------------------------------------------------
 
 function replaceAccount(list: Account[], updated: Account): Account[] {
-  return list.map((a) => (a.id === updated.id ? updated : a));
+  return list.map((a) => (a.code === updated.code ? updated : a));
 }
 
 function replaceGroup(list: Group[], updated: Group): Group[] {
-  return list.map((g) => (g.id === updated.id ? updated : g));
+  return list.map((g) => (g.code === updated.code ? updated : g));
 }
 
 // ---------------------------------------------------------------------------
@@ -1593,25 +1480,35 @@ export function Accounts() {
   const groups =
     localGroups ?? (groupsLoad.state === "ready" ? groupsLoad.data : null);
 
-  // Union of group record ids and distinct non-empty account.group values.
-  const memberOnlyIds: string[] = accounts
+  // Union of group record codes and distinct non-empty account.group values.
+  const memberOnlyCodes: string[] = accounts
     ? Array.from(new Set(accounts.map((a) => a.group).filter((g) => g !== "")))
-        .filter((id) => !groups?.some((g) => g.id === id))
+        .filter((code) => !groups?.some((g) => g.code === code))
     : [];
 
   const groupSuggestions: string[] = [
-    ...(groups?.map((g) => g.id) ?? []),
-    ...memberOnlyIds,
+    ...(groups?.map((g) => g.code) ?? []),
+    ...memberOnlyCodes,
   ];
 
   // Which group row is highlighted; null = show all accounts.
-  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  const [selectedGroupCode, setSelectedGroupCode] = useState<string | null>(null);
+  const [tab, setTab] = useState<AccountsTab>("accounts");
+  const [accountPage, setAccountPage] = useState(0);
+  const [accountSize, setAccountSize] = usePersistentPageSize(
+    "pit-officer-accounts-page-size",
+  );
+  const [groupPage, setGroupPage] = useState(0);
+  const [groupSize, setGroupSize] = usePersistentPageSize(
+    "pit-officer-groups-page-size",
+  );
 
   // Account dialog targets.
   const [blockAccountTarget, setBlockAccountTarget] = useState<Account | null>(null);
   const [unblockAccountTarget, setUnblockAccountTarget] = useState<Account | null>(null);
   const [groupTarget, setGroupTarget] = useState<Account | null>(null);
   const [notesAccountTarget, setNotesAccountTarget] = useState<Account | null>(null);
+  const [deleteAccountTarget, setDeleteAccountTarget] = useState<Account | null>(null);
 
   // Group dialog targets.
   const [groupNotesTarget, setGroupNotesTarget] = useState<Group | null>(null);
@@ -1626,37 +1523,55 @@ export function Accounts() {
     });
   }
 
+  function removeAccount(code: string) {
+    setLocalAccounts((prev) => {
+      const base = prev ?? (accountsLoad.state === "ready" ? accountsLoad.data : []);
+      return base.filter((a) => a.code !== code);
+    });
+  }
+
   function applyGroupUpdate(updated: Group) {
     setLocalGroups((prev) => {
       const base = prev ?? (groupsLoad.state === "ready" ? groupsLoad.data : []);
-      const exists = base.some((g) => g.id === updated.id);
+      const exists = base.some((g) => g.code === updated.code);
       return exists ? replaceGroup(base, updated) : [...base, updated];
     });
   }
 
-  // Build group rows: Default first, then real groups (records + membership-only), sorted by id.
+  // Build group rows: Default first, then real groups (records + membership-only), sorted by code.
   const defaultCount =
     accounts?.filter((a) => a.group === "").length ?? 0;
 
   // Membership-only groups get a synthetic Group object; actions still call the
   // existing client funcs which create-if-missing on the backend.
-  const memberOnlyRows: GroupRow[] = memberOnlyIds.map((id) => ({
+  const memberOnlyRows: RealGroupRow[] = memberOnlyCodes.map((code) => ({
     kind: "real" as const,
-    group: { id, notes: "", blocked: false, blockReason: "" } satisfies Group,
-    memberCount: accounts?.filter((a) => a.group === id).length ?? 0,
+    group: {
+      code,
+      title: code,
+      notes: "",
+      blocked: false,
+      blockReason: "",
+    } satisfies Group,
+    memberCount: accounts?.filter((a) => a.group === code).length ?? 0,
   }));
 
-  const recordRows: GroupRow[] = (groups ?? []).map((g) => ({
+  const recordRows: RealGroupRow[] = (groups ?? []).map((g) => ({
     kind: "real" as const,
     group: g,
-    memberCount: accounts?.filter((a) => a.group === g.id).length ?? 0,
+    memberCount: accounts?.filter((a) => a.group === g.code).length ?? 0,
   }));
 
-  const allRealRows = [...recordRows, ...memberOnlyRows].sort((a, b) => {
-    const ai = a.kind === "real" ? a.group.id : "";
-    const bi = b.kind === "real" ? b.group.id : "";
-    return ai.localeCompare(bi);
-  });
+  const allRealRows = [...recordRows, ...memberOnlyRows].sort((a, b) =>
+    a.group.code.localeCompare(b.group.code),
+  );
+  const selectedGroup =
+    selectedGroupCode === null
+      ? null
+      : allRealRows.find((row) => row.group.code === selectedGroupCode)?.group ??
+        null;
+  const selectedGroupTitle =
+    selectedGroup === null ? "" : groupDisplayTitle(selectedGroup);
 
   const groupRows: GroupRow[] = [
     { kind: "default", memberCount: defaultCount },
@@ -1665,10 +1580,46 @@ export function Accounts() {
 
   // Filter accounts by selected group (null = all).
   const visibleAccounts = accounts
-    ? selectedGroupId === null
+    ? selectedGroupCode === null
       ? accounts
-      : accounts.filter((a) => a.group === selectedGroupId)
+      : accounts.filter((a) => a.group === selectedGroupCode)
     : null;
+  const pagedAccounts =
+    visibleAccounts === null
+      ? null
+      : slicePage(visibleAccounts, accountPage, accountSize);
+  const visibleAccountCount = visibleAccounts?.length ?? 0;
+  const pagedGroups = slicePage(groupRows, groupPage, groupSize);
+  const hasMoreAccounts =
+    visibleAccounts !== null &&
+    hasNextPage(visibleAccounts, accountPage, accountSize);
+  const hasMoreGroups = hasNextPage(groupRows, groupPage, groupSize);
+  const accountPager = (
+    <TablePagination
+      page={accountPage}
+      canPrevious={accountPage > 0}
+      canNext={hasMoreAccounts}
+      knownTotalPages={
+        visibleAccounts === null
+          ? undefined
+          : knownPageCount(visibleAccounts.length, accountSize)
+      }
+      onPrevious={() => setAccountPage((p) => Math.max(0, p - 1))}
+      onNext={() => setAccountPage((p) => p + 1)}
+      onPage={setAccountPage}
+    />
+  );
+  const groupPager = (
+    <TablePagination
+      page={groupPage}
+      canPrevious={groupPage > 0}
+      canNext={hasMoreGroups}
+      knownTotalPages={knownPageCount(groupRows.length, groupSize)}
+      onPrevious={() => setGroupPage((p) => Math.max(0, p - 1))}
+      onNext={() => setGroupPage((p) => p + 1)}
+      onPage={setGroupPage}
+    />
+  );
 
   const reloadAll = () => {
     setLocalAccounts(null);
@@ -1676,6 +1627,8 @@ export function Accounts() {
     reloadAccounts();
     reloadGroups();
   };
+  const accountCsvFilters =
+    selectedGroupCode === null ? undefined : { groupCode: selectedGroupCode };
 
   const isLoading =
     accountsLoad.state === "loading" || groupsLoad.state === "loading";
@@ -1691,17 +1644,48 @@ export function Accounts() {
       title={t("page.title")}
       actions={
         <>
+          <PageSizeSelect
+            value={tab === "accounts" ? accountSize : groupSize}
+            onChange={(value) => {
+              if (tab === "accounts") {
+                setAccountSize(value);
+                setAccountPage(0);
+              } else {
+                setGroupSize(value);
+                setGroupPage(0);
+              }
+            }}
+            ariaLabel={t("pagination.pageSize.ariaLabel")}
+            rowCountLabel={(count) =>
+              t("pagination.pageSize.rowCount", { count })
+            }
+          />
           <RefreshButton onClick={reloadAll} busy={isLoading} />
+          <CsvTransferMenu
+            imports={[
+              {
+                defaultEntity: "accounts",
+                entities: ["account_groups", "accounts"],
+                label: t("businessCsv.importCsv"),
+              },
+            ]}
+            exports={[
+              {
+                entity: "account_groups",
+                label: t("businessCsv.exportGroupsCsv"),
+              },
+              {
+                entity: "accounts",
+                filters: accountCsvFilters,
+                label: t("businessCsv.exportAccountsCsv"),
+              },
+            ]}
+            onImported={reloadAll}
+          />
           <CreateGroupDialog
             onCreated={() => {
               setLocalGroups(null);
               reloadGroups();
-            }}
-          />
-          <LoadAccountsDialog
-            onLoaded={() => {
-              setLocalAccounts(null);
-              reloadAccounts();
             }}
           />
           <CreateAccountDialog
@@ -1718,6 +1702,24 @@ export function Accounts() {
         {t("page.description")}
       </p>
 
+      <div className="flex w-fit gap-1 rounded-card border border-border bg-surface-2 p-1">
+        {(["accounts", "groups"] as AccountsTab[]).map((tabId) => (
+          <button
+            key={tabId}
+            type="button"
+            onClick={() => setTab(tabId)}
+            className={[
+              "rounded-badge px-3 py-1 text-xs font-medium transition-colors duration-[180ms]",
+              tab === tabId
+                ? "bg-accent-dim text-accent"
+                : "text-muted-lt hover:bg-surface-hover hover:text-text",
+            ].join(" ")}
+          >
+            {t(`tabs.${tabId}`)}
+          </button>
+        ))}
+      </div>
+
       {/* Groups panel */}
       {isLoading && accounts === null && groups === null && (
         <TableSkeleton cols={5} />
@@ -1725,56 +1727,76 @@ export function Accounts() {
       {loadError && accounts === null && (
         <ErrorState message={loadError} onRetry={reloadAll} />
       )}
-      {(accounts !== null || groups !== null) && (
+      {tab === "groups" && (accounts !== null || groups !== null) && (
         <div className="space-y-1">
           <p className="text-xs font-medium text-muted">
             {t("groups.heading")}{" "}
-            {selectedGroupId !== null && (
+            {selectedGroupCode !== null && (
               <button
                 type="button"
                 className="ml-1 text-accent hover:underline"
-                onClick={() => setSelectedGroupId(null)}
+                onClick={() => {
+                  setSelectedGroupCode(null);
+                  setAccountPage(0);
+                }}
               >
                 {t("groups.clearFilter")}
               </button>
             )}
           </p>
+          {groupPager}
           <GroupsPanel
-            groupRows={groupRows}
-            selectedGroupId={selectedGroupId}
-            onSelect={setSelectedGroupId}
+            groupRows={pagedGroups}
+            selectedGroupCode={selectedGroupCode}
+            onSelect={(code) => {
+              setSelectedGroupCode(code);
+              setAccountPage(0);
+            }}
             onEditNotes={setGroupNotesTarget}
             onBlock={setBlockGroupTarget}
             onUnblock={setUnblockGroupTarget}
             onDelete={setDeleteGroupTarget}
           />
+          {groupPager}
         </div>
       )}
 
       {/* Accounts panel */}
-      {visibleAccounts !== null && (
+      {tab === "accounts" && pagedAccounts !== null && (
         <div className="space-y-1">
           <p className="text-xs font-medium text-muted">
             {t("accounts.heading")}
-            {selectedGroupId !== null && (
+            {selectedGroupCode !== null && (
               <span className="ml-1 text-muted-lt">
                 {t("accounts.filteredTo")}{" "}
-                {selectedGroupId === DEFAULT_GROUP_ID
+                {selectedGroupCode === DEFAULT_GROUP_CODE
                   ? t("accounts.filteredToDefault")
-                  : <span className="nums">{selectedGroupId}</span>}
+                  : selectedGroup === null
+                    ? <span className="nums">{selectedGroupCode}</span>
+                    : (
+                      <>
+                        <span>{selectedGroupTitle}</span>
+                        {selectedGroupTitle !== selectedGroup.code && (
+                          <>
+                            {" "}
+                            <span className="nums">({selectedGroup.code})</span>
+                          </>
+                        )}
+                      </>
+                    )}
               </span>
             )}
           </p>
-          {visibleAccounts.length === 0 ? (
+          {visibleAccountCount === 0 ? (
             <EmptyState
               title={t("accounts.empty.title")}
               hint={
-                selectedGroupId !== null
+                selectedGroupCode !== null
                   ? t("accounts.empty.hintFiltered")
                   : t("accounts.empty.hintEmpty")
               }
               action={
-                selectedGroupId === null ? (
+                selectedGroupCode === null ? (
                   <CreateAccountDialog
                     groupSuggestions={groupSuggestions}
                     onCreated={() => {
@@ -1786,14 +1808,19 @@ export function Accounts() {
               }
             />
           ) : (
-            <AccountsTable
-              accounts={visibleAccounts}
-              groupSuggestions={groupSuggestions}
-              onBlock={setBlockAccountTarget}
-              onUnblock={setUnblockAccountTarget}
-              onAssignGroup={setGroupTarget}
-              onEditNotes={setNotesAccountTarget}
-            />
+            <>
+              {accountPager}
+              <AccountsTable
+                accounts={pagedAccounts}
+                groupSuggestions={groupSuggestions}
+                onBlock={setBlockAccountTarget}
+                onUnblock={setUnblockAccountTarget}
+                onAssignGroup={setGroupTarget}
+                onEditNotes={setNotesAccountTarget}
+                onDelete={setDeleteAccountTarget}
+              />
+              {accountPager}
+            </>
           )}
         </div>
       )}
@@ -1844,6 +1871,19 @@ export function Accounts() {
           applyAccountUpdate(updated);
         }}
       />
+      <DeleteAccountConfirm
+        account={deleteAccountTarget}
+        open={deleteAccountTarget !== null}
+        onOpenChange={(next) => {
+          if (!next) setDeleteAccountTarget(null);
+        }}
+        onDone={() => {
+          if (deleteAccountTarget !== null) {
+            removeAccount(deleteAccountTarget.code);
+          }
+          setDeleteAccountTarget(null);
+        }}
+      />
       {/* Group dialogs */}
       <EditGroupNotesDialog
         group={groupNotesTarget}
@@ -1889,9 +1929,10 @@ export function Accounts() {
           // If the deleted group was selected, clear the filter.
           if (
             deleteGroupTarget !== null &&
-            selectedGroupId === deleteGroupTarget.id
+            selectedGroupCode === deleteGroupTarget.code
           ) {
-            setSelectedGroupId(null);
+            setSelectedGroupCode(null);
+            setAccountPage(0);
           }
           setLocalGroups(null);
           reloadGroups();

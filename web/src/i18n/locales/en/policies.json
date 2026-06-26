@@ -9,6 +9,13 @@
     "policy": "Filter by policy",
     "allPolicies": "All policies"
   },
+  "pagination": {
+    "summary": "Showing {{from}}-{{to}} of {{total}} records",
+    "pageSize": {
+      "ariaLabel": "Page size",
+      "rowCount": "{{count}} records per page"
+    }
+  },
   "table": {
     "policy": "Policy",
     "scope": "Scope",

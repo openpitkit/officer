@@ -27,6 +27,7 @@ import (
 	"go.openpit.dev/officer/internal/backend"
 	"go.openpit.dev/officer/internal/domain"
 	"go.openpit.dev/officer/internal/engine"
+	"go.openpit.dev/officer/internal/node"
 )
 
 // The DTOs below are the JSON wire contract of the HTTP surface. They carry the
@@ -64,33 +65,69 @@ type storeHealthDTO struct {
 	Reachable     bool   `json:"reachable"`
 }
 
-// accountDTO is the wire shape of a single account.
+// accountDTO is the wire shape of a single account. An account is a dictionary
+// record: its public handle is the immutable code, paired with a mutable title.
+// The engine account id and the store surrogate id are never serialized.
 type accountDTO struct {
-	ID          string `json:"id"`
+	Code        string `json:"code"`
+	Title       string `json:"title"`
 	Group       string `json:"group"`
 	Notes       string `json:"notes"`
 	BlockReason string `json:"blockReason"`
 	Blocked     bool   `json:"blocked"`
 }
 
-// limitDTO is the wire shape of a single risk barrier.
-type limitDTO struct {
-	Policy  string            `json:"policy"`
-	Scope   string            `json:"scope"`
-	Account string            `json:"account"`
-	Asset   string            `json:"asset"`
-	Values  map[string]string `json:"values"`
+// rateLimitDTO is the wire shape of a rate-limit barrier.
+type rateLimitDTO struct {
+	Scope     string `json:"scope"`
+	Account   string `json:"account"`
+	Asset     string `json:"asset"`
+	WindowMs  int64  `json:"windowMs"`
+	MaxOrders uint64 `json:"maxOrders"`
 }
 
-// auditDTO is the wire shape of a single audit row.
+// orderSizeLimitDTO is the wire shape of an order-size barrier. The ceilings are
+// exact decimal strings; an unset ceiling is the empty string.
+type orderSizeLimitDTO struct {
+	Scope       string `json:"scope"`
+	Account     string `json:"account"`
+	Asset       string `json:"asset"`
+	MaxQuantity string `json:"maxQuantity"`
+	MaxNotional string `json:"maxNotional"`
+}
+
+// pnlBoundsLimitDTO is the wire shape of a P&L-bounds kill-switch barrier. The
+// bounds and seed are exact decimal strings; an unset value is the empty string.
+type pnlBoundsLimitDTO struct {
+	Scope      string `json:"scope"`
+	Account    string `json:"account"`
+	Asset      string `json:"asset"`
+	LowerBound string `json:"lowerBound"`
+	UpperBound string `json:"upperBound"`
+	InitialPnl string `json:"initialPnl"`
+}
+
+// accountLimitsDTO is the per-policy view of an account's typed barriers,
+// returned by the account-state and limit-list endpoints. Each slice is always
+// a non-nil JSON array.
+type accountLimitsDTO struct {
+	RateLimits      []rateLimitDTO      `json:"rateLimits"`
+	OrderSizeLimits []orderSizeLimitDTO `json:"orderSizeLimits"`
+	PnlBoundsLimits []pnlBoundsLimitDTO `json:"pnlBoundsLimits"`
+}
+
+// auditDTO is the wire shape of a single audit row. An audit row is a machine
+// record: its public handle is the opaque external id; no surrogate id appears.
 type auditDTO struct {
-	At      time.Time `json:"at"`
-	Actor   string    `json:"actor"`
-	Action  string    `json:"action"`
-	Account string    `json:"account"`
-	Detail  string    `json:"detail"`
-	Source  string    `json:"source"`
-	ID      int64     `json:"id"`
+	At           time.Time `json:"at"`
+	ExternalID   string    `json:"externalId"`
+	Actor        string    `json:"actor"`
+	ActorTitle   string    `json:"actorTitle"`
+	Action       string    `json:"action"`
+	Account      string    `json:"account"`
+	AccountTitle string    `json:"accountTitle"`
+	Detail       string    `json:"detail"`
+	Source       string    `json:"source"`
 }
 
 // toStatusDTO maps a backend.Status onto the wire DTO.
@@ -113,60 +150,88 @@ func toStatusDTO(status backend.Status) statusDTO {
 	return statusDTO{Nodes: nodes, Healthy: status.Healthy}
 }
 
-// toAccountDTO maps a domain.Account onto the wire DTO.
+// toAccountDTO maps a domain.Account onto the wire DTO. The account's public
+// handle is its code; the engine account id is never serialized.
 func toAccountDTO(a domain.Account) accountDTO {
 	return accountDTO{
-		ID:          string(a.ID),
-		Group:       a.GroupID,
+		Code:        string(a.Code),
+		Title:       a.Title,
+		Group:       a.GroupCode,
 		Notes:       a.Notes,
 		BlockReason: a.BlockReason,
 		Blocked:     a.Blocked,
 	}
 }
 
-// toLimitDTO maps a domain.Limit onto the wire DTO.
-func toLimitDTO(l domain.Limit) limitDTO {
-	vals := make(map[string]string, len(l.Values))
-	for _, v := range l.Values {
-		vals[v.Kind] = v.Value
-	}
-	return limitDTO{
-		Policy:  l.Target.Policy,
-		Scope:   l.Target.Scope,
-		Account: string(l.Target.Account),
-		Asset:   l.Target.Asset,
-		Values:  vals,
+// toRateLimitDTO maps a domain.LimitRate onto the wire DTO.
+func toRateLimitDTO(l domain.LimitRate) rateLimitDTO {
+	return rateLimitDTO{
+		Scope:     l.Scope,
+		Account:   string(l.Account),
+		Asset:     l.Asset,
+		WindowMs:  l.Window.Milliseconds(),
+		MaxOrders: l.MaxOrders,
 	}
 }
 
-// fromLimitDTO maps a wire limitDTO back to a domain.Limit.
-func fromLimitDTO(dto limitDTO) domain.Limit {
-	vals := make([]domain.LimitValue, 0, len(dto.Values))
-	for k, v := range dto.Values {
-		vals = append(vals, domain.LimitValue{Kind: k, Value: v})
-	}
-	domain.SortLimitValues(vals)
-	return domain.Limit{
-		Target: domain.LimitTarget{
-			Policy:  dto.Policy,
-			Scope:   dto.Scope,
-			Account: domain.AccountID(dto.Account),
-			Asset:   dto.Asset,
-		},
-		Values: vals,
+// toOrderSizeLimitDTO maps a domain.LimitOrderSize onto the wire DTO.
+func toOrderSizeLimitDTO(l domain.LimitOrderSize) orderSizeLimitDTO {
+	return orderSizeLimitDTO{
+		Scope:       l.Scope,
+		Account:     string(l.Account),
+		Asset:       l.Asset,
+		MaxQuantity: l.MaxQuantity,
+		MaxNotional: l.MaxNotional,
 	}
 }
 
-// toAuditDTO maps a domain.AuditRow onto the wire DTO.
+// toPnlBoundsLimitDTO maps a domain.LimitPnlBounds onto the wire DTO.
+func toPnlBoundsLimitDTO(l domain.LimitPnlBounds) pnlBoundsLimitDTO {
+	return pnlBoundsLimitDTO{
+		Scope:      l.Scope,
+		Account:    string(l.Account),
+		Asset:      l.Asset,
+		LowerBound: l.LowerBound,
+		UpperBound: l.UpperBound,
+		InitialPnl: l.InitialPnl,
+	}
+}
+
+// toAccountLimitsDTO maps the per-policy typed barriers onto the wire DTO. Each
+// slice is a non-nil JSON array.
+func toAccountLimitsDTO(limits node.AccountLimits) accountLimitsDTO {
+	rates := make([]rateLimitDTO, 0, len(limits.RateLimits))
+	for _, l := range limits.RateLimits {
+		rates = append(rates, toRateLimitDTO(l))
+	}
+	sizes := make([]orderSizeLimitDTO, 0, len(limits.OrderSizeLimits))
+	for _, l := range limits.OrderSizeLimits {
+		sizes = append(sizes, toOrderSizeLimitDTO(l))
+	}
+	pnls := make([]pnlBoundsLimitDTO, 0, len(limits.PnlBoundsLimits))
+	for _, l := range limits.PnlBoundsLimits {
+		pnls = append(pnls, toPnlBoundsLimitDTO(l))
+	}
+	return accountLimitsDTO{
+		RateLimits:      rates,
+		OrderSizeLimits: sizes,
+		PnlBoundsLimits: pnls,
+	}
+}
+
+// toAuditDTO maps a domain.AuditRow onto the wire DTO. The audit row's public
+// handle is its opaque external id; no surrogate id is serialized.
 func toAuditDTO(row domain.AuditRow) auditDTO {
 	return auditDTO{
-		ID:      row.ID,
-		At:      row.At,
-		Actor:   row.Actor,
-		Action:  string(row.Action),
-		Account: string(row.Account),
-		Detail:  row.Detail,
-		Source:  string(row.Source),
+		ExternalID:   row.ExternalID.String(),
+		At:           row.At,
+		Actor:        row.Actor,
+		ActorTitle:   row.ActorTitle,
+		Action:       string(row.Action),
+		Account:      string(row.Account),
+		AccountTitle: row.AccountTitle,
+		Detail:       row.Detail,
+		Source:       string(row.Source),
 	}
 }
 
@@ -234,9 +299,12 @@ type marketDataReferencesDTO struct {
 }
 
 type marketDataInstanceDTO struct {
-	ID    string `json:"id"`
-	Type  string `json:"type"`
-	Label string `json:"label"`
+	// ExternalID is the instance's opaque public handle (a machine record). The
+	// store surrogate id is never serialized.
+	ExternalID string `json:"externalId"`
+	// Provider is the provider discriminator (e.g. "ib", "binance").
+	Provider string `json:"provider"`
+	Label    string `json:"label"`
 	// Credentials is accepted on create requests but redacted from responses.
 	Credentials     string                    `json:"credentials"`
 	State           string                    `json:"state"`
@@ -251,8 +319,15 @@ type marketDataInstanceDTO struct {
 	Diagnostics     []marketDataDiagnosticDTO `json:"diagnostics,omitempty"`
 }
 
+// marketDataCreateInstanceRequestDTO is the body of POST
+// /market-data/instances. ExternalID is the optional caller-supplied opaque
+// public handle for the instance; when omitted the server generates and returns
+// one (in the instance's externalId). A supplied id must be a well-formed
+// 22-char base64url wire form (malformed is a 400) and unique (a duplicate is a
+// 409); it is never a surrogate id.
 type marketDataCreateInstanceRequestDTO struct {
-	Type        string `json:"type"`
+	ExternalID  string `json:"externalId,omitempty"`
+	Provider    string `json:"provider"`
 	Label       string `json:"label"`
 	Credentials string `json:"credentials"`
 	Enabled     bool   `json:"enabled"`
@@ -312,11 +387,13 @@ type marketDataDiagnosticDTO struct {
 }
 
 type marketDataInstrumentDTO struct {
-	InstanceID     string `json:"instanceId,omitempty"`
-	ExternalSymbol string `json:"externalSymbol"`
-	BaseAsset      string `json:"baseAsset"`
-	QuoteAsset     string `json:"quoteAsset"`
-	ManualPrice    string `json:"manualPrice"`
+	// InstanceExternalID is the owning instance's opaque public handle; omitted
+	// in request bodies (taken from the path) and set in responses.
+	InstanceExternalID string `json:"instanceExternalId,omitempty"`
+	ExternalSymbol     string `json:"externalSymbol"`
+	BaseAsset          string `json:"baseAsset"`
+	QuoteAsset         string `json:"quoteAsset"`
+	ManualPrice        string `json:"manualPrice"`
 	// UpdateIntervalMs is the elapsed time, in milliseconds, between the two most
 	// recent ticks of this instrument's quote. Omitted while it is unknown (fewer
 	// than two ticks since the last (re)subscribe). It is a fixed measurement,
@@ -392,8 +469,8 @@ func toMarketDataInstanceDTO(status backend.MarketDataInstanceStatus) marketData
 		}
 	}
 	return marketDataInstanceDTO{
-		ID:              status.Instance.ID,
-		Type:            status.Instance.Type,
+		ExternalID:      status.Instance.ExternalID.String(),
+		Provider:        status.Instance.Provider,
 		Label:           status.Instance.Label,
 		Credentials:     "",
 		State:           status.State,
@@ -415,13 +492,12 @@ func marketDataSafeSettings(instance domain.MarketDataInstance) map[string]any {
 		return nil
 	}
 	settings := make(map[string]any)
-	switch instance.Type {
+	switch instance.Provider {
 	case domain.MarketDataProviderIB:
 		copyStringSetting(settings, credentials, "host")
 		copyNumberSetting(settings, credentials, "port")
 		copyNumberSetting(settings, credentials, "clientId")
 		copyStringSetting(settings, credentials, "marketDataType")
-		copyNumberSetting(settings, credentials, "marketDataType")
 		copyObjectSetting(settings, credentials, "contracts")
 	case domain.MarketDataProviderBybit:
 		copyStringSetting(settings, credentials, "category")
@@ -441,7 +517,7 @@ func marketDataSecretState(instance domain.MarketDataInstance) map[string]bool {
 		return nil
 	}
 	secrets := make(map[string]bool)
-	switch instance.Type {
+	switch instance.Provider {
 	case domain.MarketDataProviderAlpaca:
 		secrets["apiKey"] = stringCredentialPresent(credentials, "apiKey") ||
 			stringCredentialPresent(credentials, "key")
@@ -541,15 +617,15 @@ func toMarketDataInstrumentDTO(
 		intervalMs = int(status.UpdateInterval.Milliseconds())
 	}
 	return marketDataInstrumentDTO{
-		InstanceID:       status.Instrument.InstanceID,
-		ExternalSymbol:   status.Instrument.ExternalSymbol,
-		BaseAsset:        status.Instrument.BaseAsset,
-		QuoteAsset:       status.Instrument.QuoteAsset,
-		ManualPrice:      status.Instrument.ManualPrice,
-		UpdateIntervalMs: intervalMs,
-		Enabled:          status.Instrument.Enabled,
-		Stale:            status.Stale,
-		Quote:            toMarketDataQuoteDTO(status.Quote),
+		InstanceExternalID: status.Instrument.Instance.String(),
+		ExternalSymbol:     status.Instrument.ExternalSymbol,
+		BaseAsset:          status.Instrument.BaseAsset,
+		QuoteAsset:         status.Instrument.QuoteAsset,
+		ManualPrice:        status.Instrument.ManualPrice,
+		UpdateIntervalMs:   intervalMs,
+		Enabled:            status.Instrument.Enabled,
+		Stale:              status.Stale,
+		Quote:              toMarketDataQuoteDTO(status.Quote),
 	}
 }
 
@@ -568,18 +644,23 @@ func toMarketDataQuoteDTO(quote *domain.MarketDataQuote) *marketDataQuoteDTO {
 
 // --- group ------------------------------------------------------------------
 
-// groupDTO is the wire shape of a single account group.
+// groupDTO is the wire shape of a single account group. A group is a dictionary
+// record: its public handle is the immutable code, paired with a mutable title.
+// The engine group id and the store surrogate id are never serialized.
 type groupDTO struct {
-	ID          string `json:"id"`
+	Code        string `json:"code"`
+	Title       string `json:"title"`
 	Notes       string `json:"notes"`
 	BlockReason string `json:"blockReason"`
 	Blocked     bool   `json:"blocked"`
 }
 
-// toGroupDTO maps a domain.AccountGroup onto the wire DTO.
+// toGroupDTO maps a domain.AccountGroup onto the wire DTO. The group's public
+// handle is its code; the engine group id is never serialized.
 func toGroupDTO(g domain.AccountGroup) groupDTO {
 	return groupDTO{
-		ID:          g.ID,
+		Code:        g.Code,
+		Title:       g.Title,
 		Notes:       g.Notes,
 		BlockReason: g.BlockReason,
 		Blocked:     g.Blocked,
@@ -630,7 +711,13 @@ type adjustmentBoundsDTO struct {
 }
 
 // adjustmentRequestDTO is the wire body of POST .../adjustments. All values are
-// exact decimal strings passed through verbatim.
+// exact decimal strings passed through verbatim. ExternalID is the optional
+// caller-supplied opaque public handle for the adjustment record; when omitted
+// the server generates and returns one (under the record's externalId). It is
+// write-only on create: a supplied id must be a well-formed 22-char base64url
+// wire form (malformed is a 400) and unique (a duplicate is a 409). It is
+// omitted from the request echoed back in an adjustment record (the record's own
+// externalId carries the resolved handle).
 type adjustmentRequestDTO struct {
 	Balance           *adjustmentAmountDTO `json:"balance,omitempty"`
 	BalanceBounds     *adjustmentBoundsDTO `json:"balanceBounds,omitempty"`
@@ -638,6 +725,7 @@ type adjustmentRequestDTO struct {
 	HeldBounds        *adjustmentBoundsDTO `json:"heldBounds,omitempty"`
 	Incoming          *adjustmentAmountDTO `json:"incoming,omitempty"`
 	IncomingBounds    *adjustmentBoundsDTO `json:"incomingBounds,omitempty"`
+	ExternalID        string               `json:"externalId,omitempty"`
 	Asset             string               `json:"asset"`
 	AverageEntryPrice string               `json:"averageEntryPrice,omitempty"`
 }
@@ -668,15 +756,18 @@ type adjustmentRejectedDTO struct {
 	Details string `json:"details,omitempty"`
 }
 
-// adjustmentDTO is the wire shape of one adjustment record incl. outcome.
+// adjustmentDTO is the wire shape of one adjustment record incl. outcome. An
+// adjustment is a machine record: its public handle is the opaque external id;
+// no surrogate id is serialized.
 type adjustmentDTO struct {
-	At      time.Time            `json:"at"`
-	Request adjustmentRequestDTO `json:"request"`
-	Outcome adjustmentOutcomeDTO `json:"outcome"`
-	Account string               `json:"account"`
-	Source  string               `json:"source"`
-	Status  string               `json:"status"`
-	ID      int64                `json:"id"`
+	At         time.Time            `json:"at"`
+	ExternalID string               `json:"externalId"`
+	Request    adjustmentRequestDTO `json:"request"`
+	Outcome    adjustmentOutcomeDTO `json:"outcome"`
+	Account    string               `json:"account"`
+	Principal  string               `json:"principal,omitempty"`
+	Source     string               `json:"source"`
+	Status     string               `json:"status"`
 }
 
 // fromAdjustmentRequestDTO maps a wire request body onto the domain request.
@@ -765,54 +856,64 @@ func toAdjustmentDTO(r domain.AccountAdjustmentRecord) adjustmentDTO {
 		}
 	}
 	return adjustmentDTO{
-		At:      r.At,
-		Request: toAdjustmentRequestDTO(r.Request),
-		Outcome: outcome,
-		Account: string(r.Account),
-		Source:  string(r.Source),
-		Status:  string(status),
-		ID:      r.ID,
+		At:         r.At,
+		ExternalID: r.ExternalID.String(),
+		Request:    toAdjustmentRequestDTO(r.Request),
+		Outcome:    outcome,
+		Account:    string(r.Account),
+		Principal:  r.Principal,
+		Source:     string(r.Source),
+		Status:     string(status),
 	}
 }
 
 // --- order ------------------------------------------------------------------
 
-// orderDTO is the wire shape of one Officer-side order record. All monetary and
-// size values are exact decimal strings passed through verbatim.
+// orderDTO is the wire shape of one Officer-side order record. An order is a
+// machine record: its public handle is the opaque external id; no surrogate or
+// engine id is serialized. DisplayPrices are the human-readable reservation lock
+// prices derived from the opaque lock blob by the engine seam (settlement leg
+// last); the raw lock is never serialized. All monetary and size values are
+// exact decimal strings passed through verbatim.
 type orderDTO struct {
-	At          time.Time `json:"at"`
-	Account     string    `json:"account"`
-	BaseAsset   string    `json:"baseAsset"`
-	QuoteAsset  string    `json:"quoteAsset"`
-	Side        string    `json:"side"`
-	AmountKind  string    `json:"amountKind"`
-	AmountValue string    `json:"amountValue"`
-	Price       string    `json:"price"`
-	Status      string    `json:"status"`
-	Source      string    `json:"source"`
-	LockPrices  []string  `json:"lockPrices"`
-	ID          int64     `json:"id"`
+	At            time.Time `json:"at"`
+	ExternalID    string    `json:"externalId"`
+	Account       string    `json:"account"`
+	Principal     string    `json:"principal,omitempty"`
+	BaseAsset     string    `json:"baseAsset"`
+	QuoteAsset    string    `json:"quoteAsset"`
+	Side          string    `json:"side"`
+	AmountKind    string    `json:"amountKind"`
+	AmountValue   string    `json:"amountValue"`
+	Price         string    `json:"price"`
+	Status        string    `json:"status"`
+	Source        string    `json:"source"`
+	DisplayPrices []string  `json:"displayPrices"`
 }
 
-// toOrderDTO maps a domain.Order onto the wire DTO.
+// toOrderDTO maps a domain.Order onto the wire DTO. The display prices are
+// derived from the order's opaque lock blob via the engine seam; an undecodable
+// lock degrades gracefully to an empty list rather than failing the response,
+// since the lock is presentation-only and the order row is already authoritative.
 func toOrderDTO(o domain.Order) orderDTO {
-	prices := o.LockPrices
-	if prices == nil {
+	prices, err := engine.LockDisplayPrices(o.Lock)
+	if err != nil || prices == nil {
 		prices = []string{}
 	}
 	return orderDTO{
-		At:          o.At,
-		Account:     string(o.Account),
-		BaseAsset:   o.BaseAsset,
-		QuoteAsset:  o.QuoteAsset,
-		Side:        string(o.Side),
-		AmountKind:  string(o.AmountKind),
-		AmountValue: o.AmountValue,
-		Price:       o.Price,
-		Status:      string(o.Status),
-		Source:      string(o.Source),
-		LockPrices:  prices,
-		ID:          o.ID,
+		At:            o.At,
+		ExternalID:    o.ExternalID.String(),
+		Account:       string(o.Account),
+		Principal:     o.Principal,
+		BaseAsset:     o.BaseAsset,
+		QuoteAsset:    o.QuoteAsset,
+		Side:          string(o.Side),
+		AmountKind:    string(o.AmountKind),
+		AmountValue:   o.AmountValue,
+		Price:         o.Price,
+		Status:        string(o.Status),
+		Source:        string(o.Source),
+		DisplayPrices: prices,
 	}
 }
 
@@ -830,20 +931,22 @@ type orderApprovalDTO struct {
 	Signed    bool   `json:"signed"`
 }
 
-// toOrderApprovalDTO maps an order's persisted envelope onto the wire DTO, or
-// returns nil when the order carries no envelope (approval token empty).
-func toOrderApprovalDTO(o domain.Order) *orderApprovalDTO {
-	if o.ApprovalToken == "" {
+// toOrderApprovalDTO maps an order's 1:1 persisted approval envelope onto the
+// wire DTO, or returns nil when the order carries no envelope (unsigned). The
+// envelope is read back from OrderDetail.Approval; no surrogate or engine id is
+// present in it.
+func toOrderApprovalDTO(a *domain.OrderApproval) *orderApprovalDTO {
+	if a == nil {
 		return nil
 	}
 	return &orderApprovalDTO{
-		Token:     o.ApprovalToken,
-		KeyID:     o.ApprovalKeyID,
-		Alg:       o.ApprovalAlg,
-		Mode:      o.ApprovalMode,
-		IssuedAt:  o.ApprovalIssuedAt,
-		ExpiresAt: o.ApprovalExpiresAt,
-		Signed:    o.ApprovalAlg == "ed25519",
+		Token:     a.Token,
+		KeyID:     a.KeyID,
+		Alg:       a.Alg,
+		Mode:      a.Mode,
+		IssuedAt:  a.IssuedAt,
+		ExpiresAt: a.ExpiresAt,
+		Signed:    a.Alg == "ed25519",
 	}
 }
 
@@ -860,13 +963,14 @@ type orderRejectDTO struct {
 }
 
 // checkResultDTO is the wire shape of a non-mutating order-check outcome: the
-// would-be lock prices on pass, or the structured rejects and any would-be
-// account block on reject. Monetary values are exact decimal strings.
+// would-be display (lock) prices on pass, or the structured rejects and any
+// would-be account block on reject. The display prices are exact decimal
+// strings, never the opaque lock blob.
 type checkResultDTO struct {
-	WouldBlock      *executionBlockDTO `json:"wouldBlock"`
-	Rejects         []orderRejectDTO   `json:"rejects"`
-	WouldLockPrices []string           `json:"wouldLockPrices"`
-	Passed          bool               `json:"passed"`
+	WouldBlock         *executionBlockDTO `json:"wouldBlock"`
+	Rejects            []orderRejectDTO   `json:"rejects"`
+	WouldDisplayPrices []string           `json:"wouldDisplayPrices"`
+	Passed             bool               `json:"passed"`
 }
 
 // toCheckResultDTO maps a domain.CheckResult onto the wire DTO. It reuses the
@@ -896,10 +1000,10 @@ func toCheckResultDTO(r domain.CheckResult) checkResultDTO {
 		}
 	}
 	return checkResultDTO{
-		WouldBlock:      block,
-		Rejects:         rejects,
-		WouldLockPrices: prices,
-		Passed:          r.Passed,
+		WouldBlock:         block,
+		Rejects:            rejects,
+		WouldDisplayPrices: prices,
+		Passed:             r.Passed,
 	}
 }
 
@@ -910,8 +1014,11 @@ func toCheckResultDTO(r domain.CheckResult) checkResultDTO {
 // Reject fields can also be present on fill events that caused an account block.
 type orderEventDTO struct {
 	At            time.Time `json:"at"`
+	ExternalID    string    `json:"externalId"`
+	Order         string    `json:"order"`
 	Type          string    `json:"type"`
 	Source        string    `json:"source"`
+	Principal     string    `json:"principal,omitempty"`
 	RejectCode    string    `json:"rejectCode,omitempty"`
 	RejectScope   string    `json:"rejectScope,omitempty"`
 	RejectPolicy  string    `json:"rejectPolicy,omitempty"`
@@ -920,16 +1027,18 @@ type orderEventDTO struct {
 	FillQuantity  string    `json:"fillQuantity,omitempty"`
 	FillPrice     string    `json:"fillPrice,omitempty"`
 	FillLockPrice string    `json:"fillLockPrice,omitempty"`
-	OrderID       int64     `json:"orderId"`
-	ID            int64     `json:"id"`
 }
 
-// toOrderEventDTO maps a domain.OrderEvent onto the wire DTO.
+// toOrderEventDTO maps a domain.OrderEvent onto the wire DTO. Both the event and
+// its parent order are addressed by opaque external ids; no surrogate id appears.
 func toOrderEventDTO(e domain.OrderEvent) orderEventDTO {
 	return orderEventDTO{
 		At:            e.At,
+		ExternalID:    e.ExternalID.String(),
+		Order:         e.Order.String(),
 		Type:          string(e.Type),
 		Source:        string(e.Source),
+		Principal:     e.Principal,
 		RejectCode:    e.Payload.RejectCode,
 		RejectScope:   e.Payload.RejectScope,
 		RejectPolicy:  e.Payload.RejectPolicy,
@@ -938,8 +1047,6 @@ func toOrderEventDTO(e domain.OrderEvent) orderEventDTO {
 		FillQuantity:  e.Payload.FillQuantity,
 		FillPrice:     e.Payload.FillPrice,
 		FillLockPrice: e.Payload.FillLockPrice,
-		OrderID:       e.OrderID,
-		ID:            e.ID,
 	}
 }
 
@@ -949,7 +1056,10 @@ func toOrderEventDTO(e domain.OrderEvent) orderEventDTO {
 // are exact decimal strings passed through verbatim.
 type tradeDTO struct {
 	At         time.Time `json:"at"`
+	ExternalID string    `json:"externalId"`
+	Order      string    `json:"order"`
 	Account    string    `json:"account"`
+	Principal  string    `json:"principal,omitempty"`
 	BaseAsset  string    `json:"baseAsset"`
 	QuoteAsset string    `json:"quoteAsset"`
 	Side       string    `json:"side"`
@@ -957,15 +1067,17 @@ type tradeDTO struct {
 	Price      string    `json:"price"`
 	LockPrice  string    `json:"lockPrice"`
 	Source     string    `json:"source"`
-	OrderID    int64     `json:"orderId"`
-	ID         int64     `json:"id"`
 }
 
-// toTradeDTO maps a domain.Trade onto the wire DTO.
+// toTradeDTO maps a domain.Trade onto the wire DTO. Both the trade and its
+// originating order are addressed by opaque external ids; no surrogate id appears.
 func toTradeDTO(t domain.Trade) tradeDTO {
 	return tradeDTO{
 		At:         t.At,
+		ExternalID: t.ExternalID.String(),
+		Order:      t.Order.String(),
 		Account:    string(t.Account),
+		Principal:  t.Principal,
 		BaseAsset:  t.BaseAsset,
 		QuoteAsset: t.QuoteAsset,
 		Side:       string(t.Side),
@@ -973,8 +1085,6 @@ func toTradeDTO(t domain.Trade) tradeDTO {
 		Price:      t.Price,
 		LockPrice:  t.LockPrice,
 		Source:     string(t.Source),
-		OrderID:    t.OrderID,
-		ID:         t.ID,
 	}
 }
 
@@ -1060,26 +1170,40 @@ type publicKeyDTO struct {
 	PublicKey string `json:"publicKey"`
 }
 
-// submitOrderTokenRequestDTO is the body of POST /orders/{id}/submit.
+// submitOrderTokenRequestDTO is the body of POST /orders/submit. Submit creates
+// the order from these fields: there is no prior persisting create. ExternalID
+// is the optional caller-supplied opaque public handle; when omitted the server
+// generates and returns one in the response. A supplied id must be a well-formed
+// 22-char base64url wire form (malformed is a 400) and unique (a duplicate is a
+// 409); it is never a surrogate or engine id.
 type submitOrderTokenRequestDTO struct {
-	Mode string `json:"mode"`
+	ExternalID  string `json:"externalId,omitempty"`
+	Account     string `json:"account"`
+	BaseAsset   string `json:"baseAsset"`
+	QuoteAsset  string `json:"quoteAsset"`
+	Side        string `json:"side"`
+	AmountKind  string `json:"amountKind"`
+	AmountValue string `json:"amountValue"`
+	Price       string `json:"price"`
+	Mode        string `json:"mode"`
 }
 
-// approvalTokenDTO is the response of POST /orders/{id}/submit.
+// approvalTokenDTO is the response of POST /orders/submit. The authorised order
+// is referenced by its opaque external id, never a surrogate id.
 type approvalTokenDTO struct {
-	Token     string `json:"token"`
-	KeyID     string `json:"keyId"`
-	ExpiresAt string `json:"expiresAt"`
-	OrderID   int64  `json:"orderId"`
+	Token           string `json:"token"`
+	KeyID           string `json:"keyId"`
+	ExpiresAt       string `json:"expiresAt"`
+	OrderExternalID string `json:"orderExternalId"`
 }
 
-// confirmExecutionRequestDTO is the body of POST /orders/{id}/confirm.
+// confirmExecutionRequestDTO is the body of POST /orders/{externalId}/confirm.
 type confirmExecutionRequestDTO struct {
 	Token string `json:"token"`
 	Force bool   `json:"force"`
 }
 
-// cancelOrderRequestDTO is the body of POST /orders/{id}/cancel.
+// cancelOrderRequestDTO is the body of POST /orders/{externalId}/cancel.
 type cancelOrderRequestDTO struct {
 	Token  string `json:"token"`
 	Reason string `json:"reason"`

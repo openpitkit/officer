@@ -56,7 +56,8 @@ export interface Health {
 
 /** An operator account (mirrors the accountDTO wire shape). */
 export interface Account {
-  id: string;
+  code: string;
+  title: string;
   blocked: boolean;
   blockReason: string;
   group: string;
@@ -67,7 +68,8 @@ export interface Account {
 
 /** An account group (mirrors the groupDTO wire shape). */
 export interface Group {
-  id: string;
+  code: string;
+  title: string;
   notes: string;
   blocked: boolean;
   blockReason: string;
@@ -75,8 +77,43 @@ export interface Group {
 
 // --- Limits / Policies ---
 
-/** One risk-limit barrier: the full set of kind/value pairs for a target
- *  (mirrors the limitDTO wire shape). Values is an ordered kind -> value map.
+/** Typed wire shape for a rate-limit barrier. */
+export interface RateLimit {
+  scope: string;
+  account: string;
+  asset: string;
+  windowMs: number;
+  maxOrders: number;
+}
+
+/** Typed wire shape for an order-size barrier. */
+export interface OrderSizeLimit {
+  scope: string;
+  account: string;
+  asset: string;
+  maxQuantity: string;
+  maxNotional: string;
+}
+
+/** Typed wire shape for a P&L-bounds kill-switch barrier. */
+export interface PnlBoundsLimit {
+  scope: string;
+  account: string;
+  asset: string;
+  lowerBound: string;
+  upperBound: string;
+  initialPnl: string;
+}
+
+/** Per-policy typed limits returned by the account-state and limit-list APIs. */
+export interface AccountLimits {
+  rateLimits: RateLimit[];
+  orderSizeLimits: OrderSizeLimit[];
+  pnlBoundsLimits: PnlBoundsLimit[];
+}
+
+/** One risk-limit barrier in the UI's flat policy/value model. Values is an
+ *  ordered kind -> value map.
  */
 export interface Limit {
   policy: string;
@@ -136,6 +173,7 @@ export interface AdjustmentRejected {
 
 /** The request body captured on an adjustment record. */
 export interface AdjustmentRequest {
+  externalId?: string;
   asset: string;
   balance?: AdjustmentAmount;
   held?: AdjustmentAmount;
@@ -148,9 +186,10 @@ export interface AdjustmentRequest {
 
 /** One balance adjustment record (mirrors adjustmentDTO). */
 export interface Adjustment {
-  id: number;
+  externalId: string;
   account: string;
   at: string;
+  principal?: string;
   source: Source;
   asset: string;
   status: "accepted" | "rejected";
@@ -172,9 +211,10 @@ export type AmountKind = "quantity" | "volume";
 
 /** An order record. */
 export interface Order {
-  id: number;
+  externalId: string;
   account: string;
   at: string;
+  principal?: string;
   source: Source;
   baseAsset: string;
   quoteAsset: string;
@@ -183,22 +223,20 @@ export interface Order {
   amountValue: string;
   price: string;
   status: string;
-  /** Prices locked at order submission, as exact decimal strings. */
-  lockPrices: string[];
-  /** Submission mode; present only for held orders. */
-  submitMode?: "hold" | "immediate";
+  /** Human-readable reservation prices, as exact decimal strings. */
+  displayPrices: string[];
 }
 
 /** An event on an order's lifecycle.
  * Reject fields are present on rejected events and account-blocking fill events.
  */
 export interface OrderEvent {
-  id: number;
-  orderId: number;
+  externalId: string;
+  order: string;
   at: string;
   type: string;
   source: Source;
-  principal: string;
+  principal?: string;
   rejectCode?: string;
   rejectScope?: string;
   rejectPolicy?: string;
@@ -211,10 +249,11 @@ export interface OrderEvent {
 
 /** A completed trade derived from a fill. */
 export interface Trade {
-  id: number;
-  orderId: number;
+  externalId: string;
+  order: string;
   account: string;
   at: string;
+  principal?: string;
   source: Source;
   baseAsset: string;
   quoteAsset: string;
@@ -245,7 +284,7 @@ export interface CheckWouldBlock {
 export interface CheckResult {
   passed: boolean;
   rejects: CheckReject[];
-  wouldLockPrices: string[];
+  wouldDisplayPrices: string[];
   wouldBlock: CheckWouldBlock | null;
 }
 
@@ -257,9 +296,16 @@ export interface ExecutionBlock {
   details: string;
 }
 
-/** Result of POST /orders/{id}/execution-reports (the blocks the fill caused). */
+/** Result of POST /orders/{externalId}/execution-reports. */
 export interface ExecutionReportResult {
   blocks: ExecutionBlock[];
+}
+
+export interface ApprovalToken {
+  token: string;
+  keyId: string;
+  expiresAt: string;
+  orderExternalId: string;
 }
 
 // --- Dashboard / Overview ---
@@ -303,7 +349,7 @@ export interface MarketDataQuote {
 }
 
 export interface MarketDataInstrument {
-  instanceId: string;
+  instanceExternalId: string;
   externalSymbol: string;
   baseAsset: string;
   quoteAsset: string;
@@ -343,8 +389,8 @@ export interface MarketDataReferences {
 }
 
 export interface MarketDataInstance {
-  id: string;
-  type: string;
+  externalId: string;
+  provider: string;
   label: string;
   credentials: string;
   settings?: Record<string, unknown>;
@@ -363,7 +409,7 @@ export interface MarketDataInstance {
   references?: MarketDataReferences;
 }
 
-/** Outcome of POST /market-data/instances/{id}/verify-symbol. */
+/** Outcome of POST /market-data/instances/{externalId}/verify-symbol. */
 export interface MarketDataSymbolVerification {
   /** False when the provider cannot verify symbols. */
   supported: boolean;
@@ -392,7 +438,7 @@ export interface MarketDataSymbolMatch {
   tradingClass?: string;
 }
 
-/** Outcome of POST /market-data/instances/{id}/search-symbols. */
+/** Outcome of POST /market-data/instances/{externalId}/search-symbols. */
 export interface MarketDataSymbolSearch {
   /** False when the provider cannot search symbols. */
   supported: boolean;
@@ -494,6 +540,57 @@ export interface BackupRestoreSummary {
   restartRequired: boolean;
 }
 
+// --- Business CSV import / export ---
+
+export type BusinessCsvEntity =
+  | "account_groups"
+  | "accounts"
+  | "positions"
+  | "orders"
+  | "trades";
+
+export type BusinessCsvImportEntity =
+  | "account_groups"
+  | "accounts"
+  | "positions";
+
+export type BusinessCsvDelimiter = "comma" | "semicolon" | "tab" | "pipe";
+
+export type BusinessCsvConflictPolicy = "skip" | "replace" | "stop";
+
+export interface BusinessCsvExportFilters {
+  groupCode?: string | null;
+  account?: string;
+  asset?: string;
+  source?: Source;
+}
+
+export interface BusinessCsvImportFile {
+  name: string;
+  type: "csv" | "zip" | string;
+}
+
+export interface BusinessCsvImportCounts {
+  rows: number;
+  applied: number;
+  skipped: number;
+  conflicts: number;
+  stopped: boolean;
+}
+
+export interface BusinessCsvConflict {
+  row: number;
+  key: string;
+}
+
+export interface BusinessCsvImportPreview {
+  file: BusinessCsvImportFile;
+  counts: BusinessCsvImportCounts;
+  conflicts: BusinessCsvConflict[];
+}
+
+export type BusinessCsvImportResult = BusinessCsvImportPreview;
+
 // --- MCP access ---
 
 /** One entry from GET /mcp-access (mirrors the mcpCommandDTO wire shape). */
@@ -561,13 +658,21 @@ export interface OrderApproval {
 
 /** One audit-log entry (mirrors the auditDTO wire shape). */
 export interface AuditEntry {
-  id: number;
+  externalId: string;
   at: string;
   actor: string;
+  actorTitle: string;
   action: string;
   account: string;
+  accountTitle: string;
   detail: string;
   source: Source;
+}
+
+/** One dependent row kind that blocks a destructive delete. */
+export interface ApiErrorDependent {
+  kind: string;
+  count: number;
 }
 
 /** One category of the audit action catalogue (mirrors the wire shape from

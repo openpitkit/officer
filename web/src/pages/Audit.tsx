@@ -26,6 +26,10 @@ import { Autocomplete } from "@/components/Autocomplete";
 import { EmptyState, ErrorState, TableSkeleton } from "@/components/PageStates";
 import { Page } from "@/components/Page";
 import { RefreshButton } from "@/components/RefreshButton";
+import {
+  PageSizeSelect,
+  TablePagination,
+} from "@/components/TableControls";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -51,8 +55,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatDateTime } from "@/i18n/format";
+import {
+  hasNextPage,
+  pageFetchLimit,
+  slicePage,
+} from "@/lib/tablePagination";
+import { usePersistentPageSize } from "@/lib/tablePageSize";
 
-const PAGE_SIZES = [50, 100, 500] as const;
 const SOURCES = ["panel", "api", "mcp", "system"] as const;
 const EMPTY_ACTION_GROUPS: AuditActionGroup[] = [];
 
@@ -105,12 +114,12 @@ function AuditTable({ entries }: { entries: AuditEntry[] }) {
         </TableHeader>
         <TableBody>
           {entries.map((entry) => (
-            <TableRow key={entry.id} className="hover:bg-transparent">
+            <TableRow key={entry.externalId} className="hover:bg-transparent">
               <TableCell className="nums whitespace-nowrap text-xs text-muted-lt">
                 {formatDateTime(entry.at)}
               </TableCell>
               <TableCell className="text-xs text-muted-lt">
-                {entry.actor || tc("value.none")}
+                {entry.actorTitle || entry.actor || tc("value.none")}
               </TableCell>
               <TableCell>
                 <Badge variant={actionVariant(entry.action)}>
@@ -118,7 +127,7 @@ function AuditTable({ entries }: { entries: AuditEntry[] }) {
                 </Badge>
               </TableCell>
               <TableCell className="nums text-xs">
-                {entry.account || tc("value.none")}
+                {entry.accountTitle || entry.account || tc("value.none")}
               </TableCell>
               <TableCell>
                 {entry.source ? (
@@ -258,7 +267,8 @@ export function Audit() {
   // quick-links land here pre-filtered.
   const [account, setAccount] = useState(params.get("account") ?? "");
   const [source, setSource] = useState(params.get("source") ?? "");
-  const [size, setSize] = useState<number>(50);
+  const [size, setSize] = usePersistentPageSize("pit-officer-audit-page-size");
+  const [page, setPage] = useState(0);
   const [selectedActions, setSelectedActions] = useState<Set<string> | null>(
     null,
   );
@@ -297,10 +307,23 @@ export function Audit() {
   // Hold the audit fetch until the catalogue has seeded the selection so the
   // first call carries the control default, not an empty (match-nothing) set.
   const { load, reload } = useAudit(
-    size,
+    pageFetchLimit(page, size),
     account || undefined,
     source || undefined,
     catalogue.load.state === "ready" ? actions : undefined,
+  );
+  const entries = load.state === "ready" ? load.data : [];
+  const pagedEntries = slicePage(entries, page, size);
+  const hasMoreEntries = hasNextPage(entries, page, size);
+  const pager = (
+    <TablePagination
+      page={page}
+      canPrevious={page > 0}
+      canNext={hasMoreEntries}
+      onPrevious={() => setPage((p) => Math.max(0, p - 1))}
+      onNext={() => setPage((p) => p + 1)}
+      onPage={setPage}
+    />
   );
 
   // Build account suggestions from loaded entries.
@@ -322,24 +345,17 @@ export function Audit() {
       title={t("title")}
       actions={
         <>
-          <Select
-            value={String(size)}
-            onValueChange={(v) => setSize(Number(v))}
-          >
-            <SelectTrigger
-              className="h-8 w-28 text-xs"
-              aria-label={t("actions.pageSize.ariaLabel")}
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {PAGE_SIZES.map((n) => (
-                <SelectItem key={n} value={String(n)}>
-                  {t("actions.pageSize.rowCount", { count: n })}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <PageSizeSelect
+            value={size}
+            onChange={(value) => {
+              setSize(value);
+              setPage(0);
+            }}
+            ariaLabel={t("actions.pageSize.ariaLabel")}
+            rowCountLabel={(count) =>
+              t("actions.pageSize.rowCount", { count })
+            }
+          />
           <RefreshButton onClick={reload} busy={load.state === "loading"} />
         </>
       }
@@ -351,7 +367,10 @@ export function Audit() {
         <div className="w-48">
           <Autocomplete
             value={account}
-            onChange={setAccount}
+            onChange={(value) => {
+              setAccount(value);
+              setPage(0);
+            }}
             suggestions={accountSuggestions}
             placeholder={t("filter.account.placeholder")}
             className="h-8 text-xs"
@@ -359,7 +378,10 @@ export function Audit() {
         </div>
         <Select
           value={source || "_all"}
-          onValueChange={(v) => setSource(v === "_all" ? "" : v)}
+          onValueChange={(v) => {
+            setSource(v === "_all" ? "" : v);
+            setPage(0);
+          }}
         >
           <SelectTrigger
             className="h-8 w-32 text-xs"
@@ -380,6 +402,7 @@ export function Audit() {
           selected={effectiveSelectedActions}
           onChange={(next) => {
             setSelectedActions(next);
+            setPage(0);
           }}
           groups={actionGroups}
           allActions={allActions}
@@ -408,7 +431,11 @@ export function Audit() {
             hint={isFiltered ? t("empty.hint.filtered") : t("empty.hint.blank")}
           />
         ) : (
-          <AuditTable entries={load.data} />
+          <>
+            {pager}
+            <AuditTable entries={pagedEntries} />
+            {pager}
+          </>
         ))}
     </Page>
   );

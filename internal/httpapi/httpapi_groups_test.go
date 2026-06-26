@@ -32,8 +32,8 @@ import (
 func TestListGroups(t *testing.T) {
 	svc := &fakeService{
 		groups: []domain.AccountGroup{
-			{ID: "grp-1", Notes: "team A", Blocked: false},
-			{ID: "grp-2", Notes: "team B", Blocked: true, BlockReason: "risk"},
+			{Code: "grp-1", Notes: "team A", Blocked: false},
+			{Code: "grp-2", Notes: "team B", Blocked: true, BlockReason: "risk"},
 		},
 	}
 	r, err := newRouter(svc)
@@ -52,14 +52,15 @@ func TestListGroups(t *testing.T) {
 	}
 	// Verify the wire shape carries the camelCase contract keys.
 	first := groups[0].(map[string]any)
-	for _, field := range []string{"id", "notes", "blockReason", "blocked"} {
+	for _, field := range []string{"code", "title", "notes", "blockReason", "blocked"} {
 		if _, ok := first[field]; !ok {
 			t.Fatalf("group missing field %q", field)
 		}
 	}
-	if first["id"] != "grp-1" || first["blocked"] != false {
+	if first["code"] != "grp-1" || first["blocked"] != false {
 		t.Fatalf("unexpected first group: %v", first)
 	}
+	assertNoSurrogateID(t, first)
 	second := groups[1].(map[string]any)
 	if second["blocked"] != true || second["blockReason"] != "risk" {
 		t.Fatalf("unexpected second group: %v", second)
@@ -113,7 +114,7 @@ func TestCreateGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := bytes.NewBufferString(`{"id":"grp-1","notes":"desk one"}`)
+	body := bytes.NewBufferString(`{"code":"grp-1","notes":"desk one"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/groups", body))
 	if rec.Code != http.StatusCreated {
@@ -124,11 +125,12 @@ func TestCreateGroup(t *testing.T) {
 	if !ok {
 		t.Fatalf("want group object, got %v", m["group"])
 	}
-	if g["id"] != "grp-1" || g["notes"] != "desk one" {
+	if g["code"] != "grp-1" || g["notes"] != "desk one" {
 		t.Fatalf("unexpected group: %v", g)
 	}
+	assertNoSurrogateID(t, g)
 	// CreateGroup appends to the seed set; one row must now exist.
-	if len(svc.groups) != 1 || svc.groups[0].ID != "grp-1" {
+	if len(svc.groups) != 1 || svc.groups[0].Code != "grp-1" {
 		t.Fatalf("expected group persisted, got %v", svc.groups)
 	}
 }
@@ -162,7 +164,7 @@ func TestCreateGroup_Conflict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := bytes.NewBufferString(`{"id":"grp-1"}`)
+	body := bytes.NewBufferString(`{"code":"grp-1"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/groups", body))
 	if rec.Code != http.StatusConflict {
@@ -186,7 +188,7 @@ func TestCreateGroup_ValidationError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := bytes.NewBufferString(`{"id":""}`)
+	body := bytes.NewBufferString(`{"code":""}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/groups", body))
 	if rec.Code != http.StatusBadRequest {
@@ -208,7 +210,7 @@ func TestCreateGroup_ServiceError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := bytes.NewBufferString(`{"id":"grp-1"}`)
+	body := bytes.NewBufferString(`{"code":"grp-1"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/groups", body))
 	if rec.Code != http.StatusInternalServerError {
@@ -226,12 +228,12 @@ func TestCreateGroup_ServiceError(t *testing.T) {
 func TestGetGroup(t *testing.T) {
 	svc := &fakeService{
 		groups: []domain.AccountGroup{
-			{ID: "grp-1", Notes: "desk one"},
+			{Code: "grp-1", Notes: "desk one"},
 		},
 		// GetGroup returns the seeded accounts as the member list.
 		accounts: []domain.Account{
-			{ID: "acc-1", Tenant: domain.DefaultTenant},
-			{ID: "acc-2", Tenant: domain.DefaultTenant},
+			{Code: "acc-1"},
+			{Code: "acc-2"},
 		},
 	}
 	r, err := newRouter(svc)
@@ -248,9 +250,10 @@ func TestGetGroup(t *testing.T) {
 	if !ok {
 		t.Fatalf("want group object, got %v", m["group"])
 	}
-	if g["id"] != "grp-1" || g["notes"] != "desk one" {
+	if g["code"] != "grp-1" || g["notes"] != "desk one" {
 		t.Fatalf("unexpected group: %v", g)
 	}
+	assertNoSurrogateID(t, g)
 	accounts, ok := m["accounts"].([]any)
 	if !ok || len(accounts) != 2 {
 		t.Fatalf("want 2 member accounts, got %v", m["accounts"])
@@ -279,7 +282,7 @@ func TestGetGroup_URLEncodedID(t *testing.T) {
 	// Verify percent-encoded characters in the group id are decoded before the
 	// service lookup. %40 = '@'.
 	svc := &fakeService{
-		groups: []domain.AccountGroup{{ID: "grp@1"}},
+		groups: []domain.AccountGroup{{Code: "grp@1"}},
 	}
 	r, err := newRouter(svc)
 	if err != nil {
@@ -316,7 +319,7 @@ func TestSetGroupNotes(t *testing.T) {
 	// The group must already exist: after the no-op setter, writeGroup re-reads
 	// it via GetGroup and serializes the current server state.
 	svc := &fakeService{
-		groups: []domain.AccountGroup{{ID: "grp-1", Notes: "old"}},
+		groups: []domain.AccountGroup{{Code: "grp-1", Notes: "old"}},
 	}
 	r, err := newRouter(svc)
 	if err != nil {
@@ -331,14 +334,14 @@ func TestSetGroupNotes(t *testing.T) {
 	}
 	m := bodyMap(t, rec.Result())
 	g, ok := m["group"].(map[string]any)
-	if !ok || g["id"] != "grp-1" {
+	if !ok || g["code"] != "grp-1" {
 		t.Fatalf("want group object, got %v", m["group"])
 	}
 }
 
 func TestSetGroupNotes_InvalidJSON(t *testing.T) {
 	svc := &fakeService{
-		groups: []domain.AccountGroup{{ID: "grp-1"}},
+		groups: []domain.AccountGroup{{Code: "grp-1"}},
 	}
 	r, err := newRouter(svc)
 	if err != nil {
@@ -405,7 +408,7 @@ func TestSetGroupNotes_ServiceError(t *testing.T) {
 
 func TestBlockGroup(t *testing.T) {
 	svc := &fakeService{
-		groups: []domain.AccountGroup{{ID: "grp-1"}},
+		groups: []domain.AccountGroup{{Code: "grp-1"}},
 	}
 	r, err := newRouter(svc)
 	if err != nil {
@@ -426,7 +429,7 @@ func TestBlockGroup(t *testing.T) {
 
 func TestBlockGroup_InvalidJSON(t *testing.T) {
 	svc := &fakeService{
-		groups: []domain.AccountGroup{{ID: "grp-1"}},
+		groups: []domain.AccountGroup{{Code: "grp-1"}},
 	}
 	r, err := newRouter(svc)
 	if err != nil {
@@ -488,7 +491,7 @@ func TestUnblockGroup(t *testing.T) {
 	// Unblock takes no body; writeGroup re-reads the seeded group.
 	svc := &fakeService{
 		groups: []domain.AccountGroup{
-			{ID: "grp-1", Blocked: true, BlockReason: "risk"},
+			{Code: "grp-1", Blocked: true, BlockReason: "risk"},
 		},
 	}
 	r, err := newRouter(svc)
@@ -544,7 +547,7 @@ func TestUnblockGroup_ServiceError(t *testing.T) {
 
 func TestDeleteGroup(t *testing.T) {
 	svc := &fakeService{
-		groups: []domain.AccountGroup{{ID: "grp-1"}},
+		groups: []domain.AccountGroup{{Code: "grp-1"}},
 	}
 	r, err := newRouter(svc)
 	if err != nil {

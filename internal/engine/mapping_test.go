@@ -26,6 +26,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -34,31 +35,92 @@ import (
 	"go.openpit.dev/officer/internal/domain"
 )
 
-func rateLimit(scope, account, asset, maxOrders, window string) domain.Limit {
-	return domain.Limit{
-		Target: domain.LimitTarget{
-			Tenant:  domain.DefaultTenant,
-			Policy:  domain.PolicyRateLimit,
-			Scope:   scope,
-			Account: domain.AccountID(account),
-			Asset:   asset,
-		},
-		Values: []domain.LimitValue{
-			{Kind: domain.KindMaxOrders, Value: maxOrders},
-			{Kind: domain.KindWindow, Value: window},
-		},
+// testEngineAccountID assigns a deterministic, distinct engine account id to a
+// test account code so the resolver maps it without hashing. Tests address
+// accounts by code; the connector would assign these ids collision-free.
+func testEngineAccountID(code string) domain.EngineAccountID {
+	switch code {
+	case "acc-1", "1":
+		return 1
+	case "acc-2", "2":
+		return 2
+	case "acc-3", "3":
+		return 3
+	default:
+		// A stable non-zero fallback for any other code used in a test.
+		return domain.EngineAccountID(1000 + len(code))
+	}
+}
+
+// account builds a snapshot account carrying its stored engine account id so the
+// resolver has an entry for code.
+func account(code string) domain.Account {
+	return domain.Account{Code: domain.AccountID(code), EngineAccountID: testEngineAccountID(code)}
+}
+
+// blockedAccount builds a blocked snapshot account with a stored engine id.
+func blockedAccount(code, reason string) domain.Account {
+	a := account(code)
+	a.Blocked = true
+	a.BlockReason = reason
+	return a
+}
+
+// testResolver builds an idResolver covering the given account codes, mirroring
+// the resolver BuildOpenPitEngine builds from a Snapshot. It is used by the pure
+// mapping tests that do not build a full engine.
+func testResolver(codes ...string) idResolver {
+	accounts := make([]domain.Account, 0, len(codes))
+	for _, code := range codes {
+		accounts = append(accounts, account(code))
+	}
+	res, err := newIDResolver(accounts, nil)
+	if err != nil {
+		panic(err)
+	}
+	return res
+}
+
+func rateLimit(scope, acct, asset string, maxOrders uint64, window time.Duration) domain.LimitRate {
+	return domain.LimitRate{
+		Scope:     scope,
+		Account:   domain.AccountID(acct),
+		Asset:     asset,
+		MaxOrders: maxOrders,
+		Window:    window,
+	}
+}
+
+func orderSize(scope, acct, asset, maxQty, maxNotional string) domain.LimitOrderSize {
+	return domain.LimitOrderSize{
+		Scope:       scope,
+		Account:     domain.AccountID(acct),
+		Asset:       asset,
+		MaxQuantity: maxQty,
+		MaxNotional: maxNotional,
+	}
+}
+
+func pnlBounds(scope, acct, asset, lower, upper string) domain.LimitPnlBounds {
+	return domain.LimitPnlBounds{
+		Scope:      scope,
+		Account:    domain.AccountID(acct),
+		Asset:      asset,
+		LowerBound: lower,
+		UpperBound: upper,
 	}
 }
 
 func TestRateLimitReady_AllAxes(t *testing.T) {
 	t.Parallel()
-	limits := []domain.Limit{
-		rateLimit(domain.ScopeBroker, "", "", "1000", "1m"),
-		rateLimit(domain.ScopeAsset, "", "USD", "500", "1m"),
-		rateLimit(domain.ScopeAccount, "acc-1", "", "200", "1m"),
-		rateLimit(domain.ScopeAccountAsset, "acc-1", "USD", "100", "1m"),
+	res := testResolver("acc-1")
+	limits := []domain.LimitRate{
+		rateLimit(domain.ScopeBroker, "", "", 1000, time.Minute),
+		rateLimit(domain.ScopeAsset, "", "USD", 500, time.Minute),
+		rateLimit(domain.ScopeAccount, "acc-1", "", 200, time.Minute),
+		rateLimit(domain.ScopeAccountAsset, "acc-1", "USD", 100, time.Minute),
 	}
-	ready, err := rateLimitReady(limits)
+	ready, err := rateLimitReady(limits, res)
 	if err != nil {
 		t.Fatalf("rateLimitReady: %v", err)
 	}
@@ -67,24 +129,24 @@ func TestRateLimitReady_AllAxes(t *testing.T) {
 	}
 }
 
-func TestRateLimitFromValues_RequiresBoth(t *testing.T) {
+// TestRateLimitReady_UnknownAccountInvalid checks an account-scoped barrier for a
+// code the resolver does not cover (no stored engine id) wraps domain.ErrInvalid
+// rather than hashing the string into an engine id.
+func TestRateLimitReady_UnknownAccountInvalid(t *testing.T) {
 	t.Parallel()
-	_, err := rateLimitFromValues([]domain.LimitValue{
-		{Kind: domain.KindMaxOrders, Value: "100"},
-	})
-	if err == nil {
-		t.Fatalf("want error when window missing")
+	res := testResolver() // empty: no accounts
+	_, err := rateLimitReady(
+		[]domain.LimitRate{rateLimit(domain.ScopeAccount, "ghost", "", 1, time.Minute)}, res)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("want ErrInvalid for unknown account, got %v", err)
 	}
 }
 
-func TestOrderSizeFromValues_ParsesBoth(t *testing.T) {
+func TestOrderSizeValue_ParsesBoth(t *testing.T) {
 	t.Parallel()
-	limit, err := orderSizeFromValues([]domain.LimitValue{
-		{Kind: domain.KindMaxQuantity, Value: "10"},
-		{Kind: domain.KindMaxNotional, Value: "1000"},
-	})
+	limit, err := orderSizeValue(orderSize(domain.ScopeBroker, "", "", "10", "1000"))
 	if err != nil {
-		t.Fatalf("orderSizeFromValues: %v", err)
+		t.Fatalf("orderSizeValue: %v", err)
 	}
 	want, err := param.NewQuantityFromString("10")
 	if err != nil {
@@ -95,13 +157,12 @@ func TestOrderSizeFromValues_ParsesBoth(t *testing.T) {
 	}
 }
 
-func TestPnlBoundsFromValues_Optionals(t *testing.T) {
+func TestPnlBoundsValues_Optionals(t *testing.T) {
 	t.Parallel()
-	lower, upper, initial, err := pnlBoundsFromValues([]domain.LimitValue{
-		{Kind: domain.KindLowerBound, Value: "-100"},
-	})
+	lower, upper, initial, err := pnlBoundsValues(
+		domain.LimitPnlBounds{Scope: domain.ScopeAsset, Asset: "USD", LowerBound: "-100"})
 	if err != nil {
-		t.Fatalf("pnlBoundsFromValues: %v", err)
+		t.Fatalf("pnlBoundsValues: %v", err)
 	}
 	if _, ok := lower.Get(); !ok {
 		t.Fatalf("want lower bound present")
@@ -119,13 +180,14 @@ func TestPnlBoundsFromValues_Optionals(t *testing.T) {
 // limit.
 func TestRateLimitAxes_AllAxes(t *testing.T) {
 	t.Parallel()
-	limits := []domain.Limit{
-		rateLimit(domain.ScopeBroker, "", "", "1000", "1m"),
-		rateLimit(domain.ScopeAsset, "", "USD", "500", "1m"),
-		rateLimit(domain.ScopeAccount, "acc-1", "", "200", "1m"),
-		rateLimit(domain.ScopeAccountAsset, "acc-1", "USD", "100", "1m"),
+	res := testResolver("acc-1")
+	limits := []domain.LimitRate{
+		rateLimit(domain.ScopeBroker, "", "", 1000, time.Minute),
+		rateLimit(domain.ScopeAsset, "", "USD", 500, time.Minute),
+		rateLimit(domain.ScopeAccount, "acc-1", "", 200, time.Minute),
+		rateLimit(domain.ScopeAccountAsset, "acc-1", "USD", 100, time.Minute),
 	}
-	broker, assets, accounts, accountAssets, err := rateLimitAxes(limits)
+	broker, assets, accounts, accountAssets, err := rateLimitAxes(limits, res)
 	if err != nil {
 		t.Fatalf("rateLimitAxes: %v", err)
 	}
@@ -146,7 +208,7 @@ func TestRateLimitAxes_AllAxes(t *testing.T) {
 func TestOrderSizeAxes_EmptyAxesNonNil(t *testing.T) {
 	t.Parallel()
 	broker, assets, accountAssets, err := orderSizeAxes(
-		[]domain.Limit{orderSize(domain.ScopeBroker, "", "", "10", "")})
+		[]domain.LimitOrderSize{orderSize(domain.ScopeBroker, "", "", "10", "")}, testResolver())
 	if err != nil {
 		t.Fatalf("orderSizeAxes: %v", err)
 	}
@@ -165,7 +227,7 @@ func TestOrderSizeAxes_EmptyAxesNonNil(t *testing.T) {
 func TestPnlBoundsAxes_NonNil(t *testing.T) {
 	t.Parallel()
 	brokers, accounts, err := pnlBoundsAxes(
-		[]domain.Limit{pnlBounds(domain.ScopeAsset, "", "USD", "-100", "100")})
+		[]domain.LimitPnlBounds{pnlBounds(domain.ScopeAsset, "", "USD", "-100", "100")}, testResolver())
 	if err != nil {
 		t.Fatalf("pnlBoundsAxes: %v", err)
 	}
@@ -179,14 +241,17 @@ func TestPnlBoundsAxes_NonNil(t *testing.T) {
 
 func TestBuildEngine_RegistersRiskPolicies(t *testing.T) {
 	t.Parallel()
-	byPolicy := map[string][]domain.Limit{
-		domain.PolicyRateLimit:      {rateLimit(domain.ScopeBroker, "", "", "100", "1s")},
-		domain.PolicyOrderSizeLimit: {orderSize(domain.ScopeBroker, "", "", "10", "")},
-		domain.PolicyPnlBoundsKillSwitch: {
-			pnlBounds(domain.ScopeAsset, "", "USD", "-100", "100"),
-		},
+	snap := Snapshot{
+		Accounts:        []domain.Account{account("acc-1")},
+		RateLimits:      []domain.LimitRate{rateLimit(domain.ScopeBroker, "", "", 100, time.Second)},
+		OrderSizeLimits: []domain.LimitOrderSize{orderSize(domain.ScopeBroker, "", "", "10", "")},
+		PnlBoundsLimits: []domain.LimitPnlBounds{pnlBounds(domain.ScopeAsset, "", "USD", "-100", "100")},
 	}
-	eng, service, registered, err := buildEngine(byPolicy)
+	res, err := newIDResolver(snap.Accounts, snap.Groups)
+	if err != nil {
+		t.Fatalf("newIDResolver: %v", err)
+	}
+	eng, service, registered, err := buildEngine(snap, res)
 	if err != nil {
 		t.Fatalf("buildEngine: %v", err)
 	}
@@ -202,16 +267,60 @@ func TestBuildEngine_RegistersRiskPolicies(t *testing.T) {
 	}
 }
 
+// TestNewIDResolver_RejectsUnassignedEngineID checks the resolver build rejects
+// an account whose stored engine id is unassigned (zero), since that is
+// corruption of our own persisted ids, not a hashable input.
+func TestNewIDResolver_RejectsUnassignedEngineID(t *testing.T) {
+	t.Parallel()
+	_, err := newIDResolver(
+		[]domain.Account{{Code: "acc-1", EngineAccountID: 0}}, nil)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("want ErrInvalid for unassigned engine id, got %v", err)
+	}
+}
+
+// TestNewIDResolver_UsesStoredEngineIDs checks the resolver maps a code to a
+// param.AccountID built from the stored uint engine id (param.NewAccountIDFromUint64),
+// not a hash of the code: the engine id string form is the decimal of the stored
+// integer.
+func TestNewIDResolver_UsesStoredEngineIDs(t *testing.T) {
+	t.Parallel()
+	res, err := newIDResolver([]domain.Account{
+		{Code: "acc-1", EngineAccountID: 7},
+	}, []domain.AccountGroup{
+		{Code: "grp-1", EngineGroupID: 9},
+	})
+	if err != nil {
+		t.Fatalf("newIDResolver: %v", err)
+	}
+	got, err := res.account("acc-1")
+	if err != nil {
+		t.Fatalf("resolve account: %v", err)
+	}
+	if want := param.NewAccountIDFromUint64(7); got.String() != want.String() {
+		t.Fatalf("account engine id = %s, want %s (from stored uint, not hash)", got, want)
+	}
+	grp, err := res.group("grp-1")
+	if err != nil {
+		t.Fatalf("resolve group: %v", err)
+	}
+	want, err := param.NewAccountGroupIDFromUint32(9)
+	if err != nil {
+		t.Fatalf("want group id: %v", err)
+	}
+	if grp.String() != want.String() {
+		t.Fatalf("group engine id = %s, want %s", grp, want)
+	}
+}
+
 // TestBuildOpenPitEngine_SeedsFromSnapshot builds the one engine from a seeded
 // snapshot (a blocked account plus a rate-limit barrier) and retunes the
 // rate-limit policy in place. It needs the native dylib at run time.
 func TestBuildOpenPitEngine_SeedsFromSnapshot(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
-		Accounts: []domain.Account{
-			{Tenant: domain.DefaultTenant, ID: "acc-1", Blocked: true, BlockReason: "risk"},
-		},
-		Limits: []domain.Limit{rateLimit(domain.ScopeBroker, "", "", "100", "1s")},
+		Accounts:   []domain.Account{blockedAccount("acc-1", "risk"), account("acc-2")},
+		RateLimits: []domain.LimitRate{rateLimit(domain.ScopeBroker, "", "", 100, time.Second)},
 	}
 	eng, err := BuildOpenPitEngine("", snap)
 	if err != nil {
@@ -222,16 +331,24 @@ func TestBuildOpenPitEngine_SeedsFromSnapshot(t *testing.T) {
 
 	// Retune the rate-limit policy (broker barrier kept) on the live handle: the
 	// axes are replaced wholesale, no rebuild.
-	newLimits := []domain.Limit{rateLimit(domain.ScopeBroker, "", "", "5", "1s")}
+	newLimits := LimitSet{RateLimits: []domain.LimitRate{rateLimit(domain.ScopeBroker, "", "", 5, time.Second)}}
 	if err := eng.ConfigurePolicy(ctx, domain.PolicyRateLimit, newLimits); err != nil {
 		t.Fatalf("ConfigurePolicy retune: %v", err)
 	}
 
+	// Both accounts are in the snapshot, so the resolver covers them by their
+	// stored engine ids - no string hashing.
 	if err := eng.UnblockAccount(ctx, "acc-1"); err != nil {
 		t.Fatalf("UnblockAccount: %v", err)
 	}
 	if err := eng.BlockAccount(ctx, "acc-2", "manual"); err != nil {
 		t.Fatalf("BlockAccount: %v", err)
+	}
+
+	// An account the snapshot does not cover has no stored engine id, so the
+	// resolver rejects it as invalid rather than hashing its code.
+	if err := eng.BlockAccount(ctx, "ghost", "manual"); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("BlockAccount(unknown) = %v, want ErrInvalid", err)
 	}
 }
 
@@ -240,9 +357,9 @@ func TestBuildOpenPitEngine_SeedsFromSnapshot(t *testing.T) {
 func TestConfigurePolicy_RateLimitRetuneUnchangedKeys(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
-		Limits: []domain.Limit{
-			rateLimit(domain.ScopeBroker, "", "", "100", "1s"),
-			rateLimit(domain.ScopeAsset, "", "USD", "50", "1s"),
+		RateLimits: []domain.LimitRate{
+			rateLimit(domain.ScopeBroker, "", "", 100, time.Second),
+			rateLimit(domain.ScopeAsset, "", "USD", 50, time.Second),
 		},
 	}
 	eng, err := BuildOpenPitEngine("", snap)
@@ -251,11 +368,10 @@ func TestConfigurePolicy_RateLimitRetuneUnchangedKeys(t *testing.T) {
 	}
 	defer eng.Stop()
 
-	// Same keys (broker + asset USD), retuned values.
-	same := []domain.Limit{
-		rateLimit(domain.ScopeBroker, "", "", "7", "1s"),
-		rateLimit(domain.ScopeAsset, "", "USD", "3", "1s"),
-	}
+	same := LimitSet{RateLimits: []domain.LimitRate{
+		rateLimit(domain.ScopeBroker, "", "", 7, time.Second),
+		rateLimit(domain.ScopeAsset, "", "USD", 3, time.Second),
+	}}
 	if err := eng.ConfigurePolicy(context.Background(),
 		domain.PolicyRateLimit, same); err != nil {
 		t.Fatalf("ConfigurePolicy retune: %v", err)
@@ -267,7 +383,7 @@ func TestConfigurePolicy_RateLimitRetuneUnchangedKeys(t *testing.T) {
 func TestConfigurePolicy_OrderSizeReplacesAxes(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
-		Limits: []domain.Limit{orderSize(domain.ScopeBroker, "", "", "10", "")},
+		OrderSizeLimits: []domain.LimitOrderSize{orderSize(domain.ScopeBroker, "", "", "10", "")},
 	}
 	eng, err := BuildOpenPitEngine("", snap)
 	if err != nil {
@@ -275,14 +391,10 @@ func TestConfigurePolicy_OrderSizeReplacesAxes(t *testing.T) {
 	}
 	defer eng.Stop()
 
-	// Replace the whole order-size set: drop the broker barrier value and add an
-	// asset barrier. The broker barrier stays (pointer axis cannot be cleared in
-	// isolation), but the asset axis is replaced wholesale and at least one
-	// barrier remains, so the Configure succeeds.
-	replaced := []domain.Limit{
+	replaced := LimitSet{OrderSizeLimits: []domain.LimitOrderSize{
 		orderSize(domain.ScopeBroker, "", "", "20", ""),
 		orderSize(domain.ScopeAsset, "", "USD", "5", ""),
-	}
+	}}
 	if err := eng.ConfigurePolicy(context.Background(),
 		domain.PolicyOrderSizeLimit, replaced); err != nil {
 		t.Fatalf("ConfigurePolicy replace: %v", err)
@@ -290,14 +402,11 @@ func TestConfigurePolicy_OrderSizeReplacesAxes(t *testing.T) {
 }
 
 // TestConfigurePolicy_OrderSizeDropBrokerStub checks the order-size broker-drop
-// stub: when the new barrier set drops a broker barrier the live handle still
-// carries (the Configure surface cannot clear a broker barrier in isolation),
-// ConfigurePolicy returns ErrNotImplemented rather than silently diverging the
-// engine from the store.
+// stub returns ErrNotImplemented.
 func TestConfigurePolicy_OrderSizeDropBrokerStub(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
-		Limits: []domain.Limit{
+		OrderSizeLimits: []domain.LimitOrderSize{
 			orderSize(domain.ScopeBroker, "", "", "10", ""),
 			orderSize(domain.ScopeAsset, "", "USD", "5", ""),
 		},
@@ -308,23 +417,20 @@ func TestConfigurePolicy_OrderSizeDropBrokerStub(t *testing.T) {
 	}
 	defer eng.Stop()
 
-	// Drop the broker barrier, keeping the asset barrier: at least one barrier
-	// remains, but the Configure surface cannot clear the broker barrier.
-	dropped := []domain.Limit{orderSize(domain.ScopeAsset, "", "USD", "5", "")}
+	dropped := LimitSet{OrderSizeLimits: []domain.LimitOrderSize{orderSize(domain.ScopeAsset, "", "USD", "5", "")}}
 	err = eng.ConfigurePolicy(context.Background(), domain.PolicyOrderSizeLimit, dropped)
 	if !errors.Is(err, domain.ErrNotImplemented) {
 		t.Fatalf("want ErrNotImplemented for order_size broker drop, got %v", err)
 	}
 }
 
-// TestConfigurePolicy_OrderSizeNoBrokerReplace checks that an order-size set
-// built without a broker barrier can be replaced wholesale (still without a
-// broker barrier): the broker-drop stub only fires when an existing broker
-// barrier would be dropped.
+// TestConfigurePolicy_OrderSizeNoBrokerReplace checks an order-size set built
+// without a broker barrier can be replaced wholesale.
 func TestConfigurePolicy_OrderSizeNoBrokerReplace(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
-		Limits: []domain.Limit{orderSize(domain.ScopeAsset, "", "USD", "5", "")},
+		Accounts:        []domain.Account{account("acc-1")},
+		OrderSizeLimits: []domain.LimitOrderSize{orderSize(domain.ScopeAsset, "", "USD", "5", "")},
 	}
 	eng, err := BuildOpenPitEngine("", snap)
 	if err != nil {
@@ -332,10 +438,10 @@ func TestConfigurePolicy_OrderSizeNoBrokerReplace(t *testing.T) {
 	}
 	defer eng.Stop()
 
-	replaced := []domain.Limit{
+	replaced := LimitSet{OrderSizeLimits: []domain.LimitOrderSize{
 		orderSize(domain.ScopeAsset, "", "USD", "7", ""),
 		orderSize(domain.ScopeAccountAsset, "acc-1", "USD", "3", ""),
-	}
+	}}
 	if err := eng.ConfigurePolicy(context.Background(),
 		domain.PolicyOrderSizeLimit, replaced); err != nil {
 		t.Fatalf("ConfigurePolicy replace without broker: %v", err)
@@ -347,7 +453,7 @@ func TestConfigurePolicy_OrderSizeNoBrokerReplace(t *testing.T) {
 func TestConfigurePolicy_PnlReplacesAxes(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
-		Limits: []domain.Limit{pnlBounds(domain.ScopeAsset, "", "USD", "-100", "100")},
+		PnlBoundsLimits: []domain.LimitPnlBounds{pnlBounds(domain.ScopeAsset, "", "USD", "-100", "100")},
 	}
 	eng, err := BuildOpenPitEngine("", snap)
 	if err != nil {
@@ -355,22 +461,19 @@ func TestConfigurePolicy_PnlReplacesAxes(t *testing.T) {
 	}
 	defer eng.Stop()
 
-	// Replace the broker (asset-scoped) axis wholesale with a different bound.
-	replaced := []domain.Limit{pnlBounds(domain.ScopeAsset, "", "USD", "-50", "50")}
+	replaced := LimitSet{PnlBoundsLimits: []domain.LimitPnlBounds{pnlBounds(domain.ScopeAsset, "", "USD", "-50", "50")}}
 	if err := eng.ConfigurePolicy(context.Background(),
 		domain.PolicyPnlBoundsKillSwitch, replaced); err != nil {
 		t.Fatalf("ConfigurePolicy replace: %v", err)
 	}
 }
 
-// TestConfigurePolicy_UnregisteredPolicyStub checks stub case (a): configuring a
-// policy not registered at build time returns ErrNotImplemented and does not
-// touch the handle.
+// TestConfigurePolicy_UnregisteredPolicyStub checks configuring a policy not
+// registered at build time returns ErrNotImplemented.
 func TestConfigurePolicy_UnregisteredPolicyStub(t *testing.T) {
 	t.Parallel()
-	// Build with only rate_limit registered; order_size_limit is absent.
 	snap := Snapshot{
-		Limits: []domain.Limit{rateLimit(domain.ScopeBroker, "", "", "100", "1s")},
+		RateLimits: []domain.LimitRate{rateLimit(domain.ScopeBroker, "", "", 100, time.Second)},
 	}
 	eng, err := BuildOpenPitEngine("", snap)
 	if err != nil {
@@ -378,19 +481,19 @@ func TestConfigurePolicy_UnregisteredPolicyStub(t *testing.T) {
 	}
 	defer eng.Stop()
 
-	add := []domain.Limit{orderSize(domain.ScopeBroker, "", "", "10", "")}
+	add := LimitSet{OrderSizeLimits: []domain.LimitOrderSize{orderSize(domain.ScopeBroker, "", "", "10", "")}}
 	err = eng.ConfigurePolicy(context.Background(), domain.PolicyOrderSizeLimit, add)
 	if !errors.Is(err, domain.ErrNotImplemented) {
 		t.Fatalf("want ErrNotImplemented for unregistered policy, got %v", err)
 	}
 }
 
-// TestConfigurePolicy_RemoveLastBarrierStub checks stub case (b): an empty
-// barrier set for a registered policy returns ErrNotImplemented.
+// TestConfigurePolicy_RemoveLastBarrierStub checks an empty barrier set for a
+// registered policy returns ErrNotImplemented.
 func TestConfigurePolicy_RemoveLastBarrierStub(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
-		Limits: []domain.Limit{rateLimit(domain.ScopeBroker, "", "", "100", "1s")},
+		RateLimits: []domain.LimitRate{rateLimit(domain.ScopeBroker, "", "", 100, time.Second)},
 	}
 	eng, err := BuildOpenPitEngine("", snap)
 	if err != nil {
@@ -398,20 +501,18 @@ func TestConfigurePolicy_RemoveLastBarrierStub(t *testing.T) {
 	}
 	defer eng.Stop()
 
-	err = eng.ConfigurePolicy(context.Background(), domain.PolicyRateLimit, nil)
+	err = eng.ConfigurePolicy(context.Background(), domain.PolicyRateLimit, LimitSet{})
 	if !errors.Is(err, domain.ErrNotImplemented) {
 		t.Fatalf("want ErrNotImplemented for empty settings, got %v", err)
 	}
 }
 
 // TestConfigurePolicy_RateLimitAddRemoveBarrier checks the rate-limit axes are
-// replaced wholesale on the live handle: a barrier can be added and removed at
-// runtime as long as a barrier survives and no broker barrier is dropped in
-// isolation.
+// replaced wholesale on the live handle.
 func TestConfigurePolicy_RateLimitAddRemoveBarrier(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
-		Limits: []domain.Limit{rateLimit(domain.ScopeBroker, "", "", "100", "1s")},
+		RateLimits: []domain.LimitRate{rateLimit(domain.ScopeBroker, "", "", 100, time.Second)},
 	}
 	eng, err := BuildOpenPitEngine("", snap)
 	if err != nil {
@@ -420,34 +521,28 @@ func TestConfigurePolicy_RateLimitAddRemoveBarrier(t *testing.T) {
 	defer eng.Stop()
 	ctx := context.Background()
 
-	// Add an asset barrier alongside the broker barrier: the asset axis is
-	// replaced wholesale, the broker barrier stays.
-	added := []domain.Limit{
-		rateLimit(domain.ScopeBroker, "", "", "100", "1s"),
-		rateLimit(domain.ScopeAsset, "", "USD", "50", "1s"),
-	}
+	added := LimitSet{RateLimits: []domain.LimitRate{
+		rateLimit(domain.ScopeBroker, "", "", 100, time.Second),
+		rateLimit(domain.ScopeAsset, "", "USD", 50, time.Second),
+	}}
 	if err := eng.ConfigurePolicy(ctx, domain.PolicyRateLimit, added); err != nil {
 		t.Fatalf("ConfigurePolicy add: %v", err)
 	}
 
-	// Remove the asset barrier again (broker barrier kept): the asset axis is
-	// cleared by the empty non-nil slice; a barrier still remains.
-	removed := []domain.Limit{rateLimit(domain.ScopeBroker, "", "", "100", "1s")}
+	removed := LimitSet{RateLimits: []domain.LimitRate{rateLimit(domain.ScopeBroker, "", "", 100, time.Second)}}
 	if err := eng.ConfigurePolicy(ctx, domain.PolicyRateLimit, removed); err != nil {
 		t.Fatalf("ConfigurePolicy remove: %v", err)
 	}
 }
 
 // TestConfigurePolicy_RateLimitDropBrokerStub checks the rate-limit broker-drop
-// stub: dropping a broker barrier the live handle still carries (the Configure
-// surface cannot clear it in isolation) returns ErrNotImplemented rather than
-// diverging the engine from the store.
+// stub returns ErrNotImplemented.
 func TestConfigurePolicy_RateLimitDropBrokerStub(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
-		Limits: []domain.Limit{
-			rateLimit(domain.ScopeBroker, "", "", "100", "1s"),
-			rateLimit(domain.ScopeAsset, "", "USD", "50", "1s"),
+		RateLimits: []domain.LimitRate{
+			rateLimit(domain.ScopeBroker, "", "", 100, time.Second),
+			rateLimit(domain.ScopeAsset, "", "USD", 50, time.Second),
 		},
 	}
 	eng, err := BuildOpenPitEngine("", snap)
@@ -456,9 +551,7 @@ func TestConfigurePolicy_RateLimitDropBrokerStub(t *testing.T) {
 	}
 	defer eng.Stop()
 
-	// Drop the broker barrier, keeping the asset barrier: at least one barrier
-	// remains, but the Configure surface cannot clear the broker barrier.
-	dropped := []domain.Limit{rateLimit(domain.ScopeAsset, "", "USD", "50", "1s")}
+	dropped := LimitSet{RateLimits: []domain.LimitRate{rateLimit(domain.ScopeAsset, "", "USD", 50, time.Second)}}
 	err = eng.ConfigurePolicy(context.Background(), domain.PolicyRateLimit, dropped)
 	if !errors.Is(err, domain.ErrNotImplemented) {
 		t.Fatalf("want ErrNotImplemented for rate_limit broker drop, got %v", err)
@@ -471,7 +564,8 @@ func TestConfigurePolicy_RateLimitDropBrokerStub(t *testing.T) {
 func TestPnlBoundsAxes_AccountUpdateShape(t *testing.T) {
 	t.Parallel()
 	brokers, accounts, err := pnlBoundsAxes(
-		[]domain.Limit{pnlBounds(domain.ScopeAccountAsset, "acc-1", "USD", "-100", "100")})
+		[]domain.LimitPnlBounds{pnlBounds(domain.ScopeAccountAsset, "acc-1", "USD", "-100", "100")},
+		testResolver("acc-1"))
 	if err != nil {
 		t.Fatalf("pnlBoundsAxes: %v", err)
 	}
@@ -489,19 +583,18 @@ func TestPnlBoundsAxes_AccountUpdateShape(t *testing.T) {
 
 // fundedBalance seeds an account with absolute holdings on one asset so a spot
 // limit order can reserve against it.
-func fundedBalance(account, asset, available string) domain.Balance {
+func fundedBalance(acct, asset, available string) domain.Balance {
 	return domain.Balance{
-		Tenant:    domain.DefaultTenant,
-		Account:   domain.AccountID(account),
+		Account:   domain.AccountID(acct),
 		Asset:     asset,
 		Available: available,
 	}
 }
 
 // checkProbe builds a buy/sell limit OrderProbe for the dry-run tests.
-func checkProbe(account string, side domain.OrderSide, qty, price string) domain.OrderProbe {
+func checkProbe(acct string, side domain.OrderSide, qty, price string) domain.OrderProbe {
 	return domain.OrderProbe{
-		Account:     domain.AccountID(account),
+		Account:     domain.AccountID(acct),
 		BaseAsset:   "AAPL",
 		QuoteAsset:  "USD",
 		Side:        side,
@@ -517,6 +610,7 @@ func checkProbe(account string, side domain.OrderSide, qty, price string) domain
 func TestEngine_CheckOrderPassCapturesLock(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
+		Accounts: []domain.Account{account("acc-1")},
 		Balances: []domain.Balance{
 			fundedBalance("acc-1", "USD", "1000000"),
 			fundedBalance("acc-1", "AAPL", "1000000"),
@@ -544,7 +638,7 @@ func TestEngine_CheckOrderPassCapturesLock(t *testing.T) {
 // checks it rejects with a structured reject (insufficient funds), not an error.
 func TestEngine_CheckOrderRejectStructured(t *testing.T) {
 	t.Parallel()
-	eng, err := BuildOpenPitEngine("", Snapshot{})
+	eng, err := BuildOpenPitEngine("", Snapshot{Accounts: []domain.Account{account("acc-1")}})
 	if err != nil {
 		t.Fatalf("BuildOpenPitEngine: %v", err)
 	}
@@ -571,9 +665,7 @@ func TestEngine_CheckOrderRejectStructured(t *testing.T) {
 func TestEngine_CheckOrderWouldBlock(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
-		Accounts: []domain.Account{
-			{Tenant: domain.DefaultTenant, ID: "acc-1", Blocked: true, BlockReason: "risk"},
-		},
+		Accounts: []domain.Account{blockedAccount("acc-1", "risk")},
 		Balances: []domain.Balance{
 			fundedBalance("acc-1", "USD", "1000000"),
 			fundedBalance("acc-1", "AAPL", "1000000"),
@@ -606,9 +698,7 @@ func TestEngine_CheckOrderWouldBlock(t *testing.T) {
 func TestEngine_CheckOrderDropsGarbledAccountBlockReason(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
-		Accounts: []domain.Account{
-			{Tenant: domain.DefaultTenant, ID: "acc-1", Blocked: true, BlockReason: "0}"},
-		},
+		Accounts: []domain.Account{blockedAccount("acc-1", "0}")},
 		Balances: []domain.Balance{
 			fundedBalance("acc-1", "USD", "1000000"),
 			fundedBalance("acc-1", "AAPL", "1000000"),
@@ -641,17 +731,16 @@ func TestEngine_CheckOrderDropsGarbledAccountBlockReason(t *testing.T) {
 	}
 }
 
-// TestEngine_CheckOrderIsNonMutating is the ticket's headline acceptance test.
-// It runs against the REAL native engine (BuildOpenPitEngine), not a fake. A
+// TestEngine_CheckOrderIsNonMutating runs against the REAL native engine. A
 // rate_limit broker barrier of max_orders=1 governs a funded account. Repeated
 // CheckOrder dry-runs must consume none of the budget: afterwards the first real
-// SubmitOrder still passes (the one allowed slot is intact), and only the second
-// SubmitOrder is throttled - proving the checks reserved nothing and left engine
-// state unchanged.
+// SubmitOrder still passes, and only the second SubmitOrder is throttled -
+// proving the checks reserved nothing and left engine state unchanged.
 func TestEngine_CheckOrderIsNonMutating(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
-		Limits: []domain.Limit{rateLimit(domain.ScopeBroker, "", "", "1", "1m")},
+		Accounts:   []domain.Account{account("acc-1")},
+		RateLimits: []domain.LimitRate{rateLimit(domain.ScopeBroker, "", "", 1, time.Minute)},
 		Balances: []domain.Balance{
 			fundedBalance("acc-1", "USD", "1000000"),
 			fundedBalance("acc-1", "AAPL", "1000000"),
@@ -664,7 +753,6 @@ func TestEngine_CheckOrderIsNonMutating(t *testing.T) {
 	defer eng.Stop()
 	ctx := context.Background()
 
-	// Many dry-runs: each must pass and consume no rate-limit budget.
 	for i := 0; i < 5; i++ {
 		out, err := eng.CheckOrder(ctx, checkProbe("acc-1", domain.OrderSideBuy, "1", "100"))
 		if err != nil {
@@ -676,13 +764,11 @@ func TestEngine_CheckOrderIsNonMutating(t *testing.T) {
 	}
 
 	order := domain.Order{
-		Tenant: domain.DefaultTenant, Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
+		Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
 		Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity,
 		AmountValue: "1", Price: "100",
 	}
 
-	// First real submit: the single allowed slot is still available because the
-	// dry-runs consumed nothing.
 	first, err := eng.SubmitOrder(ctx, order)
 	if err != nil {
 		t.Fatalf("first SubmitOrder: %v", err)
@@ -691,7 +777,6 @@ func TestEngine_CheckOrderIsNonMutating(t *testing.T) {
 		t.Fatalf("first submit must pass after dry-runs (budget intact), got %+v", first.Rejects)
 	}
 
-	// Second real submit: now the one slot is spent, so the rate limit trips.
 	second, err := eng.SubmitOrder(ctx, order)
 	if err != nil {
 		t.Fatalf("second SubmitOrder: %v", err)
@@ -715,9 +800,7 @@ func hasRejectCode(rejects []domain.OrderReject, code string) bool {
 }
 
 // TestNewAsset_BadFormatIsInvalid checks a core-rejected asset code (caller
-// input) wraps domain.ErrInvalid so the HTTP surface reports 400, not 500. The
-// core rejects a blank/empty asset (ErrAssetEmpty); the mapper must wrap that as
-// ErrInvalid.
+// input) wraps domain.ErrInvalid so the HTTP surface reports 400, not 500.
 func TestNewAsset_BadFormatIsInvalid(t *testing.T) {
 	t.Parallel()
 	if _, err := newAsset(" "); !errors.Is(err, domain.ErrInvalid) {
@@ -725,13 +808,13 @@ func TestNewAsset_BadFormatIsInvalid(t *testing.T) {
 	}
 }
 
-// TestNewAccountID_BadFormatIsInvalid checks a core-rejected account id (caller
-// input) wraps domain.ErrInvalid. The core rejects a blank/empty id
-// (ErrAccountIdEmpty); the mapper must wrap that as ErrInvalid.
-func TestNewAccountID_BadFormatIsInvalid(t *testing.T) {
+// TestResolverUnknownAccountIsInvalid checks resolving a code the resolver does
+// not cover wraps domain.ErrInvalid (so an order for an unknown account is a 400,
+// not a 500, and is never silently hashed into an engine id).
+func TestResolverUnknownAccountIsInvalid(t *testing.T) {
 	t.Parallel()
-	if _, err := newAccountID(domain.AccountID(" ")); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("want ErrInvalid for blank account id, got %v", err)
+	if _, err := testResolver().account(domain.AccountID("nope")); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("want ErrInvalid for unknown account, got %v", err)
 	}
 }
 
@@ -745,8 +828,8 @@ func TestOrderSide_UnknownIsInvalid(t *testing.T) {
 }
 
 // TestTradeAmountFrom_InvalidInputs checks the order amount mapper wraps
-// domain.ErrInvalid for an unknown amount kind (the "base" bug) and for a
-// non-decimal quantity/volume value, so malformed input surfaces as 400.
+// domain.ErrInvalid for an unknown amount kind and for a non-decimal
+// quantity/volume value.
 func TestTradeAmountFrom_InvalidInputs(t *testing.T) {
 	t.Parallel()
 	if _, err := tradeAmountFrom(domain.OrderAmountKind("base"), "1"); !errors.Is(err, domain.ErrInvalid) {
@@ -764,6 +847,7 @@ func TestTradeAmountFrom_InvalidInputs(t *testing.T) {
 // domain.ErrInvalid for a bad asset, a bad amount, and a bad limit price.
 func TestOrderModelFrom_InvalidInputs(t *testing.T) {
 	t.Parallel()
+	res := testResolver("acc-1")
 	base := domain.Order{
 		Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
 		Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1",
@@ -771,20 +855,26 @@ func TestOrderModelFrom_InvalidInputs(t *testing.T) {
 
 	badAsset := base
 	badAsset.BaseAsset = " "
-	if _, err := orderModelFrom(badAsset); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := orderModelFrom(badAsset, res); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid for blank base asset, got %v", err)
 	}
 
 	badAmount := base
 	badAmount.AmountValue = "not-a-number"
-	if _, err := orderModelFrom(badAmount); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := orderModelFrom(badAmount, res); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid for bad amount, got %v", err)
 	}
 
 	badPrice := base
 	badPrice.Price = "not-a-number"
-	if _, err := orderModelFrom(badPrice); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := orderModelFrom(badPrice, res); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid for bad price, got %v", err)
+	}
+
+	badAccount := base
+	badAccount.Account = "ghost"
+	if _, err := orderModelFrom(badAccount, res); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("want ErrInvalid for unknown account, got %v", err)
 	}
 }
 
@@ -793,26 +883,27 @@ func TestOrderModelFrom_InvalidInputs(t *testing.T) {
 // price (all caller input).
 func TestExecutionReportFrom_InvalidInputs(t *testing.T) {
 	t.Parallel()
+	res := testResolver("acc-1")
 	base := domain.ExecutionReportInput{
 		BaseAsset: "AAPL", QuoteAsset: "USD", Account: "acc-1", Side: domain.OrderSideBuy,
-		FillQuantity: "1", FillPrice: "100", OrderID: 1,
+		FillQuantity: "1", FillPrice: "100",
 	}
 
 	badPrice := base
 	badPrice.FillPrice = "not-a-number"
-	if _, err := executionReportFrom(badPrice); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := executionReportFrom(badPrice, res); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid for bad fill price, got %v", err)
 	}
 
 	badQty := base
 	badQty.FillQuantity = "not-a-number"
-	if _, err := executionReportFrom(badQty); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := executionReportFrom(badQty, res); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid for bad fill quantity, got %v", err)
 	}
 
 	badLock := base
 	badLock.LockPrice = "not-a-number"
-	if _, err := executionReportFrom(badLock); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := executionReportFrom(badLock, res); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid for bad lock price, got %v", err)
 	}
 }
@@ -865,14 +956,10 @@ func TestAccountAdjustmentFromRequest_InvalidInputs(t *testing.T) {
 
 // TestSanitizeText_CleansInvalidUTF8AndControls checks the boundary sanitizer
 // drops invalid UTF-8 bytes and strips control characters while preserving
-// normal printable text and spaces. This guards the control plane against the
-// upstream bug where the SDK binding returns garbage reason/details for an
-// account-blocked (Engine-scope) dry-run reject.
+// normal printable text and spaces.
 func TestSanitizeText_CleansInvalidUTF8AndControls(t *testing.T) {
 	t.Parallel()
 
-	// Mimics the observed mojibake: "account_blocked Engine" followed by
-	// non-UTF-8 bytes (0x80, 0xff) interleaved with control characters.
 	garbage := "account_blocked Engine \x80\x16V \x07\xff\x78x"
 	got := sanitizeText(garbage)
 	if !utf8.ValidString(got) {
@@ -883,64 +970,19 @@ func TestSanitizeText_CleansInvalidUTF8AndControls(t *testing.T) {
 			t.Fatalf("sanitized text must carry no control runes, got %q", got)
 		}
 	}
-	// The printable prefix and the surviving printable bytes are preserved; the
-	// invalid/control bytes are dropped.
 	if want := "account_blocked Engine V xx"; got != want {
 		t.Fatalf("sanitized text = %q, want %q", got, want)
 	}
 
-	// Clean input is returned unchanged.
 	if got := sanitizeText("insufficient funds"); got != "insufficient funds" {
 		t.Fatalf("clean text must pass through, got %q", got)
 	}
 	if got := sanitizeText("404"); got != "404" {
 		t.Fatalf("clean numeric text must pass through, got %q", got)
 	}
-	// Fully garbage and short printable leftovers collapse to empty, which is
-	// acceptable for optional reason/detail fields.
 	for _, input := range []string{"\x80\xff\x01", "0}", "}"} {
 		if got := sanitizeText(input); got != "" {
 			t.Fatalf("garbage text %q must sanitize to empty, got %q", input, got)
 		}
-	}
-}
-
-func orderSize(scope, account, asset, maxQty, maxNotional string) domain.Limit {
-	values := []domain.LimitValue{}
-	if maxQty != "" {
-		values = append(values, domain.LimitValue{Kind: domain.KindMaxQuantity, Value: maxQty})
-	}
-	if maxNotional != "" {
-		values = append(values, domain.LimitValue{Kind: domain.KindMaxNotional, Value: maxNotional})
-	}
-	return domain.Limit{
-		Target: domain.LimitTarget{
-			Tenant:  domain.DefaultTenant,
-			Policy:  domain.PolicyOrderSizeLimit,
-			Scope:   scope,
-			Account: domain.AccountID(account),
-			Asset:   asset,
-		},
-		Values: values,
-	}
-}
-
-func pnlBounds(scope, account, asset, lower, upper string) domain.Limit {
-	values := []domain.LimitValue{}
-	if lower != "" {
-		values = append(values, domain.LimitValue{Kind: domain.KindLowerBound, Value: lower})
-	}
-	if upper != "" {
-		values = append(values, domain.LimitValue{Kind: domain.KindUpperBound, Value: upper})
-	}
-	return domain.Limit{
-		Target: domain.LimitTarget{
-			Tenant:  domain.DefaultTenant,
-			Policy:  domain.PolicyPnlBoundsKillSwitch,
-			Scope:   scope,
-			Account: domain.AccountID(account),
-			Asset:   asset,
-		},
-		Values: values,
 	}
 }

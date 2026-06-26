@@ -2,9 +2,11 @@
   "code": {
     "validation": "请求因无效而被拒绝。",
     "not_found": "请求的资源未找到。",
+    "has_dependents": "资源存在关联行。",
     "conflict": "请求与当前状态冲突。",
     "terminal_order": "订单已处于终态。",
     "precondition": "请求的前提条件未满足。",
+    "too_large": "导入超过 128 MiB 最大限制。请将导出拆分为较小文件，或使用 API 进行批量加载。",
     "engine_restarting": "风控引擎正在重启；请在完成后重试。",
     "not_implemented": "请求的操作尚未实现。",
     "internal": "服务遇到内部错误。",

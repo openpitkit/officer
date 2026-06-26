@@ -9,6 +9,13 @@
     "policy": "按策略筛选",
     "allPolicies": "所有策略"
   },
+  "pagination": {
+    "summary": "显示第 {{from}}-{{to}} 条，共 {{total}} 条",
+    "pageSize": {
+      "ariaLabel": "分页大小",
+      "rowCount": "每页 {{count}} 条"
+    }
+  },
   "table": {
     "policy": "策略",
     "scope": "范围",

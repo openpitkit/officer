@@ -20,6 +20,99 @@
     "yes": "yes",
     "no": "no"
   },
+  "table": {
+    "pagination": {
+      "page": "Page {{page}}",
+      "pageOf": "Page {{page}} of {{pages}}",
+      "pageOfAtLeast": "Page {{page}} of {{pages}}+",
+      "pageOfUnknown": "Page {{page}}",
+      "first": "First page",
+      "firstShort": "First",
+      "previous": "Previous",
+      "next": "Next",
+      "last": "Last page",
+      "lastShort": "Last",
+      "goToPage": "Go to page {{page}}",
+      "goToPageInput": "Go to page",
+      "goToPagePlaceholder": "Page"
+    }
+  },
+  "businessCsv": {
+    "menu": {
+      "trigger": "File",
+      "ariaLabel": "Import or export CSV"
+    },
+    "entityLabel": "Entity",
+    "delimiterLabel": "Delimiter",
+    "format": {
+      "heading": "CSV format",
+      "account_groups": {
+        "description": "One account group per row. The first row must be the header.",
+        "columns": "code,title,notes,blocked,block_reason"
+      },
+      "accounts": {
+        "description": "One account per row. The first row must be the header.",
+        "columns": "code,title,group_code,notes,blocked,block_reason"
+      },
+      "positions": {
+        "description": "One spot-funds position per row. The first row must be the header.",
+        "columns": "account_code,asset,available,held,incoming,realized_pnl,average_entry_price"
+      },
+      "orders": {
+        "description": "Orders are export-only. The first row is the header.",
+        "columns": "external_id,at,account_code,source,principal,base_asset,quote_asset,side,amount_kind,amount_value,price,status,display_prices"
+      },
+      "trades": {
+        "description": "Trades are export-only. The first row is the header.",
+        "columns": "external_id,order_external_id,at,account_code,source,principal,base_asset,quote_asset,side,quantity,price,lock_price"
+      }
+    },
+    "entities": {
+      "account_groups": "Account groups",
+      "accounts": "Accounts",
+      "positions": "Positions",
+      "orders": "Orders",
+      "trades": "Trades"
+    },
+    "delimiters": {
+      "comma": "Comma",
+      "semicolon": "Semicolon",
+      "tab": "Tab",
+      "pipe": "Pipe"
+    },
+    "conflictPolicy": {
+      "skip": "Skip conflicts",
+      "replace": "Replace conflicts",
+      "stop": "Stop at first conflict"
+    },
+    "import": {
+      "trigger": "Import CSV",
+      "title": "Import business CSV",
+      "description": "Upload one CSV file, a ZIP with one CSV file, or paste CSV text for backend validation before applying it.",
+      "chooseFile": "Choose CSV or ZIP",
+      "noFile": "No file selected",
+      "pastePlaceholder": "Paste CSV rows here",
+      "fileTakesPriority": "The selected file is used instead of pasted text.",
+      "fileTooLarge": "File is too large. Choose a file up to {{limit}} MiB.",
+      "preview": "Preview upload",
+      "previewing": "Previewing…",
+      "previewReady": "Preview ready for {{file}}",
+      "counts": "Rows {{rows}} · applied {{applied}} · skipped {{skipped}} · conflicts {{conflicts}}",
+      "conflictsFound": "{{count}} conflicts found.",
+      "apply": "Apply import",
+      "applied": "Import applied",
+      "conflictTitle": "Conflicts found",
+      "conflictDescription": "{{count}} uploaded rows intersect with existing business data. Choose how Officer should apply this import."
+    },
+    "export": {
+      "trigger": "Export CSV",
+      "title": "Export business CSV",
+      "description": "Export {{entity}} matching the current filters.",
+      "zip": "Download as ZIP",
+      "submit": "Export",
+      "exporting": "Exporting…"
+    }
+  },
   "nav": {
     "dashboard": "Dashboard",
     "accounts": "Accounts",

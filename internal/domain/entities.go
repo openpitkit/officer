@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Source identifies the channel through which a mutation was initiated.
@@ -59,31 +60,62 @@ type Caller struct {
 	Role string
 }
 
-// AccountGroup is the control-plane view of a named account grouping.
-// Membership is expressed via Account.GroupID; an account belongs to at most
-// one group, matching the engine's group-hash semantics.
+// AccountGroup is the control-plane view of a named account grouping: a
+// dictionary entity addressed by its immutable Code, displayed under a mutable
+// Title, and run on the engine under EngineGroupID. Membership is expressed via
+// Account.GroupCode; an account belongs to at most one group. The surrogate key
+// never appears here.
 type AccountGroup struct {
-	// Tenant is the isolation boundary that owns the group.
-	Tenant TenantID
-	// ID is the operator-facing group identifier, unique within Tenant.
-	ID string
+	// Code is the immutable, operator-chosen group code, unique per realm.
+	Code string
+	// Title is the mutable human-readable display name; may be empty.
+	Title string
 	// Notes is a free-form reference string, never forwarded to the engine.
 	Notes string
 	// BlockReason is the human-readable reason the group was blocked.
 	BlockReason string
+	// EngineGroupID is the integer id the engine runs this group on. It is
+	// internal and never serialized on the wire (json:"-"); zero means
+	// unassigned. The engine layer consumes it on read paths, but it is never a
+	// public handle.
+	EngineGroupID EngineGroupID `json:"-"`
 	// Blocked reports whether the group is currently kill-switched.
 	Blocked bool
 }
 
-// ValidateGroupID returns ErrInvalid for group IDs that are empty, exceed 64
-// chars, have leading/trailing whitespace, or contain non-printable characters.
-// Mirrors ValidateAccountID - groups and accounts share the same id contract.
+// Asset is a dictionary entity naming one tradable asset, addressed by its
+// immutable Code (e.g. "AAPL", "USD"), displayed under a mutable Title, and
+// optionally classified by AssetClass. The surrogate key never appears here.
+type Asset struct {
+	// Code is the immutable, operator-chosen asset code, unique per realm.
+	Code string
+	// Title is the mutable human-readable display name; may be empty.
+	Title string
+	// AssetClass is an optional classification (e.g. "equity", "fx"); empty
+	// when unset.
+	AssetClass string
+}
+
+// Principal is a dictionary entity naming one actor that initiates control-plane
+// actions, addressed by its immutable Code, displayed under a mutable Title. The
+// surrogate key never appears here.
+type Principal struct {
+	// Code is the immutable, operator-chosen principal code, unique per realm.
+	Code string
+	// Title is the mutable human-readable display name; may be empty.
+	Title string
+}
+
+// ValidateGroupID returns ErrInvalid for group codes that are empty, exceed 64
+// code points, have leading/trailing whitespace, or contain non-printable
+// characters. Mirrors ValidateAccountID - groups and accounts share the same
+// code contract.
 func ValidateGroupID(id string) error {
 	if id == "" {
 		return fmt.Errorf("group id is empty: %w", ErrInvalid)
 	}
-	if len(id) > 64 {
-		return fmt.Errorf("group id exceeds 64 chars: %w", ErrInvalid)
+	if utf8.RuneCountInString(id) > 64 {
+		return fmt.Errorf("group id exceeds 64 code points: %w", ErrInvalid)
 	}
 	if strings.TrimSpace(id) != id {
 		return fmt.Errorf("group id has leading or trailing whitespace: %w", ErrInvalid)
@@ -96,10 +128,24 @@ func ValidateGroupID(id string) error {
 	return nil
 }
 
-// ValidateNotes returns ErrInvalid when notes exceed the 4096-character limit.
+// ValidateNotes returns ErrInvalid when notes exceed 4096 code points.
 func ValidateNotes(notes string) error {
-	if len(notes) > 4096 {
-		return fmt.Errorf("notes exceed 4096 chars: %w", ErrInvalid)
+	if utf8.RuneCountInString(notes) > 4096 {
+		return fmt.Errorf("notes exceed 4096 code points: %w", ErrInvalid)
+	}
+	return nil
+}
+
+// ValidateTitle returns ErrInvalid when a display title exceeds 256 code points
+// or contains non-printable characters. Empty titles are allowed.
+func ValidateTitle(title string) error {
+	if utf8.RuneCountInString(title) > 256 {
+		return fmt.Errorf("title exceeds 256 code points: %w", ErrInvalid)
+	}
+	for _, r := range title {
+		if !unicode.IsPrint(r) {
+			return fmt.Errorf("title contains non-printable character: %w", ErrInvalid)
+		}
 	}
 	return nil
 }
@@ -125,12 +171,10 @@ type Balance struct {
 	RealizedPnl string
 	// AverageEntryPrice is optional; empty when not applicable.
 	AverageEntryPrice string
-	// Asset identifies the asset, e.g. "AAPL".
+	// Asset is the code of the asset, e.g. "AAPL".
 	Asset string
-	// Account is the account that owns this balance.
+	// Account is the code of the account that owns this balance.
 	Account AccountID
-	// Tenant is the isolation boundary.
-	Tenant TenantID
 }
 
 // --- Market-data config -----------------------------------------------------
@@ -164,16 +208,19 @@ const (
 	MarketDataProviderMock = "mock"
 )
 
-// MarketDataInstance is one configured market-data source. Multiple instances
-// of the same Type may coexist (e.g. two BYO feeds). Credentials is an opaque
-// JSON blob, unencrypted for now (credentials encryption not yet implemented);
-// BYO and mock leave it empty.
+// MarketDataInstance is one configured market-data source. It is a machine
+// record: its public handle is ExternalID, the surrogate key never appears here.
+// Multiple instances of the same Provider may coexist (e.g. two BYO feeds), so
+// the unique, case-insensitive Label distinguishes them for the operator.
+// Credentials is an opaque JSON blob, unencrypted for now (credentials
+// encryption not yet implemented); BYO and mock leave it empty.
 type MarketDataInstance struct {
-	// ID is the operator-facing instance identifier, unique across instances.
-	ID string
-	// Type is the provider discriminator (e.g. MarketDataProviderBYO).
-	Type string
-	// Label is a free-form human-readable name; may be empty.
+	// ExternalID is the opaque public handle of this instance.
+	ExternalID ExternalID
+	// Provider is the provider discriminator (e.g. MarketDataProviderBYO).
+	Provider string
+	// Label is a free-form, unique, case-insensitive human-readable name; may be
+	// empty.
 	Label string
 	// Credentials is an opaque provider-specific JSON blob; empty for BYO/mock.
 	Credentials string
@@ -186,13 +233,13 @@ type MarketDataInstance struct {
 // enable/disable lives here, so an instance can carry instruments that are
 // configured but not yet streaming.
 type MarketDataInstrument struct {
-	// InstanceID is the owning instance.
-	InstanceID string
+	// Instance is the owning instance's opaque public handle.
+	Instance ExternalID
 	// ExternalSymbol is the source-side symbol (e.g. "AAPL").
 	ExternalSymbol string
-	// BaseAsset is the instrument underlying asset (e.g. "AAPL").
+	// BaseAsset is the code of the instrument underlying asset (e.g. "AAPL").
 	BaseAsset string
-	// QuoteAsset is the instrument settlement asset (e.g. "USD").
+	// QuoteAsset is the code of the instrument settlement asset (e.g. "USD").
 	QuoteAsset string
 	// ManualPrice is the operator-set mark price as an exact decimal string;
 	// empty when none. It applies only to bring-your-own (manual) instruments:
@@ -211,13 +258,13 @@ type MarketDataQuote struct {
 	AsOf time.Time
 	// ReceivedAt is when Officer received and persisted the quote.
 	ReceivedAt time.Time
-	// InstanceID is the owning instance.
-	InstanceID string
+	// Instance is the owning instance's opaque public handle.
+	Instance ExternalID
 	// ExternalSymbol is the source-side symbol.
 	ExternalSymbol string
-	// BaseAsset is the instrument underlying asset.
+	// BaseAsset is the code of the instrument underlying asset.
 	BaseAsset string
-	// QuoteAsset is the instrument settlement asset.
+	// QuoteAsset is the code of the instrument settlement asset.
 	QuoteAsset string
 	// Mark is the mark price as an exact decimal string; empty when absent.
 	Mark string
@@ -310,26 +357,31 @@ type AdjustmentOutcomeRejected struct {
 }
 
 // AccountAdjustmentRecord is the append-only history of a single spot-funds
-// edit. Payload and outcome are typed; the store marshals them to JSON.
+// edit. It is a machine record: its public handle is ExternalID, the surrogate
+// key never appears here. Payload and outcome are typed; the store marshals them
+// to JSON. Account and Asset are dictionary references by code; Principal is an
+// optional principal reference by code, cleared (not cascaded) when the
+// principal is removed.
 type AccountAdjustmentRecord struct {
 	// At is the wall-clock time the adjustment was submitted.
 	At time.Time
+	// ExternalID is the opaque public handle of this adjustment.
+	ExternalID ExternalID
 	// Request is the adjustment payload submitted by the caller.
 	Request AdjustmentRequest
 	// Accepted is non-nil when the engine accepted the adjustment.
 	Accepted *AdjustmentOutcomeAccepted
 	// Rejected is non-nil when the engine rejected the adjustment.
 	Rejected *AdjustmentOutcomeRejected
-	// Principal identifies who initiated the action.
+	// Principal is the code of the principal who initiated the action; empty when
+	// the reference was cleared or none was recorded.
 	Principal string
-	// Tenant is the isolation boundary.
-	Tenant TenantID
-	// Account is the account that was adjusted.
+	// Asset is the code of the asset that was adjusted.
+	Asset string
+	// Account is the code of the account that was adjusted.
 	Account AccountID
 	// Source is the channel that originated the adjustment.
 	Source Source
-	// ID is the store-assigned monotonically increasing identifier.
-	ID int64
 }
 
 // AdjustmentStatus summarises the outcome of an adjustment for indexed queries.
@@ -408,26 +460,31 @@ func OrderStatusTerminal(status OrderStatus) bool {
 }
 
 // Order is the Officer-side record of an order that passed through the system,
-// including rejected ones. All monetary/size values are exact decimal strings.
+// including rejected ones. It is a machine record: its public handle is
+// ExternalID, the surrogate key never appears here. All monetary/size values are
+// exact decimal strings, never float. The signed approval, when present, lives
+// in a separate 1:1 OrderApproval rather than inline on the order.
 type Order struct {
 	// At is the wall-clock time the order was submitted.
 	At time.Time
+	// ExternalID is the opaque public handle of this order.
+	ExternalID ExternalID
 	// AmountValue is the size of the order (exact decimal string).
 	AmountValue string
 	// Price is the limit price (exact decimal string); empty for market orders.
 	Price string
-	// Principal identifies who submitted the order.
+	// Principal is the code of the principal who submitted the order; empty when
+	// the reference was cleared or none was recorded.
 	Principal string
-	// BaseAsset is the asset being bought or sold.
+	// BaseAsset is the code of the asset being bought or sold.
 	BaseAsset string
-	// QuoteAsset is the asset used for pricing.
+	// QuoteAsset is the code of the asset used for pricing.
 	QuoteAsset string
-	// LockPrices is an optional list of reference prices for PnL locks
-	// (exact decimal strings). Marshalled to JSON in the store.
-	LockPrices []string
-	// Tenant is the isolation boundary.
-	Tenant TenantID
-	// Account is the account that placed the order.
+	// Lock is the opaque SDK-serialized reservation lock (pretrade.Lock), held as
+	// raw bytes; nil when the order carried no lock. Display prices are derived
+	// later from the deserialized lock via the SDK; this package never decodes it.
+	Lock []byte
+	// Account is the code of the account that placed the order.
 	Account AccountID
 	// Source is the channel that submitted the order.
 	Source Source
@@ -437,38 +494,27 @@ type Order struct {
 	AmountKind OrderAmountKind
 	// Status is the current lifecycle state.
 	Status OrderStatus
-	// ApprovalToken is the exact base64url-encoded signed approval envelope
-	// stamped onto the order's pre-trade verdict; empty when no envelope was
-	// issued (signer not wired, or a pre-migration row).
-	ApprovalToken string `json:"approvalToken"`
-	// ApprovalKeyID is the signing key id that produced ApprovalToken; empty
-	// under eSign-off or when unsigned.
-	ApprovalKeyID string `json:"approvalKeyId"`
-	// ApprovalAlg is the envelope signing algorithm ("ed25519" | "none"); empty
-	// when no envelope was issued.
-	ApprovalAlg string `json:"approvalAlg"`
-	// ApprovalMode is the payload mode the envelope carries ("immediate").
-	ApprovalMode string `json:"approvalMode"`
-	// ApprovalIssuedAt is the envelope issue time (RFC3339Nano UTC); empty when
-	// no envelope was issued.
-	ApprovalIssuedAt string `json:"approvalIssuedAt"`
-	// ApprovalExpiresAt is the envelope expiry (RFC3339Nano UTC); empty when no
-	// envelope was issued.
-	ApprovalExpiresAt string `json:"approvalExpiresAt"`
-	// ID is the store-assigned order identifier (string of int64).
-	ID int64
 }
 
 // OrderApproval is the persisted signed approval envelope stamped onto an
-// order's pre-trade verdict (accept or reject). Token is the exact base64url
-// envelope bytes issued by the signer; the remaining fields are the envelope
-// metadata carried for read-back without decoding the token.
+// order's pre-trade verdict (accept or reject), held in a 1:1 companion of the
+// signed order and absent when the order is unsigned. Token is the exact
+// base64url envelope bytes issued by the signer; the remaining fields are the
+// envelope metadata carried for read-back without decoding the token. KeyID
+// references the signing key by its own UUID handle. IssuedAt and ExpiresAt are
+// RFC3339Nano UTC strings.
 type OrderApproval struct {
-	Token     string
-	KeyID     string
-	Alg       string
-	Mode      string
-	IssuedAt  string
+	// Token is the exact base64url-encoded signed approval envelope.
+	Token string
+	// KeyID is the signing key UUID that produced Token.
+	KeyID string
+	// Alg is the envelope signing algorithm ("ed25519" | "none").
+	Alg string
+	// Mode is the payload mode the envelope carries (e.g. "immediate").
+	Mode string
+	// IssuedAt is the envelope issue time (RFC3339Nano UTC).
+	IssuedAt string
+	// ExpiresAt is the envelope expiry (RFC3339Nano UTC).
 	ExpiresAt string
 }
 
@@ -507,61 +553,68 @@ type OrderEventPayload struct {
 	FillLockPrice string `json:"fill_lock_price,omitempty"`
 }
 
-// OrderEvent is one immutable record in an order's event stream.
+// OrderEvent is one immutable record in an order's event stream. It is a machine
+// record: its public handle is ExternalID, the surrogate key never appears here.
+// It links to its parent order by the order's opaque handle.
 type OrderEvent struct {
 	// At is the wall-clock time the event was recorded.
 	At time.Time
+	// ExternalID is the opaque public handle of this event.
+	ExternalID ExternalID
+	// Order is the parent order's opaque public handle.
+	Order ExternalID
 	// Payload carries the event-specific structured data.
 	Payload OrderEventPayload
-	// Principal identifies who triggered the event.
+	// Principal is the code of the principal who triggered the event; empty when
+	// the reference was cleared or none was recorded.
 	Principal string
 	// Source is the channel that triggered the event.
 	Source Source
 	// Type classifies the event.
 	Type OrderEventType
-	// OrderID links back to the parent order.
-	OrderID int64
-	// ID is the store-assigned event identifier.
-	ID int64
 }
 
-// Trade is the per-fill record backing the standalone trades list. One Trade is
-// recorded for each fill event. All monetary values are exact decimal strings.
+// Trade is the per-fill record backing the standalone trades list ("reports").
+// One Trade is recorded for each fill event. It is a machine record: its public
+// handle is ExternalID, the surrogate key never appears here. It links to its
+// originating order by the order's opaque handle. All monetary values are exact
+// decimal strings, never float.
 type Trade struct {
 	// At is the wall-clock time the fill was recorded.
 	At time.Time
+	// ExternalID is the opaque public handle of this trade.
+	ExternalID ExternalID
+	// Order is the originating order's opaque public handle.
+	Order ExternalID
 	// Quantity is the filled quantity (exact decimal string).
 	Quantity string
 	// Price is the fill price (exact decimal string).
 	Price string
 	// LockPrice is the reference price used for PnL locking; empty if none.
 	LockPrice string
-	// Principal identifies who submitted the originating order.
+	// Principal is the code of the principal who submitted the originating order;
+	// empty when the reference was cleared or none was recorded.
 	Principal string
-	// BaseAsset is the asset that was filled.
+	// BaseAsset is the code of the asset that was filled.
 	BaseAsset string
-	// QuoteAsset is the asset used for pricing.
+	// QuoteAsset is the code of the asset used for pricing.
 	QuoteAsset string
-	// Tenant is the isolation boundary.
-	Tenant TenantID
-	// Account is the account that received the fill.
+	// Account is the code of the account that received the fill.
 	Account AccountID
 	// Source is the channel that submitted the originating order.
 	Source Source
 	// Side is the direction of the fill.
 	Side OrderSide
-	// OrderID links back to the originating order.
-	OrderID int64
-	// ID is the store-assigned trade identifier.
-	ID int64
 }
 
 // OrderDetail bundles an order together with its events and trades; returned
-// by GetOrder.
+// by GetOrder. Approval is the order's 1:1 signed approval envelope when one was
+// issued, read back from order_approvals; nil when the order is unsigned.
 type OrderDetail struct {
-	Order  Order
-	Events []OrderEvent
-	Trades []Trade
+	Order    Order
+	Approval *OrderApproval
+	Events   []OrderEvent
+	Trades   []Trade
 }
 
 // OrderReject is the transport-agnostic view of one engine pre-trade reject.
@@ -593,14 +646,14 @@ type ExecutionReportInput struct {
 	// LockPrice is the reference price for the fill's PnL lock; empty when the
 	// originating order carried no lock.
 	LockPrice string
-	// Account is the account that received the fill.
+	// Order is the opaque public handle of the Officer order this fill settles.
+	// The fill event and trade reference it, and the order's status is reflected
+	// from the fill.
+	Order ExternalID
+	// Account is the code of the account that received the fill.
 	Account AccountID
 	// Side is the direction of the fill.
 	Side OrderSide
-	// OrderID links the fill to the Officer order it settles. The fill event and
-	// trade reference it (order_events/trades are NOT NULL FKs to orders), and
-	// the order's status is reflected from the fill.
-	OrderID int64
 	// Force bypasses Officer's safety checks and routes straight to the engine.
 	Force bool
 	// Final reports whether this fill closes the order: true reflects status
@@ -650,16 +703,20 @@ type BalanceSettlement struct {
 type OrderSettlement struct {
 	// Trade is the optional trade row to create in the same tx; nil to skip.
 	Trade *Trade
-	// Tenant is the isolation boundary.
-	Tenant TenantID
-	// Account is the account the fill settled against.
+	// Account is the code of the account the fill settled against.
 	Account AccountID
 	// OrderStatus is the target status (e.g. filled, partially_filled, or
 	// accepted for the hold-accept path).
 	OrderStatus OrderStatus
-	// LockPrices is the order's reservation lock prices to write when
-	// SetLockPrices is true; an empty slice clears them, nil leaves them.
-	LockPrices []string
+	// Lock is the opaque SDK-serialized reservation lock to write when SetLock is
+	// true; an empty (non-nil) slice clears it, nil leaves it. It replaces the
+	// former decimal-array lock: display prices are derived from the deserialized
+	// SDK lock, not stored as an array.
+	Lock []byte
+	// Order is the opaque public handle of the order being settled; the zero
+	// value means an in-memory-only hold with no order row, skipping the order
+	// and event writes.
+	Order ExternalID
 	// AllowedFrom is an optional status WHERE-guard: when non-empty the order
 	// status UPDATE only advances rows already in one of these statuses, and a
 	// disallowed current status yields domain.ErrConflict with nothing written.
@@ -673,11 +730,9 @@ type OrderSettlement struct {
 	// Blocks are engine-already-applied account blocks to mirror in the same tx
 	// (the block UPDATE only; the observational audit row stays outside).
 	Blocks []ExecutionAccountBlock
-	// OrderID is the order being settled.
-	OrderID int64
-	// SetLockPrices distinguishes a nil LockPrices ("leave unchanged") from an
-	// empty slice ("clear"); only when true is the lock-price column rewritten.
-	SetLockPrices bool
+	// SetLock distinguishes a nil Lock ("leave unchanged") from an empty slice
+	// ("clear"); only when true is the lock column rewritten.
+	SetLock bool
 }
 
 // --- Signing keys -----------------------------------------------------------
@@ -716,7 +771,12 @@ type ApprovalPayload struct {
 	ApprovalID    string `json:"approvalId"` // server UUID == reservationId
 	ReservationID string `json:"reservationId"`
 	Mode          string `json:"mode"` // "hold" | "immediate"
-	OrderID       int64  `json:"orderId"`
+	// OrderExternalID is the order's opaque public handle (22-char base64url
+	// ExternalID), never the internal surrogate key: a monotonic surrogate in a
+	// client-facing token would leak record counts/existence. Empty when the
+	// approval is signed before an order row exists (an in-memory-only held
+	// reservation).
+	OrderExternalID string `json:"orderExternalId,omitempty"`
 
 	// Bound order params — connector re-binds against the order it executes.
 	Instrument     string `json:"instrument"`
@@ -774,16 +834,20 @@ type ReservationIntent struct {
 	IssuedAt time.Time
 	// ExpiresAt is when the TTL sweeper should roll this back.
 	ExpiresAt time.Time
-	// ApprovalID is the server UUID identifying the reservation (PK).
+	// ApprovalID is the server UUID identifying the reservation; it is this row's
+	// own external handle (used in tokens), not a surrogate key.
 	ApprovalID string
-	// OrderID is the persisted order authorised by this reservation.
-	OrderID int64
-	// Account is the account that placed the order.
+	// Lock is the opaque SDK-serialized reservation lock (pretrade.Lock), held as
+	// raw bytes; nil when the reservation carried no lock. It replaces the former
+	// decimal-array JSON; this package never decodes it.
+	Lock []byte
+	// Order is the opaque public handle of the persisted order authorised by this
+	// reservation; the zero value means an in-memory-only hold with no order row.
+	Order ExternalID
+	// Account is the code of the account that placed the order.
 	Account AccountID
 	// ParamsJSON is the bound order params plus persisted balance outcomes.
 	ParamsJSON string
-	// LockPricesJSON is the engine lock prices serialized as JSON array.
-	LockPricesJSON string
 	// State is the current lifecycle state.
 	State ReservationIntentState
 }
@@ -799,13 +863,11 @@ type ReservationIntent struct {
 // The store only ever advances accepted->terminal: AllowedFrom is a status
 // WHERE-guard (callers pass {OrderStatusAccepted}); a current status outside it
 // yields domain.ErrConflict with nothing written (TOCTOU-safe against a fill
-// that lands before the tx). An empty AllowedFrom disables the guard. OrderID==0
-// (an in-memory-only hold with no order row) skips the order/event writes and
-// only flips the intent. A missing intent row is tolerated (no-op), mirroring
-// SetReservationIntentState's NotFound tolerance.
+// that lands before the tx). An empty AllowedFrom disables the guard. A zero
+// Order (an in-memory-only hold with no order row) skips the order/event writes
+// and only flips the intent. A missing intent row is tolerated (no-op),
+// mirroring SetReservationIntentState's NotFound tolerance.
 type ReservationResolution struct {
-	// Tenant is the isolation boundary.
-	Tenant TenantID
 	// ApprovalID identifies the reservation intent row to flip.
 	ApprovalID string
 	// IntentState is the target intent state (committed or rolled_back).
@@ -813,12 +875,12 @@ type ReservationResolution struct {
 	// OrderStatus is the target order status (e.g. committed, cancelled,
 	// rolled_back).
 	OrderStatus OrderStatus
+	// Order is the opaque public handle of the order authorised by the
+	// reservation; the zero value means an in-memory-only hold with no order row.
+	Order ExternalID
 	// AllowedFrom is the status WHERE-guard; empty disables guarding.
 	AllowedFrom []OrderStatus
 	// Events are the lifecycle events to append in the same tx (e.g.
 	// reservation_committed, or reservation_rolled_back + cancelled).
 	Events []OrderEvent
-	// OrderID is the order authorised by the reservation; 0 for in-memory-only
-	// holds with no order row.
-	OrderID int64
 }

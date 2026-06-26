@@ -25,6 +25,7 @@ func TestCatalogueContract(t *testing.T) {
 		{Name: "health", Mutating: false, Protective: false, Implemented: true, DefaultEnabled: true},
 		{Name: "get_account_state", Mutating: false, Protective: false, Implemented: true, DefaultEnabled: true},
 		{Name: "get_limits", Mutating: false, Protective: false, Implemented: true, DefaultEnabled: true},
+		{Name: "get_order", Mutating: false, Protective: false, Implemented: true, DefaultEnabled: true},
 		{Name: "get_audit", Mutating: false, Protective: false, Implemented: true, DefaultEnabled: true},
 		{Name: "check_order", Mutating: false, Protective: false, Implemented: true, DefaultEnabled: true},
 		{Name: "set_limit", Mutating: true, Protective: true, Implemented: false, DefaultEnabled: false},

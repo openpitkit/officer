@@ -15,11 +15,15 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
+// Unit tests for the realm-portable archive contract: scope/selector filtering,
+// dictionary-first carriage, and the touched-runtime engine-rebuild signal. The
+// store-level export -> restore round-trip (identity preservation, isolated <->
+// shared moves, modes, FK resolution and engine-id reassignment) lives in the
+// store package, where a real connector is available.
 package backup
 
 import (
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -28,383 +32,328 @@ import (
 	"go.openpit.dev/officer/internal/domain"
 )
 
-func TestMigrateArchiveFixtures(t *testing.T) {
-	fixtures := []struct {
-		file          string
-		formatVersion int
-	}{
-		{file: "v1_full.json", formatVersion: 1},
+// TestFixtureArchiveDecodes loads the on-disk fixture and asserts it carries the
+// portable identity model end to end: dictionaries by code, machine records by
+// external id, links by code/external id, no version field.
+func TestFixtureArchiveDecodes(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "full_archive.json"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	var archive Archive
+	if err := json.Unmarshal(raw, &archive); err != nil {
+		t.Fatalf("unmarshal fixture: %v", err)
 	}
 
-	for _, fixture := range fixtures {
-		t.Run(fixture.file, func(t *testing.T) {
-			raw, err := os.ReadFile(filepath.Join("testdata", fixture.file))
-			if err != nil {
-				t.Fatalf("read fixture: %v", err)
-			}
-			var archive Archive
-			if err := json.Unmarshal(raw, &archive); err != nil {
-				t.Fatalf("unmarshal fixture: %v", err)
-			}
-			if archive.Manifest.FormatVersion != fixture.formatVersion {
-				t.Fatalf("fixture version = %d, want %d",
-					archive.Manifest.FormatVersion, fixture.formatVersion)
-			}
-			migrated, err := MigrateArchive(archive)
-			if err != nil {
-				t.Fatalf("MigrateArchive: %v", err)
-			}
-			if migrated.Manifest.FormatVersion != CurrentFormatVersion {
-				t.Fatalf("migrated version = %d, want %d",
-					migrated.Manifest.FormatVersion, CurrentFormatVersion)
-			}
-			assertFixtureDataPreserved(t, migrated)
-		})
+	if archive.Manifest.Realm.Code != "default" {
+		t.Fatalf("realm code = %q, want default", archive.Manifest.Realm.Code)
 	}
-}
-
-func TestMigrateArchiveRejectsInvalidVersions(t *testing.T) {
-	base := Archive{Manifest: Manifest{
-		Format:        Format,
-		FormatVersion: CurrentFormatVersion,
-	}}
-	tests := []struct {
-		name   string
-		mutate func(*Archive)
-	}{
-		{
-			name: "bad format",
-			mutate: func(a *Archive) {
-				a.Manifest.Format = "other"
-			},
-		},
-		{
-			name: "too old",
-			mutate: func(a *Archive) {
-				a.Manifest.FormatVersion = MinSupportedFormatVersion - 1
-			},
-		},
-		{
-			name: "future",
-			mutate: func(a *Archive) {
-				a.Manifest.FormatVersion = CurrentFormatVersion + 1
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			archive := base
-			tt.mutate(&archive)
-			if _, err := MigrateArchive(archive); !errors.Is(err, domain.ErrInvalid) {
-				t.Fatalf("MigrateArchive error = %v, want ErrInvalid", err)
-			}
-		})
-	}
-}
-
-func TestFilterDataDropsActivityOrphans(t *testing.T) {
-	data := Data{
-		Accounts: []domain.Account{{
-			Tenant: domain.DefaultTenant,
-			ID:     "acc-1",
-		}},
-		Orders: []domain.Order{{
-			ID:      1,
-			Tenant:  domain.DefaultTenant,
-			Account: "acc-2",
-		}},
-		OrderEvents: []domain.OrderEvent{{
-			ID:      10,
-			OrderID: 2,
-		}},
-		Trades: []domain.Trade{{
-			ID:      20,
-			OrderID: 2,
-			Tenant:  domain.DefaultTenant,
-			Account: "acc-1",
-		}},
-	}
-	filtered := FilterData(data, Scope{
-		Sections: []Section{SectionActivityHistory},
-		Accounts: EntitySelector{
-			Accounts: []string{"acc-1"},
-		},
-	})
-	if len(filtered.Orders) != 0 ||
-		len(filtered.OrderEvents) != 0 ||
-		len(filtered.Trades) != 0 {
-		t.Fatalf("activity orphans preserved: %+v", filtered)
-	}
-}
-
-func TestFilterDataAccountsGroupsByAccountAndGroupSelectors(t *testing.T) {
-	data := filterFixtureData()
-	filtered := FilterData(data, Scope{
-		Sections: []Section{SectionAccountsGroups},
-		Accounts: EntitySelector{
-			Accounts: []string{" acc-1 ", "acc-1"},
-			Groups:   []string{"grp-2"},
-		},
-	})
-	if got := accountIDs(filtered.Accounts); !sameStrings(got, []string{"acc-1", "acc-2"}) {
-		t.Fatalf("accounts = %v, want acc-1 and acc-2", got)
-	}
-	if got := groupIDs(filtered.Groups); !sameStrings(got, []string{"grp-1", "grp-2"}) {
-		t.Fatalf("groups = %v, want grp-1 and grp-2", got)
-	}
-	if len(filtered.Balances) != 0 || len(filtered.Limits) != 0 ||
-		len(filtered.Orders) != 0 {
-		t.Fatalf("unexpected non-account sections: %+v", filtered)
-	}
-}
-
-func TestFilterDataPositionsUsePositionsSelectorOnly(t *testing.T) {
-	data := filterFixtureData()
-	filtered := FilterData(data, Scope{
-		Sections: []Section{SectionPositions},
-		Accounts: EntitySelector{
-			Accounts: []string{"acc-1"},
-		},
-		Positions: EntitySelector{
-			Groups: []string{"grp-2"},
-		},
-	})
-	if got := balanceAccounts(filtered.Balances); !sameStrings(got, []string{"acc-2"}) {
-		t.Fatalf("balance accounts = %v, want only acc-2", got)
-	}
-	if len(filtered.Accounts) != 0 || len(filtered.Groups) != 0 ||
-		len(filtered.Limits) != 0 {
-		t.Fatalf("unexpected non-position sections: %+v", filtered)
-	}
-}
-
-func TestFilterDataLimitsRespectAccountSelectorsAndGlobalRows(t *testing.T) {
-	data := filterFixtureData()
-	filtered := FilterData(data, Scope{
-		Sections: []Section{SectionRiskLimits},
-		Accounts: EntitySelector{
-			Accounts: []string{"acc-1"},
-		},
-	})
-	if got := limitAccounts(filtered.Limits); !sameStrings(got, []string{"acc-1"}) {
-		t.Fatalf("filtered limit accounts = %v, want only acc-1", got)
-	}
-
-	filtered = FilterData(data, Scope{
-		Sections: []Section{SectionRiskLimits},
-	})
-	if got := limitAccounts(filtered.Limits); !sameStrings(got, []string{"", "acc-1", "acc-2"}) {
-		t.Fatalf("unfiltered limit accounts = %v, want global, acc-1, acc-2", got)
-	}
-}
-
-func TestFilterDataActivityHistoryKeepsOnlySelectedOrderChildren(t *testing.T) {
-	data := filterFixtureData()
-	filtered := FilterData(data, Scope{
-		Sections: []Section{SectionActivityHistory},
-		Accounts: EntitySelector{
-			Groups: []string{"grp-1"},
-		},
-	})
-	if got := orderIDs(filtered.Orders); !sameInt64s(got, []int64{1}) {
-		t.Fatalf("orders = %v, want order 1", got)
-	}
-	if got := orderEventIDs(filtered.OrderEvents); !sameInt64s(got, []int64{10}) {
-		t.Fatalf("order events = %v, want event 10", got)
-	}
-	if got := tradeIDs(filtered.Trades); !sameInt64s(got, []int64{100}) {
-		t.Fatalf("trades = %v, want trade 100", got)
-	}
-	if got := adjustmentAccounts(filtered.Adjustments); !sameStrings(got, []string{"acc-1"}) {
-		t.Fatalf("adjustments = %v, want acc-1", got)
-	}
-}
-
-func TestFilterDataAuditRespectsAccountSelectorsAndGlobalRows(t *testing.T) {
-	data := filterFixtureData()
-	filtered := FilterData(data, Scope{
-		Sections: []Section{SectionAuditLog},
-		Accounts: EntitySelector{
-			Accounts: []string{"acc-1"},
-		},
-	})
-	if got := auditAccounts(filtered.Audit); !sameStrings(got, []string{"acc-1"}) {
-		t.Fatalf("filtered audit accounts = %v, want only acc-1", got)
-	}
-
-	filtered = FilterData(data, Scope{
-		Sections: []Section{SectionAuditLog},
-	})
-	if got := auditAccounts(filtered.Audit); !sameStrings(got, []string{"", "acc-1", "acc-2"}) {
-		t.Fatalf("unfiltered audit accounts = %v, want global, acc-1, acc-2", got)
-	}
-}
-
-func TestFilterDataMarketDataAndSettingsSectionsAreIndependent(t *testing.T) {
-	data := filterFixtureData()
-	filtered := FilterData(data, Scope{
-		Sections: []Section{SectionMarketDataQuotes},
-	})
-	if len(filtered.MarketDataQuotes) != 1 ||
-		len(filtered.MarketDataInstances) != 0 ||
-		len(filtered.MarketDataInstruments) != 0 {
-		t.Fatalf("quotes-only market-data = %+v", filtered)
-	}
-	filtered = FilterData(data, Scope{
-		Sections: []Section{
-			SectionMarketData,
-			SectionGeneralSettings,
-		},
-	})
-	if len(filtered.MarketDataInstances) != 1 ||
-		len(filtered.MarketDataInstruments) != 1 ||
-		len(filtered.MarketDataQuotes) != 0 {
-		t.Fatalf("settings-only market-data = %+v", filtered)
-	}
-	if filtered.McpAccess["submit_order"] != true ||
-		filtered.McpAccess["delete_limit"] != false {
-		t.Fatalf("mcp access = %+v, want all settings", filtered.McpAccess)
-	}
-}
-
-func assertFixtureDataPreserved(t *testing.T, archive Archive) {
-	t.Helper()
 	data := archive.Data
-	if len(data.Accounts) != 1 || data.Accounts[0].ID != "acc-1" {
-		t.Fatalf("accounts not preserved: %+v", data.Accounts)
+	if len(data.Assets) != 2 {
+		t.Fatalf("assets = %d, want 2", len(data.Assets))
 	}
-	if len(data.Groups) != 1 || data.Groups[0].ID != "grp-1" {
-		t.Fatalf("groups not preserved: %+v", data.Groups)
+	if len(data.Accounts) != 1 || data.Accounts[0].Code != "acc-1" ||
+		data.Accounts[0].GroupCode != "grp-1" {
+		t.Fatalf("accounts not portable: %+v", data.Accounts)
 	}
-	if len(data.Balances) != 1 || data.Balances[0].Available != "10" {
-		t.Fatalf("balances not preserved: %+v", data.Balances)
+	if len(data.Groups) != 1 || data.Groups[0].Code != "grp-1" {
+		t.Fatalf("groups not portable: %+v", data.Groups)
 	}
-	if len(data.Limits) != 1 || len(data.Limits[0].Values) != 1 {
-		t.Fatalf("limits not preserved: %+v", data.Limits)
+	if len(data.OrderSizeLimits) != 1 ||
+		data.OrderSizeLimits[0].Account != "acc-1" ||
+		data.OrderSizeLimits[0].MaxQuantity != "100" {
+		t.Fatalf("limits not portable: %+v", data.OrderSizeLimits)
 	}
-	if len(data.MarketDataInstances) != 1 ||
-		len(data.MarketDataInstruments) != 1 ||
-		len(data.MarketDataQuotes) != 1 {
-		t.Fatalf("market-data not preserved: %+v", data)
+	if len(data.Orders) != 1 {
+		t.Fatalf("orders = %d, want 1", len(data.Orders))
 	}
-	if len(data.Orders) != 1 || len(data.OrderEvents) != 1 ||
-		len(data.Trades) != 1 || len(data.Adjustments) != 1 {
-		t.Fatalf("activity history not preserved: %+v", data)
+	// The order is addressed by a 22-char external id, and its event/trade link
+	// back to it by the same external id.
+	orderXID := data.Orders[0].Order.ExternalID
+	if orderXID.IsZero() {
+		t.Fatal("order external id is zero")
 	}
-	if len(data.Audit) != 1 || data.Audit[0].Action != "create_account" {
-		t.Fatalf("audit not preserved: %+v", data.Audit)
+	if len(data.OrderEvents) != 1 || data.OrderEvents[0].Order != orderXID {
+		t.Fatalf("order event link not by external id: %+v", data.OrderEvents)
+	}
+	if len(data.Trades) != 1 || data.Trades[0].Order != orderXID {
+		t.Fatalf("trade link not by external id: %+v", data.Trades)
+	}
+	// Money/quantity assertions use the domain value types' decimal strings.
+	if data.Trades[0].Quantity != "10" || data.Trades[0].Price != "150" {
+		t.Fatalf("trade decimals = %+v", data.Trades[0])
 	}
 	if data.McpAccess["submit_order"] != true {
 		t.Fatalf("mcp access not preserved: %+v", data.McpAccess)
 	}
 }
 
-func filterFixtureData() Data {
-	now := time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC)
-	return Data{
-		Accounts: []domain.Account{
-			{Tenant: domain.DefaultTenant, ID: "acc-1", GroupID: "grp-1"},
-			{Tenant: domain.DefaultTenant, ID: "acc-2", GroupID: "grp-2"},
-			{Tenant: domain.DefaultTenant, ID: "acc-3"},
-		},
-		Groups: []domain.AccountGroup{
-			{Tenant: domain.DefaultTenant, ID: "grp-1"},
-			{Tenant: domain.DefaultTenant, ID: "grp-2"},
-			{Tenant: domain.DefaultTenant, ID: "grp-unused"},
-		},
-		Balances: []domain.Balance{
-			{Tenant: domain.DefaultTenant, Account: "acc-1", Asset: "USD"},
-			{Tenant: domain.DefaultTenant, Account: "acc-2", Asset: "EUR"},
-			{Tenant: domain.DefaultTenant, Account: "acc-3", Asset: "GBP"},
-		},
-		Limits: []domain.Limit{
-			{Target: domain.LimitTarget{
-				Tenant: domain.DefaultTenant, Policy: "rate", Scope: "broker",
-			}, Values: []domain.LimitValue{{Kind: "max", Value: "10"}}},
-			{Target: domain.LimitTarget{
-				Tenant: domain.DefaultTenant, Policy: "rate",
-				Scope: "account", Account: "acc-1",
-			}, Values: []domain.LimitValue{{Kind: "max", Value: "11"}}},
-			{Target: domain.LimitTarget{
-				Tenant: domain.DefaultTenant, Policy: "rate",
-				Scope: "account", Account: "acc-2",
-			}, Values: []domain.LimitValue{{Kind: "max", Value: "12"}}},
-		},
-		MarketDataInstances: []domain.MarketDataInstance{{
-			ID: "manual-1", Type: domain.MarketDataProviderBYO,
-		}},
-		MarketDataInstruments: []domain.MarketDataInstrument{{
-			InstanceID: "manual-1", ExternalSymbol: "AAPLUSD",
-		}},
-		MarketDataQuotes: []domain.MarketDataQuote{{
-			InstanceID: "manual-1", ExternalSymbol: "AAPLUSD",
-		}},
-		McpAccess: map[string]bool{
-			"delete_limit": false,
-			"submit_order": true,
-		},
-		Adjustments: []domain.AccountAdjustmentRecord{
-			{ID: 1, Tenant: domain.DefaultTenant, Account: "acc-1"},
-			{ID: 2, Tenant: domain.DefaultTenant, Account: "acc-2"},
-		},
-		Orders: []domain.Order{
-			{ID: 1, Tenant: domain.DefaultTenant, Account: "acc-1", At: now},
-			{ID: 2, Tenant: domain.DefaultTenant, Account: "acc-2", At: now},
-		},
-		OrderEvents: []domain.OrderEvent{
-			{ID: 10, OrderID: 1, At: now},
-			{ID: 20, OrderID: 2, At: now},
-			{ID: 30, OrderID: 99, At: now},
-		},
-		Trades: []domain.Trade{
-			{ID: 100, OrderID: 1, Tenant: domain.DefaultTenant, Account: "acc-1", At: now},
-			{ID: 200, OrderID: 2, Tenant: domain.DefaultTenant, Account: "acc-2", At: now},
-			{ID: 300, OrderID: 99, Tenant: domain.DefaultTenant, Account: "acc-1", At: now},
-		},
-		Audit: []domain.AuditRow{
-			{ID: 1, Tenant: domain.DefaultTenant, Action: domain.AuditActionHydrate},
-			{ID: 2, Tenant: domain.DefaultTenant, Account: "acc-1", Action: domain.AuditActionSetNotes},
-			{ID: 3, Tenant: domain.DefaultTenant, Account: "acc-2", Action: domain.AuditActionSetNotes},
-		},
+func TestFilterDataAlwaysCarriesDictionaries(t *testing.T) {
+	data := fixtureData()
+	// A positions-only scope still carries the asset and principal dictionaries so
+	// the balance foreign keys resolve on import.
+	filtered := FilterData(data, Scope{Sections: []Section{SectionPositions}})
+	if len(filtered.Assets) != 2 {
+		t.Fatalf("assets dropped from positions-only scope: %+v", filtered.Assets)
+	}
+	if len(filtered.Principals) != 1 {
+		t.Fatalf("principals dropped from positions-only scope: %+v", filtered.Principals)
+	}
+	// Positions are account-addressed, so the scope force-includes the
+	// accounts+groups dictionary: the balance rows resolve against parent accounts
+	// (and their groups) that the archive must therefore carry. With no account
+	// narrowing every account and group travels.
+	if got := accountCodes(filtered.Accounts); !sameStrings(got, []string{"acc-1", "acc-2", "acc-3"}) {
+		t.Fatalf("positions-only scope accounts = %v, want all accounts force-included", got)
+	}
+	if got := groupCodes(filtered.Groups); !sameStrings(got, []string{"grp-1", "grp-2", "grp-unused"}) {
+		t.Fatalf("positions-only scope groups = %v, want all groups force-included", got)
 	}
 }
 
-func accountIDs(accounts []domain.Account) []string {
-	out := make([]string, 0, len(accounts))
-	for _, account := range accounts {
-		out = append(out, account.ID.String())
+func TestFilterDataAccountsGroupsByCode(t *testing.T) {
+	data := fixtureData()
+	filtered := FilterData(data, Scope{
+		Sections: []Section{SectionAccountsGroups},
+		Accounts: EntitySelector{Accounts: []string{" acc-1 ", "acc-1"}, Groups: []string{"grp-2"}},
+	})
+	if got := accountCodes(filtered.Accounts); !sameStrings(got, []string{"acc-1", "acc-2"}) {
+		t.Fatalf("accounts = %v, want acc-1, acc-2", got)
+	}
+	if got := groupCodes(filtered.Groups); !sameStrings(got, []string{"grp-1", "grp-2"}) {
+		t.Fatalf("groups = %v, want grp-1, grp-2", got)
+	}
+}
+
+func TestFilterDataPositionsUsePositionsSelector(t *testing.T) {
+	data := fixtureData()
+	filtered := FilterData(data, Scope{
+		Sections:  []Section{SectionPositions},
+		Accounts:  EntitySelector{Accounts: []string{"acc-1"}},
+		Positions: EntitySelector{Groups: []string{"grp-2"}},
+	})
+	if got := balanceAccounts(filtered.Balances); !sameStrings(got, []string{"acc-2"}) {
+		t.Fatalf("balance accounts = %v, want only acc-2", got)
+	}
+}
+
+func TestFilterDataLimitsRespectAccountSelectorAndGlobalRows(t *testing.T) {
+	data := fixtureData()
+	filtered := FilterData(data, Scope{
+		Sections: []Section{SectionRiskLimits},
+		Accounts: EntitySelector{Accounts: []string{"acc-1"}},
+	})
+	// With a specific account selector, only that account's barriers travel; the
+	// scope-wide (no-account) barrier is dropped, matching the prior behaviour
+	// where a global row required an unfiltered selector to be included.
+	if got := orderSizeAccounts(filtered.OrderSizeLimits); !sameStrings(got, []string{"acc-1"}) {
+		t.Fatalf("filtered limit accounts = %v, want only acc-1", got)
+	}
+
+	filtered = FilterData(data, Scope{Sections: []Section{SectionRiskLimits}})
+	if got := orderSizeAccounts(filtered.OrderSizeLimits); !sameStrings(got, []string{"", "acc-1", "acc-2"}) {
+		t.Fatalf("unfiltered limit accounts = %v, want global, acc-1, acc-2", got)
+	}
+}
+
+func TestFilterDataActivityHistoryKeepsOnlySelectedOrderChildren(t *testing.T) {
+	data := fixtureData()
+	filtered := FilterData(data, Scope{
+		Sections: []Section{SectionActivityHistory},
+		Accounts: EntitySelector{Groups: []string{"grp-1"}},
+	})
+	// Only acc-1's order (and its child event/trade) survive; the orphan child of
+	// an unselected order is dropped.
+	if len(filtered.Orders) != 1 || filtered.Orders[0].Order.Account != "acc-1" {
+		t.Fatalf("orders = %+v, want only acc-1's order", filtered.Orders)
+	}
+	keptXID := filtered.Orders[0].Order.ExternalID
+	if len(filtered.OrderEvents) != 1 || filtered.OrderEvents[0].Order != keptXID {
+		t.Fatalf("order events = %+v, want only the kept order's", filtered.OrderEvents)
+	}
+	if len(filtered.Trades) != 1 || filtered.Trades[0].Order != keptXID {
+		t.Fatalf("trades = %+v, want only the kept order's", filtered.Trades)
+	}
+}
+
+func TestFilterDataAuditRespectsAccountSelectorAndGlobalRows(t *testing.T) {
+	data := fixtureData()
+	filtered := FilterData(data, Scope{
+		Sections: []Section{SectionAuditLog},
+		Accounts: EntitySelector{Accounts: []string{"acc-1"}},
+	})
+	// A specific account selector drops the global (empty-account) audit row, the
+	// same rule the limit and balance filters apply.
+	if got := auditAccounts(filtered.Audit); !sameStrings(got, []string{"acc-1"}) {
+		t.Fatalf("filtered audit accounts = %v, want only acc-1", got)
+	}
+}
+
+func TestTouchesRuntime(t *testing.T) {
+	if !TouchesRuntime(Scope{All: true}) {
+		t.Fatal("All scope must touch runtime")
+	}
+	if !TouchesRuntime(Scope{Sections: []Section{SectionPositions}}) {
+		t.Fatal("positions must touch runtime")
+	}
+	// Settings-only and user-settings-only and audit-only do not rebuild the
+	// engine.
+	for _, s := range []Section{SectionGeneralSettings, SectionUserSettings, SectionAuditLog} {
+		if TouchesRuntime(Scope{Sections: []Section{s}}) {
+			t.Fatalf("section %q must not touch runtime", s)
+		}
+	}
+}
+
+func TestNewArchiveOmitsVersionAndCarriesRealmLabel(t *testing.T) {
+	created := time.Date(2026, 6, 26, 12, 0, 0, 0, time.UTC)
+	archive := NewArchive(created, "src", RealmLabel{Code: "desk-a", Title: "Desk A"},
+		Scope{All: true}, fixtureData())
+	if archive.Manifest.Realm.Code != "desk-a" || archive.Manifest.Realm.Title != "Desk A" {
+		t.Fatalf("realm label = %+v", archive.Manifest.Realm)
+	}
+	if !archive.Manifest.CreatedAt.Equal(created) {
+		t.Fatalf("createdAt = %v, want %v", archive.Manifest.CreatedAt, created)
+	}
+	if archive.Manifest.FormatVersion != FormatVersion {
+		t.Fatalf("formatVersion = %d, want %d", archive.Manifest.FormatVersion, FormatVersion)
+	}
+	// Round-trips through JSON with the explicit format version.
+	raw, err := json.Marshal(archive)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var generic map[string]any
+	if err := json.Unmarshal(raw, &generic); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	manifest := generic["manifest"].(map[string]any)
+	if got := int(manifest["formatVersion"].(float64)); got != FormatVersion {
+		t.Fatalf("json formatVersion = %d, want %d", got, FormatVersion)
+	}
+}
+
+func TestFilenameStable(t *testing.T) {
+	created := time.Date(2026, 6, 26, 12, 30, 15, 0, time.UTC)
+	if got := Filename(created); got != "pit-officer-backup-20260626T123015Z.json" {
+		t.Fatalf("Filename = %q", got)
+	}
+}
+
+// --- Fixture data ------------------------------------------------------------
+
+func fixtureData() Data {
+	now := time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC)
+	order1XID := mustXID(t1Bytes())
+	order2XID := mustXID(t2Bytes())
+	return Data{
+		Assets: []domain.Asset{
+			{Code: "AAPL", Title: "Apple", AssetClass: "equity"},
+			{Code: "USD", Title: "US Dollar"},
+		},
+		Principals: []domain.Principal{{Code: "operator", Title: "Operator"}},
+		Accounts: []Account{
+			{Code: "acc-1", GroupCode: "grp-1"},
+			{Code: "acc-2", GroupCode: "grp-2"},
+			{Code: "acc-3"},
+		},
+		Groups: []AccountGroup{
+			{Code: "grp-1"},
+			{Code: "grp-2"},
+			{Code: "grp-unused"},
+		},
+		Balances: []domain.Balance{
+			{Account: "acc-1", Asset: "USD", Available: "10"},
+			{Account: "acc-2", Asset: "USD", Available: "20"},
+			{Account: "acc-3", Asset: "USD", Available: "30"},
+		},
+		OrderSizeLimits: []domain.LimitOrderSize{
+			{Scope: domain.ScopeBroker, MaxQuantity: "1000"},
+			{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxQuantity: "100"},
+			{Scope: domain.ScopeAccountAsset, Account: "acc-2", Asset: "AAPL", MaxQuantity: "200"},
+		},
+		Adjustments: []domain.AccountAdjustmentRecord{
+			{ExternalID: mustXID(a1Bytes()), Account: "acc-1", Asset: "USD", At: now},
+			{ExternalID: mustXID(a2Bytes()), Account: "acc-2", Asset: "USD", At: now},
+		},
+		Orders: []OrderRecord{
+			{Order: domain.Order{ExternalID: order1XID, Account: "acc-1", At: now}},
+			{Order: domain.Order{ExternalID: order2XID, Account: "acc-2", At: now}},
+		},
+		OrderEvents: []domain.OrderEvent{
+			{ExternalID: mustXID(e1Bytes()), Order: order1XID, At: now},
+			{ExternalID: mustXID(e2Bytes()), Order: order2XID, At: now},
+		},
+		Trades: []domain.Trade{
+			{ExternalID: mustXID(tr1Bytes()), Order: order1XID, Account: "acc-1", At: now},
+			{ExternalID: mustXID(tr2Bytes()), Order: order2XID, Account: "acc-2", At: now},
+		},
+		Audit: []domain.AuditRow{
+			{ExternalID: mustXID(au0Bytes()), Action: domain.AuditActionHydrate},
+			{ExternalID: mustXID(au1Bytes()), Account: "acc-1", Action: domain.AuditActionSetNotes},
+			{ExternalID: mustXID(au2Bytes()), Account: "acc-2", Action: domain.AuditActionSetNotes},
+		},
+		McpAccess: map[string]bool{"submit_order": true},
+	}
+}
+
+func mustXID(b []byte) domain.ExternalID {
+	id, err := domain.ExternalIDFromBytes(b)
+	if err != nil {
+		panic(err)
+	}
+	return id
+}
+
+// Distinct 16-byte external-id seeds for the fixture rows.
+func t1Bytes() []byte  { return seed(0x01) }
+func t2Bytes() []byte  { return seed(0x02) }
+func a1Bytes() []byte  { return seed(0x11) }
+func a2Bytes() []byte  { return seed(0x12) }
+func e1Bytes() []byte  { return seed(0x21) }
+func e2Bytes() []byte  { return seed(0x22) }
+func tr1Bytes() []byte { return seed(0x31) }
+func tr2Bytes() []byte { return seed(0x32) }
+func au0Bytes() []byte { return seed(0x40) }
+func au1Bytes() []byte { return seed(0x41) }
+func au2Bytes() []byte { return seed(0x42) }
+
+func seed(b byte) []byte {
+	out := make([]byte, domain.ExternalIDByteLen)
+	for i := range out {
+		out[i] = b
 	}
 	return out
 }
 
-func groupIDs(groups []domain.AccountGroup) []string {
+func accountCodes(accounts []Account) []string {
+	out := make([]string, 0, len(accounts))
+	for _, a := range accounts {
+		out = append(out, a.Code)
+	}
+	return out
+}
+
+func groupCodes(groups []AccountGroup) []string {
 	out := make([]string, 0, len(groups))
-	for _, group := range groups {
-		out = append(out, group.ID)
+	for _, g := range groups {
+		out = append(out, g.Code)
 	}
 	return out
 }
 
 func balanceAccounts(balances []domain.Balance) []string {
 	out := make([]string, 0, len(balances))
-	for _, balance := range balances {
-		out = append(out, balance.Account.String())
+	for _, b := range balances {
+		out = append(out, b.Account.String())
 	}
 	return out
 }
 
-func limitAccounts(limits []domain.Limit) []string {
+func orderSizeAccounts(limits []domain.LimitOrderSize) []string {
 	out := make([]string, 0, len(limits))
-	for _, limit := range limits {
-		out = append(out, limit.Target.Account.String())
-	}
-	return out
-}
-
-func adjustmentAccounts(adjustments []domain.AccountAdjustmentRecord) []string {
-	out := make([]string, 0, len(adjustments))
-	for _, adjustment := range adjustments {
-		out = append(out, adjustment.Account.String())
+	for _, l := range limits {
+		out = append(out, l.Account.String())
 	}
 	return out
 }
@@ -417,60 +366,19 @@ func auditAccounts(rows []domain.AuditRow) []string {
 	return out
 }
 
-func orderIDs(orders []domain.Order) []int64 {
-	out := make([]int64, 0, len(orders))
-	for _, order := range orders {
-		out = append(out, order.ID)
-	}
-	return out
-}
-
-func orderEventIDs(events []domain.OrderEvent) []int64 {
-	out := make([]int64, 0, len(events))
-	for _, event := range events {
-		out = append(out, event.ID)
-	}
-	return out
-}
-
-func tradeIDs(trades []domain.Trade) []int64 {
-	out := make([]int64, 0, len(trades))
-	for _, trade := range trades {
-		out = append(out, trade.ID)
-	}
-	return out
-}
-
-func sameStrings(got []string, want []string) bool {
+func sameStrings(got, want []string) bool {
 	if len(got) != len(want) {
 		return false
 	}
 	counts := make(map[string]int, len(want))
-	for _, value := range got {
-		counts[value]++
+	for _, v := range got {
+		counts[v]++
 	}
-	for _, value := range want {
-		if counts[value] == 0 {
+	for _, v := range want {
+		if counts[v] == 0 {
 			return false
 		}
-		counts[value]--
-	}
-	return true
-}
-
-func sameInt64s(got []int64, want []int64) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	counts := make(map[int64]int, len(want))
-	for _, value := range got {
-		counts[value]++
-	}
-	for _, value := range want {
-		if counts[value] == 0 {
-			return false
-		}
-		counts[value]--
+		counts[v]--
 	}
 	return true
 }

@@ -34,6 +34,8 @@ tags:
     description: Trade records
   - name: limits
     description: Risk limit barriers
+  - name: signing
+    description: Signing keys and the order approval-token flow
   - name: audit
     description: Append-only audit trail
   - name: mcp-access
@@ -44,6 +46,8 @@ tags:
     description: Market-data source configuration and latest quote snapshots
   - name: backup
     description: Portable database backup and restore
+  - name: business-csv
+    description: Business-entity CSV import and export
   - name: dashboard
     description: Overview and service information
 
@@ -174,6 +178,107 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /business-csv/export:
+    post:
+      operationId: exportBusinessCSV
+      summary: Export business entities as CSV or ZIP
+      tags: [business-csv]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BusinessCSVExportRequest"
+      responses:
+        "200":
+          description: CSV file or ZIP containing one CSV file.
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+              description: Timestamped export filename.
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /business-csv/import/preview:
+    post:
+      operationId: previewBusinessCSVImport
+      summary: Decode business CSV and report import conflicts
+      tags: [business-csv]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BusinessCSVImportPreviewRequest"
+      responses:
+        "200":
+          description: Parsed file metadata and conflict summary.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [preview]
+                properties:
+                  preview:
+                    $ref: "#/components/schemas/BusinessCSVImportPreview"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "413":
+          $ref: "#/components/responses/TooLargeError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /business-csv/import:
+    post:
+      operationId: importBusinessCSV
+      summary: Import business entities from CSV or ZIP
+      description: >
+        Applies validated business CSV rows atomically. Any row error rolls
+        back the entire import, so no entity rows or per-row audit rows are
+        persisted. The stop conflict policy deliberately commits rows applied
+        before the first conflict and returns 200 with counts.stopped=true and
+        the conflict list; it is not reported as HTTP 409. A 409 response is
+        only reachable through a concurrent-create race while the import is
+        applying.
+      tags: [business-csv]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BusinessCSVImportRequest"
+      responses:
+        "200":
+          description: Import applied.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [result]
+                properties:
+                  result:
+                    $ref: "#/components/schemas/BusinessCSVImportResult"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "413":
+          $ref: "#/components/responses/TooLargeError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /database/reset:
     post:
       operationId: resetDatabase
@@ -241,11 +346,11 @@ paths:
           application/json:
             schema:
               type: object
-              required: [id]
+              required: [code]
               properties:
-                id:
+                code:
                   type: string
-                  description: Account identifier.
+                  description: Account public code (its immutable handle).
       responses:
         "201":
           description: Account created.
@@ -264,12 +369,12 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
-  /accounts/{id}:
+  /accounts/{code}:
     parameters:
-      - $ref: "#/components/parameters/AccountID"
+      - $ref: "#/components/parameters/AccountCode"
     get:
       operationId: getAccount
-      summary: Get account detail and its relational limits
+      summary: Get account detail and its typed limit barriers
       tags: [accounts]
       responses:
         "200":
@@ -283,19 +388,34 @@ paths:
                   account:
                     $ref: "#/components/schemas/Account"
                   limits:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/Limit"
+                    $ref: "#/components/schemas/AccountLimits"
         "400":
           $ref: "#/components/responses/ValidationError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "500":
           $ref: "#/components/responses/InternalError"
+    delete:
+      operationId: deleteAccount
+      summary: Delete an account
+      tags: [accounts]
+      parameters:
+        - $ref: "#/components/parameters/ForceCascade"
+      responses:
+        "204":
+          description: Account deleted.
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/HasDependentsError"
+        "500":
+          $ref: "#/components/responses/InternalError"
 
-  /accounts/{id}/block:
+  /accounts/{code}/block:
     parameters:
-      - $ref: "#/components/parameters/AccountID"
+      - $ref: "#/components/parameters/AccountCode"
     post:
       operationId: blockAccount
       summary: Block an account
@@ -329,9 +449,9 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
-  /accounts/{id}/unblock:
+  /accounts/{code}/unblock:
     parameters:
-      - $ref: "#/components/parameters/AccountID"
+      - $ref: "#/components/parameters/AccountCode"
     post:
       operationId: unblockAccount
       summary: Unblock an account
@@ -360,9 +480,9 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
-  /accounts/{id}/group:
+  /accounts/{code}/group:
     parameters:
-      - $ref: "#/components/parameters/AccountID"
+      - $ref: "#/components/parameters/AccountCode"
     put:
       operationId: setAccountGroup
       summary: Set (or clear) account group membership
@@ -380,7 +500,7 @@ paths:
               properties:
                 group:
                   type: string
-                  description: Group identifier. Empty string clears membership.
+                  description: Group code. Empty string clears membership.
       responses:
         "200":
           description: Account after update.
@@ -399,9 +519,9 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
-  /accounts/{id}/notes:
+  /accounts/{code}/notes:
     parameters:
-      - $ref: "#/components/parameters/AccountID"
+      - $ref: "#/components/parameters/AccountCode"
     put:
       operationId: setAccountNotes
       summary: Set operator notes on an account
@@ -435,9 +555,9 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
-  /accounts/{id}/adjustments:
+  /accounts/{code}/adjustments:
     parameters:
-      - $ref: "#/components/parameters/AccountID"
+      - $ref: "#/components/parameters/AccountCode"
     get:
       operationId: listAccountAdjustments
       summary: List adjustments for an account
@@ -469,7 +589,10 @@ paths:
       description: >
         Runs the adjustment through the engine. A policy reject is a successful
         call: the rejected record is returned in the body with `status` =
-        `"rejected"`. HTTP errors indicate only system-level failures.
+        `"rejected"`. HTTP errors indicate only system-level failures. The request
+        may carry an optional `externalId`: when supplied it is used as-is and a
+        duplicate is rejected with 409; when omitted the server generates one and
+        returns it on the record.
       tags: [adjustments]
       requestBody:
         required: true
@@ -492,6 +615,8 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -530,13 +655,18 @@ paths:
           application/json:
             schema:
               type: object
-              required: [id]
+              required: [code]
               properties:
-                id:
+                code:
                   type: string
-                  description: Group identifier.
+                  description: Group public code (its immutable handle).
+                title:
+                  type: string
+                  maxLength: 256
+                  description: Mutable display title for the group.
                 notes:
                   type: string
+                  maxLength: 4096
                   description: Free-form operator notes stored on the group.
       responses:
         "201":
@@ -556,9 +686,9 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
-  /groups/{id}:
+  /groups/{code}:
     parameters:
-      - $ref: "#/components/parameters/GroupID"
+      - $ref: "#/components/parameters/GroupCode"
     get:
       operationId: getGroup
       summary: Get group detail and its member accounts
@@ -599,9 +729,9 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
-  /groups/{id}/notes:
+  /groups/{code}/notes:
     parameters:
-      - $ref: "#/components/parameters/GroupID"
+      - $ref: "#/components/parameters/GroupCode"
     put:
       operationId: setGroupNotes
       summary: Set operator notes on a group
@@ -635,9 +765,9 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
-  /groups/{id}/block:
+  /groups/{code}/block:
     parameters:
-      - $ref: "#/components/parameters/GroupID"
+      - $ref: "#/components/parameters/GroupCode"
     post:
       operationId: blockGroup
       summary: Block all accounts in a group
@@ -671,9 +801,9 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
-  /groups/{id}/unblock:
+  /groups/{code}/unblock:
     parameters:
-      - $ref: "#/components/parameters/GroupID"
+      - $ref: "#/components/parameters/GroupCode"
     post:
       operationId: unblockGroup
       summary: Unblock all accounts in a group
@@ -714,7 +844,7 @@ paths:
       parameters:
         - name: account
           in: query
-          description: Filter by account identifier.
+          description: Filter by account code.
           schema:
             type: string
         - name: asset
@@ -750,7 +880,7 @@ paths:
       parameters:
         - name: account
           in: query
-          description: Filter by account identifier.
+          description: Filter by account code.
           schema:
             type: string
         - $ref: "#/components/parameters/SourceFilter"
@@ -785,7 +915,7 @@ paths:
       parameters:
         - name: account
           in: query
-          description: Filter by account identifier.
+          description: Filter by account code.
           schema:
             type: string
         - $ref: "#/components/parameters/SourceFilter"
@@ -826,7 +956,7 @@ paths:
               properties:
                 account:
                   type: string
-                  description: Account identifier that owns the order.
+                  description: Account code that owns the order.
                 baseAsset:
                   type: string
                   description: Asset being bought or sold.
@@ -858,8 +988,6 @@ paths:
                     $ref: "#/components/schemas/Order"
         "400":
           $ref: "#/components/responses/ValidationError"
-        "404":
-          $ref: "#/components/responses/NotFoundError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -885,7 +1013,7 @@ paths:
               properties:
                 account:
                   type: string
-                  description: Account identifier to evaluate without mutation.
+                  description: Account code to evaluate without mutation.
                 baseAsset:
                   type: string
                   description: Asset being bought or sold.
@@ -922,16 +1050,19 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
-  /orders/{id}:
+  /orders/{externalId}:
     parameters:
-      - $ref: "#/components/parameters/OrderID"
+      - $ref: "#/components/parameters/OrderExternalId"
     get:
       operationId: getOrder
-      summary: Get an order with its lifecycle events and trades
+      summary: Get an order with its approval, lifecycle events, and trades
       tags: [orders]
       responses:
         "200":
-          description: Order, events, and trades.
+          description: >
+            Order, its events and trades, and its approval envelope. The
+            `approval` field is present only when the order has been signed and
+            is omitted entirely when the order is unsigned.
           content:
             application/json:
               schema:
@@ -948,6 +1079,11 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/Trade"
+                  approval:
+                    description: >
+                      Signed approval envelope. Present only when the order is
+                      signed; omitted entirely when unsigned.
+                    $ref: "#/components/schemas/OrderApproval"
         "400":
           $ref: "#/components/responses/ValidationError"
         "404":
@@ -955,9 +1091,9 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
-  /orders/{id}/execution-reports:
+  /orders/{externalId}/execution-reports:
     parameters:
-      - $ref: "#/components/parameters/OrderID"
+      - $ref: "#/components/parameters/OrderExternalId"
     post:
       operationId: applyExecutionReport
       summary: Apply an execution report (fill) to an order
@@ -1023,7 +1159,7 @@ paths:
       parameters:
         - name: account
           in: query
-          description: Filter by account identifier.
+          description: Filter by account code.
           schema:
             type: string
         - $ref: "#/components/parameters/SourceFilter"
@@ -1053,17 +1189,21 @@ paths:
   /limits:
     get:
       operationId: listLimits
-      summary: List risk limit barriers
+      summary: List typed risk limit barriers
+      description: >
+        Returns the typed limit barriers grouped by policy (rate, order-size,
+        and P&L-bounds). Barriers reference accounts by code; no surrogate or
+        engine id is involved.
       tags: [limits]
       parameters:
         - name: account
           in: query
-          description: Filter by account identifier.
+          description: Filter by account code.
           schema:
             type: string
       responses:
         "200":
-          description: Limit list.
+          description: Typed limit barriers grouped by policy.
           content:
             application/json:
               schema:
@@ -1071,39 +1211,7 @@ paths:
                 required: [limits]
                 properties:
                   limits:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/Limit"
-        "500":
-          $ref: "#/components/responses/InternalError"
-
-    put:
-      operationId: putLimit
-      summary: Upsert a risk limit barrier
-      tags: [limits]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/Limit"
-      responses:
-        "200":
-          description: Normalized form of the stored limit.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [limit]
-                properties:
-                  limit:
-                    $ref: "#/components/schemas/Limit"
-        "400":
-          $ref: "#/components/responses/ValidationError"
-        "501":
-          $ref: "#/components/responses/NotImplementedError"
-        "503":
-          $ref: "#/components/responses/EngineRestartingError"
+                    $ref: "#/components/schemas/AccountLimits"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -1115,18 +1223,19 @@ paths:
         - name: policy
           in: query
           required: true
-          description: Risk policy name whose barrier should be deleted.
+          description: Risk policy whose barrier should be deleted.
           schema:
             type: string
+            enum: [rate_limit, order_size_limit, pnl_bounds_kill_switch]
         - name: scope
           in: query
           required: true
           description: Policy scope discriminator of the barrier to delete.
           schema:
-            type: string
+            $ref: "#/components/schemas/LimitScope"
         - name: account
           in: query
-          description: Account-scoped barrier owner, or omit for a global barrier.
+          description: Account-scoped barrier owner code, or omit for a global barrier.
           schema:
             type: string
         - name: asset
@@ -1141,6 +1250,99 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "503":
+          $ref: "#/components/responses/EngineRestartingError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /limits/rate:
+    put:
+      operationId: putRateLimit
+      summary: Upsert a rate-limit barrier
+      tags: [limits]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RateLimit"
+      responses:
+        "200":
+          description: Normalized form of the stored rate-limit barrier.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [rateLimit]
+                properties:
+                  rateLimit:
+                    $ref: "#/components/schemas/RateLimit"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
+        "503":
+          $ref: "#/components/responses/EngineRestartingError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /limits/order-size:
+    put:
+      operationId: putOrderSizeLimit
+      summary: Upsert an order-size barrier
+      tags: [limits]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrderSizeLimit"
+      responses:
+        "200":
+          description: Normalized form of the stored order-size barrier.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [orderSizeLimit]
+                properties:
+                  orderSizeLimit:
+                    $ref: "#/components/schemas/OrderSizeLimit"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
+        "503":
+          $ref: "#/components/responses/EngineRestartingError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /limits/pnl-bounds:
+    put:
+      operationId: putPnlBoundsLimit
+      summary: Upsert a P&L-bounds kill-switch barrier
+      tags: [limits]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PnlBoundsLimit"
+      responses:
+        "200":
+          description: Normalized form of the stored P&L-bounds barrier.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [pnlBoundsLimit]
+                properties:
+                  pnlBoundsLimit:
+                    $ref: "#/components/schemas/PnlBoundsLimit"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "501":
+          $ref: "#/components/responses/NotImplementedError"
         "503":
           $ref: "#/components/responses/EngineRestartingError"
         "500":
@@ -1167,7 +1369,7 @@ paths:
       parameters:
         - name: account
           in: query
-          description: Filter by account identifier.
+          description: Filter by account code.
           schema:
             type: string
         - name: source
@@ -1361,6 +1563,310 @@ paths:
           $ref: "#/components/responses/InternalError"
 
   # ---------------------------------------------------------------------------
+  # Signing keys and approval token flow
+  # ---------------------------------------------------------------------------
+
+  /signing/keys/generate:
+    post:
+      operationId: generateSigningKey
+      summary: Generate a fresh Ed25519 signing key and make it active
+      description: >
+        Generates a fresh Ed25519 keypair, makes it the sole active signing key,
+        and returns it without private material.
+      tags: [signing]
+      responses:
+        "201":
+          description: The generated signing key (no private material).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [key]
+                properties:
+                  key:
+                    $ref: "#/components/schemas/SigningKey"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /signing/keys/import:
+    post:
+      operationId: importSigningKey
+      summary: Import an Ed25519 signing key and make it active
+      tags: [signing]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key, format]
+              properties:
+                key:
+                  type: string
+                  description: Raw key material in the given format. Write-only.
+                format:
+                  type: string
+                  description: Key material format.
+                  enum: [pem-pkcs8, openssh, raw-base64]
+      responses:
+        "201":
+          description: The imported signing key (no private material).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [key]
+                properties:
+                  key:
+                    $ref: "#/components/schemas/SigningKey"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /signing/keys:
+    get:
+      operationId: listSigningKeys
+      summary: List all signing keys, including inactive ones
+      description: >
+        Returns every signing key, including inactive ones, so connectors can
+        verify in-flight tokens. Private material is never returned.
+      tags: [signing]
+      responses:
+        "200":
+          description: Signing key list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [keys]
+                properties:
+                  keys:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SigningKey"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /signing/keys/active/public:
+    get:
+      operationId: getActivePublicKey
+      summary: Export the active signing key's public key
+      tags: [signing]
+      parameters:
+        - name: format
+          in: query
+          required: false
+          description: Export format. Defaults to `pem-pkcs8`.
+          schema:
+            type: string
+            enum: [pem-pkcs8, openssh, raw-base64]
+            default: pem-pkcs8
+      responses:
+        "200":
+          description: The active public key in the requested format.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicKey"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /signing/config:
+    get:
+      operationId: getSigningConfig
+      summary: Read the signing configuration
+      tags: [signing]
+      responses:
+        "200":
+          description: Current signing configuration.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SigningConfig"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: setSigningConfig
+      summary: Update the signing configuration
+      tags: [signing]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SigningConfig"
+      responses:
+        "200":
+          description: Configuration persisted; returns the stored state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SigningConfig"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /orders/submit:
+    post:
+      operationId: submitOrderToken
+      summary: Create and submit an order for approval, issuing a signed token
+      description: >
+        Submit CREATES the order exactly once from the request body: there is no
+        separate persisting create beforehand. It runs the engine pre-trade in
+        the given mode and records the order, then issues a signed approval token
+        on accept. `externalId` is optional: when supplied it is used as-is and a
+        duplicate is rejected with 409; when omitted the server generates one. The
+        returned `orderExternalId` is the id actually used, so confirm/cancel
+        resolve the same order.
+      tags: [signing]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [account, baseAsset, quoteAsset, side, amountKind, amountValue]
+              properties:
+                externalId:
+                  $ref: "#/components/schemas/ExternalId"
+                  description: >
+                    Optional caller-supplied opaque external id (22-char
+                    base64url, no padding). When omitted the server generates and
+                    returns one. A malformed value is a 400; a duplicate is a 409.
+                    Never a surrogate or engine id.
+                account:
+                  type: string
+                  description: Account code that owns the order.
+                baseAsset:
+                  type: string
+                  description: Asset being bought or sold.
+                quoteAsset:
+                  type: string
+                  description: Asset used for pricing and settlement.
+                side:
+                  type: string
+                  description: "`buy` or `sell`."
+                amountKind:
+                  type: string
+                  description: "Kind of amount - e.g. `base` or `quote`."
+                amountValue:
+                  type: string
+                  description: Exact decimal string.
+                price:
+                  type: string
+                  description: Exact decimal string. Omit for market orders.
+                mode:
+                  type: string
+                  description: Submit mode. Defaults to `immediate`.
+                  enum: [immediate, hold]
+      responses:
+        "201":
+          description: Order created and approval token issued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApprovalToken"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /orders/{externalId}/confirm:
+    parameters:
+      - $ref: "#/components/parameters/OrderExternalId"
+    post:
+      operationId: confirmExecution
+      summary: Confirm a held order with its approval token
+      description: >
+        Verifies the approval token and commits the held reservation.
+      tags: [signing]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token:
+                  type: string
+                  description: Approval token issued by submit.
+                force:
+                  type: boolean
+                  description: Bypass Officer's safety checks and route straight to the engine.
+      responses:
+        "200":
+          description: Order after confirmation.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [order]
+                properties:
+                  order:
+                    $ref: "#/components/schemas/Order"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /orders/{externalId}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/OrderExternalId"
+    post:
+      operationId: cancelOrder
+      summary: Cancel a held order with its approval token
+      description: >
+        Verifies the approval token and rolls back the held reservation.
+      tags: [signing]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token:
+                  type: string
+                  description: Approval token issued by submit.
+                reason:
+                  type: string
+                  description: Optional human-readable cancellation reason.
+                force:
+                  type: boolean
+                  description: Bypass Officer's safety checks and route straight to the engine.
+      responses:
+        "200":
+          description: Order after cancellation.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [order]
+                properties:
+                  order:
+                    $ref: "#/components/schemas/Order"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ---------------------------------------------------------------------------
   # Market data
   # ---------------------------------------------------------------------------
 
@@ -1419,15 +1925,15 @@ paths:
               $ref: "#/components/schemas/MarketDataInstanceCreate"
       responses:
         "201":
-          description: Instance created; returns the refreshed market-data snapshot.
+          description: Instance created; returns the persisted instance.
           content:
             application/json:
               schema:
                 type: object
-                required: [marketData]
+                required: [instance]
                 properties:
-                  marketData:
-                    $ref: "#/components/schemas/MarketData"
+                  instance:
+                    $ref: "#/components/schemas/MarketDataInstance"
         "400":
           $ref: "#/components/responses/ValidationError"
         "409":
@@ -1437,12 +1943,7 @@ paths:
 
   /market-data/instances/{id}/enabled:
     parameters:
-      - name: id
-        in: path
-        required: true
-        description: URL-encoded market-data instance identifier.
-        schema:
-          type: string
+      - $ref: "#/components/parameters/MarketDataInstanceId"
     put:
       operationId: setMarketDataInstanceEnabled
       summary: Enable or disable a market-data source instance
@@ -1478,12 +1979,7 @@ paths:
 
   /market-data/instances/{id}/settings:
     parameters:
-      - name: id
-        in: path
-        required: true
-        description: URL-encoded market-data instance identifier.
-        schema:
-          type: string
+      - $ref: "#/components/parameters/MarketDataInstanceId"
     put:
       operationId: updateMarketDataInstanceSettings
       summary: Update market-data source connection settings
@@ -1516,16 +2012,13 @@ paths:
 
   /market-data/instances/{id}:
     parameters:
-      - name: id
-        in: path
-        required: true
-        description: URL-encoded market-data instance identifier.
-        schema:
-          type: string
+      - $ref: "#/components/parameters/MarketDataInstanceId"
     delete:
       operationId: deleteMarketDataInstance
       summary: Delete a market-data source instance
       tags: [market-data]
+      parameters:
+        - $ref: "#/components/parameters/ForceCascade"
       responses:
         "204":
           description: Instance deleted.
@@ -1533,17 +2026,14 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/HasDependentsError"
         "500":
           $ref: "#/components/responses/InternalError"
 
   /market-data/instances/{id}/verify-symbol:
     parameters:
-      - name: id
-        in: path
-        required: true
-        description: URL-encoded market-data instance identifier.
-        schema:
-          type: string
+      - $ref: "#/components/parameters/MarketDataInstanceId"
     post:
       operationId: verifyMarketDataSymbol
       summary: Verify one provider-side market-data symbol
@@ -1576,12 +2066,7 @@ paths:
 
   /market-data/instances/{id}/search-symbols:
     parameters:
-      - name: id
-        in: path
-        required: true
-        description: URL-encoded market-data instance identifier.
-        schema:
-          type: string
+      - $ref: "#/components/parameters/MarketDataInstanceId"
     post:
       operationId: searchMarketDataSymbols
       summary: Search provider-side market-data symbols
@@ -1610,12 +2095,7 @@ paths:
 
   /market-data/instances/{id}/instruments:
     parameters:
-      - name: id
-        in: path
-        required: true
-        description: URL-encoded market-data instance identifier.
-        schema:
-          type: string
+      - $ref: "#/components/parameters/MarketDataInstanceId"
     put:
       operationId: upsertMarketDataInstrument
       summary: Add or replace one market-data instrument mapping
@@ -1664,12 +2144,7 @@ paths:
 
   /market-data/instances/{id}/instruments/enabled:
     parameters:
-      - name: id
-        in: path
-        required: true
-        description: URL-encoded market-data instance identifier.
-        schema:
-          type: string
+      - $ref: "#/components/parameters/MarketDataInstanceId"
     put:
       operationId: setMarketDataInstrumentEnabled
       summary: Enable or disable one market-data instrument mapping
@@ -1799,30 +2274,39 @@ components:
   # ---------------------------------------------------------------------------
 
   parameters:
-    AccountID:
-      name: id
+    AccountCode:
+      name: code
       in: path
       required: true
-      description: URL-encoded account identifier.
+      description: URL-encoded account public code.
       schema:
         type: string
 
-    GroupID:
-      name: id
+    GroupCode:
+      name: code
       in: path
       required: true
-      description: URL-encoded group identifier.
+      description: URL-encoded group public code.
       schema:
         type: string
 
-    OrderID:
+    OrderExternalId:
+      name: externalId
+      in: path
+      required: true
+      description: The order's opaque 22-char base64url public handle (its external id).
+      schema:
+        $ref: "#/components/schemas/ExternalId"
+
+    MarketDataInstanceId:
       name: id
       in: path
       required: true
-      description: Integer order identifier.
+      description: >
+        URL-encoded market-data instance external id - the instance's opaque
+        22-char base64url public handle, never a surrogate or engine id.
       schema:
-        type: integer
-        format: int64
+        $ref: "#/components/schemas/ExternalId"
 
     SourceFilter:
       name: source
@@ -1831,6 +2315,14 @@ components:
       schema:
         type: string
         enum: [panel, api, mcp, system]
+
+    ForceCascade:
+      name: force
+      in: query
+      description: Allow application-approved cascade deletion of dependent rows.
+      schema:
+        type: boolean
+        default: false
 
     LimitParam:
       name: limit
@@ -1867,6 +2359,13 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
 
+    HasDependentsError:
+      description: Delete would remove dependent rows without force.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/HasDependentsError"
+
     UpstreamError:
       description: Upstream provider request failed.
       content:
@@ -1895,11 +2394,29 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
 
+    TooLargeError:
+      description: Import payload exceeds the server-side size limit.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
   # ---------------------------------------------------------------------------
   # Schemas
   # ---------------------------------------------------------------------------
 
   schemas:
+
+    # Shared identity
+
+    ExternalId:
+      type: string
+      minLength: 22
+      maxLength: 22
+      pattern: "^[A-Za-z0-9_-]{22}$"
+      description: >
+        Opaque 22-char base64url public handle. No surrogate or engine id is
+        ever exposed.
 
     # Error envelope
 
@@ -1915,12 +2432,174 @@ components:
               type: string
               description: >
                 Machine-readable code: `validation`, `not_found`, `conflict`,
-                `terminal_order`, `precondition`, `engine_restarting`,
-                `not_implemented`, or `internal`.
+                `has_dependents`, `terminal_order`, `precondition`, `too_large`,
+                `engine_restarting`, `not_implemented`, or `internal`.
               example: not_found
             message:
               type: string
               example: account not found
+
+    DependentCount:
+      type: object
+      required: [kind, count]
+      properties:
+        kind:
+          type: string
+          description: Dependent row category.
+        count:
+          type: integer
+          minimum: 0
+          description: Number of dependent rows in this category.
+
+    HasDependentsError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, dependents]
+          properties:
+            code:
+              type: string
+              enum: [has_dependents]
+            message:
+              type: string
+              example: has dependents
+            dependents:
+              type: array
+              items:
+                $ref: "#/components/schemas/DependentCount"
+
+    # Business CSV
+
+    BusinessCSVEntity:
+      type: string
+      enum: [account_groups, accounts, positions, orders, trades]
+
+    BusinessCSVImportEntity:
+      type: string
+      enum: [account_groups, accounts, positions]
+
+    BusinessCSVDelimiter:
+      type: string
+      enum: [comma, semicolon, tab, pipe]
+
+    BusinessCSVConflictPolicy:
+      type: string
+      enum: [skip, replace, stop]
+
+    BusinessCSVExportFilters:
+      type: object
+      properties:
+        groupCode:
+          type: [string, "null"]
+          description: >
+            Accounts export group filter. Omit or use null to export all
+            accounts; use "" to export the default/no-group bucket; use a
+            non-empty group code to export that group.
+        account:
+          type: string
+          description: Accounts, positions, orders, and trades account filter.
+        asset:
+          type: string
+          description: Positions asset filter.
+        source:
+          type: string
+          enum: [panel, api, mcp, system]
+          description: Orders and trades source filter.
+
+    BusinessCSVExportRequest:
+      type: object
+      required: [entity, delimiter]
+      properties:
+        entity:
+          $ref: "#/components/schemas/BusinessCSVEntity"
+        delimiter:
+          $ref: "#/components/schemas/BusinessCSVDelimiter"
+        zip:
+          type: boolean
+          description: Return a ZIP with one CSV entry, using best compression.
+        filters:
+          $ref: "#/components/schemas/BusinessCSVExportFilters"
+
+    BusinessCSVImportPreviewRequest:
+      type: object
+      required: [entity, delimiter, filename, payloadBase64]
+      properties:
+        entity:
+          $ref: "#/components/schemas/BusinessCSVImportEntity"
+        delimiter:
+          $ref: "#/components/schemas/BusinessCSVDelimiter"
+        filename:
+          type: string
+          description: Original uploaded filename; `.zip` triggers ZIP decoding.
+        payloadBase64:
+          type: string
+          format: byte
+          description: Base64-encoded CSV or ZIP payload.
+
+    BusinessCSVImportRequest:
+      allOf:
+        - $ref: "#/components/schemas/BusinessCSVImportPreviewRequest"
+        - type: object
+          required: [conflictPolicy]
+          properties:
+            conflictPolicy:
+              $ref: "#/components/schemas/BusinessCSVConflictPolicy"
+
+    BusinessCSVImportFile:
+      type: object
+      required: [name, type]
+      properties:
+        name:
+          type: string
+          description: Plain filename or selected ZIP entry name.
+        type:
+          type: string
+          enum: [csv, zip]
+
+    BusinessCSVConflict:
+      type: object
+      required: [row, key]
+      properties:
+        row:
+          type: integer
+          description: One-based CSV row number including the header row.
+        key:
+          type: string
+          description: Conflicting business key.
+
+    BusinessCSVImportCounts:
+      type: object
+      required: [rows, applied, skipped, conflicts, stopped]
+      properties:
+        rows:
+          type: integer
+        applied:
+          type: integer
+        skipped:
+          type: integer
+        conflicts:
+          type: integer
+        stopped:
+          type: boolean
+
+    BusinessCSVImportPreview:
+      type: object
+      required: [file, counts, conflicts]
+      properties:
+        file:
+          $ref: "#/components/schemas/BusinessCSVImportFile"
+        counts:
+          $ref: "#/components/schemas/BusinessCSVImportCounts"
+        conflicts:
+          type: array
+          items:
+            $ref: "#/components/schemas/BusinessCSVConflict"
+
+    BusinessCSVImportResult:
+      allOf:
+        - $ref: "#/components/schemas/BusinessCSVImportPreview"
 
     # Backup / restore
 
@@ -1948,12 +2627,12 @@ components:
           description: Select every entity in the selector's category.
         accounts:
           type: array
-          description: Account identifiers to include.
+          description: Account codes to include.
           items:
             type: string
         groups:
           type: array
-          description: Group identifiers to include.
+          description: Group codes to include.
           items:
             type: string
 
@@ -1986,20 +2665,24 @@ components:
           description: Serialized backup payload grouped by table family.
           $ref: "#/components/schemas/BackupData"
 
+    RealmLabel:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+          description: Realm public code.
+        title:
+          type: string
+          description: Optional human-readable realm title.
+
     BackupManifest:
       type: object
-      required: [format, formatVersion, schemaVersion, createdAt, sections]
+      required: [formatVersion, createdAt, realm, sections]
       properties:
-        format:
-          type: string
-          description: Backup archive format identifier.
-          enum: [openpit.officer.backup]
         formatVersion:
           type: integer
-          description: Archive format version used by restore migrations.
-        schemaVersion:
-          type: integer
-          description: Source database schema version.
+          description: Backup archive format version required for restore.
         createdAt:
           type: string
           format: date-time
@@ -2007,6 +2690,9 @@ components:
         source:
           type: string
           description: Source service or deployment that produced the archive.
+        realm:
+          description: Realm the archive was produced for.
+          $ref: "#/components/schemas/RealmLabel"
         sections:
           type: array
           description: Backup sections present in the archive data.
@@ -2153,13 +2839,17 @@ components:
 
     Account:
       type: object
-      required: [id, group, notes, blocked, blockReason]
+      required: [code, title, group, notes, blocked, blockReason]
       properties:
-        id:
+        code:
           type: string
+          description: Account public code (its immutable handle).
+        title:
+          type: string
+          description: Mutable display name.
         group:
           type: string
-          description: Group identifier, or empty string when not in a group.
+          description: Group code, or empty string when not in a group.
         notes:
           type: string
         blocked:
@@ -2172,10 +2862,14 @@ components:
 
     Group:
       type: object
-      required: [id, notes, blocked, blockReason]
+      required: [code, title, notes, blocked, blockReason]
       properties:
-        id:
+        code:
           type: string
+          description: Group public code (its immutable handle).
+        title:
+          type: string
+          description: Mutable display title.
         notes:
           type: string
         blocked:
@@ -2187,7 +2881,7 @@ components:
 
     Balance:
       type: object
-      required: [account, asset, available, held, incoming, averageEntryPrice, updatedAt]
+      required: [account, asset, available, held, incoming, realizedPnl, averageEntryPrice, updatedAt]
       properties:
         account:
           type: string
@@ -2201,6 +2895,9 @@ components:
           type: string
           description: Exact decimal string.
         incoming:
+          type: string
+          description: Exact decimal string.
+        realizedPnl:
           type: string
           description: Exact decimal string.
         averageEntryPrice:
@@ -2237,6 +2934,13 @@ components:
       type: object
       required: [asset]
       properties:
+        externalId:
+          $ref: "#/components/schemas/ExternalId"
+          description: >
+            Optional caller-supplied opaque external id for the adjustment record
+            (22-char base64url, no padding). Write-only on create: when omitted the
+            server generates one and returns it under the record's `externalId`. A
+            malformed value is a 400; a duplicate is a 409. Never a surrogate id.
         asset:
           type: string
           description: Asset whose spot-funds balances are adjusted.
@@ -2337,16 +3041,20 @@ components:
 
     Adjustment:
       type: object
-      required: [id, at, account, source, status, request, outcome]
+      required: [externalId, at, account, source, status, request, outcome]
       properties:
-        id:
-          type: integer
-          format: int64
+        externalId:
+          description: The adjustment's opaque public handle.
+          $ref: "#/components/schemas/ExternalId"
         at:
           type: string
           format: date-time
         account:
           type: string
+          description: Account code the adjustment applied to.
+        principal:
+          type: string
+          description: Principal that performed the adjustment; omitted when absent.
         source:
           type: string
           description: "Originating surface: `panel`, `api`, `mcp`, or `system`."
@@ -2364,16 +3072,20 @@ components:
 
     Order:
       type: object
-      required: [id, at, account, baseAsset, quoteAsset, side, amountKind, amountValue, price, status, source, lockPrices]
+      required: [externalId, at, account, baseAsset, quoteAsset, side, amountKind, amountValue, price, status, source, displayPrices]
       properties:
-        id:
-          type: integer
-          format: int64
+        externalId:
+          description: The order's opaque public handle.
+          $ref: "#/components/schemas/ExternalId"
         at:
           type: string
           format: date-time
         account:
           type: string
+          description: Account code that owns the order.
+        principal:
+          type: string
+          description: Principal that placed the order; omitted when absent.
         baseAsset:
           type: string
         quoteAsset:
@@ -2394,24 +3106,61 @@ components:
           type: string
           description: "Originating surface: `panel`, `api`, `mcp`, or `system`."
           enum: [panel, api, mcp, system]
-        lockPrices:
+        displayPrices:
           type: array
           items:
             type: string
-          description: Lock prices used for fund reservation - exact decimal strings.
+          description: >
+            Human-readable reservation lock prices derived from the opaque lock
+            (settlement leg last) - exact decimal strings. The raw lock blob is
+            never exposed.
+
+    # Order approval
+
+    OrderApproval:
+      type: object
+      required: [token, keyId, alg, mode, issuedAt, expiresAt, signed]
+      description: >
+        An order's persisted signed approval envelope. No surrogate or engine id
+        is present.
+      properties:
+        token:
+          type: string
+          description: The exact base64url approval envelope bytes.
+        keyId:
+          type: string
+          description: Identifier of the signing key that produced the envelope.
+        alg:
+          type: string
+          description: >
+            Envelope algorithm: `ed25519` for a signed approval, `none` for an
+            eSign-off envelope.
+          enum: [ed25519, none]
+        mode:
+          type: string
+          description: Submit mode the approval was issued for.
+        issuedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        signed:
+          type: boolean
+          description: Whether the envelope carries an Ed25519 signature (alg `ed25519`).
 
     # Order event
 
     OrderEvent:
       type: object
-      required: [id, orderId, at, type, source]
+      required: [externalId, order, at, type, source]
       properties:
-        id:
-          type: integer
-          format: int64
-        orderId:
-          type: integer
-          format: int64
+        externalId:
+          description: The event's opaque public handle.
+          $ref: "#/components/schemas/ExternalId"
+        order:
+          description: The parent order's opaque public handle.
+          $ref: "#/components/schemas/ExternalId"
         at:
           type: string
           format: date-time
@@ -2420,6 +3169,9 @@ components:
         source:
           type: string
           enum: [panel, api, mcp, system]
+        principal:
+          type: string
+          description: Principal that caused the event; omitted when absent.
         rejectCode:
           type: string
           description: Present on rejected events and account-blocking fill events.
@@ -2449,19 +3201,23 @@ components:
 
     Trade:
       type: object
-      required: [id, orderId, at, account, baseAsset, quoteAsset, side, quantity, price, lockPrice, source]
+      required: [externalId, order, at, account, baseAsset, quoteAsset, side, quantity, price, lockPrice, source]
       properties:
-        id:
-          type: integer
-          format: int64
-        orderId:
-          type: integer
-          format: int64
+        externalId:
+          description: The trade's opaque public handle.
+          $ref: "#/components/schemas/ExternalId"
+        order:
+          description: The originating order's opaque public handle.
+          $ref: "#/components/schemas/ExternalId"
         at:
           type: string
           format: date-time
         account:
           type: string
+          description: Account code that owns the trade.
+        principal:
+          type: string
+          description: Principal that caused the trade; omitted when absent.
         baseAsset:
           type: string
         quoteAsset:
@@ -2500,7 +3256,7 @@ components:
 
     CheckResult:
       type: object
-      required: [passed, rejects, wouldLockPrices, wouldBlock]
+      required: [passed, rejects, wouldDisplayPrices, wouldBlock]
       properties:
         passed:
           type: boolean
@@ -2510,11 +3266,13 @@ components:
           items:
             $ref: "#/components/schemas/OrderReject"
           description: Engine pre-trade rejects; empty when the check passed.
-        wouldLockPrices:
+        wouldDisplayPrices:
           type: array
           items:
             type: string
-          description: Reservation lock prices the order would lock - exact decimal strings.
+          description: >
+            Human-readable reservation lock prices the order would lock - exact
+            decimal strings, never the opaque lock blob.
         wouldBlock:
           nullable: true
           allOf:
@@ -2554,50 +3312,124 @@ components:
             legs, so each outcome is tagged with its own asset (the base asset
             bought and the quote asset spent).
 
-    # Limit
+    # Limits (typed barriers)
 
-    Limit:
+    LimitScope:
+      type: string
+      description: >
+        Policy scope discriminator: `broker` (global), `asset`, `account`, or
+        `account_asset`.
+      enum: [broker, asset, account, account_asset]
+
+    RateLimit:
       type: object
-      required: [policy, scope, account, asset, values]
+      required: [scope, account, asset, windowMs, maxOrders]
       properties:
-        policy:
-          type: string
-          description: Risk policy name (e.g. `rate_limit`, `order_size_limit`).
         scope:
-          type: string
-          description: Policy scope discriminator.
+          $ref: "#/components/schemas/LimitScope"
         account:
           type: string
-          description: Account this limit applies to, or empty for a global limit.
+          description: Account code this barrier applies to, or empty for a global barrier.
         asset:
           type: string
-          description: Asset this limit applies to, or empty when not asset-scoped.
-        values:
-          type: object
-          additionalProperties:
-            type: string
-          description: Policy-specific key/value pairs with exact decimal strings.
+          description: Asset this barrier applies to, or empty when not asset-scoped.
+        windowMs:
+          type: integer
+          format: int64
+          description: Rolling rate-limit window in milliseconds.
+        maxOrders:
+          type: integer
+          minimum: 1
+          maximum: 1000000000
+          description: Maximum orders permitted within the window.
+
+    OrderSizeLimit:
+      type: object
+      required: [scope, account, asset, maxQuantity, maxNotional]
+      properties:
+        scope:
+          $ref: "#/components/schemas/LimitScope"
+        account:
+          type: string
+          description: Account code this barrier applies to, or empty for a global barrier.
+        asset:
+          type: string
+          description: Asset this barrier applies to, or empty when not asset-scoped.
+        maxQuantity:
+          type: string
+          description: Maximum order quantity - exact decimal string; empty when unset.
+        maxNotional:
+          type: string
+          description: Maximum order notional - exact decimal string; empty when unset.
+
+    PnlBoundsLimit:
+      type: object
+      required: [scope, account, asset, lowerBound, upperBound, initialPnl]
+      properties:
+        scope:
+          $ref: "#/components/schemas/LimitScope"
+        account:
+          type: string
+          description: Account code this barrier applies to, or empty for a global barrier.
+        asset:
+          type: string
+          description: Asset this barrier applies to, or empty when not asset-scoped.
+        lowerBound:
+          type: string
+          description: Lower P&L bound - exact decimal string; empty when unset.
+        upperBound:
+          type: string
+          description: Upper P&L bound - exact decimal string; empty when unset.
+        initialPnl:
+          type: string
+          description: Seed P&L value - exact decimal string; empty when unset.
+
+    AccountLimits:
+      type: object
+      required: [rateLimits, orderSizeLimits, pnlBoundsLimits]
+      properties:
+        rateLimits:
+          type: array
+          description: Rate-limit barriers (always a non-null array).
+          items:
+            $ref: "#/components/schemas/RateLimit"
+        orderSizeLimits:
+          type: array
+          description: Order-size barriers (always a non-null array).
+          items:
+            $ref: "#/components/schemas/OrderSizeLimit"
+        pnlBoundsLimits:
+          type: array
+          description: P&L-bounds kill-switch barriers (always a non-null array).
+          items:
+            $ref: "#/components/schemas/PnlBoundsLimit"
 
     # Audit
 
     AuditEntry:
       type: object
-      required: [id, at, actor, action, account, detail, source]
+      required: [externalId, at, actor, actorTitle, action, account, accountTitle, detail, source]
       properties:
-        id:
-          type: integer
-          format: int64
+        externalId:
+          description: The audit row's opaque public handle.
+          $ref: "#/components/schemas/ExternalId"
         at:
           type: string
           format: date-time
         actor:
           type: string
           description: Principal that performed the action.
+        actorTitle:
+          type: string
+          description: Principal title captured when the audit row was written.
         action:
           type: string
         account:
           type: string
           description: Account the action applied to, or empty for global actions.
+        accountTitle:
+          type: string
+          description: Account title captured when the audit row was written.
         detail:
           type: string
         source:
@@ -2689,10 +3521,13 @@ components:
 
     Service:
       type: object
-      required: [name, engineBuildProfile, release, database]
+      required: [name, engineVersion, engineBuildProfile, release, database]
       properties:
         name:
           type: string
+        engineVersion:
+          type: string
+          description: Engine library version string.
         engineBuildProfile:
           type: string
         release:
@@ -2762,11 +3597,18 @@ components:
 
     MarketDataInstanceCreate:
       type: object
-      required: [type, enabled]
+      required: [provider, enabled]
       properties:
-        type:
+        externalId:
+          $ref: "#/components/schemas/ExternalId"
+          description: >
+            Optional caller-supplied opaque external id for the instance (22-char
+            base64url, no padding). When omitted the server generates one and
+            returns it in the instance's `externalId`. A malformed value is a 400;
+            a duplicate is a 409. Never a surrogate id.
+        provider:
           type: string
-          description: Provider type identifier. The service assigns the internal instance id.
+          description: Provider discriminator.
           enum: [ib, binance, kraken, coinbase, alpaca, okx, bybit, oanda, finnhub, byo, mock]
         label:
           type: string
@@ -2795,8 +3637,8 @@ components:
       type: object
       required:
         [
-          id,
-          type,
+          externalId,
+          provider,
           label,
           credentials,
           state,
@@ -2805,12 +3647,12 @@ components:
           searchesSymbols,
         ]
       properties:
-        id:
+        externalId:
+          description: The instance's opaque public handle.
+          $ref: "#/components/schemas/ExternalId"
+        provider:
           type: string
-          description: Market-data source instance identifier.
-        type:
-          type: string
-          description: Provider type identifier.
+          description: Provider discriminator.
           enum:
             - ib
             - binance
@@ -2861,14 +3703,80 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/MarketDataInstrument"
+        references:
+          description: Provider documentation and symbol catalogue links.
+          $ref: "#/components/schemas/MarketDataReferences"
+        diagnostics:
+          type: array
+          description: Operator-facing diagnostics for this instance.
+          items:
+            $ref: "#/components/schemas/MarketDataDiagnostic"
+
+    MarketDataReferences:
+      type: object
+      properties:
+        docsUrl:
+          type: string
+          description: URL to provider documentation.
+        symbolsUrl:
+          type: string
+          description: URL to a provider symbol catalogue.
+
+    MarketDataDiagnostic:
+      type: object
+      required: [level, code, kind, title, detail, at]
+      properties:
+        level:
+          type: string
+          description: Severity level (e.g. `info`, `warn`, `error`).
+        code:
+          type: string
+          description: Machine-readable diagnostic code.
+        kind:
+          type: string
+          description: Diagnostic category.
+        title:
+          type: string
+          description: Short operator-facing summary.
+        detail:
+          type: string
+          description: Full operator-facing description.
+        remediation:
+          type: string
+          description: Suggested remediation steps.
+        instrument:
+          type: string
+          description: Affected instrument symbol, if applicable.
+        actions:
+          type: array
+          description: Suggested operator actions.
+          items:
+            $ref: "#/components/schemas/MarketDataDiagnosticAction"
+        at:
+          type: string
+          format: date-time
+          description: When the diagnostic was recorded.
+
+    MarketDataDiagnosticAction:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          description: Action discriminator.
+        target:
+          type: string
+          description: Action target identifier.
 
     MarketDataInstrument:
       type: object
       required: [externalSymbol, baseAsset, quoteAsset, manualPrice, enabled]
       properties:
-        instanceId:
-          type: string
-          description: Present on read responses; the path id is authoritative on writes.
+        instanceExternalId:
+          description: >
+            The owning instance's opaque public handle. Present on read
+            responses; omitted in request bodies (the path id is authoritative).
+          $ref: "#/components/schemas/ExternalId"
         externalSymbol:
           type: string
           description: Provider-side instrument symbol.
@@ -3049,3 +3957,62 @@ components:
           description: >
             Effective enabled state: the stored override when present, otherwise
             the catalogue default.
+
+    # Signing keys and approval token
+
+    SigningKey:
+      type: object
+      required: [keyId, alg, createdAt, fingerprint, active]
+      description: One Ed25519 signing key entry. Private material is never present.
+      properties:
+        keyId:
+          type: string
+          description: Identifier of the signing key.
+        alg:
+          type: string
+          description: Key algorithm.
+        createdAt:
+          type: string
+          format: date-time
+        fingerprint:
+          type: string
+          description: First 8 bytes of the SHA-256 of the public key, hex-encoded.
+        active:
+          type: boolean
+          description: Whether this is the active signing key.
+
+    SigningConfig:
+      type: object
+      required: [noESign]
+      properties:
+        noESign:
+          type: boolean
+          description: Whether the global eSign-off flag is set.
+
+    PublicKey:
+      type: object
+      required: [publicKey]
+      properties:
+        publicKey:
+          type: string
+          description: The active signing key's public key in the requested format.
+
+    ApprovalToken:
+      type: object
+      required: [token, keyId, expiresAt, orderExternalId]
+      description: >
+        The approval token issued for an order submit. The authorised order is
+        referenced by its opaque external id, never a surrogate id.
+      properties:
+        token:
+          type: string
+          description: The base64url approval token.
+        keyId:
+          type: string
+          description: Identifier of the signing key that produced the token.
+        expiresAt:
+          type: string
+          format: date-time
+        orderExternalId:
+          description: The authorised order's opaque public handle.
+          $ref: "#/components/schemas/ExternalId"
