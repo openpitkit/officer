@@ -17,9 +17,9 @@
 
 import { useCallback } from "react";
 
-import { fetchTrades } from "@/api/client";
 import type { Trade } from "@/api/types";
 import { usePolling, type PollingResult } from "@/api/usePolling";
+import { useOfficerApi } from "@/framework";
 
 /** Poll GET /trades, optionally filtered by account and/or source. */
 export function useTrades(
@@ -27,9 +27,11 @@ export function useTrades(
   source?: string,
   limit?: number,
 ): PollingResult<Trade[]> {
+  const api = useOfficerApi();
   const fetcher = useCallback(
-    (signal: AbortSignal) => fetchTrades({ account, source, limit }, signal),
-    [account, source, limit],
+    (signal: AbortSignal) =>
+      api.fetchTrades({ account, source, limit }, signal),
+    [api, account, source, limit],
   );
   return usePolling(fetcher);
 }

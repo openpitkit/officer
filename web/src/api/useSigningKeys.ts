@@ -17,15 +17,16 @@
 
 import { useCallback } from "react";
 
-import { fetchSigningKeys } from "@/api/client";
 import type { SigningKeysStatus } from "@/api/types";
 import { usePolling, type PollingResult } from "@/api/usePolling";
+import { useOfficerApi } from "@/framework";
 
 /** Poll GET /signing/keys + GET /signing/config. */
 export function useSigningKeys(): PollingResult<SigningKeysStatus> {
+  const api = useOfficerApi();
   const fetcher = useCallback(
-    (signal: AbortSignal) => fetchSigningKeys(signal),
-    [],
+    (signal: AbortSignal) => api.fetchSigningKeys(signal),
+    [api],
   );
   return usePolling(fetcher);
 }

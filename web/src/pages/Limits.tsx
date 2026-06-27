@@ -16,17 +16,16 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 import { useDeferredValue, useMemo, useState } from "react";
-import { ExternalLink, Pencil, Plus, Trash2 } from "lucide-react";
+import { ExternalLink, Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
-import { ApiError, deleteLimit } from "@/api/client";
 import type { Limit } from "@/api/types";
 import { useAccounts } from "@/api/useAccounts";
 import { useBalances } from "@/api/useBalances";
 import { useLimits } from "@/api/useLimits";
 import {
-  POLICIES,
+  getPolicies,
   getPolicyCatalogEntry,
   policyCatalogDescription,
   policyLabel,
@@ -56,6 +55,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
+import { ApiError, RowActions, useOfficerApi } from "@/framework";
 import {
   Select,
   SelectContent,
@@ -78,6 +78,7 @@ import {
 } from "@/lib/tablePagination";
 import { usePersistentPageSize } from "@/lib/tablePageSize";
 import { LimitDialog } from "@/pages/LimitDialog";
+import type { LimitRowActionContext } from "@/pages/rowActions";
 
 const ALL = "__all__";
 
@@ -129,6 +130,7 @@ function DeleteConfirm({
 }) {
   const { t } = useTranslation("policies");
   const { t: tc } = useTranslation();
+  const { deleteLimit } = useOfficerApi();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -202,12 +204,10 @@ function DeleteConfirm({
 
 function PoliciesTable({
   limits,
-  onEdit,
-  onDelete,
+  actionsCtx,
 }: {
   limits: Limit[];
-  onEdit: (limit: Limit) => void;
-  onDelete: (limit: Limit) => void;
+  actionsCtx: LimitRowActionContext;
 }) {
   const { t } = useTranslation("policies");
   const { t: tc } = useTranslation();
@@ -246,23 +246,7 @@ function PoliciesTable({
               </TableCell>
               <TableCell>
                 <div className="flex justify-end gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => onEdit(limit)}
-                    aria-label={t("table.editAriaLabel")}
-                  >
-                    <Pencil className="h-3.5 w-3.5" />
-                    {t("table.edit")}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => onDelete(limit)}
-                    aria-label={t("table.deleteAriaLabel")}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
+                  <RowActions kind="limit" row={limit} ctx={actionsCtx} />
                 </div>
               </TableCell>
             </TableRow>
@@ -378,6 +362,11 @@ export function Limits() {
     setEditing(limit);
     setDialogOpen(true);
   };
+  const limitActionsCtx: LimitRowActionContext = {
+    t,
+    onEdit: openEdit,
+    onDelete: setDeleteTarget,
+  };
 
   return (
     <Page
@@ -435,7 +424,7 @@ export function Limits() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value={ALL}>{t("filter.allPolicies")}</SelectItem>
-              {POLICIES.map((p) => (
+              {getPolicies().map((p) => (
                 <SelectItem key={p} value={p}>
                   {policyLabel(tc, p)}
                 </SelectItem>
@@ -487,8 +476,7 @@ export function Limits() {
             </div>
             <PoliciesTable
               limits={pagedVisible}
-              onEdit={openEdit}
-              onDelete={setDeleteTarget}
+              actionsCtx={limitActionsCtx}
             />
             {pager}
           </>

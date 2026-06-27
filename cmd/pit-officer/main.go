@@ -48,19 +48,11 @@ import (
 	"syscall"
 	"time"
 
-	"go.openpit.dev/officer"
-	"go.openpit.dev/officer/internal/backend"
+	frameworkapp "go.openpit.dev/officer/framework/app"
 	"go.openpit.dev/officer/internal/config"
-	"go.openpit.dev/officer/internal/domain"
-	"go.openpit.dev/officer/internal/engine"
-	"go.openpit.dev/officer/internal/httpapi"
 	"go.openpit.dev/officer/internal/logtail"
-	"go.openpit.dev/officer/internal/marketdata"
-	officermcp "go.openpit.dev/officer/internal/mcp"
-	"go.openpit.dev/officer/internal/node"
 	officerruntime "go.openpit.dev/officer/internal/runtime"
-	"go.openpit.dev/officer/internal/signing"
-	"go.openpit.dev/officer/internal/store"
+	"go.openpit.dev/officer/openapp"
 )
 
 // mcpPath is the route the streamable-HTTP MCP handler is mounted under in
@@ -110,19 +102,6 @@ func run(args []string, logger *slog.Logger, buf *logtail.Buffer) error {
 	}
 }
 
-// controlPlane bundles the assembled control-plane components so the two run
-// modes share one setup path and one shutdown path. It does not hold an engine
-// handle directly: live engine state is reached through the node (Health,
-// EngineVersion), never a captured handle. It holds the market-data manager so
-// close can stop the quote producers before the node stops the engine and
-// closes the market-data service.
-type controlPlane struct {
-	service    *backend.Service
-	node       node.Node
-	marketData *marketdata.Manager
-	cfg        config.Config
-}
-
 type fatalShutdown struct {
 	logger *slog.Logger
 	once   sync.Once
@@ -139,119 +118,24 @@ func (f *fatalShutdown) handle(err error) {
 	})
 }
 
-// setup performs the shared startup for the mcp and serve modes: open the
-// store, migrate it, then build the single local node. NewLocalNode builds the
-// one engine seeded from the store and the node assembles the single-node
-// control plane. On any failure it releases whatever it has already opened so a
-// partial setup never leaks the store handle or the engine.
-//
-// Order matters: Migrate must run before NewLocalNode, because the build reads
-// the accounts and limits tables the migration creates.
+// setup performs the shared startup through the framework app builder.
 func setup(
 	ctx context.Context,
 	cfg config.Config,
 	logger *slog.Logger,
 	fatalHook func(error),
-) (*controlPlane, error) {
-	st, err := store.NewSQLiteStore(
-		cfg.SQLitePath,
-		store.WithFatalShutdownHook(fatalHook),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("open store: %w", err)
-	}
-
-	if err := st.Migrate(ctx); err != nil {
-		_ = st.Close()
-		return nil, fmt.Errorf("migrate store: %w", err)
-	}
-	logger.Info("store migrated", "path", st.Path())
-
-	build := func(snap engine.Snapshot) (engine.Engine, error) {
-		return engine.BuildOpenPitEngine(cfg.RuntimeLibraryPath, snap)
-	}
-
-	// Bind the default realm once; every component that needs direct data access
-	// (reservation store, signing, market-data) receives this handle. node.NewLocalNode
-	// calls ForRealm internally for its own access, so the two handles share the
-	// same underlying connection.
-	realm, err := st.ForRealm(ctx, domain.DefaultRealm)
-	if err != nil {
-		_ = st.Close()
-		return nil, fmt.Errorf("bind realm: %w", err)
-	}
-
-	localNode, eng, err := node.NewLocalNode(ctx, st, build)
-	if err != nil {
-		_ = st.Close()
-		return nil, fmt.Errorf("build node: %w", err)
-	}
-	logger.Info("engine built and seeded from store",
-		"version", eng.Version(), "profile", eng.BuildProfile())
-
-	// Attach the durable reservation-intent store and report any holds preserved
-	// by a prior restart. Native reservation handles do not survive restart, but
-	// held balances reseed from stored balances and later confirm/cancel can fall
-	// back to the persisted intent. This must run before the first hold and before
-	// the surfaces serve.
-	eng.SetReservationStore(realm)
-	if reconciled, err := localNode.ReconcileOrphans(ctx); err != nil {
-		_ = localNode.Close()
-		return nil, fmt.Errorf("inspect restarted reservations: %w", err)
-	} else if reconciled > 0 {
-		logger.Info("preserved held reservations after restart", "count", reconciled)
-	}
-
-	// The signing service backs the approval-token flow: it loads the active
-	// Ed25519 key (if any) and the global eSign flag from the store.
-	signer, err := signing.New(realm)
-	if err != nil {
-		_ = localNode.Close()
-		return nil, fmt.Errorf("build signing service: %w", err)
-	}
-
-	router, err := node.NewLocalRouter(localNode)
-	if err != nil {
-		_ = localNode.Close()
-		return nil, fmt.Errorf("build router: %w", err)
-	}
-
-	// The manager brings up the enabled connectors and drains their quotes into
-	// the current engine sink; restore can swap the sink and restart the manager.
-	// Nothing enabled is a clean no-op, and a bad instance is logged and skipped,
-	// so Start never fails setup on configuration alone.
-	manager := marketdata.NewManager(realm, eng.MarketDataSink(), logger)
-	if err := manager.Start(ctx); err != nil {
-		_ = localNode.Close()
-		return nil, fmt.Errorf("start market-data manager: %w", err)
-	}
-
-	return &controlPlane{
-		service:    backend.New(router, manager, signer),
-		node:       localNode,
-		marketData: manager,
-		cfg:        cfg,
-	}, nil
+) (*frameworkapp.App, error) {
+	builder := frameworkapp.NewBuilder()
+	openapp.Register(builder)
+	return builder.Build(ctx, frameworkapp.Config{
+		SQLitePath:         cfg.SQLitePath,
+		RuntimeLibraryPath: cfg.RuntimeLibraryPath,
+	}, logger, fatalHook)
 }
 
-// close shuts the control plane down. The market-data manager is stopped first
-// so quote producers stop before node.Close stops the engine and closes the
-// market-data service (pushing into a closed service would be use-after-free).
-// Closing the node then stops the engine and closes the store. Both steps are
-// idempotent.
-func (cp *controlPlane) close() error {
-	if cp.marketData != nil {
-		cp.marketData.Stop()
-	}
-	if err := cp.node.Close(); err != nil {
-		return fmt.Errorf("close node: %w", err)
-	}
-	return nil
-}
-
-// runMCP loads the mcp-mode configuration, assembles the control plane, and
-// serves the MCP surface over stdio until the process is signalled. No HTTP
-// listener is opened in this mode.
+// runMCP loads the mcp-mode configuration, assembles the app, and serves the
+// MCP surface over stdio until the process is signalled. No HTTP listener is
+// opened in this mode.
 func runMCP(args []string, logger *slog.Logger) error {
 	cfg, err := config.Load(append([]string{"-mode", string(config.RunModeMCP)},
 		args...), os.LookupEnv)
@@ -264,27 +148,26 @@ func runMCP(args []string, logger *slog.Logger) error {
 	defer stop()
 
 	fatal := newFatalShutdown(logger)
-	cp, err := setup(ctx, cfg, logger, fatal.handle)
+	app, err := setup(ctx, cfg, logger, fatal.handle)
 	if err != nil {
 		return err
 	}
 	defer func() {
-		if err := cp.close(); err != nil {
+		if err := app.Close(); err != nil {
 			logger.Error("shutdown error", "err", err)
 		}
 	}()
 
 	logger.Info("serving mcp over stdio")
-	if err := officermcp.RunStdio(ctx, sourceAdapter{cp.service}, nodeVersionSource{cp.node}); err != nil {
+	if err := app.RunMCPStdio(ctx); err != nil {
 		return fmt.Errorf("run mcp stdio: %w", err)
 	}
 	logger.Info("mcp server stopped")
 	return nil
 }
 
-// runServe loads the serve-mode configuration, assembles the control plane, and
-// runs the HTTP server (dashboard, /api/*, and the streamable-HTTP MCP handler)
-// until the process is signalled, then shuts down gracefully.
+// runServe loads the serve-mode configuration, assembles the app, and runs the
+// HTTP dashboard/API/MCP listener until the process is signalled.
 func runServe(args []string, logger *slog.Logger, buf *logtail.Buffer) error {
 	cfg, err := config.Load(append([]string{"-mode", string(config.RunModeServe)},
 		args...), os.LookupEnv)
@@ -297,17 +180,17 @@ func runServe(args []string, logger *slog.Logger, buf *logtail.Buffer) error {
 	defer stop()
 
 	fatal := newFatalShutdown(logger)
-	cp, err := setup(ctx, cfg, logger, fatal.handle)
+	app, err := setup(ctx, cfg, logger, fatal.handle)
 	if err != nil {
 		return err
 	}
 	defer func() {
-		if err := cp.close(); err != nil {
+		if err := app.Close(); err != nil {
 			logger.Error("shutdown error", "err", err)
 		}
 	}()
 
-	handler, err := buildServeHandler(cp, buf)
+	handler, err := buildServeHandler(app, buf)
 	if err != nil {
 		return fmt.Errorf("build http handler: %w", err)
 	}
@@ -390,30 +273,8 @@ func runServe(args []string, logger *slog.Logger, buf *logtail.Buffer) error {
 	return nil
 }
 
-// buildServeHandler assembles the serve-mode HTTP handler: the embedded SPA,
-// the dashboard API, and the streamable-HTTP MCP handler mounted under /mcp.
-// buf is the in-memory log tail exposed under the v1 service routes.
-func buildServeHandler(cp *controlPlane, buf *logtail.Buffer) (http.Handler, error) {
-	spa, err := officer.WebDist()
-	if err != nil {
-		return nil, fmt.Errorf("load embedded dashboard: %w", err)
-	}
-
-	mcpHandler, err := officermcp.Handler(sourceAdapter{cp.service}, nodeVersionSource{cp.node})
-	if err != nil {
-		return nil, fmt.Errorf("build mcp handler: %w", err)
-	}
-
-	router, err := httpapi.NewRouter(httpapi.Options{
-		Service: cp.service,
-		SPA:     spa,
-		MCP:     http.StripPrefix(mcpPath, mcpHandler),
-		Logs:    buf,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("build router: %w", err)
-	}
-	return router, nil
+func buildServeHandler(app *frameworkapp.App, buf *logtail.Buffer) (http.Handler, error) {
+	return app.BuildServeHandler(buf, mcpPath)
 }
 
 // runHealthcheck probes a running serve instance's /healthz endpoint and
@@ -537,132 +398,4 @@ func openBrowser(url string) error {
 		cmd = exec.Command("xdg-open", url)
 	}
 	return cmd.Start()
-}
-
-// nodeVersionSource adapts a node.Node to the MCP surface's VersionSource seam.
-// It reads the engine version through the node rather than a captured handle,
-// so access observes the current engine even after a backup restore rebuild.
-type nodeVersionSource struct {
-	node node.Node
-}
-
-// Version returns the node's current engine version.
-func (v nodeVersionSource) Version() string { return v.node.EngineVersion() }
-
-// sourceAdapter adapts a *backend.Service to the MCP surface's Source seam.
-// The MCP package defines its own status vocabulary so it never imports the
-// backend package; this adapter maps backend types onto mcp types. It exposes
-// read-only data only - no secrets, no order-flow control.
-type sourceAdapter struct {
-	service *backend.Service
-}
-
-// Status maps the backend's aggregate status onto the MCP surface's Status.
-func (a sourceAdapter) Status(ctx context.Context) (officermcp.Status, error) {
-	status, err := a.service.Status(ctx)
-	if err != nil {
-		return officermcp.Status{}, err
-	}
-
-	nodes := make([]officermcp.NodeHealth, 0, len(status.Nodes))
-	for _, n := range status.Nodes {
-		nodes = append(nodes, officermcp.NodeHealth{
-			Engine: officermcp.EngineHealth{
-				Version:      n.Engine.Version,
-				BuildProfile: n.Engine.BuildProfile,
-				Running:      n.Engine.Running,
-			},
-			Store: officermcp.StoreHealth{
-				Path:          n.Store.Path,
-				SchemaVersion: n.Store.SchemaVersion,
-				Reachable:     n.Store.Reachable,
-			},
-		})
-	}
-	return officermcp.Status{Nodes: nodes, Healthy: status.Healthy}, nil
-}
-
-// GetAccountState delegates to the backend service.
-func (a sourceAdapter) GetAccountState(
-	ctx context.Context, id domain.AccountID,
-) (domain.Account, node.AccountLimits, error) {
-	return a.service.GetAccountState(ctx, id)
-}
-
-// ListLimits delegates to the backend service.
-func (a sourceAdapter) ListLimits(
-	ctx context.Context, account domain.AccountID,
-) (node.AccountLimits, error) {
-	return a.service.ListLimits(ctx, account)
-}
-
-// GetOrder delegates to the backend service, returning the order addressed by
-// its external-id handle.
-func (a sourceAdapter) GetOrder(ctx context.Context, externalID string) (domain.OrderDetail, error) {
-	return a.service.GetOrder(ctx, externalID)
-}
-
-// ListAudit delegates to the backend service.
-func (a sourceAdapter) ListAudit(ctx context.Context, n int) ([]domain.AuditRow, error) {
-	return a.service.ListAudit(ctx, n)
-}
-
-// ListAuditFiltered delegates to the backend service.
-func (a sourceAdapter) ListAuditFiltered(
-	ctx context.Context, filter domain.AuditFilter, n int,
-) ([]domain.AuditRow, error) {
-	return a.service.ListAuditFiltered(ctx, filter, n)
-}
-
-// CheckOrder delegates to the backend service.
-func (a sourceAdapter) CheckOrder(
-	ctx context.Context, probe domain.OrderProbe,
-) (domain.CheckResult, error) {
-	return a.service.CheckOrder(ctx, probe)
-}
-
-// SetMarketDataInstrumentEnabled delegates to the backend service.
-func (a sourceAdapter) SetMarketDataInstrumentEnabled(
-	ctx context.Context, instanceID, externalSymbol string, enabled bool,
-) error {
-	return a.service.SetMarketDataInstrumentEnabled(ctx, instanceID, externalSymbol, enabled)
-}
-
-// CommandEnabled delegates to the backend's effective MCP-access read so the
-// MCP surface can gate each tool by the operator's panel toggles.
-func (a sourceAdapter) CommandEnabled(
-	ctx context.Context, command string,
-) (bool, error) {
-	return a.service.CommandEnabled(ctx, command)
-}
-
-// SubmitOrderToken delegates to the backend approval flow and adapts the
-// result onto the MCP surface's token result type.
-func (a sourceAdapter) SubmitOrderToken(
-	ctx context.Context, o domain.Order, mode string,
-) (officermcp.SubmitOrderTokenResult, error) {
-	tok, err := a.service.SubmitOrderToken(ctx, o, mode)
-	if err != nil {
-		return officermcp.SubmitOrderTokenResult{}, err
-	}
-	return officermcp.SubmitOrderTokenResult{
-		Token:           tok.Token,
-		KeyID:           tok.KeyID,
-		ExpiresAt:       tok.ExpiresAt,
-		OrderExternalID: tok.OrderExternalID,
-	}, nil
-}
-
-// ConfirmExecution delegates to the backend confirm flow.
-func (a sourceAdapter) ConfirmExecution(
-	ctx context.Context, orderExternalID, token string, force bool,
-) (domain.Order, error) {
-	return a.service.ConfirmExecution(ctx, orderExternalID, token, force)
-}
-
-// CancelOrder delegates to the backend cancel flow.
-func (a sourceAdapter) CancelOrder(
-	ctx context.Context, orderExternalID, token, reason string, force bool,
-) (domain.Order, error) {
-	return a.service.CancelOrder(ctx, orderExternalID, token, reason, force)
 }

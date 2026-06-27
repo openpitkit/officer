@@ -15,8 +15,9 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { renderWithApi as render } from "@/test/apiClient";
 import { I18nextProvider } from "react-i18next";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -51,19 +52,6 @@ vi.mock("@/api/useMarketData", () => ({
     reload: () => {},
   }),
 }));
-vi.mock("@/api/client", async () => {
-  const actual = await vi.importActual<typeof import("@/api/client")>("@/api/client");
-  return {
-    ...actual,
-    exportBusinessCsv: vi.fn(),
-    fetchAccounts: vi.fn().mockResolvedValue([]),
-    fetchAccountState: vi.fn(),
-    checkOrder: vi.fn(),
-    createOrder: vi.fn(),
-    fetchOrderDetail: vi.fn(),
-    submitExecutionReport: vi.fn().mockResolvedValue({ blocks: [] }),
-  };
-});
 vi.mock("@/components/TableControls", async () => {
   const actual =
     await vi.importActual<typeof import("@/components/TableControls")>(
@@ -123,13 +111,6 @@ vi.mock("@/components/TableControls", async () => {
   };
 });
 
-import {
-  checkOrder,
-  createOrder,
-  exportBusinessCsv,
-  fetchOrderDetail,
-  submitExecutionReport,
-} from "@/api/client";
 import { useBalances } from "@/api/useBalances";
 import { useOrders } from "@/api/useOrders";
 import { useTrades } from "@/api/useTrades";
@@ -141,11 +122,12 @@ function readyEmpty<T>(data: T): PollingResult<T> {
 const useOrdersMock = vi.mocked(useOrders);
 const useTradesMock = vi.mocked(useTrades);
 const useBalancesMock = vi.mocked(useBalances);
-const checkOrderMock = vi.mocked(checkOrder);
-const createOrderMock = vi.mocked(createOrder);
-const exportBusinessCsvMock = vi.mocked(exportBusinessCsv);
-const fetchOrderDetailMock = vi.mocked(fetchOrderDetail);
-const submitExecutionReportMock = vi.mocked(submitExecutionReport);
+const checkOrderMock = vi.fn();
+const createOrderMock = vi.fn();
+const exportBusinessCsvMock = vi.fn();
+const fetchAccountsMock = vi.fn();
+const fetchOrderDetailMock = vi.fn();
+const submitExecutionReportMock = vi.fn();
 
 const proto = window.HTMLElement.prototype as HTMLElement & {
   hasPointerCapture?: (pointerId: number) => boolean;
@@ -186,6 +168,16 @@ function renderOrders(initialEntry: string) {
         </DisplayPreferencesProvider>
       </ThemeProvider>
     </I18nextProvider>,
+    {
+      api: {
+        checkOrder: checkOrderMock,
+        createOrder: createOrderMock,
+        exportBusinessCsv: exportBusinessCsvMock,
+        fetchAccounts: fetchAccountsMock,
+        fetchOrderDetail: fetchOrderDetailMock,
+        submitExecutionReport: submitExecutionReportMock,
+      },
+    },
   );
 }
 
@@ -195,6 +187,7 @@ beforeEach(async () => {
   useOrdersMock.mockReturnValue(readyEmpty<Order[]>([]));
   useTradesMock.mockReturnValue(readyEmpty<Trade[]>([]));
   useBalancesMock.mockReturnValue(readyEmpty<Balance[]>([]));
+  fetchAccountsMock.mockResolvedValue([]);
   checkOrderMock.mockResolvedValue({
     passed: true,
     rejects: [],

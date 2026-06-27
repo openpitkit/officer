@@ -39,20 +39,6 @@ import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
-import {
-  ApiError,
-  createMarketDataInstance,
-  deleteMarketDataInstance,
-  deleteMarketDataInstrument,
-  restartMarketData,
-  searchMarketDataSymbols,
-  setMarketDataInstanceEnabled,
-  setMarketDataInstrumentEnabled,
-  upsertMarketDataInstrument,
-  updateMarketDataInstanceSettings,
-  verifyMarketDataSymbol,
-  type MarketDataSymbolSearchInput,
-} from "@/api/client";
 import type {
   ApiErrorDependent,
   MarketDataDiagnostic,
@@ -85,6 +71,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { formatCompactDuration, formatDateTime } from "@/i18n/format";
+import {
+  ApiError,
+  useOfficerApi,
+  type MarketDataSymbolSearchInput,
+} from "@/framework";
 
 interface InstanceForm {
   provider: string;
@@ -3416,6 +3407,18 @@ export function MarketData() {
   const { t } = useTranslation("marketData");
   const { t: tc } = useTranslation();
   const { load, reload } = useMarketData();
+  const {
+    createMarketDataInstance,
+    deleteMarketDataInstance,
+    deleteMarketDataInstrument,
+    restartMarketData,
+    searchMarketDataSymbols,
+    setMarketDataInstanceEnabled,
+    setMarketDataInstrumentEnabled,
+    upsertMarketDataInstrument,
+    updateMarketDataInstanceSettings,
+    verifyMarketDataSymbol,
+  } = useOfficerApi();
   const [busy, setBusy] = useState(false);
   const [mutationError, setMutationError] = useState("");
   const [selectedProvider, setSelectedProvider] =

@@ -19,11 +19,6 @@ import { type ReactNode, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Download, FileArchive, Upload } from "lucide-react";
 
-import {
-  exportBusinessCsv,
-  importBusinessCsv,
-  previewBusinessCsvImport,
-} from "@/api/client";
 import type {
   BusinessCsvConflictPolicy,
   BusinessCsvDelimiter,
@@ -62,6 +57,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { useOfficerApi } from "@/framework";
 
 const DELIMITERS: BusinessCsvDelimiter[] = [
   "comma",
@@ -159,6 +155,7 @@ export function BusinessCsvImportDialog({
   triggerLabel?: string;
 }) {
   const { t } = useTranslation("common");
+  const { importBusinessCsv, previewBusinessCsvImport } = useOfficerApi();
   const initialEntity =
     defaultEntity !== undefined && entities.includes(defaultEntity)
       ? defaultEntity
@@ -511,6 +508,7 @@ export function BusinessCsvExportDialog({
   triggerLabel?: string;
 }) {
   const { t } = useTranslation("common");
+  const { exportBusinessCsv } = useOfficerApi();
   const [localOpen, setLocalOpen] = useState(false);
   const [delimiter, setDelimiter] =
     useState<BusinessCsvDelimiter>("comma");

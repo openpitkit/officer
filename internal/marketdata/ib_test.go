@@ -31,7 +31,7 @@ import (
 
 	"github.com/scmhub/ibapi"
 
-	"go.openpit.dev/officer/internal/domain"
+	"go.openpit.dev/officer/framework/domain"
 )
 
 func TestParseIBConfigAndContractOverrides(t *testing.T) {
@@ -727,12 +727,12 @@ func TestIBWrapperSignalsLostOnce(t *testing.T) {
 func TestNewConnectorIBRegistered(t *testing.T) {
 	t.Parallel()
 
-	connector, err := newConnector(domain.MarketDataInstance{
-		ExternalID: testExternalID("ib-1"),
+	connector, err := DefaultRegistry().Build(domain.MarketDataInstance{
+		ExternalID: testProviderExternalID("ib-1"),
 		Provider:   domain.MarketDataProviderIB,
 	})
 	if err != nil {
-		t.Fatalf("newConnector: %v", err)
+		t.Fatalf("Build: %v", err)
 	}
 	if _, ok := connector.(*ibConnector); !ok {
 		t.Fatalf("connector type = %T, want *ibConnector", connector)
@@ -742,11 +742,12 @@ func TestNewConnectorIBRegistered(t *testing.T) {
 func TestProviderVerifiesSymbolsIBUnsupported(t *testing.T) {
 	t.Parallel()
 
-	if ProviderVerifiesSymbols(domain.MarketDataProviderIB) {
-		t.Fatal("ProviderVerifiesSymbols(ib) = true, want false")
+	registry := DefaultRegistry()
+	if registry.VerifiesSymbols(domain.MarketDataProviderIB) {
+		t.Fatal("VerifiesSymbols(ib) = true, want false")
 	}
-	if !ProviderSearchesSymbols(domain.MarketDataProviderIB) {
-		t.Fatal("ProviderSearchesSymbols(ib) = false, want true")
+	if !registry.SearchesSymbols(domain.MarketDataProviderIB) {
+		t.Fatal("SearchesSymbols(ib) = false, want true")
 	}
 }
 

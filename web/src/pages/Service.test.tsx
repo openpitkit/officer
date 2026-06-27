@@ -15,35 +15,30 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { renderWithApi as render } from "@/test/apiClient";
 import { I18nextProvider } from "react-i18next";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { exportBackup, resetDatabase, restoreBackup } from "@/api/client";
 import i18n from "@/i18n";
 import { BackupCard, DatabaseCard } from "@/pages/Service";
 
-vi.mock("@/api/client", async () => {
-  const actual =
-    await vi.importActual<typeof import("@/api/client")>("@/api/client");
-  return {
-    ...actual,
-    exportBackup: vi.fn(),
-    resetDatabase: vi.fn(),
-    restoreBackup: vi.fn(),
-  };
-});
-
-const exportBackupMock = vi.mocked(exportBackup);
-const resetDatabaseMock = vi.mocked(resetDatabase);
-const restoreBackupMock = vi.mocked(restoreBackup);
+const exportBackupMock = vi.fn();
+const resetDatabaseMock = vi.fn();
+const restoreBackupMock = vi.fn();
 
 function renderBackupCard() {
   render(
     <I18nextProvider i18n={i18n}>
       <BackupCard />
     </I18nextProvider>,
+    {
+      api: {
+        exportBackup: exportBackupMock,
+        restoreBackup: restoreBackupMock,
+      },
+    },
   );
 }
 
@@ -55,6 +50,11 @@ function renderDatabaseCard(onReset = vi.fn()) {
         onReset={onReset}
       />
     </I18nextProvider>,
+    {
+      api: {
+        resetDatabase: resetDatabaseMock,
+      },
+    },
   );
   return onReset;
 }
@@ -312,7 +312,7 @@ describe("DatabaseCard", () => {
   it("resets the database and reloads service info after confirmation", async () => {
     const user = userEvent.setup();
     vi.spyOn(window, "confirm").mockReturnValue(true);
-    resetDatabaseMock.mockResolvedValue();
+    resetDatabaseMock.mockResolvedValue(undefined);
     const onReset = renderDatabaseCard();
 
     await user.click(screen.getByRole("button", { name: /delete all data/i }));

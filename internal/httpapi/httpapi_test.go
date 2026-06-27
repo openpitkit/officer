@@ -32,14 +32,14 @@ import (
 	"testing/fstest"
 	"time"
 
-	"go.openpit.dev/officer/internal/backend"
-	"go.openpit.dev/officer/internal/backup"
-	"go.openpit.dev/officer/internal/businesscsv"
-	"go.openpit.dev/officer/internal/domain"
-	"go.openpit.dev/officer/internal/engine"
-	"go.openpit.dev/officer/internal/mcpcatalog"
-	"go.openpit.dev/officer/internal/node"
-	"go.openpit.dev/officer/internal/store"
+	"go.openpit.dev/officer/framework/backend"
+	"go.openpit.dev/officer/framework/backup"
+	"go.openpit.dev/officer/framework/businesscsv"
+	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/engine"
+	"go.openpit.dev/officer/framework/node"
+	"go.openpit.dev/officer/framework/store"
+	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
 // fakeService is a fake Service for handler tests.
@@ -509,7 +509,92 @@ func fakeSPA() fs.FS {
 }
 
 func newRouter(svc Service) (http.Handler, error) {
-	return NewRouter(Options{Service: svc, SPA: fakeSPA()})
+	return httpx.NewRouter(httpx.RouterConfig{
+		Routes:      NewRouteRegistry(svc, nil),
+		Authorizer:  httpx.AllowAll{},
+		SPA:         fakeSPA(),
+		BodyLimit:   BodyLimitPolicy(),
+		ExtraMounts: ExtraMounts(),
+	})
+}
+
+func TestRouteRegistrySurfaceBaseline(t *testing.T) {
+	routes := NewRouteRegistry(&fakeService{}, nil).Routes()
+	got := make([]string, 0, len(routes))
+	for _, route := range routes {
+		got = append(got, route.Method+" "+route.Pattern)
+	}
+	want := []string{
+		"GET /health",
+		"GET /status",
+		"GET /service",
+		"GET /overview",
+		"POST /backup/export",
+		"POST /backup/restore",
+		"POST /business-csv/export",
+		"POST /business-csv/import/preview",
+		"POST /business-csv/import",
+		"POST /database/reset",
+		"GET /accounts",
+		"POST /accounts",
+		"GET /accounts/{code}",
+		"POST /accounts/{code}/block",
+		"POST /accounts/{code}/unblock",
+		"DELETE /accounts/{code}",
+		"PUT /accounts/{code}/group",
+		"PUT /accounts/{code}/notes",
+		"GET /accounts/{code}/adjustments",
+		"POST /accounts/{code}/adjustments",
+		"GET /groups",
+		"POST /groups",
+		"GET /groups/{code}",
+		"PUT /groups/{code}/notes",
+		"POST /groups/{code}/block",
+		"POST /groups/{code}/unblock",
+		"DELETE /groups/{code}",
+		"GET /balances",
+		"GET /adjustments",
+		"POST /orders",
+		"POST /orders/check",
+		"GET /orders",
+		"GET /orders/{externalId}",
+		"POST /orders/{externalId}/execution-reports",
+		"GET /trades",
+		"GET /limits",
+		"PUT /limits/rate",
+		"PUT /limits/order-size",
+		"PUT /limits/pnl-bounds",
+		"DELETE /limits",
+		"GET /audit",
+		"GET /audit/actions",
+		"GET /mcp-access",
+		"PUT /mcp-access/{command}",
+		"GET /user-settings",
+		"PUT /user-settings",
+		"POST /signing/keys/generate",
+		"POST /signing/keys/import",
+		"GET /signing/keys",
+		"GET /signing/keys/active/public",
+		"GET /signing/config",
+		"PUT /signing/config",
+		"POST /orders/submit",
+		"POST /orders/{externalId}/confirm",
+		"POST /orders/{externalId}/cancel",
+		"GET /market-data",
+		"POST /market-data/restart",
+		"POST /market-data/instances",
+		"PUT /market-data/instances/{id}/enabled",
+		"PUT /market-data/instances/{id}/settings",
+		"DELETE /market-data/instances/{id}",
+		"PUT /market-data/instances/{id}/instruments",
+		"PUT /market-data/instances/{id}/instruments/enabled",
+		"DELETE /market-data/instances/{id}/instruments",
+		"POST /market-data/instances/{id}/verify-symbol",
+		"POST /market-data/instances/{id}/search-symbols",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("route surface mismatch\ngot:  %v\nwant: %v", got, want)
+	}
 }
 
 // bodyMap decodes a JSON response body into a map.
@@ -779,7 +864,7 @@ func TestWriteErrMapsTooLargeTo413(t *testing.T) {
 	t.Parallel()
 	rec := httptest.NewRecorder()
 
-	writeErr(rec, businesscsv.NewTooLargeError(false))
+	httpx.WriteErr(rec, businesscsv.NewTooLargeError(false))
 
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d, want 413 body=%s", rec.Code, rec.Body.String())
@@ -805,12 +890,12 @@ func TestRequestBodyLimitUsesImportEnvelopeCap(t *testing.T) {
 	req := httptest.NewRequest(
 		http.MethodPost, "/api/v1/business-csv/import/preview", nil,
 	)
-	if got := requestBodyLimit(req); got != maxImportBody {
+	if got := BodyLimitPolicy()(req); got != maxImportBody {
 		t.Fatalf("requestBodyLimit import = %d, want %d", got, maxImportBody)
 	}
 
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/backup/restore", nil)
-	if got := requestBodyLimit(req); got != maxBackupRestoreBody {
+	if got := BodyLimitPolicy()(req); got != maxBackupRestoreBody {
 		t.Fatalf("requestBodyLimit backup = %d, want %d", got, maxBackupRestoreBody)
 	}
 }
@@ -1723,14 +1808,22 @@ func TestAuditDTO_JSONShape(t *testing.T) {
 }
 
 func TestNewRouter_MissingService(t *testing.T) {
-	_, err := NewRouter(Options{SPA: fakeSPA()})
+	_, err := httpx.NewRouter(httpx.RouterConfig{
+		Authorizer: httpx.AllowAll{},
+		SPA:        fakeSPA(),
+		BodyLimit:  BodyLimitPolicy(),
+	})
 	if err == nil {
-		t.Fatal("want error for nil service")
+		t.Fatal("want error for nil route registry")
 	}
 }
 
 func TestNewRouter_MissingSPA(t *testing.T) {
-	_, err := NewRouter(Options{Service: &fakeService{}})
+	_, err := httpx.NewRouter(httpx.RouterConfig{
+		Routes:     NewRouteRegistry(&fakeService{}, nil),
+		Authorizer: httpx.AllowAll{},
+		BodyLimit:  BodyLimitPolicy(),
+	})
 	if err == nil {
 		t.Fatal("want error for nil SPA")
 	}
@@ -1956,11 +2049,11 @@ func TestApplyExecutionReport_Created(t *testing.T) {
 func TestListMcpAccess(t *testing.T) {
 	svc := &fakeService{
 		mcpCommands: []backend.McpCommand{
-			{Command: mcpcatalog.Command{
+			{Command: backend.Command{
 				Name: "health", Title: "Health", AgentDescription: "desc",
 				Implemented: true, DefaultEnabled: true,
 			}, Enabled: false},
-			{Command: mcpcatalog.Command{
+			{Command: backend.Command{
 				Name: "set_limit", Title: "Set limit", AgentDescription: "desc",
 				Mutating: true, Protective: true,
 			}, Enabled: true},
@@ -1989,7 +2082,7 @@ func TestListMcpAccess(t *testing.T) {
 func TestSetMcpAccess_Persists(t *testing.T) {
 	svc := &fakeService{
 		mcpCommands: []backend.McpCommand{
-			{Command: mcpcatalog.Command{Name: "health", Title: "Health", AgentDescription: "d"}, Enabled: false},
+			{Command: backend.Command{Name: "health", Title: "Health", AgentDescription: "d"}, Enabled: false},
 		},
 	}
 	r, err := newRouter(svc)

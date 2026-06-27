@@ -17,15 +17,16 @@
 
 import { useCallback } from "react";
 
-import { fetchLimits } from "@/api/client";
 import type { Limit } from "@/api/types";
 import { usePolling, type PollingResult } from "@/api/usePolling";
+import { useOfficerApi } from "@/framework";
 
 /** Poll GET /api/v1/limits, optionally filtered to one account server-side. */
 export function useLimits(account?: string): PollingResult<Limit[]> {
+  const api = useOfficerApi();
   const fetcher = useCallback(
-    (signal: AbortSignal) => fetchLimits(account || undefined, signal),
-    [account],
+    (signal: AbortSignal) => api.fetchLimits(account || undefined, signal),
+    [api, account],
   );
   return usePolling(fetcher);
 }

@@ -17,18 +17,19 @@
 
 import { useCallback } from "react";
 
-import { fetchBalances } from "@/api/client";
 import type { Balance } from "@/api/types";
 import { usePolling, type PollingResult } from "@/api/usePolling";
+import { useOfficerApi } from "@/framework";
 
 /** Poll GET /balances, optionally filtered by account and/or asset. */
 export function useBalances(
   account?: string,
   asset?: string,
 ): PollingResult<Balance[]> {
+  const api = useOfficerApi();
   const fetcher = useCallback(
-    (signal: AbortSignal) => fetchBalances({ account, asset }, signal),
-    [account, asset],
+    (signal: AbortSignal) => api.fetchBalances({ account, asset }, signal),
+    [api, account, asset],
   );
   return usePolling(fetcher);
 }

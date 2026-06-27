@@ -54,7 +54,7 @@ import (
 	"testing"
 	"time"
 
-	"go.openpit.dev/officer/internal/domain"
+	"go.openpit.dev/officer/framework/domain"
 )
 
 // TestRealmSweep_ExternalIDAndCodeInvariants builds a representative realm with

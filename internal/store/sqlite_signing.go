@@ -35,7 +35,7 @@ import (
 	"fmt"
 	"time"
 
-	"go.openpit.dev/officer/internal/domain"
+	"go.openpit.dev/officer/framework/domain"
 )
 
 // --- Signing keys -----------------------------------------------------------

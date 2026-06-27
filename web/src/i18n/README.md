@@ -1,9 +1,9 @@
 # i18n
 
 Internationalization for the Pit Officer SPA, built on
-[react-i18next](https://react.i18next.com/). Phase 1 stands up the framework,
-the language switcher, the lint guardrail, and one migrated pilot page
-(`pages/Service.tsx`). Only the `en` catalog exists so far.
+[react-i18next](https://react.i18next.com/). The open app ships `en`, `ru`, and
+`zh-CN` catalogs and exposes registration seams for framework consumers that
+add their own locale namespaces.
 
 ## How it is wired
 
@@ -13,13 +13,30 @@ the language switcher, the lint guardrail, and one migrated pilot page
   `{ [locale]: { [namespace]: json } }` from each path
   `./locales/<locale>/<namespace>.json`. Adding a namespace or language file
   needs **no edit** to `index.ts`.
-- `locales.ts` is the supported-locale list (`{ code, endonym }`). Adding a
-  language is a one-line entry plus a `locales/<code>/` catalog folder.
+- Framework consumers can call `registerLocaleResources(locale, namespace,
+  catalog)` or `registerLocaleResourceMap(resources)` from module top level.
+  The helper uses i18next `addResourceBundle` with deep merge and overwrite, so
+  extensions can add namespaces or intentionally replace keys after init.
+- `locales.ts` is the open supported-locale list (`{ code, endonym }`). External
+  consumers can pair `registerLocale({ code, endonym })` with
+  `registerLocaleResources` to add a language at runtime; the open constants
+  `DEFAULT_LOCALE`, `LOCALES`, and `LOCALE_CODES` stay unchanged.
 - `LocaleProvider.tsx` mirrors the active language onto `<html lang>`, the same
   way `theme/ThemeProvider` mirrors the palette. Detection and persistence are
   owned by the detector (localStorage key `pit-officer-lang`); a manual choice
   in the switcher overrides auto-detection on the next load.
 - `format.ts` holds locale-aware formatting helpers.
+
+## Framework seams
+
+Call resource registration before rendering components that read the new
+namespace. The app initializes i18next synchronously at module import, so a
+closed package can import `@openpit/officer-web` and register its catalogs at
+module top level before mounting its composed app.
+
+The frontend auth predicate is intentionally rendering-only. It mirrors the
+backend authorizer conceptually, but only hides navigation, routes, pages, and
+actions in the browser; backend execution remains guarded server-side.
 
 ## Conventions for the extraction phases
 

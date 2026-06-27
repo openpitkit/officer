@@ -27,7 +27,7 @@ import (
 	"testing"
 	"time"
 
-	"go.openpit.dev/officer/internal/domain"
+	"go.openpit.dev/officer/framework/domain"
 )
 
 // seedBalanceFixtures seeds two assets and an account and returns the realm

@@ -32,7 +32,7 @@ import (
 	"fmt"
 	"strings"
 
-	"go.openpit.dev/officer/internal/domain"
+	"go.openpit.dev/officer/framework/domain"
 )
 
 // --- Assets -----------------------------------------------------------------

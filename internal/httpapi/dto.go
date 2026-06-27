@@ -24,10 +24,11 @@ import (
 	"strings"
 	"time"
 
-	"go.openpit.dev/officer/internal/backend"
-	"go.openpit.dev/officer/internal/domain"
-	"go.openpit.dev/officer/internal/engine"
-	"go.openpit.dev/officer/internal/node"
+	"go.openpit.dev/officer/app/engine/native"
+	"go.openpit.dev/officer/framework/backend"
+	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/engine"
+	"go.openpit.dev/officer/framework/node"
 )
 
 // The DTOs below are the JSON wire contract of the HTTP surface. They carry the
@@ -896,7 +897,7 @@ type orderDTO struct {
 // lock degrades gracefully to an empty list rather than failing the response,
 // since the lock is presentation-only and the order row is already authoritative.
 func toOrderDTO(o domain.Order) orderDTO {
-	prices, err := engine.LockDisplayPrices(o.Lock)
+	prices, err := native.LockDisplayPrices(o.Lock)
 	if err != nil || prices == nil {
 		prices = []string{}
 	}

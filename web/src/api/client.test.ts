@@ -18,23 +18,52 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  createMarketDataInstance,
-  exportBusinessCsv,
-  exportBackup,
-  fetchSigningKeys,
-  generateSigningKey,
-  importBusinessCsv,
-  importSigningKey,
   normalizeSigningKeysStatus,
-  previewBusinessCsvImport,
-  resetDatabase,
-  restoreBackup,
-  searchMarketDataSymbols,
-  setESignEnabled,
-  updateMarketDataInstanceSettings,
-  verifyMarketDataSymbol,
 } from "@/api/client";
 import type { BackupArchive } from "@/api/types";
+import { createApiClient, createOfficerApi } from "@/framework";
+
+function api() {
+  return createOfficerApi(
+    createApiClient({
+      baseUrl: "/app/api/v1",
+      fetch: globalThis.fetch,
+    }),
+  );
+}
+
+const createMarketDataInstance = (...args: Parameters<ReturnType<typeof api>["createMarketDataInstance"]>) =>
+  api().createMarketDataInstance(...args);
+const exportBusinessCsv = (...args: Parameters<ReturnType<typeof api>["exportBusinessCsv"]>) =>
+  api().exportBusinessCsv(...args);
+const exportBackup = (...args: Parameters<ReturnType<typeof api>["exportBackup"]>) =>
+  api().exportBackup(...args);
+const fetchSigningKeys = (...args: Parameters<ReturnType<typeof api>["fetchSigningKeys"]>) =>
+  api().fetchSigningKeys(...args);
+const generateSigningKey = (...args: Parameters<ReturnType<typeof api>["generateSigningKey"]>) =>
+  api().generateSigningKey(...args);
+const importBusinessCsv = (...args: Parameters<ReturnType<typeof api>["importBusinessCsv"]>) =>
+  api().importBusinessCsv(...args);
+const importSigningKey = (...args: Parameters<ReturnType<typeof api>["importSigningKey"]>) =>
+  api().importSigningKey(...args);
+const previewBusinessCsvImport = (
+  ...args: Parameters<ReturnType<typeof api>["previewBusinessCsvImport"]>
+) => api().previewBusinessCsvImport(...args);
+const resetDatabase = (...args: Parameters<ReturnType<typeof api>["resetDatabase"]>) =>
+  api().resetDatabase(...args);
+const restoreBackup = (...args: Parameters<ReturnType<typeof api>["restoreBackup"]>) =>
+  api().restoreBackup(...args);
+const searchMarketDataSymbols = (
+  ...args: Parameters<ReturnType<typeof api>["searchMarketDataSymbols"]>
+) => api().searchMarketDataSymbols(...args);
+const setESignEnabled = (...args: Parameters<ReturnType<typeof api>["setESignEnabled"]>) =>
+  api().setESignEnabled(...args);
+const updateMarketDataInstanceSettings = (
+  ...args: Parameters<ReturnType<typeof api>["updateMarketDataInstanceSettings"]>
+) => api().updateMarketDataInstanceSettings(...args);
+const verifyMarketDataSymbol = (
+  ...args: Parameters<ReturnType<typeof api>["verifyMarketDataSymbol"]>
+) => api().verifyMarketDataSymbol(...args);
 
 function okMarketDataResponse(): Response {
   return new Response(
@@ -406,7 +435,7 @@ describe("limits client", () => {
       }),
     );
 
-    const { fetchLimits } = await import("@/api/client");
+    const { fetchLimits } = api();
     const limits = await fetchLimits("desk-alpha");
 
     expect(fetch).toHaveBeenCalledWith(
@@ -444,7 +473,7 @@ describe("limits client", () => {
       }),
     );
 
-    const { putLimit } = await import("@/api/client");
+    const { putLimit } = api();
     const limit = await putLimit({
       policy: "rate_limit",
       scope: "account",
@@ -470,7 +499,7 @@ describe("limits client", () => {
   });
 
   it("rejects invalid max_orders before sending rate limits", async () => {
-    const { putLimit } = await import("@/api/client");
+    const { putLimit } = api();
 
     await expect(
       putLimit({
@@ -1261,7 +1290,7 @@ describe("Orders createOrder submit lifecycle", () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce(approvalResponse())
       .mockResolvedValueOnce(orderResponse());
-    const { createOrder } = await import("@/api/client");
+    const { createOrder } = api();
     await createOrder({
       account: "desk-alpha",
       baseAsset: "AAPL",
@@ -1296,7 +1325,7 @@ describe("Orders createOrder submit lifecycle", () => {
       .mockResolvedValueOnce(approvalResponse("ord_supplied_000001"))
       .mockResolvedValueOnce(orderResponse("ord_supplied_000001"));
     const controller = new AbortController();
-    const { createOrder } = await import("@/api/client");
+    const { createOrder } = api();
     await createOrder({
       externalId: "ord_supplied_000001",
       account: "desk-alpha",
@@ -1337,7 +1366,7 @@ describe("Orders createOrder submit lifecycle", () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce(wrappedApprovalResponse("ord_wrapped_0000001"))
       .mockResolvedValueOnce(orderResponse("ord_wrapped_0000001"));
-    const { createOrder } = await import("@/api/client");
+    const { createOrder } = api();
     const result = await createOrder({
       account: "desk-alpha",
       baseAsset: "AAPL",
@@ -1378,7 +1407,7 @@ describe("Orders createOrder submit lifecycle", () => {
           { status: 200, headers: { "Content-Type": "application/json" } },
         ),
       );
-    const { createOrder } = await import("@/api/client");
+    const { createOrder } = api();
     const result = await createOrder({
       account: "desk-alpha",
       baseAsset: "AAPL",
@@ -1400,7 +1429,7 @@ describe("Orders createOrder submit lifecycle", () => {
           headers: { "Content-Type": "application/json" },
         }),
       );
-    const { createOrder } = await import("@/api/client");
+    const { createOrder } = api();
     const result = await createOrder({
       account: "desk-alpha",
       baseAsset: "AAPL",

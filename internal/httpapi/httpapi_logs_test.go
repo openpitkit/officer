@@ -22,6 +22,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
 // fakeLogs is a static LogSource returning a fixed set of lines.
@@ -37,8 +39,14 @@ func (f *fakeLogs) Snapshot() []string {
 
 // newRouterWithLogs builds the router with the log tail wired in, so the
 // /service/logs routes are registered.
-func newRouterWithLogs(svc Service, logs LogSource) (http.Handler, error) {
-	return NewRouter(Options{Service: svc, SPA: fakeSPA(), Logs: logs})
+func newRouterWithLogs(svc Service, logs httpx.LogSource) (http.Handler, error) {
+	return httpx.NewRouter(httpx.RouterConfig{
+		Routes:      NewRouteRegistry(svc, logs),
+		Authorizer:  httpx.AllowAll{},
+		SPA:         fakeSPA(),
+		BodyLimit:   BodyLimitPolicy(),
+		ExtraMounts: ExtraMounts(),
+	})
 }
 
 // TestServiceLogs covers GET /api/v1/service/logs: 200, JSON with the lines

@@ -21,7 +21,7 @@
 
 import type { Limit } from "@/api/types";
 import {
-  ALLOWED_SCOPES,
+  getAllowedScopes,
   isPolicy,
   isScope,
   scopeHasAccount,
@@ -252,7 +252,7 @@ export function validateLimit(limit: Limit): FieldError | null {
   }
   const scope: Scope = limit.scope;
 
-  if (!(ALLOWED_SCOPES[policy] as readonly Scope[]).includes(scope)) {
+  if (!getAllowedScopes(policy).includes(scope)) {
     return { key: "limit.scopeNotAllowed", values: { scope, policy } };
   }
 

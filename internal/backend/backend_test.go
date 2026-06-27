@@ -29,15 +29,18 @@ import (
 	"testing"
 	"time"
 
-	"go.openpit.dev/officer/internal/auth"
+	"go.openpit.dev/officer/framework/auth"
+	"go.openpit.dev/officer/framework/backup"
+	"go.openpit.dev/officer/framework/businesscsv"
+	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/engine"
+	"go.openpit.dev/officer/framework/marketdata"
+	"go.openpit.dev/officer/framework/node"
+	fwsigning "go.openpit.dev/officer/framework/signing"
+	"go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/internal/backend"
-	"go.openpit.dev/officer/internal/backup"
-	"go.openpit.dev/officer/internal/businesscsv"
-	"go.openpit.dev/officer/internal/domain"
-	"go.openpit.dev/officer/internal/engine"
-	"go.openpit.dev/officer/internal/marketdata"
-	"go.openpit.dev/officer/internal/node"
-	"go.openpit.dev/officer/internal/store"
+	appmarketdata "go.openpit.dev/officer/internal/marketdata"
+	appstore "go.openpit.dev/officer/internal/store"
 )
 
 // fakeNode records the commands routed to it and returns canned data. It never
@@ -798,6 +801,10 @@ func (r *fakeMarketDataRuntime) AppliedConfig() map[string]marketdata.AppliedIns
 	return r.applied
 }
 
+func (r *fakeMarketDataRuntime) Registry() *marketdata.Registry {
+	return appmarketdata.DefaultRegistry()
+}
+
 func (r *fakeMarketDataRuntime) QuoteUpdateInterval(
 	instanceID, external string,
 ) (time.Duration, bool) {
@@ -842,7 +849,7 @@ func newTestServiceWithMarketDataRuntime(
 
 // newTestServiceWithSigner builds a service with a fake signer for the approval
 // flow tests.
-func newTestServiceWithSigner(signer backend.SigningService) (*backend.Service, *fakeNode) {
+func newTestServiceWithSigner(signer fwsigning.Service) (*backend.Service, *fakeNode) {
 	fn := &fakeNode{orders: make(map[domain.ExternalID]domain.Order)}
 	return backend.New(&fakeRouter{node: fn}, nil, signer), fn
 }
@@ -1541,13 +1548,6 @@ func TestMarketDataFreshnessTTLContract(t *testing.T) {
 
 	if marketdata.FreshnessTTL != 70*time.Second {
 		t.Fatalf("marketdata.FreshnessTTL = %s, want 70s", marketdata.FreshnessTTL)
-	}
-	if engine.MarketDataFreshnessTTL != marketdata.FreshnessTTL {
-		t.Fatalf(
-			"engine.MarketDataFreshnessTTL = %s, want %s",
-			engine.MarketDataFreshnessTTL,
-			marketdata.FreshnessTTL,
-		)
 	}
 	if backend.MarketDataFreshnessTTL != marketdata.FreshnessTTL {
 		t.Fatalf(
@@ -2493,7 +2493,7 @@ func newBusinessCSVRealService(
 ) (*backend.Service, store.RealmStore, *businessCSVRoundTripEngine) {
 	t.Helper()
 	ctx := context.Background()
-	st, err := store.NewSQLiteStore(t.TempDir() + "/business-csv.db")
+	st, err := appstore.NewSQLiteStore(t.TempDir() + "/business-csv.db")
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}

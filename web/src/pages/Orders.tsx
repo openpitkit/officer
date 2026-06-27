@@ -21,15 +21,7 @@ import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Copy, ExternalLink, Plus, ShieldCheck } from "lucide-react";
 
-import {
-  ApiError,
-  checkOrder,
-  createOrder,
-  exportPublicKey,
-  fetchAccounts,
-  fetchOrderDetail,
-  submitExecutionReport,
-} from "@/api/client";
+import { ApiError, useOfficerApi } from "@/framework";
 import type {
   Balance,
   CheckResult,
@@ -323,6 +315,7 @@ function SubmitOrderDialog({
 }: SubmitOrderDialogProps) {
   const { t } = useTranslation("orders");
   const { t: tc } = useTranslation();
+  const { checkOrder, createOrder } = useOfficerApi();
 
   const [externalId, setExternalId] = useState("");
   const [account, setAccount] = useState(initialValues?.account ?? "");
@@ -394,7 +387,16 @@ function SubmitOrderDialog({
       window.clearTimeout(timer);
       checkAbortRef.current?.abort();
     };
-  }, [account, baseAsset, quoteAsset, side, amountKind, amountValue, price]);
+  }, [
+    checkOrder,
+    account,
+    baseAsset,
+    quoteAsset,
+    side,
+    amountKind,
+    amountValue,
+    price,
+  ]);
 
   // Reseed from initialValues whenever the dialog opens (clone path).
   useEffect(() => {
@@ -760,6 +762,7 @@ interface ExecReportDialogProps {
 function ExecReportDialog({ orderExternalId, onClose, onSubmitted, initialValues }: ExecReportDialogProps) {
   const { t } = useTranslation("orders");
   const { t: tc } = useTranslation();
+  const { submitExecutionReport } = useOfficerApi();
 
   const [quantity, setQuantity] = useState(initialValues?.quantity ?? "");
   const [price, setPrice] = useState(initialValues?.price ?? "");
@@ -1056,6 +1059,7 @@ function SignedPayloadDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const { t } = useTranslation("orders");
+  const { exportPublicKey } = useOfficerApi();
 
   const [verifyState, setVerifyState] = useState<VerifyState>({ phase: "idle" });
 
@@ -1260,6 +1264,7 @@ function accountBlockReason(ev: OrderEvent): string | null {
 function OrderDetailDialog({ orderExternalId, onClose, onExecReport, onCloneOrder, onCloneExecReport, successBanner }: OrderDetailDialogProps) {
   const { t } = useTranslation("orders");
   const { t: tc } = useTranslation();
+  const { fetchOrderDetail } = useOfficerApi();
 
   const [state, setState] = useState<DetailState>({ phase: "loading" });
   const [signatureOpen, setSignatureOpen] = useState(false);
@@ -1286,7 +1291,7 @@ function OrderDetailDialog({ orderExternalId, onClose, onExecReport, onCloneOrde
         }
       });
     return () => controller.abort();
-  }, [orderExternalId]);
+  }, [fetchOrderDetail, orderExternalId]);
 
   if (orderExternalId === null) {
     return null;
@@ -1913,6 +1918,7 @@ type TabId = "orders" | "trades";
 
 export function Orders() {
   const { t } = useTranslation("orders");
+  const { fetchAccounts } = useOfficerApi();
 
   const [params] = useSearchParams();
   const [tab, setTab] = useState<TabId>("orders");
@@ -1975,7 +1981,7 @@ export function Orders() {
     fetchAccounts()
       .then((accs) => setFetchedAccounts(accs.map((a) => a.code)))
       .catch(() => { /* ignore */ });
-  }, []);
+  }, [fetchAccounts]);
 
   const allAccountSuggestions = useMemo(
     () => Array.from(new Set([...accountSuggestions, ...fetchedAccounts])).sort(),

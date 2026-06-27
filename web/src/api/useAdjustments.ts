@@ -17,9 +17,9 @@
 
 import { useCallback } from "react";
 
-import { fetchAdjustments } from "@/api/client";
 import type { Adjustment } from "@/api/types";
 import { usePolling, type PollingResult } from "@/api/usePolling";
+import { useOfficerApi } from "@/framework";
 
 /** Poll GET /adjustments, optionally filtered by account and/or source. */
 export function useAdjustments(
@@ -27,10 +27,11 @@ export function useAdjustments(
   source?: string,
   limit?: number,
 ): PollingResult<Adjustment[]> {
+  const api = useOfficerApi();
   const fetcher = useCallback(
     (signal: AbortSignal) =>
-      fetchAdjustments({ account, source, limit }, signal),
-    [account, source, limit],
+      api.fetchAdjustments({ account, source, limit }, signal),
+    [api, account, source, limit],
   );
   return usePolling(fetcher);
 }

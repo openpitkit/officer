@@ -32,20 +32,6 @@ import { useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
-import {
-  ApiError,
-  createAccount,
-  createAdjustment,
-  createMarketDataInstance,
-  fetchAccounts,
-  fetchMarketData,
-  putLimit,
-  restartMarketData,
-  setAccountNotes,
-  setMarketDataInstanceEnabled,
-  setWelcomeSeen,
-  upsertMarketDataInstrument,
-} from "@/api/client";
 import type { Limit, MarketDataInstance } from "@/api/types";
 import { LanguageSwitch } from "@/components/LanguageSwitch";
 import { ThemeSwitch } from "@/components/ThemeSwitch";
@@ -59,6 +45,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { ApiError, useOfficerApi } from "@/framework";
 import { cn } from "@/lib/utils";
 
 const DEMO_ACCOUNT_ID = "demo-main";
@@ -302,6 +289,19 @@ function ActionButton({
 
 export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
   const { t } = useTranslation();
+  const {
+    createAccount,
+    createAdjustment,
+    createMarketDataInstance,
+    fetchAccounts,
+    fetchMarketData,
+    putLimit,
+    restartMarketData,
+    setAccountNotes,
+    setMarketDataInstanceEnabled,
+    setWelcomeSeen,
+    upsertMarketDataInstrument,
+  } = useOfficerApi();
   const [busy, setBusy] = useState<ActionId | null>(null);
   const [status, setStatus] = useState<StatusMessage | null>(null);
   // The first-run dialog reappears on every load until the operator opts out;

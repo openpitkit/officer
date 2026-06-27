@@ -24,6 +24,7 @@ import { afterEach } from "vitest";
 
 // Side-effect import: runs the app's i18next .init() and loads every catalog.
 import "@/i18n";
+import "@/test/registerDefaults";
 
 afterEach(() => {
   cleanup();

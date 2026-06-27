@@ -28,7 +28,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"go.openpit.dev/officer/internal/domain"
+	"go.openpit.dev/officer/framework/domain"
 )
 
 // newTestStore opens a fresh migrated SQLite store in a temp file and returns it

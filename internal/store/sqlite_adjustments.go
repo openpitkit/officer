@@ -32,7 +32,7 @@ import (
 	"fmt"
 	"time"
 
-	"go.openpit.dev/officer/internal/domain"
+	"go.openpit.dev/officer/framework/domain"
 )
 
 // adjustmentSelect is the shared projection for adjustment reads. The JOINs

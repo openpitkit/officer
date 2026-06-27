@@ -15,17 +15,12 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { renderWithApi as render } from "@/test/apiClient";
 import { I18nextProvider } from "react-i18next";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  exportPublicKey,
-  generateSigningKey,
-  importSigningKey,
-  setESignEnabled,
-} from "@/api/client";
 import type { SigningKey, SigningKeysStatus } from "@/api/types";
 import { useSigningKeys } from "@/api/useSigningKeys";
 import { SidebarProvider } from "@/components/SidebarContext";
@@ -53,22 +48,11 @@ vi.mock("@/api/useMarketData", () => ({
     reload: () => {},
   }),
 }));
-vi.mock("@/api/client", async () => {
-  const actual = await vi.importActual<typeof import("@/api/client")>("@/api/client");
-  return {
-    ...actual,
-    exportPublicKey: vi.fn(),
-    generateSigningKey: vi.fn(),
-    importSigningKey: vi.fn(),
-    setESignEnabled: vi.fn(),
-  };
-});
-
 const useSigningKeysMock = vi.mocked(useSigningKeys);
-const exportPublicKeyMock = vi.mocked(exportPublicKey);
-const generateSigningKeyMock = vi.mocked(generateSigningKey);
-const importSigningKeyMock = vi.mocked(importSigningKey);
-const setESignEnabledMock = vi.mocked(setESignEnabled);
+const exportPublicKeyMock = vi.fn();
+const generateSigningKeyMock = vi.fn();
+const importSigningKeyMock = vi.fn();
+const setESignEnabledMock = vi.fn();
 
 function makeKey(overrides: Partial<SigningKey> = {}): SigningKey {
   return {
@@ -116,6 +100,14 @@ function renderPage() {
         </DisplayPreferencesProvider>
       </ThemeProvider>
     </I18nextProvider>,
+    {
+      api: {
+        exportPublicKey: exportPublicKeyMock,
+        generateSigningKey: generateSigningKeyMock,
+        importSigningKey: importSigningKeyMock,
+        setESignEnabled: setESignEnabledMock,
+      },
+    },
   );
 }
 

@@ -35,7 +35,7 @@ import (
 	"strings"
 	"time"
 
-	"go.openpit.dev/officer/internal/domain"
+	"go.openpit.dev/officer/framework/domain"
 )
 
 // --- Orders -----------------------------------------------------------------

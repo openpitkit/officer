@@ -4,14 +4,18 @@ go 1.25.0
 
 require (
 	github.com/coder/websocket v1.8.14
-	github.com/go-chi/chi/v5 v5.2.1
 	github.com/google/uuid v1.6.0
 	github.com/modelcontextprotocol/go-sdk v0.2.0
 	github.com/scmhub/ibapi v0.10.44
-	github.com/shopspring/decimal v1.4.0
+	go.openpit.dev/officer/framework v0.0.0
 	go.openpit.dev/openpit v0.5.0
 	golang.org/x/crypto v0.53.0
 	modernc.org/sqlite v1.34.4
+)
+
+require (
+	github.com/go-chi/chi/v5 v5.2.1 // indirect
+	github.com/shopspring/decimal v1.4.0 // indirect
 )
 
 require (
@@ -34,3 +38,5 @@ require (
 	modernc.org/strutil v1.2.0 // indirect
 	modernc.org/token v1.1.0 // indirect
 )
+
+replace go.openpit.dev/officer/framework => ./framework

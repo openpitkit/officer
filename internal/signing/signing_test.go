@@ -31,8 +31,11 @@ import (
 
 	cssh "golang.org/x/crypto/ssh"
 
-	"go.openpit.dev/officer/internal/domain"
+	"go.openpit.dev/officer/framework/domain"
+	fwsigning "go.openpit.dev/officer/framework/signing"
 )
+
+var _ fwsigning.Service = (*Service)(nil)
 
 // fakeStore is an in-memory Store for signing tests; no sqlite needed.
 type fakeStore struct {
@@ -122,8 +125,8 @@ func samplePayload() domain.ApprovalPayload {
 }
 
 // expectFor builds the matching VerifyParams for a payload.
-func expectFor(p domain.ApprovalPayload) VerifyParams {
-	return VerifyParams{
+func expectFor(p domain.ApprovalPayload) fwsigning.VerifyParams {
+	return fwsigning.VerifyParams{
 		OrderExternalID: p.OrderExternalID,
 		Instrument:      p.Instrument,
 		Venue:           p.Venue,
@@ -166,7 +169,7 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 	if !res.Signed {
 		t.Fatalf("expected Signed=true")
 	}
-	if res.Payload.Alg != AlgEd25519 {
+	if res.Payload.Alg != fwsigning.AlgEd25519 {
 		t.Fatalf("alg = %q, want ed25519", res.Payload.Alg)
 	}
 	if res.Payload.KeyID == "" {
@@ -246,17 +249,17 @@ func TestParamBindingTamperRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
-	mutators := map[string]func(*VerifyParams){
-		"instrument":      func(e *VerifyParams) { e.Instrument = "MSFT/USD" },
-		"side":            func(e *VerifyParams) { e.Side = "sell" },
-		"quantity":        func(e *VerifyParams) { e.Quantity = "99" },
-		"amountKind":      func(e *VerifyParams) { e.AmountKind = "volume" },
-		"orderType":       func(e *VerifyParams) { e.OrderType = "market" },
-		"limitPrice":      func(e *VerifyParams) { e.LimitPrice = "999.99" },
-		"priceCurrency":   func(e *VerifyParams) { e.PriceCurrency = "EUR" },
-		"timeInForce":     func(e *VerifyParams) { e.TimeInForce = "ioc" },
-		"accountId":       func(e *VerifyParams) { e.AccountID = "acct-2" },
-		"orderExternalId": func(e *VerifyParams) { e.OrderExternalID = "BBBBBBBBBBBBBBBBBBBBBB" },
+	mutators := map[string]func(*fwsigning.VerifyParams){
+		"instrument":      func(e *fwsigning.VerifyParams) { e.Instrument = "MSFT/USD" },
+		"side":            func(e *fwsigning.VerifyParams) { e.Side = "sell" },
+		"quantity":        func(e *fwsigning.VerifyParams) { e.Quantity = "99" },
+		"amountKind":      func(e *fwsigning.VerifyParams) { e.AmountKind = "volume" },
+		"orderType":       func(e *fwsigning.VerifyParams) { e.OrderType = "market" },
+		"limitPrice":      func(e *fwsigning.VerifyParams) { e.LimitPrice = "999.99" },
+		"priceCurrency":   func(e *fwsigning.VerifyParams) { e.PriceCurrency = "EUR" },
+		"timeInForce":     func(e *fwsigning.VerifyParams) { e.TimeInForce = "ioc" },
+		"accountId":       func(e *fwsigning.VerifyParams) { e.AccountID = "acct-2" },
+		"orderExternalId": func(e *fwsigning.VerifyParams) { e.OrderExternalID = "BBBBBBBBBBBBBBBBBBBBBB" },
 	}
 	for name, mut := range mutators {
 		exp := expectFor(p)
@@ -364,7 +367,7 @@ func TestVerifyExpiredRejected(t *testing.T) {
 func TestVerifyRejectsNoneAlgWhenESignEnabled(t *testing.T) {
 	svc, _ := newServiceWithKey(t)
 	p := samplePayload()
-	token, err := SignNone(p)
+	token, err := svc.SignNone(p)
 	if err != nil {
 		t.Fatalf("SignNone: %v", err)
 	}
@@ -424,7 +427,7 @@ func TestESignOffNoneAlg(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecodeEnvelope: %v", err)
 	}
-	if env.Alg != AlgNone {
+	if env.Alg != fwsigning.AlgNone {
 		t.Fatalf("envelope alg = %q, want none", env.Alg)
 	}
 	if env.Signature != "" {

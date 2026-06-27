@@ -17,15 +17,16 @@
 
 import { useCallback } from "react";
 
-import { getMcpCommands } from "@/api/client";
 import type { McpCommand } from "@/api/types";
 import { usePolling, type PollingResult } from "@/api/usePolling";
+import { useOfficerApi } from "@/framework";
 
 /** Poll GET /mcp-access. */
 export function useMcpAccess(): PollingResult<McpCommand[]> {
+  const api = useOfficerApi();
   const fetcher = useCallback(
-    (signal: AbortSignal) => getMcpCommands(signal),
-    [],
+    (signal: AbortSignal) => api.getMcpCommands(signal),
+    [api],
   );
   return usePolling(fetcher);
 }

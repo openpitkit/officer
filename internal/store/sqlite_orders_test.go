@@ -31,7 +31,7 @@ import (
 	"testing"
 	"time"
 
-	"go.openpit.dev/officer/internal/domain"
+	"go.openpit.dev/officer/framework/domain"
 )
 
 // seedOrderFixtures creates the dictionary rows the orders group references: an

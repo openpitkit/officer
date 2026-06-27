@@ -36,7 +36,8 @@ import (
 	"fmt"
 	"time"
 
-	"go.openpit.dev/officer/internal/domain"
+	"go.openpit.dev/officer/framework/domain"
+	fwstore "go.openpit.dev/officer/framework/store"
 )
 
 // ApplyBusinessCSVImport persists all selected business CSV rows and their
@@ -50,7 +51,7 @@ import (
 // the imported position). Audit rows are appended. An unknown group or asset
 // code on any row yields domain.ErrInvalid.
 func (r *realmStore) ApplyBusinessCSVImport(
-	ctx context.Context, in BusinessCSVImport,
+	ctx context.Context, in fwstore.BusinessCSVImport,
 ) error {
 	err := r.applyBusinessCSVImport(ctx, in)
 	if err != nil && !isExpectedDomainError(err) {
@@ -63,7 +64,7 @@ func (r *realmStore) ApplyBusinessCSVImport(
 }
 
 func (r *realmStore) applyBusinessCSVImport(
-	ctx context.Context, in BusinessCSVImport,
+	ctx context.Context, in fwstore.BusinessCSVImport,
 ) error {
 	tx, err := r.db().BeginTx(ctx, nil)
 	if err != nil {
@@ -97,7 +98,7 @@ func (r *realmStore) applyBusinessCSVImport(
 // New groups receive a connector-assigned engine group id. Existing groups have
 // their mutable fields (title, notes, blocked, block_reason) updated.
 func importGroups(
-	ctx context.Context, tx *sql.Tx, rows []BusinessCSVImportGroup,
+	ctx context.Context, tx *sql.Tx, rows []fwstore.BusinessCSVImportGroup,
 ) error {
 	for _, item := range rows {
 		g := item.Group
@@ -136,7 +137,7 @@ func importGroups(
 // yields domain.ErrInvalid. New accounts receive a connector-assigned engine
 // account id. Existing accounts have their mutable fields updated.
 func importAccounts(
-	ctx context.Context, tx *sql.Tx, rows []BusinessCSVImportAccount,
+	ctx context.Context, tx *sql.Tx, rows []fwstore.BusinessCSVImportAccount,
 ) error {
 	for _, item := range rows {
 		a := item.Account
@@ -293,7 +294,9 @@ func importAdjustments(
 // importAudit appends the snapshot audit rows inside the import transaction.
 // Account and actor titles are taken from the entry when present, else looked up
 // by code; an empty account code inserts NULL.
-func importAudit(ctx context.Context, tx *sql.Tx, audits []AuditEntry) error {
+func importAudit(
+	ctx context.Context, tx *sql.Tx, audits []fwstore.AuditEntry,
+) error {
 	for _, entry := range audits {
 		xid, err := newExternalID()
 		if err != nil {

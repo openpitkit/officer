@@ -32,7 +32,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.openpit.dev/officer/internal/domain"
+	"go.openpit.dev/officer/framework/domain"
 )
 
 const (

@@ -17,9 +17,9 @@
 
 import { useCallback } from "react";
 
-import { fetchAudit, fetchAuditActions } from "@/api/client";
 import type { AuditActionGroup, AuditEntry } from "@/api/types";
 import { usePolling, type PollingResult } from "@/api/usePolling";
+import { useOfficerApi } from "@/framework";
 
 /** Poll GET /audit for the newest `limit` entries, optionally filtered. The
  *  actions array is the include-set of event types; an empty array selects
@@ -30,16 +30,17 @@ export function useAudit(
   source?: string,
   actions?: string[],
 ): PollingResult<AuditEntry[]> {
+  const api = useOfficerApi();
   const actionsKey = actions?.join(",") ?? "";
   const fetcher = useCallback(
     (signal: AbortSignal) =>
-      fetchAudit(
+      api.fetchAudit(
         { limit, account, source, actions: actions ? [...actions] : undefined },
         signal,
       ),
     // actionsKey stands in for the actions array identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [limit, account, source, actionsKey],
+    [api, limit, account, source, actionsKey],
   );
   return usePolling(fetcher);
 }
@@ -48,9 +49,10 @@ export function useAudit(
  *  filter. The catalogue is small and static, but polling reuses the shared
  *  load lifecycle so the page can gate on it like any other fetch. */
 export function useAuditActions(): PollingResult<AuditActionGroup[]> {
+  const api = useOfficerApi();
   const fetcher = useCallback(
-    (signal: AbortSignal) => fetchAuditActions(signal),
-    [],
+    (signal: AbortSignal) => api.fetchAuditActions(signal),
+    [api],
   );
   return usePolling(fetcher);
 }

@@ -25,8 +25,8 @@ import (
 	"testing"
 	"time"
 
-	"go.openpit.dev/officer/internal/backend"
-	"go.openpit.dev/officer/internal/domain"
+	"go.openpit.dev/officer/framework/backend"
+	"go.openpit.dev/officer/framework/domain"
 )
 
 // TestGenerateSigningKey_HappyPath exercises the POST /signing/keys/generate

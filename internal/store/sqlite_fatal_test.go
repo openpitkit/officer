@@ -27,7 +27,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"go.openpit.dev/officer/internal/domain"
+	"go.openpit.dev/officer/framework/domain"
 )
 
 // newFatalHookStore opens a fresh migrated store wired with a fatal hook that

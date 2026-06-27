@@ -35,13 +35,6 @@ import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
-import {
-  exportBackup,
-  resetDatabase as resetDatabaseRequest,
-  restartMarketData,
-  restoreBackup,
-  serviceLogsDownloadUrl,
-} from "@/api/client";
 import type {
   BackupEntitySelector,
   BackupRestoreSummary,
@@ -67,6 +60,11 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import {
+  serviceLogsDownloadUrl,
+  useApiClient,
+  useOfficerApi,
+} from "@/framework";
 
 // This page is the canonical i18n pattern (phase 1 pilot): user-facing text
 // goes through useTranslation with a per-area "service" namespace; shared
@@ -224,9 +222,11 @@ function parseProfileRows(raw: string): ProfileRow[] {
 function LogsCard() {
   const { t } = useTranslation("service");
   const { t: tc } = useTranslation();
+  const apiClient = useApiClient();
   const { load, reload } = useServiceLogs();
   const refreshing = load.state === "loading";
   const lines = load.state === "ready" ? load.data.lines : [];
+  const downloadUrl = serviceLogsDownloadUrl(apiClient.baseUrl);
 
   return (
     <Card id="logs" className="scroll-mt-4">
@@ -248,7 +248,7 @@ function LogsCard() {
             {tc("actions.refresh")}
           </Button>
           <Button asChild variant="ghost" size="sm">
-            <a href={serviceLogsDownloadUrl} download>
+            <a href={downloadUrl} download>
               <Download className="h-3.5 w-3.5" />
               {t("logs.download")}
             </a>
@@ -319,6 +319,7 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
 export function BackupCard() {
   const { t } = useTranslation("service");
   const { t: tc } = useTranslation();
+  const { exportBackup, restoreBackup } = useOfficerApi();
   const [workflow, setWorkflow] = useState<BackupWorkflow>("export");
   const [all, setAll] = useState(true);
   const [sections, setSections] = useState<BackupSection[]>(backupSections);
@@ -739,6 +740,7 @@ export function DatabaseCard({
 }) {
   const { t } = useTranslation("service");
   const { t: tc } = useTranslation();
+  const { resetDatabase } = useOfficerApi();
   const [resetting, setResetting] = useState(false);
   const [resetDone, setResetDone] = useState(false);
   const [resetError, setResetError] = useState("");
@@ -751,7 +753,7 @@ export function DatabaseCard({
     setResetDone(false);
     setResetError("");
     try {
-      await resetDatabaseRequest();
+      await resetDatabase();
       setResetDone(true);
       onReset();
     } catch (err) {
@@ -1109,6 +1111,7 @@ export function Service() {
   const { t: tc } = useTranslation();
   const { t: tm } = useTranslation("marketData");
   const { load, reload } = useService();
+  const { restartMarketData } = useOfficerApi();
   const location = useLocation();
   const navigate = useNavigate();
   const [restarting, setRestarting] = useState(false);

@@ -19,13 +19,14 @@ import { Info, RotateCcw } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { restartMarketData } from "@/api/client";
 import { useMarketData } from "@/api/useMarketData";
 import { Button } from "@/components/ui/button";
+import { useOfficerApi } from "@/framework";
 
 export function PendingRestartBanner() {
   const { t } = useTranslation("marketData");
   const { load, reload } = useMarketData();
+  const { restartMarketData } = useOfficerApi();
   const [busy, setBusy] = useState(false);
 
   if (load.state !== "ready" || !load.data.restartRequired) {

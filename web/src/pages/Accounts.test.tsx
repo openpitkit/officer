@@ -15,20 +15,13 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { renderWithApi as render } from "@/test/apiClient";
 import { I18nextProvider } from "react-i18next";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  ApiError,
-  createAccount,
-  exportBusinessCsv,
-  importBusinessCsv,
-  previewBusinessCsvImport,
-  setAccountGroup,
-} from "@/api/client";
 import type {
   Account,
   BusinessCsvEntity,
@@ -40,25 +33,12 @@ import type { PollingResult } from "@/api/usePolling";
 import { useAccounts } from "@/api/useAccounts";
 import { useGroups } from "@/api/useGroups";
 import { SidebarProvider } from "@/components/SidebarContext";
+import { ApiError } from "@/framework";
 import i18n from "@/i18n";
 import { Accounts, CreateAccountDialog } from "@/pages/Accounts";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
 
-// Keep the real client (ApiError, normalizers) and replace only the two
-// mutating calls the dialog makes so no network request is issued.
-vi.mock("@/api/client", async () => {
-  const actual =
-    await vi.importActual<typeof import("@/api/client")>("@/api/client");
-  return {
-    ...actual,
-    createAccount: vi.fn(),
-    exportBusinessCsv: vi.fn(),
-    importBusinessCsv: vi.fn(),
-    previewBusinessCsvImport: vi.fn(),
-    setAccountGroup: vi.fn(),
-  };
-});
 vi.mock("@/api/useAccounts", () => ({ useAccounts: vi.fn() }));
 vi.mock("@/api/useGroups", () => ({ useGroups: vi.fn() }));
 vi.mock("@/api/useMarketData", () => ({
@@ -126,11 +106,11 @@ vi.mock("@/components/TableControls", async () => {
   };
 });
 
-const createAccountMock = vi.mocked(createAccount);
-const exportBusinessCsvMock = vi.mocked(exportBusinessCsv);
-const importBusinessCsvMock = vi.mocked(importBusinessCsv);
-const previewBusinessCsvImportMock = vi.mocked(previewBusinessCsvImport);
-const setAccountGroupMock = vi.mocked(setAccountGroup);
+const createAccountMock = vi.fn();
+const exportBusinessCsvMock = vi.fn();
+const importBusinessCsvMock = vi.fn();
+const previewBusinessCsvImportMock = vi.fn();
+const setAccountGroupMock = vi.fn();
 const useAccountsMock = vi.mocked(useAccounts);
 const useGroupsMock = vi.mocked(useGroups);
 
@@ -172,6 +152,12 @@ function renderDialog(onCreated = vi.fn()) {
     <I18nextProvider i18n={i18n}>
       <CreateAccountDialog groupSuggestions={["equity-desks"]} onCreated={onCreated} />
     </I18nextProvider>,
+    {
+      api: {
+        createAccount: createAccountMock,
+        setAccountGroup: setAccountGroupMock,
+      },
+    },
   );
   return onCreated;
 }
@@ -192,6 +178,15 @@ function renderAccounts() {
         </DisplayPreferencesProvider>
       </ThemeProvider>
     </I18nextProvider>,
+    {
+      api: {
+        createAccount: createAccountMock,
+        exportBusinessCsv: exportBusinessCsvMock,
+        importBusinessCsv: importBusinessCsvMock,
+        previewBusinessCsvImport: previewBusinessCsvImportMock,
+        setAccountGroup: setAccountGroupMock,
+      },
+    },
   );
 }
 

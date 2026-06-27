@@ -24,8 +24,8 @@ import (
 	"testing"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
-	"go.openpit.dev/officer/internal/domain"
-	"go.openpit.dev/officer/internal/node"
+	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/node"
 )
 
 // callSetMarketDataInstrument invokes the set_market_data_instrument handler

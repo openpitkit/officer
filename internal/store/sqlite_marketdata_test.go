@@ -31,7 +31,7 @@ import (
 	"testing"
 	"time"
 
-	"go.openpit.dev/officer/internal/domain"
+	"go.openpit.dev/officer/framework/domain"
 )
 
 // seedMDFixtures creates the dictionary rows market-data tests need.

@@ -26,7 +26,7 @@ import (
 	"context"
 	"testing"
 
-	"go.openpit.dev/officer/internal/domain"
+	"go.openpit.dev/officer/framework/domain"
 )
 
 func TestMcpAccessRoundTrip(t *testing.T) {

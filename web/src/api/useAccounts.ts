@@ -17,15 +17,16 @@
 
 import { useCallback } from "react";
 
-import { fetchAccounts } from "@/api/client";
 import type { Account } from "@/api/types";
 import { usePolling, type PollingResult } from "@/api/usePolling";
+import { useOfficerApi } from "@/framework";
 
 /** Poll GET /accounts. */
 export function useAccounts(): PollingResult<Account[]> {
+  const api = useOfficerApi();
   const fetcher = useCallback(
-    (signal: AbortSignal) => fetchAccounts(signal),
-    [],
+    (signal: AbortSignal) => api.fetchAccounts(signal),
+    [api],
   );
   return usePolling(fetcher);
 }

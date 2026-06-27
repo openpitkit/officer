@@ -31,7 +31,7 @@ import (
 	"testing"
 	"time"
 
-	"go.openpit.dev/officer/internal/domain"
+	"go.openpit.dev/officer/framework/domain"
 )
 
 // seedReservationOrder creates the dictionaries and one held-style order the

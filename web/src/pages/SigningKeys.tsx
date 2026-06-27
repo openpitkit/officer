@@ -18,13 +18,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import {
-  ApiError,
-  exportPublicKey,
-  generateSigningKey,
-  importSigningKey,
-  setESignEnabled,
-} from "@/api/client";
 import type { SigningKey, SigningKeyFormat } from "@/api/types";
 import { useSigningKeys } from "@/api/useSigningKeys";
 import { CopyableSnippet } from "@/components/CopyableSnippet";
@@ -59,6 +52,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { ApiError, useOfficerApi } from "@/framework";
 import { formatDateTime } from "@/i18n/format";
 
 // ---------------------------------------------------------------------------
@@ -82,6 +76,7 @@ function ActiveKeyCard({
   activeKey: SigningKey | null;
 }) {
   const { t } = useTranslation("approvalKeys");
+  const { exportPublicKey } = useOfficerApi();
 
   const [format, setFormat] = useState<SigningKeyFormat>("pem-pkcs8");
   const [exportedKey, setExportedKey] = useState<string | null>(null);
@@ -197,6 +192,7 @@ function ManageKeyCard({
 }) {
   const { t } = useTranslation("approvalKeys");
   const { t: tc } = useTranslation();
+  const { generateSigningKey, importSigningKey } = useOfficerApi();
 
   const [mode, setMode] = useState<"generate" | "import">("generate");
   const [importFormat, setImportFormat] = useState<SigningKeyFormat>("pem-pkcs8");
@@ -416,6 +412,7 @@ function ESignCard({
 
 export function SigningKeys() {
   const { t } = useTranslation("approvalKeys");
+  const { setESignEnabled } = useOfficerApi();
   const { load, reload } = useSigningKeys();
 
   const [eSignBusy, setESignBusy] = useState(false);

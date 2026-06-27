@@ -17,33 +17,13 @@
 
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router-dom";
 import {
-  ArrowLeftRight,
   Ban,
-  CircleCheck,
-  Coins,
   Folder,
-  History,
   Plus,
-  ShieldCheck,
   Trash2,
 } from "lucide-react";
 
-import {
-  ApiError,
-  blockAccount,
-  blockGroup,
-  createAccount,
-  createGroup,
-  deleteAccount,
-  deleteGroup,
-  setAccountGroup,
-  setAccountNotes,
-  setGroupNotes,
-  unblockAccount,
-  unblockGroup,
-} from "@/api/client";
 import type { Account, ApiErrorDependent, Group } from "@/api/types";
 import { useAccounts } from "@/api/useAccounts";
 import { useGroups } from "@/api/useGroups";
@@ -70,6 +50,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ApiError, RowActions, useOfficerApi } from "@/framework";
 import {
   Dialog,
   DialogContent,
@@ -96,6 +77,10 @@ import {
 } from "@/lib/tablePagination";
 import { usePersistentPageSize } from "@/lib/tablePageSize";
 import { cn } from "@/lib/utils";
+import type {
+  AccountRowActionContext,
+  GroupRowActionContext,
+} from "@/pages/rowActions";
 
 type AccountsTab = "accounts" | "groups";
 
@@ -120,6 +105,7 @@ export function CreateAccountDialog({
 }) {
   const { t } = useTranslation("validation");
   const { t: ta } = useTranslation("accounts");
+  const { createAccount, setAccountGroup } = useOfficerApi();
   const [open, setOpen] = useState(false);
   const [code, setCode] = useState("");
   const [group, setGroup] = useState("");
@@ -245,6 +231,7 @@ export function CreateAccountDialog({
 
 function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
   const { t } = useTranslation("accounts");
+  const { createGroup } = useOfficerApi();
   const [open, setOpen] = useState(false);
   const [code, setCode] = useState("");
   const [title, setTitle] = useState("");
@@ -378,6 +365,7 @@ function BlockAccountDialog({
   onDone: (updated: Account) => void;
 }) {
   const { t } = useTranslation("accounts");
+  const { blockAccount } = useOfficerApi();
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -467,6 +455,7 @@ function UnblockAccountConfirm({
   onDone: (updated: Account) => void;
 }) {
   const { t } = useTranslation("accounts");
+  const { unblockAccount } = useOfficerApi();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -530,6 +519,7 @@ function BlockGroupDialog({
   onDone: (updated: Group) => void;
 }) {
   const { t } = useTranslation("accounts");
+  const { blockGroup } = useOfficerApi();
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -619,6 +609,7 @@ function UnblockGroupConfirm({
   onDone: (updated: Group) => void;
 }) {
   const { t } = useTranslation("accounts");
+  const { unblockGroup } = useOfficerApi();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -682,6 +673,7 @@ function DeleteGroupConfirm({
   onDone: () => void;
 }) {
   const { t } = useTranslation("accounts");
+  const { deleteGroup } = useOfficerApi();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -747,6 +739,7 @@ function DeleteAccountConfirm({
   onDone: () => void;
 }) {
   const { t } = useTranslation("accounts");
+  const { deleteAccount } = useOfficerApi();
   const [error, setError] = useState<string | null>(null);
   const [dependents, setDependents] = useState<ApiErrorDependent[]>([]);
   const [busy, setBusy] = useState(false);
@@ -847,6 +840,7 @@ function EditGroupNotesDialog({
   onDone: (updated: Group) => void;
 }) {
   const { t } = useTranslation("accounts");
+  const { setGroupNotes } = useOfficerApi();
   const [notes, setNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -940,6 +934,7 @@ function AssignGroupDialog({
   onDone: (updated: Account) => void;
 }) {
   const { t } = useTranslation("accounts");
+  const { setAccountGroup } = useOfficerApi();
   const [group, setGroup] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1031,6 +1026,7 @@ function EditAccountNotesDialog({
   onDone: (updated: Account) => void;
 }) {
   const { t } = useTranslation("accounts");
+  const { setAccountNotes } = useOfficerApi();
   const [notes, setNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1126,18 +1122,12 @@ function GroupsPanel({
   groupRows,
   selectedGroupCode,
   onSelect,
-  onEditNotes,
-  onBlock,
-  onUnblock,
-  onDelete,
+  actionsCtx,
 }: {
   groupRows: GroupRow[];
   selectedGroupCode: string | null;
   onSelect: (code: string | null) => void;
-  onEditNotes: (group: Group) => void;
-  onBlock: (group: Group) => void;
-  onUnblock: (group: Group) => void;
-  onDelete: (group: Group) => void;
+  actionsCtx: GroupRowActionContext;
 }) {
   const { t } = useTranslation("accounts");
   return (
@@ -1221,43 +1211,7 @@ function GroupsPanel({
                       className="flex items-center justify-end gap-1"
                       onClick={(e) => e.stopPropagation()}
                     >
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => onEditNotes(row.group)}
-                        title={t("groups.actions.editNotesTitle")}
-                      >
-                        {t("groups.actions.notes")}
-                      </Button>
-                      {row.group.blocked ? (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => onUnblock(row.group)}
-                        >
-                          <CircleCheck className="h-3.5 w-3.5" />
-                          {t("groups.actions.unblock")}
-                        </Button>
-                      ) : (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => onBlock(row.group)}
-                        >
-                          <Ban className="h-3.5 w-3.5" />
-                          {t("groups.actions.block")}
-                        </Button>
-                      )}
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => onDelete(row.group)}
-                        title={t("groups.actions.deleteTitle")}
-                        className="text-[var(--danger)] hover:text-[var(--danger)]"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                        {t("groups.actions.delete")}
-                      </Button>
+                      <RowActions kind="group" row={row.group} ctx={actionsCtx} />
                     </div>
                   )}
                 </TableCell>
@@ -1276,19 +1230,13 @@ function GroupsPanel({
 function AccountsTable({
   accounts,
   groupSuggestions,
-  onBlock,
-  onUnblock,
   onAssignGroup,
-  onEditNotes,
-  onDelete,
+  actionsCtx,
 }: {
   accounts: Account[];
   groupSuggestions: string[];
-  onBlock: (account: Account) => void;
-  onUnblock: (account: Account) => void;
   onAssignGroup: (account: Account) => void;
-  onEditNotes: (account: Account) => void;
-  onDelete: (account: Account) => void;
+  actionsCtx: AccountRowActionContext;
 }) {
   const { t } = useTranslation("accounts");
   return (
@@ -1369,78 +1317,7 @@ function AccountsTable({
 
               <TableCell className="text-right">
                 <div className="flex items-center justify-end gap-1">
-                  {/* Quick-links: Positions → Trading → Policies → Audit */}
-                  <Link
-                    to={`/positions?account=${encodeURIComponent(account.code)}`}
-                    title={t("accounts.links.positions")}
-                    aria-label={t("accounts.links.positions")}
-                    className="inline-flex h-7 w-7 items-center justify-center rounded-badge transition-colors hover:bg-accent-dim"
-                  >
-                    <Coins className="h-3.5 w-3.5 text-muted" />
-                  </Link>
-                  <Link
-                    to={`/trading?account=${encodeURIComponent(account.code)}`}
-                    title={t("accounts.links.trading")}
-                    aria-label={t("accounts.links.trading")}
-                    className="inline-flex h-7 w-7 items-center justify-center rounded-badge transition-colors hover:bg-accent-dim"
-                  >
-                    <ArrowLeftRight className="h-3.5 w-3.5 text-muted" />
-                  </Link>
-                  <Link
-                    to={`/policies?account=${encodeURIComponent(account.code)}`}
-                    title={t("accounts.links.policies")}
-                    aria-label={t("accounts.links.policies")}
-                    className="inline-flex h-7 w-7 items-center justify-center rounded-badge transition-colors hover:bg-accent-dim"
-                  >
-                    <ShieldCheck className="h-3.5 w-3.5 text-muted" />
-                  </Link>
-                  <Link
-                    to={`/audit?account=${encodeURIComponent(account.code)}`}
-                    title={t("accounts.links.audit")}
-                    aria-label={t("accounts.links.audit")}
-                    className="inline-flex h-7 w-7 items-center justify-center rounded-badge transition-colors hover:bg-accent-dim"
-                  >
-                    <History className="h-3.5 w-3.5 text-muted" />
-                  </Link>
-
-                  {/* Notes */}
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => onEditNotes(account)}
-                    title={t("accounts.actions.editNotesTitle")}
-                  >
-                    {t("accounts.actions.notes")}
-                  </Button>
-
-                  {/* Block / Unblock */}
-                  {account.blocked ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => onUnblock(account)}
-                    >
-                      <CircleCheck className="h-3.5 w-3.5" />
-                      {t("accounts.actions.unblock")}
-                    </Button>
-                  ) : (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => onBlock(account)}
-                    >
-                      <Ban className="h-3.5 w-3.5" />
-                      {t("accounts.actions.block")}
-                    </Button>
-                  )}
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => onDelete(account)}
-                    title={t("accounts.actions.deleteTitle")}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
+                  <RowActions kind="account" row={account} ctx={actionsCtx} />
                 </div>
               </TableCell>
             </TableRow>
@@ -1629,6 +1506,20 @@ export function Accounts() {
   };
   const accountCsvFilters =
     selectedGroupCode === null ? undefined : { groupCode: selectedGroupCode };
+  const accountActionsCtx: AccountRowActionContext = {
+    t,
+    onEditNotes: setNotesAccountTarget,
+    onBlock: setBlockAccountTarget,
+    onUnblock: setUnblockAccountTarget,
+    onDelete: setDeleteAccountTarget,
+  };
+  const groupActionsCtx: GroupRowActionContext = {
+    t,
+    onEditNotes: setGroupNotesTarget,
+    onBlock: setBlockGroupTarget,
+    onUnblock: setUnblockGroupTarget,
+    onDelete: setDeleteGroupTarget,
+  };
 
   const isLoading =
     accountsLoad.state === "loading" || groupsLoad.state === "loading";
@@ -1752,10 +1643,7 @@ export function Accounts() {
               setSelectedGroupCode(code);
               setAccountPage(0);
             }}
-            onEditNotes={setGroupNotesTarget}
-            onBlock={setBlockGroupTarget}
-            onUnblock={setUnblockGroupTarget}
-            onDelete={setDeleteGroupTarget}
+            actionsCtx={groupActionsCtx}
           />
           {groupPager}
         </div>
@@ -1813,11 +1701,8 @@ export function Accounts() {
               <AccountsTable
                 accounts={pagedAccounts}
                 groupSuggestions={groupSuggestions}
-                onBlock={setBlockAccountTarget}
-                onUnblock={setUnblockAccountTarget}
                 onAssignGroup={setGroupTarget}
-                onEditNotes={setNotesAccountTarget}
-                onDelete={setDeleteAccountTarget}
+                actionsCtx={accountActionsCtx}
               />
               {accountPager}
             </>

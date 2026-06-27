@@ -19,42 +19,46 @@ package backend_test
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/engine"
+	fwsigning "go.openpit.dev/officer/framework/signing"
+	"go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/internal/backend"
-	"go.openpit.dev/officer/internal/domain"
-	"go.openpit.dev/officer/internal/engine"
-	"go.openpit.dev/officer/internal/signing"
-	"go.openpit.dev/officer/internal/store"
 )
 
-// fakeSigner is a backend.SigningService stand-in for the approval-flow tests.
+// fakeSigner is a framework signing seam stand-in for the approval-flow tests.
 // Sign records the payload it was handed and returns a deterministic token; the
 // matching Verify returns the recorded payload re-bound against the expectation.
 type fakeSigner struct {
 	noESign      bool
 	signed       []domain.ApprovalPayload
-	verifyResult *signing.VerifyResult
+	verifyResult *fwsigning.VerifyResult
 	verifyErr    error
 	noESignErr   error
 	signErr      error
 	setNoESign   []bool
 }
 
+var _ fwsigning.Service = (*fakeSigner)(nil)
+
 func (s *fakeSigner) GenerateKey(context.Context) (domain.SigningKey, error) {
-	return domain.SigningKey{KeyID: "key-1", Alg: signing.AlgEd25519, Active: true}, nil
+	return domain.SigningKey{KeyID: "key-1", Alg: fwsigning.AlgEd25519, Active: true}, nil
 }
 
 func (s *fakeSigner) ImportKey(_ context.Context, _, _ string) (domain.SigningKey, error) {
-	return domain.SigningKey{KeyID: "key-2", Alg: signing.AlgEd25519, Active: true}, nil
+	return domain.SigningKey{KeyID: "key-2", Alg: fwsigning.AlgEd25519, Active: true}, nil
 }
 
 func (s *fakeSigner) ListKeys(context.Context) ([]domain.SigningKey, error) {
-	return []domain.SigningKey{{KeyID: "key-1", Alg: signing.AlgEd25519, Active: true}}, nil
+	return []domain.SigningKey{{KeyID: "key-1", Alg: fwsigning.AlgEd25519, Active: true}}, nil
 }
 
 func (s *fakeSigner) ActivePublicKey(string) (string, error) { return "PUBLIC", nil }
@@ -69,16 +73,27 @@ func (s *fakeSigner) Sign(payload domain.ApprovalPayload) (string, error) {
 	return "signed-token", nil
 }
 
+func (s *fakeSigner) SignNone(payload domain.ApprovalPayload) (string, error) {
+	payload.KeyID = ""
+	payload.Alg = fwsigning.AlgNone
+	env := approvalEnvelope{Approval: payload, Alg: fwsigning.AlgNone}
+	raw, err := json.Marshal(env)
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
 func (s *fakeSigner) Verify(
-	_ context.Context, _ string, _ signing.VerifyParams,
-) (signing.VerifyResult, error) {
+	_ context.Context, _ string, _ fwsigning.VerifyParams,
+) (fwsigning.VerifyResult, error) {
 	if s.verifyErr != nil {
-		return signing.VerifyResult{}, s.verifyErr
+		return fwsigning.VerifyResult{}, s.verifyErr
 	}
 	if s.verifyResult != nil {
 		return *s.verifyResult, nil
 	}
-	return signing.VerifyResult{
+	return fwsigning.VerifyResult{
 		Payload: domain.ApprovalPayload{
 			ApprovalID:    "approval-1",
 			ReservationID: "approval-1",
@@ -99,6 +114,25 @@ func (s *fakeSigner) SetNoESign(_ context.Context, off bool) error {
 	s.setNoESign = append(s.setNoESign, off)
 	s.noESign = off
 	return nil
+}
+
+type approvalEnvelope struct {
+	Approval  domain.ApprovalPayload `json:"approval"`
+	Signature string                 `json:"signature,omitempty"`
+	KeyID     string                 `json:"keyId,omitempty"`
+	Alg       string                 `json:"alg"`
+}
+
+func decodeApprovalEnvelope(token string) (approvalEnvelope, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		return approvalEnvelope{}, err
+	}
+	var env approvalEnvelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return approvalEnvelope{}, err
+	}
+	return env, nil
 }
 
 func sampleOrder() domain.Order {
@@ -237,11 +271,11 @@ func TestService_SubmitOrderTokenESignOff(t *testing.T) {
 	}
 	// The token is a real eSign-off envelope: it decodes with alg "none" and no
 	// signature, with the bound payload still present.
-	env, err := signing.DecodeEnvelope(tok.Token)
+	env, err := decodeApprovalEnvelope(tok.Token)
 	if err != nil {
 		t.Fatalf("decode eSign-off envelope: %v", err)
 	}
-	if env.Alg != signing.AlgNone || env.Signature != "" {
+	if env.Alg != fwsigning.AlgNone || env.Signature != "" {
 		t.Fatalf("eSign-off envelope = %+v, want alg none and no signature", env)
 	}
 	if env.Approval.Instrument != "AAPL/USD" || env.Approval.Verdict != "accept" {
@@ -433,7 +467,7 @@ func TestService_ConfirmRejectsBadToken(t *testing.T) {
 func TestService_ConfirmImmediateTokenConflictsBeforeEngine(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{
-		verifyResult: &signing.VerifyResult{
+		verifyResult: &fwsigning.VerifyResult{
 			Payload: domain.ApprovalPayload{
 				ApprovalID:    "approval-immediate",
 				ReservationID: "approval-immediate",

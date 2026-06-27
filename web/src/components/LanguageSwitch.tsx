@@ -28,7 +28,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { LOCALES } from "@/i18n/locales";
+import { getSupportedLocales } from "@/i18n/locales";
 
 /**
  * Language selector. Each entry is labeled by its own endonym, never
@@ -59,7 +59,7 @@ export function LanguageSwitch() {
           value={i18n.resolvedLanguage}
           onValueChange={(code) => void i18n.changeLanguage(code)}
         >
-          {LOCALES.map(({ code, endonym }) => (
+          {getSupportedLocales().map(({ code, endonym }) => (
             // Endonyms are rendered as data (each language's own name), never
             // translated into the current UI language.
             <DropdownMenuRadioItem key={code} value={code}>

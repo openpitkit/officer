@@ -25,7 +25,7 @@ import tseslint from "typescript-eslint";
 // Flat config for the Pit Officer SPA. Standard Vite + React + TypeScript
 // linting plus the i18n hardcoded-string guardrail.
 export default tseslint.config(
-  { ignores: ["dist", "node_modules"] },
+  { ignores: ["dist", "lib", "node_modules"] },
   {
     files: ["src/**/*.{ts,tsx}"],
     extends: [

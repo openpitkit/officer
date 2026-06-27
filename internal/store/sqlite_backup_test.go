@@ -29,8 +29,8 @@ import (
 	"testing"
 	"time"
 
-	"go.openpit.dev/officer/internal/backup"
-	"go.openpit.dev/officer/internal/domain"
+	"go.openpit.dev/officer/framework/backup"
+	"go.openpit.dev/officer/framework/domain"
 )
 
 // newRealmStore opens a fresh migrated store bound to realm and returns both the

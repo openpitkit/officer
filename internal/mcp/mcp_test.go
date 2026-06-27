@@ -26,8 +26,8 @@ import (
 	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
-	"go.openpit.dev/officer/internal/domain"
-	"go.openpit.dev/officer/internal/node"
+	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/node"
 )
 
 // fakeSource is a controllable fake for the Source interface.

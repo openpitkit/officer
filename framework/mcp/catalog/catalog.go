@@ -1,0 +1,111 @@
+// Copyright The Pit Project Owners. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// Please see https://openpit.dev and the OWNERS file for details.
+
+// Package catalog describes the Pit Officer MCP command catalogue without
+// importing the MCP SDK.
+package catalog
+
+// CatalogCommand describes one MCP command in the catalogue: its identity, how
+// an AI agent uses it, its risk posture, whether a handler is implemented yet,
+// and the enabled state it resolves to when the operator has not stored an
+// override.
+type CatalogCommand struct {
+	// Name is the wire name of the MCP tool. For implemented commands it matches
+	// the name the tool is registered under in the MCP surface.
+	Name string
+	// Title is the human-readable label shown in the operator panel.
+	Title string
+	// AgentDescription is a one-line description of what an AI agent does with
+	// the command, written for the calling agent rather than the operator.
+	AgentDescription string
+	// Mutating reports whether the command changes control-plane or engine state.
+	Mutating bool
+	// Protective reports whether the command guards capital or risk posture, so
+	// the panel can require explicit confirmation before enabling it.
+	Protective bool
+	// Implemented reports whether a handler backs the command yet. Designed but
+	// unbuilt commands are catalogued so their enable/disable state persists
+	// ahead of implementation.
+	Implemented bool
+	// DefaultEnabled is the enabled state used when no operator override is
+	// stored for the command.
+	DefaultEnabled bool
+}
+
+// Catalog is an ordered MCP command catalogue.
+type Catalog struct {
+	commands []CatalogCommand
+}
+
+// Provider returns the current ordered MCP command catalogue.
+type Provider interface {
+	Catalog() Catalog
+}
+
+// New builds a catalogue from ordered commands.
+func New(commands []CatalogCommand) Catalog {
+	return Catalog{commands: append([]CatalogCommand(nil), commands...)}
+}
+
+// All returns the ordered MCP command catalogue. The returned slice is a fresh
+// copy the caller may mutate without affecting the catalogue.
+func (c Catalog) All() []CatalogCommand {
+	return append([]CatalogCommand(nil), c.commands...)
+}
+
+// Lookup returns the catalogue command with the given name and whether it
+// exists. It is the validation seam for the toggle endpoint: a name absent from
+// the catalogue is not a togglable command.
+func (c Catalog) Lookup(name string) (CatalogCommand, bool) {
+	for _, cmd := range c.commands {
+		if cmd.Name == name {
+			return cmd, true
+		}
+	}
+	return CatalogCommand{}, false
+}
+
+// Effective merges the stored enable/disable overrides over the catalogue
+// defaults so every catalogue command resolves to a concrete bool. A command
+// with a stored row takes the stored value; one without falls back to its
+// DefaultEnabled. Stored rows for names no longer in the catalogue are ignored.
+func (c Catalog) Effective(stored map[string]bool) map[string]bool {
+	out := make(map[string]bool, len(c.commands))
+	for _, cmd := range c.commands {
+		if enabled, ok := stored[cmd.Name]; ok {
+			out[cmd.Name] = enabled
+			continue
+		}
+		out[cmd.Name] = cmd.DefaultEnabled
+	}
+	return out
+}
+
+// EnabledFor resolves the effective enabled state of a single command from the
+// stored overrides. A stored row wins; otherwise the catalogue default applies.
+// A name absent from the catalogue resolves to false (an unknown command is not
+// enabled).
+func (c Catalog) EnabledFor(name string, stored map[string]bool) bool {
+	if enabled, ok := stored[name]; ok {
+		return enabled
+	}
+	cmd, ok := c.Lookup(name)
+	if !ok {
+		return false
+	}
+	return cmd.DefaultEnabled
+}

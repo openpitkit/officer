@@ -17,9 +17,9 @@
 
 import { useCallback } from "react";
 
-import { fetchOrders } from "@/api/client";
 import type { Order } from "@/api/types";
 import { usePolling, type PollingResult } from "@/api/usePolling";
+import { useOfficerApi } from "@/framework";
 
 /** Poll GET /orders, optionally filtered by account and/or source. */
 export function useOrders(
@@ -27,9 +27,11 @@ export function useOrders(
   source?: string,
   limit?: number,
 ): PollingResult<Order[]> {
+  const api = useOfficerApi();
   const fetcher = useCallback(
-    (signal: AbortSignal) => fetchOrders({ account, source, limit }, signal),
-    [account, source, limit],
+    (signal: AbortSignal) =>
+      api.fetchOrders({ account, source, limit }, signal),
+    [api, account, source, limit],
   );
   return usePolling(fetcher);
 }

@@ -19,14 +19,13 @@ import { useEffect, useMemo, useState } from "react";
 import { ExternalLink } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { ApiError, putLimit } from "@/api/client";
 import type { Limit } from "@/api/types";
 import { validateLimit } from "@/api/validate";
 import {
-  ALLOWED_SCOPES,
-  POLICIES,
-  POLICY_KINDS,
+  getAllowedScopes,
+  getPolicies,
   getPolicyCatalogEntry,
+  getPolicyKinds,
   kindHint,
   policyCatalogDescription,
   policyFieldHint,
@@ -38,6 +37,7 @@ import {
   type Policy,
   type Scope,
 } from "@/api/vocabulary";
+import { ApiError, useOfficerApi } from "@/framework";
 import { Autocomplete } from "@/components/Autocomplete";
 import { ErrorBanner } from "@/components/PageStates";
 import {
@@ -256,6 +256,7 @@ export function LimitDialog({
 }) {
   const { t } = useTranslation("policies");
   const { t: tc } = useTranslation();
+  const { putLimit } = useOfficerApi();
   const [form, setForm] = useState<FormState>(() => emptyForm(initialAccount));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -274,10 +275,10 @@ export function LimitDialog({
   }, [open, editing, initialAccount]);
 
   const isEdit = editing !== null;
-  const allowedScopes = ALLOWED_SCOPES[form.policy];
+  const allowedScopes = getAllowedScopes(form.policy);
   // Filter initial_pnl: only visible (and sendable) when creating an
   // account_asset pnl_bounds_kill_switch barrier.
-  const kinds = POLICY_KINDS[form.policy].filter(({ kind }) => {
+  const kinds = getPolicyKinds(form.policy).filter(({ kind }) => {
     if (kind !== "initial_pnl") return true;
     return (
       !isEdit &&
@@ -316,7 +317,7 @@ export function LimitDialog({
     setForm((prev) => ({
       ...prev,
       policy,
-      scope: ALLOWED_SCOPES[policy][0],
+      scope: getAllowedScopes(policy)[0] ?? "",
       values: {},
     }));
   };
@@ -393,14 +394,14 @@ export function LimitDialog({
               <Label>{t("dialog.policy")}</Label>
               <Select
                 value={form.policy}
-                onValueChange={(v) => setPolicy(v as Policy)}
+                onValueChange={setPolicy}
                 disabled={isEdit}
               >
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {POLICIES.map((p) => (
+                  {getPolicies().map((p) => (
                     <SelectItem key={p} value={p}>
                       {policyLabel(tc, p)}
                     </SelectItem>
@@ -413,7 +414,7 @@ export function LimitDialog({
               <Label>{t("dialog.scope")}</Label>
               <Select
                 value={form.scope}
-                onValueChange={(v) => setScope(v as Scope)}
+                onValueChange={setScope}
                 disabled={isEdit}
               >
                 <SelectTrigger>

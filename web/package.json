@@ -1,6 +1,5 @@
 {
-  "name": "pit-officer-web",
-  "private": true,
+  "name": "@openpit/officer-web",
   "version": "0.1.0",
   "type": "module",
   "description": "Operator dashboard for Pit Officer.",
@@ -11,7 +10,8 @@
     "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc -b",
     "test": "vitest run",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "build:lib": "vite build --config vite.lib.config.ts && tsc -p tsconfig.lib.json"
   },
   "dependencies": {
     "@fontsource/jetbrains-mono": "5.1.1",
@@ -55,5 +55,21 @@
     "typescript-eslint": "8.61.1",
     "vite": "6.1.1",
     "vitest": "3.0.5"
+  },
+  "main": "./lib/index.js",
+  "module": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "files": [
+    "lib"
+  ],
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "import": "./lib/index.js"
+    }
+  },
+  "peerDependencies": {
+    "react": "19.0.0",
+    "react-dom": "19.0.0"
   }
 }

@@ -27,7 +27,7 @@ import (
 	"testing"
 	"time"
 
-	"go.openpit.dev/officer/internal/domain"
+	"go.openpit.dev/officer/framework/domain"
 )
 
 // seedLimitFixtures creates an account and an asset for limit tests.

@@ -17,22 +17,19 @@
 
 import { useCallback } from "react";
 
-import {
-  fetchMarketData,
-  searchMarketDataSymbols,
-  type MarketDataSymbolSearchInput,
-} from "@/api/client";
 import type {
   MarketDataStatus,
   MarketDataSymbolSearch,
 } from "@/api/types";
 import { usePolling, type PollingResult } from "@/api/usePolling";
+import { useOfficerApi, type MarketDataSymbolSearchInput } from "@/framework";
 
 /** Poll GET /market-data. */
 export function useMarketData(): PollingResult<MarketDataStatus> {
+  const api = useOfficerApi();
   const fetcher = useCallback(
-    (signal: AbortSignal) => fetchMarketData(signal),
-    [],
+    (signal: AbortSignal) => api.fetchMarketData(signal),
+    [api],
   );
   return usePolling(fetcher);
 }
@@ -40,9 +37,14 @@ export function useMarketData(): PollingResult<MarketDataStatus> {
 /** Non-mutating contract resolve for an instance, mirroring the page-level
  *  symbol verification helper: it issues a single POST and never disturbs the
  *  running feed or the polling cycle. */
-export function searchSymbols(
+export function useMarketDataSymbolSearch(): (
   instanceId: string,
   input: MarketDataSymbolSearchInput,
-): Promise<MarketDataSymbolSearch> {
-  return searchMarketDataSymbols(instanceId, input);
+) => Promise<MarketDataSymbolSearch> {
+  const api = useOfficerApi();
+  return useCallback(
+    (instanceId: string, input: MarketDataSymbolSearchInput) =>
+      api.searchMarketDataSymbols(instanceId, input),
+    [api],
+  );
 }

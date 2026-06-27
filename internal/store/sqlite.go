@@ -21,19 +21,18 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
-	"embed"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	"go.openpit.dev/officer/internal/domain"
+	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/migration"
+	fwstore "go.openpit.dev/officer/framework/store"
 
 	// modernc.org/sqlite is a pure-Go SQLite driver registered under "sqlite".
 	_ "modernc.org/sqlite"
@@ -43,18 +42,9 @@ const driverName = "sqlite"
 
 // Compile-time assertions that the SQLite connector satisfies both seams.
 var (
-	_ Store      = (*sqliteStore)(nil)
-	_ RealmStore = (*realmStore)(nil)
+	_ fwstore.Store      = (*sqliteStore)(nil)
+	_ fwstore.RealmStore = (*realmStore)(nil)
 )
-
-//go:embed migrations/*.sql
-var migrationsFS embed.FS
-
-type migration struct {
-	name    string
-	sql     string
-	version int
-}
 
 // sqliteStore is the SQLite-backed Store. It is single-realm: it serves exactly
 // one realm and rejects any other realm id. Safe for concurrent use: all
@@ -100,7 +90,7 @@ func WithRealm(realm domain.RealmID) SQLiteOption {
 // The connection opens the path as given; only Path() resolves to an absolute
 // filesystem path so the operator sees the full location. filepath.Abs returns
 // an already-absolute path unchanged and keeps the original string on error.
-func NewSQLiteStore(path string, opts ...SQLiteOption) (Store, error) {
+func NewSQLiteStore(path string, opts ...SQLiteOption) (fwstore.Store, error) {
 	db, err := openSQLiteDB(path)
 	if err != nil {
 		return nil, fmt.Errorf("store: open sqlite at %q: %w", path, err)
@@ -162,7 +152,7 @@ func sqliteDSN(path string) string {
 // identity row is ensured so backup labelling and future placement have it.
 func (s *sqliteStore) ForRealm(
 	ctx context.Context, realm domain.RealmID,
-) (RealmStore, error) {
+) (fwstore.RealmStore, error) {
 	if realm == "" {
 		realm = domain.DefaultRealm
 	}
@@ -208,93 +198,19 @@ func (s *sqliteStore) ensureRealmRow(ctx context.Context) error {
 // The one canonical migration is rendered through the dialect before it runs, so
 // the surrogate-PK, external-id and boolean tokens become backend-specific DDL.
 func (s *sqliteStore) Migrate(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, schemaMigrationsDDL); err != nil {
-		return fmt.Errorf("store: create schema_migrations: %w", err)
-	}
-
-	migrations, err := loadMigrations()
-	if err != nil {
-		return err
-	}
-
-	applied, err := s.appliedVersions(ctx)
-	if err != nil {
-		return err
-	}
-
-	for _, m := range migrations {
-		if applied[m.version] {
-			continue
-		}
-		if err := s.applyMigration(ctx, m); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *sqliteStore) applyMigration(ctx context.Context, m migration) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("store: begin migration %d: %w", m.version, err)
-	}
-	rendered := renderSchema(s.dialect, m.sql)
-	if _, err := tx.ExecContext(ctx, rendered); err != nil {
-		return errors.Join(
-			fmt.Errorf("store: apply migration %d (%s): %w", m.version, m.name, err),
-			tx.Rollback(),
-		)
-	}
-	if _, err := tx.ExecContext(
+	return migration.Apply(
 		ctx,
-		`INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)`,
-		m.version, m.name, nowStr(),
-	); err != nil {
-		return errors.Join(
-			fmt.Errorf("store: record migration %d: %w", m.version, err),
-			tx.Rollback(),
-		)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("store: commit migration %d: %w", m.version, err)
-	}
-	return nil
-}
-
-func (s *sqliteStore) appliedVersions(ctx context.Context) (map[int]bool, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT version FROM schema_migrations`)
-	if err != nil {
-		return nil, fmt.Errorf("store: read schema_migrations: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	applied := make(map[int]bool)
-	for rows.Next() {
-		var v int
-		if err := rows.Scan(&v); err != nil {
-			return nil, fmt.Errorf("store: scan schema version: %w", err)
-		}
-		applied[v] = true
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: iterate schema versions: %w", err)
-	}
-	return applied, nil
+		s.db,
+		embeddedMigrationSource{dialect: s.dialect},
+		migration.Config{Table: "schema_migrations"},
+	)
 }
 
 // SchemaVersion returns the highest applied schema version, or zero.
 func (s *sqliteStore) SchemaVersion(ctx context.Context) (int, error) {
-	var version sql.NullInt64
-	err := s.db.QueryRowContext(
-		ctx, `SELECT MAX(version) FROM schema_migrations`,
-	).Scan(&version)
-	if err != nil {
-		return 0, fmt.Errorf("store: read schema version: %w", err)
-	}
-	if !version.Valid {
-		return 0, nil
-	}
-	return int(version.Int64), nil
+	return migration.SchemaVersion(
+		ctx, s.db, migration.Config{Table: "schema_migrations"},
+	)
 }
 
 // Ping verifies the database is reachable.
@@ -364,15 +280,6 @@ type realmStore struct {
 func (r *realmStore) db() *sql.DB { return r.store.db }
 
 // --- Shared helpers reused by every table group -----------------------------
-
-// schemaMigrationsDDL creates the migration bookkeeping table before the
-// canonical migration runs.
-const schemaMigrationsDDL = `
-CREATE TABLE IF NOT EXISTS schema_migrations (
-    version    INTEGER PRIMARY KEY,
-    name       TEXT NOT NULL,
-    applied_at TEXT NOT NULL
-)`
 
 // nowStr returns the current UTC time as RFC3339Nano.
 func nowStr() string {
@@ -541,58 +448,4 @@ func isSQLiteUniqueOn(err error, table, column string) bool {
 		strings.Contains(
 			err.Error(), "UNIQUE constraint failed: "+table+"."+column,
 		)
-}
-
-// --- Migration loading ------------------------------------------------------
-
-func loadMigrations() ([]migration, error) {
-	entries, err := fs.ReadDir(migrationsFS, "migrations")
-	if err != nil {
-		return nil, fmt.Errorf("store: read embedded migrations: %w", err)
-	}
-
-	migrations := make([]migration, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
-			continue
-		}
-		version, err := parseMigrationVersion(entry.Name())
-		if err != nil {
-			return nil, err
-		}
-		body, err := fs.ReadFile(migrationsFS, "migrations/"+entry.Name())
-		if err != nil {
-			return nil, fmt.Errorf("store: read migration %q: %w", entry.Name(), err)
-		}
-		migrations = append(migrations, migration{
-			name:    entry.Name(),
-			sql:     string(body),
-			version: version,
-		})
-	}
-
-	sort.Slice(migrations, func(i, j int) bool {
-		return migrations[i].version < migrations[j].version
-	})
-	return migrations, nil
-}
-
-func parseMigrationVersion(name string) (int, error) {
-	prefix, _, found := strings.Cut(name, "_")
-	if !found {
-		return 0, fmt.Errorf(
-			"store: malformed migration name %q (want <version>_<name>.sql)", name,
-		)
-	}
-	if prefix == "" {
-		return 0, fmt.Errorf("store: empty migration version in %q", name)
-	}
-	version := 0
-	for _, r := range prefix {
-		if r < '0' || r > '9' {
-			return 0, fmt.Errorf("store: non-numeric migration version in %q", name)
-		}
-		version = version*10 + int(r-'0')
-	}
-	return version, nil
 }

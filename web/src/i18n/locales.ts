@@ -15,6 +15,8 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
+import i18n from "i18next";
+
 /** A supported UI locale. */
 export interface Locale {
   /** BCP-47 code, also the resource and detector key. */
@@ -38,3 +40,58 @@ export const LOCALE_CODES: readonly string[] = LOCALES.map((l) => l.code);
 
 /** The default locale, used as the fallback and when detection misses. */
 export const DEFAULT_LOCALE = "en";
+
+function defaultSupportedLocales(): Locale[] {
+  return LOCALES.map((locale) => ({ ...locale }));
+}
+
+const supportedLocales: Locale[] = defaultSupportedLocales();
+
+function refreshSupportedLanguages(): void {
+  i18n.options.supportedLngs = [...getSupportedLocaleCodes()];
+}
+
+/** Return the currently supported locales, including registered extensions. */
+export function getSupportedLocales(): readonly Locale[] {
+  return supportedLocales.map((locale) => ({ ...locale }));
+}
+
+/** Return supported locale codes, including registered extensions. */
+export function getSupportedLocaleCodes(): readonly string[] {
+  return supportedLocales.map((locale) => locale.code);
+}
+
+/** Register an additional locale for external resource bundles. */
+export function registerLocale(locale: Locale): void {
+  const existing = supportedLocales.find((entry) => entry.code === locale.code);
+  if (existing) {
+    existing.endonym = locale.endonym;
+  } else {
+    supportedLocales.push({ ...locale });
+  }
+
+  refreshSupportedLanguages();
+}
+
+/** Remove an extension locale or reset an open app locale override. */
+export function unregisterLocale(code: string): boolean {
+  const defaultLocale = LOCALES.find((entry) => entry.code === code);
+  const index = supportedLocales.findIndex((entry) => entry.code === code);
+  if (index < 0) {
+    return false;
+  }
+  if (defaultLocale) {
+    supportedLocales[index] = { ...defaultLocale };
+    refreshSupportedLanguages();
+    return true;
+  }
+  supportedLocales.splice(index, 1);
+  refreshSupportedLanguages();
+  return true;
+}
+
+/** Reset runtime-supported locales to the open app defaults. */
+export function resetLocales(): void {
+  supportedLocales.splice(0, supportedLocales.length, ...defaultSupportedLocales());
+  refreshSupportedLanguages();
+}

@@ -26,7 +26,7 @@ import (
 	"context"
 	"testing"
 
-	"go.openpit.dev/officer/internal/domain"
+	"go.openpit.dev/officer/framework/domain"
 )
 
 // seedAuditFixtures creates an account and an actor principal for the audit tests.

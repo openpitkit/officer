@@ -19,7 +19,13 @@ import i18n, { type Resource, type ResourceLanguage } from "i18next";
 import LanguageDetector from "i18next-browser-languagedetector";
 import { initReactI18next } from "react-i18next";
 
-import { DEFAULT_LOCALE, LOCALE_CODES } from "@/i18n/locales";
+import {
+  DEFAULT_LOCALE,
+  getSupportedLocaleCodes,
+  registerLocale,
+  resetLocales,
+  unregisterLocale,
+} from "./locales";
 
 // Storage key the detected/selected language is cached under. The detector
 // mirrors the value to localStorage and cookie, so preferences survive a
@@ -34,7 +40,7 @@ const modules = import.meta.glob<Catalog>("./locales/**/*.json", {
   eager: true,
 });
 
-const resources: Resource = {};
+export const openLocaleResources: Resource = {};
 for (const [path, mod] of Object.entries(modules)) {
   // Path shape: ./locales/<locale>/<namespace>.json
   const match = path.match(/\.\/locales\/([^/]+)\/([^/]+)\.json$/);
@@ -42,16 +48,16 @@ for (const [path, mod] of Object.entries(modules)) {
     continue;
   }
   const [, locale, namespace] = match;
-  (resources[locale] ??= {})[namespace] = mod.default;
+  (openLocaleResources[locale] ??= {})[namespace] = mod.default;
 }
 
 void i18n
   .use(LanguageDetector)
   .use(initReactI18next)
   .init({
-    resources,
+    resources: openLocaleResources,
     fallbackLng: DEFAULT_LOCALE,
-    supportedLngs: LOCALE_CODES,
+    supportedLngs: getSupportedLocaleCodes(),
     // A detected language outside the supported set falls back to en rather
     // than narrowing a region tag (e.g. en-GB) to a missing base.
     nonExplicitSupportedLngs: false,
@@ -68,4 +74,23 @@ void i18n
     },
   });
 
+/** Register or replace a locale namespace resource bundle. */
+export function registerLocaleResources(
+  locale: string,
+  namespace: string,
+  catalog: ResourceLanguage,
+): void {
+  i18n.addResourceBundle(locale, namespace, catalog, true, true);
+}
+
+/** Register locale namespace resource bundles from an i18next resource map. */
+export function registerLocaleResourceMap(resources: Resource): void {
+  for (const [locale, namespaces] of Object.entries(resources)) {
+    for (const [namespace, catalog] of Object.entries(namespaces ?? {})) {
+      registerLocaleResources(locale, namespace, catalog as ResourceLanguage);
+    }
+  }
+}
+
+export { registerLocale, resetLocales, unregisterLocale };
 export default i18n;

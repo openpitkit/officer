@@ -15,19 +15,13 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { renderWithApi as render } from "@/test/apiClient";
 import { I18nextProvider } from "react-i18next";
 import { MemoryRouter } from "react-router-dom";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  deleteMarketDataInstrument,
-  fetchMarketData,
-  searchMarketDataSymbols,
-  updateMarketDataInstanceSettings,
-  upsertMarketDataInstrument,
-} from "@/api/client";
 import type {
   MarketDataInstance,
   MarketDataStatus,
@@ -61,26 +55,11 @@ beforeAll(() => {
   proto.scrollIntoView = () => { };
 });
 
-// Keep the real client (ApiError, normalizers) and replace the network calls the
-// page makes so no real request is issued.
-vi.mock("@/api/client", async () => {
-  const actual =
-    await vi.importActual<typeof import("@/api/client")>("@/api/client");
-  return {
-    ...actual,
-    fetchMarketData: vi.fn(),
-    upsertMarketDataInstrument: vi.fn(),
-    updateMarketDataInstanceSettings: vi.fn(),
-    deleteMarketDataInstrument: vi.fn(),
-    searchMarketDataSymbols: vi.fn(),
-  };
-});
-
-const fetchMarketDataMock = vi.mocked(fetchMarketData);
-const upsertMock = vi.mocked(upsertMarketDataInstrument);
-const updateSettingsMock = vi.mocked(updateMarketDataInstanceSettings);
-const deleteInstrumentMock = vi.mocked(deleteMarketDataInstrument);
-const searchMock = vi.mocked(searchMarketDataSymbols);
+const fetchMarketDataMock = vi.fn();
+const upsertMock = vi.fn();
+const updateSettingsMock = vi.fn();
+const deleteInstrumentMock = vi.fn();
+const searchMock = vi.fn();
 
 function renderMarketDataPage() {
   render(
@@ -96,6 +75,15 @@ function renderMarketDataPage() {
         </DisplayPreferencesProvider>
       </ThemeProvider>
     </I18nextProvider>,
+    {
+      api: {
+        deleteMarketDataInstrument: deleteInstrumentMock,
+        fetchMarketData: fetchMarketDataMock,
+        searchMarketDataSymbols: searchMock,
+        updateMarketDataInstanceSettings: updateSettingsMock,
+        upsertMarketDataInstrument: upsertMock,
+      },
+    },
   );
 }
 

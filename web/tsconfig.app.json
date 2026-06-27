@@ -24,6 +24,7 @@
 
     "baseUrl": ".",
     "paths": {
+      "@openpit/officer-web": ["./src/index.ts"],
       "@/*": ["./src/*"]
     }
   },

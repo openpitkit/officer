@@ -43,6 +43,67 @@ The operator SPA (`serve` mode) provides four pages:
 - **Limits** - browse and edit risk limit barriers across all policies.
 - **Audit** - append-only audit trail of all control-plane actions.
 
+## Extending Pit Officer
+
+The open app is itself a consumer of the public framework packages under
+`go.openpit.dev/officer/framework/...`; `go.openpit.dev/officer/openapp.Register`
+is the open composition entry point. A separate distribution can start from the
+same framework seams and add, replace, hide, or remove surfaces by composition.
+The worked proof is `examples/closedref`, which imports framework packages and
+the public `openapp` entry point without importing `go.openpit.dev/officer/internal`.
+
+- Domain types live in `go.openpit.dev/officer/framework/domain`. Caller/source
+  context lives in `go.openpit.dev/officer/framework/auth` through
+  `ContextWithCaller` and `CallerFromContext`.
+- Persistent state is the `store.Store` / `store.RealmStore` contract from
+  `go.openpit.dev/officer/framework/store`. Versioned schema application is
+  `migration.Apply` over a `migration.MigrationSource` from
+  `go.openpit.dev/officer/framework/migration`.
+- Engine wiring is split between `engine.Engine` and `engine.BuildFunc` in
+  `go.openpit.dev/officer/framework/engine`, and `node.Node` /
+  `node.NodeRouter` in `go.openpit.dev/officer/framework/node`.
+- Market-data extensions use `marketdata.Registry.Register` and
+  `marketdata.Registry.Unregister` from
+  `go.openpit.dev/officer/framework/marketdata`. Providers are keyed by stable
+  `Provider.Type`; connector factories emit `QuoteUpdate` values into the
+  injectable `marketdata.Sink`.
+- Approval-token signing depends only on `signing.Service` from
+  `go.openpit.dev/officer/framework/signing`; concrete key management belongs
+  to the consuming distribution.
+- REST routes use `httpapi.RouteRegistry.Register` and
+  `httpapi.RouteRegistry.Unregister` from
+  `go.openpit.dev/officer/framework/web/httpapi`. Routes are keyed by stable
+  `Route.ID`. Re-registering an id replaces the entry in place, unregistering
+  removes it structurally, and the `Authorizer` middleware hides a registered
+  route by denying its permission.
+- MCP tools use `mcp.ToolRegistry.Register`, `mcp.ToolRegistry.Unregister`, and
+  `mcp.ToolRegistry.Catalog` from `go.openpit.dev/officer/framework/mcp`.
+  Descriptors are keyed by stable tool name. Re-registering replaces,
+  unregistering removes both handler and catalogue projection, and
+  `mcp.Guard` applies the `Authorizer` plus per-command enabled state. The SDK
+  free catalogue view is `go.openpit.dev/officer/framework/mcp/catalog`.
+
+Every registry uses stable ids deliberately: add with a new id, replace by
+registering the same id, remove with the explicit unregister API, and hide by
+leaving the entry registered while the `Authorizer` denies it. The reference
+composition demonstrates a private route, MCP tool, market-data provider, custom
+authorizer, replacement, hiding, and removal without forking or patching the
+open app.
+
+### Deferred extension work
+
+The transport-agnostic node and engine seam is ready for a remote or RPC-backed
+engine node, but the only shipped implementation today is the in-process cgo
+node used by the open binary.
+
+The market-data manager accepts quotes through the injectable `marketdata.Sink`,
+so a distribution can later place a distribution mesh in front of the sink
+without changing the framework or the open connectors.
+
+The open repository ships an allow-all `Authorizer`. A consuming distribution is
+expected to replace it with real user, company, and entitlement logic through
+the same HTTP and MCP authorization seam.
+
 ## Run modes
 
 Pit Officer ships as a single binary, `pit-officer`, with four subcommands:

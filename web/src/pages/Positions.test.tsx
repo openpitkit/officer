@@ -15,19 +15,13 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { renderWithApi as render } from "@/test/apiClient";
 import { I18nextProvider } from "react-i18next";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  createAdjustment,
-  exportBusinessCsv,
-  fetchAdjustments,
-  importBusinessCsv,
-  previewBusinessCsvImport,
-} from "@/api/client";
 import type {
   Account,
   Adjustment,
@@ -113,19 +107,6 @@ vi.mock("@/components/TableControls", async () => {
     ),
   };
 });
-vi.mock("@/api/client", async () => {
-  const actual =
-    await vi.importActual<typeof import("@/api/client")>("@/api/client");
-  return {
-    ...actual,
-    createAdjustment: vi.fn(),
-    exportBusinessCsv: vi.fn(),
-    fetchAdjustments: vi.fn(),
-    importBusinessCsv: vi.fn(),
-    previewBusinessCsvImport: vi.fn(),
-  };
-});
-
 function ready<T>(data: T): PollingResult<T> {
   return { load: { state: "ready", data, error: null }, reload: vi.fn() };
 }
@@ -133,11 +114,11 @@ function ready<T>(data: T): PollingResult<T> {
 const useAccountsMock = vi.mocked(useAccounts);
 const useAdjustmentsMock = vi.mocked(useAdjustments);
 const useBalancesMock = vi.mocked(useBalances);
-const createAdjustmentMock = vi.mocked(createAdjustment);
-const exportBusinessCsvMock = vi.mocked(exportBusinessCsv);
-const fetchAdjustmentsMock = vi.mocked(fetchAdjustments);
-const importBusinessCsvMock = vi.mocked(importBusinessCsv);
-const previewBusinessCsvImportMock = vi.mocked(previewBusinessCsvImport);
+const createAdjustmentMock = vi.fn();
+const exportBusinessCsvMock = vi.fn();
+const fetchAdjustmentsMock = vi.fn();
+const importBusinessCsvMock = vi.fn();
+const previewBusinessCsvImportMock = vi.fn();
 
 const proto = window.HTMLElement.prototype as HTMLElement & {
   hasPointerCapture?: (pointerId: number) => boolean;
@@ -203,6 +184,15 @@ function renderPositions(initialEntry = "/positions") {
         </DisplayPreferencesProvider>
       </ThemeProvider>
     </I18nextProvider>,
+    {
+      api: {
+        createAdjustment: createAdjustmentMock,
+        exportBusinessCsv: exportBusinessCsvMock,
+        fetchAdjustments: fetchAdjustmentsMock,
+        importBusinessCsv: importBusinessCsvMock,
+        previewBusinessCsvImport: previewBusinessCsvImportMock,
+      },
+    },
   );
 }
 

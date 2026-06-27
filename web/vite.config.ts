@@ -27,6 +27,9 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
+      "@openpit/officer-web": fileURLToPath(
+        new URL("./src/index.ts", import.meta.url),
+      ),
       "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
   },
@@ -51,9 +54,13 @@ export default defineConfig({
     // running under Vite. Run the backend pinned to this port in dev:
     // `pit-officer serve -http-addr 127.0.0.1:8787` (serve defaults to a free
     // port). The embedded production build is same-origin and ignores this.
-    // `/api/v1` is the versioned surface; `/api` is kept as the prefix so any
-    // unversioned probe still reaches the backend.
+    // `/app/api/v1` is the panel surface consumed by the SPA. `/api/v1` and
+    // `/api` stay proxied for direct control-plane probes during development.
     proxy: {
+      "/app/api/v1": {
+        target: "http://127.0.0.1:8787",
+        changeOrigin: true,
+      },
       "/api/v1": {
         target: "http://127.0.0.1:8787",
         changeOrigin: true,

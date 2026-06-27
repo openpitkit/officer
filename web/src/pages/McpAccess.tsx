@@ -18,7 +18,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { ApiError, setMcpCommand } from "@/api/client";
 import type { McpCommand } from "@/api/types";
 import { useMcpAccess } from "@/api/useMcpAccess";
 import { ConnectAgent } from "@/components/ConnectAgent";
@@ -44,6 +43,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { ApiError, useOfficerApi } from "@/framework";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -209,6 +209,7 @@ function CommandsTable({
 
 export function McpAccess() {
   const { load, reload } = useMcpAccess();
+  const { setMcpCommand } = useOfficerApi();
 
   // Local snapshot so toggling reflects immediately while the PUT is in flight.
   const [localCommands, setLocalCommands] = useState<McpCommand[] | null>(null);

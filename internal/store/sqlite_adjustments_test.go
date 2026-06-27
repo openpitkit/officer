@@ -27,7 +27,7 @@ import (
 	"strings"
 	"testing"
 
-	"go.openpit.dev/officer/internal/domain"
+	"go.openpit.dev/officer/framework/domain"
 )
 
 // seedAdjustmentFixtures creates the dictionary rows adjustment tests need.

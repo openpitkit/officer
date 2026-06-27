@@ -31,7 +31,8 @@ import (
 	"strings"
 	"time"
 
-	"go.openpit.dev/officer/internal/domain"
+	"go.openpit.dev/officer/framework/domain"
+	fwstore "go.openpit.dev/officer/framework/store"
 )
 
 // auditSelect is the shared projection for audit reads. The surrogate id is
@@ -44,7 +45,9 @@ FROM audit au`
 // AppendAudit persists a new append-only audit record, assigning the external id
 // and timestamp. Account and actor codes are written verbatim; missing
 // dictionary rows do not reject the audit write.
-func (r *realmStore) AppendAudit(ctx context.Context, entry AuditEntry) error {
+func (r *realmStore) AppendAudit(
+	ctx context.Context, entry fwstore.AuditEntry,
+) error {
 	xid, err := newExternalID()
 	if err != nil {
 		return err

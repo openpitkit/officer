@@ -34,7 +34,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
-import { ApiError, createAdjustment, fetchAdjustments } from "@/api/client";
+import { ApiError, useOfficerApi } from "@/framework";
 import { formatDate, formatTime } from "@/i18n/format";
 import type {
   Adjustment,
@@ -594,6 +594,7 @@ function AdjustmentPanel({
 }) {
   const { t } = useTranslation("positions");
   const { t: tc } = useTranslation();
+  const { createAdjustment } = useOfficerApi();
   const [account, setAccount] = useState(initialAccount);
   const [asset, setAsset] = useState(initialAsset);
   const [available, setAvailable] =
@@ -1453,6 +1454,7 @@ function AdjustDialog({
   }
 
   const { t } = useTranslation("positions");
+  const { createAdjustment } = useOfficerApi();
 
   const submit = async () => {
     const trimAccount = account.trim();
@@ -1747,6 +1749,7 @@ type PositionsTab = "positions" | "history";
 
 export function Positions() {
   const { t } = useTranslation("positions");
+  const { fetchAdjustments } = useOfficerApi();
   const [searchParams] = useSearchParams();
   const initialAccount = searchParams.get("account") ?? "";
 

@@ -21,39 +21,18 @@ import { I18nextProvider } from "react-i18next";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  createMarketDataInstance,
-  fetchMarketData,
-  restartMarketData,
-  setMarketDataInstanceEnabled,
-  setWelcomeSeen,
-  upsertMarketDataInstrument,
-} from "@/api/client";
 import type { MarketDataInstance, MarketDataStatus } from "@/api/types";
 import { WelcomeDialog } from "@/components/WelcomeDialog";
+import { ApiClientProvider, type OfficerApi } from "@/framework";
 import i18n from "@/i18n";
 import { ThemeProvider } from "@/theme/ThemeProvider";
 
-vi.mock("@/api/client", async () => {
-  const actual =
-    await vi.importActual<typeof import("@/api/client")>("@/api/client");
-  return {
-    ...actual,
-    createMarketDataInstance: vi.fn(),
-    fetchMarketData: vi.fn(),
-    restartMarketData: vi.fn(),
-    setMarketDataInstanceEnabled: vi.fn(),
-    upsertMarketDataInstrument: vi.fn(),
-    setWelcomeSeen: vi.fn(),
-  };
-});
-
-const createMarketDataInstanceMock = vi.mocked(createMarketDataInstance);
-const fetchMarketDataMock = vi.mocked(fetchMarketData);
-const restartMarketDataMock = vi.mocked(restartMarketData);
-const setMarketDataInstanceEnabledMock = vi.mocked(setMarketDataInstanceEnabled);
-const upsertMarketDataInstrumentMock = vi.mocked(upsertMarketDataInstrument);
-const setWelcomeSeenMock = vi.mocked(setWelcomeSeen);
+const createMarketDataInstanceMock = vi.fn();
+const fetchMarketDataMock = vi.fn();
+const restartMarketDataMock = vi.fn();
+const setMarketDataInstanceEnabledMock = vi.fn();
+const upsertMarketDataInstrumentMock = vi.fn();
+const setWelcomeSeenMock = vi.fn();
 
 function byoInstance(
   overrides: Partial<MarketDataInstance> = {},
@@ -102,11 +81,26 @@ function marketDataStatus(
 }
 
 function renderWelcome(onOpenChange = vi.fn()) {
+  const api = {
+    createAccount: vi.fn().mockResolvedValue({}),
+    createAdjustment: vi.fn().mockResolvedValue({}),
+    createMarketDataInstance: createMarketDataInstanceMock,
+    fetchAccounts: vi.fn().mockResolvedValue([]),
+    fetchMarketData: fetchMarketDataMock,
+    putLimit: vi.fn().mockResolvedValue({}),
+    restartMarketData: restartMarketDataMock,
+    setAccountNotes: vi.fn().mockResolvedValue({}),
+    setMarketDataInstanceEnabled: setMarketDataInstanceEnabledMock,
+    setWelcomeSeen: setWelcomeSeenMock,
+    upsertMarketDataInstrument: upsertMarketDataInstrumentMock,
+  } as unknown as OfficerApi;
   render(
     <I18nextProvider i18n={i18n}>
       <ThemeProvider storageKey="pit-officer-test-theme" defaultMode="light">
         <MemoryRouter>
-          <WelcomeDialog open onOpenChange={onOpenChange} />
+          <ApiClientProvider config={{ baseUrl: "/app/api/v1" }} api={api}>
+            <WelcomeDialog open onOpenChange={onOpenChange} />
+          </ApiClientProvider>
         </MemoryRouter>
       </ThemeProvider>
     </I18nextProvider>,

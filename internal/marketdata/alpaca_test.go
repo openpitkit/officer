@@ -29,7 +29,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"go.openpit.dev/officer/internal/domain"
+	"go.openpit.dev/officer/framework/domain"
 )
 
 func TestParseAlpacaCredentials(t *testing.T) {

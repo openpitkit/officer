@@ -39,15 +39,8 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
-	"go.openpit.dev/officer/internal/domain"
-)
-
-// Algorithm identifiers carried in the envelope and payload.
-const (
-	// AlgEd25519 marks a signed envelope.
-	AlgEd25519 = "ed25519"
-	// AlgNone marks an unsigned envelope produced under global eSign-off.
-	AlgNone = "none"
+	"go.openpit.dev/officer/framework/domain"
+	fwsigning "go.openpit.dev/officer/framework/signing"
 )
 
 // Key material formats accepted by ImportKey and produced by ActivePublicKey.
@@ -88,6 +81,8 @@ type Service struct {
 	signKey    ed25519.PrivateKey // expanded from active seed; nil when none
 	usedNonces map[string]time.Time
 }
+
+var _ fwsigning.Service = (*Service)(nil)
 
 // Envelope is the wire form of a signed (or eSign-off) approval token. Signature
 // is omitted under alg "none".
@@ -161,7 +156,7 @@ func (s *Service) storeNewActive(ctx context.Context, pub ed25519.PublicKey, see
 	key := domain.SigningKey{
 		CreatedAt:  time.Now().UTC(),
 		KeyID:      uuid.NewString(),
-		Alg:        AlgEd25519,
+		Alg:        fwsigning.AlgEd25519,
 		PublicKey:  append([]byte(nil), pub...),
 		PrivateKey: append([]byte(nil), seed...),
 		Active:     true,
@@ -225,7 +220,7 @@ func (s *Service) Sign(payload domain.ApprovalPayload) (string, error) {
 		return "", fmt.Errorf("signing: no active key: %w", domain.ErrNotFound)
 	}
 	payload.KeyID = active.KeyID
-	payload.Alg = AlgEd25519
+	payload.Alg = fwsigning.AlgEd25519
 	canon, err := CanonicalBytes(payload)
 	if err != nil {
 		return "", err
@@ -235,95 +230,79 @@ func (s *Service) Sign(payload domain.ApprovalPayload) (string, error) {
 		Approval:  payload,
 		Signature: base64.StdEncoding.EncodeToString(sig),
 		KeyID:     active.KeyID,
-		Alg:       AlgEd25519,
+		Alg:       fwsigning.AlgEd25519,
 	}
 	return BuildEnvelope(env)
+}
+
+// SignNone builds an unsigned (eSign-off) envelope token so Service satisfies
+// the framework signing seam.
+func (s *Service) SignNone(payload domain.ApprovalPayload) (string, error) {
+	return SignNone(payload)
 }
 
 // SignNone builds an unsigned (eSign-off) envelope token: the full payload is
 // emitted with alg "none" and no signature.
 func SignNone(payload domain.ApprovalPayload) (string, error) {
 	payload.KeyID = ""
-	payload.Alg = AlgNone
-	env := Envelope{Approval: payload, Alg: AlgNone}
+	payload.Alg = fwsigning.AlgNone
+	env := Envelope{Approval: payload, Alg: fwsigning.AlgNone}
 	return BuildEnvelope(env)
-}
-
-// VerifyParams are the connector-side expectations a token is re-bound against.
-// Empty fields are not checked, except those always present in the payload.
-type VerifyParams struct {
-	OrderExternalID string
-	Instrument      string
-	Venue           string
-	Side            string
-	Quantity        string
-	AmountKind      string
-	OrderType       string
-	LimitPrice      string
-	PriceCurrency   string
-	TimeInForce     string
-	AccountID       string
-	AccountGroupID  string
-	Now             time.Time // verification clock; zero means time.Now().UTC()
-}
-
-// VerifyResult is the structured outcome of a successful Verify.
-type VerifyResult struct {
-	Payload domain.ApprovalPayload
-	Signed  bool
 }
 
 // Verify decodes the token, recomputes its canonical bytes, verifies the
 // signature when alg is ed25519, re-binds the bound order params against expect,
 // and enforces expiry. For alg "none" the signature step is skipped; binding and
 // expiry still apply.
-func (s *Service) Verify(ctx context.Context, token string, expect VerifyParams) (VerifyResult, error) {
+func (s *Service) Verify(
+	ctx context.Context, token string, expect fwsigning.VerifyParams,
+) (fwsigning.VerifyResult, error) {
 	env, err := DecodeEnvelope(token)
 	if err != nil {
-		return VerifyResult{}, err
+		return fwsigning.VerifyResult{}, err
 	}
 	canon, err := CanonicalBytes(env.Approval)
 	if err != nil {
-		return VerifyResult{}, err
+		return fwsigning.VerifyResult{}, err
 	}
 	signed := false
 	switch env.Approval.Alg {
-	case AlgEd25519:
-		if env.Alg != AlgEd25519 {
-			return VerifyResult{}, fmt.Errorf("signing: envelope alg %q mismatches payload: %w", env.Alg, domain.ErrInvalid)
+	case fwsigning.AlgEd25519:
+		if env.Alg != fwsigning.AlgEd25519 {
+			return fwsigning.VerifyResult{}, fmt.Errorf("signing: envelope alg %q mismatches payload: %w", env.Alg, domain.ErrInvalid)
 		}
 		pub, err := s.publicKeyFor(ctx, env.Approval.KeyID)
 		if err != nil {
-			return VerifyResult{}, err
+			return fwsigning.VerifyResult{}, err
 		}
 		sig, err := base64.StdEncoding.DecodeString(env.Signature)
 		if err != nil {
-			return VerifyResult{}, fmt.Errorf("signing: decode signature: %w", domain.ErrInvalid)
+			return fwsigning.VerifyResult{}, fmt.Errorf("signing: decode signature: %w", domain.ErrInvalid)
 		}
 		if !ed25519.Verify(pub, canon, sig) {
-			return VerifyResult{}, fmt.Errorf("signing: signature verification failed: %w", domain.ErrInvalid)
+			return fwsigning.VerifyResult{}, fmt.Errorf("signing: signature verification failed: %w", domain.ErrInvalid)
 		}
 		signed = true
-	case AlgNone:
-		if env.Alg != AlgNone {
-			return VerifyResult{}, fmt.Errorf("signing: envelope alg %q mismatches payload: %w", env.Alg, domain.ErrInvalid)
+	case fwsigning.AlgNone:
+		if env.Alg != fwsigning.AlgNone {
+			return fwsigning.VerifyResult{}, fmt.Errorf("signing: envelope alg %q mismatches payload: %w", env.Alg, domain.ErrInvalid)
 		}
 		off, err := s.NoESign(ctx)
 		if err != nil {
-			return VerifyResult{}, err
+			return fwsigning.VerifyResult{}, err
 		}
 		if !off {
-			return VerifyResult{}, fmt.Errorf("signing: unsigned token rejected while eSign is enabled: %w", domain.ErrInvalid)
+			return fwsigning.VerifyResult{}, fmt.Errorf("signing: unsigned token rejected while eSign is enabled: %w", domain.ErrInvalid)
 		}
 		// eSign-off: no signature, binding+expiry still enforced.
 	default:
-		return VerifyResult{}, fmt.Errorf("signing: unsupported alg %q: %w", env.Approval.Alg, domain.ErrInvalid)
+		return fwsigning.VerifyResult{}, fmt.Errorf("signing: unsupported alg %q: %w", env.Approval.Alg, domain.ErrInvalid)
 	}
 	if env.Approval.Version != 1 {
-		return VerifyResult{}, fmt.Errorf("signing: unsupported payload version %d: %w", env.Approval.Version, domain.ErrInvalid)
+		return fwsigning.VerifyResult{}, fmt.Errorf("signing: unsupported payload version %d: %w", env.Approval.Version, domain.ErrInvalid)
 	}
 	if err := rebind(env.Approval, expect); err != nil {
-		return VerifyResult{}, err
+		return fwsigning.VerifyResult{}, err
 	}
 	now := expect.Now
 	if now.IsZero() {
@@ -331,15 +310,15 @@ func (s *Service) Verify(ctx context.Context, token string, expect VerifyParams)
 	}
 	expiresAt, err := time.Parse(time.RFC3339Nano, env.Approval.ExpiresAt)
 	if err != nil {
-		return VerifyResult{}, fmt.Errorf("signing: parse expiresAt: %w", domain.ErrInvalid)
+		return fwsigning.VerifyResult{}, fmt.Errorf("signing: parse expiresAt: %w", domain.ErrInvalid)
 	}
 	if now.After(expiresAt) {
-		return VerifyResult{}, fmt.Errorf("signing: token expired at %s: %w", env.Approval.ExpiresAt, domain.ErrInvalid)
+		return fwsigning.VerifyResult{}, fmt.Errorf("signing: token expired at %s: %w", env.Approval.ExpiresAt, domain.ErrInvalid)
 	}
 	if err := s.consumeImmediateNonce(env.Approval, expiresAt, now); err != nil {
-		return VerifyResult{}, err
+		return fwsigning.VerifyResult{}, err
 	}
-	return VerifyResult{Payload: env.Approval, Signed: signed}, nil
+	return fwsigning.VerifyResult{Payload: env.Approval, Signed: signed}, nil
 }
 
 func (s *Service) consumeImmediateNonce(
@@ -462,7 +441,7 @@ func DecodeEnvelope(token string) (Envelope, error) {
 
 // rebind compares the bound order params in the payload against expect, failing
 // on any mismatch. Optional fields are checked only when non-empty in expect.
-func rebind(p domain.ApprovalPayload, expect VerifyParams) error {
+func rebind(p domain.ApprovalPayload, expect fwsigning.VerifyParams) error {
 	check := func(field, want, got string) error {
 		if want != got {
 			return fmt.Errorf("signing: %s mismatch (token %q != order %q): %w", field, got, want, domain.ErrInvalid)

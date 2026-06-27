@@ -20,16 +20,24 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 
 import App from "@/App";
+import { ApiClientProvider, AuthProvider } from "@/framework";
+import i18n from "@/i18n";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
-import "@/i18n";
 import "@/index.css";
+import "@/register";
 
 const container = document.getElementById("root");
 if (!container) {
   throw new Error("root element #root not found");
 }
+
+const apiConfig = {
+  baseUrl: "/app/api/v1",
+  translate: (key: string, params?: Record<string, unknown>) =>
+    i18n.t(key, params),
+};
 
 // Resources are bundled eagerly (see i18n/index.ts glob), so i18next is ready
 // synchronously and Suspense only guards the edge case of a not-yet-ready tree.
@@ -39,9 +47,13 @@ createRoot(container).render(
       <DisplayPreferencesProvider>
         <LocaleProvider>
           <Suspense fallback={null}>
-            <BrowserRouter>
-              <App />
-            </BrowserRouter>
+            <ApiClientProvider config={apiConfig}>
+              <BrowserRouter>
+                <AuthProvider>
+                  <App />
+                </AuthProvider>
+              </BrowserRouter>
+            </ApiClientProvider>
           </Suspense>
         </LocaleProvider>
       </DisplayPreferencesProvider>

@@ -36,26 +36,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
-
-	"go.openpit.dev/officer/internal/auth"
-	"go.openpit.dev/officer/internal/backend"
-	"go.openpit.dev/officer/internal/backup"
-	"go.openpit.dev/officer/internal/businesscsv"
-	"go.openpit.dev/officer/internal/domain"
-	"go.openpit.dev/officer/internal/engine"
-	"go.openpit.dev/officer/internal/node"
+	"go.openpit.dev/officer/framework/backend"
+	"go.openpit.dev/officer/framework/backup"
+	"go.openpit.dev/officer/framework/businesscsv"
+	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/node"
+	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
 // auditCapREST is the maximum number of audit rows the REST endpoint returns.
@@ -81,340 +74,151 @@ const (
 	listCapREST      = 1000
 )
 
-// Service is the control-plane seam the HTTP surface calls into. It is
-// satisfied by *backend.Service.
-type Service interface {
-	Status(ctx context.Context) (backend.Status, error)
-	ListAccounts(ctx context.Context) ([]domain.Account, error)
-	ExportBackup(ctx context.Context, scope backup.Scope) (backup.Archive, string, error)
-	RestoreBackup(
-		ctx context.Context,
-		archive backup.Archive,
-		opts backup.RestoreOptions,
-	) (backup.RestoreSummary, error)
-	ExportBusinessCSV(
-		ctx context.Context,
-		req backend.BusinessCSVExportRequest,
-	) (businesscsv.ExportFile, error)
-	PreviewBusinessCSVImport(
-		ctx context.Context,
-		req backend.BusinessCSVImportRequest,
-	) (backend.BusinessCSVImportPreview, error)
-	ImportBusinessCSV(
-		ctx context.Context,
-		req backend.BusinessCSVImportRequest,
-	) (backend.BusinessCSVImportResult, error)
-	ResetDatabase(ctx context.Context) error
-	CreateAccount(ctx context.Context, id domain.AccountID) (domain.Account, error)
-	GetAccountState(ctx context.Context, id domain.AccountID) (domain.Account, node.AccountLimits, error)
-	BlockAccount(ctx context.Context, id domain.AccountID, reason string) error
-	UnblockAccount(ctx context.Context, id domain.AccountID) error
-	DeleteAccount(ctx context.Context, id domain.AccountID, force bool) error
-	SetAccountGroup(ctx context.Context, id domain.AccountID, groupCode string) error
-	SetAccountNotes(ctx context.Context, id domain.AccountID, notes string) error
-	ListLimits(ctx context.Context, account domain.AccountID) (node.AccountLimits, error)
-	PutRateLimit(ctx context.Context, limit domain.LimitRate) error
-	PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize) error
-	PutPnlBoundsLimit(ctx context.Context, limit domain.LimitPnlBounds) error
-	DeleteLimit(ctx context.Context, target node.LimitTarget) error
-	ListAudit(ctx context.Context, count int) ([]domain.AuditRow, error)
-	ListAuditFiltered(
-		ctx context.Context, filter domain.AuditFilter, count int,
-	) ([]domain.AuditRow, error)
+// Service is the control-plane seam the HTTP surface calls into.
+type Service = backend.ControlPlane
 
-	ListMcpAccess(ctx context.Context) ([]backend.McpCommand, error)
-	SetMcpAccess(ctx context.Context, command string, enabled bool) error
-
-	WelcomeSeen(ctx context.Context) (bool, error)
-	SetWelcomeSeen(ctx context.Context, seen bool) error
-
-	ListMarketData(ctx context.Context) (backend.MarketDataStatus, error)
-	RestartMarketData(ctx context.Context) error
-	VerifyMarketDataSymbol(
-		ctx context.Context, id, externalSymbol string,
-	) (backend.MarketDataSymbolVerification, error)
-	SearchMarketDataSymbols(
-		ctx context.Context, id string, input backend.MarketDataSymbolSearchInput,
-	) (backend.MarketDataSymbolSearch, error)
-	CreateMarketDataInstance(
-		ctx context.Context, instance domain.MarketDataInstance,
-	) (domain.MarketDataInstance, error)
-	SetMarketDataInstanceEnabled(ctx context.Context, id string, enabled bool) error
-	UpdateMarketDataInstanceSettings(
-		ctx context.Context, id, label, credentials string,
-	) error
-	DeleteMarketDataInstance(ctx context.Context, id string, force bool) error
-	UpsertMarketDataInstrument(ctx context.Context, instrument domain.MarketDataInstrument) error
-	SetMarketDataInstrumentEnabled(
-		ctx context.Context, instanceID, externalSymbol string, enabled bool,
-	) error
-	DeleteMarketDataInstrument(ctx context.Context, instanceID, externalSymbol string) error
-
-	CreateGroup(ctx context.Context, group domain.AccountGroup) (domain.AccountGroup, error)
-	ListGroups(ctx context.Context) ([]domain.AccountGroup, error)
-	GetGroup(ctx context.Context, code string) (domain.AccountGroup, []domain.Account, error)
-	SetGroupNotes(ctx context.Context, code, notes string) error
-	SetGroupBlocked(ctx context.Context, code string, blocked bool, reason string) error
-	DeleteGroup(ctx context.Context, code string) error
-
-	ApplyAdjustment(
-		ctx context.Context,
-		account domain.AccountID,
-		externalID domain.ExternalID,
-		req domain.AdjustmentRequest,
-	) (domain.AccountAdjustmentRecord, error)
-
-	ListBalances(ctx context.Context, account domain.AccountID, asset string) ([]domain.Balance, error)
-	ListAdjustments(
-		ctx context.Context, account domain.AccountID, source domain.Source, n int,
-	) ([]domain.AccountAdjustmentRecord, error)
-	ListAllAdjustments(
-		ctx context.Context, account domain.AccountID, source domain.Source, n int,
-	) ([]domain.AccountAdjustmentRecord, error)
-
-	SubmitOrder(ctx context.Context, o domain.Order) (domain.Order, error)
-	CheckOrder(ctx context.Context, probe domain.OrderProbe) (domain.CheckResult, error)
-	ApplyExecutionReport(
-		ctx context.Context, in domain.ExecutionReportInput,
-	) (engine.ExecutionReportResult, error)
-	GetOrder(ctx context.Context, id string) (domain.OrderDetail, error)
-	ListOrders(
-		ctx context.Context, account domain.AccountID, source domain.Source, n int,
-	) ([]domain.Order, error)
-	ListTrades(
-		ctx context.Context, account domain.AccountID, source domain.Source, n int,
-	) ([]domain.Trade, error)
-
-	Overview(ctx context.Context, since time.Time) (backend.Overview, error)
-	ServiceInfo(ctx context.Context) (backend.ServiceInfo, error)
-
-	// Signing key management.
-	GenerateSigningKey(ctx context.Context) (domain.SigningKey, error)
-	ImportSigningKey(ctx context.Context, material, format string) (domain.SigningKey, error)
-	ListSigningKeys(ctx context.Context) ([]domain.SigningKey, error)
-	ActivePublicKey(format string) (string, error)
-	GetNoESign(ctx context.Context) (bool, error)
-	SetNoESign(ctx context.Context, off bool) error
-
-	// Approval token flow.
-	SubmitOrderToken(ctx context.Context, o domain.Order, mode string) (backend.ApprovalToken, error)
-	ConfirmExecution(
-		ctx context.Context, orderID string, token string, force bool,
-	) (domain.Order, error)
-	CancelOrder(
-		ctx context.Context, orderID string, token, reason string, force bool,
-	) (domain.Order, error)
-}
-
-// LogSource is the read seam over the in-memory log tail. It is satisfied by
-// *logtail.Buffer. Snapshot returns the buffered lines oldest to newest.
-type LogSource interface {
-	Snapshot() []string
-}
-
-// Options configures the router built by NewRouter.
-type Options struct {
-	// Service is the control-plane service backing /api/v1. Required.
-	Service Service
-	// SPA is the embedded dashboard filesystem, rooted at the dist directory so
-	// "index.html" resolves at its top level. Required.
-	SPA fs.FS
-	// MCP is the streamable-HTTP MCP handler mounted under /mcp. When nil the
-	// /mcp route is not registered; the dashboard and API are unaffected.
-	MCP http.Handler
-	// Logs is the in-memory log tail backing the service log routes. When nil the
-	// /service/logs routes are not registered; the rest of the surface is
-	// unaffected.
-	Logs LogSource
-}
-
-// NewRouter builds the serve-mode HTTP handler. It wires the liveness probe,
-// the REST control-plane API, the optional MCP handler, and the embedded SPA.
-// It returns an error when a required option is missing.
-func NewRouter(opts Options) (http.Handler, error) {
-	if opts.Service == nil {
-		return nil, errors.New("httpapi: nil service")
-	}
-	if opts.SPA == nil {
-		return nil, errors.New("httpapi: nil SPA filesystem")
-	}
-
-	router := chi.NewRouter()
-	router.Use(middleware.RequestID)
-	router.Use(middleware.Recoverer)
-
-	// Plain-text liveness probe for the container healthcheck.
-	router.Get("/healthz", handleHealthz)
-
-	// The same v1 surface is mounted twice so the panel and the programmatic API
-	// are distinguishable server-side without a spoofable header: per-mount
-	// middleware stamps the source into the request context, and the backend
-	// reads the caller from there. /api/v1 is the public API (documented next
-	// phase); /app/api/v1 is the operator-panel mirror (the SPA switches its base
-	// path to it in a later phase). Per-mount authentication attaches here later.
-	router.Route("/api/v1", func(v1 chi.Router) {
-		v1.Use(limitBody)
-		v1.Use(stampSource(domain.SourceAPI))
-		mountV1(v1, opts.Service, opts.Logs)
-	})
-	router.Route("/app/api/v1", func(v1 chi.Router) {
-		v1.Use(limitBody)
-		v1.Use(stampSource(domain.SourcePanel))
-		mountV1(v1, opts.Service, opts.Logs)
-	})
-
-	if opts.MCP != nil {
-		router.Mount("/mcp", opts.MCP)
-	}
-
-	// OpenAPI spec and Swagger UI - registered before the SPA NotFound so they
-	// are served by these handlers, not the SPA catch-all.
-	router.Get("/api/openapi.yaml", serveOpenAPISpec)
-	router.Get("/docs", serveSwaggerUI)
-
-	// Explicit routes are registered above; the SPA fallback must come last so it
-	// only catches unmatched paths.
-	spa, err := newSPAHandler(opts.SPA)
-	if err != nil {
-		return nil, err
-	}
-	router.NotFound(spa.ServeHTTP)
-
-	return router, nil
-}
-
-// mountV1 registers the v1 control-plane routes on r. It is the single source of
-// truth for the v1 surface so both the /api/v1 and /app/api/v1 mounts expose
-// exactly the same handlers; the mounting middleware decides the attributed
-// source.
-func mountV1(r chi.Router, svc Service, logs LogSource) {
-	r.Get("/health", handleV1Health)
-	r.Get("/status", handleV1Status(svc))
-	r.Get("/service", handleServiceInfo(svc))
+// RegisterRoutes registers the open app's v1 route table into registry.
+func RegisterRoutes(registry *httpx.RouteRegistry, svc Service, logs httpx.LogSource) {
+	register(registry, "health.get", http.MethodGet, "/health", handleV1Health)
+	register(registry, "status.get", http.MethodGet, "/status", handleV1Status(svc))
+	register(registry, "service.get", http.MethodGet, "/service", handleServiceInfo(svc))
 	// The log tail is optional: only the serve path supplies it, so the routes
 	// register only when a source is present.
 	if logs != nil {
-		r.Get("/service/logs", handleServiceLogs(logs))
-		r.Get("/service/logs/download", handleServiceLogsDownload(logs))
+		register(registry, "service.logs.get", http.MethodGet,
+			"/service/logs", handleServiceLogs(logs))
+		register(registry, "service.logs.download.get", http.MethodGet,
+			"/service/logs/download", handleServiceLogsDownload(logs))
 	}
-	r.Get("/overview", handleOverview(svc))
+	register(registry, "overview.get", http.MethodGet, "/overview", handleOverview(svc))
 
-	r.Post("/backup/export", handleExportBackup(svc))
-	r.Post("/backup/restore", handleRestoreBackup(svc))
-	r.Post("/business-csv/export", handleExportBusinessCSV(svc))
-	r.Post("/business-csv/import/preview", handlePreviewBusinessCSVImport(svc))
-	r.Post("/business-csv/import", handleImportBusinessCSV(svc))
-	r.Post("/database/reset", handleResetDatabase(svc))
+	register(registry, "backup.export.post", http.MethodPost, "/backup/export", handleExportBackup(svc))
+	register(registry, "backup.restore.post", http.MethodPost, "/backup/restore", handleRestoreBackup(svc))
+	register(registry, "business-csv.export.post", http.MethodPost, "/business-csv/export", handleExportBusinessCSV(svc))
+	register(registry, "business-csv.import-preview.post", http.MethodPost, "/business-csv/import/preview", handlePreviewBusinessCSVImport(svc))
+	register(registry, "business-csv.import.post", http.MethodPost, "/business-csv/import", handleImportBusinessCSV(svc))
+	register(registry, "database.reset.post", http.MethodPost, "/database/reset", handleResetDatabase(svc))
 
-	r.Get("/accounts", handleListAccounts(svc))
-	r.Post("/accounts", handleCreateAccount(svc))
-	r.Get("/accounts/{code}", handleGetAccount(svc))
-	r.Post("/accounts/{code}/block", handleBlockAccount(svc))
-	r.Post("/accounts/{code}/unblock", handleUnblockAccount(svc))
-	r.Delete("/accounts/{code}", handleDeleteAccount(svc))
-	r.Put("/accounts/{code}/group", handleSetAccountGroup(svc))
-	r.Put("/accounts/{code}/notes", handleSetAccountNotes(svc))
-	r.Get("/accounts/{code}/adjustments", handleListAccountAdjustments(svc))
-	r.Post("/accounts/{code}/adjustments", handleApplyAdjustment(svc))
+	register(registry, "accounts.list.get", http.MethodGet, "/accounts", handleListAccounts(svc))
+	register(registry, "accounts.create.post", http.MethodPost, "/accounts", handleCreateAccount(svc))
+	register(registry, "accounts.get", http.MethodGet, "/accounts/{code}", handleGetAccount(svc))
+	register(registry, "accounts.block.post", http.MethodPost, "/accounts/{code}/block", handleBlockAccount(svc))
+	register(registry, "accounts.unblock.post", http.MethodPost, "/accounts/{code}/unblock", handleUnblockAccount(svc))
+	register(registry, "accounts.delete", http.MethodDelete, "/accounts/{code}", handleDeleteAccount(svc))
+	register(registry, "accounts.group.put", http.MethodPut, "/accounts/{code}/group", handleSetAccountGroup(svc))
+	register(registry, "accounts.notes.put", http.MethodPut, "/accounts/{code}/notes", handleSetAccountNotes(svc))
+	register(registry, "accounts.adjustments.list.get", http.MethodGet, "/accounts/{code}/adjustments", handleListAccountAdjustments(svc))
+	register(registry, "accounts.adjustments.apply.post", http.MethodPost, "/accounts/{code}/adjustments", handleApplyAdjustment(svc))
 
-	r.Get("/groups", handleListGroups(svc))
-	r.Post("/groups", handleCreateGroup(svc))
-	r.Get("/groups/{code}", handleGetGroup(svc))
-	r.Put("/groups/{code}/notes", handleSetGroupNotes(svc))
-	r.Post("/groups/{code}/block", handleBlockGroup(svc))
-	r.Post("/groups/{code}/unblock", handleUnblockGroup(svc))
-	r.Delete("/groups/{code}", handleDeleteGroup(svc))
+	register(registry, "groups.list.get", http.MethodGet, "/groups", handleListGroups(svc))
+	register(registry, "groups.create.post", http.MethodPost, "/groups", handleCreateGroup(svc))
+	register(registry, "groups.get", http.MethodGet, "/groups/{code}", handleGetGroup(svc))
+	register(registry, "groups.notes.put", http.MethodPut, "/groups/{code}/notes", handleSetGroupNotes(svc))
+	register(registry, "groups.block.post", http.MethodPost, "/groups/{code}/block", handleBlockGroup(svc))
+	register(registry, "groups.unblock.post", http.MethodPost, "/groups/{code}/unblock", handleUnblockGroup(svc))
+	register(registry, "groups.delete", http.MethodDelete, "/groups/{code}", handleDeleteGroup(svc))
 
-	r.Get("/balances", handleListBalances(svc))
-	r.Get("/adjustments", handleListAdjustments(svc))
+	register(registry, "balances.list.get", http.MethodGet, "/balances", handleListBalances(svc))
+	register(registry, "adjustments.list.get", http.MethodGet, "/adjustments", handleListAdjustments(svc))
 
-	r.Post("/orders", handleSubmitOrder(svc))
-	r.Post("/orders/check", handleCheckOrder(svc))
-	r.Get("/orders", handleListOrders(svc))
-	r.Get("/orders/{externalId}", handleGetOrder(svc))
-	r.Post("/orders/{externalId}/execution-reports", handleApplyExecutionReport(svc))
-	r.Get("/trades", handleListTrades(svc))
+	register(registry, "orders.submit.post", http.MethodPost, "/orders", handleSubmitOrder(svc))
+	register(registry, "orders.check.post", http.MethodPost, "/orders/check", handleCheckOrder(svc))
+	register(registry, "orders.list.get", http.MethodGet, "/orders", handleListOrders(svc))
+	register(registry, "orders.get", http.MethodGet, "/orders/{externalId}", handleGetOrder(svc))
+	register(registry, "orders.execution-reports.post", http.MethodPost, "/orders/{externalId}/execution-reports", handleApplyExecutionReport(svc))
+	register(registry, "trades.list.get", http.MethodGet, "/trades", handleListTrades(svc))
 
-	r.Get("/limits", handleListLimits(svc))
-	r.Put("/limits/rate", handlePutRateLimit(svc))
-	r.Put("/limits/order-size", handlePutOrderSizeLimit(svc))
-	r.Put("/limits/pnl-bounds", handlePutPnlBoundsLimit(svc))
-	r.Delete("/limits", handleDeleteLimit(svc))
+	register(registry, "limits.list.get", http.MethodGet, "/limits", handleListLimits(svc))
+	register(registry, "limits.rate.put", http.MethodPut, "/limits/rate", handlePutRateLimit(svc))
+	register(registry, "limits.order-size.put", http.MethodPut, "/limits/order-size", handlePutOrderSizeLimit(svc))
+	register(registry, "limits.pnl-bounds.put", http.MethodPut, "/limits/pnl-bounds", handlePutPnlBoundsLimit(svc))
+	register(registry, "limits.delete", http.MethodDelete, "/limits", handleDeleteLimit(svc))
 
-	r.Get("/audit", handleListAudit(svc))
-	r.Get("/audit/actions", handleListAuditActions())
+	register(registry, "audit.list.get", http.MethodGet, "/audit", handleListAudit(svc))
+	register(registry, "audit.actions.get", http.MethodGet, "/audit/actions", handleListAuditActions())
 
-	r.Get("/mcp-access", handleListMcpAccess(svc))
-	r.Put("/mcp-access/{command}", handleSetMcpAccess(svc))
+	register(registry, "mcp-access.list.get", http.MethodGet, "/mcp-access", handleListMcpAccess(svc))
+	register(registry, "mcp-access.set.put", http.MethodPut, "/mcp-access/{command}", handleSetMcpAccess(svc))
 
-	r.Get("/user-settings", handleGetUserSettings(svc))
-	r.Put("/user-settings", handleSetUserSettings(svc))
+	register(registry, "user-settings.get", http.MethodGet, "/user-settings", handleGetUserSettings(svc))
+	register(registry, "user-settings.put", http.MethodPut, "/user-settings", handleSetUserSettings(svc))
 
-	r.Post("/signing/keys/generate", handleGenerateSigningKey(svc))
-	r.Post("/signing/keys/import", handleImportSigningKey(svc))
-	r.Get("/signing/keys", handleListSigningKeys(svc))
-	r.Get("/signing/keys/active/public", handleGetActivePublicKey(svc))
-	r.Get("/signing/config", handleGetSigningConfig(svc))
-	r.Put("/signing/config", handleSetSigningConfig(svc))
-	r.Post("/orders/submit", handleSubmitOrderToken(svc))
-	r.Post("/orders/{externalId}/confirm", handleConfirmExecution(svc))
-	r.Post("/orders/{externalId}/cancel", handleCancelOrder(svc))
+	register(registry, "signing.keys.generate.post", http.MethodPost, "/signing/keys/generate", handleGenerateSigningKey(svc))
+	register(registry, "signing.keys.import.post", http.MethodPost, "/signing/keys/import", handleImportSigningKey(svc))
+	register(registry, "signing.keys.list.get", http.MethodGet, "/signing/keys", handleListSigningKeys(svc))
+	register(registry, "signing.keys.active-public.get", http.MethodGet, "/signing/keys/active/public", handleGetActivePublicKey(svc))
+	register(registry, "signing.config.get", http.MethodGet, "/signing/config", handleGetSigningConfig(svc))
+	register(registry, "signing.config.put", http.MethodPut, "/signing/config", handleSetSigningConfig(svc))
+	register(registry, "orders.submit-token.post", http.MethodPost, "/orders/submit", handleSubmitOrderToken(svc))
+	register(registry, "orders.confirm.post", http.MethodPost, "/orders/{externalId}/confirm", handleConfirmExecution(svc))
+	register(registry, "orders.cancel.post", http.MethodPost, "/orders/{externalId}/cancel", handleCancelOrder(svc))
 
-	r.Get("/market-data", handleListMarketData(svc))
-	r.Post("/market-data/restart", handleRestartMarketData(svc))
-	r.Post("/market-data/instances", handleCreateMarketDataInstance(svc))
-	r.Put("/market-data/instances/{id}/enabled", handleSetMarketDataInstanceEnabled(svc))
-	r.Put("/market-data/instances/{id}/settings", handleUpdateMarketDataInstanceSettings(svc))
-	r.Delete("/market-data/instances/{id}", handleDeleteMarketDataInstance(svc))
-	r.Put("/market-data/instances/{id}/instruments", handleUpsertMarketDataInstrument(svc))
-	r.Put("/market-data/instances/{id}/instruments/enabled",
-		handleSetMarketDataInstrumentEnabled(svc))
-	r.Delete("/market-data/instances/{id}/instruments", handleDeleteMarketDataInstrument(svc))
-	r.Post("/market-data/instances/{id}/verify-symbol", handleVerifyMarketDataSymbol(svc))
-	r.Post("/market-data/instances/{id}/search-symbols", handleSearchMarketDataSymbols(svc))
+	register(registry, "market-data.list.get", http.MethodGet, "/market-data", handleListMarketData(svc))
+	register(registry, "market-data.restart.post", http.MethodPost, "/market-data/restart", handleRestartMarketData(svc))
+	register(registry, "market-data.instances.create.post", http.MethodPost, "/market-data/instances", handleCreateMarketDataInstance(svc))
+	register(registry, "market-data.instances.enabled.put", http.MethodPut, "/market-data/instances/{id}/enabled", handleSetMarketDataInstanceEnabled(svc))
+	register(registry, "market-data.instances.settings.put", http.MethodPut, "/market-data/instances/{id}/settings", handleUpdateMarketDataInstanceSettings(svc))
+	register(registry, "market-data.instances.delete", http.MethodDelete, "/market-data/instances/{id}", handleDeleteMarketDataInstance(svc))
+	register(registry, "market-data.instruments.upsert.put", http.MethodPut, "/market-data/instances/{id}/instruments", handleUpsertMarketDataInstrument(svc))
+	register(registry, "market-data.instruments.enabled.put", http.MethodPut, "/market-data/instances/{id}/instruments/enabled", handleSetMarketDataInstrumentEnabled(svc))
+	register(registry, "market-data.instruments.delete", http.MethodDelete, "/market-data/instances/{id}/instruments", handleDeleteMarketDataInstrument(svc))
+	register(registry, "market-data.verify-symbol.post", http.MethodPost, "/market-data/instances/{id}/verify-symbol", handleVerifyMarketDataSymbol(svc))
+	register(registry, "market-data.search-symbols.post", http.MethodPost, "/market-data/instances/{id}/search-symbols", handleSearchMarketDataSymbols(svc))
 }
 
-// stampSource is middleware that stamps the given source onto the request
-// context's caller so the backend attributes mutations to the surface the
-// request arrived on. The source is fixed per mount and never read from a
-// request header or body. The principal is the placeholder "operator" until
-// authentication lands; this is the authorization seam - the resolved principal
-// (and role) will be filled here once per-mount auth is attached.
-func stampSource(source domain.Source) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			caller := domain.Caller{Source: source, Principal: "operator"}
-			ctx := auth.ContextWithCaller(r.Context(), caller)
-			next.ServeHTTP(w, r.WithContext(ctx))
-		})
-	}
+// NewRouteRegistry builds the open app's v1 route registry.
+func NewRouteRegistry(svc Service, logs httpx.LogSource) *httpx.RouteRegistry {
+	registry := &httpx.RouteRegistry{}
+	RegisterRoutes(registry, svc, logs)
+	return registry
 }
 
-// limitBody caps request bodies. Backup restore and business-CSV import have
-// larger caps for uploaded files; every other v1 endpoint keeps the ordinary
-// small control-plane cap. A body over the cap fails the next Decode, so an
-// oversized or unbounded body cannot exhaust memory.
-func limitBody(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Body != nil {
-			r.Body = http.MaxBytesReader(w, r.Body, requestBodyLimit(r))
-		}
-		next.ServeHTTP(w, r)
+// BodyLimitPolicy returns the open app's per-path request body cap policy.
+func BodyLimitPolicy() func(*http.Request) int64 {
+	return httpx.BodyLimitPolicy(maxRequestBody, map[string]int64{
+		"/api/v1/backup/restore":                  maxBackupRestoreBody,
+		"/app/api/v1/backup/restore":              maxBackupRestoreBody,
+		"/api/v1/business-csv/import":             maxImportBody,
+		"/app/api/v1/business-csv/import":         maxImportBody,
+		"/api/v1/business-csv/import/preview":     maxImportBody,
+		"/app/api/v1/business-csv/import/preview": maxImportBody,
 	})
 }
 
-func requestBodyLimit(r *http.Request) int64 {
-	switch r.URL.Path {
-	case "/api/v1/backup/restore", "/app/api/v1/backup/restore":
-		return maxBackupRestoreBody
-	case "/api/v1/business-csv/import",
-		"/app/api/v1/business-csv/import",
-		"/api/v1/business-csv/import/preview",
-		"/app/api/v1/business-csv/import/preview":
-		return maxImportBody
-	default:
-		return maxRequestBody
+// ExtraMounts returns the open app's non-v1 HTTP routes.
+func ExtraMounts() []httpx.ExtraMount {
+	return []httpx.ExtraMount{
+		{
+			Method:  http.MethodGet,
+			Pattern: "/healthz",
+			Handler: http.HandlerFunc(handleHealthz),
+		},
+		{
+			Method:  http.MethodGet,
+			Pattern: "/api/openapi.yaml",
+			Handler: http.HandlerFunc(serveOpenAPISpec),
+		},
+		{
+			Method:  http.MethodGet,
+			Pattern: "/docs",
+			Handler: http.HandlerFunc(serveSwaggerUI),
+		},
 	}
+}
+
+func register(
+	registry *httpx.RouteRegistry,
+	id string,
+	method string,
+	pattern string,
+	handler http.HandlerFunc,
+) {
+	registry.Register(httpx.Route{
+		ID:      id,
+		Method:  method,
+		Pattern: pattern,
+		Handler: handler,
+	})
 }
 
 // handleHealthz is the plain-text liveness endpoint.
@@ -426,7 +230,7 @@ func handleHealthz(w http.ResponseWriter, _ *http.Request) {
 
 // handleV1Health is the JSON liveness endpoint.
 func handleV1Health(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, healthDTO{OK: true})
+	httpx.WriteJSON(w, http.StatusOK, healthDTO{OK: true})
 }
 
 // handleV1Status returns the deployment status.
@@ -434,13 +238,13 @@ func handleV1Status(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		status, err := svc.Status(r.Context())
 		if err != nil {
-			writeJSON(w, http.StatusServiceUnavailable, statusDTO{
+			httpx.WriteJSON(w, http.StatusServiceUnavailable, statusDTO{
 				Nodes:   []nodeHealthDTO{},
 				Healthy: false,
 			})
 			return
 		}
-		writeJSON(w, http.StatusOK, toStatusDTO(status))
+		httpx.WriteJSON(w, http.StatusOK, toStatusDTO(status))
 	}
 }
 
@@ -452,23 +256,23 @@ func handleExportBackup(svc Service) http.HandlerFunc {
 			Zip   bool         `json:"zip"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		if !validBackupScope(req.Scope) {
-			writeErrMsg(w, http.StatusBadRequest, "validation",
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation",
 				"backup scope must include all or at least one section")
 			return
 		}
 		archive, filename, err := svc.ExportBackup(r.Context(), req.Scope)
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		if req.Zip {
 			payload, zipFilename, err := zipBackupArchive(archive, filename)
 			if err != nil {
-				writeErr(w, err)
+				httpx.WriteErr(w, err)
 				return
 			}
 			w.Header().Set("Content-Disposition",
@@ -479,7 +283,7 @@ func handleExportBackup(svc Service) http.HandlerFunc {
 		}
 		w.Header().Set("Content-Disposition",
 			`attachment; filename="`+filename+`"`)
-		writeJSON(w, http.StatusOK, archive)
+		httpx.WriteJSON(w, http.StatusOK, archive)
 	}
 }
 
@@ -498,7 +302,7 @@ func handleExportBusinessCSV(svc Service) http.HandlerFunc {
 			Zip bool `json:"zip"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		file, err := svc.ExportBusinessCSV(r.Context(), backend.BusinessCSVExportRequest{
@@ -514,7 +318,7 @@ func handleExportBusinessCSV(svc Service) http.HandlerFunc {
 			},
 		})
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		w.Header().Set("Content-Disposition",
@@ -541,10 +345,10 @@ func handlePreviewBusinessCSVImport(svc Service) http.HandlerFunc {
 		}
 		preview, err := svc.PreviewBusinessCSVImport(r.Context(), req)
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"preview": preview})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"preview": preview})
 	}
 }
 
@@ -561,10 +365,10 @@ func handleImportBusinessCSV(svc Service) http.HandlerFunc {
 		}
 		result, err := svc.ImportBusinessCSV(r.Context(), req)
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"result": result})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"result": result})
 	}
 }
 
@@ -579,16 +383,16 @@ func readBusinessCSVImportRequest(
 		ConflictPolicy string `json:"conflictPolicy"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 		return backend.BusinessCSVImportRequest{}, false
 	}
 	if req.PayloadBase64 == "" {
-		writeErrMsg(w, http.StatusBadRequest, "validation",
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "validation",
 			"payloadBase64 is required")
 		return backend.BusinessCSVImportRequest{}, false
 	}
 	if requirePolicy && req.ConflictPolicy == "" {
-		writeErrMsg(w, http.StatusBadRequest, "validation",
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "validation",
 			"conflictPolicy is required")
 		return backend.BusinessCSVImportRequest{}, false
 	}
@@ -597,10 +401,10 @@ func readBusinessCSVImportRequest(
 	)
 	if err != nil {
 		if errors.Is(err, domain.ErrTooLarge) {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return backend.BusinessCSVImportRequest{}, false
 		}
-		writeErrMsg(w, http.StatusBadRequest, "validation",
+		httpx.WriteErrMsg(w, http.StatusBadRequest, "validation",
 			"invalid business CSV file encoding")
 		return backend.BusinessCSVImportRequest{}, false
 	}
@@ -638,26 +442,26 @@ func handleRestoreBackup(svc Service) http.HandlerFunc {
 			Mode            backup.RestoreMode `json:"mode"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		if req.Mode == "" {
-			writeErrMsg(w, http.StatusBadRequest, "validation",
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation",
 				"restore mode is required")
 			return
 		}
 		if !validRestoreMode(req.Mode) {
-			writeErrMsg(w, http.StatusBadRequest, "validation",
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation",
 				"unknown restore mode")
 			return
 		}
 		if !validBackupScope(req.Scope) {
-			writeErrMsg(w, http.StatusBadRequest, "validation",
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation",
 				"restore scope must include all or at least one section")
 			return
 		}
 		if req.ArchiveFile == "" && len(req.Archive.Manifest.Sections) == 0 {
-			writeErrMsg(w, http.StatusBadRequest, "validation",
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation",
 				"backup archive is required")
 			return
 		}
@@ -666,7 +470,7 @@ func handleRestoreBackup(svc Service) http.HandlerFunc {
 			parsed, err := parseBackupArchiveFile(req.ArchiveFilename,
 				req.ArchiveFile)
 			if err != nil {
-				writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+				httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 				return
 			}
 			archive = parsed
@@ -674,10 +478,10 @@ func handleRestoreBackup(svc Service) http.HandlerFunc {
 		summary, err := svc.RestoreBackup(r.Context(), archive,
 			backup.RestoreOptions{Scope: req.Scope, Mode: req.Mode})
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"summary": summary})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"summary": summary})
 	}
 }
 
@@ -688,19 +492,19 @@ func handleResetDatabase(svc Service) http.HandlerFunc {
 			Confirm bool `json:"confirm"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		if !req.Confirm {
-			writeErrMsg(w, http.StatusBadRequest, "validation",
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation",
 				"database reset confirmation is required")
 			return
 		}
 		if err := svc.ResetDatabase(r.Context()); err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+		httpx.WriteJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	}
 }
 
@@ -840,14 +644,14 @@ func handleListAccounts(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		accounts, err := svc.ListAccounts(r.Context())
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		dtos := make([]accountDTO, 0, len(accounts))
 		for _, a := range accounts {
 			dtos = append(dtos, toAccountDTO(a))
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"accounts": dtos})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"accounts": dtos})
 	}
 }
 
@@ -860,37 +664,37 @@ func handleCreateAccount(svc Service) http.HandlerFunc {
 			Code string `json:"code"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		id := domain.AccountID(req.Code)
 		if err := domain.ValidateAccountID(id); err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		account, err := svc.CreateAccount(r.Context(), id)
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusCreated, map[string]any{"account": toAccountDTO(account)})
+		httpx.WriteJSON(w, http.StatusCreated, map[string]any{"account": toAccountDTO(account)})
 	}
 }
 
 // handleGetAccount handles GET /api/v1/accounts/{id}.
 func handleGetAccount(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathAccountID(r)
+		id, err := httpx.PathAccountID(r)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		account, limits, err := svc.GetAccountState(r.Context(), id)
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{
 			"account": toAccountDTO(account),
 			"limits":  toAccountLimitsDTO(limits),
 		})
@@ -900,20 +704,20 @@ func handleGetAccount(svc Service) http.HandlerFunc {
 // handleBlockAccount handles POST /api/v1/accounts/{id}/block.
 func handleBlockAccount(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathAccountID(r)
+		id, err := httpx.PathAccountID(r)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		var req struct {
 			Reason string `json:"reason"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		if err := svc.BlockAccount(r.Context(), id, req.Reason); err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		writeAccount(w, svc, r, id)
@@ -923,13 +727,13 @@ func handleBlockAccount(svc Service) http.HandlerFunc {
 // handleUnblockAccount handles POST /api/v1/accounts/{id}/unblock.
 func handleUnblockAccount(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathAccountID(r)
+		id, err := httpx.PathAccountID(r)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		if err := svc.UnblockAccount(r.Context(), id); err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		writeAccount(w, svc, r, id)
@@ -939,13 +743,13 @@ func handleUnblockAccount(svc Service) http.HandlerFunc {
 // handleDeleteAccount handles DELETE /api/v1/accounts/{id}.
 func handleDeleteAccount(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathAccountID(r)
+		id, err := httpx.PathAccountID(r)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		if err := svc.DeleteAccount(r.Context(), id, forceQuery(r)); err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -959,30 +763,30 @@ func handleDeleteAccount(svc Service) http.HandlerFunc {
 func writeAccount(w http.ResponseWriter, svc Service, r *http.Request, id domain.AccountID) {
 	account, _, err := svc.GetAccountState(r.Context(), id)
 	if err != nil {
-		writeErr(w, err)
+		httpx.WriteErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"account": toAccountDTO(account)})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"account": toAccountDTO(account)})
 }
 
 // handleSetAccountGroup handles PUT /api/v1/accounts/{id}/group. An empty group
 // clears membership.
 func handleSetAccountGroup(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathAccountID(r)
+		id, err := httpx.PathAccountID(r)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		var req struct {
 			Group string `json:"group"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		if err := svc.SetAccountGroup(r.Context(), id, req.Group); err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		writeAccount(w, svc, r, id)
@@ -992,20 +796,20 @@ func handleSetAccountGroup(svc Service) http.HandlerFunc {
 // handleSetAccountNotes handles PUT /api/v1/accounts/{id}/notes.
 func handleSetAccountNotes(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathAccountID(r)
+		id, err := httpx.PathAccountID(r)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		var req struct {
 			Notes string `json:"notes"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		if err := svc.SetAccountNotes(r.Context(), id, req.Notes); err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		writeAccount(w, svc, r, id)
@@ -1020,10 +824,10 @@ func handleListLimits(svc Service) http.HandlerFunc {
 		account := domain.AccountID(r.URL.Query().Get("account"))
 		limits, err := svc.ListLimits(r.Context(), account)
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"limits": toAccountLimitsDTO(limits)})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"limits": toAccountLimitsDTO(limits)})
 	}
 }
 
@@ -1033,7 +837,7 @@ func handlePutRateLimit(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req rateLimitDTO
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		limit := domain.LimitRate{
@@ -1044,15 +848,15 @@ func handlePutRateLimit(svc Service) http.HandlerFunc {
 			MaxOrders: req.MaxOrders,
 		}
 		if err := svc.PutRateLimit(r.Context(), limit); err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		persisted, err := persistedRateLimit(r.Context(), svc, limit)
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"rateLimit": toRateLimitDTO(persisted)})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"rateLimit": toRateLimitDTO(persisted)})
 	}
 }
 
@@ -1062,7 +866,7 @@ func handlePutOrderSizeLimit(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req orderSizeLimitDTO
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		limit := domain.LimitOrderSize{
@@ -1073,15 +877,15 @@ func handlePutOrderSizeLimit(svc Service) http.HandlerFunc {
 			MaxNotional: req.MaxNotional,
 		}
 		if err := svc.PutOrderSizeLimit(r.Context(), limit); err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		persisted, err := persistedOrderSizeLimit(r.Context(), svc, limit)
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"orderSizeLimit": toOrderSizeLimitDTO(persisted)})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"orderSizeLimit": toOrderSizeLimitDTO(persisted)})
 	}
 }
 
@@ -1092,7 +896,7 @@ func handlePutPnlBoundsLimit(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req pnlBoundsLimitDTO
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		limit := domain.LimitPnlBounds{
@@ -1104,15 +908,15 @@ func handlePutPnlBoundsLimit(svc Service) http.HandlerFunc {
 			InitialPnl: req.InitialPnl,
 		}
 		if err := svc.PutPnlBoundsLimit(r.Context(), limit); err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		persisted, err := persistedPnlBoundsLimit(r.Context(), svc, limit)
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"pnlBoundsLimit": toPnlBoundsLimitDTO(persisted)})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"pnlBoundsLimit": toPnlBoundsLimitDTO(persisted)})
 	}
 }
 
@@ -1184,7 +988,7 @@ func handleDeleteLimit(svc Service) http.HandlerFunc {
 			Asset:   q.Get("asset"),
 		}
 		if err := svc.DeleteLimit(r.Context(), target); err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -1199,15 +1003,15 @@ func handleDeleteLimit(svc Service) http.HandlerFunc {
 // (order submissions and execution reports) is hidden unless asked for.
 func handleListAudit(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		n, err := limitParam(r, 100, auditCapREST)
+		n, err := httpx.LimitParam(r, 100, auditCapREST)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		q := r.URL.Query()
 		actions, err := auditActionsFromQuery(q)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		filter := domain.AuditFilter{
@@ -1217,14 +1021,14 @@ func handleListAudit(svc Service) http.HandlerFunc {
 		}
 		rows, err := svc.ListAuditFiltered(r.Context(), filter, n)
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		dtos := make([]auditDTO, 0, len(rows))
 		for _, row := range rows {
 			dtos = append(dtos, toAuditDTO(row))
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"entries": dtos})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"entries": dtos})
 	}
 }
 
@@ -1283,7 +1087,7 @@ func handleListAuditActions() http.HandlerFunc {
 					domain.AuditActionsByCategory(domain.AuditCategoryTrading)),
 			},
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"groups": groups})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"groups": groups})
 	}
 }
 
@@ -1296,14 +1100,14 @@ func handleListMcpAccess(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		commands, err := svc.ListMcpAccess(r.Context())
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		dtos := make([]mcpCommandDTO, 0, len(commands))
 		for _, c := range commands {
 			dtos = append(dtos, toMcpCommandDTO(c))
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"commands": dtos})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"commands": dtos})
 	}
 }
 
@@ -1313,38 +1117,38 @@ func handleListMcpAccess(svc Service) http.HandlerFunc {
 // concern handled elsewhere; the backend just persists.
 func handleSetMcpAccess(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		command, err := pathCommand(r)
+		command, err := httpx.PathCommand(r)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		var req struct {
 			Enabled bool `json:"enabled"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		if err := svc.SetMcpAccess(r.Context(), command, req.Enabled); err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		// Re-read the catalogue so the response reflects the persisted state and
 		// the unchanged metadata of the toggled command.
 		commands, err := svc.ListMcpAccess(r.Context())
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		for _, c := range commands {
 			if c.Command.Name == command {
-				writeJSON(w, http.StatusOK, map[string]any{"command": toMcpCommandDTO(c)})
+				httpx.WriteJSON(w, http.StatusOK, map[string]any{"command": toMcpCommandDTO(c)})
 				return
 			}
 		}
 		// The backend validated the command, so it must be present; treat its
 		// absence as an internal inconsistency rather than a 404.
-		writeErrMsg(w, http.StatusInternalServerError, "internal", "internal error")
+		httpx.WriteErrMsg(w, http.StatusInternalServerError, "internal", "internal error")
 	}
 }
 
@@ -1360,10 +1164,10 @@ func handleGetUserSettings(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		seen, err := svc.WelcomeSeen(r.Context())
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, userSettingsDTO{WelcomeSeen: seen})
+		httpx.WriteJSON(w, http.StatusOK, userSettingsDTO{WelcomeSeen: seen})
 	}
 }
 
@@ -1373,14 +1177,14 @@ func handleSetUserSettings(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req userSettingsDTO
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		if err := svc.SetWelcomeSeen(r.Context(), req.WelcomeSeen); err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, userSettingsDTO{WelcomeSeen: req.WelcomeSeen})
+		httpx.WriteJSON(w, http.StatusOK, userSettingsDTO{WelcomeSeen: req.WelcomeSeen})
 	}
 }
 
@@ -1390,10 +1194,10 @@ func handleListMarketData(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		status, err := svc.ListMarketData(r.Context())
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{
 			"marketData": toMarketDataDTO(status),
 		})
 	}
@@ -1406,15 +1210,15 @@ func handleListMarketData(svc Service) http.HandlerFunc {
 func handleRestartMarketData(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := svc.RestartMarketData(r.Context()); err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		status, err := svc.ListMarketData(r.Context())
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{
 			"marketData": toMarketDataDTO(status),
 		})
 	}
@@ -1424,7 +1228,7 @@ func handleCreateMarketDataInstance(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req marketDataCreateInstanceRequestDTO
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		instance := domain.MarketDataInstance{
@@ -1440,17 +1244,17 @@ func handleCreateMarketDataInstance(svc Service) http.HandlerFunc {
 		if req.ExternalID != "" {
 			id, err := domain.ParseExternalID(req.ExternalID)
 			if err != nil {
-				writeErr(w, err)
+				httpx.WriteErr(w, err)
 				return
 			}
 			instance.ExternalID = id
 		}
 		created, err := svc.CreateMarketDataInstance(r.Context(), instance)
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusCreated, map[string]any{
+		httpx.WriteJSON(w, http.StatusCreated, map[string]any{
 			"instance": toMarketDataInstanceDTO(backend.MarketDataInstanceStatus{
 				Instance: created,
 			}),
@@ -1460,28 +1264,28 @@ func handleCreateMarketDataInstance(svc Service) http.HandlerFunc {
 
 func handleUpdateMarketDataInstanceSettings(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
+		id, err := httpx.PathID(r)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		var req marketDataUpdateInstanceSettingsRequestDTO
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		if err := svc.UpdateMarketDataInstanceSettings(
 			r.Context(), id, req.Label, req.Credentials,
 		); err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		status, err := svc.ListMarketData(r.Context())
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{
 			"marketData": toMarketDataDTO(status),
 		})
 	}
@@ -1489,53 +1293,53 @@ func handleUpdateMarketDataInstanceSettings(svc Service) http.HandlerFunc {
 
 func handleSetMarketDataInstanceEnabled(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
+		id, err := httpx.PathID(r)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		instanceID, err := domain.ParseExternalID(id)
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		var req struct {
 			Enabled bool `json:"enabled"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		if err := svc.SetMarketDataInstanceEnabled(r.Context(), id, req.Enabled); err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		status, err := svc.ListMarketData(r.Context())
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		for _, instance := range status.Instances {
 			if instance.Instance.ExternalID == instanceID {
-				writeJSON(w, http.StatusOK, map[string]any{
+				httpx.WriteJSON(w, http.StatusOK, map[string]any{
 					"enabled": instance.Instance.Enabled,
 				})
 				return
 			}
 		}
-		writeErr(w, domain.ErrNotFound)
+		httpx.WriteErr(w, domain.ErrNotFound)
 	}
 }
 
 func handleDeleteMarketDataInstance(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
+		id, err := httpx.PathID(r)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		if err := svc.DeleteMarketDataInstance(r.Context(), id, forceQuery(r)); err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -1548,19 +1352,19 @@ func forceQuery(r *http.Request) bool {
 
 func handleUpsertMarketDataInstrument(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
+		id, err := httpx.PathID(r)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		var req marketDataInstrumentDTO
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		instanceID, err := domain.ParseExternalID(id)
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		instrument := domain.MarketDataInstrument{
@@ -1572,15 +1376,15 @@ func handleUpsertMarketDataInstrument(svc Service) http.HandlerFunc {
 			Enabled:        req.Enabled,
 		}
 		if err := svc.UpsertMarketDataInstrument(r.Context(), instrument); err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		status, err := svc.ListMarketData(r.Context())
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{
 			"marketData": toMarketDataDTO(status),
 		})
 	}
@@ -1588,9 +1392,9 @@ func handleUpsertMarketDataInstrument(svc Service) http.HandlerFunc {
 
 func handleSetMarketDataInstrumentEnabled(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
+		id, err := httpx.PathID(r)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		var req struct {
@@ -1598,29 +1402,29 @@ func handleSetMarketDataInstrumentEnabled(svc Service) http.HandlerFunc {
 			Enabled        bool   `json:"enabled"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		if err := svc.SetMarketDataInstrumentEnabled(
 			r.Context(), id, req.ExternalSymbol, req.Enabled,
 		); err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"enabled": req.Enabled})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"enabled": req.Enabled})
 	}
 }
 
 func handleDeleteMarketDataInstrument(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
+		id, err := httpx.PathID(r)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		symbol := r.URL.Query().Get("externalSymbol")
 		if err := svc.DeleteMarketDataInstrument(r.Context(), id, symbol); err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -1634,24 +1438,24 @@ func handleDeleteMarketDataInstrument(svc Service) http.HandlerFunc {
 // successful call returning supported=false, not an HTTP error.
 func handleVerifyMarketDataSymbol(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
+		id, err := httpx.PathID(r)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		var req struct {
 			ExternalSymbol string `json:"externalSymbol"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		out, err := svc.VerifyMarketDataSymbol(r.Context(), id, req.ExternalSymbol)
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{
 			"verification": toMarketDataSymbolVerificationDTO(out),
 		})
 	}
@@ -1665,9 +1469,9 @@ func handleVerifyMarketDataSymbol(svc Service) http.HandlerFunc {
 // call returning supported=false, not an HTTP error.
 func handleSearchMarketDataSymbols(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
+		id, err := httpx.PathID(r)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		var req struct {
@@ -1680,18 +1484,18 @@ func handleSearchMarketDataSymbols(svc Service) http.HandlerFunc {
 			Strike                       string `json:"strike"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		if strings.TrimSpace(req.Query) == "" {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "query is required")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "query is required")
 			return
 		}
 		// The strike is an optional, caller-supplied decimal criterion. Validate it
 		// here so a malformed value (e.g. "abc") is a 400 from the boundary, not a
 		// false upstream 502 from the connector's deep decimal parse.
 		if err := domain.ValidateMarketDataStrike(strings.TrimSpace(req.Strike)); err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		out, err := svc.SearchMarketDataSymbols(r.Context(), id, backend.MarketDataSymbolSearchInput{
@@ -1704,10 +1508,10 @@ func handleSearchMarketDataSymbols(svc Service) http.HandlerFunc {
 			Strike:                       req.Strike,
 		})
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{
 			"supported": out.Supported,
 			"matches":   toMarketDataSymbolMatchDTOs(out.Matches),
 		})
@@ -1721,14 +1525,14 @@ func handleListGroups(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groups, err := svc.ListGroups(r.Context())
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		dtos := make([]groupDTO, 0, len(groups))
 		for _, g := range groups {
 			dtos = append(dtos, toGroupDTO(g))
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"groups": dtos})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"groups": dtos})
 	}
 }
 
@@ -1743,12 +1547,12 @@ func handleCreateGroup(svc Service) http.HandlerFunc {
 			Notes string `json:"notes"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		group := domain.AccountGroup{Code: req.Code, Title: req.Title, Notes: req.Notes}
 		if _, err := svc.CreateGroup(r.Context(), group); err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		writeGroup(w, svc, r, req.Code, http.StatusCreated)
@@ -1758,21 +1562,21 @@ func handleCreateGroup(svc Service) http.HandlerFunc {
 // handleGetGroup handles GET /api/v1/groups/{code}.
 func handleGetGroup(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		code, err := pathGroupCode(r)
+		code, err := httpx.PathGroupCode(r)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		group, accounts, err := svc.GetGroup(r.Context(), code)
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		dtos := make([]accountDTO, 0, len(accounts))
 		for _, a := range accounts {
 			dtos = append(dtos, toAccountDTO(a))
 		}
-		writeJSON(w, http.StatusOK, map[string]any{
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{
 			"group":    toGroupDTO(group),
 			"accounts": dtos,
 		})
@@ -1782,20 +1586,20 @@ func handleGetGroup(svc Service) http.HandlerFunc {
 // handleSetGroupNotes handles PUT /api/v1/groups/{code}/notes.
 func handleSetGroupNotes(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		code, err := pathGroupCode(r)
+		code, err := httpx.PathGroupCode(r)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		var req struct {
 			Notes string `json:"notes"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		if err := svc.SetGroupNotes(r.Context(), code, req.Notes); err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		writeGroup(w, svc, r, code, http.StatusOK)
@@ -1805,20 +1609,20 @@ func handleSetGroupNotes(svc Service) http.HandlerFunc {
 // handleBlockGroup handles POST /api/v1/groups/{code}/block.
 func handleBlockGroup(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		code, err := pathGroupCode(r)
+		code, err := httpx.PathGroupCode(r)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		var req struct {
 			Reason string `json:"reason"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		if err := svc.SetGroupBlocked(r.Context(), code, true, req.Reason); err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		writeGroup(w, svc, r, code, http.StatusOK)
@@ -1828,13 +1632,13 @@ func handleBlockGroup(svc Service) http.HandlerFunc {
 // handleUnblockGroup handles POST /api/v1/groups/{code}/unblock.
 func handleUnblockGroup(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		code, err := pathGroupCode(r)
+		code, err := httpx.PathGroupCode(r)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		if err := svc.SetGroupBlocked(r.Context(), code, false, ""); err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		writeGroup(w, svc, r, code, http.StatusOK)
@@ -1844,13 +1648,13 @@ func handleUnblockGroup(svc Service) http.HandlerFunc {
 // handleDeleteGroup handles DELETE /api/v1/groups/{code}.
 func handleDeleteGroup(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		code, err := pathGroupCode(r)
+		code, err := httpx.PathGroupCode(r)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		if err := svc.DeleteGroup(r.Context(), code); err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -1863,10 +1667,10 @@ func handleDeleteGroup(svc Service) http.HandlerFunc {
 func writeGroup(w http.ResponseWriter, svc Service, r *http.Request, code string, status int) {
 	group, _, err := svc.GetGroup(r.Context(), code)
 	if err != nil {
-		writeErr(w, err)
+		httpx.WriteErr(w, err)
 		return
 	}
-	writeJSON(w, status, map[string]any{"group": toGroupDTO(group)})
+	httpx.WriteJSON(w, status, map[string]any{"group": toGroupDTO(group)})
 }
 
 // --- spot funds -------------------------------------------------------------
@@ -1878,14 +1682,14 @@ func handleListBalances(svc Service) http.HandlerFunc {
 		balances, err := svc.ListBalances(r.Context(),
 			domain.AccountID(q.Get("account")), q.Get("asset"))
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		dtos := make([]balanceDTO, 0, len(balances))
 		for _, b := range balances {
 			dtos = append(dtos, toBalanceDTO(b))
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"balances": dtos})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"balances": dtos})
 	}
 }
 
@@ -1893,14 +1697,14 @@ func handleListBalances(svc Service) http.HandlerFunc {
 // reject is a successful call: the rejected record is returned in the body.
 func handleApplyAdjustment(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathAccountID(r)
+		id, err := httpx.PathAccountID(r)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		var req adjustmentRequestDTO
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		// A caller-supplied external id is optional. When present it must be a
@@ -1911,17 +1715,17 @@ func handleApplyAdjustment(svc Service) http.HandlerFunc {
 		if req.ExternalID != "" {
 			externalID, err = domain.ParseExternalID(req.ExternalID)
 			if err != nil {
-				writeErr(w, err)
+				httpx.WriteErr(w, err)
 				return
 			}
 		}
 		record, err := svc.ApplyAdjustment(
 			r.Context(), id, externalID, fromAdjustmentRequestDTO(req))
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusCreated, map[string]any{"adjustment": toAdjustmentDTO(record)})
+		httpx.WriteJSON(w, http.StatusCreated, map[string]any{"adjustment": toAdjustmentDTO(record)})
 	}
 }
 
@@ -1929,42 +1733,42 @@ func handleApplyAdjustment(svc Service) http.HandlerFunc {
 // GET /api/v1/accounts/{id}/adjustments[?source=&limit=].
 func handleListAccountAdjustments(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathAccountID(r)
+		id, err := httpx.PathAccountID(r)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
-		n, err := limitParam(r, listDefaultLimit, listCapREST)
+		n, err := httpx.LimitParam(r, listDefaultLimit, listCapREST)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		recs, err := svc.ListAdjustments(r.Context(), id,
 			domain.Source(r.URL.Query().Get("source")), n)
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"adjustments": toAdjustmentDTOs(recs)})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"adjustments": toAdjustmentDTOs(recs)})
 	}
 }
 
 // handleListAdjustments handles GET /api/v1/adjustments[?account=&source=&limit=].
 func handleListAdjustments(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		n, err := limitParam(r, listDefaultLimit, listCapREST)
+		n, err := httpx.LimitParam(r, listDefaultLimit, listCapREST)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		q := r.URL.Query()
 		recs, err := svc.ListAllAdjustments(r.Context(),
 			domain.AccountID(q.Get("account")), domain.Source(q.Get("source")), n)
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"adjustments": toAdjustmentDTOs(recs)})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"adjustments": toAdjustmentDTOs(recs)})
 	}
 }
 
@@ -1994,7 +1798,7 @@ func handleSubmitOrder(svc Service) http.HandlerFunc {
 			Price       string `json:"price"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		order := domain.Order{
@@ -2008,10 +1812,10 @@ func handleSubmitOrder(svc Service) http.HandlerFunc {
 		}
 		out, err := svc.SubmitOrder(r.Context(), order)
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusCreated, map[string]any{"order": toOrderDTO(out)})
+		httpx.WriteJSON(w, http.StatusCreated, map[string]any{"order": toOrderDTO(out)})
 	}
 }
 
@@ -2031,7 +1835,7 @@ func handleCheckOrder(svc Service) http.HandlerFunc {
 			Price       string `json:"price"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		probe := domain.OrderProbe{
@@ -2045,33 +1849,33 @@ func handleCheckOrder(svc Service) http.HandlerFunc {
 		}
 		out, err := svc.CheckOrder(r.Context(), probe)
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"check": toCheckResultDTO(out)})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"check": toCheckResultDTO(out)})
 	}
 }
 
 // handleListOrders handles GET /api/v1/orders[?account=&source=&limit=].
 func handleListOrders(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		n, err := limitParam(r, listDefaultLimit, listCapREST)
+		n, err := httpx.LimitParam(r, listDefaultLimit, listCapREST)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		q := r.URL.Query()
 		orders, err := svc.ListOrders(r.Context(),
 			domain.AccountID(q.Get("account")), domain.Source(q.Get("source")), n)
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		dtos := make([]orderDTO, 0, len(orders))
 		for _, o := range orders {
 			dtos = append(dtos, toOrderDTO(o))
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"orders": dtos})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"orders": dtos})
 	}
 }
 
@@ -2080,14 +1884,14 @@ func handleListOrders(svc Service) http.HandlerFunc {
 // all addressed by opaque external ids.
 func handleGetOrder(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathOrderExternalID(r)
+		id, err := httpx.PathOrderExternalID(r)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		detail, err := svc.GetOrder(r.Context(), id)
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		events := make([]orderEventDTO, 0, len(detail.Events))
@@ -2108,7 +1912,7 @@ func handleGetOrder(svc Service) http.HandlerFunc {
 		if approval := toOrderApprovalDTO(detail.Approval); approval != nil {
 			body["approval"] = approval
 		}
-		writeJSON(w, http.StatusOK, body)
+		httpx.WriteJSON(w, http.StatusOK, body)
 	}
 }
 
@@ -2117,9 +1921,9 @@ func handleGetOrder(svc Service) http.HandlerFunc {
 // and side are taken from the parent order; the body carries only the fill.
 func handleApplyExecutionReport(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathOrderExternalID(r)
+		id, err := httpx.PathOrderExternalID(r)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		var req struct {
@@ -2130,14 +1934,14 @@ func handleApplyExecutionReport(svc Service) http.HandlerFunc {
 			Final     bool   `json:"final"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		// The parent order supplies the account, instrument, and side; the report
 		// body carries only the fill itself.
 		detail, err := svc.GetOrder(r.Context(), id)
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		in := domain.ExecutionReportInput{
@@ -2154,33 +1958,33 @@ func handleApplyExecutionReport(svc Service) http.HandlerFunc {
 		}
 		result, err := svc.ApplyExecutionReport(r.Context(), in)
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusCreated, map[string]any{"result": toExecutionResultDTO(result)})
+		httpx.WriteJSON(w, http.StatusCreated, map[string]any{"result": toExecutionResultDTO(result)})
 	}
 }
 
 // handleListTrades handles GET /api/v1/trades[?account=&source=&limit=].
 func handleListTrades(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		n, err := limitParam(r, listDefaultLimit, listCapREST)
+		n, err := httpx.LimitParam(r, listDefaultLimit, listCapREST)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		q := r.URL.Query()
 		trades, err := svc.ListTrades(r.Context(),
 			domain.AccountID(q.Get("account")), domain.Source(q.Get("source")), n)
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		dtos := make([]tradeDTO, 0, len(trades))
 		for _, t := range trades {
 			dtos = append(dtos, toTradeDTO(t))
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"trades": dtos})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"trades": dtos})
 	}
 }
 
@@ -2193,10 +1997,10 @@ func handleGenerateSigningKey(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		key, err := svc.GenerateSigningKey(r.Context())
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusCreated, map[string]any{"key": toSigningKeyDTO(key)})
+		httpx.WriteJSON(w, http.StatusCreated, map[string]any{"key": toSigningKeyDTO(key)})
 	}
 }
 
@@ -2206,23 +2010,23 @@ func handleImportSigningKey(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req signingKeyImportRequestDTO
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		if req.Key == "" {
-			writeErrMsg(w, http.StatusBadRequest, "signing", "key material is required")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "signing", "key material is required")
 			return
 		}
 		if req.Format == "" {
-			writeErrMsg(w, http.StatusBadRequest, "signing", "format is required")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "signing", "format is required")
 			return
 		}
 		key, err := svc.ImportSigningKey(r.Context(), req.Key, req.Format)
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusCreated, map[string]any{"key": toSigningKeyDTO(key)})
+		httpx.WriteJSON(w, http.StatusCreated, map[string]any{"key": toSigningKeyDTO(key)})
 	}
 }
 
@@ -2233,14 +2037,14 @@ func handleListSigningKeys(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		keys, err := svc.ListSigningKeys(r.Context())
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
 		dtos := make([]signingKeyDTO, 0, len(keys))
 		for _, k := range keys {
 			dtos = append(dtos, toSigningKeyDTO(k))
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"keys": dtos})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"keys": dtos})
 	}
 }
 
@@ -2257,16 +2061,16 @@ func handleGetActivePublicKey(svc Service) http.HandlerFunc {
 		case "pem-pkcs8", "openssh", "raw-base64":
 			// valid
 		default:
-			writeErrMsg(w, http.StatusBadRequest, "signing",
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "signing",
 				"format must be pem-pkcs8, openssh, or raw-base64")
 			return
 		}
 		pub, err := svc.ActivePublicKey(format)
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, publicKeyDTO{PublicKey: pub})
+		httpx.WriteJSON(w, http.StatusOK, publicKeyDTO{PublicKey: pub})
 	}
 }
 
@@ -2276,10 +2080,10 @@ func handleGetSigningConfig(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		noESign, err := svc.GetNoESign(r.Context())
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, signingConfigDTO{NoESign: noESign})
+		httpx.WriteJSON(w, http.StatusOK, signingConfigDTO{NoESign: noESign})
 	}
 }
 
@@ -2289,14 +2093,14 @@ func handleSetSigningConfig(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req signingConfigDTO
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		if err := svc.SetNoESign(r.Context(), req.NoESign); err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, signingConfigDTO{NoESign: req.NoESign})
+		httpx.WriteJSON(w, http.StatusOK, signingConfigDTO{NoESign: req.NoESign})
 	}
 }
 
@@ -2313,7 +2117,7 @@ func handleSubmitOrderToken(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req submitOrderTokenRequestDTO
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		mode := req.Mode
@@ -2321,7 +2125,7 @@ func handleSubmitOrderToken(svc Service) http.HandlerFunc {
 			mode = "immediate"
 		}
 		if mode != "hold" && mode != "immediate" {
-			writeErrMsg(w, http.StatusBadRequest, "signing", "mode must be hold or immediate")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "signing", "mode must be hold or immediate")
 			return
 		}
 		order := domain.Order{
@@ -2340,17 +2144,17 @@ func handleSubmitOrderToken(svc Service) http.HandlerFunc {
 		if req.ExternalID != "" {
 			id, err := domain.ParseExternalID(req.ExternalID)
 			if err != nil {
-				writeErr(w, err)
+				httpx.WriteErr(w, err)
 				return
 			}
 			order.ExternalID = id
 		}
 		tok, err := svc.SubmitOrderToken(r.Context(), order, mode)
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusCreated, approvalTokenDTO{
+		httpx.WriteJSON(w, http.StatusCreated, approvalTokenDTO{
 			Token:           tok.Token,
 			KeyID:           tok.KeyID,
 			ExpiresAt:       tok.ExpiresAt.Format(time.RFC3339Nano),
@@ -2364,27 +2168,27 @@ func handleSubmitOrderToken(svc Service) http.HandlerFunc {
 // reservation.
 func handleConfirmExecution(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		orderID, err := pathOrderExternalID(r)
+		orderID, err := httpx.PathOrderExternalID(r)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		var req confirmExecutionRequestDTO
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		if req.Token == "" {
-			writeErrMsg(w, http.StatusBadRequest, "signing", "token is required")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "signing", "token is required")
 			return
 		}
 		order, err := svc.ConfirmExecution(
 			r.Context(), orderID, req.Token, req.Force)
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"order": toOrderDTO(order)})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"order": toOrderDTO(order)})
 	}
 }
 
@@ -2393,27 +2197,27 @@ func handleConfirmExecution(svc Service) http.HandlerFunc {
 // rolls back the held reservation.
 func handleCancelOrder(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		orderID, err := pathOrderExternalID(r)
+		orderID, err := httpx.PathOrderExternalID(r)
 		if err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		var req cancelOrderRequestDTO
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
 		if req.Token == "" {
-			writeErrMsg(w, http.StatusBadRequest, "signing", "token is required")
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "signing", "token is required")
 			return
 		}
 		order, err := svc.CancelOrder(
 			r.Context(), orderID, req.Token, req.Reason, req.Force)
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"order": toOrderDTO(order)})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"order": toOrderDTO(order)})
 	}
 }
 
@@ -2432,10 +2236,10 @@ func handleOverview(svc Service) http.HandlerFunc {
 		}
 		overview, err := svc.Overview(r.Context(), since)
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, toOverviewDTO(overview))
+		httpx.WriteJSON(w, http.StatusOK, toOverviewDTO(overview))
 	}
 }
 
@@ -2452,25 +2256,25 @@ func handleServiceInfo(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		info, err := svc.ServiceInfo(r.Context())
 		if err != nil {
-			writeErr(w, err)
+			httpx.WriteErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, toServiceDTO(info))
+		httpx.WriteJSON(w, http.StatusOK, toServiceDTO(info))
 	}
 }
 
 // handleServiceLogs handles GET /api/v1/service/logs. It returns the buffered
 // log tail as JSON, oldest line first, alongside the line count.
-func handleServiceLogs(logs LogSource) http.HandlerFunc {
+func handleServiceLogs(logs httpx.LogSource) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		lines := logs.Snapshot()
-		writeJSON(w, http.StatusOK, serviceLogsDTO{Lines: lines, Count: len(lines)})
+		httpx.WriteJSON(w, http.StatusOK, serviceLogsDTO{Lines: lines, Count: len(lines)})
 	}
 }
 
 // handleServiceLogsDownload handles GET /api/v1/service/logs/download. It serves
 // the full buffer as a plain-text attachment, lines joined by newlines.
-func handleServiceLogsDownload(logs LogSource) http.HandlerFunc {
+func handleServiceLogsDownload(logs httpx.LogSource) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		lines := logs.Snapshot()
 		body := strings.Join(lines, "\n")
@@ -2483,164 +2287,4 @@ func handleServiceLogsDownload(logs LogSource) http.HandlerFunc {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(body))
 	}
-}
-
-// --- request helpers --------------------------------------------------------
-
-// limitParam reads the ?limit= query parameter, defaulting to def and capping at
-// capN. A non-positive or non-integer value is an error.
-func limitParam(r *http.Request, def, capN int) (int, error) {
-	n := def
-	if s := r.URL.Query().Get("limit"); s != "" {
-		v, err := strconv.Atoi(s)
-		if err != nil || v <= 0 {
-			return 0, errors.New("limit must be a positive integer")
-		}
-		n = v
-	}
-	if n > capN {
-		n = capN
-	}
-	return n, nil
-}
-
-// pathID reads the {id} chi path parameter and URL-decodes it. It is used by the
-// market-data routes, whose {id} is the instance's opaque external id (a string
-// the backend parses), never a surrogate or engine id.
-func pathID(r *http.Request) (string, error) {
-	raw := chi.URLParam(r, "id")
-	decoded, err := url.PathUnescape(raw)
-	if err != nil {
-		return "", errors.New("invalid URL encoding in id")
-	}
-	return decoded, nil
-}
-
-// pathGroupCode reads the {code} chi path parameter and URL-decodes it. A group
-// is addressed by its public code.
-func pathGroupCode(r *http.Request) (string, error) {
-	raw := chi.URLParam(r, "code")
-	decoded, err := url.PathUnescape(raw)
-	if err != nil {
-		return "", errors.New("invalid URL encoding in code")
-	}
-	return decoded, nil
-}
-
-// pathCommand reads the {command} chi path parameter and URL-decodes it. It is
-// the MCP-access counterpart to pathID.
-func pathCommand(r *http.Request) (string, error) {
-	raw := chi.URLParam(r, "command")
-	decoded, err := url.PathUnescape(raw)
-	if err != nil {
-		return "", errors.New("invalid URL encoding in command")
-	}
-	return decoded, nil
-}
-
-// pathOrderExternalID reads the {externalId} chi path parameter and URL-decodes
-// it. An order is addressed by its opaque external id, never a surrogate id; the
-// backend validates the string against the external-id codec.
-func pathOrderExternalID(r *http.Request) (string, error) {
-	raw := chi.URLParam(r, "externalId")
-	decoded, err := url.PathUnescape(raw)
-	if err != nil {
-		return "", errors.New("invalid URL encoding in order external id")
-	}
-	return decoded, nil
-}
-
-// pathAccountID reads the {code} chi path parameter and URL-decodes it. An
-// account is addressed by its public code.
-func pathAccountID(r *http.Request) (domain.AccountID, error) {
-	raw := chi.URLParam(r, "code")
-	decoded, err := url.PathUnescape(raw)
-	if err != nil {
-		return "", errors.New("invalid URL encoding in account code")
-	}
-	return domain.AccountID(decoded), nil
-}
-
-// writeErr maps a domain sentinel error to the appropriate HTTP status and
-// JSON error body. The codes are: ErrTooLarge -> 413 too_large,
-// ErrInvalid -> 400 validation, ErrNotFound -> 404 not_found,
-// ErrAlreadyExists/ErrConflict -> 409 conflict,
-// ErrHasDependents -> 409 has_dependents,
-// ErrTerminalOrder -> 409 terminal_order,
-// ErrEngineRestarting -> 503 engine_restarting, ErrNotImplemented -> 501
-// not_implemented (the message is surfaced so the operator sees which SDK
-// capability is missing), and anything else -> 500 internal. The specific
-// sentinels take precedence over the generic 500 path.
-func writeErr(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, domain.ErrTooLarge):
-		writeErrMsg(w, http.StatusRequestEntityTooLarge, "too_large", err.Error())
-	case errors.Is(err, domain.ErrInvalid):
-		writeErrMsg(w, http.StatusBadRequest, "validation", err.Error())
-	case errors.Is(err, domain.ErrNotFound):
-		writeErrMsg(w, http.StatusNotFound, "not_found", err.Error())
-	case errors.Is(err, domain.ErrAlreadyExists):
-		writeErrMsg(w, http.StatusConflict, "conflict", err.Error())
-	case errors.Is(err, domain.ErrHasDependents):
-		writeHasDependentsErr(w, err)
-	case errors.Is(err, domain.ErrTerminalOrder):
-		writeErrMsg(w, http.StatusConflict, "terminal_order", domain.ErrTerminalOrder.Error())
-	case errors.Is(err, domain.ErrConflict):
-		writeErrMsg(w, http.StatusConflict, "conflict", err.Error())
-	case errors.Is(err, domain.ErrEngineRestarting):
-		writeErrMsg(w, http.StatusServiceUnavailable, "engine_restarting", err.Error())
-	case errors.Is(err, domain.ErrNotImplemented):
-		writeErrMsg(w, http.StatusNotImplemented, "not_implemented", err.Error())
-	case errors.Is(err, domain.ErrUpstream):
-		// An external provider failed (e.g. a market-data 403/timeout). This is
-		// an expected operational condition, so it is logged at WARN with the
-		// detail for operators and answered with a plain, actionable message
-		// rather than a scary 500 "unhandled internal error".
-		slog.Warn("upstream provider request failed", "error", err)
-		writeErrMsg(w, http.StatusBadGateway, "upstream",
-			"The market-data provider couldn't complete the request. "+
-				"Check the symbol and your provider access, then try again.")
-	default:
-		slog.Error("unhandled internal error serving request", "error", err)
-		writeErrMsg(w, http.StatusInternalServerError, "internal", "internal error")
-	}
-}
-
-func writeHasDependentsErr(w http.ResponseWriter, err error) {
-	var typed domain.HasDependentsError
-	if !errors.As(err, &typed) {
-		typed = domain.HasDependentsError{}
-	}
-	dependents := make([]map[string]any, 0, len(typed.Dependents))
-	for _, dep := range typed.Dependents {
-		dependents = append(dependents, map[string]any{
-			"kind":  dep.Kind,
-			"count": dep.Count,
-		})
-	}
-	writeJSON(w, http.StatusConflict, map[string]any{
-		"error": map[string]any{
-			"code":       "has_dependents",
-			"message":    domain.ErrHasDependents.Error(),
-			"dependents": dependents,
-		},
-	})
-}
-
-// writeErrMsg writes a JSON error body with the given HTTP status, code and
-// message.
-func writeErrMsg(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, map[string]any{
-		"error": map[string]string{
-			"code":    code,
-			"message": message,
-		},
-	})
-}
-
-// writeJSON encodes v as JSON with the given status code.
-func writeJSON(w http.ResponseWriter, code int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(v)
 }
