@@ -38,6 +38,7 @@ export interface PollingResult<T> {
 export function usePolling<T>(
   fetcher: (signal: AbortSignal) => Promise<T>,
   intervalMs = 5000,
+  refreshKey: unknown = undefined,
 ): PollingResult<T> {
   const [load, setLoad] = useState<LoadState<T>>({
     state: "loading",
@@ -100,7 +101,7 @@ export function usePolling<T>(
       current?.abort();
       window.clearInterval(timer);
     };
-  }, [nonce, intervalMs]);
+  }, [nonce, intervalMs, refreshKey]);
 
   return { load, reload };
 }

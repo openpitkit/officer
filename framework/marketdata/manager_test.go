@@ -206,6 +206,57 @@ func (c *plainConnector) Close() {
 	close(c.ch)
 }
 
+type stuckCloseConnector struct {
+	closeEntered chan struct{}
+	releaseClose chan struct{}
+	ch           chan QuoteUpdate
+	closeOnce    sync.Once
+}
+
+func newStuckCloseConnector() *stuckCloseConnector {
+	return &stuckCloseConnector{
+		closeEntered: make(chan struct{}),
+		releaseClose: make(chan struct{}),
+		ch:           make(chan QuoteUpdate),
+	}
+}
+
+func (c *stuckCloseConnector) Subscribe(
+	context.Context, []Subscription,
+) (<-chan QuoteUpdate, error) {
+	return c.ch, nil
+}
+
+func (c *stuckCloseConnector) Close() {
+	c.closeOnce.Do(func() {
+		close(c.closeEntered)
+		<-c.releaseClose
+		close(c.ch)
+	})
+}
+
+type blockingPushConnector struct {
+	ch chan QuoteUpdate
+}
+
+func newBlockingPushConnector() *blockingPushConnector {
+	return &blockingPushConnector{ch: make(chan QuoteUpdate)}
+}
+
+func (c *blockingPushConnector) Subscribe(
+	context.Context, []Subscription,
+) (<-chan QuoteUpdate, error) {
+	return c.ch, nil
+}
+
+func (c *blockingPushConnector) Close() {
+	close(c.ch)
+}
+
+func (c *blockingPushConnector) Push(update QuoteUpdate) {
+	c.ch <- update
+}
+
 func TestManagerNoEnabledIsCleanNoop(t *testing.T) {
 	t.Parallel()
 
@@ -226,6 +277,96 @@ func TestNewManagerRejectsNilSink(t *testing.T) {
 	if !errors.Is(err, ErrNilSink) {
 		t.Fatalf("NewManager nil sink = %v, want ErrNilSink", err)
 	}
+}
+
+func TestManagerStopTimesOutStuckConnectorClose(t *testing.T) {
+	instanceID := testExternalID("mock-1")
+	connector := newStuckCloseConnector()
+	t.Cleanup(func() {
+		select {
+		case <-connector.releaseClose:
+		default:
+			close(connector.releaseClose)
+		}
+	})
+	registry := NewRegistry()
+	if err := registry.Register(Provider{
+		Type: "mock",
+		Build: func(domain.MarketDataInstance) (Connector, error) {
+			return connector, nil
+		},
+	}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	store := &fakeStore{
+		instances: []domain.MarketDataInstance{
+			{ExternalID: instanceID, Provider: "mock", Enabled: true},
+		},
+		instruments: map[string][]domain.MarketDataInstrument{
+			instanceID.String(): {{
+				Instance: instanceID, ExternalSymbol: "AAPL",
+				BaseAsset: "AAPL", QuoteAsset: "USD", Enabled: true,
+			}},
+		},
+	}
+	manager := mustNewManager(t, registry, store, &fakeSink{}, nil)
+	manager.stopGrace = 10 * time.Millisecond
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		manager.Stop()
+		close(done)
+	}()
+
+	select {
+	case <-connector.closeEntered:
+	case <-time.After(time.Second):
+		t.Fatal("connector Close was not called")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Stop waited indefinitely for connector Close")
+	}
+}
+
+func TestManagerStartReplaysManualQuotesOutsideLock(t *testing.T) {
+	t.Parallel()
+
+	instanceID := testExternalID("mock-1")
+	connector := newBlockingPushConnector()
+	registry := NewRegistry()
+	if err := registry.Register(Provider{
+		Type: "mock",
+		Build: func(domain.MarketDataInstance) (Connector, error) {
+			return connector, nil
+		},
+	}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	store := &fakeStore{
+		instances: []domain.MarketDataInstance{
+			{ExternalID: instanceID, Provider: "mock", Enabled: true},
+		},
+		instruments: map[string][]domain.MarketDataInstrument{
+			instanceID.String(): {{
+				Instance: instanceID, ExternalSymbol: "AAPL",
+				BaseAsset: "AAPL", QuoteAsset: "USD", Enabled: true,
+				ManualPrice: "185",
+			}},
+		},
+	}
+	sink := &fakeSink{}
+	manager := mustNewManager(t, registry, store, sink, nil)
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer manager.Stop()
+
+	waitFor(t, time.Second, func() bool { return sink.count() == 1 })
 }
 
 func TestManagerUseSinkRejectsNil(t *testing.T) {
@@ -1026,4 +1167,28 @@ func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 		time.Sleep(2 * time.Millisecond)
 	}
 	t.Fatal("condition not met within timeout")
+}
+
+func TestManagerSinkProviderResolvesLiveSink(t *testing.T) {
+	static := &fakeSink{}
+	manager := mustNewManager(t, NewRegistry(), &fakeStore{}, static, nil)
+
+	// Without a provider, currentSink is the static sink.
+	if got := manager.currentSink(); got != Sink(static) {
+		t.Fatalf("currentSink without provider = %v, want static", got)
+	}
+
+	// A provider takes precedence and is resolved live on every call: swapping
+	// the sink it returns is reflected immediately with no restart, mirroring an
+	// engine rebuild that replaces the sink.
+	live := Sink(static)
+	manager.UseSinkProvider(func() Sink { return live })
+	if got := manager.currentSink(); got != Sink(static) {
+		t.Fatalf("currentSink via provider = %v, want static", got)
+	}
+	next := &fakeSink{}
+	live = next
+	if got := manager.currentSink(); got != Sink(next) {
+		t.Fatalf("currentSink after swap = %v, want next", got)
+	}
 }

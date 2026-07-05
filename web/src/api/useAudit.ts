@@ -17,9 +17,29 @@
 
 import { useCallback } from "react";
 
-import type { AuditActionGroup, AuditEntry } from "@/api/types";
+import type {
+  AuditActionGroup,
+  AuditEntry,
+  PagedResult,
+} from "@/api/types";
 import { usePolling, type PollingResult } from "@/api/usePolling";
-import { useOfficerApi } from "@/framework";
+import { type AuditFilter, useOfficerApi } from "@/framework";
+
+/** Poll GET /audit with server-side total and offset paging. */
+export function useAuditPage(
+  filter: AuditFilter = {},
+): PollingResult<PagedResult<AuditEntry>> {
+  const api = useOfficerApi();
+  const actionsKey = filter.actions?.join(",") ?? "";
+  const filterKey = JSON.stringify({ ...filter, actions: actionsKey });
+  const fetcher = useCallback(
+    (signal: AbortSignal) => api.fetchAuditPage(filter, signal),
+    // filterKey stands in for the filter object identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [api, filterKey],
+  );
+  return usePolling(fetcher, 5000, filterKey);
+}
 
 /** Poll GET /audit for the newest `limit` entries, optionally filtered. The
  *  actions array is the include-set of event types; an empty array selects
@@ -42,7 +62,11 @@ export function useAudit(
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [api, limit, account, source, actionsKey],
   );
-  return usePolling(fetcher);
+  return usePolling(
+    fetcher,
+    5000,
+    JSON.stringify({ limit, account, source, actions: actionsKey }),
+  );
 }
 
 /** Poll GET /audit/actions for the action catalogue used to build the type

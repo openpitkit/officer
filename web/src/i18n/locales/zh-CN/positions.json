@@ -20,8 +20,18 @@
     "history": "历史"
   },
   "filters": {
+    "advancedDescription": "设置持仓和调整历史的次级筛选条件。列表会使用当前筛选集从服务器刷新。",
     "byAccount": "按账户筛选",
-    "byAsset": "按资产筛选"
+    "byGroup": "按分组筛选",
+    "byAsset": "按资产筛选",
+    "range": {
+      "all": "全部",
+      "greater_than": "大于",
+      "less_than": "小于",
+      "between": "介于",
+      "min": "最小值",
+      "max": "最大值"
+    }
   },
   "balances": {
     "sectionLabel": "余额",
@@ -36,6 +46,17 @@
       "updated": "更新时间",
       "adjust": "调整"
     },
+    "columnDescriptions": {
+      "account": "此列显示拥有该余额行的账户。",
+      "asset": "此列显示账户持有的资产。",
+      "available": "此列显示可立即使用的余额。",
+      "held": "此列显示当前由待处理活动预留的余额。",
+      "incoming": "此列显示尚未结转为可用余额的待入账余额。",
+      "avgEntryPrice": "此列显示为该余额保存的平均建仓价。",
+      "realizedPnl": "此列显示为该余额记录的已实现盈亏。",
+      "updated": "此列显示该余额行最后更新时间。",
+      "adjust": "此列包含打开持仓调整的行操作。"
+    },
     "empty": {
       "title": "暂无余额",
       "hint": "使用「调整」功能为账户和资产设定现货资金余额。"
@@ -46,6 +67,7 @@
     "applyWithLimits": "应用并设边界",
     "amountPlaceholder": "金额",
     "newRowHint": "新建行",
+    "newPosition": "新建持仓",
     "amountAriaLabel": "{{account}} {{asset}} 的调整金额",
     "applyAriaLabel": "对 {{account}} {{asset}} 应用调整",
     "applyWithLimitsAriaLabel": "对 {{account}} {{asset}} 应用调整并设边界",
@@ -89,7 +111,18 @@
       "source": "来源",
       "request": "请求",
       "status": "状态",
-      "outcome": "结果"
+      "outcome": "结果",
+      "externalId": "ID"
+    },
+    "columnDescriptions": {
+      "time": "此列显示调整请求被记录的时间。",
+      "account": "此列显示调整目标账户。",
+      "asset": "此列显示调整目标资产。",
+      "source": "此列显示调整来自面板、REST、MCP 或其他来源。",
+      "request": "此列显示请求的余额、冻结、待入账或平均价格变更。",
+      "status": "此列显示调整被接受还是拒绝。",
+      "outcome": "此列显示保存的结果或拒绝摘要。",
+      "externalId": "此列显示不可变的调整标识符。"
     },
     "empty": {
       "title": "暂无调整记录",

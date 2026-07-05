@@ -30,7 +30,11 @@ COPY web/ ./
 RUN npm run build
 
 # Stage 2: build the pit-officer binary (cgo required by the openpit binding).
-FROM golang:1.25-bookworm AS gobuild
+ARG GO_VERSION
+FROM golang:${GO_VERSION}-bookworm AS gobuild
+
+ARG GO_VERSION
+ENV GOTOOLCHAIN=go${GO_VERSION}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \

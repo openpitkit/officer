@@ -159,9 +159,9 @@ npm run build    # type-checks then emits the embeddable bundle into dist/
 npm run build:lib # emits the framework package into lib/
 ```
 
-The build overwrites the committed `dist/index.html` placeholder. That
-placeholder (and `dist/.gitkeep`) are kept in version control so the Go
-`go:embed web/dist` compiles on a fresh clone before the SPA is built.
+The build writes generated assets into `dist/`. The generated bundle is ignored,
+but a stable `dist/embed-placeholder.txt` file is kept in version control so
+the Go `go:embed web/dist` compiles on a fresh clone before the SPA is built.
 The library build writes only to `lib/` and never clobbers the embedded app
 bundle in `dist/`.
 

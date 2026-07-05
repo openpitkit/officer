@@ -15,9 +15,9 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 
-import type { Order } from "@/api/types";
+import type { Order, OrderListFilters, PagedResult } from "@/api/types";
 import { usePolling, type PollingResult } from "@/api/usePolling";
 import { useOfficerApi } from "@/framework";
 
@@ -33,5 +33,18 @@ export function useOrders(
       api.fetchOrders({ account, source, limit }, signal),
     [api, account, source, limit],
   );
-  return usePolling(fetcher);
+  return usePolling(fetcher, 5000, JSON.stringify({ account, source, limit }));
+}
+
+/** Poll GET /orders with server-side total. */
+export function useOrdersPage(
+  filters?: OrderListFilters,
+): PollingResult<PagedResult<Order>> {
+  const api = useOfficerApi();
+  const filterKey = useMemo(() => JSON.stringify(filters ?? {}), [filters]);
+  const fetcher = useCallback(
+    (signal: AbortSignal) => api.fetchOrdersPage(filters, signal),
+    [api, filters],
+  );
+  return usePolling(fetcher, 5000, filterKey);
 }

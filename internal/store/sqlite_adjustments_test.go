@@ -28,6 +28,7 @@ import (
 	"testing"
 
 	"go.openpit.dev/officer/framework/domain"
+	fwstore "go.openpit.dev/officer/framework/store"
 )
 
 // seedAdjustmentFixtures creates the dictionary rows adjustment tests need.
@@ -278,7 +279,7 @@ func TestAdjustmentCascadeOnAccountDelete(t *testing.T) {
 	// The adjustment must be gone (CASCADE).
 	r := rs.(*realmStore)
 	var n int
-	if err := r.db().QueryRowContext(ctx, `SELECT COUNT(*) FROM adjustments`).Scan(&n); err != nil {
+	if err := r.db().QueryRowContext(ctx, `SELECT COUNT(*) FROM adjustment`).Scan(&n); err != nil {
 		t.Fatalf("count adjustments: %v", err)
 	}
 	if n != 0 {
@@ -363,6 +364,53 @@ func TestAdjustmentOrderedNewestFirst(t *testing.T) {
 	}
 }
 
+func TestAdjustmentListRowsAccountFilterPagesFilteredSet(t *testing.T) {
+	ctx, rs := seedAdjustmentFixtures(t)
+	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-2"}); err != nil {
+		t.Fatalf("CreateAccount(acc-2): %v", err)
+	}
+
+	for _, account := range []domain.AccountID{
+		"acc-2", "acc-1", "acc-2", "acc-1", "acc-2", "acc-1",
+	} {
+		rec := sampleAdjustment()
+		rec.Account = account
+		if _, err := rs.AppendAdjustment(ctx, rec); err != nil {
+			t.Fatalf("AppendAdjustment(%s): %v", account, err)
+		}
+	}
+
+	first, err := rs.ListAdjustmentRows(ctx, fwstore.AdjustmentListFilter{
+		Account: fwstore.ExactTextMatcher("acc-1"),
+		Page:    fwstore.PageSpec{Limit: 2},
+	})
+	if err != nil {
+		t.Fatalf("ListAdjustmentRows(first): %v", err)
+	}
+	if first.Total != 3 || len(first.Rows) != 2 {
+		t.Fatalf("first page total/len = %d/%d, want 3/2", first.Total, len(first.Rows))
+	}
+	for _, row := range first.Rows {
+		if row.Account != "acc-1" {
+			t.Fatalf("unfiltered row leaked into account page: %+v", first.Rows)
+		}
+	}
+
+	second, err := rs.ListAdjustmentRows(ctx, fwstore.AdjustmentListFilter{
+		Account: fwstore.ExactTextMatcher("acc-1"),
+		Page:    fwstore.PageSpec{Limit: 2, Offset: 2},
+	})
+	if err != nil {
+		t.Fatalf("ListAdjustmentRows(second): %v", err)
+	}
+	if second.Total != 3 || len(second.Rows) != 1 {
+		t.Fatalf("second page total/len = %d/%d, want 3/1", second.Total, len(second.Rows))
+	}
+	if second.Rows[0].Account != "acc-1" {
+		t.Fatalf("second page row = %+v", second.Rows[0])
+	}
+}
+
 // TestAppendAdjustmentSuppliedExternalIDUsedVerbatim verifies that a caller-
 // supplied external id is written verbatim: the returned id equals the supplied
 // one and the row is addressable by it through a listing.
@@ -428,7 +476,7 @@ func TestAppendAdjustmentDuplicateSuppliedExternalIDConflicts(t *testing.T) {
 
 	var n int
 	if err := r.db().QueryRowContext(
-		ctx, `SELECT COUNT(*) FROM adjustments`,
+		ctx, `SELECT COUNT(*) FROM adjustment`,
 	).Scan(&n); err != nil {
 		t.Fatalf("count adjustments: %v", err)
 	}

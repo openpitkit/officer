@@ -26,12 +26,16 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/node"
+	"go.openpit.dev/officer/framework/store"
 )
 
 // ControlPlane is the backend seam consumed by HTTP and extension handlers.
 type ControlPlane interface {
 	Status(ctx context.Context) (Status, error)
 	ListAccounts(ctx context.Context) ([]domain.Account, error)
+	ListAccountRows(
+		ctx context.Context, filter store.AccountListFilter,
+	) (store.AccountListPage, error)
 	ExportBackup(ctx context.Context, scope backup.Scope) (backup.Archive, string, error)
 	RestoreBackup(
 		ctx context.Context,
@@ -51,7 +55,28 @@ type ControlPlane interface {
 		req BusinessCSVImportRequest,
 	) (BusinessCSVImportResult, error)
 	ResetDatabase(ctx context.Context) error
-	CreateAccount(ctx context.Context, id domain.AccountID) (domain.Account, error)
+	ListAssets(ctx context.Context) ([]domain.Asset, error)
+	ListAssetRows(
+		ctx context.Context, filter store.AssetListFilter,
+	) (store.AssetListPage, error)
+	CreateAsset(ctx context.Context, asset domain.Asset) (domain.Asset, error)
+	UpdateAsset(ctx context.Context, oldCode string, asset domain.Asset) (domain.Asset, error)
+	DeleteAsset(ctx context.Context, code string, force bool) error
+	ListAssetClasses(ctx context.Context) ([]domain.AssetClass, error)
+	ListAssetClassRows(
+		ctx context.Context, filter store.AssetClassListFilter,
+	) (store.AssetClassListPage, error)
+	CreateAssetClass(ctx context.Context, class domain.AssetClass) (domain.AssetClass, error)
+	UpdateAssetClass(
+		ctx context.Context, oldCode string, class domain.AssetClass,
+	) (domain.AssetClass, error)
+	DeleteAssetClass(ctx context.Context, code string, force bool) error
+	CreateAccount(ctx context.Context, account domain.Account) (domain.Account, error)
+	UpdateAccount(
+		ctx context.Context,
+		oldID domain.AccountID,
+		account domain.Account,
+	) (domain.Account, error)
 	GetAccountState(ctx context.Context, id domain.AccountID) (domain.Account, node.AccountLimits, error)
 	BlockAccount(ctx context.Context, id domain.AccountID, reason string) error
 	UnblockAccount(ctx context.Context, id domain.AccountID) error
@@ -59,6 +84,9 @@ type ControlPlane interface {
 	SetAccountGroup(ctx context.Context, id domain.AccountID, groupCode string) error
 	SetAccountNotes(ctx context.Context, id domain.AccountID, notes string) error
 	ListLimits(ctx context.Context, account domain.AccountID) (node.AccountLimits, error)
+	ListPolicyRows(
+		ctx context.Context, filter store.PolicyListFilter,
+	) (store.PolicyListPage, error)
 	PutRateLimit(ctx context.Context, limit domain.LimitRate) error
 	PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize) error
 	PutPnlBoundsLimit(ctx context.Context, limit domain.LimitPnlBounds) error
@@ -67,6 +95,9 @@ type ControlPlane interface {
 	ListAuditFiltered(
 		ctx context.Context, filter domain.AuditFilter, count int,
 	) ([]domain.AuditRow, error)
+	ListAuditRows(
+		ctx context.Context, filter store.AuditListFilter,
+	) (store.AuditListPage, error)
 	ListMcpAccess(ctx context.Context) ([]McpCommand, error)
 	SetMcpAccess(ctx context.Context, command string, enabled bool) error
 	WelcomeSeen(ctx context.Context) (bool, error)
@@ -93,7 +124,15 @@ type ControlPlane interface {
 	) error
 	DeleteMarketDataInstrument(ctx context.Context, instanceID, externalSymbol string) error
 	CreateGroup(ctx context.Context, group domain.AccountGroup) (domain.AccountGroup, error)
+	UpdateGroup(
+		ctx context.Context,
+		oldCode string,
+		group domain.AccountGroup,
+	) (domain.AccountGroup, error)
 	ListGroups(ctx context.Context) ([]domain.AccountGroup, error)
+	ListGroupRows(
+		ctx context.Context, filter store.GroupListFilter,
+	) (store.GroupListPage, error)
 	GetGroup(ctx context.Context, code string) (domain.AccountGroup, []domain.Account, error)
 	SetGroupNotes(ctx context.Context, code, notes string) error
 	SetGroupBlocked(ctx context.Context, code string, blocked bool, reason string) error
@@ -105,12 +144,18 @@ type ControlPlane interface {
 		req domain.AdjustmentRequest,
 	) (domain.AccountAdjustmentRecord, error)
 	ListBalances(ctx context.Context, account domain.AccountID, asset string) ([]domain.Balance, error)
+	ListBalanceRows(
+		ctx context.Context, filter store.BalanceListFilter,
+	) (store.BalanceListPage, error)
 	ListAdjustments(
 		ctx context.Context, account domain.AccountID, source domain.Source, n int,
 	) ([]domain.AccountAdjustmentRecord, error)
 	ListAllAdjustments(
 		ctx context.Context, account domain.AccountID, source domain.Source, n int,
 	) ([]domain.AccountAdjustmentRecord, error)
+	ListAdjustmentRows(
+		ctx context.Context, filter store.AdjustmentListFilter,
+	) (store.AdjustmentListPage, error)
 	SubmitOrder(ctx context.Context, o domain.Order) (domain.Order, error)
 	CheckOrder(ctx context.Context, probe domain.OrderProbe) (domain.CheckResult, error)
 	ApplyExecutionReport(
@@ -120,9 +165,15 @@ type ControlPlane interface {
 	ListOrders(
 		ctx context.Context, account domain.AccountID, source domain.Source, n int,
 	) ([]domain.Order, error)
+	ListOrderRows(
+		ctx context.Context, filter store.OrderListFilter,
+	) (store.OrderListPage, error)
 	ListTrades(
 		ctx context.Context, account domain.AccountID, source domain.Source, n int,
 	) ([]domain.Trade, error)
+	ListTradeRows(
+		ctx context.Context, filter store.TradeListFilter,
+	) (store.TradeListPage, error)
 	Overview(ctx context.Context, since time.Time) (Overview, error)
 	ServiceInfo(ctx context.Context) (ServiceInfo, error)
 	GenerateSigningKey(ctx context.Context) (domain.SigningKey, error)

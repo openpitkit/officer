@@ -13,6 +13,63 @@
       "rowCount": "{{count}} rows per page"
     }
   },
+  "filters": {
+    "find": "Find",
+    "clearField": "Clear field",
+    "maskHelp": "Use * as a wildcard. For example, desk-* matches desk-alpha and desk-risk; choose starts with, ends with, or exact for stricter matching.",
+    "match": {
+      "codeAriaLabel": "Code match mode",
+      "notesAriaLabel": "Notes match mode",
+      "blockReasonAriaLabel": "Block reason match mode",
+      "contains": "Contains",
+      "startsWith": "Starts with",
+      "endsWith": "Ends with",
+      "exact": "Exact"
+    },
+    "status": {
+      "ariaLabel": "Status filter",
+      "all": "All statuses",
+      "active": "Active",
+      "blocked": "Blocked"
+    },
+    "positionCount": {
+      "ariaLabel": "Position count filter",
+      "all": "All positions",
+      "greaterThan": "More than",
+      "lessThan": "Less than",
+      "between": "From-to"
+    },
+    "accountCount": {
+      "ariaLabel": "Account count filter",
+      "all": "All accounts",
+      "hasAccounts": "Has accounts",
+      "noAccounts": "No accounts"
+    },
+    "advanced": {
+      "trigger": "More filters",
+      "title": "Find by fields",
+      "applied": "Applied:",
+      "positionLabel": "Position count",
+      "accountLabel": "Account count",
+      "positionFrom": "From",
+      "positionTo": "To",
+      "positionValue": "Value",
+      "notesLabel": "Notes",
+      "blockReasonLabel": "Block reason",
+      "notesShort": "Notes",
+      "blockReasonShort": "Block reason",
+      "cancel": "Cancel",
+      "summary": {
+        "positionGreater": "pos > {{value}}",
+        "positionLess": "pos < {{value}}",
+        "positionBetween": "pos {{min}}-{{max}}",
+        "accountGreater": "accounts > {{value}}",
+        "accountLess": "accounts < {{value}}",
+        "accountBetween": "accounts {{min}}-{{max}}",
+        "text": "{{field}}: {{match}} {{value}}"
+      }
+    }
+  },
   "groups": {
     "heading": "Groups",
     "clearFilter": "(clear filter)",
@@ -21,17 +78,37 @@
     "columns": {
       "group": "Group",
       "accounts": "Accounts",
+      "positions": "Pos",
       "status": "Status",
       "notes": "Notes",
       "actions": "Actions"
+    },
+    "columnDescriptions": {
+      "group": "This column shows the account group code and display title.",
+      "accounts": "This column shows how many accounts belong to the group.",
+      "positions": "This column shows how many open position rows belong to the group.",
+      "status": "This column shows whether the group is active or blocked.",
+      "notes": "This column shows the operator notes stored on the group.",
+      "actions": "This column contains row actions for filtering, sharing, and deleting the group."
     },
     "status": {
       "blocked": "blocked",
       "active": "active"
     },
+    "filters": {
+      "codeLabel": "Group search",
+      "codePlaceholder": "Search group code or title",
+      "notesLabel": "Group notes search",
+      "notesPlaceholder": "Search group notes",
+      "blockReasonPlaceholder": "Search group block reason",
+      "advancedDescription": "Search group notes, block reason, and position counts. These filters apply together with code, status, and account count."
+    },
     "actions": {
       "notes": "Notes",
+      "editTitle": "Edit group",
       "editNotesTitle": "Edit notes",
+      "positionsTitle": "Open positions filtered by this group",
+      "viewBlockDetails": "View block details",
       "block": "Block",
       "unblock": "Unblock",
       "delete": "Delete",
@@ -40,22 +117,42 @@
   },
   "accounts": {
     "heading": "Accounts",
+    "clearFilter": "(clear filter)",
     "filteredTo": "— filtered to",
     "filteredToDefault": "default group",
     "columns": {
       "account": "Account",
       "group": "Group",
+      "positions": "Pos",
       "status": "Status",
       "notes": "Notes",
       "actions": "Actions"
+    },
+    "columnDescriptions": {
+      "account": "This column shows the account code and display title.",
+      "group": "This column shows the group assigned to the account.",
+      "positions": "This column shows how many position rows are stored for the account.",
+      "status": "This column shows whether the account is active or blocked.",
+      "notes": "This column shows the operator notes stored on the account.",
+      "actions": "This column contains row actions for positions, trading, policies, audit, and deletion."
     },
     "status": {
       "blocked": "blocked",
       "active": "active"
     },
+    "filters": {
+      "codeLabel": "Account search",
+      "codePlaceholder": "Search account code or title",
+      "groupLabel": "Group search",
+      "groupPlaceholder": "Search group code or title",
+      "notesLabel": "Account notes search",
+      "notesPlaceholder": "Search account notes",
+      "blockReasonPlaceholder": "Search account block reason",
+      "advancedDescription": "Search account block reason and position counts. These filters apply together with code, status, and selected group."
+    },
     "groupCell": {
-      "title": "Group — click to change",
-      "titleNoGroups": "Group — click to change (no groups yet)",
+      "editTitle": "Edit group assignment",
+      "filterTitle": "Filter accounts by this group",
       "noGroup": "none"
     },
     "links": {
@@ -66,7 +163,10 @@
     },
     "actions": {
       "notes": "Notes",
+      "editTitle": "Edit account",
       "editNotesTitle": "Edit reference notes",
+      "positionsTitle": "Open positions filtered by this account",
+      "viewBlockDetails": "View block details",
       "block": "Block",
       "unblock": "Unblock",
       "deleteTitle": "Delete account"
@@ -92,7 +192,7 @@
     "trigger": "New group",
     "title": "Create group",
     "codeLabel": "Group code",
-    "titleLabel": "Display title",
+    "titleLabel": "Display title (optional)",
     "titlePlaceholder": "US equity desks",
     "notesLabel": "Notes (optional)",
     "notesPlaceholder": "Accounts belonging to the US equity trading desks.",
@@ -162,6 +262,21 @@
     "cancel": "Cancel",
     "submit": "Unblock"
   },
+  "blockDetails": {
+    "accountTitle": "Blocked account",
+    "groupTitle": "Blocked group",
+    "description": "Full block reason and the nearest audit record for this block.",
+    "reason": "Reason",
+    "noReason": "No reason recorded.",
+    "audit": "Audit",
+    "auditLoading": "Loading audit records…",
+    "noAudit": "No audit records found.",
+    "noAuditDetail": "No detail recorded.",
+    "actor": "Actor:",
+    "close": "Close",
+    "openAudit": "Open audit",
+    "unblock": "Unblock"
+  },
   "deleteGroup": {
     "title": "Delete group?",
     "descriptionPrefix": "Group",
@@ -189,6 +304,22 @@
     "cancel": "Cancel",
     "submit": "Delete",
     "forceSubmit": "Force delete"
+  },
+  "editGroup": {
+    "titlePrefix": "Edit group",
+    "description": "Update the group id and display title.",
+    "codeLabel": "Group id",
+    "titleLabel": "Display title (optional)",
+    "cancel": "Cancel",
+    "submit": "Save"
+  },
+  "editAccount": {
+    "titlePrefix": "Edit account",
+    "description": "Update the account id and display title.",
+    "codeLabel": "Account id",
+    "titleLabel": "Display title (optional)",
+    "cancel": "Cancel",
+    "submit": "Save"
   },
   "editGroupNotes": {
     "titlePrefix": "Notes — group",

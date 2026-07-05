@@ -24,7 +24,7 @@
 // NodeRouter, so backend code never assumes a single node.
 //
 // Identity at this seam follows the store: accounts and groups are addressed by
-// their immutable code, machine records (orders, order events) by their opaque
+// their public code, machine records (orders, order events) by their opaque
 // external id. The realm is bound once when the node is built and never appears
 // as a method parameter; the single-binary node binds domain.DefaultRealm.
 package node
@@ -44,7 +44,7 @@ import (
 // the realm bound on the node, the account code alone resolves an account to
 // exactly one node, so the key carries only the account code.
 type Key struct {
-	// Account is the immutable code of the account being routed.
+	// Account is the public code of the account being routed.
 	Account domain.AccountID
 }
 
@@ -109,6 +109,12 @@ type Node interface {
 	// ListAccounts returns every persisted account owned by this node.
 	ListAccounts(ctx context.Context) ([]domain.Account, error)
 
+	// ListAccountRows returns persisted accounts matching filter, with
+	// list-only aggregate counts and total count before paging.
+	ListAccountRows(
+		ctx context.Context, filter store.AccountListFilter,
+	) (store.AccountListPage, error)
+
 	// ExportBackup returns a portable archive for the node's persisted state and
 	// audits the action.
 	ExportBackup(
@@ -131,10 +137,64 @@ type Node interface {
 	// and audits the reset in the new database.
 	ResetDatabase(ctx context.Context, caller domain.Caller) (marketdata.Sink, error)
 
+	// CurrentMarketDataSink returns the quote sink of the node's current engine.
+	// The engine is rebuilt (and its market-data service replaced) by account,
+	// group, restore, and reset mutations, so the market-data runtime must
+	// re-adopt this sink on restart rather than caching one across a rebuild.
+	CurrentMarketDataSink() marketdata.Sink
+
+	// ListAssets returns every persisted asset.
+	ListAssets(ctx context.Context) ([]domain.Asset, error)
+
+	// ListAssetRows returns persisted assets matching filter, with total count
+	// before paging.
+	ListAssetRows(
+		ctx context.Context, filter store.AssetListFilter,
+	) (store.AssetListPage, error)
+
+	// CreateAsset persists a new asset and audits the action.
+	CreateAsset(ctx context.Context, asset domain.Asset, caller domain.Caller) (domain.Asset, error)
+
+	// UpdateAsset replaces the asset's public code and mutable fields and audits
+	// the action. A code rename is safe because dependent rows reference the asset
+	// by its surrogate id.
+	UpdateAsset(
+		ctx context.Context, oldCode string, asset domain.Asset, caller domain.Caller,
+	) (domain.Asset, error)
+
+	// DeleteAsset removes the asset, cascading dependents when force is set, and
+	// audits the action.
+	DeleteAsset(ctx context.Context, code string, force bool, caller domain.Caller) error
+
+	// ListAssetClasses returns every persisted asset class.
+	ListAssetClasses(ctx context.Context) ([]domain.AssetClass, error)
+
+	// ListAssetClassRows returns persisted asset classes matching filter, with the
+	// aggregate asset count and total count before paging.
+	ListAssetClassRows(
+		ctx context.Context, filter store.AssetClassListFilter,
+	) (store.AssetClassListPage, error)
+
+	// CreateAssetClass persists a new asset class and audits the action.
+	CreateAssetClass(
+		ctx context.Context, class domain.AssetClass, caller domain.Caller,
+	) (domain.AssetClass, error)
+
+	// UpdateAssetClass replaces the class's public code, title and notes,
+	// cascading the asset link on a code rename, and audits the action.
+	UpdateAssetClass(
+		ctx context.Context, oldCode string, class domain.AssetClass, caller domain.Caller,
+	) (domain.AssetClass, error)
+
+	// DeleteAssetClass removes the class, clearing the asset link when force is
+	// set, and audits the action.
+	DeleteAssetClass(ctx context.Context, code string, force bool, caller domain.Caller) error
+
 	// CreateAccount persists a new account and audits the action. The account
-	// is identified by key; caller carries the attribution stamped on the audit.
+	// carries its public code and optional title; caller carries the attribution
+	// stamped on the audit.
 	// It returns the stored account with its engine account id populated.
-	CreateAccount(ctx context.Context, key Key, caller domain.Caller) (domain.Account, error)
+	CreateAccount(ctx context.Context, account domain.Account, caller domain.Caller) (domain.Account, error)
 
 	// SetAccountBlocked blocks or unblocks the account in the store and engine
 	// and audits the action.
@@ -151,6 +211,15 @@ type Node interface {
 	// audits the action. Notes never reach the engine.
 	SetAccountNotes(ctx context.Context, key Key, notes string, caller domain.Caller) error
 
+	// UpdateAccount replaces the account's public code and display title in the
+	// store, rebuilds the engine resolver, and audits the action.
+	UpdateAccount(
+		ctx context.Context,
+		key Key,
+		account domain.Account,
+		caller domain.Caller,
+	) (domain.Account, error)
+
 	// DeleteAccount removes the account and audits the action. Destructive
 	// cascades require force.
 	DeleteAccount(ctx context.Context, key Key, force bool, caller domain.Caller) error
@@ -162,6 +231,12 @@ type Node interface {
 	// ListLimits returns the barriers that reference the account, or all
 	// barriers when account is empty.
 	ListLimits(ctx context.Context, account domain.AccountID) (AccountLimits, error)
+
+	// ListPolicyRows returns the node's typed barriers flattened into one sorted,
+	// paged policy list, with the total matching count before paging.
+	ListPolicyRows(
+		ctx context.Context, filter store.PolicyListFilter,
+	) (store.PolicyListPage, error)
 
 	// PutRateLimit upserts the whole rate-limit barrier in the store,
 	// reconfigures the live rate-limit policy from the persisted full barrier
@@ -201,6 +276,12 @@ type Node interface {
 	// ListGroups returns every persisted group.
 	ListGroups(ctx context.Context) ([]domain.AccountGroup, error)
 
+	// ListGroupRows returns persisted groups matching filter, with list-only
+	// aggregate counts and total count before paging.
+	ListGroupRows(
+		ctx context.Context, filter store.GroupListFilter,
+	) (store.GroupListPage, error)
+
 	// GetGroup returns the group and its member accounts. The bool is false when
 	// no such group exists.
 	GetGroup(
@@ -209,6 +290,15 @@ type Node interface {
 
 	// SetGroupNotes replaces a group's notes in the store and audits the action.
 	SetGroupNotes(ctx context.Context, code, notes string, caller domain.Caller) error
+
+	// UpdateGroup replaces the group's public code and display title in the
+	// store, rebuilds the engine resolver, and audits the action.
+	UpdateGroup(
+		ctx context.Context,
+		oldCode string,
+		group domain.AccountGroup,
+		caller domain.Caller,
+	) (domain.AccountGroup, error)
 
 	// SetGroupBlocked blocks or unblocks the group in the store and engine and
 	// audits the action.
@@ -252,6 +342,12 @@ type Node interface {
 	ListBalances(
 		ctx context.Context, account domain.AccountID, asset string,
 	) ([]domain.Balance, error)
+
+	// ListBalanceRows returns balance rows matching filter, with total count
+	// before paging.
+	ListBalanceRows(
+		ctx context.Context, filter store.BalanceListFilter,
+	) (store.BalanceListPage, error)
 
 	// GetBalance returns the balance for (account, asset). The bool is false when
 	// no row exists.
@@ -350,6 +446,12 @@ type Node interface {
 	ListOrders(
 		ctx context.Context, account domain.AccountID, source domain.Source, n int,
 	) ([]domain.Order, error)
+
+	// ListOrderRows returns orders matching filter, with total count before
+	// paging.
+	ListOrderRows(
+		ctx context.Context, filter store.OrderListFilter,
+	) (store.OrderListPage, error)
 
 	// ListAllOrders returns every order matching filters, newest first.
 	ListAllOrders(

@@ -15,27 +15,63 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { ReactElement } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent, MouseEvent, ReactElement } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Copy, ExternalLink, Plus, ShieldCheck } from "lucide-react";
+import {
+  ExternalLink,
+  Plus,
+  GitFork,
+  ShieldCheck,
+} from "lucide-react";
 
-import { ApiError, useOfficerApi } from "@/framework";
+import {
+  ApiError,
+  CloneButton,
+  ColumnHeader,
+  AutocompleteFilterField,
+  ExactIdField,
+  FieldLabel,
+  FilterBar,
+  FilterByButton,
+  FilterChip,
+  IdCell,
+  MoreFiltersButton,
+  NumberRangeFilter,
+  reportInvalidFilterControls,
+  RowActions,
+  Segmented,
+  SortableHeader,
+  ShareLinkButton,
+  TimeRangeFilter,
+  ViewEntityButton,
+  useOpenInNewTabHint,
+  useOfficerApi,
+  type SortDirection,
+  type TradesFilter,
+} from "@/framework";
 import type {
-  Balance,
   CheckResult,
   ExecutionBlock,
   Order,
   OrderApproval,
   OrderEvent,
+  OrderListFilters,
+  OrderSide,
+  RangeFilterMode,
   Source,
+  SortOrder,
   Trade,
 } from "@/api/types";
-import { useBalances } from "@/api/useBalances";
-import { useOrders } from "@/api/useOrders";
-import { useTrades } from "@/api/useTrades";
+import { useOrdersPage } from "@/api/useOrders";
+import { useTradesPage } from "@/api/useTrades";
+import { operatorOptions } from "@/lib/dataControlLabels";
 import { formatDateTime } from "@/i18n/format";
+import { DEFAULT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from "@/lib/useDebounce";
+import { shareUrl } from "@/lib/shareLink";
+import { sortDirection } from "@/lib/sortDirection";
+import { cn } from "@/lib/utils";
 import { Autocomplete } from "@/components/Autocomplete";
 import {
   EmptyState,
@@ -80,9 +116,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
-  hasNextPage,
-  pageFetchLimit,
-  slicePage,
+  knownPageCount,
 } from "@/lib/tablePagination";
 import { usePersistentPageSize } from "@/lib/tablePageSize";
 
@@ -148,39 +182,36 @@ function instrument(baseAsset: string, quoteAsset: string): string {
   return `${baseAsset} / ${quoteAsset}`;
 }
 
-// ---------------------------------------------------------------------------
-// Asset pool — collect distinct base/quote assets from loaded data
-// ---------------------------------------------------------------------------
-
-function collectAssets(
-  orders: Order[],
-  trades: Trade[],
-  balances: Balance[],
-): string[] {
-  const set = new Set<string>();
-  for (const o of orders) {
-    if (o.baseAsset) {
-      set.add(o.baseAsset);
-    }
-    if (o.quoteAsset) {
-      set.add(o.quoteAsset);
-    }
+function ordersFilterHref({
+  tab,
+  account,
+  baseAsset,
+  quoteAsset,
+  order,
+}: {
+  tab?: "orders" | "trades";
+  account?: string;
+  baseAsset?: string;
+  quoteAsset?: string;
+  order?: string;
+}): string {
+  const query = new URLSearchParams();
+  if (tab === "trades") {
+    query.set("tab", "trades");
   }
-  for (const t of trades) {
-    if (t.baseAsset) {
-      set.add(t.baseAsset);
-    }
-    if (t.quoteAsset) {
-      set.add(t.quoteAsset);
-    }
+  if (order !== undefined && order !== "") {
+    query.set("order", order);
   }
-  // Supplement from balances so suggestions exist before any order is placed.
-  for (const b of balances) {
-    if (b.asset) {
-      set.add(b.asset);
-    }
+  if (account !== undefined && account !== "") {
+    query.set("account", account);
   }
-  return Array.from(set).sort();
+  if (baseAsset !== undefined && baseAsset !== "") {
+    query.set("baseAsset", baseAsset);
+  }
+  if (quoteAsset !== undefined && quoteAsset !== "") {
+    query.set("quoteAsset", quoteAsset);
+  }
+  return shareUrl("/orders", query);
 }
 
 // ---------------------------------------------------------------------------
@@ -309,12 +340,12 @@ function SubmitOrderDialog({
   onClose,
   onCreated,
   onOpenDetail,
-  accountSuggestions,
-  assetSuggestions,
-  initialValues,
+	accountSuggestions,
+	assetSuggestions,
+	initialValues,
 }: SubmitOrderDialogProps) {
-  const { t } = useTranslation("orders");
-  const { t: tc } = useTranslation();
+	  const { t } = useTranslation("orders");
+			  const { t: tc } = useTranslation();
   const { checkOrder, createOrder } = useOfficerApi();
 
   const [externalId, setExternalId] = useState("");
@@ -338,7 +369,7 @@ function SubmitOrderDialog({
     };
   }, []);
 
-  // Debounced live check: fires ~350ms after any form field changes.
+  // Debounced live check: fires after the shared search interval.
   useEffect(() => {
     const accountT = account.trim();
     const baseT = baseAsset.trim();
@@ -382,7 +413,7 @@ function SubmitOrderDialog({
           }
           setCheckState({ phase: "error", message: errMessage(err) });
         });
-    }, 350);
+    }, DEFAULT_SEARCH_DEBOUNCE_MS);
     return () => {
       window.clearTimeout(timer);
       checkAbortRef.current?.abort();
@@ -477,7 +508,7 @@ function SubmitOrderDialog({
         body.price = price.trim();
       }
       if (externalId.trim()) {
-        body.externalId = externalId.trim();
+        body.id = externalId.trim();
       }
       body.mode = submitMode;
       const result = await createOrder(body, controller.signal);
@@ -1366,8 +1397,24 @@ function OrderDetailDialog({ orderExternalId, onClose, onExecReport, onCloneOrde
             {/* Order header fields */}
             <div className="grid grid-cols-3 gap-2 rounded-card border border-border bg-surface-2 p-3 text-xs">
               <div>
+                <span className="text-muted-lt">{t("table.externalId")}</span>
+                <div className="mt-0.5">
+                  <IdCell
+                    value={state.order.externalId}
+                    copyTitle={t("common:rowActions.copyId")}
+                    copiedTitle={t("common:rowActions.copiedId")}
+                  />
+                </div>
+              </div>
+              <div>
                 <span className="text-muted-lt">{t("detail.dialog.fieldAccount")}</span>
-                <div className="nums mt-0.5 text-text">{state.order.account}</div>
+                <div className="mt-0.5">
+                  <IdCell
+                    value={state.order.account}
+                    copyTitle={t("common:rowActions.copyId")}
+                    copiedTitle={t("common:rowActions.copiedId")}
+                  />
+                </div>
               </div>
               <div>
                 <span className="text-muted-lt">{t("detail.dialog.fieldStatus")}</span>
@@ -1499,7 +1546,7 @@ function OrderDetailDialog({ orderExternalId, onClose, onExecReport, onCloneOrde
                             onClose();
                           }}
                         >
-                          <Copy className="h-3.5 w-3.5" />
+                          <GitFork className="h-3.5 w-3.5" />
                         </Button>
                       )}
                       {ev.type === "fill" && ev.fillQuantity !== undefined && (
@@ -1516,7 +1563,7 @@ function OrderDetailDialog({ orderExternalId, onClose, onExecReport, onCloneOrde
                             })
                           }
                         >
-                          <Copy className="h-3.5 w-3.5" />
+                          <GitFork className="h-3.5 w-3.5" />
                         </Button>
                       )}
                       </li>
@@ -1539,21 +1586,53 @@ function OrderDetailDialog({ orderExternalId, onClose, onExecReport, onCloneOrde
                 <Table>
                     <TableHeader>
                       <TableRow className="hover:bg-transparent">
-                        <TableHead>{t("table.externalId")}</TableHead>
-                        <TableHead>{t("table.qty")}</TableHead>
-                        <TableHead>{t("table.price")}</TableHead>
-                        <TableHead>{t("table.lockPrice")}</TableHead>
-                        <TableHead>{t("table.source")}</TableHead>
-                        <TableHead>{t("table.time")}</TableHead>
-                        <TableHead />
+                        <TableHead>
+                          <ColumnHeader
+                            description={t("table.columnDescriptions.externalId")}
+                          >
+                            {t("table.externalId")}
+                          </ColumnHeader>
+                        </TableHead>
+                        <TableHead>
+                          <ColumnHeader description={t("table.columnDescriptions.qty")}>
+                            {t("table.qty")}
+                          </ColumnHeader>
+                        </TableHead>
+                        <TableHead>
+                          <ColumnHeader description={t("table.columnDescriptions.price")}>
+                            {t("table.price")}
+                          </ColumnHeader>
+                        </TableHead>
+                        <TableHead>
+                          <ColumnHeader
+                            description={t("table.columnDescriptions.lockPrice")}
+                          >
+                            {t("table.lockPrice")}
+                          </ColumnHeader>
+                        </TableHead>
+                        <TableHead>
+                          <ColumnHeader description={t("table.columnDescriptions.source")}>
+                            {t("table.source")}
+                          </ColumnHeader>
+                        </TableHead>
+                        <TableHead>
+                          <ColumnHeader description={t("table.columnDescriptions.time")}>
+                            {t("table.time")}
+                          </ColumnHeader>
+                        </TableHead>
+                        <TableHead className="text-right" />
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {state.trades.map((trade) => (
                         <TableRow key={trade.externalId} className="hover:bg-transparent">
-                          <TableCell className="nums text-xs text-muted-lt">
-                            {trade.externalId}
-                          </TableCell>
+	                          <TableCell className="nums text-xs text-muted-lt">
+	                            <IdCell
+	                              value={trade.externalId}
+	                              copyTitle={t("common:rowActions.copyId")}
+	                              copiedTitle={t("common:rowActions.copiedId")}
+	                            />
+	                          </TableCell>
                           <TableCell className="nums text-xs">{trade.quantity}</TableCell>
                           <TableCell className="nums text-xs">{trade.price}</TableCell>
                           <TableCell className="nums text-xs text-muted-lt">
@@ -1565,22 +1644,22 @@ function OrderDetailDialog({ orderExternalId, onClose, onExecReport, onCloneOrde
                           <TableCell className="nums whitespace-nowrap text-xs text-muted-lt">
                             {formatDateTime(trade.at)}
                           </TableCell>
-                          <TableCell>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              aria-label={t("clone.execReportAriaLabel", { tradeId: trade.externalId })}
-                              onClick={() =>
-                                onCloneExecReport(orderExternalId, {
-                                  quantity: trade.quantity,
-                                  price: trade.price,
-                                  lockPrice: trade.lockPrice,
-                                })
-                              }
-                            >
-                              <Copy className="h-3.5 w-3.5" />
-                            </Button>
-                          </TableCell>
+	                          <TableCell className="text-right">
+	                            <RowActions>
+	                              <CloneButton
+	                                title={t("clone.execReportAriaLabel", {
+	                                  tradeId: trade.externalId,
+	                                })}
+	                                onClick={() =>
+	                                  onCloneExecReport(orderExternalId, {
+	                                    quantity: trade.quantity,
+	                                    price: trade.price,
+	                                    lockPrice: trade.lockPrice,
+	                                  })
+	                                }
+	                              />
+	                            </RowActions>
+	                          </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -1625,7 +1704,7 @@ function OrderDetailDialog({ orderExternalId, onClose, onExecReport, onCloneOrde
                     onClose();
                   }}
                 >
-                  <Copy className="h-3.5 w-3.5" />
+                  <GitFork className="h-3.5 w-3.5" />
                   {t("clone.orderButton")}
                 </Button>
               )}
@@ -1655,15 +1734,60 @@ function OrderDetailDialog({ orderExternalId, onClose, onExecReport, onCloneOrde
 
 interface OrdersTableProps {
   orders: Order[];
+  activeSort?: string;
+  activeOrder?: SortOrder;
+  onSortChange: (sort: string, order: SortDirection) => void;
   onRowClick: (order: Order) => void;
+  onFilterAccount: (account: string) => void;
+  onFilterInstrument: (baseAsset: string, quoteAsset: string) => void;
   onClone: (values: OrderInitialValues) => void;
 }
 
-function OrdersTable({ orders, onRowClick, onClone }: OrdersTableProps) {
-  const { t } = useTranslation("orders");
-  const { t: tc } = useTranslation();
+function OrdersTable({
+  orders,
+  activeSort,
+  activeOrder,
+  onSortChange,
+  onRowClick,
+  onFilterAccount,
+  onFilterInstrument,
+  onClone,
+	}: OrdersTableProps) {
+	  const { t } = useTranslation("orders");
+	  const { t: tc } = useTranslation();
+	  const rowRefs = useRef<Array<HTMLTableRowElement | null>>([]);
+	  const [selectedIndex, setSelectedIndex] = useState(0);
 
-  // Amount label: "100 qty" or "500 vol".
+	  const focusRow = (index: number) => {
+	    rowRefs.current[index]?.focus();
+	  };
+
+	  const onRowKeyDown = (
+	    event: KeyboardEvent<HTMLTableRowElement>,
+	    index: number,
+	    order: Order,
+	  ) => {
+	    if (event.key === "Enter") {
+	      event.preventDefault();
+	      onRowClick(order);
+	      return;
+	    }
+	    if (event.key === "ArrowDown" || event.key === "j") {
+	      event.preventDefault();
+	      const next = Math.min(index + 1, orders.length - 1);
+	      setSelectedIndex(next);
+	      focusRow(next);
+	      return;
+	    }
+	    if (event.key === "ArrowUp" || event.key === "k") {
+	      event.preventDefault();
+	      const next = Math.max(index - 1, 0);
+	      setSelectedIndex(next);
+	      focusRow(next);
+	    }
+	  };
+
+	  // Amount label: "100 qty" or "500 vol".
   function amountLabel(kind: string, value: string): string {
     return kind === "quantity"
       ? t("amount.qty", { value })
@@ -1682,34 +1806,158 @@ function OrdersTable({ orders, onRowClick, onClone }: OrdersTableProps) {
     <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
-            <TableHead>{t("table.externalId")}</TableHead>
-            <TableHead>{t("table.account")}</TableHead>
-            <TableHead>{t("table.instrument")}</TableHead>
-            <TableHead>{t("table.side")}</TableHead>
-            <TableHead>{t("table.amount")}</TableHead>
-            <TableHead>{t("table.price")}</TableHead>
-            <TableHead>{t("table.displayPrices")}</TableHead>
-            <TableHead>{t("table.status")}</TableHead>
-            <TableHead>{t("table.source")}</TableHead>
-            <TableHead>{t("table.time")}</TableHead>
-            <TableHead />
+            <TableHead>
+              <ColumnHeader description={t("table.columnDescriptions.externalId")}>
+                {t("table.externalId")}
+              </ColumnHeader>
+            </TableHead>
+            <TableHead>
+              <SortableHeader
+                field="account"
+                label={t("table.account")}
+                description={t("table.columnDescriptions.account")}
+                direction={sortDirection(activeSort, activeOrder, "account")}
+                onSort={onSortChange}
+              />
+            </TableHead>
+            <TableHead>
+              <SortableHeader
+                field="baseAsset"
+                label={t("table.instrument")}
+                description={t("table.columnDescriptions.instrument")}
+                direction={sortDirection(activeSort, activeOrder, "baseAsset")}
+                onSort={onSortChange}
+              />
+            </TableHead>
+            <TableHead className="orders-side-cell">
+              <SortableHeader
+                field="side"
+                label={t("table.side")}
+                description={t("table.columnDescriptions.side")}
+                direction={sortDirection(activeSort, activeOrder, "side")}
+                onSort={onSortChange}
+              />
+            </TableHead>
+            <TableHead>
+              <SortableHeader
+                field="amountValue"
+                label={t("table.amount")}
+                description={t("table.columnDescriptions.amount")}
+                direction={sortDirection(activeSort, activeOrder, "amountValue")}
+                onSort={onSortChange}
+              />
+            </TableHead>
+            <TableHead>
+              <SortableHeader
+                field="price"
+                label={t("table.price")}
+                description={t("table.columnDescriptions.price")}
+                direction={sortDirection(activeSort, activeOrder, "price")}
+                onSort={onSortChange}
+              />
+            </TableHead>
+            <TableHead>
+              <ColumnHeader
+                description={t("table.columnDescriptions.displayPrices")}
+              >
+                {t("table.displayPrices")}
+              </ColumnHeader>
+            </TableHead>
+            <TableHead className="w-[var(--orders-status-column-width)]">
+              <SortableHeader
+                field="status"
+                label={t("table.status")}
+                description={t("table.columnDescriptions.status")}
+                direction={sortDirection(activeSort, activeOrder, "status")}
+                onSort={onSortChange}
+              />
+            </TableHead>
+            <TableHead>
+              <SortableHeader
+                field="source"
+                label={t("table.source")}
+                description={t("table.columnDescriptions.source")}
+                direction={sortDirection(activeSort, activeOrder, "source")}
+                onSort={onSortChange}
+              />
+            </TableHead>
+            <TableHead>
+              <SortableHeader
+                field="at"
+                label={t("table.time")}
+                description={t("table.columnDescriptions.time")}
+                direction={sortDirection(activeSort, activeOrder, "at")}
+                onSort={onSortChange}
+              />
+            </TableHead>
+            <TableHead className="text-right" />
           </TableRow>
         </TableHeader>
         <TableBody>
-          {orders.map((order) => (
-            <TableRow
-              key={order.externalId}
-              className="cursor-pointer"
-              onClick={() => onRowClick(order)}
-            >
-              <TableCell className="nums text-xs text-muted-lt">
-                {order.externalId}
+	          {orders.map((order, index) => (
+	            <TableRow
+	              key={order.externalId}
+	              ref={(node) => {
+	                rowRefs.current[index] = node;
+	              }}
+	              tabIndex={0}
+	              className={cn(
+	                "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+	                selectedIndex === index && "ring-1 ring-inset ring-ring",
+	              )}
+	              onClick={() => onRowClick(order)}
+	              onFocus={() => setSelectedIndex(index)}
+	              onKeyDown={(event) => onRowKeyDown(event, index, order)}
+	            >
+              <TableCell className="text-muted-lt">
+                <IdCell
+                  value={order.externalId}
+                  copyTitle={t("common:rowActions.copyId")}
+                  copiedTitle={t("common:rowActions.copiedId")}
+                />
               </TableCell>
-              <TableCell className="nums text-xs">{order.account}</TableCell>
+              <TableCell className="nums text-xs">
+                <div className="flex min-w-0 items-center gap-1">
+                  <IdCell
+                    value={order.account}
+                    copyTitle={t("common:rowActions.copyId")}
+                    copiedTitle={t("common:rowActions.copiedId")}
+                  />
+                  <span className="ml-auto flex shrink-0 items-center">
+                    <FilterByButton
+                      size={28}
+                      title={tc("rowActions.filterByTitle", {
+                        field: order.account,
+                      })}
+                      href={ordersFilterHref({ account: order.account })}
+                      onClick={() => onFilterAccount(order.account)}
+                    />
+                  </span>
+                </div>
+              </TableCell>
               <TableCell className="text-xs">
-                {instrument(order.baseAsset, order.quoteAsset)}
+                <div className="flex min-w-0 items-center gap-1">
+                  <span className="min-w-0 truncate">
+                    {instrument(order.baseAsset, order.quoteAsset)}
+                  </span>
+                  <span className="ml-auto flex shrink-0 items-center">
+                    <FilterByButton
+                      size={28}
+                      title={tc("rowActions.filterByTitle", {
+                        field: instrument(order.baseAsset, order.quoteAsset),
+                      })}
+                      href={ordersFilterHref({
+                        baseAsset: order.baseAsset,
+                        quoteAsset: order.quoteAsset,
+                      })}
+                      onClick={() =>
+                        onFilterInstrument(order.baseAsset, order.quoteAsset)
+                      }
+                    />
+                  </span>
+                </div>
               </TableCell>
-              <TableCell>
+              <TableCell className="orders-side-cell">
                 <Badge variant={order.side === "buy" ? "buy" : "sell"}>
                   {order.side}
                 </Badge>
@@ -1725,7 +1973,7 @@ function OrdersTable({ orders, onRowClick, onClone }: OrdersTableProps) {
                   ? order.displayPrices.join(", ")
                   : tc("value.none")}
               </TableCell>
-              <TableCell>
+              <TableCell className="w-[var(--orders-status-column-width)]">
                 <Badge variant={statusVariant(order.status)}>{order.status}</Badge>
               </TableCell>
               <TableCell>
@@ -1734,26 +1982,34 @@ function OrdersTable({ orders, onRowClick, onClone }: OrdersTableProps) {
               <TableCell className="nums whitespace-nowrap text-xs text-muted-lt">
                 {formatDateTime(order.at)}
               </TableCell>
-              <TableCell>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  aria-label={t("clone.orderAriaLabel", { orderExternalId: order.externalId })}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onClone({
-                      account: order.account,
-                      baseAsset: order.baseAsset,
-                      quoteAsset: order.quoteAsset,
-                      side: order.side,
-                      amountKind: order.amountKind,
-                      amountValue: order.amountValue,
-                      price: order.price === "0" ? "" : order.price,
-                    });
-                  }}
-                >
-                  <Copy className="h-3.5 w-3.5" />
-                </Button>
+              <TableCell
+                className="text-right"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <RowActions>
+                  <ViewEntityButton
+                    title={tc("rowActions.viewTitle", {
+                      entity: order.externalId,
+                    })}
+                    onClick={() => onRowClick(order)}
+                  />
+                  <CloneButton
+                    title={t("clone.orderAriaLabel", {
+                      orderExternalId: order.externalId,
+                    })}
+                    onClick={() =>
+                      onClone({
+                        account: order.account,
+                        baseAsset: order.baseAsset,
+                        quoteAsset: order.quoteAsset,
+                        side: order.side,
+                        amountKind: order.amountKind,
+                        amountValue: order.amountValue,
+                        price: order.price === "0" ? "" : order.price,
+                      })
+                    }
+                  />
+                </RowActions>
               </TableCell>
             </TableRow>
           ))}
@@ -1768,51 +2024,248 @@ function OrdersTable({ orders, onRowClick, onClone }: OrdersTableProps) {
 
 interface TradesTableProps {
   trades: Trade[];
+  activeSort?: string;
+  activeOrder?: SortOrder;
+  onSortChange: (sort: string, order: SortDirection) => void;
   onOrderClick: (orderExternalId: string) => void;
+  onFilterAccount: (account: string) => void;
+  onFilterInstrument: (baseAsset: string, quoteAsset: string) => void;
   onCloneExecReport: (orderExternalId: string, values: ExecReportInitialValues) => void;
 }
 
-function TradesTable({ trades, onOrderClick, onCloneExecReport }: TradesTableProps) {
-  const { t } = useTranslation("orders");
-  const { t: tc } = useTranslation();
+function TradesTable({
+  trades,
+  activeSort,
+  activeOrder,
+  onSortChange,
+  onOrderClick,
+  onFilterAccount,
+  onFilterInstrument,
+  onCloneExecReport,
+	}: TradesTableProps) {
+		  const { t } = useTranslation("orders");
+		  const { t: tc } = useTranslation();
+		  const openInNewTabHint = useOpenInNewTabHint();
+		  const rowRefs = useRef<Array<HTMLTableRowElement | null>>([]);
+	  const [selectedIndex, setSelectedIndex] = useState(0);
 
-  return (
+	  const focusRow = (index: number) => {
+	    rowRefs.current[index]?.focus();
+	  };
+
+	  const onRowKeyDown = (
+	    event: KeyboardEvent<HTMLTableRowElement>,
+	    index: number,
+	    trade: Trade,
+	  ) => {
+	    if (event.key === "Enter") {
+	      event.preventDefault();
+	      onOrderClick(trade.order);
+	      return;
+	    }
+	    if (event.key === "ArrowDown" || event.key === "j") {
+	      event.preventDefault();
+	      const next = Math.min(index + 1, trades.length - 1);
+	      setSelectedIndex(next);
+	      focusRow(next);
+	      return;
+	    }
+	    if (event.key === "ArrowUp" || event.key === "k") {
+	      event.preventDefault();
+	      const next = Math.max(index - 1, 0);
+	      setSelectedIndex(next);
+	      focusRow(next);
+	    }
+	  };
+
+  const onOrderLinkClick = (
+    event: MouseEvent<HTMLAnchorElement>,
+    orderExternalId: string,
+  ) => {
+    if (event.metaKey || event.ctrlKey) {
+      return;
+    }
+    event.preventDefault();
+    onOrderClick(orderExternalId);
+  };
+
+	  return (
     <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
-            <TableHead>{t("table.externalId")}</TableHead>
-            <TableHead>{t("table.order")}</TableHead>
-            <TableHead>{t("table.account")}</TableHead>
-            <TableHead>{t("table.instrument")}</TableHead>
-            <TableHead>{t("table.side")}</TableHead>
-            <TableHead>{t("table.qty")}</TableHead>
-            <TableHead>{t("table.price")}</TableHead>
-            <TableHead>{t("table.lockPrice")}</TableHead>
-            <TableHead>{t("table.source")}</TableHead>
-            <TableHead>{t("table.time")}</TableHead>
-            <TableHead />
+            <TableHead>
+              <ColumnHeader description={t("table.columnDescriptions.externalId")}>
+                {t("table.externalId")}
+              </ColumnHeader>
+            </TableHead>
+            <TableHead>
+              <ColumnHeader description={t("table.columnDescriptions.order")}>
+                {t("table.order")}
+              </ColumnHeader>
+            </TableHead>
+            <TableHead>
+              <SortableHeader
+                field="account"
+                label={t("table.account")}
+                description={t("table.columnDescriptions.account")}
+                direction={sortDirection(activeSort, activeOrder, "account")}
+                onSort={onSortChange}
+              />
+            </TableHead>
+            <TableHead>
+              <SortableHeader
+                field="baseAsset"
+                label={t("table.instrument")}
+                description={t("table.columnDescriptions.instrument")}
+                direction={sortDirection(activeSort, activeOrder, "baseAsset")}
+                onSort={onSortChange}
+              />
+            </TableHead>
+            <TableHead className="trades-side-cell">
+              <SortableHeader
+                field="side"
+                label={t("table.side")}
+                description={t("table.columnDescriptions.side")}
+                direction={sortDirection(activeSort, activeOrder, "side")}
+                onSort={onSortChange}
+              />
+            </TableHead>
+            <TableHead>
+              <SortableHeader
+                field="quantity"
+                label={t("table.qty")}
+                description={t("table.columnDescriptions.qty")}
+                direction={sortDirection(activeSort, activeOrder, "quantity")}
+                onSort={onSortChange}
+              />
+            </TableHead>
+            <TableHead>
+              <SortableHeader
+                field="price"
+                label={t("table.price")}
+                description={t("table.columnDescriptions.price")}
+                direction={sortDirection(activeSort, activeOrder, "price")}
+                onSort={onSortChange}
+              />
+            </TableHead>
+            <TableHead>
+              <SortableHeader
+                field="lockPrice"
+                label={t("table.lockPrice")}
+                description={t("table.columnDescriptions.lockPrice")}
+                direction={sortDirection(activeSort, activeOrder, "lockPrice")}
+                onSort={onSortChange}
+              />
+            </TableHead>
+            <TableHead>
+              <SortableHeader
+                field="source"
+                label={t("table.source")}
+                description={t("table.columnDescriptions.source")}
+                direction={sortDirection(activeSort, activeOrder, "source")}
+                onSort={onSortChange}
+              />
+            </TableHead>
+            <TableHead>
+              <SortableHeader
+                field="at"
+                label={t("table.time")}
+                description={t("table.columnDescriptions.time")}
+                direction={sortDirection(activeSort, activeOrder, "at")}
+                onSort={onSortChange}
+              />
+            </TableHead>
+            <TableHead className="text-right" />
           </TableRow>
         </TableHeader>
         <TableBody>
-          {trades.map((trade) => (
-            <TableRow key={trade.externalId} className="hover:bg-transparent">
-              <TableCell className="nums text-xs text-muted-lt">
-                {trade.externalId}
+	          {trades.map((trade, index) => (
+	            <TableRow
+	              key={trade.externalId}
+	              ref={(node) => {
+	                rowRefs.current[index] = node;
+	              }}
+	              tabIndex={0}
+	              className={cn(
+	                "hover:bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+	                selectedIndex === index && "ring-1 ring-inset ring-ring",
+	              )}
+	              onFocus={() => setSelectedIndex(index)}
+	              onKeyDown={(event) => onRowKeyDown(event, index, trade)}
+	            >
+              <TableCell className="text-muted-lt">
+                <IdCell
+                  value={trade.externalId}
+                  copyTitle={t("common:rowActions.copyId")}
+                  copiedTitle={t("common:rowActions.copiedId")}
+                />
               </TableCell>
               <TableCell>
-                <button
-                  type="button"
-                  className="nums text-xs text-accent underline-offset-2 hover:underline"
-                  onClick={() => onOrderClick(trade.order)}
+                <IdCell
+                  value={trade.order}
+                  copyTitle={t("common:rowActions.copyId")}
+                  copiedTitle={t("common:rowActions.copiedId")}
                 >
-                  {trade.order}
-                </button>
+                  <a
+                    className="nums text-xs text-accent underline-offset-2 hover:underline"
+                    href={ordersFilterHref({ order: trade.order })}
+                    title={`${tc("rowActions.viewTitle", {
+                      entity: trade.order,
+                    })}\n${openInNewTabHint}`}
+                    onClick={(event) => onOrderLinkClick(event, trade.order)}
+                  >
+                    {trade.order}
+                  </a>
+                </IdCell>
               </TableCell>
-              <TableCell className="nums text-xs">{trade.account}</TableCell>
+              <TableCell className="nums text-xs">
+                <div className="flex min-w-0 items-center gap-1">
+                  <IdCell
+                    value={trade.account}
+                    copyTitle={t("common:rowActions.copyId")}
+                    copiedTitle={t("common:rowActions.copiedId")}
+                  />
+                  <span className="ml-auto flex shrink-0 items-center">
+                    <FilterByButton
+                      size={28}
+                      title={tc("rowActions.filterByTitle", {
+                        field: trade.account,
+                      })}
+                      href={ordersFilterHref({
+                        tab: "trades",
+                        account: trade.account,
+                      })}
+                      onClick={() => onFilterAccount(trade.account)}
+                    />
+                  </span>
+                </div>
+              </TableCell>
               <TableCell className="text-xs">
-                {instrument(trade.baseAsset, trade.quoteAsset)}
+                <div className="flex min-w-0 items-center gap-1">
+                  <IdCell
+                    value={instrument(trade.baseAsset, trade.quoteAsset)}
+                    copyTitle={t("common:rowActions.copyId")}
+                    copiedTitle={t("common:rowActions.copiedId")}
+                  />
+                  <span className="ml-auto flex shrink-0 items-center">
+                    <FilterByButton
+                      size={28}
+                      title={tc("rowActions.filterByTitle", {
+                        field: instrument(trade.baseAsset, trade.quoteAsset),
+                      })}
+                      href={ordersFilterHref({
+                        tab: "trades",
+                        baseAsset: trade.baseAsset,
+                        quoteAsset: trade.quoteAsset,
+                      })}
+                      onClick={() =>
+                        onFilterInstrument(trade.baseAsset, trade.quoteAsset)
+                      }
+                    />
+                  </span>
+                </div>
               </TableCell>
-              <TableCell>
+              <TableCell className="trades-side-cell">
                 <Badge variant={trade.side === "buy" ? "buy" : "sell"}>
                   {trade.side}
                 </Badge>
@@ -1828,21 +2281,21 @@ function TradesTable({ trades, onOrderClick, onCloneExecReport }: TradesTablePro
               <TableCell className="nums whitespace-nowrap text-xs text-muted-lt">
                 {formatDateTime(trade.at)}
               </TableCell>
-              <TableCell>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  aria-label={t("clone.execReportAriaLabel", { tradeId: trade.externalId })}
-                  onClick={() =>
-                    onCloneExecReport(trade.order, {
-                      quantity: trade.quantity,
-                      price: trade.price,
-                      lockPrice: trade.lockPrice,
-                    })
-                  }
-                >
-                  <Copy className="h-3.5 w-3.5" />
-                </Button>
+              <TableCell className="text-right">
+                <RowActions>
+                  <CloneButton
+                    title={t("clone.execReportAriaLabel", {
+                      tradeId: trade.externalId,
+                    })}
+                    onClick={() =>
+                      onCloneExecReport(trade.order, {
+                        quantity: trade.quantity,
+                        price: trade.price,
+                        lockPrice: trade.lockPrice,
+                      })
+                    }
+                  />
+                </RowActions>
               </TableCell>
             </TableRow>
           ))}
@@ -1856,6 +2309,33 @@ function TradesTable({ trades, onOrderClick, onCloneExecReport }: TradesTablePro
 // ---------------------------------------------------------------------------
 
 const SOURCES = ["", "panel", "api", "mcp", "system"] as const;
+const RANGE_MODES: RangeFilterMode[] = [
+  "all",
+  "greater_than",
+  "less_than",
+  "between",
+];
+const NUMBER_FILTER_MODES: RangeFilterMode[] = [
+  "eq",
+  "neq",
+  "gt",
+  "lt",
+  "gte",
+  "lte",
+  "between",
+];
+const TIME_FILTER_MODES: RangeFilterMode[] = ["after", "before", "between"];
+const ORDER_STATUS_FILTERS = [
+  "all",
+  "submitted",
+  "accepted",
+  "rejected",
+  "committed",
+  "rolled_back",
+  "filled",
+  "partially_filled",
+  "cancelled",
+] as const;
 
 function normalizeSourceFilter(value: string): Source | undefined {
   const trimmed = value.trim();
@@ -1865,47 +2345,213 @@ function normalizeSourceFilter(value: string): Source | undefined {
   return trimmed as Source;
 }
 
-interface FilterBarProps {
-  account: string;
-  source: string;
-  accountSuggestions: string[];
-  onAccount: (v: string) => void;
-  onSource: (v: string) => void;
+function rangeModeFromParams(
+  params: URLSearchParams,
+  key: string,
+  modes: RangeFilterMode[] = RANGE_MODES,
+  fallback: RangeFilterMode = "all",
+): RangeFilterMode {
+  const value = params.get(key);
+  return modes.includes(value as RangeFilterMode)
+    ? (value as RangeFilterMode)
+    : fallback;
 }
 
-function FilterBar({
-  account,
-  source,
-  accountSuggestions,
-  onAccount,
-  onSource,
-}: FilterBarProps) {
-  const { t } = useTranslation("orders");
+function trimmedOrUndefined(value: string): string | undefined {
+  const trimmed = value.trim();
+  return trimmed === "" ? undefined : trimmed;
+}
 
+function appendShareParam(
+  query: URLSearchParams,
+  key: string,
+  value: string | undefined,
+  defaultValue = "",
+) {
+  if (value !== undefined && value !== "" && value !== defaultValue) {
+    query.set(key, value);
+  }
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  const tag = target.tagName.toLowerCase();
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <div className="w-48">
-        <Autocomplete
-          value={account}
-          onChange={onAccount}
-          suggestions={accountSuggestions}
-          placeholder={t("filter.accountPlaceholder")}
-          className="h-8 text-xs"
+    target.isContentEditable ||
+    tag === "input" ||
+    tag === "select" ||
+    tag === "textarea" ||
+    tag === "button"
+  );
+}
+
+function dateTimeFilter(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (trimmed === "") {
+    return undefined;
+  }
+  const date = new Date(trimmed);
+  if (Number.isNaN(date.getTime())) {
+    return undefined;
+  }
+  return date.toISOString();
+}
+
+function addAmountRange(
+  filter: OrderListFilters,
+  mode: RangeFilterMode,
+  min: string,
+  max: string,
+) {
+  if (mode === "greater_than" && min !== "") {
+    filter.amountMode = mode;
+    filter.amountMin = min;
+  } else if (
+    (mode === "lt" || mode === "lte" || mode === "less_than") &&
+    min !== ""
+  ) {
+    filter.amountMode = mode;
+    filter.amountMax = min;
+  } else if (mode === "between" && min !== "" && max !== "") {
+    filter.amountMode = mode;
+    filter.amountMin = min;
+    filter.amountMax = max;
+  }
+}
+
+function addPriceRange(
+  filter: OrderListFilters,
+  mode: RangeFilterMode,
+  min: string,
+  max: string,
+) {
+  if (mode === "greater_than" && min !== "") {
+    filter.priceMode = mode;
+    filter.priceMin = min;
+  } else if (
+    (mode === "lt" || mode === "lte" || mode === "less_than") &&
+    min !== ""
+  ) {
+    filter.priceMode = mode;
+    filter.priceMax = min;
+  } else if (mode === "between" && min !== "" && max !== "") {
+    filter.priceMode = mode;
+    filter.priceMin = min;
+    filter.priceMax = max;
+  }
+}
+
+function addAtRange(
+  filter: OrderListFilters,
+  mode: RangeFilterMode,
+  min: string | undefined,
+  max: string | undefined,
+) {
+  if (mode === "greater_than" && min !== undefined) {
+    filter.atMode = mode;
+    filter.atMin = min;
+  } else if (
+    (mode === "lt" || mode === "lte" || mode === "less_than" || mode === "before") &&
+    min !== undefined
+  ) {
+    filter.atMode = mode;
+    filter.atMax = min;
+  } else if (mode === "between" && min !== undefined && max !== undefined) {
+    filter.atMode = mode;
+    filter.atMin = min;
+    filter.atMax = max;
+  }
+}
+
+function RangeFilterControls({
+  label,
+  mode,
+  min,
+  max,
+  inputType = "text",
+  onMode,
+  onMin,
+  onMax,
+}: {
+  label: string;
+  mode: RangeFilterMode;
+  min: string;
+  max: string;
+  inputType?: "text" | "datetime-local";
+  onMode: (value: RangeFilterMode) => void;
+  onMin: (value: string) => void;
+  onMax: (value: string) => void;
+}) {
+  const { t } = useTranslation("orders");
+  const { t: tc } = useTranslation("common");
+  const activeMode: RangeFilterMode = mode === "all" ? "greater_than" : mode;
+  const rangeOperators = [
+    {
+      value: "greater_than",
+      label: t("filter.range.greater_than"),
+      sign: ">",
+    },
+    { value: "less_than", label: t("filter.range.less_than"), sign: "<" },
+    { value: "between", label: t("filter.range.between") },
+  ];
+  const firstValue = activeMode === "less_than" ? max : min;
+  const secondValue = activeMode === "between" ? max : "";
+  const updateMode = (next: string) => {
+    const nextMode = next as RangeFilterMode;
+    onMode(nextMode);
+    if (nextMode === "greater_than") {
+      onMax("");
+    } else if (nextMode === "less_than") {
+      onMin("");
+    }
+  };
+  const updateFirst = (value: string) => {
+    if (mode === "all") {
+      onMode(activeMode);
+    }
+    if (activeMode === "less_than") {
+      onMax(value);
+    } else {
+      onMin(value);
+    }
+  };
+  const updateSecond = (value: string) => {
+    if (mode === "all") {
+      onMode(activeMode);
+    }
+    onMax(value);
+  };
+  return (
+    <div className="grid gap-1">
+      <FieldLabel>{label}</FieldLabel>
+      {inputType === "datetime-local" ? (
+        <TimeRangeFilter
+          operator={activeMode}
+          operators={rangeOperators}
+          operatorAriaLabel={label}
+          from={firstValue}
+          to={secondValue}
+          showPresets={false}
+          clearLabel={tc("filters.clearField")}
+          onOperatorChange={updateMode}
+          onFromChange={updateFirst}
+          onToChange={updateSecond}
         />
-      </div>
-      <Select value={source || "_all"} onValueChange={(v) => onSource(v === "_all" ? "" : v)}>
-        <SelectTrigger className="h-8 w-32 text-xs" aria-label={t("filter.sourceAriaLabel")}>
-          <SelectValue placeholder={t("filter.sourceAll")} />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="_all">{t("filter.sourceAll")}</SelectItem>
-          {SOURCES.filter(Boolean).map((s) => (
-            <SelectItem key={s} value={s}>
-              {s}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      ) : (
+        <NumberRangeFilter
+          operator={activeMode}
+          operators={rangeOperators}
+          operatorAriaLabel={label}
+          min={firstValue}
+          max={secondValue}
+          clearLabel={tc("filters.clearField")}
+          onOperatorChange={updateMode}
+          onMinChange={updateFirst}
+          onMaxChange={updateSecond}
+        />
+      )}
     </div>
   );
 }
@@ -1916,93 +2562,668 @@ function FilterBar({
 
 type TabId = "orders" | "trades";
 
+type OrderAdvancedFilterDraft = {
+  amountMode: RangeFilterMode;
+  amountMin: string;
+  amountMax: string;
+  priceMode: RangeFilterMode;
+  priceMin: string;
+  priceMax: string;
+  atMode: RangeFilterMode;
+  atMin: string;
+  atMax: string;
+};
+
+type TradeAdvancedFilterDraft = {
+  atMode: RangeFilterMode;
+  atMin: string;
+  atMax: string;
+  quantityMode: RangeFilterMode;
+  quantityMin: string;
+  quantityMax: string;
+  priceMode: RangeFilterMode;
+  priceMin: string;
+  priceMax: string;
+  lockPriceMode: RangeFilterMode;
+  lockPriceMin: string;
+  lockPriceMax: string;
+};
+
 export function Orders() {
   const { t } = useTranslation("orders");
-  const { fetchAccounts } = useOfficerApi();
+  const { t: tc } = useTranslation("common");
+  const { fetchAccounts, fetchAssets, fetchOrderDetail } = useOfficerApi();
+  const filterRegionRef = useRef<HTMLDivElement | null>(null);
+  const advancedFilterDialogRef = useRef<HTMLDivElement | null>(null);
+  const openedTradeExternalIdRef = useRef<string | null>(null);
 
   const [params] = useSearchParams();
-  const [tab, setTab] = useState<TabId>("orders");
+  // A deep link from the Assets screen lands on the trades tab when asked
+  // (?tab=trades) and seeds the matching base-asset filter on both tabs.
+  const [tab, setTab] = useState<TabId>(
+    params.get("tab") === "trades" ? "trades" : "orders",
+  );
+  const initialBaseAsset = params.get("baseAsset") ?? "";
 
   // Filter state — seeded from URL on mount
   const [orderAccount, setOrderAccount] = useState(params.get("account") ?? "");
+  const [orderAccountDraft, setOrderAccountDraft] = useState(
+    params.get("account") ?? "",
+  );
   const [orderSource, setOrderSource] = useState(params.get("source") ?? "");
+  const [orderSide, setOrderSide] = useState<"all" | OrderSide>(
+    params.get("side") === "buy" || params.get("side") === "sell"
+      ? (params.get("side") as OrderSide)
+      : "all",
+  );
+  const [orderStatus, setOrderStatus] =
+    useState<(typeof ORDER_STATUS_FILTERS)[number]>(
+      ORDER_STATUS_FILTERS.includes(
+        params.get("status") as (typeof ORDER_STATUS_FILTERS)[number],
+      )
+        ? (params.get("status") as (typeof ORDER_STATUS_FILTERS)[number])
+        : "all",
+  );
+  const [orderBaseAsset, setOrderBaseAsset] = useState(initialBaseAsset);
+  const [orderBaseAssetDraft, setOrderBaseAssetDraft] =
+    useState(initialBaseAsset);
+  const [orderQuoteAsset, setOrderQuoteAsset] = useState(
+    params.get("quoteAsset") ?? "",
+  );
+  const [orderQuoteAssetDraft, setOrderQuoteAssetDraft] = useState(
+    params.get("quoteAsset") ?? "",
+  );
+  const [orderAmountMode, setOrderAmountMode] = useState<RangeFilterMode>(
+    rangeModeFromParams(params, "amountMode"),
+  );
+  const [orderAmountMin, setOrderAmountMin] = useState(params.get("amountMin") ?? "");
+  const [orderAmountMax, setOrderAmountMax] = useState(params.get("amountMax") ?? "");
+  const [orderPriceMode, setOrderPriceMode] = useState<RangeFilterMode>(
+    rangeModeFromParams(params, "priceMode"),
+  );
+  const [orderPriceMin, setOrderPriceMin] = useState(params.get("priceMin") ?? "");
+  const [orderPriceMax, setOrderPriceMax] = useState(params.get("priceMax") ?? "");
+  const [orderAtMode, setOrderAtMode] = useState<RangeFilterMode>(
+    rangeModeFromParams(params, "atMode"),
+  );
+  const [orderAtMin, setOrderAtMin] = useState(params.get("atMin") ?? "");
+  const [orderAtMax, setOrderAtMax] = useState(params.get("atMax") ?? "");
   const [orderSize, setOrderSize] = usePersistentPageSize(
     "pit-officer-orders-page-size",
   );
   const [orderPage, setOrderPage] = useState(0);
+  const [orderSort, setOrderSort] = useState<{
+    sort?: string;
+    order?: SortOrder;
+  }>({ sort: "at", order: "desc" });
 
   const [tradeAccount, setTradeAccount] = useState(params.get("account") ?? "");
+  const [tradeAccountDraft, setTradeAccountDraft] = useState(
+    params.get("account") ?? "",
+  );
+  const [tradeExternalId, setTradeExternalId] = useState(
+    params.get("id") ?? params.get("externalId") ?? "",
+  );
+  const [appliedTradeExternalId, setAppliedTradeExternalId] = useState(
+    params.get("id") ?? params.get("externalId") ?? "",
+  );
   const [tradeSource, setTradeSource] = useState(params.get("source") ?? "");
+  const [tradeSide, setTradeSide] = useState<"all" | OrderSide>(
+    params.get("side") === "buy" || params.get("side") === "sell"
+      ? (params.get("side") as OrderSide)
+      : "all",
+  );
+  const [tradeBaseAsset, setTradeBaseAsset] = useState(initialBaseAsset);
+  const [tradeBaseAssetDraft, setTradeBaseAssetDraft] =
+    useState(initialBaseAsset);
+  const [tradeQuoteAsset, setTradeQuoteAsset] = useState(
+    params.get("quoteAsset") ?? "",
+  );
+  const [tradeQuoteAssetDraft, setTradeQuoteAssetDraft] = useState(
+    params.get("quoteAsset") ?? "",
+  );
+  const [tradeAtMode, setTradeAtMode] = useState<RangeFilterMode>(
+    rangeModeFromParams(params, "atMode", TIME_FILTER_MODES, "after"),
+  );
+  const [tradeAtMin, setTradeAtMin] = useState(params.get("atMin") ?? "");
+  const [tradeAtMax, setTradeAtMax] = useState(params.get("atMax") ?? "");
+  const [tradeQuantityMode, setTradeQuantityMode] = useState<RangeFilterMode>(
+    rangeModeFromParams(params, "quantityMode", NUMBER_FILTER_MODES, "eq"),
+  );
+  const [tradeQuantityMin, setTradeQuantityMin] = useState(
+    params.get("quantityMin") ?? "",
+  );
+  const [tradeQuantityMax, setTradeQuantityMax] = useState(
+    params.get("quantityMax") ?? "",
+  );
+  const [tradePriceMode, setTradePriceMode] = useState<RangeFilterMode>(
+    rangeModeFromParams(params, "priceMode", NUMBER_FILTER_MODES, "eq"),
+  );
+  const [tradePriceMin, setTradePriceMin] = useState(params.get("priceMin") ?? "");
+  const [tradePriceMax, setTradePriceMax] = useState(params.get("priceMax") ?? "");
+  const [tradeLockPriceMode, setTradeLockPriceMode] = useState<RangeFilterMode>(
+    rangeModeFromParams(params, "lockPriceMode", NUMBER_FILTER_MODES, "eq"),
+  );
+  const [tradeLockPriceMin, setTradeLockPriceMin] = useState(
+    params.get("lockPriceMin") ?? "",
+  );
+  const [tradeLockPriceMax, setTradeLockPriceMax] = useState(
+    params.get("lockPriceMax") ?? "",
+  );
   const [tradeSize, setTradeSize] = usePersistentPageSize(
     "pit-officer-trades-page-size",
   );
   const [tradePage, setTradePage] = useState(0);
+  const [tradeSort, setTradeSort] = useState<{
+    sort?: string;
+    order?: SortOrder;
+  }>({ sort: "at", order: "desc" });
+  const [moreFiltersOpen, setMoreFiltersOpen] = useState(false);
+  const [orderAdvancedDraft, setOrderAdvancedDraft] =
+    useState<OrderAdvancedFilterDraft>({
+      amountMode: orderAmountMode,
+      amountMin: orderAmountMin,
+      amountMax: orderAmountMax,
+      priceMode: orderPriceMode,
+      priceMin: orderPriceMin,
+      priceMax: orderPriceMax,
+      atMode: orderAtMode,
+      atMin: orderAtMin,
+      atMax: orderAtMax,
+    });
+  const [tradeAdvancedDraft, setTradeAdvancedDraft] =
+    useState<TradeAdvancedFilterDraft>({
+      atMode: tradeAtMode,
+      atMin: tradeAtMin,
+      atMax: tradeAtMax,
+      quantityMode: tradeQuantityMode,
+      quantityMin: tradeQuantityMin,
+      quantityMax: tradeQuantityMax,
+      priceMode: tradePriceMode,
+      priceMin: tradePriceMin,
+      priceMax: tradePriceMax,
+      lockPriceMode: tradeLockPriceMode,
+      lockPriceMin: tradeLockPriceMin,
+      lockPriceMax: tradeLockPriceMax,
+    });
+  const debouncedOrderAccountDraft = useDebouncedValue(
+    orderAccountDraft.trim(),
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const debouncedTradeAccountDraft = useDebouncedValue(
+    tradeAccountDraft.trim(),
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const debouncedTradeBaseAssetDraft = useDebouncedValue(
+    tradeBaseAssetDraft.trim(),
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const debouncedTradeQuoteAssetDraft = useDebouncedValue(
+    tradeQuoteAssetDraft.trim(),
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const debouncedTradeAtMin = useDebouncedValue(
+    tradeAtMin,
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const debouncedTradeAtMax = useDebouncedValue(
+    tradeAtMax,
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const debouncedTradeQuantityMin = useDebouncedValue(
+    tradeQuantityMin.trim(),
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const debouncedTradeQuantityMax = useDebouncedValue(
+    tradeQuantityMax.trim(),
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const debouncedTradePriceMin = useDebouncedValue(
+    tradePriceMin.trim(),
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const debouncedTradePriceMax = useDebouncedValue(
+    tradePriceMax.trim(),
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const debouncedTradeLockPriceMin = useDebouncedValue(
+    tradeLockPriceMin.trim(),
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const debouncedTradeLockPriceMax = useDebouncedValue(
+    tradeLockPriceMax.trim(),
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const debouncedOrderBaseAssetDraft = useDebouncedValue(
+    orderBaseAssetDraft.trim(),
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const debouncedOrderQuoteAssetDraft = useDebouncedValue(
+    orderQuoteAssetDraft.trim(),
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const debouncedOrderAmountMin = useDebouncedValue(
+    orderAmountMin.trim(),
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const debouncedOrderAmountMax = useDebouncedValue(
+    orderAmountMax.trim(),
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const debouncedOrderPriceMin = useDebouncedValue(
+    orderPriceMin.trim(),
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const debouncedOrderPriceMax = useDebouncedValue(
+    orderPriceMax.trim(),
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const debouncedOrderAtMin = useDebouncedValue(
+    orderAtMin,
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const debouncedOrderAtMax = useDebouncedValue(
+    orderAtMax,
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
   const normalizedOrderSource = normalizeSourceFilter(orderSource);
   const normalizedTradeSource = normalizeSourceFilter(tradeSource);
 
+  function resetTradePage() {
+    setTradePage(0);
+  }
+
+  function syncAdvancedDrafts() {
+    setOrderAdvancedDraft({
+      amountMode: orderAmountMode,
+      amountMin: orderAmountMin,
+      amountMax: orderAmountMax,
+      priceMode: orderPriceMode,
+      priceMin: orderPriceMin,
+      priceMax: orderPriceMax,
+      atMode: orderAtMode,
+      atMin: orderAtMin,
+      atMax: orderAtMax,
+    });
+    setTradeAdvancedDraft({
+      atMode: tradeAtMode,
+      atMin: tradeAtMin,
+      atMax: tradeAtMax,
+      quantityMode: tradeQuantityMode,
+      quantityMin: tradeQuantityMin,
+      quantityMax: tradeQuantityMax,
+      priceMode: tradePriceMode,
+      priceMin: tradePriceMin,
+      priceMax: tradePriceMax,
+      lockPriceMode: tradeLockPriceMode,
+      lockPriceMin: tradeLockPriceMin,
+      lockPriceMax: tradeLockPriceMax,
+    });
+  }
+
+  function applyAdvancedFilters() {
+    if (!reportInvalidFilterControls(advancedFilterDialogRef.current)) {
+      return;
+    }
+    if (tab === "orders") {
+      setOrderAmountMode(orderAdvancedDraft.amountMode);
+      setOrderAmountMin(orderAdvancedDraft.amountMin);
+      setOrderAmountMax(orderAdvancedDraft.amountMax);
+      setOrderPriceMode(orderAdvancedDraft.priceMode);
+      setOrderPriceMin(orderAdvancedDraft.priceMin);
+      setOrderPriceMax(orderAdvancedDraft.priceMax);
+      setOrderAtMode(orderAdvancedDraft.atMode);
+      setOrderAtMin(orderAdvancedDraft.atMin);
+      setOrderAtMax(orderAdvancedDraft.atMax);
+      setOrderPage(0);
+    } else {
+      setTradeAtMode(tradeAdvancedDraft.atMode);
+      setTradeAtMin(tradeAdvancedDraft.atMin);
+      setTradeAtMax(tradeAdvancedDraft.atMax);
+      setTradeQuantityMode(tradeAdvancedDraft.quantityMode);
+      setTradeQuantityMin(tradeAdvancedDraft.quantityMin);
+      setTradeQuantityMax(tradeAdvancedDraft.quantityMax);
+      setTradePriceMode(tradeAdvancedDraft.priceMode);
+      setTradePriceMin(tradeAdvancedDraft.priceMin);
+      setTradePriceMax(tradeAdvancedDraft.priceMax);
+      setTradeLockPriceMode(tradeAdvancedDraft.lockPriceMode);
+      setTradeLockPriceMin(tradeAdvancedDraft.lockPriceMin);
+      setTradeLockPriceMax(tradeAdvancedDraft.lockPriceMax);
+      resetTradePage();
+    }
+    setMoreFiltersOpen(false);
+  }
+
+  const orderIdentityDraftChanged =
+    orderAccountDraft.trim() !== orderAccount ||
+    orderBaseAssetDraft.trim() !== orderBaseAsset ||
+    orderQuoteAssetDraft.trim() !== orderQuoteAsset;
+  const tradeIdentityDraftChanged =
+    tradeAccountDraft.trim() !== tradeAccount ||
+    tradeBaseAssetDraft.trim() !== tradeBaseAsset ||
+    tradeQuoteAssetDraft.trim() !== tradeQuoteAsset;
+
+  function applyOrderIdentityFilters() {
+    setOrderAccount(orderAccountDraft.trim());
+    setOrderBaseAsset(orderBaseAssetDraft.trim());
+    setOrderQuoteAsset(orderQuoteAssetDraft.trim());
+    setOrderPage(0);
+  }
+
+  function applyTradeIdentityFilters() {
+    setTradeAccount(tradeAccountDraft.trim());
+    setTradeBaseAsset(tradeBaseAssetDraft.trim());
+    setTradeQuoteAsset(tradeQuoteAssetDraft.trim());
+    resetTradePage();
+  }
+
+  function applyOrderIdentityField(
+    field: "account" | "baseAsset" | "quoteAsset",
+    value: string,
+  ) {
+    const nextValue = value.trim();
+    if (field === "account") {
+      setOrderAccountDraft(nextValue);
+      setOrderAccount(nextValue);
+    } else if (field === "baseAsset") {
+      setOrderBaseAssetDraft(nextValue);
+      setOrderBaseAsset(nextValue);
+    } else {
+      setOrderQuoteAssetDraft(nextValue);
+      setOrderQuoteAsset(nextValue);
+    }
+    setOrderPage(0);
+  }
+
+  function applyTradeIdentityField(
+    field: "account" | "baseAsset" | "quoteAsset",
+    value: string,
+  ) {
+    const nextValue = value.trim();
+    if (field === "account") {
+      setTradeAccountDraft(nextValue);
+      setTradeAccount(nextValue);
+    } else if (field === "baseAsset") {
+      setTradeBaseAssetDraft(nextValue);
+      setTradeBaseAsset(nextValue);
+    } else {
+      setTradeQuoteAssetDraft(nextValue);
+      setTradeQuoteAsset(nextValue);
+    }
+    resetTradePage();
+  }
+
+  function applyOrderIdentityFiltersOnEnter(
+    event: KeyboardEvent<HTMLInputElement>,
+  ) {
+    if (event.key === "Enter") {
+      applyOrderIdentityFilters();
+    }
+  }
+
+  function applyTradeIdentityFiltersOnEnter(
+    event: KeyboardEvent<HTMLInputElement>,
+  ) {
+    if (event.key === "Enter") {
+      applyTradeIdentityFilters();
+    }
+  }
+
   // Data
-  const ordersResult = useOrders(
-    orderAccount || undefined,
+  const orderListFilters = useMemo<OrderListFilters>(() => {
+    const filter: OrderListFilters = {
+      account: orderAccount.trim() || undefined,
+      source: normalizedOrderSource,
+      limit: orderSize,
+      offset: orderPage * orderSize,
+      sort: orderSort.sort,
+      order: orderSort.order,
+    };
+    if (orderSide !== "all") {
+      filter.side = orderSide;
+    }
+    if (orderStatus !== "all") {
+      filter.status = orderStatus;
+    }
+    const baseAsset = trimmedOrUndefined(orderBaseAsset);
+    if (baseAsset !== undefined) {
+      filter.baseAsset = baseAsset;
+    }
+    const quoteAsset = trimmedOrUndefined(orderQuoteAsset);
+    if (quoteAsset !== undefined) {
+      filter.quoteAsset = quoteAsset;
+    }
+    addAmountRange(
+      filter,
+      orderAmountMode,
+      debouncedOrderAmountMin,
+      debouncedOrderAmountMax,
+    );
+    addPriceRange(
+      filter,
+      orderPriceMode,
+      debouncedOrderPriceMin,
+      debouncedOrderPriceMax,
+    );
+    addAtRange(
+      filter,
+      orderAtMode,
+      dateTimeFilter(debouncedOrderAtMin),
+      dateTimeFilter(debouncedOrderAtMax),
+    );
+    return filter;
+  }, [
+    debouncedOrderAmountMax,
+    debouncedOrderAmountMin,
+    debouncedOrderAtMax,
+    debouncedOrderAtMin,
+    debouncedOrderPriceMax,
+    debouncedOrderPriceMin,
     normalizedOrderSource,
-    pageFetchLimit(orderPage, orderSize),
-  );
-  const tradesResult = useTrades(
-    tradeAccount || undefined,
+    orderAccount,
+    orderAmountMode,
+    orderAtMode,
+    orderBaseAsset,
+    orderPage,
+    orderPriceMode,
+    orderQuoteAsset,
+    orderSide,
+    orderSize,
+    orderSort.order,
+    orderSort.sort,
+    orderStatus,
+  ]);
+  const ordersResult = useOrdersPage(orderListFilters);
+  const tradeListFilters = useMemo<TradesFilter>(() => {
+    const filter: TradesFilter = {
+      externalId: appliedTradeExternalId.trim() || undefined,
+      account: tradeAccount.trim() || undefined,
+      source: normalizedTradeSource,
+      limit: tradeSize,
+      offset: tradePage * tradeSize,
+      sort: tradeSort.sort,
+      order: tradeSort.order,
+    };
+    if (tradeSide !== "all") {
+      filter.side = tradeSide;
+    }
+    const baseAsset = trimmedOrUndefined(tradeBaseAsset);
+    if (baseAsset !== undefined) {
+      filter.baseAsset = baseAsset;
+    }
+    const quoteAsset = trimmedOrUndefined(tradeQuoteAsset);
+    if (quoteAsset !== undefined) {
+      filter.quoteAsset = quoteAsset;
+    }
+    const tradeAtFrom = dateTimeFilter(debouncedTradeAtMin);
+    const tradeAtTo = dateTimeFilter(debouncedTradeAtMax);
+    if (tradeAtMode === "after" && tradeAtFrom !== undefined) {
+      filter.atMode = tradeAtMode;
+      filter.atMin = tradeAtFrom;
+    } else if (tradeAtMode === "before" && tradeAtFrom !== undefined) {
+      filter.atMode = tradeAtMode;
+      filter.atMax = tradeAtFrom;
+    } else if (
+      tradeAtMode === "between" &&
+      tradeAtFrom !== undefined &&
+      tradeAtTo !== undefined
+    ) {
+      filter.atMode = tradeAtMode;
+      filter.atMin = tradeAtFrom;
+      filter.atMax = tradeAtTo;
+    }
+    if (tradeQuantityMode === "between") {
+      if (debouncedTradeQuantityMin !== "" && debouncedTradeQuantityMax !== "") {
+        filter.quantityMode = tradeQuantityMode;
+        filter.quantityMin = debouncedTradeQuantityMin;
+        filter.quantityMax = debouncedTradeQuantityMax;
+      }
+    } else if (debouncedTradeQuantityMin !== "") {
+      filter.quantityMode = tradeQuantityMode as RangeFilterMode;
+      filter.quantityMin = debouncedTradeQuantityMin;
+    }
+    if (tradePriceMode === "between") {
+      if (debouncedTradePriceMin !== "" && debouncedTradePriceMax !== "") {
+        filter.priceMode = tradePriceMode;
+        filter.priceMin = debouncedTradePriceMin;
+        filter.priceMax = debouncedTradePriceMax;
+      }
+    } else if (debouncedTradePriceMin !== "") {
+      filter.priceMode = tradePriceMode as RangeFilterMode;
+      filter.priceMin = debouncedTradePriceMin;
+    }
+    if (tradeLockPriceMode === "between") {
+      if (debouncedTradeLockPriceMin !== "" && debouncedTradeLockPriceMax !== "") {
+        filter.lockPriceMode = tradeLockPriceMode;
+        filter.lockPriceMin = debouncedTradeLockPriceMin;
+        filter.lockPriceMax = debouncedTradeLockPriceMax;
+      }
+    } else if (debouncedTradeLockPriceMin !== "") {
+      filter.lockPriceMode = tradeLockPriceMode as RangeFilterMode;
+      filter.lockPriceMin = debouncedTradeLockPriceMin;
+    }
+    return filter;
+  }, [
+    appliedTradeExternalId,
+    debouncedTradeAtMax,
+    debouncedTradeAtMin,
+    debouncedTradeLockPriceMax,
+    debouncedTradeLockPriceMin,
+    debouncedTradePriceMax,
+    debouncedTradePriceMin,
+    debouncedTradeQuantityMax,
+    debouncedTradeQuantityMin,
     normalizedTradeSource,
-    pageFetchLimit(tradePage, tradeSize),
-  );
+    tradeAtMode,
+    tradeAccount,
+    tradeBaseAsset,
+    tradeLockPriceMode,
+    tradePage,
+    tradePriceMode,
+    tradeQuantityMode,
+    tradeQuoteAsset,
+    tradeSide,
+    tradeSize,
+    tradeSort.order,
+    tradeSort.sort,
+  ]);
+  const tradesResult = useTradesPage(tradeListFilters);
 
-  // Balances — unfiltered, for seeding asset suggestions before any orders exist.
-  const balancesResult = useBalances();
-
-  // Account suggestions — union of accounts seen in orders + trades
-  const accountSuggestions = useMemo(() => {
-    const set = new Set<string>();
-    if (ordersResult.load.state === "ready") {
-      for (const o of ordersResult.load.data) {
-        if (o.account) {
-          set.add(o.account);
-        }
-      }
-    }
-    if (tradesResult.load.state === "ready") {
-      for (const tr of tradesResult.load.data) {
-        if (tr.account) {
-          set.add(tr.account);
-        }
-      }
-    }
-    return Array.from(set).sort();
-  }, [ordersResult.load, tradesResult.load]);
-
-  // Also fetch accounts for the submit dialog
-  const [fetchedAccounts, setFetchedAccounts] = useState<string[]>([]);
+  const accountSuggestionQuery =
+    tab === "orders" ? debouncedOrderAccountDraft : debouncedTradeAccountDraft;
+  const [allAccountSuggestions, setAllAccountSuggestions] = useState<string[]>([]);
+  const visibleAccountSuggestions =
+    accountSuggestionQuery.trim() === "" ? [] : allAccountSuggestions;
   useEffect(() => {
-    fetchAccounts()
-      .then((accs) => setFetchedAccounts(accs.map((a) => a.code)))
-      .catch(() => { /* ignore */ });
-  }, [fetchAccounts]);
+    const query = accountSuggestionQuery.trim();
+    if (query === "") {
+      return;
+    }
+    const controller = new AbortController();
+    fetchAccounts(
+      { code: query, codeMatch: "starts_with", limit: 8, sort: "code" },
+      controller.signal,
+    )
+      .then((accounts) => setAllAccountSuggestions(accounts.map((a) => a.code)))
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setAllAccountSuggestions([]);
+        }
+      });
+    return () => controller.abort();
+  }, [accountSuggestionQuery, fetchAccounts]);
 
-  const allAccountSuggestions = useMemo(
-    () => Array.from(new Set([...accountSuggestions, ...fetchedAccounts])).sort(),
-    [accountSuggestions, fetchedAccounts],
+  const assetSuggestionQuery = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          [
+            debouncedOrderBaseAssetDraft,
+            debouncedOrderQuoteAssetDraft,
+            debouncedTradeBaseAssetDraft,
+            debouncedTradeQuoteAssetDraft,
+          ]
+            .map((value) => value.trim())
+            .filter(Boolean),
+        ),
+      ),
+    [
+      debouncedOrderBaseAssetDraft,
+      debouncedOrderQuoteAssetDraft,
+      debouncedTradeBaseAssetDraft,
+      debouncedTradeQuoteAssetDraft,
+    ],
   );
-
-  // Asset suggestions from orders + trades + balances (fallback when feeds empty).
-  const assetSuggestions = useMemo(() => {
-    const orders = ordersResult.load.state === "ready" ? ordersResult.load.data : [];
-    const trades = tradesResult.load.state === "ready" ? tradesResult.load.data : [];
-    const balances = balancesResult.load.state === "ready" ? balancesResult.load.data : [];
-    return collectAssets(orders, trades, balances);
-  }, [ordersResult.load, tradesResult.load, balancesResult.load]);
+  const [assetSuggestions, setAssetSuggestions] = useState<string[]>([]);
+  const visibleAssetSuggestions =
+    assetSuggestionQuery.length === 0 ? [] : assetSuggestions;
+  useEffect(() => {
+    if (assetSuggestionQuery.length === 0) {
+      return;
+    }
+    const controller = new AbortController();
+    Promise.all(
+      assetSuggestionQuery.map((query) =>
+        fetchAssets(
+          {
+            code: query,
+            codeMatch: "starts_with",
+            limit: 8,
+            sort: "code",
+          },
+          controller.signal,
+        ),
+      ),
+    )
+      .then((pages) => {
+        const next = new Set<string>();
+        for (const assets of pages) {
+          for (const asset of assets) {
+            next.add(asset.code);
+          }
+        }
+        setAssetSuggestions(Array.from(next).sort().slice(0, 12));
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setAssetSuggestions([]);
+        }
+      });
+    return () => controller.abort();
+  }, [assetSuggestionQuery, fetchAssets]);
 
   // Dialog state
   const [submitOpen, setSubmitOpen] = useState(false);
   const [submitInitialValues, setSubmitInitialValues] = useState<OrderInitialValues | undefined>(undefined);
-  const [detailOrderExternalId, setDetailOrderExternalId] = useState<string | null>(null);
+  const [detailOrderExternalId, setDetailOrderExternalId] = useState<string | null>(
+    params.get("order"),
+  );
   const [detailSuccessBanner, setDetailSuccessBanner] = useState<string | undefined>(undefined);
   const [execReportOrderExternalId, setExecReportOrderExternalId] = useState<string | null>(null);
   const [execReportInitialValues, setExecReportInitialValues] = useState<ExecReportInitialValues | undefined>(undefined);
+  const [lookupId, setLookupId] = useState("");
+  const [lookupBusy, setLookupBusy] = useState(false);
+  const [lookupNotFoundOpen, setLookupNotFoundOpen] = useState(false);
 
   function openDetail(externalId: string) {
     setDetailSuccessBanner(undefined);
@@ -2044,18 +3265,49 @@ export function Orders() {
   const activeLoad = tab === "orders" ? ordersResult : tradesResult;
   const activeReload = tab === "orders" ? ordersResult.reload : tradesResult.reload;
   const orderRows =
-    ordersResult.load.state === "ready" ? ordersResult.load.data : [];
-  const tradeRows =
-    tradesResult.load.state === "ready" ? tradesResult.load.data : [];
-  const pagedOrders = slicePage(orderRows, orderPage, orderSize);
-  const pagedTrades = slicePage(tradeRows, tradePage, tradeSize);
-  const hasMoreOrders = hasNextPage(orderRows, orderPage, orderSize);
-  const hasMoreTrades = hasNextPage(tradeRows, tradePage, tradeSize);
+    ordersResult.load.state === "ready" ? ordersResult.load.data.items : [];
+  const tradeRows = useMemo(
+    () => (tradesResult.load.state === "ready" ? tradesResult.load.data.items : []),
+    [tradesResult.load],
+  );
+  // Deep-link: open the trade's order detail when the applied trade id changes.
+  useEffect(() => {
+    const externalId = appliedTradeExternalId.trim();
+    if (externalId === "") {
+      openedTradeExternalIdRef.current = null;
+      return;
+    }
+    if (openedTradeExternalIdRef.current === externalId) {
+      return;
+    }
+    const trade = tradeRows.find((row) => row.externalId === externalId);
+    if (trade === undefined) {
+      return;
+    }
+    openedTradeExternalIdRef.current = externalId;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setDetailSuccessBanner(undefined);
+    setDetailOrderExternalId(trade.order);
+  }, [appliedTradeExternalId, tradeRows]);
+  const pagedOrders = orderRows;
+  const pagedTrades = tradeRows;
+  const hasMoreOrders =
+    ordersResult.load.state === "ready" &&
+    (orderPage + 1) * orderSize < ordersResult.load.data.total;
+  const tradesPage =
+    tradesResult.load.state === "ready" ? tradesResult.load.data : null;
+  const hasMoreTrades =
+    tradesPage !== null && (tradePage + 1) * tradeSize < tradesPage.total;
   const orderPager = (
     <TablePagination
       page={orderPage}
       canPrevious={orderPage > 0}
       canNext={hasMoreOrders}
+      knownTotalPages={
+        ordersResult.load.state === "ready"
+          ? knownPageCount(ordersResult.load.data.total, orderSize)
+          : undefined
+      }
       onPrevious={() => setOrderPage((p) => Math.max(0, p - 1))}
       onNext={() => setOrderPage((p) => p + 1)}
       onPage={setOrderPage}
@@ -2066,6 +3318,9 @@ export function Orders() {
       page={tradePage}
       canPrevious={tradePage > 0}
       canNext={hasMoreTrades}
+      knownTotalPages={
+        tradesPage !== null ? knownPageCount(tradesPage.total, tradeSize) : undefined
+      }
       onPrevious={() => setTradePage((p) => Math.max(0, p - 1))}
       onNext={() => setTradePage((p) => p + 1)}
       onPage={setTradePage}
@@ -2078,9 +3333,396 @@ export function Orders() {
   const activeSourceFilter =
     tab === "orders" ? normalizedOrderSource : normalizedTradeSource;
   const activeExportFilters = {
-    ...(activeAccountFilter ? { account: activeAccountFilter } : {}),
-    ...(activeSourceFilter ? { source: activeSourceFilter } : {}),
+	    ...(activeAccountFilter ? { account: activeAccountFilter } : {}),
+	    ...(activeSourceFilter ? { source: activeSourceFilter } : {}),
+	    ...(tab === "trades" && appliedTradeExternalId.trim()
+	      ? { externalId: appliedTradeExternalId.trim() }
+	      : {}),
+	  };
+
+  const shareHref = useMemo(() => {
+    const query = new URLSearchParams();
+    if (tab === "trades") {
+      query.set("tab", "trades");
+      appendShareParam(query, "id", appliedTradeExternalId.trim());
+      appendShareParam(query, "account", tradeAccount.trim());
+      appendShareParam(query, "source", normalizedTradeSource);
+      appendShareParam(query, "side", tradeSide, "all");
+      appendShareParam(query, "baseAsset", tradeBaseAsset.trim());
+      appendShareParam(query, "quoteAsset", tradeQuoteAsset.trim());
+      appendShareParam(query, "atMode", tradeAtMode, "after");
+      appendShareParam(query, "atMin", tradeAtMin.trim());
+      appendShareParam(query, "atMax", tradeAtMax.trim());
+      appendShareParam(query, "quantityMode", tradeQuantityMode, "eq");
+      appendShareParam(query, "quantityMin", tradeQuantityMin.trim());
+      appendShareParam(query, "quantityMax", tradeQuantityMax.trim());
+      appendShareParam(query, "priceMode", tradePriceMode, "eq");
+      appendShareParam(query, "priceMin", tradePriceMin.trim());
+      appendShareParam(query, "priceMax", tradePriceMax.trim());
+      appendShareParam(query, "lockPriceMode", tradeLockPriceMode, "eq");
+      appendShareParam(query, "lockPriceMin", tradeLockPriceMin.trim());
+      appendShareParam(query, "lockPriceMax", tradeLockPriceMax.trim());
+    } else {
+      appendShareParam(query, "account", orderAccount.trim());
+      appendShareParam(query, "source", normalizedOrderSource);
+      appendShareParam(query, "side", orderSide, "all");
+      appendShareParam(query, "status", orderStatus, "all");
+      appendShareParam(query, "baseAsset", orderBaseAsset.trim());
+      appendShareParam(query, "quoteAsset", orderQuoteAsset.trim());
+      appendShareParam(query, "amountMode", orderAmountMode, "all");
+      appendShareParam(query, "amountMin", orderAmountMin.trim());
+      appendShareParam(query, "amountMax", orderAmountMax.trim());
+      appendShareParam(query, "priceMode", orderPriceMode, "all");
+      appendShareParam(query, "priceMin", orderPriceMin.trim());
+      appendShareParam(query, "priceMax", orderPriceMax.trim());
+      appendShareParam(query, "atMode", orderAtMode, "all");
+      appendShareParam(query, "atMin", orderAtMin.trim());
+      appendShareParam(query, "atMax", orderAtMax.trim());
+    }
+    return shareUrl("/orders", query);
+  }, [
+    appliedTradeExternalId,
+    normalizedOrderSource,
+    normalizedTradeSource,
+    orderAccount,
+    orderAmountMax,
+    orderAmountMin,
+    orderAmountMode,
+    orderAtMax,
+    orderAtMin,
+    orderAtMode,
+    orderBaseAsset,
+    orderPriceMax,
+    orderPriceMin,
+    orderPriceMode,
+    orderQuoteAsset,
+    orderSide,
+    orderStatus,
+    tab,
+    tradeAccount,
+    tradeAtMax,
+    tradeAtMin,
+    tradeAtMode,
+    tradeBaseAsset,
+    tradeLockPriceMax,
+    tradeLockPriceMin,
+    tradeLockPriceMode,
+    tradePriceMax,
+    tradePriceMin,
+    tradePriceMode,
+    tradeQuantityMax,
+    tradeQuantityMin,
+    tradeQuantityMode,
+    tradeQuoteAsset,
+    tradeSide,
+  ]);
+
+  const orderRangeValue = useCallback((mode: RangeFilterMode, min: string, max: string) => {
+    const operator = t(`filter.range.${mode}`);
+    const from = min.trim();
+    const to = max.trim();
+    if (mode === "between") {
+      return [operator, from, to].filter(Boolean).join(" ");
+    }
+    if (mode === "less_than") {
+      return [operator, to || from].filter(Boolean).join(" ");
+    }
+    return [operator, from || to].filter(Boolean).join(" ");
+  }, [t]);
+  const numberRangeValue = useCallback((mode: RangeFilterMode, min: string, max: string) => {
+    const operator = tc(`operators.number.${mode}`);
+    const from = min.trim();
+    const to = max.trim();
+    if (mode === "between") {
+      return [operator, from, to].filter(Boolean).join(" ");
+    }
+    if (mode === "lt" || mode === "lte") {
+      return [operator, to || from].filter(Boolean).join(" ");
+    }
+    return [operator, from || to].filter(Boolean).join(" ");
+  }, [tc]);
+  const timeRangeValue = useCallback((mode: RangeFilterMode, min: string, max: string) => {
+    const operator = tc(`operators.time.${mode}`);
+    const from = min.trim();
+    const to = max.trim();
+    if (mode === "between") {
+      return [operator, from, to].filter(Boolean).join(" ");
+    }
+    if (mode === "before") {
+      return [operator, to || from].filter(Boolean).join(" ");
+    }
+    return [operator, from || to].filter(Boolean).join(" ");
+  }, [tc]);
+
+  const activeFilterChips = useMemo(() => {
+    const entries: Array<{ key: string; label: string; onRemove: () => void }> = [];
+    const add = (key: string, label: string, onRemove: () => void) => {
+      entries.push({ key, label, onRemove });
+    };
+    if (tab === "orders") {
+      if (orderAccount.trim() !== "") {
+        add("account", `${t("table.account")}: ${orderAccount.trim()}`, () => {
+          setOrderAccountDraft("");
+          setOrderAccount("");
+          setOrderPage(0);
+        });
+      }
+      if (normalizedOrderSource !== undefined) {
+        add("source", `${t("table.source")}: ${normalizedOrderSource}`, () => {
+          setOrderSource("");
+          setOrderPage(0);
+        });
+      }
+      if (orderSide !== "all") {
+        add("side", `${t("filter.sideLabel")}: ${t(`filter.side.${orderSide}`)}`, () => {
+          setOrderSide("all");
+          setOrderPage(0);
+        });
+      }
+      if (orderStatus !== "all") {
+        add(
+          "status",
+          `${t("filter.statusLabel")}: ${t(`filter.status.${orderStatus}`)}`,
+          () => {
+            setOrderStatus("all");
+            setOrderPage(0);
+          },
+        );
+      }
+      if (orderBaseAsset.trim() !== "") {
+        add("baseAsset", `${t("filter.baseAssetLabel")}: ${orderBaseAsset.trim()}`, () => {
+          setOrderBaseAssetDraft("");
+          setOrderBaseAsset("");
+          setOrderPage(0);
+        });
+      }
+      if (orderQuoteAsset.trim() !== "") {
+        add("quoteAsset", `${t("filter.quoteAssetLabel")}: ${orderQuoteAsset.trim()}`, () => {
+          setOrderQuoteAssetDraft("");
+          setOrderQuoteAsset("");
+          setOrderPage(0);
+        });
+      }
+      if (orderAmountMode !== "all") {
+        add("amount", `${t("filter.amountLabel")}: ${orderRangeValue(orderAmountMode, orderAmountMin, orderAmountMax)}`, () => {
+          setOrderAmountMode("all");
+          setOrderAmountMin("");
+          setOrderAmountMax("");
+          setOrderPage(0);
+        });
+      }
+      if (orderPriceMode !== "all") {
+        add("price", `${t("filter.priceLabel")}: ${orderRangeValue(orderPriceMode, orderPriceMin, orderPriceMax)}`, () => {
+          setOrderPriceMode("all");
+          setOrderPriceMin("");
+          setOrderPriceMax("");
+          setOrderPage(0);
+        });
+      }
+      if (orderAtMode !== "all") {
+        add("at", `${t("filter.timeLabel")}: ${orderRangeValue(orderAtMode, orderAtMin, orderAtMax)}`, () => {
+          setOrderAtMode("all");
+          setOrderAtMin("");
+          setOrderAtMax("");
+          setOrderPage(0);
+        });
+      }
+      return entries;
+    }
+    if (appliedTradeExternalId.trim() !== "") {
+      add("externalId", `${t("table.externalId")}: ${appliedTradeExternalId.trim()}`, () => {
+        setTradeExternalId("");
+        setAppliedTradeExternalId("");
+        resetTradePage();
+      });
+    }
+    if (tradeAccount.trim() !== "") {
+      add("account", `${t("table.account")}: ${tradeAccount.trim()}`, () => {
+        setTradeAccountDraft("");
+        setTradeAccount("");
+        resetTradePage();
+      });
+    }
+    if (normalizedTradeSource !== undefined) {
+      add("source", `${t("table.source")}: ${normalizedTradeSource}`, () => {
+        setTradeSource("");
+        resetTradePage();
+      });
+    }
+    if (tradeSide !== "all") {
+      add("side", `${t("filter.sideLabel")}: ${t(`filter.side.${tradeSide}`)}`, () => {
+        setTradeSide("all");
+        resetTradePage();
+      });
+    }
+    if (tradeBaseAsset.trim() !== "") {
+      add("baseAsset", `${t("filter.baseAssetLabel")}: ${tradeBaseAsset.trim()}`, () => {
+        setTradeBaseAssetDraft("");
+        setTradeBaseAsset("");
+        resetTradePage();
+      });
+    }
+    if (tradeQuoteAsset.trim() !== "") {
+      add("quoteAsset", `${t("filter.quoteAssetLabel")}: ${tradeQuoteAsset.trim()}`, () => {
+        setTradeQuoteAssetDraft("");
+        setTradeQuoteAsset("");
+        resetTradePage();
+      });
+    }
+    if (tradeAtMode !== "after" || tradeAtMin.trim() !== "" || tradeAtMax.trim() !== "") {
+      add("at", `${t("filter.timeLabel")}: ${timeRangeValue(tradeAtMode, tradeAtMin, tradeAtMax)}`, () => {
+        setTradeAtMode("after");
+        setTradeAtMin("");
+        setTradeAtMax("");
+        resetTradePage();
+      });
+    }
+    if (
+      tradeQuantityMode !== "eq" ||
+      tradeQuantityMin.trim() !== "" ||
+      tradeQuantityMax.trim() !== ""
+    ) {
+      add("quantity", `${t("table.qty")}: ${numberRangeValue(tradeQuantityMode, tradeQuantityMin, tradeQuantityMax)}`, () => {
+        setTradeQuantityMode("eq");
+        setTradeQuantityMin("");
+        setTradeQuantityMax("");
+        resetTradePage();
+      });
+    }
+    if (tradePriceMode !== "eq" || tradePriceMin.trim() !== "" || tradePriceMax.trim() !== "") {
+      add("price", `${t("table.price")}: ${numberRangeValue(tradePriceMode, tradePriceMin, tradePriceMax)}`, () => {
+        setTradePriceMode("eq");
+        setTradePriceMin("");
+        setTradePriceMax("");
+        resetTradePage();
+      });
+    }
+    if (
+      tradeLockPriceMode !== "eq" ||
+      tradeLockPriceMin.trim() !== "" ||
+      tradeLockPriceMax.trim() !== ""
+    ) {
+      add("lockPrice", `${t("table.lockPrice")}: ${numberRangeValue(tradeLockPriceMode, tradeLockPriceMin, tradeLockPriceMax)}`, () => {
+        setTradeLockPriceMode("eq");
+        setTradeLockPriceMin("");
+        setTradeLockPriceMax("");
+        resetTradePage();
+      });
+    }
+    return entries;
+  }, [
+    appliedTradeExternalId,
+    normalizedOrderSource,
+    normalizedTradeSource,
+    numberRangeValue,
+    orderAccount,
+    orderAmountMax,
+    orderAmountMin,
+    orderAmountMode,
+    orderAtMax,
+    orderAtMin,
+    orderAtMode,
+    orderBaseAsset,
+    orderRangeValue,
+    orderPriceMax,
+    orderPriceMin,
+    orderPriceMode,
+    orderQuoteAsset,
+    orderSide,
+    orderStatus,
+    t,
+    tab,
+    tradeAccount,
+    tradeAtMax,
+    tradeAtMin,
+    tradeAtMode,
+    tradeBaseAsset,
+    tradeLockPriceMax,
+    tradeLockPriceMin,
+    tradeLockPriceMode,
+    tradePriceMax,
+    tradePriceMin,
+    tradePriceMode,
+    tradeQuantityMax,
+    tradeQuantityMin,
+    tradeQuantityMode,
+    tradeQuoteAsset,
+    tradeSide,
+    timeRangeValue,
+  ]);
+
+  const advancedFilterCount =
+    tab === "orders"
+      ? activeFilterChips.filter(
+          (entry) =>
+            ![
+              "account",
+              "baseAsset",
+              "quoteAsset",
+              "source",
+              "side",
+              "status",
+            ].includes(entry.key),
+        ).length
+      : activeFilterChips.filter(
+          (entry) =>
+            ![
+              "externalId",
+              "account",
+              "baseAsset",
+              "quoteAsset",
+              "source",
+              "side",
+            ].includes(entry.key),
+        ).length;
+  const visibleFilterChips = useMemo(
+    () =>
+      tab === "orders"
+        ? activeFilterChips.filter((entry) =>
+            ["amount", "price", "at"].includes(entry.key),
+          )
+        : activeFilterChips.filter((entry) =>
+            ["at", "quantity", "price", "lockPrice"].includes(entry.key),
+          ),
+    [activeFilterChips, tab],
+  );
+  const clearActiveFilters = () => {
+    for (const entry of activeFilterChips) {
+      entry.onRemove();
+    }
   };
+
+  function filterOrdersAccount(account: string) {
+    setTab("orders");
+    setOrderAccountDraft(account);
+    setOrderAccount(account);
+    setOrderPage(0);
+  }
+
+  function filterOrdersInstrument(baseAsset: string, quoteAsset: string) {
+    setTab("orders");
+    setOrderBaseAssetDraft(baseAsset);
+    setOrderQuoteAssetDraft(quoteAsset);
+    setOrderBaseAsset(baseAsset);
+    setOrderQuoteAsset(quoteAsset);
+    setOrderPage(0);
+  }
+
+  function filterTradesAccount(account: string) {
+    setTab("trades");
+    setTradeAccountDraft(account);
+    setTradeAccount(account);
+    resetTradePage();
+  }
+
+  function filterTradesInstrument(baseAsset: string, quoteAsset: string) {
+    setTab("trades");
+    setTradeBaseAssetDraft(baseAsset);
+    setTradeQuoteAssetDraft(quoteAsset);
+    setTradeBaseAsset(baseAsset);
+    setTradeQuoteAsset(quoteAsset);
+    resetTradePage();
+  }
 
   function openAddOrder() {
     setSubmitInitialValues(
@@ -2099,7 +3741,61 @@ export function Orders() {
     setSubmitOpen(true);
   }
 
-  return (
+  async function openOrderById(value: string) {
+    if (lookupBusy) {
+      return;
+    }
+	    const externalId = value.trim();
+    if (!externalId) {
+      return;
+    }
+    setLookupBusy(true);
+    try {
+      const detail = await fetchOrderDetail(externalId);
+      setLookupNotFoundOpen(false);
+      openDetail(detail.order.externalId);
+    } catch {
+      setLookupNotFoundOpen(true);
+    } finally {
+      setLookupBusy(false);
+	    }
+  }
+
+	  useEffect(() => {
+	    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+	      if (event.defaultPrevented || isEditableTarget(event.target)) {
+	        return;
+	      }
+	      if (event.key === "/") {
+	        event.preventDefault();
+	        filterRegionRef.current
+	          ?.querySelector<HTMLInputElement>("input:not([disabled])")
+	          ?.focus();
+	        return;
+	      }
+	      if (event.key !== "Escape") {
+	        return;
+	      }
+	      if (detailOrderExternalId !== null) {
+	        setDetailOrderExternalId(null);
+	        setDetailSuccessBanner(undefined);
+	        return;
+	      }
+	      if (execReportOrderExternalId !== null) {
+	        setExecReportOrderExternalId(null);
+	        setExecReportInitialValues(undefined);
+	        return;
+	      }
+	      if (submitOpen) {
+	        setSubmitInitialValues(undefined);
+	        setSubmitOpen(false);
+	      }
+	    };
+	    window.addEventListener("keydown", onKeyDown);
+	    return () => window.removeEventListener("keydown", onKeyDown);
+	  }, [detailOrderExternalId, execReportOrderExternalId, submitOpen]);
+
+	  return (
     <Page
       title={t("title")}
       actions={
@@ -2112,7 +3808,7 @@ export function Orders() {
                 setOrderPage(0);
               } else {
                 setTradeSize(value);
-                setTradePage(0);
+                resetTradePage();
               }
             }}
             ariaLabel={t("filter.sizeAriaLabel")}
@@ -2165,35 +3861,583 @@ export function Orders() {
       </div>
 
       {/* Filters */}
-      {tab === "orders" ? (
+      <div ref={filterRegionRef}>
         <FilterBar
-          account={orderAccount}
-          source={orderSource}
-          accountSuggestions={allAccountSuggestions}
-          onAccount={(value) => {
-            setOrderAccount(value);
-            setOrderPage(0);
-          }}
-          onSource={(value) => {
-            setOrderSource(value);
-            setOrderPage(0);
-          }}
-        />
-      ) : (
-        <FilterBar
-          account={tradeAccount}
-          source={tradeSource}
-          accountSuggestions={allAccountSuggestions}
-          onAccount={(value) => {
-            setTradeAccount(value);
-            setTradePage(0);
-          }}
-          onSource={(value) => {
-            setTradeSource(value);
-            setTradePage(0);
-          }}
-        />
-      )}
+          active={activeFilterChips.length > 0}
+          activeLabel={tc("filters.active")}
+          onClearActive={clearActiveFilters}
+          clearActiveLabel={tc("filters.clearAll")}
+          chips={
+            visibleFilterChips.length > 0 ? (
+              <>
+                {visibleFilterChips.map((entry) => (
+                  <FilterChip
+                    key={entry.key}
+                    label={entry.label}
+                    removeLabel={tc("filters.removeAdvanced")}
+                    onRemove={entry.onRemove}
+                  />
+                ))}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 text-[0.6875rem]"
+                  onClick={() => {
+                    for (const entry of visibleFilterChips) {
+                      entry.onRemove();
+                    }
+                  }}
+                >
+                  {tc("filters.removeAdvanced")}
+                </Button>
+              </>
+            ) : undefined
+          }
+          trailing={
+            <>
+              <MoreFiltersButton
+                count={advancedFilterCount}
+                label={tc("filters.more")}
+                onClick={() => {
+                  syncAdvancedDrafts();
+                  setMoreFiltersOpen(true);
+                }}
+              />
+              <div className="flex items-end">
+                <ShareLinkButton
+                  href={shareHref}
+                  title={tc("rowActions.shareFilters")}
+                  copiedTitle={tc("rowActions.copiedLink")}
+                  size={32}
+                />
+              </div>
+            </>
+          }
+          bottom={
+            tab === "orders" ? (
+              <ExactIdField
+                label={tc("exactLookup.label")}
+                value={lookupId}
+                placeholder={t("lookup.placeholder")}
+                openLabel={lookupBusy ? t("lookup.searching") : tc("exactLookup.open")}
+                onChange={setLookupId}
+                onOpen={(value) => void openOrderById(value)}
+                style={{ width: "100%" }}
+                width={360}
+              />
+            ) : (
+              <ExactIdField
+                label={tc("exactLookup.label")}
+                value={tradeExternalId}
+                placeholder={tc("exactLookup.placeholder", {
+                  entity: tc("entities.trade"),
+                })}
+                openLabel={tc("exactLookup.open")}
+                onChange={setTradeExternalId}
+                onOpen={(value) => {
+                  setAppliedTradeExternalId(value.trim());
+                  resetTradePage();
+                }}
+                style={{ width: "100%" }}
+                width={360}
+              />
+            )
+          }
+        >
+          {tab === "orders" ? (
+            <>
+              <AutocompleteFilterField
+                label={t("table.account")}
+                value={orderAccountDraft}
+                placeholder={t("filter.accountPlaceholder")}
+                suggestions={visibleAccountSuggestions}
+                onChange={setOrderAccountDraft}
+                onSuggestionSelect={(value) =>
+                  applyOrderIdentityField("account", value)
+                }
+                onKeyDown={applyOrderIdentityFiltersOnEnter}
+                onClear={() => {
+                  setOrderAccountDraft("");
+                  setOrderAccount("");
+                  setOrderPage(0);
+                }}
+                clearLabel={tc("filters.clearField")}
+              />
+              <AutocompleteFilterField
+                label={t("filter.baseAssetLabel")}
+                value={orderBaseAssetDraft}
+                placeholder={t("filter.baseAssetPlaceholder")}
+                suggestions={visibleAssetSuggestions}
+                onChange={setOrderBaseAssetDraft}
+                onSuggestionSelect={(value) =>
+                  applyOrderIdentityField("baseAsset", value)
+                }
+                onKeyDown={applyOrderIdentityFiltersOnEnter}
+                onClear={() => {
+                  setOrderBaseAssetDraft("");
+                  setOrderBaseAsset("");
+                  setOrderPage(0);
+                }}
+                clearLabel={tc("filters.clearField")}
+              />
+              <AutocompleteFilterField
+                label={t("filter.quoteAssetLabel")}
+                value={orderQuoteAssetDraft}
+                placeholder={t("filter.quoteAssetPlaceholder")}
+                suggestions={visibleAssetSuggestions}
+                onChange={setOrderQuoteAssetDraft}
+                onSuggestionSelect={(value) =>
+                  applyOrderIdentityField("quoteAsset", value)
+                }
+                onKeyDown={applyOrderIdentityFiltersOnEnter}
+                onClear={() => {
+                  setOrderQuoteAssetDraft("");
+                  setOrderQuoteAsset("");
+                  setOrderPage(0);
+                }}
+                clearLabel={tc("filters.clearField")}
+              />
+              <div className="flex items-end">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={applyOrderIdentityFilters}
+                  disabled={!orderIdentityDraftChanged}
+                >
+                  {tc("filters.apply")}
+                </Button>
+              </div>
+              <div className="grid gap-1">
+                <FieldLabel>{t("filter.sideLabel")}</FieldLabel>
+                <Segmented
+                  value={orderSide}
+                  options={[
+                    { value: "all", label: t("filter.side.all") },
+                    { value: "buy", label: t("filter.side.buy") },
+                    { value: "sell", label: t("filter.side.sell") },
+                  ]}
+                  onChange={(next) => {
+                    setOrderSide(next as "all" | OrderSide);
+                    setOrderPage(0);
+                  }}
+                />
+              </div>
+              <div className="grid gap-1">
+                <FieldLabel>{t("filter.statusLabel")}</FieldLabel>
+                <Select
+                  value={orderStatus}
+                  onValueChange={(next) => {
+                    setOrderStatus(next as (typeof ORDER_STATUS_FILTERS)[number]);
+                    setOrderPage(0);
+                  }}
+                >
+                  <SelectTrigger className="h-8 w-44 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ORDER_STATUS_FILTERS.map((status) => (
+                      <SelectItem key={status} value={status}>
+                        {t(`filter.status.${status}`)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-1">
+                <FieldLabel>{t("filter.sourceAriaLabel")}</FieldLabel>
+                <Select
+                  value={orderSource || "_all"}
+                  onValueChange={(value) => {
+                    setOrderSource(value === "_all" ? "" : value);
+                    setOrderPage(0);
+                  }}
+                >
+                  <SelectTrigger
+                    className="h-8 w-44 text-xs"
+                    aria-label={t("filter.sourceAriaLabel")}
+                  >
+                    <SelectValue placeholder={t("filter.sourceAll")} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="_all">{t("filter.sourceAll")}</SelectItem>
+                    {SOURCES.filter(Boolean).map((source) => (
+                      <SelectItem key={source} value={source}>
+                        {source}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </>
+          ) : (
+            <>
+              <AutocompleteFilterField
+                label={t("table.account")}
+                value={tradeAccountDraft}
+                placeholder={t("filter.accountPlaceholder")}
+                suggestions={visibleAccountSuggestions}
+                onChange={setTradeAccountDraft}
+                onSuggestionSelect={(value) =>
+                  applyTradeIdentityField("account", value)
+                }
+                onKeyDown={applyTradeIdentityFiltersOnEnter}
+                onClear={() => {
+                  setTradeAccountDraft("");
+                  setTradeAccount("");
+                  resetTradePage();
+                }}
+                clearLabel={tc("filters.clearField")}
+              />
+              <AutocompleteFilterField
+                label={t("filter.baseAssetLabel")}
+                value={tradeBaseAssetDraft}
+                placeholder={t("filter.baseAssetPlaceholder")}
+                suggestions={visibleAssetSuggestions}
+                onChange={setTradeBaseAssetDraft}
+                onSuggestionSelect={(value) =>
+                  applyTradeIdentityField("baseAsset", value)
+                }
+                onKeyDown={applyTradeIdentityFiltersOnEnter}
+                onClear={() => {
+                  setTradeBaseAssetDraft("");
+                  setTradeBaseAsset("");
+                  resetTradePage();
+                }}
+                clearLabel={tc("filters.clearField")}
+              />
+              <AutocompleteFilterField
+                label={t("filter.quoteAssetLabel")}
+                value={tradeQuoteAssetDraft}
+                placeholder={t("filter.quoteAssetPlaceholder")}
+                suggestions={visibleAssetSuggestions}
+                onChange={setTradeQuoteAssetDraft}
+                onSuggestionSelect={(value) =>
+                  applyTradeIdentityField("quoteAsset", value)
+                }
+                onKeyDown={applyTradeIdentityFiltersOnEnter}
+                onClear={() => {
+                  setTradeQuoteAssetDraft("");
+                  setTradeQuoteAsset("");
+                  resetTradePage();
+                }}
+                clearLabel={tc("filters.clearField")}
+              />
+              <div className="flex items-end">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={applyTradeIdentityFilters}
+                  disabled={!tradeIdentityDraftChanged}
+                >
+                  {tc("filters.apply")}
+                </Button>
+              </div>
+              <div className="grid gap-1">
+                <FieldLabel>{t("filter.sideLabel")}</FieldLabel>
+                <Segmented
+                  value={tradeSide}
+                  options={[
+                    { value: "all", label: t("filter.side.all") },
+                    { value: "buy", label: t("filter.side.buy") },
+                    { value: "sell", label: t("filter.side.sell") },
+                  ]}
+                  onChange={(next) => {
+                    setTradeSide(next as "all" | OrderSide);
+                    resetTradePage();
+                  }}
+                />
+              </div>
+              <div className="grid gap-1">
+                <FieldLabel>{t("filter.sourceAriaLabel")}</FieldLabel>
+                <Select
+                  value={tradeSource || "_all"}
+                  onValueChange={(value) => {
+                    setTradeSource(value === "_all" ? "" : value);
+                    resetTradePage();
+                  }}
+                >
+                  <SelectTrigger
+                    className="h-8 w-44 text-xs"
+                    aria-label={t("filter.sourceAriaLabel")}
+                  >
+                    <SelectValue placeholder={t("filter.sourceAll")} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="_all">{t("filter.sourceAll")}</SelectItem>
+                    {SOURCES.filter(Boolean).map((source) => (
+                      <SelectItem key={source} value={source}>
+                        {source}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </>
+          )}
+        </FilterBar>
+      </div>
+
+      <Dialog
+        open={moreFiltersOpen}
+        onOpenChange={(next) => {
+          if (next) {
+            syncAdvancedDrafts();
+          }
+          setMoreFiltersOpen(next);
+        }}
+      >
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>{tc("filters.more")}</DialogTitle>
+            <DialogDescription>{t("filter.advancedDescription")}</DialogDescription>
+          </DialogHeader>
+          {tab === "orders" ? (
+            <div ref={advancedFilterDialogRef} className="grid gap-4">
+              <div className="grid gap-3 xl:grid-cols-3">
+                <RangeFilterControls
+                  label={t("filter.amountLabel")}
+                  mode={orderAdvancedDraft.amountMode}
+                  min={orderAdvancedDraft.amountMin}
+                  max={orderAdvancedDraft.amountMax}
+                  onMode={(value) =>
+                    setOrderAdvancedDraft((current) => ({
+                      ...current,
+                      amountMode: value,
+                    }))
+                  }
+                  onMin={(value) =>
+                    setOrderAdvancedDraft((current) => ({
+                      ...current,
+                      amountMin: value,
+                    }))
+                  }
+                  onMax={(value) =>
+                    setOrderAdvancedDraft((current) => ({
+                      ...current,
+                      amountMax: value,
+                    }))
+                  }
+                />
+                <RangeFilterControls
+                  label={t("filter.priceLabel")}
+                  mode={orderAdvancedDraft.priceMode}
+                  min={orderAdvancedDraft.priceMin}
+                  max={orderAdvancedDraft.priceMax}
+                  onMode={(value) =>
+                    setOrderAdvancedDraft((current) => ({
+                      ...current,
+                      priceMode: value,
+                    }))
+                  }
+                  onMin={(value) =>
+                    setOrderAdvancedDraft((current) => ({
+                      ...current,
+                      priceMin: value,
+                    }))
+                  }
+                  onMax={(value) =>
+                    setOrderAdvancedDraft((current) => ({
+                      ...current,
+                      priceMax: value,
+                    }))
+                  }
+                />
+                <RangeFilterControls
+                  label={t("filter.timeLabel")}
+                  mode={orderAdvancedDraft.atMode}
+                  min={orderAdvancedDraft.atMin}
+                  max={orderAdvancedDraft.atMax}
+                  inputType="datetime-local"
+                  onMode={(value) =>
+                    setOrderAdvancedDraft((current) => ({
+                      ...current,
+                      atMode: value,
+                    }))
+                  }
+                  onMin={(value) =>
+                    setOrderAdvancedDraft((current) => ({
+                      ...current,
+                      atMin: value,
+                    }))
+                  }
+                  onMax={(value) =>
+                    setOrderAdvancedDraft((current) => ({
+                      ...current,
+                      atMax: value,
+                    }))
+                  }
+                />
+              </div>
+            </div>
+          ) : (
+            <div ref={advancedFilterDialogRef} className="grid gap-4">
+              <div className="grid gap-3 xl:grid-cols-2">
+                <div className="grid gap-1">
+                  <FieldLabel>{t("filter.timeLabel")}</FieldLabel>
+                  <TimeRangeFilter
+                    operator={tradeAdvancedDraft.atMode}
+                    operators={operatorOptions(t, "time")}
+                    operatorAriaLabel={t("table.time")}
+                    from={tradeAdvancedDraft.atMin}
+                    to={tradeAdvancedDraft.atMax}
+                    showPresets={false}
+                    clearLabel={tc("filters.clearField")}
+                    onOperatorChange={(value) =>
+                      setTradeAdvancedDraft((current) => ({
+                        ...current,
+                        atMode: value as RangeFilterMode,
+                      }))
+                    }
+                    onFromChange={(value) =>
+                      setTradeAdvancedDraft((current) => ({
+                        ...current,
+                        atMin: value,
+                      }))
+                    }
+                    onToChange={(value) =>
+                      setTradeAdvancedDraft((current) => ({
+                        ...current,
+                        atMax: value,
+                      }))
+                    }
+                  />
+                </div>
+                <div className="grid gap-1">
+                  <FieldLabel>{t("table.qty")}</FieldLabel>
+                  <NumberRangeFilter
+                    operator={tradeAdvancedDraft.quantityMode}
+                    operators={operatorOptions(t, "number")}
+                    operatorAriaLabel={t("table.qty")}
+                    min={tradeAdvancedDraft.quantityMin}
+                    max={tradeAdvancedDraft.quantityMax}
+                    clearLabel={tc("filters.clearField")}
+                    onOperatorChange={(value) =>
+                      setTradeAdvancedDraft((current) => ({
+                        ...current,
+                        quantityMode: value as RangeFilterMode,
+                      }))
+                    }
+                    onMinChange={(value) =>
+                      setTradeAdvancedDraft((current) => ({
+                        ...current,
+                        quantityMin: value,
+                      }))
+                    }
+                    onMaxChange={(value) =>
+                      setTradeAdvancedDraft((current) => ({
+                        ...current,
+                        quantityMax: value,
+                      }))
+                    }
+                  />
+                </div>
+                <div className="grid gap-1">
+                  <FieldLabel>{t("table.price")}</FieldLabel>
+                  <NumberRangeFilter
+                    operator={tradeAdvancedDraft.priceMode}
+                    operators={operatorOptions(t, "number")}
+                    operatorAriaLabel={t("table.price")}
+                    min={tradeAdvancedDraft.priceMin}
+                    max={tradeAdvancedDraft.priceMax}
+                    clearLabel={tc("filters.clearField")}
+                    onOperatorChange={(value) =>
+                      setTradeAdvancedDraft((current) => ({
+                        ...current,
+                        priceMode: value as RangeFilterMode,
+                      }))
+                    }
+                    onMinChange={(value) =>
+                      setTradeAdvancedDraft((current) => ({
+                        ...current,
+                        priceMin: value,
+                      }))
+                    }
+                    onMaxChange={(value) =>
+                      setTradeAdvancedDraft((current) => ({
+                        ...current,
+                        priceMax: value,
+                      }))
+                    }
+                  />
+                </div>
+                <div className="grid gap-1">
+                  <FieldLabel>{t("table.lockPrice")}</FieldLabel>
+                  <NumberRangeFilter
+                    operator={tradeAdvancedDraft.lockPriceMode}
+                    operators={operatorOptions(t, "number")}
+                    operatorAriaLabel={t("table.lockPrice")}
+                    min={tradeAdvancedDraft.lockPriceMin}
+                    max={tradeAdvancedDraft.lockPriceMax}
+                    clearLabel={tc("filters.clearField")}
+                    onOperatorChange={(value) =>
+                      setTradeAdvancedDraft((current) => ({
+                        ...current,
+                        lockPriceMode: value as RangeFilterMode,
+                      }))
+                    }
+                    onMinChange={(value) =>
+                      setTradeAdvancedDraft((current) => ({
+                        ...current,
+                        lockPriceMin: value,
+                      }))
+                    }
+                    onMaxChange={(value) =>
+                      setTradeAdvancedDraft((current) => ({
+                        ...current,
+                        lockPriceMax: value,
+                      }))
+                    }
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                if (tab === "orders") {
+                  setOrderAdvancedDraft({
+                    amountMode: "all",
+                    amountMin: "",
+                    amountMax: "",
+                    priceMode: "all",
+                    priceMin: "",
+                    priceMax: "",
+                    atMode: "all",
+                    atMin: "",
+                    atMax: "",
+                  });
+                } else {
+                  setTradeAdvancedDraft({
+                    atMode: "after",
+                    atMin: "",
+                    atMax: "",
+                    quantityMode: "eq",
+                    quantityMin: "",
+                    quantityMax: "",
+                    priceMode: "eq",
+                    priceMin: "",
+                    priceMax: "",
+                    lockPriceMode: "eq",
+                    lockPriceMin: "",
+                    lockPriceMax: "",
+                  });
+                }
+              }}
+            >
+              {tc("filters.removeAdvanced")}
+            </Button>
+            <Button type="button" onClick={applyAdvancedFilters}>
+              {tc("filters.applyAdvanced")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Orders view */}
       {tab === "orders" && (
@@ -2206,7 +4450,7 @@ export function Orders() {
             />
           )}
           {ordersResult.load.state === "ready" &&
-            (ordersResult.load.data.length === 0 ? (
+            (ordersResult.load.data.items.length === 0 ? (
               <EmptyState
                 title={t("empty.orders.title")}
                 hint={t("empty.orders.hint")}
@@ -2222,7 +4466,15 @@ export function Orders() {
                 {orderPager}
                 <OrdersTable
                   orders={pagedOrders}
+                  activeSort={orderSort.sort}
+                  activeOrder={orderSort.order}
+                  onSortChange={(sort, order) => {
+                    setOrderSort(order === "none" ? {} : { sort, order });
+                    setOrderPage(0);
+                  }}
                   onRowClick={(o) => openDetail(o.externalId)}
+                  onFilterAccount={filterOrdersAccount}
+                  onFilterInstrument={filterOrdersInstrument}
                   onClone={openCloneOrder}
                 />
                 {orderPager}
@@ -2242,7 +4494,7 @@ export function Orders() {
             />
           )}
           {tradesResult.load.state === "ready" &&
-            (tradesResult.load.data.length === 0 ? (
+            (tradesResult.load.data.total === 0 ? (
               <EmptyState
                 title={t("empty.trades.title")}
                 hint={t("empty.trades.hint")}
@@ -2252,7 +4504,15 @@ export function Orders() {
                 {tradePager}
                 <TradesTable
                   trades={pagedTrades}
+                  activeSort={tradeSort.sort}
+                  activeOrder={tradeSort.order}
+                  onSortChange={(sort, order) => {
+                    setTradeSort(order === "none" ? {} : { sort, order });
+                    resetTradePage();
+                  }}
                   onOrderClick={openDetail}
+                  onFilterAccount={filterTradesAccount}
+                  onFilterInstrument={filterTradesInstrument}
                   onCloneExecReport={openCloneExecReport}
                 />
                 {tradePager}
@@ -2293,6 +4553,21 @@ export function Orders() {
         }}
         initialValues={execReportInitialValues}
       />
+      <Dialog open={lookupNotFoundOpen} onOpenChange={setLookupNotFoundOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{t("lookup.notFound.title")}</DialogTitle>
+            <DialogDescription>
+              {t("lookup.notFound.description", { externalId: lookupId.trim() })}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" onClick={() => setLookupNotFoundOpen(false)}>
+              {t("lookup.notFound.close")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Page>
   );
 }

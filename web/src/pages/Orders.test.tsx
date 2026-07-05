@@ -15,12 +15,12 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithApi as render } from "@/test/apiClient";
 import { I18nextProvider } from "react-i18next";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   Balance,
@@ -29,6 +29,7 @@ import type {
   BusinessCsvImportEntity,
   Order,
   OrderEvent,
+  OrderListFilters,
   Trade,
 } from "@/api/types";
 import type { PollingResult } from "@/api/usePolling";
@@ -40,8 +41,8 @@ import { ThemeProvider } from "@/theme/ThemeProvider";
 
 // Replace the polling hooks with ready-empty stubs and the one-shot account
 // fetch so the page renders without any network traffic.
-vi.mock("@/api/useOrders", () => ({ useOrders: vi.fn() }));
-vi.mock("@/api/useTrades", () => ({ useTrades: vi.fn() }));
+vi.mock("@/api/useOrders", () => ({ useOrdersPage: vi.fn() }));
+vi.mock("@/api/useTrades", () => ({ useTradesPage: vi.fn() }));
 vi.mock("@/api/useBalances", () => ({ useBalances: vi.fn() }));
 // The page chrome renders PendingRestartBanner, which polls market data on
 // mount. Stub it to a settled, no-restart state so its async update does not
@@ -112,20 +113,50 @@ vi.mock("@/components/TableControls", async () => {
 });
 
 import { useBalances } from "@/api/useBalances";
-import { useOrders } from "@/api/useOrders";
-import { useTrades } from "@/api/useTrades";
+import { useOrdersPage } from "@/api/useOrders";
+import { useTradesPage } from "@/api/useTrades";
 
 function readyEmpty<T>(data: T): PollingResult<T> {
   return { load: { state: "ready", data, error: null }, reload: vi.fn() };
 }
 
-const useOrdersMock = vi.mocked(useOrders);
-const useTradesMock = vi.mocked(useTrades);
+function readyPage<T>(items: T[]): PollingResult<{ items: T[]; total: number }> {
+  return readyEmpty({ items, total: items.length });
+}
+
+function readyPageWithTotal<T>(
+  items: T[],
+  total: number,
+): PollingResult<{ items: T[]; total: number }> {
+  return readyEmpty({ items, total });
+}
+
+const useOrdersMock = vi.mocked(useOrdersPage);
+const useTradesMock = vi.mocked(useTradesPage);
 const useBalancesMock = vi.mocked(useBalances);
+
+function lastOrderFilters(): OrderListFilters | undefined {
+  const calls = useOrdersMock.mock.calls;
+  return calls[calls.length - 1]?.[0];
+}
+
+function lastTradeFilters() {
+  const calls = useTradesMock.mock.calls;
+  return calls[calls.length - 1]?.[0];
+}
+
+function orderFilterWasRequested(
+  match: (filters: OrderListFilters) => boolean,
+): boolean {
+  return useOrdersMock.mock.calls.some(
+    ([filters]) => filters !== undefined && match(filters),
+  );
+}
 const checkOrderMock = vi.fn();
 const createOrderMock = vi.fn();
 const exportBusinessCsvMock = vi.fn();
 const fetchAccountsMock = vi.fn();
+const fetchAssetsMock = vi.fn();
 const fetchOrderDetailMock = vi.fn();
 const submitExecutionReportMock = vi.fn();
 
@@ -174,6 +205,7 @@ function renderOrders(initialEntry: string) {
         createOrder: createOrderMock,
         exportBusinessCsv: exportBusinessCsvMock,
         fetchAccounts: fetchAccountsMock,
+        fetchAssets: fetchAssetsMock,
         fetchOrderDetail: fetchOrderDetailMock,
         submitExecutionReport: submitExecutionReportMock,
       },
@@ -184,10 +216,11 @@ function renderOrders(initialEntry: string) {
 beforeEach(async () => {
   vi.clearAllMocks();
   await i18n.changeLanguage("en");
-  useOrdersMock.mockReturnValue(readyEmpty<Order[]>([]));
-  useTradesMock.mockReturnValue(readyEmpty<Trade[]>([]));
+  useOrdersMock.mockReturnValue(readyPage<Order>([]));
+  useTradesMock.mockReturnValue(readyPage<Trade>([]));
   useBalancesMock.mockReturnValue(readyEmpty<Balance[]>([]));
   fetchAccountsMock.mockResolvedValue([]);
+  fetchAssetsMock.mockResolvedValue([]);
   checkOrderMock.mockResolvedValue({
     passed: true,
     rejects: [],
@@ -217,14 +250,81 @@ beforeEach(async () => {
   HTMLAnchorElement.prototype.click = () => {};
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("Orders account pre-fill", () => {
+  it("applies advanced order filters only after apply", async () => {
+    const user = userEvent.setup();
+    renderOrders("/orders");
+
+    await user.click(screen.getByRole("button", { name: /more filters/i }));
+    const dialog = screen.getByRole("dialog", { name: /more filters/i });
+    await user.type(within(dialog).getAllByPlaceholderText("Value")[0], "100");
+
+    expect(lastOrderFilters()).not.toEqual(
+      expect.objectContaining({ amountMin: "100" }),
+    );
+    expect(screen.queryByText(/active filters/i)).not.toBeInTheDocument();
+
+    await user.click(
+      within(dialog).getByRole("button", {
+        name: /apply advanced filter/i,
+      }),
+    );
+
+    await waitFor(() =>
+      expect(lastOrderFilters()).toEqual(
+        expect.objectContaining({
+          amountMode: "greater_than",
+          amountMin: "100",
+        }),
+      ),
+    );
+    expect(screen.getByText(/active filters/i)).toBeInTheDocument();
+    expect(screen.getByText(/amount: Greater than 100/i)).toBeInTheDocument();
+  });
+
+  it("keeps advanced order filters open when a numeric value is invalid", async () => {
+    const user = userEvent.setup();
+    renderOrders("/orders");
+
+    await user.click(screen.getByRole("button", { name: /more filters/i }));
+    const dialog = screen.getByRole("dialog", { name: /more filters/i });
+    const amount = within(dialog).getAllByPlaceholderText("Value")[0];
+    await user.type(amount, "word");
+
+    await user.click(
+      within(dialog).getByRole("button", {
+        name: /apply advanced filter/i,
+      }),
+    );
+
+    expect(screen.getByRole("dialog", { name: /more filters/i })).toBeInTheDocument();
+    expect(amount).toBeInvalid();
+    expect(amount).toHaveProperty("validationMessage", "Enter a valid number.");
+    expect(lastOrderFilters()).not.toEqual(
+      expect.objectContaining({
+        amountMode: "greater_than",
+        amountMin: expect.any(String),
+      }),
+    );
+    expect(screen.queryByText(/active filters/i)).not.toBeInTheDocument();
+  });
+
   it("seeds the account filter from the ?account= query param", async () => {
+    const user = userEvent.setup();
     renderOrders("/orders?account=desk-alpha");
     await waitFor(() =>
       expect(screen.getByPlaceholderText(/filter by account/i)).toHaveValue(
         "desk-alpha",
       ),
     );
+    expect(screen.getByText(/active filters/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /clear all filters/i }));
+    expect(screen.getByPlaceholderText(/filter by account/i)).toHaveValue("");
+    expect(screen.queryByText(/active filters/i)).not.toBeInTheDocument();
   });
 
   it("pre-fills the new-order account when a single account is filtered", async () => {
@@ -252,8 +352,11 @@ describe("Orders account pre-fill", () => {
     renderOrders("/orders?account=desk-alpha");
 
     const filter = screen.getByPlaceholderText(/filter by account/i);
+    expect(screen.getByText(/active filters/i)).toBeInTheDocument();
     await user.clear(filter);
     await waitFor(() => expect(filter).toHaveValue(""));
+    await user.keyboard("{Enter}");
+    expect(screen.queryByText(/active filters/i)).not.toBeInTheDocument();
 
     await user.click(screen.getAllByRole("button", { name: /add order/i })[0]);
 
@@ -314,7 +417,7 @@ describe("Orders submit mode", () => {
     const dialog = await openDialog(user);
 
     await user.type(
-      within(dialog).getByLabelText("External ID (optional)"),
+      within(dialog).getByLabelText("ID (optional)"),
       "ord-supplied-000001",
     );
     await user.type(within(dialog).getByLabelText("Account"), "desk-alpha");
@@ -342,7 +445,7 @@ describe("Orders submit mode", () => {
     const submitted = createOrderMock.mock.calls[0][0];
     const signal = createOrderMock.mock.calls[0][1];
     expect(submitted).toMatchObject({
-      externalId: "ord-supplied-000001",
+      id: "ord-supplied-000001",
       account: "desk-alpha",
       baseAsset: "AAPL",
       quoteAsset: "USD",
@@ -409,6 +512,58 @@ describe("Orders submit mode", () => {
   });
 });
 
+describe("Orders row filters", () => {
+  it("filters orders by the row account and instrument", async () => {
+    const user = userEvent.setup();
+    useOrdersMock.mockReturnValue(readyPage<Order>([sampleOrder]));
+    renderOrders("/orders");
+
+    const row = screen
+      .getAllByRole("row")
+      .find((candidate) => candidate.textContent?.includes("ord-alpha-1"));
+    expect(row).toBeDefined();
+    const scope = within(row as HTMLElement);
+
+    await user.click(
+      scope.getByRole("button", { name: /filter by desk-alpha/i }),
+    );
+    expect(screen.getByPlaceholderText(/filter by account/i)).toHaveValue(
+      "desk-alpha",
+    );
+
+    await user.click(scope.getByRole("button", { name: /filter by aapl \/ usd/i }));
+    expect(screen.getByPlaceholderText("Base")).toHaveValue("AAPL");
+    expect(screen.getByPlaceholderText("Quote")).toHaveValue("USD");
+  });
+
+  it("exposes order links from trades as new-tab friendly deep links", async () => {
+    const user = userEvent.setup();
+    useTradesMock.mockReturnValue(
+      readyPage<Trade>([
+        {
+          externalId: "trd-alpha-1",
+          order: "ord-alpha-1",
+          account: "desk-alpha",
+          at: "2026-06-24T00:00:00Z",
+          source: "panel",
+          baseAsset: "AAPL",
+          quoteAsset: "USD",
+          side: "buy",
+          quantity: "2",
+          price: "12",
+          lockPrice: "12",
+        },
+      ]),
+    );
+    renderOrders("/orders?tab=trades");
+
+    await user.click(screen.getByRole("button", { name: /^trades$/i }));
+    const link = screen.getByRole("link", { name: "ord-alpha-1" });
+    expect(link).toHaveAttribute("href", expect.stringContaining("order=ord-alpha-1"));
+    expect(link).toHaveAttribute("title", expect.stringContaining("Ctrl-click"));
+  });
+});
+
 describe("Order detail account block placement", () => {
   it("shows the account block reason beside the fill event that caused it", async () => {
     const user = userEvent.setup();
@@ -440,7 +595,7 @@ describe("Order detail account block placement", () => {
       },
     ];
 
-    useOrdersMock.mockReturnValue(readyEmpty<Order[]>([order]));
+    useOrdersMock.mockReturnValue(readyPage<Order>([order]));
     fetchOrderDetailMock.mockResolvedValueOnce({
       order,
       events,
@@ -497,8 +652,17 @@ describe("Orders business CSV export", () => {
     const user = userEvent.setup();
     renderOrders("/orders?account=desk-alpha&source=_all");
 
-    expect(useOrdersMock).toHaveBeenCalledWith("desk-alpha", undefined, 51);
-    expect(useTradesMock).toHaveBeenCalledWith("desk-alpha", undefined, 51);
+    expect(useOrdersMock).toHaveBeenCalledWith(
+      expect.objectContaining({ account: "desk-alpha", source: undefined }),
+    );
+    expect(useTradesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        account: "desk-alpha",
+        source: undefined,
+        limit: 50,
+        offset: 0,
+      }),
+    );
 
     await user.click(screen.getByRole("button", { name: /export orders csv/i }));
     await user.click(screen.getByRole("button", { name: /^export$/i }));
@@ -595,7 +759,7 @@ describe("Execution report force submit", () => {
       },
     ];
 
-    useOrdersMock.mockReturnValue(readyEmpty<Order[]>([order]));
+    useOrdersMock.mockReturnValue(readyPage<Order>([order]));
     fetchOrderDetailMock.mockResolvedValueOnce({
       order,
       events: [],
@@ -628,5 +792,157 @@ describe("Execution report force submit", () => {
         }),
       ),
     );
+  });
+});
+
+describe("Orders filter, debounce, sort and pagination", () => {
+  it("applies an identity filter only after Enter", () => {
+    vi.useFakeTimers();
+    fetchAccountsMock.mockReturnValueOnce(new Promise(() => {}));
+    renderOrders("/orders");
+
+    const accountInput = screen.getByPlaceholderText(/filter by account/i);
+    fireEvent.change(accountInput, { target: { value: "desk-zeta" } });
+
+    expect(
+      orderFilterWasRequested((f) => f.account === "desk-zeta"),
+    ).toBe(false);
+
+    act(() => {
+      vi.advanceTimersByTime(299);
+    });
+    expect(
+      orderFilterWasRequested((f) => f.account === "desk-zeta"),
+    ).toBe(false);
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(
+      orderFilterWasRequested((f) => f.account === "desk-zeta"),
+    ).toBe(false);
+
+    act(() => {
+      fireEvent.keyDown(accountInput, { key: "Enter" });
+    });
+    expect(
+      orderFilterWasRequested((f) => f.account === "desk-zeta"),
+    ).toBe(true);
+  });
+
+  it("applies an order account suggestion when it is selected", async () => {
+    const user = userEvent.setup();
+    fetchAccountsMock.mockResolvedValueOnce([{ code: "desk-alpha" }]);
+    renderOrders("/orders");
+
+    await user.type(screen.getByPlaceholderText(/filter by account/i), "des");
+    await user.click(await screen.findByRole("option", { name: "desk-alpha" }));
+
+    await waitFor(() =>
+      expect(lastOrderFilters()).toEqual(
+        expect.objectContaining({ account: "desk-alpha" }),
+      ),
+    );
+  });
+
+  it("applies a trade asset suggestion when it is selected", async () => {
+    const user = userEvent.setup();
+    fetchAssetsMock.mockResolvedValueOnce([{ code: "AAPL" }]);
+    renderOrders("/orders?tab=trades");
+    await user.click(screen.getByRole("button", { name: /^trades$/i }));
+
+    await user.type(screen.getByPlaceholderText("Base"), "AA");
+    await user.click(await screen.findByRole("option", { name: "AAPL" }));
+
+    await waitFor(() =>
+      expect(lastTradeFilters()).toEqual(
+        expect.objectContaining({ baseAsset: "AAPL" }),
+      ),
+    );
+  });
+
+  it("resets to the first page when a filter changes", async () => {
+    const user = userEvent.setup();
+    useOrdersMock.mockReturnValue(readyPageWithTotal<Order>([sampleOrder], 120));
+    renderOrders("/orders");
+
+    // Page size is 50, total 120 → advance to the second page first.
+    await user.click(screen.getAllByRole("button", { name: "Next" })[0]);
+    await waitFor(() => expect(lastOrderFilters()?.offset).toBe(50));
+
+    // Any filter change must drop back to offset 0.
+    const baseInput = screen.getByPlaceholderText("Base");
+    fireEvent.change(baseInput, {
+      target: { value: "AAPL" },
+    });
+    fireEvent.keyDown(baseInput, { key: "Enter" });
+    await waitFor(() => expect(lastOrderFilters()?.offset).toBe(0));
+  });
+
+  it("keeps the active sort across a filter change", async () => {
+    useOrdersMock.mockReturnValue(readyPageWithTotal<Order>([sampleOrder], 120));
+    renderOrders("/orders");
+
+    // Default sort is at/desc; it must survive a filter edit.
+    expect(lastOrderFilters()).toMatchObject({ sort: "at", order: "desc" });
+
+    const baseInput = screen.getByPlaceholderText("Base");
+    fireEvent.change(baseInput, {
+      target: { value: "AAPL" },
+    });
+    fireEvent.keyDown(baseInput, { key: "Enter" });
+    await waitFor(() =>
+      expect(lastOrderFilters()).toMatchObject({ sort: "at", order: "desc" }),
+    );
+  });
+
+  it("opens the detail dialog on an exact-lookup hit", async () => {
+    const user = userEvent.setup();
+    renderOrders("/orders");
+
+    await user.type(
+      screen.getByPlaceholderText(/^exact id$/i),
+      "ord-alpha-1",
+    );
+    await user.click(screen.getByRole("button", { name: /^open$/i }));
+
+    expect(
+      await screen.findByRole("dialog", { name: "Order ord-alpha-1" }),
+    ).toBeInTheDocument();
+    expect(fetchOrderDetailMock).toHaveBeenCalledWith("ord-alpha-1");
+  });
+
+  it("shows the not-found dialog on an exact-lookup miss", async () => {
+    const user = userEvent.setup();
+    fetchOrderDetailMock.mockRejectedValueOnce(new Error("not found"));
+    renderOrders("/orders");
+
+    await user.type(
+      screen.getByPlaceholderText(/^exact id$/i),
+      "ord-missing-9",
+    );
+    await user.click(screen.getByRole("button", { name: /^open$/i }));
+
+    expect(
+      await screen.findByText(/no order with id ord-missing-9/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("dialog", { name: "Order ord-missing-9" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("reads the server total to drive pagination", async () => {
+    const user = userEvent.setup();
+    useOrdersMock.mockReturnValue(readyPageWithTotal<Order>([sampleOrder], 120));
+    renderOrders("/orders");
+
+    // 120 rows at a page size of 50 → three known pages.
+    expect(screen.getAllByText("Page 1 of 3").length).toBeGreaterThan(0);
+
+    const next = screen.getAllByRole("button", { name: "Next" })[0];
+    expect(next).toBeEnabled();
+    await user.click(next);
+
+    await waitFor(() => expect(lastOrderFilters()?.offset).toBe(50));
   });
 });

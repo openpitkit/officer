@@ -100,6 +100,9 @@ func NewLocalNode(
 	}
 
 	n := &localNode{db: st, realm: realm, build: build}
+	if err := n.ensureOperatorPrincipal(ctx, realm); err != nil {
+		return nil, nil, err
+	}
 
 	snap, counts, err := n.loadSnapshot(ctx)
 	if err != nil {
@@ -228,6 +231,17 @@ func (n *localNode) ListAccounts(ctx context.Context) ([]domain.Account, error) 
 	return accounts, nil
 }
 
+// ListAccountRows returns persisted accounts matching filter.
+func (n *localNode) ListAccountRows(
+	ctx context.Context, filter store.AccountListFilter,
+) (store.AccountListPage, error) {
+	accounts, err := n.realm.ListAccountRows(ctx, filter)
+	if err != nil {
+		return store.AccountListPage{}, fmt.Errorf("list account rows: %w", err)
+	}
+	return accounts, nil
+}
+
 // ExportBackup returns a portable archive of this node's persisted state.
 func (n *localNode) ExportBackup(
 	ctx context.Context,
@@ -335,13 +349,15 @@ func (n *localNode) ResetDatabase(
 		return n.currentMarketDataSink(), fmt.Errorf("rebind realm after reset: %w", err)
 	}
 	n.realm = realm
+	if err := n.ensureOperatorPrincipal(ctx, realm); err != nil {
+		return n.currentMarketDataSink(), err
+	}
 	if err := n.rebuildEngineFromStore(ctx); err != nil {
 		return n.currentMarketDataSink(), err
 	}
-	// The reset audit lands in the freshly-recreated database, whose principal
-	// dictionary is empty, so it carries no actor principal (the store rejects a
-	// non-existent actor code). The caller's channel is preserved as the source so
-	// the reset stays attributable, mirroring the system-sourced startup hydrate.
+	// The reset audit intentionally carries no actor principal. The caller's
+	// channel is preserved as the source so the reset stays attributable,
+	// mirroring the system-sourced startup hydrate.
 	if err := n.realm.AppendAudit(ctx, store.AuditEntry{
 		Action: domain.AuditActionResetDatabase,
 		Detail: "reset database from scratch",
@@ -351,6 +367,17 @@ func (n *localNode) ResetDatabase(
 			fmt.Errorf("audit reset database: %w", err)
 	}
 	return n.currentMarketDataSink(), nil
+}
+
+func (n *localNode) ensureOperatorPrincipal(
+	ctx context.Context, realm store.RealmStore,
+) error {
+	// Public surfaces stamp this placeholder actor until authentication lands.
+	err := realm.CreatePrincipal(ctx, domain.Principal{Code: domain.PrincipalOperator})
+	if err != nil && !errors.Is(err, domain.ErrAlreadyExists) {
+		return fmt.Errorf("ensure operator principal: %w", err)
+	}
+	return nil
 }
 
 func (n *localNode) rebuildEngineFromStore(ctx context.Context) error {
@@ -375,7 +402,10 @@ func (n *localNode) swapEngine(next engine.Engine) {
 	prev := n.engine
 	n.engine = next
 	n.engineMu.Unlock()
-	if prev != nil {
+	// Never stop the handle just installed: a real build always returns a fresh
+	// handle (prev != next), but a degenerate build that hands back the current
+	// one must not be torn down out from under the node.
+	if prev != nil && prev != next {
 		prev.Stop()
 	}
 }
@@ -384,6 +414,12 @@ func (n *localNode) currentMarketDataSink() marketdata.Sink {
 	n.engineMu.RLock()
 	defer n.engineMu.RUnlock()
 	return n.engine.MarketDataSink()
+}
+
+// CurrentMarketDataSink returns the current engine's quote sink so the
+// market-data runtime can re-adopt it after an engine rebuild.
+func (n *localNode) CurrentMarketDataSink() marketdata.Sink {
+	return n.currentMarketDataSink()
 }
 
 func (n *localNode) beginMutation() error {
@@ -457,28 +493,219 @@ func (n *localNode) rollbackStoreAndEngine(
 	return err
 }
 
-// CreateAccount persists a new account and audits the action. The account has
-// no engine side-effect: an unblocked account is the engine's default, so there
-// is nothing to apply or revert. The store assigns the engine account id and
-// returns the populated account.
+// ListAssets returns every persisted asset.
+func (n *localNode) ListAssets(ctx context.Context) ([]domain.Asset, error) {
+	page, err := n.ListAssetRows(ctx, store.AssetListFilter{})
+	if err != nil {
+		return nil, err
+	}
+	return page.Rows, nil
+}
+
+// ListAssetRows returns persisted assets matching filter, with total count.
+func (n *localNode) ListAssetRows(
+	ctx context.Context, filter store.AssetListFilter,
+) (store.AssetListPage, error) {
+	page, err := n.realm.ListAssetRows(ctx, filter)
+	if err != nil {
+		return store.AssetListPage{}, fmt.Errorf("list asset rows: %w", err)
+	}
+	return page, nil
+}
+
+// CreateAsset persists a new asset dictionary row and audits the action.
+func (n *localNode) CreateAsset(
+	ctx context.Context, asset domain.Asset, caller domain.Caller,
+) (domain.Asset, error) {
+	if err := n.beginMutation(); err != nil {
+		return domain.Asset{}, err
+	}
+	defer n.endMutation()
+
+	if err := n.realm.CreateAsset(ctx, asset); err != nil {
+		return domain.Asset{}, fmt.Errorf("create asset: %w", err)
+	}
+	if err := n.audit(ctx, caller, store.AuditEntry{
+		Action: domain.AuditActionCreateAsset,
+		Asset:  asset.Code,
+		Detail: fmt.Sprintf("create asset %s", asset.Code),
+	}); err != nil {
+		return domain.Asset{}, fmt.Errorf("audit create asset: %w", err)
+	}
+	return asset, nil
+}
+
+// UpdateAsset replaces the asset's public code and mutable fields (title, asset
+// class) and audits the action. The asset is not part of the engine resolver, so
+// a code rename has no engine side-effect and no rebuild; dependent rows
+// reference the asset by its surrogate id.
+func (n *localNode) UpdateAsset(
+	ctx context.Context, oldCode string, asset domain.Asset, caller domain.Caller,
+) (domain.Asset, error) {
+	if err := n.beginMutation(); err != nil {
+		return domain.Asset{}, err
+	}
+	defer n.endMutation()
+
+	updated, err := n.realm.UpdateAsset(ctx, oldCode, asset)
+	if err != nil {
+		return domain.Asset{}, fmt.Errorf("update asset: %w", err)
+	}
+	if err := n.audit(ctx, caller, store.AuditEntry{
+		Action: domain.AuditActionUpdateAsset,
+		Asset:  updated.Code,
+		Detail: fmt.Sprintf("update asset %s -> %s", oldCode, updated.Code),
+	}); err != nil {
+		return domain.Asset{}, fmt.Errorf("audit update asset: %w", err)
+	}
+	return updated, nil
+}
+
+// DeleteAsset removes the asset, cascading its dependent rows when force is set,
+// and audits the action. The asset is store-only, so there is no engine
+// side-effect.
+func (n *localNode) DeleteAsset(
+	ctx context.Context, code string, force bool, caller domain.Caller,
+) error {
+	if err := n.beginMutation(); err != nil {
+		return err
+	}
+	defer n.endMutation()
+
+	if err := n.realm.DeleteAsset(ctx, code, force); err != nil {
+		return fmt.Errorf("delete asset: %w", err)
+	}
+	if err := n.audit(ctx, caller, store.AuditEntry{
+		Action: domain.AuditActionDeleteAsset,
+		Asset:  code,
+		Detail: fmt.Sprintf("delete asset %s", code),
+	}); err != nil {
+		return fmt.Errorf("audit delete asset: %w", err)
+	}
+	return nil
+}
+
+// ListAssetClasses returns every persisted asset class.
+func (n *localNode) ListAssetClasses(
+	ctx context.Context,
+) ([]domain.AssetClass, error) {
+	classes, err := n.realm.ListAssetClasses(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list asset classes: %w", err)
+	}
+	return classes, nil
+}
+
+// ListAssetClassRows returns persisted asset classes matching filter.
+func (n *localNode) ListAssetClassRows(
+	ctx context.Context, filter store.AssetClassListFilter,
+) (store.AssetClassListPage, error) {
+	page, err := n.realm.ListAssetClassRows(ctx, filter)
+	if err != nil {
+		return store.AssetClassListPage{}, fmt.Errorf("list asset class rows: %w", err)
+	}
+	return page, nil
+}
+
+// CreateAssetClass persists a new asset-class dictionary row and audits the
+// action. The class is store-only, so there is no engine side-effect.
+func (n *localNode) CreateAssetClass(
+	ctx context.Context, class domain.AssetClass, caller domain.Caller,
+) (domain.AssetClass, error) {
+	if err := n.beginMutation(); err != nil {
+		return domain.AssetClass{}, err
+	}
+	defer n.endMutation()
+
+	if err := n.realm.CreateAssetClass(ctx, class); err != nil {
+		return domain.AssetClass{}, fmt.Errorf("create asset class: %w", err)
+	}
+	if err := n.audit(ctx, caller, store.AuditEntry{
+		Action: domain.AuditActionCreateAssetClass,
+		Detail: fmt.Sprintf("create asset class %s", class.Code),
+	}); err != nil {
+		return domain.AssetClass{}, fmt.Errorf("audit create asset class: %w", err)
+	}
+	return class, nil
+}
+
+// UpdateAssetClass replaces the class's public code, title and notes and audits
+// the action. The store cascades the asset link on a code rename; the class is
+// store-only, so there is no engine side-effect.
+func (n *localNode) UpdateAssetClass(
+	ctx context.Context, oldCode string, class domain.AssetClass, caller domain.Caller,
+) (domain.AssetClass, error) {
+	if err := n.beginMutation(); err != nil {
+		return domain.AssetClass{}, err
+	}
+	defer n.endMutation()
+
+	updated, err := n.realm.UpdateAssetClass(ctx, oldCode, class)
+	if err != nil {
+		return domain.AssetClass{}, fmt.Errorf("update asset class: %w", err)
+	}
+	if err := n.audit(ctx, caller, store.AuditEntry{
+		Action: domain.AuditActionUpdateAssetClass,
+		Detail: fmt.Sprintf("update asset class %s -> %s", oldCode, updated.Code),
+	}); err != nil {
+		return domain.AssetClass{}, fmt.Errorf("audit update asset class: %w", err)
+	}
+	return updated, nil
+}
+
+// DeleteAssetClass removes the class, clearing the asset link when force is set,
+// and audits the action. The class is store-only, so there is no engine
+// side-effect.
+func (n *localNode) DeleteAssetClass(
+	ctx context.Context, code string, force bool, caller domain.Caller,
+) error {
+	if err := n.beginMutation(); err != nil {
+		return err
+	}
+	defer n.endMutation()
+
+	if err := n.realm.DeleteAssetClass(ctx, code, force); err != nil {
+		return fmt.Errorf("delete asset class: %w", err)
+	}
+	if err := n.audit(ctx, caller, store.AuditEntry{
+		Action: domain.AuditActionDeleteAssetClass,
+		Detail: fmt.Sprintf("delete asset class %s", code),
+	}); err != nil {
+		return fmt.Errorf("audit delete asset class: %w", err)
+	}
+	return nil
+}
+
+// CreateAccount persists a new account, rebuilds the live engine so the account
+// enters the resolver, and audits the action. The resolver is built from the
+// snapshot and the engine has no incremental account registration, so a new
+// account stays invisible to the engine — its adjustments, group moves, and
+// orders reject as "unknown account" — until the engine is rebuilt from the
+// store. This mirrors the rebuild DeleteAccount performs when the account set
+// shrinks. The store assigns the engine account id and returns the populated
+// account.
 func (n *localNode) CreateAccount(
-	ctx context.Context, key Key, caller domain.Caller,
+	ctx context.Context, account domain.Account, caller domain.Caller,
 ) (domain.Account, error) {
 	if err := n.beginMutation(); err != nil {
 		return domain.Account{}, err
 	}
 	defer n.endMutation()
 
-	account, err := n.realm.CreateAccount(ctx, domain.Account{Code: key.Account})
+	account, err := n.realm.CreateAccount(ctx, account)
 	if err != nil {
 		return domain.Account{}, fmt.Errorf("create account: %w", err)
 	}
 
+	if err := n.rebuildEngineFromStore(ctx); err != nil {
+		return domain.Account{}, fmt.Errorf("rebuild engine after account create: %w", err)
+	}
+
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action:       domain.AuditActionCreateAccount,
-		Account:      key.Account,
+		Account:      account.Code,
 		AccountTitle: account.Title,
-		Detail:       fmt.Sprintf("create account %s", key.Account),
+		Detail:       fmt.Sprintf("create account %s", account.Code),
 	}); err != nil {
 		return domain.Account{}, fmt.Errorf("audit create account: %w", err)
 	}
@@ -617,6 +844,18 @@ func (n *localNode) ListLimits(
 		return AccountLimits{}, fmt.Errorf("list limits: %w", err)
 	}
 	return limits, nil
+}
+
+// ListPolicyRows returns the node's typed barriers flattened into one sorted,
+// paged policy list.
+func (n *localNode) ListPolicyRows(
+	ctx context.Context, filter store.PolicyListFilter,
+) (store.PolicyListPage, error) {
+	page, err := n.realm.ListPolicyRows(ctx, filter)
+	if err != nil {
+		return store.PolicyListPage{}, fmt.Errorf("list policy rows: %w", err)
+	}
+	return page, nil
 }
 
 // listLimits reads the three typed barrier tables narrowed to account (empty
@@ -1011,6 +1250,17 @@ func (n *localNode) ListAuditFiltered(
 	return rows, nil
 }
 
+// ListAuditRows returns audit rows matching filter.
+func (n *localNode) ListAuditRows(
+	ctx context.Context, filter store.AuditListFilter,
+) (store.AuditListPage, error) {
+	page, err := n.realm.ListAuditRows(ctx, filter)
+	if err != nil {
+		return store.AuditListPage{}, fmt.Errorf("list audit rows: %w", err)
+	}
+	return page, nil
+}
+
 // --- MCP access control -----------------------------------------------------
 
 // ListMcpAccess returns the stored per-command MCP overrides keyed by command.
@@ -1197,6 +1447,9 @@ func (n *localNode) UpsertMarketDataInstrument(
 	}
 	defer n.endMutation()
 
+	if err := n.ensureMarketDataAssets(ctx, instrument); err != nil {
+		return err
+	}
 	if err := n.realm.UpsertMarketDataInstrument(ctx, instrument); err != nil {
 		return fmt.Errorf("upsert market-data instrument: %w", err)
 	}
@@ -1206,6 +1459,18 @@ func (n *localNode) UpsertMarketDataInstrument(
 			instrument.Instance, instrument.ExternalSymbol),
 	}); err != nil {
 		return fmt.Errorf("audit upsert market-data instrument: %w", err)
+	}
+	return nil
+}
+
+func (n *localNode) ensureMarketDataAssets(
+	ctx context.Context, instrument domain.MarketDataInstrument,
+) error {
+	for _, code := range []string{instrument.BaseAsset, instrument.QuoteAsset} {
+		if err := n.realm.CreateAsset(ctx, domain.Asset{Code: code}); err != nil &&
+			!errors.Is(err, domain.ErrAlreadyExists) {
+			return fmt.Errorf("create market-data asset %s: %w", code, err)
+		}
 	}
 	return nil
 }
@@ -1366,6 +1631,50 @@ func (n *localNode) SetAccountNotes(
 	return nil
 }
 
+// UpdateAccount replaces an account's public code and title, rebuilds the
+// engine resolver, and audits the change.
+func (n *localNode) UpdateAccount(
+	ctx context.Context,
+	key Key,
+	account domain.Account,
+	caller domain.Caller,
+) (domain.Account, error) {
+	if err := n.beginMutation(); err != nil {
+		return domain.Account{}, err
+	}
+	defer n.endMutation()
+
+	prev, ok, err := n.realm.GetAccount(ctx, key.Account)
+	if err != nil {
+		return domain.Account{}, fmt.Errorf("read account for update: %w", err)
+	}
+	if !ok {
+		return domain.Account{},
+			fmt.Errorf("account %q: %w", key.Account, domain.ErrNotFound)
+	}
+	updated, err := n.realm.UpdateAccount(ctx, key.Account, account)
+	if err != nil {
+		return domain.Account{}, fmt.Errorf("update account: %w", err)
+	}
+	if err := n.rebuildEngineFromStore(ctx); err != nil {
+		return domain.Account{},
+			fmt.Errorf("rebuild engine after account update: %w", err)
+	}
+	if err := n.audit(ctx, caller, store.AuditEntry{
+		Action:       domain.AuditActionUpdateAccount,
+		Account:      updated.Code,
+		AccountTitle: updated.Title,
+		Detail: fmt.Sprintf(
+			"update account %s -> %s",
+			prev.Code,
+			updated.Code,
+		),
+	}); err != nil {
+		return domain.Account{}, fmt.Errorf("audit update account: %w", err)
+	}
+	return updated, nil
+}
+
 // DeleteAccount removes an account from the store, rebuilds the engine from the
 // surviving rows, and audits the action.
 func (n *localNode) DeleteAccount(
@@ -1402,10 +1711,12 @@ func (n *localNode) DeleteAccount(
 
 // --- groups -----------------------------------------------------------------
 
-// CreateGroup persists a new account group and audits the action. A group is
-// store-only: membership lives on accounts, so there is no engine side-effect
-// at creation. The store assigns the engine group id and returns the populated
-// group.
+// CreateGroup persists a new account group, rebuilds the live engine so the
+// group enters the resolver, and audits the action. Like CreateAccount, the
+// resolver has no incremental group registration, so a runtime-created group is
+// unknown to the engine — a later group move or group-scoped barrier would
+// reject as "unknown group" — until the engine is rebuilt from the store. The
+// store assigns the engine group id and returns the populated group.
 func (n *localNode) CreateGroup(
 	ctx context.Context, group domain.AccountGroup, caller domain.Caller,
 ) (domain.AccountGroup, error) {
@@ -1417,6 +1728,9 @@ func (n *localNode) CreateGroup(
 	created, err := n.realm.CreateGroup(ctx, group)
 	if err != nil {
 		return domain.AccountGroup{}, fmt.Errorf("create group: %w", err)
+	}
+	if err := n.rebuildEngineFromStore(ctx); err != nil {
+		return domain.AccountGroup{}, fmt.Errorf("rebuild engine after group create: %w", err)
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action: domain.AuditActionCreateGroup,
@@ -1434,6 +1748,17 @@ func (n *localNode) ListGroups(ctx context.Context) ([]domain.AccountGroup, erro
 		return nil, fmt.Errorf("list groups: %w", err)
 	}
 	return groups, nil
+}
+
+// ListGroupRows returns persisted groups matching filter.
+func (n *localNode) ListGroupRows(
+	ctx context.Context, filter store.GroupListFilter,
+) (store.GroupListPage, error) {
+	page, err := n.realm.ListGroupRows(ctx, filter)
+	if err != nil {
+		return store.GroupListPage{}, fmt.Errorf("list group rows: %w", err)
+	}
+	return page, nil
 }
 
 // GetGroup returns the group and its member accounts. The bool is false when no
@@ -1480,6 +1805,48 @@ func (n *localNode) SetGroupNotes(
 		return fmt.Errorf("audit set group notes: %w", err)
 	}
 	return nil
+}
+
+// UpdateGroup replaces a group's public code and title, rebuilds the engine
+// resolver, and audits the change.
+func (n *localNode) UpdateGroup(
+	ctx context.Context,
+	oldCode string,
+	group domain.AccountGroup,
+	caller domain.Caller,
+) (domain.AccountGroup, error) {
+	if err := n.beginMutation(); err != nil {
+		return domain.AccountGroup{}, err
+	}
+	defer n.endMutation()
+
+	prev, ok, err := n.realm.GetGroup(ctx, oldCode)
+	if err != nil {
+		return domain.AccountGroup{}, fmt.Errorf("read group for update: %w", err)
+	}
+	if !ok {
+		return domain.AccountGroup{},
+			fmt.Errorf("group %q: %w", oldCode, domain.ErrNotFound)
+	}
+	updated, err := n.realm.UpdateGroup(ctx, oldCode, group)
+	if err != nil {
+		return domain.AccountGroup{}, fmt.Errorf("update group: %w", err)
+	}
+	if err := n.rebuildEngineFromStore(ctx); err != nil {
+		return domain.AccountGroup{},
+			fmt.Errorf("rebuild engine after group update: %w", err)
+	}
+	if err := n.audit(ctx, caller, store.AuditEntry{
+		Action: domain.AuditActionUpdateGroup,
+		Detail: fmt.Sprintf(
+			"update group %s -> %s",
+			prev.Code,
+			updated.Code,
+		),
+	}); err != nil {
+		return domain.AccountGroup{}, fmt.Errorf("audit update group: %w", err)
+	}
+	return updated, nil
 }
 
 // SetGroupBlocked blocks or unblocks the group in the store, then the engine,
@@ -1842,11 +2209,82 @@ func snapshotAdjustmentRequest(snapshot domain.Balance) domain.AdjustmentRequest
 	}
 }
 
+// ensureAccountForAdjustment creates the account when it does not exist yet so a
+// fund of a fresh account succeeds in one call. The new account joins the
+// default group (empty GroupCode, no group assigned); its id is validated the
+// same way CreateAccount validates it. Creating an account rebuilds the engine
+// so the account enters the resolver before the adjustment is applied, and the
+// creation is audited like a standalone CreateAccount. It runs under the
+// mutation lock the caller already holds.
+func (n *localNode) ensureAccountForAdjustment(
+	ctx context.Context, id domain.AccountID, caller domain.Caller,
+) error {
+	if _, ok, err := n.realm.GetAccount(ctx, id); err != nil {
+		return fmt.Errorf("read account for adjustment: %w", err)
+	} else if ok {
+		return nil
+	}
+	if err := domain.ValidateAccountID(id); err != nil {
+		return err
+	}
+	account, err := n.realm.CreateAccount(ctx, domain.Account{Code: id})
+	if err != nil {
+		return fmt.Errorf("create account for adjustment: %w", err)
+	}
+	if err := n.rebuildEngineFromStore(ctx); err != nil {
+		return fmt.Errorf("rebuild engine after account create: %w", err)
+	}
+	if err := n.audit(ctx, caller, store.AuditEntry{
+		Action:       domain.AuditActionCreateAccount,
+		Account:      account.Code,
+		AccountTitle: account.Title,
+		Detail:       fmt.Sprintf("create account %s", account.Code),
+	}); err != nil {
+		return fmt.Errorf("audit create account: %w", err)
+	}
+	return nil
+}
+
+// ensureAssetForAdjustment creates the asset when it does not exist yet so a
+// fund referencing a fresh asset succeeds in one call. The new asset carries an
+// empty title and empty asset class (minimal default); its code is validated the
+// same way CreateAsset validates it. Creating an asset rebuilds the engine so
+// the asset enters the resolver before the adjustment is applied, mirroring
+// ensureAccountForAdjustment, and the creation is audited like a standalone
+// CreateAsset. It runs under the mutation lock the caller already holds.
+func (n *localNode) ensureAssetForAdjustment(
+	ctx context.Context, code string, caller domain.Caller,
+) error {
+	if _, ok, err := n.realm.GetAsset(ctx, code); err != nil {
+		return fmt.Errorf("read asset for adjustment: %w", err)
+	} else if ok {
+		return nil
+	}
+	if err := domain.ValidateAsset(code); err != nil {
+		return err
+	}
+	if err := n.realm.CreateAsset(ctx, domain.Asset{Code: code}); err != nil {
+		return fmt.Errorf("create asset for adjustment: %w", err)
+	}
+	if err := n.rebuildEngineFromStore(ctx); err != nil {
+		return fmt.Errorf("rebuild engine after asset create: %w", err)
+	}
+	if err := n.audit(ctx, caller, store.AuditEntry{
+		Action: domain.AuditActionCreateAsset,
+		Detail: fmt.Sprintf("create asset %s", code),
+	}); err != nil {
+		return fmt.Errorf("audit create asset: %w", err)
+	}
+	return nil
+}
+
 // ApplyAdjustment applies one spot-funds adjustment through the engine, which
-// is the authority for the resulting holdings. On accept it writes the
-// recomputed balance snapshot and the accepted record; on reject it records
-// the rejected adjustment and leaves balances unchanged. Either way it audits
-// the action.
+// is the authority for the resulting holdings. An adjustment to an account or
+// asset that does not exist yet auto-creates it before applying, so an operator
+// can fund a fresh account or a fresh asset in one call. On accept it writes the
+// recomputed balance snapshot and the accepted record; on reject it records the
+// rejected adjustment and leaves balances unchanged. Either way it audits the
+// action.
 func (n *localNode) ApplyAdjustment(
 	ctx context.Context, key Key, externalID domain.ExternalID,
 	req domain.AdjustmentRequest, caller domain.Caller,
@@ -1855,6 +2293,13 @@ func (n *localNode) ApplyAdjustment(
 		return domain.AccountAdjustmentRecord{}, err
 	}
 	defer n.endMutation()
+
+	if err := n.ensureAccountForAdjustment(ctx, key.Account, caller); err != nil {
+		return domain.AccountAdjustmentRecord{}, err
+	}
+	if err := n.ensureAssetForAdjustment(ctx, req.Asset, caller); err != nil {
+		return domain.AccountAdjustmentRecord{}, err
+	}
 
 	result, err := n.engine.ApplyAccountAdjustment(ctx, key.Account, req)
 	if err != nil {
@@ -1888,6 +2333,7 @@ func (n *localNode) ApplyAdjustment(
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action:  domain.AuditActionAdjustment,
 		Account: key.Account,
+		Asset:   req.Asset,
 		Detail:  adjustmentDetail(key.Account, req.Asset, result.Accepted != nil),
 	}); err != nil {
 		return domain.AccountAdjustmentRecord{}, fmt.Errorf("audit adjustment: %w", err)
@@ -2080,6 +2526,17 @@ func (n *localNode) ListBalances(
 	return balances, nil
 }
 
+// ListBalanceRows returns the balance rows filtered by the typed list filter.
+func (n *localNode) ListBalanceRows(
+	ctx context.Context, filter store.BalanceListFilter,
+) (store.BalanceListPage, error) {
+	balances, err := n.realm.ListBalanceRows(ctx, filter)
+	if err != nil {
+		return store.BalanceListPage{}, fmt.Errorf("list balance rows: %w", err)
+	}
+	return balances, nil
+}
+
 // GetBalance returns the balance for (account, asset).
 func (n *localNode) GetBalance(
 	ctx context.Context, account domain.AccountID, asset string,
@@ -2100,6 +2557,17 @@ func (n *localNode) ListAdjustments(
 		return nil, fmt.Errorf("list adjustments: %w", err)
 	}
 	return records, nil
+}
+
+// ListAdjustmentRows returns adjustments matching filter.
+func (n *localNode) ListAdjustmentRows(
+	ctx context.Context, filter store.AdjustmentListFilter,
+) (store.AdjustmentListPage, error) {
+	page, err := n.realm.ListAdjustmentRows(ctx, filter)
+	if err != nil {
+		return store.AdjustmentListPage{}, fmt.Errorf("list adjustment rows: %w", err)
+	}
+	return page, nil
 }
 
 // --- trading ----------------------------------------------------------------
@@ -2800,6 +3268,17 @@ func (n *localNode) ListOrders(
 	return orders, nil
 }
 
+// ListOrderRows returns orders matching filter.
+func (n *localNode) ListOrderRows(
+	ctx context.Context, filter store.OrderListFilter,
+) (store.OrderListPage, error) {
+	orders, err := n.realm.ListOrderRows(ctx, filter)
+	if err != nil {
+		return store.OrderListPage{}, fmt.Errorf("list order rows: %w", err)
+	}
+	return orders, nil
+}
+
 // ListAllOrders returns every matching order, newest first.
 func (n *localNode) ListAllOrders(
 	ctx context.Context, account domain.AccountID, source domain.Source,
@@ -2862,6 +3341,17 @@ func (n *localNode) ListAllTrades(
 		return nil, fmt.Errorf("list all trades: %w", err)
 	}
 	return trades, nil
+}
+
+// ListTradeRows returns trades matching filter.
+func (n *localNode) ListTradeRows(
+	ctx context.Context, filter store.TradeListFilter,
+) (store.TradeListPage, error) {
+	page, err := n.realm.ListTradeRows(ctx, filter)
+	if err != nil {
+		return store.TradeListPage{}, fmt.Errorf("list trade rows: %w", err)
+	}
+	return page, nil
 }
 
 // CheckOrder delegates the non-mutating pre-trade dry-run to the engine. The

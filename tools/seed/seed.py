@@ -15,14 +15,18 @@
 #
 # Please see https://openpit.dev and the OWNERS file for details.
 #
-# Demo data only — all account names are fictional parodies of archetypes;
-# any resemblance to real persons or entities is unintended.
+# Demo data only. Every account name, group, and note below is fiction: a
+# satirical archetype of trader *behaviour*, not a portrait of any real person,
+# firm, fund, or event. Any resemblance to a real entity — living, dead, or
+# merely insolvent — is coincidental and unintended. The jokes are aimed at
+# generic human failings (greed, FOMO, an absent off switch), never at a
+# nameable target. Do not seed a production instance with this file.
 
 """Pit Officer demo seed utility.
 
 Populates a running Pit Officer instance via its public REST API (/api/v1)
-with a set of fictional accounts, groups, balances, orders, and trades so the
-team can take demo screenshots and sanity-check behaviour.
+with a set of fictional accounts, groups, balances, typed risk limits, orders,
+and trades so the team can take demo screenshots and sanity-check behaviour.
 
 Usage:
     python seed.py [--base http://host:port] [--runtime-file PATH]
@@ -36,11 +40,11 @@ Base-URL discovery (in order):
 
 import argparse
 import json
-import os
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -131,31 +135,68 @@ def _put(base: str, path: str, body: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def _get(base: str, path: str) -> dict[str, Any]:
+    _, data = _request("GET", f"{base}/api/v1{path}", ok_statuses=(200,))
+    return data
+
+
 # ---------------------------------------------------------------------------
 # Seed data
 # ---------------------------------------------------------------------------
 
+# An asset is a dictionary record: code is its immutable handle, title its
+# display name, and assetClass is an optional classification used by operators.
+# An asset class is a dictionary record every asset links to by code. Assets
+# reference a class via a foreign key, so the classes must be created first.
+# Create body is {code, title, notes}.
+ASSET_CLASSES = [
+    {"code": "cash", "title": "Cash", "notes": "Fiat and stablecoin balances."},
+    {"code": "equity", "title": "Equity", "notes": "Listed company shares."},
+    {"code": "index", "title": "Index", "notes": "Market index instruments."},
+]
+
+ASSETS = [
+    {"code": "USD", "title": "US Dollar", "assetClass": "cash"},
+    {"code": "AAPL", "title": "Apple Inc.", "assetClass": "equity"},
+    {"code": "MSFT", "title": "Microsoft Corp.", "assetClass": "equity"},
+    {"code": "SPX", "title": "S&P 500 Index", "assetClass": "index"},
+]
+
+# A group is a dictionary record: code is its immutable handle, title its
+# display name. Create body is {code, title, notes}.
 GROUPS = [
     {
-        "id": "whales",
+        "code": "whales",
+        "title": "Whales",
         "notes": "Accounts with enough capital to move markets — handle with care.",
     },
     {
-        "id": "degens",
-        "notes": "High-frequency risk-takers; frequent flyers on the margin call list.",
+        "code": "degens",
+        "title": "Degenerates",
+        "notes": "High-frequency risk-takers; frequent flyers on the margin-call list.",
     },
     {
-        "id": "blowups",
-        "notes": "Accounts currently underwater. Do not lend them more rope.",
+        "code": "algos",
+        "title": "Algos",
+        "notes": "Automated desks. Fast, tireless, and only as sane as their last deploy.",
+    },
+    {
+        "code": "blowups",
+        "title": "Blow-ups",
+        "notes": "Accounts underwater. Do not lend them more rope.",
     },
 ]
 
-# Each account: id, group, notes, balances (list of adjustment dicts), blocked/reason.
-# Balance adjustments use mode "set" on the `balance` field (absolute USD value).
-# For the underwater desk we also set a large negative `held` to model locked losses.
+# Each account: code, title, group, notes, balances (list of adjustment dicts),
+# blocked/reason. Code is the immutable handle; title is the display name.
+# Balance adjustments use mode "absolute" on the `balance` field (absolute USD
+# value). For the underwater desks we also set a large negative `held` to model
+# locked losses.
 ACCOUNTS = [
+    # --- Whales -------------------------------------------------------------
     {
-        "id": "Bucks McMoneyface",
+        "code": "whale-bucks",
+        "title": "Bucks McMoneyface",
         "group": "whales",
         "notes": "Patriarch of the McMoneyface dynasty. Buys dips; is the dip.",
         "balances": [
@@ -164,7 +205,8 @@ ACCOUNTS = [
         "blocked": False,
     },
     {
-        "id": "Rocket Surgeons LLC",
+        "code": "whale-rocket-surgeons",
+        "title": "Rocket Surgeons LLC",
         "group": "whales",
         "notes": "Technically we do rocket surgery. Financially, same thing.",
         "balances": [
@@ -173,7 +215,39 @@ ACCOUNTS = [
         "blocked": False,
     },
     {
-        "id": "Diamond Hands Capital",
+        "code": "whale-gravy-train",
+        "title": "Gravy Train Capital",
+        "group": "whales",
+        "notes": "Wealth so old it predates fiat. Tips the sommelier in basis points.",
+        "balances": [
+            {"asset": "USD", "balance": {"mode": "absolute", "value": "21000000.00"}},
+        ],
+        "blocked": False,
+    },
+    {
+        "code": "whale-liquid-courage",
+        "title": "Liquid Courage Partners",
+        "group": "whales",
+        "notes": "Deep pockets, shallow convictions. Buys conviction by the case.",
+        "balances": [
+            {"asset": "USD", "balance": {"mode": "absolute", "value": "7400000.00"}},
+        ],
+        "blocked": False,
+    },
+    {
+        "code": "whale-compounding-daily",
+        "title": "Compounding Daily LLC",
+        "group": "whales",
+        "notes": "Started with a dollar and a dream. The dollar did the heavy lifting.",
+        "balances": [
+            {"asset": "USD", "balance": {"mode": "absolute", "value": "15300000.00"}},
+        ],
+        "blocked": False,
+    },
+    # --- Degenerates --------------------------------------------------------
+    {
+        "code": "degen-diamond-hands",
+        "title": "Diamond Hands Capital",
         "group": "degens",
         "notes": "We never sell. Not once. Not ever. (We always sell at the bottom.)",
         "balances": [
@@ -182,7 +256,8 @@ ACCOUNTS = [
         "blocked": False,
     },
     {
-        "id": "FOMO Ventures",
+        "code": "degen-fomo",
+        "title": "FOMO Ventures",
         "group": "degens",
         "notes": "Late to every trade since inception. Holding the bag professionally.",
         "balances": [
@@ -191,7 +266,8 @@ ACCOUNTS = [
         "blocked": False,
     },
     {
-        "id": "Hindsight Asset Mgmt",
+        "code": "degen-hindsight",
+        "title": "Hindsight Asset Mgmt",
         "group": "degens",
         "notes": "Our research is flawless — six months after the fact.",
         "balances": [
@@ -200,9 +276,76 @@ ACCOUNTS = [
         "blocked": False,
     },
     {
-        "id": "Margin Call Partners",
+        "code": "degen-yolo",
+        "title": "YOLO Capital Mgmt",
+        "group": "degens",
+        "notes": "Position sizing is for people who plan to be here next quarter.",
+        "balances": [
+            {"asset": "USD", "balance": {"mode": "absolute", "value": "640000.00"}},
+        ],
+        "blocked": False,
+    },
+    {
+        "code": "degen-leverage-regret",
+        "title": "Leverage & Regret LLP",
+        "group": "degens",
+        "notes": "Full-service firm: we supply the leverage, you supply the regret.",
+        "balances": [
+            {"asset": "USD", "balance": {"mode": "absolute", "value": "980000.00"}},
+        ],
+        "blocked": False,
+    },
+    {
+        "code": "degen-revenge-trade",
+        "title": "Revenge Trade Partners",
+        "group": "degens",
+        "notes": "The market took something from us. We're getting it back, one fat finger at a time.",
+        "balances": [
+            {"asset": "USD", "balance": {"mode": "absolute", "value": "430000.00"}},
+        ],
+        "blocked": False,
+    },
+    # --- Algos --------------------------------------------------------------
+    {
+        "code": "algo-infinite-loop",
+        "title": "Infinite Loop Capital",
+        "group": "algos",
+        "notes": (
+            "Fully automated desk. The strategy was flawless; the off switch was "
+            "theoretical. Kept blocked as a cautionary exhibit for pre-trade risk."
+        ),
+        "balances": [
+            {"asset": "USD", "balance": {"mode": "absolute", "value": "500000.00"}},
+        ],
+        "blocked": True,
+        "block_reason": "Trading halt — runaway-algorithm kill-switch activated.",
+    },
+    {
+        "code": "algo-null-pointer",
+        "title": "Null Pointer Securities",
+        "group": "algos",
+        "notes": "Quant shop. Occasionally trades on data that doesn't exist. The P&L agrees.",
+        "balances": [
+            {"asset": "USD", "balance": {"mode": "absolute", "value": "2600000.00"}},
+        ],
+        "blocked": False,
+    },
+    {
+        "code": "algo-backtest-overfit",
+        "title": "Backtest Overfit Labs",
+        "group": "algos",
+        "notes": "100% win rate in simulation. Reality has filed a formal complaint.",
+        "balances": [
+            {"asset": "USD", "balance": {"mode": "absolute", "value": "1750000.00"}},
+        ],
+        "blocked": False,
+    },
+    # --- Blow-ups -----------------------------------------------------------
+    {
+        "code": "blowup-margin-call",
+        "title": "Margin Call Partners",
         "group": "blowups",
-        "notes": "Partners since 2019. Still partners. Margin desk is not a partner.",
+        "notes": "Partners since 2019. Still partners. The margin desk is not a partner.",
         "balances": [
             {"asset": "USD", "balance": {"mode": "absolute", "value": "85000.00"}},
             # Held models outstanding reserve from underwater positions.
@@ -211,7 +354,8 @@ ACCOUNTS = [
         "blocked": False,
     },
     {
-        "id": "Buy High Sell Low Inc",
+        "code": "blowup-buy-high-sell-low",
+        "title": "Buy High Sell Low Inc",
         "group": "blowups",
         "notes": "Strategy document available on request. Results as advertised.",
         "balances": [
@@ -221,11 +365,35 @@ ACCOUNTS = [
         "blocked": False,
     },
     {
-        "id": "Lemon Brothers",
+        "code": "blowup-catching-knives",
+        "title": "Catching Knives LLC",
+        "group": "blowups",
+        "notes": "Specialists in falling assets. The catching is going great; the holding, less so.",
+        "balances": [
+            {"asset": "USD", "balance": {"mode": "absolute", "value": "60000.00"}},
+            {"asset": "USD", "held": {"mode": "absolute", "value": "-180000.00"}},
+        ],
+        "blocked": False,
+    },
+    {
+        "code": "blowup-negative-carry",
+        "title": "Negative Carry Capital",
+        "group": "blowups",
+        "notes": "Every position costs money to hold. They hold many positions.",
+        "balances": [
+            {"asset": "USD", "balance": {"mode": "absolute", "value": "33000.00"}},
+            {"asset": "USD", "held": {"mode": "absolute", "value": "-90000.00"}},
+        ],
+        "blocked": False,
+    },
+    {
+        "code": "blowup-sunk-cost",
+        "title": "Sunk Cost Brothers",
         "group": "blowups",
         "notes": (
-            "Legendary desk, historically significant collapse. "
-            "Kept as a cautionary exhibit. Do not extend credit."
+            "A legendary blow-up, preserved as a museum piece. House strategy was "
+            "'average down forever'. There is no resemblance to any real firm; the "
+            "fallacy is the joke, not a name. Do not extend credit."
         ),
         "balances": [
             # Nominal balance left from the estate.
@@ -236,62 +404,171 @@ ACCOUNTS = [
         "blocked": True,
         "block_reason": "Regulatory hold — pending liquidation proceedings.",
     },
-    {
-        "id": "Knightmare Capital",
-        "group": "blowups",
-        "notes": (
-            "Runaway algo exhibit — automated order engine spun out of control. "
-            "Generated massive order flow in minutes before halt. Cautionary tale for pre-trade risk."
-        ),
-        "balances": [
-            {"asset": "USD", "balance": {"mode": "absolute", "value": "500000.00"}},
-        ],
-        "blocked": True,
-        "block_reason": "Trading halt — runaway algorithm kill-switch activated.",
-    },
 ]
 
-# Risk policies: each entry maps directly to the PUT /api/v1/limits body.
-# Fields: policy, scope, account, asset, values (kind -> value string).
+# Typed risk limits. Each entry has a `kind` selecting the endpoint and response
+# shape; the rest are the per-kind body fields:
+#   rate       -> PUT /limits/rate        {scope, account, asset, windowMs, maxOrders}
+#   order_size -> PUT /limits/order-size  {scope, account, asset, maxQuantity, maxNotional}
+#   pnl_bounds -> PUT /limits/pnl-bounds  {scope, account, asset, lowerBound, upperBound, initialPnl}
 # Scope axes: account required for account/account_asset; asset required for
-# asset/account_asset; both empty for broker/asset scopes without per-account
-# targeting. Kinds and valid scopes are validated by the engine on apply.
-POLICIES = [
+# asset/account_asset. Allowed scopes differ per kind (the engine validates):
+#   rate       broker | asset | account | account_asset
+#   order_size broker | asset | account_asset
+#   pnl_bounds          asset | account_asset
+# windowMs is a positive integer (<= 24h); maxOrders a positive integer; all
+# decimal ceilings/bounds are exact strings.
+LIMITS = [
     {
         # Burst guard for the runaway-algo desk — at most 10 orders per second.
-        # The Knightmare Capital exhibit proves exactly why this exists.
-        "policy": "rate_limit",
+        # The Infinite Loop Capital exhibit is exactly why this exists.
+        "kind": "rate",
         "scope": "account",
-        "account": "Knightmare Capital",
+        "account": "algo-infinite-loop",
         "asset": "",
-        "values": {"max_orders": "10", "window": "1s"},
+        "windowMs": 1000,
+        "maxOrders": 10,
     },
     {
-        # Kill-switch: halt Diamond Hands Capital if realized USD P&L sinks
-        # below half a million in the red.  They never sell, until they do.
-        "policy": "pnl_bounds_kill_switch",
-        "scope": "account_asset",
-        "account": "Diamond Hands Capital",
-        "asset": "USD",
-        "values": {"lower_bound": "-500000"},
+        # A saner ceiling for a desk that's still allowed to trade.
+        "kind": "rate",
+        "scope": "account",
+        "account": "algo-null-pointer",
+        "asset": "",
+        "windowMs": 1000,
+        "maxOrders": 50,
     },
     {
-        # Global fat-finger ceiling: no single order may exceed 10 000 units
-        # or 5 000 000 notional, regardless of account.  Broker-scope means
-        # it applies to every order that passes through the engine.
-        "policy": "order_size_limit",
+        # Global fat-finger ceiling: no single order may exceed 10 000 units or
+        # 5 000 000 notional, regardless of account. Broker scope applies to every
+        # order that passes through the engine.
+        "kind": "order_size",
         "scope": "broker",
         "account": "",
         "asset": "",
-        "values": {"max_quantity": "10000", "max_notional": "5000000"},
+        "maxQuantity": "10000",
+        "maxNotional": "5000000",
+    },
+    {
+        # Per-name leash on a degen: at most 1 000 AAPL units per order.
+        "kind": "order_size",
+        "scope": "account_asset",
+        "account": "degen-yolo",
+        "asset": "AAPL",
+        "maxQuantity": "1000",
+    },
+    {
+        # Index notional cap, asset-wide: SPX orders capped at 2 000 000 notional.
+        "kind": "order_size",
+        "scope": "asset",
+        "account": "",
+        "asset": "SPX",
+        "maxNotional": "2000000",
+    },
+    {
+        # Kill-switch: halt Diamond Hands Capital if realized USD P&L sinks below
+        # half a million in the red. They never sell, until they do.
+        "kind": "pnl_bounds",
+        "scope": "account_asset",
+        "account": "degen-diamond-hands",
+        "asset": "USD",
+        "lowerBound": "-500000",
+    },
+    {
+        # A tighter leash on a known blow-up.
+        "kind": "pnl_bounds",
+        "scope": "account_asset",
+        "account": "blowup-catching-knives",
+        "asset": "USD",
+        "lowerBound": "-250000",
+    },
+    {
+        # Firm-wide USD P&L floor, asset-wide.
+        "kind": "pnl_bounds",
+        "scope": "asset",
+        "account": "",
+        "asset": "USD",
+        "lowerBound": "-2000000",
     },
 ]
 
+# Endpoint and response-key per limit kind.
+_LIMIT_ENDPOINTS = {
+    "rate": "/limits/rate",
+    "order_size": "/limits/order-size",
+    "pnl_bounds": "/limits/pnl-bounds",
+}
+_LIMIT_RESP_KEYS = {
+    "rate": "rateLimit",
+    "order_size": "orderSizeLimit",
+    "pnl_bounds": "pnlBoundsLimit",
+}
+
+def _limit_body(limit: dict[str, Any]) -> dict[str, Any]:
+    """Build the wire body for a typed limit from its seed entry."""
+    body: dict[str, Any] = {
+        "scope": limit["scope"],
+        "account": limit["account"],
+        "asset": limit["asset"],
+    }
+    kind = limit["kind"]
+    if kind == "rate":
+        body["windowMs"] = limit["windowMs"]
+        body["maxOrders"] = limit["maxOrders"]
+    elif kind == "order_size":
+        body["maxQuantity"] = limit.get("maxQuantity", "")
+        body["maxNotional"] = limit.get("maxNotional", "")
+    elif kind == "pnl_bounds":
+        body["lowerBound"] = limit.get("lowerBound", "")
+        body["upperBound"] = limit.get("upperBound", "")
+        if limit.get("initialPnl"):
+            body["initialPnl"] = limit["initialPnl"]
+    return body
+
+
+def _limit_label(limit: dict[str, Any]) -> str:
+    label = f"{limit['kind']} / {limit['scope']}"
+    if limit["account"]:
+        label += f" / {limit['account']}"
+    if limit["asset"]:
+        label += f" / {limit['asset']}"
+    return label
+
+
+def _limit_key(limit: dict[str, Any]) -> tuple[str, str, str, str]:
+    return (limit["kind"], limit["scope"], limit["account"], limit["asset"])
+
+
+def _existing_limit_keys(base: str) -> set[tuple[str, str, str, str]]:
+    resp = _get(base, "/limits")
+    limits = resp.get("limits", {})
+    keys: set[tuple[str, str, str, str]] = set()
+    for limit in limits.get("rateLimits", []):
+        keys.add(("rate", limit.get("scope", ""), limit.get("account", ""), limit.get("asset", "")))
+    for limit in limits.get("orderSizeLimits", []):
+        keys.add(
+            ("order_size", limit.get("scope", ""), limit.get("account", ""), limit.get("asset", ""))
+        )
+    for limit in limits.get("pnlBoundsLimits", []):
+        keys.add(
+            ("pnl_bounds", limit.get("scope", ""), limit.get("account", ""), limit.get("asset", ""))
+        )
+    return keys
+
+
 # Orders: account, baseAsset, quoteAsset, side, amountKind, amountValue, price.
-# execution_reports: quantity, price, final.  lockPrice is taken from order.lockPrices[0].
+# execution_reports: quantity, price, final. The fill's lockPrice is taken from
+# the order's settlement-leg display price (the LAST entry of order.displayPrices).
+# leavesQuantity (FIX LeavesQty - the order's remaining open base quantity after
+# the fill) is computed per fill from the running cumulative filled quantity; it
+# is required by the engine to settle. Every filled order here is "quantity" kind,
+# so leaves is exact base units; a "volume" order with fills cannot derive
+# base-unit leaves and is rejected as a seed error.
+# Some orders intentionally trip a limit or a block: the engine returns the order
+# in rejected status (still a 201), which is a feature of the demo, not an error.
 ORDERS = [
     {
-        "account": "Bucks McMoneyface",
+        "account": "whale-bucks",
         "baseAsset": "AAPL",
         "quoteAsset": "USD",
         "side": "buy",
@@ -304,7 +581,19 @@ ORDERS = [
         ],
     },
     {
-        "account": "Rocket Surgeons LLC",
+        "account": "whale-gravy-train",
+        "baseAsset": "AAPL",
+        "quoteAsset": "USD",
+        "side": "buy",
+        "amountKind": "quantity",
+        "amountValue": "1000",
+        "price": "184.20",
+        "execution_reports": [
+            {"quantity": "1000", "price": "184.10", "final": True},
+        ],
+    },
+    {
+        "account": "whale-rocket-surgeons",
         "baseAsset": "MSFT",
         "quoteAsset": "USD",
         "side": "buy",
@@ -316,7 +605,7 @@ ORDERS = [
         ],
     },
     {
-        "account": "Diamond Hands Capital",
+        "account": "degen-diamond-hands",
         "baseAsset": "SPX",
         "quoteAsset": "USD",
         "side": "sell",
@@ -329,7 +618,7 @@ ORDERS = [
         ],
     },
     {
-        "account": "FOMO Ventures",
+        "account": "degen-fomo",
         "baseAsset": "AAPL",
         "quoteAsset": "USD",
         "side": "buy",
@@ -340,7 +629,7 @@ ORDERS = [
         "execution_reports": [],
     },
     {
-        "account": "Hindsight Asset Mgmt",
+        "account": "degen-hindsight",
         "baseAsset": "MSFT",
         "quoteAsset": "USD",
         "side": "sell",
@@ -351,9 +640,69 @@ ORDERS = [
             {"quantity": "100", "price": "409.50", "final": True},
         ],
     },
-    # Knightmare Capital runaway algo burst (rapid-fire orders)
     {
-        "account": "Knightmare Capital",
+        # Trips the per-name order-size leash (1 000 AAPL) — rejected on submit.
+        "account": "degen-yolo",
+        "baseAsset": "AAPL",
+        "quoteAsset": "USD",
+        "side": "buy",
+        "amountKind": "quantity",
+        "amountValue": "1500",
+        "price": "186.00",
+        "execution_reports": [],
+    },
+    {
+        # Trips the global fat-finger ceiling (10 000 units) — rejected on submit.
+        "account": "degen-revenge-trade",
+        "baseAsset": "AAPL",
+        "quoteAsset": "USD",
+        "side": "buy",
+        "amountKind": "quantity",
+        "amountValue": "50000",
+        "price": "185.00",
+        "execution_reports": [],
+    },
+    {
+        "account": "degen-leverage-regret",
+        "baseAsset": "SPX",
+        "quoteAsset": "USD",
+        "side": "buy",
+        "amountKind": "quantity",
+        "amountValue": "5",
+        "price": "5180.00",
+        "execution_reports": [
+            {"quantity": "5", "price": "5181.00", "final": True},
+        ],
+    },
+    {
+        "account": "algo-null-pointer",
+        "baseAsset": "MSFT",
+        "quoteAsset": "USD",
+        "side": "buy",
+        "amountKind": "quantity",
+        "amountValue": "300",
+        "price": "416.00",
+        "execution_reports": [
+            {"quantity": "300", "price": "415.90", "final": True},
+        ],
+    },
+    {
+        "account": "blowup-catching-knives",
+        "baseAsset": "SPX",
+        "quoteAsset": "USD",
+        "side": "buy",
+        "amountKind": "quantity",
+        "amountValue": "3",
+        "price": "5000.00",
+        "execution_reports": [
+            {"quantity": "3", "price": "4990.00", "final": True},
+        ],
+    },
+    # Infinite Loop Capital runaway-algo burst. The desk is blocked, so the
+    # engine rejects every order on submit — exactly the cautionary tale the
+    # rate-limit barrier exists to prevent.
+    {
+        "account": "algo-infinite-loop",
         "baseAsset": "AAPL",
         "quoteAsset": "USD",
         "side": "buy",
@@ -363,7 +712,7 @@ ORDERS = [
         "execution_reports": [],
     },
     {
-        "account": "Knightmare Capital",
+        "account": "algo-infinite-loop",
         "baseAsset": "AAPL",
         "quoteAsset": "USD",
         "side": "buy",
@@ -373,7 +722,7 @@ ORDERS = [
         "execution_reports": [],
     },
     {
-        "account": "Knightmare Capital",
+        "account": "algo-infinite-loop",
         "baseAsset": "MSFT",
         "quoteAsset": "USD",
         "side": "buy",
@@ -383,27 +732,7 @@ ORDERS = [
         "execution_reports": [],
     },
     {
-        "account": "Knightmare Capital",
-        "baseAsset": "MSFT",
-        "quoteAsset": "USD",
-        "side": "buy",
-        "amountKind": "quantity",
-        "amountValue": "120",
-        "price": "418.00",
-        "execution_reports": [],
-    },
-    {
-        "account": "Knightmare Capital",
-        "baseAsset": "AAPL",
-        "quoteAsset": "USD",
-        "side": "sell",
-        "amountKind": "quantity",
-        "amountValue": "200",
-        "price": "188.00",
-        "execution_reports": [],
-    },
-    {
-        "account": "Knightmare Capital",
+        "account": "algo-infinite-loop",
         "baseAsset": "MSFT",
         "quoteAsset": "USD",
         "side": "sell",
@@ -413,7 +742,7 @@ ORDERS = [
         "execution_reports": [],
     },
     {
-        "account": "Knightmare Capital",
+        "account": "algo-infinite-loop",
         "baseAsset": "AAPL",
         "quoteAsset": "USD",
         "side": "buy",
@@ -423,7 +752,7 @@ ORDERS = [
         "execution_reports": [],
     },
     {
-        "account": "Knightmare Capital",
+        "account": "algo-infinite-loop",
         "baseAsset": "MSFT",
         "quoteAsset": "USD",
         "side": "buy",
@@ -435,43 +764,119 @@ ORDERS = [
 ]
 
 
+def _order_key(order: dict[str, Any]) -> tuple[str, str, str, str, str, str, str]:
+    return (
+        order["account"],
+        order["baseAsset"],
+        order["quoteAsset"],
+        order["side"],
+        order["amountKind"],
+        order["amountValue"],
+        order.get("price", ""),
+    )
+
+
+def _existing_order_keys(base: str) -> set[tuple[str, str, str, str, str, str, str]]:
+    resp = _get(base, "/orders?limit=1000")
+    keys: set[tuple[str, str, str, str, str, str, str]] = set()
+    for order in resp.get("orders", []):
+        keys.add(
+            (
+                order.get("account", ""),
+                order.get("baseAsset", ""),
+                order.get("quoteAsset", ""),
+                order.get("side", ""),
+                order.get("amountKind", ""),
+                order.get("amountValue", ""),
+                order.get("price", ""),
+            )
+        )
+    return keys
+
+
 # ---------------------------------------------------------------------------
 # Main seed logic
 # ---------------------------------------------------------------------------
 
 
 def seed(base: str) -> None:
+    assets_created = 0
     groups_created = 0
     accounts_created = 0
-    policies_created = 0
+    limits_created = 0
     orders_submitted = 0
     trades_created = 0
     errors: list[str] = []
 
+    # --- Asset classes --------------------------------------------------------
+    # Created before assets: an asset links to its class by a foreign key, so the
+    # class code must already exist or the asset create is rejected.
+    print("\n=== Asset classes ===")
+    for cls in ASSET_CLASSES:
+        resp = _post(
+            base,
+            "/asset-classes",
+            {"code": cls["code"], "title": cls["title"], "notes": cls["notes"]},
+        )
+        if "assetClass" in resp:
+            print(f"  [+] asset class '{cls['code']}'")
+        else:
+            code = resp.get("error", {}).get("code", "")
+            if code == "conflict":
+                print(f"  [=] asset class '{cls['code']}' already exists")
+            else:
+                msg = f"asset class '{cls['code']}': {resp}"
+                print(f"  [!] {msg}", file=sys.stderr)
+                errors.append(msg)
+
+    # --- Assets ---------------------------------------------------------------
+    print("\n=== Assets ===")
+    for asset in ASSETS:
+        resp = _post(
+            base,
+            "/assets",
+            {
+                "code": asset["code"],
+                "title": asset["title"],
+                "assetClass": asset["assetClass"],
+            },
+        )
+        if "asset" in resp:
+            print(f"  [+] asset '{asset['code']}'")
+            assets_created += 1
+        else:
+            code = resp.get("error", {}).get("code", "")
+            if code == "conflict":
+                print(f"  [=] asset '{asset['code']}' already exists")
+            else:
+                msg = f"asset '{asset['code']}': {resp}"
+                print(f"  [!] {msg}", file=sys.stderr)
+                errors.append(msg)
+
     # --- Groups ---------------------------------------------------------------
     print("\n=== Groups ===")
     for g in GROUPS:
-        resp = _post(base, "/groups", {"id": g["id"], "notes": g["notes"]})
+        resp = _post(base, "/groups", {"code": g["code"], "title": g["title"], "notes": g["notes"]})
         if "group" in resp:
-            print(f"  [+] group '{g['id']}'")
+            print(f"  [+] group '{g['code']}'")
             groups_created += 1
         else:
             code = resp.get("error", {}).get("code", "")
             if code == "conflict":
-                print(f"  [=] group '{g['id']}' already exists")
+                print(f"  [=] group '{g['code']}' already exists")
             else:
-                msg = f"group '{g['id']}': {resp}"
+                msg = f"group '{g['code']}': {resp}"
                 print(f"  [!] {msg}", file=sys.stderr)
                 errors.append(msg)
 
     # --- Accounts -------------------------------------------------------------
     print("\n=== Accounts ===")
     for acct in ACCOUNTS:
-        acct_id: str = acct["id"]
+        acct_id: str = acct["code"]
         url_id = urllib.parse.quote(acct_id, safe="")
 
         # Create
-        resp = _post(base, "/accounts", {"id": acct_id})
+        resp = _post(base, "/accounts", {"code": acct_id, "title": acct["title"]})
         if "account" in resp:
             print(f"  [+] account '{acct_id}'")
             accounts_created += 1
@@ -479,6 +884,7 @@ def seed(base: str) -> None:
             code = resp.get("error", {}).get("code", "")
             if code == "conflict":
                 print(f"  [=] account '{acct_id}' already exists")
+                continue
             else:
                 msg = f"create account '{acct_id}': {resp}"
                 print(f"  [!] {msg}", file=sys.stderr)
@@ -511,41 +917,52 @@ def seed(base: str) -> None:
             _post(base, f"/accounts/{url_id}/block", {"reason": reason}, conflict_ok=False)
             print(f"    blocked: {reason}")
 
-    # --- Policies -------------------------------------------------------------
-    print("\n=== Policies ===")
-    for pol in POLICIES:
-        body: dict[str, Any] = {
-            "policy": pol["policy"],
-            "scope": pol["scope"],
-            "account": pol["account"],
-            "asset": pol["asset"],
-            "values": pol["values"],
-        }
-        label = f"{pol['policy']} / {pol['scope']}"
-        if pol["account"]:
-            label += f" / {pol['account']}"
-        if pol["asset"]:
-            label += f" / {pol['asset']}"
+    # --- Limits ---------------------------------------------------------------
+    print("\n=== Limits ===")
+    try:
+        existing_limits = _existing_limit_keys(base)
+    except Exception as exc:
+        existing_limits = set()
+        msg = f"list limits: {exc}"
+        print(f"  [!] {msg}", file=sys.stderr)
+        errors.append(msg)
+    for limit in LIMITS:
+        label = _limit_label(limit)
+        if _limit_key(limit) in existing_limits:
+            print(f"  [=] {label} already exists")
+            continue
+        resp_key = _LIMIT_RESP_KEYS[limit["kind"]]
         try:
-            resp = _put(base, "/limits", body)
-            if "limit" in resp:
+            resp = _put(base, _LIMIT_ENDPOINTS[limit["kind"]], _limit_body(limit))
+            if resp_key in resp:
                 print(f"  [+] {label}")
-                policies_created += 1
+                limits_created += 1
             else:
-                msg = f"put policy {label}: {resp}"
+                msg = f"put limit {label}: {resp}"
                 print(f"  [!] {msg}", file=sys.stderr)
                 errors.append(msg)
         except Exception as exc:
-            msg = f"put policy {label}: {exc}"
+            msg = f"put limit {label}: {exc}"
             print(f"  [!] {msg}", file=sys.stderr)
             errors.append(msg)
 
     # --- Orders + execution reports ------------------------------------------
     print("\n=== Orders ===")
+    try:
+        existing_orders = _existing_order_keys(base)
+    except Exception as exc:
+        existing_orders = set()
+        msg = f"list orders: {exc}"
+        print(f"  [!] {msg}", file=sys.stderr)
+        errors.append(msg)
     for order_def in ORDERS:
         acct_id = order_def["account"]
+        instrument = f"{order_def['baseAsset']}/{order_def['quoteAsset']}"
+        if _order_key(order_def) in existing_orders:
+            print(f"  [=] order {instrument} for '{acct_id}' already exists")
+            continue
 
-        body: dict[str, Any] = {
+        body = {
             "account": acct_id,
             "baseAsset": order_def["baseAsset"],
             "quoteAsset": order_def["quoteAsset"],
@@ -558,9 +975,8 @@ def seed(base: str) -> None:
 
         resp = _post(base, "/orders", body, conflict_ok=False)
         order = resp.get("order", {})
-        order_id = order.get("id")
+        order_id = order.get("externalId")
         status = order.get("status", "?")
-        instrument = f"{order_def['baseAsset']}/{order_def['quoteAsset']}"
 
         if order_id is None:
             msg = f"submit order {instrument} for '{acct_id}': {resp}"
@@ -568,41 +984,79 @@ def seed(base: str) -> None:
             errors.append(msg)
             continue
 
-        print(f"  [+] order #{order_id}  {instrument}  {order_def['side']}  status={status}")
+        print(f"  [+] order {order_id}  {instrument}  {order_def['side']}  status={status}")
         orders_submitted += 1
 
-        # lockPrices[0] is the price the engine locked funds at.
-        lock_prices: list[str] = order.get("lockPrices", [])
-        lock_price: str | None = lock_prices[0] if lock_prices else None
+        if status == "rejected":
+            if order_def.get("execution_reports"):
+                print("      fills skipped: order rejected")
+            continue
 
-        for er in order_def.get("execution_reports", []):
+        # The settlement-leg lock price is the LAST entry of displayPrices; it is
+        # the price the engine locked the reservation at and what a fill settles to.
+        display_prices: list[str] = order.get("displayPrices", [])
+        lock_price: str | None = display_prices[-1] if display_prices else None
+
+        fills = order_def.get("execution_reports", [])
+        # leavesQuantity is base-unit remaining; we can only derive it for a
+        # quantity-kind order. A volume order with fills would need a per-fill
+        # base size the seed does not carry, so it is a defect, not demo data.
+        if fills and order_def["amountKind"] != "quantity":
+            msg = (
+                f"order {instrument} for '{acct_id}': cannot derive base-unit "
+                f"leavesQuantity for amountKind={order_def['amountKind']}"
+            )
+            print(f"  [!] {msg}", file=sys.stderr)
+            errors.append(msg)
+            continue
+
+        order_url_id = urllib.parse.quote(order_id, safe="")
+        order_quantity = Decimal(order_def["amountValue"])
+        cumulative_filled = Decimal(0)
+        for er in fills:
+            cumulative_filled += Decimal(er["quantity"])
+            leaves = order_quantity - cumulative_filled
             er_body: dict[str, Any] = {
                 "quantity": er["quantity"],
                 "price": er["price"],
+                "leavesQuantity": str(leaves),
                 "final": er["final"],
             }
             if lock_price is not None:
                 er_body["lockPrice"] = lock_price
 
-            er_resp = _post(base, f"/orders/{order_id}/execution-reports", er_body, conflict_ok=False)
+            er_resp = _post(
+                base, f"/orders/{order_url_id}/execution-reports", er_body, conflict_ok=False
+            )
             result = er_resp.get("result", {})
             blocks = result.get("blocks", [])
             outcomes = result.get("outcomes", [])
+            # A normal fill must settle without blocking the account; a block here
+            # means the fill itself was rejected, which is a real defect.
+            if blocks:
+                reasons = ", ".join(b.get("reason", b.get("code", "?")) for b in blocks)
+                msg = (
+                    f"order {instrument} for '{acct_id}': fill qty={er['quantity']} "
+                    f"blocked the account: {reasons}"
+                )
+                print(f"  [!] {msg}", file=sys.stderr)
+                errors.append(msg)
+                continue
             final_tag = " [final]" if er["final"] else ""
-            block_tag = f" BLOCKS={len(blocks)}" if blocks else ""
             print(
                 f"      fill qty={er['quantity']} px={er['price']}"
-                f" outcomes={len(outcomes)}{block_tag}{final_tag}"
+                f" leaves={leaves} outcomes={len(outcomes)}{final_tag}"
             )
             trades_created += 1
 
     # --- Summary --------------------------------------------------------------
     print("\n=== Seed complete ===")
-    print(f"  Groups   created : {groups_created}")
-    print(f"  Accounts created : {accounts_created}")
-    print(f"  Policies created : {policies_created}")
-    print(f"  Orders submitted : {orders_submitted}")
-    print(f"  Fills posted     : {trades_created}")
+    print(f"  Assets   created               : {assets_created}")
+    print(f"  Groups   created               : {groups_created}")
+    print(f"  Accounts created               : {accounts_created}")
+    print(f"  Limits   created               : {limits_created}")
+    print(f"  Orders submitted               : {orders_submitted}")
+    print(f"  Fills posted                   : {trades_created}")
     if errors:
         print(f"\n  Errors ({len(errors)}):")
         for e in errors:

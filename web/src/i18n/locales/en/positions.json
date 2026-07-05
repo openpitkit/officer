@@ -20,8 +20,18 @@
     "history": "History"
   },
   "filters": {
+    "advancedDescription": "Set secondary position and adjustment-history filters. The list refreshes from the server with the active filter set.",
     "byAccount": "Filter by account",
-    "byAsset": "Filter by asset"
+    "byGroup": "Filter by group",
+    "byAsset": "Filter by asset",
+    "range": {
+      "all": "All",
+      "greater_than": "Greater than",
+      "less_than": "Less than",
+      "between": "Between",
+      "min": "Min",
+      "max": "Max"
+    }
   },
   "balances": {
     "sectionLabel": "Balances",
@@ -36,6 +46,17 @@
       "updated": "Updated",
       "adjust": "Adjustment"
     },
+    "columnDescriptions": {
+      "account": "This column shows the account that owns the balance row.",
+      "asset": "This column shows the asset held by the account.",
+      "available": "This column shows the immediately available balance.",
+      "held": "This column shows the balance currently reserved by pending activity.",
+      "incoming": "This column shows incoming balance that has not settled into availability yet.",
+      "avgEntryPrice": "This column shows the average entry price stored for the balance.",
+      "realizedPnl": "This column shows realized profit and loss recorded for the balance.",
+      "updated": "This column shows when the balance row was last updated.",
+      "adjust": "This column contains the row action for opening a position adjustment."
+    },
     "empty": {
       "title": "No balances",
       "hint": "Use Adjust to seed spot-funds balances for an account and asset."
@@ -46,6 +67,7 @@
     "applyWithLimits": "Apply with limits",
     "amountPlaceholder": "amount",
     "newRowHint": "New row",
+    "newPosition": "New position",
     "amountAriaLabel": "Adjustment amount for {{account}} {{asset}}",
     "applyAriaLabel": "Apply adjustment to {{account}} {{asset}}",
     "applyWithLimitsAriaLabel": "Apply adjustment with limits to {{account}} {{asset}}",
@@ -89,7 +111,18 @@
       "source": "Source",
       "request": "Request",
       "status": "Status",
-      "outcome": "Outcome"
+      "outcome": "Outcome",
+      "externalId": "ID"
+    },
+    "columnDescriptions": {
+      "time": "This column shows when the adjustment request was recorded.",
+      "account": "This column shows the account targeted by the adjustment.",
+      "asset": "This column shows the asset targeted by the adjustment.",
+      "source": "This column shows whether the adjustment came from the panel, REST, MCP, or another source.",
+      "request": "This column shows the requested balance, held, incoming, or average-price change.",
+      "status": "This column shows whether the adjustment was accepted or rejected.",
+      "outcome": "This column shows the stored result or rejection summary.",
+      "externalId": "This column shows the immutable adjustment ID."
     },
     "empty": {
       "title": "No adjustments",

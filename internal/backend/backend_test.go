@@ -47,16 +47,20 @@ import (
 // touches an engine or a store, so the backend validation/routing tests run in
 // isolation.
 type fakeNode struct {
-	version  string
-	accounts []domain.Account
-	limits   node.AccountLimits
-	audit    []domain.AuditRow
+	version      string
+	accounts     []domain.Account
+	assets       []domain.Asset
+	assetClasses []domain.AssetClass
+	limits       node.AccountLimits
+	audit        []domain.AuditRow
 
 	putRateLimitCalls      []domain.LimitRate
 	putOrderSizeLimitCalls []domain.LimitOrderSize
 	putPnlBoundsLimitCalls []domain.LimitPnlBounds
 	deleteLimitCalls       []node.LimitTarget
-	createCalls            []node.Key
+	createAssetCalls       []domain.Asset
+	createAssetClassCalls  []domain.AssetClass
+	createCalls            []domain.Account
 	blockCalls             []blockCall
 	positionSnapshots      []domain.Balance
 	adjustmentExternalIDs  []domain.ExternalID
@@ -83,6 +87,7 @@ type fakeNode struct {
 	resetCaller          domain.Caller
 	resetSink            marketdata.Sink
 	resetErr             error
+	currentSink          marketdata.Sink
 	orders               map[domain.ExternalID]domain.Order
 	approvals            map[domain.ExternalID]domain.OrderApproval
 	nextOrderSeq         byte
@@ -101,6 +106,15 @@ type fakeNode struct {
 	auditCalls           []store.AuditEntry
 
 	getAccountErr error
+
+	// Canned list pages and the last filter each list method saw, so a multi-node
+	// merge test can assert global ordering, summed totals and per-node paging.
+	orderRowsPage     store.OrderListPage
+	balanceRowsPage   store.BalanceListPage
+	policyRowsPage    store.PolicyListPage
+	lastOrderFilter   store.OrderListFilter
+	lastBalanceFilter store.BalanceListFilter
+	lastPolicyFilter  store.PolicyListFilter
 
 	// getOrderCount counts GetOrder invocations; the order-resolving flows must
 	// fetch the stored order at most once per operation.
@@ -138,6 +152,16 @@ func (n *fakeNode) ListAccounts(context.Context) ([]domain.Account, error) {
 	return n.accounts, nil
 }
 
+func (n *fakeNode) ListAccountRows(
+	_ context.Context, _ store.AccountListFilter,
+) (store.AccountListPage, error) {
+	out := make([]store.AccountListRow, 0, len(n.accounts))
+	for _, account := range n.accounts {
+		out = append(out, store.AccountListRow{Account: account})
+	}
+	return store.AccountListPage{Rows: out, Total: len(out)}, nil
+}
+
 func (n *fakeNode) ExportBackup(
 	_ context.Context,
 	scope backup.Scope,
@@ -170,11 +194,103 @@ func (n *fakeNode) ResetDatabase(
 	return n.resetSink, n.resetErr
 }
 
+func (n *fakeNode) CurrentMarketDataSink() marketdata.Sink {
+	return n.currentSink
+}
+
+func (n *fakeNode) ListAssets(context.Context) ([]domain.Asset, error) {
+	return n.assets, nil
+}
+
+func (n *fakeNode) ListAssetRows(
+	_ context.Context, _ store.AssetListFilter,
+) (store.AssetListPage, error) {
+	return store.AssetListPage{Rows: n.assets, Total: len(n.assets)}, nil
+}
+
+func (n *fakeNode) CreateAsset(
+	_ context.Context, asset domain.Asset, _ domain.Caller,
+) (domain.Asset, error) {
+	n.createAssetCalls = append(n.createAssetCalls, asset)
+	n.assets = append(n.assets, asset)
+	return asset, nil
+}
+
+func (n *fakeNode) UpdateAsset(
+	_ context.Context, oldCode string, asset domain.Asset, _ domain.Caller,
+) (domain.Asset, error) {
+	for i, a := range n.assets {
+		if a.Code == oldCode {
+			n.assets[i] = asset
+			return asset, nil
+		}
+	}
+	return domain.Asset{}, domain.ErrNotFound
+}
+
+func (n *fakeNode) ListAssetClasses(_ context.Context) ([]domain.AssetClass, error) {
+	return n.assetClasses, nil
+}
+
+func (n *fakeNode) ListAssetClassRows(
+	_ context.Context, _ store.AssetClassListFilter,
+) (store.AssetClassListPage, error) {
+	out := make([]store.AssetClassListRow, 0, len(n.assetClasses))
+	for _, class := range n.assetClasses {
+		out = append(out, store.AssetClassListRow{Class: class})
+	}
+	return store.AssetClassListPage{Rows: out, Total: len(out)}, nil
+}
+
+func (n *fakeNode) CreateAssetClass(
+	_ context.Context, class domain.AssetClass, _ domain.Caller,
+) (domain.AssetClass, error) {
+	n.createAssetClassCalls = append(n.createAssetClassCalls, class)
+	n.assetClasses = append(n.assetClasses, class)
+	return class, nil
+}
+
+func (n *fakeNode) UpdateAssetClass(
+	_ context.Context, oldCode string, class domain.AssetClass, _ domain.Caller,
+) (domain.AssetClass, error) {
+	for i, c := range n.assetClasses {
+		if c.Code == oldCode {
+			n.assetClasses[i] = class
+			return class, nil
+		}
+	}
+	return domain.AssetClass{}, domain.ErrNotFound
+}
+
+func (n *fakeNode) DeleteAssetClass(
+	_ context.Context, code string, _ bool, _ domain.Caller,
+) error {
+	for i, c := range n.assetClasses {
+		if c.Code == code {
+			n.assetClasses = append(n.assetClasses[:i], n.assetClasses[i+1:]...)
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+
+func (n *fakeNode) DeleteAsset(
+	_ context.Context, code string, _ bool, _ domain.Caller,
+) error {
+	for i, a := range n.assets {
+		if a.Code == code {
+			n.assets = append(n.assets[:i], n.assets[i+1:]...)
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+
 func (n *fakeNode) CreateAccount(
-	_ context.Context, key node.Key, _ domain.Caller,
+	_ context.Context, account domain.Account, _ domain.Caller,
 ) (domain.Account, error) {
-	n.createCalls = append(n.createCalls, key)
-	account := domain.Account{Code: key.Account, EngineAccountID: 1}
+	n.createCalls = append(n.createCalls, account)
+	account.EngineAccountID = 1
 	n.accounts = append(n.accounts, account)
 	return account, nil
 }
@@ -199,6 +315,13 @@ func (n *fakeNode) ListLimits(
 	context.Context, domain.AccountID,
 ) (node.AccountLimits, error) {
 	return n.limits, nil
+}
+
+func (n *fakeNode) ListPolicyRows(
+	_ context.Context, filter store.PolicyListFilter,
+) (store.PolicyListPage, error) {
+	n.lastPolicyFilter = filter
+	return n.policyRowsPage, nil
 }
 
 func (n *fakeNode) PutRateLimit(
@@ -241,6 +364,15 @@ func (n *fakeNode) SetAccountNotes(
 	return nil
 }
 
+func (n *fakeNode) UpdateAccount(
+	_ context.Context,
+	_ node.Key,
+	account domain.Account,
+	_ domain.Caller,
+) (domain.Account, error) {
+	return account, nil
+}
+
 func (n *fakeNode) DeleteAccount(
 	context.Context, node.Key, bool, domain.Caller,
 ) error {
@@ -258,6 +390,12 @@ func (n *fakeNode) ListGroups(context.Context) ([]domain.AccountGroup, error) {
 	return nil, nil
 }
 
+func (n *fakeNode) ListGroupRows(
+	context.Context, store.GroupListFilter,
+) (store.GroupListPage, error) {
+	return store.GroupListPage{}, nil
+}
+
 func (n *fakeNode) GetGroup(
 	context.Context, string,
 ) (domain.AccountGroup, []domain.Account, bool, error) {
@@ -268,6 +406,15 @@ func (n *fakeNode) SetGroupNotes(
 	context.Context, string, string, domain.Caller,
 ) error {
 	return nil
+}
+
+func (n *fakeNode) UpdateGroup(
+	_ context.Context,
+	_ string,
+	group domain.AccountGroup,
+	_ domain.Caller,
+) (domain.AccountGroup, error) {
+	return group, nil
 }
 
 func (n *fakeNode) SetGroupBlocked(
@@ -287,9 +434,7 @@ func (n *fakeNode) ApplyBusinessCSVImport(
 ) error {
 	for _, row := range in.Accounts {
 		if !row.Exists {
-			n.createCalls = append(n.createCalls, node.Key{
-				Account: row.Account.Code,
-			})
+			n.createCalls = append(n.createCalls, row.Account)
 		}
 		found := false
 		for i, account := range n.accounts {
@@ -343,6 +488,13 @@ func (n *fakeNode) ListBalances(
 	context.Context, domain.AccountID, string,
 ) ([]domain.Balance, error) {
 	return nil, nil
+}
+
+func (n *fakeNode) ListBalanceRows(
+	_ context.Context, filter store.BalanceListFilter,
+) (store.BalanceListPage, error) {
+	n.lastBalanceFilter = filter
+	return n.balanceRowsPage, nil
 }
 
 func (n *fakeNode) GetBalance(
@@ -521,6 +673,13 @@ func (n *fakeNode) ListOrders(
 	context.Context, domain.AccountID, domain.Source, int,
 ) ([]domain.Order, error) {
 	return nil, nil
+}
+
+func (n *fakeNode) ListOrderRows(
+	_ context.Context, filter store.OrderListFilter,
+) (store.OrderListPage, error) {
+	n.lastOrderFilter = filter
+	return n.orderRowsPage, nil
 }
 
 func (n *fakeNode) ListAllOrders(
@@ -1010,6 +1169,55 @@ func TestService_ResetDatabaseNodeError(t *testing.T) {
 	}
 }
 
+// TestService_RestartMarketDataReadoptsCurrentSink proves the welcome-flow fix:
+// an engine rebuild (account/group create) replaces the engine's market-data
+// service, so a restart must re-adopt the node's current sink instead of reusing
+// a cached one that now points at a closed service ("market-data service is
+// null"). The fake node reports a fresh current sink; RestartMarketData must
+// stop the runtime, UseSink that sink, and restart.
+func TestService_RestartMarketDataReadoptsCurrentSink(t *testing.T) {
+	t.Parallel()
+	md := &fakeMarketDataRuntime{}
+	svc, fn := newTestServiceWithMarketDataRuntime(md)
+	// Simulate the post-rebuild engine handing back a new sink.
+	current := &backendTestSink{}
+	fn.currentSink = current
+
+	if err := svc.RestartMarketData(context.Background()); err != nil {
+		t.Fatalf("RestartMarketData: %v", err)
+	}
+	if md.stops != 1 || md.restarts != 1 {
+		t.Fatalf("market-data stops/restarts = %d/%d, want 1/1",
+			md.stops, md.restarts)
+	}
+	if md.sink != current {
+		t.Fatalf("market-data sink = %#v, want current engine sink", md.sink)
+	}
+}
+
+// TestService_RestartMarketDataNoRuntimeIsNoop confirms a control-plane with no
+// market-data runtime (e.g. MCP-only) treats restart as a clean no-op without
+// routing to a node.
+func TestService_RestartMarketDataNoRuntimeIsNoop(t *testing.T) {
+	t.Parallel()
+	svc, _ := newTestService()
+	if err := svc.RestartMarketData(context.Background()); err != nil {
+		t.Fatalf("RestartMarketData with no runtime: %v", err)
+	}
+}
+
+// TestService_RestartMarketDataRouteError surfaces a routing failure so the
+// restart trigger cannot silently skip re-adopting the sink.
+func TestService_RestartMarketDataRouteError(t *testing.T) {
+	t.Parallel()
+	routeErr := errors.New("route failed")
+	md := &fakeMarketDataRuntime{}
+	svc := backend.New(&fakeRouter{routeErr: routeErr}, md, nil)
+	if err := svc.RestartMarketData(context.Background()); !errors.Is(err, routeErr) {
+		t.Fatalf("RestartMarketData error = %v, want route error", err)
+	}
+}
+
 func TestService_RestoreBackupGeneralSettingsDoesNotStopMarketData(t *testing.T) {
 	t.Parallel()
 	md := &fakeMarketDataRuntime{}
@@ -1122,18 +1330,120 @@ func TestService_CreateAccountValidates(t *testing.T) {
 	svc, fn := newTestService()
 	ctx := context.Background()
 
-	if _, err := svc.CreateAccount(ctx, ""); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := svc.CreateAccount(ctx, domain.Account{}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid for empty id, got %v", err)
 	}
 	if len(fn.createCalls) != 0 {
 		t.Fatalf("invalid input must not reach the node")
 	}
 
-	if _, err := svc.CreateAccount(ctx, "acc-1"); err != nil {
+	if _, err := svc.CreateAccount(ctx, domain.Account{
+		Code:  "acc-1",
+		Title: "Account One",
+	}); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 	if len(fn.createCalls) != 1 {
 		t.Fatalf("valid create must route to node")
+	}
+	if fn.createCalls[0].Title != "Account One" {
+		t.Fatalf("account title = %q", fn.createCalls[0].Title)
+	}
+}
+
+func TestService_CreateAssetValidatesAndRoutes(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService()
+	ctx := context.Background()
+
+	if _, err := svc.CreateAsset(ctx, domain.Asset{}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("want ErrInvalid for empty asset code, got %v", err)
+	}
+	if len(fn.createAssetCalls) != 0 {
+		t.Fatalf("invalid input must not reach the node")
+	}
+
+	created, err := svc.CreateAsset(ctx, domain.Asset{
+		Code:       "AAPL",
+		Title:      "Apple Inc.",
+		AssetClass: "equity",
+	})
+	if err != nil {
+		t.Fatalf("CreateAsset: %v", err)
+	}
+	if created.Code != "AAPL" || created.Title != "Apple Inc." ||
+		created.AssetClass != "equity" {
+		t.Fatalf("created asset = %+v", created)
+	}
+	if len(fn.createAssetCalls) != 1 {
+		t.Fatalf("valid create must route to node")
+	}
+}
+
+func TestService_CreateAssetClassValidatesAndRoutes(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService()
+	ctx := context.Background()
+
+	if _, err := svc.CreateAssetClass(ctx, domain.AssetClass{}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("want ErrInvalid for empty class code, got %v", err)
+	}
+	if len(fn.createAssetClassCalls) != 0 {
+		t.Fatalf("invalid input must not reach the node")
+	}
+
+	created, err := svc.CreateAssetClass(ctx, domain.AssetClass{
+		Code:  "equity",
+		Title: "Equity",
+		Notes: "listed shares",
+	})
+	if err != nil {
+		t.Fatalf("CreateAssetClass: %v", err)
+	}
+	if created.Code != "equity" || created.Title != "Equity" || created.Notes != "listed shares" {
+		t.Fatalf("created class = %+v", created)
+	}
+	if len(fn.createAssetClassCalls) != 1 {
+		t.Fatalf("valid create must route to node")
+	}
+}
+
+func TestService_UpdateAssetClassValidatesAndRoutes(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService()
+	ctx := context.Background()
+	fn.assetClasses = []domain.AssetClass{{Code: "equity"}}
+
+	if _, err := svc.UpdateAssetClass(ctx, "equity", domain.AssetClass{Code: ""}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("want ErrInvalid for empty new code, got %v", err)
+	}
+	updated, err := svc.UpdateAssetClass(ctx, "equity", domain.AssetClass{Code: "stock", Title: "Stock"})
+	if err != nil {
+		t.Fatalf("UpdateAssetClass: %v", err)
+	}
+	if updated.Code != "stock" || updated.Title != "Stock" {
+		t.Fatalf("updated class = %+v", updated)
+	}
+}
+
+func TestService_UpdateAssetRenames(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService()
+	ctx := context.Background()
+	fn.assets = []domain.Asset{{Code: "AAPL", Title: "Apple"}}
+
+	if _, err := svc.UpdateAsset(ctx, "AAPL", domain.Asset{Code: ""}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("want ErrInvalid for empty new code, got %v", err)
+	}
+	updated, err := svc.UpdateAsset(ctx, "AAPL", domain.Asset{Code: "AAPL.US", Title: "Apple Inc."})
+	if err != nil {
+		t.Fatalf("UpdateAsset: %v", err)
+	}
+	if updated.Code != "AAPL.US" || updated.Title != "Apple Inc." {
+		t.Fatalf("updated asset = %+v", updated)
+	}
+	if fn.assets[0].Code != "AAPL.US" {
+		t.Fatalf("node asset after rename = %+v", fn.assets[0])
 	}
 }
 
@@ -2267,7 +2577,7 @@ func TestService_BusinessCSVImportStopKeepsPreviousRowsAndAudits(t *testing.T) {
 	}
 	if result.Counts.Applied != 1 || result.Counts.Conflicts != 1 ||
 		!result.Counts.Stopped || len(fn.createCalls) != 1 ||
-		fn.createCalls[0].Account != "acc-new" {
+		fn.createCalls[0].Code != "acc-new" {
 		t.Fatalf("result=%+v createCalls=%+v", result.Counts, fn.createCalls)
 	}
 	if len(fn.auditCalls) != 1 ||

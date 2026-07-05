@@ -13,6 +13,63 @@
       "rowCount": "每页 {{count}} 行"
     }
   },
+  "filters": {
+    "find": "查找",
+    "clearField": "清空字段",
+    "maskHelp": "使用 * 作为通配符。例如，desk-* 会匹配 desk-alpha 和 desk-risk；如需更严格的匹配，请选择开头、结尾或精确匹配。",
+    "match": {
+      "codeAriaLabel": "代码匹配模式",
+      "notesAriaLabel": "备注匹配模式",
+      "blockReasonAriaLabel": "封锁原因匹配模式",
+      "contains": "包含",
+      "startsWith": "开头匹配",
+      "endsWith": "结尾匹配",
+      "exact": "精确匹配"
+    },
+    "status": {
+      "ariaLabel": "状态筛选",
+      "all": "全部状态",
+      "active": "活跃",
+      "blocked": "已封锁"
+    },
+    "positionCount": {
+      "ariaLabel": "持仓数量筛选",
+      "all": "全部持仓",
+      "greaterThan": "大于",
+      "lessThan": "小于",
+      "between": "从-到"
+    },
+    "accountCount": {
+      "ariaLabel": "账户数量筛选",
+      "all": "全部账户",
+      "hasAccounts": "有账户",
+      "noAccounts": "无账户"
+    },
+    "advanced": {
+      "trigger": "更多筛选",
+      "title": "按字段查找",
+      "applied": "已应用：",
+      "positionLabel": "持仓数量",
+      "accountLabel": "账户数量",
+      "positionFrom": "从",
+      "positionTo": "到",
+      "positionValue": "值",
+      "notesLabel": "备注",
+      "blockReasonLabel": "封锁原因",
+      "notesShort": "备注",
+      "blockReasonShort": "原因",
+      "cancel": "取消",
+      "summary": {
+        "positionGreater": "持仓 > {{value}}",
+        "positionLess": "持仓 < {{value}}",
+        "positionBetween": "持仓 {{min}}-{{max}}",
+        "accountGreater": "账户 > {{value}}",
+        "accountLess": "账户 < {{value}}",
+        "accountBetween": "账户 {{min}}-{{max}}",
+        "text": "{{field}}：{{match}} {{value}}"
+      }
+    }
+  },
   "groups": {
     "heading": "分组",
     "clearFilter": "（清除筛选）",
@@ -21,17 +78,37 @@
     "columns": {
       "group": "分组",
       "accounts": "账户",
+      "positions": "持仓",
       "status": "状态",
       "notes": "备注",
       "actions": "操作"
+    },
+    "columnDescriptions": {
+      "group": "此列显示账户组代码及其显示名称。",
+      "accounts": "此列显示属于该分组的账户数量。",
+      "positions": "此列显示属于该分组的持仓行数量。",
+      "status": "此列显示该分组处于活跃还是封锁状态。",
+      "notes": "此列显示为该分组保存的操作员备注。",
+      "actions": "此列包含用于筛选、分享链接和删除分组的行操作。"
     },
     "status": {
       "blocked": "已封锁",
       "active": "活跃"
     },
+    "filters": {
+      "codeLabel": "搜索分组",
+      "codePlaceholder": "搜索分组代码或名称",
+      "notesLabel": "搜索分组备注",
+      "notesPlaceholder": "搜索分组备注",
+      "blockReasonPlaceholder": "搜索分组封锁原因",
+      "advancedDescription": "搜索分组备注、封锁原因和持仓数量。这些筛选会与代码、状态和账户数量一起生效。"
+    },
     "actions": {
       "notes": "备注",
+      "editTitle": "编辑分组",
       "editNotesTitle": "编辑备注",
+      "positionsTitle": "打开按此分组筛选的持仓",
+      "viewBlockDetails": "查看封锁详情",
       "block": "封锁",
       "unblock": "解封",
       "delete": "删除",
@@ -40,22 +117,42 @@
   },
   "accounts": {
     "heading": "账户",
+    "clearFilter": "（清除筛选）",
     "filteredTo": "— 筛选至",
     "filteredToDefault": "默认分组",
     "columns": {
       "account": "账户",
       "group": "分组",
+      "positions": "持仓",
       "status": "状态",
       "notes": "备注",
       "actions": "操作"
+    },
+    "columnDescriptions": {
+      "account": "此列显示账户代码及其显示名称。",
+      "group": "此列显示分配给该账户的账户组。",
+      "positions": "此列显示为该账户存储的持仓行数量。",
+      "status": "此列显示该账户处于活跃还是封锁状态。",
+      "notes": "此列显示为该账户保存的操作员备注。",
+      "actions": "此列包含用于持仓、交易、策略、审计和删除的行操作。"
     },
     "status": {
       "blocked": "已封锁",
       "active": "活跃"
     },
+    "filters": {
+      "codeLabel": "搜索账户",
+      "codePlaceholder": "搜索账户代码或名称",
+      "groupLabel": "按分组搜索",
+      "groupPlaceholder": "搜索分组代码或名称",
+      "notesLabel": "搜索账户备注",
+      "notesPlaceholder": "搜索账户备注",
+      "blockReasonPlaceholder": "搜索账户封锁原因",
+      "advancedDescription": "搜索账户封锁原因和持仓数量。这些筛选会与代码、状态和选中分组一起生效。"
+    },
     "groupCell": {
-      "title": "分组 — 点击更改",
-      "titleNoGroups": "分组 — 点击更改（暂无分组）",
+      "editTitle": "编辑分组分配",
+      "filterTitle": "按此分组筛选账户",
       "noGroup": "无"
     },
     "links": {
@@ -66,7 +163,10 @@
     },
     "actions": {
       "notes": "备注",
+      "editTitle": "编辑账户",
       "editNotesTitle": "编辑参考备注",
+      "positionsTitle": "打开按此账户筛选的持仓",
+      "viewBlockDetails": "查看封锁详情",
       "block": "封锁",
       "unblock": "解封",
       "deleteTitle": "删除账户"
@@ -92,7 +192,7 @@
     "trigger": "新建分组",
     "title": "创建分组",
     "codeLabel": "分组代码",
-    "titleLabel": "显示名称",
+    "titleLabel": "显示名称（可选）",
     "titlePlaceholder": "美国股票交易组",
     "notesLabel": "备注（可选）",
     "notesPlaceholder": "归属于美国股票交易台的账户。",
@@ -162,6 +262,21 @@
     "cancel": "取消",
     "submit": "解封"
   },
+  "blockDetails": {
+    "accountTitle": "已封锁账户",
+    "groupTitle": "已封锁分组",
+    "description": "完整封锁原因以及最接近此次封锁的审计记录。",
+    "reason": "原因",
+    "noReason": "未记录原因。",
+    "audit": "审计",
+    "auditLoading": "正在加载审计记录…",
+    "noAudit": "未找到审计记录。",
+    "noAuditDetail": "未记录详情。",
+    "actor": "操作员：",
+    "close": "关闭",
+    "openAudit": "打开审计",
+    "unblock": "解封"
+  },
   "deleteGroup": {
     "title": "删除分组？",
     "descriptionPrefix": "分组",
@@ -189,6 +304,22 @@
     "cancel": "取消",
     "submit": "删除",
     "forceSubmit": "强制删除"
+  },
+  "editGroup": {
+    "titlePrefix": "编辑分组",
+    "description": "更新分组 ID 和显示标题。",
+    "codeLabel": "分组 ID",
+    "titleLabel": "显示标题（可选）",
+    "cancel": "取消",
+    "submit": "保存"
+  },
+  "editAccount": {
+    "titlePrefix": "编辑账户",
+    "description": "更新账户 ID 和显示标题。",
+    "codeLabel": "账户 ID",
+    "titleLabel": "显示标题（可选）",
+    "cancel": "取消",
+    "submit": "保存"
   },
   "editGroupNotes": {
     "titlePrefix": "备注 — 分组",

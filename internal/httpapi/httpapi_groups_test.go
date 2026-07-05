@@ -22,18 +22,28 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/store"
 )
 
 // --- GET /api/v1/groups (handleListGroups) ----------------------------------
 
 func TestListGroups(t *testing.T) {
 	svc := &fakeService{
-		groups: []domain.AccountGroup{
-			{Code: "grp-1", Notes: "team A", Blocked: false},
-			{Code: "grp-2", Notes: "team B", Blocked: true, BlockReason: "risk"},
+		groupRows: []store.GroupListRow{
+			{
+				Group:         domain.AccountGroup{Code: "grp-1", Notes: "team A"},
+				AccountCount:  2,
+				PositionCount: 3,
+			},
+			{
+				Group: domain.AccountGroup{
+					Code: "grp-2", Notes: "team B", Blocked: true, BlockReason: "risk",
+				},
+			},
 		},
 	}
 	r, err := newRouter(svc)
@@ -52,7 +62,10 @@ func TestListGroups(t *testing.T) {
 	}
 	// Verify the wire shape carries the camelCase contract keys.
 	first := groups[0].(map[string]any)
-	for _, field := range []string{"code", "title", "notes", "blockReason", "blocked"} {
+	for _, field := range []string{
+		"code", "title", "notes", "blockReason", "blocked",
+		"accountCount", "positionCount",
+	} {
 		if _, ok := first[field]; !ok {
 			t.Fatalf("group missing field %q", field)
 		}
@@ -60,10 +73,134 @@ func TestListGroups(t *testing.T) {
 	if first["code"] != "grp-1" || first["blocked"] != false {
 		t.Fatalf("unexpected first group: %v", first)
 	}
+	if first["accountCount"] != float64(2) || first["positionCount"] != float64(3) {
+		t.Fatalf("unexpected counts: %v", first)
+	}
 	assertNoSurrogateID(t, first)
 	second := groups[1].(map[string]any)
 	if second["blocked"] != true || second["blockReason"] != "risk" {
 		t.Fatalf("unexpected second group: %v", second)
+	}
+}
+
+func TestListGroups_PropagatesFilters(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/groups?code=desk*&codeMatch=ends_with&status=active"+
+			"&positionCountMode=less_than&positionCountMax=2&accountCount=has"+
+			"&notes=desk&notesMatch=contains&blockReason=halt&blockReasonMatch=contains",
+		nil,
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	if got := svc.groupFilter.Code.Fragments; !slices.Equal(got, []string{"desk", ""}) {
+		t.Fatalf("code fragments = %v", got)
+	}
+	if svc.groupFilter.Code.AnchorStart || !svc.groupFilter.Code.AnchorEnd {
+		t.Fatalf("code anchors = %+v, want end only", svc.groupFilter.Code)
+	}
+	if svc.groupFilter.Status != store.StatusFilterActive {
+		t.Fatalf("status filter = %q", svc.groupFilter.Status)
+	}
+	if svc.groupFilter.Position.Max == nil || *svc.groupFilter.Position.Max != 2 ||
+		!svc.groupFilter.Position.MaxExclusive {
+		t.Fatalf("position filter = %+v", svc.groupFilter.Position)
+	}
+	if svc.groupFilter.Account.Min == nil || *svc.groupFilter.Account.Min != 0 ||
+		!svc.groupFilter.Account.MinExclusive {
+		t.Fatalf("account filter = %+v", svc.groupFilter.Account)
+	}
+	if got := svc.groupFilter.BlockReason.Fragments; !slices.Equal(got, []string{"halt"}) {
+		t.Fatalf("block reason fragments = %v", got)
+	}
+}
+
+func TestListGroups_AccountCountRange(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/groups?accountCountMode=between&accountCountMin=1&accountCountMax=5",
+		nil,
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	got := svc.groupFilter.Account
+	if got.Min == nil || *got.Min != 1 || got.Max == nil || *got.Max != 5 ||
+		got.MinExclusive || got.MaxExclusive {
+		t.Fatalf("account count range = %+v, want [1, 5]", got)
+	}
+}
+
+func TestListGroups_TotalAndPaging(t *testing.T) {
+	svc := &fakeService{
+		groupRows: []store.GroupListRow{
+			{Group: domain.AccountGroup{Code: "grp-1"}},
+			{Group: domain.AccountGroup{Code: "grp-2"}},
+		},
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/groups?sort=accountCount&order=desc&limit=5&offset=10",
+		nil,
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	if m["total"] != float64(2) {
+		t.Fatalf("total = %v, want 2", m["total"])
+	}
+	if svc.groupFilter.Sort.Column != "accountCount" || !svc.groupFilter.Sort.Descending {
+		t.Fatalf("sort spec = %+v", svc.groupFilter.Sort)
+	}
+	if svc.groupFilter.Page.Limit != 5 || svc.groupFilter.Page.Offset != 10 {
+		t.Fatalf("page spec = %+v", svc.groupFilter.Page)
+	}
+}
+
+func TestListGroups_BadSort(t *testing.T) {
+	r, err := newRouter(&fakeService{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet, "/api/v1/groups?sort=unknown", nil,
+	))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+}
+
+func TestListGroups_BadLimit(t *testing.T) {
+	r, err := newRouter(&fakeService{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet, "/api/v1/groups?limit=-1", nil,
+	))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
 	}
 }
 

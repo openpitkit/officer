@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithApi as render } from "@/test/apiClient";
 import { I18nextProvider } from "react-i18next";
@@ -26,14 +26,16 @@ import type {
   Account,
   Adjustment,
   Balance,
+  BalanceListFilters,
   BusinessCsvEntity,
   BusinessCsvExportFilters,
   BusinessCsvImportEntity,
+  Group,
 } from "@/api/types";
 import type { PollingResult } from "@/api/usePolling";
 import { useAccounts } from "@/api/useAccounts";
-import { useAdjustments } from "@/api/useAdjustments";
-import { useBalances } from "@/api/useBalances";
+import { useAdjustmentsPage } from "@/api/useAdjustments";
+import { useBalancesPage } from "@/api/useBalances";
 import { SidebarProvider } from "@/components/SidebarContext";
 import i18n from "@/i18n";
 import { Positions } from "@/pages/Positions";
@@ -41,8 +43,8 @@ import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
 
 vi.mock("@/api/useAccounts", () => ({ useAccounts: vi.fn() }));
-vi.mock("@/api/useAdjustments", () => ({ useAdjustments: vi.fn() }));
-vi.mock("@/api/useBalances", () => ({ useBalances: vi.fn() }));
+vi.mock("@/api/useAdjustments", () => ({ useAdjustmentsPage: vi.fn() }));
+vi.mock("@/api/useBalances", () => ({ useBalancesPage: vi.fn() }));
 vi.mock("@/api/useMarketData", () => ({
   useMarketData: () => ({
     load: { state: "ready", data: { restartRequired: false }, error: null },
@@ -111,14 +113,23 @@ function ready<T>(data: T): PollingResult<T> {
   return { load: { state: "ready", data, error: null }, reload: vi.fn() };
 }
 
+function readyPage<T>(items: T[]): PollingResult<{ items: T[]; total: number }> {
+  return ready({ items, total: items.length });
+}
+
 const useAccountsMock = vi.mocked(useAccounts);
-const useAdjustmentsMock = vi.mocked(useAdjustments);
-const useBalancesMock = vi.mocked(useBalances);
+const useAdjustmentsMock = vi.mocked(useAdjustmentsPage);
+const useBalancesMock = vi.mocked(useBalancesPage);
 const createAdjustmentMock = vi.fn();
 const exportBusinessCsvMock = vi.fn();
 const fetchAdjustmentsMock = vi.fn();
 const importBusinessCsvMock = vi.fn();
 const previewBusinessCsvImportMock = vi.fn();
+
+function lastBalanceFilters(): BalanceListFilters | undefined {
+  const calls = useBalancesMock.mock.calls;
+  return calls[calls.length - 1]?.[0];
+}
 
 const proto = window.HTMLElement.prototype as HTMLElement & {
   hasPointerCapture?: (pointerId: number) => boolean;
@@ -146,6 +157,14 @@ const balance: Balance = {
   averageEntryPrice: "",
   realizedPnl: "0",
   updatedAt: "2026-06-24T16:41:52Z",
+};
+
+const group: Group = {
+  code: "equity-desks",
+  title: "Equity desks",
+  blocked: false,
+  blockReason: "",
+  notes: "",
 };
 
 function acceptedAdjustment(request: Adjustment["request"]): Adjustment {
@@ -188,7 +207,10 @@ function renderPositions(initialEntry = "/positions") {
       api: {
         createAdjustment: createAdjustmentMock,
         exportBusinessCsv: exportBusinessCsvMock,
-        fetchAdjustments: fetchAdjustmentsMock,
+        fetchAccounts: async () => [account],
+        fetchAdjustmentsPage: fetchAdjustmentsMock,
+        fetchAssets: async () => [{ code: balance.asset, title: balance.asset, assetClass: "" }],
+        fetchGroups: async () => [group],
         importBusinessCsv: importBusinessCsvMock,
         previewBusinessCsvImport: previewBusinessCsvImportMock,
       },
@@ -200,8 +222,8 @@ beforeEach(async () => {
   vi.clearAllMocks();
   await i18n.changeLanguage("en");
   useAccountsMock.mockReturnValue(ready<Account[]>([account]));
-  useAdjustmentsMock.mockReturnValue(ready<Adjustment[]>([]));
-  useBalancesMock.mockReturnValue(ready<Balance[]>([balance]));
+  useAdjustmentsMock.mockReturnValue(readyPage<Adjustment>([]));
+  useBalancesMock.mockReturnValue(readyPage<Balance>([balance]));
   createAdjustmentMock.mockImplementation(async (_account, body) =>
     acceptedAdjustment(body as unknown as Adjustment["request"]),
   );
@@ -209,7 +231,7 @@ beforeEach(async () => {
     blob: new Blob(["csv"]),
     filename: "positions.csv",
   });
-  fetchAdjustmentsMock.mockResolvedValue([]);
+  fetchAdjustmentsMock.mockResolvedValue({ items: [], total: 0 });
   previewBusinessCsvImportMock.mockResolvedValue({
     file: { name: "positions.csv", type: "csv" },
     counts: {
@@ -294,11 +316,92 @@ describe("Positions adjustment panel", () => {
     });
   });
 
+  it("keeps the entered values and allows resubmit after a successful submit", async () => {
+    const user = userEvent.setup();
+    renderPositions();
+
+    await user.click(
+      screen.getByRole("button", {
+        name: /open adjustment panel for bucks mcmoneyface aapl/i,
+      }),
+    );
+
+    const panel = screen.getByRole("region", { name: "Adjustment" });
+    const scope = within(panel);
+
+    await user.type(scope.getByLabelText("Available adjustment amount"), "600");
+    await user.click(scope.getByRole("button", { name: /submit adjustment/i }));
+
+    await waitFor(() => expect(createAdjustmentMock).toHaveBeenCalledTimes(1));
+
+    // The value stays put — no auto-reset — and the field is still editable.
+    const amount = scope.getByLabelText("Available adjustment amount");
+    expect(amount).toHaveValue("600");
+    expect(amount).not.toBeDisabled();
+
+    // The operator can tweak and submit again without reopening the panel.
+    const submit = scope.getByRole("button", { name: /submit adjustment/i });
+    expect(submit).toBeEnabled();
+    await user.click(submit);
+    await waitFor(() => expect(createAdjustmentMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("clears a single amount field with its inline reset control", async () => {
+    const user = userEvent.setup();
+    renderPositions();
+
+    await user.click(
+      screen.getByRole("button", {
+        name: /open adjustment panel for bucks mcmoneyface aapl/i,
+      }),
+    );
+
+    const scope = within(screen.getByRole("region", { name: "Adjustment" }));
+    const amount = scope.getByLabelText("Available adjustment amount");
+    await user.type(amount, "600");
+    expect(amount).toHaveValue("600");
+
+    // A ✕ reset appears while the field has a value; one click clears it.
+    const clears = scope.getAllByRole("button", { name: /clear field/i });
+    await user.click(clears[0]!);
+    expect(amount).toHaveValue("");
+  });
+
+  it("renders the draft row as a single spanning 'New position' cell without a copy button", async () => {
+    const user = userEvent.setup();
+    renderPositions();
+
+    const draftRow = screen
+      .getAllByRole("row")
+      .find((r) => r.textContent?.includes("New position"));
+    expect(draftRow).toBeDefined();
+    // The label lives in one spanning cell; the only control is the adjust edit.
+    const cells = within(draftRow!).getAllByRole("cell");
+    expect(cells).toHaveLength(2);
+    expect(
+      within(draftRow!).queryByRole("button", { name: /copy/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(draftRow!).getByRole("button", {
+        name: /open new adjustment panel/i,
+      }),
+    ).toBeInTheDocument();
+    await user.click(
+      within(draftRow!).getByRole("button", {
+        name: /open new adjustment panel/i,
+      }),
+    );
+    expect(
+      screen.getByRole("region", { name: "Adjustment" }),
+    ).toBeInTheDocument();
+  });
+
   it("opens the draft panel from the page action with current filters", async () => {
     const user = userEvent.setup();
     renderPositions("/positions?account=Bucks%20McMoneyface");
 
     await user.type(screen.getByLabelText("Filter by asset"), "AAPL");
+    await user.click(screen.getByRole("button", { name: /apply filters/i }));
     await user.click(screen.getByRole("button", { name: /^adjustment$/i }));
 
     expect(screen.getByLabelText("Account")).toHaveValue("Bucks McMoneyface");
@@ -307,12 +410,128 @@ describe("Positions adjustment panel", () => {
 });
 
 describe("Positions business CSV", () => {
-  it("exports positions with account and asset filters only", async () => {
+  it("applies advanced position filters only after apply", async () => {
+    const user = userEvent.setup();
+    renderPositions();
+
+    await user.click(screen.getByRole("button", { name: /more filters/i }));
+    const dialog = screen.getByRole("dialog", { name: /more filters/i });
+    await user.type(within(dialog).getAllByPlaceholderText("Value")[0], "10");
+
+    expect(lastBalanceFilters()).not.toEqual(
+      expect.objectContaining({ availableMin: "10" }),
+    );
+    expect(screen.queryByText(/active filters/i)).not.toBeInTheDocument();
+
+    await user.click(
+      within(dialog).getByRole("button", {
+        name: /apply advanced filter/i,
+      }),
+    );
+
+    await waitFor(() =>
+      expect(lastBalanceFilters()).toEqual(
+        expect.objectContaining({
+          availableMode: "eq",
+          availableMin: "10",
+        }),
+      ),
+    );
+    expect(screen.getByText(/active filters/i)).toBeInTheDocument();
+    expect(screen.getByText(/available: Equals 10/i)).toBeInTheDocument();
+  });
+
+  it("maps less-than position ranges to the max query bound", async () => {
+    renderPositions(
+      "/positions?availableMode=lt&availableMin=10&availableMax=99",
+    );
+
+    await waitFor(() =>
+      expect(lastBalanceFilters()).toEqual(
+        expect.objectContaining({
+          availableMode: "lt",
+          availableMax: "10",
+        }),
+      ),
+    );
+  });
+
+  it("keeps advanced position filters open when a numeric value is invalid", async () => {
+    const user = userEvent.setup();
+    renderPositions();
+
+    await user.click(screen.getByRole("button", { name: /more filters/i }));
+    const dialog = screen.getByRole("dialog", { name: /more filters/i });
+    const available = within(dialog).getAllByPlaceholderText("Value")[0];
+    await user.type(available, "word");
+
+    await user.click(
+      within(dialog).getByRole("button", {
+        name: /apply advanced filter/i,
+      }),
+    );
+
+    expect(screen.getByRole("dialog", { name: /more filters/i })).toBeInTheDocument();
+    expect(available).toBeInvalid();
+    expect(available).toHaveProperty("validationMessage", "Enter a valid number.");
+    expect(lastBalanceFilters()).not.toEqual(
+      expect.objectContaining({
+        availableMode: "eq",
+        availableMin: expect.any(String),
+      }),
+    );
+    expect(screen.queryByText(/active filters/i)).not.toBeInTheDocument();
+  });
+
+  it("suggests known groups while typing the group filter", async () => {
+    const user = userEvent.setup();
+    renderPositions();
+
+    await user.type(screen.getByLabelText("Filter by group"), "equ");
+
+    await user.click(
+      await screen.findByRole("option", { name: "equity-desks" }),
+    );
+    await waitFor(() =>
+      expect(lastBalanceFilters()).toEqual(
+        expect.objectContaining({ groupCode: "equity-desks" }),
+      ),
+    );
+    expect(screen.getByText(/active filters/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /clear all filters/i }));
+    expect(screen.getByLabelText("Filter by group")).toHaveValue("");
+    expect(screen.queryByText(/active filters/i)).not.toBeInTheDocument();
+  });
+
+  it("applies identity position filters when Enter is pressed", async () => {
     const user = userEvent.setup();
     renderPositions();
 
     await user.type(screen.getByLabelText("Filter by account"), "desk-alpha");
+    expect(lastBalanceFilters()).not.toEqual(
+      expect.objectContaining({ account: "desk-alpha" }),
+    );
+    await user.keyboard("{Enter}");
+
+    await waitFor(() =>
+      expect(lastBalanceFilters()).toEqual(
+        expect.objectContaining({ account: "desk-alpha" }),
+      ),
+    );
+    expect(screen.getByText(/active filters/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /clear all filters/i }));
+    expect(screen.getByLabelText("Filter by account")).toHaveValue("");
+    expect(screen.queryByText(/active filters/i)).not.toBeInTheDocument();
+  });
+
+  it("exports positions with account, group, and asset filters", async () => {
+    const user = userEvent.setup();
+    renderPositions();
+
+    await user.type(screen.getByLabelText("Filter by account"), "desk-alpha");
+    await user.type(screen.getByLabelText("Filter by group"), "equity-desks");
     await user.type(screen.getByLabelText("Filter by asset"), "AAPL");
+    await user.click(screen.getByRole("button", { name: /apply filters/i }));
     await user.click(screen.getByRole("button", { name: /export positions csv/i }));
     await user.click(screen.getByRole("button", { name: /^export$/i }));
 
@@ -323,6 +542,7 @@ describe("Positions business CSV", () => {
         filters: {
           account: "desk-alpha",
           asset: "AAPL",
+          groupCode: "equity-desks",
         },
       }),
     );
@@ -331,25 +551,23 @@ describe("Positions business CSV", () => {
   it("exports adjustment history with the selected source filter", async () => {
     const user = userEvent.setup();
     useAdjustmentsMock.mockReturnValue(
-      ready<Adjustment[]>([
+      readyPage<Adjustment>([
         acceptedAdjustment({
           asset: "AAPL",
           balance: { mode: "absolute", value: "10" },
         }),
       ]),
     );
-    renderPositions();
+    renderPositions("/positions?tab=history&source=mcp");
 
-    await user.click(screen.getByRole("button", { name: "History" }));
-    const sourceControl = screen.getAllByText("Source")[0]!.parentElement!;
-    await user.click(within(sourceControl).getByRole("combobox"));
-    await user.click(screen.getByRole("option", { name: "mcp" }));
     await user.click(screen.getByRole("button", { name: /export history csv/i }));
 
     await waitFor(() => expect(fetchAdjustmentsMock).toHaveBeenCalledTimes(1));
     expect(fetchAdjustmentsMock).toHaveBeenCalledWith({
       source: "mcp",
       limit: 1000,
+      account: undefined,
+      asset: undefined,
     });
   });
 
@@ -358,11 +576,11 @@ describe("Positions business CSV", () => {
     const balancesReload = vi.fn();
     const adjustmentsReload = vi.fn();
     useBalancesMock.mockReturnValue({
-      load: { state: "ready", data: [balance], error: null },
+      load: { state: "ready", data: { items: [balance], total: 1 }, error: null },
       reload: balancesReload,
     });
     useAdjustmentsMock.mockReturnValue({
-      load: { state: "ready", data: [], error: null },
+      load: { state: "ready", data: { items: [], total: 0 }, error: null },
       reload: adjustmentsReload,
     });
     renderPositions();
@@ -395,5 +613,181 @@ describe("Positions business CSV", () => {
     );
     expect(balancesReload).toHaveBeenCalledTimes(1);
     expect(adjustmentsReload).toHaveBeenCalledTimes(1);
+  });
+});
+
+/** Find the balance data row for the seeded account/asset by its text. */
+function balanceRow(): HTMLElement {
+  const row = screen
+    .getAllByRole("row")
+    .find(
+      (r) =>
+        r.textContent?.includes("Bucks McMoneyface") &&
+        r.textContent?.includes("AAPL"),
+    );
+  if (!row) {
+    throw new Error("balance row not found");
+  }
+  return row;
+}
+
+describe("Positions balance row asset cell", () => {
+  it("keeps the account copy button but drops it from the asset cell", () => {
+    renderPositions();
+
+    const row = balanceRow();
+    const scope = within(row);
+    // The account keeps its inline copy control; the asset cell no longer does.
+    const copyButtons = scope.getAllByRole("button", { name: /copy/i });
+    expect(copyButtons).toHaveLength(1);
+    // The asset filter action is still present.
+    expect(
+      scope.getByRole("button", { name: /filter by aapl/i }),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("Positions history row actions", () => {
+  it("keeps external id separate and filters history by row account or asset", async () => {
+    const user = userEvent.setup();
+    useAdjustmentsMock.mockReturnValue(
+      readyPage<Adjustment>([
+        acceptedAdjustment({
+          asset: "AAPL",
+          balance: { mode: "absolute", value: "10" },
+        }),
+      ]),
+    );
+    renderPositions("/positions?tab=history");
+
+    expect(
+      screen.getByRole("columnheader", { name: "ID" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("columnheader", { name: "Actions" }),
+    ).not.toBeInTheDocument();
+    const row = screen
+      .getAllByRole("row")
+      .find(
+        (candidate) =>
+          candidate.textContent?.includes("Bucks McMoneyface") &&
+          candidate.textContent?.includes("AAPL"),
+      );
+    expect(row).toBeDefined();
+    const scope = within(row as HTMLElement);
+
+    await user.click(
+      scope.getByRole("button", { name: /filter by bucks mcmoneyface/i }),
+    );
+    expect(screen.getByLabelText("Filter by account")).toHaveValue(
+      "Bucks McMoneyface",
+    );
+
+    await user.click(scope.getByRole("button", { name: /filter by aapl/i }));
+    expect(screen.getByLabelText("Filter by asset")).toHaveValue("AAPL");
+  });
+});
+
+describe("Positions row navigation to history", () => {
+  it("opens the history tab pre-filtered by the row account and asset", async () => {
+    const user = userEvent.setup();
+    renderPositions();
+
+    await user.click(balanceRow());
+
+    // History tab is now active: its source control (history-only) is shown.
+    expect(
+      await screen.findByText("Adjustment history"),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Filter by account")).toHaveValue(
+      "Bucks McMoneyface",
+    );
+    expect(screen.getByLabelText("Filter by asset")).toHaveValue("AAPL");
+  });
+
+  it("does not navigate when the adjust control is used", async () => {
+    const user = userEvent.setup();
+    renderPositions();
+
+    await user.click(
+      screen.getByRole("button", {
+        name: /open adjustment panel for bucks mcmoneyface aapl/i,
+      }),
+    );
+
+    // The adjust panel opens in place; the history view did not take over.
+    expect(
+      screen.getByRole("region", { name: "Adjustment" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Adjustment history")).not.toBeInTheDocument();
+  });
+});
+
+describe("Positions share filter set", () => {
+  it("copies a deep link that encodes the active filters", async () => {
+    const user = userEvent.setup();
+    // Install the spy after userEvent.setup so its own clipboard stub does not
+    // shadow it; the share button click uses fireEvent for the same reason.
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    renderPositions();
+
+    await user.type(screen.getByLabelText("Filter by account"), "desk-alpha");
+    await user.type(screen.getByLabelText("Filter by asset"), "AAPL");
+    await user.click(screen.getByRole("button", { name: /apply filters/i }));
+    // fireEvent (not userEvent) so the user-event clipboard stub does not
+    // shadow the writeText spy asserted below.
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /copy a link to the current filter set/i,
+      }),
+    );
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    const url = new URL(writeText.mock.calls[0][0]);
+    expect(url.pathname).toBe("/positions");
+    expect(url.searchParams.get("account")).toBe("desk-alpha");
+    expect(url.searchParams.get("asset")).toBe("AAPL");
+    expect(url.searchParams.get("sort")).toBe("account");
+    expect(url.searchParams.get("order")).toBe("asc");
+    // No non-default range or tab params leak into the clean link.
+    expect(url.searchParams.get("tab")).toBeNull();
+    expect(url.searchParams.get("availableMode")).toBeNull();
+  });
+
+  it("restores position sort from query params on mount", async () => {
+    renderPositions("/positions?sort=available&order=desc");
+
+    await waitFor(() =>
+      expect(lastBalanceFilters()).toEqual(
+        expect.objectContaining({ sort: "available", order: "desc" }),
+      ),
+    );
+  });
+
+  it("restores the filter set from query params on mount", async () => {
+    renderPositions(
+      "/positions?tab=history&account=desk-alpha&asset=AAPL&status=rejected&source=mcp&sort=status&order=asc",
+    );
+
+    // The history tab is active and its filters are seeded.
+    expect(screen.getByLabelText("Filter by account")).toHaveValue("desk-alpha");
+    expect(screen.getByLabelText("Filter by asset")).toHaveValue("AAPL");
+    await waitFor(() => {
+      const filter =
+        useAdjustmentsMock.mock.calls[
+          useAdjustmentsMock.mock.calls.length - 1
+        ]?.[0];
+      expect(filter).toMatchObject({
+        account: "desk-alpha",
+        order: "asc",
+        status: "rejected",
+        sort: "status",
+        source: "mcp",
+      });
+    });
   });
 });

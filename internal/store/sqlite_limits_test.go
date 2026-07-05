@@ -195,7 +195,7 @@ func TestRateLimitCascadeOnAccountDelete(t *testing.T) {
 	}
 
 	r := rs.(*realmStore)
-	if _, err := r.db().ExecContext(ctx, `DELETE FROM accounts WHERE code = 'acc-1'`); err != nil {
+	if _, err := r.db().ExecContext(ctx, `DELETE FROM account WHERE code = 'acc-1'`); err != nil {
 		t.Fatalf("delete account: %v", err)
 	}
 
@@ -322,7 +322,7 @@ func TestOrderSizeLimitCascadeOnAssetDelete(t *testing.T) {
 	}
 }
 
-// --- P&L-bounds limits (limit_pnl_bounds) ------------------------------------
+// --- P&L-bounds limits (limit_pnl_bound) ------------------------------------
 
 func TestPnlBoundsLimitPutListDeleteRoundTrip(t *testing.T) {
 	ctx, rs := seedLimitFixtures(t)
@@ -456,7 +456,7 @@ func TestPnlBoundsLimitCascadeOnAccountDelete(t *testing.T) {
 	}
 
 	r := rs.(*realmStore)
-	if _, err := r.db().ExecContext(ctx, `DELETE FROM accounts WHERE code = 'acc-1'`); err != nil {
+	if _, err := r.db().ExecContext(ctx, `DELETE FROM account WHERE code = 'acc-1'`); err != nil {
 		t.Fatalf("delete account: %v", err)
 	}
 
@@ -492,4 +492,191 @@ func TestPnlBoundsLimitAccountFilter(t *testing.T) {
 	if len(filtered) != 1 || filtered[0].Scope != domain.ScopeAccountAsset {
 		t.Fatalf("filter returned %+v", filtered)
 	}
+}
+
+// --- Unified policy list (ListPolicyRows) ------------------------------------
+
+func policyKeys(rows []PolicyListRow) []string {
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, string(row.Kind)+"|"+string(row.Account))
+	}
+	return out
+}
+
+// seedPolicyFixtures creates the accounts and asset plus one barrier of each
+// kind across two accounts, so a policy list test can exercise the UNION,
+// filters, and paging.
+func seedPolicyFixtures(t *testing.T) (context.Context, RealmStore) {
+	t.Helper()
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+	if err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL"}); err != nil {
+		t.Fatalf("CreateAsset(AAPL): %v", err)
+	}
+	for _, code := range []domain.AccountID{"acc-1", "acc-2"} {
+		if _, err := rs.CreateAccount(ctx, domain.Account{Code: code}); err != nil {
+			t.Fatalf("CreateAccount(%s): %v", code, err)
+		}
+	}
+	// acc-1 carries all three kinds; acc-2 carries only a rate barrier.
+	if err := rs.PutRateLimit(ctx, domain.LimitRate{
+		Scope: domain.ScopeAccount, Account: "acc-1",
+		MaxOrders: 100, Window: time.Minute,
+	}); err != nil {
+		t.Fatalf("PutRateLimit(acc-1): %v", err)
+	}
+	if err := rs.PutRateLimit(ctx, domain.LimitRate{
+		Scope: domain.ScopeAccount, Account: "acc-2",
+		MaxOrders: 50, Window: time.Minute,
+	}); err != nil {
+		t.Fatalf("PutRateLimit(acc-2): %v", err)
+	}
+	if err := rs.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+		Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL",
+		MaxQuantity: "500",
+	}); err != nil {
+		t.Fatalf("PutOrderSizeLimit(acc-1): %v", err)
+	}
+	if err := rs.PutPnlBoundsLimit(ctx, domain.LimitPnlBounds{
+		Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL",
+		LowerBound: "-100",
+	}); err != nil {
+		t.Fatalf("PutPnlBoundsLimit(acc-1): %v", err)
+	}
+	return ctx, rs
+}
+
+func TestListPolicyRowsUnionOrderAndTotal(t *testing.T) {
+	ctx, rs := seedPolicyFixtures(t)
+
+	// Unfiltered: all four barriers, ordered by the default key (kind, then the
+	// composite). Total counts every matching barrier before paging.
+	page, err := rs.ListPolicyRows(ctx, PolicyListFilter{})
+	if err != nil {
+		t.Fatalf("ListPolicyRows all: %v", err)
+	}
+	if page.Total != 4 {
+		t.Fatalf("total = %d, want 4", page.Total)
+	}
+	// kind sorts lexically: order_size_limit, pnl_bounds_kill_switch, rate_limit.
+	wantOrder := []string{
+		"order_size_limit|acc-1",
+		"pnl_bounds_kill_switch|acc-1",
+		"rate_limit|acc-1",
+		"rate_limit|acc-2",
+	}
+	if got := policyKeys(page.Rows); !equalStrings(got, wantOrder) {
+		t.Fatalf("default order = %v, want %v", got, wantOrder)
+	}
+	// The order-size row reconstructs its typed value faithfully.
+	if page.Rows[0].OrderSize == nil || page.Rows[0].OrderSize.MaxQuantity != "500" {
+		t.Fatalf("order-size payload = %+v", page.Rows[0].OrderSize)
+	}
+	// The rate row reconstructs the count and window.
+	rateRow := page.Rows[2]
+	if rateRow.Rate == nil || rateRow.Rate.MaxOrders != 100 ||
+		rateRow.Rate.Window != time.Minute {
+		t.Fatalf("rate payload = %+v", rateRow.Rate)
+	}
+}
+
+func TestListPolicyRowsAccountAndKindFilter(t *testing.T) {
+	ctx, rs := seedPolicyFixtures(t)
+
+	// Exact account filter narrows to acc-1's three barriers.
+	page, err := rs.ListPolicyRows(ctx, PolicyListFilter{
+		Account: ExactTextMatcher("acc-1"),
+	})
+	if err != nil {
+		t.Fatalf("ListPolicyRows account: %v", err)
+	}
+	if page.Total != 3 {
+		t.Fatalf("acc-1 total = %d, want 3", page.Total)
+	}
+
+	// Kind filter narrows to the two rate barriers.
+	rate := PolicyKindRate
+	page, err = rs.ListPolicyRows(ctx, PolicyListFilter{Kind: &rate})
+	if err != nil {
+		t.Fatalf("ListPolicyRows kind: %v", err)
+	}
+	if got := policyKeys(page.Rows); !equalStrings(
+		got, []string{"rate_limit|acc-1", "rate_limit|acc-2"},
+	) {
+		t.Fatalf("rate-only rows = %v", got)
+	}
+
+	// Account and kind combine.
+	page, err = rs.ListPolicyRows(ctx, PolicyListFilter{
+		Account: ExactTextMatcher("acc-2"),
+		Kind:    &rate,
+	})
+	if err != nil {
+		t.Fatalf("ListPolicyRows account+kind: %v", err)
+	}
+	if got := policyKeys(page.Rows); !equalStrings(got, []string{"rate_limit|acc-2"}) {
+		t.Fatalf("acc-2 rate rows = %v", got)
+	}
+}
+
+func TestListPolicyRowsSortAndPage(t *testing.T) {
+	ctx, rs := seedPolicyFixtures(t)
+
+	// Sort by account ascending: acc-1's three barriers (ordered by the kind
+	// tiebreak) then acc-2's rate barrier.
+	page, err := rs.ListPolicyRows(ctx, PolicyListFilter{
+		Sort: SortSpec{Column: "account"},
+	})
+	if err != nil {
+		t.Fatalf("ListPolicyRows sort account: %v", err)
+	}
+	wantOrder := []string{
+		"order_size_limit|acc-1",
+		"pnl_bounds_kill_switch|acc-1",
+		"rate_limit|acc-1",
+		"rate_limit|acc-2",
+	}
+	if got := policyKeys(page.Rows); !equalStrings(got, wantOrder) {
+		t.Fatalf("account order = %v, want %v", got, wantOrder)
+	}
+
+	// First page of two; Total still reports the full match count.
+	page, err = rs.ListPolicyRows(ctx, PolicyListFilter{
+		Sort: SortSpec{Column: "account"},
+		Page: PageSpec{Limit: 2, Offset: 0},
+	})
+	if err != nil {
+		t.Fatalf("ListPolicyRows page 0: %v", err)
+	}
+	if page.Total != 4 {
+		t.Fatalf("page 0 total = %d, want 4", page.Total)
+	}
+	if got := policyKeys(page.Rows); !equalStrings(got, wantOrder[:2]) {
+		t.Fatalf("page 0 = %v, want %v", got, wantOrder[:2])
+	}
+
+	// Second page continues from the offset window.
+	page, err = rs.ListPolicyRows(ctx, PolicyListFilter{
+		Sort: SortSpec{Column: "account"},
+		Page: PageSpec{Limit: 2, Offset: 2},
+	})
+	if err != nil {
+		t.Fatalf("ListPolicyRows page 1: %v", err)
+	}
+	if got := policyKeys(page.Rows); !equalStrings(got, wantOrder[2:]) {
+		t.Fatalf("page 1 = %v, want %v", got, wantOrder[2:])
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

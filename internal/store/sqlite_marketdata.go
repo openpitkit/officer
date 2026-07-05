@@ -41,7 +41,7 @@ import (
 // BLOB is the only public handle; the surrogate id is never surfaced.
 const mdInstanceSelect = `
 SELECT external_id, provider, label, credentials, enabled
-FROM market_data_instances`
+FROM market_data_instance`
 
 // CreateMarketDataInstance persists a new instance and returns it with
 // ExternalID populated. A caller-supplied instance.ExternalID is used verbatim
@@ -59,14 +59,14 @@ func (r *realmStore) CreateMarketDataInstance(
 	}
 	_, err = r.db().ExecContext(
 		ctx,
-		`INSERT INTO market_data_instances
+		`INSERT INTO market_data_instance
 		 (external_id, provider, label, credentials, enabled)
 		 VALUES (?, ?, ?, ?, ?)`,
 		xid.Bytes(), instance.Provider, instance.Label,
 		instance.Credentials, instance.Enabled,
 	)
 	if err != nil {
-		if isSQLiteUniqueOn(err, "market_data_instances", "external_id") {
+		if isSQLiteUniqueOn(err, "market_data_instance", "external_id") {
 			return instance, fmt.Errorf(
 				"market data instance %q: %w", xid.String(), domain.ErrAlreadyExists,
 			)
@@ -147,7 +147,7 @@ func (r *realmStore) SetMarketDataInstanceEnabled(
 ) error {
 	res, err := r.db().ExecContext(
 		ctx,
-		`UPDATE market_data_instances SET enabled = ? WHERE external_id = ?`,
+		`UPDATE market_data_instance SET enabled = ? WHERE external_id = ?`,
 		enabled, id.Bytes(),
 	)
 	if err != nil {
@@ -164,7 +164,7 @@ func (r *realmStore) UpdateMarketDataInstanceSettings(
 ) error {
 	res, err := r.db().ExecContext(
 		ctx,
-		`UPDATE market_data_instances SET label = ?, credentials = ? WHERE external_id = ?`,
+		`UPDATE market_data_instance SET label = ?, credentials = ? WHERE external_id = ?`,
 		label, credentials, id.Bytes(),
 	)
 	if err != nil {
@@ -193,7 +193,7 @@ func (r *realmStore) DeleteMarketDataInstance(
 	}
 	if !force {
 		count, err := countDependent(
-			ctx, tx, `SELECT COUNT(*) FROM market_data_instruments WHERE instance_id = ?`,
+			ctx, tx, `SELECT COUNT(*) FROM market_data_instrument WHERE instance_id = ?`,
 			instanceID,
 		)
 		if err != nil {
@@ -201,12 +201,12 @@ func (r *realmStore) DeleteMarketDataInstance(
 		}
 		if count > 0 {
 			return domain.NewHasDependentsError([]domain.DependentCount{{
-				Kind:  "market_data_instruments",
+				Kind:  "market_data_instrument",
 				Count: count,
 			}})
 		}
 	}
-	res, err := tx.ExecContext(ctx, `DELETE FROM market_data_instances WHERE id = ?`, instanceID)
+	res, err := tx.ExecContext(ctx, `DELETE FROM market_data_instance WHERE id = ?`, instanceID)
 	if err != nil {
 		return fmt.Errorf("store: delete market data instance: %w", err)
 	}
@@ -263,7 +263,7 @@ func resolveInstanceID(
 	var sid int64
 	err := q.QueryRowContext(
 		ctx,
-		`SELECT id FROM market_data_instances WHERE external_id = ?`,
+		`SELECT id FROM market_data_instance WHERE external_id = ?`,
 		id.Bytes(),
 	).Scan(&sid)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -283,10 +283,10 @@ func resolveInstanceID(
 const mdInstrumentSelect = `
 SELECT i.external_id AS instance_xid, mdi.external_symbol,
        ba.code, qa.code, mdi.enabled, mdi.manual_price
-FROM market_data_instruments mdi
-JOIN market_data_instances i ON i.id = mdi.instance_id
-JOIN assets ba               ON ba.id = mdi.base_asset_id
-JOIN assets qa               ON qa.id = mdi.quote_asset_id`
+FROM market_data_instrument mdi
+JOIN market_data_instance i ON i.id = mdi.instance_id
+JOIN asset ba               ON ba.id = mdi.base_asset_id
+JOIN asset qa               ON qa.id = mdi.quote_asset_id`
 
 // UpsertMarketDataInstrument inserts or replaces one instrument of an instance,
 // keyed by (instance, external symbol). Unknown asset codes or unknown instance
@@ -311,7 +311,7 @@ func (r *realmStore) UpsertMarketDataInstrument(
 	// dependents are untouched rather than re-firing delete cascades.
 	if _, err := r.db().ExecContext(
 		ctx,
-		`INSERT INTO market_data_instruments
+		`INSERT INTO market_data_instrument
 		 (instance_id, external_symbol, base_asset_id, quote_asset_id,
 		  enabled, manual_price)
 		 VALUES (?, ?, ?, ?, ?, ?)
@@ -384,10 +384,10 @@ func (r *realmStore) SetMarketDataInstrumentEnabled(
 ) error {
 	res, err := r.db().ExecContext(
 		ctx,
-		`UPDATE market_data_instruments
+		`UPDATE market_data_instrument
 		 SET enabled = ?
 		 WHERE instance_id = (
-		   SELECT id FROM market_data_instances WHERE external_id = ?
+		   SELECT id FROM market_data_instance WHERE external_id = ?
 		 ) AND external_symbol = ?`,
 		enabled, instance.Bytes(), externalSymbol,
 	)
@@ -404,9 +404,9 @@ func (r *realmStore) DeleteMarketDataInstrument(
 ) error {
 	res, err := r.db().ExecContext(
 		ctx,
-		`DELETE FROM market_data_instruments
+		`DELETE FROM market_data_instrument
 		 WHERE instance_id = (
-		   SELECT id FROM market_data_instances WHERE external_id = ?
+		   SELECT id FROM market_data_instance WHERE external_id = ?
 		 ) AND external_symbol = ?`,
 		instance.Bytes(), externalSymbol,
 	)
@@ -446,11 +446,11 @@ const mdQuoteSelect = `
 SELECT i.external_id AS instance_xid, mdi.external_symbol,
        ba.code, qa.code,
        q.mark, q.bid, q.ask, q.as_of, q.received_at
-FROM market_data_quotes q
-JOIN market_data_instruments mdi ON mdi.id = q.instrument_id
-JOIN market_data_instances   i   ON i.id   = mdi.instance_id
-JOIN assets ba                   ON ba.id  = mdi.base_asset_id
-JOIN assets qa                   ON qa.id  = mdi.quote_asset_id`
+FROM market_data_quote q
+JOIN market_data_instrument mdi ON mdi.id = q.instrument_id
+JOIN market_data_instance   i   ON i.id   = mdi.instance_id
+JOIN asset ba                   ON ba.id  = mdi.base_asset_id
+JOIN asset qa                   ON qa.id  = mdi.quote_asset_id`
 
 // UpsertMarketDataQuote records the latest normalized quote for one configured
 // instrument, keyed by (instance, external symbol). The quote row is 1:1 with
@@ -463,8 +463,8 @@ func (r *realmStore) UpsertMarketDataQuote(
 	err := r.db().QueryRowContext(
 		ctx,
 		`SELECT mdi.id
-		 FROM market_data_instruments mdi
-		 JOIN market_data_instances i ON i.id = mdi.instance_id
+		 FROM market_data_instrument mdi
+		 JOIN market_data_instance i ON i.id = mdi.instance_id
 		 WHERE i.external_id = ? AND mdi.external_symbol = ?`,
 		quote.Instance.Bytes(), quote.ExternalSymbol,
 	).Scan(&instrumentID)
@@ -480,7 +480,7 @@ func (r *realmStore) UpsertMarketDataQuote(
 
 	if _, err := r.db().ExecContext(
 		ctx,
-		`INSERT INTO market_data_quotes
+		`INSERT INTO market_data_quote
 		 (instrument_id, mark, bid, ask, as_of, received_at)
 		 VALUES (?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(instrument_id) DO UPDATE SET

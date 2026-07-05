@@ -11,6 +11,12 @@
     "command": "Command",
     "description": "Description",
     "flags": "Flags",
+    "columnDescriptions": {
+      "on": "This column shows whether the MCP command is currently enabled.",
+      "command": "This column shows the MCP command name exposed to the agent.",
+      "description": "This column explains what the command lets the agent do.",
+      "flags": "This column shows safety and implementation flags for the command."
+    },
     "enableAriaLabel": "Enable {{name}}",
     "disabledNotice": "Disabled — returns a “disabled in panel” notice to the agent.",
     "noDescription": "—"

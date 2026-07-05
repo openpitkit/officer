@@ -41,6 +41,10 @@ import (
 type fakeEngine struct {
 	running bool
 
+	enforceResolver bool
+	knownAccounts   map[domain.AccountID]struct{}
+	knownGroups     map[string]struct{}
+
 	configureCalls []configureCall
 	blockCalls     []blockCall
 	unblockCalls   []domain.AccountID
@@ -131,11 +135,48 @@ func newFakeEngine() *fakeEngine { return &fakeEngine{running: true} }
 // fakeBuild returns a BuildFunc that records the seed snapshot it was given and
 // hands back eng. The captured snapshot lets a test assert the build was seeded
 // from the store.
-func fakeBuild(eng engine.Engine, captured *engine.Snapshot) engine.BuildFunc {
+func fakeBuild(eng *fakeEngine, captured *engine.Snapshot) engine.BuildFunc {
 	return func(snap engine.Snapshot) (engine.Engine, error) {
 		*captured = snap
+		eng.knownAccounts = map[domain.AccountID]struct{}{}
+		for _, account := range snap.Accounts {
+			eng.knownAccounts[account.Code] = struct{}{}
+		}
+		eng.knownGroups = map[string]struct{}{}
+		for _, group := range snap.Groups {
+			eng.knownGroups[group.Code] = struct{}{}
+		}
 		return eng, nil
 	}
+}
+
+func (e *fakeEngine) checkKnownAccount(account domain.AccountID) error {
+	if !e.enforceResolver {
+		return nil
+	}
+	if _, ok := e.knownAccounts[account]; !ok {
+		return fmt.Errorf("engine: unknown account %q: %w", account, domain.ErrInvalid)
+	}
+	return nil
+}
+
+func (e *fakeEngine) checkKnownAccounts(accounts []domain.AccountID) error {
+	for _, account := range accounts {
+		if err := e.checkKnownAccount(account); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *fakeEngine) checkKnownGroup(groupID string) error {
+	if !e.enforceResolver || groupID == "" {
+		return nil
+	}
+	if _, ok := e.knownGroups[groupID]; !ok {
+		return fmt.Errorf("engine: unknown group %q: %w", groupID, domain.ErrInvalid)
+	}
+	return nil
 }
 
 func (e *fakeEngine) Version() string      { return "fake" }
@@ -158,6 +199,9 @@ func (e *fakeEngine) ConfigurePolicy(
 func (e *fakeEngine) BlockAccount(
 	_ context.Context, id domain.AccountID, reason string,
 ) error {
+	if err := e.checkKnownAccount(id); err != nil {
+		return err
+	}
 	if e.failBlock {
 		return errors.New("block failed")
 	}
@@ -166,6 +210,9 @@ func (e *fakeEngine) BlockAccount(
 }
 
 func (e *fakeEngine) UnblockAccount(_ context.Context, id domain.AccountID) error {
+	if err := e.checkKnownAccount(id); err != nil {
+		return err
+	}
 	if e.failBlock {
 		return errors.New("unblock failed")
 	}
@@ -193,6 +240,9 @@ func (e *fakeEngine) ApplyAccountAdjustment(
 func (e *fakeEngine) ApplyAccountAdjustmentBatch(
 	_ context.Context, account domain.AccountID, reqs []domain.AdjustmentRequest,
 ) ([]engine.AdjustmentResult, *engine.AdjustmentBatchReject, error) {
+	if err := e.checkKnownAccount(account); err != nil {
+		return nil, nil, err
+	}
 	if e.failAdjustment {
 		return nil, nil, errors.New("adjustment failed")
 	}
@@ -219,6 +269,9 @@ func (e *fakeEngine) ApplyAccountAdjustmentBatch(
 func (e *fakeEngine) SubmitOrder(
 	_ context.Context, o domain.Order,
 ) (engine.OrderResult, error) {
+	if err := e.checkKnownAccount(o.Account); err != nil {
+		return engine.OrderResult{}, err
+	}
 	if e.failSubmit {
 		return engine.OrderResult{}, errors.New("submit failed")
 	}
@@ -239,6 +292,9 @@ func (e *fakeEngine) SubmitOrder(
 func (e *fakeEngine) ReserveHold(
 	_ context.Context, o domain.Order,
 ) (engine.HoldResult, error) {
+	if err := e.checkKnownAccount(o.Account); err != nil {
+		return engine.HoldResult{}, err
+	}
 	if e.failSubmit {
 		return engine.HoldResult{}, errors.New("reserve hold failed")
 	}
@@ -270,6 +326,9 @@ func (e *fakeEngine) RollbackHeld(_ context.Context, approvalID string) error {
 func (e *fakeEngine) SubmitImmediate(
 	_ context.Context, o domain.Order,
 ) (engine.ImmediateResult, error) {
+	if err := e.checkKnownAccount(o.Account); err != nil {
+		return engine.ImmediateResult{}, err
+	}
 	if e.failSubmit {
 		return engine.ImmediateResult{}, errors.New("submit immediate failed")
 	}
@@ -306,6 +365,12 @@ func (e *fakeEngine) ApplyExecutionReport(
 func (e *fakeEngine) RegisterGroup(
 	_ context.Context, accounts []domain.AccountID, groupID string,
 ) error {
+	if err := e.checkKnownAccounts(accounts); err != nil {
+		return err
+	}
+	if err := e.checkKnownGroup(groupID); err != nil {
+		return err
+	}
 	if e.failGroup {
 		return errors.New("register group failed")
 	}
@@ -319,6 +384,12 @@ func (e *fakeEngine) RegisterGroup(
 func (e *fakeEngine) UnregisterGroup(
 	_ context.Context, accounts []domain.AccountID, groupID string,
 ) error {
+	if err := e.checkKnownAccounts(accounts); err != nil {
+		return err
+	}
+	if err := e.checkKnownGroup(groupID); err != nil {
+		return err
+	}
 	if e.failGroup {
 		return errors.New("unregister group failed")
 	}
@@ -327,6 +398,9 @@ func (e *fakeEngine) UnregisterGroup(
 }
 
 func (e *fakeEngine) BlockGroup(_ context.Context, groupID, reason string) error {
+	if err := e.checkKnownGroup(groupID); err != nil {
+		return err
+	}
 	if e.failGroup {
 		return errors.New("block group failed")
 	}
@@ -335,6 +409,9 @@ func (e *fakeEngine) BlockGroup(_ context.Context, groupID, reason string) error
 }
 
 func (e *fakeEngine) UnblockGroup(_ context.Context, groupID string) error {
+	if err := e.checkKnownGroup(groupID); err != nil {
+		return err
+	}
 	if e.failGroup {
 		return errors.New("unblock group failed")
 	}
@@ -449,7 +526,7 @@ func (s *failResolveRealm) ResolveOrderReservation(
 // migrated, empty) store and writes one startup hydrate audit row, so a fresh
 // node already has exactly one audit row. It returns the node and the bound
 // realm handle for direct store assertions.
-func newTestNode(t *testing.T, eng engine.Engine) (*localNode, store.RealmStore) {
+func newTestNode(t *testing.T, eng *fakeEngine) (*localNode, store.RealmStore) {
 	t.Helper()
 	st := newMemoryStore("node.db")
 	ctx := context.Background()
@@ -471,7 +548,7 @@ func newTestNode(t *testing.T, eng engine.Engine) (*localNode, store.RealmStore)
 // newTestNodeWithStore builds a localNode over the supplied store (typically a
 // realmWrapStore around a real temp SQLite store) and the fake engine. It mirrors
 // newTestNode but lets a test inject a failing realm decorator.
-func newTestNodeWithStore(t *testing.T, st store.Store, eng engine.Engine) *localNode {
+func newTestNodeWithStore(t *testing.T, st store.Store, eng *fakeEngine) *localNode {
 	t.Helper()
 	var seed engine.Snapshot
 	n, _, err := NewLocalNode(context.Background(), st, fakeBuild(eng, &seed))
@@ -520,8 +597,49 @@ func testKey(id domain.AccountID) Key {
 	return Key{Account: id}
 }
 
+func testAccount(id domain.AccountID) domain.Account {
+	return domain.Account{Code: id}
+}
+
+func TestUpsertMarketDataInstrumentCreatesAssets(t *testing.T) {
+	t.Parallel()
+	n, realm := newTestNode(t, newFakeEngine())
+	ctx := context.Background()
+	instance, err := realm.CreateMarketDataInstance(ctx, domain.MarketDataInstance{
+		Provider: domain.MarketDataProviderBinance,
+		Label:    "Binance",
+		Enabled:  true,
+	})
+	if err != nil {
+		t.Fatalf("CreateMarketDataInstance: %v", err)
+	}
+
+	instrument := domain.MarketDataInstrument{
+		Instance:       instance.ExternalID,
+		ExternalSymbol: "BTCUSDT",
+		BaseAsset:      "BTC",
+		QuoteAsset:     "USDT",
+		Enabled:        true,
+	}
+	if err := n.UpsertMarketDataInstrument(ctx, instrument, testCaller); err != nil {
+		t.Fatalf("UpsertMarketDataInstrument: %v", err)
+	}
+	for _, code := range []string{"BTC", "USDT"} {
+		if _, ok, err := realm.GetAsset(ctx, code); err != nil || !ok {
+			t.Fatalf("GetAsset(%s) = ok %v, err %v; want created asset", code, ok, err)
+		}
+	}
+	instruments, err := realm.ListMarketDataInstruments(ctx, instance.ExternalID)
+	if err != nil {
+		t.Fatalf("ListMarketDataInstruments: %v", err)
+	}
+	if len(instruments) != 1 || instruments[0].ExternalSymbol != "BTCUSDT" {
+		t.Fatalf("instruments = %+v, want BTCUSDT", instruments)
+	}
+}
+
 // testCaller is the attribution the node tests stamp on mutations.
-var testCaller = domain.Caller{Source: domain.SourceAPI, Principal: "operator"}
+var testCaller = domain.Caller{Source: domain.SourceAPI, Principal: domain.PrincipalOperator}
 
 // rateLimit builds a broker-scope rate-limit barrier with the given count/window
 // for the tests that exercise the limit paths.
@@ -805,7 +923,7 @@ func TestLocalNode_SubmitHoldPersistsHeldBalances(t *testing.T) {
 	}}
 	n, st := newTestNode(t, eng)
 	ctx := context.Background()
-	if _, err := n.CreateAccount(ctx, testKey("acc-1"), testCaller); err != nil {
+	if _, err := n.CreateAccount(ctx, testAccount("acc-1"), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 	if err := st.UpsertBalance(ctx, domain.Balance{
@@ -861,7 +979,7 @@ func TestLocalNode_SubmitOrderPersistsReservationBalances(t *testing.T) {
 	}
 	n, st := newTestNode(t, eng)
 	ctx := context.Background()
-	if _, err := n.CreateAccount(ctx, testKey("acc-1"), testCaller); err != nil {
+	if _, err := n.CreateAccount(ctx, testAccount("acc-1"), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 	if err := st.UpsertBalance(ctx, domain.Balance{
@@ -1090,6 +1208,298 @@ func TestLocalNode_ApplyAdjustmentGeneratesExternalIDWhenAbsent(t *testing.T) {
 	}
 	if rec.ExternalID.IsZero() {
 		t.Fatalf("record id is zero, want a generated id")
+	}
+}
+
+// TestLocalNode_ApplyAdjustmentRejectedIsRecorded checks that a policy reject
+// (e.g. a P&L kill-switch) on an existing account persists the rejected attempt
+// to the adjustment history and the audit log, leaving balances untouched.
+func TestLocalNode_ApplyAdjustmentRejectedIsRecorded(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.adjustmentReject = &domain.AdjustmentOutcomeRejected{
+		Code:   "pnl_bounds_kill_switch",
+		Policy: "pnl_bounds_kill_switch",
+		Reason: "upper bound exceeded",
+	}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	seedTestAccount(t, st, "acc-1")
+
+	rec, err := n.ApplyAdjustment(ctx, testKey("acc-1"), domain.ExternalID{},
+		domain.AdjustmentRequest{
+			Asset:   "USD",
+			Balance: &domain.AdjustmentAmount{Mode: domain.AdjustmentModeDelta, Value: "100"},
+		}, testCaller)
+	if err != nil {
+		t.Fatalf("ApplyAdjustment: %v", err)
+	}
+	if rec.Accepted != nil || rec.Rejected == nil {
+		t.Fatalf("record = %+v, want rejected", rec)
+	}
+
+	records, err := st.ListAdjustments(ctx, "acc-1", "", 10)
+	if err != nil {
+		t.Fatalf("ListAdjustments: %v", err)
+	}
+	if len(records) != 1 || records[0].Rejected == nil {
+		t.Fatalf("stored adjustments = %+v, want one rejected record", records)
+	}
+
+	rows, err := st.ListAuditFiltered(ctx, domain.AuditFilter{
+		Actions: []domain.AuditAction{domain.AuditActionAdjustment},
+		Account: "acc-1",
+	}, 10)
+	if err != nil {
+		t.Fatalf("ListAuditFiltered: %v", err)
+	}
+	if len(rows) != 1 || !strings.Contains(rows[0].Detail, "rejected") {
+		t.Fatalf("audit rows = %+v, want one rejected adjustment", rows)
+	}
+
+	if _, ok, err := st.GetBalance(ctx, "acc-1", "USD"); err != nil || ok {
+		t.Fatalf("GetBalance after reject = ok %v err %v, want no balance row", ok, err)
+	}
+}
+
+// TestLocalNode_ApplyAdjustmentAutoCreatesUnknownAccount checks that an
+// adjustment to a non-existent account auto-creates it in the default group (no
+// group assigned), so the engine resolves it and applies the adjustment, and
+// the creation is audited.
+func TestLocalNode_ApplyAdjustmentAutoCreatesUnknownAccount(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	// Enforce the resolver so an adjustment to an unknown account would error
+	// unless the auto-create runs first and rebuilds the engine.
+	eng.enforceResolver = true
+	eng.adjustmentAccepted = &domain.AdjustmentOutcomeAccepted{BalanceResult: "100"}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	rec, err := n.ApplyAdjustment(ctx, testKey("fresh"), domain.ExternalID{},
+		domain.AdjustmentRequest{
+			Asset:   "USD",
+			Balance: &domain.AdjustmentAmount{Mode: domain.AdjustmentModeAbsolute, Value: "100"},
+		}, testCaller)
+	if err != nil {
+		t.Fatalf("ApplyAdjustment: %v", err)
+	}
+	if rec.Accepted == nil || rec.Rejected != nil {
+		t.Fatalf("record = %+v, want accepted", rec)
+	}
+
+	account, ok, err := st.GetAccount(ctx, "fresh")
+	if err != nil || !ok {
+		t.Fatalf("GetAccount(fresh) = ok %v err %v, want auto-created", ok, err)
+	}
+	if account.GroupCode != "" {
+		t.Fatalf("auto-created account group = %q, want default (empty)", account.GroupCode)
+	}
+
+	records, err := st.ListAdjustments(ctx, "fresh", "", 10)
+	if err != nil {
+		t.Fatalf("ListAdjustments: %v", err)
+	}
+	if len(records) != 1 || records[0].Accepted == nil {
+		t.Fatalf("stored adjustments = %+v, want one accepted record", records)
+	}
+
+	createRows, err := st.ListAuditFiltered(ctx, domain.AuditFilter{
+		Actions: []domain.AuditAction{domain.AuditActionCreateAccount},
+		Account: "fresh",
+	}, 10)
+	if err != nil {
+		t.Fatalf("ListAuditFiltered(create): %v", err)
+	}
+	if len(createRows) != 1 {
+		t.Fatalf("create-account audit rows = %+v, want one", createRows)
+	}
+}
+
+// TestLocalNode_ApplyAdjustmentAutoCreateThenReject checks that a rejected
+// adjustment to a non-existent account still auto-creates the account and
+// records the rejected attempt in both history and audit.
+func TestLocalNode_ApplyAdjustmentAutoCreateThenReject(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.enforceResolver = true
+	eng.adjustmentReject = &domain.AdjustmentOutcomeRejected{
+		Code:   "pnl_bounds_kill_switch",
+		Policy: "pnl_bounds_kill_switch",
+		Reason: "upper bound exceeded",
+	}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	rec, err := n.ApplyAdjustment(ctx, testKey("fresh"), domain.ExternalID{},
+		domain.AdjustmentRequest{
+			Asset:   "USD",
+			Balance: &domain.AdjustmentAmount{Mode: domain.AdjustmentModeDelta, Value: "100"},
+		}, testCaller)
+	if err != nil {
+		t.Fatalf("ApplyAdjustment: %v", err)
+	}
+	if rec.Accepted != nil || rec.Rejected == nil {
+		t.Fatalf("record = %+v, want rejected", rec)
+	}
+
+	if _, ok, err := st.GetAccount(ctx, "fresh"); err != nil || !ok {
+		t.Fatalf("GetAccount(fresh) = ok %v err %v, want auto-created", ok, err)
+	}
+	records, err := st.ListAdjustments(ctx, "fresh", "", 10)
+	if err != nil {
+		t.Fatalf("ListAdjustments: %v", err)
+	}
+	if len(records) != 1 || records[0].Rejected == nil {
+		t.Fatalf("stored adjustments = %+v, want one rejected record", records)
+	}
+	rows, err := st.ListAuditFiltered(ctx, domain.AuditFilter{
+		Actions: []domain.AuditAction{domain.AuditActionAdjustment},
+		Account: "fresh",
+	}, 10)
+	if err != nil {
+		t.Fatalf("ListAuditFiltered: %v", err)
+	}
+	if len(rows) != 1 || !strings.Contains(rows[0].Detail, "rejected") {
+		t.Fatalf("audit rows = %+v, want one rejected adjustment", rows)
+	}
+}
+
+// TestLocalNode_ApplyAdjustmentRejectsMalformedAccountID checks that a malformed
+// account id is rejected with domain.ErrInvalid and no account is auto-created.
+func TestLocalNode_ApplyAdjustmentRejectsMalformedAccountID(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.enforceResolver = true
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	bad := domain.AccountID("bad-id ")
+	_, err := n.ApplyAdjustment(ctx, testKey(bad), domain.ExternalID{},
+		domain.AdjustmentRequest{
+			Asset:   "USD",
+			Balance: &domain.AdjustmentAmount{Mode: domain.AdjustmentModeDelta, Value: "100"},
+		}, testCaller)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("ApplyAdjustment(malformed) = %v, want ErrInvalid", err)
+	}
+	if _, ok, err := st.GetAccount(ctx, bad); err != nil || ok {
+		t.Fatalf("GetAccount(malformed) = ok %v err %v, want absent", ok, err)
+	}
+}
+
+// TestLocalNode_ApplyAdjustmentAutoCreatesUnknownAsset checks that an adjustment
+// referencing a non-existent asset auto-creates it with empty title and class,
+// so the engine resolves it and applies the adjustment, and the creation is
+// audited.
+func TestLocalNode_ApplyAdjustmentAutoCreatesUnknownAsset(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.adjustmentAccepted = &domain.AdjustmentOutcomeAccepted{BalanceResult: "100"}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	seedTestAccount(t, st, "acc-1")
+
+	rec, err := n.ApplyAdjustment(ctx, testKey("acc-1"), domain.ExternalID{},
+		domain.AdjustmentRequest{
+			Asset:   "GOLD",
+			Balance: &domain.AdjustmentAmount{Mode: domain.AdjustmentModeAbsolute, Value: "100"},
+		}, testCaller)
+	if err != nil {
+		t.Fatalf("ApplyAdjustment: %v", err)
+	}
+	if rec.Accepted == nil || rec.Rejected != nil {
+		t.Fatalf("record = %+v, want accepted", rec)
+	}
+
+	asset, ok, err := st.GetAsset(ctx, "GOLD")
+	if err != nil || !ok {
+		t.Fatalf("GetAsset(GOLD) = ok %v err %v, want auto-created", ok, err)
+	}
+	if asset.Title != "" || asset.AssetClass != "" {
+		t.Fatalf("auto-created asset = %+v, want empty title and class", asset)
+	}
+
+	createRows, err := st.ListAuditFiltered(ctx, domain.AuditFilter{
+		Actions: []domain.AuditAction{domain.AuditActionCreateAsset},
+	}, 10)
+	if err != nil {
+		t.Fatalf("ListAuditFiltered(create asset): %v", err)
+	}
+	if len(createRows) != 1 || !strings.Contains(createRows[0].Detail, "GOLD") {
+		t.Fatalf("create-asset audit rows = %+v, want one for GOLD", createRows)
+	}
+}
+
+// TestLocalNode_ApplyAdjustmentAutoCreateAssetThenReject checks that a rejected
+// adjustment to a non-existent asset still auto-creates the asset and records
+// the rejected attempt in both history and audit.
+func TestLocalNode_ApplyAdjustmentAutoCreateAssetThenReject(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.adjustmentReject = &domain.AdjustmentOutcomeRejected{
+		Code:   "pnl_bounds_kill_switch",
+		Policy: "pnl_bounds_kill_switch",
+		Reason: "upper bound exceeded",
+	}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	seedTestAccount(t, st, "acc-1")
+
+	rec, err := n.ApplyAdjustment(ctx, testKey("acc-1"), domain.ExternalID{},
+		domain.AdjustmentRequest{
+			Asset:   "GOLD",
+			Balance: &domain.AdjustmentAmount{Mode: domain.AdjustmentModeDelta, Value: "100"},
+		}, testCaller)
+	if err != nil {
+		t.Fatalf("ApplyAdjustment: %v", err)
+	}
+	if rec.Accepted != nil || rec.Rejected == nil {
+		t.Fatalf("record = %+v, want rejected", rec)
+	}
+
+	if _, ok, err := st.GetAsset(ctx, "GOLD"); err != nil || !ok {
+		t.Fatalf("GetAsset(GOLD) = ok %v err %v, want auto-created", ok, err)
+	}
+	records, err := st.ListAdjustments(ctx, "acc-1", "", 10)
+	if err != nil {
+		t.Fatalf("ListAdjustments: %v", err)
+	}
+	if len(records) != 1 || records[0].Rejected == nil {
+		t.Fatalf("stored adjustments = %+v, want one rejected record", records)
+	}
+	rows, err := st.ListAuditFiltered(ctx, domain.AuditFilter{
+		Actions: []domain.AuditAction{domain.AuditActionAdjustment},
+		Account: "acc-1",
+	}, 10)
+	if err != nil {
+		t.Fatalf("ListAuditFiltered: %v", err)
+	}
+	if len(rows) != 1 || !strings.Contains(rows[0].Detail, "rejected") {
+		t.Fatalf("audit rows = %+v, want one rejected adjustment", rows)
+	}
+}
+
+// TestLocalNode_ApplyAdjustmentRejectsMalformedAsset checks that a malformed
+// asset id is rejected with domain.ErrInvalid and no asset is auto-created.
+func TestLocalNode_ApplyAdjustmentRejectsMalformedAsset(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	seedTestAccount(t, st, "acc-1")
+
+	bad := "US D"
+	_, err := n.ApplyAdjustment(ctx, testKey("acc-1"), domain.ExternalID{},
+		domain.AdjustmentRequest{
+			Asset:   bad,
+			Balance: &domain.AdjustmentAmount{Mode: domain.AdjustmentModeDelta, Value: "100"},
+		}, testCaller)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("ApplyAdjustment(malformed asset) = %v, want ErrInvalid", err)
+	}
+	if _, ok, err := st.GetAsset(ctx, bad); err != nil || ok {
+		t.Fatalf("GetAsset(malformed) = ok %v err %v, want absent", ok, err)
 	}
 }
 
@@ -1465,6 +1875,75 @@ func TestLocalNode_PutRateLimitNotImplementedRebuildsFromStore(t *testing.T) {
 	}
 }
 
+// TestLocalNode_CreateAccountRebuildsEngineWithNewAccount verifies a freshly
+// created account is wired into the live engine. The resolver has no incremental
+// account registration, so the node rebuilds from the store on create; without
+// the rebuild the account would persist but stay unknown to the engine
+// (adjustments, group moves, and orders would reject as "unknown account") until
+// a restart.
+func TestLocalNode_CreateAccountRebuildsEngineWithNewAccount(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, _ := newTestNode(t, eng)
+	ctx := context.Background()
+	next := newFakeEngine()
+	var rebuilt engine.Snapshot
+	n.build = fakeBuild(next, &rebuilt)
+
+	if _, err := n.CreateAccount(ctx, testAccount("fresh"), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if eng.running {
+		t.Fatal("old engine still running after create rebuild")
+	}
+	if !next.running {
+		t.Fatal("replacement engine is not running after create rebuild")
+	}
+	found := false
+	for _, a := range rebuilt.Accounts {
+		if a.Code == "fresh" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("rebuilt accounts = %+v, want the new account", rebuilt.Accounts)
+	}
+}
+
+// TestLocalNode_CreateGroupRebuildsEngineWithNewGroup verifies a freshly created
+// group is wired into the live engine for the same reason: a runtime-created
+// group is unknown to the resolver until the engine is rebuilt from the store.
+func TestLocalNode_CreateGroupRebuildsEngineWithNewGroup(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, _ := newTestNode(t, eng)
+	ctx := context.Background()
+	next := newFakeEngine()
+	var rebuilt engine.Snapshot
+	n.build = fakeBuild(next, &rebuilt)
+
+	if _, err := n.CreateGroup(ctx, domain.AccountGroup{Code: "vips"}, testCaller); err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	if eng.running {
+		t.Fatal("old engine still running after create rebuild")
+	}
+	if !next.running {
+		t.Fatal("replacement engine is not running after create rebuild")
+	}
+	found := false
+	for _, g := range rebuilt.Groups {
+		if g.Code == "vips" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("rebuilt groups = %+v, want the new group", rebuilt.Groups)
+	}
+}
+
 func TestLocalNode_PutRateLimitSamePolicyDifferentAccountsRetunesOnePolicy(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
@@ -1619,7 +2098,7 @@ func TestLocalNode_BlockUnblockAccount(t *testing.T) {
 	ctx := context.Background()
 
 	const id domain.AccountID = "acc-1"
-	if _, err := n.CreateAccount(ctx, testKey(id), testCaller); err != nil {
+	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 
@@ -1662,7 +2141,7 @@ func TestLocalNode_BlockEngineFailureRevertsStore(t *testing.T) {
 	ctx := context.Background()
 
 	const id domain.AccountID = "acc-1"
-	if _, err := n.CreateAccount(ctx, testKey(id), testCaller); err != nil {
+	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 
@@ -1717,7 +2196,7 @@ func TestLocalNode_ApplyExecutionReportPersistsBothLegs(t *testing.T) {
 	ctx := context.Background()
 
 	const id domain.AccountID = "acc-1"
-	if _, err := n.CreateAccount(ctx, testKey(id), testCaller); err != nil {
+	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 	order := testOrder(t, st, id)
@@ -1764,7 +2243,7 @@ func TestLocalNode_ApplyExecutionReportAuditsEngineBlock(t *testing.T) {
 	ctx := context.Background()
 
 	const id domain.AccountID = "acc-1"
-	if _, err := n.CreateAccount(ctx, testKey(id), testCaller); err != nil {
+	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 	order := testOrder(t, st, id)
@@ -1831,7 +2310,7 @@ func TestLocalNode_ApplyExecutionReportForce(t *testing.T) {
 	ctx := context.Background()
 
 	const id domain.AccountID = "acc-1"
-	if _, err := n.CreateAccount(ctx, testKey(id), testCaller); err != nil {
+	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 	order := testOrder(t, st, id)
@@ -2270,7 +2749,7 @@ func TestLocalNode_RestoreBackupRollsBackStoreOnRebuildFailure(t *testing.T) {
 	ctx := context.Background()
 	oldEngine := newFakeEngine()
 	n, st := newTestNode(t, oldEngine)
-	if _, err := n.CreateAccount(ctx, testKey("keep"), testCaller); err != nil {
+	if _, err := n.CreateAccount(ctx, testAccount("keep"), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 	n.build = func(engine.Snapshot) (engine.Engine, error) {
@@ -2338,7 +2817,7 @@ func TestLocalNode_RestoreBackupRollsBackStoreAndEngineOnAuditFailure(t *testing
 	}
 	n := nn.(*localNode)
 	seedTestPrincipal(t, n.realm)
-	if _, err := n.CreateAccount(ctx, testKey("keep"), testCaller); err != nil {
+	if _, err := n.CreateAccount(ctx, testAccount("keep"), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 	archive := testArchive(
@@ -2498,7 +2977,7 @@ func TestLocalNode_ResetDatabaseRecreatesStoreAndAudits(t *testing.T) {
 	}
 	n := nn.(*localNode)
 	seedTestPrincipal(t, n.realm)
-	if _, err := n.CreateAccount(ctx, testKey("reset-me"), testCaller); err != nil {
+	if _, err := n.CreateAccount(ctx, testAccount("reset-me"), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 
@@ -2509,8 +2988,10 @@ func TestLocalNode_ResetDatabaseRecreatesStoreAndAudits(t *testing.T) {
 	if sink == nil {
 		t.Fatalf("ResetDatabase returned nil sink")
 	}
-	if builds != 2 {
-		t.Fatalf("build calls = %d, want 2", builds)
+	// Three builds: the initial seed, the rebuild CreateAccount triggers so the
+	// new account enters the resolver, and the rebuild ResetDatabase performs.
+	if builds != 3 {
+		t.Fatalf("build calls = %d, want 3", builds)
 	}
 	if oldEngine.running {
 		t.Fatalf("old engine still running after reset")

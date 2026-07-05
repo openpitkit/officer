@@ -11,6 +11,12 @@
     "command": "命令",
     "description": "描述",
     "flags": "标记",
+    "columnDescriptions": {
+      "on": "此列显示该 MCP 命令当前是否启用。",
+      "command": "此列显示暴露给 Agent 的 MCP 命令名称。",
+      "description": "此列说明该命令允许 Agent 执行的操作。",
+      "flags": "此列显示该命令的安全和实现标记。"
+    },
     "enableAriaLabel": "启用 {{name}}",
     "disabledNotice": "已禁用 — 将向 Agent 返回「面板已禁用」提示。",
     "noDescription": "—"

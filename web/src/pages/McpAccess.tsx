@@ -43,7 +43,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ApiError, useOfficerApi } from "@/framework";
+import { ApiError, ColumnHeader, useOfficerApi } from "@/framework";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -135,10 +135,28 @@ function CommandsTable({
     <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
-            <TableHead className="w-8">{t("table.on")}</TableHead>
-            <TableHead>{t("table.command")}</TableHead>
-            <TableHead>{t("table.description")}</TableHead>
-            <TableHead>{t("table.flags")}</TableHead>
+            <TableHead className="w-8">
+              <ColumnHeader description={t("table.columnDescriptions.on")}>
+                {t("table.on")}
+              </ColumnHeader>
+            </TableHead>
+            <TableHead>
+              <ColumnHeader description={t("table.columnDescriptions.command")}>
+                {t("table.command")}
+              </ColumnHeader>
+            </TableHead>
+            <TableHead>
+              <ColumnHeader
+                description={t("table.columnDescriptions.description")}
+              >
+                {t("table.description")}
+              </ColumnHeader>
+            </TableHead>
+            <TableHead>
+              <ColumnHeader description={t("table.columnDescriptions.flags")}>
+                {t("table.flags")}
+              </ColumnHeader>
+            </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>

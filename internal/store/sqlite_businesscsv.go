@@ -16,9 +16,9 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 // Business CSV import group of the SQLite store. ApplyBusinessCSVImport
-// persists all selected groups, accounts and balances — plus the adjustment
+// persists all selected groups, account and balance — plus the adjustment
 // records that applying a position snapshot produced and their audit rows — in
-// one transaction. Groups and accounts are addressed by code; the store
+// one transaction. Groups and account are addressed by code; the store
 // resolves codes to surrogate ids and assigns engine ids on create exactly as
 // the normal create paths do. Balances resolve account and asset codes to
 // surrogate ids. Adjustments resolve account, asset and the optional principal
@@ -44,8 +44,8 @@ import (
 // per-row audit records in one transaction. Any store error rolls the whole
 // import back, including audit rows.
 //
-// Groups and accounts that do not yet exist are created (engine ids assigned
-// by the connector). Groups and accounts that already exist are updated in
+// Groups and account that do not yet exist are created (engine ids assigned
+// by the connector). Groups and account that already exist are updated in
 // place (engine id preserved). Balances are upserted. Each adjustment the node
 // produced while applying a position snapshot is appended (the durable trace of
 // the imported position). Audit rows are appended. An unknown group or asset
@@ -95,32 +95,27 @@ func (r *realmStore) applyBusinessCSVImport(
 }
 
 // importGroups creates or updates account groups inside the import transaction.
-// New groups receive a connector-assigned engine group id. Existing groups have
-// their mutable fields (title, notes, blocked, block_reason) updated.
+// New groups run on their surrogate id (the engine group id). Existing groups
+// have their mutable fields (title, notes, blocked, block_reason) updated.
 func importGroups(
 	ctx context.Context, tx *sql.Tx, rows []fwstore.BusinessCSVImportGroup,
 ) error {
 	for _, item := range rows {
 		g := item.Group
 		if !item.Exists {
-			engineID, err := nextEngineGroupID(ctx, tx)
-			if err != nil {
-				return fmt.Errorf("store: assign engine group id for %q: %w", g.Code, err)
-			}
 			if _, err := tx.ExecContext(
 				ctx,
-				`INSERT INTO account_groups
-				 (engine_group_id, code, title, notes, blocked, block_reason)
-				 VALUES (?, ?, ?, ?, ?, ?)`,
-				int64(engineID.Uint32()), g.Code, g.Title,
-				g.Notes, g.Blocked, g.BlockReason,
+				`INSERT INTO account_group
+				 (code, title, notes, blocked, block_reason)
+				 VALUES (?, ?, ?, ?, ?)`,
+				g.Code, g.Title, g.Notes, g.Blocked, g.BlockReason,
 			); err != nil {
 				return fmt.Errorf("store: import group %q: %w", g.Code, err)
 			}
 		} else {
 			if _, err := tx.ExecContext(
 				ctx,
-				`UPDATE account_groups
+				`UPDATE account_group
 				 SET title = ?, notes = ?, blocked = ?, block_reason = ?
 				 WHERE code = ?`,
 				g.Title, g.Notes, g.Blocked, g.BlockReason, g.Code,
@@ -132,10 +127,10 @@ func importGroups(
 	return nil
 }
 
-// importAccounts creates or updates accounts inside the import transaction.
+// importAccounts creates or updates account inside the import transaction.
 // The optional group link is resolved by group code; an unknown group code
-// yields domain.ErrInvalid. New accounts receive a connector-assigned engine
-// account id. Existing accounts have their mutable fields updated.
+// yields domain.ErrInvalid. New account run on their surrogate id (the engine
+// account id). Existing accounts have their mutable fields updated.
 func importAccounts(
 	ctx context.Context, tx *sql.Tx, rows []fwstore.BusinessCSVImportAccount,
 ) error {
@@ -149,18 +144,12 @@ func importAccounts(
 			)
 		}
 		if !item.Exists {
-			engineID, err := nextEngineAccountID(ctx, tx)
-			if err != nil {
-				return fmt.Errorf(
-					"store: assign engine account id for %q: %w", a.Code, err,
-				)
-			}
 			if _, err := tx.ExecContext(
 				ctx,
-				`INSERT INTO accounts
-				 (engine_account_id, code, title, group_id, notes, blocked, block_reason)
-				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-				int64(engineID.Uint64()), a.Code.String(), a.Title,
+				`INSERT INTO account
+				 (code, title, group_id, notes, blocked, block_reason)
+				 VALUES (?, ?, ?, ?, ?, ?)`,
+				a.Code.String(), a.Title,
 				groupID, a.Notes, a.Blocked, a.BlockReason,
 			); err != nil {
 				return fmt.Errorf("store: import account %q: %w", a.Code, err)
@@ -168,7 +157,7 @@ func importAccounts(
 		} else {
 			if _, err := tx.ExecContext(
 				ctx,
-				`UPDATE accounts
+				`UPDATE account
 				 SET title = ?, group_id = ?, notes = ?, blocked = ?, block_reason = ?
 				 WHERE code = ?`,
 				a.Title, groupID, a.Notes, a.Blocked, a.BlockReason, a.Code.String(),
@@ -204,11 +193,15 @@ func importBalances(
 		if !b.UpdatedAt.IsZero() {
 			updatedAt = b.UpdatedAt.UTC().Format(time.RFC3339Nano)
 		}
+		available := settleOrZero(b.Available)
+		held := settleOrZero(b.Held)
+		incoming := settleOrZero(b.Incoming)
+		realizedPnl := settleOrZero(b.RealizedPnl)
 		if _, err := tx.ExecContext(
 			ctx,
-			`INSERT INTO balances
-			 (account_id, asset_id, available, held, incoming,
-			  realized_pnl, average_entry_price, updated_at)
+			`INSERT INTO balance
+			 (account_id, asset_id, available, held,
+			  incoming, realized_pnl, average_entry_price, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(account_id, asset_id) DO UPDATE SET
 			  available = excluded.available,
@@ -218,8 +211,7 @@ func importBalances(
 			  average_entry_price = excluded.average_entry_price,
 			  updated_at = excluded.updated_at`,
 			accountID, assetID,
-			settleOrZero(b.Available), settleOrZero(b.Held),
-			settleOrZero(b.Incoming), settleOrZero(b.RealizedPnl),
+			available, held, incoming, realizedPnl,
 			b.AverageEntryPrice, updatedAt,
 		); err != nil {
 			return fmt.Errorf(
@@ -275,7 +267,7 @@ func importAdjustments(
 		}
 		if _, err := tx.ExecContext(
 			ctx,
-			`INSERT INTO adjustments
+			`INSERT INTO adjustment
 			 (external_id, account_id, asset_id, principal_id,
 			  at, source, status, request, outcome)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -304,11 +296,15 @@ func importAudit(
 		}
 		accountTitle := entry.AccountTitle
 		if accountTitle == "" && entry.Account != "" {
-			accountTitle = lookupTitle(ctx, tx, "accounts", entry.Account.String())
+			accountTitle = lookupTitle(ctx, tx, "account", entry.Account.String())
 		}
 		actorTitle := entry.ActorTitle
 		if actorTitle == "" && entry.Actor != "" {
-			actorTitle = lookupTitle(ctx, tx, "principals", entry.Actor)
+			actorTitle = lookupTitle(ctx, tx, "principal", entry.Actor)
+		}
+		accountID, err := lookupID(ctx, tx, "account", entry.Account.String())
+		if err != nil {
+			return err
 		}
 		source := entry.Source
 		if source == "" {
@@ -317,11 +313,12 @@ func importAudit(
 		if _, err := tx.ExecContext(
 			ctx,
 			`INSERT INTO audit
-			 (external_id, account_code, account_title, actor_code, actor_title,
-			  at, action, source, detail)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			xid.Bytes(), entry.Account.String(), accountTitle, entry.Actor, actorTitle,
-			nowStr(), string(entry.Action), string(source), entry.Detail,
+			 (external_id, account_id, account_code, account_title, actor_code,
+			  actor_title, at, action, source, detail)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			xid.Bytes(), accountID, entry.Account.String(), accountTitle,
+			entry.Actor, actorTitle, nowStr(), string(entry.Action),
+			string(source), entry.Detail,
 		); err != nil {
 			return fmt.Errorf("store: import audit row: %w", err)
 		}

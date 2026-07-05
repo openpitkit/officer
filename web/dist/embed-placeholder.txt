@@ -1,0 +1,3 @@
+This placeholder keeps web/dist non-empty so Go //go:embed web/dist compiles
+before the SPA bundle is built. Production builds replace this directory with
+the generated Vite assets.

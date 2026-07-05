@@ -24,9 +24,12 @@ package store
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	"go.openpit.dev/officer/framework/domain"
+	fwstore "go.openpit.dev/officer/framework/store"
 )
 
 // seedAuditFixtures creates an account and an actor principal for the audit tests.
@@ -95,6 +98,17 @@ func TestAuditAppendListAndExternalID(t *testing.T) {
 	}
 	if control.Source != domain.SourcePanel {
 		t.Fatalf("control row source = %q, want panel", control.Source)
+	}
+	exact, err := rs.ListAuditRows(ctx, fwstore.AuditListFilter{
+		ExternalID: control.ExternalID,
+		Page:       fwstore.PageSpec{Limit: 10},
+	})
+	if err != nil {
+		t.Fatalf("ListAuditRows(external id): %v", err)
+	}
+	if len(exact.Rows) != 1 ||
+		exact.Rows[0].ExternalID != control.ExternalID {
+		t.Fatalf("external id page = %+v", exact.Rows)
 	}
 	system := rows[0]
 	if system.Account != "" || system.Actor != "" {
@@ -166,7 +180,7 @@ func TestAuditTitleSnapshotPersistedVerbatim(t *testing.T) {
 }
 
 // TestAuditTitleBackfilledFromLiveRows covers the lookupTitle safety-net: an
-// entry with empty titles but codes matching live accounts/principals rows
+// entry with empty titles but codes matching live account/principal rows
 // backfills both titles from those rows at write time.
 func TestAuditTitleBackfilledFromLiveRows(t *testing.T) {
 	ctx := context.Background()
@@ -277,6 +291,261 @@ func TestAuditFiltered(t *testing.T) {
 	}
 }
 
+// TestAuditAssetFilter verifies the asset filter on the paged list path: an
+// adjustment row and the asset create/update/delete rows are filterable by the
+// asset code they recorded, and rows with no asset are excluded.
+func TestAuditAssetFilter(t *testing.T) {
+	ctx, rs := seedAuditFixtures(t)
+	mustAppend := func(entry AuditEntry) {
+		t.Helper()
+		if err := rs.AppendAudit(ctx, entry); err != nil {
+			t.Fatalf("AppendAudit(%s): %v", entry.Detail, err)
+		}
+	}
+	mustAppend(AuditEntry{
+		Action: domain.AuditActionAdjustment, Account: "acc-1", Asset: "AAPL",
+		Detail: "adjust AAPL",
+	})
+	mustAppend(AuditEntry{
+		Action: domain.AuditActionCreateAsset, Asset: "AAPL",
+		Detail: "create asset AAPL",
+	})
+	mustAppend(AuditEntry{
+		Action: domain.AuditActionUpdateAsset, Asset: "AAPL",
+		Detail: "update asset AAPL",
+	})
+	mustAppend(AuditEntry{
+		Action: domain.AuditActionDeleteAsset, Asset: "AAPL",
+		Detail: "delete asset AAPL",
+	})
+	// Rows with no asset, or a different asset, must be excluded.
+	mustAppend(AuditEntry{
+		Action: domain.AuditActionBlock, Account: "acc-1", Detail: "block acc-1",
+	})
+	mustAppend(AuditEntry{
+		Action: domain.AuditActionAdjustment, Account: "acc-1", Asset: "MSFT",
+		Detail: "adjust MSFT",
+	})
+
+	page, err := rs.ListAuditRows(ctx, fwstore.AuditListFilter{
+		Asset: fwstore.ExactTextMatcher("AAPL"),
+		Page:  fwstore.PageSpec{Limit: 10},
+	})
+	if err != nil {
+		t.Fatalf("ListAuditRows(asset): %v", err)
+	}
+	if len(page.Rows) != 4 {
+		t.Fatalf("asset filter len = %d, want 4", len(page.Rows))
+	}
+	wantActions := map[domain.AuditAction]bool{
+		domain.AuditActionAdjustment:  true,
+		domain.AuditActionCreateAsset: true,
+		domain.AuditActionUpdateAsset: true,
+		domain.AuditActionDeleteAsset: true,
+	}
+	for _, row := range page.Rows {
+		if row.Asset != "AAPL" {
+			t.Fatalf("row asset = %q, want AAPL", row.Asset)
+		}
+		if !wantActions[row.Action] {
+			t.Fatalf("unexpected action %q in asset-filtered rows", row.Action)
+		}
+	}
+}
+
+func TestAuditAccountFilterMatchesRenamedAccountByIdentity(t *testing.T) {
+	ctx, rs := seedAuditFixtures(t)
+	if err := rs.AppendAudit(ctx, AuditEntry{
+		Action:  domain.AuditActionBlock,
+		Account: "acc-1",
+		Detail:  "blocked before rename",
+		Source:  domain.SourcePanel,
+	}); err != nil {
+		t.Fatalf("AppendAudit: %v", err)
+	}
+	if _, err := rs.UpdateAccount(ctx, "acc-1", domain.Account{
+		Code:  "acc-renamed",
+		Title: "",
+	}); err != nil {
+		t.Fatalf("UpdateAccount: %v", err)
+	}
+
+	rows, err := rs.ListAuditFiltered(ctx, domain.AuditFilter{
+		Account: "acc-renamed",
+		Actions: []domain.AuditAction{
+			domain.AuditActionBlock,
+		},
+	}, 10)
+	if err != nil {
+		t.Fatalf("ListAuditFiltered(renamed account): %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("renamed account filter len = %d, want 1: %+v", len(rows), rows)
+	}
+	if rows[0].Action != domain.AuditActionBlock {
+		t.Fatalf("action = %q, want block", rows[0].Action)
+	}
+	if rows[0].Account != "acc-1" {
+		t.Fatalf("snapshot account = %q, want old code acc-1", rows[0].Account)
+	}
+}
+
+func TestAuditListRowsKeysetPageFilter(t *testing.T) {
+	ctx, rs := seedAuditFixtures(t)
+	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-2"}); err != nil {
+		t.Fatalf("CreateAccount(acc-2): %v", err)
+	}
+	if err := rs.CreatePrincipal(ctx, domain.Principal{Code: "robot"}); err != nil {
+		t.Fatalf("CreatePrincipal(robot): %v", err)
+	}
+	mustAppend := func(entry AuditEntry) {
+		t.Helper()
+		if err := rs.AppendAudit(ctx, entry); err != nil {
+			t.Fatalf("AppendAudit(%s): %v", entry.Detail, err)
+		}
+	}
+	mustAppend(AuditEntry{
+		Actor: "operator", Action: domain.AuditActionBlock,
+		Account: "acc-2", Source: domain.SourcePanel, Detail: "row-old",
+	})
+	mustAppend(AuditEntry{
+		Actor: "operator", Action: domain.AuditActionUnblock,
+		Account: "acc-1", Source: domain.SourcePanel, Detail: "row-mid",
+	})
+	mustAppend(AuditEntry{
+		Actor: "operator", Action: domain.AuditActionBlock,
+		Account: "acc-1", Source: domain.SourcePanel, Detail: "row-new",
+	})
+	mustAppend(AuditEntry{
+		Actor: "robot", Action: domain.AuditActionSubmitOrder,
+		Account: "acc-1", Source: domain.SourceMCP, Detail: "row-other",
+	})
+
+	r := rs.(*realmStore)
+	times := map[string]string{
+		"row-old":   "2026-01-01T00:00:00Z",
+		"row-mid":   "2026-01-02T00:00:00Z",
+		"row-new":   "2026-01-03T00:00:00Z",
+		"row-other": "2026-01-04T00:00:00Z",
+	}
+	for detail, at := range times {
+		if _, err := r.db().ExecContext(
+			ctx, `UPDATE audit SET at = ? WHERE detail = ?`, at, detail,
+		); err != nil {
+			t.Fatalf("update audit at %s: %v", detail, err)
+		}
+	}
+	minAt := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	page, err := rs.ListAuditRows(ctx, fwstore.AuditListFilter{
+		Actor:  fwstore.ExactTextMatcher("operator"),
+		Source: domain.SourcePanel,
+		Actions: []domain.AuditAction{
+			domain.AuditActionBlock,
+			domain.AuditActionUnblock,
+		},
+		At:   fwstore.TimeRangeFilter{Min: &minAt},
+		Page: fwstore.PageSpec{Limit: 1},
+	})
+	if err != nil {
+		t.Fatalf("ListAuditRows(first): %v", err)
+	}
+	if page.Total != 2 || len(page.Rows) != 1 {
+		t.Fatalf("page total/len = %d/%d, want 2/1", page.Total, len(page.Rows))
+	}
+	if page.Rows[0].Detail != "row-new" {
+		t.Fatalf("first row detail = %q, want row-new", page.Rows[0].Detail)
+	}
+
+	second, err := rs.ListAuditRows(ctx, fwstore.AuditListFilter{
+		Actor:  fwstore.ExactTextMatcher("operator"),
+		Source: domain.SourcePanel,
+		Actions: []domain.AuditAction{
+			domain.AuditActionBlock,
+			domain.AuditActionUnblock,
+		},
+		At:   fwstore.TimeRangeFilter{Min: &minAt},
+		Page: fwstore.PageSpec{Limit: 1, Offset: 1},
+	})
+	if err != nil {
+		t.Fatalf("ListAuditRows(second): %v", err)
+	}
+	if second.Total != 2 || len(second.Rows) != 1 {
+		t.Fatalf("second total/len = %d/%d, want 2/1", second.Total, len(second.Rows))
+	}
+	if second.Rows[0].Detail != "row-mid" {
+		t.Fatalf("second page = %+v", second.Rows)
+	}
+}
+
+// TestAuditListUsesIndexNoTempSort asserts the audit list query
+// (newest-first, no filter and default control-category filter) is satisfied by an index
+// and never triggers a full TEMP B-TREE sort.
+func TestAuditListUsesIndexNoTempSort(t *testing.T) {
+	ctx, rs := seedAuditFixtures(t)
+	r := rs.(*realmStore)
+
+	// Populate a few thousand rows so the query planner's index choice is not an
+	// artifact of a near-empty table.
+	for i := 0; i < 4000; i++ {
+		if err := rs.AppendAudit(ctx, AuditEntry{
+			Actor: "operator", Action: domain.AuditActionBlock,
+			Account: "acc-1", Source: domain.SourcePanel, Detail: "bulk",
+		}); err != nil {
+			t.Fatalf("AppendAudit(%d): %v", i, err)
+		}
+	}
+
+	explain := func(filter fwstore.AuditListFilter) string {
+		t.Helper()
+		clauses, args := auditListClauses(filter)
+		query, queryArgs := buildAuditListQuery(clauses, args, filter.Page)
+		rows, err := r.db().QueryContext(
+			ctx, "EXPLAIN QUERY PLAN "+query, queryArgs...,
+		)
+		if err != nil {
+			t.Fatalf("EXPLAIN QUERY PLAN: %v", err)
+		}
+		defer func() { _ = rows.Close() }()
+		var plan strings.Builder
+		for rows.Next() {
+			var id, parent, notUsed int
+			var detail string
+			if err := rows.Scan(&id, &parent, &notUsed, &detail); err != nil {
+				t.Fatalf("scan plan: %v", err)
+			}
+			plan.WriteString(detail)
+			plan.WriteByte('\n')
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("iterate plan: %v", err)
+		}
+		return plan.String()
+	}
+
+	assertIndexedNoSort := func(name string, filter fwstore.AuditListFilter) {
+		t.Helper()
+		plan := explain(filter)
+		if strings.Contains(plan, "USE TEMP B-TREE FOR ORDER BY") {
+			t.Fatalf("%s: plan contains temp b-tree sort:\n%s", name, plan)
+		}
+		if !strings.Contains(plan, "USING INDEX") &&
+			!strings.Contains(plan, "USING COVERING INDEX") {
+			t.Fatalf("%s: plan does not use an index:\n%s", name, plan)
+		}
+	}
+
+	// Default browse view: newest-first, no action filter.
+	assertIndexedNoSort("no filter", fwstore.AuditListFilter{
+		Page: fwstore.PageSpec{Limit: 50},
+	})
+	// Default frontend browse view: control category filters trading noise while
+	// preserving the newest-first index order.
+	assertIndexedNoSort("control category", fwstore.AuditListFilter{
+		Category: domain.AuditCategoryControl,
+		Page:     fwstore.PageSpec{Limit: 50},
+	})
+}
+
 // TestAuditTrailPreservedOnAccountDelete is the central §6 invariant: deleting an
 // account must NOT cascade-delete its audit rows; the rows survive with the
 // account reference cleared (ON DELETE SET NULL), and ListAudit still returns
@@ -354,7 +623,7 @@ func deleteAccountRaw(
 	t.Helper()
 	r := rs.(*realmStore)
 	res, err := r.db().ExecContext(
-		ctx, `DELETE FROM accounts WHERE code = ?`, code.String(),
+		ctx, `DELETE FROM account WHERE code = ?`, code.String(),
 	)
 	if err != nil {
 		t.Fatalf("delete account %q: %v", code, err)

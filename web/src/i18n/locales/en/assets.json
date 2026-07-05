@@ -1,0 +1,137 @@
+{
+  "page": {
+    "title": "Assets",
+    "description": "Tradable assets and their class dictionary, registered in the control plane. Filtering is applied by the server over the full set."
+  },
+  "tabs": {
+    "assets": "Assets",
+    "classes": "Classes"
+  },
+  "pagination": {
+    "pageSize": {
+      "ariaLabel": "Page size",
+      "rowCount": "{{count}} rows"
+    }
+  },
+  "columns": {
+    "asset": "Asset",
+    "class": "Class",
+    "actions": "Actions"
+  },
+  "columnDescriptions": {
+    "asset": "This column shows the asset code and display title.",
+    "class": "This column shows the class assigned to the asset.",
+    "actions": "This column contains row actions for filtering, navigation, sharing, and deletion."
+  },
+  "filters": {
+    "searchLabel": "Asset search",
+    "searchPlaceholder": "Search by code or title…",
+    "classLabel": "Class",
+    "classPlaceholder": "Filter by class…",
+    "clearField": "Clear field"
+  },
+  "noClass": "—",
+  "actions": {
+    "editTitle": "Edit asset"
+  },
+  "links": {
+    "positions": "Positions",
+    "orders": "Orders",
+    "trades": "Trades",
+    "audit": "Audit"
+  },
+  "assets": {
+    "heading": "Assets"
+  },
+  "empty": {
+    "title": "No assets",
+    "hintEmpty": "Register an asset to begin tracking instruments.",
+    "hintFiltered": "No assets match the current filters."
+  },
+  "createAsset": {
+    "trigger": "New asset",
+    "title": "Create asset",
+    "description": "Register a tradable asset. The code is the identifier and can be renamed later.",
+    "codeLabel": "Asset code",
+    "codeHint": "A stable identifier, for example BTC or AAPL.",
+    "titleLabel": "Title",
+    "classLabel": "Class",
+    "classHint": "Optional. Catalogue the asset under an existing or new class.",
+    "cancel": "Cancel",
+    "submit": "Create"
+  },
+  "editAsset": {
+    "titlePrefix": "Edit asset",
+    "description": "Rename the asset code, or update its title and class.",
+    "codeLabel": "Asset code",
+    "titleLabel": "Title",
+    "classLabel": "Class",
+    "cancel": "Cancel",
+    "submit": "Save"
+  },
+  "deleteAsset": {
+    "title": "Delete asset",
+    "descriptionPrefix": "Delete asset",
+    "descriptionSuffix": "? This cannot be undone.",
+    "cancel": "Cancel",
+    "submit": "Delete"
+  },
+  "classes": {
+    "heading": "Asset classes",
+    "columns": {
+      "class": "Class",
+      "assets": "Assets",
+      "notes": "Description",
+      "actions": "Actions"
+    },
+    "columnDescriptions": {
+      "class": "This column shows the asset class code and display title.",
+      "assets": "This column shows how many assets are assigned to the class.",
+      "notes": "This column shows the description stored on the asset class.",
+      "actions": "This column contains row actions for filtering, sharing, and deletion."
+    },
+    "filters": {
+      "searchLabel": "Class search",
+      "searchPlaceholder": "Search by code or title…"
+    },
+    "actions": {
+      "editTitle": "Edit class"
+    },
+    "empty": {
+      "title": "No asset classes",
+      "hintEmpty": "Create a class to catalogue assets by category.",
+      "hintFiltered": "No classes match the current search."
+    }
+  },
+  "createClass": {
+    "trigger": "New class",
+    "title": "Create asset class",
+    "description": "Group assets under a category, for example crypto or equity.",
+    "codeLabel": "Class code",
+    "titleLabel": "Title",
+    "titlePlaceholder": "Cryptocurrencies",
+    "notesLabel": "Description",
+    "notesPlaceholder": "An optional note describing the class.",
+    "notesHint": "Shown alongside the class in the dictionary.",
+    "cancel": "Cancel",
+    "submit": "Create"
+  },
+  "editClass": {
+    "titlePrefix": "Edit class",
+    "description": "Rename the class code, or update its title and description. Renaming re-links every asset in the class.",
+    "codeLabel": "Class code",
+    "titleLabel": "Title",
+    "notesLabel": "Description",
+    "cancel": "Cancel",
+    "submit": "Save"
+  },
+  "deleteClass": {
+    "title": "Delete asset class",
+    "descriptionPrefix": "Delete asset class",
+    "descriptionSuffix": "? This cannot be undone.",
+    "descriptionSuffixLinked_one": "? Its {{count}} linked asset will be detached from the class. This cannot be undone.",
+    "descriptionSuffixLinked_other": "? Its {{count}} linked assets will be detached from the class. This cannot be undone.",
+    "cancel": "Cancel",
+    "submit": "Delete"
+  }
+}

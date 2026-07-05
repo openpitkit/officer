@@ -8,8 +8,12 @@
     }
   },
   "filter": {
+    "advancedDescription": "按执行者、来源、事件时间和事件类型筛选。账户、资产和精确 ID 筛选器保留在筛选栏中在线运行。",
     "account": {
       "placeholder": "按账户筛选…"
+    },
+    "asset": {
+      "placeholder": "按资产筛选…"
     },
     "source": {
       "ariaLabel": "来源",
@@ -33,7 +37,16 @@
     "action": "动作",
     "account": "账户",
     "source": "来源",
-    "detail": "详情"
+    "detail": "详情",
+    "columnDescriptions": {
+      "externalId": "此列显示不可变的审计记录标识符。",
+      "time": "此列显示审计事件被记录的时间。",
+      "actor": "此列显示触发该事件的操作员或集成。",
+      "action": "此列显示被审计的操作类型。",
+      "account": "此列显示事件涉及的账户，如有。",
+      "source": "此列显示事件来自面板、REST、MCP 或其他来源。",
+      "detail": "此列显示事件的简短可读摘要。"
+    }
   },
   "empty": {
     "title": "暂无审计记录",

@@ -6,8 +6,11 @@
   "filter": {
     "account": "按账户筛选",
     "accountPlaceholder": "acc-1",
+    "asset": "按资产筛选",
+    "assetPlaceholder": "AAPL",
     "policy": "按策略筛选",
-    "allPolicies": "所有策略"
+    "allPolicies": "所有策略",
+    "advancedDescription": "按策略类型和数值屏障值筛选。账户和资产筛选器保留在筛选栏中在线运行。"
   },
   "pagination": {
     "summary": "显示第 {{from}}-{{to}} 条，共 {{total}} 条",
@@ -23,6 +26,14 @@
     "asset": "资产",
     "values": "参数值",
     "actions": "操作",
+    "columnDescriptions": {
+      "policy": "此列显示该屏障应用的风控策略。",
+      "scope": "此列显示屏障应用于账户、资产、经纪商还是组合目标。",
+      "account": "此列显示屏障目标账户，如范围包含账户。",
+      "asset": "此列显示屏障目标资产，如范围包含资产。",
+      "values": "此列显示该策略屏障配置的数值或时长。",
+      "actions": "此列包含用于分享链接、编辑和删除屏障的行操作。"
+    },
     "edit": "编辑",
     "editAriaLabel": "编辑风控屏障",
     "deleteAriaLabel": "删除风控屏障"

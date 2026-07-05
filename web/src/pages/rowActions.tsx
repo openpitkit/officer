@@ -18,8 +18,6 @@
 import type { TFunction } from "i18next";
 import {
   ArrowLeftRight,
-  Ban,
-  CircleCheck,
   Coins,
   History,
   Pencil,
@@ -29,21 +27,16 @@ import {
 import { Link } from "react-router-dom";
 
 import type { Account, Group, Limit } from "@/api/types";
+import { RowActionButton } from "@/components/RowActionButton";
 import { Button } from "@/components/ui/button";
 
 export interface AccountRowActionContext {
   t: TFunction<"accounts">;
-  onEditNotes: (account: Account) => void;
-  onBlock: (account: Account) => void;
-  onUnblock: (account: Account) => void;
   onDelete: (account: Account) => void;
 }
 
 export interface GroupRowActionContext {
   t: TFunction<"accounts">;
-  onEditNotes: (group: Group) => void;
-  onBlock: (group: Group) => void;
-  onUnblock: (group: Group) => void;
   onDelete: (group: Group) => void;
 }
 
@@ -129,53 +122,6 @@ export function AccountAuditAction({
   );
 }
 
-export function AccountNotesAction({
-  account,
-  ctx,
-}: {
-  account: Account;
-  ctx: AccountRowActionContext;
-}) {
-  return (
-    <Button
-      variant="ghost"
-      size="sm"
-      onClick={() => ctx.onEditNotes(account)}
-      title={ctx.t("accounts.actions.editNotesTitle")}
-    >
-      {ctx.t("accounts.actions.notes")}
-    </Button>
-  );
-}
-
-export function AccountBlockAction({
-  account,
-  ctx,
-}: {
-  account: Account;
-  ctx: AccountRowActionContext;
-}) {
-  return account.blocked ? (
-    <Button
-      variant="outline"
-      size="sm"
-      onClick={() => ctx.onUnblock(account)}
-    >
-      <CircleCheck className="h-3.5 w-3.5" />
-      {ctx.t("accounts.actions.unblock")}
-    </Button>
-  ) : (
-    <Button
-      variant="outline"
-      size="sm"
-      onClick={() => ctx.onBlock(account)}
-    >
-      <Ban className="h-3.5 w-3.5" />
-      {ctx.t("accounts.actions.block")}
-    </Button>
-  );
-}
-
 export function AccountDeleteAction({
   account,
   ctx,
@@ -184,61 +130,12 @@ export function AccountDeleteAction({
   ctx: AccountRowActionContext;
 }) {
   return (
-    <Button
+    <RowActionButton
+      icon={Trash2}
+      label={ctx.t("accounts.actions.deleteTitle")}
       variant="ghost"
-      size="sm"
       onClick={() => ctx.onDelete(account)}
-      title={ctx.t("accounts.actions.deleteTitle")}
-    >
-      <Trash2 className="h-3.5 w-3.5" />
-    </Button>
-  );
-}
-
-export function GroupNotesAction({
-  group,
-  ctx,
-}: {
-  group: Group;
-  ctx: GroupRowActionContext;
-}) {
-  return (
-    <Button
-      variant="ghost"
-      size="sm"
-      onClick={() => ctx.onEditNotes(group)}
-      title={ctx.t("groups.actions.editNotesTitle")}
-    >
-      {ctx.t("groups.actions.notes")}
-    </Button>
-  );
-}
-
-export function GroupBlockAction({
-  group,
-  ctx,
-}: {
-  group: Group;
-  ctx: GroupRowActionContext;
-}) {
-  return group.blocked ? (
-    <Button
-      variant="outline"
-      size="sm"
-      onClick={() => ctx.onUnblock(group)}
-    >
-      <CircleCheck className="h-3.5 w-3.5" />
-      {ctx.t("groups.actions.unblock")}
-    </Button>
-  ) : (
-    <Button
-      variant="outline"
-      size="sm"
-      onClick={() => ctx.onBlock(group)}
-    >
-      <Ban className="h-3.5 w-3.5" />
-      {ctx.t("groups.actions.block")}
-    </Button>
+    />
   );
 }
 
@@ -250,16 +147,15 @@ export function GroupDeleteAction({
   ctx: GroupRowActionContext;
 }) {
   return (
-    <Button
+    <RowActionButton
+      icon={Trash2}
+      label={ctx.t("groups.actions.deleteTitle")}
       variant="ghost"
-      size="sm"
       onClick={() => ctx.onDelete(group)}
-      title={ctx.t("groups.actions.deleteTitle")}
       className="text-[var(--danger)] hover:text-[var(--danger)]"
     >
-      <Trash2 className="h-3.5 w-3.5" />
       {ctx.t("groups.actions.delete")}
-    </Button>
+    </RowActionButton>
   );
 }
 
@@ -271,15 +167,13 @@ export function LimitEditAction({
   ctx: LimitRowActionContext;
 }) {
   return (
-    <Button
-      variant="outline"
-      size="sm"
+    <RowActionButton
+      icon={Pencil}
+      label={ctx.t("table.editAriaLabel")}
       onClick={() => ctx.onEdit(limit)}
-      aria-label={ctx.t("table.editAriaLabel")}
     >
-      <Pencil className="h-3.5 w-3.5" />
       {ctx.t("table.edit")}
-    </Button>
+    </RowActionButton>
   );
 }
 
@@ -301,4 +195,3 @@ export function LimitDeleteAction({
     </Button>
   );
 }
-

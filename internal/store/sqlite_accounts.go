@@ -17,7 +17,7 @@
 
 // Group 1 of the SQLite store: the dictionary entities the rest of the schema
 // references - assets, principals, account groups and accounts. Dictionaries are
-// addressed by their immutable code; the surrogate key never crosses the
+// addressed by their public code; the surrogate key never crosses the
 // interface boundary. Accounts and groups carry a connector-assigned engine id,
 // returned (populated) on the create path so the engine layer can build its
 // tree, and an account's group link is cleared (SET NULL), not cascaded, when its
@@ -33,16 +33,30 @@ import (
 	"strings"
 
 	"go.openpit.dev/officer/framework/domain"
+	fwstore "go.openpit.dev/officer/framework/store"
 )
 
 // --- Assets -----------------------------------------------------------------
 
-// CreateAsset persists a new asset dictionary row.
+// assetSelect is the shared projection for asset reads. The LEFT JOIN surfaces
+// the class's code (NULL when the asset has no class) so the surrogate class id
+// never leaves the store.
+const assetSelect = `
+SELECT a.code, a.title, c.code
+FROM asset a
+LEFT JOIN asset_class c ON c.id = a.class_id`
+
+// CreateAsset persists a new asset dictionary row, resolving an optional class
+// code to its surrogate id (an empty code leaves the link NULL).
 func (r *realmStore) CreateAsset(ctx context.Context, asset domain.Asset) error {
-	_, err := r.db().ExecContext(
+	classID, err := optionalClassID(ctx, r.db(), asset.AssetClass)
+	if err != nil {
+		return err
+	}
+	_, err = r.db().ExecContext(
 		ctx,
-		`INSERT INTO assets (code, title, asset_class) VALUES (?, ?, ?)`,
-		asset.Code, asset.Title, nullableString(asset.AssetClass),
+		`INSERT INTO asset (code, title, class_id) VALUES (?, ?, ?)`,
+		asset.Code, asset.Title, classID,
 	)
 	if err != nil {
 		if isSQLiteUnique(err) {
@@ -57,9 +71,7 @@ func (r *realmStore) CreateAsset(ctx context.Context, asset domain.Asset) error 
 func (r *realmStore) GetAsset(
 	ctx context.Context, code string,
 ) (domain.Asset, bool, error) {
-	row := r.db().QueryRowContext(
-		ctx, `SELECT code, title, asset_class FROM assets WHERE code = ?`, code,
-	)
+	row := r.db().QueryRowContext(ctx, assetSelect+` WHERE a.code = ?`, code)
 	asset, err := scanAssetRow(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Asset{}, false, nil
@@ -72,11 +84,42 @@ func (r *realmStore) GetAsset(
 
 // ListAssets returns every asset, ordered by code.
 func (r *realmStore) ListAssets(ctx context.Context) ([]domain.Asset, error) {
-	rows, err := r.db().QueryContext(
-		ctx, `SELECT code, title, asset_class FROM assets ORDER BY code`,
-	)
+	page, err := r.ListAssetRows(ctx, fwstore.AssetListFilter{})
 	if err != nil {
-		return nil, fmt.Errorf("store: list assets: %w", err)
+		return nil, err
+	}
+	return page.Rows, nil
+}
+
+// ListAssetRows returns assets in the requested list sort order with count.
+func (r *realmStore) ListAssetRows(
+	ctx context.Context, filter fwstore.AssetListFilter,
+) (fwstore.AssetListPage, error) {
+	clauses, args := assetListWhere(filter)
+	query := assetSelect
+	if len(clauses) > 0 {
+		query += "\nWHERE " + strings.Join(clauses, " AND ")
+	}
+
+	countQuery := `SELECT COUNT(*) FROM asset a
+LEFT JOIN asset_class c ON c.id = a.class_id`
+	if len(clauses) > 0 {
+		countQuery += "\nWHERE " + strings.Join(clauses, " AND ")
+	}
+	var total int
+	if err := r.db().QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return fwstore.AssetListPage{}, fmt.Errorf("store: count assets: %w", err)
+	}
+
+	queryArgs := append([]any{}, args...)
+	query += assetListOrderBy(filter.Sort)
+	if filter.Page.Limit > 0 {
+		query += "\nLIMIT ? OFFSET ?"
+		queryArgs = append(queryArgs, filter.Page.Limit, max(filter.Page.Offset, 0))
+	}
+	rows, err := r.db().QueryContext(ctx, query, queryArgs...)
+	if err != nil {
+		return fwstore.AssetListPage{}, fmt.Errorf("store: list assets: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -84,27 +127,78 @@ func (r *realmStore) ListAssets(ctx context.Context) ([]domain.Asset, error) {
 	for rows.Next() {
 		asset, err := scanAsset(rows)
 		if err != nil {
-			return nil, err
+			return fwstore.AssetListPage{}, err
 		}
 		assets = append(assets, asset)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: iterate assets: %w", err)
+		return fwstore.AssetListPage{}, fmt.Errorf("store: iterate assets: %w", err)
 	}
-	return assets, nil
+	return fwstore.AssetListPage{Rows: assets, Total: total}, nil
 }
 
-// UpdateAsset replaces the mutable fields of the identified asset.
-func (r *realmStore) UpdateAsset(ctx context.Context, asset domain.Asset) error {
+func assetListWhere(filter fwstore.AssetListFilter) ([]string, []any) {
+	clauses := make([]string, 0)
+	args := make([]any, 0)
+	appendMatcherAny(&clauses, &args, []string{"a.code", "a.title"}, filter.Code)
+	appendMatcher(&clauses, &args, "c.code", filter.Class)
+	return clauses, args
+}
+
+func assetListOrderBy(sort fwstore.SortSpec) string {
+	columns := map[string]string{
+		"assetClass": "c.code",
+		"code":       "a.code",
+		"title":      "a.title",
+	}
+	column := columns[sort.Column]
+	if column == "" {
+		column = "a.code"
+	}
+	direction := "ASC"
+	tieDirection := "ASC"
+	if sort.Descending {
+		direction = "DESC"
+		tieDirection = "DESC"
+	}
+	return "\nORDER BY " + column + " " + direction + ", a.code " + tieDirection
+}
+
+// UpdateAsset replaces the public code and mutable fields of the identified
+// asset. Balances and other rows reference the asset by its surrogate id, so a
+// code rename is safe, mirroring UpdateGroup. The optional class code is resolved
+// to its surrogate id (an empty code clears the link).
+func (r *realmStore) UpdateAsset(
+	ctx context.Context, oldCode string, asset domain.Asset,
+) (domain.Asset, error) {
+	classID, err := optionalClassID(ctx, r.db(), asset.AssetClass)
+	if err != nil {
+		return domain.Asset{}, err
+	}
 	res, err := r.db().ExecContext(
 		ctx,
-		`UPDATE assets SET title = ?, asset_class = ? WHERE code = ?`,
-		asset.Title, nullableString(asset.AssetClass), asset.Code,
+		`UPDATE asset SET code = ?, title = ?, class_id = ? WHERE code = ?`,
+		asset.Code, asset.Title, classID, oldCode,
 	)
 	if err != nil {
-		return fmt.Errorf("store: update asset: %w", err)
+		if isSQLiteUnique(err) {
+			return domain.Asset{},
+				fmt.Errorf("asset %q: %w", asset.Code, domain.ErrAlreadyExists)
+		}
+		return domain.Asset{}, fmt.Errorf("store: update asset: %w", err)
 	}
-	return notFoundIfNoRows(res, "asset", asset.Code)
+	if err := notFoundIfNoRows(res, "asset", oldCode); err != nil {
+		return domain.Asset{}, err
+	}
+	updated, ok, err := r.GetAsset(ctx, asset.Code)
+	if err != nil {
+		return domain.Asset{}, err
+	}
+	if !ok {
+		return domain.Asset{},
+			fmt.Errorf("asset %q: %w", asset.Code, domain.ErrNotFound)
+	}
+	return updated, nil
 }
 
 // DeleteAsset removes the asset and, when forced, cascades its dependent rows.
@@ -131,7 +225,7 @@ func (r *realmStore) DeleteAsset(ctx context.Context, code string, force bool) e
 			return domain.NewHasDependentsError(deps)
 		}
 	}
-	res, err := tx.ExecContext(ctx, `DELETE FROM assets WHERE id = ?`, assetID)
+	res, err := tx.ExecContext(ctx, `DELETE FROM asset WHERE id = ?`, assetID)
 	if err != nil {
 		return fmt.Errorf("store: delete asset: %w", err)
 	}
@@ -164,6 +258,224 @@ func scanAssetRow(row *sql.Row) (domain.Asset, error) {
 	return asset, nil
 }
 
+// --- Asset classes ----------------------------------------------------------
+
+// CreateAssetClass persists a new asset-class dictionary row.
+func (r *realmStore) CreateAssetClass(
+	ctx context.Context, class domain.AssetClass,
+) error {
+	_, err := r.db().ExecContext(
+		ctx,
+		`INSERT INTO asset_class (code, title, notes) VALUES (?, ?, ?)`,
+		class.Code, class.Title, class.Notes,
+	)
+	if err != nil {
+		if isSQLiteUnique(err) {
+			return fmt.Errorf("asset class %q: %w", class.Code, domain.ErrAlreadyExists)
+		}
+		return fmt.Errorf("store: create asset class: %w", err)
+	}
+	return nil
+}
+
+// GetAssetClass returns the asset class with the given code.
+func (r *realmStore) GetAssetClass(
+	ctx context.Context, code string,
+) (domain.AssetClass, bool, error) {
+	var class domain.AssetClass
+	err := r.db().QueryRowContext(
+		ctx, `SELECT code, title, notes FROM asset_class WHERE code = ?`, code,
+	).Scan(&class.Code, &class.Title, &class.Notes)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.AssetClass{}, false, nil
+	}
+	if err != nil {
+		return domain.AssetClass{}, false, fmt.Errorf("store: get asset class: %w", err)
+	}
+	return class, true, nil
+}
+
+// ListAssetClasses returns every asset class, ordered by code.
+func (r *realmStore) ListAssetClasses(
+	ctx context.Context,
+) ([]domain.AssetClass, error) {
+	page, err := r.ListAssetClassRows(ctx, fwstore.AssetClassListFilter{})
+	if err != nil {
+		return nil, err
+	}
+	classes := make([]domain.AssetClass, 0, len(page.Rows))
+	for _, row := range page.Rows {
+		classes = append(classes, row.Class)
+	}
+	return classes, nil
+}
+
+// ListAssetClassRows returns asset classes matching filter, sorted and paged,
+// with the count of assets whose asset_class equals each class code.
+func (r *realmStore) ListAssetClassRows(
+	ctx context.Context, filter fwstore.AssetClassListFilter,
+) (fwstore.AssetClassListPage, error) {
+	where, args := assetClassListWhere(filter)
+	from := `
+FROM asset_class c
+LEFT JOIN asset a ON a.class_id = c.id` +
+		where + `
+GROUP BY c.id`
+
+	countQuery := `SELECT COUNT(*) FROM (SELECT c.id` + from + `) AS filtered`
+	var total int
+	if err := r.db().QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return fwstore.AssetClassListPage{}, fmt.Errorf("store: count asset class rows: %w", err)
+	}
+
+	queryArgs := append([]any{}, args...)
+	query := `
+SELECT c.code, c.title, c.notes, COUNT(a.id) AS asset_count` +
+		from + assetClassListOrderBy(filter.Sort)
+	if filter.Page.Limit > 0 {
+		query += ` LIMIT ? OFFSET ?`
+		queryArgs = append(queryArgs, filter.Page.Limit, max(filter.Page.Offset, 0))
+	}
+
+	rows, err := r.db().QueryContext(ctx, query, queryArgs...)
+	if err != nil {
+		return fwstore.AssetClassListPage{}, fmt.Errorf("store: list asset class rows: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	classes := make([]fwstore.AssetClassListRow, 0)
+	for rows.Next() {
+		class, err := scanAssetClassListRow(rows)
+		if err != nil {
+			return fwstore.AssetClassListPage{}, err
+		}
+		classes = append(classes, class)
+	}
+	if err := rows.Err(); err != nil {
+		return fwstore.AssetClassListPage{}, fmt.Errorf("store: iterate asset class rows: %w", err)
+	}
+	return fwstore.AssetClassListPage{Rows: classes, Total: total}, nil
+}
+
+// UpdateAssetClass replaces the public code, title and notes of the identified
+// class. Assets link to it by the class_id foreign key, so a code rename needs
+// no cascade, mirroring UpdateGroup.
+func (r *realmStore) UpdateAssetClass(
+	ctx context.Context, oldCode string, class domain.AssetClass,
+) (domain.AssetClass, error) {
+	res, err := r.db().ExecContext(
+		ctx,
+		`UPDATE asset_class SET code = ?, title = ?, notes = ? WHERE code = ?`,
+		class.Code, class.Title, class.Notes, oldCode,
+	)
+	if err != nil {
+		if isSQLiteUnique(err) {
+			return domain.AssetClass{},
+				fmt.Errorf("asset class %q: %w", class.Code, domain.ErrAlreadyExists)
+		}
+		return domain.AssetClass{}, fmt.Errorf("store: update asset class: %w", err)
+	}
+	if err := notFoundIfNoRows(res, "asset class", oldCode); err != nil {
+		return domain.AssetClass{}, err
+	}
+	return class, nil
+}
+
+// DeleteAssetClass removes the class. Assets link to it by the class_id foreign
+// key: without force, referencing assets are reported as dependents; either way
+// the delete clears the link via ON DELETE SET NULL, mirroring DeleteGroup.
+func (r *realmStore) DeleteAssetClass(
+	ctx context.Context, code string, force bool,
+) error {
+	tx, err := r.db().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: begin delete asset class: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	classID, err := resolveAssetClassID(ctx, tx, code)
+	if err != nil {
+		if errors.Is(err, domain.ErrInvalid) {
+			return fmt.Errorf("asset class %q: %w", code, domain.ErrNotFound)
+		}
+		return err
+	}
+	if !force {
+		count, err := assetClassAssetCount(ctx, tx, classID)
+		if err != nil {
+			return err
+		}
+		if count > 0 {
+			return domain.NewHasDependentsError([]domain.DependentCount{
+				{Kind: "asset", Count: count},
+			})
+		}
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM asset_class WHERE id = ?`, classID)
+	if err != nil {
+		return fmt.Errorf("store: delete asset class: %w", err)
+	}
+	if err := notFoundIfNoRows(res, "asset class", code); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit delete asset class: %w", err)
+	}
+	return nil
+}
+
+func assetClassAssetCount(
+	ctx context.Context, q sqlQueryer, classID int64,
+) (int, error) {
+	var count int
+	if err := q.QueryRowContext(
+		ctx, `SELECT COUNT(*) FROM asset WHERE class_id = ?`, classID,
+	).Scan(&count); err != nil {
+		return 0, fmt.Errorf("store: count asset class assets: %w", err)
+	}
+	return count, nil
+}
+
+func scanAssetClassListRow(rows *sql.Rows) (fwstore.AssetClassListRow, error) {
+	var (
+		class      domain.AssetClass
+		assetCount int
+	)
+	if err := rows.Scan(&class.Code, &class.Title, &class.Notes, &assetCount); err != nil {
+		return fwstore.AssetClassListRow{}, fmt.Errorf("store: scan asset class row: %w", err)
+	}
+	return fwstore.AssetClassListRow{Class: class, AssetCount: assetCount}, nil
+}
+
+func assetClassListWhere(filter fwstore.AssetClassListFilter) (string, []any) {
+	clauses := make([]string, 0)
+	args := make([]any, 0)
+	appendMatcherAny(&clauses, &args, []string{"c.code", "c.title"}, filter.Code)
+	appendMatcher(&clauses, &args, "c.notes", filter.Notes)
+	if len(clauses) == 0 {
+		return "", args
+	}
+	return "\nWHERE " + strings.Join(clauses, " AND "), args
+}
+
+func assetClassListOrderBy(sort fwstore.SortSpec) string {
+	columns := map[string]string{
+		"assetCount": "asset_count",
+		"code":       "c.code",
+		"title":      "c.title",
+	}
+	column := columns[sort.Column]
+	if column == "" {
+		column = "c.code"
+	}
+	direction := "ASC"
+	tieDirection := "ASC"
+	if sort.Descending {
+		direction = "DESC"
+		tieDirection = "DESC"
+	}
+	return "\nORDER BY " + column + " " + direction + ", c.code " + tieDirection
+}
+
 // --- Principals -------------------------------------------------------------
 
 // CreatePrincipal persists a new principal dictionary row.
@@ -172,7 +484,7 @@ func (r *realmStore) CreatePrincipal(
 ) error {
 	_, err := r.db().ExecContext(
 		ctx,
-		`INSERT INTO principals (code, title) VALUES (?, ?)`,
+		`INSERT INTO principal (code, title) VALUES (?, ?)`,
 		principal.Code, principal.Title,
 	)
 	if err != nil {
@@ -190,7 +502,7 @@ func (r *realmStore) GetPrincipal(
 ) (domain.Principal, bool, error) {
 	var principal domain.Principal
 	err := r.db().QueryRowContext(
-		ctx, `SELECT code, title FROM principals WHERE code = ?`, code,
+		ctx, `SELECT code, title FROM principal WHERE code = ?`, code,
 	).Scan(&principal.Code, &principal.Title)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Principal{}, false, nil
@@ -204,7 +516,7 @@ func (r *realmStore) GetPrincipal(
 // ListPrincipals returns every principal, ordered by code.
 func (r *realmStore) ListPrincipals(ctx context.Context) ([]domain.Principal, error) {
 	rows, err := r.db().QueryContext(
-		ctx, `SELECT code, title FROM principals ORDER BY code`,
+		ctx, `SELECT code, title FROM principal ORDER BY code`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("store: list principals: %w", err)
@@ -230,7 +542,7 @@ func (r *realmStore) UpdatePrincipal(
 	ctx context.Context, principal domain.Principal,
 ) error {
 	res, err := r.db().ExecContext(
-		ctx, `UPDATE principals SET title = ? WHERE code = ?`,
+		ctx, `UPDATE principal SET title = ? WHERE code = ?`,
 		principal.Title, principal.Code,
 	)
 	if err != nil {
@@ -241,7 +553,7 @@ func (r *realmStore) UpdatePrincipal(
 
 // DeletePrincipal removes the principal; references to it are cleared.
 func (r *realmStore) DeletePrincipal(ctx context.Context, code string) error {
-	res, err := r.db().ExecContext(ctx, `DELETE FROM principals WHERE code = ?`, code)
+	res, err := r.db().ExecContext(ctx, `DELETE FROM principal WHERE code = ?`, code)
 	if err != nil {
 		return fmt.Errorf("store: delete principal: %w", err)
 	}
@@ -250,29 +562,18 @@ func (r *realmStore) DeletePrincipal(ctx context.Context, code string) error {
 
 // --- Account groups ---------------------------------------------------------
 
-// CreateGroup persists a new account group, assigning a collision-free engine
-// group id inside the insert transaction, and returns it with EngineGroupID
-// populated.
+// CreateGroup persists a new account group and returns it with EngineGroupID
+// populated from the inserted row's surrogate id, which is the id the engine runs
+// the group on.
 func (r *realmStore) CreateGroup(
 	ctx context.Context, group domain.AccountGroup,
 ) (domain.AccountGroup, error) {
-	tx, err := r.db().BeginTx(ctx, nil)
-	if err != nil {
-		return domain.AccountGroup{}, fmt.Errorf("store: begin create group: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	engineID, err := nextEngineGroupID(ctx, tx)
-	if err != nil {
-		return domain.AccountGroup{}, err
-	}
-	_, err = tx.ExecContext(
+	res, err := r.db().ExecContext(
 		ctx,
-		`INSERT INTO account_groups
-		 (engine_group_id, code, title, notes, blocked, block_reason)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		int64(engineID.Uint32()), group.Code, group.Title,
-		group.Notes, group.Blocked, group.BlockReason,
+		`INSERT INTO account_group
+		 (code, title, notes, blocked, block_reason)
+		 VALUES (?, ?, ?, ?, ?)`,
+		group.Code, group.Title, group.Notes, group.Blocked, group.BlockReason,
 	)
 	if err != nil {
 		if isSQLiteUnique(err) {
@@ -281,10 +582,11 @@ func (r *realmStore) CreateGroup(
 		}
 		return domain.AccountGroup{}, fmt.Errorf("store: create group: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
-		return domain.AccountGroup{}, fmt.Errorf("store: commit create group: %w", err)
+	id, err := res.LastInsertId()
+	if err != nil {
+		return domain.AccountGroup{}, fmt.Errorf("store: create group id: %w", err)
 	}
-	group.EngineGroupID = engineID
+	group.EngineGroupID = domain.EngineGroupID(id)
 	return group, nil
 }
 
@@ -294,8 +596,8 @@ func (r *realmStore) GetGroup(
 ) (domain.AccountGroup, bool, error) {
 	row := r.db().QueryRowContext(
 		ctx,
-		`SELECT engine_group_id, code, title, notes, blocked, block_reason
-		 FROM account_groups WHERE code = ?`,
+		`SELECT id, code, title, notes, blocked, block_reason
+		 FROM account_group WHERE code = ?`,
 		code,
 	)
 	group, err := scanGroupRow(row)
@@ -310,39 +612,175 @@ func (r *realmStore) GetGroup(
 
 // ListGroups returns every group, ordered by code.
 func (r *realmStore) ListGroups(ctx context.Context) ([]domain.AccountGroup, error) {
-	rows, err := r.db().QueryContext(
-		ctx,
-		`SELECT engine_group_id, code, title, notes, blocked, block_reason
-		 FROM account_groups ORDER BY code`,
-	)
+	page, err := r.ListGroupRows(ctx, fwstore.GroupListFilter{})
 	if err != nil {
-		return nil, fmt.Errorf("store: list groups: %w", err)
+		return nil, err
+	}
+	groups := make([]domain.AccountGroup, 0, len(page.Rows))
+	for _, row := range page.Rows {
+		if row.Group.Code == "" {
+			continue
+		}
+		groups = append(groups, row.Group)
+	}
+	return groups, nil
+}
+
+// ListGroupRows returns groups matching filter, sorted and paged, plus the
+// synthetic default group for accounts without a group.
+//
+// The default group is a single synthetic row that cannot share a SQL sort or
+// offset window with the real groups (it has no code and no stable position
+// among them). It is therefore handled separately: it is read once with the
+// same filter visibility rules as the real groups and, when it qualifies,
+// pinned first on the first page (offset zero). It is excluded from the real
+// groups' ORDER BY, LIMIT/OFFSET window, and from Total, so paging the real
+// groups stays deterministic regardless of the default group's presence.
+func (r *realmStore) ListGroupRows(
+	ctx context.Context, filter fwstore.GroupListFilter,
+) (fwstore.GroupListPage, error) {
+	where, args := groupListWhere(filter, "g")
+	having, havingArgs := countHaving(
+		"COUNT(DISTINCT a.id)", filter.Account, "COUNT(b.asset_id)", filter.Position,
+	)
+	from := `
+FROM account_group g
+LEFT JOIN account a ON a.group_id = g.id
+LEFT JOIN balance b ON b.account_id = a.id` +
+		where + `
+GROUP BY g.id` + having
+
+	countArgs := append(append([]any{}, args...), havingArgs...)
+	countQuery := `SELECT COUNT(*) FROM (SELECT g.id` + from + `) AS filtered`
+	var total int
+	if err := r.db().QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
+		return fwstore.GroupListPage{}, fmt.Errorf("store: count group rows: %w", err)
+	}
+
+	// The default group is read first, before the real-group cursor is opened:
+	// the SQLite connector serializes on a single connection, so a second query
+	// issued while a result set is still open would deadlock on the pool.
+	groups := make([]fwstore.GroupListRow, 0)
+	if filter.Page.Offset <= 0 {
+		defaultRow, ok, err := r.defaultGroupRow(ctx, filter)
+		if err != nil {
+			return fwstore.GroupListPage{}, err
+		}
+		if ok {
+			groups = append(groups, defaultRow)
+		}
+	}
+
+	queryArgs := append(append([]any{}, args...), havingArgs...)
+	query := `
+SELECT g.id, g.code, g.title, g.notes, g.blocked, g.block_reason,
+       COUNT(DISTINCT a.id) AS account_count,
+       COUNT(b.asset_id) AS position_count` + from + groupListOrderBy(filter.Sort)
+	if filter.Page.Limit > 0 {
+		query += ` LIMIT ? OFFSET ?`
+		queryArgs = append(queryArgs, filter.Page.Limit, max(filter.Page.Offset, 0))
+	}
+
+	rows, err := r.db().QueryContext(ctx, query, queryArgs...)
+	if err != nil {
+		return fwstore.GroupListPage{}, fmt.Errorf("store: list group rows: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
-
-	groups := make([]domain.AccountGroup, 0)
 	for rows.Next() {
-		group, err := scanGroup(rows)
+		group, err := scanGroupListRow(rows)
 		if err != nil {
-			return nil, err
+			return fwstore.GroupListPage{}, err
 		}
 		groups = append(groups, group)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: iterate groups: %w", err)
+		return fwstore.GroupListPage{}, fmt.Errorf("store: iterate group rows: %w", err)
 	}
-	return groups, nil
+	return fwstore.GroupListPage{Rows: groups, Total: total}, nil
+}
+
+// defaultGroupRow reads the synthetic default group (code empty) holding the
+// accounts with no group, applying the same filter visibility rules as the real
+// groups. The bool is false when the filter excludes it.
+func (r *realmStore) defaultGroupRow(
+	ctx context.Context, filter fwstore.GroupListFilter,
+) (fwstore.GroupListRow, bool, error) {
+	where, args := groupListWhere(filter, "dg")
+	having, havingArgs := countHaving(
+		"COUNT(DISTINCT a.id)", filter.Account, "COUNT(b.asset_id)", filter.Position,
+	)
+	args = append(args, havingArgs...)
+	query := `
+SELECT dg.id, dg.code, dg.title, dg.notes, dg.blocked,
+       dg.block_reason,
+       COUNT(DISTINCT a.id) AS account_count,
+       COUNT(b.asset_id) AS position_count
+FROM (
+    SELECT 0 AS id, '' AS code, '' AS title, '' AS notes,
+           0 AS blocked, '' AS block_reason
+) dg
+LEFT JOIN account a ON a.group_id IS NULL
+LEFT JOIN balance b ON b.account_id = a.id` +
+		where + `
+GROUP BY dg.code` + having
+
+	rows, err := r.db().QueryContext(ctx, query, args...)
+	if err != nil {
+		return fwstore.GroupListRow{}, false, fmt.Errorf("store: default group row: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return fwstore.GroupListRow{}, false, fmt.Errorf("store: default group row: %w", err)
+		}
+		return fwstore.GroupListRow{}, false, nil
+	}
+	row, err := scanGroupListRow(rows)
+	if err != nil {
+		return fwstore.GroupListRow{}, false, err
+	}
+	return row, true, nil
 }
 
 // SetGroupNotes replaces the notes of the identified group.
 func (r *realmStore) SetGroupNotes(ctx context.Context, code, notes string) error {
 	res, err := r.db().ExecContext(
-		ctx, `UPDATE account_groups SET notes = ? WHERE code = ?`, notes, code,
+		ctx, `UPDATE account_group SET notes = ? WHERE code = ?`, notes, code,
 	)
 	if err != nil {
 		return fmt.Errorf("store: set group notes: %w", err)
 	}
 	return notFoundIfNoRows(res, "group", code)
+}
+
+// UpdateGroup replaces the public code and title of the identified group.
+func (r *realmStore) UpdateGroup(
+	ctx context.Context, oldCode string, group domain.AccountGroup,
+) (domain.AccountGroup, error) {
+	res, err := r.db().ExecContext(
+		ctx,
+		`UPDATE account_group SET code = ?, title = ? WHERE code = ?`,
+		group.Code, group.Title, oldCode,
+	)
+	if err != nil {
+		if isSQLiteUnique(err) {
+			return domain.AccountGroup{},
+				fmt.Errorf("group %q: %w", group.Code, domain.ErrAlreadyExists)
+		}
+		return domain.AccountGroup{}, fmt.Errorf("store: update group: %w", err)
+	}
+	if err := notFoundIfNoRows(res, "group", oldCode); err != nil {
+		return domain.AccountGroup{}, err
+	}
+	updated, ok, err := r.GetGroup(ctx, group.Code)
+	if err != nil {
+		return domain.AccountGroup{}, err
+	}
+	if !ok {
+		return domain.AccountGroup{},
+			fmt.Errorf("group %q: %w", group.Code, domain.ErrNotFound)
+	}
+	return updated, nil
 }
 
 // SetGroupBlocked updates the blocked flag and block reason of the group.
@@ -351,7 +789,7 @@ func (r *realmStore) SetGroupBlocked(
 ) error {
 	res, err := r.db().ExecContext(
 		ctx,
-		`UPDATE account_groups SET blocked = ?, block_reason = ? WHERE code = ?`,
+		`UPDATE account_group SET blocked = ?, block_reason = ? WHERE code = ?`,
 		blocked, reason, code,
 	)
 	if err != nil {
@@ -363,7 +801,7 @@ func (r *realmStore) SetGroupBlocked(
 // DeleteGroup removes the group; member accounts have their link cleared.
 func (r *realmStore) DeleteGroup(ctx context.Context, code string) error {
 	res, err := r.db().ExecContext(
-		ctx, `DELETE FROM account_groups WHERE code = ?`, code,
+		ctx, `DELETE FROM account_group WHERE code = ?`, code,
 	)
 	if err != nil {
 		return fmt.Errorf("store: delete group: %w", err)
@@ -385,19 +823,26 @@ func (r *realmStore) ListGroupAccounts(
 	return scanAccounts(rows)
 }
 
-func scanGroup(rows *sql.Rows) (domain.AccountGroup, error) {
+func scanGroupListRow(rows *sql.Rows) (fwstore.GroupListRow, error) {
 	var (
-		group    domain.AccountGroup
-		engineID int64
+		group         domain.AccountGroup
+		engineID      int64
+		accountCount  int
+		positionCount int
 	)
 	if err := rows.Scan(
 		&engineID, &group.Code, &group.Title,
 		&group.Notes, &group.Blocked, &group.BlockReason,
+		&accountCount, &positionCount,
 	); err != nil {
-		return domain.AccountGroup{}, fmt.Errorf("store: scan group: %w", err)
+		return fwstore.GroupListRow{}, fmt.Errorf("store: scan group row: %w", err)
 	}
 	group.EngineGroupID = domain.EngineGroupID(engineID)
-	return group, nil
+	return fwstore.GroupListRow{
+		Group:         group,
+		AccountCount:  accountCount,
+		PositionCount: positionCount,
+	}, nil
 }
 
 func scanGroupRow(row *sql.Row) (domain.AccountGroup, error) {
@@ -421,14 +866,14 @@ func scanGroupRow(row *sql.Row) (domain.AccountGroup, error) {
 // surfaces the group's code (NULL when the account is in no group) so the
 // surrogate group id never leaves the store.
 const accountSelect = `
-SELECT a.engine_account_id, a.code, a.title, g.code,
+SELECT a.id, a.code, a.title, g.code,
        a.notes, a.blocked, a.block_reason
-FROM accounts a
-LEFT JOIN account_groups g ON g.id = a.group_id`
+FROM account a
+LEFT JOIN account_group g ON g.id = a.group_id`
 
-// CreateAccount persists a new account, assigning a collision-free engine
-// account id inside the insert transaction, resolving an optional group code to
-// its surrogate id, and returns the account with EngineAccountID populated.
+// CreateAccount persists a new account, resolving an optional group code to its
+// surrogate id, and returns the account with EngineAccountID populated from the
+// inserted row's surrogate id, which is the id the engine runs the account on.
 func (r *realmStore) CreateAccount(
 	ctx context.Context, account domain.Account,
 ) (domain.Account, error) {
@@ -442,16 +887,12 @@ func (r *realmStore) CreateAccount(
 	if err != nil {
 		return domain.Account{}, err
 	}
-	engineID, err := nextEngineAccountID(ctx, tx)
-	if err != nil {
-		return domain.Account{}, err
-	}
-	_, err = tx.ExecContext(
+	res, err := tx.ExecContext(
 		ctx,
-		`INSERT INTO accounts
-		 (engine_account_id, code, title, group_id, notes, blocked, block_reason)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		int64(engineID.Uint64()), account.Code.String(), account.Title,
+		`INSERT INTO account
+		 (code, title, group_id, notes, blocked, block_reason)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		account.Code.String(), account.Title,
 		groupID, account.Notes, account.Blocked, account.BlockReason,
 	)
 	if err != nil {
@@ -461,10 +902,14 @@ func (r *realmStore) CreateAccount(
 		}
 		return domain.Account{}, fmt.Errorf("store: create account: %w", err)
 	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return domain.Account{}, fmt.Errorf("store: create account id: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return domain.Account{}, fmt.Errorf("store: commit create account: %w", err)
 	}
-	account.EngineAccountID = engineID
+	account.EngineAccountID = domain.EngineAccountID(id)
 	return account, nil
 }
 
@@ -487,12 +932,58 @@ func (r *realmStore) GetAccount(
 
 // ListAccounts returns every account, ordered by code.
 func (r *realmStore) ListAccounts(ctx context.Context) ([]domain.Account, error) {
-	rows, err := r.db().QueryContext(ctx, accountSelect+` ORDER BY a.code`)
+	page, err := r.ListAccountRows(ctx, fwstore.AccountListFilter{})
 	if err != nil {
-		return nil, fmt.Errorf("store: list accounts: %w", err)
+		return nil, err
+	}
+	accounts := make([]domain.Account, 0, len(page.Rows))
+	for _, row := range page.Rows {
+		accounts = append(accounts, row.Account)
+	}
+	return accounts, nil
+}
+
+// ListAccountRows returns accounts matching filter, ordered by code.
+func (r *realmStore) ListAccountRows(
+	ctx context.Context, filter fwstore.AccountListFilter,
+) (fwstore.AccountListPage, error) {
+	where, args := accountListWhere(filter)
+	having, havingArgs := countHaving(
+		"", fwstore.CountRangeFilter{}, "COUNT(b.asset_id)", filter.Position,
+	)
+	args = append(args, havingArgs...)
+	from := `
+FROM account a
+LEFT JOIN account_group g ON g.id = a.group_id
+LEFT JOIN balance b ON b.account_id = a.id` +
+		where + `
+GROUP BY a.id` + having
+	countQuery := `SELECT COUNT(*) FROM (SELECT a.id` + from + `) AS filtered`
+	var total int
+	if err := r.db().QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return fwstore.AccountListPage{}, fmt.Errorf("store: count account rows: %w", err)
+	}
+	queryArgs := append([]any{}, args...)
+	query := `
+SELECT a.id, a.code, a.title, g.code,
+       a.notes, a.blocked, a.block_reason,
+       COUNT(b.asset_id) AS position_count
+` + from + accountListOrderBy(filter.Sort)
+	if filter.Page.Limit > 0 {
+		query += ` LIMIT ? OFFSET ?`
+		queryArgs = append(queryArgs, filter.Page.Limit, max(filter.Page.Offset, 0))
+	}
+
+	rows, err := r.db().QueryContext(ctx, query, queryArgs...)
+	if err != nil {
+		return fwstore.AccountListPage{}, fmt.Errorf("store: list account rows: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
-	return scanAccounts(rows)
+	result, err := scanAccountListRows(rows)
+	if err != nil {
+		return fwstore.AccountListPage{}, err
+	}
+	return fwstore.AccountListPage{Rows: result, Total: total}, nil
 }
 
 // SetAccountBlocked updates the blocked flag and block reason of the account.
@@ -501,7 +992,7 @@ func (r *realmStore) SetAccountBlocked(
 ) error {
 	res, err := r.db().ExecContext(
 		ctx,
-		`UPDATE accounts SET blocked = ?, block_reason = ? WHERE code = ?`,
+		`UPDATE account SET blocked = ?, block_reason = ? WHERE code = ?`,
 		blocked, reason, code.String(),
 	)
 	if err != nil {
@@ -520,7 +1011,7 @@ func (r *realmStore) SetAccountGroup(
 		return err
 	}
 	res, err := r.db().ExecContext(
-		ctx, `UPDATE accounts SET group_id = ? WHERE code = ?`,
+		ctx, `UPDATE account SET group_id = ? WHERE code = ?`,
 		groupID, code.String(),
 	)
 	if err != nil {
@@ -534,12 +1025,42 @@ func (r *realmStore) SetAccountNotes(
 	ctx context.Context, code domain.AccountID, notes string,
 ) error {
 	res, err := r.db().ExecContext(
-		ctx, `UPDATE accounts SET notes = ? WHERE code = ?`, notes, code.String(),
+		ctx, `UPDATE account SET notes = ? WHERE code = ?`, notes, code.String(),
 	)
 	if err != nil {
 		return fmt.Errorf("store: set account notes: %w", err)
 	}
 	return notFoundIfNoRows(res, "account", code.String())
+}
+
+// UpdateAccount replaces the public code and title of the identified account.
+func (r *realmStore) UpdateAccount(
+	ctx context.Context, oldCode domain.AccountID, account domain.Account,
+) (domain.Account, error) {
+	res, err := r.db().ExecContext(
+		ctx,
+		`UPDATE account SET code = ?, title = ? WHERE code = ?`,
+		account.Code.String(), account.Title, oldCode.String(),
+	)
+	if err != nil {
+		if isSQLiteUnique(err) {
+			return domain.Account{},
+				fmt.Errorf("account %q: %w", account.Code, domain.ErrAlreadyExists)
+		}
+		return domain.Account{}, fmt.Errorf("store: update account: %w", err)
+	}
+	if err := notFoundIfNoRows(res, "account", oldCode.String()); err != nil {
+		return domain.Account{}, err
+	}
+	updated, ok, err := r.GetAccount(ctx, account.Code)
+	if err != nil {
+		return domain.Account{}, err
+	}
+	if !ok {
+		return domain.Account{},
+			fmt.Errorf("account %q: %w", account.Code, domain.ErrNotFound)
+	}
+	return updated, nil
 }
 
 // DeleteAccount removes the account and, when forced, cascades its dependents.
@@ -568,7 +1089,7 @@ func (r *realmStore) DeleteAccount(
 			return domain.NewHasDependentsError(deps)
 		}
 	}
-	res, err := tx.ExecContext(ctx, `DELETE FROM accounts WHERE id = ?`, accountID)
+	res, err := tx.ExecContext(ctx, `DELETE FROM account WHERE id = ?`, accountID)
 	if err != nil {
 		return fmt.Errorf("store: delete account: %w", err)
 	}
@@ -596,6 +1117,40 @@ func scanAccounts(rows *sql.Rows) ([]domain.Account, error) {
 	return accounts, nil
 }
 
+func scanAccountListRows(rows *sql.Rows) ([]fwstore.AccountListRow, error) {
+	accounts := make([]fwstore.AccountListRow, 0)
+	for rows.Next() {
+		account, err := scanAccountListRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		accounts = append(accounts, account)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: iterate account rows: %w", err)
+	}
+	return accounts, nil
+}
+
+func scanAccountListRow(rows *sql.Rows) (fwstore.AccountListRow, error) {
+	var (
+		account       domain.Account
+		engineID      int64
+		groupCode     sql.NullString
+		positionCount int
+	)
+	if err := rows.Scan(
+		&engineID, &account.Code, &account.Title, &groupCode,
+		&account.Notes, &account.Blocked, &account.BlockReason,
+		&positionCount,
+	); err != nil {
+		return fwstore.AccountListRow{}, fmt.Errorf("store: scan account row: %w", err)
+	}
+	account.EngineAccountID = domain.EngineAccountID(engineID)
+	account.GroupCode = groupCode.String
+	return fwstore.AccountListRow{Account: account, PositionCount: positionCount}, nil
+}
+
 func scanAccount(rows *sql.Rows) (domain.Account, error) {
 	var (
 		account   domain.Account
@@ -611,6 +1166,215 @@ func scanAccount(rows *sql.Rows) (domain.Account, error) {
 	account.EngineAccountID = domain.EngineAccountID(engineID)
 	account.GroupCode = groupCode.String
 	return account, nil
+}
+
+func accountListWhere(filter fwstore.AccountListFilter) (string, []any) {
+	clauses := make([]string, 0)
+	args := make([]any, 0)
+	appendMatcherAny(&clauses, &args, []string{"a.code", "a.title"}, filter.Code)
+	appendMatcher(&clauses, &args, "a.block_reason", filter.BlockReason)
+	appendStatusFilter(&clauses, filter.Status, "a.blocked")
+	if filter.GroupCode != nil {
+		if *filter.GroupCode == "" {
+			clauses = append(clauses, "a.group_id IS NULL")
+		} else {
+			clauses = append(clauses, "g.code = ?")
+			args = append(args, *filter.GroupCode)
+		}
+	}
+	if len(clauses) == 0 {
+		return "", args
+	}
+	return "\nWHERE " + strings.Join(clauses, " AND "), args
+}
+
+func accountListOrderBy(sort fwstore.SortSpec) string {
+	columns := map[string]string{
+		"blockReason":   "a.block_reason",
+		"code":          "a.code",
+		"group":         "g.code",
+		"positionCount": "position_count",
+		"status":        "a.blocked",
+		"title":         "a.title",
+	}
+	column := columns[sort.Column]
+	if column == "" {
+		column = "a.code"
+	}
+	direction := "ASC"
+	tieDirection := "ASC"
+	if sort.Descending {
+		direction = "DESC"
+		tieDirection = "DESC"
+	}
+	return "\nORDER BY " + column + " " + direction + ", a.code " + tieDirection
+}
+
+func groupListOrderBy(sort fwstore.SortSpec) string {
+	columns := map[string]string{
+		"accountCount":  "account_count",
+		"blockReason":   "g.block_reason",
+		"code":          "g.code",
+		"notes":         "g.notes",
+		"positionCount": "position_count",
+		"status":        "g.blocked",
+		"title":         "g.title",
+	}
+	column := columns[sort.Column]
+	if column == "" {
+		column = "g.code"
+	}
+	direction := "ASC"
+	tieDirection := "ASC"
+	if sort.Descending {
+		direction = "DESC"
+		tieDirection = "DESC"
+	}
+	return "\nORDER BY " + column + " " + direction + ", g.code " + tieDirection
+}
+
+func groupListWhere(filter fwstore.GroupListFilter, tableAlias string) (string, []any) {
+	clauses := make([]string, 0)
+	args := make([]any, 0)
+	appendMatcherAny(
+		&clauses, &args,
+		[]string{tableAlias + ".code", tableAlias + ".title"}, filter.Code,
+	)
+	appendMatcher(&clauses, &args, tableAlias+".notes", filter.Notes)
+	appendMatcher(&clauses, &args, tableAlias+".block_reason", filter.BlockReason)
+	appendStatusFilter(&clauses, filter.Status, tableAlias+".blocked")
+	if len(clauses) == 0 {
+		return "", args
+	}
+	return "\nWHERE " + strings.Join(clauses, " AND "), args
+}
+
+func appendMatcher(
+	clauses *[]string, args *[]any, column string, matcher fwstore.TextMatcher,
+) {
+	pattern, ok := likePattern(matcher)
+	if !ok {
+		return
+	}
+	*clauses = append(*clauses, column+" LIKE ? ESCAPE '\\'")
+	*args = append(*args, pattern)
+}
+
+// appendMatcherAny adds one OR'd LIKE clause across columns, so a single search
+// term matches any of them (e.g. an account/group code or its title).
+func appendMatcherAny(
+	clauses *[]string, args *[]any, columns []string, matcher fwstore.TextMatcher,
+) {
+	pattern, ok := likePattern(matcher)
+	if !ok {
+		return
+	}
+	ors := make([]string, 0, len(columns))
+	for _, column := range columns {
+		ors = append(ors, column+" LIKE ? ESCAPE '\\'")
+		*args = append(*args, pattern)
+	}
+	*clauses = append(*clauses, "("+strings.Join(ors, " OR ")+")")
+}
+
+func appendStatusFilter(
+	clauses *[]string, status fwstore.StatusFilter, column string,
+) {
+	switch status {
+	case fwstore.StatusFilterActive:
+		*clauses = append(*clauses, column+" = 0")
+	case fwstore.StatusFilterBlocked:
+		*clauses = append(*clauses, column+" = 1")
+	}
+}
+
+func countHaving(
+	accountExpr string,
+	accountFilter fwstore.CountRangeFilter,
+	positionExpr string,
+	positionFilter fwstore.CountRangeFilter,
+) (string, []any) {
+	clauses := make([]string, 0, 2)
+	args := make([]any, 0, 2)
+	appendCountRangeFilter(&clauses, &args, accountExpr, accountFilter)
+	appendCountRangeFilter(&clauses, &args, positionExpr, positionFilter)
+	if len(clauses) == 0 {
+		return "", nil
+	}
+	return "\nHAVING " + strings.Join(clauses, " AND "), args
+}
+
+func appendCountRangeFilter(
+	clauses *[]string,
+	args *[]any,
+	expr string,
+	filter fwstore.CountRangeFilter,
+) {
+	if expr == "" || filter.Empty() {
+		return
+	}
+	if filter.Equal != nil {
+		*clauses = append(*clauses, expr+" = ?")
+		*args = append(*args, *filter.Equal)
+	}
+	if filter.NotEqual != nil {
+		*clauses = append(*clauses, expr+" <> ?")
+		*args = append(*args, *filter.NotEqual)
+	}
+	if filter.Min != nil {
+		if filter.MinExclusive {
+			*clauses = append(*clauses, expr+" > ?")
+		} else {
+			*clauses = append(*clauses, expr+" >= ?")
+		}
+		*args = append(*args, *filter.Min)
+	}
+	if filter.Max != nil {
+		if filter.MaxExclusive {
+			*clauses = append(*clauses, expr+" < ?")
+		} else {
+			*clauses = append(*clauses, expr+" <= ?")
+		}
+		*args = append(*args, *filter.Max)
+	}
+}
+
+func likePattern(matcher fwstore.TextMatcher) (string, bool) {
+	fragments := make([]string, 0, len(matcher.Fragments))
+	for _, fragment := range matcher.Fragments {
+		if fragment != "" {
+			fragments = append(fragments, escapeLike(fragment))
+		}
+	}
+	if len(fragments) == 0 {
+		return "", false
+	}
+	var b strings.Builder
+	if !matcher.AnchorStart {
+		b.WriteByte('%')
+	}
+	for i, fragment := range fragments {
+		if i > 0 {
+			b.WriteByte('%')
+		}
+		b.WriteString(fragment)
+	}
+	if !matcher.AnchorEnd {
+		b.WriteByte('%')
+	}
+	return b.String(), true
+}
+
+func escapeLike(value string) string {
+	var b strings.Builder
+	for _, r := range value {
+		switch r {
+		case '\\', '%', '_':
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 func scanAccountRow(row *sql.Row) (domain.Account, error) {
@@ -649,12 +1413,28 @@ func optionalGroupID(
 }
 
 // nullableString maps an empty string to a NULL column value and a non-empty
-// string to itself. It backs the optional asset_class column.
+// string to itself. It backs optional text columns.
 func nullableString(s string) sql.NullString {
 	if s == "" {
 		return sql.NullString{}
 	}
 	return sql.NullString{String: s, Valid: true}
+}
+
+// optionalClassID resolves an optional asset-class code to a nullable surrogate
+// id: an empty code yields a NULL class link; a non-empty unknown code wraps
+// domain.ErrInvalid. It mirrors optionalGroupID.
+func optionalClassID(
+	ctx context.Context, q sqlQueryer, code string,
+) (sql.NullInt64, error) {
+	if code == "" {
+		return sql.NullInt64{}, nil
+	}
+	id, err := resolveAssetClassID(ctx, q, code)
+	if err != nil {
+		return sql.NullInt64{}, err
+	}
+	return sql.NullInt64{Int64: id, Valid: true}, nil
 }
 
 // notFoundIfNoRows turns a zero-rows-affected result into domain.ErrNotFound for
@@ -674,18 +1454,18 @@ func accountDependents(
 	ctx context.Context, q sqlQueryer, accountID int64,
 ) ([]domain.DependentCount, error) {
 	checks := []dependentQuery{
-		{"balances", `SELECT COUNT(*) FROM balances WHERE account_id = ?`},
-		{"orders", `SELECT COUNT(*) FROM orders WHERE account_id = ?`},
-		{"order_events", `SELECT COUNT(*) FROM order_events ev
-		 JOIN orders o ON o.id = ev.order_id WHERE o.account_id = ?`},
-		{"trades", `SELECT COUNT(*) FROM trades WHERE account_id = ?`},
-		{"order_approvals", `SELECT COUNT(*) FROM order_approvals ap
-		 JOIN orders o ON o.id = ap.order_id WHERE o.account_id = ?`},
-		{"adjustments", `SELECT COUNT(*) FROM adjustments WHERE account_id = ?`},
+		{"balance", `SELECT COUNT(*) FROM balance WHERE account_id = ?`},
+		{"order_record", `SELECT COUNT(*) FROM order_record WHERE account_id = ?`},
+		{"order_event", `SELECT COUNT(*) FROM order_event ev
+		 JOIN order_record o ON o.id = ev.order_id WHERE o.account_id = ?`},
+		{"trade", `SELECT COUNT(*) FROM trade WHERE account_id = ?`},
+		{"order_approval", `SELECT COUNT(*) FROM order_approval ap
+		 JOIN order_record o ON o.id = ap.order_id WHERE o.account_id = ?`},
+		{"adjustment", `SELECT COUNT(*) FROM adjustment WHERE account_id = ?`},
 		{"limit_rate", `SELECT COUNT(*) FROM limit_rate WHERE account_id = ?`},
 		{"limit_order_size", `SELECT COUNT(*) FROM limit_order_size WHERE account_id = ?`},
-		{"limit_pnl_bounds", `SELECT COUNT(*) FROM limit_pnl_bounds WHERE account_id = ?`},
-		{"reservation_intents", `SELECT COUNT(*) FROM reservation_intents WHERE account_id = ?`},
+		{"limit_pnl_bound", `SELECT COUNT(*) FROM limit_pnl_bound WHERE account_id = ?`},
+		{"reservation_intent", `SELECT COUNT(*) FROM reservation_intent WHERE account_id = ?`},
 	}
 	return collectDependents(ctx, q, checks, accountID)
 }
@@ -694,16 +1474,16 @@ func assetDependents(
 	ctx context.Context, q sqlQueryer, assetID int64,
 ) ([]domain.DependentCount, error) {
 	checks := []dependentQuery{
-		{"balances", `SELECT COUNT(*) FROM balances WHERE asset_id = ?`},
-		{"adjustments", `SELECT COUNT(*) FROM adjustments WHERE asset_id = ?`},
+		{"balance", `SELECT COUNT(*) FROM balance WHERE asset_id = ?`},
+		{"adjustment", `SELECT COUNT(*) FROM adjustment WHERE asset_id = ?`},
 		{"limit_rate", `SELECT COUNT(*) FROM limit_rate WHERE asset_id = ?`},
 		{"limit_order_size", `SELECT COUNT(*) FROM limit_order_size WHERE asset_id = ?`},
-		{"limit_pnl_bounds", `SELECT COUNT(*) FROM limit_pnl_bounds WHERE asset_id = ?`},
-		{"orders", `SELECT COUNT(*) FROM orders
+		{"limit_pnl_bound", `SELECT COUNT(*) FROM limit_pnl_bound WHERE asset_id = ?`},
+		{"order_record", `SELECT COUNT(*) FROM order_record
 		 WHERE base_asset_id = ? OR quote_asset_id = ?`},
-		{"trades", `SELECT COUNT(*) FROM trades
+		{"trade", `SELECT COUNT(*) FROM trade
 		 WHERE base_asset_id = ? OR quote_asset_id = ?`},
-		{"market_data_instruments", `SELECT COUNT(*) FROM market_data_instruments
+		{"market_data_instrument", `SELECT COUNT(*) FROM market_data_instrument
 		 WHERE base_asset_id = ? OR quote_asset_id = ?`},
 	}
 	return collectDependents(ctx, q, checks, assetID)

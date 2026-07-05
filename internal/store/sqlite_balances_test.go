@@ -24,13 +24,15 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
+	fwstore "go.openpit.dev/officer/framework/store"
 )
 
-// seedBalanceFixtures seeds two assets and an account and returns the realm
+// seedBalanceFixtures seeds two asset and an account and returns the realm
 // handle ready for balance tests.
 func seedBalanceFixtures(t *testing.T) (context.Context, RealmStore) {
 	t.Helper()
@@ -238,6 +240,80 @@ func TestBalanceListFilters(t *testing.T) {
 	}
 }
 
+func TestBalanceListRowsSortFilterPageOrdersDecimalsNumerically(t *testing.T) {
+	ctx, rs := seedBalanceFixtures(t)
+	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "desk"}); err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	if err := rs.SetAccountGroup(ctx, "acc-1", "desk"); err != nil {
+		t.Fatalf("SetAccountGroup: %v", err)
+	}
+	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-2"}); err != nil {
+		t.Fatalf("CreateAccount(acc-2): %v", err)
+	}
+	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-3"}); err != nil {
+		t.Fatalf("CreateAccount(acc-3): %v", err)
+	}
+	// A negative and an arbitrary-precision value prove the column's DECIMAL
+	// collation orders numerically with no fixed-width window.
+	for _, balance := range []domain.Balance{
+		{Account: "acc-1", Asset: "AAPL", Available: "10", RealizedPnl: "0"},
+		{Account: "acc-1", Asset: "USD", Available: "2.5", RealizedPnl: "0"},
+		{Account: "acc-2", Asset: "AAPL", Available: "3", RealizedPnl: "0"},
+		{
+			Account: "acc-2", Asset: "USD",
+			Available:   "3.0000000001",
+			RealizedPnl: "0",
+		},
+		{
+			Account: "acc-3", Asset: "AAPL",
+			Available:   "1000000000000000000000000000000000.0001",
+			RealizedPnl: "0",
+		},
+		{Account: "acc-3", Asset: "USD", Available: "-4", RealizedPnl: "0"},
+	} {
+		if err := rs.UpsertBalance(ctx, balance); err != nil {
+			t.Fatalf("UpsertBalance(%s/%s): %v", balance.Account, balance.Asset, err)
+		}
+	}
+
+	group := "desk"
+	page, err := rs.ListBalanceRows(ctx, fwstore.BalanceListFilter{
+		GroupCode: &group,
+		Sort:      fwstore.SortSpec{Column: "available"},
+		Page:      fwstore.PageSpec{Limit: 1, Offset: 1},
+	})
+	if err != nil {
+		t.Fatalf("ListBalanceRows(group sort page): %v", err)
+	}
+	if page.Total != 2 || len(page.Rows) != 1 {
+		t.Fatalf("page total/len = %d/%d, want 2/1", page.Total, len(page.Rows))
+	}
+	if got := page.Rows[0].Balance.Available; got != "10" {
+		t.Fatalf("second sorted available = %q, want 10", got)
+	}
+
+	min := "3"
+	page, err = rs.ListBalanceRows(ctx, fwstore.BalanceListFilter{
+		Available: fwstore.DecimalRangeFilter{Min: &min},
+		Sort:      fwstore.SortSpec{Column: "available"},
+	})
+	if err != nil {
+		t.Fatalf("ListBalanceRows(range): %v", err)
+	}
+	got := []string{}
+	for _, row := range page.Rows {
+		got = append(got, row.Balance.Available)
+	}
+	want := []string{
+		"3", "3.0000000001", "10",
+		"1000000000000000000000000000000000.0001",
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("range sorted values = %v, want %v", got, want)
+	}
+}
+
 func TestBalanceCascadeOnAccountDelete(t *testing.T) {
 	ctx, rs := seedBalanceFixtures(t)
 
@@ -273,7 +349,7 @@ func TestBalanceCascadeOnAssetDelete(t *testing.T) {
 		t.Fatalf("UpsertBalance: %v", err)
 	}
 
-	// DeleteAsset cascades to balances.
+	// DeleteAsset cascades to balance.
 	if err := rs.DeleteAsset(ctx, "AAPL", true); err != nil {
 		t.Fatalf("DeleteAsset: %v", err)
 	}

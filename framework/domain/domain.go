@@ -140,9 +140,9 @@ const (
 	KindInitialPnl  = "initial_pnl"
 )
 
-// AccountID is the immutable, operator-chosen account code: the human handle a
-// dictionary account is addressed by. It is unique per realm and does not leak
-// record counts the way an autoincrement would. The engine id and the internal
+// AccountID is the operator-chosen account code: the human handle a dictionary
+// account is addressed by. It is unique per realm and does not leak record
+// counts the way an autoincrement would. The engine id and the internal
 // surrogate key are separate and never travel as this code.
 type AccountID string
 
@@ -150,14 +150,14 @@ type AccountID string
 func (id AccountID) String() string { return string(id) }
 
 // Account is the control-plane view of an engine account: a dictionary entity
-// addressed by its immutable Code, displayed under a mutable Title, and run on
-// the engine under EngineAccountID. The surrogate key never appears here.
+// addressed by its public Code, displayed under a mutable Title, and run on the
+// engine under EngineAccountID. The surrogate key never appears here.
 type Account struct {
-	// Code is the immutable, operator-chosen account code, unique per realm.
+	// Code is the operator-chosen account code, unique per realm.
 	Code AccountID
 	// Title is the mutable human-readable display name; may be empty.
 	Title string
-	// GroupCode links the account to its group by the group's immutable code;
+	// GroupCode links the account to its group by the group's public code;
 	// empty means the account belongs to no group. The store resolves it to the
 	// group's surrogate key; the engine group id is derived from the group.
 	GroupCode string
@@ -167,10 +167,10 @@ type Account struct {
 	// BlockReason is the human-readable reason the account was blocked.
 	// Empty when the account is not blocked.
 	BlockReason string
-	// EngineAccountID is the integer id the engine runs this account on. It is
-	// internal and never serialized on the wire (json:"-"); zero means
-	// unassigned. The engine layer consumes it on read paths, but it is never a
-	// public handle.
+	// EngineAccountID is the integer id the engine runs this account on: the
+	// account row's surrogate id. It is internal and never serialized on the wire
+	// (json:"-"); zero means unassigned. The engine layer consumes it on read
+	// paths, but it is never a public handle.
 	EngineAccountID EngineAccountID `json:"-"`
 	// Blocked reports whether the account is currently kill-switched.
 	Blocked bool
@@ -181,7 +181,11 @@ type AuditAction string
 
 const (
 	AuditActionHydrate           AuditAction = "hydrate"
+	AuditActionCreateAsset       AuditAction = "create_asset"
+	AuditActionUpdateAsset       AuditAction = "update_asset"
+	AuditActionDeleteAsset       AuditAction = "delete_asset"
 	AuditActionCreateAccount     AuditAction = "create_account"
+	AuditActionUpdateAccount     AuditAction = "update_account"
 	AuditActionDeleteAccount     AuditAction = "delete_account"
 	AuditActionBlock             AuditAction = "block"
 	AuditActionUnblock           AuditAction = "unblock"
@@ -194,7 +198,11 @@ const (
 	AuditActionSetGroup          AuditAction = "set_group"
 	AuditActionAdjustment        AuditAction = "adjustment"
 	AuditActionCreateGroup       AuditAction = "create_group"
+	AuditActionUpdateGroup       AuditAction = "update_group"
 	AuditActionDeleteGroup       AuditAction = "delete_group"
+	AuditActionCreateAssetClass  AuditAction = "create_asset_class"
+	AuditActionUpdateAssetClass  AuditAction = "update_asset_class"
+	AuditActionDeleteAssetClass  AuditAction = "delete_asset_class"
 	AuditActionSubmitOrder       AuditAction = "submit_order"
 	AuditActionExecutionReport   AuditAction = "execution_report"
 	AuditActionSetMcpAccess      AuditAction = "set_mcp_access"
@@ -246,7 +254,11 @@ func (a AuditAction) Category() AuditCategory {
 func AllAuditActions() []AuditAction {
 	return []AuditAction{
 		AuditActionHydrate,
+		AuditActionCreateAsset,
+		AuditActionUpdateAsset,
+		AuditActionDeleteAsset,
 		AuditActionCreateAccount,
+		AuditActionUpdateAccount,
 		AuditActionDeleteAccount,
 		AuditActionBlock,
 		AuditActionUnblock,
@@ -259,7 +271,11 @@ func AllAuditActions() []AuditAction {
 		AuditActionSetGroup,
 		AuditActionAdjustment,
 		AuditActionCreateGroup,
+		AuditActionUpdateGroup,
 		AuditActionDeleteGroup,
+		AuditActionCreateAssetClass,
+		AuditActionUpdateAssetClass,
+		AuditActionDeleteAssetClass,
 		AuditActionSetMcpAccess,
 		AuditActionSetMarketData,
 		AuditActionExportBackup,
@@ -337,6 +353,8 @@ type AuditRow struct {
 	Account AccountID
 	// AccountTitle is the account title captured when the row was written.
 	AccountTitle string
+	// Asset is the code of the asset the action targeted; empty when none.
+	Asset string
 	// Detail is a short human-readable description of the action.
 	Detail string
 	// Source is the channel through which the action was initiated.

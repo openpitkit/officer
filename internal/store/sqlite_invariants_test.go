@@ -31,12 +31,12 @@
 //   - TestCascadeMatrix_AssetDeleteCascadesOrdersAndTrades: the cross-group
 //     cascade that is not covered in any per-group test — deleting an asset must
 //     cascade its referencing orders (and thence their events, trades, and
-//     approval). The balances and limits cascades on asset/account delete are
+//     approval). The balance and limits cascades on asset/account delete are
 //     already covered by sqlite_balances_test.go and sqlite_limits_test.go.
 //
-//   - TestEngineIDAssignment_ManyAccountsAndGroups: creates many accounts and
+//   - TestEngineIDAssignment_ManyAccountsAndGroups: creates many account and
 //     groups in a single store and asserts every assigned engine id is unique and
-//     in range. The per-group test checks only 2 accounts; this tests at a scale
+//     in range. The per-group test checks only 2 account; this tests at a scale
 //     that exercises the counter path rather than just the initial assignment.
 //
 //   - TestLimitPolicyUnique_AllThreeTables: asserts the coalesced unique index
@@ -77,6 +77,9 @@ func TestRealmSweep_ExternalIDAndCodeInvariants(t *testing.T) {
 	_, rs := newTestStore(t)
 
 	// --- Dictionaries ---
+	if err := rs.CreateAssetClass(ctx, domain.AssetClass{Code: "equity", Title: "Equity"}); err != nil {
+		t.Fatalf("CreateAssetClass: %v", err)
+	}
 	if err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL", Title: "Apple", AssetClass: "equity"}); err != nil {
 		t.Fatalf("CreateAsset: %v", err)
 	}
@@ -337,11 +340,11 @@ func assertExternalID(t *testing.T, label string, id domain.ExternalID) {
 //
 // The following cascades are already covered in their respective per-group
 // tests and are NOT re-asserted here:
-//   - account→balances: sqlite_balances_test.go (TestBalanceCascadeOnAccountDelete)
-//   - asset→balances: sqlite_balances_test.go (TestBalanceCascadeOnAssetDelete)
+//   - account→balance: sqlite_balances_test.go (TestBalanceCascadeOnAccountDelete)
+//   - asset→balance: sqlite_balances_test.go (TestBalanceCascadeOnAssetDelete)
 //   - account→orders: sqlite_orders_test.go (TestDeleteAccountCascadesOrders)
-//   - order→events/trades/approvals: sqlite_orders_test.go (TestDeleteOrderCascadesChildren)
-//   - account→adjustments: sqlite_adjustments_test.go (TestAdjustmentCascadeOnAccountDelete)
+//   - order→events/trade/approvals: sqlite_orders_test.go (TestDeleteOrderCascadesChildren)
+//   - account→adjustment: sqlite_adjustments_test.go (TestAdjustmentCascadeOnAccountDelete)
 //   - account→limits, asset→limits: sqlite_limits_test.go
 //   - instance→instruments→quotes: sqlite_marketdata_test.go (TestMDCascadeDeleteInstance)
 //   - account/principal→audit (SET NULL): sqlite_audit_test.go (TestAuditTrailPreservedOnAccountDelete)
@@ -406,26 +409,26 @@ func TestCascadeMatrix_AssetDeleteCascadesOrdersAndTrades(t *testing.T) {
 	}
 
 	rstore := rs.(*realmStore)
-	for _, table := range []string{"orders", "order_events", "trades", "order_approvals"} {
+	for _, table := range []string{"order_record", "order_event", "trade", "order_approval"} {
 		if n := countRows(t, ctx, rstore, table); n != 1 {
 			t.Fatalf("%s before asset delete = %d, want 1", table, n)
 		}
 	}
 
 	// Deleting AAPL (the order's base asset) must cascade to orders referencing
-	// it, and thence to their events, trades, and approval.
+	// it, and thence to their events, trade, and approval.
 	if err := rs.DeleteAsset(ctx, "AAPL", true); err != nil {
 		t.Fatalf("DeleteAsset(AAPL): %v", err)
 	}
 
-	for _, table := range []string{"orders", "order_events", "trades", "order_approvals"} {
+	for _, table := range []string{"order_record", "order_event", "trade", "order_approval"} {
 		if n := countRows(t, ctx, rstore, table); n != 0 {
 			t.Fatalf("%s after asset delete = %d, want 0 (cascade)", table, n)
 		}
 	}
 }
 
-// TestEngineIDAssignment_ManyAccountsAndGroups creates many accounts and groups
+// TestEngineIDAssignment_ManyAccountsAndGroups creates many account and groups
 // in one store and asserts every assigned engine id is unique and within the
 // allowed range. The per-group test (TestGroupRoundTripAndEngineID /
 // TestAccountRoundTripEngineIDAndGroupLink) verifies the two-account case;
@@ -612,7 +615,7 @@ VALUES (?, NULL, NULL, ?)`, domain.ScopeBroker, "3000000"); err == nil {
 		t.Fatalf("raw duplicate limit_order_size broker-scope insert error = %v, want unique conflict", err)
 	}
 
-	// --- limit_pnl_bounds ---
+	// --- limit_pnl_bound ---
 
 	if err := rs.PutPnlBoundsLimit(ctx, domain.LimitPnlBounds{
 		Scope:      domain.ScopeAsset,
@@ -650,8 +653,8 @@ VALUES (?, NULL, NULL, ?)`, domain.ScopeBroker, "3000000"); err == nil {
 		}
 	}
 	if _, err := r.db().ExecContext(ctx, `
-INSERT INTO limit_pnl_bounds (scope, account_id, asset_id, lower_bound, upper_bound)
-VALUES (?, NULL, (SELECT id FROM assets WHERE code = ?), ?, ?)`,
+INSERT INTO limit_pnl_bound (scope, account_id, asset_id, lower_bound, upper_bound)
+VALUES (?, NULL, (SELECT id FROM asset WHERE code = ?), ?, ?)`,
 		domain.ScopeAsset, "AAPL", "-300", "300"); err == nil {
 		t.Fatal("raw duplicate limit_pnl_bounds asset-scope insert succeeded, want unique conflict")
 	} else if !isSQLiteUnique(err) {
@@ -659,7 +662,7 @@ VALUES (?, NULL, (SELECT id FROM assets WHERE code = ?), ?, ?)`,
 	}
 
 	// --- Cross-table isolation: broker row in limit_rate does not conflict with
-	// broker row in limit_order_size or limit_pnl_bounds. The three tables are
+	// broker row in limit_order_size or limit_pnl_bound. The three tables are
 	// independent; their UNIQUE constraints are per-table.
 	if err := rs.PutPnlBoundsLimit(ctx, domain.LimitPnlBounds{
 		Scope:      domain.ScopeAccountAsset,

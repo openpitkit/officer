@@ -15,18 +15,32 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 
-import type { Account } from "@/api/types";
+import type { Account, AccountListFilters, PagedResult } from "@/api/types";
 import { usePolling, type PollingResult } from "@/api/usePolling";
 import { useOfficerApi } from "@/framework";
 
 /** Poll GET /accounts. */
-export function useAccounts(): PollingResult<Account[]> {
+export function useAccounts(filters?: AccountListFilters): PollingResult<Account[]> {
   const api = useOfficerApi();
+  const filterKey = useMemo(() => JSON.stringify(filters ?? {}), [filters]);
   const fetcher = useCallback(
-    (signal: AbortSignal) => api.fetchAccounts(signal),
-    [api],
+    (signal: AbortSignal) => api.fetchAccounts(filters, signal),
+    [api, filters],
   );
-  return usePolling(fetcher);
+  return usePolling(fetcher, 5000, filterKey);
+}
+
+/** Poll GET /accounts with server-side total. */
+export function useAccountsPage(
+  filters?: AccountListFilters,
+): PollingResult<PagedResult<Account>> {
+  const api = useOfficerApi();
+  const filterKey = useMemo(() => JSON.stringify(filters ?? {}), [filters]);
+  const fetcher = useCallback(
+    (signal: AbortSignal) => api.fetchAccountsPage(filters, signal),
+    [api, filters],
+  );
+  return usePolling(fetcher, 5000, filterKey);
 }

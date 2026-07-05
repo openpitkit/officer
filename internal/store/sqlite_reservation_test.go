@@ -359,7 +359,7 @@ func TestReservationCascadeOnOrderDelete(t *testing.T) {
 	// Deleting the order cascades to its reservation intent.
 	r := rs.(*realmStore)
 	if _, err := r.db().ExecContext(
-		ctx, `DELETE FROM orders WHERE external_id = ?`, order.Bytes(),
+		ctx, `DELETE FROM order_record WHERE external_id = ?`, order.Bytes(),
 	); err != nil {
 		t.Fatalf("delete order: %v", err)
 	}
@@ -382,7 +382,7 @@ func TestReservationCascadeOnAccountDelete(t *testing.T) {
 	// FK) to remove the intent.
 	r := rs.(*realmStore)
 	if _, err := r.db().ExecContext(
-		ctx, `DELETE FROM accounts WHERE code = ?`, "acc-1",
+		ctx, `DELETE FROM account WHERE code = ?`, "acc-1",
 	); err != nil {
 		t.Fatalf("delete account: %v", err)
 	}

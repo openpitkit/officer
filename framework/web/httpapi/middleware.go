@@ -58,7 +58,7 @@ func AuthorizeMiddleware(a Authorizer, permission string) Middleware {
 func StampSource(source domain.Source) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			caller := domain.Caller{Source: source, Principal: "operator"}
+			caller := domain.Caller{Source: source, Principal: domain.PrincipalOperator}
 			ctx := auth.ContextWithCaller(r.Context(), caller)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})

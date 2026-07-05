@@ -15,18 +15,33 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 
-import type { Group } from "@/api/types";
+import type { Group, GroupListFilters, PagedResult } from "@/api/types";
 import { usePolling, type PollingResult } from "@/api/usePolling";
 import { useOfficerApi } from "@/framework";
 
 /** Poll GET /groups. */
-export function useGroups(): PollingResult<Group[]> {
+export function useGroups(filters?: GroupListFilters): PollingResult<Group[]> {
   const api = useOfficerApi();
+  const filterKey = useMemo(() => JSON.stringify(filters ?? {}), [filters]);
   const fetcher = useCallback(
-    (signal: AbortSignal) => api.fetchGroups(signal),
-    [api],
+    (signal: AbortSignal) => api.fetchGroups(filters, signal),
+    [api, filters],
   );
-  return usePolling(fetcher);
+  return usePolling(fetcher, 5000, filterKey);
+}
+
+/** Poll GET /groups with server-side total. The synthetic default group is
+ *  pinned first by the server on the first page and excluded from `total`. */
+export function useGroupsPage(
+  filters?: GroupListFilters,
+): PollingResult<PagedResult<Group>> {
+  const api = useOfficerApi();
+  const filterKey = useMemo(() => JSON.stringify(filters ?? {}), [filters]);
+  const fetcher = useCallback(
+    (signal: AbortSignal) => api.fetchGroupsPage(filters, signal),
+    [api, filters],
+  );
+  return usePolling(fetcher, 5000, filterKey);
 }

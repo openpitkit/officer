@@ -15,12 +15,19 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { forwardRef, type InputHTMLAttributes } from "react";
-import { ChevronDown, ChevronUp } from "lucide-react";
+import {
+  forwardRef,
+  useEffect,
+  useRef,
+  useState,
+  type ForwardedRef,
+  type InputHTMLAttributes,
+} from "react";
+import { ChevronDown, ChevronUp, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Input } from "@/components/ui/input";
-import { stepValue } from "@/lib/numberStep";
+import { isDecimalString, stepValue } from "@/lib/numberStep";
 import { cn } from "@/lib/utils";
 
 export interface NumberStepperProps
@@ -32,8 +39,22 @@ export interface NumberStepperProps
   onChange: (value: string) => void;
   /** Lower clamp for the +/- controls; defaults to 0. Use null for signed values. */
   min?: string | null;
+  /** Clears the field; when set, an inline reset icon shows while non-empty. */
+  onClear?: () => void;
+  /** Accessible name + tooltip for the inline reset icon. */
+  clearLabel?: string;
   /** Classes applied to the inner input; className applies to the wrapper. */
   inputClassName?: string;
+  /** Extra validity message owned by a parent control, such as range ordering. */
+  customValidity?: string;
+}
+
+function assignRef<T>(ref: ForwardedRef<T>, value: T) {
+  if (typeof ref === "function") {
+    ref(value);
+  } else if (ref !== null) {
+    ref.current = value;
+  }
 }
 
 /**
@@ -47,6 +68,9 @@ export const NumberStepper = forwardRef<HTMLInputElement, NumberStepperProps>(
       value,
       onChange,
       min = "0",
+      onClear,
+      clearLabel,
+      customValidity = "",
       disabled,
       className,
       inputClassName,
@@ -56,21 +80,63 @@ export const NumberStepper = forwardRef<HTMLInputElement, NumberStepperProps>(
     ref,
   ) => {
     const { t } = useTranslation();
+    const inputRef = useRef<HTMLInputElement | null>(null);
+    const previousValueRef = useRef(value);
+    const [draftValue, setDraftValue] = useState(value);
+    const invalidMessage = t("filters.invalidNumber");
+    const validityMessage = !isDecimalString(draftValue)
+      ? invalidMessage
+      : customValidity;
+    const invalid = validityMessage !== "";
+
+    useEffect(() => {
+      if (value !== previousValueRef.current) {
+        previousValueRef.current = value;
+        setDraftValue(value);
+      }
+    }, [value]);
+
+    useEffect(() => {
+      inputRef.current?.setCustomValidity(validityMessage);
+    }, [validityMessage]);
 
     const nudge = (direction: 1 | -1) => {
-      onChange(stepValue(value, direction, { min }));
+      if (invalid) {
+        inputRef.current?.reportValidity();
+        return;
+      }
+      const next = stepValue(draftValue, direction, { min });
+      setDraftValue(next);
+      onChange(next);
     };
+    const clearable = onClear !== undefined && draftValue !== "" && !disabled;
 
     return (
       <div className={cn("relative", className)}>
         <Input
-          ref={ref}
+          ref={(node) => {
+            inputRef.current = node;
+            assignRef(ref, node);
+          }}
           inputMode="decimal"
           {...props}
-          value={value}
+          value={draftValue}
           disabled={disabled}
-          className={cn("pr-7", inputClassName)}
-          onChange={(e) => onChange(e.target.value)}
+          aria-invalid={invalid ? "true" : undefined}
+          className={cn(
+            "pr-7 invalid:border-danger",
+            clearable && "!pr-12",
+            inputClassName,
+          )}
+          onChange={(e) => {
+            const next = e.target.value;
+            const nextValid = isDecimalString(next);
+            setDraftValue(next);
+            e.target.setCustomValidity(nextValid ? customValidity : invalidMessage);
+            if (nextValid) {
+              onChange(next);
+            }
+          }}
           onKeyDown={(e) => {
             if (e.key === "ArrowUp") {
               e.preventDefault();
@@ -84,6 +150,23 @@ export const NumberStepper = forwardRef<HTMLInputElement, NumberStepperProps>(
             onKeyDown?.(e);
           }}
         />
+        {clearable && (
+          <button
+            type="button"
+            title={clearLabel ?? t("filters.clearField")}
+            aria-label={clearLabel ?? t("filters.clearField")}
+            tabIndex={-1}
+            className="absolute right-7 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-badge text-muted transition-colors hover:bg-accent-dim hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => {
+              setDraftValue("");
+              inputRef.current?.setCustomValidity("");
+              onClear();
+            }}
+          >
+            <X className="h-3 w-3" aria-hidden="true" />
+          </button>
+        )}
         <div className="absolute right-0 top-0 flex h-full w-6 flex-col overflow-hidden rounded-r-card border-l border-border">
           <button
             type="button"

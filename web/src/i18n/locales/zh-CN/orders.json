@@ -14,14 +14,66 @@
 
   "filter": {
     "accountPlaceholder": "按账户筛选…",
+    "advancedDescription": "设置订单和成交的次级筛选条件。列表会使用当前筛选集从服务器刷新。",
+    "amountLabel": "数量",
+    "baseAssetLabel": "基础资产",
+    "baseAssetPlaceholder": "基础资产",
+    "match": {
+      "contains": "包含",
+      "starts_with": "开头为",
+      "ends_with": "结尾为",
+      "exact": "精确匹配"
+    },
+    "priceLabel": "价格",
+    "quoteAssetLabel": "计价资产",
+    "quoteAssetPlaceholder": "计价资产",
+    "range": {
+      "all": "全部",
+      "greater_than": "大于",
+      "less_than": "小于",
+      "between": "介于",
+      "min": "最小值",
+      "max": "最大值"
+    },
+    "sideLabel": "方向",
+    "side": {
+      "all": "全部方向",
+      "buy": "买入",
+      "sell": "卖出"
+    },
     "sourceAll": "所有来源",
     "sourceAriaLabel": "来源",
     "sizeAriaLabel": "每页行数",
-    "sizeRows": "{{count}} 行"
+    "sizeRows": "{{count}} 行",
+    "statusLabel": "状态",
+    "status": {
+      "all": "全部状态",
+      "submitted": "已提交",
+      "accepted": "已接受",
+      "rejected": "已拒绝",
+      "committed": "已确认",
+      "rolled_back": "已回滚",
+      "filled": "已完全成交",
+      "partially_filled": "部分成交",
+      "cancelled": "已取消"
+    },
+    "timeLabel": "提交时间"
+  },
+
+  "lookup": {
+    "label": "按 ID 查找",
+    "placeholder": "精确 ID",
+    "searching": "正在查找…",
+    "submit": "打开订单",
+    "notFound": {
+      "title": "未找到订单",
+      "description": "未找到 ID 为 {{externalId}} 的订单。",
+      "close": "关闭"
+    }
   },
 
   "table": {
-    "externalId": "外部 ID",
+    "externalId": "ID",
     "account": "账户",
     "instrument": "标的",
     "side": "方向",
@@ -33,7 +85,22 @@
     "order": "订单",
     "qty": "数量",
     "lockPrice": "锁定价格",
-    "displayPrices": "显示价格"
+    "displayPrices": "显示价格",
+    "columnDescriptions": {
+      "externalId": "此列显示由调用方提供或由 Officer 生成的不可变标识符。",
+      "account": "此列显示提交订单或接收成交的账户。",
+      "instrument": "此列显示该行交易的基础资产和计价资产。",
+      "side": "此列显示该行为买入还是卖出。",
+      "amount": "此列显示提交的订单数量及其数量类型。",
+      "price": "此列显示订单限价或成交执行价格。",
+      "status": "此列显示订单当前生命周期状态。",
+      "source": "此列显示该行来自面板、REST、MCP 或其他来源。",
+      "time": "此列显示订单或成交被记录的时间。",
+      "order": "此列将成交链接回其父订单。",
+      "qty": "此列显示已执行的基础资产数量。",
+      "lockPrice": "此列显示用于资金锁定的价格，如不同于执行价格。",
+      "displayPrices": "此列显示风控引擎返回、供操作员查看的附加价格。"
+    }
   },
 
   "amount": {
@@ -68,9 +135,9 @@
       "baseAssetPlaceholder": "如 AAPL",
       "quoteAsset": "计价资产",
       "quoteAssetPlaceholder": "如 USD",
-      "externalId": "外部 ID（可选）",
+      "externalId": "ID（可选）",
       "externalIdPlaceholder": "留空则由服务器生成",
-      "externalIdHint": "如需与外部系统关联此订单，可填写自己的 22 字符 base64url ID。",
+      "externalIdHint": "如需稳定的订单句柄，可填写自己的 22 字符 base64url ID。",
       "side": "方向",
       "sideOptions": {
         "buy": "买入",

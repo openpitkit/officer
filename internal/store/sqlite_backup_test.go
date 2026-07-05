@@ -67,6 +67,9 @@ func newRealmStore(t *testing.T, realm domain.RealmID) (Store, RealmStore) {
 // is preserved across a round-trip.
 func seedRealm(t *testing.T, ctx context.Context, rs RealmStore) domain.ExternalID {
 	t.Helper()
+	if err := rs.CreateAssetClass(ctx, domain.AssetClass{Code: "equity", Title: "Equity"}); err != nil {
+		t.Fatalf("CreateAssetClass: %v", err)
+	}
 	mustCreateAsset(t, ctx, rs, domain.Asset{Code: "AAPL", Title: "Apple", AssetClass: "equity"})
 	mustCreateAsset(t, ctx, rs, domain.Asset{Code: "USD", Title: "US Dollar"})
 	if err := rs.CreatePrincipal(ctx, domain.Principal{Code: "operator", Title: "Operator"}); err != nil {
@@ -226,7 +229,7 @@ func TestBackupMoveIsolatedToShared(t *testing.T) {
 		t.Fatalf("RestoreBackup into shared: %v", err)
 	}
 
-	// Both the pre-existing and the restored accounts coexist with their codes.
+	// Both the pre-existing and the restored account coexist with their codes.
 	if _, ok, _ := dst.GetAccount(ctx, "existing-acc"); !ok {
 		t.Fatal("pre-existing account lost after restore")
 	}
@@ -587,7 +590,7 @@ func TestBackupRestoreReplaceAllDeletesAbsentRows(t *testing.T) {
 	seedExtra := func(t *testing.T, rs RealmStore) {
 		t.Helper()
 		// Assets the extra rows reference; the archive also carries them, so a
-		// replace-all upsert keeps them (assets are shared support rows, not pruned).
+		// replace-all upsert keeps them (asset are shared support rows, not pruned).
 		mustCreateAsset(t, ctx, rs, domain.Asset{Code: "USD", Title: "US Dollar"})
 		mustCreateAsset(t, ctx, rs, domain.Asset{Code: "AAPL", Title: "Apple"})
 		if err := rs.CreatePrincipal(ctx, domain.Principal{Code: "operator"}); err != nil {
@@ -905,35 +908,36 @@ func TestBackupRestoreResolvesForeignKeysDictionaryFirst(t *testing.T) {
 // (one per backup.Data section). Keep it in lockstep with backup.Data: a new
 // exported table must appear here.
 var backupExportedTables = map[string]bool{
-	"assets":                  true,
-	"principals":              true,
-	"account_groups":          true,
-	"accounts":                true,
-	"balances":                true,
-	"limit_rate":              true,
-	"limit_order_size":        true,
-	"limit_pnl_bounds":        true,
-	"adjustments":             true,
-	"orders":                  true,
-	"order_approvals":         true,
-	"order_events":            true,
-	"trades":                  true,
-	"audit":                   true,
-	"market_data_instances":   true,
-	"market_data_instruments": true,
-	"market_data_quotes":      true,
-	"signing_keys":            true,
-	"signing_config":          true,
-	"mcp_access":              true,
-	"user_settings":           true,
+	"asset":                  true,
+	"asset_class":            true,
+	"principal":              true,
+	"account_group":          true,
+	"account":                true,
+	"balance":                true,
+	"limit_rate":             true,
+	"limit_order_size":       true,
+	"limit_pnl_bound":        true,
+	"adjustment":             true,
+	"order_record":           true,
+	"order_approval":         true,
+	"order_event":            true,
+	"trade":                  true,
+	"audit":                  true,
+	"market_data_instance":   true,
+	"market_data_instrument": true,
+	"market_data_quote":      true,
+	"signing_key":            true,
+	"signing_config":         true,
+	"mcp_access":             true,
+	"user_setting":           true,
 }
 
 // backupExcludedTables is the explicit allowlist of user tables the backup does
 // NOT carry, with the reason each is intentionally absent.
 var backupExcludedTables = map[string]bool{
-	"realm":               true, // realm identity row, re-established by the target connector
-	"schema_migrations":   true, // migration bookkeeping, owned by Migrate
-	"reservation_intents": true, // ephemeral pre-trade reservations, not durable state
+	"realm":              true, // realm identity row, re-established by the target connector
+	"schema_migration":   true, // migration bookkeeping, owned by Migrate
+	"reservation_intent": true, // ephemeral pre-trade reservations, not durable state
 }
 
 // TestBackupCompleteness introspects sqlite_master for every user table and
@@ -980,7 +984,7 @@ func TestBackupRestoreAtomicityLeavesRealmUnchanged(t *testing.T) {
 		t.Fatalf("CreateAccount(keep): %v", err)
 	}
 
-	// The archive selects accounts+activity; restoreActivity will fail resolving
+	// The archive selects account+activity; restoreActivity will fail resolving
 	// the order's unknown asset code AFTER the replace_all prune has run.
 	scope := backup.Scope{
 		Sections: []backup.Section{
@@ -1028,7 +1032,7 @@ func TestBackupRestoreAtomicityLeavesRealmUnchanged(t *testing.T) {
 
 // TestBackupRestoreActivityOnlyForceIncludesSigningKey exports ONLY the activity
 // section of a realm holding a signed order, then restores it into a fresh realm
-// with the same scope. The signing key the order_approvals row references
+// with the same scope. The signing key the order_approval row references
 // (RESTRICT) must be force-included via the parent general-settings section, so
 // the foreign key resolves with no error.
 func TestBackupRestoreActivityOnlyForceIncludesSigningKey(t *testing.T) {

@@ -24,7 +24,7 @@
 // too). params is opaque JSON stored whole; lock is the SDK-serialized
 // pretrade.Lock blob persisted verbatim and read back byte-identical — this
 // package never (de)serializes it. ResolveOrderReservation links a held intent to
-// a created order and advances the order atomically, reusing the orders-group
+// a created order and advances the order atomically, reusing the order_record-group
 // status guard so the intent flip, the order-status advance and the lifecycle
 // events commit or roll back together.
 
@@ -46,9 +46,9 @@ import (
 const reservationSelect = `
 SELECT ri.approval_id, o.external_id, a.code, ri.params, ri.lock,
        ri.issued_at, ri.expires_at, ri.state
-FROM reservation_intents ri
-LEFT JOIN orders   o ON o.id = ri.order_id
-JOIN accounts a      ON a.id = ri.account_id`
+FROM reservation_intent ri
+LEFT JOIN order_record   o ON o.id = ri.order_id
+JOIN account a      ON a.id = ri.account_id`
 
 // UpsertReservationIntent inserts or replaces a reservation intent row keyed by
 // its approval_id UUID. The account is resolved by code and the optional order by
@@ -67,7 +67,7 @@ func (r *realmStore) UpsertReservationIntent(
 	}
 	if _, err := r.db().ExecContext(
 		ctx,
-		`INSERT INTO reservation_intents
+		`INSERT INTO reservation_intent
 		 (approval_id, order_id, account_id, params, lock, issued_at, expires_at, state)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(approval_id) DO UPDATE SET
@@ -142,7 +142,7 @@ func (r *realmStore) SetReservationIntentState(
 ) error {
 	res, err := r.db().ExecContext(
 		ctx,
-		`UPDATE reservation_intents SET state = ? WHERE approval_id = ?`,
+		`UPDATE reservation_intent SET state = ? WHERE approval_id = ?`,
 		string(state), approvalID,
 	)
 	if err != nil {
@@ -172,7 +172,7 @@ func (r *realmStore) ResolveOrderReservation(
 	// reservation may have already been swept or never persisted.
 	if _, err := tx.ExecContext(
 		ctx,
-		`UPDATE reservation_intents SET state = ? WHERE approval_id = ?`,
+		`UPDATE reservation_intent SET state = ? WHERE approval_id = ?`,
 		string(res.IntentState), res.ApprovalID,
 	); err != nil {
 		return fmt.Errorf("store: resolve reservation intent state: %w", err)
@@ -202,7 +202,7 @@ func (r *realmStore) ResolveOrderReservation(
 	}
 
 	// Order status advance last; guarded only when AllowedFrom is set, reusing the
-	// orders-group guard that distinguishes a missing order (NotFound) from a
+	// order_record-group guard that distinguishes a missing order (NotFound) from a
 	// disallowed current status (Conflict).
 	if err := guardedOrderStatus(
 		ctx, tx, orderID, res.Order, res.OrderStatus, res.AllowedFrom,

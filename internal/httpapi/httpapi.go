@@ -36,18 +36,23 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/shopspring/decimal"
 
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/businesscsv"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/node"
+	"go.openpit.dev/officer/framework/store"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
@@ -75,7 +80,12 @@ const (
 )
 
 // Service is the control-plane seam the HTTP surface calls into.
-type Service = backend.ControlPlane
+type Service interface {
+	backend.ControlPlane
+	ListAdjustmentRows(context.Context, store.AdjustmentListFilter) (store.AdjustmentListPage, error)
+	ListTradeRows(context.Context, store.TradeListFilter) (store.TradeListPage, error)
+	ListAuditRows(context.Context, store.AuditListFilter) (store.AuditListPage, error)
+}
 
 // RegisterRoutes registers the open app's v1 route table into registry.
 func RegisterRoutes(registry *httpx.RouteRegistry, svc Service, logs httpx.LogSource) {
@@ -99,9 +109,20 @@ func RegisterRoutes(registry *httpx.RouteRegistry, svc Service, logs httpx.LogSo
 	register(registry, "business-csv.import.post", http.MethodPost, "/business-csv/import", handleImportBusinessCSV(svc))
 	register(registry, "database.reset.post", http.MethodPost, "/database/reset", handleResetDatabase(svc))
 
+	register(registry, "assets.list.get", http.MethodGet, "/assets", handleListAssets(svc))
+	register(registry, "assets.create.post", http.MethodPost, "/assets", handleCreateAsset(svc))
+	register(registry, "assets.update.put", http.MethodPut, "/assets/{code}", handleUpdateAsset(svc))
+	register(registry, "assets.delete.delete", http.MethodDelete, "/assets/{code}", handleDeleteAsset(svc))
+
+	register(registry, "asset_classes.list.get", http.MethodGet, "/asset-classes", handleListAssetClasses(svc))
+	register(registry, "asset_classes.create.post", http.MethodPost, "/asset-classes", handleCreateAssetClass(svc))
+	register(registry, "asset_classes.update.put", http.MethodPut, "/asset-classes/{code}", handleUpdateAssetClass(svc))
+	register(registry, "asset_classes.delete.delete", http.MethodDelete, "/asset-classes/{code}", handleDeleteAssetClass(svc))
+
 	register(registry, "accounts.list.get", http.MethodGet, "/accounts", handleListAccounts(svc))
 	register(registry, "accounts.create.post", http.MethodPost, "/accounts", handleCreateAccount(svc))
 	register(registry, "accounts.get", http.MethodGet, "/accounts/{code}", handleGetAccount(svc))
+	register(registry, "accounts.update.put", http.MethodPut, "/accounts/{code}", handleUpdateAccount(svc))
 	register(registry, "accounts.block.post", http.MethodPost, "/accounts/{code}/block", handleBlockAccount(svc))
 	register(registry, "accounts.unblock.post", http.MethodPost, "/accounts/{code}/unblock", handleUnblockAccount(svc))
 	register(registry, "accounts.delete", http.MethodDelete, "/accounts/{code}", handleDeleteAccount(svc))
@@ -113,6 +134,7 @@ func RegisterRoutes(registry *httpx.RouteRegistry, svc Service, logs httpx.LogSo
 	register(registry, "groups.list.get", http.MethodGet, "/groups", handleListGroups(svc))
 	register(registry, "groups.create.post", http.MethodPost, "/groups", handleCreateGroup(svc))
 	register(registry, "groups.get", http.MethodGet, "/groups/{code}", handleGetGroup(svc))
+	register(registry, "groups.update.put", http.MethodPut, "/groups/{code}", handleUpdateGroup(svc))
 	register(registry, "groups.notes.put", http.MethodPut, "/groups/{code}/notes", handleSetGroupNotes(svc))
 	register(registry, "groups.block.post", http.MethodPost, "/groups/{code}/block", handleBlockGroup(svc))
 	register(registry, "groups.unblock.post", http.MethodPost, "/groups/{code}/unblock", handleUnblockGroup(svc))
@@ -639,40 +661,1197 @@ func validRestoreMode(mode backup.RestoreMode) bool {
 	}
 }
 
-// handleListAccounts handles GET /api/v1/accounts.
-func handleListAccounts(svc Service) http.HandlerFunc {
+func textMatcherFromQuery(q url.Values, valueKey, modeKey string) (
+	store.TextMatcher, error,
+) {
+	value := q.Get(valueKey)
+	if value == "" {
+		return store.TextMatcher{}, nil
+	}
+	mode := q.Get(modeKey)
+	matcher := store.TextMatcher{Fragments: strings.Split(value, "*")}
+	switch mode {
+	case "", "contains":
+	case "starts_with":
+		matcher.AnchorStart = true
+	case "ends_with":
+		matcher.AnchorEnd = true
+	case "exact":
+		matcher.AnchorStart = true
+		matcher.AnchorEnd = true
+	default:
+		return store.TextMatcher{}, fmt.Errorf("invalid %s", modeKey)
+	}
+	return matcher, nil
+}
+
+func externalIDFromQuery(q url.Values) (domain.ExternalID, error) {
+	value := q.Get("id")
+	if value == "" {
+		value = q.Get("externalId")
+	}
+	if value == "" {
+		return domain.ExternalID{}, nil
+	}
+	return domain.ParseExternalID(value)
+}
+
+func statusFilterFromQuery(q url.Values) (store.StatusFilter, error) {
+	switch q.Get("status") {
+	case "", "all":
+		return store.StatusFilterAll, nil
+	case "active":
+		return store.StatusFilterActive, nil
+	case "blocked":
+		return store.StatusFilterBlocked, nil
+	default:
+		return store.StatusFilterAll, fmt.Errorf("invalid status")
+	}
+}
+
+// accountCountRangeFromQuery parses the group account-count range filter. It
+// honours the legacy has/none/all selector (accountCount=...) and the
+// from/to/between range form (accountCountMode/Min/Max).
+func accountCountRangeFromQuery(q url.Values) (store.CountRangeFilter, error) {
+	if legacy := q.Get("accountCount"); legacy != "" {
+		switch legacy {
+		case "all":
+			return store.CountRangeFilter{}, nil
+		case "has":
+			zero := 0
+			return store.CountRangeFilter{Min: &zero, MinExclusive: true}, nil
+		case "none":
+			zero := 0
+			return store.CountRangeFilter{Min: &zero, Max: &zero}, nil
+		default:
+			return store.CountRangeFilter{}, fmt.Errorf("invalid accountCount")
+		}
+	}
+	return countRangeFromQuery(
+		q, "accountCountMode", "accountCountMin", "accountCountMax",
+	)
+}
+
+func countRangeFilterFromQuery(q url.Values) (store.CountRangeFilter, error) {
+	if legacy := q.Get("positionCount"); legacy != "" {
+		switch legacy {
+		case "all":
+			return store.CountRangeFilter{}, nil
+		case "has":
+			zero := 0
+			return store.CountRangeFilter{Min: &zero, MinExclusive: true}, nil
+		case "none":
+			zero := 0
+			return store.CountRangeFilter{Min: &zero, Max: &zero}, nil
+		default:
+			return store.CountRangeFilter{}, fmt.Errorf("invalid positionCount")
+		}
+	}
+	return countRangeFromQuery(q, "positionCountMode", "positionCountMin", "positionCountMax")
+}
+
+func countRangeFromQuery(
+	q url.Values, modeKey string, minKey string, maxKey string,
+) (store.CountRangeFilter, error) {
+	switch q.Get(modeKey) {
+	case "", "all":
+		return store.CountRangeFilter{}, nil
+	case "eq", "equal", "equals", "exact":
+		value, err := nonNegativeIntFromQuery(q, minKey)
+		if err != nil {
+			return store.CountRangeFilter{}, err
+		}
+		return store.CountRangeFilter{Equal: &value}, nil
+	case "neq", "not_equal", "not_equals":
+		value, err := nonNegativeIntFromQuery(q, minKey)
+		if err != nil {
+			return store.CountRangeFilter{}, err
+		}
+		return store.CountRangeFilter{NotEqual: &value}, nil
+	case "gt", "greater_than":
+		value, err := nonNegativeIntFromQuery(q, minKey)
+		if err != nil {
+			return store.CountRangeFilter{}, err
+		}
+		return store.CountRangeFilter{Min: &value, MinExclusive: true}, nil
+	case "gte":
+		value, err := nonNegativeIntFromQuery(q, minKey)
+		if err != nil {
+			return store.CountRangeFilter{}, err
+		}
+		return store.CountRangeFilter{Min: &value}, nil
+	case "lt", "less_than":
+		value, err := nonNegativeIntFromQuery(q, maxKey)
+		if err != nil {
+			return store.CountRangeFilter{}, err
+		}
+		return store.CountRangeFilter{Max: &value, MaxExclusive: true}, nil
+	case "lte":
+		value, err := nonNegativeIntFromQuery(q, maxKey)
+		if err != nil {
+			return store.CountRangeFilter{}, err
+		}
+		return store.CountRangeFilter{Max: &value}, nil
+	case "between":
+		minValue, err := nonNegativeIntFromQuery(q, minKey)
+		if err != nil {
+			return store.CountRangeFilter{}, err
+		}
+		maxValue, err := nonNegativeIntFromQuery(q, maxKey)
+		if err != nil {
+			return store.CountRangeFilter{}, err
+		}
+		if minValue > maxValue {
+			return store.CountRangeFilter{}, fmt.Errorf("invalid %s range", modeKey)
+		}
+		return store.CountRangeFilter{Min: &minValue, Max: &maxValue}, nil
+	default:
+		return store.CountRangeFilter{}, fmt.Errorf("invalid %s", modeKey)
+	}
+}
+
+func nonNegativeIntFromQuery(q url.Values, key string) (int, error) {
+	raw := q.Get(key)
+	if raw == "" {
+		return 0, fmt.Errorf("missing %s", key)
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 {
+		return 0, fmt.Errorf("invalid %s", key)
+	}
+	return value, nil
+}
+
+func pageSpecFromQuery(q url.Values) (store.PageSpec, error) {
+	limit := listDefaultLimit
+	if raw := q.Get("limit"); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value <= 0 {
+			return store.PageSpec{}, fmt.Errorf("invalid limit")
+		}
+		if value > listCapREST {
+			value = listCapREST
+		}
+		limit = value
+	}
+	offset := 0
+	if raw := q.Get("offset"); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 {
+			return store.PageSpec{}, fmt.Errorf("invalid offset")
+		}
+		offset = value
+	} else if raw := q.Get("page"); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value <= 0 {
+			return store.PageSpec{}, fmt.Errorf("invalid page")
+		}
+		if value-1 > math.MaxInt/limit {
+			return store.PageSpec{}, fmt.Errorf("invalid page")
+		}
+		offset = (value - 1) * limit
+	}
+	return store.PageSpec{Limit: limit, Offset: offset}, nil
+}
+
+func sortSpecFromQuery(q url.Values, allowed map[string]struct{}) (store.SortSpec, error) {
+	column := q.Get("sort")
+	order := q.Get("order")
+	if column == "" {
+		if order != "" && order != "asc" && order != "desc" {
+			return store.SortSpec{}, fmt.Errorf("invalid order")
+		}
+		return store.SortSpec{}, nil
+	}
+	if _, ok := allowed[column]; !ok {
+		return store.SortSpec{}, fmt.Errorf("invalid sort")
+	}
+	switch order {
+	case "none":
+		return store.SortSpec{}, nil
+	case "", "asc":
+		return store.SortSpec{Column: column}, nil
+	case "desc":
+		return store.SortSpec{Column: column, Descending: true}, nil
+	default:
+		return store.SortSpec{}, fmt.Errorf("invalid order")
+	}
+}
+
+func decimalRangeFromQuery(
+	q url.Values,
+	modeKey string,
+	minKey string,
+	maxKey string,
+) (store.DecimalRangeFilter, error) {
+	switch q.Get(modeKey) {
+	case "", "all":
+		return store.DecimalRangeFilter{}, nil
+	case "eq", "equal", "equals", "exact":
+		value, _, err := decimalBoundFromQuery(q, minKey)
+		if err != nil {
+			return store.DecimalRangeFilter{}, err
+		}
+		return store.DecimalRangeFilter{Equal: &value}, nil
+	case "neq", "not_equal", "not_equals":
+		value, _, err := decimalBoundFromQuery(q, minKey)
+		if err != nil {
+			return store.DecimalRangeFilter{}, err
+		}
+		return store.DecimalRangeFilter{NotEqual: &value}, nil
+	case "gt", "greater_than":
+		value, _, err := decimalBoundFromQuery(q, minKey)
+		if err != nil {
+			return store.DecimalRangeFilter{}, err
+		}
+		return store.DecimalRangeFilter{Min: &value, MinExclusive: true}, nil
+	case "gte":
+		value, _, err := decimalBoundFromQuery(q, minKey)
+		if err != nil {
+			return store.DecimalRangeFilter{}, err
+		}
+		return store.DecimalRangeFilter{Min: &value}, nil
+	case "lt", "less_than":
+		value, _, err := decimalBoundFromQuery(q, maxKey)
+		if err != nil {
+			return store.DecimalRangeFilter{}, err
+		}
+		return store.DecimalRangeFilter{Max: &value, MaxExclusive: true}, nil
+	case "lte":
+		value, _, err := decimalBoundFromQuery(q, maxKey)
+		if err != nil {
+			return store.DecimalRangeFilter{}, err
+		}
+		return store.DecimalRangeFilter{Max: &value}, nil
+	case "between":
+		minValue, minDec, err := decimalBoundFromQuery(q, minKey)
+		if err != nil {
+			return store.DecimalRangeFilter{}, err
+		}
+		maxValue, maxDec, err := decimalBoundFromQuery(q, maxKey)
+		if err != nil {
+			return store.DecimalRangeFilter{}, err
+		}
+		if minDec.GreaterThan(maxDec) {
+			return store.DecimalRangeFilter{}, fmt.Errorf("invalid %s range", modeKey)
+		}
+		return store.DecimalRangeFilter{Min: &minValue, Max: &maxValue}, nil
+	default:
+		return store.DecimalRangeFilter{}, fmt.Errorf("invalid %s", modeKey)
+	}
+}
+
+// decimalBoundFromQuery reads a decimal range bound, validating it is a real
+// decimal and returning the plain string for the filter (the store compares it
+// numerically through the column's DECIMAL collation) alongside the parsed value
+// for an order check.
+func decimalBoundFromQuery(
+	q url.Values, key string,
+) (string, decimal.Decimal, error) {
+	raw := q.Get(key)
+	if raw == "" {
+		return "", decimal.Decimal{}, fmt.Errorf("missing %s", key)
+	}
+	value, err := decimal.NewFromString(raw)
+	if err != nil {
+		return "", decimal.Decimal{}, fmt.Errorf("invalid %s", key)
+	}
+	return raw, value, nil
+}
+
+func timeRangeFromQuery(
+	q url.Values,
+	modeKey string,
+	minKey string,
+	maxKey string,
+) (store.TimeRangeFilter, error) {
+	switch q.Get(modeKey) {
+	case "", "all":
+		return store.TimeRangeFilter{}, nil
+	case "gt", "after", "greater_than":
+		value, err := timeFromQuery(q, minKey)
+		if err != nil {
+			return store.TimeRangeFilter{}, err
+		}
+		return store.TimeRangeFilter{Min: &value, MinExclusive: true}, nil
+	case "gte", "on_or_after":
+		value, err := timeFromQuery(q, minKey)
+		if err != nil {
+			return store.TimeRangeFilter{}, err
+		}
+		return store.TimeRangeFilter{Min: &value}, nil
+	case "lt", "before", "less_than":
+		value, err := timeFromQuery(q, maxKey)
+		if err != nil {
+			return store.TimeRangeFilter{}, err
+		}
+		return store.TimeRangeFilter{Max: &value, MaxExclusive: true}, nil
+	case "lte", "on_or_before":
+		value, err := timeFromQuery(q, maxKey)
+		if err != nil {
+			return store.TimeRangeFilter{}, err
+		}
+		return store.TimeRangeFilter{Max: &value}, nil
+	case "between":
+		minValue, err := timeFromQuery(q, minKey)
+		if err != nil {
+			return store.TimeRangeFilter{}, err
+		}
+		maxValue, err := timeFromQuery(q, maxKey)
+		if err != nil {
+			return store.TimeRangeFilter{}, err
+		}
+		if minValue.After(maxValue) {
+			return store.TimeRangeFilter{}, fmt.Errorf("invalid %s range", modeKey)
+		}
+		return store.TimeRangeFilter{Min: &minValue, Max: &maxValue}, nil
+	default:
+		return store.TimeRangeFilter{}, fmt.Errorf("invalid %s", modeKey)
+	}
+}
+
+func timeFromQuery(q url.Values, key string) (time.Time, error) {
+	raw := q.Get(key)
+	if raw == "" {
+		return time.Time{}, fmt.Errorf("missing %s", key)
+	}
+	value, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid %s", key)
+	}
+	return value.UTC(), nil
+}
+
+var accountSortKeys = map[string]struct{}{
+	"blockReason":   {},
+	"code":          {},
+	"group":         {},
+	"positionCount": {},
+	"status":        {},
+	"title":         {},
+}
+
+var assetSortKeys = map[string]struct{}{
+	"assetClass": {},
+	"code":       {},
+	"title":      {},
+}
+
+var orderSortKeys = map[string]struct{}{
+	"account":     {},
+	"amountValue": {},
+	"at":          {},
+	"baseAsset":   {},
+	"price":       {},
+	"quoteAsset":  {},
+	"side":        {},
+	"source":      {},
+	"status":      {},
+}
+
+var groupSortKeys = map[string]struct{}{
+	"accountCount":  {},
+	"blockReason":   {},
+	"code":          {},
+	"notes":         {},
+	"positionCount": {},
+	"status":        {},
+	"title":         {},
+}
+
+var assetClassSortKeys = map[string]struct{}{
+	"assetCount": {},
+	"code":       {},
+	"title":      {},
+}
+
+var policySortKeys = map[string]struct{}{
+	"account":     {},
+	"asset":       {},
+	"initialPnl":  {},
+	"lowerBound":  {},
+	"maxNotional": {},
+	"maxOrders":   {},
+	"maxQuantity": {},
+	"policy":      {},
+	"scope":       {},
+	"upperBound":  {},
+}
+
+var balanceSortKeys = map[string]struct{}{
+	"account":           {},
+	"asset":             {},
+	"available":         {},
+	"averageEntryPrice": {},
+	"held":              {},
+	"incoming":          {},
+	"realizedPnl":       {},
+	"updatedAt":         {},
+}
+
+var adjustmentSortKeys = map[string]struct{}{
+	"account":   {},
+	"asset":     {},
+	"at":        {},
+	"principal": {},
+	"source":    {},
+	"status":    {},
+}
+
+var tradeSortKeys = map[string]struct{}{
+	"account":    {},
+	"at":         {},
+	"baseAsset":  {},
+	"lockPrice":  {},
+	"price":      {},
+	"quantity":   {},
+	"quoteAsset": {},
+	"side":       {},
+	"source":     {},
+}
+
+func accountListFilterFromQuery(q url.Values) (store.AccountListFilter, error) {
+	code, err := textMatcherFromQuery(q, "code", "codeMatch")
+	if err != nil {
+		return store.AccountListFilter{}, err
+	}
+	blockReason, err := textMatcherFromQuery(q, "blockReason", "blockReasonMatch")
+	if err != nil {
+		return store.AccountListFilter{}, err
+	}
+	status, err := statusFilterFromQuery(q)
+	if err != nil {
+		return store.AccountListFilter{}, err
+	}
+	position, err := countRangeFilterFromQuery(q)
+	if err != nil {
+		return store.AccountListFilter{}, err
+	}
+	sortSpec, err := sortSpecFromQuery(q, accountSortKeys)
+	if err != nil {
+		return store.AccountListFilter{}, err
+	}
+	page, err := pageSpecFromQuery(q)
+	if err != nil {
+		return store.AccountListFilter{}, err
+	}
+	filter := store.AccountListFilter{
+		Code:        code,
+		BlockReason: blockReason,
+		Status:      status,
+		Position:    position,
+		GroupCode:   nil,
+		Sort:        sortSpec,
+		Page:        page,
+	}
+	if values, ok := q["group"]; ok {
+		group := ""
+		if len(values) > 0 {
+			group = values[0]
+		}
+		filter.GroupCode = &group
+	}
+	return filter, nil
+}
+
+func orderListFilterFromQuery(q url.Values) (store.OrderListFilter, error) {
+	baseAsset := store.ExactTextMatcher(q.Get("baseAsset"))
+	quoteAsset := store.ExactTextMatcher(q.Get("quoteAsset"))
+	side, err := orderSideFromQuery(q)
+	if err != nil {
+		return store.OrderListFilter{}, err
+	}
+	status, err := orderStatusFromQuery(q)
+	if err != nil {
+		return store.OrderListFilter{}, err
+	}
+	amount, err := decimalRangeFromQuery(q, "amountMode", "amountMin", "amountMax")
+	if err != nil {
+		return store.OrderListFilter{}, err
+	}
+	price, err := decimalRangeFromQuery(q, "priceMode", "priceMin", "priceMax")
+	if err != nil {
+		return store.OrderListFilter{}, err
+	}
+	at, err := timeRangeFromQuery(q, "atMode", "atMin", "atMax")
+	if err != nil {
+		return store.OrderListFilter{}, err
+	}
+	sortSpec, err := sortSpecFromQuery(q, orderSortKeys)
+	if err != nil {
+		return store.OrderListFilter{}, err
+	}
+	page, err := pageSpecFromQuery(q)
+	if err != nil {
+		return store.OrderListFilter{}, err
+	}
+	return store.OrderListFilter{
+		Account:    domain.AccountID(q.Get("account")),
+		Source:     domain.Source(q.Get("source")),
+		Side:       side,
+		Status:     status,
+		BaseAsset:  baseAsset,
+		QuoteAsset: quoteAsset,
+		Amount:     amount,
+		Price:      price,
+		At:         at,
+		Sort:       sortSpec,
+		Page:       page,
+	}, nil
+}
+
+func balanceListFilterFromQuery(q url.Values) (store.BalanceListFilter, error) {
+	account := store.ExactTextMatcher(q.Get("account"))
+	asset := store.ExactTextMatcher(q.Get("asset"))
+	available, err := decimalRangeFromQuery(q, "availableMode", "availableMin", "availableMax")
+	if err != nil {
+		return store.BalanceListFilter{}, err
+	}
+	held, err := decimalRangeFromQuery(q, "heldMode", "heldMin", "heldMax")
+	if err != nil {
+		return store.BalanceListFilter{}, err
+	}
+	incoming, err := decimalRangeFromQuery(q, "incomingMode", "incomingMin", "incomingMax")
+	if err != nil {
+		return store.BalanceListFilter{}, err
+	}
+	averageEntryPrice, err := decimalRangeFromQuery(
+		q, "averageEntryPriceMode", "averageEntryPriceMin", "averageEntryPriceMax",
+	)
+	if err != nil {
+		return store.BalanceListFilter{}, err
+	}
+	realizedPnl, err := decimalRangeFromQuery(
+		q, "realizedPnlMode", "realizedPnlMin", "realizedPnlMax",
+	)
+	if err != nil {
+		return store.BalanceListFilter{}, err
+	}
+	updatedAt, err := timeRangeFromQuery(q, "updatedAtMode", "updatedAfter", "updatedBefore")
+	if err != nil {
+		return store.BalanceListFilter{}, err
+	}
+	sortSpec, err := sortSpecFromQuery(q, balanceSortKeys)
+	if err != nil {
+		return store.BalanceListFilter{}, err
+	}
+	page, err := pageSpecFromQuery(q)
+	if err != nil {
+		return store.BalanceListFilter{}, err
+	}
+	filter := store.BalanceListFilter{
+		Account:           account,
+		Asset:             asset,
+		Available:         available,
+		Held:              held,
+		Incoming:          incoming,
+		AverageEntryPrice: averageEntryPrice,
+		RealizedPnl:       realizedPnl,
+		UpdatedAt:         updatedAt,
+		Sort:              sortSpec,
+		Page:              page,
+	}
+	if values, ok := q["groupCode"]; ok {
+		groupCode := ""
+		if len(values) > 0 {
+			groupCode = values[0]
+		}
+		filter.GroupCode = &groupCode
+	}
+	return filter, nil
+}
+
+func orderSideFromQuery(q url.Values) (*domain.OrderSide, error) {
+	switch raw := q.Get("side"); raw {
+	case "", "all":
+		return nil, nil
+	case string(domain.OrderSideBuy), string(domain.OrderSideSell):
+		side := domain.OrderSide(raw)
+		return &side, nil
+	default:
+		return nil, fmt.Errorf("invalid side")
+	}
+}
+
+func sourceFromQuery(q url.Values) (domain.Source, error) {
+	switch raw := q.Get("source"); raw {
+	case "", "all":
+		return "", nil
+	default:
+		return domain.Source(raw), nil
+	}
+}
+
+func adjustmentStatusFromQuery(q url.Values) (*domain.AdjustmentStatus, error) {
+	switch raw := q.Get("status"); raw {
+	case "", "all":
+		return nil, nil
+	case string(domain.AdjustmentStatusAccepted), string(domain.AdjustmentStatusRejected):
+		status := domain.AdjustmentStatus(raw)
+		return &status, nil
+	default:
+		return nil, fmt.Errorf("invalid status")
+	}
+}
+
+func orderStatusFromQuery(q url.Values) ([]domain.OrderStatus, error) {
+	rawValues := q["status"]
+	if len(rawValues) == 0 {
+		return nil, nil
+	}
+	out := make([]domain.OrderStatus, 0, len(rawValues))
+	for _, raw := range rawValues {
+		for _, part := range strings.Split(raw, ",") {
+			if part == "" || part == "all" {
+				continue
+			}
+			status := domain.OrderStatus(part)
+			if !validOrderStatus(status) {
+				return nil, fmt.Errorf("invalid status")
+			}
+			out = append(out, status)
+		}
+	}
+	return out, nil
+}
+
+func validOrderStatus(status domain.OrderStatus) bool {
+	switch status {
+	case domain.OrderStatusSubmitted,
+		domain.OrderStatusAccepted,
+		domain.OrderStatusRejected,
+		domain.OrderStatusCommitted,
+		domain.OrderStatusRolledBack,
+		domain.OrderStatusFilled,
+		domain.OrderStatusPartiallyFilled,
+		domain.OrderStatusCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
+func groupListFilterFromQuery(q url.Values) (store.GroupListFilter, error) {
+	code, err := textMatcherFromQuery(q, "code", "codeMatch")
+	if err != nil {
+		return store.GroupListFilter{}, err
+	}
+	notes, err := textMatcherFromQuery(q, "notes", "notesMatch")
+	if err != nil {
+		return store.GroupListFilter{}, err
+	}
+	blockReason, err := textMatcherFromQuery(q, "blockReason", "blockReasonMatch")
+	if err != nil {
+		return store.GroupListFilter{}, err
+	}
+	status, err := statusFilterFromQuery(q)
+	if err != nil {
+		return store.GroupListFilter{}, err
+	}
+	position, err := countRangeFilterFromQuery(q)
+	if err != nil {
+		return store.GroupListFilter{}, err
+	}
+	account, err := accountCountRangeFromQuery(q)
+	if err != nil {
+		return store.GroupListFilter{}, err
+	}
+	sortSpec, err := sortSpecFromQuery(q, groupSortKeys)
+	if err != nil {
+		return store.GroupListFilter{}, err
+	}
+	page, err := pageSpecFromQuery(q)
+	if err != nil {
+		return store.GroupListFilter{}, err
+	}
+	return store.GroupListFilter{
+		Code:        code,
+		Notes:       notes,
+		BlockReason: blockReason,
+		Status:      status,
+		Position:    position,
+		Account:     account,
+		Sort:        sortSpec,
+		Page:        page,
+	}, nil
+}
+
+func assetClassListFilterFromQuery(q url.Values) (store.AssetClassListFilter, error) {
+	code, err := textMatcherFromQuery(q, "code", "codeMatch")
+	if err != nil {
+		return store.AssetClassListFilter{}, err
+	}
+	notes, err := textMatcherFromQuery(q, "notes", "notesMatch")
+	if err != nil {
+		return store.AssetClassListFilter{}, err
+	}
+	sortSpec, err := sortSpecFromQuery(q, assetClassSortKeys)
+	if err != nil {
+		return store.AssetClassListFilter{}, err
+	}
+	page, err := pageSpecFromQuery(q)
+	if err != nil {
+		return store.AssetClassListFilter{}, err
+	}
+	return store.AssetClassListFilter{
+		Code:  code,
+		Notes: notes,
+		Sort:  sortSpec,
+		Page:  page,
+	}, nil
+}
+
+func assetListFilterFromQuery(q url.Values) (store.AssetListFilter, error) {
+	code, err := textMatcherFromQuery(q, "code", "codeMatch")
+	if err != nil {
+		return store.AssetListFilter{}, err
+	}
+	class, err := textMatcherFromQuery(q, "class", "classMatch")
+	if err != nil {
+		return store.AssetListFilter{}, err
+	}
+	sortSpec, err := sortSpecFromQuery(q, assetSortKeys)
+	if err != nil {
+		return store.AssetListFilter{}, err
+	}
+	page, err := pageSpecFromQuery(q)
+	if err != nil {
+		return store.AssetListFilter{}, err
+	}
+	return store.AssetListFilter{
+		Code:  code,
+		Class: class,
+		Sort:  sortSpec,
+		Page:  page,
+	}, nil
+}
+
+// policyKindFromQuery maps the Limits UI policy selector to the store kind. The
+// "all" value (and an absent param) leaves the kind unrestricted; any other
+// value is rejected.
+func policyKindFromQuery(q url.Values) (*store.PolicyKind, error) {
+	switch q.Get("policy") {
+	case "", "all":
+		return nil, nil
+	case "rate":
+		kind := store.PolicyKindRate
+		return &kind, nil
+	case "order_size":
+		kind := store.PolicyKindOrderSize
+		return &kind, nil
+	case "pnl_bounds":
+		kind := store.PolicyKindPnlBounds
+		return &kind, nil
+	default:
+		return nil, fmt.Errorf("invalid policy")
+	}
+}
+
+func policyListFilterFromQuery(q url.Values) (store.PolicyListFilter, error) {
+	account := store.ExactTextMatcher(q.Get("account"))
+	asset := store.ExactTextMatcher(q.Get("asset"))
+	kind, err := policyKindFromQuery(q)
+	if err != nil {
+		return store.PolicyListFilter{}, err
+	}
+	sortSpec, err := sortSpecFromQuery(q, policySortKeys)
+	if err != nil {
+		return store.PolicyListFilter{}, err
+	}
+	page, err := pageSpecFromQuery(q)
+	if err != nil {
+		return store.PolicyListFilter{}, err
+	}
+	return store.PolicyListFilter{
+		Account: account,
+		Asset:   asset,
+		Kind:    kind,
+		Sort:    sortSpec,
+		Page:    page,
+	}, nil
+}
+
+func adjustmentListFilterFromQuery(q url.Values) (store.AdjustmentListFilter, error) {
+	externalID, err := externalIDFromQuery(q)
+	if err != nil {
+		return store.AdjustmentListFilter{}, err
+	}
+	account := store.ExactTextMatcher(q.Get("account"))
+	asset := store.ExactTextMatcher(q.Get("asset"))
+	source, err := sourceFromQuery(q)
+	if err != nil {
+		return store.AdjustmentListFilter{}, err
+	}
+	status, err := adjustmentStatusFromQuery(q)
+	if err != nil {
+		return store.AdjustmentListFilter{}, err
+	}
+	at, err := timeRangeFromQuery(q, "atMode", "atMin", "atMax")
+	if err != nil {
+		return store.AdjustmentListFilter{}, err
+	}
+	sortSpec, err := sortSpecFromQuery(q, adjustmentSortKeys)
+	if err != nil {
+		return store.AdjustmentListFilter{}, err
+	}
+	page, err := pageSpecFromQuery(q)
+	if err != nil {
+		return store.AdjustmentListFilter{}, err
+	}
+	return store.AdjustmentListFilter{
+		Account:    account,
+		Asset:      asset,
+		ExternalID: externalID,
+		Source:     source,
+		Status:     status,
+		At:         at,
+		Sort:       sortSpec,
+		Page:       page,
+	}, nil
+}
+
+func tradeListFilterFromQuery(q url.Values) (store.TradeListFilter, error) {
+	account := store.ExactTextMatcher(q.Get("account"))
+	externalID, err := externalIDFromQuery(q)
+	if err != nil {
+		return store.TradeListFilter{}, err
+	}
+	baseAsset := store.ExactTextMatcher(q.Get("baseAsset"))
+	quoteAsset := store.ExactTextMatcher(q.Get("quoteAsset"))
+	side, err := orderSideFromQuery(q)
+	if err != nil {
+		return store.TradeListFilter{}, err
+	}
+	source, err := sourceFromQuery(q)
+	if err != nil {
+		return store.TradeListFilter{}, err
+	}
+	at, err := timeRangeFromQuery(q, "atMode", "atMin", "atMax")
+	if err != nil {
+		return store.TradeListFilter{}, err
+	}
+	quantity, err := decimalRangeFromQuery(q, "quantityMode", "quantityMin", "quantityMax")
+	if err != nil {
+		return store.TradeListFilter{}, err
+	}
+	price, err := decimalRangeFromQuery(q, "priceMode", "priceMin", "priceMax")
+	if err != nil {
+		return store.TradeListFilter{}, err
+	}
+	lockPrice, err := decimalRangeFromQuery(q, "lockPriceMode", "lockPriceMin", "lockPriceMax")
+	if err != nil {
+		return store.TradeListFilter{}, err
+	}
+	sortSpec, err := sortSpecFromQuery(q, tradeSortKeys)
+	if err != nil {
+		return store.TradeListFilter{}, err
+	}
+	page, err := pageSpecFromQuery(q)
+	if err != nil {
+		return store.TradeListFilter{}, err
+	}
+	return store.TradeListFilter{
+		Account:    account,
+		ExternalID: externalID,
+		BaseAsset:  baseAsset,
+		QuoteAsset: quoteAsset,
+		Side:       side,
+		Source:     source,
+		At:         at,
+		Quantity:   quantity,
+		Price:      price,
+		LockPrice:  lockPrice,
+		Sort:       sortSpec,
+		Page:       page,
+	}, nil
+}
+
+func auditListFilterFromQuery(q url.Values) (store.AuditListFilter, error) {
+	account := store.ExactTextMatcher(q.Get("account"))
+	asset := store.ExactTextMatcher(q.Get("asset"))
+	externalID, err := externalIDFromQuery(q)
+	if err != nil {
+		return store.AuditListFilter{}, err
+	}
+	actor, err := textMatcherFromQuery(q, "actor", "actorMatch")
+	if err != nil {
+		return store.AuditListFilter{}, err
+	}
+	source, err := sourceFromQuery(q)
+	if err != nil {
+		return store.AuditListFilter{}, err
+	}
+	actions, err := auditActionsFromQuery(q)
+	if err != nil {
+		return store.AuditListFilter{}, err
+	}
+	category, err := auditCategoryFromQuery(q, len(actions) > 0)
+	if err != nil {
+		return store.AuditListFilter{}, err
+	}
+	at, err := timeRangeFromQuery(q, "atMode", "atMin", "atMax")
+	if err != nil {
+		return store.AuditListFilter{}, err
+	}
+	if q.Get("sort") != "" || q.Get("order") != "" {
+		return store.AuditListFilter{}, fmt.Errorf("audit sorting is not supported")
+	}
+	page, err := pageSpecFromQuery(q)
+	if err != nil {
+		return store.AuditListFilter{}, err
+	}
+	return store.AuditListFilter{
+		Account:    account,
+		Asset:      asset,
+		ExternalID: externalID,
+		Actor:      actor,
+		Source:     source,
+		Actions:    actions,
+		Category:   category,
+		At:         at,
+		Page:       page,
+	}, nil
+}
+
+// handleListAssets handles GET /api/v1/assets.
+func handleListAssets(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		accounts, err := svc.ListAccounts(r.Context())
+		filter, err := assetListFilterFromQuery(r.URL.Query())
+		if err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		page, err := svc.ListAssetRows(r.Context(), filter)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
-		dtos := make([]accountDTO, 0, len(accounts))
-		for _, a := range accounts {
-			dtos = append(dtos, toAccountDTO(a))
+		dtos := make([]assetDTO, 0, len(page.Rows))
+		for _, asset := range page.Rows {
+			dtos = append(dtos, toAssetDTO(asset))
 		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{"accounts": dtos})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{
+			"assets": dtos,
+			"total":  page.Total,
+		})
 	}
 }
 
-// handleCreateAccount handles POST /api/v1/accounts. The body carries the
-// account's public code; the engine assigns its internal id, which is never
-// exposed.
-func handleCreateAccount(svc Service) http.HandlerFunc {
+// handleCreateAsset handles POST /api/v1/assets. The body carries the asset's
+// public code, optional title, and optional classification.
+func handleCreateAsset(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Code string `json:"code"`
+			Code       string `json:"code"`
+			Title      string `json:"title"`
+			AssetClass string `json:"assetClass"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
-		id := domain.AccountID(req.Code)
-		if err := domain.ValidateAccountID(id); err != nil {
+		asset := domain.Asset{
+			Code:       req.Code,
+			Title:      req.Title,
+			AssetClass: req.AssetClass,
+		}
+		created, err := svc.CreateAsset(r.Context(), asset)
+		if err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
-		account, err := svc.CreateAccount(r.Context(), id)
+		httpx.WriteJSON(w, http.StatusCreated, map[string]any{"asset": toAssetDTO(created)})
+	}
+}
+
+// handleUpdateAsset handles PUT /api/v1/assets/{code}. The path code identifies
+// the asset; the body carries the replacement public code, title and
+// classification, so an asset can be renamed. Dependent rows reference the asset
+// by its surrogate id, mirroring the group rename.
+func handleUpdateAsset(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		code, err := httpx.PathGroupCode(r)
+		if err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		var req struct {
+			Code       string `json:"code"`
+			Title      string `json:"title"`
+			AssetClass string `json:"assetClass"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			return
+		}
+		updated, err := svc.UpdateAsset(r.Context(), code, domain.Asset{
+			Code:       req.Code,
+			Title:      req.Title,
+			AssetClass: req.AssetClass,
+		})
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"asset": toAssetDTO(updated)})
+	}
+}
+
+// handleListAssetClasses handles GET /api/v1/asset-classes.
+func handleListAssetClasses(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		filter, err := assetClassListFilterFromQuery(r.URL.Query())
+		if err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		page, err := svc.ListAssetClassRows(r.Context(), filter)
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		dtos := make([]assetClassDTO, 0, len(page.Rows))
+		for _, row := range page.Rows {
+			dtos = append(dtos, toAssetClassRowDTO(row))
+		}
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{
+			"assetClasses": dtos,
+			"total":        page.Total,
+		})
+	}
+}
+
+// handleCreateAssetClass handles POST /api/v1/asset-classes. The body carries
+// the class public code, an optional title, and optional notes.
+func handleCreateAssetClass(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Code  string `json:"code"`
+			Title string `json:"title"`
+			Notes string `json:"notes"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			return
+		}
+		created, err := svc.CreateAssetClass(r.Context(), domain.AssetClass{
+			Code:  req.Code,
+			Title: req.Title,
+			Notes: req.Notes,
+		})
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		httpx.WriteJSON(w, http.StatusCreated, map[string]any{"assetClass": toAssetClassDTO(created)})
+	}
+}
+
+// handleUpdateAssetClass handles PUT /api/v1/asset-classes/{code}. The path code
+// identifies the class; the body carries the replacement public code, title and
+// notes, so a class can be renamed. A rename cascades the asset link.
+func handleUpdateAssetClass(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		code, err := httpx.PathGroupCode(r)
+		if err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		var req struct {
+			Code  string `json:"code"`
+			Title string `json:"title"`
+			Notes string `json:"notes"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			return
+		}
+		updated, err := svc.UpdateAssetClass(r.Context(), code, domain.AssetClass{
+			Code:  req.Code,
+			Title: req.Title,
+			Notes: req.Notes,
+		})
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"assetClass": toAssetClassDTO(updated)})
+	}
+}
+
+// handleDeleteAssetClass handles DELETE /api/v1/asset-classes/{code}.
+func handleDeleteAssetClass(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		code, err := httpx.PathGroupCode(r)
+		if err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		if err := svc.DeleteAssetClass(r.Context(), code, forceQuery(r)); err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// handleDeleteAsset handles DELETE /api/v1/assets/{code}.
+func handleDeleteAsset(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		code, err := httpx.PathGroupCode(r)
+		if err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		if err := svc.DeleteAsset(r.Context(), code, forceQuery(r)); err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// handleListAccounts handles GET /api/v1/accounts.
+func handleListAccounts(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		filter, err := accountListFilterFromQuery(r.URL.Query())
+		if err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		accounts, err := svc.ListAccountRows(r.Context(), filter)
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		dtos := make([]accountDTO, 0, len(accounts.Rows))
+		for _, row := range accounts.Rows {
+			dtos = append(dtos, toAccountRowDTO(row))
+		}
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{
+			"accounts": dtos,
+			"total":    accounts.Total,
+		})
+	}
+}
+
+// handleCreateAccount handles POST /api/v1/accounts. The body carries the
+// account's public code and optional title; the engine assigns its internal id,
+// which is never exposed.
+func handleCreateAccount(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Code  string `json:"code"`
+			Title string `json:"title"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			return
+		}
+		account, err := svc.CreateAccount(r.Context(), domain.Account{
+			Code:  domain.AccountID(req.Code),
+			Title: req.Title,
+		})
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
@@ -698,6 +1877,35 @@ func handleGetAccount(svc Service) http.HandlerFunc {
 			"account": toAccountDTO(account),
 			"limits":  toAccountLimitsDTO(limits),
 		})
+	}
+}
+
+// handleUpdateAccount handles PUT /api/v1/accounts/{id}. The body carries the
+// replacement public code and title.
+func handleUpdateAccount(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := httpx.PathAccountID(r)
+		if err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		var req struct {
+			Code  string `json:"code"`
+			Title string `json:"title"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			return
+		}
+		account, err := svc.UpdateAccount(r.Context(), id, domain.Account{
+			Code:  domain.AccountID(req.Code),
+			Title: req.Title,
+		})
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"account": toAccountDTO(account)})
 	}
 }
 
@@ -816,18 +2024,30 @@ func handleSetAccountNotes(svc Service) http.HandlerFunc {
 	}
 }
 
-// handleListLimits handles GET /api/v1/limits[?account=]. It returns the three
-// typed barrier shapes (rate / order-size / pnl-bounds) per policy. Barriers
-// reference accounts by code; no surrogate or engine id is involved.
+// handleListLimits handles GET /api/v1/limits. It returns the three typed
+// barrier tables flattened into one sorted, paged policy list. The optional
+// account, policy (kind), sort/order, and limit/offset query params narrow and
+// order the result; barriers reference accounts by code, never a surrogate id.
 func handleListLimits(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		account := domain.AccountID(r.URL.Query().Get("account"))
-		limits, err := svc.ListLimits(r.Context(), account)
+		filter, err := policyListFilterFromQuery(r.URL.Query())
+		if err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		page, err := svc.ListPolicyRows(r.Context(), filter)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{"limits": toAccountLimitsDTO(limits)})
+		dtos := make([]policyDTO, 0, len(page.Rows))
+		for _, row := range page.Rows {
+			dtos = append(dtos, toPolicyRowDTO(row))
+		}
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{
+			"policies": dtos,
+			"total":    page.Total,
+		})
 	}
 }
 
@@ -996,49 +2216,40 @@ func handleDeleteLimit(svc Service) http.HandlerFunc {
 }
 
 // handleListAudit handles
-// GET /api/v1/audit[?account=&source=&actions=&category=&limit=100]. account
-// and source narrow the trail. The action filter resolves from an explicit
-// ?actions=a,b include-list when present, else from ?category (control |
-// trading | all); it defaults to control so the high-volume trading stream
-// (order submissions and execution reports) is hidden unless asked for.
+// GET /api/v1/audit[?account=&asset=&source=&actions=&category=&limit=100].
+// account, asset, and source narrow the trail. An explicit ?actions=a,b include
+// list wins; otherwise ?category selects control, trading, or all actions.
 func handleListAudit(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		n, err := httpx.LimitParam(r, 100, auditCapREST)
-		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
-			return
-		}
 		q := r.URL.Query()
-		actions, err := auditActionsFromQuery(q)
+		filter, err := auditListFilterFromQuery(q)
 		if err != nil {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
-		filter := domain.AuditFilter{
-			Account: domain.AccountID(q.Get("account")),
-			Source:  domain.Source(q.Get("source")),
-			Actions: actions,
+		if filter.Page.Limit > auditCapREST {
+			filter.Page.Limit = auditCapREST
 		}
-		rows, err := svc.ListAuditFiltered(r.Context(), filter, n)
+		page, err := svc.ListAuditRows(r.Context(), filter)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
-		dtos := make([]auditDTO, 0, len(rows))
-		for _, row := range rows {
+		dtos := make([]auditDTO, 0, len(page.Rows))
+		for _, row := range page.Rows {
 			dtos = append(dtos, toAuditDTO(row))
 		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{"entries": dtos})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{
+			"entries": dtos,
+			"total":   page.Total,
+		})
 	}
 }
 
-// auditActionsFromQuery resolves the audit action include-set from the request.
-// An explicit ?actions=a,b list wins (each name validated against the catalogue;
-// a non-empty value that resolves to zero valid names is rejected). Otherwise
-// ?category selects a group via domain.AuditActionsForCategory; an unknown
-// category is rejected with a 400 error. Absent category defaults to control so
-// the high-volume trading stream is hidden unless asked for. A nil result means
-// no action filter (all actions).
+// auditActionsFromQuery resolves the explicit audit action include-set. Each
+// name is validated against the catalogue; a non-empty value that resolves to
+// zero valid names is rejected. Category shortcuts are parsed separately so the
+// store can use category-specific predicates instead of large action IN lists.
 func auditActionsFromQuery(q url.Values) ([]domain.AuditAction, error) {
 	if raw := strings.TrimSpace(q.Get("actions")); raw != "" {
 		valid := make(map[domain.AuditAction]struct{})
@@ -1062,11 +2273,27 @@ func auditActionsFromQuery(q url.Values) ([]domain.AuditAction, error) {
 		}
 		return actions, nil
 	}
-	actions, known := domain.AuditActionsForCategory(strings.TrimSpace(q.Get("category")))
-	if !known {
-		return nil, fmt.Errorf("unknown audit category %q", q.Get("category"))
+	return nil, nil
+}
+
+func auditCategoryFromQuery(
+	q url.Values, hasExplicitActions bool,
+) (domain.AuditCategory, error) {
+	if hasExplicitActions {
+		return "", nil
 	}
-	return actions, nil
+	switch category := strings.TrimSpace(q.Get("category")); category {
+	case "":
+		return "", nil
+	case string(domain.AuditCategoryControl):
+		return domain.AuditCategoryControl, nil
+	case string(domain.AuditCategoryTrading):
+		return domain.AuditCategoryTrading, nil
+	case "all":
+		return "", nil
+	default:
+		return "", fmt.Errorf("unknown audit category %q", q.Get("category"))
+	}
 }
 
 // handleListAuditActions handles GET /api/v1/audit/actions. It returns the
@@ -1241,8 +2468,12 @@ func handleCreateMarketDataInstance(svc Service) http.HandlerFunc {
 		// well-formed wire form (a malformed one is a 400); the backend uses it
 		// verbatim and rejects a duplicate with 409. When absent the backend
 		// generates one and returns it on the instance.
-		if req.ExternalID != "" {
-			id, err := domain.ParseExternalID(req.ExternalID)
+		suppliedID := req.ID
+		if suppliedID == "" {
+			suppliedID = req.ExternalID
+		}
+		if suppliedID != "" {
+			id, err := domain.ParseExternalID(suppliedID)
 			if err != nil {
 				httpx.WriteErr(w, err)
 				return
@@ -1523,16 +2754,24 @@ func handleSearchMarketDataSymbols(svc Service) http.HandlerFunc {
 // handleListGroups handles GET /api/v1/groups.
 func handleListGroups(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		groups, err := svc.ListGroups(r.Context())
+		filter, err := groupListFilterFromQuery(r.URL.Query())
+		if err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		groups, err := svc.ListGroupRows(r.Context(), filter)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
-		dtos := make([]groupDTO, 0, len(groups))
-		for _, g := range groups {
-			dtos = append(dtos, toGroupDTO(g))
+		dtos := make([]groupDTO, 0, len(groups.Rows))
+		for _, row := range groups.Rows {
+			dtos = append(dtos, toGroupRowDTO(row))
 		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{"groups": dtos})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{
+			"groups": dtos,
+			"total":  groups.Total,
+		})
 	}
 }
 
@@ -1580,6 +2819,35 @@ func handleGetGroup(svc Service) http.HandlerFunc {
 			"group":    toGroupDTO(group),
 			"accounts": dtos,
 		})
+	}
+}
+
+// handleUpdateGroup handles PUT /api/v1/groups/{code}. The body carries the
+// replacement public code and title.
+func handleUpdateGroup(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		code, err := httpx.PathGroupCode(r)
+		if err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		var req struct {
+			Code  string `json:"code"`
+			Title string `json:"title"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			return
+		}
+		group, err := svc.UpdateGroup(r.Context(), code, domain.AccountGroup{
+			Code:  req.Code,
+			Title: req.Title,
+		})
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"group": toGroupDTO(group)})
 	}
 }
 
@@ -1678,18 +2946,24 @@ func writeGroup(w http.ResponseWriter, svc Service, r *http.Request, code string
 // handleListBalances handles GET /api/v1/balances[?account=&asset=].
 func handleListBalances(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query()
-		balances, err := svc.ListBalances(r.Context(),
-			domain.AccountID(q.Get("account")), q.Get("asset"))
+		filter, err := balanceListFilterFromQuery(r.URL.Query())
+		if err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		balances, err := svc.ListBalanceRows(r.Context(), filter)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
-		dtos := make([]balanceDTO, 0, len(balances))
-		for _, b := range balances {
-			dtos = append(dtos, toBalanceDTO(b))
+		dtos := make([]balanceDTO, 0, len(balances.Rows))
+		for _, b := range balances.Rows {
+			dtos = append(dtos, toBalanceDTO(b.Balance))
 		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{"balances": dtos})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{
+			"balances": dtos,
+			"total":    balances.Total,
+		})
 	}
 }
 
@@ -1712,8 +2986,12 @@ func handleApplyAdjustment(svc Service) http.HandlerFunc {
 		// verbatim and rejects a duplicate with 409. When absent the backend
 		// generates one and returns it on the record.
 		var externalID domain.ExternalID
-		if req.ExternalID != "" {
-			externalID, err = domain.ParseExternalID(req.ExternalID)
+		suppliedID := req.ID
+		if suppliedID == "" {
+			suppliedID = req.ExternalID
+		}
+		if suppliedID != "" {
+			externalID, err = domain.ParseExternalID(suppliedID)
 			if err != nil {
 				httpx.WriteErr(w, err)
 				return
@@ -1753,22 +3031,24 @@ func handleListAccountAdjustments(svc Service) http.HandlerFunc {
 	}
 }
 
-// handleListAdjustments handles GET /api/v1/adjustments[?account=&source=&limit=].
+// handleListAdjustments handles GET /api/v1/adjustments.
 func handleListAdjustments(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		n, err := httpx.LimitParam(r, listDefaultLimit, listCapREST)
+		q := r.URL.Query()
+		filter, err := adjustmentListFilterFromQuery(q)
 		if err != nil {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
-		q := r.URL.Query()
-		recs, err := svc.ListAllAdjustments(r.Context(),
-			domain.AccountID(q.Get("account")), domain.Source(q.Get("source")), n)
+		page, err := svc.ListAdjustmentRows(r.Context(), filter)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{"adjustments": toAdjustmentDTOs(recs)})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{
+			"adjustments": toAdjustmentDTOs(page.Rows),
+			"total":       page.Total,
+		})
 	}
 }
 
@@ -1859,23 +3139,24 @@ func handleCheckOrder(svc Service) http.HandlerFunc {
 // handleListOrders handles GET /api/v1/orders[?account=&source=&limit=].
 func handleListOrders(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		n, err := httpx.LimitParam(r, listDefaultLimit, listCapREST)
+		filter, err := orderListFilterFromQuery(r.URL.Query())
 		if err != nil {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
-		q := r.URL.Query()
-		orders, err := svc.ListOrders(r.Context(),
-			domain.AccountID(q.Get("account")), domain.Source(q.Get("source")), n)
+		orders, err := svc.ListOrderRows(r.Context(), filter)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
-		dtos := make([]orderDTO, 0, len(orders))
-		for _, o := range orders {
-			dtos = append(dtos, toOrderDTO(o))
+		dtos := make([]orderDTO, 0, len(orders.Rows))
+		for _, o := range orders.Rows {
+			dtos = append(dtos, toOrderDTO(o.Order))
 		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{"orders": dtos})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{
+			"orders": dtos,
+			"total":  orders.Total,
+		})
 	}
 }
 
@@ -1927,14 +3208,21 @@ func handleApplyExecutionReport(svc Service) http.HandlerFunc {
 			return
 		}
 		var req struct {
-			Quantity  string `json:"quantity"`
-			Price     string `json:"price"`
-			LockPrice string `json:"lockPrice"`
-			Force     bool   `json:"force"`
-			Final     bool   `json:"final"`
+			Quantity       string `json:"quantity"`
+			Price          string `json:"price"`
+			LeavesQuantity string `json:"leavesQuantity"`
+			LockPrice      string `json:"lockPrice"`
+			RealizedPnl    string `json:"realizedPnl"`
+			Fee            string `json:"fee"`
+			Force          bool   `json:"force"`
+			Final          bool   `json:"final"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			return
+		}
+		if req.LeavesQuantity == "" {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "leavesQuantity is required")
 			return
 		}
 		// The parent order supplies the account, instrument, and side; the report
@@ -1945,16 +3233,19 @@ func handleApplyExecutionReport(svc Service) http.HandlerFunc {
 			return
 		}
 		in := domain.ExecutionReportInput{
-			BaseAsset:    detail.Order.BaseAsset,
-			QuoteAsset:   detail.Order.QuoteAsset,
-			FillQuantity: req.Quantity,
-			FillPrice:    req.Price,
-			LockPrice:    req.LockPrice,
-			Account:      detail.Order.Account,
-			Side:         detail.Order.Side,
-			Order:        detail.Order.ExternalID,
-			Force:        req.Force,
-			Final:        req.Final,
+			BaseAsset:      detail.Order.BaseAsset,
+			QuoteAsset:     detail.Order.QuoteAsset,
+			FillQuantity:   req.Quantity,
+			FillPrice:      req.Price,
+			LeavesQuantity: req.LeavesQuantity,
+			LockPrice:      req.LockPrice,
+			RealizedPnl:    req.RealizedPnl,
+			Fee:            req.Fee,
+			Account:        detail.Order.Account,
+			Side:           detail.Order.Side,
+			Order:          detail.Order.ExternalID,
+			Force:          req.Force,
+			Final:          req.Final,
 		}
 		result, err := svc.ApplyExecutionReport(r.Context(), in)
 		if err != nil {
@@ -1965,26 +3256,28 @@ func handleApplyExecutionReport(svc Service) http.HandlerFunc {
 	}
 }
 
-// handleListTrades handles GET /api/v1/trades[?account=&source=&limit=].
+// handleListTrades handles GET /api/v1/trades.
 func handleListTrades(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		n, err := httpx.LimitParam(r, listDefaultLimit, listCapREST)
+		q := r.URL.Query()
+		filter, err := tradeListFilterFromQuery(q)
 		if err != nil {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
-		q := r.URL.Query()
-		trades, err := svc.ListTrades(r.Context(),
-			domain.AccountID(q.Get("account")), domain.Source(q.Get("source")), n)
+		page, err := svc.ListTradeRows(r.Context(), filter)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
-		dtos := make([]tradeDTO, 0, len(trades))
-		for _, t := range trades {
+		dtos := make([]tradeDTO, 0, len(page.Rows))
+		for _, t := range page.Rows {
 			dtos = append(dtos, toTradeDTO(t))
 		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{"trades": dtos})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{
+			"trades": dtos,
+			"total":  page.Total,
+		})
 	}
 }
 
@@ -2141,8 +3434,12 @@ func handleSubmitOrderToken(svc Service) http.HandlerFunc {
 		// well-formed wire form (a malformed one is a 400); the backend uses it
 		// verbatim and rejects a duplicate with 409. When absent the backend
 		// generates one and returns it.
-		if req.ExternalID != "" {
-			id, err := domain.ParseExternalID(req.ExternalID)
+		suppliedID := req.ID
+		if suppliedID == "" {
+			suppliedID = req.ExternalID
+		}
+		if suppliedID != "" {
+			id, err := domain.ParseExternalID(suppliedID)
 			if err != nil {
 				httpx.WriteErr(w, err)
 				return

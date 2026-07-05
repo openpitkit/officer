@@ -20,6 +20,8 @@ servers:
 tags:
   - name: health
     description: Liveness and deployment status
+  - name: assets
+    description: Asset dictionary lifecycle
   - name: accounts
     description: Account lifecycle and admin
   - name: groups
@@ -312,14 +314,362 @@ paths:
           $ref: "#/components/responses/InternalError"
 
   # ---------------------------------------------------------------------------
-  # Accounts
+  # Assets / accounts
   # ---------------------------------------------------------------------------
+
+  /assets:
+    get:
+      operationId: listAssets
+      summary: List all assets
+      tags: [assets]
+      parameters:
+        - $ref: "#/components/parameters/CodeFilter"
+        - $ref: "#/components/parameters/CodeMatch"
+        - name: class
+          in: query
+          description: Asset class code search text.
+          schema:
+            type: string
+        - name: classMatch
+          in: query
+          description: Anchoring mode applied to the class filter.
+          schema:
+            type: string
+            enum: [contains, starts_with, ends_with, exact]
+            default: contains
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [code, title, assetClass]
+          description: Asset list sort key. Unknown keys are rejected.
+        - $ref: "#/components/parameters/SortOrder"
+        - $ref: "#/components/parameters/LimitParam"
+        - $ref: "#/components/parameters/OffsetParam"
+        - $ref: "#/components/parameters/PageParam"
+      responses:
+        "200":
+          description: Asset list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [assets, total]
+                properties:
+                  assets:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Asset"
+                  total:
+                    type: integer
+                    description: Total assets matching the filters before paging.
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    post:
+      operationId: createAsset
+      summary: Create an asset
+      tags: [assets]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code:
+                  type: string
+                  description: Asset public code (its immutable handle).
+                title:
+                  type: string
+                  maxLength: 256
+                  description: Mutable display title for the asset.
+                assetClass:
+                  type: string
+                  maxLength: 256
+                  description: Optional operator classification for the asset.
+      responses:
+        "201":
+          description: Asset created.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [asset]
+                properties:
+                  asset:
+                    $ref: "#/components/schemas/Asset"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /assets/{code}:
+    parameters:
+      - name: code
+        in: path
+        required: true
+        description: URL-encoded asset public code.
+        schema:
+          type: string
+    put:
+      operationId: updateAsset
+      summary: Update an asset's code, title and classification
+      tags: [assets]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code:
+                  type: string
+                  description: >
+                    Replacement asset public code. Dependent rows reference the
+                    asset by its internal id, so renaming the code is safe.
+                title:
+                  type: string
+                  maxLength: 256
+                  description: Mutable display title for the asset.
+                assetClass:
+                  type: string
+                  maxLength: 256
+                  description: Optional operator classification for the asset.
+      responses:
+        "200":
+          description: Asset after update.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [asset]
+                properties:
+                  asset:
+                    $ref: "#/components/schemas/Asset"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    delete:
+      operationId: deleteAsset
+      summary: Delete an asset
+      tags: [assets]
+      parameters:
+        - $ref: "#/components/parameters/ForceCascade"
+      responses:
+        "204":
+          description: Asset deleted.
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/HasDependentsError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /asset-classes:
+    get:
+      operationId: listAssetClasses
+      summary: List all asset classes
+      tags: [assets]
+      parameters:
+        - $ref: "#/components/parameters/CodeFilter"
+        - $ref: "#/components/parameters/CodeMatch"
+        - name: notes
+          in: query
+          schema:
+            type: string
+          description: Search asset-class notes.
+        - $ref: "#/components/parameters/NotesMatch"
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [code, title, assetCount]
+          description: Asset-class list sort key. Unknown keys are rejected.
+        - $ref: "#/components/parameters/SortOrder"
+        - $ref: "#/components/parameters/LimitParam"
+        - $ref: "#/components/parameters/OffsetParam"
+        - $ref: "#/components/parameters/PageParam"
+      responses:
+        "200":
+          description: Asset-class list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [assetClasses, total]
+                properties:
+                  assetClasses:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AssetClass"
+                  total:
+                    type: integer
+                    description: Total asset classes matching the filters before paging.
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    post:
+      operationId: createAssetClass
+      summary: Create an asset class
+      tags: [assets]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code:
+                  type: string
+                  description: Asset-class public code.
+                title:
+                  type: string
+                  maxLength: 256
+                  description: Mutable display title for the class.
+                notes:
+                  type: string
+                  maxLength: 4096
+                  description: Free-form operator notes stored on the class.
+      responses:
+        "201":
+          description: Asset class created.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [assetClass]
+                properties:
+                  assetClass:
+                    $ref: "#/components/schemas/AssetClass"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /asset-classes/{code}:
+    parameters:
+      - name: code
+        in: path
+        required: true
+        description: URL-encoded asset-class public code.
+        schema:
+          type: string
+    put:
+      operationId: updateAssetClass
+      summary: Update an asset class's code, title and notes
+      tags: [assets]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code:
+                  type: string
+                  description: >
+                    Replacement asset-class public code. A rename cascades the
+                    asset.assetClass text link to referencing assets.
+                title:
+                  type: string
+                  maxLength: 256
+                  description: Replacement display title.
+                notes:
+                  type: string
+                  maxLength: 4096
+                  description: Replacement operator notes.
+      responses:
+        "200":
+          description: Asset class after update.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [assetClass]
+                properties:
+                  assetClass:
+                    $ref: "#/components/schemas/AssetClass"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    delete:
+      operationId: deleteAssetClass
+      summary: Delete an asset class
+      tags: [assets]
+      parameters:
+        - $ref: "#/components/parameters/ForceCascade"
+      responses:
+        "204":
+          description: Asset class deleted.
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/HasDependentsError"
+        "500":
+          $ref: "#/components/responses/InternalError"
 
   /accounts:
     get:
       operationId: listAccounts
       summary: List all accounts
       tags: [accounts]
+      parameters:
+        - $ref: "#/components/parameters/CodeFilter"
+        - $ref: "#/components/parameters/CodeMatch"
+        - $ref: "#/components/parameters/StatusFilter"
+        - $ref: "#/components/parameters/PositionCountMode"
+        - $ref: "#/components/parameters/PositionCountMin"
+        - $ref: "#/components/parameters/PositionCountMax"
+        - name: blockReason
+          in: query
+          schema:
+            type: string
+          description: Search account block reason.
+        - $ref: "#/components/parameters/BlockReasonMatch"
+        - name: group
+          in: query
+          schema:
+            type: string
+          description: Group code. Present with an empty value selects ungrouped accounts.
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [code, title, group, status, blockReason, positionCount]
+          description: Account list sort key. Unknown keys are rejected.
+        - $ref: "#/components/parameters/SortOrder"
+        - $ref: "#/components/parameters/LimitParam"
+        - $ref: "#/components/parameters/OffsetParam"
+        - $ref: "#/components/parameters/PageParam"
       responses:
         "200":
           description: Account list.
@@ -327,12 +677,17 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [accounts]
+                required: [accounts, total]
                 properties:
                   accounts:
                     type: array
                     items:
                       $ref: "#/components/schemas/Account"
+                  total:
+                    type: integer
+                    description: Total rows matching the filters before paging.
+        "400":
+          $ref: "#/components/responses/ValidationError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -350,7 +705,11 @@ paths:
               properties:
                 code:
                   type: string
-                  description: Account public code (its immutable handle).
+                  description: Account public code.
+                title:
+                  type: string
+                  maxLength: 256
+                  description: Mutable display title for the account.
       responses:
         "201":
           description: Account created.
@@ -393,6 +752,44 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      operationId: updateAccount
+      summary: Update account code and title
+      tags: [accounts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, title]
+              properties:
+                code:
+                  type: string
+                  description: Replacement account public code.
+                title:
+                  type: string
+                  maxLength: 256
+                  description: Replacement display title.
+      responses:
+        "200":
+          description: Account after update.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [account]
+                properties:
+                  account:
+                    $ref: "#/components/schemas/Account"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
         "500":
           $ref: "#/components/responses/InternalError"
     delete:
@@ -629,6 +1026,45 @@ paths:
       operationId: listGroups
       summary: List all account groups
       tags: [groups]
+      parameters:
+        - $ref: "#/components/parameters/CodeFilter"
+        - $ref: "#/components/parameters/CodeMatch"
+        - $ref: "#/components/parameters/StatusFilter"
+        - $ref: "#/components/parameters/PositionCountMode"
+        - $ref: "#/components/parameters/PositionCountMin"
+        - $ref: "#/components/parameters/PositionCountMax"
+        - name: accountCount
+          in: query
+          schema:
+            type: string
+            enum: [all, has, none]
+            default: all
+          description: Filter by whether the group has member accounts.
+        - $ref: "#/components/parameters/AccountCountMode"
+        - $ref: "#/components/parameters/AccountCountMin"
+        - $ref: "#/components/parameters/AccountCountMax"
+        - name: notes
+          in: query
+          schema:
+            type: string
+          description: Search group notes.
+        - $ref: "#/components/parameters/NotesMatch"
+        - name: blockReason
+          in: query
+          schema:
+            type: string
+          description: Search group block reason.
+        - $ref: "#/components/parameters/BlockReasonMatch"
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [code, title, accountCount, positionCount, status, notes, blockReason]
+          description: Group list sort key. Unknown keys are rejected.
+        - $ref: "#/components/parameters/SortOrder"
+        - $ref: "#/components/parameters/LimitParam"
+        - $ref: "#/components/parameters/OffsetParam"
+        - $ref: "#/components/parameters/PageParam"
       responses:
         "200":
           description: Group list.
@@ -636,12 +1072,19 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [groups]
+                required: [groups, total]
                 properties:
                   groups:
                     type: array
                     items:
                       $ref: "#/components/schemas/Group"
+                  total:
+                    type: integer
+                    description: >
+                      Total real groups matching the filters before paging. The
+                      synthetic default group is not counted.
+        "400":
+          $ref: "#/components/responses/ValidationError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -659,7 +1102,7 @@ paths:
               properties:
                 code:
                   type: string
-                  description: Group public code (its immutable handle).
+                  description: Group public code.
                 title:
                   type: string
                   maxLength: 256
@@ -712,6 +1155,45 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    put:
+      operationId: updateGroup
+      summary: Update group code and title
+      tags: [groups]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, title]
+              properties:
+                code:
+                  type: string
+                  description: Replacement group public code.
+                title:
+                  type: string
+                  maxLength: 256
+                  description: Replacement display title.
+      responses:
+        "200":
+          description: Group after update.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [group]
+                properties:
+                  group:
+                    $ref: "#/components/schemas/Group"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -844,14 +1326,133 @@ paths:
       parameters:
         - name: account
           in: query
-          description: Filter by account code.
+          description: Exact account code.
+          schema:
+            type: string
+        - name: groupCode
+          in: query
+          description: Group code. Present with an empty value selects ungrouped accounts.
           schema:
             type: string
         - name: asset
           in: query
-          description: Filter by asset symbol.
+          description: Exact asset symbol.
           schema:
             type: string
+        - name: availableMode
+          in: query
+          schema:
+            type: string
+            enum: [all, eq, equal, equals, exact, neq, not_equal, not_equals, gt, greater_than, gte, lt, less_than, lte, between]
+            default: all
+          description: Available amount comparison mode.
+        - name: availableMin
+          in: query
+          schema:
+            type: string
+          description: Exact decimal lower bound for available amount.
+        - name: availableMax
+          in: query
+          schema:
+            type: string
+          description: Exact decimal upper bound for available amount.
+        - name: heldMode
+          in: query
+          schema:
+            type: string
+            enum: [all, eq, equal, equals, exact, neq, not_equal, not_equals, gt, greater_than, gte, lt, less_than, lte, between]
+            default: all
+          description: Held amount comparison mode.
+        - name: heldMin
+          in: query
+          schema:
+            type: string
+          description: Exact decimal lower bound for held amount.
+        - name: heldMax
+          in: query
+          schema:
+            type: string
+          description: Exact decimal upper bound for held amount.
+        - name: incomingMode
+          in: query
+          schema:
+            type: string
+            enum: [all, eq, equal, equals, exact, neq, not_equal, not_equals, gt, greater_than, gte, lt, less_than, lte, between]
+            default: all
+          description: Incoming amount comparison mode.
+        - name: incomingMin
+          in: query
+          schema:
+            type: string
+          description: Exact decimal lower bound for incoming amount.
+        - name: incomingMax
+          in: query
+          schema:
+            type: string
+          description: Exact decimal upper bound for incoming amount.
+        - name: averageEntryPriceMode
+          in: query
+          schema:
+            type: string
+            enum: [all, eq, equal, equals, exact, neq, not_equal, not_equals, gt, greater_than, gte, lt, less_than, lte, between]
+            default: all
+          description: Average entry price comparison mode.
+        - name: averageEntryPriceMin
+          in: query
+          schema:
+            type: string
+          description: Exact decimal lower bound for average entry price.
+        - name: averageEntryPriceMax
+          in: query
+          schema:
+            type: string
+          description: Exact decimal upper bound for average entry price.
+        - name: realizedPnlMode
+          in: query
+          schema:
+            type: string
+            enum: [all, eq, equal, equals, exact, neq, not_equal, not_equals, gt, greater_than, gte, lt, less_than, lte, between]
+            default: all
+          description: Realized P&L comparison mode.
+        - name: realizedPnlMin
+          in: query
+          schema:
+            type: string
+          description: Exact decimal lower bound for realized P&L.
+        - name: realizedPnlMax
+          in: query
+          schema:
+            type: string
+          description: Exact decimal upper bound for realized P&L.
+        - name: updatedAtMode
+          in: query
+          schema:
+            type: string
+            enum: [all, gt, after, greater_than, gte, on_or_after, lt, before, less_than, lte, on_or_before, between]
+            default: all
+          description: Updated-at timestamp comparison mode.
+        - name: updatedAfter
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Lower updated-at bound.
+        - name: updatedBefore
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Upper updated-at bound.
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [account, asset, available, held, incoming, averageEntryPrice, realizedPnl, updatedAt]
+          description: Balance list sort key. Unknown keys are rejected.
+        - $ref: "#/components/parameters/SortOrder"
+        - $ref: "#/components/parameters/LimitParam"
+        - $ref: "#/components/parameters/OffsetParam"
+        - $ref: "#/components/parameters/PageParam"
       responses:
         "200":
           description: Balance list.
@@ -859,12 +1460,17 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [balances]
+                required: [balances, total]
                 properties:
                   balances:
                     type: array
                     items:
                       $ref: "#/components/schemas/Balance"
+                  total:
+                    type: integer
+                    description: Total rows matching the filters before paging.
+        "400":
+          $ref: "#/components/responses/ValidationError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -878,13 +1484,64 @@ paths:
       summary: List adjustments across all accounts
       tags: [adjustments]
       parameters:
-        - name: account
+        - name: externalId
           in: query
-          description: Filter by account code.
+          deprecated: true
+          description: Exact adjustment external ID lookup. Prefer `id`.
           schema:
             type: string
+        - name: id
+          in: query
+          description: Exact adjustment external ID lookup.
+          schema:
+            type: string
+        - name: account
+          in: query
+          description: Exact account code.
+          schema:
+            type: string
+        - name: asset
+          in: query
+          description: Exact adjusted asset code.
+          schema:
+            type: string
+        - name: status
+          in: query
+          description: Filter by adjustment outcome status.
+          schema:
+            type: string
+            enum: [all, accepted, rejected]
+            default: all
+        - name: atMode
+          in: query
+          schema:
+            type: string
+            enum: [all, gt, after, greater_than, gte, on_or_after, lt, before, less_than, lte, on_or_before, between]
+            default: all
+          description: Adjustment timestamp comparison mode.
+        - name: atMin
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Lower adjustment timestamp bound.
+        - name: atMax
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Upper adjustment timestamp bound.
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [account, asset, at, principal, source, status]
+          description: Adjustment list sort key. Unknown keys are rejected.
         - $ref: "#/components/parameters/SourceFilter"
+        - $ref: "#/components/parameters/SortOrder"
         - $ref: "#/components/parameters/LimitParam"
+        - $ref: "#/components/parameters/OffsetParam"
+        - $ref: "#/components/parameters/PageParam"
       responses:
         "200":
           description: Adjustment list.
@@ -892,12 +1549,15 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [adjustments]
+                required: [adjustments, total]
                 properties:
                   adjustments:
                     type: array
                     items:
                       $ref: "#/components/schemas/Adjustment"
+                  total:
+                    type: integer
+                    description: Total adjustments matching the filters before paging.
         "400":
           $ref: "#/components/responses/ValidationError"
         "500":
@@ -919,7 +1579,93 @@ paths:
           schema:
             type: string
         - $ref: "#/components/parameters/SourceFilter"
+        - name: side
+          in: query
+          schema:
+            type: string
+            enum: [all, buy, sell]
+            default: all
+          description: Filter by order side.
+        - name: status
+          in: query
+          schema:
+            type: string
+          description: >
+            Order status filter. May be repeated or comma-separated; `all` and
+            empty parts are ignored.
+        - name: baseAsset
+          in: query
+          schema:
+            type: string
+          description: Exact base asset symbol.
+        - name: quoteAsset
+          in: query
+          schema:
+            type: string
+          description: Exact quote asset symbol.
+        - name: amountMode
+          in: query
+          schema:
+            type: string
+            enum: [all, eq, equal, equals, exact, neq, not_equal, not_equals, gt, greater_than, gte, lt, less_than, lte, between]
+            default: all
+          description: Order amount comparison mode.
+        - name: amountMin
+          in: query
+          schema:
+            type: string
+          description: Exact decimal lower bound for order amount.
+        - name: amountMax
+          in: query
+          schema:
+            type: string
+          description: Exact decimal upper bound for order amount.
+        - name: priceMode
+          in: query
+          schema:
+            type: string
+            enum: [all, eq, equal, equals, exact, neq, not_equal, not_equals, gt, greater_than, gte, lt, less_than, lte, between]
+            default: all
+          description: Order price comparison mode.
+        - name: priceMin
+          in: query
+          schema:
+            type: string
+          description: Exact decimal lower bound for order price.
+        - name: priceMax
+          in: query
+          schema:
+            type: string
+          description: Exact decimal upper bound for order price.
+        - name: atMode
+          in: query
+          schema:
+            type: string
+            enum: [all, gt, after, greater_than, gte, on_or_after, lt, before, less_than, lte, on_or_before, between]
+            default: all
+          description: Submitted-at timestamp comparison mode.
+        - name: atMin
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Lower submitted-at bound.
+        - name: atMax
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Upper submitted-at bound.
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [account, amountValue, at, baseAsset, price, quoteAsset, side, source, status]
+          description: Order list sort key. Unknown keys are rejected.
+        - $ref: "#/components/parameters/SortOrder"
         - $ref: "#/components/parameters/LimitParam"
+        - $ref: "#/components/parameters/OffsetParam"
+        - $ref: "#/components/parameters/PageParam"
       responses:
         "200":
           description: Order list.
@@ -927,12 +1673,15 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [orders]
+                required: [orders, total]
                 properties:
                   orders:
                     type: array
                     items:
                       $ref: "#/components/schemas/Order"
+                  total:
+                    type: integer
+                    description: Total rows matching the filters before paging.
         "400":
           $ref: "#/components/responses/ValidationError"
         "500":
@@ -1109,7 +1858,7 @@ paths:
           application/json:
             schema:
               type: object
-              required: [quantity, price, final]
+              required: [quantity, price, leavesQuantity, final]
               properties:
                 quantity:
                   type: string
@@ -1117,9 +1866,29 @@ paths:
                 price:
                   type: string
                   description: Fill price - exact decimal string.
+                leavesQuantity:
+                  type: string
+                  description: >
+                    Order's remaining open base quantity after this fill (FIX
+                    LeavesQty) - exact decimal string in base units. "0" on a
+                    fully-filled final fill; the released remainder on a final
+                    partial; the still-open quantity on a non-final partial.
                 lockPrice:
                   type: string
                   description: Lock price used for fund reservation - exact decimal string.
+                realizedPnl:
+                  type: string
+                  description: >
+                    Realized P&L delta this fill contributes, in the settlement
+                    asset, signed - exact decimal string. Accumulated by the P&L-
+                    bounds kill-switch. Omitted or empty means zero (e.g. a
+                    position-opening buy realizes nothing).
+                fee:
+                  type: string
+                  description: >
+                    Fee (negative) or rebate (positive) for this fill, in the
+                    settlement asset - exact decimal string. Omitted or empty
+                    means zero.
                 force:
                   type: boolean
                   description: >
@@ -1157,13 +1926,120 @@ paths:
       summary: List trade records
       tags: [trades]
       parameters:
-        - name: account
+        - name: externalId
           in: query
-          description: Filter by account code.
+          deprecated: true
+          description: Exact trade external ID lookup. Prefer `id`.
           schema:
             type: string
+        - name: id
+          in: query
+          description: Exact trade external ID lookup.
+          schema:
+            type: string
+        - name: account
+          in: query
+          description: Exact account code.
+          schema:
+            type: string
+        - name: baseAsset
+          in: query
+          description: Exact base asset symbol.
+          schema:
+            type: string
+        - name: quoteAsset
+          in: query
+          description: Exact quote asset symbol.
+          schema:
+            type: string
+        - name: side
+          in: query
+          schema:
+            type: string
+            enum: [all, buy, sell]
+            default: all
+          description: Filter by trade side.
+        - name: atMode
+          in: query
+          schema:
+            type: string
+            enum: [all, gt, after, greater_than, gte, on_or_after, lt, before, less_than, lte, on_or_before, between]
+            default: all
+          description: Trade timestamp comparison mode.
+        - name: atMin
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Lower trade timestamp bound.
+        - name: atMax
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Upper trade timestamp bound.
+        - name: quantityMode
+          in: query
+          schema:
+            type: string
+            enum: [all, eq, equal, equals, exact, neq, not_equal, not_equals, gt, greater_than, gte, lt, less_than, lte, between]
+            default: all
+          description: Trade quantity comparison mode.
+        - name: quantityMin
+          in: query
+          schema:
+            type: string
+          description: Exact decimal lower bound for trade quantity.
+        - name: quantityMax
+          in: query
+          schema:
+            type: string
+          description: Exact decimal upper bound for trade quantity.
+        - name: priceMode
+          in: query
+          schema:
+            type: string
+            enum: [all, eq, equal, equals, exact, neq, not_equal, not_equals, gt, greater_than, gte, lt, less_than, lte, between]
+            default: all
+          description: Trade price comparison mode.
+        - name: priceMin
+          in: query
+          schema:
+            type: string
+          description: Exact decimal lower bound for trade price.
+        - name: priceMax
+          in: query
+          schema:
+            type: string
+          description: Exact decimal upper bound for trade price.
+        - name: lockPriceMode
+          in: query
+          schema:
+            type: string
+            enum: [all, eq, equal, equals, exact, neq, not_equal, not_equals, gt, greater_than, gte, lt, less_than, lte, between]
+            default: all
+          description: Trade lock-price comparison mode.
+        - name: lockPriceMin
+          in: query
+          schema:
+            type: string
+          description: Exact decimal lower bound for trade lock price.
+        - name: lockPriceMax
+          in: query
+          schema:
+            type: string
+          description: Exact decimal upper bound for trade lock price.
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [account, at, baseAsset, lockPrice, price, quantity, quoteAsset, side, source]
+          description: Trade list sort key. Unknown keys are rejected.
         - $ref: "#/components/parameters/SourceFilter"
+        - $ref: "#/components/parameters/SortOrder"
         - $ref: "#/components/parameters/LimitParam"
+        - $ref: "#/components/parameters/OffsetParam"
+        - $ref: "#/components/parameters/PageParam"
       responses:
         "200":
           description: Trade list.
@@ -1171,12 +2047,15 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [trades]
+                required: [trades, total]
                 properties:
                   trades:
                     type: array
                     items:
                       $ref: "#/components/schemas/Trade"
+                  total:
+                    type: integer
+                    description: Total trades matching the filters before paging.
         "400":
           $ref: "#/components/responses/ValidationError"
         "500":
@@ -1191,27 +2070,56 @@ paths:
       operationId: listLimits
       summary: List typed risk limit barriers
       description: >
-        Returns the typed limit barriers grouped by policy (rate, order-size,
-        and P&L-bounds). Barriers reference accounts by code; no surrogate or
-        engine id is involved.
+        Returns the typed limit barriers (rate, order-size, and P&L-bounds)
+        flattened into one sorted, paged policy list. Barriers reference accounts
+        by code; no surrogate or engine id is involved.
       tags: [limits]
       parameters:
         - name: account
           in: query
-          description: Filter by account code.
+          description: Filter by exact account code.
           schema:
             type: string
+        - name: asset
+          in: query
+          description: Filter by exact asset code.
+          schema:
+            type: string
+        - name: policy
+          in: query
+          description: Filter by policy kind.
+          schema:
+            type: string
+            enum: [all, rate, order_size, pnl_bounds]
+            default: all
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [policy, scope, account, asset, maxOrders, maxQuantity, maxNotional, lowerBound, upperBound, initialPnl]
+          description: Policy list sort key. Unknown keys are rejected.
+        - $ref: "#/components/parameters/SortOrder"
+        - $ref: "#/components/parameters/LimitParam"
+        - $ref: "#/components/parameters/OffsetParam"
+        - $ref: "#/components/parameters/PageParam"
       responses:
         "200":
-          description: Typed limit barriers grouped by policy.
+          description: Typed limit barriers as a flat policy list.
           content:
             application/json:
               schema:
                 type: object
-                required: [limits]
+                required: [policies, total]
                 properties:
-                  limits:
-                    $ref: "#/components/schemas/AccountLimits"
+                  policies:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Policy"
+                  total:
+                    type: integer
+                    description: Total barriers matching the filters before paging.
+        "400":
+          $ref: "#/components/responses/ValidationError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -1360,18 +2268,44 @@ paths:
         Returns audit rows in reverse chronological order. Optional `account`
         and `source` filters narrow the trail. `source` values: `panel`, `api`,
         `mcp`, `system`. The action filter resolves from an explicit
-        `actions` include-list when present, otherwise from `category`; it
-        defaults to `control`, so the high-volume trading stream (`submit_order`,
-        `execution_report`) is hidden unless requested. The action filter is
-        applied before the limit, so control rows are never crowded out by
-        trading volume.
+        `actions` include-list when present, otherwise from `category`. When
+        neither is present, no action filter is applied so the newest-first
+        index path stays O(page).
       tags: [audit]
       parameters:
-        - name: account
+        - name: externalId
           in: query
-          description: Filter by account code.
+          deprecated: true
+          description: Exact audit row external ID lookup. Prefer `id`.
           schema:
             type: string
+        - name: id
+          in: query
+          description: Exact audit row external ID lookup.
+          schema:
+            type: string
+        - name: account
+          in: query
+          description: Exact account code.
+          schema:
+            type: string
+        - name: asset
+          in: query
+          description: Exact asset code.
+          schema:
+            type: string
+        - name: actor
+          in: query
+          description: Actor search text.
+          schema:
+            type: string
+        - name: actorMatch
+          in: query
+          description: Anchoring mode applied to the actor filter.
+          schema:
+            type: string
+            enum: [contains, starts_with, ends_with, exact]
+            default: contains
         - name: source
           in: query
           description: "Filter by originating surface: `panel`, `api`, `mcp`, or `system`."
@@ -1382,8 +2316,8 @@ paths:
           in: query
           description: >
             Action category shortcut, used when `actions` is absent: `control`
-            (default) hides trading, `trading` shows only the order/execution
-            stream, `all` disables the action filter.
+            hides trading, `trading` shows only the order/execution stream,
+            `all` disables the action filter.
           schema:
             type: string
             enum: [control, trading, all]
@@ -1395,13 +2329,28 @@ paths:
             names are rejected with 400.
           schema:
             type: string
-        - name: limit
+        - name: atMode
           in: query
-          description: Maximum rows to return (default 100, capped at 1000).
           schema:
-            type: integer
-            default: 100
-            maximum: 1000
+            type: string
+            enum: [all, gt, after, greater_than, gte, on_or_after, lt, before, less_than, lte, on_or_before, between]
+            default: all
+          description: Audit timestamp comparison mode.
+        - name: atMin
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Lower audit timestamp bound.
+        - name: atMax
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Upper audit timestamp bound.
+        - $ref: "#/components/parameters/LimitParam"
+        - $ref: "#/components/parameters/OffsetParam"
+        - $ref: "#/components/parameters/PageParam"
       responses:
         "200":
           description: Audit entries.
@@ -1409,12 +2358,15 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [entries]
+                required: [entries, total]
                 properties:
                   entries:
                     type: array
                     items:
                       $ref: "#/components/schemas/AuditEntry"
+                  total:
+                    type: integer
+                    description: Total audit rows matching the filters before paging.
         "400":
           $ref: "#/components/responses/ValidationError"
         "500":
@@ -2290,6 +3242,101 @@ components:
       schema:
         type: string
 
+    CodeFilter:
+      name: code
+      in: query
+      description: >
+        Code search text. A plain value is matched as a substring. `*` is a
+        friendly wildcard whose fragments must appear in order.
+      schema:
+        type: string
+
+    CodeMatch:
+      name: codeMatch
+      in: query
+      description: Anchoring mode applied to the code filter.
+      schema:
+        type: string
+        enum: [contains, starts_with, ends_with, exact]
+        default: contains
+
+    NotesMatch:
+      name: notesMatch
+      in: query
+      description: Anchoring mode applied to the notes filter.
+      schema:
+        type: string
+        enum: [contains, starts_with, ends_with, exact]
+        default: contains
+
+    BlockReasonMatch:
+      name: blockReasonMatch
+      in: query
+      description: Anchoring mode applied to the block-reason filter.
+      schema:
+        type: string
+        enum: [contains, starts_with, ends_with, exact]
+        default: contains
+
+    StatusFilter:
+      name: status
+      in: query
+      description: Filter by blocked state.
+      schema:
+        type: string
+        enum: [all, active, blocked]
+        default: all
+
+    PositionCountMode:
+      name: positionCountMode
+      in: query
+      description: Position count comparison mode.
+      schema:
+        type: string
+        enum: [all, eq, equal, equals, exact, neq, not_equal, not_equals, gt, greater_than, gte, lt, less_than, lte, between]
+        default: all
+
+    PositionCountMin:
+      name: positionCountMin
+      in: query
+      description: Lower position-count bound. Required for greater_than and between.
+      schema:
+        type: integer
+        minimum: 0
+
+    PositionCountMax:
+      name: positionCountMax
+      in: query
+      description: Upper position-count bound. Required for less_than and between.
+      schema:
+        type: integer
+        minimum: 0
+
+    AccountCountMode:
+      name: accountCountMode
+      in: query
+      description: Account count comparison mode.
+      schema:
+        type: string
+        enum: [all, eq, equal, equals, exact, neq, not_equal, not_equals, gt, greater_than, gte, lt, less_than, lte, between]
+        default: all
+
+    AccountCountMin:
+      name: accountCountMin
+      in: query
+      description: Lower account-count bound. Required for gt/gte/eq/neq and between.
+      schema:
+        type: integer
+        minimum: 0
+
+    AccountCountMax:
+      name: accountCountMax
+      in: query
+      description: Upper account-count bound. Required for lt/lte and between.
+      schema:
+        type: integer
+        minimum: 0
+
     OrderExternalId:
       name: externalId
       in: path
@@ -2316,6 +3363,15 @@ components:
         type: string
         enum: [panel, api, mcp, system]
 
+    SortOrder:
+      name: order
+      in: query
+      description: Sort direction.
+      schema:
+        type: string
+        enum: [asc, desc]
+        default: asc
+
     ForceCascade:
       name: force
       in: query
@@ -2332,6 +3388,25 @@ components:
         type: integer
         default: 100
         maximum: 1000
+
+    OffsetParam:
+      name: offset
+      in: query
+      description: Zero-based row offset for server-side pagination.
+      schema:
+        type: integer
+        default: 0
+        minimum: 0
+
+    PageParam:
+      name: page
+      in: query
+      description: >
+        One-based page number for server-side pagination. When present, the
+        backend computes offset as `(page - 1) * limit`.
+      schema:
+        type: integer
+        minimum: 1
 
   # ---------------------------------------------------------------------------
   # Responses
@@ -2835,15 +3910,51 @@ components:
         reachable:
           type: boolean
 
+    # Asset
+
+    Asset:
+      type: object
+      required: [code, title, assetClass]
+      properties:
+        code:
+          type: string
+          description: Asset public code (its immutable handle).
+        title:
+          type: string
+          description: Mutable display title.
+        assetClass:
+          type: string
+          description: Optional operator classification for the asset.
+
+    # AssetClass
+
+    AssetClass:
+      type: object
+      required: [code, title, notes, assetCount]
+      properties:
+        code:
+          type: string
+          description: Asset-class public code (its handle).
+        title:
+          type: string
+          description: Mutable display title.
+        notes:
+          type: string
+          description: Free-form operator notes.
+        assetCount:
+          type: integer
+          minimum: 0
+          description: Number of assets referencing this class.
+
     # Account
 
     Account:
       type: object
-      required: [code, title, group, notes, blocked, blockReason]
+      required: [code, title, group, notes, positionCount, blocked, blockReason]
       properties:
         code:
           type: string
-          description: Account public code (its immutable handle).
+          description: Account public code.
         title:
           type: string
           description: Mutable display name.
@@ -2852,6 +3963,10 @@ components:
           description: Group code, or empty string when not in a group.
         notes:
           type: string
+        positionCount:
+          type: integer
+          minimum: 0
+          description: Number of stored position/balance rows for the account.
         blocked:
           type: boolean
         blockReason:
@@ -2862,16 +3977,24 @@ components:
 
     Group:
       type: object
-      required: [code, title, notes, blocked, blockReason]
+      required: [code, title, notes, accountCount, positionCount, blocked, blockReason]
       properties:
         code:
           type: string
-          description: Group public code (its immutable handle).
+          description: Group public code; empty for the synthetic default group in list responses.
         title:
           type: string
           description: Mutable display title.
         notes:
           type: string
+        accountCount:
+          type: integer
+          minimum: 0
+          description: Number of accounts assigned to the group.
+        positionCount:
+          type: integer
+          minimum: 0
+          description: Total stored position/balance rows across group accounts.
         blocked:
           type: boolean
         blockReason:
@@ -3403,6 +4526,69 @@ components:
           description: P&L-bounds kill-switch barriers (always a non-null array).
           items:
             $ref: "#/components/schemas/PnlBoundsLimit"
+
+    Policy:
+      type: object
+      description: >
+        One typed barrier flattened into the unified policy list. The kind
+        discriminator selects which member of values is present; the
+        scope/account/asset axes are shared across all kinds.
+      required: [kind, scope, account, asset, values]
+      properties:
+        kind:
+          type: string
+          description: Policy kind discriminator.
+          enum: [rate_limit, order_size_limit, pnl_bounds_kill_switch]
+        scope:
+          $ref: "#/components/schemas/LimitScope"
+        account:
+          type: string
+          description: Account code this barrier applies to, or empty for a global barrier.
+        asset:
+          type: string
+          description: Asset this barrier applies to, or empty when not asset-scoped.
+        values:
+          type: object
+          description: >
+            Kind-specific values: exactly one sub-object is present, matching
+            kind.
+          properties:
+            rate:
+              type: object
+              required: [windowMs, maxOrders]
+              properties:
+                windowMs:
+                  type: integer
+                  format: int64
+                  description: Rolling rate-limit window in milliseconds.
+                maxOrders:
+                  type: integer
+                  minimum: 1
+                  maximum: 1000000000
+                  description: Maximum orders permitted within the window.
+            orderSize:
+              type: object
+              required: [maxQuantity, maxNotional]
+              properties:
+                maxQuantity:
+                  type: string
+                  description: Maximum order quantity - exact decimal string; empty when unset.
+                maxNotional:
+                  type: string
+                  description: Maximum order notional - exact decimal string; empty when unset.
+            pnlBounds:
+              type: object
+              required: [lowerBound, upperBound, initialPnl]
+              properties:
+                lowerBound:
+                  type: string
+                  description: Lower P&L bound - exact decimal string; empty when unset.
+                upperBound:
+                  type: string
+                  description: Upper P&L bound - exact decimal string; empty when unset.
+                initialPnl:
+                  type: string
+                  description: Seed P&L value - exact decimal string; empty when unset.
 
     # Audit
 

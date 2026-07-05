@@ -17,7 +17,7 @@
 
 // Settings group of the SQLite store: the per-command MCP access overrides and
 // the per-user UI settings. Both are plain key/value tables: mcp_access is keyed
-// by the command name, user_settings by the (user_id, setting_key) composite.
+// by the command name, user_setting by the (user_id, setting_key) composite.
 // The keys are hardcoded enums stored as TEXT (validated by the surfaces that own
 // them), never dictionaries, so there is no surrogate id and no code resolution
 // in this group.
@@ -89,7 +89,7 @@ func (r *realmStore) GetUserSetting(
 	var value string
 	err := r.db().QueryRowContext(
 		ctx,
-		`SELECT setting_value FROM user_settings
+		`SELECT setting_value FROM user_setting
 		 WHERE user_id = ? AND setting_key = ?`,
 		userID, key,
 	).Scan(&value)
@@ -109,7 +109,7 @@ func (r *realmStore) SetUserSetting(
 ) error {
 	if _, err := r.db().ExecContext(
 		ctx,
-		`INSERT INTO user_settings (user_id, setting_key, setting_value)
+		`INSERT INTO user_setting (user_id, setting_key, setting_value)
 		 VALUES (?, ?, ?)
 		 ON CONFLICT(user_id, setting_key) DO UPDATE SET
 		   setting_value = excluded.setting_value`,
@@ -128,7 +128,7 @@ func (r *realmStore) ListUserSettings(
 ) ([]domain.UserSetting, error) {
 	rows, err := r.db().QueryContext(
 		ctx,
-		`SELECT user_id, setting_key, setting_value FROM user_settings
+		`SELECT user_id, setting_key, setting_value FROM user_setting
 		 ORDER BY user_id, setting_key`,
 	)
 	if err != nil {

@@ -39,6 +39,11 @@ const (
 	SourceSystem Source = "system"
 )
 
+const (
+	// PrincipalOperator is the placeholder actor for unauthenticated surfaces.
+	PrincipalOperator = "operator"
+)
+
 // ValidateSource returns ErrInvalid when s is not a recognised Source value.
 func ValidateSource(s Source) error {
 	switch s {
@@ -61,12 +66,13 @@ type Caller struct {
 }
 
 // AccountGroup is the control-plane view of a named account grouping: a
-// dictionary entity addressed by its immutable Code, displayed under a mutable
-// Title, and run on the engine under EngineGroupID. Membership is expressed via
+// dictionary entity addressed by its public Code, displayed under a mutable
+// Title, and run on the engine under EngineGroupID (its surrogate id).
+// Membership is expressed via
 // Account.GroupCode; an account belongs to at most one group. The surrogate key
 // never appears here.
 type AccountGroup struct {
-	// Code is the immutable, operator-chosen group code, unique per realm.
+	// Code is the operator-chosen group code, unique per realm.
 	Code string
 	// Title is the mutable human-readable display name; may be empty.
 	Title string
@@ -74,10 +80,10 @@ type AccountGroup struct {
 	Notes string
 	// BlockReason is the human-readable reason the group was blocked.
 	BlockReason string
-	// EngineGroupID is the integer id the engine runs this group on. It is
-	// internal and never serialized on the wire (json:"-"); zero means
-	// unassigned. The engine layer consumes it on read paths, but it is never a
-	// public handle.
+	// EngineGroupID is the integer id the engine runs this group on: the group
+	// row's surrogate id. It is internal and never serialized on the wire
+	// (json:"-"); zero means unassigned. The engine layer consumes it on read
+	// paths, but it is never a public handle.
 	EngineGroupID EngineGroupID `json:"-"`
 	// Blocked reports whether the group is currently kill-switched.
 	Blocked bool
@@ -94,6 +100,20 @@ type Asset struct {
 	// AssetClass is an optional classification (e.g. "equity", "fx"); empty
 	// when unset.
 	AssetClass string
+}
+
+// AssetClass is a dictionary entity naming one asset classification (e.g.
+// "equity", "fx"), addressed by its public Code, displayed under a mutable
+// Title, with free-form Notes. Assets link to it via Asset.AssetClass holding
+// the class Code; a class carries no block concept. The surrogate key never
+// appears here.
+type AssetClass struct {
+	// Code is the operator-chosen class code, unique per realm.
+	Code string
+	// Title is the mutable human-readable display name; may be empty.
+	Title string
+	// Notes is a free-form reference string.
+	Notes string
 }
 
 // Principal is a dictionary entity naming one actor that initiates control-plane
@@ -123,6 +143,28 @@ func ValidateGroupID(id string) error {
 	for _, r := range id {
 		if !unicode.IsPrint(r) {
 			return fmt.Errorf("group id contains non-printable character: %w", ErrInvalid)
+		}
+	}
+	return nil
+}
+
+// ValidateAssetClassID returns ErrInvalid for asset-class codes that are empty,
+// exceed 64 code points, have leading/trailing whitespace, or contain
+// non-printable characters. Mirrors ValidateGroupID - asset classes are a
+// dictionary addressed by the same code contract as groups.
+func ValidateAssetClassID(id string) error {
+	if id == "" {
+		return fmt.Errorf("asset class id is empty: %w", ErrInvalid)
+	}
+	if utf8.RuneCountInString(id) > 64 {
+		return fmt.Errorf("asset class id exceeds 64 code points: %w", ErrInvalid)
+	}
+	if strings.TrimSpace(id) != id {
+		return fmt.Errorf("asset class id has leading or trailing whitespace: %w", ErrInvalid)
+	}
+	for _, r := range id {
+		if !unicode.IsPrint(r) {
+			return fmt.Errorf("asset class id contains non-printable character: %w", ErrInvalid)
 		}
 	}
 	return nil
@@ -643,9 +685,22 @@ type ExecutionReportInput struct {
 	FillQuantity string
 	// FillPrice is the fill price (exact decimal string).
 	FillPrice string
+	// LeavesQuantity is the order's remaining open base quantity after this fill
+	// (FIX LeavesQty), as an exact decimal string: "0" on a fully-filled final
+	// fill, the released remainder on a final partial, the still-open quantity on
+	// a non-final partial. The engine requires it to settle the fill.
+	LeavesQuantity string
 	// LockPrice is the reference price for the fill's PnL lock; empty when the
 	// originating order carried no lock.
 	LockPrice string
+	// RealizedPnl is the realized P&L delta this fill contributes, in the
+	// settlement asset, signed (exact decimal string). It is the per-fill amount
+	// the P&L-bounds kill-switch accumulates; empty means zero (e.g. a position-
+	// opening buy realizes nothing).
+	RealizedPnl string
+	// Fee is the fee (negative) or rebate (positive) for this fill, in the
+	// settlement asset (exact decimal string); empty means zero.
+	Fee string
 	// Order is the opaque public handle of the Officer order this fill settles.
 	// The fill event and trade reference it, and the order's status is reflected
 	// from the fill.

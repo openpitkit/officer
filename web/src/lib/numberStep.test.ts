@@ -17,7 +17,22 @@
 
 import { describe, expect, it } from "vitest";
 
-import { smartStep, stepValue } from "@/lib/numberStep";
+import { isDecimalString, smartStep, stepValue } from "@/lib/numberStep";
+
+describe("isDecimalString", () => {
+  it("accepts empty and decimal text values", () => {
+    expect(isDecimalString("")).toBe(true);
+    expect(isDecimalString("12")).toBe(true);
+    expect(isDecimalString("-12.5")).toBe(true);
+    expect(isDecimalString(".5")).toBe(true);
+    expect(isDecimalString("12.")).toBe(true);
+  });
+
+  it("rejects non-decimal text values", () => {
+    expect(isDecimalString("word")).toBe(false);
+    expect(isDecimalString("12a")).toBe(false);
+  });
+});
 
 describe("smartStep", () => {
   it("scales the step with the value magnitude", () => {

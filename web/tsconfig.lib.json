@@ -13,6 +13,7 @@
     "src/vite-env.d.ts",
     "src/index.ts",
     "src/api/types.ts",
+    "src/components/data",
     "src/framework",
     "src/i18n/index.ts",
     "src/i18n/locales.ts"

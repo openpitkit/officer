@@ -17,9 +17,27 @@
 
 import { useCallback } from "react";
 
-import type { Adjustment } from "@/api/types";
+import type { Adjustment, PagedResult } from "@/api/types";
 import { usePolling, type PollingResult } from "@/api/usePolling";
-import { useOfficerApi } from "@/framework";
+import {
+  type GlobalAdjustmentsFilter,
+  useOfficerApi,
+} from "@/framework";
+
+/** Poll GET /adjustments with server-side total and offset paging. */
+export function useAdjustmentsPage(
+  filter: GlobalAdjustmentsFilter = {},
+): PollingResult<PagedResult<Adjustment>> {
+  const api = useOfficerApi();
+  const filterKey = JSON.stringify(filter);
+  const fetcher = useCallback(
+    (signal: AbortSignal) => api.fetchAdjustmentsPage(filter, signal),
+    // filterKey stands in for the filter object identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [api, filterKey],
+  );
+  return usePolling(fetcher, 5000, filterKey);
+}
 
 /** Poll GET /adjustments, optionally filtered by account and/or source. */
 export function useAdjustments(
@@ -33,5 +51,5 @@ export function useAdjustments(
       api.fetchAdjustments({ account, source, limit }, signal),
     [api, account, source, limit],
   );
-  return usePolling(fetcher);
+  return usePolling(fetcher, 5000, JSON.stringify({ account, source, limit }));
 }

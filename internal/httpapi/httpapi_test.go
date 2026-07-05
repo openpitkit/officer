@@ -44,56 +44,85 @@ import (
 
 // fakeService is a fake Service for handler tests.
 type fakeService struct {
-	accounts       []domain.Account
-	limits         node.AccountLimits
-	auditRows      []domain.AuditRow
-	auditFilter    domain.AuditFilter
-	groups         []domain.AccountGroup
-	balances       []domain.Balance
-	adjustments    []domain.AccountAdjustmentRecord
-	orders         []domain.Order
-	trades         []domain.Trade
-	orderDetail    domain.OrderDetail
-	adjustment     domain.AccountAdjustmentRecord
-	submitOrder    domain.Order
-	execReportIn   domain.ExecutionReportInput
-	checkResult    domain.CheckResult
-	overview       backend.Overview
-	serviceInfo    backend.ServiceInfo
-	backupArchive  backup.Archive
-	backupFilename string
-	backupSummary  backup.RestoreSummary
-	backupErr      error
-	csvExport      businesscsv.ExportFile
-	csvExportReq   backend.BusinessCSVExportRequest
-	csvPreview     backend.BusinessCSVImportPreview
-	csvPreviewReq  backend.BusinessCSVImportRequest
-	csvImport      backend.BusinessCSVImportResult
-	csvImportReq   backend.BusinessCSVImportRequest
-	csvErr         error
-	restoreArchive backup.Archive
-	restoreOptions backup.RestoreOptions
-	resetCalled    bool
-	resetErr       error
-	marketData     backend.MarketDataStatus
-	mdVerify       backend.MarketDataSymbolVerification
-	mdVerifyErr    error
-	mdSearch       backend.MarketDataSymbolSearch
-	mdSearchInput  backend.MarketDataSymbolSearchInput
-	mdSearchErr    error
-	mdCreateResult domain.MarketDataInstance
-	status         backend.Status
-	statusErr      error
-	welcomeSeen    bool
-	createErr      error
-	blockErr       error
-	unblockErr     error
-	stateErr       error
-	listLimErr     error
-	putLimErr      error
-	delLimErr      error
-	auditErr       error
-	groupErr       error
+	accounts              []domain.Account
+	accountRows           []store.AccountListRow
+	accountFilter         store.AccountListFilter
+	balanceFilter         store.BalanceListFilter
+	orderFilter           store.OrderListFilter
+	limits                node.AccountLimits
+	policyRows            []store.PolicyListRow
+	policyFilter          store.PolicyListFilter
+	policyErr             error
+	auditRows             []domain.AuditRow
+	auditListPage         *store.AuditListPage
+	auditFilter           domain.AuditFilter
+	auditListFilter       store.AuditListFilter
+	assets                []domain.Asset
+	assetFilter           store.AssetListFilter
+	assetClasses          []domain.AssetClass
+	assetClassRows        []store.AssetClassListRow
+	assetClassFilter      store.AssetClassListFilter
+	groups                []domain.AccountGroup
+	groupRows             []store.GroupListRow
+	groupFilter           store.GroupListFilter
+	balances              []domain.Balance
+	adjustments           []domain.AccountAdjustmentRecord
+	adjustmentPage        *store.AdjustmentListPage
+	adjustmentFilter      store.AdjustmentListFilter
+	orders                []domain.Order
+	trades                []domain.Trade
+	tradePage             *store.TradeListPage
+	tradeFilter           store.TradeListFilter
+	orderDetail           domain.OrderDetail
+	adjustment            domain.AccountAdjustmentRecord
+	submitOrder           domain.Order
+	execReportIn          domain.ExecutionReportInput
+	checkResult           domain.CheckResult
+	overview              backend.Overview
+	serviceInfo           backend.ServiceInfo
+	backupArchive         backup.Archive
+	backupFilename        string
+	backupSummary         backup.RestoreSummary
+	backupErr             error
+	csvExport             businesscsv.ExportFile
+	csvExportReq          backend.BusinessCSVExportRequest
+	csvPreview            backend.BusinessCSVImportPreview
+	csvPreviewReq         backend.BusinessCSVImportRequest
+	csvImport             backend.BusinessCSVImportResult
+	csvImportReq          backend.BusinessCSVImportRequest
+	csvErr                error
+	restoreArchive        backup.Archive
+	restoreOptions        backup.RestoreOptions
+	resetCalled           bool
+	resetErr              error
+	marketData            backend.MarketDataStatus
+	mdVerify              backend.MarketDataSymbolVerification
+	mdVerifyErr           error
+	mdSearch              backend.MarketDataSymbolSearch
+	mdSearchInput         backend.MarketDataSymbolSearchInput
+	mdSearchErr           error
+	mdCreateResult        domain.MarketDataInstance
+	status                backend.Status
+	statusErr             error
+	welcomeSeen           bool
+	createAssetErr        error
+	updateAssetErr        error
+	deleteAssetErr        error
+	deleteAssetForce      bool
+	createAssetClassErr   error
+	updateAssetClassErr   error
+	deleteAssetClassErr   error
+	deleteAssetClassForce bool
+	assetClassErr         error
+	createErr             error
+	blockErr              error
+	unblockErr            error
+	stateErr              error
+	listLimErr            error
+	putLimErr             error
+	delLimErr             error
+	auditErr              error
+	groupErr              error
 
 	// Captured typed-limit puts and delete target, for round-trip assertions.
 	rateLimitPut      domain.LimitRate
@@ -152,6 +181,25 @@ func (f *fakeService) Status(_ context.Context) (backend.Status, error) {
 func (f *fakeService) ListAccounts(_ context.Context) ([]domain.Account, error) {
 	return f.accounts, f.listAccountsErr
 }
+func (f *fakeService) ListAccountRows(
+	_ context.Context, filter store.AccountListFilter,
+) (store.AccountListPage, error) {
+	f.accountFilter = filter
+	if f.listAccountsErr != nil {
+		return store.AccountListPage{}, f.listAccountsErr
+	}
+	if f.accountRows != nil {
+		return store.AccountListPage{
+			Rows:  f.accountRows,
+			Total: len(f.accountRows),
+		}, nil
+	}
+	out := make([]store.AccountListRow, 0, len(f.accounts))
+	for _, account := range f.accounts {
+		out = append(out, store.AccountListRow{Account: account})
+	}
+	return store.AccountListPage{Rows: out, Total: len(out)}, nil
+}
 func (f *fakeService) ExportBackup(
 	_ context.Context, _ backup.Scope,
 ) (backup.Archive, string, error) {
@@ -191,11 +239,117 @@ func (f *fakeService) ResetDatabase(_ context.Context) error {
 	f.resetCalled = true
 	return f.resetErr
 }
-func (f *fakeService) CreateAccount(_ context.Context, id domain.AccountID) (domain.Account, error) {
+func (f *fakeService) ListAssets(_ context.Context) ([]domain.Asset, error) {
+	return f.assets, nil
+}
+func (f *fakeService) ListAssetRows(
+	_ context.Context, filter store.AssetListFilter,
+) (store.AssetListPage, error) {
+	f.assetFilter = filter
+	return store.AssetListPage{Rows: f.assets, Total: len(f.assets)}, nil
+}
+func (f *fakeService) CreateAsset(_ context.Context, asset domain.Asset) (domain.Asset, error) {
+	if f.createAssetErr != nil {
+		return domain.Asset{}, f.createAssetErr
+	}
+	f.assets = append(f.assets, asset)
+	return asset, nil
+}
+func (f *fakeService) UpdateAsset(
+	_ context.Context, oldCode string, asset domain.Asset,
+) (domain.Asset, error) {
+	if f.updateAssetErr != nil {
+		return domain.Asset{}, f.updateAssetErr
+	}
+	for i, a := range f.assets {
+		if a.Code == oldCode {
+			f.assets[i] = asset
+			return asset, nil
+		}
+	}
+	return domain.Asset{}, domain.ErrNotFound
+}
+func (f *fakeService) ListAssetClasses(_ context.Context) ([]domain.AssetClass, error) {
+	return f.assetClasses, f.assetClassErr
+}
+func (f *fakeService) ListAssetClassRows(
+	_ context.Context, filter store.AssetClassListFilter,
+) (store.AssetClassListPage, error) {
+	f.assetClassFilter = filter
+	if f.assetClassErr != nil {
+		return store.AssetClassListPage{}, f.assetClassErr
+	}
+	if f.assetClassRows != nil {
+		return store.AssetClassListPage{Rows: f.assetClassRows, Total: len(f.assetClassRows)}, nil
+	}
+	out := make([]store.AssetClassListRow, 0, len(f.assetClasses))
+	for _, class := range f.assetClasses {
+		out = append(out, store.AssetClassListRow{Class: class})
+	}
+	return store.AssetClassListPage{Rows: out, Total: len(out)}, nil
+}
+func (f *fakeService) CreateAssetClass(
+	_ context.Context, class domain.AssetClass,
+) (domain.AssetClass, error) {
+	if f.createAssetClassErr != nil {
+		return domain.AssetClass{}, f.createAssetClassErr
+	}
+	f.assetClasses = append(f.assetClasses, class)
+	return class, nil
+}
+func (f *fakeService) UpdateAssetClass(
+	_ context.Context, oldCode string, class domain.AssetClass,
+) (domain.AssetClass, error) {
+	if f.updateAssetClassErr != nil {
+		return domain.AssetClass{}, f.updateAssetClassErr
+	}
+	for i, c := range f.assetClasses {
+		if c.Code == oldCode {
+			f.assetClasses[i] = class
+			return class, nil
+		}
+	}
+	return domain.AssetClass{}, domain.ErrNotFound
+}
+func (f *fakeService) DeleteAssetClass(_ context.Context, code string, force bool) error {
+	if f.deleteAssetClassErr != nil {
+		return f.deleteAssetClassErr
+	}
+	f.deleteAssetClassForce = force
+	for i, c := range f.assetClasses {
+		if c.Code == code {
+			f.assetClasses = append(f.assetClasses[:i], f.assetClasses[i+1:]...)
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+func (f *fakeService) DeleteAsset(_ context.Context, code string, force bool) error {
+	if f.deleteAssetErr != nil {
+		return f.deleteAssetErr
+	}
+	f.deleteAssetForce = force
+	for i, a := range f.assets {
+		if a.Code == code {
+			f.assets = append(f.assets[:i], f.assets[i+1:]...)
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+func (f *fakeService) CreateAccount(_ context.Context, account domain.Account) (domain.Account, error) {
 	if f.createErr != nil {
 		return domain.Account{}, f.createErr
 	}
-	return domain.Account{Code: id}, nil
+	return account, nil
+}
+func (f *fakeService) UpdateAccount(
+	_ context.Context, _ domain.AccountID, account domain.Account,
+) (domain.Account, error) {
+	if f.createErr != nil {
+		return domain.Account{}, f.createErr
+	}
+	return account, nil
 }
 func (f *fakeService) GetAccountState(_ context.Context, id domain.AccountID) (domain.Account, node.AccountLimits, error) {
 	if f.stateErr != nil {
@@ -222,6 +376,15 @@ func (f *fakeService) DeleteAccount(
 func (f *fakeService) ListLimits(_ context.Context, _ domain.AccountID) (node.AccountLimits, error) {
 	return f.limits, f.listLimErr
 }
+func (f *fakeService) ListPolicyRows(
+	_ context.Context, filter store.PolicyListFilter,
+) (store.PolicyListPage, error) {
+	f.policyFilter = filter
+	if f.policyErr != nil {
+		return store.PolicyListPage{}, f.policyErr
+	}
+	return store.PolicyListPage{Rows: f.policyRows, Total: len(f.policyRows)}, nil
+}
 func (f *fakeService) PutRateLimit(_ context.Context, l domain.LimitRate) error {
 	f.rateLimitPut = l
 	return f.putLimErr
@@ -246,6 +409,18 @@ func (f *fakeService) ListAuditFiltered(
 ) ([]domain.AuditRow, error) {
 	f.auditFilter = filter
 	return f.auditRows, f.auditErr
+}
+func (f *fakeService) ListAuditRows(
+	_ context.Context, filter store.AuditListFilter,
+) (store.AuditListPage, error) {
+	f.auditListFilter = filter
+	if f.auditErr != nil {
+		return store.AuditListPage{}, f.auditErr
+	}
+	if f.auditListPage != nil {
+		return *f.auditListPage, nil
+	}
+	return store.AuditListPage{Rows: f.auditRows, Total: len(f.auditRows)}, nil
 }
 func (f *fakeService) ListMcpAccess(_ context.Context) ([]backend.McpCommand, error) {
 	return f.mcpCommands, f.mcpAccessErr
@@ -345,8 +520,32 @@ func (f *fakeService) CreateGroup(
 	f.groups = append(f.groups, g)
 	return g, nil
 }
+func (f *fakeService) UpdateGroup(
+	_ context.Context, _ string, g domain.AccountGroup,
+) (domain.AccountGroup, error) {
+	if f.groupErr != nil {
+		return domain.AccountGroup{}, f.groupErr
+	}
+	return g, nil
+}
 func (f *fakeService) ListGroups(_ context.Context) ([]domain.AccountGroup, error) {
 	return f.groups, f.groupErr
+}
+func (f *fakeService) ListGroupRows(
+	_ context.Context, filter store.GroupListFilter,
+) (store.GroupListPage, error) {
+	f.groupFilter = filter
+	if f.groupErr != nil {
+		return store.GroupListPage{}, f.groupErr
+	}
+	if f.groupRows != nil {
+		return store.GroupListPage{Rows: f.groupRows, Total: len(f.groupRows)}, nil
+	}
+	out := make([]store.GroupListRow, 0, len(f.groups))
+	for _, group := range f.groups {
+		out = append(out, store.GroupListRow{Group: group})
+	}
+	return store.GroupListPage{Rows: out, Total: len(out)}, nil
 }
 func (f *fakeService) GetGroup(
 	_ context.Context, code string,
@@ -382,6 +581,20 @@ func (f *fakeService) ListBalances(
 ) ([]domain.Balance, error) {
 	return f.balances, f.balancesErr
 }
+
+func (f *fakeService) ListBalanceRows(
+	_ context.Context, filter store.BalanceListFilter,
+) (store.BalanceListPage, error) {
+	f.balanceFilter = filter
+	if f.balancesErr != nil {
+		return store.BalanceListPage{}, f.balancesErr
+	}
+	rows := make([]store.BalanceListRow, 0, len(f.balances))
+	for _, balance := range f.balances {
+		rows = append(rows, store.BalanceListRow{Balance: balance})
+	}
+	return store.BalanceListPage{Rows: rows, Total: len(rows)}, nil
+}
 func (f *fakeService) ListAdjustments(
 	_ context.Context, _ domain.AccountID, _ domain.Source, _ int,
 ) ([]domain.AccountAdjustmentRecord, error) {
@@ -391,6 +604,18 @@ func (f *fakeService) ListAllAdjustments(
 	_ context.Context, _ domain.AccountID, _ domain.Source, _ int,
 ) ([]domain.AccountAdjustmentRecord, error) {
 	return f.adjustments, f.allAdjErr
+}
+func (f *fakeService) ListAdjustmentRows(
+	_ context.Context, filter store.AdjustmentListFilter,
+) (store.AdjustmentListPage, error) {
+	f.adjustmentFilter = filter
+	if f.allAdjErr != nil {
+		return store.AdjustmentListPage{}, f.allAdjErr
+	}
+	if f.adjustmentPage != nil {
+		return *f.adjustmentPage, nil
+	}
+	return store.AdjustmentListPage{Rows: f.adjustments, Total: len(f.adjustments)}, nil
 }
 func (f *fakeService) SubmitOrder(_ context.Context, _ domain.Order) (domain.Order, error) {
 	return f.submitOrder, f.stateErr
@@ -412,10 +637,36 @@ func (f *fakeService) ListOrders(
 ) ([]domain.Order, error) {
 	return f.orders, f.ordersErr
 }
+
+func (f *fakeService) ListOrderRows(
+	_ context.Context, filter store.OrderListFilter,
+) (store.OrderListPage, error) {
+	f.orderFilter = filter
+	if f.ordersErr != nil {
+		return store.OrderListPage{}, f.ordersErr
+	}
+	rows := make([]store.OrderListRow, 0, len(f.orders))
+	for _, order := range f.orders {
+		rows = append(rows, store.OrderListRow{Order: order})
+	}
+	return store.OrderListPage{Rows: rows, Total: len(rows)}, nil
+}
 func (f *fakeService) ListTrades(
 	_ context.Context, _ domain.AccountID, _ domain.Source, _ int,
 ) ([]domain.Trade, error) {
 	return f.trades, f.tradesErr
+}
+func (f *fakeService) ListTradeRows(
+	_ context.Context, filter store.TradeListFilter,
+) (store.TradeListPage, error) {
+	f.tradeFilter = filter
+	if f.tradesErr != nil {
+		return store.TradeListPage{}, f.tradesErr
+	}
+	if f.tradePage != nil {
+		return *f.tradePage, nil
+	}
+	return store.TradeListPage{Rows: f.trades, Total: len(f.trades)}, nil
 }
 func (f *fakeService) Overview(_ context.Context, _ time.Time) (backend.Overview, error) {
 	return f.overview, f.statusErr
@@ -535,9 +786,18 @@ func TestRouteRegistrySurfaceBaseline(t *testing.T) {
 		"POST /business-csv/import/preview",
 		"POST /business-csv/import",
 		"POST /database/reset",
+		"GET /assets",
+		"POST /assets",
+		"PUT /assets/{code}",
+		"DELETE /assets/{code}",
+		"GET /asset-classes",
+		"POST /asset-classes",
+		"PUT /asset-classes/{code}",
+		"DELETE /asset-classes/{code}",
 		"GET /accounts",
 		"POST /accounts",
 		"GET /accounts/{code}",
+		"PUT /accounts/{code}",
 		"POST /accounts/{code}/block",
 		"POST /accounts/{code}/unblock",
 		"DELETE /accounts/{code}",
@@ -548,6 +808,7 @@ func TestRouteRegistrySurfaceBaseline(t *testing.T) {
 		"GET /groups",
 		"POST /groups",
 		"GET /groups/{code}",
+		"PUT /groups/{code}",
 		"PUT /groups/{code}/notes",
 		"POST /groups/{code}/block",
 		"POST /groups/{code}/unblock",
@@ -620,12 +881,16 @@ func extID(seed string) domain.ExternalID {
 }
 
 // assertNoSurrogateID fails if a decoded response sub-map leaks any forbidden
-// surrogate or engine identifier key. The new identity model addresses resources
-// by their public handle (code / externalId) only; no numeric or engine id is
-// ever serialized.
+// surrogate or engine identifier key. Machine records may expose their public
+// opaque handle as "id"; numeric and engine ids must never be serialized.
 func assertNoSurrogateID(t *testing.T, obj map[string]any) {
 	t.Helper()
-	for _, k := range []string{"id", "orderId", "engineId", "engineAccountId", "engineGroupId"} {
+	if id, ok := obj["id"]; ok {
+		if _, ok := id.(string); !ok {
+			t.Fatalf("response leaked non-public id %q: %v", id, obj)
+		}
+	}
+	for _, k := range []string{"orderId", "engineId", "engineAccountId", "engineGroupId"} {
 		if _, ok := obj[k]; ok {
 			t.Fatalf("response leaked forbidden key %q: %v", k, obj)
 		}
@@ -902,8 +1167,11 @@ func TestRequestBodyLimitUsesImportEnvelopeCap(t *testing.T) {
 
 func TestListAccounts(t *testing.T) {
 	svc := &fakeService{
-		accounts: []domain.Account{
-			{Code: "acc-1", Title: "Account One", Blocked: false},
+		accountRows: []store.AccountListRow{
+			{
+				Account:       domain.Account{Code: "acc-1", Title: "Account One"},
+				PositionCount: 2,
+			},
 		},
 	}
 	r, err := newRouter(svc)
@@ -935,6 +1203,723 @@ func TestListAccounts(t *testing.T) {
 	if _, ok := a["blockReason"]; !ok {
 		t.Fatal("missing blockReason field")
 	}
+	if a["positionCount"] != float64(2) {
+		t.Fatalf("positionCount = %v, want 2", a["positionCount"])
+	}
+}
+
+func TestListAccounts_PropagatesFilters(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/accounts?code=acc*alpha&codeMatch=starts_with"+
+			"&status=blocked&positionCountMode=greater_than&positionCountMin=1"+
+			"&blockReason=risk&blockReasonMatch=contains&group="+
+			"&sort=positionCount&order=desc&limit=25&offset=50",
+		nil,
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	if svc.accountFilter.GroupCode == nil || *svc.accountFilter.GroupCode != "" {
+		t.Fatalf("group filter = %v, want empty group pointer", svc.accountFilter.GroupCode)
+	}
+	if got := svc.accountFilter.Code.Fragments; !slices.Equal(got, []string{"acc", "alpha"}) {
+		t.Fatalf("code fragments = %v", got)
+	}
+	if !svc.accountFilter.Code.AnchorStart || svc.accountFilter.Code.AnchorEnd {
+		t.Fatalf("code anchors = %+v, want start only", svc.accountFilter.Code)
+	}
+	if svc.accountFilter.Status != store.StatusFilterBlocked {
+		t.Fatalf("status filter = %q", svc.accountFilter.Status)
+	}
+	if svc.accountFilter.Position.Min == nil || *svc.accountFilter.Position.Min != 1 ||
+		!svc.accountFilter.Position.MinExclusive {
+		t.Fatalf("position filter = %+v", svc.accountFilter.Position)
+	}
+	if got := svc.accountFilter.BlockReason.Fragments; !slices.Equal(got, []string{"risk"}) {
+		t.Fatalf("block reason fragments = %v", got)
+	}
+	if svc.accountFilter.Sort.Column != "positionCount" ||
+		!svc.accountFilter.Sort.Descending {
+		t.Fatalf("sort filter = %+v", svc.accountFilter.Sort)
+	}
+	if svc.accountFilter.Page.Limit != 25 || svc.accountFilter.Page.Offset != 50 {
+		t.Fatalf("page filter = %+v", svc.accountFilter.Page)
+	}
+}
+
+func TestListAccounts_RejectsNotesSort(t *testing.T) {
+	r, err := newRouter(&fakeService{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/accounts?sort=notes",
+		nil,
+	))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+}
+
+func TestListBalances_PropagatesFilters(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/balances?account=acc&groupCode=desk"+
+			"&asset=USD&availableMode=between&availableMin=2.5&availableMax=10"+
+			"&updatedAtMode=greater_than&updatedAfter=2026-01-02T03:04:05Z"+
+			"&sort=available&order=desc&limit=10&offset=20",
+		nil,
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	if got := svc.balanceFilter.Account.Fragments; !slices.Equal(got, []string{"acc"}) {
+		t.Fatalf("account fragments = %v", got)
+	}
+	if svc.balanceFilter.GroupCode == nil || *svc.balanceFilter.GroupCode != "desk" {
+		t.Fatalf("group filter = %v", svc.balanceFilter.GroupCode)
+	}
+	if got := svc.balanceFilter.Asset.Fragments; !slices.Equal(got, []string{"USD"}) {
+		t.Fatalf("asset fragments = %v", got)
+	}
+	if svc.balanceFilter.Available.Min == nil || svc.balanceFilter.Available.Max == nil {
+		t.Fatalf("available range = %+v", svc.balanceFilter.Available)
+	}
+	if svc.balanceFilter.Available.MinExclusive || svc.balanceFilter.Available.MaxExclusive {
+		t.Fatalf("available exclusivity = %+v", svc.balanceFilter.Available)
+	}
+	if svc.balanceFilter.UpdatedAt.Min == nil || !svc.balanceFilter.UpdatedAt.MinExclusive {
+		t.Fatalf("updatedAt range = %+v", svc.balanceFilter.UpdatedAt)
+	}
+	if svc.balanceFilter.Sort.Column != "available" || !svc.balanceFilter.Sort.Descending {
+		t.Fatalf("sort filter = %+v", svc.balanceFilter.Sort)
+	}
+	if svc.balanceFilter.Page.Limit != 10 || svc.balanceFilter.Page.Offset != 20 {
+		t.Fatalf("page filter = %+v", svc.balanceFilter.Page)
+	}
+}
+
+func TestListOrders_PropagatesFilters(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/orders?account=acc-1&source=panel&side=buy&status=accepted,filled"+
+			"&baseAsset=A&quoteAsset=USD"+
+			"&amountMode=greater_than&amountMin=2.5&priceMode=less_than&priceMax=10"+
+			"&atMode=between&atMin=2026-01-02T03:04:05Z&atMax=2026-01-03T03:04:05Z"+
+			"&sort=amountValue&order=asc&limit=5&offset=15",
+		nil,
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	if svc.orderFilter.Account != "acc-1" || svc.orderFilter.Source != domain.SourcePanel {
+		t.Fatalf("account/source = %q/%q", svc.orderFilter.Account, svc.orderFilter.Source)
+	}
+	if svc.orderFilter.Side == nil || *svc.orderFilter.Side != domain.OrderSideBuy {
+		t.Fatalf("side filter = %v", svc.orderFilter.Side)
+	}
+	if !slices.Equal(svc.orderFilter.Status, []domain.OrderStatus{
+		domain.OrderStatusAccepted,
+		domain.OrderStatusFilled,
+	}) {
+		t.Fatalf("status filter = %v", svc.orderFilter.Status)
+	}
+	if got := svc.orderFilter.BaseAsset.Fragments; !slices.Equal(got, []string{"A"}) {
+		t.Fatalf("base fragments = %v", got)
+	}
+	if got := svc.orderFilter.QuoteAsset.Fragments; !slices.Equal(got, []string{"USD"}) {
+		t.Fatalf("quote fragments = %v", got)
+	}
+	if svc.orderFilter.Amount.Min == nil || !svc.orderFilter.Amount.MinExclusive {
+		t.Fatalf("amount range = %+v", svc.orderFilter.Amount)
+	}
+	if svc.orderFilter.Price.Max == nil || !svc.orderFilter.Price.MaxExclusive {
+		t.Fatalf("price range = %+v", svc.orderFilter.Price)
+	}
+	if svc.orderFilter.At.Min == nil || svc.orderFilter.At.Max == nil {
+		t.Fatalf("at range = %+v", svc.orderFilter.At)
+	}
+	if svc.orderFilter.Sort.Column != "amountValue" || svc.orderFilter.Sort.Descending {
+		t.Fatalf("sort filter = %+v", svc.orderFilter.Sort)
+	}
+	if svc.orderFilter.Page.Limit != 5 || svc.orderFilter.Page.Offset != 15 {
+		t.Fatalf("page filter = %+v", svc.orderFilter.Page)
+	}
+}
+
+func TestListOrders_PageParamComputesOffset(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet, "/api/v1/orders?limit=25&page=3", nil,
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	if svc.orderFilter.Page.Limit != 25 || svc.orderFilter.Page.Offset != 50 {
+		t.Fatalf("page filter = %+v", svc.orderFilter.Page)
+	}
+}
+
+func TestListOrders_OffsetParamWinsOverPage(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet, "/api/v1/orders?limit=25&page=3&offset=7", nil,
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	if svc.orderFilter.Page.Limit != 25 || svc.orderFilter.Page.Offset != 7 {
+		t.Fatalf("page filter = %+v", svc.orderFilter.Page)
+	}
+}
+
+func TestListOrders_BadPage(t *testing.T) {
+	r, err := newRouter(&fakeService{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet, "/api/v1/orders?page=0", nil,
+	))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "validation" {
+		t.Fatalf("want code=validation, got %v", errObj["code"])
+	}
+}
+
+func TestListTrades_PropagatesFilters(t *testing.T) {
+	tradeID := extID("trade-exact")
+	svc := &fakeService{
+		tradePage: &store.TradeListPage{
+			Total: 42,
+		},
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/trades?id="+tradeID.String()+
+			"&account=acc*"+
+			"&baseAsset=AAPL&quoteAsset=US"+
+			"&side=buy&source=panel&atMode=between"+
+			"&atMin=2026-01-02T03:04:05Z&atMax=2026-01-03T03:04:05Z"+
+			"&quantityMode=gte&quantityMin=2.5&priceMode=lt&priceMax=150.75"+
+			"&lockPriceMode=neq&lockPriceMin=149.5"+
+			"&sort=quantity&order=desc&limit=7&offset=14",
+		nil,
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	if got := svc.tradeFilter.Account.Fragments; !slices.Equal(got, []string{"acc*"}) {
+		t.Fatalf("account fragments = %v", got)
+	}
+	if svc.tradeFilter.ExternalID != tradeID {
+		t.Fatalf("external id = %s", svc.tradeFilter.ExternalID)
+	}
+	if !svc.tradeFilter.Account.AnchorStart || !svc.tradeFilter.Account.AnchorEnd {
+		t.Fatalf("account matcher = %+v", svc.tradeFilter.Account)
+	}
+	if got := svc.tradeFilter.BaseAsset.Fragments; !slices.Equal(got, []string{"AAPL"}) {
+		t.Fatalf("base fragments = %v", got)
+	}
+	if !svc.tradeFilter.BaseAsset.AnchorStart || !svc.tradeFilter.BaseAsset.AnchorEnd {
+		t.Fatalf("base matcher = %+v", svc.tradeFilter.BaseAsset)
+	}
+	if got := svc.tradeFilter.QuoteAsset.Fragments; !slices.Equal(got, []string{"US"}) {
+		t.Fatalf("quote fragments = %v", got)
+	}
+	if svc.tradeFilter.Side == nil || *svc.tradeFilter.Side != domain.OrderSideBuy {
+		t.Fatalf("side = %v", svc.tradeFilter.Side)
+	}
+	if svc.tradeFilter.Source != domain.SourcePanel {
+		t.Fatalf("source = %q", svc.tradeFilter.Source)
+	}
+	if svc.tradeFilter.At.Min == nil || svc.tradeFilter.At.Max == nil {
+		t.Fatalf("at range = %+v", svc.tradeFilter.At)
+	}
+	if svc.tradeFilter.Quantity.Min == nil || *svc.tradeFilter.Quantity.Min != "2.5" ||
+		svc.tradeFilter.Quantity.MinExclusive {
+		t.Fatalf("quantity range = %+v", svc.tradeFilter.Quantity)
+	}
+	if svc.tradeFilter.Price.Max == nil || *svc.tradeFilter.Price.Max != "150.75" ||
+		!svc.tradeFilter.Price.MaxExclusive {
+		t.Fatalf("price range = %+v", svc.tradeFilter.Price)
+	}
+	if svc.tradeFilter.LockPrice.NotEqual == nil ||
+		*svc.tradeFilter.LockPrice.NotEqual != "149.5" {
+		t.Fatalf("lockPrice range = %+v", svc.tradeFilter.LockPrice)
+	}
+	if svc.tradeFilter.Sort.Column != "quantity" || !svc.tradeFilter.Sort.Descending {
+		t.Fatalf("sort = %+v", svc.tradeFilter.Sort)
+	}
+	if svc.tradeFilter.Page.Limit != 7 || svc.tradeFilter.Page.Offset != 14 {
+		t.Fatalf("page = %+v", svc.tradeFilter.Page)
+	}
+	m := bodyMap(t, rec.Result())
+	if m["total"] != float64(42) {
+		t.Fatalf("envelope = %v", m)
+	}
+}
+
+func TestListAdjustments_PropagatesFilters(t *testing.T) {
+	status := domain.AdjustmentStatusRejected
+	svc := &fakeService{
+		adjustmentPage: &store.AdjustmentListPage{
+			Total: 17,
+		},
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/adjustments?id="+extID("adj-1").String()+
+			"&account=acc-1&accountMatch=exact"+
+			"&asset=US&assetMatch=starts_with&source=api&status=rejected"+
+			"&atMode=gte&atMin=2026-01-02T03:04:05Z"+
+			"&sort=status&order=asc&limit=9&offset=18",
+		nil,
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	if svc.adjustmentFilter.ExternalID != extID("adj-1") {
+		t.Fatalf("external id = %v", svc.adjustmentFilter.ExternalID)
+	}
+	if got := svc.adjustmentFilter.Account.Fragments; !slices.Equal(got, []string{"acc-1"}) {
+		t.Fatalf("account fragments = %v", got)
+	}
+	if !svc.adjustmentFilter.Account.AnchorStart ||
+		!svc.adjustmentFilter.Account.AnchorEnd {
+		t.Fatalf("account matcher = %+v", svc.adjustmentFilter.Account)
+	}
+	if got := svc.adjustmentFilter.Asset.Fragments; !slices.Equal(got, []string{"US"}) {
+		t.Fatalf("asset fragments = %v", got)
+	}
+	if !svc.adjustmentFilter.Asset.AnchorStart || !svc.adjustmentFilter.Asset.AnchorEnd {
+		t.Fatalf("asset matcher = %+v", svc.adjustmentFilter.Asset)
+	}
+	if svc.adjustmentFilter.Source != domain.SourceAPI {
+		t.Fatalf("source = %q", svc.adjustmentFilter.Source)
+	}
+	if svc.adjustmentFilter.Status == nil || *svc.adjustmentFilter.Status != status {
+		t.Fatalf("status = %v", svc.adjustmentFilter.Status)
+	}
+	if svc.adjustmentFilter.At.Min == nil || svc.adjustmentFilter.At.MinExclusive {
+		t.Fatalf("at range = %+v", svc.adjustmentFilter.At)
+	}
+	if svc.adjustmentFilter.Sort.Column != "status" ||
+		svc.adjustmentFilter.Sort.Descending {
+		t.Fatalf("sort = %+v", svc.adjustmentFilter.Sort)
+	}
+	if svc.adjustmentFilter.Page.Limit != 9 ||
+		svc.adjustmentFilter.Page.Offset != 18 {
+		t.Fatalf("page = %+v", svc.adjustmentFilter.Page)
+	}
+	m := bodyMap(t, rec.Result())
+	if m["total"] != float64(17) {
+		t.Fatalf("envelope = %v", m)
+	}
+}
+
+func TestListAudit_PropagatesFilters(t *testing.T) {
+	auditID := extID("audit-exact")
+	svc := &fakeService{
+		auditListPage: &store.AuditListPage{
+			Total: 33,
+		},
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/audit?id="+auditID.String()+
+			"&account=acc&accountMatch=starts_with"+
+			"&asset=AAPL&assetMatch=exact"+
+			"&actor=operator&actorMatch=exact&source=panel"+
+			"&actions=block,unblock&atMode=lte&atMax=2026-01-03T03:04:05Z"+
+			"&limit=4&offset=8",
+		nil,
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	if got := svc.auditListFilter.Account.Fragments; !slices.Equal(got, []string{"acc"}) {
+		t.Fatalf("account fragments = %v", got)
+	}
+	if svc.auditListFilter.ExternalID != auditID {
+		t.Fatalf("external id = %s", svc.auditListFilter.ExternalID)
+	}
+	if !svc.auditListFilter.Account.AnchorStart || !svc.auditListFilter.Account.AnchorEnd {
+		t.Fatalf("account matcher = %+v", svc.auditListFilter.Account)
+	}
+	if got := svc.auditListFilter.Asset.Fragments; !slices.Equal(got, []string{"AAPL"}) {
+		t.Fatalf("asset fragments = %v", got)
+	}
+	if !svc.auditListFilter.Asset.AnchorStart || !svc.auditListFilter.Asset.AnchorEnd {
+		t.Fatalf("asset matcher = %+v", svc.auditListFilter.Asset)
+	}
+	if got := svc.auditListFilter.Actor.Fragments; !slices.Equal(got, []string{"operator"}) {
+		t.Fatalf("actor fragments = %v", got)
+	}
+	if !svc.auditListFilter.Actor.AnchorStart || !svc.auditListFilter.Actor.AnchorEnd {
+		t.Fatalf("actor matcher = %+v", svc.auditListFilter.Actor)
+	}
+	if svc.auditListFilter.Source != domain.SourcePanel {
+		t.Fatalf("source = %q", svc.auditListFilter.Source)
+	}
+	if !slices.Equal(svc.auditListFilter.Actions, []domain.AuditAction{
+		domain.AuditActionBlock,
+		domain.AuditActionUnblock,
+	}) {
+		t.Fatalf("actions = %v", svc.auditListFilter.Actions)
+	}
+	if svc.auditListFilter.At.Max == nil || svc.auditListFilter.At.MaxExclusive {
+		t.Fatalf("at range = %+v", svc.auditListFilter.At)
+	}
+	if svc.auditListFilter.Page.Limit != 4 || svc.auditListFilter.Page.Offset != 8 {
+		t.Fatalf("page = %+v", svc.auditListFilter.Page)
+	}
+	m := bodyMap(t, rec.Result())
+	if m["total"] != float64(33) {
+		t.Fatalf("envelope = %v", m)
+	}
+}
+
+func TestListAssets(t *testing.T) {
+	r, err := newRouter(&fakeService{
+		assets: []domain.Asset{
+			{Code: "AAPL", Title: "Apple Inc.", AssetClass: "equity"},
+			{Code: "USD", Title: "US Dollar", AssetClass: "cash"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/assets", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	assets, ok := m["assets"].([]any)
+	if !ok || len(assets) != 2 {
+		t.Fatalf("want 2 assets, got %v", m["assets"])
+	}
+	if m["total"] != float64(2) {
+		t.Fatalf("total = %v, want 2", m["total"])
+	}
+	first, _ := assets[0].(map[string]any)
+	if first["code"] != "AAPL" || first["title"] != "Apple Inc." ||
+		first["assetClass"] != "equity" {
+		t.Fatalf("unexpected first asset: %v", first)
+	}
+}
+
+func TestListAssets_PropagatesSort(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/assets?sort=assetClass&order=desc",
+		nil,
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	if svc.assetFilter.Sort.Column != "assetClass" || !svc.assetFilter.Sort.Descending {
+		t.Fatalf("sort = %+v", svc.assetFilter.Sort)
+	}
+}
+
+func TestListAssets_PropagatesFilters(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/assets?code=apple&codeMatch=contains&class=equity&classMatch=exact&limit=5&offset=10",
+		nil,
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	if len(svc.assetFilter.Code.Fragments) != 1 ||
+		svc.assetFilter.Code.Fragments[0] != "apple" {
+		t.Fatalf("code matcher = %+v", svc.assetFilter.Code)
+	}
+	if len(svc.assetFilter.Class.Fragments) != 1 ||
+		svc.assetFilter.Class.Fragments[0] != "equity" ||
+		!svc.assetFilter.Class.AnchorStart ||
+		!svc.assetFilter.Class.AnchorEnd {
+		t.Fatalf("class matcher = %+v", svc.assetFilter.Class)
+	}
+	if svc.assetFilter.Page.Limit != 5 || svc.assetFilter.Page.Offset != 10 {
+		t.Fatalf("page = %+v", svc.assetFilter.Page)
+	}
+}
+
+func TestListAssets_BadSort(t *testing.T) {
+	r, err := newRouter(&fakeService{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/assets?sort=bogus", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+}
+
+func TestCreateAsset(t *testing.T) {
+	r, err := newRouter(&fakeService{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(
+		`{"code":"AAPL","title":"Apple Inc.","assetClass":"equity"}`,
+	)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/assets", body))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	asset, ok := m["asset"].(map[string]any)
+	if !ok {
+		t.Fatalf("want asset object, got %v", m["asset"])
+	}
+	if asset["code"] != "AAPL" || asset["title"] != "Apple Inc." ||
+		asset["assetClass"] != "equity" {
+		t.Fatalf("unexpected asset: %v", asset)
+	}
+	assertNoSurrogateID(t, asset)
+}
+
+func TestCreateAsset_ValidationError(t *testing.T) {
+	svc := &fakeService{createAssetErr: domain.ErrInvalid}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"code":""}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/assets", body))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "validation" {
+		t.Fatalf("want code=validation, got %v", errObj["code"])
+	}
+}
+
+func TestCreateAsset_Conflict(t *testing.T) {
+	svc := &fakeService{createAssetErr: domain.ErrAlreadyExists}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"code":"AAPL"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/assets", body))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "conflict" {
+		t.Fatalf("want code=conflict, got %v", errObj["code"])
+	}
+}
+
+func TestUpdateAsset(t *testing.T) {
+	r, err := newRouter(&fakeService{
+		assets: []domain.Asset{{Code: "AAPL", Title: "Apple Inc.", AssetClass: "equity"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"code":"AAPL","title":"Apple","assetClass":"stock"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/assets/AAPL", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	asset, ok := m["asset"].(map[string]any)
+	if !ok {
+		t.Fatalf("want asset object, got %v", m["asset"])
+	}
+	if asset["code"] != "AAPL" || asset["title"] != "Apple" ||
+		asset["assetClass"] != "stock" {
+		t.Fatalf("unexpected asset: %v", asset)
+	}
+}
+
+// TestUpdateAsset_Rename covers the code-edit path: the path code identifies the
+// asset and the body carries a new public code, mirroring the group rename.
+func TestUpdateAsset_Rename(t *testing.T) {
+	svc := &fakeService{
+		assets: []domain.Asset{{Code: "AAPL", Title: "Apple Inc."}},
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"code":"AAPL.US","title":"Apple Inc."}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/assets/AAPL", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	asset, _ := m["asset"].(map[string]any)
+	if asset["code"] != "AAPL.US" {
+		t.Fatalf("unexpected renamed asset: %v", asset)
+	}
+	if svc.assets[0].Code != "AAPL.US" {
+		t.Fatalf("asset not renamed in fake, got %v", svc.assets)
+	}
+}
+
+func TestUpdateAsset_NotFound(t *testing.T) {
+	svc := &fakeService{updateAssetErr: domain.ErrNotFound}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"title":"Apple"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/assets/AAPL", body))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d", rec.Code)
+	}
+}
+
+func TestUpdateAsset_ValidationError(t *testing.T) {
+	svc := &fakeService{updateAssetErr: domain.ErrInvalid}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"title":"Apple"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/assets/AAPL", body))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "validation" {
+		t.Fatalf("want code=validation, got %v", errObj["code"])
+	}
+}
+
+func TestDeleteAsset(t *testing.T) {
+	svc := &fakeService{
+		assets: []domain.Asset{{Code: "AAPL", Title: "Apple Inc."}},
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodDelete, "/api/v1/assets/AAPL?force=true", nil))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("want 204, got %d", rec.Code)
+	}
+	if !svc.deleteAssetForce {
+		t.Fatal("want force flag propagated to service")
+	}
+	if len(svc.assets) != 0 {
+		t.Fatalf("want asset removed, got %v", svc.assets)
+	}
+}
+
+func TestDeleteAsset_NotFound(t *testing.T) {
+	svc := &fakeService{deleteAssetErr: domain.ErrNotFound}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/v1/assets/AAPL", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d", rec.Code)
+	}
+}
+
+func TestDeleteAsset_ValidationError(t *testing.T) {
+	svc := &fakeService{deleteAssetErr: domain.ErrInvalid}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/v1/assets/AAPL", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "validation" {
+		t.Fatalf("want code=validation, got %v", errObj["code"])
+	}
 }
 
 func TestCreateAccount(t *testing.T) {
@@ -942,7 +1927,7 @@ func TestCreateAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := bytes.NewBufferString(`{"code":"acc-1"}`)
+	body := bytes.NewBufferString(`{"code":"acc-1","title":"Account One"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/accounts", body))
 	if rec.Code != http.StatusCreated {
@@ -956,11 +1941,14 @@ func TestCreateAccount(t *testing.T) {
 	if acc["code"] != "acc-1" {
 		t.Fatalf("want code=acc-1, got %v", acc["code"])
 	}
+	if acc["title"] != "Account One" {
+		t.Fatalf("want title=Account One, got %v", acc["title"])
+	}
 	assertNoSurrogateID(t, acc)
 }
 
 func TestCreateAccount_ValidationError(t *testing.T) {
-	r, err := newRouter(&fakeService{})
+	r, err := newRouter(&fakeService{createErr: domain.ErrInvalid})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1195,9 +2183,13 @@ func TestUnblockAccount(t *testing.T) {
 
 func TestListLimits(t *testing.T) {
 	svc := &fakeService{
-		limits: node.AccountLimits{
-			OrderSizeLimits: []domain.LimitOrderSize{
-				{Scope: domain.ScopeBroker, MaxQuantity: "500"},
+		policyRows: []store.PolicyListRow{
+			{
+				Kind:  store.PolicyKindOrderSize,
+				Scope: domain.ScopeBroker,
+				OrderSize: &domain.LimitOrderSize{
+					Scope: domain.ScopeBroker, MaxQuantity: "500",
+				},
 			},
 		},
 	}
@@ -1211,36 +2203,104 @@ func TestListLimits(t *testing.T) {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 	m := bodyMap(t, rec.Result())
-	// GET /limits returns the three-array per-policy object, never a flat list.
-	limits, ok := m["limits"].(map[string]any)
+	// GET /limits returns the flat policy list plus a total.
+	policies, ok := m["policies"].([]any)
+	if !ok || len(policies) != 1 {
+		t.Fatalf("want 1 policy, got %v", m["policies"])
+	}
+	if m["total"] != float64(1) {
+		t.Fatalf("total = %v, want 1", m["total"])
+	}
+	policy := policies[0].(map[string]any)
+	if policy["kind"] != domain.PolicyOrderSizeLimit || policy["scope"] != domain.ScopeBroker {
+		t.Fatalf("unexpected policy: %v", policy)
+	}
+	values, ok := policy["values"].(map[string]any)
 	if !ok {
-		t.Fatalf("want limits object, got %v", m["limits"])
+		t.Fatalf("want values object, got %v", policy["values"])
 	}
-	for _, field := range []string{"rateLimits", "orderSizeLimits", "pnlBoundsLimits"} {
-		if _, ok := limits[field].([]any); !ok {
-			t.Fatalf("limits missing array field %q: %v", field, limits)
-		}
+	orderSize, ok := values["orderSize"].(map[string]any)
+	if !ok {
+		t.Fatalf("want orderSize values, got %v", values)
 	}
-	sizes, _ := limits["orderSizeLimits"].([]any)
-	if len(sizes) != 1 {
-		t.Fatalf("want 1 order-size limit, got %v", limits["orderSizeLimits"])
-	}
-	size := sizes[0].(map[string]any)
-	if size["scope"] != domain.ScopeBroker || size["maxQuantity"] != "500" {
-		t.Fatalf("unexpected order-size limit: %v", size)
+	if orderSize["maxQuantity"] != "500" {
+		t.Fatalf("unexpected order-size values: %v", orderSize)
 	}
 }
 
-func TestListLimits_AccountFilter(t *testing.T) {
+func TestListLimits_FilterAndPaging(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/api/v1/limits?account=acc-1&asset=AAPL&policy=rate&sort=scope&order=desc&limit=20&offset=40",
+		nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	// Account is matched exactly (anchored both ends, single fragment).
+	if got := svc.policyFilter.Account.Fragments; len(got) != 1 || got[0] != "acc-1" {
+		t.Fatalf("account fragments = %v", got)
+	}
+	if !svc.policyFilter.Account.AnchorStart || !svc.policyFilter.Account.AnchorEnd {
+		t.Fatalf("account not exact-anchored: %+v", svc.policyFilter.Account)
+	}
+	if got := svc.policyFilter.Asset.Fragments; len(got) != 1 || got[0] != "AAPL" {
+		t.Fatalf("asset fragments = %v", got)
+	}
+	if !svc.policyFilter.Asset.AnchorStart || !svc.policyFilter.Asset.AnchorEnd {
+		t.Fatalf("asset not exact-anchored: %+v", svc.policyFilter.Asset)
+	}
+	if svc.policyFilter.Kind == nil || *svc.policyFilter.Kind != store.PolicyKindRate {
+		t.Fatalf("kind filter = %v", svc.policyFilter.Kind)
+	}
+	if svc.policyFilter.Sort.Column != "scope" || !svc.policyFilter.Sort.Descending {
+		t.Fatalf("sort spec = %+v", svc.policyFilter.Sort)
+	}
+	if svc.policyFilter.Page.Limit != 20 || svc.policyFilter.Page.Offset != 40 {
+		t.Fatalf("page spec = %+v", svc.policyFilter.Page)
+	}
+}
+
+func TestListLimits_BadSort(t *testing.T) {
 	r, err := newRouter(&fakeService{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
-		"/api/v1/limits?account=acc-1", nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
+		"/api/v1/limits?sort=unknown", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+}
+
+func TestListLimits_BadPolicy(t *testing.T) {
+	r, err := newRouter(&fakeService{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/api/v1/limits?policy=invalid", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+}
+
+func TestListLimits_BadLimit(t *testing.T) {
+	r, err := newRouter(&fakeService{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/api/v1/limits?limit=-1", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
 	}
 }
 
@@ -1591,19 +2651,20 @@ func TestListAudit(t *testing.T) {
 }
 
 func TestListAudit_FilterResolution(t *testing.T) {
-	tradingActions := domain.AuditActionsByCategory(domain.AuditCategoryTrading)
-	controlActions := domain.AuditActionsByCategory(domain.AuditCategoryControl)
 	cases := []struct {
-		name  string
-		query string
-		want  []domain.AuditAction
+		name         string
+		query        string
+		wantActions  []domain.AuditAction
+		wantCategory domain.AuditCategory
 	}{
-		{"default hides trading", "/api/v1/audit", controlActions},
-		{"category control", "/api/v1/audit?category=control", controlActions},
-		{"category trading", "/api/v1/audit?category=trading", tradingActions},
-		{"category all", "/api/v1/audit?category=all", nil},
+		{"default unfiltered", "/api/v1/audit", nil, ""},
+		{"category control", "/api/v1/audit?category=control", nil, domain.AuditCategoryControl},
+		{"category trading", "/api/v1/audit?category=trading", nil, domain.AuditCategoryTrading},
+		{"category all", "/api/v1/audit?category=all", nil, ""},
 		{"explicit actions", "/api/v1/audit?actions=block,submit_order",
-			[]domain.AuditAction{domain.AuditActionBlock, domain.AuditActionSubmitOrder}},
+			[]domain.AuditAction{domain.AuditActionBlock, domain.AuditActionSubmitOrder}, ""},
+		{"explicit actions override category", "/api/v1/audit?category=control&actions=submit_order",
+			[]domain.AuditAction{domain.AuditActionSubmitOrder}, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1617,8 +2678,11 @@ func TestListAudit_FilterResolution(t *testing.T) {
 			if rec.Code != http.StatusOK {
 				t.Fatalf("want 200, got %d", rec.Code)
 			}
-			if !slices.Equal(svc.auditFilter.Actions, tc.want) {
-				t.Fatalf("actions = %+v, want %+v", svc.auditFilter.Actions, tc.want)
+			if !slices.Equal(svc.auditListFilter.Actions, tc.wantActions) {
+				t.Fatalf("actions = %+v, want %+v", svc.auditListFilter.Actions, tc.wantActions)
+			}
+			if svc.auditListFilter.Category != tc.wantCategory {
+				t.Fatalf("category = %q, want %q", svc.auditListFilter.Category, tc.wantCategory)
 			}
 		})
 	}
@@ -1633,6 +2697,38 @@ func TestListAudit_UnknownActionRejected(t *testing.T) {
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/audit?actions=bogus", nil))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("want 400 for unknown action, got %d", rec.Code)
+	}
+}
+
+func TestListAudit_BadQueryParams(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+	}{
+		{"unknown_sort", "?sort=unknown"},
+		{"invalid_order", "?sort=source&order=sideways"},
+		{"invalid_category", "?category=bogus"},
+		{"invalid_time", "?atMode=after&atMin=not-time"},
+		{"bad_external_id", "?externalId=not-valid"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := newRouter(&fakeService{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+				"/api/v1/audit"+tc.query, nil))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("want 400, got %d", rec.Code)
+			}
+			m := bodyMap(t, rec.Result())
+			errObj, _ := m["error"].(map[string]any)
+			if errObj["code"] != "validation" {
+				t.Fatalf("want code=validation, got %v", errObj["code"])
+			}
+		})
 	}
 }
 
@@ -2030,7 +3126,7 @@ func TestApplyExecutionReport_Created(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bytes.NewBufferString(
-		`{"quantity":"1","price":"100","force":true,"final":true}`)
+		`{"quantity":"1","price":"100","leavesQuantity":"0","force":true,"final":true}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports", body))
@@ -2043,6 +3139,37 @@ func TestApplyExecutionReport_Created(t *testing.T) {
 	}
 	if !svc.execReportIn.Force {
 		t.Fatal("force was not forwarded to ApplyExecutionReport")
+	}
+	if svc.execReportIn.LeavesQuantity != "0" {
+		t.Fatalf("leavesQuantity not forwarded: %q", svc.execReportIn.LeavesQuantity)
+	}
+}
+
+// TestApplyExecutionReport_MissingLeavesQuantity checks the handler rejects a
+// fill body that omits leavesQuantity with 400 validation, locking in the
+// engine's hard requirement before the report reaches the service.
+func TestApplyExecutionReport_MissingLeavesQuantity(t *testing.T) {
+	svc := &fakeService{orderDetail: domain.OrderDetail{
+		Order: domain.Order{
+			ExternalID: extID("order-1"), Account: "acc-1", BaseAsset: "AAPL",
+			QuoteAsset: "USD", Side: domain.OrderSideBuy,
+		},
+	}}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"quantity":"1","price":"100","final":true}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports", body))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "validation" {
+		t.Fatalf("want code=validation, got %v", errObj["code"])
 	}
 }
 

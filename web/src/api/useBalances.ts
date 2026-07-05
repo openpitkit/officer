@@ -15,9 +15,9 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 
-import type { Balance } from "@/api/types";
+import type { Balance, BalanceListFilters, PagedResult } from "@/api/types";
 import { usePolling, type PollingResult } from "@/api/usePolling";
 import { useOfficerApi } from "@/framework";
 
@@ -31,5 +31,18 @@ export function useBalances(
     (signal: AbortSignal) => api.fetchBalances({ account, asset }, signal),
     [api, account, asset],
   );
-  return usePolling(fetcher);
+  return usePolling(fetcher, 5000, JSON.stringify({ account, asset }));
+}
+
+/** Poll GET /balances with server-side total. */
+export function useBalancesPage(
+  filters?: BalanceListFilters,
+): PollingResult<PagedResult<Balance>> {
+  const api = useOfficerApi();
+  const filterKey = useMemo(() => JSON.stringify(filters ?? {}), [filters]);
+  const fetcher = useCallback(
+    (signal: AbortSignal) => api.fetchBalancesPage(filters, signal),
+    [api, filters],
+  );
+  return usePolling(fetcher, 5000, filterKey);
 }

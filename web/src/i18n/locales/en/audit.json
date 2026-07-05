@@ -11,6 +11,9 @@
     "account": {
       "placeholder": "Filter by account…"
     },
+    "asset": {
+      "placeholder": "Filter by asset…"
+    },
     "source": {
       "ariaLabel": "Source",
       "all": "All sources"
@@ -25,7 +28,8 @@
         "control": "Control plane",
         "trading": "Trading"
       }
-    }
+    },
+    "advancedDescription": "Filter by actor, source, event time, and event type. Account, asset, and exact-ID filters stay online in the filter bar."
   },
   "table": {
     "time": "Time",
@@ -33,7 +37,16 @@
     "action": "Action",
     "account": "Account",
     "source": "Source",
-    "detail": "Detail"
+    "detail": "Detail",
+    "columnDescriptions": {
+      "externalId": "This column shows the immutable audit entry ID.",
+      "time": "This column shows when the audited event was recorded.",
+      "actor": "This column shows the operator or integration that caused the event.",
+      "action": "This column shows the audited operation type.",
+      "account": "This column shows the account affected by the event when one is present.",
+      "source": "This column shows whether the event came from the panel, REST, MCP, or another source.",
+      "detail": "This column shows a short human-readable summary of the event."
+    }
   },
   "empty": {
     "title": "No audit entries",

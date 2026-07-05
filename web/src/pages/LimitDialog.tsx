@@ -308,8 +308,9 @@ export function LimitDialog({
   }, [form, kinds]);
 
   const validation = validateLimit(candidate);
+  const policyCount = policyCounts[form.policy];
   const requiresEngineRebuild =
-    !isEdit && (policyCounts[form.policy] ?? 0) === 0;
+    !isEdit && policyCount !== undefined && policyCount === 0;
 
   const setPolicy = (policy: Policy) => {
     // Switching policy resets scope to the first allowed one and clears values,

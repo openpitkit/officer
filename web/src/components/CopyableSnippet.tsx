@@ -16,9 +16,10 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 import { Check, Copy } from "lucide-react";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { copyText } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 
@@ -38,28 +39,12 @@ export function CopyableSnippet({
 }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
-  const taRef = useRef<HTMLTextAreaElement>(null);
 
   function handleCopy() {
-    if (navigator.clipboard) {
-      void navigator.clipboard.writeText(text).then(() => {
-        showCopied();
-      });
-    } else {
-      // Fallback for environments without Clipboard API.
-      const ta = taRef.current;
-      if (ta) {
-        ta.select();
-        // execCommand is deprecated but universally supported as fallback.
-        document.execCommand("copy");
-      }
-      showCopied();
-    }
-  }
-
-  function showCopied() {
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    void copyText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
   }
 
   const copyBtn = (
@@ -89,7 +74,6 @@ export function CopyableSnippet({
         <div className="flex justify-end">{copyBtn}</div>
       )}
       <textarea
-        ref={taRef}
         readOnly
         rows={rows}
         value={text}

@@ -33,19 +33,20 @@ import (
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
+	fwstore "go.openpit.dev/officer/framework/store"
 )
 
 // adjustmentSelect is the shared projection for adjustment reads. The JOINs
 // surface the account, asset, and optional principal as their codes so the
-// surrogate ids never leave the store. The LEFT JOIN on principals yields NULL
+// surrogate ids never leave the store. The LEFT JOIN on principal yields NULL
 // when the reference was cleared or never set.
 const adjustmentSelect = `
 SELECT adj.external_id, a.code, ast.code, p.code,
        adj.at, adj.source, adj.status, adj.request, adj.outcome
-FROM adjustments adj
-JOIN accounts  a   ON a.id   = adj.account_id
-JOIN assets    ast ON ast.id = adj.asset_id
-LEFT JOIN principals p ON p.id = adj.principal_id`
+FROM adjustment adj
+JOIN account  a   ON a.id   = adj.account_id
+JOIN asset    ast ON ast.id = adj.asset_id
+LEFT JOIN principal p ON p.id = adj.principal_id`
 
 // AppendAdjustment records one adjustment outcome and its timestamp. The caller
 // populates the typed Request and Accepted/Rejected fields; the store marshals
@@ -89,7 +90,7 @@ func (r *realmStore) AppendAdjustment(
 
 	if _, err := r.db().ExecContext(
 		ctx,
-		`INSERT INTO adjustments
+		`INSERT INTO adjustment
 		 (external_id, account_id, asset_id, principal_id,
 		  at, source, status, request, outcome)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -110,7 +111,7 @@ func (r *realmStore) AppendAdjustment(
 	return rec, nil
 }
 
-// ListAdjustments returns the most recent n adjustments, newest first. A
+// ListAdjustments returns the most recent n adjustment, newest first. A
 // non-empty account or source filters to that value; a non-positive n returns
 // an empty slice.
 func (r *realmStore) ListAdjustments(
@@ -154,6 +155,138 @@ func (r *realmStore) ListAdjustments(
 		return nil, fmt.Errorf("store: iterate adjustments: %w", err)
 	}
 	return result, nil
+}
+
+// ListAdjustmentRows returns adjustment rows matching filter, with total count
+// before paging.
+func (r *realmStore) ListAdjustmentRows(
+	ctx context.Context, filter fwstore.AdjustmentListFilter,
+) (fwstore.AdjustmentListPage, error) {
+	clauses, args := adjustmentListClauses(filter)
+	countQuery := `SELECT COUNT(*)
+FROM adjustment adj
+JOIN account  a   ON a.id   = adj.account_id
+JOIN asset    ast ON ast.id = adj.asset_id
+LEFT JOIN principal p ON p.id = adj.principal_id` + whereFromClauses(clauses)
+	var total int
+	if err := r.db().QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return fwstore.AdjustmentListPage{}, fmt.Errorf("store: count adjustments: %w", err)
+	}
+
+	queryArgs := append([]any{}, args...)
+	sortColumn := adjustmentListSortColumn(filter.Sort)
+	query := `
+SELECT adj.external_id, a.code, ast.code, p.code,
+       adj.at, adj.source, adj.status, adj.request, adj.outcome
+FROM adjustment adj
+JOIN account  a   ON a.id   = adj.account_id
+JOIN asset    ast ON ast.id = adj.asset_id
+LEFT JOIN principal p ON p.id = adj.principal_id` +
+		whereFromClauses(clauses) +
+		adjustmentListOrderBy(sortColumn, filter.Sort)
+	if filter.Page.Limit > 0 {
+		query += ` LIMIT ? OFFSET ?`
+		queryArgs = append(queryArgs, filter.Page.Limit, max(filter.Page.Offset, 0))
+	}
+	rows, err := r.db().QueryContext(ctx, query, queryArgs...)
+	if err != nil {
+		return fwstore.AdjustmentListPage{}, fmt.Errorf("store: list adjustment rows: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	result := make([]domain.AccountAdjustmentRecord, 0)
+	for rows.Next() {
+		row, err := scanAdjustmentListRow(rows)
+		if err != nil {
+			return fwstore.AdjustmentListPage{}, err
+		}
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		return fwstore.AdjustmentListPage{}, fmt.Errorf(
+			"store: iterate adjustment rows: %w", err,
+		)
+	}
+	return fwstore.AdjustmentListPage{
+		Rows:  result,
+		Total: total,
+	}, nil
+}
+
+func adjustmentListClauses(filter fwstore.AdjustmentListFilter) ([]string, []any) {
+	clauses := make([]string, 0)
+	args := make([]any, 0)
+	if !filter.ExternalID.IsZero() {
+		clauses = append(clauses, "adj.external_id = ?")
+		args = append(args, filter.ExternalID.Bytes())
+	}
+	appendMatcher(&clauses, &args, "a.code", filter.Account)
+	appendMatcher(&clauses, &args, "ast.code", filter.Asset)
+	if filter.Source != "" {
+		clauses = append(clauses, "adj.source = ?")
+		args = append(args, string(filter.Source))
+	}
+	if filter.Status != nil {
+		clauses = append(clauses, "adj.status = ?")
+		args = append(args, string(*filter.Status))
+	}
+	appendTimeRangeFilter(&clauses, &args, "adj.at", filter.At)
+	return clauses, args
+}
+
+func adjustmentListSortColumn(sort fwstore.SortSpec) string {
+	columns := map[string]string{
+		"account":   "a.code",
+		"asset":     "ast.code",
+		"at":        "adj.at",
+		"principal": "COALESCE(p.code, '')",
+		"source":    "adj.source",
+		"status":    "adj.status",
+	}
+	column := columns[sort.Column]
+	if column == "" {
+		column = "adj.at"
+	}
+	return column
+}
+
+func adjustmentListOrderBy(sortColumn string, sort fwstore.SortSpec) string {
+	direction := "ASC"
+	tieDirection := "ASC"
+	if sort.Column == "" ||
+		(sortColumn == "adj.at" && sort.Column != "at") ||
+		sort.Descending {
+		direction = "DESC"
+		tieDirection = "DESC"
+	}
+	return "\nORDER BY " + sortColumn + " " + direction +
+		", adj.id " + tieDirection
+}
+
+func scanAdjustmentListRow(
+	rows *sql.Rows,
+) (domain.AccountAdjustmentRecord, error) {
+	var (
+		extID                                      []byte
+		accountCode, assetCode                     string
+		principal                                  sql.NullString
+		at, source, status, requestStr, outcomeStr string
+	)
+	if err := rows.Scan(
+		&extID, &accountCode, &assetCode, &principal,
+		&at, &source, &status, &requestStr, &outcomeStr,
+	); err != nil {
+		return domain.AccountAdjustmentRecord{}, fmt.Errorf(
+			"store: scan adjustment row: %w", err,
+		)
+	}
+	rec, err := adjustmentFromScanned(
+		extID, accountCode, assetCode, principal, at, source, status, requestStr, outcomeStr,
+	)
+	if err != nil {
+		return domain.AccountAdjustmentRecord{}, err
+	}
+	return rec, nil
 }
 
 // --- Adjustment helpers ------------------------------------------------------
@@ -205,7 +338,22 @@ func scanAdjustment(rows *sql.Rows) (domain.AccountAdjustmentRecord, error) {
 	); err != nil {
 		return domain.AccountAdjustmentRecord{}, fmt.Errorf("store: scan adjustment: %w", err)
 	}
+	return adjustmentFromScanned(
+		extID, accountCode, assetCode, principal, at, source, status, requestStr, outcomeStr,
+	)
+}
 
+func adjustmentFromScanned(
+	extID []byte,
+	accountCode string,
+	assetCode string,
+	principal sql.NullString,
+	at string,
+	source string,
+	status string,
+	requestStr string,
+	outcomeStr string,
+) (domain.AccountAdjustmentRecord, error) {
 	xid, err := domain.ExternalIDFromBytes(extID)
 	if err != nil {
 		return domain.AccountAdjustmentRecord{}, fmt.Errorf(

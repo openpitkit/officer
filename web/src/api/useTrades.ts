@@ -17,9 +17,24 @@
 
 import { useCallback } from "react";
 
-import type { Trade } from "@/api/types";
+import type { PagedResult, Trade } from "@/api/types";
 import { usePolling, type PollingResult } from "@/api/usePolling";
-import { useOfficerApi } from "@/framework";
+import { type TradesFilter, useOfficerApi } from "@/framework";
+
+/** Poll GET /trades with server-side total and offset paging. */
+export function useTradesPage(
+  filter: TradesFilter = {},
+): PollingResult<PagedResult<Trade>> {
+  const api = useOfficerApi();
+  const filterKey = JSON.stringify(filter);
+  const fetcher = useCallback(
+    (signal: AbortSignal) => api.fetchTradesPage(filter, signal),
+    // filterKey stands in for the filter object identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [api, filterKey],
+  );
+  return usePolling(fetcher, 5000, filterKey);
+}
 
 /** Poll GET /trades, optionally filtered by account and/or source. */
 export function useTrades(
@@ -33,5 +48,5 @@ export function useTrades(
       api.fetchTrades({ account, source, limit }, signal),
     [api, account, source, limit],
   );
-  return usePolling(fetcher);
+  return usePolling(fetcher, 5000, JSON.stringify({ account, source, limit }));
 }

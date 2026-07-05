@@ -272,6 +272,10 @@ func (b *Builder) Build(
 		_ = localNode.Close()
 		return nil, fmt.Errorf("build market-data manager: %w", err)
 	}
+	// Resolve the live engine sink on every push: the engine (and its sink) is
+	// rebuilt on account/group/asset changes, so a cached sink would go stale
+	// until a restart. The provider keeps quotes flowing across rebuilds.
+	manager.UseSinkProvider(localNode.CurrentMarketDataSink)
 	if err := manager.Start(ctx); err != nil {
 		manager.Stop()
 		_ = localNode.Close()

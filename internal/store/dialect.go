@@ -21,12 +21,13 @@ import "strings"
 
 // Dialect renders the few backend-specific tokens of the one canonical schema.
 //
-// The schema text is shared verbatim across backends; only three declarations
+// The schema text is shared verbatim across backends; only four declarations
 // diverge per backend, so the seam is intentionally minimal. A future backend
 // (for example PostgreSQL, which would map the external-id default to
-// gen_random_uuid() and the boolean to BOOLEAN) slots in as a new Dialect
-// without touching the schema text or the store logic. PostgreSQL is referenced
-// here only in prose; it is not implemented.
+// gen_random_uuid(), the boolean to BOOLEAN and the {{DECIMAL}} token to
+// NUMERIC) slots in as a new Dialect without touching the schema text or the
+// store logic. PostgreSQL is referenced here only in prose; it is not
+// implemented.
 type Dialect interface {
 	// PrimaryKey renders the {{PK}} token: the surrogate-PK identity column
 	// declaration, an internal integer key that never leaves the store.
@@ -37,6 +38,10 @@ type Dialect interface {
 	ExternalID() string
 	// Bool renders the {{BOOL}} token: the boolean column type.
 	Bool() string
+	// Decimal renders the {{DECIMAL}} token: the exact-decimal column type whose
+	// comparison and ordering are numeric. SQLite stores the exact decimal string
+	// and attaches a numeric collation; PostgreSQL would render NUMERIC.
+	Decimal() string
 }
 
 // Dialect tokens substituted in the canonical schema text. They are the only
@@ -45,6 +50,7 @@ const (
 	tokenPrimaryKey = "{{PK}}"
 	tokenExternalID = "{{XID}}"
 	tokenBool       = "{{BOOL}}"
+	tokenDecimal    = "{{DECIMAL}}"
 )
 
 // renderSchema substitutes the dialect tokens in the canonical schema text. It
@@ -54,6 +60,7 @@ func renderSchema(d Dialect, schema string) string {
 		tokenPrimaryKey, d.PrimaryKey(),
 		tokenExternalID, d.ExternalID(),
 		tokenBool, d.Bool(),
+		tokenDecimal, d.Decimal(),
 	).Replace(schema)
 }
 
@@ -77,4 +84,12 @@ func (sqliteDialect) ExternalID() string {
 // Bool renders booleans as INTEGER (0/1), SQLite's storage class for them.
 func (sqliteDialect) Bool() string {
 	return "INTEGER"
+}
+
+// Decimal renders an exact-decimal column as TEXT with the DECIMAL collation
+// registered by the connector. The collation makes <, >, BETWEEN and ORDER BY
+// numeric and exact, and an index on the column inherits it, so range scans and
+// sorts run through the index. The empty string sorts below every number.
+func (sqliteDialect) Decimal() string {
+	return "TEXT COLLATE DECIMAL"
 }

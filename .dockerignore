@@ -62,3 +62,8 @@ officer-runtime.json
 docs/
 justfile
 Makefile
+
+# Python
+.ruff_cache
+.venv
+__pycache__

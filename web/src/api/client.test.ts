@@ -36,6 +36,14 @@ const createMarketDataInstance = (...args: Parameters<ReturnType<typeof api>["cr
   api().createMarketDataInstance(...args);
 const exportBusinessCsv = (...args: Parameters<ReturnType<typeof api>["exportBusinessCsv"]>) =>
   api().exportBusinessCsv(...args);
+const fetchAccounts = (...args: Parameters<ReturnType<typeof api>["fetchAccounts"]>) =>
+  api().fetchAccounts(...args);
+const fetchAssets = (...args: Parameters<ReturnType<typeof api>["fetchAssets"]>) =>
+  api().fetchAssets(...args);
+const fetchBalancesPage = (...args: Parameters<ReturnType<typeof api>["fetchBalancesPage"]>) =>
+  api().fetchBalancesPage(...args);
+const fetchGroups = (...args: Parameters<ReturnType<typeof api>["fetchGroups"]>) =>
+  api().fetchGroups(...args);
 const exportBackup = (...args: Parameters<ReturnType<typeof api>["exportBackup"]>) =>
   api().exportBackup(...args);
 const fetchSigningKeys = (...args: Parameters<ReturnType<typeof api>["fetchSigningKeys"]>) =>
@@ -104,6 +112,172 @@ const backupArchive: BackupArchive = {
   },
   data: { accounts: [] },
 };
+
+describe("accounts and groups client", () => {
+  it("builds account list filter query and normalizes position count", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        accounts: [
+          {
+            code: "acc-alpha",
+            title: "Alpha",
+            group: "",
+            notes: "",
+            blocked: false,
+            blockReason: "",
+            positionCount: 2,
+          },
+        ],
+      }),
+    );
+
+    const result = await fetchAccounts({
+      code: "acc*alpha",
+      codeMatch: "starts_with",
+      status: "blocked",
+      positionCountMode: "between",
+      positionCountMin: "1",
+      positionCountMax: "3",
+      blockReason: "halt",
+      blockReasonMatch: "contains",
+      group: "",
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/accounts?code=acc*alpha&codeMatch=starts_with&status=blocked&positionCountMode=between&positionCountMin=1&positionCountMax=3&blockReason=halt&group=",
+      expect.anything(),
+    );
+    expect(result[0]).toMatchObject({ code: "acc-alpha", positionCount: 2 });
+  });
+
+  it("builds group list filter query and normalizes aggregate counts", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        groups: [
+          {
+            code: "desk-alpha",
+            title: "Desk alpha",
+            notes: "",
+            blocked: false,
+            blockReason: "",
+            accountCount: 3,
+            positionCount: 4,
+          },
+        ],
+      }),
+    );
+
+    const result = await fetchGroups({
+      code: "desk",
+      status: "active",
+      positionCountMode: "less_than",
+      positionCountMax: "2",
+      accountCountMode: "between",
+      accountCountMin: "1",
+      accountCountMax: "5",
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/groups?code=desk&status=active&positionCountMode=less_than&positionCountMax=2&accountCountMode=between&accountCountMin=1&accountCountMax=5",
+      expect.anything(),
+    );
+    expect(result[0]).toMatchObject({
+      code: "desk-alpha",
+      accountCount: 3,
+      positionCount: 4,
+    });
+  });
+});
+
+describe("assets client", () => {
+  it("builds server-side asset filter and sort query", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        assets: [{ code: "AAPL", title: "Apple Inc.", assetClass: "equity" }],
+      }),
+    );
+
+    const result = await fetchAssets({
+      code: "apple",
+      codeMatch: "contains",
+      class: "equity",
+      classMatch: "exact",
+      sort: "assetClass",
+      order: "desc",
+    });
+
+    const url = new URL(String(vi.mocked(fetch).mock.calls[0][0]), "http://test");
+    expect(url.pathname).toBe("/app/api/v1/assets");
+    expect(url.searchParams.get("code")).toBe("apple");
+    expect(url.searchParams.get("codeMatch")).toBeNull();
+    expect(url.searchParams.get("class")).toBe("equity");
+    expect(url.searchParams.get("classMatch")).toBe("exact");
+    expect(url.searchParams.get("sort")).toBe("assetClass");
+    expect(url.searchParams.get("order")).toBe("desc");
+    expect(result[0]).toMatchObject({ code: "AAPL", assetClass: "equity" });
+  });
+
+  it("normalizes paged assets", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        assets: [{ code: "AAPL", title: "Apple Inc.", assetClass: "equity" }],
+        total: 12,
+      }),
+    );
+
+    const result = await api().fetchAssetsPage({ limit: 5, offset: 10 });
+
+    const url = new URL(String(vi.mocked(fetch).mock.calls[0][0]), "http://test");
+    expect(url.searchParams.get("limit")).toBe("5");
+    expect(url.searchParams.get("offset")).toBe("10");
+    expect(result).toMatchObject({
+      total: 12,
+      items: [{ code: "AAPL", assetClass: "equity" }],
+    });
+  });
+});
+
+describe("balances client", () => {
+  it("builds exact identity filters without match-mode parameters", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        balances: [
+          {
+            account: "desk-alpha",
+            asset: "AAPL",
+            available: "10",
+            held: "0",
+            incoming: "0",
+            averageEntryPrice: "100",
+            realizedPnl: "0",
+            updatedAt: "2026-06-24T00:00:00Z",
+          },
+        ],
+        total: 1,
+      }),
+    );
+
+    const result = await fetchBalancesPage({
+      account: "desk-alpha",
+      groupCode: "equity-desks",
+      asset: "AAPL",
+      sort: "account",
+      order: "asc",
+    });
+
+    const url = new URL(String(vi.mocked(fetch).mock.calls[0][0]), "http://test");
+    expect(url.pathname).toBe("/app/api/v1/balances");
+    expect(url.searchParams.get("account")).toBe("desk-alpha");
+    expect(url.searchParams.get("accountMatch")).toBeNull();
+    expect(url.searchParams.get("groupCode")).toBe("equity-desks");
+    expect(url.searchParams.get("asset")).toBe("AAPL");
+    expect(url.searchParams.get("assetMatch")).toBeNull();
+    expect(result).toMatchObject({
+      total: 1,
+      items: [{ account: "desk-alpha", asset: "AAPL" }],
+    });
+  });
+});
 
 describe("business CSV client", () => {
   it("exports CSV with entity, delimiter, zip flag, filters, and filename", async () => {
@@ -408,35 +582,58 @@ describe("business CSV client", () => {
 });
 
 describe("limits client", () => {
+  it("serializes policy list filters", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({ policies: [], total: 0 }),
+    );
+
+    const { fetchPoliciesPage } = api();
+    await fetchPoliciesPage({
+      account: "desk-alpha",
+      asset: "AAPL",
+      policy: "pnl_bounds",
+      limit: 25,
+      offset: 50,
+    });
+
+    const calledUrl = new URL(String(vi.mocked(fetch).mock.calls[0][0]), "http://test");
+    expect(calledUrl.pathname).toBe("/app/api/v1/limits");
+    expect(Object.fromEntries(calledUrl.searchParams.entries())).toEqual(
+      expect.objectContaining({
+        account: "desk-alpha",
+        asset: "AAPL",
+        policy: "pnl_bounds",
+        limit: "25",
+        offset: "50",
+      }),
+    );
+  });
+
   it("flattens typed limit-list responses for the dashboard view", async () => {
     vi.mocked(fetch).mockResolvedValue(
       jsonResponse({
-        limits: {
-          rateLimits: [
-            {
-              scope: "account",
-              account: "desk-alpha",
-              asset: "",
-              windowMs: 60000,
-              maxOrders: 20,
-            },
-          ],
-          orderSizeLimits: [
-            {
-              scope: "account_asset",
-              account: "desk-alpha",
-              asset: "AAPL",
-              maxQuantity: "10",
-              maxNotional: "1500",
-            },
-          ],
-          pnlBoundsLimits: [],
-        },
+        policies: [
+          {
+            kind: "rate_limit",
+            scope: "account",
+            account: "desk-alpha",
+            asset: "",
+            values: { rate: { windowMs: 60000, maxOrders: 20 } },
+          },
+          {
+            kind: "order_size_limit",
+            scope: "account_asset",
+            account: "desk-alpha",
+            asset: "AAPL",
+            values: { orderSize: { maxQuantity: "10", maxNotional: "1500" } },
+          },
+        ],
+        total: 2,
       }),
     );
 
     const { fetchLimits } = api();
-    const limits = await fetchLimits("desk-alpha");
+    const limits = await fetchLimits({ account: "desk-alpha" });
 
     expect(fetch).toHaveBeenCalledWith(
       "/app/api/v1/limits?account=desk-alpha",
@@ -511,6 +708,160 @@ describe("limits client", () => {
       }),
     ).rejects.toThrow("rate limit max_orders must be an integer greater than 0");
     expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("append-only list clients", () => {
+  it("normalizes adjustments, trades, and audit keyset envelopes", async () => {
+    const officerApi = api();
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(
+        jsonResponse({
+          adjustments: [
+            {
+              externalId: "adj-1",
+              account: "desk-alpha",
+              at: "2026-06-24T00:00:00Z",
+              source: "panel",
+              asset: "USD",
+              status: "accepted",
+              request: { asset: "USD" },
+            },
+          ],
+          total: 3,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          trades: [
+            {
+              externalId: "trd-1",
+              order: "ord-1",
+              account: "desk-alpha",
+              at: "2026-06-24T00:00:00Z",
+              source: "panel",
+              baseAsset: "AAPL",
+              quoteAsset: "USD",
+              side: "buy",
+              quantity: "10",
+              price: "100",
+              lockPrice: "99",
+            },
+          ],
+          total: 4,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          entries: [
+            {
+              externalId: "aud-1",
+              at: "2026-06-24T00:00:00Z",
+              actor: "operator",
+              actorTitle: "Operator",
+              action: "block",
+              account: "desk-alpha",
+              accountTitle: "Desk Alpha",
+              detail: "blocked",
+              source: "panel",
+            },
+          ],
+          total: 5,
+        }),
+      );
+
+    const adjustments = await officerApi.fetchAdjustmentsPage({
+      externalId: "adj-1",
+      account: "desk-alpha",
+      accountMatch: "contains",
+      asset: "USD",
+      assetMatch: "exact",
+      source: "panel",
+      status: "accepted",
+      atMode: "after",
+      atMin: "2026-06-24T00:00:00Z",
+      sort: "at",
+      order: "desc",
+      offset: 100,
+      limit: 50,
+    });
+    const trades = await officerApi.fetchTradesPage({
+      externalId: "trd-1",
+      account: "desk-alpha",
+      baseAsset: "AAP",
+      quoteAsset: "USD",
+      side: "buy",
+      source: "panel",
+      atMode: "between",
+      atMin: "2026-06-24T00:00:00Z",
+      atMax: "2026-06-25T00:00:00Z",
+      quantityMode: "gte",
+      quantityMin: "10",
+      priceMode: "lt",
+      priceMin: "150",
+      lockPriceMode: "neq",
+      lockPriceMin: "99",
+      sort: "at",
+      order: "desc",
+      offset: 50,
+      limit: 25,
+    });
+    const audit = await officerApi.fetchAuditPage({
+      externalId: "aud-1",
+      account: "desk-alpha",
+      accountMatch: "contains",
+      actor: "operator",
+      actorMatch: "contains",
+      source: "panel",
+      category: "control",
+      actions: ["block", "unblock"],
+      atMode: "before",
+      atMax: "2026-06-25T00:00:00Z",
+      offset: 20,
+      limit: 10,
+    });
+
+    expect(adjustments).toMatchObject({
+      total: 3,
+      items: [{ externalId: "adj-1" }],
+    });
+    expect(trades).toMatchObject({
+      total: 4,
+      items: [{ externalId: "trd-1" }],
+    });
+    expect(audit).toMatchObject({
+      total: 5,
+      items: [{ externalId: "aud-1" }],
+    });
+
+    const adjustmentUrl = new URL(
+      String(vi.mocked(fetch).mock.calls[0][0]),
+      "http://test",
+    );
+    const tradeUrl = new URL(
+      String(vi.mocked(fetch).mock.calls[1][0]),
+      "http://test",
+    );
+    const auditUrl = new URL(
+      String(vi.mocked(fetch).mock.calls[2][0]),
+      "http://test",
+    );
+    expect(adjustmentUrl.searchParams.get("offset")).toBe("100");
+    expect(adjustmentUrl.searchParams.get("id")).toBe("adj-1");
+    expect(adjustmentUrl.searchParams.get("status")).toBe("accepted");
+    expect(tradeUrl.searchParams.get("quantityMode")).toBe("gte");
+    expect(tradeUrl.searchParams.get("offset")).toBe("50");
+    expect(tradeUrl.searchParams.get("id")).toBe("trd-1");
+    expect(tradeUrl.searchParams.get("lockPriceMode")).toBe("neq");
+    expect(tradeUrl.searchParams.get("accountMatch")).toBeNull();
+    expect(tradeUrl.searchParams.get("baseAssetMatch")).toBeNull();
+    expect(tradeUrl.searchParams.get("quoteAssetMatch")).toBeNull();
+    expect(auditUrl.searchParams.get("actions")).toBe("block,unblock");
+    expect(auditUrl.searchParams.get("category")).toBe("control");
+    expect(auditUrl.searchParams.get("id")).toBe("aud-1");
+    expect(auditUrl.searchParams.get("offset")).toBe("20");
+    expect(auditUrl.searchParams.get("sort")).toBeNull();
+    expect(auditUrl.searchParams.get("order")).toBeNull();
   });
 });
 
@@ -1341,7 +1692,6 @@ describe("Orders createOrder submit lifecycle", () => {
       "/app/api/v1/orders/submit",
       expect.objectContaining({
         body: JSON.stringify({
-          externalId: "ord_supplied_000001",
           account: "desk-alpha",
           baseAsset: "AAPL",
           quoteAsset: "USD",
@@ -1349,6 +1699,7 @@ describe("Orders createOrder submit lifecycle", () => {
           amountKind: "quantity",
           amountValue: "100",
           mode: "hold",
+          id: "ord_supplied_000001",
         }),
         signal: controller.signal,
       }),

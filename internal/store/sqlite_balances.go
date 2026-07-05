@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// Spot-funds balances group of the SQLite store. Balances are keyed by the
+// Spot-funds balance group of the SQLite store. Balances are keyed by the
 // natural composite primary key (account_id, asset_id); there is no surrogate
 // external id and no external id outward. Account and asset are always
 // addressed and surfaced by code. The realized_pnl column is delta-accumulated
@@ -32,9 +32,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
+	fwstore "go.openpit.dev/officer/framework/store"
 )
 
 // balanceSelect is the shared projection for balance reads. The JOINs surface
@@ -44,9 +46,10 @@ const balanceSelect = `
 SELECT a.code, ast.code,
        b.available, b.held, b.incoming, b.realized_pnl,
        b.average_entry_price, b.updated_at
-FROM balances b
-JOIN accounts a   ON a.id  = b.account_id
-JOIN assets   ast ON ast.id = b.asset_id`
+FROM balance b
+JOIN account a   ON a.id  = b.account_id
+LEFT JOIN account_group g ON g.id = a.group_id
+JOIN asset   ast ON ast.id = b.asset_id`
 
 // UpsertBalance inserts or replaces the balance snapshot for the
 // (account, asset) named by balance. The caller supplies all amount fields
@@ -68,9 +71,9 @@ func (r *realmStore) UpsertBalance(ctx context.Context, balance domain.Balance) 
 	}
 	_, err = r.db().ExecContext(
 		ctx,
-		`INSERT OR REPLACE INTO balances
-		 (account_id, asset_id, available, held, incoming,
-		  realized_pnl, average_entry_price, updated_at)
+		`INSERT OR REPLACE INTO balance
+		 (account_id, asset_id, available, held,
+		  incoming, realized_pnl, average_entry_price, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		accountID, assetID,
 		settleOrZero(balance.Available),
@@ -114,36 +117,112 @@ func (r *realmStore) GetBalance(
 func (r *realmStore) ListBalances(
 	ctx context.Context, account domain.AccountID, asset string,
 ) ([]domain.Balance, error) {
-	q := balanceSelect + ` WHERE 1 = 1`
-	args := make([]any, 0, 2)
-	if account != "" {
-		q += ` AND a.code = ?`
-		args = append(args, account.String())
-	}
-	if asset != "" {
-		q += ` AND ast.code = ?`
-		args = append(args, asset)
-	}
-	q += ` ORDER BY a.code, ast.code`
-
-	rows, err := r.db().QueryContext(ctx, q, args...)
+	page, err := r.ListBalanceRows(ctx, fwstore.BalanceListFilter{
+		Account: fwstore.ExactTextMatcher(account.String()),
+		Asset:   fwstore.ExactTextMatcher(asset),
+	})
 	if err != nil {
-		return nil, fmt.Errorf("store: list balances: %w", err)
+		return nil, err
+	}
+	result := make([]domain.Balance, 0, len(page.Rows))
+	for _, row := range page.Rows {
+		result = append(result, row.Balance)
+	}
+	return result, nil
+}
+
+// ListBalanceRows returns balances matching filter, with total count before
+// paging.
+func (r *realmStore) ListBalanceRows(
+	ctx context.Context, filter fwstore.BalanceListFilter,
+) (fwstore.BalanceListPage, error) {
+	where, args := balanceListWhere(filter)
+	countQuery := `SELECT COUNT(*)
+FROM balance b
+JOIN account a   ON a.id  = b.account_id
+LEFT JOIN account_group g ON g.id = a.group_id
+JOIN asset   ast ON ast.id = b.asset_id` + where
+	var total int
+	if err := r.db().QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return fwstore.BalanceListPage{}, fmt.Errorf("store: count balance rows: %w", err)
+	}
+
+	queryArgs := append([]any{}, args...)
+	query := balanceSelect + where + balanceListOrderBy(filter.Sort)
+	if filter.Page.Limit > 0 {
+		query += ` LIMIT ? OFFSET ?`
+		queryArgs = append(queryArgs, filter.Page.Limit, max(filter.Page.Offset, 0))
+	}
+	rows, err := r.db().QueryContext(ctx, query, queryArgs...)
+	if err != nil {
+		return fwstore.BalanceListPage{}, fmt.Errorf("store: list balance rows: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	result := make([]domain.Balance, 0)
+	result := make([]fwstore.BalanceListRow, 0)
 	for rows.Next() {
 		b, err := scanBalance(rows)
 		if err != nil {
-			return nil, err
+			return fwstore.BalanceListPage{}, err
 		}
-		result = append(result, b)
+		result = append(result, fwstore.BalanceListRow{Balance: b})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: iterate balances: %w", err)
+		return fwstore.BalanceListPage{}, fmt.Errorf("store: iterate balance rows: %w", err)
 	}
-	return result, nil
+	return fwstore.BalanceListPage{Rows: result, Total: total}, nil
+}
+
+func balanceListWhere(filter fwstore.BalanceListFilter) (string, []any) {
+	clauses := make([]string, 0)
+	args := make([]any, 0)
+	appendMatcher(&clauses, &args, "a.code", filter.Account)
+	if filter.GroupCode != nil {
+		if *filter.GroupCode == "" {
+			clauses = append(clauses, "a.group_id IS NULL")
+		} else {
+			clauses = append(clauses, "g.code = ?")
+			args = append(args, *filter.GroupCode)
+		}
+	}
+	appendMatcher(&clauses, &args, "ast.code", filter.Asset)
+	appendDecimalRangeFilter(&clauses, &args, "b.available", filter.Available)
+	appendDecimalRangeFilter(&clauses, &args, "b.held", filter.Held)
+	appendDecimalRangeFilter(&clauses, &args, "b.incoming", filter.Incoming)
+	appendDecimalRangeFilter(
+		&clauses, &args, "b.average_entry_price", filter.AverageEntryPrice,
+	)
+	appendDecimalRangeFilter(&clauses, &args, "b.realized_pnl", filter.RealizedPnl)
+	appendTimeRangeFilter(&clauses, &args, "b.updated_at", filter.UpdatedAt)
+	if len(clauses) == 0 {
+		return "", args
+	}
+	return "\nWHERE " + strings.Join(clauses, " AND "), args
+}
+
+func balanceListOrderBy(sort fwstore.SortSpec) string {
+	columns := map[string]string{
+		"account":           "a.code",
+		"asset":             "ast.code",
+		"available":         "b.available",
+		"held":              "b.held",
+		"incoming":          "b.incoming",
+		"averageEntryPrice": "b.average_entry_price",
+		"realizedPnl":       "b.realized_pnl",
+		"updatedAt":         "b.updated_at",
+	}
+	column := columns[sort.Column]
+	if column == "" {
+		column = "a.code"
+	}
+	direction := "ASC"
+	tieDirection := "ASC"
+	if sort.Descending {
+		direction = "DESC"
+		tieDirection = "DESC"
+	}
+	return "\nORDER BY " + column + " " + direction +
+		", a.code " + tieDirection + ", ast.code " + tieDirection
 }
 
 // DeleteBalance removes the balance for (account, asset). Returns
@@ -153,9 +232,9 @@ func (r *realmStore) DeleteBalance(
 ) error {
 	res, err := r.db().ExecContext(
 		ctx,
-		`DELETE FROM balances
-		 WHERE account_id = (SELECT id FROM accounts WHERE code = ?)
-		   AND asset_id   = (SELECT id FROM assets   WHERE code = ?)`,
+		`DELETE FROM balance
+		 WHERE account_id = (SELECT id FROM account WHERE code = ?)
+		   AND asset_id   = (SELECT id FROM asset   WHERE code = ?)`,
 		account.String(), asset,
 	)
 	if err != nil {

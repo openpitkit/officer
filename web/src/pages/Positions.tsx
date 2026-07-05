@@ -15,17 +15,11 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import {
-  useDeferredValue,
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import {
   ChevronDown,
   ChevronRight,
   Coins,
-  Copy,
   Download,
   Plus,
   SlidersHorizontal,
@@ -34,19 +28,43 @@ import {
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
-import { ApiError, useOfficerApi } from "@/framework";
+import {
+  ActionButton,
+  ApiError,
+  AutocompleteFilterField,
+  CloneButton,
+  ColumnHeader,
+  ExactIdField,
+  FieldLabel,
+  FilterChip,
+  FilterBar,
+  FilterByButton,
+  IdCell,
+  MoreFiltersButton,
+  NumberRangeFilter,
+  reportInvalidFilterControls,
+  RowActions,
+  Segmented,
+  ShareLinkButton,
+  SortableHeader,
+  TimeRangeFilter,
+  useOfficerApi,
+} from "@/framework";
 import { formatDate, formatTime } from "@/i18n/format";
 import type {
   Adjustment,
   AdjustmentMode,
   Balance,
+  BalanceListFilters,
   BoundsPair,
+  RangeFilterMode,
+  SortOrder,
   Source,
 } from "@/api/types";
-import { useAccounts } from "@/api/useAccounts";
-import { useAdjustments } from "@/api/useAdjustments";
-import { useBalances } from "@/api/useBalances";
+import { useAdjustmentsPage } from "@/api/useAdjustments";
+import { useBalancesPage } from "@/api/useBalances";
 import { Autocomplete } from "@/components/Autocomplete";
+import { sortDirection } from "@/lib/sortDirection";
 import {
   EmptyState,
   ErrorBanner,
@@ -62,7 +80,6 @@ import {
 } from "@/components/TableControls";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -89,12 +106,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
-  hasNextPage,
   knownPageCount,
-  pageFetchLimit,
-  slicePage,
 } from "@/lib/tablePagination";
 import { usePersistentPageSize } from "@/lib/tablePageSize";
+import { shareUrl } from "@/lib/shareLink";
+import { DEFAULT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from "@/lib/useDebounce";
+import { operatorOptions } from "@/lib/dataControlLabels";
 import { cn } from "@/lib/utils";
 
 // ---------------------------------------------------------------------------
@@ -106,6 +123,33 @@ function errMessage(err: unknown): string {
     return err.message;
   }
   return err instanceof Error ? err.message : String(err);
+}
+
+function positionsFilterHref({
+  tab,
+  account,
+  asset,
+  group,
+}: {
+  tab?: "positions" | "history";
+  account?: string;
+  asset?: string;
+  group?: string;
+}): string {
+  const query = new URLSearchParams();
+  if (tab === "history") {
+    query.set("tab", "history");
+  }
+  if (account !== undefined && account !== "") {
+    query.set("account", account);
+  }
+  if (asset !== undefined && asset !== "") {
+    query.set("asset", asset);
+  }
+  if (group !== undefined && group !== "") {
+    query.set("group", group);
+  }
+  return shareUrl("/positions", query);
 }
 
 /** Split a localized timestamp so the date and time are rendered as
@@ -247,12 +291,311 @@ function addDecimalStrings(left: string, right: string): string | null {
   );
 }
 
+function sameStrings(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, i) => value === right[i]);
+}
+
 function isDecimal(value: string): boolean {
   return parseDecimal(value) !== null;
 }
 
 function hasValue(value: string | undefined): boolean {
   return (value ?? "").trim() !== "";
+}
+
+type BalanceRangeKey =
+  | "available"
+  | "held"
+  | "incoming"
+  | "averageEntryPrice"
+  | "realizedPnl"
+  | "updatedAt";
+
+type BalanceRangeDraft = {
+  mode: RangeFilterMode;
+  min: string;
+  max: string;
+};
+
+type BalanceRangeDrafts = Record<BalanceRangeKey, BalanceRangeDraft>;
+
+const EMPTY_BALANCE_RANGES: Record<BalanceRangeKey, BalanceRangeDraft> = {
+  available: { mode: "all", min: "", max: "" },
+  held: { mode: "all", min: "", max: "" },
+  incoming: { mode: "all", min: "", max: "" },
+  averageEntryPrice: { mode: "all", min: "", max: "" },
+  realizedPnl: { mode: "all", min: "", max: "" },
+  updatedAt: { mode: "all", min: "", max: "" },
+};
+
+const NUMERIC_RANGE_KEYS: Exclude<BalanceRangeKey, "updatedAt">[] = [
+  "available",
+  "held",
+  "incoming",
+  "averageEntryPrice",
+  "realizedPnl",
+];
+
+/** Seed the balance range drafts from URL params so a shared link restores the
+ *  full range filter set. Numeric ranges mirror the API `<key>Mode/Min/Max`
+ *  params; the updatedAt range mirrors `updatedAtMode/updatedAfter/updatedBefore`. */
+function balanceRangesFromParams(
+  params: URLSearchParams,
+): BalanceRangeDrafts {
+  const ranges: BalanceRangeDrafts = {
+    available: { ...EMPTY_BALANCE_RANGES.available },
+    held: { ...EMPTY_BALANCE_RANGES.held },
+    incoming: { ...EMPTY_BALANCE_RANGES.incoming },
+    averageEntryPrice: { ...EMPTY_BALANCE_RANGES.averageEntryPrice },
+    realizedPnl: { ...EMPTY_BALANCE_RANGES.realizedPnl },
+    updatedAt: { ...EMPTY_BALANCE_RANGES.updatedAt },
+  };
+  for (const key of NUMERIC_RANGE_KEYS) {
+    const mode = params.get(`${key}Mode`);
+    if (mode !== null) {
+      ranges[key] = {
+        mode: mode as RangeFilterMode,
+        min: params.get(`${key}Min`) ?? "",
+        max: params.get(`${key}Max`) ?? "",
+      };
+    }
+  }
+  const updatedMode = params.get("updatedAtMode");
+  if (updatedMode !== null) {
+    ranges.updatedAt = {
+      mode: updatedMode as RangeFilterMode,
+      min: params.get("updatedAfter") ?? "",
+      max: params.get("updatedBefore") ?? "",
+    };
+  }
+  return ranges;
+}
+
+function cloneBalanceRanges(ranges: BalanceRangeDrafts): BalanceRangeDrafts {
+  return {
+    available: { ...ranges.available },
+    held: { ...ranges.held },
+    incoming: { ...ranges.incoming },
+    averageEntryPrice: { ...ranges.averageEntryPrice },
+    realizedPnl: { ...ranges.realizedPnl },
+    updatedAt: { ...ranges.updatedAt },
+  };
+}
+
+/** Serialize the active balance range drafts into a `URLSearchParams`, omitting
+ *  ranges left at their default (`mode === "all"`). */
+function appendBalanceRanges(
+  query: URLSearchParams,
+  ranges: BalanceRangeDrafts,
+): void {
+  for (const key of NUMERIC_RANGE_KEYS) {
+    const draft = ranges[key];
+    if (draft.mode === "all") {
+      continue;
+    }
+    query.set(`${key}Mode`, draft.mode);
+    if (draft.min.trim() !== "") {
+      query.set(`${key}Min`, draft.min.trim());
+    }
+    if (draft.max.trim() !== "") {
+      query.set(`${key}Max`, draft.max.trim());
+    }
+  }
+  const updated = ranges.updatedAt;
+  if (updated.mode !== "all") {
+    query.set("updatedAtMode", updated.mode);
+    if (updated.min.trim() !== "") {
+      query.set("updatedAfter", updated.min.trim());
+    }
+    if (updated.max.trim() !== "") {
+      query.set("updatedBefore", updated.max.trim());
+    }
+  }
+}
+
+function rangeValue(value: string): string {
+  return value.trim();
+}
+
+function localDateTimeFilter(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed === "") {
+    return "";
+  }
+  const date = new Date(trimmed);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  return date.toISOString();
+}
+
+function addBalanceRange(
+  filter: BalanceListFilters,
+  key: Exclude<BalanceRangeKey, "updatedAt">,
+  draft: BalanceRangeDraft,
+) {
+  const target = filter as Record<string, string | undefined>;
+  const min = rangeValue(draft.min);
+  const max = rangeValue(draft.max);
+  if (draft.mode === "all") {
+    return;
+  }
+  if (draft.mode === "greater_than" && min !== "") {
+    target[`${key}Mode`] = draft.mode;
+    target[`${key}Min`] = min;
+  } else if (
+    (draft.mode === "lt" || draft.mode === "lte" || draft.mode === "less_than") &&
+    min !== ""
+  ) {
+    target[`${key}Mode`] = draft.mode;
+    target[`${key}Max`] = min;
+  } else if (draft.mode === "between" && min !== "" && max !== "") {
+    target[`${key}Mode`] = draft.mode;
+    target[`${key}Min`] = min;
+    target[`${key}Max`] = max;
+  } else if (min !== "") {
+    target[`${key}Mode`] = draft.mode;
+    target[`${key}Min`] = min;
+  }
+}
+
+function addUpdatedAtRange(
+  filter: BalanceListFilters,
+  draft: BalanceRangeDraft,
+) {
+  const min = localDateTimeFilter(draft.min);
+  const max = localDateTimeFilter(draft.max);
+  if (draft.mode === "all") {
+    return;
+  }
+  if (
+    (draft.mode === "greater_than" || draft.mode === "after") &&
+    min !== ""
+  ) {
+    filter.updatedAtMode = draft.mode;
+    filter.updatedAfter = min;
+  } else if (draft.mode === "less_than" && max !== "") {
+    filter.updatedAtMode = draft.mode;
+    filter.updatedBefore = max;
+  } else if (draft.mode === "before" && min !== "") {
+    filter.updatedAtMode = draft.mode;
+    filter.updatedBefore = min;
+  } else if (draft.mode === "between" && min !== "" && max !== "") {
+    filter.updatedAtMode = draft.mode;
+    filter.updatedAfter = min;
+    filter.updatedBefore = max;
+  }
+}
+
+function rangeChipValue(
+  operator: string,
+  mode: RangeFilterMode,
+  min: string,
+  max: string,
+): string {
+  const from = min.trim();
+  const to = max.trim();
+  if (mode === "between") {
+    return [operator, from, to].filter(Boolean).join(" ");
+  }
+  if (mode === "less_than" || mode === "before") {
+    return [operator, to || from].filter(Boolean).join(" ");
+  }
+  return [operator, from || to].filter(Boolean).join(" ");
+}
+
+function hasActiveRange(draft: BalanceRangeDraft): boolean {
+  return (
+    draft.mode !== "all" &&
+    (draft.min.trim() !== "" || draft.max.trim() !== "")
+  );
+}
+
+function PositionRangeFilter({
+  label,
+  draft,
+  inputType = "text",
+  onChange,
+}: {
+  label: string;
+  draft: BalanceRangeDraft;
+  inputType?: "text" | "datetime-local";
+  onChange: (next: BalanceRangeDraft) => void;
+}) {
+  const { t: tc } = useTranslation();
+  const operator =
+    draft.mode === "all"
+      ? inputType === "datetime-local"
+        ? "after"
+        : "eq"
+      : draft.mode;
+  return (
+    <div className="grid gap-1">
+      <FieldLabel>{label}</FieldLabel>
+      <div>
+        {inputType === "datetime-local" ? (
+          <TimeRangeFilter
+            operator={operator}
+            from={draft.min}
+            to={draft.max}
+            fluid
+            showPresets={false}
+            operators={operatorOptions(tc, "time")}
+            operatorAriaLabel={label}
+            clearLabel={tc("filters.clearField")}
+            onOperatorChange={(next) =>
+              onChange({ ...draft, mode: next as RangeFilterMode })
+            }
+            onFromChange={(value) =>
+              onChange({
+                ...draft,
+                mode:
+                  draft.mode === "all" ? (operator as RangeFilterMode) : draft.mode,
+                min: value,
+              })
+            }
+            onToChange={(value) =>
+              onChange({
+                ...draft,
+                mode:
+                  draft.mode === "all" ? (operator as RangeFilterMode) : draft.mode,
+                max: value,
+              })
+            }
+          />
+        ) : (
+          <NumberRangeFilter
+            operator={operator}
+            min={draft.min}
+            max={draft.max}
+            fluid
+            operators={operatorOptions(tc, "number")}
+            operatorAriaLabel={label}
+            clearLabel={tc("filters.clearField")}
+            onOperatorChange={(next) =>
+              onChange({ ...draft, mode: next as RangeFilterMode })
+            }
+            onMinChange={(value) =>
+              onChange({
+                ...draft,
+                mode:
+                  draft.mode === "all" ? (operator as RangeFilterMode) : draft.mode,
+                min: value,
+              })
+            }
+            onMaxChange={(value) =>
+              onChange({
+                ...draft,
+                mode:
+                  draft.mode === "all" ? (operator as RangeFilterMode) : draft.mode,
+                max: value,
+              })
+            }
+          />
+        )}
+      </div>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -337,7 +680,7 @@ function AveragePriceIntentRow({
   const label = t("balances.columns.avgEntryPrice");
 
   return (
-    <div className="grid gap-2 border-t border-border px-3 py-3 md:grid-cols-[minmax(8rem,1fr)_8rem_minmax(10rem,1.2fr)_minmax(8rem,1fr)] md:items-end">
+    <div className="grid gap-4 border-t border-border px-3 py-3 md:grid-cols-[minmax(8rem,1fr)_8rem_minmax(10rem,1.2fr)_minmax(8rem,1fr)] md:items-end">
       <div>
         <p className="text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted">
           {label}
@@ -367,6 +710,8 @@ function AveragePriceIntentRow({
           inputClassName="h-8 text-right text-xs"
           disabled={disabled}
           aria-label={t("dialog.fields.avgEntryPrice")}
+          clearLabel={t("common:filters.clearField")}
+          onClear={() => onChange("")}
           onChange={onChange}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
@@ -381,7 +726,7 @@ function AveragePriceIntentRow({
         </p>
         <p
           className={cn(
-            "nums mt-1 text-sm",
+            "nums mt-1 text-sm md:pr-3 md:text-right",
             invalid
               ? "text-[var(--danger)]"
               : result
@@ -422,7 +767,7 @@ function AmountIntentRow({
   const invalid = hasValue(field.value) && result === null;
 
   return (
-    <div className="grid gap-2 border-t border-border px-3 py-3 md:grid-cols-[minmax(8rem,1fr)_8rem_minmax(10rem,1.2fr)_minmax(8rem,1fr)] md:items-end">
+    <div className="grid gap-4 border-t border-border px-3 py-3 md:grid-cols-[minmax(8rem,1fr)_8rem_minmax(10rem,1.2fr)_minmax(8rem,1fr)] md:items-end">
       <div>
         <p className="text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted">
           {label}
@@ -466,6 +811,8 @@ function AmountIntentRow({
           inputClassName="h-8 text-right text-xs"
           disabled={disabled}
           aria-label={t("panel.amountAriaLabel", { field: label })}
+          clearLabel={t("common:filters.clearField")}
+          onClear={() => onChange({ ...field, value: "" })}
           onChange={(value) => onChange({ ...field, value })}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
@@ -480,7 +827,7 @@ function AmountIntentRow({
         </p>
         <p
           className={cn(
-            "nums mt-1 text-sm",
+            "nums mt-1 text-sm md:pr-3 md:text-right",
             invalid
               ? "text-[var(--danger)]"
               : result
@@ -536,6 +883,8 @@ function BoundsIntentRow({
           placeholder={t("panel.noChange")}
           inputClassName="h-8 text-right text-xs"
           disabled={disabled}
+          clearLabel={t("common:filters.clearField")}
+          onClear={() => onChange({ ...field, lower: "" })}
           onChange={(lower) => onChange({ ...field, lower })}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
@@ -556,6 +905,8 @@ function BoundsIntentRow({
           placeholder={t("panel.noChange")}
           inputClassName="h-8 text-right text-xs"
           disabled={disabled}
+          clearLabel={t("common:filters.clearField")}
+          onClear={() => onChange({ ...field, upper: "" })}
           onChange={(upper) => onChange({ ...field, upper })}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
@@ -652,8 +1003,7 @@ function AdjustmentPanel({
     amountFieldsValid &&
     avgPriceValid &&
     allBoundsValid &&
-    !busy &&
-    outcome === null;
+    !busy;
 
   const submit = async () => {
     if (!trimAccount) {
@@ -674,7 +1024,6 @@ function AdjustmentPanel({
     }
     setBusy(true);
     setError(null);
-    setOutcome(null);
     try {
       const body: Parameters<typeof createAdjustment>[1] = {
         asset: trimAsset,
@@ -719,7 +1068,9 @@ function AdjustmentPanel({
     }
   };
 
-  const disabled = busy || outcome !== null;
+  // Fields stay editable after a submit so the operator can tweak the same
+  // values and submit again; the outcome banner reflects the latest result.
+  const disabled = busy;
 
   return (
     <div
@@ -734,12 +1085,6 @@ function AdjustmentPanel({
             <p className="text-sm font-bold text-text">
               {t("panel.title")}
             </p>
-            <Badge variant="neutral">
-              {trimAccount || t("panel.emptyAccount")}
-            </Badge>
-            <Badge variant="neutral">
-              {trimAsset || t("panel.emptyAsset")}
-            </Badge>
           </div>
         </div>
         <Button
@@ -752,45 +1097,47 @@ function AdjustmentPanel({
         </Button>
       </div>
 
-      {lockIdentity ? null : (
-        <div className="grid gap-3 md:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label htmlFor="adjust-panel-account">
-              {t("dialog.fields.account")}
-            </Label>
-            <Autocomplete
-              id="adjust-panel-account"
-              value={account}
-              spellCheck={false}
-              placeholder="acc-1"
-              suggestions={accountSuggestions}
-              disabled={disabled}
-              onChange={setAccount}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="adjust-panel-asset">
-              {t("dialog.fields.asset")}
-            </Label>
-            <Autocomplete
-              id="adjust-panel-asset"
-              value={asset}
-              spellCheck={false}
-              placeholder="AAPL"
-              suggestions={assetSuggestions}
-              disabled={disabled}
-              onChange={setAsset}
-            />
-          </div>
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="space-y-1.5">
+          <Label htmlFor="adjust-panel-account">
+            {t("dialog.fields.account")}
+          </Label>
+          <Autocomplete
+            id="adjust-panel-account"
+            value={account}
+            spellCheck={false}
+            placeholder="acc-1"
+            suggestions={accountSuggestions}
+            disabled={disabled || lockIdentity}
+            onChange={setAccount}
+            onClear={() => setAccount("")}
+            clearLabel={t("common:filters.clearField")}
+          />
         </div>
-      )}
+        <div className="space-y-1.5">
+          <Label htmlFor="adjust-panel-asset">
+            {t("dialog.fields.asset")}
+          </Label>
+          <Autocomplete
+            id="adjust-panel-asset"
+            value={asset}
+            spellCheck={false}
+            placeholder="AAPL"
+            suggestions={assetSuggestions}
+            disabled={disabled || lockIdentity}
+            onChange={setAsset}
+            onClear={() => setAsset("")}
+            clearLabel={t("common:filters.clearField")}
+          />
+        </div>
+      </div>
 
       <div className="border border-border bg-bg">
-        <div className="grid grid-cols-[minmax(8rem,1fr)_8rem_minmax(10rem,1.2fr)_minmax(8rem,1fr)] gap-2 px-3 py-2 text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted max-md:hidden">
+        <div className="grid grid-cols-[minmax(8rem,1fr)_8rem_minmax(10rem,1.2fr)_minmax(8rem,1fr)] gap-4 px-3 py-2 text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted max-md:hidden">
           <span>{t("panel.columns.current")}</span>
           <span>{t("panel.columns.intent")}</span>
           <span>{t("panel.columns.amount")}</span>
-          <span>{t("panel.columns.result")}</span>
+          <span className="text-right">{t("panel.columns.result")}</span>
         </div>
         <AmountIntentRow
           id="available"
@@ -900,11 +1247,9 @@ function AdjustmentPanel({
         <Button variant="outline" size="sm" onClick={onClose} disabled={busy}>
           {outcome ? t("dialog.footer.close") : t("actions.cancel", { ns: "common" })}
         </Button>
-        {!outcome && (
-          <Button size="sm" onClick={() => void submit()} disabled={!canSubmit}>
-            {busy ? t("panel.saving") : t("panel.submit")}
-          </Button>
-        )}
+        <Button size="sm" onClick={() => void submit()} disabled={!canSubmit}>
+          {busy ? t("panel.saving") : t("panel.submit")}
+        </Button>
       </div>
     </div>
   );
@@ -915,6 +1260,9 @@ function BalanceEditRow({
   expanded,
   onToggle,
   onClose,
+  onShowHistory,
+  onFilterAccount,
+  onFilterAsset,
   accountSuggestions,
   assetSuggestions,
   onApplied,
@@ -923,17 +1271,55 @@ function BalanceEditRow({
   expanded: boolean;
   onToggle: () => void;
   onClose: () => void;
+  onShowHistory: (account: string, asset: string) => void;
+  onFilterAccount: (account: string) => void;
+  onFilterAsset: (asset: string) => void;
   accountSuggestions: string[];
   assetSuggestions: string[];
   onApplied: () => void;
 }) {
   const { t } = useTranslation("positions");
+  const { t: tc } = useTranslation("common");
   const b = balance;
   return (
     <>
-      <TableRow className={cn("hover:bg-transparent", expanded && "bg-accent-dim")}>
-        <TableCell className="nums text-xs">{b.account}</TableCell>
-        <TableCell className="nums text-xs">{b.asset}</TableCell>
+      {/* Clicking the row body opens this position's adjustment history,
+          pre-filtered by account + asset. The adjust control below stops
+          propagation so it stays a distinct, explicit action. */}
+      <TableRow
+        className={cn("cursor-pointer", expanded && "bg-accent-dim")}
+        onClick={() => onShowHistory(b.account, b.asset)}
+      >
+        <TableCell className="nums text-xs">
+          <div className="flex min-w-0 items-center gap-1">
+            <IdCell
+              value={b.account}
+              copyTitle={t("common:rowActions.copyId")}
+              copiedTitle={t("common:rowActions.copiedId")}
+            />
+            <span className="ml-auto flex shrink-0 items-center">
+              <FilterByButton
+                size={28}
+                title={tc("rowActions.filterByTitle", { field: b.account })}
+                href={positionsFilterHref({ account: b.account })}
+                onClick={() => onFilterAccount(b.account)}
+              />
+            </span>
+          </div>
+        </TableCell>
+        <TableCell className="nums text-xs">
+          <div className="flex min-w-0 items-center gap-1">
+            <span className="min-w-0 truncate">{b.asset}</span>
+            <span className="ml-auto flex shrink-0 items-center">
+              <FilterByButton
+                size={28}
+                title={tc("rowActions.filterByTitle", { field: b.asset })}
+                href={positionsFilterHref({ asset: b.asset })}
+                onClick={() => onFilterAsset(b.asset)}
+              />
+            </span>
+          </div>
+        </TableCell>
         <TableCell className="nums text-right text-xs">{b.available}</TableCell>
         <TableCell className="nums text-right text-xs">{b.held}</TableCell>
         <TableCell className="nums text-right text-xs">{b.incoming}</TableCell>
@@ -949,20 +1335,19 @@ function BalanceEditRow({
           <SplitTime iso={b.updatedAt} />
         </TableCell>
         <TableCell className="text-right">
-          <Button
-            variant="outline"
-            size="sm"
-            className={cn(expanded && "border-accent bg-accent-dim text-accent")}
-            onClick={onToggle}
-            aria-expanded={expanded}
-            aria-label={t("panel.openAriaLabel", {
-              account: b.account,
-              asset: b.asset,
-            })}
-          >
-            <SlidersHorizontal className="h-3.5 w-3.5" />
-            {t("panel.open")}
-          </Button>
+          <RowActions align="flex-end">
+            <ActionButton
+              icon="edit"
+              title={t("panel.openAriaLabel", {
+                account: b.account,
+                asset: b.asset,
+              })}
+              active={expanded}
+              onClick={() => {
+                onToggle();
+              }}
+            />
+          </RowActions>
         </TableCell>
       </TableRow>
       {expanded && (
@@ -1012,27 +1397,21 @@ function BalanceDraftRow({
   return (
     <>
       <TableRow className={cn("hover:bg-transparent", expanded && "bg-accent-dim")}>
-        <TableCell className="nums text-xs text-muted-lt">
-          {defaultAccount || t("panel.emptyAccount")}
-        </TableCell>
-        <TableCell className="nums text-xs text-muted-lt">
-          {defaultAsset || t("panel.emptyAsset")}
-        </TableCell>
-        <TableCell className="text-right text-xs text-muted-lt" colSpan={6}>
-          {t("inline.newRowHint")}
+        <TableCell
+          className="text-xs italic text-muted-lt"
+          colSpan={BALANCE_TABLE_COLS - 1}
+        >
+          {t("inline.newPosition")}
         </TableCell>
         <TableCell className="text-right">
-          <Button
-            variant="outline"
-            size="sm"
-            className={cn(expanded && "border-accent bg-accent-dim text-accent")}
-            onClick={onToggle}
-            aria-expanded={expanded}
-            aria-label={t("panel.openDraftAriaLabel")}
-          >
-            <SlidersHorizontal className="h-3.5 w-3.5" />
-            {t("panel.open")}
-          </Button>
+          <RowActions align="flex-end">
+            <ActionButton
+              icon="edit"
+              title={t("panel.openDraftAriaLabel")}
+              active={expanded}
+              onClick={onToggle}
+            />
+          </RowActions>
         </TableCell>
       </TableRow>
       {expanded && (
@@ -1057,20 +1436,32 @@ function BalanceDraftRow({
 
 function BalancesTable({
   balances,
+  activeSort,
+  activeOrder,
   defaultDraftAccount,
   defaultDraftAsset,
   draftOpenRequest,
   accountSuggestions,
   assetSuggestions,
+  onSortChange,
   onApplied,
+  onShowHistory,
+  onFilterAccount,
+  onFilterAsset,
 }: {
   balances: Balance[];
+  activeSort?: string;
+  activeOrder?: SortOrder;
   defaultDraftAccount: string;
   defaultDraftAsset: string;
   draftOpenRequest: number;
   accountSuggestions: string[];
   assetSuggestions: string[];
+  onSortChange: (sort?: string, order?: SortOrder) => void;
   onApplied: () => void;
+  onShowHistory: (account: string, asset: string) => void;
+  onFilterAccount: (account: string) => void;
+  onFilterAsset: (asset: string) => void;
 }) {
   const { t } = useTranslation("positions");
   const [openKey, setOpenKey] = useState<string | null>(null);
@@ -1086,36 +1477,142 @@ function BalancesTable({
     <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
-            <TableHead>{t("balances.columns.account")}</TableHead>
-            <TableHead>{t("balances.columns.asset")}</TableHead>
-            <TableHead className="text-right">{t("balances.columns.available")}</TableHead>
-            <TableHead className="text-right">{t("balances.columns.held")}</TableHead>
-            <TableHead className="text-right">{t("balances.columns.incoming")}</TableHead>
-            <TableHead className="text-right">{t("balances.columns.avgEntryPrice")}</TableHead>
-            <TableHead className="text-right">{t("balances.columns.realizedPnl")}</TableHead>
-            <TableHead>{t("balances.columns.updated")}</TableHead>
-            <TableHead className="text-right">{t("balances.columns.adjust")}</TableHead>
+            <TableHead>
+              <SortableHeader
+                field="account"
+                label={t("balances.columns.account")}
+                description={t("balances.columnDescriptions.account")}
+                direction={sortDirection(activeSort, activeOrder, "account")}
+                onSort={(field, next) =>
+                  onSortChange(
+                    next === "none" ? undefined : field,
+                    next === "none" ? undefined : next,
+                  )
+                }
+              />
+            </TableHead>
+            <TableHead>
+              <SortableHeader
+                field="asset"
+                label={t("balances.columns.asset")}
+                description={t("balances.columnDescriptions.asset")}
+                direction={sortDirection(activeSort, activeOrder, "asset")}
+                onSort={(field, next) =>
+                  onSortChange(
+                    next === "none" ? undefined : field,
+                    next === "none" ? undefined : next,
+                  )
+                }
+              />
+            </TableHead>
+            <TableHead className="text-right">
+              <SortableHeader
+                field="available"
+                label={t("balances.columns.available")}
+                description={t("balances.columnDescriptions.available")}
+                direction={sortDirection(activeSort, activeOrder, "available")}
+                align="right"
+                onSort={(field, next) =>
+                  onSortChange(
+                    next === "none" ? undefined : field,
+                    next === "none" ? undefined : next,
+                  )
+                }
+              />
+            </TableHead>
+            <TableHead className="text-right">
+              <SortableHeader
+                field="held"
+                label={t("balances.columns.held")}
+                description={t("balances.columnDescriptions.held")}
+                direction={sortDirection(activeSort, activeOrder, "held")}
+                align="right"
+                onSort={(field, next) =>
+                  onSortChange(
+                    next === "none" ? undefined : field,
+                    next === "none" ? undefined : next,
+                  )
+                }
+              />
+            </TableHead>
+            <TableHead className="text-right">
+              <SortableHeader
+                field="incoming"
+                label={t("balances.columns.incoming")}
+                description={t("balances.columnDescriptions.incoming")}
+                direction={sortDirection(activeSort, activeOrder, "incoming")}
+                align="right"
+                onSort={(field, next) =>
+                  onSortChange(
+                    next === "none" ? undefined : field,
+                    next === "none" ? undefined : next,
+                  )
+                }
+              />
+            </TableHead>
+            <TableHead className="text-right">
+              <SortableHeader
+                field="averageEntryPrice"
+                label={t("balances.columns.avgEntryPrice")}
+                description={t("balances.columnDescriptions.avgEntryPrice")}
+                direction={sortDirection(
+                  activeSort,
+                  activeOrder,
+                  "averageEntryPrice",
+                )}
+                align="right"
+                onSort={(field, next) =>
+                  onSortChange(
+                    next === "none" ? undefined : field,
+                    next === "none" ? undefined : next,
+                  )
+                }
+              />
+            </TableHead>
+            <TableHead className="text-right">
+              <SortableHeader
+                field="realizedPnl"
+                label={t("balances.columns.realizedPnl")}
+                description={t("balances.columnDescriptions.realizedPnl")}
+                direction={sortDirection(
+                  activeSort,
+                  activeOrder,
+                  "realizedPnl",
+                )}
+                align="right"
+                onSort={(field, next) =>
+                  onSortChange(
+                    next === "none" ? undefined : field,
+                    next === "none" ? undefined : next,
+                  )
+                }
+              />
+            </TableHead>
+            <TableHead>
+              <SortableHeader
+                field="updatedAt"
+                label={t("balances.columns.updated")}
+                description={t("balances.columnDescriptions.updated")}
+                direction={sortDirection(activeSort, activeOrder, "updatedAt")}
+                onSort={(field, next) =>
+                  onSortChange(
+                    next === "none" ? undefined : field,
+                    next === "none" ? undefined : next,
+                  )
+                }
+              />
+            </TableHead>
+            <TableHead className="text-right">
+              <ColumnHeader
+                align="right"
+                description={t("balances.columnDescriptions.adjust")}
+              >
+                {t("balances.columns.adjust")}
+              </ColumnHeader>
+            </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {balances.map((b) => (
-            <BalanceEditRow
-              key={`${b.account}|${b.asset}`}
-              balance={b}
-              expanded={openKey === `${b.account}|${b.asset}`}
-              onToggle={() =>
-                setOpenKey((current) =>
-                  current === `${b.account}|${b.asset}`
-                    ? null
-                    : `${b.account}|${b.asset}`,
-                )
-              }
-              onClose={() => setOpenKey(null)}
-              accountSuggestions={accountSuggestions}
-              assetSuggestions={assetSuggestions}
-              onApplied={onApplied}
-            />
-          ))}
           <BalanceDraftRow
             defaultAccount={defaultDraftAccount}
             defaultAsset={defaultDraftAsset}
@@ -1133,6 +1630,27 @@ function BalancesTable({
             onClose={() => setOpenKey(null)}
             onApplied={onApplied}
           />
+          {balances.map((b) => (
+            <BalanceEditRow
+              key={`${b.account}|${b.asset}`}
+              balance={b}
+              expanded={openKey === `${b.account}|${b.asset}`}
+              onToggle={() =>
+                setOpenKey((current) =>
+                  current === `${b.account}|${b.asset}`
+                    ? null
+                    : `${b.account}|${b.asset}`,
+                )
+              }
+              onClose={() => setOpenKey(null)}
+              onShowHistory={onShowHistory}
+              onFilterAccount={onFilterAccount}
+              onFilterAsset={onFilterAsset}
+              accountSuggestions={accountSuggestions}
+              assetSuggestions={assetSuggestions}
+              onApplied={onApplied}
+            />
+          ))}
         </TableBody>
     </Table>
   );
@@ -1249,6 +1767,8 @@ function AmountField({
             className="flex-1"
             inputClassName="h-7 text-xs"
             onChange={(value) => onChange({ ...field, value })}
+            onClear={() => onChange({ ...field, value: "" })}
+            clearLabel={t("common:filters.clearField")}
           />
         </div>
       )}
@@ -1303,6 +1823,8 @@ function BoundsField({
               placeholder="—"
               inputClassName="h-7 text-xs"
               onChange={(lower) => onChange({ ...field, lower })}
+              onClear={() => onChange({ ...field, lower: "" })}
+              clearLabel={t("common:filters.clearField")}
             />
           </div>
           <div className="space-y-1">
@@ -1314,6 +1836,8 @@ function BoundsField({
               placeholder="—"
               inputClassName="h-7 text-xs"
               onChange={(upper) => onChange({ ...field, upper })}
+              onClear={() => onChange({ ...field, upper: "" })}
+              clearLabel={t("common:filters.clearField")}
             />
           </div>
         </div>
@@ -1456,6 +1980,20 @@ function AdjustDialog({
   const { t } = useTranslation("positions");
   const { createAdjustment } = useOfficerApi();
 
+  const resetAllFields = () => {
+    setAccount("");
+    setAsset("");
+    setAvgPrice("");
+    setBalance(emptyAmount());
+    setHeld(emptyAmount());
+    setIncoming(emptyAmount());
+    setBalanceBounds(emptyBounds());
+    setHeldBounds(emptyBounds());
+    setIncomingBounds(emptyBounds());
+    setError(null);
+    setOutcome(null);
+  };
+
   const submit = async () => {
     const trimAccount = account.trim();
     const trimAsset = asset.trim();
@@ -1528,7 +2066,9 @@ function AdjustDialog({
                 placeholder="acc-1"
                 suggestions={accountSuggestions}
                 onChange={setAccount}
-                disabled={busy || outcome !== null}
+                disabled={busy}
+                onClear={() => setAccount("")}
+                clearLabel={t("common:filters.clearField")}
               />
             </div>
             <div className="space-y-1.5">
@@ -1540,7 +2080,9 @@ function AdjustDialog({
                 placeholder="AAPL"
                 suggestions={assetSuggestions}
                 onChange={setAsset}
-                disabled={busy || outcome !== null}
+                disabled={busy}
+                onClear={() => setAsset("")}
+                clearLabel={t("common:filters.clearField")}
               />
             </div>
           </div>
@@ -1554,8 +2096,10 @@ function AdjustDialog({
               spellCheck={false}
               placeholder="e.g. 142.50"
               inputClassName="text-xs"
-              disabled={busy || outcome !== null}
+              disabled={busy}
               onChange={setAvgPrice}
+              onClear={() => setAvgPrice("")}
+              clearLabel={t("common:filters.clearField")}
             />
             <p className="text-[0.6875rem] text-muted">
               {t("dialog.fields.avgEntryPriceHint")}
@@ -1614,15 +2158,21 @@ function AdjustDialog({
           >
             {outcome ? t("dialog.footer.close") : t("actions.cancel", { ns: "common" })}
           </Button>
-          {!outcome && (
-            <Button
-              size="sm"
-              onClick={() => void submit()}
-              disabled={busy}
-            >
-              {t("dialog.footer.submit")}
-            </Button>
-          )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={resetAllFields}
+            disabled={busy}
+          >
+            {t("actions.clearAll", { ns: "common" })}
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => void submit()}
+            disabled={busy}
+          >
+            {t("dialog.footer.submit")}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -1669,8 +2219,19 @@ function HistoryRowOutcome({ adj }: { adj: Adjustment }) {
   return <span className="text-muted-lt">—</span>;
 }
 
-function HistoryRow({ adj, onClone }: { adj: Adjustment; onClone: (adj: Adjustment) => void }) {
+function HistoryRow({
+  adj,
+  onClone,
+  onFilterAccount,
+  onFilterAsset,
+}: {
+  adj: Adjustment;
+  onClone: (adj: Adjustment) => void;
+  onFilterAccount: (account: string) => void;
+  onFilterAsset: (asset: string) => void;
+}) {
   const { t } = useTranslation("positions");
+  const { t: tc } = useTranslation();
   const isRejected = !!adj.rejected;
   const isAccepted = !!adj.accepted && !isRejected;
 
@@ -1704,9 +2265,40 @@ function HistoryRow({ adj, onClone }: { adj: Adjustment; onClone: (adj: Adjustme
   return (
     <TableRow className="hover:bg-transparent">
       <TableCell className="text-xs text-muted-lt"><SplitTime iso={adj.at} /></TableCell>
-      <TableCell className="nums text-xs">{adj.account}</TableCell>
-      <TableCell className="nums text-xs">{adj.asset}</TableCell>
-      <TableCell>
+      <TableCell className="nums text-xs">
+        <div className="flex min-w-0 items-center gap-1">
+          <IdCell
+            value={adj.account}
+            copyTitle={t("common:rowActions.copyId")}
+            copiedTitle={t("common:rowActions.copiedId")}
+          />
+          <span className="ml-auto flex shrink-0 items-center">
+            <FilterByButton
+              size={28}
+              title={tc("rowActions.filterByTitle", { field: adj.account })}
+              href={positionsFilterHref({
+                tab: "history",
+                account: adj.account,
+              })}
+              onClick={() => onFilterAccount(adj.account)}
+            />
+          </span>
+        </div>
+      </TableCell>
+      <TableCell className="nums text-xs">
+        <div className="flex min-w-0 items-center gap-1">
+          <span className="min-w-0 truncate">{adj.asset}</span>
+          <span className="ml-auto flex shrink-0 items-center">
+            <FilterByButton
+              size={28}
+              title={tc("rowActions.filterByTitle", { field: adj.asset })}
+              href={positionsFilterHref({ tab: "history", asset: adj.asset })}
+              onClick={() => onFilterAsset(adj.asset)}
+            />
+          </span>
+        </div>
+      </TableCell>
+      <TableCell className="w-[var(--positions-source-column-width)]">
         <Badge variant="neutral" className="text-[0.6875rem]">
           {adj.source}
         </Badge>
@@ -1714,7 +2306,7 @@ function HistoryRow({ adj, onClone }: { adj: Adjustment; onClone: (adj: Adjustme
       <TableCell className="nums text-xs text-muted-lt">
         {reqParts.length > 0 ? reqParts.join(" · ") : "—"}
       </TableCell>
-      <TableCell>
+      <TableCell className="w-[var(--positions-status-column-width)]">
         {isRejected ? (
           <Badge variant="danger">{t("history.status.rejected")}</Badge>
         ) : isAccepted ? (
@@ -1726,15 +2318,20 @@ function HistoryRow({ adj, onClone }: { adj: Adjustment; onClone: (adj: Adjustme
       <TableCell className="text-xs">
         <HistoryRowOutcome adj={adj} />
       </TableCell>
-      <TableCell>
-        <Button
-          variant="ghost"
-          size="sm"
-          aria-label={t("history.clone.ariaLabel", { id: adj.externalId })}
-          onClick={() => onClone(adj)}
-        >
-          <Copy className="h-3.5 w-3.5" />
-        </Button>
+      <TableCell className="text-muted-lt">
+        <IdCell
+          value={adj.externalId}
+          copyTitle={t("common:rowActions.copyId")}
+          copiedTitle={t("common:rowActions.copiedId")}
+        />
+      </TableCell>
+      <TableCell className="text-right">
+        <RowActions align="flex-end">
+          <CloneButton
+            title={tc("rowActions.cloneTitle", { entity: adj.externalId })}
+            onClick={() => onClone(adj)}
+          />
+        </RowActions>
       </TableCell>
     </TableRow>
   );
@@ -1747,16 +2344,82 @@ function HistoryRow({ adj, onClone }: { adj: Adjustment; onClone: (adj: Adjustme
 const SOURCES: Source[] = ["panel", "api", "mcp", "system"];
 type PositionsTab = "positions" | "history";
 
+const BALANCE_SORT_KEYS = new Set([
+  "account",
+  "asset",
+  "available",
+  "averageEntryPrice",
+  "held",
+  "incoming",
+  "realizedPnl",
+  "updatedAt",
+]);
+const HISTORY_SORT_KEYS = new Set([
+  "account",
+  "asset",
+  "at",
+  "principal",
+  "source",
+  "status",
+]);
+
+function sortFromParams(
+  params: URLSearchParams,
+  allowed: Set<string>,
+  fallback: { sort?: string; order?: SortOrder },
+): { sort?: string; order?: SortOrder } {
+  const sort = params.get("sort");
+  const order = params.get("order");
+  if (sort !== null && allowed.has(sort) && (order === "asc" || order === "desc")) {
+    return { sort, order };
+  }
+  return fallback;
+}
+
 export function Positions() {
   const { t } = useTranslation("positions");
-  const { fetchAdjustments } = useOfficerApi();
+  const { t: tc } = useTranslation("common");
+  const { fetchAccounts, fetchAdjustmentsPage, fetchAssets, fetchGroups } =
+    useOfficerApi();
   const [searchParams] = useSearchParams();
   const initialAccount = searchParams.get("account") ?? "";
+  const initialGroup = searchParams.get("group") ?? "";
+  const initialAsset = searchParams.get("asset") ?? "";
+  const initialTab: PositionsTab =
+    searchParams.get("tab") === "history" ? "history" : "positions";
 
-  const [tab, setTab] = useState<PositionsTab>("positions");
+  const [tab, setTab] = useState<PositionsTab>(initialTab);
   const [accountFilter, setAccountFilter] = useState(initialAccount);
-  const [assetFilter, setAssetFilter] = useState("");
-  const [sourceFilter, setSourceFilter] = useState<Source | "__all__">("__all__");
+  const [groupFilter, setGroupFilter] = useState(initialGroup);
+  const [assetFilter, setAssetFilter] = useState(initialAsset);
+  const [accountDraft, setAccountDraft] = useState(initialAccount);
+  const [groupDraft, setGroupDraft] = useState(initialGroup);
+  const [assetDraft, setAssetDraft] = useState(initialAsset);
+  const [sourceFilter, setSourceFilter] = useState<Source | "__all__">(() => {
+    const source = searchParams.get("source");
+    return SOURCES.includes(source as Source) ? (source as Source) : "__all__";
+  });
+  const [historyExternalId, setHistoryExternalId] = useState(
+    searchParams.get("id") ?? searchParams.get("externalId") ?? "",
+  );
+  const [appliedHistoryExternalId, setAppliedHistoryExternalId] = useState(
+    searchParams.get("id") ?? searchParams.get("externalId") ?? "",
+  );
+  const [historyStatusFilter, setHistoryStatusFilter] = useState<
+    Adjustment["status"] | "__all__"
+  >(() => {
+    const status = searchParams.get("status");
+    return status === "accepted" || status === "rejected" ? status : "__all__";
+  });
+  const [historyAtMode, setHistoryAtMode] = useState<RangeFilterMode>(
+    (searchParams.get("atMode") as RangeFilterMode | null) ?? "after",
+  );
+  const [historyAtMin, setHistoryAtMin] = useState(
+    searchParams.get("atMin") ?? "",
+  );
+  const [historyAtMax, setHistoryAtMax] = useState(
+    searchParams.get("atMax") ?? "",
+  );
   const [draftOpenRequest, setDraftOpenRequest] = useState(0);
   const [balancePage, setBalancePage] = useState(0);
   const [historyPage, setHistoryPage] = useState(0);
@@ -1766,10 +2429,44 @@ export function Positions() {
   const [historySize, setHistorySize] = usePersistentPageSize(
     "pit-officer-position-history-page-size",
   );
+  const [balanceSort, setBalanceSort] = useState<{
+    sort?: string;
+    order?: SortOrder;
+  }>(() =>
+    initialTab === "positions"
+      ? sortFromParams(searchParams, BALANCE_SORT_KEYS, {
+          sort: "account",
+          order: "asc",
+        })
+      : { sort: "account", order: "asc" },
+  );
+  const [historySort, setHistorySort] = useState<{
+    sort?: string;
+    order?: SortOrder;
+  }>(() =>
+    initialTab === "history"
+      ? sortFromParams(searchParams, HISTORY_SORT_KEYS, {
+          sort: "at",
+          order: "desc",
+        })
+      : { sort: "at", order: "desc" },
+  );
+  const [balanceRanges, setBalanceRanges] = useState(() =>
+    balanceRangesFromParams(searchParams),
+  );
+  const [balanceRangeDrafts, setBalanceRangeDrafts] = useState(() =>
+    balanceRangesFromParams(searchParams),
+  );
+  const advancedFilterDialogRef = useRef<HTMLDivElement | null>(null);
+  const [moreFiltersOpen, setMoreFiltersOpen] = useState(false);
   const [historyExportBusy, setHistoryExportBusy] = useState(false);
   const [historyExportError, setHistoryExportError] = useState<string | null>(
     null,
   );
+
+  const resetHistoryPage = () => {
+    setHistoryPage(0);
+  };
 
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [adjustAccount, setAdjustAccount] = useState("");
@@ -1790,50 +2487,180 @@ export function Positions() {
   const [adjustIncomingBoundsLower, setAdjustIncomingBoundsLower] = useState<string | undefined>(undefined);
   const [adjustIncomingBoundsUpper, setAdjustIncomingBoundsUpper] = useState<string | undefined>(undefined);
 
-  const deferredAccount = useDeferredValue(accountFilter.trim());
-  const deferredAsset = useDeferredValue(assetFilter.trim());
-
-  const balancesLoad = useBalances(
-    deferredAccount || undefined,
-    deferredAsset || undefined,
+  const deferredAccountDraft = useDebouncedValue(
+    accountDraft.trim(),
+    DEFAULT_SEARCH_DEBOUNCE_MS,
   );
+  const deferredGroupDraft = useDebouncedValue(
+    groupDraft.trim(),
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const deferredAssetDraft = useDebouncedValue(
+    assetDraft.trim(),
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const deferredAccount = accountFilter;
+  const deferredGroup = groupFilter;
+  const deferredAsset = assetFilter;
+  const debouncedBalanceRanges = useDebouncedValue(
+    balanceRanges,
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const debouncedHistoryAtMin = useDebouncedValue(
+    historyAtMin,
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const debouncedHistoryAtMax = useDebouncedValue(
+    historyAtMax,
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+
+  const balanceListFilters = useMemo<BalanceListFilters>(
+    () => {
+      const filter: BalanceListFilters = {
+        account: deferredAccount || undefined,
+        asset: deferredAsset || undefined,
+        groupCode: deferredGroup || undefined,
+        limit: balanceSize,
+        offset: balancePage * balanceSize,
+        sort: balanceSort.sort,
+        order: balanceSort.order,
+      };
+      addBalanceRange(filter, "available", debouncedBalanceRanges.available);
+      addBalanceRange(filter, "held", debouncedBalanceRanges.held);
+      addBalanceRange(filter, "incoming", debouncedBalanceRanges.incoming);
+      addBalanceRange(
+        filter,
+        "averageEntryPrice",
+        debouncedBalanceRanges.averageEntryPrice,
+      );
+      addBalanceRange(filter, "realizedPnl", debouncedBalanceRanges.realizedPnl);
+      addUpdatedAtRange(filter, debouncedBalanceRanges.updatedAt);
+      return filter;
+    },
+    [
+      balancePage,
+      balanceSize,
+      balanceSort.order,
+      balanceSort.sort,
+      debouncedBalanceRanges,
+      deferredAccount,
+      deferredAsset,
+      deferredGroup,
+    ],
+  );
+  const balancesLoad = useBalancesPage(balanceListFilters);
 
   const deferredSource =
     sourceFilter === "__all__" ? undefined : sourceFilter;
-  const adjustmentsLoad = useAdjustments(
-    deferredAccount || undefined,
-    deferredSource,
-    pageFetchLimit(historyPage, historySize),
+  const historyAtFrom = localDateTimeFilter(debouncedHistoryAtMin);
+  const historyAtTo = localDateTimeFilter(debouncedHistoryAtMax);
+  const requestHistoryAt =
+    historyAtMode === "between"
+      ? historyAtFrom !== "" && historyAtTo !== ""
+        ? { atMode: historyAtMode, atMin: historyAtFrom, atMax: historyAtTo }
+        : {}
+      : historyAtMode === "before"
+        ? historyAtFrom !== ""
+          ? { atMode: historyAtMode, atMax: historyAtFrom }
+          : {}
+        : historyAtFrom !== ""
+          ? { atMode: historyAtMode, atMin: historyAtFrom }
+          : {};
+  const adjustmentsLoad = useAdjustmentsPage(
+    {
+      externalId: appliedHistoryExternalId.trim() || undefined,
+      account: deferredAccount || undefined,
+      asset: deferredAsset || undefined,
+      source: deferredSource,
+      status:
+        historyStatusFilter === "__all__" ? undefined : historyStatusFilter,
+      ...requestHistoryAt,
+      sort: historySort.sort,
+      order: historySort.order,
+      limit: historySize,
+      offset: historyPage * historySize,
+    },
   );
 
-  // Account suggestions from the accounts hook.
-  const accountsLoad = useAccounts();
-  const accountSuggestions = useMemo(() => {
-    if (accountsLoad.load.state !== "ready") {
-      return [];
-    }
-    return accountsLoad.load.data.map((a) => a.code);
-  }, [accountsLoad.load]);
+  const [accountSuggestions, setAccountSuggestions] = useState<string[]>([]);
+  const [groupSuggestions, setGroupSuggestions] = useState<string[]>([]);
+  const [assetSuggestions, setAssetSuggestions] = useState<string[]>([]);
+  const visibleAccountSuggestions =
+    deferredAccountDraft.trim() === "" ? [] : accountSuggestions;
+  const visibleGroupSuggestions =
+    deferredGroupDraft.trim() === "" ? [] : groupSuggestions;
+  const visibleAssetSuggestions =
+    deferredAssetDraft.trim() === "" ? [] : assetSuggestions;
 
-  // Asset suggestions: union from balances + adjustments history.
-  const assetSuggestions = useMemo(() => {
-    const set = new Set<string>();
-    if (balancesLoad.load.state === "ready") {
-      for (const b of balancesLoad.load.data) {
-        if (b.asset) {
-          set.add(b.asset);
-        }
-      }
+  useEffect(() => {
+    const query = deferredAccountDraft.trim();
+    if (query === "") {
+      return;
     }
-    if (adjustmentsLoad.load.state === "ready") {
-      for (const a of adjustmentsLoad.load.data) {
-        if (a.asset) {
-          set.add(a.asset);
+    const controller = new AbortController();
+    void fetchAccounts(
+      { code: query, codeMatch: "starts_with", limit: 8, sort: "code" },
+      controller.signal,
+    )
+      .then((accounts) => {
+        const next = accounts.map((account) => account.code);
+        setAccountSuggestions((prev) => (sameStrings(prev, next) ? prev : next));
+      })
+      .catch((err: unknown) => {
+        if (!controller.signal.aborted) {
+          console.error(err);
+          setAccountSuggestions((prev) => (prev.length === 0 ? prev : []));
         }
-      }
+      });
+    return () => controller.abort();
+  }, [deferredAccountDraft, fetchAccounts]);
+
+  useEffect(() => {
+    const query = deferredGroupDraft.trim();
+    if (query === "") {
+      return;
     }
-    return Array.from(set).sort();
-  }, [balancesLoad.load, adjustmentsLoad.load]);
+    const controller = new AbortController();
+    void fetchGroups(
+      { code: query, codeMatch: "starts_with", limit: 8, sort: "code" },
+      controller.signal,
+    )
+      .then((groups) => {
+        const next = groups.map((group) => group.code);
+        setGroupSuggestions((prev) => (sameStrings(prev, next) ? prev : next));
+      })
+      .catch((err: unknown) => {
+        if (!controller.signal.aborted) {
+          console.error(err);
+          setGroupSuggestions((prev) => (prev.length === 0 ? prev : []));
+        }
+      });
+    return () => controller.abort();
+  }, [deferredGroupDraft, fetchGroups]);
+
+  useEffect(() => {
+    const query = deferredAssetDraft.trim();
+    if (query === "") {
+      return;
+    }
+    const controller = new AbortController();
+    void fetchAssets(
+      { code: query, codeMatch: "starts_with", limit: 8, sort: "code" },
+      controller.signal,
+    )
+      .then((assets) => {
+        const next = assets.map((asset) => asset.code);
+        setAssetSuggestions((prev) => (sameStrings(prev, next) ? prev : next));
+      })
+      .catch((err: unknown) => {
+        if (!controller.signal.aborted) {
+          console.error(err);
+          setAssetSuggestions((prev) => (prev.length === 0 ? prev : []));
+        }
+      });
+    return () => controller.abort();
+  }, [deferredAssetDraft, fetchAssets]);
 
   const openNewAdjust = () => {
     setDraftOpenRequest((current) => current + 1);
@@ -1864,6 +2691,29 @@ export function Positions() {
     balancesLoad.reload();
     adjustmentsLoad.reload();
   };
+  // Open this position's adjustment history, pre-filtered by account + asset.
+  // The asset filter is applied client-side on the history list, so no new
+  // server parameter is introduced.
+  const showAccountAssetHistory = (account: string, asset: string) => {
+    setAccountFilter(account);
+    setAccountDraft(account);
+    setAssetFilter(asset);
+    setAssetDraft(asset);
+    resetHistoryPage();
+    setTab("history");
+  };
+  const filterHistoryAccount = (account: string) => {
+    setAccountFilter(account);
+    setAccountDraft(account);
+    resetHistoryPage();
+    setTab("history");
+  };
+  const filterHistoryAsset = (asset: string) => {
+    setAssetFilter(asset);
+    setAssetDraft(asset);
+    resetHistoryPage();
+    setTab("history");
+  };
   const reloadPositions = () => {
     balancesLoad.reload();
     adjustmentsLoad.reload();
@@ -1875,12 +2725,78 @@ export function Positions() {
     }
     adjustmentsLoad.reload();
   };
+  const updateBalanceRange = (
+    key: BalanceRangeKey,
+    next: BalanceRangeDraft,
+  ) => {
+    setBalanceRanges((current) => ({ ...current, [key]: next }));
+    setBalancePage(0);
+  };
+  const updateBalanceRangeDraft = (
+    key: BalanceRangeKey,
+    next: BalanceRangeDraft,
+  ) => {
+    setBalanceRangeDrafts((current) => ({ ...current, [key]: next }));
+  };
+  const openAdvancedFilters = () => {
+    setBalanceRangeDrafts(cloneBalanceRanges(balanceRanges));
+    setMoreFiltersOpen(true);
+  };
+  const applyAdvancedFilters = () => {
+    if (!reportInvalidFilterControls(advancedFilterDialogRef.current)) {
+      return;
+    }
+    setBalanceRanges(cloneBalanceRanges(balanceRangeDrafts));
+    setBalancePage(0);
+    setMoreFiltersOpen(false);
+  };
+  const filterDraftChanged =
+    accountDraft.trim() !== accountFilter ||
+    groupDraft.trim() !== groupFilter ||
+    assetDraft.trim() !== assetFilter;
+  const applyIdentityFilters = () => {
+    const nextAccount = accountDraft.trim();
+    const nextGroup = groupDraft.trim();
+    const nextAsset = assetDraft.trim();
+    setAccountFilter(nextAccount);
+    setGroupFilter(nextGroup);
+    setAssetFilter(nextAsset);
+    setBalancePage(0);
+    resetHistoryPage();
+  };
+  const applyIdentityField = (
+    field: "account" | "group" | "asset",
+    value: string,
+  ) => {
+    const nextValue = value.trim();
+    if (field === "account") {
+      setAccountDraft(nextValue);
+      setAccountFilter(nextValue);
+      resetHistoryPage();
+    } else if (field === "group") {
+      setGroupDraft(nextValue);
+      setGroupFilter(nextValue);
+    } else {
+      setAssetDraft(nextValue);
+      setAssetFilter(nextValue);
+      resetHistoryPage();
+    }
+    setBalancePage(0);
+  };
+  const applyIdentityFiltersOnEnter = (
+    event: KeyboardEvent<HTMLInputElement>,
+  ) => {
+    if (event.key === "Enter") {
+      applyIdentityFilters();
+    }
+  };
   const exportHistory = async () => {
     setHistoryExportBusy(true);
     setHistoryExportError(null);
     try {
-      const rows = await fetchAdjustments({
+      const page = await fetchAdjustmentsPage({
         account: deferredAccount || undefined,
+        asset: deferredAsset || undefined,
         source: deferredSource,
         limit: 1000,
       });
@@ -1906,7 +2822,7 @@ export function Positions() {
           "rejected_reason",
           "rejected_details",
         ],
-        ...rows.map(adjustmentCsvRow),
+        ...page.items.map(adjustmentCsvRow),
       ]);
     } catch (err) {
       setHistoryExportError(errMessage(err));
@@ -1915,38 +2831,267 @@ export function Positions() {
     }
   };
   const positionCsvFilters = {
-    account: deferredAccount.trim() || undefined,
-    asset: deferredAsset.trim() || undefined,
+    account: accountFilter.trim() || undefined,
+    asset: assetFilter.trim() || undefined,
+    groupCode: groupFilter.trim() || undefined,
   };
+
+  // Encode the active filter set (both tabs) as a shareable deep link. Only
+  // non-default params are emitted, mirroring the API param names.
+  const shareHref = useMemo(() => {
+    const query = new URLSearchParams();
+    if (tab === "history") {
+      query.set("tab", "history");
+    }
+    if (appliedHistoryExternalId.trim() !== "") {
+      query.set("id", appliedHistoryExternalId.trim());
+    }
+    if (accountFilter.trim() !== "") {
+      query.set("account", accountFilter.trim());
+    }
+    if (groupFilter.trim() !== "") {
+      query.set("group", groupFilter.trim());
+    }
+    if (assetFilter.trim() !== "") {
+      query.set("asset", assetFilter.trim());
+    }
+    appendBalanceRanges(query, balanceRanges);
+    if (sourceFilter !== "__all__") {
+      query.set("source", sourceFilter);
+    }
+    if (historyStatusFilter !== "__all__") {
+      query.set("status", historyStatusFilter);
+    }
+    if (historyAtMin.trim() !== "") {
+      query.set("atMode", historyAtMode);
+      query.set("atMin", historyAtMin.trim());
+    }
+    if (historyAtMax.trim() !== "") {
+      query.set("atMode", historyAtMode);
+      query.set("atMax", historyAtMax.trim());
+    }
+    const activeSort = tab === "history" ? historySort : balanceSort;
+    if (activeSort.sort !== undefined) {
+      query.set("sort", activeSort.sort);
+      if (activeSort.order !== undefined) {
+        query.set("order", activeSort.order);
+      }
+    }
+    return shareUrl("/positions", query);
+  }, [
+    accountFilter,
+    appliedHistoryExternalId,
+    assetFilter,
+    balanceRanges,
+    groupFilter,
+    historyAtMax,
+    historyAtMin,
+    historyAtMode,
+    historySort,
+    historyStatusFilter,
+    balanceSort,
+    sourceFilter,
+    tab,
+  ]);
   const balances =
-    balancesLoad.load.state === "ready" ? balancesLoad.load.data : [];
-  const pagedBalances = slicePage(balances, balancePage, balanceSize);
-  const hasMoreBalances = hasNextPage(balances, balancePage, balanceSize);
+    balancesLoad.load.state === "ready"
+      ? balancesLoad.load.data.items
+      : [];
+  const pagedBalances = balances;
+  const hasMoreBalances =
+    balancesLoad.load.state === "ready" &&
+    (balancePage + 1) * balanceSize < balancesLoad.load.data.total;
   const balancePager = (
     <TablePagination
       page={balancePage}
       canPrevious={balancePage > 0}
       canNext={hasMoreBalances}
-      knownTotalPages={knownPageCount(balances.length, balanceSize)}
+      knownTotalPages={
+        balancesLoad.load.state === "ready"
+          ? knownPageCount(balancesLoad.load.data.total, balanceSize)
+          : undefined
+      }
       onPrevious={() => setBalancePage((p) => Math.max(0, p - 1))}
       onNext={() => setBalancePage((p) => p + 1)}
       onPage={setBalancePage}
     />
   );
-  const adjustments =
-    adjustmentsLoad.load.state === "ready" ? adjustmentsLoad.load.data : [];
-  const pagedAdjustments = slicePage(adjustments, historyPage, historySize);
-  const hasMoreAdjustments = hasNextPage(adjustments, historyPage, historySize);
+  const adjustmentsPage =
+    adjustmentsLoad.load.state === "ready" ? adjustmentsLoad.load.data : null;
+  const pagedAdjustments = adjustmentsPage?.items ?? [];
   const historyPager = (
     <TablePagination
       page={historyPage}
       canPrevious={historyPage > 0}
-      canNext={hasMoreAdjustments}
+      canNext={
+        adjustmentsPage !== null &&
+        (historyPage + 1) * historySize < adjustmentsPage.total
+      }
+      knownTotalPages={
+        adjustmentsPage !== null
+          ? knownPageCount(adjustmentsPage.total, historySize)
+          : undefined
+      }
       onPrevious={() => setHistoryPage((p) => Math.max(0, p - 1))}
       onNext={() => setHistoryPage((p) => p + 1)}
       onPage={setHistoryPage}
     />
   );
+  const balanceRangeLabels: Record<BalanceRangeKey, string> = {
+    available: t("balances.columns.available"),
+    held: t("balances.columns.held"),
+    incoming: t("balances.columns.incoming"),
+    averageEntryPrice: t("balances.columns.avgEntryPrice"),
+    realizedPnl: t("balances.columns.realizedPnl"),
+    updatedAt: t("balances.columns.updated"),
+  };
+  const balanceRangeOperatorLabel = (
+    key: BalanceRangeKey,
+    mode: RangeFilterMode,
+  ) => {
+    if (mode === "greater_than" || mode === "less_than") {
+      return t(`filters.range.${mode}`);
+    }
+    if (key === "updatedAt") {
+      return tc(`operators.time.${mode}`);
+    }
+    return tc(`operators.number.${mode}`);
+  };
+  const activeFilterChips = [
+    tab === "history" && appliedHistoryExternalId.trim() !== ""
+      ? {
+          key: "externalId",
+          label: t("history.columns.externalId"),
+          value: appliedHistoryExternalId.trim(),
+          clear: () => {
+            setHistoryExternalId("");
+            setAppliedHistoryExternalId("");
+            resetHistoryPage();
+          },
+        }
+      : null,
+    tab === "positions" && groupFilter.trim() !== ""
+      ? {
+          key: "group",
+          label: t("filters.byGroup"),
+          value: groupFilter.trim(),
+          clear: () => {
+            setGroupDraft("");
+            setGroupFilter("");
+            setBalancePage(0);
+          },
+        }
+      : null,
+    accountFilter.trim() !== ""
+      ? {
+          key: "account",
+          label: t("filters.byAccount"),
+          value: accountFilter.trim(),
+          clear: () => {
+            setAccountDraft("");
+            setAccountFilter("");
+            setBalancePage(0);
+            resetHistoryPage();
+          },
+        }
+      : null,
+    assetFilter.trim() !== ""
+      ? {
+          key: "asset",
+          label: t("filters.byAsset"),
+          value: assetFilter.trim(),
+          clear: () => {
+            setAssetDraft("");
+            setAssetFilter("");
+            setBalancePage(0);
+            resetHistoryPage();
+          },
+        }
+      : null,
+    tab === "history" && sourceFilter !== "__all__"
+      ? {
+          key: "source",
+          label: t("history.sourceLabel"),
+          value: sourceFilter,
+          clear: () => {
+            setSourceFilter("__all__");
+            resetHistoryPage();
+          },
+        }
+      : null,
+    tab === "history" && historyStatusFilter !== "__all__"
+      ? {
+          key: "status",
+          label: t("history.columns.status"),
+          value: t(`history.status.${historyStatusFilter}`),
+          clear: () => {
+            setHistoryStatusFilter("__all__");
+            resetHistoryPage();
+          },
+        }
+      : null,
+    tab === "history" &&
+    (historyAtMin.trim() !== "" || historyAtMax.trim() !== "")
+      ? {
+          key: "historyAt",
+          label: t("history.columns.time"),
+          value: rangeChipValue(
+            tc(`operators.time.${historyAtMode}`),
+            historyAtMode,
+            historyAtMin,
+            historyAtMax,
+          ),
+          clear: () => {
+            setHistoryAtMode("after");
+            setHistoryAtMin("");
+            setHistoryAtMax("");
+            resetHistoryPage();
+          },
+        }
+      : null,
+    ...(tab === "positions"
+      ? (Object.keys(balanceRanges) as BalanceRangeKey[])
+          .filter((key) => hasActiveRange(balanceRanges[key]))
+          .map((key) => {
+            const draft = balanceRanges[key];
+            return {
+              key,
+              label: balanceRangeLabels[key],
+              value: rangeChipValue(
+                balanceRangeOperatorLabel(key, draft.mode),
+                draft.mode,
+                draft.min,
+                draft.max,
+              ),
+              clear: () => updateBalanceRange(key, { mode: "all", min: "", max: "" }),
+            };
+          })
+      : []),
+  ].filter((entry): entry is {
+    key: string;
+    label: string;
+    value: string;
+    clear: () => void;
+  } => entry !== null);
+  const visibleFilterChips =
+    tab === "positions"
+      ? activeFilterChips.filter((entry) =>
+          [
+            "available",
+            "held",
+            "incoming",
+            "averageEntryPrice",
+            "realizedPnl",
+            "updatedAt",
+          ].includes(entry.key),
+        )
+      : [];
+  const advancedFilterCount = visibleFilterChips.length;
+  const clearActiveFilters = () => {
+    for (const entry of activeFilterChips) {
+      entry.clear();
+    }
+  };
 
   return (
     <Page
@@ -1961,7 +3106,7 @@ export function Positions() {
                 setBalancePage(0);
               } else {
                 setHistorySize(value);
-                setHistoryPage(0);
+                resetHistoryPage();
               }
             }}
             ariaLabel={t("pagination.pageSize.ariaLabel")}
@@ -2017,39 +3162,268 @@ export function Positions() {
       }
     >
       {/* Filters */}
-      <Card className="flex flex-wrap items-end gap-4 p-4">
-        <div className="space-y-1.5">
-          <Label htmlFor="pos-account">{t("filters.byAccount")}</Label>
-          <Autocomplete
-            id="pos-account"
-            value={accountFilter}
-            spellCheck={false}
-            placeholder="acc-1"
-            className="h-8 w-48 text-xs"
-            suggestions={accountSuggestions}
-            onChange={(value) => {
-              setAccountFilter(value);
+      <FilterBar
+        active={activeFilterChips.length > 0}
+        activeLabel={tc("filters.active")}
+        onClearActive={clearActiveFilters}
+        clearActiveLabel={tc("filters.clearAll")}
+        chips={
+          visibleFilterChips.length > 0 ? (
+            <>
+              {visibleFilterChips.map((entry) => (
+                <FilterChip
+                  key={entry.key}
+                  label={`${entry.label}: ${entry.value}`}
+                  removeLabel={tc("filters.removeAdvanced")}
+                  onRemove={entry.clear}
+                />
+              ))}
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-6 text-[0.6875rem]"
+                onClick={() => {
+                  for (const entry of visibleFilterChips) {
+                    entry.clear();
+                  }
+                }}
+              >
+                {tc("filters.removeAdvanced")}
+              </Button>
+            </>
+          ) : undefined
+        }
+        trailing={
+          <>
+            {tab === "positions" && (
+              <MoreFiltersButton
+                count={advancedFilterCount}
+                label={tc("filters.more")}
+                onClick={openAdvancedFilters}
+              />
+            )}
+            <div className="flex items-end">
+              <ShareLinkButton
+                href={shareHref}
+                title={tc("rowActions.shareFilters")}
+                copiedTitle={tc("rowActions.copiedLink")}
+                size={32}
+              />
+            </div>
+          </>
+        }
+        bottom={
+          tab === "history" ? (
+            <ExactIdField
+              label={t("common:exactLookup.label")}
+              value={historyExternalId}
+              placeholder={t("common:exactLookup.placeholder", {
+                entity: t("history.columns.externalId"),
+              })}
+              openLabel={t("common:exactLookup.open")}
+              width={360}
+              style={{ width: "100%" }}
+              onChange={setHistoryExternalId}
+              onOpen={(value) => {
+                setAppliedHistoryExternalId(value.trim());
+                resetHistoryPage();
+              }}
+            />
+          ) : undefined
+        }
+      >
+        {tab === "positions" && (
+          <AutocompleteFilterField
+            label={t("filters.byGroup")}
+            value={groupDraft}
+            placeholder="equity-desks"
+            suggestions={visibleGroupSuggestions}
+            onChange={setGroupDraft}
+            onSuggestionSelect={(value) => applyIdentityField("group", value)}
+            onKeyDown={applyIdentityFiltersOnEnter}
+            onClear={() => {
+              setGroupDraft("");
+              setGroupFilter("");
               setBalancePage(0);
-              setHistoryPage(0);
             }}
+            clearLabel={t("common:filters.clearField")}
           />
+        )}
+        <AutocompleteFilterField
+          label={t("filters.byAccount")}
+          value={accountDraft}
+          placeholder="acc-1"
+          suggestions={visibleAccountSuggestions}
+          onChange={setAccountDraft}
+          onSuggestionSelect={(value) => applyIdentityField("account", value)}
+          onKeyDown={applyIdentityFiltersOnEnter}
+          onClear={() => {
+            setAccountDraft("");
+            setAccountFilter("");
+            setBalancePage(0);
+            resetHistoryPage();
+          }}
+          clearLabel={t("common:filters.clearField")}
+        />
+        <AutocompleteFilterField
+          label={t("filters.byAsset")}
+          value={assetDraft}
+          placeholder="AAPL"
+          suggestions={visibleAssetSuggestions}
+          width={160}
+          onChange={setAssetDraft}
+          onSuggestionSelect={(value) => applyIdentityField("asset", value)}
+          onKeyDown={applyIdentityFiltersOnEnter}
+          onClear={() => {
+            setAssetDraft("");
+            setAssetFilter("");
+            setBalancePage(0);
+            resetHistoryPage();
+          }}
+          clearLabel={t("common:filters.clearField")}
+        />
+        <div className="flex items-end">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={applyIdentityFilters}
+            disabled={!filterDraftChanged}
+          >
+            {tc("filters.apply")}
+          </Button>
         </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="pos-asset">{t("filters.byAsset")}</Label>
-          <Autocomplete
-            id="pos-asset"
-            value={assetFilter}
-            spellCheck={false}
-            placeholder="AAPL"
-            className="h-8 w-32 text-xs"
-            suggestions={assetSuggestions}
-            onChange={(value) => {
-              setAssetFilter(value);
-              setBalancePage(0);
-            }}
-          />
-        </div>
-      </Card>
+        {tab === "history" && (
+          <>
+            <div className="grid gap-1">
+              <FieldLabel>{t("history.sourceLabel")}</FieldLabel>
+              <Segmented
+                value={sourceFilter}
+                options={[
+                  { value: "__all__", label: t("history.sourceAll") },
+                  ...SOURCES.map((source) => ({
+                    value: source,
+                    label: source,
+                  })),
+                ]}
+                onChange={(value) => {
+                  setSourceFilter(value as Source | "__all__");
+                  resetHistoryPage();
+                }}
+              />
+            </div>
+            <div className="grid gap-1">
+              <FieldLabel>{t("history.columns.status")}</FieldLabel>
+              <Segmented
+                value={historyStatusFilter}
+                options={[
+                  { value: "__all__", label: t("history.sourceAll") },
+                  { value: "accepted", label: t("history.status.accepted") },
+                  { value: "rejected", label: t("history.status.rejected") },
+                ]}
+                onChange={(value) => {
+                  setHistoryStatusFilter(
+                    value as Adjustment["status"] | "__all__",
+                  );
+                  resetHistoryPage();
+                }}
+              />
+            </div>
+            <div className="grid gap-1">
+              <FieldLabel>{t("history.columns.time")}</FieldLabel>
+              <TimeRangeFilter
+                operator={historyAtMode}
+                from={historyAtMin}
+                to={historyAtMax}
+                showPresets={false}
+                operators={operatorOptions(tc, "time")}
+                onOperatorChange={(value) => {
+                  setHistoryAtMode(value as RangeFilterMode);
+                  resetHistoryPage();
+                }}
+                onFromChange={(value) => {
+                  setHistoryAtMin(value);
+                  resetHistoryPage();
+                }}
+                onToChange={(value) => {
+                  setHistoryAtMax(value);
+                  resetHistoryPage();
+                }}
+                clearLabel={tc("filters.clearField")}
+              />
+            </div>
+          </>
+        )}
+      </FilterBar>
+
+      {tab === "positions" && (
+        <Dialog
+          open={moreFiltersOpen}
+          onOpenChange={(next) => {
+            if (next) {
+              setBalanceRangeDrafts(cloneBalanceRanges(balanceRanges));
+            }
+            setMoreFiltersOpen(next);
+          }}
+        >
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{tc("filters.more")}</DialogTitle>
+            <DialogDescription>{t("filters.advancedDescription")}</DialogDescription>
+          </DialogHeader>
+            <div ref={advancedFilterDialogRef} className="grid gap-3">
+              <PositionRangeFilter
+                label={t("balances.columns.available")}
+                draft={balanceRangeDrafts.available}
+                onChange={(next) => updateBalanceRangeDraft("available", next)}
+              />
+              <PositionRangeFilter
+                label={t("balances.columns.held")}
+                draft={balanceRangeDrafts.held}
+                onChange={(next) => updateBalanceRangeDraft("held", next)}
+              />
+              <PositionRangeFilter
+                label={t("balances.columns.incoming")}
+                draft={balanceRangeDrafts.incoming}
+                onChange={(next) => updateBalanceRangeDraft("incoming", next)}
+              />
+              <PositionRangeFilter
+                label={t("balances.columns.avgEntryPrice")}
+                draft={balanceRangeDrafts.averageEntryPrice}
+                onChange={(next) =>
+                  updateBalanceRangeDraft("averageEntryPrice", next)
+                }
+              />
+              <PositionRangeFilter
+                label={t("balances.columns.realizedPnl")}
+                draft={balanceRangeDrafts.realizedPnl}
+                onChange={(next) => updateBalanceRangeDraft("realizedPnl", next)}
+              />
+              <PositionRangeFilter
+                label={t("balances.columns.updated")}
+                draft={balanceRangeDrafts.updatedAt}
+                inputType="datetime-local"
+                onChange={(next) => updateBalanceRangeDraft("updatedAt", next)}
+              />
+            </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setBalanceRangeDrafts(cloneBalanceRanges(EMPTY_BALANCE_RANGES));
+              }}
+            >
+              {tc("filters.removeAdvanced")}
+            </Button>
+            <Button type="button" onClick={applyAdvancedFilters}>
+              {tc("filters.applyAdvanced")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      )}
 
       <div className="flex w-fit gap-1 rounded-card border border-border bg-surface-2 p-1">
         {(["positions", "history"] as PositionsTab[]).map((tabId) => (
@@ -2088,7 +3462,7 @@ export function Positions() {
             />
           )}
           {balancesLoad.load.state === "ready" &&
-            (balancesLoad.load.data.length === 0 ? (
+            (balances.length === 0 ? (
               <>
                 <EmptyState
                   title={t("balances.empty.title")}
@@ -2102,12 +3476,27 @@ export function Positions() {
                 />
                 <BalancesTable
                   balances={[]}
+                  activeSort={balanceSort.sort}
+                  activeOrder={balanceSort.order}
                   defaultDraftAccount={accountFilter.trim()}
                   defaultDraftAsset={assetFilter.trim()}
                   draftOpenRequest={draftOpenRequest}
                   accountSuggestions={accountSuggestions}
                   assetSuggestions={assetSuggestions}
+                  onSortChange={(sort, order) => {
+                    setBalanceSort({ sort, order });
+                    setBalancePage(0);
+                  }}
                   onApplied={handleAdjustDone}
+                  onShowHistory={showAccountAssetHistory}
+                  onFilterAccount={(account) => {
+                    setAccountFilter(account);
+                    setBalancePage(0);
+                  }}
+                  onFilterAsset={(asset) => {
+                    setAssetFilter(asset);
+                    setBalancePage(0);
+                  }}
                 />
               </>
             ) : (
@@ -2115,12 +3504,27 @@ export function Positions() {
                 {balancePager}
                 <BalancesTable
                   balances={pagedBalances}
+                  activeSort={balanceSort.sort}
+                  activeOrder={balanceSort.order}
                   defaultDraftAccount={accountFilter.trim()}
                   defaultDraftAsset={assetFilter.trim()}
                   draftOpenRequest={draftOpenRequest}
                   accountSuggestions={accountSuggestions}
                   assetSuggestions={assetSuggestions}
+                  onSortChange={(sort, order) => {
+                    setBalanceSort({ sort, order });
+                    setBalancePage(0);
+                  }}
                   onApplied={handleAdjustDone}
+                  onShowHistory={showAccountAssetHistory}
+                  onFilterAccount={(account) => {
+                    setAccountFilter(account);
+                    setBalancePage(0);
+                  }}
+                  onFilterAsset={(asset) => {
+                    setAssetFilter(asset);
+                    setBalancePage(0);
+                  }}
                 />
                 {balancePager}
               </>
@@ -2130,39 +3534,13 @@ export function Positions() {
 
       {tab === "history" && (
         <>
-          <div className="flex flex-wrap items-center gap-3">
-            <p className="text-[0.6875rem] uppercase tracking-[0.07em] text-muted">
-              {t("history.sectionLabel")}
-            </p>
-            <div className="ml-auto flex items-center gap-2">
-              <Label className="text-xs">{t("history.sourceLabel")}</Label>
-              <Select
-                value={sourceFilter}
-                onValueChange={(v) => {
-                  setSourceFilter(v as Source | "__all__");
-                  setHistoryPage(0);
-                }}
-              >
-                <SelectTrigger className="h-7 w-28 text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__all__">
-                    {t("history.sourceAll")}
-                  </SelectItem>
-                  {SOURCES.map((s) => (
-                    <SelectItem key={s} value={s}>
-                      {s}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
+          <p className="text-[0.6875rem] uppercase tracking-[0.07em] text-muted">
+            {t("history.sectionLabel")}
+          </p>
 
           {historyExportError && <ErrorBanner message={historyExportError} />}
           {adjustmentsLoad.load.state === "loading" && (
-            <TableSkeleton cols={7} />
+            <TableSkeleton cols={9} />
           )}
           {adjustmentsLoad.load.state === "error" && (
             <ErrorState
@@ -2171,7 +3549,7 @@ export function Positions() {
             />
           )}
           {adjustmentsLoad.load.state === "ready" &&
-            (adjustmentsLoad.load.data.length === 0 ? (
+            (adjustmentsLoad.load.data.total === 0 ? (
               <EmptyState
                 title={t("history.empty.title")}
                 hint={t("history.empty.hint")}
@@ -2180,16 +3558,120 @@ export function Positions() {
               <>
                 {historyPager}
                 <Table>
-                  <TableHeader>
-                    <TableRow className="hover:bg-transparent">
-                      <TableHead>{t("history.columns.time")}</TableHead>
-                      <TableHead>{t("history.columns.account")}</TableHead>
-                      <TableHead>{t("history.columns.asset")}</TableHead>
-                      <TableHead>{t("history.columns.source")}</TableHead>
-                      <TableHead>{t("history.columns.request")}</TableHead>
-                      <TableHead>{t("history.columns.status")}</TableHead>
-                      <TableHead>{t("history.columns.outcome")}</TableHead>
-                      <TableHead />
+	                  <TableHeader>
+	                    <TableRow className="hover:bg-transparent">
+	                      <TableHead>
+	                        <SortableHeader
+	                          field="at"
+	                          label={t("history.columns.time")}
+	                          description={t("history.columnDescriptions.time")}
+	                          direction={sortDirection(
+	                            historySort.sort,
+	                            historySort.order,
+	                            "at",
+	                          )}
+	                          onSort={(field, next) => {
+	                            setHistorySort(
+	                              next === "none" ? {} : { sort: field, order: next },
+	                            );
+	                            resetHistoryPage();
+	                          }}
+	                        />
+	                      </TableHead>
+	                      <TableHead>
+	                        <SortableHeader
+	                          field="account"
+	                          label={t("history.columns.account")}
+	                          description={t("history.columnDescriptions.account")}
+	                          direction={sortDirection(
+	                            historySort.sort,
+	                            historySort.order,
+	                            "account",
+	                          )}
+	                          onSort={(field, next) => {
+	                            setHistorySort(
+	                              next === "none" ? {} : { sort: field, order: next },
+	                            );
+	                            resetHistoryPage();
+	                          }}
+	                        />
+	                      </TableHead>
+	                      <TableHead>
+	                        <SortableHeader
+	                          field="asset"
+	                          label={t("history.columns.asset")}
+	                          description={t("history.columnDescriptions.asset")}
+	                          direction={sortDirection(
+	                            historySort.sort,
+	                            historySort.order,
+	                            "asset",
+	                          )}
+	                          onSort={(field, next) => {
+	                            setHistorySort(
+	                              next === "none" ? {} : { sort: field, order: next },
+	                            );
+	                            resetHistoryPage();
+	                          }}
+	                        />
+	                      </TableHead>
+	                      <TableHead className="w-[var(--positions-source-column-width)]">
+	                        <SortableHeader
+	                          field="source"
+	                          label={t("history.columns.source")}
+	                          description={t("history.columnDescriptions.source")}
+	                          direction={sortDirection(
+	                            historySort.sort,
+	                            historySort.order,
+	                            "source",
+	                          )}
+	                          onSort={(field, next) => {
+	                            setHistorySort(
+	                              next === "none" ? {} : { sort: field, order: next },
+	                            );
+	                            resetHistoryPage();
+	                          }}
+	                        />
+	                      </TableHead>
+	                      <TableHead>
+	                        <ColumnHeader
+	                          description={t("history.columnDescriptions.request")}
+	                        >
+	                          {t("history.columns.request")}
+	                        </ColumnHeader>
+	                      </TableHead>
+	                      <TableHead className="w-[var(--positions-status-column-width)]">
+	                        <SortableHeader
+	                          field="status"
+	                          label={t("history.columns.status")}
+	                          description={t("history.columnDescriptions.status")}
+	                          direction={sortDirection(
+	                            historySort.sort,
+	                            historySort.order,
+	                            "status",
+	                          )}
+	                          onSort={(field, next) => {
+	                            setHistorySort(
+	                              next === "none" ? {} : { sort: field, order: next },
+	                            );
+	                            resetHistoryPage();
+	                          }}
+	                        />
+	                      </TableHead>
+                      <TableHead>
+                        <ColumnHeader
+                          description={t("history.columnDescriptions.outcome")}
+                        >
+                          {t("history.columns.outcome")}
+                        </ColumnHeader>
+                      </TableHead>
+                      <TableHead>
+                        <ColumnHeader
+                          description={t("history.columnDescriptions.externalId")}
+                        >
+                          {t("history.columns.externalId")}
+                        </ColumnHeader>
+                      </TableHead>
+                      <TableHead className="text-right" />
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -2198,6 +3680,8 @@ export function Positions() {
                         key={adj.externalId}
                         adj={adj}
                         onClone={openCloneAdjust}
+                        onFilterAccount={filterHistoryAccount}
+                        onFilterAsset={filterHistoryAsset}
                       />
                     ))}
                   </TableBody>

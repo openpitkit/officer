@@ -93,6 +93,9 @@ func TestFilterDataAlwaysCarriesDictionaries(t *testing.T) {
 	// A positions-only scope still carries the asset and principal dictionaries so
 	// the balance foreign keys resolve on import.
 	filtered := FilterData(data, Scope{Sections: []Section{SectionPositions}})
+	if len(filtered.AssetClasses) != 1 {
+		t.Fatalf("asset classes dropped from positions-only scope: %+v", filtered.AssetClasses)
+	}
 	if len(filtered.Assets) != 2 {
 		t.Fatalf("assets dropped from positions-only scope: %+v", filtered.Assets)
 	}
@@ -247,6 +250,9 @@ func fixtureData() Data {
 	order1XID := mustXID(t1Bytes())
 	order2XID := mustXID(t2Bytes())
 	return Data{
+		AssetClasses: []domain.AssetClass{
+			{Code: "equity", Title: "Equity"},
+		},
 		Assets: []domain.Asset{
 			{Code: "AAPL", Title: "Apple", AssetClass: "equity"},
 			{Code: "USD", Title: "US Dollar"},

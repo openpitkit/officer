@@ -260,7 +260,10 @@ func TestBinanceConnector_AllInvalidSymbolsReportsStatusError(t *testing.T) {
 func TestBinanceConnector_CloseStopsSubscription(t *testing.T) {
 	t.Parallel()
 
-	blocked := &fakeBinanceConn{blockRead: make(chan struct{})}
+	blocked := &fakeBinanceConn{
+		blockRead:     make(chan struct{}),
+		ignoreContext: true,
+	}
 	connector := &binanceConnector{
 		dial: func(context.Context, string) (binanceConn, error) {
 			return blocked, nil
@@ -430,19 +433,24 @@ func mustNormalizeBinanceSubscriptions(
 }
 
 type fakeBinanceConn struct {
-	messages  [][]byte
-	err       error
-	blockRead chan struct{}
-	index     int
-	closeOnce sync.Once
+	messages      [][]byte
+	err           error
+	blockRead     chan struct{}
+	ignoreContext bool
+	index         int
+	closeOnce     sync.Once
 }
 
 func (c *fakeBinanceConn) Read(ctx context.Context) ([]byte, error) {
 	if c.blockRead != nil {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-c.blockRead:
+		if c.ignoreContext {
+			<-c.blockRead
+		} else {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-c.blockRead:
+			}
 		}
 	}
 	if c.index >= len(c.messages) {
@@ -460,7 +468,6 @@ func (c *fakeBinanceConn) Close(websocket.StatusCode, string) error {
 	c.closeOnce.Do(func() {
 		if c.blockRead != nil {
 			close(c.blockRead)
-			c.blockRead = nil
 		}
 	})
 	return nil

@@ -20,7 +20,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { AuthProvider } from "./AuthProvider";
 import { useHasPermission } from "./auth-context";
-import { RowActions, registerRowAction, unregisterRowAction } from "..";
+import { RegistryRowActions, registerRowAction, unregisterRowAction } from "..";
 
 function PermissionProbe() {
   const hasPermission = useHasPermission();
@@ -60,7 +60,7 @@ describe("AuthProvider", () => {
 
     render(
       <AuthProvider hasPermission={() => false}>
-        <RowActions kind="auth-smoke" row={{}} ctx={{}} />
+        <RegistryRowActions kind="auth-smoke" row={{}} ctx={{}} />
       </AuthProvider>,
     );
 

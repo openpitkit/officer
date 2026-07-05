@@ -21,7 +21,12 @@
 # Recipes ending in -dev build against a local Pit checkout without modifying
 # go.mod or go.sum.
 
+set dotenv-load
+set dotenv-path := ".github/ci-versions.env"
+
 native_runtime_name := if os() == "macos" { "libopenpit_ffi.dylib" } else { "libopenpit_ffi.so" }
+go_toolchain := "go" + env_var("CI_GO")
+go_version := env_var("CI_GO")
 go_cache := env_var_or_default("GOCACHE", "/tmp/pit-officer-go-build-cache")
 golangci_lint_cache := env_var_or_default("GOLANGCI_LINT_CACHE", "/tmp/pit-officer-golangci-lint-cache")
 go_packages := ". ./cmd/... ./internal/... ./examples/... ./app/... ./openapp/..."
@@ -29,12 +34,12 @@ go_dirs := "webdist.go cmd internal examples app openapp"
 
 # Build the pit-officer binary.
 build: frontend-install build-js
-    GOCACHE={{ go_cache }} CGO_ENABLED=1 go build -o pit-officer ./cmd/pit-officer
+    GOTOOLCHAIN={{ go_toolchain }} GOCACHE={{ go_cache }} CGO_ENABLED=1 go build -o pit-officer ./cmd/pit-officer
 
 # Build all Go packages (no frontend; uses the committed web/dist placeholder).
 build-go:
-    GOCACHE={{ go_cache }} CGO_ENABLED=1 go build {{ go_packages }}
-    cd framework && GOCACHE={{ go_cache }} CGO_ENABLED=1 go build ./...
+    GOTOOLCHAIN={{ go_toolchain }} GOCACHE={{ go_cache }} CGO_ENABLED=1 go build {{ go_packages }}
+    cd framework && GOTOOLCHAIN={{ go_toolchain }} GOCACHE={{ go_cache }} CGO_ENABLED=1 go build ./...
 
 # Build the SPA using already-installed frontend dependencies.
 build-js:
@@ -47,16 +52,28 @@ build-js-lib:
 # Check formatting, lint, build, and test the result.
 check: check-dry build-js build-js-lib
 
+# Check formatting, lint, build, and test against a local Pit checkout.
+check-dev pit_checkout="../pit": (check-dry-dev pit_checkout) build-js build-js-lib
+
 # Lint and test the result (non-mutating).
 [parallel]
 check-dry: lint-all test-all
 
+# Lint and test against a local Pit checkout (non-mutating).
+check-dry-dev pit_checkout="../pit": (lint-all-dev pit_checkout) (test-all-dev pit_checkout)
+
 # Check formatting, lint, build, and test Go.
 check-go: check-go-dry
+
+# Check formatting, lint, build, and test Go against a local Pit checkout.
+check-go-dev pit_checkout="../pit": (check-go-dry-dev pit_checkout)
 
 # Lint, build, and test Go (non-mutating).
 [parallel]
 check-go-dry: lint-go build-go test-go test-go-race
+
+# Lint, build, and test Go against a local Pit checkout (non-mutating).
+check-go-dry-dev pit_checkout="../pit": (lint-go-dev pit_checkout) (build-go-dev pit_checkout) (test-go-dev pit_checkout) (test-go-race-dev pit_checkout)
 
 # Lint, build, and test JS/TypeScript.
 check-js: check-js-dry build-js build-js-lib
@@ -67,22 +84,41 @@ check-js-dry: lint-js test-js
 
 # Run go vet across all packages.
 vet:
-    GOCACHE={{ go_cache }} CGO_ENABLED=1 go vet -all {{ go_packages }}
+    GOTOOLCHAIN={{ go_toolchain }} GOCACHE={{ go_cache }} CGO_ENABLED=1 go vet -all {{ go_packages }}
+
+# Update Go module metadata.
+tidy:
+    GOTOOLCHAIN={{ go_toolchain }} CGO_ENABLED=1 go mod tidy -go={{ go_version }}
+    cd framework && GOTOOLCHAIN={{ go_toolchain }} CGO_ENABLED=1 go mod tidy -go={{ go_version }}
 
 # Lint all.
 [parallel]
 lint-all: lint-go lint-js
 
+# Lint all against a local Pit checkout.
+lint-all-dev pit_checkout="../pit": (lint-go-dev pit_checkout) lint-js
+
 # Lint Go sources.
 lint-go:
     gofmt -l {{ go_dirs }} | (! grep .)
     cd framework && gofmt -l . | (! grep .)
-    GOCACHE={{ go_cache }} CGO_ENABLED=1 go mod tidy -diff
-    cd framework && GOCACHE={{ go_cache }} CGO_ENABLED=1 go mod tidy -diff
-    GOCACHE={{ go_cache }} CGO_ENABLED=1 go vet -all {{ go_packages }}
-    cd framework && GOCACHE={{ go_cache }} CGO_ENABLED=1 go vet -all ./...
-    GOCACHE={{ go_cache }} GOLANGCI_LINT_CACHE={{ golangci_lint_cache }} golangci-lint run --timeout=5m {{ go_packages }}
-    cd framework && GOCACHE={{ go_cache }} GOLANGCI_LINT_CACHE={{ golangci_lint_cache }} golangci-lint run --timeout=5m ./...
+    GOTOOLCHAIN={{ go_toolchain }} GOCACHE={{ go_cache }} CGO_ENABLED=1 go mod tidy -go={{ go_version }} -diff
+    cd framework && GOTOOLCHAIN={{ go_toolchain }} GOCACHE={{ go_cache }} CGO_ENABLED=1 go mod tidy -go={{ go_version }} -diff
+    GOTOOLCHAIN={{ go_toolchain }} GOCACHE={{ go_cache }} CGO_ENABLED=1 go vet -all {{ go_packages }}
+    cd framework && GOTOOLCHAIN={{ go_toolchain }} GOCACHE={{ go_cache }} CGO_ENABLED=1 go vet -all ./...
+    GOTOOLCHAIN={{ go_toolchain }} GOCACHE={{ go_cache }} GOLANGCI_LINT_CACHE={{ golangci_lint_cache }} golangci-lint run --timeout=5m {{ go_packages }}
+    cd framework && GOTOOLCHAIN={{ go_toolchain }} GOCACHE={{ go_cache }} GOLANGCI_LINT_CACHE={{ golangci_lint_cache }} golangci-lint run --timeout=5m ./...
+
+# Lint Go sources against a local Pit checkout.
+lint-go-dev pit_checkout="../pit": (dylib-dev pit_checkout)
+    gofmt -l {{ go_dirs }} | (! grep .)
+    cd framework && gofmt -l . | (! grep .)
+    GOTOOLCHAIN={{ go_toolchain }} GOCACHE={{ go_cache }} CGO_ENABLED=1 go mod tidy -go={{ go_version }} -diff
+    cd framework && GOTOOLCHAIN={{ go_toolchain }} GOCACHE={{ go_cache }} CGO_ENABLED=1 go mod tidy -go={{ go_version }} -diff
+    just _go-dev {{ quote(pit_checkout) }} "." "vet" "-all" {{ go_packages }}
+    just _go-dev {{ quote(pit_checkout) }} "framework" "vet" "-all" "./..."
+    just _go-tool-dev {{ quote(pit_checkout) }} "." "golangci-lint" "run" "--timeout=5m" {{ go_packages }}
+    just _go-tool-dev {{ quote(pit_checkout) }} "framework" "golangci-lint" "run" "--timeout=5m" "./..."
 
 # Lint and typecheck JS/TypeScript sources.
 lint-js:
@@ -93,15 +129,28 @@ lint-js:
 [parallel]
 test-all: test-go test-go-race test-js
 
+# Run all tests against a local Pit checkout.
+test-all-dev pit_checkout="../pit": (test-go-dev pit_checkout) (test-go-race-dev pit_checkout) test-js
+
 # Run all Go tests.
 test-go:
-    GOCACHE={{ go_cache }} CGO_ENABLED=1 go test -count=1 {{ go_packages }}
-    cd framework && GOCACHE={{ go_cache }} CGO_ENABLED=1 go test -count=1 ./...
+    GOTOOLCHAIN={{ go_toolchain }} GOCACHE={{ go_cache }} CGO_ENABLED=1 go test -count=1 {{ go_packages }}
+    cd framework && GOTOOLCHAIN={{ go_toolchain }} GOCACHE={{ go_cache }} CGO_ENABLED=1 go test -count=1 ./...
+
+# Run all Go tests against a local Pit checkout.
+test-go-dev pit_checkout="../pit": (dylib-dev pit_checkout)
+    just _go-dev {{ quote(pit_checkout) }} "." "test" "-count=1" {{ go_packages }}
+    just _go-dev {{ quote(pit_checkout) }} "framework" "test" "-count=1" "./..."
 
 # Run all Go tests with the race detector.
 test-go-race:
-    GOCACHE={{ go_cache }} CGO_ENABLED=1 go test -race -count=1 {{ go_packages }}
-    cd framework && GOCACHE={{ go_cache }} CGO_ENABLED=1 go test -race -count=1 ./...
+    GOTOOLCHAIN={{ go_toolchain }} GOCACHE={{ go_cache }} CGO_ENABLED=1 go test -race -count=1 {{ go_packages }}
+    cd framework && GOTOOLCHAIN={{ go_toolchain }} GOCACHE={{ go_cache }} CGO_ENABLED=1 go test -race -count=1 ./...
+
+# Run all Go tests with the race detector against a local Pit checkout.
+test-go-race-dev pit_checkout="../pit": (dylib-dev pit_checkout)
+    just _go-dev {{ quote(pit_checkout) }} "." "test" "-race" "-count=1" {{ go_packages }}
+    just _go-dev {{ quote(pit_checkout) }} "framework" "test" "-race" "-count=1" "./..."
 
 # Run JS/TypeScript tests.
 test-js:
@@ -142,6 +191,7 @@ frontend-ci-install:
 # Build the stable Docker image from the published OpenPit module.
 docker-build tag="pit-officer:local":
     docker build \
+        --build-arg GO_VERSION={{ go_version }} \
         -f {{ justfile_directory() }}/Dockerfile \
         -t {{ tag }} \
         {{ justfile_directory() }}
@@ -159,13 +209,17 @@ dylib-dev pit_checkout="../pit":
 build-dev pit_checkout="../pit": frontend-install build-js (dylib-dev pit_checkout) (_go-dev pit_checkout "." "build" "-o" "pit-officer" "./cmd/pit-officer")
 
 # Build all Go packages against a local Pit checkout.
-build-go-dev pit_checkout="../pit": (dylib-dev pit_checkout) (_go-dev pit_checkout "." "build" "./...") (_go-dev pit_checkout "framework" "build" "./...")
+build-go-dev pit_checkout="../pit": (dylib-dev pit_checkout)
+    just _go-dev {{ quote(pit_checkout) }} "." "build" {{ go_packages }}
+    just _go-dev {{ quote(pit_checkout) }} "framework" "build" "./..."
 
 # Run go vet against a local Pit checkout.
-vet-dev pit_checkout="../pit": (dylib-dev pit_checkout) (_go-dev pit_checkout "." "vet" "./...") (_go-dev pit_checkout "framework" "vet" "./...")
+vet-dev pit_checkout="../pit": (dylib-dev pit_checkout)
+    just _go-dev {{ quote(pit_checkout) }} "." "vet" {{ go_packages }}
+    just _go-dev {{ quote(pit_checkout) }} "framework" "vet" "./..."
 
 # Run tests against a local Pit checkout.
-test-dev pit_checkout="../pit": (dylib-dev pit_checkout) (_go-dev pit_checkout "." "test" "-race" "-count=1" "./...") (_go-dev pit_checkout "framework" "test" "-race" "-count=1" "./...")
+test-dev pit_checkout="../pit": (test-all-dev pit_checkout)
 
 # Run pit-officer in stdio MCP mode against a local Pit checkout.
 run-mcp-dev pit_checkout="../pit": (build-dev pit_checkout)
@@ -198,14 +252,49 @@ _go-dev pit_checkout module_dir +go_args:
     trap 'rm -rf "$work_dir"' EXIT
     (
         cd "$work_dir"
-        go work init "$officer_dir" "$officer_dir/framework" "$pit_dir/bindings/go"
+        GOTOOLCHAIN={{ go_toolchain }} \
+            go work init \
+            "$officer_dir" \
+            "$officer_dir/framework" \
+            "$pit_dir/bindings/go"
     )
     (
         cd "$officer_dir/$module_dir"
-        CGO_ENABLED=1 \
+        GOTOOLCHAIN={{ go_toolchain }} \
+            CGO_ENABLED=1 \
             GOWORK="$work_dir/go.work" \
             OPENPIT_RUNTIME_LIBRARY_PATH="$runtime_lib" \
             go {{ go_args }}
+    )
+
+# Run a Go-adjacent tool with a temporary workspace using the local OpenPit binding.
+_go-tool-dev pit_checkout module_dir +tool_args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    officer_dir={{ quote(justfile_directory()) }}
+    pit_dir={{ quote(pit_checkout) }}
+    module_dir={{ quote(module_dir) }}
+    pit_dir="$(cd "$pit_dir" && pwd)"
+    runtime_lib="$pit_dir/target/release/{{ native_runtime_name }}"
+    work_dir="$(mktemp -d)"
+    trap 'rm -rf "$work_dir"' EXIT
+    (
+        cd "$work_dir"
+        GOTOOLCHAIN={{ go_toolchain }} \
+            go work init \
+            "$officer_dir" \
+            "$officer_dir/framework" \
+            "$pit_dir/bindings/go"
+    )
+    (
+        cd "$officer_dir/$module_dir"
+        GOTOOLCHAIN={{ go_toolchain }} \
+            GOCACHE={{ go_cache }} \
+            GOLANGCI_LINT_CACHE={{ golangci_lint_cache }} \
+            CGO_ENABLED=1 \
+            GOWORK="$work_dir/go.work" \
+            OPENPIT_RUNTIME_LIBRARY_PATH="$runtime_lib" \
+            {{ tool_args }}
     )
 
 # Seed a running Officer instance with demo accounts, balances, orders, and trades.

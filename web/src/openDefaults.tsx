@@ -25,15 +25,11 @@ import {
 } from "@/framework";
 import {
   AccountAuditAction,
-  AccountBlockAction,
   AccountDeleteAction,
-  AccountNotesAction,
   AccountPoliciesAction,
   AccountPositionsAction,
   AccountTradingAction,
-  GroupBlockAction,
   GroupDeleteAction,
-  GroupNotesAction,
   LimitDeleteAction,
   LimitEditAction,
   type AccountRowActionContext,
@@ -119,37 +115,11 @@ export function registerOpenRowActions(): void {
       createElement(AccountAuditAction, { account, ctx }),
   });
   registerRowAction<Account, AccountRowActionContext>({
-    id: "account-notes",
-    kind: "account",
-    order: 50,
-    render: (account, ctx) =>
-      createElement(AccountNotesAction, { account, ctx }),
-  });
-  registerRowAction<Account, AccountRowActionContext>({
-    id: "account-block-unblock",
-    kind: "account",
-    order: 60,
-    render: (account, ctx) =>
-      createElement(AccountBlockAction, { account, ctx }),
-  });
-  registerRowAction<Account, AccountRowActionContext>({
     id: "account-delete",
     kind: "account",
     order: 70,
     render: (account, ctx) =>
       createElement(AccountDeleteAction, { account, ctx }),
-  });
-  registerRowAction<Group, GroupRowActionContext>({
-    id: "group-notes",
-    kind: "group",
-    order: 10,
-    render: (group, ctx) => createElement(GroupNotesAction, { group, ctx }),
-  });
-  registerRowAction<Group, GroupRowActionContext>({
-    id: "group-block-unblock",
-    kind: "group",
-    order: 20,
-    render: (group, ctx) => createElement(GroupBlockAction, { group, ctx }),
   });
   registerRowAction<Group, GroupRowActionContext>({
     id: "group-delete",

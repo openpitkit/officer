@@ -17,7 +17,7 @@
 
 // Skeleton tests for the rebuilt SQLite store: schema migration and foreign-key
 // enforcement, single-realm ForRealm enforcement, the shared external-id and
-// engine-id helpers, and group-1 (assets, principals, account groups, accounts)
+// engine-id helpers, and group-1 (asset, principal, account groups, account)
 // round-trips by code. The table groups still stubbed are not covered here.
 
 package store
@@ -26,7 +26,9 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"testing"
+	"time"
 
 	"go.openpit.dev/officer/framework/domain"
 )
@@ -75,7 +77,7 @@ func TestMigrateAppliesSchemaAndForeignKeys(t *testing.T) {
 	}
 	_, err = sq.db.ExecContext(
 		ctx,
-		`INSERT INTO accounts (engine_account_id, code, group_id) VALUES (1, 'x', 999999)`,
+		`INSERT INTO account (code, group_id) VALUES ('x', 999999)`,
 	)
 	if err == nil {
 		t.Fatal("expected foreign-key violation inserting dangling group_id, got nil")
@@ -166,6 +168,9 @@ func TestAssetRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
+	if err := rs.CreateAssetClass(ctx, domain.AssetClass{Code: "equity", Title: "Equity"}); err != nil {
+		t.Fatalf("CreateAssetClass: %v", err)
+	}
 	asset := domain.Asset{Code: "AAPL", Title: "Apple", AssetClass: "equity"}
 	if err := rs.CreateAsset(ctx, asset); err != nil {
 		t.Fatalf("CreateAsset: %v", err)
@@ -179,15 +184,20 @@ func TestAssetRoundTrip(t *testing.T) {
 		t.Fatalf("GetAsset = %+v, want %+v", got, asset)
 	}
 
+	// An unknown class code is rejected: the link is a real foreign key.
+	if err := rs.CreateAsset(ctx, domain.Asset{Code: "MSFT", AssetClass: "ghost"}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("CreateAsset(unknown class) error = %v, want ErrInvalid", err)
+	}
+
 	// Duplicate code is ErrAlreadyExists.
 	if err := rs.CreateAsset(ctx, asset); !errors.Is(err, domain.ErrAlreadyExists) {
 		t.Fatalf("CreateAsset(dup) error = %v, want ErrAlreadyExists", err)
 	}
 
-	// Update mutates title and class.
+	// Update mutates title and class in place (no code change).
 	asset.Title = "Apple Inc."
 	asset.AssetClass = ""
-	if err := rs.UpdateAsset(ctx, asset); err != nil {
+	if _, err := rs.UpdateAsset(ctx, "AAPL", asset); err != nil {
 		t.Fatalf("UpdateAsset: %v", err)
 	}
 	got, _, err = rs.GetAsset(ctx, "AAPL")
@@ -198,25 +208,269 @@ func TestAssetRoundTrip(t *testing.T) {
 		t.Fatalf("UpdateAsset result = %+v", got)
 	}
 
-	// List returns the row.
+	// Update renames the public code; the old code no longer resolves.
+	renamed := domain.Asset{Code: "AAPL.US", Title: "Apple Inc."}
+	updated, err := rs.UpdateAsset(ctx, "AAPL", renamed)
+	if err != nil {
+		t.Fatalf("UpdateAsset rename: %v", err)
+	}
+	if updated.Code != "AAPL.US" {
+		t.Fatalf("UpdateAsset rename result = %+v", updated)
+	}
+	if _, ok, _ := rs.GetAsset(ctx, "AAPL"); ok {
+		t.Fatal("old asset code still resolves after rename")
+	}
+	if got, ok, _ := rs.GetAsset(ctx, "AAPL.US"); !ok || got.Title != "Apple Inc." {
+		t.Fatalf("renamed asset = %+v ok=%v", got, ok)
+	}
+
+	// Rename onto an existing code is a conflict.
+	if err := rs.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
+		t.Fatalf("CreateAsset USD: %v", err)
+	}
+	if _, err := rs.UpdateAsset(ctx, "AAPL.US", domain.Asset{Code: "USD"}); !errors.Is(err, domain.ErrAlreadyExists) {
+		t.Fatalf("UpdateAsset(rename dup) error = %v, want ErrAlreadyExists", err)
+	}
+	// Rename of a missing asset is ErrNotFound.
+	if _, err := rs.UpdateAsset(ctx, "GHOST", domain.Asset{Code: "GHOST2"}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("UpdateAsset(missing) error = %v, want ErrNotFound", err)
+	}
+
+	// List returns the rows.
 	assets, err := rs.ListAssets(ctx)
 	if err != nil {
 		t.Fatalf("ListAssets: %v", err)
 	}
-	if len(assets) != 1 {
-		t.Fatalf("ListAssets len = %d, want 1", len(assets))
+	if len(assets) != 2 {
+		t.Fatalf("ListAssets len = %d, want 2", len(assets))
 	}
 
 	// Delete removes it.
-	if err := rs.DeleteAsset(ctx, "AAPL", true); err != nil {
+	if err := rs.DeleteAsset(ctx, "AAPL.US", true); err != nil {
 		t.Fatalf("DeleteAsset: %v", err)
 	}
-	if _, ok, _ := rs.GetAsset(ctx, "AAPL"); ok {
+	if _, ok, _ := rs.GetAsset(ctx, "AAPL.US"); ok {
 		t.Fatal("GetAsset after delete returned ok=true")
 	}
 	// Delete of a missing asset is ErrNotFound.
-	if err := rs.DeleteAsset(ctx, "AAPL", true); !errors.Is(err, domain.ErrNotFound) {
+	if err := rs.DeleteAsset(ctx, "AAPL.US", true); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("DeleteAsset(missing) error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestAssetClassRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+
+	class := domain.AssetClass{Code: "equity", Title: "Equity", Notes: "listed shares"}
+	if err := rs.CreateAssetClass(ctx, class); err != nil {
+		t.Fatalf("CreateAssetClass: %v", err)
+	}
+	got, ok, err := rs.GetAssetClass(ctx, "equity")
+	if err != nil || !ok {
+		t.Fatalf("GetAssetClass: ok=%v err=%v", ok, err)
+	}
+	if got != class {
+		t.Fatalf("GetAssetClass = %+v, want %+v", got, class)
+	}
+
+	// Duplicate code rejected.
+	if err := rs.CreateAssetClass(ctx, class); !errors.Is(err, domain.ErrAlreadyExists) {
+		t.Fatalf("CreateAssetClass(dup) error = %v, want ErrAlreadyExists", err)
+	}
+
+	// In-place update mutates title and notes.
+	class.Title = "Equities"
+	class.Notes = "cash equities"
+	updated, err := rs.UpdateAssetClass(ctx, "equity", class)
+	if err != nil {
+		t.Fatalf("UpdateAssetClass: %v", err)
+	}
+	if updated.Title != "Equities" || updated.Notes != "cash equities" {
+		t.Fatalf("UpdateAssetClass result = %+v", updated)
+	}
+
+	list, err := rs.ListAssetClasses(ctx)
+	if err != nil {
+		t.Fatalf("ListAssetClasses: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("ListAssetClasses len = %d, want 1", len(list))
+	}
+
+	// Missing-code update is ErrNotFound.
+	if _, err := rs.UpdateAssetClass(ctx, "ghost", domain.AssetClass{Code: "ghost"}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("UpdateAssetClass(missing) error = %v, want ErrNotFound", err)
+	}
+
+	if err := rs.DeleteAssetClass(ctx, "equity", false); err != nil {
+		t.Fatalf("DeleteAssetClass: %v", err)
+	}
+	if _, ok, _ := rs.GetAssetClass(ctx, "equity"); ok {
+		t.Fatal("GetAssetClass after delete returned ok=true")
+	}
+	if err := rs.DeleteAssetClass(ctx, "equity", false); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("DeleteAssetClass(missing) error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestAssetClassLinkIsForeignKey(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+
+	if err := rs.CreateAssetClass(ctx, domain.AssetClass{Code: "equity"}); err != nil {
+		t.Fatalf("CreateAssetClass: %v", err)
+	}
+	if err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL", AssetClass: "equity"}); err != nil {
+		t.Fatalf("CreateAsset AAPL: %v", err)
+	}
+	if err := rs.CreateAsset(ctx, domain.Asset{Code: "MSFT", AssetClass: "equity"}); err != nil {
+		t.Fatalf("CreateAsset MSFT: %v", err)
+	}
+	if err := rs.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
+		t.Fatalf("CreateAsset USD: %v", err)
+	}
+
+	// A code rename needs no cascade: the class_id foreign key is unchanged, so
+	// referencing assets resolve to the new code via the join.
+	if _, err := rs.UpdateAssetClass(ctx, "equity", domain.AssetClass{Code: "stock"}); err != nil {
+		t.Fatalf("UpdateAssetClass rename: %v", err)
+	}
+	for _, code := range []string{"AAPL", "MSFT"} {
+		asset, _, err := rs.GetAsset(ctx, code)
+		if err != nil {
+			t.Fatalf("GetAsset %s: %v", code, err)
+		}
+		if asset.AssetClass != "stock" {
+			t.Fatalf("asset %s class = %q, want stock", code, asset.AssetClass)
+		}
+	}
+
+	// The list row aggregates the asset count for the renamed class.
+	page, err := rs.ListAssetClassRows(ctx, AssetClassListFilter{})
+	if err != nil {
+		t.Fatalf("ListAssetClassRows: %v", err)
+	}
+	if len(page.Rows) != 1 || page.Rows[0].Class.Code != "stock" || page.Rows[0].AssetCount != 2 {
+		t.Fatalf("ListAssetClassRows = %+v", page.Rows)
+	}
+
+	// Non-forced delete with referencing assets reports dependents.
+	if err := rs.DeleteAssetClass(ctx, "stock", false); !errors.Is(err, domain.ErrHasDependents) {
+		t.Fatalf("DeleteAssetClass(non-force) error = %v, want ErrHasDependents", err)
+	}
+
+	// Forced delete removes the class; ON DELETE SET NULL clears the link.
+	if err := rs.DeleteAssetClass(ctx, "stock", true); err != nil {
+		t.Fatalf("DeleteAssetClass(force): %v", err)
+	}
+	asset, _, err := rs.GetAsset(ctx, "AAPL")
+	if err != nil {
+		t.Fatalf("GetAsset AAPL after force delete: %v", err)
+	}
+	if asset.AssetClass != "" {
+		t.Fatalf("asset class after force delete = %q, want empty", asset.AssetClass)
+	}
+}
+
+func TestAssetClassListFiltersAndCounts(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+
+	if err := rs.CreateAssetClass(ctx, domain.AssetClass{Code: "equity", Title: "Equity", Notes: "shares"}); err != nil {
+		t.Fatalf("CreateAssetClass equity: %v", err)
+	}
+	if err := rs.CreateAssetClass(ctx, domain.AssetClass{Code: "fx", Title: "Foreign Exchange", Notes: "currency pairs"}); err != nil {
+		t.Fatalf("CreateAssetClass fx: %v", err)
+	}
+	if err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL", AssetClass: "equity"}); err != nil {
+		t.Fatalf("CreateAsset: %v", err)
+	}
+
+	// Code/title search matches either column.
+	page, err := rs.ListAssetClassRows(ctx, AssetClassListFilter{
+		Code: ExactTextMatcher("fx"),
+	})
+	if err != nil {
+		t.Fatalf("ListAssetClassRows code: %v", err)
+	}
+	if len(page.Rows) != 1 || page.Rows[0].Class.Code != "fx" {
+		t.Fatalf("ListAssetClassRows code = %+v", page.Rows)
+	}
+
+	// Notes search narrows.
+	page, err = rs.ListAssetClassRows(ctx, AssetClassListFilter{
+		Notes: TextMatcher{Fragments: []string{"shares"}},
+	})
+	if err != nil {
+		t.Fatalf("ListAssetClassRows notes: %v", err)
+	}
+	if len(page.Rows) != 1 || page.Rows[0].Class.Code != "equity" || page.Rows[0].AssetCount != 1 {
+		t.Fatalf("ListAssetClassRows notes = %+v", page.Rows)
+	}
+
+	// Unfiltered lists both, ordered by code, with per-class asset counts.
+	page, err = rs.ListAssetClassRows(ctx, AssetClassListFilter{})
+	if err != nil {
+		t.Fatalf("ListAssetClassRows all: %v", err)
+	}
+	if page.Total != 2 || len(page.Rows) != 2 {
+		t.Fatalf("ListAssetClassRows all total=%d rows=%d", page.Total, len(page.Rows))
+	}
+	if page.Rows[0].Class.Code != "equity" || page.Rows[0].AssetCount != 1 {
+		t.Fatalf("ListAssetClassRows all[0] = %+v", page.Rows[0])
+	}
+	if page.Rows[1].Class.Code != "fx" || page.Rows[1].AssetCount != 0 {
+		t.Fatalf("ListAssetClassRows all[1] = %+v", page.Rows[1])
+	}
+}
+
+func TestAssetListFilters(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+
+	if err := rs.CreateAssetClass(ctx, domain.AssetClass{Code: "equity", Title: "Equity"}); err != nil {
+		t.Fatalf("CreateAssetClass equity: %v", err)
+	}
+	if err := rs.CreateAssetClass(ctx, domain.AssetClass{Code: "crypto", Title: "Crypto"}); err != nil {
+		t.Fatalf("CreateAssetClass crypto: %v", err)
+	}
+	if err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL", Title: "Apple Inc.", AssetClass: "equity"}); err != nil {
+		t.Fatalf("CreateAsset AAPL: %v", err)
+	}
+	if err := rs.CreateAsset(ctx, domain.Asset{Code: "BTC", Title: "Bitcoin", AssetClass: "crypto"}); err != nil {
+		t.Fatalf("CreateAsset BTC: %v", err)
+	}
+
+	page, err := rs.ListAssetRows(ctx, AssetListFilter{
+		Code: TextMatcher{Fragments: []string{"Apple"}},
+	})
+	if err != nil {
+		t.Fatalf("ListAssetRows code/title: %v", err)
+	}
+	if page.Total != 1 || len(page.Rows) != 1 || page.Rows[0].Code != "AAPL" {
+		t.Fatalf("code/title filtered page = %+v", page)
+	}
+
+	page, err = rs.ListAssetRows(ctx, AssetListFilter{
+		Class: ExactTextMatcher("crypto"),
+	})
+	if err != nil {
+		t.Fatalf("ListAssetRows class: %v", err)
+	}
+	if page.Total != 1 || len(page.Rows) != 1 || page.Rows[0].Code != "BTC" {
+		t.Fatalf("class filtered page = %+v", page)
+	}
+
+	page, err = rs.ListAssetRows(ctx, AssetListFilter{
+		Sort: SortSpec{Column: "code"},
+		Page: PageSpec{Limit: 1, Offset: 1},
+	})
+	if err != nil {
+		t.Fatalf("ListAssetRows page: %v", err)
+	}
+	if page.Total != 2 || len(page.Rows) != 1 || page.Rows[0].Code != "BTC" {
+		t.Fatalf("paged rows = %+v", page)
 	}
 }
 
@@ -442,6 +696,447 @@ func TestDeleteGroupClearsAccountLink(t *testing.T) {
 	if err := rs.DeleteGroup(ctx, "alpha"); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("DeleteGroup(missing) error = %v, want ErrNotFound", err)
 	}
+}
+
+func TestListAccountRowsFiltersAndCounts(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+
+	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "desk-alpha"}); err != nil {
+		t.Fatalf("CreateGroup alpha: %v", err)
+	}
+	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "desk-beta"}); err != nil {
+		t.Fatalf("CreateGroup beta: %v", err)
+	}
+	if err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL"}); err != nil {
+		t.Fatalf("CreateAsset AAPL: %v", err)
+	}
+	if err := rs.CreateAsset(ctx, domain.Asset{Code: "MSFT"}); err != nil {
+		t.Fatalf("CreateAsset MSFT: %v", err)
+	}
+	for _, account := range []domain.Account{
+		{
+			Code:      "acc_%_alpha",
+			GroupCode: "desk-alpha",
+			Notes:     "primary equity desk",
+		},
+		{
+			Code:        "acc-star-beta",
+			GroupCode:   "desk-beta",
+			Blocked:     true,
+			BlockReason: "risk halt",
+		},
+		{Code: "cash-default", Notes: "cash desk"},
+	} {
+		if _, err := rs.CreateAccount(ctx, account); err != nil {
+			t.Fatalf("CreateAccount %s: %v", account.Code, err)
+		}
+	}
+	now := time.Now().UTC()
+	for _, balance := range []domain.Balance{
+		{Account: "acc_%_alpha", Asset: "AAPL", UpdatedAt: now},
+		{Account: "acc_%_alpha", Asset: "MSFT", UpdatedAt: now},
+		{Account: "acc-star-beta", Asset: "AAPL", UpdatedAt: now},
+	} {
+		if err := rs.UpsertBalance(ctx, balance); err != nil {
+			t.Fatalf("UpsertBalance %+v: %v", balance, err)
+		}
+	}
+
+	rows, err := rs.ListAccountRows(ctx, AccountListFilter{
+		Code: TextMatcher{Fragments: []string{"acc_%"}},
+	})
+	if err != nil {
+		t.Fatalf("ListAccountRows code literal: %v", err)
+	}
+	if got := accountRowCodes(rows.Rows); len(got) != 1 || got[0] != "acc_%_alpha" {
+		t.Fatalf("code literal rows = %v, want [acc_%%_alpha]", got)
+	}
+	if rows.Rows[0].PositionCount != 2 {
+		t.Fatalf("position count = %d, want 2", rows.Rows[0].PositionCount)
+	}
+
+	group := "desk-beta"
+	zero := 0
+	rows, err = rs.ListAccountRows(ctx, AccountListFilter{
+		GroupCode:   &group,
+		Status:      StatusFilterBlocked,
+		BlockReason: TextMatcher{Fragments: []string{"risk"}},
+		Position: CountRangeFilter{
+			Min:          &zero,
+			MinExclusive: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ListAccountRows combined: %v", err)
+	}
+	if got := accountRowCodes(rows.Rows); len(got) != 1 || got[0] != "acc-star-beta" {
+		t.Fatalf("combined rows = %v, want [acc-star-beta]", got)
+	}
+
+	ungrouped := ""
+	rows, err = rs.ListAccountRows(ctx, AccountListFilter{
+		GroupCode: &ungrouped,
+		Position: CountRangeFilter{
+			Min: &zero,
+			Max: &zero,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ListAccountRows ungrouped no positions: %v", err)
+	}
+	if got := accountRowCodes(rows.Rows); len(got) != 1 || got[0] != "cash-default" {
+		t.Fatalf("ungrouped rows = %v, want [cash-default]", got)
+	}
+
+	two := 2
+	rows, err = rs.ListAccountRows(ctx, AccountListFilter{
+		Position: CountRangeFilter{
+			Min: &two,
+			Max: &two,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ListAccountRows position range: %v", err)
+	}
+	if got := accountRowCodes(rows.Rows); len(got) != 1 || got[0] != "acc_%_alpha" {
+		t.Fatalf("position range rows = %v, want [acc_%%_alpha]", got)
+	}
+}
+
+func TestListRowsMatchTitleAndGroupCode(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+
+	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{
+		Code:  "g-eq",
+		Title: "Equity Desk",
+	}); err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	if _, err := rs.CreateAccount(ctx, domain.Account{
+		Code:      "acc-1",
+		Title:     "Alpha Trader",
+		GroupCode: "g-eq",
+	}); err != nil {
+		t.Fatalf("CreateAccount acc-1: %v", err)
+	}
+	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-2"}); err != nil {
+		t.Fatalf("CreateAccount acc-2: %v", err)
+	}
+
+	// Account code search also matches the title.
+	rows, err := rs.ListAccountRows(ctx, AccountListFilter{
+		Code: TextMatcher{Fragments: []string{"Trader"}},
+	})
+	if err != nil {
+		t.Fatalf("ListAccountRows title: %v", err)
+	}
+	if got := accountRowCodes(rows.Rows); len(got) != 1 || got[0] != "acc-1" {
+		t.Fatalf("title match rows = %v, want [acc-1]", got)
+	}
+
+	// Exact group code narrows accounts by their assigned group.
+	groupCode := "g-eq"
+	rows, err = rs.ListAccountRows(ctx, AccountListFilter{
+		GroupCode: &groupCode,
+	})
+	if err != nil {
+		t.Fatalf("ListAccountRows group code: %v", err)
+	}
+	if got := accountRowCodes(rows.Rows); len(got) != 1 || got[0] != "acc-1" {
+		t.Fatalf("group code rows = %v, want [acc-1]", got)
+	}
+
+	// Group list code search also matches the group title.
+	groupPage, err := rs.ListGroupRows(ctx, GroupListFilter{
+		Code: TextMatcher{Fragments: []string{"Equity"}},
+	})
+	if err != nil {
+		t.Fatalf("ListGroupRows title: %v", err)
+	}
+	if got := groupRowCodes(groupPage.Rows); len(got) != 1 || got[0] != "g-eq" {
+		t.Fatalf("group title rows = %v, want [g-eq]", got)
+	}
+
+	// Group account-count range selects groups by their member count: g-eq has
+	// one account, so a two-account floor excludes it.
+	two := 2
+	groupPage, err = rs.ListGroupRows(ctx, GroupListFilter{
+		Account: CountRangeFilter{Min: &two},
+	})
+	if err != nil {
+		t.Fatalf("ListGroupRows account range: %v", err)
+	}
+	if got := groupRowCodes(groupPage.Rows); len(got) != 0 {
+		t.Fatalf("account range rows = %v, want []", got)
+	}
+	one := 1
+	groupPage, err = rs.ListGroupRows(ctx, GroupListFilter{
+		Code:    TextMatcher{Fragments: []string{"g-eq"}},
+		Account: CountRangeFilter{Min: &one},
+	})
+	if err != nil {
+		t.Fatalf("ListGroupRows account range floor: %v", err)
+	}
+	if got := groupRowCodes(groupPage.Rows); len(got) != 1 || got[0] != "g-eq" {
+		t.Fatalf("account range floor rows = %v, want [g-eq]", got)
+	}
+}
+
+func TestListGroupRowsFiltersAndCounts(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+	zero := 0
+
+	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{
+		Code:  "desk-alpha",
+		Notes: "primary group",
+	}); err != nil {
+		t.Fatalf("CreateGroup alpha: %v", err)
+	}
+	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{
+		Code:        "desk-beta",
+		Blocked:     true,
+		BlockReason: "risk halt",
+	}); err != nil {
+		t.Fatalf("CreateGroup beta: %v", err)
+	}
+	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "empty"}); err != nil {
+		t.Fatalf("CreateGroup empty: %v", err)
+	}
+	if err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL"}); err != nil {
+		t.Fatalf("CreateAsset: %v", err)
+	}
+	for _, account := range []domain.Account{
+		{Code: "acc-alpha-1", GroupCode: "desk-alpha"},
+		{Code: "acc-alpha-2", GroupCode: "desk-alpha"},
+		{Code: "acc-beta-1", GroupCode: "desk-beta"},
+		{Code: "acc-default"},
+	} {
+		if _, err := rs.CreateAccount(ctx, account); err != nil {
+			t.Fatalf("CreateAccount %s: %v", account.Code, err)
+		}
+	}
+	now := time.Now().UTC()
+	if err := rs.UpsertBalance(ctx, domain.Balance{
+		Account: "acc-alpha-1", Asset: "AAPL", UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("UpsertBalance alpha: %v", err)
+	}
+	if err := rs.UpsertBalance(ctx, domain.Balance{
+		Account: "acc-default", Asset: "AAPL", UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("UpsertBalance default: %v", err)
+	}
+
+	page, err := rs.ListGroupRows(ctx, GroupListFilter{})
+	if err != nil {
+		t.Fatalf("ListGroupRows all: %v", err)
+	}
+	defaultRow, ok := findGroupRow(page.Rows, "")
+	if !ok {
+		t.Fatalf("default group row missing from %v", groupRowCodes(page.Rows))
+	}
+	if defaultRow.AccountCount != 1 || defaultRow.PositionCount != 1 {
+		t.Fatalf(
+			"default counts = accounts %d positions %d, want 1/1",
+			defaultRow.AccountCount, defaultRow.PositionCount,
+		)
+	}
+	// Total counts the three real groups; the synthetic default is excluded.
+	if page.Total != 3 {
+		t.Fatalf("total = %d, want 3", page.Total)
+	}
+	// The default group is pinned first on the first page.
+	if page.Rows[0].Group.Code != "" {
+		t.Fatalf("default group not pinned first: %v", groupRowCodes(page.Rows))
+	}
+
+	page, err = rs.ListGroupRows(ctx, GroupListFilter{
+		Code:    TextMatcher{Fragments: []string{"desk", "alpha"}},
+		Account: CountRangeFilter{Min: &zero, MinExclusive: true},
+		Position: CountRangeFilter{
+			Min:          &zero,
+			MinExclusive: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ListGroupRows alpha: %v", err)
+	}
+	if got := groupRowCodes(page.Rows); len(got) != 1 || got[0] != "desk-alpha" {
+		t.Fatalf("alpha rows = %v, want [desk-alpha]", got)
+	}
+	if page.Rows[0].AccountCount != 2 || page.Rows[0].PositionCount != 1 {
+		t.Fatalf(
+			"alpha counts = accounts %d positions %d, want 2/1",
+			page.Rows[0].AccountCount, page.Rows[0].PositionCount,
+		)
+	}
+	if page.Total != 1 {
+		t.Fatalf("alpha total = %d, want 1", page.Total)
+	}
+
+	page, err = rs.ListGroupRows(ctx, GroupListFilter{
+		Status:      StatusFilterBlocked,
+		BlockReason: TextMatcher{Fragments: []string{"risk"}},
+		Account:     CountRangeFilter{Min: &zero, MinExclusive: true},
+	})
+	if err != nil {
+		t.Fatalf("ListGroupRows blocked notes: %v", err)
+	}
+	if got := groupRowCodes(page.Rows); len(got) != 1 || got[0] != "desk-beta" {
+		t.Fatalf("blocked rows = %v, want [desk-beta]", got)
+	}
+
+	page, err = rs.ListGroupRows(ctx, GroupListFilter{
+		Account: CountRangeFilter{Min: &zero, Max: &zero},
+	})
+	if err != nil {
+		t.Fatalf("ListGroupRows no accounts: %v", err)
+	}
+	if got := groupRowCodes(page.Rows); len(got) != 1 || got[0] != "empty" {
+		t.Fatalf("empty rows = %v, want [empty]", got)
+	}
+
+	page, err = rs.ListGroupRows(ctx, GroupListFilter{
+		Code: TextMatcher{Fragments: []string{"desk"}},
+	})
+	if err != nil {
+		t.Fatalf("ListGroupRows code filter: %v", err)
+	}
+	if got := groupRowCodes(page.Rows); slices.Contains(got, "") {
+		t.Fatalf("default row bypassed code filter: %v", got)
+	}
+
+	page, err = rs.ListGroupRows(ctx, GroupListFilter{Status: StatusFilterBlocked})
+	if err != nil {
+		t.Fatalf("ListGroupRows blocked filter: %v", err)
+	}
+	if got := groupRowCodes(page.Rows); slices.Contains(got, "") {
+		t.Fatalf("default row bypassed blocked filter: %v", got)
+	}
+
+	page, err = rs.ListGroupRows(ctx, GroupListFilter{
+		BlockReason: TextMatcher{Fragments: []string{"risk"}},
+	})
+	if err != nil {
+		t.Fatalf("ListGroupRows notes filter: %v", err)
+	}
+	if got := groupRowCodes(page.Rows); slices.Contains(got, "") {
+		t.Fatalf("default row bypassed notes filter: %v", got)
+	}
+}
+
+func TestListGroupRowsSortAndPage(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+
+	// Three real groups with distinct account counts so an accountCount sort has
+	// a deterministic order independent of code.
+	for _, group := range []domain.AccountGroup{
+		{Code: "desk-bravo"},
+		{Code: "desk-alpha"},
+		{Code: "desk-charlie"},
+	} {
+		if _, err := rs.CreateGroup(ctx, group); err != nil {
+			t.Fatalf("CreateGroup %s: %v", group.Code, err)
+		}
+	}
+	for _, account := range []domain.Account{
+		{Code: "acc-a1", GroupCode: "desk-alpha"},
+		{Code: "acc-a2", GroupCode: "desk-alpha"},
+		{Code: "acc-b1", GroupCode: "desk-bravo"},
+		{Code: "acc-ungrouped"},
+	} {
+		if _, err := rs.CreateAccount(ctx, account); err != nil {
+			t.Fatalf("CreateAccount %s: %v", account.Code, err)
+		}
+	}
+
+	// Descending code sort: the default group still pins first; the real groups
+	// follow in descending code order.
+	page, err := rs.ListGroupRows(ctx, GroupListFilter{
+		Sort: SortSpec{Column: "code", Descending: true},
+	})
+	if err != nil {
+		t.Fatalf("ListGroupRows sort desc: %v", err)
+	}
+	if got := groupRowCodes(page.Rows); !slices.Equal(
+		got, []string{"", "desk-charlie", "desk-bravo", "desk-alpha"},
+	) {
+		t.Fatalf("code desc order = %v", got)
+	}
+	if page.Total != 3 {
+		t.Fatalf("total = %d, want 3", page.Total)
+	}
+
+	// accountCount ascending: charlie(0) < bravo(1) < alpha(2); default pinned.
+	page, err = rs.ListGroupRows(ctx, GroupListFilter{
+		Sort: SortSpec{Column: "accountCount"},
+	})
+	if err != nil {
+		t.Fatalf("ListGroupRows sort accountCount: %v", err)
+	}
+	if got := groupRowCodes(page.Rows); !slices.Equal(
+		got, []string{"", "desk-charlie", "desk-bravo", "desk-alpha"},
+	) {
+		t.Fatalf("accountCount asc order = %v", got)
+	}
+
+	// First page: default group plus the first real group; Total still 3.
+	page, err = rs.ListGroupRows(ctx, GroupListFilter{
+		Page: PageSpec{Limit: 1, Offset: 0},
+	})
+	if err != nil {
+		t.Fatalf("ListGroupRows page 0: %v", err)
+	}
+	if got := groupRowCodes(page.Rows); !slices.Equal(got, []string{"", "desk-alpha"}) {
+		t.Fatalf("page 0 = %v, want [\"\" desk-alpha]", got)
+	}
+	if page.Total != 3 {
+		t.Fatalf("page 0 total = %d, want 3", page.Total)
+	}
+
+	// Second page (offset 1): default group excluded, real groups continue from
+	// the offset window.
+	page, err = rs.ListGroupRows(ctx, GroupListFilter{
+		Page: PageSpec{Limit: 1, Offset: 1},
+	})
+	if err != nil {
+		t.Fatalf("ListGroupRows page 1: %v", err)
+	}
+	if got := groupRowCodes(page.Rows); !slices.Equal(got, []string{"desk-bravo"}) {
+		t.Fatalf("page 1 = %v, want [desk-bravo]", got)
+	}
+	if page.Total != 3 {
+		t.Fatalf("page 1 total = %d, want 3", page.Total)
+	}
+}
+
+func accountRowCodes(rows []AccountListRow) []string {
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, row.Account.Code.String())
+	}
+	return out
+}
+
+func groupRowCodes(rows []GroupListRow) []string {
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, row.Group.Code)
+	}
+	return out
+}
+
+func findGroupRow(rows []GroupListRow, code string) (GroupListRow, bool) {
+	for _, row := range rows {
+		if row.Group.Code == code {
+			return row, true
+		}
+	}
+	return GroupListRow{}, false
 }
 
 func TestApplyBusinessCSVImport_EmptyBatchIsNoOp(t *testing.T) {

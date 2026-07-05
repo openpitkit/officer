@@ -202,14 +202,14 @@ func (s *sqliteStore) Migrate(ctx context.Context) error {
 		ctx,
 		s.db,
 		embeddedMigrationSource{dialect: s.dialect},
-		migration.Config{Table: "schema_migrations"},
+		migration.Config{Table: "schema_migration"},
 	)
 }
 
 // SchemaVersion returns the highest applied schema version, or zero.
 func (s *sqliteStore) SchemaVersion(ctx context.Context) (int, error) {
 	return migration.SchemaVersion(
-		ctx, s.db, migration.Config{Table: "schema_migrations"},
+		ctx, s.db, migration.Config{Table: "schema_migration"},
 	)
 }
 
@@ -328,22 +328,27 @@ type sqlExecer interface {
 // query. An unknown code is reported as an error wrapping domain.ErrInvalid so a
 // dangling dictionary reference never silently inserts a bad foreign key.
 func resolveAssetID(ctx context.Context, q sqlQueryer, code string) (int64, error) {
-	return resolveDictID(ctx, q, "assets", "asset", code)
+	return resolveDictID(ctx, q, "asset", "asset", code)
 }
 
 // resolveAccountID resolves an account code to its surrogate id.
 func resolveAccountID(ctx context.Context, q sqlQueryer, code domain.AccountID) (int64, error) {
-	return resolveDictID(ctx, q, "accounts", "account", code.String())
+	return resolveDictID(ctx, q, "account", "account", code.String())
 }
 
 // resolveGroupID resolves a group code to its surrogate id.
 func resolveGroupID(ctx context.Context, q sqlQueryer, code string) (int64, error) {
-	return resolveDictID(ctx, q, "account_groups", "group", code)
+	return resolveDictID(ctx, q, "account_group", "group", code)
+}
+
+// resolveAssetClassID resolves an asset-class code to its surrogate id.
+func resolveAssetClassID(ctx context.Context, q sqlQueryer, code string) (int64, error) {
+	return resolveDictID(ctx, q, "asset_class", "asset class", code)
 }
 
 // resolvePrincipalID resolves a principal code to its surrogate id.
 func resolvePrincipalID(ctx context.Context, q sqlQueryer, code string) (int64, error) {
-	return resolveDictID(ctx, q, "principals", "principal", code)
+	return resolveDictID(ctx, q, "principal", "principal", code)
 }
 
 // resolveDictID resolves a dictionary code in table to its surrogate id. The
@@ -379,57 +384,6 @@ func resolveOptionalPrincipalID(
 		return sql.NullInt64{}, err
 	}
 	return sql.NullInt64{Int64: id, Valid: true}, nil
-}
-
-// nextEngineAccountID assigns the next collision-free engine account id inside a
-// transaction. Engine-id invariant: the connector assigns engine ids
-// monotonically as MAX(existing)+1 within the same write transaction that
-// inserts the row, so the single-writer SQLite connection guarantees uniqueness
-// without a separate sequence. The starting value is the minimum assignable id;
-// the range is checked so the id always fits the engine constructor and the
-// signed column.
-func nextEngineAccountID(ctx context.Context, tx *sql.Tx) (domain.EngineAccountID, error) {
-	var max sql.NullInt64
-	if err := tx.QueryRowContext(
-		ctx, `SELECT MAX(engine_account_id) FROM accounts`,
-	).Scan(&max); err != nil {
-		return 0, fmt.Errorf("store: read max engine account id: %w", err)
-	}
-	next := domain.EngineAccountIDMin
-	if max.Valid {
-		next = uint64(max.Int64) + 1
-	}
-	id := domain.EngineAccountID(next)
-	if err := domain.ValidateEngineAccountID(id); err != nil {
-		return 0, fmt.Errorf("store: assign engine account id: %w", err)
-	}
-	return id, nil
-}
-
-// nextEngineGroupID assigns the next collision-free engine group id inside a
-// transaction. See nextEngineAccountID for the monotonic single-writer
-// invariant.
-func nextEngineGroupID(ctx context.Context, tx *sql.Tx) (domain.EngineGroupID, error) {
-	var max sql.NullInt64
-	if err := tx.QueryRowContext(
-		ctx, `SELECT MAX(engine_group_id) FROM account_groups`,
-	).Scan(&max); err != nil {
-		return 0, fmt.Errorf("store: read max engine group id: %w", err)
-	}
-	next := uint64(domain.EngineGroupIDMin)
-	if max.Valid {
-		next = uint64(max.Int64) + 1
-	}
-	if next > uint64(domain.EngineGroupIDMax) {
-		return 0, fmt.Errorf(
-			"store: engine group id space exhausted: %w", domain.ErrInvalid,
-		)
-	}
-	id := domain.EngineGroupID(next)
-	if err := domain.ValidateEngineGroupID(id); err != nil {
-		return 0, fmt.Errorf("store: assign engine group id: %w", err)
-	}
-	return id, nil
 }
 
 // isSQLiteUnique returns true when the error is a SQLite UNIQUE constraint

@@ -17,15 +17,18 @@
 
 -- Canonical control-plane schema for one realm, created from scratch in a
 -- single migration. It is backend-agnostic: the dialect substitutes {{PK}}
--- (surrogate-PK identity), {{XID}} (16-byte external-id column) and {{BOOL}}
--- (boolean) before the DDL runs. Identity model: an internal integer surrogate
+-- (surrogate-PK identity), {{XID}} (16-byte external-id column), {{BOOL}}
+-- (boolean) and {{DECIMAL}} (exact-decimal value with numeric comparison)
+-- before the DDL runs. Identity model: an internal integer surrogate
 -- key (id) joins rows and never leaves the store; a non-guessable external_id
--- is the public handle of machine records; engine_account_id/engine_group_id are
--- the integer ids the engine runs on, assigned by the connector. Dictionaries
--- are addressed by an immutable code with a mutable display title. Money, price
--- and quantity are exact-decimal TEXT (never float); timestamps are RFC3339Nano
--- UTC TEXT; binary is BLOB. The schema_migrations bookkeeping table is created
--- by the Go migration harness, not here.
+-- is the public handle of machine records; the same surrogate id is the integer
+-- id the engine runs an account or group on, so there is no separate engine id
+-- column. Dictionaries
+-- are addressed by a public code with a mutable display title. Money, price
+-- and quantity are exact-decimal {{DECIMAL}} values (never float); an index on a
+-- {{DECIMAL}} column orders numerically, so range scans and sorts use the index.
+-- Timestamps are RFC3339Nano UTC TEXT; binary is BLOB. The schema_migration
+-- bookkeeping table is created by the Go migration harness, not here.
 
 -- Single-row identity of the realm this schema holds: recorded once for backup
 -- labelling and future placement. It is not a foreign key on any other table.
@@ -36,67 +39,97 @@ CREATE TABLE realm (
     title       TEXT    NOT NULL DEFAULT ''
 );
 
--- Tradable assets dictionary. code is the immutable human handle, unique per
--- realm; title is the mutable display string; asset_class is optional.
-CREATE TABLE assets (
-    id          {{PK}},
-    code        TEXT NOT NULL UNIQUE,
-    title       TEXT NOT NULL DEFAULT '',
-    asset_class TEXT
+-- Tradable asset dictionary. code is the immutable human handle, unique per
+-- realm; title is the mutable display string; class_id is the optional foreign
+-- key into asset_class, cleared (SET NULL) when the class is deleted.
+CREATE TABLE asset (
+    id       {{PK}},
+    code     TEXT NOT NULL UNIQUE,
+    title    TEXT NOT NULL DEFAULT '',
+    class_id INTEGER REFERENCES asset_class(id) ON DELETE SET NULL
 );
 
+CREATE INDEX idx_assets_class_code ON asset (class_id, code);
+CREATE INDEX idx_assets_title_code ON asset (title, code);
+
+-- Asset-class dictionary. A managed classification list, mirroring the
+-- account_group dictionary but without the block concept: an asset class carries
+-- only a public code, a mutable display title, and free-form notes. Assets link
+-- to it by the asset.class_id foreign key, so a class rename needs no cascade and
+-- a class delete clears the link via ON DELETE SET NULL.
+CREATE TABLE asset_class (
+    id    {{PK}},
+    code  TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX idx_asset_classes_title ON asset_class (title, code);
+
 -- Principals dictionary: actors that initiate control-plane actions.
-CREATE TABLE principals (
+CREATE TABLE principal (
     id    {{PK}},
     code  TEXT NOT NULL UNIQUE,
     title TEXT NOT NULL DEFAULT ''
 );
 
--- Account groups dictionary. engine_group_id is the connector-assigned integer
--- the engine runs the group on; it is internal and never exposed on the wire.
-CREATE TABLE account_groups (
-    id              {{PK}},
-    engine_group_id INTEGER NOT NULL UNIQUE,
-    code            TEXT    NOT NULL UNIQUE,
-    title           TEXT    NOT NULL DEFAULT '',
-    notes           TEXT    NOT NULL DEFAULT '',
-    blocked         {{BOOL}} NOT NULL DEFAULT 0,
-    block_reason    TEXT    NOT NULL DEFAULT ''
+-- Account groups dictionary. The engine runs the group on its surrogate id, so
+-- there is no separate engine id column.
+CREATE TABLE account_group (
+    id           {{PK}},
+    code         TEXT    NOT NULL UNIQUE,
+    title        TEXT    NOT NULL DEFAULT '',
+    notes        TEXT    NOT NULL DEFAULT '',
+    blocked      {{BOOL}} NOT NULL DEFAULT 0,
+    block_reason TEXT    NOT NULL DEFAULT ''
 );
 
--- Accounts dictionary. engine_account_id is the connector-assigned integer the
--- engine runs the account on (internal, never on the wire). group_id links to a
--- group and is cleared (SET NULL), not cascaded, when the group is deleted so an
--- account survives its group's removal.
-CREATE TABLE accounts (
-    id                {{PK}},
-    engine_account_id INTEGER NOT NULL UNIQUE,
-    code              TEXT    NOT NULL UNIQUE,
-    title             TEXT    NOT NULL DEFAULT '',
-    group_id          INTEGER REFERENCES account_groups(id) ON DELETE SET NULL,
-    notes             TEXT    NOT NULL DEFAULT '',
-    blocked           {{BOOL}} NOT NULL DEFAULT 0,
-    block_reason      TEXT    NOT NULL DEFAULT ''
+CREATE INDEX idx_account_groups_blocked ON account_group (blocked, code);
+CREATE INDEX idx_account_groups_title ON account_group (title, code);
+
+-- Accounts dictionary. The engine runs the account on its surrogate id, so there
+-- is no separate engine id column. group_id links to a group and is cleared (SET
+-- NULL), not cascaded, when the group is deleted so an account survives its
+-- group's removal.
+CREATE TABLE account (
+    id           {{PK}},
+    code         TEXT    NOT NULL UNIQUE,
+    title        TEXT    NOT NULL DEFAULT '',
+    group_id     INTEGER REFERENCES account_group(id) ON DELETE SET NULL,
+    notes        TEXT    NOT NULL DEFAULT '',
+    blocked      {{BOOL}} NOT NULL DEFAULT 0,
+    block_reason TEXT    NOT NULL DEFAULT ''
 );
 
-CREATE INDEX idx_accounts_group ON accounts (group_id);
+CREATE INDEX idx_accounts_group ON account (group_id);
+CREATE INDEX idx_accounts_blocked ON account (blocked, code);
+CREATE INDEX idx_accounts_title ON account (title, code);
 
--- Per-(account, asset) holdings snapshot. Amounts are exact TEXT decimals,
--- never float. realized_pnl is delta-accumulated (a fresh row starts at '0').
--- Both references cascade so deleting an account or asset removes its balances.
-CREATE TABLE balances (
-    account_id          INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-    asset_id            INTEGER NOT NULL REFERENCES assets(id)   ON DELETE CASCADE,
-    available           TEXT    NOT NULL DEFAULT '0',
-    held                TEXT    NOT NULL DEFAULT '0',
-    incoming            TEXT    NOT NULL DEFAULT '0',
-    average_entry_price TEXT    NOT NULL DEFAULT '',
-    realized_pnl        TEXT    NOT NULL DEFAULT '0',
+-- Per-(account, asset) holdings snapshot. Amounts are exact {{DECIMAL}} values,
+-- never float; the indexes below order numerically. realized_pnl is
+-- delta-accumulated (a fresh row starts at '0'). Both references cascade so
+-- deleting an account or asset removes its balance.
+CREATE TABLE balance (
+    account_id          INTEGER NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    asset_id            INTEGER NOT NULL REFERENCES asset(id)   ON DELETE CASCADE,
+    available           {{DECIMAL}} NOT NULL DEFAULT '0',
+    held                {{DECIMAL}} NOT NULL DEFAULT '0',
+    incoming            {{DECIMAL}} NOT NULL DEFAULT '0',
+    average_entry_price {{DECIMAL}} NOT NULL DEFAULT '',
+    realized_pnl        {{DECIMAL}} NOT NULL DEFAULT '0',
     updated_at          TEXT    NOT NULL,
     PRIMARY KEY (account_id, asset_id)
 );
 
-CREATE INDEX idx_balances_asset   ON balances (asset_id);
+CREATE INDEX idx_balances_asset   ON balance (asset_id);
+CREATE INDEX idx_balances_available ON balance (available, account_id, asset_id);
+CREATE INDEX idx_balances_held ON balance (held, account_id, asset_id);
+CREATE INDEX idx_balances_incoming ON balance (incoming, account_id, asset_id);
+CREATE INDEX idx_balances_average_entry_price
+    ON balance (average_entry_price, account_id, asset_id);
+CREATE INDEX idx_balances_realized_pnl
+    ON balance (realized_pnl, account_id, asset_id);
+CREATE INDEX idx_balances_updated_at ON balance (updated_at DESC, account_id, asset_id);
 
 -- Per-policy typed limit tables (replacing the former EAV limits table). Each
 -- carries a hardcoded enum scope and nullable account/asset axes present only
@@ -107,8 +140,8 @@ CREATE INDEX idx_balances_asset   ON balances (asset_id);
 CREATE TABLE limit_rate (
     id         {{PK}},
     scope      TEXT NOT NULL,
-    account_id INTEGER REFERENCES accounts(id) ON DELETE CASCADE,
-    asset_id   INTEGER REFERENCES assets(id)   ON DELETE CASCADE,
+    account_id INTEGER REFERENCES account(id) ON DELETE CASCADE,
+    asset_id   INTEGER REFERENCES asset(id)   ON DELETE CASCADE,
     max_orders INTEGER NOT NULL,
     window     TEXT    NOT NULL
 );
@@ -122,8 +155,8 @@ CREATE UNIQUE INDEX uq_limit_rate
 CREATE TABLE limit_order_size (
     id           {{PK}},
     scope        TEXT NOT NULL,
-    account_id   INTEGER REFERENCES accounts(id) ON DELETE CASCADE,
-    asset_id     INTEGER REFERENCES assets(id)   ON DELETE CASCADE,
+    account_id   INTEGER REFERENCES account(id) ON DELETE CASCADE,
+    asset_id     INTEGER REFERENCES asset(id)   ON DELETE CASCADE,
     max_quantity TEXT,
     max_notional TEXT
 );
@@ -135,30 +168,30 @@ CREATE UNIQUE INDEX uq_limit_order_size
 
 -- P&L-bounds kill-switch barriers: lower/upper accumulated-P&L bounds and an
 -- optional seed for the per-account accumulator.
-CREATE TABLE limit_pnl_bounds (
+CREATE TABLE limit_pnl_bound (
     id          {{PK}},
     scope       TEXT NOT NULL,
-    account_id  INTEGER REFERENCES accounts(id) ON DELETE CASCADE,
-    asset_id    INTEGER REFERENCES assets(id)   ON DELETE CASCADE,
+    account_id  INTEGER REFERENCES account(id) ON DELETE CASCADE,
+    asset_id    INTEGER REFERENCES asset(id)   ON DELETE CASCADE,
     lower_bound TEXT,
     upper_bound TEXT,
     initial_pnl TEXT
 );
 
-CREATE INDEX idx_limit_pnl_bounds_account ON limit_pnl_bounds (account_id);
-CREATE INDEX idx_limit_pnl_bounds_asset ON limit_pnl_bounds (asset_id);
+CREATE INDEX idx_limit_pnl_bounds_account ON limit_pnl_bound (account_id);
+CREATE INDEX idx_limit_pnl_bounds_asset ON limit_pnl_bound (asset_id);
 CREATE UNIQUE INDEX uq_limit_pnl_bounds
-    ON limit_pnl_bounds (scope, COALESCE(account_id, 0), COALESCE(asset_id, 0));
+    ON limit_pnl_bound (scope, COALESCE(account_id, 0), COALESCE(asset_id, 0));
 
 -- Append-only history of spot-funds adjustments. request/outcome are opaque
 -- JSON. principal is cleared (SET NULL) when the principal is removed; account
 -- and asset cascade.
-CREATE TABLE adjustments (
+CREATE TABLE adjustment (
     id           {{PK}},
     external_id  {{XID}} UNIQUE,
-    account_id   INTEGER NOT NULL REFERENCES accounts(id)   ON DELETE CASCADE,
-    asset_id     INTEGER NOT NULL REFERENCES assets(id)     ON DELETE CASCADE,
-    principal_id INTEGER REFERENCES principals(id)          ON DELETE SET NULL,
+    account_id   INTEGER NOT NULL REFERENCES account(id)   ON DELETE CASCADE,
+    asset_id     INTEGER NOT NULL REFERENCES asset(id)     ON DELETE CASCADE,
+    principal_id INTEGER REFERENCES principal(id)          ON DELETE SET NULL,
     at           TEXT    NOT NULL,
     source       TEXT    NOT NULL,
     status       TEXT    NOT NULL,
@@ -166,79 +199,85 @@ CREATE TABLE adjustments (
     outcome      TEXT    NOT NULL
 );
 
-CREATE INDEX idx_adjustments_account ON adjustments (account_id, at DESC, id DESC);
-CREATE INDEX idx_adjustments_asset ON adjustments (asset_id);
-CREATE INDEX idx_adjustments_principal ON adjustments (principal_id);
-CREATE INDEX idx_adjustments_source  ON adjustments (source, at DESC, id DESC);
+CREATE INDEX idx_adjustments_account ON adjustment (account_id, at DESC, id DESC);
+CREATE INDEX idx_adjustments_asset ON adjustment (asset_id);
+CREATE INDEX idx_adjustments_principal ON adjustment (principal_id);
+CREATE INDEX idx_adjustments_source  ON adjustment (source, at DESC, id DESC);
+CREATE INDEX idx_adjustments_status ON adjustment (status, at DESC, id DESC);
 
--- Orders recorded by Officer (including rejected ones). lock is the
+-- Orders recorded by Officer (including rejected ones). amount_value and price
+-- are exact {{DECIMAL}} values; their indexes order numerically. lock is the
 -- SDK-serialized pretrade.Lock blob, persisted verbatim; the store never decodes
 -- it. price is empty for market orders. The signed approval, when present, lives
--- in the 1:1 order_approvals companion, not inline here.
-CREATE TABLE orders (
+-- in the 1:1 order_approval companion, not inline here.
+CREATE TABLE order_record (
     id             {{PK}},
     external_id    {{XID}} UNIQUE,
-    account_id     INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-    base_asset_id  INTEGER NOT NULL REFERENCES assets(id)   ON DELETE CASCADE,
-    quote_asset_id INTEGER NOT NULL REFERENCES assets(id)   ON DELETE CASCADE,
-    principal_id   INTEGER REFERENCES principals(id)        ON DELETE SET NULL,
+    account_id     INTEGER NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    base_asset_id  INTEGER NOT NULL REFERENCES asset(id)   ON DELETE CASCADE,
+    quote_asset_id INTEGER NOT NULL REFERENCES asset(id)   ON DELETE CASCADE,
+    principal_id   INTEGER REFERENCES principal(id)        ON DELETE SET NULL,
     at             TEXT    NOT NULL,
     source         TEXT    NOT NULL,
     side           TEXT    NOT NULL,
     amount_kind    TEXT    NOT NULL,
-    amount_value   TEXT    NOT NULL,
-    price          TEXT    NOT NULL DEFAULT '',
+    amount_value   {{DECIMAL}} NOT NULL,
+    price          {{DECIMAL}} NOT NULL DEFAULT '',
     status         TEXT    NOT NULL,
     lock           BLOB
 );
 
-CREATE INDEX idx_orders_account ON orders (account_id, at DESC, id DESC);
-CREATE INDEX idx_orders_principal ON orders (principal_id);
-CREATE INDEX idx_orders_base_asset ON orders (base_asset_id);
-CREATE INDEX idx_orders_quote_asset ON orders (quote_asset_id);
-CREATE INDEX idx_orders_source  ON orders (source, at DESC, id DESC);
+CREATE INDEX idx_orders_account ON order_record (account_id, at DESC, id DESC);
+CREATE INDEX idx_orders_principal ON order_record (principal_id);
+CREATE INDEX idx_orders_base_asset ON order_record (base_asset_id);
+CREATE INDEX idx_orders_quote_asset ON order_record (quote_asset_id);
+CREATE INDEX idx_orders_source  ON order_record (source, at DESC, id DESC);
+CREATE INDEX idx_orders_side ON order_record (side, at DESC, id DESC);
+CREATE INDEX idx_orders_status ON order_record (status, at DESC, id DESC);
+CREATE INDEX idx_orders_amount_value ON order_record (amount_value, id DESC);
+CREATE INDEX idx_orders_price ON order_record (price, id DESC);
 
 -- Signed approval envelope, 1:1 with an order and absent when the order is
 -- unsigned. signing_key_id references the signing key surrogate and is RESTRICT
 -- so a key in use cannot be dropped.
-CREATE TABLE order_approvals (
-    order_id       INTEGER PRIMARY KEY REFERENCES orders(id) ON DELETE CASCADE,
+CREATE TABLE order_approval (
+    order_id       INTEGER PRIMARY KEY REFERENCES order_record(id) ON DELETE CASCADE,
     token          TEXT    NOT NULL,
-    signing_key_id INTEGER NOT NULL REFERENCES signing_keys(id) ON DELETE RESTRICT,
+    signing_key_id INTEGER NOT NULL REFERENCES signing_key(id) ON DELETE RESTRICT,
     alg            TEXT    NOT NULL,
     mode           TEXT    NOT NULL,
     issued_at      TEXT    NOT NULL,
     expires_at     TEXT    NOT NULL
 );
 
-CREATE INDEX idx_order_approvals_signing_key ON order_approvals (signing_key_id);
+CREATE INDEX idx_order_approvals_signing_key ON order_approval (signing_key_id);
 
 -- Immutable event stream for an order. payload is opaque JSON. principal is
 -- cleared (SET NULL) when removed; the parent order cascades.
-CREATE TABLE order_events (
+CREATE TABLE order_event (
     id           {{PK}},
     external_id  {{XID}} UNIQUE,
-    order_id     INTEGER NOT NULL REFERENCES orders(id)  ON DELETE CASCADE,
-    principal_id INTEGER REFERENCES principals(id)       ON DELETE SET NULL,
+    order_id     INTEGER NOT NULL REFERENCES order_record(id)  ON DELETE CASCADE,
+    principal_id INTEGER REFERENCES principal(id)       ON DELETE SET NULL,
     at           TEXT    NOT NULL,
     type         TEXT    NOT NULL,
     source       TEXT    NOT NULL,
     payload      TEXT    NOT NULL DEFAULT '{}'
 );
 
-CREATE INDEX idx_order_events_order ON order_events (order_id, at DESC, id DESC);
-CREATE INDEX idx_order_events_principal ON order_events (principal_id);
+CREATE INDEX idx_order_events_order ON order_event (order_id, at DESC, id DESC);
+CREATE INDEX idx_order_events_principal ON order_event (principal_id);
 
 -- Per-fill trade records ("reports"); one row per fill. lock_price is empty when
--- not applicable. order, account and assets cascade; principal is cleared.
-CREATE TABLE trades (
+-- not applicable. order, account and asset cascade; principal is cleared.
+CREATE TABLE trade (
     id             {{PK}},
     external_id    {{XID}} UNIQUE,
-    order_id       INTEGER NOT NULL REFERENCES orders(id)   ON DELETE CASCADE,
-    account_id     INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-    base_asset_id  INTEGER NOT NULL REFERENCES assets(id)   ON DELETE CASCADE,
-    quote_asset_id INTEGER NOT NULL REFERENCES assets(id)   ON DELETE CASCADE,
-    principal_id   INTEGER REFERENCES principals(id)        ON DELETE SET NULL,
+    order_id       INTEGER NOT NULL REFERENCES order_record(id)   ON DELETE CASCADE,
+    account_id     INTEGER NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    base_asset_id  INTEGER NOT NULL REFERENCES asset(id)   ON DELETE CASCADE,
+    quote_asset_id INTEGER NOT NULL REFERENCES asset(id)   ON DELETE CASCADE,
+    principal_id   INTEGER REFERENCES principal(id)        ON DELETE SET NULL,
     at             TEXT    NOT NULL,
     source         TEXT    NOT NULL,
     side           TEXT    NOT NULL,
@@ -247,20 +286,28 @@ CREATE TABLE trades (
     lock_price     TEXT    NOT NULL DEFAULT ''
 );
 
-CREATE INDEX idx_trades_account ON trades (account_id, at DESC, id DESC);
-CREATE INDEX idx_trades_principal ON trades (principal_id);
-CREATE INDEX idx_trades_base_asset ON trades (base_asset_id);
-CREATE INDEX idx_trades_quote_asset ON trades (quote_asset_id);
-CREATE INDEX idx_trades_source  ON trades (source, at DESC, id DESC);
-CREATE INDEX idx_trades_order   ON trades (order_id);
+CREATE INDEX idx_trades_account ON trade (account_id, at DESC, id DESC);
+CREATE INDEX idx_trades_principal ON trade (principal_id);
+CREATE INDEX idx_trades_base_asset ON trade (base_asset_id);
+CREATE INDEX idx_trades_quote_asset ON trade (quote_asset_id);
+CREATE INDEX idx_trades_source  ON trade (source, at DESC, id DESC);
+CREATE INDEX idx_trades_order   ON trade (order_id);
+CREATE INDEX idx_trades_side ON trade (side, at DESC, id DESC);
+CREATE INDEX idx_trades_quantity ON trade (quantity COLLATE DECIMAL, id DESC);
+CREATE INDEX idx_trades_price ON trade (price COLLATE DECIMAL, id DESC);
+CREATE INDEX idx_trades_lock_price ON trade (lock_price COLLATE DECIMAL, id DESC);
 
--- Append-only audit trail. Account and actor are immutable snapshots, not
--- foreign keys, so compliance history survives dictionary deletes unchanged.
+-- Append-only audit trail. Account and actor codes/titles are immutable
+-- snapshots, so compliance history survives dictionary deletes unchanged.
+-- account_id is only a nullable identity link used for current-code filtering
+-- after account renames; deleting the account clears the link, not the row.
 CREATE TABLE audit (
     id            {{PK}},
     external_id   {{XID}} UNIQUE,
+    account_id    INTEGER REFERENCES account(id) ON DELETE SET NULL,
     account_code  TEXT NOT NULL DEFAULT '',
     account_title TEXT NOT NULL DEFAULT '',
+    asset_code    TEXT NOT NULL DEFAULT '',
     actor_code    TEXT NOT NULL DEFAULT '',
     actor_title   TEXT NOT NULL DEFAULT '',
     at            TEXT NOT NULL,
@@ -270,12 +317,17 @@ CREATE TABLE audit (
 );
 
 CREATE INDEX idx_audit_at ON audit (at DESC, id DESC);
+CREATE INDEX idx_audit_account_id ON audit (account_id, at DESC, id DESC);
 CREATE INDEX idx_audit_account_code ON audit (account_code, at DESC, id DESC);
+CREATE INDEX idx_audit_asset_code ON audit (asset_code, at DESC, id DESC);
+CREATE INDEX idx_audit_action ON audit (action, at DESC, id DESC);
+CREATE INDEX idx_audit_source ON audit (source, at DESC, id DESC);
+CREATE INDEX idx_audit_actor_code ON audit (actor_code, at DESC, id DESC);
 
 -- Market-data connector instances. provider is a hardcoded enum; label is a
 -- unique, case-insensitive operator-facing name; credentials is an opaque JSON
 -- blob; enabled gates runtime participation.
-CREATE TABLE market_data_instances (
+CREATE TABLE market_data_instance (
     id          {{PK}},
     external_id {{XID}} UNIQUE,
     provider    TEXT NOT NULL,
@@ -286,26 +338,26 @@ CREATE TABLE market_data_instances (
 
 -- Per-instrument selection for an instance: the external source symbol mapped to
 -- an engine instrument (base, quote). The instance reference cascades.
-CREATE TABLE market_data_instruments (
+CREATE TABLE market_data_instrument (
     id              {{PK}},
-    instance_id     INTEGER NOT NULL REFERENCES market_data_instances(id) ON DELETE CASCADE,
+    instance_id     INTEGER NOT NULL REFERENCES market_data_instance(id) ON DELETE CASCADE,
     external_symbol TEXT    NOT NULL,
-    base_asset_id   INTEGER NOT NULL REFERENCES assets(id)  ON DELETE CASCADE,
-    quote_asset_id  INTEGER NOT NULL REFERENCES assets(id)  ON DELETE CASCADE,
+    base_asset_id   INTEGER NOT NULL REFERENCES asset(id)  ON DELETE CASCADE,
+    quote_asset_id  INTEGER NOT NULL REFERENCES asset(id)  ON DELETE CASCADE,
     enabled         {{BOOL}} NOT NULL DEFAULT 0,
     manual_price    TEXT    NOT NULL DEFAULT '',
     UNIQUE (instance_id, external_symbol)
 );
 
 CREATE INDEX idx_market_data_instruments_base_asset
-    ON market_data_instruments (base_asset_id);
+    ON market_data_instrument (base_asset_id);
 CREATE INDEX idx_market_data_instruments_quote_asset
-    ON market_data_instruments (quote_asset_id);
+    ON market_data_instrument (quote_asset_id);
 
 -- Latest normalized quote per configured instrument, 1:1 with the instrument and
 -- overwritten on each update (an operational snapshot, not a tick history).
-CREATE TABLE market_data_quotes (
-    instrument_id INTEGER PRIMARY KEY REFERENCES market_data_instruments(id) ON DELETE CASCADE,
+CREATE TABLE market_data_quote (
+    instrument_id INTEGER PRIMARY KEY REFERENCES market_data_instrument(id) ON DELETE CASCADE,
     mark          TEXT NOT NULL DEFAULT '',
     bid           TEXT NOT NULL DEFAULT '',
     ask           TEXT NOT NULL DEFAULT '',
@@ -315,7 +367,7 @@ CREATE TABLE market_data_quotes (
 
 -- Ed25519 signing keypairs. key_id is the key's own UUID handle. private_key is
 -- a plaintext BLOB (at-rest encryption deferred). active=1 marks the signing key.
-CREATE TABLE signing_keys (
+CREATE TABLE signing_key (
     id          {{PK}},
     key_id      TEXT    NOT NULL UNIQUE,
     alg         TEXT    NOT NULL,
@@ -325,7 +377,7 @@ CREATE TABLE signing_keys (
     active      {{BOOL}} NOT NULL DEFAULT 0
 );
 
-CREATE INDEX idx_signing_keys_active ON signing_keys (active);
+CREATE INDEX idx_signing_keys_active ON signing_key (active);
 
 -- Global signing configuration; key is a hardcoded enum, not a dictionary.
 CREATE TABLE signing_config (
@@ -342,7 +394,7 @@ CREATE TABLE mcp_access (
 );
 
 -- Per-user UI settings as a key-value store; setting_key is a hardcoded enum.
-CREATE TABLE user_settings (
+CREATE TABLE user_setting (
     user_id       TEXT NOT NULL,
     setting_key   TEXT NOT NULL,
     setting_value TEXT NOT NULL DEFAULT '',
@@ -352,10 +404,10 @@ CREATE TABLE user_settings (
 -- Reservation intents survive process restart; on boot any held row is orphaned
 -- and rolled back. approval_id is the row's own UUID handle (used in tokens).
 -- params is opaque transient JSON; lock is the SDK-serialized pretrade.Lock blob.
-CREATE TABLE reservation_intents (
+CREATE TABLE reservation_intent (
     approval_id TEXT PRIMARY KEY,
-    order_id    INTEGER REFERENCES orders(id)   ON DELETE CASCADE,
-    account_id  INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    order_id    INTEGER REFERENCES order_record(id)   ON DELETE CASCADE,
+    account_id  INTEGER NOT NULL REFERENCES account(id) ON DELETE CASCADE,
     params      TEXT    NOT NULL,
     lock        BLOB,
     issued_at   TEXT    NOT NULL,
@@ -363,4 +415,4 @@ CREATE TABLE reservation_intents (
     state       TEXT    NOT NULL DEFAULT 'held'
 );
 
-CREATE INDEX idx_reservation_intents_state ON reservation_intents (state);
+CREATE INDEX idx_reservation_intents_state ON reservation_intent (state);

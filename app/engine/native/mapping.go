@@ -957,8 +957,11 @@ func orderRejectsFrom(rejects []reject.Reject) []domain.OrderReject {
 
 // executionReportFrom maps a domain execution-report input onto a
 // model.ExecutionReport: the operation (instrument/account/side) and the fill
-// (last trade price+quantity, and the lock reconstructed from the single
-// reference price when present). The account is resolved to its stored engine id.
+// (last trade price+quantity, leaves quantity, the is-final flag, and the lock
+// reconstructed from the single reference price when present). The engine
+// requires leaves quantity and the is-final flag to settle the fill; an empty or
+// invalid leaves quantity is caller error (ErrInvalid). The account is resolved
+// to its stored engine id.
 func executionReportFrom(in domain.ExecutionReportInput, res idResolver) (model.ExecutionReport, error) {
 	base, err := newAsset(in.BaseAsset)
 	if err != nil {
@@ -986,6 +989,11 @@ func executionReportFrom(in domain.ExecutionReportInput, res idResolver) (model.
 		return model.ExecutionReport{}, fmt.Errorf(
 			"engine: fill quantity %q: %w: %w", in.FillQuantity, err, domain.ErrInvalid)
 	}
+	leaves, err := param.NewQuantityFromString(in.LeavesQuantity)
+	if err != nil {
+		return model.ExecutionReport{}, fmt.Errorf(
+			"engine: leaves quantity %q: %w: %w", in.LeavesQuantity, err, domain.ErrInvalid)
+	}
 
 	lockBytes, err := fillLockBytes(in.LockPrice)
 	if err != nil {
@@ -1000,10 +1008,55 @@ func executionReportFrom(in domain.ExecutionReportInput, res idResolver) (model.
 
 	fill := report.EnsureFillView()
 	fill.SetLastTrade(model.NewExecutionReportTrade(price, quantity))
+	fill.SetLeavesQuantity(leaves)
+	fill.SetIsFinal(in.Final)
 	if lockBytes != nil {
 		fill.SetLock(lockBytes)
 	}
+
+	// The financial-impact group carries the per-fill realized P&L and fee the
+	// P&L-bounds kill-switch accumulates. spot-funds ignores it, but the engine
+	// applies every configured policy to the same report, so the group is always
+	// set (defaulting to zero) to keep a P&L policy from rejecting on an absent
+	// group. Both are exact decimal deltas in the settlement asset.
+	pnl, err := pnlOrZero(in.RealizedPnl)
+	if err != nil {
+		return model.ExecutionReport{}, err
+	}
+	fee, err := feeOrZero(in.Fee)
+	if err != nil {
+		return model.ExecutionReport{}, err
+	}
+	impact := report.EnsureFinancialImpactView()
+	impact.SetPnl(pnl)
+	impact.SetFee(fee)
 	return report, nil
+}
+
+// pnlOrZero parses a signed realized-P&L delta, treating an empty string as
+// zero; a malformed value is caller error (ErrInvalid).
+func pnlOrZero(s string) (param.Pnl, error) {
+	if s == "" {
+		return param.NewPnlZero(), nil
+	}
+	pnl, err := param.NewPnlFromString(s)
+	if err != nil {
+		return param.Pnl{}, fmt.Errorf("engine: realized pnl %q: %w: %w", s, err, domain.ErrInvalid)
+	}
+	return pnl, nil
+}
+
+// feeOrZero parses a fee/rebate delta, treating an empty string as zero; a
+// malformed value is caller error (ErrInvalid).
+func feeOrZero(s string) (param.Fee, error) {
+	if s == "" {
+		return param.NewFeeZero(), nil
+	}
+	fee, err := param.NewFeeFromString(s)
+	if err != nil {
+		return param.Fee{}, fmt.Errorf("engine: fee %q: %w: %w", s, err, domain.ErrInvalid)
+	}
+	return fee, nil
 }
 
 // immediateExecutionReport builds the synthetic fill that settles an immediate
@@ -1019,15 +1072,16 @@ func immediateExecutionReport(o domain.Order, settlementPrice string, res idReso
 		return model.ExecutionReport{}, err
 	}
 	return executionReportFrom(domain.ExecutionReportInput{
-		BaseAsset:    o.BaseAsset,
-		QuoteAsset:   o.QuoteAsset,
-		FillQuantity: quantity,
-		FillPrice:    settlementPrice,
-		LockPrice:    settlementPrice,
-		Account:      o.Account,
-		Side:         o.Side,
-		Order:        o.ExternalID,
-		Final:        true,
+		BaseAsset:      o.BaseAsset,
+		QuoteAsset:     o.QuoteAsset,
+		FillQuantity:   quantity,
+		FillPrice:      settlementPrice,
+		LeavesQuantity: "0",
+		LockPrice:      settlementPrice,
+		Account:        o.Account,
+		Side:           o.Side,
+		Order:          o.ExternalID,
+		Final:          true,
 	}, res)
 }
 

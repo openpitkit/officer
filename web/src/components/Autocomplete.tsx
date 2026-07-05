@@ -30,6 +30,7 @@ import {
   type KeyboardEvent,
 } from "react";
 
+import { ClearInlineButton } from "@/components/ClearableInput";
 import { cn } from "@/lib/utils";
 
 export interface AutocompleteProps
@@ -38,10 +39,16 @@ export interface AutocompleteProps
   value: string;
   /** Called on every keystroke and when a suggestion is selected. */
   onChange: (value: string) => void;
+  /** Called only when a suggestion is explicitly selected. */
+  onSuggestionSelect?: (value: string) => void;
   /** Candidate list to filter suggestions from. May be empty. */
   suggestions: string[];
   /** Maximum suggestions to show at once (default 8). */
   maxSuggestions?: number;
+  /** Clears the field; when set, the shared inline reset glyph shows while non-empty. */
+  onClear?: () => void;
+  /** Accessible name + tooltip for the inline reset glyph. */
+  clearLabel?: string;
 }
 
 /** Prefix-match filter - case-insensitive, empty query shows nothing. */
@@ -71,15 +78,21 @@ const Autocomplete = forwardRef<HTMLInputElement, AutocompleteProps>(
     {
       value,
       onChange,
+      onSuggestionSelect,
       suggestions,
       maxSuggestions = 8,
       className,
       onBlur,
       onFocus,
+      onKeyDown,
+      onClear,
+      clearLabel = "Clear",
       ...props
     },
     ref,
   ) => {
+    const clearable =
+      onClear !== undefined && value !== "" && !props.disabled;
     const listId = useId();
     const [open, setOpen] = useState(false);
     const [activeIndex, setActiveIndex] = useState(-1);
@@ -98,12 +111,14 @@ const Autocomplete = forwardRef<HTMLInputElement, AutocompleteProps>(
 
     function select(suggestion: string) {
       onChange(suggestion);
+      onSuggestionSelect?.(suggestion);
       setOpen(false);
       setActiveIndex(-1);
     }
 
     function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
       if (!visible) {
+        onKeyDown?.(e);
         return;
       }
       switch (e.key) {
@@ -125,6 +140,9 @@ const Autocomplete = forwardRef<HTMLInputElement, AutocompleteProps>(
           setOpen(false);
           setActiveIndex(-1);
           break;
+      }
+      if (!e.defaultPrevented) {
+        onKeyDown?.(e);
       }
     }
 
@@ -161,10 +179,14 @@ const Autocomplete = forwardRef<HTMLInputElement, AutocompleteProps>(
             "placeholder:text-muted focus-visible:border-border-hover focus-visible:outline-none",
             "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-bg",
             "disabled:cursor-not-allowed disabled:opacity-50",
+            clearable && "pr-9",
             className,
           )}
           {...props}
         />
+        {clearable && (
+          <ClearInlineButton label={clearLabel} onClick={() => onClear?.()} />
+        )}
         {visible && (
           <ul
             ref={listRef}

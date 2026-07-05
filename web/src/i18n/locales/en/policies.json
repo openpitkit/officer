@@ -6,8 +6,11 @@
   "filter": {
     "account": "Filter by account",
     "accountPlaceholder": "acc-1",
+    "asset": "Filter by asset",
+    "assetPlaceholder": "AAPL",
     "policy": "Filter by policy",
-    "allPolicies": "All policies"
+    "allPolicies": "All policies",
+    "advancedDescription": "Filter by policy kind and numeric barrier values. Account and asset filters stay online in the filter bar."
   },
   "pagination": {
     "summary": "Showing {{from}}-{{to}} of {{total}} records",
@@ -23,6 +26,14 @@
     "asset": "Asset",
     "values": "Values",
     "actions": "Actions",
+    "columnDescriptions": {
+      "policy": "This column shows the risk policy applied by the barrier.",
+      "scope": "This column shows whether the barrier applies to an account, asset, broker, or combined target.",
+      "account": "This column shows the account targeted by the barrier when the scope includes one.",
+      "asset": "This column shows the asset targeted by the barrier when the scope includes one.",
+      "values": "This column shows the configured numeric or duration values for the policy barrier.",
+      "actions": "This column contains row actions for sharing, editing, and deleting the barrier."
+    },
     "edit": "Edit",
     "editAriaLabel": "Edit policy barrier",
     "deleteAriaLabel": "Delete policy barrier"

@@ -59,9 +59,11 @@ type binanceConnector struct {
 	// array.
 	subs []binanceSubscription
 
-	cancel context.CancelFunc
-	mu     sync.Mutex
-	wg     sync.WaitGroup
+	active  binanceConn
+	closing bool
+	cancel  context.CancelFunc
+	mu      sync.Mutex
+	wg      sync.WaitGroup
 }
 
 type binanceConn interface {
@@ -257,6 +259,7 @@ func (c *binanceConnector) Subscribe(
 	runCtx, cancel := context.WithCancel(ctx)
 	c.mu.Lock()
 	c.cancel = cancel
+	c.closing = false
 	c.mu.Unlock()
 
 	out := make(chan QuoteUpdate)
@@ -390,10 +393,18 @@ func (c *binanceConnector) stream(
 	if err != nil {
 		return false, err
 	}
+	select {
+	case <-ctx.Done():
+		_ = conn.Close(websocket.StatusNormalClosure, "")
+		return false, ctx.Err()
+	default:
+	}
+	c.setActiveConn(conn)
 	// Connected (or recovered after a prior failure): clear any error state.
 	c.reportStatus(true, "")
 	defer func() {
 		_ = conn.Close(websocket.StatusNormalClosure, "")
+		c.clearActiveConn()
 	}()
 
 	// One-shot "receiving data but cannot parse it" diagnostic. We emit it at
@@ -451,12 +462,35 @@ func (c *binanceConnector) stream(
 
 func (c *binanceConnector) Close() {
 	c.mu.Lock()
+	c.closing = true
 	cancel := c.cancel
+	active := c.active
 	c.mu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
+	if active != nil {
+		_ = active.Close(websocket.StatusNormalClosure, "")
+	}
 	c.wg.Wait()
+}
+
+func (c *binanceConnector) setActiveConn(conn binanceConn) {
+	c.mu.Lock()
+	closing := c.closing
+	if !closing {
+		c.active = conn
+	}
+	c.mu.Unlock()
+	if closing {
+		_ = conn.Close(websocket.StatusNormalClosure, "")
+	}
+}
+
+func (c *binanceConnector) clearActiveConn() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.active = nil
 }
 
 // binanceExchangeInfoResponse carries only the symbol field we need.

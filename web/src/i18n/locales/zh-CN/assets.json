@@ -1,0 +1,137 @@
+{
+  "page": {
+    "title": "资产",
+    "description": "在控制平面中注册的可交易资产及其类别字典。筛选由服务器在完整集合上执行。"
+  },
+  "tabs": {
+    "assets": "资产",
+    "classes": "类别"
+  },
+  "pagination": {
+    "pageSize": {
+      "ariaLabel": "每页数量",
+      "rowCount": "{{count}} 行"
+    }
+  },
+  "columns": {
+    "asset": "资产",
+    "class": "类别",
+    "actions": "操作"
+  },
+  "columnDescriptions": {
+    "asset": "此列显示资产代码及其显示名称。",
+    "class": "此列显示分配给该资产的类别。",
+    "actions": "此列包含用于筛选、导航、分享链接和删除的行操作。"
+  },
+  "filters": {
+    "searchLabel": "资产搜索",
+    "searchPlaceholder": "按代码或名称搜索…",
+    "classLabel": "类别",
+    "classPlaceholder": "按类别筛选…",
+    "clearField": "清除字段"
+  },
+  "noClass": "—",
+  "actions": {
+    "editTitle": "编辑资产"
+  },
+  "links": {
+    "positions": "持仓",
+    "orders": "订单",
+    "trades": "成交",
+    "audit": "审计"
+  },
+  "assets": {
+    "heading": "资产"
+  },
+  "empty": {
+    "title": "暂无资产",
+    "hintEmpty": "注册资产以开始跟踪交易品种。",
+    "hintFiltered": "没有资产符合当前筛选条件。"
+  },
+  "createAsset": {
+    "trigger": "新建资产",
+    "title": "创建资产",
+    "description": "注册可交易资产。代码为标识符，日后可重命名。",
+    "codeLabel": "资产代码",
+    "codeHint": "稳定的标识符，例如 BTC 或 AAPL。",
+    "titleLabel": "名称",
+    "classLabel": "类别",
+    "classHint": "可选。将资产归入现有或新建的类别。",
+    "cancel": "取消",
+    "submit": "创建"
+  },
+  "editAsset": {
+    "titlePrefix": "编辑资产",
+    "description": "重命名资产代码，或更新其名称和类别。",
+    "codeLabel": "资产代码",
+    "titleLabel": "名称",
+    "classLabel": "类别",
+    "cancel": "取消",
+    "submit": "保存"
+  },
+  "deleteAsset": {
+    "title": "删除资产",
+    "descriptionPrefix": "删除资产",
+    "descriptionSuffix": "？此操作无法撤销。",
+    "cancel": "取消",
+    "submit": "删除"
+  },
+  "classes": {
+    "heading": "资产类别",
+    "columns": {
+      "class": "类别",
+      "assets": "资产",
+      "notes": "说明",
+      "actions": "操作"
+    },
+    "columnDescriptions": {
+      "class": "此列显示资产类别代码及其显示名称。",
+      "assets": "此列显示分配给该类别的资产数量。",
+      "notes": "此列显示为该资产类别保存的说明。",
+      "actions": "此列包含用于筛选、分享链接和删除的行操作。"
+    },
+    "filters": {
+      "searchLabel": "类别搜索",
+      "searchPlaceholder": "按代码或名称搜索…"
+    },
+    "actions": {
+      "editTitle": "编辑类别"
+    },
+    "empty": {
+      "title": "暂无资产类别",
+      "hintEmpty": "创建类别以按分类整理资产。",
+      "hintFiltered": "没有类别符合当前搜索条件。"
+    }
+  },
+  "createClass": {
+    "trigger": "新建类别",
+    "title": "创建资产类别",
+    "description": "按分类归集资产，例如 crypto 或 equity。",
+    "codeLabel": "类别代码",
+    "titleLabel": "名称",
+    "titlePlaceholder": "加密货币",
+    "notesLabel": "说明",
+    "notesPlaceholder": "描述该类别的可选说明。",
+    "notesHint": "在字典中与类别一同显示。",
+    "cancel": "取消",
+    "submit": "创建"
+  },
+  "editClass": {
+    "titlePrefix": "编辑类别",
+    "description": "重命名类别代码，或更新其名称和说明。重命名会重新关联该类别下的所有资产。",
+    "codeLabel": "类别代码",
+    "titleLabel": "名称",
+    "notesLabel": "说明",
+    "cancel": "取消",
+    "submit": "保存"
+  },
+  "deleteClass": {
+    "title": "删除资产类别",
+    "descriptionPrefix": "删除资产类别",
+    "descriptionSuffix": "？此操作无法撤销。",
+    "descriptionSuffixLinked_one": "？其关联的 {{count}} 项资产将从该类别中解除关联。此操作无法撤销。",
+    "descriptionSuffixLinked_other": "？其关联的 {{count}} 项资产将从该类别中解除关联。此操作无法撤销。",
+    "cancel": "取消",
+    "submit": "删除"
+  }
+}

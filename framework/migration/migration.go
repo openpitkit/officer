@@ -46,13 +46,13 @@ type MigrationSource interface {
 
 // Config names the migration bookkeeping table.
 type Config struct {
-	// Table is the bookkeeping table name. Empty uses schema_migrations.
+	// Table is the bookkeeping table name. Empty uses schema_migration.
 	Table string
 }
 
-const defaultTable = "schema_migrations"
+const defaultTable = "schema_migration"
 
-// DefaultConfig returns the default schema_migrations bookkeeping layout.
+// DefaultConfig returns the default schema_migration bookkeeping layout.
 func DefaultConfig() Config {
 	return Config{Table: defaultTable}
 }

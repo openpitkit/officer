@@ -15,18 +15,36 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   Ban,
+  CircleCheck,
+  Eye,
   Folder,
+  Pencil,
   Plus,
+  Search,
   Trash2,
 } from "lucide-react";
 
-import type { Account, ApiErrorDependent, Group } from "@/api/types";
-import { useAccounts } from "@/api/useAccounts";
-import { useGroups } from "@/api/useGroups";
+import type {
+  Account,
+  AccountListFilters,
+  ApiErrorDependent,
+  AuditEntry,
+  Group,
+  GroupListFilters,
+  PositionCountFilterMode,
+  SortOrder,
+  StatusListFilter,
+  TextMatchMode,
+} from "@/api/types";
+import { useAccountsPage } from "@/api/useAccounts";
+import { useGroupsPage } from "@/api/useGroups";
 import { validateAccountID } from "@/api/validate";
 import { Autocomplete } from "@/components/Autocomplete";
 import { EmptyState, ErrorBanner, ErrorState, TableSkeleton } from "@/components/PageStates";
@@ -50,7 +68,31 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ApiError, RowActions, useOfficerApi } from "@/framework";
+import {
+  ApiError,
+  ColumnHeader,
+  DeleteButton,
+  FieldLabel,
+  FilterBar,
+  FilterChip,
+  FilterByButton,
+  FilterOperatorSelect,
+  HistoryButton,
+  IdCell,
+  MoreFiltersButton,
+  NumberRangeFilter,
+  AutocompleteFilterField,
+  PoliciesButton,
+  reportInvalidFilterControls,
+  PositionsButton,
+  RowActions,
+  Segmented,
+  ShareLinkButton,
+  SortableHeader,
+  TextFilter,
+  TradingButton,
+  useOfficerApi,
+} from "@/framework";
 import {
   Dialog,
   DialogContent,
@@ -70,25 +112,890 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  hasNextPage,
-  knownPageCount,
-  slicePage,
-} from "@/lib/tablePagination";
+import { ClearableInput } from "@/components/ClearableInput";
+import { ClearFieldButton } from "@/components/ClearFieldButton";
+import { useDisplayPreferences } from "@/theme/display-context";
+import type { DensityMode } from "@/theme/display-context";
+import { operatorOptions } from "@/lib/dataControlLabels";
+import { knownPageCount } from "@/lib/tablePagination";
+import { absoluteAppUrl, shareUrl } from "@/lib/shareLink";
+import { sortDirection } from "@/lib/sortDirection";
+import { formatDateTime } from "@/i18n/format";
 import { usePersistentPageSize } from "@/lib/tablePageSize";
+import {
+  DEFAULT_SEARCH_DEBOUNCE_MS,
+  useDebouncedValue,
+} from "@/lib/useDebounce";
 import { cn } from "@/lib/utils";
-import type {
-  AccountRowActionContext,
-  GroupRowActionContext,
-} from "@/pages/rowActions";
 
 type AccountsTab = "accounts" | "groups";
+
+const ACCOUNT_SORT_KEYS = new Set([
+  "blockReason",
+  "code",
+  "group",
+  "positionCount",
+  "status",
+  "title",
+]);
+const GROUP_SORT_KEYS = new Set([
+  "accountCount",
+  "blockReason",
+  "code",
+  "notes",
+  "positionCount",
+  "status",
+  "title",
+]);
+
+type AdvancedListFilters = {
+  positionMode: PositionCountFilterMode;
+  positionMin: string;
+  positionMax: string;
+  accountMode: PositionCountFilterMode;
+  accountMin: string;
+  accountMax: string;
+  notes: string;
+  notesMatch: TextMatchMode;
+  blockReason: string;
+  blockReasonMatch: TextMatchMode;
+};
+
+const DEFAULT_ADVANCED_FILTERS: AdvancedListFilters = {
+  positionMode: "all",
+  positionMin: "",
+  positionMax: "",
+  accountMode: "all",
+  accountMin: "",
+  accountMax: "",
+  notes: "",
+  notesMatch: "contains",
+  blockReason: "",
+  blockReasonMatch: "contains",
+};
+
+function trimmedOrUndefined(value: string): string | undefined {
+  const trimmed = value.trim();
+  return trimmed === "" ? undefined : trimmed;
+}
+
+const TEXT_MATCH_MODES: TextMatchMode[] = [
+  "contains",
+  "starts_with",
+  "ends_with",
+  "exact",
+];
+
+function isTextMatchMode(value: string | null): value is TextMatchMode {
+  return value !== null && (TEXT_MATCH_MODES as string[]).includes(value);
+}
+
+const COUNT_MODES: PositionCountFilterMode[] = [
+  "all",
+  "eq",
+  "neq",
+  "gt",
+  "gte",
+  "lt",
+  "lte",
+  "greater_than",
+  "less_than",
+  "between",
+];
+
+function countModeFromParam(value: string | null): PositionCountFilterMode {
+  return value !== null && (COUNT_MODES as string[]).includes(value)
+    ? (value as PositionCountFilterMode)
+    : "all";
+}
+
+function countModeNeedsMin(mode: PositionCountFilterMode): boolean {
+  return (
+    mode === "eq" ||
+    mode === "neq" ||
+    mode === "gt" ||
+    mode === "gte" ||
+    mode === "greater_than"
+  );
+}
+
+function countModeNeedsMax(mode: PositionCountFilterMode): boolean {
+  return mode === "lt" || mode === "lte" || mode === "less_than";
+}
+
+/** Read the shared `codeMatch` param, defaulting to "contains". */
+function textMatchFromParams(params: URLSearchParams): TextMatchMode {
+  const value = params.get("codeMatch");
+  return isTextMatchMode(value) ? value : "contains";
+}
+
+/** Read the shared `status` param, defaulting to "all". */
+function statusFromParams(params: URLSearchParams): StatusListFilter {
+  const value = params.get("status");
+  return value === "active" || value === "blocked" ? value : "all";
+}
+
+/** Read the shared `sort`/`order` params into a sort state object. */
+function sortFromParams(params: URLSearchParams, allowed: Set<string>): {
+  sort?: string;
+  order?: SortOrder;
+} {
+  const sort = params.get("sort");
+  const order = params.get("order");
+  if (sort !== null && allowed.has(sort) && (order === "asc" || order === "desc")) {
+    return { sort, order };
+  }
+  return {};
+}
+
+/** Read the advanced (position/account count, notes, block reason) filters from
+ *  the shared params, mirroring the API param names. */
+function advancedFromParams(params: URLSearchParams): AdvancedListFilters {
+  const positionMode = countModeFromParam(params.get("positionCountMode"));
+  const accountMode = countModeFromParam(params.get("accountCountMode"));
+  const notes = params.get("notes") ?? "";
+  const blockReason = params.get("blockReason") ?? "";
+  return {
+    positionMode,
+    positionMin: params.get("positionCountMin") ?? "",
+    positionMax: params.get("positionCountMax") ?? "",
+    accountMode,
+    accountMin: params.get("accountCountMin") ?? "",
+    accountMax: params.get("accountCountMax") ?? "",
+    notes,
+    notesMatch:
+      notes !== "" && isTextMatchMode(params.get("notesMatch"))
+        ? (params.get("notesMatch") as TextMatchMode)
+        : DEFAULT_ADVANCED_FILTERS.notesMatch,
+    blockReason,
+    blockReasonMatch:
+      blockReason !== "" && isTextMatchMode(params.get("blockReasonMatch"))
+        ? (params.get("blockReasonMatch") as TextMatchMode)
+        : DEFAULT_ADVANCED_FILTERS.blockReasonMatch,
+  };
+}
+
+/** Serialize the advanced filters into a `URLSearchParams`, emitting only the
+ *  active fields. `entity` gates the groups-only account-count range. */
+function appendAdvancedParams(
+  query: URLSearchParams,
+  filters: AdvancedListFilters,
+  entity: "accounts" | "groups",
+): void {
+  const positionMin = trimmedOrUndefined(filters.positionMin);
+  const positionMax = trimmedOrUndefined(filters.positionMax);
+  if (countModeNeedsMin(filters.positionMode) && positionMin !== undefined) {
+    query.set("positionCountMode", filters.positionMode);
+    query.set("positionCountMin", positionMin);
+  } else if (
+    countModeNeedsMax(filters.positionMode) &&
+    positionMax !== undefined
+  ) {
+    query.set("positionCountMode", filters.positionMode);
+    query.set("positionCountMax", positionMax);
+  } else if (
+    filters.positionMode === "between" &&
+    positionMin !== undefined &&
+    positionMax !== undefined
+  ) {
+    query.set("positionCountMode", filters.positionMode);
+    query.set("positionCountMin", positionMin);
+    query.set("positionCountMax", positionMax);
+  }
+  if (entity === "groups") {
+    const accountMin = trimmedOrUndefined(filters.accountMin);
+    const accountMax = trimmedOrUndefined(filters.accountMax);
+    if (countModeNeedsMin(filters.accountMode) && accountMin !== undefined) {
+      query.set("accountCountMode", filters.accountMode);
+      query.set("accountCountMin", accountMin);
+    } else if (
+      countModeNeedsMax(filters.accountMode) &&
+      accountMax !== undefined
+    ) {
+      query.set("accountCountMode", filters.accountMode);
+      query.set("accountCountMax", accountMax);
+    } else if (
+      filters.accountMode === "between" &&
+      accountMin !== undefined &&
+      accountMax !== undefined
+    ) {
+      query.set("accountCountMode", filters.accountMode);
+      query.set("accountCountMin", accountMin);
+      query.set("accountCountMax", accountMax);
+    }
+  }
+  const notes = trimmedOrUndefined(filters.notes);
+  if (entity === "groups" && notes !== undefined) {
+    query.set("notes", notes);
+    if (filters.notesMatch !== "contains") {
+      query.set("notesMatch", filters.notesMatch);
+    }
+  }
+  const blockReason = trimmedOrUndefined(filters.blockReason);
+  if (blockReason !== undefined) {
+    query.set("blockReason", blockReason);
+    if (filters.blockReasonMatch !== "contains") {
+      query.set("blockReasonMatch", filters.blockReasonMatch);
+    }
+  }
+}
+
+function positionCountQuery(filters: AdvancedListFilters): Pick<
+  AccountListFilters,
+  "positionCountMode" | "positionCountMin" | "positionCountMax"
+> {
+  const min = trimmedOrUndefined(filters.positionMin);
+  const max = trimmedOrUndefined(filters.positionMax);
+  switch (filters.positionMode) {
+    case "eq":
+    case "neq":
+    case "gt":
+    case "gte":
+    case "greater_than":
+      return min === undefined
+        ? {}
+        : {
+            positionCountMode: filters.positionMode,
+            positionCountMin: min,
+          };
+    case "lt":
+    case "lte":
+    case "less_than":
+      return min === undefined
+        ? {}
+        : {
+            positionCountMode: filters.positionMode,
+            positionCountMax: min,
+          };
+    case "between":
+      return min === undefined || max === undefined
+        ? {}
+        : {
+            positionCountMode: "between",
+            positionCountMin: min,
+            positionCountMax: max,
+          };
+    default:
+      return {};
+  }
+}
+
+function accountCountQuery(filters: AdvancedListFilters): Pick<
+  GroupListFilters,
+  "accountCountMode" | "accountCountMin" | "accountCountMax"
+> {
+  const min = trimmedOrUndefined(filters.accountMin);
+  const max = trimmedOrUndefined(filters.accountMax);
+  switch (filters.accountMode) {
+    case "eq":
+    case "neq":
+    case "gt":
+    case "gte":
+    case "greater_than":
+      return min === undefined
+        ? {}
+        : { accountCountMode: filters.accountMode, accountCountMin: min };
+    case "lt":
+    case "lte":
+    case "less_than":
+      return min === undefined
+        ? {}
+        : {
+            accountCountMode: filters.accountMode,
+            accountCountMax: min,
+          };
+    case "between":
+      return min === undefined || max === undefined
+        ? {}
+        : {
+            accountCountMode: "between",
+            accountCountMin: min,
+            accountCountMax: max,
+          };
+    default:
+      return {};
+  }
+}
 
 function errMessage(err: unknown): string {
   if (err instanceof ApiError) {
     return err.message;
   }
   return err instanceof Error ? err.message : String(err);
+}
+
+function matchLabelKey(mode: TextMatchMode): string {
+  switch (mode) {
+    case "starts_with":
+      return "filters.match.startsWith";
+    case "ends_with":
+      return "filters.match.endsWith";
+    case "exact":
+      return "filters.match.exact";
+    default:
+      return "filters.match.contains";
+  }
+}
+
+function countModeFromNumberOperator(operator: string): PositionCountFilterMode {
+  switch (operator) {
+    case "eq":
+    case "neq":
+    case "gt":
+    case "gte":
+    case "lt":
+    case "lte":
+    case "between":
+      return operator;
+    default:
+      return "all";
+  }
+}
+
+function numberOperatorFromCountMode(
+  mode: PositionCountFilterMode,
+): "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "between" {
+  switch (mode) {
+    case "greater_than":
+      return "gt";
+    case "less_than":
+      return "lt";
+    case "eq":
+    case "neq":
+    case "gt":
+    case "gte":
+    case "lt":
+    case "lte":
+    case "between":
+      return mode;
+    default:
+      return "eq";
+  }
+}
+
+/** A single applied advanced-filter chip, tagged by which field it clears. */
+type AdvancedSummaryEntry = {
+  field: "position" | "account" | "notes" | "blockReason";
+  text: string;
+};
+
+function advancedFilterSummary(
+  filters: AdvancedListFilters,
+  t: TFunction<"accounts">,
+  includeNotes = true,
+): AdvancedSummaryEntry[] {
+  const out: AdvancedSummaryEntry[] = [];
+  const min = trimmedOrUndefined(filters.positionMin);
+  const max = trimmedOrUndefined(filters.positionMax);
+  if (
+    (filters.positionMode === "gt" ||
+      filters.positionMode === "greater_than") &&
+    min !== undefined
+  ) {
+    out.push({
+      field: "position",
+      text: t("filters.advanced.summary.positionGreater", { value: min }),
+    });
+  } else if (
+    (filters.positionMode === "lt" || filters.positionMode === "less_than") &&
+    max !== undefined
+  ) {
+    out.push({
+      field: "position",
+      text: t("filters.advanced.summary.positionLess", { value: max }),
+    });
+  } else if (countModeNeedsMin(filters.positionMode) && min !== undefined) {
+    out.push({
+      field: "position",
+      text: t("filters.advanced.summary.text", {
+        field: t("filters.advanced.positionLabel"),
+        match: t(`common:operators.number.${filters.positionMode}`),
+        value: min,
+      }),
+    });
+  } else if (countModeNeedsMax(filters.positionMode) && max !== undefined) {
+    out.push({
+      field: "position",
+      text: t("filters.advanced.summary.text", {
+        field: t("filters.advanced.positionLabel"),
+        match: t(`common:operators.number.${filters.positionMode}`),
+        value: max,
+      }),
+    });
+  } else if (
+    filters.positionMode === "between" &&
+    min !== undefined &&
+    max !== undefined
+  ) {
+    out.push({
+      field: "position",
+      text: t("filters.advanced.summary.positionBetween", { min, max }),
+    });
+  }
+  const accountMin = trimmedOrUndefined(filters.accountMin);
+  const accountMax = trimmedOrUndefined(filters.accountMax);
+  if (
+    (filters.accountMode === "gt" ||
+      filters.accountMode === "greater_than") &&
+    accountMin !== undefined
+  ) {
+    out.push({
+      field: "account",
+      text: t("filters.advanced.summary.accountGreater", { value: accountMin }),
+    });
+  } else if (
+    (filters.accountMode === "lt" || filters.accountMode === "less_than") &&
+    accountMax !== undefined
+  ) {
+    out.push({
+      field: "account",
+      text: t("filters.advanced.summary.accountLess", { value: accountMax }),
+    });
+  } else if (
+    countModeNeedsMin(filters.accountMode) &&
+    accountMin !== undefined
+  ) {
+    out.push({
+      field: "account",
+      text: t("filters.advanced.summary.text", {
+        field: t("filters.advanced.accountLabel"),
+        match: t(`common:operators.number.${filters.accountMode}`),
+        value: accountMin,
+      }),
+    });
+  } else if (
+    countModeNeedsMax(filters.accountMode) &&
+    accountMax !== undefined
+  ) {
+    out.push({
+      field: "account",
+      text: t("filters.advanced.summary.text", {
+        field: t("filters.advanced.accountLabel"),
+        match: t(`common:operators.number.${filters.accountMode}`),
+        value: accountMax,
+      }),
+    });
+  } else if (
+    filters.accountMode === "between" &&
+    accountMin !== undefined &&
+    accountMax !== undefined
+  ) {
+    out.push({
+      field: "account",
+      text: t("filters.advanced.summary.accountBetween", {
+        min: accountMin,
+        max: accountMax,
+      }),
+    });
+  }
+  const notes = trimmedOrUndefined(filters.notes);
+  if (includeNotes && notes !== undefined) {
+    out.push({
+      field: "notes",
+      text: t("filters.advanced.summary.text", {
+        field: t("filters.advanced.notesShort"),
+        match: t(matchLabelKey(filters.notesMatch)),
+        value: notes,
+      }),
+    });
+  }
+  const blockReason = trimmedOrUndefined(filters.blockReason);
+  if (blockReason !== undefined) {
+    out.push({
+      field: "blockReason",
+      text: t("filters.advanced.summary.text", {
+        field: t("filters.advanced.blockReasonShort"),
+        match: t(matchLabelKey(filters.blockReasonMatch)),
+        value: blockReason,
+      }),
+    });
+  }
+  return out;
+}
+
+/** Reset one advanced-filter field group back to its default. */
+function clearAdvancedField(
+  filters: AdvancedListFilters,
+  field: AdvancedSummaryEntry["field"],
+): AdvancedListFilters {
+  switch (field) {
+    case "position":
+      return {
+        ...filters,
+        positionMode: DEFAULT_ADVANCED_FILTERS.positionMode,
+        positionMin: DEFAULT_ADVANCED_FILTERS.positionMin,
+        positionMax: DEFAULT_ADVANCED_FILTERS.positionMax,
+      };
+    case "account":
+      return {
+        ...filters,
+        accountMode: DEFAULT_ADVANCED_FILTERS.accountMode,
+        accountMin: DEFAULT_ADVANCED_FILTERS.accountMin,
+        accountMax: DEFAULT_ADVANCED_FILTERS.accountMax,
+      };
+    case "notes":
+      return {
+        ...filters,
+        notes: DEFAULT_ADVANCED_FILTERS.notes,
+        notesMatch: DEFAULT_ADVANCED_FILTERS.notesMatch,
+      };
+    case "blockReason":
+      return {
+        ...filters,
+        blockReason: DEFAULT_ADVANCED_FILTERS.blockReason,
+        blockReasonMatch: DEFAULT_ADVANCED_FILTERS.blockReasonMatch,
+      };
+  }
+}
+
+function ListFilters({
+  entity,
+  code,
+  codeMatch,
+  codeSuggestions,
+  codeLoading,
+  groupSearch,
+  groupSuggestions,
+  groupLoading,
+  groupActive,
+  status,
+  advancedSummary,
+  shareHref,
+  onClearAll,
+  onCode,
+  onCodeMatch,
+  onGroupSearch,
+  onStatus,
+  onClearAdvanced,
+  onOpenAdvanced,
+}: {
+  entity: "accounts" | "groups";
+  code: string;
+  codeMatch: TextMatchMode;
+  codeSuggestions?: string[];
+  codeLoading?: boolean;
+  groupSearch?: string;
+  groupSuggestions?: string[];
+  groupLoading?: boolean;
+  groupActive?: boolean;
+  status: StatusListFilter;
+  advancedSummary: AdvancedSummaryEntry[];
+  shareHref: string;
+  onClearAll: () => void;
+  onCode: (value: string) => void;
+  onCodeMatch: (value: TextMatchMode) => void;
+  onGroupSearch?: (value: string) => void;
+  onStatus: (value: StatusListFilter) => void;
+  onClearAdvanced: (field: AdvancedSummaryEntry["field"]) => void;
+  onOpenAdvanced: () => void;
+}) {
+  const { t } = useTranslation("accounts");
+  const { t: tc } = useTranslation("common");
+  const maskHelp = t("filters.maskHelp");
+  const accountGroupFilter =
+    entity === "accounts" &&
+    groupSearch !== undefined &&
+    onGroupSearch !== undefined;
+  const active =
+    code.trim() !== "" ||
+    (groupActive ?? (groupSearch?.trim() ?? "") !== "") ||
+    status !== "all" ||
+    advancedSummary.length > 0;
+  const statusOptions = [
+    { value: "all", label: t("filters.status.all") },
+    { value: "active", label: t("filters.status.active") },
+    { value: "blocked", label: t("filters.status.blocked") },
+  ];
+  return (
+    <FilterBar
+      active={active}
+      activeLabel={tc("filters.active")}
+      onClearActive={onClearAll}
+      clearActiveLabel={tc("filters.clearAll")}
+      chips={
+        advancedSummary.length > 0 ? (
+          <>
+            {advancedSummary.map((entry) => (
+              <FilterChip
+                key={entry.field}
+                label={entry.text}
+                removeLabel={tc("filters.removeAdvanced")}
+                onRemove={() => onClearAdvanced(entry.field)}
+              />
+            ))}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-6 text-[0.6875rem]"
+              onClick={() => {
+                for (const entry of advancedSummary) {
+                  onClearAdvanced(entry.field);
+                }
+              }}
+            >
+              {tc("filters.removeAdvanced")}
+            </Button>
+          </>
+        ) : undefined
+      }
+      trailing={
+        <>
+          <div className="grid gap-1.5">
+            <FieldLabel>{t("filters.status.ariaLabel")}</FieldLabel>
+            <Segmented
+              value={status}
+              options={statusOptions}
+              onChange={(value) => onStatus(value as StatusListFilter)}
+            />
+          </div>
+          <MoreFiltersButton
+            count={advancedSummary.length}
+            label={t("filters.advanced.trigger")}
+            onClick={onOpenAdvanced}
+          />
+          <div className="flex items-end">
+            <ShareLinkButton
+              href={shareHref}
+              title={tc("rowActions.shareFilters")}
+              copiedTitle={tc("rowActions.copiedLink")}
+              size={32}
+            />
+          </div>
+        </>
+      }
+    >
+        {accountGroupFilter && (
+          <AutocompleteFilterField
+            label={t("accounts.filters.groupLabel")}
+            value={groupSearch}
+            placeholder={t("accounts.filters.groupPlaceholder")}
+            suggestions={groupSuggestions}
+            loading={groupLoading}
+            searchingLabel={tc("filters.onlineLoading", {
+              field: t("accounts.filters.groupLabel"),
+            })}
+            onChange={onGroupSearch}
+            onClear={() => onGroupSearch("")}
+            clearLabel={tc("filters.clearField")}
+            width={180}
+          />
+        )}
+        <div className="grid gap-1.5">
+          <FieldLabel>{t(`${entity}.filters.codeLabel`)}</FieldLabel>
+          <div className="flex items-center gap-2">
+            <AutocompleteFilterField
+              value={code}
+              placeholder={t(`${entity}.filters.codePlaceholder`)}
+              title={maskHelp}
+              ariaLabel={t(`${entity}.filters.codeLabel`)}
+              suggestions={codeSuggestions}
+              loading={codeLoading}
+              searchingLabel={tc("filters.onlineLoading", {
+                field: t(`${entity}.filters.codeLabel`),
+              })}
+              width={220}
+              onChange={onCode}
+              onClear={() => onCode("")}
+              clearLabel={tc("filters.clearField")}
+            />
+            <FilterOperatorSelect
+              value={codeMatch}
+              options={operatorOptions(t, "text")}
+              ariaLabel={
+                entity === "groups"
+                  ? `${tc("fields.group")} ${tc("filters.operator")}`
+                  : `${tc("fields.account")} ${tc("filters.operator")}`
+              }
+              onChange={(value) => {
+                if (isTextMatchMode(value)) {
+                  onCodeMatch(value);
+                }
+              }}
+              width={140}
+            />
+          </div>
+        </div>
+    </FilterBar>
+  );
+}
+
+function AdvancedFilterDialog({
+  entity,
+  open,
+  draft,
+  onDraftChange,
+  onApply,
+  onCancel,
+}: {
+  entity: "accounts" | "groups";
+  open: boolean;
+  draft: AdvancedListFilters;
+  onDraftChange: (next: AdvancedListFilters) => void;
+  onApply: () => void;
+  onCancel: () => void;
+}) {
+  const { t } = useTranslation("accounts");
+  const formRef = useRef<HTMLFormElement | null>(null);
+  const update = <K extends keyof AdvancedListFilters>(
+    key: K,
+    value: AdvancedListFilters[K],
+  ) => onDraftChange({ ...draft, [key]: value });
+  const updatePositionCount = (
+    patch: Partial<
+      Pick<
+        AdvancedListFilters,
+        "positionMode" | "positionMin" | "positionMax"
+      >
+    >,
+  ) =>
+    onDraftChange({
+      ...draft,
+      positionMode:
+        draft.positionMode === "all" && patch.positionMode === undefined
+          ? "eq"
+          : draft.positionMode,
+      ...patch,
+    });
+  const updateAccountCount = (
+    patch: Partial<
+      Pick<AdvancedListFilters, "accountMode" | "accountMin" | "accountMax">
+    >,
+  ) =>
+    onDraftChange({
+      ...draft,
+      accountMode:
+        draft.accountMode === "all" && patch.accountMode === undefined
+          ? "eq"
+          : draft.accountMode,
+      ...patch,
+    });
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onCancel();
+      }}
+    >
+      <DialogContent>
+        <form
+          ref={formRef}
+          className="grid gap-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!reportInvalidFilterControls(formRef.current)) {
+              return;
+            }
+            onApply();
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>{t("filters.advanced.title")}</DialogTitle>
+            <DialogDescription>
+              {t(`${entity}.filters.advancedDescription`)}
+            </DialogDescription>
+            <p className="text-[0.6875rem] text-muted-lt">
+              {t("filters.maskHelp")}
+            </p>
+          </DialogHeader>
+
+          <div className="grid gap-2">
+            <Label>{t("filters.advanced.positionLabel")}</Label>
+            <div className="flex items-center gap-2">
+              <NumberRangeFilter
+                fluid
+                operator={numberOperatorFromCountMode(draft.positionMode)}
+                operators={operatorOptions(t, "number")}
+                operatorAriaLabel={t("filters.advanced.positionLabel")}
+                min={draft.positionMin}
+                max={draft.positionMax}
+                onOperatorChange={(value) =>
+                  update("positionMode", countModeFromNumberOperator(value))
+                }
+                onMinChange={(value) => updatePositionCount({ positionMin: value })}
+                onMaxChange={(value) => updatePositionCount({ positionMax: value })}
+              />
+            </div>
+          </div>
+
+          {entity === "groups" && (
+            <div className="grid gap-2">
+              <Label>{t("filters.advanced.accountLabel")}</Label>
+              <div className="flex items-center gap-2">
+                <NumberRangeFilter
+                  fluid
+                  operator={numberOperatorFromCountMode(draft.accountMode)}
+                  operators={operatorOptions(t, "number")}
+                  operatorAriaLabel={t("filters.advanced.accountLabel")}
+                  min={draft.accountMin}
+                  max={draft.accountMax}
+                  onOperatorChange={(value) =>
+                    update("accountMode", countModeFromNumberOperator(value))
+                  }
+                  onMinChange={(value) => updateAccountCount({ accountMin: value })}
+                  onMaxChange={(value) => updateAccountCount({ accountMax: value })}
+                />
+              </div>
+            </div>
+          )}
+
+          {entity === "groups" && (
+            <label className="grid gap-2">
+              <Label asChild>
+                <span>{t("filters.advanced.notesLabel")}</span>
+              </Label>
+              <TextFilter
+                fluid
+                value={draft.notes}
+                operator={draft.notesMatch}
+                operators={operatorOptions(t, "text")}
+                placeholder={t(`${entity}.filters.notesPlaceholder`)}
+                onValueChange={(value) => update("notes", value)}
+                onClear={() => update("notes", "")}
+                clearLabel={t("common:filters.clearField")}
+                onOperatorChange={(value) => {
+                  if (isTextMatchMode(value)) {
+                    update("notesMatch", value);
+                  }
+                }}
+              />
+            </label>
+          )}
+
+          <label className="grid gap-2">
+            <Label asChild>
+              <span>{t("filters.advanced.blockReasonLabel")}</span>
+            </Label>
+            <TextFilter
+              fluid
+              value={draft.blockReason}
+              operator={draft.blockReasonMatch}
+              operators={operatorOptions(t, "text")}
+              placeholder={t(`${entity}.filters.blockReasonPlaceholder`)}
+              onValueChange={(value) => update("blockReason", value)}
+              onClear={() => update("blockReason", "")}
+              clearLabel={t("common:filters.clearField")}
+              onOperatorChange={(value) => {
+                if (isTextMatchMode(value)) {
+                  update("blockReasonMatch", value);
+                }
+              }}
+            />
+          </label>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onCancel}>
+              {t("filters.advanced.cancel")}
+            </Button>
+            <Button type="submit">
+              <Search className="h-3.5 w-3.5" />
+              {t("common:filters.applyAdvanced")}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -196,6 +1103,8 @@ export function CreateAccountDialog({
               suggestions={groupSuggestions}
               placeholder="equity-desks"
               spellCheck={false}
+              onClear={() => setGroup("")}
+              clearLabel={ta("filters.clearField")}
             />
             <p className="text-[0.6875rem] text-muted">
               {ta("createAccount.groupHint")}
@@ -251,7 +1160,7 @@ function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
   };
 
   const submit = async () => {
-    if (codeTrimmed.length === 0 || titleTrimmed.length === 0) return;
+    if (codeTrimmed.length === 0) return;
     setBusy(true);
     setError(null);
     try {
@@ -292,7 +1201,7 @@ function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
               placeholder="equity-desks"
               onChange={(e) => setCode(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && codeTrimmed.length > 0 && titleTrimmed.length > 0) {
+                if (e.key === "Enter" && codeTrimmed.length > 0) {
                   void submit();
                 }
               }}
@@ -307,7 +1216,7 @@ function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
               placeholder={t("createGroup.titlePlaceholder")}
               onChange={(e) => setTitle(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && codeTrimmed.length > 0 && titleTrimmed.length > 0) {
+                if (e.key === "Enter" && codeTrimmed.length > 0) {
                   void submit();
                 }
               }}
@@ -339,7 +1248,7 @@ function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
           <Button
             size="sm"
             onClick={() => void submit()}
-            disabled={busy || codeTrimmed.length === 0 || titleTrimmed.length === 0}
+            disabled={busy || codeTrimmed.length === 0}
           >
             {t("createGroup.submit")}
           </Button>
@@ -825,6 +1734,260 @@ function DeleteAccountConfirm({
 }
 
 // ---------------------------------------------------------------------------
+// Edit account metadata dialog
+// ---------------------------------------------------------------------------
+
+function EditAccountMetadataDialog({
+  account,
+  open,
+  onOpenChange,
+  onDone,
+}: {
+  account: Account | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onDone: (updated: Account) => void;
+}) {
+  const { t } = useTranslation("accounts");
+  const { t: tv } = useTranslation("validation");
+  const { updateAccount } = useOfficerApi();
+  const [code, setCode] = useState("");
+  const [title, setTitle] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      /* eslint-disable react-hooks/set-state-in-effect */
+      setCode(account?.code ?? "");
+      setTitle(account?.title ?? "");
+      /* eslint-enable react-hooks/set-state-in-effect */
+    }
+  }, [open, account]);
+
+  const codeTrimmed = code.trim();
+  const titleTrimmed = title.trim();
+  const validation =
+    codeTrimmed.length > 0 ? validateAccountID(codeTrimmed) : null;
+
+  const handleOpenChange = (next: boolean) => {
+    if (!next) {
+      setCode("");
+      setTitle("");
+      setError(null);
+    }
+    onOpenChange(next);
+  };
+
+  const submit = async () => {
+    if (!account || codeTrimmed.length === 0 || validation !== null) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const updated = await updateAccount(
+        account.code,
+        codeTrimmed,
+        titleTrimmed,
+      );
+      onOpenChange(false);
+      onDone(updated);
+    } catch (err) {
+      setError(errMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>
+            {t("editAccount.titlePrefix")}{" "}
+            <span className="nums text-accent">{account?.code}</span>
+          </DialogTitle>
+          <DialogDescription>{t("editAccount.description")}</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="account-edit-code">
+              {t("editAccount.codeLabel")}
+            </Label>
+            <ClearableInput
+              id="account-edit-code"
+              value={code}
+              autoFocus
+              spellCheck={false}
+              onChange={(e) => setCode(e.target.value)}
+              onClear={() => setCode("")}
+              clearLabel={t("filters.clearField")}
+              disabled={busy}
+            />
+            {validation && (
+              <p className="text-[0.6875rem] text-[var(--danger)]">
+                {tv(validation.key, validation.values)}
+              </p>
+            )}
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="account-edit-title">
+              {t("editAccount.titleLabel")}
+            </Label>
+            <ClearableInput
+              id="account-edit-title"
+              value={title}
+              spellCheck={false}
+              onChange={(e) => setTitle(e.target.value)}
+              onClear={() => setTitle("")}
+              clearLabel={t("filters.clearField")}
+              disabled={busy}
+            />
+          </div>
+        </div>
+        {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+        <DialogFooter>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => onOpenChange(false)}
+            disabled={busy}
+          >
+            {t("editAccount.cancel")}
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => void submit()}
+            disabled={busy || codeTrimmed.length === 0 || validation !== null}
+          >
+            {t("editAccount.submit")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Edit group metadata dialog
+// ---------------------------------------------------------------------------
+
+function EditGroupMetadataDialog({
+  group,
+  open,
+  onOpenChange,
+  onDone,
+}: {
+  group: Group | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onDone: (updated: Group) => void;
+}) {
+  const { t } = useTranslation("accounts");
+  const { updateGroup } = useOfficerApi();
+  const [code, setCode] = useState("");
+  const [title, setTitle] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      /* eslint-disable react-hooks/set-state-in-effect */
+      setCode(group?.code ?? "");
+      setTitle(group?.title ?? "");
+      /* eslint-enable react-hooks/set-state-in-effect */
+    }
+  }, [open, group]);
+
+  const codeTrimmed = code.trim();
+  const titleTrimmed = title.trim();
+
+  const handleOpenChange = (next: boolean) => {
+    if (!next) {
+      setCode("");
+      setTitle("");
+      setError(null);
+    }
+    onOpenChange(next);
+  };
+
+  const submit = async () => {
+    if (!group || codeTrimmed.length === 0) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const updated = await updateGroup(group.code, codeTrimmed, titleTrimmed);
+      onOpenChange(false);
+      onDone(updated);
+    } catch (err) {
+      setError(errMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>
+            {t("editGroup.titlePrefix")}{" "}
+            <span className="nums text-accent">{group?.code}</span>
+          </DialogTitle>
+          <DialogDescription>{t("editGroup.description")}</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="group-edit-code">{t("editGroup.codeLabel")}</Label>
+            <ClearableInput
+              id="group-edit-code"
+              value={code}
+              autoFocus
+              spellCheck={false}
+              onChange={(e) => setCode(e.target.value)}
+              onClear={() => setCode("")}
+              clearLabel={t("filters.clearField")}
+              disabled={busy}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="group-edit-title">
+              {t("editGroup.titleLabel")}
+            </Label>
+            <ClearableInput
+              id="group-edit-title"
+              value={title}
+              spellCheck={false}
+              onChange={(e) => setTitle(e.target.value)}
+              onClear={() => setTitle("")}
+              clearLabel={t("filters.clearField")}
+              disabled={busy}
+            />
+          </div>
+        </div>
+        {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+        <DialogFooter>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => onOpenChange(false)}
+            disabled={busy}
+          >
+            {t("editGroup.cancel")}
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => void submit()}
+            disabled={busy || codeTrimmed.length === 0}
+          >
+            {t("editGroup.submit")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Edit group notes dialog
 // ---------------------------------------------------------------------------
 
@@ -889,13 +2052,20 @@ function EditGroupNotesDialog({
         </p>
         <div className="space-y-2">
           <Label htmlFor="group-notes-edit">{t("editGroupNotes.notesLabel")}</Label>
-          <Textarea
-            id="group-notes-edit"
-            value={notes}
-            autoFocus
-            rows={4}
-            onChange={(e) => setNotes(e.target.value)}
-          />
+          <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_2rem]">
+            <Textarea
+              id="group-notes-edit"
+              value={notes}
+              autoFocus
+              rows={4}
+              onChange={(e) => setNotes(e.target.value)}
+            />
+            <ClearFieldButton
+              label={t("filters.clearField")}
+              onClick={() => setNotes("")}
+              disabled={busy || notes.length === 0}
+            />
+          </div>
         </div>
         {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
         <DialogFooter>
@@ -934,15 +2104,19 @@ function AssignGroupDialog({
   onDone: (updated: Account) => void;
 }) {
   const { t } = useTranslation("accounts");
-  const { setAccountGroup } = useOfficerApi();
+  const { setAccountGroup, createGroup } = useOfficerApi();
   const [group, setGroup] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const handleOpenChange = (next: boolean) => {
-    if (next && account) {
-      setGroup(account.group ?? "");
+  useEffect(() => {
+    if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setGroup(account?.group ?? "");
     }
+  }, [open, account]);
+
+  const handleOpenChange = (next: boolean) => {
     if (!next) {
       setGroup("");
       setError(null);
@@ -954,8 +2128,19 @@ function AssignGroupDialog({
     if (!account) return;
     setBusy(true);
     setError(null);
+    const trimmed = group.trim();
     try {
-      const updated = await setAccountGroup(account.code, group.trim());
+      // Assigning to a group the engine doesn't know yet creates it on the fly,
+      // so the operator never has to pre-register a group before using it.
+      if (trimmed.length > 0 && !groupSuggestions.includes(trimmed)) {
+        try {
+          await createGroup(trimmed, "", "");
+        } catch {
+          // The group may already exist outside the loaded suggestions; the
+          // assignment below surfaces any genuine error.
+        }
+      }
+      const updated = await setAccountGroup(account.code, trimmed);
       onOpenChange(false);
       setGroup("");
       onDone(updated);
@@ -988,6 +2173,9 @@ function AssignGroupDialog({
             placeholder="equity-desks"
             autoFocus
             spellCheck={false}
+            disabled={busy}
+            onClear={() => setGroup("")}
+            clearLabel={t("filters.clearField")}
           />
         </div>
         {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
@@ -1075,13 +2263,20 @@ function EditAccountNotesDialog({
         </p>
         <div className="space-y-2">
           <Label htmlFor="account-notes">{t("editAccountNotes.notesLabel")}</Label>
-          <Textarea
-            id="account-notes"
-            value={notes}
-            autoFocus
-            rows={4}
-            onChange={(e) => setNotes(e.target.value)}
-          />
+          <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_2rem]">
+            <Textarea
+              id="account-notes"
+              value={notes}
+              autoFocus
+              rows={4}
+              onChange={(e) => setNotes(e.target.value)}
+            />
+            <ClearFieldButton
+              label={t("filters.clearField")}
+              onClick={() => setNotes("")}
+              disabled={busy || notes.length === 0}
+            />
+          </div>
         </div>
         {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
         <DialogFooter>
@@ -1103,15 +2298,271 @@ function EditAccountNotesDialog({
 }
 
 // ---------------------------------------------------------------------------
+// Block details dialog
+// ---------------------------------------------------------------------------
+
+type BlockedDetailsTarget =
+  | { kind: "account"; account: Account }
+  | { kind: "group"; group: Group };
+
+function blockedDetailsCode(target: BlockedDetailsTarget): string {
+  return target.kind === "account" ? target.account.code : target.group.code;
+}
+
+function blockedDetailsReason(target: BlockedDetailsTarget): string {
+  return target.kind === "account"
+    ? target.account.blockReason
+    : target.group.blockReason;
+}
+
+function groupAuditMatches(entry: AuditEntry, groupCode: string): boolean {
+  const needle = groupCode.toLowerCase();
+  return (
+    entry.account.toLowerCase() === needle ||
+    entry.accountTitle.toLowerCase() === needle ||
+    entry.detail.toLowerCase().includes(needle)
+  );
+}
+
+function BlockedDetailsDialog({
+  target,
+  open,
+  onOpenChange,
+  onUnblock,
+}: {
+  target: BlockedDetailsTarget | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onUnblock: (target: BlockedDetailsTarget) => void;
+}) {
+  const { t } = useTranslation("accounts");
+  const { fetchAudit } = useOfficerApi();
+  const navigate = useNavigate();
+  const [entries, setEntries] = useState<AuditEntry[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open || target === null) {
+      return;
+    }
+
+    let cancelled = false;
+    const code = blockedDetailsCode(target);
+
+    const load = async () => {
+      setBusy(true);
+      setError(null);
+      try {
+        let next: AuditEntry[] = [];
+        if (target.kind === "account") {
+          next = await fetchAudit({
+            account: code,
+            actions: ["block"],
+            limit: 1,
+          });
+          if (next.length === 0) {
+            next = await fetchAudit({ account: code, limit: 3 });
+          }
+        } else {
+          const blockEntries = await fetchAudit({
+            actions: ["block_group"],
+            limit: 20,
+          });
+          next = blockEntries
+            .filter((entry) => groupAuditMatches(entry, code))
+            .slice(0, 3);
+          if (next.length === 0) {
+            next = blockEntries.slice(0, 3);
+          }
+        }
+        if (next.length === 0) {
+          next = await fetchAudit(3);
+        }
+        if (!cancelled) {
+          setEntries(next.slice(0, 3));
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(errMessage(err));
+        }
+      } finally {
+        if (!cancelled) {
+          setBusy(false);
+        }
+      }
+    };
+
+    void load();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchAudit, open, target]);
+
+  const changeOpen = (next: boolean) => {
+    if (!next) {
+      setEntries([]);
+      setError(null);
+      setBusy(false);
+    }
+    onOpenChange(next);
+  };
+
+  const auditPath =
+    target?.kind === "account"
+      ? `/audit?account=${encodeURIComponent(blockedDetailsCode(target))}&actions=block`
+      : "/audit?actions=block_group";
+
+  return (
+    <Dialog open={open} onOpenChange={changeOpen}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>
+            {target?.kind === "account"
+              ? t("blockDetails.accountTitle")
+              : t("blockDetails.groupTitle")}{" "}
+            <span className="nums text-accent">
+              {target === null ? "" : blockedDetailsCode(target)}
+            </span>
+          </DialogTitle>
+          <DialogDescription>
+            {t("blockDetails.description")}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <section className="space-y-2">
+            <p className="text-[0.6875rem] font-bold uppercase tracking-[0.07em] text-muted">
+              {t("blockDetails.reason")}
+            </p>
+            <p className="max-h-40 overflow-auto whitespace-pre-wrap rounded-card border border-border bg-surface-2 p-3 text-xs text-text">
+              {target === null
+                ? ""
+                : blockedDetailsReason(target) || t("blockDetails.noReason")}
+            </p>
+          </section>
+
+          <section className="space-y-2">
+            <p className="text-[0.6875rem] font-bold uppercase tracking-[0.07em] text-muted">
+              {t("blockDetails.audit")}
+            </p>
+            {busy ? (
+              <p className="text-xs text-muted-lt">
+                {t("blockDetails.auditLoading")}
+              </p>
+            ) : error !== null ? (
+              <ErrorBanner message={error} onDismiss={() => setError(null)} />
+            ) : entries.length === 0 ? (
+              <p className="text-xs text-muted-lt">
+                {t("blockDetails.noAudit")}
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {entries.map((entry) => (
+                  <div
+                    key={entry.externalId}
+                    className="rounded-card border border-border bg-surface-2 p-3 text-xs"
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="nums text-muted-lt">
+                        {formatDateTime(entry.at)}
+                      </span>
+                      <Badge variant="danger">{entry.action}</Badge>
+                      {entry.source && (
+                        <Badge variant="neutral">{entry.source}</Badge>
+                      )}
+                    </div>
+                    <p className="mt-2 text-text">
+                      {entry.detail || t("blockDetails.noAuditDetail")}
+                    </p>
+                    {(entry.actorTitle || entry.actor) && (
+                      <p className="mt-1 text-muted-lt">
+                        {t("blockDetails.actor")}{" "}
+                        {entry.actorTitle || entry.actor}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+
+        <DialogFooter>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => changeOpen(false)}
+          >
+            {t("blockDetails.close")}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              changeOpen(false);
+              navigate(auditPath);
+            }}
+          >
+            {t("blockDetails.openAudit")}
+          </Button>
+          {target !== null && (
+            <Button
+              size="sm"
+              onClick={() => {
+                onUnblock(target);
+              }}
+            >
+              <CircleCheck className="h-3.5 w-3.5" />
+              {t("blockDetails.unblock")}
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Groups panel
 // ---------------------------------------------------------------------------
 
 // Sentinel code used internally to represent the "Default group" row.
 const DEFAULT_GROUP_CODE = "";
+const STATUS_COLUMN_CLASS =
+  "accounts-status-cell w-px whitespace-nowrap";
+
+// Notes wrap to a few lines when the density mode leaves vertical room, and
+// stay single-line (truncated) in the terminal/dense mode.
+const NOTES_CLAMP_LINES: Record<DensityMode, number> = {
+  comfortable: 3,
+  compact: 2,
+  terminal: 1,
+};
+
+function NotesText({ text }: { text: string }) {
+  const { density } = useDisplayPreferences();
+  const lines = NOTES_CLAMP_LINES[density];
+  if (lines <= 1) {
+    return <span className="truncate">{text}</span>;
+  }
+  const style: CSSProperties = {
+    display: "-webkit-box",
+    WebkitLineClamp: lines,
+    WebkitBoxOrient: "vertical",
+    overflow: "hidden",
+  };
+  return (
+    <span className="min-w-0" style={style}>
+      {text}
+    </span>
+  );
+}
 
 type GroupRow =
-  | { kind: "default"; memberCount: number }
-  | { kind: "real"; group: Group; memberCount: number };
+  | { kind: "default"; memberCount: number; positionCount: number }
+  | { kind: "real"; group: Group; memberCount: number; positionCount: number };
 type RealGroupRow = Extract<GroupRow, { kind: "real" }>;
 
 function groupDisplayTitle(group: Group): string {
@@ -1121,24 +2572,95 @@ function groupDisplayTitle(group: Group): string {
 function GroupsPanel({
   groupRows,
   selectedGroupCode,
+  activeSort,
+  activeOrder,
   onSelect,
-  actionsCtx,
+  onSortChange,
+  onEdit,
+  onEditNotes,
+  onBlock,
+  onUnblock,
+  onShowBlockDetails,
+  onDelete,
 }: {
   groupRows: GroupRow[];
   selectedGroupCode: string | null;
+  activeSort?: string;
+  activeOrder?: SortOrder;
   onSelect: (code: string | null) => void;
-  actionsCtx: GroupRowActionContext;
+  onSortChange: (sort?: string, order?: SortOrder) => void;
+  onEdit: (group: Group) => void;
+  onEditNotes: (group: Group) => void;
+  onBlock: (group: Group) => void;
+  onUnblock: (group: Group) => void;
+  onShowBlockDetails: (group: Group) => void;
+  onDelete: (group: Group) => void;
 }) {
   const { t } = useTranslation("accounts");
+  const { t: tc } = useTranslation("common");
   return (
-    <Table>
+    <Table className="min-w-[52rem]">
+        <colgroup>
+          <col className="w-[14rem]" />
+          <col className="w-[5rem]" />
+          <col className="w-[2.5rem]" />
+          <col className={STATUS_COLUMN_CLASS} />
+          <col />
+          <col className="w-[8.5rem]" />
+        </colgroup>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
-            <TableHead>{t("groups.columns.group")}</TableHead>
-            <TableHead>{t("groups.columns.accounts")}</TableHead>
-            <TableHead>{t("groups.columns.status")}</TableHead>
-            <TableHead>{t("groups.columns.notes")}</TableHead>
-            <TableHead className="text-right">{t("groups.columns.actions")}</TableHead>
+            <TableHead className="w-[14rem]">
+              <SortableHeader
+                field="code"
+                label={t("groups.columns.group")}
+                description={t("groups.columnDescriptions.group")}
+                direction={sortDirection(activeSort, activeOrder, "code")}
+                onSort={(field, next) =>
+                  onSortChange(
+                    next === "none" ? undefined : field,
+                    next === "none" ? undefined : next,
+                  )
+                }
+              />
+            </TableHead>
+            <TableHead className="w-[5rem]">
+              <ColumnHeader description={t("groups.columnDescriptions.accounts")}>
+                {t("groups.columns.accounts")}
+              </ColumnHeader>
+            </TableHead>
+            <TableHead className="w-[2.5rem]">
+              <ColumnHeader description={t("groups.columnDescriptions.positions")}>
+                {t("groups.columns.positions")}
+              </ColumnHeader>
+            </TableHead>
+            <TableHead className={STATUS_COLUMN_CLASS}>
+              <SortableHeader
+                field="status"
+                label={t("groups.columns.status")}
+                description={t("groups.columnDescriptions.status")}
+                direction={sortDirection(activeSort, activeOrder, "status")}
+                onSort={(field, next) =>
+                  onSortChange(
+                    next === "none" ? undefined : field,
+                    next === "none" ? undefined : next,
+                  )
+                }
+              />
+            </TableHead>
+            <TableHead>
+              <ColumnHeader description={t("groups.columnDescriptions.notes")}>
+                {t("groups.columns.notes")}
+              </ColumnHeader>
+            </TableHead>
+            <TableHead className="w-[8.5rem] text-right">
+              <ColumnHeader
+                align="right"
+                description={t("groups.columnDescriptions.actions")}
+              >
+                {t("groups.columns.actions")}
+              </ColumnHeader>
+            </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -1153,51 +2675,161 @@ function GroupsPanel({
                 className={cn(
                   isBlocked && "bg-accent-dim",
                   isSelected && "ring-1 ring-inset ring-ring",
-                  "cursor-pointer",
                 )}
-                onClick={() => onSelect(isSelected ? null : code)}
               >
-                <TableCell className="font-medium">
+                <TableCell className="w-[14rem] font-medium">
                   {row.kind === "default" ? (
                     <span className="text-muted-lt italic">{t("groups.defaultGroup")}</span>
                   ) : (
-                    <span className="flex flex-col">
-                      <span>{title}</span>
-                      {title !== row.group.code && (
-                        <span className="nums text-[0.6875rem] text-accent">
-                          {row.group.code}
-                        </span>
-                      )}
-                    </span>
+                    <div className="flex items-start gap-1">
+                      <span className="flex min-w-0 flex-col">
+                        <span className="nums truncate">{title}</span>
+                        {title !== row.group.code && (
+                          <IdCell
+                            value={row.group.code}
+                            copyTitle={tc("rowActions.copyIdTitle", {
+                              entity: row.group.code,
+                            })}
+                            copiedTitle={tc("rowActions.copiedId")}
+                            gap={4}
+                          >
+                            <span className="text-[0.6875rem] text-accent">
+                              {row.group.code}
+                            </span>
+                          </IdCell>
+                        )}
+                        {title === row.group.code && (
+                          <IdCell
+                            value={row.group.code}
+                            copyTitle={tc("rowActions.copyIdTitle", {
+                              entity: row.group.code,
+                            })}
+                            copiedTitle={tc("rowActions.copiedId")}
+                            gap={4}
+                          />
+                        )}
+                      </span>
+                      <span className="ml-auto flex shrink-0 items-center">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 w-7 shrink-0 px-0"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onEdit(row.group);
+                          }}
+                          title={t("groups.actions.editTitle")}
+                          aria-label={t("groups.actions.editTitle")}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                      </span>
+                    </div>
                   )}
                 </TableCell>
 
-                <TableCell className="text-xs text-muted-lt">
+                <TableCell className="w-[5rem] text-xs text-muted-lt">
                   {row.memberCount}
                 </TableCell>
 
-                <TableCell>
-                  {row.kind === "real" && row.group.blocked ? (
-                    <Badge variant="danger">
-                      <StatusDot tone="danger" />
-                      {t("groups.status.blocked")}
-                    </Badge>
-                  ) : (
-                    <Badge variant="ok">
-                      <StatusDot tone="ok" />
-                      {t("groups.status.active")}
-                    </Badge>
-                  )}
+                <TableCell className="w-[2.5rem] text-xs text-muted-lt">
+                  <span className="nums">{row.positionCount}</span>
                 </TableCell>
 
                 <TableCell
-                  className="max-w-[16rem] truncate text-xs text-muted-lt"
+                  className={STATUS_COLUMN_CLASS}
+                  title={
+                    row.kind === "real"
+                      ? row.group.blockReason || undefined
+                      : undefined
+                  }
+                >
+                  <div className="flex items-center gap-1">
+                    {row.kind === "real" && row.group.blocked ? (
+                      <Badge variant="danger" className="shrink-0">
+                        <StatusDot tone="danger" />
+                        {t("groups.status.blocked")}
+                      </Badge>
+                    ) : (
+                      <Badge variant="ok" className="shrink-0">
+                        <StatusDot tone="ok" />
+                        {t("groups.status.active")}
+                      </Badge>
+                    )}
+                    {row.kind === "real" && (
+                      <div className="accounts-status-action-area">
+                        {row.group.blocked && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="accounts-status-action h-7 w-7 border-0 px-0"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onShowBlockDetails(row.group);
+                            }}
+                            title={t("groups.actions.viewBlockDetails")}
+                            aria-label={t("groups.actions.viewBlockDetails")}
+                          >
+                            <Eye className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="accounts-status-action h-7 w-7 border-0 px-0"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (row.group.blocked) {
+                              onUnblock(row.group);
+                            } else {
+                              onBlock(row.group);
+                            }
+                          }}
+                          title={
+                            row.group.blocked
+                              ? t("groups.actions.unblock")
+                              : t("groups.actions.block")
+                          }
+                          aria-label={
+                            row.group.blocked
+                              ? t("groups.actions.unblock")
+                              : t("groups.actions.block")
+                          }
+                        >
+                          {row.group.blocked ? (
+                            <CircleCheck className="h-3.5 w-3.5" />
+                          ) : (
+                            <Ban className="h-3.5 w-3.5" />
+                          )}
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </TableCell>
+
+                <TableCell
+                  className="text-xs text-muted-lt"
                   title={
                     row.kind === "real" ? (row.group.notes || undefined) : undefined
                   }
                 >
                   {row.kind === "real" ? (
-                    row.group.notes || "—"
+                    <div className="flex min-w-0 items-start gap-1">
+                      <NotesText text={row.group.notes || "—"} />
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="ml-auto h-7 w-7 shrink-0 px-0"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onEditNotes(row.group);
+                        }}
+                        title={t("groups.actions.editNotesTitle")}
+                        aria-label={t("groups.actions.editNotesTitle")}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
                   ) : (
                     <span className="italic">
                       {t("groups.defaultGroupNote")}
@@ -1205,14 +2837,51 @@ function GroupsPanel({
                   )}
                 </TableCell>
 
-                <TableCell className="text-right">
-                  {row.kind === "real" && (
-                    <div
-                      className="flex items-center justify-end gap-1"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <RowActions kind="group" row={row.group} ctx={actionsCtx} />
-                    </div>
+                <TableCell className="w-[8.5rem] text-right">
+                  {row.kind === "default" ? (
+                    <RowActions>
+                      <FilterByButton
+                        title={tc("rowActions.filterByTitle", {
+                          field: t("groups.defaultGroup"),
+                        })}
+                        href={absoluteAppUrl("/accounts?group=")}
+                        onClick={() => onSelect(DEFAULT_GROUP_CODE)}
+                      />
+                      <ShareLinkButton
+                        href={absoluteAppUrl("/accounts?group=")}
+                        title={tc("rowActions.shareTitle", {
+                          entity: t("groups.defaultGroup"),
+                        })}
+                        copiedTitle={tc("rowActions.copiedLink")}
+                      />
+                    </RowActions>
+                  ) : (
+                    <RowActions>
+                      <FilterByButton
+                        title={tc("rowActions.filterByTitle", {
+                          field: row.group.code,
+                        })}
+                        href={absoluteAppUrl(
+                          `/accounts?group=${encodeURIComponent(row.group.code)}`,
+                        )}
+                        onClick={() => onSelect(code)}
+                      />
+                      <ShareLinkButton
+                        href={absoluteAppUrl(
+                          `/accounts?group=${encodeURIComponent(row.group.code)}`,
+                        )}
+                        title={tc("rowActions.shareTitle", {
+                          entity: row.group.code,
+                        })}
+                        copiedTitle={tc("rowActions.copiedLink")}
+                      />
+                      <DeleteButton
+                        title={tc("rowActions.deleteTitle", {
+                          entity: row.group.code,
+                        })}
+                        onClick={() => onDelete(row.group)}
+                      />
+                    </RowActions>
                   )}
                 </TableCell>
               </TableRow>
@@ -1229,114 +2898,337 @@ function GroupsPanel({
 
 function AccountsTable({
   accounts,
-  groupSuggestions,
+  activeSort,
+  activeOrder,
+  selectedGroupCode,
+  onSortChange,
+  onEditAccount,
   onAssignGroup,
-  actionsCtx,
+  onEditNotes,
+  onBlock,
+  onUnblock,
+  onShowBlockDetails,
+  onOpenPositions,
+  onOpenTrading,
+  onOpenPolicies,
+  onOpenHistory,
+  onFilterGroup,
+  onDelete,
 }: {
   accounts: Account[];
-  groupSuggestions: string[];
+  activeSort?: string;
+  activeOrder?: SortOrder;
+  selectedGroupCode: string | null;
+  onSortChange: (sort?: string, order?: SortOrder) => void;
+  onEditAccount: (account: Account) => void;
   onAssignGroup: (account: Account) => void;
-  actionsCtx: AccountRowActionContext;
+  onEditNotes: (account: Account) => void;
+  onBlock: (account: Account) => void;
+  onUnblock: (account: Account) => void;
+  onShowBlockDetails: (account: Account) => void;
+  onOpenPositions: (account: Account) => void;
+  onOpenTrading: (account: Account) => void;
+  onOpenPolicies: (account: Account) => void;
+  onOpenHistory: (account: Account) => void;
+  onFilterGroup: (group: string) => void;
+  onDelete: (account: Account) => void;
 }) {
   const { t } = useTranslation("accounts");
+  const { t: tc } = useTranslation("common");
   return (
-    <Table>
+    <Table className="min-w-[55rem]">
+        <colgroup>
+          <col className="w-[13rem]" />
+          <col className="w-[9rem]" />
+          <col className="w-[2.5rem]" />
+          <col className={STATUS_COLUMN_CLASS} />
+          <col />
+          <col className="w-[12.5rem]" />
+        </colgroup>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
-            <TableHead>{t("accounts.columns.account")}</TableHead>
-            <TableHead>{t("accounts.columns.group")}</TableHead>
-            <TableHead>{t("accounts.columns.status")}</TableHead>
-            <TableHead>{t("accounts.columns.notes")}</TableHead>
-            <TableHead className="text-right">{t("accounts.columns.actions")}</TableHead>
+            <TableHead className="w-[13rem]">
+              <SortableHeader
+                field="code"
+                label={t("accounts.columns.account")}
+                description={t("accounts.columnDescriptions.account")}
+                direction={sortDirection(activeSort, activeOrder, "code")}
+                onSort={(field, next) =>
+                  onSortChange(
+                    next === "none" ? undefined : field,
+                    next === "none" ? undefined : next,
+                  )
+                }
+              />
+            </TableHead>
+            <TableHead className="w-[9rem]">
+              <SortableHeader
+                field="group"
+                label={t("accounts.columns.group")}
+                description={t("accounts.columnDescriptions.group")}
+                direction={sortDirection(activeSort, activeOrder, "group")}
+                onSort={(field, next) =>
+                  onSortChange(
+                    next === "none" ? undefined : field,
+                    next === "none" ? undefined : next,
+                  )
+                }
+              />
+            </TableHead>
+            <TableHead className="w-[2.5rem]">
+              <SortableHeader
+                field="positionCount"
+                label={t("accounts.columns.positions")}
+                description={t("accounts.columnDescriptions.positions")}
+                direction={sortDirection(
+                  activeSort,
+                  activeOrder,
+                  "positionCount",
+                )}
+                onSort={(field, next) =>
+                  onSortChange(
+                    next === "none" ? undefined : field,
+                    next === "none" ? undefined : next,
+                  )
+                }
+              />
+            </TableHead>
+            <TableHead className={STATUS_COLUMN_CLASS}>
+              <SortableHeader
+                field="status"
+                label={t("accounts.columns.status")}
+                description={t("accounts.columnDescriptions.status")}
+                direction={sortDirection(activeSort, activeOrder, "status")}
+                onSort={(field, next) =>
+                  onSortChange(
+                    next === "none" ? undefined : field,
+                    next === "none" ? undefined : next,
+                  )
+                }
+              />
+            </TableHead>
+            <TableHead>
+              <ColumnHeader description={t("accounts.columnDescriptions.notes")}>
+                {t("accounts.columns.notes")}
+              </ColumnHeader>
+            </TableHead>
+            <TableHead className="w-[12.5rem] text-right">
+              <ColumnHeader
+                align="right"
+                description={t("accounts.columnDescriptions.actions")}
+              >
+                {t("accounts.columns.actions")}
+              </ColumnHeader>
+            </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {accounts.map((account) => (
-            <TableRow
-              key={account.code}
-              className={cn(account.blocked && "bg-accent-dim")}
-            >
-              <TableCell className="font-medium">
-                <span className="flex flex-col">
-                  <span>{account.title}</span>
-                  <span className="nums text-[0.6875rem] text-accent">
-                    {account.code}
-                  </span>
-                </span>
-              </TableCell>
-
-              {/* Group cell — button with single-membership Folder icon */}
-              <TableCell>
-                <button
-                  type="button"
-                  className="inline-flex items-center gap-1 text-xs text-muted-lt hover:text-accent"
-                  onClick={() => onAssignGroup(account)}
-                  title={
-                    groupSuggestions.length > 0
-                      ? t("accounts.groupCell.title")
-                      : t("accounts.groupCell.titleNoGroups")
-                  }
-                >
-                  <Folder className="h-3.5 w-3.5 shrink-0" />
-                  <span className="nums">
-                    {account.group || <span className="italic">{t("accounts.groupCell.noGroup")}</span>}
-                  </span>
-                </button>
-              </TableCell>
-
-              <TableCell>
-                {account.blocked ? (
-                  <div className="flex flex-col items-start gap-1">
-                    <Badge variant="danger">
-                      <StatusDot tone="danger" />
-                      {t("accounts.status.blocked")}
-                    </Badge>
-                    {account.blockReason && (
-                      <span
-                        className="max-w-[18rem] truncate text-[0.6875rem] text-muted-lt"
-                        title={account.blockReason}
-                      >
-                        {account.blockReason}
-                      </span>
-                    )}
-                  </div>
-                ) : (
-                  <Badge variant="ok">
-                    <StatusDot tone="ok" />
-                    {t("accounts.status.active")}
-                  </Badge>
-                )}
-              </TableCell>
-
-              <TableCell
-                className="max-w-[14rem] truncate text-xs text-muted-lt"
-                title={account.notes || undefined}
+          {accounts.map((account) => {
+            const title = account.title;
+            return (
+              <TableRow
+                key={account.code}
+                className={cn(account.blocked && "bg-accent-dim")}
               >
-                {account.notes || "—"}
-              </TableCell>
+                <TableCell className="w-[13rem] font-medium">
+                  <div className="flex items-start gap-1">
+                    <span className="flex min-w-0 flex-col">
+                      <span className="nums truncate">{title}</span>
+                      {title !== account.code && (
+                        <IdCell
+                          value={account.code}
+                          copyTitle={tc("rowActions.copyIdTitle", {
+                            entity: account.code,
+                          })}
+                          copiedTitle={tc("rowActions.copiedId")}
+                          gap={4}
+                        >
+                          <span className="text-[0.6875rem] text-accent">
+                            {account.code}
+                          </span>
+                        </IdCell>
+                      )}
+                      {title === account.code && (
+                        <IdCell
+                          value={account.code}
+                          copyTitle={tc("rowActions.copyIdTitle", {
+                            entity: account.code,
+                          })}
+                          copiedTitle={tc("rowActions.copiedId")}
+                          gap={4}
+                        />
+                      )}
+                    </span>
+                    <span className="ml-auto flex shrink-0 items-center">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 w-7 shrink-0 px-0"
+                        onClick={() => onEditAccount(account)}
+                        title={t("accounts.actions.editTitle")}
+                        aria-label={t("accounts.actions.editTitle")}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                    </span>
+                  </div>
+                </TableCell>
 
-              <TableCell className="text-right">
-                <div className="flex items-center justify-end gap-1">
-                  <RowActions kind="account" row={account} ctx={actionsCtx} />
-                </div>
-              </TableCell>
-            </TableRow>
-          ))}
+                <TableCell className="w-[9rem]">
+                  <div className="flex min-w-0 items-center gap-1">
+                    <span
+                      className={cn(
+                        "nums min-w-0 truncate text-xs",
+                        selectedGroupCode === account.group
+                          ? "text-accent"
+                          : "text-muted-lt",
+                      )}
+                    >
+                      {account.group ? (
+                        account.group
+                      ) : (
+                        <span className="italic">
+                          {t("accounts.groupCell.noGroup")}
+                        </span>
+                      )}
+                    </span>
+                    <span className="ml-auto flex shrink-0 items-center">
+                      {account.group && selectedGroupCode !== account.group && (
+                        <FilterByButton
+                          size={28}
+                          title={tc("rowActions.filterByTitle", {
+                            field: account.group,
+                          })}
+                          href={absoluteAppUrl(
+                            `/accounts?group=${encodeURIComponent(account.group)}`,
+                          )}
+                          onClick={() => onFilterGroup(account.group)}
+                        />
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 w-7 shrink-0 px-0"
+                        onClick={() => onAssignGroup(account)}
+                        title={t("accounts.groupCell.editTitle")}
+                        aria-label={t("accounts.groupCell.editTitle")}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                    </span>
+                  </div>
+                </TableCell>
+
+                <TableCell className="w-[2.5rem] text-xs text-muted-lt">
+                  <span className="nums">{account.positionCount ?? 0}</span>
+                </TableCell>
+
+                <TableCell
+                  className={STATUS_COLUMN_CLASS}
+                  title={account.blockReason || undefined}
+                >
+                  {account.blocked ? (
+                    <div className="flex items-center gap-1">
+                      <Badge variant="danger" className="shrink-0">
+                        <StatusDot tone="danger" />
+                        {t("accounts.status.blocked")}
+                      </Badge>
+                      <div className="accounts-status-action-area">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="accounts-status-action h-7 w-7 border-0 px-0"
+                          onClick={() => onShowBlockDetails(account)}
+                          title={t("accounts.actions.viewBlockDetails")}
+                          aria-label={t("accounts.actions.viewBlockDetails")}
+                        >
+                          <Eye className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="accounts-status-action h-7 w-7 border-0 px-0"
+                          onClick={() => onUnblock(account)}
+                          title={t("accounts.actions.unblock")}
+                          aria-label={t("accounts.actions.unblock")}
+                        >
+                          <CircleCheck className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1">
+                      <Badge variant="ok" className="shrink-0">
+                        <StatusDot tone="ok" />
+                        {t("accounts.status.active")}
+                      </Badge>
+                      <div className="accounts-status-action-area">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="accounts-status-action h-7 w-7 border-0 px-0"
+                          onClick={() => onBlock(account)}
+                          title={t("accounts.actions.block")}
+                          aria-label={t("accounts.actions.block")}
+                        >
+                          <Ban className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </TableCell>
+
+                <TableCell
+                  className="text-xs text-muted-lt"
+                  title={account.notes || undefined}
+                >
+                  <div className="flex min-w-0 items-start gap-1">
+                    <NotesText text={account.notes || "—"} />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="ml-auto h-7 w-7 shrink-0 px-0"
+                      onClick={() => onEditNotes(account)}
+                      title={t("accounts.actions.editNotesTitle")}
+                      aria-label={t("accounts.actions.editNotesTitle")}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                </TableCell>
+
+                <TableCell className="w-[12.5rem] text-right">
+                  <RowActions>
+                    <PositionsButton
+                      title={t("accounts.links.positions")}
+                      onClick={() => onOpenPositions(account)}
+                    />
+                    <TradingButton
+                      title={t("accounts.links.trading")}
+                      onClick={() => onOpenTrading(account)}
+                    />
+                    <PoliciesButton
+                      title={t("accounts.links.policies")}
+                      onClick={() => onOpenPolicies(account)}
+                    />
+                    <HistoryButton
+                      title={t("accounts.links.audit")}
+                      onClick={() => onOpenHistory(account)}
+                    />
+                    <DeleteButton
+                      title={tc("rowActions.deleteTitle", {
+                        entity: account.code,
+                      })}
+                      onClick={() => onDelete(account)}
+                    />
+                  </RowActions>
+                </TableCell>
+              </TableRow>
+            );
+          })}
         </TableBody>
     </Table>
   );
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function replaceAccount(list: Account[], updated: Account): Account[] {
-  return list.map((a) => (a.code === updated.code ? updated : a));
-}
-
-function replaceGroup(list: Group[], updated: Group): Group[] {
-  return list.map((g) => (g.code === updated.code ? updated : g));
 }
 
 // ---------------------------------------------------------------------------
@@ -1345,32 +3237,222 @@ function replaceGroup(list: Group[], updated: Group): Group[] {
 
 export function Accounts() {
   const { t } = useTranslation("accounts");
-  const { load: accountsLoad, reload: reloadAccounts } = useAccounts();
-  const { load: groupsLoad, reload: reloadGroups } = useGroups();
+  const { fetchAccounts, fetchGroups } = useOfficerApi();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  // A shared deep link seeds the initial filter set for the active tab (defaults
+  // to accounts); the operator owns it thereafter.
+  const initialTab: AccountsTab =
+    searchParams.get("tab") === "groups" ? "groups" : "accounts";
+  const seedAccounts = initialTab === "accounts";
+  const seedGroups = initialTab === "groups";
+  // The legacy `?group=<code>` link seeds the exact-group filter on the accounts
+  // tab, matching the "filter by group" action.
+  const [selectedGroupCode, setSelectedGroupCode] = useState<string | null>(
+    () => (seedAccounts ? searchParams.get("group") : null),
+  );
+  const [accountCode, setAccountCode] = useState(
+    seedAccounts ? (searchParams.get("code") ?? "") : "",
+  );
+  const [accountCodeMatch, setAccountCodeMatch] = useState<TextMatchMode>(
+    () => (seedAccounts ? textMatchFromParams(searchParams) : "contains"),
+  );
+  const [accountStatus, setAccountStatus] = useState<StatusListFilter>(
+    () => (seedAccounts ? statusFromParams(searchParams) : "all"),
+  );
+  const [accountSort, setAccountSort] = useState<{
+    sort?: string;
+    order?: SortOrder;
+  }>(() => (seedAccounts ? sortFromParams(searchParams, ACCOUNT_SORT_KEYS) : {}));
+  const initialAccountAdvanced = useMemo(
+    () =>
+      seedAccounts
+        ? advancedFromParams(searchParams)
+        : DEFAULT_ADVANCED_FILTERS,
+    [seedAccounts, searchParams],
+  );
+  const [accountAdvancedDraft, setAccountAdvancedDraft] =
+    useState<AdvancedListFilters>(initialAccountAdvanced);
+  const [accountAdvanced, setAccountAdvanced] =
+    useState<AdvancedListFilters>(initialAccountAdvanced);
+  const [accountAdvancedOpen, setAccountAdvancedOpen] = useState(false);
+  const [accountGroupSearch, setAccountGroupSearch] = useState(
+    "",
+  );
+  const accountGroupSearchRef = useRef(accountGroupSearch);
+  const [groupCode, setGroupCode] = useState(
+    seedGroups ? (searchParams.get("code") ?? "") : "",
+  );
+  const [groupCodeMatch, setGroupCodeMatch] = useState<TextMatchMode>(
+    () => (seedGroups ? textMatchFromParams(searchParams) : "contains"),
+  );
+  const [groupStatus, setGroupStatus] = useState<StatusListFilter>(
+    () => (seedGroups ? statusFromParams(searchParams) : "all"),
+  );
+  const [groupSort, setGroupSort] = useState<{
+    sort?: string;
+    order?: SortOrder;
+  }>(() => (seedGroups ? sortFromParams(searchParams, GROUP_SORT_KEYS) : {}));
+  const initialGroupAdvanced = useMemo(
+    () =>
+      seedGroups ? advancedFromParams(searchParams) : DEFAULT_ADVANCED_FILTERS,
+    [seedGroups, searchParams],
+  );
+  const [groupAdvancedDraft, setGroupAdvancedDraft] =
+    useState<AdvancedListFilters>(initialGroupAdvanced);
+  const [groupAdvanced, setGroupAdvanced] =
+    useState<AdvancedListFilters>(initialGroupAdvanced);
+  const [groupAdvancedOpen, setGroupAdvancedOpen] = useState(false);
+  const debouncedAccountCode = useDebouncedValue(
+    accountCode,
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const debouncedAccountGroupSearch = useDebouncedValue(
+    accountGroupSearch,
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const debouncedGroupCode = useDebouncedValue(
+    groupCode,
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const [accountCodeSuggestions, setAccountCodeSuggestions] =
+    useState<string[]>([]);
+  const [accountGroupSuggestions, setAccountGroupSuggestions] =
+    useState<string[]>([]);
+  const [groupCodeSuggestions, setGroupCodeSuggestions] =
+    useState<string[]>([]);
+  const visibleAccountCodeSuggestions =
+    debouncedAccountCode.trim() === "" ? [] : accountCodeSuggestions;
+  const visibleAccountGroupSuggestions =
+    debouncedAccountGroupSearch.trim() === "" ? [] : accountGroupSuggestions;
+  const visibleGroupCodeSuggestions =
+    debouncedGroupCode.trim() === "" ? [] : groupCodeSuggestions;
 
-  // Local snapshots so individual rows update immediately from server responses.
-  const [localAccounts, setLocalAccounts] = useState<Account[] | null>(null);
-  const [localGroups, setLocalGroups] = useState<Group[] | null>(null);
+  useEffect(() => {
+    const query = debouncedAccountCode.trim();
+    if (query === "") {
+      return;
+    }
+    const controller = new AbortController();
+    void fetchAccounts(
+      { code: query, codeMatch: "starts_with", limit: 8, sort: "code" },
+      controller.signal,
+    )
+      .then((items) =>
+        setAccountCodeSuggestions(items.map((account) => account.code)),
+      )
+      .catch((err: unknown) => {
+        if (!controller.signal.aborted) {
+          console.error(err);
+          setAccountCodeSuggestions([]);
+        }
+      });
+    return () => controller.abort();
+  }, [debouncedAccountCode, fetchAccounts]);
 
-  const accounts =
-    localAccounts ?? (accountsLoad.state === "ready" ? accountsLoad.data : null);
-  const groups =
-    localGroups ?? (groupsLoad.state === "ready" ? groupsLoad.data : null);
+  useEffect(() => {
+    const query = debouncedAccountGroupSearch.trim();
+    if (query === "") {
+      return;
+    }
+    const controller = new AbortController();
+    void fetchGroups(
+      { code: query, codeMatch: "starts_with", limit: 8, sort: "code" },
+      controller.signal,
+    )
+      .then((items) => {
+        const suggestions = items
+          .map((group) => group.code)
+          .filter((code) => code !== DEFAULT_GROUP_CODE);
+        setAccountGroupSuggestions(suggestions);
+        const exact = accountGroupSearchRef.current.trim();
+        if (exact !== "" && suggestions.includes(exact)) {
+          setSelectedGroupCode(exact);
+        }
+      })
+      .catch((err: unknown) => {
+        if (!controller.signal.aborted) {
+          console.error(err);
+          setAccountGroupSuggestions([]);
+        }
+      });
+    return () => controller.abort();
+  }, [debouncedAccountGroupSearch, fetchGroups]);
 
-  // Union of group record codes and distinct non-empty account.group values.
-  const memberOnlyCodes: string[] = accounts
-    ? Array.from(new Set(accounts.map((a) => a.group).filter((g) => g !== "")))
-        .filter((code) => !groups?.some((g) => g.code === code))
-    : [];
+  useEffect(() => {
+    const query = debouncedGroupCode.trim();
+    if (query === "") {
+      return;
+    }
+    const controller = new AbortController();
+    void fetchGroups(
+      { code: query, codeMatch: "starts_with", limit: 8, sort: "code" },
+      controller.signal,
+    )
+      .then((items) =>
+        setGroupCodeSuggestions(
+          items
+            .map((group) => group.code)
+            .filter((code) => code !== DEFAULT_GROUP_CODE),
+        ),
+      )
+      .catch((err: unknown) => {
+        if (!controller.signal.aborted) {
+          console.error(err);
+          setGroupCodeSuggestions([]);
+        }
+      });
+    return () => controller.abort();
+  }, [debouncedGroupCode, fetchGroups]);
 
-  const groupSuggestions: string[] = [
-    ...(groups?.map((g) => g.code) ?? []),
-    ...memberOnlyCodes,
-  ];
-
-  // Which group row is highlighted; null = show all accounts.
-  const [selectedGroupCode, setSelectedGroupCode] = useState<string | null>(null);
-  const [tab, setTab] = useState<AccountsTab>("accounts");
+  const accountFilters = useMemo<AccountListFilters>(() => {
+    const blockReason = trimmedOrUndefined(accountAdvanced.blockReason);
+    const filters: AccountListFilters = {
+      code: trimmedOrUndefined(debouncedAccountCode),
+      codeMatch: accountCodeMatch,
+      status: accountStatus,
+      ...positionCountQuery(accountAdvanced),
+    };
+    if (blockReason !== undefined) {
+      filters.blockReason = blockReason;
+      filters.blockReasonMatch = accountAdvanced.blockReasonMatch;
+    }
+    if (selectedGroupCode !== null) {
+      filters.group = selectedGroupCode;
+    }
+    return filters;
+  }, [
+    accountAdvanced,
+    accountCodeMatch,
+    accountStatus,
+    debouncedAccountCode,
+    selectedGroupCode,
+  ]);
+  const groupFilters = useMemo<GroupListFilters>(() => {
+    const notes = trimmedOrUndefined(groupAdvanced.notes);
+    const blockReason = trimmedOrUndefined(groupAdvanced.blockReason);
+    const filters: GroupListFilters = {
+      code: trimmedOrUndefined(debouncedGroupCode),
+      codeMatch: groupCodeMatch,
+      status: groupStatus,
+      ...positionCountQuery(groupAdvanced),
+      ...accountCountQuery(groupAdvanced),
+    };
+    if (notes !== undefined) {
+      filters.notes = notes;
+      filters.notesMatch = groupAdvanced.notesMatch;
+    }
+    if (blockReason !== undefined) {
+      filters.blockReason = blockReason;
+      filters.blockReasonMatch = groupAdvanced.blockReasonMatch;
+    }
+    return filters;
+  }, [
+    debouncedGroupCode,
+    groupAdvanced,
+    groupCodeMatch,
+    groupStatus,
+  ]);
   const [accountPage, setAccountPage] = useState(0);
   const [accountSize, setAccountSize] = usePersistentPageSize(
     "pit-officer-accounts-page-size",
@@ -1379,107 +3461,247 @@ export function Accounts() {
   const [groupSize, setGroupSize] = usePersistentPageSize(
     "pit-officer-groups-page-size",
   );
+  const accountListFilters = useMemo<AccountListFilters>(
+    () => ({
+      ...accountFilters,
+      sort:
+        accountSort.sort !== undefined && ACCOUNT_SORT_KEYS.has(accountSort.sort)
+          ? accountSort.sort
+          : undefined,
+      order:
+        accountSort.sort !== undefined && ACCOUNT_SORT_KEYS.has(accountSort.sort)
+          ? accountSort.order
+          : undefined,
+      limit: accountSize,
+      offset: accountPage * accountSize,
+    }),
+    [accountFilters, accountPage, accountSize, accountSort.order, accountSort.sort],
+  );
+  const groupListFilters = useMemo<GroupListFilters>(
+    () => ({
+      ...groupFilters,
+      sort:
+        groupSort.sort !== undefined && GROUP_SORT_KEYS.has(groupSort.sort)
+          ? groupSort.sort
+          : undefined,
+      order:
+        groupSort.sort !== undefined && GROUP_SORT_KEYS.has(groupSort.sort)
+          ? groupSort.order
+          : undefined,
+      limit: groupSize,
+      offset: groupPage * groupSize,
+    }),
+    [groupFilters, groupPage, groupSize, groupSort.order, groupSort.sort],
+  );
+  const { load: accountsLoad, reload: reloadAccounts } =
+    useAccountsPage(accountListFilters);
+  const { load: groupsLoad, reload: reloadGroups } =
+    useGroupsPage(groupListFilters);
+  const accountFilterKey = useMemo(
+    () => JSON.stringify(accountListFilters),
+    [accountListFilters],
+  );
+  const groupFilterKey = useMemo(
+    () => JSON.stringify(groupListFilters),
+    [groupListFilters],
+  );
+  const accountAdvancedSummary = useMemo(
+    () => advancedFilterSummary(accountAdvanced, t, false),
+    [accountAdvanced, t],
+  );
+  const groupAdvancedSummary = useMemo(
+    () => advancedFilterSummary(groupAdvanced, t),
+    [groupAdvanced, t],
+  );
+
+  // Encode each tab's active filter set as a shareable deep link. Only
+  // non-default params are emitted, mirroring the API param names; the active
+  // tab's link is the one surfaced in the filter bar.
+  const accountShareHref = useMemo(() => {
+    const query = new URLSearchParams();
+    const codeValue = trimmedOrUndefined(accountCode);
+    if (codeValue !== undefined) {
+      query.set("code", codeValue);
+      if (accountCodeMatch !== "contains") {
+        query.set("codeMatch", accountCodeMatch);
+      }
+    }
+    if (accountStatus !== "all") {
+      query.set("status", accountStatus);
+    }
+    if (selectedGroupCode !== null) {
+      query.set("group", selectedGroupCode);
+    }
+    appendAdvancedParams(query, accountAdvanced, "accounts");
+    if (accountSort.sort !== undefined && ACCOUNT_SORT_KEYS.has(accountSort.sort)) {
+      query.set("sort", accountSort.sort);
+      if (accountSort.order !== undefined) {
+        query.set("order", accountSort.order);
+      }
+    }
+    return shareUrl("/accounts", query);
+  }, [
+    accountAdvanced,
+    accountCode,
+    accountCodeMatch,
+    accountSort.order,
+    accountSort.sort,
+    accountStatus,
+    selectedGroupCode,
+  ]);
+  const clearGroupFilters = () => {
+    setGroupCode("");
+    setGroupCodeMatch("contains");
+    setGroupStatus("all");
+    setGroupAdvanced(DEFAULT_ADVANCED_FILTERS);
+    setGroupAdvancedDraft(DEFAULT_ADVANCED_FILTERS);
+    setGroupPage(0);
+  };
+  const clearAccountFilters = () => {
+    setAccountCode("");
+    setAccountCodeMatch("contains");
+    setAccountStatus("all");
+    setSelectedGroupCode(null);
+    accountGroupSearchRef.current = "";
+    setAccountGroupSearch("");
+    setAccountAdvanced(DEFAULT_ADVANCED_FILTERS);
+    setAccountAdvancedDraft(DEFAULT_ADVANCED_FILTERS);
+    setAccountPage(0);
+  };
+  const groupShareHref = useMemo(() => {
+    const query = new URLSearchParams();
+    query.set("tab", "groups");
+    const codeValue = trimmedOrUndefined(groupCode);
+    if (codeValue !== undefined) {
+      query.set("code", codeValue);
+      if (groupCodeMatch !== "contains") {
+        query.set("codeMatch", groupCodeMatch);
+      }
+    }
+    if (groupStatus !== "all") {
+      query.set("status", groupStatus);
+    }
+    appendAdvancedParams(query, groupAdvanced, "groups");
+    if (groupSort.sort !== undefined && GROUP_SORT_KEYS.has(groupSort.sort)) {
+      query.set("sort", groupSort.sort);
+      if (groupSort.order !== undefined) {
+        query.set("order", groupSort.order);
+      }
+    }
+    return shareUrl("/accounts", query);
+  }, [
+    groupAdvanced,
+    groupCode,
+    groupCodeMatch,
+    groupSort.order,
+    groupSort.sort,
+    groupStatus,
+  ]);
+
+  // Local snapshots so individual rows update immediately from server responses.
+  const [localAccounts, setLocalAccounts] = useState<{
+    key: string;
+    data: Account[];
+  } | null>(null);
+  const [localGroups, setLocalGroups] = useState<{
+    key: string;
+    data: Group[];
+  } | null>(null);
+
+  const accounts =
+    localAccounts?.key === accountFilterKey
+      ? localAccounts.data
+      : accountsLoad.state === "ready"
+        ? accountsLoad.data.items
+        : null;
+  const groups =
+    localGroups?.key === groupFilterKey
+      ? localGroups.data
+      : groupsLoad.state === "ready"
+        ? groupsLoad.data.items
+        : null;
+
+  const groupSuggestions: string[] =
+    groups?.map((g) => g.code).filter((code) => code !== DEFAULT_GROUP_CODE) ?? [];
+
+  // Which group row is highlighted; null = show all accounts.
+  const [tab, setTab] = useState<AccountsTab>(initialTab);
 
   // Account dialog targets.
+  const [editAccountTarget, setEditAccountTarget] = useState<Account | null>(null);
   const [blockAccountTarget, setBlockAccountTarget] = useState<Account | null>(null);
   const [unblockAccountTarget, setUnblockAccountTarget] = useState<Account | null>(null);
   const [groupTarget, setGroupTarget] = useState<Account | null>(null);
   const [notesAccountTarget, setNotesAccountTarget] = useState<Account | null>(null);
   const [deleteAccountTarget, setDeleteAccountTarget] = useState<Account | null>(null);
+  const [blockedDetailsTarget, setBlockedDetailsTarget] =
+    useState<BlockedDetailsTarget | null>(null);
 
   // Group dialog targets.
+  const [editGroupTarget, setEditGroupTarget] = useState<Group | null>(null);
   const [groupNotesTarget, setGroupNotesTarget] = useState<Group | null>(null);
   const [blockGroupTarget, setBlockGroupTarget] = useState<Group | null>(null);
   const [unblockGroupTarget, setUnblockGroupTarget] = useState<Group | null>(null);
   const [deleteGroupTarget, setDeleteGroupTarget] = useState<Group | null>(null);
 
-  function applyAccountUpdate(updated: Account) {
-    setLocalAccounts((prev) => {
-      const base = prev ?? (accountsLoad.state === "ready" ? accountsLoad.data : []);
-      return replaceAccount(base, updated);
-    });
-  }
-
   function removeAccount(code: string) {
     setLocalAccounts((prev) => {
-      const base = prev ?? (accountsLoad.state === "ready" ? accountsLoad.data : []);
-      return base.filter((a) => a.code !== code);
+      const base =
+        prev?.key === accountFilterKey
+          ? prev.data
+          : accountsLoad.state === "ready"
+            ? accountsLoad.data.items
+            : [];
+      return {
+        key: accountFilterKey,
+        data: base.filter((a) => a.code !== code),
+      };
     });
   }
 
-  function applyGroupUpdate(updated: Group) {
-    setLocalGroups((prev) => {
-      const base = prev ?? (groupsLoad.state === "ready" ? groupsLoad.data : []);
-      const exists = base.some((g) => g.code === updated.code);
-      return exists ? replaceGroup(base, updated) : [...base, updated];
-    });
-  }
-
-  // Build group rows: Default first, then real groups (records + membership-only), sorted by code.
-  const defaultCount =
-    accounts?.filter((a) => a.group === "").length ?? 0;
-
-  // Membership-only groups get a synthetic Group object; actions still call the
-  // existing client funcs which create-if-missing on the backend.
-  const memberOnlyRows: RealGroupRow[] = memberOnlyCodes.map((code) => ({
-    kind: "real" as const,
-    group: {
-      code,
-      title: code,
-      notes: "",
-      blocked: false,
-      blockReason: "",
-    } satisfies Group,
-    memberCount: accounts?.filter((a) => a.group === code).length ?? 0,
-  }));
-
-  const recordRows: RealGroupRow[] = (groups ?? []).map((g) => ({
+  // Build group rows from the backend list only: Default first when returned,
+  // then real persisted groups sorted by code.
+  const defaultRows: GroupRow[] = (groups ?? [])
+    .filter((g) => g.code === DEFAULT_GROUP_CODE)
+    .map((g) => ({
+      kind: "default" as const,
+      memberCount: g.accountCount ?? 0,
+      positionCount: g.positionCount ?? 0,
+    }));
+  const recordRows: RealGroupRow[] = (groups ?? [])
+    .filter((g) => g.code !== DEFAULT_GROUP_CODE)
+    .map((g) => ({
     kind: "real" as const,
     group: g,
-    memberCount: accounts?.filter((a) => a.group === g.code).length ?? 0,
+    memberCount: g.accountCount ?? 0,
+    positionCount: g.positionCount ?? 0,
   }));
 
-  const allRealRows = [...recordRows, ...memberOnlyRows].sort((a, b) =>
-    a.group.code.localeCompare(b.group.code),
-  );
-  const selectedGroup =
-    selectedGroupCode === null
-      ? null
-      : allRealRows.find((row) => row.group.code === selectedGroupCode)?.group ??
-        null;
-  const selectedGroupTitle =
-    selectedGroup === null ? "" : groupDisplayTitle(selectedGroup);
+  // Server returns real groups already sorted + paged; preserve that order.
+  const allRealRows = recordRows;
+  const groupRows: GroupRow[] = [...defaultRows, ...allRealRows];
 
-  const groupRows: GroupRow[] = [
-    { kind: "default", memberCount: defaultCount },
-    ...allRealRows,
-  ];
-
-  // Filter accounts by selected group (null = all).
-  const visibleAccounts = accounts
-    ? selectedGroupCode === null
-      ? accounts
-      : accounts.filter((a) => a.group === selectedGroupCode)
-    : null;
-  const pagedAccounts =
-    visibleAccounts === null
-      ? null
-      : slicePage(visibleAccounts, accountPage, accountSize);
-  const visibleAccountCount = visibleAccounts?.length ?? 0;
-  const pagedGroups = slicePage(groupRows, groupPage, groupSize);
+  const pagedAccounts = accounts;
+  const visibleAccountCount =
+    accountsLoad.state === "ready" ? accountsLoad.data.total : 0;
+  // Server already paged the real groups (Default pinned first on page 0);
+  // render the returned rows directly. `total` counts real groups only.
+  const groupsTotal =
+    groupsLoad.state === "ready" ? groupsLoad.data.total : 0;
+  const pagedGroups = groupRows;
   const hasMoreAccounts =
-    visibleAccounts !== null &&
-    hasNextPage(visibleAccounts, accountPage, accountSize);
-  const hasMoreGroups = hasNextPage(groupRows, groupPage, groupSize);
+    accountsLoad.state === "ready" &&
+    (accountPage + 1) * accountSize < accountsLoad.data.total;
+  const hasMoreGroups = (groupPage + 1) * groupSize < groupsTotal;
   const accountPager = (
     <TablePagination
       page={accountPage}
       canPrevious={accountPage > 0}
       canNext={hasMoreAccounts}
       knownTotalPages={
-        visibleAccounts === null
-          ? undefined
-          : knownPageCount(visibleAccounts.length, accountSize)
+        accountsLoad.state === "ready"
+          ? knownPageCount(accountsLoad.data.total, accountSize)
+          : undefined
       }
       onPrevious={() => setAccountPage((p) => Math.max(0, p - 1))}
       onNext={() => setAccountPage((p) => p + 1)}
@@ -1491,7 +3713,7 @@ export function Accounts() {
       page={groupPage}
       canPrevious={groupPage > 0}
       canNext={hasMoreGroups}
-      knownTotalPages={knownPageCount(groupRows.length, groupSize)}
+      knownTotalPages={knownPageCount(groupsTotal, groupSize)}
       onPrevious={() => setGroupPage((p) => Math.max(0, p - 1))}
       onNext={() => setGroupPage((p) => p + 1)}
       onPage={setGroupPage}
@@ -1506,29 +3728,11 @@ export function Accounts() {
   };
   const accountCsvFilters =
     selectedGroupCode === null ? undefined : { groupCode: selectedGroupCode };
-  const accountActionsCtx: AccountRowActionContext = {
-    t,
-    onEditNotes: setNotesAccountTarget,
-    onBlock: setBlockAccountTarget,
-    onUnblock: setUnblockAccountTarget,
-    onDelete: setDeleteAccountTarget,
-  };
-  const groupActionsCtx: GroupRowActionContext = {
-    t,
-    onEditNotes: setGroupNotesTarget,
-    onBlock: setBlockGroupTarget,
-    onUnblock: setUnblockGroupTarget,
-    onDelete: setDeleteGroupTarget,
-  };
-
   const isLoading =
     accountsLoad.state === "loading" || groupsLoad.state === "loading";
-  const loadError =
-    accountsLoad.state === "error"
-      ? accountsLoad.error
-      : groupsLoad.state === "error"
-        ? groupsLoad.error
-        : null;
+  const accountLoadError =
+    accountsLoad.state === "error" ? accountsLoad.error : null;
+  const groupLoadError = groupsLoad.state === "error" ? groupsLoad.error : null;
 
   return (
     <Page
@@ -1612,70 +3816,145 @@ export function Accounts() {
       </div>
 
       {/* Groups panel */}
-      {isLoading && accounts === null && groups === null && (
-        <TableSkeleton cols={5} />
-      )}
-      {loadError && accounts === null && (
-        <ErrorState message={loadError} onRetry={reloadAll} />
-      )}
-      {tab === "groups" && (accounts !== null || groups !== null) && (
+      {tab === "groups" && (
         <div className="space-y-1">
           <p className="text-xs font-medium text-muted">
-            {t("groups.heading")}{" "}
-            {selectedGroupCode !== null && (
-              <button
-                type="button"
-                className="ml-1 text-accent hover:underline"
-                onClick={() => {
-                  setSelectedGroupCode(null);
-                  setAccountPage(0);
-                }}
-              >
-                {t("groups.clearFilter")}
-              </button>
-            )}
+            {t("groups.heading")}
           </p>
-          {groupPager}
-          <GroupsPanel
-            groupRows={pagedGroups}
-            selectedGroupCode={selectedGroupCode}
-            onSelect={(code) => {
-              setSelectedGroupCode(code);
-              setAccountPage(0);
+          <ListFilters
+            entity="groups"
+            code={groupCode}
+            codeMatch={groupCodeMatch}
+            codeSuggestions={visibleGroupCodeSuggestions}
+            codeLoading={
+              groupsLoad.state === "loading" && groupCode.trim() !== ""
+            }
+            status={groupStatus}
+            advancedSummary={groupAdvancedSummary}
+            shareHref={groupShareHref}
+            onClearAll={clearGroupFilters}
+            onCode={(value) => {
+              setGroupCode(value);
+              setGroupPage(0);
             }}
-            actionsCtx={groupActionsCtx}
+            onCodeMatch={(value) => {
+              setGroupCodeMatch(value);
+              setGroupPage(0);
+            }}
+            onStatus={(value) => {
+              setGroupStatus(value);
+              setGroupPage(0);
+            }}
+            onClearAdvanced={(field) => {
+              setGroupAdvanced((prev) => clearAdvancedField(prev, field));
+              setGroupAdvancedDraft((prev) => clearAdvancedField(prev, field));
+              setGroupPage(0);
+            }}
+            onOpenAdvanced={() => setGroupAdvancedOpen(true)}
           />
-          {groupPager}
+          {groupLoadError !== null && groups === null ? (
+            <ErrorState message={groupLoadError} onRetry={reloadAll} />
+          ) : groups === null ? (
+            <TableSkeleton cols={6} />
+          ) : (
+            <>
+              {groupPager}
+              <GroupsPanel
+                groupRows={pagedGroups}
+                selectedGroupCode={selectedGroupCode}
+                activeSort={groupSort.sort}
+                activeOrder={groupSort.order}
+                onSelect={(code) => {
+                  setSelectedGroupCode(code);
+                  accountGroupSearchRef.current = "";
+                  setAccountGroupSearch("");
+                  setAccountPage(0);
+                  setTab("accounts");
+                }}
+                onSortChange={(sort, order) => {
+                  setGroupSort({ sort, order });
+                  setGroupPage(0);
+                }}
+                onEdit={setEditGroupTarget}
+                onEditNotes={setGroupNotesTarget}
+                onBlock={setBlockGroupTarget}
+                onUnblock={setUnblockGroupTarget}
+                onShowBlockDetails={(group) =>
+                  setBlockedDetailsTarget({ kind: "group", group })
+                }
+                onDelete={setDeleteGroupTarget}
+              />
+              {groupPager}
+            </>
+          )}
         </div>
       )}
 
       {/* Accounts panel */}
-      {tab === "accounts" && pagedAccounts !== null && (
+      {tab === "accounts" && (
         <div className="space-y-1">
           <p className="text-xs font-medium text-muted">
             {t("accounts.heading")}
-            {selectedGroupCode !== null && (
-              <span className="ml-1 text-muted-lt">
-                {t("accounts.filteredTo")}{" "}
-                {selectedGroupCode === DEFAULT_GROUP_CODE
-                  ? t("accounts.filteredToDefault")
-                  : selectedGroup === null
-                    ? <span className="nums">{selectedGroupCode}</span>
-                    : (
-                      <>
-                        <span>{selectedGroupTitle}</span>
-                        {selectedGroupTitle !== selectedGroup.code && (
-                          <>
-                            {" "}
-                            <span className="nums">({selectedGroup.code})</span>
-                          </>
-                        )}
-                      </>
-                    )}
-              </span>
-            )}
           </p>
-          {visibleAccountCount === 0 ? (
+          <ListFilters
+            entity="accounts"
+            code={accountCode}
+            codeMatch={accountCodeMatch}
+            codeSuggestions={visibleAccountCodeSuggestions}
+            codeLoading={
+              accountsLoad.state === "loading" && accountCode.trim() !== ""
+            }
+            groupSearch={
+              selectedGroupCode !== null ? selectedGroupCode : accountGroupSearch
+            }
+            groupSuggestions={visibleAccountGroupSuggestions}
+            groupLoading={
+              groupsLoad.state === "loading" && accountGroupSearch.trim() !== ""
+            }
+            groupActive={selectedGroupCode !== null}
+            status={accountStatus}
+            advancedSummary={accountAdvancedSummary}
+            shareHref={accountShareHref}
+            onClearAll={clearAccountFilters}
+            onCode={(value) => {
+              setAccountCode(value);
+              setAccountPage(0);
+            }}
+            onCodeMatch={(value) => {
+              setAccountCodeMatch(value);
+              setAccountPage(0);
+            }}
+            onGroupSearch={(value) => {
+              const trimmed = value.trim();
+              setSelectedGroupCode(
+                trimmed !== "" &&
+                  trimmed !== DEFAULT_GROUP_CODE &&
+                  accountGroupSuggestions.includes(trimmed)
+                  ? trimmed
+                  : null,
+              );
+              accountGroupSearchRef.current = value;
+              setAccountGroupSearch(value);
+              setAccountPage(0);
+            }}
+            onStatus={(value) => {
+              setAccountStatus(value);
+              setAccountPage(0);
+            }}
+            onClearAdvanced={(field) => {
+              setAccountAdvanced((prev) => clearAdvancedField(prev, field));
+              setAccountAdvancedDraft((prev) =>
+                clearAdvancedField(prev, field),
+              );
+              setAccountPage(0);
+            }}
+            onOpenAdvanced={() => setAccountAdvancedOpen(true)}
+          />
+          {accountLoadError !== null && accounts === null ? (
+            <ErrorState message={accountLoadError} onRetry={reloadAll} />
+          ) : pagedAccounts === null ? (
+            <TableSkeleton cols={6} />
+          ) : visibleAccountCount === 0 ? (
             <EmptyState
               title={t("accounts.empty.title")}
               hint={
@@ -1700,9 +3979,40 @@ export function Accounts() {
               {accountPager}
               <AccountsTable
                 accounts={pagedAccounts}
-                groupSuggestions={groupSuggestions}
+                activeSort={accountSort.sort}
+                activeOrder={accountSort.order}
+                selectedGroupCode={selectedGroupCode}
+                onSortChange={(sort, order) => {
+                  setAccountSort({ sort, order });
+                  setAccountPage(0);
+                }}
+                onEditAccount={setEditAccountTarget}
                 onAssignGroup={setGroupTarget}
-                actionsCtx={accountActionsCtx}
+                onEditNotes={setNotesAccountTarget}
+                onBlock={setBlockAccountTarget}
+                onUnblock={setUnblockAccountTarget}
+                onShowBlockDetails={(account) =>
+                  setBlockedDetailsTarget({ kind: "account", account })
+                }
+                onOpenPositions={(account) =>
+                  navigate(`/positions?account=${encodeURIComponent(account.code)}`)
+                }
+                onOpenTrading={(account) =>
+                  navigate(`/trading?account=${encodeURIComponent(account.code)}`)
+                }
+                onOpenPolicies={(account) =>
+                  navigate(`/policies?account=${encodeURIComponent(account.code)}`)
+                }
+                onOpenHistory={(account) =>
+                  navigate(`/audit?account=${encodeURIComponent(account.code)}`)
+                }
+                onFilterGroup={(group) => {
+                  setSelectedGroupCode(group);
+                  accountGroupSearchRef.current = "";
+                  setAccountGroupSearch("");
+                  setAccountPage(0);
+                }}
+                onDelete={setDeleteAccountTarget}
               />
               {accountPager}
             </>
@@ -1710,16 +4020,54 @@ export function Accounts() {
         </div>
       )}
 
+      <AdvancedFilterDialog
+        entity="accounts"
+        open={accountAdvancedOpen}
+        draft={accountAdvancedDraft}
+        onDraftChange={setAccountAdvancedDraft}
+        onCancel={() => setAccountAdvancedOpen(false)}
+        onApply={() => {
+          setAccountAdvanced(accountAdvancedDraft);
+          setAccountPage(0);
+          setAccountAdvancedOpen(false);
+        }}
+      />
+      <AdvancedFilterDialog
+        entity="groups"
+        open={groupAdvancedOpen}
+        draft={groupAdvancedDraft}
+        onDraftChange={setGroupAdvancedDraft}
+        onCancel={() => setGroupAdvancedOpen(false)}
+        onApply={() => {
+          setGroupAdvanced(groupAdvancedDraft);
+          setGroupPage(0);
+          setGroupAdvancedOpen(false);
+        }}
+      />
+
       {/* Account dialogs */}
+      <EditAccountMetadataDialog
+        account={editAccountTarget}
+        open={editAccountTarget !== null}
+        onOpenChange={(next) => {
+          if (!next) setEditAccountTarget(null);
+        }}
+        onDone={() => {
+          setEditAccountTarget(null);
+          setLocalAccounts(null);
+          reloadAccounts();
+        }}
+      />
       <BlockAccountDialog
         account={blockAccountTarget}
         open={blockAccountTarget !== null}
         onOpenChange={(next) => {
           if (!next) setBlockAccountTarget(null);
         }}
-        onDone={(updated) => {
+        onDone={() => {
           setBlockAccountTarget(null);
-          applyAccountUpdate(updated);
+          setLocalAccounts(null);
+          reloadAccounts();
         }}
       />
       <UnblockAccountConfirm
@@ -1728,9 +4076,19 @@ export function Accounts() {
         onOpenChange={(next) => {
           if (!next) setUnblockAccountTarget(null);
         }}
-        onDone={(updated) => {
+        onDone={() => {
+          const unblocked = unblockAccountTarget;
           setUnblockAccountTarget(null);
-          applyAccountUpdate(updated);
+          if (unblocked !== null) {
+            setBlockedDetailsTarget((current) =>
+              current?.kind === "account" &&
+              current.account.code === unblocked.code
+                ? null
+                : current,
+            );
+          }
+          setLocalAccounts(null);
+          reloadAccounts();
         }}
       />
       <AssignGroupDialog
@@ -1740,9 +4098,12 @@ export function Accounts() {
         onOpenChange={(next) => {
           if (!next) setGroupTarget(null);
         }}
-        onDone={(updated) => {
+        onDone={() => {
           setGroupTarget(null);
-          applyAccountUpdate(updated);
+          setLocalAccounts(null);
+          setLocalGroups(null);
+          reloadAccounts();
+          reloadGroups();
         }}
       />
       <EditAccountNotesDialog
@@ -1751,9 +4112,10 @@ export function Accounts() {
         onOpenChange={(next) => {
           if (!next) setNotesAccountTarget(null);
         }}
-        onDone={(updated) => {
+        onDone={() => {
           setNotesAccountTarget(null);
-          applyAccountUpdate(updated);
+          setLocalAccounts(null);
+          reloadAccounts();
         }}
       />
       <DeleteAccountConfirm
@@ -1769,16 +4131,52 @@ export function Accounts() {
           setDeleteAccountTarget(null);
         }}
       />
+      <BlockedDetailsDialog
+        target={blockedDetailsTarget}
+        open={blockedDetailsTarget !== null}
+        onOpenChange={(next) => {
+          if (!next) setBlockedDetailsTarget(null);
+        }}
+        onUnblock={(target) => {
+          if (target.kind === "account") {
+            setUnblockAccountTarget(target.account);
+          } else {
+            setUnblockGroupTarget(target.group);
+          }
+        }}
+      />
       {/* Group dialogs */}
+      <EditGroupMetadataDialog
+        group={editGroupTarget}
+        open={editGroupTarget !== null}
+        onOpenChange={(next) => {
+          if (!next) setEditGroupTarget(null);
+        }}
+        onDone={(updated) => {
+          if (
+            editGroupTarget !== null &&
+            selectedGroupCode === editGroupTarget.code
+          ) {
+            setSelectedGroupCode(updated.code);
+            setAccountPage(0);
+          }
+          setEditGroupTarget(null);
+          setLocalGroups(null);
+          reloadGroups();
+          setLocalAccounts(null);
+          reloadAccounts();
+        }}
+      />
       <EditGroupNotesDialog
         group={groupNotesTarget}
         open={groupNotesTarget !== null}
         onOpenChange={(next) => {
           if (!next) setGroupNotesTarget(null);
         }}
-        onDone={(updated) => {
+        onDone={() => {
           setGroupNotesTarget(null);
-          applyGroupUpdate(updated);
+          setLocalGroups(null);
+          reloadGroups();
         }}
       />
       <BlockGroupDialog
@@ -1787,9 +4185,10 @@ export function Accounts() {
         onOpenChange={(next) => {
           if (!next) setBlockGroupTarget(null);
         }}
-        onDone={(updated) => {
+        onDone={() => {
           setBlockGroupTarget(null);
-          applyGroupUpdate(updated);
+          setLocalGroups(null);
+          reloadGroups();
         }}
       />
       <UnblockGroupConfirm
@@ -1798,9 +4197,18 @@ export function Accounts() {
         onOpenChange={(next) => {
           if (!next) setUnblockGroupTarget(null);
         }}
-        onDone={(updated) => {
+        onDone={() => {
+          const unblocked = unblockGroupTarget;
           setUnblockGroupTarget(null);
-          applyGroupUpdate(updated);
+          if (unblocked !== null) {
+            setBlockedDetailsTarget((current) =>
+              current?.kind === "group" && current.group.code === unblocked.code
+                ? null
+                : current,
+            );
+          }
+          setLocalGroups(null);
+          reloadGroups();
         }}
       />
       <DeleteGroupConfirm

@@ -80,6 +80,34 @@ describe("TablePagination", () => {
       screen.queryByRole("spinbutton", { name: "Go to page" }),
     ).not.toBeInTheDocument();
   });
+
+  it("keeps thousands of pages compact", () => {
+    renderWithI18n(
+      <TablePagination
+        page={2499}
+        canPrevious={true}
+        canNext={true}
+        knownTotalPages={5000}
+        onPrevious={vi.fn()}
+        onNext={vi.fn()}
+        onPage={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Page 2500 of 5000")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Go to page 1" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Go to page 2500" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Go to page 5000" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Go to page 42" }),
+    ).not.toBeInTheDocument();
+  });
 });
 
 describe("PageSizeSelect", () => {

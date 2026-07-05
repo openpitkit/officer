@@ -55,16 +55,23 @@ type Store interface {
 // single bad instance (unknown type, subscribe error) is logged and skipped
 // without blocking the others or crashing the process.
 type Manager struct {
-	registry *Registry
-	store    Store
-	sink     Sink
-	logger   *slog.Logger
+	registry  *Registry
+	store     Store
+	sink      Sink
+	stopGrace time.Duration
+	// sinkProvider, when set, resolves the live engine sink on every push. The
+	// engine sink is recreated on each engine rebuild (account/group/asset
+	// changes), so a cached sink goes stale ("market-data service is null") until
+	// a restart. Resolving per push keeps quotes flowing across rebuilds without a
+	// restart. It takes precedence over the static sink.
+	sinkProvider func() Sink
+	logger       *slog.Logger
 
 	mu            sync.Mutex
 	baseCtx       context.Context
 	started       bool
 	cancel        context.CancelFunc
-	wg            sync.WaitGroup
+	runWG         *sync.WaitGroup
 	connectors    []Connector
 	appliedConfig map[string]AppliedInstanceConfig
 	// byInstance maps an instance id to its live connector, so a manual quote
@@ -120,6 +127,8 @@ const diagBufferCap = 20
 // whether any data has arrived and (if not) triggers one-shot self-diagnosis.
 const diagnoseGrace = 20 * time.Second
 
+const defaultManagerStopGrace = 2 * time.Second
+
 // ErrUnsupportedProvider marks an unregistered market-data provider type.
 var ErrUnsupportedProvider = errors.New("unsupported market-data provider")
 
@@ -143,7 +152,13 @@ func NewManager(
 	if registry == nil {
 		registry = NewRegistry()
 	}
-	return &Manager{registry: registry, store: store, sink: sink, logger: logger}, nil
+	return &Manager{
+		registry:  registry,
+		store:     store,
+		sink:      sink,
+		stopGrace: defaultManagerStopGrace,
+		logger:    logger,
+	}, nil
 }
 
 // Registry returns the connector registry used by this manager.
@@ -173,7 +188,9 @@ func (m *Manager) Start(ctx context.Context) error {
 	}
 
 	runCtx, cancel := context.WithCancel(ctx)
+	runWG := &sync.WaitGroup{}
 	m.cancel = cancel
+	m.runWG = runWG
 	m.started = true
 	m.statuses = make(map[string]InstanceRuntimeStatus, len(instances))
 	m.byInstance = make(map[string]Connector, len(instances))
@@ -185,7 +202,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	m.intervalMu.Unlock()
 
 	for _, instance := range instances {
-		m.startInstanceLocked(runCtx, instance)
+		m.startInstanceLocked(runCtx, runWG, instance)
 	}
 	return nil
 }
@@ -194,7 +211,11 @@ func (m *Manager) Start(ctx context.Context) error {
 // build the connector, subscribe, and drain into the sink. Any failure records
 // a diagnostic (logged via recordDiagLocked) and skips the instance. Callers
 // must hold mu.
-func (m *Manager) startInstanceLocked(ctx context.Context, instance domain.MarketDataInstance) {
+func (m *Manager) startInstanceLocked(
+	ctx context.Context,
+	runWG *sync.WaitGroup,
+	instance domain.MarketDataInstance,
+) {
 	// Use the 22-char string form of the external id as the runtime map key.
 	instanceID := instance.ExternalID.String()
 
@@ -332,8 +353,8 @@ func (m *Manager) startInstanceLocked(ctx context.Context, instance domain.Marke
 	// without additional locks.
 	received := &sync.Map{}
 	m.connectors = append(m.connectors, connector)
-	m.wg.Add(1)
-	go m.drain(ctx, instanceID, symbols, ch, received)
+	runWG.Add(1)
+	go m.drain(ctx, runWG, instanceID, symbols, ch, received)
 	m.statuses[instanceID] = InstanceRuntimeStatus{
 		State: StateOK, References: refs,
 		VerifiesSymbols: verifiesSymbols, SearchesSymbols: searchesSymbols,
@@ -347,11 +368,21 @@ func (m *Manager) startInstanceLocked(ctx context.Context, instance domain.Marke
 	pushable, pushableOK := connector.(Pushable)
 	if pushableOK {
 		m.byInstance[instanceID] = connector
+		quotes := make([]QuoteUpdate, 0, len(instruments))
 		for _, inst := range instruments {
 			if inst.ManualPrice == "" {
 				continue
 			}
-			pushable.Push(manualQuote(inst))
+			quotes = append(quotes, manualQuote(inst))
+		}
+		if len(quotes) > 0 {
+			runWG.Add(1)
+			go func() {
+				defer runWG.Done()
+				for _, quote := range quotes {
+					pushable.Push(quote)
+				}
+			}()
 		}
 	}
 	if pushableOK {
@@ -360,11 +391,11 @@ func (m *Manager) startInstanceLocked(ctx context.Context, instance domain.Marke
 
 	// One-shot no-data watchdog: after diagnoseGrace, if any expected instrument
 	// has not delivered a quote, run self-diagnosis (if available) or record a
-	// generic no-data warning. Runs once; tracked on m.wg so Stop waits for it.
+	// generic no-data warning. Runs once; tracked on runWG so Stop waits for it.
 	id := instanceID
-	m.wg.Add(1)
+	runWG.Add(1)
 	go func() {
-		defer m.wg.Done()
+		defer runWG.Done()
 		select {
 		case <-ctx.Done():
 			return
@@ -534,12 +565,13 @@ func (m *Manager) recordDiagLocked(instanceID string, diag Diagnostic) {
 // closes.
 func (m *Manager) drain(
 	ctx context.Context,
+	runWG *sync.WaitGroup,
 	instanceID string,
 	symbols map[quoteInstrumentKey]string,
 	ch <-chan QuoteUpdate,
 	received *sync.Map,
 ) {
-	defer m.wg.Done()
+	defer runWG.Done()
 	for update := range ch {
 		received.Store(update.Base+"\x00"+update.Quote, true)
 		external := symbols[quoteInstrumentKey{base: update.Base, quote: update.Quote}]
@@ -557,7 +589,18 @@ func (m *Manager) drain(
 				Actions:     []DiagnosticAction{{Type: ActionRestart}},
 			})
 		}
-		if err := m.sink.Push(update); err != nil {
+		sink := m.currentSink()
+		if sink == nil {
+			m.recordDiag(instanceID, Diagnostic{
+				Level:       DiagWarn,
+				Code:        CodeInternalError,
+				Kind:        DiagKindProvider,
+				Title:       "Failed to push quote to engine",
+				Detail:      ErrNilSink.Error(),
+				Remediation: "Usually transient; if persistent, Restart feeds or contact support.",
+				Actions:     []DiagnosticAction{{Type: ActionRestart}},
+			})
+		} else if err := sink.Push(update); err != nil {
 			m.recordDiag(instanceID, Diagnostic{
 				Level:       DiagWarn,
 				Code:        CodeInternalError,
@@ -666,20 +709,34 @@ func (m *Manager) Stop() {
 	m.started = false
 	cancel := m.cancel
 	connectors := m.connectors
+	runWG := m.runWG
+	stopGrace := m.stopGrace
 	m.connectors = nil
 	// Clear byInstance before Close so a concurrent PushManual cannot reach a
 	// connector that is being shut down.
 	m.byInstance = nil
 	m.cancel = nil
+	m.runWG = nil
 	m.mu.Unlock()
 
 	if cancel != nil {
 		cancel()
 	}
-	for _, connector := range connectors {
-		connector.Close()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for _, connector := range connectors {
+			connector.Close()
+		}
+		if runWG != nil {
+			runWG.Wait()
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(stopGrace):
+		m.logger.Warn("market data shutdown timed out", "timeout", stopGrace)
 	}
-	m.wg.Wait()
 
 	m.mu.Lock()
 	m.statuses = nil
@@ -706,6 +763,30 @@ func (m *Manager) UseSink(sink Sink) error {
 	}
 	m.sink = sink
 	return nil
+}
+
+// UseSinkProvider installs a resolver that returns the current engine sink on
+// every push. Unlike UseSink it may be set once at construction and needs no
+// restart on an engine rebuild: the manager always pushes into the live engine,
+// so a rebuild never leaves it pushing into a closed service.
+func (m *Manager) UseSinkProvider(provider func() Sink) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sinkProvider = provider
+}
+
+// currentSink returns the sink to push into: the live provider result when a
+// provider is installed, otherwise the static sink. The provider is invoked
+// without holding mu so it never nests the manager lock under the engine lock.
+func (m *Manager) currentSink() Sink {
+	m.mu.Lock()
+	provider := m.sinkProvider
+	static := m.sink
+	m.mu.Unlock()
+	if provider != nil {
+		return provider()
+	}
+	return static
 }
 
 // InstanceStatuses returns a copy of the current per-instance runtime statuses.

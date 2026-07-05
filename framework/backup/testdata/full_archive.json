@@ -18,6 +18,13 @@
     ]
   },
   "data": {
+    "assetClasses": [
+      {
+        "Code": "equity",
+        "Title": "Equity",
+        "Notes": ""
+      }
+    ],
     "assets": [
       {
         "Code": "AAPL",

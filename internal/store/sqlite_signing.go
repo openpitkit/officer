@@ -45,7 +45,7 @@ import (
 // public handle; the surrogate id is never selected.
 const signingKeySelect = `
 SELECT key_id, alg, private_key, public_key, created_at, active
-FROM signing_keys`
+FROM signing_key`
 
 // UpsertSigningKey inserts or replaces a signing key row, keyed by its UUID
 // key_id. The private and public key material is stored verbatim as BLOBs and
@@ -56,7 +56,7 @@ func (r *realmStore) UpsertSigningKey(
 ) error {
 	if _, err := r.db().ExecContext(
 		ctx,
-		`INSERT INTO signing_keys
+		`INSERT INTO signing_key
 		 (key_id, alg, private_key, public_key, created_at, active)
 		 VALUES (?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(key_id) DO UPDATE SET
@@ -117,7 +117,7 @@ func (r *realmStore) ListSigningKeys(ctx context.Context) ([]domain.SigningKey, 
 	rows, err := r.db().QueryContext(
 		ctx,
 		`SELECT key_id, alg, public_key, created_at, active
-		 FROM signing_keys ORDER BY created_at DESC, id DESC`,
+		 FROM signing_key ORDER BY created_at DESC, id DESC`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("store: list signing keys: %w", err)
@@ -142,7 +142,7 @@ func (r *realmStore) ListSigningKeys(ctx context.Context) ([]domain.SigningKey, 
 // no-op when there are no active keys (or no keys at all).
 func (r *realmStore) DeactivateAllSigningKeys(ctx context.Context) error {
 	if _, err := r.db().ExecContext(
-		ctx, `UPDATE signing_keys SET active = 0 WHERE active = 1`,
+		ctx, `UPDATE signing_key SET active = 0 WHERE active = 1`,
 	); err != nil {
 		return fmt.Errorf("store: deactivate signing keys: %w", err)
 	}
@@ -239,7 +239,7 @@ func (r *realmStore) SetSigningConfig(ctx context.Context, key, value string) er
 func resolveSigningKeyID(ctx context.Context, q sqlQueryer, keyID string) (int64, error) {
 	var id int64
 	err := q.QueryRowContext(
-		ctx, `SELECT id FROM signing_keys WHERE key_id = ?`, keyID,
+		ctx, `SELECT id FROM signing_key WHERE key_id = ?`, keyID,
 	).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, fmt.Errorf("signing key %q: %w", keyID, domain.ErrInvalid)

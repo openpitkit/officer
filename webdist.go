@@ -30,7 +30,7 @@ import (
 )
 
 // distFS embeds the built single-page app produced by `npm run build` in
-// officer/web. The repository commits a placeholder web/dist/index.html so this
+// officer/web. The repository commits a stable web/dist placeholder so this
 // directive compiles before the real build runs; the Docker build overwrites
 // web/dist with the compiled assets before the Go build.
 //

@@ -27,7 +27,7 @@ import {
   getRoutes,
   getScopes,
   getWidgets,
-  RowActions,
+  RegistryRowActions,
 } from "@openpit/officer-web";
 
 import {
@@ -98,7 +98,7 @@ describe("closed reference web composition", () => {
 
     render(
       <ClosedReferenceAuthProvider>
-        <RowActions kind="closedref" row={{}} ctx={{}} />
+        <RegistryRowActions kind="closedref" row={{}} ctx={{}} />
       </ClosedReferenceAuthProvider>,
     );
 
@@ -129,7 +129,7 @@ describe("closed reference web composition", () => {
 
     render(
       <ClosedReferenceAuthProvider>
-        <RowActions kind="closedref" row={{}} ctx={{}} />
+        <RegistryRowActions kind="closedref" row={{}} ctx={{}} />
       </ClosedReferenceAuthProvider>,
     );
 

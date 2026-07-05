@@ -26,6 +26,11 @@ interface DecimalValue {
 
 const DECIMAL_PATTERN = /^([+-]?)(?:(\d+)(?:\.(\d*))?|\.(\d+))$/;
 
+export function isDecimalString(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed === "" || DECIMAL_PATTERN.test(trimmed);
+}
+
 function parseDecimal(value: string): DecimalValue | null {
   const match = DECIMAL_PATTERN.exec(value.trim());
   if (match === null) {
@@ -65,6 +70,15 @@ function compareDecimals(a: DecimalValue, b: DecimalValue): number {
   if (left < right) return -1;
   if (left > right) return 1;
   return 0;
+}
+
+export function compareDecimalStrings(a: string, b: string): number | null {
+  const left = parseDecimal(a);
+  const right = parseDecimal(b);
+  if (left === null || right === null) {
+    return null;
+  }
+  return compareDecimals(left, right);
 }
 
 function absDecimal(value: DecimalValue): DecimalValue {

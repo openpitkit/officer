@@ -90,6 +90,9 @@ func (r *realmStore) exportData(ctx context.Context) (backup.Data, error) {
 		data backup.Data
 		err  error
 	)
+	if data.AssetClasses, err = r.ListAssetClasses(ctx); err != nil {
+		return backup.Data{}, err
+	}
 	if data.Assets, err = r.ListAssets(ctx); err != nil {
 		return backup.Data{}, err
 	}
@@ -193,8 +196,8 @@ func (r *realmStore) exportAccounts(ctx context.Context) ([]backup.Account, erro
 	return out, nil
 }
 
-// exportAdjustments scans the whole adjustments table, oldest first, so a backup
-// captures the full history rather than a UI page. It uses the adjustments-group
+// exportAdjustments scans the whole adjustment table, oldest first, so a backup
+// captures the full history rather than a UI page. It uses the adjustment-group
 // projection and scan helper directly to avoid a per-account, limit-bounded read.
 func (r *realmStore) exportAdjustments(
 	ctx context.Context,
@@ -221,8 +224,8 @@ func (r *realmStore) exportAdjustments(
 	return out, nil
 }
 
-// exportOrders lists every order across all accounts (no UI limit) and folds in
-// each order's optional 1:1 approval. Events and trades travel in their own
+// exportOrders lists every order across all account (no UI limit) and folds in
+// each order's optional 1:1 approval. Events and trade travel in their own
 // sections, linked back by the order's external id.
 func (r *realmStore) exportOrders(ctx context.Context) ([]backup.OrderRecord, error) {
 	orders, err := r.ListAllOrders(ctx, "", "")
@@ -313,7 +316,7 @@ func (r *realmStore) exportSigningKeys(ctx context.Context) ([]backup.SigningKey
 	rows, err := r.db().QueryContext(
 		ctx,
 		`SELECT key_id, alg, private_key, public_key, created_at, active
-		 FROM signing_keys ORDER BY created_at ASC, id ASC`,
+		 FROM signing_key ORDER BY created_at ASC, id ASC`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("store: export signing keys: %w", err)
@@ -444,7 +447,7 @@ type restoreTx struct {
 }
 
 // run inserts every included section in dictionary-first order. Assets and
-// principals always travel (FilterData carries them unconditionally) so the
+// principal always travel (FilterData carries them unconditionally) so the
 // machine-record foreign keys resolve regardless of which sections the scope
 // selected.
 func (rt *restoreTx) run(ctx context.Context, scope backup.Scope, data backup.Data) error {
@@ -458,6 +461,9 @@ func (rt *restoreTx) run(ctx context.Context, scope backup.Scope, data backup.Da
 		if err := rt.prune(ctx, scope, data); err != nil {
 			return err
 		}
+	}
+	if err := rt.restoreAssetClasses(ctx, data.AssetClasses); err != nil {
+		return err
 	}
 	if err := rt.restoreAssets(ctx, data.Assets); err != nil {
 		return err
@@ -518,9 +524,13 @@ func (rt *restoreTx) run(ctx context.Context, scope backup.Scope, data backup.Da
 
 // --- Restore: dictionaries --------------------------------------------------
 
-func (rt *restoreTx) restoreAssets(ctx context.Context, assets []domain.Asset) error {
-	for _, a := range assets {
-		exists, err := rowExists(ctx, rt.tx, `SELECT 1 FROM assets WHERE code = ?`, a.Code)
+// restoreAssetClasses inserts (or updates) the asset-class dictionary before the
+// assets, so an asset's class_id foreign key resolves on import.
+func (rt *restoreTx) restoreAssetClasses(
+	ctx context.Context, classes []domain.AssetClass,
+) error {
+	for _, c := range classes {
+		exists, err := rowExists(ctx, rt.tx, `SELECT 1 FROM asset_class WHERE code = ?`, c.Code)
 		if err != nil {
 			return err
 		}
@@ -529,21 +539,52 @@ func (rt *restoreTx) restoreAssets(ctx context.Context, assets []domain.Asset) e
 		}
 		if exists {
 			if _, err := rt.tx.ExecContext(
+				ctx, `UPDATE asset_class SET title = ?, notes = ? WHERE code = ?`,
+				c.Title, c.Notes, c.Code,
+			); err != nil {
+				return fmt.Errorf("store: restore asset class %q: %w", c.Code, err)
+			}
+		} else if _, err := rt.tx.ExecContext(
+			ctx, `INSERT INTO asset_class (code, title, notes) VALUES (?, ?, ?)`,
+			c.Code, c.Title, c.Notes,
+		); err != nil {
+			return fmt.Errorf("store: restore asset class %q: %w", c.Code, err)
+		}
+		rt.summary.AddApplied(backup.SectionAccountsGroups, 1)
+	}
+	return nil
+}
+
+func (rt *restoreTx) restoreAssets(ctx context.Context, assets []domain.Asset) error {
+	for _, a := range assets {
+		exists, err := rowExists(ctx, rt.tx, `SELECT 1 FROM asset WHERE code = ?`, a.Code)
+		if err != nil {
+			return err
+		}
+		if rt.skip(backup.SectionAccountsGroups, exists) {
+			continue
+		}
+		classID, err := optionalClassID(ctx, rt.tx, a.AssetClass)
+		if err != nil {
+			return fmt.Errorf("store: restore asset %q: %w", a.Code, err)
+		}
+		if exists {
+			if _, err := rt.tx.ExecContext(
 				ctx,
-				`UPDATE assets SET title = ?, asset_class = ? WHERE code = ?`,
-				a.Title, nullableString(a.AssetClass), a.Code,
+				`UPDATE asset SET title = ?, class_id = ? WHERE code = ?`,
+				a.Title, classID, a.Code,
 			); err != nil {
 				return fmt.Errorf("store: restore asset %q: %w", a.Code, err)
 			}
 		} else if _, err := rt.tx.ExecContext(
 			ctx,
-			`INSERT INTO assets (code, title, asset_class) VALUES (?, ?, ?)`,
-			a.Code, a.Title, nullableString(a.AssetClass),
+			`INSERT INTO asset (code, title, class_id) VALUES (?, ?, ?)`,
+			a.Code, a.Title, classID,
 		); err != nil {
 			return fmt.Errorf("store: restore asset %q: %w", a.Code, err)
 		}
 		// Assets are dictionary support rows for every section; their counts roll
-		// into the accounts/groups section so the summary stays section-shaped.
+		// into the account/groups section so the summary stays section-shaped.
 		rt.summary.AddApplied(backup.SectionAccountsGroups, 1)
 	}
 	return nil
@@ -551,7 +592,7 @@ func (rt *restoreTx) restoreAssets(ctx context.Context, assets []domain.Asset) e
 
 func (rt *restoreTx) restorePrincipals(ctx context.Context, principals []domain.Principal) error {
 	for _, p := range principals {
-		exists, err := rowExists(ctx, rt.tx, `SELECT 1 FROM principals WHERE code = ?`, p.Code)
+		exists, err := rowExists(ctx, rt.tx, `SELECT 1 FROM principal WHERE code = ?`, p.Code)
 		if err != nil {
 			return err
 		}
@@ -560,12 +601,12 @@ func (rt *restoreTx) restorePrincipals(ctx context.Context, principals []domain.
 		}
 		if exists {
 			if _, err := rt.tx.ExecContext(
-				ctx, `UPDATE principals SET title = ? WHERE code = ?`, p.Title, p.Code,
+				ctx, `UPDATE principal SET title = ? WHERE code = ?`, p.Title, p.Code,
 			); err != nil {
 				return fmt.Errorf("store: restore principal %q: %w", p.Code, err)
 			}
 		} else if _, err := rt.tx.ExecContext(
-			ctx, `INSERT INTO principals (code, title) VALUES (?, ?)`, p.Code, p.Title,
+			ctx, `INSERT INTO principal (code, title) VALUES (?, ?)`, p.Code, p.Title,
 		); err != nil {
 			return fmt.Errorf("store: restore principal %q: %w", p.Code, err)
 		}
@@ -574,13 +615,12 @@ func (rt *restoreTx) restorePrincipals(ctx context.Context, principals []domain.
 	return nil
 }
 
-// restoreGroups inserts the account groups, assigning a fresh engine group id per
-// new row while preserving the code. On overwrite of an existing group the
-// engine id is kept (re-assigning it would force an engine-tree churn that the
-// rebuild already covers, and the code is the portable handle).
+// restoreGroups inserts the account groups, preserving the code. A new group
+// runs on its surrogate id (the engine group id). On overwrite of an existing
+// group the surrogate id is kept (the code is the portable handle).
 func (rt *restoreTx) restoreGroups(ctx context.Context, groups []backup.AccountGroup) error {
 	for _, g := range groups {
-		exists, err := rowExists(ctx, rt.tx, `SELECT 1 FROM account_groups WHERE code = ?`, g.Code)
+		exists, err := rowExists(ctx, rt.tx, `SELECT 1 FROM account_group WHERE code = ?`, g.Code)
 		if err != nil {
 			return err
 		}
@@ -590,43 +630,37 @@ func (rt *restoreTx) restoreGroups(ctx context.Context, groups []backup.AccountG
 		if exists {
 			if _, err := rt.tx.ExecContext(
 				ctx,
-				`UPDATE account_groups
+				`UPDATE account_group
 				 SET title = ?, notes = ?, blocked = ?, block_reason = ?
 				 WHERE code = ?`,
 				g.Title, g.Notes, g.Blocked, g.BlockReason, g.Code,
 			); err != nil {
 				return fmt.Errorf("store: restore group %q: %w", g.Code, err)
 			}
-		} else {
-			engineID, err := nextEngineGroupID(ctx, rt.tx)
-			if err != nil {
-				return err
-			}
-			if _, err := rt.tx.ExecContext(
-				ctx,
-				`INSERT INTO account_groups
-				 (engine_group_id, code, title, notes, blocked, block_reason)
-				 VALUES (?, ?, ?, ?, ?, ?)`,
-				int64(engineID.Uint32()), g.Code, g.Title, g.Notes, g.Blocked, g.BlockReason,
-			); err != nil {
-				return fmt.Errorf("store: restore group %q: %w", g.Code, err)
-			}
+		} else if _, err := rt.tx.ExecContext(
+			ctx,
+			`INSERT INTO account_group
+			 (code, title, notes, blocked, block_reason)
+			 VALUES (?, ?, ?, ?, ?)`,
+			g.Code, g.Title, g.Notes, g.Blocked, g.BlockReason,
+		); err != nil {
+			return fmt.Errorf("store: restore group %q: %w", g.Code, err)
 		}
 		rt.summary.AddApplied(backup.SectionAccountsGroups, 1)
 	}
 	return nil
 }
 
-// restoreAccounts inserts the accounts, resolving the optional group link by
-// group code (the group is already inserted) and assigning a fresh engine account
-// id per new row while preserving the code.
+// restoreAccounts inserts the account, resolving the optional group link by
+// group code (the group is already inserted) and preserving the code. A new
+// account runs on its surrogate id (the engine account id).
 func (rt *restoreTx) restoreAccounts(ctx context.Context, accounts []backup.Account) error {
 	for _, a := range accounts {
 		groupID, err := optionalGroupID(ctx, rt.tx, a.GroupCode)
 		if err != nil {
 			return err
 		}
-		exists, err := rowExists(ctx, rt.tx, `SELECT 1 FROM accounts WHERE code = ?`, a.Code)
+		exists, err := rowExists(ctx, rt.tx, `SELECT 1 FROM account WHERE code = ?`, a.Code)
 		if err != nil {
 			return err
 		}
@@ -636,28 +670,21 @@ func (rt *restoreTx) restoreAccounts(ctx context.Context, accounts []backup.Acco
 		if exists {
 			if _, err := rt.tx.ExecContext(
 				ctx,
-				`UPDATE accounts
+				`UPDATE account
 				 SET title = ?, group_id = ?, notes = ?, blocked = ?, block_reason = ?
 				 WHERE code = ?`,
 				a.Title, groupID, a.Notes, a.Blocked, a.BlockReason, a.Code,
 			); err != nil {
 				return fmt.Errorf("store: restore account %q: %w", a.Code, err)
 			}
-		} else {
-			engineID, err := nextEngineAccountID(ctx, rt.tx)
-			if err != nil {
-				return err
-			}
-			if _, err := rt.tx.ExecContext(
-				ctx,
-				`INSERT INTO accounts
-				 (engine_account_id, code, title, group_id, notes, blocked, block_reason)
-				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-				int64(engineID.Uint64()), a.Code, a.Title, groupID,
-				a.Notes, a.Blocked, a.BlockReason,
-			); err != nil {
-				return fmt.Errorf("store: restore account %q: %w", a.Code, err)
-			}
+		} else if _, err := rt.tx.ExecContext(
+			ctx,
+			`INSERT INTO account
+			 (code, title, group_id, notes, blocked, block_reason)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+			a.Code, a.Title, groupID, a.Notes, a.Blocked, a.BlockReason,
+		); err != nil {
+			return fmt.Errorf("store: restore account %q: %w", a.Code, err)
 		}
 		rt.summary.AddApplied(backup.SectionAccountsGroups, 1)
 	}
@@ -678,7 +705,7 @@ func (rt *restoreTx) restoreBalances(ctx context.Context, balances []domain.Bala
 		}
 		exists, err := rowExists(
 			ctx, rt.tx,
-			`SELECT 1 FROM balances WHERE account_id = ? AND asset_id = ?`,
+			`SELECT 1 FROM balance WHERE account_id = ? AND asset_id = ?`,
 			accountID, assetID,
 		)
 		if err != nil {
@@ -691,15 +718,19 @@ func (rt *restoreTx) restoreBalances(ctx context.Context, balances []domain.Bala
 		if updatedAt.IsZero() {
 			updatedAt = time.Now().UTC()
 		}
+		available := settleOrZero(b.Available)
+		held := settleOrZero(b.Held)
+		incoming := settleOrZero(b.Incoming)
+		realizedPnl := settleOrZero(b.RealizedPnl)
 		if _, err := rt.tx.ExecContext(
 			ctx,
-			`INSERT OR REPLACE INTO balances
-			 (account_id, asset_id, available, held, incoming, realized_pnl,
-			  average_entry_price, updated_at)
+			`INSERT OR REPLACE INTO balance
+			 (account_id, asset_id, available, held,
+			  incoming, realized_pnl, average_entry_price, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			accountID, assetID,
-			settleOrZero(b.Available), settleOrZero(b.Held), settleOrZero(b.Incoming),
-			settleOrZero(b.RealizedPnl), b.AverageEntryPrice,
+			available, held, incoming, realizedPnl,
+			b.AverageEntryPrice,
 			updatedAt.UTC().Format(time.RFC3339Nano),
 		); err != nil {
 			return fmt.Errorf("store: restore balance %q/%q: %w", b.Account, b.Asset, err)
@@ -748,8 +779,8 @@ func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error 
 		if err != nil {
 			return err
 		}
-		applied, err := rt.putLimit(ctx, "limit_pnl_bounds", l.Scope, accountID, assetID,
-			`INSERT INTO limit_pnl_bounds
+		applied, err := rt.putLimit(ctx, "limit_pnl_bound", l.Scope, accountID, assetID,
+			`INSERT INTO limit_pnl_bound
 			 (scope, account_id, asset_id, lower_bound, upper_bound, initial_pnl)
 			 VALUES (?, ?, ?, ?, ?, ?)`,
 			[]any{l.Scope, accountID, assetID,
@@ -806,7 +837,7 @@ func (rt *restoreTx) restoreMarketData(ctx context.Context, data backup.Data) er
 	for _, inst := range data.MarketDataInstances {
 		exists, err := rowExists(
 			ctx, rt.tx,
-			`SELECT 1 FROM market_data_instances WHERE external_id = ?`,
+			`SELECT 1 FROM market_data_instance WHERE external_id = ?`,
 			inst.ExternalID.Bytes(),
 		)
 		if err != nil {
@@ -818,7 +849,7 @@ func (rt *restoreTx) restoreMarketData(ctx context.Context, data backup.Data) er
 		if exists {
 			if _, err := rt.tx.ExecContext(
 				ctx,
-				`UPDATE market_data_instances
+				`UPDATE market_data_instance
 				 SET provider = ?, label = ?, credentials = ?, enabled = ?
 				 WHERE external_id = ?`,
 				inst.Provider, inst.Label, inst.Credentials, inst.Enabled,
@@ -828,7 +859,7 @@ func (rt *restoreTx) restoreMarketData(ctx context.Context, data backup.Data) er
 			}
 		} else if _, err := rt.tx.ExecContext(
 			ctx,
-			`INSERT INTO market_data_instances
+			`INSERT INTO market_data_instance
 			 (external_id, provider, label, credentials, enabled)
 			 VALUES (?, ?, ?, ?, ?)`,
 			inst.ExternalID.Bytes(), inst.Provider, inst.Label,
@@ -840,7 +871,7 @@ func (rt *restoreTx) restoreMarketData(ctx context.Context, data backup.Data) er
 	}
 
 	// Instruments resolve their instance by the preserved external id and their
-	// assets by code; they upsert on (instance, external_symbol).
+	// asset by code; they upsert on (instance, external_symbol).
 	for _, instr := range data.MarketDataInstruments {
 		instanceID, err := resolveInstanceID(ctx, rt.tx, instr.Instance)
 		if err != nil {
@@ -856,7 +887,7 @@ func (rt *restoreTx) restoreMarketData(ctx context.Context, data backup.Data) er
 		}
 		exists, err := rowExists(
 			ctx, rt.tx,
-			`SELECT 1 FROM market_data_instruments WHERE instance_id = ? AND external_symbol = ?`,
+			`SELECT 1 FROM market_data_instrument WHERE instance_id = ? AND external_symbol = ?`,
 			instanceID, instr.ExternalSymbol,
 		)
 		if err != nil {
@@ -867,7 +898,7 @@ func (rt *restoreTx) restoreMarketData(ctx context.Context, data backup.Data) er
 		}
 		if _, err := rt.tx.ExecContext(
 			ctx,
-			`INSERT INTO market_data_instruments
+			`INSERT INTO market_data_instrument
 			 (instance_id, external_symbol, base_asset_id, quote_asset_id, enabled, manual_price)
 			 VALUES (?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(instance_id, external_symbol) DO UPDATE SET
@@ -891,8 +922,8 @@ func (rt *restoreTx) restoreQuotes(ctx context.Context, quotes []domain.MarketDa
 		err := rt.tx.QueryRowContext(
 			ctx,
 			`SELECT mdi.id
-			 FROM market_data_instruments mdi
-			 JOIN market_data_instances i ON i.id = mdi.instance_id
+			 FROM market_data_instrument mdi
+			 JOIN market_data_instance i ON i.id = mdi.instance_id
 			 WHERE i.external_id = ? AND mdi.external_symbol = ?`,
 			q.Instance.Bytes(), q.ExternalSymbol,
 		).Scan(&instrumentID)
@@ -907,7 +938,7 @@ func (rt *restoreTx) restoreQuotes(ctx context.Context, quotes []domain.MarketDa
 		}
 		exists, err := rowExists(
 			ctx, rt.tx,
-			`SELECT 1 FROM market_data_quotes WHERE instrument_id = ?`, instrumentID,
+			`SELECT 1 FROM market_data_quote WHERE instrument_id = ?`, instrumentID,
 		)
 		if err != nil {
 			return err
@@ -917,7 +948,7 @@ func (rt *restoreTx) restoreQuotes(ctx context.Context, quotes []domain.MarketDa
 		}
 		if _, err := rt.tx.ExecContext(
 			ctx,
-			`INSERT OR REPLACE INTO market_data_quotes
+			`INSERT OR REPLACE INTO market_data_quote
 			 (instrument_id, mark, bid, ask, as_of, received_at)
 			 VALUES (?, ?, ?, ?, ?, ?)`,
 			instrumentID, q.Mark, q.Bid, q.Ask,
@@ -974,7 +1005,7 @@ func (rt *restoreTx) restoreGeneralSettings(ctx context.Context, data backup.Dat
 		rt.summary.AddApplied(backup.SectionGeneralSettings, 1)
 	}
 	for _, key := range data.SigningKeys {
-		exists, err := rowExists(ctx, rt.tx, `SELECT 1 FROM signing_keys WHERE key_id = ?`, key.KeyID)
+		exists, err := rowExists(ctx, rt.tx, `SELECT 1 FROM signing_key WHERE key_id = ?`, key.KeyID)
 		if err != nil {
 			return err
 		}
@@ -987,7 +1018,7 @@ func (rt *restoreTx) restoreGeneralSettings(ctx context.Context, data backup.Dat
 		}
 		if _, err := rt.tx.ExecContext(
 			ctx,
-			`INSERT INTO signing_keys
+			`INSERT INTO signing_key
 			 (key_id, alg, private_key, public_key, created_at, active)
 			 VALUES (?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(key_id) DO UPDATE SET
@@ -1008,7 +1039,7 @@ func (rt *restoreTx) restoreUserSettings(ctx context.Context, settings []domain.
 	for _, s := range settings {
 		exists, err := rowExists(
 			ctx, rt.tx,
-			`SELECT 1 FROM user_settings WHERE user_id = ? AND setting_key = ?`,
+			`SELECT 1 FROM user_setting WHERE user_id = ? AND setting_key = ?`,
 			s.UserID, s.Key,
 		)
 		if err != nil {
@@ -1019,7 +1050,7 @@ func (rt *restoreTx) restoreUserSettings(ctx context.Context, settings []domain.
 		}
 		if _, err := rt.tx.ExecContext(
 			ctx,
-			`INSERT INTO user_settings (user_id, setting_key, setting_value)
+			`INSERT INTO user_setting (user_id, setting_key, setting_value)
 			 VALUES (?, ?, ?)
 			 ON CONFLICT(user_id, setting_key) DO UPDATE SET
 			   setting_value = excluded.setting_value`,
@@ -1037,7 +1068,7 @@ func (rt *restoreTx) restoreUserSettings(ctx context.Context, settings []domain.
 // restoreActivity restores adjustments, orders (with approvals), order events and
 // trades, each preserving its archived external id while resolving cross-row
 // links through the dictionaries inserted earlier. Orders land before their
-// events and trades so the order surrogate id those rows reference exists.
+// events and trade so the order surrogate id those rows reference exists.
 func (rt *restoreTx) restoreActivity(ctx context.Context, data backup.Data) error {
 	for _, adj := range data.Adjustments {
 		if err := rt.restoreAdjustment(ctx, adj); err != nil {
@@ -1078,7 +1109,7 @@ func (rt *restoreTx) restoreAdjustment(
 		return err
 	}
 	exists, err := rowExists(
-		ctx, rt.tx, `SELECT 1 FROM adjustments WHERE external_id = ?`, rec.ExternalID.Bytes(),
+		ctx, rt.tx, `SELECT 1 FROM adjustment WHERE external_id = ?`, rec.ExternalID.Bytes(),
 	)
 	if err != nil {
 		return err
@@ -1096,7 +1127,7 @@ func (rt *restoreTx) restoreAdjustment(
 	}
 	if _, err := rt.tx.ExecContext(
 		ctx,
-		`INSERT OR REPLACE INTO adjustments
+		`INSERT OR REPLACE INTO adjustment
 		 (external_id, account_id, asset_id, principal_id, at, source, status, request, outcome)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.ExternalID.Bytes(), accountID, assetID, principalID,
@@ -1128,7 +1159,7 @@ func (rt *restoreTx) restoreOrder(ctx context.Context, rec backup.OrderRecord) e
 		return err
 	}
 	exists, err := rowExists(
-		ctx, rt.tx, `SELECT 1 FROM orders WHERE external_id = ?`, o.ExternalID.Bytes(),
+		ctx, rt.tx, `SELECT 1 FROM order_record WHERE external_id = ?`, o.ExternalID.Bytes(),
 	)
 	if err != nil {
 		return err
@@ -1139,26 +1170,29 @@ func (rt *restoreTx) restoreOrder(ctx context.Context, rec backup.OrderRecord) e
 	if exists && rt.mode == backup.RestoreModeOverwrite {
 		if _, err := rt.tx.ExecContext(
 			ctx,
-			`UPDATE orders
+			`UPDATE order_record
 			 SET account_id = ?, base_asset_id = ?, quote_asset_id = ?, principal_id = ?,
 			     at = ?, source = ?, side = ?, amount_kind = ?, amount_value = ?,
 			     price = ?, status = ?, lock = ?
 			 WHERE external_id = ?`,
 			accountID, baseID, quoteID, principalID, atOrNow(o.At), string(o.Source),
-			string(o.Side), string(o.AmountKind), o.AmountValue, o.Price,
+			string(o.Side), string(o.AmountKind), o.AmountValue,
+			o.Price,
 			string(o.Status), nullableBlob(o.Lock), o.ExternalID.Bytes(),
 		); err != nil {
 			return fmt.Errorf("store: restore order %q: %w", o.ExternalID, err)
 		}
 	} else if _, err := rt.tx.ExecContext(
 		ctx,
-		`INSERT OR REPLACE INTO orders
+		`INSERT OR REPLACE INTO order_record
 		 (external_id, account_id, base_asset_id, quote_asset_id, principal_id,
-		  at, source, side, amount_kind, amount_value, price, status, lock)
+		  at, source, side, amount_kind, amount_value,
+		  price, status, lock)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		o.ExternalID.Bytes(), accountID, baseID, quoteID, principalID,
 		atOrNow(o.At), string(o.Source), string(o.Side), string(o.AmountKind),
-		o.AmountValue, o.Price, string(o.Status), nullableBlob(o.Lock),
+		o.AmountValue, o.Price,
+		string(o.Status), nullableBlob(o.Lock),
 	); err != nil {
 		return fmt.Errorf("store: restore order %q: %w", o.ExternalID, err)
 	}
@@ -1176,7 +1210,7 @@ func (rt *restoreTx) restoreOrder(ctx context.Context, rec backup.OrderRecord) e
 		}
 		if _, err := rt.tx.ExecContext(
 			ctx,
-			`INSERT INTO order_approvals
+			`INSERT INTO order_approval
 			 (order_id, token, signing_key_id, alg, mode, issued_at, expires_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(order_id) DO UPDATE SET
@@ -1204,7 +1238,7 @@ func (rt *restoreTx) restoreOrderEvent(ctx context.Context, ev domain.OrderEvent
 		return err
 	}
 	exists, err := rowExists(
-		ctx, rt.tx, `SELECT 1 FROM order_events WHERE external_id = ?`, ev.ExternalID.Bytes(),
+		ctx, rt.tx, `SELECT 1 FROM order_event WHERE external_id = ?`, ev.ExternalID.Bytes(),
 	)
 	if err != nil {
 		return err
@@ -1218,7 +1252,7 @@ func (rt *restoreTx) restoreOrderEvent(ctx context.Context, ev domain.OrderEvent
 	}
 	if _, err := rt.tx.ExecContext(
 		ctx,
-		`INSERT OR REPLACE INTO order_events
+		`INSERT OR REPLACE INTO order_event
 		 (external_id, order_id, principal_id, at, type, source, payload)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		ev.ExternalID.Bytes(), orderID, principalID, atOrNow(ev.At),
@@ -1252,7 +1286,7 @@ func (rt *restoreTx) restoreTrade(ctx context.Context, t domain.Trade) error {
 		return err
 	}
 	exists, err := rowExists(
-		ctx, rt.tx, `SELECT 1 FROM trades WHERE external_id = ?`, t.ExternalID.Bytes(),
+		ctx, rt.tx, `SELECT 1 FROM trade WHERE external_id = ?`, t.ExternalID.Bytes(),
 	)
 	if err != nil {
 		return err
@@ -1262,7 +1296,7 @@ func (rt *restoreTx) restoreTrade(ctx context.Context, t domain.Trade) error {
 	}
 	if _, err := rt.tx.ExecContext(
 		ctx,
-		`INSERT OR REPLACE INTO trades
+		`INSERT OR REPLACE INTO trade
 		 (external_id, order_id, account_id, base_asset_id, quote_asset_id,
 		  principal_id, at, source, side, quantity, price, lock_price)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -1288,6 +1322,10 @@ func (rt *restoreTx) restoreAudit(ctx context.Context, rows []domain.AuditRow) e
 		if rt.skipMachine(backup.SectionAuditLog, exists) {
 			continue
 		}
+		accountID, err := lookupID(ctx, rt.tx, "account", row.Account.String())
+		if err != nil {
+			return err
+		}
 		source := row.Source
 		if source == "" {
 			source = domain.SourceSystem
@@ -1295,11 +1333,11 @@ func (rt *restoreTx) restoreAudit(ctx context.Context, rows []domain.AuditRow) e
 		if _, err := rt.tx.ExecContext(
 			ctx,
 			`INSERT OR REPLACE INTO audit
-			 (external_id, account_code, account_title, actor_code, actor_title,
-			  at, action, source, detail)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			row.ExternalID.Bytes(), row.Account.String(), row.AccountTitle,
-			row.Actor, row.ActorTitle, atOrNow(row.At),
+			 (external_id, account_id, account_code, account_title, actor_code,
+			  actor_title, at, action, source, detail)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			row.ExternalID.Bytes(), accountID, row.Account.String(),
+			row.AccountTitle, row.Actor, row.ActorTitle, atOrNow(row.At),
 			string(row.Action), string(source), row.Detail,
 		); err != nil {
 			return fmt.Errorf("store: restore audit %q: %w", row.ExternalID, err)
@@ -1318,7 +1356,7 @@ func (rt *restoreTx) restoreAudit(ctx context.Context, rows []domain.AuditRow) e
 // adjustments, orders (and their events, trades and approval); deleting a group
 // clears the account links (SET NULL); deleting a market-data instance cascades
 // its instruments and quotes. Account-addressed sections honour the scope's
-// account/position selectors; the dictionaries assets and principals are never
+// account/position selectors; the dictionaries asset and principal are never
 // pruned (they are shared support rows every section's foreign keys resolve
 // against, carried in full rather than as a section).
 func (rt *restoreTx) prune(ctx context.Context, scope backup.Scope, data backup.Data) error {
@@ -1412,7 +1450,7 @@ func archiveScopeAccounts(
 	return accountScope{codes: codes}
 }
 
-// pruneAccountsGroups deletes the in-scope accounts the archive omits (their
+// pruneAccountsGroups deletes the in-scope account the archive omits (their
 // balances/adjustments/orders cascade) and then the in-scope groups it omits
 // (account links clear via SET NULL). The resolved account scope decides which
 // existing rows are in scope; an All/empty selector prunes the whole realm. A
@@ -1443,7 +1481,7 @@ func (rt *restoreTx) pruneAccountsGroups(
 			continue
 		}
 		if _, err := rt.tx.ExecContext(
-			ctx, `DELETE FROM accounts WHERE code = ?`, p.a,
+			ctx, `DELETE FROM account WHERE code = ?`, p.a,
 		); err != nil {
 			return fmt.Errorf("store: prune account %q: %w", p.a, err)
 		}
@@ -1456,7 +1494,7 @@ func (rt *restoreTx) pruneAccountsGroups(
 	for _, code := range scope.Accounts.Groups {
 		inScopeGroups[code] = true
 	}
-	groups, err := scanStrings(rt.tx.QueryContext(ctx, `SELECT code FROM account_groups`))
+	groups, err := scanStrings(rt.tx.QueryContext(ctx, `SELECT code FROM account_group`))
 	if err != nil {
 		return fmt.Errorf("store: prune groups scan: %w", err)
 	}
@@ -1468,7 +1506,7 @@ func (rt *restoreTx) pruneAccountsGroups(
 			continue
 		}
 		if _, err := rt.tx.ExecContext(
-			ctx, `DELETE FROM account_groups WHERE code = ?`, code,
+			ctx, `DELETE FROM account_group WHERE code = ?`, code,
 		); err != nil {
 			return fmt.Errorf("store: prune group %q: %w", code, err)
 		}
@@ -1482,8 +1520,8 @@ func (rt *restoreTx) accountCodeGroups(ctx context.Context) ([]codePair, error) 
 	rows, err := rt.tx.QueryContext(
 		ctx,
 		`SELECT a.code, COALESCE(g.code, '')
-		 FROM accounts a
-		 LEFT JOIN account_groups g ON g.id = a.group_id`,
+		 FROM account a
+		 LEFT JOIN account_group g ON g.id = a.group_id`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("store: prune account groups scan: %w", err)
@@ -1491,8 +1529,8 @@ func (rt *restoreTx) accountCodeGroups(ctx context.Context) ([]codePair, error) 
 	return scanCodePairs(rows)
 }
 
-// prunePositions deletes the in-scope balances the archive omits. The resolved
-// positions scope decides which balances are in scope; an All/empty selector
+// prunePositions deletes the in-scope balance the archive omits. The resolved
+// positions scope decides which balance are in scope; an All/empty selector
 // prunes the whole realm.
 func (rt *restoreTx) prunePositions(
 	ctx context.Context, positions accountScope, balances []domain.Balance,
@@ -1504,9 +1542,9 @@ func (rt *restoreTx) prunePositions(
 	rows, err := rt.tx.QueryContext(
 		ctx,
 		`SELECT a.code, ast.code
-		 FROM balances b
-		 JOIN accounts a   ON a.id   = b.account_id
-		 JOIN assets   ast ON ast.id = b.asset_id`,
+		 FROM balance b
+		 JOIN account a   ON a.id   = b.account_id
+		 JOIN asset   ast ON ast.id = b.asset_id`,
 	)
 	if err != nil {
 		return fmt.Errorf("store: prune positions scan: %w", err)
@@ -1521,9 +1559,9 @@ func (rt *restoreTx) prunePositions(
 		}
 		if _, err := rt.tx.ExecContext(
 			ctx,
-			`DELETE FROM balances
-			 WHERE account_id = (SELECT id FROM accounts WHERE code = ?)
-			   AND asset_id   = (SELECT id FROM assets   WHERE code = ?)`,
+			`DELETE FROM balance
+			 WHERE account_id = (SELECT id FROM account WHERE code = ?)
+			   AND asset_id   = (SELECT id FROM asset   WHERE code = ?)`,
 			p.a, p.b,
 		); err != nil {
 			return fmt.Errorf("store: prune balance %q/%q: %w", p.a, p.b, err)
@@ -1557,7 +1595,7 @@ func (rt *restoreTx) pruneLimits(
 	for _, l := range data.PnlBoundsLimits {
 		pnlKeep[limitKey(l.Scope, l.Account, l.Asset)] = true
 	}
-	return rt.pruneLimitTable(ctx, selector, accounts, "limit_pnl_bounds", pnlKeep)
+	return rt.pruneLimitTable(ctx, selector, accounts, "limit_pnl_bound", pnlKeep)
 }
 
 // pruneLimitTable deletes the in-scope rows of one limit table whose
@@ -1574,8 +1612,8 @@ func (rt *restoreTx) pruneLimitTable(
 		ctx,
 		`SELECT t.id, t.scope, a.code, ast.code
 		 FROM `+table+` t
-		 LEFT JOIN accounts a   ON a.id   = t.account_id
-		 LEFT JOIN assets   ast ON ast.id = t.asset_id`,
+		 LEFT JOIN account a   ON a.id   = t.account_id
+		 LEFT JOIN asset   ast ON ast.id = t.asset_id`,
 	)
 	if err != nil {
 		return fmt.Errorf("store: prune %s scan: %w", table, err)
@@ -1639,8 +1677,8 @@ func (rt *restoreTx) pruneMarketData(ctx context.Context, data backup.Data) erro
 	instrRows, err := rt.tx.QueryContext(
 		ctx,
 		`SELECT mdi.id, i.external_id, mdi.external_symbol
-		 FROM market_data_instruments mdi
-		 JOIN market_data_instances i ON i.id = mdi.instance_id`,
+		 FROM market_data_instrument mdi
+		 JOIN market_data_instance i ON i.id = mdi.instance_id`,
 	)
 	if err != nil {
 		return fmt.Errorf("store: prune md instruments scan: %w", err)
@@ -1677,7 +1715,7 @@ func (rt *restoreTx) pruneMarketData(ctx context.Context, data backup.Data) erro
 			continue
 		}
 		if _, err := rt.tx.ExecContext(
-			ctx, `DELETE FROM market_data_instruments WHERE id = ?`, instr.id,
+			ctx, `DELETE FROM market_data_instrument WHERE id = ?`, instr.id,
 		); err != nil {
 			return fmt.Errorf("store: prune md instrument id %d: %w", instr.id, err)
 		}
@@ -1688,7 +1726,7 @@ func (rt *restoreTx) pruneMarketData(ctx context.Context, data backup.Data) erro
 		keepInst[inst.ExternalID.String()] = true
 	}
 	instRows, err := rt.tx.QueryContext(
-		ctx, `SELECT id, external_id FROM market_data_instances`,
+		ctx, `SELECT id, external_id FROM market_data_instance`,
 	)
 	if err != nil {
 		return fmt.Errorf("store: prune md instances scan: %w", err)
@@ -1724,7 +1762,7 @@ func (rt *restoreTx) pruneMarketData(ctx context.Context, data backup.Data) erro
 			continue
 		}
 		if _, err := rt.tx.ExecContext(
-			ctx, `DELETE FROM market_data_instances WHERE id = ?`, inst.id,
+			ctx, `DELETE FROM market_data_instance WHERE id = ?`, inst.id,
 		); err != nil {
 			return fmt.Errorf("store: prune md instance id %d: %w", inst.id, err)
 		}
@@ -1742,9 +1780,9 @@ func (rt *restoreTx) pruneQuotes(ctx context.Context, quotes []domain.MarketData
 	rows, err := rt.tx.QueryContext(
 		ctx,
 		`SELECT q.instrument_id, i.external_id, mdi.external_symbol
-		 FROM market_data_quotes q
-		 JOIN market_data_instruments mdi ON mdi.id = q.instrument_id
-		 JOIN market_data_instances i ON i.id = mdi.instance_id`,
+		 FROM market_data_quote q
+		 JOIN market_data_instrument mdi ON mdi.id = q.instrument_id
+		 JOIN market_data_instance i ON i.id = mdi.instance_id`,
 	)
 	if err != nil {
 		return fmt.Errorf("store: prune quotes scan: %w", err)
@@ -1781,7 +1819,7 @@ func (rt *restoreTx) pruneQuotes(ctx context.Context, quotes []domain.MarketData
 			continue
 		}
 		if _, err := rt.tx.ExecContext(
-			ctx, `DELETE FROM market_data_quotes WHERE instrument_id = ?`, q.instrumentID,
+			ctx, `DELETE FROM market_data_quote WHERE instrument_id = ?`, q.instrumentID,
 		); err != nil {
 			return fmt.Errorf("store: prune quote %d: %w", q.instrumentID, err)
 		}
@@ -1836,7 +1874,7 @@ func (rt *restoreTx) pruneGeneralSettings(ctx context.Context, data backup.Data)
 	for _, key := range data.SigningKeys {
 		keepKeys[key.KeyID] = true
 	}
-	keyIDs, err := scanStrings(rt.tx.QueryContext(ctx, `SELECT key_id FROM signing_keys`))
+	keyIDs, err := scanStrings(rt.tx.QueryContext(ctx, `SELECT key_id FROM signing_key`))
 	if err != nil {
 		return fmt.Errorf("store: prune signing keys: %w", err)
 	}
@@ -1845,8 +1883,8 @@ func (rt *restoreTx) pruneGeneralSettings(ctx context.Context, data backup.Data)
 			continue
 		}
 		referenced, err := rowExists(
-			ctx, rt.tx, `SELECT 1 FROM order_approvals ap
-			 JOIN signing_keys sk ON sk.id = ap.signing_key_id
+			ctx, rt.tx, `SELECT 1 FROM order_approval ap
+			 JOIN signing_key sk ON sk.id = ap.signing_key_id
 			 WHERE sk.key_id = ?`, keyID,
 		)
 		if err != nil {
@@ -1856,7 +1894,7 @@ func (rt *restoreTx) pruneGeneralSettings(ctx context.Context, data backup.Data)
 			continue
 		}
 		if _, err := rt.tx.ExecContext(
-			ctx, `DELETE FROM signing_keys WHERE key_id = ?`, keyID,
+			ctx, `DELETE FROM signing_key WHERE key_id = ?`, keyID,
 		); err != nil {
 			return fmt.Errorf("store: prune signing key %q: %w", keyID, err)
 		}
@@ -1871,7 +1909,7 @@ func (rt *restoreTx) pruneUserSettings(ctx context.Context, settings []domain.Us
 		keep[s.UserID+"\x00"+s.Key] = true
 	}
 	rows, err := rt.tx.QueryContext(
-		ctx, `SELECT user_id, setting_key FROM user_settings`,
+		ctx, `SELECT user_id, setting_key FROM user_setting`,
 	)
 	if err != nil {
 		return fmt.Errorf("store: prune user settings scan: %w", err)
@@ -1885,7 +1923,7 @@ func (rt *restoreTx) pruneUserSettings(ctx context.Context, settings []domain.Us
 			continue
 		}
 		if _, err := rt.tx.ExecContext(
-			ctx, `DELETE FROM user_settings WHERE user_id = ? AND setting_key = ?`, p.a, p.b,
+			ctx, `DELETE FROM user_setting WHERE user_id = ? AND setting_key = ?`, p.a, p.b,
 		); err != nil {
 			return fmt.Errorf("store: prune user setting %q/%q: %w", p.a, p.b, err)
 		}
@@ -1904,7 +1942,7 @@ func (rt *restoreTx) pruneActivity(
 		keepAdj[adj.ExternalID.String()] = true
 	}
 	if err := rt.pruneByExternalID(
-		ctx, accounts, "adjustments", keepAdj,
+		ctx, accounts, "adjustment", keepAdj,
 	); err != nil {
 		return err
 	}
@@ -1912,7 +1950,7 @@ func (rt *restoreTx) pruneActivity(
 	for _, rec := range data.Orders {
 		keepOrders[rec.Order.ExternalID.String()] = true
 	}
-	return rt.pruneByExternalID(ctx, accounts, "orders", keepOrders)
+	return rt.pruneByExternalID(ctx, accounts, "order_record", keepOrders)
 }
 
 // pruneByExternalID deletes the in-scope rows of an account-addressed,
@@ -1926,7 +1964,7 @@ func (rt *restoreTx) pruneByExternalID(
 		ctx,
 		`SELECT t.external_id, a.code
 		 FROM `+table+` t
-		 JOIN accounts a ON a.id = t.account_id`,
+		 JOIN account a ON a.id = t.account_id`,
 	)
 	if err != nil {
 		return fmt.Errorf("store: prune %s scan: %w", table, err)

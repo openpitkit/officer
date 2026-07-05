@@ -62,6 +62,99 @@ export interface Account {
   blockReason: string;
   group: string;
   notes: string;
+  positionCount?: number;
+}
+
+/** Text pattern anchoring used by account/group list filters. */
+export type TextMatchMode = "contains" | "starts_with" | "ends_with" | "exact";
+
+/** Blocked-state account/group list filter. */
+export type StatusListFilter = "all" | "active" | "blocked";
+
+/** Aggregate count list filter. */
+export type CountListFilter = "all" | "has" | "none";
+
+/** Numeric position-count filter mode. */
+export type PositionCountFilterMode =
+  | "all"
+  | "eq"
+  | "neq"
+  | "gt"
+  | "gte"
+  | "lt"
+  | "lte"
+  | "greater_than"
+  | "less_than"
+  | "between";
+
+/** Sort direction accepted by list endpoints. */
+export type SortOrder = "asc" | "desc";
+
+/** Server-side page request. */
+export interface PageRequest {
+  limit?: number;
+  offset?: number;
+}
+
+/** Server-side sort request. */
+export interface SortSpec {
+  sort?: string;
+  order?: SortOrder;
+}
+
+/** Paged list response with total count before limit/offset. */
+export interface PagedResult<T> {
+  items: T[];
+  total: number;
+}
+
+/** Filter options accepted by GET /accounts. */
+export interface AccountListFilters extends PageRequest, SortSpec {
+  code?: string;
+  codeMatch?: TextMatchMode;
+  status?: StatusListFilter;
+  positionCountMode?: PositionCountFilterMode;
+  positionCountMin?: string;
+  positionCountMax?: string;
+  blockReason?: string;
+  blockReasonMatch?: TextMatchMode;
+  /** Exact group selection (empty string = accounts with no group). */
+  group?: string;
+}
+
+// --- Assets ---
+
+/** A tradable asset registered in the control plane (mirrors the assetDTO wire
+ *  shape). */
+export interface Asset {
+  code: string;
+  title: string;
+  assetClass: string;
+}
+
+/** Filter options accepted by GET /assets. */
+export interface AssetListFilters extends PageRequest, SortSpec {
+  code?: string;
+  codeMatch?: TextMatchMode;
+  class?: string;
+  classMatch?: TextMatchMode;
+}
+
+/** An asset class entry from the class dictionary (mirrors the assetClassDTO
+ *  wire shape). */
+export interface AssetClass {
+  code: string;
+  title: string;
+  notes: string;
+  assetCount: number;
+}
+
+/** Filter options accepted by GET /asset-classes. */
+export interface AssetClassListFilters extends PageRequest, SortSpec {
+  code?: string;
+  codeMatch?: TextMatchMode;
+  notes?: string;
+  notesMatch?: TextMatchMode;
 }
 
 // --- Groups ---
@@ -73,6 +166,25 @@ export interface Group {
   notes: string;
   blocked: boolean;
   blockReason: string;
+  accountCount?: number;
+  positionCount?: number;
+}
+
+/** Filter options accepted by GET /groups. */
+export interface GroupListFilters extends PageRequest, SortSpec {
+  code?: string;
+  codeMatch?: TextMatchMode;
+  status?: StatusListFilter;
+  positionCountMode?: PositionCountFilterMode;
+  positionCountMin?: string;
+  positionCountMax?: string;
+  accountCountMode?: PositionCountFilterMode;
+  accountCountMin?: string;
+  accountCountMax?: string;
+  notes?: string;
+  notesMatch?: TextMatchMode;
+  blockReason?: string;
+  blockReasonMatch?: TextMatchMode;
 }
 
 // --- Limits / Policies ---
@@ -121,6 +233,58 @@ export interface Limit {
   account: string;
   asset: string;
   values: Record<string, string>;
+}
+
+/** Discriminant of a policy row returned by the unified GET /limits list. */
+export type PolicyKind =
+  | "rate_limit"
+  | "order_size_limit"
+  | "pnl_bounds_kill_switch";
+
+/** Rate-limit barrier values (window in ms, integer order cap). */
+export interface PolicyRateValues {
+  windowMs: number;
+  maxOrders: number;
+}
+
+/** Order-size barrier values as exact decimal strings (empty when unset). */
+export interface PolicyOrderSizeValues {
+  maxQuantity: string;
+  maxNotional: string;
+}
+
+/** P&L-bounds barrier values as exact decimal strings (empty when unset). */
+export interface PolicyPnlBoundsValues {
+  lowerBound: string;
+  upperBound: string;
+  initialPnl: string;
+}
+
+/** Discriminated value carrier: exactly one member is present per `kind`. */
+export interface PolicyValues {
+  rate?: PolicyRateValues;
+  orderSize?: PolicyOrderSizeValues;
+  pnlBounds?: PolicyPnlBoundsValues;
+}
+
+/** One policy row from the unified, paged GET /limits list (the policyDTO wire
+ *  shape). The `kind` selects which member of `values` is populated. */
+export interface Policy {
+  kind: PolicyKind;
+  scope: string;
+  account: string;
+  asset: string;
+  values: PolicyValues;
+}
+
+/** Policy-kind selector accepted by the GET /limits `policy` query param. */
+export type PolicyFilter = "all" | "rate" | "order_size" | "pnl_bounds";
+
+/** Filter options accepted by the unified, paged GET /limits list. */
+export interface PolicyListFilters extends PageRequest, SortSpec {
+  account?: string;
+  asset?: string;
+  policy?: PolicyFilter;
 }
 
 // --- Balances ---
@@ -173,6 +337,7 @@ export interface AdjustmentRejected {
 
 /** The request body captured on an adjustment record. */
 export interface AdjustmentRequest {
+  id?: string;
   externalId?: string;
   asset: string;
   balance?: AdjustmentAmount;
@@ -208,6 +373,65 @@ export type OrderSide = "buy" | "sell";
 
 /** How the order amount is denominated. */
 export type AmountKind = "quantity" | "volume";
+
+/** Numeric range filter mode for exact decimal and time fields. */
+export type RangeFilterMode =
+  | "all"
+  | "eq"
+  | "neq"
+  | "gt"
+  | "gte"
+  | "lt"
+  | "lte"
+  | "after"
+  | "before"
+  | "greater_than"
+  | "less_than"
+  | "between";
+
+/** Filter options accepted by GET /orders. */
+export interface OrderListFilters extends PageRequest, SortSpec {
+  account?: string;
+  source?: string;
+  side?: "all" | OrderSide;
+  status?: string;
+  baseAsset?: string;
+  quoteAsset?: string;
+  amountMode?: RangeFilterMode;
+  amountMin?: string;
+  amountMax?: string;
+  priceMode?: RangeFilterMode;
+  priceMin?: string;
+  priceMax?: string;
+  atMode?: RangeFilterMode;
+  atMin?: string;
+  atMax?: string;
+}
+
+/** Filter options accepted by GET /balances. */
+export interface BalanceListFilters extends PageRequest, SortSpec {
+  account?: string;
+  groupCode?: string;
+  asset?: string;
+  availableMode?: RangeFilterMode;
+  availableMin?: string;
+  availableMax?: string;
+  heldMode?: RangeFilterMode;
+  heldMin?: string;
+  heldMax?: string;
+  incomingMode?: RangeFilterMode;
+  incomingMin?: string;
+  incomingMax?: string;
+  averageEntryPriceMode?: RangeFilterMode;
+  averageEntryPriceMin?: string;
+  averageEntryPriceMax?: string;
+  realizedPnlMode?: RangeFilterMode;
+  realizedPnlMin?: string;
+  realizedPnlMax?: string;
+  updatedAtMode?: RangeFilterMode;
+  updatedAfter?: string;
+  updatedBefore?: string;
+}
 
 /** An order record. */
 export interface Order {

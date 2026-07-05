@@ -146,6 +146,40 @@ func TestListOrders_BadLimit(t *testing.T) {
 	}
 }
 
+func TestListOrders_BadQueryParams(t *testing.T) {
+	// Every malformed list query param is a 400 validation error, never silently
+	// ignored. amountMin is only parsed when amountMode selects a bounded range.
+	tests := []struct {
+		name  string
+		query string
+	}{
+		{"unknown_sort", "?sort=unknown"},
+		{"invalid_side", "?side=invalid"},
+		{"amount_not_decimal", "?amountMode=greater_than&amountMin=not-a-decimal"},
+		{"negative_limit", "?limit=-1"},
+		{"negative_offset", "?offset=-1"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := newRouter(&fakeService{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+				"/api/v1/orders"+tc.query, nil))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("want 400, got %d", rec.Code)
+			}
+			m := bodyMap(t, rec.Result())
+			errObj, _ := m["error"].(map[string]any)
+			if errObj["code"] != "validation" {
+				t.Fatalf("want code=validation, got %v", errObj["code"])
+			}
+		})
+	}
+}
+
 func TestListOrders_LimitCapping(t *testing.T) {
 	// A limit beyond listCapREST is silently capped, not an error.
 	r, err := newRouter(&fakeService{})
@@ -385,6 +419,9 @@ func TestListTrades_Seeded(t *testing.T) {
 		t.Fatalf("want externalId, got %v", tr["externalId"])
 	}
 	assertNoSurrogateID(t, tr)
+	if m["total"] != float64(1) {
+		t.Fatalf("unexpected envelope: %v", m)
+	}
 }
 
 func TestListTrades_Empty(t *testing.T) {
@@ -400,6 +437,9 @@ func TestListTrades_Empty(t *testing.T) {
 	m := bodyMap(t, rec.Result())
 	if trades, ok := m["trades"].([]any); !ok || len(trades) != 0 {
 		t.Fatalf("want trades=[], got %v", m["trades"])
+	}
+	if m["total"] != float64(0) {
+		t.Fatalf("unexpected envelope: %v", m)
 	}
 }
 
@@ -449,6 +489,41 @@ func TestListTrades_BadLimit(t *testing.T) {
 				"/api/v1/trades?limit="+tc.limit, nil))
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("want 400, got %d", rec.Code)
+			}
+		})
+	}
+}
+
+func TestListTrades_BadQueryParams(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+	}{
+		{"unknown_sort", "?sort=unknown"},
+		{"invalid_order", "?sort=quantity&order=sideways"},
+		{"invalid_side", "?side=invalid"},
+		{"quantity_not_decimal", "?quantityMode=gte&quantityMin=not-a-decimal"},
+		{"price_bad_range", "?priceMode=between&priceMin=10&priceMax=2"},
+		{"lock_price_missing_bound", "?lockPriceMode=neq"},
+		{"invalid_time", "?atMode=after&atMin=not-time"},
+		{"bad_external_id", "?externalId=not-valid"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := newRouter(&fakeService{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+				"/api/v1/trades"+tc.query, nil))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("want 400, got %d", rec.Code)
+			}
+			m := bodyMap(t, rec.Result())
+			errObj, _ := m["error"].(map[string]any)
+			if errObj["code"] != "validation" {
+				t.Fatalf("want code=validation, got %v", errObj["code"])
 			}
 		})
 	}
@@ -509,6 +584,9 @@ func TestListAdjustments_Seeded(t *testing.T) {
 	if a["externalId"] != extID("adj-1").String() {
 		t.Fatalf("want externalId, got %v", a["externalId"])
 	}
+	if m["total"] != float64(1) {
+		t.Fatalf("unexpected envelope: %v", m)
+	}
 }
 
 func TestListAdjustments_Empty(t *testing.T) {
@@ -524,6 +602,9 @@ func TestListAdjustments_Empty(t *testing.T) {
 	m := bodyMap(t, rec.Result())
 	if adjustments, ok := m["adjustments"].([]any); !ok || len(adjustments) != 0 {
 		t.Fatalf("want adjustments=[], got %v", m["adjustments"])
+	}
+	if m["total"] != float64(0) {
+		t.Fatalf("unexpected envelope: %v", m)
 	}
 }
 
@@ -573,6 +654,36 @@ func TestListAdjustments_BadLimit(t *testing.T) {
 				"/api/v1/adjustments?limit="+tc.limit, nil))
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("want 400, got %d", rec.Code)
+			}
+		})
+	}
+}
+
+func TestListAdjustments_BadQueryParams(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+	}{
+		{"unknown_sort", "?sort=unknown"},
+		{"invalid_status", "?status=bogus"},
+		{"invalid_time_mode", "?atMode=around&atMin=2026-01-02T03:04:05Z"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := newRouter(&fakeService{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+				"/api/v1/adjustments"+tc.query, nil))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("want 400, got %d", rec.Code)
+			}
+			m := bodyMap(t, rec.Result())
+			errObj, _ := m["error"].(map[string]any)
+			if errObj["code"] != "validation" {
+				t.Fatalf("want code=validation, got %v", errObj["code"])
 			}
 		})
 	}
@@ -892,7 +1003,7 @@ func TestApplyExecutionReport_BadID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := bytes.NewBufferString(`{"quantity":"1","price":"100","final":true}`)
+	body := bytes.NewBufferString(`{"quantity":"1","price":"100","leavesQuantity":"0","final":true}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/orders/unknown-id/execution-reports", body))
@@ -933,7 +1044,7 @@ func TestApplyExecutionReport_ServiceError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := bytes.NewBufferString(`{"quantity":"1","price":"100","final":true}`)
+	body := bytes.NewBufferString(`{"quantity":"1","price":"100","leavesQuantity":"0","final":true}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports", body))
@@ -953,7 +1064,7 @@ func TestApplyExecutionReport_TerminalOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := bytes.NewBufferString(`{"quantity":"1","price":"100","final":true}`)
+	body := bytes.NewBufferString(`{"quantity":"1","price":"100","leavesQuantity":"0","final":true}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports", body))
@@ -977,7 +1088,7 @@ func TestApplyExecutionReport_NotFound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := bytes.NewBufferString(`{"quantity":"1","price":"100","final":true}`)
+	body := bytes.NewBufferString(`{"quantity":"1","price":"100","leavesQuantity":"0","final":true}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/orders/"+extID("missing").String()+"/execution-reports", body))

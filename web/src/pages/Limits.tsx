@@ -15,24 +15,25 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { useDeferredValue, useMemo, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
+import type { KeyboardEvent } from "react";
 import { ExternalLink, Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
-import type { Limit } from "@/api/types";
-import { useAccounts } from "@/api/useAccounts";
-import { useBalances } from "@/api/useBalances";
-import { useLimits } from "@/api/useLimits";
+import type {
+  Limit,
+  PolicyFilter,
+  PolicyListFilters,
+  SortOrder,
+} from "@/api/types";
+import { useLimitsPage } from "@/api/useLimits";
 import {
-  getPolicies,
   getPolicyCatalogEntry,
   policyCatalogDescription,
   policyLabel,
   scopeLabel,
-  type Policy,
 } from "@/api/vocabulary";
-import { Autocomplete } from "@/components/Autocomplete";
 import { EmptyState, ErrorBanner, ErrorState, TableSkeleton } from "@/components/PageStates";
 import { Page } from "@/components/Page";
 import { RefreshButton } from "@/components/RefreshButton";
@@ -53,9 +54,21 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { Label } from "@/components/ui/label";
-import { ApiError, RowActions, useOfficerApi } from "@/framework";
+import {
+  ApiError,
+  AutocompleteFilterField,
+  ColumnHeader,
+  DeleteButton,
+  EditButton,
+  FieldLabel,
+  FilterBar,
+  FilterByButton,
+  IdCell,
+  RowActions,
+  ShareLinkButton,
+  SortableHeader,
+  useOfficerApi,
+} from "@/framework";
 import {
   Select,
   SelectContent,
@@ -71,16 +84,51 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  hasNextPage,
-  knownPageCount,
-  slicePage,
-} from "@/lib/tablePagination";
+import { absoluteAppUrl } from "@/lib/shareLink";
+import { sortDirection } from "@/lib/sortDirection";
+import { knownPageCount } from "@/lib/tablePagination";
 import { usePersistentPageSize } from "@/lib/tablePageSize";
 import { LimitDialog } from "@/pages/LimitDialog";
-import type { LimitRowActionContext } from "@/pages/rowActions";
 
-const ALL = "__all__";
+const ALL = "all";
+const SCOPE_COLUMN_CLASS = "w-[var(--policies-scope-column-width)]";
+
+// Wire policy-filter value -> the catalog kind id it selects, for labels and
+// the description strip. The wire param is the short form; the catalog keys on
+// the full kind id.
+const POLICY_FILTER_KIND: Record<
+  Exclude<PolicyFilter, "all">,
+  string
+> = {
+  rate: "rate_limit",
+  order_size: "order_size_limit",
+  pnl_bounds: "pnl_bounds_kill_switch",
+};
+
+const POLICY_FILTERS: Exclude<PolicyFilter, "all">[] = [
+  "rate",
+  "order_size",
+  "pnl_bounds",
+];
+
+function policyFilterFromParams(params: URLSearchParams): PolicyFilter {
+  const policy = params.get("policy");
+  return policy === "rate" || policy === "order_size" || policy === "pnl_bounds"
+    ? policy
+    : ALL;
+}
+
+function sortFromParams(params: URLSearchParams): {
+  sort?: string;
+  order?: SortOrder;
+} {
+  const sort = params.get("sort") ?? undefined;
+  const order = params.get("order");
+  return {
+    sort,
+    order: order === "asc" || order === "desc" ? order : undefined,
+  };
+}
 
 function errMessage(err: unknown): string {
   if (err instanceof ApiError) {
@@ -89,13 +137,21 @@ function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+function usePolicyCount(policy: Exclude<PolicyFilter, "all">) {
+  const filters = useMemo<PolicyListFilters>(
+    () => ({ policy, limit: 1, offset: 0 }),
+    [policy],
+  );
+  return useLimitsPage(filters);
+}
+
 // Policy description strip shown near the filter when a single policy is selected.
-function PolicyDescription({ policy }: { policy: Policy | typeof ALL }) {
+function PolicyDescription({ policy }: { policy: PolicyFilter }) {
   const { t } = useTranslation("policies");
   if (policy === ALL) {
     return null;
   }
-  const entry = getPolicyCatalogEntry(policy);
+  const entry = getPolicyCatalogEntry(POLICY_FILTER_KIND[policy]);
   if (!entry) {
     return null;
   }
@@ -204,10 +260,22 @@ function DeleteConfirm({
 
 function PoliciesTable({
   limits,
-  actionsCtx,
+  activeSort,
+  activeOrder,
+  onSortChange,
+  onFilterAccount,
+  onFilterAsset,
+  onEdit,
+  onDelete,
 }: {
   limits: Limit[];
-  actionsCtx: LimitRowActionContext;
+  activeSort?: string;
+  activeOrder?: SortOrder;
+  onSortChange: (sort?: string, order?: SortOrder) => void;
+  onFilterAccount: (account: string) => void;
+  onFilterAsset: (asset: string) => void;
+  onEdit: (limit: Limit) => void;
+  onDelete: (limit: Limit) => void;
 }) {
   const { t } = useTranslation("policies");
   const { t: tc } = useTranslation();
@@ -215,12 +283,75 @@ function PoliciesTable({
     <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
-            <TableHead>{t("table.policy")}</TableHead>
-            <TableHead>{t("table.scope")}</TableHead>
-            <TableHead>{t("table.account")}</TableHead>
-            <TableHead>{t("table.asset")}</TableHead>
-            <TableHead>{t("table.values")}</TableHead>
-            <TableHead className="text-right">{t("table.actions")}</TableHead>
+            <TableHead>
+              <SortableHeader
+                field="policy"
+                label={t("table.policy")}
+                description={t("table.columnDescriptions.policy")}
+                direction={sortDirection(activeSort, activeOrder, "policy")}
+                onSort={(field, next) =>
+                  onSortChange(
+                    next === "none" ? undefined : field,
+                    next === "none" ? undefined : next,
+                  )
+                }
+              />
+            </TableHead>
+            <TableHead className={SCOPE_COLUMN_CLASS}>
+              <SortableHeader
+                field="scope"
+                label={t("table.scope")}
+                description={t("table.columnDescriptions.scope")}
+                direction={sortDirection(activeSort, activeOrder, "scope")}
+                onSort={(field, next) =>
+                  onSortChange(
+                    next === "none" ? undefined : field,
+                    next === "none" ? undefined : next,
+                  )
+                }
+              />
+            </TableHead>
+            <TableHead>
+              <SortableHeader
+                field="account"
+                label={t("table.account")}
+                description={t("table.columnDescriptions.account")}
+                direction={sortDirection(activeSort, activeOrder, "account")}
+                onSort={(field, next) =>
+                  onSortChange(
+                    next === "none" ? undefined : field,
+                    next === "none" ? undefined : next,
+                  )
+                }
+              />
+            </TableHead>
+            <TableHead>
+              <SortableHeader
+                field="asset"
+                label={t("table.asset")}
+                description={t("table.columnDescriptions.asset")}
+                direction={sortDirection(activeSort, activeOrder, "asset")}
+                onSort={(field, next) =>
+                  onSortChange(
+                    next === "none" ? undefined : field,
+                    next === "none" ? undefined : next,
+                  )
+                }
+              />
+            </TableHead>
+            <TableHead>
+              <ColumnHeader description={t("table.columnDescriptions.values")}>
+                {t("table.values")}
+              </ColumnHeader>
+            </TableHead>
+            <TableHead className="text-right">
+              <ColumnHeader
+                align="right"
+                description={t("table.columnDescriptions.actions")}
+              >
+                {t("table.actions")}
+              </ColumnHeader>
+            </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -232,22 +363,86 @@ function PoliciesTable({
               <TableCell>
                 <Badge variant="accent">{policyLabel(tc, limit.policy)}</Badge>
               </TableCell>
-              <TableCell className="text-xs text-muted-lt">
+              <TableCell
+                className={`${SCOPE_COLUMN_CLASS} text-xs text-muted-lt`}
+              >
                 {scopeLabel(tc, limit.scope)}
               </TableCell>
               <TableCell className="nums text-xs">
-                {limit.account || tc("value.none")}
+                {limit.account ? (
+                  <div className="flex min-w-0 items-center gap-1">
+                    <IdCell
+                      value={limit.account}
+                      copyTitle={tc("rowActions.copyId")}
+                      copiedTitle={tc("rowActions.copiedId")}
+                    />
+                    <span className="ml-auto flex shrink-0 items-center">
+                      <FilterByButton
+                        size={28}
+                        title={tc("rowActions.filterByTitle", {
+                          field: limit.account,
+                        })}
+                        href={absoluteAppUrl(
+                          `/policies?account=${encodeURIComponent(limit.account)}`,
+                        )}
+                        onClick={() => onFilterAccount(limit.account)}
+                      />
+                    </span>
+                  </div>
+                ) : (
+                  tc("value.none")
+                )}
               </TableCell>
               <TableCell className="nums text-xs">
-                {limit.asset || tc("value.none")}
+                {limit.asset ? (
+                  <div className="flex min-w-0 items-center gap-1">
+                    <span className="min-w-0 truncate">{limit.asset}</span>
+                    <span className="ml-auto flex shrink-0 items-center">
+                      <FilterByButton
+                        size={28}
+                        title={tc("rowActions.filterByTitle", {
+                          field: limit.asset,
+                        })}
+                        href={absoluteAppUrl(
+                          `/policies?asset=${encodeURIComponent(limit.asset)}`,
+                        )}
+                        onClick={() => onFilterAsset(limit.asset)}
+                      />
+                    </span>
+                  </div>
+                ) : (
+                  tc("value.none")
+                )}
               </TableCell>
               <TableCell>
                 <ValueChips values={limit.values} />
               </TableCell>
-              <TableCell>
-                <div className="flex justify-end gap-2">
-                  <RowActions kind="limit" row={limit} ctx={actionsCtx} />
-                </div>
+              <TableCell className="text-right">
+                <RowActions>
+                  <ShareLinkButton
+                    href={absoluteAppUrl(
+                      `/policies?account=${encodeURIComponent(
+                        limit.account,
+                      )}&policy=${encodeURIComponent(limit.policy)}`,
+                    )}
+                    title={tc("rowActions.shareTitle", {
+                      entity: policyLabel(tc, limit.policy),
+                    })}
+                    copiedTitle={tc("rowActions.copiedLink")}
+                  />
+                  <EditButton
+                    title={tc("rowActions.editTitle", {
+                      entity: policyLabel(tc, limit.policy),
+                    })}
+                    onClick={() => onEdit(limit)}
+                  />
+                  <DeleteButton
+                    title={tc("rowActions.deleteTitle", {
+                      entity: policyLabel(tc, limit.policy),
+                    })}
+                    onClick={() => onDelete(limit)}
+                  />
+                </RowActions>
               </TableCell>
             </TableRow>
           ))}
@@ -259,99 +454,195 @@ function PoliciesTable({
 export function Limits() {
   const { t } = useTranslation("policies");
   const { t: tc } = useTranslation();
+  const { fetchAccounts, fetchAssets } = useOfficerApi();
   const [searchParams] = useSearchParams();
   const initialAccount = searchParams.get("account") ?? "";
+  const initialAsset = searchParams.get("asset") ?? "";
 
   const [accountFilter, setAccountFilter] = useState(initialAccount);
-  const [policyFilter, setPolicyFilter] = useState<Policy | typeof ALL>(ALL);
+  const [assetFilter, setAssetFilter] = useState(initialAsset);
+  const [accountDraft, setAccountDraft] = useState(initialAccount);
+  const [assetDraft, setAssetDraft] = useState(initialAsset);
+  const [policyFilter, setPolicyFilter] = useState<PolicyFilter>(() =>
+    policyFilterFromParams(searchParams),
+  );
+  const [sort, setSort] = useState<{ sort?: string; order?: SortOrder }>(() =>
+    sortFromParams(searchParams),
+  );
   const [page, setPage] = useState(0);
   const [size, setSize] = usePersistentPageSize(
     "pit-officer-policies-page-size",
   );
 
-  // Defer the account filter so server-side polling does not refire on every
-  // keystroke; the input stays responsive while the fetch debounces.
-  const deferredAccount = useDeferredValue(accountFilter.trim());
-  const { load, reload } = useLimits(deferredAccount);
+  const deferredAccountDraft = useDeferredValue(accountDraft.trim());
+  const deferredAssetDraft = useDeferredValue(assetDraft.trim());
+  const hasActiveFilters =
+    accountFilter !== "" || assetFilter !== "" || policyFilter !== ALL;
+  const clearFilters = () => {
+    setAccountDraft("");
+    setAccountFilter("");
+    setAssetDraft("");
+    setAssetFilter("");
+    setPolicyFilter(ALL);
+    setPage(0);
+  };
 
-  // Account suggestions from the accounts hook.
-  const accountsLoad = useAccounts();
-  const accountSuggestions = useMemo(() => {
-    if (accountsLoad.load.state !== "ready") {
-      return [];
+  const filters = useMemo<PolicyListFilters>(
+    () => {
+      const next: PolicyListFilters = {
+        account: accountFilter || undefined,
+        asset: assetFilter || undefined,
+        policy: policyFilter,
+        sort: sort.sort,
+        order: sort.order,
+        limit: size,
+        offset: page * size,
+      };
+      return next;
+    },
+    [
+      accountFilter,
+      assetFilter,
+      page,
+      policyFilter,
+      size,
+      sort.order,
+      sort.sort,
+    ],
+  );
+  const { load, reload } = useLimitsPage(filters);
+  const rateCount = usePolicyCount("rate");
+  const orderSizeCount = usePolicyCount("order_size");
+  const pnlBoundsCount = usePolicyCount("pnl_bounds");
+  const policyCounts = useMemo(() => {
+    const next: Record<string, number> = {};
+    if (rateCount.load.state === "ready") {
+      next[POLICY_FILTER_KIND.rate] = rateCount.load.data.total;
     }
-    return accountsLoad.load.data.map((a) => a.code);
-  }, [accountsLoad.load]);
+    if (orderSizeCount.load.state === "ready") {
+      next[POLICY_FILTER_KIND.order_size] = orderSizeCount.load.data.total;
+    }
+    if (pnlBoundsCount.load.state === "ready") {
+      next[POLICY_FILTER_KIND.pnl_bounds] = pnlBoundsCount.load.data.total;
+    }
+    return next;
+  }, [
+    orderSizeCount.load,
+    pnlBoundsCount.load,
+    rateCount.load,
+  ]);
+  const reloadPolicyCounts = useCallback(() => {
+    rateCount.reload();
+    orderSizeCount.reload();
+    pnlBoundsCount.reload();
+  }, [orderSizeCount, pnlBoundsCount, rateCount]);
+  const reloadLimits = useCallback(() => {
+    reload();
+    reloadPolicyCounts();
+  }, [reload, reloadPolicyCounts]);
 
-  // Asset suggestions: union of assets from limits and balances.
-  const balancesLoad = useBalances();
-  const assetSuggestions = useMemo(() => {
-    const set = new Set<string>();
-    if (load.state === "ready") {
-      for (const l of load.data) {
-        if (l.asset) {
-          set.add(l.asset);
-        }
-      }
+  const [accountSuggestions, setAccountSuggestions] = useState<string[]>([]);
+  const [assetSuggestions, setAssetSuggestions] = useState<string[]>([]);
+  const visibleAccountSuggestions =
+    deferredAccountDraft.trim() === "" ? [] : accountSuggestions;
+  const visibleAssetSuggestions =
+    deferredAssetDraft.trim() === "" ? [] : assetSuggestions;
+
+  useEffect(() => {
+    const query = deferredAccountDraft.trim();
+    if (query === "") {
+      return;
     }
-    if (balancesLoad.load.state === "ready") {
-      for (const b of balancesLoad.load.data) {
-        if (b.asset) {
-          set.add(b.asset);
+    const controller = new AbortController();
+    void fetchAccounts(
+      { code: query, codeMatch: "starts_with", limit: 8, sort: "code" },
+      controller.signal,
+    )
+      .then((accounts) =>
+        setAccountSuggestions(accounts.map((account) => account.code)),
+      )
+      .catch((err: unknown) => {
+        if (!controller.signal.aborted) {
+          console.error(err);
+          setAccountSuggestions([]);
         }
-      }
+      });
+    return () => controller.abort();
+  }, [deferredAccountDraft, fetchAccounts]);
+
+  useEffect(() => {
+    const query = deferredAssetDraft.trim();
+    if (query === "") {
+      return;
     }
-    return Array.from(set).sort();
-  }, [load, balancesLoad.load]);
+    const controller = new AbortController();
+    void fetchAssets(
+      { code: query, codeMatch: "starts_with", limit: 8, sort: "code" },
+      controller.signal,
+    )
+      .then((assets) =>
+        setAssetSuggestions(assets.map((asset) => asset.code)),
+      )
+      .catch((err: unknown) => {
+        if (!controller.signal.aborted) {
+          console.error(err);
+          setAssetSuggestions([]);
+        }
+      });
+    return () => controller.abort();
+  }, [deferredAssetDraft, fetchAssets]);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Limit | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Limit | null>(null);
 
-  const visible = useMemo(() => {
-    if (load.state !== "ready") {
-      return [];
-    }
-    if (policyFilter === ALL) {
-      return load.data;
-    }
-    return load.data.filter((l) => l.policy === policyFilter);
-  }, [load, policyFilter]);
-
-  const lastPage = Math.max(0, Math.ceil(visible.length / size) - 1);
-  const safePage = Math.min(page, lastPage);
-  const pagedVisible = slicePage(visible, safePage, size);
-  const hasMorePolicies = hasNextPage(visible, safePage, size);
-  const totalPolicyPages = knownPageCount(visible.length, size);
-  const shownFrom = visible.length === 0 ? 0 : safePage * size + 1;
-  const shownTo = Math.min((safePage + 1) * size, visible.length);
+  const rows = load.state === "ready" ? load.data.items : [];
+  const total = load.state === "ready" ? load.data.total : 0;
+  const hasMore = (page + 1) * size < total;
+  const shownFrom = total === 0 ? 0 : page * size + 1;
+  const shownTo = Math.min((page + 1) * size, total);
   const pager = (
     <TablePagination
-      page={safePage}
-      canPrevious={safePage > 0}
-      canNext={hasMorePolicies}
-      knownTotalPages={totalPolicyPages}
-      onPrevious={() => setPage((p) => Math.max(0, Math.min(p, lastPage) - 1))}
-      onNext={() => setPage((p) => Math.min(p, lastPage) + 1)}
+      page={page}
+      canPrevious={page > 0}
+      canNext={hasMore}
+      knownTotalPages={knownPageCount(total, size)}
+      onPrevious={() => setPage((p) => Math.max(0, p - 1))}
+      onNext={() => setPage((p) => p + 1)}
       onPage={setPage}
     />
   );
 
-  const policyCounts = useMemo<Partial<Record<Policy, number>>>(() => {
-    const counts: Partial<Record<Policy, number>> = {};
-    if (load.state !== "ready") {
-      return counts;
-    }
-    for (const limit of load.data) {
-      const policy = limit.policy as Policy;
-      counts[policy] = (counts[policy] ?? 0) + 1;
-    }
-    return counts;
-  }, [load]);
+  const onSortChange = (nextSort?: string, nextOrder?: SortOrder) => {
+    setSort({ sort: nextSort, order: nextOrder });
+    setPage(0);
+  };
 
-  const deleteRequiresEngineRebuild =
-    deleteTarget !== null &&
-    (policyCounts[deleteTarget.policy as Policy] ?? 0) === 1;
+  const identityDraftChanged =
+    accountDraft.trim() !== accountFilter || assetDraft.trim() !== assetFilter;
+  const applyIdentityFilters = () => {
+    setAccountFilter(accountDraft.trim());
+    setAssetFilter(assetDraft.trim());
+    setPage(0);
+  };
+  const applyIdentityField = (field: "account" | "asset", value: string) => {
+    const nextValue = value.trim();
+    if (field === "account") {
+      setAccountDraft(nextValue);
+      setAccountFilter(nextValue);
+    } else {
+      setAssetDraft(nextValue);
+      setAssetFilter(nextValue);
+    }
+    setPage(0);
+  };
+  const applyIdentityFiltersOnEnter = (
+    event: KeyboardEvent<HTMLInputElement>,
+  ) => {
+    if (event.key === "Enter") {
+      applyIdentityFilters();
+    }
+  };
 
   const openAdd = () => {
     setEditing(null);
@@ -362,12 +653,37 @@ export function Limits() {
     setEditing(limit);
     setDialogOpen(true);
   };
-  const limitActionsCtx: LimitRowActionContext = {
-    t,
-    onEdit: openEdit,
-    onDelete: setDeleteTarget,
-  };
-
+  const accountIsSet = accountFilter.trim().length > 0;
+  const assetIsSet = assetFilter.trim().length > 0;
+  const policyIsSet = policyFilter !== ALL;
+  const shareHref = useMemo(() => {
+    const query = new URLSearchParams();
+    const account = accountFilter.trim();
+    const asset = assetFilter.trim();
+    if (account !== "") {
+      query.set("account", account);
+    }
+    if (asset !== "") {
+      query.set("asset", asset);
+    }
+    if (policyFilter !== ALL) {
+      query.set("policy", policyFilter);
+    }
+    if (sort.sort !== undefined) {
+      query.set("sort", sort.sort);
+      if (sort.order !== undefined) {
+        query.set("order", sort.order);
+      }
+    }
+    const text = query.toString();
+    return absoluteAppUrl(`/policies${text === "" ? "" : `?${text}`}`);
+  }, [
+    accountFilter,
+    assetFilter,
+    policyFilter,
+    sort.order,
+    sort.sort,
+  ]);
   return (
     <Page
       title={t("title")}
@@ -394,28 +710,69 @@ export function Limits() {
     >
       <p className="text-xs text-muted-lt">{t("intro")}</p>
 
-      <Card className="flex flex-wrap items-end gap-4 p-4">
-        <div className="space-y-1.5">
-          <Label htmlFor="filter-account">{t("filter.account")}</Label>
-          <Autocomplete
-            id="filter-account"
-            value={accountFilter}
-            spellCheck={false}
-            placeholder={t("filter.accountPlaceholder")}
-            className="h-8 w-48 text-xs"
-            suggestions={accountSuggestions}
-            onChange={(value) => {
-              setAccountFilter(value);
-              setPage(0);
-            }}
-          />
+      <FilterBar
+        active={hasActiveFilters}
+        activeLabel={tc("filters.active")}
+        onClearActive={clearFilters}
+        clearActiveLabel={tc("filters.clearAll")}
+        trailing={
+          <div className="flex items-end">
+            <ShareLinkButton
+              href={shareHref}
+              title={tc("rowActions.shareFilters")}
+              copiedTitle={tc("rowActions.copiedLink")}
+              size={32}
+            />
+          </div>
+        }
+      >
+        <AutocompleteFilterField
+          label={t("filter.account")}
+          value={accountDraft}
+          placeholder={t("filter.accountPlaceholder")}
+          suggestions={visibleAccountSuggestions}
+          onChange={setAccountDraft}
+          onSuggestionSelect={(value) => applyIdentityField("account", value)}
+          onKeyDown={applyIdentityFiltersOnEnter}
+          onClear={() => {
+            setAccountDraft("");
+            setAccountFilter("");
+            setPage(0);
+          }}
+          clearLabel={tc("filters.clearField")}
+        />
+        <AutocompleteFilterField
+          label={t("filter.asset")}
+          value={assetDraft}
+          placeholder={t("filter.assetPlaceholder")}
+          suggestions={visibleAssetSuggestions}
+          onChange={setAssetDraft}
+          onSuggestionSelect={(value) => applyIdentityField("asset", value)}
+          onKeyDown={applyIdentityFiltersOnEnter}
+          onClear={() => {
+            setAssetDraft("");
+            setAssetFilter("");
+            setPage(0);
+          }}
+          clearLabel={tc("filters.clearField")}
+        />
+        <div className="flex items-end">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={applyIdentityFilters}
+            disabled={!identityDraftChanged}
+          >
+            {tc("filters.apply")}
+          </Button>
         </div>
-        <div className="space-y-1.5">
-          <Label>{t("filter.policy")}</Label>
+        <div className="grid gap-1">
+          <FieldLabel>{t("filter.policy")}</FieldLabel>
           <Select
             value={policyFilter}
-            onValueChange={(v) => {
-              setPolicyFilter(v as Policy | typeof ALL);
+            onValueChange={(value) => {
+              setPolicyFilter(value as PolicyFilter);
               setPage(0);
             }}
           >
@@ -424,15 +781,15 @@ export function Limits() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value={ALL}>{t("filter.allPolicies")}</SelectItem>
-              {getPolicies().map((p) => (
-                <SelectItem key={p} value={p}>
-                  {policyLabel(tc, p)}
+              {POLICY_FILTERS.map((policy) => (
+                <SelectItem key={policy} value={policy}>
+                  {policyLabel(tc, POLICY_FILTER_KIND[policy])}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
         </div>
-      </Card>
+      </FilterBar>
 
       <PolicyDescription policy={policyFilter} />
 
@@ -441,25 +798,26 @@ export function Limits() {
         <ErrorState message={load.error} onRetry={reload} />
       )}
       {load.state === "ready" &&
-        (visible.length === 0 ? (
+        (total === 0 ? (
           <EmptyState
             title={
-              load.data.length === 0
-                ? t("empty.noPolicies")
-                : t("empty.noMatching")
+              accountIsSet || policyIsSet
+                || assetIsSet
+                ? t("empty.noMatching")
+                : t("empty.noPolicies")
             }
             hint={
-              load.data.length === 0
-                ? t("empty.noPoliciesHint")
-                : t("empty.noMatchingHint")
+              accountIsSet || policyIsSet || assetIsSet
+                ? t("empty.noMatchingHint")
+                : t("empty.noPoliciesHint")
             }
             action={
-              load.data.length === 0 ? (
+              accountIsSet || policyIsSet || assetIsSet ? undefined : (
                 <Button size="sm" onClick={openAdd}>
                   <Plus className="h-3.5 w-3.5" />
                   {t("addPolicy")}
                 </Button>
-              ) : undefined
+              )
             }
           />
         ) : (
@@ -469,14 +827,28 @@ export function Limits() {
                 {t("pagination.summary", {
                   from: shownFrom,
                   to: shownTo,
-                  total: visible.length,
+                  total,
                 })}
               </span>
               {pager}
             </div>
             <PoliciesTable
-              limits={pagedVisible}
-              actionsCtx={limitActionsCtx}
+              limits={rows}
+              activeSort={sort.sort}
+              activeOrder={sort.order}
+              onSortChange={onSortChange}
+              onFilterAccount={(account) => {
+                setAccountDraft(account);
+                setAccountFilter(account);
+                setPage(0);
+              }}
+              onFilterAsset={(asset) => {
+                setAssetDraft(asset);
+                setAssetFilter(asset);
+                setPage(0);
+              }}
+              onEdit={openEdit}
+              onDelete={setDeleteTarget}
             />
             {pager}
           </>
@@ -490,18 +862,22 @@ export function Limits() {
         accountSuggestions={accountSuggestions}
         policyCounts={policyCounts}
         onOpenChange={setDialogOpen}
-        onSaved={reload}
+        onSaved={reloadLimits}
       />
       <DeleteConfirm
         target={deleteTarget}
         open={deleteTarget !== null}
-        requiresEngineRebuild={deleteRequiresEngineRebuild}
+        requiresEngineRebuild={
+          deleteTarget !== null &&
+          policyCounts[deleteTarget.policy] !== undefined &&
+          policyCounts[deleteTarget.policy] <= 1
+        }
         onOpenChange={(next) => {
           if (!next) {
             setDeleteTarget(null);
           }
         }}
-        onDone={reload}
+        onDone={reloadLimits}
       />
     </Page>
   );

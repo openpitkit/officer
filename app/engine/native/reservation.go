@@ -429,15 +429,16 @@ func (e *openPitEngine) SubmitImmediate(
 		return ImmediateResult{}, err
 	}
 	report, err := executionReportFrom(domain.ExecutionReportInput{
-		BaseAsset:    o.BaseAsset,
-		QuoteAsset:   o.QuoteAsset,
-		FillQuantity: fillQuantity,
-		FillPrice:    settlement,
-		LockPrice:    settlement,
-		Account:      o.Account,
-		Side:         o.Side,
-		Order:        o.ExternalID,
-		Final:        true,
+		BaseAsset:      o.BaseAsset,
+		QuoteAsset:     o.QuoteAsset,
+		FillQuantity:   fillQuantity,
+		FillPrice:      settlement,
+		LeavesQuantity: "0",
+		LockPrice:      settlement,
+		Account:        o.Account,
+		Side:           o.Side,
+		Order:          o.ExternalID,
+		Final:          true,
 	}, e.res)
 	if err != nil {
 		reservation.RollbackAndClose()

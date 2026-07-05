@@ -16,7 +16,7 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 // Store-level tests for the transactional business CSV import. Covers happy
-// paths (groups, accounts, balances), code-resolution errors (unknown group
+// paths (groups, account, balance), code-resolution errors (unknown group
 // code, unknown asset), conflict semantics (Exists flag drives create-vs-update
 // so engine ids are preserved on update), and the atomicity guarantee (a
 // bad-asset balance row rolls back the entire transaction).
@@ -113,7 +113,7 @@ func TestApplyBusinessCSVImport_UpdatesExistingGroup(t *testing.T) {
 	}
 }
 
-// --- Happy path: accounts ----------------------------------------------------
+// --- Happy path: account ----------------------------------------------------
 
 func TestApplyBusinessCSVImport_CreatesAccount(t *testing.T) {
 	t.Parallel()
@@ -201,7 +201,7 @@ func TestApplyBusinessCSVImport_UpdatesExistingAccount(t *testing.T) {
 	}
 }
 
-// --- Happy path: balances ----------------------------------------------------
+// --- Happy path: balance ----------------------------------------------------
 
 func TestApplyBusinessCSVImport_UpsertsBalance(t *testing.T) {
 	t.Parallel()
@@ -287,7 +287,7 @@ func TestApplyBusinessCSVImport_AppendsAudit(t *testing.T) {
 	}
 }
 
-// --- Happy path: adjustments -------------------------------------------------
+// --- Happy path: adjustment -------------------------------------------------
 
 // TestApplyBusinessCSVImport_PersistsAdjustments asserts the adjustment records
 // the node produced from the imported position snapshots are persisted in the
@@ -462,7 +462,7 @@ func TestApplyBusinessCSVImport_Atomicity(t *testing.T) {
 	}
 }
 
-// --- Engine id assignment across multiple new groups/accounts ----------------
+// --- Engine id assignment across multiple new groups/account ----------------
 
 func TestApplyBusinessCSVImport_MultipleNewGroupsGetDistinctEngineIDs(t *testing.T) {
 	t.Parallel()

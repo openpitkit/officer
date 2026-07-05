@@ -166,6 +166,10 @@ Please see https://openpit.dev and the OWNERS file for details.
     --dens-control-fz: 0.75rem;
     --dens-control-icon: 14px;
     --dens-swatch: 10px;
+    --orders-status-column-width: 6.5rem;
+    --positions-status-column-width: 6.5rem;
+    --positions-source-column-width: 5.5rem;
+    --policies-scope-column-width: 7rem;
   }
 
   [data-density="comfortable"] {
@@ -208,6 +212,10 @@ Please see https://openpit.dev and the OWNERS file for details.
     --dens-control-fz: 0.75rem;
     --dens-control-icon: 14px;
     --dens-swatch: 10px;
+    --orders-status-column-width: 7rem;
+    --positions-status-column-width: 7rem;
+    --positions-source-column-width: 6rem;
+    --policies-scope-column-width: 7.5rem;
   }
 
   [data-density="terminal"] {
@@ -261,6 +269,7 @@ Please see https://openpit.dev and the OWNERS file for details.
     --dens-button-sm-h: 20px;
     --dens-button-icon: 22px;
     --dens-button-glyph: 12px;
+    --dens-row-action-size: 18px;
     --dens-button-px: 7px;
     --dens-button-sm-px: 6px;
     --dens-field-h: 22px;
@@ -273,6 +282,10 @@ Please see https://openpit.dev and the OWNERS file for details.
     --dens-control-fz: 0.625rem;
     --dens-control-icon: 10px;
     --dens-swatch: 7px;
+    --orders-status-column-width: 5.5rem;
+    --positions-status-column-width: 5.5rem;
+    --positions-source-column-width: 4.75rem;
+    --policies-scope-column-width: 6rem;
   }
 
   .light[data-density="terminal"] {
@@ -494,10 +507,94 @@ Please see https://openpit.dev and the OWNERS file for details.
     border-bottom: 0;
   }
 
+  [data-density="terminal"] .ledger-table .sortable-header {
+    width: 100%;
+  }
+
+  [data-density="terminal"] .ledger-table .sortable-header svg {
+    height: 0.625rem;
+    width: 0.625rem;
+  }
+
+  .ledger-table .orders-side-cell {
+    width: 1%;
+    white-space: nowrap;
+  }
+
+  .ledger-table .trades-side-cell {
+    width: 1%;
+    white-space: nowrap;
+  }
+
+  [data-density="terminal"] .ledger-table [data-slot="badge"] {
+    min-height: 16px;
+    gap: 2px;
+    padding: 1px 4px;
+    font-size: 0.625rem;
+    line-height: 1;
+  }
+
+  [data-density="terminal"] .ledger-table [data-slot="badge"] svg,
+  [data-density="terminal"] .ledger-table [data-slot="badge"] .size-2,
+  [data-density="terminal"] .ledger-table [data-slot="badge"] .h-2 {
+    height: 0.5rem;
+    width: 0.5rem;
+  }
+
+  [data-density="terminal"] .ledger-table button.inline-flex.rounded-badge {
+    min-height: var(--dens-row-action-size);
+    padding-top: 0;
+    padding-bottom: 0;
+    font-size: 0.625rem;
+    line-height: 1;
+  }
+
+  [data-density="terminal"] .ledger-table button.inline-flex.rounded-badge svg {
+    height: 0.625rem;
+    width: 0.625rem;
+  }
+
   /* Compress older page-level Tailwind utilities in the pro terminal density. */
   [data-density="terminal"] .h-8,
   [data-density="terminal"] .h-9 {
     height: var(--dens-field-h);
+  }
+
+  [data-density="terminal"] .accounts-status-action {
+    height: 18px;
+    width: 18px;
+    min-width: 18px;
+  }
+
+  /* Reserve a fixed action area in the status column so the right edges of the
+     inline block/unblock buttons line up whether a row shows one button (Ban)
+     or two (view details + unblock). Sized for the two-button case; single
+     buttons right-justify into it. */
+  .accounts-status-action-area {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    margin-left: auto;
+    flex-shrink: 0;
+    gap: 0.25rem;
+    min-width: 3.75rem;
+  }
+  [data-density="terminal"] .accounts-status-action-area {
+    gap: 2px;
+    min-width: 2.25rem;
+  }
+
+  /* Row-action buttons (inside table rows) collapse to icon-only squares in
+     the pro terminal density; the label stays as the accessible name. */
+  [data-density="terminal"] .row-action {
+    gap: 0;
+    padding-left: 0;
+    padding-right: 0;
+    min-height: var(--dens-row-action-size);
+    width: var(--dens-row-action-size);
+  }
+  [data-density="terminal"] .row-action .row-action-label {
+    display: none;
   }
 
   [data-density="terminal"] .min-h-\[7rem\] {

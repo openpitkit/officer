@@ -298,6 +298,9 @@ type OrderRecord struct {
 // and accounts, then the account-addressed facts. Every list uses portable
 // identity; no list carries a surrogate key or an engine id.
 type Data struct {
+	// AssetClasses is the asset-class dictionary (by code). Always carried so the
+	// asset->class foreign key resolves on import.
+	AssetClasses []domain.AssetClass `json:"assetClasses,omitempty"`
 	// Assets is the asset dictionary (by code). Always carried so fact foreign
 	// keys resolve.
 	Assets []domain.Asset `json:"assets,omitempty"`
@@ -512,8 +515,10 @@ func FilterData(data Data, scope Scope) Data {
 	groupByAccount := accountGroupMap(data.Accounts)
 	out := Data{}
 
-	// Assets and principals are dictionaries every fact may reference; they
-	// always travel so foreign keys resolve on import, regardless of section.
+	// Asset classes, assets and principals are dictionaries every fact may
+	// reference; they always travel so foreign keys resolve on import, regardless
+	// of section.
+	out.AssetClasses = append([]domain.AssetClass(nil), data.AssetClasses...)
 	out.Assets = append([]domain.Asset(nil), data.Assets...)
 	out.Principals = append([]domain.Principal(nil), data.Principals...)
 

@@ -964,7 +964,7 @@ func TestMDInstanceDuplicateSuppliedExternalIDConflicts(t *testing.T) {
 			msg, supplied.String())
 	}
 
-	if n := countRows(t, ctx, r, "market_data_instances"); n != 1 {
+	if n := countRows(t, ctx, r, "market_data_instance"); n != 1 {
 		t.Fatalf("instance row count = %d, want 1 (no second row)", n)
 	}
 }

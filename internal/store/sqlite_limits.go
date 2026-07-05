@@ -16,7 +16,7 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 // Limits group of the SQLite store: one typed table per policy
-// (limit_rate, limit_order_size, limit_pnl_bounds). Each row is keyed by the
+// (limit_rate, limit_order_size, limit_pnl_bound). Each row is keyed by the
 // natural composite (scope, account_id, asset_id); there is no external id and
 // no surrogate id outward. Account and asset are present only for scopes that
 // carry them; an empty code means the NULL axis (scope-wide). Domain Validate()
@@ -30,10 +30,211 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
+	fwstore "go.openpit.dev/officer/framework/store"
 )
+
+// --- Unified policy list (flattens the three barrier tables) -----------------
+
+// policyUnion projects the three typed barrier tables onto one common shape so
+// they can be sorted, filtered, and paged together. Columns absent for a given
+// barrier kind are NULL; stable_id is the kind-prefixed surrogate id, unique
+// across the union, used as the deterministic sort tiebreak. The account/asset
+// codes come from the same LEFT JOINs the per-kind reads use.
+const policyUnion = `
+SELECT 'rate_limit' AS kind, lr.scope AS scope,
+       a.code AS account_code, ast.code AS asset_code,
+       lr.max_orders AS max_orders, lr.window AS window,
+       NULL AS max_quantity, NULL AS max_notional,
+       NULL AS lower_bound, NULL AS upper_bound, NULL AS initial_pnl,
+       'rate_limit:' || lr.id AS stable_id
+FROM limit_rate lr
+LEFT JOIN account a   ON a.id   = lr.account_id
+LEFT JOIN asset   ast ON ast.id = lr.asset_id
+UNION ALL
+SELECT 'order_size_limit' AS kind, los.scope AS scope,
+       a.code AS account_code, ast.code AS asset_code,
+       NULL AS max_orders, NULL AS window,
+       los.max_quantity AS max_quantity, los.max_notional AS max_notional,
+       NULL AS lower_bound, NULL AS upper_bound, NULL AS initial_pnl,
+       'order_size_limit:' || los.id AS stable_id
+FROM limit_order_size los
+LEFT JOIN account a   ON a.id   = los.account_id
+LEFT JOIN asset   ast ON ast.id = los.asset_id
+UNION ALL
+SELECT 'pnl_bounds_kill_switch' AS kind, lpb.scope AS scope,
+       a.code AS account_code, ast.code AS asset_code,
+       NULL AS max_orders, NULL AS window,
+       NULL AS max_quantity, NULL AS max_notional,
+       lpb.lower_bound AS lower_bound, lpb.upper_bound AS upper_bound,
+       lpb.initial_pnl AS initial_pnl,
+       'pnl_bounds_kill_switch:' || lpb.id AS stable_id
+FROM limit_pnl_bound lpb
+LEFT JOIN account a   ON a.id   = lpb.account_id
+LEFT JOIN asset   ast ON ast.id = lpb.asset_id`
+
+// ListPolicyRows returns the three typed barrier tables flattened into one
+// sorted, paged list with the pre-paging total. It applies the account and kind
+// filters in SQL and reconstructs each row's typed value from the projected
+// columns.
+func (r *realmStore) ListPolicyRows(
+	ctx context.Context, filter fwstore.PolicyListFilter,
+) (fwstore.PolicyListPage, error) {
+	where, args := policyListWhere(filter)
+	from := ` FROM (` + policyUnion + `) AS policies` + where
+
+	countQuery := `SELECT COUNT(*)` + from
+	var total int
+	if err := r.db().QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return fwstore.PolicyListPage{}, fmt.Errorf("store: count policy rows: %w", err)
+	}
+
+	queryArgs := append([]any{}, args...)
+	query := `SELECT kind, scope, account_code, asset_code,
+       max_orders, window, max_quantity, max_notional,
+       lower_bound, upper_bound, initial_pnl` + from + policyListOrderBy(filter.Sort)
+	if filter.Page.Limit > 0 {
+		query += ` LIMIT ? OFFSET ?`
+		queryArgs = append(queryArgs, filter.Page.Limit, max(filter.Page.Offset, 0))
+	}
+
+	rows, err := r.db().QueryContext(ctx, query, queryArgs...)
+	if err != nil {
+		return fwstore.PolicyListPage{}, fmt.Errorf("store: list policy rows: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	result := make([]fwstore.PolicyListRow, 0)
+	for rows.Next() {
+		row, err := scanPolicyRow(rows)
+		if err != nil {
+			return fwstore.PolicyListPage{}, err
+		}
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		return fwstore.PolicyListPage{}, fmt.Errorf("store: iterate policy rows: %w", err)
+	}
+	return fwstore.PolicyListPage{Rows: result, Total: total}, nil
+}
+
+func policyListWhere(filter fwstore.PolicyListFilter) (string, []any) {
+	clauses := make([]string, 0, 2)
+	args := make([]any, 0, 2)
+	appendMatcher(&clauses, &args, "account_code", filter.Account)
+	appendMatcher(&clauses, &args, "asset_code", filter.Asset)
+	if filter.Kind != nil {
+		clauses = append(clauses, "kind = ?")
+		args = append(args, string(*filter.Kind))
+	}
+	if len(clauses) == 0 {
+		return "", args
+	}
+	return " WHERE " + strings.Join(clauses, " AND "), args
+}
+
+func policyListOrderBy(sort fwstore.SortSpec) string {
+	columns := map[string]string{
+		"account":     "account_code",
+		"asset":       "asset_code",
+		"initialPnl":  "initial_pnl COLLATE DECIMAL",
+		"lowerBound":  "lower_bound COLLATE DECIMAL",
+		"maxNotional": "max_notional COLLATE DECIMAL",
+		"maxOrders":   "max_orders",
+		"maxQuantity": "max_quantity COLLATE DECIMAL",
+		"policy":      "kind",
+		"scope":       "scope",
+		"upperBound":  "upper_bound COLLATE DECIMAL",
+	}
+	column := columns[sort.Column]
+	if column == "" {
+		column = "kind"
+	}
+	direction := "ASC"
+	tieDirection := "ASC"
+	if sort.Descending {
+		direction = "DESC"
+		tieDirection = "DESC"
+	}
+	// The (kind, scope, account, asset) composite is unique across the union, so
+	// it is a deterministic tiebreak the cross-shard merge can reproduce without
+	// the per-table surrogate id. stable_id stays the final tiebreak for the
+	// degenerate case where the composite repeats across shards.
+	tie := "kind " + tieDirection + ", scope " + tieDirection +
+		", account_code " + tieDirection + ", asset_code " + tieDirection +
+		", stable_id " + tieDirection
+	return " ORDER BY " + column + " " + direction + ", " + tie
+}
+
+func scanPolicyRow(rows *sql.Rows) (fwstore.PolicyListRow, error) {
+	var (
+		kind                   string
+		scope                  string
+		accountCode, assetCode sql.NullString
+		maxOrders              sql.NullInt64
+		windowStr              sql.NullString
+		maxQuantity            sql.NullString
+		maxNotional            sql.NullString
+		lowerBound             sql.NullString
+		upperBound             sql.NullString
+		initialPnl             sql.NullString
+	)
+	if err := rows.Scan(
+		&kind, &scope, &accountCode, &assetCode,
+		&maxOrders, &windowStr, &maxQuantity, &maxNotional,
+		&lowerBound, &upperBound, &initialPnl,
+	); err != nil {
+		return fwstore.PolicyListRow{}, fmt.Errorf("store: scan policy row: %w", err)
+	}
+	account := domain.AccountID(accountCode.String)
+	row := fwstore.PolicyListRow{
+		Kind:    fwstore.PolicyKind(kind),
+		Scope:   scope,
+		Account: account,
+		Asset:   assetCode.String,
+	}
+	switch row.Kind {
+	case fwstore.PolicyKindRate:
+		window, err := time.ParseDuration(windowStr.String)
+		if err != nil {
+			return fwstore.PolicyListRow{}, fmt.Errorf(
+				"store: parse rate limit window %q: %w", windowStr.String, err,
+			)
+		}
+		row.Rate = &domain.LimitRate{
+			Scope:     scope,
+			Account:   account,
+			Asset:     assetCode.String,
+			Window:    window,
+			MaxOrders: uint64(maxOrders.Int64),
+		}
+	case fwstore.PolicyKindOrderSize:
+		row.OrderSize = &domain.LimitOrderSize{
+			Scope:       scope,
+			Account:     account,
+			Asset:       assetCode.String,
+			MaxQuantity: maxQuantity.String,
+			MaxNotional: maxNotional.String,
+		}
+	case fwstore.PolicyKindPnlBounds:
+		row.PnlBounds = &domain.LimitPnlBounds{
+			Scope:      scope,
+			Account:    account,
+			Asset:      assetCode.String,
+			LowerBound: lowerBound.String,
+			UpperBound: upperBound.String,
+			InitialPnl: initialPnl.String,
+		}
+	default:
+		return fwstore.PolicyListRow{}, fmt.Errorf(
+			"store: unknown policy kind %q: %w", kind, domain.ErrInvalid,
+		)
+	}
+	return row, nil
+}
 
 // --- Rate-limit barriers (limit_rate) ----------------------------------------
 
@@ -46,8 +247,8 @@ func (r *realmStore) ListRateLimits(
 	q := `
 SELECT lr.scope, a.code, ast.code, lr.max_orders, lr.window
 FROM limit_rate lr
-LEFT JOIN accounts a   ON a.id   = lr.account_id
-LEFT JOIN assets   ast ON ast.id = lr.asset_id`
+LEFT JOIN account a   ON a.id   = lr.account_id
+LEFT JOIN asset   ast ON ast.id = lr.asset_id`
 	args := make([]any, 0, 1)
 	if account != "" {
 		q += ` WHERE a.code = ?`
@@ -165,8 +366,8 @@ func (r *realmStore) ListOrderSizeLimits(
 	q := `
 SELECT los.scope, a.code, ast.code, los.max_quantity, los.max_notional
 FROM limit_order_size los
-LEFT JOIN accounts a   ON a.id   = los.account_id
-LEFT JOIN assets   ast ON ast.id = los.asset_id`
+LEFT JOIN account a   ON a.id   = los.account_id
+LEFT JOIN asset   ast ON ast.id = los.asset_id`
 	args := make([]any, 0, 1)
 	if account != "" {
 		q += ` WHERE a.code = ?`
@@ -263,7 +464,7 @@ func scanOrderSizeLimit(rows *sql.Rows) (domain.LimitOrderSize, error) {
 	}, nil
 }
 
-// --- P&L-bounds barriers (limit_pnl_bounds) ----------------------------------
+// --- P&L-bounds barriers (limit_pnl_bound) ----------------------------------
 
 // ListPnlBoundsLimits returns every P&L-bounds barrier. When account is
 // non-empty only barriers whose account_id matches are returned.
@@ -272,9 +473,9 @@ func (r *realmStore) ListPnlBoundsLimits(
 ) ([]domain.LimitPnlBounds, error) {
 	q := `
 SELECT lpb.scope, a.code, ast.code, lpb.lower_bound, lpb.upper_bound, lpb.initial_pnl
-FROM limit_pnl_bounds lpb
-LEFT JOIN accounts a   ON a.id   = lpb.account_id
-LEFT JOIN assets   ast ON ast.id = lpb.asset_id`
+FROM limit_pnl_bound lpb
+LEFT JOIN account a   ON a.id   = lpb.account_id
+LEFT JOIN asset   ast ON ast.id = lpb.asset_id`
 	args := make([]any, 0, 1)
 	if account != "" {
 		q += ` WHERE a.code = ?`
@@ -313,12 +514,12 @@ func (r *realmStore) PutPnlBoundsLimit(ctx context.Context, limit domain.LimitPn
 	if err != nil {
 		return err
 	}
-	return putLimitRow(ctx, r.db(), "limit_pnl_bounds",
+	return putLimitRow(ctx, r.db(), "limit_pnl_bound",
 		limit.Scope, accountID, assetID,
 		func(ctx context.Context, exec sqlExecer) error {
 			_, err := exec.ExecContext(
 				ctx,
-				`INSERT INTO limit_pnl_bounds
+				`INSERT INTO limit_pnl_bound
 				 (scope, account_id, asset_id, lower_bound, upper_bound, initial_pnl)
 				 VALUES (?, ?, ?, ?, ?, ?)`,
 				limit.Scope, accountID, assetID,
@@ -342,7 +543,7 @@ func (r *realmStore) DeletePnlBoundsLimit(
 	}
 	res, err := r.db().ExecContext(
 		ctx,
-		`DELETE FROM limit_pnl_bounds
+		`DELETE FROM limit_pnl_bound
 		 WHERE scope = ? AND account_id IS ? AND asset_id IS ?`,
 		scope, accountID, assetID,
 	)

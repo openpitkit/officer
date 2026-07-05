@@ -30,6 +30,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shopspring/decimal"
+
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
@@ -37,6 +39,7 @@ import (
 	"go.openpit.dev/officer/framework/mcp/catalog"
 	"go.openpit.dev/officer/framework/node"
 	fwsigning "go.openpit.dev/officer/framework/signing"
+	"go.openpit.dev/officer/framework/store"
 )
 
 // MarketDataRuntime is the live view of the connector manager the backend
@@ -82,6 +85,18 @@ type Service struct {
 	signer         fwsigning.Service
 	commands       catalog.Provider
 	lockSettlement LockSettlementEstimator
+}
+
+type adjustmentRowNode interface {
+	ListAdjustmentRows(context.Context, store.AdjustmentListFilter) (store.AdjustmentListPage, error)
+}
+
+type tradeRowNode interface {
+	ListTradeRows(context.Context, store.TradeListFilter) (store.TradeListPage, error)
+}
+
+type auditRowNode interface {
+	ListAuditRows(context.Context, store.AuditListFilter) (store.AuditListPage, error)
 }
 
 // LockSettlementEstimator derives display settlement prices from an opaque
@@ -194,30 +209,258 @@ func keyFor(id domain.AccountID) node.Key {
 
 // ListAccounts returns every account aggregated across all nodes.
 func (s *Service) ListAccounts(ctx context.Context) ([]domain.Account, error) {
-	accounts := make([]domain.Account, 0)
-	for i, n := range s.router.All() {
-		part, err := n.ListAccounts(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("backend: node %d list accounts: %w", i, err)
-		}
-		accounts = append(accounts, part...)
+	page, err := s.ListAccountRows(ctx, store.AccountListFilter{})
+	if err != nil {
+		return nil, err
+	}
+	accounts := make([]domain.Account, 0, len(page.Rows))
+	for _, row := range page.Rows {
+		accounts = append(accounts, row.Account)
 	}
 	return accounts, nil
 }
 
-// CreateAccount validates the id, routes to the owning node, and creates the
-// account.
+// ListAccountRows returns accounts aggregated across all nodes with list-only
+// counts.
+func (s *Service) ListAccountRows(
+	ctx context.Context, filter store.AccountListFilter,
+) (store.AccountListPage, error) {
+	nodes := s.router.All()
+	if len(nodes) == 1 {
+		return nodes[0].ListAccountRows(ctx, filter)
+	}
+	nodeFilter := filter
+	nodeFilter.Page = nodePageForMerge(filter.Page)
+	accounts := make([]store.AccountListRow, 0)
+	total := 0
+	for i, n := range nodes {
+		part, err := n.ListAccountRows(ctx, nodeFilter)
+		if err != nil {
+			return store.AccountListPage{},
+				fmt.Errorf("backend: node %d list account rows: %w", i, err)
+		}
+		total += part.Total
+		accounts = append(accounts, part.Rows...)
+	}
+	sortAccountRows(accounts, filter.Sort)
+	accounts = pageAccountRows(accounts, filter.Page)
+	return store.AccountListPage{Rows: accounts, Total: total}, nil
+}
+
+// ListAssets returns every asset in the realm.
+func (s *Service) ListAssets(ctx context.Context) ([]domain.Asset, error) {
+	page, err := s.ListAssetRows(ctx, store.AssetListFilter{})
+	if err != nil {
+		return nil, err
+	}
+	return page.Rows, nil
+}
+
+// ListAssetRows returns every asset in the realm in list sort order.
+func (s *Service) ListAssetRows(
+	ctx context.Context, filter store.AssetListFilter,
+) (store.AssetListPage, error) {
+	n, err := s.groupNode()
+	if err != nil {
+		return store.AssetListPage{}, err
+	}
+	page, err := n.ListAssetRows(ctx, filter)
+	if err != nil {
+		return store.AssetListPage{}, fmt.Errorf("backend: list assets: %w", err)
+	}
+	return page, nil
+}
+
+// CreateAsset validates the asset metadata and creates the asset.
+func (s *Service) CreateAsset(
+	ctx context.Context, asset domain.Asset,
+) (domain.Asset, error) {
+	if err := domain.ValidateAsset(asset.Code); err != nil {
+		return domain.Asset{}, err
+	}
+	if err := domain.ValidateTitle(asset.Title); err != nil {
+		return domain.Asset{}, err
+	}
+	if err := domain.ValidateTitle(asset.AssetClass); err != nil {
+		return domain.Asset{}, err
+	}
+	n, err := s.groupNode()
+	if err != nil {
+		return domain.Asset{}, err
+	}
+	return n.CreateAsset(ctx, asset, auth.CallerFromContext(ctx))
+}
+
+// UpdateAsset validates the old and new asset metadata and updates the asset,
+// renaming its public code when it differs. Dependent rows reference the asset
+// by its surrogate id, so a code rename is safe, mirroring UpdateGroup.
+func (s *Service) UpdateAsset(
+	ctx context.Context, oldCode string, asset domain.Asset,
+) (domain.Asset, error) {
+	if err := domain.ValidateAsset(oldCode); err != nil {
+		return domain.Asset{}, err
+	}
+	if err := domain.ValidateAsset(asset.Code); err != nil {
+		return domain.Asset{}, err
+	}
+	if err := domain.ValidateTitle(asset.Title); err != nil {
+		return domain.Asset{}, err
+	}
+	if err := domain.ValidateTitle(asset.AssetClass); err != nil {
+		return domain.Asset{}, err
+	}
+	n, err := s.groupNode()
+	if err != nil {
+		return domain.Asset{}, err
+	}
+	return n.UpdateAsset(ctx, oldCode, asset, auth.CallerFromContext(ctx))
+}
+
+// --- Asset classes ---------------------------------------------------------
+
+// ListAssetClasses returns every asset class in the realm.
+func (s *Service) ListAssetClasses(ctx context.Context) ([]domain.AssetClass, error) {
+	page, err := s.ListAssetClassRows(ctx, store.AssetClassListFilter{})
+	if err != nil {
+		return nil, err
+	}
+	classes := make([]domain.AssetClass, 0, len(page.Rows))
+	for _, row := range page.Rows {
+		classes = append(classes, row.Class)
+	}
+	return classes, nil
+}
+
+// ListAssetClassRows returns asset classes in the realm with list-only counts.
+func (s *Service) ListAssetClassRows(
+	ctx context.Context, filter store.AssetClassListFilter,
+) (store.AssetClassListPage, error) {
+	n, err := s.groupNode()
+	if err != nil {
+		return store.AssetClassListPage{}, err
+	}
+	page, err := n.ListAssetClassRows(ctx, filter)
+	if err != nil {
+		return store.AssetClassListPage{}, fmt.Errorf("backend: list asset class rows: %w", err)
+	}
+	return page, nil
+}
+
+// CreateAssetClass validates the class metadata and creates the class.
+func (s *Service) CreateAssetClass(
+	ctx context.Context, class domain.AssetClass,
+) (domain.AssetClass, error) {
+	if err := domain.ValidateAssetClassID(class.Code); err != nil {
+		return domain.AssetClass{}, err
+	}
+	if err := domain.ValidateTitle(class.Title); err != nil {
+		return domain.AssetClass{}, err
+	}
+	if err := domain.ValidateNotes(class.Notes); err != nil {
+		return domain.AssetClass{}, err
+	}
+	n, err := s.groupNode()
+	if err != nil {
+		return domain.AssetClass{}, err
+	}
+	return n.CreateAssetClass(ctx, class, auth.CallerFromContext(ctx))
+}
+
+// UpdateAssetClass validates the old and new class metadata and updates the
+// class, renaming its public code when it differs.
+func (s *Service) UpdateAssetClass(
+	ctx context.Context, oldCode string, class domain.AssetClass,
+) (domain.AssetClass, error) {
+	if err := domain.ValidateAssetClassID(oldCode); err != nil {
+		return domain.AssetClass{}, err
+	}
+	if err := domain.ValidateAssetClassID(class.Code); err != nil {
+		return domain.AssetClass{}, err
+	}
+	if err := domain.ValidateTitle(class.Title); err != nil {
+		return domain.AssetClass{}, err
+	}
+	if err := domain.ValidateNotes(class.Notes); err != nil {
+		return domain.AssetClass{}, err
+	}
+	n, err := s.groupNode()
+	if err != nil {
+		return domain.AssetClass{}, err
+	}
+	return n.UpdateAssetClass(ctx, oldCode, class, auth.CallerFromContext(ctx))
+}
+
+// DeleteAssetClass validates the code and removes the class, clearing the asset
+// link when force is set.
+func (s *Service) DeleteAssetClass(ctx context.Context, code string, force bool) error {
+	if err := domain.ValidateAssetClassID(code); err != nil {
+		return err
+	}
+	n, err := s.groupNode()
+	if err != nil {
+		return err
+	}
+	return n.DeleteAssetClass(ctx, code, force, auth.CallerFromContext(ctx))
+}
+
+// DeleteAsset validates the code and removes the asset, cascading dependents
+// when force is set.
+func (s *Service) DeleteAsset(ctx context.Context, code string, force bool) error {
+	if err := domain.ValidateAsset(code); err != nil {
+		return err
+	}
+	n, err := s.groupNode()
+	if err != nil {
+		return err
+	}
+	return n.DeleteAsset(ctx, code, force, auth.CallerFromContext(ctx))
+}
+
+// CreateAccount validates the account metadata, routes to the owning node, and
+// creates the account.
 func (s *Service) CreateAccount(
-	ctx context.Context, id domain.AccountID,
+	ctx context.Context, account domain.Account,
 ) (domain.Account, error) {
+	id := account.Code
 	if err := domain.ValidateAccountID(id); err != nil {
+		return domain.Account{}, err
+	}
+	if err := domain.ValidateTitle(account.Title); err != nil {
 		return domain.Account{}, err
 	}
 	n, err := s.router.Route(keyFor(id))
 	if err != nil {
 		return domain.Account{}, fmt.Errorf("backend: route account: %w", err)
 	}
-	return n.CreateAccount(ctx, keyFor(id), auth.CallerFromContext(ctx))
+	return n.CreateAccount(ctx, account, auth.CallerFromContext(ctx))
+}
+
+// UpdateAccount validates the old and new account metadata, routes through the
+// account's current owner, and updates the account dictionary row.
+func (s *Service) UpdateAccount(
+	ctx context.Context,
+	oldID domain.AccountID,
+	account domain.Account,
+) (domain.Account, error) {
+	if err := domain.ValidateAccountID(oldID); err != nil {
+		return domain.Account{}, err
+	}
+	if err := domain.ValidateAccountID(account.Code); err != nil {
+		return domain.Account{}, err
+	}
+	if err := domain.ValidateTitle(account.Title); err != nil {
+		return domain.Account{}, err
+	}
+	n, err := s.router.Route(keyFor(oldID))
+	if err != nil {
+		return domain.Account{}, fmt.Errorf("backend: route account: %w", err)
+	}
+	return n.UpdateAccount(
+		ctx,
+		keyFor(oldID),
+		account,
+		auth.CallerFromContext(ctx),
+	)
 }
 
 // BlockAccount validates the id and blocks the account with reason.
@@ -292,6 +535,36 @@ func (s *Service) ListLimits(
 		out.PnlBoundsLimits = append(out.PnlBoundsLimits, part.PnlBoundsLimits...)
 	}
 	return out, nil
+}
+
+// ListPolicyRows returns the typed barriers across all nodes flattened into one
+// sorted, paged policy list. Limits are sharded by account, so each node is
+// queried with the filter and an offset-inclusive page bound, the per-node
+// ordered slices are merge-sorted on the same SortSpec the connector applied,
+// the per-node totals are summed, and the global page window is taken last.
+func (s *Service) ListPolicyRows(
+	ctx context.Context, filter store.PolicyListFilter,
+) (store.PolicyListPage, error) {
+	nodes := s.router.All()
+	if len(nodes) == 1 {
+		return nodes[0].ListPolicyRows(ctx, filter)
+	}
+	nodeFilter := filter
+	nodeFilter.Page = nodePageForMerge(filter.Page)
+	rows := make([]store.PolicyListRow, 0)
+	total := 0
+	for i, n := range nodes {
+		part, err := n.ListPolicyRows(ctx, nodeFilter)
+		if err != nil {
+			return store.PolicyListPage{},
+				fmt.Errorf("backend: node %d list policy rows: %w", i, err)
+		}
+		total += part.Total
+		rows = append(rows, part.Rows...)
+	}
+	sortPolicyRows(rows, filter.Sort)
+	rows = pagePolicyRows(rows, filter.Page)
+	return store.PolicyListPage{Rows: rows, Total: total}, nil
 }
 
 // PutRateLimit validates the rate-limit barrier, routes to the owning node, and
@@ -431,6 +704,46 @@ func (s *Service) ListAuditFiltered(
 		rows = rows[:count]
 	}
 	return rows, nil
+}
+
+// ListAuditRows returns audit entries with DB-side filters/counts from each
+// node.
+func (s *Service) ListAuditRows(
+	ctx context.Context, filter store.AuditListFilter,
+) (store.AuditListPage, error) {
+	nodes := s.router.All()
+	if len(nodes) == 1 {
+		target, ok := nodes[0].(auditRowNode)
+		if !ok {
+			return store.AuditListPage{}, fmt.Errorf(
+				"backend: node list audit rows: %w", domain.ErrNotImplemented,
+			)
+		}
+		return target.ListAuditRows(ctx, filter)
+	}
+	rows := make([]domain.AuditRow, 0)
+	total := 0
+	nodeFilter := filter
+	nodeFilter.Page = nodePageForMerge(filter.Page)
+	for i, n := range nodes {
+		target, ok := n.(auditRowNode)
+		if !ok {
+			return store.AuditListPage{}, fmt.Errorf(
+				"backend: node %d list audit rows: %w", i, domain.ErrNotImplemented,
+			)
+		}
+		part, err := target.ListAuditRows(ctx, nodeFilter)
+		if err != nil {
+			return store.AuditListPage{}, fmt.Errorf(
+				"backend: node %d list audit rows: %w", i, err,
+			)
+		}
+		total += part.Total
+		rows = append(rows, part.Rows...)
+	}
+	sortAuditNewestFirst(rows)
+	rows = pageAuditRows(rows, filter.Page)
+	return store.AuditListPage{Rows: rows, Total: total}, nil
 }
 
 // sortAuditNewestFirst orders audit rows newest first by timestamp, breaking
@@ -715,11 +1028,23 @@ func (s *Service) ListMarketData(ctx context.Context) (MarketDataStatus, error) 
 
 // RestartMarketData re-applies the market-data configuration by stopping and
 // restarting the connector manager. With no runtime wired it is a no-op.
+//
+// It re-adopts the node's current engine sink before restarting. Account,
+// group, restore, and reset mutations rebuild the engine and replace its
+// market-data service, which leaves any sink the manager cached pointing at a
+// closed service (every push then fails with "market-data service is null").
+// Re-adopting on restart converges every feed-change path - including the
+// welcome flow - onto a restart that always wires the live sink.
 func (s *Service) RestartMarketData(ctx context.Context) error {
 	if s.md == nil {
 		return nil
 	}
-	return s.md.Restart()
+	n, err := s.groupNode()
+	if err != nil {
+		return err
+	}
+	s.md.Stop()
+	return s.restoreMarketDataAfterBackup(n.CurrentMarketDataSink())
 }
 
 // MarketDataSymbolVerification is the outcome of a one-shot symbol check for
@@ -1365,17 +1690,56 @@ func (s *Service) CreateGroup(
 	return n.CreateGroup(ctx, group, auth.CallerFromContext(ctx))
 }
 
+// UpdateGroup validates the old and new group metadata and updates the group.
+func (s *Service) UpdateGroup(
+	ctx context.Context,
+	oldCode string,
+	group domain.AccountGroup,
+) (domain.AccountGroup, error) {
+	if err := domain.ValidateGroupID(oldCode); err != nil {
+		return domain.AccountGroup{}, err
+	}
+	if err := domain.ValidateGroupID(group.Code); err != nil {
+		return domain.AccountGroup{}, err
+	}
+	if err := domain.ValidateTitle(group.Title); err != nil {
+		return domain.AccountGroup{}, err
+	}
+	n, err := s.groupNode()
+	if err != nil {
+		return domain.AccountGroup{}, err
+	}
+	return n.UpdateGroup(ctx, oldCode, group, auth.CallerFromContext(ctx))
+}
+
 // ListGroups returns every group in the realm.
 func (s *Service) ListGroups(ctx context.Context) ([]domain.AccountGroup, error) {
-	n, err := s.groupNode()
+	page, err := s.ListGroupRows(ctx, store.GroupListFilter{})
 	if err != nil {
 		return nil, err
 	}
-	groups, err := n.ListGroups(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("backend: list groups: %w", err)
+	groups := make([]domain.AccountGroup, 0, len(page.Rows))
+	for _, row := range page.Rows {
+		groups = append(groups, row.Group)
 	}
 	return groups, nil
+}
+
+// ListGroupRows returns groups in the realm with list-only counts. Groups are a
+// single-source dictionary, so the page passes through the owning node
+// unchanged; sort and paging are applied by the connector.
+func (s *Service) ListGroupRows(
+	ctx context.Context, filter store.GroupListFilter,
+) (store.GroupListPage, error) {
+	n, err := s.groupNode()
+	if err != nil {
+		return store.GroupListPage{}, err
+	}
+	page, err := n.ListGroupRows(ctx, filter)
+	if err != nil {
+		return store.GroupListPage{}, fmt.Errorf("backend: list group rows: %w", err)
+	}
+	return page, nil
 }
 
 // GetGroup validates the code and returns the group and its member accounts. It
@@ -1447,8 +1811,9 @@ func (s *Service) DeleteGroup(ctx context.Context, code string) error {
 // ApplyAdjustment validates the account id and asset, routes to the owning
 // node, and applies one spot-funds adjustment. The returned record carries the
 // accepted-or-rejected outcome; a policy reject is a successful call, not an
-// error. No existence check is performed on the account: the engine creates the
-// balance on first adjustment.
+// error, and is persisted to the adjustment history and audit log like an
+// accepted one. An adjustment to an account that does not exist yet auto-creates
+// it in the default group (no group assigned) before applying.
 //
 // externalID is the caller-supplied external id for the adjustment record. When
 // non-zero it is used verbatim and must be canonical; a duplicate is rejected by
@@ -1494,15 +1859,44 @@ func (s *Service) ImportPositionSnapshot(
 func (s *Service) ListBalances(
 	ctx context.Context, account domain.AccountID, asset string,
 ) ([]domain.Balance, error) {
-	balances := make([]domain.Balance, 0)
-	for i, n := range s.router.All() {
-		part, err := n.ListBalances(ctx, account, asset)
-		if err != nil {
-			return nil, fmt.Errorf("backend: node %d list balances: %w", i, err)
-		}
-		balances = append(balances, part...)
+	page, err := s.ListBalanceRows(ctx, store.BalanceListFilter{
+		Account: store.ExactTextMatcher(account.String()),
+		Asset:   store.ExactTextMatcher(asset),
+	})
+	if err != nil {
+		return nil, err
+	}
+	balances := make([]domain.Balance, 0, len(page.Rows))
+	for _, row := range page.Rows {
+		balances = append(balances, row.Balance)
 	}
 	return balances, nil
+}
+
+// ListBalanceRows returns balance rows aggregated across all nodes.
+func (s *Service) ListBalanceRows(
+	ctx context.Context, filter store.BalanceListFilter,
+) (store.BalanceListPage, error) {
+	nodes := s.router.All()
+	if len(nodes) == 1 {
+		return nodes[0].ListBalanceRows(ctx, filter)
+	}
+	nodeFilter := filter
+	nodeFilter.Page = nodePageForMerge(filter.Page)
+	balances := make([]store.BalanceListRow, 0)
+	total := 0
+	for i, n := range nodes {
+		part, err := n.ListBalanceRows(ctx, nodeFilter)
+		if err != nil {
+			return store.BalanceListPage{},
+				fmt.Errorf("backend: node %d list balance rows: %w", i, err)
+		}
+		total += part.Total
+		balances = append(balances, part.Rows...)
+	}
+	sortBalanceRows(balances, filter.Sort)
+	balances = pageBalanceRows(balances, filter.Page)
+	return store.BalanceListPage{Rows: balances, Total: total}, nil
 }
 
 // ListAdjustments validates the account id and returns the most recent n
@@ -1552,6 +1946,89 @@ func (s *Service) ListAllAdjustments(
 		recs = recs[:n]
 	}
 	return recs, nil
+}
+
+// ListAdjustmentRows returns adjustments with DB-side filters/counts from each
+// node.
+func (s *Service) ListAdjustmentRows(
+	ctx context.Context, filter store.AdjustmentListFilter,
+) (store.AdjustmentListPage, error) {
+	nodes := s.router.All()
+	if len(nodes) == 1 {
+		target, ok := nodes[0].(adjustmentRowNode)
+		if !ok {
+			return store.AdjustmentListPage{}, fmt.Errorf(
+				"backend: node list adjustment rows: %w", domain.ErrNotImplemented,
+			)
+		}
+		return target.ListAdjustmentRows(ctx, filter)
+	}
+	rows := make([]domain.AccountAdjustmentRecord, 0)
+	total := 0
+	nodeFilter := filter
+	nodeFilter.Page = nodePageForMerge(filter.Page)
+	for i, n := range nodes {
+		target, ok := n.(adjustmentRowNode)
+		if !ok {
+			return store.AdjustmentListPage{}, fmt.Errorf(
+				"backend: node %d list adjustment rows: %w", i, domain.ErrNotImplemented,
+			)
+		}
+		part, err := target.ListAdjustmentRows(ctx, nodeFilter)
+		if err != nil {
+			return store.AdjustmentListPage{}, fmt.Errorf(
+				"backend: node %d list adjustment rows: %w", i, err,
+			)
+		}
+		total += part.Total
+		rows = append(rows, part.Rows...)
+	}
+	sortAdjustmentRows(rows, filter.Sort)
+	rows = pageAdjustmentRows(rows, filter.Page)
+	return store.AdjustmentListPage{Rows: rows, Total: total}, nil
+}
+
+func sortAdjustmentRows(rows []domain.AccountAdjustmentRecord, spec store.SortSpec) {
+	desc := spec.Descending
+	column := spec.Column
+	if column == "" {
+		column = "at"
+		desc = true
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		left, right := rows[i], rows[j]
+		cmp := 0
+		switch column {
+		case "account":
+			cmp = strings.Compare(left.Account.String(), right.Account.String())
+		case "asset":
+			cmp = strings.Compare(left.Asset, right.Asset)
+		case "principal":
+			cmp = strings.Compare(left.Principal, right.Principal)
+		case "source":
+			cmp = strings.Compare(string(left.Source), string(right.Source))
+		case "status":
+			cmp = strings.Compare(adjustmentStatus(left), adjustmentStatus(right))
+		case "at":
+			cmp = timeCompare(left.At, right.At)
+		default:
+			cmp = timeCompare(left.At, right.At)
+		}
+		if cmp == 0 {
+			cmp = strings.Compare(left.ExternalID.String(), right.ExternalID.String())
+		}
+		if desc {
+			return cmp > 0
+		}
+		return cmp < 0
+	})
+}
+
+func adjustmentStatus(rec domain.AccountAdjustmentRecord) string {
+	if rec.Rejected != nil {
+		return string(domain.AdjustmentStatusRejected)
+	}
+	return string(domain.AdjustmentStatusAccepted)
 }
 
 // --- Trading ---------------------------------------------------------------
@@ -1791,24 +2268,51 @@ func (s *Service) GetOrder(
 func (s *Service) ListOrders(
 	ctx context.Context, account domain.AccountID, source domain.Source, n int,
 ) ([]domain.Order, error) {
-	if account != "" {
-		if err := domain.ValidateAccountID(account); err != nil {
-			return nil, err
-		}
+	page, err := s.ListOrderRows(ctx, store.OrderListFilter{
+		Account: account,
+		Source:  source,
+		Sort:    store.SortSpec{Column: "at", Descending: true},
+		Page:    store.PageSpec{Limit: n},
+	})
+	if err != nil {
+		return nil, err
 	}
-	orders := make([]domain.Order, 0)
-	for i, target := range s.router.All() {
-		part, err := target.ListOrders(ctx, account, source, n)
-		if err != nil {
-			return nil, fmt.Errorf("backend: node %d list orders: %w", i, err)
-		}
-		orders = append(orders, part...)
-	}
-	sortOrdersNewestFirst(orders)
-	if n > 0 && len(orders) > n {
-		orders = orders[:n]
+	orders := make([]domain.Order, 0, len(page.Rows))
+	for _, row := range page.Rows {
+		orders = append(orders, row.Order)
 	}
 	return orders, nil
+}
+
+// ListOrderRows returns order rows aggregated across all nodes.
+func (s *Service) ListOrderRows(
+	ctx context.Context, filter store.OrderListFilter,
+) (store.OrderListPage, error) {
+	if filter.Account != "" {
+		if err := domain.ValidateAccountID(filter.Account); err != nil {
+			return store.OrderListPage{}, err
+		}
+	}
+	nodes := s.router.All()
+	if len(nodes) == 1 {
+		return nodes[0].ListOrderRows(ctx, filter)
+	}
+	nodeFilter := filter
+	nodeFilter.Page = nodePageForMerge(filter.Page)
+	orders := make([]store.OrderListRow, 0)
+	total := 0
+	for i, target := range nodes {
+		part, err := target.ListOrderRows(ctx, nodeFilter)
+		if err != nil {
+			return store.OrderListPage{},
+				fmt.Errorf("backend: node %d list order rows: %w", i, err)
+		}
+		total += part.Total
+		orders = append(orders, part.Rows...)
+	}
+	sortOrderRows(orders, filter.Sort)
+	orders = pageOrderRows(orders, filter.Page)
+	return store.OrderListPage{Rows: orders, Total: total}, nil
 }
 
 // sortOrdersNewestFirst orders order rows newest first by timestamp, breaking
@@ -1820,6 +2324,358 @@ func sortOrdersNewestFirst(orders []domain.Order) {
 		}
 		return orders[i].ExternalID.String() > orders[j].ExternalID.String()
 	})
+}
+
+func nodePageForMerge(page store.PageSpec) store.PageSpec {
+	if page.Limit <= 0 {
+		return store.PageSpec{}
+	}
+	return store.PageSpec{Limit: max(page.Offset, 0) + page.Limit}
+}
+
+func pageAccountRows(
+	rows []store.AccountListRow, page store.PageSpec,
+) []store.AccountListRow {
+	if page.Limit <= 0 {
+		return rows
+	}
+	start := min(max(page.Offset, 0), len(rows))
+	end := min(start+page.Limit, len(rows))
+	return rows[start:end]
+}
+
+func pageBalanceRows(
+	rows []store.BalanceListRow, page store.PageSpec,
+) []store.BalanceListRow {
+	if page.Limit <= 0 {
+		return rows
+	}
+	start := min(max(page.Offset, 0), len(rows))
+	end := min(start+page.Limit, len(rows))
+	return rows[start:end]
+}
+
+func pageOrderRows(rows []store.OrderListRow, page store.PageSpec) []store.OrderListRow {
+	if page.Limit <= 0 {
+		return rows
+	}
+	start := min(max(page.Offset, 0), len(rows))
+	end := min(start+page.Limit, len(rows))
+	return rows[start:end]
+}
+
+func pageAdjustmentRows(
+	rows []domain.AccountAdjustmentRecord, page store.PageSpec,
+) []domain.AccountAdjustmentRecord {
+	if page.Limit <= 0 {
+		return rows
+	}
+	start := min(max(page.Offset, 0), len(rows))
+	end := min(start+page.Limit, len(rows))
+	return rows[start:end]
+}
+
+func pageAuditRows(rows []domain.AuditRow, page store.PageSpec) []domain.AuditRow {
+	if page.Limit <= 0 {
+		return rows
+	}
+	start := min(max(page.Offset, 0), len(rows))
+	end := min(start+page.Limit, len(rows))
+	return rows[start:end]
+}
+
+func pageTradeRows(rows []domain.Trade, page store.PageSpec) []domain.Trade {
+	if page.Limit <= 0 {
+		return rows
+	}
+	start := min(max(page.Offset, 0), len(rows))
+	end := min(start+page.Limit, len(rows))
+	return rows[start:end]
+}
+
+func sortAccountRows(rows []store.AccountListRow, spec store.SortSpec) {
+	desc := spec.Descending
+	column := spec.Column
+	if column == "" {
+		column = "code"
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		left, right := rows[i], rows[j]
+		cmp := 0
+		switch column {
+		case "blockReason":
+			cmp = strings.Compare(left.Account.BlockReason, right.Account.BlockReason)
+		case "group":
+			cmp = strings.Compare(left.Account.GroupCode, right.Account.GroupCode)
+		case "positionCount":
+			cmp = left.PositionCount - right.PositionCount
+		case "status":
+			cmp = boolCompare(left.Account.Blocked, right.Account.Blocked)
+		case "title":
+			cmp = strings.Compare(left.Account.Title, right.Account.Title)
+		case "code":
+			cmp = strings.Compare(left.Account.Code.String(), right.Account.Code.String())
+		default:
+			cmp = strings.Compare(left.Account.Code.String(), right.Account.Code.String())
+		}
+		if cmp == 0 {
+			cmp = strings.Compare(left.Account.Code.String(), right.Account.Code.String())
+		}
+		if desc {
+			return cmp > 0
+		}
+		return cmp < 0
+	})
+}
+
+func sortBalanceRows(rows []store.BalanceListRow, spec store.SortSpec) {
+	desc := spec.Descending
+	column := spec.Column
+	if column == "" {
+		column = "account"
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		left, right := rows[i].Balance, rows[j].Balance
+		cmp := 0
+		switch column {
+		case "asset":
+			cmp = strings.Compare(left.Asset, right.Asset)
+		case "available":
+			cmp = decimalStringCompare(left.Available, right.Available)
+		case "held":
+			cmp = decimalStringCompare(left.Held, right.Held)
+		case "incoming":
+			cmp = decimalStringCompare(left.Incoming, right.Incoming)
+		case "averageEntryPrice":
+			cmp = decimalStringCompare(left.AverageEntryPrice, right.AverageEntryPrice)
+		case "realizedPnl":
+			cmp = decimalStringCompare(left.RealizedPnl, right.RealizedPnl)
+		case "updatedAt":
+			cmp = timeCompare(left.UpdatedAt, right.UpdatedAt)
+		case "account":
+			cmp = strings.Compare(left.Account.String(), right.Account.String())
+		default:
+			cmp = strings.Compare(left.Account.String(), right.Account.String())
+		}
+		if cmp == 0 {
+			cmp = strings.Compare(left.Account.String(), right.Account.String())
+		}
+		if cmp == 0 {
+			cmp = strings.Compare(left.Asset, right.Asset)
+		}
+		if desc {
+			return cmp > 0
+		}
+		return cmp < 0
+	})
+}
+
+func sortOrderRows(rows []store.OrderListRow, spec store.SortSpec) {
+	desc := spec.Descending
+	column := spec.Column
+	if column == "" {
+		column = "at"
+		desc = true
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		left, right := rows[i].Order, rows[j].Order
+		cmp := 0
+		switch column {
+		case "account":
+			cmp = strings.Compare(left.Account.String(), right.Account.String())
+		case "amountValue":
+			cmp = decimalStringCompare(left.AmountValue, right.AmountValue)
+		case "baseAsset":
+			cmp = strings.Compare(left.BaseAsset, right.BaseAsset)
+		case "price":
+			cmp = decimalStringCompare(left.Price, right.Price)
+		case "quoteAsset":
+			cmp = strings.Compare(left.QuoteAsset, right.QuoteAsset)
+		case "side":
+			cmp = strings.Compare(string(left.Side), string(right.Side))
+		case "source":
+			cmp = strings.Compare(string(left.Source), string(right.Source))
+		case "status":
+			cmp = strings.Compare(string(left.Status), string(right.Status))
+		case "at":
+			cmp = timeCompare(left.At, right.At)
+		default:
+			cmp = timeCompare(left.At, right.At)
+		}
+		if cmp == 0 {
+			cmp = strings.Compare(left.ExternalID.String(), right.ExternalID.String())
+		}
+		if desc {
+			return cmp > 0
+		}
+		return cmp < 0
+	})
+}
+
+func pagePolicyRows(rows []store.PolicyListRow, page store.PageSpec) []store.PolicyListRow {
+	if page.Limit <= 0 {
+		return rows
+	}
+	start := min(max(page.Offset, 0), len(rows))
+	end := min(start+page.Limit, len(rows))
+	return rows[start:end]
+}
+
+// sortPolicyRows orders the merged policy rows under the same total order as the
+// connector's ORDER BY: the selected column first, then the
+// (kind, scope, account, asset) composite as the deterministic tiebreak. The
+// composite is unique across the union, so single-node and cross-shard listings
+// agree.
+func sortPolicyRows(rows []store.PolicyListRow, spec store.SortSpec) {
+	desc := spec.Descending
+	column := spec.Column
+	if column == "" {
+		column = "policy"
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		left, right := rows[i], rows[j]
+		cmp := 0
+		switch column {
+		case "scope":
+			cmp = strings.Compare(left.Scope, right.Scope)
+		case "account":
+			cmp = strings.Compare(left.Account.String(), right.Account.String())
+		case "asset":
+			cmp = strings.Compare(left.Asset, right.Asset)
+		case "initialPnl":
+			cmp = decimalStringCompare(policyInitialPnl(left), policyInitialPnl(right))
+		case "lowerBound":
+			cmp = decimalStringCompare(policyLowerBound(left), policyLowerBound(right))
+		case "maxNotional":
+			cmp = decimalStringCompare(policyMaxNotional(left), policyMaxNotional(right))
+		case "maxOrders":
+			cmp = decimalStringCompare(policyMaxOrders(left), policyMaxOrders(right))
+		case "maxQuantity":
+			cmp = decimalStringCompare(policyMaxQuantity(left), policyMaxQuantity(right))
+		case "policy":
+			cmp = strings.Compare(string(left.Kind), string(right.Kind))
+		case "upperBound":
+			cmp = decimalStringCompare(policyUpperBound(left), policyUpperBound(right))
+		default:
+			cmp = strings.Compare(string(left.Kind), string(right.Kind))
+		}
+		if cmp == 0 {
+			cmp = policyCompositeCompare(left, right)
+		}
+		if desc {
+			return cmp > 0
+		}
+		return cmp < 0
+	})
+}
+
+func policyMaxOrders(row store.PolicyListRow) string {
+	if row.Rate == nil {
+		return ""
+	}
+	return fmt.Sprintf("%d", row.Rate.MaxOrders)
+}
+
+func policyMaxQuantity(row store.PolicyListRow) string {
+	if row.OrderSize == nil {
+		return ""
+	}
+	return row.OrderSize.MaxQuantity
+}
+
+func policyMaxNotional(row store.PolicyListRow) string {
+	if row.OrderSize == nil {
+		return ""
+	}
+	return row.OrderSize.MaxNotional
+}
+
+func policyLowerBound(row store.PolicyListRow) string {
+	if row.PnlBounds == nil {
+		return ""
+	}
+	return row.PnlBounds.LowerBound
+}
+
+func policyUpperBound(row store.PolicyListRow) string {
+	if row.PnlBounds == nil {
+		return ""
+	}
+	return row.PnlBounds.UpperBound
+}
+
+func policyInitialPnl(row store.PolicyListRow) string {
+	if row.PnlBounds == nil {
+		return ""
+	}
+	return row.PnlBounds.InitialPnl
+}
+
+// policyCompositeCompare orders two policy rows by their unique
+// (kind, scope, account, asset) composite, the tiebreak that mirrors the
+// connector's ORDER BY.
+func policyCompositeCompare(left, right store.PolicyListRow) int {
+	if cmp := strings.Compare(string(left.Kind), string(right.Kind)); cmp != 0 {
+		return cmp
+	}
+	if cmp := strings.Compare(left.Scope, right.Scope); cmp != 0 {
+		return cmp
+	}
+	if cmp := strings.Compare(left.Account.String(), right.Account.String()); cmp != 0 {
+		return cmp
+	}
+	return strings.Compare(left.Asset, right.Asset)
+}
+
+func boolCompare(left, right bool) int {
+	switch {
+	case left == right:
+		return 0
+	case left:
+		return 1
+	default:
+		return -1
+	}
+}
+
+func timeCompare(left, right time.Time) int {
+	switch {
+	case left.Before(right):
+		return -1
+	case left.After(right):
+		return 1
+	default:
+		return 0
+	}
+}
+
+// decimalStringCompare orders two decimal strings for the cross-node merge under
+// the same total order as the connector's DECIMAL collation, so single-node and
+// multi-node listings agree: the empty string (an unset price or average entry
+// price) sorts below every number, two parseable decimals compare numerically,
+// and any other text is pushed above numbers with a byte-order tie-break.
+func decimalStringCompare(left, right string) int {
+	leftEmpty, rightEmpty := left == "", right == ""
+	switch {
+	case leftEmpty && rightEmpty:
+		return 0
+	case leftEmpty:
+		return -1
+	case rightEmpty:
+		return 1
+	}
+	leftD, leftErr := decimal.NewFromString(left)
+	rightD, rightErr := decimal.NewFromString(right)
+	switch {
+	case leftErr == nil && rightErr == nil:
+		return leftD.Cmp(rightD)
+	case leftErr != nil && rightErr != nil:
+		return strings.Compare(left, right)
+	case leftErr != nil:
+		return 1
+	default:
+		return -1
+	}
 }
 
 // ListTrades returns the most recent n trades, optionally narrowed to a
@@ -1847,6 +2703,45 @@ func (s *Service) ListTrades(
 	return trades, nil
 }
 
+// ListTradeRows returns trades with DB-side filters/counts from each node.
+func (s *Service) ListTradeRows(
+	ctx context.Context, filter store.TradeListFilter,
+) (store.TradeListPage, error) {
+	nodes := s.router.All()
+	if len(nodes) == 1 {
+		target, ok := nodes[0].(tradeRowNode)
+		if !ok {
+			return store.TradeListPage{}, fmt.Errorf(
+				"backend: node list trade rows: %w", domain.ErrNotImplemented,
+			)
+		}
+		return target.ListTradeRows(ctx, filter)
+	}
+	rows := make([]domain.Trade, 0)
+	total := 0
+	nodeFilter := filter
+	nodeFilter.Page = nodePageForMerge(filter.Page)
+	for i, n := range nodes {
+		target, ok := n.(tradeRowNode)
+		if !ok {
+			return store.TradeListPage{}, fmt.Errorf(
+				"backend: node %d list trade rows: %w", i, domain.ErrNotImplemented,
+			)
+		}
+		part, err := target.ListTradeRows(ctx, nodeFilter)
+		if err != nil {
+			return store.TradeListPage{}, fmt.Errorf(
+				"backend: node %d list trade rows: %w", i, err,
+			)
+		}
+		total += part.Total
+		rows = append(rows, part.Rows...)
+	}
+	sortTradeRows(rows, filter.Sort)
+	rows = pageTradeRows(rows, filter.Page)
+	return store.TradeListPage{Rows: rows, Total: total}, nil
+}
+
 // sortTradesNewestFirst orders trade rows newest first by timestamp, breaking
 // ties on the opaque external id (descending) for a stable merge across nodes.
 func sortTradesNewestFirst(trades []domain.Trade) {
@@ -1855,6 +2750,48 @@ func sortTradesNewestFirst(trades []domain.Trade) {
 			return trades[i].At.After(trades[j].At)
 		}
 		return trades[i].ExternalID.String() > trades[j].ExternalID.String()
+	})
+}
+
+func sortTradeRows(rows []domain.Trade, spec store.SortSpec) {
+	desc := spec.Descending
+	column := spec.Column
+	if column == "" {
+		column = "at"
+		desc = true
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		left, right := rows[i], rows[j]
+		cmp := 0
+		switch column {
+		case "account":
+			cmp = strings.Compare(left.Account.String(), right.Account.String())
+		case "baseAsset":
+			cmp = strings.Compare(left.BaseAsset, right.BaseAsset)
+		case "lockPrice":
+			cmp = decimalStringCompare(left.LockPrice, right.LockPrice)
+		case "price":
+			cmp = decimalStringCompare(left.Price, right.Price)
+		case "quantity":
+			cmp = decimalStringCompare(left.Quantity, right.Quantity)
+		case "quoteAsset":
+			cmp = strings.Compare(left.QuoteAsset, right.QuoteAsset)
+		case "side":
+			cmp = strings.Compare(string(left.Side), string(right.Side))
+		case "source":
+			cmp = strings.Compare(string(left.Source), string(right.Source))
+		case "at":
+			cmp = timeCompare(left.At, right.At)
+		default:
+			cmp = timeCompare(left.At, right.At)
+		}
+		if cmp == 0 {
+			cmp = strings.Compare(left.ExternalID.String(), right.ExternalID.String())
+		}
+		if desc {
+			return cmp > 0
+		}
+		return cmp < 0
 	})
 }
 

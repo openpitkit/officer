@@ -15,12 +15,12 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithApi as render } from "@/test/apiClient";
 import { I18nextProvider } from "react-i18next";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   Account,
@@ -30,8 +30,8 @@ import type {
   Group,
 } from "@/api/types";
 import type { PollingResult } from "@/api/usePolling";
-import { useAccounts } from "@/api/useAccounts";
-import { useGroups } from "@/api/useGroups";
+import { useAccountsPage } from "@/api/useAccounts";
+import { useGroupsPage } from "@/api/useGroups";
 import { SidebarProvider } from "@/components/SidebarContext";
 import { ApiError } from "@/framework";
 import i18n from "@/i18n";
@@ -39,8 +39,8 @@ import { Accounts, CreateAccountDialog } from "@/pages/Accounts";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
 import { ThemeProvider } from "@/theme/ThemeProvider";
 
-vi.mock("@/api/useAccounts", () => ({ useAccounts: vi.fn() }));
-vi.mock("@/api/useGroups", () => ({ useGroups: vi.fn() }));
+vi.mock("@/api/useAccounts", () => ({ useAccountsPage: vi.fn() }));
+vi.mock("@/api/useGroups", () => ({ useGroupsPage: vi.fn() }));
 vi.mock("@/api/useMarketData", () => ({
   useMarketData: () => ({
     load: { state: "ready", data: { restartRequired: false }, error: null },
@@ -111,11 +111,37 @@ const exportBusinessCsvMock = vi.fn();
 const importBusinessCsvMock = vi.fn();
 const previewBusinessCsvImportMock = vi.fn();
 const setAccountGroupMock = vi.fn();
-const useAccountsMock = vi.mocked(useAccounts);
-const useGroupsMock = vi.mocked(useGroups);
+const createGroupMock = vi.fn();
+const fetchAuditMock = vi.fn();
+const fetchAccountsMock = vi.fn();
+const fetchGroupsMock = vi.fn();
+const unblockAccountMock = vi.fn();
+const unblockGroupMock = vi.fn();
+const useAccountsMock = vi.mocked(useAccountsPage);
+const useGroupsMock = vi.mocked(useGroupsPage);
+
+function accountCodeWasRequested(code: string): boolean {
+  return useAccountsMock.mock.calls.some(([filters]) => filters?.code === code);
+}
+
+function groupCodeWasRequested(code: string): boolean {
+  return useGroupsMock.mock.calls.some(([filters]) => filters?.code === code);
+}
+
+function lastAccountFilters() {
+  return useAccountsMock.mock.calls[useAccountsMock.mock.calls.length - 1]?.[0];
+}
+
+function lastGroupFilters() {
+  return useGroupsMock.mock.calls[useGroupsMock.mock.calls.length - 1]?.[0];
+}
 
 function ready<T>(data: T): PollingResult<T> {
   return { load: { state: "ready", data, error: null }, reload: vi.fn() };
+}
+
+function readyPage<T>(items: T[]): PollingResult<{ items: T[]; total: number }> {
+  return ready({ items, total: items.length });
 }
 
 const accounts: Account[] = [
@@ -139,11 +165,22 @@ const accounts: Account[] = [
 
 const groups: Group[] = [
   {
+    code: "",
+    title: "",
+    blocked: false,
+    blockReason: "",
+    notes: "",
+    accountCount: 1,
+    positionCount: 0,
+  },
+  {
     code: "equity-desks",
     title: "Equity desks",
     blocked: false,
     blockReason: "",
     notes: "",
+    accountCount: 1,
+    positionCount: 0,
   },
 ];
 
@@ -162,7 +199,7 @@ function renderDialog(onCreated = vi.fn()) {
   return onCreated;
 }
 
-function renderAccounts() {
+function renderAccounts(initialEntry = "/accounts") {
   render(
     <I18nextProvider i18n={i18n}>
       <ThemeProvider storageKey="pit-officer-test-theme" defaultMode="light">
@@ -170,7 +207,7 @@ function renderAccounts() {
           densityStorageKey="pit-officer-test-density"
           tradeStyleStorageKey="pit-officer-test-trade-style"
         >
-          <MemoryRouter>
+          <MemoryRouter initialEntries={[initialEntry]}>
             <SidebarProvider>
               <Accounts />
             </SidebarProvider>
@@ -185,6 +222,12 @@ function renderAccounts() {
         importBusinessCsv: importBusinessCsvMock,
         previewBusinessCsvImport: previewBusinessCsvImportMock,
         setAccountGroup: setAccountGroupMock,
+        createGroup: createGroupMock,
+        fetchAudit: fetchAuditMock,
+        fetchAccounts: fetchAccountsMock,
+        fetchGroups: fetchGroupsMock,
+        unblockAccount: unblockAccountMock,
+        unblockGroup: unblockGroupMock,
       },
     },
   );
@@ -195,8 +238,8 @@ beforeEach(async () => {
   // Pin the locale so assertions match the English catalog regardless of the
   // detector's navigator guess under jsdom.
   await i18n.changeLanguage("en");
-  useAccountsMock.mockReturnValue(ready(accounts));
-  useGroupsMock.mockReturnValue(ready(groups));
+  useAccountsMock.mockReturnValue(readyPage(accounts));
+  useGroupsMock.mockReturnValue(readyPage(groups));
   exportBusinessCsvMock.mockResolvedValue({
     blob: new Blob(["csv"]),
     filename: "business.csv",
@@ -223,6 +266,24 @@ beforeEach(async () => {
     },
     conflicts: [],
   });
+  fetchAuditMock.mockResolvedValue([]);
+  fetchAccountsMock.mockResolvedValue(accounts);
+  fetchGroupsMock.mockResolvedValue(groups);
+  unblockAccountMock.mockResolvedValue({
+    code: "algo-infinite-loop",
+    title: "",
+    blocked: false,
+    blockReason: "",
+    group: "",
+    notes: "",
+  });
+  unblockGroupMock.mockResolvedValue({
+    code: "equity-desks",
+    title: "Equity desks",
+    blocked: false,
+    blockReason: "",
+    notes: "",
+  });
   Object.defineProperty(URL, "createObjectURL", {
     configurable: true,
     value: vi.fn(() => "blob:business-csv"),
@@ -232,6 +293,10 @@ beforeEach(async () => {
     value: vi.fn(),
   });
   HTMLAnchorElement.prototype.click = () => {};
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("CreateAccountDialog", () => {
@@ -357,7 +422,13 @@ describe("Accounts business CSV", () => {
     renderAccounts();
 
     await user.click(screen.getByRole("button", { name: /^groups$/i }));
-    await user.click(screen.getByText("Default group"));
+    const defaultRow = screen.getByText("Default group").closest("tr");
+    expect(defaultRow).not.toBeNull();
+    await user.click(
+      within(defaultRow as HTMLElement).getByRole("button", {
+        name: /filter by default group/i,
+      }),
+    );
     await user.click(
       screen.getByRole("button", { name: /export accounts csv/i }),
     );
@@ -448,7 +519,7 @@ describe("Accounts business CSV", () => {
     );
   });
 
-  it("resets account pagination when selecting a group filter", async () => {
+  it("resets account pagination and requests accounts with the selected group", async () => {
     const user = userEvent.setup();
     const pagedAccounts: Account[] = [
       ...Array.from({ length: 51 }, (_, index) => ({
@@ -468,14 +539,665 @@ describe("Accounts business CSV", () => {
         notes: "",
       },
     ];
-    useAccountsMock.mockReturnValue(ready(pagedAccounts));
+    useAccountsMock.mockImplementation((filters) =>
+      readyPage(filters?.group === "equity-desks" ? [pagedAccounts[51]] : pagedAccounts),
+    );
     renderAccounts();
 
     await user.click(screen.getAllByRole("button", { name: /^next$/i })[0]);
     await user.click(screen.getByRole("button", { name: /^groups$/i }));
-    await user.click(screen.getByText("equity-desks"));
-    await user.click(screen.getByRole("button", { name: /^accounts$/i }));
+    const groupRow = screen.getByText("Equity desks").closest("tr");
+    expect(groupRow).not.toBeNull();
+    await user.click(
+      within(groupRow as HTMLElement).getByRole("button", {
+        name: /filter by equity-desks/i,
+      }),
+    );
 
-    expect(screen.getByText("desk-alpha")).toBeInTheDocument();
+    expect(screen.getByText("Desk alpha")).toBeInTheDocument();
+    expect(useAccountsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ group: "equity-desks" }),
+    );
+  });
+
+  it("filters accounts by group through the group-cell filter action", async () => {
+    const user = userEvent.setup();
+    renderAccounts();
+
+    await user.click(
+      screen.getByRole("button", { name: /filter by equity-desks/i }),
+    );
+
+    await waitFor(() =>
+      expect(useAccountsMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ group: "equity-desks" }),
+      ),
+    );
+  });
+
+  it("creates a missing group before assigning it to an account", async () => {
+    const user = userEvent.setup();
+    createGroupMock.mockResolvedValue({
+      code: "new-desk",
+      title: "",
+      notes: "",
+      blocked: false,
+      blockReason: "",
+      accountCount: 1,
+      positionCount: 0,
+    });
+    setAccountGroupMock.mockResolvedValue({
+      code: "desk-default",
+      title: "Desk default",
+      blocked: false,
+      blockReason: "",
+      group: "new-desk",
+      notes: "",
+    });
+    renderAccounts();
+
+    const row = screen.getByText("Desk default").closest("tr");
+    expect(row).not.toBeNull();
+    await user.click(
+      within(row as HTMLElement).getByRole("button", {
+        name: /edit group assignment/i,
+      }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: /assign group/i });
+    await user.type(within(dialog).getByLabelText(/^group$/i), "new-desk");
+    await user.click(within(dialog).getByRole("button", { name: /^assign$/i }));
+
+    await waitFor(() =>
+      expect(createGroupMock).toHaveBeenCalledWith("new-desk", "", ""),
+    );
+    expect(setAccountGroupMock).toHaveBeenCalledWith("desk-default", "new-desk");
+  });
+
+  it("requests a status sort when the status header is toggled", async () => {
+    const user = userEvent.setup();
+    renderAccounts();
+
+    await user.click(screen.getByRole("button", { name: /sort by status/i }));
+
+    await waitFor(() =>
+      expect(useAccountsMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ sort: "status", order: "asc" }),
+      ),
+    );
+  });
+
+  it("renders an account code once when the display title is empty", () => {
+    useAccountsMock.mockReturnValue(
+      readyPage([
+        {
+          code: "empty-title",
+          title: "",
+          blocked: false,
+          blockReason: "",
+          group: "",
+          notes: "",
+        },
+      ]),
+    );
+
+    renderAccounts();
+
+    const row = screen.getByText("empty-title").closest("tr");
+
+    expect(row).not.toBeNull();
+    expect(
+      within(row as HTMLElement).getAllByText("empty-title"),
+    ).toHaveLength(1);
+  });
+
+  it("loads blocked-account audit with the account block action", async () => {
+    const user = userEvent.setup();
+    useAccountsMock.mockReturnValue(
+      readyPage([
+        {
+          code: "algo-infinite-loop",
+          title: "",
+          blocked: true,
+          blockReason: "Trading halt",
+          group: "",
+          notes: "",
+        },
+      ]),
+    );
+    fetchAuditMock.mockResolvedValue([
+      {
+        externalId: "audit-1",
+        at: "2026-06-29T00:00:00Z",
+        actor: "risk",
+        actorTitle: "Risk",
+        action: "block",
+        account: "algo-infinite-loop",
+        accountTitle: "",
+        detail: "Trading halt",
+        source: "panel",
+      },
+    ]);
+
+    renderAccounts();
+    await user.click(
+      screen.getByRole("button", { name: /view block details/i }),
+    );
+
+    await waitFor(() =>
+      expect(fetchAuditMock).toHaveBeenCalledWith({
+        account: "algo-infinite-loop",
+        actions: ["block"],
+        limit: 1,
+      }),
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("keeps blocked details open when unblock confirmation is cancelled", async () => {
+    const user = userEvent.setup();
+    useAccountsMock.mockReturnValue(
+      readyPage([
+        {
+          code: "algo-infinite-loop",
+          title: "",
+          blocked: true,
+          blockReason: "Trading halt",
+          group: "",
+          notes: "",
+        },
+      ]),
+    );
+
+    renderAccounts();
+    await user.click(
+      screen.getByRole("button", { name: /view block details/i }),
+    );
+    const details = await screen.findByRole("dialog", {
+      name: /blocked account/i,
+    });
+    await user.click(within(details).getByRole("button", { name: /^unblock$/i }));
+    const confirmation = screen.getByRole("alertdialog", {
+      name: /unblock account/i,
+    });
+
+    await user.click(
+      within(confirmation).getByRole("button", { name: /cancel/i }),
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument(),
+    );
+    expect(
+      screen.getByRole("dialog", { name: /blocked account/i }),
+    ).toBeInTheDocument();
+    expect(unblockAccountMock).not.toHaveBeenCalled();
+  });
+
+  it("closes blocked details after a successful unblock", async () => {
+    const user = userEvent.setup();
+    useAccountsMock.mockReturnValue(
+      readyPage([
+        {
+          code: "algo-infinite-loop",
+          title: "",
+          blocked: true,
+          blockReason: "Trading halt",
+          group: "",
+          notes: "",
+        },
+      ]),
+    );
+
+    renderAccounts();
+    await user.click(
+      screen.getByRole("button", { name: /view block details/i }),
+    );
+    const details = await screen.findByRole("dialog", {
+      name: /blocked account/i,
+    });
+    await user.click(within(details).getByRole("button", { name: /^unblock$/i }));
+    const confirmation = screen.getByRole("alertdialog", {
+      name: /unblock account/i,
+    });
+    await user.click(
+      within(confirmation).getByRole("button", { name: /^unblock$/i }),
+    );
+
+    await waitFor(() =>
+      expect(unblockAccountMock).toHaveBeenCalledWith("algo-infinite-loop"),
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: /blocked account/i }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
+  it("switches to filtered accounts through a group row filter action", async () => {
+    const user = userEvent.setup();
+    renderAccounts();
+
+    await user.click(screen.getByRole("button", { name: /^groups$/i }));
+    const row = screen.getByText("Equity desks").closest("tr");
+    expect(row).not.toBeNull();
+    await user.click(
+      within(row as HTMLElement).getByRole("button", { name: /filter by equity-desks/i }),
+    );
+
+    expect(screen.getByText("Desk alpha")).toBeInTheDocument();
+    expect(useAccountsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ group: "equity-desks" }),
+    );
+  });
+
+  it("exposes mask help on the account code search field", async () => {
+    const user = userEvent.setup();
+    renderAccounts();
+
+    const codeInput = screen.getByLabelText(/account search/i);
+
+    expect(codeInput).toHaveAttribute(
+      "title",
+      expect.stringContaining("desk-*"),
+    );
+    expect(screen.queryByText(/wildcard/i)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /more filters/i }));
+
+    expect(screen.getByText(/wildcard/i)).toBeInTheDocument();
+  });
+
+  it("debounces account code filters without dropping focus", async () => {
+    vi.useFakeTimers();
+    renderAccounts();
+    const codeInput = screen.getByLabelText(/account search/i);
+
+    codeInput.focus();
+    fireEvent.change(codeInput, {
+      target: { value: "desk-alpha" },
+    });
+
+    expect(accountCodeWasRequested("desk-alpha")).toBe(false);
+
+    act(() => {
+      vi.advanceTimersByTime(299);
+    });
+    expect(accountCodeWasRequested("desk-alpha")).toBe(false);
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(accountCodeWasRequested("desk-alpha")).toBe(true);
+    expect(document.activeElement).toBe(codeInput);
+  });
+
+  it("suggests known accounts while typing the account search filter", async () => {
+    vi.useFakeTimers();
+    fetchAccountsMock.mockResolvedValue([accounts[1]]);
+    renderAccounts();
+
+    const codeInput = screen.getByLabelText(/account search/i);
+    fireEvent.change(codeInput, { target: { value: "desk-a" } });
+
+    await act(async () => {
+      vi.advanceTimersByTime(300);
+      await Promise.resolve();
+    });
+
+    expect(fetchAccountsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: "desk-a",
+        codeMatch: "starts_with",
+        limit: 8,
+        sort: "code",
+      }),
+      expect.any(AbortSignal),
+    );
+    expect(
+      screen.getByRole("option", { name: "desk-alpha" }),
+    ).toBeInTheDocument();
+  });
+
+  it("applies account advanced search only on apply and keeps dialog input", async () => {
+    const user = userEvent.setup();
+    renderAccounts();
+
+    await user.click(screen.getByRole("button", { name: /more filters/i }));
+    const dialog = screen.getByRole("dialog", { name: /find by fields/i });
+
+    expect(within(dialog).queryByLabelText(/^notes$/i)).not.toBeInTheDocument();
+    await user.type(within(dialog).getAllByPlaceholderText("Value")[0], "1");
+    await user.type(
+      within(dialog).getByLabelText(/^block reason$/i, { selector: "input" }),
+      "halt",
+    );
+    expect(lastAccountFilters()).not.toEqual(
+      expect.objectContaining({ blockReason: "halt" }),
+    );
+    expect(lastAccountFilters()).not.toEqual(
+      expect.objectContaining({ positionCountMin: "1" }),
+    );
+
+    await user.click(
+      within(dialog).getByRole("button", {
+        name: /apply advanced filter/i,
+      }),
+    );
+    expect(lastAccountFilters()).toEqual(
+      expect.objectContaining({
+        blockReason: "halt",
+        positionCountMode: "eq",
+        positionCountMin: "1",
+      }),
+    );
+    expect(lastAccountFilters()).not.toEqual(
+      expect.objectContaining({ notes: expect.any(String) }),
+    );
+    expect(screen.getByText(/Active filters/i)).toBeInTheDocument();
+    expect(screen.getByText(/Position count: Equals 1/i)).toBeInTheDocument();
+    expect(screen.getByText(/Block reason: Contains halt/i)).toBeInTheDocument();
+    expect(
+      screen.getAllByRole("button", { name: /Remove advanced filter/i })
+        .length,
+    ).toBeGreaterThan(0);
+    await user.click(screen.getByRole("button", { name: /clear all filters/i }));
+    expect(screen.queryByText(/Active filters/i)).not.toBeInTheDocument();
+    expect(lastAccountFilters()).not.toEqual(
+      expect.objectContaining({ blockReason: expect.any(String) }),
+    );
+    expect(lastAccountFilters()).not.toEqual(
+      expect.objectContaining({ positionCountMin: expect.any(String) }),
+    );
+
+    await user.click(screen.getByRole("button", { name: /more filters/i }));
+    const reopened = screen.getByRole("dialog", { name: /find by fields/i });
+    expect(within(reopened).queryByLabelText(/^notes$/i)).not.toBeInTheDocument();
+    expect(
+      within(reopened).getByLabelText(/^block reason$/i, { selector: "input" }),
+    ).toHaveValue("");
+    expect(within(reopened).getAllByPlaceholderText("Value")[0]).toHaveValue("");
+  });
+
+  it("keeps account advanced search open when a numeric value is invalid", async () => {
+    const user = userEvent.setup();
+    renderAccounts();
+
+    await user.click(screen.getByRole("button", { name: /more filters/i }));
+    const dialog = screen.getByRole("dialog", { name: /find by fields/i });
+    const positionCount = within(dialog).getAllByPlaceholderText("Value")[0];
+    await user.type(positionCount, "word");
+
+    await user.click(
+      within(dialog).getByRole("button", {
+        name: /apply advanced filter/i,
+      }),
+    );
+
+    expect(
+      screen.getByRole("dialog", { name: /find by fields/i }),
+    ).toBeInTheDocument();
+    expect(positionCount).toBeInvalid();
+    expect(positionCount).toHaveProperty(
+      "validationMessage",
+      "Enter a valid number.",
+    );
+    expect(lastAccountFilters()).not.toEqual(
+      expect.objectContaining({
+        positionCountMode: "eq",
+        positionCountMin: expect.any(String),
+      }),
+    );
+    expect(screen.queryByText(/active filters/i)).not.toBeInTheDocument();
+  });
+
+  it("maps less-than count filters to the visible value", async () => {
+    renderAccounts(
+      "/accounts?positionCountMode=lt&positionCountMin=1&positionCountMax=9",
+    );
+
+    await waitFor(() =>
+      expect(lastAccountFilters()).toEqual(
+        expect.objectContaining({
+          positionCountMode: "lt",
+          positionCountMax: "1",
+        }),
+      ),
+    );
+  });
+
+  it("debounces group code filters", async () => {
+    vi.useFakeTimers();
+    renderAccounts();
+
+    fireEvent.click(screen.getByRole("button", { name: /^groups$/i }));
+    fireEvent.change(screen.getByLabelText(/group search/i), {
+      target: { value: "equity" },
+    });
+
+    expect(groupCodeWasRequested("equity")).toBe(false);
+
+    act(() => {
+      vi.advanceTimersByTime(299);
+    });
+    expect(groupCodeWasRequested("equity")).toBe(false);
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(groupCodeWasRequested("equity")).toBe(true);
+  });
+
+  it("suggests known groups while typing group filters", async () => {
+    vi.useFakeTimers();
+    fetchGroupsMock.mockResolvedValue([groups[1]]);
+    renderAccounts();
+
+    const accountGroupInput = screen.getByLabelText(/group search/i);
+    fireEvent.change(accountGroupInput, {
+      target: { value: "equity" },
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(300);
+      await Promise.resolve();
+    });
+
+    expect(fetchGroupsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: "equity",
+        codeMatch: "starts_with",
+        limit: 8,
+        sort: "code",
+      }),
+      expect.any(AbortSignal),
+    );
+    expect(
+      screen.getByRole("option", { name: "equity-desks" }),
+    ).toBeInTheDocument();
+    expect(lastAccountFilters()).not.toEqual(
+      expect.objectContaining({ group: expect.any(String) }),
+    );
+
+    fireEvent.change(accountGroupInput, {
+      target: { value: "equity-desks" },
+    });
+    expect(lastAccountFilters()).toEqual(
+      expect.objectContaining({ group: "equity-desks" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /clear all filters/i }));
+    expect(accountGroupInput).toHaveValue("");
+    expect(lastAccountFilters()).not.toEqual(
+      expect.objectContaining({ group: expect.any(String) }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /^groups$/i }));
+    fireEvent.change(screen.getByLabelText(/group search/i), {
+      target: { value: "equity" },
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(300);
+      await Promise.resolve();
+    });
+
+    expect(fetchGroupsMock).toHaveBeenCalledTimes(2);
+    expect(
+      screen.getByRole("option", { name: "equity-desks" }),
+    ).toBeInTheDocument();
+  });
+
+  it("applies group advanced search only on apply", async () => {
+    const user = userEvent.setup();
+    renderAccounts();
+
+    await user.click(screen.getByRole("button", { name: /^groups$/i }));
+    await user.click(screen.getByRole("button", { name: /more filters/i }));
+    const dialog = screen.getByRole("dialog", { name: /find by fields/i });
+
+    await user.type(within(dialog).getByLabelText(/^notes$/i), "desk");
+    await user.type(
+      within(dialog).getByLabelText(/^block reason$/i, { selector: "input" }),
+      "halt",
+    );
+    expect(lastGroupFilters()).not.toEqual(
+      expect.objectContaining({ notes: "desk" }),
+    );
+    expect(lastGroupFilters()).not.toEqual(
+      expect.objectContaining({ blockReason: "halt" }),
+    );
+
+    await user.click(
+      within(dialog).getByRole("button", {
+        name: /apply advanced filter/i,
+      }),
+    );
+    expect(lastGroupFilters()).toEqual(
+      expect.objectContaining({ notes: "desk", blockReason: "halt" }),
+    );
+  });
+
+  it("applies supported account-count inequality filters", async () => {
+    const user = userEvent.setup();
+    renderAccounts(
+      "/accounts?tab=groups&accountCountMode=neq&accountCountMin=1",
+    );
+
+    await user.click(screen.getByRole("button", { name: /more filters/i }));
+    const dialog = screen.getByRole("dialog", { name: /find by fields/i });
+
+    expect(within(dialog).getAllByRole("combobox")[1]).toHaveTextContent(
+      /not equal/i,
+    );
+    expect(within(dialog).getAllByPlaceholderText(/value/i)[1]).toHaveValue(
+      "1",
+    );
+    await user.click(
+      within(dialog).getByRole("button", {
+        name: /apply advanced filter/i,
+      }),
+    );
+
+    expect(lastGroupFilters()).toEqual(
+      expect.objectContaining({
+        accountCountMode: "neq",
+        accountCountMin: "1",
+      }),
+    );
+    expect(screen.getByText(/Active filters/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/account count: not equal 1/i),
+    ).toBeInTheDocument();
+  });
+
+  it("does not synthesize the default group when the group response omits it", async () => {
+    const user = userEvent.setup();
+    useGroupsMock.mockReturnValue(readyPage(groups.filter((g) => g.code !== "")));
+
+    renderAccounts();
+
+    await user.click(screen.getByRole("button", { name: /^groups$/i }));
+
+    expect(screen.queryByText("Default group")).not.toBeInTheDocument();
+    expect(screen.getByText("equity-desks")).toBeInTheDocument();
+  });
+
+  it("renders default group counts from the group response, not the accounts response", async () => {
+    const user = userEvent.setup();
+    useAccountsMock.mockReturnValue(readyPage([]));
+    useGroupsMock.mockReturnValue(readyPage([
+      {
+        code: "",
+        title: "",
+        blocked: false,
+        blockReason: "",
+        notes: "",
+        accountCount: 7,
+        positionCount: 4,
+      },
+    ]));
+
+    renderAccounts();
+
+    await user.click(screen.getByRole("button", { name: /^groups$/i }));
+    const row = screen.getByText("Default group").closest("tr");
+
+    expect(row).not.toBeNull();
+    expect(within(row as HTMLElement).getByText("7")).toBeInTheDocument();
+    expect(within(row as HTMLElement).getByText("4")).toBeInTheDocument();
+  });
+});
+
+describe("Accounts share filter set", () => {
+  it("copies a deep link that encodes the active accounts filters", async () => {
+    const user = userEvent.setup();
+    // Install the spy after userEvent.setup so its own clipboard stub does not
+    // shadow it; the share button click uses fireEvent for the same reason.
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    renderAccounts();
+
+    await user.type(screen.getByLabelText(/account search/i), "acc-spx");
+    // fireEvent (not userEvent) so the user-event clipboard stub does not
+    // shadow the writeText spy asserted below.
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /copy a link to the current filter set/i,
+      }),
+    );
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    const url = new URL(writeText.mock.calls[0][0]);
+    expect(url.pathname).toBe("/accounts");
+    expect(url.searchParams.get("code")).toBe("acc-spx");
+    // Default codeMatch / status stay out of the clean link, and the accounts
+    // tab is implied (no tab param).
+    expect(url.searchParams.get("codeMatch")).toBeNull();
+    expect(url.searchParams.get("status")).toBeNull();
+    expect(url.searchParams.get("tab")).toBeNull();
+  });
+
+  it("restores the accounts filter set from query params on mount", async () => {
+    renderAccounts("/accounts?code=acc-spx&status=blocked");
+
+    expect(screen.getByLabelText(/account search/i)).toHaveValue("acc-spx");
+    await waitFor(() =>
+      expect(lastAccountFilters()).toEqual(
+        expect.objectContaining({ code: "acc-spx", status: "blocked" }),
+      ),
+    );
+  });
+
+  it("restores the groups tab and its filters from query params on mount", async () => {
+    renderAccounts("/accounts?tab=groups&code=equity");
+
+    expect(screen.getByLabelText(/group search/i)).toHaveValue("equity");
+    await waitFor(() =>
+      expect(lastGroupFilters()).toEqual(
+        expect.objectContaining({ code: "equity" }),
+      ),
+    );
   });
 });

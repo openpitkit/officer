@@ -25,3 +25,32 @@ type AuditEntry = fwstore.AuditEntry
 type BusinessCSVImport = fwstore.BusinessCSVImport
 type BusinessCSVImportGroup = fwstore.BusinessCSVImportGroup
 type BusinessCSVImportAccount = fwstore.BusinessCSVImportAccount
+type TextMatcher = fwstore.TextMatcher
+type SortSpec = fwstore.SortSpec
+type PageSpec = fwstore.PageSpec
+type AccountListFilter = fwstore.AccountListFilter
+type AccountListRow = fwstore.AccountListRow
+type GroupListFilter = fwstore.GroupListFilter
+type GroupListRow = fwstore.GroupListRow
+type AssetListFilter = fwstore.AssetListFilter
+type AssetClassListFilter = fwstore.AssetClassListFilter
+type AssetClassListRow = fwstore.AssetClassListRow
+type StatusFilter = fwstore.StatusFilter
+type CountFilter = fwstore.CountFilter
+type CountRangeFilter = fwstore.CountRangeFilter
+type DecimalRangeFilter = fwstore.DecimalRangeFilter
+type PolicyKind = fwstore.PolicyKind
+type PolicyListFilter = fwstore.PolicyListFilter
+type PolicyListRow = fwstore.PolicyListRow
+
+const (
+	StatusFilterActive  = fwstore.StatusFilterActive
+	StatusFilterBlocked = fwstore.StatusFilterBlocked
+	CountFilterHas      = fwstore.CountFilterHas
+	CountFilterNone     = fwstore.CountFilterNone
+	PolicyKindRate      = fwstore.PolicyKindRate
+	PolicyKindOrderSize = fwstore.PolicyKindOrderSize
+	PolicyKindPnlBounds = fwstore.PolicyKindPnlBounds
+)
+
+func ExactTextMatcher(value string) TextMatcher { return fwstore.ExactTextMatcher(value) }

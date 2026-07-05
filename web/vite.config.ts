@@ -35,7 +35,9 @@ export default defineConfig({
   },
   build: {
     outDir: "dist",
-    emptyOutDir: true,
+    // npm run prepare:dist cleans generated files while preserving the
+    // committed embed placeholder required by go:embed on fresh clones.
+    emptyOutDir: false,
     sourcemap: false,
     rollupOptions: {
       output: {

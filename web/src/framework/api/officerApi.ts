@@ -18,16 +18,22 @@
 import { ApiError, type ApiClient } from "./createApiClient";
 import type {
   Account,
+  AccountListFilters,
   AccountLimits,
   Adjustment,
+  Asset,
   AdjustmentAccepted,
   AdjustmentAmount,
   AdjustmentRejected,
   AdjustmentRequest,
   ApprovalToken,
+  AssetClass,
+  AssetClassListFilters,
+  AssetListFilters,
   AuditActionGroup,
   AuditEntry,
   Balance,
+  BalanceListFilters,
   BackupArchive,
   BackupRestoreSummary,
   BackupScope,
@@ -47,6 +53,7 @@ import type {
   ExecutionBlock,
   ExecutionReportResult,
   Group,
+  GroupListFilters,
   Health,
   Limit,
   MarketDataDiagnostic,
@@ -65,9 +72,15 @@ import type {
   Order,
   OrderApproval,
   OrderEvent,
+  OrderListFilters,
   OrderSizeLimit,
+  PageRequest,
+  PagedResult,
   PnlBoundsLimit,
+  Policy,
+  PolicyListFilters,
   RateLimit,
+  RangeFilterMode,
   SigningKey,
   SigningKeyFormat,
   SigningKeysStatus,
@@ -77,8 +90,10 @@ import type {
   ServiceInfo,
   ServiceLogs,
   Source,
+  SortOrder,
   Status,
   StoreHealth,
+  TextMatchMode,
   Trade,
 } from "../../api/types";
 
@@ -201,11 +216,12 @@ function normalizeAccount(v: unknown): Account {
   const title = asString(pick(o, "title", "Title"));
   return {
     code,
-    title: title || code,
+    title,
     blocked: asBool(pick(o, "blocked", "Blocked")),
     blockReason: asString(pick(o, "blockReason", "BlockReason", "block_reason")),
     group: asString(pick(o, "group", "Group")),
     notes: asString(pick(o, "notes", "Notes")),
+    positionCount: asInt(pick(o, "positionCount", "PositionCount")),
   };
 }
 
@@ -219,6 +235,8 @@ function normalizeGroup(v: unknown): Group {
     notes: asString(pick(o, "notes", "Notes")),
     blocked: asBool(pick(o, "blocked", "Blocked")),
     blockReason: asString(pick(o, "blockReason", "BlockReason", "block_reason")),
+    accountCount: asInt(pick(o, "accountCount", "AccountCount")),
+    positionCount: asInt(pick(o, "positionCount", "PositionCount")),
   };
 }
 
@@ -271,7 +289,7 @@ function normalizeAdjustmentRequest(v: unknown): AdjustmentRequest {
   const req: AdjustmentRequest = {
     asset: asString(pick(o, "asset", "Asset")),
   };
-  const externalId = pick(o, "externalId", "ExternalId", "external_id");
+  const externalId = pick(o, "externalId", "ExternalId", "external_id", "id", "Id", "ID");
   if (externalId !== undefined) {
     req.externalId = asString(externalId);
   }
@@ -591,6 +609,110 @@ function normalizeLimitCollection(v: unknown): Limit[] {
     return v.map(normalizeLimit);
   }
   return flattenAccountLimits(normalizeAccountLimits(v));
+}
+
+function normalizePolicyKind(v: unknown): Policy["kind"] {
+  switch (v) {
+    case "rate_limit":
+    case "order_size_limit":
+    case "pnl_bounds_kill_switch":
+      return v;
+    default:
+      return "rate_limit";
+  }
+}
+
+/** Normalize one policyDTO from the unified GET /limits list. */
+function normalizePolicy(v: unknown): Policy {
+  const o = isObject(v) ? v : {};
+  const values = isObject(pick(o, "values", "Values"))
+    ? (pick(o, "values", "Values") as Json)
+    : {};
+  const policy: Policy = {
+    kind: normalizePolicyKind(pick(o, "kind", "Kind")),
+    scope: asString(pick(o, "scope", "Scope")),
+    account: asString(pick(o, "account", "Account")),
+    asset: asString(pick(o, "asset", "Asset")),
+    values: {},
+  };
+  const rate = pick(values, "rate", "Rate");
+  if (isObject(rate)) {
+    policy.values.rate = {
+      windowMs: asInt(pick(rate, "windowMs", "WindowMs", "window_ms")),
+      maxOrders: asInt(pick(rate, "maxOrders", "MaxOrders", "max_orders")),
+    };
+  }
+  const orderSize = pick(values, "orderSize", "OrderSize", "order_size");
+  if (isObject(orderSize)) {
+    policy.values.orderSize = {
+      maxQuantity: asString(
+        pick(orderSize, "maxQuantity", "MaxQuantity", "max_quantity"),
+      ),
+      maxNotional: asString(
+        pick(orderSize, "maxNotional", "MaxNotional", "max_notional"),
+      ),
+    };
+  }
+  const pnlBounds = pick(values, "pnlBounds", "PnlBounds", "pnl_bounds");
+  if (isObject(pnlBounds)) {
+    policy.values.pnlBounds = {
+      lowerBound: asString(
+        pick(pnlBounds, "lowerBound", "LowerBound", "lower_bound"),
+      ),
+      upperBound: asString(
+        pick(pnlBounds, "upperBound", "UpperBound", "upper_bound"),
+      ),
+      initialPnl: asString(
+        pick(pnlBounds, "initialPnl", "InitialPnl", "initial_pnl"),
+      ),
+    };
+  }
+  return policy;
+}
+
+/** Flatten a typed policy row into the UI's flat policy/value `Limit` model so
+ *  the policy table, value chips, and the edit/delete dialogs keep one shape
+ *  across the list endpoint and the account-detail endpoint. */
+function policyToLimit(policy: Policy): Limit {
+  const base = {
+    policy: policy.kind,
+    scope: policy.scope,
+    account: policy.account,
+    asset: policy.asset,
+  };
+  switch (policy.kind) {
+    case "rate_limit": {
+      const rate = policy.values.rate;
+      return {
+        ...base,
+        values: {
+          max_orders: String(rate?.maxOrders ?? 0),
+          window: windowMsToDuration(rate?.windowMs ?? 0),
+        },
+      };
+    }
+    case "order_size_limit": {
+      const orderSize = policy.values.orderSize;
+      return {
+        ...base,
+        values: {
+          max_quantity: orderSize?.maxQuantity ?? "",
+          max_notional: orderSize?.maxNotional ?? "",
+        },
+      };
+    }
+    case "pnl_bounds_kill_switch": {
+      const pnlBounds = policy.values.pnlBounds;
+      return {
+        ...base,
+        values: {
+          lower_bound: pnlBounds?.lowerBound ?? "",
+          upper_bound: pnlBounds?.upperBound ?? "",
+          initial_pnl: pnlBounds?.initialPnl ?? "",
+        },
+      };
+    }
+  }
 }
 
 function limitWindowMs(limit: Limit): number {
@@ -1514,11 +1636,113 @@ async function resetDatabase(client: ApiClient, ): Promise<void> {
  *  the browser downloads it under the route's shared middleware. */
 // --- Accounts ---
 
-/** GET /accounts. */
-async function fetchAccounts(client: ApiClient, signal?: AbortSignal): Promise<Account[]> {
-  const v = await client.request(`${client.baseUrl}/accounts`, { signal });
+function signalFromListArg<T>(
+  input?: T | AbortSignal,
+  signal?: AbortSignal,
+): AbortSignal | undefined {
+  return input instanceof AbortSignal ? input : signal;
+}
+
+function listFiltersFromArg<T>(input?: T | AbortSignal): T | undefined {
+  return input instanceof AbortSignal ? undefined : input;
+}
+
+function appendListFilter(
+  params: URLSearchParams,
+  key: string,
+  value: number | string | undefined,
+  defaultValue?: string,
+) {
+  const text = value === undefined ? undefined : String(value);
+  if (text !== undefined && text !== "" && text !== defaultValue) {
+    params.set(key, text);
+  }
+}
+
+function accountListQuery(filters?: AccountListFilters): string {
+  if (filters === undefined) return "";
+  const params = new URLSearchParams();
+  appendListFilter(params, "code", filters.code);
+  appendListFilter(params, "codeMatch", filters.codeMatch, "contains");
+  appendListFilter(params, "status", filters.status, "all");
+  appendListFilter(params, "positionCountMode", filters.positionCountMode, "all");
+  appendListFilter(params, "positionCountMin", filters.positionCountMin);
+  appendListFilter(params, "positionCountMax", filters.positionCountMax);
+  appendListFilter(params, "blockReason", filters.blockReason);
+  appendListFilter(params, "blockReasonMatch", filters.blockReasonMatch, "contains");
+  if (filters.group !== undefined) {
+    params.set("group", filters.group);
+  }
+  appendListFilter(params, "sort", filters.sort);
+  appendListFilter(params, "order", filters.order);
+  appendListFilter(params, "limit", filters.limit);
+  appendListFilter(params, "offset", filters.offset);
+  const query = params.toString();
+  return query === "" ? "" : `?${query}`;
+}
+
+function groupListQuery(filters?: GroupListFilters): string {
+  if (filters === undefined) return "";
+  const params = new URLSearchParams();
+  appendListFilter(params, "code", filters.code);
+  appendListFilter(params, "codeMatch", filters.codeMatch, "contains");
+  appendListFilter(params, "status", filters.status, "all");
+  appendListFilter(params, "positionCountMode", filters.positionCountMode, "all");
+  appendListFilter(params, "positionCountMin", filters.positionCountMin);
+  appendListFilter(params, "positionCountMax", filters.positionCountMax);
+  appendListFilter(params, "accountCountMode", filters.accountCountMode, "all");
+  appendListFilter(params, "accountCountMin", filters.accountCountMin);
+  appendListFilter(params, "accountCountMax", filters.accountCountMax);
+  appendListFilter(params, "notes", filters.notes);
+  appendListFilter(params, "notesMatch", filters.notesMatch, "contains");
+  appendListFilter(params, "blockReason", filters.blockReason);
+  appendListFilter(params, "blockReasonMatch", filters.blockReasonMatch, "contains");
+  appendListFilter(params, "sort", filters.sort);
+  appendListFilter(params, "order", filters.order);
+  appendListFilter(params, "limit", filters.limit);
+  appendListFilter(params, "offset", filters.offset);
+  const query = params.toString();
+  return query === "" ? "" : `?${query}`;
+}
+
+function policyListQuery(filters?: PolicyListFilters): string {
+  if (filters === undefined) return "";
+  const params = new URLSearchParams();
+  appendListFilter(params, "account", filters.account);
+  appendListFilter(params, "asset", filters.asset);
+  appendListFilter(params, "policy", filters.policy, "all");
+  appendListFilter(params, "sort", filters.sort);
+  appendListFilter(params, "order", filters.order);
+  appendListFilter(params, "limit", filters.limit);
+  appendListFilter(params, "offset", filters.offset);
+  const query = params.toString();
+  return query === "" ? "" : `?${query}`;
+}
+
+/** GET /accounts with server-side total. */
+async function fetchAccountsPage(
+  client: ApiClient,
+  input?: AccountListFilters | AbortSignal,
+  signal?: AbortSignal,
+): Promise<PagedResult<Account>> {
+  const filters = listFiltersFromArg(input);
+  const v = await client.request(`${client.baseUrl}/accounts${accountListQuery(filters)}`, {
+    signal: signalFromListArg(input, signal),
+  });
   const o = isObject(v) ? v : {};
-  return normalizeArray(pick(o, "accounts", "Accounts"), normalizeAccount);
+  return {
+    items: normalizeArray(pick(o, "accounts", "Accounts"), normalizeAccount),
+    total: asInt(pick(o, "total", "Total")),
+  };
+}
+
+/** GET /accounts. */
+async function fetchAccounts(
+  client: ApiClient,
+  input?: AccountListFilters | AbortSignal,
+  signal?: AbortSignal,
+): Promise<Account[]> {
+  return (await fetchAccountsPage(client, input, signal)).items;
 }
 
 /** POST /accounts. */
@@ -1526,6 +1750,21 @@ async function createAccount(client: ApiClient, code: string): Promise<Account> 
   const v = await client.request(`${client.baseUrl}/accounts`, {
     method: "POST",
     body: { code },
+  });
+  const o = isObject(v) ? v : {};
+  return normalizeAccount(pick(o, "account", "Account"));
+}
+
+/** PUT /accounts/{code}. Returns the updated account. */
+async function updateAccount(
+  client: ApiClient,
+  oldCode: string,
+  code: string,
+  title: string,
+): Promise<Account> {
+  const v = await client.request(`${client.baseUrl}/accounts/${encode(oldCode)}`, {
+    method: "PUT",
+    body: { code, title },
   });
   const o = isObject(v) ? v : {};
   return normalizeAccount(pick(o, "account", "Account"));
@@ -1600,11 +1839,31 @@ async function setAccountNotes(client: ApiClient,
 
 // --- Groups ---
 
-/** GET /groups. */
-async function fetchGroups(client: ApiClient, signal?: AbortSignal): Promise<Group[]> {
-  const v = await client.request(`${client.baseUrl}/groups`, { signal });
+/** GET /groups with server-side total. The synthetic default group is pinned
+ *  first by the server on the first page and is excluded from `total`. */
+async function fetchGroupsPage(
+  client: ApiClient,
+  input?: GroupListFilters | AbortSignal,
+  signal?: AbortSignal,
+): Promise<PagedResult<Group>> {
+  const filters = listFiltersFromArg(input);
+  const v = await client.request(`${client.baseUrl}/groups${groupListQuery(filters)}`, {
+    signal: signalFromListArg(input, signal),
+  });
   const o = isObject(v) ? v : {};
-  return normalizeArray(pick(o, "groups", "Groups"), normalizeGroup);
+  return {
+    items: normalizeArray(pick(o, "groups", "Groups"), normalizeGroup),
+    total: asInt(pick(o, "total", "Total")),
+  };
+}
+
+/** GET /groups. */
+async function fetchGroups(
+  client: ApiClient,
+  input?: GroupListFilters | AbortSignal,
+  signal?: AbortSignal,
+): Promise<Group[]> {
+  return (await fetchGroupsPage(client, input, signal)).items;
 }
 
 /** POST /groups. */
@@ -1616,6 +1875,21 @@ async function createGroup(client: ApiClient,
   const v = await client.request(`${client.baseUrl}/groups`, {
     method: "POST",
     body: { code, title, notes },
+  });
+  const o = isObject(v) ? v : {};
+  return normalizeGroup(pick(o, "group", "Group"));
+}
+
+/** PUT /groups/{code}. Returns the updated group. */
+async function updateGroup(
+  client: ApiClient,
+  oldCode: string,
+  code: string,
+  title: string,
+): Promise<Group> {
+  const v = await client.request(`${client.baseUrl}/groups/${encode(oldCode)}`, {
+    method: "PUT",
+    body: { code, title },
   });
   const o = isObject(v) ? v : {};
   return normalizeGroup(pick(o, "group", "Group"));
@@ -1674,6 +1948,187 @@ async function deleteGroup(client: ApiClient, code: string): Promise<void> {
   await client.request(`${client.baseUrl}/groups/${encode(code)}`, { method: "DELETE" });
 }
 
+// --- Assets ---
+
+function normalizeAsset(v: unknown): Asset {
+  const o = isObject(v) ? v : {};
+  return {
+    code: asString(pick(o, "code", "Code", "id", "Id", "ID")),
+    title: asString(pick(o, "title", "Title")),
+    assetClass: asString(pick(o, "assetClass", "AssetClass", "asset_class")),
+  };
+}
+
+/** GET /assets with server-side filtering and sorting. */
+async function fetchAssetsPage(
+  client: ApiClient,
+  filtersOrSignal?: AssetListFilters | AbortSignal,
+  signal?: AbortSignal,
+): Promise<PagedResult<Asset>> {
+  const filters = listFiltersFromArg(filtersOrSignal);
+  const params = new URLSearchParams();
+  appendListFilter(params, "code", filters?.code);
+  appendListFilter(params, "codeMatch", filters?.codeMatch, "contains");
+  appendListFilter(params, "class", filters?.class);
+  appendListFilter(params, "classMatch", filters?.classMatch, "contains");
+  appendListFilter(params, "sort", filters?.sort);
+  appendListFilter(params, "order", filters?.order);
+  appendListFilter(params, "limit", filters?.limit);
+  appendListFilter(params, "offset", filters?.offset);
+  const query = params.toString();
+  const v = await client.request(
+    `${client.baseUrl}/assets${query ? `?${query}` : ""}`,
+    { signal: signalFromListArg(filtersOrSignal, signal) },
+  );
+  const o = isObject(v) ? v : {};
+  return normalizePagedResult(o, "assets", "Assets", normalizeAsset);
+}
+
+async function fetchAssets(
+  client: ApiClient,
+  filtersOrSignal?: AssetListFilters | AbortSignal,
+  signal?: AbortSignal,
+): Promise<Asset[]> {
+  const page = await fetchAssetsPage(client, filtersOrSignal, signal);
+  return page.items;
+}
+
+/** POST /assets. */
+async function createAsset(
+  client: ApiClient,
+  code: string,
+  title: string,
+  assetClass: string,
+): Promise<Asset> {
+  const v = await client.request(`${client.baseUrl}/assets`, {
+    method: "POST",
+    body: { code, title, assetClass },
+  });
+  const o = isObject(v) ? v : {};
+  return normalizeAsset(pick(o, "asset", "Asset"));
+}
+
+/** PUT /assets/{code}. Renames the asset code and updates its title and class;
+ *  returns the updated asset. */
+async function updateAsset(
+  client: ApiClient,
+  oldCode: string,
+  code: string,
+  title: string,
+  assetClass: string,
+): Promise<Asset> {
+  const v = await client.request(`${client.baseUrl}/assets/${encode(oldCode)}`, {
+    method: "PUT",
+    body: { code, title, assetClass },
+  });
+  const o = isObject(v) ? v : {};
+  return normalizeAsset(pick(o, "asset", "Asset"));
+}
+
+/** DELETE /assets/{code}. Returns 204; throws ApiError on failure. */
+async function deleteAsset(client: ApiClient, code: string): Promise<void> {
+  await client.request(`${client.baseUrl}/assets/${encode(code)}`, { method: "DELETE" });
+}
+
+// --- Asset classes ---
+
+function normalizeAssetClass(v: unknown): AssetClass {
+  const o = isObject(v) ? v : {};
+  return {
+    code: asString(pick(o, "code", "Code", "id", "Id", "ID")),
+    title: asString(pick(o, "title", "Title")),
+    notes: asString(pick(o, "notes", "Notes")),
+    assetCount: asInt(pick(o, "assetCount", "AssetCount", "asset_count")),
+  };
+}
+
+/** GET /asset-classes with server-side filtering and sorting. */
+async function fetchAssetClassesPage(
+  client: ApiClient,
+  filtersOrSignal?: AssetClassListFilters | AbortSignal,
+  signal?: AbortSignal,
+): Promise<PagedResult<AssetClass>> {
+  const filters = listFiltersFromArg(filtersOrSignal);
+  const params = new URLSearchParams();
+  appendListFilter(params, "code", filters?.code);
+  appendListFilter(params, "codeMatch", filters?.codeMatch, "contains");
+  appendListFilter(params, "notes", filters?.notes);
+  appendListFilter(params, "notesMatch", filters?.notesMatch, "contains");
+  appendListFilter(params, "sort", filters?.sort);
+  appendListFilter(params, "order", filters?.order);
+  appendListFilter(params, "limit", filters?.limit);
+  appendListFilter(params, "offset", filters?.offset);
+  const query = params.toString();
+  const v = await client.request(
+    `${client.baseUrl}/asset-classes${query ? `?${query}` : ""}`,
+    { signal: signalFromListArg(filtersOrSignal, signal) },
+  );
+  const o = isObject(v) ? v : {};
+  return normalizePagedResult(
+    o,
+    "assetClasses",
+    "AssetClasses",
+    normalizeAssetClass,
+  );
+}
+
+async function fetchAssetClasses(
+  client: ApiClient,
+  filtersOrSignal?: AssetClassListFilters | AbortSignal,
+  signal?: AbortSignal,
+): Promise<AssetClass[]> {
+  const page = await fetchAssetClassesPage(client, filtersOrSignal, signal);
+  return page.items;
+}
+
+/** POST /asset-classes. */
+async function createAssetClass(
+  client: ApiClient,
+  code: string,
+  title: string,
+  notes: string,
+): Promise<AssetClass> {
+  const v = await client.request(`${client.baseUrl}/asset-classes`, {
+    method: "POST",
+    body: { code, title, notes },
+  });
+  const o = isObject(v) ? v : {};
+  return normalizeAssetClass(pick(o, "assetClass", "AssetClass"));
+}
+
+/** PUT /asset-classes/{code}. Renames the class code (cascading to the assets'
+ *  class link) and updates its title and notes; returns the updated class. */
+async function updateAssetClass(
+  client: ApiClient,
+  oldCode: string,
+  code: string,
+  title: string,
+  notes: string,
+): Promise<AssetClass> {
+  const v = await client.request(
+    `${client.baseUrl}/asset-classes/${encode(oldCode)}`,
+    {
+      method: "PUT",
+      body: { code, title, notes },
+    },
+  );
+  const o = isObject(v) ? v : {};
+  return normalizeAssetClass(pick(o, "assetClass", "AssetClass"));
+}
+
+/** DELETE /asset-classes/{code}. Returns 204; throws ApiError on failure. */
+async function deleteAssetClass(
+  client: ApiClient,
+  code: string,
+  force = false,
+): Promise<void> {
+  const query = force ? "?force=true" : "";
+  await client.request(
+    `${client.baseUrl}/asset-classes/${encode(code)}${query}`,
+    { method: "DELETE" },
+  );
+}
+
 // --- Balances (Spot Funds) ---
 
 export interface BalancesFilter {
@@ -1681,25 +2136,62 @@ export interface BalancesFilter {
   asset?: string;
 }
 
+function balanceListQuery(filter: BalanceListFilters = {}): string {
+  const params = new URLSearchParams();
+  appendListFilter(params, "account", filter.account);
+  appendListFilter(params, "groupCode", filter.groupCode);
+  appendListFilter(params, "asset", filter.asset);
+  appendListFilter(params, "availableMode", filter.availableMode, "all");
+  appendListFilter(params, "availableMin", filter.availableMin);
+  appendListFilter(params, "availableMax", filter.availableMax);
+  appendListFilter(params, "heldMode", filter.heldMode, "all");
+  appendListFilter(params, "heldMin", filter.heldMin);
+  appendListFilter(params, "heldMax", filter.heldMax);
+  appendListFilter(params, "incomingMode", filter.incomingMode, "all");
+  appendListFilter(params, "incomingMin", filter.incomingMin);
+  appendListFilter(params, "incomingMax", filter.incomingMax);
+  appendListFilter(params, "averageEntryPriceMode", filter.averageEntryPriceMode, "all");
+  appendListFilter(params, "averageEntryPriceMin", filter.averageEntryPriceMin);
+  appendListFilter(params, "averageEntryPriceMax", filter.averageEntryPriceMax);
+  appendListFilter(params, "realizedPnlMode", filter.realizedPnlMode, "all");
+  appendListFilter(params, "realizedPnlMin", filter.realizedPnlMin);
+  appendListFilter(params, "realizedPnlMax", filter.realizedPnlMax);
+  appendListFilter(params, "updatedAtMode", filter.updatedAtMode, "all");
+  appendListFilter(params, "updatedAfter", filter.updatedAfter);
+  appendListFilter(params, "updatedBefore", filter.updatedBefore);
+  appendListFilter(params, "sort", filter.sort);
+  appendListFilter(params, "order", filter.order);
+  appendListFilter(params, "limit", filter.limit);
+  appendListFilter(params, "offset", filter.offset);
+  const query = params.toString();
+  return query === "" ? "" : `?${query}`;
+}
+
+/** GET /balances with server-side total. */
+async function fetchBalancesPage(
+  client: ApiClient,
+  filter: BalanceListFilters = {},
+  signal?: AbortSignal,
+): Promise<PagedResult<Balance>> {
+  const v = await client.request(`${client.baseUrl}/balances${balanceListQuery(filter)}`, { signal });
+  const o = isObject(v) ? v : {};
+  return {
+    items: normalizeArray(pick(o, "balances", "Balances"), normalizeBalance),
+    total: asInt(pick(o, "total", "Total")),
+  };
+}
+
 /** GET /balances, optionally filtered by account and/or asset. */
-async function fetchBalances(client: ApiClient, 
+async function fetchBalances(
+  client: ApiClient,
   filter: BalancesFilter = {},
   signal?: AbortSignal,
 ): Promise<Balance[]> {
-  const params = new URLSearchParams();
-  if (filter.account) {
-    params.set("account", filter.account);
-  }
-  if (filter.asset) {
-    params.set("asset", filter.asset);
-  }
-  const query = params.size > 0 ? `?${params.toString()}` : "";
-  const v = await client.request(`${client.baseUrl}/balances${query}`, { signal });
-  const o = isObject(v) ? v : {};
-  return normalizeArray(pick(o, "balances", "Balances"), normalizeBalance);
+  return (await fetchBalancesPage(client, filter, signal)).items;
 }
 
 export interface AdjustmentBody {
+  id?: string;
   externalId?: string;
   asset: string;
   averageEntryPrice?: string;
@@ -1751,36 +2243,90 @@ async function fetchAccountAdjustments(client: ApiClient,
   return normalizeArray(pick(o, "adjustments", "Adjustments"), normalizeAdjustment);
 }
 
-export interface GlobalAdjustmentsFilter {
+export interface GlobalAdjustmentsFilter extends PageRequest {
+  externalId?: string;
   account?: string;
+  accountMatch?: TextMatchMode;
+  asset?: string;
+  assetMatch?: TextMatchMode;
   source?: string;
-  limit?: number;
+  status?: string;
+  atMode?: string;
+  atMin?: string;
+  atMax?: string;
+  sort?: string;
+  order?: SortOrder;
+}
+
+function appendPagedListParams(
+  params: URLSearchParams,
+  filter: PageRequest & { sort?: string; order?: SortOrder },
+) {
+  appendListFilter(params, "sort", filter.sort);
+  appendListFilter(params, "order", filter.order);
+  appendListFilter(params, "limit", filter.limit);
+  appendListFilter(params, "offset", filter.offset);
+}
+
+function normalizePagedResult<T>(
+  source: Json,
+  key: string,
+  fallbackKey: string,
+  normalize: (value: unknown) => T,
+): PagedResult<T> {
+  return {
+    items: normalizeArray(pick(source, key, fallbackKey), normalize),
+    total: asInt(pick(source, "total", "Total")),
+  };
+}
+
+function adjustmentListQuery(filter: GlobalAdjustmentsFilter = {}): string {
+  const params = new URLSearchParams();
+  appendListFilter(params, "id", filter.externalId);
+  appendListFilter(params, "account", filter.account);
+  appendListFilter(params, "asset", filter.asset);
+  appendListFilter(params, "source", filter.source);
+  appendListFilter(params, "status", filter.status, "all");
+  appendListFilter(params, "atMode", filter.atMode, "all");
+  appendListFilter(params, "atMin", filter.atMin);
+  appendListFilter(params, "atMax", filter.atMax);
+  appendPagedListParams(params, filter);
+  return params.size > 0 ? `?${params.toString()}` : "";
+}
+
+/** GET /adjustments with server-side total and offset paging. */
+async function fetchAdjustmentsPage(
+  client: ApiClient,
+  filter: GlobalAdjustmentsFilter = {},
+  signal?: AbortSignal,
+): Promise<PagedResult<Adjustment>> {
+  const v = await client.request(
+    `${client.baseUrl}/adjustments${adjustmentListQuery(filter)}`,
+    { signal },
+  );
+  const o = isObject(v) ? v : {};
+  return normalizePagedResult(
+    o,
+    "adjustments",
+    "Adjustments",
+    normalizeAdjustment,
+  );
 }
 
 /** GET /adjustments, newest first. */
-async function fetchAdjustments(client: ApiClient, 
+async function fetchAdjustments(
+  client: ApiClient,
   filter: GlobalAdjustmentsFilter = {},
   signal?: AbortSignal,
 ): Promise<Adjustment[]> {
-  const params = new URLSearchParams();
-  if (filter.account) {
-    params.set("account", filter.account);
-  }
-  if (filter.source) {
-    params.set("source", filter.source);
-  }
-  if (filter.limit !== undefined) {
-    params.set("limit", String(filter.limit));
-  }
-  const query = params.size > 0 ? `?${params.toString()}` : "";
-  const v = await client.request(`${client.baseUrl}/adjustments${query}`, { signal });
-  const o = isObject(v) ? v : {};
-  return normalizeArray(pick(o, "adjustments", "Adjustments"), normalizeAdjustment);
+  const page = await fetchAdjustmentsPage(client, filter, signal);
+  return page.items;
 }
 
 // --- Orders / Trading ---
 
 export interface CreateOrderBody {
+  id?: string;
   externalId?: string;
   account: string;
   baseAsset: string;
@@ -1836,9 +2382,13 @@ async function submitOrder(client: ApiClient,
   body: CreateOrderBody,
   signal?: AbortSignal,
 ): Promise<ApprovalToken> {
+  const requestBody =
+    body.id !== undefined || body.externalId === undefined
+      ? body
+      : { ...body, id: body.externalId, externalId: undefined };
   const v = await client.request(`${client.baseUrl}/orders/submit`, {
     method: "POST",
-    body,
+    body: requestBody,
     signal,
   });
   return normalizeApprovalToken(v);
@@ -1932,25 +2482,52 @@ export interface OrdersFilter {
   limit?: number;
 }
 
+function orderListQuery(filter: OrderListFilters = {}): string {
+  const params = new URLSearchParams();
+  appendListFilter(params, "account", filter.account);
+  appendListFilter(params, "source", filter.source);
+  appendListFilter(params, "side", filter.side, "all");
+  appendListFilter(params, "status", filter.status, "all");
+  appendListFilter(params, "baseAsset", filter.baseAsset);
+  appendListFilter(params, "quoteAsset", filter.quoteAsset);
+  appendListFilter(params, "amountMode", filter.amountMode, "all");
+  appendListFilter(params, "amountMin", filter.amountMin);
+  appendListFilter(params, "amountMax", filter.amountMax);
+  appendListFilter(params, "priceMode", filter.priceMode, "all");
+  appendListFilter(params, "priceMin", filter.priceMin);
+  appendListFilter(params, "priceMax", filter.priceMax);
+  appendListFilter(params, "atMode", filter.atMode, "all");
+  appendListFilter(params, "atMin", filter.atMin);
+  appendListFilter(params, "atMax", filter.atMax);
+  appendListFilter(params, "sort", filter.sort);
+  appendListFilter(params, "order", filter.order);
+  appendListFilter(params, "limit", filter.limit);
+  appendListFilter(params, "offset", filter.offset);
+  const query = params.toString();
+  return query === "" ? "" : `?${query}`;
+}
+
+/** GET /orders with server-side total. */
+async function fetchOrdersPage(
+  client: ApiClient,
+  filter: OrderListFilters = {},
+  signal?: AbortSignal,
+): Promise<PagedResult<Order>> {
+  const v = await client.request(`${client.baseUrl}/orders${orderListQuery(filter)}`, { signal });
+  const o = isObject(v) ? v : {};
+  return {
+    items: normalizeArray(pick(o, "orders", "Orders"), normalizeOrder),
+    total: asInt(pick(o, "total", "Total")),
+  };
+}
+
 /** GET /orders, newest first. */
-async function fetchOrders(client: ApiClient, 
+async function fetchOrders(
+  client: ApiClient,
   filter: OrdersFilter = {},
   signal?: AbortSignal,
 ): Promise<Order[]> {
-  const params = new URLSearchParams();
-  if (filter.account) {
-    params.set("account", filter.account);
-  }
-  if (filter.source) {
-    params.set("source", filter.source);
-  }
-  if (filter.limit !== undefined) {
-    params.set("limit", String(filter.limit));
-  }
-  const query = params.size > 0 ? `?${params.toString()}` : "";
-  const v = await client.request(`${client.baseUrl}/orders${query}`, { signal });
-  const o = isObject(v) ? v : {};
-  return normalizeArray(pick(o, "orders", "Orders"), normalizeOrder);
+  return (await fetchOrdersPage(client, filter, signal)).items;
 }
 
 function normalizeOrderApproval(v: unknown): OrderApproval | null {
@@ -2020,44 +2597,106 @@ async function submitExecutionReport(client: ApiClient,
   };
 }
 
-export interface TradesFilter {
+export interface TradesFilter extends PageRequest {
+  externalId?: string;
   account?: string;
+  baseAsset?: string;
+  quoteAsset?: string;
+  side?: "all" | Order["side"];
   source?: string;
-  limit?: number;
+  atMode?: string;
+  atMin?: string;
+  atMax?: string;
+  quantityMode?: RangeFilterMode;
+  quantityMin?: string;
+  quantityMax?: string;
+  priceMode?: RangeFilterMode;
+  priceMin?: string;
+  priceMax?: string;
+  lockPriceMode?: RangeFilterMode;
+  lockPriceMin?: string;
+  lockPriceMax?: string;
+  sort?: string;
+  order?: SortOrder;
+}
+
+function tradeListQuery(filter: TradesFilter = {}): string {
+  const params = new URLSearchParams();
+  appendListFilter(params, "id", filter.externalId);
+  appendListFilter(params, "account", filter.account);
+  appendListFilter(params, "baseAsset", filter.baseAsset);
+  appendListFilter(params, "quoteAsset", filter.quoteAsset);
+  appendListFilter(params, "side", filter.side, "all");
+  appendListFilter(params, "source", filter.source);
+  appendListFilter(params, "atMode", filter.atMode, "all");
+  appendListFilter(params, "atMin", filter.atMin);
+  appendListFilter(params, "atMax", filter.atMax);
+  appendListFilter(params, "quantityMode", filter.quantityMode, "all");
+  appendListFilter(params, "quantityMin", filter.quantityMin);
+  appendListFilter(params, "quantityMax", filter.quantityMax);
+  appendListFilter(params, "priceMode", filter.priceMode, "all");
+  appendListFilter(params, "priceMin", filter.priceMin);
+  appendListFilter(params, "priceMax", filter.priceMax);
+  appendListFilter(params, "lockPriceMode", filter.lockPriceMode, "all");
+  appendListFilter(params, "lockPriceMin", filter.lockPriceMin);
+  appendListFilter(params, "lockPriceMax", filter.lockPriceMax);
+  appendPagedListParams(params, filter);
+  return params.size > 0 ? `?${params.toString()}` : "";
+}
+
+/** GET /trades with server-side total and offset paging. */
+async function fetchTradesPage(
+  client: ApiClient,
+  filter: TradesFilter = {},
+  signal?: AbortSignal,
+): Promise<PagedResult<Trade>> {
+  const v = await client.request(
+    `${client.baseUrl}/trades${tradeListQuery(filter)}`,
+    { signal },
+  );
+  const o = isObject(v) ? v : {};
+  return normalizePagedResult(o, "trades", "Trades", normalizeTrade);
 }
 
 /** GET /trades, newest first. */
-async function fetchTrades(client: ApiClient, 
+async function fetchTrades(
+  client: ApiClient,
   filter: TradesFilter = {},
   signal?: AbortSignal,
 ): Promise<Trade[]> {
-  const params = new URLSearchParams();
-  if (filter.account) {
-    params.set("account", filter.account);
-  }
-  if (filter.source) {
-    params.set("source", filter.source);
-  }
-  if (filter.limit !== undefined) {
-    params.set("limit", String(filter.limit));
-  }
-  const query = params.size > 0 ? `?${params.toString()}` : "";
-  const v = await client.request(`${client.baseUrl}/trades${query}`, { signal });
-  const o = isObject(v) ? v : {};
-  return normalizeArray(pick(o, "trades", "Trades"), normalizeTrade);
+  const page = await fetchTradesPage(client, filter, signal);
+  return page.items;
 }
 
 // --- Limits / Policies ---
 
-/** GET /limits, optionally filtered to one account server-side. */
-async function fetchLimits(client: ApiClient, 
-  account?: string,
+/** GET /limits: the unified, paged policy list, with server-side total. Rows
+ *  arrive as typed policyDTOs and are flattened into the UI's `Limit` model. */
+async function fetchPoliciesPage(
+  client: ApiClient,
+  input?: PolicyListFilters | AbortSignal,
+  signal?: AbortSignal,
+): Promise<PagedResult<Limit>> {
+  const filters = listFiltersFromArg(input);
+  const v = await client.request(`${client.baseUrl}/limits${policyListQuery(filters)}`, {
+    signal: signalFromListArg(input, signal),
+  });
+  const o = isObject(v) ? v : {};
+  return {
+    items: normalizeArray(pick(o, "policies", "Policies"), (row) =>
+      policyToLimit(normalizePolicy(row)),
+    ),
+    total: asInt(pick(o, "total", "Total")),
+  };
+}
+
+/** GET /limits: the unified, paged policy list. */
+async function fetchLimits(
+  client: ApiClient,
+  input?: PolicyListFilters | AbortSignal,
   signal?: AbortSignal,
 ): Promise<Limit[]> {
-  const query = account ? `?account=${encode(account)}` : "";
-  const v = await client.request(`${client.baseUrl}/limits${query}`, { signal });
-  const o = isObject(v) ? v : {};
-  return normalizeLimitCollection(pick(o, "limits", "Limits"));
+  return (await fetchPoliciesPage(client, input, signal)).items;
 }
 
 /** PUT /limits/{policy}: upsert a typed barrier. */
@@ -2089,13 +2728,21 @@ async function deleteLimit(client: ApiClient, target: {
 
 // --- Audit ---
 
-export interface AuditFilter {
+export interface AuditFilter extends PageRequest {
+  externalId?: string;
   account?: string;
+  accountMatch?: TextMatchMode;
+  asset?: string;
+  actor?: string;
+  actorMatch?: TextMatchMode;
   source?: string;
-  /** Action types to include. Undefined sends no action filter (server
-   *  default: control only); an empty array selects nothing. */
+  /** Action types to include. Undefined lets `category` select the action
+   *  predicate; an empty array selects nothing. */
   actions?: string[];
-  limit?: number;
+  category?: string;
+  atMode?: string;
+  atMin?: string;
+  atMax?: string;
 }
 
 // --- MCP access ---
@@ -2158,36 +2805,55 @@ async function setWelcomeSeen(client: ApiClient, seen: boolean): Promise<boolean
 
 // --- Audit ---
 
+function auditListQuery(filter: AuditFilter = {}): string {
+  const params = new URLSearchParams();
+  appendListFilter(params, "id", filter.externalId);
+  appendListFilter(params, "account", filter.account);
+  appendListFilter(params, "asset", filter.asset);
+  appendListFilter(params, "actor", filter.actor);
+  appendListFilter(params, "actorMatch", filter.actorMatch, "contains");
+  appendListFilter(params, "source", filter.source);
+  appendListFilter(params, "category", filter.category);
+  appendListFilter(params, "atMode", filter.atMode, "all");
+  appendListFilter(params, "atMin", filter.atMin);
+  appendListFilter(params, "atMax", filter.atMax);
+  if (filter.actions && filter.actions.length > 0) {
+    params.set("actions", filter.actions.join(","));
+  }
+  appendPagedListParams(params, filter);
+  return params.size > 0 ? `?${params.toString()}` : "";
+}
+
+/** GET /audit with server-side total and offset paging. */
+async function fetchAuditPage(
+  client: ApiClient,
+  filter: AuditFilter = {},
+  signal?: AbortSignal,
+): Promise<PagedResult<AuditEntry>> {
+  // An empty action selection matches nothing; skip the round-trip.
+  if (filter.actions && filter.actions.length === 0) {
+    return { items: [], total: 0 };
+  }
+  const v = await client.request(
+    `${client.baseUrl}/audit${auditListQuery(filter)}`,
+    { signal },
+  );
+  const o = isObject(v) ? v : {};
+  return normalizePagedResult(o, "entries", "Entries", normalizeAudit);
+}
+
 /** GET /audit, newest first; the backend caps the limit at 1000. */
-async function fetchAudit(client: ApiClient, 
+async function fetchAudit(
+  client: ApiClient,
   limitOrFilter: number | AuditFilter,
   signal?: AbortSignal,
 ): Promise<AuditEntry[]> {
-  const params = new URLSearchParams();
-  if (typeof limitOrFilter === "number") {
-    params.set("limit", String(limitOrFilter));
-  } else {
-    // An empty action selection matches nothing; skip the round-trip.
-    if (limitOrFilter.actions && limitOrFilter.actions.length === 0) {
-      return [];
-    }
-    if (limitOrFilter.account) {
-      params.set("account", limitOrFilter.account);
-    }
-    if (limitOrFilter.source) {
-      params.set("source", limitOrFilter.source);
-    }
-    if (limitOrFilter.actions && limitOrFilter.actions.length > 0) {
-      params.set("actions", limitOrFilter.actions.join(","));
-    }
-    if (limitOrFilter.limit !== undefined) {
-      params.set("limit", String(limitOrFilter.limit));
-    }
-  }
-  const query = params.size > 0 ? `?${params.toString()}` : "";
-  const v = await client.request(`${client.baseUrl}/audit${query}`, { signal });
-  const o = isObject(v) ? v : {};
-  return normalizeArray(pick(o, "entries", "Entries"), normalizeAudit);
+  const page = await fetchAuditPage(
+    client,
+    typeof limitOrFilter === "number" ? { limit: limitOrFilter } : limitOrFilter,
+    signal,
+  );
+  return page.items;
 }
 
 function normalizeAuditActionGroup(v: unknown): AuditActionGroup {
@@ -2333,32 +2999,51 @@ export function createOfficerApi(client: ApiClient) {
     exportBackup: bind(exportBackup),
     restoreBackup: bind(restoreBackup),
     resetDatabase: bind(resetDatabase),
+    fetchAccountsPage: bind(fetchAccountsPage),
     fetchAccounts: bind(fetchAccounts),
     createAccount: bind(createAccount),
+    updateAccount: bind(updateAccount),
     deleteAccount: bind(deleteAccount),
     fetchAccountState: bind(fetchAccountState),
     blockAccount: bind(blockAccount),
     unblockAccount: bind(unblockAccount),
     setAccountGroup: bind(setAccountGroup),
     setAccountNotes: bind(setAccountNotes),
+    fetchGroupsPage: bind(fetchGroupsPage),
     fetchGroups: bind(fetchGroups),
     createGroup: bind(createGroup),
+    updateGroup: bind(updateGroup),
     fetchGroupState: bind(fetchGroupState),
     setGroupNotes: bind(setGroupNotes),
     blockGroup: bind(blockGroup),
     unblockGroup: bind(unblockGroup),
     deleteGroup: bind(deleteGroup),
+    fetchAssetsPage: bind(fetchAssetsPage),
+    fetchAssets: bind(fetchAssets),
+    createAsset: bind(createAsset),
+    updateAsset: bind(updateAsset),
+    deleteAsset: bind(deleteAsset),
+    fetchAssetClassesPage: bind(fetchAssetClassesPage),
+    fetchAssetClasses: bind(fetchAssetClasses),
+    createAssetClass: bind(createAssetClass),
+    updateAssetClass: bind(updateAssetClass),
+    deleteAssetClass: bind(deleteAssetClass),
+    fetchBalancesPage: bind(fetchBalancesPage),
     fetchBalances: bind(fetchBalances),
     createAdjustment: bind(createAdjustment),
     fetchAccountAdjustments: bind(fetchAccountAdjustments),
+    fetchAdjustmentsPage: bind(fetchAdjustmentsPage),
     fetchAdjustments: bind(fetchAdjustments),
     submitOrder: bind(submitOrder),
     createOrder: bind(createOrder),
     checkOrder: bind(checkOrder),
+    fetchOrdersPage: bind(fetchOrdersPage),
     fetchOrders: bind(fetchOrders),
     fetchOrderDetail: bind(fetchOrderDetail),
     submitExecutionReport: bind(submitExecutionReport),
+    fetchTradesPage: bind(fetchTradesPage),
     fetchTrades: bind(fetchTrades),
+    fetchPoliciesPage: bind(fetchPoliciesPage),
     fetchLimits: bind(fetchLimits),
     putLimit: bind(putLimit),
     deleteLimit: bind(deleteLimit),
@@ -2366,6 +3051,7 @@ export function createOfficerApi(client: ApiClient) {
     setMcpCommand: bind(setMcpCommand),
     fetchWelcomeSeen: bind(fetchWelcomeSeen),
     setWelcomeSeen: bind(setWelcomeSeen),
+    fetchAuditPage: bind(fetchAuditPage),
     fetchAudit: bind(fetchAudit),
     fetchAuditActions: bind(fetchAuditActions),
     fetchSigningKeys: bind(fetchSigningKeys),

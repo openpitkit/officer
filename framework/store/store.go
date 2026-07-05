@@ -27,7 +27,7 @@
 //
 // Identity model surfaced by this interface: dictionaries (accounts, groups,
 // assets, principals, market-data instances, signing keys) are addressed by
-// their immutable code; machine records (orders, trades, order events,
+// their public code; machine records (orders, trades, order events,
 // adjustments, audit rows) are addressed by their opaque external id. The
 // internal surrogate key never crosses the interface boundary. The engine ids
 // are internal too: they are populated on the entity the engine layer rebuilds
@@ -59,6 +59,8 @@ type AuditEntry struct {
 	Account domain.AccountID
 	// AccountTitle is the account title captured at write time.
 	AccountTitle string
+	// Asset is the code of the asset the action targeted, if any.
+	Asset string
 	// Detail is a short human-readable description of the action.
 	Detail string
 	// Source is the channel that initiated the action.
@@ -87,6 +89,370 @@ type BusinessCSVImport struct {
 	Balances    []domain.Balance
 	Adjustments []domain.AccountAdjustmentRecord
 	Audits      []AuditEntry
+}
+
+// TextMatcher is a parsed user text pattern. Fragments are literal text
+// fragments that must appear in order. AnchorStart requires the first fragment
+// to match from the value start; AnchorEnd requires the final fragment to end
+// at the value end.
+type TextMatcher struct {
+	Fragments   []string
+	AnchorStart bool
+	AnchorEnd   bool
+}
+
+// Empty reports whether the matcher has no literal fragments or anchors.
+func (m TextMatcher) Empty() bool {
+	return len(m.Fragments) == 0 && !m.AnchorStart && !m.AnchorEnd
+}
+
+// ExactTextMatcher returns a matcher that requires value verbatim, anchored at
+// both ends. An empty value yields the empty (unrestricted) matcher. It is the
+// single constructor for an exact text filter, so connectors and the backend
+// merge never re-derive one from a raw string.
+func ExactTextMatcher(value string) TextMatcher {
+	if value == "" {
+		return TextMatcher{}
+	}
+	return TextMatcher{
+		Fragments:   []string{value},
+		AnchorStart: true,
+		AnchorEnd:   true,
+	}
+}
+
+// StatusFilter narrows rows by blocked state.
+type StatusFilter string
+
+const (
+	// StatusFilterAll leaves blocked state unrestricted.
+	StatusFilterAll StatusFilter = ""
+	// StatusFilterActive selects rows that are not blocked.
+	StatusFilterActive StatusFilter = "active"
+	// StatusFilterBlocked selects rows that are blocked.
+	StatusFilterBlocked StatusFilter = "blocked"
+)
+
+// CountFilter narrows rows by whether an aggregate count is zero or non-zero.
+type CountFilter string
+
+const (
+	// CountFilterAll leaves the aggregate unrestricted.
+	CountFilterAll CountFilter = ""
+	// CountFilterHas selects rows with at least one aggregate member.
+	CountFilterHas CountFilter = "has"
+	// CountFilterNone selects rows with no aggregate members.
+	CountFilterNone CountFilter = "none"
+)
+
+// CountRangeFilter narrows rows by an aggregate count value.
+type CountRangeFilter struct {
+	Min          *int
+	Max          *int
+	Equal        *int
+	NotEqual     *int
+	MinExclusive bool
+	MaxExclusive bool
+}
+
+// Empty returns true when the aggregate count is unrestricted.
+func (f CountRangeFilter) Empty() bool {
+	return f.Min == nil && f.Max == nil && f.Equal == nil && f.NotEqual == nil
+}
+
+// DecimalRangeFilter narrows rows by a plain decimal value. Bounds are exact
+// decimal strings validated upstream; the connector compares them numerically
+// (the column carries a numeric collation), never an encoded key.
+type DecimalRangeFilter struct {
+	Min          *string
+	Max          *string
+	Equal        *string
+	NotEqual     *string
+	MinExclusive bool
+	MaxExclusive bool
+}
+
+// Empty returns true when the decimal value is unrestricted.
+func (f DecimalRangeFilter) Empty() bool {
+	return f.Min == nil && f.Max == nil && f.Equal == nil && f.NotEqual == nil
+}
+
+// TimeRangeFilter narrows rows by RFC3339Nano UTC text timestamps.
+type TimeRangeFilter struct {
+	Min          *time.Time
+	Max          *time.Time
+	MinExclusive bool
+	MaxExclusive bool
+}
+
+// Empty returns true when the timestamp is unrestricted.
+func (f TimeRangeFilter) Empty() bool {
+	return f.Min == nil && f.Max == nil
+}
+
+// SortSpec describes a whitelisted table sort key.
+type SortSpec struct {
+	Column     string
+	Descending bool
+}
+
+// Empty returns true when the natural table order should be used.
+func (s SortSpec) Empty() bool {
+	return s.Column == ""
+}
+
+// PageSpec describes a server-side page window.
+type PageSpec struct {
+	Limit  int
+	Offset int
+}
+
+// Empty returns true when no LIMIT/OFFSET should be applied.
+func (p PageSpec) Empty() bool {
+	return p.Limit <= 0 && p.Offset <= 0
+}
+
+// AccountListFilter narrows account-list reads in the store.
+type AccountListFilter struct {
+	// GroupCode narrows accounts to one exact group code. A non-nil empty
+	// string selects accounts with no assigned group.
+	GroupCode   *string
+	Code        TextMatcher
+	BlockReason TextMatcher
+	Status      StatusFilter
+	Position    CountRangeFilter
+	Sort        SortSpec
+	Page        PageSpec
+}
+
+// AccountListRow is an account row plus list-only aggregates.
+type AccountListRow struct {
+	Account       domain.Account
+	PositionCount int
+}
+
+// AccountListPage is a paged account-list result.
+type AccountListPage struct {
+	Rows  []AccountListRow
+	Total int
+}
+
+// AssetListFilter narrows asset-list reads in the store.
+type AssetListFilter struct {
+	Code  TextMatcher
+	Class TextMatcher
+	Sort  SortSpec
+	Page  PageSpec
+}
+
+// AssetListPage is a paged asset-list result.
+type AssetListPage struct {
+	Rows  []domain.Asset
+	Total int
+}
+
+// OrderListFilter narrows order-list reads in the store.
+type OrderListFilter struct {
+	Account    domain.AccountID
+	Source     domain.Source
+	ExternalID TextMatcher
+	Side       *domain.OrderSide
+	Status     []domain.OrderStatus
+	BaseAsset  TextMatcher
+	QuoteAsset TextMatcher
+	Amount     DecimalRangeFilter
+	Price      DecimalRangeFilter
+	At         TimeRangeFilter
+	Sort       SortSpec
+	Page       PageSpec
+}
+
+// OrderListRow is an order row plus list-only data.
+type OrderListRow struct {
+	Order domain.Order
+}
+
+// OrderListPage is a paged order-list result.
+type OrderListPage struct {
+	Rows  []OrderListRow
+	Total int
+}
+
+// BalanceListFilter narrows balance-list reads in the store.
+type BalanceListFilter struct {
+	Account           TextMatcher
+	GroupCode         *string
+	Asset             TextMatcher
+	Available         DecimalRangeFilter
+	Held              DecimalRangeFilter
+	Incoming          DecimalRangeFilter
+	AverageEntryPrice DecimalRangeFilter
+	RealizedPnl       DecimalRangeFilter
+	UpdatedAt         TimeRangeFilter
+	Sort              SortSpec
+	Page              PageSpec
+}
+
+// BalanceListRow is a balance row plus list-only data.
+type BalanceListRow struct {
+	Balance domain.Balance
+}
+
+// BalanceListPage is a paged balance-list result.
+type BalanceListPage struct {
+	Rows  []BalanceListRow
+	Total int
+}
+
+// GroupListFilter narrows account-group list reads in the store.
+type GroupListFilter struct {
+	Code        TextMatcher
+	Notes       TextMatcher
+	BlockReason TextMatcher
+	Status      StatusFilter
+	Position    CountRangeFilter
+	Account     CountRangeFilter
+	Sort        SortSpec
+	Page        PageSpec
+}
+
+// GroupListRow is a group row plus list-only aggregates.
+type GroupListRow struct {
+	Group         domain.AccountGroup
+	AccountCount  int
+	PositionCount int
+}
+
+// GroupListPage is a paged group-list result. Total counts the real groups
+// matching the filter; the synthetic default group is not part of Total.
+type GroupListPage struct {
+	Rows  []GroupListRow
+	Total int
+}
+
+// AssetClassListFilter narrows asset-class list reads in the store.
+type AssetClassListFilter struct {
+	Code  TextMatcher
+	Notes TextMatcher
+	Sort  SortSpec
+	Page  PageSpec
+}
+
+// AssetClassListRow is an asset-class row plus list-only aggregates.
+type AssetClassListRow struct {
+	Class      domain.AssetClass
+	AssetCount int
+}
+
+// AssetClassListPage is a paged asset-class list result. Total counts the
+// classes matching the filter before paging.
+type AssetClassListPage struct {
+	Rows  []AssetClassListRow
+	Total int
+}
+
+// PolicyKind discriminates the three typed limit barriers flattened into the
+// unified policy list. Its string values match the engine policy constants in
+// the domain package (domain.PolicyRateLimit and siblings).
+type PolicyKind string
+
+const (
+	// PolicyKindRate is the rate-limit barrier.
+	PolicyKindRate PolicyKind = "rate_limit"
+	// PolicyKindOrderSize is the order-size barrier.
+	PolicyKindOrderSize PolicyKind = "order_size_limit"
+	// PolicyKindPnlBounds is the P&L-bounds kill-switch barrier.
+	PolicyKindPnlBounds PolicyKind = "pnl_bounds_kill_switch"
+)
+
+// PolicyListFilter narrows the unified policy-list read. Account mirrors the
+// Limits UI account filter; Kind, when set, restricts to one barrier kind.
+type PolicyListFilter struct {
+	Account TextMatcher
+	Asset   TextMatcher
+	Kind    *PolicyKind
+	Sort    SortSpec
+	Page    PageSpec
+}
+
+// PolicyListRow is one barrier flattened into the common policy shape: the kind
+// discriminator, the (scope, account, asset) composite all three barriers share,
+// and exactly one populated typed value matching Kind. The money and size fields
+// stay on the domain value types, never collapsed to a float.
+type PolicyListRow struct {
+	Kind      PolicyKind
+	Scope     domain.LimitScope
+	Account   domain.AccountID
+	Asset     string
+	Rate      *domain.LimitRate
+	OrderSize *domain.LimitOrderSize
+	PnlBounds *domain.LimitPnlBounds
+}
+
+// PolicyListPage is a paged policy-list result with the total matching count
+// before paging.
+type PolicyListPage struct {
+	Rows  []PolicyListRow
+	Total int
+}
+
+// AdjustmentListFilter narrows the append-only adjustment list.
+type AdjustmentListFilter struct {
+	Account    TextMatcher
+	Asset      TextMatcher
+	ExternalID domain.ExternalID
+	Source     domain.Source
+	Status     *domain.AdjustmentStatus
+	At         TimeRangeFilter
+	Sort       SortSpec
+	Page       PageSpec
+}
+
+// AdjustmentListPage is a paged adjustment-list result.
+type AdjustmentListPage struct {
+	Rows  []domain.AccountAdjustmentRecord
+	Total int
+}
+
+// TradeListFilter narrows the append-only trade list.
+type TradeListFilter struct {
+	Account    TextMatcher
+	ExternalID domain.ExternalID
+	BaseAsset  TextMatcher
+	QuoteAsset TextMatcher
+	Side       *domain.OrderSide
+	Source     domain.Source
+	At         TimeRangeFilter
+	Quantity   DecimalRangeFilter
+	Price      DecimalRangeFilter
+	LockPrice  DecimalRangeFilter
+	Sort       SortSpec
+	Page       PageSpec
+}
+
+// TradeListPage is a paged trade-list result.
+type TradeListPage struct {
+	Rows  []domain.Trade
+	Total int
+}
+
+// AuditListFilter narrows the append-only audit list.
+type AuditListFilter struct {
+	Account    TextMatcher
+	Asset      TextMatcher
+	ExternalID domain.ExternalID
+	Actor      TextMatcher
+	Source     domain.Source
+	Actions    []domain.AuditAction
+	Category   domain.AuditCategory
+	At         TimeRangeFilter
+	Page       PageSpec
+}
+
+// AuditListPage is a paged audit-list result.
+type AuditListPage struct {
+	Rows  []domain.AuditRow
+	Total int
 }
 
 // StoreHealth reports the observable condition of the store.
@@ -154,13 +520,56 @@ type RealmStore interface {
 	// ListAssets returns every asset, ordered by code.
 	ListAssets(ctx context.Context) ([]domain.Asset, error)
 
-	// UpdateAsset replaces the mutable fields (title, asset class) of the asset
-	// identified by code. Returns domain.ErrNotFound when absent.
-	UpdateAsset(ctx context.Context, asset domain.Asset) error
+	// ListAssetRows returns persisted assets matching filter, with total count
+	// before paging.
+	ListAssetRows(ctx context.Context, filter AssetListFilter) (AssetListPage, error)
+
+	// UpdateAsset replaces the public code and mutable fields (title, asset class)
+	// of the asset identified by oldCode. A code rename is safe because balances
+	// and other rows reference the asset by its surrogate id. Returns
+	// domain.ErrNotFound when oldCode is absent, or domain.ErrAlreadyExists when
+	// asset.Code already exists.
+	UpdateAsset(
+		ctx context.Context, oldCode string, asset domain.Asset,
+	) (domain.Asset, error)
 
 	// DeleteAsset removes the asset and cascades its dependent rows when force is
 	// true. Without force, cascade-destroying dependents return ErrHasDependents.
 	DeleteAsset(ctx context.Context, code string, force bool) error
+
+	// --- Asset classes (dictionary, addressed by code) ---
+
+	// CreateAssetClass persists a new asset-class dictionary row. Returns
+	// domain.ErrAlreadyExists when the code already exists.
+	CreateAssetClass(ctx context.Context, class domain.AssetClass) error
+
+	// GetAssetClass returns the asset class with the given code. The bool is false
+	// when no such class exists.
+	GetAssetClass(ctx context.Context, code string) (domain.AssetClass, bool, error)
+
+	// ListAssetClasses returns every asset class, ordered by code.
+	ListAssetClasses(ctx context.Context) ([]domain.AssetClass, error)
+
+	// ListAssetClassRows returns asset classes matching filter, with the aggregate
+	// count of assets referencing each class and the total count before paging.
+	ListAssetClassRows(
+		ctx context.Context, filter AssetClassListFilter,
+	) (AssetClassListPage, error)
+
+	// UpdateAssetClass replaces the public code, title and notes of the class
+	// identified by oldCode. On a code rename the referenced class row is updated
+	// under the store's asset-class relationship so existing assets keep their
+	// class. Returns domain.ErrNotFound when oldCode is absent, or
+	// domain.ErrAlreadyExists when class.Code already exists.
+	UpdateAssetClass(
+		ctx context.Context, oldCode string, class domain.AssetClass,
+	) (domain.AssetClass, error)
+
+	// DeleteAssetClass removes the class. When assets still reference it, force
+	// clears their class relationship in the same transaction; without force the
+	// referencing assets are reported as ErrHasDependents. Returns
+	// domain.ErrNotFound when absent.
+	DeleteAssetClass(ctx context.Context, code string, force bool) error
 
 	// --- Principals (dictionary, addressed by code) ---
 
@@ -198,9 +607,24 @@ type RealmStore interface {
 	// ListGroups returns every group, ordered by code.
 	ListGroups(ctx context.Context) ([]domain.AccountGroup, error)
 
+	// ListGroupRows returns groups matching filter, with aggregate account and
+	// position counts and the total count of real groups before paging. The list
+	// surface includes the synthetic default group (code empty) for accounts
+	// without a group; persisted dictionary reads through ListGroups do not. The
+	// default group is pinned first on the first page (offset zero) and excluded
+	// from the real-group sort, paging window, and Total.
+	ListGroupRows(ctx context.Context, filter GroupListFilter) (GroupListPage, error)
+
 	// SetGroupNotes replaces the notes of the identified group. Returns
 	// domain.ErrNotFound when absent.
 	SetGroupNotes(ctx context.Context, code, notes string) error
+
+	// UpdateGroup replaces the public code and mutable title of the identified
+	// group. Returns domain.ErrNotFound when oldCode is absent, or
+	// domain.ErrAlreadyExists when group.Code already exists.
+	UpdateGroup(
+		ctx context.Context, oldCode string, group domain.AccountGroup,
+	) (domain.AccountGroup, error)
 
 	// SetGroupBlocked updates the blocked flag and block reason of the identified
 	// group. Returns domain.ErrNotFound when absent.
@@ -231,6 +655,10 @@ type RealmStore interface {
 	// ListAccounts returns every account, ordered by code.
 	ListAccounts(ctx context.Context) ([]domain.Account, error)
 
+	// ListAccountRows returns accounts matching filter, with aggregate position
+	// counts and total count before paging.
+	ListAccountRows(ctx context.Context, filter AccountListFilter) (AccountListPage, error)
+
 	// SetAccountBlocked updates the blocked flag and block reason of the
 	// identified account. Returns domain.ErrNotFound when absent.
 	SetAccountBlocked(
@@ -246,6 +674,13 @@ type RealmStore interface {
 	// SetAccountNotes replaces the notes of the identified account. Returns
 	// domain.ErrNotFound when absent.
 	SetAccountNotes(ctx context.Context, code domain.AccountID, notes string) error
+
+	// UpdateAccount replaces the public code and mutable title of the identified
+	// account. Returns domain.ErrNotFound when oldCode is absent, or
+	// domain.ErrAlreadyExists when account.Code already exists.
+	UpdateAccount(
+		ctx context.Context, oldCode domain.AccountID, account domain.Account,
+	) (domain.Account, error)
 
 	// DeleteAccount removes the account and cascades its dependent rows when
 	// force is true. Without force, cascade-destroying dependents return
@@ -271,11 +706,23 @@ type RealmStore interface {
 		ctx context.Context, account domain.AccountID, asset string,
 	) ([]domain.Balance, error)
 
+	// ListBalanceRows returns balances matching filter, with total count before
+	// paging.
+	ListBalanceRows(
+		ctx context.Context, filter BalanceListFilter,
+	) (BalanceListPage, error)
+
 	// DeleteBalance removes the balance for (account, asset). Returns
 	// domain.ErrNotFound when absent.
 	DeleteBalance(ctx context.Context, account domain.AccountID, asset string) error
 
 	// --- Per-policy limits (addressed by the scope+account+asset composite) ---
+
+	// ListPolicyRows returns the three typed barrier tables flattened into one
+	// sorted, paged list, with the total matching count before paging. It is the
+	// list surface behind the Limits page; the per-kind reads below stay for the
+	// engine-reconfigure and backup paths.
+	ListPolicyRows(ctx context.Context, filter PolicyListFilter) (PolicyListPage, error)
 
 	// ListRateLimits returns every rate-limit barrier. When account is non-empty
 	// only barriers carrying that account are returned.
@@ -340,6 +787,12 @@ type RealmStore interface {
 		n int,
 	) ([]domain.AccountAdjustmentRecord, error)
 
+	// ListAdjustmentRows returns adjustments matching filter, with total count
+	// before paging.
+	ListAdjustmentRows(
+		ctx context.Context, filter AdjustmentListFilter,
+	) (AdjustmentListPage, error)
+
 	// --- Orders (machine record, addressed by external id) ---
 
 	// CreateOrder inserts a new order, assigning its external id. It returns the
@@ -374,6 +827,12 @@ type RealmStore interface {
 	ListOrders(
 		ctx context.Context, account domain.AccountID, source domain.Source, n int,
 	) ([]domain.Order, error)
+
+	// ListOrderRows returns orders matching filter, with total count before
+	// paging.
+	ListOrderRows(
+		ctx context.Context, filter OrderListFilter,
+	) (OrderListPage, error)
 
 	// ListAllOrders returns every order for an account, newest first. It is used
 	// by exports that must not inherit UI display limits.
@@ -426,6 +885,10 @@ type RealmStore interface {
 		ctx context.Context, account domain.AccountID, source domain.Source,
 	) ([]domain.Trade, error)
 
+	// ListTradeRows returns trades matching filter, with total count before
+	// paging.
+	ListTradeRows(ctx context.Context, filter TradeListFilter) (TradeListPage, error)
+
 	// --- Audit trail (machine record, addressed by external id) ---
 
 	// AppendAudit persists a new append-only audit record.
@@ -442,6 +905,10 @@ type RealmStore interface {
 	ListAuditFiltered(
 		ctx context.Context, filter domain.AuditFilter, n int,
 	) ([]domain.AuditRow, error)
+
+	// ListAuditRows returns audit entries matching filter, with total count
+	// before paging.
+	ListAuditRows(ctx context.Context, filter AuditListFilter) (AuditListPage, error)
 
 	// --- Market-data instances (dictionary, addressed by external id) ---
 

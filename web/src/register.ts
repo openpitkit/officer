@@ -17,8 +17,9 @@
 
 import { createElement } from "react";
 import {
+  BadgeDollarSign,
+  BriefcaseBusiness,
   ClipboardList,
-  Coins,
   Database,
   Info,
   KeyRound,
@@ -47,6 +48,7 @@ import {
   registerOpenVocabulary,
 } from "@/openDefaults";
 import { Accounts } from "@/pages/Accounts";
+import { Assets } from "@/pages/Assets";
 import { Audit } from "@/pages/Audit";
 import { Dashboard } from "@/pages/Dashboard";
 import { Limits } from "@/pages/Limits";
@@ -80,6 +82,7 @@ export function registerOpenOfficerDefaults(): void {
   // service.
   registerRoute({ id: "dashboard", path: "/", order: 10, Component: Dashboard });
   registerRoute({ id: "accounts", path: "/accounts", order: 20, Component: Accounts });
+  registerRoute({ id: "assets", path: "/assets", order: 45, Component: Assets });
   registerRoute({ id: "policies", path: "/policies", order: 30, Component: Limits });
   registerRoute({ id: "limits-redirect", path: "/limits", order: 40, redirectTo: "/policies" });
   registerRoute({ id: "positions", path: "/positions", order: 50, Component: Positions });
@@ -115,7 +118,7 @@ export function registerOpenOfficerDefaults(): void {
     id: "positions",
     to: "/positions",
     labelKey: "nav.positions",
-    icon: Coins,
+    icon: BriefcaseBusiness,
     section: "primary",
     order: 30,
   });
@@ -126,6 +129,14 @@ export function registerOpenOfficerDefaults(): void {
     icon: TrendingUp,
     section: "primary",
     order: 40,
+  });
+  registerNav({
+    id: "assets",
+    to: "/assets",
+    labelKey: "nav.assets",
+    icon: BadgeDollarSign,
+    section: "primary",
+    order: 45,
   });
   registerNav({
     id: "policies",
@@ -212,8 +223,7 @@ export function registerOpenOfficerDefaults(): void {
   registerWidget({ id: "audit-strip", order: 50, Component: AuditStrip });
 
   // Row action ids: account-positions, account-trading, account-policies,
-  // account-audit, account-notes, account-block-unblock, account-delete,
-  // group-notes, group-block-unblock, group-delete, limit-edit, limit-delete.
+  // account-audit, account-delete, group-delete, limit-edit, limit-delete.
   registerOpenRowActions();
 }
 

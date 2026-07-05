@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
+	fwstore "go.openpit.dev/officer/framework/store"
 )
 
 // seedOrderFixtures creates the dictionary rows the orders group references: an
@@ -79,7 +80,7 @@ func seedBalance(
 	}
 	if _, err := r.db().ExecContext(
 		ctx,
-		`INSERT OR REPLACE INTO balances
+		`INSERT OR REPLACE INTO balance
 		 (account_id, asset_id, available, held, incoming, realized_pnl,
 		  average_entry_price, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, '', ?)`,
@@ -89,7 +90,7 @@ func seedBalance(
 	}
 }
 
-// balanceRow holds the amount columns a test reads back from the balances table.
+// balanceRow holds the amount columns a test reads back from the balance table.
 type balanceRow struct {
 	available, held, incoming, realized string
 }
@@ -113,7 +114,7 @@ func getBalanceRow(
 	err = r.db().QueryRowContext(
 		ctx,
 		`SELECT available, held, incoming, realized_pnl
-		 FROM balances WHERE account_id = ? AND asset_id = ?`,
+		 FROM balance WHERE account_id = ? AND asset_id = ?`,
 		accountID, assetID,
 	).Scan(&b.available, &b.held, &b.incoming, &b.realized)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -125,7 +126,7 @@ func getBalanceRow(
 	return b, true
 }
 
-// seedSigningKey inserts a signing key row directly so an order_approvals row can
+// seedSigningKey inserts a signing key row directly so an order_approval row can
 // satisfy its ON DELETE RESTRICT FK; the public UpsertSigningKey is another
 // sub-agent's stub.
 func seedSigningKey(t *testing.T, ctx context.Context, rs RealmStore, keyID string) {
@@ -133,7 +134,7 @@ func seedSigningKey(t *testing.T, ctx context.Context, rs RealmStore, keyID stri
 	r := rs.(*realmStore)
 	if _, err := r.db().ExecContext(
 		ctx,
-		`INSERT INTO signing_keys
+		`INSERT INTO signing_key
 		 (key_id, alg, private_key, public_key, created_at, active)
 		 VALUES (?, 'ed25519', ?, ?, ?, 1)`,
 		keyID, []byte{0x01}, []byte{0x02}, nowStr(),
@@ -231,6 +232,104 @@ func TestCreateOrderGetListRoundTrip(t *testing.T) {
 	}
 	if len(none) != 0 {
 		t.Fatalf("ListAllOrders(mcp) = %+v, want empty", none)
+	}
+}
+
+func TestOrderListRowsSortFilterPageOrdersDecimalsNumerically(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+	// A negative amount and an arbitrary-precision amount (beyond any fixed
+	// sort-key window) prove the column's DECIMAL collation orders numerically.
+	amounts := []string{
+		"10", "2", "2.5", "2.5000000001", "-3",
+		"1000000000000000000000000000000000.0001",
+	}
+	for _, value := range amounts {
+		order := sampleOrder()
+		order.AmountValue = value
+		order.Price = "100"
+		if _, err := rs.CreateOrder(ctx, order); err != nil {
+			t.Fatalf("CreateOrder(%s): %v", value, err)
+		}
+	}
+
+	page, err := rs.ListOrderRows(ctx, fwstore.OrderListFilter{
+		Sort: fwstore.SortSpec{Column: "amountValue"},
+		Page: fwstore.PageSpec{Limit: 1, Offset: 1},
+	})
+	if err != nil {
+		t.Fatalf("ListOrderRows(sort page): %v", err)
+	}
+	if page.Total != 6 || len(page.Rows) != 1 {
+		t.Fatalf("page total/len = %d/%d, want 6/1", page.Total, len(page.Rows))
+	}
+	// Ascending order is -3, 2, 2.5, ...; the second row is 2.
+	if got := page.Rows[0].Order.AmountValue; got != "2" {
+		t.Fatalf("second sorted amount = %q, want 2", got)
+	}
+
+	min := "2.5"
+	page, err = rs.ListOrderRows(ctx, fwstore.OrderListFilter{
+		Amount: fwstore.DecimalRangeFilter{Min: &min},
+		Sort:   fwstore.SortSpec{Column: "amountValue"},
+	})
+	if err != nil {
+		t.Fatalf("ListOrderRows(range): %v", err)
+	}
+	got := []string{}
+	for _, row := range page.Rows {
+		got = append(got, row.Order.AmountValue)
+	}
+	want := []string{
+		"2.5", "2.5000000001", "10",
+		"1000000000000000000000000000000000.0001",
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("range sorted amounts = %v, want %v", got, want)
+	}
+}
+
+func TestOrderListRowsExclusiveMinBoundExcludesEqual(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+	for _, value := range []string{"2.5", "3"} {
+		order := sampleOrder()
+		order.AmountValue = value
+		order.Price = "100"
+		if _, err := rs.CreateOrder(ctx, order); err != nil {
+			t.Fatalf("CreateOrder(%s): %v", value, err)
+		}
+	}
+
+	bound := "2.5"
+	// An exclusive min excludes the row equal to the bound (2.50 == 2.5).
+	page, err := rs.ListOrderRows(ctx, fwstore.OrderListFilter{
+		Amount: fwstore.DecimalRangeFilter{Min: &bound, MinExclusive: true},
+		Sort:   fwstore.SortSpec{Column: "amountValue"},
+	})
+	if err != nil {
+		t.Fatalf("ListOrderRows(exclusive min): %v", err)
+	}
+	got := []string{}
+	for _, row := range page.Rows {
+		got = append(got, row.Order.AmountValue)
+	}
+	if strings.Join(got, ",") != "3" {
+		t.Fatalf("exclusive-min amounts = %v, want [3]", got)
+	}
+
+	// An inclusive min keeps the equal row.
+	page, err = rs.ListOrderRows(ctx, fwstore.OrderListFilter{
+		Amount: fwstore.DecimalRangeFilter{Min: &bound},
+		Sort:   fwstore.SortSpec{Column: "amountValue"},
+	})
+	if err != nil {
+		t.Fatalf("ListOrderRows(inclusive min): %v", err)
+	}
+	got = got[:0]
+	for _, row := range page.Rows {
+		got = append(got, row.Order.AmountValue)
+	}
+	if strings.Join(got, ",") != "2.5,3" {
+		t.Fatalf("inclusive-min amounts = %v, want [2.5 3]", got)
 	}
 }
 
@@ -515,6 +614,128 @@ func TestTradesRoundTrip(t *testing.T) {
 	}
 }
 
+func TestTradeListRowsDBCountPageFilterSortDecimalsNumerically(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-2"}); err != nil {
+		t.Fatalf("CreateAccount(acc-2): %v", err)
+	}
+	order := sampleOrder()
+	created, err := rs.CreateOrder(ctx, order)
+	if err != nil {
+		t.Fatalf("CreateOrder(acc-1): %v", err)
+	}
+	order.Account = "acc-2"
+	otherOrder, err := rs.CreateOrder(ctx, order)
+	if err != nil {
+		t.Fatalf("CreateOrder(acc-2): %v", err)
+	}
+
+	seedTrade := func(account domain.AccountID, orderID domain.ExternalID,
+		source domain.Source, side domain.OrderSide,
+		quantity string, price string, lockPrice string,
+	) domain.Trade {
+		t.Helper()
+		trade, err := rs.CreateTrade(ctx, domain.Trade{
+			Order:      orderID,
+			Account:    account,
+			BaseAsset:  "AAPL",
+			QuoteAsset: "USD",
+			Principal:  "operator",
+			Source:     source,
+			Side:       side,
+			Quantity:   quantity,
+			Price:      price,
+			LockPrice:  lockPrice,
+		})
+		if err != nil {
+			t.Fatalf("CreateTrade(%s): %v", quantity, err)
+		}
+		return trade
+	}
+	seedTrade("acc-1", created.ExternalID, domain.SourcePanel,
+		domain.OrderSideBuy, "2", "9", "2")
+	trade10 := seedTrade("acc-1", created.ExternalID, domain.SourcePanel,
+		domain.OrderSideBuy, "10", "10", "10")
+	seedTrade("acc-1", created.ExternalID, domain.SourcePanel,
+		domain.OrderSideBuy, "100", "100", "100")
+	seedTrade("acc-1", created.ExternalID, domain.SourceAPI,
+		domain.OrderSideSell, "3", "3", "3")
+	seedTrade("acc-2", otherOrder.ExternalID, domain.SourcePanel,
+		domain.OrderSideBuy, "1", "1", "1")
+
+	minQuantity := "2"
+	side := domain.OrderSideBuy
+	page, err := rs.ListTradeRows(ctx, fwstore.TradeListFilter{
+		Account:    fwstore.ExactTextMatcher("acc-1"),
+		BaseAsset:  fwstore.ExactTextMatcher("AAPL"),
+		QuoteAsset: fwstore.ExactTextMatcher("USD"),
+		Side:       &side,
+		Source:     domain.SourcePanel,
+		Quantity:   fwstore.DecimalRangeFilter{Min: &minQuantity},
+		Sort:       fwstore.SortSpec{Column: "quantity"},
+		Page:       fwstore.PageSpec{Limit: 2},
+	})
+	if err != nil {
+		t.Fatalf("ListTradeRows(first): %v", err)
+	}
+	if page.Total != 3 || len(page.Rows) != 2 {
+		t.Fatalf("page total/len = %d/%d, want 3/2", page.Total, len(page.Rows))
+	}
+	got := []string{page.Rows[0].Quantity, page.Rows[1].Quantity}
+	if strings.Join(got, ",") != "2,10" {
+		t.Fatalf("numeric quantity sort = %v, want [2 10]", got)
+	}
+
+	next, err := rs.ListTradeRows(ctx, fwstore.TradeListFilter{
+		Account:    fwstore.ExactTextMatcher("acc-1"),
+		BaseAsset:  fwstore.ExactTextMatcher("AAPL"),
+		QuoteAsset: fwstore.ExactTextMatcher("USD"),
+		Side:       &side,
+		Source:     domain.SourcePanel,
+		Quantity:   fwstore.DecimalRangeFilter{Min: &minQuantity},
+		Sort:       fwstore.SortSpec{Column: "quantity"},
+		Page:       fwstore.PageSpec{Limit: 2, Offset: 2},
+	})
+	if err != nil {
+		t.Fatalf("ListTradeRows(next): %v", err)
+	}
+	if next.Total != 3 || len(next.Rows) != 1 || next.Rows[0].Quantity != "100" {
+		t.Fatalf("next page = total %d rows %+v", next.Total, next.Rows)
+	}
+
+	maxPrice := "11"
+	minLockPrice := "2.5"
+	filtered, err := rs.ListTradeRows(ctx, fwstore.TradeListFilter{
+		Price:     fwstore.DecimalRangeFilter{Max: &maxPrice, MaxExclusive: true},
+		LockPrice: fwstore.DecimalRangeFilter{Min: &minLockPrice, MinExclusive: true},
+		Sort:      fwstore.SortSpec{Column: "lockPrice"},
+		Page:      fwstore.PageSpec{Limit: 10},
+	})
+	if err != nil {
+		t.Fatalf("ListTradeRows(price lock filters): %v", err)
+	}
+	got = got[:0]
+	for _, row := range filtered.Rows {
+		got = append(got, row.LockPrice)
+	}
+	if strings.Join(got, ",") != "3,10" {
+		t.Fatalf("price/lock filtered rows = %v, want [3 10]", got)
+	}
+
+	exact, err := rs.ListTradeRows(ctx, fwstore.TradeListFilter{
+		ExternalID: trade10.ExternalID,
+		Page:       fwstore.PageSpec{Limit: 10},
+	})
+	if err != nil {
+		t.Fatalf("ListTradeRows(external id): %v", err)
+	}
+	if exact.Total != 1 || len(exact.Rows) != 1 ||
+		exact.Rows[0].ExternalID != trade10.ExternalID {
+		t.Fatalf("external id page = total %d rows %+v",
+			exact.Total, exact.Rows)
+	}
+}
+
 func TestCountOrders(t *testing.T) {
 	ctx, rs := seedOrderFixtures(t)
 
@@ -641,6 +862,41 @@ func TestRecordOrderSettlement(t *testing.T) {
 	}
 }
 
+func TestRecordOrderSettlementAcceptsHighPrecisionBalance(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+	created, err := rs.CreateOrder(ctx, sampleOrder())
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+
+	const highPrecision = "263.1578947368421052631578947368421053"
+	st := domain.OrderSettlement{
+		Order:       created.ExternalID,
+		Account:     "acc-1",
+		OrderStatus: domain.OrderStatusCommitted,
+		AllowedFrom: domain.OrderStatusesEligibleForFill(),
+		Balances: []domain.BalanceSettlement{
+			{
+				Asset: "AAPL",
+				Outcome: domain.AdjustmentOutcomeAccepted{
+					BalanceResult:    highPrecision,
+					RealizedPnlDelta: "0",
+				},
+			},
+		},
+	}
+	if err := rs.RecordOrderSettlement(ctx, st); err != nil {
+		t.Fatalf("RecordOrderSettlement: %v", err)
+	}
+	bal, ok := getBalanceRow(t, ctx, rs, "acc-1", "AAPL")
+	if !ok {
+		t.Fatal("balance row missing after high-precision settlement")
+	}
+	if bal.available != highPrecision {
+		t.Fatalf("available = %q, want %q", bal.available, highPrecision)
+	}
+}
+
 func TestRecordOrderSettlementMissingOrder(t *testing.T) {
 	ctx, rs := seedOrderFixtures(t)
 
@@ -711,30 +967,30 @@ func TestDeleteOrderCascadesChildren(t *testing.T) {
 	}
 
 	rstore := rs.(*realmStore)
-	if c := countRows(t, ctx, rstore, "order_events"); c != 1 {
+	if c := countRows(t, ctx, rstore, "order_event"); c != 1 {
 		t.Fatalf("order_events before delete = %d, want 1", c)
 	}
-	if c := countRows(t, ctx, rstore, "trades"); c != 1 {
+	if c := countRows(t, ctx, rstore, "trade"); c != 1 {
 		t.Fatalf("trades before delete = %d, want 1", c)
 	}
-	if c := countRows(t, ctx, rstore, "order_approvals"); c != 1 {
+	if c := countRows(t, ctx, rstore, "order_approval"); c != 1 {
 		t.Fatalf("order_approvals before delete = %d, want 1", c)
 	}
 
 	// Delete the order by surrogate id (schema-cascade test via raw SQL; the
 	// public interface has no DeleteOrder). The schema must cascade children.
 	if _, err := rstore.db().ExecContext(
-		ctx, `DELETE FROM orders WHERE external_id = ?`, created.ExternalID.Bytes(),
+		ctx, `DELETE FROM order_record WHERE external_id = ?`, created.ExternalID.Bytes(),
 	); err != nil {
 		t.Fatalf("delete order: %v", err)
 	}
-	if c := countRows(t, ctx, rstore, "order_events"); c != 0 {
+	if c := countRows(t, ctx, rstore, "order_event"); c != 0 {
 		t.Fatalf("order_events after delete = %d, want 0 (cascade)", c)
 	}
-	if c := countRows(t, ctx, rstore, "trades"); c != 0 {
+	if c := countRows(t, ctx, rstore, "trade"); c != 0 {
 		t.Fatalf("trades after delete = %d, want 0 (cascade)", c)
 	}
-	if c := countRows(t, ctx, rstore, "order_approvals"); c != 0 {
+	if c := countRows(t, ctx, rstore, "order_approval"); c != 0 {
 		t.Fatalf("order_approvals after delete = %d, want 0 (cascade)", c)
 	}
 }
@@ -746,17 +1002,17 @@ func TestDeleteAccountCascadesOrders(t *testing.T) {
 		t.Fatalf("CreateOrder: %v", err)
 	}
 	rstore := rs.(*realmStore)
-	if c := countRows(t, ctx, rstore, "orders"); c != 1 {
+	if c := countRows(t, ctx, rstore, "order_record"); c != 1 {
 		t.Fatalf("orders before account delete = %d, want 1", c)
 	}
 
 	// Deleting the account cascades to its orders (and thence their children).
 	if _, err := rstore.db().ExecContext(
-		ctx, `DELETE FROM accounts WHERE code = ?`, "acc-1",
+		ctx, `DELETE FROM account WHERE code = ?`, "acc-1",
 	); err != nil {
 		t.Fatalf("delete account: %v", err)
 	}
-	if c := countRows(t, ctx, rstore, "orders"); c != 0 {
+	if c := countRows(t, ctx, rstore, "order_record"); c != 0 {
 		t.Fatalf("orders after account delete = %d, want 0 (cascade)", c)
 	}
 }
@@ -874,7 +1130,7 @@ func TestCreateOrderDuplicateSuppliedExternalIDConflicts(t *testing.T) {
 			msg, supplied.String())
 	}
 
-	if n := countRows(t, ctx, r, "orders"); n != 1 {
+	if n := countRows(t, ctx, r, "order_record"); n != 1 {
 		t.Fatalf("orders row count = %d, want 1 (no second row)", n)
 	}
 }

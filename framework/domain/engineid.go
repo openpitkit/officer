@@ -19,9 +19,10 @@ package domain
 
 import "fmt"
 
-// Engine-id bounds. The engine runs accounts on a uint64 and groups on a
-// uint32, but both are persisted in signed integer columns, so the usable range
-// excludes zero (reserved as "unassigned") and the high half of each width.
+// Engine-id bounds. The engine id is the row's surrogate key, a monotonic
+// autoincrement rowid that starts at one and grows. The engine runs accounts on
+// a uint64 and groups on a uint32, so the usable range excludes zero (reserved
+// as "unassigned") and caps each id at the width the engine constructor accepts.
 const (
 	// EngineAccountIDMin is the smallest assignable engine account id.
 	EngineAccountIDMin uint64 = 1
@@ -35,19 +36,19 @@ const (
 	EngineGroupIDMax uint32 = 1<<32 - 1
 )
 
-// EngineAccountID is the integer id the engine runs a single account on,
-// assigned collision-free by the connector and passed straight to the engine
-// via its uint64 account-id constructor. It is internal: it is never the public
-// handle and never leaves the store on the wire. Zero means "unassigned".
+// EngineAccountID is the integer id the engine runs a single account on. It is
+// the account row's surrogate id, passed straight to the engine via its uint64
+// account-id constructor. It is internal: it is never the public handle and
+// never leaves the store on the wire. Zero means "unassigned".
 type EngineAccountID uint64
 
 // Uint64 returns the raw engine account id.
 func (id EngineAccountID) Uint64() uint64 { return uint64(id) }
 
-// EngineGroupID is the integer id the engine runs an account group on, assigned
-// collision-free by the connector and passed straight to the engine via its
-// uint32 group-id constructor. It is internal: never the public handle, never on
-// the wire. Zero means "unassigned".
+// EngineGroupID is the integer id the engine runs an account group on. It is the
+// group row's surrogate id, passed straight to the engine via its uint32 group-id
+// constructor. It is internal: never the public handle, never on the wire. Zero
+// means "unassigned".
 type EngineGroupID uint32
 
 // Uint32 returns the raw engine group id.

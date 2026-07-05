@@ -879,14 +879,14 @@ func TestOrderModelFrom_InvalidInputs(t *testing.T) {
 }
 
 // TestExecutionReportFrom_InvalidInputs checks the execution-report mapper wraps
-// domain.ErrInvalid for a bad fill price, a bad fill quantity, and a bad lock
-// price (all caller input).
+// domain.ErrInvalid for a bad fill price, a bad fill quantity, an empty or bad
+// leaves quantity, and a bad lock price (all caller input).
 func TestExecutionReportFrom_InvalidInputs(t *testing.T) {
 	t.Parallel()
 	res := testResolver("acc-1")
 	base := domain.ExecutionReportInput{
 		BaseAsset: "AAPL", QuoteAsset: "USD", Account: "acc-1", Side: domain.OrderSideBuy,
-		FillQuantity: "1", FillPrice: "100",
+		FillQuantity: "1", FillPrice: "100", LeavesQuantity: "0",
 	}
 
 	badPrice := base
@@ -899,6 +899,18 @@ func TestExecutionReportFrom_InvalidInputs(t *testing.T) {
 	badQty.FillQuantity = "not-a-number"
 	if _, err := executionReportFrom(badQty, res); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid for bad fill quantity, got %v", err)
+	}
+
+	emptyLeaves := base
+	emptyLeaves.LeavesQuantity = ""
+	if _, err := executionReportFrom(emptyLeaves, res); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("want ErrInvalid for empty leaves quantity, got %v", err)
+	}
+
+	badLeaves := base
+	badLeaves.LeavesQuantity = "not-a-number"
+	if _, err := executionReportFrom(badLeaves, res); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("want ErrInvalid for bad leaves quantity, got %v", err)
 	}
 
 	badLock := base

@@ -164,24 +164,27 @@ TLS-terminating reverse proxy in front rather than exposing the port directly.
 ### Prerequisites
 
 The OpenPit Go binding requires cgo. Stable builds use the published
-`go.openpit.dev/openpit v0.5.0` module pinned in `go.mod`, the same dependency
+`go.openpit.dev/openpit` module pinned in `go.mod`, the same dependency
 users get with `go get`.
 
 - cgo enabled (`CGO_ENABLED=1`) and a working C toolchain.
 
 By default, the `just` recipes do not use a sibling Pit checkout and do not set
 `OPENPIT_RUNTIME_LIBRARY_PATH`. If that environment variable is already set by
-the caller, the binding still honors it in the normal Go way. The SPA must be
-installed and built before `go build` so the `//go:embed` directive finds the
-assets.
+the caller, the binding still honors it in the normal Go way. Runnable binary
+builds (`just build`, `just run-serve`, and their `*-dev` variants) install and
+build the SPA before `go build` so the `//go:embed` directive captures
+`web/dist/index.html` and the dashboard assets. Go-only builds (`just build-go`
+or direct `go build` from a fresh checkout) use the committed `web/dist`
+placeholder and do not produce a dashboard-capable `serve` binary.
 
 With [Just](https://just.systems/):
 
 ```bash
 go mod tidy   # update go.sum after editing go.mod
 just check    # format, lint, build, and test
-just build-go # build all Go packages without rebuilding the SPA
-just build    # build the SPA, then the pit-officer binary
+just build-go # compile Go packages only; no runnable dashboard bundle
+just build    # build the SPA first, then the pit-officer binary
 ```
 
 Local OpenPit developer mode is explicit. These recipes build the native runtime
@@ -221,7 +224,7 @@ With [Just](https://just.systems/):
 
 ```bash
 just run-mcp     # local stdio MCP server (rebuilds first)
-just run-serve   # always-on dashboard + MCP-over-HTTP (rebuilds first)
+just run-serve   # build SPA + binary first, then serve the dashboard
 just dashboard   # print and open the running serve URL (no rebuild)
 ```
 
@@ -234,6 +237,10 @@ just run-serve-dev /path/to/pit
 ```
 
 Manual:
+
+Use a binary built by `just build` or by the manual build sequence above. A
+binary produced by a Go-only build lacks the embedded dashboard assets and
+`serve` fails at startup.
 
 ```bash
 ./pit-officer mcp           # local stdio MCP server

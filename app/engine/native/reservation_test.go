@@ -509,6 +509,158 @@ func TestSubmitImmediate_NetsHeldToZero(t *testing.T) {
 	}
 }
 
+// TestApplyExecutionReport_SettlesFillNoBlock drives a fill end to end through
+// the real engine and the real executionReportFrom mapping: reserve a spot BUY
+// (holding quote funds), commit it, then apply a final execution report carrying
+// an explicit leaves quantity. It asserts the report settles with no account
+// block and produces a per-asset outcome for each spot leg. This locks in that
+// the mapper sets leaves quantity and the is-final flag; without them the engine
+// rejects the fill with missing_required_field and blocks the account.
+func TestApplyExecutionReport_SettlesFillNoBlock(t *testing.T) {
+	e := newTestEngine(t)
+	ctx := context.Background()
+
+	held, err := e.ReserveHold(ctx, testOrder())
+	if err != nil || !held.Accepted {
+		t.Fatalf("ReserveHold: %v accepted=%v", err, held.Accepted)
+	}
+	if err := e.CommitHeld(ctx, held.ApprovalID); err != nil {
+		t.Fatalf("CommitHeld: %v", err)
+	}
+
+	// A full fill of the 5-unit order at the reservation's settlement lock price
+	// nets the held quote to zero: leaves is 0 and the fill is final.
+	result, err := e.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
+		BaseAsset:      testBase,
+		QuoteAsset:     testQuote,
+		FillQuantity:   testQty,
+		FillPrice:      held.SettlementLockPrice,
+		LeavesQuantity: "0",
+		LockPrice:      held.SettlementLockPrice,
+		Account:        domain.AccountID(testAccount),
+		Side:           domain.OrderSideBuy,
+		Final:          true,
+	})
+	if err != nil {
+		t.Fatalf("ApplyExecutionReport: %v", err)
+	}
+	if len(result.Blocks) != 0 {
+		t.Fatalf("fill must not block the account, got blocks=%+v", result.Blocks)
+	}
+	// Both spot legs settle: the base (AAPL) and the quote (USD).
+	assets := map[string]bool{}
+	for _, o := range result.Outcomes {
+		assets[o.Asset] = true
+	}
+	if !assets[testBase] || !assets[testQuote] {
+		t.Fatalf("want outcomes for %s and %s, got %+v", testBase, testQuote, result.Outcomes)
+	}
+}
+
+// TestApplyExecutionReport_MissingLeavesRejected proves the mapper treats an
+// empty leaves quantity as caller error: the report is rejected with
+// domain.ErrInvalid before it reaches the engine, with no account block.
+func TestApplyExecutionReport_MissingLeavesRejected(t *testing.T) {
+	e := newTestEngine(t)
+	ctx := context.Background()
+
+	held, err := e.ReserveHold(ctx, testOrder())
+	if err != nil || !held.Accepted {
+		t.Fatalf("ReserveHold: %v accepted=%v", err, held.Accepted)
+	}
+	if err := e.CommitHeld(ctx, held.ApprovalID); err != nil {
+		t.Fatalf("CommitHeld: %v", err)
+	}
+
+	_, err = e.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
+		BaseAsset:    testBase,
+		QuoteAsset:   testQuote,
+		FillQuantity: testQty,
+		FillPrice:    held.SettlementLockPrice,
+		LockPrice:    held.SettlementLockPrice,
+		Account:      domain.AccountID(testAccount),
+		Side:         domain.OrderSideBuy,
+		Final:        true,
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("ApplyExecutionReport(empty leaves) = %v, want ErrInvalid", err)
+	}
+}
+
+// newTestEngineWithPnlBounds builds the test engine with an asset-scope P&L-
+// bounds kill-switch active, so a fill exercises that policy's post-trade
+// reading of the execution report's financial-impact group.
+func newTestEngineWithPnlBounds(t *testing.T) *openPitEngine {
+	t.Helper()
+	snap := Snapshot{
+		Accounts: []domain.Account{account(testAccount)},
+		PnlBoundsLimits: []domain.LimitPnlBounds{{
+			Scope:      domain.ScopeAsset,
+			Asset:      testQuote,
+			LowerBound: "-1000000",
+		}},
+	}
+	res, err := newIDResolver(snap.Accounts, snap.Groups)
+	if err != nil {
+		t.Fatalf("newIDResolver: %v", err)
+	}
+	eng, service, registered, err := buildEngine(snap, res)
+	if err != nil {
+		t.Fatalf("build engine: %v", err)
+	}
+	adapter := newOpenPitEngine(eng, service, registered, nil, res).(*openPitEngine)
+	t.Cleanup(adapter.Stop)
+
+	if err := seedBalances(eng, []domain.Balance{{
+		Account:   domain.AccountID(testAccount),
+		Asset:     testQuote,
+		Available: testQuoteFund,
+	}}, res); err != nil {
+		t.Fatalf("seed balance: %v", err)
+	}
+	return adapter
+}
+
+// TestApplyExecutionReport_SettlesFillWithPnlBoundsNoBlock proves a fill settles
+// without a spurious account block when a P&L-bounds kill-switch is active. The
+// mapper sets the financial-impact group (P&L and fee) the policy reads, so an
+// absent group no longer trips missing_required_field. Spot-funds alone settled
+// the fill (it ignores the group); only the P&L policy exposed the gap.
+func TestApplyExecutionReport_SettlesFillWithPnlBoundsNoBlock(t *testing.T) {
+	e := newTestEngineWithPnlBounds(t)
+	ctx := context.Background()
+
+	held, err := e.ReserveHold(ctx, testOrder())
+	if err != nil || !held.Accepted {
+		t.Fatalf("ReserveHold: %v accepted=%v", err, held.Accepted)
+	}
+	if err := e.CommitHeld(ctx, held.ApprovalID); err != nil {
+		t.Fatalf("CommitHeld: %v", err)
+	}
+
+	// RealizedPnl/Fee left empty (→ zero): a position-opening buy realizes nothing.
+	result, err := e.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
+		BaseAsset:      testBase,
+		QuoteAsset:     testQuote,
+		FillQuantity:   testQty,
+		FillPrice:      held.SettlementLockPrice,
+		LeavesQuantity: "0",
+		LockPrice:      held.SettlementLockPrice,
+		Account:        domain.AccountID(testAccount),
+		Side:           domain.OrderSideBuy,
+		Final:          true,
+	})
+	if err != nil {
+		t.Fatalf("ApplyExecutionReport: %v", err)
+	}
+	if len(result.Blocks) != 0 {
+		t.Fatalf("fill must not block with pnl_bounds active, got blocks=%+v", result.Blocks)
+	}
+	if len(result.Outcomes) == 0 {
+		t.Fatalf("want settlement outcomes, got none")
+	}
+}
+
 // TestSubmitOrder_AcceptCapturesSerializedLock checks SubmitOrder returns the
 // SDK-serialized lock (not decimal prices) and that the lock round-trips through
 // the seam to the prices the order locked.

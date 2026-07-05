@@ -15,18 +15,34 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 
-import type { Limit } from "@/api/types";
+import type { Limit, PagedResult, PolicyListFilters } from "@/api/types";
 import { usePolling, type PollingResult } from "@/api/usePolling";
 import { useOfficerApi } from "@/framework";
 
-/** Poll GET /api/v1/limits, optionally filtered to one account server-side. */
-export function useLimits(account?: string): PollingResult<Limit[]> {
+/** Poll the unified, paged GET /api/v1/limits policy list. */
+export function useLimits(
+  filters?: PolicyListFilters,
+): PollingResult<Limit[]> {
   const api = useOfficerApi();
+  const filterKey = useMemo(() => JSON.stringify(filters ?? {}), [filters]);
   const fetcher = useCallback(
-    (signal: AbortSignal) => api.fetchLimits(account || undefined, signal),
-    [api, account],
+    (signal: AbortSignal) => api.fetchLimits(filters, signal),
+    [api, filters],
   );
-  return usePolling(fetcher);
+  return usePolling(fetcher, 5000, filterKey);
+}
+
+/** Poll the unified GET /api/v1/limits policy list with server-side total. */
+export function useLimitsPage(
+  filters?: PolicyListFilters,
+): PollingResult<PagedResult<Limit>> {
+  const api = useOfficerApi();
+  const filterKey = useMemo(() => JSON.stringify(filters ?? {}), [filters]);
+  const fetcher = useCallback(
+    (signal: AbortSignal) => api.fetchPoliciesPage(filters, signal),
+    [api, filters],
+  );
+  return usePolling(fetcher, 5000, filterKey);
 }
