@@ -51,6 +51,7 @@ import type {
   CheckWouldBlock,
   EngineHealth,
   ExecutionBlock,
+  ExecutionOutcome,
   ExecutionReportResult,
   Group,
   GroupListFilters,
@@ -69,11 +70,21 @@ import type {
   MarketDataSymbolVerification,
   McpCommand,
   NodeHealth,
+  ApprovalTokenResponse,
+  AttestationBlock,
+  AttestationResult,
+  EventAttestation,
+  EventReproduction,
+  EventReproductionESign,
+  EventReproductionRequest,
+  EventReproductionResponse,
+  ExecutionReportResponse,
   Order,
-  OrderApproval,
   OrderEvent,
   OrderListFilters,
+  OrderMutationResponse,
   OrderSizeLimit,
+  PublicKeyMaterial,
   PageRequest,
   PagedResult,
   PnlBoundsLimit,
@@ -120,6 +131,14 @@ function pick(obj: Json, ...keys: string[]): unknown {
 
 function asString(v: unknown): string {
   return typeof v === "string" ? v : "";
+}
+
+function requireStringField(obj: Json, label: string, ...keys: string[]): string {
+  const value = pick(obj, ...keys);
+  if (typeof value !== "string") {
+    throw new ApiError(`${label} is missing from the API response`, "internal");
+  }
+  return value;
 }
 
 function parseGoDurationSeconds(value: string): number | null {
@@ -399,6 +418,14 @@ function normalizeOrder(v: unknown): Order {
     "LockPrices",
     "lock_prices",
   );
+  const amountValue = asString(pick(o, "amountValue", "AmountValue", "amount_value"));
+  const leavesQuantity = requireStringField(
+    o,
+    "leavesQuantity",
+    "leavesQuantity",
+    "LeavesQuantity",
+    "leaves_quantity",
+  );
   return {
     externalId: asString(pick(o, "externalId", "ExternalId", "external_id", "id", "Id", "ID")),
     account: asString(pick(o, "account", "Account")),
@@ -409,10 +436,12 @@ function normalizeOrder(v: unknown): Order {
     quoteAsset: asString(pick(o, "quoteAsset", "QuoteAsset", "quote_asset")),
     side: asString(pick(o, "side", "Side")) as Order["side"],
     amountKind: asString(pick(o, "amountKind", "AmountKind", "amount_kind")) as Order["amountKind"],
-    amountValue: asString(pick(o, "amountValue", "AmountValue", "amount_value")),
+    amountValue,
+    leavesQuantity,
     price: asString(pick(o, "price", "Price")),
     status: asString(pick(o, "status", "Status")),
     displayPrices: Array.isArray(rawDisplay) ? rawDisplay.map(asString) : [],
+    signed: asBool(pick(o, "signed", "Signed")),
   };
 }
 
@@ -425,7 +454,12 @@ function normalizeOrderEvent(v: unknown): OrderEvent {
     type: asString(pick(o, "type", "Type")),
     source: asSource(pick(o, "source", "Source")),
     principal: asString(pick(o, "principal", "Principal")) || undefined,
+    signed: asBool(pick(o, "signed", "Signed")),
   };
+  const alg = pick(o, "alg", "Alg");
+  if (typeof alg === "string" && alg.length > 0) {
+    event.alg = alg;
+  }
   const rejectCode = pick(o, "rejectCode", "RejectCode", "reject_code");
   if (rejectCode !== undefined) {
     event.rejectCode = asString(rejectCode);
@@ -2207,11 +2241,14 @@ export interface AdjustmentBody {
 async function createAdjustment(client: ApiClient, 
   accountCode: string,
   body: AdjustmentBody,
-): Promise<Adjustment> {
+): Promise<Adjustment | null> {
   const v = await client.request(`${client.baseUrl}/accounts/${encode(accountCode)}/adjustments`, {
     method: "POST",
     body,
   });
+  if (v === undefined) {
+    return null;
+  }
   const o = isObject(v) ? v : {};
   return normalizeAdjustment(pick(o, "adjustment", "Adjustment"));
 }
@@ -2341,6 +2378,10 @@ export interface CreateOrderBody {
 export interface CreateOrderResult {
   order: Order;
   warning?: string;
+  /** The approval token issued by submit. For a hold order this is the token the
+   *  operator must present to confirm or cancel the held reservation, so the UI
+   *  retains it; for an immediate order it is already resolved and unused. */
+  approval: ApprovalToken;
 }
 
 function normalizeApprovalToken(v: unknown): ApprovalToken {
@@ -2371,9 +2412,14 @@ function minimalCreatedOrder(
     side: body.side as Order["side"],
     amountKind: body.amountKind as Order["amountKind"],
     amountValue: body.amountValue,
+    leavesQuantity: body.amountValue,
     price: body.price ?? "0",
     status: "submitted",
     displayPrices: [],
+    // The held-reservation token is signed but not yet persisted onto the
+    // order (that only happens via the panel's own submit/accept path), so
+    // this placeholder reports unsigned until a real fetch replaces it.
+    signed: false,
   };
 }
 
@@ -2403,12 +2449,14 @@ async function createOrder(client: ApiClient,
   try {
     return {
       order: (await fetchOrderDetail(client, token.orderExternalId, signal)).order,
+      approval: token,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {
       order: minimalCreatedOrder(body, token),
       warning: `Order was created, but detail enrichment failed: ${message}`,
+      approval: token,
     };
   }
 }
@@ -2530,16 +2578,86 @@ async function fetchOrders(
   return (await fetchOrdersPage(client, filter, signal)).items;
 }
 
-function normalizeOrderApproval(v: unknown): OrderApproval | null {
+/** GET /orders/{externalId}: the order plus its per-event signed timeline and
+ *  trades. Signatures are sourced per event (each event carries its own signed
+ *  flag and alg); there is no order-level approval envelope. */
+async function fetchOrderDetail(client: ApiClient,
+  externalId: string,
+  signal?: AbortSignal,
+): Promise<{ order: Order; events: OrderEvent[]; trades: Trade[] }> {
+  const v = await client.request(`${client.baseUrl}/orders/${encode(externalId)}`, { signal });
+  const o = isObject(v) ? v : {};
+  return {
+    order: normalizeOrder(pick(o, "order", "Order")),
+    events: normalizeArray(pick(o, "events", "Events"), normalizeOrderEvent),
+    trades: normalizeArray(pick(o, "trades", "Trades"), normalizeTrade),
+  };
+}
+
+// asNullableString maps an absent/null wire value to null and any string to
+// itself, so a null canonicalApproval stays distinct from an empty-string one.
+function asNullableString(v: unknown): string | null {
+  return typeof v === "string" ? v : null;
+}
+
+function normalizeSigningKeyFormat(v: unknown): SigningKeyFormat {
+  switch (v) {
+    case "openssh":
+    case "raw-base64":
+      return v;
+    default:
+      return "pem-pkcs8";
+  }
+}
+
+function normalizePublicKeyMaterial(v: unknown): PublicKeyMaterial | null {
+  if (!isObject(v)) {
+    return null;
+  }
+  return {
+    keyId: asString(pick(v, "keyId", "KeyId", "key_id")),
+    alg: pick(v, "alg", "Alg") === "none" ? "none" : "ed25519",
+    format: normalizeSigningKeyFormat(pick(v, "format", "Format")),
+    key: asString(pick(v, "key", "Key")),
+  };
+}
+
+function normalizeApprovalTokenResponse(v: unknown): ApprovalTokenResponse | null {
+  if (!isObject(v)) {
+    return null;
+  }
+  return {
+    token: asString(pick(v, "token", "Token")),
+    keyId: asString(pick(v, "keyId", "KeyId", "key_id")),
+    expiresAt: asString(pick(v, "expiresAt", "ExpiresAt", "expires_at")),
+    orderExternalId: asString(
+      pick(v, "orderExternalId", "OrderExternalId", "order_external_id"),
+    ),
+  };
+}
+
+function normalizeEventReproductionESign(v: unknown): EventReproductionESign {
+  const o = isObject(v) ? v : {};
+  return {
+    alg: asString(pick(o, "alg", "Alg")),
+    noESign: asFlag(pick(o, "noESign", "NoESign", "no_esign")),
+    signed: asBool(pick(o, "signed", "Signed")),
+  };
+}
+
+function normalizeEventAttestation(v: unknown): EventAttestation | null {
   if (!isObject(v)) {
     return null;
   }
   const rawAlg = asString(pick(v, "alg", "Alg"));
-  const alg: OrderApproval["alg"] = rawAlg === "none" ? "none" : "ed25519";
+  const alg: EventAttestation["alg"] = rawAlg === "none" ? "none" : "ed25519";
   return {
     token: asString(pick(v, "token", "Token")),
     keyId: asString(pick(v, "keyId", "KeyId", "key_id")),
     alg,
+    requestType: asString(
+      pick(v, "requestType", "RequestType", "request_type"),
+    ),
     mode: asString(pick(v, "mode", "Mode")),
     issuedAt: asString(pick(v, "issuedAt", "IssuedAt", "issued_at")),
     expiresAt: asString(pick(v, "expiresAt", "ExpiresAt", "expires_at")),
@@ -2547,27 +2665,189 @@ function normalizeOrderApproval(v: unknown): OrderApproval | null {
   };
 }
 
-/** GET /orders/{externalId}: the order plus its events, trades, and approval envelope. */
-async function fetchOrderDetail(client: ApiClient, 
-  externalId: string,
-  signal?: AbortSignal,
-): Promise<{ order: Order; events: OrderEvent[]; trades: Trade[]; approval: OrderApproval | null }> {
-  const v = await client.request(`${client.baseUrl}/orders/${encode(externalId)}`, { signal });
+function normalizeAttestationBlock(v: unknown): AttestationBlock {
   const o = isObject(v) ? v : {};
   return {
-    order: normalizeOrder(pick(o, "order", "Order")),
-    events: normalizeArray(pick(o, "events", "Events"), normalizeOrderEvent),
-    trades: normalizeArray(pick(o, "trades", "Trades"), normalizeTrade),
-    approval: normalizeOrderApproval(pick(o, "approval", "Approval")),
+    account: asString(pick(o, "account", "Account")),
+    code: asString(pick(o, "code", "Code")),
+    reason: asString(pick(o, "reason", "Reason")),
+    details: asString(pick(o, "details", "Details")),
   };
 }
 
+function normalizeAttestationResult(v: unknown): AttestationResult | null {
+  if (!isObject(v)) {
+    return null;
+  }
+  return {
+    outcome: asString(pick(v, "outcome", "Outcome")),
+    fillQuantity: asString(pick(v, "fillQuantity", "FillQuantity", "fill_quantity")),
+    fillPrice: asString(pick(v, "fillPrice", "FillPrice", "fill_price")),
+    fillLockPrice: asString(
+      pick(v, "fillLockPrice", "FillLockPrice", "fill_lock_price"),
+    ),
+    leavesQuantity: asString(
+      pick(v, "leavesQuantity", "LeavesQuantity", "leaves_quantity"),
+    ),
+    orderStatus: asString(pick(v, "orderStatus", "OrderStatus", "order_status")),
+    blocks: normalizeArray(pick(v, "blocks", "Blocks"), normalizeAttestationBlock),
+  };
+}
+
+function normalizeEventReproductionRequest(
+  v: unknown,
+): EventReproductionRequest | null {
+  if (!isObject(v)) {
+    return null;
+  }
+  return {
+    requestType: asString(pick(v, "requestType", "RequestType", "request_type")),
+    orderExternalId: asString(
+      pick(v, "orderExternalId", "OrderExternalId", "order_external_id"),
+    ),
+    eventExternalId: asString(
+      pick(v, "eventExternalId", "EventExternalId", "event_external_id"),
+    ),
+    instrument: asString(pick(v, "instrument", "Instrument")),
+    side: asString(pick(v, "side", "Side")),
+    quantity: asString(pick(v, "quantity", "Quantity")),
+    amountKind: asString(pick(v, "amountKind", "AmountKind", "amount_kind")),
+    orderType: asString(pick(v, "orderType", "OrderType", "order_type")),
+    limitPrice: asString(pick(v, "limitPrice", "LimitPrice", "limit_price")),
+    priceCurrency: asString(
+      pick(v, "priceCurrency", "PriceCurrency", "price_currency"),
+    ),
+    accountId: asString(pick(v, "accountId", "AccountId", "account_id")),
+    verdict: asString(pick(v, "verdict", "Verdict")),
+    result: normalizeAttestationResult(pick(v, "result", "Result")),
+  };
+}
+
+function normalizeExecutionReportResponse(
+  v: unknown,
+): ExecutionReportResponse | null {
+  if (!isObject(v)) {
+    return null;
+  }
+  const result = pick(v, "result", "Result");
+  const resultObj = isObject(result) ? result : {};
+  return {
+    blocks: normalizeArray(
+      pick(resultObj, "blocks", "Blocks"),
+      normalizeAttestationBlock,
+    ),
+    outcomes: normalizeArray(
+      pick(resultObj, "outcomes", "Outcomes"),
+      normalizeExecutionOutcome,
+    ),
+    attestationToken: asString(
+      pick(v, "attestationToken", "AttestationToken", "attestation_token"),
+    ),
+    attestationKeyId: asString(
+      pick(v, "attestationKeyId", "AttestationKeyId", "attestation_key_id"),
+    ),
+    signed: asBool(pick(v, "signed", "Signed")),
+  };
+}
+
+function normalizeOrderMutationResponse(v: unknown): OrderMutationResponse | null {
+  if (!isObject(v)) {
+    return null;
+  }
+  return {
+    order: normalizeOrder(pick(v, "order", "Order")),
+    attestationToken: asString(
+      pick(v, "attestationToken", "AttestationToken", "attestation_token"),
+    ),
+    attestationKeyId: asString(
+      pick(v, "attestationKeyId", "AttestationKeyId", "attestation_key_id"),
+    ),
+    signed: asBool(pick(v, "signed", "Signed")),
+  };
+}
+
+function normalizeEventReproductionResponse(
+  v: unknown,
+): EventReproductionResponse | null {
+  if (!isObject(v)) {
+    return null;
+  }
+  return {
+    submitResponse: normalizeApprovalTokenResponse(
+      pick(v, "submitResponse", "SubmitResponse", "submit_response"),
+    ),
+    executionReport: normalizeExecutionReportResponse(
+      pick(v, "executionReport", "ExecutionReport", "execution_report"),
+    ),
+    confirm: normalizeOrderMutationResponse(pick(v, "confirm", "Confirm")),
+    cancel: normalizeOrderMutationResponse(pick(v, "cancel", "Cancel")),
+  };
+}
+
+/** GET /orders/{orderExternalId}/events/{eventId}/reproduction: the
+ *  controller-facing per-event reproduction bundle. Officer signs every
+ *  engine-processed request, so each attested event has its own bundle. Signed
+ *  artifacts (token, canonicalApproval, signature, publicKey.key) are returned
+ *  verbatim and are never re-serialized here. */
+async function fetchEventReproduction(client: ApiClient,
+  orderExternalId: string,
+  eventId: string,
+  signal?: AbortSignal,
+): Promise<EventReproduction> {
+  const v = await client.request(
+    `${client.baseUrl}/orders/${encode(orderExternalId)}/events/${encode(eventId)}/reproduction`,
+    { signal },
+  );
+  const o = isObject(v) ? v : {};
+  return {
+    requestType: asString(pick(o, "requestType", "RequestType", "request_type")),
+    event: normalizeOrderEvent(pick(o, "event", "Event")),
+    attestation: normalizeEventAttestation(
+      pick(o, "attestation", "Attestation"),
+    ),
+    request: normalizeEventReproductionRequest(pick(o, "request", "Request")),
+    response: normalizeEventReproductionResponse(pick(o, "response", "Response")),
+    canonicalApproval: asNullableString(
+      pick(o, "canonicalApproval", "CanonicalApproval", "canonical_approval"),
+    ),
+    publicKey: normalizePublicKeyMaterial(
+      pick(o, "publicKey", "PublicKey", "public_key"),
+    ),
+    eSign: normalizeEventReproductionESign(pick(o, "eSign", "ESign", "e_sign")),
+    signature: asString(pick(o, "signature", "Signature")),
+    reason: asString(pick(o, "reason", "Reason")),
+  };
+}
+
+/** GET /signing/keys/{keyId}/public?format= — resolve one key's public material
+ *  by id (rotation-safe: not the active key). Only public material is returned. */
+async function fetchPublicKeyById(client: ApiClient,
+  keyId: string,
+  format: SigningKeyFormat,
+  signal?: AbortSignal,
+): Promise<PublicKeyMaterial> {
+  const v = await client.request(
+    `${client.baseUrl}/signing/keys/${encode(keyId)}/public?format=${encode(format)}`,
+    { signal },
+  );
+  const material = normalizePublicKeyMaterial(v);
+  if (material !== null) {
+    return material;
+  }
+  return { keyId, alg: "ed25519", format, key: "" };
+}
+
+// The web exec-report intentionally omits realizedPnl/fee: this is a manual
+// operator entry of a venue fill, and real P&L and fees arrive from venue
+// adapters via the MCP/API surfaces, not from a hand-typed panel report.
 export interface ExecutionReportBody {
-  quantity: string;
-  price: string;
+  /** Fill fields: required for filled/partially_filled, ignored otherwise. */
+  quantity?: string;
+  price?: string;
+  leavesQuantity?: string;
   lockPrice?: string;
+  status: string;
   force?: boolean;
-  final: boolean;
 }
 
 function normalizeExecutionBlock(v: unknown): ExecutionBlock {
@@ -2580,8 +2860,23 @@ function normalizeExecutionBlock(v: unknown): ExecutionBlock {
   };
 }
 
-/** POST /orders/{externalId}/execution-reports. Returns blocks caused by the fill. */
-async function submitExecutionReport(client: ApiClient, 
+function normalizeExecutionOutcome(v: unknown): ExecutionOutcome {
+  const o = isObject(v) ? v : {};
+  return {
+    asset: asString(pick(o, "asset", "Asset")),
+    balanceDelta: asString(pick(o, "balanceDelta", "BalanceDelta")),
+    balanceResult: asString(pick(o, "balanceResult", "BalanceResult")),
+    heldDelta: asString(pick(o, "heldDelta", "HeldDelta")),
+    heldResult: asString(pick(o, "heldResult", "HeldResult")),
+    incomingDelta: asString(pick(o, "incomingDelta", "IncomingDelta")),
+    incomingResult: asString(pick(o, "incomingResult", "IncomingResult")),
+  };
+}
+
+/** POST /orders/{externalId}/execution-reports. Returns the engine result -
+ *  account blocks and per-asset outcomes caused by the fill - plus the
+ *  attestation the robot receives as proof the engine passed this report. */
+async function submitExecutionReport(client: ApiClient,
   orderExternalId: string,
   body: ExecutionReportBody,
 ): Promise<ExecutionReportResult> {
@@ -2594,7 +2889,74 @@ async function submitExecutionReport(client: ApiClient,
   const ro = isObject(result) ? result : {};
   return {
     blocks: normalizeArray(pick(ro, "blocks", "Blocks"), normalizeExecutionBlock),
+    outcomes: normalizeArray(
+      pick(ro, "outcomes", "Outcomes"),
+      normalizeExecutionOutcome,
+    ),
+    attestationToken: asString(
+      pick(o, "attestationToken", "AttestationToken", "attestation_token"),
+    ),
+    attestationKeyId: asString(
+      pick(o, "attestationKeyId", "AttestationKeyId", "attestation_key_id"),
+    ),
+    signed: asBool(pick(o, "signed", "Signed")),
   };
+}
+
+/** POST /orders/{externalId}/confirm body: the approval token from the hold
+ *  submit, plus an optional force to bypass Officer's safety checks. */
+export interface ConfirmHeldOrderBody {
+  token: string;
+  force?: boolean;
+}
+
+/** POST /orders/{externalId}/cancel body: the approval token from the hold
+ *  submit, an optional reason, and an optional force to bypass safety checks. */
+export interface CancelHeldOrderBody {
+  token: string;
+  reason?: string;
+  force?: boolean;
+}
+
+function orderMutationResponseOrThrow(v: unknown): OrderMutationResponse {
+  const mutation = normalizeOrderMutationResponse(v);
+  if (mutation !== null) {
+    return mutation;
+  }
+  // A 2xx with a non-object body is a contract violation; fail loud rather than
+  // fabricate a resolved order the caller would render as truth.
+  throw new ApiError(
+    "order mutation response was not a JSON object",
+    "internal",
+  );
+}
+
+/** POST /orders/{externalId}/confirm. Verifies the approval token and commits
+ *  the held reservation, returning the resolved order plus its attestation. */
+async function confirmHeldOrder(client: ApiClient,
+  orderExternalId: string,
+  body: ConfirmHeldOrderBody,
+  signal?: AbortSignal,
+): Promise<OrderMutationResponse> {
+  const v = await client.request(
+    `${client.baseUrl}/orders/${encode(orderExternalId)}/confirm`,
+    { method: "POST", body, signal },
+  );
+  return orderMutationResponseOrThrow(v);
+}
+
+/** POST /orders/{externalId}/cancel. Verifies the approval token and rolls back
+ *  the held reservation, returning the resolved order plus its attestation. */
+async function cancelHeldOrder(client: ApiClient,
+  orderExternalId: string,
+  body: CancelHeldOrderBody,
+  signal?: AbortSignal,
+): Promise<OrderMutationResponse> {
+  const v = await client.request(
+    `${client.baseUrl}/orders/${encode(orderExternalId)}/cancel`,
+    { method: "POST", body, signal },
+  );
+  return orderMutationResponseOrThrow(v);
 }
 
 export interface TradesFilter extends PageRequest {
@@ -3040,7 +3402,10 @@ export function createOfficerApi(client: ApiClient) {
     fetchOrdersPage: bind(fetchOrdersPage),
     fetchOrders: bind(fetchOrders),
     fetchOrderDetail: bind(fetchOrderDetail),
+    fetchEventReproduction: bind(fetchEventReproduction),
     submitExecutionReport: bind(submitExecutionReport),
+    confirmHeldOrder: bind(confirmHeldOrder),
+    cancelHeldOrder: bind(cancelHeldOrder),
     fetchTradesPage: bind(fetchTradesPage),
     fetchTrades: bind(fetchTrades),
     fetchPoliciesPage: bind(fetchPoliciesPage),
@@ -3058,6 +3423,7 @@ export function createOfficerApi(client: ApiClient) {
     generateSigningKey: bind(generateSigningKey),
     importSigningKey: bind(importSigningKey),
     exportPublicKey: bind(exportPublicKey),
+    fetchPublicKeyById: bind(fetchPublicKeyById),
     setESignEnabled: bind(setESignEnabled),
   } as const;
 }

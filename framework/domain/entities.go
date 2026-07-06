@@ -466,12 +466,27 @@ const (
 	OrderStatusCancelled       OrderStatus = "cancelled"
 )
 
-// OrderStatusesEligibleForFill returns the statuses a fill may legally advance
-// FROM. A fill arriving on an order in a truly terminal status (rejected,
-// rolled_back, filled, or cancelled) is a clobber and must be rejected with
-// ErrConflict. This list is the single source of truth used by every fill path
-// (SubmitImmediate and ApplyExecutionReport) to build their AllowedFrom guard on
-// RecordOrderSettlement.
+// OrderStatusSupported reports whether status is one of the recognized order
+// lifecycle states, so a report or request naming an unknown status is rejected
+// as invalid rather than persisted.
+func OrderStatusSupported(status OrderStatus) bool {
+	switch status {
+	case OrderStatusSubmitted,
+		OrderStatusAccepted,
+		OrderStatusRejected,
+		OrderStatusCommitted,
+		OrderStatusRolledBack,
+		OrderStatusFilled,
+		OrderStatusPartiallyFilled,
+		OrderStatusCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
+// OrderStatusesEligibleForFill returns the statuses an immediate-submit fill
+// may legally advance FROM.
 //
 // Eligible sources:
 //   - submitted: immediate order just created, fill closes it in one step
@@ -487,8 +502,35 @@ func OrderStatusesEligibleForFill() []OrderStatus {
 	}
 }
 
-// OrderStatusTerminal reports whether the status hits Officer's remaining
-// terminal-order safety net, which callers can bypass with force.
+// ExecutionReportStatusChangeEvent maps an execution-report target status to a
+// lifecycle event. Fill statuses have no entry here: they emit OrderEventFill
+// from the settlement path instead. The bool is false for an unmapped status.
+func ExecutionReportStatusChangeEvent(status OrderStatus) (OrderEventType, bool) {
+	switch status {
+	case OrderStatusSubmitted:
+		return OrderEventSubmitted, true
+	case OrderStatusAccepted:
+		return OrderEventPreTradeAccepted, true
+	case OrderStatusRejected:
+		return OrderEventPreTradeRejected, true
+	case OrderStatusCommitted:
+		return OrderEventReservationCommitted, true
+	case OrderStatusRolledBack:
+		return OrderEventReservationRolledBack, true
+	case OrderStatusCancelled:
+		return OrderEventCancelled, true
+	default:
+		return "", false
+	}
+}
+
+// ExecutionReportTargetStatus resolves the persisted order status for an
+// execution report.
+func ExecutionReportTargetStatus(in ExecutionReportInput) OrderStatus {
+	return in.OrderStatus
+}
+
+// OrderStatusTerminal reports whether the status is a final lifecycle state.
 func OrderStatusTerminal(status OrderStatus) bool {
 	switch status {
 	case OrderStatusRejected,
@@ -501,11 +543,20 @@ func OrderStatusTerminal(status OrderStatus) bool {
 	}
 }
 
+// RequireOrderModifiable returns ErrTerminalOrder when the order's status is
+// terminal and the caller did not set force.
+func RequireOrderModifiable(status OrderStatus, force bool) error {
+	if !force && OrderStatusTerminal(status) {
+		return ErrTerminalOrder
+	}
+	return nil
+}
+
 // Order is the Officer-side record of an order that passed through the system,
 // including rejected ones. It is a machine record: its public handle is
 // ExternalID, the surrogate key never appears here. All monetary/size values are
-// exact decimal strings, never float. The signed approval, when present, lives
-// in a separate 1:1 OrderApproval rather than inline on the order.
+// exact decimal strings, never float. Signed attestations, when present, live
+// per-event in EventAttestation, not inline on the order.
 type Order struct {
 	// At is the wall-clock time the order was submitted.
 	At time.Time
@@ -513,6 +564,10 @@ type Order struct {
 	ExternalID ExternalID
 	// AmountValue is the size of the order (exact decimal string).
 	AmountValue string
+	// Leaves is the persisted remaining open base quantity (exact decimal string).
+	// It is persisted from the request and later replaced only by the
+	// LeavesQuantity carried by an accepted execution-report patch.
+	Leaves string
 	// Price is the limit price (exact decimal string); empty for market orders.
 	Price string
 	// Principal is the code of the principal who submitted the order; empty when
@@ -538,20 +593,38 @@ type Order struct {
 	Status OrderStatus
 }
 
-// OrderApproval is the persisted signed approval envelope stamped onto an
-// order's pre-trade verdict (accept or reject), held in a 1:1 companion of the
-// signed order and absent when the order is unsigned. Token is the exact
-// base64url envelope bytes issued by the signer; the remaining fields are the
-// envelope metadata carried for read-back without decoding the token. KeyID
-// references the signing key by its own UUID handle. IssuedAt and ExpiresAt are
-// RFC3339Nano UTC strings.
-type OrderApproval struct {
-	// Token is the exact base64url-encoded signed approval envelope.
+// AttestationRequestType names the trading request an attestation binds. Every
+// request the engine evaluates produces one order-history event; the
+// attestation over (request + engine result) is bound 1:1 to that event, tagged
+// with the request that produced it.
+type AttestationRequestType string
+
+const (
+	// AttestationRequestSubmit is a pre-trade submit (accept or reject verdict).
+	AttestationRequestSubmit AttestationRequestType = "submit"
+	// AttestationRequestExecutionReport is a post-trade fill/settlement report.
+	AttestationRequestExecutionReport AttestationRequestType = "execution_report"
+	// AttestationRequestConfirm is a held-reservation commit.
+	AttestationRequestConfirm AttestationRequestType = "confirm"
+	// AttestationRequestCancel is a held-reservation rollback.
+	AttestationRequestCancel AttestationRequestType = "cancel"
+)
+
+// EventAttestation is the persisted signed attestation over one trading request
+// and the engine result it produced, bound 1:1 to the order-history event that
+// records it. Token is the exact base64url envelope bytes issued by the signer;
+// the remaining fields are the envelope metadata carried for read-back without
+// decoding the token. KeyID references the signing key by its own UUID handle.
+// IssuedAt and ExpiresAt are RFC3339Nano UTC strings.
+type EventAttestation struct {
+	// Token is the exact base64url-encoded signed attestation envelope.
 	Token string
 	// KeyID is the signing key UUID that produced Token.
 	KeyID string
 	// Alg is the envelope signing algorithm ("ed25519" | "none").
 	Alg string
+	// RequestType is the trading request the attestation binds.
+	RequestType AttestationRequestType
 	// Mode is the payload mode the envelope carries (e.g. "immediate").
 	Mode string
 	// IssuedAt is the envelope issue time (RFC3339Nano UTC).
@@ -571,11 +644,6 @@ const (
 	OrderEventReservationRolledBack OrderEventType = "reservation_rolled_back"
 	OrderEventFill                  OrderEventType = "fill"
 	OrderEventCancelled             OrderEventType = "cancelled"
-	// OrderEventApprovalIssued records that a signed approval envelope was
-	// stamped onto the order's pre-trade verdict (accept or reject). It reuses the
-	// approval_issued audit string for consistency across the audit and event
-	// streams.
-	OrderEventApprovalIssued OrderEventType = "approval_issued"
 )
 
 // OrderEventPayload is the JSON-marshalled variant payload for an order event.
@@ -593,6 +661,14 @@ type OrderEventPayload struct {
 	FillQuantity  string `json:"fill_quantity,omitempty"`
 	FillPrice     string `json:"fill_price,omitempty"`
 	FillLockPrice string `json:"fill_lock_price,omitempty"`
+
+	// Execution-report fields - copied from the accepted report request so the
+	// order event preserves the report contract even when the report carries no
+	// trade.
+	LeavesQuantity string `json:"leaves_quantity,omitempty"`
+	OrderStatus    string `json:"order_status,omitempty"`
+	RealizedPnl    string `json:"realized_pnl,omitempty"`
+	Fee            string `json:"fee,omitempty"`
 }
 
 // OrderEvent is one immutable record in an order's event stream. It is a machine
@@ -605,6 +681,9 @@ type OrderEvent struct {
 	ExternalID ExternalID
 	// Order is the parent order's opaque public handle.
 	Order ExternalID
+	// Attestation is the event's 1:1 signed attestation over (request + engine
+	// result), read back on GetOrder; nil when the event carries none.
+	Attestation *EventAttestation
 	// Payload carries the event-specific structured data.
 	Payload OrderEventPayload
 	// Principal is the code of the principal who triggered the event; empty when
@@ -649,14 +728,27 @@ type Trade struct {
 	Side OrderSide
 }
 
-// OrderDetail bundles an order together with its events and trades; returned
-// by GetOrder. Approval is the order's 1:1 signed approval envelope when one was
-// issued, read back from order_approvals; nil when the order is unsigned.
+// OrderDetail bundles an order together with its events and trades; returned by
+// GetOrder. Each event carries its own 1:1 signed attestation (OrderEvent.
+// Attestation) when one was issued; the order is "signed" when at least one of
+// its events is attested.
 type OrderDetail struct {
-	Order    Order
-	Approval *OrderApproval
-	Events   []OrderEvent
-	Trades   []Trade
+	Order  Order
+	Events []OrderEvent
+	Trades []Trade
+}
+
+// Signed reports the order-level rollup: the order carries at least one
+// Ed25519-signed event attestation. An eSign-off ("none") attestation does not
+// count as signed.
+func (d OrderDetail) Signed() bool {
+	for i := range d.Events {
+		att := d.Events[i].Attestation
+		if att != nil && att.Alg == "ed25519" {
+			return true
+		}
+	}
+	return false
 }
 
 // OrderReject is the transport-agnostic view of one engine pre-trade reject.
@@ -685,14 +777,17 @@ type ExecutionReportInput struct {
 	FillQuantity string
 	// FillPrice is the fill price (exact decimal string).
 	FillPrice string
-	// LeavesQuantity is the order's remaining open base quantity after this fill
-	// (FIX LeavesQty), as an exact decimal string: "0" on a fully-filled final
-	// fill, the released remainder on a final partial, the still-open quantity on
-	// a non-final partial. The engine requires it to settle the fill.
+	// LeavesQuantity is the request's FIX LeavesQty value as an exact decimal
+	// string. Officer forwards it as-is; it is not recalculated from order size or
+	// target status.
 	LeavesQuantity string
 	// LockPrice is the reference price for the fill's PnL lock; empty when the
 	// originating order carried no lock.
 	LockPrice string
+	// Lock is the opaque SDK-serialized pre-trade lock persisted on the order.
+	// When present, the engine adapter passes it through instead of
+	// reconstructing a default-group lock from LockPrice.
+	Lock []byte
 	// RealizedPnl is the realized P&L delta this fill contributes, in the
 	// settlement asset, signed (exact decimal string). It is the per-fill amount
 	// the P&L-bounds kill-switch accumulates; empty means zero (e.g. a position-
@@ -709,11 +804,11 @@ type ExecutionReportInput struct {
 	Account AccountID
 	// Side is the direction of the fill.
 	Side OrderSide
-	// Force bypasses Officer's safety checks and routes straight to the engine.
+	// OrderStatus is the Officer lifecycle status to persist.
+	OrderStatus OrderStatus
+	// Force bypasses Officer's finalized-order safety check; when omitted or
+	// false, an execution report on a terminal order returns 409 terminal_order.
 	Force bool
-	// Final reports whether this fill closes the order: true reflects status
-	// filled, false reflects partially_filled.
-	Final bool
 }
 
 // ExecutionAccountBlock is one engine-recorded account block returned by an
@@ -733,13 +828,9 @@ type ExecutionAccountBlock struct {
 
 // BalanceSettlement is one per-asset balance outcome of a fill, expressed as a
 // plain data carrier so the store can persist it without importing the engine.
-// It mirrors the engine's per-asset balance outcome (engine.BalanceOutcome);
-// the node maps each engine outcome onto this type when building an
-// OrderSettlement. RealizedPnl is delta-accumulated onto the stored row inside
-// the settlement tx (prev + RealizedPnlDelta), never overwritten with an
-// engine-reported absolute; available/held/incoming follow the *Result fields
-// with prev carried forward when a result is empty; average_entry_price is
-// carried forward (a fill does not restate it).
+// The settlement tx persists the engine-returned absolute result fields when
+// present and accumulates the realized-P&L delta; absent result fields leave the
+// previous stored balance component unchanged.
 type BalanceSettlement struct {
 	// Asset identifies the asset whose balance the fill moves.
 	Asset string
@@ -768,6 +859,9 @@ type OrderSettlement struct {
 	// former decimal-array lock: display prices are derived from the deserialized
 	// SDK lock, not stored as an array.
 	Lock []byte
+	// Leaves is the order's remaining open base quantity to persist (exact decimal
+	// string); empty leaves the stored value unchanged.
+	Leaves string
 	// Order is the opaque public handle of the order being settled; the zero
 	// value means an in-memory-only hold with no order row, skipping the order
 	// and event writes.
@@ -778,7 +872,12 @@ type OrderSettlement struct {
 	// Empty means unguarded (fill paths that may run from submitted/accepted/
 	// partially_filled).
 	AllowedFrom []OrderStatus
-	// Balances are the per-asset fill outcomes to persist.
+	// ReservationApprovalID identifies a held reservation intent to resolve in
+	// the same transaction as the settlement. Empty skips intent resolution.
+	ReservationApprovalID string
+	// ReservationIntentState is the target state for ReservationApprovalID.
+	ReservationIntentState ReservationIntentState
+	// Balances are the per-asset engine outcomes to persist.
 	Balances []BalanceSettlement
 	// Events are the lifecycle events to append (e.g. fill).
 	Events []OrderEvent
@@ -817,21 +916,70 @@ const (
 	EstimateSourceMarketMark = "market_mark"
 )
 
-// ApprovalPayload is the canonical signed payload embedded in an approval
-// token. Field declaration order is the canonical wire order (Go json.Marshal
-// emits fields in declaration order). All price/quantity fields are decimal
-// strings; never float.
+// AttestationResult is the engine result section of an attestation payload: the
+// engine assessment/outcome for the request the payload binds. It is present
+// only for request types that carry an engine result (execution report,
+// confirm, cancel); nil for a plain submit accept whose verdict/estimate above
+// already carry the assessment. All fields are always emitted when the section
+// is present (never omitempty) so the canonical bytes stay deterministic. All
+// monetary/size values are exact decimal strings; never float.
+type AttestationResult struct {
+	// Outcome is the coarse engine outcome for the request: "applied" for an
+	// execution report, "committed" for a confirm, "rolled_back" for a cancel.
+	Outcome string `json:"outcome"`
+	// FillQuantity is the settled fill quantity (execution report); empty
+	// otherwise.
+	FillQuantity string `json:"fillQuantity"`
+	// FillPrice is the settled fill price (execution report); empty otherwise.
+	FillPrice string `json:"fillPrice"`
+	// FillLockPrice is the reference lock price used for the fill (execution
+	// report); empty otherwise.
+	FillLockPrice string `json:"fillLockPrice"`
+	// LeavesQuantity is the order's remaining open base quantity after the
+	// request; empty when not applicable.
+	LeavesQuantity string `json:"leavesQuantity"`
+	// OrderStatus is the order's lifecycle status after the request.
+	OrderStatus string `json:"orderStatus"`
+	// Blocks are the account blocks the engine recorded for this request, in
+	// order; empty when none.
+	Blocks []AttestationBlock `json:"blocks"`
+}
+
+// AttestationBlock is one engine-recorded account block bound in an attestation
+// result. It mirrors ExecutionAccountBlock in the signed form.
+type AttestationBlock struct {
+	Account string `json:"account"`
+	Code    string `json:"code"`
+	Reason  string `json:"reason"`
+	Details string `json:"details"`
+}
+
+// ApprovalPayload is the canonical signed attestation payload embedded in a
+// token. It binds a trading request (its material params) and the engine result
+// it produced, keyed to the order-history event that recorded it, so a verifier
+// can prove "for THIS request the engine returned THIS result". Field
+// declaration order is the canonical wire order (Go json.Marshal emits fields in
+// declaration order). All price/quantity fields are decimal strings; never
+// float. (The type name is retained to avoid a repo-wide rename of the signing
+// machinery; it now models every request type, not just an approval verdict.)
 type ApprovalPayload struct {
 	Version       int    `json:"version"`    // =1
 	ApprovalID    string `json:"approvalId"` // server UUID == reservationId
 	ReservationID string `json:"reservationId"`
-	Mode          string `json:"mode"` // "hold" | "immediate"
-	// OrderExternalID is the order's opaque public handle (22-char base64url
-	// ExternalID), never the internal surrogate key: a monotonic surrogate in a
-	// client-facing token would leak record counts/existence. Empty when the
-	// approval is signed before an order row exists (an in-memory-only held
-	// reservation).
+	// RequestType is the trading request this payload attests: "submit" |
+	// "execution_report" | "confirm" | "cancel". Every issued payload stamps it;
+	// an empty value is an unsupported payload, not a default.
+	RequestType string `json:"requestType,omitempty"`
+	Mode        string `json:"mode"` // "hold" | "immediate"
+	// OrderExternalID is the order's opaque public handle, never the internal
+	// surrogate key: a monotonic surrogate in a client-facing token would leak
+	// record counts/existence. Empty when the approval is signed before an order
+	// row exists (an in-memory-only held reservation).
 	OrderExternalID string `json:"orderExternalId,omitempty"`
+	// EventExternalID is the opaque public handle of the order-history event this
+	// attestation is bound 1:1 to. Empty on a submit token issued before the
+	// event id is known (kept omitempty so those tokens stay deterministic).
+	EventExternalID string `json:"eventExternalId,omitempty"`
 
 	// Bound order params — connector re-binds against the order it executes.
 	Instrument     string `json:"instrument"`
@@ -861,13 +1009,23 @@ type ApprovalPayload struct {
 	KeyID string `json:"keyId"`
 	Alg   string `json:"alg"` // "ed25519" | "none"
 
-	// Reject verdict — appended at the very end with omitempty so an accept
-	// envelope (Verdict="accept", these empty) stays byte-identical to the
-	// pre-reject canonical wire shape. Populated only when Verdict="reject".
+	// Reject verdict — appended with omitempty so an accept envelope
+	// (Verdict="accept", these empty) stays byte-identical to the pre-reject
+	// canonical wire shape. Populated only when Verdict="reject".
 	RejectCode   string `json:"rejectCode,omitempty"`
 	RejectScope  string `json:"rejectScope,omitempty"`
 	RejectPolicy string `json:"rejectPolicy,omitempty"`
 	RejectReason string `json:"rejectReason,omitempty"`
+
+	// Caller who triggered the request; empty when none was recorded. Appended
+	// with omitempty so a submit token with no principal stays deterministic.
+	Principal string `json:"principal,omitempty"`
+
+	// Result is the engine assessment/outcome for the request. Present (non-nil)
+	// only for request types that carry an engine result beyond the submit
+	// verdict/estimate above (execution report, confirm, cancel); nil for a plain
+	// submit so its canonical wire shape is unchanged.
+	Result *AttestationResult `json:"result,omitempty"`
 }
 
 // --- Reservation intents ----------------------------------------------------

@@ -19,6 +19,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"slices"
@@ -46,6 +47,7 @@ type memoryStore struct {
 }
 
 type memoryRealm struct {
+	mu    sync.RWMutex
 	store *memoryStore
 
 	nextID uint64
@@ -61,12 +63,12 @@ type memoryRealm struct {
 	orderSizeLimits map[string]domain.LimitOrderSize
 	pnlBoundsLimits map[string]domain.LimitPnlBounds
 
-	adjustments []domain.AccountAdjustmentRecord
-	orders      map[domain.ExternalID]domain.Order
-	approvals   map[domain.ExternalID]domain.OrderApproval
-	events      []domain.OrderEvent
-	trades      []domain.Trade
-	audit       []domain.AuditRow
+	adjustments  []domain.AccountAdjustmentRecord
+	orders       map[domain.ExternalID]domain.Order
+	attestations map[domain.ExternalID]domain.EventAttestation
+	events       []domain.OrderEvent
+	trades       []domain.Trade
+	audit        []domain.AuditRow
 
 	instances   map[domain.ExternalID]domain.MarketDataInstance
 	instruments map[string]domain.MarketDataInstrument
@@ -100,7 +102,7 @@ func newMemoryRealm(st *memoryStore) *memoryRealm {
 		orderSizeLimits: map[string]domain.LimitOrderSize{},
 		pnlBoundsLimits: map[string]domain.LimitPnlBounds{},
 		orders:          map[domain.ExternalID]domain.Order{},
-		approvals:       map[domain.ExternalID]domain.OrderApproval{},
+		attestations:    map[domain.ExternalID]domain.EventAttestation{},
 		instances:       map[domain.ExternalID]domain.MarketDataInstance{},
 		instruments:     map[string]domain.MarketDataInstrument{},
 		quotes:          map[string]domain.MarketDataQuote{},
@@ -145,11 +147,7 @@ func (s *memoryStore) Close() error {
 
 func (r *memoryRealm) nextExternalID() domain.ExternalID {
 	r.nextID++
-	var id domain.ExternalID
-	for i := 0; i < domain.ExternalIDByteLen; i++ {
-		id[domain.ExternalIDByteLen-1-i] = byte(r.nextID >> (8 * i))
-	}
-	return id
+	return domain.ExternalID(fmt.Sprintf("mem-%016x", r.nextID))
 }
 
 func balanceKey(account domain.AccountID, asset string) string {
@@ -748,6 +746,8 @@ func (r *memoryRealm) DeleteAccount(
 }
 
 func (r *memoryRealm) UpsertBalance(_ context.Context, balance domain.Balance) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.balances[balanceKey(balance.Account, balance.Asset)] = balance
 	return nil
 }
@@ -755,6 +755,8 @@ func (r *memoryRealm) UpsertBalance(_ context.Context, balance domain.Balance) e
 func (r *memoryRealm) GetBalance(
 	_ context.Context, account domain.AccountID, asset string,
 ) (domain.Balance, bool, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	balance, ok := r.balances[balanceKey(account, asset)]
 	return balance, ok, nil
 }
@@ -762,6 +764,8 @@ func (r *memoryRealm) GetBalance(
 func (r *memoryRealm) ListBalances(
 	_ context.Context, account domain.AccountID, asset string,
 ) ([]domain.Balance, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	var out []domain.Balance
 	for _, balance := range r.balances {
 		if account != "" && balance.Account != account {
@@ -818,6 +822,8 @@ func (r *memoryRealm) ListBalanceRows(
 func (r *memoryRealm) DeleteBalance(
 	_ context.Context, account domain.AccountID, asset string,
 ) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	key := balanceKey(account, asset)
 	if _, ok := r.balances[key]; !ok {
 		return domain.ErrNotFound
@@ -1312,6 +1318,35 @@ func (r *memoryRealm) AppendAdjustment(
 	return rec, nil
 }
 
+func (r *memoryRealm) RecordAccountAdjustment(
+	ctx context.Context, in store.AccountAdjustmentPersistence,
+) (domain.AccountAdjustmentRecord, error) {
+	snapshot := r.exportData(ctx)
+	if in.UpsertBalance != nil {
+		if err := r.UpsertBalance(ctx, *in.UpsertBalance); err != nil {
+			r.restoreData(snapshot)
+			return domain.AccountAdjustmentRecord{}, err
+		}
+	}
+	if in.DeleteBalance != nil {
+		if err := r.DeleteBalance(ctx, in.DeleteBalance.Account, in.DeleteBalance.Asset); err != nil &&
+			!errors.Is(err, domain.ErrNotFound) {
+			r.restoreData(snapshot)
+			return domain.AccountAdjustmentRecord{}, err
+		}
+	}
+	stored, err := r.AppendAdjustment(ctx, in.Adjustment)
+	if err != nil {
+		r.restoreData(snapshot)
+		return domain.AccountAdjustmentRecord{}, err
+	}
+	if err := r.AppendAudit(ctx, in.Audit); err != nil {
+		r.restoreData(snapshot)
+		return domain.AccountAdjustmentRecord{}, err
+	}
+	return stored, nil
+}
+
 func (r *memoryRealm) ListAdjustments(
 	_ context.Context, account domain.AccountID, source domain.Source, n int,
 ) ([]domain.AccountAdjustmentRecord, error) {
@@ -1365,6 +1400,8 @@ func (r *memoryRealm) ListAdjustmentRows(
 func (r *memoryRealm) CreateOrder(
 	_ context.Context, order domain.Order,
 ) (domain.Order, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if order.ExternalID.IsZero() {
 		order.ExternalID = r.nextExternalID()
 	} else if _, ok := r.orders[order.ExternalID]; ok {
@@ -1380,6 +1417,8 @@ func (r *memoryRealm) CreateOrder(
 func (r *memoryRealm) UpdateOrderStatus(
 	_ context.Context, id domain.ExternalID, status domain.OrderStatus,
 ) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	order, ok := r.orders[id]
 	if !ok {
 		return domain.ErrNotFound
@@ -1392,6 +1431,8 @@ func (r *memoryRealm) UpdateOrderStatus(
 func (r *memoryRealm) SetOrderLock(
 	_ context.Context, id domain.ExternalID, lock []byte,
 ) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	order, ok := r.orders[id]
 	if !ok {
 		return domain.ErrNotFound
@@ -1401,14 +1442,23 @@ func (r *memoryRealm) SetOrderLock(
 	return nil
 }
 
-func (r *memoryRealm) PutOrderApproval(
-	_ context.Context, id domain.ExternalID, env domain.OrderApproval,
+func (r *memoryRealm) PutEventAttestation(
+	_ context.Context, eventID domain.ExternalID, att domain.EventAttestation,
 ) error {
-	if _, ok := r.orders[id]; !ok {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	found := false
+	for _, event := range r.events {
+		if event.ExternalID == eventID {
+			found = true
+			break
+		}
+	}
+	if !found {
 		return nil
 	}
-	if _, ok := r.approvals[id]; !ok {
-		r.approvals[id] = env
+	if _, ok := r.attestations[eventID]; !ok {
+		r.attestations[eventID] = att
 	}
 	return nil
 }
@@ -1416,16 +1466,19 @@ func (r *memoryRealm) PutOrderApproval(
 func (r *memoryRealm) GetOrder(
 	_ context.Context, id domain.ExternalID,
 ) (domain.OrderDetail, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	order, ok := r.orders[id]
 	if !ok {
 		return domain.OrderDetail{}, domain.ErrNotFound
 	}
 	detail := domain.OrderDetail{Order: order}
-	if approval, ok := r.approvals[id]; ok {
-		detail.Approval = &approval
-	}
 	for _, event := range r.events {
 		if event.Order == id {
+			if att, ok := r.attestations[event.ExternalID]; ok {
+				a := att
+				event.Attestation = &a
+			}
 			detail.Events = append(detail.Events, event)
 		}
 	}
@@ -1472,6 +1525,8 @@ func (r *memoryRealm) ListOrderRows(
 func (r *memoryRealm) ListAllOrders(
 	_ context.Context, account domain.AccountID, source domain.Source,
 ) ([]domain.Order, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	var out []domain.Order
 	for _, order := range r.orders {
 		if account != "" && order.Account != account {
@@ -1487,10 +1542,14 @@ func (r *memoryRealm) ListAllOrders(
 }
 
 func (r *memoryRealm) CountOrders(context.Context) (int, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return len(r.orders), nil
 }
 
 func (r *memoryRealm) CountOrdersSince(_ context.Context, since time.Time) (int, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	var n int
 	for _, order := range r.orders {
 		if !order.At.Before(since) {
@@ -1503,6 +1562,14 @@ func (r *memoryRealm) CountOrdersSince(_ context.Context, since time.Time) (int,
 func (r *memoryRealm) RecordOrderSettlement(
 	_ context.Context, st domain.OrderSettlement,
 ) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if st.ReservationApprovalID != "" {
+		if intent, ok := r.reservations[st.ReservationApprovalID]; ok {
+			intent.State = st.ReservationIntentState
+			r.reservations[st.ReservationApprovalID] = intent
+		}
+	}
 	if !st.Order.IsZero() {
 		order, ok := r.orders[st.Order]
 		if !ok {
@@ -1515,6 +1582,9 @@ func (r *memoryRealm) RecordOrderSettlement(
 		if st.SetLock {
 			order.Lock = append([]byte(nil), st.Lock...)
 		}
+		if st.Leaves != "" {
+			order.Leaves = st.Leaves
+		}
 		r.orders[st.Order] = order
 	}
 	for _, balance := range st.Balances {
@@ -1525,14 +1595,29 @@ func (r *memoryRealm) RecordOrderSettlement(
 		if balance.Outcome.BalanceResult != "" {
 			current.Available = balance.Outcome.BalanceResult
 		}
+		if current.Available == "" {
+			current.Available = "0"
+		}
 		if balance.Outcome.HeldResult != "" {
 			current.Held = balance.Outcome.HeldResult
+		}
+		if current.Held == "" {
+			current.Held = "0"
 		}
 		if balance.Outcome.IncomingResult != "" {
 			current.Incoming = balance.Outcome.IncomingResult
 		}
-		if balance.Outcome.RealizedPnlResult != "" {
-			current.RealizedPnl = balance.Outcome.RealizedPnlResult
+		if current.Incoming == "" {
+			current.Incoming = "0"
+		}
+		next, err := domain.AddDecimals(current.RealizedPnl, balance.Outcome.RealizedPnlDelta)
+		if err != nil {
+			return err
+		}
+		current.RealizedPnl = next
+		if balanceIsEmpty(current) {
+			delete(r.balances, key)
+			continue
 		}
 		r.balances[key] = current
 	}
@@ -1570,9 +1655,56 @@ func (r *memoryRealm) RecordOrderSettlement(
 	return nil
 }
 
+func (r *memoryRealm) RecordOrderSubmission(
+	ctx context.Context,
+	o domain.Order,
+	submitted domain.OrderEvent,
+	apply func(domain.Order) (domain.OrderSettlement, error),
+) (domain.Order, error) {
+	snapshot := r.exportData(ctx)
+	order, err := r.CreateOrder(ctx, o)
+	if err != nil {
+		return domain.Order{}, err
+	}
+	if submitted.Order.IsZero() {
+		submitted.Order = order.ExternalID
+	}
+	if _, err := r.AppendOrderEvent(ctx, submitted); err != nil {
+		r.restoreData(snapshot)
+		return domain.Order{}, err
+	}
+
+	settlement, err := apply(order)
+	if err != nil {
+		r.restoreData(snapshot)
+		return domain.Order{}, err
+	}
+	if settlement.Order.IsZero() {
+		settlement.Order = order.ExternalID
+	}
+	if settlement.Account == "" {
+		settlement.Account = order.Account
+	}
+	if err := r.RecordOrderSettlement(ctx, settlement); err != nil {
+		r.restoreData(snapshot)
+		return domain.Order{}, err
+	}
+
+	order.Status = settlement.OrderStatus
+	if settlement.SetLock {
+		order.Lock = append([]byte(nil), settlement.Lock...)
+	}
+	if settlement.Leaves != "" {
+		order.Leaves = settlement.Leaves
+	}
+	return order, nil
+}
+
 func (r *memoryRealm) AppendOrderEvent(
 	_ context.Context, event domain.OrderEvent,
 ) (domain.OrderEvent, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if event.ExternalID.IsZero() {
 		event.ExternalID = r.nextExternalID()
 	}
@@ -1586,13 +1718,33 @@ func (r *memoryRealm) AppendOrderEvent(
 func (r *memoryRealm) ListOrderEvents(
 	_ context.Context, order domain.ExternalID,
 ) ([]domain.OrderEvent, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	var out []domain.OrderEvent
 	for _, event := range r.events {
 		if event.Order == order {
+			if att, ok := r.attestations[event.ExternalID]; ok {
+				a := att
+				event.Attestation = &a
+			}
 			out = append(out, event)
 		}
 	}
 	return out, nil
+}
+
+// exportEvents returns every event with its 1:1 attestation folded in, so the
+// portable archive carries attestations per-event.
+func (r *memoryRealm) exportEvents() []domain.OrderEvent {
+	out := make([]domain.OrderEvent, 0, len(r.events))
+	for _, event := range r.events {
+		if att, ok := r.attestations[event.ExternalID]; ok {
+			a := att
+			event.Attestation = &a
+		}
+		out = append(out, event)
+	}
+	return out
 }
 
 func (r *memoryRealm) CreateTrade(
@@ -1673,6 +1825,8 @@ func (r *memoryRealm) ListTradeRows(
 }
 
 func (r *memoryRealm) AppendAudit(_ context.Context, entry store.AuditEntry) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	row := domain.AuditRow{
 		At:           time.Now().UTC(),
 		ExternalID:   r.nextExternalID(),
@@ -1690,6 +1844,8 @@ func (r *memoryRealm) AppendAudit(_ context.Context, entry store.AuditEntry) err
 }
 
 func (r *memoryRealm) ListAudit(_ context.Context, n int) ([]domain.AuditRow, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	if n <= 0 {
 		return []domain.AuditRow{}, nil
 	}
@@ -1703,6 +1859,8 @@ func (r *memoryRealm) ListAudit(_ context.Context, n int) ([]domain.AuditRow, er
 func (r *memoryRealm) ListAuditFiltered(
 	_ context.Context, filter domain.AuditFilter, n int,
 ) ([]domain.AuditRow, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	if n <= 0 {
 		return []domain.AuditRow{}, nil
 	}
@@ -2057,6 +2215,8 @@ func (r *memoryRealm) ListUserSettings(context.Context) ([]domain.UserSetting, e
 func (r *memoryRealm) UpsertReservationIntent(
 	_ context.Context, intent domain.ReservationIntent,
 ) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.reservations[intent.ApprovalID] = intent
 	return nil
 }
@@ -2064,13 +2224,30 @@ func (r *memoryRealm) UpsertReservationIntent(
 func (r *memoryRealm) GetReservationIntent(
 	_ context.Context, approvalID string,
 ) (domain.ReservationIntent, bool, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	intent, ok := r.reservations[approvalID]
 	return intent, ok, nil
+}
+
+func (r *memoryRealm) GetOpenReservationIntentByOrder(
+	_ context.Context, order domain.ExternalID,
+) (domain.ReservationIntent, bool, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, intent := range r.reservations {
+		if intent.Order == order && intent.State == domain.ReservationIntentStateHeld {
+			return intent, true, nil
+		}
+	}
+	return domain.ReservationIntent{}, false, nil
 }
 
 func (r *memoryRealm) ListOpenReservationIntents(
 	context.Context,
 ) ([]domain.ReservationIntent, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	var out []domain.ReservationIntent
 	for _, intent := range r.reservations {
 		if intent.State == domain.ReservationIntentStateHeld {
@@ -2083,6 +2260,8 @@ func (r *memoryRealm) ListOpenReservationIntents(
 func (r *memoryRealm) SetReservationIntentState(
 	_ context.Context, approvalID string, state domain.ReservationIntentState,
 ) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	intent, ok := r.reservations[approvalID]
 	if !ok {
 		return domain.ErrNotFound
@@ -2095,6 +2274,8 @@ func (r *memoryRealm) SetReservationIntentState(
 func (r *memoryRealm) ResolveOrderReservation(
 	_ context.Context, resolution domain.ReservationResolution,
 ) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	intent, ok := r.reservations[resolution.ApprovalID]
 	if ok {
 		intent.State = resolution.IntentState
@@ -2201,7 +2382,12 @@ func (r *memoryRealm) RestoreBackup(
 		return backup.RestoreSummary{}, domain.ErrInvalid
 	}
 	data := archive.Data
-	if opts.Scope.All || backup.TouchesRuntime(opts.Scope) {
+	// Mirror the real store: the normalized scope drives whether runtime data can
+	// land (Normalize force-includes the accounts+groups and market-data parents an
+	// account-addressed restore lands), and the restart signal is driven off the
+	// rows actually written, not the raw requested scope.
+	writesRuntime := opts.Scope.All || backup.TouchesRuntime(opts.Scope.Normalize())
+	if writesRuntime {
 		// Runtime sections are replaced wholesale in the test store. This is
 		// enough for LocalNode rollback/rebuild tests and keeps the fake honest
 		// about the restart signal.
@@ -2218,9 +2404,12 @@ func (r *memoryRealm) RestoreBackup(
 		}
 	}
 	summary := backup.NewSummary()
-	summary.RestartRequired = backup.TouchesRuntime(opts.Scope)
-	for _, section := range opts.Scope.IncludedSections() {
-		summary.AddApplied(section, r.sectionCount(ctx, section))
+	for _, section := range opts.Scope.Normalize().IncludedSections() {
+		count := r.sectionCount(ctx, section)
+		summary.AddApplied(section, count)
+		if count > 0 && backup.RuntimeSection(section) {
+			summary.RestartRequired = true
+		}
 	}
 	return summary, nil
 }
@@ -2237,7 +2426,7 @@ func (r *memoryRealm) exportData(context.Context) backup.Data {
 		PnlBoundsLimits:       make([]domain.LimitPnlBounds, 0, len(r.pnlBoundsLimits)),
 		Adjustments:           append([]domain.AccountAdjustmentRecord(nil), r.adjustments...),
 		Orders:                make([]backup.OrderRecord, 0, len(r.orders)),
-		OrderEvents:           append([]domain.OrderEvent(nil), r.events...),
+		OrderEvents:           r.exportEvents(),
 		Trades:                append([]domain.Trade(nil), r.trades...),
 		Audit:                 append([]domain.AuditRow(nil), r.audit...),
 		MarketDataInstances:   make([]domain.MarketDataInstance, 0, len(r.instances)),
@@ -2279,12 +2468,8 @@ func (r *memoryRealm) exportData(context.Context) backup.Data {
 	for _, limit := range r.pnlBoundsLimits {
 		data.PnlBoundsLimits = append(data.PnlBoundsLimits, limit)
 	}
-	for id, order := range r.orders {
-		record := backup.OrderRecord{Order: order}
-		if approval, ok := r.approvals[id]; ok {
-			record.Approval = &approval
-		}
-		data.Orders = append(data.Orders, record)
+	for _, order := range r.orders {
+		data.Orders = append(data.Orders, backup.OrderRecord{Order: order})
 	}
 	for _, instance := range r.instances {
 		data.MarketDataInstances = append(data.MarketDataInstances, instance)
@@ -2361,14 +2546,18 @@ func (r *memoryRealm) restoreData(data backup.Data) {
 	}
 	r.adjustments = append([]domain.AccountAdjustmentRecord(nil), data.Adjustments...)
 	r.orders = map[domain.ExternalID]domain.Order{}
-	r.approvals = map[domain.ExternalID]domain.OrderApproval{}
 	for _, record := range data.Orders {
 		r.orders[record.Order.ExternalID] = record.Order
-		if record.Approval != nil {
-			r.approvals[record.Order.ExternalID] = *record.Approval
-		}
 	}
-	r.events = append([]domain.OrderEvent(nil), data.OrderEvents...)
+	r.attestations = map[domain.ExternalID]domain.EventAttestation{}
+	r.events = r.events[:0]
+	for _, event := range data.OrderEvents {
+		if event.Attestation != nil {
+			r.attestations[event.ExternalID] = *event.Attestation
+			event.Attestation = nil
+		}
+		r.events = append(r.events, event)
+	}
 	r.trades = append([]domain.Trade(nil), data.Trades...)
 	r.audit = append([]domain.AuditRow(nil), data.Audit...)
 	r.instances = map[domain.ExternalID]domain.MarketDataInstance{}

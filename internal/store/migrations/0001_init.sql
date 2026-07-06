@@ -17,7 +17,7 @@
 
 -- Canonical control-plane schema for one realm, created from scratch in a
 -- single migration. It is backend-agnostic: the dialect substitutes {{PK}}
--- (surrogate-PK identity), {{XID}} (16-byte external-id column), {{BOOL}}
+-- (surrogate-PK identity), {{XID}} (external-id column), {{BOOL}}
 -- (boolean) and {{DECIMAL}} (exact-decimal value with numeric comparison)
 -- before the DDL runs. Identity model: an internal integer surrogate
 -- key (id) joins rows and never leaves the store; a non-guessable external_id
@@ -206,25 +206,28 @@ CREATE INDEX idx_adjustments_source  ON adjustment (source, at DESC, id DESC);
 CREATE INDEX idx_adjustments_status ON adjustment (status, at DESC, id DESC);
 
 -- Orders recorded by Officer (including rejected ones). amount_value and price
--- are exact {{DECIMAL}} values; their indexes order numerically. lock is the
--- SDK-serialized pretrade.Lock blob, persisted verbatim; the store never decodes
--- it. price is empty for market orders. The signed approval, when present, lives
--- in the 1:1 order_approval companion, not inline here.
+-- are exact {{DECIMAL}} values; their indexes order numerically. leaves_quantity
+-- stores request-provided remaining quantity and later follows only the LeavesQty
+-- value accepted from an execution report.
+-- lock is the SDK-serialized pretrade.Lock blob, persisted verbatim; the store
+-- never decodes it. price is empty for market orders. Signed attestations, when
+-- present, live per-event in the event_attestation companion, not inline here.
 CREATE TABLE order_record (
-    id             {{PK}},
-    external_id    {{XID}} UNIQUE,
-    account_id     INTEGER NOT NULL REFERENCES account(id) ON DELETE CASCADE,
-    base_asset_id  INTEGER NOT NULL REFERENCES asset(id)   ON DELETE CASCADE,
-    quote_asset_id INTEGER NOT NULL REFERENCES asset(id)   ON DELETE CASCADE,
-    principal_id   INTEGER REFERENCES principal(id)        ON DELETE SET NULL,
-    at             TEXT    NOT NULL,
-    source         TEXT    NOT NULL,
-    side           TEXT    NOT NULL,
-    amount_kind    TEXT    NOT NULL,
-    amount_value   {{DECIMAL}} NOT NULL,
-    price          {{DECIMAL}} NOT NULL DEFAULT '',
-    status         TEXT    NOT NULL,
-    lock           BLOB
+    id              {{PK}},
+    external_id     {{XID}} UNIQUE,
+    account_id      INTEGER NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    base_asset_id   INTEGER NOT NULL REFERENCES asset(id)   ON DELETE CASCADE,
+    quote_asset_id  INTEGER NOT NULL REFERENCES asset(id)   ON DELETE CASCADE,
+    principal_id    INTEGER REFERENCES principal(id)        ON DELETE SET NULL,
+    at              TEXT    NOT NULL,
+    source          TEXT    NOT NULL,
+    side            TEXT    NOT NULL,
+    amount_kind     TEXT    NOT NULL,
+    amount_value    {{DECIMAL}} NOT NULL,
+    leaves_quantity {{DECIMAL}} NOT NULL DEFAULT '',
+    price           {{DECIMAL}} NOT NULL DEFAULT '',
+    status          TEXT    NOT NULL,
+    lock            BLOB
 );
 
 CREATE INDEX idx_orders_account ON order_record (account_id, at DESC, id DESC);
@@ -235,22 +238,8 @@ CREATE INDEX idx_orders_source  ON order_record (source, at DESC, id DESC);
 CREATE INDEX idx_orders_side ON order_record (side, at DESC, id DESC);
 CREATE INDEX idx_orders_status ON order_record (status, at DESC, id DESC);
 CREATE INDEX idx_orders_amount_value ON order_record (amount_value, id DESC);
+CREATE INDEX idx_orders_leaves_quantity ON order_record (leaves_quantity, id DESC);
 CREATE INDEX idx_orders_price ON order_record (price, id DESC);
-
--- Signed approval envelope, 1:1 with an order and absent when the order is
--- unsigned. signing_key_id references the signing key surrogate and is RESTRICT
--- so a key in use cannot be dropped.
-CREATE TABLE order_approval (
-    order_id       INTEGER PRIMARY KEY REFERENCES order_record(id) ON DELETE CASCADE,
-    token          TEXT    NOT NULL,
-    signing_key_id INTEGER NOT NULL REFERENCES signing_key(id) ON DELETE RESTRICT,
-    alg            TEXT    NOT NULL,
-    mode           TEXT    NOT NULL,
-    issued_at      TEXT    NOT NULL,
-    expires_at     TEXT    NOT NULL
-);
-
-CREATE INDEX idx_order_approvals_signing_key ON order_approval (signing_key_id);
 
 -- Immutable event stream for an order. payload is opaque JSON. principal is
 -- cleared (SET NULL) when removed; the parent order cascades.
@@ -267,6 +256,36 @@ CREATE TABLE order_event (
 
 CREATE INDEX idx_order_events_order ON order_event (order_id, at DESC, id DESC);
 CREATE INDEX idx_order_events_principal ON order_event (principal_id);
+
+-- Signed attestation over (trading request + engine result), 1:1 with the
+-- order_event that recorded the request; absent when no attestation was issued.
+-- Every trading request the engine evaluates (submit, execution report, confirm,
+-- cancel) produces one event, and its attestation binds here to that event.
+-- signing_key_id references the signing key surrogate and is RESTRICT so a key
+-- in use cannot be dropped. NULL means an unsigned (eSign-off) envelope.
+-- alg/request_type/mode are closed enums kept as TEXT on purpose (no lookup
+-- table): they are the canonical signed/wire strings embedded in the token and
+-- returned by the API, so the column persists them verbatim. The Go typed
+-- constants (framework/signing.Alg*, domain.AttestationRequest*,
+-- framework/backend.SubmitMode*) are the source of truth for the CHECK sets
+-- below; mode is always "immediate" or "hold", including for the non-submit
+-- request types (execution_report always signs under "immediate", confirm/
+-- cancel always sign under "hold" via buildResolutionPayload), so '' is never
+-- a real value.
+CREATE TABLE event_attestation (
+    event_id       INTEGER PRIMARY KEY REFERENCES order_event(id) ON DELETE CASCADE,
+    token          TEXT    NOT NULL,
+    signing_key_id INTEGER REFERENCES signing_key(id) ON DELETE RESTRICT,
+    alg            TEXT    NOT NULL CHECK (alg IN ('ed25519', 'none')),
+    request_type   TEXT    NOT NULL
+                       CHECK (request_type IN
+                           ('submit', 'execution_report', 'confirm', 'cancel')),
+    mode           TEXT    NOT NULL CHECK (mode IN ('immediate', 'hold')),
+    issued_at      TEXT    NOT NULL,
+    expires_at     TEXT    NOT NULL
+);
+
+CREATE INDEX idx_event_attestations_signing_key ON event_attestation (signing_key_id);
 
 -- Per-fill trade records ("reports"); one row per fill. lock_price is empty when
 -- not applicable. order, account and asset cascade; principal is cleared.
@@ -385,7 +404,9 @@ CREATE TABLE signing_config (
     value TEXT NOT NULL
 );
 
-INSERT OR IGNORE INTO signing_config (key, value) VALUES ('no_esign', '0');
+-- Intentional default: fresh installs ship with eSign OFF ('1'). The operator
+-- opts in to signing; this is not a leftover.
+INSERT OR IGNORE INTO signing_config (key, value) VALUES ('no_esign', '1');
 
 -- Per-command MCP access overrides; command is the key, enabled is the toggle.
 CREATE TABLE mcp_access (

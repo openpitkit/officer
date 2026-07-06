@@ -37,10 +37,9 @@ type instrumentKey struct {
 
 // marketDataSink adapts the binding's market-data service to the connector
 // framework's Sink. It registers each instrument on first sight, caches the
-// returned id, and pushes quotes through the service. The service is FullSync so
-// individual binding calls are safe under goroutine migration, but the
-// first-sight register-then-cache must be atomic across draining goroutines, so
-// it is guarded by mu.
+// returned id, and pushes quotes through the service. The first-sight
+// register-then-cache must be atomic across draining goroutines, so it is
+// guarded by mu.
 type marketDataSink struct {
 	service *bindmd.Service
 
@@ -59,7 +58,8 @@ func newMarketDataSink(service *bindmd.Service) *marketDataSink {
 // Push registers the instrument on first sight and publishes the quote,
 // replacing the stored snapshot. Only the present price fields are set
 // (.WithMark/.WithBid/.WithAsk for non-empty decimal strings). Binding errors
-// are wrapped as officer errors.
+// are wrapped as officer errors. The SDK market-data service is FullSync for a
+// non-NoSync engine, so connector goroutines may push off the account lanes.
 func (s *marketDataSink) Push(update marketdata.QuoteUpdate) error {
 	instrument, err := instrumentFrom(update.Base, update.Quote)
 	if err != nil {

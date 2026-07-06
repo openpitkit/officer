@@ -426,6 +426,11 @@ export function SigningKeys() {
   const eSignEnabled = localESign ?? status?.eSignEnabled ?? false;
 
   async function handleESignToggle(next: boolean) {
+    if (next && activeKey === null) {
+      setLocalESign(false);
+      setError(t("eSign.missingKeyError"));
+      return;
+    }
     setLocalESign(next);
     setError(null);
     setESignBusy(true);

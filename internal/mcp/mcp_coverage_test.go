@@ -155,14 +155,14 @@ func (s *setMDErrSource) SubmitOrderToken(
 
 func (s *setMDErrSource) ConfirmExecution(
 	context.Context, string, string, bool,
-) (domain.Order, error) {
-	return domain.Order{}, nil
+) (domain.Order, Attestation, error) {
+	return domain.Order{}, Attestation{}, nil
 }
 
 func (s *setMDErrSource) CancelOrder(
 	context.Context, string, string, string, bool,
-) (domain.Order, error) {
-	return domain.Order{}, nil
+) (domain.Order, Attestation, error) {
+	return domain.Order{}, Attestation{}, nil
 }
 
 // TestSetMarketDataInstrumentSourceFailure covers the path where the gate

@@ -30,6 +30,7 @@ import (
 	"go.openpit.dev/openpit/pretrade"
 
 	"go.openpit.dev/officer/framework/domain"
+	fwengine "go.openpit.dev/officer/framework/engine"
 )
 
 // defaultHoldTTL is how long a held reservation lives before the TTL sweeper
@@ -146,20 +147,22 @@ func (e *openPitEngine) startSweeper() {
 func (e *openPitEngine) sweepExpired(ctx context.Context, now time.Time) {
 	e.registry.mu.Lock()
 	e.pruneResolvedLocked(now)
-	expired := make([]string, 0)
-	for id, held := range e.registry.by {
+	expired := make([]*heldReservation, 0)
+	for _, held := range e.registry.by {
 		if held.state == reservationStateHeld && !held.expiresAt.After(now) {
-			expired = append(expired, id)
+			expired = append(expired, held)
 		}
 	}
 	e.registry.mu.Unlock()
 
-	for _, id := range expired {
+	for _, held := range expired {
 		// A concurrent confirm may have resolved the entry between collection and
 		// here; rollbackHeld tolerates an already-resolved id. Swept ids are
 		// forgotten (not recorded resolved): the token is already past expiry, so a
 		// later resolve legitimately sees the id as unknown.
-		_ = e.rollbackHeld(ctx, id, false)
+		_ = e.RunAccountSynchronized(ctx, held.account, func(lane AccountLane) error {
+			return lane.(accountLane).rollbackHeldLane(ctx, held.approvalID, false)
+		})
 	}
 }
 
@@ -168,29 +171,36 @@ func (e *openPitEngine) sweepExpired(ctx context.Context, now time.Time) {
 func (e *openPitEngine) ReserveHold(
 	ctx context.Context, o domain.Order,
 ) (HoldResult, error) {
+	var result HoldResult
+	err := e.RunAccountSynchronized(ctx, o.Account, func(lane fwengine.AccountLane) error {
+		var err error
+		result, err = lane.ReserveHold(ctx, o)
+		return err
+	})
+	return result, err
+}
+
+func (l accountLane) ReserveHold(
+	ctx context.Context, o domain.Order,
+) (HoldResult, error) {
 	if err := ctx.Err(); err != nil {
 		return HoldResult{}, fmt.Errorf("engine: reserve hold cancelled: %w", err)
 	}
 
-	order, err := orderModelFrom(o, e.res)
+	order, err := orderModelFromAccount(o, l.accountID)
 	if err != nil {
 		return HoldResult{}, err
 	}
 
-	e.mu.Lock()
-	if !e.running {
-		e.mu.Unlock()
-		return HoldResult{}, fmt.Errorf("engine: reserve hold on stopped engine")
-	}
-	store := e.resStore
+	l.owner.mu.RLock()
+	store := l.owner.resStore
+	l.owner.mu.RUnlock()
 
-	reservation, rejects, err := e.eng.ExecutePreTrade(order)
+	reservation, rejects, err := l.eng.ExecutePreTrade(order)
 	if err != nil {
-		e.mu.Unlock()
 		return HoldResult{}, fmt.Errorf("engine: execute pre-trade: %w", err)
 	}
 	if rejects != nil {
-		e.mu.Unlock()
 		return HoldResult{Accepted: false, Rejects: orderRejectsFrom(rejects)}, nil
 	}
 
@@ -199,11 +209,9 @@ func (e *openPitEngine) ReserveHold(
 	lockBytes, settlement, source, err := captureHold(reservation, o)
 	if err != nil {
 		reservation.RollbackAndClose()
-		e.mu.Unlock()
 		return HoldResult{}, err
 	}
 	outcomes := balanceOutcomesFromList(reservation.AccountAdjustments())
-	e.mu.Unlock()
 
 	now := time.Now().UTC()
 	held := &heldReservation{
@@ -220,15 +228,15 @@ func (e *openPitEngine) ReserveHold(
 		state:      reservationStateHeld,
 	}
 
-	e.registry.mu.Lock()
-	e.registry.by[held.approvalID] = held
-	e.registry.mu.Unlock()
+	l.owner.registry.mu.Lock()
+	l.owner.registry.by[held.approvalID] = held
+	l.owner.registry.mu.Unlock()
 
 	if store != nil {
 		if perr := persistIntent(ctx, store, held, domain.ReservationIntentStateHeld); perr != nil {
 			// Persisting failed: roll the hold back so engine state and the (absent)
 			// durable record agree, then surface the error.
-			_ = e.rollbackHeld(ctx, held.approvalID, true)
+			_ = l.rollbackHeldLane(ctx, held.approvalID, true)
 			return HoldResult{}, perr
 		}
 	}
@@ -246,11 +254,25 @@ func (e *openPitEngine) ReserveHold(
 
 // CommitHeld commits the held reservation identified by approvalID.
 func (e *openPitEngine) CommitHeld(ctx context.Context, approvalID string) error {
+	account, err := e.reservationAccount(approvalID)
+	if err != nil {
+		if errors.Is(err, errAlreadyResolved) {
+			return fmt.Errorf("engine: reservation %q already resolved: %w",
+				approvalID, domain.ErrConflict)
+		}
+		return err
+	}
+	return e.RunAccountSynchronized(ctx, account, func(lane fwengine.AccountLane) error {
+		return lane.CommitHeld(ctx, approvalID)
+	})
+}
+
+func (l accountLane) CommitHeld(ctx context.Context, approvalID string) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("engine: commit held cancelled: %w", err)
 	}
 
-	held, err := e.beginResolve(approvalID)
+	held, err := l.owner.beginResolve(approvalID)
 	if err != nil {
 		// A second commit on an already-resolved id is a conflict, not a panic.
 		if errors.Is(err, errAlreadyResolved) {
@@ -260,30 +282,36 @@ func (e *openPitEngine) CommitHeld(ctx context.Context, approvalID string) error
 		return err
 	}
 
-	e.mu.Lock()
-	if !e.running {
-		e.mu.Unlock()
-		e.abortResolve(approvalID)
-		return fmt.Errorf("engine: commit held on stopped engine")
-	}
 	held.res.CommitAndClose()
-	e.mu.Unlock()
 
 	// The in-memory single-resolve guard and native commit are the engine's only
 	// job here. Durable persistence (intent flip + order status + event) is the
 	// node's atomic ResolveOrderReservation; the engine no longer touches the
 	// store on the node-driven commit path.
-	e.finishResolve(approvalID, reservationStateCommitted, true)
+	l.owner.finishResolve(approvalID, reservationStateCommitted, true)
 	return nil
 }
 
 // RollbackHeld rolls back the held reservation identified by approvalID. It is
 // tolerant of an already-resolved id.
 func (e *openPitEngine) RollbackHeld(ctx context.Context, approvalID string) error {
+	account, err := e.reservationAccount(approvalID)
+	if err != nil {
+		if errors.Is(err, errAlreadyResolved) {
+			return nil
+		}
+		return err
+	}
+	return e.RunAccountSynchronized(ctx, account, func(lane fwengine.AccountLane) error {
+		return lane.RollbackHeld(ctx, approvalID)
+	})
+}
+
+func (l accountLane) RollbackHeld(ctx context.Context, approvalID string) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("engine: rollback held cancelled: %w", err)
 	}
-	return e.rollbackHeld(ctx, approvalID, true)
+	return l.rollbackHeldLane(ctx, approvalID, true)
 }
 
 // rollbackHeld is the internal rollback-by-id path shared by RollbackHeld and
@@ -291,8 +319,8 @@ func (e *openPitEngine) RollbackHeld(ctx context.Context, approvalID string) err
 // call is a no-op. An unknown id returns domain.ErrNotFound. When record is true
 // the terminal outcome is remembered so a later resolve is recognised as
 // already-resolved; the sweeper passes false to forget swept ids.
-func (e *openPitEngine) rollbackHeld(ctx context.Context, approvalID string, record bool) error {
-	held, err := e.beginResolve(approvalID)
+func (l accountLane) rollbackHeldLane(ctx context.Context, approvalID string, record bool) error {
+	held, err := l.owner.beginResolve(approvalID)
 	if err != nil {
 		// Tolerate a terminal/resolving entry: it was already resolved.
 		if errors.Is(err, errAlreadyResolved) {
@@ -304,12 +332,12 @@ func (e *openPitEngine) rollbackHeld(ctx context.Context, approvalID string, rec
 	// Rollback is idempotent and tolerates a closed handle, so it is safe whether
 	// or not the engine is still running; the native handle is only touched under
 	// e.mu either way.
-	e.mu.Lock()
 	held.res.RollbackAndClose()
-	store := e.resStore
-	e.mu.Unlock()
+	l.owner.mu.RLock()
+	store := l.owner.resStore
+	l.owner.mu.RUnlock()
 
-	e.finishResolve(approvalID, reservationStateRolledBack, record)
+	l.owner.finishResolve(approvalID, reservationStateRolledBack, record)
 
 	// record==true is the node-driven cancel: the node performs the atomic
 	// ResolveOrderReservation (intent flip + status + events), so the engine does
@@ -322,6 +350,19 @@ func (e *openPitEngine) rollbackHeld(ctx context.Context, approvalID string, rec
 		return nil
 	}
 	return resolveSweptRollback(ctx, store, held)
+}
+
+func (e *openPitEngine) reservationAccount(approvalID string) (domain.AccountID, error) {
+	e.registry.mu.Lock()
+	defer e.registry.mu.Unlock()
+	held, ok := e.registry.by[approvalID]
+	if !ok {
+		if _, done := e.registry.resolved[approvalID]; done {
+			return "", errAlreadyResolved
+		}
+		return "", fmt.Errorf("engine: reservation %q: %w", approvalID, domain.ErrNotFound)
+	}
+	return held.account, nil
 }
 
 // errAlreadyResolved is the internal sentinel beginResolve returns when the
@@ -337,7 +378,6 @@ var errAlreadyResolved = fmt.Errorf("reservation already resolved")
 func (e *openPitEngine) beginResolve(approvalID string) (*heldReservation, error) {
 	e.registry.mu.Lock()
 	defer e.registry.mu.Unlock()
-	e.pruneResolvedLocked(time.Now().UTC())
 	held, ok := e.registry.by[approvalID]
 	if !ok {
 		// A previously recorded terminal outcome means the id was already resolved
@@ -372,14 +412,6 @@ func (e *openPitEngine) finishResolve(approvalID string, state reservationState,
 	}
 }
 
-func (e *openPitEngine) abortResolve(approvalID string) {
-	e.registry.mu.Lock()
-	defer e.registry.mu.Unlock()
-	if held, ok := e.registry.by[approvalID]; ok && held.state == reservationStateResolving {
-		held.state = reservationStateHeld
-	}
-}
-
 func (e *openPitEngine) pruneResolvedLocked(now time.Time) {
 	for id, resolved := range e.registry.resolved {
 		if !resolved.expiresAt.After(now) {
@@ -394,22 +426,28 @@ func (e *openPitEngine) pruneResolvedLocked(now time.Time) {
 func (e *openPitEngine) SubmitImmediate(
 	ctx context.Context, o domain.Order,
 ) (ImmediateResult, error) {
+	var result ImmediateResult
+	err := e.RunAccountSynchronized(ctx, o.Account, func(lane fwengine.AccountLane) error {
+		var err error
+		result, err = lane.SubmitImmediate(ctx, o)
+		return err
+	})
+	return result, err
+}
+
+func (l accountLane) SubmitImmediate(
+	ctx context.Context, o domain.Order,
+) (ImmediateResult, error) {
 	if err := ctx.Err(); err != nil {
 		return ImmediateResult{}, fmt.Errorf("engine: submit immediate cancelled: %w", err)
 	}
 
-	order, err := orderModelFrom(o, e.res)
+	order, err := orderModelFromAccount(o, l.accountID)
 	if err != nil {
 		return ImmediateResult{}, err
 	}
 
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if !e.running {
-		return ImmediateResult{}, fmt.Errorf("engine: submit immediate on stopped engine")
-	}
-
-	reservation, rejects, err := e.eng.ExecutePreTrade(order)
+	reservation, rejects, err := l.eng.ExecutePreTrade(order)
 	if err != nil {
 		return ImmediateResult{}, fmt.Errorf("engine: execute pre-trade: %w", err)
 	}
@@ -428,7 +466,7 @@ func (e *openPitEngine) SubmitImmediate(
 		reservation.RollbackAndClose()
 		return ImmediateResult{}, err
 	}
-	report, err := executionReportFrom(domain.ExecutionReportInput{
+	report, err := executionReportFromAccount(domain.ExecutionReportInput{
 		BaseAsset:      o.BaseAsset,
 		QuoteAsset:     o.QuoteAsset,
 		FillQuantity:   fillQuantity,
@@ -438,8 +476,8 @@ func (e *openPitEngine) SubmitImmediate(
 		Account:        o.Account,
 		Side:           o.Side,
 		Order:          o.ExternalID,
-		Final:          true,
-	}, e.res)
+		OrderStatus:    domain.OrderStatusFilled,
+	}, l.accountID)
 	if err != nil {
 		reservation.RollbackAndClose()
 		return ImmediateResult{}, err
@@ -458,7 +496,7 @@ func (e *openPitEngine) SubmitImmediate(
 	// failure here leaves the funds committed but the fill unsettled, which only an
 	// operator can reconcile; surface that explicitly rather than as a bare wrapped
 	// error so the caller does not retry blindly.
-	postTrade, err := e.eng.ApplyExecutionReport(report)
+	postTrade, err := l.eng.ApplyExecutionReport(report)
 	if err != nil {
 		return ImmediateResult{}, fmt.Errorf(
 			"engine: reservation committed but execution report failed for order %s "+

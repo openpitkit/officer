@@ -30,8 +30,8 @@
 //
 //   - TestCascadeMatrix_AssetDeleteCascadesOrdersAndTrades: the cross-group
 //     cascade that is not covered in any per-group test — deleting an asset must
-//     cascade its referencing orders (and thence their events, trades, and
-//     approval). The balance and limits cascades on asset/account delete are
+//     cascade its referencing orders (and thence their events, trades, and event
+//     attestations). The balance and limits cascades on asset/account delete are
 //     already covered by sqlite_balances_test.go and sqlite_limits_test.go.
 //
 //   - TestEngineIDAssignment_ManyAccountsAndGroups: creates many account and
@@ -196,17 +196,19 @@ func TestRealmSweep_ExternalIDAndCodeInvariants(t *testing.T) {
 	}
 	assertExternalID(t, "trade", trade.ExternalID)
 
-	// Approval (write-once 1:1 table, not its own external id — addressed by
-	// the order's external id; no separate external id to assert here).
-	if err := rs.PutOrderApproval(ctx, order.ExternalID, domain.OrderApproval{
-		Token:     "tok",
-		KeyID:     "key-sweep",
-		Alg:       "ed25519",
-		Mode:      "immediate",
-		IssuedAt:  "2026-06-26T10:00:00Z",
-		ExpiresAt: "2026-06-26T10:05:00Z",
+	// Event attestation (write-once 1:1 table, not its own external id —
+	// addressed by the event's external id; no separate external id to assert
+	// here).
+	if err := rs.PutEventAttestation(ctx, ev.ExternalID, domain.EventAttestation{
+		Token:       "tok",
+		KeyID:       "key-sweep",
+		Alg:         "ed25519",
+		RequestType: domain.AttestationRequestSubmit,
+		Mode:        "immediate",
+		IssuedAt:    "2026-06-26T10:00:00Z",
+		ExpiresAt:   "2026-06-26T10:05:00Z",
 	}); err != nil {
-		t.Fatalf("PutOrderApproval: %v", err)
+		t.Fatalf("PutEventAttestation: %v", err)
 	}
 
 	// Adjustment.
@@ -336,14 +338,14 @@ func assertExternalID(t *testing.T, label string, id domain.ExternalID) {
 // TestCascadeMatrix_AssetDeleteCascadesOrdersAndTrades covers the cross-group
 // cascade path that no per-group test exercises: deleting an asset must cascade
 // to orders that reference it as base_asset or quote_asset, and thence to those
-// orders' child rows (events, trades, approvals).
+// orders' child rows (events, trades, event attestations).
 //
 // The following cascades are already covered in their respective per-group
 // tests and are NOT re-asserted here:
 //   - account→balance: sqlite_balances_test.go (TestBalanceCascadeOnAccountDelete)
 //   - asset→balance: sqlite_balances_test.go (TestBalanceCascadeOnAssetDelete)
 //   - account→orders: sqlite_orders_test.go (TestDeleteAccountCascadesOrders)
-//   - order→events/trade/approvals: sqlite_orders_test.go (TestDeleteOrderCascadesChildren)
+//   - order→events/trade/attestations: sqlite_orders_test.go (TestDeleteOrderCascadesChildren)
 //   - account→adjustment: sqlite_adjustments_test.go (TestAdjustmentCascadeOnAccountDelete)
 //   - account→limits, asset→limits: sqlite_limits_test.go
 //   - instance→instruments→quotes: sqlite_marketdata_test.go (TestMDCascadeDeleteInstance)
@@ -378,11 +380,12 @@ func TestCascadeMatrix_AssetDeleteCascadesOrdersAndTrades(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateOrder: %v", err)
 	}
-	if _, err := rs.AppendOrderEvent(ctx, domain.OrderEvent{
+	event, err := rs.AppendOrderEvent(ctx, domain.OrderEvent{
 		Order:  order.ExternalID,
 		Type:   domain.OrderEventSubmitted,
 		Source: domain.SourcePanel,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("AppendOrderEvent: %v", err)
 	}
 	if _, err := rs.CreateTrade(ctx, domain.Trade{
@@ -397,19 +400,20 @@ func TestCascadeMatrix_AssetDeleteCascadesOrdersAndTrades(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateTrade: %v", err)
 	}
-	if err := rs.PutOrderApproval(ctx, order.ExternalID, domain.OrderApproval{
-		Token:     "tok",
-		KeyID:     "key-cascade",
-		Alg:       "ed25519",
-		Mode:      "immediate",
-		IssuedAt:  "2026-06-26T10:00:00Z",
-		ExpiresAt: "2026-06-26T10:05:00Z",
+	if err := rs.PutEventAttestation(ctx, event.ExternalID, domain.EventAttestation{
+		Token:       "tok",
+		KeyID:       "key-cascade",
+		Alg:         "ed25519",
+		RequestType: domain.AttestationRequestSubmit,
+		Mode:        "immediate",
+		IssuedAt:    "2026-06-26T10:00:00Z",
+		ExpiresAt:   "2026-06-26T10:05:00Z",
 	}); err != nil {
-		t.Fatalf("PutOrderApproval: %v", err)
+		t.Fatalf("PutEventAttestation: %v", err)
 	}
 
 	rstore := rs.(*realmStore)
-	for _, table := range []string{"order_record", "order_event", "trade", "order_approval"} {
+	for _, table := range []string{"order_record", "order_event", "trade", "event_attestation"} {
 		if n := countRows(t, ctx, rstore, table); n != 1 {
 			t.Fatalf("%s before asset delete = %d, want 1", table, n)
 		}
@@ -421,7 +425,7 @@ func TestCascadeMatrix_AssetDeleteCascadesOrdersAndTrades(t *testing.T) {
 		t.Fatalf("DeleteAsset(AAPL): %v", err)
 	}
 
-	for _, table := range []string{"order_record", "order_event", "trade", "order_approval"} {
+	for _, table := range []string{"order_record", "order_event", "trade", "event_attestation"} {
 		if n := countRows(t, ctx, rstore, table); n != 0 {
 			t.Fatalf("%s after asset delete = %d, want 0 (cascade)", table, n)
 		}
@@ -549,7 +553,7 @@ func TestLimitPolicyUnique_AllThreeTables(t *testing.T) {
 	if n := countBrokerScope(rates); n != 1 {
 		t.Fatalf("limit_rate broker-scope rows after upsert = %d, want exactly 1 (unique constraint)", n)
 	}
-	if _, err := r.db().ExecContext(ctx, `
+	if _, err := r.rawDB().ExecContext(ctx, `
 INSERT INTO limit_rate (scope, account_id, asset_id, max_orders, window)
 VALUES (?, NULL, NULL, ?, ?)`, domain.ScopeBroker, 300, int64(time.Minute/time.Millisecond)); err == nil {
 		t.Fatal("raw duplicate limit_rate broker-scope insert succeeded, want unique conflict")
@@ -607,7 +611,7 @@ VALUES (?, NULL, NULL, ?, ?)`, domain.ScopeBroker, 300, int64(time.Minute/time.M
 	if n := countBrokerScopeSize(sizes); n != 1 {
 		t.Fatalf("limit_order_size broker-scope rows after upsert = %d, want 1 (unique constraint)", n)
 	}
-	if _, err := r.db().ExecContext(ctx, `
+	if _, err := r.rawDB().ExecContext(ctx, `
 INSERT INTO limit_order_size (scope, account_id, asset_id, max_notional)
 VALUES (?, NULL, NULL, ?)`, domain.ScopeBroker, "3000000"); err == nil {
 		t.Fatal("raw duplicate limit_order_size broker-scope insert succeeded, want unique conflict")
@@ -652,7 +656,7 @@ VALUES (?, NULL, NULL, ?)`, domain.ScopeBroker, "3000000"); err == nil {
 			t.Fatalf("upsert did not update lower_bound: got %q, want -200", b.LowerBound)
 		}
 	}
-	if _, err := r.db().ExecContext(ctx, `
+	if _, err := r.rawDB().ExecContext(ctx, `
 INSERT INTO limit_pnl_bound (scope, account_id, asset_id, lower_bound, upper_bound)
 VALUES (?, NULL, (SELECT id FROM asset WHERE code = ?), ?, ?)`,
 		domain.ScopeAsset, "AAPL", "-300", "300"); err == nil {

@@ -35,6 +35,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shopspring/decimal"
+
 	"go.openpit.dev/officer/framework/domain"
 	fwstore "go.openpit.dev/officer/framework/store"
 )
@@ -49,7 +51,26 @@ import (
 const orderSelect = `
 SELECT o.external_id, a.code, ba.code, qa.code, p.code,
        o.at, o.source, o.side, o.amount_kind, o.amount_value,
-       o.price, o.status, o.lock
+       o.leaves_quantity, o.price, o.status, o.lock
+FROM order_record o
+JOIN account a       ON a.id = o.account_id
+JOIN asset ba        ON ba.id = o.base_asset_id
+JOIN asset qa        ON qa.id = o.quote_asset_id
+LEFT JOIN principal p ON p.id = o.principal_id`
+
+// orderListSelect extends orderSelect with a "signed" rollup so the paged list
+// view can report whether the order carries at least one Ed25519-signed event
+// attestation without a second query per order. The correlated subquery is 1
+// when any of the order's events has a signed attestation, else 0.
+const orderListSelect = `
+SELECT o.external_id, a.code, ba.code, qa.code, p.code,
+       o.at, o.source, o.side, o.amount_kind, o.amount_value,
+       o.leaves_quantity, o.price, o.status, o.lock,
+       EXISTS (
+           SELECT 1 FROM order_event e
+           JOIN event_attestation ea ON ea.event_id = e.id
+           WHERE e.order_id = o.id AND ea.alg = 'ed25519'
+       ) AS signed
 FROM order_record o
 JOIN account a       ON a.id = o.account_id
 JOIN asset ba        ON ba.id = o.base_asset_id
@@ -67,19 +88,27 @@ LEFT JOIN principal p ON p.id = o.principal_id`
 func (r *realmStore) CreateOrder(
 	ctx context.Context, o domain.Order,
 ) (domain.Order, error) {
-	accountID, err := resolveAccountID(ctx, r.db(), o.Account)
+	db, err := r.db()
+	if err != nil {
+		return domain.Order{}, err
+	}
+	return createOrderTx(ctx, db, o)
+}
+
+func createOrderTx(ctx context.Context, q sqlReadWriter, o domain.Order) (domain.Order, error) {
+	accountID, err := resolveAccountID(ctx, q, o.Account)
 	if err != nil {
 		return o, err
 	}
-	baseID, err := resolveAssetID(ctx, r.db(), o.BaseAsset)
+	baseID, err := resolveAssetID(ctx, q, o.BaseAsset)
 	if err != nil {
 		return o, err
 	}
-	quoteID, err := resolveAssetID(ctx, r.db(), o.QuoteAsset)
+	quoteID, err := resolveAssetID(ctx, q, o.QuoteAsset)
 	if err != nil {
 		return o, err
 	}
-	principalID, err := resolveOptionalPrincipalID(ctx, r.db(), o.Principal)
+	principalID, err := resolveOptionalPrincipalID(ctx, q, o.Principal)
 	if err != nil {
 		return o, err
 	}
@@ -88,16 +117,16 @@ func (r *realmStore) CreateOrder(
 		return o, err
 	}
 	at := nowStr()
-	if _, err := r.db().ExecContext(
+	if _, err := q.ExecContext(
 		ctx,
 		`INSERT INTO order_record
 		 (external_id, account_id, base_asset_id, quote_asset_id, principal_id,
 		  at, source, side, amount_kind, amount_value,
-		  price, status, lock)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  leaves_quantity, price, status, lock)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		xid.Bytes(), accountID, baseID, quoteID, principalID,
 		at, string(o.Source), string(o.Side), string(o.AmountKind),
-		o.AmountValue, o.Price,
+		o.AmountValue, o.Leaves, o.Price,
 		string(o.Status), nullableBlob(o.Lock),
 	); err != nil {
 		if isSQLiteUnique(err) {
@@ -112,11 +141,80 @@ func (r *realmStore) CreateOrder(
 	return o, nil
 }
 
+func (r *realmStore) RecordOrderSubmission(
+	ctx context.Context,
+	o domain.Order,
+	submitted domain.OrderEvent,
+	apply func(domain.Order) (domain.OrderSettlement, error),
+) (domain.Order, error) {
+	return r.recordOrderSubmission(ctx, o, submitted, apply)
+}
+
+func (r *realmStore) recordOrderSubmission(
+	ctx context.Context,
+	o domain.Order,
+	submitted domain.OrderEvent,
+	apply func(domain.Order) (domain.OrderSettlement, error),
+) (domain.Order, error) {
+	db, err := r.db()
+	if err != nil {
+		return domain.Order{}, err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.Order{}, fmt.Errorf("store: begin order submission: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	order, err := createOrderTx(ctx, tx, o)
+	if err != nil {
+		return domain.Order{}, err
+	}
+	orderID, err := lookupOrderID(ctx, tx, order.ExternalID)
+	if err != nil {
+		return domain.Order{}, err
+	}
+	if submitted.Order.IsZero() {
+		submitted.Order = order.ExternalID
+	}
+	if err := appendOrderEventTx(ctx, tx, orderID, submitted); err != nil {
+		return domain.Order{}, err
+	}
+
+	settlement, err := apply(order)
+	if err != nil {
+		return domain.Order{}, err
+	}
+	if settlement.Order.IsZero() {
+		settlement.Order = order.ExternalID
+	}
+	if settlement.Account == "" {
+		settlement.Account = order.Account
+	}
+	if err := r.recordOrderSettlementTx(ctx, tx, settlement); err != nil {
+		return domain.Order{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return domain.Order{}, fmt.Errorf("store: commit order submission: %w", err)
+	}
+
+	order.Status = settlement.OrderStatus
+	order.Lock = settlement.Lock
+	if settlement.Leaves != "" {
+		order.Leaves = settlement.Leaves
+	}
+	return order, nil
+}
+
 // UpdateOrderStatus updates the status of the order addressed by external id.
 func (r *realmStore) UpdateOrderStatus(
 	ctx context.Context, id domain.ExternalID, status domain.OrderStatus,
 ) error {
-	res, err := r.db().ExecContext(
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	res, err := db.ExecContext(
 		ctx,
 		`UPDATE order_record SET status = ? WHERE external_id = ?`,
 		string(status), id.Bytes(),
@@ -133,7 +231,11 @@ func (r *realmStore) UpdateOrderStatus(
 func (r *realmStore) SetOrderLock(
 	ctx context.Context, id domain.ExternalID, lock []byte,
 ) error {
-	res, err := r.db().ExecContext(
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	res, err := db.ExecContext(
 		ctx,
 		`UPDATE order_record SET lock = ? WHERE external_id = ?`,
 		nullableBlob(lock), id.Bytes(),
@@ -144,53 +246,66 @@ func (r *realmStore) SetOrderLock(
 	return notFoundIfNoRows(res, "order", id.String())
 }
 
-// PutOrderApproval stamps the signed approval envelope onto the order addressed
-// by external id, write-once: it inserts the 1:1 order_approval row only when
-// the order carries none yet (INSERT OR IGNORE on the order_id primary key), so
-// a retry or a later write never clobbers an already-issued envelope. A no-op
-// (already stamped, or missing order) is not an error: the envelope is
-// best-effort and the order is the durable trail.
-func (r *realmStore) PutOrderApproval(
-	ctx context.Context, id domain.ExternalID, env domain.OrderApproval,
+// PutEventAttestation stamps the attestation envelope onto the order-history
+// event addressed by external id, write-once: it inserts the 1:1
+// event_attestation row only when the event carries none yet (only event_id
+// conflicts are ignored), so a retry or a later write never clobbers an
+// already-issued envelope. A no-op (already stamped, or missing event) is not an
+// error: the attestation is best-effort and the event stream is the durable
+// trail.
+func (r *realmStore) PutEventAttestation(
+	ctx context.Context, eventID domain.ExternalID, att domain.EventAttestation,
 ) error {
-	orderID, err := lookupOrderID(ctx, r.db(), id)
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	surrogate, err := lookupOrderEventID(ctx, db, eventID)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
-			// Missing order is a tolerated no-op, not an error.
+			// Missing event is a tolerated no-op, not an error.
 			return nil
 		}
 		return err
 	}
-	signingKeyID, err := resolveSigningKeyID(ctx, r.db(), env.KeyID)
-	if err != nil {
-		return err
+	var signingKeyID sql.NullInt64
+	if att.KeyID != "" {
+		id, err := resolveSigningKeyID(ctx, db, att.KeyID)
+		if err != nil {
+			return err
+		}
+		signingKeyID = sql.NullInt64{Int64: id, Valid: true}
 	}
-	if _, err := r.db().ExecContext(
+	if _, err := db.ExecContext(
 		ctx,
-		`INSERT OR IGNORE INTO order_approval
-		 (order_id, token, signing_key_id, alg, mode, issued_at, expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		orderID, env.Token, signingKeyID, env.Alg, env.Mode,
-		env.IssuedAt, env.ExpiresAt,
+		`INSERT INTO event_attestation
+		 (event_id, token, signing_key_id, alg, request_type, mode, issued_at, expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(event_id) DO NOTHING`,
+		surrogate, att.Token, signingKeyID, att.Alg, string(att.RequestType),
+		att.Mode, att.IssuedAt, att.ExpiresAt,
 	); err != nil {
-		return fmt.Errorf("store: put order approval: %w", err)
+		return fmt.Errorf("store: put event attestation: %w", err)
 	}
 	return nil
 }
 
-// GetOrder returns the order addressed by external id together with its events,
-// trade, and its 1:1 signed approval when one was issued. Returns
-// domain.ErrNotFound when the order is absent.
+// GetOrder returns the order addressed by external id together with its events
+// (each carrying its 1:1 signed attestation when one was issued) and trades.
+// Returns domain.ErrNotFound when the order is absent.
 //
-// The order's signed approval is persisted in order_approval (written by
-// PutOrderApproval, write-once). It is read back through the getOrderApproval
-// seam and folded into OrderDetail.Approval (nil when the order is unsigned), so
-// a caller presenting an order gets its envelope metadata without a second
-// round-trip.
+// Each event's attestation is persisted in event_attestation (written by
+// PutEventAttestation, write-once) and folded into OrderEvent.Attestation by the
+// event read (nil when the event is unattested), so a caller presenting an order
+// gets every event's envelope metadata without a second round-trip.
 func (r *realmStore) GetOrder(
 	ctx context.Context, id domain.ExternalID,
 ) (domain.OrderDetail, error) {
-	row := r.db().QueryRowContext(ctx, orderSelect+` WHERE o.external_id = ?`, id.Bytes())
+	db, err := r.db()
+	if err != nil {
+		return domain.OrderDetail{}, err
+	}
+	row := db.QueryRowContext(ctx, orderSelect+` WHERE o.external_id = ?`, id.Bytes())
 	o, err := scanOrderRow(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.OrderDetail{}, fmt.Errorf("order %q: %w", id.String(), domain.ErrNotFound)
@@ -207,13 +322,7 @@ func (r *realmStore) GetOrder(
 	if err != nil {
 		return domain.OrderDetail{}, err
 	}
-	detail := domain.OrderDetail{Order: o, Events: events, Trades: trades}
-	if env, ok, aerr := r.getOrderApproval(ctx, id); aerr != nil {
-		return domain.OrderDetail{}, aerr
-	} else if ok {
-		detail.Approval = &env
-	}
-	return detail, nil
+	return domain.OrderDetail{Order: o, Events: events, Trades: trades}, nil
 }
 
 // ListOrders returns the most recent n orders for an account, newest first. An
@@ -247,18 +356,22 @@ JOIN account a       ON a.id = o.account_id
 JOIN asset ba        ON ba.id = o.base_asset_id
 JOIN asset qa        ON qa.id = o.quote_asset_id
 LEFT JOIN principal p ON p.id = o.principal_id` + where
+	db, err := r.db()
+	if err != nil {
+		return fwstore.OrderListPage{}, err
+	}
 	var total int
-	if err := r.db().QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return fwstore.OrderListPage{}, fmt.Errorf("store: count order rows: %w", err)
 	}
 
 	queryArgs := append([]any{}, args...)
-	query := orderSelect + where + orderListOrderBy(filter.Sort)
+	query := orderListSelect + where + orderListOrderBy(filter.Sort)
 	if filter.Page.Limit > 0 {
 		query += ` LIMIT ? OFFSET ?`
 		queryArgs = append(queryArgs, filter.Page.Limit, max(filter.Page.Offset, 0))
 	}
-	rows, err := r.db().QueryContext(ctx, query, queryArgs...)
+	rows, err := db.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return fwstore.OrderListPage{}, fmt.Errorf("store: list order rows: %w", err)
 	}
@@ -266,11 +379,11 @@ LEFT JOIN principal p ON p.id = o.principal_id` + where
 
 	result := make([]fwstore.OrderListRow, 0)
 	for rows.Next() {
-		o, err := scanOrder(rows)
+		o, signed, err := scanOrderListRow(rows)
 		if err != nil {
 			return fwstore.OrderListPage{}, err
 		}
-		result = append(result, fwstore.OrderListRow{Order: o})
+		result = append(result, fwstore.OrderListRow{Order: o, Signed: signed})
 	}
 	if err := rows.Err(); err != nil {
 		return fwstore.OrderListPage{}, fmt.Errorf("store: iterate order rows: %w", err)
@@ -361,8 +474,12 @@ func orderListOrderBy(sort fwstore.SortSpec) string {
 
 // CountOrders returns the total number of orders recorded in the realm.
 func (r *realmStore) CountOrders(ctx context.Context) (int, error) {
+	db, err := r.db()
+	if err != nil {
+		return 0, err
+	}
 	var n int
-	if err := r.db().QueryRowContext(
+	if err := db.QueryRowContext(
 		ctx, `SELECT COUNT(*) FROM order_record`,
 	).Scan(&n); err != nil {
 		return 0, fmt.Errorf("store: count orders: %w", err)
@@ -374,8 +491,12 @@ func (r *realmStore) CountOrders(ctx context.Context) (int, error) {
 // after since. The at column is RFC3339Nano UTC text, so the boundary is
 // formatted the same way for a lexicographic comparison.
 func (r *realmStore) CountOrdersSince(ctx context.Context, since time.Time) (int, error) {
+	db, err := r.db()
+	if err != nil {
+		return 0, err
+	}
 	var n int
-	if err := r.db().QueryRowContext(
+	if err := db.QueryRowContext(
 		ctx,
 		`SELECT COUNT(*) FROM order_record WHERE at >= ?`,
 		since.UTC().Format(time.RFC3339Nano),
@@ -383,38 +504,6 @@ func (r *realmStore) CountOrdersSince(ctx context.Context, since time.Time) (int
 		return 0, fmt.Errorf("store: count orders since: %w", err)
 	}
 	return n, nil
-}
-
-// getOrderApproval returns the 1:1 approval of the order addressed by external
-// id. The bool is false when the order carries no signed envelope.
-func (r *realmStore) getOrderApproval(
-	ctx context.Context, id domain.ExternalID,
-) (domain.OrderApproval, bool, error) {
-	var env domain.OrderApproval
-	err := r.db().QueryRowContext(
-		ctx,
-		`SELECT ap.token, sk.key_id, ap.alg, ap.mode, ap.issued_at, ap.expires_at
-		 FROM order_approval ap
-		 JOIN signing_key sk ON sk.id = ap.signing_key_id
-		 JOIN order_record o ON o.id = ap.order_id
-		 WHERE o.external_id = ?`,
-		id.Bytes(),
-	).Scan(&env.Token, &env.KeyID, &env.Alg, &env.Mode, &env.IssuedAt, &env.ExpiresAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return domain.OrderApproval{}, false, nil
-	}
-	if err != nil {
-		return domain.OrderApproval{}, false, fmt.Errorf("store: get order approval: %w", err)
-	}
-	return env, true, nil
-}
-
-func scanOrder(rows *sql.Rows) (domain.Order, error) {
-	var o domain.Order
-	if err := scanOrderInto(rows.Scan, &o); err != nil {
-		return domain.Order{}, fmt.Errorf("store: scan order: %w", err)
-	}
-	return o, nil
 }
 
 func scanOrderRow(row *sql.Row) (domain.Order, error) {
@@ -425,6 +514,21 @@ func scanOrderRow(row *sql.Row) (domain.Order, error) {
 	return o, nil
 }
 
+// scanOrderListRow scans one orderListSelect projection, returning the order
+// plus the "signed" rollup: whether any of its events carries an Ed25519-signed
+// attestation. An order with no attestation, or only eSign-off ("none")
+// attestations, reports false.
+func scanOrderListRow(rows *sql.Rows) (domain.Order, bool, error) {
+	var o domain.Order
+	var signed bool
+	if err := scanOrderInto(func(dest ...any) error {
+		return rows.Scan(append(dest, &signed)...)
+	}, &o); err != nil {
+		return domain.Order{}, false, fmt.Errorf("store: scan order list row: %w", err)
+	}
+	return o, signed, nil
+}
+
 // scanOrderInto scans one order projection through scan into o, decoding the
 // external-id BLOB, the nullable principal code and the nullable lock BLOB and
 // parsing the submission time. The scan func is *sql.Row.Scan or *sql.Rows.Scan.
@@ -433,13 +537,13 @@ func scanOrderInto(scan func(...any) error, o *domain.Order) error {
 		extID                                []byte
 		principal                            sql.NullString
 		at, source, side, amountKind, status string
-		amountValue, price                   string
+		amountValue, leaves, price           string
 		lock                                 []byte
 	)
 	if err := scan(
 		&extID, &o.Account, &o.BaseAsset, &o.QuoteAsset, &principal,
 		&at, &source, &side, &amountKind, &amountValue,
-		&price, &status, &lock,
+		&leaves, &price, &status, &lock,
 	); err != nil {
 		return err
 	}
@@ -458,6 +562,7 @@ func scanOrderInto(scan func(...any) error, o *domain.Order) error {
 	o.Side = domain.OrderSide(side)
 	o.AmountKind = domain.OrderAmountKind(amountKind)
 	o.AmountValue = amountValue
+	o.Leaves = leaves
 	o.Price = price
 	o.Status = domain.OrderStatus(status)
 	o.Lock = lock
@@ -468,11 +573,17 @@ func scanOrderInto(scan func(...any) error, o *domain.Order) error {
 
 // orderEventSelect is the shared projection for event reads. The event links to
 // its order through the surrogate FK internally; reads surface only the event's
-// own fields plus the optional principal code.
+// own fields plus the optional principal code and, when present, the event's 1:1
+// signed attestation metadata (token verbatim, key UUID, alg, request type,
+// mode, timestamps). A NULL token means the event carries no attestation.
 const orderEventSelect = `
-SELECT e.external_id, e.at, e.type, e.source, p.code, e.payload
+SELECT e.external_id, e.at, e.type, e.source, p.code, e.payload,
+       ea.token, sk.key_id, ea.alg, ea.request_type, ea.mode,
+       ea.issued_at, ea.expires_at
 FROM order_event e
-LEFT JOIN principal p ON p.id = e.principal_id`
+LEFT JOIN principal p ON p.id = e.principal_id
+LEFT JOIN event_attestation ea ON ea.event_id = e.id
+LEFT JOIN signing_key sk ON sk.id = ea.signing_key_id`
 
 // AppendOrderEvent adds an event to the stream of the order named by ev.Order,
 // assigning the event's external id and timestamp. The payload is marshalled to
@@ -480,11 +591,15 @@ LEFT JOIN principal p ON p.id = e.principal_id`
 func (r *realmStore) AppendOrderEvent(
 	ctx context.Context, ev domain.OrderEvent,
 ) (domain.OrderEvent, error) {
-	orderID, err := lookupOrderID(ctx, r.db(), ev.Order)
+	db, err := r.db()
+	if err != nil {
+		return domain.OrderEvent{}, err
+	}
+	orderID, err := lookupOrderID(ctx, db, ev.Order)
 	if err != nil {
 		return ev, err
 	}
-	principalID, err := resolveOptionalPrincipalID(ctx, r.db(), ev.Principal)
+	principalID, err := resolveOptionalPrincipalID(ctx, db, ev.Principal)
 	if err != nil {
 		return ev, err
 	}
@@ -497,7 +612,7 @@ func (r *realmStore) AppendOrderEvent(
 		return ev, fmt.Errorf("store: marshal event payload: %w", err)
 	}
 	at := nowStr()
-	if _, err := r.db().ExecContext(
+	if _, err := db.ExecContext(
 		ctx,
 		`INSERT INTO order_event
 		 (external_id, order_id, principal_id, at, type, source, payload)
@@ -517,7 +632,11 @@ func (r *realmStore) AppendOrderEvent(
 func (r *realmStore) ListOrderEvents(
 	ctx context.Context, order domain.ExternalID,
 ) ([]domain.OrderEvent, error) {
-	rows, err := r.db().QueryContext(
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(
 		ctx,
 		orderEventSelect+`
 		 JOIN order_record o ON o.id = e.order_id
@@ -544,16 +663,28 @@ func (r *realmStore) ListOrderEvents(
 	return result, nil
 }
 
-// scanOrderEvent scans one event projection. The parent order's external id is
-// carried in by the caller (it is the query key) so it need not be re-selected.
+// scanOrderEvent scans one event projection, folding in the event's 1:1
+// attestation when present. The parent order's external id is carried in by the
+// caller (it is the query key) so it need not be re-selected.
 func scanOrderEvent(rows *sql.Rows, order domain.ExternalID) (domain.OrderEvent, error) {
 	var (
 		extID           []byte
 		at, typ, source string
 		principal       sql.NullString
 		payloadStr      string
+		attToken        sql.NullString
+		attKeyID        sql.NullString
+		attAlg          sql.NullString
+		attRequestType  sql.NullString
+		attMode         sql.NullString
+		attIssuedAt     sql.NullString
+		attExpiresAt    sql.NullString
 	)
-	if err := rows.Scan(&extID, &at, &typ, &source, &principal, &payloadStr); err != nil {
+	if err := rows.Scan(
+		&extID, &at, &typ, &source, &principal, &payloadStr,
+		&attToken, &attKeyID, &attAlg, &attRequestType, &attMode,
+		&attIssuedAt, &attExpiresAt,
+	); err != nil {
 		return domain.OrderEvent{}, fmt.Errorf("store: scan order event: %w", err)
 	}
 	xid, err := domain.ExternalIDFromBytes(extID)
@@ -568,7 +699,7 @@ func scanOrderEvent(rows *sql.Rows, order domain.ExternalID) (domain.OrderEvent,
 	if err := json.Unmarshal([]byte(payloadStr), &payload); err != nil {
 		return domain.OrderEvent{}, fmt.Errorf("store: unmarshal event payload: %w", err)
 	}
-	return domain.OrderEvent{
+	ev := domain.OrderEvent{
 		ExternalID: xid,
 		Order:      order,
 		At:         parsedAt,
@@ -576,7 +707,19 @@ func scanOrderEvent(rows *sql.Rows, order domain.ExternalID) (domain.OrderEvent,
 		Source:     domain.Source(source),
 		Principal:  principal.String,
 		Payload:    payload,
-	}, nil
+	}
+	if attToken.Valid {
+		ev.Attestation = &domain.EventAttestation{
+			Token:       attToken.String,
+			KeyID:       attKeyID.String,
+			Alg:         attAlg.String,
+			RequestType: domain.AttestationRequestType(attRequestType.String),
+			Mode:        attMode.String,
+			IssuedAt:    attIssuedAt.String,
+			ExpiresAt:   attExpiresAt.String,
+		}
+	}
+	return ev, nil
 }
 
 // --- Trades -----------------------------------------------------------------
@@ -602,7 +745,11 @@ LEFT JOIN principal p ON p.id = t.principal_id`
 func (r *realmStore) CreateTrade(
 	ctx context.Context, t domain.Trade,
 ) (domain.Trade, error) {
-	xid, at, err := r.insertTrade(ctx, r.db(), t)
+	db, err := r.db()
+	if err != nil {
+		return domain.Trade{}, err
+	}
+	xid, at, err := r.insertTrade(ctx, db, t)
 	if err != nil {
 		return t, err
 	}
@@ -623,27 +770,27 @@ func (r *realmStore) insertTrade(
 ) (domain.ExternalID, string, error) {
 	orderID, err := lookupOrderID(ctx, exec, t.Order)
 	if err != nil {
-		return domain.ExternalID{}, "", err
+		return domain.ExternalID(""), "", err
 	}
 	accountID, err := resolveAccountID(ctx, exec, t.Account)
 	if err != nil {
-		return domain.ExternalID{}, "", err
+		return domain.ExternalID(""), "", err
 	}
 	baseID, err := resolveAssetID(ctx, exec, t.BaseAsset)
 	if err != nil {
-		return domain.ExternalID{}, "", err
+		return domain.ExternalID(""), "", err
 	}
 	quoteID, err := resolveAssetID(ctx, exec, t.QuoteAsset)
 	if err != nil {
-		return domain.ExternalID{}, "", err
+		return domain.ExternalID(""), "", err
 	}
 	principalID, err := resolveOptionalPrincipalID(ctx, exec, t.Principal)
 	if err != nil {
-		return domain.ExternalID{}, "", err
+		return domain.ExternalID(""), "", err
 	}
 	xid, err := newExternalID()
 	if err != nil {
-		return domain.ExternalID{}, "", err
+		return domain.ExternalID(""), "", err
 	}
 	at := nowStr()
 	if _, err := exec.ExecContext(
@@ -655,7 +802,7 @@ func (r *realmStore) insertTrade(
 		xid.Bytes(), orderID, accountID, baseID, quoteID, principalID,
 		at, string(t.Source), string(t.Side), t.Quantity, t.Price, t.LockPrice,
 	); err != nil {
-		return domain.ExternalID{}, "", fmt.Errorf("store: create trade: %w", err)
+		return domain.ExternalID(""), "", fmt.Errorf("store: create trade: %w", err)
 	}
 	return xid, at, nil
 }
@@ -693,8 +840,12 @@ JOIN account a        ON a.id = t.account_id
 JOIN asset ba         ON ba.id = t.base_asset_id
 JOIN asset qa         ON qa.id = t.quote_asset_id
 LEFT JOIN principal p ON p.id = t.principal_id` + whereFromClauses(clauses)
+	db, err := r.db()
+	if err != nil {
+		return fwstore.TradeListPage{}, err
+	}
 	var total int
-	if err := r.db().QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return fwstore.TradeListPage{}, fmt.Errorf("store: count trade rows: %w", err)
 	}
 
@@ -715,7 +866,7 @@ LEFT JOIN principal p ON p.id = t.principal_id` +
 		query += ` LIMIT ? OFFSET ?`
 		queryArgs = append(queryArgs, filter.Page.Limit, max(filter.Page.Offset, 0))
 	}
-	rows, err := r.db().QueryContext(ctx, query, queryArgs...)
+	rows, err := db.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return fwstore.TradeListPage{}, fmt.Errorf("store: list trade rows: %w", err)
 	}
@@ -816,7 +967,11 @@ func (r *realmStore) listTrades(
 		args = append(args, limit)
 	}
 
-	rows, err := r.db().QueryContext(ctx, q, args...)
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: list trades: %w", err)
 	}
@@ -829,7 +984,11 @@ func (r *realmStore) listTrades(
 func (r *realmStore) listTradesByOrder(
 	ctx context.Context, order domain.ExternalID,
 ) ([]domain.Trade, error) {
-	rows, err := r.db().QueryContext(
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(
 		ctx,
 		tradeSelect+` WHERE o.external_id = ? ORDER BY t.at ASC, t.id ASC`,
 		order.Bytes(),
@@ -947,27 +1106,60 @@ func tradeFromScanned(
 // RecordOrderSettlement persists one fill/settlement atomically in a single
 // transaction: per-asset balance (realized P&L delta-accumulated inside the
 // tx), the engine-applied account blocks, the optional trade, the fill event(s),
-// the optional lock rewrite and the order status advance commit or roll back
-// together. A zero st.Order is an in-memory-only hold with no order row: the
-// order/event/lock writes are skipped and only the balance and block effects
-// run. When AllowedFrom is non-empty the status UPDATE is guarded and a
-// disallowed current status yields domain.ErrConflict with nothing written;
-// otherwise a missing order yields domain.ErrNotFound. The block-audit row is
-// NOT part of this tx; callers write it separately after a successful commit.
+// the optional lock rewrite and the order
+// status advance commit or roll back together. A zero st.Order is an
+// in-memory-only hold with no order row: the order/event/lock writes are skipped
+// and only the balance and block effects run. When AllowedFrom is
+// non-empty the status UPDATE is guarded and a disallowed current status yields
+// domain.ErrConflict with nothing written; otherwise a missing order yields
+// domain.ErrNotFound. The block-audit row is NOT part of this tx; callers write
+// it separately after a successful commit.
 func (r *realmStore) RecordOrderSettlement(
 	ctx context.Context, st domain.OrderSettlement,
 ) error {
-	tx, err := r.db().BeginTx(ctx, nil)
+	return r.recordOrderSettlement(ctx, st)
+}
+
+func (r *realmStore) recordOrderSettlement(
+	ctx context.Context, st domain.OrderSettlement,
+) error {
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin record_order_settlement: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	if err := r.recordOrderSettlementTx(ctx, tx, st); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit record_order_settlement: %w", err)
+	}
+	return nil
+}
+
+func (r *realmStore) recordOrderSettlementTx(
+	ctx context.Context, tx *sql.Tx, st domain.OrderSettlement,
+) error {
 	// Resolve the settling account once; balance and blocks reuse it. The
 	// account is the fill's account, always present on a settlement.
 	accountID, err := resolveAccountID(ctx, tx, st.Account)
 	if err != nil {
 		return err
+	}
+
+	if st.ReservationApprovalID != "" {
+		if _, err := tx.ExecContext(
+			ctx,
+			`UPDATE reservation_intent SET state = ? WHERE approval_id = ?`,
+			string(st.ReservationIntentState), st.ReservationApprovalID,
+		); err != nil {
+			return fmt.Errorf("store: settlement reservation intent state: %w", err)
+		}
 	}
 
 	// Per-asset balance: read-modify-write inside the tx so the realized-P&L
@@ -1006,9 +1198,6 @@ func (r *realmStore) RecordOrderSettlement(
 	// Order) carries no order row, so skip them and only the balance/block
 	// effects above run.
 	if st.Order.IsZero() {
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("store: commit record_order_settlement: %w", err)
-		}
 		return nil
 	}
 
@@ -1038,6 +1227,18 @@ func (r *realmStore) RecordOrderSettlement(
 		}
 	}
 
+	// Remaining open quantity: the caller carries the report's LeavesQty; an
+	// empty value leaves the column untouched.
+	if st.Leaves != "" {
+		if _, err := tx.ExecContext(
+			ctx,
+			`UPDATE order_record SET leaves_quantity = ? WHERE id = ?`,
+			st.Leaves, orderID,
+		); err != nil {
+			return fmt.Errorf("store: settlement leaves: %w", err)
+		}
+	}
+
 	// Status advance last; guarded only when AllowedFrom is set.
 	if err := guardedOrderStatus(
 		ctx, tx, orderID, st.Order, st.OrderStatus, st.AllowedFrom,
@@ -1045,9 +1246,6 @@ func (r *realmStore) RecordOrderSettlement(
 		return err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("store: commit record_order_settlement: %w", err)
-	}
 	return nil
 }
 
@@ -1133,15 +1331,12 @@ func appendOrderEventTx(
 	return nil
 }
 
-// settleBalanceTx applies one per-asset fill outcome inside tx. It resolves the
-// asset code to its surrogate id, reads the prior row (zero-value on absence),
-// accumulates realized P&L by delta, takes available/held/incoming from the
-// outcome's *Result with the prior value carried forward when a result is empty,
-// carries average_entry_price forward (a fill does not restate it) and writes
-// the row back. This is the node's former read-modify-write fill persistence,
-// moved inside the tx so the accumulate cannot lose an update. The balance
-// table is owned by another store group; this method touches it with direct SQL
-// (never the public balance methods) to keep the whole settlement atomic.
+// settleBalanceTx applies one per-asset fill outcome inside tx. Available,
+// held, and incoming are independent optional engine-returned absolutes; an
+// absent result preserves the prior value. Realized P&L is accumulated from the
+// engine delta. The balance table is owned by another store group; this method
+// touches it with direct SQL (never the public balance methods) to keep the
+// whole settlement atomic.
 func settleBalanceTx(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -1167,9 +1362,9 @@ func settleBalanceTx(
 	if err != nil {
 		return fmt.Errorf("store: settle balance %q realized_pnl: %w", bal.Asset, err)
 	}
-	available := settleOrZero(settlePick(bal.Outcome.BalanceResult, prevAvail))
-	held := settleOrZero(settlePick(bal.Outcome.HeldResult, prevHeld))
-	incoming := settleOrZero(settlePick(bal.Outcome.IncomingResult, prevIncoming))
+	available := settleOrZero(settlementResultOrPrevious(bal.Outcome.BalanceResult, prevAvail))
+	held := settleOrZero(settlementResultOrPrevious(bal.Outcome.HeldResult, prevHeld))
+	incoming := settleOrZero(settlementResultOrPrevious(bal.Outcome.IncomingResult, prevIncoming))
 	realized = settleOrZero(realized)
 	if _, err := tx.ExecContext(
 		ctx,
@@ -1183,7 +1378,56 @@ func settleBalanceTx(
 	); err != nil {
 		return fmt.Errorf("store: settle balance %q write: %w", bal.Asset, err)
 	}
+	if err := pruneEmptySettlementBalanceTx(
+		ctx, tx, accountID, assetID, bal.Asset,
+		available, held, incoming, realized, prevAvgPx,
+	); err != nil {
+		return err
+	}
 	return nil
+}
+
+func pruneEmptySettlementBalanceTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	accountID int64,
+	assetID int64,
+	asset string,
+	available string,
+	held string,
+	incoming string,
+	realized string,
+	averageEntryPrice string,
+) error {
+	if !balanceAmountsEmpty(available, held, incoming, realized, averageEntryPrice) {
+		return nil
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		`DELETE FROM balance WHERE account_id = ? AND asset_id = ?`,
+		accountID, assetID,
+	); err != nil {
+		return fmt.Errorf("store: prune empty settlement balance %q: %w", asset, err)
+	}
+	return nil
+}
+
+func balanceAmountsEmpty(
+	available string, held string, incoming string, realized string, averageEntryPrice string,
+) bool {
+	return decimalZeroOrEmpty(available) &&
+		decimalZeroOrEmpty(held) &&
+		decimalZeroOrEmpty(incoming) &&
+		decimalZeroOrEmpty(realized) &&
+		decimalZeroOrEmpty(averageEntryPrice)
+}
+
+func decimalZeroOrEmpty(value string) bool {
+	if value == "" {
+		return true
+	}
+	parsed, err := decimal.NewFromString(value)
+	return err == nil && parsed.IsZero()
 }
 
 // --- Orders-group small helpers ---------------------------------------------
@@ -1208,6 +1452,26 @@ func lookupOrderID(
 	return orderID, nil
 }
 
+// lookupOrderEventID resolves an event's external id to its surrogate id,
+// mapping a missing event onto domain.ErrNotFound. It is the analogue of
+// lookupOrderID for the event stream; it keys the 1:1 attestation onto the event
+// without exposing the surrogate id.
+func lookupOrderEventID(
+	ctx context.Context, q sqlQueryer, id domain.ExternalID,
+) (int64, error) {
+	var eventID int64
+	err := q.QueryRowContext(
+		ctx, `SELECT id FROM order_event WHERE external_id = ?`, id.Bytes(),
+	).Scan(&eventID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("order event %q: %w", id.String(), domain.ErrNotFound)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("store: resolve order event %q: %w", id.String(), err)
+	}
+	return eventID, nil
+}
+
 // nullableBlob maps a nil byte slice to a NULL column value and a non-nil slice
 // (including an empty one) to itself, so the lock column distinguishes "no lock"
 // (NULL) from a present-but-empty serialized lock.
@@ -1226,16 +1490,6 @@ func mustParseTime(s string) time.Time {
 	return t
 }
 
-// settlePick returns next when it is non-empty, otherwise the carried-forward
-// prev. A fill outcome leaves a field's *Result empty when the fill did not move
-// that field, so the prior stored value is retained.
-func settlePick(next, prev string) string {
-	if next != "" {
-		return next
-	}
-	return prev
-}
-
 // settleOrZero maps an empty amount string to "0" so a balance column is never
 // written empty.
 func settleOrZero(s string) string {
@@ -1243,4 +1497,11 @@ func settleOrZero(s string) string {
 		return "0"
 	}
 	return s
+}
+
+func settlementResultOrPrevious(next, prev string) string {
+	if next != "" {
+		return next
+	}
+	return prev
 }

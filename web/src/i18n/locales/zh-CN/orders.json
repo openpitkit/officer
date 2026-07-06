@@ -86,6 +86,7 @@
     "qty": "数量",
     "lockPrice": "锁定价格",
     "displayPrices": "显示价格",
+    "signedIndicator": "此订单至少有一个已签名的事件。",
     "columnDescriptions": {
       "externalId": "此列显示由调用方提供或由 Officer 生成的不可变标识符。",
       "account": "此列显示提交订单或接收成交的账户。",
@@ -137,7 +138,7 @@
       "quoteAssetPlaceholder": "如 USD",
       "externalId": "ID（可选）",
       "externalIdPlaceholder": "留空则由服务器生成",
-      "externalIdHint": "如需稳定的订单句柄，可填写自己的 22 字符 base64url ID。",
+      "externalIdHint": "如需稳定的订单句柄，可填写您自己的唯一 ID。",
       "side": "方向",
       "sideOptions": {
         "buy": "买入",
@@ -159,6 +160,7 @@
       "submitModeHoldHelp": "锁定资金并等待盘后报告。",
       "submitModeRequired": "请选择提交模式。",
       "amountKindRequired": "请选择数量类型。",
+      "sideRequired": "请选择方向。",
       "openApi": "OpenAPI",
       "submitBusy": "添加中…",
       "submit": "添加订单",
@@ -188,16 +190,31 @@
       "fillQtyPlaceholder": "如 50",
       "fillPrice": "成交价格",
       "fillPricePlaceholder": "如 192.40",
+      "leavesQty": "剩余数量",
+      "leavesQtyPlaceholder": "如 0",
+      "calculateLeaves": "计算剩余数量",
       "lockPrice": "锁定价格（可选）",
       "lockPricePlaceholder": "可选",
+      "status": "目标状态",
+      "statusHelp": {
+        "submitted": "将订单记录为已提交至交易场所。不产生成交，不影响余额。",
+        "accepted": "记录交易场所已接受该订单。不产生成交，不影响余额。",
+        "rejected": "将订单关闭为已拒绝。不产生成交，不影响余额。",
+        "committed": "记录该预留已确认提交。不产生成交，不影响余额。",
+        "rolled_back": "记录该预留已回滚。不产生成交，不影响余额。",
+        "filled": "以一笔成交结清订单全部剩余数量并将其关闭。",
+        "partially_filled": "结清订单部分剩余数量，订单保持开放。",
+        "cancelled": "关闭订单并释放剩余数量。不产生成交。"
+      },
       "finalFill": "最终成交（关闭订单）",
-      "force": "强制：绕过 Officer 检查，直接发送至引擎",
+      "force": "强制：绕过防止对已终结订单提交执行报告的检查",
       "submitBusy": "提交中…",
       "submit": "提交",
       "accepted": "执行报告已接受。",
       "accountBlocked": "账户 {{account}} 已被封锁：",
       "done": "完成",
-      "validationError": "数量和价格为必填项。"
+      "validationError": "成交状态需要填写数量和价格。",
+      "leavesRequired": "剩余数量为必填项。"
     }
   },
 
@@ -218,6 +235,15 @@
       "fieldSource": "来源",
       "fieldSubmitted": "提交时间",
       "fieldDisplayPrices": "显示价格",
+      "hold": {
+        "title": "已保留的预留",
+        "description": "此订单处于保留状态。确认以提交该预留，或取消以回滚该预留。",
+        "force": "强制：绕过 Officer 的安全检查，直接路由至引擎",
+        "confirm": "确认",
+        "confirmBusy": "确认中…",
+        "cancel": "取消订单",
+        "cancelBusy": "取消中…"
+      },
       "timeline": {
         "sectionTitle": "事件时间线",
         "empty": "暂无事件记录。",
@@ -227,32 +253,119 @@
         "fillLock": "（锁定 {{price}}）",
         "rejectCode": "代码 {{code}}",
         "rejectScope": "范围 {{scope}}",
-        "rejectPolicy": "策略 {{policy}}"
+        "rejectPolicy": "策略 {{policy}}",
+        "verifySigned": "复现并验证此事件的签名",
+        "verifyUnsigned": "复现此事件的未签名认证"
       },
       "trades": {
         "sectionTitle": "该订单的成交记录",
         "empty": "暂无成交记录。提交执行报告以创建成交。",
         "submitExecReport": "提交执行报告"
-      },
-      "signedPayload": {
-        "sectionTitle": "已签名的 API 载荷",
-        "dialogDescription": "此订单记录的批准信封、规范令牌和签名验证。",
-        "openButton": "查看签名",
-        "tokenLabel": "信封令牌（base64url）",
-        "decodedLabel": "已解码的批准内容",
-        "verifyButton": "验证签名",
-        "verifying": "验证中…",
-        "badgeVerified": "VERIFIED",
-        "badgeInvalid": "INVALID",
-        "badgeUnverified": "UNVERIFIED",
-        "badgeUnsigned": "UNSIGNED",
-        "unsignedNote": "无加密签名 — 签名服务已配置，但未设置密钥。",
-        "verifiedNote": "已通过当前活跃公钥验证签名。",
-        "invalidNote": "签名不匹配。信封可能已被篡改。",
-        "verifyError": "验证失败。活跃密钥可能与签名密钥不符，或浏览器不支持 Ed25519。",
-        "issuedAt": "签发时间：",
-        "expiresAt": "到期时间："
       }
     }
+  },
+
+  "panel": {
+    "title": "复现与验证",
+    "description": "机器人或智能体就此请求收到的确切工件，按字节原样显示，您可复制、验证签名，或验证任意粘贴的令牌。",
+    "verifyTokenButton": "验证令牌",
+    "tabReproduction": "复现",
+    "tabVerify": "验证令牌"
+  },
+
+  "requestType": {
+    "submit": "提交",
+    "executionReport": "执行报告",
+    "confirm": "确认",
+    "cancel": "取消"
+  },
+
+  "repro": {
+    "loading": "正在加载复现数据包…",
+    "loadError": "无法加载复现数据包。{{message}}",
+    "noAttestation": "此事件没有持久化的认证，因此无可复现内容。",
+    "requestTypeLabel": "请求类型",
+    "tokenLabel": "令牌",
+    "tokenNote": "机器人收到的确切 base64url 令牌。主要复制项。",
+    "requestLabel": "已签名请求与引擎结果",
+    "requestNote": "认证中绑定的请求，以及它产生的引擎结果。",
+    "responseNote": "确切的 API 响应，由同一服务端序列化器重建。",
+    "responseTokenLabel": "认证令牌（原样）",
+    "responseSubmit": "提交响应",
+    "responseExecutionReport": "执行报告响应",
+    "responseConfirm": "确认响应",
+    "responseCancel": "取消响应",
+    "canonicalLabel": "规范形式（已签名字节）",
+    "canonicalNote": "按字节原样，用于验证签名。",
+    "signatureLabel": "签名与公钥",
+    "signatureNote": "信封签名，以及按此认证密钥 ID 解析出的公钥 — 该密钥可能是已轮换的非活跃密钥。",
+    "keyId": "密钥 ID",
+    "signatureFieldLabel": "签名（base64）",
+    "publicKeyFieldLabel": "公钥（{{format}}）",
+    "eventBodyLabel": "事件主体",
+    "eventBodyNote": "事件主体，与 GET /orders 返回的一致。"
+  },
+
+  "verify": {
+    "label": "验证签名",
+    "note": "在您的浏览器中对上方规范字节运行 Ed25519，使用此认证密钥 ID 对应的公钥。",
+    "button": "验证",
+    "verifying": "验证中…",
+    "badgeValid": "VALID",
+    "badgeInvalid": "INVALID",
+    "badgeUnverified": "UNVERIFIED",
+    "badgeUnsigned": "UNSIGNED",
+    "badgeError": "ERROR",
+    "validNote": "已通过此认证密钥 ID 对应的公钥验证签名。",
+    "invalidNote": "签名不匹配。令牌可能已被更改。",
+    "unsignedNote": "无加密签名 — 此事件在 eSign-off 模式下认证。",
+    "errorNote": "无法执行验证。{{message}}",
+    "missingArtifacts": "数据包中缺少规范字节或签名。",
+    "expired": "已过期",
+    "jsSnippetLabel": "使用 WebCrypto 验证（JavaScript）",
+    "goSnippetLabel": "使用 crypto/ed25519 验证（Go）",
+    "snippetKeyNote": "公钥为 raw-base64 形式，按此认证密钥 ID 解析。",
+    "pasteEmpty": "请粘贴要验证的令牌。",
+    "pasteMalformed": "无法将该令牌解码为已签名的认证信封。",
+    "pasteNoKeyId": "该令牌不含密钥 ID，无法解析其公钥。",
+    "pasteUnknownKey": "未知密钥 ID {{keyId}} 的公钥。"
+  },
+
+  "paste": {
+    "label": "令牌",
+    "note": "粘贴任意 base64url 信封令牌。它将在您的浏览器中解码；其密钥 ID 用于解析待验证的公钥。",
+    "placeholder": "粘贴 base64url 令牌…"
+  },
+
+  "breakdown": {
+    "label": "可读明细",
+    "readOnlyNote": "仅供阅读 — 不用于复制或验证。请依据规范字节验证，切勿依据重新格式化的副本。",
+    "requestType": "请求类型",
+    "verdict": "裁决",
+    "side": "方向",
+    "quantity": "数量",
+    "amountKind": "数量类型",
+    "orderType": "订单类型",
+    "limitPrice": "限价",
+    "estimatePrice": "估算价",
+    "instrument": "工具",
+    "account": "账户",
+    "policySummary": "策略摘要",
+    "outcome": "结果",
+    "fillQuantity": "成交数量",
+    "fillPrice": "成交价",
+    "leavesQuantity": "剩余数量",
+    "orderStatus": "订单状态",
+    "issuedAt": "签发时间",
+    "expiresAt": "到期时间"
+  },
+
+  "esign": {
+    "label": "eSign 模式",
+    "signed": "SIGNED",
+    "unsigned": "UNSIGNED",
+    "alg": "alg {{alg}}",
+    "noAlg": "无认证信封",
+    "offGlobal": "已全局启用 eSign-off"
   }
 }

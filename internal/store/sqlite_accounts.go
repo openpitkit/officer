@@ -49,11 +49,15 @@ LEFT JOIN asset_class c ON c.id = a.class_id`
 // CreateAsset persists a new asset dictionary row, resolving an optional class
 // code to its surrogate id (an empty code leaves the link NULL).
 func (r *realmStore) CreateAsset(ctx context.Context, asset domain.Asset) error {
-	classID, err := optionalClassID(ctx, r.db(), asset.AssetClass)
+	db, err := r.db()
 	if err != nil {
 		return err
 	}
-	_, err = r.db().ExecContext(
+	classID, err := optionalClassID(ctx, db, asset.AssetClass)
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(
 		ctx,
 		`INSERT INTO asset (code, title, class_id) VALUES (?, ?, ?)`,
 		asset.Code, asset.Title, classID,
@@ -71,7 +75,11 @@ func (r *realmStore) CreateAsset(ctx context.Context, asset domain.Asset) error 
 func (r *realmStore) GetAsset(
 	ctx context.Context, code string,
 ) (domain.Asset, bool, error) {
-	row := r.db().QueryRowContext(ctx, assetSelect+` WHERE a.code = ?`, code)
+	db, err := r.db()
+	if err != nil {
+		return domain.Asset{}, false, err
+	}
+	row := db.QueryRowContext(ctx, assetSelect+` WHERE a.code = ?`, code)
 	asset, err := scanAssetRow(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Asset{}, false, nil
@@ -106,8 +114,12 @@ LEFT JOIN asset_class c ON c.id = a.class_id`
 	if len(clauses) > 0 {
 		countQuery += "\nWHERE " + strings.Join(clauses, " AND ")
 	}
+	db, err := r.db()
+	if err != nil {
+		return fwstore.AssetListPage{}, err
+	}
 	var total int
-	if err := r.db().QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return fwstore.AssetListPage{}, fmt.Errorf("store: count assets: %w", err)
 	}
 
@@ -117,7 +129,7 @@ LEFT JOIN asset_class c ON c.id = a.class_id`
 		query += "\nLIMIT ? OFFSET ?"
 		queryArgs = append(queryArgs, filter.Page.Limit, max(filter.Page.Offset, 0))
 	}
-	rows, err := r.db().QueryContext(ctx, query, queryArgs...)
+	rows, err := db.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return fwstore.AssetListPage{}, fmt.Errorf("store: list assets: %w", err)
 	}
@@ -171,11 +183,15 @@ func assetListOrderBy(sort fwstore.SortSpec) string {
 func (r *realmStore) UpdateAsset(
 	ctx context.Context, oldCode string, asset domain.Asset,
 ) (domain.Asset, error) {
-	classID, err := optionalClassID(ctx, r.db(), asset.AssetClass)
+	db, err := r.db()
 	if err != nil {
 		return domain.Asset{}, err
 	}
-	res, err := r.db().ExecContext(
+	classID, err := optionalClassID(ctx, db, asset.AssetClass)
+	if err != nil {
+		return domain.Asset{}, err
+	}
+	res, err := db.ExecContext(
 		ctx,
 		`UPDATE asset SET code = ?, title = ?, class_id = ? WHERE code = ?`,
 		asset.Code, asset.Title, classID, oldCode,
@@ -203,7 +219,11 @@ func (r *realmStore) UpdateAsset(
 
 // DeleteAsset removes the asset and, when forced, cascades its dependent rows.
 func (r *realmStore) DeleteAsset(ctx context.Context, code string, force bool) error {
-	tx, err := r.db().BeginTx(ctx, nil)
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin delete asset: %w", err)
 	}
@@ -264,7 +284,11 @@ func scanAssetRow(row *sql.Row) (domain.Asset, error) {
 func (r *realmStore) CreateAssetClass(
 	ctx context.Context, class domain.AssetClass,
 ) error {
-	_, err := r.db().ExecContext(
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(
 		ctx,
 		`INSERT INTO asset_class (code, title, notes) VALUES (?, ?, ?)`,
 		class.Code, class.Title, class.Notes,
@@ -282,8 +306,12 @@ func (r *realmStore) CreateAssetClass(
 func (r *realmStore) GetAssetClass(
 	ctx context.Context, code string,
 ) (domain.AssetClass, bool, error) {
+	db, err := r.db()
+	if err != nil {
+		return domain.AssetClass{}, false, err
+	}
 	var class domain.AssetClass
-	err := r.db().QueryRowContext(
+	err = db.QueryRowContext(
 		ctx, `SELECT code, title, notes FROM asset_class WHERE code = ?`, code,
 	).Scan(&class.Code, &class.Title, &class.Notes)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -323,8 +351,12 @@ LEFT JOIN asset a ON a.class_id = c.id` +
 GROUP BY c.id`
 
 	countQuery := `SELECT COUNT(*) FROM (SELECT c.id` + from + `) AS filtered`
+	db, err := r.db()
+	if err != nil {
+		return fwstore.AssetClassListPage{}, err
+	}
 	var total int
-	if err := r.db().QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return fwstore.AssetClassListPage{}, fmt.Errorf("store: count asset class rows: %w", err)
 	}
 
@@ -337,7 +369,7 @@ SELECT c.code, c.title, c.notes, COUNT(a.id) AS asset_count` +
 		queryArgs = append(queryArgs, filter.Page.Limit, max(filter.Page.Offset, 0))
 	}
 
-	rows, err := r.db().QueryContext(ctx, query, queryArgs...)
+	rows, err := db.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return fwstore.AssetClassListPage{}, fmt.Errorf("store: list asset class rows: %w", err)
 	}
@@ -362,7 +394,11 @@ SELECT c.code, c.title, c.notes, COUNT(a.id) AS asset_count` +
 func (r *realmStore) UpdateAssetClass(
 	ctx context.Context, oldCode string, class domain.AssetClass,
 ) (domain.AssetClass, error) {
-	res, err := r.db().ExecContext(
+	db, err := r.db()
+	if err != nil {
+		return domain.AssetClass{}, err
+	}
+	res, err := db.ExecContext(
 		ctx,
 		`UPDATE asset_class SET code = ?, title = ?, notes = ? WHERE code = ?`,
 		class.Code, class.Title, class.Notes, oldCode,
@@ -386,7 +422,11 @@ func (r *realmStore) UpdateAssetClass(
 func (r *realmStore) DeleteAssetClass(
 	ctx context.Context, code string, force bool,
 ) error {
-	tx, err := r.db().BeginTx(ctx, nil)
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin delete asset class: %w", err)
 	}
@@ -482,7 +522,11 @@ func assetClassListOrderBy(sort fwstore.SortSpec) string {
 func (r *realmStore) CreatePrincipal(
 	ctx context.Context, principal domain.Principal,
 ) error {
-	_, err := r.db().ExecContext(
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(
 		ctx,
 		`INSERT INTO principal (code, title) VALUES (?, ?)`,
 		principal.Code, principal.Title,
@@ -500,8 +544,12 @@ func (r *realmStore) CreatePrincipal(
 func (r *realmStore) GetPrincipal(
 	ctx context.Context, code string,
 ) (domain.Principal, bool, error) {
+	db, err := r.db()
+	if err != nil {
+		return domain.Principal{}, false, err
+	}
 	var principal domain.Principal
-	err := r.db().QueryRowContext(
+	err = db.QueryRowContext(
 		ctx, `SELECT code, title FROM principal WHERE code = ?`, code,
 	).Scan(&principal.Code, &principal.Title)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -515,7 +563,11 @@ func (r *realmStore) GetPrincipal(
 
 // ListPrincipals returns every principal, ordered by code.
 func (r *realmStore) ListPrincipals(ctx context.Context) ([]domain.Principal, error) {
-	rows, err := r.db().QueryContext(
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(
 		ctx, `SELECT code, title FROM principal ORDER BY code`,
 	)
 	if err != nil {
@@ -541,7 +593,11 @@ func (r *realmStore) ListPrincipals(ctx context.Context) ([]domain.Principal, er
 func (r *realmStore) UpdatePrincipal(
 	ctx context.Context, principal domain.Principal,
 ) error {
-	res, err := r.db().ExecContext(
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	res, err := db.ExecContext(
 		ctx, `UPDATE principal SET title = ? WHERE code = ?`,
 		principal.Title, principal.Code,
 	)
@@ -553,7 +609,11 @@ func (r *realmStore) UpdatePrincipal(
 
 // DeletePrincipal removes the principal; references to it are cleared.
 func (r *realmStore) DeletePrincipal(ctx context.Context, code string) error {
-	res, err := r.db().ExecContext(ctx, `DELETE FROM principal WHERE code = ?`, code)
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	res, err := db.ExecContext(ctx, `DELETE FROM principal WHERE code = ?`, code)
 	if err != nil {
 		return fmt.Errorf("store: delete principal: %w", err)
 	}
@@ -568,7 +628,11 @@ func (r *realmStore) DeletePrincipal(ctx context.Context, code string) error {
 func (r *realmStore) CreateGroup(
 	ctx context.Context, group domain.AccountGroup,
 ) (domain.AccountGroup, error) {
-	res, err := r.db().ExecContext(
+	db, err := r.db()
+	if err != nil {
+		return domain.AccountGroup{}, err
+	}
+	res, err := db.ExecContext(
 		ctx,
 		`INSERT INTO account_group
 		 (code, title, notes, blocked, block_reason)
@@ -594,7 +658,11 @@ func (r *realmStore) CreateGroup(
 func (r *realmStore) GetGroup(
 	ctx context.Context, code string,
 ) (domain.AccountGroup, bool, error) {
-	row := r.db().QueryRowContext(
+	db, err := r.db()
+	if err != nil {
+		return domain.AccountGroup{}, false, err
+	}
+	row := db.QueryRowContext(
 		ctx,
 		`SELECT id, code, title, notes, blocked, block_reason
 		 FROM account_group WHERE code = ?`,
@@ -652,8 +720,12 @@ GROUP BY g.id` + having
 
 	countArgs := append(append([]any{}, args...), havingArgs...)
 	countQuery := `SELECT COUNT(*) FROM (SELECT g.id` + from + `) AS filtered`
+	db, err := r.db()
+	if err != nil {
+		return fwstore.GroupListPage{}, err
+	}
 	var total int
-	if err := r.db().QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
+	if err := db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
 		return fwstore.GroupListPage{}, fmt.Errorf("store: count group rows: %w", err)
 	}
 
@@ -681,7 +753,7 @@ SELECT g.id, g.code, g.title, g.notes, g.blocked, g.block_reason,
 		queryArgs = append(queryArgs, filter.Page.Limit, max(filter.Page.Offset, 0))
 	}
 
-	rows, err := r.db().QueryContext(ctx, query, queryArgs...)
+	rows, err := db.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return fwstore.GroupListPage{}, fmt.Errorf("store: list group rows: %w", err)
 	}
@@ -724,7 +796,11 @@ LEFT JOIN balance b ON b.account_id = a.id` +
 		where + `
 GROUP BY dg.code` + having
 
-	rows, err := r.db().QueryContext(ctx, query, args...)
+	db, err := r.db()
+	if err != nil {
+		return fwstore.GroupListRow{}, false, err
+	}
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fwstore.GroupListRow{}, false, fmt.Errorf("store: default group row: %w", err)
 	}
@@ -744,7 +820,11 @@ GROUP BY dg.code` + having
 
 // SetGroupNotes replaces the notes of the identified group.
 func (r *realmStore) SetGroupNotes(ctx context.Context, code, notes string) error {
-	res, err := r.db().ExecContext(
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	res, err := db.ExecContext(
 		ctx, `UPDATE account_group SET notes = ? WHERE code = ?`, notes, code,
 	)
 	if err != nil {
@@ -757,7 +837,11 @@ func (r *realmStore) SetGroupNotes(ctx context.Context, code, notes string) erro
 func (r *realmStore) UpdateGroup(
 	ctx context.Context, oldCode string, group domain.AccountGroup,
 ) (domain.AccountGroup, error) {
-	res, err := r.db().ExecContext(
+	db, err := r.db()
+	if err != nil {
+		return domain.AccountGroup{}, err
+	}
+	res, err := db.ExecContext(
 		ctx,
 		`UPDATE account_group SET code = ?, title = ? WHERE code = ?`,
 		group.Code, group.Title, oldCode,
@@ -787,7 +871,11 @@ func (r *realmStore) UpdateGroup(
 func (r *realmStore) SetGroupBlocked(
 	ctx context.Context, code string, blocked bool, reason string,
 ) error {
-	res, err := r.db().ExecContext(
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	res, err := db.ExecContext(
 		ctx,
 		`UPDATE account_group SET blocked = ?, block_reason = ? WHERE code = ?`,
 		blocked, reason, code,
@@ -800,7 +888,11 @@ func (r *realmStore) SetGroupBlocked(
 
 // DeleteGroup removes the group; member accounts have their link cleared.
 func (r *realmStore) DeleteGroup(ctx context.Context, code string) error {
-	res, err := r.db().ExecContext(
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	res, err := db.ExecContext(
 		ctx, `DELETE FROM account_group WHERE code = ?`, code,
 	)
 	if err != nil {
@@ -813,7 +905,11 @@ func (r *realmStore) DeleteGroup(ctx context.Context, code string) error {
 func (r *realmStore) ListGroupAccounts(
 	ctx context.Context, code string,
 ) ([]domain.Account, error) {
-	rows, err := r.db().QueryContext(
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(
 		ctx, accountSelect+` WHERE g.code = ? ORDER BY a.code`, code,
 	)
 	if err != nil {
@@ -877,7 +973,11 @@ LEFT JOIN account_group g ON g.id = a.group_id`
 func (r *realmStore) CreateAccount(
 	ctx context.Context, account domain.Account,
 ) (domain.Account, error) {
-	tx, err := r.db().BeginTx(ctx, nil)
+	db, err := r.db()
+	if err != nil {
+		return domain.Account{}, err
+	}
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return domain.Account{}, fmt.Errorf("store: begin create account: %w", err)
 	}
@@ -917,7 +1017,11 @@ func (r *realmStore) CreateAccount(
 func (r *realmStore) GetAccount(
 	ctx context.Context, code domain.AccountID,
 ) (domain.Account, bool, error) {
-	row := r.db().QueryRowContext(
+	db, err := r.db()
+	if err != nil {
+		return domain.Account{}, false, err
+	}
+	row := db.QueryRowContext(
 		ctx, accountSelect+` WHERE a.code = ?`, code.String(),
 	)
 	account, err := scanAccountRow(row)
@@ -959,8 +1063,12 @@ LEFT JOIN balance b ON b.account_id = a.id` +
 		where + `
 GROUP BY a.id` + having
 	countQuery := `SELECT COUNT(*) FROM (SELECT a.id` + from + `) AS filtered`
+	db, err := r.db()
+	if err != nil {
+		return fwstore.AccountListPage{}, err
+	}
 	var total int
-	if err := r.db().QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return fwstore.AccountListPage{}, fmt.Errorf("store: count account rows: %w", err)
 	}
 	queryArgs := append([]any{}, args...)
@@ -974,7 +1082,7 @@ SELECT a.id, a.code, a.title, g.code,
 		queryArgs = append(queryArgs, filter.Page.Limit, max(filter.Page.Offset, 0))
 	}
 
-	rows, err := r.db().QueryContext(ctx, query, queryArgs...)
+	rows, err := db.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return fwstore.AccountListPage{}, fmt.Errorf("store: list account rows: %w", err)
 	}
@@ -990,7 +1098,11 @@ SELECT a.id, a.code, a.title, g.code,
 func (r *realmStore) SetAccountBlocked(
 	ctx context.Context, code domain.AccountID, blocked bool, reason string,
 ) error {
-	res, err := r.db().ExecContext(
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	res, err := db.ExecContext(
 		ctx,
 		`UPDATE account SET blocked = ?, block_reason = ? WHERE code = ?`,
 		blocked, reason, code.String(),
@@ -1006,11 +1118,15 @@ func (r *realmStore) SetAccountBlocked(
 func (r *realmStore) SetAccountGroup(
 	ctx context.Context, code domain.AccountID, groupCode string,
 ) error {
-	groupID, err := optionalGroupID(ctx, r.db(), groupCode)
+	db, err := r.db()
 	if err != nil {
 		return err
 	}
-	res, err := r.db().ExecContext(
+	groupID, err := optionalGroupID(ctx, db, groupCode)
+	if err != nil {
+		return err
+	}
+	res, err := db.ExecContext(
 		ctx, `UPDATE account SET group_id = ? WHERE code = ?`,
 		groupID, code.String(),
 	)
@@ -1024,7 +1140,11 @@ func (r *realmStore) SetAccountGroup(
 func (r *realmStore) SetAccountNotes(
 	ctx context.Context, code domain.AccountID, notes string,
 ) error {
-	res, err := r.db().ExecContext(
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	res, err := db.ExecContext(
 		ctx, `UPDATE account SET notes = ? WHERE code = ?`, notes, code.String(),
 	)
 	if err != nil {
@@ -1037,7 +1157,11 @@ func (r *realmStore) SetAccountNotes(
 func (r *realmStore) UpdateAccount(
 	ctx context.Context, oldCode domain.AccountID, account domain.Account,
 ) (domain.Account, error) {
-	res, err := r.db().ExecContext(
+	db, err := r.db()
+	if err != nil {
+		return domain.Account{}, err
+	}
+	res, err := db.ExecContext(
 		ctx,
 		`UPDATE account SET code = ?, title = ? WHERE code = ?`,
 		account.Code.String(), account.Title, oldCode.String(),
@@ -1067,7 +1191,11 @@ func (r *realmStore) UpdateAccount(
 func (r *realmStore) DeleteAccount(
 	ctx context.Context, code domain.AccountID, force bool,
 ) error {
-	tx, err := r.db().BeginTx(ctx, nil)
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin delete account: %w", err)
 	}
@@ -1459,8 +1587,9 @@ func accountDependents(
 		{"order_event", `SELECT COUNT(*) FROM order_event ev
 		 JOIN order_record o ON o.id = ev.order_id WHERE o.account_id = ?`},
 		{"trade", `SELECT COUNT(*) FROM trade WHERE account_id = ?`},
-		{"order_approval", `SELECT COUNT(*) FROM order_approval ap
-		 JOIN order_record o ON o.id = ap.order_id WHERE o.account_id = ?`},
+		{"event_attestation", `SELECT COUNT(*) FROM event_attestation ea
+		 JOIN order_event ev ON ev.id = ea.event_id
+		 JOIN order_record o ON o.id = ev.order_id WHERE o.account_id = ?`},
 		{"adjustment", `SELECT COUNT(*) FROM adjustment WHERE account_id = ?`},
 		{"limit_rate", `SELECT COUNT(*) FROM limit_rate WHERE account_id = ?`},
 		{"limit_order_size", `SELECT COUNT(*) FROM limit_order_size WHERE account_id = ?`},

@@ -279,7 +279,7 @@ func TestAdjustmentCascadeOnAccountDelete(t *testing.T) {
 	// The adjustment must be gone (CASCADE).
 	r := rs.(*realmStore)
 	var n int
-	if err := r.db().QueryRowContext(ctx, `SELECT COUNT(*) FROM adjustment`).Scan(&n); err != nil {
+	if err := r.rawDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM adjustment`).Scan(&n); err != nil {
 		t.Fatalf("count adjustments: %v", err)
 	}
 	if n != 0 {
@@ -417,10 +417,7 @@ func TestAdjustmentListRowsAccountFilterPagesFilteredSet(t *testing.T) {
 func TestAppendAdjustmentSuppliedExternalIDUsedVerbatim(t *testing.T) {
 	ctx, rs := seedAdjustmentFixtures(t)
 
-	supplied, err := domain.ParseExternalID("AAECAwQFBgcICQoLDA0ODw")
-	if err != nil {
-		t.Fatalf("ParseExternalID: %v", err)
-	}
+	supplied := domain.ExternalID("caller-adjustment-1")
 	rec := sampleAdjustment()
 	rec.ExternalID = supplied
 
@@ -453,10 +450,7 @@ func TestAppendAdjustmentDuplicateSuppliedExternalIDConflicts(t *testing.T) {
 	ctx, rs := seedAdjustmentFixtures(t)
 	r := rs.(*realmStore)
 
-	supplied, err := domain.ParseExternalID("AAECAwQFBgcICQoLDA0ODw")
-	if err != nil {
-		t.Fatalf("ParseExternalID: %v", err)
-	}
+	supplied := domain.ExternalID("caller-adjustment-1")
 	first := sampleAdjustment()
 	first.ExternalID = supplied
 	if _, err := rs.AppendAdjustment(ctx, first); err != nil {
@@ -465,7 +459,7 @@ func TestAppendAdjustmentDuplicateSuppliedExternalIDConflicts(t *testing.T) {
 
 	second := sampleAdjustment()
 	second.ExternalID = supplied
-	_, err = rs.AppendAdjustment(ctx, second)
+	_, err := rs.AppendAdjustment(ctx, second)
 	if !errors.Is(err, domain.ErrAlreadyExists) {
 		t.Fatalf("AppendAdjustment(dup id) = %v, want ErrAlreadyExists", err)
 	}
@@ -475,7 +469,7 @@ func TestAppendAdjustmentDuplicateSuppliedExternalIDConflicts(t *testing.T) {
 	}
 
 	var n int
-	if err := r.db().QueryRowContext(
+	if err := r.rawDB().QueryRowContext(
 		ctx, `SELECT COUNT(*) FROM adjustment`,
 	).Scan(&n); err != nil {
 		t.Fatalf("count adjustments: %v", err)

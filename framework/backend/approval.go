@@ -21,12 +21,12 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"time"
 
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/node"
 	fwsigning "go.openpit.dev/officer/framework/signing"
 	"go.openpit.dev/officer/framework/store"
@@ -132,6 +132,19 @@ func (s *Service) ActivePublicKey(format string) (string, error) {
 		return "", err
 	}
 	return signer.ActivePublicKey(format)
+}
+
+// PublicKeyByID exports the public key bound to keyID in the given format
+// (pem-pkcs8 | openssh | raw-base64). It resolves the key by id rather than by
+// the active flag, so a reproduction of an order signed under a since-rotated
+// key returns the exact public key that signed it. An unknown id reports
+// domain.ErrNotFound.
+func (s *Service) PublicKeyByID(ctx context.Context, keyID, format string) (string, error) {
+	signer, err := s.signerOrErr()
+	if err != nil {
+		return "", err
+	}
+	return signer.PublicKeyByID(ctx, keyID, format)
 }
 
 // GetNoESign reports whether global eSign-off is enabled. With eSign-off on,
@@ -246,6 +259,20 @@ func (s *Service) SubmitOrderToken(
 			approvalID = immediateApprovalID
 		}
 	}
+
+	// Attest the recorded order's pre-trade verdict (accept or reject) onto its
+	// verdict event, reusing the same attestSubmitVerdict path SubmitOrder uses.
+	// The attestation is stamped write-once onto the pre_trade_accepted /
+	// pre_trade_rejected event and surfaced by GetOrder as OrderEvent.Attestation,
+	// so a panel order created through this token flow carries a signed verdict
+	// event - the same attestation the like-the-API POST /orders path produces.
+	// It is independent of the HTTP token below (the hold token the caller
+	// confirms with) and best-effort: a build or persist failure records
+	// attestation_failed and never fails the submit. This also stamps the
+	// approval_issued audit for both verdicts, so no separate token-issue audit is
+	// recorded below.
+	s.attestSubmitVerdict(ctx, n, key, order)
+
 	if !accepted {
 		return ApprovalToken{}, rejectError(rejects)
 	}
@@ -283,10 +310,6 @@ func (s *Service) SubmitOrderToken(
 		signed = true
 	}
 
-	_ = s.auditApproval(ctx, n, key, domain.AuditActionApprovalIssued,
-		fmt.Sprintf("issue approval %s order %s mode=%s",
-			approvalID, order.ExternalID.String(), mode))
-
 	return ApprovalToken{
 		ExpiresAt:       expiresAt,
 		Token:           token,
@@ -299,143 +322,122 @@ func (s *Service) SubmitOrderToken(
 // ConfirmExecution verifies token against the stored order, then commits the
 // held reservation it authorises. Verification recomputes the canonical bytes,
 // checks the signature when signed, re-binds the bound params to the stored
-// order, and enforces expiry. A second confirm of an already-committed order is
-// an idempotent success; a confirm of a cancelled or expired reservation is a
-// conflict. The confirmation is audited as approval_confirmed.
+// order, and enforces expiry. The conflict/terminal-order guard is not enforced
+// here: it lives in node.ConfirmHeld, which re-reads the authoritative status
+// inside the account lane (serialized with fills and reports). A second confirm
+// of an already-committed order is an idempotent success there; a confirm of a
+// cancelled or expired reservation is a conflict. The confirmation is audited as
+// approval_confirmed.
 func (s *Service) ConfirmExecution(
 	ctx context.Context, orderID string, token string, force bool,
-) (domain.Order, error) {
+) (domain.Order, Attestation, error) {
 	signer, err := s.signerOrErr()
 	if err != nil {
-		return domain.Order{}, err
+		return domain.Order{}, Attestation{}, err
 	}
 	order, err := domain.ParseExternalID(orderID)
 	if err != nil {
-		return domain.Order{}, err
+		return domain.Order{}, Attestation{}, err
 	}
 	n, err := s.router.Route(keyFor(""))
 	if err != nil {
-		return domain.Order{}, fmt.Errorf("backend: route confirm: %w", err)
+		return domain.Order{}, Attestation{}, fmt.Errorf("backend: route confirm: %w", err)
 	}
 
 	stored, err := n.GetOrder(ctx, order)
 	if err != nil {
-		return domain.Order{}, err
-	}
-	switch stored.Order.Status {
-	case domain.OrderStatusCommitted:
-		return stored.Order, nil
-	case domain.OrderStatusAccepted:
-	default:
-		if domain.OrderStatusTerminal(stored.Order.Status) {
-			if !force {
-				return domain.Order{}, fmt.Errorf(
-					"backend: order %s is in terminal status %q: %w",
-					orderID, stored.Order.Status, domain.ErrTerminalOrder)
-			}
-			break
-		}
-		return domain.Order{}, fmt.Errorf(
-			"backend: order %s status %q cannot confirm held approval: %w",
-			orderID, stored.Order.Status, domain.ErrConflict)
+		return domain.Order{}, Attestation{}, err
 	}
 	result, err := signer.Verify(ctx, token, verifyParamsFor(stored.Order))
 	if err != nil {
-		return domain.Order{}, err
+		return domain.Order{}, Attestation{}, err
 	}
 	if result.Payload.Mode != SubmitModeHold {
-		return domain.Order{}, fmt.Errorf(
+		return domain.Order{}, Attestation{}, fmt.Errorf(
 			"backend: approval %s mode %q cannot be confirmed: %w",
 			result.Payload.ApprovalID, result.Payload.Mode, domain.ErrConflict)
 	}
 
 	caller := auth.CallerFromContext(ctx)
-	confirmed, err := n.ConfirmHeld(
+	confirmed, forcedBypass, err := n.ConfirmHeld(
 		ctx, order, result.Payload.ApprovalID, caller, force)
 	if err != nil {
-		// The engine guards the double-commit panic by returning a conflict on an
-		// already-resolved reservation. A confirm of an already-committed order is
-		// an idempotent success; any other terminal state is a real conflict.
-		if errors.Is(err, domain.ErrConflict) {
-			if stored.Order.Status == domain.OrderStatusCommitted {
-				return stored.Order, nil
-			}
-		}
-		return domain.Order{}, err
+		return domain.Order{}, Attestation{}, err
 	}
+	key := keyFor(confirmed.Account)
 	detail := fmt.Sprintf(
 		"confirm approval %s order %s", result.Payload.ApprovalID, orderID)
-	if force && domain.OrderStatusTerminal(stored.Order.Status) {
+	// forced=true is audited only when force actually bypassed a terminal-order
+	// guard, matching the execution-report path; a force flag that changed nothing
+	// is not recorded as a forced bypass.
+	if forcedBypass {
 		detail += " forced=true"
 	}
-	_ = s.auditApproval(
-		ctx, n, keyFor(confirmed.Account), domain.AuditActionApprovalConfirmed, detail)
-	return confirmed, nil
+	_ = s.auditApproval(ctx, n, key, domain.AuditActionApprovalConfirmed, detail)
+	att := s.attestResolution(
+		ctx, n, key, confirmed, domain.AttestationRequestConfirm,
+		"committed", "", result.Payload.ApprovalID)
+	return confirmed, att, nil
 }
 
 // CancelOrder verifies token against the stored order, then rolls back the held
-// reservation it authorises, returning the held amount to available. Rollback is
-// idempotent: cancelling an already-resolved reservation is a no-op on the
-// engine side and still records the cancelled lifecycle. The cancellation is
-// audited as approval_cancelled, with reason.
+// reservation it authorises, returning the held amount to available. The
+// conflict/terminal-order guard is not enforced here: it lives in
+// node.CancelHeld, which re-reads the authoritative status inside the account
+// lane (serialized with fills and reports). Rollback is idempotent: cancelling an
+// already-resolved reservation is a no-op on the engine side and still records
+// the cancelled lifecycle. The cancellation is audited as approval_cancelled,
+// with reason.
 func (s *Service) CancelOrder(
 	ctx context.Context, orderID string, token, reason string, force bool,
-) (domain.Order, error) {
+) (domain.Order, Attestation, error) {
 	signer, err := s.signerOrErr()
 	if err != nil {
-		return domain.Order{}, err
+		return domain.Order{}, Attestation{}, err
 	}
 	order, err := domain.ParseExternalID(orderID)
 	if err != nil {
-		return domain.Order{}, err
+		return domain.Order{}, Attestation{}, err
 	}
 	n, err := s.router.Route(keyFor(""))
 	if err != nil {
-		return domain.Order{}, fmt.Errorf("backend: route cancel: %w", err)
+		return domain.Order{}, Attestation{}, fmt.Errorf("backend: route cancel: %w", err)
 	}
 
 	stored, err := n.GetOrder(ctx, order)
 	if err != nil {
-		return domain.Order{}, err
-	}
-	if stored.Order.Status != domain.OrderStatusAccepted {
-		if domain.OrderStatusTerminal(stored.Order.Status) {
-			if !force {
-				return domain.Order{}, fmt.Errorf(
-					"backend: order %s is in terminal status %q: %w",
-					orderID, stored.Order.Status, domain.ErrTerminalOrder)
-			}
-		} else {
-			return domain.Order{}, fmt.Errorf(
-				"backend: order %s status %q cannot cancel held approval: %w",
-				orderID, stored.Order.Status, domain.ErrConflict)
-		}
+		return domain.Order{}, Attestation{}, err
 	}
 	result, err := signer.Verify(ctx, token, verifyParamsFor(stored.Order))
 	if err != nil {
-		return domain.Order{}, err
+		return domain.Order{}, Attestation{}, err
 	}
 	if result.Payload.Mode != SubmitModeHold {
-		return domain.Order{}, fmt.Errorf(
+		return domain.Order{}, Attestation{}, fmt.Errorf(
 			"backend: approval %s mode %q cannot be cancelled: %w",
 			result.Payload.ApprovalID, result.Payload.Mode, domain.ErrConflict)
 	}
 
 	caller := auth.CallerFromContext(ctx)
-	cancelled, err := n.CancelHeld(
+	cancelled, forcedBypass, err := n.CancelHeld(
 		ctx, order, result.Payload.ApprovalID, caller, force)
 	if err != nil {
-		return domain.Order{}, err
+		return domain.Order{}, Attestation{}, err
 	}
+	key := keyFor(cancelled.Account)
 	detail := fmt.Sprintf(
 		"cancel approval %s order %s reason=%s",
 		result.Payload.ApprovalID, orderID, reason)
-	if force && domain.OrderStatusTerminal(stored.Order.Status) {
+	// forced=true is audited only when force actually bypassed a terminal-order
+	// guard, matching the execution-report path.
+	if forcedBypass {
 		detail += " forced=true"
 	}
-	_ = s.auditApproval(
-		ctx, n, keyFor(cancelled.Account), domain.AuditActionApprovalCancelled, detail)
-	return cancelled, nil
+	_ = s.auditApproval(ctx, n, key, domain.AuditActionApprovalCancelled, detail)
+	att := s.attestResolution(
+		ctx, n, key, cancelled, domain.AttestationRequestCancel,
+		"rolled_back", reason, result.Payload.ApprovalID)
+	return cancelled, att, nil
 }
 
 // defaultTokenTTL is how long an issued approval token stays valid. For a hold
@@ -575,6 +577,146 @@ func buildRejectApprovalPayload(
 	}
 }
 
+// baseAttestationPayload assembles the request-neutral core of an attestation
+// payload: the bound order params, lifecycle timestamps, and a fresh
+// approvalId/nonce. Callers stamp the verdict/result and request-specific fields.
+// RequestType and EventExternalID are set later by attestEvent. It is the shared
+// core the report/confirm/cancel builders extend, mirroring buildApprovalPayload.
+func baseAttestationPayload(
+	order domain.Order, mode string, issuedAt, expiresAt time.Time,
+	approvalID, nonce string,
+) domain.ApprovalPayload {
+	orderType := "market"
+	if order.Price != "" {
+		orderType = "limit"
+	}
+	return domain.ApprovalPayload{
+		Version:         approvalPayloadVersion,
+		ApprovalID:      approvalID,
+		ReservationID:   approvalID,
+		Mode:            mode,
+		OrderExternalID: orderExternalID(order),
+		Instrument:      order.BaseAsset + "/" + order.QuoteAsset,
+		Side:            string(order.Side),
+		Quantity:        order.AmountValue,
+		AmountKind:      string(order.AmountKind),
+		OrderType:       orderType,
+		LimitPrice:      order.Price,
+		PriceCurrency:   order.QuoteAsset,
+		AccountID:       string(order.Account),
+		IssuedAt:        issuedAt.Format(time.RFC3339Nano),
+		ExpiresAt:       expiresAt.Format(time.RFC3339Nano),
+		Nonce:           nonce,
+		Principal:       order.Principal,
+	}
+}
+
+// buildExecutionReportPayload assembles the attestation payload for an execution
+// report: the bound order params plus the engine persistence section (settled fill,
+// leaves, target status, and any account block the engine recorded). Verdict is
+// "accept" (the report was applied); a report that produced an account block
+// carries the first block onto the reject fields too, mirroring the fill event.
+func (s *Service) buildExecutionReportPayload(
+	order domain.Order,
+	persistence engine.ExecutionReportPersistence,
+) (domain.ApprovalPayload, error) {
+	approvalID, err := newNonce()
+	if err != nil {
+		return domain.ApprovalPayload{}, err
+	}
+	nonce, err := newNonce()
+	if err != nil {
+		return domain.ApprovalPayload{}, err
+	}
+	issuedAt := time.Now().UTC()
+	expiresAt := issuedAt.Add(defaultTokenTTL)
+
+	payload := baseAttestationPayload(
+		order, SubmitModeImmediate, issuedAt, expiresAt, approvalID, nonce)
+	payload.Verdict = "accept"
+	payload.PolicySummary = "execution report applied"
+	fillQuantity := ""
+	fillPrice := ""
+	fillLockPrice := ""
+	if persistence.Trade != nil {
+		fillQuantity = persistence.Trade.Quantity
+		fillPrice = persistence.Trade.Price
+		fillLockPrice = persistence.Trade.LockPrice
+	}
+	payload.Result = &domain.AttestationResult{
+		Outcome:        "applied",
+		FillQuantity:   fillQuantity,
+		FillPrice:      fillPrice,
+		FillLockPrice:  fillLockPrice,
+		LeavesQuantity: persistence.Leaves,
+		OrderStatus:    string(persistence.OrderStatus),
+		Blocks:         attestationBlocks(persistence.Blocks),
+	}
+	if len(persistence.Blocks) > 0 {
+		b := persistence.Blocks[0]
+		payload.RejectCode = b.Code
+		payload.RejectScope = "account"
+		payload.RejectReason = b.Reason
+	}
+	return payload, nil
+}
+
+// buildResolutionPayload assembles the attestation payload for a held-reservation
+// resolution (confirm commit or cancel rollback): the bound order params plus the
+// engine result section carrying the coarse outcome, the resulting status, and
+// the reservation approval id. reason, when present, is bound onto RejectReason.
+func (s *Service) buildResolutionPayload(
+	order domain.Order,
+	requestType domain.AttestationRequestType,
+	outcome, reason, approvalRef string,
+) (domain.ApprovalPayload, error) {
+	approvalID, err := newNonce()
+	if err != nil {
+		return domain.ApprovalPayload{}, err
+	}
+	nonce, err := newNonce()
+	if err != nil {
+		return domain.ApprovalPayload{}, err
+	}
+	issuedAt := time.Now().UTC()
+	expiresAt := issuedAt.Add(defaultTokenTTL)
+
+	payload := baseAttestationPayload(
+		order, SubmitModeHold, issuedAt, expiresAt, approvalID, nonce)
+	payload.Verdict = "accept"
+	payload.ReservationID = approvalRef
+	summary := "reservation committed"
+	if requestType == domain.AttestationRequestCancel {
+		summary = "reservation rolled back"
+	}
+	payload.PolicySummary = summary
+	payload.Result = &domain.AttestationResult{
+		Outcome:     outcome,
+		OrderStatus: string(order.Status),
+		Blocks:      []domain.AttestationBlock{},
+	}
+	if reason != "" {
+		payload.RejectReason = reason
+	}
+	return payload, nil
+}
+
+// attestationBlocks maps engine execution blocks onto the signed-payload block
+// shape. It returns a non-nil (possibly empty) slice so the canonical bytes stay
+// deterministic (the Result.Blocks field is always present when Result is).
+func attestationBlocks(blocks []domain.ExecutionAccountBlock) []domain.AttestationBlock {
+	out := make([]domain.AttestationBlock, 0, len(blocks))
+	for _, b := range blocks {
+		out = append(out, domain.AttestationBlock{
+			Account: string(b.Account),
+			Code:    b.Code,
+			Reason:  b.Reason,
+			Details: b.Details,
+		})
+	}
+	return out
+}
+
 // verifyParamsFor builds the re-bind expectation from the stored order. The
 // connector contract compares each bound param to the order it will execute; the
 // backend re-binds against the persisted order the token authorises.
@@ -653,4 +795,152 @@ func (s *Service) auditApproval(
 		return fmt.Errorf("backend: audit %s: %w", action, err)
 	}
 	return nil
+}
+
+// --- Event attestation (shared across submit / report / confirm / cancel) ---
+
+// Attestation is the backend-facing result of stamping a signed attestation onto
+// an order-history event. Surface layers return Token to the caller so a robot
+// receives its proof. Token is the base64url-encoded signed (or eSign-off)
+// envelope; KeyID is the signing key id (empty under eSign-off); Signed reports
+// whether the envelope carries a signature. It is the zero value (Token empty)
+// when attestation was skipped or failed best-effort.
+type Attestation struct {
+	// Token is the base64url-encoded attestation envelope; empty when none.
+	Token string
+	// KeyID is the signing key id; empty under eSign-off or when none.
+	KeyID string
+	// EventExternalID is the opaque handle of the attested order-history event.
+	EventExternalID string
+	// Signed reports whether the envelope carries an Ed25519 signature.
+	Signed bool
+}
+
+// attestEvent signs payload, binds it to the newest event of eventType on the
+// order, and stamps the attestation onto that event write-once. It re-reads the
+// order to resolve the event id and its request-type, signs (or SignNone under
+// eSign-off), persists via the node, and audits approval_issued. It returns the
+// resulting Attestation. It errors only on signing/persist failures; callers on
+// the best-effort paths swallow the error and record attestation_failed.
+func (s *Service) attestEvent(
+	ctx context.Context,
+	n node.Node,
+	key node.Key,
+	order domain.ExternalID,
+	eventType domain.OrderEventType,
+	requestType domain.AttestationRequestType,
+	payload domain.ApprovalPayload,
+) (Attestation, error) {
+	signer, err := s.signerOrErr()
+	if err != nil {
+		return Attestation{}, err
+	}
+	event, err := s.latestEventOfType(ctx, n, order, eventType)
+	if err != nil {
+		return Attestation{}, err
+	}
+	payload.RequestType = string(requestType)
+	payload.EventExternalID = event.ExternalID.String()
+
+	off, err := signer.NoESign(ctx)
+	if err != nil {
+		return Attestation{}, err
+	}
+	var token, keyID string
+	signed := false
+	if off {
+		payload.Alg = fwsigning.AlgNone
+		token, err = signer.SignNone(payload)
+		if err != nil {
+			return Attestation{}, err
+		}
+	} else {
+		token, err = signer.Sign(payload)
+		if err != nil {
+			return Attestation{}, err
+		}
+		keys, kerr := signer.ListKeys(ctx)
+		if kerr != nil {
+			return Attestation{}, kerr
+		}
+		keyID = activeKeyID(keys)
+		payload.Alg = fwsigning.AlgEd25519
+		signed = true
+	}
+	att := domain.EventAttestation{
+		Token:       token,
+		KeyID:       keyID,
+		Alg:         payload.Alg,
+		RequestType: requestType,
+		Mode:        payload.Mode,
+		IssuedAt:    payload.IssuedAt,
+		ExpiresAt:   payload.ExpiresAt,
+	}
+	if err := n.PersistEventAttestation(ctx, key, event.ExternalID, att); err != nil {
+		return Attestation{}, err
+	}
+	_ = s.auditApproval(ctx, n, key, domain.AuditActionApprovalIssued,
+		fmt.Sprintf("issue attestation order %s event %s request=%s",
+			order.String(), event.ExternalID.String(), requestType))
+	return Attestation{
+		Token:           token,
+		KeyID:           keyID,
+		EventExternalID: event.ExternalID.String(),
+		Signed:          signed,
+	}, nil
+}
+
+// latestEventOfType returns the newest event of eventType for the order. Events
+// come back oldest-first; the last match is the one the just-completed request
+// produced. A missing event is a real error: the request-produced event must
+// exist for a 1:1 attestation.
+func (s *Service) latestEventOfType(
+	ctx context.Context, n node.Node, order domain.ExternalID, eventType domain.OrderEventType,
+) (domain.OrderEvent, error) {
+	detail, err := n.GetOrder(ctx, order)
+	if err != nil {
+		return domain.OrderEvent{}, err
+	}
+	var found *domain.OrderEvent
+	for i := range detail.Events {
+		if detail.Events[i].Type == eventType {
+			found = &detail.Events[i]
+		}
+	}
+	if found == nil {
+		return domain.OrderEvent{}, fmt.Errorf(
+			"backend: no %s event on order %s to attest: %w",
+			eventType, order.String(), domain.ErrNotFound)
+	}
+	return *found, nil
+}
+
+// attestResolution signs an attestation over a held-reservation resolution
+// (confirm commit or cancel rollback) and stamps it onto the resolution's
+// terminal event (reservation_committed for confirm, cancelled for cancel). It
+// is best-effort: on failure it records attestation_failed and returns a zero
+// Attestation.
+func (s *Service) attestResolution(
+	ctx context.Context,
+	n node.Node,
+	key node.Key,
+	order domain.Order,
+	requestType domain.AttestationRequestType,
+	outcome, reason, approvalRef string,
+) Attestation {
+	payload, err := s.buildResolutionPayload(order, requestType, outcome, reason, approvalRef)
+	if err != nil {
+		s.reportAttestationFailure(ctx, n, key, order, requestType, err)
+		return Attestation{}
+	}
+	eventType := domain.OrderEventReservationCommitted
+	if requestType == domain.AttestationRequestCancel {
+		eventType = domain.OrderEventCancelled
+	}
+	att, err := s.attestEvent(ctx, n, key, order.ExternalID, eventType, requestType, payload)
+	if err != nil {
+		s.reportAttestationFailure(ctx, n, key, order, requestType, err)
+		return Attestation{}
+	}
+	return att
 }

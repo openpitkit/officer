@@ -32,7 +32,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
-import type { Limit, MarketDataInstance } from "@/api/types";
+import type { Asset, AssetClass, Limit, MarketDataInstance } from "@/api/types";
 import { LanguageSwitch } from "@/components/LanguageSwitch";
 import { ThemeSwitch } from "@/components/ThemeSwitch";
 import { Badge } from "@/components/ui/badge";
@@ -53,6 +53,10 @@ const BINANCE_MARKET_DATA_LABEL = "Binance spot";
 const STATIC_MARKET_DATA_LABEL = "FX (static)";
 const BINANCE_PROVIDER = "binance";
 const MANUAL_PROVIDER = "byo";
+// Asset class the server stamps on an asset it auto-created while processing an
+// order for an unknown symbol. Preset reconciliation may overwrite this
+// placeholder class, so it must match the server's constant byte-for-byte.
+const AUTO_CREATED_ASSET_CLASS = "auto-created";
 
 type ActionId = "account" | "policies" | "marketData" | "binance";
 
@@ -66,6 +70,18 @@ interface PresetInstrument {
   externalSymbol: string;
   manualPrice: string;
   quoteAsset: string;
+}
+
+interface PresetAsset {
+  assetClass: string;
+  code: string;
+  title: string;
+}
+
+interface PresetAssetClass {
+  code: string;
+  notes: string;
+  title: string;
 }
 
 interface StatusMessage {
@@ -188,6 +204,38 @@ const BINANCE_MARKET_DATA_PRESET: PresetInstrument[] = [
   },
 ];
 
+const WELCOME_PRESET_ASSET_CLASSES: PresetAssetClass[] = [
+  {
+    code: "currency",
+    title: "Currencies",
+    notes:
+      "Government-issued cash currencies used for settlement, cash balances, and FX conversion.",
+  },
+  {
+    code: "stablecoin",
+    title: "Stablecoins",
+    notes:
+      "Tokenized cash-equivalent settlement assets used by crypto venues.",
+  },
+  {
+    code: "crypto",
+    title: "Crypto assets",
+    notes:
+      "Native crypto assets used for demo balances and crypto venue risk checks.",
+  },
+];
+
+const WELCOME_PRESET_ASSETS: PresetAsset[] = [
+  { code: "USD", title: "US Dollar", assetClass: "currency" },
+  { code: "EUR", title: "Euro", assetClass: "currency" },
+  { code: "BTC", title: "Bitcoin", assetClass: "crypto" },
+  { code: "ETH", title: "Ethereum", assetClass: "crypto" },
+  { code: "USDT", title: "Tether USD", assetClass: "stablecoin" },
+  { code: "USDC", title: "USD Coin", assetClass: "stablecoin" },
+  { code: "EURI", title: "Eurite", assetClass: "stablecoin" },
+  { code: "AEUR", title: "Anchored Coins AEUR", assetClass: "stablecoin" },
+];
+
 function apiErrorMessage(error: unknown): string {
   if (error instanceof ApiError) {
     return error.message;
@@ -236,6 +284,25 @@ function findMarketDataInstance(
   return instances.find(
     (instance) => instance.provider === provider && instance.label === label,
   );
+}
+
+function shouldReconcilePresetAsset(asset: Asset, preset: PresetAsset): boolean {
+  return (
+    asset.assetClass === "" ||
+    asset.assetClass === AUTO_CREATED_ASSET_CLASS ||
+    asset.assetClass === preset.assetClass
+  );
+}
+
+function shouldUpdatePresetAssetClass(
+  assetClass: AssetClass,
+  preset: PresetAssetClass,
+): boolean {
+  return assetClass.title !== preset.title || assetClass.notes !== preset.notes;
+}
+
+function shouldUpdatePresetAsset(asset: Asset, preset: PresetAsset): boolean {
+  return asset.title !== preset.title || asset.assetClass !== preset.assetClass;
 }
 
 function Section({
@@ -290,16 +357,22 @@ function ActionButton({
 export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
   const { t } = useTranslation();
   const {
+    createAsset,
+    createAssetClass,
     createAccount,
     createAdjustment,
     createMarketDataInstance,
     fetchAccounts,
+    fetchAssetClasses,
+    fetchAssets,
     fetchMarketData,
     putLimit,
     restartMarketData,
     setAccountNotes,
     setMarketDataInstanceEnabled,
     setWelcomeSeen,
+    updateAsset,
+    updateAssetClass,
     upsertMarketDataInstrument,
   } = useOfficerApi();
   const [busy, setBusy] = useState<ActionId | null>(null);
@@ -383,6 +456,9 @@ export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
       }
       await setAccountNotes(DEMO_ACCOUNT_ID, t("welcome.presets.accountNote"));
       applied += 1;
+      await ensureWelcomePresetAssets(() => {
+        applied += 1;
+      });
       for (const position of DEMO_POSITIONS) {
         await createAdjustment(DEMO_ACCOUNT_ID, {
           asset: position.asset,
@@ -410,6 +486,58 @@ export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
     }
   };
 
+  // Reconcile the preset asset classes and assets, reporting each applied step
+  // through `onApplied` as it lands. The callback (not a return value) is what
+  // preserves partial progress: a mid-loop failure still leaves the caller's
+  // running count incremented for every step that already succeeded, so
+  // PresetApplyError does not undercount.
+  //
+  // The {limit:1000} reads below are an implicit "fetch all existing" so the
+  // presets can be matched against the current catalog; a deployment with more
+  // than 1000 asset classes or assets would truncate the list and could cause a
+  // preset to be recreated as a duplicate. Acceptable for the first-run welcome
+  // flow, which targets fresh installs.
+  const ensureWelcomePresetAssets = async (onApplied: () => void) => {
+    const existingClasses = await fetchAssetClasses({ limit: 1000 });
+    for (const preset of WELCOME_PRESET_ASSET_CLASSES) {
+      const existing = existingClasses.find(
+        (assetClass) => assetClass.code === preset.code,
+      );
+      if (existing === undefined) {
+        await createAssetClass(preset.code, preset.title, preset.notes);
+        onApplied();
+      } else if (shouldUpdatePresetAssetClass(existing, preset)) {
+        await updateAssetClass(
+          existing.code,
+          preset.code,
+          preset.title,
+          preset.notes,
+        );
+        onApplied();
+      }
+    }
+
+    const existingAssets = await fetchAssets({ limit: 1000 });
+    for (const preset of WELCOME_PRESET_ASSETS) {
+      const existing = existingAssets.find((asset) => asset.code === preset.code);
+      if (existing === undefined) {
+        await createAsset(preset.code, preset.title, preset.assetClass);
+        onApplied();
+      } else if (
+        shouldReconcilePresetAsset(existing, preset) &&
+        shouldUpdatePresetAsset(existing, preset)
+      ) {
+        await updateAsset(
+          existing.code,
+          preset.code,
+          preset.title,
+          preset.assetClass,
+        );
+        onApplied();
+      }
+    }
+  };
+
   const applyMarketDataPreset = async () => {
     let applied = 0;
     try {
@@ -431,6 +559,9 @@ export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
         await setMarketDataInstanceEnabled(instance.externalId, true);
         applied += 1;
       }
+      await ensureWelcomePresetAssets(() => {
+        applied += 1;
+      });
       for (const instrument of STATIC_MARKET_DATA_PRESET) {
         await upsertMarketDataInstrument(instance.externalId, {
           ...instrument,
@@ -466,6 +597,9 @@ export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
         await setMarketDataInstanceEnabled(instance.externalId, true);
         applied += 1;
       }
+      await ensureWelcomePresetAssets(() => {
+        applied += 1;
+      });
       for (const instrument of BINANCE_MARKET_DATA_PRESET) {
         await upsertMarketDataInstrument(instance.externalId, {
           ...instrument,

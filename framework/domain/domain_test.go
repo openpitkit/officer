@@ -247,9 +247,9 @@ func TestValidateGroupID(t *testing.T) {
 
 // --- ExternalID codec ---
 
-// TestExternalID_RoundTrip checks that every distinct 16-byte value encodes to
-// the 22-char wire form and decodes back to the same bytes, and that the encoded
-// form has the fixed width.
+// TestGeneratedExternalIDFromBytes checks that every distinct 16-byte random
+// value encodes to the generated 22-char wire form and parses back as that
+// opaque string.
 func TestExternalID_RoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -261,9 +261,9 @@ func TestExternalID_RoundTrip(t *testing.T) {
 			0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb},
 	}
 	for _, raw := range cases {
-		id, err := domain.ExternalIDFromBytes(raw)
+		id, err := domain.GeneratedExternalIDFromBytes(raw)
 		if err != nil {
-			t.Fatalf("ExternalIDFromBytes(%x): %v", raw, err)
+			t.Fatalf("GeneratedExternalIDFromBytes(%x): %v", raw, err)
 		}
 		s := id.String()
 		if len(s) != domain.ExternalIDStringLen {
@@ -274,67 +274,75 @@ func TestExternalID_RoundTrip(t *testing.T) {
 			t.Fatalf("ParseExternalID(%q): %v", s, err)
 		}
 		if back != id {
-			t.Fatalf("round-trip mismatch: %x -> %q -> %x", raw, s, back.Bytes())
-		}
-		if !bytes.Equal(back.Bytes(), raw) {
-			t.Fatalf("Bytes() = %x, want %x", back.Bytes(), raw)
+			t.Fatalf("round-trip mismatch: %x -> %q -> %q", raw, s, back.String())
 		}
 	}
 }
 
 // TestExternalID_Zero checks the unset zero value reports IsZero and that the
-// zero value is rejected by the wire-form validator only via its encoding
-// (a zero value still encodes to a well-formed 22-char string).
+// generated non-zero value does not.
 func TestExternalID_Zero(t *testing.T) {
 	t.Parallel()
 	var zero domain.ExternalID
 	if !zero.IsZero() {
 		t.Fatal("zero value must report IsZero")
 	}
-	nonzero, err := domain.ExternalIDFromBytes(
+	nonzero, err := domain.GeneratedExternalIDFromBytes(
 		[]byte{1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})
 	if err != nil {
-		t.Fatalf("ExternalIDFromBytes: %v", err)
+		t.Fatalf("GeneratedExternalIDFromBytes: %v", err)
 	}
 	if nonzero.IsZero() {
 		t.Fatal("non-zero value must not report IsZero")
 	}
 }
 
-func TestExternalIDFromBytes_WrongLength(t *testing.T) {
+func TestGeneratedExternalIDFromBytes_WrongLength(t *testing.T) {
 	t.Parallel()
 	for _, n := range []int{0, 1, 15, 17, 32} {
-		_, err := domain.ExternalIDFromBytes(make([]byte, n))
+		_, err := domain.GeneratedExternalIDFromBytes(make([]byte, n))
 		if !errors.Is(err, domain.ErrInvalid) {
 			t.Errorf("len %d: expected ErrInvalid, got %v", n, err)
 		}
 	}
 }
 
-func TestParseExternalID_Invalid(t *testing.T) {
+func TestExternalIDFromBytes_Empty(t *testing.T) {
 	t.Parallel()
-	bad := []struct {
-		name string
-		s    string
-	}{
-		{"empty", ""},
-		{"too short", "AAAA"},
-		{"too long", strings.Repeat("A", 23)},
-		{"padded", strings.Repeat("A", 21) + "="},
-		{"standard alphabet plus", strings.Repeat("A", 21) + "+"},
-		{"standard alphabet slash", strings.Repeat("A", 21) + "/"},
-		{"non-base64", strings.Repeat(" ", domain.ExternalIDStringLen)},
+	if _, err := domain.ExternalIDFromBytes(nil); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("ExternalIDFromBytes(nil): expected ErrInvalid, got %v", err)
 	}
-	for _, tc := range bad {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			if _, err := domain.ParseExternalID(tc.s); !errors.Is(err, domain.ErrInvalid) {
-				t.Fatalf("ParseExternalID(%q): expected ErrInvalid, got %v", tc.s, err)
-			}
-			if err := domain.ValidateExternalID(tc.s); !errors.Is(err, domain.ErrInvalid) {
-				t.Fatalf("ValidateExternalID(%q): expected ErrInvalid, got %v", tc.s, err)
-			}
-		})
+}
+
+func TestParseExternalID_AcceptsOpaqueCallerStrings(t *testing.T) {
+	t.Parallel()
+	for _, s := range []string{
+		"order-1",
+		"short",
+		strings.Repeat("A", 23),
+		"standard/alphabet+plus",
+		"contains spaces",
+	} {
+		id, err := domain.ParseExternalID(s)
+		if err != nil {
+			t.Fatalf("ParseExternalID(%q): %v", s, err)
+		}
+		if id.String() != s {
+			t.Fatalf("ParseExternalID(%q) = %q", s, id.String())
+		}
+		if err := domain.ValidateExternalID(s); err != nil {
+			t.Fatalf("ValidateExternalID(%q): %v", s, err)
+		}
+	}
+}
+
+func TestParseExternalID_Empty(t *testing.T) {
+	t.Parallel()
+	if _, err := domain.ParseExternalID(""); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("ParseExternalID(empty): expected ErrInvalid, got %v", err)
+	}
+	if err := domain.ValidateExternalID(""); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("ValidateExternalID(empty): expected ErrInvalid, got %v", err)
 	}
 }
 

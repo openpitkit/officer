@@ -193,16 +193,70 @@ type ImmediateResult struct {
 	Accepted bool
 }
 
+// ExecutionReportPersistence is the Officer write set produced after the engine
+// applies an execution report. Report-owned order, trade, and event fields are
+// copied from the original report and stored without inventing extra values;
+// engine-owned account effects are limited to Balances and Blocks.
+type ExecutionReportPersistence struct {
+	// Trade is the optional trade row to persist.
+	Trade *domain.Trade
+	// OrderStatus is the order status change the engine-facing layer accepted.
+	OrderStatus domain.OrderStatus
+	// Leaves is the remaining open quantity to persist; empty leaves it unchanged.
+	Leaves string
+	// Balances are the per-asset balance outcomes returned by the engine.
+	Balances []domain.BalanceSettlement
+	// Events are the order lifecycle events to append.
+	Events []domain.OrderEvent
+	// Blocks are account blocks returned by the engine.
+	Blocks []domain.ExecutionAccountBlock
+}
+
 // ExecutionReportResult is the outcome of one ApplyExecutionReport call: the
-// account blocks the engine recorded and any per-asset adjustment outcomes
-// policies produced.
+// account blocks the engine recorded, any per-asset adjustment outcomes policies
+// produced, and the explicit persistence write set the node must apply.
 type ExecutionReportResult struct {
+	// Persistence is the explicit write set returned by the engine-facing layer.
+	// Nil means the report produced no Officer-side writes.
+	Persistence *ExecutionReportPersistence
 	// Blocks are the account blocks the engine recorded for this report.
 	Blocks []domain.ExecutionAccountBlock
 	// Outcomes are the per-asset adjustment outcomes policies produced, each
 	// tagged with its asset (both the base and the quote leg of a spot fill
 	// settle).
 	Outcomes []BalanceOutcome
+}
+
+// AccountLane is the engine view captured for one account-synchronized lane
+// callback. Methods on this handle run directly on the already-routed engine
+// lane; callers must not call Engine.RunAccountSynchronized from inside them.
+type AccountLane interface {
+	BlockAccount(ctx context.Context, id domain.AccountID, reason string) error
+	UnblockAccount(ctx context.Context, id domain.AccountID) error
+	ApplyAccountAdjustmentBatch(
+		ctx context.Context, account domain.AccountID, reqs []domain.AdjustmentRequest,
+	) ([]AdjustmentResult, *AdjustmentBatchReject, error)
+	ApplyAccountAdjustment(
+		ctx context.Context, account domain.AccountID, req domain.AdjustmentRequest,
+	) (AdjustmentResult, error)
+	SubmitOrder(ctx context.Context, o domain.Order) (OrderResult, error)
+	ReserveHold(ctx context.Context, o domain.Order) (HoldResult, error)
+	CommitHeld(ctx context.Context, approvalID string) error
+	RollbackHeld(ctx context.Context, approvalID string) error
+	SubmitImmediate(ctx context.Context, o domain.Order) (ImmediateResult, error)
+	ApplyExecutionReport(
+		ctx context.Context, in domain.ExecutionReportInput,
+	) (ExecutionReportResult, error)
+	CheckOrder(ctx context.Context, probe domain.OrderProbe) (domain.CheckResult, error)
+}
+
+// GroupLane is the engine view captured for one group-synchronized lane
+// callback.
+type GroupLane interface {
+	BlockGroup(ctx context.Context, groupID, reason string) error
+	UnblockGroup(ctx context.Context, groupID string) error
+	RegisterGroup(ctx context.Context, accounts []domain.AccountID, groupID string) error
+	UnregisterGroup(ctx context.Context, accounts []domain.AccountID, groupID string) error
 }
 
 // BuildFunc builds an engine from a seed snapshot. The local node calls it at
@@ -244,72 +298,6 @@ type Engine interface {
 	// LimitSet slice matching policy is consumed.
 	ConfigurePolicy(ctx context.Context, policy string, limits LimitSet) error
 
-	// BlockAccount kill-switches the account in the engine, gating its pre-trade
-	// orders until it is unblocked. reason is recorded with the block.
-	BlockAccount(ctx context.Context, id domain.AccountID, reason string) error
-
-	// UnblockAccount lifts the engine block on the account. Unblocking an
-	// account that is not blocked is a no-op.
-	UnblockAccount(ctx context.Context, id domain.AccountID) error
-
-	// ApplyAccountAdjustmentBatch applies a batch of spot-funds adjustments for
-	// account on the live engine. The SDK batch is atomic for the account: on a
-	// batch reject no per-request outcomes are committed.
-	ApplyAccountAdjustmentBatch(
-		ctx context.Context, account domain.AccountID, reqs []domain.AdjustmentRequest,
-	) ([]AdjustmentResult, *AdjustmentBatchReject, error)
-
-	// ApplyAccountAdjustment applies one spot-funds adjustment for account on the
-	// live engine and returns its accept/reject outcome. It delegates to
-	// ApplyAccountAdjustmentBatch with a one-request batch.
-	ApplyAccountAdjustment(
-		ctx context.Context, account domain.AccountID, req domain.AdjustmentRequest,
-	) (AdjustmentResult, error)
-
-	// SubmitOrder runs the pre-trade pipeline for o on the live engine. On accept
-	// it serializes the reservation lock, commits the reservation, and returns
-	// Accepted with the serialized lock; on reject it returns the engine rejects.
-	// The native reservation never escapes the adapter.
-	SubmitOrder(ctx context.Context, o domain.Order) (OrderResult, error)
-
-	// ReserveHold runs the pre-trade pipeline for o on the live engine and, on
-	// accept, keeps the reservation held: the held amount stays reserved on
-	// engine storage until CommitHeld or RollbackHeld resolves it, or the TTL
-	// sweeper auto-rolls it back. It registers the held reservation under a fresh
-	// approval id and persists a reservation intent, then returns that id, the
-	// serialized lock, the settlement-leg price and estimate source, and the
-	// expiry. On reject it holds nothing and returns the engine rejects. A held
-	// reservation holds no engine/storage lock between calls, so a multi-minute
-	// TTL blocks nothing.
-	ReserveHold(ctx context.Context, o domain.Order) (HoldResult, error)
-
-	// CommitHeld commits the held reservation identified by approvalID, realizing
-	// its reservation permanently. It does the native commit and the in-memory
-	// single-resolve guard only; durable persistence (intent flip + order status +
-	// event) is the node's atomic ResolveOrderReservation. The Held->Resolving flip
-	// happens before the native commit, so a concurrent or repeated resolve cannot
-	// trigger the binding's double-commit panic: a second CommitHeld on an
-	// already-resolved id returns domain.ErrConflict. An unknown id returns
-	// domain.ErrNotFound.
-	CommitHeld(ctx context.Context, approvalID string) error
-
-	// RollbackHeld rolls back the held reservation identified by approvalID,
-	// returning the held amount to available. Like CommitHeld it does the native
-	// rollback and the in-memory guard only; the node persists the resolution
-	// atomically via ResolveOrderReservation. (The TTL sweeper, by contrast, owns
-	// its swept rollback end to end and persists through the engine's own store
-	// handle.) It is tolerant of an already-resolved id (idempotent no-op for a
-	// terminal entry). An unknown id returns domain.ErrNotFound.
-	RollbackHeld(ctx context.Context, approvalID string) error
-
-	// SubmitImmediate runs the pre-trade pipeline for o and, on accept, commits
-	// the reservation and settles a fill in the same call via a synthetic
-	// ApplyExecutionReport at the captured settlement lock price, so the held
-	// amount nets to zero. It returns the lock prices, settlement price, and
-	// estimate source; on reject it returns the engine rejects and settles
-	// nothing.
-	SubmitImmediate(ctx context.Context, o domain.Order) (ImmediateResult, error)
-
 	// SetReservationStore attaches the persistence layer the adapter uses to keep
 	// reservation intents durable across the hold lifecycle. It is called once at
 	// boot, before the first ReserveHold and before ReconcileOrphans. A nil store
@@ -322,36 +310,17 @@ type Engine interface {
 	// persisted intent. It returns the number found.
 	ReconcileOrphans(ctx context.Context) (int, error)
 
-	// ApplyExecutionReport settles a fill on the live engine and returns the
-	// account blocks the engine recorded plus any adjustment outcomes.
-	ApplyExecutionReport(
-		ctx context.Context, in domain.ExecutionReportInput,
-	) (ExecutionReportResult, error)
+	// RunAccountSynchronized runs fn on the engine's account-synchronized lane.
+	// Account-scoped node operations use this to keep Officer's own checks,
+	// engine calls, and persistence ordered with every engine call for account.
+	RunAccountSynchronized(
+		ctx context.Context, account domain.AccountID, fn func(AccountLane) error,
+	) error
 
-	// RegisterGroup atomically registers accounts into the group identified by
-	// groupID on the live engine. An account belongs to exactly one non-default
-	// group.
-	RegisterGroup(ctx context.Context, accounts []domain.AccountID, groupID string) error
-
-	// UnregisterGroup atomically removes accounts from the group identified by
-	// groupID on the live engine.
-	UnregisterGroup(ctx context.Context, accounts []domain.AccountID, groupID string) error
-
-	// BlockGroup kill-switches every account in groupID on the live engine,
-	// recording reason. Re-blocking refreshes the reason.
-	BlockGroup(ctx context.Context, groupID, reason string) error
-
-	// UnblockGroup lifts the engine block on groupID. Unblocking an unblocked
-	// group is a no-op.
-	UnblockGroup(ctx context.Context, groupID string) error
-
-	// CheckOrder runs the pre-trade pipeline for probe as a non-mutating
-	// dry-run on the live engine. It returns whether the order would pass plus
-	// the reasons: on pass the would-be reservation lock prices, on reject the
-	// engine rejects and the account block the engine would record. It commits
-	// nothing - no reservation is taken and no account state changes - so it is
-	// idempotent and safe to call repeatedly.
-	CheckOrder(ctx context.Context, probe domain.OrderProbe) (domain.CheckResult, error)
+	// RunGroupSynchronized runs fn on the engine's group-synchronized lane.
+	RunGroupSynchronized(
+		ctx context.Context, groupID string, fn func(GroupLane) error,
+	) error
 
 	// MarketDataSink returns the quote sink backed by the engine's market-data
 	// service. The connector manager drains normalized quotes into it; the sink

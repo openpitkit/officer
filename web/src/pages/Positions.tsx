@@ -22,6 +22,7 @@ import {
   Coins,
   Download,
   Plus,
+  RotateCcw,
   SlidersHorizontal,
   X,
 } from "lucide-react";
@@ -53,6 +54,7 @@ import {
 import { formatDate, formatTime } from "@/i18n/format";
 import type {
   Adjustment,
+  AdjustmentAmount,
   AdjustmentMode,
   Balance,
   BalanceListFilters,
@@ -292,7 +294,100 @@ function addDecimalStrings(left: string, right: string): string | null {
 }
 
 function sameStrings(left: string[], right: string[]): boolean {
-  return left.length === right.length && left.every((value, i) => value === right[i]);
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
+}
+
+function mergeCodeSuggestions(...groups: string[][]): string[] {
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  for (const group of groups) {
+    for (const value of group) {
+      if (!seen.has(value)) {
+        seen.add(value);
+        merged.push(value);
+      }
+    }
+  }
+  return merged;
+}
+
+function useAccountCodeSuggestions(query: string, enabled: boolean): string[] {
+  const { fetchAccounts } = useOfficerApi();
+  const debouncedQuery = useDebouncedValue(
+    query.trim(),
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!enabled || debouncedQuery === "") {
+      return;
+    }
+    const controller = new AbortController();
+    void fetchAccounts(
+      {
+        code: debouncedQuery,
+        codeMatch: "starts_with",
+        limit: 8,
+        sort: "code",
+      },
+      controller.signal,
+    )
+      .then((accounts) => {
+        const next = accounts.map((account) => account.code);
+        setSuggestions((prev) => (sameStrings(prev, next) ? prev : next));
+      })
+      .catch((err: unknown) => {
+        if (!controller.signal.aborted) {
+          console.error(err);
+          setSuggestions((prev) => (prev.length === 0 ? prev : []));
+        }
+      });
+    return () => controller.abort();
+  }, [debouncedQuery, enabled, fetchAccounts]);
+
+  return enabled && debouncedQuery !== "" ? suggestions : [];
+}
+
+function useAssetCodeSuggestions(query: string, enabled: boolean): string[] {
+  const { fetchAssets } = useOfficerApi();
+  const debouncedQuery = useDebouncedValue(
+    query.trim(),
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!enabled || debouncedQuery === "") {
+      return;
+    }
+    const controller = new AbortController();
+    void fetchAssets(
+      {
+        code: debouncedQuery,
+        codeMatch: "starts_with",
+        limit: 8,
+        sort: "code",
+      },
+      controller.signal,
+    )
+      .then((assets) => {
+        const next = assets.map((asset) => asset.code);
+        setSuggestions((prev) => (sameStrings(prev, next) ? prev : next));
+      })
+      .catch((err: unknown) => {
+        if (!controller.signal.aborted) {
+          console.error(err);
+          setSuggestions((prev) => (prev.length === 0 ? prev : []));
+        }
+      });
+    return () => controller.abort();
+  }, [debouncedQuery, enabled, fetchAssets]);
+
+  return enabled && debouncedQuery !== "" ? suggestions : [];
 }
 
 function isDecimal(value: string): boolean {
@@ -301,6 +396,17 @@ function isDecimal(value: string): boolean {
 
 function hasValue(value: string | undefined): boolean {
   return (value ?? "").trim() !== "";
+}
+
+function outcomeAmountText(
+  request: AdjustmentAmount | undefined,
+  delta: string,
+  result: string,
+): string {
+  if (request?.mode === "absolute") {
+    return result || "—";
+  }
+  return `Δ${delta} → ${result}`;
 }
 
 type BalanceRangeKey =
@@ -963,6 +1069,19 @@ function AdjustmentPanel({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<Adjustment | null>(null);
+  const localAccountSuggestions = useAccountCodeSuggestions(
+    account,
+    !lockIdentity,
+  );
+  const localAssetSuggestions = useAssetCodeSuggestions(asset, !lockIdentity);
+  const mergedAccountSuggestions = useMemo(
+    () => mergeCodeSuggestions(accountSuggestions, localAccountSuggestions),
+    [accountSuggestions, localAccountSuggestions],
+  );
+  const mergedAssetSuggestions = useMemo(
+    () => mergeCodeSuggestions(assetSuggestions, localAssetSuggestions),
+    [assetSuggestions, localAssetSuggestions],
+  );
 
   const trimAccount = account.trim();
   const trimAsset = asset.trim();
@@ -996,6 +1115,9 @@ function AdjustmentPanel({
   ].filter(boundsHaveValue).length;
   const hasChanges =
     hasAmountChange || hasValue(avgPrice) || hasBoundsChange;
+  const hasFilledField =
+    (!lockIdentity && (hasValue(account) || hasValue(asset))) ||
+    hasChanges;
   const canSubmit =
     trimAccount !== "" &&
     trimAsset !== "" &&
@@ -1004,6 +1126,22 @@ function AdjustmentPanel({
     avgPriceValid &&
     allBoundsValid &&
     !busy;
+
+  const resetAllFields = () => {
+    if (!lockIdentity) {
+      setAccount("");
+      setAsset("");
+    }
+    setAvailable(emptyAmountDraft());
+    setHeld(emptyAmountDraft());
+    setIncoming(emptyAmountDraft());
+    setAvgPrice("");
+    setBalanceBounds(emptyBoundsDraft());
+    setHeldBounds(emptyBoundsDraft());
+    setIncomingBounds(emptyBoundsDraft());
+    setError(null);
+    setOutcome(null);
+  };
 
   const submit = async () => {
     if (!trimAccount) {
@@ -1107,7 +1245,7 @@ function AdjustmentPanel({
             value={account}
             spellCheck={false}
             placeholder="acc-1"
-            suggestions={accountSuggestions}
+            suggestions={mergedAccountSuggestions}
             disabled={disabled || lockIdentity}
             onChange={setAccount}
             onClear={() => setAccount("")}
@@ -1123,7 +1261,7 @@ function AdjustmentPanel({
             value={asset}
             spellCheck={false}
             placeholder="AAPL"
-            suggestions={assetSuggestions}
+            suggestions={mergedAssetSuggestions}
             disabled={disabled || lockIdentity}
             onChange={setAsset}
             onClear={() => setAsset("")}
@@ -1243,9 +1381,20 @@ function AdjustmentPanel({
       {outcome && <AdjustOutcomeView adjustment={outcome} />}
       {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
 
-      <div className="flex justify-end gap-2 border-t border-border pt-3">
+      <div className="flex flex-wrap justify-end gap-2 border-t border-border pt-3">
         <Button variant="outline" size="sm" onClick={onClose} disabled={busy}>
-          {outcome ? t("dialog.footer.close") : t("actions.cancel", { ns: "common" })}
+          {outcome
+            ? t("dialog.footer.close")
+            : t("actions.cancel", { ns: "common" })}
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={resetAllFields}
+          disabled={busy || !hasFilledField}
+        >
+          <RotateCcw className="h-3.5 w-3.5" />
+          {t("panel.resetAll")}
         </Button>
         <Button size="sm" onClick={() => void submit()} disabled={!canSubmit}>
           {busy ? t("panel.saving") : t("panel.submit")}
@@ -1375,7 +1524,6 @@ function BalanceDraftRow({
   defaultAccount,
   defaultAsset,
   expanded,
-  requestId,
   accountSuggestions,
   assetSuggestions,
   onToggle,
@@ -1385,7 +1533,6 @@ function BalanceDraftRow({
   defaultAccount: string;
   defaultAsset: string;
   expanded: boolean;
-  requestId: number;
   accountSuggestions: string[];
   assetSuggestions: string[];
   onToggle: () => void;
@@ -1418,7 +1565,6 @@ function BalanceDraftRow({
         <TableRow className="hover:bg-transparent">
           <TableCell colSpan={BALANCE_TABLE_COLS} className="p-0">
             <AdjustmentPanel
-              key={requestId}
               initialAccount={defaultAccount}
               initialAsset={defaultAsset}
               accountSuggestions={accountSuggestions}
@@ -1617,7 +1763,6 @@ function BalancesTable({
             defaultAccount={defaultDraftAccount}
             defaultAsset={defaultDraftAsset}
             expanded={openKey === DRAFT_ADJUSTMENT_KEY}
-            requestId={draftOpenRequest}
             accountSuggestions={accountSuggestions}
             assetSuggestions={assetSuggestions}
             onToggle={() =>
@@ -1676,15 +1821,35 @@ function AdjustOutcomeView({ adjustment }: AdjustOutcome) {
     );
   }
   if (accepted) {
-    const rows: { label: string; delta: string; result: string }[] = [];
+    const rows: {
+      label: string;
+      request: AdjustmentAmount | undefined;
+      delta: string;
+      result: string;
+    }[] = [];
     if (accepted.balanceDelta || accepted.balanceResult) {
-      rows.push({ label: t("dialog.outcome.fieldBalance"), delta: accepted.balanceDelta, result: accepted.balanceResult });
+      rows.push({
+        label: t("dialog.outcome.fieldBalance"),
+        request: adjustment.request.balance,
+        delta: accepted.balanceDelta,
+        result: accepted.balanceResult,
+      });
     }
     if (accepted.heldDelta || accepted.heldResult) {
-      rows.push({ label: t("dialog.outcome.fieldHeld"), delta: accepted.heldDelta, result: accepted.heldResult });
+      rows.push({
+        label: t("dialog.outcome.fieldHeld"),
+        request: adjustment.request.held,
+        delta: accepted.heldDelta,
+        result: accepted.heldResult,
+      });
     }
     if (accepted.incomingDelta || accepted.incomingResult) {
-      rows.push({ label: t("dialog.outcome.fieldIncoming"), delta: accepted.incomingDelta, result: accepted.incomingResult });
+      rows.push({
+        label: t("dialog.outcome.fieldIncoming"),
+        request: adjustment.request.incoming,
+        delta: accepted.incomingDelta,
+        result: accepted.incomingResult,
+      });
     }
     return (
       <div className="rounded-card border border-[var(--ok)] bg-[var(--ok-dim)] p-3 text-xs">
@@ -1695,7 +1860,7 @@ function AdjustOutcomeView({ adjustment }: AdjustOutcome) {
               <div key={r.label} className="flex gap-2">
                 <span className="w-28 text-muted">{r.label}</span>
                 <span className="nums text-text">
-                  Δ{r.delta} → {r.result}
+                  {outcomeAmountText(r.request, r.delta, r.result)}
                 </span>
               </div>
             ))}
@@ -1929,6 +2094,16 @@ function AdjustDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<Adjustment | null>(null);
+  const localAccountSuggestions = useAccountCodeSuggestions(account, open);
+  const localAssetSuggestions = useAssetCodeSuggestions(asset, open);
+  const mergedAccountSuggestions = useMemo(
+    () => mergeCodeSuggestions(accountSuggestions, localAccountSuggestions),
+    [accountSuggestions, localAccountSuggestions],
+  );
+  const mergedAssetSuggestions = useMemo(
+    () => mergeCodeSuggestions(assetSuggestions, localAssetSuggestions),
+    [assetSuggestions, localAssetSuggestions],
+  );
 
   // Reseed whenever the dialog opens.
   useEffect(() => {
@@ -2064,7 +2239,7 @@ function AdjustDialog({
                 value={account}
                 spellCheck={false}
                 placeholder="acc-1"
-                suggestions={accountSuggestions}
+                suggestions={mergedAccountSuggestions}
                 onChange={setAccount}
                 disabled={busy}
                 onClear={() => setAccount("")}
@@ -2078,7 +2253,7 @@ function AdjustDialog({
                 value={asset}
                 spellCheck={false}
                 placeholder="AAPL"
-                suggestions={assetSuggestions}
+                suggestions={mergedAssetSuggestions}
                 onChange={setAsset}
                 disabled={busy}
                 onClear={() => setAsset("")}
@@ -2197,17 +2372,29 @@ function HistoryRowOutcome({ adj }: { adj: Adjustment }) {
     const parts: string[] = [];
     if (accepted.balanceDelta || accepted.balanceResult) {
       parts.push(
-        `${t("dialog.outcome.fieldBalance")} Δ${accepted.balanceDelta} → ${accepted.balanceResult}`,
+        `${t("dialog.outcome.fieldBalance")} ${outcomeAmountText(
+          adj.request.balance,
+          accepted.balanceDelta,
+          accepted.balanceResult,
+        )}`,
       );
     }
     if (accepted.heldDelta || accepted.heldResult) {
       parts.push(
-        `${t("dialog.outcome.fieldHeld")} Δ${accepted.heldDelta} → ${accepted.heldResult}`,
+        `${t("dialog.outcome.fieldHeld")} ${outcomeAmountText(
+          adj.request.held,
+          accepted.heldDelta,
+          accepted.heldResult,
+        )}`,
       );
     }
     if (accepted.incomingDelta || accepted.incomingResult) {
       parts.push(
-        `${t("dialog.outcome.fieldIncoming")} Δ${accepted.incomingDelta} → ${accepted.incomingResult}`,
+        `${t("dialog.outcome.fieldIncoming")} ${outcomeAmountText(
+          adj.request.incoming,
+          accepted.incomingDelta,
+          accepted.incomingResult,
+        )}`,
       );
     }
     return (
@@ -3461,9 +3648,9 @@ export function Positions() {
               onRetry={balancesLoad.reload}
             />
           )}
-          {balancesLoad.load.state === "ready" &&
-            (balances.length === 0 ? (
-              <>
+          {balancesLoad.load.state === "ready" && (
+            <>
+              {balances.length === 0 ? (
                 <EmptyState
                   title={t("balances.empty.title")}
                   hint={t("balances.empty.hint")}
@@ -3474,61 +3661,36 @@ export function Positions() {
                     </Button>
                   }
                 />
-                <BalancesTable
-                  balances={[]}
-                  activeSort={balanceSort.sort}
-                  activeOrder={balanceSort.order}
-                  defaultDraftAccount={accountFilter.trim()}
-                  defaultDraftAsset={assetFilter.trim()}
-                  draftOpenRequest={draftOpenRequest}
-                  accountSuggestions={accountSuggestions}
-                  assetSuggestions={assetSuggestions}
-                  onSortChange={(sort, order) => {
-                    setBalanceSort({ sort, order });
-                    setBalancePage(0);
-                  }}
-                  onApplied={handleAdjustDone}
-                  onShowHistory={showAccountAssetHistory}
-                  onFilterAccount={(account) => {
-                    setAccountFilter(account);
-                    setBalancePage(0);
-                  }}
-                  onFilterAsset={(asset) => {
-                    setAssetFilter(asset);
-                    setBalancePage(0);
-                  }}
-                />
-              </>
-            ) : (
-              <>
-                {balancePager}
-                <BalancesTable
-                  balances={pagedBalances}
-                  activeSort={balanceSort.sort}
-                  activeOrder={balanceSort.order}
-                  defaultDraftAccount={accountFilter.trim()}
-                  defaultDraftAsset={assetFilter.trim()}
-                  draftOpenRequest={draftOpenRequest}
-                  accountSuggestions={accountSuggestions}
-                  assetSuggestions={assetSuggestions}
-                  onSortChange={(sort, order) => {
-                    setBalanceSort({ sort, order });
-                    setBalancePage(0);
-                  }}
-                  onApplied={handleAdjustDone}
-                  onShowHistory={showAccountAssetHistory}
-                  onFilterAccount={(account) => {
-                    setAccountFilter(account);
-                    setBalancePage(0);
-                  }}
-                  onFilterAsset={(asset) => {
-                    setAssetFilter(asset);
-                    setBalancePage(0);
-                  }}
-                />
-                {balancePager}
-              </>
-            ))}
+              ) : (
+                balancePager
+              )}
+              <BalancesTable
+                balances={pagedBalances}
+                activeSort={balanceSort.sort}
+                activeOrder={balanceSort.order}
+                defaultDraftAccount={accountFilter.trim()}
+                defaultDraftAsset={assetFilter.trim()}
+                draftOpenRequest={draftOpenRequest}
+                accountSuggestions={accountSuggestions}
+                assetSuggestions={assetSuggestions}
+                onSortChange={(sort, order) => {
+                  setBalanceSort({ sort, order });
+                  setBalancePage(0);
+                }}
+                onApplied={handleAdjustDone}
+                onShowHistory={showAccountAssetHistory}
+                onFilterAccount={(account) => {
+                  setAccountFilter(account);
+                  setBalancePage(0);
+                }}
+                onFilterAsset={(asset) => {
+                  setAssetFilter(asset);
+                  setBalancePage(0);
+                }}
+              />
+              {balances.length > 0 && balancePager}
+            </>
+          )}
         </>
       )}
 

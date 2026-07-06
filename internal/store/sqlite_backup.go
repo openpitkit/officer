@@ -71,7 +71,11 @@ func (r *realmStore) ExportBackup(
 // connector on restore.
 func (r *realmStore) exportRealmLabel(ctx context.Context) (backup.RealmLabel, error) {
 	var label backup.RealmLabel
-	err := r.db().QueryRowContext(
+	db, err := r.db()
+	if err != nil {
+		return backup.RealmLabel{}, err
+	}
+	err = db.QueryRowContext(
 		ctx, `SELECT code, title FROM realm LIMIT 1`,
 	).Scan(&label.Code, &label.Title)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -138,7 +142,7 @@ func (r *realmStore) exportData(ctx context.Context) (backup.Data, error) {
 	if data.MarketDataInstruments, err = r.exportInstruments(ctx); err != nil {
 		return backup.Data{}, err
 	}
-	if data.MarketDataQuotes, err = r.ListMarketDataQuotes(ctx, domain.ExternalID{}); err != nil {
+	if data.MarketDataQuotes, err = r.ListMarketDataQuotes(ctx, domain.ExternalID("")); err != nil {
 		return backup.Data{}, err
 	}
 	if data.SigningKeys, err = r.exportSigningKeys(ctx); err != nil {
@@ -202,7 +206,11 @@ func (r *realmStore) exportAccounts(ctx context.Context) ([]backup.Account, erro
 func (r *realmStore) exportAdjustments(
 	ctx context.Context,
 ) ([]domain.AccountAdjustmentRecord, error) {
-	rows, err := r.db().QueryContext(
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(
 		ctx, adjustmentSelect+` ORDER BY adj.at ASC, adj.id ASC`,
 	)
 	if err != nil {
@@ -224,9 +232,9 @@ func (r *realmStore) exportAdjustments(
 	return out, nil
 }
 
-// exportOrders lists every order across all account (no UI limit) and folds in
-// each order's optional 1:1 approval. Events and trade travel in their own
-// sections, linked back by the order's external id.
+// exportOrders lists every order across all account (no UI limit). Events (each
+// carrying its optional 1:1 attestation) and trade travel in their own sections,
+// linked back by the order's external id.
 func (r *realmStore) exportOrders(ctx context.Context) ([]backup.OrderRecord, error) {
 	orders, err := r.ListAllOrders(ctx, "", "")
 	if err != nil {
@@ -234,20 +242,14 @@ func (r *realmStore) exportOrders(ctx context.Context) ([]backup.OrderRecord, er
 	}
 	out := make([]backup.OrderRecord, 0, len(orders))
 	for _, o := range orders {
-		rec := backup.OrderRecord{Order: o}
-		if env, ok, aerr := r.getOrderApproval(ctx, o.ExternalID); aerr != nil {
-			return nil, aerr
-		} else if ok {
-			env := env
-			rec.Approval = &env
-		}
-		out = append(out, rec)
+		out = append(out, backup.OrderRecord{Order: o})
 	}
 	return out, nil
 }
 
-// exportOrderEvents lists every order's events, oldest first within each order,
-// linked to the parent by the order's external id.
+// exportOrderEvents lists every order's events (each carrying its optional 1:1
+// attestation), oldest first within each order, linked to the parent by the
+// order's external id.
 func (r *realmStore) exportOrderEvents(ctx context.Context) ([]domain.OrderEvent, error) {
 	orders, err := r.ListAllOrders(ctx, "", "")
 	if err != nil {
@@ -268,7 +270,11 @@ func (r *realmStore) exportOrderEvents(ctx context.Context) ([]domain.OrderEvent
 // in the order rows were recorded. It uses the audit-group projection and scan
 // helper directly to avoid a limit-bounded, newest-first UI read.
 func (r *realmStore) exportAudit(ctx context.Context) ([]domain.AuditRow, error) {
-	rows, err := r.db().QueryContext(
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(
 		ctx, auditSelect+` ORDER BY au.at ASC, au.id ASC`,
 	)
 	if err != nil {
@@ -313,7 +319,11 @@ func (r *realmStore) exportInstruments(
 // exportSigningKeys reads every signing key WITH its private material so the keys
 // round-trip; the listing API omits private keys, so this is a dedicated read.
 func (r *realmStore) exportSigningKeys(ctx context.Context) ([]backup.SigningKey, error) {
-	rows, err := r.db().QueryContext(
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(
 		ctx,
 		`SELECT key_id, alg, private_key, public_key, created_at, active
 		 FROM signing_key ORDER BY created_at ASC, id ASC`,
@@ -354,7 +364,11 @@ func (r *realmStore) exportSigningKeys(ctx context.Context) ([]backup.SigningKey
 func (r *realmStore) exportSigningConfig(
 	ctx context.Context,
 ) ([]backup.SigningConfigEntry, error) {
-	rows, err := r.db().QueryContext(
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(
 		ctx, `SELECT key, value FROM signing_config ORDER BY key`,
 	)
 	if err != nil {
@@ -403,7 +417,11 @@ func (r *realmStore) RestoreBackup(
 	// of a full archive; the archive already filtered to its own scope at export.
 	data := backup.FilterData(archive.Data, scope)
 
-	tx, err := r.db().BeginTx(ctx, nil)
+	db, err := r.db()
+	if err != nil {
+		return backup.RestoreSummary{}, err
+	}
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return backup.RestoreSummary{}, fmt.Errorf("store: begin restore: %w", err)
 	}
@@ -419,10 +437,14 @@ func (r *realmStore) RestoreBackup(
 		return backup.RestoreSummary{}, fmt.Errorf("store: commit restore: %w", err)
 	}
 
-	// Evaluate the restart signal against the caller's requested scope, not the
-	// force-included parent dictionaries Normalize adds for FK resolution: an
-	// audit-only or activity-history-only restore must stay observational.
-	summary.RestartRequired = backup.TouchesRuntime(opts.Scope)
+	// Drive the restart signal off the rows actually written, not the requested
+	// scope. Normalize force-includes the accounts+groups (and market-data) parent
+	// dictionaries whenever an account-addressed section is restored, so an
+	// audit-only or activity-history-only request can still land a new runtime
+	// dictionary row the live resolver has not seen; when it does, the engine must
+	// rebuild. A force-included parent that inserted no runtime row leaves the
+	// signal off, keeping an observational restore observational.
+	summary.RestartRequired = rt.runtimeApplied
 	return summary, nil
 }
 
@@ -439,11 +461,27 @@ func validateRestoreMode(mode backup.RestoreMode) (backup.RestoreMode, error) {
 }
 
 // restoreTx carries the in-flight restore transaction, the mode and the running
-// per-section summary so the per-table insert helpers stay small.
+// per-section summary so the per-table insert helpers stay small. runtimeApplied
+// records whether any genuinely runtime-affecting row (account, group, balance,
+// limit, market-data instance/instrument or quote) was written, driving the
+// engine-rebuild signal. It is tracked separately from the summary counts because
+// the shared support dictionaries (asset classes, assets, principals) roll into
+// the accounts+groups summary section but are not part of the engine snapshot, so
+// they must not by themselves flip the restart signal.
 type restoreTx struct {
-	tx      *sql.Tx
-	mode    backup.RestoreMode
-	summary *backup.RestoreSummary
+	tx             *sql.Tx
+	mode           backup.RestoreMode
+	summary        *backup.RestoreSummary
+	runtimeApplied bool
+}
+
+// applyRuntime records n runtime rows written to section: it bumps the summary
+// count and, when section is a runtime section, raises the engine-rebuild signal.
+func (rt *restoreTx) applyRuntime(section backup.Section, n int) {
+	rt.summary.AddApplied(section, n)
+	if n > 0 && backup.RuntimeSection(section) {
+		rt.runtimeApplied = true
+	}
 }
 
 // run inserts every included section in dictionary-first order. Assets and
@@ -646,7 +684,7 @@ func (rt *restoreTx) restoreGroups(ctx context.Context, groups []backup.AccountG
 		); err != nil {
 			return fmt.Errorf("store: restore group %q: %w", g.Code, err)
 		}
-		rt.summary.AddApplied(backup.SectionAccountsGroups, 1)
+		rt.applyRuntime(backup.SectionAccountsGroups, 1)
 	}
 	return nil
 }
@@ -686,7 +724,7 @@ func (rt *restoreTx) restoreAccounts(ctx context.Context, accounts []backup.Acco
 		); err != nil {
 			return fmt.Errorf("store: restore account %q: %w", a.Code, err)
 		}
-		rt.summary.AddApplied(backup.SectionAccountsGroups, 1)
+		rt.applyRuntime(backup.SectionAccountsGroups, 1)
 	}
 	return nil
 }
@@ -735,7 +773,7 @@ func (rt *restoreTx) restoreBalances(ctx context.Context, balances []domain.Bala
 		); err != nil {
 			return fmt.Errorf("store: restore balance %q/%q: %w", b.Account, b.Asset, err)
 		}
-		rt.summary.AddApplied(backup.SectionPositions, 1)
+		rt.applyRuntime(backup.SectionPositions, 1)
 	}
 	return nil
 }
@@ -756,7 +794,7 @@ func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error 
 		if err != nil {
 			return err
 		}
-		rt.summary.AddApplied(backup.SectionRiskLimits, applied)
+		rt.applyRuntime(backup.SectionRiskLimits, applied)
 	}
 	for _, l := range data.OrderSizeLimits {
 		accountID, assetID, err := resolveLimitAxes(ctx, rt.tx, l.Account, l.Asset)
@@ -772,7 +810,7 @@ func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error 
 		if err != nil {
 			return err
 		}
-		rt.summary.AddApplied(backup.SectionRiskLimits, applied)
+		rt.applyRuntime(backup.SectionRiskLimits, applied)
 	}
 	for _, l := range data.PnlBoundsLimits {
 		accountID, assetID, err := resolveLimitAxes(ctx, rt.tx, l.Account, l.Asset)
@@ -790,7 +828,7 @@ func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error 
 		if err != nil {
 			return err
 		}
-		rt.summary.AddApplied(backup.SectionRiskLimits, applied)
+		rt.applyRuntime(backup.SectionRiskLimits, applied)
 	}
 	return nil
 }
@@ -867,7 +905,7 @@ func (rt *restoreTx) restoreMarketData(ctx context.Context, data backup.Data) er
 		); err != nil {
 			return fmt.Errorf("store: restore md instance %q: %w", inst.ExternalID, err)
 		}
-		rt.summary.AddApplied(backup.SectionMarketData, 1)
+		rt.applyRuntime(backup.SectionMarketData, 1)
 	}
 
 	// Instruments resolve their instance by the preserved external id and their
@@ -911,7 +949,7 @@ func (rt *restoreTx) restoreMarketData(ctx context.Context, data backup.Data) er
 		); err != nil {
 			return fmt.Errorf("store: restore md instrument %q: %w", instr.ExternalSymbol, err)
 		}
-		rt.summary.AddApplied(backup.SectionMarketData, 1)
+		rt.applyRuntime(backup.SectionMarketData, 1)
 	}
 	return nil
 }
@@ -957,7 +995,7 @@ func (rt *restoreTx) restoreQuotes(ctx context.Context, quotes []domain.MarketDa
 		); err != nil {
 			return fmt.Errorf("store: restore quote %q: %w", q.ExternalSymbol, err)
 		}
-		rt.summary.AddApplied(backup.SectionMarketDataQuotes, 1)
+		rt.applyRuntime(backup.SectionMarketDataQuotes, 1)
 	}
 	return nil
 }
@@ -1173,11 +1211,11 @@ func (rt *restoreTx) restoreOrder(ctx context.Context, rec backup.OrderRecord) e
 			`UPDATE order_record
 			 SET account_id = ?, base_asset_id = ?, quote_asset_id = ?, principal_id = ?,
 			     at = ?, source = ?, side = ?, amount_kind = ?, amount_value = ?,
-			     price = ?, status = ?, lock = ?
+			     leaves_quantity = ?, price = ?, status = ?, lock = ?
 			 WHERE external_id = ?`,
 			accountID, baseID, quoteID, principalID, atOrNow(o.At), string(o.Source),
 			string(o.Side), string(o.AmountKind), o.AmountValue,
-			o.Price,
+			o.Leaves, o.Price,
 			string(o.Status), nullableBlob(o.Lock), o.ExternalID.Bytes(),
 		); err != nil {
 			return fmt.Errorf("store: restore order %q: %w", o.ExternalID, err)
@@ -1187,44 +1225,16 @@ func (rt *restoreTx) restoreOrder(ctx context.Context, rec backup.OrderRecord) e
 		`INSERT OR REPLACE INTO order_record
 		 (external_id, account_id, base_asset_id, quote_asset_id, principal_id,
 		  at, source, side, amount_kind, amount_value,
-		  price, status, lock)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  leaves_quantity, price, status, lock)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		o.ExternalID.Bytes(), accountID, baseID, quoteID, principalID,
 		atOrNow(o.At), string(o.Source), string(o.Side), string(o.AmountKind),
-		o.AmountValue, o.Price,
+		o.AmountValue, o.Leaves, o.Price,
 		string(o.Status), nullableBlob(o.Lock),
 	); err != nil {
 		return fmt.Errorf("store: restore order %q: %w", o.ExternalID, err)
 	}
 	rt.summary.AddApplied(backup.SectionActivityHistory, 1)
-
-	if rec.Approval != nil {
-		orderID, err := lookupOrderID(ctx, rt.tx, o.ExternalID)
-		if err != nil {
-			return err
-		}
-		env := rec.Approval
-		signingKeyID, err := resolveSigningKeyID(ctx, rt.tx, env.KeyID)
-		if err != nil {
-			return err
-		}
-		if _, err := rt.tx.ExecContext(
-			ctx,
-			`INSERT INTO order_approval
-			 (order_id, token, signing_key_id, alg, mode, issued_at, expires_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?)
-			 ON CONFLICT(order_id) DO UPDATE SET
-			   token = excluded.token,
-			   signing_key_id = excluded.signing_key_id,
-			   alg = excluded.alg,
-			   mode = excluded.mode,
-			   issued_at = excluded.issued_at,
-			   expires_at = excluded.expires_at`,
-			orderID, env.Token, signingKeyID, env.Alg, env.Mode, env.IssuedAt, env.ExpiresAt,
-		); err != nil {
-			return fmt.Errorf("store: restore order approval %q: %w", o.ExternalID, err)
-		}
-	}
 	return nil
 }
 
@@ -1260,7 +1270,54 @@ func (rt *restoreTx) restoreOrderEvent(ctx context.Context, ev domain.OrderEvent
 	); err != nil {
 		return fmt.Errorf("store: restore order event %q: %w", ev.ExternalID, err)
 	}
+	if err := rt.restoreEventAttestation(ctx, ev); err != nil {
+		return err
+	}
 	rt.summary.AddApplied(backup.SectionActivityHistory, 1)
+	return nil
+}
+
+// restoreEventAttestation writes the event's 1:1 attestation when present. The
+// event's surrogate id is resolved after the event insert (INSERT OR REPLACE may
+// have re-keyed it), then the attestation is upserted onto it, mirroring the
+// former order-approval restore.
+func (rt *restoreTx) restoreEventAttestation(
+	ctx context.Context, ev domain.OrderEvent,
+) error {
+	if ev.Attestation == nil {
+		return nil
+	}
+	eventID, err := lookupOrderEventID(ctx, rt.tx, ev.ExternalID)
+	if err != nil {
+		return err
+	}
+	att := ev.Attestation
+	var signingKeyID sql.NullInt64
+	if att.KeyID != "" {
+		id, err := resolveSigningKeyID(ctx, rt.tx, att.KeyID)
+		if err != nil {
+			return err
+		}
+		signingKeyID = sql.NullInt64{Int64: id, Valid: true}
+	}
+	if _, err := rt.tx.ExecContext(
+		ctx,
+		`INSERT INTO event_attestation
+		 (event_id, token, signing_key_id, alg, request_type, mode, issued_at, expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(event_id) DO UPDATE SET
+		   token = excluded.token,
+		   signing_key_id = excluded.signing_key_id,
+		   alg = excluded.alg,
+		   request_type = excluded.request_type,
+		   mode = excluded.mode,
+		   issued_at = excluded.issued_at,
+		   expires_at = excluded.expires_at`,
+		eventID, att.Token, signingKeyID, att.Alg, string(att.RequestType),
+		att.Mode, att.IssuedAt, att.ExpiresAt,
+	); err != nil {
+		return fmt.Errorf("store: restore event attestation %q: %w", ev.ExternalID, err)
+	}
 	return nil
 }
 
@@ -1883,8 +1940,8 @@ func (rt *restoreTx) pruneGeneralSettings(ctx context.Context, data backup.Data)
 			continue
 		}
 		referenced, err := rowExists(
-			ctx, rt.tx, `SELECT 1 FROM order_approval ap
-			 JOIN signing_key sk ON sk.id = ap.signing_key_id
+			ctx, rt.tx, `SELECT 1 FROM event_attestation ea
+			 JOIN signing_key sk ON sk.id = ea.signing_key_id
 			 WHERE sk.key_id = ?`, keyID,
 		)
 		if err != nil {

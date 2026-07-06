@@ -32,6 +32,7 @@ import (
 	"go.openpit.dev/openpit/reject"
 
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/engine"
 )
 
 // --- engine-id resolution ---------------------------------------------------
@@ -782,16 +783,18 @@ func adjustmentBoundsValues(
 // rework is intentionally deferred.
 func outcomeAcceptedFromList(
 	outcomes []accountadjustment.Outcome, asset string,
-) domain.AdjustmentOutcomeAccepted {
+) (domain.AdjustmentOutcomeAccepted, bool) {
 	var result domain.AdjustmentOutcomeAccepted
+	found := false
 	for _, outcome := range outcomes {
 		entry := outcome.Entry
 		if entry.Asset.String() != asset {
 			continue
 		}
 		result = outcomeAcceptedFromEntry(entry)
+		found = true
 	}
-	return result
+	return result, found
 }
 
 // balanceOutcomesFromList relies on the at-most-one-outcome-per-asset invariant
@@ -865,15 +868,19 @@ func adjustmentRejectFrom(r reject.Reject) domain.AdjustmentOutcomeRejected {
 // trade amount (quantity or volume), and the optional limit price (omitted for
 // market orders).
 func orderModelFrom(o domain.Order, res idResolver) (model.Order, error) {
+	account, err := res.account(o.Account)
+	if err != nil {
+		return model.Order{}, err
+	}
+	return orderModelFromAccount(o, account)
+}
+
+func orderModelFromAccount(o domain.Order, account param.AccountID) (model.Order, error) {
 	base, err := newAsset(o.BaseAsset)
 	if err != nil {
 		return model.Order{}, err
 	}
 	quote, err := newAsset(o.QuoteAsset)
-	if err != nil {
-		return model.Order{}, err
-	}
-	account, err := res.account(o.Account)
 	if err != nil {
 		return model.Order{}, err
 	}
@@ -957,12 +964,22 @@ func orderRejectsFrom(rejects []reject.Reject) []domain.OrderReject {
 
 // executionReportFrom maps a domain execution-report input onto a
 // model.ExecutionReport: the operation (instrument/account/side) and the fill
-// (last trade price+quantity, leaves quantity, the is-final flag, and the lock
-// reconstructed from the single reference price when present). The engine
-// requires leaves quantity and the is-final flag to settle the fill; an empty or
+// (last trade price+quantity, leaves quantity, the terminal-status flag, and the
+// lock reconstructed from the single reference price when present). The engine
+// requires leaves quantity and the terminal flag to settle the fill; an empty or
 // invalid leaves quantity is caller error (ErrInvalid). The account is resolved
 // to its stored engine id.
 func executionReportFrom(in domain.ExecutionReportInput, res idResolver) (model.ExecutionReport, error) {
+	account, err := res.account(in.Account)
+	if err != nil {
+		return model.ExecutionReport{}, err
+	}
+	return executionReportFromAccount(in, account)
+}
+
+func executionReportFromAccount(
+	in domain.ExecutionReportInput, account param.AccountID,
+) (model.ExecutionReport, error) {
 	base, err := newAsset(in.BaseAsset)
 	if err != nil {
 		return model.ExecutionReport{}, err
@@ -971,23 +988,9 @@ func executionReportFrom(in domain.ExecutionReportInput, res idResolver) (model.
 	if err != nil {
 		return model.ExecutionReport{}, err
 	}
-	account, err := res.account(in.Account)
-	if err != nil {
-		return model.ExecutionReport{}, err
-	}
 	side, err := orderSide(in.Side)
 	if err != nil {
 		return model.ExecutionReport{}, err
-	}
-	price, err := param.NewPriceFromString(in.FillPrice)
-	if err != nil {
-		return model.ExecutionReport{}, fmt.Errorf(
-			"engine: fill price %q: %w: %w", in.FillPrice, err, domain.ErrInvalid)
-	}
-	quantity, err := param.NewQuantityFromString(in.FillQuantity)
-	if err != nil {
-		return model.ExecutionReport{}, fmt.Errorf(
-			"engine: fill quantity %q: %w: %w", in.FillQuantity, err, domain.ErrInvalid)
 	}
 	leaves, err := param.NewQuantityFromString(in.LeavesQuantity)
 	if err != nil {
@@ -995,10 +998,23 @@ func executionReportFrom(in domain.ExecutionReportInput, res idResolver) (model.
 			"engine: leaves quantity %q: %w: %w", in.LeavesQuantity, err, domain.ErrInvalid)
 	}
 
-	lockBytes, err := fillLockBytes(in.LockPrice)
+	hasFill, err := executionReportHasFill(in)
 	if err != nil {
 		return model.ExecutionReport{}, err
 	}
+	targetStatus := domain.ExecutionReportTargetStatus(in)
+	if !hasFill && (targetStatus == domain.OrderStatusFilled ||
+		targetStatus == domain.OrderStatusPartiallyFilled) {
+		return model.ExecutionReport{}, fmt.Errorf(
+			"engine: fill status %q requires fill price and quantity: %w",
+			targetStatus, domain.ErrInvalid)
+	}
+
+	lockBytes, err := executionReportLockBytes(in)
+	if err != nil {
+		return model.ExecutionReport{}, err
+	}
+	isFinal := domain.OrderStatusTerminal(targetStatus)
 
 	report := model.NewExecutionReport()
 	op := report.EnsureOperationView()
@@ -1007,9 +1023,21 @@ func executionReportFrom(in domain.ExecutionReportInput, res idResolver) (model.
 	op.SetSide(side)
 
 	fill := report.EnsureFillView()
-	fill.SetLastTrade(model.NewExecutionReportTrade(price, quantity))
+	if hasFill {
+		price, err := param.NewPriceFromString(in.FillPrice)
+		if err != nil {
+			return model.ExecutionReport{}, fmt.Errorf(
+				"engine: fill price %q: %w: %w", in.FillPrice, err, domain.ErrInvalid)
+		}
+		quantity, err := param.NewQuantityFromString(in.FillQuantity)
+		if err != nil {
+			return model.ExecutionReport{}, fmt.Errorf(
+				"engine: fill quantity %q: %w: %w", in.FillQuantity, err, domain.ErrInvalid)
+		}
+		fill.SetLastTrade(model.NewExecutionReportTrade(price, quantity))
+	}
 	fill.SetLeavesQuantity(leaves)
-	fill.SetIsFinal(in.Final)
+	fill.SetIsFinal(isFinal)
 	if lockBytes != nil {
 		fill.SetLock(lockBytes)
 	}
@@ -1031,6 +1059,101 @@ func executionReportFrom(in domain.ExecutionReportInput, res idResolver) (model.
 	impact.SetPnl(pnl)
 	impact.SetFee(fee)
 	return report, nil
+}
+
+func executionReportHasFill(in domain.ExecutionReportInput) (bool, error) {
+	hasQuantity := in.FillQuantity != ""
+	hasPrice := in.FillPrice != ""
+	if hasQuantity != hasPrice {
+		return false, fmt.Errorf(
+			"engine: fill price and quantity must be provided together: %w",
+			domain.ErrInvalid)
+	}
+	return hasQuantity, nil
+}
+
+func executionReportPersistenceFrom(
+	in domain.ExecutionReportInput,
+	blocks []domain.ExecutionAccountBlock,
+	outcomes []BalanceOutcome,
+) engine.ExecutionReportPersistence {
+	payload := executionAccountBlockPayload(blocks)
+	payload.FillQuantity = in.FillQuantity
+	payload.FillPrice = in.FillPrice
+	payload.FillLockPrice = in.LockPrice
+	payload.LeavesQuantity = in.LeavesQuantity
+	payload.OrderStatus = string(in.OrderStatus)
+	payload.RealizedPnl = in.RealizedPnl
+	payload.Fee = in.Fee
+
+	events := make([]domain.OrderEvent, 0, 2)
+	hasFill := in.FillQuantity != "" && in.FillPrice != ""
+	if hasFill {
+		events = append(events, domain.OrderEvent{
+			Order:   in.Order,
+			Type:    domain.OrderEventFill,
+			Payload: payload,
+		})
+	}
+	if eventType, ok := domain.ExecutionReportStatusChangeEvent(in.OrderStatus); ok {
+		events = append(events, domain.OrderEvent{
+			Order:   in.Order,
+			Type:    eventType,
+			Payload: payload,
+		})
+	}
+
+	var trade *domain.Trade
+	if hasFill {
+		trade = &domain.Trade{
+			Order:      in.Order,
+			Account:    in.Account,
+			BaseAsset:  in.BaseAsset,
+			QuoteAsset: in.QuoteAsset,
+			Side:       in.Side,
+			Quantity:   in.FillQuantity,
+			Price:      in.FillPrice,
+			LockPrice:  in.LockPrice,
+		}
+	}
+
+	return engine.ExecutionReportPersistence{
+		Trade:       trade,
+		OrderStatus: in.OrderStatus,
+		Leaves:      in.LeavesQuantity,
+		Balances:    executionBalanceSettlementsFrom(outcomes),
+		Events:      events,
+		Blocks:      blocks,
+	}
+}
+
+func executionAccountBlockPayload(
+	blocks []domain.ExecutionAccountBlock,
+) domain.OrderEventPayload {
+	if len(blocks) == 0 {
+		return domain.OrderEventPayload{}
+	}
+	block := blocks[0]
+	return domain.OrderEventPayload{
+		RejectCode:    block.Code,
+		RejectScope:   "account",
+		RejectReason:  block.Reason,
+		RejectDetails: block.Details,
+	}
+}
+
+func executionBalanceSettlementsFrom(outcomes []BalanceOutcome) []domain.BalanceSettlement {
+	if len(outcomes) == 0 {
+		return nil
+	}
+	settlements := make([]domain.BalanceSettlement, 0, len(outcomes))
+	for _, outcome := range outcomes {
+		settlements = append(settlements, domain.BalanceSettlement{
+			Asset:   outcome.Asset,
+			Outcome: outcome.Outcome,
+		})
+	}
+	return settlements
 }
 
 // pnlOrZero parses a signed realized-P&L delta, treating an empty string as
@@ -1081,7 +1204,7 @@ func immediateExecutionReport(o domain.Order, settlementPrice string, res idReso
 		Account:        o.Account,
 		Side:           o.Side,
 		Order:          o.ExternalID,
-		Final:          true,
+		OrderStatus:    domain.OrderStatusFilled,
 	}, res)
 }
 
@@ -1143,6 +1266,17 @@ func fillLockBytes(lockPrice string) ([]byte, error) {
 		return nil, fmt.Errorf("engine: build fill lock: %w", err)
 	}
 	return lock.Bytes(), nil
+}
+
+func executionReportLockBytes(in domain.ExecutionReportInput) ([]byte, error) {
+	if len(in.Lock) > 0 {
+		lock, err := unmarshalLock(in.Lock)
+		if err != nil {
+			return nil, fmt.Errorf("engine: execution report lock: %w: %w", err, domain.ErrInvalid)
+		}
+		return lock.Bytes(), nil
+	}
+	return fillLockBytes(in.LockPrice)
 }
 
 // executionBlocksFrom maps the engine-recorded account blocks of a post-trade

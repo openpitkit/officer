@@ -989,7 +989,8 @@ paths:
         `"rejected"`. HTTP errors indicate only system-level failures. The request
         may carry an optional `externalId`: when supplied it is used as-is and a
         duplicate is rejected with 409; when omitted the server generates one and
-        returns it on the record.
+        returns it on the record. If the engine returns no account modifications,
+        Officer records nothing and returns 204.
       tags: [adjustments]
       requestBody:
         required: true
@@ -1008,6 +1009,8 @@ paths:
                 properties:
                   adjustment:
                     $ref: "#/components/schemas/Adjustment"
+        "204":
+          description: The engine returned no account modifications.
         "400":
           $ref: "#/components/responses/ValidationError"
         "404":
@@ -1717,7 +1720,7 @@ paths:
                   description: "`buy` or `sell`."
                 amountKind:
                   type: string
-                  description: "Kind of amount - e.g. `base` or `quote`."
+                  description: "Kind of amount - `quantity` or `volume`."
                 amountValue:
                   type: string
                   description: Exact decimal string.
@@ -1774,7 +1777,7 @@ paths:
                   description: "`buy` or `sell`."
                 amountKind:
                   type: string
-                  description: "Kind of amount - e.g. `base` or `quote`."
+                  description: "Kind of amount - `quantity` or `volume`."
                 amountValue:
                   type: string
                   description: Exact decimal string.
@@ -1794,8 +1797,6 @@ paths:
                     $ref: "#/components/schemas/CheckResult"
         "400":
           $ref: "#/components/responses/ValidationError"
-        "404":
-          $ref: "#/components/responses/NotFoundError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -1804,14 +1805,14 @@ paths:
       - $ref: "#/components/parameters/OrderExternalId"
     get:
       operationId: getOrder
-      summary: Get an order with its approval, lifecycle events, and trades
+      summary: Get an order with its lifecycle events (each with its attestation) and trades
       tags: [orders]
       responses:
         "200":
           description: >
-            Order, its events and trades, and its approval envelope. The
-            `approval` field is present only when the order has been signed and
-            is omitted entirely when the order is unsigned.
+            Order, its events and trades. Each event carries its own 1:1 signed
+            attestation metadata (its `signed` flag and `alg`); the order's
+            `signed` field is the rollup (at least one event is signed).
           content:
             application/json:
               schema:
@@ -1828,11 +1829,41 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/Trade"
-                  approval:
-                    description: >
-                      Signed approval envelope. Present only when the order is
-                      signed; omitted entirely when unsigned.
-                    $ref: "#/components/schemas/OrderApproval"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /orders/{externalId}/events/{eventId}/reproduction:
+    parameters:
+      - $ref: "#/components/parameters/OrderExternalId"
+      - name: eventId
+        in: path
+        required: true
+        description: The opaque public handle of the order-history event.
+        schema:
+          type: string
+    get:
+      operationId: getOrderEventReproduction
+      summary: Reproduce, byte-for-byte, what a robot received for this event
+      description: >
+        Returns the controller-facing reproduction bundle for one order-history
+        event's attestation: byte-for-byte what a robot or AI agent received from
+        the live APIs for the request that produced this event, assembled from
+        persisted state through the same serializers the live endpoints use so it
+        can never drift from real API output. Nothing is re-issued or re-signed,
+        and only public artifacts appear. Shares the order-read authorization: a
+        controller cannot reproduce an event they could not already read.
+      tags: [orders]
+      responses:
+        "200":
+          description: The reproduction bundle.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventReproduction"
         "400":
           $ref: "#/components/responses/ValidationError"
         "404":
@@ -1845,12 +1876,17 @@ paths:
       - $ref: "#/components/parameters/OrderExternalId"
     post:
       operationId: applyExecutionReport
-      summary: Apply an execution report (fill) to an order
+      summary: Apply an execution report to an order
       description: >
-        Records a fill against the parent order. The instrument, account, and
-        side are taken from the parent order; only the fill fields are required
-        in the body. Returns account blocks the engine recorded plus per-asset
-        adjustment outcomes.
+        Advances the parent order to a target lifecycle status. The instrument,
+        account, and side are taken from the parent order.
+
+
+        Every report is applied through the engine. `leavesQuantity` is required
+        on every report. When `quantity` and `price` are present, the report
+        carries a fill. Terminal no-trade statuses such as `rejected` and
+        `cancelled` release the remaining reservation through the engine using
+        the order's persisted lock and carry `leavesQuantity` of `"0"`.
       tags: [orders]
       requestBody:
         required: true
@@ -1858,21 +1894,31 @@ paths:
           application/json:
             schema:
               type: object
-              required: [quantity, price, leavesQuantity, final]
+              required: [leavesQuantity, status]
+              description: >
+                `quantity` and `price` must be provided together. No-trade
+                terminal reports may omit fill fields. `leavesQuantity` is
+                required on every report.
               properties:
+                status:
+                  type: string
+                  description: >
+                    Target lifecycle status. Required on every execution report.
+                  enum:
+                    [submitted, accepted, rejected, committed, rolled_back,
+                     filled, partially_filled, cancelled]
                 quantity:
                   type: string
-                  description: Fill quantity - exact decimal string.
+                  description: Fill quantity - exact decimal string. Fill statuses only.
                 price:
                   type: string
-                  description: Fill price - exact decimal string.
+                  description: Fill price - exact decimal string. Fill statuses only.
                 leavesQuantity:
                   type: string
                   description: >
-                    Order's remaining open base quantity after this fill (FIX
-                    LeavesQty) - exact decimal string in base units. "0" on a
-                    fully-filled final fill; the released remainder on a final
-                    partial; the still-open quantity on a non-final partial.
+                    Order's remaining open base quantity after this report (FIX
+                    LeavesQty) - exact decimal string in base units. Required on
+                    every report; a terminal no-trade report carries `"0"`.
                 lockPrice:
                   type: string
                   description: Lock price used for fund reservation - exact decimal string.
@@ -1892,27 +1938,27 @@ paths:
                 force:
                   type: boolean
                   description: >
-                    Bypass Officer's safety checks and route straight to the
-                    engine. When omitted or false, a terminal order returns 409
-                    terminal_order.
-                final:
-                  type: boolean
-                  description: Whether this is the last fill for the order.
+                    Bypasses Officer's finalized-order safety check. When
+                    omitted or false, an execution report on a terminal order
+                    returns 409 `terminal_order`.
       responses:
         "201":
-          description: Execution result; the fill (trade) record was created.
+          description: >
+            Execution result plus the signed attestation over (report + engine
+            result). A fill status created a trade record and per-asset outcomes;
+            a non-fill status recorded the lifecycle transition only.
+            `attestationToken` is the robot's proof the engine passed this report;
+            it is empty when attestation was skipped or failed best-effort.
           content:
             application/json:
               schema:
-                type: object
-                required: [result]
-                properties:
-                  result:
-                    $ref: "#/components/schemas/ExecutionResult"
+                $ref: "#/components/schemas/ExecutionReportResponse"
         "400":
           $ref: "#/components/responses/ValidationError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -2626,6 +2672,44 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /signing/keys/{keyId}/public:
+    get:
+      operationId: getSigningKeyPublic
+      summary: Export any signing key's public key by id
+      description: >
+        Resolves the public key by id (rotation-safe: not the active key), so a
+        pasted token's embedded `keyId` can be resolved even when it was signed
+        under a since-rotated key. Only public material is returned.
+      tags: [signing]
+      parameters:
+        - name: keyId
+          in: path
+          required: true
+          description: The signing key's id.
+          schema:
+            type: string
+        - name: format
+          in: query
+          required: false
+          description: Export format. Defaults to `pem-pkcs8`.
+          schema:
+            type: string
+            enum: [pem-pkcs8, openssh, raw-base64]
+            default: pem-pkcs8
+      responses:
+        "200":
+          description: The public key material for the requested id and format.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicKeyMaterial"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /signing/config:
     get:
       operationId: getSigningConfig
@@ -2686,9 +2770,8 @@ paths:
                 externalId:
                   $ref: "#/components/schemas/ExternalId"
                   description: >
-                    Optional caller-supplied opaque external id (22-char
-                    base64url, no padding). When omitted the server generates and
-                    returns one. A malformed value is a 400; a duplicate is a 409.
+                    Optional caller-supplied opaque external id. When omitted
+                    the server generates and returns one. A duplicate is a 409.
                     Never a surrogate or engine id.
                 account:
                   type: string
@@ -2704,7 +2787,7 @@ paths:
                   description: "`buy` or `sell`."
                 amountKind:
                   type: string
-                  description: "Kind of amount - e.g. `base` or `quote`."
+                  description: "Kind of amount - `quantity` or `volume`."
                 amountValue:
                   type: string
                   description: Exact decimal string.
@@ -2751,24 +2834,27 @@ paths:
                   description: Approval token issued by submit.
                 force:
                   type: boolean
-                  description: Bypass Officer's safety checks and route straight to the engine.
+                  description: >
+                    Bypasses Officer's finalized-order safety check and routes
+                    straight to the engine. When omitted or false, confirming a
+                    terminal (already-finalized) order returns 409
+                    `terminal_order`.
       responses:
         "200":
-          description: Order after confirmation.
+          description: >
+            Order after confirmation, plus the signed attestation over the commit.
+            `attestationToken` is the robot's proof the engine committed this
+            reservation; it is empty when attestation was skipped or failed.
           content:
             application/json:
               schema:
-                type: object
-                required: [order]
-                properties:
-                  order:
-                    $ref: "#/components/schemas/Order"
+                $ref: "#/components/schemas/OrderMutationResponse"
         "400":
           $ref: "#/components/responses/ValidationError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "#/components/responses/ConflictError"
+          $ref: "#/components/responses/TerminalOrderError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -2797,24 +2883,27 @@ paths:
                   description: Optional human-readable cancellation reason.
                 force:
                   type: boolean
-                  description: Bypass Officer's safety checks and route straight to the engine.
+                  description: >
+                    Bypasses Officer's finalized-order safety check and routes
+                    straight to the engine. When omitted or false, cancelling a
+                    terminal (already-finalized) order returns 409
+                    `terminal_order`.
       responses:
         "200":
-          description: Order after cancellation.
+          description: >
+            Order after cancellation, plus the signed attestation over the
+            rollback. `attestationToken` is the robot's proof the engine rolled
+            back this reservation; it is empty when attestation was skipped.
           content:
             application/json:
               schema:
-                type: object
-                required: [order]
-                properties:
-                  order:
-                    $ref: "#/components/schemas/Order"
+                $ref: "#/components/schemas/OrderMutationResponse"
         "400":
           $ref: "#/components/responses/ValidationError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "#/components/responses/ConflictError"
+          $ref: "#/components/responses/TerminalOrderError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -3341,7 +3430,7 @@ components:
       name: externalId
       in: path
       required: true
-      description: The order's opaque 22-char base64url public handle (its external id).
+      description: The order's opaque public handle (its external id).
       schema:
         $ref: "#/components/schemas/ExternalId"
 
@@ -3351,7 +3440,7 @@ components:
       required: true
       description: >
         URL-encoded market-data instance external id - the instance's opaque
-        22-char base64url public handle, never a surrogate or engine id.
+        public handle, never a surrogate or engine id.
       schema:
         $ref: "#/components/schemas/ExternalId"
 
@@ -3434,6 +3523,16 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
 
+    TerminalOrderError:
+      description: >
+        Non-forced mutation of a terminal (already-finalized) order. The error
+        `code` is `terminal_order`. Retry with `force: true` to bypass the
+        finalized-order safety check.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
     HasDependentsError:
       description: Delete would remove dependent rows without force.
       content:
@@ -3486,12 +3585,8 @@ components:
 
     ExternalId:
       type: string
-      minLength: 22
-      maxLength: 22
-      pattern: "^[A-Za-z0-9_-]{22}$"
       description: >
-        Opaque 22-char base64url public handle. No surrogate or engine id is
-        ever exposed.
+        Opaque public handle. No surrogate or engine id is ever exposed.
 
     # Error envelope
 
@@ -3508,7 +3603,7 @@ components:
               description: >
                 Machine-readable code: `validation`, `not_found`, `conflict`,
                 `has_dependents`, `terminal_order`, `precondition`, `too_large`,
-                `engine_restarting`, `not_implemented`, or `internal`.
+                `engine_restarting`, `signing`, `not_implemented`, or `internal`.
               example: not_found
             message:
               type: string
@@ -4061,9 +4156,9 @@ components:
           $ref: "#/components/schemas/ExternalId"
           description: >
             Optional caller-supplied opaque external id for the adjustment record
-            (22-char base64url, no padding). Write-only on create: when omitted the
-            server generates one and returns it under the record's `externalId`. A
-            malformed value is a 400; a duplicate is a 409. Never a surrogate id.
+            Write-only on create: when omitted the server generates one and
+            returns it under the record's `externalId`. A duplicate is a 409.
+            Never a surrogate id.
         asset:
           type: string
           description: Asset whose spot-funds balances are adjusted.
@@ -4195,7 +4290,7 @@ components:
 
     Order:
       type: object
-      required: [externalId, at, account, baseAsset, quoteAsset, side, amountKind, amountValue, price, status, source, displayPrices]
+      required: [externalId, at, account, baseAsset, quoteAsset, side, amountKind, amountValue, leavesQuantity, price, status, source, displayPrices, signed]
       properties:
         externalId:
           description: The order's opaque public handle.
@@ -4220,6 +4315,12 @@ components:
         amountValue:
           type: string
           description: Exact decimal string.
+        leavesQuantity:
+          type: string
+          description: >
+            Remaining open base quantity as an exact decimal string: equals
+            `amountValue` before any fill, the released remainder after a partial
+            fill, and `0` once the order is filled or terminal.
         price:
           type: string
           description: Exact decimal string.
@@ -4237,31 +4338,40 @@ components:
             Human-readable reservation lock prices derived from the opaque lock
             (settlement leg last) - exact decimal strings. The raw lock blob is
             never exposed.
+        signed:
+          type: boolean
+          description: >
+            Order-level rollup: whether at least one of the order's events carries
+            an Ed25519-signed attestation.
 
-    # Order approval
+    # Event attestation
 
-    OrderApproval:
+    EventAttestation:
       type: object
-      required: [token, keyId, alg, mode, issuedAt, expiresAt, signed]
+      required: [token, keyId, alg, requestType, mode, issuedAt, expiresAt, signed]
       description: >
-        An order's persisted signed approval envelope. No surrogate or engine id
-        is present.
+        An order-history event's persisted signed attestation envelope over
+        (trading request + engine result). No surrogate or engine id is present.
       properties:
         token:
           type: string
-          description: The exact base64url approval envelope bytes.
+          description: The exact base64url attestation envelope bytes.
         keyId:
           type: string
           description: Identifier of the signing key that produced the envelope.
         alg:
           type: string
           description: >
-            Envelope algorithm: `ed25519` for a signed approval, `none` for an
+            Envelope algorithm: `ed25519` for a signed attestation, `none` for an
             eSign-off envelope.
           enum: [ed25519, none]
+        requestType:
+          type: string
+          description: The trading request the attestation binds.
+          enum: [submit, execution_report, confirm, cancel]
         mode:
           type: string
-          description: Submit mode the approval was issued for.
+          description: Submit mode the attestation was issued for.
         issuedAt:
           type: string
           format: date-time
@@ -4276,7 +4386,7 @@ components:
 
     OrderEvent:
       type: object
-      required: [externalId, order, at, type, source]
+      required: [externalId, order, at, type, source, signed]
       properties:
         externalId:
           description: The event's opaque public handle.
@@ -4292,6 +4402,17 @@ components:
         source:
           type: string
           enum: [panel, api, mcp, system]
+        signed:
+          type: boolean
+          description: >
+            Whether the event carries an Ed25519-signed attestation. The web
+            renders a per-event key icon and opens the per-event reproduction.
+        alg:
+          type: string
+          description: >
+            The event's attestation algorithm (`ed25519` | `none`); omitted when
+            the event is unattested.
+          enum: [ed25519, none]
         principal:
           type: string
           description: Principal that caused the event; omitted when absent.
@@ -4434,6 +4555,49 @@ components:
             Per-asset balance effects of the fill. A spot fill settles both
             legs, so each outcome is tagged with its own asset (the base asset
             bought and the quote asset spent).
+
+    ExecutionReportResponse:
+      type: object
+      required: [result, signed]
+      description: >
+        The execution result plus the signed attestation over (report + engine
+        result), returned to the robot as proof the engine passed this report.
+      properties:
+        result:
+          $ref: "#/components/schemas/ExecutionResult"
+        attestationToken:
+          type: string
+          description: >
+            The base64url attestation envelope; empty when attestation was
+            skipped or failed best-effort.
+        attestationKeyId:
+          type: string
+          description: The signing key id; empty under eSign-off or when absent.
+        signed:
+          type: boolean
+          description: Whether the attestation carries an Ed25519 signature.
+
+    OrderMutationResponse:
+      type: object
+      required: [order, signed]
+      description: >
+        The resolved order plus the signed attestation over the held-reservation
+        resolution (confirm commit or cancel rollback), returned to the robot as
+        proof the engine resolved this reservation.
+      properties:
+        order:
+          $ref: "#/components/schemas/Order"
+        attestationToken:
+          type: string
+          description: >
+            The base64url attestation envelope; empty when attestation was
+            skipped or failed best-effort.
+        attestationKeyId:
+          type: string
+          description: The signing key id; empty under eSign-off or when absent.
+        signed:
+          type: boolean
+          description: Whether the attestation carries an Ed25519 signature.
 
     # Limits (typed barriers)
 
@@ -4788,10 +4952,9 @@ components:
         externalId:
           $ref: "#/components/schemas/ExternalId"
           description: >
-            Optional caller-supplied opaque external id for the instance (22-char
-            base64url, no padding). When omitted the server generates one and
-            returns it in the instance's `externalId`. A malformed value is a 400;
-            a duplicate is a 409. Never a surrogate id.
+            Optional caller-supplied opaque external id for the instance. When
+            omitted the server generates one and returns it in the instance's
+            `externalId`. A duplicate is a 409. Never a surrogate id.
         provider:
           type: string
           description: Provider discriminator.
@@ -5202,3 +5365,206 @@ components:
         orderExternalId:
           description: The authorised order's opaque public handle.
           $ref: "#/components/schemas/ExternalId"
+
+    PublicKeyMaterial:
+      type: object
+      required: [keyId, alg, format, key]
+      description: >
+        A public key paired with the id it was resolved by and its export format.
+        Private material is never present.
+      properties:
+        keyId:
+          type: string
+          description: Identifier of the signing key this material belongs to.
+        alg:
+          type: string
+          description: Signing algorithm; currently always `ed25519`.
+          enum: [ed25519]
+        format:
+          type: string
+          description: Export format of `key`.
+          enum: [pem-pkcs8, openssh, raw-base64]
+        key:
+          type: string
+          description: The public key in the given format.
+
+    AttestationBlock:
+      type: object
+      required: [account, code, reason, details]
+      description: One engine-recorded account block bound in an attestation result.
+      properties:
+        account:
+          type: string
+        code:
+          type: string
+        reason:
+          type: string
+        details:
+          type: string
+
+    AttestationResult:
+      type: object
+      required: [outcome, fillQuantity, fillPrice, fillLockPrice, leavesQuantity, orderStatus, blocks]
+      description: >
+        The engine result section bound in the attestation payload; present only
+        for request types carrying an engine result beyond the submit verdict
+        (execution report, confirm, cancel).
+      properties:
+        outcome:
+          type: string
+          description: "Coarse engine outcome: `applied`, `committed`, or `rolled_back`."
+        fillQuantity:
+          type: string
+        fillPrice:
+          type: string
+        fillLockPrice:
+          type: string
+        leavesQuantity:
+          type: string
+        orderStatus:
+          type: string
+        blocks:
+          type: array
+          items:
+            $ref: "#/components/schemas/AttestationBlock"
+
+    EventReproductionRequest:
+      type: object
+      required: [requestType, instrument, side, quantity, amountKind, orderType, limitPrice, priceCurrency, accountId, verdict, result]
+      description: >
+        The request bound in the attestation payload, reconstructed from the
+        decoded token for reproduction.
+      properties:
+        requestType:
+          type: string
+          enum: [submit, execution_report, confirm, cancel]
+        orderExternalId:
+          type: string
+        eventExternalId:
+          type: string
+        instrument:
+          type: string
+        side:
+          type: string
+        quantity:
+          type: string
+        amountKind:
+          type: string
+        orderType:
+          type: string
+        limitPrice:
+          type: string
+        priceCurrency:
+          type: string
+        accountId:
+          type: string
+        verdict:
+          type: string
+        result:
+          description: The engine result section, or `null` for a plain submit verdict.
+          oneOf:
+            - $ref: "#/components/schemas/AttestationResult"
+            - type: "null"
+
+    EventReproductionResponse:
+      type: object
+      description: >
+        The exact type-specific live API response the robot received for the
+        attested request. Exactly one facet is populated, matching the request
+        type; the token is carried verbatim in the response's attestation-token
+        field.
+      properties:
+        submitResponse:
+          $ref: "#/components/schemas/ApprovalToken"
+        executionReport:
+          $ref: "#/components/schemas/ExecutionReportResponse"
+        confirm:
+          $ref: "#/components/schemas/OrderMutationResponse"
+        cancel:
+          $ref: "#/components/schemas/OrderMutationResponse"
+
+    EventReproduction:
+      type: object
+      required: [requestType, event, attestation, request, response, canonicalApproval, publicKey, eSign, signature, reason]
+      description: >
+        The controller-facing reproduction bundle for a single order-history
+        event's attestation: byte-for-byte what a robot or AI agent received from
+        the live APIs for the request that produced this event, assembled from
+        persisted state through the same serializers the live endpoints use so it
+        can never drift from real API output. Only public artifacts appear;
+        private key material never does. `attestation`, `request`, `response`,
+        `canonicalApproval` and `publicKey` are `null` when the event carries no
+        persisted attestation envelope, and `reason` then explains why. `publicKey`
+        is also `null` and `signature` empty under alg `none`.
+      properties:
+        requestType:
+          type: string
+          description: >
+            The trading request the attestation binds; empty when the event is
+            unattested.
+        event:
+          description: >
+            Byte-identical to the event body in `GET /orders/{externalId}` (same
+            serializer).
+          $ref: "#/components/schemas/OrderEvent"
+        attestation:
+          description: >
+            The persisted attestation envelope metadata (token verbatim), or
+            `null` when the event has no attestation.
+          oneOf:
+            - $ref: "#/components/schemas/EventAttestation"
+            - type: "null"
+        request:
+          description: >
+            The request bound in the attestation payload, or `null` when the event
+            has no attestation or the token cannot be decoded.
+          oneOf:
+            - $ref: "#/components/schemas/EventReproductionRequest"
+            - type: "null"
+        response:
+          description: >
+            The exact type-specific API response the robot received for this
+            request (token verbatim), or `null` when the event has no attestation.
+          oneOf:
+            - $ref: "#/components/schemas/EventReproductionResponse"
+            - type: "null"
+        canonicalApproval:
+          type: [string, "null"]
+          description: >
+            The exact signed bytes as a string: the attestation payload in its
+            canonical signed form, byte-identical to what was signed. `null` when
+            the event has no attestation or the persisted token cannot be decoded.
+        publicKey:
+          description: >
+            The public key matching this attestation's `keyId`, resolved
+            rotation-safe by id. `null` under alg `none` or when no signature is
+            present.
+          oneOf:
+            - $ref: "#/components/schemas/PublicKeyMaterial"
+            - type: "null"
+        eSign:
+          type: object
+          required: [alg, noESign, signed]
+          description: The signing mode and whether this event was signed.
+          properties:
+            alg:
+              type: string
+              description: >
+                This event's envelope algorithm: `ed25519` when signed, `none`
+                under eSign-off, empty when the event has no attestation.
+            noESign:
+              type: boolean
+              description: The current global eSign-off flag.
+            signed:
+              type: boolean
+              description: Whether this event's envelope carries an Ed25519 signature.
+        signature:
+          type: string
+          description: >
+            The base64 envelope signature; empty under alg `none` or when the
+            event has no attestation.
+        reason:
+          type: string
+          description: >
+            Explains a `null` attestation (e.g. the request was not attested);
+            empty when an attestation is present.

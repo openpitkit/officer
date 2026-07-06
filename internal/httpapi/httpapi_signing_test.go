@@ -429,12 +429,13 @@ func TestSubmitOrderToken_DuplicateConflict(t *testing.T) {
 	}
 }
 
-// TestSubmitOrderToken_MalformedID verifies a malformed supplied id yields 400
-// before any backend call.
-func TestSubmitOrderToken_MalformedID(t *testing.T) {
+// TestSubmitOrderToken_OpaqueID verifies a caller-supplied id is accepted
+// verbatim without a base64url shape requirement.
+func TestSubmitOrderToken_OpaqueID(t *testing.T) {
 	svc := &fakeService{}
+	supplied := "not-a-valid-external-id"
 	body, _ := json.Marshal(map[string]any{
-		"externalId":  "not-a-valid-external-id",
+		"externalId":  supplied,
 		"account":     "acc-1",
 		"baseAsset":   "BTC",
 		"quoteAsset":  "USDT",
@@ -450,13 +451,11 @@ func TestSubmitOrderToken_MalformedID(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec,
 		httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit", bytes.NewReader(body)))
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d: %s", rec.Code, rec.Body.String())
 	}
-	m := bodyMap(t, rec.Result())
-	errObj, _ := m["error"].(map[string]any)
-	if errObj["code"] != "validation" {
-		t.Errorf("want code=validation, got %v", errObj["code"])
+	if svc.submitOrderIn.ExternalID.String() != supplied {
+		t.Fatalf("supplied id not threaded onto order: got %s", svc.submitOrderIn.ExternalID)
 	}
 }
 
@@ -577,6 +576,148 @@ func TestCancelOrder_MissingToken(t *testing.T) {
 			bytes.NewReader(body)))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d", rec.Code)
+	}
+}
+
+// TestConfirmExecution_TerminalOrderConflict verifies POST /orders/{id}/confirm
+// with force=false on a terminal-status order surfaces the node's ErrTerminalOrder
+// as 409 terminal_order.
+func TestConfirmExecution_TerminalOrderConflict(t *testing.T) {
+	svc := &fakeService{confirmErr: domain.ErrTerminalOrder}
+	body, _ := json.Marshal(map[string]any{"token": "mytoken", "force": false})
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec,
+		httptest.NewRequest(http.MethodPost, "/api/v1/orders/"+extID("order-1").String()+"/confirm",
+			bytes.NewReader(body)))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+	m := bodyMap(t, rec.Result())
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "terminal_order" {
+		t.Fatalf("want code=terminal_order, got %v", errObj["code"])
+	}
+	if svc.confirmForce {
+		t.Fatal("force must be false in this test")
+	}
+}
+
+// TestCancelOrder_TerminalOrderConflict verifies POST /orders/{id}/cancel with
+// force=false on a terminal-status order surfaces ErrTerminalOrder as 409
+// terminal_order.
+func TestCancelOrder_TerminalOrderConflict(t *testing.T) {
+	svc := &fakeService{cancelErr: domain.ErrTerminalOrder}
+	body, _ := json.Marshal(map[string]any{
+		"token": "mytoken", "reason": "user request", "force": false,
+	})
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec,
+		httptest.NewRequest(http.MethodPost, "/api/v1/orders/"+extID("order-1").String()+"/cancel",
+			bytes.NewReader(body)))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+	m := bodyMap(t, rec.Result())
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "terminal_order" {
+		t.Fatalf("want code=terminal_order, got %v", errObj["code"])
+	}
+}
+
+// TestGetSigningKeyPublic_HappyPath verifies GET /signing/keys/{keyId}/public
+// resolves the public key by id and returns only public material.
+func TestGetSigningKeyPublic_HappyPath(t *testing.T) {
+	svc := &fakeService{
+		publicKeysByID: map[string]string{
+			"key-42": "-----BEGIN PUBLIC KEY-----\nABC\n-----END PUBLIC KEY-----",
+		},
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/api/v1/signing/keys/key-42/public", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if svc.keyByIDLast != "key-42" {
+		t.Errorf("want resolution by keyId=key-42, got %q", svc.keyByIDLast)
+	}
+	if svc.keyByIDFormat != "pem-pkcs8" {
+		t.Errorf("want default format pem-pkcs8, got %q", svc.keyByIDFormat)
+	}
+	m := bodyMap(t, rec.Result())
+	if m["keyId"] != "key-42" {
+		t.Errorf("want keyId=key-42, got %v", m["keyId"])
+	}
+	if m["format"] != "pem-pkcs8" {
+		t.Errorf("want format=pem-pkcs8, got %v", m["format"])
+	}
+	if _, ok := m["key"].(string); !ok {
+		t.Errorf("want key string, got %T", m["key"])
+	}
+	for _, forbidden := range []string{"privateKey", "private_key", "priv"} {
+		if _, present := m[forbidden]; present {
+			t.Errorf("private material %q must not appear", forbidden)
+		}
+	}
+}
+
+// TestGetSigningKeyPublic_Format verifies ?format= is forwarded to the service.
+func TestGetSigningKeyPublic_Format(t *testing.T) {
+	svc := &fakeService{publicKeysByID: map[string]string{"k": "data"}}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/api/v1/signing/keys/k/public?format=openssh", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	if svc.keyByIDFormat != "openssh" {
+		t.Errorf("want format=openssh forwarded, got %q", svc.keyByIDFormat)
+	}
+}
+
+// TestGetSigningKeyPublic_BadFormat verifies an unknown format yields 400.
+func TestGetSigningKeyPublic_BadFormat(t *testing.T) {
+	svc := &fakeService{publicKeysByID: map[string]string{"k": "data"}}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/api/v1/signing/keys/k/public?format=bad", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+}
+
+// TestGetSigningKeyPublic_Unknown verifies an unknown key id yields 404.
+func TestGetSigningKeyPublic_Unknown(t *testing.T) {
+	svc := &fakeService{publicKeysByID: map[string]string{}}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/api/v1/signing/keys/nope/public", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

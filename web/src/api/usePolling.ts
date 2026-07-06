@@ -25,15 +25,15 @@ export type LoadState<T> =
 
 export interface PollingResult<T> {
   load: LoadState<T>;
-  /** Re-fetch now, resetting to loading and clearing any prior error. */
+  /** Re-fetch now, keeping ready data visible while the request is in flight. */
   reload: () => void;
 }
 
 /**
  * Fetch `fetcher` on mount and then on a fixed interval, exposing
  * loading / ready / error states. The fetcher must accept an AbortSignal so an
- * unmount or re-fetch cancels the in-flight request. Background polls keep the
- * last good data visible (no loading flash); `reload` shows loading again.
+ * unmount or re-fetch cancels the in-flight request. Re-fetches keep the last
+ * good data visible, so mounted children do not lose local draft state.
  */
 export function usePolling<T>(
   fetcher: (signal: AbortSignal) => Promise<T>,
@@ -55,8 +55,19 @@ export function usePolling<T>(
   // eslint-disable-next-line react-hooks/refs
   fetcherRef.current = fetcher;
 
+  // Set by reload() and consumed by the next run so a failed manual reload
+  // surfaces the error even from ready state, while a failed background poll
+  // keeps the last good data. A ref (not state) so the running interval reads
+  // the flag without re-subscribing the effect.
+  const reloadRequestedRef = useRef(false);
+
   const reload = useCallback(() => {
-    setLoad({ state: "loading", data: null, error: null });
+    reloadRequestedRef.current = true;
+    setLoad((prev) =>
+      prev.state === "ready"
+        ? prev
+        : { state: "loading", data: null, error: null },
+    );
     setNonce((n) => n + 1);
   }, []);
 
@@ -71,6 +82,10 @@ export function usePolling<T>(
       // own signal, not a controller a later run has since replaced.
       const controller = new AbortController();
       current = controller;
+      // Consume the reload flag for this run: a failed manual reload must
+      // surface the error even from ready state, unlike a background poll.
+      const reloadRun = reloadRequestedRef.current;
+      reloadRequestedRef.current = false;
       fetcherRef
         .current(controller.signal)
         .then((data) => {
@@ -84,9 +99,10 @@ export function usePolling<T>(
           }
           const message = err instanceof Error ? err.message : String(err);
           setLoad((prev) =>
-            // Keep showing prior data on a background failure; surface the
-            // error only when nothing has loaded yet.
-            prev.state === "ready"
+            // Surface the error when nothing has loaded yet or the operator
+            // asked for a fresh reload; keep prior data only on a passive
+            // background poll failure so drafts survive a transient blip.
+            prev.state === "ready" && !reloadRun
               ? prev
               : { state: "error", data: null, error: message },
           );

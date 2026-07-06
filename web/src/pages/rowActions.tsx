@@ -16,19 +16,18 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 import type { TFunction } from "i18next";
-import {
-  ArrowLeftRight,
-  Coins,
-  History,
-  Pencil,
-  ShieldCheck,
-  Trash2,
-} from "lucide-react";
-import { Link } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 
 import type { Account, Group, Limit } from "@/api/types";
-import { RowActionButton } from "@/components/RowActionButton";
-import { Button } from "@/components/ui/button";
+import {
+  DeleteButton as RowDeleteButton,
+  EditButton,
+  HistoryButton,
+  PoliciesButton,
+  PositionsButton,
+  TradingButton,
+} from "@/framework";
+import { absoluteAppUrl } from "@/lib/shareLink";
 
 export interface AccountRowActionContext {
   t: TFunction<"accounts">;
@@ -53,15 +52,15 @@ export function AccountPositionsAction({
   account: Account;
   ctx: AccountRowActionContext;
 }) {
+  const navigate = useNavigate();
+  const path = `/positions?account=${encodeURIComponent(account.code)}`;
+
   return (
-    <Link
-      to={`/positions?account=${encodeURIComponent(account.code)}`}
+    <PositionsButton
+      href={absoluteAppUrl(path)}
       title={ctx.t("accounts.links.positions")}
-      aria-label={ctx.t("accounts.links.positions")}
-      className="inline-flex h-7 w-7 items-center justify-center rounded-badge transition-colors hover:bg-accent-dim"
-    >
-      <Coins className="h-3.5 w-3.5 text-muted" />
-    </Link>
+      onClick={() => navigate(path)}
+    />
   );
 }
 
@@ -72,15 +71,15 @@ export function AccountTradingAction({
   account: Account;
   ctx: AccountRowActionContext;
 }) {
+  const navigate = useNavigate();
+  const path = `/trading?account=${encodeURIComponent(account.code)}`;
+
   return (
-    <Link
-      to={`/trading?account=${encodeURIComponent(account.code)}`}
+    <TradingButton
+      href={absoluteAppUrl(path)}
       title={ctx.t("accounts.links.trading")}
-      aria-label={ctx.t("accounts.links.trading")}
-      className="inline-flex h-7 w-7 items-center justify-center rounded-badge transition-colors hover:bg-accent-dim"
-    >
-      <ArrowLeftRight className="h-3.5 w-3.5 text-muted" />
-    </Link>
+      onClick={() => navigate(path)}
+    />
   );
 }
 
@@ -91,15 +90,15 @@ export function AccountPoliciesAction({
   account: Account;
   ctx: AccountRowActionContext;
 }) {
+  const navigate = useNavigate();
+  const path = `/policies?account=${encodeURIComponent(account.code)}`;
+
   return (
-    <Link
-      to={`/policies?account=${encodeURIComponent(account.code)}`}
+    <PoliciesButton
+      href={absoluteAppUrl(path)}
       title={ctx.t("accounts.links.policies")}
-      aria-label={ctx.t("accounts.links.policies")}
-      className="inline-flex h-7 w-7 items-center justify-center rounded-badge transition-colors hover:bg-accent-dim"
-    >
-      <ShieldCheck className="h-3.5 w-3.5 text-muted" />
-    </Link>
+      onClick={() => navigate(path)}
+    />
   );
 }
 
@@ -110,15 +109,15 @@ export function AccountAuditAction({
   account: Account;
   ctx: AccountRowActionContext;
 }) {
+  const navigate = useNavigate();
+  const path = `/audit?account=${encodeURIComponent(account.code)}`;
+
   return (
-    <Link
-      to={`/audit?account=${encodeURIComponent(account.code)}`}
+    <HistoryButton
+      href={absoluteAppUrl(path)}
       title={ctx.t("accounts.links.audit")}
-      aria-label={ctx.t("accounts.links.audit")}
-      className="inline-flex h-7 w-7 items-center justify-center rounded-badge transition-colors hover:bg-accent-dim"
-    >
-      <History className="h-3.5 w-3.5 text-muted" />
-    </Link>
+      onClick={() => navigate(path)}
+    />
   );
 }
 
@@ -130,10 +129,8 @@ export function AccountDeleteAction({
   ctx: AccountRowActionContext;
 }) {
   return (
-    <RowActionButton
-      icon={Trash2}
-      label={ctx.t("accounts.actions.deleteTitle")}
-      variant="ghost"
+    <RowDeleteButton
+      title={ctx.t("accounts.actions.deleteTitle")}
       onClick={() => ctx.onDelete(account)}
     />
   );
@@ -147,15 +144,10 @@ export function GroupDeleteAction({
   ctx: GroupRowActionContext;
 }) {
   return (
-    <RowActionButton
-      icon={Trash2}
-      label={ctx.t("groups.actions.deleteTitle")}
-      variant="ghost"
+    <RowDeleteButton
+      title={ctx.t("groups.actions.deleteTitle")}
       onClick={() => ctx.onDelete(group)}
-      className="text-[var(--danger)] hover:text-[var(--danger)]"
-    >
-      {ctx.t("groups.actions.delete")}
-    </RowActionButton>
+    />
   );
 }
 
@@ -167,13 +159,10 @@ export function LimitEditAction({
   ctx: LimitRowActionContext;
 }) {
   return (
-    <RowActionButton
-      icon={Pencil}
-      label={ctx.t("table.editAriaLabel")}
+    <EditButton
+      title={ctx.t("table.editAriaLabel")}
       onClick={() => ctx.onEdit(limit)}
-    >
-      {ctx.t("table.edit")}
-    </RowActionButton>
+    />
   );
 }
 
@@ -185,13 +174,9 @@ export function LimitDeleteAction({
   ctx: LimitRowActionContext;
 }) {
   return (
-    <Button
-      variant="outline"
-      size="sm"
+    <RowDeleteButton
+      title={ctx.t("table.deleteAriaLabel")}
       onClick={() => ctx.onDelete(limit)}
-      aria-label={ctx.t("table.deleteAriaLabel")}
-    >
-      <Trash2 className="h-3.5 w-3.5" />
-    </Button>
+    />
   );
 }

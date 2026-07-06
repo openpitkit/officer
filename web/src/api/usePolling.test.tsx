@@ -17,9 +17,24 @@
 
 import { useCallback } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { usePolling } from "@/api/usePolling";
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
 
 function PollingProbe({
   fetchSpy,
@@ -51,6 +66,22 @@ function AbortProbe({ onAbort }: { onAbort: () => void }) {
   return <span>mounted</span>;
 }
 
+function ReloadProbe({
+  fetcher,
+}: {
+  fetcher: (signal: AbortSignal) => Promise<string>;
+}) {
+  const { load, reload } = usePolling(fetcher, 60000);
+  return (
+    <>
+      <span>{load.state === "ready" ? load.data : load.state}</span>
+      <button type="button" onClick={reload}>
+        reload
+      </button>
+    </>
+  );
+}
+
 describe("usePolling", () => {
   it("refetches immediately when the refresh key changes", async () => {
     const fetchSpy = vi.fn();
@@ -79,5 +110,69 @@ describe("usePolling", () => {
     unmount();
 
     expect(onAbort).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps ready data visible while a manual reload is in flight", async () => {
+    const user = userEvent.setup();
+    const first = deferred<string>();
+    const second = deferred<string>();
+    const fetcher = vi
+      .fn<(signal: AbortSignal) => Promise<string>>()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+
+    render(<ReloadProbe fetcher={fetcher} />);
+    first.resolve("first");
+
+    await waitFor(() => {
+      expect(screen.getByText("first")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "reload" }));
+
+    await waitFor(() => {
+      expect(fetcher).toHaveBeenCalledTimes(2);
+    });
+    expect(screen.getByText("first")).toBeInTheDocument();
+
+    second.resolve("second");
+
+    await waitFor(() => {
+      expect(screen.getByText("second")).toBeInTheDocument();
+    });
+  });
+
+  it("surfaces the error when a manual reload fails while ready", async () => {
+    const user = userEvent.setup();
+    const first = deferred<string>();
+    const second = deferred<string>();
+    const fetcher = vi
+      .fn<(signal: AbortSignal) => Promise<string>>()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+
+    render(<ReloadProbe fetcher={fetcher} />);
+    first.resolve("first");
+
+    await waitFor(() => {
+      expect(screen.getByText("first")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "reload" }));
+
+    await waitFor(() => {
+      expect(fetcher).toHaveBeenCalledTimes(2);
+    });
+    // Stale data stays visible while the reload is in flight.
+    expect(screen.getByText("first")).toBeInTheDocument();
+
+    second.reject(new Error("reload failed"));
+
+    // A failed reload replaces the stale data with the error state instead of
+    // silently retaining it.
+    await waitFor(() => {
+      expect(screen.getByText("error")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("first")).not.toBeInTheDocument();
   });
 });

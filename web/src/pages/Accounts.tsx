@@ -23,9 +23,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   Ban,
   CircleCheck,
-  Eye,
   Folder,
-  Pencil,
   Plus,
   Search,
   Trash2,
@@ -69,9 +67,11 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  ActionButton,
   ApiError,
   ColumnHeader,
   DeleteButton,
+  EditButton,
   FieldLabel,
   FilterBar,
   FilterChip,
@@ -1072,13 +1072,15 @@ export function CreateAccountDialog({
         <div className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="account-code">{ta("createAccount.codeLabel")}</Label>
-            <Input
+            <ClearableInput
               id="account-code"
               value={code}
               autoFocus
               spellCheck={false}
               placeholder="acc-aapl-desk"
               onChange={(e) => setCode(e.target.value)}
+              onClear={() => setCode("")}
+              clearLabel={ta("filters.clearField")}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !validation) {
                   void submit();
@@ -2710,19 +2712,11 @@ function GroupsPanel({
                         )}
                       </span>
                       <span className="ml-auto flex shrink-0 items-center">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-7 w-7 shrink-0 px-0"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onEdit(row.group);
-                          }}
+                        <EditButton
+                          size={28}
+                          onClick={() => onEdit(row.group)}
                           title={t("groups.actions.editTitle")}
-                          aria-label={t("groups.actions.editTitle")}
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </Button>
+                        />
                       </span>
                     </div>
                   )}
@@ -2759,49 +2753,30 @@ function GroupsPanel({
                     {row.kind === "real" && (
                       <div className="accounts-status-action-area">
                         {row.group.blocked && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="accounts-status-action h-7 w-7 border-0 px-0"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onShowBlockDetails(row.group);
-                            }}
+                          <ActionButton
+                            icon="view"
+                            size={28}
                             title={t("groups.actions.viewBlockDetails")}
-                            aria-label={t("groups.actions.viewBlockDetails")}
-                          >
-                            <Eye className="h-3.5 w-3.5" />
-                          </Button>
+                            onClick={() => onShowBlockDetails(row.group)}
+                          />
                         )}
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="accounts-status-action h-7 w-7 border-0 px-0"
-                          onClick={(e) => {
-                            e.stopPropagation();
+                        <ActionButton
+                          icon={row.group.blocked ? "check" : "block"}
+                          size={28}
+                          title={
+                            row.group.blocked
+                              ? t("groups.actions.unblock")
+                              : t("groups.actions.block")
+                          }
+                          onClick={() => {
                             if (row.group.blocked) {
                               onUnblock(row.group);
                             } else {
                               onBlock(row.group);
                             }
                           }}
-                          title={
-                            row.group.blocked
-                              ? t("groups.actions.unblock")
-                              : t("groups.actions.block")
-                          }
-                          aria-label={
-                            row.group.blocked
-                              ? t("groups.actions.unblock")
-                              : t("groups.actions.block")
-                          }
-                        >
-                          {row.group.blocked ? (
-                            <CircleCheck className="h-3.5 w-3.5" />
-                          ) : (
-                            <Ban className="h-3.5 w-3.5" />
-                          )}
-                        </Button>
+                          danger={!row.group.blocked}
+                        />
                       </div>
                     )}
                   </div>
@@ -2816,19 +2791,12 @@ function GroupsPanel({
                   {row.kind === "real" ? (
                     <div className="flex min-w-0 items-start gap-1">
                       <NotesText text={row.group.notes || "—"} />
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="ml-auto h-7 w-7 shrink-0 px-0"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onEditNotes(row.group);
-                        }}
+                      <EditButton
+                        size={28}
+                        style={{ marginLeft: "auto" }}
+                        onClick={() => onEditNotes(row.group)}
                         title={t("groups.actions.editNotesTitle")}
-                        aria-label={t("groups.actions.editNotesTitle")}
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </Button>
+                      />
                     </div>
                   ) : (
                     <span className="italic">
@@ -3060,16 +3028,11 @@ function AccountsTable({
                       )}
                     </span>
                     <span className="ml-auto flex shrink-0 items-center">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 w-7 shrink-0 px-0"
+                      <EditButton
+                        size={28}
                         onClick={() => onEditAccount(account)}
                         title={t("accounts.actions.editTitle")}
-                        aria-label={t("accounts.actions.editTitle")}
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </Button>
+                      />
                     </span>
                   </div>
                 </TableCell>
@@ -3105,16 +3068,11 @@ function AccountsTable({
                           onClick={() => onFilterGroup(account.group)}
                         />
                       )}
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 w-7 shrink-0 px-0"
+                      <EditButton
+                        size={28}
                         onClick={() => onAssignGroup(account)}
                         title={t("accounts.groupCell.editTitle")}
-                        aria-label={t("accounts.groupCell.editTitle")}
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </Button>
+                      />
                     </span>
                   </div>
                 </TableCell>
@@ -3134,26 +3092,18 @@ function AccountsTable({
                         {t("accounts.status.blocked")}
                       </Badge>
                       <div className="accounts-status-action-area">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="accounts-status-action h-7 w-7 border-0 px-0"
+                        <ActionButton
+                          icon="view"
+                          size={28}
                           onClick={() => onShowBlockDetails(account)}
                           title={t("accounts.actions.viewBlockDetails")}
-                          aria-label={t("accounts.actions.viewBlockDetails")}
-                        >
-                          <Eye className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="accounts-status-action h-7 w-7 border-0 px-0"
+                        />
+                        <ActionButton
+                          icon="check"
+                          size={28}
                           onClick={() => onUnblock(account)}
                           title={t("accounts.actions.unblock")}
-                          aria-label={t("accounts.actions.unblock")}
-                        >
-                          <CircleCheck className="h-3.5 w-3.5" />
-                        </Button>
+                        />
                       </div>
                     </div>
                   ) : (
@@ -3163,16 +3113,13 @@ function AccountsTable({
                         {t("accounts.status.active")}
                       </Badge>
                       <div className="accounts-status-action-area">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="accounts-status-action h-7 w-7 border-0 px-0"
+                        <ActionButton
+                          icon="block"
+                          size={28}
                           onClick={() => onBlock(account)}
                           title={t("accounts.actions.block")}
-                          aria-label={t("accounts.actions.block")}
-                        >
-                          <Ban className="h-3.5 w-3.5" />
-                        </Button>
+                          danger
+                        />
                       </div>
                     </div>
                   )}
@@ -3184,16 +3131,12 @@ function AccountsTable({
                 >
                   <div className="flex min-w-0 items-start gap-1">
                     <NotesText text={account.notes || "—"} />
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="ml-auto h-7 w-7 shrink-0 px-0"
+                    <EditButton
+                      size={28}
+                      style={{ marginLeft: "auto" }}
                       onClick={() => onEditNotes(account)}
                       title={t("accounts.actions.editNotesTitle")}
-                      aria-label={t("accounts.actions.editNotesTitle")}
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                    </Button>
+                    />
                   </div>
                 </TableCell>
 
@@ -3201,18 +3144,30 @@ function AccountsTable({
                   <RowActions>
                     <PositionsButton
                       title={t("accounts.links.positions")}
+                      href={absoluteAppUrl(
+                        `/positions?account=${encodeURIComponent(account.code)}`,
+                      )}
                       onClick={() => onOpenPositions(account)}
                     />
                     <TradingButton
                       title={t("accounts.links.trading")}
+                      href={absoluteAppUrl(
+                        `/trading?account=${encodeURIComponent(account.code)}`,
+                      )}
                       onClick={() => onOpenTrading(account)}
                     />
                     <PoliciesButton
                       title={t("accounts.links.policies")}
+                      href={absoluteAppUrl(
+                        `/policies?account=${encodeURIComponent(account.code)}`,
+                      )}
                       onClick={() => onOpenPolicies(account)}
                     />
                     <HistoryButton
                       title={t("accounts.links.audit")}
+                      href={absoluteAppUrl(
+                        `/audit?account=${encodeURIComponent(account.code)}`,
+                      )}
                       onClick={() => onOpenHistory(account)}
                     />
                     <DeleteButton

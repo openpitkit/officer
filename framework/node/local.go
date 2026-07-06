@@ -22,14 +22,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/shopspring/decimal"
 
-	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
@@ -48,9 +47,9 @@ import (
 // single-realm connector resolves ForRealm to one fixed realm, so realm is
 // re-obtained only when ResetDatabase recreates the backing database.
 //
-// mutate serializes every mutation so the store-write, engine-apply,
-// revert-on-failure, and audit-append steps run atomically with respect to each
-// other. Reads do not take it.
+// mutate serializes store-only control-plane writes. Account and group engine
+// effects route through the engine's async lanes instead; multi-account or
+// rebuild-style operations use the exclusive restart gate below.
 //
 // Administrative snapshot changes and policy changes the SDK cannot reconfigure
 // dynamically rebuild the engine from persisted state. While that rebuild
@@ -62,9 +61,31 @@ type localNode struct {
 	build    engine.BuildFunc
 	db       store.Store
 	realm    store.RealmStore
+	fatal    func(error)
 
 	mutate     sync.Mutex
+	laneGate   sync.RWMutex
 	restarting atomic.Bool
+}
+
+const (
+	autoCreatedAssetClassCode  = "auto-created"
+	autoCreatedAssetClassTitle = "Auto-created assets"
+	autoCreatedAssetClassNotes = "Assets automatically created while handling " +
+		"operations that referenced unknown assets."
+)
+
+// LocalOption customizes a local node instance.
+type LocalOption func(*localNode)
+
+// WithFatalShutdownHook wires the process-level fail-stop hook for
+// unrecoverable post-engine persistence failures.
+func WithFatalShutdownHook(hook func(error)) LocalOption {
+	return func(n *localNode) {
+		if hook != nil {
+			n.fatal = hook
+		}
+	}
 }
 
 // NewLocalNode builds the single in-process Node: it binds the fixed realm via
@@ -85,7 +106,7 @@ type localNode struct {
 // the realm cannot be bound, if the seed cannot be loaded, or if the engine
 // cannot be built.
 func NewLocalNode(
-	ctx context.Context, st store.Store, build engine.BuildFunc,
+	ctx context.Context, st store.Store, build engine.BuildFunc, opts ...LocalOption,
 ) (Node, engine.Engine, error) {
 	if st == nil {
 		return nil, nil, fmt.Errorf("nil store")
@@ -99,7 +120,15 @@ func NewLocalNode(
 		return nil, nil, fmt.Errorf("bind realm: %w", err)
 	}
 
-	n := &localNode{db: st, realm: realm, build: build}
+	n := &localNode{
+		db:    st,
+		realm: realm,
+		build: build,
+		fatal: func(error) {},
+	}
+	for _, opt := range opts {
+		opt(n)
+	}
 	if err := n.ensureOperatorPrincipal(ctx, realm); err != nil {
 		return nil, nil, err
 	}
@@ -132,6 +161,66 @@ func NewLocalNode(
 	}
 
 	return n, eng, nil
+}
+
+func (n *localNode) accountDiagnosticID(
+	ctx context.Context, account domain.AccountID,
+) (string, error) {
+	if account == "" {
+		return "unknown", nil
+	}
+	record, ok, err := n.realm.GetAccount(ctx, account)
+	if err != nil {
+		return "", fmt.Errorf("read diagnostic account id %s: %w", account, err)
+	}
+	if !ok || record.EngineAccountID == 0 {
+		return "", fmt.Errorf("diagnostic account id %s: %w", account, domain.ErrNotFound)
+	}
+	return strconv.FormatUint(record.EngineAccountID.Uint64(), 10), nil
+}
+
+// fatalPostEnginePersistence routes a post-engine persistence failure into the
+// fatal-shutdown hook. The engine mutation already committed, so a failed store
+// write leaves engine and store divergent; the P7 cascade is intentionally
+// straight-to-fatal (it does not block the account first) because there is no
+// safe in-process state to fall back to once the durable record is lost.
+func (n *localNode) fatalPostEnginePersistence(
+	operation string, accountID string, err error,
+) error {
+	if err == nil {
+		return nil
+	}
+	if accountID == "" {
+		accountID = "unknown"
+	}
+	n.fatal(fmt.Errorf(
+		"operation=%q account_id=%s: post-engine persistence failure: %w",
+		operation, accountID, err,
+	))
+	return err
+}
+
+// fatalPostEngineAuditByCode routes a post-engine audit-write failure into the
+// fatal-shutdown hook, identifying the subject by its operator-facing code
+// (subjectKind is "account" or "group") rather than the engine surrogate. The
+// admin block/group/set-group paths use it so the diagnostic never resolves or
+// emits the DB/engine account id; the audit row itself already stores code and
+// title only. Like fatalPostEnginePersistence this is the straight-to-fatal P7
+// cascade: the engine mutation committed and its audit trail is now lost.
+func (n *localNode) fatalPostEngineAuditByCode(
+	operation, subjectKind, code string, err error,
+) error {
+	if err == nil {
+		return nil
+	}
+	if code == "" {
+		code = "unknown"
+	}
+	n.fatal(fmt.Errorf(
+		"operation=%q %s=%s: post-engine persistence failure: %w",
+		operation, subjectKind, code, err,
+	))
+	return err
 }
 
 // loadSnapshot reads the full engine seed from the bound realm: accounts (with
@@ -278,7 +367,15 @@ func (n *localNode) RestoreBackup(
 	opts backup.RestoreOptions,
 	caller domain.Caller,
 ) (backup.RestoreSummary, marketdata.Sink, error) {
-	if backup.TouchesRuntime(opts.Scope) {
+	// Decide the lock from the normalized scope, not the raw requested one. A
+	// restore of an account-addressed section (audit log, activity history) force-
+	// includes the accounts+groups dictionary for FK resolution, and landing a new
+	// group there requires an engine rebuild the store gates on the applied rows.
+	// The rebuild swaps the engine, so it must run under the exclusive restart gate
+	// that quiesces every lane; take it whenever the normalized scope could write a
+	// runtime dictionary. Only a purely observational restore (settings, or a
+	// non-account-addressed section) takes the lighter mutation lock.
+	if backup.TouchesRuntime(opts.Scope.Normalize()) {
 		if err := n.beginEngineRestart(); err != nil {
 			return backup.RestoreSummary{}, n.currentMarketDataSink(), err
 		}
@@ -416,6 +513,28 @@ func (n *localNode) currentMarketDataSink() marketdata.Sink {
 	return n.engine.MarketDataSink()
 }
 
+func (n *localNode) currentEngine() engine.Engine {
+	n.engineMu.RLock()
+	defer n.engineMu.RUnlock()
+	return n.engine
+}
+
+func (n *localNode) beginLane() (engine.Engine, func(), error) {
+	n.laneGate.RLock()
+	if n.restarting.Load() {
+		n.laneGate.RUnlock()
+		return nil, nil, fmt.Errorf(
+			"engine restart in progress; mutating requests are rejected until rebuild completes: %w",
+			domain.ErrEngineRestarting)
+	}
+	return n.currentEngine(), n.laneGate.RUnlock, nil
+}
+
+func (n *localNode) beginLaneRead() (engine.Engine, func()) {
+	n.laneGate.RLock()
+	return n.currentEngine(), n.laneGate.RUnlock
+}
+
 // CurrentMarketDataSink returns the current engine's quote sink so the
 // market-data runtime can re-adopt it after an engine rebuild.
 func (n *localNode) CurrentMarketDataSink() marketdata.Sink {
@@ -448,26 +567,18 @@ func (n *localNode) beginEngineRestart() error {
 			"engine restart in progress; mutating requests are rejected until rebuild completes: %w",
 			domain.ErrEngineRestarting)
 	}
+	n.laneGate.Lock()
 	n.mutate.Lock()
 	return nil
 }
 
 func (n *localNode) endEngineRestart() {
+	// Clear the restart flag before releasing the mutation lock so a mutating
+	// request that wins the lock next sees restarting=false and proceeds, rather
+	// than racing the flag and rejecting spuriously.
+	n.restarting.Store(false)
 	n.mutate.Unlock()
-	n.restarting.Store(false)
-}
-
-func (n *localNode) beginEngineRestartLocked() error {
-	if !n.restarting.CompareAndSwap(false, true) {
-		return fmt.Errorf(
-			"engine restart in progress; mutating requests are rejected until rebuild completes: %w",
-			domain.ErrEngineRestarting)
-	}
-	return nil
-}
-
-func (n *localNode) endEngineRestartLocked() {
-	n.restarting.Store(false)
+	n.laneGate.Unlock()
 }
 
 func (n *localNode) rollbackStore(ctx context.Context, rollback backup.Archive, err error) error {
@@ -687,10 +798,10 @@ func (n *localNode) DeleteAssetClass(
 func (n *localNode) CreateAccount(
 	ctx context.Context, account domain.Account, caller domain.Caller,
 ) (domain.Account, error) {
-	if err := n.beginMutation(); err != nil {
+	if err := n.beginEngineRestart(); err != nil {
 		return domain.Account{}, err
 	}
-	defer n.endMutation()
+	defer n.endEngineRestart()
 
 	account, err := n.realm.CreateAccount(ctx, account)
 	if err != nil {
@@ -717,54 +828,75 @@ func (n *localNode) CreateAccount(
 func (n *localNode) SetAccountBlocked(
 	ctx context.Context, key Key, blocked bool, reason string, caller domain.Caller,
 ) error {
-	if err := n.beginMutation(); err != nil {
+	eng, done, err := n.beginLane()
+	if err != nil {
 		return err
 	}
-	defer n.endMutation()
+	defer done()
 
-	prev, ok, err := n.realm.GetAccount(ctx, key.Account)
-	if err != nil {
+	// Pre-lane existence check: the engine resolves the account before entering
+	// the lane and rejects an unknown code with ErrInvalid, so a missing account
+	// must be surfaced as ErrNotFound here (before the lane) or the closure below
+	// never runs to report it.
+	if _, ok, err := n.realm.GetAccount(ctx, key.Account); err != nil {
 		return fmt.Errorf("read account for block: %w", err)
-	}
-	if !ok {
+	} else if !ok {
 		return fmt.Errorf("account %q: %w", key.Account, domain.ErrNotFound)
 	}
 
-	if err := n.realm.SetAccountBlocked(ctx, key.Account, blocked, reason); err != nil {
-		return fmt.Errorf("set account blocked: %w", err)
-	}
+	// Serialize the prev-read, store write, engine block, revert, and audit on
+	// the one account lane so concurrent same-account admin ops cannot interleave
+	// the store write with the engine block and diverge. The lane also serializes
+	// against fills and the execution-report kill-switch, which mutate the same
+	// account's engine block state on that lane.
+	return eng.RunAccountSynchronized(ctx, key.Account, func(lane engine.AccountLane) error {
+		prev, ok, err := n.realm.GetAccount(ctx, key.Account)
+		if err != nil {
+			return fmt.Errorf("read account for block: %w", err)
+		}
+		if !ok {
+			return fmt.Errorf("account %q: %w", key.Account, domain.ErrNotFound)
+		}
 
-	if applyErr := n.applyBlock(ctx, key.Account, blocked, reason); applyErr != nil {
-		// Revert the store to the previously persisted blocked state.
-		_ = n.realm.SetAccountBlocked(ctx, key.Account, prev.Blocked, prev.BlockReason)
-		return fmt.Errorf("apply account block: %w", applyErr)
-	}
+		if err := n.realm.SetAccountBlocked(ctx, key.Account, blocked, reason); err != nil {
+			return fmt.Errorf("set account blocked: %w", err)
+		}
 
-	action := domain.AuditActionBlock
-	detail := fmt.Sprintf("block account %s", key.Account)
-	if !blocked {
-		action = domain.AuditActionUnblock
-		detail = fmt.Sprintf("unblock account %s", key.Account)
-	}
-	if err := n.audit(ctx, caller, store.AuditEntry{
-		Action:       action,
-		Account:      key.Account,
-		AccountTitle: prev.Title,
-		Detail:       detail,
-	}); err != nil {
-		return fmt.Errorf("audit account block: %w", err)
-	}
-	return nil
+		if applyErr := n.applyBlock(ctx, lane, key.Account, blocked, reason); applyErr != nil {
+			// Revert the store to the previously persisted blocked state.
+			_ = n.realm.SetAccountBlocked(ctx, key.Account, prev.Blocked, prev.BlockReason)
+			return fmt.Errorf("apply account block: %w", applyErr)
+		}
+
+		action := domain.AuditActionBlock
+		detail := fmt.Sprintf("block account %s", key.Account)
+		if !blocked {
+			action = domain.AuditActionUnblock
+			detail = fmt.Sprintf("unblock account %s", key.Account)
+		}
+		if err := n.audit(ctx, caller, store.AuditEntry{
+			Action:       action,
+			Account:      key.Account,
+			AccountTitle: prev.Title,
+			Detail:       detail,
+		}); err != nil {
+			return n.fatalPostEngineAuditByCode(
+				"audit account block", "account", key.Account.String(),
+				fmt.Errorf("audit account block: %w", err),
+			)
+		}
+		return nil
+	})
 }
 
 // applyBlock applies the desired blocked state to the engine.
 func (n *localNode) applyBlock(
-	ctx context.Context, id domain.AccountID, blocked bool, reason string,
+	ctx context.Context, lane engine.AccountLane, id domain.AccountID, blocked bool, reason string,
 ) error {
 	if blocked {
-		return n.engine.BlockAccount(ctx, id, reason)
+		return lane.BlockAccount(ctx, id, reason)
 	}
-	return n.engine.UnblockAccount(ctx, id)
+	return lane.UnblockAccount(ctx, id)
 }
 
 // mirrorEngineBlocksAudit writes one system-sourced audit row per engine-recorded
@@ -889,10 +1021,10 @@ func (n *localNode) listLimits(
 func (n *localNode) PutRateLimit(
 	ctx context.Context, limit domain.LimitRate, caller domain.Caller,
 ) (marketdata.Sink, error) {
-	if err := n.beginMutation(); err != nil {
+	if err := n.beginEngineRestart(); err != nil {
 		return nil, err
 	}
-	defer n.endMutation()
+	defer n.endEngineRestart()
 
 	target := LimitTarget{
 		Policy:  domain.PolicyRateLimit,
@@ -905,6 +1037,11 @@ func (n *localNode) PutRateLimit(
 		return nil, err
 	}
 
+	if err := n.ensureLimitAsset(
+		ctx, limit.Scope, limit.Asset, "rate limit", caller,
+	); err != nil {
+		return nil, err
+	}
 	if err := n.realm.PutRateLimit(ctx, limit); err != nil {
 		return nil, fmt.Errorf("put rate limit: %w", err)
 	}
@@ -930,10 +1067,10 @@ func (n *localNode) PutRateLimit(
 func (n *localNode) PutOrderSizeLimit(
 	ctx context.Context, limit domain.LimitOrderSize, caller domain.Caller,
 ) (marketdata.Sink, error) {
-	if err := n.beginMutation(); err != nil {
+	if err := n.beginEngineRestart(); err != nil {
 		return nil, err
 	}
-	defer n.endMutation()
+	defer n.endEngineRestart()
 
 	target := LimitTarget{
 		Policy:  domain.PolicyOrderSizeLimit,
@@ -946,6 +1083,11 @@ func (n *localNode) PutOrderSizeLimit(
 		return nil, err
 	}
 
+	if err := n.ensureLimitAsset(
+		ctx, limit.Scope, limit.Asset, "order-size limit", caller,
+	); err != nil {
+		return nil, err
+	}
 	if err := n.realm.PutOrderSizeLimit(ctx, limit); err != nil {
 		return nil, fmt.Errorf("put order-size limit: %w", err)
 	}
@@ -971,10 +1113,10 @@ func (n *localNode) PutOrderSizeLimit(
 func (n *localNode) PutPnlBoundsLimit(
 	ctx context.Context, limit domain.LimitPnlBounds, caller domain.Caller,
 ) (marketdata.Sink, error) {
-	if err := n.beginMutation(); err != nil {
+	if err := n.beginEngineRestart(); err != nil {
 		return nil, err
 	}
-	defer n.endMutation()
+	defer n.endEngineRestart()
 
 	target := LimitTarget{
 		Policy:  domain.PolicyPnlBoundsKillSwitch,
@@ -987,6 +1129,11 @@ func (n *localNode) PutPnlBoundsLimit(
 		return nil, err
 	}
 
+	if err := n.ensureLimitAsset(
+		ctx, limit.Scope, limit.Asset, "pnl-bounds limit", caller,
+	); err != nil {
+		return nil, err
+	}
 	if err := n.realm.PutPnlBoundsLimit(ctx, limit); err != nil {
 		return nil, fmt.Errorf("put pnl-bounds limit: %w", err)
 	}
@@ -1014,10 +1161,10 @@ func (n *localNode) PutPnlBoundsLimit(
 func (n *localNode) DeleteLimit(
 	ctx context.Context, target LimitTarget, caller domain.Caller,
 ) (marketdata.Sink, error) {
-	if err := n.beginMutation(); err != nil {
+	if err := n.beginEngineRestart(); err != nil {
 		return nil, err
 	}
-	defer n.endMutation()
+	defer n.endEngineRestart()
 
 	revert, err := n.deleteBarrier(ctx, target)
 	if err != nil {
@@ -1082,7 +1229,7 @@ func (n *localNode) deleteBarrier(
 // applyPolicyChangeLocked applies a just-persisted barrier change for policy
 // to the engine via the runtime Configure surface. If the SDK cannot express
 // the change dynamically, the persisted snapshot becomes the source of truth and
-// the engine is rebuilt. Callers must hold mutate.
+// the engine is rebuilt. Callers must hold the exclusive restart gate.
 func (n *localNode) applyPolicyChangeLocked(
 	ctx context.Context, policy string,
 ) (marketdata.Sink, error) {
@@ -1090,10 +1237,6 @@ func (n *localNode) applyPolicyChangeLocked(
 		if !errors.Is(err, domain.ErrNotImplemented) {
 			return nil, err
 		}
-		if err := n.beginEngineRestartLocked(); err != nil {
-			return nil, err
-		}
-		defer n.endEngineRestartLocked()
 		if err := n.rebuildEngineFromStore(ctx); err != nil {
 			return nil, err
 		}
@@ -1157,6 +1300,22 @@ func (n *localNode) readRateBarrier(
 		}
 	}
 	return domain.LimitRate{}, false, nil
+}
+
+func (n *localNode) ensureLimitAsset(
+	ctx context.Context,
+	scope string,
+	asset string,
+	operation string,
+	caller domain.Caller,
+) error {
+	switch scope {
+	case domain.ScopeAsset, domain.ScopeAccountAsset:
+		_, err := n.ensureAutoCreatedAsset(ctx, asset, operation, caller)
+		return err
+	default:
+		return nil
+	}
 }
 
 // revertRateBarrier restores the rate-limit barrier at target to its previous
@@ -1442,12 +1601,12 @@ func (n *localNode) ListMarketDataInstruments(
 func (n *localNode) UpsertMarketDataInstrument(
 	ctx context.Context, instrument domain.MarketDataInstrument, caller domain.Caller,
 ) error {
-	if err := n.beginMutation(); err != nil {
+	if err := n.beginEngineRestart(); err != nil {
 		return err
 	}
-	defer n.endMutation()
+	defer n.endEngineRestart()
 
-	if err := n.ensureMarketDataAssets(ctx, instrument); err != nil {
+	if err := n.ensureMarketDataAssets(ctx, instrument, caller); err != nil {
 		return err
 	}
 	if err := n.realm.UpsertMarketDataInstrument(ctx, instrument); err != nil {
@@ -1464,12 +1623,16 @@ func (n *localNode) UpsertMarketDataInstrument(
 }
 
 func (n *localNode) ensureMarketDataAssets(
-	ctx context.Context, instrument domain.MarketDataInstrument,
+	ctx context.Context, instrument domain.MarketDataInstrument, caller domain.Caller,
 ) error {
-	for _, code := range []string{instrument.BaseAsset, instrument.QuoteAsset} {
-		if err := n.realm.CreateAsset(ctx, domain.Asset{Code: code}); err != nil &&
-			!errors.Is(err, domain.ErrAlreadyExists) {
-			return fmt.Errorf("create market-data asset %s: %w", code, err)
+	created, err := n.ensureAutoCreatedAssets(ctx, instrument.BaseAsset,
+		instrument.QuoteAsset, "market-data instrument upsert", caller)
+	if err != nil {
+		return err
+	}
+	if created {
+		if err := n.rebuildEngineFromStore(ctx); err != nil {
+			return fmt.Errorf("rebuild engine after asset create: %w", err)
 		}
 	}
 	return nil
@@ -1532,75 +1695,140 @@ func (n *localNode) ListMarketDataQuotes(
 // SetAccountGroup sets or clears the account's group in the store, then moves
 // it on the engine (unregister from the old group, register into the new),
 // reverts the store on engine failure, and audits the action.
+//
+// A brand-new target group is auto-created and the engine rebuilt from the store
+// under the exclusive engine-restart gate before the lane, so the live resolver
+// knows the group when the in-lane RegisterGroup resolves it; an already-known
+// target group skips the gate and goes straight to the lane. The account move
+// itself (prev-read, store link write, engine membership move, revert, audit)
+// runs on the one account lane so concurrent same-account admin ops cannot
+// interleave and diverge.
 func (n *localNode) SetAccountGroup(
 	ctx context.Context, key Key, groupCode string, caller domain.Caller,
 ) error {
-	if err := n.beginMutation(); err != nil {
-		return err
-	}
-	defer n.endMutation()
-
-	prev, ok, err := n.realm.GetAccount(ctx, key.Account)
-	if err != nil {
+	// Pre-lane existence check: the engine resolves the account before entering
+	// the lane and rejects an unknown code with ErrInvalid, so a missing account
+	// must be surfaced as ErrNotFound here (before the lane) or the closure below
+	// never runs to report it.
+	if _, ok, err := n.realm.GetAccount(ctx, key.Account); err != nil {
 		return fmt.Errorf("read account for set group: %w", err)
-	}
-	if !ok {
+	} else if !ok {
 		return fmt.Errorf("account %q: %w", key.Account, domain.ErrNotFound)
 	}
-	if prev.GroupCode == groupCode {
+
+	// Auto-create the target group and rebuild the engine before entering the
+	// lane, so the live resolver knows it when the in-lane RegisterGroup resolves
+	// it and so the rebuild never stops a live lane's runtime. Only a genuinely
+	// new group escalates to the gate; an existing one is already registered.
+	if err := n.ensureGroupRegisteredExclusive(ctx, groupCode); err != nil {
+		return err
+	}
+
+	eng, done, err := n.beginLane()
+	if err != nil {
+		return err
+	}
+	defer done()
+
+	// Serialize the prev-read, store link write, engine membership move, revert,
+	// and audit on the one account lane. The prev.GroupCode read must live inside
+	// the lane so the unregister/register move is computed from lane-serialized
+	// state and never from a group that a concurrent move already changed.
+	return eng.RunAccountSynchronized(ctx, key.Account, func(lane engine.AccountLane) error {
+		prev, ok, err := n.realm.GetAccount(ctx, key.Account)
+		if err != nil {
+			return fmt.Errorf("read account for set group: %w", err)
+		}
+		if !ok {
+			return fmt.Errorf("account %q: %w", key.Account, domain.ErrNotFound)
+		}
+		if prev.GroupCode == groupCode {
+			return nil
+		}
+
+		if err := n.realm.SetAccountGroup(ctx, key.Account, groupCode); err != nil {
+			return fmt.Errorf("set account group: %w", err)
+		}
+
+		if applyErr := n.applyGroupMove(
+			ctx, eng, key.Account, prev.GroupCode, groupCode,
+		); applyErr != nil {
+			// Best-effort revert; the caller already surfaces the primary error.
+			_ = n.realm.SetAccountGroup(ctx, key.Account, prev.GroupCode)
+			return fmt.Errorf("apply account group: %w", applyErr)
+		}
+
+		if err := n.audit(ctx, caller, store.AuditEntry{
+			Action:       domain.AuditActionSetGroup,
+			Account:      key.Account,
+			AccountTitle: prev.Title,
+			Detail:       setAccountGroupDetail(key.Account, groupCode),
+		}); err != nil {
+			return n.fatalPostEngineAuditByCode(
+				"audit set account group", "account", key.Account.String(),
+				fmt.Errorf("audit set account group: %w", err),
+			)
+		}
+		return nil
+	})
+}
+
+// ensureGroupRegisteredExclusive auto-creates the target group record and
+// rebuilds the engine from the store under the exclusive engine-restart gate
+// when the group is not already known, so the live resolver knows it before the
+// caller enters an account lane and RegisterGroup resolves it. An empty code
+// ("no group") and an already-persisted group skip the gate: an existing store
+// group is already engine-registered because its creation rebuilt the engine.
+func (n *localNode) ensureGroupRegisteredExclusive(
+	ctx context.Context, groupCode string,
+) error {
+	if groupCode == "" {
 		return nil
 	}
-
-	// Ensure a group record exists for the new group before linking the account
-	// to it (the store rejects an unknown group code). Treat ErrAlreadyExists as
-	// success (idempotent).
-	if groupCode != "" {
-		if _, createErr := n.realm.CreateGroup(ctx, domain.AccountGroup{
-			Code: groupCode,
-		}); createErr != nil && !errors.Is(createErr, domain.ErrAlreadyExists) {
-			return fmt.Errorf("ensure group record on set: %w", createErr)
-		}
+	if _, ok, err := n.realm.GetGroup(ctx, groupCode); err != nil {
+		return fmt.Errorf("read group for set: %w", err)
+	} else if ok {
+		return nil
 	}
-
-	if err := n.realm.SetAccountGroup(ctx, key.Account, groupCode); err != nil {
-		return fmt.Errorf("set account group: %w", err)
+	if err := n.beginEngineRestart(); err != nil {
+		return err
 	}
+	defer n.endEngineRestart()
 
-	if applyErr := n.applyGroupMove(ctx, key.Account, prev.GroupCode, groupCode); applyErr != nil {
-		// Best-effort revert; the caller already surfaces the primary error.
-		_ = n.realm.SetAccountGroup(ctx, key.Account, prev.GroupCode)
-		return fmt.Errorf("apply account group: %w", applyErr)
+	if err := n.ensureGroupRecordLocked(ctx, groupCode); err != nil {
+		return fmt.Errorf("ensure group record on set: %w", err)
 	}
-
-	if err := n.audit(ctx, caller, store.AuditEntry{
-		Action:       domain.AuditActionSetGroup,
-		Account:      key.Account,
-		AccountTitle: prev.Title,
-		Detail:       setAccountGroupDetail(key.Account, groupCode),
-	}); err != nil {
-		return fmt.Errorf("audit set account group: %w", err)
+	// The auto-created record is unknown to the resolver until the engine is
+	// rebuilt from the store, so rebuild before the lane runs.
+	if err := n.rebuildEngineFromStore(ctx); err != nil {
+		return fmt.Errorf("rebuild engine after group ensure: %w", err)
 	}
 	return nil
 }
 
-// applyGroupMove moves one account between groups on the engine: it
-// unregisters from oldGroup when set and registers into newGroup when set. An
-// empty group code means "no group", so clearing only unregisters and setting
-// from none only registers.
+// applyGroupMove moves one account between groups on the engine. Each concrete
+// group membership mutation runs on that group's synchronized lane. An empty
+// group code means "no group", so clearing only unregisters and setting from
+// none only registers.
 func (n *localNode) applyGroupMove(
-	ctx context.Context, id domain.AccountID, oldGroup, newGroup string,
+	ctx context.Context, eng engine.Engine, id domain.AccountID, oldGroup, newGroup string,
 ) error {
 	accounts := []domain.AccountID{id}
 	if oldGroup != "" {
-		if err := n.engine.UnregisterGroup(ctx, accounts, oldGroup); err != nil {
+		if err := eng.RunGroupSynchronized(ctx, oldGroup, func(lane engine.GroupLane) error {
+			return lane.UnregisterGroup(ctx, accounts, oldGroup)
+		}); err != nil {
 			return err
 		}
 	}
 	if newGroup != "" {
-		if err := n.engine.RegisterGroup(ctx, accounts, newGroup); err != nil {
-			// Re-register into the old group to undo the unregister above.
+		if err := eng.RunGroupSynchronized(ctx, newGroup, func(lane engine.GroupLane) error {
+			return lane.RegisterGroup(ctx, accounts, newGroup)
+		}); err != nil {
 			if oldGroup != "" {
-				_ = n.engine.RegisterGroup(ctx, accounts, oldGroup)
+				_ = eng.RunGroupSynchronized(ctx, oldGroup, func(lane engine.GroupLane) error {
+					return lane.RegisterGroup(ctx, accounts, oldGroup)
+				})
 			}
 			return err
 		}
@@ -1609,7 +1837,9 @@ func (n *localNode) applyGroupMove(
 }
 
 // SetAccountNotes replaces the account's notes in the store and audits the
-// action. Notes never reach the engine, so there is no engine side-effect.
+// action. Notes never reach the engine, so there is no engine side-effect and
+// no account-lane hop is needed: it writes only the notes store row, which no
+// engine lane touches.
 func (n *localNode) SetAccountNotes(
 	ctx context.Context, key Key, notes string, caller domain.Caller,
 ) error {
@@ -1632,17 +1862,19 @@ func (n *localNode) SetAccountNotes(
 }
 
 // UpdateAccount replaces an account's public code and title, rebuilds the
-// engine resolver, and audits the change.
+// engine resolver, and audits the change. It takes no account lane: the code
+// change is applied by a full engine rebuild (which cannot run inside a lane),
+// already serialized against every lane by the exclusive restart gate.
 func (n *localNode) UpdateAccount(
 	ctx context.Context,
 	key Key,
 	account domain.Account,
 	caller domain.Caller,
 ) (domain.Account, error) {
-	if err := n.beginMutation(); err != nil {
+	if err := n.beginEngineRestart(); err != nil {
 		return domain.Account{}, err
 	}
-	defer n.endMutation()
+	defer n.endEngineRestart()
 
 	prev, ok, err := n.realm.GetAccount(ctx, key.Account)
 	if err != nil {
@@ -1680,10 +1912,10 @@ func (n *localNode) UpdateAccount(
 func (n *localNode) DeleteAccount(
 	ctx context.Context, key Key, force bool, caller domain.Caller,
 ) error {
-	if err := n.beginMutation(); err != nil {
+	if err := n.beginEngineRestart(); err != nil {
 		return err
 	}
-	defer n.endMutation()
+	defer n.endEngineRestart()
 
 	account, ok, err := n.realm.GetAccount(ctx, key.Account)
 	if err != nil {
@@ -1720,10 +1952,10 @@ func (n *localNode) DeleteAccount(
 func (n *localNode) CreateGroup(
 	ctx context.Context, group domain.AccountGroup, caller domain.Caller,
 ) (domain.AccountGroup, error) {
-	if err := n.beginMutation(); err != nil {
+	if err := n.beginEngineRestart(); err != nil {
 		return domain.AccountGroup{}, err
 	}
-	defer n.endMutation()
+	defer n.endEngineRestart()
 
 	created, err := n.realm.CreateGroup(ctx, group)
 	if err != nil {
@@ -1783,17 +2015,24 @@ func (n *localNode) GetGroup(
 // SetGroupNotes replaces a group's notes in the store and audits the action.
 // If no group record exists yet (e.g. the group is known only via account
 // membership), a default record is created first so the update succeeds.
+//
+// Auto-creating that record must also register the group in the engine, or the
+// live resolver would not know it and a later group move into this code would
+// reject as "unknown group". The ensure runs under the exclusive engine-restart
+// gate, which takes the mutation lock internally, so it must run before
+// beginMutation (never while mutate is held) or it self-deadlocks; the notes
+// write then runs under beginMutation and finds the row the ensure created.
 func (n *localNode) SetGroupNotes(
 	ctx context.Context, code, notes string, caller domain.Caller,
 ) error {
+	if err := n.ensureGroupRegisteredExclusive(ctx, code); err != nil {
+		return fmt.Errorf("ensure group for set notes: %w", err)
+	}
+
 	if err := n.beginMutation(); err != nil {
 		return err
 	}
 	defer n.endMutation()
-
-	if err := n.ensureGroupRecordLocked(ctx, code); err != nil {
-		return fmt.Errorf("ensure group for set notes: %w", err)
-	}
 
 	if err := n.realm.SetGroupNotes(ctx, code, notes); err != nil {
 		return fmt.Errorf("set group notes: %w", err)
@@ -1815,10 +2054,10 @@ func (n *localNode) UpdateGroup(
 	group domain.AccountGroup,
 	caller domain.Caller,
 ) (domain.AccountGroup, error) {
-	if err := n.beginMutation(); err != nil {
+	if err := n.beginEngineRestart(); err != nil {
 		return domain.AccountGroup{}, err
 	}
-	defer n.endMutation()
+	defer n.endEngineRestart()
 
 	prev, ok, err := n.realm.GetGroup(ctx, oldCode)
 	if err != nil {
@@ -1853,31 +2092,47 @@ func (n *localNode) UpdateGroup(
 // reverts the store on engine failure, and audits the action. If no group
 // record exists yet (e.g. the group is known only via account membership), a
 // default record is created first so the operation succeeds.
+//
+// The block spans every member account, so a group has no single account lane
+// to serialize on; instead the whole op runs under the exclusive engine-restart
+// gate, which quiesces every account lane. That gate serves two ends: a missing
+// group is auto-created and the engine rebuilt from the store so the resolver
+// knows it before the block runs, and the group effect is ordered against every
+// member-account fill, report, and block. Concurrent engine-restart-class admin
+// requests are rejected with domain.ErrEngineRestarting; in-lane requests (fills,
+// reports, account blocks) block on the gate and proceed once the group block
+// completes.
 func (n *localNode) SetGroupBlocked(
 	ctx context.Context, code string, blocked bool, reason string, caller domain.Caller,
 ) error {
-	if err := n.beginMutation(); err != nil {
+	if err := n.beginEngineRestart(); err != nil {
 		return err
 	}
-	defer n.endMutation()
+	defer n.endEngineRestart()
 
-	if err := n.ensureGroupRecordLocked(ctx, code); err != nil {
-		return fmt.Errorf("ensure group for block: %w", err)
-	}
-
-	prev, ok, err := n.realm.GetGroup(ctx, code)
+	prev, existed, err := n.realm.GetGroup(ctx, code)
 	if err != nil {
 		return fmt.Errorf("read group for block: %w", err)
 	}
-	if !ok {
-		return fmt.Errorf("group %q: %w", code, domain.ErrNotFound)
+	if !existed {
+		if err := n.ensureGroupRecordLocked(ctx, code); err != nil {
+			return fmt.Errorf("ensure group for block: %w", err)
+		}
+		// The auto-created record is unknown to the resolver until the engine is
+		// rebuilt from the store, so rebuild before the block runs.
+		if err := n.rebuildEngineFromStore(ctx); err != nil {
+			return fmt.Errorf("rebuild engine after group ensure: %w", err)
+		}
 	}
 
 	if err := n.realm.SetGroupBlocked(ctx, code, blocked, reason); err != nil {
 		return fmt.Errorf("set group blocked: %w", err)
 	}
 
-	if applyErr := n.applyGroupBlock(ctx, code, blocked, reason); applyErr != nil {
+	applyErr := n.engine.RunGroupSynchronized(ctx, code, func(lane engine.GroupLane) error {
+		return n.applyGroupBlock(ctx, lane, code, blocked, reason)
+	})
+	if applyErr != nil {
 		// Best-effort revert; the caller already surfaces the primary error.
 		_ = n.realm.SetGroupBlocked(ctx, code, prev.Blocked, prev.BlockReason)
 		return fmt.Errorf("apply group block: %w", applyErr)
@@ -1893,14 +2148,17 @@ func (n *localNode) SetGroupBlocked(
 		Action: action,
 		Detail: detail,
 	}); err != nil {
-		return fmt.Errorf("audit group block: %w", err)
+		return n.fatalPostEngineAuditByCode(
+			"audit group block", "group", code,
+			fmt.Errorf("audit group block: %w", err),
+		)
 	}
 	return nil
 }
 
-// ensureGroupRecordLocked creates an account_groups record for code if one does
-// not already exist. ErrAlreadyExists is treated as success so the call is
-// idempotent. Callers must hold mutate.
+// ensureGroupRecord creates an account_groups record for code if one does not
+// already exist. ErrAlreadyExists is treated as success so the call is
+// idempotent.
 func (n *localNode) ensureGroupRecordLocked(ctx context.Context, code string) error {
 	_, err := n.realm.CreateGroup(ctx, domain.AccountGroup{Code: code})
 	if err != nil && !errors.Is(err, domain.ErrAlreadyExists) {
@@ -1909,14 +2167,16 @@ func (n *localNode) ensureGroupRecordLocked(ctx context.Context, code string) er
 	return nil
 }
 
-// applyGroupBlock applies the desired blocked state for a group to the engine.
+// applyGroupBlock applies the desired blocked state for a group to the engine
+// through the supplied group view. SetGroupBlocked passes the live engine under
+// the exclusive restart gate; the business CSV import passes a group lane.
 func (n *localNode) applyGroupBlock(
-	ctx context.Context, code string, blocked bool, reason string,
+	ctx context.Context, lane engine.GroupLane, code string, blocked bool, reason string,
 ) error {
 	if blocked {
-		return n.engine.BlockGroup(ctx, code, reason)
+		return lane.BlockGroup(ctx, code, reason)
 	}
-	return n.engine.UnblockGroup(ctx, code)
+	return lane.UnblockGroup(ctx, code)
 }
 
 // DeleteGroup removes the group from the store and audits the action. A group
@@ -1945,29 +2205,46 @@ func (n *localNode) DeleteGroup(
 // --- spot funds -------------------------------------------------------------
 
 // ApplyBusinessCSVImport persists a prepared business CSV import atomically in
-// the store and mirrors the selected rows into the live engine.
+// the store and mirrors the selected rows into the live engine. The engine
+// adjustments, group moves, and blocks are applied first; the selected rows are
+// then persisted in one store transaction. That transaction is all-or-nothing,
+// so a failed import writes nothing. Because the engine effects already ran when
+// it fails, the engine is reconciled from the persisted store state so the
+// engine and store never diverge.
 func (n *localNode) ApplyBusinessCSVImport(
 	ctx context.Context,
 	in store.BusinessCSVImport,
 	caller domain.Caller,
 ) error {
-	if err := n.beginMutation(); err != nil {
+	if err := n.beginEngineRestart(); err != nil {
 		return err
 	}
-	defer n.endMutation()
+	defer n.endEngineRestart()
+
+	rollback, err := n.realm.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		return fmt.Errorf("capture business CSV rollback backup: %w", err)
+	}
+
+	seenBalances := make(map[string]struct{}, len(in.Balances))
+	for _, balance := range in.Balances {
+		balanceKey := businessCSVImportBalanceKey(balance)
+		if _, ok := seenBalances[balanceKey]; ok {
+			return fmt.Errorf("duplicate position snapshot %s/%s: %w",
+				balance.Account, balance.Asset, domain.ErrInvalid)
+		}
+		seenBalances[balanceKey] = struct{}{}
+	}
 
 	ensuredGroups := make(map[string]bool)
 	pendingAccounts := make(map[string]domain.Account)
-	registerGroups := make(map[string][]domain.AccountID)
-	unregisterGroups := make(map[string][]domain.AccountID)
+	type accountGroupMove struct {
+		account domain.AccountID
+		old     string
+		next    string
+	}
+	groupMoves := make([]accountGroupMove, 0)
 	for _, row := range in.Groups {
-		if row.Group.Blocked {
-			if err := n.applyGroupBlock(ctx, row.Group.Code, true, row.Group.BlockReason); err != nil {
-				return fmt.Errorf("apply group block: %w", err)
-			}
-		} else if err := n.applyGroupBlock(ctx, row.Group.Code, false, ""); err != nil {
-			return fmt.Errorf("apply group unblock: %w", err)
-		}
 		if row.Exists {
 			in.Audits = append(in.Audits, n.auditEntry(caller, store.AuditEntry{
 				Action: domain.AuditActionSetGroupNotes,
@@ -2022,27 +2299,19 @@ func (n *localNode) ApplyBusinessCSVImport(
 			ensuredGroups[row.Account.GroupCode] = true
 		}
 		if prev.GroupCode != row.Account.GroupCode {
-			if prev.GroupCode != "" {
-				unregisterGroups[prev.GroupCode] = append(
-					unregisterGroups[prev.GroupCode], row.Account.Code,
-				)
-			}
-			if row.Account.GroupCode != "" {
-				registerGroups[row.Account.GroupCode] = append(
-					registerGroups[row.Account.GroupCode], row.Account.Code,
-				)
-			}
+			groupMoves = append(groupMoves, accountGroupMove{
+				account: row.Account.Code,
+				old:     prev.GroupCode,
+				next:    row.Account.GroupCode,
+			})
 			in.Audits = append(in.Audits, n.auditEntry(caller, store.AuditEntry{
 				Action:  domain.AuditActionSetGroup,
 				Account: row.Account.Code,
 				Detail:  setAccountGroupDetail(row.Account.Code, row.Account.GroupCode),
 			}))
 		}
-		if err := n.applyBlock(
-			ctx, row.Account.Code, row.Account.Blocked, row.Account.BlockReason,
-		); err != nil {
-			return fmt.Errorf("apply account block: %w", err)
-		}
+		// Account blocks for CSV-created accounts run after the import rebuilds
+		// the resolver; see the engine-effects phase below.
 		if !row.Exists {
 			in.Audits = append(in.Audits, n.auditEntry(caller, store.AuditEntry{
 				Action:  domain.AuditActionCreateAccount,
@@ -2068,20 +2337,59 @@ func (n *localNode) ApplyBusinessCSVImport(
 		}))
 		pendingAccounts[accountKey] = row.Account
 	}
-	if err := n.applyGroupMovesBatch(ctx, unregisterGroups, registerGroups); err != nil {
-		return fmt.Errorf("apply account groups: %w", err)
+
+	preStore := store.BusinessCSVImport{
+		Groups:   append([]store.BusinessCSVImportGroup(nil), in.Groups...),
+		Accounts: append([]store.BusinessCSVImportAccount(nil), in.Accounts...),
+	}
+	if len(preStore.Groups) > 0 || len(preStore.Accounts) > 0 {
+		if err := n.realm.ApplyBusinessCSVImport(ctx, preStore); err != nil {
+			return n.rollbackStore(ctx, rollback, fmt.Errorf("apply business CSV dictionaries: %w", err))
+		}
+		if err := n.rebuildEngineFromStore(ctx); err != nil {
+			return n.rollbackStoreAndEngine(ctx, rollback,
+				fmt.Errorf("rebuild engine after business CSV dictionaries: %w", err))
+		}
+		for i := range in.Groups {
+			in.Groups[i].Exists = true
+		}
+		for i := range in.Accounts {
+			in.Accounts[i].Exists = true
+		}
+	}
+
+	for _, row := range in.Groups {
+		applyErr := n.engine.RunGroupSynchronized(ctx, row.Group.Code,
+			func(lane engine.GroupLane) error {
+				return n.applyGroupBlock(ctx, lane, row.Group.Code,
+					row.Group.Blocked, row.Group.BlockReason)
+			})
+		if applyErr != nil {
+			return n.rollbackStoreAndEngine(ctx, rollback,
+				fmt.Errorf("apply group block: %w", applyErr))
+		}
+	}
+	for _, row := range in.Accounts {
+		applyErr := n.engine.RunAccountSynchronized(ctx, row.Account.Code,
+			func(lane engine.AccountLane) error {
+				return n.applyBlock(ctx, lane, row.Account.Code,
+					row.Account.Blocked, row.Account.BlockReason)
+			})
+		if applyErr != nil {
+			return n.rollbackStoreAndEngine(ctx, rollback,
+				fmt.Errorf("apply account block: %w", applyErr))
+		}
+	}
+	for _, move := range groupMoves {
+		if err := n.applyGroupMove(ctx, n.engine, move.account, move.old, move.next); err != nil {
+			return n.rollbackStoreAndEngine(ctx, rollback,
+				fmt.Errorf("apply account group: %w", err))
+		}
 	}
 
 	balanceGroups := make(map[domain.AccountID][]domain.Balance)
 	balanceAccounts := make([]domain.AccountID, 0)
-	seenBalances := make(map[string]struct{}, len(in.Balances))
 	for _, balance := range in.Balances {
-		balanceKey := businessCSVImportBalanceKey(balance)
-		if _, ok := seenBalances[balanceKey]; ok {
-			return fmt.Errorf("duplicate position snapshot %s/%s: %w",
-				balance.Account, balance.Asset, domain.ErrInvalid)
-		}
-		seenBalances[balanceKey] = struct{}{}
 		if _, ok := balanceGroups[balance.Account]; !ok {
 			balanceAccounts = append(balanceAccounts, balance.Account)
 		}
@@ -2093,21 +2401,32 @@ func (n *localNode) ApplyBusinessCSVImport(
 		for _, balance := range balances {
 			reqs = append(reqs, snapshotAdjustmentRequest(balance))
 		}
-		results, batchReject, err := n.engine.ApplyAccountAdjustmentBatch(ctx, account, reqs)
-		if err != nil {
-			return fmt.Errorf("apply position snapshot adjustment: %w", err)
+		var results []engine.AdjustmentResult
+		var batchReject *engine.AdjustmentBatchReject
+		if err := n.engine.RunAccountSynchronized(ctx, account, func(lane engine.AccountLane) error {
+			var err error
+			results, batchReject, err = lane.ApplyAccountAdjustmentBatch(ctx, account, reqs)
+			return err
+		}); err != nil {
+			return n.rollbackStoreAndEngine(ctx, rollback,
+				fmt.Errorf("apply position snapshot adjustment: %w", err))
 		}
 		if batchReject != nil {
-			return fmt.Errorf("position snapshot adjustment batch for account %s rejected: %s: %w",
-				account, batchReject.Reason, domain.ErrInvalid)
+			return n.rollbackStoreAndEngine(ctx, rollback,
+				fmt.Errorf("position snapshot adjustment batch for account %s rejected: %s: %w",
+					account, batchReject.Reason, domain.ErrInvalid))
 		}
-		if len(results) != len(balances) {
-			return fmt.Errorf("position snapshot adjustment batch for account %s returned %d outcomes for %d requests: %w",
-				account, len(results), len(balances), domain.ErrInvalid)
+		if len(results) == 0 {
+			continue
 		}
-		for i, balance := range balances {
+		for i, result := range results {
+			if i >= len(balances) {
+				return n.rollbackStoreAndEngine(ctx, rollback,
+					fmt.Errorf("position snapshot adjustment batch for account %s returned extra outcome %d for %d requests: %w",
+						account, len(results), len(balances), domain.ErrInvalid))
+			}
+			balance := balances[i]
 			req := reqs[i]
-			result := results[i]
 			rec := domain.AccountAdjustmentRecord{
 				Account:   balance.Account,
 				Source:    caller.Source,
@@ -2118,8 +2437,12 @@ func (n *localNode) ApplyBusinessCSVImport(
 				Asset:     balance.Asset,
 			}
 			if result.Rejected != nil {
-				return fmt.Errorf("position %s/%s snapshot adjustment rejected: %s: %w",
-					balance.Account, balance.Asset, result.Rejected.Reason, domain.ErrInvalid)
+				return n.rollbackStoreAndEngine(ctx, rollback,
+					fmt.Errorf("position %s/%s snapshot adjustment rejected: %s: %w",
+						balance.Account, balance.Asset, result.Rejected.Reason, domain.ErrInvalid))
+			}
+			if adjustmentResultNoChange(result) {
+				continue
 			}
 			in.Adjustments = append(in.Adjustments, rec)
 			in.Audits = append(in.Audits, n.auditEntry(caller, store.AuditEntry{
@@ -2131,50 +2454,10 @@ func (n *localNode) ApplyBusinessCSVImport(
 	}
 
 	if err := n.realm.ApplyBusinessCSVImport(ctx, in); err != nil {
-		return fmt.Errorf("apply business CSV import: %w", err)
+		return n.rollbackStoreAndEngine(ctx, rollback,
+			fmt.Errorf("apply business CSV import: %w", err))
 	}
 	return nil
-}
-
-func (n *localNode) applyGroupMovesBatch(
-	ctx context.Context,
-	unregisterGroups map[string][]domain.AccountID,
-	registerGroups map[string][]domain.AccountID,
-) error {
-	oldGroups := sortedGroupIDs(unregisterGroups)
-	for _, group := range oldGroups {
-		if err := n.engine.UnregisterGroup(ctx, unregisterGroups[group], group); err != nil {
-			return err
-		}
-	}
-	registeredGroups := make([]string, 0, len(registerGroups))
-	for _, group := range sortedGroupIDs(registerGroups) {
-		if err := n.engine.RegisterGroup(ctx, registerGroups[group], group); err != nil {
-			for i := len(registeredGroups) - 1; i >= 0; i-- {
-				registeredGroup := registeredGroups[i]
-				_ = n.engine.UnregisterGroup(
-					ctx, registerGroups[registeredGroup], registeredGroup,
-				)
-			}
-			for _, oldGroup := range oldGroups {
-				_ = n.engine.RegisterGroup(ctx, unregisterGroups[oldGroup], oldGroup)
-			}
-			return err
-		}
-		registeredGroups = append(registeredGroups, group)
-	}
-	return nil
-}
-
-func sortedGroupIDs(groups map[string][]domain.AccountID) []string {
-	ids := make([]string, 0, len(groups))
-	for id, accounts := range groups {
-		if len(accounts) > 0 {
-			ids = append(ids, id)
-		}
-	}
-	slices.Sort(ids)
-	return ids
 }
 
 func businessCSVImportAccountKey(account domain.Account) string {
@@ -2209,73 +2492,134 @@ func snapshotAdjustmentRequest(snapshot domain.Balance) domain.AdjustmentRequest
 	}
 }
 
-// ensureAccountForAdjustment creates the account when it does not exist yet so a
-// fund of a fresh account succeeds in one call. The new account joins the
-// default group (empty GroupCode, no group assigned); its id is validated the
-// same way CreateAccount validates it. Creating an account rebuilds the engine
-// so the account enters the resolver before the adjustment is applied, and the
-// creation is audited like a standalone CreateAccount. It runs under the
-// mutation lock the caller already holds.
-func (n *localNode) ensureAccountForAdjustment(
-	ctx context.Context, id domain.AccountID, caller domain.Caller,
+func (n *localNode) ensureAdjustmentExternalIDUnused(
+	ctx context.Context, externalID domain.ExternalID,
 ) error {
-	if _, ok, err := n.realm.GetAccount(ctx, id); err != nil {
-		return fmt.Errorf("read account for adjustment: %w", err)
-	} else if ok {
+	if externalID.IsZero() {
 		return nil
 	}
+	page, err := n.realm.ListAdjustmentRows(ctx, store.AdjustmentListFilter{
+		ExternalID: externalID,
+		Page:       store.PageSpec{Limit: 1},
+	})
+	if err != nil {
+		return fmt.Errorf("check adjustment external id: %w", err)
+	}
+	if len(page.Rows) > 0 {
+		return fmt.Errorf("adjustment %q: %w", externalID, domain.ErrAlreadyExists)
+	}
+	return nil
+}
+
+// ensureAutoCreatedAccount creates the account when it does not exist yet so an
+// adjustment, order, or execution report against a fresh account succeeds in
+// one call instead of failing with an unknown-account error. The new account
+// joins the default group (empty GroupCode, no group assigned); its id is
+// validated the same way CreateAccount validates it, and the creation is
+// audited like a standalone CreateAccount, naming operation as the trigger. It
+// reports whether the account was newly created so the caller rebuilds the
+// engine once before entering the account lane. It runs under the mutation lock
+// the caller already holds and must not rebuild the engine itself: a rebuild
+// stops the live engine's async runtime, which would deadlock if run inside a
+// lane callback.
+func (n *localNode) ensureAutoCreatedAccount(
+	ctx context.Context, id domain.AccountID, operation string, caller domain.Caller,
+) (bool, error) {
+	if _, ok, err := n.realm.GetAccount(ctx, id); err != nil {
+		return false, fmt.Errorf("read account for %s: %w", operation, err)
+	} else if ok {
+		return false, nil
+	}
 	if err := domain.ValidateAccountID(id); err != nil {
-		return err
+		return false, err
 	}
 	account, err := n.realm.CreateAccount(ctx, domain.Account{Code: id})
 	if err != nil {
-		return fmt.Errorf("create account for adjustment: %w", err)
-	}
-	if err := n.rebuildEngineFromStore(ctx); err != nil {
-		return fmt.Errorf("rebuild engine after account create: %w", err)
+		if errors.Is(err, domain.ErrAlreadyExists) {
+			return false, nil
+		}
+		return false, fmt.Errorf("create account for %s: %w", operation, err)
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action:       domain.AuditActionCreateAccount,
 		Account:      account.Code,
 		AccountTitle: account.Title,
-		Detail:       fmt.Sprintf("create account %s", account.Code),
+		Detail:       fmt.Sprintf("auto-created account %s by %s", account.Code, operation),
 	}); err != nil {
-		return fmt.Errorf("audit create account: %w", err)
+		return false, fmt.Errorf("audit create account: %w", err)
+	}
+	return true, nil
+}
+
+// ensureAccountAndAssetsRegistered auto-creates the account and each named asset
+// pre-lane and rebuilds the engine once when anything was newly created, so the
+// live resolver knows the account and both assets before the caller enters the
+// account lane. Empty asset codes are skipped. The rebuild swaps n.engine, so
+// the caller must read n.engine again after this returns.
+func (n *localNode) ensureAccountAndAssetsRegistered(
+	ctx context.Context, id domain.AccountID, operation string,
+	caller domain.Caller, assets ...string,
+) error {
+	accountCreated, err := n.ensureAutoCreatedAccount(ctx, id, operation, caller)
+	if err != nil {
+		return err
+	}
+	assetsCreated := false
+	for _, code := range assets {
+		if code == "" {
+			continue
+		}
+		created, err := n.ensureAutoCreatedAsset(ctx, code, operation, caller)
+		if err != nil {
+			return err
+		}
+		assetsCreated = assetsCreated || created
+	}
+	if accountCreated || assetsCreated {
+		if err := n.rebuildEngineFromStore(ctx); err != nil {
+			return fmt.Errorf("rebuild engine after auto-create: %w", err)
+		}
 	}
 	return nil
 }
 
-// ensureAssetForAdjustment creates the asset when it does not exist yet so a
-// fund referencing a fresh asset succeeds in one call. The new asset carries an
-// empty title and empty asset class (minimal default); its code is validated the
-// same way CreateAsset validates it. Creating an asset rebuilds the engine so
-// the asset enters the resolver before the adjustment is applied, mirroring
-// ensureAccountForAdjustment, and the creation is audited like a standalone
-// CreateAsset. It runs under the mutation lock the caller already holds.
-func (n *localNode) ensureAssetForAdjustment(
-	ctx context.Context, code string, caller domain.Caller,
-) error {
-	if _, ok, err := n.realm.GetAsset(ctx, code); err != nil {
-		return fmt.Errorf("read asset for adjustment: %w", err)
-	} else if ok {
-		return nil
+func (n *localNode) accountOrAssetsNeedAutoCreate(
+	ctx context.Context, id domain.AccountID, assets ...string,
+) (bool, error) {
+	if _, ok, err := n.realm.GetAccount(ctx, id); err != nil {
+		return false, fmt.Errorf("read account for auto-create check: %w", err)
+	} else if !ok {
+		return true, nil
 	}
-	if err := domain.ValidateAsset(code); err != nil {
+	for _, code := range assets {
+		if code == "" {
+			continue
+		}
+		if _, ok, err := n.realm.GetAsset(ctx, code); err != nil {
+			return false, fmt.Errorf("read asset for auto-create check: %w", err)
+		} else if !ok {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (n *localNode) ensureAccountAndAssetsRegisteredExclusive(
+	ctx context.Context, id domain.AccountID, operation string,
+	caller domain.Caller, assets ...string,
+) error {
+	needed, err := n.accountOrAssetsNeedAutoCreate(ctx, id, assets...)
+	if err != nil {
 		return err
 	}
-	if err := n.realm.CreateAsset(ctx, domain.Asset{Code: code}); err != nil {
-		return fmt.Errorf("create asset for adjustment: %w", err)
+	if !needed {
+		return nil
 	}
-	if err := n.rebuildEngineFromStore(ctx); err != nil {
-		return fmt.Errorf("rebuild engine after asset create: %w", err)
+	if err := n.beginEngineRestart(); err != nil {
+		return err
 	}
-	if err := n.audit(ctx, caller, store.AuditEntry{
-		Action: domain.AuditActionCreateAsset,
-		Detail: fmt.Sprintf("create asset %s", code),
-	}); err != nil {
-		return fmt.Errorf("audit create asset: %w", err)
-	}
-	return nil
+	defer n.endEngineRestart()
+	return n.ensureAccountAndAssetsRegistered(ctx, id, operation, caller, assets...)
 }
 
 // ApplyAdjustment applies one spot-funds adjustment through the engine, which
@@ -2283,60 +2627,90 @@ func (n *localNode) ensureAssetForAdjustment(
 // asset that does not exist yet auto-creates it before applying, so an operator
 // can fund a fresh account or a fresh asset in one call. On accept it writes the
 // recomputed balance snapshot and the accepted record; on reject it records the
-// rejected adjustment and leaves balances unchanged. Either way it audits the
-// action.
+// rejected adjustment and leaves balances unchanged. If the engine returns no
+// account modification, the call returns ErrNoChange without recording an
+// adjustment or adjustment audit.
 func (n *localNode) ApplyAdjustment(
 	ctx context.Context, key Key, externalID domain.ExternalID,
 	req domain.AdjustmentRequest, caller domain.Caller,
 ) (domain.AccountAdjustmentRecord, error) {
-	if err := n.beginMutation(); err != nil {
+	// Auto-create the account and asset and rebuild the engine before entering
+	// the lane, so the live resolver knows them when RunAccountSynchronized
+	// resolves the account and so the rebuild never stops a live lane's runtime.
+	if err := n.ensureAccountAndAssetsRegisteredExclusive(
+		ctx, key.Account, "adjustment", caller, req.Asset,
+	); err != nil {
 		return domain.AccountAdjustmentRecord{}, err
 	}
-	defer n.endMutation()
-
-	if err := n.ensureAccountForAdjustment(ctx, key.Account, caller); err != nil {
+	if err := n.ensureAdjustmentExternalIDUnused(ctx, externalID); err != nil {
 		return domain.AccountAdjustmentRecord{}, err
 	}
-	if err := n.ensureAssetForAdjustment(ctx, req.Asset, caller); err != nil {
-		return domain.AccountAdjustmentRecord{}, err
-	}
-
-	result, err := n.engine.ApplyAccountAdjustment(ctx, key.Account, req)
+	accountID, err := n.accountDiagnosticID(ctx, key.Account)
 	if err != nil {
-		return domain.AccountAdjustmentRecord{}, fmt.Errorf("apply adjustment: %w", err)
+		return domain.AccountAdjustmentRecord{}, err
 	}
-
-	// A non-zero externalID is the caller-supplied handle, carried verbatim onto
-	// the record so the store uses it (else the store mints one on append).
-	rec := domain.AccountAdjustmentRecord{
-		ExternalID: externalID,
-		Account:    key.Account,
-		Source:     caller.Source,
-		Principal:  caller.Principal,
-		Request:    req,
-		Accepted:   result.Accepted,
-		Rejected:   result.Rejected,
-		Asset:      req.Asset,
+	eng, done, err := n.beginLane()
+	if err != nil {
+		return domain.AccountAdjustmentRecord{}, err
 	}
+	defer done()
 
-	if result.Accepted != nil {
-		if err := n.persistAdjustedBalance(ctx, key, req, *result.Accepted); err != nil {
-			return domain.AccountAdjustmentRecord{}, err
+	var stored domain.AccountAdjustmentRecord
+	if err := eng.RunAccountSynchronized(ctx, key.Account, func(lane engine.AccountLane) error {
+		result, err := lane.ApplyAccountAdjustment(ctx, key.Account, req)
+		if err != nil {
+			return fmt.Errorf("apply adjustment: %w", err)
 		}
-	}
+		if adjustmentResultNoChange(result) {
+			return domain.ErrNoChange
+		}
 
-	stored, err := n.realm.AppendAdjustment(ctx, rec)
-	if err != nil {
-		return domain.AccountAdjustmentRecord{}, fmt.Errorf("append adjustment: %w", err)
-	}
+		// A non-zero externalID is the caller-supplied handle, carried verbatim onto
+		// the record so the store uses it (else the store mints one on append).
+		rec := domain.AccountAdjustmentRecord{
+			ExternalID: externalID,
+			Account:    key.Account,
+			Source:     caller.Source,
+			Principal:  caller.Principal,
+			Request:    req,
+			Accepted:   result.Accepted,
+			Rejected:   result.Rejected,
+			Asset:      req.Asset,
+		}
 
-	if err := n.audit(ctx, caller, store.AuditEntry{
-		Action:  domain.AuditActionAdjustment,
-		Account: key.Account,
-		Asset:   req.Asset,
-		Detail:  adjustmentDetail(key.Account, req.Asset, result.Accepted != nil),
+		var balance *domain.Balance
+		var deleteBalance *store.BalanceKey
+		if result.Accepted != nil {
+			var err error
+			balance, deleteBalance, _, err =
+				n.adjustedBalanceCommand(ctx, key, req, *result.Accepted)
+			if err != nil {
+				return err
+			}
+		}
+
+		audit := n.auditEntry(caller, store.AuditEntry{
+			Action:  domain.AuditActionAdjustment,
+			Account: key.Account,
+			Asset:   req.Asset,
+			Detail:  adjustmentDetail(key.Account, req.Asset, result.Accepted != nil),
+		})
+		stored, err = n.realm.RecordAccountAdjustment(ctx, store.AccountAdjustmentPersistence{
+			UpsertBalance: balance,
+			DeleteBalance: deleteBalance,
+			Adjustment:    rec,
+			Audit:         audit,
+		})
+		if err != nil {
+			return n.fatalPostEnginePersistence(
+				"record account adjustment",
+				accountID,
+				fmt.Errorf("record adjustment: %w", err),
+			)
+		}
+		return nil
 	}); err != nil {
-		return domain.AccountAdjustmentRecord{}, fmt.Errorf("audit adjustment: %w", err)
+		return domain.AccountAdjustmentRecord{}, err
 	}
 	return stored, nil
 }
@@ -2347,84 +2721,116 @@ func (n *localNode) ApplyAdjustment(
 // available/held/incoming/average-entry-price while Officer persists the
 // historical realized_pnl value from the snapshot.
 func (n *localNode) ImportPositionSnapshot(
-	ctx context.Context, key Key, snapshot domain.Balance, caller domain.Caller,
+	ctx context.Context, key Key, externalID domain.ExternalID,
+	snapshot domain.Balance, caller domain.Caller,
 ) (domain.AccountAdjustmentRecord, error) {
-	if err := n.beginMutation(); err != nil {
+	// Register the account and asset and rebuild pre-lane (see ApplyAdjustment).
+	if err := n.ensureAccountAndAssetsRegisteredExclusive(
+		ctx, key.Account, "position snapshot import", caller, snapshot.Asset,
+	); err != nil {
 		return domain.AccountAdjustmentRecord{}, err
 	}
-	defer n.endMutation()
-
-	req := domain.AdjustmentRequest{
-		Asset:             snapshot.Asset,
-		AverageEntryPrice: snapshot.AverageEntryPrice,
-		Balance: &domain.AdjustmentAmount{
-			Mode: domain.AdjustmentModeAbsolute, Value: snapshot.Available,
-		},
-		Held: &domain.AdjustmentAmount{
-			Mode: domain.AdjustmentModeAbsolute, Value: snapshot.Held,
-		},
-		Incoming: &domain.AdjustmentAmount{
-			Mode: domain.AdjustmentModeAbsolute, Value: snapshot.Incoming,
-		},
+	if err := n.ensureAdjustmentExternalIDUnused(ctx, externalID); err != nil {
+		return domain.AccountAdjustmentRecord{}, err
 	}
-	result, err := n.engine.ApplyAccountAdjustment(ctx, key.Account, req)
+	accountID, err := n.accountDiagnosticID(ctx, key.Account)
 	if err != nil {
-		return domain.AccountAdjustmentRecord{}, fmt.Errorf("apply position snapshot adjustment: %w", err)
+		return domain.AccountAdjustmentRecord{}, err
 	}
-
-	rec := domain.AccountAdjustmentRecord{
-		Account:   key.Account,
-		Source:    caller.Source,
-		Principal: caller.Principal,
-		Request:   req,
-		Accepted:  result.Accepted,
-		Rejected:  result.Rejected,
-		Asset:     snapshot.Asset,
+	eng, done, err := n.beginLane()
+	if err != nil {
+		return domain.AccountAdjustmentRecord{}, err
 	}
+	defer done()
 
-	if result.Accepted != nil {
-		balance := snapshot
-		balance.Account = key.Account
-		if err := n.realm.UpsertBalance(ctx, balance); err != nil {
-			return domain.AccountAdjustmentRecord{}, fmt.Errorf("upsert position snapshot: %w", err)
+	var stored domain.AccountAdjustmentRecord
+	if err := eng.RunAccountSynchronized(ctx, key.Account, func(lane engine.AccountLane) error {
+		req := domain.AdjustmentRequest{
+			Asset:             snapshot.Asset,
+			AverageEntryPrice: snapshot.AverageEntryPrice,
+			Balance: &domain.AdjustmentAmount{
+				Mode: domain.AdjustmentModeAbsolute, Value: snapshot.Available,
+			},
+			Held: &domain.AdjustmentAmount{
+				Mode: domain.AdjustmentModeAbsolute, Value: snapshot.Held,
+			},
+			Incoming: &domain.AdjustmentAmount{
+				Mode: domain.AdjustmentModeAbsolute, Value: snapshot.Incoming,
+			},
 		}
-	}
+		result, err := lane.ApplyAccountAdjustment(ctx, key.Account, req)
+		if err != nil {
+			return fmt.Errorf("apply position snapshot adjustment: %w", err)
+		}
+		if adjustmentResultNoChange(result) {
+			return domain.ErrNoChange
+		}
 
-	stored, err := n.realm.AppendAdjustment(ctx, rec)
-	if err != nil {
-		return domain.AccountAdjustmentRecord{}, fmt.Errorf("append position snapshot adjustment: %w", err)
-	}
+		rec := domain.AccountAdjustmentRecord{
+			ExternalID: externalID,
+			Account:    key.Account,
+			Source:     caller.Source,
+			Principal:  caller.Principal,
+			Request:    req,
+			Accepted:   result.Accepted,
+			Rejected:   result.Rejected,
+			Asset:      snapshot.Asset,
+		}
 
-	auditSnapshot := snapshot
-	auditSnapshot.Account = key.Account
-	if err := n.audit(ctx, caller, store.AuditEntry{
-		Action:  domain.AuditActionAdjustment,
-		Account: key.Account,
-		Detail:  importPositionSnapshotDetail(auditSnapshot, result.Accepted != nil),
+		var balance *domain.Balance
+		var deleteBalance *store.BalanceKey
+		if result.Accepted != nil {
+			_, _, err := n.realm.GetBalance(ctx, key.Account, snapshot.Asset)
+			if err != nil {
+				return fmt.Errorf("read balance for position snapshot: %w", err)
+			}
+			balanceValue := snapshot
+			balanceValue.Account = key.Account
+			balance, deleteBalance = balanceSnapshotCommand(balanceValue)
+		}
+
+		auditSnapshot := snapshot
+		auditSnapshot.Account = key.Account
+		audit := n.auditEntry(caller, store.AuditEntry{
+			Action:  domain.AuditActionAdjustment,
+			Account: key.Account,
+			Detail:  importPositionSnapshotDetail(auditSnapshot, result.Accepted != nil),
+		})
+		stored, err = n.realm.RecordAccountAdjustment(ctx, store.AccountAdjustmentPersistence{
+			UpsertBalance: balance,
+			DeleteBalance: deleteBalance,
+			Adjustment:    rec,
+			Audit:         audit,
+		})
+		if err != nil {
+			return n.fatalPostEnginePersistence(
+				"record position snapshot adjustment",
+				accountID,
+				fmt.Errorf("record position snapshot adjustment: %w", err),
+			)
+		}
+		return nil
 	}); err != nil {
-		return domain.AccountAdjustmentRecord{}, fmt.Errorf("audit position snapshot adjustment: %w", err)
+		return domain.AccountAdjustmentRecord{}, err
 	}
 	return stored, nil
 }
 
-// persistAdjustedBalance writes the new (account, asset) balance snapshot. The
-// available/held/incoming fields are the engine-reported resulting absolutes
-// (carried forward when the outcome did not report them). Realized P&L is the
-// one accumulator: the outcome's per-operation delta is added to the stored
-// value rather than overwritten with the engine's reported absolute, so the
-// stored figure stays correct across operations (a fresh row starts at "0", so
-// accumulated deltas equal the cumulative). The average-entry-price follows the
-// request when it set one, else the previous stored value.
-func (n *localNode) persistAdjustedBalance(
-	ctx context.Context, key Key, req domain.AdjustmentRequest, outcome domain.AdjustmentOutcomeAccepted,
-) error {
+func adjustmentResultNoChange(result engine.AdjustmentResult) bool {
+	return result.Accepted == nil && result.Rejected == nil
+}
+
+func (n *localNode) adjustedBalanceCommand(
+	ctx context.Context, key Key, req domain.AdjustmentRequest,
+	outcome domain.AdjustmentOutcomeAccepted,
+) (*domain.Balance, *store.BalanceKey, string, error) {
 	prev, _, err := n.realm.GetBalance(ctx, key.Account, req.Asset)
 	if err != nil {
-		return fmt.Errorf("read balance for adjustment: %w", err)
+		return nil, nil, "", fmt.Errorf("read balance for adjustment: %w", err)
 	}
 	realizedPnl, err := domain.AddDecimals(prev.RealizedPnl, outcome.RealizedPnlDelta)
 	if err != nil {
-		return fmt.Errorf("accumulate realized pnl: %w", err)
+		return nil, nil, "", fmt.Errorf("accumulate realized pnl: %w", err)
 	}
 	balance := domain.Balance{
 		Account:           key.Account,
@@ -2435,18 +2841,61 @@ func (n *localNode) persistAdjustedBalance(
 		RealizedPnl:       realizedPnl,
 		AverageEntryPrice: pick(req.AverageEntryPrice, prev.AverageEntryPrice),
 	}
-	if err := n.realm.UpsertBalance(ctx, balance); err != nil {
-		return fmt.Errorf("upsert balance: %w", err)
+	upsert, deleteKey := balanceSnapshotCommand(balance)
+	return upsert, deleteKey, prev.AverageEntryPrice, nil
+}
+
+func balanceSnapshotCommand(balance domain.Balance) (*domain.Balance, *store.BalanceKey) {
+	if balanceIsEmpty(balance) {
+		return nil, &store.BalanceKey{Account: balance.Account, Asset: balance.Asset}
+	}
+	return &balance, nil
+}
+
+func (n *localNode) persistAdjustedBalance(
+	ctx context.Context, key Key, req domain.AdjustmentRequest, outcome domain.AdjustmentOutcomeAccepted,
+) error {
+	balance, deleteBalance, _, err := n.adjustedBalanceCommand(ctx, key, req, outcome)
+	if err != nil {
+		return err
+	}
+	if deleteBalance != nil {
+		err := n.realm.DeleteBalance(ctx, deleteBalance.Account, deleteBalance.Asset)
+		if err != nil && !errors.Is(err, domain.ErrNotFound) {
+			return fmt.Errorf("delete empty adjusted balance: %w", err)
+		}
+		return nil
+	}
+	if balance != nil {
+		if err := n.realm.UpsertBalance(ctx, *balance); err != nil {
+			return fmt.Errorf("upsert adjusted balance: %w", err)
+		}
 	}
 	return nil
 }
 
-// balanceSettlementsFrom maps the engine's per-asset fill outcomes onto the
-// domain settlement carrier RecordOrderSettlement consumes. The store applies the
-// same balance/held/incoming carry-forward and realized-pnl accumulation the
-// former persistFillBalance did, but inside the settlement tx. The engine emits
-// at most one outcome per asset (see engine.BalanceOutcome), so the slice carries
-// no duplicate-asset entries that would double-count realized P&L.
+func balanceIsEmpty(balance domain.Balance) bool {
+	return decimalZeroOrEmpty(balance.Available) &&
+		decimalZeroOrEmpty(balance.Held) &&
+		decimalZeroOrEmpty(balance.Incoming) &&
+		decimalZeroOrEmpty(balance.RealizedPnl) &&
+		decimalZeroOrEmpty(balance.AverageEntryPrice)
+}
+
+func decimalZeroOrEmpty(value string) bool {
+	if value == "" {
+		return true
+	}
+	parsed, err := decimal.NewFromString(value)
+	return err == nil && parsed.IsZero()
+}
+
+// balanceSettlementsFrom maps the engine's per-asset outcomes onto the domain
+// settlement carrier RecordOrderSettlement consumes. The store persists the
+// engine-returned result fields and accumulates realized-P&L deltas inside the
+// settlement tx. The engine emits at most one outcome per asset (see
+// engine.BalanceOutcome), so the slice carries no duplicate-asset entries that
+// would double-count realized P&L.
 func balanceSettlementsFrom(outcomes []engine.BalanceOutcome) []domain.BalanceSettlement {
 	if len(outcomes) == 0 {
 		return nil
@@ -2487,6 +2936,20 @@ func fillSettlementEvent(
 		Principal: caller.Principal,
 		Payload:   payload,
 	}
+}
+
+func stampExecutionReportPersistence(
+	persistence engine.ExecutionReportPersistence, caller domain.Caller,
+) engine.ExecutionReportPersistence {
+	for i := range persistence.Events {
+		persistence.Events[i].Source = caller.Source
+		persistence.Events[i].Principal = caller.Principal
+	}
+	if persistence.Trade != nil {
+		persistence.Trade.Source = caller.Source
+		persistence.Trade.Principal = caller.Principal
+	}
+	return persistence
 }
 
 func accountBlockPayload(blocks []domain.ExecutionAccountBlock) domain.OrderEventPayload {
@@ -2572,56 +3035,87 @@ func (n *localNode) ListAdjustmentRows(
 
 // --- trading ----------------------------------------------------------------
 
-// SubmitOrder records the order as submitted, runs the engine pre-trade, and
-// persists the lifecycle. On accept it records pre_trade_accepted and
-// reservation_committed events, persists the captured lock blob, and sets the
-// order committed; on reject it records pre_trade_rejected and sets the order
-// rejected. The order row is the durable trail, so a recorded order is never
-// rolled back; the engine outcome only drives later events and status.
+// SubmitOrder runs the pre-trade submit on the account lane and persists the
+// order, submitted event, and engine outcome in one store transaction. On accept
+// it records pre_trade_accepted and reservation_committed, persists the lock,
+// balance outcomes, and committed status; on reject it records
+// pre_trade_rejected and rejected status. An order for an account Officer does
+// not know yet auto-creates it (like a fresh adjustment target), so submitting
+// against an unknown account is processed rather than rejected as invalid.
 func (n *localNode) SubmitOrder(
 	ctx context.Context, key Key, o domain.Order, caller domain.Caller,
 ) (domain.Order, error) {
-	if err := n.beginMutation(); err != nil {
+	// Register the account and both order assets and rebuild pre-lane so the
+	// resolver knows them before RunAccountSynchronized resolves the account.
+	if err := n.ensureAccountAndAssetsRegisteredExclusive(
+		ctx, key.Account, "submit order", caller, o.BaseAsset, o.QuoteAsset,
+	); err != nil {
 		return domain.Order{}, err
 	}
-	defer n.endMutation()
-
-	order, err := n.recordSubmittedOrder(ctx, key, o, caller)
+	accountID, err := n.accountDiagnosticID(ctx, key.Account)
 	if err != nil {
 		return domain.Order{}, err
 	}
-
-	result, err := n.engine.SubmitOrder(ctx, order)
-	if err != nil {
-		return domain.Order{}, fmt.Errorf("submit order: %w", err)
-	}
-
-	if result.Accepted {
-		order, err = n.recordOrderAccepted(ctx, key, order, result, caller)
-	} else {
-		order, err = n.recordOrderRejected(ctx, order, result.Rejects, caller)
-	}
+	eng, done, err := n.beginLane()
 	if err != nil {
 		return domain.Order{}, err
 	}
+	defer done()
 
-	if err := n.audit(ctx, caller, store.AuditEntry{
-		Action:  domain.AuditActionSubmitOrder,
-		Account: key.Account,
-		Detail:  submitOrderDetail(order, result.Accepted),
+	var order domain.Order
+	var result engine.OrderResult
+	engineApplied := false
+	draft := submittedOrderDraft(key, o, caller)
+	submitted := submittedOrderEvent(caller)
+	if err := eng.RunAccountSynchronized(ctx, key.Account, func(lane engine.AccountLane) error {
+		var err error
+		order, err = n.realm.RecordOrderSubmission(
+			ctx,
+			draft,
+			submitted,
+			func(persisted domain.Order) (domain.OrderSettlement, error) {
+				result, err = lane.SubmitOrder(ctx, persisted)
+				if err != nil {
+					return domain.OrderSettlement{}, fmt.Errorf("submit order: %w", err)
+				}
+				engineApplied = true
+				if result.Accepted {
+					return orderAcceptedSettlement(key, persisted, result, caller), nil
+				}
+				return orderRejectedSettlement(key, persisted, result.Rejects, caller), nil
+			},
+		)
+		if err != nil {
+			if engineApplied {
+				return n.fatalPostEnginePersistence(
+					"record order submission", accountID, err,
+				)
+			}
+			return err
+		}
+
+		if err := n.audit(ctx, caller, store.AuditEntry{
+			Action:  domain.AuditActionSubmitOrder,
+			Account: key.Account,
+			Detail:  submitOrderDetail(order, result.Accepted),
+		}); err != nil {
+			return n.fatalPostEnginePersistence(
+				"audit submit order",
+				accountID,
+				fmt.Errorf("audit submit order: %w", err),
+			)
+		}
+		return nil
 	}); err != nil {
-		return domain.Order{}, fmt.Errorf("audit submit order: %w", err)
+		return domain.Order{}, err
 	}
 	return order, nil
 }
 
-// recordOrderAccepted records the accept path: pre_trade_accepted and
-// reservation_committed events, the captured lock blob on the order, and the
-// committed status.
-func (n *localNode) recordOrderAccepted(
-	ctx context.Context, key Key, order domain.Order, result engine.OrderResult, caller domain.Caller,
-) (domain.Order, error) {
-	if err := n.realm.RecordOrderSettlement(ctx, domain.OrderSettlement{
+func orderAcceptedSettlement(
+	key Key, order domain.Order, result engine.OrderResult, caller domain.Caller,
+) domain.OrderSettlement {
+	return domain.OrderSettlement{
 		Account:     key.Account,
 		Order:       order.ExternalID,
 		OrderStatus: domain.OrderStatusCommitted,
@@ -2632,19 +3126,12 @@ func (n *localNode) recordOrderAccepted(
 		},
 		Lock:    result.Lock,
 		SetLock: true,
-	}); err != nil {
-		return domain.Order{}, fmt.Errorf("record order accepted: %w", err)
 	}
-	order.Lock = result.Lock
-	order.Status = domain.OrderStatusCommitted
-	return order, nil
 }
 
-// recordOrderRejected records the reject path: one pre_trade_rejected event
-// carrying the first reject and the rejected status.
-func (n *localNode) recordOrderRejected(
-	ctx context.Context, order domain.Order, rejects []domain.OrderReject, caller domain.Caller,
-) (domain.Order, error) {
+func orderRejectedSettlement(
+	key Key, order domain.Order, rejects []domain.OrderReject, caller domain.Caller,
+) domain.OrderSettlement {
 	payload := domain.OrderEventPayload{}
 	if len(rejects) > 0 {
 		r := rejects[0]
@@ -2654,14 +3141,14 @@ func (n *localNode) recordOrderRejected(
 		payload.RejectReason = r.Reason
 		payload.RejectDetails = r.Details
 	}
-	if err := n.appendOrderEvent(ctx, order.ExternalID, domain.OrderEventPreTradeRejected, caller, payload); err != nil {
-		return domain.Order{}, err
+	return domain.OrderSettlement{
+		Account:     key.Account,
+		Order:       order.ExternalID,
+		OrderStatus: domain.OrderStatusRejected,
+		Events: []domain.OrderEvent{
+			fillSettlementEvent(order.ExternalID, domain.OrderEventPreTradeRejected, caller, payload),
+		},
 	}
-	if err := n.realm.UpdateOrderStatus(ctx, order.ExternalID, domain.OrderStatusRejected); err != nil {
-		return domain.Order{}, fmt.Errorf("order status rejected: %w", err)
-	}
-	order.Status = domain.OrderStatusRejected
-	return order, nil
 }
 
 // SubmitHold records the order, runs the engine pre-trade keeping the
@@ -2672,47 +3159,58 @@ func (n *localNode) recordOrderRejected(
 func (n *localNode) SubmitHold(
 	ctx context.Context, key Key, o domain.Order, caller domain.Caller,
 ) (domain.Order, engine.HoldResult, error) {
-	if err := n.beginMutation(); err != nil {
+	// Register the account and both order assets and rebuild pre-lane (see
+	// SubmitOrder).
+	if err := n.ensureAccountAndAssetsRegisteredExclusive(
+		ctx, key.Account, "submit hold", caller, o.BaseAsset, o.QuoteAsset,
+	); err != nil {
 		return domain.Order{}, engine.HoldResult{}, err
 	}
-	defer n.endMutation()
-
-	order, err := n.recordSubmittedOrder(ctx, key, o, caller)
+	accountID, err := n.accountDiagnosticID(ctx, key.Account)
 	if err != nil {
 		return domain.Order{}, engine.HoldResult{}, err
 	}
-
-	result, err := n.engine.ReserveHold(ctx, order)
+	eng, done, err := n.beginLane()
 	if err != nil {
-		return domain.Order{}, engine.HoldResult{}, fmt.Errorf("reserve hold: %w", err)
+		return domain.Order{}, engine.HoldResult{}, err
 	}
+	defer done()
 
-	if !result.Accepted {
-		order, err = n.recordOrderRejected(ctx, order, result.Rejects, caller)
+	var order domain.Order
+	var result engine.HoldResult
+	engineApplied := false
+	draft := submittedOrderDraft(key, o, caller)
+	submitted := submittedOrderEvent(caller)
+	if err := eng.RunAccountSynchronized(ctx, key.Account, func(lane engine.AccountLane) error {
+		var err error
+		order, err = n.realm.RecordOrderSubmission(
+			ctx,
+			draft,
+			submitted,
+			func(persisted domain.Order) (domain.OrderSettlement, error) {
+				result, err = lane.ReserveHold(ctx, persisted)
+				if err != nil {
+					return domain.OrderSettlement{}, fmt.Errorf("reserve hold: %w", err)
+				}
+				engineApplied = true
+				if !result.Accepted {
+					return orderRejectedSettlement(key, persisted, result.Rejects, caller), nil
+				}
+				return holdAcceptedSettlement(key, persisted, result, caller), nil
+			},
+		)
 		if err != nil {
-			return domain.Order{}, engine.HoldResult{}, err
+			if engineApplied {
+				return n.fatalPostEnginePersistence(
+					"record hold submission", accountID, err,
+				)
+			}
+			return err
 		}
-		return order, result, nil
-	}
-
-	// One atomic store transaction: pre_trade_accepted event, per-asset held
-	// balances (realized-pnl accumulated inside the tx), lock blob, and the
-	// accepted status. No trade, no blocks on the hold-accept path. AllowedFrom is
-	// left empty: the order is fresh (submitted) so the status advance is
-	// unguarded.
-	if err := n.realm.RecordOrderSettlement(ctx, domain.OrderSettlement{
-		Account:     key.Account,
-		Order:       order.ExternalID,
-		OrderStatus: domain.OrderStatusAccepted,
-		Balances:    balanceSettlementsFrom(result.Outcomes),
-		Events:      []domain.OrderEvent{fillSettlementEvent(order.ExternalID, domain.OrderEventPreTradeAccepted, caller, domain.OrderEventPayload{})},
-		Lock:        result.Lock,
-		SetLock:     true,
+		return nil
 	}); err != nil {
-		return domain.Order{}, engine.HoldResult{}, fmt.Errorf("record hold accept: %w", err)
+		return domain.Order{}, engine.HoldResult{}, err
 	}
-	order.Lock = result.Lock
-	order.Status = domain.OrderStatusAccepted
 	return order, result, nil
 }
 
@@ -2723,208 +3221,266 @@ func (n *localNode) SubmitHold(
 func (n *localNode) SubmitImmediate(
 	ctx context.Context, key Key, o domain.Order, caller domain.Caller,
 ) (domain.Order, engine.ImmediateResult, error) {
-	if err := n.beginMutation(); err != nil {
+	// Register the account and both order assets and rebuild pre-lane (see
+	// SubmitOrder).
+	if err := n.ensureAccountAndAssetsRegisteredExclusive(
+		ctx, key.Account, "submit immediate", caller, o.BaseAsset, o.QuoteAsset,
+	); err != nil {
 		return domain.Order{}, engine.ImmediateResult{}, err
 	}
-	defer n.endMutation()
-
-	order, err := n.recordSubmittedOrder(ctx, key, o, caller)
+	accountID, err := n.accountDiagnosticID(ctx, key.Account)
 	if err != nil {
 		return domain.Order{}, engine.ImmediateResult{}, err
 	}
-
-	result, err := n.engine.SubmitImmediate(ctx, order)
+	eng, done, err := n.beginLane()
 	if err != nil {
-		return domain.Order{}, engine.ImmediateResult{}, fmt.Errorf("submit immediate: %w", err)
+		return domain.Order{}, engine.ImmediateResult{}, err
 	}
+	defer done()
 
-	if !result.Accepted {
-		order, err = n.recordOrderRejected(ctx, order, result.Rejects, caller)
+	var order domain.Order
+	var result engine.ImmediateResult
+	engineApplied := false
+	draft := submittedOrderDraft(key, o, caller)
+	submitted := submittedOrderEvent(caller)
+	if err := eng.RunAccountSynchronized(ctx, key.Account, func(lane engine.AccountLane) error {
+		var err error
+		order, err = n.realm.RecordOrderSubmission(
+			ctx,
+			draft,
+			submitted,
+			func(persisted domain.Order) (domain.OrderSettlement, error) {
+				result, err = lane.SubmitImmediate(ctx, persisted)
+				if err != nil {
+					return domain.OrderSettlement{}, fmt.Errorf("submit immediate: %w", err)
+				}
+				engineApplied = true
+				if !result.Accepted {
+					return orderRejectedSettlement(key, persisted, result.Rejects, caller), nil
+				}
+				return immediateAcceptedSettlement(key, persisted, result, caller), nil
+			},
+		)
 		if err != nil {
-			return domain.Order{}, engine.ImmediateResult{}, err
+			if engineApplied {
+				return n.fatalPostEnginePersistence(
+					"record immediate submission", accountID, err,
+				)
+			}
+			return err
 		}
-		return order, result, nil
-	}
-
-	fillQuantity := result.FillQuantity
-	if fillQuantity == "" {
-		fillQuantity = order.AmountValue
-	}
-	fillPayload := accountBlockPayload(result.Blocks)
-	fillPayload.FillQuantity = fillQuantity
-	fillPayload.FillPrice = result.SettlementLockPrice
-	fillPayload.FillLockPrice = result.SettlementLockPrice
-	// One atomic store transaction: pre_trade_accepted + reservation_committed +
-	// fill events, per-asset balances (realized-pnl accumulated in-tx), the trade,
-	// engine-block UPDATEs, lock blob, and the filled status. AllowedFrom guards
-	// against terminal-status clobber (e.g. a duplicate fill for an already-filled
-	// order). The block-audit rows are observational and stay a post-commit
-	// best-effort write below.
-	if err := n.realm.RecordOrderSettlement(ctx, domain.OrderSettlement{
-		Account:     key.Account,
-		Order:       order.ExternalID,
-		OrderStatus: domain.OrderStatusFilled,
-		AllowedFrom: domain.OrderStatusesEligibleForFill(),
-		Balances:    balanceSettlementsFrom(result.Outcomes),
-		Events: []domain.OrderEvent{
-			fillSettlementEvent(order.ExternalID, domain.OrderEventPreTradeAccepted, caller, domain.OrderEventPayload{}),
-			fillSettlementEvent(order.ExternalID, domain.OrderEventReservationCommitted, caller, domain.OrderEventPayload{}),
-			fillSettlementEvent(order.ExternalID, domain.OrderEventFill, caller, fillPayload),
-		},
-		Trade: &domain.Trade{
-			Order:      order.ExternalID,
-			Account:    key.Account,
-			Source:     caller.Source,
-			Principal:  caller.Principal,
-			BaseAsset:  order.BaseAsset,
-			QuoteAsset: order.QuoteAsset,
-			Side:       order.Side,
-			Quantity:   fillQuantity,
-			Price:      result.SettlementLockPrice,
-			LockPrice:  result.SettlementLockPrice,
-		},
-		Blocks:  accountBlockSettlementsFrom(order.ExternalID, result.Blocks),
-		Lock:    result.Lock,
-		SetLock: true,
+		if result.Accepted {
+			if err := n.mirrorEngineBlocksAudit(ctx, order.ExternalID, result.Blocks); err != nil {
+				return n.fatalPostEnginePersistence(
+					"audit immediate engine blocks", accountID, err,
+				)
+			}
+		}
+		return nil
 	}); err != nil {
-		return domain.Order{}, engine.ImmediateResult{}, fmt.Errorf("record immediate fill: %w", err)
-	}
-	if err := n.mirrorEngineBlocksAudit(ctx, order.ExternalID, result.Blocks); err != nil {
 		return domain.Order{}, engine.ImmediateResult{}, err
 	}
-	order.Lock = result.Lock
-	order.Status = domain.OrderStatusFilled
 	return order, result, nil
 }
 
 // ConfirmHeld commits the held reservation through the engine and records the
-// committed lifecycle on the order. The backend audits the confirmation.
+// committed lifecycle on the order. The backend audits the confirmation. The
+// returned bool reports whether force actually bypassed a terminal-order guard.
 func (n *localNode) ConfirmHeld(
 	ctx context.Context, order domain.ExternalID,
 	approvalID string, caller domain.Caller, force bool,
-) (domain.Order, error) {
-	if err := n.beginMutation(); err != nil {
-		return domain.Order{}, err
+) (domain.Order, bool, error) {
+	eng, done, err := n.beginLane()
+	if err != nil {
+		return domain.Order{}, false, err
 	}
-	defer n.endMutation()
+	defer done()
 
-	if err := n.engine.CommitHeld(ctx, approvalID); err != nil {
-		if !errors.Is(err, domain.ErrNotFound) {
-			return domain.Order{}, fmt.Errorf("commit held: %w", err)
-		}
-		// The native handle is gone (post-restart): fall back to the persisted
-		// intent. The fallback verifies the intent then drives the same atomic
-		// resolve below, so the status guard still protects a fill that landed in
-		// the crash window.
-		if err := n.commitHeldIntentFallback(ctx, approvalID); err != nil {
-			return domain.Order{}, err
-		}
-	}
-	// One atomic store transaction: intent flip + order status advance + the
-	// reservation_committed event. Without force, AllowedFrom={accepted} is
-	// TOCTOU-safe: a concurrent fill that flipped the order to filled before this
-	// tx yields ErrConflict and writes nothing. Force drops the entire
-	// AllowedFrom store guard, including that concurrent-fill protection, because
-	// it means straight to the engine with no Officer checks. The native commit
-	// already happened; a store failure here does not re-resolve the handle.
-	allowedFrom := []domain.OrderStatus{domain.OrderStatusAccepted}
-	if force {
-		allowedFrom = nil
-	}
-	if err := n.realm.ResolveOrderReservation(ctx, domain.ReservationResolution{
-		ApprovalID:  approvalID,
-		IntentState: domain.ReservationIntentStateCommitted,
-		OrderStatus: domain.OrderStatusCommitted,
-		AllowedFrom: allowedFrom,
-		Events: []domain.OrderEvent{{
-			Order:     order,
-			Type:      domain.OrderEventReservationCommitted,
-			Source:    caller.Source,
-			Principal: caller.Principal,
-		}},
-		Order: order,
-	}); err != nil {
-		return domain.Order{}, fmt.Errorf("resolve confirm: %w", err)
-	}
+	// Outer fetch is for routing only (the account keys the lane); the inner fetch
+	// inside the lane re-reads the authoritative status under serialization with
+	// fills and reports, closing the TOCTOU window on the terminal-order guard.
 	detail, err := n.realm.GetOrder(ctx, order)
 	if err != nil {
-		return domain.Order{}, fmt.Errorf("get order: %w", err)
+		return domain.Order{}, false, fmt.Errorf("get order: %w", err)
 	}
-	return detail.Order, nil
+	accountID, err := n.accountDiagnosticID(ctx, detail.Order.Account)
+	if err != nil {
+		return domain.Order{}, false, err
+	}
+	var confirmed domain.Order
+	var forcedBypass bool
+	if err := eng.RunAccountSynchronized(ctx, detail.Order.Account, func(lane engine.AccountLane) error {
+		detail, err := n.realm.GetOrder(ctx, order)
+		if err != nil {
+			return fmt.Errorf("get order: %w", err)
+		}
+		if err := domain.RequireOrderModifiable(detail.Order.Status, force); err != nil {
+			return fmt.Errorf(
+				"order %s is in terminal status %q: %w",
+				order, detail.Order.Status, err)
+		}
+		forcedBypass = force && domain.OrderStatusTerminal(detail.Order.Status)
+		if detail.Order.Status == domain.OrderStatusCommitted {
+			confirmed = detail.Order
+			return nil
+		}
+
+		if err := lane.CommitHeld(ctx, approvalID); err != nil {
+			if !errors.Is(err, domain.ErrNotFound) {
+				return fmt.Errorf("commit held: %w", err)
+			}
+			// The native handle is gone (post-restart): fall back to the persisted
+			// intent. The fallback verifies the intent then drives the same atomic
+			// resolve below.
+			if err := n.commitHeldIntentFallback(ctx, approvalID); err != nil {
+				return err
+			}
+		}
+		// One atomic store transaction: intent flip + order status advance + the
+		// reservation_committed event. Without force, AllowedFrom={accepted} is
+		// TOCTOU-safe inside the same account lane as fills and reports. Force drops
+		// the store guard because it means straight to the engine with no Officer
+		// checks.
+		allowedFrom := []domain.OrderStatus{domain.OrderStatusAccepted}
+		if force {
+			allowedFrom = nil
+		}
+		if err := n.realm.ResolveOrderReservation(ctx, domain.ReservationResolution{
+			ApprovalID:  approvalID,
+			IntentState: domain.ReservationIntentStateCommitted,
+			OrderStatus: domain.OrderStatusCommitted,
+			AllowedFrom: allowedFrom,
+			Events: []domain.OrderEvent{{
+				Order:     order,
+				Type:      domain.OrderEventReservationCommitted,
+				Source:    caller.Source,
+				Principal: caller.Principal,
+			}},
+			Order: order,
+		}); err != nil {
+			wrapped := fmt.Errorf("resolve confirm: %w", err)
+			return n.fatalPostEnginePersistence(
+				"resolve held confirmation", accountID, wrapped,
+			)
+		}
+		detail, err = n.realm.GetOrder(ctx, order)
+		if err != nil {
+			return fmt.Errorf("get order: %w", err)
+		}
+		confirmed = detail.Order
+		return nil
+	}); err != nil {
+		return domain.Order{}, false, err
+	}
+	return confirmed, forcedBypass, nil
 }
 
 // CancelHeld rolls back the held reservation through the engine and records the
-// cancelled lifecycle on the order. The backend audits the cancellation.
+// cancelled lifecycle on the order. The backend audits the cancellation. The
+// returned bool reports whether force actually bypassed a terminal-order guard.
 func (n *localNode) CancelHeld(
 	ctx context.Context, order domain.ExternalID,
 	approvalID string, caller domain.Caller, force bool,
-) (domain.Order, error) {
-	if err := n.beginMutation(); err != nil {
-		return domain.Order{}, err
+) (domain.Order, bool, error) {
+	eng, done, err := n.beginLane()
+	if err != nil {
+		return domain.Order{}, false, err
 	}
-	defer n.endMutation()
+	defer done()
 
-	if err := n.engine.RollbackHeld(ctx, approvalID); err != nil {
-		if !errors.Is(err, domain.ErrNotFound) {
-			return domain.Order{}, fmt.Errorf("rollback held: %w", err)
-		}
-		// Native handle gone (post-restart): release the held balance effects
-		// through the engine from the persisted intent. The intent flip + order
-		// status + events are still done by the atomic resolve below.
-		if err := n.rollbackHeldIntentFallback(ctx, approvalID); err != nil {
-			return domain.Order{}, err
-		}
-	}
-	// One atomic store transaction: intent flip + cancelled status +
-	// reservation_rolled_back and cancelled events. Without force,
-	// AllowedFrom={accepted} is TOCTOU-safe: a concurrent fill that flipped the
-	// order to filled before this tx yields ErrConflict and writes nothing. Force
-	// drops the entire AllowedFrom store guard, including that concurrent-fill
-	// protection, because it means straight to the engine with no Officer checks.
-	allowedFrom := []domain.OrderStatus{domain.OrderStatusAccepted}
-	if force {
-		allowedFrom = nil
-	}
-	if err := n.realm.ResolveOrderReservation(ctx, domain.ReservationResolution{
-		ApprovalID:  approvalID,
-		IntentState: domain.ReservationIntentStateRolledBack,
-		OrderStatus: domain.OrderStatusCancelled,
-		AllowedFrom: allowedFrom,
-		Events: []domain.OrderEvent{
-			{
-				Order:     order,
-				Type:      domain.OrderEventReservationRolledBack,
-				Source:    caller.Source,
-				Principal: caller.Principal,
-			},
-			{
-				Order:     order,
-				Type:      domain.OrderEventCancelled,
-				Source:    caller.Source,
-				Principal: caller.Principal,
-			},
-		},
-		Order: order,
-	}); err != nil {
-		return domain.Order{}, fmt.Errorf("resolve cancel: %w", err)
-	}
+	// Outer fetch is for routing only; the inner fetch inside the lane re-reads
+	// the authoritative status under serialization with fills and reports, closing
+	// the TOCTOU window on the terminal-order guard.
 	detail, err := n.realm.GetOrder(ctx, order)
 	if err != nil {
-		return domain.Order{}, fmt.Errorf("get order: %w", err)
+		return domain.Order{}, false, fmt.Errorf("get order: %w", err)
 	}
-	return detail.Order, nil
+	accountID, err := n.accountDiagnosticID(ctx, detail.Order.Account)
+	if err != nil {
+		return domain.Order{}, false, err
+	}
+	var cancelled domain.Order
+	var forcedBypass bool
+	if err := eng.RunAccountSynchronized(ctx, detail.Order.Account, func(lane engine.AccountLane) error {
+		detail, err := n.realm.GetOrder(ctx, order)
+		if err != nil {
+			return fmt.Errorf("get order: %w", err)
+		}
+		if err := domain.RequireOrderModifiable(detail.Order.Status, force); err != nil {
+			return fmt.Errorf(
+				"order %s is in terminal status %q: %w",
+				order, detail.Order.Status, err)
+		}
+		forcedBypass = force && domain.OrderStatusTerminal(detail.Order.Status)
+
+		if err := lane.RollbackHeld(ctx, approvalID); err != nil {
+			if !errors.Is(err, domain.ErrNotFound) {
+				return fmt.Errorf("rollback held: %w", err)
+			}
+			// Native handle gone (post-restart): release the held balance effects
+			// through the engine from the persisted intent. The intent flip + order
+			// status + events are still done by the atomic resolve below.
+			if err := n.rollbackHeldIntentFallback(ctx, lane, approvalID, accountID); err != nil {
+				return err
+			}
+		}
+		// One atomic store transaction: intent flip + cancelled status +
+		// reservation_rolled_back and cancelled events. Without force,
+		// AllowedFrom={accepted} is TOCTOU-safe inside the same account lane as fills
+		// and reports. Force drops the store guard because it means straight to the
+		// engine with no Officer checks.
+		allowedFrom := []domain.OrderStatus{domain.OrderStatusAccepted}
+		if force {
+			allowedFrom = nil
+		}
+		if err := n.realm.ResolveOrderReservation(ctx, domain.ReservationResolution{
+			ApprovalID:  approvalID,
+			IntentState: domain.ReservationIntentStateRolledBack,
+			OrderStatus: domain.OrderStatusCancelled,
+			AllowedFrom: allowedFrom,
+			Events: []domain.OrderEvent{
+				{
+					Order:     order,
+					Type:      domain.OrderEventReservationRolledBack,
+					Source:    caller.Source,
+					Principal: caller.Principal,
+				},
+				{
+					Order:     order,
+					Type:      domain.OrderEventCancelled,
+					Source:    caller.Source,
+					Principal: caller.Principal,
+				},
+			},
+			Order: order,
+		}); err != nil {
+			wrapped := fmt.Errorf("resolve cancel: %w", err)
+			return n.fatalPostEnginePersistence(
+				"resolve held cancellation", accountID, wrapped,
+			)
+		}
+		detail, err = n.realm.GetOrder(ctx, order)
+		if err != nil {
+			return fmt.Errorf("get order: %w", err)
+		}
+		cancelled = detail.Order
+		return nil
+	}); err != nil {
+		return domain.Order{}, false, err
+	}
+	return cancelled, forcedBypass, nil
 }
 
 // ReconcileOrphans reports persisted held reservation intents after boot. It
 // runs once after the engine is built; held balance effects remain durable in
 // the store and are not rolled back here.
 func (n *localNode) ReconcileOrphans(ctx context.Context) (int, error) {
-	if err := n.beginMutation(); err != nil {
+	eng, done, err := n.beginLane()
+	if err != nil {
 		return 0, err
 	}
-	defer n.endMutation()
-
-	count, err := n.engine.ReconcileOrphans(ctx)
+	defer done()
+	count, err := eng.ReconcileOrphans(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -2960,7 +3516,7 @@ func (n *localNode) commitHeldIntentFallback(ctx context.Context, approvalID str
 }
 
 func (n *localNode) rollbackHeldIntentFallback(
-	ctx context.Context, approvalID string,
+	ctx context.Context, lane engine.AccountLane, approvalID string, accountID string,
 ) error {
 	intent, err := n.openReservationIntent(ctx, approvalID)
 	if err != nil {
@@ -2988,7 +3544,7 @@ func (n *localNode) rollbackHeldIntentFallback(
 	}
 	key := Key{Account: intent.Account}
 	for _, outcome := range outcomes {
-		if err := n.releaseHeldBalance(ctx, key, outcome); err != nil {
+		if err := n.releaseHeldBalance(ctx, lane, key, accountID, outcome); err != nil {
 			return err
 		}
 	}
@@ -3031,20 +3587,24 @@ func decodeReservationIntentPayload(raw string) (
 	domain.Order, []engine.BalanceOutcome, error,
 ) {
 	var payload reservationIntentPayload
-	if err := json.Unmarshal([]byte(raw), &payload); err == nil {
-		if !payload.Order.ExternalID.IsZero() || payload.Order.Account != "" || payload.Outcomes != nil {
-			return payload.Order, payload.Outcomes, nil
-		}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return domain.Order{}, nil, fmt.Errorf(
+			"malformed reservation intent payload: %w", domain.ErrInvalid)
 	}
-	var order domain.Order
-	if err := json.Unmarshal([]byte(raw), &order); err != nil {
-		return domain.Order{}, nil, err
+	if len(payload.Outcomes) == 0 || payload.Order.ExternalID.IsZero() ||
+		payload.Order.Account == "" {
+		return domain.Order{}, nil, fmt.Errorf(
+			"malformed reservation intent payload: %w", domain.ErrInvalid)
 	}
-	return order, nil, nil
+	return payload.Order, payload.Outcomes, nil
 }
 
 func (n *localNode) releaseHeldBalance(
-	ctx context.Context, key Key, held engine.BalanceOutcome,
+	ctx context.Context,
+	lane engine.AccountLane,
+	key Key,
+	accountID string,
+	held engine.BalanceOutcome,
 ) error {
 	req, err := releaseHeldRequest(held)
 	if err != nil {
@@ -3053,7 +3613,7 @@ func (n *localNode) releaseHeldBalance(
 	if req.Balance == nil && req.Held == nil && req.Incoming == nil {
 		return nil
 	}
-	result, err := n.engine.ApplyAccountAdjustment(ctx, key.Account, req)
+	result, err := lane.ApplyAccountAdjustment(ctx, key.Account, req)
 	if err != nil {
 		return fmt.Errorf("release held through engine: %w", err)
 	}
@@ -3065,7 +3625,10 @@ func (n *localNode) releaseHeldBalance(
 	if result.Accepted == nil {
 		return fmt.Errorf("release held produced no accepted outcome: %w", domain.ErrConflict)
 	}
-	return n.persistAdjustedBalance(ctx, key, req, *result.Accepted)
+	if err := n.persistAdjustedBalance(ctx, key, req, *result.Accepted); err != nil {
+		return n.fatalPostEnginePersistence("release held balance", accountID, err)
+	}
+	return nil
 }
 
 func releaseHeldRequest(held engine.BalanceOutcome) (domain.AdjustmentRequest, error) {
@@ -3097,150 +3660,291 @@ func inverseAdjustmentAmount(delta string) (*domain.AdjustmentAmount, error) {
 	}, nil
 }
 
-// recordSubmittedOrder creates the order record and its submitted event, stamped
-// with the caller and routing key. The store assigns the order's external id and
-// timestamp on insert. Callers hold n.mutate.
-func (n *localNode) recordSubmittedOrder(
-	ctx context.Context, key Key, o domain.Order, caller domain.Caller,
-) (domain.Order, error) {
+func submittedOrderDraft(key Key, o domain.Order, caller domain.Caller) domain.Order {
 	o.Account = key.Account
 	o.Source = caller.Source
 	o.Principal = caller.Principal
 	o.Status = domain.OrderStatusSubmitted
-
-	order, err := n.realm.CreateOrder(ctx, o)
-	if err != nil {
-		return domain.Order{}, fmt.Errorf("create order: %w", err)
-	}
-	if err := n.appendOrderEvent(ctx, order.ExternalID, domain.OrderEventSubmitted, caller, domain.OrderEventPayload{}); err != nil {
-		return domain.Order{}, err
-	}
-	return order, nil
+	return o
 }
 
-// ApplyExecutionReport settles a fill through the engine, then persists the fill
-// event, trade, per-asset balances, engine-block UPDATEs, and the reflected
-// status (from in.Final) in one atomic RecordOrderSettlement transaction so a
-// crash never leaves a half-settled fill. The engine already applied the block,
-// so the store UPDATE only follows; the observational block-audit row is written
-// post-commit.
-func (n *localNode) ApplyExecutionReport(
-	ctx context.Context, key Key, in domain.ExecutionReportInput, caller domain.Caller,
-) (engine.ExecutionReportResult, error) {
-	if err := n.beginMutation(); err != nil {
-		return engine.ExecutionReportResult{}, err
-	}
-	defer n.endMutation()
+func submittedOrderEvent(caller domain.Caller) domain.OrderEvent {
+	return fillSettlementEvent(
+		domain.ExternalID(""),
+		domain.OrderEventSubmitted,
+		caller,
+		domain.OrderEventPayload{},
+	)
+}
 
-	in.Account = key.Account
-	result, err := n.engine.ApplyExecutionReport(ctx, in)
-	if err != nil {
-		return engine.ExecutionReportResult{}, fmt.Errorf("apply execution report: %w", err)
-	}
-
-	status := domain.OrderStatusPartiallyFilled
-	if in.Final {
-		status = domain.OrderStatusFilled
-	}
-	fillPayload := accountBlockPayload(result.Blocks)
-	fillPayload.FillQuantity = in.FillQuantity
-	fillPayload.FillPrice = in.FillPrice
-	fillPayload.FillLockPrice = in.LockPrice
-
-	// One atomic store transaction: the fill event, per-asset balances (balance/
-	// held/incoming follow the engine's resulting absolutes; realized P&L is
-	// delta-accumulated in-tx, never overwritten with the reported absolute - a
-	// spot fill settles both legs, so each outcome is keyed on its own asset), the
-	// trade, engine-block UPDATEs, and the fill status. Without force, AllowedFrom
-	// guards terminal-status clobber. Force drops the entire AllowedFrom store
-	// guard, including TOCTOU protection against a concurrent fill, because it
-	// means straight to the engine with no Officer checks. The block-audit rows
-	// are observational and stay a post-commit best-effort write below.
-	allowedFrom := domain.OrderStatusesEligibleForFill()
-	if in.Force {
-		allowedFrom = nil
-	}
-	if err := n.realm.RecordOrderSettlement(ctx, domain.OrderSettlement{
+func holdAcceptedSettlement(
+	key Key, order domain.Order, result engine.HoldResult, caller domain.Caller,
+) domain.OrderSettlement {
+	return domain.OrderSettlement{
 		Account:     key.Account,
-		Order:       in.Order,
-		OrderStatus: status,
-		AllowedFrom: allowedFrom,
+		Order:       order.ExternalID,
+		OrderStatus: domain.OrderStatusAccepted,
 		Balances:    balanceSettlementsFrom(result.Outcomes),
 		Events: []domain.OrderEvent{
-			fillSettlementEvent(in.Order, domain.OrderEventFill, caller, fillPayload),
+			fillSettlementEvent(order.ExternalID, domain.OrderEventPreTradeAccepted, caller, domain.OrderEventPayload{}),
+		},
+		Lock:    result.Lock,
+		SetLock: true,
+	}
+}
+
+func immediateAcceptedSettlement(
+	key Key, order domain.Order, result engine.ImmediateResult, caller domain.Caller,
+) domain.OrderSettlement {
+	fillPayload := accountBlockPayload(result.Blocks)
+	fillPayload.FillQuantity = result.FillQuantity
+	fillPayload.FillPrice = result.SettlementLockPrice
+	fillPayload.FillLockPrice = result.SettlementLockPrice
+	return domain.OrderSettlement{
+		Account:     key.Account,
+		Order:       order.ExternalID,
+		OrderStatus: domain.OrderStatusFilled,
+		AllowedFrom: domain.OrderStatusesEligibleForFill(),
+		Balances:    balanceSettlementsFrom(result.Outcomes),
+		Events: []domain.OrderEvent{
+			fillSettlementEvent(order.ExternalID, domain.OrderEventPreTradeAccepted, caller, domain.OrderEventPayload{}),
+			fillSettlementEvent(order.ExternalID, domain.OrderEventReservationCommitted, caller, domain.OrderEventPayload{}),
+			fillSettlementEvent(order.ExternalID, domain.OrderEventFill, caller, fillPayload),
 		},
 		Trade: &domain.Trade{
-			Order:      in.Order,
+			Order:      order.ExternalID,
 			Account:    key.Account,
 			Source:     caller.Source,
 			Principal:  caller.Principal,
-			BaseAsset:  in.BaseAsset,
-			QuoteAsset: in.QuoteAsset,
-			Side:       in.Side,
-			Quantity:   in.FillQuantity,
-			Price:      in.FillPrice,
-			LockPrice:  in.LockPrice,
+			BaseAsset:  order.BaseAsset,
+			QuoteAsset: order.QuoteAsset,
+			Side:       order.Side,
+			Quantity:   result.FillQuantity,
+			Price:      result.SettlementLockPrice,
+			LockPrice:  result.SettlementLockPrice,
 		},
-		Blocks: accountBlockSettlementsFrom(in.Order, result.Blocks),
+		Blocks:  accountBlockSettlementsFrom(order.ExternalID, result.Blocks),
+		Lock:    result.Lock,
+		SetLock: true,
+	}
+}
+
+// ensureAutoCreatedAssets creates the base and quote assets when missing and
+// reports whether either was newly created. It is a pure store helper: it never
+// rebuilds the engine, so the caller decides when the rebuild is safe (pre-lane
+// for account-scoped operations).
+func (n *localNode) ensureAutoCreatedAssets(
+	ctx context.Context, baseAsset string, quoteAsset string,
+	operation string, caller domain.Caller,
+) (bool, error) {
+	created := false
+	for _, code := range []string{baseAsset, quoteAsset} {
+		if code == "" {
+			continue
+		}
+		assetCreated, err := n.ensureAutoCreatedAsset(ctx, code, operation, caller)
+		if err != nil {
+			return false, err
+		}
+		created = created || assetCreated
+	}
+	return created, nil
+}
+
+func (n *localNode) ensureAutoCreatedAsset(
+	ctx context.Context, code string, operation string, caller domain.Caller,
+) (bool, error) {
+	if _, ok, err := n.realm.GetAsset(ctx, code); err != nil {
+		return false, fmt.Errorf("read asset for %s: %w", operation, err)
+	} else if ok {
+		return false, nil
+	}
+	if err := domain.ValidateAsset(code); err != nil {
+		return false, err
+	}
+	if err := n.realm.CreateAssetClass(ctx, domain.AssetClass{
+		Code:  autoCreatedAssetClassCode,
+		Title: autoCreatedAssetClassTitle,
+		Notes: autoCreatedAssetClassNotes,
+	}); err != nil && !errors.Is(err, domain.ErrAlreadyExists) {
+		return false, fmt.Errorf("create auto-created asset class: %w", err)
+	}
+	if err := n.realm.CreateAsset(ctx, domain.Asset{
+		Code:       code,
+		AssetClass: autoCreatedAssetClassCode,
 	}); err != nil {
-		return engine.ExecutionReportResult{}, fmt.Errorf("record execution report: %w", err)
-	}
-
-	if err := n.mirrorEngineBlocksAudit(ctx, in.Order, result.Blocks); err != nil {
-		return engine.ExecutionReportResult{}, err
-	}
-
-	detail := executionReportDetail(in, len(result.Blocks))
-	if in.Force {
-		detail += " forced=true"
+		if errors.Is(err, domain.ErrAlreadyExists) {
+			return false, nil
+		}
+		return false, fmt.Errorf("create auto-created asset %s: %w", code, err)
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{
-		Action:  domain.AuditActionExecutionReport,
-		Account: key.Account,
-		Detail:  detail,
+		Action: domain.AuditActionCreateAsset,
+		Asset:  code,
+		Detail: fmt.Sprintf("auto-created asset %s by %s", code, operation),
 	}); err != nil {
-		return engine.ExecutionReportResult{}, fmt.Errorf("audit execution report: %w", err)
+		return false, fmt.Errorf("audit auto-created asset: %w", err)
+	}
+	return true, nil
+}
+
+// ApplyExecutionReport applies every report through the engine, then persists
+// the execution-report persistence in one atomic RecordOrderSettlement transaction:
+// report events, optional trade, per-asset balances, engine-block UPDATEs, and
+// the reflected status/leaves. The node does not commit or roll back held
+// reservations around the report; any account effects must come from the engine
+// persistence. The observational block-audit row is written post-commit. A report
+// against an account Officer does not know yet auto-creates it, so it is
+// processed rather than rejected as invalid.
+func (n *localNode) ApplyExecutionReport(
+	ctx context.Context, key Key, in domain.ExecutionReportInput, caller domain.Caller,
+) (engine.ExecutionReportResult, error) {
+	status := domain.ExecutionReportTargetStatus(in)
+	if !domain.OrderStatusSupported(status) {
+		return engine.ExecutionReportResult{}, fmt.Errorf(
+			"invalid execution report status %q: %w", status, domain.ErrInvalid)
+	}
+	// The report is a fact from the venue; caller cancellation must not cancel it.
+	ctx = context.WithoutCancel(ctx)
+
+	routeDetail, err := n.realm.GetOrder(ctx, in.Order)
+	if err != nil {
+		return engine.ExecutionReportResult{}, fmt.Errorf("get execution report order: %w", err)
+	}
+	account := routeDetail.Order.Account
+
+	// Register the order account and assets and rebuild pre-lane so the resolver
+	// knows them before RunAccountSynchronized resolves the account.
+	if err := n.ensureAccountAndAssetsRegisteredExclusive(
+		ctx, account, "execution report", caller,
+		routeDetail.Order.BaseAsset, routeDetail.Order.QuoteAsset,
+	); err != nil {
+		return engine.ExecutionReportResult{}, err
+	}
+	accountID, err := n.accountDiagnosticID(ctx, account)
+	if err != nil {
+		return engine.ExecutionReportResult{}, err
+	}
+	eng, done, err := n.beginLane()
+	if err != nil {
+		return engine.ExecutionReportResult{}, err
+	}
+	defer done()
+
+	var result engine.ExecutionReportResult
+	if err := eng.RunAccountSynchronized(ctx, account, func(lane engine.AccountLane) error {
+		detail, err := n.realm.GetOrder(ctx, in.Order)
+		if err != nil {
+			return fmt.Errorf("get execution report order: %w", err)
+		}
+		if err := domain.RequireOrderModifiable(detail.Order.Status, in.Force); err != nil {
+			return err
+		}
+		forcedTerminalBypass := in.Force && domain.OrderStatusTerminal(detail.Order.Status)
+		in.Account = detail.Order.Account
+		in.BaseAsset = detail.Order.BaseAsset
+		in.QuoteAsset = detail.Order.QuoteAsset
+		in.Side = detail.Order.Side
+		if len(in.Lock) == 0 && len(detail.Order.Lock) > 0 {
+			in.Lock = detail.Order.Lock
+		}
+
+		reservationApprovalID := ""
+		reservationIntentState := domain.ReservationIntentState("")
+		if detail.Order.Status == domain.OrderStatusAccepted {
+			intent, found, err := n.realm.GetOpenReservationIntentByOrder(ctx, in.Order)
+			if err != nil {
+				return fmt.Errorf("get open reservation intent: %w", err)
+			}
+			if found {
+				reservationApprovalID = intent.ApprovalID
+				if executionReportCarriesFill(in) {
+					reservationIntentState = domain.ReservationIntentStateCommitted
+				} else if domain.OrderStatusTerminal(status) {
+					reservationIntentState = domain.ReservationIntentStateRolledBack
+				}
+			}
+		}
+
+		applied, err := lane.ApplyExecutionReport(ctx, in)
+		if err != nil {
+			return fmt.Errorf("apply execution report: %w", err)
+		}
+		result = applied
+
+		if result.Persistence == nil {
+			return fmt.Errorf("apply execution report returned no persistence write set: %w", domain.ErrInvalid)
+		}
+		persistence := stampExecutionReportPersistence(*result.Persistence, caller)
+		settlement := domain.OrderSettlement{
+			Account:     in.Account,
+			Order:       in.Order,
+			OrderStatus: persistence.OrderStatus,
+			Leaves:      persistence.Leaves,
+			Balances:    persistence.Balances,
+			Events:      persistence.Events,
+			Trade:       persistence.Trade,
+			Blocks:      accountBlockSettlementsFrom(in.Order, persistence.Blocks),
+		}
+		if reservationApprovalID != "" && reservationIntentState != "" {
+			settlement.ReservationApprovalID = reservationApprovalID
+			settlement.ReservationIntentState = reservationIntentState
+		}
+		if err := n.realm.RecordOrderSettlement(ctx, settlement); err != nil {
+			return n.fatalPostEnginePersistence(
+				"record execution report",
+				accountID,
+				fmt.Errorf("record execution report: %w", err),
+			)
+		}
+
+		if err := n.mirrorEngineBlocksAudit(ctx, in.Order, result.Blocks); err != nil {
+			return n.fatalPostEnginePersistence(
+				"audit execution report engine blocks", accountID, err,
+			)
+		}
+
+		detailText := executionReportDetail(in, status, len(result.Blocks))
+		if forcedTerminalBypass {
+			detailText += " forced=true"
+		}
+		if err := n.audit(ctx, caller, store.AuditEntry{
+			Action:  domain.AuditActionExecutionReport,
+			Account: in.Account,
+			Detail:  detailText,
+		}); err != nil {
+			return n.fatalPostEnginePersistence(
+				"audit execution report",
+				accountID,
+				fmt.Errorf("audit execution report: %w", err),
+			)
+		}
+		return nil
+	}); err != nil {
+		return engine.ExecutionReportResult{}, err
 	}
 	return result, nil
 }
 
-// appendOrderEvent records one order-lifecycle event stamped with the caller.
-func (n *localNode) appendOrderEvent(
-	ctx context.Context, order domain.ExternalID, typ domain.OrderEventType, caller domain.Caller, payload domain.OrderEventPayload,
-) error {
-	if _, err := n.realm.AppendOrderEvent(ctx, domain.OrderEvent{
-		Order:     order,
-		Type:      typ,
-		Source:    caller.Source,
-		Principal: caller.Principal,
-		Payload:   payload,
-	}); err != nil {
-		return fmt.Errorf("append order event %s: %w", typ, err)
-	}
-	return nil
+func executionReportCarriesFill(in domain.ExecutionReportInput) bool {
+	return in.FillQuantity != "" && in.FillPrice != ""
 }
 
-// PersistOrderApproval stamps the signed approval envelope onto the order and
-// records the approval_issued event. It is write-once: store.PutOrderApproval
-// sets the envelope only when none is present, so a retry or a later fill never
-// clobbers it. The order is already durable, so this mutation only adds the
-// envelope; it never touches money or status.
-func (n *localNode) PersistOrderApproval(
-	ctx context.Context, key Key, order domain.ExternalID, env domain.OrderApproval,
+// PersistEventAttestation stamps the signed attestation envelope onto the
+// order-history event named by its external id. It is write-once:
+// store.PutEventAttestation sets the envelope only when none is present, so a
+// retry never clobbers it. The event is already durable, so this mutation only
+// adds the envelope; it never touches money or status.
+func (n *localNode) PersistEventAttestation(
+	ctx context.Context, _ Key, eventID domain.ExternalID, att domain.EventAttestation,
 ) error {
 	if err := n.beginMutation(); err != nil {
 		return err
 	}
 	defer n.endMutation()
 
-	if err := n.realm.PutOrderApproval(ctx, order, env); err != nil {
-		return fmt.Errorf("persist order approval: %w", err)
-	}
-	caller := auth.CallerFromContext(ctx)
-	if err := n.appendOrderEvent(
-		ctx, order, domain.OrderEventApprovalIssued, caller, domain.OrderEventPayload{},
-	); err != nil {
-		return err
+	if err := n.realm.PutEventAttestation(ctx, eventID, att); err != nil {
+		return fmt.Errorf("persist event attestation: %w", err)
 	}
 	return nil
 }
@@ -3355,13 +4059,22 @@ func (n *localNode) ListTradeRows(
 }
 
 // CheckOrder delegates the non-mutating pre-trade dry-run to the engine. The
-// check mutates no state, so it takes no mutate lock and writes no audit row.
+// check mutates no state and writes no audit row, but it still runs through the
+// account lane so dry-runs cannot observe account state out of order with fills.
 func (n *localNode) CheckOrder(
 	ctx context.Context, _ Key, probe domain.OrderProbe,
 ) (domain.CheckResult, error) {
-	n.engineMu.RLock()
-	defer n.engineMu.RUnlock()
-	return n.engine.CheckOrder(ctx, probe)
+	eng, done := n.beginLaneRead()
+	defer done()
+	var out domain.CheckResult
+	if err := eng.RunAccountSynchronized(ctx, probe.Account, func(lane engine.AccountLane) error {
+		var err error
+		out, err = lane.CheckOrder(ctx, probe)
+		return err
+	}); err != nil {
+		return domain.CheckResult{}, err
+	}
+	return out, nil
 }
 
 // Close stops the engine and closes the store. It is idempotent: the engine's

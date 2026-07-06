@@ -44,17 +44,20 @@ type Config struct {
 	RuntimeLibraryPath string
 }
 
-// FatalShutdownHook is invoked by concrete stores on unrecoverable failures.
+// FatalShutdownHook is invoked by the business node on unrecoverable
+// post-engine persistence failures.
 type FatalShutdownHook func(error)
 
 // StoreFactory opens the configured persistent store.
-type StoreFactory func(string, FatalShutdownHook) (store.Store, error)
+type StoreFactory func(string) (store.Store, error)
 
 // EngineBuildFactory returns the engine build function for cfg.
 type EngineBuildFactory func(Config) engine.BuildFunc
 
 // NodeBuilder builds the node and returns the initial engine handle.
-type NodeBuilder func(context.Context, store.Store, engine.BuildFunc) (node.Node, engine.Engine, error)
+type NodeBuilder func(
+	context.Context, store.Store, engine.BuildFunc, FatalShutdownHook,
+) (node.Node, engine.Engine, error)
 
 // NodeRouterBuilder builds the routing seam over the configured node set.
 type NodeRouterBuilder func(node.Node) (node.NodeRouter, error)
@@ -215,7 +218,7 @@ func (b *Builder) Build(
 		return nil, err
 	}
 
-	st, err := b.storeFactory(cfg.SQLitePath, fatalHook)
+	st, err := b.storeFactory(cfg.SQLitePath)
 	if err != nil {
 		return nil, fmt.Errorf("open store: %w", err)
 	}
@@ -231,7 +234,7 @@ func (b *Builder) Build(
 		return nil, fmt.Errorf("bind realm: %w", err)
 	}
 
-	localNode, eng, err := b.nodeBuilder(ctx, st, b.engineBuild(cfg))
+	localNode, eng, err := b.nodeBuilder(ctx, st, b.engineBuild(cfg), fatalHook)
 	if err != nil {
 		_ = st.Close()
 		return nil, fmt.Errorf("build node: %w", err)
@@ -525,12 +528,30 @@ func (a sourceAdapter) SubmitOrderToken(
 
 func (a sourceAdapter) ConfirmExecution(
 	ctx context.Context, orderExternalID, token string, force bool,
-) (domain.Order, error) {
-	return a.service.ConfirmExecution(ctx, orderExternalID, token, force)
+) (domain.Order, frameworkmcp.Attestation, error) {
+	order, att, err := a.service.ConfirmExecution(ctx, orderExternalID, token, force)
+	if err != nil {
+		return domain.Order{}, frameworkmcp.Attestation{}, err
+	}
+	return order, attestationForMCP(att), nil
 }
 
 func (a sourceAdapter) CancelOrder(
 	ctx context.Context, orderExternalID, token, reason string, force bool,
-) (domain.Order, error) {
-	return a.service.CancelOrder(ctx, orderExternalID, token, reason, force)
+) (domain.Order, frameworkmcp.Attestation, error) {
+	order, att, err := a.service.CancelOrder(ctx, orderExternalID, token, reason, force)
+	if err != nil {
+		return domain.Order{}, frameworkmcp.Attestation{}, err
+	}
+	return order, attestationForMCP(att), nil
+}
+
+// attestationForMCP maps the backend attestation onto the surface-agnostic MCP
+// carrier, mirroring the token and key id the HTTP surface exposes.
+func attestationForMCP(att backend.Attestation) frameworkmcp.Attestation {
+	return frameworkmcp.Attestation{
+		Token:  att.Token,
+		KeyID:  att.KeyID,
+		Signed: att.Signed,
+	}
 }

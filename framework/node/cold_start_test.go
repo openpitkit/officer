@@ -151,7 +151,7 @@ func TestLocalNode_AdjustmentUnderOperatorCallerOnColdStore(t *testing.T) {
 	if err := realm.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
 		t.Fatalf("CreateAsset(USD): %v", err)
 	}
-	rec, err := n.ApplyAdjustment(ctx, testKey("cold"), domain.ExternalID{},
+	rec, err := n.ApplyAdjustment(ctx, testKey("cold"), domain.ExternalID(""),
 		domain.AdjustmentRequest{
 			Asset: "USD",
 			Balance: &domain.AdjustmentAmount{
@@ -185,7 +185,7 @@ func TestLocalNode_ColdStartCreateAccountThenTrade(t *testing.T) {
 			t.Fatalf("CreateAsset(%s): %v", asset, err)
 		}
 	}
-	if _, err := n.ApplyAdjustment(ctx, testKey("cold"), domain.ExternalID{},
+	if _, err := n.ApplyAdjustment(ctx, testKey("cold"), domain.ExternalID(""),
 		domain.AdjustmentRequest{
 			Asset: "USD",
 			Balance: &domain.AdjustmentAmount{

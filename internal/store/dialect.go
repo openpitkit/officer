@@ -32,9 +32,9 @@ type Dialect interface {
 	// PrimaryKey renders the {{PK}} token: the surrogate-PK identity column
 	// declaration, an internal integer key that never leaves the store.
 	PrimaryKey() string
-	// ExternalID renders the {{XID}} token: the 16-byte external-id column
-	// declaration. SQLite has no server-side random default, so the column is a
-	// plain blob and the connector fills 16 crypto/rand bytes at insert.
+	// ExternalID renders the {{XID}} token: the external-id column declaration.
+	// SQLite has no server-side random default, so the connector fills generated
+	// ids at insert.
 	ExternalID() string
 	// Bool renders the {{BOOL}} token: the boolean column type.
 	Bool() string

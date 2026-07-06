@@ -76,34 +76,37 @@ type fakeNode struct {
 	mdInstruments    map[string][]domain.MarketDataInstrument
 	mdQuotes         []domain.MarketDataQuote
 
-	backupArchive        backup.Archive
-	backupScope          backup.Scope
-	backupCaller         domain.Caller
-	backupErr            error
-	restoreOpts          backup.RestoreOptions
-	restoreSummary       backup.RestoreSummary
-	restoreSink          marketdata.Sink
-	restoreErr           error
-	resetCaller          domain.Caller
-	resetSink            marketdata.Sink
-	resetErr             error
-	currentSink          marketdata.Sink
-	orders               map[domain.ExternalID]domain.Order
-	approvals            map[domain.ExternalID]domain.OrderApproval
-	nextOrderSeq         byte
-	holdResult           *engine.HoldResult
-	immediateResult      *engine.ImmediateResult
-	execReports          []domain.ExecutionReportInput
-	submitErr            error
-	confirmErr           error
-	cancelErr            error
-	getOrderErr          error
-	reconciled           int
-	holdCalls            []string
-	confirmCalls         []string
-	cancelCalls          []string
-	persistApprovalCalls []domain.ExternalID
-	auditCalls           []store.AuditEntry
+	backupArchive           backup.Archive
+	backupScope             backup.Scope
+	backupCaller            domain.Caller
+	backupErr               error
+	restoreOpts             backup.RestoreOptions
+	restoreSummary          backup.RestoreSummary
+	restoreSink             marketdata.Sink
+	restoreErr              error
+	resetCaller             domain.Caller
+	resetSink               marketdata.Sink
+	resetErr                error
+	currentSink             marketdata.Sink
+	orders                  map[domain.ExternalID]domain.Order
+	orderEvents             map[domain.ExternalID][]domain.OrderEvent
+	attestations            map[domain.ExternalID]domain.EventAttestation
+	nextOrderSeq            byte
+	nextEventSeq            int
+	holdResult              *engine.HoldResult
+	immediateResult         *engine.ImmediateResult
+	execReports             []domain.ExecutionReportInput
+	submitErr               error
+	confirmErr              error
+	cancelErr               error
+	getOrderErr             error
+	persistAttestationErr   error
+	reconciled              int
+	holdCalls               []string
+	confirmCalls            []string
+	cancelCalls             []string
+	persistAttestationCalls []domain.ExternalID
+	auditCalls              []store.AuditEntry
 
 	getAccountErr error
 
@@ -123,12 +126,55 @@ type fakeNode struct {
 
 // newOrderExternalID returns a deterministic distinct external id for a fake
 // order. Machine records are addressed by an opaque external id, not an integer,
-// so the fake mints a fresh 16-byte id per submit from a monotonic seed.
+// so the fake mints a fresh string id per submit from a monotonic seed.
 func (n *fakeNode) newOrderExternalID() domain.ExternalID {
 	n.nextOrderSeq++
-	var id domain.ExternalID
-	id[0] = n.nextOrderSeq
-	return id
+	return domain.ExternalID(fmt.Sprintf("order-%d", n.nextOrderSeq))
+}
+
+// newEventExternalID mints a fresh non-zero external id for an order-history
+// event, mirroring the store's per-event id contract: the attestation flow binds
+// its envelope to the event's external id, so every fake event needs a unique
+// non-zero handle.
+func (n *fakeNode) newEventExternalID() domain.ExternalID {
+	n.nextEventSeq++
+	return domain.ExternalID(fmt.Sprintf("event-%d", n.nextEventSeq))
+}
+
+// appendEvent records one order-history event with a fresh external id, links it
+// to its order, appends it to the event stream, and returns it. Every event the
+// fake produces must carry a non-zero external id so the backend's attestation
+// path can bind its envelope to that event.
+func (n *fakeNode) appendEvent(
+	orderID domain.ExternalID,
+	typ domain.OrderEventType,
+	payload domain.OrderEventPayload,
+) domain.OrderEvent {
+	if n.orderEvents == nil {
+		n.orderEvents = make(map[domain.ExternalID][]domain.OrderEvent)
+	}
+	event := domain.OrderEvent{
+		ExternalID: n.newEventExternalID(),
+		Order:      orderID,
+		Type:       typ,
+		Payload:    payload,
+	}
+	n.orderEvents[orderID] = append(n.orderEvents[orderID], event)
+	return event
+}
+
+// eventExists reports whether any order carries an event with the given external
+// id, so PersistEventAttestation can honour the node's "only when the event
+// exists" write contract.
+func (n *fakeNode) eventExists(eventID domain.ExternalID) bool {
+	for _, events := range n.orderEvents {
+		for i := range events {
+			if events[i].ExternalID == eventID {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type setMcpAccessCall struct {
@@ -476,7 +522,8 @@ func (n *fakeNode) ApplyAdjustment(
 }
 
 func (n *fakeNode) ImportPositionSnapshot(
-	_ context.Context, _ node.Key, snapshot domain.Balance, _ domain.Caller,
+	_ context.Context, _ node.Key, _ domain.ExternalID,
+	snapshot domain.Balance, _ domain.Caller,
 ) (domain.AccountAdjustmentRecord, error) {
 	n.positionSnapshots = append(n.positionSnapshots, snapshot)
 	return domain.AccountAdjustmentRecord{
@@ -511,13 +558,32 @@ func (n *fakeNode) ListAdjustments(
 
 // recordedOrderExternalID models the store's supplied-or-generated contract: a
 // caller-supplied (non-zero) order external id is used verbatim, else a fresh id
-// is minted. This keeps the fake faithful to recordSubmittedOrder, so a backend
-// test can prove the id is threaded create-once and the returned id matches.
+// is minted. This keeps the fake faithful to the node submission contract, so a
+// backend test can prove the id is threaded create-once and the returned id
+// matches.
 func (n *fakeNode) recordedOrderExternalID(o domain.Order) domain.ExternalID {
 	if !o.ExternalID.IsZero() {
 		return o.ExternalID
 	}
 	return n.newOrderExternalID()
+}
+
+// recordRejected stores the rejected order and its pre_trade_rejected event,
+// mirroring the real node's final persisted state so the reject verdict is
+// durable and its first reject is readable by GetOrder.
+func (n *fakeNode) recordRejected(order domain.Order, rejects []domain.OrderReject) {
+	order.Status = domain.OrderStatusRejected
+	n.orders[order.ExternalID] = order
+	payload := domain.OrderEventPayload{}
+	if len(rejects) > 0 {
+		r := rejects[0]
+		payload.RejectCode = r.Code
+		payload.RejectScope = r.Scope
+		payload.RejectPolicy = r.Policy
+		payload.RejectReason = r.Reason
+		payload.RejectDetails = r.Details
+	}
+	n.appendEvent(order.ExternalID, domain.OrderEventPreTradeRejected, payload)
 }
 
 func (n *fakeNode) SubmitOrder(
@@ -531,6 +597,7 @@ func (n *fakeNode) SubmitOrder(
 	order.Account = key.Account
 	order.Status = domain.OrderStatusAccepted
 	n.orders[order.ExternalID] = order
+	n.appendEvent(order.ExternalID, domain.OrderEventPreTradeAccepted, domain.OrderEventPayload{})
 	return order, nil
 }
 
@@ -545,16 +612,18 @@ func (n *fakeNode) SubmitHold(
 	order.Account = key.Account
 	if n.holdResult != nil {
 		if !n.holdResult.Accepted {
-			order.Status = domain.OrderStatusRejected
-			return order, *n.holdResult, nil
+			n.recordRejected(order, n.holdResult.Rejects)
+			return n.orders[order.ExternalID], *n.holdResult, nil
 		}
 		order.Status = domain.OrderStatusAccepted
 		order.Lock = n.holdResult.Lock
 		n.orders[order.ExternalID] = order
+		n.appendEvent(order.ExternalID, domain.OrderEventPreTradeAccepted, domain.OrderEventPayload{})
 		return order, *n.holdResult, nil
 	}
 	order.Status = domain.OrderStatusAccepted
 	n.orders[order.ExternalID] = order
+	n.appendEvent(order.ExternalID, domain.OrderEventPreTradeAccepted, domain.OrderEventPayload{})
 	result := engine.HoldResult{
 		Accepted:            true,
 		ApprovalID:          "approval-1",
@@ -577,16 +646,18 @@ func (n *fakeNode) SubmitImmediate(
 	order.Account = key.Account
 	if n.immediateResult != nil {
 		if !n.immediateResult.Accepted {
-			order.Status = domain.OrderStatusRejected
-			return order, *n.immediateResult, nil
+			n.recordRejected(order, n.immediateResult.Rejects)
+			return n.orders[order.ExternalID], *n.immediateResult, nil
 		}
 		order.Status = domain.OrderStatusFilled
 		order.Lock = n.immediateResult.Lock
 		n.orders[order.ExternalID] = order
+		n.appendEvent(order.ExternalID, domain.OrderEventPreTradeAccepted, domain.OrderEventPayload{})
 		return order, *n.immediateResult, nil
 	}
 	order.Status = domain.OrderStatusFilled
 	n.orders[order.ExternalID] = order
+	n.appendEvent(order.ExternalID, domain.OrderEventPreTradeAccepted, domain.OrderEventPayload{})
 	return order, engine.ImmediateResult{
 		Accepted:            true,
 		SettlementLockPrice: "100",
@@ -597,30 +668,57 @@ func (n *fakeNode) SubmitImmediate(
 
 func (n *fakeNode) ConfirmHeld(
 	_ context.Context, orderID domain.ExternalID,
-	approvalID string, _ domain.Caller, _ bool,
-) (domain.Order, error) {
+	approvalID string, _ domain.Caller, force bool,
+) (domain.Order, bool, error) {
+	order := n.orders[orderID]
+	forcedBypass := false
+	switch order.Status {
+	case domain.OrderStatusCommitted:
+		return order, false, nil
+	case domain.OrderStatusAccepted:
+	default:
+		if err := domain.RequireOrderModifiable(order.Status, force); err != nil {
+			return domain.Order{}, false, err
+		}
+		if !domain.OrderStatusTerminal(order.Status) {
+			return domain.Order{}, false, domain.ErrConflict
+		}
+		forcedBypass = true
+	}
 	n.confirmCalls = append(n.confirmCalls, approvalID)
 	if n.confirmErr != nil {
-		return domain.Order{}, n.confirmErr
+		return domain.Order{}, false, n.confirmErr
 	}
-	order := n.orders[orderID]
 	order.Status = domain.OrderStatusCommitted
 	n.orders[orderID] = order
-	return order, nil
+	n.appendEvent(orderID, domain.OrderEventReservationCommitted, domain.OrderEventPayload{})
+	return order, forcedBypass, nil
 }
 
 func (n *fakeNode) CancelHeld(
 	_ context.Context, orderID domain.ExternalID,
-	approvalID string, _ domain.Caller, _ bool,
-) (domain.Order, error) {
+	approvalID string, _ domain.Caller, force bool,
+) (domain.Order, bool, error) {
+	order := n.orders[orderID]
+	forcedBypass := false
+	if order.Status != domain.OrderStatusAccepted {
+		if err := domain.RequireOrderModifiable(order.Status, force); err != nil {
+			return domain.Order{}, false, err
+		}
+		if !domain.OrderStatusTerminal(order.Status) {
+			return domain.Order{}, false, domain.ErrConflict
+		}
+		forcedBypass = true
+	}
 	n.cancelCalls = append(n.cancelCalls, approvalID)
 	if n.cancelErr != nil {
-		return domain.Order{}, n.cancelErr
+		return domain.Order{}, false, n.cancelErr
 	}
-	order := n.orders[orderID]
 	order.Status = domain.OrderStatusCancelled
 	n.orders[orderID] = order
-	return order, nil
+	n.appendEvent(orderID, domain.OrderEventReservationRolledBack, domain.OrderEventPayload{})
+	n.appendEvent(orderID, domain.OrderEventCancelled, domain.OrderEventPayload{})
+	return order, forcedBypass, nil
 }
 
 func (n *fakeNode) ReconcileOrphans(context.Context) (int, error) {
@@ -630,8 +728,41 @@ func (n *fakeNode) ReconcileOrphans(context.Context) (int, error) {
 func (n *fakeNode) ApplyExecutionReport(
 	_ context.Context, _ node.Key, in domain.ExecutionReportInput, _ domain.Caller,
 ) (engine.ExecutionReportResult, error) {
+	if order, ok := n.orders[in.Order]; ok {
+		if err := domain.RequireOrderModifiable(order.Status, in.Force); err != nil {
+			return engine.ExecutionReportResult{}, err
+		}
+	}
 	n.execReports = append(n.execReports, in)
-	return engine.ExecutionReportResult{}, nil
+	// Model the node's event emission so the backend's attestation path finds the
+	// event it binds to: a fill event when the report carried a fill, else the
+	// mapped status-change event for the report's target status.
+	var events []domain.OrderEvent
+	if in.FillQuantity != "" && in.FillPrice != "" {
+		payload := domain.OrderEventPayload{
+			FillQuantity:  in.FillQuantity,
+			FillPrice:     in.FillPrice,
+			FillLockPrice: in.LockPrice,
+		}
+		n.appendEvent(in.Order, domain.OrderEventFill, payload)
+		events = append(events, domain.OrderEvent{
+			Order:   in.Order,
+			Type:    domain.OrderEventFill,
+			Payload: payload,
+		})
+	} else if typ, ok := domain.ExecutionReportStatusChangeEvent(
+		domain.ExecutionReportTargetStatus(in),
+	); ok {
+		n.appendEvent(in.Order, typ, domain.OrderEventPayload{})
+		events = append(events, domain.OrderEvent{Order: in.Order, Type: typ})
+	}
+	return engine.ExecutionReportResult{
+		Persistence: &engine.ExecutionReportPersistence{
+			OrderStatus: domain.ExecutionReportTargetStatus(in),
+			Leaves:      in.LeavesQuantity,
+			Events:      events,
+		},
+	}, nil
 }
 
 func (n *fakeNode) GetOrder(
@@ -645,26 +776,36 @@ func (n *fakeNode) GetOrder(
 	if !ok {
 		return domain.OrderDetail{}, domain.ErrNotFound
 	}
-	detail := domain.OrderDetail{Order: order}
-	if env, ok := n.approvals[id]; ok {
-		stamped := env
-		detail.Approval = &stamped
+	// Fold each event's persisted attestation into the returned events, mirroring
+	// the node's GetOrder read-back. Copy the slice so the stored stream is not
+	// mutated with per-read attestation pointers.
+	stored := n.orderEvents[id]
+	events := make([]domain.OrderEvent, len(stored))
+	copy(events, stored)
+	for i := range events {
+		if att, ok := n.attestations[events[i].ExternalID]; ok {
+			stamped := att
+			events[i].Attestation = &stamped
+		}
 	}
-	return detail, nil
+	return domain.OrderDetail{Order: order, Events: events}, nil
 }
 
-func (n *fakeNode) PersistOrderApproval(
-	_ context.Context, _ node.Key, orderID domain.ExternalID, env domain.OrderApproval,
+func (n *fakeNode) PersistEventAttestation(
+	_ context.Context, _ node.Key, eventID domain.ExternalID, att domain.EventAttestation,
 ) error {
-	n.persistApprovalCalls = append(n.persistApprovalCalls, orderID)
-	if n.approvals == nil {
-		n.approvals = make(map[domain.ExternalID]domain.OrderApproval)
+	n.persistAttestationCalls = append(n.persistAttestationCalls, eventID)
+	if n.persistAttestationErr != nil {
+		return n.persistAttestationErr
 	}
-	// Write-once: a retry or later write never clobbers an already-issued envelope.
-	if _, ok := n.approvals[orderID]; !ok {
-		if _, exists := n.orders[orderID]; exists {
-			n.approvals[orderID] = env
-		}
+	if n.attestations == nil {
+		n.attestations = make(map[domain.ExternalID]domain.EventAttestation)
+	}
+	// Write-once, and only when the event exists: a retry or later write never
+	// clobbers an already-issued envelope, and a missing event is a tolerated
+	// no-op.
+	if _, done := n.attestations[eventID]; !done && n.eventExists(eventID) {
+		n.attestations[eventID] = att
 	}
 	return nil
 }
@@ -1023,7 +1164,7 @@ func TestService_ApplyExecutionReportTerminalRequiresForce(t *testing.T) {
 		BaseAsset:  "AAPL",
 		QuoteAsset: "USD",
 		Side:       domain.OrderSideBuy,
-		Status:     domain.OrderStatusFilled,
+		Status:     domain.OrderStatusCancelled,
 	}
 	report := domain.ExecutionReportInput{
 		Order:        orderID,
@@ -1033,23 +1174,160 @@ func TestService_ApplyExecutionReportTerminalRequiresForce(t *testing.T) {
 		Side:         domain.OrderSideBuy,
 		FillQuantity: "1",
 		FillPrice:    "100",
-		Final:        true,
+		OrderStatus:  domain.OrderStatusFilled,
 	}
 
-	_, err := svc.ApplyExecutionReport(context.Background(), report)
+	_, _, err := svc.ApplyExecutionReport(context.Background(), report)
 	if !errors.Is(err, domain.ErrTerminalOrder) {
-		t.Fatalf("ApplyExecutionReport without force = %v, want terminal order", err)
+		t.Fatalf("ApplyExecutionReport terminal = %v, want terminal order", err)
 	}
 	if len(fn.execReports) != 0 {
-		t.Fatalf("terminal preflight reached node: %+v", fn.execReports)
+		t.Fatalf("terminal report reached node: %+v", fn.execReports)
+	}
+}
+
+func TestService_ApplyExecutionReportForceBypassesTerminalGuard(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService()
+	orderID := mdID("order-4")
+	fn.orders[orderID] = domain.Order{
+		ExternalID: orderID,
+		Account:    "acc-1",
+		BaseAsset:  "AAPL",
+		QuoteAsset: "USD",
+		Side:       domain.OrderSideBuy,
+		Status:     domain.OrderStatusCancelled,
+	}
+	report := domain.ExecutionReportInput{
+		Order:        orderID,
+		Account:      "acc-1",
+		BaseAsset:    "AAPL",
+		QuoteAsset:   "USD",
+		Side:         domain.OrderSideBuy,
+		FillQuantity: "1",
+		FillPrice:    "100",
+		Force:        true,
+		OrderStatus:  domain.OrderStatusFilled,
 	}
 
-	report.Force = true
-	if _, err := svc.ApplyExecutionReport(context.Background(), report); err != nil {
-		t.Fatalf("ApplyExecutionReport with force: %v", err)
+	if _, _, err := svc.ApplyExecutionReport(context.Background(), report); err != nil {
+		t.Fatalf("ApplyExecutionReport force: %v", err)
 	}
-	if len(fn.execReports) != 1 || !fn.execReports[0].Force {
-		t.Fatalf("forced report not forwarded: %+v", fn.execReports)
+	if len(fn.execReports) != 1 || fn.execReports[0].Order != orderID {
+		t.Fatalf("report not forwarded: %+v", fn.execReports)
+	}
+}
+
+// TestService_ApplyExecutionReportAttestsFillEvent covers the report attestation
+// path: with a configured signer the report signs an attestation over its result
+// and stamps it onto the fill event, returning a signed token and persisting one
+// attestation.
+func TestService_ApplyExecutionReportAttestsFillEvent(t *testing.T) {
+	t.Parallel()
+	signer := &fakeSigner{}
+	svc, fn := newTestServiceWithSigner(signer)
+	orderID := mdID("order-report")
+	fn.orders[orderID] = domain.Order{
+		ExternalID: orderID,
+		Account:    "acc-1",
+		BaseAsset:  "AAPL",
+		QuoteAsset: "USD",
+		Side:       domain.OrderSideBuy,
+		Status:     domain.OrderStatusAccepted,
+	}
+	report := domain.ExecutionReportInput{
+		Order:        orderID,
+		Account:      "acc-1",
+		BaseAsset:    "AAPL",
+		QuoteAsset:   "USD",
+		Side:         domain.OrderSideBuy,
+		FillQuantity: "1",
+		FillPrice:    "100",
+		OrderStatus:  domain.OrderStatusFilled,
+	}
+
+	_, att, err := svc.ApplyExecutionReport(context.Background(), report)
+	if err != nil {
+		t.Fatalf("ApplyExecutionReport: %v", err)
+	}
+	if att.Token == "" || !att.Signed {
+		t.Fatalf("report must return a signed attestation, got %+v", att)
+	}
+	if len(fn.persistAttestationCalls) != 1 {
+		t.Fatalf("report must persist one attestation, calls=%+v", fn.persistAttestationCalls)
+	}
+	// The attestation binds the fill event: GetOrder surfaces it on that event.
+	detail, err := svc.GetOrder(context.Background(), orderID.String())
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	var fill *domain.OrderEvent
+	for i := range detail.Events {
+		if detail.Events[i].Type == domain.OrderEventFill {
+			fill = &detail.Events[i]
+		}
+	}
+	if fill == nil || fill.Attestation == nil || fill.Attestation.Token == "" ||
+		fill.Attestation.Alg != fwsigning.AlgEd25519 {
+		t.Fatalf("report must stamp a signed attestation on the fill event, got %+v", fill)
+	}
+}
+
+func TestService_ApplyExecutionReportStatusLifecycleReachesNode(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService()
+	orderID := mdID("order-4")
+	fn.orders[orderID] = domain.Order{
+		ExternalID: orderID,
+		Account:    "acc-1",
+		BaseAsset:  "AAPL",
+		QuoteAsset: "USD",
+		Side:       domain.OrderSideBuy,
+		Status:     domain.OrderStatusAccepted,
+	}
+	report := domain.ExecutionReportInput{
+		Order:       orderID,
+		OrderStatus: domain.OrderStatusCommitted,
+	}
+
+	if _, _, err := svc.ApplyExecutionReport(context.Background(), report); err != nil {
+		t.Fatalf("ApplyExecutionReport: %v", err)
+	}
+	if len(fn.execReports) != 1 ||
+		fn.execReports[0].OrderStatus != domain.OrderStatusCommitted {
+		t.Fatalf("report not forwarded: %+v", fn.execReports)
+	}
+}
+
+func TestService_ApplyExecutionReportRejectsInvalidStatusBeforeNode(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService()
+	orderID := mdID("order-5")
+	fn.orders[orderID] = domain.Order{
+		ExternalID: orderID,
+		Account:    "acc-1",
+		BaseAsset:  "AAPL",
+		QuoteAsset: "USD",
+		Side:       domain.OrderSideBuy,
+		Status:     domain.OrderStatusSubmitted,
+	}
+
+	_, _, err := svc.ApplyExecutionReport(context.Background(), domain.ExecutionReportInput{
+		Order:        orderID,
+		Account:      "acc-1",
+		BaseAsset:    "AAPL",
+		QuoteAsset:   "USD",
+		Side:         domain.OrderSideBuy,
+		FillQuantity: "1",
+		FillPrice:    "100",
+		Force:        true,
+		OrderStatus:  domain.OrderStatus("bogus"),
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("ApplyExecutionReport invalid status = %v, want invalid", err)
+	}
+	if len(fn.execReports) != 0 {
+		t.Fatalf("invalid status reached node: %+v", fn.execReports)
 	}
 }
 
@@ -1697,7 +1975,7 @@ func TestService_AggregatesReads(t *testing.T) {
 	fn.limits = node.AccountLimits{
 		RateLimits: []domain.LimitRate{{Scope: domain.ScopeBroker}},
 	}
-	fn.audit = []domain.AuditRow{{ExternalID: domain.ExternalID{1}}}
+	fn.audit = []domain.AuditRow{{ExternalID: domain.ExternalID("audit-1")}}
 	ctx := context.Background()
 
 	accounts, err := svc.ListAccounts(ctx)
@@ -2351,7 +2629,7 @@ func TestService_ApplyAdjustmentGeneratesExternalIDWhenAbsent(t *testing.T) {
 	svc, fn := newTestService()
 
 	rec, err := svc.ApplyAdjustment(
-		context.Background(), "acc-1", domain.ExternalID{}, sampleAdjustmentRequest())
+		context.Background(), "acc-1", domain.ExternalID(""), sampleAdjustmentRequest())
 	if err != nil {
 		t.Fatalf("ApplyAdjustment: %v", err)
 	}
@@ -2380,12 +2658,9 @@ func TestService_ApplyAdjustmentDuplicateSuppliedIDConflicts(t *testing.T) {
 
 // mdID derives a deterministic, distinct external id from a short label so a
 // test can address a market-data instance by a stable handle. Market-data
-// instances are dictionary rows addressed by their opaque external id, not a
-// human string, so fixtures mint a real ExternalID rather than a synthetic id.
+// instances are dictionary rows addressed by their opaque external id.
 func mdID(label string) domain.ExternalID {
-	var id domain.ExternalID
-	copy(id[:], label)
-	return id
+	return domain.ExternalID(label)
 }
 
 func containsProviderType(providers []backend.MarketDataProvider, want string) bool {
@@ -2397,10 +2672,13 @@ func containsProviderType(providers []backend.MarketDataProvider, want string) b
 	return false
 }
 
-// TestService_OrderFlowsRouteOnceFetchAtMostOnce locks the resolve-once
-// invariant: every order-resolving flow must route exactly once and fetch the
-// stored order at most once per operation. It instruments the fake router/node
-// call counters so a regression to double routing or double fetching fails here.
+// TestService_OrderFlowsRouteOnceFetchAtMostOnce locks the route-once invariant:
+// every order-resolving flow must route exactly once per operation and fetch the
+// stored order no more than the attestation-aware budget below. It instruments
+// the fake router/node call counters so a regression to double routing fails
+// here. Signing is additive: it re-reads the order to bind its verdict/resolution
+// event, so submit fetches once (attest read-back) and confirm/cancel fetch twice
+// (the token-binding read plus the attest read-back).
 func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 	t.Parallel()
 
@@ -2409,8 +2687,7 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 		// run drives one operation. mustHold and any other multi-step setup happen
 		// before the measured operation; the case calls reset() to zero the counters
 		// just before the operation under test so the assertion covers only it. It
-		// returns the number of order fetches expected (submit fetches none,
-		// confirm/cancel fetch once).
+		// returns the number of order fetches expected for the measured operation.
 		run func(t *testing.T, svc *backend.Service, fn *fakeNode, reset func()) int
 	}{
 		{
@@ -2423,7 +2700,8 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 				); err != nil {
 					t.Fatalf("SubmitOrderToken hold: %v", err)
 				}
-				return 0
+				// One fetch: the attest read-back that binds the verdict event.
+				return 1
 			},
 		},
 		{
@@ -2436,7 +2714,8 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 				); err != nil {
 					t.Fatalf("SubmitOrderToken immediate: %v", err)
 				}
-				return 0
+				// One fetch: the attest read-back that binds the verdict event.
+				return 1
 			},
 		},
 		{
@@ -2445,12 +2724,14 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 				t.Helper()
 				tok := mustHold(t, svc)
 				reset()
-				if _, err := svc.ConfirmExecution(
+				if _, _, err := svc.ConfirmExecution(
 					context.Background(), tok.OrderExternalID, tok.Token, false,
 				); err != nil {
 					t.Fatalf("ConfirmExecution: %v", err)
 				}
-				return 1
+				// Two fetches: the token-binding read plus the attest read-back that
+				// binds the reservation_committed event.
+				return 2
 			},
 		},
 		{
@@ -2458,19 +2739,21 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 			run: func(t *testing.T, svc *backend.Service, fn *fakeNode, reset func()) int {
 				t.Helper()
 				tok := mustHold(t, svc)
-				if _, err := svc.ConfirmExecution(
+				if _, _, err := svc.ConfirmExecution(
 					context.Background(), tok.OrderExternalID, tok.Token, false,
 				); err != nil {
 					t.Fatalf("first confirm: %v", err)
 				}
 				reset()
 				fn.confirmErr = domain.ErrConflict
-				if _, err := svc.ConfirmExecution(
+				if _, _, err := svc.ConfirmExecution(
 					context.Background(), tok.OrderExternalID, tok.Token, false,
 				); err != nil {
 					t.Fatalf("idempotent confirm: %v", err)
 				}
-				return 1
+				// Two fetches: backend only binds the token, then node handles the
+				// idempotent confirm and the attestation path reads back the event.
+				return 2
 			},
 		},
 		{
@@ -2478,18 +2761,20 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 			run: func(t *testing.T, svc *backend.Service, fn *fakeNode, reset func()) int {
 				t.Helper()
 				tok := mustHold(t, svc)
-				if _, err := svc.CancelOrder(
+				if _, _, err := svc.CancelOrder(
 					context.Background(), tok.OrderExternalID, tok.Token, "operator", false,
 				); err != nil {
 					t.Fatalf("cancel setup: %v", err)
 				}
 				reset()
 				fn.confirmErr = domain.ErrConflict
-				if _, err := svc.ConfirmExecution(
+				if _, _, err := svc.ConfirmExecution(
 					context.Background(), tok.OrderExternalID, tok.Token, false,
 				); !errors.Is(err, domain.ErrTerminalOrder) {
 					t.Fatalf("confirm after cancel = %v, want terminal order", err)
 				}
+				// One fetch: the token-binding read happens before the node-level
+				// terminal guard rejects without attestation.
 				return 1
 			},
 		},
@@ -2499,12 +2784,14 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 				t.Helper()
 				tok := mustHold(t, svc)
 				reset()
-				if _, err := svc.CancelOrder(
+				if _, _, err := svc.CancelOrder(
 					context.Background(), tok.OrderExternalID, tok.Token, "stale price", false,
 				); err != nil {
 					t.Fatalf("CancelOrder: %v", err)
 				}
-				return 1
+				// Two fetches: the token-binding read plus the attest read-back that
+				// binds the cancelled event.
+				return 2
 			},
 		},
 		{
@@ -2512,17 +2799,19 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 			run: func(t *testing.T, svc *backend.Service, fn *fakeNode, reset func()) int {
 				t.Helper()
 				tok := mustHold(t, svc)
-				if _, err := svc.ConfirmExecution(
+				if _, _, err := svc.ConfirmExecution(
 					context.Background(), tok.OrderExternalID, tok.Token, false,
 				); err != nil {
 					t.Fatalf("confirm setup: %v", err)
 				}
 				reset()
-				if _, err := svc.CancelOrder(
+				if _, _, err := svc.CancelOrder(
 					context.Background(), tok.OrderExternalID, tok.Token, "too late", false,
 				); !errors.Is(err, domain.ErrConflict) {
 					t.Fatalf("cancel after confirm = %v, want conflict", err)
 				}
+				// One fetch: the token-binding read happens before the node-level
+				// conflict rejects without attestation.
 				return 1
 			},
 		},
@@ -2817,7 +3106,15 @@ func newBusinessCSVRealService(
 		t.Fatalf("ForRealm: %v", err)
 	}
 	eng := &businessCSVRoundTripEngine{running: true}
-	n, _, err := node.NewLocalNode(ctx, st, func(engine.Snapshot) (engine.Engine, error) {
+	n, _, err := node.NewLocalNode(ctx, st, func(snap engine.Snapshot) (engine.Engine, error) {
+		// Mirror the real adapter and the framework/node fakeEngine: the resolver
+		// learns its accounts from the seed snapshot on every build/rebuild, so a
+		// later RunAccountSynchronized can resolve the account before entering the
+		// lane. Re-seed on each build to reflect the current persisted account set.
+		eng.knownAccounts = map[domain.AccountID]struct{}{}
+		for _, account := range snap.Accounts {
+			eng.knownAccounts[account.Code] = struct{}{}
+		}
 		return eng, nil
 	})
 	if err != nil {
@@ -2833,8 +3130,64 @@ func newBusinessCSVRealService(
 
 type businessCSVRoundTripEngine struct {
 	running              bool
+	enforceResolver      bool
+	knownAccounts        map[domain.AccountID]struct{}
 	adjustmentCalls      []domain.AdjustmentRequest
 	adjustmentBatchCalls [][]domain.AdjustmentRequest
+}
+
+// resolveAccount mirrors the real adapter's pre-lane account resolution and the
+// framework/node fakeEngine: the engine resolver knows only the accounts it was
+// seeded with from a build/rebuild snapshot. Enforcement is opt-in (like
+// fakeEngine.enforceResolver) so a test that legitimately seeds an account
+// directly in the store, without the rebuild production would perform, still
+// resolves; the resolve step itself always runs before the lane callback.
+func (e *businessCSVRoundTripEngine) resolveAccount(account domain.AccountID) error {
+	if !e.enforceResolver {
+		return nil
+	}
+	if _, ok := e.knownAccounts[account]; !ok {
+		return fmt.Errorf("engine: unknown account %q: %w", account, domain.ErrInvalid)
+	}
+	return nil
+}
+
+// TestBusinessCSVRoundTripEngine_RunAccountSynchronizedResolvesBeforeCallback
+// guards the fake's account-lane seam: an unknown account must reject before the
+// lane callback runs, and a known account must resolve and run it. This proves
+// the resolve-before-callback fix is not a permissive no-op.
+func TestBusinessCSVRoundTripEngine_RunAccountSynchronizedResolvesBeforeCallback(t *testing.T) {
+	t.Parallel()
+	eng := &businessCSVRoundTripEngine{
+		running:         true,
+		enforceResolver: true,
+		knownAccounts:   map[domain.AccountID]struct{}{"acc-known": {}},
+	}
+
+	ran := false
+	err := eng.RunAccountSynchronized(context.Background(), "acc-missing",
+		func(engine.AccountLane) error {
+			ran = true
+			return nil
+		})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("unknown account error = %v, want ErrInvalid before callback", err)
+	}
+	if ran {
+		t.Fatal("callback ran for an unresolved account; the lane seam is not gated")
+	}
+
+	ran = false
+	if err := eng.RunAccountSynchronized(context.Background(), "acc-known",
+		func(engine.AccountLane) error {
+			ran = true
+			return nil
+		}); err != nil {
+		t.Fatalf("known account RunAccountSynchronized: %v", err)
+	}
+	if !ran {
+		t.Fatal("callback did not run for a resolved account")
+	}
 }
 
 func (e *businessCSVRoundTripEngine) Version() string      { return "fake" }
@@ -2910,6 +3263,24 @@ func (e *businessCSVRoundTripEngine) SubmitImmediate(
 func (e *businessCSVRoundTripEngine) SetReservationStore(engine.ReservationStore) {}
 func (e *businessCSVRoundTripEngine) ReconcileOrphans(context.Context) (int, error) {
 	return 0, nil
+}
+func (e *businessCSVRoundTripEngine) RunAccountSynchronized(
+	_ context.Context, account domain.AccountID, fn func(engine.AccountLane) error,
+) error {
+	// Mirror the real adapter (openPitEngine.RunAccountSynchronized) and the
+	// framework/node fakeEngine: resolve the account before entering the lane, so a
+	// brand-new account rejects here and its callback never runs unless a pre-lane
+	// rebuild has already registered it. Resolving before fn is what exercises the
+	// account-lane seam.
+	if err := e.resolveAccount(account); err != nil {
+		return err
+	}
+	return fn(e)
+}
+func (e *businessCSVRoundTripEngine) RunGroupSynchronized(
+	_ context.Context, _ string, fn func(engine.GroupLane) error,
+) error {
+	return fn(e)
 }
 func (e *businessCSVRoundTripEngine) ApplyExecutionReport(
 	context.Context, domain.ExecutionReportInput,

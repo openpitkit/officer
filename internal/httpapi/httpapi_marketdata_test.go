@@ -300,27 +300,24 @@ func TestCreateMarketDataInstance_DuplicateConflict(t *testing.T) {
 	}
 }
 
-// TestCreateMarketDataInstance_MalformedExternalID checks a malformed supplied id
-// maps to 400 before any backend call.
-func TestCreateMarketDataInstance_MalformedExternalID(t *testing.T) {
+// TestCreateMarketDataInstance_OpaqueExternalID checks a caller-supplied id is
+// accepted verbatim without a base64url shape requirement.
+func TestCreateMarketDataInstance_OpaqueExternalID(t *testing.T) {
 	svc := &fakeService{}
 	r, err := newRouter(svc)
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := bytes.NewBufferString(`{"externalId":"bad-id","provider":"ib","label":"Backup"}`)
+	supplied := "bad-id"
+	body := bytes.NewBufferString(`{"externalId":"` + supplied + `","provider":"ib","label":"Backup"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/market-data/instances", body))
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d: %s", rec.Code, rec.Body.String())
 	}
-	errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
-	if errObj["code"] != "validation" {
-		t.Errorf("want code=validation, got %v", errObj["code"])
-	}
-	if len(svc.mdCalls) != 0 {
-		t.Errorf("malformed id must not reach service: %v", svc.mdCalls)
+	if got := svc.mdCreateInstance.ExternalID.String(); got != supplied {
+		t.Fatalf("externalId: want %q got %q", supplied, got)
 	}
 }
 

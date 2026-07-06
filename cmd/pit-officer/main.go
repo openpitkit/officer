@@ -113,7 +113,7 @@ func newFatalShutdown(logger *slog.Logger) *fatalShutdown {
 
 func (f *fatalShutdown) handle(err error) {
 	f.once.Do(func() {
-		f.logger.Error("fatal store error; exiting", "err", err)
+		f.logger.Error("fatal post-engine persistence error; exiting", "err", err)
 		os.Exit(1)
 	})
 }

@@ -16,8 +16,8 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 // Adjustments group of the SQLite store. Adjustments are machine records
-// addressed by their opaque external id (22-char base64url, assigned at insert
-// by the connector). Account and asset references cascade on delete; the
+// addressed by their opaque external id (assigned at insert by the connector).
+// Account and asset references cascade on delete; the
 // optional principal reference is cleared (SET NULL) when the principal is
 // removed. The request and outcome columns are opaque JSON stored whole; this
 // package never decodes them — callers supply pre-marshalled JSON and receive
@@ -58,15 +58,29 @@ LEFT JOIN principal p ON p.id = adj.principal_id`
 func (r *realmStore) AppendAdjustment(
 	ctx context.Context, rec domain.AccountAdjustmentRecord,
 ) (domain.AccountAdjustmentRecord, error) {
-	accountID, err := resolveAccountID(ctx, r.db(), rec.Account)
+	db, err := r.db()
 	if err != nil {
 		return rec, err
 	}
-	assetID, err := resolveAssetID(ctx, r.db(), rec.Asset)
+	return appendAdjustment(ctx, db, rec)
+}
+
+func appendAdjustment(
+	ctx context.Context, q sqlQueryer, rec domain.AccountAdjustmentRecord,
+) (domain.AccountAdjustmentRecord, error) {
+	exec, ok := q.(sqlExecer)
+	if !ok {
+		return rec, fmt.Errorf("store: append adjustment: queryer cannot execute")
+	}
+	accountID, err := resolveAccountID(ctx, q, rec.Account)
 	if err != nil {
 		return rec, err
 	}
-	principalID, err := resolveOptionalPrincipalID(ctx, r.db(), rec.Principal)
+	assetID, err := resolveAssetID(ctx, q, rec.Asset)
+	if err != nil {
+		return rec, err
+	}
+	principalID, err := resolveOptionalPrincipalID(ctx, q, rec.Principal)
 	if err != nil {
 		return rec, err
 	}
@@ -88,7 +102,7 @@ func (r *realmStore) AppendAdjustment(
 	}
 	at := nowStr()
 
-	if _, err := r.db().ExecContext(
+	if _, err := exec.ExecContext(
 		ctx,
 		`INSERT INTO adjustment
 		 (external_id, account_id, asset_id, principal_id,
@@ -109,6 +123,60 @@ func (r *realmStore) AppendAdjustment(
 	rec.ExternalID = xid
 	rec.At = mustParseTime(at)
 	return rec, nil
+}
+
+// RecordAccountAdjustment writes the balance snapshot command, adjustment
+// record, and audit row in one SQLite transaction.
+func (r *realmStore) RecordAccountAdjustment(
+	ctx context.Context, in fwstore.AccountAdjustmentPersistence,
+) (domain.AccountAdjustmentRecord, error) {
+	return r.recordAccountAdjustment(ctx, in)
+}
+
+func (r *realmStore) recordAccountAdjustment(
+	ctx context.Context, in fwstore.AccountAdjustmentPersistence,
+) (domain.AccountAdjustmentRecord, error) {
+	db, err := r.db()
+	if err != nil {
+		return domain.AccountAdjustmentRecord{}, err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.AccountAdjustmentRecord{},
+			fmt.Errorf("store: begin account adjustment tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if in.UpsertBalance != nil {
+		if err := importBalances(ctx, tx, []domain.Balance{*in.UpsertBalance}); err != nil {
+			return domain.AccountAdjustmentRecord{}, err
+		}
+	}
+	if in.DeleteBalance != nil {
+		if _, err := tx.ExecContext(
+			ctx,
+			`DELETE FROM balance
+			 WHERE account_id = (SELECT id FROM account WHERE code = ?)
+			   AND asset_id   = (SELECT id FROM asset   WHERE code = ?)`,
+			in.DeleteBalance.Account.String(), in.DeleteBalance.Asset,
+		); err != nil {
+			return domain.AccountAdjustmentRecord{},
+				fmt.Errorf("store: delete adjustment balance: %w", err)
+		}
+	}
+
+	stored, err := appendAdjustment(ctx, tx, in.Adjustment)
+	if err != nil {
+		return domain.AccountAdjustmentRecord{}, err
+	}
+	if err := importAudit(ctx, tx, []fwstore.AuditEntry{in.Audit}); err != nil {
+		return domain.AccountAdjustmentRecord{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return domain.AccountAdjustmentRecord{},
+			fmt.Errorf("store: commit account adjustment tx: %w", err)
+	}
+	return stored, nil
 }
 
 // ListAdjustments returns the most recent n adjustment, newest first. A
@@ -137,7 +205,11 @@ func (r *realmStore) ListAdjustments(
 	q += ` ORDER BY adj.at DESC, adj.id DESC LIMIT ?`
 	args = append(args, n)
 
-	rows, err := r.db().QueryContext(ctx, q, args...)
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: list adjustments: %w", err)
 	}
@@ -163,13 +235,17 @@ func (r *realmStore) ListAdjustmentRows(
 	ctx context.Context, filter fwstore.AdjustmentListFilter,
 ) (fwstore.AdjustmentListPage, error) {
 	clauses, args := adjustmentListClauses(filter)
+	db, err := r.db()
+	if err != nil {
+		return fwstore.AdjustmentListPage{}, err
+	}
 	countQuery := `SELECT COUNT(*)
 FROM adjustment adj
 JOIN account  a   ON a.id   = adj.account_id
 JOIN asset    ast ON ast.id = adj.asset_id
 LEFT JOIN principal p ON p.id = adj.principal_id` + whereFromClauses(clauses)
 	var total int
-	if err := r.db().QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return fwstore.AdjustmentListPage{}, fmt.Errorf("store: count adjustments: %w", err)
 	}
 
@@ -188,7 +264,7 @@ LEFT JOIN principal p ON p.id = adj.principal_id` +
 		query += ` LIMIT ? OFFSET ?`
 		queryArgs = append(queryArgs, filter.Page.Limit, max(filter.Page.Offset, 0))
 	}
-	rows, err := r.db().QueryContext(ctx, query, queryArgs...)
+	rows, err := db.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return fwstore.AdjustmentListPage{}, fmt.Errorf("store: list adjustment rows: %w", err)
 	}

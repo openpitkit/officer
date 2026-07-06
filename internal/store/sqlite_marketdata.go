@@ -38,7 +38,7 @@ import (
 // --- Market-data instances --------------------------------------------------
 
 // mdInstanceSelect is the shared projection for instance reads. The external_id
-// BLOB is the only public handle; the surrogate id is never surfaced.
+// is the only public handle; the surrogate id is never surfaced.
 const mdInstanceSelect = `
 SELECT external_id, provider, label, credentials, enabled
 FROM market_data_instance`
@@ -57,7 +57,11 @@ func (r *realmStore) CreateMarketDataInstance(
 	if err != nil {
 		return instance, err
 	}
-	_, err = r.db().ExecContext(
+	db, err := r.db()
+	if err != nil {
+		return instance, err
+	}
+	_, err = db.ExecContext(
 		ctx,
 		`INSERT INTO market_data_instance
 		 (external_id, provider, label, credentials, enabled)
@@ -86,7 +90,11 @@ func (r *realmStore) CreateMarketDataInstance(
 func (r *realmStore) GetMarketDataInstance(
 	ctx context.Context, id domain.ExternalID,
 ) (domain.MarketDataInstance, bool, error) {
-	row := r.db().QueryRowContext(
+	db, err := r.db()
+	if err != nil {
+		return domain.MarketDataInstance{}, false, err
+	}
+	row := db.QueryRowContext(
 		ctx, mdInstanceSelect+` WHERE external_id = ?`, id.Bytes(),
 	)
 	inst, err := scanMDInstanceRow(row)
@@ -120,7 +128,11 @@ func (r *realmStore) ListEnabledMarketDataInstances(
 func (r *realmStore) queryMDInstances(
 	ctx context.Context, q string, args ...any,
 ) ([]domain.MarketDataInstance, error) {
-	rows, err := r.db().QueryContext(ctx, q, args...)
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: list market data instances: %w", err)
 	}
@@ -145,7 +157,11 @@ func (r *realmStore) queryMDInstances(
 func (r *realmStore) SetMarketDataInstanceEnabled(
 	ctx context.Context, id domain.ExternalID, enabled bool,
 ) error {
-	res, err := r.db().ExecContext(
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	res, err := db.ExecContext(
 		ctx,
 		`UPDATE market_data_instance SET enabled = ? WHERE external_id = ?`,
 		enabled, id.Bytes(),
@@ -162,7 +178,11 @@ func (r *realmStore) SetMarketDataInstanceEnabled(
 func (r *realmStore) UpdateMarketDataInstanceSettings(
 	ctx context.Context, id domain.ExternalID, label, credentials string,
 ) error {
-	res, err := r.db().ExecContext(
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	res, err := db.ExecContext(
 		ctx,
 		`UPDATE market_data_instance SET label = ?, credentials = ? WHERE external_id = ?`,
 		label, credentials, id.Bytes(),
@@ -181,7 +201,11 @@ func (r *realmStore) UpdateMarketDataInstanceSettings(
 func (r *realmStore) DeleteMarketDataInstance(
 	ctx context.Context, id domain.ExternalID, force bool,
 ) error {
-	tx, err := r.db().BeginTx(ctx, nil)
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin delete market data instance: %w", err)
 	}
@@ -294,22 +318,26 @@ JOIN asset qa               ON qa.id = mdi.quote_asset_id`
 func (r *realmStore) UpsertMarketDataInstrument(
 	ctx context.Context, instrument domain.MarketDataInstrument,
 ) error {
-	instanceID, err := resolveInstanceID(ctx, r.db(), instrument.Instance)
+	db, err := r.db()
 	if err != nil {
 		return err
 	}
-	baseID, err := resolveAssetID(ctx, r.db(), instrument.BaseAsset)
+	instanceID, err := resolveInstanceID(ctx, db, instrument.Instance)
 	if err != nil {
 		return err
 	}
-	quoteID, err := resolveAssetID(ctx, r.db(), instrument.QuoteAsset)
+	baseID, err := resolveAssetID(ctx, db, instrument.BaseAsset)
+	if err != nil {
+		return err
+	}
+	quoteID, err := resolveAssetID(ctx, db, instrument.QuoteAsset)
 	if err != nil {
 		return err
 	}
 	// ON CONFLICT(instance_id, external_symbol) DO UPDATE: mutates the row in
 	// place (base/quote asset, enabled, manual_price), so the existing row's
 	// dependents are untouched rather than re-firing delete cascades.
-	if _, err := r.db().ExecContext(
+	if _, err := db.ExecContext(
 		ctx,
 		`INSERT INTO market_data_instrument
 		 (instance_id, external_symbol, base_asset_id, quote_asset_id,
@@ -357,7 +385,11 @@ func (r *realmStore) ListEnabledMarketDataInstruments(
 func (r *realmStore) queryMDInstruments(
 	ctx context.Context, q string, args ...any,
 ) ([]domain.MarketDataInstrument, error) {
-	rows, err := r.db().QueryContext(ctx, q, args...)
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: list market data instruments: %w", err)
 	}
@@ -382,7 +414,11 @@ func (r *realmStore) queryMDInstruments(
 func (r *realmStore) SetMarketDataInstrumentEnabled(
 	ctx context.Context, instance domain.ExternalID, externalSymbol string, enabled bool,
 ) error {
-	res, err := r.db().ExecContext(
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	res, err := db.ExecContext(
 		ctx,
 		`UPDATE market_data_instrument
 		 SET enabled = ?
@@ -402,7 +438,11 @@ func (r *realmStore) SetMarketDataInstrumentEnabled(
 func (r *realmStore) DeleteMarketDataInstrument(
 	ctx context.Context, instance domain.ExternalID, externalSymbol string,
 ) error {
-	res, err := r.db().ExecContext(
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	res, err := db.ExecContext(
 		ctx,
 		`DELETE FROM market_data_instrument
 		 WHERE instance_id = (
@@ -459,8 +499,12 @@ func (r *realmStore) UpsertMarketDataQuote(
 	ctx context.Context, quote domain.MarketDataQuote,
 ) error {
 	// Resolve the instrument's surrogate id from (instance external id, symbol).
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
 	var instrumentID int64
-	err := r.db().QueryRowContext(
+	err = db.QueryRowContext(
 		ctx,
 		`SELECT mdi.id
 		 FROM market_data_instrument mdi
@@ -478,7 +522,7 @@ func (r *realmStore) UpsertMarketDataQuote(
 		return fmt.Errorf("store: resolve instrument for quote: %w", err)
 	}
 
-	if _, err := r.db().ExecContext(
+	if _, err := db.ExecContext(
 		ctx,
 		`INSERT INTO market_data_quote
 		 (instrument_id, mark, bid, ask, as_of, received_at)
@@ -515,7 +559,11 @@ func (r *realmStore) ListMarketDataQuotes(
 		args = []any{instance.Bytes()}
 	}
 
-	rows, err := r.db().QueryContext(ctx, q, args...)
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: list market data quotes: %w", err)
 	}

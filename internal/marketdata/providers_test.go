@@ -188,7 +188,5 @@ func TestDefaultRegistryCapabilitiesMatchConnectors(t *testing.T) {
 }
 
 func testProviderExternalID(label string) domain.ExternalID {
-	var id domain.ExternalID
-	copy(id[:], label)
-	return id
+	return domain.ExternalID(label)
 }

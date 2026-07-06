@@ -43,6 +43,11 @@ type Service interface {
 	ImportKey(ctx context.Context, material, format string) (domain.SigningKey, error)
 	ListKeys(ctx context.Context) ([]domain.SigningKey, error)
 	ActivePublicKey(format string) (string, error)
+	// PublicKeyByID exports the public key bound to keyID in the given format,
+	// resolving it by id rather than by the active flag so a token signed under a
+	// rotated (now inactive) key still yields the key that actually signed it. An
+	// unknown id reports domain.ErrNotFound.
+	PublicKeyByID(ctx context.Context, keyID, format string) (string, error)
 	Fingerprint(pub []byte) string
 	Sign(payload domain.ApprovalPayload) (string, error)
 	// SignNone issues an unsigned token after the implementation reports
@@ -97,6 +102,14 @@ func (unavailableService) ListKeys(context.Context) ([]domain.SigningKey, error)
 }
 
 func (unavailableService) ActivePublicKey(string) (string, error) {
+	return "", ErrNotConfigured
+}
+
+func (unavailableService) PublicKeyByID(
+	context.Context,
+	string,
+	string,
+) (string, error) {
 	return "", ErrNotConfigured
 }
 

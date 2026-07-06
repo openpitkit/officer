@@ -19,6 +19,8 @@
 package openapp
 
 import (
+	"context"
+
 	"go.openpit.dev/officer"
 	enginenative "go.openpit.dev/officer/app/engine/native"
 	frameworkapp "go.openpit.dev/officer/framework/app"
@@ -42,21 +44,22 @@ func Register(b *frameworkapp.Builder) {
 	if b == nil {
 		return
 	}
-	b.SetStoreFactory(func(
-		path string,
-		fatalHook frameworkapp.FatalShutdownHook,
-	) (store.Store, error) {
-		return appstore.NewSQLiteStore(
-			path,
-			appstore.WithFatalShutdownHook(fatalHook),
-		)
+	b.SetStoreFactory(func(path string) (store.Store, error) {
+		return appstore.NewSQLiteStore(path)
 	})
 	b.SetEngineBuildFactory(func(cfg frameworkapp.Config) engine.BuildFunc {
 		return func(snap engine.Snapshot) (engine.Engine, error) {
 			return enginenative.BuildOpenPitEngine(cfg.RuntimeLibraryPath, snap)
 		}
 	})
-	b.SetNodeBuilder(node.NewLocalNode)
+	b.SetNodeBuilder(func(
+		ctx context.Context,
+		st store.Store,
+		build engine.BuildFunc,
+		fatalHook frameworkapp.FatalShutdownHook,
+	) (node.Node, engine.Engine, error) {
+		return node.NewLocalNode(ctx, st, build, node.WithFatalShutdownHook(fatalHook))
+	})
 	b.SetNodeRouterBuilder(node.NewLocalRouter)
 	b.SetSigningFactory(func(st store.RealmStore) (fwsigning.Service, error) {
 		return appsigning.New(st)

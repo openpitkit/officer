@@ -86,9 +86,14 @@ func (r *realmStore) ListPolicyRows(
 	where, args := policyListWhere(filter)
 	from := ` FROM (` + policyUnion + `) AS policies` + where
 
+	db, err := r.db()
+	if err != nil {
+		return fwstore.PolicyListPage{}, err
+	}
+
 	countQuery := `SELECT COUNT(*)` + from
 	var total int
-	if err := r.db().QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return fwstore.PolicyListPage{}, fmt.Errorf("store: count policy rows: %w", err)
 	}
 
@@ -101,7 +106,7 @@ func (r *realmStore) ListPolicyRows(
 		queryArgs = append(queryArgs, filter.Page.Limit, max(filter.Page.Offset, 0))
 	}
 
-	rows, err := r.db().QueryContext(ctx, query, queryArgs...)
+	rows, err := db.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return fwstore.PolicyListPage{}, fmt.Errorf("store: list policy rows: %w", err)
 	}
@@ -256,7 +261,11 @@ LEFT JOIN asset   ast ON ast.id = lr.asset_id`
 	}
 	q += ` ORDER BY lr.scope, a.code, ast.code`
 
-	rows, err := r.db().QueryContext(ctx, q, args...)
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: list rate limits: %w", err)
 	}
@@ -289,11 +298,15 @@ func (r *realmStore) PutRateLimit(ctx context.Context, limit domain.LimitRate) e
 	if err := limit.Validate(); err != nil {
 		return err
 	}
-	accountID, assetID, err := resolveLimitAxes(ctx, r.db(), limit.Account, limit.Asset)
+	db, err := r.db()
 	if err != nil {
 		return err
 	}
-	return putLimitRow(ctx, r.db(), "limit_rate",
+	accountID, assetID, err := resolveLimitAxes(ctx, db, limit.Account, limit.Asset)
+	if err != nil {
+		return err
+	}
+	return putLimitRow(ctx, db, "limit_rate",
 		limit.Scope, accountID, assetID,
 		func(ctx context.Context, exec sqlExecer) error {
 			_, err := exec.ExecContext(
@@ -315,11 +328,15 @@ func (r *realmStore) PutRateLimit(ctx context.Context, limit domain.LimitRate) e
 func (r *realmStore) DeleteRateLimit(
 	ctx context.Context, scope domain.LimitScope, account domain.AccountID, asset string,
 ) error {
-	accountID, assetID, err := resolveLimitAxes(ctx, r.db(), account, asset)
+	db, err := r.db()
 	if err != nil {
 		return err
 	}
-	res, err := r.db().ExecContext(
+	accountID, assetID, err := resolveLimitAxes(ctx, db, account, asset)
+	if err != nil {
+		return err
+	}
+	res, err := db.ExecContext(
 		ctx,
 		`DELETE FROM limit_rate
 		 WHERE scope = ? AND account_id IS ? AND asset_id IS ?`,
@@ -375,7 +392,11 @@ LEFT JOIN asset   ast ON ast.id = los.asset_id`
 	}
 	q += ` ORDER BY los.scope, a.code, ast.code`
 
-	rows, err := r.db().QueryContext(ctx, q, args...)
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: list order size limits: %w", err)
 	}
@@ -402,11 +423,15 @@ func (r *realmStore) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOr
 	if err := limit.Validate(); err != nil {
 		return err
 	}
-	accountID, assetID, err := resolveLimitAxes(ctx, r.db(), limit.Account, limit.Asset)
+	db, err := r.db()
 	if err != nil {
 		return err
 	}
-	return putLimitRow(ctx, r.db(), "limit_order_size",
+	accountID, assetID, err := resolveLimitAxes(ctx, db, limit.Account, limit.Asset)
+	if err != nil {
+		return err
+	}
+	return putLimitRow(ctx, db, "limit_order_size",
 		limit.Scope, accountID, assetID,
 		func(ctx context.Context, exec sqlExecer) error {
 			_, err := exec.ExecContext(
@@ -428,11 +453,15 @@ func (r *realmStore) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOr
 func (r *realmStore) DeleteOrderSizeLimit(
 	ctx context.Context, scope domain.LimitScope, account domain.AccountID, asset string,
 ) error {
-	accountID, assetID, err := resolveLimitAxes(ctx, r.db(), account, asset)
+	db, err := r.db()
 	if err != nil {
 		return err
 	}
-	res, err := r.db().ExecContext(
+	accountID, assetID, err := resolveLimitAxes(ctx, db, account, asset)
+	if err != nil {
+		return err
+	}
+	res, err := db.ExecContext(
 		ctx,
 		`DELETE FROM limit_order_size
 		 WHERE scope = ? AND account_id IS ? AND asset_id IS ?`,
@@ -483,7 +512,11 @@ LEFT JOIN asset   ast ON ast.id = lpb.asset_id`
 	}
 	q += ` ORDER BY lpb.scope, a.code, ast.code`
 
-	rows, err := r.db().QueryContext(ctx, q, args...)
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: list pnl bounds limits: %w", err)
 	}
@@ -510,11 +543,15 @@ func (r *realmStore) PutPnlBoundsLimit(ctx context.Context, limit domain.LimitPn
 	if err := limit.Validate(); err != nil {
 		return err
 	}
-	accountID, assetID, err := resolveLimitAxes(ctx, r.db(), limit.Account, limit.Asset)
+	db, err := r.db()
 	if err != nil {
 		return err
 	}
-	return putLimitRow(ctx, r.db(), "limit_pnl_bound",
+	accountID, assetID, err := resolveLimitAxes(ctx, db, limit.Account, limit.Asset)
+	if err != nil {
+		return err
+	}
+	return putLimitRow(ctx, db, "limit_pnl_bound",
 		limit.Scope, accountID, assetID,
 		func(ctx context.Context, exec sqlExecer) error {
 			_, err := exec.ExecContext(
@@ -537,11 +574,15 @@ func (r *realmStore) PutPnlBoundsLimit(ctx context.Context, limit domain.LimitPn
 func (r *realmStore) DeletePnlBoundsLimit(
 	ctx context.Context, scope domain.LimitScope, account domain.AccountID, asset string,
 ) error {
-	accountID, assetID, err := resolveLimitAxes(ctx, r.db(), account, asset)
+	db, err := r.db()
 	if err != nil {
 		return err
 	}
-	res, err := r.db().ExecContext(
+	accountID, assetID, err := resolveLimitAxes(ctx, db, account, asset)
+	if err != nil {
+		return err
+	}
+	res, err := db.ExecContext(
 		ctx,
 		`DELETE FROM limit_pnl_bound
 		 WHERE scope = ? AND account_id IS ? AND asset_id IS ?`,

@@ -370,15 +370,22 @@ func TestBackupRestoreReplaceAllPrunesActivityBeforeSigningKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateOrder: %v", err)
 	}
-	if err := rs.PutOrderApproval(ctx, order.ExternalID, domain.OrderApproval{
-		Token:     "tok",
-		KeyID:     "key-prune",
-		Alg:       "ed25519",
-		Mode:      "immediate",
-		IssuedAt:  "2026-06-26T10:00:00Z",
-		ExpiresAt: "2026-06-26T10:05:00Z",
+	event, err := rs.AppendOrderEvent(ctx, domain.OrderEvent{
+		Order: order.ExternalID, Type: domain.OrderEventSubmitted, Source: domain.SourcePanel,
+	})
+	if err != nil {
+		t.Fatalf("AppendOrderEvent: %v", err)
+	}
+	if err := rs.PutEventAttestation(ctx, event.ExternalID, domain.EventAttestation{
+		Token:       "tok",
+		KeyID:       "key-prune",
+		Alg:         "ed25519",
+		RequestType: domain.AttestationRequestSubmit,
+		Mode:        "immediate",
+		IssuedAt:    "2026-06-26T10:00:00Z",
+		ExpiresAt:   "2026-06-26T10:05:00Z",
 	}); err != nil {
-		t.Fatalf("PutOrderApproval: %v", err)
+		t.Fatalf("PutEventAttestation: %v", err)
 	}
 
 	archive := backup.NewArchive(
@@ -551,9 +558,6 @@ func TestBackupRestoreOverwriteKeepsTargetOnlyOrderChildren(t *testing.T) {
 	partial := full
 	partial.Data.OrderEvents = nil
 	partial.Data.Trades = nil
-	for i := range partial.Data.Orders {
-		partial.Data.Orders[i].Approval = nil
-	}
 	if _, err := dst.RestoreBackup(ctx, partial, backup.RestoreOptions{
 		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeOverwrite,
 	}); err != nil {
@@ -919,7 +923,7 @@ var backupExportedTables = map[string]bool{
 	"limit_pnl_bound":        true,
 	"adjustment":             true,
 	"order_record":           true,
-	"order_approval":         true,
+	"event_attestation":      true,
 	"order_event":            true,
 	"trade":                  true,
 	"audit":                  true,
@@ -948,7 +952,7 @@ func TestBackupCompleteness(t *testing.T) {
 	_, rs := newRealmStore(t, domain.DefaultRealm)
 	r := rs.(*realmStore)
 
-	rows, err := r.db().QueryContext(
+	rows, err := r.rawDB().QueryContext(
 		ctx,
 		`SELECT name FROM sqlite_master
 		 WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
@@ -1032,7 +1036,7 @@ func TestBackupRestoreAtomicityLeavesRealmUnchanged(t *testing.T) {
 
 // TestBackupRestoreActivityOnlyForceIncludesSigningKey exports ONLY the activity
 // section of a realm holding a signed order, then restores it into a fresh realm
-// with the same scope. The signing key the order_approval row references
+// with the same scope. The signing key the event_attestation row references
 // (RESTRICT) must be force-included via the parent general-settings section, so
 // the foreign key resolves with no error.
 func TestBackupRestoreActivityOnlyForceIncludesSigningKey(t *testing.T) {
@@ -1042,20 +1046,27 @@ func TestBackupRestoreActivityOnlyForceIncludesSigningKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateOrder: %v", err)
 	}
-	if err := src.PutOrderApproval(ctx, order.ExternalID, domain.OrderApproval{
-		Token:     "tok",
-		KeyID:     "key-activity",
-		Alg:       "ed25519",
-		Mode:      "immediate",
-		IssuedAt:  "2026-06-26T10:00:00Z",
-		ExpiresAt: "2026-06-26T10:05:00Z",
+	event, err := src.AppendOrderEvent(ctx, domain.OrderEvent{
+		Order: order.ExternalID, Type: domain.OrderEventSubmitted, Source: domain.SourcePanel,
+	})
+	if err != nil {
+		t.Fatalf("AppendOrderEvent: %v", err)
+	}
+	if err := src.PutEventAttestation(ctx, event.ExternalID, domain.EventAttestation{
+		Token:       "tok",
+		KeyID:       "key-activity",
+		Alg:         "ed25519",
+		RequestType: domain.AttestationRequestSubmit,
+		Mode:        "immediate",
+		IssuedAt:    "2026-06-26T10:00:00Z",
+		ExpiresAt:   "2026-06-26T10:05:00Z",
 	}); err != nil {
-		t.Fatalf("PutOrderApproval: %v", err)
+		t.Fatalf("PutEventAttestation: %v", err)
 	}
 
 	// Export only the activity section; Normalize force-includes the parent
 	// dictionaries and general-settings (the signing keys) so the archive carries
-	// the key the approval references.
+	// the key the attestation references.
 	archive, err := src.ExportBackup(ctx, backup.Scope{
 		Sections: []backup.Section{backup.SectionActivityHistory},
 	})
@@ -1071,13 +1082,85 @@ func TestBackupRestoreActivityOnlyForceIncludesSigningKey(t *testing.T) {
 		t.Fatalf("RestoreBackup activity-only: %v", err)
 	}
 
-	// The signed order restored and its approval resolved the force-included key.
+	// The signed order restored and its event attestation resolved the
+	// force-included key.
 	detail, err := dst.GetOrder(ctx, order.ExternalID)
 	if err != nil {
 		t.Fatalf("GetOrder after activity-only restore: %v", err)
 	}
-	if detail.Approval == nil || detail.Approval.KeyID != "key-activity" {
-		t.Fatalf("restored order approval = %+v, want key-activity", detail.Approval)
+	att := eventAttestation(t, detail, event.ExternalID)
+	if att == nil || att.KeyID != "key-activity" {
+		t.Fatalf("restored event attestation = %+v, want key-activity", att)
+	}
+}
+
+// TestBackupRestoreAuditOnlyForceIncludedGroupRaisesRestart asserts that a
+// restore whose REQUESTED scope names only the (observational) audit log still
+// raises RestartRequired when it lands a group the target did not have. Normalize
+// force-includes the accounts+groups dictionary so the audit rows resolve, and
+// that force-include inserts a new group into the fresh target; the restart
+// signal must reflect the row actually written so the caller rebuilds the live
+// resolver. Against the old TouchesRuntime(opts.Scope) code the audit-only scope
+// read as observational and RestartRequired was false, leaving the store holding
+// a group the resolver never learned.
+func TestBackupRestoreAuditOnlyForceIncludedGroupRaisesRestart(t *testing.T) {
+	ctx := context.Background()
+	_, src := newRealmStore(t, domain.DefaultRealm)
+	seedRealm(t, ctx, src)
+	archive, err := src.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup: %v", err)
+	}
+
+	_, dst := newRealmStore(t, domain.DefaultRealm)
+	summary, err := dst.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{Sections: []backup.Section{backup.SectionAuditLog}},
+		Mode:  backup.RestoreModeInsertMissing,
+	})
+	if err != nil {
+		t.Fatalf("RestoreBackup audit-only: %v", err)
+	}
+	if !summary.RestartRequired {
+		t.Fatalf("RestartRequired = false, want true for a force-included group insert")
+	}
+	// The force-included group landed even though only the audit log was requested.
+	if _, ok, err := dst.GetGroup(ctx, "grp-1"); err != nil || !ok {
+		t.Fatalf("dst GetGroup(grp-1) ok=%v err=%v, want present", ok, err)
+	}
+}
+
+// TestBackupRestoreAuditOnlyNoNewGroupStaysObservational asserts the restart
+// signal stays off when an audit-only restore force-includes the accounts+groups
+// dictionary but the target already holds every group, so no runtime row is
+// written. The signal must follow the rows actually applied, not the mere
+// presence of the force-included section.
+func TestBackupRestoreAuditOnlyNoNewGroupStaysObservational(t *testing.T) {
+	ctx := context.Background()
+	_, src := newRealmStore(t, domain.DefaultRealm)
+	seedRealm(t, ctx, src)
+	archive, err := src.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup: %v", err)
+	}
+
+	// Restore the full archive first so the target already holds every dictionary,
+	// then repeat an audit-only insert-missing restore: the force-included group
+	// and account rows all collide and are skipped, so nothing runtime is written.
+	_, dst := newRealmStore(t, domain.DefaultRealm)
+	if _, err := dst.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+	}); err != nil {
+		t.Fatalf("RestoreBackup seed full: %v", err)
+	}
+	summary, err := dst.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{Sections: []backup.Section{backup.SectionAuditLog}},
+		Mode:  backup.RestoreModeInsertMissing,
+	})
+	if err != nil {
+		t.Fatalf("RestoreBackup audit-only repeat: %v", err)
+	}
+	if summary.RestartRequired {
+		t.Fatalf("RestartRequired = true for an audit-only restore that wrote no runtime row")
 	}
 }
 

@@ -117,6 +117,19 @@ function formatDecimal(value: DecimalValue): string {
   return `${negative ? "-" : ""}${formatted}`;
 }
 
+export function subtractDecimalStrings(a: string, b: string): string | null {
+  const left = parseDecimal(a);
+  const right = parseDecimal(b);
+  if (left === null || right === null) {
+    return null;
+  }
+  const result = addDecimals(left, negateDecimal(right));
+  if (compareDecimals(result, decimalLiteral("0")) < 0) {
+    return "0";
+  }
+  return formatDecimal(result);
+}
+
 const STEP_BANDS = [
   { threshold: decimalLiteral("1"), step: "0.1" },
   { threshold: decimalLiteral("10"), step: "1" },

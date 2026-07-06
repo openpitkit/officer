@@ -775,7 +775,7 @@ func TestMDQuoteListAllInstances(t *testing.T) {
 	}
 
 	// Zero instance returns both.
-	all, err := rs.ListMarketDataQuotes(ctx, domain.ExternalID{})
+	all, err := rs.ListMarketDataQuotes(ctx, domain.ExternalID(""))
 	if err != nil {
 		t.Fatalf("ListMarketDataQuotes(zero): %v", err)
 	}
@@ -817,7 +817,7 @@ func TestMDCascadeDeleteInstance(t *testing.T) {
 	}
 
 	// Quotes for that instance must be gone (zero id = all instances).
-	quotes, err := rs.ListMarketDataQuotes(ctx, domain.ExternalID{})
+	quotes, err := rs.ListMarketDataQuotes(ctx, domain.ExternalID(""))
 	if err != nil {
 		t.Fatalf("ListMarketDataQuotes after cascade: %v", err)
 	}
@@ -906,10 +906,7 @@ func TestMDListInstrumentsEmptyInstance(t *testing.T) {
 func TestMDInstanceSuppliedExternalIDUsedVerbatim(t *testing.T) {
 	ctx, rs := seedMDFixtures(t)
 
-	supplied, err := domain.ParseExternalID("AAECAwQFBgcICQoLDA0ODw")
-	if err != nil {
-		t.Fatalf("ParseExternalID: %v", err)
-	}
+	supplied := domain.ExternalID("caller-market-data-1")
 	inst := sampleInstance()
 	inst.ExternalID = supplied
 
@@ -940,10 +937,7 @@ func TestMDInstanceDuplicateSuppliedExternalIDConflicts(t *testing.T) {
 	ctx, rs := seedMDFixtures(t)
 	r := rs.(*realmStore)
 
-	supplied, err := domain.ParseExternalID("AAECAwQFBgcICQoLDA0ODw")
-	if err != nil {
-		t.Fatalf("ParseExternalID: %v", err)
-	}
+	supplied := domain.ExternalID("caller-market-data-1")
 	first := sampleInstance()
 	first.ExternalID = supplied
 	if _, err := rs.CreateMarketDataInstance(ctx, first); err != nil {
@@ -955,7 +949,7 @@ func TestMDInstanceDuplicateSuppliedExternalIDConflicts(t *testing.T) {
 	second := sampleInstance()
 	second.ExternalID = supplied
 	second.Label = "another-feed"
-	_, err = rs.CreateMarketDataInstance(ctx, second)
+	_, err := rs.CreateMarketDataInstance(ctx, second)
 	if !errors.Is(err, domain.ErrAlreadyExists) {
 		t.Fatalf("CreateMarketDataInstance(dup id) = %v, want ErrAlreadyExists", err)
 	}

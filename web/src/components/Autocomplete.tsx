@@ -51,7 +51,12 @@ export interface AutocompleteProps
   clearLabel?: string;
 }
 
-/** Prefix-match filter - case-insensitive, empty query shows nothing. */
+/**
+ * Prefix-match filter - case-insensitive, empty query shows nothing. A
+ * case-insensitive exact match is promoted to the top of the list, and the
+ * remaining prefix matches are de-duplicated case-insensitively so a list with
+ * case-variants (e.g. "usd" and "USD") never shows a duplicate-looking entry.
+ */
 function filterSuggestions(
   query: string,
   suggestions: string[],
@@ -61,10 +66,17 @@ function filterSuggestions(
   if (q.length === 0) {
     return [];
   }
-  const out: string[] = [];
+  const exact = suggestions.find((s) => s.toLowerCase() === q);
+  const out: string[] = exact === undefined ? [] : [exact];
+  const seen = new Set(out.map((s) => s.toLowerCase()));
+  if (out.length >= max) {
+    return out;
+  }
   for (const s of suggestions) {
-    if (s.toLowerCase().startsWith(q) && s.toLowerCase() !== q) {
+    const lower = s.toLowerCase();
+    if (lower.startsWith(q) && !seen.has(lower)) {
       out.push(s);
+      seen.add(lower);
       if (out.length >= max) {
         break;
       }

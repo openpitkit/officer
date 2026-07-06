@@ -323,7 +323,7 @@ type getLimitsOutput struct {
 }
 
 type getOrderInput struct {
-	OrderExternalID string `json:"orderExternalId" jsonschema:"Order external id (22-char opaque handle) returned by submit_order"`
+	OrderExternalID string `json:"orderExternalId" jsonschema:"Order external id returned by submit_order"`
 }
 
 type getOrderOutput struct {
@@ -380,7 +380,7 @@ type submitOrderInput struct {
 	AmountValue string `json:"amountValue" jsonschema:"Order size as an exact decimal string"`
 	Price       string `json:"price,omitempty" jsonschema:"Limit price as an exact decimal string; omit for market"`
 	Mode        string `json:"mode,omitempty" jsonschema:"hold or immediate (default immediate)"`
-	ExternalID  string `json:"externalId,omitempty" jsonschema:"Optional caller-supplied order external id (22-char opaque handle); omit to have the server generate one"`
+	ExternalID  string `json:"externalId,omitempty" jsonschema:"Optional caller-supplied unique order external id; omit to have the server generate one"`
 }
 
 type submitOrderOutput struct {
@@ -397,8 +397,10 @@ type confirmExecutionInput struct {
 }
 
 type confirmExecutionOutput struct {
-	OrderExternalID string `json:"orderExternalId"`
-	Status          string `json:"status"`
+	OrderExternalID  string `json:"orderExternalId"`
+	Status           string `json:"status"`
+	AttestationToken string `json:"attestationToken,omitempty"`
+	KeyID            string `json:"keyId,omitempty"`
 }
 
 type cancelInput struct {
@@ -409,8 +411,10 @@ type cancelInput struct {
 }
 
 type cancelOutput struct {
-	OrderExternalID string `json:"orderExternalId"`
-	Status          string `json:"status"`
+	OrderExternalID  string `json:"orderExternalId"`
+	Status           string `json:"status"`
+	AttestationToken string `json:"attestationToken,omitempty"`
+	KeyID            string `json:"keyId,omitempty"`
 }
 
 type accountDTO struct {
@@ -585,19 +589,45 @@ func toOrderDTO(o domain.Order) orderDTO {
 	}
 }
 
-func toOrderApprovalDTO(a *domain.OrderApproval) *orderApprovalDTO {
-	if a == nil {
+// toOrderApprovalDTO maps the order's submit-verdict attestation onto the MCP
+// approval DTO, or returns nil when no event carries one. The submit verdict
+// event (pre_trade_accepted / pre_trade_rejected) is preferred; failing that,
+// the first attested event is used, so the MCP surface still reflects an
+// attested order created through a non-submit path.
+func toOrderApprovalDTO(detail domain.OrderDetail) *orderApprovalDTO {
+	att := submitVerdictAttestation(detail)
+	if att == nil {
 		return nil
 	}
 	return &orderApprovalDTO{
-		Token:     a.Token,
-		KeyID:     a.KeyID,
-		Alg:       a.Alg,
-		Mode:      a.Mode,
-		IssuedAt:  a.IssuedAt,
-		ExpiresAt: a.ExpiresAt,
-		Signed:    a.Alg == "ed25519",
+		Token:     att.Token,
+		KeyID:     att.KeyID,
+		Alg:       att.Alg,
+		Mode:      att.Mode,
+		IssuedAt:  att.IssuedAt,
+		ExpiresAt: att.ExpiresAt,
+		Signed:    att.Alg == "ed25519",
 	}
+}
+
+// submitVerdictAttestation returns the attestation of the order's submit verdict
+// event when present, else the first attested event's attestation, else nil.
+func submitVerdictAttestation(detail domain.OrderDetail) *domain.EventAttestation {
+	var first *domain.EventAttestation
+	for i := range detail.Events {
+		att := detail.Events[i].Attestation
+		if att == nil {
+			continue
+		}
+		if first == nil {
+			first = att
+		}
+		switch detail.Events[i].Type {
+		case domain.OrderEventPreTradeAccepted, domain.OrderEventPreTradeRejected:
+			return att
+		}
+	}
+	return first
 }
 
 func toTradeDTOs(trades []domain.Trade) []tradeDTO {
@@ -736,7 +766,7 @@ func getOrderHandler(
 		}
 		out := getOrderOutput{
 			Order:    toOrderDTO(detail.Order),
-			Approval: toOrderApprovalDTO(detail.Approval),
+			Approval: toOrderApprovalDTO(detail),
 			Trades:   toTradeDTOs(detail.Trades),
 		}
 		return fmt.Sprintf(
@@ -920,13 +950,15 @@ func confirmExecutionHandler(
 		if token == "" {
 			return "", confirmExecutionOutput{}, fmt.Errorf("token is required")
 		}
-		order, err := src.ConfirmExecution(ctx, orderExternalID, token, in.Force)
+		order, att, err := src.ConfirmExecution(ctx, orderExternalID, token, in.Force)
 		if err != nil {
 			return "", confirmExecutionOutput{}, fmt.Errorf("confirm execution failed: %s", err)
 		}
 		out := confirmExecutionOutput{
-			OrderExternalID: order.ExternalID.String(),
-			Status:          string(order.Status),
+			OrderExternalID:  order.ExternalID.String(),
+			Status:           string(order.Status),
+			AttestationToken: att.Token,
+			KeyID:            att.KeyID,
 		}
 		return fmt.Sprintf(
 			"order %s confirmed: %s",
@@ -952,7 +984,7 @@ func cancelHandler(
 		if token == "" {
 			return "", cancelOutput{}, fmt.Errorf("token is required")
 		}
-		order, err := src.CancelOrder(
+		order, att, err := src.CancelOrder(
 			ctx,
 			orderExternalID,
 			token,
@@ -963,8 +995,10 @@ func cancelHandler(
 			return "", cancelOutput{}, fmt.Errorf("cancel failed: %s", err)
 		}
 		out := cancelOutput{
-			OrderExternalID: order.ExternalID.String(),
-			Status:          string(order.Status),
+			OrderExternalID:  order.ExternalID.String(),
+			Status:           string(order.Status),
+			AttestationToken: att.Token,
+			KeyID:            att.KeyID,
 		}
 		return fmt.Sprintf(
 			"order %s cancelled: %s",

@@ -332,9 +332,11 @@ type Node interface {
 
 	// ImportPositionSnapshot applies the engine-relevant fields of a persisted
 	// position snapshot through the spot-funds adjustment path, then stores the
-	// full snapshot and audits the import operation.
+	// full snapshot and audits the import operation. externalID follows
+	// ApplyAdjustment semantics for the internal adjustment record.
 	ImportPositionSnapshot(
-		ctx context.Context, key Key, snapshot domain.Balance, caller domain.Caller,
+		ctx context.Context, key Key, externalID domain.ExternalID,
+		snapshot domain.Balance, caller domain.Caller,
 	) (domain.AccountAdjustmentRecord, error)
 
 	// ListBalances returns the balance rows filtered by the non-empty account and
@@ -393,11 +395,13 @@ type Node interface {
 	// fill that already moved the order to a terminal status (e.g. filled) yields
 	// domain.ErrConflict and nothing is written, preserving the fill. A second
 	// confirm on an already-resolved reservation returns domain.ErrConflict; an
-	// unknown reservation returns domain.ErrNotFound.
+	// unknown reservation returns domain.ErrNotFound. The returned bool reports
+	// whether force actually bypassed a terminal-order guard, so the backend
+	// audits forced=true only on a real bypass.
 	ConfirmHeld(
 		ctx context.Context, order domain.ExternalID,
 		approvalID string, caller domain.Caller, force bool,
-	) (domain.Order, error)
+	) (domain.Order, bool, error)
 
 	// CancelHeld rolls back the held reservation identified by approvalID through
 	// the engine, then atomically flips the intent, advances the order to
@@ -407,11 +411,13 @@ type Node interface {
 	// against the accepted state: a late fill that already moved the order to filled
 	// yields domain.ErrConflict and nothing is written, so the fill is never
 	// clobbered. It is tolerant of an already-resolved reservation in the engine
-	// (idempotent native rollback).
+	// (idempotent native rollback). The returned bool reports whether force
+	// actually bypassed a terminal-order guard, so the backend audits forced=true
+	// only on a real bypass.
 	CancelHeld(
 		ctx context.Context, order domain.ExternalID,
 		approvalID string, caller domain.Caller, force bool,
-	) (domain.Order, error)
+	) (domain.Order, bool, error)
 
 	// ReconcileOrphans reports persisted reservation intents still held after
 	// restart. Held balance effects are durable, and confirm/cancel can fall
@@ -419,26 +425,25 @@ type Node interface {
 	// number found.
 	ReconcileOrphans(ctx context.Context) (int, error)
 
-	// ApplyExecutionReport settles a fill through the engine, then persists the
-	// fill event, trade, per-asset balances, engine-block UPDATEs, and the
-	// reflected order status in one atomic store transaction; the observational
+	// ApplyExecutionReport applies every report through the engine, then persists
+	// the engine-returned patch in one atomic store transaction; observational
 	// block-audit rows are written post-commit, and the action is audited.
 	ApplyExecutionReport(
 		ctx context.Context, key Key, in domain.ExecutionReportInput, caller domain.Caller,
 	) (engine.ExecutionReportResult, error)
 
-	// PersistOrderApproval stamps the signed approval envelope onto the order's
-	// pre-trade verdict and records an approval_issued event. The order is
-	// addressed by its opaque external id. It is write-once: the envelope is set
-	// only when the order carries none yet, so a retry or a later fill never
-	// clobbers the issued envelope. Signing is additive and runs after the order is
-	// already durable, so this never mutates money or status.
-	PersistOrderApproval(
-		ctx context.Context, key Key, order domain.ExternalID, env domain.OrderApproval,
+	// PersistEventAttestation stamps the signed attestation envelope onto the
+	// order-history event addressed by its opaque external id. It is write-once:
+	// the envelope is set only when the event carries none yet, so a retry never
+	// clobbers the issued envelope. Signing is additive and runs after the event
+	// is already durable, so this never mutates money or status.
+	PersistEventAttestation(
+		ctx context.Context, key Key, eventID domain.ExternalID, att domain.EventAttestation,
 	) error
 
-	// GetOrder returns the order with its 1:1 signed approval (when issued), its
-	// events and trades, addressed by the order's opaque external id.
+	// GetOrder returns the order with its events (each carrying its 1:1 signed
+	// attestation when issued) and trades, addressed by the order's opaque
+	// external id.
 	GetOrder(ctx context.Context, order domain.ExternalID) (domain.OrderDetail, error)
 
 	// ListOrders returns the most recent n orders for an account, newest first;

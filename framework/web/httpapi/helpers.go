@@ -66,6 +66,16 @@ func PathOrderExternalID(r *http.Request) (string, error) {
 	return pathString(r, "externalId", "invalid URL encoding in order external id")
 }
 
+// PathOrderEventID reads and URL-decodes the {eventId} chi path parameter.
+func PathOrderEventID(r *http.Request) (string, error) {
+	return pathString(r, "eventId", "invalid URL encoding in order event id")
+}
+
+// PathSigningKeyID reads and URL-decodes the {keyId} chi path parameter.
+func PathSigningKeyID(r *http.Request) (string, error) {
+	return pathString(r, "keyId", "invalid URL encoding in signing key id")
+}
+
 // PathAccountID reads and URL-decodes the {code} chi path parameter.
 func PathAccountID(r *http.Request) (domain.AccountID, error) {
 	decoded, err := pathString(r, "code", "invalid URL encoding in account code")

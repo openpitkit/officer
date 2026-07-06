@@ -91,6 +91,21 @@ type BusinessCSVImport struct {
 	Audits      []AuditEntry
 }
 
+// BalanceKey addresses one balance snapshot by account and asset.
+type BalanceKey struct {
+	Account domain.AccountID
+	Asset   string
+}
+
+// AccountAdjustmentPersistence is the atomic persistence command for one
+// engine-applied account adjustment or position snapshot.
+type AccountAdjustmentPersistence struct {
+	UpsertBalance *domain.Balance
+	DeleteBalance *BalanceKey
+	Adjustment    domain.AccountAdjustmentRecord
+	Audit         AuditEntry
+}
+
 // TextMatcher is a parsed user text pattern. Fragments are literal text
 // fragments that must appear in order. AnchorStart requires the first fragment
 // to match from the value start; AnchorEnd requires the final fragment to end
@@ -270,6 +285,9 @@ type OrderListFilter struct {
 // OrderListRow is an order row plus list-only data.
 type OrderListRow struct {
 	Order domain.Order
+	// Signed reports whether the order carries a persisted Ed25519-signed
+	// approval envelope (alg "ed25519"); false when unsigned or eSign-off.
+	Signed bool
 }
 
 // OrderListPage is a paged order-list result.
@@ -777,6 +795,12 @@ type RealmStore interface {
 		ctx context.Context, rec domain.AccountAdjustmentRecord,
 	) (domain.AccountAdjustmentRecord, error)
 
+	// RecordAccountAdjustment persists the balance snapshot command, adjustment
+	// record, and audit row in one transaction.
+	RecordAccountAdjustment(
+		ctx context.Context, in AccountAdjustmentPersistence,
+	) (domain.AccountAdjustmentRecord, error)
+
 	// ListAdjustments returns the most recent n adjustments for an account,
 	// newest first. An empty source returns all sources; a non-positive n returns
 	// an empty slice.
@@ -810,15 +834,19 @@ type RealmStore interface {
 	// column. Returns domain.ErrNotFound when absent.
 	SetOrderLock(ctx context.Context, id domain.ExternalID, lock []byte) error
 
-	// PutOrderApproval stamps the signed approval envelope onto the identified
-	// order, write-once: it inserts the 1:1 order_approvals row only when the
-	// order carries none yet, so a retry or a later write never clobbers an
-	// already-issued envelope. A no-op (already stamped, or missing order) is not
-	// an error: the envelope is best-effort and the order is the durable trail.
-	PutOrderApproval(ctx context.Context, id domain.ExternalID, env domain.OrderApproval) error
+	// PutEventAttestation stamps the signed attestation envelope onto the
+	// identified order-history event, write-once: it inserts the 1:1
+	// event_attestation row only when the event carries none yet, so a retry or a
+	// later write never clobbers an already-issued envelope. A no-op (already
+	// stamped, or missing event) is not an error: the attestation is best-effort
+	// and the event stream is the durable trail.
+	PutEventAttestation(
+		ctx context.Context, eventID domain.ExternalID, att domain.EventAttestation,
+	) error
 
-	// GetOrder returns the order with its events and trades. Returns
-	// domain.ErrNotFound when absent.
+	// GetOrder returns the order with its events (each carrying its 1:1
+	// attestation when present) and trades. Returns domain.ErrNotFound when
+	// absent.
 	GetOrder(ctx context.Context, id domain.ExternalID) (domain.OrderDetail, error)
 
 	// ListOrders returns the most recent n orders for an account, newest first.
@@ -850,12 +878,24 @@ type RealmStore interface {
 	// RecordOrderSettlement persists one fill/settlement atomically in a single
 	// transaction: per-asset balances (realized P&L delta-accumulated inside the
 	// tx), the optional trade, the engine-applied account blocks, the optional
-	// lock rewrite, the fill event(s), and the order status advance commit or roll
-	// back together. When AllowedFrom is non-empty the status UPDATE is guarded and
-	// a disallowed current status yields domain.ErrConflict with nothing written;
-	// otherwise a missing order yields domain.ErrNotFound. The block-audit row is
-	// NOT part of this tx; callers write it separately after a successful commit.
+	// lock rewrite, the fill event(s),
+	// and the order status advance commit or roll back together. When AllowedFrom
+	// is non-empty the status UPDATE is guarded and a disallowed current status
+	// yields domain.ErrConflict with nothing written; otherwise a missing order
+	// yields domain.ErrNotFound. The block-audit row is NOT part of this tx;
+	// callers write it separately after a successful commit.
 	RecordOrderSettlement(ctx context.Context, st domain.OrderSettlement) error
+
+	// RecordOrderSubmission persists the submitted order and submitted event,
+	// invokes apply with the persisted order while the same SQL transaction is
+	// open, and then persists the returned settlement in that transaction.
+	// Implementations roll the transaction back when apply returns an error.
+	RecordOrderSubmission(
+		ctx context.Context,
+		order domain.Order,
+		submitted domain.OrderEvent,
+		apply func(domain.Order) (domain.OrderSettlement, error),
+	) (domain.Order, error)
 
 	// --- Order events (machine record, addressed by external id) ---
 
@@ -1048,6 +1088,12 @@ type RealmStore interface {
 	// regardless of state; found is false when absent.
 	GetReservationIntent(
 		ctx context.Context, approvalID string,
+	) (domain.ReservationIntent, bool, error)
+
+	// GetOpenReservationIntentByOrder returns the held intent linked to order.
+	// found is false when no held reservation remains for the order.
+	GetOpenReservationIntentByOrder(
+		ctx context.Context, order domain.ExternalID,
 	) (domain.ReservationIntent, bool, error)
 
 	// ListOpenReservationIntents returns all intents whose state is held.

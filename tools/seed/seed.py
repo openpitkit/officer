@@ -557,7 +557,7 @@ def _existing_limit_keys(base: str) -> set[tuple[str, str, str, str]]:
 
 
 # Orders: account, baseAsset, quoteAsset, side, amountKind, amountValue, price.
-# execution_reports: quantity, price, final. The fill's lockPrice is taken from
+# execution_reports: quantity, price, status. The fill's lockPrice is taken from
 # the order's settlement-leg display price (the LAST entry of order.displayPrices).
 # leavesQuantity (FIX LeavesQty - the order's remaining open base quantity after
 # the fill) is computed per fill from the running cumulative filled quantity; it
@@ -576,8 +576,8 @@ ORDERS = [
         "amountValue": "500",
         "price": "185.50",
         "execution_reports": [
-            {"quantity": "300", "price": "185.40", "final": False},
-            {"quantity": "200", "price": "185.50", "final": True},
+            {"quantity": "300", "price": "185.40", "status": "partially_filled"},
+            {"quantity": "200", "price": "185.50", "status": "filled"},
         ],
     },
     {
@@ -589,7 +589,7 @@ ORDERS = [
         "amountValue": "1000",
         "price": "184.20",
         "execution_reports": [
-            {"quantity": "1000", "price": "184.10", "final": True},
+            {"quantity": "1000", "price": "184.10", "status": "filled"},
         ],
     },
     {
@@ -601,7 +601,7 @@ ORDERS = [
         "amountValue": "200",
         "price": "415.00",
         "execution_reports": [
-            {"quantity": "200", "price": "414.75", "final": True},
+            {"quantity": "200", "price": "414.75", "status": "filled"},
         ],
     },
     {
@@ -614,7 +614,7 @@ ORDERS = [
         "price": "5200.00",
         "execution_reports": [
             # Partial fill only — still open.
-            {"quantity": "4", "price": "5195.00", "final": False},
+            {"quantity": "4", "price": "5195.00", "status": "partially_filled"},
         ],
     },
     {
@@ -637,7 +637,7 @@ ORDERS = [
         "amountValue": "100",
         "price": "410.00",
         "execution_reports": [
-            {"quantity": "100", "price": "409.50", "final": True},
+            {"quantity": "100", "price": "409.50", "status": "filled"},
         ],
     },
     {
@@ -671,7 +671,7 @@ ORDERS = [
         "amountValue": "5",
         "price": "5180.00",
         "execution_reports": [
-            {"quantity": "5", "price": "5181.00", "final": True},
+            {"quantity": "5", "price": "5181.00", "status": "filled"},
         ],
     },
     {
@@ -683,7 +683,7 @@ ORDERS = [
         "amountValue": "300",
         "price": "416.00",
         "execution_reports": [
-            {"quantity": "300", "price": "415.90", "final": True},
+            {"quantity": "300", "price": "415.90", "status": "filled"},
         ],
     },
     {
@@ -695,7 +695,7 @@ ORDERS = [
         "amountValue": "3",
         "price": "5000.00",
         "execution_reports": [
-            {"quantity": "3", "price": "4990.00", "final": True},
+            {"quantity": "3", "price": "4990.00", "status": "filled"},
         ],
     },
     # Infinite Loop Capital runaway-algo burst. The desk is blocked, so the
@@ -1020,7 +1020,7 @@ def seed(base: str) -> None:
                 "quantity": er["quantity"],
                 "price": er["price"],
                 "leavesQuantity": str(leaves),
-                "final": er["final"],
+                "status": er["status"],
             }
             if lock_price is not None:
                 er_body["lockPrice"] = lock_price
@@ -1042,10 +1042,10 @@ def seed(base: str) -> None:
                 print(f"  [!] {msg}", file=sys.stderr)
                 errors.append(msg)
                 continue
-            final_tag = " [final]" if er["final"] else ""
+            status_tag = f" [{er['status']}]"
             print(
                 f"      fill qty={er['quantity']} px={er['price']}"
-                f" leaves={leaves} outcomes={len(outcomes)}{final_tag}"
+                f" leaves={leaves} outcomes={len(outcomes)}{status_tag}"
             )
             trades_created += 1
 

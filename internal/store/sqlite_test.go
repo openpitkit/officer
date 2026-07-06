@@ -24,14 +24,25 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
 )
+
+// rawDB returns the realm's shared connection pool directly, for tests that
+// reach past the RealmStore surface to seed or inspect rows with raw SQL. It is
+// the test-only counterpart of the guarded db() accessor and assumes the store
+// is open (these tests never race Close); the guarded accessor's closed-store
+// behaviour is covered by TestRealmDataOpAfterCloseReturnsClosedError.
+func (r *realmStore) rawDB() *sql.DB { return r.store.currentDB() }
 
 // newTestStore opens a fresh migrated SQLite store in a temp file and returns it
 // with its default realm handle.
@@ -75,7 +86,7 @@ func TestMigrateAppliesSchemaAndForeignKeys(t *testing.T) {
 	if !ok {
 		t.Fatalf("store is not *sqliteStore")
 	}
-	_, err = sq.db.ExecContext(
+	_, err = sq.currentDB().ExecContext(
 		ctx,
 		`INSERT INTO account (code, group_id) VALUES ('x', 999999)`,
 	)
@@ -94,6 +105,57 @@ func TestMigrateAppliesSchemaAndForeignKeys(t *testing.T) {
 	}
 	if len(assets) != 0 {
 		t.Fatalf("ListAssets len = %d, want 0", len(assets))
+	}
+}
+
+// TestRealmDataOpAfterCloseReturnsClosedError proves the realm data path fails
+// gracefully on a shutdown/Close race: once Close swaps the pool out, a data
+// method resolves the pool through the guarded accessor and returns the same
+// "store: sqlite is closed" error the lifecycle methods return, rather than
+// dereferencing a nil pool and panicking. A read, a write, and a
+// transaction-opening method are all exercised because they reach the pool
+// through different call shapes.
+func TestRealmDataOpAfterCloseReturnsClosedError(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "officer.db")
+	s, err := NewSQLiteStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	rs, err := s.ForRealm(ctx, domain.DefaultRealm)
+	if err != nil {
+		t.Fatalf("ForRealm(default): %v", err)
+	}
+
+	// Close the store while the realm handle is still held, mirroring a data op
+	// racing a shutdown.
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	const want = "store: sqlite is closed"
+
+	// Read path (QueryContext via a helper-returning method).
+	if _, err := rs.ListAssets(ctx); err == nil ||
+		!strings.Contains(err.Error(), want) {
+		t.Fatalf("ListAssets after close = %v, want %q", err, want)
+	}
+
+	// Write path that also passes the pool to a helper (resolveAccountID).
+	if err := rs.UpsertBalance(ctx, domain.Balance{
+		Account: "acc-1", Asset: "USD", Available: "1",
+	}); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("UpsertBalance after close = %v, want %q", err, want)
+	}
+
+	// Transaction-opening path (BeginTx).
+	if err := rs.ApplyBusinessCSVImport(ctx, BusinessCSVImport{
+		Balances: []domain.Balance{{Account: "acc-1", Asset: "USD", Available: "1"}},
+	}); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("ApplyBusinessCSVImport after close = %v, want %q", err, want)
 	}
 }
 
@@ -131,6 +193,72 @@ func TestForRealmNonDefaultBoundRealm(t *testing.T) {
 	// The default realm is now foreign to a connector bound to desk-a.
 	if _, err := s.ForRealm(ctx, domain.DefaultRealm); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("ForRealm(default) error = %v, want ErrInvalid", err)
+	}
+}
+
+func TestResetDoesNotExposeNilOrUnmigratedDBToReaders(t *testing.T) {
+	ctx := context.Background()
+	s, rs := newTestStore(t)
+
+	done := make(chan struct{})
+	errs := make(chan error, 1)
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					select {
+					case errs <- fmt.Errorf("reader panic: %v", recovered):
+					default:
+					}
+				}
+			}()
+			for {
+				select {
+				case <-done:
+					return
+				default:
+				}
+				if _, err := rs.ListMarketDataInstances(ctx); err != nil {
+					select {
+					case errs <- fmt.Errorf("list market-data instances: %w", err):
+					default:
+					}
+					return
+				}
+				if _, err := rs.ListMcpAccess(ctx); err != nil {
+					select {
+					case errs <- fmt.Errorf("list mcp access: %w", err):
+					default:
+					}
+					return
+				}
+			}
+		}()
+	}
+
+	for i := 0; i < 50; i++ {
+		if err := s.Reset(ctx); err != nil {
+			close(done)
+			wg.Wait()
+			t.Fatalf("Reset(%d): %v", i, err)
+		}
+		select {
+		case err := <-errs:
+			close(done)
+			wg.Wait()
+			t.Fatal(err)
+		default:
+		}
+	}
+	close(done)
+	wg.Wait()
+	select {
+	case err := <-errs:
+		t.Fatal(err)
+	default:
 	}
 }
 

@@ -450,9 +450,8 @@ type marketDataInstanceDTO struct {
 // marketDataCreateInstanceRequestDTO is the body of POST
 // /market-data/instances. ExternalID is the optional caller-supplied opaque
 // public handle for the instance; when omitted the server generates and returns
-// one (in the instance's externalId). A supplied id must be a well-formed
-// 22-char base64url wire form (malformed is a 400) and unique (a duplicate is a
-// 409); it is never a surrogate id.
+// one (in the instance's externalId). A supplied id is accepted verbatim and
+// must be unique (a duplicate is a 409); it is never a surrogate id.
 type marketDataCreateInstanceRequestDTO struct {
 	ID          string `json:"id,omitempty"`
 	ExternalID  string `json:"externalId,omitempty"`
@@ -854,10 +853,9 @@ type adjustmentBoundsDTO struct {
 // exact decimal strings passed through verbatim. ExternalID is the optional
 // caller-supplied opaque public handle for the adjustment record; when omitted
 // the server generates and returns one (under the record's externalId). It is
-// write-only on create: a supplied id must be a well-formed 22-char base64url
-// wire form (malformed is a 400) and unique (a duplicate is a 409). It is
-// omitted from the request echoed back in an adjustment record (the record's own
-// externalId carries the resolved handle).
+// write-only on create: a supplied id is accepted verbatim and must be unique
+// (a duplicate is a 409). It is omitted from the request echoed back in an
+// adjustment record (the record's own externalId carries the resolved handle).
 type adjustmentRequestDTO struct {
 	Balance           *adjustmentAmountDTO `json:"balance,omitempty"`
 	BalanceBounds     *adjustmentBoundsDTO `json:"balanceBounds,omitempty"`
@@ -1019,80 +1017,211 @@ func toAdjustmentDTO(r domain.AccountAdjustmentRecord) adjustmentDTO {
 // last); the raw lock is never serialized. All monetary and size values are
 // exact decimal strings passed through verbatim.
 type orderDTO struct {
-	At            time.Time `json:"at"`
-	ID            string    `json:"id"`
-	ExternalID    string    `json:"externalId"`
-	Account       string    `json:"account"`
-	Principal     string    `json:"principal,omitempty"`
-	BaseAsset     string    `json:"baseAsset"`
-	QuoteAsset    string    `json:"quoteAsset"`
-	Side          string    `json:"side"`
-	AmountKind    string    `json:"amountKind"`
-	AmountValue   string    `json:"amountValue"`
-	Price         string    `json:"price"`
-	Status        string    `json:"status"`
-	Source        string    `json:"source"`
-	DisplayPrices []string  `json:"displayPrices"`
+	At          time.Time `json:"at"`
+	ExternalID  string    `json:"externalId"`
+	Account     string    `json:"account"`
+	Principal   string    `json:"principal,omitempty"`
+	BaseAsset   string    `json:"baseAsset"`
+	QuoteAsset  string    `json:"quoteAsset"`
+	Side        string    `json:"side"`
+	AmountKind  string    `json:"amountKind"`
+	AmountValue string    `json:"amountValue"`
+	// LeavesQuantity is the persisted remaining open base quantity (exact decimal
+	// string). It is read from the stored order/report data as-is.
+	LeavesQuantity string   `json:"leavesQuantity"`
+	Price          string   `json:"price"`
+	Status         string   `json:"status"`
+	Source         string   `json:"source"`
+	DisplayPrices  []string `json:"displayPrices"`
+	// Signed is the order-level rollup: whether at least one of the order's events
+	// carries a persisted Ed25519-signed attestation.
+	Signed bool `json:"signed"`
 }
 
 // toOrderDTO maps a domain.Order onto the wire DTO. The display prices are
 // derived from the order's opaque lock blob via the engine seam; an undecodable
 // lock degrades gracefully to an empty list rather than failing the response,
 // since the lock is presentation-only and the order row is already authoritative.
-func toOrderDTO(o domain.Order) orderDTO {
+// signed reports whether the order's 1:1 approval envelope, when present,
+// carries a real Ed25519 signature; callers compute it from whatever approval
+// data they already have (the list query's joined alg, or a fetched detail).
+func toOrderDTO(o domain.Order, signed bool) orderDTO {
 	prices, err := native.LockDisplayPrices(o.Lock)
 	if err != nil || prices == nil {
 		prices = []string{}
 	}
 	return orderDTO{
-		At:            o.At,
-		ID:            o.ExternalID.String(),
-		ExternalID:    o.ExternalID.String(),
-		Account:       string(o.Account),
-		Principal:     o.Principal,
-		BaseAsset:     o.BaseAsset,
-		QuoteAsset:    o.QuoteAsset,
-		Side:          string(o.Side),
-		AmountKind:    string(o.AmountKind),
-		AmountValue:   o.AmountValue,
-		Price:         o.Price,
-		Status:        string(o.Status),
-		Source:        string(o.Source),
-		DisplayPrices: prices,
+		At:             o.At,
+		ExternalID:     o.ExternalID.String(),
+		Account:        string(o.Account),
+		Principal:      o.Principal,
+		BaseAsset:      o.BaseAsset,
+		QuoteAsset:     o.QuoteAsset,
+		Side:           string(o.Side),
+		AmountKind:     string(o.AmountKind),
+		AmountValue:    o.AmountValue,
+		LeavesQuantity: o.Leaves,
+		Price:          o.Price,
+		Status:         string(o.Status),
+		Source:         string(o.Source),
+		DisplayPrices:  prices,
+		Signed:         signed,
 	}
 }
 
-// orderApprovalDTO is the wire shape of an order's persisted signed approval
-// envelope. Token is the exact base64url envelope bytes; the rest is the
-// envelope metadata. Signed reports whether the envelope carries an Ed25519
+// eventAttestationDTO is the wire shape of an event's persisted signed
+// attestation envelope. Token is the exact base64url envelope bytes; the rest is
+// the envelope metadata. Signed reports whether the envelope carries an Ed25519
 // signature (alg "ed25519") versus an eSign-off envelope (alg "none").
-type orderApprovalDTO struct {
-	Token     string `json:"token"`
-	KeyID     string `json:"keyId"`
-	Alg       string `json:"alg"`
-	Mode      string `json:"mode"`
-	IssuedAt  string `json:"issuedAt"`
-	ExpiresAt string `json:"expiresAt"`
-	Signed    bool   `json:"signed"`
+type eventAttestationDTO struct {
+	Token       string `json:"token"`
+	KeyID       string `json:"keyId"`
+	Alg         string `json:"alg"`
+	RequestType string `json:"requestType"`
+	Mode        string `json:"mode"`
+	IssuedAt    string `json:"issuedAt"`
+	ExpiresAt   string `json:"expiresAt"`
+	Signed      bool   `json:"signed"`
 }
 
-// toOrderApprovalDTO maps an order's 1:1 persisted approval envelope onto the
-// wire DTO, or returns nil when the order carries no envelope (unsigned). The
-// envelope is read back from OrderDetail.Approval; no surrogate or engine id is
-// present in it.
-func toOrderApprovalDTO(a *domain.OrderApproval) *orderApprovalDTO {
+// toEventAttestationDTO maps an event's 1:1 persisted attestation envelope onto
+// the wire DTO, or returns nil when the event carries no envelope (unattested).
+// The envelope is read back from OrderEvent.Attestation; no surrogate or engine
+// id is present in it.
+func toEventAttestationDTO(a *domain.EventAttestation) *eventAttestationDTO {
 	if a == nil {
 		return nil
 	}
-	return &orderApprovalDTO{
-		Token:     a.Token,
-		KeyID:     a.KeyID,
-		Alg:       a.Alg,
-		Mode:      a.Mode,
-		IssuedAt:  a.IssuedAt,
-		ExpiresAt: a.ExpiresAt,
-		Signed:    a.Alg == "ed25519",
+	return &eventAttestationDTO{
+		Token:       a.Token,
+		KeyID:       a.KeyID,
+		Alg:         a.Alg,
+		RequestType: string(a.RequestType),
+		Mode:        a.Mode,
+		IssuedAt:    a.IssuedAt,
+		ExpiresAt:   a.ExpiresAt,
+		Signed:      eventAttestationSigned(a),
 	}
+}
+
+// eventAttestationSigned reports whether a persisted attestation carries a real
+// Ed25519 signature, as opposed to an eSign-off ("none") envelope or no envelope
+// at all.
+func eventAttestationSigned(a *domain.EventAttestation) bool {
+	return a != nil && a.Alg == "ed25519"
+}
+
+// --- event reproduction -----------------------------------------------------
+
+// eventReproductionESignDTO is the signing-mode facet of a reproduction bundle:
+// the current global eSign-off flag plus this event's own envelope alg and
+// whether it carries a real signature. It makes explicit whether the event was
+// signed ("ed25519") or issued under eSign-off ("none").
+type eventReproductionESignDTO struct {
+	Alg     string `json:"alg"`
+	NoESign bool   `json:"noESign"`
+	Signed  bool   `json:"signed"`
+}
+
+// eventReproductionRequestDTO is the request bound in the attestation payload,
+// reconstructed for reproduction from the decoded token. It surfaces the request
+// type and its material params so a verifier sees which request produced the
+// engine result. It carries no private material.
+type eventReproductionRequestDTO struct {
+	RequestType     string                `json:"requestType"`
+	OrderExternalID string                `json:"orderExternalId,omitempty"`
+	EventExternalID string                `json:"eventExternalId,omitempty"`
+	Instrument      string                `json:"instrument"`
+	Side            string                `json:"side"`
+	Quantity        string                `json:"quantity"`
+	AmountKind      string                `json:"amountKind"`
+	OrderType       string                `json:"orderType"`
+	LimitPrice      string                `json:"limitPrice"`
+	PriceCurrency   string                `json:"priceCurrency"`
+	AccountID       string                `json:"accountId"`
+	Verdict         string                `json:"verdict"`
+	Result          *attestationResultDTO `json:"result"`
+}
+
+// attestationResultDTO is the engine result section bound in the payload,
+// reconstructed for reproduction. Present only for request types carrying an
+// engine result beyond the submit verdict (execution report, confirm, cancel).
+type attestationResultDTO struct {
+	Outcome        string                `json:"outcome"`
+	FillQuantity   string                `json:"fillQuantity"`
+	FillPrice      string                `json:"fillPrice"`
+	FillLockPrice  string                `json:"fillLockPrice"`
+	LeavesQuantity string                `json:"leavesQuantity"`
+	OrderStatus    string                `json:"orderStatus"`
+	Blocks         []attestationBlockDTO `json:"blocks"`
+}
+
+// attestationBlockDTO is one engine-recorded account block bound in the payload
+// result, reconstructed for reproduction.
+type attestationBlockDTO struct {
+	Account string `json:"account"`
+	Code    string `json:"code"`
+	Reason  string `json:"reason"`
+	Details string `json:"details"`
+}
+
+// eventReproductionDTO is the controller-facing reproduction bundle for a single
+// order-history event's attestation: byte-for-byte what a robot / AI agent
+// received from the live APIs for the request that produced this event, assembled
+// from persisted state through the SAME serializers the live endpoints use so it
+// can never drift from real API output.
+//
+// A field is null when the event carries no persisted attestation envelope:
+// attestation, request, response, canonicalApproval and publicKey are then all
+// null and reason explains why. publicKey and signature are also null/empty
+// under eSign-off ("none"), where there is no signing key or signature to
+// reproduce.
+type eventReproductionDTO struct {
+	// RequestType is the trading request the attestation binds ("submit" |
+	// "execution_report" | "confirm" | "cancel"); empty when unattested.
+	RequestType string `json:"requestType"`
+	// Event is byte-identical to the GET /orders/{id} event body (same serializer).
+	Event orderEventDTO `json:"event"`
+	// Attestation is the persisted envelope metadata (token verbatim), or null
+	// when the event has no attestation.
+	Attestation *eventAttestationDTO `json:"attestation"`
+	// Request is the request bound in the attestation payload, reconstructed from
+	// the decoded token; null when the event has no attestation or the token
+	// cannot be decoded.
+	Request *eventReproductionRequestDTO `json:"request"`
+	// Response is the exact type-specific API response the robot received for this
+	// request, reconstructed from persisted state through the SAME serializer
+	// (token verbatim); null when the event has no attestation.
+	Response *eventReproductionResponseDTO `json:"response"`
+	// CanonicalApproval is the exact signed bytes as a string: the attestation
+	// payload in its canonical signed form, byte-identical to what was signed.
+	// Null when the event has no attestation or the token cannot be decoded.
+	CanonicalApproval *string `json:"canonicalApproval"`
+	// PublicKey is the public key matching this attestation's keyId, resolved
+	// rotation-safe by id. Null under alg "none" / no signature.
+	PublicKey *publicKeyMaterialDTO `json:"publicKey"`
+	// ESign reports the signing mode and whether this event was signed.
+	ESign eventReproductionESignDTO `json:"eSign"`
+	// Signature is the base64 envelope signature; empty under alg "none".
+	Signature string `json:"signature"`
+	// Reason explains a null attestation (e.g. the request was not attested);
+	// empty when an attestation is present.
+	Reason string `json:"reason"`
+}
+
+// eventReproductionResponseDTO is the exact type-specific API response the robot
+// received for the attested request, reconstructed through the same serializers.
+// Exactly one facet is populated, matching the request type. The token facet
+// carries the attestation token verbatim.
+type eventReproductionResponseDTO struct {
+	// SubmitResponse reproduces the POST /orders/submit response (submit).
+	SubmitResponse *approvalTokenDTO `json:"submitResponse,omitempty"`
+	// ExecutionReport reproduces the POST .../execution-reports response.
+	ExecutionReport *executionReportResponseDTO `json:"executionReport,omitempty"`
+	// Confirm reproduces the POST .../confirm response.
+	Confirm *orderMutationResponseDTO `json:"confirm,omitempty"`
+	// Cancel reproduces the POST .../cancel response.
+	Cancel *orderMutationResponseDTO `json:"cancel,omitempty"`
 }
 
 // --- order check ------------------------------------------------------------
@@ -1157,13 +1286,17 @@ func toCheckResultDTO(r domain.CheckResult) checkResultDTO {
 // orderEventDTO is the wire shape of one immutable order lifecycle event. The
 // payload fields are flattened in; only the ones relevant to the type are set.
 // Reject fields can also be present on fill events that caused an account block.
+// Signed reports whether the event carries an Ed25519-signed attestation, and
+// Alg is that attestation's algorithm ("ed25519" | "none"); Alg is empty when
+// the event is unattested, so the web can render a per-event key icon and open
+// the per-event reproduction.
 type orderEventDTO struct {
 	At            time.Time `json:"at"`
-	ID            string    `json:"id"`
 	ExternalID    string    `json:"externalId"`
 	Order         string    `json:"order"`
 	Type          string    `json:"type"`
 	Source        string    `json:"source"`
+	Alg           string    `json:"alg,omitempty"`
 	Principal     string    `json:"principal,omitempty"`
 	RejectCode    string    `json:"rejectCode,omitempty"`
 	RejectScope   string    `json:"rejectScope,omitempty"`
@@ -1173,14 +1306,15 @@ type orderEventDTO struct {
 	FillQuantity  string    `json:"fillQuantity,omitempty"`
 	FillPrice     string    `json:"fillPrice,omitempty"`
 	FillLockPrice string    `json:"fillLockPrice,omitempty"`
+	Signed        bool      `json:"signed"`
 }
 
 // toOrderEventDTO maps a domain.OrderEvent onto the wire DTO. Both the event and
 // its parent order are addressed by opaque external ids; no surrogate id appears.
+// The event's 1:1 attestation, when present, sets the signed flag and alg.
 func toOrderEventDTO(e domain.OrderEvent) orderEventDTO {
-	return orderEventDTO{
+	dto := orderEventDTO{
 		At:            e.At,
-		ID:            e.ExternalID.String(),
 		ExternalID:    e.ExternalID.String(),
 		Order:         e.Order.String(),
 		Type:          string(e.Type),
@@ -1195,6 +1329,11 @@ func toOrderEventDTO(e domain.OrderEvent) orderEventDTO {
 		FillPrice:     e.Payload.FillPrice,
 		FillLockPrice: e.Payload.FillLockPrice,
 	}
+	if e.Attestation != nil {
+		dto.Alg = e.Attestation.Alg
+		dto.Signed = eventAttestationSigned(e.Attestation)
+	}
+	return dto
 }
 
 // --- trade ------------------------------------------------------------------
@@ -1203,7 +1342,6 @@ func toOrderEventDTO(e domain.OrderEvent) orderEventDTO {
 // are exact decimal strings passed through verbatim.
 type tradeDTO struct {
 	At         time.Time `json:"at"`
-	ID         string    `json:"id"`
 	ExternalID string    `json:"externalId"`
 	Order      string    `json:"order"`
 	Account    string    `json:"account"`
@@ -1222,7 +1360,6 @@ type tradeDTO struct {
 func toTradeDTO(t domain.Trade) tradeDTO {
 	return tradeDTO{
 		At:         t.At,
-		ID:         t.ExternalID.String(),
 		ExternalID: t.ExternalID.String(),
 		Order:      t.Order.String(),
 		Account:    string(t.Account),
@@ -1262,6 +1399,28 @@ type executionBlockDTO struct {
 	Code    string `json:"code"`
 	Reason  string `json:"reason"`
 	Details string `json:"details"`
+}
+
+// executionReportResponseDTO is the response of POST
+// /orders/{externalId}/execution-reports: the engine result plus the attestation
+// token the robot receives as proof the engine passed this report. AttestationToken
+// is empty when attestation was skipped or failed best-effort.
+type executionReportResponseDTO struct {
+	Result           executionResultDTO `json:"result"`
+	AttestationToken string             `json:"attestationToken,omitempty"`
+	AttestationKeyID string             `json:"attestationKeyId,omitempty"`
+	Signed           bool               `json:"signed"`
+}
+
+// orderMutationResponseDTO is the response of POST /orders/{externalId}/confirm
+// and .../cancel: the resolved order plus the attestation token the robot
+// receives as proof the engine resolved this reservation. AttestationToken is
+// empty when attestation was skipped or failed best-effort.
+type orderMutationResponseDTO struct {
+	Order            orderDTO `json:"order"`
+	AttestationToken string   `json:"attestationToken,omitempty"`
+	AttestationKeyID string   `json:"attestationKeyId,omitempty"`
+	Signed           bool     `json:"signed"`
 }
 
 // toExecutionResultDTO maps an engine.ExecutionReportResult onto the wire DTO.
@@ -1319,12 +1478,24 @@ type publicKeyDTO struct {
 	PublicKey string `json:"publicKey"`
 }
 
+// publicKeyMaterialDTO is the identified public-key shape used by the
+// reproduction bundle and the per-key public endpoint. It carries the public key
+// paired with the id it was resolved by and its export format, so a caller can
+// resolve a token's embedded keyId to the exact public material. Private
+// material is NEVER present.
+type publicKeyMaterialDTO struct {
+	KeyID  string `json:"keyId"`
+	Alg    string `json:"alg"`
+	Format string `json:"format"`
+	Key    string `json:"key"`
+}
+
 // submitOrderTokenRequestDTO is the body of POST /orders/submit. Submit creates
 // the order from these fields: there is no prior persisting create. ExternalID
 // is the optional caller-supplied opaque public handle; when omitted the server
-// generates and returns one in the response. A supplied id must be a well-formed
-// 22-char base64url wire form (malformed is a 400) and unique (a duplicate is a
-// 409); it is never a surrogate or engine id.
+// generates and returns one in the response. A supplied id is accepted verbatim
+// and must be unique (a duplicate is a 409); it is never a surrogate or engine
+// id.
 type submitOrderTokenRequestDTO struct {
 	ID          string `json:"id,omitempty"`
 	ExternalID  string `json:"externalId,omitempty"`

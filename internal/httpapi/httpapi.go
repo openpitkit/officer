@@ -52,8 +52,10 @@ import (
 	"go.openpit.dev/officer/framework/businesscsv"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/node"
+	fwsigning "go.openpit.dev/officer/framework/signing"
 	"go.openpit.dev/officer/framework/store"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
+	appsigning "go.openpit.dev/officer/internal/signing"
 )
 
 // auditCapREST is the maximum number of audit rows the REST endpoint returns.
@@ -147,6 +149,7 @@ func RegisterRoutes(registry *httpx.RouteRegistry, svc Service, logs httpx.LogSo
 	register(registry, "orders.check.post", http.MethodPost, "/orders/check", handleCheckOrder(svc))
 	register(registry, "orders.list.get", http.MethodGet, "/orders", handleListOrders(svc))
 	register(registry, "orders.get", http.MethodGet, "/orders/{externalId}", handleGetOrder(svc))
+	register(registry, "orders.events.reproduction.get", http.MethodGet, "/orders/{externalId}/events/{eventId}/reproduction", handleGetOrderEventReproduction(svc))
 	register(registry, "orders.execution-reports.post", http.MethodPost, "/orders/{externalId}/execution-reports", handleApplyExecutionReport(svc))
 	register(registry, "trades.list.get", http.MethodGet, "/trades", handleListTrades(svc))
 
@@ -169,6 +172,7 @@ func RegisterRoutes(registry *httpx.RouteRegistry, svc Service, logs httpx.LogSo
 	register(registry, "signing.keys.import.post", http.MethodPost, "/signing/keys/import", handleImportSigningKey(svc))
 	register(registry, "signing.keys.list.get", http.MethodGet, "/signing/keys", handleListSigningKeys(svc))
 	register(registry, "signing.keys.active-public.get", http.MethodGet, "/signing/keys/active/public", handleGetActivePublicKey(svc))
+	register(registry, "signing.keys.public.get", http.MethodGet, "/signing/keys/{keyId}/public", handleGetSigningKeyPublic(svc))
 	register(registry, "signing.config.get", http.MethodGet, "/signing/config", handleGetSigningConfig(svc))
 	register(registry, "signing.config.put", http.MethodPut, "/signing/config", handleSetSigningConfig(svc))
 	register(registry, "orders.submit-token.post", http.MethodPost, "/orders/submit", handleSubmitOrderToken(svc))
@@ -691,7 +695,7 @@ func externalIDFromQuery(q url.Values) (domain.ExternalID, error) {
 		value = q.Get("externalId")
 	}
 	if value == "" {
-		return domain.ExternalID{}, nil
+		return domain.ExternalID(""), nil
 	}
 	return domain.ParseExternalID(value)
 }
@@ -709,44 +713,13 @@ func statusFilterFromQuery(q url.Values) (store.StatusFilter, error) {
 	}
 }
 
-// accountCountRangeFromQuery parses the group account-count range filter. It
-// honours the legacy has/none/all selector (accountCount=...) and the
-// from/to/between range form (accountCountMode/Min/Max).
 func accountCountRangeFromQuery(q url.Values) (store.CountRangeFilter, error) {
-	if legacy := q.Get("accountCount"); legacy != "" {
-		switch legacy {
-		case "all":
-			return store.CountRangeFilter{}, nil
-		case "has":
-			zero := 0
-			return store.CountRangeFilter{Min: &zero, MinExclusive: true}, nil
-		case "none":
-			zero := 0
-			return store.CountRangeFilter{Min: &zero, Max: &zero}, nil
-		default:
-			return store.CountRangeFilter{}, fmt.Errorf("invalid accountCount")
-		}
-	}
 	return countRangeFromQuery(
 		q, "accountCountMode", "accountCountMin", "accountCountMax",
 	)
 }
 
 func countRangeFilterFromQuery(q url.Values) (store.CountRangeFilter, error) {
-	if legacy := q.Get("positionCount"); legacy != "" {
-		switch legacy {
-		case "all":
-			return store.CountRangeFilter{}, nil
-		case "has":
-			zero := 0
-			return store.CountRangeFilter{Min: &zero, MinExclusive: true}, nil
-		case "none":
-			zero := 0
-			return store.CountRangeFilter{Min: &zero, Max: &zero}, nil
-		default:
-			return store.CountRangeFilter{}, fmt.Errorf("invalid positionCount")
-		}
-	}
 	return countRangeFromQuery(q, "positionCountMode", "positionCountMin", "positionCountMax")
 }
 
@@ -1316,19 +1289,7 @@ func orderStatusFromQuery(q url.Values) ([]domain.OrderStatus, error) {
 }
 
 func validOrderStatus(status domain.OrderStatus) bool {
-	switch status {
-	case domain.OrderStatusSubmitted,
-		domain.OrderStatusAccepted,
-		domain.OrderStatusRejected,
-		domain.OrderStatusCommitted,
-		domain.OrderStatusRolledBack,
-		domain.OrderStatusFilled,
-		domain.OrderStatusPartiallyFilled,
-		domain.OrderStatusCancelled:
-		return true
-	default:
-		return false
-	}
+	return domain.OrderStatusSupported(status)
 }
 
 func groupListFilterFromQuery(q url.Values) (store.GroupListFilter, error) {
@@ -2464,10 +2425,9 @@ func handleCreateMarketDataInstance(svc Service) http.HandlerFunc {
 			Credentials: req.Credentials,
 			Enabled:     req.Enabled,
 		}
-		// A caller-supplied external id is optional. When present it must be a
-		// well-formed wire form (a malformed one is a 400); the backend uses it
-		// verbatim and rejects a duplicate with 409. When absent the backend
-		// generates one and returns it on the instance.
+		// A caller-supplied external id is optional. When present, the backend
+		// uses it verbatim and rejects a duplicate with 409. When absent the
+		// backend generates one and returns it on the instance.
 		suppliedID := req.ID
 		if suppliedID == "" {
 			suppliedID = req.ExternalID
@@ -2981,10 +2941,9 @@ func handleApplyAdjustment(svc Service) http.HandlerFunc {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
-		// A caller-supplied external id is optional. When present it must be a
-		// well-formed wire form (a malformed one is a 400); the backend uses it
-		// verbatim and rejects a duplicate with 409. When absent the backend
-		// generates one and returns it on the record.
+		// A caller-supplied external id is optional. When present, the backend
+		// uses it verbatim and rejects a duplicate with 409. When absent the
+		// backend generates one and returns it on the record.
 		var externalID domain.ExternalID
 		suppliedID := req.ID
 		if suppliedID == "" {
@@ -3000,6 +2959,10 @@ func handleApplyAdjustment(svc Service) http.HandlerFunc {
 		record, err := svc.ApplyAdjustment(
 			r.Context(), id, externalID, fromAdjustmentRequestDTO(req))
 		if err != nil {
+			if errors.Is(err, domain.ErrNoChange) {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
 			httpx.WriteErr(w, err)
 			return
 		}
@@ -3095,8 +3058,22 @@ func handleSubmitOrder(svc Service) http.HandlerFunc {
 			httpx.WriteErr(w, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusCreated, map[string]any{"order": toOrderDTO(out)})
+		httpx.WriteJSON(w, http.StatusCreated,
+			map[string]any{"order": toOrderDTO(out, orderSignedByID(r.Context(), svc, out.ExternalID))})
 	}
+}
+
+// orderSignedByID reports the order-level rollup: whether the order named by id
+// currently carries at least one Ed25519-signed event attestation. It re-reads
+// the order detail because the mutation handlers (submit/confirm/cancel) only
+// get back the bare order; a lookup failure degrades to unsigned rather than
+// failing the response, since the mutation itself already succeeded.
+func orderSignedByID(ctx context.Context, svc Service, id domain.ExternalID) bool {
+	detail, err := svc.GetOrder(ctx, id.String())
+	if err != nil {
+		return false
+	}
+	return detail.Signed()
 }
 
 // handleCheckOrder handles POST /api/v1/orders/check. It runs the engine
@@ -3151,7 +3128,7 @@ func handleListOrders(svc Service) http.HandlerFunc {
 		}
 		dtos := make([]orderDTO, 0, len(orders.Rows))
 		for _, o := range orders.Rows {
-			dtos = append(dtos, toOrderDTO(o.Order))
+			dtos = append(dtos, toOrderDTO(o.Order, o.Signed))
 		}
 		httpx.WriteJSON(w, http.StatusOK, map[string]any{
 			"orders": dtos,
@@ -3183,17 +3160,270 @@ func handleGetOrder(svc Service) http.HandlerFunc {
 		for _, t := range detail.Trades {
 			trades = append(trades, toTradeDTO(t))
 		}
+		// signed is the order-level rollup (any event carries a signed
+		// attestation); per-event attestation metadata rides on each event DTO.
 		body := map[string]any{
-			"order":  toOrderDTO(detail.Order),
+			"order":  toOrderDTO(detail.Order, detail.Signed()),
 			"events": events,
 			"trades": trades,
 		}
-		// The approval envelope is omitted entirely when the order is unsigned, so
-		// the wire shape distinguishes "no envelope" from a present one.
-		if approval := toOrderApprovalDTO(detail.Approval); approval != nil {
-			body["approval"] = approval
-		}
 		httpx.WriteJSON(w, http.StatusOK, body)
+	}
+}
+
+// handleGetOrderEventReproduction handles GET
+// /api/v1/orders/{externalId}/events/{eventId}/reproduction. It returns the
+// controller-facing reproduction bundle for one order-history event's
+// attestation: byte-for-byte what a robot / AI agent received from the live APIs
+// for the request that produced this event, assembled from persisted state
+// through the SAME serializers the live endpoints use plus the same signing code
+// (DecodeEnvelope / CanonicalBytes) so the panel can never drift from real API
+// output. Nothing is re-issued or re-signed. Only public artifacts are exposed;
+// private key material never appears.
+//
+// It shares the order-read auth seam: the request reaches here only through the
+// same middleware/authorizer as GET /orders/{id}, and GetOrder enforces whatever
+// account/tenant scoping order reads already apply, so a controller cannot
+// reproduce an event they could not already read.
+func handleGetOrderEventReproduction(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		orderID, err := httpx.PathOrderExternalID(r)
+		if err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		eventID, err := httpx.PathOrderEventID(r)
+		if err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		// Reproduction-permission seam: a future controller/reproduction capability
+		// check slots in here, gating this endpoint by capability without
+		// restructuring. It is intentionally the single guard point; the RBAC system
+		// itself is out of scope for this change.
+		detail, err := svc.GetOrder(r.Context(), orderID)
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		var event *domain.OrderEvent
+		for i := range detail.Events {
+			if detail.Events[i].ExternalID.String() == eventID {
+				event = &detail.Events[i]
+				break
+			}
+		}
+		if event == nil {
+			httpx.WriteErrMsg(w, http.StatusNotFound, "not_found",
+				"order event not found")
+			return
+		}
+		bundle, err := buildEventReproduction(r.Context(), svc, *event)
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		httpx.WriteJSON(w, http.StatusOK, bundle)
+	}
+}
+
+// buildEventReproduction assembles the reproduction bundle for one event. It
+// reuses the live serializers for byte-identity: toOrderEventDTO for the event,
+// toEventAttestationDTO for the attestation metadata, and a reconstructed
+// type-specific response DTO that reproduces the exact live API response (token
+// verbatim). The bound request and the canonical signed bytes and base64
+// signature are recovered from the persisted token with the same signing code
+// that produced it (DecodeEnvelope + CanonicalBytes). The public key is resolved
+// rotation-safe by the attestation's keyId. No re-issue or re-sign occurs.
+func buildEventReproduction(
+	ctx context.Context, svc Service, event domain.OrderEvent,
+) (eventReproductionDTO, error) {
+	bundle := eventReproductionDTO{
+		Event: toOrderEventDTO(event),
+		ESign: eventReproductionESignDTO{
+			Signed: eventAttestationSigned(event.Attestation),
+		},
+	}
+	noESign, err := svc.GetNoESign(ctx)
+	if err != nil {
+		return eventReproductionDTO{}, err
+	}
+	bundle.ESign.NoESign = noESign
+
+	att := event.Attestation
+	if att == nil {
+		// The request that produced this event was not attested (e.g. an unsigned
+		// intermediate event, or attestation failed best-effort). The attestation,
+		// request, response, canonicalApproval and publicKey are null; reason
+		// documents the absence so the client need not infer it.
+		bundle.Reason = "event has no persisted attestation envelope"
+		return bundle, nil
+	}
+	bundle.RequestType = string(att.RequestType)
+	bundle.ESign.Alg = att.Alg
+	bundle.Attestation = toEventAttestationDTO(att)
+
+	// Decode the persisted token with the same signing code that built it and
+	// expose the payload in its exact canonical signed form and the bound request.
+	// This is byte-identical to what was signed; it is never re-serialized here.
+	env, err := appsigning.DecodeEnvelope(att.Token)
+	if err != nil {
+		// A token that fails to decode is presentation-only degradation: the event
+		// row and its attestation metadata stay authoritative, so the bundle still
+		// returns with the canonical bytes, request, response and public key omitted.
+		bundle.Reason = "persisted attestation token could not be decoded"
+		return bundle, nil
+	}
+	bundle.Request = toEventReproductionRequestDTO(env.Approval)
+	bundle.Response = toEventReproductionResponseDTO(event, att, env.Approval)
+
+	canon, err := appsigning.CanonicalBytes(env.Approval)
+	if err != nil {
+		return eventReproductionDTO{}, err
+	}
+	canonStr := string(canon)
+	bundle.CanonicalApproval = &canonStr
+	bundle.Signature = env.Signature
+
+	// Resolve the public key by the envelope's own keyId, not the active key, so a
+	// token signed under a since-rotated key reproduces the exact key that signed
+	// it. Under alg "none" there is no signing key or signature to reproduce.
+	if env.Approval.Alg == fwsigning.AlgEd25519 && env.KeyID != "" {
+		pub, err := svc.PublicKeyByID(ctx, env.KeyID, "pem-pkcs8")
+		if err != nil {
+			return eventReproductionDTO{}, err
+		}
+		bundle.PublicKey = &publicKeyMaterialDTO{
+			KeyID:  env.KeyID,
+			Alg:    env.Approval.Alg,
+			Format: "pem-pkcs8",
+			Key:    pub,
+		}
+	}
+	return bundle, nil
+}
+
+// toEventReproductionRequestDTO reconstructs the request bound in an attestation
+// payload for reproduction: the request type and its material params plus the
+// engine result section when the payload carries one. Every issued payload
+// stamps its request type, so an empty one is an unsupported payload and yields
+// no reconstructed request (nil), matching how the response facet is omitted for
+// an unrecognized request type.
+func toEventReproductionRequestDTO(p domain.ApprovalPayload) *eventReproductionRequestDTO {
+	if p.RequestType == "" {
+		return nil
+	}
+	dto := &eventReproductionRequestDTO{
+		RequestType:     p.RequestType,
+		OrderExternalID: p.OrderExternalID,
+		EventExternalID: p.EventExternalID,
+		Instrument:      p.Instrument,
+		Side:            p.Side,
+		Quantity:        p.Quantity,
+		AmountKind:      p.AmountKind,
+		OrderType:       p.OrderType,
+		LimitPrice:      p.LimitPrice,
+		PriceCurrency:   p.PriceCurrency,
+		AccountID:       p.AccountID,
+		Verdict:         p.Verdict,
+	}
+	if p.Result != nil {
+		blocks := make([]attestationBlockDTO, 0, len(p.Result.Blocks))
+		for _, b := range p.Result.Blocks {
+			blocks = append(blocks, attestationBlockDTO{
+				Account: b.Account,
+				Code:    b.Code,
+				Reason:  b.Reason,
+				Details: b.Details,
+			})
+		}
+		dto.Result = &attestationResultDTO{
+			Outcome:        p.Result.Outcome,
+			FillQuantity:   p.Result.FillQuantity,
+			FillPrice:      p.Result.FillPrice,
+			FillLockPrice:  p.Result.FillLockPrice,
+			LeavesQuantity: p.Result.LeavesQuantity,
+			OrderStatus:    p.Result.OrderStatus,
+			Blocks:         blocks,
+		}
+	}
+	return dto
+}
+
+// toEventReproductionResponseDTO reconstructs the exact type-specific live API
+// response the robot received for the attested request. The token is carried
+// verbatim in the response's attestation-token field, matching the live handler.
+// Only the facet matching the request type is populated.
+func toEventReproductionResponseDTO(
+	event domain.OrderEvent, att *domain.EventAttestation, p domain.ApprovalPayload,
+) *eventReproductionResponseDTO {
+	out := &eventReproductionResponseDTO{}
+	switch att.RequestType {
+	case domain.AttestationRequestSubmit:
+		out.SubmitResponse = &approvalTokenDTO{
+			Token:           att.Token,
+			KeyID:           att.KeyID,
+			ExpiresAt:       att.ExpiresAt,
+			OrderExternalID: event.Order.String(),
+		}
+	case domain.AttestationRequestExecutionReport:
+		out.ExecutionReport = &executionReportResponseDTO{
+			Result:           executionResultFromPayload(p),
+			AttestationToken: att.Token,
+			AttestationKeyID: att.KeyID,
+			Signed:           eventAttestationSigned(att),
+		}
+	case domain.AttestationRequestConfirm:
+		out.Confirm = orderMutationResponseFromPayload(event, att, p)
+	case domain.AttestationRequestCancel:
+		out.Cancel = orderMutationResponseFromPayload(event, att, p)
+	}
+	return out
+}
+
+// executionResultFromPayload reconstructs the execution result DTO from the
+// signed payload's result section (blocks and per-asset balance outcomes are not
+// re-derived; only the blocks bound in the payload are surfaced).
+func executionResultFromPayload(p domain.ApprovalPayload) executionResultDTO {
+	blocks := make([]executionBlockDTO, 0)
+	if p.Result != nil {
+		for _, b := range p.Result.Blocks {
+			blocks = append(blocks, executionBlockDTO{
+				Account: b.Account,
+				Code:    b.Code,
+				Reason:  b.Reason,
+				Details: b.Details,
+			})
+		}
+	}
+	return executionResultDTO{Blocks: blocks, Outcomes: make([]executionOutcomeDTO, 0)}
+}
+
+// orderMutationResponseFromPayload reconstructs the confirm/cancel response DTO
+// from persisted state. The order is rebuilt from the payload's bound params and
+// result status; the token is carried verbatim.
+func orderMutationResponseFromPayload(
+	event domain.OrderEvent, att *domain.EventAttestation, p domain.ApprovalPayload,
+) *orderMutationResponseDTO {
+	status := ""
+	if p.Result != nil {
+		status = p.Result.OrderStatus
+	}
+	return &orderMutationResponseDTO{
+		Order: orderDTO{
+			ExternalID:    event.Order.String(),
+			Account:       p.AccountID,
+			Side:          p.Side,
+			AmountKind:    p.AmountKind,
+			AmountValue:   p.Quantity,
+			Price:         p.LimitPrice,
+			Status:        status,
+			DisplayPrices: []string{},
+			Signed:        eventAttestationSigned(att),
+		},
+		AttestationToken: att.Token,
+		AttestationKeyID: att.KeyID,
+		Signed:           eventAttestationSigned(att),
 	}
 }
 
@@ -3214,45 +3444,61 @@ func handleApplyExecutionReport(svc Service) http.HandlerFunc {
 			LockPrice      string `json:"lockPrice"`
 			RealizedPnl    string `json:"realizedPnl"`
 			Fee            string `json:"fee"`
+			Status         string `json:"status"`
 			Force          bool   `json:"force"`
-			Final          bool   `json:"final"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			return
+		}
+		var status domain.OrderStatus
+		if req.Status == "" {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "status is required")
+			return
+		}
+		status = domain.OrderStatus(req.Status)
+		if !validOrderStatus(status) {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid status")
+			return
+		}
+		hasQuantity := req.Quantity != ""
+		hasPrice := req.Price != ""
+		if hasQuantity != hasPrice {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation",
+				"quantity and price must be provided together")
 			return
 		}
 		if req.LeavesQuantity == "" {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "leavesQuantity is required")
 			return
 		}
-		// The parent order supplies the account, instrument, and side; the report
-		// body carries only the fill itself.
-		detail, err := svc.GetOrder(r.Context(), id)
+		orderID, err := domain.ParseExternalID(id)
 		if err != nil {
-			httpx.WriteErr(w, err)
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
 		in := domain.ExecutionReportInput{
-			BaseAsset:      detail.Order.BaseAsset,
-			QuoteAsset:     detail.Order.QuoteAsset,
 			FillQuantity:   req.Quantity,
 			FillPrice:      req.Price,
 			LeavesQuantity: req.LeavesQuantity,
 			LockPrice:      req.LockPrice,
 			RealizedPnl:    req.RealizedPnl,
 			Fee:            req.Fee,
-			Account:        detail.Order.Account,
-			Side:           detail.Order.Side,
-			Order:          detail.Order.ExternalID,
+			Order:          orderID,
+			OrderStatus:    status,
 			Force:          req.Force,
-			Final:          req.Final,
 		}
-		result, err := svc.ApplyExecutionReport(r.Context(), in)
+		result, att, err := svc.ApplyExecutionReport(r.Context(), in)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusCreated, map[string]any{"result": toExecutionResultDTO(result)})
+		httpx.WriteJSON(w, http.StatusCreated, executionReportResponseDTO{
+			Result:           toExecutionResultDTO(result),
+			AttestationToken: att.Token,
+			AttestationKeyID: att.KeyID,
+			Signed:           att.Signed,
+		})
 	}
 }
 
@@ -3346,14 +3592,8 @@ func handleListSigningKeys(svc Service) http.HandlerFunc {
 // (pem-pkcs8 | openssh | raw-base64); the default is pem-pkcs8.
 func handleGetActivePublicKey(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		format := r.URL.Query().Get("format")
-		if format == "" {
-			format = "pem-pkcs8"
-		}
-		switch format {
-		case "pem-pkcs8", "openssh", "raw-base64":
-			// valid
-		default:
+		format := signingKeyFormatOrDefault(r)
+		if !validSigningKeyFormat(format) {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "signing",
 				"format must be pem-pkcs8, openssh, or raw-base64")
 			return
@@ -3364,6 +3604,61 @@ func handleGetActivePublicKey(svc Service) http.HandlerFunc {
 			return
 		}
 		httpx.WriteJSON(w, http.StatusOK, publicKeyDTO{PublicKey: pub})
+	}
+}
+
+// handleGetSigningKeyPublic handles GET /api/v1/signing/keys/{keyId}/public. It
+// resolves the public key by id (rotation-safe: not the active key), so the
+// reproduction panel's paste-to-verify can resolve the keyId embedded in any
+// pasted token, including one signed under a since-rotated key. The optional
+// ?format= parameter selects the export format (pem-pkcs8 | openssh |
+// raw-base64); the default is pem-pkcs8. Only public material is ever returned;
+// an unknown id is a 404.
+func handleGetSigningKeyPublic(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		keyID, err := httpx.PathSigningKeyID(r)
+		if err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		format := signingKeyFormatOrDefault(r)
+		if !validSigningKeyFormat(format) {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "signing",
+				"format must be pem-pkcs8, openssh, or raw-base64")
+			return
+		}
+		pub, err := svc.PublicKeyByID(r.Context(), keyID, format)
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		httpx.WriteJSON(w, http.StatusOK, publicKeyMaterialDTO{
+			KeyID:  keyID,
+			Alg:    "ed25519",
+			Format: format,
+			Key:    pub,
+		})
+	}
+}
+
+// signingKeyFormatOrDefault reads the ?format= query parameter, defaulting to
+// pem-pkcs8 when absent.
+func signingKeyFormatOrDefault(r *http.Request) string {
+	format := r.URL.Query().Get("format")
+	if format == "" {
+		return "pem-pkcs8"
+	}
+	return format
+}
+
+// validSigningKeyFormat reports whether format is a supported public-key export
+// format.
+func validSigningKeyFormat(format string) bool {
+	switch format {
+	case "pem-pkcs8", "openssh", "raw-base64":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -3430,10 +3725,9 @@ func handleSubmitOrderToken(svc Service) http.HandlerFunc {
 			AmountValue: req.AmountValue,
 			Price:       req.Price,
 		}
-		// A caller-supplied external id is optional. When present it must be a
-		// well-formed wire form (a malformed one is a 400); the backend uses it
-		// verbatim and rejects a duplicate with 409. When absent the backend
-		// generates one and returns it.
+		// A caller-supplied external id is optional. When present, the backend
+		// uses it verbatim and rejects a duplicate with 409. When absent the
+		// backend generates one and returns it.
 		suppliedID := req.ID
 		if suppliedID == "" {
 			suppliedID = req.ExternalID
@@ -3479,13 +3773,18 @@ func handleConfirmExecution(svc Service) http.HandlerFunc {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "signing", "token is required")
 			return
 		}
-		order, err := svc.ConfirmExecution(
+		order, att, err := svc.ConfirmExecution(
 			r.Context(), orderID, req.Token, req.Force)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{"order": toOrderDTO(order)})
+		httpx.WriteJSON(w, http.StatusOK, orderMutationResponseDTO{
+			Order:            toOrderDTO(order, orderSignedByID(r.Context(), svc, order.ExternalID)),
+			AttestationToken: att.Token,
+			AttestationKeyID: att.KeyID,
+			Signed:           att.Signed,
+		})
 	}
 }
 
@@ -3508,13 +3807,18 @@ func handleCancelOrder(svc Service) http.HandlerFunc {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "signing", "token is required")
 			return
 		}
-		order, err := svc.CancelOrder(
+		order, att, err := svc.CancelOrder(
 			r.Context(), orderID, req.Token, req.Reason, req.Force)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{"order": toOrderDTO(order)})
+		httpx.WriteJSON(w, http.StatusOK, orderMutationResponseDTO{
+			Order:            toOrderDTO(order, orderSignedByID(r.Context(), svc, order.ExternalID)),
+			AttestationToken: att.Token,
+			AttestationKeyID: att.KeyID,
+			Signed:           att.Signed,
+		})
 	}
 }
 

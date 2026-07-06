@@ -429,7 +429,7 @@ func TestAuditListRowsKeysetPageFilter(t *testing.T) {
 		"row-other": "2026-01-04T00:00:00Z",
 	}
 	for detail, at := range times {
-		if _, err := r.db().ExecContext(
+		if _, err := r.rawDB().ExecContext(
 			ctx, `UPDATE audit SET at = ? WHERE detail = ?`, at, detail,
 		); err != nil {
 			t.Fatalf("update audit at %s: %v", detail, err)
@@ -499,7 +499,7 @@ func TestAuditListUsesIndexNoTempSort(t *testing.T) {
 		t.Helper()
 		clauses, args := auditListClauses(filter)
 		query, queryArgs := buildAuditListQuery(clauses, args, filter.Page)
-		rows, err := r.db().QueryContext(
+		rows, err := r.rawDB().QueryContext(
 			ctx, "EXPLAIN QUERY PLAN "+query, queryArgs...,
 		)
 		if err != nil {
@@ -622,7 +622,7 @@ func deleteAccountRaw(
 ) {
 	t.Helper()
 	r := rs.(*realmStore)
-	res, err := r.db().ExecContext(
+	res, err := r.rawDB().ExecContext(
 		ctx, `DELETE FROM account WHERE code = ?`, code.String(),
 	)
 	if err != nil {

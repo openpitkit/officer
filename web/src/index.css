@@ -584,19 +584,6 @@ Please see https://openpit.dev and the OWNERS file for details.
     min-width: 2.25rem;
   }
 
-  /* Row-action buttons (inside table rows) collapse to icon-only squares in
-     the pro terminal density; the label stays as the accessible name. */
-  [data-density="terminal"] .row-action {
-    gap: 0;
-    padding-left: 0;
-    padding-right: 0;
-    min-height: var(--dens-row-action-size);
-    width: var(--dens-row-action-size);
-  }
-  [data-density="terminal"] .row-action .row-action-label {
-    display: none;
-  }
-
   [data-density="terminal"] .min-h-\[7rem\] {
     min-height: var(--dens-textarea-min-h);
   }

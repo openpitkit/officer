@@ -53,20 +53,17 @@ import (
 func (r *realmStore) ApplyBusinessCSVImport(
 	ctx context.Context, in fwstore.BusinessCSVImport,
 ) error {
-	err := r.applyBusinessCSVImport(ctx, in)
-	if err != nil && !isExpectedDomainError(err) {
-		// Begin/commit/exec failures mean the store is no longer trustworthy;
-		// fire the process-level fatal hook. Domain rejections (bad codes etc.)
-		// stay regular errors the caller maps to a 4xx.
-		r.store.fatal(err)
-	}
-	return err
+	return r.applyBusinessCSVImport(ctx, in)
 }
 
 func (r *realmStore) applyBusinessCSVImport(
 	ctx context.Context, in fwstore.BusinessCSVImport,
 ) error {
-	tx, err := r.db().BeginTx(ctx, nil)
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin business CSV import: %w", err)
 	}

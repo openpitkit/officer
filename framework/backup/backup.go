@@ -281,15 +281,14 @@ type SigningConfigEntry struct {
 	Value string `json:"value"`
 }
 
-// OrderRecord bundles a portable order with its optional 1:1 signed approval, so
-// the approval travels and restores with the order it belongs to. The order is
-// the Phase A domain order, already portable (external id, code/external-id links
-// and the opaque SDK lock blob; no surrogate or engine id).
+// OrderRecord is a portable order row. It is the Phase A domain order, already
+// portable (external id, code/external-id links and the opaque SDK lock blob; no
+// surrogate or engine id). Signed attestations travel per-event: each portable
+// OrderEvent carries its own 1:1 attestation, so they restore with the event
+// they belong to.
 type OrderRecord struct {
 	// Order is the portable order row.
 	Order domain.Order `json:"order"`
-	// Approval is the order's 1:1 signed approval envelope; nil when unsigned.
-	Approval *domain.OrderApproval `json:"approval,omitempty"`
 }
 
 // Data carries the portable rows of an archive. Dictionary sections are listed
@@ -386,29 +385,47 @@ func Filename(createdAt time.Time) string {
 		createdAt.UTC().Format("20060102T150405Z") + ".json"
 }
 
+// RuntimeSection reports whether restoring section changes live runtime state,
+// so a restore that writes at least one of its rows must rebuild the engine and
+// reconnect the market-data sinks. The accounts+groups, positions, risk-limits
+// and market-data sections are projected into the live engine resolver; general/
+// user settings, activity history and the audit log are observational.
+//
+// The shared support dictionaries (asset classes, assets, principals) are NOT a
+// runtime section: they travel with every restore for foreign-key resolution but
+// are not part of the engine snapshot, so writing one never rebuilds the engine.
+func RuntimeSection(section Section) bool {
+	switch section {
+	case SectionAccountsGroups,
+		SectionPositions,
+		SectionRiskLimits,
+		SectionMarketData,
+		SectionMarketDataQuotes:
+		return true
+	default:
+		return false
+	}
+}
+
 // TouchesRuntime reports whether restoring scope changes live runtime state and
 // therefore requires the engine to be rebuilt and the market-data sinks
-// reconnected. It is the scope-level half of the engine-rebuild signal; the
-// store sets RestoreSummary.RestartRequired to match when such a section is
-// actually restored.
+// reconnected. It is the scope-level half of the engine-rebuild signal.
 //
-// It evaluates the caller's explicitly requested sections, NOT the parent
-// dictionaries Normalize force-includes for foreign-key resolution: an
-// audit-only or activity-history-only restore pulls in the accounts+groups
-// dictionary so its rows resolve, but that resolution aid alone is observational
-// and must not flip the restart signal.
+// It evaluates the sections carried in scope as given. Passed the caller's raw
+// requested scope it answers "did the caller ask for a runtime section"; passed
+// scope.Normalize() it answers "could this restore write a runtime dictionary",
+// since Normalize force-includes the accounts+groups (and market-data) parent
+// sections an account-addressed restore lands to keep foreign keys resolving. The
+// node and backend decide the restore lock and market-data reconnect from the
+// normalized scope so any runtime write runs under the exclusive gate; the store
+// reports RestartRequired from the rows actually applied, so a force-included
+// parent that inserts nothing does not needlessly rebuild.
 func TouchesRuntime(scope Scope) bool {
 	if scope.All {
 		return true
 	}
-	requested := normalizeSections(scope.Sections)
-	for _, section := range requested {
-		switch section {
-		case SectionAccountsGroups,
-			SectionPositions,
-			SectionRiskLimits,
-			SectionMarketData,
-			SectionMarketDataQuotes:
+	for _, section := range normalizeSections(scope.Sections) {
+		if RuntimeSection(section) {
 			return true
 		}
 	}

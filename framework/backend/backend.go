@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -952,7 +953,7 @@ func (s *Service) ListMarketData(ctx context.Context) (MarketDataStatus, error) 
 	if err != nil {
 		return MarketDataStatus{}, fmt.Errorf("backend: list market-data instances: %w", err)
 	}
-	quotes, err := n.ListMarketDataQuotes(ctx, domain.ExternalID{})
+	quotes, err := n.ListMarketDataQuotes(ctx, domain.ExternalID(""))
 	if err != nil {
 		return MarketDataStatus{}, fmt.Errorf("backend: list market-data quotes: %w", err)
 	}
@@ -1839,7 +1840,7 @@ func (s *Service) ApplyAdjustment(
 // import needs to round-trip realized P&L that the engine adjustment request
 // cannot express as an absolute field.
 func (s *Service) ImportPositionSnapshot(
-	ctx context.Context, snapshot domain.Balance,
+	ctx context.Context, externalID domain.ExternalID, snapshot domain.Balance,
 ) (domain.AccountAdjustmentRecord, error) {
 	if err := domain.ValidateAccountID(snapshot.Account); err != nil {
 		return domain.AccountAdjustmentRecord{}, err
@@ -1851,7 +1852,8 @@ func (s *Service) ImportPositionSnapshot(
 	if err != nil {
 		return domain.AccountAdjustmentRecord{}, fmt.Errorf("backend: route account: %w", err)
 	}
-	return n.ImportPositionSnapshot(ctx, keyFor(snapshot.Account), snapshot, auth.CallerFromContext(ctx))
+	return n.ImportPositionSnapshot(
+		ctx, keyFor(snapshot.Account), externalID, snapshot, auth.CallerFromContext(ctx))
 }
 
 // ListBalances returns the balance rows for the realm, optionally narrowed to a
@@ -2055,118 +2057,106 @@ func (s *Service) SubmitOrder(
 	if err != nil {
 		return domain.Order{}, err
 	}
-	// Sign the engine's pre-trade verdict (accept or reject) and persist the
-	// envelope into a separate 1:1 order_approvals row; the recorded order is
-	// returned unchanged. Signing is additive: money/commit behaviour is
-	// unchanged, and the recorded order is already durable, so a signing or
-	// persistence failure never rolls the order back - the envelope is best-effort.
-	order = s.signOrderVerdict(ctx, n, key, order)
+	// Sign the engine's pre-trade verdict (accept or reject) and stamp the
+	// attestation onto the verdict event; the recorded order is returned
+	// unchanged. Signing is additive: money/commit behaviour is unchanged, and the
+	// recorded order is already durable, so a signing or persistence failure never
+	// rolls the order back - the attestation is best-effort.
+	s.attestSubmitVerdict(ctx, n, key, order)
 	return order, nil
 }
 
-// signOrderVerdict signs the recorded order's pre-trade verdict and persists the
-// envelope (write-once) plus an approval_issued audit. The signed approval lives
-// in the 1:1 order_approvals row and is read back via OrderDetail.Approval; the
-// returned order is unchanged. On any signing or persistence error it swallows
-// the error and returns the order unchanged (the order is already durable — the
-// envelope is best-effort and must not fail the submit).
-func (s *Service) signOrderVerdict(
+// attestSubmitVerdict signs the recorded order's pre-trade verdict and stamps the
+// attestation (write-once) onto the verdict event. On signing or persistence
+// errors it records attestation_failed and returns: the order is already
+// durable, so attestation capture must not fail the submit.
+func (s *Service) attestSubmitVerdict(
 	ctx context.Context, n node.Node, key node.Key, order domain.Order,
-) domain.Order {
-	signed, err := s.buildOrderEnvelope(ctx, n, order)
+) {
+	payload, err := s.buildSubmitPayload(ctx, n, order)
 	if err != nil {
-		return order
+		s.reportAttestationFailure(ctx, n, key, order, domain.AttestationRequestSubmit, err)
+		return
 	}
-	if err := n.PersistOrderApproval(ctx, key, order.ExternalID, signed); err != nil {
-		return order
+	eventType := domain.OrderEventPreTradeAccepted
+	if order.Status == domain.OrderStatusRejected {
+		eventType = domain.OrderEventPreTradeRejected
 	}
-	_ = s.auditApproval(ctx, n, key, domain.AuditActionApprovalIssued,
-		fmt.Sprintf("issue approval order %s verdict=%s",
-			order.ExternalID.String(), orderVerdict(order.Status)))
-	return order
+	if _, err := s.attestEvent(
+		ctx, n, key, order.ExternalID, eventType,
+		domain.AttestationRequestSubmit, payload,
+	); err != nil {
+		s.reportAttestationFailure(ctx, n, key, order, domain.AttestationRequestSubmit, err)
+	}
 }
 
-// buildOrderEnvelope assembles, signs, and returns the approval envelope for the
-// recorded order's verdict. Accept binds the order's settlement lock price as the
-// estimate; reject reads the first pre-trade reject from the order's events and
-// binds it onto the payload. The payload mode is always "immediate": the decision
-// is final now (this is the commit-only panel path, not a held approval).
-func (s *Service) buildOrderEnvelope(
+// buildSubmitPayload assembles the submit verdict payload for the recorded
+// order. Accept binds the order's settlement lock price as the estimate; reject
+// reads the first pre-trade reject from the order's events and binds it. The
+// payload mode is always "immediate": the decision is final now (this is the
+// commit-only panel path, not a held approval).
+func (s *Service) buildSubmitPayload(
 	ctx context.Context, n node.Node, order domain.Order,
-) (domain.OrderApproval, error) {
-	signer, err := s.signerOrErr()
-	if err != nil {
-		return domain.OrderApproval{}, err
-	}
+) (domain.ApprovalPayload, error) {
 	approvalID, err := newNonce()
 	if err != nil {
-		return domain.OrderApproval{}, err
+		return domain.ApprovalPayload{}, err
 	}
 	nonce, err := newNonce()
 	if err != nil {
-		return domain.OrderApproval{}, err
+		return domain.ApprovalPayload{}, err
 	}
 	issuedAt := time.Now().UTC()
 	expiresAt := issuedAt.Add(defaultTokenTTL)
 
-	var payload domain.ApprovalPayload
 	if order.Status == domain.OrderStatusRejected {
 		reject, rerr := s.firstOrderReject(ctx, n, order.ExternalID)
 		if rerr != nil {
-			return domain.OrderApproval{}, rerr
+			return domain.ApprovalPayload{}, rerr
 		}
-		payload = buildRejectApprovalPayload(
-			order, SubmitModeImmediate, approvalID, reject, issuedAt, expiresAt, nonce)
-	} else {
-		// Accept: the order's settlement lock price is the estimate. The engine
-		// captured a single lock price for the spot order, persisted as the opaque
-		// SDK lock blob; derive the display prices from it via the lock seam and
-		// take the settlement leg (the last entry) as the estimate.
-		if s.lockSettlement == nil {
-			return domain.OrderApproval{}, fmt.Errorf(
-				"backend: lock settlement estimator not configured: %w",
-				domain.ErrNotImplemented)
-		}
-		estimate, estimateSource, lerr := s.lockSettlement(order.Lock, order)
-		if lerr != nil {
-			return domain.OrderApproval{}, lerr
-		}
-		payload = buildApprovalPayload(
-			order, SubmitModeImmediate, approvalID, estimate,
-			estimateSource, issuedAt, expiresAt, nonce)
+		return buildRejectApprovalPayload(
+			order, SubmitModeImmediate, approvalID, reject, issuedAt, expiresAt, nonce), nil
 	}
+	// Accept: the order's settlement lock price is the estimate. The engine
+	// captured a single lock price for the spot order, persisted as the opaque
+	// SDK lock blob; derive the display prices from it via the lock seam and take
+	// the settlement leg (the last entry) as the estimate.
+	if s.lockSettlement == nil {
+		return domain.ApprovalPayload{}, fmt.Errorf(
+			"backend: lock settlement estimator not configured: %w",
+			domain.ErrNotImplemented)
+	}
+	estimate, estimateSource, lerr := s.lockSettlement(order.Lock, order)
+	if lerr != nil {
+		return domain.ApprovalPayload{}, lerr
+	}
+	return buildApprovalPayload(
+		order, SubmitModeImmediate, approvalID, estimate,
+		estimateSource, issuedAt, expiresAt, nonce), nil
+}
 
-	off, err := signer.NoESign(ctx)
-	if err != nil {
-		return domain.OrderApproval{}, err
+func (s *Service) reportAttestationFailure(
+	ctx context.Context,
+	n node.Node,
+	key node.Key,
+	order domain.Order,
+	requestType domain.AttestationRequestType,
+	err error,
+) {
+	slog.ErrorContext(ctx, "event attestation failed",
+		"order", order.ExternalID.String(),
+		"account", key.Account,
+		"request", string(requestType),
+		"error", err)
+	if auditErr := s.auditApproval(ctx, n, key, domain.AuditActionApprovalFailed,
+		fmt.Sprintf("fail attestation order %s request=%s error=%s",
+			order.ExternalID.String(), requestType, err)); auditErr != nil {
+		slog.ErrorContext(ctx, "event attestation failure audit failed",
+			"order", order.ExternalID.String(),
+			"account", key.Account,
+			"request", string(requestType),
+			"error", auditErr)
 	}
-	var token, keyID string
-	if off {
-		payload.Alg = fwsigning.AlgNone
-		token, err = signer.SignNone(payload)
-		if err != nil {
-			return domain.OrderApproval{}, err
-		}
-	} else {
-		token, err = signer.Sign(payload)
-		if err != nil {
-			return domain.OrderApproval{}, err
-		}
-		keys, kerr := signer.ListKeys(ctx)
-		if kerr != nil {
-			return domain.OrderApproval{}, kerr
-		}
-		keyID = activeKeyID(keys)
-		payload.Alg = fwsigning.AlgEd25519
-	}
-	return domain.OrderApproval{
-		Token:     token,
-		KeyID:     keyID,
-		Alg:       payload.Alg,
-		Mode:      payload.Mode,
-		IssuedAt:  payload.IssuedAt,
-		ExpiresAt: payload.ExpiresAt,
-	}, nil
 }
 
 // firstOrderReject reads the order's pre_trade_rejected event and returns the
@@ -2193,14 +2183,6 @@ func (s *Service) firstOrderReject(
 	return domain.OrderReject{}, nil
 }
 
-// orderVerdict maps a recorded order status onto the signed verdict label.
-func orderVerdict(status domain.OrderStatus) string {
-	if status == domain.OrderStatusRejected {
-		return "reject"
-	}
-	return "accept"
-}
-
 // CheckOrder validates the probe's account and assets, routes to the owning
 // node, and runs the engine pre-trade as a non-mutating dry-run. It mutates no
 // state and writes no audit row; an engine reject is a successful call carrying
@@ -2218,37 +2200,95 @@ func (s *Service) CheckOrder(
 	return n.CheckOrder(ctx, keyFor(probe.Account), probe)
 }
 
-// ApplyExecutionReport validates the fill's account and assets, routes to the
-// owning node, and settles the fill through the engine.
+// ApplyExecutionReport validates the target status, routes the report to the
+// owning node for account-synchronized application, and signs an attestation over
+// the engine persistence bound to the fill/status-change event it produced. The
+// attestation is best-effort: a signing/persist failure records
+// attestation_failed and returns a zero Attestation, never failing the report.
 func (s *Service) ApplyExecutionReport(
 	ctx context.Context, in domain.ExecutionReportInput,
-) (engine.ExecutionReportResult, error) {
-	// Officer applies no boundary id/asset format checks; the engine seam parses
-	// the account and assets and enforces the real settlement rules.
-	n, err := s.router.Route(keyFor(in.Account))
+) (engine.ExecutionReportResult, Attestation, error) {
+	targetStatus := domain.ExecutionReportTargetStatus(in)
+	if !domain.OrderStatusSupported(targetStatus) {
+		return engine.ExecutionReportResult{}, Attestation{}, fmt.Errorf(
+			"backend: invalid execution report status %q: %w", targetStatus, domain.ErrInvalid)
+	}
+	key := keyFor("")
+	n, err := s.router.Route(key)
 	if err != nil {
-		return engine.ExecutionReportResult{}, fmt.Errorf("backend: route report: %w", err)
+		return engine.ExecutionReportResult{}, Attestation{}, fmt.Errorf("backend: route report: %w", err)
 	}
-	if !in.Force {
-		// This second read is the authoritative status check, independent of the
-		// HTTP handler's payload fetch, and returns friendly terminal_order
-		// instead of the store's generic ErrConflict.
-		detail, err := n.GetOrder(ctx, in.Order)
-		if err != nil {
-			return engine.ExecutionReportResult{}, err
-		}
-		if domain.OrderStatusTerminal(detail.Order.Status) {
-			return engine.ExecutionReportResult{}, fmt.Errorf(
-				"backend: order %s is in terminal status %q: %w",
-				in.Order.String(), detail.Order.Status, domain.ErrTerminalOrder)
-		}
+	result, err := n.ApplyExecutionReport(ctx, key, in, auth.CallerFromContext(ctx))
+	if err != nil {
+		return engine.ExecutionReportResult{}, Attestation{}, err
 	}
-	return n.ApplyExecutionReport(ctx, keyFor(in.Account), in, auth.CallerFromContext(ctx))
+	att := s.attestExecutionReport(ctx, n, key, in, result)
+	return result, att, nil
 }
 
-// GetOrder returns the order with its 1:1 signed approval (when issued), its
-// events and trades, addressed by the order's opaque external id. It maps a
-// missing order onto the node's domain.ErrNotFound.
+// attestExecutionReport signs an attestation over the execution report and its
+// engine result, bound to the event the report produced (the fill event when the
+// report carried a fill, otherwise the terminal status-change event). It is
+// best-effort: on failure it records attestation_failed and returns a zero
+// Attestation.
+func (s *Service) attestExecutionReport(
+	ctx context.Context,
+	n node.Node,
+	key node.Key,
+	in domain.ExecutionReportInput,
+	result engine.ExecutionReportResult,
+) Attestation {
+	order, err := n.GetOrder(ctx, in.Order)
+	if err != nil {
+		s.reportAttestationFailure(ctx, n, key, domain.Order{ExternalID: in.Order},
+			domain.AttestationRequestExecutionReport, err)
+		return Attestation{}
+	}
+	eventType, ok := executionReportEventTypeFromPersistence(result.Persistence)
+	if !ok {
+		return Attestation{}
+	}
+	payload, err := s.buildExecutionReportPayload(order.Order, *result.Persistence)
+	if err != nil {
+		s.reportAttestationFailure(ctx, n, key, order.Order,
+			domain.AttestationRequestExecutionReport, err)
+		return Attestation{}
+	}
+	att, err := s.attestEvent(
+		ctx, n, key, in.Order, eventType,
+		domain.AttestationRequestExecutionReport, payload)
+	if err != nil {
+		s.reportAttestationFailure(ctx, n, key, order.Order,
+			domain.AttestationRequestExecutionReport, err)
+		return Attestation{}
+	}
+	return att
+}
+
+// executionReportEventTypeFromPersistence resolves the event a report attests to from
+// the engine-owned persistence. Prefer the fill event because reports with a fill may
+// also carry a status-close event.
+func executionReportEventTypeFromPersistence(
+	persistence *engine.ExecutionReportPersistence,
+) (domain.OrderEventType, bool) {
+	if persistence == nil {
+		return "", false
+	}
+	for _, event := range persistence.Events {
+		if event.Type == domain.OrderEventFill {
+			return event.Type, true
+		}
+	}
+	if len(persistence.Events) > 0 {
+		return persistence.Events[0].Type, true
+	}
+	return "", false
+}
+
+// GetOrder returns the order with its events and trades, addressed by the
+// order's opaque external id. Each event carries its own 1:1 EventAttestation
+// (when issued); there is no order-level approval envelope. It maps a missing
+// order onto the node's domain.ErrNotFound.
 func (s *Service) GetOrder(
 	ctx context.Context, id string,
 ) (domain.OrderDetail, error) {

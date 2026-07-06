@@ -338,16 +338,16 @@ func TestBuildOpenPitEngine_SeedsFromSnapshot(t *testing.T) {
 
 	// Both accounts are in the snapshot, so the resolver covers them by their
 	// stored engine ids - no string hashing.
-	if err := eng.UnblockAccount(ctx, "acc-1"); err != nil {
+	if err := unblockAccountOnLane(ctx, eng, "acc-1"); err != nil {
 		t.Fatalf("UnblockAccount: %v", err)
 	}
-	if err := eng.BlockAccount(ctx, "acc-2", "manual"); err != nil {
+	if err := blockAccountOnLane(ctx, eng, "acc-2", "manual"); err != nil {
 		t.Fatalf("BlockAccount: %v", err)
 	}
 
 	// An account the snapshot does not cover has no stored engine id, so the
 	// resolver rejects it as invalid rather than hashing its code.
-	if err := eng.BlockAccount(ctx, "ghost", "manual"); !errors.Is(err, domain.ErrInvalid) {
+	if err := blockAccountOnLane(ctx, eng, "ghost", "manual"); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("BlockAccount(unknown) = %v, want ErrInvalid", err)
 	}
 }
@@ -604,6 +604,44 @@ func checkProbe(acct string, side domain.OrderSide, qty, price string) domain.Or
 	}
 }
 
+func blockAccountOnLane(
+	ctx context.Context, eng Engine, account domain.AccountID, reason string,
+) error {
+	return eng.RunAccountSynchronized(ctx, account, func(lane AccountLane) error {
+		return lane.BlockAccount(ctx, account, reason)
+	})
+}
+
+func unblockAccountOnLane(ctx context.Context, eng Engine, account domain.AccountID) error {
+	return eng.RunAccountSynchronized(ctx, account, func(lane AccountLane) error {
+		return lane.UnblockAccount(ctx, account)
+	})
+}
+
+func checkOrderOnLane(
+	ctx context.Context, eng Engine, probe domain.OrderProbe,
+) (domain.CheckResult, error) {
+	var out domain.CheckResult
+	err := eng.RunAccountSynchronized(ctx, probe.Account, func(lane AccountLane) error {
+		var err error
+		out, err = lane.CheckOrder(ctx, probe)
+		return err
+	})
+	return out, err
+}
+
+func submitOrderOnLane(
+	ctx context.Context, eng Engine, order domain.Order,
+) (OrderResult, error) {
+	var out OrderResult
+	err := eng.RunAccountSynchronized(ctx, order.Account, func(lane AccountLane) error {
+		var err error
+		out, err = lane.SubmitOrder(ctx, order)
+		return err
+	})
+	return out, err
+}
+
 // TestEngine_CheckOrderPassCapturesLock runs a non-mutating dry-run for a funded
 // limit order and checks it passes, capturing the would-be reservation lock
 // prices the same way SubmitOrder does.
@@ -622,7 +660,7 @@ func TestEngine_CheckOrderPassCapturesLock(t *testing.T) {
 	}
 	defer eng.Stop()
 
-	out, err := eng.CheckOrder(context.Background(), checkProbe("acc-1", domain.OrderSideBuy, "1", "100"))
+	out, err := checkOrderOnLane(context.Background(), eng, checkProbe("acc-1", domain.OrderSideBuy, "1", "100"))
 	if err != nil {
 		t.Fatalf("CheckOrder: %v", err)
 	}
@@ -644,7 +682,7 @@ func TestEngine_CheckOrderRejectStructured(t *testing.T) {
 	}
 	defer eng.Stop()
 
-	out, err := eng.CheckOrder(context.Background(), checkProbe("acc-1", domain.OrderSideBuy, "1", "100"))
+	out, err := checkOrderOnLane(context.Background(), eng, checkProbe("acc-1", domain.OrderSideBuy, "1", "100"))
 	if err != nil {
 		t.Fatalf("CheckOrder: %v", err)
 	}
@@ -677,7 +715,7 @@ func TestEngine_CheckOrderWouldBlock(t *testing.T) {
 	}
 	defer eng.Stop()
 
-	out, err := eng.CheckOrder(context.Background(), checkProbe("acc-1", domain.OrderSideBuy, "1", "100"))
+	out, err := checkOrderOnLane(context.Background(), eng, checkProbe("acc-1", domain.OrderSideBuy, "1", "100"))
 	if err != nil {
 		t.Fatalf("CheckOrder: %v", err)
 	}
@@ -710,7 +748,7 @@ func TestEngine_CheckOrderDropsGarbledAccountBlockReason(t *testing.T) {
 	}
 	defer eng.Stop()
 
-	out, err := eng.CheckOrder(context.Background(), checkProbe("acc-1", domain.OrderSideBuy, "1", "100"))
+	out, err := checkOrderOnLane(context.Background(), eng, checkProbe("acc-1", domain.OrderSideBuy, "1", "100"))
 	if err != nil {
 		t.Fatalf("CheckOrder: %v", err)
 	}
@@ -754,7 +792,7 @@ func TestEngine_CheckOrderIsNonMutating(t *testing.T) {
 	ctx := context.Background()
 
 	for i := 0; i < 5; i++ {
-		out, err := eng.CheckOrder(ctx, checkProbe("acc-1", domain.OrderSideBuy, "1", "100"))
+		out, err := checkOrderOnLane(ctx, eng, checkProbe("acc-1", domain.OrderSideBuy, "1", "100"))
 		if err != nil {
 			t.Fatalf("CheckOrder #%d: %v", i, err)
 		}
@@ -769,7 +807,7 @@ func TestEngine_CheckOrderIsNonMutating(t *testing.T) {
 		AmountValue: "1", Price: "100",
 	}
 
-	first, err := eng.SubmitOrder(ctx, order)
+	first, err := submitOrderOnLane(ctx, eng, order)
 	if err != nil {
 		t.Fatalf("first SubmitOrder: %v", err)
 	}
@@ -777,7 +815,7 @@ func TestEngine_CheckOrderIsNonMutating(t *testing.T) {
 		t.Fatalf("first submit must pass after dry-runs (budget intact), got %+v", first.Rejects)
 	}
 
-	second, err := eng.SubmitOrder(ctx, order)
+	second, err := submitOrderOnLane(ctx, eng, order)
 	if err != nil {
 		t.Fatalf("second SubmitOrder: %v", err)
 	}
@@ -887,6 +925,7 @@ func TestExecutionReportFrom_InvalidInputs(t *testing.T) {
 	base := domain.ExecutionReportInput{
 		BaseAsset: "AAPL", QuoteAsset: "USD", Account: "acc-1", Side: domain.OrderSideBuy,
 		FillQuantity: "1", FillPrice: "100", LeavesQuantity: "0",
+		OrderStatus: domain.OrderStatusFilled,
 	}
 
 	badPrice := base
@@ -917,6 +956,28 @@ func TestExecutionReportFrom_InvalidInputs(t *testing.T) {
 	badLock.LockPrice = "not-a-number"
 	if _, err := executionReportFrom(badLock, res); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid for bad lock price, got %v", err)
+	}
+
+	badOpaqueLock := base
+	badOpaqueLock.Lock = []byte{0x01, 0x02, 0x03}
+	if _, err := executionReportFrom(badOpaqueLock, res); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("want ErrInvalid for bad opaque lock, got %v", err)
+	}
+
+	oneSidedFill := base
+	oneSidedFill.FillPrice = ""
+	if _, err := executionReportFrom(oneSidedFill, res); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("want ErrInvalid for one-sided fill, got %v", err)
+	}
+
+	noTradeCancel := base
+	noTradeCancel.FillQuantity = ""
+	noTradeCancel.FillPrice = ""
+	noTradeCancel.LeavesQuantity = "1"
+	noTradeCancel.OrderStatus = domain.OrderStatusCancelled
+	noTradeCancel.LockPrice = "100"
+	if _, err := executionReportFrom(noTradeCancel, res); err != nil {
+		t.Fatalf("no-trade cancel must map: %v", err)
 	}
 }
 
@@ -996,5 +1057,39 @@ func TestSanitizeText_CleansInvalidUTF8AndControls(t *testing.T) {
 		if got := sanitizeText(input); got != "" {
 			t.Fatalf("garbage text %q must sanitize to empty, got %q", input, got)
 		}
+	}
+}
+
+// TestExecutionReportPersistenceFrom_StatusOnlyNoAccountWrites proves the real mapper
+// folds no account-side persistence into a status-only report: with empty engine
+// outcomes and blocks, persistence.Balances is nil and persistence.Blocks is empty, so the
+// node writes zero balance rows and zero account-block rows. The venue-owned
+// bookkeeping (order status and its status-change event) is still carried.
+func TestExecutionReportPersistenceFrom_StatusOnlyNoAccountWrites(t *testing.T) {
+	t.Parallel()
+	in := domain.ExecutionReportInput{
+		Account:     domain.AccountID(testAccount),
+		Order:       testOrderXID(0x11),
+		BaseAsset:   testBase,
+		QuoteAsset:  testQuote,
+		Side:        domain.OrderSideBuy,
+		OrderStatus: domain.OrderStatusCancelled,
+	}
+	persistence := executionReportPersistenceFrom(in, nil, nil)
+
+	if persistence.Balances != nil {
+		t.Fatalf("persistence.Balances = %+v, want nil for a status-only report", persistence.Balances)
+	}
+	if len(persistence.Blocks) != 0 {
+		t.Fatalf("persistence.Blocks = %+v, want empty for a status-only report", persistence.Blocks)
+	}
+	if persistence.Trade != nil {
+		t.Fatalf("persistence.Trade = %+v, want nil for a status-only report", persistence.Trade)
+	}
+	if persistence.OrderStatus != domain.OrderStatusCancelled {
+		t.Fatalf("persistence.OrderStatus = %q, want cancelled", persistence.OrderStatus)
+	}
+	if len(persistence.Events) == 0 {
+		t.Fatal("persistence.Events is empty, want the status-change event")
 	}
 }

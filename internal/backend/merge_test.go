@@ -19,6 +19,7 @@ package backend_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -38,8 +39,7 @@ func (r *twoNodeRouter) Route(node.Key) (node.Node, error) { return r.nodes[0], 
 func (r *twoNodeRouter) All() []node.Node                  { return r.nodes }
 
 func orderRow(id byte, amount string) store.OrderListRow {
-	var xid domain.ExternalID
-	xid[0] = id
+	xid := domain.ExternalID(fmt.Sprintf("order-%d", id))
 	return store.OrderListRow{Order: domain.Order{ExternalID: xid, AmountValue: amount}}
 }
 

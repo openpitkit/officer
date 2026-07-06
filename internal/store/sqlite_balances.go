@@ -57,11 +57,15 @@ JOIN asset   ast ON ast.id = b.asset_id`
 // settlement path (settleBalanceTx) handles delta accumulation in its own tx;
 // it uses INSERT OR REPLACE directly, keeping the two paths consistent.
 func (r *realmStore) UpsertBalance(ctx context.Context, balance domain.Balance) error {
-	accountID, err := resolveAccountID(ctx, r.db(), balance.Account)
+	db, err := r.db()
 	if err != nil {
 		return err
 	}
-	assetID, err := resolveAssetID(ctx, r.db(), balance.Asset)
+	accountID, err := resolveAccountID(ctx, db, balance.Account)
+	if err != nil {
+		return err
+	}
+	assetID, err := resolveAssetID(ctx, db, balance.Asset)
 	if err != nil {
 		return err
 	}
@@ -69,7 +73,7 @@ func (r *realmStore) UpsertBalance(ctx context.Context, balance domain.Balance) 
 	if updatedAt.IsZero() {
 		updatedAt = time.Now().UTC()
 	}
-	_, err = r.db().ExecContext(
+	_, err = db.ExecContext(
 		ctx,
 		`INSERT OR REPLACE INTO balance
 		 (account_id, asset_id, available, held,
@@ -95,7 +99,11 @@ func (r *realmStore) UpsertBalance(ctx context.Context, balance domain.Balance) 
 func (r *realmStore) GetBalance(
 	ctx context.Context, account domain.AccountID, asset string,
 ) (domain.Balance, bool, error) {
-	row := r.db().QueryRowContext(
+	db, err := r.db()
+	if err != nil {
+		return domain.Balance{}, false, err
+	}
+	row := db.QueryRowContext(
 		ctx,
 		balanceSelect+` WHERE a.code = ? AND ast.code = ?`,
 		account.String(), asset,
@@ -137,13 +145,17 @@ func (r *realmStore) ListBalanceRows(
 	ctx context.Context, filter fwstore.BalanceListFilter,
 ) (fwstore.BalanceListPage, error) {
 	where, args := balanceListWhere(filter)
+	db, err := r.db()
+	if err != nil {
+		return fwstore.BalanceListPage{}, err
+	}
 	countQuery := `SELECT COUNT(*)
 FROM balance b
 JOIN account a   ON a.id  = b.account_id
 LEFT JOIN account_group g ON g.id = a.group_id
 JOIN asset   ast ON ast.id = b.asset_id` + where
 	var total int
-	if err := r.db().QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return fwstore.BalanceListPage{}, fmt.Errorf("store: count balance rows: %w", err)
 	}
 
@@ -153,7 +165,7 @@ JOIN asset   ast ON ast.id = b.asset_id` + where
 		query += ` LIMIT ? OFFSET ?`
 		queryArgs = append(queryArgs, filter.Page.Limit, max(filter.Page.Offset, 0))
 	}
-	rows, err := r.db().QueryContext(ctx, query, queryArgs...)
+	rows, err := db.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return fwstore.BalanceListPage{}, fmt.Errorf("store: list balance rows: %w", err)
 	}
@@ -230,7 +242,11 @@ func balanceListOrderBy(sort fwstore.SortSpec) string {
 func (r *realmStore) DeleteBalance(
 	ctx context.Context, account domain.AccountID, asset string,
 ) error {
-	res, err := r.db().ExecContext(
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	res, err := db.ExecContext(
 		ctx,
 		`DELETE FROM balance
 		 WHERE account_id = (SELECT id FROM account WHERE code = ?)

@@ -311,8 +311,8 @@ func (s *referenceSource) ConfirmExecution(
 	string,
 	string,
 	bool,
-) (domain.Order, error) {
-	return domain.Order{}, nil
+) (domain.Order, mcp.Attestation, error) {
+	return domain.Order{}, mcp.Attestation{}, nil
 }
 
 func (s *referenceSource) CancelOrder(
@@ -321,8 +321,8 @@ func (s *referenceSource) CancelOrder(
 	string,
 	string,
 	bool,
-) (domain.Order, error) {
-	return domain.Order{}, nil
+) (domain.Order, mcp.Attestation, error) {
+	return domain.Order{}, mcp.Attestation{}, nil
 }
 
 func toolContentContains(content []sdkmcp.Content, needle string) bool {
@@ -402,6 +402,18 @@ func (e *fakeEngine) SubmitImmediate(
 func (e *fakeEngine) SetReservationStore(engine.ReservationStore) {}
 
 func (e *fakeEngine) ReconcileOrphans(context.Context) (int, error) { return 0, nil }
+
+func (e *fakeEngine) RunAccountSynchronized(
+	_ context.Context, _ domain.AccountID, fn func(engine.AccountLane) error,
+) error {
+	return fn(e)
+}
+
+func (e *fakeEngine) RunGroupSynchronized(
+	_ context.Context, _ string, fn func(engine.GroupLane) error,
+) error {
+	return fn(e)
+}
 
 func (e *fakeEngine) ApplyExecutionReport(
 	context.Context,

@@ -216,7 +216,7 @@ func (m *Manager) startInstanceLocked(
 	runWG *sync.WaitGroup,
 	instance domain.MarketDataInstance,
 ) {
-	// Use the 22-char string form of the external id as the runtime map key.
+	// Use the string form of the external id as the runtime map key.
 	instanceID := instance.ExternalID.String()
 
 	// Drop any interval state from a prior run of this instance so a restart
@@ -622,9 +622,9 @@ func quoteSnapshot(
 	if asOf.IsZero() {
 		asOf = receivedAt
 	}
-	// instanceID is the 22-char string form; parse it back to the typed handle.
-	// The value was produced by ExternalID.String() so parsing always succeeds;
-	// a parse failure yields a zero ExternalID which is the safe fallback.
+	// instanceID is the string form; parse it back to the typed handle. The value
+	// was produced by ExternalID.String() so parsing always succeeds; a parse
+	// failure yields a zero ExternalID which is the safe fallback.
 	instance, _ := domain.ParseExternalID(instanceID)
 	return domain.MarketDataQuote{
 		AsOf:           asOf.UTC(),

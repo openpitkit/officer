@@ -103,6 +103,13 @@ func TestReservationUpsertGetAndLockRoundTrip(t *testing.T) {
 	if got.State != domain.ReservationIntentStateHeld {
 		t.Fatalf("state = %q, want held", got.State)
 	}
+	openByOrder, ok, err := rs.GetOpenReservationIntentByOrder(ctx, order)
+	if err != nil || !ok {
+		t.Fatalf("GetOpenReservationIntentByOrder: ok=%v err=%v", ok, err)
+	}
+	if openByOrder.ApprovalID != "appr-1" {
+		t.Fatalf("open by order = %+v, want appr-1", openByOrder)
+	}
 	if !got.IssuedAt.Equal(intent.IssuedAt) || !got.ExpiresAt.Equal(intent.ExpiresAt) {
 		t.Fatalf("timestamps round-trip = (%v, %v)", got.IssuedAt, got.ExpiresAt)
 	}
@@ -123,6 +130,14 @@ func TestReservationUpsertGetAndLockRoundTrip(t *testing.T) {
 	}
 	if len(open) != 1 || open[0].ParamsJSON != intent.ParamsJSON {
 		t.Fatalf("ListOpenReservationIntents after replace = %+v", open)
+	}
+	if err := rs.SetReservationIntentState(
+		ctx, "appr-1", domain.ReservationIntentStateCommitted,
+	); err != nil {
+		t.Fatalf("SetReservationIntentState: %v", err)
+	}
+	if _, ok, err := rs.GetOpenReservationIntentByOrder(ctx, order); err != nil || ok {
+		t.Fatalf("GetOpenReservationIntentByOrder(committed): ok=%v err=%v, want false", ok, err)
 	}
 }
 
@@ -358,7 +373,7 @@ func TestReservationCascadeOnOrderDelete(t *testing.T) {
 
 	// Deleting the order cascades to its reservation intent.
 	r := rs.(*realmStore)
-	if _, err := r.db().ExecContext(
+	if _, err := r.rawDB().ExecContext(
 		ctx, `DELETE FROM order_record WHERE external_id = ?`, order.Bytes(),
 	); err != nil {
 		t.Fatalf("delete order: %v", err)
@@ -381,7 +396,7 @@ func TestReservationCascadeOnAccountDelete(t *testing.T) {
 	// Deleting the account cascades through the order (and the intent's own account
 	// FK) to remove the intent.
 	r := rs.(*realmStore)
-	if _, err := r.db().ExecContext(
+	if _, err := r.rawDB().ExecContext(
 		ctx, `DELETE FROM account WHERE code = ?`, "acc-1",
 	); err != nil {
 		t.Fatalf("delete account: %v", err)

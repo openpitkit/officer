@@ -18,7 +18,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 
 import type {
   Asset,
@@ -42,6 +42,7 @@ import {
   AutocompleteFilterField,
   ColumnHeader,
   DeleteButton,
+  EditButton,
   FilterBar,
   FilterByButton,
   HistoryButton,
@@ -952,16 +953,11 @@ function AssetsTable({
                         onClick={() => onFilterAsset(asset)}
                       />
                     )}
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 w-7 shrink-0 px-0"
+                    <EditButton
+                      size={28}
                       onClick={() => onEditAsset(asset)}
                       title={t("actions.editTitle")}
-                      aria-label={t("actions.editTitle")}
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                    </Button>
+                    />
                   </span>
                 </div>
               </TableCell>
@@ -1001,18 +997,32 @@ function AssetsTable({
                 <RowActions>
                   <PositionsButton
                     title={t("links.positions")}
+                    href={absoluteAppUrl(
+                      `/positions?asset=${encodeURIComponent(asset.code)}`,
+                    )}
                     onClick={() => onOpenPositions(asset)}
                   />
                   <TradingButton
                     title={t("links.orders")}
+                    href={absoluteAppUrl(
+                      `/orders?baseAsset=${encodeURIComponent(asset.code)}`,
+                    )}
                     onClick={() => onOpenOrders(asset)}
                   />
                   <TradesButton
                     title={t("links.trades")}
+                    href={absoluteAppUrl(
+                      `/orders?tab=trades&baseAsset=${encodeURIComponent(
+                        asset.code,
+                      )}`,
+                    )}
                     onClick={() => onOpenTrades(asset)}
                   />
                   <HistoryButton
                     title={t("links.audit")}
+                    href={absoluteAppUrl(
+                      `/audit?asset=${encodeURIComponent(asset.code)}`,
+                    )}
                     onClick={() => onOpenHistory(asset)}
                   />
                   <DeleteButton
@@ -1153,16 +1163,11 @@ function ClassesPanel({
                     )}
                   </span>
                   <span className="ml-auto flex shrink-0 items-center">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 w-7 shrink-0 px-0"
+                    <EditButton
+                      size={28}
                       onClick={() => onEdit(assetClass)}
                       title={t("classes.actions.editTitle")}
-                      aria-label={t("classes.actions.editTitle")}
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                    </Button>
+                    />
                   </span>
                 </div>
               </TableCell>

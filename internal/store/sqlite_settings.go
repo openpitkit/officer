@@ -38,7 +38,11 @@ import (
 // ListMcpAccess returns the stored per-command MCP enable/disable overrides,
 // keyed by command name. An empty table returns a non-nil empty map.
 func (r *realmStore) ListMcpAccess(ctx context.Context) (map[string]bool, error) {
-	rows, err := r.db().QueryContext(
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(
 		ctx, `SELECT command, enabled FROM mcp_access`,
 	)
 	if err != nil {
@@ -67,7 +71,11 @@ func (r *realmStore) ListMcpAccess(ctx context.Context) (map[string]bool, error)
 func (r *realmStore) SetMcpAccess(
 	ctx context.Context, command string, enabled bool,
 ) error {
-	if _, err := r.db().ExecContext(
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(
 		ctx,
 		`INSERT INTO mcp_access (command, enabled) VALUES (?, ?)
 		 ON CONFLICT(command) DO UPDATE SET enabled = excluded.enabled`,
@@ -87,7 +95,11 @@ func (r *realmStore) GetUserSetting(
 	ctx context.Context, userID, key string,
 ) (string, bool, error) {
 	var value string
-	err := r.db().QueryRowContext(
+	db, err := r.db()
+	if err != nil {
+		return "", false, err
+	}
+	err = db.QueryRowContext(
 		ctx,
 		`SELECT setting_value FROM user_setting
 		 WHERE user_id = ? AND setting_key = ?`,
@@ -107,7 +119,11 @@ func (r *realmStore) GetUserSetting(
 func (r *realmStore) SetUserSetting(
 	ctx context.Context, userID, key, value string,
 ) error {
-	if _, err := r.db().ExecContext(
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(
 		ctx,
 		`INSERT INTO user_setting (user_id, setting_key, setting_value)
 		 VALUES (?, ?, ?)
@@ -126,7 +142,11 @@ func (r *realmStore) SetUserSetting(
 func (r *realmStore) ListUserSettings(
 	ctx context.Context,
 ) ([]domain.UserSetting, error) {
-	rows, err := r.db().QueryContext(
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(
 		ctx,
 		`SELECT user_id, setting_key, setting_value FROM user_setting
 		 ORDER BY user_id, setting_key`,

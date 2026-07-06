@@ -23,11 +23,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
@@ -50,28 +50,18 @@ var (
 // one realm and rejects any other realm id. Safe for concurrent use: all
 // mutations go through database/sql which pools a single connection.
 type sqliteStore struct {
-	db      *sql.DB
+	db      atomic.Pointer[sql.DB]
 	dialect Dialect
 	path    string
 	realm   domain.RealmID
 
 	mu        sync.Mutex
 	reachable bool
-	fatal     func(error)
+	staleDBs  []*sql.DB
 }
 
 // SQLiteOption customizes a SQLite store instance.
 type SQLiteOption func(*sqliteStore)
-
-// WithFatalShutdownHook wires the process-level fatal handler for unrecoverable
-// business-CSV import store failures.
-func WithFatalShutdownHook(hook func(error)) SQLiteOption {
-	return func(s *sqliteStore) {
-		if hook != nil {
-			s.fatal = hook
-		}
-	}
-}
 
 // WithRealm binds the single-realm connector to a non-default realm id. When
 // unset the connector serves domain.DefaultRealm.
@@ -101,30 +91,15 @@ func NewSQLiteStore(path string, opts ...SQLiteOption) (fwstore.Store, error) {
 		displayPath = abs
 	}
 	s := &sqliteStore{
-		db:      db,
 		dialect: sqliteDialect{},
 		path:    displayPath,
 		realm:   domain.DefaultRealm,
-		fatal:   defaultFatalShutdown,
 	}
+	s.db.Store(db)
 	for _, opt := range opts {
 		opt(s)
 	}
 	return s, nil
-}
-
-func defaultFatalShutdown(err error) {
-	log.Fatalf("fatal store error: %v", err)
-}
-
-// isExpectedDomainError reports whether err is a domain-level outcome the caller
-// can map to an HTTP status (a 4xx), as opposed to an unexpected infrastructure
-// failure (begin/commit/exec) that signals the store is no longer trustworthy.
-func isExpectedDomainError(err error) bool {
-	return errors.Is(err, domain.ErrInvalid) ||
-		errors.Is(err, domain.ErrNotFound) ||
-		errors.Is(err, domain.ErrAlreadyExists) ||
-		errors.Is(err, domain.ErrHasDependents)
 }
 
 func openSQLiteDB(path string) (*sql.DB, error) {
@@ -171,8 +146,12 @@ func (s *sqliteStore) ForRealm(
 // ensureRealmRow inserts the single realm identity row when absent, assigning it
 // an external id. Its code is the bound realm id.
 func (s *sqliteStore) ensureRealmRow(ctx context.Context) error {
+	db := s.currentDB()
+	if db == nil {
+		return fmt.Errorf("store: sqlite is closed")
+	}
 	var n int
-	if err := s.db.QueryRowContext(
+	if err := db.QueryRowContext(
 		ctx, `SELECT COUNT(*) FROM realm`,
 	).Scan(&n); err != nil {
 		return fmt.Errorf("store: count realm rows: %w", err)
@@ -184,7 +163,7 @@ func (s *sqliteStore) ensureRealmRow(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if _, err := s.db.ExecContext(
+	if _, err := db.ExecContext(
 		ctx,
 		`INSERT INTO realm (external_id, code, title) VALUES (?, ?, '')`,
 		xid.Bytes(), s.realm.String(),
@@ -198,9 +177,17 @@ func (s *sqliteStore) ensureRealmRow(ctx context.Context) error {
 // The one canonical migration is rendered through the dialect before it runs, so
 // the surrogate-PK, external-id and boolean tokens become backend-specific DDL.
 func (s *sqliteStore) Migrate(ctx context.Context) error {
+	db := s.currentDB()
+	if db == nil {
+		return fmt.Errorf("store: sqlite is closed")
+	}
+	return s.migrateDB(ctx, db)
+}
+
+func (s *sqliteStore) migrateDB(ctx context.Context, db *sql.DB) error {
 	return migration.Apply(
 		ctx,
-		s.db,
+		db,
 		embeddedMigrationSource{dialect: s.dialect},
 		migration.Config{Table: "schema_migration"},
 	)
@@ -208,14 +195,22 @@ func (s *sqliteStore) Migrate(ctx context.Context) error {
 
 // SchemaVersion returns the highest applied schema version, or zero.
 func (s *sqliteStore) SchemaVersion(ctx context.Context) (int, error) {
+	db := s.currentDB()
+	if db == nil {
+		return 0, fmt.Errorf("store: sqlite is closed")
+	}
 	return migration.SchemaVersion(
-		ctx, s.db, migration.Config{Table: "schema_migration"},
+		ctx, db, migration.Config{Table: "schema_migration"},
 	)
 }
 
 // Ping verifies the database is reachable.
 func (s *sqliteStore) Ping(ctx context.Context) error {
-	err := s.db.PingContext(ctx)
+	db := s.currentDB()
+	if db == nil {
+		return fmt.Errorf("store: sqlite is closed")
+	}
+	err := db.PingContext(ctx)
 	s.mu.Lock()
 	s.reachable = err == nil
 	s.mu.Unlock()
@@ -228,23 +223,51 @@ func (s *sqliteStore) Ping(ctx context.Context) error {
 // Reset recreates the SQLite file and reapplies the bundled migration.
 func (s *sqliteStore) Reset(ctx context.Context) error {
 	path := s.path
-	if err := s.Close(); err != nil {
-		return fmt.Errorf("store: reset close sqlite: %w", err)
+	oldDB := s.currentDB()
+	if oldDB == nil {
+		return fmt.Errorf("store: reset sqlite: database is closed")
 	}
-	for _, candidate := range sqliteResetPaths(path) {
-		if err := os.Remove(candidate); err != nil &&
-			!errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("store: reset remove %q: %w", candidate, err)
-		}
+
+	tmp, err := os.CreateTemp(
+		filepath.Dir(path), filepath.Base(path)+".reset-*.db",
+	)
+	if err != nil {
+		return fmt.Errorf("store: reset create temporary sqlite: %w", err)
+	}
+	tmpPath := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("store: reset close temporary sqlite file: %w", err)
+	}
+	if err := os.Remove(tmpPath); err != nil &&
+		!errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("store: reset remove temporary sqlite %q: %w", tmpPath, err)
+	}
+
+	tmpDB, err := openSQLiteDB(tmpPath)
+	if err != nil {
+		return fmt.Errorf("store: reset open temporary sqlite at %q: %w", tmpPath, err)
+	}
+	if err := s.migrateDB(ctx, tmpDB); err != nil {
+		_ = tmpDB.Close()
+		cleanupSQLiteResetTemp(tmpPath)
+		return fmt.Errorf("store: reset migrate: %w", err)
+	}
+	if err := tmpDB.Close(); err != nil {
+		cleanupSQLiteResetTemp(tmpPath)
+		return fmt.Errorf("store: reset close migrated temporary sqlite: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		cleanupSQLiteResetTemp(tmpPath)
+		return fmt.Errorf("store: reset replace sqlite at %q: %w", path, err)
 	}
 	db, err := openSQLiteDB(path)
 	if err != nil {
-		return fmt.Errorf("store: reset open sqlite at %q: %w", path, err)
+		return fmt.Errorf("store: reset reopen sqlite at %q: %w", path, err)
 	}
-	s.db = db
-	if err := s.Migrate(ctx); err != nil {
-		return fmt.Errorf("store: reset migrate: %w", err)
-	}
+	s.db.Store(db)
+	s.mu.Lock()
+	s.staleDBs = append(s.staleDBs, oldDB)
+	s.mu.Unlock()
 	return nil
 }
 
@@ -252,16 +275,32 @@ func sqliteResetPaths(path string) []string {
 	return []string{path, path + "-wal", path + "-shm", path + "-journal"}
 }
 
+func cleanupSQLiteResetTemp(path string) {
+	for _, candidate := range sqliteResetPaths(path) {
+		_ = os.Remove(candidate)
+	}
+}
+
 // Path returns the on-disk location of the database.
 func (s *sqliteStore) Path() string { return s.path }
 
 // Close releases the connection pool. Idempotent.
 func (s *sqliteStore) Close() error {
-	if s.db == nil {
-		return nil
+	current := s.db.Swap(nil)
+	s.mu.Lock()
+	stale := s.staleDBs
+	s.staleDBs = nil
+	s.mu.Unlock()
+
+	var err error
+	if current != nil {
+		err = errors.Join(err, current.Close())
 	}
-	err := s.db.Close()
-	s.db = nil
+	for _, db := range stale {
+		if db != nil && db != current {
+			err = errors.Join(err, db.Close())
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("store: close: %w", err)
 	}
@@ -276,8 +315,19 @@ type realmStore struct {
 	store *sqliteStore
 }
 
-// db returns the shared connection pool.
-func (r *realmStore) db() *sql.DB { return r.store.db }
+func (s *sqliteStore) currentDB() *sql.DB { return s.db.Load() }
+
+// db returns the shared connection pool, or the closed-store error once Close
+// has swapped the pool out. Every realm data method resolves the pool through
+// here so a shutdown/Close race fails gracefully with the same error the
+// lifecycle methods return instead of dereferencing a nil pool.
+func (r *realmStore) db() (*sql.DB, error) {
+	db := r.store.currentDB()
+	if db == nil {
+		return nil, fmt.Errorf("store: sqlite is closed")
+	}
+	return db, nil
+}
 
 // --- Shared helpers reused by every table group -----------------------------
 
@@ -286,17 +336,17 @@ func nowStr() string {
 	return time.Now().UTC().Format(time.RFC3339Nano)
 }
 
-// newExternalID draws 16 crypto/rand bytes and wraps them in a domain external
+// newExternalID draws 16 crypto/rand bytes and encodes them as a domain external
 // id. This is the single place machine-record external ids are generated; there
 // is no per-insert existence check because 128 bits of randomness make a
-// collision negligible. The connector fills this into the external_id BLOB
-// column at insert time (the SQLite dialect has no server-side random default).
+// collision negligible. The connector fills this into the external_id column at
+// insert time (the SQLite dialect has no server-side random default).
 func newExternalID() (domain.ExternalID, error) {
 	var raw [domain.ExternalIDByteLen]byte
 	if _, err := rand.Read(raw[:]); err != nil {
-		return domain.ExternalID{}, fmt.Errorf("store: generate external id: %w", err)
+		return domain.ExternalID(""), fmt.Errorf("store: generate external id: %w", err)
 	}
-	return domain.ExternalIDFromBytes(raw[:])
+	return domain.GeneratedExternalIDFromBytes(raw[:])
 }
 
 // externalIDForInsert returns the external id to write for a user-created
@@ -322,6 +372,11 @@ type sqlQueryer interface {
 // sqlExecer is the write surface shared by *sql.DB and *sql.Tx.
 type sqlExecer interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+type sqlReadWriter interface {
+	sqlQueryer
+	sqlExecer
 }
 
 // resolveAssetID resolves an asset code to its surrogate id for an insert or a

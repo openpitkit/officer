@@ -76,6 +76,9 @@ var (
 	// ErrTerminalOrder marks the remaining Officer safety net for terminal
 	// orders; callers can bypass it with force and route straight to the engine.
 	ErrTerminalOrder = errors.New("order in terminal status")
+	// ErrNoChange marks a successful engine command that produced no account
+	// modifications for Officer to persist.
+	ErrNoChange = errors.New("no change")
 	// ErrNotImplemented marks an operation that needs an engine SDK capability
 	// that is not available yet and cannot be represented as a full engine
 	// rebuild from persisted state.
@@ -220,6 +223,7 @@ const (
 
 	// Approval token lifecycle.
 	AuditActionApprovalIssued    AuditAction = "approval_issued"
+	AuditActionApprovalFailed    AuditAction = "approval_failed"
 	AuditActionApprovalConfirmed AuditAction = "approval_confirmed"
 	AuditActionApprovalCancelled AuditAction = "approval_cancelled"
 )
@@ -287,6 +291,7 @@ func AllAuditActions() []AuditAction {
 		AuditActionImportSigningKey,
 		AuditActionSetSigningConfig,
 		AuditActionApprovalIssued,
+		AuditActionApprovalFailed,
 		AuditActionApprovalConfirmed,
 		AuditActionApprovalCancelled,
 		AuditActionSubmitOrder,

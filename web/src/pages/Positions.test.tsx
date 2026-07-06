@@ -15,7 +15,12 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import {
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithApi as render } from "@/test/apiClient";
 import { I18nextProvider } from "react-i18next";
@@ -188,7 +193,7 @@ function acceptedAdjustment(request: Adjustment["request"]): Adjustment {
 }
 
 function renderPositions(initialEntry = "/positions") {
-  render(
+  return render(
     <I18nextProvider i18n={i18n}>
       <ThemeProvider storageKey="pit-officer-test-theme" defaultMode="light">
         <DisplayPreferencesProvider
@@ -306,6 +311,9 @@ describe("Positions adjustment panel", () => {
     await user.click(scope.getByRole("button", { name: /submit adjustment/i }));
 
     await waitFor(() => expect(createAdjustmentMock).toHaveBeenCalledTimes(1));
+    expect(scope.getByText("balance")).toBeInTheDocument();
+    expect(scope.getAllByText("600").length).toBeGreaterThan(0);
+    expect(scope.queryByText(/Δ600/)).not.toBeInTheDocument();
     expect(createAdjustmentMock).toHaveBeenCalledWith("Bucks McMoneyface", {
       asset: "AAPL",
       balance: { mode: "absolute", value: "600" },
@@ -396,16 +404,145 @@ describe("Positions adjustment panel", () => {
     ).toBeInTheDocument();
   });
 
+  it("keeps draft values after submit and clears them with reset all", async () => {
+    const user = userEvent.setup();
+    renderPositions();
+
+    const draftRow = screen
+      .getAllByRole("row")
+      .find((r) => r.textContent?.includes("New position"));
+    await user.click(
+      within(draftRow!).getByRole("button", {
+        name: /open new adjustment panel/i,
+      }),
+    );
+
+    const panel = screen.getByRole("region", { name: "Adjustment" });
+    const scope = within(panel);
+    const resetAll = scope.getByRole("button", { name: /reset all/i });
+    expect(resetAll).toBeDisabled();
+
+    const account = scope.getByLabelText("Account");
+    const asset = scope.getByLabelText("Asset");
+    const amount = scope.getByLabelText("Available adjustment amount");
+
+    await user.type(account, "my");
+    await user.type(asset, "AAPL");
+    await user.type(amount, "600");
+    expect(resetAll).toBeEnabled();
+
+    await user.click(scope.getByRole("button", { name: /submit adjustment/i }));
+    await waitFor(() => expect(createAdjustmentMock).toHaveBeenCalledTimes(1));
+    expect(createAdjustmentMock).toHaveBeenCalledWith("my", {
+      asset: "AAPL",
+      balance: { mode: "absolute", value: "600" },
+    });
+    expect(account).toHaveValue("my");
+    expect(asset).toHaveValue("AAPL");
+    expect(amount).toHaveValue("600");
+
+    await user.click(resetAll);
+    expect(account).toHaveValue("");
+    expect(asset).toHaveValue("");
+    expect(amount).toHaveValue("");
+    expect(resetAll).toBeDisabled();
+    expect(
+      scope.getByRole("button", { name: /submit adjustment/i }),
+    ).toBeDisabled();
+  });
+
   it("opens the draft panel from the page action with current filters", async () => {
     const user = userEvent.setup();
     renderPositions("/positions?account=Bucks%20McMoneyface");
 
     await user.type(screen.getByLabelText("Filter by asset"), "AAPL");
     await user.click(screen.getByRole("button", { name: /apply filters/i }));
-    await user.click(screen.getByRole("button", { name: /^adjustment$/i }));
+    await user.click(
+      screen.getAllByRole("button", { name: /^adjustment$/i })[0],
+    );
 
     expect(screen.getByLabelText("Account")).toHaveValue("Bucks McMoneyface");
     expect(screen.getByLabelText("Asset")).toHaveValue("AAPL");
+  });
+
+  it("does not reset an open draft panel when filters change later", async () => {
+    const user = userEvent.setup();
+    renderPositions("/positions?account=Bucks%20McMoneyface");
+
+    await user.click(
+      screen.getAllByRole("button", { name: /^adjustment$/i })[0],
+    );
+
+    const panel = screen.getByRole("region", { name: "Adjustment" });
+    const accountInput = within(panel).getByLabelText("Account");
+    const assetInput = within(panel).getByLabelText("Asset");
+    expect(accountInput).toHaveValue("Bucks McMoneyface");
+    expect(assetInput).toHaveValue("");
+
+    await user.type(assetInput, "MSFT");
+    await user.clear(screen.getByLabelText("Filter by account"));
+    await user.type(screen.getByLabelText("Filter by account"), "desk-beta");
+    await user.clear(screen.getByLabelText("Filter by asset"));
+    await user.type(screen.getByLabelText("Filter by asset"), "AAPL");
+    await user.click(screen.getByRole("button", { name: /apply filters/i }));
+
+    expect(accountInput).toHaveValue("Bucks McMoneyface");
+    expect(assetInput).toHaveValue("MSFT");
+  });
+
+  it("keeps an open draft panel when a new balance appears after reload", async () => {
+    const user = userEvent.setup();
+    useBalancesMock.mockReturnValue(readyPage<Balance>([]));
+    renderPositions();
+
+    await user.click(
+      screen.getAllByRole("button", { name: /^adjustment$/i })[0],
+    );
+
+    let panel = screen.getByRole("region", { name: "Adjustment" });
+    await user.type(within(panel).getByLabelText("Account"), "my");
+    await user.type(within(panel).getByLabelText("Asset"), "AAPL");
+    await user.type(
+      within(panel).getByLabelText("Available adjustment amount"),
+      "600",
+    );
+
+    useBalancesMock.mockReturnValue(readyPage<Balance>([balance]));
+    await user.type(
+      screen.getByLabelText("Filter by asset"),
+      "MSFT",
+    );
+
+    panel = screen.getByRole("region", { name: "Adjustment" });
+    expect(within(panel).getByLabelText("Account")).toHaveValue("my");
+    expect(within(panel).getByLabelText("Asset")).toHaveValue("AAPL");
+    expect(
+      within(panel).getByLabelText("Available adjustment amount"),
+    ).toHaveValue("600");
+  });
+
+  it("suggests known accounts and assets inside the draft panel", async () => {
+    const user = userEvent.setup();
+    renderPositions();
+
+    await user.click(
+      screen.getAllByRole("button", { name: /^adjustment$/i })[0],
+    );
+
+    const panel = screen.getByRole("region", { name: "Adjustment" });
+    const accountInput = within(panel).getByLabelText("Account");
+    const assetInput = within(panel).getByLabelText("Asset");
+
+    await user.clear(accountInput);
+    await user.type(accountInput, "Bu");
+    await user.click(
+      await screen.findByRole("option", { name: "Bucks McMoneyface" }),
+    );
+    expect(accountInput).toHaveValue("Bucks McMoneyface");
+
+    await user.type(assetInput, "AA");
+    await user.click(await screen.findByRole("option", { name: "AAPL" }));
+    expect(assetInput).toHaveValue("AAPL");
   });
 });
 
@@ -672,9 +809,11 @@ describe("Positions history row actions", () => {
         (candidate) =>
           candidate.textContent?.includes("Bucks McMoneyface") &&
           candidate.textContent?.includes("AAPL"),
-      );
+    );
     expect(row).toBeDefined();
     const scope = within(row as HTMLElement);
+    expect(scope.getByText(/balance 600/)).toBeInTheDocument();
+    expect(scope.queryByText(/balance Δ/)).not.toBeInTheDocument();
 
     await user.click(
       scope.getByRole("button", { name: /filter by bucks mcmoneyface/i }),

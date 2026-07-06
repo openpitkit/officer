@@ -304,14 +304,14 @@ func fixtureData() Data {
 }
 
 func mustXID(b []byte) domain.ExternalID {
-	id, err := domain.ExternalIDFromBytes(b)
+	id, err := domain.GeneratedExternalIDFromBytes(b)
 	if err != nil {
 		panic(err)
 	}
 	return id
 }
 
-// Distinct 16-byte external-id seeds for the fixture rows.
+// Distinct random-byte seeds for generated fixture ids.
 func t1Bytes() []byte  { return seed(0x01) }
 func t2Bytes() []byte  { return seed(0x02) }
 func a1Bytes() []byte  { return seed(0x11) }

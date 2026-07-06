@@ -24,6 +24,7 @@ import (
 	"sync"
 
 	"go.openpit.dev/openpit"
+	"go.openpit.dev/openpit/asyncengine"
 	bindmd "go.openpit.dev/openpit/marketdata"
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
@@ -31,6 +32,7 @@ import (
 	"go.openpit.dev/openpit/reject"
 
 	"go.openpit.dev/officer/framework/domain"
+	fwengine "go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/marketdata"
 )
 
@@ -90,13 +92,12 @@ const (
 // The adapter tracks the minimal state this requires: the set of policies
 // registered at build time, and per-policy whether a broker barrier is currently
 // live (for the broker-drop guard), all updated only on a successful call. All
-// handle access and this state are serialized behind mu: the mu gives
-// store+engine+audit atomicity across multi-step operations; the engine itself
-// is built FullSync so individual binding calls are safe under goroutine
-// migration across OS threads (Go does not pin goroutines, making NoSync unsafe
-// in this environment).
+// handle fields and runtime Configure state are guarded by mu. Account-scoped
+// engine calls run through asyncengine lanes and use the handle snapshot
+// captured before submission instead of taking this mutex on the hot path.
 type openPitEngine struct {
-	eng *openpit.Engine
+	eng   *openpit.Engine
+	async *asyncengine.AsyncEngine
 
 	// res resolves account/group codes to the stored integer engine ids the
 	// handle runs on. It is built once from the build Snapshot and is immutable
@@ -138,8 +139,19 @@ type openPitEngine struct {
 	stopSweep chan struct{}
 	sweepWG   sync.WaitGroup
 
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	running bool
+}
+
+type accountLane struct {
+	owner     *openPitEngine
+	eng       *openpit.Engine
+	accountID param.AccountID
+}
+
+type groupLane struct {
+	owner *openPitEngine
+	eng   *openpit.Engine
 }
 
 // newOpenPitEngine wraps an already-built *openpit.Engine and its market-data
@@ -153,6 +165,7 @@ type openPitEngine struct {
 // assembles the tracked state and owns the service before the engine is built.
 func newOpenPitEngine(
 	eng *openpit.Engine,
+	async *asyncengine.AsyncEngine,
 	service *bindmd.Service,
 	registered map[string]struct{},
 	brokerPresent map[string]bool,
@@ -172,6 +185,7 @@ func newOpenPitEngine(
 	}
 	adapter := &openPitEngine{
 		eng:               eng,
+		async:             async,
 		res:               res,
 		sink:              newMarketDataSink(service),
 		marketDataService: service,
@@ -179,7 +193,7 @@ func newOpenPitEngine(
 		brokerPresent:     brokerPresent,
 		registry:          newReservationRegistry(),
 		stopSweep:         make(chan struct{}),
-		running:           eng != nil,
+		running:           eng != nil && async != nil,
 	}
 	if adapter.running {
 		adapter.startSweeper()
@@ -188,10 +202,8 @@ func newOpenPitEngine(
 }
 
 // BuildOpenPitEngine builds the one stage-2 OpenPit engine plus its market-data
-// service and returns them wrapped as an Engine. The engine uses the FullSync
-// mode so that binding calls are safe under goroutine migration: Go does not
-// guarantee that a goroutine stays on the OS thread that built the handle, so
-// NoSync would fault intermittently on the multi-cgo SubmitOrder path. It always
+// service and returns them wrapped as an Engine. The engine uses AccountSync;
+// Officer routes account and group work through asyncengine lanes. It always
 // registers the built-in order-validation policy, and registers each risk policy
 // that has at least one barrier in snap.Limits (reusing the mapping.go ready
 // builders). Blocked accounts from snap.Accounts are then applied with their
@@ -248,12 +260,16 @@ func BuildOpenPitEngine(runtimeLibraryPath string, snap Snapshot) (Engine, error
 	if err := seedBalances(eng, snap.Balances, res); err != nil {
 		return releaseOnErr(err)
 	}
+	async, err := asyncengine.NewBuilder(eng).Dynamic().Build()
+	if err != nil {
+		return releaseOnErr(fmt.Errorf("engine: build async account dispatcher: %w", err))
+	}
 
 	brokerPresent := map[string]bool{
 		nameRateLimit:      hasRateBrokerBarrier(snap.RateLimits),
 		nameOrderSizeLimit: hasOrderSizeBrokerBarrier(snap.OrderSizeLimits),
 	}
-	return newOpenPitEngine(eng, service, registered, brokerPresent, res), nil
+	return newOpenPitEngine(eng, async, service, registered, brokerPresent, res), nil
 }
 
 // hasRateBrokerBarrier reports whether a rate-limit barrier set carries a
@@ -299,8 +315,8 @@ func (e *openPitEngine) BuildProfile() string { return openpit.GetBuildProfile()
 
 // Running reports whether the engine handle is live (built and not stopped).
 func (e *openPitEngine) Running() bool {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	return e.running
 }
 
@@ -435,21 +451,23 @@ func (e *openPitEngine) configurePnlBoundsLocked(limits []domain.LimitPnlBounds)
 func (e *openPitEngine) BlockAccount(
 	ctx context.Context, id domain.AccountID, reason string,
 ) error {
+	return e.RunAccountSynchronized(ctx, id, func(lane fwengine.AccountLane) error {
+		return lane.BlockAccount(ctx, id, reason)
+	})
+}
+
+func (l accountLane) BlockAccount(
+	ctx context.Context, id domain.AccountID, reason string,
+) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("engine: block cancelled: %w", err)
 	}
 
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if !e.running {
-		return fmt.Errorf("engine: block on stopped engine")
-	}
-
-	accountID, err := e.res.account(id)
+	accountID, err := l.owner.res.account(id)
 	if err != nil {
 		return fmt.Errorf("engine: block account %q: %w", id, err)
 	}
-	accounts := e.eng.Accounts()
+	accounts := l.eng.Accounts()
 	accounts.Unblock(accountID)
 	accounts.Block(accountID, reason)
 	return nil
@@ -457,27 +475,40 @@ func (e *openPitEngine) BlockAccount(
 
 // UnblockAccount lifts the engine block on the account.
 func (e *openPitEngine) UnblockAccount(ctx context.Context, id domain.AccountID) error {
+	return e.RunAccountSynchronized(ctx, id, func(lane fwengine.AccountLane) error {
+		return lane.UnblockAccount(ctx, id)
+	})
+}
+
+func (l accountLane) UnblockAccount(ctx context.Context, id domain.AccountID) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("engine: unblock cancelled: %w", err)
 	}
 
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if !e.running {
-		return fmt.Errorf("engine: unblock on stopped engine")
-	}
-
-	accountID, err := e.res.account(id)
+	accountID, err := l.owner.res.account(id)
 	if err != nil {
 		return fmt.Errorf("engine: unblock account %q: %w", id, err)
 	}
-	e.eng.Accounts().Unblock(accountID)
+	l.eng.Accounts().Unblock(accountID)
 	return nil
 }
 
 // ApplyAccountAdjustmentBatch applies one atomic SDK account-adjustment batch
 // for account and maps accepted per-asset outcomes back to the request order.
 func (e *openPitEngine) ApplyAccountAdjustmentBatch(
+	ctx context.Context, account domain.AccountID, reqs []domain.AdjustmentRequest,
+) ([]AdjustmentResult, *AdjustmentBatchReject, error) {
+	var results []AdjustmentResult
+	var batchReject *AdjustmentBatchReject
+	err := e.RunAccountSynchronized(ctx, account, func(lane fwengine.AccountLane) error {
+		var err error
+		results, batchReject, err = lane.ApplyAccountAdjustmentBatch(ctx, account, reqs)
+		return err
+	})
+	return results, batchReject, err
+}
+
+func (l accountLane) ApplyAccountAdjustmentBatch(
 	ctx context.Context, account domain.AccountID, reqs []domain.AdjustmentRequest,
 ) ([]AdjustmentResult, *AdjustmentBatchReject, error) {
 	if err := ctx.Err(); err != nil {
@@ -487,13 +518,7 @@ func (e *openPitEngine) ApplyAccountAdjustmentBatch(
 		return nil, nil, nil
 	}
 
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if !e.running {
-		return nil, nil, fmt.Errorf("engine: adjustment on stopped engine")
-	}
-
-	accountID, err := e.res.account(account)
+	accountID, err := l.owner.res.account(account)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -506,7 +531,7 @@ func (e *openPitEngine) ApplyAccountAdjustmentBatch(
 		adjustments = append(adjustments, adjustment)
 	}
 
-	batch, outcomes, err := e.eng.ApplyAccountAdjustment(
+	batch, outcomes, err := l.eng.ApplyAccountAdjustment(
 		accountID, adjustments)
 	if err != nil {
 		return nil, nil, fmt.Errorf("engine: apply account adjustment: %w", err)
@@ -515,9 +540,16 @@ func (e *openPitEngine) ApplyAccountAdjustmentBatch(
 		rejected := outcomeRejectedFrom(rej)
 		return nil, &rejected, nil
 	}
+	if len(outcomes) == 0 {
+		return nil, nil, nil
+	}
 	results := make([]AdjustmentResult, 0, len(reqs))
 	for _, req := range reqs {
-		accepted := outcomeAcceptedFromList(outcomes, req.Asset)
+		accepted, ok := outcomeAcceptedFromList(outcomes, req.Asset)
+		if !ok {
+			results = append(results, AdjustmentResult{})
+			continue
+		}
 		results = append(results, AdjustmentResult{Accepted: &accepted})
 	}
 	return results, nil, nil
@@ -528,7 +560,19 @@ func (e *openPitEngine) ApplyAccountAdjustmentBatch(
 func (e *openPitEngine) ApplyAccountAdjustment(
 	ctx context.Context, account domain.AccountID, req domain.AdjustmentRequest,
 ) (AdjustmentResult, error) {
-	results, batchReject, err := e.ApplyAccountAdjustmentBatch(
+	var result AdjustmentResult
+	err := e.RunAccountSynchronized(ctx, account, func(lane fwengine.AccountLane) error {
+		var err error
+		result, err = lane.ApplyAccountAdjustment(ctx, account, req)
+		return err
+	})
+	return result, err
+}
+
+func (l accountLane) ApplyAccountAdjustment(
+	ctx context.Context, account domain.AccountID, req domain.AdjustmentRequest,
+) (AdjustmentResult, error) {
+	results, batchReject, err := l.ApplyAccountAdjustmentBatch(
 		ctx, account, []domain.AdjustmentRequest{req},
 	)
 	if err != nil {
@@ -536,6 +580,9 @@ func (e *openPitEngine) ApplyAccountAdjustment(
 	}
 	if batchReject != nil {
 		return AdjustmentResult{Rejected: batchReject}, nil
+	}
+	if len(results) == 0 {
+		return AdjustmentResult{}, nil
 	}
 	if len(results) != 1 {
 		return AdjustmentResult{}, fmt.Errorf(
@@ -552,22 +599,26 @@ func (e *openPitEngine) ApplyAccountAdjustment(
 func (e *openPitEngine) SubmitOrder(
 	ctx context.Context, o domain.Order,
 ) (OrderResult, error) {
+	var result OrderResult
+	err := e.RunAccountSynchronized(ctx, o.Account, func(lane fwengine.AccountLane) error {
+		var err error
+		result, err = lane.SubmitOrder(ctx, o)
+		return err
+	})
+	return result, err
+}
+
+func (l accountLane) SubmitOrder(ctx context.Context, o domain.Order) (OrderResult, error) {
 	if err := ctx.Err(); err != nil {
 		return OrderResult{}, fmt.Errorf("engine: submit order cancelled: %w", err)
 	}
 
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if !e.running {
-		return OrderResult{}, fmt.Errorf("engine: submit order on stopped engine")
-	}
-
-	order, err := orderModelFrom(o, e.res)
+	order, err := orderModelFromAccount(o, l.accountID)
 	if err != nil {
 		return OrderResult{}, err
 	}
 
-	reservation, rejects, err := e.eng.ExecutePreTrade(order)
+	reservation, rejects, err := l.eng.ExecutePreTrade(order)
 	if err != nil {
 		return OrderResult{}, fmt.Errorf("engine: execute pre-trade: %w", err)
 	}
@@ -589,113 +640,141 @@ func (e *openPitEngine) SubmitOrder(
 	return OrderResult{Accepted: true, Lock: lockBytes, Outcomes: outcomes}, nil
 }
 
-// ApplyExecutionReport settles a fill and returns the account blocks the engine
-// recorded plus any adjustment outcomes. Blocks are stamped with the report's
+func (e *openPitEngine) RunAccountSynchronized(
+	ctx context.Context, account domain.AccountID, fn func(fwengine.AccountLane) error,
+) error {
+	accountID, err := e.res.account(account)
+	if err != nil {
+		return err
+	}
+	e.mu.RLock()
+	eng := e.eng
+	async := e.async
+	running := e.running
+	e.mu.RUnlock()
+	if !running || async == nil || eng == nil {
+		return fmt.Errorf("engine: account-synchronized mutation on stopped engine")
+	}
+	lane := accountLane{owner: e, eng: eng, accountID: accountID}
+	_, err = async.Submit(ctx, accountID, func() error { return fn(lane) }).Await(ctx)
+	return err
+}
+
+func (e *openPitEngine) RunGroupSynchronized(
+	ctx context.Context, groupID string, fn func(fwengine.GroupLane) error,
+) error {
+	group, err := e.res.group(groupID)
+	if err != nil {
+		return err
+	}
+	e.mu.RLock()
+	eng := e.eng
+	async := e.async
+	running := e.running
+	e.mu.RUnlock()
+	if !running || async == nil || eng == nil {
+		return fmt.Errorf("engine: group-synchronized mutation on stopped engine")
+	}
+	lane := groupLane{owner: e, eng: eng}
+	_, err = async.Submit(ctx, groupRoutingKey(group), func() error { return fn(lane) }).Await(ctx)
+	return err
+}
+
+func groupRoutingKey(group param.AccountGroupID) param.AccountID {
+	const groupRoutingKeyMask = uint64(1) << 63
+	return param.NewAccountIDFromUint64(groupRoutingKeyMask | uint64(group.Handle()))
+}
+
+// ApplyExecutionReport settles a report and returns the engine-owned persistence
+// persistence plus any adjustment outcomes. Blocks are stamped with the report's
 // account, since the binding's block record does not name the account.
 func (e *openPitEngine) ApplyExecutionReport(
 	ctx context.Context, in domain.ExecutionReportInput,
 ) (ExecutionReportResult, error) {
-	if err := ctx.Err(); err != nil {
-		return ExecutionReportResult{}, fmt.Errorf("engine: execution report cancelled: %w", err)
-	}
+	var result ExecutionReportResult
+	err := e.RunAccountSynchronized(ctx, in.Account, func(lane fwengine.AccountLane) error {
+		var err error
+		result, err = lane.ApplyExecutionReport(ctx, in)
+		return err
+	})
+	return result, err
+}
 
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if !e.running {
-		return ExecutionReportResult{}, fmt.Errorf("engine: execution report on stopped engine")
-	}
-
-	report, err := executionReportFrom(in, e.res)
+func (l accountLane) ApplyExecutionReport(
+	ctx context.Context, in domain.ExecutionReportInput,
+) (ExecutionReportResult, error) {
+	report, err := executionReportFromAccount(in, l.accountID)
 	if err != nil {
 		return ExecutionReportResult{}, err
 	}
 
-	result, err := e.eng.ApplyExecutionReport(report)
+	result, err := l.eng.ApplyExecutionReport(report)
 	if err != nil {
 		return ExecutionReportResult{}, fmt.Errorf("engine: apply execution report: %w", err)
 	}
 
+	blocks := executionBlocksFrom(result.AccountBlocks, in.Account)
+	outcomes := balanceOutcomesFromList(result.AccountAdjustmentOutcomes)
+	persistence := executionReportPersistenceFrom(in, blocks, outcomes)
 	return ExecutionReportResult{
-		Blocks:   executionBlocksFrom(result.AccountBlocks, in.Account),
-		Outcomes: balanceOutcomesFromList(result.AccountAdjustmentOutcomes),
+		Persistence: &persistence,
+		Blocks:      blocks,
+		Outcomes:    outcomes,
 	}, nil
 }
 
-// RegisterGroup atomically registers accounts into groupID on the live engine.
-func (e *openPitEngine) RegisterGroup(
+func (l groupLane) RegisterGroup(
 	ctx context.Context, accounts []domain.AccountID, groupID string,
 ) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("engine: register group cancelled: %w", err)
 	}
 
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if !e.running {
-		return fmt.Errorf("engine: register group on stopped engine")
-	}
-
-	ids, err := e.res.accountIDs(accounts)
+	ids, err := l.owner.res.accountIDs(accounts)
 	if err != nil {
 		return err
 	}
-	group, err := e.res.group(groupID)
+	group, err := l.owner.res.group(groupID)
 	if err != nil {
 		return err
 	}
-	if err := e.eng.Accounts().RegisterGroup(ids, group); err != nil {
+	if err := l.eng.Accounts().RegisterGroup(ids, group); err != nil {
 		return fmt.Errorf("engine: register group %q: %w", groupID, err)
 	}
 	return nil
 }
 
-// UnregisterGroup atomically removes accounts from groupID on the live engine.
-func (e *openPitEngine) UnregisterGroup(
+func (l groupLane) UnregisterGroup(
 	ctx context.Context, accounts []domain.AccountID, groupID string,
 ) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("engine: unregister group cancelled: %w", err)
 	}
 
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if !e.running {
-		return fmt.Errorf("engine: unregister group on stopped engine")
-	}
-
-	ids, err := e.res.accountIDs(accounts)
+	ids, err := l.owner.res.accountIDs(accounts)
 	if err != nil {
 		return err
 	}
-	group, err := e.res.group(groupID)
+	group, err := l.owner.res.group(groupID)
 	if err != nil {
 		return err
 	}
-	if err := e.eng.Accounts().UnregisterGroup(ids, group); err != nil {
+	if err := l.eng.Accounts().UnregisterGroup(ids, group); err != nil {
 		return fmt.Errorf("engine: unregister group %q: %w", groupID, err)
 	}
 	return nil
 }
 
-// BlockGroup kill-switches every account in groupID on the live engine. Block
-// keeps the first recorded reason, so the group is unblocked and re-blocked to
-// refresh the reason, mirroring BlockAccount.
-func (e *openPitEngine) BlockGroup(ctx context.Context, groupID, reason string) error {
+func (l groupLane) BlockGroup(ctx context.Context, groupID, reason string) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("engine: block group cancelled: %w", err)
 	}
 
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if !e.running {
-		return fmt.Errorf("engine: block group on stopped engine")
-	}
-
-	group, err := e.res.group(groupID)
+	group, err := l.owner.res.group(groupID)
 	if err != nil {
 		return err
 	}
-	accounts := e.eng.Accounts()
+	accounts := l.eng.Accounts()
 	if err := accounts.UnblockGroup(group); err != nil {
 		return fmt.Errorf("engine: block group %q: %w", groupID, err)
 	}
@@ -705,23 +784,16 @@ func (e *openPitEngine) BlockGroup(ctx context.Context, groupID, reason string) 
 	return nil
 }
 
-// UnblockGroup lifts the engine block on groupID.
-func (e *openPitEngine) UnblockGroup(ctx context.Context, groupID string) error {
+func (l groupLane) UnblockGroup(ctx context.Context, groupID string) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("engine: unblock group cancelled: %w", err)
 	}
 
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if !e.running {
-		return fmt.Errorf("engine: unblock group on stopped engine")
-	}
-
-	group, err := e.res.group(groupID)
+	group, err := l.owner.res.group(groupID)
 	if err != nil {
 		return err
 	}
-	if err := e.eng.Accounts().UnblockGroup(group); err != nil {
+	if err := l.eng.Accounts().UnblockGroup(group); err != nil {
 		return fmt.Errorf("engine: unblock group %q: %w", groupID, err)
 	}
 	return nil
@@ -737,17 +809,23 @@ func (e *openPitEngine) UnblockGroup(ctx context.Context, groupID string) error 
 func (e *openPitEngine) CheckOrder(
 	ctx context.Context, probe domain.OrderProbe,
 ) (domain.CheckResult, error) {
+	var result domain.CheckResult
+	err := e.RunAccountSynchronized(ctx, probe.Account, func(lane fwengine.AccountLane) error {
+		var err error
+		result, err = lane.CheckOrder(ctx, probe)
+		return err
+	})
+	return result, err
+}
+
+func (l accountLane) CheckOrder(
+	ctx context.Context, probe domain.OrderProbe,
+) (domain.CheckResult, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.CheckResult{}, fmt.Errorf("engine: check order cancelled: %w", err)
 	}
 
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if !e.running {
-		return domain.CheckResult{}, fmt.Errorf("engine: check order on stopped engine")
-	}
-
-	order, err := orderModelFrom(domain.Order{
+	order, err := orderModelFromAccount(domain.Order{
 		Account:     probe.Account,
 		BaseAsset:   probe.BaseAsset,
 		QuoteAsset:  probe.QuoteAsset,
@@ -755,12 +833,12 @@ func (e *openPitEngine) CheckOrder(
 		AmountKind:  probe.AmountKind,
 		AmountValue: probe.AmountValue,
 		Price:       probe.Price,
-	}, e.res)
+	}, l.accountID)
 	if err != nil {
 		return domain.CheckResult{}, err
 	}
 
-	report, err := e.eng.ExecutePreTradeDryRun(order)
+	report, err := l.eng.ExecutePreTradeDryRun(order)
 	if err != nil {
 		return domain.CheckResult{}, fmt.Errorf("engine: execute pre-trade dry-run: %w", err)
 	}
@@ -800,10 +878,6 @@ func (e *openPitEngine) MarketDataSink() marketdata.Sink {
 // Quote producers (the connector manager) must be stopped before Stop. It is
 // idempotent.
 func (e *openPitEngine) Stop() {
-	// Quiesce the sweeper before taking e.mu: the sweeper also takes e.mu, so
-	// signalling and waiting here avoids a deadlock and a rollback racing the
-	// drain. The close is guarded so a second Stop does not close a closed
-	// channel.
 	e.mu.Lock()
 	if !e.running {
 		e.mu.Unlock()
@@ -815,17 +889,27 @@ func (e *openPitEngine) Stop() {
 
 	e.sweepWG.Wait()
 
+	async := e.async
+	if async != nil {
+		_ = async.StopGraceful(context.Background())
+	}
+
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	// Drain held reservations before the engine stops so the rollbacks reach a
 	// live handle.
 	e.drainHeldLocked()
-	if e.eng != nil {
-		e.eng.Stop()
+	eng := e.eng
+	e.async = nil
+	e.eng = nil
+	service := e.marketDataService
+	e.marketDataService = nil
+	e.mu.Unlock()
+
+	if eng != nil {
+		eng.Stop()
 	}
-	if e.marketDataService != nil {
-		e.marketDataService.Close()
-		e.marketDataService = nil
+	if service != nil {
+		service.Close()
 	}
 }
 
@@ -866,9 +950,9 @@ func policyName(policy string) string {
 func buildEngine(
 	snap Snapshot, res idResolver,
 ) (*openpit.Engine, *bindmd.Service, map[string]struct{}, error) {
-	// The market-data service is built from the engine builder so its sync mode
-	// is derived (FullSync), and it must be built before the engine.
-	eb := openpit.NewEngineBuilder().FullSync()
+	// The market-data service is intentionally FullSync for every non-NoSync
+	// engine builder, and it must be built before the AccountSync engine.
+	eb := openpit.NewEngineBuilder().AccountSync()
 	service, err := eb.MarketData(defaultQuoteTTL).Build()
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("engine: build market-data service: %w", err)

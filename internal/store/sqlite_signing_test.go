@@ -170,22 +170,23 @@ func TestSigningConfigRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
-	// The migration seeds no_esign=0.
+	// The migration seeds no_esign=1, so fresh realms do not require signatures
+	// until an operator configures a signing key and enables the mode.
 	v, ok, err := rs.GetSigningConfig(ctx, "no_esign")
 	if err != nil || !ok {
 		t.Fatalf("GetSigningConfig(no_esign): ok=%v err=%v", ok, err)
 	}
-	if v != "0" {
-		t.Fatalf("seeded no_esign = %q, want 0", v)
+	if v != "1" {
+		t.Fatalf("seeded no_esign = %q, want 1", v)
 	}
 
 	// Set then read back (upsert over the seeded row).
-	if err := rs.SetSigningConfig(ctx, "no_esign", "1"); err != nil {
+	if err := rs.SetSigningConfig(ctx, "no_esign", "0"); err != nil {
 		t.Fatalf("SetSigningConfig: %v", err)
 	}
 	v, _, _ = rs.GetSigningConfig(ctx, "no_esign")
-	if v != "1" {
-		t.Fatalf("no_esign after set = %q, want 1", v)
+	if v != "0" {
+		t.Fatalf("no_esign after set = %q, want 0", v)
 	}
 
 	// An absent enum key reports ok=false, not an error.

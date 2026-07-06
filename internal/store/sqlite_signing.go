@@ -54,7 +54,11 @@ FROM signing_key`
 func (r *realmStore) UpsertSigningKey(
 	ctx context.Context, key domain.SigningKey,
 ) error {
-	if _, err := r.db().ExecContext(
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(
 		ctx,
 		`INSERT INTO signing_key
 		 (key_id, alg, private_key, public_key, created_at, active)
@@ -79,7 +83,11 @@ func (r *realmStore) UpsertSigningKey(
 func (r *realmStore) GetActiveSigningKey(
 	ctx context.Context,
 ) (domain.SigningKey, bool, error) {
-	row := r.db().QueryRowContext(
+	db, err := r.db()
+	if err != nil {
+		return domain.SigningKey{}, false, err
+	}
+	row := db.QueryRowContext(
 		ctx, signingKeySelect+` WHERE active = 1 LIMIT 1`,
 	)
 	key, err := scanSigningKeyRow(row)
@@ -97,7 +105,11 @@ func (r *realmStore) GetActiveSigningKey(
 func (r *realmStore) GetSigningKey(
 	ctx context.Context, keyID string,
 ) (domain.SigningKey, error) {
-	row := r.db().QueryRowContext(
+	db, err := r.db()
+	if err != nil {
+		return domain.SigningKey{}, err
+	}
+	row := db.QueryRowContext(
 		ctx, signingKeySelect+` WHERE key_id = ?`, keyID,
 	)
 	key, err := scanSigningKeyRow(row)
@@ -114,7 +126,11 @@ func (r *realmStore) GetSigningKey(
 // PrivateKey is deliberately NOT populated: a listing never carries private
 // material; callers use GetSigningKey/GetActiveSigningKey for that.
 func (r *realmStore) ListSigningKeys(ctx context.Context) ([]domain.SigningKey, error) {
-	rows, err := r.db().QueryContext(
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(
 		ctx,
 		`SELECT key_id, alg, public_key, created_at, active
 		 FROM signing_key ORDER BY created_at DESC, id DESC`,
@@ -141,7 +157,11 @@ func (r *realmStore) ListSigningKeys(ctx context.Context) ([]domain.SigningKey, 
 // DeactivateAllSigningKeys clears the active flag on every signing key. It is a
 // no-op when there are no active keys (or no keys at all).
 func (r *realmStore) DeactivateAllSigningKeys(ctx context.Context) error {
-	if _, err := r.db().ExecContext(
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(
 		ctx, `UPDATE signing_key SET active = 0 WHERE active = 1`,
 	); err != nil {
 		return fmt.Errorf("store: deactivate signing keys: %w", err)
@@ -211,7 +231,11 @@ func (r *realmStore) GetSigningConfig(
 	ctx context.Context, key string,
 ) (string, bool, error) {
 	var value string
-	err := r.db().QueryRowContext(
+	db, err := r.db()
+	if err != nil {
+		return "", false, err
+	}
+	err = db.QueryRowContext(
 		ctx, `SELECT value FROM signing_config WHERE key = ?`, key,
 	).Scan(&value)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -225,7 +249,11 @@ func (r *realmStore) GetSigningConfig(
 
 // SetSigningConfig upserts the value for the given enum config key.
 func (r *realmStore) SetSigningConfig(ctx context.Context, key, value string) error {
-	if _, err := r.db().ExecContext(
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(
 		ctx,
 		`INSERT INTO signing_config (key, value) VALUES (?, ?)
 		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,

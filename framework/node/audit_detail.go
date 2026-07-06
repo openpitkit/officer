@@ -144,13 +144,11 @@ func submitOrderDetail(order domain.Order, accepted bool) string {
 		order.ExternalID, order.Account, order.BaseAsset, order.QuoteAsset, order.Side, disposition)
 }
 
-// executionReportDetail renders one execution report, its fill, and how many
-// account blocks it produced.
-func executionReportDetail(in domain.ExecutionReportInput, blocks int) string {
-	status := "partially_filled"
-	if in.Final {
-		status = "filled"
-	}
+// executionReportDetail renders one execution report and how many account
+// blocks it produced.
+func executionReportDetail(
+	in domain.ExecutionReportInput, status domain.OrderStatus, blocks int,
+) string {
 	return fmt.Sprintf("execution report order %s account %s %s/%s qty=%s %s blocks=%d",
 		in.Order, in.Account, in.BaseAsset, in.QuoteAsset, in.FillQuantity, status, blocks)
 }

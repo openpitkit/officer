@@ -225,6 +225,19 @@ describe("SigningKeys page — eSign toggle", () => {
       expect(setESignEnabledMock).toHaveBeenCalledWith(true),
     );
   });
+
+  it("does not enable eSign without an active signing key", async () => {
+    mockReady({ keys: [], eSignEnabled: false });
+    renderPage();
+    const checkbox = screen.getByRole("checkbox");
+    await userEvent.click(checkbox);
+
+    expect(setESignEnabledMock).not.toHaveBeenCalled();
+    expect(checkbox).not.toBeChecked();
+    expect(
+      screen.getByText(/generate or import a signing key/i),
+    ).toBeInTheDocument();
+  });
 });
 
 describe("SigningKeys page — loading state", () => {

@@ -41,10 +41,12 @@ type approvalFakeSource struct {
 	submitCalls  []submitCall
 
 	confirmOrder domain.Order
+	confirmAtt   Attestation
 	confirmErr   error
 	confirmCalls []confirmCall
 
 	cancelOrder domain.Order
+	cancelAtt   Attestation
 	cancelErr   error
 	cancelCalls []cancelCallRecord
 }
@@ -76,25 +78,25 @@ func (f *approvalFakeSource) SubmitOrderToken(
 
 func (f *approvalFakeSource) ConfirmExecution(
 	_ context.Context, orderExternalID string, token string, force bool,
-) (domain.Order, error) {
+) (domain.Order, Attestation, error) {
 	f.confirmCalls = append(f.confirmCalls, confirmCall{
 		orderExternalID: orderExternalID,
 		token:           token,
 		force:           force,
 	})
-	return f.confirmOrder, f.confirmErr
+	return f.confirmOrder, f.confirmAtt, f.confirmErr
 }
 
 func (f *approvalFakeSource) CancelOrder(
 	_ context.Context, orderExternalID string, token, reason string, force bool,
-) (domain.Order, error) {
+) (domain.Order, Attestation, error) {
 	f.cancelCalls = append(f.cancelCalls, cancelCallRecord{
 		orderExternalID: orderExternalID,
 		token:           token,
 		reason:          reason,
 		force:           force,
 	})
-	return f.cancelOrder, f.cancelErr
+	return f.cancelOrder, f.cancelAtt, f.cancelErr
 }
 
 // helpers -----------------------------------------------------------------
@@ -369,20 +371,21 @@ func TestSubmitOrderGeneratesWhenAbsent(t *testing.T) {
 	}
 }
 
-// TestSubmitOrderMalformedExternalID: a malformed supplied id yields a clear
-// invalid error before the backend is touched.
-func TestSubmitOrderMalformedExternalID(t *testing.T) {
+// TestSubmitOrderOpaqueExternalID: a caller-supplied id is accepted verbatim
+// without a base64url shape requirement.
+func TestSubmitOrderOpaqueExternalID(t *testing.T) {
 	src := &approvalFakeSource{}
+	supplied := "not-a-valid-id"
 	res := callSubmitOrder(t, src, submitOrderInput{
 		Account: "acc1", BaseAsset: "BTC", QuoteAsset: "USD",
 		Side: "buy", AmountKind: "quantity", AmountValue: "1",
-		ExternalID: "not-a-valid-id",
+		ExternalID: supplied,
 	})
-	if !res.IsError {
-		t.Fatalf("want IsError=true for malformed externalId")
+	if res.IsError {
+		t.Fatalf("unexpected error: %v", res.Content)
 	}
-	if len(src.submitCalls) != 0 {
-		t.Errorf("malformed id must not reach backend: %v", src.submitCalls)
+	if got := src.submitCalls[0].order.ExternalID.String(); got != supplied {
+		t.Errorf("externalId: want %q got %q", supplied, got)
 	}
 }
 

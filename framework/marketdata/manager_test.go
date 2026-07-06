@@ -29,9 +29,7 @@ import (
 )
 
 func testExternalID(label string) domain.ExternalID {
-	var id domain.ExternalID
-	copy(id[:], label)
-	return id
+	return domain.ExternalID(label)
 }
 
 type fakeStore struct {

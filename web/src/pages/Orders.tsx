@@ -16,13 +16,15 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent, MouseEvent, ReactElement } from "react";
+import type { KeyboardEvent, MouseEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
+  Calculator,
   ExternalLink,
   Plus,
   GitFork,
+  KeyRound,
   ShieldCheck,
 } from "lucide-react";
 
@@ -48,14 +50,15 @@ import {
   ViewEntityButton,
   useOpenInNewTabHint,
   useOfficerApi,
+  type ExecutionReportBody,
   type SortDirection,
   type TradesFilter,
 } from "@/framework";
 import type {
+  ApprovalToken,
   CheckResult,
   ExecutionBlock,
   Order,
-  OrderApproval,
   OrderEvent,
   OrderListFilters,
   OrderSide,
@@ -69,9 +72,11 @@ import { useTradesPage } from "@/api/useTrades";
 import { operatorOptions } from "@/lib/dataControlLabels";
 import { formatDateTime } from "@/i18n/format";
 import { DEFAULT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from "@/lib/useDebounce";
+import { subtractDecimalStrings } from "@/lib/numberStep";
 import { shareUrl } from "@/lib/shareLink";
 import { sortDirection } from "@/lib/sortDirection";
 import { cn } from "@/lib/utils";
+import { OrderVerificationPanel } from "@/pages/OrderVerificationPanel";
 import { Autocomplete } from "@/components/Autocomplete";
 import {
   EmptyState,
@@ -88,8 +93,7 @@ import {
 } from "@/components/TableControls";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { CopyableSnippet } from "@/components/CopyableSnippet";
+import { ClearableInput } from "@/components/ClearableInput";
 import {
   Dialog,
   DialogContent,
@@ -134,16 +138,18 @@ function errMessage(err: unknown): string {
 /** Order status → badge variant. */
 function statusVariant(status: string): BadgeProps["variant"] {
   switch (status) {
+    case "submitted":
+      return "accent";
     case "accepted":
+    case "committed":
     case "filled":
       return "ok";
     case "rejected":
+    case "rolled_back":
     case "cancelled":
       return "danger";
-    case "partial":
+    case "partially_filled":
       return "warn";
-    case "pending":
-      return "accent";
     default:
       return "neutral";
   }
@@ -329,6 +335,9 @@ interface SubmitOrderDialogProps {
   onClose: () => void;
   onCreated: () => void;
   onOpenDetail: (externalId: string, banner?: string) => void;
+  /** Retain the approval token of a freshly created held order so the operator
+   *  can later confirm or cancel it. Called only for the hold submit mode. */
+  onHeldTokenIssued: (token: ApprovalToken) => void;
   accountSuggestions: string[];
   assetSuggestions: string[];
   /** Pre-seed all input fields (clone path). */
@@ -340,19 +349,21 @@ function SubmitOrderDialog({
   onClose,
   onCreated,
   onOpenDetail,
+  onHeldTokenIssued,
 	accountSuggestions,
 	assetSuggestions,
 	initialValues,
 }: SubmitOrderDialogProps) {
 	  const { t } = useTranslation("orders");
 			  const { t: tc } = useTranslation();
-  const { checkOrder, createOrder } = useOfficerApi();
+  const { checkOrder, createOrder, fetchAccounts, fetchAssets } =
+    useOfficerApi();
 
   const [externalId, setExternalId] = useState("");
   const [account, setAccount] = useState(initialValues?.account ?? "");
   const [baseAsset, setBaseAsset] = useState(initialValues?.baseAsset ?? "");
   const [quoteAsset, setQuoteAsset] = useState(initialValues?.quoteAsset ?? "");
-  const [side, setSide] = useState<string>(initialValues?.side ?? "buy");
+  const [side, setSide] = useState<string>(initialValues?.side ?? "");
   const [amountKind, setAmountKind] = useState<string>(initialValues?.amountKind ?? "");
   const [amountValue, setAmountValue] = useState(initialValues?.amountValue ?? "");
   const [price, setPrice] = useState(initialValues?.price ?? "");
@@ -360,14 +371,103 @@ function SubmitOrderDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [checkState, setCheckState] = useState<CheckState>({ phase: "idle" });
+  const debouncedAccount = useDebouncedValue(
+    account.trim(),
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const debouncedBaseAsset = useDebouncedValue(
+    baseAsset.trim(),
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const debouncedQuoteAsset = useDebouncedValue(
+    quoteAsset.trim(),
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const [dialogAccountSuggestions, setDialogAccountSuggestions] =
+    useState<string[]>([]);
+  const [dialogAssetSuggestions, setDialogAssetSuggestions] =
+    useState<string[]>([]);
   const checkAbortRef = useRef<AbortController | null>(null);
   const submitAbortRef = useRef<AbortController | null>(null);
+  const accountFieldRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     return () => {
       submitAbortRef.current?.abort();
     };
   }, []);
+
+  useEffect(() => {
+    if (debouncedAccount === "") {
+      return;
+    }
+    const controller = new AbortController();
+    fetchAccounts(
+      {
+        code: debouncedAccount,
+        codeMatch: "starts_with",
+        limit: 8,
+        sort: "code",
+      },
+      controller.signal,
+    )
+      .then((accounts) => {
+        if (!controller.signal.aborted) {
+          setDialogAccountSuggestions(accounts.map((item) => item.code));
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setDialogAccountSuggestions([]);
+        }
+      });
+    return () => controller.abort();
+  }, [debouncedAccount, fetchAccounts]);
+
+  useEffect(() => {
+    const queries = Array.from(
+      new Set(
+        [debouncedBaseAsset, debouncedQuoteAsset].filter(
+          (value) => value !== "",
+        ),
+      ),
+    );
+    if (queries.length === 0) {
+      return;
+    }
+    const controller = new AbortController();
+    Promise.all(
+      queries.map((query) =>
+        fetchAssets(
+          {
+            code: query,
+            codeMatch: "starts_with",
+            limit: 8,
+            sort: "code",
+          },
+          controller.signal,
+        ),
+      ),
+    )
+      .then((pages) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        const next = new Set<string>();
+        for (const page of pages) {
+          for (const asset of page) {
+            next.add(asset.code);
+          }
+        }
+        setDialogAssetSuggestions(Array.from(next).sort().slice(0, 12));
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setDialogAssetSuggestions([]);
+        }
+      });
+    return () => controller.abort();
+  }, [debouncedBaseAsset, debouncedQuoteAsset, fetchAssets]);
 
   // Debounced live check: fires after the shared search interval.
   useEffect(() => {
@@ -376,7 +476,7 @@ function SubmitOrderDialog({
     const quoteT = quoteAsset.trim();
     const amountT = amountValue.trim();
     // Skip when required fields are absent.
-    if (!accountT || !baseT || !quoteT || !amountT || !amountKind) {
+    if (!accountT || !baseT || !quoteT || !amountT || !amountKind || !side) {
       // Reset to idle when the form is incomplete; intentional sync.
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setCheckState({ phase: "idle" });
@@ -391,7 +491,7 @@ function SubmitOrderDialog({
         account: accountT,
         baseAsset: baseT,
         quoteAsset: quoteT,
-        side,
+        side: side as OrderSide,
         amountKind,
         amountValue: amountT,
       };
@@ -437,7 +537,7 @@ function SubmitOrderDialog({
       setBaseAsset(initialValues?.baseAsset ?? "");
       setQuoteAsset(initialValues?.quoteAsset ?? "");
       setExternalId("");
-      setSide(initialValues?.side ?? "buy");
+      setSide(initialValues?.side ?? "");
       setAmountKind(initialValues?.amountKind ?? "");
       setAmountValue(initialValues?.amountValue ?? "");
       setPrice(initialValues?.price ?? "");
@@ -458,7 +558,7 @@ function SubmitOrderDialog({
     setBaseAsset(initialValues?.baseAsset ?? "");
     setQuoteAsset(initialValues?.quoteAsset ?? "");
     setExternalId("");
-    setSide(initialValues?.side ?? "buy");
+    setSide(initialValues?.side ?? "");
     setAmountKind(initialValues?.amountKind ?? "");
     setAmountValue(initialValues?.amountValue ?? "");
     setPrice(initialValues?.price ?? "");
@@ -486,6 +586,10 @@ function SubmitOrderDialog({
       setError(t("addOrder.dialog.amountKindRequired"));
       return;
     }
+    if (!side) {
+      setError(t("addOrder.dialog.sideRequired"));
+      return;
+    }
     if (submitMode === null) {
       setError(t("addOrder.dialog.submitModeRequired"));
       return;
@@ -500,7 +604,7 @@ function SubmitOrderDialog({
         account: account.trim(),
         baseAsset: baseAsset.trim(),
         quoteAsset: quoteAsset.trim(),
-        side,
+        side: side as OrderSide,
         amountKind,
         amountValue: amountValue.trim(),
       };
@@ -514,6 +618,11 @@ function SubmitOrderDialog({
       const result = await createOrder(body, controller.signal);
       if (controller.signal.aborted) {
         return;
+      }
+      // A held order is not yet resolved: retain its approval token so the
+      // operator can confirm or cancel it from the detail view.
+      if (submitMode === "hold") {
+        onHeldTokenIssued(result.approval);
       }
       onCreated();
       reset();
@@ -539,12 +648,19 @@ function SubmitOrderDialog({
     baseAsset.trim() !== "" &&
     quoteAsset.trim() !== "" &&
     amountValue.trim() !== "" &&
+    side !== "" &&
     amountKind !== "" &&
     submitMode !== null;
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) handleClose(); }}>
-      <DialogContent className="max-w-md">
+      <DialogContent
+        className="max-w-md"
+        onOpenAutoFocus={(e) => {
+          e.preventDefault();
+          accountFieldRef.current?.focus();
+        }}
+      >
         <DialogHeader>
           <DialogTitle>{t("addOrder.dialog.title")}</DialogTitle>
           <DialogDescription>
@@ -555,13 +671,15 @@ function SubmitOrderDialog({
         <div className="space-y-4">
           <div className="space-y-1.5">
             <Label htmlFor="so-external-id">{t("addOrder.dialog.externalId")}</Label>
-            <Input
+            <ClearableInput
               id="so-external-id"
               value={externalId}
               spellCheck={false}
               placeholder={t("addOrder.dialog.externalIdPlaceholder")}
               onChange={(e) => setExternalId(e.target.value)}
               disabled={busy}
+              onClear={() => setExternalId("")}
+              clearLabel={tc("filters.clearField")}
             />
             <p className="text-[0.6875rem] text-muted">
               {t("addOrder.dialog.externalIdHint")}
@@ -570,12 +688,21 @@ function SubmitOrderDialog({
           <div className="space-y-1.5">
             <Label htmlFor="so-account">{t("addOrder.dialog.account")}</Label>
             <Autocomplete
+              ref={accountFieldRef}
               id="so-account"
               value={account}
               onChange={setAccount}
-              suggestions={accountSuggestions}
+              suggestions={
+                debouncedAccount === ""
+                  ? []
+                  : dialogAccountSuggestions.length > 0
+                    ? dialogAccountSuggestions
+                    : accountSuggestions
+              }
               placeholder={t("addOrder.dialog.accountPlaceholder")}
               disabled={busy}
+              onClear={() => setAccount("")}
+              clearLabel={tc("filters.clearField")}
             />
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -585,9 +712,17 @@ function SubmitOrderDialog({
                 id="so-base"
                 value={baseAsset}
                 onChange={setBaseAsset}
-                suggestions={assetSuggestions}
+                suggestions={
+                  debouncedBaseAsset === ""
+                    ? []
+                    : dialogAssetSuggestions.length > 0
+                      ? dialogAssetSuggestions
+                      : assetSuggestions
+                }
                 placeholder={t("addOrder.dialog.baseAssetPlaceholder")}
                 disabled={busy}
+                onClear={() => setBaseAsset("")}
+                clearLabel={tc("filters.clearField")}
               />
             </div>
             <div className="space-y-1.5">
@@ -596,9 +731,17 @@ function SubmitOrderDialog({
                 id="so-quote"
                 value={quoteAsset}
                 onChange={setQuoteAsset}
-                suggestions={assetSuggestions}
+                suggestions={
+                  debouncedQuoteAsset === ""
+                    ? []
+                    : dialogAssetSuggestions.length > 0
+                      ? dialogAssetSuggestions
+                      : assetSuggestions
+                }
                 placeholder={t("addOrder.dialog.quoteAssetPlaceholder")}
                 disabled={busy}
+                onClear={() => setQuoteAsset("")}
+                clearLabel={tc("filters.clearField")}
               />
             </div>
           </div>
@@ -726,6 +869,8 @@ function SubmitOrderDialog({
                 placeholder={t("addOrder.dialog.amountPlaceholder")}
                 disabled={busy}
                 className="flex-1"
+                onClear={() => setAmountValue("")}
+                clearLabel={tc("filters.clearField")}
               />
             </div>
           </div>
@@ -737,6 +882,8 @@ function SubmitOrderDialog({
               onChange={setPrice}
               placeholder={t("addOrder.dialog.limitPricePlaceholder")}
               disabled={busy}
+              onClear={() => setPrice("")}
+              clearLabel={tc("filters.clearField")}
             />
           </div>
 
@@ -769,7 +916,29 @@ interface ExecReportInitialValues {
   quantity: string;
   price: string;
   lockPrice: string;
+  /** Order's current remaining-open quantity. Absent for a trades-table clone
+   * that carries no order detail. */
+  leaves?: string;
 }
+
+const EXEC_REPORT_STATUS_OPTIONS = [
+  "submitted",
+  "accepted",
+  "rejected",
+  "committed",
+  "rolled_back",
+  "filled",
+  "partially_filled",
+  "cancelled",
+] as const;
+
+type ExecReportOrderStatus = (typeof EXEC_REPORT_STATUS_OPTIONS)[number];
+
+/** Statuses that settle a fill through the engine and need fill fields. */
+const EXEC_REPORT_FILL_STATUSES = new Set<ExecReportOrderStatus>([
+  "filled",
+  "partially_filled",
+]);
 
 function execReportInitialValuesFromOrder(order: Order): ExecReportInitialValues {
   const lockPrice = order.displayPrices.length > 0
@@ -779,40 +948,90 @@ function execReportInitialValuesFromOrder(order: Order): ExecReportInitialValues
     quantity: "",
     price: lockPrice,
     lockPrice,
+    leaves: order.leavesQuantity,
   };
 }
 
 interface ExecReportDialogProps {
   orderExternalId: string | null;
   onClose: () => void;
-  onSubmitted: () => void;
+  onSubmitted: (update: ExecReportSubmittedUpdate) => void;
   /** Pre-seed all input fields (clone path). */
   initialValues?: ExecReportInitialValues;
+}
+
+interface ExecReportSubmittedUpdate {
+  orderExternalId: string;
+}
+
+/** Field values for a given status. Leaves is always operator-entered or
+ * explicitly calculated by button; it is never auto-filled on status change. */
+function execReportFieldsForStatus(
+  status: ExecReportOrderStatus,
+  initialValues: ExecReportInitialValues | undefined,
+): { quantity: string; price: string; leavesQuantity: string; lockPrice: string } {
+  if (status === "filled") {
+    return {
+      quantity: initialValues?.leaves ?? initialValues?.quantity ?? "",
+      price: initialValues?.price ?? "",
+      leavesQuantity: "",
+      lockPrice: initialValues?.lockPrice ?? "",
+    };
+  }
+  if (status === "partially_filled") {
+    return {
+      quantity: initialValues?.quantity ?? "",
+      price: initialValues?.price ?? "",
+      leavesQuantity: "",
+      lockPrice: initialValues?.lockPrice ?? "",
+    };
+  }
+  return { quantity: "", price: "", leavesQuantity: "", lockPrice: "" };
 }
 
 function ExecReportDialog({ orderExternalId, onClose, onSubmitted, initialValues }: ExecReportDialogProps) {
   const { t } = useTranslation("orders");
   const { t: tc } = useTranslation();
   const { submitExecutionReport } = useOfficerApi();
+  const statusTriggerRef = useRef<HTMLButtonElement | null>(null);
 
-  const [quantity, setQuantity] = useState(initialValues?.quantity ?? "");
-  const [price, setPrice] = useState(initialValues?.price ?? "");
-  const [lockPrice, setLockPrice] = useState(initialValues?.lockPrice ?? "");
-  const [final, setFinal] = useState(true);
+  const initialFields = execReportFieldsForStatus("filled", initialValues);
+  const [quantity, setQuantity] = useState(initialFields.quantity);
+  const [price, setPrice] = useState(initialFields.price);
+  const [leavesQuantity, setLeavesQuantity] = useState(initialFields.leavesQuantity);
+  const [lockPrice, setLockPrice] = useState(initialFields.lockPrice);
+  const [status, setStatus] = useState<ExecReportOrderStatus>("filled");
   const [force, setForce] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
   const [blocks, setBlocks] = useState<ExecutionBlock[]>([]);
 
+  const isFillStatus = EXEC_REPORT_FILL_STATUSES.has(status);
+
+  function applyStatus(next: ExecReportOrderStatus) {
+    const wasFillStatus = isFillStatus;
+    setStatus(next);
+    if (wasFillStatus && EXEC_REPORT_FILL_STATUSES.has(next)) {
+      return;
+    }
+    const fields = execReportFieldsForStatus(next, initialValues);
+    setQuantity(fields.quantity);
+    setPrice(fields.price);
+    setLeavesQuantity(fields.leavesQuantity);
+    setLockPrice(fields.lockPrice);
+  }
+
   // Reseed from initialValues whenever the dialog opens (clone path).
   useEffect(() => {
     if (orderExternalId !== null) {
+      const fields = execReportFieldsForStatus("filled", initialValues);
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setQuantity(initialValues?.quantity ?? "");
-      setPrice(initialValues?.price ?? "");
-      setLockPrice(initialValues?.lockPrice ?? "");
-      setFinal(true);
+      setStatus("filled");
+      setQuantity(fields.quantity);
+      setPrice(fields.price);
+      setLeavesQuantity(fields.leavesQuantity);
+      setLockPrice(fields.lockPrice);
       setForce(false);
       setBusy(false);
       setError(null);
@@ -823,10 +1042,12 @@ function ExecReportDialog({ orderExternalId, onClose, onSubmitted, initialValues
   }, [orderExternalId]);
 
   function reset() {
-    setQuantity(initialValues?.quantity ?? "");
-    setPrice(initialValues?.price ?? "");
-    setLockPrice(initialValues?.lockPrice ?? "");
-    setFinal(true);
+    const fields = execReportFieldsForStatus("filled", initialValues);
+    setStatus("filled");
+    setQuantity(fields.quantity);
+    setPrice(fields.price);
+    setLeavesQuantity(fields.leavesQuantity);
+    setLockPrice(fields.lockPrice);
     setForce(false);
     setBusy(false);
     setError(null);
@@ -839,9 +1060,27 @@ function ExecReportDialog({ orderExternalId, onClose, onSubmitted, initialValues
     onClose();
   }
 
+  function calculateLeavesQuantity() {
+    const result = subtractDecimalStrings(
+      initialValues?.leaves ?? "",
+      quantity.trim(),
+    );
+    if (result !== null) {
+      setLeavesQuantity(result);
+    }
+  }
+
+  const canCalculateLeaves = !busy
+    && (initialValues?.leaves ?? "").trim() !== ""
+    && quantity.trim() !== "";
+
   async function submit() {
-    if (!quantity.trim() || !price.trim()) {
+    if (isFillStatus && (!quantity.trim() || !price.trim())) {
       setError(t("execReport.dialog.validationError"));
+      return;
+    }
+    if (!leavesQuantity.trim()) {
+      setError(t("execReport.dialog.leavesRequired"));
       return;
     }
     if (orderExternalId === null) {
@@ -850,27 +1089,22 @@ function ExecReportDialog({ orderExternalId, onClose, onSubmitted, initialValues
     setBusy(true);
     setError(null);
     try {
-      const body: {
-        quantity: string;
-        price: string;
-        lockPrice?: string;
-        force?: boolean;
-        final: boolean;
-      } = {
-        quantity: quantity.trim(),
-        price: price.trim(),
-        final,
-      };
+      const body: ExecutionReportBody = { status };
+      if (isFillStatus) {
+        body.quantity = quantity.trim();
+        body.price = price.trim();
+        if (lockPrice.trim()) {
+          body.lockPrice = lockPrice.trim();
+        }
+      }
+      body.leavesQuantity = leavesQuantity.trim();
       if (force) {
         body.force = true;
-      }
-      if (lockPrice.trim()) {
-        body.lockPrice = lockPrice.trim();
       }
       const result = await submitExecutionReport(orderExternalId, body);
       setBlocks(result.blocks);
       setDone(true);
-      onSubmitted();
+      onSubmitted({ orderExternalId });
     } catch (err) {
       setError(errMessage(err));
     } finally {
@@ -880,7 +1114,13 @@ function ExecReportDialog({ orderExternalId, onClose, onSubmitted, initialValues
 
   return (
     <Dialog open={orderExternalId !== null} onOpenChange={(v) => { if (!v) handleClose(); }}>
-      <DialogContent className="max-w-sm">
+      <DialogContent
+        className="max-w-sm"
+        onOpenAutoFocus={(e) => {
+          e.preventDefault();
+          statusTriggerRef.current?.focus();
+        }}
+      >
         <DialogHeader>
           <DialogTitle>{t("execReport.dialog.title")}</DialogTitle>
           <DialogDescription>
@@ -909,48 +1149,101 @@ function ExecReportDialog({ orderExternalId, onClose, onSubmitted, initialValues
           </div>
         ) : (
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="er-qty">{t("execReport.dialog.fillQty")}</Label>
-                <NumberStepper
-                  id="er-qty"
-                  value={quantity}
-                  onChange={setQuantity}
-                  placeholder={t("execReport.dialog.fillQtyPlaceholder")}
-                  disabled={busy}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="er-price">{t("execReport.dialog.fillPrice")}</Label>
-                <NumberStepper
-                  id="er-price"
-                  value={price}
-                  onChange={setPrice}
-                  placeholder={t("execReport.dialog.fillPricePlaceholder")}
-                  disabled={busy}
-                />
-              </div>
-            </div>
             <div className="space-y-1.5">
-              <Label htmlFor="er-lock">{t("execReport.dialog.lockPrice")}</Label>
-              <NumberStepper
-                id="er-lock"
-                value={lockPrice}
-                onChange={setLockPrice}
-                placeholder={t("execReport.dialog.lockPricePlaceholder")}
+              <Label htmlFor="er-status">{t("execReport.dialog.status")}</Label>
+              <Select
+                value={status}
+                onValueChange={(next) => applyStatus(next as ExecReportOrderStatus)}
                 disabled={busy}
-              />
+              >
+                <SelectTrigger id="er-status" className="h-8 text-xs" ref={statusTriggerRef}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {EXEC_REPORT_STATUS_OPTIONS.map((option) => (
+                    <SelectItem key={option} value={option}>
+                      {t(`filter.status.${option}`)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-[0.6875rem] text-muted">
+                {t(`execReport.dialog.statusHelp.${status}`)}
+              </p>
             </div>
-            <label className="flex items-center gap-2 text-xs text-text cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={final}
-                onChange={(e) => setFinal(e.target.checked)}
-                disabled={busy}
-                className="accent-[var(--accent)]"
-              />
-              {t("execReport.dialog.finalFill")}
-            </label>
+
+            {isFillStatus && (
+              <>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="er-qty">{t("execReport.dialog.fillQty")}</Label>
+                    <NumberStepper
+                      id="er-qty"
+                      value={quantity}
+                      onChange={setQuantity}
+                      placeholder={t("execReport.dialog.fillQtyPlaceholder")}
+                      disabled={busy}
+                      onClear={() => setQuantity("")}
+                      clearLabel={tc("filters.clearField")}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="er-price">{t("execReport.dialog.fillPrice")}</Label>
+                    <NumberStepper
+                      id="er-price"
+                      value={price}
+                      onChange={setPrice}
+                      placeholder={t("execReport.dialog.fillPricePlaceholder")}
+                      disabled={busy}
+                      onClear={() => setPrice("")}
+                      clearLabel={tc("filters.clearField")}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="er-lock">{t("execReport.dialog.lockPrice")}</Label>
+                  <NumberStepper
+                    id="er-lock"
+                    value={lockPrice}
+                    onChange={setLockPrice}
+                    placeholder={t("execReport.dialog.lockPricePlaceholder")}
+                    disabled={busy}
+                    onClear={() => setLockPrice("")}
+                    clearLabel={tc("filters.clearField")}
+                  />
+                </div>
+              </>
+            )}
+
+            <div className="space-y-1.5">
+              <Label htmlFor="er-leaves">
+                {t("execReport.dialog.leavesQty")}
+              </Label>
+              <div className="flex gap-2">
+                <NumberStepper
+                  id="er-leaves"
+                  value={leavesQuantity}
+                  onChange={setLeavesQuantity}
+                  placeholder={t("execReport.dialog.leavesQtyPlaceholder")}
+                  disabled={busy}
+                  onClear={() => setLeavesQuantity("")}
+                  clearLabel={tc("filters.clearField")}
+                  className="min-w-0 flex-1"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  title={t("execReport.dialog.calculateLeaves")}
+                  aria-label={t("execReport.dialog.calculateLeaves")}
+                  disabled={!canCalculateLeaves}
+                  onClick={calculateLeavesQuantity}
+                >
+                  <Calculator />
+                </Button>
+              </div>
+            </div>
+
             <label className="flex items-center gap-2 text-xs text-text cursor-pointer select-none">
               <input
                 type="checkbox"
@@ -982,297 +1275,37 @@ function ExecReportDialog({ orderExternalId, onClose, onSubmitted, initialValues
 }
 
 // ---------------------------------------------------------------------------
-// Signed pre-trade verdict helpers + section component
-// ---------------------------------------------------------------------------
-
-/** Decode a base64url string to a Uint8Array (no padding required). */
-function base64urlToBytes(s: string): Uint8Array {
-  // base64url → base64: replace URL-safe chars and pad to 4-char boundary.
-  const b64 = s.replace(/-/g, "+").replace(/_/g, "/");
-  const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
-  const binary = atob(padded);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
-
-/** Decode a standard base64 string (with padding) to a Uint8Array. */
-function base64StdToBytes(s: string): Uint8Array {
-  const binary = atob(s);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
-
-/** Extract the verbatim JSON value substring for "approval" from the envelope
- *  JSON string. The approval object is flat (no nested objects), so we scan
- *  forward from the opening '{' to the matching '}', honoring string literals
- *  and backslash escapes. Returns the canonical bytes that were signed. */
-function approvalValueSubstring(envJson: string): string {
-  // Match the "approval" KEY (preceded by { or , in compact Go JSON), never the
-  // same text occurring inside a string value.
-  let keyIdx = -1;
-  for (let from = 0; ; ) {
-    const idx = envJson.indexOf('"approval"', from);
-    if (idx === -1) {
-      break;
-    }
-    const prev = envJson[idx - 1];
-    if (prev === "{" || prev === ",") {
-      keyIdx = idx;
-      break;
-    }
-    from = idx + 1;
-  }
-  if (keyIdx === -1) {
-    throw new Error("approval key not found in envelope");
-  }
-  // Skip past the key and its colon.
-  let i = keyIdx + '"approval"'.length;
-  while (i < envJson.length && envJson[i] !== "{") {
-    i++;
-  }
-  if (i >= envJson.length) {
-    throw new Error("approval object not found");
-  }
-  const start = i;
-  let depth = 0;
-  while (i < envJson.length) {
-    const ch = envJson[i];
-    if (ch === "{") {
-      depth++;
-      i++;
-    } else if (ch === "}") {
-      depth--;
-      i++;
-      if (depth === 0) {
-        break;
-      }
-    } else if (ch === '"') {
-      // Skip over string literals, honoring backslash escapes.
-      i++;
-      while (i < envJson.length) {
-        if (envJson[i] === "\\") {
-          i += 2; // skip escaped char
-        } else if (envJson[i] === '"') {
-          i++;
-          break;
-        } else {
-          i++;
-        }
-      }
-    } else {
-      i++;
-    }
-  }
-  return envJson.slice(start, i);
-}
-
-type VerifyState =
-  | { phase: "idle" }
-  | { phase: "verifying" }
-  | { phase: "verified" }
-  | { phase: "invalid" }
-  | { phase: "error"; message: string };
-
-/** Dialog that shows the signed approval envelope for an order. */
-function SignedPayloadDialog({
-  approval,
-  open,
-  onOpenChange,
-}: {
-  approval: OrderApproval;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}) {
-  const { t } = useTranslation("orders");
-  const { exportPublicKey } = useOfficerApi();
-
-  const [verifyState, setVerifyState] = useState<VerifyState>({ phase: "idle" });
-
-  // Decode the token to get the approval payload for display purposes.
-  const decodedApproval = useMemo(() => {
-    try {
-      const envJson = new TextDecoder().decode(base64urlToBytes(approval.token));
-      const env = JSON.parse(envJson) as { approval?: unknown };
-      return JSON.stringify(env.approval, null, 2);
-    } catch {
-      return "";
-    }
-  }, [approval.token]);
-
-  // RFC3339 timestamps for display.
-  const issuedAtDisplay = approval.issuedAt
-    ? formatDateTime(approval.issuedAt)
-    : "";
-  const expiresAtDisplay = approval.expiresAt
-    ? formatDateTime(approval.expiresAt)
-    : "";
-
-  async function runVerify() {
-    setVerifyState({ phase: "verifying" });
-    try {
-      const pubBase64 = await exportPublicKey("raw-base64");
-      const envJson = new TextDecoder().decode(base64urlToBytes(approval.token));
-      const env = JSON.parse(envJson) as { alg?: string; signature?: string };
-      if (env.alg === "none") {
-        // Should not reach here (the section hides the button for alg=none),
-        // but guard defensively.
-        setVerifyState({ phase: "idle" });
-        return;
-      }
-      const canonical = new TextEncoder().encode(approvalValueSubstring(envJson));
-      const sig = base64StdToBytes(env.signature ?? "");
-      const keyBytes = base64StdToBytes(pubBase64);
-      if (keyBytes.length !== 32) {
-        throw new Error("active public key is not a 32-byte Ed25519 key");
-      }
-      const cryptoKey = await crypto.subtle.importKey(
-        "raw",
-        keyBytes,
-        { name: "Ed25519" },
-        false,
-        ["verify"],
-      );
-      const ok = await crypto.subtle.verify(
-        { name: "Ed25519" },
-        cryptoKey,
-        sig,
-        canonical,
-      );
-      setVerifyState(ok ? { phase: "verified" } : { phase: "invalid" });
-    } catch (err) {
-      setVerifyState({
-        phase: "error",
-        message: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  // Badge for the current verification state.
-  let badge: ReactElement;
-  if (approval.alg === "none") {
-    badge = <Badge variant="neutral">{t("detail.dialog.signedPayload.badgeUnsigned")}</Badge>;
-  } else if (verifyState.phase === "verified") {
-    badge = <Badge variant="ok">{t("detail.dialog.signedPayload.badgeVerified")}</Badge>;
-  } else if (verifyState.phase === "invalid") {
-    badge = <Badge variant="danger">{t("detail.dialog.signedPayload.badgeInvalid")}</Badge>;
-  } else {
-    badge = <Badge variant="neutral">{t("detail.dialog.signedPayload.badgeUnverified")}</Badge>;
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>{t("detail.dialog.signedPayload.sectionTitle")}</DialogTitle>
-          <DialogDescription>
-            {t("detail.dialog.signedPayload.dialogDescription")}
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-4">
-          <div className="flex flex-wrap items-center gap-3">
-            {badge}
-            {approval.alg === "ed25519" && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => { void runVerify(); }}
-                disabled={verifyState.phase === "verifying"}
-              >
-                <ShieldCheck className="h-3.5 w-3.5" />
-                {verifyState.phase === "verifying"
-                  ? t("detail.dialog.signedPayload.verifying")
-                  : t("detail.dialog.signedPayload.verifyButton")}
-              </Button>
-            )}
-            {approval.alg === "none" && (
-              <span className="text-xs text-muted-lt">
-                {t("detail.dialog.signedPayload.unsignedNote")}
-              </span>
-            )}
-          </div>
-
-          {verifyState.phase === "verified" && (
-            <p className="text-xs text-[var(--ok)]">
-              {t("detail.dialog.signedPayload.verifiedNote")}
-            </p>
-          )}
-          {verifyState.phase === "invalid" && (
-            <p className="text-xs text-[var(--danger)]">
-              {t("detail.dialog.signedPayload.invalidNote")}
-            </p>
-          )}
-          {verifyState.phase === "error" && (
-            <p className="text-xs text-[var(--danger)]">
-              {t("detail.dialog.signedPayload.verifyError")}
-            </p>
-          )}
-
-          {(issuedAtDisplay || expiresAtDisplay) && (
-            <div className="flex flex-wrap gap-4 text-xs text-muted-lt">
-              {issuedAtDisplay && (
-                <span>
-                  <span className="font-medium text-muted">
-                    {t("detail.dialog.signedPayload.issuedAt")}
-                  </span>
-                  {" "}
-                  <span className="nums">{issuedAtDisplay}</span>
-                </span>
-              )}
-              {expiresAtDisplay && (
-                <span>
-                  <span className="font-medium text-muted">
-                    {t("detail.dialog.signedPayload.expiresAt")}
-                  </span>
-                  {" "}
-                  <span className="nums">{expiresAtDisplay}</span>
-                </span>
-              )}
-            </div>
-          )}
-
-          <CopyableSnippet
-            label={t("detail.dialog.signedPayload.tokenLabel")}
-            text={approval.token}
-            rows={3}
-          />
-
-          {decodedApproval && (
-            <CopyableSnippet
-              label={t("detail.dialog.signedPayload.decodedLabel")}
-              text={decodedApproval}
-              rows={10}
-            />
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Order Detail dialog — header + event timeline + trades
 // ---------------------------------------------------------------------------
 
 interface OrderDetailDialogProps {
   orderExternalId: string | null;
+  refreshKey: number;
   onClose: () => void;
   onExecReport: (orderExternalId: string, values?: ExecReportInitialValues) => void;
   onCloneOrder: (values: OrderInitialValues) => void;
   onCloneExecReport: (orderExternalId: string, values: ExecReportInitialValues) => void;
+  /** Approval token for a held order awaiting confirm/cancel, or null when none
+   *  is retained (immediate order, or the token was lost on reload). */
+  heldToken: ApprovalToken | null;
+  /** Called after the held reservation is resolved (confirmed or cancelled) so
+   *  the page drops the now-spent token and refetches server state. */
+  onHeldResolved: (orderExternalId: string) => void;
   successBanner?: string;
 }
 
 type DetailState =
   | { phase: "loading" }
   | { phase: "error"; message: string }
-  | { phase: "ready"; order: Order; events: OrderEvent[]; trades: Trade[]; approval: OrderApproval | null };
+  | { phase: "ready"; order: Order; events: OrderEvent[]; trades: Trade[] };
+
+/** Whether a timeline event carries a persisted attestation the operator can
+ *  reproduce and verify. A signed event has a real Ed25519 signature; an
+ *  eSign-off event (alg "none") is still attested and openable. Events with no
+ *  attestation carry no alg and show no key. */
+function eventHasAttestation(ev: OrderEvent): boolean {
+  return ev.signed || ev.alg === "none";
+}
 
 function accountBlockReason(ev: OrderEvent): string | null {
   if (ev.rejectScope !== "account") {
@@ -1292,13 +1325,24 @@ function accountBlockReason(ev: OrderEvent): string | null {
   return details.length > 0 ? `${reason} [${details.join(", ")}]` : reason;
 }
 
-function OrderDetailDialog({ orderExternalId, onClose, onExecReport, onCloneOrder, onCloneExecReport, successBanner }: OrderDetailDialogProps) {
+function OrderDetailDialog({ orderExternalId, refreshKey, onClose, onExecReport, onCloneOrder, onCloneExecReport, heldToken, onHeldResolved, successBanner }: OrderDetailDialogProps) {
   const { t } = useTranslation("orders");
   const { t: tc } = useTranslation();
-  const { fetchOrderDetail } = useOfficerApi();
+  const { fetchOrderDetail, confirmHeldOrder, cancelHeldOrder } =
+    useOfficerApi();
 
   const [state, setState] = useState<DetailState>({ phase: "loading" });
-  const [signatureOpen, setSignatureOpen] = useState(false);
+  // The event whose per-event reproduction/verification panel is open, or null
+  // when the panel is closed. Officer signs each engine-processed request 1:1
+  // with the event it produced, so verification is per timeline event.
+  const [verifyEventId, setVerifyEventId] = useState<string | null>(null);
+  // Hold-resolution UI state: the in-flight action, an operator-set force flag,
+  // and the last error message from a failed confirm/cancel.
+  const [holdAction, setHoldAction] = useState<"confirm" | "cancel" | null>(
+    null,
+  );
+  const [holdForce, setHoldForce] = useState(false);
+  const [holdError, setHoldError] = useState<string | null>(null);
 
   useEffect(() => {
     if (orderExternalId === null) {
@@ -1307,14 +1351,17 @@ function OrderDetailDialog({ orderExternalId, onClose, onExecReport, onCloneOrde
     // Show the loading state before the detail fetch starts; intentional.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setState({ phase: "loading" });
-    setSignatureOpen(false);
+    setVerifyEventId(null);
+    setHoldAction(null);
+    setHoldForce(false);
+    setHoldError(null);
     const controller = new AbortController();
     fetchOrderDetail(orderExternalId, controller.signal)
-      .then(({ order, events, trades, approval }) => {
+      .then(({ order, events, trades }) => {
         if (controller.signal.aborted) {
           return;
         }
-        setState({ phase: "ready", order, events, trades, approval });
+        setState({ phase: "ready", order, events, trades });
       })
       .catch((err: unknown) => {
         if (!controller.signal.aborted) {
@@ -1322,7 +1369,7 @@ function OrderDetailDialog({ orderExternalId, onClose, onExecReport, onCloneOrde
         }
       });
     return () => controller.abort();
-  }, [fetchOrderDetail, orderExternalId]);
+  }, [fetchOrderDetail, orderExternalId, refreshKey]);
 
   if (orderExternalId === null) {
     return null;
@@ -1343,13 +1390,47 @@ function OrderDetailDialog({ orderExternalId, onClose, onExecReport, onCloneOrde
     return price;
   }
 
+  // The backend owns status validation for held-resolution attempts; the UI only
+  // checks whether this session still carries a token it can submit.
+  const canResolveHold =
+    state.phase === "ready" && heldToken !== null;
+
+  async function resolveHold(action: "confirm" | "cancel") {
+    if (orderExternalId === null || heldToken === null || holdAction !== null) {
+      return;
+    }
+    setHoldAction(action);
+    setHoldError(null);
+    try {
+      if (action === "confirm") {
+        await confirmHeldOrder(orderExternalId, {
+          token: heldToken.token,
+          force: holdForce || undefined,
+        });
+      } else {
+        await cancelHeldOrder(orderExternalId, {
+          token: heldToken.token,
+          force: holdForce || undefined,
+        });
+      }
+      // The token is spent; drop it and let the page refetch server truth. The
+      // detail refresh (via onHeldResolved bumping refreshKey) reloads this view
+      // so the resolved status comes from the engine, never the request.
+      onHeldResolved(orderExternalId);
+    } catch (err) {
+      setHoldError(errMessage(err));
+    } finally {
+      setHoldAction(null);
+    }
+  }
+
   return (
     <>
       <Dialog
         open
         onOpenChange={(v) => {
           if (!v) {
-            setSignatureOpen(false);
+            setVerifyEventId(null);
             onClose();
           }
         }}
@@ -1525,6 +1606,35 @@ function OrderDetailDialog({ orderExternalId, onClose, onExecReport, onCloneOrde
                           </div>
                         )}
                       </div>
+                      {/* Per-event attestation: open the reproduction /
+                          verification panel for this event's signature. */}
+                      {eventHasAttestation(ev) && (
+                        <button
+                          type="button"
+                          className={cn(
+                            "shrink-0 self-start rounded-badge p-1 text-muted-lt transition-colors duration-[180ms] hover:text-accent focus-visible:text-accent",
+                            verifyEventId === ev.externalId && "text-accent",
+                          )}
+                          aria-label={
+                            ev.signed
+                              ? t("detail.dialog.timeline.verifySigned")
+                              : t("detail.dialog.timeline.verifyUnsigned")
+                          }
+                          title={
+                            ev.signed
+                              ? t("detail.dialog.timeline.verifySigned")
+                              : t("detail.dialog.timeline.verifyUnsigned")
+                          }
+                          onClick={() => setVerifyEventId(ev.externalId)}
+                        >
+                          <KeyRound
+                            className={cn(
+                              "h-3.5 w-3.5",
+                              !ev.signed && "opacity-60",
+                            )}
+                          />
+                        </button>
+                      )}
                       {/* Re-issue the engine action this event recorded:
                           a submission clones the order, a fill clones the report. */}
                       {ev.type === "submitted" && (
@@ -1560,6 +1670,7 @@ function OrderDetailDialog({ orderExternalId, onClose, onExecReport, onCloneOrde
                               quantity: ev.fillQuantity ?? "",
                               price: ev.fillPrice ?? "",
                               lockPrice: ev.fillLockPrice ?? "",
+                              leaves: state.order.leavesQuantity,
                             })
                           }
                         >
@@ -1655,6 +1766,7 @@ function OrderDetailDialog({ orderExternalId, onClose, onExecReport, onCloneOrde
 	                                    quantity: trade.quantity,
 	                                    price: trade.price,
 	                                    lockPrice: trade.lockPrice,
+	                                    leaves: state.order.leavesQuantity,
 	                                  })
 	                                }
 	                              />
@@ -1667,21 +1779,62 @@ function OrderDetailDialog({ orderExternalId, onClose, onExecReport, onCloneOrde
               )}
             </div>
 
+            {canResolveHold && (
+              <div className="space-y-3 rounded-card border border-border bg-surface-2 p-3">
+                <div>
+                  <h4 className="text-xs font-bold text-text">
+                    {t("detail.dialog.hold.title")}
+                  </h4>
+                  <p className="mt-0.5 text-[0.6875rem] text-muted">
+                    {t("detail.dialog.hold.description")}
+                  </p>
+                </div>
+                <label className="flex items-center gap-2 text-xs text-text cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={holdForce}
+                    onChange={(e) => setHoldForce(e.target.checked)}
+                    disabled={holdAction !== null}
+                    className="accent-[var(--accent)]"
+                  />
+                  {t("detail.dialog.hold.force")}
+                </label>
+                {holdError && (
+                  <ErrorBanner
+                    message={holdError}
+                    onDismiss={() => setHoldError(null)}
+                  />
+                )}
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    onClick={() => void resolveHold("confirm")}
+                    disabled={holdAction !== null}
+                  >
+                    {holdAction === "confirm"
+                      ? t("detail.dialog.hold.confirmBusy")
+                      : t("detail.dialog.hold.confirm")}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-[var(--danger)] hover:border-[var(--danger)] hover:text-[var(--danger)]"
+                    onClick={() => void resolveHold("cancel")}
+                    disabled={holdAction !== null}
+                  >
+                    {holdAction === "cancel"
+                      ? t("detail.dialog.hold.cancelBusy")
+                      : t("detail.dialog.hold.cancel")}
+                  </Button>
+                </div>
+              </div>
+            )}
+
             <DialogFooter>
-              {state.approval !== null && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="sm:mr-auto"
-                  onClick={() => setSignatureOpen(true)}
-                >
-                  <ShieldCheck className="h-3.5 w-3.5" />
-                  {t("detail.dialog.signedPayload.openButton")}
-                </Button>
-              )}
               <Button
                 variant="outline"
                 size="sm"
+                className="sm:mr-auto"
                 onClick={() => onExecReport(orderExternalId, execReportInitialValuesFromOrder(state.order))}
               >
                 {t("detail.dialog.trades.submitExecReport")}
@@ -1717,13 +1870,20 @@ function OrderDetailDialog({ orderExternalId, onClose, onExecReport, onCloneOrde
         </DialogContent>
       </Dialog>
 
-      {state.phase === "ready" && state.approval !== null && (
-        <SignedPayloadDialog
-          approval={state.approval}
-          open={signatureOpen}
-          onOpenChange={setSignatureOpen}
-        />
-      )}
+      <OrderVerificationPanel
+        orderExternalId={
+          state.phase === "ready" && verifyEventId !== null
+            ? orderExternalId
+            : null
+        }
+        eventId={verifyEventId}
+        open={verifyEventId !== null}
+        onOpenChange={(next) => {
+          if (!next) {
+            setVerifyEventId(null);
+          }
+        }}
+      />
     </>
   );
 }
@@ -1910,11 +2070,23 @@ function OrdersTable({
 	              onKeyDown={(event) => onRowKeyDown(event, index, order)}
 	            >
               <TableCell className="text-muted-lt">
-                <IdCell
-                  value={order.externalId}
-                  copyTitle={t("common:rowActions.copyId")}
-                  copiedTitle={t("common:rowActions.copiedId")}
-                />
+                <div className="flex min-w-0 items-center gap-1">
+                  <IdCell
+                    value={order.externalId}
+                    copyTitle={t("common:rowActions.copyId")}
+                    copiedTitle={t("common:rowActions.copiedId")}
+                  />
+                  {order.signed && (
+                    <span
+                      className="shrink-0"
+                      role="img"
+                      aria-label={t("table.signedIndicator")}
+                      title={t("table.signedIndicator")}
+                    >
+                      <KeyRound className="h-3.5 w-3.5 text-muted-lt" />
+                    </span>
+                  )}
+                </div>
               </TableCell>
               <TableCell className="nums text-xs">
                 <div className="flex min-w-0 items-center gap-1">
@@ -1991,6 +2163,7 @@ function OrdersTable({
                     title={tc("rowActions.viewTitle", {
                       entity: order.externalId,
                     })}
+                    href={ordersFilterHref({ order: order.externalId })}
                     onClick={() => onRowClick(order)}
                   />
                   <CloneButton
@@ -3218,12 +3391,39 @@ export function Orders() {
   const [detailOrderExternalId, setDetailOrderExternalId] = useState<string | null>(
     params.get("order"),
   );
+  const [detailRefreshKey, setDetailRefreshKey] = useState(0);
   const [detailSuccessBanner, setDetailSuccessBanner] = useState<string | undefined>(undefined);
   const [execReportOrderExternalId, setExecReportOrderExternalId] = useState<string | null>(null);
   const [execReportInitialValues, setExecReportInitialValues] = useState<ExecReportInitialValues | undefined>(undefined);
   const [lookupId, setLookupId] = useState("");
   const [lookupBusy, setLookupBusy] = useState(false);
   const [lookupNotFoundOpen, setLookupNotFoundOpen] = useState(false);
+  const [verifyTokenOpen, setVerifyTokenOpen] = useState(false);
+  // Approval tokens for held orders created in this session, keyed by order
+  // external id. A held order needs its token to confirm or cancel, and the
+  // token is only returned by submit; it is not persisted onto the order, so it
+  // lives here in memory until the operator resolves the hold or reloads.
+  const [heldOrderTokens, setHeldOrderTokens] = useState<
+    Record<string, ApprovalToken>
+  >({});
+
+  const rememberHeldToken = useCallback((token: ApprovalToken) => {
+    if (token.token === "" || token.orderExternalId === "") {
+      return;
+    }
+    setHeldOrderTokens((prev) => ({ ...prev, [token.orderExternalId]: token }));
+  }, []);
+
+  const forgetHeldToken = useCallback((orderExternalId: string) => {
+    setHeldOrderTokens((prev) => {
+      if (!(orderExternalId in prev)) {
+        return prev;
+      }
+      const next = { ...prev };
+      delete next[orderExternalId];
+      return next;
+    });
+  }, []);
 
   function openDetail(externalId: string) {
     setDetailSuccessBanner(undefined);
@@ -3241,7 +3441,6 @@ export function Orders() {
   }
 
   function openExecReport(externalId: string, values?: ExecReportInitialValues) {
-    setDetailOrderExternalId(null);
     setExecReportOrderExternalId(externalId);
     setExecReportInitialValues(values);
   }
@@ -3264,6 +3463,8 @@ export function Orders() {
 
   const activeLoad = tab === "orders" ? ordersResult : tradesResult;
   const activeReload = tab === "orders" ? ordersResult.reload : tradesResult.reload;
+  // Render the server's rows as-is. A mutation refetches (reload) so the table
+  // reflects the engine's resulting state, never the operator's requested one.
   const orderRows =
     ordersResult.load.state === "ready" ? ordersResult.load.data.items : [];
   const tradeRows = useMemo(
@@ -3731,8 +3932,8 @@ export function Orders() {
             account: activeAccountFilter,
             baseAsset: "",
             quoteAsset: "",
-            side: "buy",
-            amountKind: "quantity",
+            side: "",
+            amountKind: "",
             amountValue: "",
             price: "",
           }
@@ -3830,6 +4031,14 @@ export function Orders() {
               },
             ]}
           />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setVerifyTokenOpen(true)}
+          >
+            <ShieldCheck className="h-3.5 w-3.5" />
+            {t("panel.verifyTokenButton")}
+          </Button>
           <Button size="sm" onClick={openAddOrder}>
             <Plus className="h-3.5 w-3.5" />
             {t("addOrder.button")}
@@ -4530,6 +4739,7 @@ export function Orders() {
           id,
           banner ?? t("addOrder.added"),
         )}
+        onHeldTokenIssued={rememberHeldToken}
         accountSuggestions={allAccountSuggestions}
         assetSuggestions={assetSuggestions}
         initialValues={submitInitialValues}
@@ -4537,17 +4747,33 @@ export function Orders() {
 
       <OrderDetailDialog
         orderExternalId={detailOrderExternalId}
+        refreshKey={detailRefreshKey}
         onClose={closeDetail}
         onExecReport={openExecReport}
         onCloneOrder={openCloneOrder}
         onCloneExecReport={openCloneExecReport}
+        heldToken={
+          detailOrderExternalId !== null
+            ? (heldOrderTokens[detailOrderExternalId] ?? null)
+            : null
+        }
+        onHeldResolved={(id) => {
+          forgetHeldToken(id);
+          setDetailRefreshKey((value) => value + 1);
+          ordersResult.reload();
+        }}
         successBanner={detailSuccessBanner}
       />
 
       <ExecReportDialog
         orderExternalId={execReportOrderExternalId}
         onClose={closeExecReport}
-        onSubmitted={() => {
+        onSubmitted={(update) => {
+          // Reflect only server truth: refetch the table and the open detail so
+          // the rendered status/leaves come from the engine, not the request.
+          if (detailOrderExternalId === update.orderExternalId) {
+            setDetailRefreshKey((value) => value + 1);
+          }
           ordersResult.reload();
           tradesResult.reload();
         }}
@@ -4568,6 +4794,12 @@ export function Orders() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <OrderVerificationPanel
+        orderExternalId={null}
+        initialMode="verify"
+        open={verifyTokenOpen}
+        onOpenChange={setVerifyTokenOpen}
+      />
     </Page>
   );
 }

@@ -25,9 +25,11 @@ import { Autocomplete } from "@/components/Autocomplete";
 function Harness({
   onClear,
   initial = "",
+  suggestions = ["crypto", "credit", "equity"],
 }: {
   onClear?: () => void;
   initial?: string;
+  suggestions?: string[];
 }) {
   const [value, setValue] = useState(initial);
   return (
@@ -35,7 +37,7 @@ function Harness({
       aria-label="dictionary field"
       value={value}
       onChange={setValue}
-      suggestions={["crypto", "credit", "equity"]}
+      suggestions={suggestions}
       onClear={
         onClear
           ? () => {
@@ -89,6 +91,53 @@ describe("Autocomplete", () => {
     expect(
       screen.queryByRole("option", { name: "equity" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("promotes a case-insensitive exact match to the top of the list", async () => {
+    const user = userEvent.setup();
+    // The exact match "USD" is not first in the source list, so a
+    // case-sensitive exact test would fail to promote it for the lowercase
+    // query and leave the longer prefix matches ahead of it.
+    render(<Harness suggestions={["USDC", "USDT", "USD"]} />);
+
+    await user.type(
+      screen.getByRole("combobox", { name: "dictionary field" }),
+      "usd",
+    );
+
+    expect(
+      screen.getAllByRole("option").map((option) => option.textContent),
+    ).toEqual(["USD", "USDC", "USDT"]);
+  });
+
+  it("de-duplicates case-variant suggestions", async () => {
+    const user = userEvent.setup();
+    render(<Harness suggestions={["USD", "usd", "USDC"]} />);
+
+    await user.type(
+      screen.getByRole("combobox", { name: "dictionary field" }),
+      "us",
+    );
+
+    // "USD" and "usd" collapse to a single entry (the first canonical form),
+    // so the list is not padded with a duplicate-looking case variant.
+    expect(
+      screen.getAllByRole("option").map((option) => option.textContent),
+    ).toEqual(["USD", "USDC"]);
+  });
+
+  it("keeps an exact dictionary match ahead of longer prefix matches", async () => {
+    const user = userEvent.setup();
+    render(<Harness suggestions={["USD", "USDC", "USDT"]} />);
+
+    await user.type(
+      screen.getByRole("combobox", { name: "dictionary field" }),
+      "USD",
+    );
+
+    expect(
+      screen.getAllByRole("option").map((option) => option.textContent),
+    ).toEqual(["USD", "USDC", "USDT"]);
   });
 
   it("omits the inline reset glyph when no onClear is provided", async () => {

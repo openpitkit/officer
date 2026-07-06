@@ -195,6 +195,21 @@ func (s *Service) ActivePublicKey(format string) (string, error) {
 	return exportPublic(active.PublicKey, format)
 }
 
+// PublicKeyByID exports the public key bound to keyID in the given format. It
+// resolves the key by id, not by the active flag, so a token signed under a
+// since-rotated key still yields the exact public key that signed it. It reads
+// only the public half; an unknown id reports domain.ErrNotFound.
+func (s *Service) PublicKeyByID(ctx context.Context, keyID, format string) (string, error) {
+	if keyID == "" {
+		return "", fmt.Errorf("signing: empty keyId: %w", domain.ErrInvalid)
+	}
+	pub, err := s.publicKeyFor(ctx, keyID)
+	if err != nil {
+		return "", err
+	}
+	return exportPublic(pub, format)
+}
+
 // Fingerprint returns a short hex SHA-256 prefix of the public key. Display
 // only; never stored or used as an identity.
 func Fingerprint(pub []byte) string {

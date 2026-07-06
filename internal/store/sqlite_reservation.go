@@ -57,15 +57,19 @@ JOIN account a      ON a.id = ri.account_id`
 func (r *realmStore) UpsertReservationIntent(
 	ctx context.Context, intent domain.ReservationIntent,
 ) error {
-	accountID, err := resolveAccountID(ctx, r.db(), intent.Account)
+	db, err := r.db()
 	if err != nil {
 		return err
 	}
-	orderID, err := optionalOrderID(ctx, r.db(), intent.Order)
+	accountID, err := resolveAccountID(ctx, db, intent.Account)
 	if err != nil {
 		return err
 	}
-	if _, err := r.db().ExecContext(
+	orderID, err := optionalOrderID(ctx, db, intent.Order)
+	if err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(
 		ctx,
 		`INSERT INTO reservation_intent
 		 (approval_id, order_id, account_id, params, lock, issued_at, expires_at, state)
@@ -93,7 +97,11 @@ func (r *realmStore) UpsertReservationIntent(
 func (r *realmStore) GetReservationIntent(
 	ctx context.Context, approvalID string,
 ) (domain.ReservationIntent, bool, error) {
-	row := r.db().QueryRowContext(
+	db, err := r.db()
+	if err != nil {
+		return domain.ReservationIntent{}, false, err
+	}
+	row := db.QueryRowContext(
 		ctx, reservationSelect+` WHERE ri.approval_id = ?`, approvalID,
 	)
 	intent, err := scanReservationRow(row)
@@ -106,12 +114,45 @@ func (r *realmStore) GetReservationIntent(
 	return intent, true, nil
 }
 
+// GetOpenReservationIntentByOrder returns the held intent linked to order;
+// found is false when no held reservation remains for the order.
+func (r *realmStore) GetOpenReservationIntentByOrder(
+	ctx context.Context, order domain.ExternalID,
+) (domain.ReservationIntent, bool, error) {
+	db, err := r.db()
+	if err != nil {
+		return domain.ReservationIntent{}, false, err
+	}
+	row := db.QueryRowContext(
+		ctx,
+		reservationSelect+`
+WHERE o.external_id = ? AND ri.state = ?
+ORDER BY ri.issued_at ASC, ri.approval_id ASC
+LIMIT 1`,
+		order.Bytes(),
+		string(domain.ReservationIntentStateHeld),
+	)
+	intent, err := scanReservationRow(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.ReservationIntent{}, false, nil
+	}
+	if err != nil {
+		return domain.ReservationIntent{}, false, fmt.Errorf(
+			"store: get open reservation intent by order: %w", err)
+	}
+	return intent, true, nil
+}
+
 // ListOpenReservationIntents returns all intents whose state is held, ordered by
 // issued_at (oldest first) so the TTL sweeper sees the longest-held first.
 func (r *realmStore) ListOpenReservationIntents(
 	ctx context.Context,
 ) ([]domain.ReservationIntent, error) {
-	rows, err := r.db().QueryContext(
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(
 		ctx,
 		reservationSelect+` WHERE ri.state = ? ORDER BY ri.issued_at ASC, ri.approval_id ASC`,
 		string(domain.ReservationIntentStateHeld),
@@ -140,7 +181,11 @@ func (r *realmStore) ListOpenReservationIntents(
 func (r *realmStore) SetReservationIntentState(
 	ctx context.Context, approvalID string, state domain.ReservationIntentState,
 ) error {
-	res, err := r.db().ExecContext(
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	res, err := db.ExecContext(
 		ctx,
 		`UPDATE reservation_intent SET state = ? WHERE approval_id = ?`,
 		string(state), approvalID,
@@ -161,7 +206,17 @@ func (r *realmStore) SetReservationIntentState(
 func (r *realmStore) ResolveOrderReservation(
 	ctx context.Context, res domain.ReservationResolution,
 ) error {
-	tx, err := r.db().BeginTx(ctx, nil)
+	return r.resolveOrderReservation(ctx, res)
+}
+
+func (r *realmStore) resolveOrderReservation(
+	ctx context.Context, res domain.ReservationResolution,
+) error {
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin resolve_order_reservation: %w", err)
 	}

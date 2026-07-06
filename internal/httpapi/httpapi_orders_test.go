@@ -254,29 +254,48 @@ func TestGetOrder_Found(t *testing.T) {
 	if !ok || len(trades) != 1 {
 		t.Fatalf("want 1 trade, got %v", m["trades"])
 	}
-	// An unsigned order (Approval == nil) omits the approval envelope entirely.
+	// The order no longer carries an order-level approval key; attestations ride
+	// per-event on the events list.
 	if _, present := m["approval"]; present {
-		t.Fatalf("unsigned order must not carry an approval key: %v", m["approval"])
+		t.Fatalf("order must not carry an approval key: %v", m["approval"])
+	}
+	// The unsigned event reports signed=false and omits alg.
+	event, ok := events[0].(map[string]any)
+	if !ok {
+		t.Fatalf("want event object, got %v", events[0])
+	}
+	if event["signed"] != false {
+		t.Fatalf("want event signed=false, got %v", event["signed"])
+	}
+	if _, present := event["alg"]; present {
+		t.Fatalf("unsigned event must omit alg, got %v", event["alg"])
 	}
 }
 
-// TestGetOrder_ApprovalReadBack covers the 1:1 approval read-back: a signed
-// order surfaces its envelope under the "approval" key with the full metadata,
-// while an unsigned order omits the key. The envelope is addressed only by the
-// signing key id; no surrogate or engine id appears.
-func TestGetOrder_ApprovalReadBack(t *testing.T) {
+// TestGetOrder_EventAttestationReadBack covers per-event attestation read-back: a
+// signed event reports signed=true and its attestation alg on the event DTO,
+// and the order-level signed rollup is true. The attestation is addressed only by
+// the signing key id; no surrogate or engine id appears.
+func TestGetOrder_EventAttestationReadBack(t *testing.T) {
 	svc := &fakeService{orderDetail: domain.OrderDetail{
 		Order: domain.Order{
 			ExternalID: extID("order-1"), Account: "acc-1",
 			Status: domain.OrderStatusAccepted,
 		},
-		Approval: &domain.OrderApproval{
-			Token:     "eyJhbHQ...",
-			KeyID:     "key-1",
-			Alg:       "ed25519",
-			Mode:      "immediate",
-			IssuedAt:  "2026-06-11T10:00:00Z",
-			ExpiresAt: "2026-06-11T10:02:00Z",
+		Events: []domain.OrderEvent{
+			{
+				ExternalID: extID("event-1"), Order: extID("order-1"),
+				Type: domain.OrderEventPreTradeAccepted,
+				Attestation: &domain.EventAttestation{
+					Token:       "eyJhbHQ...",
+					KeyID:       "key-1",
+					Alg:         "ed25519",
+					RequestType: domain.AttestationRequestSubmit,
+					Mode:        "immediate",
+					IssuedAt:    "2026-06-11T10:00:00Z",
+					ExpiresAt:   "2026-06-11T10:02:00Z",
+				},
+			},
 		},
 	}}
 	r, err := newRouter(svc)
@@ -290,25 +309,23 @@ func TestGetOrder_ApprovalReadBack(t *testing.T) {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
 	m := bodyMap(t, rec.Result())
-	approval, ok := m["approval"].(map[string]any)
-	if !ok {
-		t.Fatalf("want approval envelope, got %v", m["approval"])
+	// Order-level signed rollup is true.
+	order, _ := m["order"].(map[string]any)
+	if order["signed"] != true {
+		t.Fatalf("want order signed rollup=true, got %v", order["signed"])
 	}
-	for _, field := range []string{
-		"token", "keyId", "alg", "mode", "issuedAt", "expiresAt", "signed",
-	} {
-		if _, ok := approval[field]; !ok {
-			t.Fatalf("approval envelope missing field %q", field)
-		}
+	events, ok := m["events"].([]any)
+	if !ok || len(events) != 1 {
+		t.Fatalf("want 1 event, got %v", m["events"])
 	}
-	if approval["keyId"] != "key-1" || approval["alg"] != "ed25519" {
-		t.Fatalf("unexpected approval envelope: %v", approval)
+	event, _ := events[0].(map[string]any)
+	if event["signed"] != true {
+		t.Fatalf("want event signed=true, got %v", event["signed"])
 	}
-	// An ed25519 envelope reports signed=true.
-	if approval["signed"] != true {
-		t.Fatalf("want signed=true, got %v", approval["signed"])
+	if event["alg"] != "ed25519" {
+		t.Fatalf("want event alg=ed25519, got %v", event["alg"])
 	}
-	assertNoSurrogateID(t, approval)
+	assertNoSurrogateID(t, event)
 }
 
 func TestGetOrder_EmptyChildLists(t *testing.T) {
@@ -331,6 +348,65 @@ func TestGetOrder_EmptyChildLists(t *testing.T) {
 	}
 	if trades, ok := m["trades"].([]any); !ok || len(trades) != 0 {
 		t.Fatalf("want trades=[], got %v", m["trades"])
+	}
+}
+
+// TestGetOrder_LeavesQuantity checks the order detail exposes the remaining open
+// base quantity: the full order size before any fill, the released remainder
+// after a partial fill, and "0" once filled.
+func TestGetOrder_LeavesQuantity(t *testing.T) {
+	cases := []struct {
+		name  string
+		order domain.Order
+		want  string
+	}{
+		{
+			name: "submitted-leaves",
+			order: domain.Order{
+				ExternalID: extID("order-1"), Account: "acc-1",
+				AmountValue: "5", Leaves: "5", Status: domain.OrderStatusSubmitted,
+			},
+			want: "5",
+		},
+		{
+			name: "partial-remainder",
+			order: domain.Order{
+				ExternalID: extID("order-1"), Account: "acc-1",
+				AmountValue: "5", Leaves: "2", Status: domain.OrderStatusPartiallyFilled,
+			},
+			want: "2",
+		},
+		{
+			name: "filled-zero",
+			order: domain.Order{
+				ExternalID: extID("order-1"), Account: "acc-1",
+				AmountValue: "5", Leaves: "0", Status: domain.OrderStatusFilled,
+			},
+			want: "0",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeService{orderDetail: domain.OrderDetail{Order: tc.order}}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+				"/api/v1/orders/"+extID("order-1").String(), nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("want 200, got %d", rec.Code)
+			}
+			m := bodyMap(t, rec.Result())
+			order, ok := m["order"].(map[string]any)
+			if !ok {
+				t.Fatalf("want order object, got %v", m["order"])
+			}
+			if order["leavesQuantity"] != tc.want {
+				t.Fatalf("leavesQuantity = %v, want %q", order["leavesQuantity"], tc.want)
+			}
+		})
 	}
 }
 
@@ -506,7 +582,6 @@ func TestListTrades_BadQueryParams(t *testing.T) {
 		{"price_bad_range", "?priceMode=between&priceMin=10&priceMax=2"},
 		{"lock_price_missing_bound", "?lockPriceMode=neq"},
 		{"invalid_time", "?atMode=after&atMin=not-time"},
-		{"bad_external_id", "?externalId=not-valid"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -970,26 +1045,25 @@ func TestApplyAdjustment_DuplicateConflict(t *testing.T) {
 	}
 }
 
-// TestApplyAdjustment_MalformedExternalID checks a malformed supplied id maps to
-// 400 before any backend call.
-func TestApplyAdjustment_MalformedExternalID(t *testing.T) {
+// TestApplyAdjustment_OpaqueExternalID checks a caller-supplied id is accepted
+// verbatim without a base64url shape requirement.
+func TestApplyAdjustment_OpaqueExternalID(t *testing.T) {
 	svc := &fakeService{}
 	r, err := newRouter(svc)
 	if err != nil {
 		t.Fatal(err)
 	}
+	supplied := "not-valid"
 	body := bytes.NewBufferString(
-		`{"externalId":"not-valid","asset":"USD","balance":{"mode":"delta","value":"100"}}`)
+		`{"externalId":"` + supplied + `","asset":"USD","balance":{"mode":"delta","value":"100"}}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/accounts/acc-1/adjustments", body))
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d: %s", rec.Code, rec.Body.String())
 	}
-	m := bodyMap(t, rec.Result())
-	errObj, _ := m["error"].(map[string]any)
-	if errObj["code"] != "validation" {
-		t.Errorf("want code=validation, got %v", errObj["code"])
+	if got := svc.adjustmentExternalID.String(); got != supplied {
+		t.Fatalf("externalId: want %q got %q", supplied, got)
 	}
 }
 
@@ -1003,7 +1077,7 @@ func TestApplyExecutionReport_BadID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := bytes.NewBufferString(`{"quantity":"1","price":"100","leavesQuantity":"0","final":true}`)
+	body := bytes.NewBufferString(`{"quantity":"1","price":"100","leavesQuantity":"0","status":"filled"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/orders/unknown-id/execution-reports", body))
@@ -1036,6 +1110,31 @@ func TestApplyExecutionReport_InvalidJSON(t *testing.T) {
 	}
 }
 
+// TestApplyExecutionReport_QuantityWithoutPrice verifies the "quantity and price
+// must be provided together" guard: a report body with a quantity but no price
+// (or vice versa) is rejected as 400 validation before any service call.
+func TestApplyExecutionReport_QuantityWithoutPrice(t *testing.T) {
+	r, err := newRouter(&fakeService{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"quantity":"1","leavesQuantity":"0","status":"filled"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports", body))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	m := bodyMap(t, rec.Result())
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "validation" {
+		t.Fatalf("want code=validation, got %v", errObj["code"])
+	}
+	if errObj["message"] != "quantity and price must be provided together" {
+		t.Fatalf("want quantity/price message, got %v", errObj["message"])
+	}
+}
+
 func TestApplyExecutionReport_ServiceError(t *testing.T) {
 	// stateErr drives the GetOrder lookup (and ApplyExecutionReport) to fail; a
 	// generic error maps to 500.
@@ -1044,7 +1143,7 @@ func TestApplyExecutionReport_ServiceError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := bytes.NewBufferString(`{"quantity":"1","price":"100","leavesQuantity":"0","final":true}`)
+	body := bytes.NewBufferString(`{"quantity":"1","price":"100","leavesQuantity":"0","status":"filled"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports", body))
@@ -1059,12 +1158,23 @@ func TestApplyExecutionReport_ServiceError(t *testing.T) {
 }
 
 func TestApplyExecutionReport_TerminalOrder(t *testing.T) {
-	svc := &fakeService{stateErr: domain.ErrTerminalOrder}
+	svc := &fakeService{
+		orderDetail: domain.OrderDetail{
+			Order: domain.Order{
+				ExternalID: extID("order-1"),
+				Account:    "acc-1",
+				BaseAsset:  "AAPL",
+				QuoteAsset: "USD",
+				Side:       domain.OrderSideBuy,
+			},
+		},
+		execReportErr: domain.ErrTerminalOrder,
+	}
 	r, err := newRouter(svc)
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := bytes.NewBufferString(`{"quantity":"1","price":"100","leavesQuantity":"0","final":true}`)
+	body := bytes.NewBufferString(`{"quantity":"1","price":"100","leavesQuantity":"0","status":"filled"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports", body))
@@ -1088,7 +1198,7 @@ func TestApplyExecutionReport_NotFound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := bytes.NewBufferString(`{"quantity":"1","price":"100","leavesQuantity":"0","final":true}`)
+	body := bytes.NewBufferString(`{"quantity":"1","price":"100","leavesQuantity":"0","status":"filled"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/orders/"+extID("missing").String()+"/execution-reports", body))

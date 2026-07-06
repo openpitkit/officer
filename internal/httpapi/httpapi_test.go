@@ -118,6 +118,7 @@ type fakeService struct {
 	blockErr              error
 	unblockErr            error
 	stateErr              error
+	execReportErr         error
 	listLimErr            error
 	putLimErr             error
 	delLimErr             error
@@ -154,10 +155,22 @@ type fakeService struct {
 	noESign               bool
 	noESignSet            bool
 	approvalToken         backend.ApprovalToken
+	attestation           backend.Attestation
 	submitTokenMode       string
 	confirmForce          bool
 	cancelForce           bool
 	signingErr            error
+	// confirmErr/cancelErr inject a resolution failure (e.g. a terminal-order
+	// conflict) into ConfirmExecution/CancelOrder, kept distinct from signingErr so
+	// a test can drive the terminal-order path without touching the signing setup.
+	confirmErr error
+	cancelErr  error
+	// Public-key-by-id resolution. publicKeysByID maps keyId to its exported
+	// public material; a missing id reports domain.ErrNotFound so the rotation and
+	// 404 paths can be exercised. keyByIDFormat/keyByIDLast capture the last call.
+	publicKeysByID map[string]string
+	keyByIDFormat  string
+	keyByIDLast    string
 
 	// Captured caller-supplied external ids for the user-create surfaces. The
 	// adjustment id is captured on ApplyAdjustment; the order id is captured on
@@ -625,9 +638,12 @@ func (f *fakeService) CheckOrder(_ context.Context, _ domain.OrderProbe) (domain
 }
 func (f *fakeService) ApplyExecutionReport(
 	_ context.Context, in domain.ExecutionReportInput,
-) (engine.ExecutionReportResult, error) {
+) (engine.ExecutionReportResult, backend.Attestation, error) {
 	f.execReportIn = in
-	return engine.ExecutionReportResult{}, f.stateErr
+	if f.execReportErr != nil {
+		return engine.ExecutionReportResult{}, backend.Attestation{}, f.execReportErr
+	}
+	return engine.ExecutionReportResult{}, f.attestation, f.stateErr
 }
 func (f *fakeService) GetOrder(_ context.Context, _ string) (domain.OrderDetail, error) {
 	return f.orderDetail, f.stateErr
@@ -690,6 +706,17 @@ func (f *fakeService) ActivePublicKey(format string) (string, error) {
 	f.activePublicKeyFormat = format
 	return f.activePublicKey, f.signingErr
 }
+func (f *fakeService) PublicKeyByID(_ context.Context, keyID, format string) (string, error) {
+	f.keyByIDLast = keyID
+	f.keyByIDFormat = format
+	if f.signingErr != nil {
+		return "", f.signingErr
+	}
+	if pub, ok := f.publicKeysByID[keyID]; ok {
+		return pub, nil
+	}
+	return "", fmt.Errorf("signing: unknown keyId %q: %w", keyID, domain.ErrNotFound)
+}
 func (f *fakeService) GetNoESign(_ context.Context) (bool, error) {
 	return f.noESign, f.signingErr
 }
@@ -727,29 +754,35 @@ func (f *fakeService) SubmitOrderToken(
 }
 func (f *fakeService) ConfirmExecution(
 	_ context.Context, orderID string, _ string, force bool,
-) (domain.Order, error) {
+) (domain.Order, backend.Attestation, error) {
 	f.confirmForce = force
+	if f.confirmErr != nil {
+		return domain.Order{}, backend.Attestation{}, f.confirmErr
+	}
 	if f.signingErr != nil {
-		return domain.Order{}, f.signingErr
+		return domain.Order{}, backend.Attestation{}, f.signingErr
 	}
 	if o, ok := f.submittedOrders[orderID]; ok {
 		o.Status = domain.OrderStatusCommitted
-		return o, nil
+		return o, f.attestation, nil
 	}
-	return f.submitOrder, nil
+	return f.submitOrder, f.attestation, nil
 }
 func (f *fakeService) CancelOrder(
 	_ context.Context, orderID string, _, _ string, force bool,
-) (domain.Order, error) {
+) (domain.Order, backend.Attestation, error) {
 	f.cancelForce = force
+	if f.cancelErr != nil {
+		return domain.Order{}, backend.Attestation{}, f.cancelErr
+	}
 	if f.signingErr != nil {
-		return domain.Order{}, f.signingErr
+		return domain.Order{}, backend.Attestation{}, f.signingErr
 	}
 	if o, ok := f.submittedOrders[orderID]; ok {
 		o.Status = domain.OrderStatusRejected
-		return o, nil
+		return o, f.attestation, nil
 	}
-	return f.submitOrder, nil
+	return f.submitOrder, f.attestation, nil
 }
 
 // fakeSPA returns a minimal in-memory filesystem for the SPA option.
@@ -819,6 +852,7 @@ func TestRouteRegistrySurfaceBaseline(t *testing.T) {
 		"POST /orders/check",
 		"GET /orders",
 		"GET /orders/{externalId}",
+		"GET /orders/{externalId}/events/{eventId}/reproduction",
 		"POST /orders/{externalId}/execution-reports",
 		"GET /trades",
 		"GET /limits",
@@ -836,6 +870,7 @@ func TestRouteRegistrySurfaceBaseline(t *testing.T) {
 		"POST /signing/keys/import",
 		"GET /signing/keys",
 		"GET /signing/keys/active/public",
+		"GET /signing/keys/{keyId}/public",
 		"GET /signing/config",
 		"PUT /signing/config",
 		"POST /orders/submit",
@@ -869,11 +904,11 @@ func bodyMap(t *testing.T, resp *http.Response) map[string]any {
 }
 
 // extID builds a deterministic ExternalID from a short seed for test fixtures.
-// The wire form is the 22-char base64url of the 16 raw bytes.
+// The wire form is Officer's generated external id for the 16 raw bytes.
 func extID(seed string) domain.ExternalID {
 	var b [16]byte
 	copy(b[:], seed)
-	id, err := domain.ExternalIDFromBytes(b[:])
+	id, err := domain.GeneratedExternalIDFromBytes(b[:])
 	if err != nil {
 		panic(err)
 	}
@@ -2709,7 +2744,6 @@ func TestListAudit_BadQueryParams(t *testing.T) {
 		{"invalid_order", "?sort=source&order=sideways"},
 		{"invalid_category", "?category=bogus"},
 		{"invalid_time", "?atMode=after&atMin=not-time"},
-		{"bad_external_id", "?externalId=not-valid"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -3111,6 +3145,24 @@ func TestApplyAdjustment_Created(t *testing.T) {
 	assertNoSurrogateID(t, adj)
 }
 
+func TestApplyAdjustment_NoChangeReturnsNoContent(t *testing.T) {
+	svc := &fakeService{stateErr: domain.ErrNoChange}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(
+		`{"asset":"USD","balance":{"mode":"delta","value":"0"}}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/accounts/acc-1/adjustments", body))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("want 204, got %d", rec.Code)
+	}
+	if rec.Body.Len() != 0 {
+		t.Fatalf("response body = %q, want empty", rec.Body.String())
+	}
+}
+
 // TestApplyExecutionReport_Created checks the execution-report path returns 201:
 // the trade row is created on the success path, so the resource-creating POST is
 // a 201 Created carrying the result.
@@ -3126,7 +3178,7 @@ func TestApplyExecutionReport_Created(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bytes.NewBufferString(
-		`{"quantity":"1","price":"100","leavesQuantity":"0","force":true,"final":true}`)
+		`{"quantity":"1","price":"100","leavesQuantity":"0","status":"cancelled","force":true}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports", body))
@@ -3143,11 +3195,21 @@ func TestApplyExecutionReport_Created(t *testing.T) {
 	if svc.execReportIn.LeavesQuantity != "0" {
 		t.Fatalf("leavesQuantity not forwarded: %q", svc.execReportIn.LeavesQuantity)
 	}
+	if svc.execReportIn.OrderStatus != domain.OrderStatusCancelled {
+		t.Fatalf("status not forwarded: %q", svc.execReportIn.OrderStatus)
+	}
+	if svc.execReportIn.Account != "" ||
+		svc.execReportIn.BaseAsset != "" ||
+		svc.execReportIn.QuoteAsset != "" ||
+		svc.execReportIn.Side != "" {
+		t.Fatalf("order-derived fields were populated by HTTP: %+v", svc.execReportIn)
+	}
 }
 
 // TestApplyExecutionReport_MissingLeavesQuantity checks the handler rejects a
 // fill body that omits leavesQuantity with 400 validation, locking in the
-// engine's hard requirement before the report reaches the service.
+// engine's hard requirement that every report carries leaves before it reaches
+// the service.
 func TestApplyExecutionReport_MissingLeavesQuantity(t *testing.T) {
 	svc := &fakeService{orderDetail: domain.OrderDetail{
 		Order: domain.Order{
@@ -3159,7 +3221,118 @@ func TestApplyExecutionReport_MissingLeavesQuantity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := bytes.NewBufferString(`{"quantity":"1","price":"100","final":true}`)
+	body := bytes.NewBufferString(`{"quantity":"1","price":"100","status":"filled"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports", body))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "validation" {
+		t.Fatalf("want code=validation, got %v", errObj["code"])
+	}
+}
+
+// TestApplyExecutionReport_NonFillMissingLeaves checks a no-trade lifecycle
+// report without leavesQuantity is rejected with 400: leaves is required on
+// every report, not only fills.
+func TestApplyExecutionReport_NonFillMissingLeaves(t *testing.T) {
+	svc := &fakeService{orderDetail: domain.OrderDetail{
+		Order: domain.Order{
+			ExternalID: extID("order-1"), Account: "acc-1", BaseAsset: "AAPL",
+			QuoteAsset: "USD", Side: domain.OrderSideBuy,
+		},
+	}}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"status":"cancelled"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports", body))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "validation" {
+		t.Fatalf("want code=validation, got %v", errObj["code"])
+	}
+}
+
+// TestApplyExecutionReport_NonFillForwardsLeaves checks a no-trade lifecycle
+// report that carries leavesQuantity is forwarded verbatim to the service.
+func TestApplyExecutionReport_NonFillForwardsLeaves(t *testing.T) {
+	svc := &fakeService{orderDetail: domain.OrderDetail{
+		Order: domain.Order{
+			ExternalID: extID("order-1"), Account: "acc-1", BaseAsset: "AAPL",
+			QuoteAsset: "USD", Side: domain.OrderSideBuy,
+		},
+	}}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"status":"cancelled","leavesQuantity":"0"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports", body))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d", rec.Code)
+	}
+	if svc.execReportIn.OrderStatus != domain.OrderStatusCancelled {
+		t.Fatalf("status not forwarded: %q", svc.execReportIn.OrderStatus)
+	}
+	if svc.execReportIn.LeavesQuantity != "0" {
+		t.Fatalf("leavesQuantity not forwarded: %q", svc.execReportIn.LeavesQuantity)
+	}
+}
+
+func TestApplyExecutionReport_InvalidStatus(t *testing.T) {
+	svc := &fakeService{orderDetail: domain.OrderDetail{
+		Order: domain.Order{
+			ExternalID: extID("order-1"), Account: "acc-1", BaseAsset: "AAPL",
+			QuoteAsset: "USD", Side: domain.OrderSideBuy,
+		},
+	}}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(
+		`{"quantity":"1","price":"100","leavesQuantity":"0","status":"done"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports", body))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "validation" {
+		t.Fatalf("want code=validation, got %v", errObj["code"])
+	}
+	if svc.execReportIn.Order != "" {
+		t.Fatalf("invalid status reached service: %+v", svc.execReportIn)
+	}
+}
+
+func TestApplyExecutionReport_MissingStatus(t *testing.T) {
+	svc := &fakeService{orderDetail: domain.OrderDetail{
+		Order: domain.Order{
+			ExternalID: extID("order-1"), Account: "acc-1", BaseAsset: "AAPL",
+			QuoteAsset: "USD", Side: domain.OrderSideBuy,
+		},
+	}}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(
+		`{"quantity":"1","price":"100","leavesQuantity":"0"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports", body))

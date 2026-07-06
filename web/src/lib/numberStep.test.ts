@@ -17,7 +17,12 @@
 
 import { describe, expect, it } from "vitest";
 
-import { isDecimalString, smartStep, stepValue } from "@/lib/numberStep";
+import {
+  isDecimalString,
+  smartStep,
+  stepValue,
+  subtractDecimalStrings,
+} from "@/lib/numberStep";
 
 describe("isDecimalString", () => {
   it("accepts empty and decimal text values", () => {
@@ -102,5 +107,22 @@ describe("stepValue", () => {
 
   it("steps values beyond MAX_SAFE_INTEGER exactly", () => {
     expect(stepValue("9999999999999999", 1)).toBe("10000000000000999");
+  });
+});
+
+describe("subtractDecimalStrings", () => {
+  it("subtracts decimal strings without binary-float drift", () => {
+    expect(subtractDecimalStrings("2", "2")).toBe("0");
+    expect(subtractDecimalStrings("2.50", "1.25")).toBe("1.25");
+    expect(subtractDecimalStrings("0.3", "0.2")).toBe("0.1");
+  });
+
+  it("clamps negative subtraction results to zero", () => {
+    expect(subtractDecimalStrings("1", "2")).toBe("0");
+    expect(subtractDecimalStrings("0.1", "0.25")).toBe("0");
+  });
+
+  it("returns null for invalid decimal strings", () => {
+    expect(subtractDecimalStrings("2", "word")).toBeNull();
   });
 });

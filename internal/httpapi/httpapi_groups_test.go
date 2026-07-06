@@ -93,7 +93,8 @@ func TestListGroups_PropagatesFilters(t *testing.T) {
 	r.ServeHTTP(rec, httptest.NewRequest(
 		http.MethodGet,
 		"/api/v1/groups?code=desk*&codeMatch=ends_with&status=active"+
-			"&positionCountMode=less_than&positionCountMax=2&accountCount=has"+
+			"&positionCountMode=less_than&positionCountMax=2"+
+			"&accountCountMode=greater_than&accountCountMin=0"+
 			"&notes=desk&notesMatch=contains&blockReason=halt&blockReasonMatch=contains",
 		nil,
 	))

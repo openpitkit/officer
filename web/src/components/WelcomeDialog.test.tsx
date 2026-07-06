@@ -21,17 +21,33 @@ import { I18nextProvider } from "react-i18next";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { MarketDataInstance, MarketDataStatus } from "@/api/types";
+import type {
+  Asset,
+  AssetClass,
+  MarketDataInstance,
+  MarketDataStatus,
+} from "@/api/types";
 import { WelcomeDialog } from "@/components/WelcomeDialog";
 import { ApiClientProvider, type OfficerApi } from "@/framework";
 import i18n from "@/i18n";
 import { ThemeProvider } from "@/theme/ThemeProvider";
 
 const createMarketDataInstanceMock = vi.fn();
+const createAccountMock = vi.fn();
+const createAdjustmentMock = vi.fn();
+const createAssetMock = vi.fn();
+const createAssetClassMock = vi.fn();
+const fetchAccountsMock = vi.fn();
+const fetchAssetsMock = vi.fn();
+const fetchAssetClassesMock = vi.fn();
 const fetchMarketDataMock = vi.fn();
+const putLimitMock = vi.fn();
 const restartMarketDataMock = vi.fn();
+const setAccountNotesMock = vi.fn();
 const setMarketDataInstanceEnabledMock = vi.fn();
 const upsertMarketDataInstrumentMock = vi.fn();
+const updateAssetMock = vi.fn();
+const updateAssetClassMock = vi.fn();
 const setWelcomeSeenMock = vi.fn();
 
 function byoInstance(
@@ -80,18 +96,44 @@ function marketDataStatus(
   };
 }
 
+function asset(overrides: Partial<Asset> = {}): Asset {
+  return {
+    code: "USD",
+    title: "US Dollar",
+    assetClass: "currency",
+    ...overrides,
+  };
+}
+
+function assetClass(overrides: Partial<AssetClass> = {}): AssetClass {
+  return {
+    code: "currency",
+    title: "Currencies",
+    notes:
+      "Government-issued cash currencies used for settlement, cash balances, and FX conversion.",
+    assetCount: 0,
+    ...overrides,
+  };
+}
+
 function renderWelcome(onOpenChange = vi.fn()) {
   const api = {
-    createAccount: vi.fn().mockResolvedValue({}),
-    createAdjustment: vi.fn().mockResolvedValue({}),
+    createAsset: createAssetMock,
+    createAssetClass: createAssetClassMock,
+    createAccount: createAccountMock,
+    createAdjustment: createAdjustmentMock,
     createMarketDataInstance: createMarketDataInstanceMock,
-    fetchAccounts: vi.fn().mockResolvedValue([]),
+    fetchAccounts: fetchAccountsMock,
+    fetchAssetClasses: fetchAssetClassesMock,
+    fetchAssets: fetchAssetsMock,
     fetchMarketData: fetchMarketDataMock,
-    putLimit: vi.fn().mockResolvedValue({}),
+    putLimit: putLimitMock,
     restartMarketData: restartMarketDataMock,
-    setAccountNotes: vi.fn().mockResolvedValue({}),
+    setAccountNotes: setAccountNotesMock,
     setMarketDataInstanceEnabled: setMarketDataInstanceEnabledMock,
     setWelcomeSeen: setWelcomeSeenMock,
+    updateAsset: updateAssetMock,
+    updateAssetClass: updateAssetClassMock,
     upsertMarketDataInstrument: upsertMarketDataInstrumentMock,
   } as unknown as OfficerApi;
   render(
@@ -110,7 +152,25 @@ function renderWelcome(onOpenChange = vi.fn()) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  createAccountMock.mockResolvedValue({});
+  createAdjustmentMock.mockResolvedValue({});
+  fetchAccountsMock.mockResolvedValue([]);
+  fetchAssetClassesMock.mockResolvedValue([]);
+  fetchAssetsMock.mockResolvedValue([]);
+  createAssetClassMock.mockImplementation(async (code, title, notes) =>
+    assetClass({ code, title, notes }),
+  );
+  createAssetMock.mockImplementation(async (code, title, assetClassCode) =>
+    asset({ code, title, assetClass: assetClassCode }),
+  );
+  updateAssetClassMock.mockImplementation(async (_oldCode, code, title, notes) =>
+    assetClass({ code, title, notes }),
+  );
+  updateAssetMock.mockImplementation(async (_oldCode, code, title, assetClassCode) =>
+    asset({ code, title, assetClass: assetClassCode }),
+  );
   fetchMarketDataMock.mockResolvedValue(marketDataStatus());
+  putLimitMock.mockResolvedValue({});
   createMarketDataInstanceMock.mockImplementation(async (body) =>
     body.provider === "binance" ? binanceInstance() : byoInstance(),
   );
@@ -169,6 +229,57 @@ describe("WelcomeDialog", () => {
         credentials: "",
         enabled: true,
       });
+      expect(createAssetClassMock).toHaveBeenCalledWith(
+        "currency",
+        "Currencies",
+        "Government-issued cash currencies used for settlement, cash balances, and FX conversion.",
+      );
+      expect(createAssetClassMock).toHaveBeenCalledWith(
+        "stablecoin",
+        "Stablecoins",
+        "Tokenized cash-equivalent settlement assets used by crypto venues.",
+      );
+      expect(createAssetClassMock).toHaveBeenCalledWith(
+        "crypto",
+        "Crypto assets",
+        "Native crypto assets used for demo balances and crypto venue risk checks.",
+      );
+      expect(createAssetMock).toHaveBeenCalledWith(
+        "USD",
+        "US Dollar",
+        "currency",
+      );
+      expect(createAssetMock).toHaveBeenCalledWith("EUR", "Euro", "currency");
+      expect(createAssetMock).toHaveBeenCalledWith(
+        "BTC",
+        "Bitcoin",
+        "crypto",
+      );
+      expect(createAssetMock).toHaveBeenCalledWith(
+        "ETH",
+        "Ethereum",
+        "crypto",
+      );
+      expect(createAssetMock).toHaveBeenCalledWith(
+        "USDT",
+        "Tether USD",
+        "stablecoin",
+      );
+      expect(createAssetMock).toHaveBeenCalledWith(
+        "USDC",
+        "USD Coin",
+        "stablecoin",
+      );
+      expect(createAssetMock).toHaveBeenCalledWith(
+        "EURI",
+        "Eurite",
+        "stablecoin",
+      );
+      expect(createAssetMock).toHaveBeenCalledWith(
+        "AEUR",
+        "Anchored Coins AEUR",
+        "stablecoin",
+      );
       expect(upsertMarketDataInstrumentMock).toHaveBeenCalledTimes(6);
       expect(restartMarketDataMock).toHaveBeenCalledTimes(1);
       expect(upsertMarketDataInstrumentMock).not.toHaveBeenCalledWith(
@@ -232,11 +343,113 @@ describe("WelcomeDialog", () => {
     await waitFor(() => {
       expect(
         screen.getByText(
-          /Install FX and crypto static prices partially applied: 2 rows updated before failure: provider refused/i,
+          /Install FX and crypto static prices partially applied: 13 rows updated before failure: provider refused/i,
         ),
       ).toBeDefined();
     });
     expect(restartMarketDataMock).not.toHaveBeenCalled();
+  });
+
+  it("reclasses auto-created preset assets before upserting feeds", async () => {
+    const user = userEvent.setup();
+    fetchAssetClassesMock.mockResolvedValue([
+      assetClass(),
+      assetClass({
+        code: "stablecoin",
+        title: "Stablecoins",
+        notes:
+          "Tokenized cash-equivalent settlement assets used by crypto venues.",
+      }),
+      assetClass({
+        code: "crypto",
+        title: "Crypto assets",
+        notes:
+          "Native crypto assets used for demo balances and crypto venue risk checks.",
+      }),
+    ]);
+    fetchAssetsMock.mockResolvedValue([
+      asset({ code: "USD", title: "", assetClass: "auto-created" }),
+      asset({ code: "EUR", title: "", assetClass: "auto-created" }),
+      asset({ code: "BTC", title: "", assetClass: "auto-created" }),
+      asset({ code: "ETH", title: "", assetClass: "auto-created" }),
+      asset({ code: "USDT", title: "", assetClass: "auto-created" }),
+      asset({ code: "USDC", title: "", assetClass: "auto-created" }),
+      asset({ code: "EURI", title: "", assetClass: "auto-created" }),
+      asset({ code: "AEUR", title: "", assetClass: "auto-created" }),
+    ]);
+    renderWelcome();
+
+    await user.click(
+      screen.getByRole("button", {
+        name: /Install FX and crypto static prices/i,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(updateAssetMock).toHaveBeenCalledWith(
+        "USD",
+        "USD",
+        "US Dollar",
+        "currency",
+      );
+      expect(updateAssetMock).toHaveBeenCalledWith(
+        "USDT",
+        "USDT",
+        "Tether USD",
+        "stablecoin",
+      );
+      expect(updateAssetMock).toHaveBeenCalledWith(
+        "BTC",
+        "BTC",
+        "Bitcoin",
+        "crypto",
+      );
+      expect(createAssetMock).not.toHaveBeenCalled();
+      expect(upsertMarketDataInstrumentMock).toHaveBeenCalledTimes(6);
+    });
+  });
+
+  it("seeds demo account assets with explicit classes before positions", async () => {
+    const user = userEvent.setup();
+    renderWelcome();
+
+    await user.click(
+      screen.getByRole("button", {
+        name: /Create demo account and positions/i,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(createAssetClassMock).toHaveBeenCalledWith(
+        "crypto",
+        "Crypto assets",
+        "Native crypto assets used for demo balances and crypto venue risk checks.",
+      );
+      expect(createAssetMock).toHaveBeenCalledWith(
+        "BTC",
+        "Bitcoin",
+        "crypto",
+      );
+      expect(createAssetMock).toHaveBeenCalledWith(
+        "ETH",
+        "Ethereum",
+        "crypto",
+      );
+      expect(createAssetMock).toHaveBeenCalledWith(
+        "USD",
+        "US Dollar",
+        "currency",
+      );
+      expect(createAssetMock).toHaveBeenCalledWith(
+        "USDT",
+        "Tether USD",
+        "stablecoin",
+      );
+      expect(createAdjustmentMock).toHaveBeenCalledTimes(4);
+    });
+    expect(createAssetMock.mock.invocationCallOrder[0]).toBeLessThan(
+      createAdjustmentMock.mock.invocationCallOrder[0],
+    );
   });
 
   it("applies Binance preset with provider-native FX symbols", async () => {

@@ -268,8 +268,8 @@ func (s *guardSource) ConfirmExecution(
 	string,
 	string,
 	bool,
-) (domain.Order, error) {
-	return domain.Order{}, nil
+) (domain.Order, Attestation, error) {
+	return domain.Order{}, Attestation{}, nil
 }
 
 func (s *guardSource) CancelOrder(
@@ -278,8 +278,8 @@ func (s *guardSource) CancelOrder(
 	string,
 	string,
 	bool,
-) (domain.Order, error) {
-	return domain.Order{}, nil
+) (domain.Order, Attestation, error) {
+	return domain.Order{}, Attestation{}, nil
 }
 
 func contentContains(content []sdkmcp.Content, needle string) bool {

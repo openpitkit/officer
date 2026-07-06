@@ -195,7 +195,7 @@ func TestRateLimitCascadeOnAccountDelete(t *testing.T) {
 	}
 
 	r := rs.(*realmStore)
-	if _, err := r.db().ExecContext(ctx, `DELETE FROM account WHERE code = 'acc-1'`); err != nil {
+	if _, err := r.rawDB().ExecContext(ctx, `DELETE FROM account WHERE code = 'acc-1'`); err != nil {
 		t.Fatalf("delete account: %v", err)
 	}
 
@@ -456,7 +456,7 @@ func TestPnlBoundsLimitCascadeOnAccountDelete(t *testing.T) {
 	}
 
 	r := rs.(*realmStore)
-	if _, err := r.db().ExecContext(ctx, `DELETE FROM account WHERE code = 'acc-1'`); err != nil {
+	if _, err := r.rawDB().ExecContext(ctx, `DELETE FROM account WHERE code = 'acc-1'`); err != nil {
 		t.Fatalf("delete account: %v", err)
 	}
 

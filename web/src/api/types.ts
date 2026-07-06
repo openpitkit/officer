@@ -445,10 +445,14 @@ export interface Order {
   side: OrderSide;
   amountKind: AmountKind;
   amountValue: string;
+  /** Remaining open base quantity persisted from stored order/report data. */
+  leavesQuantity: string;
   price: string;
   status: string;
   /** Human-readable reservation prices, as exact decimal strings. */
   displayPrices: string[];
+  /** Whether the order carries a persisted Ed25519-signed approval envelope. */
+  signed: boolean;
 }
 
 /** An event on an order's lifecycle.
@@ -469,6 +473,10 @@ export interface OrderEvent {
   fillQuantity?: string;
   fillPrice?: string;
   fillLockPrice?: string;
+  /** Whether this event carries a persisted Ed25519-signed attestation. */
+  signed: boolean;
+  /** The attestation's algorithm ("ed25519" | "none"); empty when unattested. */
+  alg?: string;
 }
 
 /** A completed trade derived from a fill. */
@@ -520,9 +528,29 @@ export interface ExecutionBlock {
   details: string;
 }
 
-/** Result of POST /orders/{externalId}/execution-reports. */
+/** One per-asset balance effect of a fill, tagged with its asset so the base
+ *  and quote legs of a spot fill can be told apart. All values are exact
+ *  decimal strings passed through verbatim. */
+export interface ExecutionOutcome {
+  asset: string;
+  balanceDelta: string;
+  balanceResult: string;
+  heldDelta: string;
+  heldResult: string;
+  incomingDelta: string;
+  incomingResult: string;
+}
+
+/** Result of POST /orders/{externalId}/execution-reports: the engine result
+ *  (account blocks and per-asset outcomes) plus the attestation the robot
+ *  receives as proof the engine passed this report. The attestation fields are
+ *  empty when attestation was skipped or ran under eSign-off. */
 export interface ExecutionReportResult {
   blocks: ExecutionBlock[];
+  outcomes: ExecutionOutcome[];
+  attestationToken: string;
+  attestationKeyId: string;
+  signed: boolean;
 }
 
 export interface ApprovalToken {
@@ -855,19 +883,43 @@ export interface SigningKeyResult {
   publicKey: string;
 }
 
-// --- Order approval / signed pre-trade verdict ---
+// --- Per-event attestation / reproduction ---
 
-/** Signing algorithm used in the approval envelope. */
+/** Signing algorithm used in the attestation envelope. */
 export type ApprovalAlg = "ed25519" | "none";
 
-/** The signed pre-trade verdict envelope attached to an order, or null when the
- *  order has no envelope (no signer configured / pre-existing order). */
-export interface OrderApproval {
+/** The trading request an attestation binds. Officer signs each engine-processed
+ *  request, so every attested event carries exactly one of these. */
+export type AttestationRequestType =
+  | "submit"
+  | "execution_report"
+  | "confirm"
+  | "cancel";
+
+/** Identified public-key material (never private): the key resolved by a keyId,
+ *  paired with its export format. Mirrors the reproduction bundle's publicKey and
+ *  the GET /signing/keys/{keyId}/public body. */
+export interface PublicKeyMaterial {
+  /** UUID of the signing key this material was resolved by. */
+  keyId: string;
+  alg: ApprovalAlg;
+  /** Export format of `key` (pem-pkcs8 | openssh | raw-base64). */
+  format: SigningKeyFormat;
+  /** The public key encoded in `format`. */
+  key: string;
+}
+
+/** The persisted signed-attestation envelope metadata for one order event: the
+ *  exact base64url token plus the envelope's own fields. Bound 1:1 to the event
+ *  it attested. */
+export interface EventAttestation {
   /** Base64url-encoded envelope JSON: { approval, signature, keyId, alg }. */
   token: string;
   /** UUID of the signing key, or empty string when alg is "none". */
   keyId: string;
   alg: ApprovalAlg;
+  /** The trading request this attestation binds. */
+  requestType: string;
   /** Submission mode; currently always "immediate". */
   mode: string;
   /** RFC3339Nano timestamp at which the envelope was issued. May be empty. */
@@ -876,6 +928,126 @@ export interface OrderApproval {
   expiresAt: string;
   /** Whether the envelope carries a real cryptographic signature. */
   signed: boolean;
+}
+
+/** The exact POST /orders/submit response a robot / agent received (submit). */
+export interface ApprovalTokenResponse {
+  /** Base64url envelope token, verbatim. */
+  token: string;
+  /** Signing key UUID, or empty string under eSign-off. */
+  keyId: string;
+  /** RFC3339Nano expiry timestamp. May be empty. */
+  expiresAt: string;
+  /** The order's opaque public handle. */
+  orderExternalId: string;
+}
+
+/** One engine-recorded account block bound in the attestation payload result. */
+export interface AttestationBlock {
+  account: string;
+  code: string;
+  reason: string;
+  details: string;
+}
+
+/** The engine result section bound in the attestation payload, present for
+ *  request types carrying a result beyond the submit verdict. */
+export interface AttestationResult {
+  outcome: string;
+  fillQuantity: string;
+  fillPrice: string;
+  fillLockPrice: string;
+  leavesQuantity: string;
+  orderStatus: string;
+  blocks: AttestationBlock[];
+}
+
+/** The request bound in the attestation payload, reconstructed for reproduction
+ *  from the decoded token: the request type, its material params, and the engine
+ *  result section when present. Carries no private material. */
+export interface EventReproductionRequest {
+  requestType: string;
+  orderExternalId: string;
+  eventExternalId: string;
+  instrument: string;
+  side: string;
+  quantity: string;
+  amountKind: string;
+  orderType: string;
+  limitPrice: string;
+  priceCurrency: string;
+  accountId: string;
+  verdict: string;
+  result: AttestationResult | null;
+}
+
+/** The execution-report facet of a reproduction response: the engine result plus
+ *  the attestation token the robot received verbatim. */
+export interface ExecutionReportResponse {
+  blocks: AttestationBlock[];
+  outcomes: ExecutionOutcome[];
+  attestationToken: string;
+  attestationKeyId: string;
+  signed: boolean;
+}
+
+/** The confirm / cancel facet of a reproduction response: the resolved order plus
+ *  the attestation token the robot received verbatim. */
+export interface OrderMutationResponse {
+  order: Order;
+  attestationToken: string;
+  attestationKeyId: string;
+  signed: boolean;
+}
+
+/** The exact type-specific API response the robot received for the attested
+ *  request. Exactly one facet is populated, matching the request type. The token
+ *  inside each facet is carried verbatim. */
+export interface EventReproductionResponse {
+  submitResponse: ApprovalTokenResponse | null;
+  executionReport: ExecutionReportResponse | null;
+  confirm: OrderMutationResponse | null;
+  cancel: OrderMutationResponse | null;
+}
+
+/** The signing-mode facet of a reproduction bundle: the global eSign-off flag
+ *  plus this event's own envelope alg and whether it carries a real signature. */
+export interface EventReproductionESign {
+  /** Envelope alg for this event ("ed25519" | "none"); empty when unattested. */
+  alg: string;
+  /** Whether the global eSign-off flag is set. */
+  noESign: boolean;
+  /** Whether this event carries a real Ed25519 signature. */
+  signed: boolean;
+}
+
+/** The controller-facing reproduction bundle for one order-history event's
+ *  attestation: byte-for-byte what a robot / AI agent received from the live APIs
+ *  for the request that produced this event. Signed artifacts (token,
+ *  canonicalApproval, signature, publicKey.key) are verbatim server output and
+ *  must never be re-serialized client-side. */
+export interface EventReproduction {
+  /** The trading request the attestation binds; empty when unattested. */
+  requestType: string;
+  /** The event body, identical to GET /orders/{id}. */
+  event: OrderEvent;
+  /** Persisted attestation metadata (token verbatim), or null when unattested. */
+  attestation: EventAttestation | null;
+  /** The request bound in the attestation payload, or null when unattested. */
+  request: EventReproductionRequest | null;
+  /** The exact type-specific API response, or null when unattested. */
+  response: EventReproductionResponse | null;
+  /** The exact signed bytes (canonical JSON), or null when absent/undecodable. */
+  canonicalApproval: string | null;
+  /** Public key resolved rotation-safe by the attestation's keyId; null under
+   *  "none". */
+  publicKey: PublicKeyMaterial | null;
+  /** Signing mode facet. */
+  eSign: EventReproductionESign;
+  /** Base64 envelope signature; empty under alg "none". */
+  signature: string;
+  /** Explains a null attestation; empty otherwise. */
+  reason: string;
 }
 
 // --- Audit ---

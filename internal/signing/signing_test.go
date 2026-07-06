@@ -242,6 +242,69 @@ func TestVerifyWrongKeyFails(t *testing.T) {
 	}
 }
 
+// TestPublicKeyByID_ResolvesRotatedKey verifies PublicKeyByID resolves a key by
+// id after rotation: the earlier (now inactive) key still yields its own public
+// material, distinct from the active key's, and matches ActivePublicKey while it
+// was active.
+func TestPublicKeyByID_ResolvesRotatedKey(t *testing.T) {
+	ctx := context.Background()
+	st := newFakeStore()
+	svc, err := New(st)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	oldKey, err := svc.GenerateKey(ctx)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	oldActive, err := svc.ActivePublicKey(FormatPEMPKCS8)
+	if err != nil {
+		t.Fatalf("ActivePublicKey: %v", err)
+	}
+	oldByID, err := svc.PublicKeyByID(ctx, oldKey.KeyID, FormatPEMPKCS8)
+	if err != nil {
+		t.Fatalf("PublicKeyByID old: %v", err)
+	}
+	if oldByID != oldActive {
+		t.Fatalf("PublicKeyByID must match ActivePublicKey while active")
+	}
+	newKey, err := svc.GenerateKey(ctx)
+	if err != nil {
+		t.Fatalf("GenerateKey rotate: %v", err)
+	}
+	// After rotation, the OLD key must still resolve to its OWN public material.
+	afterByID, err := svc.PublicKeyByID(ctx, oldKey.KeyID, FormatPEMPKCS8)
+	if err != nil {
+		t.Fatalf("PublicKeyByID after rotation: %v", err)
+	}
+	if afterByID != oldByID {
+		t.Fatalf("rotated key's public material changed under its id")
+	}
+	newByID, err := svc.PublicKeyByID(ctx, newKey.KeyID, FormatPEMPKCS8)
+	if err != nil {
+		t.Fatalf("PublicKeyByID new: %v", err)
+	}
+	if newByID == oldByID {
+		t.Fatalf("new key shares public material with the old key")
+	}
+	if got, err := svc.ActivePublicKey(FormatPEMPKCS8); err != nil || got != newByID {
+		t.Fatalf("active key should now be the new key, got %q err %v", got, err)
+	}
+}
+
+// TestPublicKeyByID_UnknownAndEmpty verifies PublicKeyByID rejects an unknown id
+// with ErrNotFound and an empty id with ErrInvalid, and never emits private
+// material.
+func TestPublicKeyByID_UnknownAndEmpty(t *testing.T) {
+	svc, _ := newServiceWithKey(t)
+	if _, err := svc.PublicKeyByID(context.Background(), "nope", FormatPEMPKCS8); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("want ErrNotFound for unknown id, got %v", err)
+	}
+	if _, err := svc.PublicKeyByID(context.Background(), "", FormatPEMPKCS8); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("want ErrInvalid for empty id, got %v", err)
+	}
+}
+
 func TestParamBindingTamperRejected(t *testing.T) {
 	svc, _ := newServiceWithKey(t)
 	p := samplePayload()

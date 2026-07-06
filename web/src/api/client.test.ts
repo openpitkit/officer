@@ -48,6 +48,12 @@ const exportBackup = (...args: Parameters<ReturnType<typeof api>["exportBackup"]
   api().exportBackup(...args);
 const fetchSigningKeys = (...args: Parameters<ReturnType<typeof api>["fetchSigningKeys"]>) =>
   api().fetchSigningKeys(...args);
+const fetchEventReproduction = (
+  ...args: Parameters<ReturnType<typeof api>["fetchEventReproduction"]>
+) => api().fetchEventReproduction(...args);
+const fetchPublicKeyById = (
+  ...args: Parameters<ReturnType<typeof api>["fetchPublicKeyById"]>
+) => api().fetchPublicKeyById(...args);
 const generateSigningKey = (...args: Parameters<ReturnType<typeof api>["generateSigningKey"]>) =>
   api().generateSigningKey(...args);
 const importBusinessCsv = (...args: Parameters<ReturnType<typeof api>["importBusinessCsv"]>) =>
@@ -66,6 +72,9 @@ const searchMarketDataSymbols = (
 ) => api().searchMarketDataSymbols(...args);
 const setESignEnabled = (...args: Parameters<ReturnType<typeof api>["setESignEnabled"]>) =>
   api().setESignEnabled(...args);
+const submitExecutionReport = (
+  ...args: Parameters<ReturnType<typeof api>["submitExecutionReport"]>
+) => api().submitExecutionReport(...args);
 const updateMarketDataInstanceSettings = (
   ...args: Parameters<ReturnType<typeof api>["updateMarketDataInstanceSettings"]>
 ) => api().updateMarketDataInstanceSettings(...args);
@@ -863,6 +872,18 @@ describe("append-only list clients", () => {
     expect(auditUrl.searchParams.get("sort")).toBeNull();
     expect(auditUrl.searchParams.get("order")).toBeNull();
   });
+
+  it("returns null when an adjustment produces no engine-side change", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    const result = await api().createAdjustment("desk-alpha", { asset: "USD" });
+
+    expect(result).toBeNull();
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/accounts/desk-alpha/adjustments",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
 });
 
 describe("backup client", () => {
@@ -1583,6 +1604,239 @@ describe("signing-keys HTTP calls", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Order reproduction + per-key public material
+// ---------------------------------------------------------------------------
+
+describe("event reproduction client", () => {
+  it("fetchEventReproduction normalizes a signed submit bundle verbatim", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        requestType: "submit",
+        event: {
+          externalId: "evt-1",
+          order: "ord-1",
+          at: "2026-06-24T00:00:00Z",
+          type: "submitted",
+          source: "api",
+          alg: "ed25519",
+          signed: true,
+        },
+        attestation: {
+          token: "tok-verbatim",
+          keyId: "key-1",
+          alg: "ed25519",
+          requestType: "submit",
+          mode: "immediate",
+          issuedAt: "2026-06-24T00:00:00Z",
+          expiresAt: "2026-06-24T00:02:00Z",
+          signed: true,
+        },
+        request: {
+          requestType: "submit",
+          orderExternalId: "ord-1",
+          instrument: "AAPL/USD",
+          side: "buy",
+          quantity: "10",
+          amountKind: "quantity",
+          orderType: "limit",
+          limitPrice: "150.25",
+          accountId: "acc-1",
+          verdict: "accept",
+          result: null,
+        },
+        response: {
+          submitResponse: {
+            token: "tok-verbatim",
+            keyId: "key-1",
+            expiresAt: "2026-06-24T00:02:00Z",
+            orderExternalId: "ord-1",
+          },
+        },
+        canonicalApproval: '{"version":1,"side":"buy"}',
+        publicKey: {
+          keyId: "key-1",
+          alg: "ed25519",
+          format: "pem-pkcs8",
+          key: "PEM",
+        },
+        eSign: { alg: "ed25519", noESign: false, signed: true },
+        signature: "sig-base64",
+        reason: "",
+      }),
+    );
+
+    const result = await fetchEventReproduction("ord-1", "evt-1");
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/orders/ord-1/events/evt-1/reproduction",
+      expect.any(Object),
+    );
+    // Signed artifacts are carried through verbatim.
+    expect(result.requestType).toBe("submit");
+    expect(result.attestation?.token).toBe("tok-verbatim");
+    expect(result.response?.submitResponse?.token).toBe("tok-verbatim");
+    expect(result.canonicalApproval).toBe('{"version":1,"side":"buy"}');
+    expect(result.signature).toBe("sig-base64");
+    expect(result.publicKey?.keyId).toBe("key-1");
+    expect(result.event.signed).toBe(true);
+    expect(result.eSign).toEqual({
+      alg: "ed25519",
+      noESign: false,
+      signed: true,
+    });
+  });
+
+  it("fetchEventReproduction normalizes an execution-report facet with its verbatim token", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        requestType: "execution_report",
+        event: {
+          externalId: "evt-fill",
+          order: "ord-1",
+          at: "2026-06-24T00:01:00Z",
+          type: "fill",
+          source: "api",
+          alg: "ed25519",
+          signed: true,
+        },
+        attestation: {
+          token: "tok-fill",
+          keyId: "key-1",
+          alg: "ed25519",
+          requestType: "execution_report",
+          mode: "immediate",
+          issuedAt: "2026-06-24T00:01:00Z",
+          expiresAt: "2026-06-24T00:03:00Z",
+          signed: true,
+        },
+        request: {
+          requestType: "execution_report",
+          orderExternalId: "ord-1",
+          eventExternalId: "evt-fill",
+          accountId: "acc-1",
+          result: {
+            outcome: "filled",
+            fillQuantity: "10",
+            fillPrice: "150.25",
+            leavesQuantity: "0",
+            orderStatus: "filled",
+            blocks: [],
+          },
+        },
+        response: {
+          executionReport: {
+            result: {
+              blocks: [],
+              outcomes: [
+                {
+                  asset: "AAPL",
+                  balanceDelta: "10",
+                  balanceResult: "10",
+                  heldDelta: "0",
+                  heldResult: "0",
+                  incomingDelta: "0",
+                  incomingResult: "0",
+                },
+              ],
+            },
+            attestationToken: "tok-fill",
+            attestationKeyId: "key-1",
+            signed: true,
+          },
+        },
+        canonicalApproval: '{"version":1,"requestType":"execution_report"}',
+        publicKey: {
+          keyId: "key-1",
+          alg: "ed25519",
+          format: "pem-pkcs8",
+          key: "PEM",
+        },
+        eSign: { alg: "ed25519", noESign: false, signed: true },
+        signature: "sig-fill",
+        reason: "",
+      }),
+    );
+
+    const result = await fetchEventReproduction("ord-1", "evt-fill");
+    expect(result.requestType).toBe("execution_report");
+    expect(result.response?.executionReport?.attestationToken).toBe("tok-fill");
+    // The per-asset outcomes surface through the reproduction facet verbatim.
+    expect(result.response?.executionReport?.outcomes).toEqual([
+      {
+        asset: "AAPL",
+        balanceDelta: "10",
+        balanceResult: "10",
+        heldDelta: "0",
+        heldResult: "0",
+        incomingDelta: "0",
+        incomingResult: "0",
+      },
+    ]);
+    expect(result.request?.result?.orderStatus).toBe("filled");
+    expect(result.response?.submitResponse).toBeNull();
+  });
+
+  it("fetchEventReproduction keeps a null canonicalApproval distinct from empty", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        requestType: "",
+        event: { externalId: "evt-bare", signed: false },
+        attestation: null,
+        request: null,
+        response: null,
+        canonicalApproval: null,
+        publicKey: null,
+        eSign: { alg: "", noESign: false, signed: false },
+        signature: "",
+        reason: "event has no persisted attestation envelope",
+      }),
+    );
+
+    const result = await fetchEventReproduction("ord-bare", "evt-bare");
+    expect(result.attestation).toBeNull();
+    expect(result.request).toBeNull();
+    expect(result.canonicalApproval).toBeNull();
+    expect(result.publicKey).toBeNull();
+    expect(result.reason).toBe("event has no persisted attestation envelope");
+  });
+
+  it("fetchPublicKeyById requests the per-key endpoint with format", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        keyId: "key-9",
+        alg: "ed25519",
+        format: "raw-base64",
+        key: "RAW-BASE64",
+      }),
+    );
+
+    const result = await fetchPublicKeyById("key-9", "raw-base64");
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/signing/keys/key-9/public?format=raw-base64",
+      expect.any(Object),
+    );
+    expect(result).toEqual({
+      keyId: "key-9",
+      alg: "ed25519",
+      format: "raw-base64",
+      key: "RAW-BASE64",
+    });
+  });
+
+  it("fetchPublicKeyById surfaces a 404 for an unknown key id", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ error: { code: "not_found", message: "unknown key" } }),
+        { status: 404, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    await expect(fetchPublicKeyById("missing", "raw-base64")).rejects.toMatchObject(
+      { status: 404 },
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Orders — submit creates a signed approval token and addresses by external id
 // ---------------------------------------------------------------------------
 
@@ -1628,6 +1882,7 @@ describe("Orders createOrder submit lifecycle", () => {
           side: "buy",
           amountKind: "quantity",
           amountValue: "100",
+          leavesQuantity: "100",
           price: "0",
           status: "accepted",
           displayPrices: [],
@@ -1750,6 +2005,7 @@ describe("Orders createOrder submit lifecycle", () => {
               side: "buy",
               amountKind: "quantity",
               amountValue: "100",
+              leavesQuantity: "100",
               price: "0",
               status: "accepted",
               displayPrices: ["101.20"],
@@ -1804,5 +2060,303 @@ describe("Orders createOrder submit lifecycle", () => {
     expect(result.warning).toContain(
       "Order was created, but detail enrichment failed",
     );
+  });
+
+  it("treats a fetched order without leavesQuantity as invalid", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        orders: [
+          {
+            externalId: "ord_alpha_0000000001",
+            account: "desk-alpha",
+            at: "2026-01-01T00:00:00Z",
+            source: "panel",
+            baseAsset: "AAPL",
+            quoteAsset: "USD",
+            side: "buy",
+            amountKind: "quantity",
+            amountValue: "100",
+            price: "0",
+            status: "accepted",
+            displayPrices: [],
+          },
+        ],
+      }),
+    );
+
+    await expect(api().fetchOrders()).rejects.toMatchObject({
+      code: "internal",
+      message: "leavesQuantity is missing from the API response",
+    });
+  });
+});
+
+describe("Orders submitExecutionReport", () => {
+  it("surfaces blocks, per-asset outcomes, and the attestation", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        result: {
+          blocks: [
+            {
+              account: "desk-alpha",
+              code: "spot_funds",
+              reason: "insufficient funds",
+              details: "USD",
+            },
+          ],
+          outcomes: [
+            {
+              asset: "AAPL",
+              balanceDelta: "10",
+              balanceResult: "10",
+              heldDelta: "0",
+              heldResult: "0",
+              incomingDelta: "0",
+              incomingResult: "0",
+            },
+            {
+              asset: "USD",
+              balanceDelta: "-1502.50",
+              balanceResult: "8497.50",
+              heldDelta: "0",
+              heldResult: "0",
+              incomingDelta: "0",
+              incomingResult: "0",
+            },
+          ],
+        },
+        attestationToken: "tok-report",
+        attestationKeyId: "key-7",
+        signed: true,
+      }),
+    );
+
+    const result = await submitExecutionReport("ord_alpha_0000000001", {
+      status: "filled",
+      quantity: "10",
+      price: "150.25",
+      leavesQuantity: "0",
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/orders/ord_alpha_0000000001/execution-reports",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(result.blocks).toEqual([
+      {
+        account: "desk-alpha",
+        code: "spot_funds",
+        reason: "insufficient funds",
+        details: "USD",
+      },
+    ]);
+    expect(result.outcomes).toEqual([
+      {
+        asset: "AAPL",
+        balanceDelta: "10",
+        balanceResult: "10",
+        heldDelta: "0",
+        heldResult: "0",
+        incomingDelta: "0",
+        incomingResult: "0",
+      },
+      {
+        asset: "USD",
+        balanceDelta: "-1502.50",
+        balanceResult: "8497.50",
+        heldDelta: "0",
+        heldResult: "0",
+        incomingDelta: "0",
+        incomingResult: "0",
+      },
+    ]);
+    expect(result.attestationToken).toBe("tok-report");
+    expect(result.attestationKeyId).toBe("key-7");
+    expect(result.signed).toBe(true);
+  });
+});
+
+describe("Orders confirmHeldOrder and cancelHeldOrder", () => {
+  function orderMutationResponse(): Response {
+    return new Response(
+      JSON.stringify({
+        order: {
+          externalId: "ord_alpha_0000000001",
+          account: "desk-alpha",
+          at: "2026-01-01T00:00:00Z",
+          source: "panel",
+          baseAsset: "AAPL",
+          quoteAsset: "USD",
+          side: "buy",
+          amountKind: "quantity",
+          amountValue: "100",
+          leavesQuantity: "0",
+          price: "150.25",
+          status: "filled",
+          displayPrices: [],
+        },
+        attestationToken: "tok-confirm",
+        attestationKeyId: "key-9",
+        signed: true,
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  }
+
+  it("confirmHeldOrder sends force=false and decodes the mutation response", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(orderMutationResponse());
+
+    const result = await api().confirmHeldOrder("ord_alpha_0000000001", {
+      token: "approval-token",
+      force: false,
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/orders/ord_alpha_0000000001/confirm",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ token: "approval-token", force: false }),
+      }),
+    );
+    expect(result.order).toMatchObject({
+      externalId: "ord_alpha_0000000001",
+      leavesQuantity: "0",
+      price: "150.25",
+      status: "filled",
+    });
+    expect(result.attestationToken).toBe("tok-confirm");
+    expect(result.attestationKeyId).toBe("key-9");
+    expect(result.signed).toBe(true);
+  });
+
+  it("confirmHeldOrder sends force=true when the caller overrides safety checks", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(orderMutationResponse());
+
+    await api().confirmHeldOrder("ord_alpha_0000000001", {
+      token: "approval-token",
+      force: true,
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/orders/ord_alpha_0000000001/confirm",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ token: "approval-token", force: true }),
+      }),
+    );
+  });
+
+  it("cancelHeldOrder sends force=false and decodes the mutation response", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(orderMutationResponse());
+
+    const result = await api().cancelHeldOrder("ord_alpha_0000000001", {
+      token: "approval-token",
+      reason: "operator request",
+      force: false,
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/orders/ord_alpha_0000000001/cancel",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          token: "approval-token",
+          reason: "operator request",
+          force: false,
+        }),
+      }),
+    );
+    expect(result.order).toMatchObject({
+      externalId: "ord_alpha_0000000001",
+      leavesQuantity: "0",
+      price: "150.25",
+      status: "filled",
+    });
+    expect(result.attestationToken).toBe("tok-confirm");
+    expect(result.attestationKeyId).toBe("key-9");
+    expect(result.signed).toBe(true);
+  });
+
+  it("cancelHeldOrder sends force=true when the caller overrides safety checks", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(orderMutationResponse());
+
+    await api().cancelHeldOrder("ord_alpha_0000000001", {
+      token: "approval-token",
+      reason: "operator request",
+      force: true,
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/orders/ord_alpha_0000000001/cancel",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          token: "approval-token",
+          reason: "operator request",
+          force: true,
+        }),
+      }),
+    );
+  });
+});
+
+describe("Orders terminal_order error decode", () => {
+  function terminalOrderResponse(): Response {
+    return new Response(
+      JSON.stringify({
+        error: {
+          code: "terminal_order",
+          message: "order is already in a terminal status",
+        },
+      }),
+      { status: 409, headers: { "Content-Type": "application/json" } },
+    );
+  }
+
+  it("confirmHeldOrder surfaces a typed terminal_order ApiError on a 409", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(terminalOrderResponse());
+
+    await expect(
+      api().confirmHeldOrder("ord_alpha_0000000001", {
+        token: "approval-token",
+        force: false,
+      }),
+    ).rejects.toMatchObject({
+      name: "ApiError",
+      code: "terminal_order",
+      status: 409,
+    });
+  });
+
+  it("cancelHeldOrder surfaces a typed terminal_order ApiError on a 409", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(terminalOrderResponse());
+
+    await expect(
+      api().cancelHeldOrder("ord_alpha_0000000001", {
+        token: "approval-token",
+        force: false,
+      }),
+    ).rejects.toMatchObject({
+      name: "ApiError",
+      code: "terminal_order",
+      status: 409,
+    });
+  });
+
+  it("submitExecutionReport surfaces a typed terminal_order ApiError on a 409", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(terminalOrderResponse());
+
+    await expect(
+      submitExecutionReport("ord_alpha_0000000001", {
+        status: "filled",
+        quantity: "10",
+        price: "150.25",
+        leavesQuantity: "0",
+      }),
+    ).rejects.toMatchObject({
+      name: "ApiError",
+      code: "terminal_order",
+      status: 409,
+    });
   });
 });

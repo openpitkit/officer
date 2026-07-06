@@ -160,7 +160,7 @@ type ControlPlane interface {
 	CheckOrder(ctx context.Context, probe domain.OrderProbe) (domain.CheckResult, error)
 	ApplyExecutionReport(
 		ctx context.Context, in domain.ExecutionReportInput,
-	) (engine.ExecutionReportResult, error)
+	) (engine.ExecutionReportResult, Attestation, error)
 	GetOrder(ctx context.Context, id string) (domain.OrderDetail, error)
 	ListOrders(
 		ctx context.Context, account domain.AccountID, source domain.Source, n int,
@@ -180,13 +180,14 @@ type ControlPlane interface {
 	ImportSigningKey(ctx context.Context, material, format string) (domain.SigningKey, error)
 	ListSigningKeys(ctx context.Context) ([]domain.SigningKey, error)
 	ActivePublicKey(format string) (string, error)
+	PublicKeyByID(ctx context.Context, keyID, format string) (string, error)
 	GetNoESign(ctx context.Context) (bool, error)
 	SetNoESign(ctx context.Context, off bool) error
 	SubmitOrderToken(ctx context.Context, o domain.Order, mode string) (ApprovalToken, error)
 	ConfirmExecution(
 		ctx context.Context, orderID string, token string, force bool,
-	) (domain.Order, error)
+	) (domain.Order, Attestation, error)
 	CancelOrder(
 		ctx context.Context, orderID string, token, reason string, force bool,
-	) (domain.Order, error)
+	) (domain.Order, Attestation, error)
 }

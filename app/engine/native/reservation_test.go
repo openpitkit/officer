@@ -30,6 +30,8 @@ import (
 	"testing"
 	"time"
 
+	"go.openpit.dev/openpit"
+	"go.openpit.dev/openpit/asyncengine"
 	"go.openpit.dev/openpit/param"
 
 	"go.openpit.dev/officer/framework/domain"
@@ -58,6 +60,18 @@ func testOrderXID(seed byte) domain.ExternalID {
 	return id
 }
 
+func testAsyncEngine(t *testing.T, eng *openpit.Engine) *asyncengine.AsyncEngine {
+	t.Helper()
+	async, err := asyncengine.NewBuilder(eng).
+		WithStopUnderlying(eng.Stop).
+		Dynamic().
+		Build()
+	if err != nil {
+		t.Fatalf("build async engine: %v", err)
+	}
+	return async
+}
+
 // newTestEngine builds a real engine adapter with one account ("1") that carries
 // a stored engine id and is seeded with testQuoteFund of the quote asset, enough
 // to reserve exactly two test orders. The adapter is stopped via t.Cleanup.
@@ -72,7 +86,9 @@ func newTestEngine(t *testing.T) *openPitEngine {
 	if err != nil {
 		t.Fatalf("build engine: %v", err)
 	}
-	adapter := newOpenPitEngine(eng, service, registered, nil, res).(*openPitEngine)
+	adapter := newOpenPitEngine(
+		eng, testAsyncEngine(t, eng), service, registered, nil, res,
+	).(*openPitEngine)
 	t.Cleanup(adapter.Stop)
 
 	if err := seedBalances(eng, []domain.Balance{{
@@ -511,10 +527,10 @@ func TestSubmitImmediate_NetsHeldToZero(t *testing.T) {
 
 // TestApplyExecutionReport_SettlesFillNoBlock drives a fill end to end through
 // the real engine and the real executionReportFrom mapping: reserve a spot BUY
-// (holding quote funds), commit it, then apply a final execution report carrying
+// (holding quote funds), commit it, then apply a fill report carrying filled
 // an explicit leaves quantity. It asserts the report settles with no account
 // block and produces a per-asset outcome for each spot leg. This locks in that
-// the mapper sets leaves quantity and the is-final flag; without them the engine
+// the mapper sets leaves quantity and terminal order status; without them the engine
 // rejects the fill with missing_required_field and blocks the account.
 func TestApplyExecutionReport_SettlesFillNoBlock(t *testing.T) {
 	e := newTestEngine(t)
@@ -539,7 +555,7 @@ func TestApplyExecutionReport_SettlesFillNoBlock(t *testing.T) {
 		LockPrice:      held.SettlementLockPrice,
 		Account:        domain.AccountID(testAccount),
 		Side:           domain.OrderSideBuy,
-		Final:          true,
+		OrderStatus:    domain.OrderStatusFilled,
 	})
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport: %v", err)
@@ -548,12 +564,94 @@ func TestApplyExecutionReport_SettlesFillNoBlock(t *testing.T) {
 		t.Fatalf("fill must not block the account, got blocks=%+v", result.Blocks)
 	}
 	// Both spot legs settle: the base (AAPL) and the quote (USD).
-	assets := map[string]bool{}
+	outcomes := map[string]domain.AdjustmentOutcomeAccepted{}
 	for _, o := range result.Outcomes {
-		assets[o.Asset] = true
+		outcomes[o.Asset] = o.Outcome
 	}
-	if !assets[testBase] || !assets[testQuote] {
+	if _, ok := outcomes[testBase]; !ok {
 		t.Fatalf("want outcomes for %s and %s, got %+v", testBase, testQuote, result.Outcomes)
+	}
+	if _, ok := outcomes[testQuote]; !ok {
+		t.Fatalf("want outcomes for %s and %s, got %+v", testBase, testQuote, result.Outcomes)
+	}
+	if base := outcomes[testBase]; base.BalanceDelta != testQty || base.BalanceResult != testQty {
+		t.Fatalf("base outcome = %+v, want balance +%s result %s", base, testQty, testQty)
+	}
+	if quote := outcomes[testQuote]; quote.BalanceDelta != "" ||
+		quote.HeldDelta != "-500" || quote.HeldResult != "0" {
+		t.Fatalf("quote outcome = %+v, want held-only release without balance double count", quote)
+	}
+}
+
+func TestApplyExecutionReport_CanceledContextDoesNotEnterLane(t *testing.T) {
+	e := newTestEngine(t)
+	ctx := context.Background()
+
+	held, err := e.ReserveHold(ctx, testOrder())
+	if err != nil || !held.Accepted {
+		t.Fatalf("ReserveHold: %v accepted=%v", err, held.Accepted)
+	}
+	if err := e.CommitHeld(ctx, held.ApprovalID); err != nil {
+		t.Fatalf("CommitHeld: %v", err)
+	}
+
+	reportCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := e.ApplyExecutionReport(reportCtx, domain.ExecutionReportInput{
+		BaseAsset:      testBase,
+		QuoteAsset:     testQuote,
+		FillQuantity:   testQty,
+		FillPrice:      held.SettlementLockPrice,
+		LeavesQuantity: "0",
+		LockPrice:      held.SettlementLockPrice,
+		Account:        domain.AccountID(testAccount),
+		Side:           domain.OrderSideBuy,
+		Order:          "order-1",
+		OrderStatus:    domain.OrderStatusFilled,
+	}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ApplyExecutionReport with canceled context = %v, want context canceled", err)
+	}
+}
+
+func TestApplyExecutionReport_NoTradeFinalReleasesReservation(t *testing.T) {
+	e := newTestEngine(t)
+	ctx := context.Background()
+
+	submitted, err := e.SubmitOrder(ctx, testOrder())
+	if err != nil {
+		t.Fatalf("SubmitOrder: %v", err)
+	}
+	if !submitted.Accepted {
+		t.Fatalf("SubmitOrder rejected: %+v", submitted.Rejects)
+	}
+
+	result, err := e.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
+		BaseAsset:      testBase,
+		QuoteAsset:     testQuote,
+		LeavesQuantity: testQty,
+		Lock:           submitted.Lock,
+		Account:        domain.AccountID(testAccount),
+		Side:           domain.OrderSideBuy,
+		OrderStatus:    domain.OrderStatusCancelled,
+	})
+	if err != nil {
+		t.Fatalf("ApplyExecutionReport: %v", err)
+	}
+	if len(result.Blocks) != 0 {
+		t.Fatalf("cancel must not block the account, got blocks=%+v", result.Blocks)
+	}
+
+	outcomes := map[string]domain.AdjustmentOutcomeAccepted{}
+	for _, outcome := range result.Outcomes {
+		outcomes[outcome.Asset] = outcome.Outcome
+	}
+	base := outcomes[testBase]
+	if base.IncomingDelta != "" && base.IncomingDelta != "-"+testQty {
+		t.Fatalf("base incoming delta = %q, want empty or -%s", base.IncomingDelta, testQty)
+	}
+	quote := outcomes[testQuote]
+	if quote.BalanceDelta != "500" || quote.HeldDelta != "-500" {
+		t.Fatalf("quote outcome = %+v, want available +500 held -500", quote)
 	}
 }
 
@@ -580,7 +678,7 @@ func TestApplyExecutionReport_MissingLeavesRejected(t *testing.T) {
 		LockPrice:    held.SettlementLockPrice,
 		Account:      domain.AccountID(testAccount),
 		Side:         domain.OrderSideBuy,
-		Final:        true,
+		OrderStatus:  domain.OrderStatusFilled,
 	})
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("ApplyExecutionReport(empty leaves) = %v, want ErrInvalid", err)
@@ -608,7 +706,9 @@ func newTestEngineWithPnlBounds(t *testing.T) *openPitEngine {
 	if err != nil {
 		t.Fatalf("build engine: %v", err)
 	}
-	adapter := newOpenPitEngine(eng, service, registered, nil, res).(*openPitEngine)
+	adapter := newOpenPitEngine(
+		eng, testAsyncEngine(t, eng), service, registered, nil, res,
+	).(*openPitEngine)
 	t.Cleanup(adapter.Stop)
 
 	if err := seedBalances(eng, []domain.Balance{{
@@ -648,7 +748,7 @@ func TestApplyExecutionReport_SettlesFillWithPnlBoundsNoBlock(t *testing.T) {
 		LockPrice:      held.SettlementLockPrice,
 		Account:        domain.AccountID(testAccount),
 		Side:           domain.OrderSideBuy,
-		Final:          true,
+		OrderStatus:    domain.OrderStatusFilled,
 	})
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport: %v", err)
@@ -726,7 +826,9 @@ func TestStop_DrainsHeldReservations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build engine: %v", err)
 	}
-	adapter := newOpenPitEngine(eng, service, registered, nil, res).(*openPitEngine)
+	adapter := newOpenPitEngine(
+		eng, testAsyncEngine(t, eng), service, registered, nil, res,
+	).(*openPitEngine)
 	if err := seedBalances(eng, []domain.Balance{{
 		Account:   domain.AccountID(testAccount),
 		Asset:     testQuote,
@@ -748,6 +850,60 @@ func TestStop_DrainsHeldReservations(t *testing.T) {
 		t.Fatalf("registry size after Stop = %d, want 0", got)
 	}
 	adapter.Stop()
+}
+
+func TestStopWaitsForMidFlightHoldThenDrains(t *testing.T) {
+	adapter := newTestEngine(t)
+	ctx := context.Background()
+
+	entered := make(chan HoldResult, 1)
+	release := make(chan struct{})
+	laneDone := make(chan error, 1)
+	go func() {
+		laneDone <- adapter.RunAccountSynchronized(
+			ctx, domain.AccountID(testAccount), func(lane AccountLane) error {
+				held, err := lane.ReserveHold(ctx, testOrder())
+				if err != nil {
+					return err
+				}
+				entered <- held
+				<-release
+				return nil
+			})
+	}()
+
+	held := <-entered
+	if !held.Accepted {
+		close(release)
+		t.Fatal("mid-flight ReserveHold rejected")
+	}
+	stopDone := make(chan struct{})
+	go func() {
+		adapter.Stop()
+		close(stopDone)
+	}()
+	select {
+	case <-stopDone:
+		t.Fatal("Stop returned before the in-flight account lane finished")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case err := <-laneDone:
+		if err != nil {
+			t.Fatalf("lane: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("account lane did not finish")
+	}
+	select {
+	case <-stopDone:
+	case <-time.After(time.Second):
+		t.Fatal("Stop did not finish after releasing the account lane")
+	}
+	if got := adapter.registrySize(); got != 0 {
+		t.Fatalf("registry size after Stop = %d, want 0", got)
+	}
 }
 
 func TestReconcileOrphans_PreservesHeldIntents(t *testing.T) {
@@ -900,4 +1056,89 @@ func (s *fakeReservationStore) ResolveOrderReservation(
 		s.events = append(s.events, r.Events...)
 	}
 	return nil
+}
+
+// TestRunAccountSynchronized_SerializesSameAccount drives the real SDK account
+// lane (not a fake global mutex): two goroutines submit work for the same
+// account through RunAccountSynchronized concurrently, and the test asserts the
+// lane never runs both callbacks at once. A callback that observed a sibling
+// already inside the lane would flip overlap; the lane's per-account ordering
+// keeps the increments race-free without any additional lock in the callback.
+func TestRunAccountSynchronized_SerializesSameAccount(t *testing.T) {
+	e := newTestEngine(t)
+	ctx := context.Background()
+
+	const goroutines = 8
+	const iterations = 50
+
+	var (
+		active  int
+		overlap bool
+		counter int
+		guard   sync.Mutex
+	)
+	// The callback intentionally reads-modifies-writes counter without a lock: if
+	// the lane serializes, no data race occurs and the final value is exact.
+	work := func(AccountLane) error {
+		guard.Lock()
+		active++
+		if active > 1 {
+			overlap = true
+		}
+		guard.Unlock()
+
+		v := counter
+		time.Sleep(time.Millisecond)
+		counter = v + 1
+
+		guard.Lock()
+		active--
+		guard.Unlock()
+		return nil
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for g := 0; g < goroutines; g++ {
+		go func() {
+			defer wg.Done()
+			for i := 0; i < iterations; i++ {
+				if err := e.RunAccountSynchronized(
+					ctx, domain.AccountID(testAccount), work,
+				); err != nil {
+					t.Errorf("RunAccountSynchronized: %v", err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	if overlap {
+		t.Fatal("account lane ran two callbacks concurrently for one account")
+	}
+	if want := goroutines * iterations; counter != want {
+		t.Fatalf("counter = %d, want %d (lane did not serialize increments)", counter, want)
+	}
+}
+
+// TestRunAccountSynchronized_RejectsUnknownAccount proves the real lane resolves
+// the account before entering the callback: an account the resolver does not
+// know rejects with domain.ErrInvalid and the callback never runs, which is the
+// seam the node's pre-lane auto-create/rebuild exists to satisfy.
+func TestRunAccountSynchronized_RejectsUnknownAccount(t *testing.T) {
+	e := newTestEngine(t)
+	ctx := context.Background()
+
+	ran := false
+	err := e.RunAccountSynchronized(ctx, "unknown-account", func(AccountLane) error {
+		ran = true
+		return nil
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("RunAccountSynchronized(unknown) error = %v, want ErrInvalid", err)
+	}
+	if ran {
+		t.Fatal("callback ran for an account the resolver does not know")
+	}
 }

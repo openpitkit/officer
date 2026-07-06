@@ -142,14 +142,14 @@ func (f *fakeSource) SubmitOrderToken(
 
 func (f *fakeSource) ConfirmExecution(
 	_ context.Context, _ string, _ string, _ bool,
-) (domain.Order, error) {
-	return domain.Order{}, nil
+) (domain.Order, Attestation, error) {
+	return domain.Order{}, Attestation{}, nil
 }
 
 func (f *fakeSource) CancelOrder(
 	_ context.Context, _ string, _, _ string, _ bool,
-) (domain.Order, error) {
-	return domain.Order{}, nil
+) (domain.Order, Attestation, error) {
+	return domain.Order{}, Attestation{}, nil
 }
 
 // callHealth invokes the health tool handler directly.
@@ -659,24 +659,25 @@ func (c *captureNSource) SubmitOrderToken(
 }
 func (c *captureNSource) ConfirmExecution(
 	context.Context, string, string, bool,
-) (domain.Order, error) {
-	return domain.Order{}, nil
+) (domain.Order, Attestation, error) {
+	return domain.Order{}, Attestation{}, nil
 }
 func (c *captureNSource) CancelOrder(
 	context.Context, string, string, string, bool,
-) (domain.Order, error) {
-	return domain.Order{}, nil
+) (domain.Order, Attestation, error) {
+	return domain.Order{}, Attestation{}, nil
 }
 
 // -- get_order --
 
 // TestGetOrderHappyPath: get_order returns the order keyed by its external id,
-// its 1:1 approval read back from OrderDetail.Approval, and its fills with their
-// display prices. It asserts the opaque lock is never serialized and no surrogate
-// or engine id appears anywhere in the structured output.
+// its submit-verdict attestation read back from the verdict event, and its fills
+// with their display prices. It asserts the opaque lock is never serialized and
+// no surrogate or engine id appears anywhere in the structured output.
 func TestGetOrderHappyPath(t *testing.T) {
 	orderEID := mustExternalID(t, "b3JkZXItZXh0ZXJuYWwtMQ")
 	tradeEID := mustExternalID(t, "dHJhZGUtZXh0ZXJuYWwtMQ")
+	eventEID := mustExternalID(t, "ZXZlbnQtZXh0ZXJuYWwtMQ")
 	src := &fakeSource{
 		orderDetail: domain.OrderDetail{
 			Order: domain.Order{
@@ -692,13 +693,21 @@ func TestGetOrderHappyPath(t *testing.T) {
 				// Lock is the opaque reservation blob; it must never reach the wire.
 				Lock: []byte{0x01, 0x02, 0x03, 0x04},
 			},
-			Approval: &domain.OrderApproval{
-				Token:     "eyAPPROVAL",
-				KeyID:     "key-1",
-				Alg:       "ed25519",
-				Mode:      "hold",
-				IssuedAt:  "2026-06-11T10:00:00Z",
-				ExpiresAt: "2026-06-11T10:02:00Z",
+			Events: []domain.OrderEvent{
+				{
+					ExternalID: eventEID,
+					Order:      orderEID,
+					Type:       domain.OrderEventPreTradeAccepted,
+					Attestation: &domain.EventAttestation{
+						Token:       "eyAPPROVAL",
+						KeyID:       "key-1",
+						Alg:         "ed25519",
+						RequestType: domain.AttestationRequestSubmit,
+						Mode:        "hold",
+						IssuedAt:    "2026-06-11T10:00:00Z",
+						ExpiresAt:   "2026-06-11T10:02:00Z",
+					},
+				},
 			},
 			Trades: []domain.Trade{
 				{

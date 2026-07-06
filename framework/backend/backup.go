@@ -60,7 +60,12 @@ func (s *Service) RestoreBackup(
 		return backup.RestoreSummary{}, err
 	}
 
-	runtimeRestore := backup.TouchesRuntime(opts.Scope)
+	// Gate the market-data stop/reconnect on the normalized scope, matching the
+	// node's rebuild decision. An account-addressed restore (audit log, activity
+	// history) force-includes the market-data and accounts+groups parents, so it
+	// can rebuild the engine and mint a fresh sink; the raw requested scope would
+	// miss that and leave the feed pushing into the swapped-out engine's sink.
+	runtimeRestore := backup.TouchesRuntime(opts.Scope.Normalize())
 	mdStopped := false
 	if runtimeRestore && s.md != nil {
 		s.md.Stop()

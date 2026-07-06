@@ -17,8 +17,8 @@
 
 // Orders-group tests: create/get/list round-trips addressed by external id,
 // external-id opacity (22-char handle, surrogate id never surfaced), byte-exact
-// lock round-trip, approval present/absent, cascade deletes (order and account),
-// counts, settlement atomicity, and the unknown-FK-code error path.
+// lock round-trip, event attestation present/absent, cascade deletes (order and
+// account), counts, settlement atomicity, and the unknown-FK-code error path.
 
 package store
 
@@ -70,15 +70,15 @@ func seedBalance(
 ) {
 	t.Helper()
 	r := rs.(*realmStore)
-	accountID, err := resolveAccountID(ctx, r.db(), account)
+	accountID, err := resolveAccountID(ctx, r.rawDB(), account)
 	if err != nil {
 		t.Fatalf("resolve account %q: %v", account, err)
 	}
-	assetID, err := resolveAssetID(ctx, r.db(), asset)
+	assetID, err := resolveAssetID(ctx, r.rawDB(), asset)
 	if err != nil {
 		t.Fatalf("resolve asset %q: %v", asset, err)
 	}
-	if _, err := r.db().ExecContext(
+	if _, err := r.rawDB().ExecContext(
 		ctx,
 		`INSERT OR REPLACE INTO balance
 		 (account_id, asset_id, available, held, incoming, realized_pnl,
@@ -102,16 +102,16 @@ func getBalanceRow(
 ) (balanceRow, bool) {
 	t.Helper()
 	r := rs.(*realmStore)
-	accountID, err := resolveAccountID(ctx, r.db(), account)
+	accountID, err := resolveAccountID(ctx, r.rawDB(), account)
 	if err != nil {
 		t.Fatalf("resolve account %q: %v", account, err)
 	}
-	assetID, err := resolveAssetID(ctx, r.db(), asset)
+	assetID, err := resolveAssetID(ctx, r.rawDB(), asset)
 	if err != nil {
 		t.Fatalf("resolve asset %q: %v", asset, err)
 	}
 	var b balanceRow
-	err = r.db().QueryRowContext(
+	err = r.rawDB().QueryRowContext(
 		ctx,
 		`SELECT available, held, incoming, realized_pnl
 		 FROM balance WHERE account_id = ? AND asset_id = ?`,
@@ -126,13 +126,13 @@ func getBalanceRow(
 	return b, true
 }
 
-// seedSigningKey inserts a signing key row directly so an order_approval row can
-// satisfy its ON DELETE RESTRICT FK; the public UpsertSigningKey is another
+// seedSigningKey inserts a signing key row directly so an event_attestation row
+// can satisfy its ON DELETE RESTRICT FK; the public UpsertSigningKey is another
 // sub-agent's stub.
 func seedSigningKey(t *testing.T, ctx context.Context, rs RealmStore, keyID string) {
 	t.Helper()
 	r := rs.(*realmStore)
-	if _, err := r.db().ExecContext(
+	if _, err := r.rawDB().ExecContext(
 		ctx,
 		`INSERT INTO signing_key
 		 (key_id, alg, private_key, public_key, created_at, active)
@@ -373,8 +373,7 @@ func TestOrderLockBlobRoundTripsByteIdentical(t *testing.T) {
 	}
 
 	// SetOrderLock on a missing order is ErrNotFound.
-	var ghost domain.ExternalID
-	ghost[0] = 0x99
+	ghost := domain.ExternalID("missing-order-lock")
 	if err := rs.SetOrderLock(ctx, ghost, newLock); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("SetOrderLock(missing) = %v, want ErrNotFound", err)
 	}
@@ -413,8 +412,7 @@ func TestUpdateOrderStatus(t *testing.T) {
 		t.Fatalf("status = %q, want accepted", detail.Order.Status)
 	}
 
-	var ghost domain.ExternalID
-	ghost[0] = 0x42
+	ghost := domain.ExternalID("missing-order-status")
 	if err := rs.UpdateOrderStatus(
 		ctx, ghost, domain.OrderStatusCancelled,
 	); !errors.Is(err, domain.ErrNotFound) {
@@ -422,61 +420,153 @@ func TestUpdateOrderStatus(t *testing.T) {
 	}
 }
 
-func TestPutOrderApprovalPresentAndAbsent(t *testing.T) {
+// eventAttestation returns the attestation folded onto the order's event with
+// the given external id, failing the test if the event is absent.
+func eventAttestation(
+	t *testing.T, detail domain.OrderDetail, eventID domain.ExternalID,
+) *domain.EventAttestation {
+	t.Helper()
+	for i := range detail.Events {
+		if detail.Events[i].ExternalID == eventID {
+			return detail.Events[i].Attestation
+		}
+	}
+	t.Fatalf("event %q not found in order detail", eventID.String())
+	return nil
+}
+
+func TestPutEventAttestationPresentAndAbsent(t *testing.T) {
 	ctx, rs := seedOrderFixtures(t)
 
-	// A signing key the approval references (ON DELETE RESTRICT FK).
+	// A signing key the attestation references (ON DELETE RESTRICT FK).
 	seedSigningKey(t, ctx, rs, "key-1")
 
 	created, err := rs.CreateOrder(ctx, sampleOrder())
 	if err != nil {
 		t.Fatalf("CreateOrder: %v", err)
 	}
-
-	// Absent before any PutOrderApproval.
-	rstore, ok := rs.(*realmStore)
-	if !ok {
-		t.Fatal("realm store is not *realmStore")
-	}
-	if _, has, err := rstore.getOrderApproval(ctx, created.ExternalID); err != nil || has {
-		t.Fatalf("approval before put: has=%v err=%v, want absent", has, err)
-	}
-
-	env := domain.OrderApproval{
-		Token:     "tok-abc",
-		KeyID:     "key-1",
-		Alg:       "ed25519",
-		Mode:      "immediate",
-		IssuedAt:  "2026-06-26T10:00:00Z",
-		ExpiresAt: "2026-06-26T10:05:00Z",
-	}
-	if err := rs.PutOrderApproval(ctx, created.ExternalID, env); err != nil {
-		t.Fatalf("PutOrderApproval: %v", err)
-	}
-	got, has, err := rstore.getOrderApproval(ctx, created.ExternalID)
-	if err != nil || !has {
-		t.Fatalf("approval after put: has=%v err=%v, want present", has, err)
-	}
-	if got != env {
-		t.Fatalf("approval = %+v, want %+v", got, env)
+	event, err := rs.AppendOrderEvent(ctx, domain.OrderEvent{
+		Order:  created.ExternalID,
+		Type:   domain.OrderEventPreTradeAccepted,
+		Source: domain.SourcePanel,
+	})
+	if err != nil {
+		t.Fatalf("AppendOrderEvent: %v", err)
 	}
 
-	// Write-once: a second put with different fields does not clobber.
-	clobber := env
+	// Absent before any PutEventAttestation: the event carries no attestation.
+	events, err := rs.ListOrderEvents(ctx, created.ExternalID)
+	if err != nil {
+		t.Fatalf("ListOrderEvents(before put): %v", err)
+	}
+	if len(events) != 1 || events[0].Attestation != nil {
+		t.Fatalf("attestation before put: %+v, want absent", events)
+	}
+
+	att := domain.EventAttestation{
+		Token:       "tok-abc",
+		KeyID:       "key-1",
+		Alg:         "ed25519",
+		RequestType: domain.AttestationRequestSubmit,
+		Mode:        "immediate",
+		IssuedAt:    "2026-06-26T10:00:00Z",
+		ExpiresAt:   "2026-06-26T10:05:00Z",
+	}
+	if err := rs.PutEventAttestation(ctx, event.ExternalID, att); err != nil {
+		t.Fatalf("PutEventAttestation: %v", err)
+	}
+	detail, err := rs.GetOrder(ctx, created.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder(signed attestation): %v", err)
+	}
+	got := eventAttestation(t, detail, event.ExternalID)
+	if got == nil || *got != att {
+		t.Fatalf("GetOrder signed attestation = %+v, want %+v", got, att)
+	}
+
+	// Write-once: a second put with a different token does not clobber.
+	clobber := att
 	clobber.Token = "tok-CLOBBER"
-	if err := rs.PutOrderApproval(ctx, created.ExternalID, clobber); err != nil {
-		t.Fatalf("PutOrderApproval(retry): %v", err)
+	if err := rs.PutEventAttestation(ctx, event.ExternalID, clobber); err != nil {
+		t.Fatalf("PutEventAttestation(retry): %v", err)
 	}
-	got, _, _ = rstore.getOrderApproval(ctx, created.ExternalID)
-	if got.Token != "tok-abc" {
-		t.Fatalf("approval token after retry = %q, want the first (write-once)", got.Token)
+	detail, _ = rs.GetOrder(ctx, created.ExternalID)
+	got = eventAttestation(t, detail, event.ExternalID)
+	if got == nil || got.Token != "tok-abc" {
+		t.Fatalf("attestation token after retry = %+v, want the first (write-once)", got)
 	}
 
-	// A missing order is a tolerated no-op, not an error.
-	var ghost domain.ExternalID
-	ghost[0] = 0x55
-	if err := rs.PutOrderApproval(ctx, ghost, env); err != nil {
-		t.Fatalf("PutOrderApproval(missing) = %v, want nil (no-op)", err)
+	// A missing event id is a tolerated no-op, not an error.
+	ghost := domain.ExternalID("missing-attestation-event")
+	if err := rs.PutEventAttestation(ctx, ghost, att); err != nil {
+		t.Fatalf("PutEventAttestation(missing) = %v, want nil (no-op)", err)
+	}
+
+	unsignedEvent, err := rs.AppendOrderEvent(ctx, domain.OrderEvent{
+		Order:  created.ExternalID,
+		Type:   domain.OrderEventPreTradeAccepted,
+		Source: domain.SourcePanel,
+	})
+	if err != nil {
+		t.Fatalf("AppendOrderEvent(unsigned): %v", err)
+	}
+	unsigned := domain.EventAttestation{
+		Token:       "tok-unsigned",
+		Alg:         "none",
+		RequestType: domain.AttestationRequestSubmit,
+		Mode:        "immediate",
+		IssuedAt:    "2026-06-26T10:10:00Z",
+		ExpiresAt:   "2026-06-26T10:15:00Z",
+	}
+	if err := rs.PutEventAttestation(ctx, unsignedEvent.ExternalID, unsigned); err != nil {
+		t.Fatalf("PutEventAttestation(unsigned): %v", err)
+	}
+	detail, err = rs.GetOrder(ctx, created.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder(unsigned attestation): %v", err)
+	}
+	gotUnsigned := eventAttestation(t, detail, unsignedEvent.ExternalID)
+	if gotUnsigned == nil {
+		t.Fatal("GetOrder unsigned attestation = nil, want present")
+	}
+	if *gotUnsigned != unsigned {
+		t.Fatalf("GetOrder unsigned attestation = %+v, want %+v", gotUnsigned, unsigned)
+	}
+	if gotUnsigned.Alg != "none" || gotUnsigned.KeyID != "" {
+		t.Fatalf(
+			"unsigned attestation alg/key = %q/%q, want none/empty",
+			gotUnsigned.Alg, gotUnsigned.KeyID,
+		)
+	}
+
+	badAlgEvent, err := rs.AppendOrderEvent(ctx, domain.OrderEvent{
+		Order:  created.ExternalID,
+		Type:   domain.OrderEventPreTradeAccepted,
+		Source: domain.SourcePanel,
+	})
+	if err != nil {
+		t.Fatalf("AppendOrderEvent(bad alg): %v", err)
+	}
+	badAlg := unsigned
+	badAlg.Alg = "bogus"
+	if err := rs.PutEventAttestation(ctx, badAlgEvent.ExternalID, badAlg); err == nil {
+		t.Fatal("PutEventAttestation(bad alg) = nil, want CHECK violation")
+	}
+
+	badKeyEvent, err := rs.AppendOrderEvent(ctx, domain.OrderEvent{
+		Order:  created.ExternalID,
+		Type:   domain.OrderEventPreTradeAccepted,
+		Source: domain.SourcePanel,
+	})
+	if err != nil {
+		t.Fatalf("AppendOrderEvent(bad key): %v", err)
+	}
+	badKey := unsigned
+	badKey.KeyID = "missing-key"
+	if err := rs.PutEventAttestation(
+		ctx, badKeyEvent.ExternalID, badKey,
+	); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("PutEventAttestation(missing key) = %v, want ErrInvalid", err)
 	}
 }
 
@@ -534,8 +624,7 @@ func TestOrderEventsRoundTrip(t *testing.T) {
 	}
 
 	// AppendOrderEvent on a missing order is ErrNotFound.
-	var ghost domain.ExternalID
-	ghost[0] = 0x77
+	ghost := domain.ExternalID("missing-event-order")
 	if _, err := rs.AppendOrderEvent(ctx, domain.OrderEvent{
 		Order: ghost, Type: domain.OrderEventFill, Source: domain.SourcePanel,
 	}); !errors.Is(err, domain.ErrNotFound) {
@@ -786,6 +875,8 @@ func TestRecordOrderSettlement(t *testing.T) {
 				Asset: "USD",
 				Outcome: domain.AdjustmentOutcomeAccepted{
 					BalanceResult:    "850",
+					HeldResult:       "0",
+					IncomingResult:   "0",
 					RealizedPnlDelta: "12.50",
 				},
 			},
@@ -837,7 +928,7 @@ func TestRecordOrderSettlement(t *testing.T) {
 		t.Fatalf("fill event not appended: %+v", detail.Events)
 	}
 
-	// Balance updated: available from *Result, realized P&L delta-accumulated.
+	// Balance updated from deltas; bogus absolute results are ignored.
 	bal, ok := getBalanceRow(t, ctx, rs, "acc-1", "USD")
 	if !ok {
 		t.Fatal("balance row missing after settlement")
@@ -859,6 +950,134 @@ func TestRecordOrderSettlement(t *testing.T) {
 	detail, _ = rs.GetOrder(ctx, created.ExternalID)
 	if detail.Order.Status != domain.OrderStatusFilled {
 		t.Fatalf("status after rejected settlement = %q, want still filled", detail.Order.Status)
+	}
+}
+
+func TestRecordOrderSettlementPersistsEngineAbsoluteBalances(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+
+	seedBalance(t, ctx, rs, "acc-1", "USD", "800", "200", "5", "4")
+
+	order := sampleOrder()
+	order.Status = domain.OrderStatusAccepted
+	created, err := rs.CreateOrder(ctx, order)
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+	if err := rs.UpsertReservationIntent(ctx, domain.ReservationIntent{
+		ApprovalID: "approval-1",
+		Order:      created.ExternalID,
+		Account:    "acc-1",
+		ParamsJSON: "{}",
+		IssuedAt:   time.Now().UTC(),
+		ExpiresAt:  time.Now().UTC().Add(time.Minute),
+		State:      domain.ReservationIntentStateHeld,
+	}); err != nil {
+		t.Fatalf("UpsertReservationIntent: %v", err)
+	}
+
+	if err := rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		Account:     "acc-1",
+		Order:       created.ExternalID,
+		OrderStatus: domain.OrderStatusRejected,
+		Leaves:      "0",
+		Balances: []domain.BalanceSettlement{{
+			Asset: "USD",
+			Outcome: domain.AdjustmentOutcomeAccepted{
+				BalanceDelta:     "200",
+				HeldDelta:        "-200",
+				IncomingDelta:    "10",
+				RealizedPnlDelta: "3",
+				BalanceResult:    "999999",
+			},
+		}},
+		Events: []domain.OrderEvent{
+			{Order: created.ExternalID, Type: domain.OrderEventPreTradeRejected},
+		},
+	}); err != nil {
+		t.Fatalf("RecordOrderSettlement: %v", err)
+	}
+
+	intent, ok, err := rs.GetReservationIntent(ctx, "approval-1")
+	if err != nil || !ok {
+		t.Fatalf("GetReservationIntent: ok=%v err=%v", ok, err)
+	}
+	if intent.State != domain.ReservationIntentStateHeld {
+		t.Fatalf("intent state = %q, want held", intent.State)
+	}
+	detail, err := rs.GetOrder(ctx, created.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if detail.Order.Status != domain.OrderStatusRejected ||
+		detail.Order.Leaves != "0" {
+		t.Fatalf("order = %+v, want rejected leaves=0", detail.Order)
+	}
+	if len(detail.Events) != 1 ||
+		detail.Events[0].Type != domain.OrderEventPreTradeRejected {
+		t.Fatalf("events = %+v, want rejected", detail.Events)
+	}
+	bal, ok := getBalanceRow(t, ctx, rs, "acc-1", "USD")
+	if !ok {
+		t.Fatal("balance row missing after settlement")
+	}
+	if bal.available != "999999" || bal.held != "200" ||
+		bal.incoming != "5" || bal.realized != "7" {
+		t.Fatalf("balance = %+v, want optional absolutes merged with previous values", bal)
+	}
+}
+
+// TestRecordOrderSettlementLeaves verifies CreateOrder persists the caller
+// supplied remaining open quantity and RecordOrderSettlement rewrites it only
+// when a non-empty Leaves is supplied.
+func TestRecordOrderSettlementLeaves(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+
+	order := sampleOrder()
+	order.Leaves = "7"
+	created, err := rs.CreateOrder(ctx, order)
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+	if created.Leaves != "7" {
+		t.Fatalf("created leaves = %q, want request value 7", created.Leaves)
+	}
+	detail, err := rs.GetOrder(ctx, created.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if detail.Order.Leaves != "7" {
+		t.Fatalf("stored leaves = %q, want 7", detail.Order.Leaves)
+	}
+
+	// An empty Leaves leaves the column unchanged; the status advance still
+	// applies.
+	if err := rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		Order:       created.ExternalID,
+		Account:     "acc-1",
+		OrderStatus: domain.OrderStatusAccepted,
+		AllowedFrom: []domain.OrderStatus{domain.OrderStatusSubmitted},
+	}); err != nil {
+		t.Fatalf("RecordOrderSettlement(no leaves): %v", err)
+	}
+	detail, _ = rs.GetOrder(ctx, created.ExternalID)
+	if detail.Order.Leaves != "7" {
+		t.Fatalf("leaves after empty settlement = %q, want unchanged 7", detail.Order.Leaves)
+	}
+
+	// A non-empty Leaves rewrites the column.
+	if err := rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		Order:       created.ExternalID,
+		Account:     "acc-1",
+		OrderStatus: domain.OrderStatusPartiallyFilled,
+		AllowedFrom: []domain.OrderStatus{domain.OrderStatusAccepted},
+		Leaves:      "4",
+	}); err != nil {
+		t.Fatalf("RecordOrderSettlement(leaves): %v", err)
+	}
+	detail, _ = rs.GetOrder(ctx, created.ExternalID)
+	if detail.Order.Leaves != "4" {
+		t.Fatalf("leaves after settlement = %q, want 4", detail.Order.Leaves)
 	}
 }
 
@@ -900,8 +1119,7 @@ func TestRecordOrderSettlementAcceptsHighPrecisionBalance(t *testing.T) {
 func TestRecordOrderSettlementMissingOrder(t *testing.T) {
 	ctx, rs := seedOrderFixtures(t)
 
-	var ghost domain.ExternalID
-	ghost[0] = 0x88
+	ghost := domain.ExternalID("missing-settlement-order")
 	st := domain.OrderSettlement{
 		Order:       ghost,
 		Account:     "acc-1",
@@ -922,7 +1140,7 @@ func TestRecordOrderSettlementInMemoryHold(t *testing.T) {
 	st := domain.OrderSettlement{
 		Account: "acc-1",
 		Balances: []domain.BalanceSettlement{
-			{Asset: "USD", Outcome: domain.AdjustmentOutcomeAccepted{HeldResult: "100"}},
+			{Asset: "USD", Outcome: domain.AdjustmentOutcomeAccepted{BalanceResult: "1000", HeldResult: "100"}},
 		},
 	}
 	if err := rs.RecordOrderSettlement(ctx, st); err != nil {
@@ -937,6 +1155,33 @@ func TestRecordOrderSettlementInMemoryHold(t *testing.T) {
 	}
 }
 
+func TestRecordOrderSettlementPrunesEmptyBalance(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+
+	seedBalance(t, ctx, rs, "acc-1", "USD", "10", "0", "0", "0")
+
+	st := domain.OrderSettlement{
+		Account: "acc-1",
+		Balances: []domain.BalanceSettlement{
+			{
+				Asset: "USD",
+				Outcome: domain.AdjustmentOutcomeAccepted{
+					BalanceResult:    "0",
+					HeldResult:       "0",
+					IncomingResult:   "0",
+					RealizedPnlDelta: "0",
+				},
+			},
+		},
+	}
+	if err := rs.RecordOrderSettlement(ctx, st); err != nil {
+		t.Fatalf("RecordOrderSettlement: %v", err)
+	}
+	if _, ok := getBalanceRow(t, ctx, rs, "acc-1", "USD"); ok {
+		t.Fatal("balance row still exists, want empty settlement balance pruned")
+	}
+}
+
 func TestDeleteOrderCascadesChildren(t *testing.T) {
 	ctx, rs := seedOrderFixtures(t)
 
@@ -946,9 +1191,10 @@ func TestDeleteOrderCascadesChildren(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateOrder: %v", err)
 	}
-	if _, err := rs.AppendOrderEvent(ctx, domain.OrderEvent{
+	event, err := rs.AppendOrderEvent(ctx, domain.OrderEvent{
 		Order: created.ExternalID, Type: domain.OrderEventSubmitted, Source: domain.SourcePanel,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("AppendOrderEvent: %v", err)
 	}
 	if _, err := rs.CreateTrade(ctx, domain.Trade{
@@ -959,11 +1205,12 @@ func TestDeleteOrderCascadesChildren(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateTrade: %v", err)
 	}
-	if err := rs.PutOrderApproval(ctx, created.ExternalID, domain.OrderApproval{
-		Token: "t", KeyID: "key-1", Alg: "ed25519", Mode: "immediate",
+	if err := rs.PutEventAttestation(ctx, event.ExternalID, domain.EventAttestation{
+		Token: "t", KeyID: "key-1", Alg: "ed25519",
+		RequestType: domain.AttestationRequestSubmit, Mode: "immediate",
 		IssuedAt: "2026-06-26T10:00:00Z", ExpiresAt: "2026-06-26T10:05:00Z",
 	}); err != nil {
-		t.Fatalf("PutOrderApproval: %v", err)
+		t.Fatalf("PutEventAttestation: %v", err)
 	}
 
 	rstore := rs.(*realmStore)
@@ -973,13 +1220,13 @@ func TestDeleteOrderCascadesChildren(t *testing.T) {
 	if c := countRows(t, ctx, rstore, "trade"); c != 1 {
 		t.Fatalf("trades before delete = %d, want 1", c)
 	}
-	if c := countRows(t, ctx, rstore, "order_approval"); c != 1 {
-		t.Fatalf("order_approvals before delete = %d, want 1", c)
+	if c := countRows(t, ctx, rstore, "event_attestation"); c != 1 {
+		t.Fatalf("event_attestations before delete = %d, want 1", c)
 	}
 
 	// Delete the order by surrogate id (schema-cascade test via raw SQL; the
 	// public interface has no DeleteOrder). The schema must cascade children.
-	if _, err := rstore.db().ExecContext(
+	if _, err := rstore.rawDB().ExecContext(
 		ctx, `DELETE FROM order_record WHERE external_id = ?`, created.ExternalID.Bytes(),
 	); err != nil {
 		t.Fatalf("delete order: %v", err)
@@ -990,8 +1237,8 @@ func TestDeleteOrderCascadesChildren(t *testing.T) {
 	if c := countRows(t, ctx, rstore, "trade"); c != 0 {
 		t.Fatalf("trades after delete = %d, want 0 (cascade)", c)
 	}
-	if c := countRows(t, ctx, rstore, "order_approval"); c != 0 {
-		t.Fatalf("order_approvals after delete = %d, want 0 (cascade)", c)
+	if c := countRows(t, ctx, rstore, "event_attestation"); c != 0 {
+		t.Fatalf("event_attestations after delete = %d, want 0 (cascade)", c)
 	}
 }
 
@@ -1007,7 +1254,7 @@ func TestDeleteAccountCascadesOrders(t *testing.T) {
 	}
 
 	// Deleting the account cascades to its orders (and thence their children).
-	if _, err := rstore.db().ExecContext(
+	if _, err := rstore.rawDB().ExecContext(
 		ctx, `DELETE FROM account WHERE code = ?`, "acc-1",
 	); err != nil {
 		t.Fatalf("delete account: %v", err)
@@ -1043,8 +1290,7 @@ func TestOrderUnknownFKCodeIsInvalid(t *testing.T) {
 
 	// A trade naming an unknown order is ErrNotFound (the order is addressed by
 	// external id, resolved via lookupOrderID).
-	var ghost domain.ExternalID
-	ghost[0] = 0x33
+	ghost := domain.ExternalID("missing-trade-order")
 	if _, err := rs.CreateTrade(ctx, domain.Trade{
 		Order: ghost, Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
 		Source: domain.SourcePanel, Side: domain.OrderSideBuy, Quantity: "1", Price: "1",
@@ -1058,7 +1304,7 @@ func TestOrderUnknownFKCodeIsInvalid(t *testing.T) {
 func countRows(t *testing.T, ctx context.Context, r *realmStore, table string) int {
 	t.Helper()
 	var n int
-	if err := r.db().QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&n); err != nil {
+	if err := r.rawDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&n); err != nil {
 		t.Fatalf("count %s: %v", table, err)
 	}
 	return n
@@ -1070,10 +1316,7 @@ func countRows(t *testing.T, ctx context.Context, r *realmStore, table string) i
 func TestCreateOrderSuppliedExternalIDUsedVerbatim(t *testing.T) {
 	ctx, rs := seedOrderFixtures(t)
 
-	supplied, err := domain.ParseExternalID("AAECAwQFBgcICQoLDA0ODw")
-	if err != nil {
-		t.Fatalf("ParseExternalID: %v", err)
-	}
+	supplied := domain.ExternalID("caller-order-1")
 	o := sampleOrder()
 	o.ExternalID = supplied
 
@@ -1109,10 +1352,7 @@ func TestCreateOrderDuplicateSuppliedExternalIDConflicts(t *testing.T) {
 	ctx, rs := seedOrderFixtures(t)
 	r := rs.(*realmStore)
 
-	supplied, err := domain.ParseExternalID("AAECAwQFBgcICQoLDA0ODw")
-	if err != nil {
-		t.Fatalf("ParseExternalID: %v", err)
-	}
+	supplied := domain.ExternalID("caller-order-1")
 	first := sampleOrder()
 	first.ExternalID = supplied
 	if _, err := rs.CreateOrder(ctx, first); err != nil {
@@ -1121,7 +1361,7 @@ func TestCreateOrderDuplicateSuppliedExternalIDConflicts(t *testing.T) {
 
 	second := sampleOrder()
 	second.ExternalID = supplied
-	_, err = rs.CreateOrder(ctx, second)
+	_, err := rs.CreateOrder(ctx, second)
 	if !errors.Is(err, domain.ErrAlreadyExists) {
 		t.Fatalf("CreateOrder(dup id) = %v, want ErrAlreadyExists", err)
 	}

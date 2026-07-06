@@ -55,15 +55,19 @@ func (r *realmStore) AppendAudit(
 	if err != nil {
 		return err
 	}
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
 	accountTitle := entry.AccountTitle
 	if accountTitle == "" && entry.Account != "" {
-		accountTitle = lookupTitle(ctx, r.db(), "account", entry.Account.String())
+		accountTitle = lookupTitle(ctx, db, "account", entry.Account.String())
 	}
 	actorTitle := entry.ActorTitle
 	if actorTitle == "" && entry.Actor != "" {
-		actorTitle = lookupTitle(ctx, r.db(), "principal", entry.Actor)
+		actorTitle = lookupTitle(ctx, db, "principal", entry.Actor)
 	}
-	accountID, err := lookupID(ctx, r.db(), "account", entry.Account.String())
+	accountID, err := lookupID(ctx, db, "account", entry.Account.String())
 	if err != nil {
 		return err
 	}
@@ -71,7 +75,7 @@ func (r *realmStore) AppendAudit(
 	if source == "" {
 		source = domain.SourceSystem
 	}
-	if _, err := r.db().ExecContext(
+	if _, err := db.ExecContext(
 		ctx,
 		`INSERT INTO audit
 		 (external_id, account_id, account_code, account_title, asset_code,
@@ -125,7 +129,11 @@ func (r *realmStore) ListAuditFiltered(
 	q += ` ORDER BY au.at DESC, au.id DESC LIMIT ?`
 	args = append(args, n)
 
-	rows, err := r.db().QueryContext(ctx, q, args...)
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: list audit: %w", err)
 	}
@@ -152,14 +160,18 @@ func (r *realmStore) ListAuditRows(
 ) (fwstore.AuditListPage, error) {
 	clauses, args := auditListClauses(filter)
 
+	db, err := r.db()
+	if err != nil {
+		return fwstore.AuditListPage{}, err
+	}
 	countQuery := `SELECT COUNT(*) FROM audit au` + whereFromClauses(clauses)
 	var total int
-	if err := r.db().QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return fwstore.AuditListPage{}, fmt.Errorf("store: count audit rows: %w", err)
 	}
 
 	query, queryArgs := buildAuditListQuery(clauses, args, filter.Page)
-	rows, err := r.db().QueryContext(ctx, query, queryArgs...)
+	rows, err := db.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return fwstore.AuditListPage{}, fmt.Errorf("store: list audit rows: %w", err)
 	}

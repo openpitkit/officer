@@ -226,23 +226,38 @@ export function ShareLinkButton({
   );
 }
 
+/** Props for a row action that opens a link (cmd/ctrl-click new tab). */
 export interface RowActionProps {
+  href?: string;
   onClick?: ActionButtonClick;
   title?: string;
   size?: number;
+  style?: CSSProperties;
 }
 
-interface FilterByButtonProps extends RowActionProps {
-  href?: string;
-}
+/** Props for a row action that only fires an onClick and has no navigable
+ *  target, so it never accepts `href`/`newTabHint`. Tightened so a caller
+ *  cannot pass link props a click-only button would silently ignore. */
+export type RowActionClickProps = Omit<RowActionProps, "href">;
 
 /** Open the entity's own surface / related records. */
 export function ViewEntityButton({
+  href,
   onClick,
   title = "View",
   size = 30,
 }: RowActionProps) {
-  return <ActionButton icon="view" title={title} onClick={onClick} size={size} />;
+  const newTabHint = useOpenInNewTabHint();
+  return (
+    <ActionButton
+      icon="view"
+      title={title}
+      href={href}
+      newTabHint={newTabHint}
+      onClick={onClick}
+      size={size}
+    />
+  );
 }
 
 /** Apply a filter for this entity in the current table. */
@@ -251,7 +266,7 @@ export function FilterByButton({
   href,
   title = "Filter by this",
   size = 30,
-}: FilterByButtonProps) {
+}: RowActionProps) {
   const newTabHint = useOpenInNewTabHint();
   return (
     <ActionButton
@@ -270,7 +285,7 @@ export function CloneButton({
   onClick,
   title = "Clone",
   size = 30,
-}: RowActionProps) {
+}: RowActionClickProps) {
   return <ActionButton icon="clone" title={title} onClick={onClick} size={size} />;
 }
 
@@ -278,15 +293,24 @@ export function EditButton({
   onClick,
   title = "Edit",
   size = 30,
-}: RowActionProps) {
-  return <ActionButton icon="edit" title={title} onClick={onClick} size={size} />;
+  style,
+}: RowActionClickProps) {
+  return (
+    <ActionButton
+      icon="edit"
+      title={title}
+      onClick={onClick}
+      size={size}
+      style={style}
+    />
+  );
 }
 
 export function BlockButton({
   onClick,
   title = "Block",
   size = 30,
-}: RowActionProps) {
+}: RowActionClickProps) {
   return (
     <ActionButton
       icon="block"
@@ -302,7 +326,7 @@ export function DeleteButton({
   onClick,
   title = "Delete",
   size = 30,
-}: RowActionProps) {
+}: RowActionClickProps) {
   return (
     <ActionButton
       icon="trash"
@@ -315,14 +339,18 @@ export function DeleteButton({
 }
 
 export function HistoryButton({
+  href,
   onClick,
   title = "History",
   size = 30,
 }: RowActionProps) {
+  const newTabHint = useOpenInNewTabHint();
   return (
     <ActionButton
       icon="history"
       title={title}
+      href={href}
+      newTabHint={newTabHint}
       onClick={onClick}
       size={size}
     />
@@ -331,45 +359,81 @@ export function HistoryButton({
 
 /** Open the entity's positions surface. */
 export function PositionsButton({
+  href,
   onClick,
   title = "Positions",
   size = 30,
 }: RowActionProps) {
+  const newTabHint = useOpenInNewTabHint();
   return (
-    <ActionButton icon="positions" title={title} onClick={onClick} size={size} />
+    <ActionButton
+      icon="positions"
+      title={title}
+      href={href}
+      newTabHint={newTabHint}
+      onClick={onClick}
+      size={size}
+    />
   );
 }
 
 /** Open the entity's trading surface. */
 export function TradingButton({
+  href,
   onClick,
   title = "Trading",
   size = 30,
 }: RowActionProps) {
+  const newTabHint = useOpenInNewTabHint();
   return (
-    <ActionButton icon="trading" title={title} onClick={onClick} size={size} />
+    <ActionButton
+      icon="trading"
+      title={title}
+      href={href}
+      newTabHint={newTabHint}
+      onClick={onClick}
+      size={size}
+    />
   );
 }
 
 /** Open the entity's trades surface. */
 export function TradesButton({
+  href,
   onClick,
   title = "Trades",
   size = 30,
 }: RowActionProps) {
+  const newTabHint = useOpenInNewTabHint();
   return (
-    <ActionButton icon="trades" title={title} onClick={onClick} size={size} />
+    <ActionButton
+      icon="trades"
+      title={title}
+      href={href}
+      newTabHint={newTabHint}
+      onClick={onClick}
+      size={size}
+    />
   );
 }
 
 /** Open the entity's policies surface. */
 export function PoliciesButton({
+  href,
   onClick,
   title = "Policies",
   size = 30,
 }: RowActionProps) {
+  const newTabHint = useOpenInNewTabHint();
   return (
-    <ActionButton icon="policies" title={title} onClick={onClick} size={size} />
+    <ActionButton
+      icon="policies"
+      title={title}
+      href={href}
+      newTabHint={newTabHint}
+      onClick={onClick}
+      size={size}
+    />
   );
 }
 
