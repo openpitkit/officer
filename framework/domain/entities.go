@@ -76,6 +76,10 @@ type AccountGroup struct {
 	Code string
 	// Title is the mutable human-readable display name; may be empty.
 	Title string
+	// Currency is the group-level realized P&L currency asset code. Empty means
+	// member accounts inherit from the reserved default group unless they carry
+	// an account-level currency.
+	Currency string
 	// Notes is a free-form reference string, never forwarded to the engine.
 	Notes string
 	// BlockReason is the human-readable reason the group was blocked.
@@ -615,7 +619,7 @@ const (
 // records it. Token is the exact base64url envelope bytes issued by the signer;
 // the remaining fields are the envelope metadata carried for read-back without
 // decoding the token. KeyID references the signing key by its own UUID handle.
-// IssuedAt and ExpiresAt are RFC3339Nano UTC strings.
+// IssuedAt is an RFC3339Nano UTC string.
 type EventAttestation struct {
 	// Token is the exact base64url-encoded signed attestation envelope.
 	Token string
@@ -629,8 +633,6 @@ type EventAttestation struct {
 	Mode string
 	// IssuedAt is the envelope issue time (RFC3339Nano UTC).
 	IssuedAt string
-	// ExpiresAt is the envelope expiry (RFC3339Nano UTC).
-	ExpiresAt string
 }
 
 // OrderEventType classifies a single event in an order's lifecycle.
@@ -877,6 +879,13 @@ type OrderSettlement struct {
 	ReservationApprovalID string
 	// ReservationIntentState is the target state for ReservationApprovalID.
 	ReservationIntentState ReservationIntentState
+	// ReservationIntentUpsert, when non-nil, is a held reservation intent to
+	// insert (or replace) in the same transaction as the settlement. It carries
+	// the initial durable record of a hold the engine has just registered
+	// in-memory, so the order row and its intent commit or roll back together;
+	// nil skips the write. It is distinct from ReservationApprovalID above, which
+	// only advances the state of an already-persisted intent.
+	ReservationIntentUpsert *ReservationIntent
 	// Balances are the per-asset engine outcomes to persist.
 	Balances []BalanceSettlement
 	// Events are the lifecycle events to append (e.g. fill).
@@ -1001,9 +1010,8 @@ type ApprovalPayload struct {
 	EstimateSource string `json:"estimateSource"` // "limit" | "market_mark"
 
 	// Lifecycle / anti-replay.
-	IssuedAt  string `json:"issuedAt"`  // RFC3339Nano UTC
-	ExpiresAt string `json:"expiresAt"` // RFC3339Nano UTC (TTL)
-	Nonce     string `json:"nonce"`     // single-use, 128-bit base64url
+	IssuedAt string `json:"issuedAt"` // RFC3339Nano UTC
+	Nonce    string `json:"nonce"`    // single-use, 128-bit base64url
 
 	// Key binding.
 	KeyID string `json:"keyId"`
@@ -1045,8 +1053,6 @@ const (
 type ReservationIntent struct {
 	// IssuedAt is when the reservation was issued.
 	IssuedAt time.Time
-	// ExpiresAt is when the TTL sweeper should roll this back.
-	ExpiresAt time.Time
 	// ApprovalID is the server UUID identifying the reservation; it is this row's
 	// own external handle (used in tokens), not a surrogate key.
 	ApprovalID string
@@ -1069,9 +1075,9 @@ type ReservationIntent struct {
 // store transaction: the intent state flip, the order status advance, and the
 // lifecycle event(s) are all committed together or not at all. It replaces the
 // former two-write SetReservationIntentState + (AppendOrderEvent + UpdateOrder
-// Status) pattern on the confirm/cancel/sweeper paths so a crash can never leave
-// the intent flipped without the matching status/event. It is a plain data
-// carrier: no methods, no engine/store imports.
+// Status) pattern on the confirm/cancel paths so a crash can never leave the
+// intent flipped without the matching status/event. It is a plain data carrier:
+// no methods, no engine/store imports.
 //
 // The store only ever advances accepted->terminal: AllowedFrom is a status
 // WHERE-guard (callers pass {OrderStatusAccepted}); a current status outside it

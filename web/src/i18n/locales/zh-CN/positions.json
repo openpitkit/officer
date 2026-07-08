@@ -60,7 +60,8 @@
     "empty": {
       "title": "暂无余额",
       "hint": "使用「调整」功能为账户和资产设定现货资金余额。"
-    }
+    },
+    "activeOrdersTitle": "{{account}} 的活跃订单"
   },
   "inline": {
     "apply": "应用",

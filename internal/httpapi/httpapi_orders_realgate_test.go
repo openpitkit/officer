@@ -30,6 +30,7 @@ import (
 	"go.openpit.dev/officer/framework/marketdata"
 	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/framework/store"
+	appsigning "go.openpit.dev/officer/internal/signing"
 	appstore "go.openpit.dev/officer/internal/store"
 )
 
@@ -103,9 +104,7 @@ func TestApplyExecutionReport_RealTerminalGate(t *testing.T) {
 // newRealServiceRouter builds the full production chain a handler test would
 // otherwise stub: a real SQLite store, a real localNode over an engine fake, a
 // real NodeRouter, a real backend.Service, and the real HTTP router. It returns
-// the mounted handler and the bound realm store for direct seeding. A nil signer
-// is intentional: the execution-report path needs none, and its best-effort
-// attestation tolerates the absence.
+// the mounted handler and the bound realm store for direct seeding.
 func newRealServiceRouter(t *testing.T) (http.Handler, store.RealmStore) {
 	t.Helper()
 	ctx := context.Background()
@@ -132,7 +131,14 @@ func newRealServiceRouter(t *testing.T) (http.Handler, store.RealmStore) {
 	if err != nil {
 		t.Fatalf("NewLocalRouter: %v", err)
 	}
-	svc := backend.New(router, nil, nil)
+	signer, err := appsigning.New(realm)
+	if err != nil {
+		t.Fatalf("signing.New: %v", err)
+	}
+	if _, err := signer.GenerateKey(ctx); err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	svc := backend.New(router, nil, signer)
 	handler, err := newRouter(svc)
 	if err != nil {
 		t.Fatalf("newRouter: %v", err)
@@ -194,6 +200,12 @@ func (e *realGateEngine) ReserveHold(context.Context, domain.Order) (engine.Hold
 }
 func (e *realGateEngine) CommitHeld(context.Context, string) error   { return nil }
 func (e *realGateEngine) RollbackHeld(context.Context, string) error { return nil }
+func (e *realGateEngine) SetAccountCurrency(context.Context, domain.AccountID, string) error {
+	return nil
+}
+func (e *realGateEngine) ClearAccountCurrency(context.Context, domain.AccountID) error {
+	return nil
+}
 func (e *realGateEngine) SubmitImmediate(
 	context.Context, domain.Order,
 ) (engine.ImmediateResult, error) {

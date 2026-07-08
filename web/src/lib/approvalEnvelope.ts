@@ -130,7 +130,6 @@ export interface ParsedApproval {
   policySummary: string;
   estimatePrice: string;
   issuedAt: string;
-  expiresAt: string;
   result: ParsedApprovalResult | null;
 }
 
@@ -174,7 +173,6 @@ export function parseApprovalFields(
     policySummary: str(approval.policySummary),
     estimatePrice: str(approval.estimatePrice),
     issuedAt: str(approval.issuedAt),
-    expiresAt: str(approval.expiresAt),
     result: parseResult(approval.result),
   };
 }

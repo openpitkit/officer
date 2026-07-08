@@ -44,11 +44,13 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	frameworkapp "go.openpit.dev/officer/framework/app"
+	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/internal/config"
 	"go.openpit.dev/officer/internal/logtail"
 	officerruntime "go.openpit.dev/officer/internal/runtime"
@@ -62,6 +64,13 @@ const mcpPath = "/mcp"
 // shutdownTimeout bounds the graceful HTTP shutdown before connections are
 // forced closed.
 const shutdownTimeout = 10 * time.Second
+
+type lifecycleAction string
+
+const (
+	lifecycleStop    lifecycleAction = "stop"
+	lifecycleRestart lifecycleAction = "restart"
+)
 
 func main() {
 	// Tee the logger into a bounded in-memory ring buffer so the serve surface
@@ -152,8 +161,15 @@ func runMCP(args []string, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	closeApp := func() error {
+		if app == nil {
+			return nil
+		}
+		defer func() { app = nil }()
+		return app.Close()
+	}
 	defer func() {
-		if err := app.Close(); err != nil {
+		if err := closeApp(); err != nil {
 			logger.Error("shutdown error", "err", err)
 		}
 	}()
@@ -184,13 +200,21 @@ func runServe(args []string, logger *slog.Logger, buf *logtail.Buffer) error {
 	if err != nil {
 		return err
 	}
+	closeApp := func() error {
+		if app == nil {
+			return nil
+		}
+		defer func() { app = nil }()
+		return app.Close()
+	}
 	defer func() {
-		if err := app.Close(); err != nil {
+		if err := closeApp(); err != nil {
 			logger.Error("shutdown error", "err", err)
 		}
 	}()
 
-	handler, err := buildServeHandler(app, buf)
+	lifecycleRequests := make(chan lifecycleAction, 1)
+	handler, err := buildServeHandler(app, buf, lifecycleRequests)
 	if err != nil {
 		return fmt.Errorf("build http handler: %w", err)
 	}
@@ -222,8 +246,16 @@ func runServe(args []string, logger *slog.Logger, buf *logtail.Buffer) error {
 		_ = listener.Close()
 		return fmt.Errorf("write runtime state: %w", err)
 	}
+	runtimeStateWritten := true
+	removeRuntimeState := func() error {
+		if !runtimeStateWritten {
+			return nil
+		}
+		runtimeStateWritten = false
+		return officerruntime.Remove(cfg)
+	}
 	defer func() {
-		if err := officerruntime.Remove(cfg); err != nil {
+		if err := removeRuntimeState(); err != nil {
 			logger.Error("remove runtime state", "err", err)
 		}
 	}()
@@ -250,9 +282,12 @@ func runServe(args []string, logger *slog.Logger, buf *logtail.Buffer) error {
 		}()
 	}
 
+	var lifecycle lifecycleAction
 	select {
 	case <-ctx.Done():
 		logger.Info("shutdown signal received, draining http")
+	case lifecycle = <-lifecycleRequests:
+		logger.Warn("service lifecycle request received", "action", lifecycle)
 	case err := <-serveErr:
 		if err != nil {
 			return fmt.Errorf("http server: %w", err)
@@ -270,11 +305,129 @@ func runServe(args []string, logger *slog.Logger, buf *logtail.Buffer) error {
 		return fmt.Errorf("http server: %w", err)
 	}
 	logger.Info("http server stopped")
+	if lifecycle == lifecycleRestart {
+		if err := removeRuntimeState(); err != nil {
+			return fmt.Errorf("remove runtime state before restart: %w", err)
+		}
+		if err := closeApp(); err != nil {
+			return fmt.Errorf("shutdown app before restart: %w", err)
+		}
+		stop()
+		logger.Warn("pit-officer restart requested; replacing current process")
+		args := restartProcessArgs(os.Args, actual)
+		if err := replaceCurrentProcess(args); err != nil {
+			return fmt.Errorf("replace current process: %w", err)
+		}
+	}
 	return nil
 }
 
-func buildServeHandler(app *frameworkapp.App, buf *logtail.Buffer) (http.Handler, error) {
-	return app.BuildServeHandler(buf, mcpPath)
+func restartProcessArgs(args []string, httpAddr string) []string {
+	out := append([]string(nil), args...)
+	for i := 1; i < len(out); i++ {
+		switch {
+		case out[i] == "-http-addr" || out[i] == "--http-addr":
+			if i+1 < len(out) {
+				out[i+1] = httpAddr
+				return append(out, "-open-browser=false")
+			}
+			return append(out, httpAddr, "-open-browser=false")
+		case strings.HasPrefix(out[i], "-http-addr="):
+			out[i] = "-http-addr=" + httpAddr
+			return append(out, "-open-browser=false")
+		case strings.HasPrefix(out[i], "--http-addr="):
+			out[i] = "--http-addr=" + httpAddr
+			return append(out, "-open-browser=false")
+		}
+	}
+	return append(out, "-http-addr", httpAddr, "-open-browser=false")
+}
+
+func buildServeHandler(
+	app *frameworkapp.App,
+	buf *logtail.Buffer,
+	lifecycleRequests chan<- lifecycleAction,
+) (http.Handler, error) {
+	handler, err := app.BuildServeHandler(buf, mcpPath)
+	if err != nil {
+		return nil, err
+	}
+	recordLifecycle := func(
+		ctx context.Context,
+		action lifecycleAction,
+		source domain.Source,
+	) error {
+		auditAction, detail := lifecycleAudit(action)
+		return app.RecordServiceLifecycle(ctx, auditAction, detail, source)
+	}
+	return withServiceLifecycle(handler, lifecycleRequests, recordLifecycle), nil
+}
+
+type lifecycleRecorder func(context.Context, lifecycleAction, domain.Source) error
+
+func withServiceLifecycle(
+	next http.Handler,
+	lifecycleRequests chan<- lifecycleAction,
+	recordLifecycle lifecycleRecorder,
+) http.Handler {
+	var lifecycleMu sync.Mutex
+	lifecyclePending := false
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		action, source, ok := serviceLifecycleRoute(r.URL.Path)
+		if !ok {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		lifecycleMu.Lock()
+		defer lifecycleMu.Unlock()
+		if lifecyclePending {
+			http.Error(w, "lifecycle request already pending", http.StatusConflict)
+			return
+		}
+		if recordLifecycle != nil {
+			if err := recordLifecycle(r.Context(), action, source); err != nil {
+				http.Error(w, "audit lifecycle request", http.StatusInternalServerError)
+				return
+			}
+		}
+		lifecyclePending = true
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"accepted":true}` + "\n"))
+		lifecycleRequests <- action
+	})
+}
+
+func serviceLifecycleRoute(path string) (lifecycleAction, domain.Source, bool) {
+	switch path {
+	case "/api/v1/service/stop":
+		return lifecycleStop, domain.SourceAPI, true
+	case "/app/api/v1/service/stop":
+		return lifecycleStop, domain.SourcePanel, true
+	case "/api/v1/service/restart":
+		return lifecycleRestart, domain.SourceAPI, true
+	case "/app/api/v1/service/restart":
+		return lifecycleRestart, domain.SourcePanel, true
+	default:
+		return "", "", false
+	}
+}
+
+func lifecycleAudit(action lifecycleAction) (domain.AuditAction, string) {
+	switch action {
+	case lifecycleRestart:
+		return domain.AuditActionRestartService, "restart service requested"
+	case lifecycleStop:
+		return domain.AuditActionStopService, "stop service requested"
+	default:
+		return domain.AuditActionStopService, "unknown service lifecycle requested"
+	}
 }
 
 // runHealthcheck probes a running serve instance's /healthz endpoint and

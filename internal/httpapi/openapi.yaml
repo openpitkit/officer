@@ -710,6 +710,9 @@ paths:
                   type: string
                   maxLength: 256
                   description: Mutable display title for the account.
+                currency:
+                  type: string
+                  description: Optional account currency asset code. Empty or omitted inherits from group/default tiers.
       responses:
         "201":
           description: Account created.
@@ -885,7 +888,8 @@ paths:
       summary: Set (or clear) account group membership
       description: >
         Assigns the account to a group. Pass an empty string to clear group
-        membership.
+        membership. The request is rejected when changing membership would alter
+        the account's effective currency while it has balance or P&L rows.
       tags: [accounts]
       requestBody:
         required: true
@@ -901,6 +905,46 @@ paths:
       responses:
         "200":
           description: Account after update.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [account]
+                properties:
+                  account:
+                    $ref: "#/components/schemas/Account"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /accounts/{code}/currency:
+    parameters:
+      - $ref: "#/components/parameters/AccountCode"
+    put:
+      operationId: setAccountCurrency
+      summary: Set or clear account currency
+      description: >
+        Sets the account-level currency asset code. Pass an empty string to clear
+        the account tier and inherit from group/default tiers. Changing the
+        effective currency is rejected when the account has balance or P&L rows.
+      tags: [accounts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currency]
+              properties:
+                currency:
+                  type: string
+                  description: Asset code to use as the account currency, or empty to clear it.
+      responses:
+        "200":
+          description: Account after currency update.
           content:
             application/json:
               schema:
@@ -1114,6 +1158,9 @@ paths:
                   type: string
                   maxLength: 4096
                   description: Free-form operator notes stored on the group.
+                currency:
+                  type: string
+                  description: Optional group currency asset code. Empty or omitted leaves the group tier unset.
       responses:
         "201":
           description: Group created.
@@ -1203,10 +1250,92 @@ paths:
     delete:
       operationId: deleteGroup
       summary: Delete a group
+      description: >
+        Deletes a group. The request is rejected when deleting the group would
+        alter member accounts' effective currency while they have balance or P&L
+        rows.
       tags: [groups]
       responses:
         "204":
           description: Group deleted.
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /groups/-/default/currency:
+    put:
+      operationId: setDefaultGroupCurrency
+      summary: Set or clear the reserved default group currency
+      description: >
+        Sets the reserved default account group currency asset code. Pass an
+        empty string to clear the default tier. Changing effective currency is
+        rejected for accounts that resolve through this tier and have balance or
+        P&L rows.
+      tags: [groups]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currency]
+              properties:
+                currency:
+                  type: string
+                  description: Asset code to use as the default group currency, or empty to clear it.
+      responses:
+        "200":
+          description: Reserved default group after currency update.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [group]
+                properties:
+                  group:
+                    $ref: "#/components/schemas/Group"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /groups/{code}/currency:
+    parameters:
+      - $ref: "#/components/parameters/GroupCode"
+    put:
+      operationId: setGroupCurrency
+      summary: Set or clear group currency
+      description: >
+        Sets the group-level currency asset code. Pass an empty string to clear
+        the group tier and inherit from the reserved default group. Changing
+        effective currency is rejected for member accounts that resolve through
+        this tier and have balance or P&L rows.
+      tags: [groups]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currency]
+              properties:
+                currency:
+                  type: string
+                  description: Asset code to use as the group currency, or empty to clear it.
+      responses:
+        "200":
+          description: Group after currency update.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [group]
+                properties:
+                  group:
+                    $ref: "#/components/schemas/Group"
         "400":
           $ref: "#/components/responses/ValidationError"
         "404":
@@ -1695,8 +1824,10 @@ paths:
       summary: Submit an order through pre-trade risk evaluation
       description: >
         Runs the order through the engine pre-trade checks and records the result.
-        An engine reject is a successful call: the returned order carries
-        `status` = `"rejected"`. HTTP errors indicate only system-level failures.
+        An engine reject is a successful signed pre-trade decision: the returned
+        order carries `status` = `"rejected"` and `submitResponse` carries the
+        signed `verdict: reject` envelope plus structured reasons. HTTP errors
+        indicate invalid input or system-level failures.
       tags: [orders]
       requestBody:
         required: true
@@ -1729,15 +1860,19 @@ paths:
                   description: Exact decimal string. Omit for market orders.
       responses:
         "201":
-          description: Order record created (accepted or rejected by the engine).
+          description: >
+            Order record created (accepted or rejected by the engine), plus the
+            signed submit verdict envelope.
           content:
             application/json:
               schema:
                 type: object
-                required: [order]
+                required: [order, submitResponse]
                 properties:
                   order:
                     $ref: "#/components/schemas/Order"
+                  submitResponse:
+                    $ref: "#/components/schemas/ApprovalToken"
         "400":
           $ref: "#/components/responses/ValidationError"
         "500":
@@ -1948,7 +2083,8 @@ paths:
             result). A fill status created a trade record and per-asset outcomes;
             a non-fill status recorded the lifecycle transition only.
             `attestationToken` is the robot's proof the engine passed this report;
-            it is empty when attestation was skipped or failed best-effort.
+            signing or attestation persistence failures fail the request before
+            the report is recorded.
           content:
             application/json:
               schema:
@@ -2800,7 +2936,10 @@ paths:
                   enum: [immediate, hold]
       responses:
         "201":
-          description: Order created and approval token issued.
+          description: >
+            Order created and signed submit decision issued. A risk reject is a
+            successful pre-trade decision with `verdict: reject` and structured
+            `reasons`; invalid input and signing/attestation failures are errors.
           content:
             application/json:
               schema:
@@ -2844,7 +2983,8 @@ paths:
           description: >
             Order after confirmation, plus the signed attestation over the commit.
             `attestationToken` is the robot's proof the engine committed this
-            reservation; it is empty when attestation was skipped or failed.
+            reservation. Signing or attestation persistence failures fail the
+            request before the commit is recorded.
           content:
             application/json:
               schema:
@@ -2893,7 +3033,8 @@ paths:
           description: >
             Order after cancellation, plus the signed attestation over the
             rollback. `attestationToken` is the robot's proof the engine rolled
-            back this reservation; it is empty when attestation was skipped.
+            back this reservation. Signing or attestation persistence failures
+            fail the request before the rollback is recorded.
           content:
             application/json:
               schema:
@@ -3263,6 +3404,43 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Service"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /service/restart:
+    post:
+      operationId: restartService
+      summary: Restart the service process
+      description: >
+        Records the restart request in the audit log, drains HTTP, closes the
+        current app runtime, and replaces the running process with the same
+        executable and arguments.
+      tags: [dashboard]
+      responses:
+        "202":
+          description: Restart request accepted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceLifecycleAccepted"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /service/stop:
+    post:
+      operationId: stopService
+      summary: Request graceful service shutdown
+      description: >
+        Requests the running serve process to drain HTTP and exit normally. The
+        service may remain offline until an administrator starts it manually.
+      tags: [dashboard]
+      responses:
+        "202":
+          description: Stop request accepted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceLifecycleAccepted"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -4045,7 +4223,7 @@ components:
 
     Account:
       type: object
-      required: [code, title, group, notes, positionCount, blocked, blockReason]
+      required: [code, title, group, currency, effectiveCurrency, currencyOrigin, currencyCascade, notes, positionCount, blocked, blockReason]
       properties:
         code:
           type: string
@@ -4056,6 +4234,30 @@ components:
         group:
           type: string
           description: Group code, or empty string when not in a group.
+        currency:
+          type: string
+          description: Account currency asset code, or empty when this tier is unset.
+        effectiveCurrency:
+          type: string
+          description: Effective account currency after account, group, and default-group cascade; empty when no tier supplies a currency.
+        currencyOrigin:
+          type: string
+          enum: ["", account, group, default]
+          description: Tier that supplied `effectiveCurrency`, or empty when no tier supplies a currency.
+        currencyCascade:
+          type: object
+          required: [account, group, default]
+          description: Currency values at each cascade tier before resolution.
+          properties:
+            account:
+              type: string
+              description: Account-level currency asset code, or empty when unset.
+            group:
+              type: string
+              description: Account group currency asset code, or empty when unset or ungrouped.
+            default:
+              type: string
+              description: Reserved default account group currency asset code, or empty when unset.
         notes:
           type: string
         positionCount:
@@ -4072,7 +4274,7 @@ components:
 
     Group:
       type: object
-      required: [code, title, notes, accountCount, positionCount, blocked, blockReason]
+      required: [code, title, notes, currency, accountCount, positionCount, blocked, blockReason]
       properties:
         code:
           type: string
@@ -4082,6 +4284,9 @@ components:
           description: Mutable display title.
         notes:
           type: string
+        currency:
+          type: string
+          description: Group currency asset code, or empty when this tier is unset.
         accountCount:
           type: integer
           minimum: 0
@@ -4348,7 +4553,7 @@ components:
 
     EventAttestation:
       type: object
-      required: [token, keyId, alg, requestType, mode, issuedAt, expiresAt, signed]
+      required: [token, keyId, alg, requestType, mode, issuedAt, signed]
       description: >
         An order-history event's persisted signed attestation envelope over
         (trading request + engine result). No surrogate or engine id is present.
@@ -4373,9 +4578,6 @@ components:
           type: string
           description: Submit mode the attestation was issued for.
         issuedAt:
-          type: string
-          format: date-time
-        expiresAt:
           type: string
           format: date-time
         signed:
@@ -4568,8 +4770,7 @@ components:
         attestationToken:
           type: string
           description: >
-            The base64url attestation envelope; empty when attestation was
-            skipped or failed best-effort.
+            The base64url attestation envelope returned on success.
         attestationKeyId:
           type: string
           description: The signing key id; empty under eSign-off or when absent.
@@ -4590,8 +4791,7 @@ components:
         attestationToken:
           type: string
           description: >
-            The base64url attestation envelope; empty when attestation was
-            skipped or failed best-effort.
+            The base64url attestation envelope returned on success.
         attestationKeyId:
           type: string
           description: The signing key id; empty under eSign-off or when absent.
@@ -4805,7 +5005,7 @@ components:
 
     Counts:
       type: object
-      required: [accounts, accountsActive, groups, groupsActive, limits, ordersToday, ordersTotal]
+      required: [accounts, accountsActive, groups, groupsActive, limits, ordersActive, ordersToday, ordersTotal]
       properties:
         accounts:
           type: integer
@@ -4821,6 +5021,9 @@ components:
           description: Account groups that are not blocked.
         limits:
           type: integer
+        ordersActive:
+          type: integer
+          description: Orders in the working lifecycle set.
         ordersToday:
           type: integer
           description: >-
@@ -4884,6 +5087,13 @@ components:
           type: boolean
         database:
           $ref: "#/components/schemas/ServiceDatabase"
+
+    ServiceLifecycleAccepted:
+      type: object
+      required: [accepted]
+      properties:
+        accepted:
+          type: boolean
 
     ServiceLogs:
       type: object
@@ -5348,23 +5558,32 @@ components:
 
     ApprovalToken:
       type: object
-      required: [token, keyId, expiresAt, orderExternalId]
+      required: [token, keyId, orderExternalId, verdict]
       description: >
-        The approval token issued for an order submit. The authorised order is
-        referenced by its opaque external id, never a surrogate id.
+        The signed submit decision issued for an order submit. The authorised
+        order is referenced by its opaque external id, never a surrogate id.
+        `verdict` distinguishes accepted and rejected pre-trade decisions.
+        Event reproduction may return an empty verdict when the reproduced event
+        has no pre-trade verdict, including submitted lifecycle events.
       properties:
         token:
           type: string
-          description: The base64url approval token.
+          description: The base64url signed decision envelope.
         keyId:
           type: string
           description: Identifier of the signing key that produced the token.
-        expiresAt:
-          type: string
-          format: date-time
         orderExternalId:
           description: The authorised order's opaque public handle.
           $ref: "#/components/schemas/ExternalId"
+        verdict:
+          type: string
+          enum: [accept, reject, ""]
+          description: The signed pre-trade verdict, or empty when absent.
+        reasons:
+          type: array
+          description: Structured pre-trade reject reasons; omitted on accept.
+          items:
+            $ref: "#/components/schemas/OrderReject"
 
     PublicKeyMaterial:
       type: object

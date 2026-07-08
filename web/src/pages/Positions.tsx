@@ -27,7 +27,7 @@ import {
   X,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import {
   ActionButton,
@@ -43,6 +43,7 @@ import {
   IdCell,
   MoreFiltersButton,
   NumberRangeFilter,
+  OrdersButton,
   reportInvalidFilterControls,
   RowActions,
   Segmented,
@@ -111,7 +112,8 @@ import {
   knownPageCount,
 } from "@/lib/tablePagination";
 import { usePersistentPageSize } from "@/lib/tablePageSize";
-import { shareUrl } from "@/lib/shareLink";
+import { absoluteAppUrl, shareUrl } from "@/lib/shareLink";
+import { ACTIVE_STATUS_QUERY } from "@/lib/orderStatus";
 import { DEFAULT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from "@/lib/useDebounce";
 import { operatorOptions } from "@/lib/dataControlLabels";
 import { cn } from "@/lib/utils";
@@ -154,6 +156,15 @@ function positionsFilterHref({
   return shareUrl("/positions", query);
 }
 
+/** Deep link to the Orders screen pre-filtered to this account and the active
+ *  (working) order statuses, matching the Orders "Active" quick filter. */
+function activeOrdersHref(account: string): string {
+  const query = new URLSearchParams();
+  query.set("account", account);
+  query.set("status", ACTIVE_STATUS_QUERY);
+  return absoluteAppUrl(`/orders?${query.toString()}`);
+}
+
 /** Split a localized timestamp so the date and time are rendered as
  *  separate unbreakable units that wrap as a whole, never split mid-value. */
 function SplitTime({ iso }: { iso: string }) {
@@ -178,6 +189,20 @@ function SplitTime({ iso }: { iso: string }) {
 
 function dash(v: string | undefined): string {
   return v && v !== "" ? v : "—";
+}
+
+/** Whether a decimal amount string represents a non-zero value. Operates on the
+ *  precision string directly (no float parse): a value is zero only when every
+ *  digit is 0, ignoring sign, decimal point, and surrounding whitespace. */
+function isNonZeroAmount(value: string | undefined): boolean {
+  if (value === undefined) {
+    return false;
+  }
+  const trimmed = value.trim();
+  if (trimmed === "") {
+    return false;
+  }
+  return /[1-9]/.test(trimmed);
 }
 
 function csvCell(value: string | number | undefined): string {
@@ -1429,7 +1454,13 @@ function BalanceEditRow({
 }) {
   const { t } = useTranslation("positions");
   const { t: tc } = useTranslation("common");
+  const navigate = useNavigate();
   const b = balance;
+  const openActiveOrders = () =>
+    navigate(
+      `/orders?account=${encodeURIComponent(b.account)}` +
+        `&status=${ACTIVE_STATUS_QUERY}`,
+    );
   return (
     <>
       {/* Clicking the row body opens this position's adjustment history,
@@ -1470,8 +1501,40 @@ function BalanceEditRow({
           </div>
         </TableCell>
         <TableCell className="nums text-right text-xs">{b.available}</TableCell>
-        <TableCell className="nums text-right text-xs">{b.held}</TableCell>
-        <TableCell className="nums text-right text-xs">{b.incoming}</TableCell>
+        <TableCell className="nums text-right text-xs">
+          <div className="flex items-center justify-end gap-1">
+            <span className="min-w-0 truncate">{b.held}</span>
+            {isNonZeroAmount(b.held) && (
+              <span className="shrink-0">
+                <OrdersButton
+                  size={22}
+                  title={t("balances.activeOrdersTitle", {
+                    account: b.account,
+                  })}
+                  href={activeOrdersHref(b.account)}
+                  onClick={openActiveOrders}
+                />
+              </span>
+            )}
+          </div>
+        </TableCell>
+        <TableCell className="nums text-right text-xs">
+          <div className="flex items-center justify-end gap-1">
+            <span className="min-w-0 truncate">{b.incoming}</span>
+            {isNonZeroAmount(b.incoming) && (
+              <span className="shrink-0">
+                <OrdersButton
+                  size={22}
+                  title={t("balances.activeOrdersTitle", {
+                    account: b.account,
+                  })}
+                  href={activeOrdersHref(b.account)}
+                  onClick={openActiveOrders}
+                />
+              </span>
+            )}
+          </div>
+        </TableCell>
         <TableCell className="nums text-right text-xs">
           {dash(b.averageEntryPrice)}
         </TableCell>

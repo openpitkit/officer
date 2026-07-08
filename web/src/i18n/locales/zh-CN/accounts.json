@@ -79,6 +79,7 @@
       "group": "分组",
       "accounts": "账户",
       "positions": "持仓",
+      "currency": "货币",
       "status": "状态",
       "notes": "备注",
       "actions": "操作"
@@ -87,6 +88,7 @@
       "group": "此列显示账户组代码及其显示名称。",
       "accounts": "此列显示属于该分组的账户数量。",
       "positions": "此列显示属于该分组的持仓行数量。",
+      "currency": "组内账户默认货币。",
       "status": "此列显示该分组处于活跃还是封锁状态。",
       "notes": "此列显示为该分组保存的操作员备注。",
       "actions": "此列包含用于筛选、分享链接和删除分组的行操作。"
@@ -106,6 +108,7 @@
     "actions": {
       "notes": "备注",
       "editTitle": "编辑分组",
+      "editCurrencyTitle": "编辑分组货币",
       "editNotesTitle": "编辑备注",
       "positionsTitle": "打开按此分组筛选的持仓",
       "viewBlockDetails": "查看封锁详情",
@@ -113,6 +116,9 @@
       "unblock": "解封",
       "delete": "删除",
       "deleteTitle": "删除分组"
+    },
+    "currencyCell": {
+      "title": "组内账户默认货币。"
     }
   },
   "accounts": {
@@ -123,6 +129,7 @@
     "columns": {
       "account": "账户",
       "group": "分组",
+      "currency": "货币",
       "positions": "持仓",
       "status": "状态",
       "notes": "备注",
@@ -131,6 +138,7 @@
     "columnDescriptions": {
       "account": "此列显示账户代码及其显示名称。",
       "group": "此列显示分配给该账户的账户组。",
+      "currency": "账户货币。",
       "positions": "此列显示为该账户存储的持仓行数量。",
       "status": "此列显示该账户处于活跃还是封锁状态。",
       "notes": "此列显示为该账户保存的操作员备注。",
@@ -164,6 +172,7 @@
     "actions": {
       "notes": "备注",
       "editTitle": "编辑账户",
+      "editCurrencyTitle": "编辑账户货币",
       "editNotesTitle": "编辑参考备注",
       "positionsTitle": "打开按此账户筛选的持仓",
       "viewBlockDetails": "查看封锁详情",
@@ -175,6 +184,15 @@
       "title": "暂无账户",
       "hintFiltered": "该分组下暂无账户。",
       "hintEmpty": "创建第一个账户以开始应用风控限制。"
+    },
+    "currencyCell": {
+      "title": "账户货币",
+      "none": "未设置层级",
+      "origins": {
+        "account": "账户货币在账户层级设置",
+        "groupNamed": "账户货币继承自 {{group}}",
+        "default": "账户货币使用默认值"
+      }
     }
   },
   "createAccount": {
@@ -185,6 +203,8 @@
     "codeHint": "最多 64 个可打印字符，首尾不得有空格。",
     "groupLabel": "分组（可选）",
     "groupHint": "选择已有分组或输入新代码。留空则创建未分组账户。",
+    "currencyLabel": "货币（可选）",
+    "currencyHint": "未设置货币时，不计算该账户的已实现 P&L。",
     "cancel": "取消",
     "submit": "创建"
   },
@@ -194,11 +214,41 @@
     "codeLabel": "分组代码",
     "titleLabel": "显示名称（可选）",
     "titlePlaceholder": "美国股票交易组",
+    "currencyLabel": "货币（可选）",
+    "currencyHint": "未设置货币时，除非在账户层级设置货币，否则不计算该分组内账户的已实现 P&L。",
     "notesLabel": "备注（可选）",
     "notesPlaceholder": "归属于美国股票交易台的账户。",
     "notesHint": "参考备注 — 仅存储于控制平面，不发送至引擎。",
     "cancel": "取消",
     "submit": "创建"
+  },
+  "editCurrency": {
+    "title": "编辑账户货币",
+    "description": "为 {{account}} 设置账户货币。",
+    "cascadeTitle": "货币级联",
+    "accountTier": "账户",
+    "groupTier": "分组",
+    "defaultTier": "默认",
+    "effective": "有效",
+    "origins": {
+      "account": "账户",
+      "group": "分组",
+      "default": "默认"
+    },
+    "blockedHint": "此账户存在余额或 P&L 行。若变更会改变有效货币，后端将拒绝该操作。",
+    "currencyLabel": "账户货币",
+    "currencyHint": "清空字段可从分组和默认层级继承。未设置账户有效货币时，不计算该账户的已实现 P&L。",
+    "cancel": "取消",
+    "submit": "保存"
+  },
+  "editGroupCurrency": {
+    "title": "编辑分组货币",
+    "description": "为 {{group}} 设置分组货币。",
+    "defaultDescription": "设置保留默认分组货币。",
+    "blockedHint": "若变更会改变存在余额或 P&L 行的成员账户有效货币，后端将拒绝该操作。",
+    "currencyLabel": "分组货币",
+    "cancel": "取消",
+    "submit": "保存"
   },
   "businessCsv": {
     "importCsv": "导入 CSV",

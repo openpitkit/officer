@@ -128,6 +128,25 @@ func TestFilterDataAccountsGroupsByCode(t *testing.T) {
 	}
 }
 
+func TestFilterDataAccountsGroupsCarriesDefaultCurrencyForGroupedAccount(t *testing.T) {
+	data := fixtureData()
+	data.DefaultGroupCurrency = "USD"
+	filtered := FilterData(data, Scope{
+		Sections: []Section{SectionAccountsGroups},
+		Accounts: EntitySelector{Accounts: []string{"acc-1"}},
+	})
+	if filtered.DefaultGroupCurrency != "USD" {
+		t.Fatalf("default group currency = %q, want USD",
+			filtered.DefaultGroupCurrency)
+	}
+	if got := accountCodes(filtered.Accounts); !sameStrings(got, []string{"acc-1"}) {
+		t.Fatalf("accounts = %v, want acc-1", got)
+	}
+	if got := groupCodes(filtered.Groups); !sameStrings(got, []string{"grp-1"}) {
+		t.Fatalf("groups = %v, want grp-1 only", got)
+	}
+}
+
 func TestFilterDataPositionsUsePositionsSelector(t *testing.T) {
 	data := fixtureData()
 	filtered := FilterData(data, Scope{

@@ -207,6 +207,9 @@ type Node interface {
 	// then audits the action. An empty groupCode clears membership.
 	SetAccountGroup(ctx context.Context, key Key, groupCode string, caller domain.Caller) error
 
+	// SetAccountCurrency sets or clears the account-level realized P&L currency.
+	SetAccountCurrency(ctx context.Context, key Key, currency string, caller domain.Caller) error
+
 	// SetAccountNotes replaces the account's free-form notes in the store and
 	// audits the action. Notes never reach the engine.
 	SetAccountNotes(ctx context.Context, key Key, notes string, caller domain.Caller) error
@@ -291,6 +294,12 @@ type Node interface {
 	// SetGroupNotes replaces a group's notes in the store and audits the action.
 	SetGroupNotes(ctx context.Context, code, notes string, caller domain.Caller) error
 
+	// SetGroupCurrency sets or clears a group-level realized P&L currency.
+	SetGroupCurrency(ctx context.Context, code, currency string, caller domain.Caller) error
+
+	// SetDefaultGroupCurrency sets or clears the reserved default group currency.
+	SetDefaultGroupCurrency(ctx context.Context, currency string, caller domain.Caller) error
+
 	// UpdateGroup replaces the group's public code and display title in the
 	// store, rebuilds the engine resolver, and audits the action.
 	UpdateGroup(
@@ -370,10 +379,10 @@ type Node interface {
 	// SubmitHold records the order, runs the engine pre-trade keeping the
 	// reservation held, persists the accept/reject lifecycle, and returns the
 	// recorded order with the engine hold result. On accept the held amount stays
-	// reserved on engine storage until ConfirmHeld or CancelHeld resolves it (or
-	// the engine's TTL sweeper auto-rolls it back); the order status is left
-	// accepted. On reject the order is recorded rejected and the result carries the
-	// engine rejects. It does not audit; the backend audits approval_issued.
+	// reserved on engine storage until ConfirmHeld or CancelHeld resolves it; the
+	// order status is left accepted. On reject the order is recorded rejected and
+	// the result carries the engine rejects. It does not audit; the backend audits
+	// approval_issued.
 	SubmitHold(
 		ctx context.Context, key Key, o domain.Order, caller domain.Caller,
 	) (domain.Order, engine.HoldResult, error)
@@ -465,6 +474,9 @@ type Node interface {
 
 	// CountOrders returns the total number of orders recorded in the realm.
 	CountOrders(ctx context.Context) (int, error)
+
+	// CountActiveOrders returns orders in the working lifecycle set.
+	CountActiveOrders(ctx context.Context) (int, error)
 
 	// CountOrdersSince returns the number of orders recorded in the realm whose
 	// timestamp is at or after since.

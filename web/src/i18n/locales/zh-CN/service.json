@@ -16,6 +16,24 @@
     "build": "构建版本",
     "nonRelease": "非正式版本"
   },
+  "lifecycle": {
+    "title": "服务生命周期",
+    "warning": "重启或停止服务在没有管理员介入时可能不可逆。确认后，控制面板可能会立即断开连接。",
+    "restart": "重启服务",
+    "stop": "停止服务",
+    "confirm": {
+      "restart": {
+        "title": "重启服务？",
+        "description": "服务会将请求写入审计，排空当前连接，并使用相同参数重新启动。",
+        "confirm": "重启服务"
+      },
+      "stop": {
+        "title": "停止服务？",
+        "description": "服务将关闭，并且可能保持离线，直到管理员再次启动。",
+        "confirm": "停止服务"
+      }
+    }
+  },
   "engine": {
     "title": "引擎",
     "version": "版本",

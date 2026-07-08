@@ -85,7 +85,10 @@ function actionVariant(action: string): BadgeProps["variant"] {
     case "block":
     case "delete_limit":
     case "reset_database":
+    case "stop_service":
       return "danger";
+    case "restart_service":
+      return "warn";
     case "create_account":
     case "unblock":
       return "ok";

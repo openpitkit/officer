@@ -27,7 +27,9 @@ import {
   Layers,
   Lock,
   LockOpen,
+  Power,
   PlusCircle,
+  RefreshCw,
   ShieldOff,
   Sliders,
   Trash2,
@@ -170,6 +172,10 @@ export function auditActionMeta(action: string): AuditIconMeta {
 
   if (a === "reset_database")
     return { Icon: Trash2,           variant: "danger",  titleKey: "audit.action.resetDatabase" };
+  if (a === "restart_service")
+    return { Icon: RefreshCw,        variant: "warn",    titleKey: "audit.action.restartService" };
+  if (a === "stop_service")
+    return { Icon: Power,            variant: "danger",  titleKey: "audit.action.stopService" };
 
   // Policy / config and unknown — raw action string as fallback key.
   if (a.includes("policy") || a.includes("config"))

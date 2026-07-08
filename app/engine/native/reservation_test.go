@@ -160,9 +160,6 @@ func TestReserveHold_AcceptCapturesEstimate(t *testing.T) {
 	if gotSettle.Compare(wantSettle) != 0 {
 		t.Fatalf("lock settlement price %s != reported %s", prices[len(prices)-1], res.SettlementLockPrice)
 	}
-	if !res.ExpiresAt.After(time.Now()) {
-		t.Fatal("ReserveHold: expiry is not in the future")
-	}
 	if got := e.registrySize(); got != 1 {
 		t.Fatalf("registry size = %d, want 1", got)
 	}
@@ -259,244 +256,6 @@ func TestRollbackHeld_UnknownAndIdempotent(t *testing.T) {
 	}
 	if err := e.RollbackHeld(ctx, res.ApprovalID); err != nil {
 		t.Fatalf("idempotent RollbackHeld: %v", err)
-	}
-}
-
-func TestSweepExpired_AutoRollsBackAndConfirmConflicts(t *testing.T) {
-	e := newTestEngine(t)
-	ctx := context.Background()
-
-	res, err := e.ReserveHold(ctx, testOrder())
-	if err != nil || !res.Accepted {
-		t.Fatalf("ReserveHold: %v accepted=%v", err, res.Accepted)
-	}
-
-	e.sweepExpired(ctx, res.ExpiresAt.Add(time.Second))
-
-	if got := e.registrySize(); got != 0 {
-		t.Fatalf("registry size after sweep = %d, want 0", got)
-	}
-	if err := e.CommitHeld(ctx, res.ApprovalID); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("CommitHeld after sweep = %v, want ErrNotFound", err)
-	}
-	again, err := e.ReserveHold(ctx, testOrder())
-	if err != nil || !again.Accepted {
-		t.Fatalf("ReserveHold after sweep: %v accepted=%v", err, again.Accepted)
-	}
-}
-
-// TestSweepExpired_AtomicResolution proves the TTL sweeper resolves the durable
-// state through the store in ONE atomic ResolveOrderReservation call: the intent
-// flips to rolled_back, the order advances accepted->rolled_back, and a single
-// reservation_rolled_back event is appended together.
-func TestSweepExpired_AtomicResolution(t *testing.T) {
-	e := newTestEngine(t)
-	ctx := context.Background()
-	orderXID := testOrderXID(99)
-	store := &fakeReservationStore{
-		intents: make(map[string]domain.ReservationIntent),
-		// The held order starts accepted so the AllowedFrom={accepted} guard passes.
-		status: map[domain.ExternalID]domain.OrderStatus{orderXID: domain.OrderStatusAccepted},
-	}
-	e.SetReservationStore(store)
-
-	order := testOrder()
-	order.ExternalID = orderXID
-	res, err := e.ReserveHold(ctx, order)
-	if err != nil || !res.Accepted {
-		t.Fatalf("ReserveHold: %v accepted=%v", err, res.Accepted)
-	}
-
-	e.sweepExpired(ctx, res.ExpiresAt.Add(time.Second))
-
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	if store.resolveCalls != 1 {
-		t.Fatalf("ResolveOrderReservation calls = %d, want exactly 1 (atomic)", store.resolveCalls)
-	}
-	if got := store.intents[res.ApprovalID].State; got != domain.ReservationIntentStateRolledBack {
-		t.Fatalf("intent state = %q, want rolled_back", got)
-	}
-	if got := store.status[orderXID]; got != domain.OrderStatusRolledBack {
-		t.Fatalf("order status = %q, want rolled_back", got)
-	}
-	if len(store.events) != 1 || store.events[0].Type != domain.OrderEventReservationRolledBack {
-		t.Fatalf("events = %+v, want one reservation_rolled_back", store.events)
-	}
-}
-
-// recordingReservationStore wraps fakeReservationStore and records the names of
-// every ReservationStore method the sweeper invokes. It locks in the structural
-// fact that the TTL sweeper writes only through the ReservationStore and never
-// re-enters node code.
-type recordingReservationStore struct {
-	fakeReservationStore
-	calls []string
-}
-
-func (s *recordingReservationStore) record(name string) {
-	s.mu.Lock()
-	s.calls = append(s.calls, name)
-	s.mu.Unlock()
-}
-
-func (s *recordingReservationStore) UpsertReservationIntent(
-	ctx context.Context, intent domain.ReservationIntent,
-) error {
-	s.record("UpsertReservationIntent")
-	return s.fakeReservationStore.UpsertReservationIntent(ctx, intent)
-}
-
-func (s *recordingReservationStore) ListOpenReservationIntents(
-	ctx context.Context,
-) ([]domain.ReservationIntent, error) {
-	s.record("ListOpenReservationIntents")
-	return s.fakeReservationStore.ListOpenReservationIntents(ctx)
-}
-
-func (s *recordingReservationStore) ResolveOrderReservation(
-	ctx context.Context, r domain.ReservationResolution,
-) error {
-	s.record("ResolveOrderReservation")
-	return s.fakeReservationStore.ResolveOrderReservation(ctx, r)
-}
-
-// TestSweepExpired_ConcurrentWithResolveNoDeadlockSingleResolution races the TTL
-// sweeper against synchronous CommitHeld/RollbackHeld calls on a batch of held
-// reservations.
-func TestSweepExpired_ConcurrentWithResolveNoDeadlockSingleResolution(t *testing.T) {
-	e := newTestEngine(t)
-	ctx := context.Background()
-
-	first, err := e.ReserveHold(ctx, testOrder())
-	if err != nil || !first.Accepted {
-		t.Fatalf("first ReserveHold: %v accepted=%v", err, first.Accepted)
-	}
-	second, err := e.ReserveHold(ctx, testOrder())
-	if err != nil || !second.Accepted {
-		t.Fatalf("second ReserveHold: %v accepted=%v", err, second.Accepted)
-	}
-
-	sweepAt := first.ExpiresAt.Add(time.Second)
-	if second.ExpiresAt.Add(time.Second).After(sweepAt) {
-		sweepAt = second.ExpiresAt.Add(time.Second)
-	}
-
-	var wg sync.WaitGroup
-	wg.Add(3)
-	go func() { defer wg.Done(); e.sweepExpired(ctx, sweepAt) }()
-	go func() { defer wg.Done(); _ = e.CommitHeld(ctx, first.ApprovalID) }()
-	go func() { defer wg.Done(); _ = e.RollbackHeld(ctx, second.ApprovalID) }()
-
-	done := make(chan struct{})
-	go func() { wg.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("sweep raced with resolve deadlocked")
-	}
-
-	if got := e.registrySize(); got != 0 {
-		t.Fatalf("registry size after race = %d, want 0", got)
-	}
-	if err := e.CommitHeld(ctx, first.ApprovalID); !errors.Is(err, domain.ErrNotFound) &&
-		!errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("re-resolve first = %v, want ErrNotFound or ErrConflict", err)
-	}
-	if err := e.RollbackHeld(ctx, second.ApprovalID); err != nil &&
-		!errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("re-resolve second = %v, want nil or ErrNotFound", err)
-	}
-}
-
-// TestSweepExpired_WritesOnlyThroughReservationStore asserts the sweeper's
-// auto-rollback touches state exclusively via the ReservationStore.
-func TestSweepExpired_WritesOnlyThroughReservationStore(t *testing.T) {
-	e := newTestEngine(t)
-	ctx := context.Background()
-	orderXID := testOrderXID(7)
-	store := &recordingReservationStore{
-		fakeReservationStore: fakeReservationStore{
-			intents: make(map[string]domain.ReservationIntent),
-			status:  map[domain.ExternalID]domain.OrderStatus{orderXID: domain.OrderStatusAccepted},
-		},
-	}
-	e.SetReservationStore(store)
-
-	order := testOrder()
-	order.ExternalID = orderXID
-	res, err := e.ReserveHold(ctx, order)
-	if err != nil || !res.Accepted {
-		t.Fatalf("ReserveHold: %v accepted=%v", err, res.Accepted)
-	}
-
-	e.sweepExpired(ctx, res.ExpiresAt.Add(time.Second))
-
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	if len(store.calls) == 0 {
-		t.Fatal("sweep recorded no ReservationStore writes")
-	}
-	allowed := map[string]bool{
-		"UpsertReservationIntent":    true,
-		"ListOpenReservationIntents": true,
-		"ResolveOrderReservation":    true,
-	}
-	for _, name := range store.calls {
-		if !allowed[name] {
-			t.Fatalf("sweep invoked non-ReservationStore method %q", name)
-		}
-	}
-}
-
-// TestSweepExpired_RaceWithConfirmNoDoubleResolveNoClobber proves the sweeper's
-// store resolve is TOCTOU-safe against a confirm that already committed the order
-// durably.
-func TestSweepExpired_RaceWithConfirmNoDoubleResolveNoClobber(t *testing.T) {
-	e := newTestEngine(t)
-	ctx := context.Background()
-	orderXID := testOrderXID(42)
-	store := &fakeReservationStore{
-		intents: make(map[string]domain.ReservationIntent),
-		// The order was already committed durably (a confirm won); the held intent
-		// row still reads held until the winning resolution flips it.
-		status: map[domain.ExternalID]domain.OrderStatus{orderXID: domain.OrderStatusCommitted},
-	}
-	e.SetReservationStore(store)
-
-	order := testOrder()
-	order.ExternalID = orderXID
-	res, err := e.ReserveHold(ctx, order)
-	if err != nil || !res.Accepted {
-		t.Fatalf("ReserveHold: %v accepted=%v", err, res.Accepted)
-	}
-	store.mu.Lock()
-	store.intents[res.ApprovalID] = domain.ReservationIntent{
-		ApprovalID: res.ApprovalID,
-		Order:      orderXID,
-		State:      domain.ReservationIntentStateHeld,
-	}
-	store.mu.Unlock()
-
-	e.sweepExpired(ctx, res.ExpiresAt.Add(time.Second))
-
-	if got := e.registrySize(); got != 0 {
-		t.Fatalf("registry size after sweep = %d, want 0 (entry drained)", got)
-	}
-
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	if store.resolveCalls != 1 {
-		t.Fatalf("ResolveOrderReservation calls = %d, want exactly 1", store.resolveCalls)
-	}
-	if got := store.status[orderXID]; got != domain.OrderStatusCommitted {
-		t.Fatalf("order status = %q, want committed preserved (no clobber)", got)
-	}
-	if got := store.intents[res.ApprovalID].State; got != domain.ReservationIntentStateHeld {
-		t.Fatalf("intent state = %q, want held (conflict wrote nothing)", got)
-	}
-	if len(store.events) != 0 {
-		t.Fatalf("events = %+v, want none (conflict wrote nothing)", store.events)
 	}
 }
 
@@ -787,7 +546,10 @@ func TestSubmitOrder_AcceptCapturesSerializedLock(t *testing.T) {
 	}
 }
 
-func TestResolvedReservationsArePruned(t *testing.T) {
+// TestResolvedReservationRetainedForDoubleResolve proves the resolved-entry
+// guard survives without any TTL: a committed id is remembered so a second
+// commit is recognised as already-resolved (conflict), not unknown.
+func TestResolvedReservationRetainedForDoubleResolve(t *testing.T) {
 	e := newTestEngine(t)
 	ctx := context.Background()
 
@@ -802,17 +564,12 @@ func TestResolvedReservationsArePruned(t *testing.T) {
 	if len(e.registry.resolved) != 1 {
 		t.Fatalf("resolved len after commit = %d, want 1", len(e.registry.resolved))
 	}
-	for id, resolved := range e.registry.resolved {
-		resolved.expiresAt = time.Now().UTC().Add(-time.Second)
-		e.registry.resolved[id] = resolved
-	}
 	e.registry.mu.Unlock()
 
-	e.sweepExpired(ctx, time.Now().UTC())
-	e.registry.mu.Lock()
-	defer e.registry.mu.Unlock()
-	if len(e.registry.resolved) != 0 {
-		t.Fatalf("resolved len after prune = %d, want 0", len(e.registry.resolved))
+	// A repeated commit of the same id is a conflict, not ErrNotFound: the terminal
+	// outcome is retained for double-resolve detection.
+	if err := e.CommitHeld(ctx, res.ApprovalID); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("second CommitHeld = %v, want ErrConflict", err)
 	}
 }
 
@@ -977,19 +734,19 @@ func TestImmediateExecutionReport_VolumeSizing(t *testing.T) {
 	}
 }
 
-// fakeReservationStore is an in-memory ReservationStore for reconcile and
-// sweeper tests. It applies ResolveOrderReservation atomically against its own
-// maps keyed by the order's opaque external id: a single call flips the intent,
-// advances the order status, and records the events together. The status
-// WHERE-guard is honoured so a sweeper resolve that races a committed order
-// yields domain.ErrConflict and writes nothing, exactly like the real store.
+// fakeReservationStore is an in-memory ReservationStore for reconcile tests. It
+// applies ResolveOrderReservation atomically against its own maps keyed by the
+// order's opaque external id: a single call flips the intent, advances the order
+// status, and records the events together. The status WHERE-guard is honoured so
+// a resolve that races a committed order yields domain.ErrConflict and writes
+// nothing, exactly like the real store.
 type fakeReservationStore struct {
 	mu      sync.Mutex
 	intents map[string]domain.ReservationIntent
 	events  []domain.OrderEvent
 	status  map[domain.ExternalID]domain.OrderStatus
 	// resolveCalls counts ResolveOrderReservation invocations - the single atomic
-	// entry point the sweeper/confirm/cancel paths use.
+	// entry point the confirm/cancel paths use.
 	resolveCalls int
 }
 

@@ -22,7 +22,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.openpit.dev/officer/framework/domain"
@@ -260,7 +259,7 @@ func (s *guardSource) SubmitOrderToken(
 	domain.Order,
 	string,
 ) (SubmitOrderTokenResult, error) {
-	return SubmitOrderTokenResult{ExpiresAt: time.Now()}, nil
+	return SubmitOrderTokenResult{}, nil
 }
 
 func (s *guardSource) ConfirmExecution(

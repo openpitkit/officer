@@ -243,7 +243,6 @@ beforeEach(async () => {
     approval: {
       token: "hold-token",
       keyId: "key-1",
-      expiresAt: "",
       orderExternalId: sampleOrder.externalId,
     },
   });
@@ -436,6 +435,154 @@ async function openDialog(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getAllByRole("button", { name: /add order/i })[0]);
   return screen.findByRole("dialog");
 }
+
+describe("Orders status filter", () => {
+  it("has no status filter by default and applies the active set on the quick button", async () => {
+    const user = userEvent.setup();
+    renderOrders("/orders");
+
+    // No status is sent until a filter is chosen.
+    await waitFor(() => expect(lastOrderFilters()).toBeDefined());
+    expect(lastOrderFilters()).not.toHaveProperty("status");
+
+    await user.click(screen.getByRole("button", { name: /^active$/i }));
+
+    await waitFor(() =>
+      expect(lastOrderFilters()).toEqual(
+        expect.objectContaining({
+          status: "submitted,accepted,partially_filled",
+        }),
+      ),
+    );
+    expect(screen.getByText(/active filters/i)).toBeInTheDocument();
+    // The Active quick set is a shorthand, so it is not surfaced as an
+    // advanced-filter chip.
+    expect(screen.queryByText(/status:/i)).not.toBeInTheDocument();
+  });
+
+  it("clears the status filter with the All quick button", async () => {
+    const user = userEvent.setup();
+    renderOrders("/orders?status=submitted,accepted,partially_filled");
+
+    await waitFor(() =>
+      expect(lastOrderFilters()).toEqual(
+        expect.objectContaining({
+          status: "submitted,accepted,partially_filled",
+        }),
+      ),
+    );
+
+    await user.click(screen.getByRole("button", { name: /^all$/i }));
+
+    await waitFor(() => expect(lastOrderFilters()).not.toHaveProperty("status"));
+  });
+
+  it("opens the advanced status draft with every status selected for All orders", async () => {
+    const user = userEvent.setup();
+    renderOrders("/orders");
+
+    await user.click(screen.getByRole("button", { name: /more filters/i }));
+    const dialog = screen.getByRole("dialog", { name: /more filters/i });
+
+    for (const checkbox of within(dialog).getAllByRole("checkbox")) {
+      expect(checkbox).toBeChecked();
+    }
+  });
+
+  it("does not allow applying an empty advanced status set", async () => {
+    const user = userEvent.setup();
+    renderOrders("/orders");
+
+    await user.click(screen.getByRole("button", { name: /more filters/i }));
+    const dialog = screen.getByRole("dialog", { name: /more filters/i });
+    await user.click(
+      within(dialog).getAllByRole("button", { name: /clear all/i })[0],
+    );
+
+    expect(
+      within(dialog).getByRole("button", { name: /apply advanced filter/i }),
+    ).toBeDisabled();
+    expect(lastOrderFilters()).not.toHaveProperty("status");
+  });
+
+  it("applies a custom status subset from the advanced dialog and shows it as a chip", async () => {
+    const user = userEvent.setup();
+    renderOrders("/orders");
+
+    await user.click(screen.getByRole("button", { name: /more filters/i }));
+    const dialog = screen.getByRole("dialog", { name: /more filters/i });
+    await user.click(
+      within(dialog).getAllByRole("button", { name: /clear all/i })[0],
+    );
+    await user.click(within(dialog).getByRole("checkbox", { name: "Filled" }));
+    await user.click(
+      within(dialog).getByRole("button", { name: /apply advanced filter/i }),
+    );
+
+    await waitFor(() =>
+      expect(lastOrderFilters()).toEqual(
+        expect.objectContaining({ status: "filled" }),
+      ),
+    );
+    // A genuine custom subset (not All or Active) is surfaced as a chip.
+    expect(screen.getByText(/status: Filled/i)).toBeInTheDocument();
+  });
+
+  it("selects the whole active group from the advanced group controls", async () => {
+    const user = userEvent.setup();
+    renderOrders("/orders");
+
+    await user.click(screen.getByRole("button", { name: /more filters/i }));
+    const dialog = screen.getByRole("dialog", { name: /more filters/i });
+    await user.click(
+      within(dialog).getAllByRole("button", { name: /clear all/i })[0],
+    );
+    await user.click(
+      within(dialog).getAllByRole("button", { name: /select all/i })[1],
+    );
+    await user.click(
+      within(dialog).getByRole("button", { name: /apply advanced filter/i }),
+    );
+
+    await waitFor(() =>
+      expect(lastOrderFilters()).toEqual(
+        expect.objectContaining({
+          status: "submitted,accepted,partially_filled",
+        }),
+      ),
+    );
+    // Equal to the Active quick set, so no status chip is shown.
+    expect(screen.getByText(/active filters/i)).toBeInTheDocument();
+    expect(screen.queryByText(/status:/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^active$/i })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("normalizes the full advanced status set to the All quick filter", async () => {
+    const user = userEvent.setup();
+    renderOrders("/orders");
+
+    await user.click(screen.getByRole("button", { name: /more filters/i }));
+    const dialog = screen.getByRole("dialog", { name: /more filters/i });
+    await user.click(
+      within(dialog).getAllByRole("button", { name: /select all/i })[0],
+    );
+    await user.click(
+      within(dialog).getByRole("button", { name: /apply advanced filter/i }),
+    );
+
+    await waitFor(() =>
+      expect(lastOrderFilters()).not.toHaveProperty("status"),
+    );
+    expect(screen.queryByText(/active filters/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^all$/i })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+});
 
 describe("Orders side & amount-kind toggles", () => {
   it("renders side as buy/sell radio buttons without a default selection", async () => {
@@ -733,7 +880,6 @@ describe("Orders held-order confirm/cancel", () => {
       approval: {
         token: "hold-token",
         keyId: "key-1",
-        expiresAt: "",
         orderExternalId: terminalOrder.externalId,
       },
     });
@@ -971,7 +1117,6 @@ describe("Order detail per-event verification", () => {
         requestType: "execution_report",
         mode: "immediate",
         issuedAt: "2026-06-24T11:08:00Z",
-        expiresAt: "2036-06-24T00:00:00Z",
         signed: true,
       },
       request: null,
@@ -1491,9 +1636,9 @@ describe("Execution report status-driven fields", () => {
 });
 
 describe("Orders filter, debounce, sort and pagination", () => {
-  it("applies an identity filter only after Enter", () => {
+  it("applies an identity filter only after Enter", async () => {
     vi.useFakeTimers();
-    fetchAccountsMock.mockReturnValueOnce(new Promise(() => {}));
+    fetchAccountsMock.mockResolvedValueOnce([{ code: "desk-zeta" }]);
     renderOrders("/orders");
 
     const accountInput = screen.getByPlaceholderText(/filter by account/i);
@@ -1510,15 +1655,20 @@ describe("Orders filter, debounce, sort and pagination", () => {
       orderFilterWasRequested((f) => f.account === "desk-zeta"),
     ).toBe(false);
 
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(1);
+      await Promise.resolve();
     });
+    expect(
+      screen.getByRole("option", { name: "desk-zeta" }),
+    ).toBeInTheDocument();
     expect(
       orderFilterWasRequested((f) => f.account === "desk-zeta"),
     ).toBe(false);
 
     act(() => {
       fireEvent.keyDown(accountInput, { key: "Enter" });
+      vi.runOnlyPendingTimers();
     });
     expect(
       orderFilterWasRequested((f) => f.account === "desk-zeta"),
@@ -1536,6 +1686,45 @@ describe("Orders filter, debounce, sort and pagination", () => {
     await waitFor(() =>
       expect(lastOrderFilters()).toEqual(
         expect.objectContaining({ account: "desk-alpha" }),
+      ),
+    );
+  });
+
+  it("applies the first order account suggestion on Enter", async () => {
+    const user = userEvent.setup();
+    fetchAccountsMock.mockResolvedValueOnce([{ code: "desk-alpha" }]);
+    renderOrders("/orders");
+
+    await user.type(screen.getByPlaceholderText(/filter by account/i), "DES");
+    await screen.findByRole("option", { name: "desk-alpha" });
+    await user.keyboard("{Enter}");
+
+    await waitFor(() =>
+      expect(lastOrderFilters()).toEqual(
+        expect.objectContaining({ account: "desk-alpha" }),
+      ),
+    );
+  });
+
+  it("applies all edited order identity filters when Enter accepts a suggestion", async () => {
+    const user = userEvent.setup();
+    fetchAssetsMock.mockResolvedValueOnce([{ code: "AAPL" }]);
+    renderOrders("/orders");
+
+    await user.type(
+      screen.getByPlaceholderText(/filter by account/i),
+      "desk-alpha",
+    );
+    await user.type(screen.getByPlaceholderText("Base"), "AA");
+    await screen.findByRole("option", { name: "AAPL" });
+    await user.keyboard("{Enter}");
+
+    await waitFor(() =>
+      expect(lastOrderFilters()).toEqual(
+        expect.objectContaining({
+          account: "desk-alpha",
+          baseAsset: "AAPL",
+        }),
       ),
     );
   });

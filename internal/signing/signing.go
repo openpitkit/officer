@@ -70,16 +70,25 @@ type Store interface {
 	SetSigningConfig(ctx context.Context, key, value string) error
 }
 
+// maxUsedNonces bounds the single-use replay set. A held-reservation resolution
+// or immediate submit each consume one nonce; the cap keeps recent nonces for
+// replay detection while bounding memory over an unbounded run. Eviction is FIFO
+// (oldest inserted first) once the cap is exceeded.
+const maxUsedNonces = 1 << 16
+
 // Service signs and verifies approval tokens against the persisted key set. The
 // active keypair is cached in memory; the cache is refreshed whenever a key is
 // generated or imported. A nil active key means no key is configured yet.
 type Service struct {
 	store Store
 
-	mu         sync.RWMutex
-	active     *domain.SigningKey // PrivateKey populated; nil when none
-	signKey    ed25519.PrivateKey // expanded from active seed; nil when none
-	usedNonces map[string]time.Time
+	mu      sync.RWMutex
+	active  *domain.SigningKey // PrivateKey populated; nil when none
+	signKey ed25519.PrivateKey // expanded from active seed; nil when none
+	// usedNonces is the single-use replay set; nonceOrder records insertion order
+	// so the oldest entry is evicted first once maxUsedNonces is reached.
+	usedNonces map[string]struct{}
+	nonceOrder []string
 }
 
 var _ fwsigning.Service = (*Service)(nil)
@@ -96,7 +105,7 @@ type Envelope struct {
 // New constructs a Service backed by st and loads the active key (if any) into
 // the in-memory cache.
 func New(st Store) (*Service, error) {
-	s := &Service{store: st, usedNonces: make(map[string]time.Time)}
+	s := &Service{store: st, usedNonces: make(map[string]struct{})}
 	if err := s.reloadActive(context.Background()); err != nil {
 		return nil, err
 	}
@@ -266,9 +275,8 @@ func SignNone(payload domain.ApprovalPayload) (string, error) {
 }
 
 // Verify decodes the token, recomputes its canonical bytes, verifies the
-// signature when alg is ed25519, re-binds the bound order params against expect,
-// and enforces expiry. For alg "none" the signature step is skipped; binding and
-// expiry still apply.
+// signature when alg is ed25519, and re-binds the bound order params against
+// expect. For alg "none" the signature step is skipped; binding still applies.
 func (s *Service) Verify(
 	ctx context.Context, token string, expect fwsigning.VerifyParams,
 ) (fwsigning.VerifyResult, error) {
@@ -309,7 +317,7 @@ func (s *Service) Verify(
 		if !off {
 			return fwsigning.VerifyResult{}, fmt.Errorf("signing: unsigned token rejected while eSign is enabled: %w", domain.ErrInvalid)
 		}
-		// eSign-off: no signature, binding+expiry still enforced.
+		// eSign-off: no signature, binding still enforced.
 	default:
 		return fwsigning.VerifyResult{}, fmt.Errorf("signing: unsupported alg %q: %w", env.Approval.Alg, domain.ErrInvalid)
 	}
@@ -319,26 +327,17 @@ func (s *Service) Verify(
 	if err := rebind(env.Approval, expect); err != nil {
 		return fwsigning.VerifyResult{}, err
 	}
-	now := expect.Now
-	if now.IsZero() {
-		now = time.Now().UTC()
-	}
-	expiresAt, err := time.Parse(time.RFC3339Nano, env.Approval.ExpiresAt)
-	if err != nil {
-		return fwsigning.VerifyResult{}, fmt.Errorf("signing: parse expiresAt: %w", domain.ErrInvalid)
-	}
-	if now.After(expiresAt) {
-		return fwsigning.VerifyResult{}, fmt.Errorf("signing: token expired at %s: %w", env.Approval.ExpiresAt, domain.ErrInvalid)
-	}
-	if err := s.consumeImmediateNonce(env.Approval, expiresAt, now); err != nil {
+	if err := s.consumeImmediateNonce(env.Approval); err != nil {
 		return fwsigning.VerifyResult{}, err
 	}
 	return fwsigning.VerifyResult{Payload: env.Approval, Signed: signed}, nil
 }
 
-func (s *Service) consumeImmediateNonce(
-	payload domain.ApprovalPayload, expiresAt, now time.Time,
-) error {
+// consumeImmediateNonce enforces single-use replay protection for an immediate
+// token: the (approvalID, nonce) pair may be verified at most once. The used set
+// is bounded to maxUsedNonces with FIFO eviction, so replay protection holds
+// without any time-based expiry; a repeated pair still in the set is a conflict.
+func (s *Service) consumeImmediateNonce(payload domain.ApprovalPayload) error {
 	if payload.Mode != "immediate" {
 		return nil
 	}
@@ -348,15 +347,16 @@ func (s *Service) consumeImmediateNonce(
 	key := payload.ApprovalID + ":" + payload.Nonce
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for used, until := range s.usedNonces {
-		if !until.After(now) {
-			delete(s.usedNonces, used)
-		}
-	}
 	if _, ok := s.usedNonces[key]; ok {
 		return fmt.Errorf("signing: nonce replay for approval %q: %w", payload.ApprovalID, domain.ErrConflict)
 	}
-	s.usedNonces[key] = expiresAt
+	if len(s.nonceOrder) >= maxUsedNonces {
+		oldest := s.nonceOrder[0]
+		s.nonceOrder = s.nonceOrder[1:]
+		delete(s.usedNonces, oldest)
+	}
+	s.usedNonces[key] = struct{}{}
+	s.nonceOrder = append(s.nonceOrder, key)
 	return nil
 }
 

@@ -301,14 +301,12 @@ func TestSetSigningConfig_HappyPath(t *testing.T) {
 // so the returned id is the one the caller supplied — and it is the id a later
 // confirm resolves, proving submit created exactly one order.
 func TestSubmitOrderToken_HappyPath(t *testing.T) {
-	exp := time.Now().UTC().Add(2 * time.Minute)
 	supplied := extID("order-1").String()
 	svc := &fakeService{
 		approvalToken: backend.ApprovalToken{
-			Token:     "eyJhbHQ...",
-			KeyID:     "key-1",
-			ExpiresAt: exp,
-			Signed:    true,
+			Token:  "eyJhbHQ...",
+			KeyID:  "key-1",
+			Signed: true,
 		},
 	}
 	body, _ := json.Marshal(map[string]any{
@@ -360,6 +358,57 @@ func TestSubmitOrderToken_HappyPath(t *testing.T) {
 	ord, _ := confM["order"].(map[string]any)
 	if ord["externalId"] != supplied {
 		t.Errorf("confirm resolved a different order: want %s, got %v", supplied, ord["externalId"])
+	}
+}
+
+func TestSubmitOrderToken_RiskRejectReturnsSignedDecision(t *testing.T) {
+	supplied := extID("order-reject").String()
+	svc := &fakeService{
+		approvalToken: backend.ApprovalToken{
+			Token:           "reject-envelope",
+			KeyID:           "key-1",
+			OrderExternalID: supplied,
+			Verdict:         "reject",
+			Reasons: []domain.OrderReject{{
+				Code:   "insufficient_funds",
+				Scope:  "account",
+				Policy: "spot_funds",
+				Reason: "available funds below required amount",
+			}},
+			Signed: true,
+		},
+	}
+	body, _ := json.Marshal(map[string]any{
+		"externalId":  supplied,
+		"account":     "acc-1",
+		"baseAsset":   "BTC",
+		"quoteAsset":  "USDT",
+		"side":        "buy",
+		"amountKind":  "quantity",
+		"amountValue": "1",
+		"mode":        "hold",
+	})
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec,
+		httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit", bytes.NewReader(body)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	m := bodyMap(t, rec.Result())
+	if m["token"] != "reject-envelope" || m["verdict"] != "reject" {
+		t.Fatalf("reject response = %v", m)
+	}
+	reasons, ok := m["reasons"].([]any)
+	if !ok || len(reasons) != 1 {
+		t.Fatalf("want one reject reason, got %v", m["reasons"])
+	}
+	reason, _ := reasons[0].(map[string]any)
+	if reason["code"] != "insufficient_funds" || reason["reason"] == "" {
+		t.Fatalf("reject reason not on wire: %v", reason)
 	}
 }
 

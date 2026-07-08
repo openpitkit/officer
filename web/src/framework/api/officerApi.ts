@@ -233,9 +233,23 @@ function normalizeAccount(v: unknown): Account {
   const o = isObject(v) ? v : {};
   const code = asString(pick(o, "code", "Code", "id", "Id", "ID"));
   const title = asString(pick(o, "title", "Title"));
+  const cascadeValue = pick(o, "currencyCascade", "CurrencyCascade");
+  const cascade = isObject(cascadeValue) ? cascadeValue : {};
   return {
     code,
     title,
+    currency: asString(pick(o, "currency", "Currency")),
+    effectiveCurrency: asString(
+      pick(o, "effectiveCurrency", "EffectiveCurrency", "effective_currency"),
+    ),
+    currencyOrigin: asString(
+      pick(o, "currencyOrigin", "CurrencyOrigin", "currency_origin"),
+    ),
+    currencyCascade: {
+      account: asString(pick(cascade, "account", "Account")),
+      group: asString(pick(cascade, "group", "Group")),
+      default: asString(pick(cascade, "default", "Default")),
+    },
     blocked: asBool(pick(o, "blocked", "Blocked")),
     blockReason: asString(pick(o, "blockReason", "BlockReason", "block_reason")),
     group: asString(pick(o, "group", "Group")),
@@ -250,7 +264,8 @@ function normalizeGroup(v: unknown): Group {
   const title = asString(pick(o, "title", "Title"));
   return {
     code,
-    title: title || code,
+    title,
+    currency: asString(pick(o, "currency", "Currency")),
     notes: asString(pick(o, "notes", "Notes")),
     blocked: asBool(pick(o, "blocked", "Blocked")),
     blockReason: asString(pick(o, "blockReason", "BlockReason", "block_reason")),
@@ -903,6 +918,7 @@ function normalizeOverview(v: unknown): Overview {
       groups: groupsTotal,
       groupsActive: typeof groupsActiveRaw === "number" ? asInt(groupsActiveRaw) : groupsTotal,
       limits: asInt(pick(counts, "limits", "Limits")),
+      ordersActive: asInt(pick(counts, "ordersActive", "OrdersActive", "orders_active")),
       ordersToday: asInt(pick(counts, "ordersToday", "OrdersToday", "orders_today")),
       ordersTotal: asInt(pick(counts, "ordersTotal", "OrdersTotal", "orders_total")),
     },
@@ -1482,6 +1498,16 @@ async function fetchServiceLogs(client: ApiClient,
   return normalizeServiceLogs(await client.request(`${client.baseUrl}/service/logs`, { signal }));
 }
 
+/** POST /service/restart - request service process restart. */
+async function restartService(client: ApiClient): Promise<void> {
+  await client.request(`${client.baseUrl}/service/restart`, { method: "POST" });
+}
+
+/** POST /service/stop - request graceful process shutdown. */
+async function stopService(client: ApiClient): Promise<void> {
+  await client.request(`${client.baseUrl}/service/stop`, { method: "POST" });
+}
+
 function businessCsvFilters(
   filters?: BusinessCsvExportFilters,
 ): BusinessCsvExportFilters {
@@ -1780,10 +1806,15 @@ async function fetchAccounts(
 }
 
 /** POST /accounts. */
-async function createAccount(client: ApiClient, code: string): Promise<Account> {
+async function createAccount(
+  client: ApiClient,
+  code: string,
+  title = "",
+  currency = "",
+): Promise<Account> {
   const v = await client.request(`${client.baseUrl}/accounts`, {
     method: "POST",
-    body: { code },
+    body: { code, title, currency },
   });
   const o = isObject(v) ? v : {};
   return normalizeAccount(pick(o, "account", "Account"));
@@ -1858,6 +1889,20 @@ async function setAccountGroup(client: ApiClient,
   return normalizeAccount(pick(o, "account", "Account"));
 }
 
+/** PUT /accounts/{code}/currency. Returns the updated account. */
+async function setAccountCurrency(
+  client: ApiClient,
+  code: string,
+  currency: string,
+): Promise<Account> {
+  const v = await client.request(`${client.baseUrl}/accounts/${encode(code)}/currency`, {
+    method: "PUT",
+    body: { currency },
+  });
+  const o = isObject(v) ? v : {};
+  return normalizeAccount(pick(o, "account", "Account"));
+}
+
 /** PUT /accounts/{code}/notes. Returns the updated account. */
 async function setAccountNotes(client: ApiClient, 
   code: string,
@@ -1905,10 +1950,11 @@ async function createGroup(client: ApiClient,
   code: string,
   title: string,
   notes: string,
+  currency = "",
 ): Promise<Group> {
   const v = await client.request(`${client.baseUrl}/groups`, {
     method: "POST",
-    body: { code, title, notes },
+    body: { code, title, notes, currency },
   });
   const o = isObject(v) ? v : {};
   return normalizeGroup(pick(o, "group", "Group"));
@@ -1940,6 +1986,33 @@ async function fetchGroupState(client: ApiClient,
     group: normalizeGroup(pick(o, "group", "Group")),
     accounts: normalizeArray(pick(o, "accounts", "Accounts"), normalizeAccount),
   };
+}
+
+/** PUT /groups/{code}/currency. Returns the updated group. */
+async function setGroupCurrency(
+  client: ApiClient,
+  code: string,
+  currency: string,
+): Promise<Group> {
+  const v = await client.request(`${client.baseUrl}/groups/${encode(code)}/currency`, {
+    method: "PUT",
+    body: { currency },
+  });
+  const o = isObject(v) ? v : {};
+  return normalizeGroup(pick(o, "group", "Group"));
+}
+
+/** PUT /groups/-/default/currency. Returns the default group row. */
+async function setDefaultGroupCurrency(
+  client: ApiClient,
+  currency: string,
+): Promise<Group> {
+  const v = await client.request(`${client.baseUrl}/groups/-/default/currency`, {
+    method: "PUT",
+    body: { currency },
+  });
+  const o = isObject(v) ? v : {};
+  return normalizeGroup(pick(o, "group", "Group"));
 }
 
 /** PUT /groups/{code}/notes. Returns the updated group. */
@@ -2386,16 +2459,27 @@ export interface CreateOrderResult {
 
 function normalizeApprovalToken(v: unknown): ApprovalToken {
   const response = isObject(v) ? v : {};
-  const wrapped = pick(response, "approval", "Approval");
+  const wrapped = pick(
+    response,
+    "approval",
+    "Approval",
+    "submitResponse",
+    "SubmitResponse",
+  );
   const o = isObject(wrapped) ? wrapped : response;
   return {
     token: asString(pick(o, "token", "Token")),
     keyId: asString(pick(o, "keyId", "KeyId", "key_id")),
-    expiresAt: asString(pick(o, "expiresAt", "ExpiresAt", "expires_at")),
     orderExternalId: asString(
       pick(o, "orderExternalId", "OrderExternalId", "order_external_id"),
     ),
+    verdict: normalizeSubmitVerdict(pick(o, "verdict", "Verdict")),
+    reasons: normalizeArray(pick(o, "reasons", "Reasons"), normalizeCheckReject),
   };
+}
+
+function normalizeSubmitVerdict(v: unknown): ApprovalToken["verdict"] {
+  return v === "accept" || v === "reject" ? v : "";
 }
 
 function minimalCreatedOrder(
@@ -2629,10 +2713,11 @@ function normalizeApprovalTokenResponse(v: unknown): ApprovalTokenResponse | nul
   return {
     token: asString(pick(v, "token", "Token")),
     keyId: asString(pick(v, "keyId", "KeyId", "key_id")),
-    expiresAt: asString(pick(v, "expiresAt", "ExpiresAt", "expires_at")),
     orderExternalId: asString(
       pick(v, "orderExternalId", "OrderExternalId", "order_external_id"),
     ),
+    verdict: normalizeSubmitVerdict(pick(v, "verdict", "Verdict")),
+    reasons: normalizeArray(pick(v, "reasons", "Reasons"), normalizeCheckReject),
   };
 }
 
@@ -2660,7 +2745,6 @@ function normalizeEventAttestation(v: unknown): EventAttestation | null {
     ),
     mode: asString(pick(v, "mode", "Mode")),
     issuedAt: asString(pick(v, "issuedAt", "IssuedAt", "issued_at")),
-    expiresAt: asString(pick(v, "expiresAt", "ExpiresAt", "expires_at")),
     signed: asBool(pick(v, "signed", "Signed")),
   };
 }
@@ -3355,6 +3439,8 @@ export function createOfficerApi(client: ApiClient) {
     searchMarketDataSymbols: bind(searchMarketDataSymbols),
     fetchServiceInfo: bind(fetchServiceInfo),
     fetchServiceLogs: bind(fetchServiceLogs),
+    restartService: bind(restartService),
+    stopService: bind(stopService),
     exportBusinessCsv: bind(exportBusinessCsv),
     previewBusinessCsvImport: bind(previewBusinessCsvImport),
     importBusinessCsv: bind(importBusinessCsv),
@@ -3370,12 +3456,15 @@ export function createOfficerApi(client: ApiClient) {
     blockAccount: bind(blockAccount),
     unblockAccount: bind(unblockAccount),
     setAccountGroup: bind(setAccountGroup),
+    setAccountCurrency: bind(setAccountCurrency),
     setAccountNotes: bind(setAccountNotes),
     fetchGroupsPage: bind(fetchGroupsPage),
     fetchGroups: bind(fetchGroups),
     createGroup: bind(createGroup),
     updateGroup: bind(updateGroup),
     fetchGroupState: bind(fetchGroupState),
+    setGroupCurrency: bind(setGroupCurrency),
+    setDefaultGroupCurrency: bind(setDefaultGroupCurrency),
     setGroupNotes: bind(setGroupNotes),
     blockGroup: bind(blockGroup),
     unblockGroup: bind(unblockGroup),

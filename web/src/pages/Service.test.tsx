@@ -15,14 +15,18 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithApi as render } from "@/test/apiClient";
 import { I18nextProvider } from "react-i18next";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import i18n from "@/i18n";
-import { BackupCard, DatabaseCard } from "@/pages/Service";
+import {
+  BackupCard,
+  DatabaseCard,
+  ServiceLifecycleCard,
+} from "@/pages/Service";
 
 const exportBackupMock = vi.fn();
 const resetDatabaseMock = vi.fn();
@@ -57,6 +61,21 @@ function renderDatabaseCard(onReset = vi.fn()) {
     },
   );
   return onReset;
+}
+
+function renderServiceLifecycleCard(
+  onAction = vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+) {
+  render(
+    <I18nextProvider i18n={i18n}>
+      <ServiceLifecycleCard
+        busyAction={null}
+        error={null}
+        onAction={onAction}
+      />
+    </I18nextProvider>,
+  );
+  return onAction;
 }
 
 function backupFile(name: string, body: string, type = "application/json") {
@@ -322,5 +341,35 @@ describe("DatabaseCard", () => {
     });
     expect(onReset).toHaveBeenCalledTimes(1);
     expect(screen.getByText("Database reset.")).toBeInTheDocument();
+  });
+});
+
+describe("ServiceLifecycleCard", () => {
+  it("confirms before requesting a service restart", async () => {
+    const user = userEvent.setup();
+    const onAction = renderServiceLifecycleCard();
+
+    await user.click(screen.getByRole("button", { name: "Restart service" }));
+    expect(onAction).not.toHaveBeenCalled();
+
+    await user.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", {
+        name: "Restart service",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(onAction).toHaveBeenCalledWith("restart");
+    });
+  });
+
+  it("cancels service stop without calling the action", async () => {
+    const user = userEvent.setup();
+    const onAction = renderServiceLifecycleCard();
+
+    await user.click(screen.getByRole("button", { name: "Stop service" }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(onAction).not.toHaveBeenCalled();
   });
 });

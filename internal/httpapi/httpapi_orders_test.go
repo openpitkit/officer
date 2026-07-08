@@ -293,7 +293,6 @@ func TestGetOrder_EventAttestationReadBack(t *testing.T) {
 					RequestType: domain.AttestationRequestSubmit,
 					Mode:        "immediate",
 					IssuedAt:    "2026-06-11T10:00:00Z",
-					ExpiresAt:   "2026-06-11T10:02:00Z",
 				},
 			},
 		},

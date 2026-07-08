@@ -206,7 +206,6 @@ func TestRealmSweep_ExternalIDAndCodeInvariants(t *testing.T) {
 		RequestType: domain.AttestationRequestSubmit,
 		Mode:        "immediate",
 		IssuedAt:    "2026-06-26T10:00:00Z",
-		ExpiresAt:   "2026-06-26T10:05:00Z",
 	}); err != nil {
 		t.Fatalf("PutEventAttestation: %v", err)
 	}
@@ -407,7 +406,6 @@ func TestCascadeMatrix_AssetDeleteCascadesOrdersAndTrades(t *testing.T) {
 		RequestType: domain.AttestationRequestSubmit,
 		Mode:        "immediate",
 		IssuedAt:    "2026-06-26T10:00:00Z",
-		ExpiresAt:   "2026-06-26T10:05:00Z",
 	}); err != nil {
 		t.Fatalf("PutEventAttestation: %v", err)
 	}

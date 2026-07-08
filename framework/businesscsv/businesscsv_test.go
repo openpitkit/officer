@@ -34,8 +34,14 @@ import (
 func TestEncodeDecodeGroups(t *testing.T) {
 	t.Parallel()
 	groups := []domain.AccountGroup{
-		{Code: "desk-a", Title: "Desk A", Notes: "note one", Blocked: false},
-		{Code: "desk-b", Title: "Desk B", Notes: "", Blocked: true, BlockReason: "compliance hold"},
+		{
+			Code: "desk-a", Title: "Desk A", Currency: "USD",
+			Notes: "note one", Blocked: false,
+		},
+		{
+			Code: "desk-b", Title: "Desk B", Notes: "",
+			Blocked: true, BlockReason: "compliance hold",
+		},
 	}
 	body, err := businesscsv.EncodeGroups(groups, businesscsv.DelimiterComma)
 	if err != nil {
@@ -49,12 +55,29 @@ func TestEncodeDecodeGroups(t *testing.T) {
 		t.Fatalf("want 2 groups, got %d", len(rows.Groups))
 	}
 	g := rows.Groups[0]
-	if g.Code != "desk-a" || g.Title != "Desk A" || g.Notes != "note one" || g.Blocked {
+	if g.Code != "desk-a" || g.Title != "Desk A" || g.Currency != "USD" ||
+		g.Notes != "note one" || g.Blocked {
 		t.Errorf("group[0] = %+v", g)
 	}
 	g = rows.Groups[1]
-	if g.Code != "desk-b" || g.Title != "Desk B" || !g.Blocked || g.BlockReason != "compliance hold" {
+	if g.Code != "desk-b" || g.Title != "Desk B" || g.Currency != "" ||
+		!g.Blocked || g.BlockReason != "compliance hold" {
 		t.Errorf("group[1] = %+v", g)
+	}
+}
+
+func TestParseGroups_LegacyHeaderDefaultsCurrency(t *testing.T) {
+	t.Parallel()
+	csv := "code,title,notes,blocked,block_reason\ndesk-a,Desk A,note,false,\n"
+	rows, err := businesscsv.ParseImport(
+		businesscsv.EntityAccountGroups, []byte(csv), businesscsv.DelimiterComma,
+	)
+	if err != nil {
+		t.Fatalf("ParseImport: %v", err)
+	}
+	if len(rows.Groups) != 1 || rows.Groups[0].Currency != "" ||
+		rows.Groups[0].Notes != "note" {
+		t.Fatalf("groups = %+v", rows.Groups)
 	}
 }
 
@@ -74,7 +97,10 @@ func TestParseGroups_EmptyCode(t *testing.T) {
 func TestEncodeDecodeAccounts(t *testing.T) {
 	t.Parallel()
 	accounts := []domain.Account{
-		{Code: "acc-1", Title: "Desk A One", GroupCode: "desk-a", Notes: "note"},
+		{
+			Code: "acc-1", Title: "Desk A One", GroupCode: "desk-a",
+			Currency: "USD", Notes: "note",
+		},
 		{Code: "acc-2", GroupCode: "", Notes: "", Blocked: true, BlockReason: "kyc"},
 	}
 	body, err := businesscsv.EncodeAccounts(accounts, businesscsv.DelimiterComma)
@@ -92,13 +118,29 @@ func TestEncodeDecodeAccounts(t *testing.T) {
 	}
 	a := rows.Accounts[0]
 	if a.Code != "acc-1" || a.Title != "Desk A One" || a.GroupCode != "desk-a" ||
-		a.Notes != "note" || a.Blocked {
+		a.Currency != "USD" || a.Notes != "note" || a.Blocked {
 		t.Errorf("account[0] = %+v", a)
 	}
 	a = rows.Accounts[1]
-	if a.Code != "acc-2" || a.Title != "" || a.GroupCode != "" || !a.Blocked ||
-		a.BlockReason != "kyc" {
+	if a.Code != "acc-2" || a.Title != "" || a.GroupCode != "" ||
+		a.Currency != "" || !a.Blocked || a.BlockReason != "kyc" {
 		t.Errorf("account[1] = %+v", a)
+	}
+}
+
+func TestParseAccounts_LegacyHeaderDefaultsCurrency(t *testing.T) {
+	t.Parallel()
+	csv := "code,title,group_code,notes,blocked,block_reason\n" +
+		"acc-1,Desk A One,desk-a,note,false,\n"
+	rows, err := businesscsv.ParseImport(
+		businesscsv.EntityAccounts, []byte(csv), businesscsv.DelimiterComma,
+	)
+	if err != nil {
+		t.Fatalf("ParseImport: %v", err)
+	}
+	if len(rows.Accounts) != 1 || rows.Accounts[0].Currency != "" ||
+		rows.Accounts[0].Notes != "note" {
+		t.Fatalf("accounts = %+v", rows.Accounts)
 	}
 }
 

@@ -35,6 +35,7 @@ function overviewResponse(): Response {
         groups: 0,
         groupsActive: 0,
         limits: 0,
+        ordersActive: 0,
         ordersToday: 0,
         ordersTotal: 0,
       },

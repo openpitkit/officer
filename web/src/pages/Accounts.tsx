@@ -24,9 +24,11 @@ import {
   Ban,
   CircleCheck,
   Folder,
+  Globe2,
   Plus,
   Search,
   Trash2,
+  Users,
 } from "lucide-react";
 
 import type {
@@ -1016,14 +1018,17 @@ export function CreateAccountDialog({
   const [open, setOpen] = useState(false);
   const [code, setCode] = useState("");
   const [group, setGroup] = useState("");
+  const [currency, setCurrency] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const assetSuggestions = useAssetCodeSuggestions(currency, open);
 
   const validation = code.length > 0 ? validateAccountID(code) : null;
 
   const reset = () => {
     setCode("");
     setGroup("");
+    setCurrency("");
     setError(null);
     setBusy(false);
   };
@@ -1037,7 +1042,7 @@ export function CreateAccountDialog({
     setBusy(true);
     setError(null);
     try {
-      await createAccount(code);
+      await createAccount(code, "", currency.trim());
       if (group.trim().length > 0) {
         await setAccountGroup(code, group.trim());
       }
@@ -1112,6 +1117,25 @@ export function CreateAccountDialog({
               {ta("createAccount.groupHint")}
             </p>
           </div>
+          <div className="space-y-2">
+            <Label htmlFor="create-account-currency">
+              {ta("createAccount.currencyLabel")}
+            </Label>
+            <Autocomplete
+              id="create-account-currency"
+              value={currency}
+              onChange={setCurrency}
+              suggestions={assetSuggestions}
+              disabled={busy}
+              placeholder="USD"
+              spellCheck={false}
+              onClear={() => setCurrency("")}
+              clearLabel={ta("filters.clearField")}
+            />
+            <p className="text-[0.6875rem] text-muted">
+              {ta("createAccount.currencyHint")}
+            </p>
+          </div>
         </div>
         {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
         <DialogFooter>
@@ -1146,9 +1170,11 @@ function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
   const [open, setOpen] = useState(false);
   const [code, setCode] = useState("");
   const [title, setTitle] = useState("");
+  const [currency, setCurrency] = useState("");
   const [notes, setNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const assetSuggestions = useAssetCodeSuggestions(currency, open);
 
   const codeTrimmed = code.trim();
   const titleTrimmed = title.trim();
@@ -1156,6 +1182,7 @@ function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
   const reset = () => {
     setCode("");
     setTitle("");
+    setCurrency("");
     setNotes("");
     setError(null);
     setBusy(false);
@@ -1166,7 +1193,12 @@ function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
     setBusy(true);
     setError(null);
     try {
-      await createGroup(codeTrimmed, titleTrimmed, notes.trim());
+      await createGroup(
+        codeTrimmed,
+        titleTrimmed,
+        notes.trim(),
+        currency.trim(),
+      );
       setOpen(false);
       reset();
       onCreated();
@@ -1223,6 +1255,25 @@ function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
                 }
               }}
             />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="create-group-currency">
+              {t("createGroup.currencyLabel")}
+            </Label>
+            <Autocomplete
+              id="create-group-currency"
+              value={currency}
+              onChange={setCurrency}
+              suggestions={assetSuggestions}
+              disabled={busy}
+              placeholder="USD"
+              spellCheck={false}
+              onClear={() => setCurrency("")}
+              clearLabel={t("filters.clearField")}
+            />
+            <p className="text-[0.6875rem] text-muted">
+              {t("createGroup.currencyHint")}
+            </p>
           </div>
           <div className="space-y-2">
             <Label htmlFor="group-notes">{t("createGroup.notesLabel")}</Label>
@@ -2200,6 +2251,184 @@ function AssignGroupDialog({
   );
 }
 
+function AccountCurrencyDialog({
+  account,
+  open,
+  onOpenChange,
+  onDone,
+}: {
+  account: Account;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onDone: () => void;
+}) {
+  const { t } = useTranslation("accounts");
+  const { setAccountCurrency } = useOfficerApi();
+  const [currency, setCurrency] = useState(account.currency ?? "");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const assetSuggestions = useAssetCodeSuggestions(currency, open);
+
+  const submit = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await setAccountCurrency(account.code, currency.trim());
+      onDone();
+    } catch (err) {
+      setError(errMessage(err));
+      setBusy(false);
+    }
+  };
+
+  const hasOpenPositions = (account.positionCount ?? 0) > 0;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t("editCurrency.title")}</DialogTitle>
+          <DialogDescription>
+            {t("editCurrency.description", { account: account.code })}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="rounded-card border border-border bg-surface-2 p-3 text-xs">
+            <p className="font-medium text-text">{t("editCurrency.cascadeTitle")}</p>
+            <dl className="mt-2 grid grid-cols-[7rem_1fr] gap-1 text-muted-lt">
+              <dt>{t("editCurrency.accountTier")}</dt>
+              <dd className="nums">{currencyText(account.currency ?? "")}</dd>
+              <dt>{t("editCurrency.groupTier")}</dt>
+              <dd className="nums">{currencyText(account.currencyCascade?.group ?? "")}</dd>
+              <dt>{t("editCurrency.defaultTier")}</dt>
+              <dd className="nums">{currencyText(account.currencyCascade?.default ?? "")}</dd>
+              <dt>{t("editCurrency.effective")}</dt>
+              <dd className="nums">
+                {currencyText(account.effectiveCurrency ?? "")}
+                {account.currencyOrigin
+                  ? ` · ${t(`editCurrency.origins.${account.currencyOrigin}`)}`
+                  : ""}
+              </dd>
+            </dl>
+          </div>
+          {hasOpenPositions && (
+            <p className="text-xs text-[var(--warning)]">
+              {t("editCurrency.blockedHint")}
+            </p>
+          )}
+          <div className="space-y-2">
+            <Label htmlFor="account-currency">{t("editCurrency.currencyLabel")}</Label>
+            <Autocomplete
+              id="account-currency"
+              value={currency}
+              onChange={setCurrency}
+              suggestions={assetSuggestions}
+              disabled={busy}
+              placeholder="USD"
+              spellCheck={false}
+              onClear={() => setCurrency("")}
+              clearLabel={t("filters.clearField")}
+            />
+            <p className="text-[0.6875rem] text-muted">
+              {t("editCurrency.currencyHint")}
+            </p>
+          </div>
+        </div>
+        {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+        <DialogFooter>
+          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)} disabled={busy}>
+            {t("editCurrency.cancel")}
+          </Button>
+          <Button size="sm" onClick={() => void submit()} disabled={busy}>
+            {t("editCurrency.submit")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function GroupCurrencyDialog({
+  group,
+  open,
+  onOpenChange,
+  onDone,
+}: {
+  group: Group;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onDone: () => void;
+}) {
+  const { t } = useTranslation("accounts");
+  const { setDefaultGroupCurrency, setGroupCurrency } = useOfficerApi();
+  const [currency, setCurrency] = useState(group.currency ?? "");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const assetSuggestions = useAssetCodeSuggestions(currency, open);
+  const hasOpenPositions = (group.positionCount ?? 0) > 0;
+
+  const submit = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      if (group.code === DEFAULT_GROUP_CODE) {
+        await setDefaultGroupCurrency(currency.trim());
+      } else {
+        await setGroupCurrency(group.code, currency.trim());
+      }
+      onDone();
+    } catch (err) {
+      setError(errMessage(err));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t("editGroupCurrency.title")}</DialogTitle>
+          <DialogDescription>
+            {group.code === DEFAULT_GROUP_CODE
+              ? t("editGroupCurrency.defaultDescription")
+              : t("editGroupCurrency.description", { group: group.code })}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          {hasOpenPositions && (
+            <p className="text-xs text-[var(--warning)]">
+              {t("editGroupCurrency.blockedHint")}
+            </p>
+          )}
+          <div className="space-y-2">
+            <Label htmlFor="group-currency">{t("editGroupCurrency.currencyLabel")}</Label>
+            <Autocomplete
+              id="group-currency"
+              value={currency}
+              onChange={setCurrency}
+              suggestions={assetSuggestions}
+              disabled={busy}
+              placeholder="USD"
+              spellCheck={false}
+              onClear={() => setCurrency("")}
+              clearLabel={t("filters.clearField")}
+            />
+          </div>
+        </div>
+        {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+        <DialogFooter>
+          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)} disabled={busy}>
+            {t("editGroupCurrency.cancel")}
+          </Button>
+          <Button size="sm" onClick={() => void submit()} disabled={busy}>
+            {t("editGroupCurrency.submit")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Edit account notes dialog
 // ---------------------------------------------------------------------------
@@ -2563,12 +2792,116 @@ function NotesText({ text }: { text: string }) {
 }
 
 type GroupRow =
-  | { kind: "default"; memberCount: number; positionCount: number }
+  | { kind: "default"; group: Group; memberCount: number; positionCount: number }
   | { kind: "real"; group: Group; memberCount: number; positionCount: number };
 type RealGroupRow = Extract<GroupRow, { kind: "real" }>;
 
 function groupDisplayTitle(group: Group): string {
+  return group.title;
+}
+
+function groupDisplayName(group: Group): string {
   return group.title !== "" ? group.title : group.code;
+}
+
+function useAssetCodeSuggestions(query: string, enabled: boolean): string[] {
+  const api = useOfficerApi();
+  const fetchAssets =
+    typeof api.fetchAssets === "function" ? api.fetchAssets : undefined;
+  const debouncedQuery = useDebouncedValue(query, DEFAULT_SEARCH_DEBOUNCE_MS);
+  const trimmed = debouncedQuery.trim();
+  const canFetch = enabled && fetchAssets && trimmed !== "";
+  const [codes, setCodes] = useState<string[]>([]);
+  useEffect(() => {
+    if (!canFetch) {
+      return;
+    }
+    const controller = new AbortController();
+    void fetchAssets(
+      { code: trimmed, codeMatch: "starts_with", limit: 8, sort: "code" },
+      controller.signal,
+    )
+      .then((assets) => {
+        setCodes(assets.map((asset) => asset.code));
+      })
+      .catch((err: unknown) => {
+        if (!controller.signal.aborted) {
+          console.error(err);
+          setCodes([]);
+        }
+      });
+    return () => {
+      controller.abort();
+    };
+  }, [canFetch, fetchAssets, trimmed]);
+  return canFetch ? codes : [];
+}
+
+function currencyText(currency: string): string {
+  return currency.trim() === "" ? "—" : currency;
+}
+
+function CurrencyCell({
+  currency,
+  title,
+  origin,
+  originTitle,
+  editTitle,
+  noneLabel,
+  onEdit,
+}: {
+  currency: string;
+  title: string;
+  origin?: string;
+  originTitle?: string;
+  editTitle: string;
+  noneLabel?: string;
+  onEdit: () => void;
+}) {
+  return (
+    <div className="flex min-w-0 items-center gap-1" title={title}>
+      <span
+        className={cn(
+          "nums min-w-0 truncate text-xs",
+          currency === "" ? "italic text-muted" : "text-muted-lt",
+        )}
+        aria-label={currency === "" ? noneLabel : undefined}
+      >
+        {currencyText(currency)}
+      </span>
+      {origin && origin !== "account" && (
+        <span className="inline-flex shrink-0" title={originTitle}>
+          <AccountCurrencyOriginIcon origin={origin} />
+        </span>
+      )}
+      <EditButton
+        size={28}
+        style={{ marginLeft: "auto" }}
+        onClick={onEdit}
+        title={editTitle}
+      />
+    </div>
+  );
+}
+
+function AccountCurrencyOriginIcon({ origin }: { origin?: string }) {
+  if (origin === "group") {
+    return (
+      <Users
+        aria-hidden="true"
+        className="h-3.5 w-3.5 shrink-0 text-muted"
+      />
+    );
+  }
+  if (origin === "default") {
+    return (
+      <Globe2
+        aria-hidden="true"
+        className="h-3.5 w-3.5 shrink-0 text-muted"
+      />
+    );
+  }
+  return null;
 }
 
 function GroupsPanel({
@@ -2579,6 +2912,7 @@ function GroupsPanel({
   onSelect,
   onSortChange,
   onEdit,
+  onEditCurrency,
   onEditNotes,
   onBlock,
   onUnblock,
@@ -2592,6 +2926,7 @@ function GroupsPanel({
   onSelect: (code: string | null) => void;
   onSortChange: (sort?: string, order?: SortOrder) => void;
   onEdit: (group: Group) => void;
+  onEditCurrency: (group: Group) => void;
   onEditNotes: (group: Group) => void;
   onBlock: (group: Group) => void;
   onUnblock: (group: Group) => void;
@@ -2601,11 +2936,12 @@ function GroupsPanel({
   const { t } = useTranslation("accounts");
   const { t: tc } = useTranslation("common");
   return (
-    <Table className="min-w-[52rem]">
+    <Table className="min-w-[58rem]">
         <colgroup>
           <col className="w-[14rem]" />
           <col className="w-[5rem]" />
           <col className="w-[2.5rem]" />
+          <col className="w-[7rem]" />
           <col className={STATUS_COLUMN_CLASS} />
           <col />
           <col className="w-[8.5rem]" />
@@ -2634,6 +2970,11 @@ function GroupsPanel({
             <TableHead className="w-[2.5rem]">
               <ColumnHeader description={t("groups.columnDescriptions.positions")}>
                 {t("groups.columns.positions")}
+              </ColumnHeader>
+            </TableHead>
+            <TableHead className="w-[7rem]">
+              <ColumnHeader description={t("groups.columnDescriptions.currency")}>
+                {t("groups.columns.currency")}
               </ColumnHeader>
             </TableHead>
             <TableHead className={STATUS_COLUMN_CLASS}>
@@ -2685,8 +3026,10 @@ function GroupsPanel({
                   ) : (
                     <div className="flex items-start gap-1">
                       <span className="flex min-w-0 flex-col">
-                        <span className="nums truncate">{title}</span>
-                        {title !== row.group.code && (
+                        {title !== "" && (
+                          <span className="nums truncate">{title}</span>
+                        )}
+                        {title !== "" && (
                           <IdCell
                             value={row.group.code}
                             copyTitle={tc("rowActions.copyIdTitle", {
@@ -2700,7 +3043,7 @@ function GroupsPanel({
                             </span>
                           </IdCell>
                         )}
-                        {title === row.group.code && (
+                        {title === "" && (
                           <IdCell
                             value={row.group.code}
                             copyTitle={tc("rowActions.copyIdTitle", {
@@ -2728,6 +3071,15 @@ function GroupsPanel({
 
                 <TableCell className="w-[2.5rem] text-xs text-muted-lt">
                   <span className="nums">{row.positionCount}</span>
+                </TableCell>
+
+                <TableCell className="w-[7rem]">
+                  <CurrencyCell
+                    currency={row.group.currency ?? ""}
+                    title={t("groups.currencyCell.title")}
+                    editTitle={t("groups.actions.editCurrencyTitle")}
+                    onEdit={() => onEditCurrency(row.group)}
+                  />
                 </TableCell>
 
                 <TableCell
@@ -2869,9 +3221,11 @@ function AccountsTable({
   activeSort,
   activeOrder,
   selectedGroupCode,
+  groupsByCode,
   onSortChange,
   onEditAccount,
   onAssignGroup,
+  onEditCurrency,
   onEditNotes,
   onBlock,
   onUnblock,
@@ -2887,9 +3241,11 @@ function AccountsTable({
   activeSort?: string;
   activeOrder?: SortOrder;
   selectedGroupCode: string | null;
+  groupsByCode: Map<string, Group>;
   onSortChange: (sort?: string, order?: SortOrder) => void;
   onEditAccount: (account: Account) => void;
   onAssignGroup: (account: Account) => void;
+  onEditCurrency: (account: Account) => void;
   onEditNotes: (account: Account) => void;
   onBlock: (account: Account) => void;
   onUnblock: (account: Account) => void;
@@ -2903,11 +3259,24 @@ function AccountsTable({
 }) {
   const { t } = useTranslation("accounts");
   const { t: tc } = useTranslation("common");
+  const currencyOriginTitle = (account: Account): string | undefined => {
+    if (account.currencyOrigin !== "group") {
+      return account.currencyOrigin
+        ? t(`accounts.currencyCell.origins.${account.currencyOrigin}`)
+        : undefined;
+    }
+    const group = groupsByCode.get(account.group);
+    return t("accounts.currencyCell.origins.groupNamed", {
+      group: group ? groupDisplayName(group) : account.group,
+    });
+  };
+
   return (
-    <Table className="min-w-[55rem]">
+    <Table className="min-w-[62rem]">
         <colgroup>
           <col className="w-[13rem]" />
           <col className="w-[9rem]" />
+          <col className="w-[7rem]" />
           <col className="w-[2.5rem]" />
           <col className={STATUS_COLUMN_CLASS} />
           <col />
@@ -2942,6 +3311,11 @@ function AccountsTable({
                   )
                 }
               />
+            </TableHead>
+            <TableHead className="w-[7rem]">
+              <ColumnHeader description={t("accounts.columnDescriptions.currency")}>
+                {t("accounts.columns.currency")}
+              </ColumnHeader>
             </TableHead>
             <TableHead className="w-[2.5rem]">
               <SortableHeader
@@ -3075,6 +3449,18 @@ function AccountsTable({
                       />
                     </span>
                   </div>
+                </TableCell>
+
+                <TableCell className="w-[7rem]">
+                  <CurrencyCell
+                    currency={account.effectiveCurrency ?? ""}
+                    title={t("accounts.currencyCell.title")}
+                    origin={account.currencyOrigin}
+                    originTitle={currencyOriginTitle(account)}
+                    editTitle={t("accounts.actions.editCurrencyTitle")}
+                    noneLabel={t("accounts.currencyCell.none")}
+                    onEdit={() => onEditCurrency(account)}
+                  />
                 </TableCell>
 
                 <TableCell className="w-[2.5rem] text-xs text-muted-lt">
@@ -3587,6 +3973,7 @@ export function Accounts() {
   const [blockAccountTarget, setBlockAccountTarget] = useState<Account | null>(null);
   const [unblockAccountTarget, setUnblockAccountTarget] = useState<Account | null>(null);
   const [groupTarget, setGroupTarget] = useState<Account | null>(null);
+  const [currencyAccountTarget, setCurrencyAccountTarget] = useState<Account | null>(null);
   const [notesAccountTarget, setNotesAccountTarget] = useState<Account | null>(null);
   const [deleteAccountTarget, setDeleteAccountTarget] = useState<Account | null>(null);
   const [blockedDetailsTarget, setBlockedDetailsTarget] =
@@ -3594,6 +3981,7 @@ export function Accounts() {
 
   // Group dialog targets.
   const [editGroupTarget, setEditGroupTarget] = useState<Group | null>(null);
+  const [groupCurrencyTarget, setGroupCurrencyTarget] = useState<Group | null>(null);
   const [groupNotesTarget, setGroupNotesTarget] = useState<Group | null>(null);
   const [blockGroupTarget, setBlockGroupTarget] = useState<Group | null>(null);
   const [unblockGroupTarget, setUnblockGroupTarget] = useState<Group | null>(null);
@@ -3620,6 +4008,7 @@ export function Accounts() {
     .filter((g) => g.code === DEFAULT_GROUP_CODE)
     .map((g) => ({
       kind: "default" as const,
+      group: g,
       memberCount: g.accountCount ?? 0,
       positionCount: g.positionCount ?? 0,
     }));
@@ -3637,6 +4026,7 @@ export function Accounts() {
   const groupRows: GroupRow[] = [...defaultRows, ...allRealRows];
 
   const pagedAccounts = accounts;
+  const groupsByCode = new Map((groups ?? []).map((group) => [group.code, group]));
   const visibleAccountCount =
     accountsLoad.state === "ready" ? accountsLoad.data.total : 0;
   // Server already paged the real groups (Default pinned first on page 0);
@@ -3831,6 +4221,7 @@ export function Accounts() {
                   setGroupPage(0);
                 }}
                 onEdit={setEditGroupTarget}
+                onEditCurrency={setGroupCurrencyTarget}
                 onEditNotes={setGroupNotesTarget}
                 onBlock={setBlockGroupTarget}
                 onUnblock={setUnblockGroupTarget}
@@ -3937,12 +4328,14 @@ export function Accounts() {
                 activeSort={accountSort.sort}
                 activeOrder={accountSort.order}
                 selectedGroupCode={selectedGroupCode}
+                groupsByCode={groupsByCode}
                 onSortChange={(sort, order) => {
                   setAccountSort({ sort, order });
                   setAccountPage(0);
                 }}
                 onEditAccount={setEditAccountTarget}
                 onAssignGroup={setGroupTarget}
+                onEditCurrency={setCurrencyAccountTarget}
                 onEditNotes={setNotesAccountTarget}
                 onBlock={setBlockAccountTarget}
                 onUnblock={setUnblockAccountTarget}
@@ -4061,6 +4454,21 @@ export function Accounts() {
           reloadGroups();
         }}
       />
+      {currencyAccountTarget !== null && (
+        <AccountCurrencyDialog
+          key={currencyAccountTarget.code}
+          account={currencyAccountTarget}
+          open
+          onOpenChange={(next) => {
+            if (!next) setCurrencyAccountTarget(null);
+          }}
+          onDone={() => {
+            setCurrencyAccountTarget(null);
+            setLocalAccounts(null);
+            reloadAccounts();
+          }}
+        />
+      )}
       <EditAccountNotesDialog
         account={notesAccountTarget}
         open={notesAccountTarget !== null}
@@ -4122,6 +4530,23 @@ export function Accounts() {
           reloadAccounts();
         }}
       />
+      {groupCurrencyTarget !== null && (
+        <GroupCurrencyDialog
+          key={groupCurrencyTarget.code}
+          group={groupCurrencyTarget}
+          open
+          onOpenChange={(next) => {
+            if (!next) setGroupCurrencyTarget(null);
+          }}
+          onDone={() => {
+            setGroupCurrencyTarget(null);
+            setLocalGroups(null);
+            setLocalAccounts(null);
+            reloadGroups();
+            reloadAccounts();
+          }}
+        />
+      )}
       <EditGroupNotesDialog
         group={groupNotesTarget}
         open={groupNotesTarget !== null}

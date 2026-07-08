@@ -4,7 +4,10 @@
   "counts": {
     "accounts": "Счета",
     "groups": "Группы",
-    "orders": "Ордера"
+    "orders": "Ордера",
+    "captionActiveTotal": "активные / всего",
+    "captionTodayTotal": "сегодня / всего",
+    "captionTodayActiveTotal": "сегодня / активные / всего"
   },
   "activity": {
     "noRecent": "Нет последней активности",
@@ -54,7 +57,9 @@
       "balanceUpdate": "Обновление баланса",
       "order": "Ордер",
       "tradeFill": "Сделка / исполнение",
-      "resetDatabase": "Ресет базы"
+      "resetDatabase": "Сброс базы данных",
+      "restartService": "Перезапуск сервиса",
+      "stopService": "Остановка сервиса"
     }
   }
 }

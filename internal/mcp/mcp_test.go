@@ -705,7 +705,6 @@ func TestGetOrderHappyPath(t *testing.T) {
 						RequestType: domain.AttestationRequestSubmit,
 						Mode:        "hold",
 						IssuedAt:    "2026-06-11T10:00:00Z",
-						ExpiresAt:   "2026-06-11T10:02:00Z",
 					},
 				},
 			},

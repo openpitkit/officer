@@ -358,6 +358,26 @@ func (a *App) Service() backend.ControlPlane {
 	return a.service
 }
 
+// RecordServiceLifecycle appends an audit row for a process-level lifecycle
+// request accepted by the serve wrapper.
+func (a *App) RecordServiceLifecycle(
+	ctx context.Context,
+	action domain.AuditAction,
+	detail string,
+	source domain.Source,
+) error {
+	if a == nil || a.node == nil {
+		return errors.New("app: nil node")
+	}
+	return a.node.AppendAudit(ctx, store.AuditEntry{
+		Action: action,
+		Detail: detail,
+	}, domain.Caller{
+		Source:    source,
+		Principal: domain.PrincipalOperator,
+	})
+}
+
 // Close stops producers before closing the node and engine.
 func (a *App) Close() error {
 	// Quote producers must stop before the node closes the engine and its
@@ -521,8 +541,9 @@ func (a sourceAdapter) SubmitOrderToken(
 	return frameworkmcp.SubmitOrderTokenResult{
 		Token:           tok.Token,
 		KeyID:           tok.KeyID,
-		ExpiresAt:       tok.ExpiresAt,
 		OrderExternalID: tok.OrderExternalID,
+		Verdict:         tok.Verdict,
+		Reasons:         tok.Reasons,
 	}, nil
 }
 

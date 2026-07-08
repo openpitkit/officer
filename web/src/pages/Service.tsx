@@ -24,6 +24,7 @@ import {
   Loader2,
   Logs,
   Plug,
+  Power,
   RefreshCw,
   RotateCcw,
   Server,
@@ -54,6 +55,16 @@ import { StatusDot } from "@/components/StatusDot";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Card,
   CardContent,
   CardHeader,
@@ -79,6 +90,7 @@ interface ProfileRow {
 
 type ServiceTab = "application" | "api" | "database" | "logs";
 type BackupWorkflow = "export" | "restore";
+type ServiceLifecycleAction = "restart" | "stop";
 
 const serviceTabs: {
   id: ServiceTab;
@@ -179,6 +191,10 @@ function moveTabFocus<T extends string>(
   window.requestAnimationFrame(() => {
     document.getElementById(tabID(next))?.focus();
   });
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /**
@@ -824,16 +840,133 @@ export function DatabaseCard({
   );
 }
 
+export function ServiceLifecycleCard({
+  busyAction,
+  error,
+  onAction,
+}: {
+  busyAction: ServiceLifecycleAction | null;
+  error: string | null;
+  onAction: (action: ServiceLifecycleAction) => Promise<void>;
+}) {
+  const { t } = useTranslation("service");
+  const { t: tc } = useTranslation();
+  const [confirmAction, setConfirmAction] =
+    useState<ServiceLifecycleAction | null>(null);
+  const busy = busyAction !== null;
+  const currentAction = confirmAction ?? "restart";
+  const confirmBusy = busyAction === confirmAction;
+
+  const run = async () => {
+    if (confirmAction === null) {
+      return;
+    }
+    await onAction(confirmAction);
+    setConfirmAction(null);
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t("lifecycle.title")}</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex items-start gap-2 rounded-card border border-[var(--danger)]/35 bg-[var(--danger)]/10 p-3 text-xs text-text">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--danger)]" />
+          <p>{t("lifecycle.warning")}</p>
+        </div>
+        {error !== null && (
+          <p className="rounded-card border border-[var(--danger)]/40 bg-[var(--danger)]/10 px-3 py-2 text-xs text-[var(--danger)]">
+            {error}
+          </p>
+        )}
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setConfirmAction("restart")}
+            disabled={busy}
+          >
+            {busyAction === "restart" ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RotateCcw className="h-3.5 w-3.5" />
+            )}
+            {t("lifecycle.restart")}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="border-[var(--danger)]/60 text-[var(--danger)] hover:border-[var(--danger)] hover:text-[var(--danger)]"
+            onClick={() => setConfirmAction("stop")}
+            disabled={busy}
+          >
+            {busyAction === "stop" ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Power className="h-3.5 w-3.5" />
+            )}
+            {t("lifecycle.stop")}
+          </Button>
+        </div>
+      </CardContent>
+      <AlertDialog
+        open={confirmAction !== null}
+        onOpenChange={(open) => {
+          if (!open && !busy) {
+            setConfirmAction(null);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {t(`lifecycle.confirm.${currentAction}.title`)}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t(`lifecycle.confirm.${currentAction}.description`)}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={confirmBusy}>
+              {tc("actions.cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={confirmBusy}
+              className="border border-[var(--danger)] bg-[var(--danger)] text-bg hover:bg-[var(--danger)]/90"
+              onClick={(event) => {
+                event.preventDefault();
+                void run();
+              }}
+            >
+              {confirmBusy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              {t(`lifecycle.confirm.${currentAction}.confirm`)}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </Card>
+  );
+}
+
 export function ServiceCard({
   info,
   activeTab,
   onTabChange,
   onDatabaseReset,
+  lifecycleBusyAction,
+  lifecycleError,
+  onLifecycleAction,
 }: {
   info: ServiceInfo;
   activeTab: ServiceTab;
   onTabChange: (tab: ServiceTab) => void;
   onDatabaseReset: () => void;
+  lifecycleBusyAction: ServiceLifecycleAction | null;
+  lifecycleError: string | null;
+  onLifecycleAction: (action: ServiceLifecycleAction) => Promise<void>;
 }) {
   const { t } = useTranslation("service");
   const { t: tc } = useTranslation();
@@ -909,6 +1042,12 @@ export function ServiceCard({
               )}
             </CardContent>
           </Card>
+
+          <ServiceLifecycleCard
+            busyAction={lifecycleBusyAction}
+            error={lifecycleError}
+            onAction={onLifecycleAction}
+          />
 
           <Card>
             <CardHeader>
@@ -1111,10 +1250,13 @@ export function Service() {
   const { t: tc } = useTranslation();
   const { t: tm } = useTranslation("marketData");
   const { load, reload } = useService();
-  const { restartMarketData } = useOfficerApi();
+  const { restartMarketData, restartService, stopService } = useOfficerApi();
   const location = useLocation();
   const navigate = useNavigate();
   const [restarting, setRestarting] = useState(false);
+  const [lifecycleBusyAction, setLifecycleBusyAction] =
+    useState<ServiceLifecycleAction | null>(null);
+  const [lifecycleError, setLifecycleError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ServiceTab>("application");
   const scrolledToLogs = useRef(false);
   const refreshing = load.state === "loading";
@@ -1150,6 +1292,20 @@ export function Service() {
       await restartMarketData();
     } finally {
       setRestarting(false);
+    }
+  };
+  const runLifecycleAction = async (action: ServiceLifecycleAction) => {
+    setLifecycleBusyAction(action);
+    setLifecycleError(null);
+    try {
+      if (action === "restart") {
+        await restartService();
+      } else {
+        await stopService();
+      }
+    } catch (err) {
+      setLifecycleError(errorText(err));
+      setLifecycleBusyAction(null);
     }
   };
 
@@ -1215,6 +1371,9 @@ export function Service() {
           activeTab={displayedTab}
           onTabChange={selectTab}
           onDatabaseReset={reload}
+          lifecycleBusyAction={lifecycleBusyAction}
+          lifecycleError={lifecycleError}
+          onLifecycleAction={runLifecycleAction}
         />
       )}
     </Page>

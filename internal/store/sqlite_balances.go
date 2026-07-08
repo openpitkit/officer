@@ -139,6 +139,55 @@ func (r *realmStore) ListBalances(
 	return result, nil
 }
 
+// ListAccountsWithOpenBalances returns accounts with at least one non-zero
+// balance/P&L row.
+func (r *realmStore) ListAccountsWithOpenBalances(
+	ctx context.Context, accounts []domain.AccountID,
+) ([]domain.AccountID, error) {
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	args := make([]any, 0, len(accounts))
+	accountWhere := ""
+	if len(accounts) > 0 {
+		placeholders := make([]string, 0, len(accounts))
+		for _, account := range accounts {
+			placeholders = append(placeholders, "?")
+			args = append(args, account.String())
+		}
+		accountWhere = " AND a.code IN (" + strings.Join(placeholders, ", ") + ")"
+	}
+	query := `SELECT DISTINCT a.code
+FROM balance b
+JOIN account a ON a.id = b.account_id
+WHERE (
+    (b.available <> '' AND b.available COLLATE DECIMAL <> '0') OR
+    (b.held <> '' AND b.held COLLATE DECIMAL <> '0') OR
+    (b.incoming <> '' AND b.incoming COLLATE DECIMAL <> '0') OR
+    (b.realized_pnl <> '' AND b.realized_pnl COLLATE DECIMAL <> '0') OR
+    (b.average_entry_price <> '' AND b.average_entry_price COLLATE DECIMAL <> '0')
+)` + accountWhere + `
+ORDER BY a.code`
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: list open balance accounts: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	result := make([]domain.AccountID, 0)
+	for rows.Next() {
+		var account domain.AccountID
+		if err := rows.Scan(&account); err != nil {
+			return nil, fmt.Errorf("store: scan open balance account: %w", err)
+		}
+		result = append(result, account)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: iterate open balance accounts: %w", err)
+	}
+	return result, nil
+}
+
 // ListBalanceRows returns balances matching filter, with total count before
 // paging.
 func (r *realmStore) ListBalanceRows(

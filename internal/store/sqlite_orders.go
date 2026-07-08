@@ -147,7 +147,17 @@ func (r *realmStore) RecordOrderSubmission(
 	submitted domain.OrderEvent,
 	apply func(domain.Order) (domain.OrderSettlement, error),
 ) (domain.Order, error) {
-	return r.recordOrderSubmission(ctx, o, submitted, apply)
+	return r.recordOrderSubmission(ctx, o, submitted, apply, nil)
+}
+
+func (r *realmStore) RecordOrderSubmissionWithAttestation(
+	ctx context.Context,
+	o domain.Order,
+	submitted domain.OrderEvent,
+	apply func(domain.Order) (domain.OrderSettlement, error),
+	attest fwstore.EventAttestor,
+) (domain.Order, error) {
+	return r.recordOrderSubmission(ctx, o, submitted, apply, attest)
 }
 
 func (r *realmStore) recordOrderSubmission(
@@ -155,6 +165,7 @@ func (r *realmStore) recordOrderSubmission(
 	o domain.Order,
 	submitted domain.OrderEvent,
 	apply func(domain.Order) (domain.OrderSettlement, error),
+	attest fwstore.EventAttestor,
 ) (domain.Order, error) {
 	db, err := r.db()
 	if err != nil {
@@ -177,12 +188,16 @@ func (r *realmStore) recordOrderSubmission(
 	if submitted.Order.IsZero() {
 		submitted.Order = order.ExternalID
 	}
-	if err := appendOrderEventTx(ctx, tx, orderID, submitted); err != nil {
+	recordedSubmitted, err := appendOrderEventReturningTx(ctx, tx, orderID, submitted)
+	if err != nil {
 		return domain.Order{}, err
 	}
 
 	settlement, err := apply(order)
 	if err != nil {
+		return domain.Order{}, err
+	}
+	if err := attestOrderEventTx(ctx, tx, recordedSubmitted, attest); err != nil {
 		return domain.Order{}, err
 	}
 	if settlement.Order.IsZero() {
@@ -191,7 +206,7 @@ func (r *realmStore) recordOrderSubmission(
 	if settlement.Account == "" {
 		settlement.Account = order.Account
 	}
-	if err := r.recordOrderSettlementTx(ctx, tx, settlement); err != nil {
+	if err := r.recordOrderSettlementTx(ctx, tx, settlement, attest); err != nil {
 		return domain.Order{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -250,9 +265,9 @@ func (r *realmStore) SetOrderLock(
 // event addressed by external id, write-once: it inserts the 1:1
 // event_attestation row only when the event carries none yet (only event_id
 // conflicts are ignored), so a retry or a later write never clobbers an
-// already-issued envelope. A no-op (already stamped, or missing event) is not an
-// error: the attestation is best-effort and the event stream is the durable
-// trail.
+// already-issued envelope. An already-stamped event is a no-op; a missing event
+// returns domain.ErrNotFound so callers cannot silently commit an unsigned
+// event.
 func (r *realmStore) PutEventAttestation(
 	ctx context.Context, eventID domain.ExternalID, att domain.EventAttestation,
 ) error {
@@ -260,30 +275,35 @@ func (r *realmStore) PutEventAttestation(
 	if err != nil {
 		return err
 	}
-	surrogate, err := lookupOrderEventID(ctx, db, eventID)
+	return putEventAttestationTx(ctx, db, eventID, att)
+}
+
+func putEventAttestationTx(
+	ctx context.Context,
+	q sqlReadWriter,
+	eventID domain.ExternalID,
+	att domain.EventAttestation,
+) error {
+	surrogate, err := lookupOrderEventID(ctx, q, eventID)
 	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			// Missing event is a tolerated no-op, not an error.
-			return nil
-		}
 		return err
 	}
 	var signingKeyID sql.NullInt64
 	if att.KeyID != "" {
-		id, err := resolveSigningKeyID(ctx, db, att.KeyID)
+		id, err := resolveSigningKeyID(ctx, q, att.KeyID)
 		if err != nil {
 			return err
 		}
 		signingKeyID = sql.NullInt64{Int64: id, Valid: true}
 	}
-	if _, err := db.ExecContext(
+	if _, err := q.ExecContext(
 		ctx,
 		`INSERT INTO event_attestation
-		 (event_id, token, signing_key_id, alg, request_type, mode, issued_at, expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		 (event_id, token, signing_key_id, alg, request_type, mode, issued_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(event_id) DO NOTHING`,
 		surrogate, att.Token, signingKeyID, att.Alg, string(att.RequestType),
-		att.Mode, att.IssuedAt, att.ExpiresAt,
+		att.Mode, att.IssuedAt,
 	); err != nil {
 		return fmt.Errorf("store: put event attestation: %w", err)
 	}
@@ -487,6 +507,26 @@ func (r *realmStore) CountOrders(ctx context.Context) (int, error) {
 	return n, nil
 }
 
+// CountActiveOrders returns orders in the working lifecycle set.
+func (r *realmStore) CountActiveOrders(ctx context.Context) (int, error) {
+	db, err := r.db()
+	if err != nil {
+		return 0, err
+	}
+	var n int
+	if err := db.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*) FROM order_record
+		 WHERE status IN (?, ?, ?)`,
+		domain.OrderStatusSubmitted,
+		domain.OrderStatusAccepted,
+		domain.OrderStatusPartiallyFilled,
+	).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count active orders: %w", err)
+	}
+	return n, nil
+}
+
 // CountOrdersSince returns the number of orders whose at timestamp is at or
 // after since. The at column is RFC3339Nano UTC text, so the boundary is
 // formatted the same way for a lexicographic comparison.
@@ -575,11 +615,11 @@ func scanOrderInto(scan func(...any) error, o *domain.Order) error {
 // its order through the surrogate FK internally; reads surface only the event's
 // own fields plus the optional principal code and, when present, the event's 1:1
 // signed attestation metadata (token verbatim, key UUID, alg, request type,
-// mode, timestamps). A NULL token means the event carries no attestation.
+// mode, issued-at). A NULL token means the event carries no attestation.
 const orderEventSelect = `
 SELECT e.external_id, e.at, e.type, e.source, p.code, e.payload,
        ea.token, sk.key_id, ea.alg, ea.request_type, ea.mode,
-       ea.issued_at, ea.expires_at
+       ea.issued_at
 FROM order_event e
 LEFT JOIN principal p ON p.id = e.principal_id
 LEFT JOIN event_attestation ea ON ea.event_id = e.id
@@ -678,12 +718,11 @@ func scanOrderEvent(rows *sql.Rows, order domain.ExternalID) (domain.OrderEvent,
 		attRequestType  sql.NullString
 		attMode         sql.NullString
 		attIssuedAt     sql.NullString
-		attExpiresAt    sql.NullString
 	)
 	if err := rows.Scan(
 		&extID, &at, &typ, &source, &principal, &payloadStr,
 		&attToken, &attKeyID, &attAlg, &attRequestType, &attMode,
-		&attIssuedAt, &attExpiresAt,
+		&attIssuedAt,
 	); err != nil {
 		return domain.OrderEvent{}, fmt.Errorf("store: scan order event: %w", err)
 	}
@@ -716,7 +755,6 @@ func scanOrderEvent(rows *sql.Rows, order domain.ExternalID) (domain.OrderEvent,
 			RequestType: domain.AttestationRequestType(attRequestType.String),
 			Mode:        attMode.String,
 			IssuedAt:    attIssuedAt.String,
-			ExpiresAt:   attExpiresAt.String,
 		}
 	}
 	return ev, nil
@@ -1117,11 +1155,17 @@ func tradeFromScanned(
 func (r *realmStore) RecordOrderSettlement(
 	ctx context.Context, st domain.OrderSettlement,
 ) error {
-	return r.recordOrderSettlement(ctx, st)
+	return r.recordOrderSettlement(ctx, st, nil)
+}
+
+func (r *realmStore) RecordOrderSettlementWithAttestation(
+	ctx context.Context, st domain.OrderSettlement, attest fwstore.EventAttestor,
+) error {
+	return r.recordOrderSettlement(ctx, st, attest)
 }
 
 func (r *realmStore) recordOrderSettlement(
-	ctx context.Context, st domain.OrderSettlement,
+	ctx context.Context, st domain.OrderSettlement, attest fwstore.EventAttestor,
 ) error {
 	db, err := r.db()
 	if err != nil {
@@ -1133,7 +1177,7 @@ func (r *realmStore) recordOrderSettlement(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := r.recordOrderSettlementTx(ctx, tx, st); err != nil {
+	if err := r.recordOrderSettlementTx(ctx, tx, st, attest); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -1143,7 +1187,7 @@ func (r *realmStore) recordOrderSettlement(
 }
 
 func (r *realmStore) recordOrderSettlementTx(
-	ctx context.Context, tx *sql.Tx, st domain.OrderSettlement,
+	ctx context.Context, tx *sql.Tx, st domain.OrderSettlement, attest fwstore.EventAttestor,
 ) error {
 	// Resolve the settling account once; balance and blocks reuse it. The
 	// account is the fill's account, always present on a settlement.
@@ -1159,6 +1203,16 @@ func (r *realmStore) recordOrderSettlementTx(
 			string(st.ReservationIntentState), st.ReservationApprovalID,
 		); err != nil {
 			return fmt.Errorf("store: settlement reservation intent state: %w", err)
+		}
+	}
+
+	// Insert the initial held-intent row for a hold-accept settlement in the same
+	// transaction as the order, so the order row and its durable reservation record
+	// are atomic. The engine builds the intent but never writes it (a nested write
+	// would self-deadlock on the single connection held by this transaction).
+	if st.ReservationIntentUpsert != nil {
+		if err := upsertReservationIntentTx(ctx, tx, *st.ReservationIntentUpsert); err != nil {
+			return err
 		}
 	}
 
@@ -1207,10 +1261,19 @@ func (r *realmStore) recordOrderSettlementTx(
 	if err != nil {
 		return err
 	}
+	if attest != nil && len(st.Events) == 0 {
+		return fmt.Errorf(
+			"store: settlement has no event to attest: %w", domain.ErrInvalid,
+		)
+	}
 
 	// Fill event(s).
 	for _, ev := range st.Events {
-		if err := appendOrderEventTx(ctx, tx, orderID, ev); err != nil {
+		recorded, err := appendOrderEventReturningTx(ctx, tx, orderID, ev)
+		if err != nil {
+			return err
+		}
+		if err := attestOrderEventTx(ctx, tx, recorded, attest); err != nil {
 			return err
 		}
 	}
@@ -1300,35 +1363,57 @@ func guardedOrderStatus(
 	)
 }
 
-// appendOrderEventTx inserts one order event inside tx against the already-
-// resolved order surrogate id, mirroring AppendOrderEvent's external-id, payload
-// and timestamp handling.
-func appendOrderEventTx(
+func appendOrderEventReturningTx(
 	ctx context.Context, tx *sql.Tx, orderID int64, ev domain.OrderEvent,
-) error {
+) (domain.OrderEvent, error) {
 	principalID, err := resolveOptionalPrincipalID(ctx, tx, ev.Principal)
 	if err != nil {
-		return err
+		return domain.OrderEvent{}, err
 	}
 	xid, err := newExternalID()
 	if err != nil {
-		return err
+		return domain.OrderEvent{}, err
 	}
+	at := nowStr()
 	payloadJSON, err := json.Marshal(ev.Payload)
 	if err != nil {
-		return fmt.Errorf("store: marshal event payload: %w", err)
+		return domain.OrderEvent{}, fmt.Errorf("store: marshal event payload: %w", err)
 	}
 	if _, err := tx.ExecContext(
 		ctx,
 		`INSERT INTO order_event
 		 (external_id, order_id, principal_id, at, type, source, payload)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		xid.Bytes(), orderID, principalID, nowStr(),
+		xid.Bytes(), orderID, principalID, at,
 		string(ev.Type), string(ev.Source), string(payloadJSON),
 	); err != nil {
-		return fmt.Errorf("store: append order event: %w", err)
+		return domain.OrderEvent{}, fmt.Errorf("store: append order event: %w", err)
 	}
-	return nil
+	ev.ExternalID = xid
+	ev.At = mustParseTime(at)
+	return ev, nil
+}
+
+func attestOrderEventTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	event domain.OrderEvent,
+	attest fwstore.EventAttestor,
+) error {
+	if attest == nil {
+		return nil
+	}
+	att, ok, err := attest(ctx, event)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf(
+			"store: event %s has no attestation payload: %w",
+			event.Type, domain.ErrInvalid,
+		)
+	}
+	return putEventAttestationTx(ctx, tx, event.ExternalID, att)
 }
 
 // settleBalanceTx applies one per-asset fill outcome inside tx. Available,

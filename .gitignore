@@ -43,6 +43,7 @@ go.work.sum
 *.db-wal
 *.sqlite
 *.sqlite3
+.wt/
 
 # Runtime state published by `serve` next to the database.
 officer-runtime.json

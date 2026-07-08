@@ -784,6 +784,55 @@ describe("Positions balance row asset cell", () => {
   });
 });
 
+describe("Positions active-orders navigation", () => {
+  it("shows the control only for the non-zero incoming balance", () => {
+    // The seeded balance has held "0" and incoming "500", so exactly one
+    // active-orders control renders (on the incoming cell).
+    renderPositions();
+
+    const row = balanceRow();
+    expect(
+      within(row).getAllByRole("button", {
+        name: /active orders for Bucks McMoneyface/i,
+      }),
+    ).toHaveLength(1);
+  });
+
+  it("opens Orders pre-filtered to the account and active statuses in a new tab", () => {
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    renderPositions();
+
+    const row = balanceRow();
+    const [button] = within(row).getAllByRole("button", {
+      name: /active orders for Bucks McMoneyface/i,
+    });
+    // Modifier-click opens the deep link in a new tab, exactly like the other
+    // cross-screen row-action buttons.
+    fireEvent.click(button, { metaKey: true });
+
+    expect(open).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "/orders?account=Bucks+McMoneyface&status=submitted%2Caccepted%2Cpartially_filled",
+      ),
+      "_blank",
+      "noopener,noreferrer",
+    );
+    open.mockRestore();
+  });
+
+  it("hides the control for zero held and incoming balances", () => {
+    useBalancesMock.mockReturnValue(
+      readyPage<Balance>([{ ...balance, held: "0", incoming: "0.00" }]),
+    );
+    renderPositions();
+
+    const row = balanceRow();
+    expect(
+      within(row).queryByRole("button", { name: /active orders/i }),
+    ).not.toBeInTheDocument();
+  });
+});
+
 describe("Positions history row actions", () => {
   it("keeps external id separate and filters history by row account or asset", async () => {
     const user = userEvent.setup();

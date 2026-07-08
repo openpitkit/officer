@@ -109,6 +109,8 @@ const Autocomplete = forwardRef<HTMLInputElement, AutocompleteProps>(
     const [open, setOpen] = useState(false);
     const [activeIndex, setActiveIndex] = useState(-1);
     const listRef = useRef<HTMLUListElement>(null);
+    const onKeyDownRef = useRef(onKeyDown);
+    onKeyDownRef.current = onKeyDown;
 
     const filtered = filterSuggestions(value, suggestions, maxSuggestions);
     const visible = open && filtered.length > 0;
@@ -126,6 +128,10 @@ const Autocomplete = forwardRef<HTMLInputElement, AutocompleteProps>(
       onSuggestionSelect?.(suggestion);
       setOpen(false);
       setActiveIndex(-1);
+    }
+
+    function forwardEnterAfterSelection(e: KeyboardEvent<HTMLInputElement>) {
+      setTimeout(() => onKeyDownRef.current?.(e), 0);
     }
 
     function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
@@ -146,6 +152,14 @@ const Autocomplete = forwardRef<HTMLInputElement, AutocompleteProps>(
           if (activeIndex >= 0 && activeIndex < filtered.length) {
             e.preventDefault();
             select(filtered[activeIndex]);
+            forwardEnterAfterSelection(e);
+          } else {
+            const first = filtered[0];
+            if (first !== undefined) {
+              e.preventDefault();
+              select(first);
+              forwardEnterAfterSelection(e);
+            }
           }
           break;
         case "Escape":

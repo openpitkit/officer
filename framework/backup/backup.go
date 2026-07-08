@@ -229,6 +229,8 @@ type Account struct {
 	Code string `json:"code"`
 	// Title is the mutable display name; may be empty.
 	Title string `json:"title,omitempty"`
+	// Currency is the account-level realized P&L currency asset code.
+	Currency string `json:"currency,omitempty"`
 	// GroupCode links to the account's group by the group's code; empty means no
 	// group.
 	GroupCode string `json:"groupCode,omitempty"`
@@ -248,6 +250,8 @@ type AccountGroup struct {
 	Code string `json:"code"`
 	// Title is the mutable display name; may be empty.
 	Title string `json:"title,omitempty"`
+	// Currency is the group-level realized P&L currency asset code.
+	Currency string `json:"currency,omitempty"`
 	// Notes is a free-form reference string.
 	Notes string `json:"notes,omitempty"`
 	// BlockReason is the reason the group was blocked; empty when not blocked.
@@ -308,6 +312,9 @@ type Data struct {
 	Principals []domain.Principal `json:"principals,omitempty"`
 	// Groups is the account-group dictionary (by code).
 	Groups []AccountGroup `json:"groups,omitempty"`
+	// DefaultGroupCurrency is the fallback tier in the account -> group ->
+	// default currency cascade.
+	DefaultGroupCurrency string `json:"defaultGroupCurrency,omitempty"`
 	// Accounts is the account dictionary (by code).
 	Accounts []Account `json:"accounts,omitempty"`
 	// Balances are per-(account, asset) snapshots, linked by codes.
@@ -542,6 +549,7 @@ func FilterData(data Data, scope Scope) Data {
 	if scope.Included(SectionAccountsGroups) {
 		out.Accounts = filterAccounts(data.Accounts, scope.Accounts)
 		out.Groups = filterGroups(data.Groups, out.Accounts, scope.Accounts)
+		out.DefaultGroupCurrency = data.DefaultGroupCurrency
 	}
 	if scope.Included(SectionPositions) {
 		out.Balances = filterBalances(data.Balances, scope.Positions, groupByAccount)

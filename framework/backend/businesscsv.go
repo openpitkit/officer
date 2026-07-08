@@ -83,7 +83,7 @@ func (s *Service) ExportBusinessCSV(
 	)
 	switch req.Entity {
 	case businesscsv.EntityAccountGroups:
-		groups, lerr := s.ListGroups(ctx)
+		groups, lerr := s.businessCSVGroups(ctx)
 		if lerr != nil {
 			return businesscsv.ExportFile{}, lerr
 		}
@@ -129,6 +129,21 @@ func (s *Service) ExportBusinessCSV(
 	return file, nil
 }
 
+func (s *Service) businessCSVGroups(ctx context.Context) ([]domain.AccountGroup, error) {
+	groups, err := s.ListGroups(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := groups[:0]
+	for _, group := range groups {
+		if group.Code == "" {
+			continue
+		}
+		out = append(out, group)
+	}
+	return out, nil
+}
+
 // parseBusinessCSVImport decodes the uploaded CSV/ZIP and parses its rows for the
 // requested entity, validating the delimiter first.
 func (s *Service) parseBusinessCSVImport(
@@ -154,6 +169,9 @@ func (s *Service) PreviewBusinessCSVImport(
 ) (BusinessCSVImportPreview, error) {
 	file, rows, err := s.parseBusinessCSVImport(req)
 	if err != nil {
+		return BusinessCSVImportPreview{}, err
+	}
+	if err := s.validateBusinessCSVCurrencyAssets(ctx, req.Entity, rows); err != nil {
 		return BusinessCSVImportPreview{}, err
 	}
 	conflicts, counts, err := s.businessCSVConflicts(ctx, req.Entity, rows)
@@ -191,6 +209,10 @@ func (s *Service) ImportBusinessCSV(
 		// A parse failure is still a file attempt: audit it with the data-row count
 		// recovered from the raw CSV so the operator sees the rejected upload.
 		counts := businesscsv.ImportCounts{Rows: businessCSVDataRowCount(file.Body, req.Delimiter)}
+		return BusinessCSVImportResult{}, s.auditBusinessCSVImportError(ctx, req, file, counts, err)
+	}
+	if err := s.validateBusinessCSVCurrencyAssets(ctx, req.Entity, rows); err != nil {
+		counts := businesscsv.ImportCounts{Rows: importRowCount(req.Entity, rows)}
 		return BusinessCSVImportResult{}, s.auditBusinessCSVImportError(ctx, req, file, counts, err)
 	}
 
@@ -423,12 +445,16 @@ func businessCSVGroupImport(row businesscsv.GroupRow) (domain.AccountGroup, erro
 	if err := domain.ValidateTitle(row.Title); err != nil {
 		return domain.AccountGroup{}, err
 	}
+	if err := validateOptionalCurrency(row.Currency); err != nil {
+		return domain.AccountGroup{}, err
+	}
 	if err := domain.ValidateNotes(row.Notes); err != nil {
 		return domain.AccountGroup{}, err
 	}
 	return domain.AccountGroup{
 		Code:        row.Code,
 		Title:       row.Title,
+		Currency:    row.Currency,
 		Notes:       row.Notes,
 		Blocked:     row.Blocked,
 		BlockReason: row.BlockReason,
@@ -450,10 +476,14 @@ func businessCSVAccountImport(row businesscsv.AccountRow) (domain.Account, error
 	if err := domain.ValidateTitle(row.Title); err != nil {
 		return domain.Account{}, err
 	}
+	if err := validateOptionalCurrency(row.Currency); err != nil {
+		return domain.Account{}, err
+	}
 	return domain.Account{
 		Code:        row.Code,
 		Title:       row.Title,
 		GroupCode:   row.GroupCode,
+		Currency:    row.Currency,
 		Notes:       row.Notes,
 		Blocked:     row.Blocked,
 		BlockReason: row.BlockReason,
@@ -552,6 +582,69 @@ func importKeys(entity businesscsv.Entity, rows businesscsv.ImportRows) []import
 		}
 	}
 	return out
+}
+
+type businessCSVCurrencyRef struct {
+	Code string
+	Row  int
+}
+
+func businessCSVCurrencyRefs(
+	entity businesscsv.Entity, rows businesscsv.ImportRows,
+) []businessCSVCurrencyRef {
+	out := make([]businessCSVCurrencyRef, 0)
+	switch entity {
+	case businesscsv.EntityAccountGroups:
+		for i, row := range rows.Groups {
+			if row.Currency != "" {
+				out = append(out, businessCSVCurrencyRef{Row: i + 2, Code: row.Currency})
+			}
+		}
+	case businesscsv.EntityAccounts:
+		for i, row := range rows.Accounts {
+			if row.Currency != "" {
+				out = append(out, businessCSVCurrencyRef{Row: i + 2, Code: row.Currency})
+			}
+		}
+	}
+	return out
+}
+
+func (s *Service) validateBusinessCSVCurrencyAssets(
+	ctx context.Context, entity businesscsv.Entity, rows businesscsv.ImportRows,
+) error {
+	refs := businessCSVCurrencyRefs(entity, rows)
+	if len(refs) == 0 {
+		return nil
+	}
+	assets, err := s.ListAssets(ctx)
+	if err != nil {
+		return fmt.Errorf("list assets for business CSV currencies: %w", err)
+	}
+	known := make(map[string]struct{}, len(assets))
+	for _, asset := range assets {
+		known[asset.Code] = struct{}{}
+	}
+	missing := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, ref := range refs {
+		if _, ok := known[ref.Code]; ok {
+			continue
+		}
+		if _, ok := seen[ref.Code]; ok {
+			continue
+		}
+		missing = append(missing, fmt.Sprintf("row %d %s", ref.Row, ref.Code))
+		seen[ref.Code] = struct{}{}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"business CSV references unknown currency asset(s) %s: %w",
+		strings.Join(missing, ", "),
+		domain.ErrInvalid,
+	)
 }
 
 func businessCSVPositionKey(account domain.AccountID, asset string) string {

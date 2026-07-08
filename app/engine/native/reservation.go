@@ -33,17 +33,12 @@ import (
 	fwengine "go.openpit.dev/officer/framework/engine"
 )
 
-// defaultHoldTTL is how long a held reservation lives before the TTL sweeper
-// auto-rolls it back. A held reservation holds no engine/storage lock, so this
-// multi-minute window blocks nothing.
-const defaultHoldTTL = 120 * time.Second
-
-// sweepInterval is the TTL sweeper tick.
-const sweepInterval = time.Second
-
-// resolvedRetention bounds how long explicit terminal ids stay in memory for
-// duplicate resolve detection.
-const resolvedRetention = defaultHoldTTL
+// maxResolvedRetained bounds how many explicit terminal ids stay in memory for
+// duplicate-resolve detection. Eviction is FIFO (oldest resolved first) once the
+// cap is reached, so the single-resolve guard is bounded without any TTL. A held
+// reservation stays held until an operator/reconciliation resolves it; nothing
+// auto-releases it.
+const maxResolvedRetained = 1 << 16
 
 // reservationState is the lifecycle state of a registry entry. Held is the only
 // resolvable state; Resolving is the transient single-resolve guard set before
@@ -58,8 +53,7 @@ const (
 )
 
 type resolvedReservation struct {
-	expiresAt time.Time
-	state     reservationState
+	state reservationState
 }
 
 // terminal reports whether the state is a final resolution.
@@ -73,7 +67,6 @@ func (s reservationState) terminal() bool {
 type heldReservation struct {
 	res        *pretrade.Reservation
 	issuedAt   time.Time
-	expiresAt  time.Time
 	account    domain.AccountID
 	params     domain.Order
 	approvalID string
@@ -95,13 +88,15 @@ type heldReservation struct {
 // state, releases it, then takes e.mu to touch the native handle.
 type reservationRegistry struct {
 	by map[string]*heldReservation
-	// resolved records the terminal outcome of ids resolved explicitly via
-	// commit/rollback, so a repeated resolve is recognised as already-resolved
-	// (conflict for commit, no-op for rollback) rather than unknown. TTL-swept
-	// ids are NOT recorded here: an expired hold's token is already past its
-	// expiry, so a later resolve legitimately sees it as unknown.
-	resolved map[string]resolvedReservation
-	mu       sync.Mutex
+	// resolved records the terminal outcome of ids resolved via commit/rollback,
+	// so a repeated resolve is recognised as already-resolved (conflict for commit,
+	// no-op for rollback) rather than unknown. It is the in-process single-resolve
+	// guard: after a restart the native handle is gone and resolution falls back to
+	// the persisted terminal intent instead. The set is bounded by
+	// maxResolvedRetained with FIFO eviction (resolvedOrder tracks insertion order).
+	resolved      map[string]resolvedReservation
+	resolvedOrder []string
+	mu            sync.Mutex
 }
 
 // newReservationRegistry builds an empty registry.
@@ -120,50 +115,6 @@ func (e *openPitEngine) SetReservationStore(store ReservationStore) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.resStore = store
-}
-
-// startSweeper launches the TTL sweeper goroutine. It is started once when the
-// adapter is constructed and stopped by Stop via stopSweep.
-func (e *openPitEngine) startSweeper() {
-	e.sweepWG.Add(1)
-	go func() {
-		defer e.sweepWG.Done()
-		ticker := time.NewTicker(sweepInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-e.stopSweep:
-				return
-			case <-ticker.C:
-				e.sweepExpired(context.Background(), time.Now())
-			}
-		}
-	}()
-}
-
-// sweepExpired rolls back every held reservation whose TTL has passed, via the
-// rollback-by-id path. Collecting ids under registry.mu first keeps the lock
-// order (registry.mu -> e.mu) intact during each rollback.
-func (e *openPitEngine) sweepExpired(ctx context.Context, now time.Time) {
-	e.registry.mu.Lock()
-	e.pruneResolvedLocked(now)
-	expired := make([]*heldReservation, 0)
-	for _, held := range e.registry.by {
-		if held.state == reservationStateHeld && !held.expiresAt.After(now) {
-			expired = append(expired, held)
-		}
-	}
-	e.registry.mu.Unlock()
-
-	for _, held := range expired {
-		// A concurrent confirm may have resolved the entry between collection and
-		// here; rollbackHeld tolerates an already-resolved id. Swept ids are
-		// forgotten (not recorded resolved): the token is already past expiry, so a
-		// later resolve legitimately sees the id as unknown.
-		_ = e.RunAccountSynchronized(ctx, held.account, func(lane AccountLane) error {
-			return lane.(accountLane).rollbackHeldLane(ctx, held.approvalID, false)
-		})
-	}
 }
 
 // ReserveHold runs the pre-trade pipeline for o and, on accept, keeps the
@@ -191,10 +142,6 @@ func (l accountLane) ReserveHold(
 	if err != nil {
 		return HoldResult{}, err
 	}
-
-	l.owner.mu.RLock()
-	store := l.owner.resStore
-	l.owner.mu.RUnlock()
 
 	reservation, rejects, err := l.eng.ExecutePreTrade(order)
 	if err != nil {
@@ -224,22 +171,24 @@ func (l accountLane) ReserveHold(
 		outcomes:   outcomes,
 		approvalID: uuid.NewString(),
 		issuedAt:   now,
-		expiresAt:  now.Add(defaultHoldTTL),
 		state:      reservationStateHeld,
+	}
+
+	// Build the durable intent before registering the hold so a marshal failure
+	// aborts with nothing held. The engine only registers the hold in-memory; the
+	// node persists this intent in the same transaction as the order (mirroring the
+	// node-driven commit/rollback paths), so a nested store write on the single DB
+	// connection - which would self-deadlock against the order transaction - never
+	// happens here.
+	intent, err := reservationIntentFrom(held, domain.ReservationIntentStateHeld)
+	if err != nil {
+		reservation.RollbackAndClose()
+		return HoldResult{}, err
 	}
 
 	l.owner.registry.mu.Lock()
 	l.owner.registry.by[held.approvalID] = held
 	l.owner.registry.mu.Unlock()
-
-	if store != nil {
-		if perr := persistIntent(ctx, store, held, domain.ReservationIntentStateHeld); perr != nil {
-			// Persisting failed: roll the hold back so engine state and the (absent)
-			// durable record agree, then surface the error.
-			_ = l.rollbackHeldLane(ctx, held.approvalID, true)
-			return HoldResult{}, perr
-		}
-	}
 
 	return HoldResult{
 		Accepted:            true,
@@ -248,7 +197,7 @@ func (l accountLane) ReserveHold(
 		SettlementLockPrice: settlement,
 		EstimateSource:      source,
 		Outcomes:            outcomes,
-		ExpiresAt:           held.expiresAt,
+		Intent:              intent,
 	}, nil
 }
 
@@ -288,7 +237,7 @@ func (l accountLane) CommitHeld(ctx context.Context, approvalID string) error {
 	// job here. Durable persistence (intent flip + order status + event) is the
 	// node's atomic ResolveOrderReservation; the engine no longer touches the
 	// store on the node-driven commit path.
-	l.owner.finishResolve(approvalID, reservationStateCommitted, true)
+	l.owner.finishResolve(approvalID, reservationStateCommitted)
 	return nil
 }
 
@@ -311,15 +260,16 @@ func (l accountLane) RollbackHeld(ctx context.Context, approvalID string) error 
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("engine: rollback held cancelled: %w", err)
 	}
-	return l.rollbackHeldLane(ctx, approvalID, true)
+	return l.rollbackHeldLane(approvalID)
 }
 
-// rollbackHeld is the internal rollback-by-id path shared by RollbackHeld and
-// the TTL sweeper. It tolerates an already-resolved (terminal) entry: such a
-// call is a no-op. An unknown id returns domain.ErrNotFound. When record is true
-// the terminal outcome is remembered so a later resolve is recognised as
-// already-resolved; the sweeper passes false to forget swept ids.
-func (l accountLane) rollbackHeldLane(ctx context.Context, approvalID string, record bool) error {
+// rollbackHeldLane is the internal rollback-by-id path behind the manual cancel.
+// It tolerates an already-resolved (terminal) entry: such a call is a no-op. An
+// unknown id returns domain.ErrNotFound. The terminal outcome is remembered so a
+// later resolve is recognised as already-resolved. The node performs the atomic
+// ResolveOrderReservation (intent flip + status + events); the engine does not
+// touch the store here.
+func (l accountLane) rollbackHeldLane(approvalID string) error {
 	held, err := l.owner.beginResolve(approvalID)
 	if err != nil {
 		// Tolerate a terminal/resolving entry: it was already resolved.
@@ -333,23 +283,8 @@ func (l accountLane) rollbackHeldLane(ctx context.Context, approvalID string, re
 	// or not the engine is still running; the native handle is only touched under
 	// e.mu either way.
 	held.res.RollbackAndClose()
-	l.owner.mu.RLock()
-	store := l.owner.resStore
-	l.owner.mu.RUnlock()
-
-	l.owner.finishResolve(approvalID, reservationStateRolledBack, record)
-
-	// record==true is the node-driven cancel: the node performs the atomic
-	// ResolveOrderReservation (intent flip + status + events), so the engine does
-	// not touch the store. record==false is the TTL sweeper, which the engine owns
-	// end to end: it resolves atomically through its own store handle here. A late
-	// confirm that won the in-memory guard already removed the entry, so only one
-	// of {confirm, sweep} reaches this point; if the order moved on meanwhile the
-	// store's status guard returns ErrConflict, which the sweeper swallows.
-	if record || store == nil {
-		return nil
-	}
-	return resolveSweptRollback(ctx, store, held)
+	l.owner.finishResolve(approvalID, reservationStateRolledBack)
+	return nil
 }
 
 func (e *openPitEngine) reservationAccount(approvalID string) (domain.AccountID, error) {
@@ -394,30 +329,26 @@ func (e *openPitEngine) beginResolve(approvalID string) (*heldReservation, error
 	return held, nil
 }
 
-// finishResolve sets the terminal state, removes the live entry, and (when record
-// is true) remembers the terminal outcome so a later resolve is recognised as
-// already-resolved.
-func (e *openPitEngine) finishResolve(approvalID string, state reservationState, record bool) {
+// finishResolve sets the terminal state, removes the live entry, and remembers
+// the terminal outcome so a later resolve is recognised as already-resolved. The
+// resolved set is bounded by maxResolvedRetained with FIFO eviction so it cannot
+// grow without bound over a long run.
+func (e *openPitEngine) finishResolve(approvalID string, state reservationState) {
 	e.registry.mu.Lock()
 	defer e.registry.mu.Unlock()
 	if held, ok := e.registry.by[approvalID]; ok {
 		held.state = state
 		delete(e.registry.by, approvalID)
 	}
-	if record {
-		e.registry.resolved[approvalID] = resolvedReservation{
-			state:     state,
-			expiresAt: time.Now().UTC().Add(resolvedRetention),
+	if _, done := e.registry.resolved[approvalID]; !done {
+		if len(e.registry.resolvedOrder) >= maxResolvedRetained {
+			oldest := e.registry.resolvedOrder[0]
+			e.registry.resolvedOrder = e.registry.resolvedOrder[1:]
+			delete(e.registry.resolved, oldest)
 		}
+		e.registry.resolvedOrder = append(e.registry.resolvedOrder, approvalID)
 	}
-}
-
-func (e *openPitEngine) pruneResolvedLocked(now time.Time) {
-	for id, resolved := range e.registry.resolved {
-		if !resolved.expiresAt.After(now) {
-			delete(e.registry.resolved, id)
-		}
-	}
+	e.registry.resolved[approvalID] = resolvedReservation{state: state}
 }
 
 // SubmitImmediate runs the pre-trade pipeline and, on accept, commits the
@@ -593,83 +524,35 @@ func settlementEstimate(lockPrices []string, o domain.Order) (string, string) {
 	return settlement, source
 }
 
-// persistIntent writes a reservation intent row for a held reservation in the
-// given state. The order params plus persisted balance outcomes are marshalled
-// into the opaque ParamsJSON; the SDK-serialized lock is carried verbatim as the
-// intent's Lock blob (not as a decimal-array JSON). The order ref is the order's
-// opaque external id, zero for an in-memory-only hold.
-func persistIntent(
-	ctx context.Context, store ReservationStore,
+// reservationIntentFrom builds the durable reservation-intent record for a held
+// reservation in the given state. The order params plus persisted balance
+// outcomes are marshalled into the opaque ParamsJSON; the SDK-serialized lock is
+// carried verbatim as the intent's Lock blob (not as a decimal-array JSON). The
+// order ref is the order's opaque external id, zero for an in-memory-only hold.
+// The engine never writes it: the node persists it in the order transaction so a
+// nested store write cannot self-deadlock on the single DB connection.
+func reservationIntentFrom(
 	held *heldReservation, state domain.ReservationIntentState,
-) error {
+) (domain.ReservationIntent, error) {
 	paramsJSON, err := json.Marshal(reservationIntentPayload{
 		Order:    held.params,
 		Outcomes: held.outcomes,
 	})
 	if err != nil {
-		return fmt.Errorf("engine: marshal reservation params: %w", err)
+		return domain.ReservationIntent{}, fmt.Errorf("engine: marshal reservation params: %w", err)
 	}
-	intent := domain.ReservationIntent{
+	return domain.ReservationIntent{
 		ApprovalID: held.approvalID,
 		Order:      held.params.ExternalID,
 		Account:    held.account,
 		ParamsJSON: string(paramsJSON),
 		Lock:       held.lock,
 		IssuedAt:   held.issuedAt,
-		ExpiresAt:  held.expiresAt,
 		State:      state,
-	}
-	if err := store.UpsertReservationIntent(ctx, intent); err != nil {
-		return fmt.Errorf("engine: persist reservation intent: %w", err)
-	}
-	return nil
+	}, nil
 }
 
 type reservationIntentPayload struct {
 	Order    domain.Order     `json:"order"`
 	Outcomes []BalanceOutcome `json:"outcomes,omitempty"`
-}
-
-// resolveSweptRollback atomically resolves a TTL-swept hold: it flips the intent
-// to rolled-back, advances the order accepted->rolled_back, and appends one
-// system-sourced reservation_rolled_back event in a single store transaction. An
-// in-memory-only hold (no order row) carries OrderID==0, so the store skips the
-// order/event writes and only flips the intent (tolerating its absence too). The
-// status WHERE-guard (AllowedFrom={accepted}) is TOCTOU-safe: if a confirm/fill
-// advanced the order between collection and this tx, the store returns
-// ErrConflict and writes nothing; the caller (sweeper) swallows it, leaving the
-// winning resolution intact.
-func resolveSweptRollback(
-	ctx context.Context, store ReservationStore, held *heldReservation,
-) error {
-	order := held.params.ExternalID
-	var events []domain.OrderEvent
-	if !order.IsZero() {
-		events = []domain.OrderEvent{{
-			Order:  order,
-			Type:   domain.OrderEventReservationRolledBack,
-			Source: domain.SourceSystem,
-			// A TTL-swept rollback is system-initiated: it has no actor principal, so
-			// the event carries an empty principal (a NULL reference). A literal
-			// "system" code would point at a non-existent principal dictionary row.
-		}}
-	}
-	err := store.ResolveOrderReservation(ctx, domain.ReservationResolution{
-		ApprovalID:  held.approvalID,
-		IntentState: domain.ReservationIntentStateRolledBack,
-		OrderStatus: domain.OrderStatusRolledBack,
-		AllowedFrom: []domain.OrderStatus{domain.OrderStatusAccepted},
-		Events:      events,
-		Order:       order,
-	})
-	if err != nil {
-		// A swept order may have been committed/filled meanwhile: the status guard
-		// returns ErrConflict and an unknown order returns ErrNotFound. Both are
-		// expected races the sweeper tolerates - the winning resolution stands.
-		if errors.Is(err, domain.ErrConflict) || errors.Is(err, domain.ErrNotFound) {
-			return nil
-		}
-		return fmt.Errorf("engine: resolve swept reservation: %w", err)
-	}
-	return nil
 }

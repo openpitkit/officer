@@ -60,7 +60,8 @@
     "empty": {
       "title": "No balances",
       "hint": "Use Adjust to seed spot-funds balances for an account and asset."
-    }
+    },
+    "activeOrdersTitle": "Active orders for {{account}}"
   },
   "inline": {
     "apply": "Apply",

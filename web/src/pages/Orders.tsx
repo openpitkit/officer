@@ -70,6 +70,15 @@ import type {
 import { useOrdersPage } from "@/api/useOrders";
 import { useTradesPage } from "@/api/useTrades";
 import { operatorOptions } from "@/lib/dataControlLabels";
+import {
+  ACTIVE_ORDER_STATUSES,
+  ACTIVE_STATUS_SET,
+  ALL_ORDER_STATUSES,
+  parseStatusSet,
+  sameStatusSet,
+  TERMINAL_ORDER_STATUSES,
+  type OrderStatusValue,
+} from "@/lib/orderStatus";
 import { formatDateTime } from "@/i18n/format";
 import { DEFAULT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from "@/lib/useDebounce";
 import { subtractDecimalStrings } from "@/lib/numberStep";
@@ -2498,18 +2507,6 @@ const NUMBER_FILTER_MODES: RangeFilterMode[] = [
   "between",
 ];
 const TIME_FILTER_MODES: RangeFilterMode[] = ["after", "before", "between"];
-const ORDER_STATUS_FILTERS = [
-  "all",
-  "submitted",
-  "accepted",
-  "rejected",
-  "committed",
-  "rolled_back",
-  "filled",
-  "partially_filled",
-  "cancelled",
-] as const;
-
 function normalizeSourceFilter(value: string): Source | undefined {
   const trimmed = value.trim();
   if (trimmed === "" || trimmed === "_all") {
@@ -2706,6 +2703,7 @@ function RangeFilterControls({
           operatorAriaLabel={label}
           from={firstValue}
           to={secondValue}
+          fluid
           showPresets={false}
           clearLabel={tc("filters.clearField")}
           onOperatorChange={updateMode}
@@ -2719,6 +2717,7 @@ function RangeFilterControls({
           operatorAriaLabel={label}
           min={firstValue}
           max={secondValue}
+          fluid
           clearLabel={tc("filters.clearField")}
           onOperatorChange={updateMode}
           onMinChange={updateFirst}
@@ -2762,6 +2761,114 @@ type TradeAdvancedFilterDraft = {
   lockPriceMax: string;
 };
 
+/** The advanced-dialog status filter: checkboxes grouped by lifecycle phase,
+ *  plus per-group quick selects and a reset. Multi-select over a status set;
+ *  an empty selection means no status filter. */
+function OrderStatusFilterGroup({
+  selected,
+  onChange,
+}: {
+  selected: OrderStatusValue[];
+  onChange: (next: OrderStatusValue[]) => void;
+}) {
+  const { t } = useTranslation("orders");
+
+  const toggle = (status: OrderStatusValue, checked: boolean) => {
+    const next = new Set(selected);
+    if (checked) {
+      next.add(status);
+    } else {
+      next.delete(status);
+    }
+    onChange(ALL_ORDER_STATUSES.filter((value) => next.has(value)));
+  };
+
+  const renderGroup = (
+    title: string,
+    group: readonly OrderStatusValue[],
+  ) => {
+    const nextWithoutGroup = selected.filter(
+      (status) => !group.includes(status),
+    );
+    const nextWithGroup = ALL_ORDER_STATUSES.filter(
+      (status) => selected.includes(status) || group.includes(status),
+    );
+    return (
+      <div className="grid gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <FieldLabel>{title}</FieldLabel>
+          <div className="flex flex-wrap gap-1">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-5 px-1.5 text-[0.625rem]"
+              onClick={() => onChange(nextWithGroup)}
+            >
+              {t("filter.status.selectAll")}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-5 px-1.5 text-[0.625rem]"
+              onClick={() => onChange(nextWithoutGroup)}
+            >
+              {t("filter.status.clearAll")}
+            </Button>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
+          {group.map((status) => (
+            <label
+              key={status}
+              className="flex cursor-pointer select-none items-center gap-2 text-xs text-text"
+            >
+              <input
+                type="checkbox"
+                checked={selected.includes(status)}
+                onChange={(e) => toggle(status, e.target.checked)}
+                className="accent-[var(--accent)]"
+              />
+              {t(`filter.status.${status}`)}
+            </label>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="grid gap-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <FieldLabel>{t("filter.statusLabel")}</FieldLabel>
+        <div className="flex flex-wrap gap-1">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-5 px-1.5 text-[0.625rem]"
+            onClick={() => onChange([...ALL_ORDER_STATUSES])}
+          >
+            {t("filter.status.selectAll")}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-5 px-1.5 text-[0.625rem]"
+            onClick={() => onChange([])}
+          >
+            {t("filter.status.clearAll")}
+          </Button>
+        </div>
+      </div>
+      {renderGroup(t("filter.status.groupActive"), ACTIVE_ORDER_STATUSES)}
+      {renderGroup(t("filter.status.groupFinalized"), TERMINAL_ORDER_STATUSES)}
+    </div>
+  );
+}
+
 export function Orders() {
   const { t } = useTranslation("orders");
   const { t: tc } = useTranslation("common");
@@ -2789,14 +2896,14 @@ export function Orders() {
       ? (params.get("side") as OrderSide)
       : "all",
   );
-  const [orderStatus, setOrderStatus] =
-    useState<(typeof ORDER_STATUS_FILTERS)[number]>(
-      ORDER_STATUS_FILTERS.includes(
-        params.get("status") as (typeof ORDER_STATUS_FILTERS)[number],
-      )
-        ? (params.get("status") as (typeof ORDER_STATUS_FILTERS)[number])
-        : "all",
+  // The applied status filter is a set; empty means "all statuses". The quick
+  // buttons and the advanced checkbox group are shorthands over this one set.
+  const [orderStatuses, setOrderStatuses] = useState<OrderStatusValue[]>(() =>
+    parseStatusSet(params.get("status")),
   );
+  const [orderStatusesDraft, setOrderStatusesDraft] = useState<
+    OrderStatusValue[]
+  >(() => parseStatusSet(params.get("status")));
   const [orderBaseAsset, setOrderBaseAsset] = useState(initialBaseAsset);
   const [orderBaseAssetDraft, setOrderBaseAssetDraft] =
     useState(initialBaseAsset);
@@ -3007,6 +3114,9 @@ export function Orders() {
   }
 
   function syncAdvancedDrafts() {
+    setOrderStatusesDraft(
+      orderStatuses.length === 0 ? [...ALL_ORDER_STATUSES] : orderStatuses,
+    );
     setOrderAdvancedDraft({
       amountMode: orderAmountMode,
       amountMin: orderAmountMin,
@@ -3039,6 +3149,12 @@ export function Orders() {
       return;
     }
     if (tab === "orders") {
+      if (orderStatusesDraft.length === 0) {
+        return;
+      }
+      const nextStatuses = normalizeOrderStatusSet(orderStatusesDraft);
+      setOrderStatuses(nextStatuses);
+      setOrderStatusesDraft(nextStatuses);
       setOrderAmountMode(orderAdvancedDraft.amountMode);
       setOrderAmountMin(orderAdvancedDraft.amountMin);
       setOrderAmountMax(orderAdvancedDraft.amountMax);
@@ -3065,6 +3181,36 @@ export function Orders() {
       resetTradePage();
     }
     setMoreFiltersOpen(false);
+  }
+
+  // Quick status filters are online shorthands over the one status set: "All"
+  // clears it, "Active" sets it to exactly the active-orders group. They win
+  // over any advanced selection, overwriting it to match.
+  const statusIsAll = orderStatuses.length === 0;
+  const statusIsActive = sameStatusSet(orderStatuses, ACTIVE_STATUS_SET);
+
+  function normalizeOrderStatusSet(
+    statuses: readonly OrderStatusValue[],
+  ): OrderStatusValue[] {
+    if (sameStatusSet(statuses, ALL_ORDER_STATUSES)) {
+      return [];
+    }
+    if (sameStatusSet(statuses, ACTIVE_STATUS_SET)) {
+      return [...ACTIVE_STATUS_SET];
+    }
+    return ALL_ORDER_STATUSES.filter((status) => statuses.includes(status));
+  }
+
+  function applyAllStatuses() {
+    setOrderStatuses([]);
+    setOrderStatusesDraft([]);
+    setOrderPage(0);
+  }
+
+  function applyActiveStatuses() {
+    setOrderStatuses(ACTIVE_STATUS_SET);
+    setOrderStatusesDraft(ACTIVE_STATUS_SET);
+    setOrderPage(0);
   }
 
   const orderIdentityDraftChanged =
@@ -3155,8 +3301,8 @@ export function Orders() {
     if (orderSide !== "all") {
       filter.side = orderSide;
     }
-    if (orderStatus !== "all") {
-      filter.status = orderStatus;
+    if (orderStatuses.length > 0) {
+      filter.status = orderStatuses.join(",");
     }
     const baseAsset = trimmedOrUndefined(orderBaseAsset);
     if (baseAsset !== undefined) {
@@ -3204,7 +3350,7 @@ export function Orders() {
     orderSize,
     orderSort.order,
     orderSort.sort,
-    orderStatus,
+    orderStatuses,
   ]);
   const ordersResult = useOrdersPage(orderListFilters);
   const tradeListFilters = useMemo<TradesFilter>(() => {
@@ -3567,7 +3713,7 @@ export function Orders() {
       appendShareParam(query, "account", orderAccount.trim());
       appendShareParam(query, "source", normalizedOrderSource);
       appendShareParam(query, "side", orderSide, "all");
-      appendShareParam(query, "status", orderStatus, "all");
+      appendShareParam(query, "status", orderStatuses.join(","));
       appendShareParam(query, "baseAsset", orderBaseAsset.trim());
       appendShareParam(query, "quoteAsset", orderQuoteAsset.trim());
       appendShareParam(query, "amountMode", orderAmountMode, "all");
@@ -3598,7 +3744,7 @@ export function Orders() {
     orderPriceMode,
     orderQuoteAsset,
     orderSide,
-    orderStatus,
+    orderStatuses,
     tab,
     tradeAccount,
     tradeAtMax,
@@ -3680,15 +3826,17 @@ export function Orders() {
           setOrderPage(0);
         });
       }
-      if (orderStatus !== "all") {
-        add(
-          "status",
-          `${t("filter.statusLabel")}: ${t(`filter.status.${orderStatus}`)}`,
-          () => {
-            setOrderStatus("all");
-            setOrderPage(0);
-          },
-        );
+      if (orderStatuses.length > 0) {
+        const value = statusIsActive
+          ? t("filter.quickStatus.active")
+          : orderStatuses
+              .map((status) => t(`filter.status.${status}`))
+              .join(", ");
+        add("status", `${t("filter.statusLabel")}: ${value}`, () => {
+          setOrderStatuses([]);
+          setOrderStatusesDraft([]);
+          setOrderPage(0);
+        });
       }
       if (orderBaseAsset.trim() !== "") {
         add("baseAsset", `${t("filter.baseAssetLabel")}: ${orderBaseAsset.trim()}`, () => {
@@ -3830,7 +3978,8 @@ export function Orders() {
     orderPriceMode,
     orderQuoteAsset,
     orderSide,
-    orderStatus,
+    orderStatuses,
+    statusIsActive,
     t,
     tab,
     tradeAccount,
@@ -3852,41 +4001,19 @@ export function Orders() {
     timeRangeValue,
   ]);
 
-  const advancedFilterCount =
-    tab === "orders"
-      ? activeFilterChips.filter(
-          (entry) =>
-            ![
-              "account",
-              "baseAsset",
-              "quoteAsset",
-              "source",
-              "side",
-              "status",
-            ].includes(entry.key),
-        ).length
-      : activeFilterChips.filter(
-          (entry) =>
-            ![
-              "externalId",
-              "account",
-              "baseAsset",
-              "quoteAsset",
-              "source",
-              "side",
-            ].includes(entry.key),
-        ).length;
   const visibleFilterChips = useMemo(
     () =>
       tab === "orders"
         ? activeFilterChips.filter((entry) =>
-            ["amount", "price", "at"].includes(entry.key),
+            ["amount", "price", "at"].includes(entry.key) ||
+            (entry.key === "status" && !statusIsActive),
           )
         : activeFilterChips.filter((entry) =>
             ["at", "quantity", "price", "lockPrice"].includes(entry.key),
           ),
-    [activeFilterChips, tab],
+    [activeFilterChips, statusIsActive, tab],
   );
+  const advancedFilterCount = visibleFilterChips.length;
   const clearActiveFilters = () => {
     for (const entry of activeFilterChips) {
       entry.onRemove();
@@ -4219,6 +4346,23 @@ export function Orders() {
                 </Button>
               </div>
               <div className="grid gap-1">
+                <FieldLabel>{t("filter.quickStatusLabel")}</FieldLabel>
+                <Segmented
+                  value={statusIsAll ? "all" : statusIsActive ? "active" : ""}
+                  options={[
+                    { value: "all", label: t("filter.quickStatus.all") },
+                    { value: "active", label: t("filter.quickStatus.active") },
+                  ]}
+                  onChange={(next) => {
+                    if (next === "active") {
+                      applyActiveStatuses();
+                    } else {
+                      applyAllStatuses();
+                    }
+                  }}
+                />
+              </div>
+              <div className="grid gap-1">
                 <FieldLabel>{t("filter.sideLabel")}</FieldLabel>
                 <Segmented
                   value={orderSide}
@@ -4232,27 +4376,6 @@ export function Orders() {
                     setOrderPage(0);
                   }}
                 />
-              </div>
-              <div className="grid gap-1">
-                <FieldLabel>{t("filter.statusLabel")}</FieldLabel>
-                <Select
-                  value={orderStatus}
-                  onValueChange={(next) => {
-                    setOrderStatus(next as (typeof ORDER_STATUS_FILTERS)[number]);
-                    setOrderPage(0);
-                  }}
-                >
-                  <SelectTrigger className="h-8 w-44 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {ORDER_STATUS_FILTERS.map((status) => (
-                      <SelectItem key={status} value={status}>
-                        {t(`filter.status.${status}`)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
               </div>
               <div className="grid gap-1">
                 <FieldLabel>{t("filter.sourceAriaLabel")}</FieldLabel>
@@ -4398,14 +4521,18 @@ export function Orders() {
           setMoreFiltersOpen(next);
         }}
       >
-        <DialogContent className="max-w-3xl">
+        <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>{tc("filters.more")}</DialogTitle>
             <DialogDescription>{t("filter.advancedDescription")}</DialogDescription>
           </DialogHeader>
           {tab === "orders" ? (
-            <div ref={advancedFilterDialogRef} className="grid gap-4">
-              <div className="grid gap-3 xl:grid-cols-3">
+            <div ref={advancedFilterDialogRef} className="grid gap-3">
+              <OrderStatusFilterGroup
+                selected={orderStatusesDraft}
+                onChange={setOrderStatusesDraft}
+              />
+              <div className="mt-2 grid gap-3 border-t border-border pt-3">
                 <RangeFilterControls
                   label={t("filter.amountLabel")}
                   mode={orderAdvancedDraft.amountMode}
@@ -4482,8 +4609,8 @@ export function Orders() {
               </div>
             </div>
           ) : (
-            <div ref={advancedFilterDialogRef} className="grid gap-4">
-              <div className="grid gap-3 xl:grid-cols-2">
+            <div ref={advancedFilterDialogRef} className="grid gap-3">
+              <div className="grid gap-3">
                 <div className="grid gap-1">
                   <FieldLabel>{t("filter.timeLabel")}</FieldLabel>
                   <TimeRangeFilter
@@ -4610,6 +4737,7 @@ export function Orders() {
               variant="outline"
               onClick={() => {
                 if (tab === "orders") {
+                  setOrderStatusesDraft([]);
                   setOrderAdvancedDraft({
                     amountMode: "all",
                     amountMin: "",
@@ -4641,7 +4769,11 @@ export function Orders() {
             >
               {tc("filters.removeAdvanced")}
             </Button>
-            <Button type="button" onClick={applyAdvancedFilters}>
+            <Button
+              type="button"
+              onClick={applyAdvancedFilters}
+              disabled={tab === "orders" && orderStatusesDraft.length === 0}
+            >
               {tc("filters.applyAdvanced")}
             </Button>
           </DialogFooter>

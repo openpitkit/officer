@@ -135,10 +135,6 @@ type openPitEngine struct {
 	// holds in memory only. Guarded by mu.
 	resStore ReservationStore
 
-	// stopSweep signals the TTL sweeper goroutine to exit; sweepWG waits for it.
-	stopSweep chan struct{}
-	sweepWG   sync.WaitGroup
-
 	mu      sync.RWMutex
 	running bool
 }
@@ -192,11 +188,7 @@ func newOpenPitEngine(
 		registered:        registered,
 		brokerPresent:     brokerPresent,
 		registry:          newReservationRegistry(),
-		stopSweep:         make(chan struct{}),
 		running:           eng != nil && async != nil,
-	}
-	if adapter.running {
-		adapter.startSweeper()
 	}
 	return adapter
 }
@@ -252,6 +244,9 @@ func BuildOpenPitEngine(runtimeLibraryPath string, snap Snapshot) (Engine, error
 		return releaseOnErr(err)
 	}
 	if err := hydrateGroups(eng, snap.Accounts, res); err != nil {
+		return releaseOnErr(err)
+	}
+	if err := hydrateCurrencies(eng, snap.Accounts, snap.Groups, res); err != nil {
 		return releaseOnErr(err)
 	}
 	if err := blockGroups(eng, snap.Groups); err != nil {
@@ -490,6 +485,41 @@ func (l accountLane) UnblockAccount(ctx context.Context, id domain.AccountID) er
 		return fmt.Errorf("engine: unblock account %q: %w", id, err)
 	}
 	l.eng.Accounts().Unblock(accountID)
+	return nil
+}
+
+// SetAccountCurrency sets the account's explicit currency on the live engine.
+func (l accountLane) SetAccountCurrency(
+	ctx context.Context, id domain.AccountID, currency string,
+) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("engine: set account currency cancelled: %w", err)
+	}
+	accountID, err := l.owner.res.account(id)
+	if err != nil {
+		return fmt.Errorf("engine: set account currency %q: %w", id, err)
+	}
+	asset, err := newAsset(currency)
+	if err != nil {
+		return fmt.Errorf("engine: account currency %q: %w", currency, err)
+	}
+	if err := l.eng.Accounts().SetCurrency(accountID, asset); err != nil {
+		return fmt.Errorf("engine: set account currency %q: %w", id, err)
+	}
+	return nil
+}
+
+// ClearAccountCurrency clears the account's explicit currency on the live
+// engine.
+func (l accountLane) ClearAccountCurrency(ctx context.Context, id domain.AccountID) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("engine: clear account currency cancelled: %w", err)
+	}
+	accountID, err := l.owner.res.account(id)
+	if err != nil {
+		return fmt.Errorf("engine: clear account currency %q: %w", id, err)
+	}
+	l.eng.Accounts().ClearCurrency(accountID)
 	return nil
 }
 
@@ -870,13 +900,11 @@ func (e *openPitEngine) MarketDataSink() marketdata.Sink {
 	return e.sink
 }
 
-// Stop halts the engine and releases native resources. It first stops the TTL
-// sweeper goroutine (which takes e.mu, so it must be quiesced before Stop holds
-// it), then under e.mu drains the reservation registry - rolling back and
-// closing every non-terminal held reservation so no native handle leaks across
-// teardown - before stopping the engine and closing the market-data service.
-// Quote producers (the connector manager) must be stopped before Stop. It is
-// idempotent.
+// Stop halts the engine and releases native resources. Under e.mu it drains the
+// reservation registry - rolling back and closing every non-terminal held
+// reservation so no native handle leaks across teardown - before stopping the
+// engine and closing the market-data service. Quote producers (the connector
+// manager) must be stopped before Stop. It is idempotent.
 func (e *openPitEngine) Stop() {
 	e.mu.Lock()
 	if !e.running {
@@ -884,10 +912,7 @@ func (e *openPitEngine) Stop() {
 		return
 	}
 	e.running = false
-	close(e.stopSweep)
 	e.mu.Unlock()
-
-	e.sweepWG.Wait()
 
 	async := e.async
 	if async != nil {
@@ -1067,6 +1092,12 @@ func hydrateGroups(eng *openpit.Engine, accounts []domain.Account, res idResolve
 func blockGroups(eng *openpit.Engine, groups []domain.AccountGroup) error {
 	handle := eng.Accounts()
 	for _, group := range groups {
+		if group.Code == "" {
+			if group.Blocked {
+				return fmt.Errorf("engine: default group cannot be blocked: %w", domain.ErrInvalid)
+			}
+			continue
+		}
 		if !group.Blocked {
 			continue
 		}
@@ -1076,6 +1107,66 @@ func blockGroups(eng *openpit.Engine, groups []domain.AccountGroup) error {
 		}
 		if err := handle.BlockGroup(id, group.BlockReason); err != nil {
 			return fmt.Errorf("engine: block group %q: %w", group.Code, err)
+		}
+	}
+	return nil
+}
+
+func hydrateCurrencies(
+	eng *openpit.Engine,
+	accounts []domain.Account,
+	groups []domain.AccountGroup,
+	res idResolver,
+) error {
+	return applyCurrencies(eng.Accounts(), accounts, groups, res)
+}
+
+type currencyAccounts interface {
+	SetGroupCurrency(param.AccountGroupID, param.Asset) error
+	SetCurrency(param.AccountID, param.Asset) error
+}
+
+func applyCurrencies(
+	handle currencyAccounts,
+	accounts []domain.Account,
+	groups []domain.AccountGroup,
+	res idResolver,
+) error {
+	for _, group := range groups {
+		if group.Currency == "" {
+			continue
+		}
+		groupID, err := res.group(group.Code)
+		if err != nil {
+			return err
+		}
+		asset, err := param.NewAsset(group.Currency)
+		if err != nil {
+			return fmt.Errorf("engine: group %q currency %q: %w", group.Code, group.Currency, err)
+		}
+		if err := handle.SetGroupCurrency(groupID, asset); err != nil {
+			return fmt.Errorf("engine: set group %q currency: %w", group.Code, err)
+		}
+	}
+	for _, account := range accounts {
+		if account.Currency == "" {
+			continue
+		}
+		accountID, err := res.account(account.Code)
+		if err != nil {
+			return err
+		}
+		asset, err := param.NewAsset(account.Currency)
+		if err != nil {
+			return fmt.Errorf(
+				"engine: account %q currency %q: %w",
+				account.Code,
+				account.Currency,
+				err,
+			)
+		}
+		if err := handle.SetCurrency(accountID, asset); err != nil {
+			return fmt.Errorf("engine: set account %q currency: %w", account.Code, err)
 		}
 	}
 	return nil

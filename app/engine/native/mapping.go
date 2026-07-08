@@ -69,6 +69,10 @@ func newIDResolver(accounts []domain.Account, groups []domain.AccountGroup) (idR
 		r.accounts[account.Code] = id
 	}
 	for _, group := range groups {
+		if group.Code == "" {
+			r.groups[group.Code] = param.DefaultAccountGroup
+			continue
+		}
 		id, err := engineGroupID(group.EngineGroupID, group.Code)
 		if err != nil {
 			return idResolver{}, err

@@ -112,6 +112,7 @@ type ImportCounts struct {
 type GroupRow struct {
 	Code        string
 	Title       string
+	Currency    string
 	Notes       string
 	BlockReason string
 	Blocked     bool
@@ -124,6 +125,7 @@ type AccountRow struct {
 	Code        domain.AccountID
 	Title       string
 	GroupCode   string
+	Currency    string
 	Notes       string
 	BlockReason string
 	Blocked     bool
@@ -173,8 +175,15 @@ func (e tooLargeError) Unwrap() error { return domain.ErrTooLarge }
 // surrogate id. Orders and trades use external_id; trades reference their order
 // via order_external_id.
 var (
-	groupHeader   = []string{"code", "title", "notes", "blocked", "block_reason"}
+	groupHeader   = []string{"code", "title", "currency", "notes", "blocked", "block_reason"}
 	accountHeader = []string{
+		"code", "title", "group_code", "currency", "notes", "blocked",
+		"block_reason",
+	}
+	legacyGroupHeader = []string{
+		"code", "title", "notes", "blocked", "block_reason",
+	}
+	legacyAccountHeader = []string{
 		"code", "title", "group_code", "notes", "blocked", "block_reason",
 	}
 	positionHeader = []string{
@@ -247,7 +256,7 @@ func EncodeGroups(rows []domain.AccountGroup, delimiter Delimiter) ([]byte, erro
 	out = append(out, groupHeader)
 	for _, row := range rows {
 		out = append(out, []string{
-			row.Code, row.Title, row.Notes,
+			row.Code, row.Title, row.Currency, row.Notes,
 			formatBool(row.Blocked), row.BlockReason,
 		})
 	}
@@ -261,8 +270,8 @@ func EncodeAccounts(rows []domain.Account, delimiter Delimiter) ([]byte, error) 
 	out = append(out, accountHeader)
 	for _, row := range rows {
 		out = append(out, []string{
-			row.Code.String(), row.Title, row.GroupCode, row.Notes,
-			formatBool(row.Blocked), row.BlockReason,
+			row.Code.String(), row.Title, row.GroupCode, row.Currency,
+			row.Notes, formatBool(row.Blocked), row.BlockReason,
 		})
 	}
 	return writeCSV(out, delimiter)
@@ -412,15 +421,31 @@ func readCSV(body []byte, delimiter Delimiter) ([][]string, error) {
 }
 
 func parseGroups(records [][]string) (ImportRows, error) {
+	header := groupHeader
+	legacy := false
 	if err := requireHeader(records[0], groupHeader); err != nil {
-		return ImportRows{}, err
+		if legacyErr := requireHeader(records[0], legacyGroupHeader); legacyErr != nil {
+			return ImportRows{}, err
+		}
+		header = legacyGroupHeader
+		legacy = true
 	}
 	rows := make([]GroupRow, 0, len(records)-1)
 	for i, rec := range records[1:] {
-		if len(rec) != len(groupHeader) {
+		if len(rec) != len(header) {
 			return ImportRows{}, rowErr(i+2, "wrong field count")
 		}
-		blocked, err := parseBool(rec[3], i+2)
+		currency := ""
+		notesIndex := 2
+		blockedIndex := 3
+		reasonIndex := 4
+		if !legacy {
+			currency = strings.TrimSpace(rec[2])
+			notesIndex = 3
+			blockedIndex = 4
+			reasonIndex = 5
+		}
+		blocked, err := parseBool(rec[blockedIndex], i+2)
 		if err != nil {
 			return ImportRows{}, err
 		}
@@ -429,23 +454,40 @@ func parseGroups(records [][]string) (ImportRows, error) {
 			return ImportRows{}, rowErr(i+2, "code is empty")
 		}
 		rows = append(rows, GroupRow{
-			Code: code, Title: rec[1], Notes: rec[2],
-			Blocked: blocked, BlockReason: rec[4],
+			Code: code, Title: rec[1], Currency: currency,
+			Notes: rec[notesIndex], Blocked: blocked,
+			BlockReason: rec[reasonIndex],
 		})
 	}
 	return ImportRows{Groups: rows}, nil
 }
 
 func parseAccounts(records [][]string) (ImportRows, error) {
+	header := accountHeader
+	legacy := false
 	if err := requireHeader(records[0], accountHeader); err != nil {
-		return ImportRows{}, err
+		if legacyErr := requireHeader(records[0], legacyAccountHeader); legacyErr != nil {
+			return ImportRows{}, err
+		}
+		header = legacyAccountHeader
+		legacy = true
 	}
 	rows := make([]AccountRow, 0, len(records)-1)
 	for i, rec := range records[1:] {
-		if len(rec) != len(accountHeader) {
+		if len(rec) != len(header) {
 			return ImportRows{}, rowErr(i+2, "wrong field count")
 		}
-		blocked, err := parseBool(rec[4], i+2)
+		currency := ""
+		notesIndex := 3
+		blockedIndex := 4
+		reasonIndex := 5
+		if !legacy {
+			currency = strings.TrimSpace(rec[3])
+			notesIndex = 4
+			blockedIndex = 5
+			reasonIndex = 6
+		}
+		blocked, err := parseBool(rec[blockedIndex], i+2)
 		if err != nil {
 			return ImportRows{}, err
 		}
@@ -456,8 +498,10 @@ func parseAccounts(records [][]string) (ImportRows, error) {
 		rows = append(rows, AccountRow{
 			Code:      domain.AccountID(code),
 			Title:     rec[1],
-			GroupCode: strings.TrimSpace(rec[2]), Notes: rec[3],
-			Blocked: blocked, BlockReason: rec[5],
+			GroupCode: strings.TrimSpace(rec[2]),
+			Currency:  currency,
+			Notes:     rec[notesIndex],
+			Blocked:   blocked, BlockReason: rec[reasonIndex],
 		})
 	}
 	return ImportRows{Accounts: rows}, nil

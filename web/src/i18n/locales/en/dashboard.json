@@ -4,7 +4,10 @@
   "counts": {
     "accounts": "Accounts",
     "groups": "Groups",
-    "orders": "Orders"
+    "orders": "Orders",
+    "captionActiveTotal": "active / total",
+    "captionTodayTotal": "today / total",
+    "captionTodayActiveTotal": "today / active / total"
   },
   "activity": {
     "noRecent": "No recent activity",
@@ -54,7 +57,9 @@
       "balanceUpdate": "Balance update",
       "order": "Order",
       "tradeFill": "Trade / fill",
-      "resetDatabase": "Reset database"
+      "resetDatabase": "Reset database",
+      "restartService": "Restart service",
+      "stopService": "Stop service"
     }
   }
 }

@@ -663,6 +663,9 @@ func TestGroupRoundTripAndEngineID(t *testing.T) {
 	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "alpha"}); !errors.Is(err, domain.ErrAlreadyExists) {
 		t.Fatalf("CreateGroup(dup) error = %v, want ErrAlreadyExists", err)
 	}
+	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: ""}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("CreateGroup(empty) error = %v, want ErrInvalid", err)
+	}
 
 	got, ok, err := rs.GetGroup(ctx, "alpha")
 	if err != nil || !ok {
@@ -693,6 +696,9 @@ func TestGroupRoundTripAndEngineID(t *testing.T) {
 
 	if err := rs.SetGroupNotes(ctx, "ghost", "x"); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("SetGroupNotes(missing) error = %v, want ErrNotFound", err)
+	}
+	if _, err := rs.UpdateGroup(ctx, "alpha", domain.AccountGroup{Code: ""}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("UpdateGroup(empty) error = %v, want ErrInvalid", err)
 	}
 }
 

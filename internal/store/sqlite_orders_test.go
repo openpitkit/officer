@@ -470,7 +470,6 @@ func TestPutEventAttestationPresentAndAbsent(t *testing.T) {
 		RequestType: domain.AttestationRequestSubmit,
 		Mode:        "immediate",
 		IssuedAt:    "2026-06-26T10:00:00Z",
-		ExpiresAt:   "2026-06-26T10:05:00Z",
 	}
 	if err := rs.PutEventAttestation(ctx, event.ExternalID, att); err != nil {
 		t.Fatalf("PutEventAttestation: %v", err)
@@ -496,10 +495,11 @@ func TestPutEventAttestationPresentAndAbsent(t *testing.T) {
 		t.Fatalf("attestation token after retry = %+v, want the first (write-once)", got)
 	}
 
-	// A missing event id is a tolerated no-op, not an error.
+	// A missing event id is a hard error: an attestation without its event row
+	// would otherwise make a committed event look signed when it is not.
 	ghost := domain.ExternalID("missing-attestation-event")
-	if err := rs.PutEventAttestation(ctx, ghost, att); err != nil {
-		t.Fatalf("PutEventAttestation(missing) = %v, want nil (no-op)", err)
+	if err := rs.PutEventAttestation(ctx, ghost, att); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("PutEventAttestation(missing) = %v, want ErrNotFound", err)
 	}
 
 	unsignedEvent, err := rs.AppendOrderEvent(ctx, domain.OrderEvent{
@@ -516,7 +516,6 @@ func TestPutEventAttestationPresentAndAbsent(t *testing.T) {
 		RequestType: domain.AttestationRequestSubmit,
 		Mode:        "immediate",
 		IssuedAt:    "2026-06-26T10:10:00Z",
-		ExpiresAt:   "2026-06-26T10:15:00Z",
 	}
 	if err := rs.PutEventAttestation(ctx, unsignedEvent.ExternalID, unsigned); err != nil {
 		t.Fatalf("PutEventAttestation(unsigned): %v", err)
@@ -854,6 +853,33 @@ func TestCountOrders(t *testing.T) {
 	}
 }
 
+func TestCountActiveOrders(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+
+	statuses := []domain.OrderStatus{
+		domain.OrderStatusSubmitted,
+		domain.OrderStatusAccepted,
+		domain.OrderStatusPartiallyFilled,
+		domain.OrderStatusCommitted,
+		domain.OrderStatusFilled,
+		domain.OrderStatusRejected,
+		domain.OrderStatusCancelled,
+		domain.OrderStatusRolledBack,
+	}
+	for _, status := range statuses {
+		order := sampleOrder()
+		order.Status = status
+		if _, err := rs.CreateOrder(ctx, order); err != nil {
+			t.Fatalf("CreateOrder(%s): %v", status, err)
+		}
+	}
+
+	n, err := rs.CountActiveOrders(ctx)
+	if err != nil || n != 3 {
+		t.Fatalf("CountActiveOrders = %d, err=%v, want 3", n, err)
+	}
+}
+
 func TestRecordOrderSettlement(t *testing.T) {
 	ctx, rs := seedOrderFixtures(t)
 
@@ -953,6 +979,133 @@ func TestRecordOrderSettlement(t *testing.T) {
 	}
 }
 
+// TestRecordOrderSubmissionPersistsHeldIntentInSameTx is the regression guard for
+// the hold-submit self-deadlock: a held-accept settlement carries the reservation
+// intent, which must be written on the order transaction. Writing it on the pooled
+// *sql.DB from inside the transaction self-deadlocks under SetMaxOpenConns(1) - the
+// nested query waits forever for the one connection the transaction already holds.
+// The watchdog fails fast instead of hanging the suite if that regresses.
+func TestRecordOrderSubmissionPersistsHeldIntentInSameTx(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+	r := rs.(*realmStore)
+
+	order := sampleOrder()
+	order.ExternalID = domain.ExternalID("hold-order")
+	const approvalID = "held-approval-1"
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.RecordOrderSubmission(
+			ctx,
+			order,
+			domain.OrderEvent{Type: domain.OrderEventSubmitted},
+			func(persisted domain.Order) (domain.OrderSettlement, error) {
+				intent := domain.ReservationIntent{
+					ApprovalID: approvalID,
+					Order:      persisted.ExternalID,
+					Account:    persisted.Account,
+					ParamsJSON: `{"order":{}}`,
+					Lock:       persisted.Lock,
+					IssuedAt:   time.Unix(0, 0).UTC(),
+					State:      domain.ReservationIntentStateHeld,
+				}
+				return domain.OrderSettlement{
+					Account:     persisted.Account,
+					Order:       persisted.ExternalID,
+					OrderStatus: domain.OrderStatusAccepted,
+					Events: []domain.OrderEvent{{
+						Order: persisted.ExternalID,
+						Type:  domain.OrderEventPreTradeAccepted,
+					}},
+					ReservationIntentUpsert: &intent,
+				}, nil
+			},
+		)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RecordOrderSubmission: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("RecordOrderSubmission deadlocked persisting the held intent inside the order transaction")
+	}
+
+	got, ok, err := rs.GetReservationIntent(ctx, approvalID)
+	if err != nil {
+		t.Fatalf("GetReservationIntent: %v", err)
+	}
+	if !ok {
+		t.Fatal("reservation intent was not persisted atomically with the order")
+	}
+	if got.Order != order.ExternalID {
+		t.Fatalf("intent order = %q, want %q", got.Order, order.ExternalID)
+	}
+	if got.State != domain.ReservationIntentStateHeld {
+		t.Fatalf("intent state = %q, want held", got.State)
+	}
+}
+
+func TestRecordOrderSubmissionAttestationFailureRollsBack(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+	seedSigningKey(t, ctx, rs, "key-1")
+
+	order := sampleOrder()
+	order.ExternalID = domain.ExternalID("rollback-order")
+	errSign := errors.New("signing unavailable")
+	attest := func(
+		_ context.Context, event domain.OrderEvent,
+	) (domain.EventAttestation, bool, error) {
+		if event.Type == domain.OrderEventPreTradeAccepted {
+			return domain.EventAttestation{}, false, errSign
+		}
+		return domain.EventAttestation{
+			Token:       "tok-" + string(event.Type),
+			KeyID:       "key-1",
+			Alg:         "ed25519",
+			RequestType: domain.AttestationRequestSubmit,
+			Mode:        "immediate",
+			IssuedAt:    "2026-06-26T10:00:00Z",
+		}, true, nil
+	}
+
+	_, err := rs.(*realmStore).RecordOrderSubmissionWithAttestation(
+		ctx,
+		order,
+		domain.OrderEvent{Type: domain.OrderEventSubmitted},
+		func(persisted domain.Order) (domain.OrderSettlement, error) {
+			return domain.OrderSettlement{
+				Account:     persisted.Account,
+				Order:       persisted.ExternalID,
+				OrderStatus: domain.OrderStatusCommitted,
+				Events: []domain.OrderEvent{{
+					Order: persisted.ExternalID,
+					Type:  domain.OrderEventPreTradeAccepted,
+				}},
+			}, nil
+		},
+		attest,
+	)
+	if !errors.Is(err, errSign) {
+		t.Fatalf("RecordOrderSubmissionWithAttestation = %v, want signing error", err)
+	}
+	if _, err := rs.GetOrder(ctx, order.ExternalID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("GetOrder after rollback = %v, want ErrNotFound", err)
+	}
+	r := rs.(*realmStore)
+	if got := countRows(t, ctx, r, "order_record"); got != 0 {
+		t.Fatalf("order_record rows after rollback = %d, want 0", got)
+	}
+	if got := countRows(t, ctx, r, "order_event"); got != 0 {
+		t.Fatalf("order_event rows after rollback = %d, want 0", got)
+	}
+	if got := countRows(t, ctx, r, "event_attestation"); got != 0 {
+		t.Fatalf("event_attestation rows after rollback = %d, want 0", got)
+	}
+}
+
 func TestRecordOrderSettlementPersistsEngineAbsoluteBalances(t *testing.T) {
 	ctx, rs := seedOrderFixtures(t)
 
@@ -970,7 +1123,6 @@ func TestRecordOrderSettlementPersistsEngineAbsoluteBalances(t *testing.T) {
 		Account:    "acc-1",
 		ParamsJSON: "{}",
 		IssuedAt:   time.Now().UTC(),
-		ExpiresAt:  time.Now().UTC().Add(time.Minute),
 		State:      domain.ReservationIntentStateHeld,
 	}); err != nil {
 		t.Fatalf("UpsertReservationIntent: %v", err)
@@ -1208,7 +1360,7 @@ func TestDeleteOrderCascadesChildren(t *testing.T) {
 	if err := rs.PutEventAttestation(ctx, event.ExternalID, domain.EventAttestation{
 		Token: "t", KeyID: "key-1", Alg: "ed25519",
 		RequestType: domain.AttestationRequestSubmit, Mode: "immediate",
-		IssuedAt: "2026-06-26T10:00:00Z", ExpiresAt: "2026-06-26T10:05:00Z",
+		IssuedAt: "2026-06-26T10:00:00Z",
 	}); err != nil {
 		t.Fatalf("PutEventAttestation: %v", err)
 	}

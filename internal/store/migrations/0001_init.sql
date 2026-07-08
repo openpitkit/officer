@@ -79,6 +79,7 @@ CREATE TABLE account_group (
     id           {{PK}},
     code         TEXT    NOT NULL UNIQUE,
     title        TEXT    NOT NULL DEFAULT '',
+    currency_asset_id INTEGER REFERENCES asset(id) ON DELETE RESTRICT,
     notes        TEXT    NOT NULL DEFAULT '',
     blocked      {{BOOL}} NOT NULL DEFAULT 0,
     block_reason TEXT    NOT NULL DEFAULT ''
@@ -96,6 +97,7 @@ CREATE TABLE account (
     code         TEXT    NOT NULL UNIQUE,
     title        TEXT    NOT NULL DEFAULT '',
     group_id     INTEGER REFERENCES account_group(id) ON DELETE SET NULL,
+    currency_asset_id INTEGER REFERENCES asset(id) ON DELETE RESTRICT,
     notes        TEXT    NOT NULL DEFAULT '',
     blocked      {{BOOL}} NOT NULL DEFAULT 0,
     block_reason TEXT    NOT NULL DEFAULT ''
@@ -281,8 +283,7 @@ CREATE TABLE event_attestation (
                        CHECK (request_type IN
                            ('submit', 'execution_report', 'confirm', 'cancel')),
     mode           TEXT    NOT NULL CHECK (mode IN ('immediate', 'hold')),
-    issued_at      TEXT    NOT NULL,
-    expires_at     TEXT    NOT NULL
+    issued_at      TEXT    NOT NULL
 );
 
 CREATE INDEX idx_event_attestations_signing_key ON event_attestation (signing_key_id);
@@ -422,9 +423,10 @@ CREATE TABLE user_setting (
     PRIMARY KEY (user_id, setting_key)
 );
 
--- Reservation intents survive process restart; on boot any held row is orphaned
--- and rolled back. approval_id is the row's own UUID handle (used in tokens).
--- params is opaque transient JSON; lock is the SDK-serialized pretrade.Lock blob.
+-- Reservation intents survive process restart; a held row stays held until an
+-- operator/reconciliation resolves it. approval_id is the row's own UUID handle
+-- (used in tokens). params is opaque transient JSON; lock is the SDK-serialized
+-- pretrade.Lock blob.
 CREATE TABLE reservation_intent (
     approval_id TEXT PRIMARY KEY,
     order_id    INTEGER REFERENCES order_record(id)   ON DELETE CASCADE,
@@ -432,7 +434,6 @@ CREATE TABLE reservation_intent (
     params      TEXT    NOT NULL,
     lock        BLOB,
     issued_at   TEXT    NOT NULL,
-    expires_at  TEXT    NOT NULL,
     state       TEXT    NOT NULL DEFAULT 'held'
 );
 

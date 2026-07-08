@@ -853,6 +853,7 @@ func TestOverview(t *testing.T) {
 				Groups:         4,
 				GroupsActive:   3,
 				Limits:         5,
+				OrdersActive:   6,
 				OrdersToday:    2,
 				OrdersTotal:    9,
 			},
@@ -886,6 +887,7 @@ func TestOverview(t *testing.T) {
 		counts["accountsActive"] != float64(2) ||
 		counts["groups"] != float64(4) ||
 		counts["groupsActive"] != float64(3) ||
+		counts["ordersActive"] != float64(6) ||
 		counts["ordersTotal"] != float64(9) {
 		t.Fatalf("unexpected counts: %v", counts)
 	}

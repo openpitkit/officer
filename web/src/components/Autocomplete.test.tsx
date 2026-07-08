@@ -140,6 +140,18 @@ describe("Autocomplete", () => {
     ).toEqual(["USD", "USDC", "USDT"]);
   });
 
+  it("accepts the first matching suggestion on Enter", async () => {
+    const user = userEvent.setup();
+    render(<Harness suggestions={["desk-alpha", "desk-beta"]} />);
+
+    const input = screen.getByRole("combobox", { name: "dictionary field" });
+    await user.type(input, "DES");
+    await user.keyboard("{Enter}");
+
+    expect(input).toHaveValue("desk-alpha");
+    expect(screen.queryByRole("option")).not.toBeInTheDocument();
+  });
+
   it("omits the inline reset glyph when no onClear is provided", async () => {
     const user = userEvent.setup();
     render(<Harness />);

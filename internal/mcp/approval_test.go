@@ -21,7 +21,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.openpit.dev/officer/framework/domain"
@@ -241,12 +240,10 @@ func TestCancelGateMutatingAccessError(t *testing.T) {
 // TestSubmitOrderHappyPath: submit_order forwards inputs and returns token
 // fields when the gate is open.
 func TestSubmitOrderHappyPath(t *testing.T) {
-	expires := time.Now().UTC().Add(120 * time.Second)
 	src := &approvalFakeSource{
 		submitResult: SubmitOrderTokenResult{
 			Token:           "eyFAKETOKEN",
 			KeyID:           "key-1",
-			ExpiresAt:       expires,
 			OrderExternalID: testOrderEID,
 		},
 	}
@@ -286,6 +283,48 @@ func TestSubmitOrderHappyPath(t *testing.T) {
 	}
 	if call.mode != "hold" {
 		t.Errorf("mode: want hold got %s", call.mode)
+	}
+}
+
+func TestSubmitOrderRiskRejectReturnsDecision(t *testing.T) {
+	src := &approvalFakeSource{
+		submitResult: SubmitOrderTokenResult{
+			Token:           "eyREJECT",
+			KeyID:           "key-1",
+			OrderExternalID: testOrderEID,
+			Verdict:         "reject",
+			Reasons: []domain.OrderReject{{
+				Code:   "insufficient_funds",
+				Scope:  "account",
+				Policy: "spot_funds",
+				Reason: "available funds below required amount",
+			}},
+		},
+	}
+
+	res := callSubmitOrder(t, src, submitOrderInput{
+		Account:     "acc1",
+		BaseAsset:   "BTC",
+		QuoteAsset:  "USD",
+		Side:        "buy",
+		AmountKind:  "quantity",
+		AmountValue: "0.5",
+		Price:       "50000",
+		Mode:        "hold",
+	})
+
+	if res.IsError {
+		t.Fatalf("unexpected error: %v", res.Content)
+	}
+	out := res.StructuredContent
+	if out.Verdict != "reject" || out.Token != "eyREJECT" || len(out.Reasons) != 1 {
+		t.Fatalf("reject output = %+v", out)
+	}
+	if out.Reasons[0].Code != "insufficient_funds" {
+		t.Fatalf("reject reason = %+v", out.Reasons[0])
+	}
+	if got := textContent(res.Content); got != "order "+testOrderEID+" rejected - 1 reason(s)" {
+		t.Fatalf("summary = %q", got)
 	}
 }
 

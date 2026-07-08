@@ -384,10 +384,11 @@ type submitOrderInput struct {
 }
 
 type submitOrderOutput struct {
-	Token           string `json:"token"`
-	KeyID           string `json:"keyId"`
-	ExpiresAt       string `json:"expiresAt"`
-	OrderExternalID string `json:"orderExternalId"`
+	Token           string                `json:"token"`
+	KeyID           string                `json:"keyId"`
+	OrderExternalID string                `json:"orderExternalId"`
+	Verdict         string                `json:"verdict"`
+	Reasons         []checkOrderRejectDTO `json:"reasons,omitempty"`
 }
 
 type confirmExecutionInput struct {
@@ -480,13 +481,12 @@ type orderDTO struct {
 }
 
 type orderApprovalDTO struct {
-	Token     string `json:"token"`
-	KeyID     string `json:"keyId"`
-	Alg       string `json:"alg"`
-	Mode      string `json:"mode"`
-	IssuedAt  string `json:"issuedAt"`
-	ExpiresAt string `json:"expiresAt"`
-	Signed    bool   `json:"signed"`
+	Token    string `json:"token"`
+	KeyID    string `json:"keyId"`
+	Alg      string `json:"alg"`
+	Mode     string `json:"mode"`
+	IssuedAt string `json:"issuedAt"`
+	Signed   bool   `json:"signed"`
 }
 
 type tradeDTO struct {
@@ -600,13 +600,12 @@ func toOrderApprovalDTO(detail domain.OrderDetail) *orderApprovalDTO {
 		return nil
 	}
 	return &orderApprovalDTO{
-		Token:     att.Token,
-		KeyID:     att.KeyID,
-		Alg:       att.Alg,
-		Mode:      att.Mode,
-		IssuedAt:  att.IssuedAt,
-		ExpiresAt: att.ExpiresAt,
-		Signed:    att.Alg == "ed25519",
+		Token:    att.Token,
+		KeyID:    att.KeyID,
+		Alg:      att.Alg,
+		Mode:     att.Mode,
+		IssuedAt: att.IssuedAt,
+		Signed:   att.Alg == "ed25519",
 	}
 }
 
@@ -656,13 +655,7 @@ func toAuditDTOs(rows []domain.AuditRow) []auditDTO {
 func toCheckOrderOutput(r domain.CheckResult) checkOrderOutput {
 	rejects := make([]checkOrderRejectDTO, 0, len(r.Rejects))
 	for _, rej := range r.Rejects {
-		rejects = append(rejects, checkOrderRejectDTO{
-			Code:    rej.Code,
-			Scope:   rej.Scope,
-			Policy:  rej.Policy,
-			Reason:  rej.Reason,
-			Details: rej.Details,
-		})
+		rejects = append(rejects, toMCPRejectDTO(rej))
 	}
 	prices := r.WouldLockPrices
 	if prices == nil {
@@ -682,6 +675,27 @@ func toCheckOrderOutput(r domain.CheckResult) checkOrderOutput {
 		Rejects:            rejects,
 		WouldDisplayPrices: prices,
 		Passed:             r.Passed,
+	}
+}
+
+func toMCPRejectDTOs(rejects []domain.OrderReject) []checkOrderRejectDTO {
+	if len(rejects) == 0 {
+		return nil
+	}
+	out := make([]checkOrderRejectDTO, 0, len(rejects))
+	for _, rej := range rejects {
+		out = append(out, toMCPRejectDTO(rej))
+	}
+	return out
+}
+
+func toMCPRejectDTO(rej domain.OrderReject) checkOrderRejectDTO {
+	return checkOrderRejectDTO{
+		Code:    rej.Code,
+		Scope:   rej.Scope,
+		Policy:  rej.Policy,
+		Reason:  rej.Reason,
+		Details: rej.Details,
 	}
 }
 
@@ -923,13 +937,20 @@ func submitOrderHandler(
 		out := submitOrderOutput{
 			Token:           res.Token,
 			KeyID:           res.KeyID,
-			ExpiresAt:       res.ExpiresAt.UTC().Format(time.RFC3339),
 			OrderExternalID: res.OrderExternalID,
+			Verdict:         res.Verdict,
+			Reasons:         toMCPRejectDTOs(res.Reasons),
+		}
+		if res.Verdict == "reject" {
+			return fmt.Sprintf(
+				"order %s rejected - %d reason(s)",
+				res.OrderExternalID,
+				len(res.Reasons),
+			), out, nil
 		}
 		return fmt.Sprintf(
-			"order %s approved token issued (expires %s)",
+			"order %s approved token issued",
 			res.OrderExternalID,
-			out.ExpiresAt,
 		), out, nil
 	}
 }

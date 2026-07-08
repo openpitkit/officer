@@ -67,6 +67,12 @@ type AuditEntry struct {
 	Source domain.Source
 }
 
+// EventAttestor signs or intentionally skips one just-appended order event
+// before the surrounding store transaction commits.
+type EventAttestor func(
+	ctx context.Context, event domain.OrderEvent,
+) (domain.EventAttestation, bool, error)
+
 // BusinessCSVImportGroup is one account-group row selected for a transactional
 // business CSV import.
 type BusinessCSVImportGroup struct {
@@ -637,6 +643,10 @@ type RealmStore interface {
 	// domain.ErrNotFound when absent.
 	SetGroupNotes(ctx context.Context, code, notes string) error
 
+	// SetGroupCurrency sets or clears the currency asset for the identified
+	// group. The empty code addresses the reserved default group tier.
+	SetGroupCurrency(ctx context.Context, code, currency string) error
+
 	// UpdateGroup replaces the public code and mutable title of the identified
 	// group. Returns domain.ErrNotFound when oldCode is absent, or
 	// domain.ErrAlreadyExists when group.Code already exists.
@@ -689,6 +699,9 @@ type RealmStore interface {
 	// group code is unknown.
 	SetAccountGroup(ctx context.Context, code domain.AccountID, groupCode string) error
 
+	// SetAccountCurrency sets or clears the account-level currency asset.
+	SetAccountCurrency(ctx context.Context, code domain.AccountID, currency string) error
+
 	// SetAccountNotes replaces the notes of the identified account. Returns
 	// domain.ErrNotFound when absent.
 	SetAccountNotes(ctx context.Context, code domain.AccountID, notes string) error
@@ -723,6 +736,13 @@ type RealmStore interface {
 	ListBalances(
 		ctx context.Context, account domain.AccountID, asset string,
 	) ([]domain.Balance, error)
+
+	// ListAccountsWithOpenBalances returns account codes that have at least one
+	// non-zero available, held, or incoming balance. Empty accounts means all
+	// accounts.
+	ListAccountsWithOpenBalances(
+		ctx context.Context, accounts []domain.AccountID,
+	) ([]domain.AccountID, error)
 
 	// ListBalanceRows returns balances matching filter, with total count before
 	// paging.
@@ -837,9 +857,9 @@ type RealmStore interface {
 	// PutEventAttestation stamps the signed attestation envelope onto the
 	// identified order-history event, write-once: it inserts the 1:1
 	// event_attestation row only when the event carries none yet, so a retry or a
-	// later write never clobbers an already-issued envelope. A no-op (already
-	// stamped, or missing event) is not an error: the attestation is best-effort
-	// and the event stream is the durable trail.
+	// later write never clobbers an already-issued envelope. An already-stamped
+	// event is a no-op; a missing event returns domain.ErrNotFound so callers
+	// cannot silently commit an unsigned event.
 	PutEventAttestation(
 		ctx context.Context, eventID domain.ExternalID, att domain.EventAttestation,
 	) error
@@ -870,6 +890,9 @@ type RealmStore interface {
 
 	// CountOrders returns the total number of orders recorded in the realm.
 	CountOrders(ctx context.Context) (int, error)
+
+	// CountActiveOrders returns orders in the working lifecycle set.
+	CountActiveOrders(ctx context.Context) (int, error)
 
 	// CountOrdersSince returns the number of orders whose at timestamp is at or
 	// after since. Timestamps are compared as RFC3339Nano UTC text.

@@ -1,0 +1,666 @@
+// Copyright The Pit Project Owners. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// Please see https://openpit.dev and the OWNERS file for details.
+
+package node
+
+import (
+	"context"
+	"errors"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/store"
+)
+
+func TestLocalNode_BlockUnblockAccount(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+
+	if err := n.SetAccountBlocked(ctx, testKey(id), true, "risk", testCaller); err != nil {
+		t.Fatalf("block: %v", err)
+	}
+	if len(eng.blockCalls) != 1 || eng.blockCalls[0].reason != "risk" {
+		t.Fatalf("engine block not applied: %+v", eng.blockCalls)
+	}
+
+	account, _, err := n.GetAccountState(ctx, testKey(id))
+	if err != nil {
+		t.Fatalf("GetAccountState: %v", err)
+	}
+	if !account.Blocked || account.BlockReason != "risk" {
+		t.Fatalf("account not blocked in store: %+v", account)
+	}
+
+	if err := n.SetAccountBlocked(ctx, testKey(id), false, "", testCaller); err != nil {
+		t.Fatalf("unblock: %v", err)
+	}
+	if len(eng.unblockCalls) != 1 {
+		t.Fatalf("engine unblock not applied: %+v", eng.unblockCalls)
+	}
+
+	rows, err := st.ListAudit(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	// startup hydrate, create_account, block, unblock = 4 rows, newest first.
+	if len(rows) != 4 || rows[0].Action != domain.AuditActionUnblock {
+		t.Fatalf("unexpected audit trail: %+v", rows)
+	}
+}
+
+// TestLocalNode_SetAccountBlockedUsesAccountLane proves the engine block/unblock
+// runs through the account lane (so it serializes against fills and the
+// execution-report kill-switch on the same account), not just under the global
+// mutation lock.
+func TestLocalNode_SetAccountBlockedUsesAccountLane(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, _ := newTestNode(t, eng)
+	ctx := context.Background()
+
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if err := n.SetAccountBlocked(ctx, testKey(id), true, "risk", testCaller); err != nil {
+		t.Fatalf("block: %v", err)
+	}
+	if len(eng.blockCalls) != 1 {
+		t.Fatalf("engine block not applied: %+v", eng.blockCalls)
+	}
+	if len(eng.accountSyncCalls) == 0 || eng.accountSyncCalls[len(eng.accountSyncCalls)-1] != id {
+		t.Fatalf("account sync calls = %+v, want last %s (block routed through lane)",
+			eng.accountSyncCalls, id)
+	}
+}
+
+// TestLocalNode_SetAccountGroupUsesGroupLane proves the engine group move runs
+// on the target group's synchronized lane while the store write remains inside
+// the account lane.
+func TestLocalNode_SetAccountGroupUsesGroupLane(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, _ := newTestNode(t, eng)
+	ctx := context.Background()
+
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if _, err := n.CreateGroup(ctx, domain.AccountGroup{Code: "desk-a"}, testCaller); err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	if err := n.SetAccountGroup(ctx, testKey(id), "desk-a", testCaller); err != nil {
+		t.Fatalf("SetAccountGroup: %v", err)
+	}
+	if len(eng.registerGroupCalls) != 1 {
+		t.Fatalf("register group calls = %+v, want one", eng.registerGroupCalls)
+	}
+	if len(eng.accountSyncCalls) == 0 || eng.accountSyncCalls[len(eng.accountSyncCalls)-1] != id {
+		t.Fatalf("account sync calls = %+v, want last %s", eng.accountSyncCalls, id)
+	}
+	if len(eng.groupSyncCalls) == 0 || eng.groupSyncCalls[len(eng.groupSyncCalls)-1] != "desk-a" {
+		t.Fatalf("group sync calls = %+v, want last desk-a", eng.groupSyncCalls)
+	}
+}
+
+// TestLocalNode_SetAccountGroupAutoCreatesUnknownGroup proves the auto-create
+// contract against a strict resolver: moving an account into a group with no
+// account_groups record succeeds because the missing record is created and the
+// engine rebuilt from the store before the lane, so the in-lane RegisterGroup
+// resolves the now-known group. Against the old in-lane-create-no-rebuild
+// implementation the account lane's RegisterGroup resolved the brand-new group
+// before it was registered and rejected it with ErrInvalid, so the move failed.
+func TestLocalNode_SetAccountGroupAutoCreatesUnknownGroup(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	// The strict resolver rejects any group it has not seen in a build snapshot.
+	// "new-desk" has never been created, so it is absent from the resolver.
+	eng.enforceResolver = true
+
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+
+	if err := n.SetAccountGroup(ctx, testKey(id), "new-desk", testCaller); err != nil {
+		t.Fatalf("SetAccountGroup into unknown group: %v", err)
+	}
+
+	if len(eng.registerGroupCalls) != 1 ||
+		eng.registerGroupCalls[0].groupID != "new-desk" ||
+		!slices.Equal(eng.registerGroupCalls[0].accounts, []domain.AccountID{id}) {
+		t.Fatalf("register group calls = %+v, want one for new-desk/%s",
+			eng.registerGroupCalls, id)
+	}
+
+	account, ok, err := st.GetAccount(ctx, id)
+	if err != nil || !ok {
+		t.Fatalf("GetAccount: %v ok=%v", err, ok)
+	}
+	if account.GroupCode != "new-desk" {
+		t.Fatalf("account group = %q, want new-desk", account.GroupCode)
+	}
+	group, ok, err := st.GetGroup(ctx, "new-desk")
+	if err != nil || !ok {
+		t.Fatalf("GetGroup: %v ok=%v", err, ok)
+	}
+	if group.Code != "new-desk" {
+		t.Fatalf("group code = %q, want new-desk", group.Code)
+	}
+}
+
+// TestLocalNode_SetGroupBlockedRunsUnderRestartGate proves the group block runs
+// under the exclusive engine-restart gate rather than on the group lane: it
+// applies the engine block directly (no RunGroupSynchronized call) and, while it
+// holds the gate, a concurrent engine-restart request is rejected with
+// ErrEngineRestarting.
+func TestLocalNode_SetGroupBlockedRunsUnderRestartGate(t *testing.T) {
+	t.Parallel()
+	entered := make(chan string, 1)
+	release := make(chan struct{})
+	eng := newFakeEngine()
+	eng.blockGroupEntered = entered
+	eng.blockGroupRelease = release
+	n, _ := newTestNode(t, eng)
+	ctx := context.Background()
+
+	if _, err := n.CreateGroup(ctx, domain.AccountGroup{Code: "desk-a"}, testCaller); err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+
+	errs := make(chan error, 1)
+	go func() { errs <- n.SetGroupBlocked(ctx, "desk-a", true, "risk", testCaller) }()
+
+	select {
+	case got := <-entered:
+		if got != "desk-a" {
+			t.Fatalf("entered group = %s, want desk-a", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SetGroupBlocked did not reach the engine block")
+	}
+
+	// The exclusive gate is held: a concurrent engine-restart request is rejected
+	// rather than interleaving with the in-flight group block.
+	if _, err := n.CreateGroup(ctx, domain.AccountGroup{Code: "desk-b"}, testCaller); !errors.Is(err, domain.ErrEngineRestarting) {
+		t.Fatalf("concurrent CreateGroup error = %v, want ErrEngineRestarting", err)
+	}
+
+	close(release)
+	if err := <-errs; err != nil {
+		t.Fatalf("SetGroupBlocked: %v", err)
+	}
+	if len(eng.blockGroupCalls) != 1 {
+		t.Fatalf("block group calls = %+v, want one", eng.blockGroupCalls)
+	}
+	if !slices.Equal(eng.groupSyncCalls, []string{"desk-a"}) {
+		t.Fatalf("group sync calls = %+v, want desk-a", eng.groupSyncCalls)
+	}
+}
+
+// TestLocalNode_SetGroupBlockedAutoCreatesUnknownGroup proves the auto-create
+// contract against a strict resolver: a group with no account_groups record is
+// unknown to the engine resolver, yet SetGroupBlocked succeeds because the
+// missing record is created and the engine rebuilt from the store before the
+// block runs. Against the old in-lane implementation the group-synchronized
+// call resolved the group before the callback and rejected the unknown group
+// with ErrInvalid, so the store record was never created and the block failed.
+func TestLocalNode_SetGroupBlockedAutoCreatesUnknownGroup(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	// The strict resolver rejects any group it has not seen in a build snapshot.
+	// "new-desk" has never been created, so it is absent from the resolver.
+	eng.enforceResolver = true
+
+	if err := n.SetGroupBlocked(ctx, "new-desk", true, "risk", testCaller); err != nil {
+		t.Fatalf("SetGroupBlocked on unknown group: %v", err)
+	}
+
+	group, ok, err := st.GetGroup(ctx, "new-desk")
+	if err != nil || !ok {
+		t.Fatalf("GetGroup: %v ok=%v", err, ok)
+	}
+	if !group.Blocked {
+		t.Fatalf("store not blocked after auto-create block")
+	}
+	if len(eng.blockGroupCalls) != 1 || eng.blockGroupCalls[0].groupID != "new-desk" {
+		t.Fatalf("block group calls = %+v, want one for new-desk", eng.blockGroupCalls)
+	}
+}
+
+// TestLocalNode_SetAccountBlockedAuditFailureFatals proves the account-block
+// path joins the post-engine fail-stop: once the engine block and the store
+// blocked-state write committed inside the account lane, a failing audit write
+// routes to the fatal hook. The diagnostic must name the account CODE, never the
+// engine surrogate (account_id), so operators reading the fatal log see the same
+// identifier the audit row stores.
+func TestLocalNode_SetAccountBlockedAuditFailureFatals(t *testing.T) {
+	t.Parallel()
+	auditErr := errors.New("account block audit failed")
+	st := newRealmWrapStore(newMemoryStore("node.db"), func(r store.RealmStore) store.RealmStore {
+		return &failActionAuditRealm{
+			RealmStore: r, action: domain.AuditActionBlock, err: auditErr,
+		}
+	})
+	ctx := context.Background()
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	eng := newFakeEngine()
+	var fatalErr error
+	n := newTestNodeWithStore(t, st, eng, WithFatalShutdownHook(func(err error) {
+		fatalErr = err
+	}))
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+
+	err := n.SetAccountBlocked(ctx, testKey(id), true, "risk", testCaller)
+	if !errors.Is(err, auditErr) {
+		t.Fatalf("SetAccountBlocked error = %v, want audit failure", err)
+	}
+	// Engine block applied before the audit write failed.
+	if len(eng.blockCalls) != 1 {
+		t.Fatalf("engine block calls = %+v, want one", eng.blockCalls)
+	}
+	if fatalErr == nil {
+		t.Fatal("fatal hook did not fire on post-engine account-block audit failure")
+	}
+	msg := fatalErr.Error()
+	if !strings.Contains(msg, `operation="audit account block"`) ||
+		!strings.Contains(msg, "account=acc-1") ||
+		!strings.Contains(msg, "account block audit failed") {
+		t.Fatalf("fatal error = %q, want operation, account code, and cause", msg)
+	}
+	if strings.Contains(msg, "account_id=") {
+		t.Fatalf("fatal error = %q, must not leak the engine surrogate", msg)
+	}
+}
+
+// TestLocalNode_SetAccountGroupAuditFailureFatals proves the account set-group
+// path joins the post-engine fail-stop with the same code-not-surrogate
+// diagnostic: the engine group move and the store link write committed inside
+// the lane, so a failing audit write routes to the fatal hook naming the account
+// code.
+func TestLocalNode_SetAccountGroupAuditFailureFatals(t *testing.T) {
+	t.Parallel()
+	auditErr := errors.New("set group audit failed")
+	st := newRealmWrapStore(newMemoryStore("node.db"), func(r store.RealmStore) store.RealmStore {
+		return &failActionAuditRealm{
+			RealmStore: r, action: domain.AuditActionSetGroup, err: auditErr,
+		}
+	})
+	ctx := context.Background()
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	eng := newFakeEngine()
+	var fatalErr error
+	n := newTestNodeWithStore(t, st, eng, WithFatalShutdownHook(func(err error) {
+		fatalErr = err
+	}))
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if _, err := n.CreateGroup(ctx, domain.AccountGroup{Code: "desk-a"}, testCaller); err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+
+	err := n.SetAccountGroup(ctx, testKey(id), "desk-a", testCaller)
+	if !errors.Is(err, auditErr) {
+		t.Fatalf("SetAccountGroup error = %v, want audit failure", err)
+	}
+	// Engine group move applied before the audit write failed.
+	if len(eng.registerGroupCalls) != 1 {
+		t.Fatalf("register group calls = %+v, want one", eng.registerGroupCalls)
+	}
+	if fatalErr == nil {
+		t.Fatal("fatal hook did not fire on post-engine set-group audit failure")
+	}
+	msg := fatalErr.Error()
+	if !strings.Contains(msg, `operation="audit set account group"`) ||
+		!strings.Contains(msg, "account=acc-1") ||
+		!strings.Contains(msg, "set group audit failed") {
+		t.Fatalf("fatal error = %q, want operation, account code, and cause", msg)
+	}
+	if strings.Contains(msg, "account_id=") {
+		t.Fatalf("fatal error = %q, must not leak the engine surrogate", msg)
+	}
+}
+
+// TestLocalNode_SetGroupBlockedAuditFailureFatals proves the group-block path
+// joins the post-engine fail-stop. A group has no account, so the diagnostic
+// names the group CODE. The engine group block and the store blocked-state write
+// committed under the restart gate, so a failing audit write routes to the fatal
+// hook.
+func TestLocalNode_SetGroupBlockedAuditFailureFatals(t *testing.T) {
+	t.Parallel()
+	auditErr := errors.New("group block audit failed")
+	st := newRealmWrapStore(newMemoryStore("node.db"), func(r store.RealmStore) store.RealmStore {
+		return &failActionAuditRealm{
+			RealmStore: r, action: domain.AuditActionBlockGroup, err: auditErr,
+		}
+	})
+	ctx := context.Background()
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	eng := newFakeEngine()
+	var fatalErr error
+	n := newTestNodeWithStore(t, st, eng, WithFatalShutdownHook(func(err error) {
+		fatalErr = err
+	}))
+	if _, err := n.CreateGroup(ctx, domain.AccountGroup{Code: "desk-a"}, testCaller); err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+
+	err := n.SetGroupBlocked(ctx, "desk-a", true, "risk", testCaller)
+	if !errors.Is(err, auditErr) {
+		t.Fatalf("SetGroupBlocked error = %v, want audit failure", err)
+	}
+	// Engine group block applied before the audit write failed.
+	if len(eng.blockGroupCalls) != 1 || eng.blockGroupCalls[0].groupID != "desk-a" {
+		t.Fatalf("block group calls = %+v, want one for desk-a", eng.blockGroupCalls)
+	}
+	if fatalErr == nil {
+		t.Fatal("fatal hook did not fire on post-engine group-block audit failure")
+	}
+	msg := fatalErr.Error()
+	if !strings.Contains(msg, `operation="audit group block"`) ||
+		!strings.Contains(msg, "group=desk-a") ||
+		!strings.Contains(msg, "group block audit failed") {
+		t.Fatalf("fatal error = %q, want operation, group code, and cause", msg)
+	}
+	if strings.Contains(msg, "account_id=") || strings.Contains(msg, "account=") {
+		t.Fatalf("fatal error = %q, must not leak a surrogate or account id", msg)
+	}
+}
+
+// TestLocalNode_SetGroupNotesAutoCreatesRegisteredGroup proves that setting
+// notes on a brand-new group registers it in the engine, not just the store:
+// after SetGroupNotes auto-creates "new-desk" a later SetAccountGroup moving an
+// account into it succeeds because the strict resolver knows the group.
+// SetGroupNotes rebuilt the engine from the store when it created the record.
+// Against the old no-rebuild SetGroupNotes the store row existed but the live
+// resolver never learned the group, so the in-lane RegisterGroup rejected it
+// with ErrInvalid and the account move failed.
+func TestLocalNode_SetGroupNotesAutoCreatesRegisteredGroup(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	// The strict resolver rejects any group it has not seen in a build snapshot.
+	// "new-desk" has never been created, so it is absent from the resolver.
+	eng.enforceResolver = true
+
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+
+	if err := n.SetGroupNotes(ctx, "new-desk", "vip desk", testCaller); err != nil {
+		t.Fatalf("SetGroupNotes on unknown group: %v", err)
+	}
+
+	group, ok, err := st.GetGroup(ctx, "new-desk")
+	if err != nil || !ok {
+		t.Fatalf("GetGroup: %v ok=%v", err, ok)
+	}
+	if group.Notes != "vip desk" {
+		t.Fatalf("group notes = %q, want vip desk", group.Notes)
+	}
+
+	// The group is now engine-registered, so moving an account into it succeeds
+	// against the strict resolver.
+	if err := n.SetAccountGroup(ctx, testKey(id), "new-desk", testCaller); err != nil {
+		t.Fatalf("SetAccountGroup into notes-created group: %v", err)
+	}
+	if len(eng.registerGroupCalls) != 1 ||
+		eng.registerGroupCalls[0].groupID != "new-desk" ||
+		!slices.Equal(eng.registerGroupCalls[0].accounts, []domain.AccountID{id}) {
+		t.Fatalf("register group calls = %+v, want one for new-desk/%s",
+			eng.registerGroupCalls, id)
+	}
+
+	account, ok, err := st.GetAccount(ctx, id)
+	if err != nil || !ok {
+		t.Fatalf("GetAccount: %v ok=%v", err, ok)
+	}
+	if account.GroupCode != "new-desk" {
+		t.Fatalf("account group = %q, want new-desk", account.GroupCode)
+	}
+}
+
+func TestLocalNode_BlockEngineFailureRevertsStore(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+
+	eng.failBlock = true
+	if err := n.SetAccountBlocked(ctx, testKey(id), true, "risk", testCaller); err == nil {
+		t.Fatalf("block: want error on engine failure")
+	}
+
+	account, ok, err := st.GetAccount(ctx, id)
+	if err != nil || !ok {
+		t.Fatalf("GetAccount: %v ok=%v", err, ok)
+	}
+	if account.Blocked {
+		t.Fatalf("store not reverted: account still blocked")
+	}
+}
+
+// newLaneProbeNode builds a node whose realm is a laneProbeRealm around a real
+// temp SQLite store, so a test can assert block/group store writes execute
+// inside the engine lane closure.
+func newLaneProbeNode(
+	t *testing.T, eng *fakeEngine,
+) (*localNode, *laneProbeRealm) {
+	t.Helper()
+	probe := &laneProbeRealm{eng: eng}
+	st := newRealmWrapStore(newMemoryStore("lane-probe.db"), func(inner store.RealmStore) store.RealmStore {
+		probe.RealmStore = inner
+		return probe
+	})
+	if err := st.Migrate(context.Background()); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	n := newTestNodeWithStore(t, st, eng)
+	return n, probe
+}
+
+// TestLocalNode_SetAccountBlockedStoreWriteInsideLane proves the store write is
+// serialized inside the account lane closure, so a concurrent same-account admin
+// op cannot interleave the store write with the engine block.
+func TestLocalNode_SetAccountBlockedStoreWriteInsideLane(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, probe := newLaneProbeNode(t, eng)
+	ctx := context.Background()
+
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if err := n.SetAccountBlocked(ctx, testKey(id), true, "risk", testCaller); err != nil {
+		t.Fatalf("block: %v", err)
+	}
+	if len(probe.inLane) != 1 || !probe.inLane[0] {
+		t.Fatalf("store write in-lane flags = %+v, want one true (write inside lane)", probe.inLane)
+	}
+}
+
+// TestLocalNode_SetAccountBlockedStoreFailureInLaneLeavesEngineUntouched proves a
+// store-write failure inside the lane returns before the engine block runs, so
+// the engine is never mutated when the store write cannot commit.
+func TestLocalNode_SetAccountBlockedStoreFailureInLaneLeavesEngineUntouched(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, probe := newLaneProbeNode(t, eng)
+	ctx := context.Background()
+
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	probe.failErr = errors.New("store write failed")
+	if err := n.SetAccountBlocked(ctx, testKey(id), true, "risk", testCaller); err == nil {
+		t.Fatalf("block: want error on store write failure")
+	}
+	if len(probe.inLane) != 1 || !probe.inLane[0] {
+		t.Fatalf("store write in-lane flags = %+v, want one true", probe.inLane)
+	}
+	if len(eng.blockCalls) != 0 {
+		t.Fatalf("engine block calls = %+v, want none on store failure", eng.blockCalls)
+	}
+	if len(eng.accountSyncCalls) == 0 || eng.accountSyncCalls[len(eng.accountSyncCalls)-1] != id {
+		t.Fatalf("account sync calls = %+v, want last %s (write attempted inside lane)",
+			eng.accountSyncCalls, id)
+	}
+}
+
+// TestLocalNode_SetAccountGroupStoreWriteInsideLane proves the group-move store
+// write is serialized inside the account lane closure.
+func TestLocalNode_SetAccountGroupStoreWriteInsideLane(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, probe := newLaneProbeNode(t, eng)
+	ctx := context.Background()
+
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if err := n.SetAccountGroup(ctx, testKey(id), "desk-a", testCaller); err != nil {
+		t.Fatalf("SetAccountGroup: %v", err)
+	}
+	if len(probe.inLane) != 1 || !probe.inLane[0] {
+		t.Fatalf("store write in-lane flags = %+v, want one true (write inside lane)", probe.inLane)
+	}
+}
+
+// TestLocalNode_SetAccountGroupStoreFailureInLaneLeavesEngineUntouched proves a
+// store-write failure inside the account lane returns before the engine move
+// runs.
+func TestLocalNode_SetAccountGroupStoreFailureInLaneLeavesEngineUntouched(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, probe := newLaneProbeNode(t, eng)
+	ctx := context.Background()
+
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	probe.failErr = errors.New("store write failed")
+	if err := n.SetAccountGroup(ctx, testKey(id), "desk-a", testCaller); err == nil {
+		t.Fatalf("SetAccountGroup: want error on store write failure")
+	}
+	if len(probe.inLane) != 1 || !probe.inLane[0] {
+		t.Fatalf("store write in-lane flags = %+v, want one true", probe.inLane)
+	}
+	if len(eng.registerGroupCalls) != 0 || len(eng.unregisterGroupCalls) != 0 {
+		t.Fatalf("engine group moves = register %+v unregister %+v, want none on store failure",
+			eng.registerGroupCalls, eng.unregisterGroupCalls)
+	}
+}
+
+// TestLocalNode_SetGroupBlockedStoreWriteUnderGate proves the group-block store
+// write runs under the exclusive restart gate, then the engine block follows on
+// the group lane.
+func TestLocalNode_SetGroupBlockedStoreWriteUnderGate(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, probe := newLaneProbeNode(t, eng)
+	ctx := context.Background()
+
+	if _, err := n.CreateGroup(ctx, domain.AccountGroup{Code: "desk-a"}, testCaller); err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	if err := n.SetGroupBlocked(ctx, "desk-a", true, "risk", testCaller); err != nil {
+		t.Fatalf("SetGroupBlocked: %v", err)
+	}
+	if len(probe.inLane) != 1 || probe.inLane[0] {
+		t.Fatalf("store write in-lane flags = %+v, want one false (write under restart gate)", probe.inLane)
+	}
+	if len(eng.blockGroupCalls) != 1 {
+		t.Fatalf("engine block group calls = %+v, want one after store write", eng.blockGroupCalls)
+	}
+	if !slices.Equal(eng.groupSyncCalls, []string{"desk-a"}) {
+		t.Fatalf("group sync calls = %+v, want desk-a", eng.groupSyncCalls)
+	}
+}
+
+// TestLocalNode_SetGroupBlockedStoreFailureLeavesEngineUntouched proves a
+// store-write failure under the gate returns before the engine block runs, so
+// the engine is never mutated when the store write cannot commit.
+func TestLocalNode_SetGroupBlockedStoreFailureLeavesEngineUntouched(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, probe := newLaneProbeNode(t, eng)
+	ctx := context.Background()
+
+	if _, err := n.CreateGroup(ctx, domain.AccountGroup{Code: "desk-a"}, testCaller); err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	probe.failErr = errors.New("store write failed")
+	if err := n.SetGroupBlocked(ctx, "desk-a", true, "risk", testCaller); err == nil {
+		t.Fatalf("SetGroupBlocked: want error on store write failure")
+	}
+	if len(probe.inLane) != 1 || probe.inLane[0] {
+		t.Fatalf("store write in-lane flags = %+v, want one false (write under restart gate)", probe.inLane)
+	}
+	if len(eng.blockGroupCalls) != 0 {
+		t.Fatalf("engine block group calls = %+v, want none on store failure", eng.blockGroupCalls)
+	}
+}
+
+// testOrder records a committed buy order so an execution report has a parent
+// order row to attach its event and trade to.

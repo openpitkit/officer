@@ -119,7 +119,6 @@ func samplePayload() domain.ApprovalPayload {
 		EstimatePrice:   "150.25",
 		EstimateSource:  "limit",
 		IssuedAt:        now.Format(time.RFC3339Nano),
-		ExpiresAt:       now.Add(2 * time.Minute).Format(time.RFC3339Nano),
 		Nonce:           "Zm9vYmFyYmF6cXV4MTIzNA",
 	}
 }
@@ -174,6 +173,32 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 	}
 	if res.Payload.KeyID == "" {
 		t.Fatalf("keyId not stamped")
+	}
+}
+
+func TestSignVerifyRejectRoundTrip(t *testing.T) {
+	svc, _ := newServiceWithKey(t)
+	p := samplePayload()
+	p.Verdict = "reject"
+	p.PolicySummary = "rejected"
+	p.EstimatePrice = ""
+	p.EstimateSource = ""
+	p.RejectCode = "insufficient_funds"
+	p.RejectScope = "account"
+	p.RejectPolicy = "spot_funds"
+	p.RejectReason = "available funds below required amount"
+
+	token, err := svc.Sign(p)
+	if err != nil {
+		t.Fatalf("Sign reject: %v", err)
+	}
+	res, err := svc.Verify(context.Background(), token, expectFor(p))
+	if err != nil {
+		t.Fatalf("Verify reject: %v", err)
+	}
+	if !res.Signed || res.Payload.Verdict != "reject" ||
+		res.Payload.RejectCode != "insufficient_funds" {
+		t.Fatalf("reject verify result = %+v", res)
 	}
 }
 
@@ -410,20 +435,6 @@ func TestCanonicalBytesNoSurrogateAndCarriesHandle(t *testing.T) {
 	}
 	if strings.Contains(string(canonEmpty), `"orderExternalId"`) {
 		t.Fatalf("empty order handle should be omitted: %s", canonEmpty)
-	}
-}
-
-func TestVerifyExpiredRejected(t *testing.T) {
-	svc, _ := newServiceWithKey(t)
-	p := samplePayload()
-	past := time.Now().UTC().Add(-time.Minute)
-	p.ExpiresAt = past.Format(time.RFC3339Nano)
-	token, err := svc.Sign(p)
-	if err != nil {
-		t.Fatalf("Sign: %v", err)
-	}
-	if _, err := svc.Verify(context.Background(), token, expectFor(p)); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("expected ErrInvalid for expired token, got %v", err)
 	}
 }
 

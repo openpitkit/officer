@@ -41,7 +41,7 @@ import { useOpenInNewTabHint } from "./openInNewTabHint";
 type ActionButtonClick = (event: MouseEvent<HTMLButtonElement>) => void;
 
 export interface ActionButtonProps {
-  /** Glyph key: copy-id | share | view | filter-by | clone | edit | block | trash | history | check | positions | trading | trades | policies. */
+  /** Glyph key: copy-id | share | view | filter-by | clone | edit | block | trash | history | check | positions | trading | trades | policies | orders. */
   icon: string;
   /** Tooltip + aria-label (required for accessibility). */
   title: string;
@@ -72,6 +72,7 @@ const ICONS = {
   trading: ArrowLeftRight,
   trades: Receipt,
   policies: ShieldCheck,
+  orders: ArrowLeftRight,
 };
 
 function shouldOpenInNewTab(event: MouseEvent): boolean {
@@ -388,6 +389,26 @@ export function TradingButton({
   return (
     <ActionButton
       icon="trading"
+      title={title}
+      href={href}
+      newTabHint={newTabHint}
+      onClick={onClick}
+      size={size}
+    />
+  );
+}
+
+/** Open the entity's orders surface. */
+export function OrdersButton({
+  href,
+  onClick,
+  title = "Orders",
+  size = 30,
+}: RowActionProps) {
+  const newTabHint = useOpenInNewTabHint();
+  return (
+    <ActionButton
+      icon="orders"
       title={title}
       href={href}
       newTabHint={newTabHint}

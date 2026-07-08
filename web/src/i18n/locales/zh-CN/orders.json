@@ -45,9 +45,20 @@
     "sourceAriaLabel": "来源",
     "sizeAriaLabel": "每页行数",
     "sizeRows": "{{count}} 行",
+    "quickStatusLabel": "订单",
+    "quickStatus": {
+      "all": "全部",
+      "active": "活跃"
+    },
     "statusLabel": "状态",
     "status": {
-      "all": "全部状态",
+      "groupActive": "活跃",
+      "groupTerminal": "终态",
+      "groupFinalized": "已终结",
+      "clearAll": "全部清除",
+      "selectAll": "全部选择",
+      "selectActive": "全部活跃",
+      "selectTerminal": "全部终态",
       "submitted": "已提交",
       "accepted": "已接受",
       "rejected": "已拒绝",
@@ -321,7 +332,6 @@
     "unsignedNote": "无加密签名 — 此事件在 eSign-off 模式下认证。",
     "errorNote": "无法执行验证。{{message}}",
     "missingArtifacts": "数据包中缺少规范字节或签名。",
-    "expired": "已过期",
     "jsSnippetLabel": "使用 WebCrypto 验证（JavaScript）",
     "goSnippetLabel": "使用 crypto/ed25519 验证（Go）",
     "snippetKeyNote": "公钥为 raw-base64 形式，按此认证密钥 ID 解析。",
@@ -356,8 +366,7 @@
     "fillPrice": "成交价",
     "leavesQuantity": "剩余数量",
     "orderStatus": "订单状态",
-    "issuedAt": "签发时间",
-    "expiresAt": "到期时间"
+    "issuedAt": "签发时间"
   },
 
   "esign": {

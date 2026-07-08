@@ -252,7 +252,9 @@ func TestCreateGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := bytes.NewBufferString(`{"code":"grp-1","notes":"desk one"}`)
+	body := bytes.NewBufferString(
+		`{"code":"grp-1","currency":"USD","notes":"desk one"}`,
+	)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/groups", body))
 	if rec.Code != http.StatusCreated {
@@ -263,12 +265,14 @@ func TestCreateGroup(t *testing.T) {
 	if !ok {
 		t.Fatalf("want group object, got %v", m["group"])
 	}
-	if g["code"] != "grp-1" || g["notes"] != "desk one" {
+	if g["code"] != "grp-1" || g["currency"] != "USD" || g["notes"] != "desk one" {
 		t.Fatalf("unexpected group: %v", g)
 	}
 	assertNoSurrogateID(t, g)
 	// CreateGroup appends to the seed set; one row must now exist.
-	if len(svc.groups) != 1 || svc.groups[0].Code != "grp-1" {
+	if len(svc.groups) != 1 ||
+		svc.groups[0].Code != "grp-1" ||
+		svc.groups[0].Currency != "USD" {
 		t.Fatalf("expected group persisted, got %v", svc.groups)
 	}
 }
@@ -448,6 +452,127 @@ func TestGetGroup_ServiceError(t *testing.T) {
 	errObj, _ := m["error"].(map[string]any)
 	if errObj["code"] != "internal" {
 		t.Fatalf("want code=internal, got %v", errObj["code"])
+	}
+}
+
+func TestSetGroupCurrency(t *testing.T) {
+	svc := &fakeService{
+		groups: []domain.AccountGroup{{Code: "grp-1"}},
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"currency":"USD"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut,
+		"/api/v1/groups/grp-1/currency", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	g, ok := m["group"].(map[string]any)
+	if !ok {
+		t.Fatalf("want group object, got %v", m["group"])
+	}
+	if g["code"] != "grp-1" || g["currency"] != "USD" {
+		t.Fatalf("unexpected group currency response: %v", g)
+	}
+}
+
+func TestSetGroupCurrency_ServiceInvalid(t *testing.T) {
+	svc := &fakeService{
+		groups:   []domain.AccountGroup{{Code: "grp-1"}},
+		groupErr: domain.ErrInvalid,
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"currency":"NOPE"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut,
+		"/api/v1/groups/grp-1/currency", body))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "validation" {
+		t.Fatalf("want code=validation, got %v", errObj["code"])
+	}
+}
+
+func TestSetDefaultGroupCurrency(t *testing.T) {
+	r, err := newRouter(&fakeService{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"currency":"USD"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut,
+		"/api/v1/groups/-/default/currency", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	g, ok := m["group"].(map[string]any)
+	if !ok {
+		t.Fatalf("want group object, got %v", m["group"])
+	}
+	if g["code"] != "" || g["currency"] != "USD" {
+		t.Fatalf("unexpected default group currency response: %v", g)
+	}
+}
+
+func TestSetDefaultGroupCurrency_ServiceInvalid(t *testing.T) {
+	svc := &fakeService{groupErr: domain.ErrInvalid}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"currency":"NOPE"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut,
+		"/api/v1/groups/-/default/currency", body))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "validation" {
+		t.Fatalf("want code=validation, got %v", errObj["code"])
+	}
+}
+
+func TestSetGroupCurrency_AllowsLiteralDefaultGroupCode(t *testing.T) {
+	svc := &fakeService{
+		groups: []domain.AccountGroup{
+			{Code: "default"},
+			{Code: "", Currency: "EUR"},
+		},
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"currency":"USD"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut,
+		"/api/v1/groups/default/currency", body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	g, ok := m["group"].(map[string]any)
+	if !ok {
+		t.Fatalf("want group object, got %v", m["group"])
+	}
+	if g["code"] != "default" || g["currency"] != "USD" {
+		t.Fatalf("literal default group response = %v", g)
+	}
+	if svc.groups[1].Currency != "EUR" {
+		t.Fatalf("reserved default currency changed to %q", svc.groups[1].Currency)
 	}
 }
 

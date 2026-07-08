@@ -38,6 +38,7 @@ import (
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
+	fwstore "go.openpit.dev/officer/framework/store"
 )
 
 // reservationSelect is the shared projection for reservation reads. The optional
@@ -45,7 +46,7 @@ import (
 // account is surfaced as its code. The lock BLOB is read back verbatim.
 const reservationSelect = `
 SELECT ri.approval_id, o.external_id, a.code, ri.params, ri.lock,
-       ri.issued_at, ri.expires_at, ri.state
+       ri.issued_at, ri.state
 FROM reservation_intent ri
 LEFT JOIN order_record   o ON o.id = ri.order_id
 JOIN account a      ON a.id = ri.account_id`
@@ -61,30 +62,41 @@ func (r *realmStore) UpsertReservationIntent(
 	if err != nil {
 		return err
 	}
-	accountID, err := resolveAccountID(ctx, db, intent.Account)
+	return upsertReservationIntentTx(ctx, db, intent)
+}
+
+// upsertReservationIntentTx inserts or replaces a reservation intent on the given
+// read/write surface, which may be the pooled *sql.DB or an open *sql.Tx. The
+// settlement path passes the order transaction so the held intent commits or
+// rolls back atomically with the order row - and, critically, without acquiring a
+// second connection, which under SetMaxOpenConns(1) would self-deadlock against
+// that same transaction.
+func upsertReservationIntentTx(
+	ctx context.Context, q sqlReadWriter, intent domain.ReservationIntent,
+) error {
+	accountID, err := resolveAccountID(ctx, q, intent.Account)
 	if err != nil {
 		return err
 	}
-	orderID, err := optionalOrderID(ctx, db, intent.Order)
+	orderID, err := optionalOrderID(ctx, q, intent.Order)
 	if err != nil {
 		return err
 	}
-	if _, err := db.ExecContext(
+	if _, err := q.ExecContext(
 		ctx,
 		`INSERT INTO reservation_intent
-		 (approval_id, order_id, account_id, params, lock, issued_at, expires_at, state)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		 (approval_id, order_id, account_id, params, lock, issued_at, state)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(approval_id) DO UPDATE SET
 		   order_id   = excluded.order_id,
 		   account_id = excluded.account_id,
 		   params     = excluded.params,
 		   lock       = excluded.lock,
 		   issued_at  = excluded.issued_at,
-		   expires_at = excluded.expires_at,
 		   state      = excluded.state`,
 		intent.ApprovalID, orderID, accountID, intent.ParamsJSON,
 		nullableBlob(intent.Lock),
-		reservationTimeStr(intent.IssuedAt), reservationTimeStr(intent.ExpiresAt),
+		reservationTimeStr(intent.IssuedAt),
 		string(reservationState(intent.State)),
 	); err != nil {
 		return fmt.Errorf("store: upsert reservation intent: %w", err)
@@ -144,7 +156,7 @@ LIMIT 1`,
 }
 
 // ListOpenReservationIntents returns all intents whose state is held, ordered by
-// issued_at (oldest first) so the TTL sweeper sees the longest-held first.
+// issued_at (oldest first) so the longest-held intent comes first.
 func (r *realmStore) ListOpenReservationIntents(
 	ctx context.Context,
 ) ([]domain.ReservationIntent, error) {
@@ -206,11 +218,17 @@ func (r *realmStore) SetReservationIntentState(
 func (r *realmStore) ResolveOrderReservation(
 	ctx context.Context, res domain.ReservationResolution,
 ) error {
-	return r.resolveOrderReservation(ctx, res)
+	return r.resolveOrderReservation(ctx, res, nil)
+}
+
+func (r *realmStore) ResolveOrderReservationWithAttestation(
+	ctx context.Context, res domain.ReservationResolution, attest fwstore.EventAttestor,
+) error {
+	return r.resolveOrderReservation(ctx, res, attest)
 }
 
 func (r *realmStore) resolveOrderReservation(
-	ctx context.Context, res domain.ReservationResolution,
+	ctx context.Context, res domain.ReservationResolution, attest fwstore.EventAttestor,
 ) error {
 	db, err := r.db()
 	if err != nil {
@@ -251,7 +269,11 @@ func (r *realmStore) resolveOrderReservation(
 	// Lifecycle event(s) (e.g. reservation_committed, or reservation_rolled_back +
 	// cancelled).
 	for _, ev := range res.Events {
-		if err := appendOrderEventTx(ctx, tx, orderID, ev); err != nil {
+		recorded, err := appendOrderEventReturningTx(ctx, tx, orderID, ev)
+		if err != nil {
+			return err
+		}
+		if err := attestOrderEventTx(ctx, tx, recorded, attest); err != nil {
 			return err
 		}
 	}
@@ -318,18 +340,18 @@ func scanReservationRows(rows *sql.Rows) (domain.ReservationIntent, error) {
 }
 
 // scanReservationInto scans one reservation projection through scan, decoding the
-// nullable order external-id BLOB, the lock BLOB (verbatim) and the timestamps.
-// The scan func is *sql.Row.Scan or *sql.Rows.Scan.
+// nullable order external-id BLOB, the lock BLOB (verbatim) and the issued-at
+// timestamp. The scan func is *sql.Row.Scan or *sql.Rows.Scan.
 func scanReservationInto(scan func(...any) error) (domain.ReservationIntent, error) {
 	var (
 		approvalID, account, params, state string
 		orderExtID                         []byte
 		lock                               []byte
-		issuedAt, expiresAt                string
+		issuedAt                           string
 	)
 	if err := scan(
 		&approvalID, &orderExtID, &account, &params, &lock,
-		&issuedAt, &expiresAt, &state,
+		&issuedAt, &state,
 	); err != nil {
 		return domain.ReservationIntent{}, err
 	}
@@ -349,12 +371,6 @@ func scanReservationInto(scan func(...any) error) (domain.ReservationIntent, err
 			"store: parse reservation issued_at %q: %w", issuedAt, err,
 		)
 	}
-	parsedExpires, err := time.Parse(time.RFC3339Nano, expiresAt)
-	if err != nil {
-		return domain.ReservationIntent{}, fmt.Errorf(
-			"store: parse reservation expires_at %q: %w", expiresAt, err,
-		)
-	}
 	return domain.ReservationIntent{
 		ApprovalID: approvalID,
 		Order:      order,
@@ -362,7 +378,6 @@ func scanReservationInto(scan func(...any) error) (domain.ReservationIntent, err
 		ParamsJSON: params,
 		Lock:       lock,
 		IssuedAt:   parsedIssued,
-		ExpiresAt:  parsedExpires,
 		State:      domain.ReservationIntentState(state),
 	}, nil
 }

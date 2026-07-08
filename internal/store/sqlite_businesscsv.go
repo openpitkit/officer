@@ -93,19 +93,26 @@ func (r *realmStore) applyBusinessCSVImport(
 
 // importGroups creates or updates account groups inside the import transaction.
 // New groups run on their surrogate id (the engine group id). Existing groups
-// have their mutable fields (title, notes, blocked, block_reason) updated.
+// have their mutable fields updated.
 func importGroups(
 	ctx context.Context, tx *sql.Tx, rows []fwstore.BusinessCSVImportGroup,
 ) error {
 	for _, item := range rows {
 		g := item.Group
+		currencyID, err := nullableAssetID(ctx, tx, g.Currency)
+		if err != nil {
+			return fmt.Errorf(
+				"store: import group %q: currency %q: %w",
+				g.Code, g.Currency, err,
+			)
+		}
 		if !item.Exists {
 			if _, err := tx.ExecContext(
 				ctx,
 				`INSERT INTO account_group
-				 (code, title, notes, blocked, block_reason)
-				 VALUES (?, ?, ?, ?, ?)`,
-				g.Code, g.Title, g.Notes, g.Blocked, g.BlockReason,
+				 (code, title, currency_asset_id, notes, blocked, block_reason)
+				 VALUES (?, ?, ?, ?, ?, ?)`,
+				g.Code, g.Title, currencyID, g.Notes, g.Blocked, g.BlockReason,
 			); err != nil {
 				return fmt.Errorf("store: import group %q: %w", g.Code, err)
 			}
@@ -113,9 +120,11 @@ func importGroups(
 			if _, err := tx.ExecContext(
 				ctx,
 				`UPDATE account_group
-				 SET title = ?, notes = ?, blocked = ?, block_reason = ?
+				 SET title = ?, currency_asset_id = ?, notes = ?,
+				     blocked = ?, block_reason = ?
 				 WHERE code = ?`,
-				g.Title, g.Notes, g.Blocked, g.BlockReason, g.Code,
+				g.Title, currencyID, g.Notes, g.Blocked, g.BlockReason,
+				g.Code,
 			); err != nil {
 				return fmt.Errorf("store: update group %q: %w", g.Code, err)
 			}
@@ -140,14 +149,22 @@ func importAccounts(
 				a.Code, a.GroupCode, err,
 			)
 		}
+		currencyID, err := nullableAssetID(ctx, tx, a.Currency)
+		if err != nil {
+			return fmt.Errorf(
+				"store: import account %q: currency %q: %w",
+				a.Code, a.Currency, err,
+			)
+		}
 		if !item.Exists {
 			if _, err := tx.ExecContext(
 				ctx,
 				`INSERT INTO account
-				 (code, title, group_id, notes, blocked, block_reason)
-				 VALUES (?, ?, ?, ?, ?, ?)`,
+				 (code, title, group_id, currency_asset_id, notes, blocked,
+				  block_reason)
+				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 				a.Code.String(), a.Title,
-				groupID, a.Notes, a.Blocked, a.BlockReason,
+				groupID, currencyID, a.Notes, a.Blocked, a.BlockReason,
 			); err != nil {
 				return fmt.Errorf("store: import account %q: %w", a.Code, err)
 			}
@@ -155,9 +172,11 @@ func importAccounts(
 			if _, err := tx.ExecContext(
 				ctx,
 				`UPDATE account
-				 SET title = ?, group_id = ?, notes = ?, blocked = ?, block_reason = ?
+				 SET title = ?, group_id = ?, currency_asset_id = ?,
+				     notes = ?, blocked = ?, block_reason = ?
 				 WHERE code = ?`,
-				a.Title, groupID, a.Notes, a.Blocked, a.BlockReason, a.Code.String(),
+				a.Title, groupID, currencyID, a.Notes, a.Blocked,
+				a.BlockReason, a.Code.String(),
 			); err != nil {
 				return fmt.Errorf("store: update account %q: %w", a.Code, err)
 			}

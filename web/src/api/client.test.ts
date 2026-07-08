@@ -63,6 +63,8 @@ const importSigningKey = (...args: Parameters<ReturnType<typeof api>["importSign
 const previewBusinessCsvImport = (
   ...args: Parameters<ReturnType<typeof api>["previewBusinessCsvImport"]>
 ) => api().previewBusinessCsvImport(...args);
+const restartService = (...args: Parameters<ReturnType<typeof api>["restartService"]>) =>
+  api().restartService(...args);
 const resetDatabase = (...args: Parameters<ReturnType<typeof api>["resetDatabase"]>) =>
   api().resetDatabase(...args);
 const restoreBackup = (...args: Parameters<ReturnType<typeof api>["restoreBackup"]>) =>
@@ -72,6 +74,8 @@ const searchMarketDataSymbols = (
 ) => api().searchMarketDataSymbols(...args);
 const setESignEnabled = (...args: Parameters<ReturnType<typeof api>["setESignEnabled"]>) =>
   api().setESignEnabled(...args);
+const stopService = (...args: Parameters<ReturnType<typeof api>["stopService"]>) =>
+  api().stopService(...args);
 const submitExecutionReport = (
   ...args: Parameters<ReturnType<typeof api>["submitExecutionReport"]>
 ) => api().submitExecutionReport(...args);
@@ -159,6 +163,89 @@ describe("accounts and groups client", () => {
     expect(result[0]).toMatchObject({ code: "acc-alpha", positionCount: 2 });
   });
 
+  it("normalizes account currency fields across response casings", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        accounts: [
+          {
+            code: "acc-camel",
+            title: "Camel",
+            currency: "EUR",
+            effectiveCurrency: "USD",
+            currencyOrigin: "account",
+            currencyCascade: {
+              account: "USD",
+              group: "EUR",
+              default: "GBP",
+            },
+          },
+          {
+            Code: "acc-pascal",
+            Title: "Pascal",
+            Currency: "CHF",
+            EffectiveCurrency: "JPY",
+            CurrencyOrigin: "group",
+            CurrencyCascade: {
+              Account: "",
+              Group: "JPY",
+              Default: "USD",
+            },
+          },
+          {
+            code: "acc-snake",
+            title: "Snake",
+            currency: "GBP",
+            effective_currency: "CAD",
+            currency_origin: "default",
+            currencyCascade: {
+              Account: "",
+              Group: "",
+              Default: "CAD",
+            },
+          },
+        ],
+      }),
+    );
+
+    const result = await fetchAccounts();
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        code: "acc-camel",
+        currency: "EUR",
+        effectiveCurrency: "USD",
+        currencyOrigin: "account",
+        currencyCascade: {
+          account: "USD",
+          group: "EUR",
+          default: "GBP",
+        },
+      }),
+      expect.objectContaining({
+        code: "acc-pascal",
+        currency: "CHF",
+        effectiveCurrency: "JPY",
+        currencyOrigin: "group",
+        currencyCascade: {
+          account: "",
+          group: "JPY",
+          default: "USD",
+        },
+      }),
+      expect.objectContaining({
+        code: "acc-snake",
+        currency: "GBP",
+        effectiveCurrency: "CAD",
+        currencyOrigin: "default",
+        currencyCascade: {
+          account: "",
+          group: "",
+          default: "CAD",
+        },
+      }),
+    ]);
+  });
+
   it("builds group list filter query and normalizes aggregate counts", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(
       jsonResponse({
@@ -194,6 +281,31 @@ describe("accounts and groups client", () => {
       code: "desk-alpha",
       accountCount: 3,
       positionCount: 4,
+    });
+  });
+
+  it("preserves an empty group title from the API", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        groups: [
+          {
+            code: "the-code-of-group-withoit-title",
+            title: "",
+            notes: "",
+            blocked: false,
+            blockReason: "",
+            accountCount: 0,
+            positionCount: 0,
+          },
+        ],
+      }),
+    );
+
+    const result = await fetchGroups();
+
+    expect(result[0]).toMatchObject({
+      code: "the-code-of-group-withoit-title",
+      title: "",
     });
   });
 });
@@ -1089,6 +1201,28 @@ describe("backup client", () => {
       }),
     );
   });
+
+  it("requests service restart", async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ accepted: true }));
+
+    await restartService();
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/service/restart",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("requests service stop", async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse({ accepted: true }));
+
+    await stopService();
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/service/stop",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
 });
 
 describe("market-data client settings payloads", () => {
@@ -1628,7 +1762,6 @@ describe("event reproduction client", () => {
           requestType: "submit",
           mode: "immediate",
           issuedAt: "2026-06-24T00:00:00Z",
-          expiresAt: "2026-06-24T00:02:00Z",
           signed: true,
         },
         request: {
@@ -1641,15 +1774,24 @@ describe("event reproduction client", () => {
           orderType: "limit",
           limitPrice: "150.25",
           accountId: "acc-1",
-          verdict: "accept",
+          verdict: "reject",
           result: null,
         },
         response: {
           submitResponse: {
             token: "tok-verbatim",
             keyId: "key-1",
-            expiresAt: "2026-06-24T00:02:00Z",
             orderExternalId: "ord-1",
+            verdict: "reject",
+            reasons: [
+              {
+                code: "max_order_size",
+                scope: "order",
+                policy: "order-size",
+                reason: "order too large",
+                details: "qty=100",
+              },
+            ],
           },
         },
         canonicalApproval: '{"version":1,"side":"buy"}',
@@ -1674,6 +1816,16 @@ describe("event reproduction client", () => {
     expect(result.requestType).toBe("submit");
     expect(result.attestation?.token).toBe("tok-verbatim");
     expect(result.response?.submitResponse?.token).toBe("tok-verbatim");
+    expect(result.response?.submitResponse?.verdict).toBe("reject");
+    expect(result.response?.submitResponse?.reasons).toEqual([
+      {
+        code: "max_order_size",
+        scope: "order",
+        policy: "order-size",
+        reason: "order too large",
+        details: "qty=100",
+      },
+    ]);
     expect(result.canonicalApproval).toBe('{"version":1,"side":"buy"}');
     expect(result.signature).toBe("sig-base64");
     expect(result.publicKey?.keyId).toBe("key-1");
@@ -1705,7 +1857,6 @@ describe("event reproduction client", () => {
           requestType: "execution_report",
           mode: "immediate",
           issuedAt: "2026-06-24T00:01:00Z",
-          expiresAt: "2026-06-24T00:03:00Z",
           signed: true,
         },
         request: {
@@ -1846,8 +1997,8 @@ describe("Orders createOrder submit lifecycle", () => {
       JSON.stringify({
         token: "approval-token",
         keyId: "key-1",
-        expiresAt: "2026-01-01T00:05:00Z",
         orderExternalId,
+        verdict: "accept",
       }),
       { status: 201, headers: { "Content-Type": "application/json" } },
     );
@@ -1861,8 +2012,8 @@ describe("Orders createOrder submit lifecycle", () => {
         approval: {
           token: "approval-token",
           keyId: "key-1",
-          expiresAt: "2026-01-01T00:05:00Z",
           orderExternalId,
+          verdict: "accept",
         },
       }),
       { status: 201, headers: { "Content-Type": "application/json" } },
@@ -1897,13 +2048,20 @@ describe("Orders createOrder submit lifecycle", () => {
       .mockResolvedValueOnce(approvalResponse())
       .mockResolvedValueOnce(orderResponse());
     const { createOrder } = api();
-    await createOrder({
+    const result = await createOrder({
       account: "desk-alpha",
       baseAsset: "AAPL",
       quoteAsset: "USD",
       side: "buy",
       amountKind: "quantity",
       amountValue: "100",
+    });
+    expect(result.approval).toMatchObject({
+      token: "approval-token",
+      keyId: "key-1",
+      orderExternalId: "ord_alpha_0000000001",
+      verdict: "accept",
+      reasons: [],
     });
     expect(fetch).toHaveBeenNthCalledWith(
       1,
@@ -1987,6 +2145,88 @@ describe("Orders createOrder submit lifecycle", () => {
       "/app/api/v1/orders/ord_wrapped_0000001",
       expect.any(Object),
     );
+  });
+
+  it("normalizes submitResponse verdict and reasons", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            order: { externalId: "ord_rejected_0000001" },
+            submitResponse: {
+              token: "reject-token",
+              keyId: "key-1",
+              orderExternalId: "ord_rejected_0000001",
+              verdict: "reject",
+              reasons: [
+                {
+                  code: "max_order_size",
+                  scope: "order",
+                  policy: "order-size",
+                  reason: "order too large",
+                  details: "qty=100",
+                },
+              ],
+            },
+          }),
+          { status: 201, headers: { "Content-Type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(orderResponse("ord_rejected_0000001"));
+    const { createOrder } = api();
+    const result = await createOrder({
+      account: "desk-alpha",
+      baseAsset: "AAPL",
+      quoteAsset: "USD",
+      side: "buy",
+      amountKind: "quantity",
+      amountValue: "100",
+    });
+    expect(result.approval).toEqual({
+      token: "reject-token",
+      keyId: "key-1",
+      orderExternalId: "ord_rejected_0000001",
+      verdict: "reject",
+      reasons: [
+        {
+          code: "max_order_size",
+          scope: "order",
+          policy: "order-size",
+          reason: "order too large",
+          details: "qty=100",
+        },
+      ],
+    });
+  });
+
+  it("keeps an empty submitResponse verdict", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            order: { externalId: "ord_legacy_0000001" },
+            submitResponse: {
+              token: "legacy-token",
+              keyId: "key-1",
+              orderExternalId: "ord_legacy_0000001",
+              verdict: "",
+            },
+          }),
+          { status: 201, headers: { "Content-Type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(orderResponse("ord_legacy_0000001"));
+    const { createOrder } = api();
+    const result = await createOrder({
+      account: "desk-alpha",
+      baseAsset: "AAPL",
+      quoteAsset: "USD",
+      side: "buy",
+      amountKind: "quantity",
+      amountValue: "100",
+    });
+    expect(result.approval.verdict).toBe("");
+    expect(result.approval.reasons).toEqual([]);
   });
 
   it("normalizes displayPrices from the fetched order", async () => {

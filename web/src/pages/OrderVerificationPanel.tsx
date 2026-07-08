@@ -263,7 +263,6 @@ function ApprovalBreakdown({
 }): ReactElement {
   const { t } = useTranslation("orders");
   const issued = fields.issuedAt ? formatDateTime(fields.issuedAt) : "";
-  const expires = fields.expiresAt ? formatDateTime(fields.expiresAt) : "";
   const requestType = fields.requestType
     ? requestTypeLabel(t, fields.requestType)
     : "";
@@ -336,7 +335,6 @@ function ApprovalBreakdown({
           </>
         ) : null}
         <BreakdownRow label={t("breakdown.issuedAt")} value={issued} />
-        <BreakdownRow label={t("breakdown.expiresAt")} value={expires} />
       </div>
     </LedgerBlock>
   );
@@ -669,7 +667,6 @@ interface PasteResult {
   parsed: ParsedApproval;
   canonical: string;
   keyId: string;
-  expired: boolean;
 }
 
 function VerifyTokenMode(): ReactElement {
@@ -704,13 +701,10 @@ function VerifyTokenMode(): ReactElement {
       // The signed bytes are the EXACT approval substring, never a re-stringify.
       const canonical = extractApprovalJsonSubstring(envJson);
       const keyId = fields.keyId || env.keyId || "";
-      const now = Date.now();
-      const expiresMs = fields.expiresAt ? Date.parse(fields.expiresAt) : NaN;
-      const expired = Number.isFinite(expiresMs) && expiresMs < now;
 
       const alg = fields.alg || env.alg || "";
       if (alg === "none") {
-        setResult({ parsed: fields, canonical, keyId, expired });
+        setResult({ parsed: fields, canonical, keyId });
         setVerifyState({ phase: "unsigned" });
         return;
       }
@@ -727,7 +721,7 @@ function VerifyTokenMode(): ReactElement {
             phase: "error",
             message: t("verify.pasteUnknownKey", { keyId }),
           });
-          setResult({ parsed: fields, canonical, keyId, expired });
+          setResult({ parsed: fields, canonical, keyId });
           return;
         }
         throw err;
@@ -737,7 +731,7 @@ function VerifyTokenMode(): ReactElement {
         env.signature ?? "",
         material.key,
       );
-      setResult({ parsed: fields, canonical, keyId, expired });
+      setResult({ parsed: fields, canonical, keyId });
       setVerifyState(ok ? { phase: "valid" } : { phase: "invalid" });
     } catch (err) {
       setVerifyState({ phase: "error", message: errMessage(err) });
@@ -770,9 +764,6 @@ function VerifyTokenMode(): ReactElement {
               : t("verify.button")}
           </Button>
           {verifyBadge(t, verifyState)}
-          {result?.expired ? (
-            <Badge variant="warn">{t("verify.expired")}</Badge>
-          ) : null}
         </div>
         <div className="mt-2">
           <VerifyResultLine state={verifyState} />

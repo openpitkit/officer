@@ -58,6 +58,14 @@ export interface Health {
 export interface Account {
   code: string;
   title: string;
+  currency?: string;
+  effectiveCurrency?: string;
+  currencyOrigin?: string;
+  currencyCascade?: {
+    account: string;
+    group: string;
+    default: string;
+  };
   blocked: boolean;
   blockReason: string;
   group: string;
@@ -163,6 +171,7 @@ export interface AssetClassListFilters extends PageRequest, SortSpec {
 export interface Group {
   code: string;
   title: string;
+  currency?: string;
   notes: string;
   blocked: boolean;
   blockReason: string;
@@ -556,8 +565,9 @@ export interface ExecutionReportResult {
 export interface ApprovalToken {
   token: string;
   keyId: string;
-  expiresAt: string;
   orderExternalId: string;
+  verdict: "accept" | "reject" | "";
+  reasons: CheckReject[];
 }
 
 // --- Dashboard / Overview ---
@@ -579,6 +589,7 @@ export interface Overview {
     groups: number;
     groupsActive: number;
     limits: number;
+    ordersActive: number;
     ordersToday: number;
     ordersTotal: number;
   };
@@ -924,8 +935,6 @@ export interface EventAttestation {
   mode: string;
   /** RFC3339Nano timestamp at which the envelope was issued. May be empty. */
   issuedAt: string;
-  /** RFC3339Nano expiry timestamp. May be empty. */
-  expiresAt: string;
   /** Whether the envelope carries a real cryptographic signature. */
   signed: boolean;
 }
@@ -936,10 +945,12 @@ export interface ApprovalTokenResponse {
   token: string;
   /** Signing key UUID, or empty string under eSign-off. */
   keyId: string;
-  /** RFC3339Nano expiry timestamp. May be empty. */
-  expiresAt: string;
   /** The order's opaque public handle. */
   orderExternalId: string;
+  /** Signed pre-trade verdict. */
+  verdict: "accept" | "reject" | "";
+  /** Structured reject reasons; empty on accept. */
+  reasons: CheckReject[];
 }
 
 /** One engine-recorded account block bound in the attestation payload result. */

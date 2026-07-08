@@ -22,7 +22,6 @@ package signing
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"go.openpit.dev/officer/framework/domain"
 )
@@ -154,7 +153,6 @@ type VerifyParams struct {
 	TimeInForce     string
 	AccountID       string
 	AccountGroupID  string
-	Now             time.Time // verification clock; zero means time.Now().UTC()
 }
 
 // VerifyResult is the structured outcome of a successful Verify.

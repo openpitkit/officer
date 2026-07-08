@@ -123,7 +123,6 @@ func reproPayload(id domain.ExternalID) domain.ApprovalPayload {
 		EstimatePrice:   "150.25",
 		EstimateSource:  "limit",
 		IssuedAt:        now.Format(time.RFC3339Nano),
-		ExpiresAt:       now.Add(2 * time.Minute).Format(time.RFC3339Nano),
 		Nonce:           "Zm9vYmFyYmF6cXV4MTIzNA",
 	}
 }
@@ -159,7 +158,6 @@ func attestationFromToken(t *testing.T, token string) *domain.EventAttestation {
 		RequestType: domain.AttestationRequestType(env.Approval.RequestType),
 		Mode:        env.Approval.Mode,
 		IssuedAt:    env.Approval.IssuedAt,
-		ExpiresAt:   env.Approval.ExpiresAt,
 	}
 }
 

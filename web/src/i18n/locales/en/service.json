@@ -16,6 +16,24 @@
     "build": "Build",
     "nonRelease": "non-release"
   },
+  "lifecycle": {
+    "title": "Service lifecycle",
+    "warning": "Restarting or stopping the service can be irreversible without administrator intervention. The dashboard may disconnect immediately after confirmation.",
+    "restart": "Restart service",
+    "stop": "Stop service",
+    "confirm": {
+      "restart": {
+        "title": "Restart service?",
+        "description": "The service will record the request in audit, drain current connections, and start again with the same arguments.",
+        "confirm": "Restart service"
+      },
+      "stop": {
+        "title": "Stop service?",
+        "description": "The service will shut down and may remain offline until an administrator starts it again.",
+        "confirm": "Stop service"
+      }
+    }
+  },
   "engine": {
     "title": "Engine",
     "version": "Version",

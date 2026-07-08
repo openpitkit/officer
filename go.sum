@@ -41,8 +41,8 @@ github.com/shopspring/decimal v1.4.0 h1:bxl37RwXBklmTi0C79JfXCEBD1cqqHt0bbgBAGFp
 github.com/shopspring/decimal v1.4.0/go.mod h1:gawqmDU56v4yIKSwfBSFip1HdCCXN8/+DMd9qYNcwME=
 github.com/yosida95/uritemplate/v3 v3.0.2 h1:Ed3Oyj9yrmi9087+NczuL5BwkIc4wvTb5zIM+UJPGz4=
 github.com/yosida95/uritemplate/v3 v3.0.2/go.mod h1:ILOh0sOhIJR3+L/8afwt/kE++YT040gmv5BQTMR2HP4=
-go.openpit.dev/openpit v0.5.0 h1:y3gnIFDwgcmw8iBuwwfMpwTNCFNuhuxzAysvgUehd3c=
-go.openpit.dev/openpit v0.5.0/go.mod h1:+o08p9EB74ieFMuk9Y2abq0ILozq92DuPkzdpuUATk4=
+go.openpit.dev/openpit v0.6.0 h1:NuxAWZSXCkFRUN/Rdu2+6liwiSGyixV/y+bLIv/6Lfg=
+go.openpit.dev/openpit v0.6.0/go.mod h1:+o08p9EB74ieFMuk9Y2abq0ILozq92DuPkzdpuUATk4=
 golang.org/x/crypto v0.53.0 h1:QZ4Muo8THX6CizN2vPPd5fBGHyogrdK9fG4wLPFUsto=
 golang.org/x/crypto v0.53.0/go.mod h1:DNLU434OwVakk9PzuwV8w62mAJpRJL3vsgcfp4Qnsio=
 golang.org/x/mod v0.36.0 h1:JJjpVx6myfUsUdAzZuOSTTmRE0PfZeNWzzvKrP7amb4=

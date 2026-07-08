@@ -67,8 +67,8 @@ var (
 	ErrTooLarge = errors.New("too large")
 	// ErrConflict marks an operation that cannot proceed because the target is
 	// already in a terminal or incompatible state - for example confirming an
-	// approval whose held reservation was already rolled back or expired. The
-	// surface layer maps it to an HTTP 409.
+	// approval whose held reservation was already rolled back. The surface layer
+	// maps it to an HTTP 409.
 	ErrConflict = errors.New("conflict")
 	// ErrHasDependents marks a delete that would cascade-delete dependent rows
 	// without an explicit force flag. The concrete error carries the blockers.
@@ -160,6 +160,20 @@ type Account struct {
 	Code AccountID
 	// Title is the mutable human-readable display name; may be empty.
 	Title string
+	// Currency is the account-level realized P&L currency asset code. Empty
+	// means the account inherits from its group, then from the reserved default
+	// group, and finally disables realized P&L tracking when all tiers are empty.
+	Currency string
+	// EffectiveCurrency is the displayed currency after resolving the account,
+	// account-group, and reserved default-group tiers. Empty means no tier is set.
+	EffectiveCurrency string
+	// CurrencyOrigin names the tier that supplied EffectiveCurrency: "account",
+	// "group", "default", or empty when no tier is set.
+	CurrencyOrigin string
+	// GroupCurrency is the currency set on GroupCode, when any.
+	GroupCurrency string
+	// DefaultCurrency is the currency set on the reserved default group, when any.
+	DefaultCurrency string
 	// GroupCode links the account to its group by the group's public code;
 	// empty means the account belongs to no group. The store resolves it to the
 	// group's surrogate key; the engine group id is derived from the group.
@@ -179,42 +193,75 @@ type Account struct {
 	Blocked bool
 }
 
+const (
+	// CurrencyOriginAccount means the account tier supplied the effective currency.
+	CurrencyOriginAccount = "account"
+	// CurrencyOriginGroup means the account group tier supplied the effective
+	// currency.
+	CurrencyOriginGroup = "group"
+	// CurrencyOriginDefault means the reserved default group supplied the
+	// effective currency.
+	CurrencyOriginDefault = "default"
+)
+
+// ResolveCurrencyCascade resolves the three account-currency tiers.
+func ResolveCurrencyCascade(
+	accountCurrency string,
+	groupCurrency string,
+	defaultCurrency string,
+) (string, string) {
+	switch {
+	case accountCurrency != "":
+		return accountCurrency, CurrencyOriginAccount
+	case groupCurrency != "":
+		return groupCurrency, CurrencyOriginGroup
+	case defaultCurrency != "":
+		return defaultCurrency, CurrencyOriginDefault
+	default:
+		return "", ""
+	}
+}
+
 // AuditAction classifies a control-plane action recorded in the audit trail.
 type AuditAction string
 
 const (
-	AuditActionHydrate           AuditAction = "hydrate"
-	AuditActionCreateAsset       AuditAction = "create_asset"
-	AuditActionUpdateAsset       AuditAction = "update_asset"
-	AuditActionDeleteAsset       AuditAction = "delete_asset"
-	AuditActionCreateAccount     AuditAction = "create_account"
-	AuditActionUpdateAccount     AuditAction = "update_account"
-	AuditActionDeleteAccount     AuditAction = "delete_account"
-	AuditActionBlock             AuditAction = "block"
-	AuditActionUnblock           AuditAction = "unblock"
-	AuditActionSetLimit          AuditAction = "set_limit"
-	AuditActionDeleteLimit       AuditAction = "delete_limit"
-	AuditActionSetGroupNotes     AuditAction = "set_group_notes"
-	AuditActionBlockGroup        AuditAction = "block_group"
-	AuditActionUnblockGroup      AuditAction = "unblock_group"
-	AuditActionSetNotes          AuditAction = "set_notes"
-	AuditActionSetGroup          AuditAction = "set_group"
-	AuditActionAdjustment        AuditAction = "adjustment"
-	AuditActionCreateGroup       AuditAction = "create_group"
-	AuditActionUpdateGroup       AuditAction = "update_group"
-	AuditActionDeleteGroup       AuditAction = "delete_group"
-	AuditActionCreateAssetClass  AuditAction = "create_asset_class"
-	AuditActionUpdateAssetClass  AuditAction = "update_asset_class"
-	AuditActionDeleteAssetClass  AuditAction = "delete_asset_class"
-	AuditActionSubmitOrder       AuditAction = "submit_order"
-	AuditActionExecutionReport   AuditAction = "execution_report"
-	AuditActionSetMcpAccess      AuditAction = "set_mcp_access"
-	AuditActionSetMarketData     AuditAction = "set_market_data"
-	AuditActionExportBackup      AuditAction = "export_backup"
-	AuditActionRestoreBackup     AuditAction = "restore_backup"
-	AuditActionExportBusinessCSV AuditAction = "export_business_csv"
-	AuditActionImportBusinessCSV AuditAction = "import_business_csv"
-	AuditActionResetDatabase     AuditAction = "reset_database"
+	AuditActionHydrate            AuditAction = "hydrate"
+	AuditActionCreateAsset        AuditAction = "create_asset"
+	AuditActionUpdateAsset        AuditAction = "update_asset"
+	AuditActionDeleteAsset        AuditAction = "delete_asset"
+	AuditActionCreateAccount      AuditAction = "create_account"
+	AuditActionUpdateAccount      AuditAction = "update_account"
+	AuditActionDeleteAccount      AuditAction = "delete_account"
+	AuditActionBlock              AuditAction = "block"
+	AuditActionUnblock            AuditAction = "unblock"
+	AuditActionSetLimit           AuditAction = "set_limit"
+	AuditActionDeleteLimit        AuditAction = "delete_limit"
+	AuditActionSetGroupNotes      AuditAction = "set_group_notes"
+	AuditActionBlockGroup         AuditAction = "block_group"
+	AuditActionUnblockGroup       AuditAction = "unblock_group"
+	AuditActionSetNotes           AuditAction = "set_notes"
+	AuditActionSetGroup           AuditAction = "set_group"
+	AuditActionSetAccountCurrency AuditAction = "set_account_currency"
+	AuditActionSetGroupCurrency   AuditAction = "set_group_currency"
+	AuditActionAdjustment         AuditAction = "adjustment"
+	AuditActionCreateGroup        AuditAction = "create_group"
+	AuditActionUpdateGroup        AuditAction = "update_group"
+	AuditActionDeleteGroup        AuditAction = "delete_group"
+	AuditActionCreateAssetClass   AuditAction = "create_asset_class"
+	AuditActionUpdateAssetClass   AuditAction = "update_asset_class"
+	AuditActionDeleteAssetClass   AuditAction = "delete_asset_class"
+	AuditActionSubmitOrder        AuditAction = "submit_order"
+	AuditActionExecutionReport    AuditAction = "execution_report"
+	AuditActionSetMcpAccess       AuditAction = "set_mcp_access"
+	AuditActionSetMarketData      AuditAction = "set_market_data"
+	AuditActionExportBackup       AuditAction = "export_backup"
+	AuditActionRestoreBackup      AuditAction = "restore_backup"
+	AuditActionExportBusinessCSV  AuditAction = "export_business_csv"
+	AuditActionImportBusinessCSV  AuditAction = "import_business_csv"
+	AuditActionResetDatabase      AuditAction = "reset_database"
+	AuditActionRestartService     AuditAction = "restart_service"
+	AuditActionStopService        AuditAction = "stop_service"
 
 	// Signing-key lifecycle.
 	AuditActionGenerateSigningKey AuditAction = "generate_signing_key"
@@ -273,6 +320,8 @@ func AllAuditActions() []AuditAction {
 		AuditActionUnblockGroup,
 		AuditActionSetNotes,
 		AuditActionSetGroup,
+		AuditActionSetAccountCurrency,
+		AuditActionSetGroupCurrency,
 		AuditActionAdjustment,
 		AuditActionCreateGroup,
 		AuditActionUpdateGroup,
@@ -287,6 +336,8 @@ func AllAuditActions() []AuditAction {
 		AuditActionExportBusinessCSV,
 		AuditActionImportBusinessCSV,
 		AuditActionResetDatabase,
+		AuditActionRestartService,
+		AuditActionStopService,
 		AuditActionGenerateSigningKey,
 		AuditActionImportSigningKey,
 		AuditActionSetSigningConfig,

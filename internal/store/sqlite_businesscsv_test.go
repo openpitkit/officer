@@ -37,13 +37,16 @@ func TestApplyBusinessCSVImport_CreatesGroup(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
+	if err := rs.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
+		t.Fatalf("CreateAsset USD: %v", err)
+	}
 
 	in := BusinessCSVImport{
 		Groups: []BusinessCSVImportGroup{
 			{
 				Group: domain.AccountGroup{
 					Code: "desk-a", Title: "Desk A",
-					Notes: "import note", Blocked: false,
+					Currency: "USD", Notes: "import note", Blocked: false,
 				},
 				Exists: false,
 			},
@@ -60,7 +63,8 @@ func TestApplyBusinessCSVImport_CreatesGroup(t *testing.T) {
 	if !ok {
 		t.Fatal("group not found after import")
 	}
-	if g.Code != "desk-a" || g.Title != "Desk A" || g.Notes != "import note" {
+	if g.Code != "desk-a" || g.Title != "Desk A" || g.Currency != "USD" ||
+		g.Notes != "import note" {
 		t.Errorf("group = %+v", g)
 	}
 	if g.EngineGroupID == 0 {
@@ -72,6 +76,9 @@ func TestApplyBusinessCSVImport_UpdatesExistingGroup(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
+	if err := rs.CreateAsset(ctx, domain.Asset{Code: "EUR"}); err != nil {
+		t.Fatalf("CreateAsset EUR: %v", err)
+	}
 
 	// Create a group first via the normal path so it has an engine id.
 	created, err := rs.CreateGroup(ctx, domain.AccountGroup{
@@ -87,7 +94,8 @@ func TestApplyBusinessCSVImport_UpdatesExistingGroup(t *testing.T) {
 			{
 				Group: domain.AccountGroup{
 					Code: "desk-b", Title: "New Title",
-					Notes: "updated", Blocked: true, BlockReason: "hold",
+					Currency: "EUR", Notes: "updated", Blocked: true,
+					BlockReason: "hold",
 				},
 				Exists: true,
 			},
@@ -104,7 +112,8 @@ func TestApplyBusinessCSVImport_UpdatesExistingGroup(t *testing.T) {
 	if !ok {
 		t.Fatal("group not found")
 	}
-	if g.Title != "New Title" || g.Notes != "updated" || !g.Blocked || g.BlockReason != "hold" {
+	if g.Title != "New Title" || g.Currency != "EUR" ||
+		g.Notes != "updated" || !g.Blocked || g.BlockReason != "hold" {
 		t.Errorf("group = %+v", g)
 	}
 	// Engine id must be preserved on update.
@@ -119,6 +128,9 @@ func TestApplyBusinessCSVImport_CreatesAccount(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
+	if err := rs.CreateAsset(ctx, domain.Asset{Code: "JPY"}); err != nil {
+		t.Fatalf("CreateAsset JPY: %v", err)
+	}
 
 	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "grp"}); err != nil {
 		t.Fatalf("CreateGroup: %v", err)
@@ -128,7 +140,8 @@ func TestApplyBusinessCSVImport_CreatesAccount(t *testing.T) {
 		Accounts: []BusinessCSVImportAccount{
 			{
 				Account: domain.Account{
-					Code: "acc-1", GroupCode: "grp", Notes: "note",
+					Code: "acc-1", GroupCode: "grp", Currency: "JPY",
+					Notes: "note",
 				},
 				Exists: false,
 			},
@@ -145,7 +158,8 @@ func TestApplyBusinessCSVImport_CreatesAccount(t *testing.T) {
 	if !ok {
 		t.Fatal("account not found")
 	}
-	if a.Code != "acc-1" || a.GroupCode != "grp" || a.Notes != "note" {
+	if a.Code != "acc-1" || a.GroupCode != "grp" || a.Currency != "JPY" ||
+		a.Notes != "note" {
 		t.Errorf("account = %+v", a)
 	}
 	if a.EngineAccountID == 0 {
@@ -157,6 +171,9 @@ func TestApplyBusinessCSVImport_UpdatesExistingAccount(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	_, rs := newTestStore(t)
+	if err := rs.CreateAsset(ctx, domain.Asset{Code: "CHF"}); err != nil {
+		t.Fatalf("CreateAsset CHF: %v", err)
+	}
 
 	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "grp"}); err != nil {
 		t.Fatalf("CreateGroup: %v", err)
@@ -173,6 +190,7 @@ func TestApplyBusinessCSVImport_UpdatesExistingAccount(t *testing.T) {
 				Account: domain.Account{
 					Code:        "acc-2",
 					GroupCode:   "grp",
+					Currency:    "CHF",
 					Notes:       "updated",
 					Blocked:     true,
 					BlockReason: "kyc",
@@ -192,7 +210,8 @@ func TestApplyBusinessCSVImport_UpdatesExistingAccount(t *testing.T) {
 	if !ok {
 		t.Fatal("account not found")
 	}
-	if a.Notes != "updated" || !a.Blocked || a.BlockReason != "kyc" {
+	if a.Currency != "CHF" || a.Notes != "updated" || !a.Blocked ||
+		a.BlockReason != "kyc" {
 		t.Errorf("account = %+v", a)
 	}
 	// Engine id must be preserved on update.

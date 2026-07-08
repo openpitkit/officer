@@ -240,6 +240,52 @@ func TestBalanceListFilters(t *testing.T) {
 	}
 }
 
+func TestListAccountsWithOpenBalancesIncludesPnLRows(t *testing.T) {
+	ctx, rs := seedBalanceFixtures(t)
+
+	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-2"}); err != nil {
+		t.Fatalf("CreateAccount acc-2: %v", err)
+	}
+	if err := rs.UpsertBalance(ctx, domain.Balance{
+		Account:     "acc-1",
+		Asset:       "AAPL",
+		RealizedPnl: "2.5",
+	}); err != nil {
+		t.Fatalf("UpsertBalance realized P&L: %v", err)
+	}
+	if err := rs.UpsertBalance(ctx, domain.Balance{
+		Account:           "acc-2",
+		Asset:             "USD",
+		AverageEntryPrice: "100",
+	}); err != nil {
+		t.Fatalf("UpsertBalance average entry: %v", err)
+	}
+
+	got, err := rs.ListAccountsWithOpenBalances(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListAccountsWithOpenBalances(all): %v", err)
+	}
+	if strings.Join(accountIDsToStrings(got), ",") != "acc-1,acc-2" {
+		t.Fatalf("ListAccountsWithOpenBalances(all) = %v, want acc-1,acc-2", got)
+	}
+
+	filtered, err := rs.ListAccountsWithOpenBalances(ctx, []domain.AccountID{"acc-2"})
+	if err != nil {
+		t.Fatalf("ListAccountsWithOpenBalances(filtered): %v", err)
+	}
+	if len(filtered) != 1 || filtered[0] != "acc-2" {
+		t.Fatalf("ListAccountsWithOpenBalances(filtered) = %v, want acc-2", filtered)
+	}
+}
+
+func accountIDsToStrings(ids []domain.AccountID) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, id.String())
+	}
+	return out
+}
+
 func TestBalanceListRowsSortFilterPageOrdersDecimalsNumerically(t *testing.T) {
 	ctx, rs := seedBalanceFixtures(t)
 	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "desk"}); err != nil {

@@ -24,6 +24,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   Account,
+  Asset,
   BusinessCsvEntity,
   BusinessCsvExportFilters,
   BusinessCsvImportEntity,
@@ -111,8 +112,12 @@ const exportBusinessCsvMock = vi.fn();
 const importBusinessCsvMock = vi.fn();
 const previewBusinessCsvImportMock = vi.fn();
 const setAccountGroupMock = vi.fn();
+const setAccountCurrencyMock = vi.fn();
 const createGroupMock = vi.fn();
+const setGroupCurrencyMock = vi.fn();
+const setDefaultGroupCurrencyMock = vi.fn();
 const fetchAuditMock = vi.fn();
+const fetchAssetsMock = vi.fn();
 const fetchAccountsMock = vi.fn();
 const fetchGroupsMock = vi.fn();
 const unblockAccountMock = vi.fn();
@@ -222,8 +227,12 @@ function renderAccounts(initialEntry = "/accounts") {
         importBusinessCsv: importBusinessCsvMock,
         previewBusinessCsvImport: previewBusinessCsvImportMock,
         setAccountGroup: setAccountGroupMock,
+        setAccountCurrency: setAccountCurrencyMock,
         createGroup: createGroupMock,
+        setGroupCurrency: setGroupCurrencyMock,
+        setDefaultGroupCurrency: setDefaultGroupCurrencyMock,
         fetchAudit: fetchAuditMock,
+        fetchAssets: fetchAssetsMock,
         fetchAccounts: fetchAccountsMock,
         fetchGroups: fetchGroupsMock,
         unblockAccount: unblockAccountMock,
@@ -243,6 +252,38 @@ beforeEach(async () => {
   exportBusinessCsvMock.mockResolvedValue({
     blob: new Blob(["csv"]),
     filename: "business.csv",
+  });
+  setAccountCurrencyMock.mockResolvedValue({
+    code: "desk-alpha",
+    title: "Desk alpha",
+    blocked: false,
+    blockReason: "",
+    group: "equity-desks",
+    currency: "EUR",
+    effectiveCurrency: "EUR",
+    currencyOrigin: "account",
+    currencyCascade: { account: "EUR", group: "", default: "" },
+    notes: "",
+  });
+  setGroupCurrencyMock.mockResolvedValue({
+    code: "equity-desks",
+    title: "Equity desks",
+    blocked: false,
+    blockReason: "",
+    notes: "",
+    currency: "EUR",
+    accountCount: 1,
+    positionCount: 0,
+  });
+  setDefaultGroupCurrencyMock.mockResolvedValue({
+    code: "",
+    title: "",
+    blocked: false,
+    blockReason: "",
+    notes: "",
+    currency: "EUR",
+    accountCount: 1,
+    positionCount: 0,
   });
   previewBusinessCsvImportMock.mockResolvedValue({
     file: { name: "accounts.csv", type: "csv" },
@@ -267,6 +308,7 @@ beforeEach(async () => {
     conflicts: [],
   });
   fetchAuditMock.mockResolvedValue([]);
+  fetchAssetsMock.mockResolvedValue([]);
   fetchAccountsMock.mockResolvedValue(accounts);
   fetchGroupsMock.mockResolvedValue(groups);
   unblockAccountMock.mockResolvedValue({
@@ -308,6 +350,10 @@ describe("CreateAccountDialog", () => {
       blocked: false,
       blockReason: "",
       group: "",
+      currency: "",
+      effectiveCurrency: "",
+      currencyOrigin: "",
+      currencyCascade: { account: "", group: "", default: "" },
       notes: "",
     });
     const onCreated = renderDialog();
@@ -323,7 +369,7 @@ describe("CreateAccountDialog", () => {
     await waitFor(() => {
       expect(createAccountMock).toHaveBeenCalledTimes(1);
     });
-    expect(createAccountMock).toHaveBeenCalledWith("acc-aapl-desk");
+    expect(createAccountMock).toHaveBeenCalledWith("acc-aapl-desk", "", "");
     expect(setAccountGroupMock).not.toHaveBeenCalled();
     expect(onCreated).toHaveBeenCalledTimes(1);
     await waitFor(() => {
@@ -339,6 +385,10 @@ describe("CreateAccountDialog", () => {
       blocked: false,
       blockReason: "",
       group: "equity-desks",
+      currency: "",
+      effectiveCurrency: "",
+      currencyOrigin: "",
+      currencyCascade: { account: "", group: "", default: "" },
       notes: "",
     });
     setAccountGroupMock.mockResolvedValue({
@@ -347,6 +397,10 @@ describe("CreateAccountDialog", () => {
       blocked: false,
       blockReason: "",
       group: "equity-desks",
+      currency: "",
+      effectiveCurrency: "",
+      currencyOrigin: "",
+      currencyCascade: { account: "", group: "", default: "" },
       notes: "",
     });
     renderDialog();
@@ -357,7 +411,7 @@ describe("CreateAccountDialog", () => {
     await user.click(screen.getByRole("button", { name: /^create$/i }));
 
     await waitFor(() => {
-      expect(createAccountMock).toHaveBeenCalledWith("acc-spx");
+      expect(createAccountMock).toHaveBeenCalledWith("acc-spx", "", "");
     });
     expect(setAccountGroupMock).toHaveBeenCalledTimes(1);
     expect(setAccountGroupMock).toHaveBeenCalledWith("acc-spx", "equity-desks");
@@ -611,6 +665,173 @@ describe("Accounts business CSV", () => {
       expect(createGroupMock).toHaveBeenCalledWith("new-desk", "", ""),
     );
     expect(setAccountGroupMock).toHaveBeenCalledWith("desk-default", "new-desk");
+  });
+
+  it("sets an account currency from the account currency dialog", async () => {
+    const user = userEvent.setup();
+    useAccountsMock.mockReturnValue(readyPage([
+      {
+        code: "desk-alpha",
+        title: "Desk alpha",
+        blocked: false,
+        blockReason: "",
+        group: "equity-desks",
+        currency: "USD",
+        effectiveCurrency: "USD",
+        currencyOrigin: "account",
+        currencyCascade: { account: "USD", group: "", default: "" },
+        notes: "",
+        positionCount: 0,
+      },
+    ]));
+    renderAccounts();
+
+    const row = screen.getByText("Desk alpha").closest("tr");
+    expect(row).not.toBeNull();
+    await user.click(
+      within(row as HTMLElement).getByRole("button", {
+        name: /edit account currency/i,
+      }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: /edit account currency/i,
+    });
+    const currency = within(dialog).getByLabelText(/^account currency$/i);
+    await user.clear(currency);
+    await user.type(currency, "EUR");
+    await user.click(within(dialog).getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() =>
+      expect(setAccountCurrencyMock).toHaveBeenCalledWith(
+        "desk-alpha",
+        "EUR",
+      ),
+    );
+  });
+
+  it("searches currency assets while editing account currency", async () => {
+    const user = userEvent.setup();
+    const asset: Asset = { code: "EUR", title: "Euro", assetClass: "currency" };
+    fetchAssetsMock.mockResolvedValue([asset]);
+    useAccountsMock.mockReturnValue(readyPage([
+      {
+        code: "desk-alpha",
+        title: "Desk alpha",
+        blocked: false,
+        blockReason: "",
+        group: "equity-desks",
+        currency: "USD",
+        effectiveCurrency: "USD",
+        currencyOrigin: "account",
+        currencyCascade: { account: "USD", group: "", default: "" },
+        notes: "",
+        positionCount: 0,
+      },
+    ]));
+    renderAccounts();
+
+    const row = screen.getByText("Desk alpha").closest("tr");
+    expect(row).not.toBeNull();
+    await user.click(
+      within(row as HTMLElement).getByRole("button", {
+        name: /edit account currency/i,
+      }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: /edit account currency/i,
+    });
+    const currency = within(dialog).getByLabelText(/^account currency$/i);
+    await user.clear(currency);
+    await user.type(currency, "EU");
+
+    await waitFor(() =>
+      expect(fetchAssetsMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          code: "EU",
+          codeMatch: "starts_with",
+          limit: 8,
+          sort: "code",
+        }),
+        expect.any(AbortSignal),
+      ),
+    );
+    expect(
+      within(dialog).getByRole("option", { name: "EUR" }),
+    ).toBeInTheDocument();
+  });
+
+  it("clears an already-set account currency", async () => {
+    const user = userEvent.setup();
+    useAccountsMock.mockReturnValue(readyPage([
+      {
+        code: "desk-alpha",
+        title: "Desk alpha",
+        blocked: false,
+        blockReason: "",
+        group: "equity-desks",
+        currency: "USD",
+        effectiveCurrency: "USD",
+        currencyOrigin: "account",
+        currencyCascade: { account: "USD", group: "", default: "" },
+        notes: "",
+        positionCount: 0,
+      },
+    ]));
+    renderAccounts();
+
+    const row = screen.getByText("Desk alpha").closest("tr");
+    expect(row).not.toBeNull();
+    await user.click(
+      within(row as HTMLElement).getByRole("button", {
+        name: /edit account currency/i,
+      }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: /edit account currency/i,
+    });
+    const currency = within(dialog).getByLabelText(/^account currency$/i);
+    await user.clear(currency);
+    await user.click(within(dialog).getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() =>
+      expect(setAccountCurrencyMock).toHaveBeenCalledWith("desk-alpha", ""),
+    );
+  });
+
+  it("creates a group with an optional currency", async () => {
+    const user = userEvent.setup();
+    createGroupMock.mockResolvedValue({
+      code: "fx-desks",
+      title: "FX desks",
+      notes: "",
+      blocked: false,
+      blockReason: "",
+      currency: "EUR",
+      accountCount: 0,
+      positionCount: 0,
+    });
+    renderAccounts();
+
+    await user.click(screen.getByRole("button", { name: /new group/i }));
+    const dialog = await screen.findByRole("dialog", {
+      name: /create group/i,
+    });
+    await user.type(within(dialog).getByLabelText(/group code/i), "fx-desks");
+    await user.type(
+      within(dialog).getByLabelText(/display title/i),
+      "FX desks",
+    );
+    await user.type(within(dialog).getByLabelText(/^currency/i), "EUR");
+    await user.click(within(dialog).getByRole("button", { name: /^create$/i }));
+
+    await waitFor(() =>
+      expect(createGroupMock).toHaveBeenCalledWith(
+        "fx-desks",
+        "FX desks",
+        "",
+        "EUR",
+      ),
+    );
   });
 
   it("requests a status sort when the status header is toggled", async () => {
@@ -1119,6 +1340,151 @@ describe("Accounts business CSV", () => {
 
     expect(screen.queryByText("Default group")).not.toBeInTheDocument();
     expect(screen.getByText("equity-desks")).toBeInTheDocument();
+  });
+
+  it("does not render a group code as a title when the title is empty", async () => {
+    const user = userEvent.setup();
+    useGroupsMock.mockReturnValue(readyPage([
+      {
+        code: "equity-desks",
+        title: "",
+        blocked: false,
+        blockReason: "",
+        notes: "",
+        accountCount: 1,
+        positionCount: 0,
+      },
+    ]));
+
+    renderAccounts();
+
+    await user.click(screen.getByRole("button", { name: /^groups$/i }));
+    const row = screen.getByText("equity-desks").closest("tr");
+
+    expect(row).not.toBeNull();
+    expect(within(row as HTMLElement).getAllByText("equity-desks")).toHaveLength(1);
+  });
+
+  it("sets a regular group currency from the group currency dialog", async () => {
+    const user = userEvent.setup();
+    useGroupsMock.mockReturnValue(readyPage([
+      {
+        code: "",
+        title: "",
+        blocked: false,
+        blockReason: "",
+        notes: "",
+        accountCount: 1,
+        positionCount: 0,
+      },
+      {
+        code: "equity-desks",
+        title: "Equity desks",
+        blocked: false,
+        blockReason: "",
+        notes: "",
+        currency: "USD",
+        accountCount: 1,
+        positionCount: 2,
+      },
+    ]));
+    renderAccounts();
+
+    await user.click(screen.getByRole("button", { name: /^groups$/i }));
+    const row = screen.getByText("Equity desks").closest("tr");
+    expect(row).not.toBeNull();
+    await user.click(
+      within(row as HTMLElement).getByRole("button", {
+        name: /edit group currency/i,
+      }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: /edit group currency/i,
+    });
+    expect(
+      within(dialog).getByText(/member accounts with balance or P&L rows/i),
+    ).toBeInTheDocument();
+    const currency = within(dialog).getByLabelText(/^group currency$/i);
+    await user.clear(currency);
+    await user.type(currency, "EUR");
+    await user.click(within(dialog).getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() =>
+      expect(setGroupCurrencyMock).toHaveBeenCalledWith(
+        "equity-desks",
+        "EUR",
+      ),
+    );
+  });
+
+  it("sets the default group currency from the group currency dialog", async () => {
+    const user = userEvent.setup();
+    useGroupsMock.mockReturnValue(readyPage([
+      {
+        code: "",
+        title: "",
+        blocked: false,
+        blockReason: "",
+        notes: "",
+        currency: "USD",
+        accountCount: 1,
+        positionCount: 1,
+      },
+    ]));
+    renderAccounts();
+
+    await user.click(screen.getByRole("button", { name: /^groups$/i }));
+    const row = screen.getByText("Default group").closest("tr");
+    expect(row).not.toBeNull();
+    await user.click(
+      within(row as HTMLElement).getByRole("button", {
+        name: /edit group currency/i,
+      }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: /edit group currency/i,
+    });
+    const currency = within(dialog).getByLabelText(/^group currency$/i);
+    await user.clear(currency);
+    await user.type(currency, "EUR");
+    await user.click(within(dialog).getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() =>
+      expect(setDefaultGroupCurrencyMock).toHaveBeenCalledWith("EUR"),
+    );
+  });
+
+  it("shows the source group name on inherited currency icons", () => {
+    useAccountsMock.mockReturnValue(readyPage([
+      {
+        code: "desk-alpha",
+        title: "Desk alpha",
+        blocked: false,
+        blockReason: "",
+        group: "equity-desks",
+        currency: "",
+        effectiveCurrency: "USD",
+        currencyOrigin: "group",
+        currencyCascade: { account: "", group: "USD", default: "" },
+        notes: "",
+      },
+    ]));
+
+    renderAccounts();
+
+    const row = screen.getByText("Desk alpha").closest("tr");
+    expect(row).not.toBeNull();
+    const titledNodes = Array.from(
+      (row as HTMLElement).querySelectorAll("[title]"),
+    );
+
+    expect(
+      titledNodes.some(
+        (node) =>
+          node.getAttribute("title") ===
+          "Account currency is inherited from Equity desks",
+      ),
+    ).toBe(true);
   });
 
   it("renders default group counts from the group response, not the accounts response", async () => {

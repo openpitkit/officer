@@ -236,6 +236,13 @@ func (r *realmStore) DeleteAsset(ctx context.Context, code string, force bool) e
 		}
 		return err
 	}
+	currencyDeps, err := assetCurrencyDependents(ctx, tx, assetID)
+	if err != nil {
+		return err
+	}
+	if len(currencyDeps) > 0 {
+		return domain.NewHasDependentsError(currencyDeps)
+	}
 	if !force {
 		deps, err := assetDependents(ctx, tx, assetID)
 		if err != nil {
@@ -628,16 +635,25 @@ func (r *realmStore) DeletePrincipal(ctx context.Context, code string) error {
 func (r *realmStore) CreateGroup(
 	ctx context.Context, group domain.AccountGroup,
 ) (domain.AccountGroup, error) {
+	if group.Code == "" {
+		return domain.AccountGroup{},
+			fmt.Errorf("group code is reserved for the default group: %w", domain.ErrInvalid)
+	}
 	db, err := r.db()
+	if err != nil {
+		return domain.AccountGroup{}, err
+	}
+	assetID, err := nullableAssetID(ctx, db, group.Currency)
 	if err != nil {
 		return domain.AccountGroup{}, err
 	}
 	res, err := db.ExecContext(
 		ctx,
 		`INSERT INTO account_group
-		 (code, title, notes, blocked, block_reason)
-		 VALUES (?, ?, ?, ?, ?)`,
-		group.Code, group.Title, group.Notes, group.Blocked, group.BlockReason,
+		 (code, title, currency_asset_id, notes, blocked, block_reason)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		group.Code, group.Title, assetID, group.Notes, group.Blocked,
+		group.BlockReason,
 	)
 	if err != nil {
 		if isSQLiteUnique(err) {
@@ -664,8 +680,11 @@ func (r *realmStore) GetGroup(
 	}
 	row := db.QueryRowContext(
 		ctx,
-		`SELECT id, code, title, notes, blocked, block_reason
-		 FROM account_group WHERE code = ?`,
+		`SELECT g.id, g.code, g.title, ca.code, g.notes, g.blocked,
+		        g.block_reason
+		 FROM account_group g
+		 LEFT JOIN asset ca ON ca.id = g.currency_asset_id
+		 WHERE g.code = ?`,
 		code,
 	)
 	group, err := scanGroupRow(row)
@@ -713,9 +732,10 @@ func (r *realmStore) ListGroupRows(
 	)
 	from := `
 FROM account_group g
+LEFT JOIN asset ca ON ca.id = g.currency_asset_id
 LEFT JOIN account a ON a.group_id = g.id
 LEFT JOIN balance b ON b.account_id = a.id` +
-		where + `
+		realGroupWhere(where) + `
 GROUP BY g.id` + having
 
 	countArgs := append(append([]any{}, args...), havingArgs...)
@@ -745,7 +765,7 @@ GROUP BY g.id` + having
 
 	queryArgs := append(append([]any{}, args...), havingArgs...)
 	query := `
-SELECT g.id, g.code, g.title, g.notes, g.blocked, g.block_reason,
+SELECT g.id, g.code, g.title, ca.code, g.notes, g.blocked, g.block_reason,
        COUNT(DISTINCT a.id) AS account_count,
        COUNT(b.asset_id) AS position_count` + from + groupListOrderBy(filter.Sort)
 	if filter.Page.Limit > 0 {
@@ -783,7 +803,7 @@ func (r *realmStore) defaultGroupRow(
 	)
 	args = append(args, havingArgs...)
 	query := `
-SELECT dg.id, dg.code, dg.title, dg.notes, dg.blocked,
+SELECT dg.id, dg.code, dg.title, dca.code, dg.notes, dg.blocked,
        dg.block_reason,
        COUNT(DISTINCT a.id) AS account_count,
        COUNT(b.asset_id) AS position_count
@@ -791,6 +811,8 @@ FROM (
     SELECT 0 AS id, '' AS code, '' AS title, '' AS notes,
            0 AS blocked, '' AS block_reason
 ) dg
+LEFT JOIN account_group persisted_default ON persisted_default.code = ''
+LEFT JOIN asset dca ON dca.id = persisted_default.currency_asset_id
 LEFT JOIN account a ON a.group_id IS NULL
 LEFT JOIN balance b ON b.account_id = a.id` +
 		where + `
@@ -833,10 +855,50 @@ func (r *realmStore) SetGroupNotes(ctx context.Context, code, notes string) erro
 	return notFoundIfNoRows(res, "group", code)
 }
 
+// SetGroupCurrency sets or clears the currency of a group. The empty group code
+// is the reserved default group tier and is materialized as the empty-code row.
+func (r *realmStore) SetGroupCurrency(
+	ctx context.Context, code string, currency string,
+) error {
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	assetID, err := nullableAssetID(ctx, db, currency)
+	if err != nil {
+		return err
+	}
+	if code == "" {
+		_, err := db.ExecContext(
+			ctx,
+			`INSERT INTO account_group (code, currency_asset_id)
+			 VALUES ('', ?)
+			 ON CONFLICT(code) DO UPDATE SET currency_asset_id = excluded.currency_asset_id`,
+			assetID,
+		)
+		if err != nil {
+			return fmt.Errorf("store: set default group currency: %w", err)
+		}
+		return nil
+	}
+	res, err := db.ExecContext(
+		ctx, `UPDATE account_group SET currency_asset_id = ? WHERE code = ?`,
+		assetID, code,
+	)
+	if err != nil {
+		return fmt.Errorf("store: set group currency: %w", err)
+	}
+	return notFoundIfNoRows(res, "group", code)
+}
+
 // UpdateGroup replaces the public code and title of the identified group.
 func (r *realmStore) UpdateGroup(
 	ctx context.Context, oldCode string, group domain.AccountGroup,
 ) (domain.AccountGroup, error) {
+	if oldCode == "" || group.Code == "" {
+		return domain.AccountGroup{},
+			fmt.Errorf("group code is reserved for the default group: %w", domain.ErrInvalid)
+	}
 	db, err := r.db()
 	if err != nil {
 		return domain.AccountGroup{}, err
@@ -923,17 +985,19 @@ func scanGroupListRow(rows *sql.Rows) (fwstore.GroupListRow, error) {
 	var (
 		group         domain.AccountGroup
 		engineID      int64
+		currency      sql.NullString
 		accountCount  int
 		positionCount int
 	)
 	if err := rows.Scan(
-		&engineID, &group.Code, &group.Title,
+		&engineID, &group.Code, &group.Title, &currency,
 		&group.Notes, &group.Blocked, &group.BlockReason,
 		&accountCount, &positionCount,
 	); err != nil {
 		return fwstore.GroupListRow{}, fmt.Errorf("store: scan group row: %w", err)
 	}
 	group.EngineGroupID = domain.EngineGroupID(engineID)
+	group.Currency = currency.String
 	return fwstore.GroupListRow{
 		Group:         group,
 		AccountCount:  accountCount,
@@ -946,13 +1010,15 @@ func scanGroupRow(row *sql.Row) (domain.AccountGroup, error) {
 		group    domain.AccountGroup
 		engineID int64
 	)
+	var currency sql.NullString
 	if err := row.Scan(
-		&engineID, &group.Code, &group.Title,
+		&engineID, &group.Code, &group.Title, &currency,
 		&group.Notes, &group.Blocked, &group.BlockReason,
 	); err != nil {
 		return domain.AccountGroup{}, err
 	}
 	group.EngineGroupID = domain.EngineGroupID(engineID)
+	group.Currency = currency.String
 	return group, nil
 }
 
@@ -962,10 +1028,14 @@ func scanGroupRow(row *sql.Row) (domain.AccountGroup, error) {
 // surfaces the group's code (NULL when the account is in no group) so the
 // surrogate group id never leaves the store.
 const accountSelect = `
-SELECT a.id, a.code, a.title, g.code,
+SELECT a.id, a.code, a.title, ac.code, g.code, gc.code, dc.code,
        a.notes, a.blocked, a.block_reason
 FROM account a
-LEFT JOIN account_group g ON g.id = a.group_id`
+LEFT JOIN asset ac ON ac.id = a.currency_asset_id
+LEFT JOIN account_group g ON g.id = a.group_id
+LEFT JOIN asset gc ON gc.id = g.currency_asset_id
+LEFT JOIN account_group dg ON dg.code = ''
+LEFT JOIN asset dc ON dc.id = dg.currency_asset_id`
 
 // CreateAccount persists a new account, resolving an optional group code to its
 // surrogate id, and returns the account with EngineAccountID populated from the
@@ -987,13 +1057,17 @@ func (r *realmStore) CreateAccount(
 	if err != nil {
 		return domain.Account{}, err
 	}
-	res, err := tx.ExecContext(
+	currencyID, err := nullableAssetID(ctx, tx, account.Currency)
+	if err != nil {
+		return domain.Account{}, err
+	}
+	_, err = tx.ExecContext(
 		ctx,
 		`INSERT INTO account
-		 (code, title, group_id, notes, blocked, block_reason)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
+		 (code, title, group_id, currency_asset_id, notes, blocked, block_reason)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		account.Code.String(), account.Title,
-		groupID, account.Notes, account.Blocked, account.BlockReason,
+		groupID, currencyID, account.Notes, account.Blocked, account.BlockReason,
 	)
 	if err != nil {
 		if isSQLiteUnique(err) {
@@ -1002,15 +1076,18 @@ func (r *realmStore) CreateAccount(
 		}
 		return domain.Account{}, fmt.Errorf("store: create account: %w", err)
 	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		return domain.Account{}, fmt.Errorf("store: create account id: %w", err)
-	}
 	if err := tx.Commit(); err != nil {
 		return domain.Account{}, fmt.Errorf("store: commit create account: %w", err)
 	}
-	account.EngineAccountID = domain.EngineAccountID(id)
-	return account, nil
+	created, ok, err := r.GetAccount(ctx, account.Code)
+	if err != nil {
+		return domain.Account{}, err
+	}
+	if !ok {
+		return domain.Account{},
+			fmt.Errorf("account %q: %w", account.Code, domain.ErrNotFound)
+	}
+	return created, nil
 }
 
 // GetAccount returns the account with the given code.
@@ -1058,7 +1135,11 @@ func (r *realmStore) ListAccountRows(
 	args = append(args, havingArgs...)
 	from := `
 FROM account a
+LEFT JOIN asset ac ON ac.id = a.currency_asset_id
 LEFT JOIN account_group g ON g.id = a.group_id
+LEFT JOIN asset gc ON gc.id = g.currency_asset_id
+LEFT JOIN account_group dg ON dg.code = ''
+LEFT JOIN asset dc ON dc.id = dg.currency_asset_id
 LEFT JOIN balance b ON b.account_id = a.id` +
 		where + `
 GROUP BY a.id` + having
@@ -1073,7 +1154,7 @@ GROUP BY a.id` + having
 	}
 	queryArgs := append([]any{}, args...)
 	query := `
-SELECT a.id, a.code, a.title, g.code,
+SELECT a.id, a.code, a.title, ac.code, g.code, gc.code, dc.code,
        a.notes, a.blocked, a.block_reason,
        COUNT(b.asset_id) AS position_count
 ` + from + accountListOrderBy(filter.Sort)
@@ -1132,6 +1213,28 @@ func (r *realmStore) SetAccountGroup(
 	)
 	if err != nil {
 		return fmt.Errorf("store: set account group: %w", err)
+	}
+	return notFoundIfNoRows(res, "account", code.String())
+}
+
+// SetAccountCurrency sets or clears the account-level currency asset.
+func (r *realmStore) SetAccountCurrency(
+	ctx context.Context, code domain.AccountID, currency string,
+) error {
+	db, err := r.db()
+	if err != nil {
+		return err
+	}
+	assetID, err := nullableAssetID(ctx, db, currency)
+	if err != nil {
+		return err
+	}
+	res, err := db.ExecContext(
+		ctx, `UPDATE account SET currency_asset_id = ? WHERE code = ?`,
+		assetID, code.String(),
+	)
+	if err != nil {
+		return fmt.Errorf("store: set account currency: %w", err)
 	}
 	return notFoundIfNoRows(res, "account", code.String())
 }
@@ -1262,13 +1365,17 @@ func scanAccountListRows(rows *sql.Rows) ([]fwstore.AccountListRow, error) {
 
 func scanAccountListRow(rows *sql.Rows) (fwstore.AccountListRow, error) {
 	var (
-		account       domain.Account
-		engineID      int64
-		groupCode     sql.NullString
-		positionCount int
+		account         domain.Account
+		engineID        int64
+		currency        sql.NullString
+		groupCode       sql.NullString
+		groupCurrency   sql.NullString
+		defaultCurrency sql.NullString
+		positionCount   int
 	)
 	if err := rows.Scan(
-		&engineID, &account.Code, &account.Title, &groupCode,
+		&engineID, &account.Code, &account.Title, &currency,
+		&groupCode, &groupCurrency, &defaultCurrency,
 		&account.Notes, &account.Blocked, &account.BlockReason,
 		&positionCount,
 	); err != nil {
@@ -1276,23 +1383,29 @@ func scanAccountListRow(rows *sql.Rows) (fwstore.AccountListRow, error) {
 	}
 	account.EngineAccountID = domain.EngineAccountID(engineID)
 	account.GroupCode = groupCode.String
+	setAccountCurrencyFields(&account, currency, groupCurrency, defaultCurrency)
 	return fwstore.AccountListRow{Account: account, PositionCount: positionCount}, nil
 }
 
 func scanAccount(rows *sql.Rows) (domain.Account, error) {
 	var (
-		account   domain.Account
-		engineID  int64
-		groupCode sql.NullString
+		account         domain.Account
+		engineID        int64
+		currency        sql.NullString
+		groupCode       sql.NullString
+		groupCurrency   sql.NullString
+		defaultCurrency sql.NullString
 	)
 	if err := rows.Scan(
-		&engineID, &account.Code, &account.Title, &groupCode,
+		&engineID, &account.Code, &account.Title, &currency,
+		&groupCode, &groupCurrency, &defaultCurrency,
 		&account.Notes, &account.Blocked, &account.BlockReason,
 	); err != nil {
 		return domain.Account{}, fmt.Errorf("store: scan account: %w", err)
 	}
 	account.EngineAccountID = domain.EngineAccountID(engineID)
 	account.GroupCode = groupCode.String
+	setAccountCurrencyFields(&account, currency, groupCurrency, defaultCurrency)
 	return account, nil
 }
 
@@ -1375,6 +1488,13 @@ func groupListWhere(filter fwstore.GroupListFilter, tableAlias string) (string, 
 		return "", args
 	}
 	return "\nWHERE " + strings.Join(clauses, " AND "), args
+}
+
+func realGroupWhere(where string) string {
+	if where == "" {
+		return "\nWHERE g.code <> ''"
+	}
+	return where + " AND g.code <> ''"
 }
 
 func appendMatcher(
@@ -1507,18 +1627,23 @@ func escapeLike(value string) string {
 
 func scanAccountRow(row *sql.Row) (domain.Account, error) {
 	var (
-		account   domain.Account
-		engineID  int64
-		groupCode sql.NullString
+		account         domain.Account
+		engineID        int64
+		currency        sql.NullString
+		groupCode       sql.NullString
+		groupCurrency   sql.NullString
+		defaultCurrency sql.NullString
 	)
 	if err := row.Scan(
-		&engineID, &account.Code, &account.Title, &groupCode,
+		&engineID, &account.Code, &account.Title, &currency,
+		&groupCode, &groupCurrency, &defaultCurrency,
 		&account.Notes, &account.Blocked, &account.BlockReason,
 	); err != nil {
 		return domain.Account{}, err
 	}
 	account.EngineAccountID = domain.EngineAccountID(engineID)
 	account.GroupCode = groupCode.String
+	setAccountCurrencyFields(&account, currency, groupCurrency, defaultCurrency)
 	return account, nil
 }
 
@@ -1563,6 +1688,36 @@ func optionalClassID(
 		return sql.NullInt64{}, err
 	}
 	return sql.NullInt64{Int64: id, Valid: true}, nil
+}
+
+func nullableAssetID(
+	ctx context.Context, q sqlQueryer, code string,
+) (sql.NullInt64, error) {
+	if code == "" {
+		return sql.NullInt64{}, nil
+	}
+	id, err := resolveAssetID(ctx, q, code)
+	if err != nil {
+		return sql.NullInt64{}, err
+	}
+	return sql.NullInt64{Int64: id, Valid: true}, nil
+}
+
+func setAccountCurrencyFields(
+	account *domain.Account,
+	currency sql.NullString,
+	groupCurrency sql.NullString,
+	defaultCurrency sql.NullString,
+) {
+	account.Currency = currency.String
+	account.GroupCurrency = groupCurrency.String
+	account.DefaultCurrency = defaultCurrency.String
+	account.EffectiveCurrency, account.CurrencyOrigin =
+		domain.ResolveCurrencyCascade(
+			account.Currency,
+			account.GroupCurrency,
+			account.DefaultCurrency,
+		)
 }
 
 // notFoundIfNoRows turns a zero-rows-affected result into domain.ErrNotFound for
@@ -1614,6 +1769,16 @@ func assetDependents(
 		 WHERE base_asset_id = ? OR quote_asset_id = ?`},
 		{"market_data_instrument", `SELECT COUNT(*) FROM market_data_instrument
 		 WHERE base_asset_id = ? OR quote_asset_id = ?`},
+	}
+	return collectDependents(ctx, q, checks, assetID)
+}
+
+func assetCurrencyDependents(
+	ctx context.Context, q sqlQueryer, assetID int64,
+) ([]domain.DependentCount, error) {
+	checks := []dependentQuery{
+		{"account_currency", `SELECT COUNT(*) FROM account WHERE currency_asset_id = ?`},
+		{"account_group_currency", `SELECT COUNT(*) FROM account_group WHERE currency_asset_id = ?`},
 	}
 	return collectDependents(ctx, q, checks, assetID)
 }

@@ -17,6 +17,7 @@
 
 import { createElement } from "react";
 import {
+  ArrowLeftRight,
   BadgeDollarSign,
   BriefcaseBusiness,
   ClipboardList,
@@ -27,7 +28,6 @@ import {
   Settings,
   ShieldCheck,
   SlidersHorizontal,
-  TrendingUp,
   Users,
 } from "lucide-react";
 
@@ -126,7 +126,7 @@ export function registerOpenOfficerDefaults(): void {
     id: "orders",
     to: "/orders",
     labelKey: "nav.orders",
-    icon: TrendingUp,
+    icon: ArrowLeftRight,
     section: "primary",
     order: 40,
   });

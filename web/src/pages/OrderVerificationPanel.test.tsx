@@ -101,7 +101,6 @@ async function buildSignedToken(
     policySummary: "accepted",
     estimatePrice: "150.25",
     issuedAt: "2026-06-24T00:00:00Z",
-    expiresAt: "2036-06-24T00:00:00Z",
     keyId,
     alg: "ed25519",
     ...overrides,
@@ -143,7 +142,6 @@ function submitBundleFrom(fixture: SignedFixture): EventReproduction {
       requestType: "submit",
       mode: "immediate",
       issuedAt: "2026-06-24T00:00:00Z",
-      expiresAt: "2036-06-24T00:00:00Z",
       signed: true,
     },
     request: {
@@ -165,8 +163,9 @@ function submitBundleFrom(fixture: SignedFixture): EventReproduction {
       submitResponse: {
         token: fixture.token,
         keyId: fixture.keyId,
-        expiresAt: "2036-06-24T00:00:00Z",
         orderExternalId: "ord-repro-1",
+        verdict: "accept",
+        reasons: [],
       },
       executionReport: null,
       confirm: null,
@@ -207,7 +206,6 @@ function execReportBundleFrom(fixture: SignedFixture): EventReproduction {
       requestType: "execution_report",
       mode: "immediate",
       issuedAt: "2026-06-24T00:01:00Z",
-      expiresAt: "2036-06-24T00:00:00Z",
       signed: true,
     },
     request: {

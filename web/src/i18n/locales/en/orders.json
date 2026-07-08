@@ -45,9 +45,20 @@
     "sourceAriaLabel": "Source",
     "sizeAriaLabel": "Page size",
     "sizeRows": "{{count}} rows",
+    "quickStatusLabel": "Orders",
+    "quickStatus": {
+      "all": "All",
+      "active": "Active"
+    },
     "statusLabel": "Status",
     "status": {
-      "all": "All statuses",
+      "groupActive": "Active",
+      "groupTerminal": "Terminal",
+      "groupFinalized": "Finalized",
+      "clearAll": "Clear all",
+      "selectAll": "Select all",
+      "selectActive": "All active",
+      "selectTerminal": "All terminal",
       "submitted": "Submitted",
       "accepted": "Accepted",
       "rejected": "Rejected",
@@ -321,7 +332,6 @@
     "unsignedNote": "No cryptographic signature — this event was attested under eSign-off.",
     "errorNote": "Verification could not run. {{message}}",
     "missingArtifacts": "The canonical bytes or signature are missing from the bundle.",
-    "expired": "EXPIRED",
     "jsSnippetLabel": "Verify with WebCrypto (JavaScript)",
     "goSnippetLabel": "Verify with crypto/ed25519 (Go)",
     "snippetKeyNote": "The public key is in raw-base64 form, resolved by this attestation's key id.",
@@ -356,8 +366,7 @@
     "fillPrice": "Fill price",
     "leavesQuantity": "Leaves quantity",
     "orderStatus": "Order status",
-    "issuedAt": "Issued at",
-    "expiresAt": "Expires at"
+    "issuedAt": "Issued at"
   },
 
   "esign": {

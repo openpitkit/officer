@@ -45,9 +45,20 @@
     "sourceAriaLabel": "Источник",
     "sizeAriaLabel": "Размер страницы",
     "sizeRows": "{{count}} строк",
+    "quickStatusLabel": "Ордера",
+    "quickStatus": {
+      "all": "Все",
+      "active": "Активные"
+    },
     "statusLabel": "Статус",
     "status": {
-      "all": "Все статусы",
+      "groupActive": "Активные",
+      "groupTerminal": "Терминальные",
+      "groupFinalized": "Финализированные",
+      "clearAll": "Снять все",
+      "selectAll": "Поставить все",
+      "selectActive": "Все активные",
+      "selectTerminal": "Все терминальные",
       "submitted": "Отправлен",
       "accepted": "Принят",
       "rejected": "Отклонён",
@@ -321,7 +332,6 @@
     "unsignedNote": "Криптографическая подпись отсутствует — это событие аттестовано в режиме eSign-off.",
     "errorNote": "Проверку выполнить не удалось. {{message}}",
     "missingArtifacts": "В комплекте отсутствуют канонические байты или подпись.",
-    "expired": "ИСТЁК",
     "jsSnippetLabel": "Проверка через WebCrypto (JavaScript)",
     "goSnippetLabel": "Проверка через crypto/ed25519 (Go)",
     "snippetKeyNote": "Открытый ключ приведён в форме raw-base64, разрешён по идентификатору ключа этой аттестации.",
@@ -356,8 +366,7 @@
     "fillPrice": "Цена исполнения",
     "leavesQuantity": "Остаток количества",
     "orderStatus": "Статус ордера",
-    "issuedAt": "Выпущен",
-    "expiresAt": "Истекает"
+    "issuedAt": "Выпущен"
   },
 
   "esign": {

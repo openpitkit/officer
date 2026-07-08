@@ -79,6 +79,7 @@
       "group": "Group",
       "accounts": "Accounts",
       "positions": "Pos",
+      "currency": "Currency",
       "status": "Status",
       "notes": "Notes",
       "actions": "Actions"
@@ -87,6 +88,7 @@
       "group": "This column shows the account group code and display title.",
       "accounts": "This column shows how many accounts belong to the group.",
       "positions": "This column shows how many open position rows belong to the group.",
+      "currency": "Default currency for group accounts.",
       "status": "This column shows whether the group is active or blocked.",
       "notes": "This column shows the operator notes stored on the group.",
       "actions": "This column contains row actions for filtering, sharing, and deleting the group."
@@ -106,6 +108,7 @@
     "actions": {
       "notes": "Notes",
       "editTitle": "Edit group",
+      "editCurrencyTitle": "Edit group currency",
       "editNotesTitle": "Edit notes",
       "positionsTitle": "Open positions filtered by this group",
       "viewBlockDetails": "View block details",
@@ -113,6 +116,9 @@
       "unblock": "Unblock",
       "delete": "Delete",
       "deleteTitle": "Delete group"
+    },
+    "currencyCell": {
+      "title": "Default currency for group accounts."
     }
   },
   "accounts": {
@@ -123,6 +129,7 @@
     "columns": {
       "account": "Account",
       "group": "Group",
+      "currency": "Currency",
       "positions": "Pos",
       "status": "Status",
       "notes": "Notes",
@@ -131,6 +138,7 @@
     "columnDescriptions": {
       "account": "This column shows the account code and display title.",
       "group": "This column shows the group assigned to the account.",
+      "currency": "Account currency.",
       "positions": "This column shows how many position rows are stored for the account.",
       "status": "This column shows whether the account is active or blocked.",
       "notes": "This column shows the operator notes stored on the account.",
@@ -164,6 +172,7 @@
     "actions": {
       "notes": "Notes",
       "editTitle": "Edit account",
+      "editCurrencyTitle": "Edit account currency",
       "editNotesTitle": "Edit reference notes",
       "positionsTitle": "Open positions filtered by this account",
       "viewBlockDetails": "View block details",
@@ -175,6 +184,15 @@
       "title": "No accounts",
       "hintFiltered": "No accounts are assigned to this group.",
       "hintEmpty": "Create the first account to start applying risk limits to it."
+    },
+    "currencyCell": {
+      "title": "Account currency",
+      "none": "no tier",
+      "origins": {
+        "account": "Account currency is set on the account",
+        "groupNamed": "Account currency is inherited from {{group}}",
+        "default": "Account currency uses the default tier"
+      }
     }
   },
   "createAccount": {
@@ -185,6 +203,8 @@
     "codeHint": "Up to 64 printable characters, no leading or trailing whitespace.",
     "groupLabel": "Group (optional)",
     "groupHint": "Choose an existing group or type a new code. Leave blank to create an ungrouped account.",
+    "currencyLabel": "Currency (optional)",
+    "currencyHint": "Without a currency, realized P&L for this account is not computed.",
     "cancel": "Cancel",
     "submit": "Create"
   },
@@ -194,11 +214,41 @@
     "codeLabel": "Group code",
     "titleLabel": "Display title (optional)",
     "titlePlaceholder": "US equity desks",
+    "currencyLabel": "Currency (optional)",
+    "currencyHint": "Without a currency, realized P&L for accounts in this group is not computed unless an account currency is set.",
     "notesLabel": "Notes (optional)",
     "notesPlaceholder": "Accounts belonging to the US equity trading desks.",
     "notesHint": "Reference notes — stored in the control plane only, not sent to the engine.",
     "cancel": "Cancel",
     "submit": "Create"
+  },
+  "editCurrency": {
+    "title": "Edit account currency",
+    "description": "Set the account currency for {{account}}.",
+    "cascadeTitle": "Currency cascade",
+    "accountTier": "Account",
+    "groupTier": "Group",
+    "defaultTier": "Default",
+    "effective": "Effective",
+    "origins": {
+      "account": "account",
+      "group": "group",
+      "default": "default"
+    },
+    "blockedHint": "This account has balance or P&L rows. The backend will reject a change that would alter its effective currency.",
+    "currencyLabel": "Account currency",
+    "currencyHint": "Clear the field to inherit from group and default tiers. Without an effective account currency, realized P&L for this account is not computed.",
+    "cancel": "Cancel",
+    "submit": "Save"
+  },
+  "editGroupCurrency": {
+    "title": "Edit group currency",
+    "description": "Set the group currency for {{group}}.",
+    "defaultDescription": "Set the reserved default group currency.",
+    "blockedHint": "The backend rejects changes that would alter effective currency for member accounts with balance or P&L rows.",
+    "currencyLabel": "Group currency",
+    "cancel": "Cancel",
+    "submit": "Save"
   },
   "businessCsv": {
     "importCsv": "Import CSV",

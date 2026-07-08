@@ -25,6 +25,7 @@ package native
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 	"unicode"
@@ -267,6 +268,17 @@ func TestBuildEngine_RegistersRiskPolicies(t *testing.T) {
 	}
 }
 
+func TestAccountLaneSetAccountCurrency_InvalidCurrencyIsDomainInvalid(t *testing.T) {
+	t.Parallel()
+	lane := accountLane{
+		owner: &openPitEngine{res: testResolver("acc-1")},
+	}
+	err := lane.SetAccountCurrency(context.Background(), "acc-1", "  ")
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("SetAccountCurrency invalid currency = %v, want ErrInvalid", err)
+	}
+}
+
 // TestNewIDResolver_RejectsUnassignedEngineID checks the resolver build rejects
 // an account whose stored engine id is unassigned (zero), since that is
 // corruption of our own persisted ids, not a hashable input.
@@ -311,6 +323,88 @@ func TestNewIDResolver_UsesStoredEngineIDs(t *testing.T) {
 	if grp.String() != want.String() {
 		t.Fatalf("group engine id = %s, want %s", grp, want)
 	}
+}
+
+func TestApplyCurrenciesCallsAccountAndGroupTiers(t *testing.T) {
+	t.Parallel()
+	groupID, err := param.NewAccountGroupIDFromUint32(7)
+	if err != nil {
+		t.Fatalf("group id: %v", err)
+	}
+	snap := Snapshot{
+		Accounts: []domain.Account{
+			{
+				Code:            "acc-1",
+				EngineAccountID: 11,
+				Currency:        "GBP",
+			},
+			{
+				Code:            "acc-2",
+				EngineAccountID: 12,
+			},
+		},
+		Groups: []domain.AccountGroup{
+			{Code: "", Currency: "USD"},
+			{Code: "desk-a", EngineGroupID: 7, Currency: "EUR"},
+			{Code: "desk-b", EngineGroupID: 8},
+		},
+	}
+	res, err := newIDResolver(snap.Accounts, snap.Groups)
+	if err != nil {
+		t.Fatalf("newIDResolver: %v", err)
+	}
+	handle := &fakeCurrencyAccounts{}
+	if err := applyCurrencies(handle, snap.Accounts, snap.Groups, res); err != nil {
+		t.Fatalf("applyCurrencies: %v", err)
+	}
+	accountID := param.NewAccountIDFromUint64(11)
+	wantGroups := []currencyCall{
+		{id: param.DefaultAccountGroup.String(), currency: "USD"},
+		{id: groupID.String(), currency: "EUR"},
+	}
+	if !slices.Equal(handle.groupCalls, wantGroups) {
+		t.Fatalf("group currency calls = %+v, want %+v", handle.groupCalls, wantGroups)
+	}
+	wantAccounts := []currencyCall{{id: accountID.String(), currency: "GBP"}}
+	if !slices.Equal(handle.accountCalls, wantAccounts) {
+		t.Fatalf(
+			"account currency calls = %+v, want %+v",
+			handle.accountCalls,
+			wantAccounts,
+		)
+	}
+}
+
+type currencyCall struct {
+	id       string
+	currency string
+}
+
+type fakeCurrencyAccounts struct {
+	groupCalls   []currencyCall
+	accountCalls []currencyCall
+}
+
+func (h *fakeCurrencyAccounts) SetGroupCurrency(
+	id param.AccountGroupID,
+	currency param.Asset,
+) error {
+	h.groupCalls = append(h.groupCalls, currencyCall{
+		id:       id.String(),
+		currency: currency.String(),
+	})
+	return nil
+}
+
+func (h *fakeCurrencyAccounts) SetCurrency(
+	id param.AccountID,
+	currency param.Asset,
+) error {
+	h.accountCalls = append(h.accountCalls, currencyCall{
+		id:       id.String(),
+		currency: currency.String(),
+	})
+	return nil
 }
 
 // TestBuildOpenPitEngine_SeedsFromSnapshot builds the one engine from a seeded

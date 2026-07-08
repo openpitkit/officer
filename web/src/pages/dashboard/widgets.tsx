@@ -46,32 +46,42 @@ export interface DashboardReadyWidgetProps {
 export function CountsRow({ counts }: DashboardReadyWidgetProps) {
   const { t } = useTranslation("dashboard");
   const navigate = useNavigate();
-  const tiles: { label: string; value: ReactNode; route: string }[] = [
+  const tiles: {
+    label: string;
+    value: ReactNode;
+    caption: string;
+    route: string;
+  }[] = [
     {
       label: t("counts.accounts"),
-      value: <SlashCount active={counts.accountsActive} total={counts.accounts} />,
+      value: <SlashCount left={counts.accountsActive} right={counts.accounts} />,
+      caption: t("counts.captionActiveTotal"),
       route: "/accounts",
     },
     {
       label: t("counts.groups"),
-      value: <SlashCount active={counts.groupsActive} total={counts.groups} />,
+      value: <SlashCount left={counts.groupsActive} right={counts.groups} />,
+      caption: t("counts.captionActiveTotal"),
       route: "/accounts",
     },
     {
       label: t("counts.orders"),
       value: (
-        <>
-          {counts.ordersToday}
-          <span className="text-xl font-normal text-muted-lt"> / </span>
-          {counts.ordersTotal}
-        </>
+        <SlashCount
+          values={[
+            counts.ordersToday,
+            counts.ordersActive,
+            counts.ordersTotal,
+          ]}
+        />
       ),
+      caption: t("counts.captionTodayActiveTotal"),
       route: "/orders",
     },
   ];
   return (
     <div className="grid grid-cols-3 gap-4">
-      {tiles.map(({ label, value, route }) => (
+      {tiles.map(({ label, value, caption, route }) => (
         <button
           key={label}
           type="button"
@@ -80,10 +90,16 @@ export function CountsRow({ counts }: DashboardReadyWidgetProps) {
         >
           <Card className="h-full pointer-events-none">
             <CardContent className="flex flex-col items-center gap-1 py-4 text-center">
-              <span className="nums text-2xl font-bold tracking-tight text-text">
+              <span
+                className="nums text-2xl font-bold tracking-tight text-text"
+                title={caption}
+              >
                 {value}
               </span>
               <span className="text-xs text-muted">{label}</span>
+              <span className="text-[0.625rem] uppercase tracking-[0.08em] text-muted-lt">
+                {caption}
+              </span>
             </CardContent>
           </Card>
         </button>
@@ -92,12 +108,26 @@ export function CountsRow({ counts }: DashboardReadyWidgetProps) {
   );
 }
 
-function SlashCount({ active, total }: { active: number; total: number }) {
+function SlashCount({
+  left,
+  right,
+  values,
+}: {
+  left?: number;
+  right?: number;
+  values?: number[];
+}) {
+  const parts = values ?? [left ?? 0, right ?? 0];
   return (
     <>
-      {active}
-      <span className="text-xl font-normal text-muted-lt"> / </span>
-      {total}
+      {parts.map((value, index) => (
+        <span key={`${index}-${value}`}>
+          {index > 0 && (
+            <span className="text-xl font-normal text-muted-lt"> / </span>
+          )}
+          {value}
+        </span>
+      ))}
     </>
   );
 }

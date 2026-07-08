@@ -4,7 +4,10 @@
   "counts": {
     "accounts": "账户",
     "groups": "分组",
-    "orders": "订单"
+    "orders": "订单",
+    "captionActiveTotal": "活跃 / 总数",
+    "captionTodayTotal": "今日 / 总数",
+    "captionTodayActiveTotal": "今日 / 活跃 / 总数"
   },
   "activity": {
     "noRecent": "暂无近期活动",
@@ -54,7 +57,9 @@
       "balanceUpdate": "余额更新",
       "order": "订单",
       "tradeFill": "成交",
-      "resetDatabase": "重置数据库"
+      "resetDatabase": "重置数据库",
+      "restartService": "重启服务",
+      "stopService": "停止服务"
     }
   }
 }

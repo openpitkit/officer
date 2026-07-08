@@ -77,7 +77,6 @@ func TestReservationUpsertGetAndLockRoundTrip(t *testing.T) {
 		ParamsJSON: `{"side":"buy","qty":"10"}`,
 		Lock:       lock,
 		IssuedAt:   time.Now().UTC().Truncate(time.Nanosecond),
-		ExpiresAt:  time.Now().UTC().Add(time.Minute).Truncate(time.Nanosecond),
 		State:      domain.ReservationIntentStateHeld,
 	}
 	if err := rs.UpsertReservationIntent(ctx, intent); err != nil {
@@ -110,8 +109,8 @@ func TestReservationUpsertGetAndLockRoundTrip(t *testing.T) {
 	if openByOrder.ApprovalID != "appr-1" {
 		t.Fatalf("open by order = %+v, want appr-1", openByOrder)
 	}
-	if !got.IssuedAt.Equal(intent.IssuedAt) || !got.ExpiresAt.Equal(intent.ExpiresAt) {
-		t.Fatalf("timestamps round-trip = (%v, %v)", got.IssuedAt, got.ExpiresAt)
+	if !got.IssuedAt.Equal(intent.IssuedAt) {
+		t.Fatalf("issued_at round-trip = %v", got.IssuedAt)
 	}
 
 	// Missing intent reports ok=false, not an error.
@@ -154,7 +153,6 @@ func TestReservationInMemoryHoldHasNoOrder(t *testing.T) {
 		Account:    "acc-1",
 		ParamsJSON: "{}",
 		IssuedAt:   time.Now().UTC(),
-		ExpiresAt:  time.Now().UTC().Add(time.Minute),
 		State:      domain.ReservationIntentStateHeld,
 	}); err != nil {
 		t.Fatalf("UpsertReservationIntent(in-memory): %v", err)
@@ -176,7 +174,6 @@ func TestReservationUpsertUnknownAccountIsInvalid(t *testing.T) {
 		Account:    "ghost",
 		ParamsJSON: "{}",
 		IssuedAt:   time.Now().UTC(),
-		ExpiresAt:  time.Now().UTC().Add(time.Minute),
 	}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("UpsertReservationIntent(unknown account) error = %v, want ErrInvalid", err)
 	}
@@ -192,7 +189,6 @@ func TestReservationStateTransitionAndListOpen(t *testing.T) {
 			Account:    "acc-1",
 			ParamsJSON: "{}",
 			IssuedAt:   time.Now().UTC(),
-			ExpiresAt:  time.Now().UTC().Add(time.Minute),
 			State:      domain.ReservationIntentStateHeld,
 		}
 	}
@@ -242,7 +238,6 @@ func TestResolveOrderReservation(t *testing.T) {
 		Account:    "acc-1",
 		ParamsJSON: "{}",
 		IssuedAt:   time.Now().UTC(),
-		ExpiresAt:  time.Now().UTC().Add(time.Minute),
 		State:      domain.ReservationIntentStateHeld,
 	}); err != nil {
 		t.Fatalf("UpsertReservationIntent: %v", err)
@@ -287,8 +282,8 @@ func TestResolveOrderReservationGuardConflict(t *testing.T) {
 	ctx, rs, order := seedReservationOrder(t)
 	if err := rs.UpsertReservationIntent(ctx, domain.ReservationIntent{
 		ApprovalID: "appr-1", Order: order, Account: "acc-1", ParamsJSON: "{}",
-		IssuedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(time.Minute),
-		State: domain.ReservationIntentStateHeld,
+		IssuedAt: time.Now().UTC(),
+		State:    domain.ReservationIntentStateHeld,
 	}); err != nil {
 		t.Fatalf("UpsertReservationIntent: %v", err)
 	}
@@ -343,8 +338,8 @@ func TestResolveOrderReservationInMemoryHold(t *testing.T) {
 	}
 	if err := rs.UpsertReservationIntent(ctx, domain.ReservationIntent{
 		ApprovalID: "appr-mem", Account: "acc-1", ParamsJSON: "{}",
-		IssuedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(time.Minute),
-		State: domain.ReservationIntentStateHeld,
+		IssuedAt: time.Now().UTC(),
+		State:    domain.ReservationIntentStateHeld,
 	}); err != nil {
 		t.Fatalf("UpsertReservationIntent: %v", err)
 	}
@@ -365,8 +360,8 @@ func TestReservationCascadeOnOrderDelete(t *testing.T) {
 	ctx, rs, order := seedReservationOrder(t)
 	if err := rs.UpsertReservationIntent(ctx, domain.ReservationIntent{
 		ApprovalID: "appr-1", Order: order, Account: "acc-1", ParamsJSON: "{}",
-		IssuedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(time.Minute),
-		State: domain.ReservationIntentStateHeld,
+		IssuedAt: time.Now().UTC(),
+		State:    domain.ReservationIntentStateHeld,
 	}); err != nil {
 		t.Fatalf("UpsertReservationIntent: %v", err)
 	}
@@ -387,8 +382,8 @@ func TestReservationCascadeOnAccountDelete(t *testing.T) {
 	ctx, rs, order := seedReservationOrder(t)
 	if err := rs.UpsertReservationIntent(ctx, domain.ReservationIntent{
 		ApprovalID: "appr-1", Order: order, Account: "acc-1", ParamsJSON: "{}",
-		IssuedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(time.Minute),
-		State: domain.ReservationIntentStateHeld,
+		IssuedAt: time.Now().UTC(),
+		State:    domain.ReservationIntentStateHeld,
 	}); err != nil {
 		t.Fatalf("UpsertReservationIntent: %v", err)
 	}

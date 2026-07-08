@@ -23,7 +23,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.openpit.dev/officer/framework/auth"
@@ -99,10 +98,12 @@ type SubmitOrderTokenResult struct {
 	Token string
 	// KeyID is the signing key id; empty under eSign-off.
 	KeyID string
-	// ExpiresAt is when the token and held reservation expire.
-	ExpiresAt time.Time
 	// OrderExternalID is the order's opaque public handle.
 	OrderExternalID string
+	// Verdict is the signed pre-trade decision: "accept" or "reject".
+	Verdict string
+	// Reasons carries engine reject reasons when Verdict is "reject".
+	Reasons []domain.OrderReject
 }
 
 // VersionSource reports the engine version used as the MCP server version.

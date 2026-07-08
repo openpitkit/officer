@@ -113,6 +113,14 @@ func (e *fakeEngine) UnblockAccount(context.Context, domain.AccountID) error {
 	return nil
 }
 
+func (e *fakeEngine) SetAccountCurrency(context.Context, domain.AccountID, string) error {
+	return nil
+}
+
+func (e *fakeEngine) ClearAccountCurrency(context.Context, domain.AccountID) error {
+	return nil
+}
+
 func (e *fakeEngine) ApplyAccountAdjustmentBatch(
 	context.Context,
 	domain.AccountID,

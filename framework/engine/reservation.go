@@ -33,9 +33,8 @@ type ReservationStore interface {
 	ListOpenReservationIntents(ctx context.Context) ([]domain.ReservationIntent, error)
 	// ResolveOrderReservation flips the intent state, advances the order status
 	// under an AllowedFrom WHERE-guard, and appends the lifecycle event(s) in one
-	// atomic store transaction. The TTL sweeper calls it directly so a swept
-	// rollback is all-or-nothing; the node drives confirm/cancel through the same
-	// method. F1 (no node->engine coupling) is preserved: the engine resolves via
-	// its own store handle, never a node reference.
+	// atomic store transaction. The node drives confirm/cancel through it. F1 (no
+	// node->engine coupling) is preserved: the engine resolves via its own store
+	// handle, never a node reference.
 	ResolveOrderReservation(ctx context.Context, r domain.ReservationResolution) error
 }

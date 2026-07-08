@@ -71,13 +71,23 @@ type storeHealthDTO struct {
 // record: its public handle is the code, paired with a mutable title.
 // The engine account id and the store surrogate id are never serialized.
 type accountDTO struct {
-	Code          string `json:"code"`
-	Title         string `json:"title"`
-	Group         string `json:"group"`
-	Notes         string `json:"notes"`
-	PositionCount int    `json:"positionCount"`
-	BlockReason   string `json:"blockReason"`
-	Blocked       bool   `json:"blocked"`
+	Code              string             `json:"code"`
+	Title             string             `json:"title"`
+	Group             string             `json:"group"`
+	Currency          string             `json:"currency"`
+	EffectiveCurrency string             `json:"effectiveCurrency"`
+	CurrencyOrigin    string             `json:"currencyOrigin"`
+	CurrencyCascade   currencyCascadeDTO `json:"currencyCascade"`
+	Notes             string             `json:"notes"`
+	PositionCount     int                `json:"positionCount"`
+	BlockReason       string             `json:"blockReason"`
+	Blocked           bool               `json:"blocked"`
+}
+
+type currencyCascadeDTO struct {
+	Account string `json:"account"`
+	Group   string `json:"group"`
+	Default string `json:"default"`
 }
 
 // assetDTO is the wire shape of a single asset dictionary record. An asset's
@@ -217,9 +227,17 @@ func toStatusDTO(status backend.Status) statusDTO {
 // handle is its code; the engine account id is never serialized.
 func toAccountDTO(a domain.Account) accountDTO {
 	return accountDTO{
-		Code:        string(a.Code),
-		Title:       a.Title,
-		Group:       a.GroupCode,
+		Code:              string(a.Code),
+		Title:             a.Title,
+		Group:             a.GroupCode,
+		Currency:          a.Currency,
+		EffectiveCurrency: a.EffectiveCurrency,
+		CurrencyOrigin:    a.CurrencyOrigin,
+		CurrencyCascade: currencyCascadeDTO{
+			Account: a.Currency,
+			Group:   a.GroupCurrency,
+			Default: a.DefaultCurrency,
+		},
 		Notes:       a.Notes,
 		BlockReason: a.BlockReason,
 		Blocked:     a.Blocked,
@@ -779,6 +797,7 @@ func toMarketDataQuoteDTO(quote *domain.MarketDataQuote) *marketDataQuoteDTO {
 type groupDTO struct {
 	Code          string `json:"code"`
 	Title         string `json:"title"`
+	Currency      string `json:"currency"`
 	Notes         string `json:"notes"`
 	AccountCount  int    `json:"accountCount"`
 	PositionCount int    `json:"positionCount"`
@@ -792,6 +811,7 @@ func toGroupDTO(g domain.AccountGroup) groupDTO {
 	return groupDTO{
 		Code:        g.Code,
 		Title:       g.Title,
+		Currency:    g.Currency,
 		Notes:       g.Notes,
 		BlockReason: g.BlockReason,
 		Blocked:     g.Blocked,
@@ -1080,7 +1100,6 @@ type eventAttestationDTO struct {
 	RequestType string `json:"requestType"`
 	Mode        string `json:"mode"`
 	IssuedAt    string `json:"issuedAt"`
-	ExpiresAt   string `json:"expiresAt"`
 	Signed      bool   `json:"signed"`
 }
 
@@ -1099,7 +1118,6 @@ func toEventAttestationDTO(a *domain.EventAttestation) *eventAttestationDTO {
 		RequestType: string(a.RequestType),
 		Mode:        a.Mode,
 		IssuedAt:    a.IssuedAt,
-		ExpiresAt:   a.ExpiresAt,
 		Signed:      eventAttestationSigned(a),
 	}
 }
@@ -1247,18 +1265,29 @@ type checkResultDTO struct {
 	Passed             bool               `json:"passed"`
 }
 
-// toCheckResultDTO maps a domain.CheckResult onto the wire DTO. It reuses the
-// execution-block shape for the would-be block.
-func toCheckResultDTO(r domain.CheckResult) checkResultDTO {
-	rejects := make([]orderRejectDTO, 0, len(r.Rejects))
-	for _, rej := range r.Rejects {
-		rejects = append(rejects, orderRejectDTO{
+func toOrderRejectDTOs(rejects []domain.OrderReject) []orderRejectDTO {
+	if len(rejects) == 0 {
+		return nil
+	}
+	out := make([]orderRejectDTO, 0, len(rejects))
+	for _, rej := range rejects {
+		out = append(out, orderRejectDTO{
 			Code:    rej.Code,
 			Scope:   rej.Scope,
 			Policy:  rej.Policy,
 			Reason:  rej.Reason,
 			Details: rej.Details,
 		})
+	}
+	return out
+}
+
+// toCheckResultDTO maps a domain.CheckResult onto the wire DTO. It reuses the
+// execution-block shape for the would-be block.
+func toCheckResultDTO(r domain.CheckResult) checkResultDTO {
+	rejects := toOrderRejectDTOs(r.Rejects)
+	if rejects == nil {
+		rejects = []orderRejectDTO{}
 	}
 	prices := r.WouldLockPrices
 	if prices == nil {
@@ -1404,7 +1433,8 @@ type executionBlockDTO struct {
 // executionReportResponseDTO is the response of POST
 // /orders/{externalId}/execution-reports: the engine result plus the attestation
 // token the robot receives as proof the engine passed this report. AttestationToken
-// is empty when attestation was skipped or failed best-effort.
+// is present on success; signing or attestation persistence failures fail the
+// request before the report is committed.
 type executionReportResponseDTO struct {
 	Result           executionResultDTO `json:"result"`
 	AttestationToken string             `json:"attestationToken,omitempty"`
@@ -1415,7 +1445,8 @@ type executionReportResponseDTO struct {
 // orderMutationResponseDTO is the response of POST /orders/{externalId}/confirm
 // and .../cancel: the resolved order plus the attestation token the robot
 // receives as proof the engine resolved this reservation. AttestationToken is
-// empty when attestation was skipped or failed best-effort.
+// present on success; signing or attestation persistence failures fail the
+// request before the reservation resolution is committed.
 type orderMutationResponseDTO struct {
 	Order            orderDTO `json:"order"`
 	AttestationToken string   `json:"attestationToken,omitempty"`
@@ -1512,10 +1543,11 @@ type submitOrderTokenRequestDTO struct {
 // approvalTokenDTO is the response of POST /orders/submit. The authorised order
 // is referenced by its opaque external id, never a surrogate id.
 type approvalTokenDTO struct {
-	Token           string `json:"token"`
-	KeyID           string `json:"keyId"`
-	ExpiresAt       string `json:"expiresAt"`
-	OrderExternalID string `json:"orderExternalId"`
+	Token           string           `json:"token"`
+	KeyID           string           `json:"keyId"`
+	OrderExternalID string           `json:"orderExternalId"`
+	Verdict         string           `json:"verdict"`
+	Reasons         []orderRejectDTO `json:"reasons,omitempty"`
 }
 
 // confirmExecutionRequestDTO is the body of POST /orders/{externalId}/confirm.
@@ -1564,6 +1596,7 @@ type countsDTO struct {
 	Groups         int `json:"groups"`
 	GroupsActive   int `json:"groupsActive"`
 	Limits         int `json:"limits"`
+	OrdersActive   int `json:"ordersActive"`
 	OrdersToday    int `json:"ordersToday"`
 	OrdersTotal    int `json:"ordersTotal"`
 }
@@ -1596,6 +1629,7 @@ func toOverviewDTO(o backend.Overview) overviewDTO {
 			Groups:         o.Counts.Groups,
 			GroupsActive:   o.Counts.GroupsActive,
 			Limits:         o.Counts.Limits,
+			OrdersActive:   o.Counts.OrdersActive,
 			OrdersToday:    o.Counts.OrdersToday,
 			OrdersTotal:    o.Counts.OrdersTotal,
 		},

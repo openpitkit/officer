@@ -155,6 +155,226 @@ func mustCreateAsset(t *testing.T, ctx context.Context, rs RealmStore, asset dom
 	}
 }
 
+func seedGroupCurrencies(t *testing.T, ctx context.Context, rs RealmStore) {
+	t.Helper()
+	mustCreateAsset(t, ctx, rs, domain.Asset{Code: "USD", Title: "US Dollar"})
+	mustCreateAsset(t, ctx, rs, domain.Asset{Code: "EUR", Title: "Euro"})
+	if err := rs.SetGroupCurrency(ctx, "", "USD"); err != nil {
+		t.Fatalf("SetGroupCurrency(default): %v", err)
+	}
+	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{
+		Code:     "desk-a",
+		Title:    "Desk A",
+		Currency: "EUR",
+	}); err != nil {
+		t.Fatalf("CreateGroup desk-a: %v", err)
+	}
+}
+
+func TestBackupExportIncludesGroupCurrencies(t *testing.T) {
+	ctx := context.Background()
+	_, src := newRealmStore(t, domain.DefaultRealm)
+	seedGroupCurrencies(t, ctx, src)
+
+	archive, err := src.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup: %v", err)
+	}
+	if archive.Data.DefaultGroupCurrency != "USD" {
+		t.Fatalf("DefaultGroupCurrency = %q, want USD",
+			archive.Data.DefaultGroupCurrency)
+	}
+	if len(archive.Data.Groups) != 1 {
+		t.Fatalf("groups = %v, want one real group", archive.Data.Groups)
+	}
+	if archive.Data.Groups[0].Code != "desk-a" ||
+		archive.Data.Groups[0].Currency != "EUR" {
+		t.Fatalf("exported group = %+v, want desk-a/EUR", archive.Data.Groups[0])
+	}
+	for _, group := range archive.Data.Groups {
+		if group.Code == "" {
+			t.Fatalf("archive contains default group row: %+v", group)
+		}
+	}
+}
+
+func TestBackupExportIncludesAccountCurrency(t *testing.T) {
+	ctx := context.Background()
+	_, src := newRealmStore(t, domain.DefaultRealm)
+	mustCreateAsset(t, ctx, src, domain.Asset{Code: "JPY"})
+	if _, err := src.CreateAccount(ctx, domain.Account{
+		Code: "acc-jpy", Currency: "JPY",
+	}); err != nil {
+		t.Fatalf("CreateAccount acc-jpy: %v", err)
+	}
+
+	archive, err := src.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup: %v", err)
+	}
+	if len(archive.Data.Accounts) != 1 {
+		t.Fatalf("accounts = %v, want one account", archive.Data.Accounts)
+	}
+	if archive.Data.Accounts[0].Code != "acc-jpy" ||
+		archive.Data.Accounts[0].Currency != "JPY" {
+		t.Fatalf("exported account = %+v, want acc-jpy/JPY",
+			archive.Data.Accounts[0])
+	}
+}
+
+func TestBackupRestorePreservesGroupCurrencies(t *testing.T) {
+	ctx := context.Background()
+	_, src := newRealmStore(t, domain.DefaultRealm)
+	seedGroupCurrencies(t, ctx, src)
+
+	archive, err := src.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup: %v", err)
+	}
+
+	_, dst := newRealmStore(t, domain.DefaultRealm)
+	summary, err := dst.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+	})
+	if err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	if !summary.RestartRequired {
+		t.Fatal("RestartRequired = false, want true for group currency restore")
+	}
+	group, ok, err := dst.GetGroup(ctx, "desk-a")
+	if err != nil || !ok {
+		t.Fatalf("GetGroup desk-a: ok=%v err=%v", ok, err)
+	}
+	if group.Currency != "EUR" {
+		t.Fatalf("restored group currency = %q, want EUR", group.Currency)
+	}
+	defaultGroup, ok, err := dst.GetGroup(ctx, "")
+	if err != nil || !ok {
+		t.Fatalf("GetGroup default: ok=%v err=%v", ok, err)
+	}
+	if defaultGroup.Currency != "USD" {
+		t.Fatalf("restored default currency = %q, want USD",
+			defaultGroup.Currency)
+	}
+	groups, err := dst.ListGroups(ctx)
+	if err != nil {
+		t.Fatalf("ListGroups: %v", err)
+	}
+	for _, group := range groups {
+		if group.Code == "" {
+			t.Fatalf("ListGroups returned default row: %+v", group)
+		}
+	}
+}
+
+func TestBackupRestorePreservesAccountCurrency(t *testing.T) {
+	ctx := context.Background()
+	_, src := newRealmStore(t, domain.DefaultRealm)
+	mustCreateAsset(t, ctx, src, domain.Asset{Code: "JPY"})
+	if _, err := src.CreateAccount(ctx, domain.Account{
+		Code: "acc-jpy", Currency: "JPY",
+	}); err != nil {
+		t.Fatalf("CreateAccount acc-jpy: %v", err)
+	}
+
+	archive, err := src.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup: %v", err)
+	}
+
+	_, dst := newRealmStore(t, domain.DefaultRealm)
+	summary, err := dst.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+	})
+	if err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	if !summary.RestartRequired {
+		t.Fatal("RestartRequired = false, want true for account currency restore")
+	}
+	account, ok, err := dst.GetAccount(ctx, "acc-jpy")
+	if err != nil || !ok {
+		t.Fatalf("GetAccount acc-jpy: ok=%v err=%v", ok, err)
+	}
+	if account.Currency != "JPY" ||
+		account.EffectiveCurrency != "JPY" ||
+		account.CurrencyOrigin != domain.CurrencyOriginAccount {
+		t.Fatalf("restored account currency = %+v", account)
+	}
+}
+
+func TestBackupRestoreOverwriteClearsDefaultGroupCurrency(t *testing.T) {
+	ctx := context.Background()
+	_, src := newRealmStore(t, domain.DefaultRealm)
+	mustCreateAsset(t, ctx, src, domain.Asset{Code: "EUR", Title: "Euro"})
+	if _, err := src.CreateGroup(ctx, domain.AccountGroup{
+		Code:     "desk-a",
+		Title:    "Desk A",
+		Currency: "EUR",
+	}); err != nil {
+		t.Fatalf("CreateGroup source desk-a: %v", err)
+	}
+	archive, err := src.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup: %v", err)
+	}
+	if archive.Data.DefaultGroupCurrency != "" {
+		t.Fatalf("DefaultGroupCurrency = %q, want empty",
+			archive.Data.DefaultGroupCurrency)
+	}
+
+	_, dst := newRealmStore(t, domain.DefaultRealm)
+	seedGroupCurrencies(t, ctx, dst)
+	summary, err := dst.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeOverwrite,
+	})
+	if err != nil {
+		t.Fatalf("RestoreBackup overwrite: %v", err)
+	}
+	if !summary.RestartRequired {
+		t.Fatal("RestartRequired = false, want true for default currency clear")
+	}
+	defaultGroup, ok, err := dst.GetGroup(ctx, "")
+	if err != nil || !ok {
+		t.Fatalf("GetGroup default: ok=%v err=%v", ok, err)
+	}
+	if defaultGroup.Currency != "" {
+		t.Fatalf("restored default currency = %q, want empty",
+			defaultGroup.Currency)
+	}
+}
+
+func TestBackupRestoreEmptyDefaultGroupCurrencyDoesNotCreateDefaultRow(t *testing.T) {
+	ctx := context.Background()
+	_, src := newRealmStore(t, domain.DefaultRealm)
+	mustCreateAsset(t, ctx, src, domain.Asset{Code: "EUR", Title: "Euro"})
+	if _, err := src.CreateGroup(ctx, domain.AccountGroup{
+		Code:     "desk-a",
+		Title:    "Desk A",
+		Currency: "EUR",
+	}); err != nil {
+		t.Fatalf("CreateGroup source desk-a: %v", err)
+	}
+	archive, err := src.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup: %v", err)
+	}
+
+	_, dst := newRealmStore(t, domain.DefaultRealm)
+	if _, ok, err := dst.GetGroup(ctx, ""); err != nil || ok {
+		t.Fatalf("GetGroup default before restore: ok=%v err=%v", ok, err)
+	}
+	if _, err := dst.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeOverwrite,
+	}); err != nil {
+		t.Fatalf("RestoreBackup overwrite: %v", err)
+	}
+	if _, ok, err := dst.GetGroup(ctx, ""); err != nil || ok {
+		t.Fatalf("GetGroup default after restore: ok=%v err=%v", ok, err)
+	}
+}
+
 // TestBackupRoundTripIntoIsolatedRealm exports a seeded realm and restores it
 // into a fresh isolated single-realm database, asserting public identity is
 // preserved across every section and engine ids are freshly, validly assigned.
@@ -383,7 +603,6 @@ func TestBackupRestoreReplaceAllPrunesActivityBeforeSigningKeys(t *testing.T) {
 		RequestType: domain.AttestationRequestSubmit,
 		Mode:        "immediate",
 		IssuedAt:    "2026-06-26T10:00:00Z",
-		ExpiresAt:   "2026-06-26T10:05:00Z",
 	}); err != nil {
 		t.Fatalf("PutEventAttestation: %v", err)
 	}
@@ -1059,7 +1278,6 @@ func TestBackupRestoreActivityOnlyForceIncludesSigningKey(t *testing.T) {
 		RequestType: domain.AttestationRequestSubmit,
 		Mode:        "immediate",
 		IssuedAt:    "2026-06-26T10:00:00Z",
-		ExpiresAt:   "2026-06-26T10:05:00Z",
 	}); err != nil {
 		t.Fatalf("PutEventAttestation: %v", err)
 	}

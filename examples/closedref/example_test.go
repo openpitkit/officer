@@ -28,7 +28,6 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
-	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.openpit.dev/officer/framework/app"
@@ -303,7 +302,7 @@ func (s *referenceSource) SubmitOrderToken(
 	domain.Order,
 	string,
 ) (mcp.SubmitOrderTokenResult, error) {
-	return mcp.SubmitOrderTokenResult{ExpiresAt: time.Now()}, nil
+	return mcp.SubmitOrderTokenResult{}, nil
 }
 
 func (s *referenceSource) ConfirmExecution(
@@ -361,6 +360,14 @@ func (e *fakeEngine) BlockAccount(context.Context, domain.AccountID, string) err
 }
 
 func (e *fakeEngine) UnblockAccount(context.Context, domain.AccountID) error {
+	return nil
+}
+
+func (e *fakeEngine) SetAccountCurrency(context.Context, domain.AccountID, string) error {
+	return nil
+}
+
+func (e *fakeEngine) ClearAccountCurrency(context.Context, domain.AccountID) error {
 	return nil
 }
 

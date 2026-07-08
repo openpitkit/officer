@@ -32,7 +32,6 @@ package engine
 
 import (
 	"context"
-	"time"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/marketdata"
@@ -135,12 +134,9 @@ type BalanceOutcome struct {
 
 // HoldResult is the outcome of one ReserveHold call on accept. The native
 // reservation stays held inside the engine adapter's registry, keyed by
-// ApprovalID, until CommitHeld or RollbackHeld resolves it (or the TTL sweeper
-// rolls it back). On reject ReserveHold returns Rejects with Accepted false and
-// holds nothing.
+// ApprovalID, until CommitHeld or RollbackHeld resolves it. On reject ReserveHold
+// returns Rejects with Accepted false and holds nothing.
 type HoldResult struct {
-	// ExpiresAt is when the TTL sweeper auto-rolls the hold back.
-	ExpiresAt time.Time
 	// ApprovalID is the server UUID identifying the held reservation; it is the
 	// reservation id surfaced to clients. Empty when not accepted.
 	ApprovalID string
@@ -159,6 +155,12 @@ type HoldResult struct {
 	Outcomes []BalanceOutcome
 	// Rejects are the engine pre-trade rejects; non-empty only when not accepted.
 	Rejects []domain.OrderReject
+	// Intent is the durable reservation-intent record for the registered hold,
+	// ready to persist verbatim in the same transaction as the order. The engine
+	// registers the hold in-memory only and hands the durable write to the node
+	// (mirroring the commit/rollback paths); the caller persists it on accept.
+	// Zero when not accepted.
+	Intent domain.ReservationIntent
 	// Accepted reports whether the pre-trade passed and the hold was registered.
 	Accepted bool
 }
@@ -233,6 +235,8 @@ type ExecutionReportResult struct {
 type AccountLane interface {
 	BlockAccount(ctx context.Context, id domain.AccountID, reason string) error
 	UnblockAccount(ctx context.Context, id domain.AccountID) error
+	SetAccountCurrency(ctx context.Context, id domain.AccountID, currency string) error
+	ClearAccountCurrency(ctx context.Context, id domain.AccountID) error
 	ApplyAccountAdjustmentBatch(
 		ctx context.Context, account domain.AccountID, reqs []domain.AdjustmentRequest,
 	) ([]AdjustmentResult, *AdjustmentBatchReject, error)

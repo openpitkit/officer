@@ -81,6 +81,7 @@ export {
   NumberRangeFilter,
   OnlineFilterField,
   OPERATORS,
+  OrdersButton,
   PoliciesButton,
   PositionsButton,
   reportInvalidFilterControls,

@@ -48,8 +48,6 @@ const approvalPayloadVersion = 1
 // signed (or eSign-off) envelope; KeyID is the signing key id (empty under
 // eSign-off); Signed reports whether the envelope carries a signature.
 type ApprovalToken struct {
-	// ExpiresAt is when the token (and, for a hold, the held reservation) expires.
-	ExpiresAt time.Time
 	// Token is the base64url-encoded approval envelope.
 	Token string
 	// KeyID is the signing key id; empty under eSign-off.
@@ -57,8 +55,78 @@ type ApprovalToken struct {
 	// OrderExternalID is the opaque public handle of the recorded order the token
 	// authorises. It is the order's external id, never a surrogate or engine id.
 	OrderExternalID string
+	// Verdict is the pre-trade decision carried by the signed envelope.
+	Verdict string
+	// Reasons carries the engine reject reasons when Verdict is "reject".
+	Reasons []domain.OrderReject
 	// Signed reports whether the envelope carries an Ed25519 signature.
 	Signed bool
+}
+
+type eventPayloadBuilder func(domain.OrderEvent) (domain.ApprovalPayload, bool, error)
+
+type signedEventCapture func(Attestation, domain.ApprovalPayload)
+
+type submitHoldAttestingNode interface {
+	SubmitHoldWithAttestation(
+		ctx context.Context,
+		key node.Key,
+		o domain.Order,
+		caller domain.Caller,
+		attestFor func(domain.Order, engine.HoldResult) store.EventAttestor,
+	) (domain.Order, engine.HoldResult, error)
+}
+
+type submitOrderAttestingNode interface {
+	SubmitOrderWithAttestation(
+		ctx context.Context,
+		key node.Key,
+		o domain.Order,
+		caller domain.Caller,
+		attest store.EventAttestor,
+	) (domain.Order, engine.OrderResult, error)
+}
+
+type submitImmediateAttestingNode interface {
+	SubmitImmediateWithAttestation(
+		ctx context.Context,
+		key node.Key,
+		o domain.Order,
+		caller domain.Caller,
+		attestFor func(domain.Order, engine.ImmediateResult) store.EventAttestor,
+	) (domain.Order, engine.ImmediateResult, error)
+}
+
+type executionReportAttestingNode interface {
+	ApplyExecutionReportWithAttestation(
+		ctx context.Context,
+		key node.Key,
+		in domain.ExecutionReportInput,
+		caller domain.Caller,
+		attest store.EventAttestor,
+	) (engine.ExecutionReportResult, error)
+}
+
+type confirmHeldAttestingNode interface {
+	ConfirmHeldWithAttestation(
+		ctx context.Context,
+		order domain.ExternalID,
+		approvalID string,
+		caller domain.Caller,
+		force bool,
+		attest store.EventAttestor,
+	) (domain.Order, bool, error)
+}
+
+type cancelHeldAttestingNode interface {
+	CancelHeldWithAttestation(
+		ctx context.Context,
+		order domain.ExternalID,
+		approvalID string,
+		caller domain.Caller,
+		force bool,
+		attest store.EventAttestor,
+	) (domain.Order, bool, error)
 }
 
 // signerOrErr returns the configured signer or an unconfigured error. The
@@ -69,6 +137,116 @@ func (s *Service) signerOrErr() (fwsigning.Service, error) {
 		return nil, fwsigning.ErrNotConfigured
 	}
 	return s.signer, nil
+}
+
+func missingAttestationError(requestType domain.AttestationRequestType) error {
+	return fmt.Errorf("backend: %s attestation missing", requestType)
+}
+
+func persistedEventAttestation(
+	ctx context.Context,
+	n node.Node,
+	order domain.ExternalID,
+	eventType domain.OrderEventType,
+) (Attestation, bool, error) {
+	detail, err := n.GetOrder(ctx, order)
+	if err != nil {
+		return Attestation{}, false, err
+	}
+	for i := len(detail.Events) - 1; i >= 0; i-- {
+		event := detail.Events[i]
+		if event.Order != order || event.Type != eventType {
+			continue
+		}
+		if event.Attestation == nil || event.Attestation.Token == "" {
+			continue
+		}
+		return Attestation{
+			Token:           event.Attestation.Token,
+			KeyID:           event.Attestation.KeyID,
+			EventExternalID: event.ExternalID.String(),
+			Signed:          event.Attestation.Alg != fwsigning.AlgNone,
+		}, true, nil
+	}
+	return Attestation{}, false, nil
+}
+
+func signingMode(
+	ctx context.Context, signer fwsigning.Service,
+) (bool, string, error) {
+	off, err := signer.NoESign(ctx)
+	if err != nil {
+		return false, "", err
+	}
+	if off {
+		return true, "", nil
+	}
+	keys, err := signer.ListKeys(ctx)
+	if err != nil {
+		return false, "", err
+	}
+	keyID := activeKeyID(keys)
+	if keyID == "" {
+		return false, "", fmt.Errorf("signing: no active key: %w", domain.ErrNotFound)
+	}
+	return false, keyID, nil
+}
+
+func eventAttestor(
+	signer fwsigning.Service,
+	off bool,
+	keyID string,
+	requestType domain.AttestationRequestType,
+	build eventPayloadBuilder,
+	capture signedEventCapture,
+) store.EventAttestor {
+	return func(
+		ctx context.Context, event domain.OrderEvent,
+	) (domain.EventAttestation, bool, error) {
+		payload, ok, err := build(event)
+		if err != nil || !ok {
+			return domain.EventAttestation{}, false, err
+		}
+		actualRequestType := requestType
+		if payload.RequestType != "" {
+			actualRequestType = domain.AttestationRequestType(payload.RequestType)
+		}
+		payload.RequestType = string(actualRequestType)
+		payload.EventExternalID = event.ExternalID.String()
+		var token string
+		signed := false
+		if off {
+			payload.KeyID = ""
+			payload.Alg = fwsigning.AlgNone
+			token, err = signer.SignNone(payload)
+		} else {
+			payload.KeyID = keyID
+			payload.Alg = fwsigning.AlgEd25519
+			token, err = signer.Sign(payload)
+			signed = true
+		}
+		if err != nil {
+			return domain.EventAttestation{}, false, err
+		}
+		att := domain.EventAttestation{
+			Token:       token,
+			KeyID:       payload.KeyID,
+			Alg:         payload.Alg,
+			RequestType: requestType,
+			Mode:        payload.Mode,
+			IssuedAt:    payload.IssuedAt,
+		}
+		if capture != nil {
+			capture(Attestation{
+				Token:           token,
+				KeyID:           payload.KeyID,
+				EventExternalID: event.ExternalID.String(),
+				Signed:          signed,
+			}, payload)
+		}
+		att.RequestType = actualRequestType
+		return att, true, nil
+	}
 }
 
 // --- Signing keys -----------------------------------------------------------
@@ -180,12 +358,17 @@ func (s *Service) SetNoESign(ctx context.Context, off bool) error {
 // accept, issues a signed (or eSign-off) approval token. mode "hold" keeps the
 // reservation held until ConfirmExecution or CancelOrder resolves it; mode
 // "immediate" commits and settles the fill at the engine lock price in the same
-// call. A pre-trade reject returns the rejects as a validation error and issues
-// no token. The issued token is audited as approval_issued.
+// call. A pre-trade reject is a successful signed decision and returns the
+// reject reasons with the same envelope shape as an accept verdict. The issued
+// token is audited as approval_issued.
 func (s *Service) SubmitOrderToken(
 	ctx context.Context, o domain.Order, mode string,
 ) (ApprovalToken, error) {
 	signer, err := s.signerOrErr()
+	if err != nil {
+		return ApprovalToken{}, err
+	}
+	off, keyID, err := signingMode(ctx, signer)
 	if err != nil {
 		return ApprovalToken{}, err
 	}
@@ -211,10 +394,6 @@ func (s *Service) SubmitOrderToken(
 	}
 	caller := auth.CallerFromContext(ctx)
 	key := keyFor(o.Account)
-	payloadNonce, err := newNonce()
-	if err != nil {
-		return ApprovalToken{}, err
-	}
 	immediateApprovalID := ""
 	if mode == SubmitModeImmediate {
 		immediateApprovalID, err = newNonce()
@@ -224,109 +403,222 @@ func (s *Service) SubmitOrderToken(
 	}
 
 	var (
-		order          domain.Order
-		approvalID     string
-		settlement     string
-		estimateSource string
-		expiresAt      time.Time
-		rejects        []domain.OrderReject
-		accepted       bool
+		order    domain.Order
+		rejects  []domain.OrderReject
+		verdict  string
+		issued   Attestation
+		payload  domain.ApprovalPayload
+		accepted bool
 	)
 	switch mode {
 	case SubmitModeHold:
-		var hold holdApproval
-		order, hold, err = s.submitHold(ctx, n, key, o, caller)
+		attesting, ok := n.(submitHoldAttestingNode)
+		if !ok {
+			return ApprovalToken{}, fmt.Errorf(
+				"backend: submit hold attestation unsupported: %w",
+				domain.ErrNotImplemented,
+			)
+		}
+		var result engine.HoldResult
+		attestFor := func(
+			persisted domain.Order, hold engine.HoldResult,
+		) store.EventAttestor {
+			decisionID := hold.ApprovalID
+			var decisionIDErr error
+			if !hold.Accepted {
+				decisionID, decisionIDErr = newNonce()
+			}
+			return eventAttestor(
+				signer, off, keyID, domain.AttestationRequestSubmit,
+				func(event domain.OrderEvent) (domain.ApprovalPayload, bool, error) {
+					if decisionIDErr != nil {
+						return domain.ApprovalPayload{}, false, decisionIDErr
+					}
+					if event.Type != domain.OrderEventPreTradeAccepted &&
+						event.Type != domain.OrderEventPreTradeRejected &&
+						event.Type != domain.OrderEventSubmitted {
+						return domain.ApprovalPayload{}, false, nil
+					}
+					eventOrder := orderForEvent(persisted, key, event, caller)
+					if event.Type == domain.OrderEventSubmitted {
+						p, err := buildSubmittedPayload(
+							eventOrder, SubmitModeHold, decisionID)
+						return p, err == nil, err
+					}
+					if hold.Accepted {
+						nonce, err := newNonce()
+						if err != nil {
+							return domain.ApprovalPayload{}, false, err
+						}
+						return buildApprovalPayload(
+							eventOrder,
+							SubmitModeHold,
+							hold.ApprovalID,
+							hold.SettlementLockPrice,
+							hold.EstimateSource,
+							time.Now().UTC(),
+							nonce,
+						), true, nil
+					}
+					nonce, err := newNonce()
+					if err != nil {
+						return domain.ApprovalPayload{}, false, err
+					}
+					reject := firstReject(hold.Rejects)
+					return buildRejectApprovalPayload(
+						eventOrder, SubmitModeHold, decisionID, reject,
+						time.Now().UTC(), nonce), true, nil
+				},
+				func(att Attestation, p domain.ApprovalPayload) {
+					issued = att
+					payload = p
+				},
+			)
+		}
+		order, result, err = attesting.SubmitHoldWithAttestation(
+			ctx, key, o, caller, attestFor)
 		if err != nil {
 			return ApprovalToken{}, err
 		}
-		accepted = order.Status != domain.OrderStatusRejected
-		if accepted {
-			approvalID = hold.approvalID
-			settlement = hold.settlement
-			estimateSource = hold.estimateSource
-			expiresAt = hold.expiresAt
-		} else {
-			rejects = hold.rejects
-		}
+		accepted = result.Accepted
+		rejects = result.Rejects
 	default:
-		order, settlement, estimateSource, accepted, rejects, err = s.submitImmediate(ctx, n, key, o, caller)
+		attesting, ok := n.(submitImmediateAttestingNode)
+		if !ok {
+			return ApprovalToken{}, fmt.Errorf(
+				"backend: submit immediate attestation unsupported: %w",
+				domain.ErrNotImplemented,
+			)
+		}
+		var result engine.ImmediateResult
+		attestFor := func(
+			persisted domain.Order, immediate engine.ImmediateResult,
+		) store.EventAttestor {
+			return eventAttestor(
+				signer, off, keyID, domain.AttestationRequestSubmit,
+				func(event domain.OrderEvent) (domain.ApprovalPayload, bool, error) {
+					eventOrder := orderForEvent(persisted, key, event, caller)
+					switch event.Type {
+					case domain.OrderEventSubmitted:
+						p, err := buildSubmittedPayload(
+							eventOrder, SubmitModeImmediate, immediateApprovalID)
+						return p, err == nil, err
+					case domain.OrderEventPreTradeAccepted:
+						nonce, err := newNonce()
+						if err != nil {
+							return domain.ApprovalPayload{}, false, err
+						}
+						return buildApprovalPayload(
+							eventOrder,
+							SubmitModeImmediate,
+							immediateApprovalID,
+							immediate.SettlementLockPrice,
+							immediate.EstimateSource,
+							time.Now().UTC(),
+							nonce,
+						), true, nil
+					case domain.OrderEventPreTradeRejected:
+						approvalID, err := newNonce()
+						if err != nil {
+							return domain.ApprovalPayload{}, false, err
+						}
+						nonce, err := newNonce()
+						if err != nil {
+							return domain.ApprovalPayload{}, false, err
+						}
+						return buildRejectApprovalPayload(
+							eventOrder, SubmitModeImmediate, approvalID,
+							firstReject(immediate.Rejects), time.Now().UTC(), nonce), true, nil
+					case domain.OrderEventReservationCommitted:
+						committed := eventOrder
+						committed.Status = domain.OrderStatusCommitted
+						p, err := s.buildResolutionPayload(
+							committed, domain.AttestationRequestConfirm,
+							"committed", "", immediateApprovalID)
+						if err != nil {
+							return domain.ApprovalPayload{}, false, err
+						}
+						p.Mode = SubmitModeImmediate
+						p.RequestType = string(domain.AttestationRequestConfirm)
+						return p, true, nil
+					case domain.OrderEventFill:
+						filled := eventOrder
+						filled.Status = domain.OrderStatusFilled
+						persistence := engine.ExecutionReportPersistence{
+							OrderStatus: domain.OrderStatusFilled,
+							Trade: &domain.Trade{
+								Order:      eventOrder.ExternalID,
+								Account:    key.Account,
+								Source:     caller.Source,
+								Principal:  caller.Principal,
+								BaseAsset:  eventOrder.BaseAsset,
+								QuoteAsset: eventOrder.QuoteAsset,
+								Side:       eventOrder.Side,
+								Quantity:   immediate.FillQuantity,
+								Price:      immediate.SettlementLockPrice,
+								LockPrice:  immediate.SettlementLockPrice,
+							},
+							Blocks: immediate.Blocks,
+						}
+						p, err := s.buildExecutionReportPayload(filled, persistence)
+						if err != nil {
+							return domain.ApprovalPayload{}, false, err
+						}
+						p.RequestType = string(domain.AttestationRequestExecutionReport)
+						return p, true, nil
+					default:
+						return domain.ApprovalPayload{}, false, nil
+					}
+				},
+				func(att Attestation, p domain.ApprovalPayload) {
+					if p.RequestType == string(domain.AttestationRequestSubmit) {
+						issued = att
+						payload = p
+					}
+				},
+			)
+		}
+		order, result, err = attesting.SubmitImmediateWithAttestation(
+			ctx, key, o, caller, attestFor)
 		if err != nil {
 			return ApprovalToken{}, err
 		}
-		// Immediate has no held registry entry; use a fresh approval id and an
-		// expiry equal to the token TTL from issue time.
-		if accepted {
-			approvalID = immediateApprovalID
-		}
+		accepted = result.Accepted
+		rejects = result.Rejects
 	}
 
-	// Attest the recorded order's pre-trade verdict (accept or reject) onto its
-	// verdict event, reusing the same attestSubmitVerdict path SubmitOrder uses.
-	// The attestation is stamped write-once onto the pre_trade_accepted /
-	// pre_trade_rejected event and surfaced by GetOrder as OrderEvent.Attestation,
-	// so a panel order created through this token flow carries a signed verdict
-	// event - the same attestation the like-the-API POST /orders path produces.
-	// It is independent of the HTTP token below (the hold token the caller
-	// confirms with) and best-effort: a build or persist failure records
-	// attestation_failed and never fails the submit. This also stamps the
-	// approval_issued audit for both verdicts, so no separate token-issue audit is
-	// recorded below.
-	s.attestSubmitVerdict(ctx, n, key, order)
-
-	if !accepted {
-		return ApprovalToken{}, rejectError(rejects)
+	if issued.Token == "" {
+		return ApprovalToken{}, missingAttestationError(
+			domain.AttestationRequestSubmit)
 	}
-
-	issuedAt := time.Now().UTC()
-	if expiresAt.IsZero() {
-		expiresAt = issuedAt.Add(defaultTokenTTL)
-	}
-
-	payload := buildApprovalPayload(
-		order, mode, approvalID, settlement, estimateSource, issuedAt, expiresAt, payloadNonce)
-
-	off, err := signer.NoESign(ctx)
-	if err != nil {
-		return ApprovalToken{}, err
-	}
-	var token, keyID string
-	signed := false
-	if off {
-		payload.Alg = fwsigning.AlgNone
-		token, err = signer.SignNone(payload)
-		if err != nil {
-			return ApprovalToken{}, err
-		}
+	if accepted {
+		verdict = "accept"
 	} else {
-		token, err = signer.Sign(payload)
-		if err != nil {
-			return ApprovalToken{}, err
-		}
-		keys, kerr := signer.ListKeys(ctx)
-		if kerr != nil {
-			return ApprovalToken{}, kerr
-		}
-		keyID = activeKeyID(keys)
-		signed = true
+		verdict = "reject"
 	}
+	_ = s.auditApproval(ctx, n, key, domain.AuditActionApprovalIssued,
+		fmt.Sprintf("issue attestation order %s event %s request=%s",
+			order.ExternalID.String(), issued.EventExternalID,
+			domain.AttestationRequestSubmit))
 
 	return ApprovalToken{
-		ExpiresAt:       expiresAt,
-		Token:           token,
-		KeyID:           keyID,
+		Token:           issued.Token,
+		KeyID:           issued.KeyID,
 		OrderExternalID: order.ExternalID.String(),
-		Signed:          signed,
+		Verdict:         verdict,
+		Reasons:         rejectReasons(payload, rejects),
+		Signed:          issued.Signed,
 	}, nil
 }
 
 // ConfirmExecution verifies token against the stored order, then commits the
 // held reservation it authorises. Verification recomputes the canonical bytes,
-// checks the signature when signed, re-binds the bound params to the stored
-// order, and enforces expiry. The conflict/terminal-order guard is not enforced
-// here: it lives in node.ConfirmHeld, which re-reads the authoritative status
-// inside the account lane (serialized with fills and reports). A second confirm
-// of an already-committed order is an idempotent success there; a confirm of a
-// cancelled or expired reservation is a conflict. The confirmation is audited as
+// checks the signature when signed, and re-binds the bound params to the stored
+// order. The conflict/terminal-order guard is not enforced here: it lives in
+// node.ConfirmHeld, which re-reads the authoritative status inside the account
+// lane (serialized with fills and reports). A second confirm of an
+// already-committed order is an idempotent success there; a confirm of a
+// cancelled reservation is a conflict. The confirmation is audited as
 // approval_confirmed.
 func (s *Service) ConfirmExecution(
 	ctx context.Context, orderID string, token string, force bool,
@@ -359,10 +651,58 @@ func (s *Service) ConfirmExecution(
 	}
 
 	caller := auth.CallerFromContext(ctx)
-	confirmed, forcedBypass, err := n.ConfirmHeld(
-		ctx, order, result.Payload.ApprovalID, caller, force)
+	off, keyID, err := signingMode(ctx, signer)
 	if err != nil {
 		return domain.Order{}, Attestation{}, err
+	}
+	var att Attestation
+	attesting, ok := n.(confirmHeldAttestingNode)
+	if !ok {
+		return domain.Order{}, Attestation{}, fmt.Errorf(
+			"backend: confirm attestation unsupported: %w",
+			domain.ErrNotImplemented,
+		)
+	}
+	attest := eventAttestor(
+		signer, off, keyID, domain.AttestationRequestConfirm,
+		func(event domain.OrderEvent) (domain.ApprovalPayload, bool, error) {
+			if event.Type != domain.OrderEventReservationCommitted {
+				return domain.ApprovalPayload{}, false, nil
+			}
+			confirmedOrder := stored.Order
+			confirmedOrder.Status = domain.OrderStatusCommitted
+			confirmedOrder.Source = caller.Source
+			confirmedOrder.Principal = caller.Principal
+			p, err := s.buildResolutionPayload(
+				confirmedOrder, domain.AttestationRequestConfirm,
+				"committed", "", result.Payload.ApprovalID)
+			if err != nil {
+				return domain.ApprovalPayload{}, false, err
+			}
+			return p, true, nil
+		},
+		func(got Attestation, _ domain.ApprovalPayload) {
+			att = got
+		},
+	)
+	confirmed, forcedBypass, err := attesting.ConfirmHeldWithAttestation(
+		ctx, order, result.Payload.ApprovalID, caller, force, attest)
+	if err != nil {
+		return domain.Order{}, Attestation{}, err
+	}
+	if att.Token == "" {
+		var ok bool
+		if confirmed.Status == domain.OrderStatusCommitted {
+			att, ok, err = persistedEventAttestation(
+				ctx, n, order, domain.OrderEventReservationCommitted)
+			if err != nil {
+				return domain.Order{}, Attestation{}, err
+			}
+		}
+		if !ok {
+			return domain.Order{}, Attestation{}, missingAttestationError(
+				domain.AttestationRequestConfirm)
+		}
 	}
 	key := keyFor(confirmed.Account)
 	detail := fmt.Sprintf(
@@ -374,9 +714,6 @@ func (s *Service) ConfirmExecution(
 		detail += " forced=true"
 	}
 	_ = s.auditApproval(ctx, n, key, domain.AuditActionApprovalConfirmed, detail)
-	att := s.attestResolution(
-		ctx, n, key, confirmed, domain.AttestationRequestConfirm,
-		"committed", "", result.Payload.ApprovalID)
 	return confirmed, att, nil
 }
 
@@ -419,10 +756,51 @@ func (s *Service) CancelOrder(
 	}
 
 	caller := auth.CallerFromContext(ctx)
-	cancelled, forcedBypass, err := n.CancelHeld(
-		ctx, order, result.Payload.ApprovalID, caller, force)
+	off, keyID, err := signingMode(ctx, signer)
 	if err != nil {
 		return domain.Order{}, Attestation{}, err
+	}
+	var att Attestation
+	attesting, ok := n.(cancelHeldAttestingNode)
+	if !ok {
+		return domain.Order{}, Attestation{}, fmt.Errorf(
+			"backend: cancel attestation unsupported: %w",
+			domain.ErrNotImplemented,
+		)
+	}
+	attest := eventAttestor(
+		signer, off, keyID, domain.AttestationRequestCancel,
+		func(event domain.OrderEvent) (domain.ApprovalPayload, bool, error) {
+			if event.Type != domain.OrderEventCancelled &&
+				event.Type != domain.OrderEventReservationRolledBack {
+				return domain.ApprovalPayload{}, false, nil
+			}
+			cancelledOrder := stored.Order
+			cancelledOrder.Status = domain.OrderStatusCancelled
+			cancelledOrder.Source = caller.Source
+			cancelledOrder.Principal = caller.Principal
+			p, err := s.buildResolutionPayload(
+				cancelledOrder, domain.AttestationRequestCancel,
+				"rolled_back", reason, result.Payload.ApprovalID)
+			if err != nil {
+				return domain.ApprovalPayload{}, false, err
+			}
+			return p, true, nil
+		},
+		func(got Attestation, p domain.ApprovalPayload) {
+			if p.Result != nil && p.Result.OrderStatus == string(domain.OrderStatusCancelled) {
+				att = got
+			}
+		},
+	)
+	cancelled, forcedBypass, err := attesting.CancelHeldWithAttestation(
+		ctx, order, result.Payload.ApprovalID, caller, force, attest)
+	if err != nil {
+		return domain.Order{}, Attestation{}, err
+	}
+	if att.Token == "" {
+		return domain.Order{}, Attestation{}, missingAttestationError(
+			domain.AttestationRequestCancel)
 	}
 	key := keyFor(cancelled.Account)
 	detail := fmt.Sprintf(
@@ -434,60 +812,7 @@ func (s *Service) CancelOrder(
 		detail += " forced=true"
 	}
 	_ = s.auditApproval(ctx, n, key, domain.AuditActionApprovalCancelled, detail)
-	att := s.attestResolution(
-		ctx, n, key, cancelled, domain.AttestationRequestCancel,
-		"rolled_back", reason, result.Payload.ApprovalID)
 	return cancelled, att, nil
-}
-
-// defaultTokenTTL is how long an issued approval token stays valid. For a hold
-// it equals the engine hold TTL (the engine returns the authoritative expiry);
-// for an immediate token it bounds the confirmation window the connector honours.
-const defaultTokenTTL = 120 * time.Second
-
-// holdApproval bundles the engine hold-result fields the submit flow surfaces.
-type holdApproval struct {
-	expiresAt      time.Time
-	approvalID     string
-	settlement     string
-	estimateSource string
-	rejects        []domain.OrderReject
-}
-
-// submitHold records the order, runs the engine hold through the node, and
-// returns the recorded order plus the hold approval fields. On reject the
-// approval fields are zero and rejects carries the engine rejects.
-func (s *Service) submitHold(
-	ctx context.Context, n node.Node, key node.Key, o domain.Order, caller domain.Caller,
-) (domain.Order, holdApproval, error) {
-	order, result, err := n.SubmitHold(ctx, key, o, caller)
-	if err != nil {
-		return domain.Order{}, holdApproval{}, fmt.Errorf("backend: submit hold: %w", err)
-	}
-	if !result.Accepted {
-		return order, holdApproval{rejects: result.Rejects}, nil
-	}
-	return order, holdApproval{
-		expiresAt:      result.ExpiresAt,
-		approvalID:     result.ApprovalID,
-		settlement:     result.SettlementLockPrice,
-		estimateSource: result.EstimateSource,
-	}, nil
-}
-
-// submitImmediate records the order, runs the engine immediate settlement
-// through the node, and returns the recorded order plus the settlement fields.
-func (s *Service) submitImmediate(
-	ctx context.Context, n node.Node, key node.Key, o domain.Order, caller domain.Caller,
-) (domain.Order, string, string, bool, []domain.OrderReject, error) {
-	order, result, err := n.SubmitImmediate(ctx, key, o, caller)
-	if err != nil {
-		return domain.Order{}, "", "", false, nil, fmt.Errorf("backend: submit immediate: %w", err)
-	}
-	if !result.Accepted {
-		return order, "", "", false, result.Rejects, nil
-	}
-	return order, result.SettlementLockPrice, result.EstimateSource, true, nil, nil
 }
 
 // --- helpers ----------------------------------------------------------------
@@ -497,7 +822,7 @@ func (s *Service) submitImmediate(
 // Alg are set by the signer; the rest are bound here.
 func buildApprovalPayload(
 	order domain.Order, mode, approvalID, settlement, estimateSource string,
-	issuedAt, expiresAt time.Time, nonce string,
+	issuedAt time.Time, nonce string,
 ) domain.ApprovalPayload {
 	orderType := "market"
 	if order.Price != "" {
@@ -522,7 +847,6 @@ func buildApprovalPayload(
 		EstimatePrice:   settlement,
 		EstimateSource:  estimateSource,
 		IssuedAt:        issuedAt.Format(time.RFC3339Nano),
-		ExpiresAt:       expiresAt.Format(time.RFC3339Nano),
 		Nonce:           nonce,
 	}
 }
@@ -538,13 +862,26 @@ func orderExternalID(order domain.Order) string {
 	return order.ExternalID.String()
 }
 
+func orderForEvent(
+	order domain.Order,
+	key node.Key,
+	event domain.OrderEvent,
+	caller domain.Caller,
+) domain.Order {
+	order.ExternalID = event.Order
+	order.Account = key.Account
+	order.Source = caller.Source
+	order.Principal = caller.Principal
+	return order
+}
+
 // buildRejectApprovalPayload assembles the canonical approval payload for a
 // rejected pre-trade verdict. It binds the same order params as the accept path
 // (so the envelope re-binds against the order it records), carries an empty
 // estimate, and stamps the first engine reject onto the Reject* fields.
 func buildRejectApprovalPayload(
 	order domain.Order, mode, approvalID string, reject domain.OrderReject,
-	issuedAt, expiresAt time.Time, nonce string,
+	issuedAt time.Time, nonce string,
 ) domain.ApprovalPayload {
 	orderType := "market"
 	if order.Price != "" {
@@ -568,7 +905,6 @@ func buildRejectApprovalPayload(
 		PolicySummary:   "rejected",
 		EstimatePrice:   "",
 		IssuedAt:        issuedAt.Format(time.RFC3339Nano),
-		ExpiresAt:       expiresAt.Format(time.RFC3339Nano),
 		Nonce:           nonce,
 		RejectCode:      reject.Code,
 		RejectScope:     reject.Scope,
@@ -577,13 +913,26 @@ func buildRejectApprovalPayload(
 	}
 }
 
+func buildSubmittedPayload(
+	order domain.Order, mode, approvalID string,
+) (domain.ApprovalPayload, error) {
+	nonce, err := newNonce()
+	if err != nil {
+		return domain.ApprovalPayload{}, err
+	}
+	payload := baseAttestationPayload(
+		order, mode, time.Now().UTC(), approvalID, nonce)
+	payload.PolicySummary = "order submitted"
+	return payload, nil
+}
+
 // baseAttestationPayload assembles the request-neutral core of an attestation
 // payload: the bound order params, lifecycle timestamps, and a fresh
 // approvalId/nonce. Callers stamp the verdict/result and request-specific fields.
 // RequestType and EventExternalID are set later by attestEvent. It is the shared
 // core the report/confirm/cancel builders extend, mirroring buildApprovalPayload.
 func baseAttestationPayload(
-	order domain.Order, mode string, issuedAt, expiresAt time.Time,
+	order domain.Order, mode string, issuedAt time.Time,
 	approvalID, nonce string,
 ) domain.ApprovalPayload {
 	orderType := "market"
@@ -605,7 +954,6 @@ func baseAttestationPayload(
 		PriceCurrency:   order.QuoteAsset,
 		AccountID:       string(order.Account),
 		IssuedAt:        issuedAt.Format(time.RFC3339Nano),
-		ExpiresAt:       expiresAt.Format(time.RFC3339Nano),
 		Nonce:           nonce,
 		Principal:       order.Principal,
 	}
@@ -629,10 +977,9 @@ func (s *Service) buildExecutionReportPayload(
 		return domain.ApprovalPayload{}, err
 	}
 	issuedAt := time.Now().UTC()
-	expiresAt := issuedAt.Add(defaultTokenTTL)
 
 	payload := baseAttestationPayload(
-		order, SubmitModeImmediate, issuedAt, expiresAt, approvalID, nonce)
+		order, SubmitModeImmediate, issuedAt, approvalID, nonce)
 	payload.Verdict = "accept"
 	payload.PolicySummary = "execution report applied"
 	fillQuantity := ""
@@ -679,10 +1026,9 @@ func (s *Service) buildResolutionPayload(
 		return domain.ApprovalPayload{}, err
 	}
 	issuedAt := time.Now().UTC()
-	expiresAt := issuedAt.Add(defaultTokenTTL)
 
 	payload := baseAttestationPayload(
-		order, SubmitModeHold, issuedAt, expiresAt, approvalID, nonce)
+		order, SubmitModeHold, issuedAt, approvalID, nonce)
 	payload.Verdict = "accept"
 	payload.ReservationID = approvalRef
 	summary := "reservation committed"
@@ -757,15 +1103,30 @@ func activeKeyID(keys []domain.SigningKey) string {
 	return ""
 }
 
-// rejectError wraps the first pre-trade reject as a validation error so the
-// surface maps it onto a 4xx. A reject is a successful pre-trade run that issues
-// no token.
-func rejectError(rejects []domain.OrderReject) error {
+func firstReject(rejects []domain.OrderReject) domain.OrderReject {
 	if len(rejects) == 0 {
-		return fmt.Errorf("backend: order rejected: %w", domain.ErrInvalid)
+		return domain.OrderReject{}
 	}
-	r := rejects[0]
-	return fmt.Errorf("backend: order rejected: %s %s: %w", r.Code, r.Reason, domain.ErrInvalid)
+	return rejects[0]
+}
+
+func rejectReasons(
+	payload domain.ApprovalPayload, rejects []domain.OrderReject,
+) []domain.OrderReject {
+	if payload.Verdict != "reject" {
+		return nil
+	}
+	if len(rejects) > 0 {
+		out := make([]domain.OrderReject, len(rejects))
+		copy(out, rejects)
+		return out
+	}
+	return []domain.OrderReject{{
+		Code:   payload.RejectCode,
+		Scope:  payload.RejectScope,
+		Policy: payload.RejectPolicy,
+		Reason: payload.RejectReason,
+	}}
 }
 
 // auditSigning records a signing-key/config action via the group node, the same
@@ -803,8 +1164,7 @@ func (s *Service) auditApproval(
 // an order-history event. Surface layers return Token to the caller so a robot
 // receives its proof. Token is the base64url-encoded signed (or eSign-off)
 // envelope; KeyID is the signing key id (empty under eSign-off); Signed reports
-// whether the envelope carries a signature. It is the zero value (Token empty)
-// when attestation was skipped or failed best-effort.
+// whether the envelope carries a signature.
 type Attestation struct {
 	// Token is the base64url-encoded attestation envelope; empty when none.
 	Token string
@@ -814,133 +1174,4 @@ type Attestation struct {
 	EventExternalID string
 	// Signed reports whether the envelope carries an Ed25519 signature.
 	Signed bool
-}
-
-// attestEvent signs payload, binds it to the newest event of eventType on the
-// order, and stamps the attestation onto that event write-once. It re-reads the
-// order to resolve the event id and its request-type, signs (or SignNone under
-// eSign-off), persists via the node, and audits approval_issued. It returns the
-// resulting Attestation. It errors only on signing/persist failures; callers on
-// the best-effort paths swallow the error and record attestation_failed.
-func (s *Service) attestEvent(
-	ctx context.Context,
-	n node.Node,
-	key node.Key,
-	order domain.ExternalID,
-	eventType domain.OrderEventType,
-	requestType domain.AttestationRequestType,
-	payload domain.ApprovalPayload,
-) (Attestation, error) {
-	signer, err := s.signerOrErr()
-	if err != nil {
-		return Attestation{}, err
-	}
-	event, err := s.latestEventOfType(ctx, n, order, eventType)
-	if err != nil {
-		return Attestation{}, err
-	}
-	payload.RequestType = string(requestType)
-	payload.EventExternalID = event.ExternalID.String()
-
-	off, err := signer.NoESign(ctx)
-	if err != nil {
-		return Attestation{}, err
-	}
-	var token, keyID string
-	signed := false
-	if off {
-		payload.Alg = fwsigning.AlgNone
-		token, err = signer.SignNone(payload)
-		if err != nil {
-			return Attestation{}, err
-		}
-	} else {
-		token, err = signer.Sign(payload)
-		if err != nil {
-			return Attestation{}, err
-		}
-		keys, kerr := signer.ListKeys(ctx)
-		if kerr != nil {
-			return Attestation{}, kerr
-		}
-		keyID = activeKeyID(keys)
-		payload.Alg = fwsigning.AlgEd25519
-		signed = true
-	}
-	att := domain.EventAttestation{
-		Token:       token,
-		KeyID:       keyID,
-		Alg:         payload.Alg,
-		RequestType: requestType,
-		Mode:        payload.Mode,
-		IssuedAt:    payload.IssuedAt,
-		ExpiresAt:   payload.ExpiresAt,
-	}
-	if err := n.PersistEventAttestation(ctx, key, event.ExternalID, att); err != nil {
-		return Attestation{}, err
-	}
-	_ = s.auditApproval(ctx, n, key, domain.AuditActionApprovalIssued,
-		fmt.Sprintf("issue attestation order %s event %s request=%s",
-			order.String(), event.ExternalID.String(), requestType))
-	return Attestation{
-		Token:           token,
-		KeyID:           keyID,
-		EventExternalID: event.ExternalID.String(),
-		Signed:          signed,
-	}, nil
-}
-
-// latestEventOfType returns the newest event of eventType for the order. Events
-// come back oldest-first; the last match is the one the just-completed request
-// produced. A missing event is a real error: the request-produced event must
-// exist for a 1:1 attestation.
-func (s *Service) latestEventOfType(
-	ctx context.Context, n node.Node, order domain.ExternalID, eventType domain.OrderEventType,
-) (domain.OrderEvent, error) {
-	detail, err := n.GetOrder(ctx, order)
-	if err != nil {
-		return domain.OrderEvent{}, err
-	}
-	var found *domain.OrderEvent
-	for i := range detail.Events {
-		if detail.Events[i].Type == eventType {
-			found = &detail.Events[i]
-		}
-	}
-	if found == nil {
-		return domain.OrderEvent{}, fmt.Errorf(
-			"backend: no %s event on order %s to attest: %w",
-			eventType, order.String(), domain.ErrNotFound)
-	}
-	return *found, nil
-}
-
-// attestResolution signs an attestation over a held-reservation resolution
-// (confirm commit or cancel rollback) and stamps it onto the resolution's
-// terminal event (reservation_committed for confirm, cancelled for cancel). It
-// is best-effort: on failure it records attestation_failed and returns a zero
-// Attestation.
-func (s *Service) attestResolution(
-	ctx context.Context,
-	n node.Node,
-	key node.Key,
-	order domain.Order,
-	requestType domain.AttestationRequestType,
-	outcome, reason, approvalRef string,
-) Attestation {
-	payload, err := s.buildResolutionPayload(order, requestType, outcome, reason, approvalRef)
-	if err != nil {
-		s.reportAttestationFailure(ctx, n, key, order, requestType, err)
-		return Attestation{}
-	}
-	eventType := domain.OrderEventReservationCommitted
-	if requestType == domain.AttestationRequestCancel {
-		eventType = domain.OrderEventCancelled
-	}
-	att, err := s.attestEvent(ctx, n, key, order.ExternalID, eventType, requestType, payload)
-	if err != nil {
-		s.reportAttestationFailure(ctx, n, key, order, requestType, err)
-		return Attestation{}
-	}
-	return att
 }
