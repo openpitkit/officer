@@ -46,17 +46,17 @@ type fakeNode struct {
 	limits       node.AccountLimits
 	audit        []domain.AuditRow
 
-	putRateLimitCalls      []domain.LimitRate
-	putOrderSizeLimitCalls []domain.LimitOrderSize
-	putPnlBoundsLimitCalls []domain.LimitPnlBounds
-	deleteLimitCalls       []node.LimitTarget
-	createAssetCalls       []domain.Asset
-	createAssetClassCalls  []domain.AssetClass
-	createCalls            []domain.Account
-	blockCalls             []blockCall
-	positionSnapshots      []domain.Balance
-	adjustmentExternalIDs  []domain.ExternalID
-	adjustmentErr          error
+	putRateLimitCalls               []domain.LimitRate
+	putOrderSizeLimitCalls          []domain.LimitOrderSize
+	putSpotFundsPnlBoundsLimitCalls []domain.LimitSpotFundsPnlBounds
+	deleteLimitCalls                []node.LimitTarget
+	createAssetCalls                []domain.Asset
+	createAssetClassCalls           []domain.AssetClass
+	createCalls                     []domain.Account
+	blockCalls                      []blockCall
+	positionSnapshots               []domain.Balance
+	adjustmentExternalIDs           []domain.ExternalID
+	adjustmentErr                   error
 
 	checkResult domain.CheckResult
 	checkProbes []domain.OrderProbe
@@ -505,10 +505,13 @@ func (n *fakeNode) PutOrderSizeLimit(
 	return n.restoreSink, nil
 }
 
-func (n *fakeNode) PutPnlBoundsLimit(
-	_ context.Context, limit domain.LimitPnlBounds, _ domain.Caller,
+func (n *fakeNode) PutSpotFundsPnlBoundsLimit(
+	_ context.Context, limit domain.LimitSpotFundsPnlBounds, _ domain.Caller,
 ) (marketdata.Sink, error) {
-	n.putPnlBoundsLimitCalls = append(n.putPnlBoundsLimitCalls, limit)
+	n.putSpotFundsPnlBoundsLimitCalls = append(
+		n.putSpotFundsPnlBoundsLimitCalls,
+		limit,
+	)
 	return n.restoreSink, nil
 }
 
@@ -657,6 +660,17 @@ func (n *fakeNode) ApplyAdjustment(
 		Request:    req,
 		Asset:      req.Asset,
 		Accepted:   &domain.AdjustmentOutcomeAccepted{},
+	}, nil
+}
+
+func (n *fakeNode) SetBalanceRealizedPnl(
+	_ context.Context, key node.Key, asset string, realizedPnl string,
+	_ domain.Caller,
+) (domain.Balance, error) {
+	return domain.Balance{
+		Account:     key.Account,
+		Asset:       asset,
+		RealizedPnl: realizedPnl,
 	}, nil
 }
 
@@ -1035,8 +1049,6 @@ func (n *fakeNode) ApplyExecutionReport(
 			FillLockPrice:  in.LockPrice,
 			LeavesQuantity: in.LeavesQuantity,
 			OrderStatus:    string(domain.ExecutionReportTargetStatus(in)),
-			RealizedPnl:    in.RealizedPnl,
-			Fee:            in.Fee,
 		}
 		n.appendEvent(in.Order, domain.OrderEventFill, payload)
 		events = append(events, domain.OrderEvent{

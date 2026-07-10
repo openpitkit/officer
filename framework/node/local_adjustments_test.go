@@ -108,6 +108,238 @@ func TestLocalNode_ApplyAdjustmentNoChangeDoesNotPersist(t *testing.T) {
 	}
 }
 
+func TestLocalNode_SetBalanceRealizedPnlPersistsAdjustmentRecord(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	seedTestAccount(t, st, "acc-1")
+
+	balance, err := n.SetBalanceRealizedPnl(
+		ctx,
+		testKey("acc-1"),
+		"USD",
+		"-12.50",
+		testCaller,
+	)
+	if err != nil {
+		t.Fatalf("SetBalanceRealizedPnl: %v", err)
+	}
+	if balance.RealizedPnl != "-12.50" {
+		t.Fatalf("realized pnl = %q, want -12.50", balance.RealizedPnl)
+	}
+	if len(eng.adjustmentCalls) != 0 {
+		t.Fatalf("engine adjustment calls = %+v, want none", eng.adjustmentCalls)
+	}
+	records, err := st.ListAdjustments(ctx, "acc-1", "", 10)
+	if err != nil {
+		t.Fatalf("ListAdjustments: %v", err)
+	}
+	if len(records) != 1 ||
+		records[0].Request.RealizedPnl != "-12.50" ||
+		records[0].Accepted == nil {
+		t.Fatalf("stored adjustments = %+v, want realized pnl adjustment", records)
+	}
+	// The realized-pnl-only outcome carries the persisted result and its delta
+	// from the previous (absent, hence zero) stored value.
+	if records[0].Accepted.RealizedPnlResult != "-12.50" ||
+		records[0].Accepted.RealizedPnlDelta != "-12.5" {
+		t.Fatalf("accepted outcome = %+v, want result -12.50 delta -12.5",
+			records[0].Accepted)
+	}
+	stored, ok, err := st.GetBalance(ctx, "acc-1", "USD")
+	if err != nil {
+		t.Fatalf("GetBalance: %v", err)
+	}
+	if !ok || stored.RealizedPnl != "-12.50" {
+		t.Fatalf("stored balance = %+v ok=%v, want realized pnl -12.50", stored, ok)
+	}
+	rows, err := st.ListAuditFiltered(ctx, domain.AuditFilter{
+		Actions: []domain.AuditAction{domain.AuditActionAdjustment},
+		Account: "acc-1",
+	}, 10)
+	if err != nil {
+		t.Fatalf("ListAuditFiltered: %v", err)
+	}
+	if len(rows) != 1 ||
+		!strings.Contains(rows[0].Detail, "realized_pnl=-12.50") {
+		t.Fatalf("audit rows = %+v, want realized pnl detail", rows)
+	}
+}
+
+func TestLocalNode_RealizedPnlPersistenceUsesOneWriterPerRequest(t *testing.T) {
+	t.Parallel()
+	var probe *accountAdjustmentRecordProbeRealm
+	st := newRealmWrapStore(newMemoryStore("node.db"), func(r store.RealmStore) store.RealmStore {
+		probe = &accountAdjustmentRecordProbeRealm{RealmStore: r}
+		return probe
+	})
+	ctx := context.Background()
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	eng := newFakeEngine()
+	eng.adjustmentAccepted = &domain.AdjustmentOutcomeAccepted{
+		BalanceResult:     "10",
+		RealizedPnlDelta:  "99",
+		RealizedPnlResult: "99",
+	}
+	n := newTestNodeWithStore(t, st, eng)
+	seedTestAccount(t, n.realm, "acc-1")
+
+	rec, err := n.ApplyAdjustment(ctx, testKey("acc-1"), domain.ExternalID(""),
+		domain.AdjustmentRequest{
+			Asset:       "USD",
+			RealizedPnl: "-12.50",
+			Balance:     &domain.AdjustmentAmount{Mode: domain.AdjustmentModeAbsolute, Value: "10"},
+		}, testCaller)
+	if err != nil {
+		t.Fatalf("ApplyAdjustment: %v", err)
+	}
+	// The public outcome reflects the persisted realized P&L (the supplied
+	// -12.50), not the engine's own 99 cross-check absolute. The delta is the
+	// signed change from the previous (absent, hence zero) stored value.
+	if rec.Accepted == nil ||
+		rec.Accepted.RealizedPnlResult != "-12.50" ||
+		rec.Accepted.RealizedPnlDelta != "-12.5" {
+		t.Fatalf("accepted outcome = %+v, want result -12.50 delta -12.5", rec.Accepted)
+	}
+	if len(probe.records) != 1 {
+		t.Fatalf("recorded persistence calls = %d, want 1", len(probe.records))
+	}
+	combined := probe.records[0]
+	if combined.RealizedPnl != nil {
+		t.Fatalf("combined adjustment realized-pnl carrier = %+v, want nil", combined.RealizedPnl)
+	}
+	if combined.UpsertBalance == nil || combined.UpsertBalance.RealizedPnl != "-12.50" {
+		t.Fatalf("combined adjustment upsert = %+v, want realized_pnl -12.50", combined.UpsertBalance)
+	}
+	stored, ok, err := n.realm.GetBalance(ctx, "acc-1", "USD")
+	if err != nil {
+		t.Fatalf("GetBalance(combined): %v", err)
+	}
+	if !ok || stored.RealizedPnl != "-12.50" {
+		t.Fatalf("combined stored balance = %+v ok=%v, want realized_pnl -12.50", stored, ok)
+	}
+
+	balance, err := n.SetBalanceRealizedPnl(ctx, testKey("acc-1"), "JPY", "5.25", testCaller)
+	if err != nil {
+		t.Fatalf("SetBalanceRealizedPnl(create): %v", err)
+	}
+	if balance.RealizedPnl != "5.25" {
+		t.Fatalf("created realized pnl = %q, want 5.25", balance.RealizedPnl)
+	}
+	created, ok, err := n.realm.GetBalance(ctx, "acc-1", "JPY")
+	if err != nil {
+		t.Fatalf("GetBalance(created): %v", err)
+	}
+	if !ok || created.RealizedPnl != "5.25" {
+		t.Fatalf("created balance = %+v ok=%v, want realized_pnl 5.25", created, ok)
+	}
+
+	_, err = n.SetBalanceRealizedPnl(ctx, testKey("acc-1"), "JPY", "0", testCaller)
+	if err != nil {
+		t.Fatalf("SetBalanceRealizedPnl(delete): %v", err)
+	}
+	if _, ok, err := n.realm.GetBalance(ctx, "acc-1", "JPY"); err != nil || ok {
+		t.Fatalf("GetBalance(deleted) = ok %v err %v, want no balance row", ok, err)
+	}
+	if len(eng.adjustmentCalls) != 1 {
+		t.Fatalf("engine adjustment calls = %+v, want only the combined adjustment", eng.adjustmentCalls)
+	}
+	if len(probe.records) != 3 {
+		t.Fatalf("recorded persistence calls = %d, want combined/create/delete", len(probe.records))
+	}
+	if probe.records[1].RealizedPnl == nil || probe.records[1].UpsertBalance != nil {
+		t.Fatalf("realized-only create persistence = %+v, want realized-pnl carrier only", probe.records[1])
+	}
+	if probe.records[2].RealizedPnl == nil || probe.records[2].UpsertBalance != nil {
+		t.Fatalf("realized-only delete persistence = %+v, want realized-pnl carrier only", probe.records[2])
+	}
+}
+
+// TestLocalNode_ApplyAdjustmentNoEngineChangeStillPersistsRealizedPnl asserts
+// that a no-engine-change adjustment carrying a realized P&L still persists it
+// as a realized-pnl-only adjustment, while a pure no-op returns ErrNoChange.
+func TestLocalNode_ApplyAdjustmentNoEngineChangeStillPersistsRealizedPnl(t *testing.T) {
+	t.Parallel()
+	var probe *accountAdjustmentRecordProbeRealm
+	st := newRealmWrapStore(newMemoryStore("node.db"), func(r store.RealmStore) store.RealmStore {
+		probe = &accountAdjustmentRecordProbeRealm{RealmStore: r}
+		return probe
+	})
+	ctx := context.Background()
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	eng := newFakeEngine()
+	eng.adjustmentNoop = true
+	n := newTestNodeWithStore(t, st, eng)
+	seedTestAccount(t, n.realm, "acc-1")
+
+	// An engine field that nets no change (absolute Available equal to the
+	// seeded zero balance) plus a realized P&L must persist the realized P&L.
+	rec, err := n.ApplyAdjustment(ctx, testKey("acc-1"), domain.ExternalID(""),
+		domain.AdjustmentRequest{
+			Asset:       "USD",
+			RealizedPnl: "-12.50",
+			Balance:     &domain.AdjustmentAmount{Mode: domain.AdjustmentModeAbsolute, Value: "0"},
+		}, testCaller)
+	if err != nil {
+		t.Fatalf("ApplyAdjustment(no engine change + realized pnl) = %v, want no error", err)
+	}
+	if rec.Accepted == nil || rec.Rejected != nil {
+		t.Fatalf("record = %+v, want accepted realized pnl adjustment", rec)
+	}
+	if rec.Request.RealizedPnl != "-12.50" {
+		t.Fatalf("record request realized pnl = %q, want -12.50", rec.Request.RealizedPnl)
+	}
+	if rec.Accepted.RealizedPnlResult != "-12.50" ||
+		rec.Accepted.RealizedPnlDelta != "-12.5" {
+		t.Fatalf("accepted outcome = %+v, want result -12.50 delta -12.5", rec.Accepted)
+	}
+	stored, ok, err := n.realm.GetBalance(ctx, "acc-1", "USD")
+	if err != nil {
+		t.Fatalf("GetBalance: %v", err)
+	}
+	if !ok || stored.RealizedPnl != "-12.50" {
+		t.Fatalf("stored balance = %+v ok=%v, want realized_pnl -12.50", stored, ok)
+	}
+	realizedWriters := 0
+	for _, p := range probe.records {
+		if p.RealizedPnl == nil {
+			continue
+		}
+		realizedWriters++
+		if p.UpsertBalance != nil {
+			t.Fatalf("realized pnl persistence = %+v, want realized-pnl carrier only", p)
+		}
+	}
+	if realizedWriters != 1 {
+		t.Fatalf("persistence calls carrying realized pnl = %d, want exactly 1", realizedWriters)
+	}
+
+	// A pure no-op (engine nets no change, no realized P&L) still returns
+	// ErrNoChange and records nothing further.
+	before := len(probe.records)
+	_, err = n.ApplyAdjustment(ctx, testKey("acc-1"), domain.ExternalID(""),
+		domain.AdjustmentRequest{
+			Asset:   "USD",
+			Balance: &domain.AdjustmentAmount{Mode: domain.AdjustmentModeDelta, Value: "0"},
+		}, testCaller)
+	if !errors.Is(err, domain.ErrNoChange) {
+		t.Fatalf("pure no-op error = %v, want ErrNoChange", err)
+	}
+	if len(probe.records) != before {
+		t.Fatalf("pure no-op recorded %d extra persistence calls, want 0",
+			len(probe.records)-before)
+	}
+}
+
 func TestLocalNode_ApplyAdjustmentStoreFailureFatalsWithoutCompensation(t *testing.T) {
 	t.Parallel()
 	storeErr := errors.New("record adjustment failed")
@@ -188,14 +420,14 @@ func TestLocalNode_ApplyAdjustmentGeneratesExternalIDWhenAbsent(t *testing.T) {
 }
 
 // TestLocalNode_ApplyAdjustmentRejectedIsRecorded checks that a policy reject
-// (e.g. a P&L kill-switch) on an existing account persists the rejected attempt
+// (e.g. a SpotFunds P&L kill-switch) on an existing account persists the rejected attempt
 // to the adjustment history and the audit log, leaving balances untouched.
 func TestLocalNode_ApplyAdjustmentRejectedIsRecorded(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
 	eng.adjustmentReject = &domain.AdjustmentOutcomeRejected{
-		Code:   "pnl_bounds_kill_switch",
-		Policy: "pnl_bounds_kill_switch",
+		Code:   "spot_funds_pnl_bounds_kill_switch",
+		Policy: "spot_funds_pnl_bounds_kill_switch",
 		Reason: "upper bound exceeded",
 	}
 	n, st := newTestNode(t, eng)
@@ -300,8 +532,8 @@ func TestLocalNode_ApplyAdjustmentAutoCreateThenReject(t *testing.T) {
 	eng := newFakeEngine()
 	eng.enforceResolver = true
 	eng.adjustmentReject = &domain.AdjustmentOutcomeRejected{
-		Code:   "pnl_bounds_kill_switch",
-		Policy: "pnl_bounds_kill_switch",
+		Code:   "spot_funds_pnl_bounds_kill_switch",
+		Policy: "spot_funds_pnl_bounds_kill_switch",
 		Reason: "upper bound exceeded",
 	}
 	n, st := newTestNode(t, eng)
@@ -417,8 +649,8 @@ func TestLocalNode_ApplyAdjustmentAutoCreateAssetThenReject(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
 	eng.adjustmentReject = &domain.AdjustmentOutcomeRejected{
-		Code:   "pnl_bounds_kill_switch",
-		Policy: "pnl_bounds_kill_switch",
+		Code:   "spot_funds_pnl_bounds_kill_switch",
+		Policy: "spot_funds_pnl_bounds_kill_switch",
 		Reason: "upper bound exceeded",
 	}
 	n, st := newTestNode(t, eng)
@@ -484,6 +716,139 @@ func TestLocalNode_ApplyAdjustmentRejectsMalformedAsset(t *testing.T) {
 	}
 	if _, ok, err := st.GetAsset(ctx, bad); err != nil || ok {
 		t.Fatalf("GetAsset(malformed) = ok %v err %v, want absent", ok, err)
+	}
+}
+
+// TestLocalNode_ApplyAdjustmentAcceptedOverridesEngineRealizedPnl checks that
+// when the request supplies a realized P&L, the accepted outcome reflects the
+// persisted override and its delta from the previous stored value, not the
+// engine's own cross-check absolute.
+func TestLocalNode_ApplyAdjustmentAcceptedOverridesEngineRealizedPnl(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.adjustmentAccepted = &domain.AdjustmentOutcomeAccepted{
+		BalanceResult:     "10",
+		RealizedPnlDelta:  "99",
+		RealizedPnlResult: "99",
+	}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	seedTestAccount(t, st, "acc-1")
+	if err := st.UpsertBalance(ctx, domain.Balance{
+		Account: "acc-1", Asset: "USD", Available: "5", RealizedPnl: "-2",
+	}); err != nil {
+		t.Fatalf("UpsertBalance: %v", err)
+	}
+
+	rec, err := n.ApplyAdjustment(ctx, testKey("acc-1"), domain.ExternalID(""),
+		domain.AdjustmentRequest{
+			Asset:       "USD",
+			RealizedPnl: "-12.5",
+			Balance:     &domain.AdjustmentAmount{Mode: domain.AdjustmentModeAbsolute, Value: "10"},
+		}, testCaller)
+	if err != nil {
+		t.Fatalf("ApplyAdjustment: %v", err)
+	}
+	if rec.Accepted == nil {
+		t.Fatalf("record = %+v, want accepted", rec)
+	}
+	if rec.Accepted.RealizedPnlResult != "-12.5" {
+		t.Fatalf("realized pnl result = %q, want persisted -12.5 not engine 99",
+			rec.Accepted.RealizedPnlResult)
+	}
+	if rec.Accepted.RealizedPnlDelta != "-10.5" {
+		t.Fatalf("realized pnl delta = %q, want -10.5 (-12.5 minus prev -2)",
+			rec.Accepted.RealizedPnlDelta)
+	}
+	stored, ok, err := st.GetBalance(ctx, "acc-1", "USD")
+	if err != nil || !ok {
+		t.Fatalf("GetBalance: ok=%v err=%v", ok, err)
+	}
+	if stored.RealizedPnl != "-12.5" || stored.Available != "10" {
+		t.Fatalf("stored balance = %+v, want realized_pnl -12.5 available 10", stored)
+	}
+}
+
+// TestLocalNode_ApplyAdjustmentAcceptedReflectsAccumulatedRealizedPnl checks
+// that with no supplied realized P&L the accepted outcome reports Officer's
+// accumulated stored value (previous plus engine delta), not the engine's own
+// cross-check absolute, and carries the engine delta.
+func TestLocalNode_ApplyAdjustmentAcceptedReflectsAccumulatedRealizedPnl(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.adjustmentAccepted = &domain.AdjustmentOutcomeAccepted{
+		BalanceResult:     "10",
+		RealizedPnlDelta:  "3",
+		RealizedPnlResult: "99",
+	}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	seedTestAccount(t, st, "acc-1")
+	if err := st.UpsertBalance(ctx, domain.Balance{
+		Account: "acc-1", Asset: "USD", Available: "5", RealizedPnl: "7",
+	}); err != nil {
+		t.Fatalf("UpsertBalance: %v", err)
+	}
+
+	rec, err := n.ApplyAdjustment(ctx, testKey("acc-1"), domain.ExternalID(""),
+		domain.AdjustmentRequest{
+			Asset:   "USD",
+			Balance: &domain.AdjustmentAmount{Mode: domain.AdjustmentModeAbsolute, Value: "10"},
+		}, testCaller)
+	if err != nil {
+		t.Fatalf("ApplyAdjustment: %v", err)
+	}
+	if rec.Accepted == nil {
+		t.Fatalf("record = %+v, want accepted", rec)
+	}
+	if rec.Accepted.RealizedPnlResult != "10" {
+		t.Fatalf("realized pnl result = %q, want accumulated 10 (prev 7 + delta 3) not engine 99",
+			rec.Accepted.RealizedPnlResult)
+	}
+	if rec.Accepted.RealizedPnlDelta != "3" {
+		t.Fatalf("realized pnl delta = %q, want engine delta 3", rec.Accepted.RealizedPnlDelta)
+	}
+	stored, ok, err := st.GetBalance(ctx, "acc-1", "USD")
+	if err != nil || !ok {
+		t.Fatalf("GetBalance: ok=%v err=%v", ok, err)
+	}
+	if stored.RealizedPnl != "10" {
+		t.Fatalf("stored realized pnl = %q, want accumulated 10", stored.RealizedPnl)
+	}
+}
+
+// TestLocalNode_ApplyAdjustmentRejectsEmptyAssetOnRealizedPnlOnly checks that a
+// realized-pnl-only adjustment (which bypasses the engine seam that would reject
+// the asset) rejects an empty asset with domain.ErrInvalid and persists nothing,
+// preserving the (account, asset) balance-row invariant.
+func TestLocalNode_ApplyAdjustmentRejectsEmptyAssetOnRealizedPnlOnly(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	seedTestAccount(t, st, "acc-1")
+
+	_, err := n.ApplyAdjustment(ctx, testKey("acc-1"), domain.ExternalID(""),
+		domain.AdjustmentRequest{Asset: "", RealizedPnl: "10"}, testCaller)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("ApplyAdjustment(empty asset) = %v, want ErrInvalid", err)
+	}
+	if len(eng.adjustmentCalls) != 0 {
+		t.Fatalf("engine adjustment calls = %+v, want none", eng.adjustmentCalls)
+	}
+	records, err := st.ListAdjustments(ctx, "acc-1", "", 10)
+	if err != nil {
+		t.Fatalf("ListAdjustments: %v", err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("stored adjustments = %+v, want none", records)
+	}
+	balances, err := st.ListBalances(ctx, "acc-1", "")
+	if err != nil {
+		t.Fatalf("ListBalances: %v", err)
+	}
+	if len(balances) != 0 {
+		t.Fatalf("balances = %+v, want no row for empty asset", balances)
 	}
 }
 

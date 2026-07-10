@@ -126,6 +126,7 @@ const useAccountsMock = vi.mocked(useAccounts);
 const useAdjustmentsMock = vi.mocked(useAdjustmentsPage);
 const useBalancesMock = vi.mocked(useBalancesPage);
 const createAdjustmentMock = vi.fn();
+const setBalanceRealizedPnlMock = vi.fn();
 const exportBusinessCsvMock = vi.fn();
 const fetchAdjustmentsMock = vi.fn();
 const importBusinessCsvMock = vi.fn();
@@ -173,6 +174,17 @@ const group: Group = {
 };
 
 function acceptedAdjustment(request: Adjustment["request"]): Adjustment {
+  const accepted: NonNullable<Adjustment["accepted"]> = {
+    balanceDelta: "600",
+    balanceResult: "600",
+    heldDelta: "10",
+    heldResult: "10",
+    incomingDelta: "-50",
+    incomingResult: "450",
+  };
+  if (request.realizedPnl) {
+    accepted.realizedPnlResult = request.realizedPnl;
+  }
   return {
     externalId: "adj-alpha-10",
     account: "Bucks McMoneyface",
@@ -181,14 +193,7 @@ function acceptedAdjustment(request: Adjustment["request"]): Adjustment {
     asset: request.asset,
     status: "accepted",
     request,
-    accepted: {
-      balanceDelta: "600",
-      balanceResult: "600",
-      heldDelta: "10",
-      heldResult: "10",
-      incomingDelta: "-50",
-      incomingResult: "450",
-    },
+    accepted,
   };
 }
 
@@ -211,6 +216,7 @@ function renderPositions(initialEntry = "/positions") {
     {
       api: {
         createAdjustment: createAdjustmentMock,
+        setBalanceRealizedPnl: setBalanceRealizedPnlMock,
         exportBusinessCsv: exportBusinessCsvMock,
         fetchAccounts: async () => [account],
         fetchAdjustmentsPage: fetchAdjustmentsMock,
@@ -231,6 +237,13 @@ beforeEach(async () => {
   useBalancesMock.mockReturnValue(readyPage<Balance>([balance]));
   createAdjustmentMock.mockImplementation(async (_account, body) =>
     acceptedAdjustment(body as unknown as Adjustment["request"]),
+  );
+  setBalanceRealizedPnlMock.mockImplementation(
+    async (_account, body: { asset: string; realizedPnl: string }) => ({
+      ...balance,
+      asset: body.asset,
+      realizedPnl: body.realizedPnl,
+    }),
   );
   exportBusinessCsvMock.mockResolvedValue({
     blob: new Blob(["csv"]),
@@ -298,6 +311,7 @@ describe("Positions adjustment panel", () => {
     await user.clear(scope.getByLabelText("Incoming adjustment amount"));
     await user.type(scope.getByLabelText("Incoming adjustment amount"), "-50");
     await user.type(scope.getByLabelText("Average entry price (optional)"), "142.50");
+    await user.type(scope.getByLabelText("Realized PnL"), "-12.50");
     await user.click(
       scope.getByRole("button", { name: /bounds \(optional\)/i }),
     );
@@ -320,8 +334,10 @@ describe("Positions adjustment panel", () => {
       held: { mode: "absolute", value: "10" },
       incoming: { mode: "absolute", value: "-50" },
       averageEntryPrice: "142.50",
+      realizedPnl: "-12.50",
       balanceBounds: { lower: "-100", upper: "1000" },
     });
+    expect(setBalanceRealizedPnlMock).not.toHaveBeenCalled();
   });
 
   it("keeps the entered values and allows resubmit after a successful submit", async () => {
@@ -352,6 +368,76 @@ describe("Positions adjustment panel", () => {
     expect(submit).toBeEnabled();
     await user.click(submit);
     await waitFor(() => expect(createAdjustmentMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("submits realized PnL through one adjustment request", async () => {
+    const user = userEvent.setup();
+    renderPositions();
+
+    await user.click(
+      screen.getByRole("button", {
+        name: /open adjustment panel for bucks mcmoneyface aapl/i,
+      }),
+    );
+
+    const panel = screen.getByRole("region", { name: "Adjustment" });
+    const scope = within(panel);
+    await user.type(scope.getByLabelText("Realized PnL"), "-12.50");
+    await user.click(scope.getByRole("button", { name: /submit adjustment/i }));
+
+    await waitFor(() =>
+      expect(createAdjustmentMock).toHaveBeenCalledTimes(1),
+    );
+    expect(createAdjustmentMock).toHaveBeenCalledWith("Bucks McMoneyface", {
+      asset: "AAPL",
+      realizedPnl: "-12.50",
+    });
+    expect(setBalanceRealizedPnlMock).not.toHaveBeenCalled();
+    expect(scope.getByText("realized PnL")).toBeInTheDocument();
+    expect(scope.getAllByText("-12.50").length).toBeGreaterThan(0);
+  });
+
+  it("does not reapply a delta adjustment through a second realized-PnL call on retry", async () => {
+    const user = userEvent.setup();
+    const appliedDeltas: string[] = [];
+    createAdjustmentMock
+      .mockRejectedValueOnce(new Error("temporary failure"))
+      .mockImplementationOnce(async (_account, body) => {
+        const request = body as unknown as Adjustment["request"];
+        if (request.balance?.mode === "delta") {
+          appliedDeltas.push(request.balance.value);
+        }
+        return acceptedAdjustment(request);
+      });
+
+    renderPositions();
+
+    await user.click(
+      screen.getByRole("button", {
+        name: /open adjustment panel for bucks mcmoneyface aapl/i,
+      }),
+    );
+
+    const panel = screen.getByRole("region", { name: "Adjustment" });
+    const scope = within(panel);
+    await user.click(scope.getByLabelText("Available adjustment mode"));
+    await user.click(screen.getByRole("option", { name: "delta" }));
+    await user.type(scope.getByLabelText("Available adjustment amount"), "25");
+    await user.type(scope.getByLabelText("Realized PnL"), "-12.50");
+
+    const submit = scope.getByRole("button", { name: /submit adjustment/i });
+    await user.click(submit);
+    expect(await scope.findByText("temporary failure")).toBeInTheDocument();
+
+    await user.click(submit);
+    await waitFor(() => expect(createAdjustmentMock).toHaveBeenCalledTimes(2));
+    expect(setBalanceRealizedPnlMock).not.toHaveBeenCalled();
+    expect(appliedDeltas).toEqual(["25"]);
+    expect(createAdjustmentMock).toHaveBeenLastCalledWith("Bucks McMoneyface", {
+      asset: "AAPL",
+      balance: { mode: "delta", value: "25" },
+      realizedPnl: "-12.50",
+    });
   });
 
   it("clears a single amount field with its inline reset control", async () => {
@@ -873,6 +959,33 @@ describe("Positions history row actions", () => {
 
     await user.click(scope.getByRole("button", { name: /filter by aapl/i }));
     expect(screen.getByLabelText("Filter by asset")).toHaveValue("AAPL");
+  });
+
+  it("clones realized PnL into the dialog and submits one adjustment request", async () => {
+    const user = userEvent.setup();
+    useAdjustmentsMock.mockReturnValue(
+      readyPage<Adjustment>([
+        acceptedAdjustment({
+          asset: "AAPL",
+          balance: { mode: "delta", value: "25" },
+          realizedPnl: "-12.50",
+        }),
+      ]),
+    );
+    renderPositions("/positions?tab=history");
+
+    await user.click(
+      screen.getByRole("button", { name: /clone adj-alpha-10/i }),
+    );
+    await user.click(screen.getByRole("button", { name: /submit/i }));
+
+    await waitFor(() => expect(createAdjustmentMock).toHaveBeenCalledTimes(1));
+    expect(createAdjustmentMock).toHaveBeenCalledWith("Bucks McMoneyface", {
+      asset: "AAPL",
+      balance: { mode: "delta", value: "25" },
+      realizedPnl: "-12.50",
+    });
+    expect(setBalanceRealizedPnlMock).not.toHaveBeenCalled();
   });
 });
 

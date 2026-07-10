@@ -352,6 +352,7 @@ func toEventReproductionRequestDTO(p domain.ApprovalPayload) *eventReproductionR
 			FillQuantity:   p.Result.FillQuantity,
 			FillPrice:      p.Result.FillPrice,
 			FillLockPrice:  p.Result.FillLockPrice,
+			Commission:     toCommissionDTO(p.Result.Commission),
 			LeavesQuantity: p.Result.LeavesQuantity,
 			OrderStatus:    p.Result.OrderStatus,
 			Blocks:         blocks,
@@ -438,15 +439,16 @@ func orderMutationResponseFromPayload(
 	}
 	return &orderMutationResponseDTO{
 		Order: orderDTO{
-			ExternalID:    event.Order.String(),
-			Account:       p.AccountID,
-			Side:          p.Side,
-			AmountKind:    p.AmountKind,
-			AmountValue:   p.Quantity,
-			Price:         p.LimitPrice,
-			Status:        status,
-			DisplayPrices: []string{},
-			Signed:        eventAttestationSigned(att),
+			ExternalID:          event.Order.String(),
+			Account:             p.AccountID,
+			Side:                p.Side,
+			AmountKind:          p.AmountKind,
+			AmountValue:         p.Quantity,
+			CommissionSubtotals: toCommissionDTOs(nil),
+			Price:               p.LimitPrice,
+			Status:              status,
+			DisplayPrices:       []string{},
+			Signed:              eventAttestationSigned(att),
 		},
 		AttestationToken: att.Token,
 		AttestationKeyID: att.KeyID,
@@ -465,14 +467,13 @@ func handleApplyExecutionReport(svc Service) http.HandlerFunc {
 			return
 		}
 		var req struct {
-			Quantity       string `json:"quantity"`
-			Price          string `json:"price"`
-			LeavesQuantity string `json:"leavesQuantity"`
-			LockPrice      string `json:"lockPrice"`
-			RealizedPnl    string `json:"realizedPnl"`
-			Fee            string `json:"fee"`
-			Status         string `json:"status"`
-			Force          bool   `json:"force"`
+			Quantity       string         `json:"quantity"`
+			Price          string         `json:"price"`
+			LeavesQuantity string         `json:"leavesQuantity"`
+			LockPrice      string         `json:"lockPrice"`
+			Commission     *commissionDTO `json:"commission"`
+			Status         string         `json:"status"`
+			Force          bool           `json:"force"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
@@ -499,6 +500,27 @@ func handleApplyExecutionReport(svc Service) http.HandlerFunc {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "leavesQuantity is required")
 			return
 		}
+		var commission *domain.Commission
+		if req.Commission != nil {
+			hasAmount := req.Commission.Amount != ""
+			hasCurrency := req.Commission.Currency != ""
+			if hasAmount != hasCurrency {
+				httpx.WriteErrMsg(w, http.StatusBadRequest, "validation",
+					"commission amount and currency must be provided together")
+				return
+			}
+			if hasAmount {
+				if !hasQuantity || !hasPrice {
+					httpx.WriteErrMsg(w, http.StatusBadRequest, "validation",
+						"commission requires quantity and price")
+					return
+				}
+				commission = &domain.Commission{
+					Amount:   req.Commission.Amount,
+					Currency: req.Commission.Currency,
+				}
+			}
+		}
 		orderID, err := domain.ParseExternalID(id)
 		if err != nil {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
@@ -509,8 +531,7 @@ func handleApplyExecutionReport(svc Service) http.HandlerFunc {
 			FillPrice:      req.Price,
 			LeavesQuantity: req.LeavesQuantity,
 			LockPrice:      req.LockPrice,
-			RealizedPnl:    req.RealizedPnl,
-			Fee:            req.Fee,
+			Commission:     commission,
 			Order:          orderID,
 			OrderStatus:    status,
 			Force:          req.Force,

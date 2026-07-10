@@ -51,6 +51,11 @@ func TestServeOpenAPISpec(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "openapi") {
 		t.Fatal("body does not look like an OpenAPI spec")
 	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "realizedPnlResult:\n          type: object") ||
+		!strings.Contains(body, "required: [delta, result]") {
+		t.Fatal("AdjustmentAccepted realizedPnlResult is not documented as an object")
+	}
 }
 
 // TestServeOpenAPISpec_WrongMethod covers the route's method restriction: only

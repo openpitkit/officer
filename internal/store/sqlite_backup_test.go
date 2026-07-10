@@ -93,6 +93,16 @@ func seedRealm(t *testing.T, ctx context.Context, rs RealmStore) domain.External
 	}); err != nil {
 		t.Fatalf("PutOrderSizeLimit: %v", err)
 	}
+	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Scope:           domain.ScopeAccount,
+		Account:         "acc-1",
+		AccountCurrency: "USD",
+		LowerBound:      "-250",
+		UpperBound:      "500",
+		InitialPnl:      "12.50",
+	}); err != nil {
+		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
+	}
 	order, err := rs.CreateOrder(ctx, domain.Order{
 		Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
 		Principal: "operator", Source: domain.SourcePanel, Side: domain.OrderSideBuy,
@@ -111,6 +121,7 @@ func seedRealm(t *testing.T, ctx context.Context, rs RealmStore) domain.External
 	if _, err := rs.CreateTrade(ctx, domain.Trade{
 		Order: order.ExternalID, Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
 		Source: domain.SourcePanel, Side: domain.OrderSideBuy, Quantity: "10", Price: "150",
+		Commission: &domain.Commission{Amount: "-0.12", Currency: "USD"},
 	}); err != nil {
 		t.Fatalf("CreateTrade: %v", err)
 	}
@@ -1030,6 +1041,77 @@ func TestBackupRestoreReplaceAllScopedToSelectedAccounts(t *testing.T) {
 	}
 }
 
+func TestBackupRestoreReplaceAllPrunesSpotFundsGroupLimitForSelectedAccount(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	_, src := newRealmStore(t, domain.DefaultRealm)
+	if _, err := src.CreateGroup(ctx, domain.AccountGroup{Code: "desk-a"}); err != nil {
+		t.Fatalf("src CreateGroup(desk-a): %v", err)
+	}
+	if _, err := src.CreateAccount(ctx, domain.Account{
+		Code: "acc-1", GroupCode: "desk-a",
+	}); err != nil {
+		t.Fatalf("src CreateAccount(acc-1): %v", err)
+	}
+	scope := backup.Scope{
+		Sections: []backup.Section{backup.SectionRiskLimits},
+		Accounts: backup.EntitySelector{Accounts: []string{"acc-1"}},
+	}
+	archive, err := src.ExportBackup(ctx, scope)
+	if err != nil {
+		t.Fatalf("ExportBackup: %v", err)
+	}
+
+	_, dst := newRealmStore(t, domain.DefaultRealm)
+	mustCreateAsset(t, ctx, dst, domain.Asset{Code: "USD", Title: "US Dollar"})
+	if _, err := dst.CreateGroup(ctx, domain.AccountGroup{Code: "desk-a"}); err != nil {
+		t.Fatalf("dst CreateGroup(desk-a): %v", err)
+	}
+	if _, err := dst.CreateGroup(ctx, domain.AccountGroup{Code: "desk-b"}); err != nil {
+		t.Fatalf("dst CreateGroup(desk-b): %v", err)
+	}
+	if _, err := dst.CreateAccount(ctx, domain.Account{
+		Code: "acc-1", GroupCode: "desk-a",
+	}); err != nil {
+		t.Fatalf("dst CreateAccount(acc-1): %v", err)
+	}
+	if err := dst.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Scope:           domain.ScopeAccountGroup,
+		AccountGroup:    "desk-a",
+		AccountCurrency: "USD",
+		LowerBound:      "-1000",
+	}); err != nil {
+		t.Fatalf("dst PutSpotFundsPnlBoundsLimit(desk-a): %v", err)
+	}
+	if err := dst.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Scope:           domain.ScopeAccountGroup,
+		AccountGroup:    "desk-b",
+		AccountCurrency: "USD",
+		LowerBound:      "-2000",
+	}); err != nil {
+		t.Fatalf("dst PutSpotFundsPnlBoundsLimit(desk-b): %v", err)
+	}
+
+	if _, err := dst.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: scope, Mode: backup.RestoreModeReplaceAll,
+	}); err != nil {
+		t.Fatalf("RestoreBackup(scoped replace_all): %v", err)
+	}
+
+	limits, err := dst.ListSpotFundsPnlBoundsLimits(ctx, "")
+	if err != nil {
+		t.Fatalf("ListSpotFundsPnlBoundsLimits: %v", err)
+	}
+	if len(limits) != 1 {
+		t.Fatalf("spotFundsPnlBoundsLimits = %+v, want only desk-b", limits)
+	}
+	if limits[0].AccountGroup != "desk-b" ||
+		limits[0].AccountCurrency != "USD" {
+		t.Fatalf("remaining spotFundsPnlBoundsLimit = %+v, want desk-b/USD", limits[0])
+	}
+}
+
 // TestBackupRestoreSelectorSubset restores only the general-settings section and
 // asserts it does NOT raise the engine-rebuild signal and does not pull in the
 // account-addressed sections.
@@ -1131,28 +1213,28 @@ func TestBackupRestoreResolvesForeignKeysDictionaryFirst(t *testing.T) {
 // (one per backup.Data section). Keep it in lockstep with backup.Data: a new
 // exported table must appear here.
 var backupExportedTables = map[string]bool{
-	"asset":                  true,
-	"asset_class":            true,
-	"principal":              true,
-	"account_group":          true,
-	"account":                true,
-	"balance":                true,
-	"limit_rate":             true,
-	"limit_order_size":       true,
-	"limit_pnl_bound":        true,
-	"adjustment":             true,
-	"order_record":           true,
-	"event_attestation":      true,
-	"order_event":            true,
-	"trade":                  true,
-	"audit":                  true,
-	"market_data_instance":   true,
-	"market_data_instrument": true,
-	"market_data_quote":      true,
-	"signing_key":            true,
-	"signing_config":         true,
-	"mcp_access":             true,
-	"user_setting":           true,
+	"asset":                      true,
+	"asset_class":                true,
+	"principal":                  true,
+	"account_group":              true,
+	"account":                    true,
+	"balance":                    true,
+	"limit_rate":                 true,
+	"limit_order_size":           true,
+	"limit_spot_funds_pnl_bound": true,
+	"adjustment":                 true,
+	"order_record":               true,
+	"event_attestation":          true,
+	"order_event":                true,
+	"trade":                      true,
+	"audit":                      true,
+	"market_data_instance":       true,
+	"market_data_instrument":     true,
+	"market_data_quote":          true,
+	"signing_key":                true,
+	"signing_config":             true,
+	"mcp_access":                 true,
+	"user_setting":               true,
 }
 
 // backupExcludedTables is the explicit allowlist of user tables the backup does
@@ -1250,6 +1332,72 @@ func TestBackupRestoreAtomicityLeavesRealmUnchanged(t *testing.T) {
 	// The partially-applied new account did not survive.
 	if _, ok, _ := dst.GetAccount(ctx, "new-acc"); ok {
 		t.Fatal("failed restore left a partially-applied account")
+	}
+}
+
+// TestBackupRestoreRejectsInvalidCommission asserts a restore whose archived
+// trade carries a malformed or one-sided commission fails with ErrInvalid and
+// persists nothing, mirroring the CreateTrade write-time guard. Without it the
+// bad row would land and later break the whole-page CommissionSubtotals rollup.
+func TestBackupRestoreRejectsInvalidCommission(t *testing.T) {
+	cases := []struct {
+		name       string
+		commission *domain.Commission
+	}{
+		{"malformed-amount", &domain.Commission{Amount: "not-decimal", Currency: "USD"}},
+		{"amount-only", &domain.Commission{Amount: "-0.12"}},
+		{"currency-only", &domain.Commission{Currency: "USD"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, dst := seedOrderFixtures(t)
+			orderXID := mustExternalID(t)
+			scope := backup.Scope{
+				Sections: []backup.Section{backup.SectionActivityHistory},
+			}
+			archive := backup.NewArchive(
+				time.Now().UTC(),
+				"test",
+				backup.RealmLabel{Code: string(domain.DefaultRealm)},
+				scope,
+				backup.Data{
+					Orders: []backup.OrderRecord{{Order: domain.Order{
+						ExternalID:  orderXID,
+						Account:     "acc-1",
+						BaseAsset:   "AAPL",
+						QuoteAsset:  "USD",
+						Principal:   "operator",
+						Source:      domain.SourcePanel,
+						Side:        domain.OrderSideBuy,
+						AmountKind:  domain.OrderAmountKindQuantity,
+						AmountValue: "10",
+						Price:       "150",
+						Status:      domain.OrderStatusFilled,
+					}}},
+					Trades: []domain.Trade{{
+						ExternalID: mustExternalID(t),
+						Order:      orderXID,
+						Account:    "acc-1",
+						BaseAsset:  "AAPL",
+						QuoteAsset: "USD",
+						Source:     domain.SourcePanel,
+						Side:       domain.OrderSideBuy,
+						Quantity:   "10",
+						Price:      "150",
+						Commission: tc.commission,
+					}},
+				},
+			)
+			if _, err := dst.RestoreBackup(ctx, archive, backup.RestoreOptions{
+				Scope: scope, Mode: backup.RestoreModeInsertMissing,
+			}); !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("RestoreBackup(bad commission) = %v, want ErrInvalid", err)
+			}
+			// The failed restore rolled back atomically: no trade landed.
+			if c := countRows(t, ctx, dst.(*realmStore), "trade"); c != 0 {
+				t.Fatalf("trades after failed restore = %d, want 0", c)
+			}
+		})
 	}
 }
 
@@ -1485,6 +1633,16 @@ func assertRealmsEqualOnPublicIdentity(
 		dstLimits[0].MaxQuantity != "100" || dstLimits[0].Account != "acc-1" {
 		t.Fatalf("limits differ: %v vs %v", srcLimits, dstLimits)
 	}
+	srcSpotFunds, _ := src.ListSpotFundsPnlBoundsLimits(ctx, "")
+	dstSpotFunds, _ := dst.ListSpotFundsPnlBoundsLimits(ctx, "")
+	if len(srcSpotFunds) != len(dstSpotFunds) || len(dstSpotFunds) != 1 ||
+		dstSpotFunds[0].Account != "acc-1" ||
+		dstSpotFunds[0].AccountCurrency != "USD" ||
+		dstSpotFunds[0].LowerBound != "-250" ||
+		dstSpotFunds[0].UpperBound != "500" ||
+		dstSpotFunds[0].InitialPnl != "12.50" {
+		t.Fatalf("spot funds pnl bounds differ: %v vs %v", srcSpotFunds, dstSpotFunds)
+	}
 
 	srcOrder, _ := src.GetOrder(ctx, orderXID)
 	dstOrder, err := dst.GetOrder(ctx, orderXID)
@@ -1509,6 +1667,11 @@ func assertRealmsEqualOnPublicIdentity(
 	if dstOrder.Trades[0].ExternalID != srcOrder.Trades[0].ExternalID {
 		t.Fatalf("trade external id changed: %s vs %s",
 			dstOrder.Trades[0].ExternalID, srcOrder.Trades[0].ExternalID)
+	}
+	if dstOrder.Trades[0].Commission == nil ||
+		dstOrder.Trades[0].Commission.Amount != "-0.12" ||
+		dstOrder.Trades[0].Commission.Currency != "USD" {
+		t.Fatalf("trade commission not preserved: %+v", dstOrder.Trades[0])
 	}
 
 	srcAdj, _ := src.ListAdjustments(ctx, "acc-1", "", 10)

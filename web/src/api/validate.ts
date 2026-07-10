@@ -34,6 +34,7 @@ const MAX_ACCOUNT_LEN = 64;
 const MAX_ASSET_LEN = 32;
 const MAX_ORDERS_CAP = 1e9;
 const MAX_WINDOW_HOURS = 24;
+const SPOT_FUNDS_PNL_POLICY = "spot_funds_pnl_bounds_kill_switch";
 
 /**
  * A localizable validation failure. `key` names a key in the `validation`
@@ -78,6 +79,36 @@ export function validateAsset(asset: string): FieldError | null {
     return { key: "asset.whitespace" };
   }
   return null;
+}
+
+function validateAccountGroup(group: string): FieldError | null {
+  if (group.length === 0) {
+    return { key: "accountGroup.required" };
+  }
+  if (group.length > MAX_ACCOUNT_LEN) {
+    return { key: "accountGroup.tooLong", values: { max: MAX_ACCOUNT_LEN } };
+  }
+  if (group !== group.trim()) {
+    return { key: "accountGroup.whitespace" };
+  }
+  for (const ch of group) {
+    const code = ch.codePointAt(0) ?? 0;
+    if (code < 0x20 || code === 0x7f) {
+      return { key: "accountGroup.printable" };
+    }
+  }
+  return null;
+}
+
+function validateAccountCurrency(currency: string): FieldError | null {
+  const err = validateAsset(currency);
+  if (!err) {
+    return null;
+  }
+  return {
+    key: err.key.replace(/^asset\./, "accountCurrency."),
+    values: err.values,
+  };
 }
 
 /** Loose decimal check: optional sign, digits with an optional fraction. */
@@ -246,6 +277,7 @@ export function validateLimit(limit: Limit): FieldError | null {
     return { key: "limit.unknownPolicy", values: { policy: limit.policy } };
   }
   const policy: Policy = limit.policy;
+  const isSpotFundsPnl = policy === SPOT_FUNDS_PNL_POLICY;
 
   if (!isScope(limit.scope)) {
     return { key: "limit.unknownScope", values: { scope: limit.scope } };
@@ -274,6 +306,30 @@ export function validateLimit(limit: Limit): FieldError | null {
     return { key: "limit.scopeNoAsset", values: { scope } };
   }
 
+  if (isSpotFundsPnl) {
+    const accountGroup = limit.accountGroup?.trim() ?? "";
+    const accountCurrency = limit.accountCurrency?.trim() ?? "";
+    const accountCurrencyErr = validateAccountCurrency(accountCurrency);
+    if (accountCurrencyErr) {
+      return accountCurrencyErr;
+    }
+    if (scope === "account_group") {
+      const err = validateAccountGroup(accountGroup);
+      if (err) {
+        return err;
+      }
+    } else if (accountGroup.length > 0) {
+      return { key: "limit.scopeNoAccountGroup", values: { scope } };
+    }
+  } else {
+    if ((limit.accountGroup ?? "").trim().length > 0) {
+      return { key: "limit.policyNoAccountGroup", values: { policy } };
+    }
+    if ((limit.accountCurrency ?? "").trim().length > 0) {
+      return { key: "limit.policyNoAccountCurrency", values: { policy } };
+    }
+  }
+
   const kinds = Object.keys(limit.values).filter(
     (k) => limit.values[k].trim().length > 0,
   );
@@ -286,12 +342,19 @@ export function validateLimit(limit: Limit): FieldError | null {
     if (kinds.length === 0) {
       return { key: "limit.orderSizeRequires" };
     }
-  } else if (policy === "pnl_bounds_kill_switch") {
+  } else if (policy === SPOT_FUNDS_PNL_POLICY) {
     // initial_pnl alone is not sufficient; at least one bound is always required.
     const hasBound =
       kinds.includes("lower_bound") || kinds.includes("upper_bound");
     if (!hasBound) {
       return { key: "limit.pnlRequires" };
+    }
+    if (
+      policy === SPOT_FUNDS_PNL_POLICY &&
+      scope !== "account" &&
+      kinds.includes("initial_pnl")
+    ) {
+      return { key: "limit.spotFundsInitialPnlAccountOnly" };
     }
   }
 
@@ -305,7 +368,7 @@ export function validateLimit(limit: Limit): FieldError | null {
   // pnl: when both bounds are present, lower <= upper. Compared as exact
   // decimal strings so high-precision bounds keep full precision.
   if (
-    policy === "pnl_bounds_kill_switch" &&
+    policy === SPOT_FUNDS_PNL_POLICY &&
     kinds.includes("lower_bound") &&
     kinds.includes("upper_bound")
   ) {

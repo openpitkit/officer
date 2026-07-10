@@ -96,6 +96,7 @@
     "order": "Order",
     "qty": "Qty",
     "lockPrice": "Lock price",
+    "commission": "Commission",
     "displayPrices": "Display prices",
     "signedIndicator": "This order has at least one signed event.",
     "columnDescriptions": {
@@ -111,6 +112,7 @@
       "order": "This column links a trade back to its parent order.",
       "qty": "This column shows the executed base-asset quantity.",
       "lockPrice": "This column shows the price used for funds locking when it differs from execution.",
+      "commission": "This column shows recorded commission totals by currency.",
       "displayPrices": "This column shows additional prices returned by the risk engine for operator review."
     }
   },
@@ -206,6 +208,20 @@
       "calculateLeaves": "Calculate leaves quantity",
       "lockPrice": "Lock price (optional)",
       "lockPricePlaceholder": "optional",
+      "commissionAmount": "Commission amount (optional)",
+      "commissionAmountPlaceholder": "e.g. -0.25",
+      "commissionCurrency": "Commission currency",
+      "commissionCurrencyPlaceholder": "e.g. USD",
+      "economicsHelp": "Commission feeds the self-computed kill-switch and display; amount and currency must be set together.",
+      "economics": {
+        "commission": {
+          "title": "Commission",
+          "summary": "Amount and currency are optional, but must be set together.",
+          "infoAriaLabel": "Commission details",
+          "infoTitle": "Commission",
+          "infoBody": "Commission is entered in its own currency and subtracted from engine-computed realized PnL in the account currency. Use a negative amount for a fee or cost, and a positive amount for a rebate."
+        }
+      },
       "status": "Target status",
       "statusHelp": {
         "submitted": "Records the order as submitted to the venue. No trade, no balance change.",
@@ -225,7 +241,8 @@
       "accountBlocked": "Account {{account}} blocked:",
       "done": "Done",
       "validationError": "Quantity and price are required for a fill status.",
-      "leavesRequired": "Leaves quantity is required."
+      "leavesRequired": "Leaves quantity is required.",
+      "commissionRequired": "Commission amount and currency must be set together."
     }
   },
 
@@ -246,6 +263,7 @@
       "fieldSource": "Source",
       "fieldSubmitted": "Submitted",
       "fieldDisplayPrices": "Display prices",
+      "fieldCommission": "Commission",
       "hold": {
         "title": "Held reservation",
         "description": "This order is held. Confirm it to commit the reservation, or cancel it to roll the reservation back.",
@@ -262,6 +280,7 @@
         "fillQty": "qty {{qty}}",
         "fillAt": "@ {{price}}",
         "fillLock": "(lock {{price}})",
+        "commission": "commission {{value}}",
         "rejectCode": "code {{code}}",
         "rejectScope": "scope {{scope}}",
         "rejectPolicy": "policy {{policy}}",

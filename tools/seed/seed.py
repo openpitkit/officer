@@ -410,12 +410,10 @@ ACCOUNTS = [
 # shape; the rest are the per-kind body fields:
 #   rate       -> PUT /limits/rate        {scope, account, asset, windowMs, maxOrders}
 #   order_size -> PUT /limits/order-size  {scope, account, asset, maxQuantity, maxNotional}
-#   pnl_bounds -> PUT /limits/pnl-bounds  {scope, account, asset, lowerBound, upperBound, initialPnl}
 # Scope axes: account required for account/account_asset; asset required for
 # asset/account_asset. Allowed scopes differ per kind (the engine validates):
 #   rate       broker | asset | account | account_asset
 #   order_size broker | asset | account_asset
-#   pnl_bounds          asset | account_asset
 # windowMs is a positive integer (<= 24h); maxOrders a positive integer; all
 # decimal ceilings/bounds are exact strings.
 LIMITS = [
@@ -465,43 +463,16 @@ LIMITS = [
         "asset": "SPX",
         "maxNotional": "2000000",
     },
-    {
-        # Kill-switch: halt Diamond Hands Capital if realized USD P&L sinks below
-        # half a million in the red. They never sell, until they do.
-        "kind": "pnl_bounds",
-        "scope": "account_asset",
-        "account": "degen-diamond-hands",
-        "asset": "USD",
-        "lowerBound": "-500000",
-    },
-    {
-        # A tighter leash on a known blow-up.
-        "kind": "pnl_bounds",
-        "scope": "account_asset",
-        "account": "blowup-catching-knives",
-        "asset": "USD",
-        "lowerBound": "-250000",
-    },
-    {
-        # Firm-wide USD P&L floor, asset-wide.
-        "kind": "pnl_bounds",
-        "scope": "asset",
-        "account": "",
-        "asset": "USD",
-        "lowerBound": "-2000000",
-    },
 ]
 
 # Endpoint and response-key per limit kind.
 _LIMIT_ENDPOINTS = {
     "rate": "/limits/rate",
     "order_size": "/limits/order-size",
-    "pnl_bounds": "/limits/pnl-bounds",
 }
 _LIMIT_RESP_KEYS = {
     "rate": "rateLimit",
     "order_size": "orderSizeLimit",
-    "pnl_bounds": "pnlBoundsLimit",
 }
 
 def _limit_body(limit: dict[str, Any]) -> dict[str, Any]:
@@ -518,11 +489,6 @@ def _limit_body(limit: dict[str, Any]) -> dict[str, Any]:
     elif kind == "order_size":
         body["maxQuantity"] = limit.get("maxQuantity", "")
         body["maxNotional"] = limit.get("maxNotional", "")
-    elif kind == "pnl_bounds":
-        body["lowerBound"] = limit.get("lowerBound", "")
-        body["upperBound"] = limit.get("upperBound", "")
-        if limit.get("initialPnl"):
-            body["initialPnl"] = limit["initialPnl"]
     return body
 
 
@@ -548,10 +514,6 @@ def _existing_limit_keys(base: str) -> set[tuple[str, str, str, str]]:
     for limit in limits.get("orderSizeLimits", []):
         keys.add(
             ("order_size", limit.get("scope", ""), limit.get("account", ""), limit.get("asset", ""))
-        )
-    for limit in limits.get("pnlBoundsLimits", []):
-        keys.add(
-            ("pnl_bounds", limit.get("scope", ""), limit.get("account", ""), limit.get("asset", ""))
         )
     return keys
 

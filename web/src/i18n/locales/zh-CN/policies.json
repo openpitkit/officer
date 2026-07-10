@@ -22,15 +22,15 @@
   "table": {
     "policy": "策略",
     "scope": "范围",
-    "account": "账户",
-    "asset": "资产",
+    "account": "账户 / 账户组",
+    "asset": "资产 / 账户币种",
     "values": "参数值",
     "actions": "操作",
     "columnDescriptions": {
       "policy": "此列显示该屏障应用的风控策略。",
-      "scope": "此列显示屏障应用于账户、资产、经纪商还是组合目标。",
-      "account": "此列显示屏障目标账户，如范围包含账户。",
-      "asset": "此列显示屏障目标资产，如范围包含资产。",
+      "scope": "此列显示屏障应用于全局、账户组、账户、资产还是组合目标。",
+      "account": "此列显示屏障目标账户或账户组（如该轴存在）。",
+      "asset": "此列显示屏障目标资产或账户币种（如该轴存在）。",
       "values": "此列显示该策略屏障配置的数值或时长。",
       "actions": "此列包含用于分享链接、编辑和删除屏障的行操作。"
     },
@@ -48,7 +48,9 @@
     "title": "删除风控屏障？",
     "description": "此操作将删除 {{scope}}{{account}}{{asset}} 上的 {{policy}} 屏障。",
     "accountFragment": " 账户 {{account}}",
-    "assetFragment": " 资产 {{asset}}"
+    "accountGroupFragment": " 账户组 {{accountGroup}}",
+    "assetFragment": " 资产 {{asset}}",
+    "accountCurrencyFragment": " 账户币种 {{accountCurrency}}"
   },
   "restartConfirm": {
     "title": "重建风控引擎？",
@@ -62,11 +64,16 @@
     "scope": "范围",
     "account": "账户",
     "accountPlaceholder": "acc-1",
+    "accountGroup": "账户组",
+    "accountGroupPlaceholder": "desk-a",
     "asset": "资产",
     "assetPlaceholder": "AAPL",
+    "accountCurrency": "账户币种",
+    "accountCurrencyPlaceholder": "USD",
     "values": "参数值",
     "rateLimitFootnote": "最大订单数和时间窗口均为必填项。",
     "atLeastOneFootnote": "至少需填写一个参数值。",
+    "fxFailSafeNote": "FX 故障安全模式：处于 PnL 控制下的账户在缺少必要输入时会被封锁，例如缺少用于按账户币种估值已实现 PnL 的 FX 报价。仅在实际需要时才要求 FX：资产已使用账户币种时不需要，未处于 PnL 控制下的账户也不需要。",
     "save": "保存"
   },
   "duration": {

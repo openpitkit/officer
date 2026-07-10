@@ -178,6 +178,24 @@ func TestFilterDataLimitsRespectAccountSelectorAndGlobalRows(t *testing.T) {
 	}
 }
 
+func TestFilterDataSpotFundsPnlBoundsIncludeSelectedAccountsGroup(t *testing.T) {
+	data := fixtureData()
+	filtered := FilterData(data, Scope{
+		Sections: []Section{SectionRiskLimits},
+		Accounts: EntitySelector{Accounts: []string{"acc-1"}},
+	})
+	if len(filtered.SpotFundsPnlBoundsLimits) != 1 {
+		t.Fatalf("spotFundsPnlBoundsLimits = %+v, want one grp-1 barrier",
+			filtered.SpotFundsPnlBoundsLimits)
+	}
+	got := filtered.SpotFundsPnlBoundsLimits[0]
+	if got.Scope != domain.ScopeAccountGroup ||
+		got.AccountGroup != "grp-1" ||
+		got.AccountCurrency != "USD" {
+		t.Fatalf("spotFundsPnlBoundsLimit = %+v, want grp-1/USD group barrier", got)
+	}
+}
+
 func TestFilterDataActivityHistoryKeepsOnlySelectedOrderChildren(t *testing.T) {
 	data := fixtureData()
 	filtered := FilterData(data, Scope{
@@ -296,6 +314,20 @@ func fixtureData() Data {
 			{Scope: domain.ScopeBroker, MaxQuantity: "1000"},
 			{Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL", MaxQuantity: "100"},
 			{Scope: domain.ScopeAccountAsset, Account: "acc-2", Asset: "AAPL", MaxQuantity: "200"},
+		},
+		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
+			{
+				Scope:           domain.ScopeAccountGroup,
+				AccountGroup:    "grp-1",
+				AccountCurrency: "USD",
+				LowerBound:      "-100",
+			},
+			{
+				Scope:           domain.ScopeAccountGroup,
+				AccountGroup:    "grp-2",
+				AccountCurrency: "USD",
+				LowerBound:      "-200",
+			},
 		},
 		Adjustments: []domain.AccountAdjustmentRecord{
 			{ExternalID: mustXID(a1Bytes()), Account: "acc-1", Asset: "USD", At: now},

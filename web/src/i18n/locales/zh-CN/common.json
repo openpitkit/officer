@@ -305,7 +305,7 @@
       },
       "trades": {
         "description": "成交仅支持导出。第一行为表头。",
-        "columns": "external_id,order_external_id,at,account_code,source,principal,base_asset,quote_asset,side,quantity,price,lock_price"
+        "columns": "external_id,order_external_id,at,account_code,source,principal,base_asset,quote_asset,side,quantity,price,lock_price,commission_amount,commission_currency"
       }
     },
     "entities": {

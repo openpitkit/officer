@@ -1446,6 +1446,42 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /accounts/{code}/balances/realized-pnl:
+    parameters:
+      - $ref: "#/components/parameters/AccountCode"
+    put:
+      operationId: setBalanceRealizedPnl
+      summary: Set realized P&L for a balance row
+      description: >
+        Stores the current realized P&L snapshot for one per-(account, asset)
+        balance row as an Officer control-plane record. This endpoint does not
+        call the SDK account adjustment API and does not seed the SpotFunds
+        account-currency P&L kill-switch accumulator.
+      tags: [balances]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BalanceRealizedPnlRequest"
+      responses:
+        "200":
+          description: Updated balance row.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [balance]
+                properties:
+                  balance:
+                    $ref: "#/components/schemas/Balance"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   # ---------------------------------------------------------------------------
   # Balances
   # ---------------------------------------------------------------------------
@@ -2057,19 +2093,24 @@ paths:
                 lockPrice:
                   type: string
                   description: Lock price used for fund reservation - exact decimal string.
-                realizedPnl:
-                  type: string
+                commission:
+                  type: object
                   description: >
-                    Realized P&L delta this fill contributes, in the settlement
-                    asset, signed - exact decimal string. Accumulated by the P&L-
-                    bounds kill-switch. Omitted or empty means zero (e.g. a
-                    position-opening buy realizes nothing).
-                fee:
-                  type: string
-                  description: >
-                    Fee (negative) or rebate (positive) for this fill, in the
-                    settlement asset - exact decimal string. Omitted or empty
-                    means zero.
+                    Optional commission for this fill. `amount` and `currency`
+                    must be provided together; Officer forwards them to the SDK
+                    as one structured value and does not convert currencies.
+                    Commission is accepted only when `quantity` and `price`
+                    create a trade.
+                  required: [amount, currency]
+                  properties:
+                    amount:
+                      type: string
+                      description: >
+                        Fee (negative) or rebate (positive) - exact decimal
+                        string.
+                    currency:
+                      type: string
+                      description: Commission currency code.
                 force:
                   type: boolean
                   description: >
@@ -2252,7 +2293,8 @@ paths:
       operationId: listLimits
       summary: List typed risk limit barriers
       description: >
-        Returns the typed limit barriers (rate, order-size, and P&L-bounds)
+        Returns the typed limit barriers (rate, order-size, P&L-bounds, and
+        SpotFunds P&L-bounds)
         flattened into one sorted, paged policy list. Barriers reference accounts
         by code; no surrogate or engine id is involved.
       tags: [limits]
@@ -2262,9 +2304,19 @@ paths:
           description: Filter by exact account code.
           schema:
             type: string
+        - name: accountGroup
+          in: query
+          description: Filter by exact account-group code.
+          schema:
+            type: string
         - name: asset
           in: query
           description: Filter by exact asset code.
+          schema:
+            type: string
+        - name: accountCurrency
+          in: query
+          description: Filter by exact SpotFunds account-currency code.
           schema:
             type: string
         - name: policy
@@ -2272,13 +2324,13 @@ paths:
           description: Filter by policy kind.
           schema:
             type: string
-            enum: [all, rate, order_size, pnl_bounds]
+            enum: [all, rate, order_size, spot_funds_pnl_bounds]
             default: all
         - name: sort
           in: query
           schema:
             type: string
-            enum: [policy, scope, account, asset, maxOrders, maxQuantity, maxNotional, lowerBound, upperBound, initialPnl]
+            enum: [policy, scope, account, accountGroup, asset, accountCurrency, maxOrders, maxQuantity, maxNotional, lowerBound, upperBound, initialPnl]
           description: Policy list sort key. Unknown keys are rejected.
         - $ref: "#/components/parameters/SortOrder"
         - $ref: "#/components/parameters/LimitParam"
@@ -2316,7 +2368,7 @@ paths:
           description: Risk policy whose barrier should be deleted.
           schema:
             type: string
-            enum: [rate_limit, order_size_limit, pnl_bounds_kill_switch]
+            enum: [rate_limit, order_size_limit, spot_funds_pnl_bounds_kill_switch]
         - name: scope
           in: query
           required: true
@@ -2331,6 +2383,16 @@ paths:
         - name: asset
           in: query
           description: Asset-scoped barrier asset, or omit when not asset-scoped.
+          schema:
+            type: string
+        - name: accountGroup
+          in: query
+          description: Account-group-scoped barrier owner code.
+          schema:
+            type: string
+        - name: accountCurrency
+          in: query
+          description: SpotFunds account-currency axis.
           schema:
             type: string
       responses:
@@ -2407,28 +2469,28 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
-  /limits/pnl-bounds:
+  /limits/spot-funds-pnl-bounds:
     put:
-      operationId: putPnlBoundsLimit
-      summary: Upsert a P&L-bounds kill-switch barrier
+      operationId: putSpotFundsPnlBoundsLimit
+      summary: Upsert a SpotFunds P&L-bounds barrier
       tags: [limits]
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/PnlBoundsLimit"
+              $ref: "#/components/schemas/SpotFundsPnlBoundsLimit"
       responses:
         "200":
-          description: Normalized form of the stored P&L-bounds barrier.
+          description: Normalized form of the stored SpotFunds P&L-bounds barrier.
           content:
             application/json:
               schema:
                 type: object
-                required: [pnlBoundsLimit]
+                required: [spotFundsPnlBoundsLimit]
                 properties:
-                  pnlBoundsLimit:
-                    $ref: "#/components/schemas/PnlBoundsLimit"
+                  spotFundsPnlBoundsLimit:
+                    $ref: "#/components/schemas/SpotFundsPnlBoundsLimit"
         "400":
           $ref: "#/components/responses/ValidationError"
         "501":
@@ -4330,6 +4392,17 @@ components:
           type: string
           format: date-time
 
+    BalanceRealizedPnlRequest:
+      type: object
+      required: [asset, realizedPnl]
+      properties:
+        asset:
+          type: string
+          description: Asset whose per-(account, asset) balance row is updated.
+        realizedPnl:
+          type: string
+          description: Current realized P&L as an exact decimal string.
+
     # Adjustment
 
     AdjustmentAmount:
@@ -4370,6 +4443,12 @@ components:
         averageEntryPrice:
           type: string
           description: Exact decimal string.
+        realizedPnl:
+          type: string
+          description: >
+            Optional exact decimal snapshot for persisted cumulative realized
+            P&L on the adjusted asset. This is recorded with the adjustment
+            history and is not sent to the SDK account-adjustment API.
         balance:
           description: Requested available-balance change or target.
           $ref: "#/components/schemas/AdjustmentAmount"
@@ -4391,7 +4470,7 @@ components:
 
     AdjustmentAccepted:
       type: object
-      required: [balanceDelta, balanceResult, heldDelta, heldResult, incomingDelta, incomingResult]
+      required: [balanceDelta, balanceResult, heldDelta, heldResult, incomingDelta, incomingResult, realizedPnlResult]
       properties:
         balanceDelta:
           type: string
@@ -4411,6 +4490,16 @@ components:
         incomingResult:
           type: string
           description: Exact decimal string.
+        realizedPnlResult:
+          type: object
+          required: [delta, result]
+          properties:
+            delta:
+              type: string
+              description: Exact decimal string.
+            result:
+              type: string
+              description: Exact decimal string.
 
     ExecutionOutcome:
       type: object
@@ -4493,9 +4582,21 @@ components:
 
     # Order
 
+    Commission:
+      type: object
+      required: [amount, currency]
+      properties:
+        amount:
+          type: string
+          description: >
+            Fee (negative) or rebate (positive) as an exact decimal string.
+        currency:
+          type: string
+          description: Commission currency code.
+
     Order:
       type: object
-      required: [externalId, at, account, baseAsset, quoteAsset, side, amountKind, amountValue, leavesQuantity, price, status, source, displayPrices, signed]
+      required: [externalId, at, account, baseAsset, quoteAsset, side, amountKind, amountValue, commissionSubtotals, leavesQuantity, price, status, source, displayPrices, signed]
       properties:
         externalId:
           description: The order's opaque public handle.
@@ -4520,6 +4621,13 @@ components:
         amountValue:
           type: string
           description: Exact decimal string.
+        commissionSubtotals:
+          type: array
+          items:
+            $ref: "#/components/schemas/Commission"
+          description: >
+            Per-order commission totals grouped by commission currency. Officer
+            does not convert or collapse currencies.
         leavesQuantity:
           type: string
           description: >
@@ -4642,6 +4750,8 @@ components:
         fillLockPrice:
           type: string
           description: Exact decimal string; present on fill events.
+        commission:
+          $ref: "#/components/schemas/Commission"
 
     # Trade
 
@@ -4679,6 +4789,8 @@ components:
         lockPrice:
           type: string
           description: Exact decimal string.
+        commission:
+          $ref: "#/components/schemas/Commission"
         source:
           type: string
           enum: [panel, api, mcp, system]
@@ -4804,16 +4916,37 @@ components:
     LimitScope:
       type: string
       description: >
-        Policy scope discriminator: `broker` (global), `asset`, `account`, or
-        `account_asset`.
+        Policy scope discriminator: `broker` (global), `global`, `asset`,
+        `account`, `account_group`, or `account_asset`.
+      enum: [broker, global, asset, account, account_group, account_asset]
+
+    RateLimitScope:
+      type: string
+      description: >
+        Rate-limit scope discriminator: `broker` (global), `asset`, `account`,
+        or `account_asset`.
       enum: [broker, asset, account, account_asset]
+
+    OrderSizeLimitScope:
+      type: string
+      description: >
+        Order-size-limit scope discriminator: `broker` (global), `asset`, or
+        `account_asset`.
+      enum: [broker, asset, account_asset]
+
+    SpotFundsPnlBoundsScope:
+      type: string
+      description: >
+        SpotFunds P&L-bounds scope discriminator: `global`, `account_group`,
+        or `account`.
+      enum: [global, account_group, account]
 
     RateLimit:
       type: object
       required: [scope, account, asset, windowMs, maxOrders]
       properties:
         scope:
-          $ref: "#/components/schemas/LimitScope"
+          $ref: "#/components/schemas/RateLimitScope"
         account:
           type: string
           description: Account code this barrier applies to, or empty for a global barrier.
@@ -4835,7 +4968,7 @@ components:
       required: [scope, account, asset, maxQuantity, maxNotional]
       properties:
         scope:
-          $ref: "#/components/schemas/LimitScope"
+          $ref: "#/components/schemas/OrderSizeLimitScope"
         account:
           type: string
           description: Account code this barrier applies to, or empty for a global barrier.
@@ -4849,18 +4982,21 @@ components:
           type: string
           description: Maximum order notional - exact decimal string; empty when unset.
 
-    PnlBoundsLimit:
+    SpotFundsPnlBoundsLimit:
       type: object
-      required: [scope, account, asset, lowerBound, upperBound, initialPnl]
+      required: [scope, account, accountGroup, accountCurrency, lowerBound, upperBound, initialPnl]
       properties:
         scope:
-          $ref: "#/components/schemas/LimitScope"
+          $ref: "#/components/schemas/SpotFundsPnlBoundsScope"
         account:
           type: string
-          description: Account code this barrier applies to, or empty for a global barrier.
-        asset:
+          description: Account code this barrier applies to, or empty when not account-scoped.
+        accountGroup:
           type: string
-          description: Asset this barrier applies to, or empty when not asset-scoped.
+          description: Account group code this barrier applies to, or empty when not group-scoped.
+        accountCurrency:
+          type: string
+          description: Account-currency asset code for self-computed P&L.
         lowerBound:
           type: string
           description: Lower P&L bound - exact decimal string; empty when unset.
@@ -4869,11 +5005,11 @@ components:
           description: Upper P&L bound - exact decimal string; empty when unset.
         initialPnl:
           type: string
-          description: Seed P&L value - exact decimal string; empty when unset.
+          description: Account-scope seed P&L value - exact decimal string; empty means zero. Rejected for global and accountGroup scopes.
 
     AccountLimits:
       type: object
-      required: [rateLimits, orderSizeLimits, pnlBoundsLimits]
+      required: [rateLimits, orderSizeLimits, spotFundsPnlBoundsLimits]
       properties:
         rateLimits:
           type: array
@@ -4885,37 +5021,44 @@ components:
           description: Order-size barriers (always a non-null array).
           items:
             $ref: "#/components/schemas/OrderSizeLimit"
-        pnlBoundsLimits:
+        spotFundsPnlBoundsLimits:
           type: array
-          description: P&L-bounds kill-switch barriers (always a non-null array).
+          description: SpotFunds P&L-bounds barriers (always a non-null array).
           items:
-            $ref: "#/components/schemas/PnlBoundsLimit"
+            $ref: "#/components/schemas/SpotFundsPnlBoundsLimit"
 
     Policy:
       type: object
       description: >
         One typed barrier flattened into the unified policy list. The kind
         discriminator selects which member of values is present; the
-        scope/account/asset axes are shared across all kinds.
-      required: [kind, scope, account, asset, values]
+        scope/account/accountGroup/asset/accountCurrency axes are shared across
+        all kinds; unsupported axes are empty strings.
+      required: [kind, scope, account, accountGroup, asset, accountCurrency, values]
       properties:
         kind:
           type: string
           description: Policy kind discriminator.
-          enum: [rate_limit, order_size_limit, pnl_bounds_kill_switch]
+          enum: [rate_limit, order_size_limit, spot_funds_pnl_bounds_kill_switch]
         scope:
           $ref: "#/components/schemas/LimitScope"
         account:
           type: string
           description: Account code this barrier applies to, or empty for a global barrier.
+        accountGroup:
+          type: string
+          description: Account group code this barrier applies to, or empty when not group-scoped.
         asset:
           type: string
           description: Asset this barrier applies to, or empty when not asset-scoped.
+        accountCurrency:
+          type: string
+          description: SpotFunds account-currency asset code, or empty for non-SpotFunds policies.
         values:
           type: object
           description: >
-            Kind-specific values: exactly one sub-object is present, matching
-            kind.
+            Kind-specific values: exactly one of rate, orderSize, or
+            spotFundsPnlBounds is present, matching kind.
           properties:
             rate:
               type: object
@@ -4940,8 +5083,10 @@ components:
                 maxNotional:
                   type: string
                   description: Maximum order notional - exact decimal string; empty when unset.
-            pnlBounds:
+            spotFundsPnlBounds:
               type: object
+              description: >
+                Value payload for kind spot_funds_pnl_bounds_kill_switch.
               required: [lowerBound, upperBound, initialPnl]
               properties:
                 lowerBound:
@@ -5638,6 +5783,11 @@ components:
           type: string
         fillLockPrice:
           type: string
+        commission:
+          description: >
+            Structured per-fill commission (amount + currency) bound from the
+            settled trade; omitted when the fill carried none.
+          $ref: "#/components/schemas/Commission"
         leavesQuantity:
           type: string
         orderStatus:

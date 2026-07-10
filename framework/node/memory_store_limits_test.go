@@ -65,19 +65,19 @@ func (r *memoryRealm) ListPolicyRows(
 			})
 		}
 	}
-	if wantKind(store.PolicyKindPnlBounds) {
-		for _, limit := range r.pnlBoundsLimits {
-			if !textMatches(filter.Account, string(limit.Account)) ||
-				!textMatches(filter.Asset, limit.Asset) {
+	if wantKind(store.PolicyKindSpotFundsPnlBounds) {
+		for _, limit := range r.spotFundsPnlBoundsLimits {
+			if !textMatches(filter.Account, string(limit.Account)) {
 				continue
 			}
 			value := limit
 			out = append(out, store.PolicyListRow{
-				Kind:      store.PolicyKindPnlBounds,
-				Scope:     limit.Scope,
-				Account:   limit.Account,
-				Asset:     limit.Asset,
-				PnlBounds: &value,
+				Kind:               store.PolicyKindSpotFundsPnlBounds,
+				Scope:              limit.Scope,
+				Account:            limit.Account,
+				AccountGroup:       limit.AccountGroup,
+				AccountCurrency:    limit.AccountCurrency,
+				SpotFundsPnlBounds: &value,
 			})
 		}
 	}
@@ -97,6 +97,10 @@ func sortPolicyRows(rows []store.PolicyListRow, spec store.SortSpec) {
 		switch spec.Column {
 		case "account":
 			cmp = compareStrings(string(left.Account), string(right.Account))
+		case "accountCurrency":
+			cmp = compareStrings(left.AccountCurrency, right.AccountCurrency)
+		case "accountGroup":
+			cmp = compareStrings(left.AccountGroup, right.AccountGroup)
 		case "asset":
 			cmp = compareStrings(left.Asset, right.Asset)
 		case "initialPnl":
@@ -145,24 +149,24 @@ func policyMaxNotional(row store.PolicyListRow) string {
 }
 
 func policyLowerBound(row store.PolicyListRow) string {
-	if row.PnlBounds == nil {
-		return ""
+	if row.SpotFundsPnlBounds != nil {
+		return row.SpotFundsPnlBounds.LowerBound
 	}
-	return row.PnlBounds.LowerBound
+	return ""
 }
 
 func policyUpperBound(row store.PolicyListRow) string {
-	if row.PnlBounds == nil {
-		return ""
+	if row.SpotFundsPnlBounds != nil {
+		return row.SpotFundsPnlBounds.UpperBound
 	}
-	return row.PnlBounds.UpperBound
+	return ""
 }
 
 func policyInitialPnl(row store.PolicyListRow) string {
-	if row.PnlBounds == nil {
-		return ""
+	if row.SpotFundsPnlBounds != nil {
+		return row.SpotFundsPnlBounds.InitialPnl
 	}
-	return row.PnlBounds.InitialPnl
+	return ""
 }
 
 func (r *memoryRealm) ListRateLimits(
@@ -227,11 +231,11 @@ func (r *memoryRealm) DeleteOrderSizeLimit(
 	return nil
 }
 
-func (r *memoryRealm) ListPnlBoundsLimits(
+func (r *memoryRealm) ListSpotFundsPnlBoundsLimits(
 	_ context.Context, account domain.AccountID,
-) ([]domain.LimitPnlBounds, error) {
-	var out []domain.LimitPnlBounds
-	for _, limit := range r.pnlBoundsLimits {
+) ([]domain.LimitSpotFundsPnlBounds, error) {
+	var out []domain.LimitSpotFundsPnlBounds
+	for _, limit := range r.spotFundsPnlBoundsLimits {
 		if account == "" || limit.Account == account {
 			out = append(out, limit)
 		}
@@ -239,20 +243,29 @@ func (r *memoryRealm) ListPnlBoundsLimits(
 	return out, nil
 }
 
-func (r *memoryRealm) PutPnlBoundsLimit(
-	_ context.Context, limit domain.LimitPnlBounds,
+func (r *memoryRealm) PutSpotFundsPnlBoundsLimit(
+	_ context.Context, limit domain.LimitSpotFundsPnlBounds,
 ) error {
-	r.pnlBoundsLimits[limitKey(limit.Scope, limit.Account, limit.Asset)] = limit
+	r.spotFundsPnlBoundsLimits[spotFundsPnlBoundsLimitKey(
+		limit.Scope,
+		limit.Account,
+		limit.AccountGroup,
+		limit.AccountCurrency,
+	)] = limit
 	return nil
 }
 
-func (r *memoryRealm) DeletePnlBoundsLimit(
-	_ context.Context, scope domain.LimitScope, account domain.AccountID, asset string,
+func (r *memoryRealm) DeleteSpotFundsPnlBoundsLimit(
+	_ context.Context,
+	scope domain.LimitScope,
+	account domain.AccountID,
+	accountGroup string,
+	accountCurrency string,
 ) error {
-	key := limitKey(scope, account, asset)
-	if _, ok := r.pnlBoundsLimits[key]; !ok {
+	key := spotFundsPnlBoundsLimitKey(scope, account, accountGroup, accountCurrency)
+	if _, ok := r.spotFundsPnlBoundsLimits[key]; !ok {
 		return domain.ErrNotFound
 	}
-	delete(r.pnlBoundsLimits, key)
+	delete(r.spotFundsPnlBoundsLimits, key)
 	return nil
 }

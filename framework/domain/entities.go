@@ -355,6 +355,9 @@ type AdjustmentRequest struct {
 	Asset string `json:"asset"`
 	// AverageEntryPrice is an optional replacement for the avg-entry field.
 	AverageEntryPrice string `json:"average_entry_price,omitempty"`
+	// RealizedPnl is an optional replacement for the persisted cumulative
+	// realized P&L snapshot. It is not sent to the SDK adjustment API.
+	RealizedPnl string `json:"realized_pnl,omitempty"`
 	// Balance adjustment for the available field.
 	Balance *AdjustmentAmount `json:"balance,omitempty"`
 	// BalanceBounds optionally constrains the resulting balance.
@@ -585,6 +588,9 @@ type Order struct {
 	// raw bytes; nil when the order carried no lock. Display prices are derived
 	// later from the deserialized lock via the SDK; this package never decodes it.
 	Lock []byte
+	// CommissionSubtotals aggregates per-trade commissions by their own
+	// currencies. Empty when the order has no recorded commission.
+	CommissionSubtotals []Commission
 	// Account is the code of the account that placed the order.
 	Account AccountID
 	// Source is the channel that submitted the order.
@@ -595,6 +601,15 @@ type Order struct {
 	AmountKind OrderAmountKind
 	// Status is the current lifecycle state.
 	Status OrderStatus
+}
+
+// Commission is a fee or rebate amount paired with its currency.
+type Commission struct {
+	// Amount is the exact decimal commission amount. Negative values are fees;
+	// positive values are rebates.
+	Amount string `json:"amount"`
+	// Currency is the commission currency code.
+	Currency string `json:"currency"`
 }
 
 // AttestationRequestType names the trading request an attestation binds. Every
@@ -669,8 +684,10 @@ type OrderEventPayload struct {
 	// trade.
 	LeavesQuantity string `json:"leaves_quantity,omitempty"`
 	OrderStatus    string `json:"order_status,omitempty"`
-	RealizedPnl    string `json:"realized_pnl,omitempty"`
-	Fee            string `json:"fee,omitempty"`
+	// Commission is the structured per-fill commission copied from the report,
+	// preserving its own currency. Omitted when the fill carried none so fills
+	// without a commission serialize unchanged.
+	Commission *Commission `json:"commission,omitempty"`
 }
 
 // OrderEvent is one immutable record in an order's event stream. It is a machine
@@ -715,6 +732,9 @@ type Trade struct {
 	Price string
 	// LockPrice is the reference price used for PnL locking; empty if none.
 	LockPrice string
+	// Commission is the per-fill commission amount/currency pair, preserving its
+	// own currency independently from the fill's quote asset.
+	Commission *Commission
 	// Principal is the code of the principal who submitted the originating order;
 	// empty when the reference was cleared or none was recorded.
 	Principal string
@@ -790,14 +810,9 @@ type ExecutionReportInput struct {
 	// When present, the engine adapter passes it through instead of
 	// reconstructing a default-group lock from LockPrice.
 	Lock []byte
-	// RealizedPnl is the realized P&L delta this fill contributes, in the
-	// settlement asset, signed (exact decimal string). It is the per-fill amount
-	// the P&L-bounds kill-switch accumulates; empty means zero (e.g. a position-
-	// opening buy realizes nothing).
-	RealizedPnl string
-	// Fee is the fee (negative) or rebate (positive) for this fill, in the
-	// settlement asset (exact decimal string); empty means zero.
-	Fee string
+	// Commission is the optional per-fill commission. When set, both Amount and
+	// Currency must be present and are forwarded to the SDK as one value.
+	Commission *Commission
 	// Order is the opaque public handle of the Officer order this fill settles.
 	// The fill event and trade reference it, and the order's status is reflected
 	// from the fill.
@@ -944,6 +959,10 @@ type AttestationResult struct {
 	// FillLockPrice is the reference lock price used for the fill (execution
 	// report); empty otherwise.
 	FillLockPrice string `json:"fillLockPrice"`
+	// Commission is the structured per-fill commission (amount + currency) bound
+	// from the settled trade (execution report); nil otherwise. Emitted as null
+	// when absent so the canonical signed bytes stay deterministic.
+	Commission *Commission `json:"commission"`
 	// LeavesQuantity is the order's remaining open base quantity after the
 	// request; empty when not applicable.
 	LeavesQuantity string `json:"leavesQuantity"`

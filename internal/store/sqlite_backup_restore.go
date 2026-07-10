@@ -342,18 +342,32 @@ func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error 
 		}
 		rt.applyRuntime(backup.SectionRiskLimits, applied)
 	}
-	for _, l := range data.PnlBoundsLimits {
-		accountID, assetID, err := resolveLimitAxes(ctx, rt.tx, l.Account, l.Asset)
+	for _, l := range data.SpotFundsPnlBoundsLimits {
+		accountID, groupID, accountCurrencyID, err := resolveSpotFundsPnlBoundsAxes(
+			ctx,
+			rt.tx,
+			l.Account,
+			l.AccountGroup,
+			l.AccountCurrency,
+		)
 		if err != nil {
 			return err
 		}
-		applied, err := rt.putLimit(ctx, "limit_pnl_bound", l.Scope, accountID, assetID,
-			`INSERT INTO limit_pnl_bound
-			 (scope, account_id, asset_id, lower_bound, upper_bound, initial_pnl)
-			 VALUES (?, ?, ?, ?, ?, ?)`,
-			[]any{l.Scope, accountID, assetID,
+		applied, err := rt.putSpotFundsPnlBoundsLimit(
+			ctx,
+			l.Scope,
+			accountID,
+			groupID,
+			accountCurrencyID,
+			`INSERT INTO limit_spot_funds_pnl_bound
+			 (scope, account_id, account_group_id, account_currency_asset_id,
+			  lower_bound, upper_bound, initial_pnl)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			[]any{
+				l.Scope, accountID, groupID, accountCurrencyID,
 				nullableString(l.LowerBound), nullableString(l.UpperBound),
-				nullableString(l.InitialPnl)},
+				nullableString(l.InitialPnl),
+			},
 		)
 		if err != nil {
 			return err
@@ -395,6 +409,46 @@ func (rt *restoreTx) putLimit(
 	}
 	if _, err := rt.tx.ExecContext(ctx, insertSQL, insertArgs...); err != nil {
 		return 0, fmt.Errorf("store: restore insert %s: %w", table, err)
+	}
+	return 1, nil
+}
+
+func (rt *restoreTx) putSpotFundsPnlBoundsLimit(
+	ctx context.Context,
+	scope string,
+	accountID, groupID sql.NullInt64,
+	accountCurrencyID int64,
+	insertSQL string,
+	insertArgs []any,
+) (int, error) {
+	exists, err := rowExists(
+		ctx, rt.tx,
+		`SELECT 1 FROM limit_spot_funds_pnl_bound
+		 WHERE scope = ?
+		   AND account_id IS ?
+		   AND account_group_id IS ?
+		   AND account_currency_asset_id = ?`,
+		scope, accountID, groupID, accountCurrencyID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	if rt.skip(backup.SectionRiskLimits, exists) {
+		return 0, nil
+	}
+	if _, err := rt.tx.ExecContext(
+		ctx,
+		`DELETE FROM limit_spot_funds_pnl_bound
+		 WHERE scope = ?
+		   AND account_id IS ?
+		   AND account_group_id IS ?
+		   AND account_currency_asset_id = ?`,
+		scope, accountID, groupID, accountCurrencyID,
+	); err != nil {
+		return 0, fmt.Errorf("store: restore delete limit_spot_funds_pnl_bound: %w", err)
+	}
+	if _, err := rt.tx.ExecContext(ctx, insertSQL, insertArgs...); err != nil {
+		return 0, fmt.Errorf("store: restore insert limit_spot_funds_pnl_bound: %w", err)
 	}
 	return 1, nil
 }
@@ -880,14 +934,22 @@ func (rt *restoreTx) restoreTrade(ctx context.Context, t domain.Trade) error {
 	if rt.skipMachine(backup.SectionActivityHistory, exists) {
 		return nil
 	}
+	// Validate the commission before persisting: an archived one-sided or
+	// malformed commission is failed here rather than deferred to a later read,
+	// where a single bad row breaks the CommissionSubtotals rollup.
+	if err := validateCommission(t.Commission); err != nil {
+		return fmt.Errorf("store: restore trade %q: %w", t.ExternalID, err)
+	}
 	if _, err := rt.tx.ExecContext(
 		ctx,
 		`INSERT OR REPLACE INTO trade
 		 (external_id, order_id, account_id, base_asset_id, quote_asset_id,
-		  principal_id, at, source, side, quantity, price, lock_price)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  principal_id, at, source, side, quantity, price, lock_price,
+		  commission_amount, commission_currency)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.ExternalID.Bytes(), orderID, accountID, baseID, quoteID, principalID,
 		atOrNow(t.At), string(t.Source), string(t.Side), t.Quantity, t.Price, t.LockPrice,
+		commissionAmount(t.Commission), commissionCurrency(t.Commission),
 	); err != nil {
 		return fmt.Errorf("store: restore trade %q: %w", t.ExternalID, err)
 	}

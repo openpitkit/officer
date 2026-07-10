@@ -15,13 +15,5 @@
 #
 # Please see https://openpit.dev and the OWNERS file for details.
 
-# CI-only aggregate recipes, invoked from .github/workflows/* via:
-#   just --justfile pipeline.just <recipe>. Imports the project justfile.
-
-import 'justfile'
-
-# Go lint, build, and test against the published OpenPit module.
-ci-go: check-go-dry-release
-
-# JS/TypeScript install, lint, build, and unit tests.
-ci-js: frontend-ci-install check-js
+# Keep text files stable across Windows and POSIX checkouts.
+* text=auto eol=lf

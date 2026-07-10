@@ -127,24 +127,26 @@ type orderSizeLimitDTO struct {
 	MaxNotional string `json:"maxNotional"`
 }
 
-// pnlBoundsLimitDTO is the wire shape of a P&L-bounds kill-switch barrier. The
-// bounds and seed are exact decimal strings; an unset value is the empty string.
-type pnlBoundsLimitDTO struct {
-	Scope      string `json:"scope"`
-	Account    string `json:"account"`
-	Asset      string `json:"asset"`
-	LowerBound string `json:"lowerBound"`
-	UpperBound string `json:"upperBound"`
-	InitialPnl string `json:"initialPnl"`
+// spotFundsPnlBoundsLimitDTO is the wire shape of a SpotFunds self-computed
+// P&L-bounds barrier. AccountCurrency is the account-currency axis; it is not
+// the legacy asset axis. InitialPnl is accepted only on account scope.
+type spotFundsPnlBoundsLimitDTO struct {
+	Scope           string `json:"scope"`
+	Account         string `json:"account"`
+	AccountGroup    string `json:"accountGroup"`
+	AccountCurrency string `json:"accountCurrency"`
+	LowerBound      string `json:"lowerBound"`
+	UpperBound      string `json:"upperBound"`
+	InitialPnl      string `json:"initialPnl"`
 }
 
 // accountLimitsDTO is the per-policy view of an account's typed barriers,
 // returned by the account-state and limit-list endpoints. Each slice is always
 // a non-nil JSON array.
 type accountLimitsDTO struct {
-	RateLimits      []rateLimitDTO      `json:"rateLimits"`
-	OrderSizeLimits []orderSizeLimitDTO `json:"orderSizeLimits"`
-	PnlBoundsLimits []pnlBoundsLimitDTO `json:"pnlBoundsLimits"`
+	RateLimits               []rateLimitDTO               `json:"rateLimits"`
+	OrderSizeLimits          []orderSizeLimitDTO          `json:"orderSizeLimits"`
+	SpotFundsPnlBoundsLimits []spotFundsPnlBoundsLimitDTO `json:"spotFundsPnlBoundsLimits"`
 }
 
 // policyRateValuesDTO carries the rate-limit-specific values of a policy row.
@@ -169,23 +171,26 @@ type policyPnlBoundsValuesDTO struct {
 }
 
 // policyValuesDTO is the heterogeneous value payload of a policy row: exactly
-// one of the three sub-objects is present, matching the row's kind. The common
+// one of the four sub-objects is present, matching the row's kind. The common
 // scope/account/asset axes live on policyDTO, not here.
 type policyValuesDTO struct {
-	Rate      *policyRateValuesDTO      `json:"rate,omitempty"`
-	OrderSize *policyOrderSizeValuesDTO `json:"orderSize,omitempty"`
-	PnlBounds *policyPnlBoundsValuesDTO `json:"pnlBounds,omitempty"`
+	Rate               *policyRateValuesDTO      `json:"rate,omitempty"`
+	OrderSize          *policyOrderSizeValuesDTO `json:"orderSize,omitempty"`
+	SpotFundsPnlBounds *policyPnlBoundsValuesDTO `json:"spotFundsPnlBounds,omitempty"`
 }
 
 // policyDTO is the wire shape of one typed barrier flattened into the unified
 // policy list. The kind discriminator selects which member of values is set;
-// the scope/account/asset axes are shared across all kinds.
+// the scope/account/accountGroup/asset/accountCurrency axes are shared across
+// all kinds.
 type policyDTO struct {
-	Kind    string          `json:"kind"`
-	Scope   string          `json:"scope"`
-	Account string          `json:"account"`
-	Asset   string          `json:"asset"`
-	Values  policyValuesDTO `json:"values"`
+	Kind            string          `json:"kind"`
+	Scope           string          `json:"scope"`
+	Account         string          `json:"account"`
+	AccountGroup    string          `json:"accountGroup"`
+	Asset           string          `json:"asset"`
+	AccountCurrency string          `json:"accountCurrency"`
+	Values          policyValuesDTO `json:"values"`
 }
 
 // auditDTO is the wire shape of a single audit row. An audit row is a machine
@@ -298,15 +303,19 @@ func toOrderSizeLimitDTO(l domain.LimitOrderSize) orderSizeLimitDTO {
 	}
 }
 
-// toPnlBoundsLimitDTO maps a domain.LimitPnlBounds onto the wire DTO.
-func toPnlBoundsLimitDTO(l domain.LimitPnlBounds) pnlBoundsLimitDTO {
-	return pnlBoundsLimitDTO{
-		Scope:      l.Scope,
-		Account:    string(l.Account),
-		Asset:      l.Asset,
-		LowerBound: l.LowerBound,
-		UpperBound: l.UpperBound,
-		InitialPnl: l.InitialPnl,
+// toSpotFundsPnlBoundsLimitDTO maps a domain.LimitSpotFundsPnlBounds onto the
+// wire DTO.
+func toSpotFundsPnlBoundsLimitDTO(
+	l domain.LimitSpotFundsPnlBounds,
+) spotFundsPnlBoundsLimitDTO {
+	return spotFundsPnlBoundsLimitDTO{
+		Scope:           l.Scope,
+		Account:         string(l.Account),
+		AccountGroup:    l.AccountGroup,
+		AccountCurrency: l.AccountCurrency,
+		LowerBound:      l.LowerBound,
+		UpperBound:      l.UpperBound,
+		InitialPnl:      l.InitialPnl,
 	}
 }
 
@@ -321,14 +330,18 @@ func toAccountLimitsDTO(limits node.AccountLimits) accountLimitsDTO {
 	for _, l := range limits.OrderSizeLimits {
 		sizes = append(sizes, toOrderSizeLimitDTO(l))
 	}
-	pnls := make([]pnlBoundsLimitDTO, 0, len(limits.PnlBoundsLimits))
-	for _, l := range limits.PnlBoundsLimits {
-		pnls = append(pnls, toPnlBoundsLimitDTO(l))
+	spotFundsPnls := make(
+		[]spotFundsPnlBoundsLimitDTO,
+		0,
+		len(limits.SpotFundsPnlBoundsLimits),
+	)
+	for _, l := range limits.SpotFundsPnlBoundsLimits {
+		spotFundsPnls = append(spotFundsPnls, toSpotFundsPnlBoundsLimitDTO(l))
 	}
 	return accountLimitsDTO{
-		RateLimits:      rates,
-		OrderSizeLimits: sizes,
-		PnlBoundsLimits: pnls,
+		RateLimits:               rates,
+		OrderSizeLimits:          sizes,
+		SpotFundsPnlBoundsLimits: spotFundsPnls,
 	}
 }
 
@@ -337,10 +350,12 @@ func toAccountLimitsDTO(limits node.AccountLimits) accountLimitsDTO {
 // row's kind, rendered with the same per-kind fields as toAccountLimitsDTO.
 func toPolicyRowDTO(row store.PolicyListRow) policyDTO {
 	dto := policyDTO{
-		Kind:    string(row.Kind),
-		Scope:   row.Scope,
-		Account: string(row.Account),
-		Asset:   row.Asset,
+		Kind:            string(row.Kind),
+		Scope:           row.Scope,
+		Account:         string(row.Account),
+		AccountGroup:    row.AccountGroup,
+		Asset:           row.Asset,
+		AccountCurrency: row.AccountCurrency,
 	}
 	switch {
 	case row.Rate != nil:
@@ -353,11 +368,11 @@ func toPolicyRowDTO(row store.PolicyListRow) policyDTO {
 			MaxQuantity: row.OrderSize.MaxQuantity,
 			MaxNotional: row.OrderSize.MaxNotional,
 		}
-	case row.PnlBounds != nil:
-		dto.Values.PnlBounds = &policyPnlBoundsValuesDTO{
-			LowerBound: row.PnlBounds.LowerBound,
-			UpperBound: row.PnlBounds.UpperBound,
-			InitialPnl: row.PnlBounds.InitialPnl,
+	case row.SpotFundsPnlBounds != nil:
+		dto.Values.SpotFundsPnlBounds = &policyPnlBoundsValuesDTO{
+			LowerBound: row.SpotFundsPnlBounds.LowerBound,
+			UpperBound: row.SpotFundsPnlBounds.UpperBound,
+			InitialPnl: row.SpotFundsPnlBounds.InitialPnl,
 		}
 	}
 	return dto
@@ -841,6 +856,13 @@ type balanceDTO struct {
 	AverageEntryPrice string    `json:"averageEntryPrice"`
 }
 
+// balanceRealizedPnlRequestDTO is the wire body for updating the realized P&L
+// snapshot on one per-(account, asset) balance row.
+type balanceRealizedPnlRequestDTO struct {
+	Asset       string `json:"asset"`
+	RealizedPnl string `json:"realizedPnl"`
+}
+
 // toBalanceDTO maps a domain.Balance onto the wire DTO.
 func toBalanceDTO(b domain.Balance) balanceDTO {
 	return balanceDTO{
@@ -887,6 +909,7 @@ type adjustmentRequestDTO struct {
 	ExternalID        string               `json:"externalId,omitempty"`
 	Asset             string               `json:"asset"`
 	AverageEntryPrice string               `json:"averageEntryPrice,omitempty"`
+	RealizedPnl       string               `json:"realizedPnl,omitempty"`
 }
 
 // adjustmentOutcomeDTO is the accept/reject outcome of an adjustment record.
@@ -898,12 +921,18 @@ type adjustmentOutcomeDTO struct {
 
 // adjustmentAcceptedDTO carries the per-field delta and absolute result.
 type adjustmentAcceptedDTO struct {
-	BalanceDelta   string `json:"balanceDelta"`
-	BalanceResult  string `json:"balanceResult"`
-	HeldDelta      string `json:"heldDelta"`
-	HeldResult     string `json:"heldResult"`
-	IncomingDelta  string `json:"incomingDelta"`
-	IncomingResult string `json:"incomingResult"`
+	BalanceDelta      string                         `json:"balanceDelta"`
+	BalanceResult     string                         `json:"balanceResult"`
+	HeldDelta         string                         `json:"heldDelta"`
+	HeldResult        string                         `json:"heldResult"`
+	IncomingDelta     string                         `json:"incomingDelta"`
+	IncomingResult    string                         `json:"incomingResult"`
+	RealizedPnlResult adjustmentRealizedPnlResultDTO `json:"realizedPnlResult"`
+}
+
+type adjustmentRealizedPnlResultDTO struct {
+	Delta  string `json:"delta"`
+	Result string `json:"result"`
 }
 
 // adjustmentRejectedDTO carries the structured rejection reason.
@@ -936,6 +965,7 @@ func fromAdjustmentRequestDTO(dto adjustmentRequestDTO) domain.AdjustmentRequest
 	return domain.AdjustmentRequest{
 		Asset:             dto.Asset,
 		AverageEntryPrice: dto.AverageEntryPrice,
+		RealizedPnl:       dto.RealizedPnl,
 		Balance:           fromAdjustmentAmountDTO(dto.Balance),
 		BalanceBounds:     fromAdjustmentBoundsDTO(dto.BalanceBounds),
 		Held:              fromAdjustmentAmountDTO(dto.Held),
@@ -966,6 +996,7 @@ func toAdjustmentRequestDTO(req domain.AdjustmentRequest) adjustmentRequestDTO {
 	return adjustmentRequestDTO{
 		Asset:             req.Asset,
 		AverageEntryPrice: req.AverageEntryPrice,
+		RealizedPnl:       req.RealizedPnl,
 		Balance:           toAdjustmentAmountDTO(req.Balance),
 		BalanceBounds:     toAdjustmentBoundsDTO(req.BalanceBounds),
 		Held:              toAdjustmentAmountDTO(req.Held),
@@ -997,12 +1028,13 @@ func toAdjustmentDTO(r domain.AccountAdjustmentRecord) adjustmentDTO {
 	outcome := adjustmentOutcomeDTO{}
 	if r.Accepted != nil {
 		outcome.Accepted = &adjustmentAcceptedDTO{
-			BalanceDelta:   r.Accepted.BalanceDelta,
-			BalanceResult:  r.Accepted.BalanceResult,
-			HeldDelta:      r.Accepted.HeldDelta,
-			HeldResult:     r.Accepted.HeldResult,
-			IncomingDelta:  r.Accepted.IncomingDelta,
-			IncomingResult: r.Accepted.IncomingResult,
+			BalanceDelta:      r.Accepted.BalanceDelta,
+			BalanceResult:     r.Accepted.BalanceResult,
+			HeldDelta:         r.Accepted.HeldDelta,
+			HeldResult:        r.Accepted.HeldResult,
+			IncomingDelta:     r.Accepted.IncomingDelta,
+			IncomingResult:    r.Accepted.IncomingResult,
+			RealizedPnlResult: toAdjustmentRealizedPnlResultDTO(r),
 		}
 	}
 	if r.Rejected != nil {
@@ -1028,6 +1060,19 @@ func toAdjustmentDTO(r domain.AccountAdjustmentRecord) adjustmentDTO {
 	}
 }
 
+// toAdjustmentRealizedPnlResultDTO surfaces the persisted realized-P&L result and
+// delta verbatim from the accepted outcome, which the node guarantees carries the
+// authoritative persisted value; no fallback to the request is applied, so delta
+// and result stay mutually consistent.
+func toAdjustmentRealizedPnlResultDTO(
+	r domain.AccountAdjustmentRecord,
+) adjustmentRealizedPnlResultDTO {
+	return adjustmentRealizedPnlResultDTO{
+		Delta:  r.Accepted.RealizedPnlDelta,
+		Result: r.Accepted.RealizedPnlResult,
+	}
+}
+
 // --- order ------------------------------------------------------------------
 
 // orderDTO is the wire shape of one Officer-side order record. An order is a
@@ -1037,15 +1082,16 @@ func toAdjustmentDTO(r domain.AccountAdjustmentRecord) adjustmentDTO {
 // last); the raw lock is never serialized. All monetary and size values are
 // exact decimal strings passed through verbatim.
 type orderDTO struct {
-	At          time.Time `json:"at"`
-	ExternalID  string    `json:"externalId"`
-	Account     string    `json:"account"`
-	Principal   string    `json:"principal,omitempty"`
-	BaseAsset   string    `json:"baseAsset"`
-	QuoteAsset  string    `json:"quoteAsset"`
-	Side        string    `json:"side"`
-	AmountKind  string    `json:"amountKind"`
-	AmountValue string    `json:"amountValue"`
+	At                  time.Time       `json:"at"`
+	ExternalID          string          `json:"externalId"`
+	Account             string          `json:"account"`
+	Principal           string          `json:"principal,omitempty"`
+	BaseAsset           string          `json:"baseAsset"`
+	QuoteAsset          string          `json:"quoteAsset"`
+	Side                string          `json:"side"`
+	AmountKind          string          `json:"amountKind"`
+	AmountValue         string          `json:"amountValue"`
+	CommissionSubtotals []commissionDTO `json:"commissionSubtotals"`
 	// LeavesQuantity is the persisted remaining open base quantity (exact decimal
 	// string). It is read from the stored order/report data as-is.
 	LeavesQuantity string   `json:"leavesQuantity"`
@@ -1056,6 +1102,11 @@ type orderDTO struct {
 	// Signed is the order-level rollup: whether at least one of the order's events
 	// carries a persisted Ed25519-signed attestation.
 	Signed bool `json:"signed"`
+}
+
+type commissionDTO struct {
+	Amount   string `json:"amount"`
+	Currency string `json:"currency"`
 }
 
 // toOrderDTO maps a domain.Order onto the wire DTO. The display prices are
@@ -1071,15 +1122,18 @@ func toOrderDTO(o domain.Order, signed bool) orderDTO {
 		prices = []string{}
 	}
 	return orderDTO{
-		At:             o.At,
-		ExternalID:     o.ExternalID.String(),
-		Account:        string(o.Account),
-		Principal:      o.Principal,
-		BaseAsset:      o.BaseAsset,
-		QuoteAsset:     o.QuoteAsset,
-		Side:           string(o.Side),
-		AmountKind:     string(o.AmountKind),
-		AmountValue:    o.AmountValue,
+		At:          o.At,
+		ExternalID:  o.ExternalID.String(),
+		Account:     string(o.Account),
+		Principal:   o.Principal,
+		BaseAsset:   o.BaseAsset,
+		QuoteAsset:  o.QuoteAsset,
+		Side:        string(o.Side),
+		AmountKind:  string(o.AmountKind),
+		AmountValue: o.AmountValue,
+		CommissionSubtotals: toCommissionDTOs(
+			o.CommissionSubtotals,
+		),
 		LeavesQuantity: o.Leaves,
 		Price:          o.Price,
 		Status:         string(o.Status),
@@ -1169,6 +1223,7 @@ type attestationResultDTO struct {
 	FillQuantity   string                `json:"fillQuantity"`
 	FillPrice      string                `json:"fillPrice"`
 	FillLockPrice  string                `json:"fillLockPrice"`
+	Commission     *commissionDTO        `json:"commission,omitempty"`
 	LeavesQuantity string                `json:"leavesQuantity"`
 	OrderStatus    string                `json:"orderStatus"`
 	Blocks         []attestationBlockDTO `json:"blocks"`
@@ -1320,22 +1375,23 @@ func toCheckResultDTO(r domain.CheckResult) checkResultDTO {
 // the event is unattested, so the web can render a per-event key icon and open
 // the per-event reproduction.
 type orderEventDTO struct {
-	At            time.Time `json:"at"`
-	ExternalID    string    `json:"externalId"`
-	Order         string    `json:"order"`
-	Type          string    `json:"type"`
-	Source        string    `json:"source"`
-	Alg           string    `json:"alg,omitempty"`
-	Principal     string    `json:"principal,omitempty"`
-	RejectCode    string    `json:"rejectCode,omitempty"`
-	RejectScope   string    `json:"rejectScope,omitempty"`
-	RejectPolicy  string    `json:"rejectPolicy,omitempty"`
-	RejectReason  string    `json:"rejectReason,omitempty"`
-	RejectDetails string    `json:"rejectDetails,omitempty"`
-	FillQuantity  string    `json:"fillQuantity,omitempty"`
-	FillPrice     string    `json:"fillPrice,omitempty"`
-	FillLockPrice string    `json:"fillLockPrice,omitempty"`
-	Signed        bool      `json:"signed"`
+	At            time.Time      `json:"at"`
+	ExternalID    string         `json:"externalId"`
+	Order         string         `json:"order"`
+	Type          string         `json:"type"`
+	Source        string         `json:"source"`
+	Alg           string         `json:"alg,omitempty"`
+	Principal     string         `json:"principal,omitempty"`
+	RejectCode    string         `json:"rejectCode,omitempty"`
+	RejectScope   string         `json:"rejectScope,omitempty"`
+	RejectPolicy  string         `json:"rejectPolicy,omitempty"`
+	RejectReason  string         `json:"rejectReason,omitempty"`
+	RejectDetails string         `json:"rejectDetails,omitempty"`
+	FillQuantity  string         `json:"fillQuantity,omitempty"`
+	FillPrice     string         `json:"fillPrice,omitempty"`
+	FillLockPrice string         `json:"fillLockPrice,omitempty"`
+	Commission    *commissionDTO `json:"commission,omitempty"`
+	Signed        bool           `json:"signed"`
 }
 
 // toOrderEventDTO maps a domain.OrderEvent onto the wire DTO. Both the event and
@@ -1357,6 +1413,7 @@ func toOrderEventDTO(e domain.OrderEvent) orderEventDTO {
 		FillQuantity:  e.Payload.FillQuantity,
 		FillPrice:     e.Payload.FillPrice,
 		FillLockPrice: e.Payload.FillLockPrice,
+		Commission:    toCommissionDTO(e.Payload.Commission),
 	}
 	if e.Attestation != nil {
 		dto.Alg = e.Attestation.Alg
@@ -1370,18 +1427,19 @@ func toOrderEventDTO(e domain.OrderEvent) orderEventDTO {
 // tradeDTO is the wire shape of one per-fill trade record. All monetary values
 // are exact decimal strings passed through verbatim.
 type tradeDTO struct {
-	At         time.Time `json:"at"`
-	ExternalID string    `json:"externalId"`
-	Order      string    `json:"order"`
-	Account    string    `json:"account"`
-	Principal  string    `json:"principal,omitempty"`
-	BaseAsset  string    `json:"baseAsset"`
-	QuoteAsset string    `json:"quoteAsset"`
-	Side       string    `json:"side"`
-	Quantity   string    `json:"quantity"`
-	Price      string    `json:"price"`
-	LockPrice  string    `json:"lockPrice"`
-	Source     string    `json:"source"`
+	At         time.Time      `json:"at"`
+	ExternalID string         `json:"externalId"`
+	Order      string         `json:"order"`
+	Account    string         `json:"account"`
+	Principal  string         `json:"principal,omitempty"`
+	BaseAsset  string         `json:"baseAsset"`
+	QuoteAsset string         `json:"quoteAsset"`
+	Side       string         `json:"side"`
+	Quantity   string         `json:"quantity"`
+	Price      string         `json:"price"`
+	LockPrice  string         `json:"lockPrice"`
+	Commission *commissionDTO `json:"commission,omitempty"`
+	Source     string         `json:"source"`
 }
 
 // toTradeDTO maps a domain.Trade onto the wire DTO. Both the trade and its
@@ -1399,8 +1457,27 @@ func toTradeDTO(t domain.Trade) tradeDTO {
 		Quantity:   t.Quantity,
 		Price:      t.Price,
 		LockPrice:  t.LockPrice,
+		Commission: toCommissionDTO(t.Commission),
 		Source:     string(t.Source),
 	}
+}
+
+func toCommissionDTO(c *domain.Commission) *commissionDTO {
+	if c == nil {
+		return nil
+	}
+	return &commissionDTO{Amount: c.Amount, Currency: c.Currency}
+}
+
+func toCommissionDTOs(in []domain.Commission) []commissionDTO {
+	if in == nil {
+		return []commissionDTO{}
+	}
+	out := make([]commissionDTO, 0, len(in))
+	for _, c := range in {
+		out = append(out, *toCommissionDTO(&c))
+	}
+	return out
 }
 
 // executionResultDTO is the wire shape of one execution-report outcome: the

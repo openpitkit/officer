@@ -102,20 +102,25 @@ const POLICY_FILTER_KIND: Record<
 > = {
   rate: "rate_limit",
   order_size: "order_size_limit",
-  pnl_bounds: "pnl_bounds_kill_switch",
+  spot_funds_pnl_bounds: "spot_funds_pnl_bounds_kill_switch",
 };
 
 const POLICY_FILTERS: Exclude<PolicyFilter, "all">[] = [
   "rate",
   "order_size",
-  "pnl_bounds",
+  "spot_funds_pnl_bounds",
 ];
 
 function policyFilterFromParams(params: URLSearchParams): PolicyFilter {
   const policy = params.get("policy");
-  return policy === "rate" || policy === "order_size" || policy === "pnl_bounds"
-    ? policy
-    : ALL;
+  if (
+    policy === "rate" ||
+    policy === "order_size" ||
+    policy === "spot_funds_pnl_bounds"
+  ) {
+    return policy;
+  }
+  return ALL;
 }
 
 function sortFromParams(params: URLSearchParams): {
@@ -171,6 +176,21 @@ function PolicyDescription({ policy }: { policy: PolicyFilter }) {
   );
 }
 
+function policyRowHref(limit: Limit): string {
+  const query = new URLSearchParams();
+  if (limit.account !== "") {
+    query.set("account", limit.account);
+  }
+  if ((limit.accountGroup ?? "") !== "") {
+    query.set("accountGroup", limit.accountGroup ?? "");
+  }
+  if ((limit.accountCurrency ?? "") !== "") {
+    query.set("accountCurrency", limit.accountCurrency ?? "");
+  }
+  query.set("policy", limit.policy);
+  return `/policies?${query.toString()}`;
+}
+
 function DeleteConfirm({
   target,
   open,
@@ -201,7 +221,9 @@ function DeleteConfirm({
         policy: target.policy,
         scope: target.scope,
         account: target.account,
+        accountGroup: target.accountGroup,
         asset: target.asset,
+        accountCurrency: target.accountCurrency,
       });
       onOpenChange(false);
       onDone();
@@ -224,9 +246,17 @@ function DeleteConfirm({
                 scope: scopeLabel(tc, target?.scope ?? ""),
                 account: target?.account
                   ? t("delete.accountFragment", { account: target.account })
+                  : target?.accountGroup
+                    ? t("delete.accountGroupFragment", {
+                        accountGroup: target.accountGroup,
+                      })
                   : "",
                 asset: target?.asset
                   ? t("delete.assetFragment", { asset: target.asset })
+                  : target?.accountCurrency
+                    ? t("delete.accountCurrencyFragment", {
+                        accountCurrency: target.accountCurrency,
+                      })
                   : "",
               })}
             </span>
@@ -355,97 +385,103 @@ function PoliciesTable({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {limits.map((limit) => (
-            <TableRow
-              key={`${limit.policy}|${limit.scope}|${limit.account}|${limit.asset}`}
-              className="hover:bg-transparent"
-            >
-              <TableCell>
-                <Badge variant="accent">{policyLabel(tc, limit.policy)}</Badge>
-              </TableCell>
-              <TableCell
-                className={`${SCOPE_COLUMN_CLASS} text-xs text-muted-lt`}
+          {limits.map((limit) => {
+            const accountAxis = limit.account || limit.accountGroup || "";
+            const assetAxis = limit.asset || limit.accountCurrency || "";
+            const isAccountFilterable = limit.account.length > 0;
+            const isAssetFilterable = limit.asset.length > 0;
+            return (
+              <TableRow
+                key={`${limit.policy}|${limit.scope}|${limit.account}|${limit.accountGroup ?? ""}|${limit.asset}|${limit.accountCurrency ?? ""}`}
+                className="hover:bg-transparent"
               >
-                {scopeLabel(tc, limit.scope)}
-              </TableCell>
-              <TableCell className="nums text-xs">
-                {limit.account ? (
-                  <div className="flex min-w-0 items-center gap-1">
-                    <IdCell
-                      value={limit.account}
-                      copyTitle={tc("rowActions.copyId")}
-                      copiedTitle={tc("rowActions.copiedId")}
+                <TableCell>
+                  <Badge variant="accent">{policyLabel(tc, limit.policy)}</Badge>
+                </TableCell>
+                <TableCell
+                  className={`${SCOPE_COLUMN_CLASS} text-xs text-muted-lt`}
+                >
+                  {scopeLabel(tc, limit.scope)}
+                </TableCell>
+                <TableCell className="nums text-xs">
+                  {accountAxis ? (
+                    <div className="flex min-w-0 items-center gap-1">
+                      <IdCell
+                        value={accountAxis}
+                        copyTitle={tc("rowActions.copyId")}
+                        copiedTitle={tc("rowActions.copiedId")}
+                      />
+                      {isAccountFilterable && (
+                        <span className="ml-auto flex shrink-0 items-center">
+                          <FilterByButton
+                            size={28}
+                            title={tc("rowActions.filterByTitle", {
+                              field: limit.account,
+                            })}
+                            href={absoluteAppUrl(
+                              `/policies?account=${encodeURIComponent(limit.account)}`,
+                            )}
+                            onClick={() => onFilterAccount(limit.account)}
+                          />
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    tc("value.none")
+                  )}
+                </TableCell>
+                <TableCell className="nums text-xs">
+                  {assetAxis ? (
+                    <div className="flex min-w-0 items-center gap-1">
+                      <span className="min-w-0 truncate">{assetAxis}</span>
+                      {isAssetFilterable && (
+                        <span className="ml-auto flex shrink-0 items-center">
+                          <FilterByButton
+                            size={28}
+                            title={tc("rowActions.filterByTitle", {
+                              field: limit.asset,
+                            })}
+                            href={absoluteAppUrl(
+                              `/policies?asset=${encodeURIComponent(limit.asset)}`,
+                            )}
+                            onClick={() => onFilterAsset(limit.asset)}
+                          />
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    tc("value.none")
+                  )}
+                </TableCell>
+                <TableCell>
+                  <ValueChips values={limit.values} />
+                </TableCell>
+                <TableCell className="text-right">
+                  <RowActions>
+                    <ShareLinkButton
+                      href={absoluteAppUrl(policyRowHref(limit))}
+                      title={tc("rowActions.shareTitle", {
+                        entity: policyLabel(tc, limit.policy),
+                      })}
+                      copiedTitle={tc("rowActions.copiedLink")}
                     />
-                    <span className="ml-auto flex shrink-0 items-center">
-                      <FilterByButton
-                        size={28}
-                        title={tc("rowActions.filterByTitle", {
-                          field: limit.account,
-                        })}
-                        href={absoluteAppUrl(
-                          `/policies?account=${encodeURIComponent(limit.account)}`,
-                        )}
-                        onClick={() => onFilterAccount(limit.account)}
-                      />
-                    </span>
-                  </div>
-                ) : (
-                  tc("value.none")
-                )}
-              </TableCell>
-              <TableCell className="nums text-xs">
-                {limit.asset ? (
-                  <div className="flex min-w-0 items-center gap-1">
-                    <span className="min-w-0 truncate">{limit.asset}</span>
-                    <span className="ml-auto flex shrink-0 items-center">
-                      <FilterByButton
-                        size={28}
-                        title={tc("rowActions.filterByTitle", {
-                          field: limit.asset,
-                        })}
-                        href={absoluteAppUrl(
-                          `/policies?asset=${encodeURIComponent(limit.asset)}`,
-                        )}
-                        onClick={() => onFilterAsset(limit.asset)}
-                      />
-                    </span>
-                  </div>
-                ) : (
-                  tc("value.none")
-                )}
-              </TableCell>
-              <TableCell>
-                <ValueChips values={limit.values} />
-              </TableCell>
-              <TableCell className="text-right">
-                <RowActions>
-                  <ShareLinkButton
-                    href={absoluteAppUrl(
-                      `/policies?account=${encodeURIComponent(
-                        limit.account,
-                      )}&policy=${encodeURIComponent(limit.policy)}`,
-                    )}
-                    title={tc("rowActions.shareTitle", {
-                      entity: policyLabel(tc, limit.policy),
-                    })}
-                    copiedTitle={tc("rowActions.copiedLink")}
-                  />
-                  <EditButton
-                    title={tc("rowActions.editTitle", {
-                      entity: policyLabel(tc, limit.policy),
-                    })}
-                    onClick={() => onEdit(limit)}
-                  />
-                  <DeleteButton
-                    title={tc("rowActions.deleteTitle", {
-                      entity: policyLabel(tc, limit.policy),
-                    })}
-                    onClick={() => onDelete(limit)}
-                  />
-                </RowActions>
-              </TableCell>
-            </TableRow>
-          ))}
+                    <EditButton
+                      title={tc("rowActions.editTitle", {
+                        entity: policyLabel(tc, limit.policy),
+                      })}
+                      onClick={() => onEdit(limit)}
+                    />
+                    <DeleteButton
+                      title={tc("rowActions.deleteTitle", {
+                        entity: policyLabel(tc, limit.policy),
+                      })}
+                      onClick={() => onDelete(limit)}
+                    />
+                  </RowActions>
+                </TableCell>
+              </TableRow>
+            );
+          })}
         </TableBody>
     </Table>
   );
@@ -454,13 +490,24 @@ function PoliciesTable({
 export function Limits() {
   const { t } = useTranslation("policies");
   const { t: tc } = useTranslation();
-  const { fetchAccounts, fetchAssets } = useOfficerApi();
+  const officerApi = useOfficerApi();
+  const { fetchAccounts, fetchAssets } = officerApi;
+  const fetchGroups =
+    "fetchGroups" in officerApi ? officerApi.fetchGroups : undefined;
   const [searchParams] = useSearchParams();
   const initialAccount = searchParams.get("account") ?? "";
+  const initialAccountGroup = searchParams.get("accountGroup") ?? "";
   const initialAsset = searchParams.get("asset") ?? "";
+  const initialAccountCurrency = searchParams.get("accountCurrency") ?? "";
 
   const [accountFilter, setAccountFilter] = useState(initialAccount);
+  const [accountGroupFilter, setAccountGroupFilter] = useState(
+    initialAccountGroup,
+  );
   const [assetFilter, setAssetFilter] = useState(initialAsset);
+  const [accountCurrencyFilter, setAccountCurrencyFilter] = useState(
+    initialAccountCurrency,
+  );
   const [accountDraft, setAccountDraft] = useState(initialAccount);
   const [assetDraft, setAssetDraft] = useState(initialAsset);
   const [policyFilter, setPolicyFilter] = useState<PolicyFilter>(() =>
@@ -477,12 +524,18 @@ export function Limits() {
   const deferredAccountDraft = useDeferredValue(accountDraft.trim());
   const deferredAssetDraft = useDeferredValue(assetDraft.trim());
   const hasActiveFilters =
-    accountFilter !== "" || assetFilter !== "" || policyFilter !== ALL;
+    accountFilter !== "" ||
+    accountGroupFilter !== "" ||
+    assetFilter !== "" ||
+    accountCurrencyFilter !== "" ||
+    policyFilter !== ALL;
   const clearFilters = () => {
     setAccountDraft("");
     setAccountFilter("");
+    setAccountGroupFilter("");
     setAssetDraft("");
     setAssetFilter("");
+    setAccountCurrencyFilter("");
     setPolicyFilter(ALL);
     setPage(0);
   };
@@ -491,7 +544,9 @@ export function Limits() {
     () => {
       const next: PolicyListFilters = {
         account: accountFilter || undefined,
+        accountGroup: accountGroupFilter || undefined,
         asset: assetFilter || undefined,
+        accountCurrency: accountCurrencyFilter || undefined,
         policy: policyFilter,
         sort: sort.sort,
         order: sort.order,
@@ -502,6 +557,8 @@ export function Limits() {
     },
     [
       accountFilter,
+      accountGroupFilter,
+      accountCurrencyFilter,
       assetFilter,
       page,
       policyFilter,
@@ -513,7 +570,7 @@ export function Limits() {
   const { load, reload } = useLimitsPage(filters);
   const rateCount = usePolicyCount("rate");
   const orderSizeCount = usePolicyCount("order_size");
-  const pnlBoundsCount = usePolicyCount("pnl_bounds");
+  const spotFundsPnlBoundsCount = usePolicyCount("spot_funds_pnl_bounds");
   const policyCounts = useMemo(() => {
     const next: Record<string, number> = {};
     if (rateCount.load.state === "ready") {
@@ -522,20 +579,21 @@ export function Limits() {
     if (orderSizeCount.load.state === "ready") {
       next[POLICY_FILTER_KIND.order_size] = orderSizeCount.load.data.total;
     }
-    if (pnlBoundsCount.load.state === "ready") {
-      next[POLICY_FILTER_KIND.pnl_bounds] = pnlBoundsCount.load.data.total;
+    if (spotFundsPnlBoundsCount.load.state === "ready") {
+      next[POLICY_FILTER_KIND.spot_funds_pnl_bounds] =
+        spotFundsPnlBoundsCount.load.data.total;
     }
     return next;
   }, [
     orderSizeCount.load,
-    pnlBoundsCount.load,
     rateCount.load,
+    spotFundsPnlBoundsCount.load,
   ]);
   const reloadPolicyCounts = useCallback(() => {
     rateCount.reload();
     orderSizeCount.reload();
-    pnlBoundsCount.reload();
-  }, [orderSizeCount, pnlBoundsCount, rateCount]);
+    spotFundsPnlBoundsCount.reload();
+  }, [orderSizeCount, rateCount, spotFundsPnlBoundsCount]);
   const reloadLimits = useCallback(() => {
     reload();
     reloadPolicyCounts();
@@ -543,6 +601,8 @@ export function Limits() {
 
   const [accountSuggestions, setAccountSuggestions] = useState<string[]>([]);
   const [assetSuggestions, setAssetSuggestions] = useState<string[]>([]);
+  const [accountGroupSuggestions, setAccountGroupSuggestions] = useState<string[]>([]);
+  const [currencySuggestions, setCurrencySuggestions] = useState<string[]>([]);
   const visibleAccountSuggestions =
     deferredAccountDraft.trim() === "" ? [] : accountSuggestions;
   const visibleAssetSuggestions =
@@ -591,6 +651,46 @@ export function Limits() {
       });
     return () => controller.abort();
   }, [deferredAssetDraft, fetchAssets]);
+
+  useEffect(() => {
+    if (typeof fetchGroups !== "function") {
+      return;
+    }
+    const controller = new AbortController();
+    void Promise.all([
+      fetchGroups({ limit: 1000, sort: "code" }, controller.signal),
+      fetchAccounts({ limit: 1000, sort: "code" }, controller.signal),
+    ])
+      .then(([groups, accounts]) => {
+        const groupCodes = groups
+          .map((group) => group.code)
+          .filter((code) => code !== "");
+        const currencyCodes = new Set<string>();
+        for (const group of groups) {
+          if (group.currency) {
+            currencyCodes.add(group.currency);
+          }
+        }
+        for (const account of accounts) {
+          if (account.currency) {
+            currencyCodes.add(account.currency);
+          }
+          if (account.effectiveCurrency) {
+            currencyCodes.add(account.effectiveCurrency);
+          }
+        }
+        setAccountGroupSuggestions(groupCodes);
+        setCurrencySuggestions([...currencyCodes].sort());
+      })
+      .catch((err: unknown) => {
+        if (!controller.signal.aborted) {
+          console.error(err);
+          setAccountGroupSuggestions([]);
+          setCurrencySuggestions([]);
+        }
+      });
+    return () => controller.abort();
+  }, [fetchAccounts, fetchGroups]);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Limit | null>(null);
@@ -659,12 +759,20 @@ export function Limits() {
   const shareHref = useMemo(() => {
     const query = new URLSearchParams();
     const account = accountFilter.trim();
+    const accountGroup = accountGroupFilter.trim();
     const asset = assetFilter.trim();
+    const accountCurrency = accountCurrencyFilter.trim();
     if (account !== "") {
       query.set("account", account);
     }
+    if (accountGroup !== "") {
+      query.set("accountGroup", accountGroup);
+    }
     if (asset !== "") {
       query.set("asset", asset);
+    }
+    if (accountCurrency !== "") {
+      query.set("accountCurrency", accountCurrency);
     }
     if (policyFilter !== ALL) {
       query.set("policy", policyFilter);
@@ -679,7 +787,9 @@ export function Limits() {
     return absoluteAppUrl(`/policies${text === "" ? "" : `?${text}`}`);
   }, [
     accountFilter,
+    accountGroupFilter,
     assetFilter,
+    accountCurrencyFilter,
     policyFilter,
     sort.order,
     sort.sort,
@@ -860,6 +970,8 @@ export function Limits() {
         initialAccount={initialAccount}
         assetSuggestions={assetSuggestions}
         accountSuggestions={accountSuggestions}
+        accountGroupSuggestions={accountGroupSuggestions}
+        currencySuggestions={currencySuggestions}
         policyCounts={policyCounts}
         onOpenChange={setDialogOpen}
         onSaved={reloadLimits}

@@ -163,6 +163,27 @@ var clientDataAllowlist = []clientDataAllow{
 		Why:     "imported position snapshots receive a fresh write timestamp",
 	},
 	{
+		Surface: driftBackup,
+		Entity:  "orders",
+		Field:   "CommissionSubtotals",
+		Kind:    "uncovered",
+		Why:     "derived read model aggregated from trades, not an independent backup field",
+	},
+	{
+		Surface: driftBusinessCSV,
+		Entity:  "orders",
+		Field:   "CommissionSubtotals",
+		Kind:    "uncovered",
+		Why:     "derived read model aggregated from trades, not an independent CSV field",
+	},
+	{
+		Surface: driftBusinessCSV,
+		Entity:  "trades",
+		Field:   "Commission",
+		Kind:    "uncovered",
+		Why:     "structured commission is split into commission_amount and commission_currency columns",
+	},
+	{
 		Surface: driftSchema,
 		Entity:  "*",
 		Field:   "id",
@@ -291,16 +312,30 @@ var clientDataAllowlist = []clientDataAllow{
 	{
 		Surface: driftBackup,
 		Entity:  "order-events",
-		Field:   "order-events.Payload.RealizedPnl",
+		Field:   "order-events.Payload.Commission",
 		Kind:    "optional-sentinel",
 		Why:     "event payload variants populate only fields owned by their event type",
 	},
 	{
 		Surface: driftBackup,
-		Entity:  "order-events",
-		Field:   "order-events.Payload.Fee",
+		Entity:  "spot-funds-pnl-bounds-limits",
+		Field:   "spot-funds-pnl-bounds-limits.Account",
 		Kind:    "optional-sentinel",
-		Why:     "event payload variants populate only fields owned by their event type",
+		Why:     "account and group scopes populate their own identity axis",
+	},
+	{
+		Surface: driftBackup,
+		Entity:  "spot-funds-pnl-bounds-limits",
+		Field:   "spot-funds-pnl-bounds-limits.AccountGroup",
+		Kind:    "optional-sentinel",
+		Why:     "account and group scopes populate their own identity axis",
+	},
+	{
+		Surface: driftBackup,
+		Entity:  "spot-funds-pnl-bounds-limits",
+		Field:   "spot-funds-pnl-bounds-limits.InitialPnl",
+		Kind:    "optional-sentinel",
+		Why:     "initial PnL is available only for account scope",
 	},
 }
 
@@ -394,9 +429,9 @@ var backupParitySpecs = []paritySpec{
 	},
 	{
 		surface: driftBackup,
-		entity:  "pnl-bounds-limits",
-		source:  reflect.TypeOf(domain.LimitPnlBounds{}),
-		target:  reflect.TypeOf(domain.LimitPnlBounds{}),
+		entity:  "spot-funds-pnl-bounds-limits",
+		source:  reflect.TypeOf(domain.LimitSpotFundsPnlBounds{}),
+		target:  reflect.TypeOf(domain.LimitSpotFundsPnlBounds{}),
 	},
 	{
 		surface: driftBackup,
@@ -563,8 +598,8 @@ var expectedSchemaTableNames = []string{
 	"balance",
 	"event_attestation",
 	"limit_order_size",
-	"limit_pnl_bound",
 	"limit_rate",
+	"limit_spot_funds_pnl_bound",
 	"market_data_instance",
 	"market_data_instrument",
 	"market_data_quote",
@@ -688,14 +723,15 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 			"max_notional": "MaxNotional",
 		},
 	},
-	"limit_pnl_bound": {
+	"limit_spot_funds_pnl_bound": {
 		backup: map[string]string{
-			"scope":       "Scope",
-			"account_id":  "Account",
-			"asset_id":    "Asset",
-			"lower_bound": "LowerBound",
-			"upper_bound": "UpperBound",
-			"initial_pnl": "InitialPnl",
+			"scope":                     "Scope",
+			"account_id":                "Account",
+			"account_group_id":          "AccountGroup",
+			"account_currency_asset_id": "AccountCurrency",
+			"lower_bound":               "LowerBound",
+			"upper_bound":               "UpperBound",
+			"initial_pnl":               "InitialPnl",
 		},
 	},
 	"adjustment": {
@@ -769,32 +805,36 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 	},
 	"trade": {
 		backup: map[string]string{
-			"external_id":    "ExternalID",
-			"order_id":       "Order",
-			"account_id":     "Account",
-			"base_asset_id":  "BaseAsset",
-			"quote_asset_id": "QuoteAsset",
-			"principal_id":   "Principal",
-			"at":             "At",
-			"source":         "Source",
-			"side":           "Side",
-			"quantity":       "Quantity",
-			"price":          "Price",
-			"lock_price":     "LockPrice",
+			"external_id":         "ExternalID",
+			"order_id":            "Order",
+			"account_id":          "Account",
+			"base_asset_id":       "BaseAsset",
+			"quote_asset_id":      "QuoteAsset",
+			"principal_id":        "Principal",
+			"at":                  "At",
+			"source":              "Source",
+			"side":                "Side",
+			"quantity":            "Quantity",
+			"price":               "Price",
+			"lock_price":          "LockPrice",
+			"commission_amount":   "Commission.Amount",
+			"commission_currency": "Commission.Currency",
 		},
 		businessCSV: map[string]string{
-			"external_id":    "external_id",
-			"order_id":       "order_external_id",
-			"account_id":     "account_code",
-			"base_asset_id":  "base_asset",
-			"quote_asset_id": "quote_asset",
-			"principal_id":   "principal",
-			"at":             "at",
-			"source":         "source",
-			"side":           "side",
-			"quantity":       "quantity",
-			"price":          "price",
-			"lock_price":     "lock_price",
+			"external_id":         "external_id",
+			"order_id":            "order_external_id",
+			"account_id":          "account_code",
+			"base_asset_id":       "base_asset",
+			"quote_asset_id":      "quote_asset",
+			"principal_id":        "principal",
+			"at":                  "at",
+			"source":              "source",
+			"side":                "side",
+			"quantity":            "quantity",
+			"price":               "price",
+			"lock_price":          "lock_price",
+			"commission_amount":   "commission_amount",
+			"commission_currency": "commission_currency",
 		},
 	},
 	"audit": {
@@ -1197,14 +1237,27 @@ func seedClientDataDriftRealm(
 		MaxQuantity: "18.5",
 		MaxNotional: "2500.75",
 	}))
-	must(t, "PutPnlBoundsLimit", rs.PutPnlBoundsLimit(ctx, domain.LimitPnlBounds{
-		Scope:      domain.ScopeAccountAsset,
-		Account:    "acc-1",
-		Asset:      "USD",
-		LowerBound: "-50.25",
-		UpperBound: "100.75",
-		InitialPnl: "3.50",
-	}))
+	must(t, "PutSpotFundsPnlBoundsLimit", rs.PutSpotFundsPnlBoundsLimit(
+		ctx,
+		domain.LimitSpotFundsPnlBounds{
+			Scope:           domain.ScopeAccount,
+			Account:         "acc-1",
+			AccountCurrency: "USD",
+			LowerBound:      "-50.25",
+			UpperBound:      "100.75",
+			InitialPnl:      "3.50",
+		},
+	))
+	must(t, "PutSpotFundsPnlBoundsLimit group", rs.PutSpotFundsPnlBoundsLimit(
+		ctx,
+		domain.LimitSpotFundsPnlBounds{
+			Scope:           domain.ScopeAccountGroup,
+			AccountGroup:    "grp-1",
+			AccountCurrency: "USD",
+			LowerBound:      "-25.00",
+			UpperBound:      "75.00",
+		},
+	))
 	order, err := rs.CreateOrder(ctx, domain.Order{
 		ExternalID:  "order-sentinel-1",
 		Account:     "acc-1",
@@ -1234,8 +1287,7 @@ func seedClientDataDriftRealm(
 			FillLockPrice:  "151.00",
 			LeavesQuantity: "4.25",
 			OrderStatus:    string(domain.OrderStatusFilled),
-			RealizedPnl:    "12.34",
-			Fee:            "0.12",
+			Commission:     &domain.Commission{Amount: "-0.30", Currency: "USDT"},
 		},
 	})
 	if err != nil {
@@ -1296,6 +1348,7 @@ func seedClientDataDriftRealm(
 		Quantity:   "7.00",
 		Price:      "151.25",
 		LockPrice:  "151.00",
+		Commission: &domain.Commission{Amount: "-0.42", Currency: "USD"},
 	}); err != nil {
 		t.Fatalf("CreateTrade: %v", err)
 	}
@@ -1314,6 +1367,7 @@ func seedClientDataDriftRealm(
 			HeldBounds:        adjustmentBounds("1", "20"),
 			Incoming:          adjustmentAmount(domain.AdjustmentModeDelta, "2.25"),
 			IncomingBounds:    adjustmentBounds("1", "30"),
+			RealizedPnl:       "2.84",
 		},
 		Accepted: &domain.AdjustmentOutcomeAccepted{
 			BalanceDelta:      "5.50",
@@ -1343,6 +1397,7 @@ func seedClientDataDriftRealm(
 			HeldBounds:        adjustmentBounds("1", "20"),
 			Incoming:          adjustmentAmount(domain.AdjustmentModeDelta, "3.25"),
 			IncomingBounds:    adjustmentBounds("1", "30"),
+			RealizedPnl:       "3.84",
 		},
 		Rejected: &domain.AdjustmentOutcomeRejected{
 			Code:    "limit_exceeded",
@@ -1587,7 +1642,7 @@ func nonZeroBackupFindings(data backup.Data) []clientDataDrift {
 		{"positions", data.Balances},
 		{"rate-limits", data.RateLimits},
 		{"order-size-limits", data.OrderSizeLimits},
-		{"pnl-bounds-limits", data.PnlBoundsLimits},
+		{"spot-funds-pnl-bounds-limits", data.SpotFundsPnlBoundsLimits},
 		{"adjustments", data.Adjustments},
 		{"orders", data.Orders},
 		{"order-events", data.OrderEvents},

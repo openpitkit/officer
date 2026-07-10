@@ -117,6 +117,9 @@ func TestAdjustmentAppendListRoundTrip(t *testing.T) {
 	if got.Request.Balance.Mode != domain.AdjustmentModeAbsolute || got.Request.Balance.Value != "100" {
 		t.Fatalf("request.balance = %+v", got.Request.Balance)
 	}
+	if got.Request.RealizedPnl != "" {
+		t.Fatalf("request.realized_pnl = %q, want empty", got.Request.RealizedPnl)
+	}
 	// Outcome round-trip.
 	if got.Accepted == nil {
 		t.Fatal("accepted outcome is nil after round-trip")
@@ -126,6 +129,99 @@ func TestAdjustmentAppendListRoundTrip(t *testing.T) {
 	}
 	if got.Rejected != nil {
 		t.Fatalf("rejected should be nil for accepted adjustment, got %+v", got.Rejected)
+	}
+}
+
+func TestRecordAccountAdjustmentPersistsRealizedPnlInSameTx(t *testing.T) {
+	ctx, rs := seedAdjustmentFixtures(t)
+
+	stored, err := rs.RecordAccountAdjustment(ctx, fwstore.AccountAdjustmentPersistence{
+		RealizedPnl: &fwstore.BalanceRealizedPnlPersistence{
+			Account:     "acc-1",
+			Asset:       "AAPL",
+			RealizedPnl: "-12.50",
+		},
+		Adjustment: domain.AccountAdjustmentRecord{
+			Account: "acc-1",
+			Asset:   "AAPL",
+			Source:  domain.SourcePanel,
+			Request: domain.AdjustmentRequest{
+				Asset:       "AAPL",
+				RealizedPnl: "-12.50",
+			},
+			Accepted: &domain.AdjustmentOutcomeAccepted{
+				RealizedPnlResult: "-12.50",
+			},
+		},
+		Audit: AuditEntry{
+			Action:  domain.AuditActionAdjustment,
+			Account: "acc-1",
+			Asset:   "AAPL",
+			Source:  domain.SourcePanel,
+			Detail:  "set balance realized_pnl account acc-1 asset=AAPL realized_pnl=-12.50",
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordAccountAdjustment: %v", err)
+	}
+	if stored.ExternalID.IsZero() {
+		t.Fatal("stored adjustment external id is zero")
+	}
+
+	balance, ok, err := rs.GetBalance(ctx, "acc-1", "AAPL")
+	if err != nil {
+		t.Fatalf("GetBalance: %v", err)
+	}
+	if !ok || balance.RealizedPnl != "-12.50" {
+		t.Fatalf("balance = %+v ok=%v, want realized_pnl -12.50", balance, ok)
+	}
+	rows, err := rs.ListAuditFiltered(ctx, domain.AuditFilter{
+		Actions: []domain.AuditAction{domain.AuditActionAdjustment},
+		Account: "acc-1",
+	}, 10)
+	if err != nil {
+		t.Fatalf("ListAuditFiltered: %v", err)
+	}
+	if len(rows) != 1 || !strings.Contains(rows[0].Detail, "realized_pnl=-12.50") {
+		t.Fatalf("audit rows = %+v, want realized pnl audit", rows)
+	}
+}
+
+func TestRecordAccountAdjustmentDeletesEmptyRealizedPnlBalance(t *testing.T) {
+	ctx, rs := seedAdjustmentFixtures(t)
+	seedBalance(t, ctx, rs, "acc-1", "AAPL", "", "", "", "1")
+
+	_, err := rs.RecordAccountAdjustment(ctx, fwstore.AccountAdjustmentPersistence{
+		RealizedPnl: &fwstore.BalanceRealizedPnlPersistence{
+			Account:     "acc-1",
+			Asset:       "AAPL",
+			RealizedPnl: "0",
+		},
+		Adjustment: domain.AccountAdjustmentRecord{
+			Account: "acc-1",
+			Asset:   "AAPL",
+			Source:  domain.SourcePanel,
+			Request: domain.AdjustmentRequest{
+				Asset:       "AAPL",
+				RealizedPnl: "0",
+			},
+			Accepted: &domain.AdjustmentOutcomeAccepted{
+				RealizedPnlResult: "0",
+			},
+		},
+		Audit: AuditEntry{
+			Action:  domain.AuditActionAdjustment,
+			Account: "acc-1",
+			Asset:   "AAPL",
+			Source:  domain.SourcePanel,
+			Detail:  "set balance realized_pnl account acc-1 asset=AAPL realized_pnl=0",
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordAccountAdjustment: %v", err)
+	}
+	if _, ok := getBalanceRow(t, ctx, rs, "acc-1", "AAPL"); ok {
+		t.Fatal("balance row survived zero realized_pnl adjustment")
 	}
 }
 

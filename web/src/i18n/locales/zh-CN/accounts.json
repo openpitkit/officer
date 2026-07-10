@@ -348,7 +348,6 @@
       "adjustments": "调整",
       "limit_rate": "频率限制",
       "limit_order_size": "订单规模限制",
-      "limit_pnl_bounds": "盈亏边界限制",
       "reservation_intents": "预留意向"
     },
     "cancel": "取消",

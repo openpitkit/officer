@@ -122,7 +122,7 @@ func (r *realmStore) exportData(ctx context.Context) (backup.Data, error) {
 	if data.OrderSizeLimits, err = r.ListOrderSizeLimits(ctx, ""); err != nil {
 		return backup.Data{}, err
 	}
-	if data.PnlBoundsLimits, err = r.ListPnlBoundsLimits(ctx, ""); err != nil {
+	if data.SpotFundsPnlBoundsLimits, err = r.ListSpotFundsPnlBoundsLimits(ctx, ""); err != nil {
 		return backup.Data{}, err
 	}
 	if data.Adjustments, err = r.exportAdjustments(ctx); err != nil {

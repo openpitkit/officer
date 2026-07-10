@@ -24,6 +24,7 @@ import {
   ExternalLink,
   Plus,
   GitFork,
+  Info,
   KeyRound,
   ShieldCheck,
 } from "lucide-react";
@@ -57,6 +58,7 @@ import {
 import type {
   ApprovalToken,
   CheckResult,
+  Commission,
   ExecutionBlock,
   Order,
   OrderEvent,
@@ -110,6 +112,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { NumberStepper } from "@/components/ui/number-stepper";
@@ -195,6 +198,17 @@ function eventTypeVariant(type: string): BadgeProps["variant"] {
 /** Instrument label: "AAPL / USD". */
 function instrument(baseAsset: string, quoteAsset: string): string {
   return `${baseAsset} / ${quoteAsset}`;
+}
+
+function commissionLabel(commissions: Commission[]): string {
+  return commissions
+    .filter((commission) => commission.amount !== "" && commission.currency !== "")
+    .map((commission) => `${commission.amount} ${commission.currency}`)
+    .join(", ");
+}
+
+function tradeCommissionLabel(trade: Trade): string {
+  return trade.commission === undefined ? "" : commissionLabel([trade.commission]);
 }
 
 function ordersFilterHref({
@@ -922,12 +936,16 @@ function SubmitOrderDialog({
 
 /** Input fields that can be preseeded when cloning an execution report. */
 interface ExecReportInitialValues {
+  status?: ExecReportOrderStatus;
+  hasFillPayload?: boolean;
   quantity: string;
   price: string;
   lockPrice: string;
+  commission?: Commission;
   /** Order's current remaining-open quantity. Absent for a trades-table clone
    * that carries no order detail. */
   leaves?: string;
+  leavesQuantity?: string;
 }
 
 const EXEC_REPORT_STATUS_OPTIONS = [
@@ -948,6 +966,12 @@ const EXEC_REPORT_FILL_STATUSES = new Set<ExecReportOrderStatus>([
   "filled",
   "partially_filled",
 ]);
+
+function asExecReportOrderStatus(value: string | undefined): ExecReportOrderStatus | undefined {
+  return EXEC_REPORT_STATUS_OPTIONS.includes(value as ExecReportOrderStatus)
+    ? (value as ExecReportOrderStatus)
+    : undefined;
+}
 
 function execReportInitialValuesFromOrder(order: Order): ExecReportInitialValues {
   const lockPrice = order.displayPrices.length > 0
@@ -978,12 +1002,25 @@ interface ExecReportSubmittedUpdate {
 function execReportFieldsForStatus(
   status: ExecReportOrderStatus,
   initialValues: ExecReportInitialValues | undefined,
-): { quantity: string; price: string; leavesQuantity: string; lockPrice: string } {
+): {
+  quantity: string;
+  price: string;
+  leavesQuantity: string;
+  lockPrice: string;
+} {
+  if (initialValues?.hasFillPayload === true) {
+    return {
+      quantity: initialValues.quantity ?? "",
+      price: initialValues.price ?? "",
+      leavesQuantity: initialValues.leavesQuantity ?? "",
+      lockPrice: initialValues.lockPrice ?? "",
+    };
+  }
   if (status === "filled") {
     return {
       quantity: initialValues?.leaves ?? initialValues?.quantity ?? "",
       price: initialValues?.price ?? "",
-      leavesQuantity: "",
+      leavesQuantity: initialValues?.leavesQuantity ?? "",
       lockPrice: initialValues?.lockPrice ?? "",
     };
   }
@@ -991,25 +1028,72 @@ function execReportFieldsForStatus(
     return {
       quantity: initialValues?.quantity ?? "",
       price: initialValues?.price ?? "",
-      leavesQuantity: "",
+      leavesQuantity: initialValues?.leavesQuantity ?? "",
       lockPrice: initialValues?.lockPrice ?? "",
     };
   }
   return { quantity: "", price: "", leavesQuantity: "", lockPrice: "" };
 }
 
-function ExecReportDialog({ orderExternalId, onClose, onSubmitted, initialValues }: ExecReportDialogProps) {
+function ExecReportInfoButton({
+  ariaLabel,
+  title,
+  body,
+}: {
+  ariaLabel: string;
+  title: string;
+  body: string;
+}) {
+  return (
+    <Dialog>
+      <DialogTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          aria-label={ariaLabel}
+          title={ariaLabel}
+          className="h-6 w-6 shrink-0"
+        >
+          <Info className="h-3.5 w-3.5" aria-hidden="true" />
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{body}</DialogDescription>
+        </DialogHeader>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ExecReportDialog({
+  orderExternalId,
+  onClose,
+  onSubmitted,
+  initialValues,
+}: ExecReportDialogProps) {
   const { t } = useTranslation("orders");
   const { t: tc } = useTranslation();
   const { submitExecutionReport } = useOfficerApi();
   const statusTriggerRef = useRef<HTMLButtonElement | null>(null);
 
-  const initialFields = execReportFieldsForStatus("filled", initialValues);
+  const initialStatus = initialValues?.status ?? "filled";
+  const initialFields = execReportFieldsForStatus(initialStatus, initialValues);
   const [quantity, setQuantity] = useState(initialFields.quantity);
   const [price, setPrice] = useState(initialFields.price);
-  const [leavesQuantity, setLeavesQuantity] = useState(initialFields.leavesQuantity);
+  const [leavesQuantity, setLeavesQuantity] = useState(
+    initialFields.leavesQuantity,
+  );
   const [lockPrice, setLockPrice] = useState(initialFields.lockPrice);
-  const [status, setStatus] = useState<ExecReportOrderStatus>("filled");
+  const [commissionAmount, setCommissionAmount] = useState(
+    initialValues?.commission?.amount ?? "",
+  );
+  const [commissionCurrency, setCommissionCurrency] = useState(
+    initialValues?.commission?.currency ?? "",
+  );
+  const [status, setStatus] = useState<ExecReportOrderStatus>(initialStatus);
   const [force, setForce] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1017,30 +1101,43 @@ function ExecReportDialog({ orderExternalId, onClose, onSubmitted, initialValues
   const [blocks, setBlocks] = useState<ExecutionBlock[]>([]);
 
   const isFillStatus = EXEC_REPORT_FILL_STATUSES.has(status);
+  const hasFillPayload = initialValues?.hasFillPayload === true;
+  const showFillFields = isFillStatus || hasFillPayload;
+
+  function resetEconomicsFields(nextInitialValues?: ExecReportInitialValues) {
+    setCommissionAmount(nextInitialValues?.commission?.amount ?? "");
+    setCommissionCurrency(nextInitialValues?.commission?.currency ?? "");
+  }
 
   function applyStatus(next: ExecReportOrderStatus) {
-    const wasFillStatus = isFillStatus;
+    const wasShowingFillFields = showFillFields;
+    const nextShowsFillFields =
+      EXEC_REPORT_FILL_STATUSES.has(next) || hasFillPayload;
     setStatus(next);
-    if (wasFillStatus && EXEC_REPORT_FILL_STATUSES.has(next)) {
+    if (wasShowingFillFields && nextShowsFillFields) {
       return;
     }
-    const fields = execReportFieldsForStatus(next, initialValues);
+    const nextInitialValues = nextShowsFillFields ? initialValues : undefined;
+    const fields = execReportFieldsForStatus(next, nextInitialValues);
     setQuantity(fields.quantity);
     setPrice(fields.price);
     setLeavesQuantity(fields.leavesQuantity);
     setLockPrice(fields.lockPrice);
+    resetEconomicsFields(nextInitialValues);
   }
 
   // Reseed from initialValues whenever the dialog opens (clone path).
   useEffect(() => {
     if (orderExternalId !== null) {
-      const fields = execReportFieldsForStatus("filled", initialValues);
+      const nextStatus = initialValues?.status ?? "filled";
+      const fields = execReportFieldsForStatus(nextStatus, initialValues);
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setStatus("filled");
+      setStatus(nextStatus);
       setQuantity(fields.quantity);
       setPrice(fields.price);
       setLeavesQuantity(fields.leavesQuantity);
       setLockPrice(fields.lockPrice);
+      resetEconomicsFields(initialValues);
       setForce(false);
       setBusy(false);
       setError(null);
@@ -1051,12 +1148,14 @@ function ExecReportDialog({ orderExternalId, onClose, onSubmitted, initialValues
   }, [orderExternalId]);
 
   function reset() {
-    const fields = execReportFieldsForStatus("filled", initialValues);
-    setStatus("filled");
+    const nextStatus = initialValues?.status ?? "filled";
+    const fields = execReportFieldsForStatus(nextStatus, initialValues);
+    setStatus(nextStatus);
     setQuantity(fields.quantity);
     setPrice(fields.price);
     setLeavesQuantity(fields.leavesQuantity);
     setLockPrice(fields.lockPrice);
+    resetEconomicsFields(initialValues);
     setForce(false);
     setBusy(false);
     setError(null);
@@ -1084,12 +1183,21 @@ function ExecReportDialog({ orderExternalId, onClose, onSubmitted, initialValues
     && quantity.trim() !== "";
 
   async function submit() {
-    if (isFillStatus && (!quantity.trim() || !price.trim())) {
+    if (showFillFields && (!quantity.trim() || !price.trim())) {
       setError(t("execReport.dialog.validationError"));
       return;
     }
     if (!leavesQuantity.trim()) {
       setError(t("execReport.dialog.leavesRequired"));
+      return;
+    }
+    const commissionAmountValue = commissionAmount.trim();
+    const commissionCurrencyValue = commissionCurrency.trim();
+    if (
+      showFillFields
+      && ((commissionAmountValue !== "") !== (commissionCurrencyValue !== ""))
+    ) {
+      setError(t("execReport.dialog.commissionRequired"));
       return;
     }
     if (orderExternalId === null) {
@@ -1099,11 +1207,17 @@ function ExecReportDialog({ orderExternalId, onClose, onSubmitted, initialValues
     setError(null);
     try {
       const body: ExecutionReportBody = { status };
-      if (isFillStatus) {
+      if (showFillFields) {
         body.quantity = quantity.trim();
         body.price = price.trim();
         if (lockPrice.trim()) {
           body.lockPrice = lockPrice.trim();
+        }
+        if (commissionAmountValue !== "" && commissionCurrencyValue !== "") {
+          body.commission = {
+            amount: commissionAmountValue,
+            currency: commissionCurrencyValue,
+          };
         }
       }
       body.leavesQuantity = leavesQuantity.trim();
@@ -1181,7 +1295,7 @@ function ExecReportDialog({ orderExternalId, onClose, onSubmitted, initialValues
               </p>
             </div>
 
-            {isFillStatus && (
+            {showFillFields && (
               <>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
@@ -1220,6 +1334,67 @@ function ExecReportDialog({ orderExternalId, onClose, onSubmitted, initialValues
                     onClear={() => setLockPrice("")}
                     clearLabel={tc("filters.clearField")}
                   />
+                </div>
+                <div className="space-y-3">
+                  <section className="space-y-2 rounded-card border border-border bg-surface-2 p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <h3 className="text-xs font-semibold text-text">
+                          {t("execReport.dialog.economics.commission.title")}
+                        </h3>
+                        <p className="text-[0.6875rem] text-muted">
+                          {t("execReport.dialog.economics.commission.summary")}
+                        </p>
+                      </div>
+                      <ExecReportInfoButton
+                        ariaLabel={t(
+                          "execReport.dialog.economics.commission.infoAriaLabel",
+                        )}
+                        title={t(
+                          "execReport.dialog.economics.commission.infoTitle",
+                        )}
+                        body={t(
+                          "execReport.dialog.economics.commission.infoBody",
+                        )}
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="er-commission-amount">
+                          {t("execReport.dialog.commissionAmount")}
+                        </Label>
+                        <NumberStepper
+                          id="er-commission-amount"
+                          value={commissionAmount}
+                          onChange={setCommissionAmount}
+                          placeholder={t(
+                            "execReport.dialog.commissionAmountPlaceholder",
+                          )}
+                          disabled={busy}
+                          onClear={() => setCommissionAmount("")}
+                          clearLabel={tc("filters.clearField")}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="er-commission-currency">
+                          {t("execReport.dialog.commissionCurrency")}
+                        </Label>
+                        <ClearableInput
+                          id="er-commission-currency"
+                          value={commissionCurrency}
+                          onChange={(e) => setCommissionCurrency(e.target.value)}
+                          placeholder={t(
+                            "execReport.dialog.commissionCurrencyPlaceholder",
+                          )}
+                          disabled={busy}
+                          onClear={() => setCommissionCurrency("")}
+                          clearLabel={tc("filters.clearField")}
+                          className="h-8 text-xs"
+                        />
+                      </div>
+                    </div>
+                  </section>
+
                 </div>
               </>
             )}
@@ -1534,6 +1709,14 @@ function OrderDetailDialog({ orderExternalId, refreshKey, onClose, onExecReport,
                   </div>
                 </div>
               )}
+              {state.order.commissionSubtotals.length > 0 && (
+                <div className="col-span-3">
+                  <span className="text-muted-lt">{t("detail.dialog.fieldCommission")}</span>
+                  <div className="nums mt-0.5 text-text">
+                    {commissionLabel(state.order.commissionSubtotals)}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Event timeline */}
@@ -1575,6 +1758,13 @@ function OrderDetailDialog({ orderExternalId, refreshKey, onClose, onExecReport,
                                 {" "}{t("detail.dialog.timeline.fillLock", { price: ev.fillLockPrice })}
                               </span>
                             )}
+                          </span>
+                        )}
+                        {ev.commission !== undefined && (
+                          <span className="nums text-muted-lt">
+                            {t("detail.dialog.timeline.commission", {
+                              value: commissionLabel([ev.commission]),
+                            })}
                           </span>
                         )}
                         {/* Reject payload */}
@@ -1676,10 +1866,13 @@ function OrderDetailDialog({ orderExternalId, refreshKey, onClose, onExecReport,
                           aria-label={t("clone.execReportEventAriaLabel", { orderExternalId })}
                           onClick={() =>
                             onCloneExecReport(orderExternalId, {
+                              status: asExecReportOrderStatus(ev.orderStatus),
+                              hasFillPayload: true,
                               quantity: ev.fillQuantity ?? "",
                               price: ev.fillPrice ?? "",
                               lockPrice: ev.fillLockPrice ?? "",
-                              leaves: state.order.leavesQuantity,
+                              leavesQuantity: ev.leavesQuantity ?? "",
+                              commission: ev.commission,
                             })
                           }
                         >
@@ -1704,86 +1897,109 @@ function OrderDetailDialog({ orderExternalId, refreshKey, onClose, onExecReport,
                 </p>
               ) : (
                 <Table>
-                    <TableHeader>
-                      <TableRow className="hover:bg-transparent">
-                        <TableHead>
-                          <ColumnHeader
-                            description={t("table.columnDescriptions.externalId")}
-                          >
-                            {t("table.externalId")}
-                          </ColumnHeader>
-                        </TableHead>
-                        <TableHead>
-                          <ColumnHeader description={t("table.columnDescriptions.qty")}>
-                            {t("table.qty")}
-                          </ColumnHeader>
-                        </TableHead>
-                        <TableHead>
-                          <ColumnHeader description={t("table.columnDescriptions.price")}>
-                            {t("table.price")}
-                          </ColumnHeader>
-                        </TableHead>
-                        <TableHead>
-                          <ColumnHeader
-                            description={t("table.columnDescriptions.lockPrice")}
-                          >
-                            {t("table.lockPrice")}
-                          </ColumnHeader>
-                        </TableHead>
-                        <TableHead>
-                          <ColumnHeader description={t("table.columnDescriptions.source")}>
-                            {t("table.source")}
-                          </ColumnHeader>
-                        </TableHead>
-                        <TableHead>
-                          <ColumnHeader description={t("table.columnDescriptions.time")}>
-                            {t("table.time")}
-                          </ColumnHeader>
-                        </TableHead>
-                        <TableHead className="text-right" />
+                  <TableHeader>
+                    <TableRow className="hover:bg-transparent">
+                      <TableHead>
+                        <ColumnHeader
+                          description={t("table.columnDescriptions.externalId")}
+                        >
+                          {t("table.externalId")}
+                        </ColumnHeader>
+                      </TableHead>
+                      <TableHead>
+                        <ColumnHeader description={t("table.columnDescriptions.qty")}>
+                          {t("table.qty")}
+                        </ColumnHeader>
+                      </TableHead>
+                      <TableHead>
+                        <ColumnHeader
+                          description={t("table.columnDescriptions.price")}
+                        >
+                          {t("table.price")}
+                        </ColumnHeader>
+                      </TableHead>
+                      <TableHead>
+                        <ColumnHeader
+                          description={t("table.columnDescriptions.lockPrice")}
+                        >
+                          {t("table.lockPrice")}
+                        </ColumnHeader>
+                      </TableHead>
+                      <TableHead>
+                        <ColumnHeader
+                          description={t("table.columnDescriptions.commission")}
+                        >
+                          {t("table.commission")}
+                        </ColumnHeader>
+                      </TableHead>
+                      <TableHead>
+                        <ColumnHeader
+                          description={t("table.columnDescriptions.source")}
+                        >
+                          {t("table.source")}
+                        </ColumnHeader>
+                      </TableHead>
+                      <TableHead>
+                        <ColumnHeader description={t("table.columnDescriptions.time")}>
+                          {t("table.time")}
+                        </ColumnHeader>
+                      </TableHead>
+                      <TableHead className="text-right" />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {state.trades.map((trade) => (
+                      <TableRow
+                        key={trade.externalId}
+                        className="hover:bg-transparent"
+                      >
+                        <TableCell className="nums text-xs text-muted-lt">
+                          <IdCell
+                            value={trade.externalId}
+                            copyTitle={t("common:rowActions.copyId")}
+                            copiedTitle={t("common:rowActions.copiedId")}
+                          />
+                        </TableCell>
+                        <TableCell className="nums text-xs">
+                          {trade.quantity}
+                        </TableCell>
+                        <TableCell className="nums text-xs">{trade.price}</TableCell>
+                        <TableCell className="nums text-xs text-muted-lt">
+                          {trade.lockPrice || tc("value.none")}
+                        </TableCell>
+                        <TableCell className="nums text-xs text-muted-lt">
+                          {tradeCommissionLabel(trade) || tc("value.none")}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={sourceVariant(trade.source)}>
+                            {trade.source}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="nums whitespace-nowrap text-xs text-muted-lt">
+                          {formatDateTime(trade.at)}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <RowActions>
+                            <CloneButton
+                              title={t("clone.execReportAriaLabel", {
+                                tradeId: trade.externalId,
+                              })}
+                              onClick={() =>
+                                onCloneExecReport(orderExternalId, {
+                                  hasFillPayload: true,
+                                  quantity: trade.quantity,
+                                  price: trade.price,
+                                  lockPrice: trade.lockPrice,
+                                  commission: trade.commission,
+                                  leaves: state.order.leavesQuantity,
+                                })
+                              }
+                            />
+                          </RowActions>
+                        </TableCell>
                       </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {state.trades.map((trade) => (
-                        <TableRow key={trade.externalId} className="hover:bg-transparent">
-	                          <TableCell className="nums text-xs text-muted-lt">
-	                            <IdCell
-	                              value={trade.externalId}
-	                              copyTitle={t("common:rowActions.copyId")}
-	                              copiedTitle={t("common:rowActions.copiedId")}
-	                            />
-	                          </TableCell>
-                          <TableCell className="nums text-xs">{trade.quantity}</TableCell>
-                          <TableCell className="nums text-xs">{trade.price}</TableCell>
-                          <TableCell className="nums text-xs text-muted-lt">
-                            {trade.lockPrice || tc("value.none")}
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant={sourceVariant(trade.source)}>{trade.source}</Badge>
-                          </TableCell>
-                          <TableCell className="nums whitespace-nowrap text-xs text-muted-lt">
-                            {formatDateTime(trade.at)}
-                          </TableCell>
-	                          <TableCell className="text-right">
-	                            <RowActions>
-	                              <CloneButton
-	                                title={t("clone.execReportAriaLabel", {
-	                                  tradeId: trade.externalId,
-	                                })}
-	                                onClick={() =>
-	                                  onCloneExecReport(orderExternalId, {
-	                                    quantity: trade.quantity,
-	                                    price: trade.price,
-	                                    lockPrice: trade.lockPrice,
-	                                    leaves: state.order.leavesQuantity,
-	                                  })
-	                                }
-	                              />
-	                            </RowActions>
-	                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
+                    ))}
+                  </TableBody>
                 </Table>
               )}
             </div>
@@ -2032,6 +2248,11 @@ function OrdersTable({
                 {t("table.displayPrices")}
               </ColumnHeader>
             </TableHead>
+            <TableHead>
+              <ColumnHeader description={t("table.columnDescriptions.commission")}>
+                {t("table.commission")}
+              </ColumnHeader>
+            </TableHead>
             <TableHead className="w-[var(--orders-status-column-width)]">
               <SortableHeader
                 field="status"
@@ -2153,6 +2374,9 @@ function OrdersTable({
                 {order.displayPrices.length > 0
                   ? order.displayPrices.join(", ")
                   : tc("value.none")}
+              </TableCell>
+              <TableCell className="nums text-xs text-muted-lt">
+                {commissionLabel(order.commissionSubtotals) || tc("value.none")}
               </TableCell>
               <TableCell className="w-[var(--orders-status-column-width)]">
                 <Badge variant={statusVariant(order.status)}>{order.status}</Badge>
@@ -2340,6 +2564,11 @@ function TradesTable({
               />
             </TableHead>
             <TableHead>
+              <ColumnHeader description={t("table.columnDescriptions.commission")}>
+                {t("table.commission")}
+              </ColumnHeader>
+            </TableHead>
+            <TableHead>
               <SortableHeader
                 field="source"
                 label={t("table.source")}
@@ -2457,6 +2686,9 @@ function TradesTable({
               <TableCell className="nums text-xs text-muted-lt">
                 {trade.lockPrice || tc("value.none")}
               </TableCell>
+              <TableCell className="nums text-xs text-muted-lt">
+                {tradeCommissionLabel(trade) || tc("value.none")}
+              </TableCell>
               <TableCell>
                 <Badge variant={sourceVariant(trade.source)}>{trade.source}</Badge>
               </TableCell>
@@ -2471,9 +2703,11 @@ function TradesTable({
                     })}
                     onClick={() =>
                       onCloneExecReport(trade.order, {
+                        hasFillPayload: true,
                         quantity: trade.quantity,
                         price: trade.price,
                         lockPrice: trade.lockPrice,
+                        commission: trade.commission,
                       })
                     }
                   />

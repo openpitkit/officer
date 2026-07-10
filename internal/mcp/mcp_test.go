@@ -509,11 +509,51 @@ func TestGetLimitsWithAccount(t *testing.T) {
 	}
 }
 
+func TestGetLimitsSpotFundsPnlBoundsOnly(t *testing.T) {
+	src := &fakeSource{limits: node.AccountLimits{
+		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
+			{
+				Scope:           domain.ScopeAccount,
+				Account:         "acc-spot",
+				AccountCurrency: "USD",
+				LowerBound:      "-10.25",
+				UpperBound:      "99.50",
+				InitialPnl:      "1.00",
+			},
+		},
+	}}
+	res := callGetLimits(t, src, "acc-spot")
+	requireNotToolError(t, res.IsError)
+	if got := textContent(res.Content); got != "1 limit(s)" {
+		t.Fatalf("summary = %q, want 1 limit(s)", got)
+	}
+	limits := res.StructuredContent.Limits
+	if len(limits.RateLimits) != 0 ||
+		len(limits.OrderSizeLimits) != 0 {
+		t.Fatalf("spot-funds-only result included other limits: %+v", limits)
+	}
+	if len(limits.SpotFundsPnlBoundsLimits) != 1 {
+		t.Fatalf(
+			"want 1 spot-funds P&L limit, got %d",
+			len(limits.SpotFundsPnlBoundsLimits),
+		)
+	}
+	got := limits.SpotFundsPnlBoundsLimits[0]
+	if got.Scope != domain.ScopeAccount ||
+		got.Account != "acc-spot" ||
+		got.AccountCurrency != "USD" ||
+		got.LowerBound != "-10.25" ||
+		got.UpperBound != "99.50" ||
+		got.InitialPnl != "1.00" {
+		t.Fatalf("spot-funds P&L limit = %+v", got)
+	}
+}
+
 func TestGetLimitsEmpty(t *testing.T) {
 	res := callGetLimits(t, &fakeSource{}, "")
 	requireNotToolError(t, res.IsError)
 	got := res.StructuredContent.Limits
-	if len(got.RateLimits)+len(got.OrderSizeLimits)+len(got.PnlBoundsLimits) != 0 {
+	if len(got.RateLimits)+len(got.OrderSizeLimits)+len(got.SpotFundsPnlBoundsLimits) != 0 {
 		t.Errorf("want 0 limits, got %+v", got)
 	}
 }
@@ -757,6 +797,57 @@ func TestGetOrderHappyPath(t *testing.T) {
 		}
 	}
 	assertNoSurrogateID(t, out)
+}
+
+// TestGetOrderCommission: get_order surfaces the same commission data the HTTP
+// DTOs expose - per-order commission subtotals on the order and the per-fill
+// commission on each trade - so an MCP client is not blind to it.
+func TestGetOrderCommission(t *testing.T) {
+	orderEID := mustExternalID(t, "b3JkZXItY29tbWlzc2lvbg")
+	tradeEID := mustExternalID(t, "dHJhZGUtY29tbWlzc2lvbg")
+	src := &fakeSource{
+		orderDetail: domain.OrderDetail{
+			Order: domain.Order{
+				ExternalID:  orderEID,
+				Account:     "acc-1",
+				BaseAsset:   "BTC",
+				QuoteAsset:  "USD",
+				Side:        domain.OrderSideBuy,
+				AmountKind:  domain.OrderAmountKindQuantity,
+				AmountValue: "0.5",
+				Status:      domain.OrderStatusFilled,
+				CommissionSubtotals: []domain.Commission{
+					{Amount: "-0.12", Currency: "USD"},
+				},
+			},
+			Trades: []domain.Trade{
+				{
+					ExternalID: tradeEID,
+					Order:      orderEID,
+					Side:       domain.OrderSideBuy,
+					Quantity:   "0.5",
+					Price:      "49995",
+					Commission: &domain.Commission{Amount: "-0.12", Currency: "USD"},
+				},
+			},
+		},
+	}
+
+	res := callGetOrder(t, src, orderEID.String())
+	requireNotToolError(t, res.IsError)
+	out := res.StructuredContent
+	if len(out.Order.CommissionSubtotals) != 1 {
+		t.Fatalf("want 1 order commission subtotal, got %+v", out.Order.CommissionSubtotals)
+	}
+	if sub := out.Order.CommissionSubtotals[0]; sub.Amount != "-0.12" || sub.Currency != "USD" {
+		t.Fatalf("order commission subtotal = %+v, want -0.12/USD", sub)
+	}
+	if len(out.Trades) != 1 {
+		t.Fatalf("want 1 trade, got %d", len(out.Trades))
+	}
+	if c := out.Trades[0].Commission; c == nil || c.Amount != "-0.12" || c.Currency != "USD" {
+		t.Fatalf("trade commission = %+v, want -0.12/USD", out.Trades[0].Commission)
+	}
 }
 
 // TestGetOrderUnsigned: an order with no approval read-back yields a nil approval

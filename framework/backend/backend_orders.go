@@ -246,6 +246,7 @@ func (s *Service) ApplyExecutionReport(
 					Quantity:   event.Payload.FillQuantity,
 					Price:      event.Payload.FillPrice,
 					LockPrice:  event.Payload.FillLockPrice,
+					Commission: event.Payload.Commission,
 				}
 			}
 			if event.Payload.RejectCode != "" || event.Payload.RejectReason != "" {

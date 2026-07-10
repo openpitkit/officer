@@ -348,7 +348,6 @@
       "adjustments": "Adjustments",
       "limit_rate": "Rate limits",
       "limit_order_size": "Order size limits",
-      "limit_pnl_bounds": "P&L bound limits",
       "reservation_intents": "Reservation intents"
     },
     "cancel": "Cancel",

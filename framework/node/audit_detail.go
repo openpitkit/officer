@@ -29,7 +29,12 @@ import (
 func setRateLimitDetail(limit domain.LimitRate) string {
 	var b strings.Builder
 	b.WriteString("set limit ")
-	b.WriteString(axesDetail(domain.PolicyRateLimit, limit.Scope, limit.Account, limit.Asset))
+	b.WriteString(axesDetail(LimitTarget{
+		Policy:  domain.PolicyRateLimit,
+		Scope:   limit.Scope,
+		Account: limit.Account,
+		Asset:   limit.Asset,
+	}))
 	fmt.Fprintf(&b, " max_orders=%d window=%s", limit.MaxOrders, limit.Window)
 	return b.String()
 }
@@ -38,7 +43,12 @@ func setRateLimitDetail(limit domain.LimitRate) string {
 func setOrderSizeLimitDetail(limit domain.LimitOrderSize) string {
 	var b strings.Builder
 	b.WriteString("set limit ")
-	b.WriteString(axesDetail(domain.PolicyOrderSizeLimit, limit.Scope, limit.Account, limit.Asset))
+	b.WriteString(axesDetail(LimitTarget{
+		Policy:  domain.PolicyOrderSizeLimit,
+		Scope:   limit.Scope,
+		Account: limit.Account,
+		Asset:   limit.Asset,
+	}))
 	if limit.MaxQuantity != "" {
 		b.WriteString(" max_quantity=")
 		b.WriteString(limit.MaxQuantity)
@@ -50,11 +60,17 @@ func setOrderSizeLimitDetail(limit domain.LimitOrderSize) string {
 	return b.String()
 }
 
-// setPnlBoundsLimitDetail renders a P&L-bounds upsert as a short audit detail.
-func setPnlBoundsLimitDetail(limit domain.LimitPnlBounds) string {
+// setSpotFundsPnlBoundsLimitDetail renders a SpotFunds P&L-bounds upsert.
+func setSpotFundsPnlBoundsLimitDetail(limit domain.LimitSpotFundsPnlBounds) string {
 	var b strings.Builder
 	b.WriteString("set limit ")
-	b.WriteString(axesDetail(domain.PolicyPnlBoundsKillSwitch, limit.Scope, limit.Account, limit.Asset))
+	b.WriteString(axesDetail(LimitTarget{
+		Policy:          domain.PolicySpotFundsPnlBoundsKillSwitch,
+		Scope:           limit.Scope,
+		Account:         limit.Account,
+		AccountGroup:    limit.AccountGroup,
+		AccountCurrency: limit.AccountCurrency,
+	}))
 	if limit.LowerBound != "" {
 		b.WriteString(" lower_bound=")
 		b.WriteString(limit.LowerBound)
@@ -72,7 +88,7 @@ func setPnlBoundsLimitDetail(limit domain.LimitPnlBounds) string {
 
 // deleteLimitDetail renders a barrier deletion as a short audit detail.
 func deleteLimitDetail(target LimitTarget) string {
-	return "delete limit " + axesDetail(target.Policy, target.Scope, target.Account, target.Asset)
+	return "delete limit " + axesDetail(target)
 }
 
 // setAccountGroupDetail renders an account group change; an empty groupCode is a
@@ -92,6 +108,16 @@ func adjustmentDetail(id domain.AccountID, asset string, accepted bool) string {
 		disposition = "accepted"
 	}
 	return fmt.Sprintf("adjustment account %s asset=%s %s", id, asset, disposition)
+}
+
+// balanceRealizedPnlDetail renders a store-side realized-P&L snapshot update.
+func balanceRealizedPnlDetail(id domain.AccountID, asset, realizedPnl string) string {
+	return fmt.Sprintf(
+		"set balance realized_pnl account %s asset=%s realized_pnl=%s",
+		id,
+		asset,
+		realizedPnl,
+	)
 }
 
 // importPositionSnapshotDetail renders the internal snapshot-import adjustment
@@ -182,19 +208,27 @@ func engineBlockReason(order domain.ExternalID, block domain.ExecutionAccountBlo
 	return fmt.Sprintf("%s [%s]", reason, cause)
 }
 
-// axesDetail renders the policy/scope/account/asset axes of a typed barrier.
-func axesDetail(policy string, scope domain.LimitScope, account domain.AccountID, asset string) string {
+// axesDetail renders the policy/scope axes of a typed barrier.
+func axesDetail(target LimitTarget) string {
 	var b strings.Builder
-	b.WriteString(policy)
+	b.WriteString(target.Policy)
 	b.WriteByte(' ')
-	b.WriteString(scope)
-	if account != "" {
+	b.WriteString(target.Scope)
+	if target.Account != "" {
 		b.WriteString(" account=")
-		b.WriteString(account.String())
+		b.WriteString(target.Account.String())
 	}
-	if asset != "" {
+	if target.AccountGroup != "" {
+		b.WriteString(" account_group=")
+		b.WriteString(target.AccountGroup)
+	}
+	if target.Asset != "" {
 		b.WriteString(" asset=")
-		b.WriteString(asset)
+		b.WriteString(target.Asset)
+	}
+	if target.AccountCurrency != "" {
+		b.WriteString(" account_currency=")
+		b.WriteString(target.AccountCurrency)
 	}
 	return b.String()
 }

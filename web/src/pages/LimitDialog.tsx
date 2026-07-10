@@ -197,7 +197,9 @@ interface FormState {
   policy: Policy;
   scope: Scope;
   account: string;
+  accountGroup: string;
   asset: string;
+  accountCurrency: string;
   values: Record<string, string>;
 }
 
@@ -206,7 +208,9 @@ function emptyForm(initialAccount = ""): FormState {
     policy: "rate_limit",
     scope: "broker",
     account: initialAccount,
+    accountGroup: "",
     asset: "",
+    accountCurrency: "",
     values: {},
   };
 }
@@ -216,7 +220,9 @@ function fromLimit(limit: Limit): FormState {
     policy: limit.policy as Policy,
     scope: limit.scope as Scope,
     account: limit.account,
+    accountGroup: limit.accountGroup ?? "",
     asset: limit.asset,
+    accountCurrency: limit.accountCurrency ?? "",
     values: { ...limit.values },
   };
 }
@@ -241,6 +247,8 @@ export function LimitDialog({
   initialAccount = "",
   assetSuggestions = [],
   accountSuggestions = [],
+  accountGroupSuggestions = [],
+  currencySuggestions = [],
   policyCounts = {},
   onOpenChange,
   onSaved,
@@ -250,6 +258,8 @@ export function LimitDialog({
   initialAccount?: string;
   assetSuggestions?: string[];
   accountSuggestions?: string[];
+  accountGroupSuggestions?: string[];
+  currencySuggestions?: string[];
   policyCounts?: Partial<Record<Policy, number>>;
   onOpenChange: (open: boolean) => void;
   onSaved: () => void;
@@ -276,15 +286,17 @@ export function LimitDialog({
 
   const isEdit = editing !== null;
   const allowedScopes = getAllowedScopes(form.policy);
-  // Filter initial_pnl: only visible (and sendable) when creating an
-  // account_asset pnl_bounds_kill_switch barrier.
+  const isSpotFundsPnl =
+    form.policy === "spot_funds_pnl_bounds_kill_switch";
+  const hasAccountGroupAxis =
+    isSpotFundsPnl && form.scope === "account_group";
+  const hasAccountCurrencyAxis = isSpotFundsPnl;
   const kinds = getPolicyKinds(form.policy).filter(({ kind }) => {
     if (kind !== "initial_pnl") return true;
-    return (
-      !isEdit &&
-      form.policy === "pnl_bounds_kill_switch" &&
-      form.scope === "account_asset"
-    );
+    if (isSpotFundsPnl) {
+      return form.scope === "account";
+    }
+    return false;
   });
 
   // Pull the catalog entry for the current policy for descriptions + human labels.
@@ -302,10 +314,17 @@ export function LimitDialog({
       policy: form.policy,
       scope: form.scope,
       account: scopeHasAccount(form.scope) ? form.account.trim() : "",
-      asset: scopeHasAsset(form.scope) ? form.asset.trim() : "",
+      accountGroup: hasAccountGroupAxis ? form.accountGroup.trim() : "",
+      asset:
+        !isSpotFundsPnl && scopeHasAsset(form.scope)
+          ? form.asset.trim()
+          : "",
+      accountCurrency: hasAccountCurrencyAxis
+        ? form.accountCurrency.trim()
+        : "",
       values,
     };
-  }, [form, kinds]);
+  }, [form, hasAccountCurrencyAxis, hasAccountGroupAxis, isSpotFundsPnl, kinds]);
 
   const validation = validateLimit(candidate);
   const policyCount = policyCounts[form.policy];
@@ -390,6 +409,12 @@ export function LimitDialog({
         </DialogHeader>
 
         <div className="space-y-4">
+          {isSpotFundsPnl && (
+            <p className="text-xs text-muted-lt">
+              {t("dialog.fxFailSafeNote")}
+            </p>
+          )}
+
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label>{t("dialog.policy")}</Label>
@@ -432,7 +457,10 @@ export function LimitDialog({
             </div>
           </div>
 
-          {(scopeHasAccount(form.scope) || scopeHasAsset(form.scope)) && (
+          {(scopeHasAccount(form.scope) ||
+            hasAccountGroupAxis ||
+            scopeHasAsset(form.scope) ||
+            hasAccountCurrencyAxis) && (
             <div className="grid grid-cols-2 gap-3">
               {scopeHasAccount(form.scope) && (
                 <div className="space-y-1.5">
@@ -450,7 +478,25 @@ export function LimitDialog({
                   />
                 </div>
               )}
-              {scopeHasAsset(form.scope) && (
+              {hasAccountGroupAxis && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="limit-account-group">
+                    {t("dialog.accountGroup")}
+                  </Label>
+                  <Autocomplete
+                    id="limit-account-group"
+                    value={form.accountGroup}
+                    spellCheck={false}
+                    placeholder={t("dialog.accountGroupPlaceholder")}
+                    disabled={isEdit}
+                    suggestions={accountGroupSuggestions}
+                    onChange={(v) =>
+                      setForm((prev) => ({ ...prev, accountGroup: v }))
+                    }
+                  />
+                </div>
+              )}
+              {!isSpotFundsPnl && scopeHasAsset(form.scope) && (
                 <div className="space-y-1.5">
                   <Label htmlFor="limit-asset">{t("dialog.asset")}</Label>
                   <Autocomplete
@@ -462,6 +508,24 @@ export function LimitDialog({
                     suggestions={assetSuggestions}
                     onChange={(v) =>
                       setForm((prev) => ({ ...prev, asset: v }))
+                    }
+                  />
+                </div>
+              )}
+              {hasAccountCurrencyAxis && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="limit-account-currency">
+                    {t("dialog.accountCurrency")}
+                  </Label>
+                  <Autocomplete
+                    id="limit-account-currency"
+                    value={form.accountCurrency}
+                    spellCheck={false}
+                    placeholder={t("dialog.accountCurrencyPlaceholder")}
+                    disabled={isEdit}
+                    suggestions={currencySuggestions}
+                    onChange={(v) =>
+                      setForm((prev) => ({ ...prev, accountCurrency: v }))
                     }
                   />
                 </div>

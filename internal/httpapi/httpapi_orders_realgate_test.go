@@ -22,6 +22,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"go.openpit.dev/officer/framework/backend"
@@ -98,6 +99,131 @@ func TestApplyExecutionReport_RealTerminalGate(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("terminal report with force: status = %d, want 201; body=%s",
 			rec.Code, rec.Body.String())
+	}
+}
+
+// TestApplyExecutionReport_RealCommissionSignedAndReproduced drives a fill
+// carrying a structured commission in its own currency through the REAL
+// execution-report path (real backend.Service, localNode, SQLite store, and
+// Ed25519 signer) and proves the commission reaches the signed bytes in both
+// attestation-facing flows: the freshly-settled attestation token returned by
+// the POST, and the replay-from-event reconstruction the reproduction endpoint
+// serves from the persisted event. It also asserts the OrderEventPayload
+// commission round-trips through the store's JSON payload blob (no dedicated
+// column).
+func TestApplyExecutionReport_RealCommissionSignedAndReproduced(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	handler, realm := newRealServiceRouter(t)
+
+	const acct domain.AccountID = "acc-1"
+	seedRealAccountAndAssets(t, realm, acct)
+	order, err := realm.CreateOrder(ctx, domain.Order{
+		Account:     acct,
+		Source:      domain.SourceAPI,
+		Principal:   domain.PrincipalOperator,
+		BaseAsset:   "AAPL",
+		QuoteAsset:  "USD",
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "10",
+		Price:       "150",
+		Status:      domain.OrderStatusSubmitted,
+	})
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+
+	path := "/api/v1/orders/" + order.ExternalID.String() + "/execution-reports"
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path,
+		bytes.NewBufferString(
+			`{"quantity":"3.5","price":"150.20","leavesQuantity":"6.5",`+
+				`"status":"partially_filled",`+
+				`"commission":{"amount":"-0.30","currency":"USDT"}}`)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("execution report: status = %d, want 201; body=%s",
+			rec.Code, rec.Body.String())
+	}
+
+	// Fresh-settlement path: decode the token the settlement just signed and
+	// confirm its canonical bytes bind the structured commission.
+	fresh := bodyMap(t, rec.Result())
+	token, _ := fresh["attestationToken"].(string)
+	if token == "" {
+		t.Fatalf("want attestationToken, got %v", fresh["attestationToken"])
+	}
+	env, err := appsigning.DecodeEnvelope(token)
+	if err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	if env.Approval.Result == nil || env.Approval.Result.Commission == nil {
+		t.Fatalf("fresh attestation missing commission: %+v", env.Approval.Result)
+	}
+	if env.Approval.Result.Commission.Amount != "-0.30" ||
+		env.Approval.Result.Commission.Currency != "USDT" {
+		t.Fatalf("fresh commission = %+v, want -0.30/USDT",
+			env.Approval.Result.Commission)
+	}
+	canon, err := appsigning.CanonicalBytes(env.Approval)
+	if err != nil {
+		t.Fatalf("canonical bytes: %v", err)
+	}
+	if !strings.Contains(string(canon),
+		`"commission":{"amount":"-0.30","currency":"USDT"}`) {
+		t.Fatalf("fresh canonical bytes missing commission:\n%s", canon)
+	}
+
+	// The commission persisted on the fill event's JSON payload blob must round-trip
+	// through the store unchanged (no dedicated column).
+	events, err := realm.ListOrderEvents(ctx, order.ExternalID)
+	if err != nil {
+		t.Fatalf("ListOrderEvents: %v", err)
+	}
+	var fill domain.OrderEvent
+	for _, ev := range events {
+		if ev.Type == domain.OrderEventFill {
+			fill = ev
+		}
+	}
+	if fill.ExternalID.IsZero() {
+		t.Fatalf("no fill event recorded; events=%+v", events)
+	}
+	if fill.Payload.Commission == nil ||
+		fill.Payload.Commission.Amount != "-0.30" ||
+		fill.Payload.Commission.Currency != "USDT" {
+		t.Fatalf("fill event payload commission did not round-trip: %+v",
+			fill.Payload.Commission)
+	}
+
+	// Replay-from-event reconstruction path: the reproduction bundle decodes the
+	// persisted token and surfaces the bound commission both in the byte-identical
+	// canonicalApproval and in the reconstructed request result DTO.
+	reproPath := "/api/v1/orders/" + order.ExternalID.String() +
+		"/events/" + fill.ExternalID.String() + "/reproduction"
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, reproPath, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reproduction: status = %d, want 200; body=%s",
+			rec.Code, rec.Body.String())
+	}
+	repro := bodyMap(t, rec.Result())
+	reproCanon, _ := repro["canonicalApproval"].(string)
+	if !strings.Contains(reproCanon,
+		`"commission":{"amount":"-0.30","currency":"USDT"}`) {
+		t.Fatalf("reproduction canonicalApproval missing commission:\n%s", reproCanon)
+	}
+	request, _ := repro["request"].(map[string]any)
+	result, _ := request["result"].(map[string]any)
+	commission, ok := result["commission"].(map[string]any)
+	if !ok {
+		t.Fatalf("reproduction request.result.commission missing: %v",
+			result["commission"])
+	}
+	if commission["amount"] != "-0.30" || commission["currency"] != "USDT" {
+		t.Fatalf("reproduction request.result.commission = %v, want -0.30/USDT",
+			commission)
 	}
 }
 
@@ -228,16 +354,40 @@ func (e *realGateEngine) RunGroupSynchronized(
 func (e *realGateEngine) ApplyExecutionReport(
 	_ context.Context, in domain.ExecutionReportInput,
 ) (engine.ExecutionReportResult, error) {
-	// Only reached on the force path (the guard rejects the rejected case earlier).
-	// Return a valid single-fill persistence so the node's settlement write set is
-	// well-formed and the report completes.
+	// Mirror the native settlement builder (executionReportPersistenceFrom): copy
+	// the report-owned fill fields and structured commission onto both the fill
+	// event payload and the persisted trade so the attestation and listing agree.
+	// This fake carries no risk logic; it only shapes a well-formed write set so
+	// the node completes the settlement.
+	payload := domain.OrderEventPayload{
+		FillQuantity:   in.FillQuantity,
+		FillPrice:      in.FillPrice,
+		FillLockPrice:  in.LockPrice,
+		LeavesQuantity: in.LeavesQuantity,
+		OrderStatus:    string(in.OrderStatus),
+		Commission:     in.Commission,
+	}
 	persistence := engine.ExecutionReportPersistence{
 		OrderStatus: in.OrderStatus,
 		Leaves:      in.LeavesQuantity,
 		Events: []domain.OrderEvent{{
-			Order: in.Order,
-			Type:  domain.OrderEventFill,
+			Order:   in.Order,
+			Type:    domain.OrderEventFill,
+			Payload: payload,
 		}},
+	}
+	if in.FillQuantity != "" && in.FillPrice != "" {
+		persistence.Trade = &domain.Trade{
+			Order:      in.Order,
+			Account:    in.Account,
+			BaseAsset:  in.BaseAsset,
+			QuoteAsset: in.QuoteAsset,
+			Side:       in.Side,
+			Quantity:   in.FillQuantity,
+			Price:      in.FillPrice,
+			LockPrice:  in.LockPrice,
+			Commission: in.Commission,
+		}
 	}
 	return engine.ExecutionReportResult{Persistence: &persistence}, nil
 }

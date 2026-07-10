@@ -56,12 +56,6 @@
     "set_limit": {
       "description": "Create or change a risk-limit / policy barrier."
     },
-    "arm_killswitch": {
-      "description": "Arm the P&L kill-switch for an account/asset."
-    },
-    "disarm_killswitch": {
-      "description": "Disarm the P&L kill-switch for an account/asset."
-    },
     "submit_order": {
       "description": "Submit an order intent through pre-trade and obtain a signed approval token."
     },

@@ -2,12 +2,14 @@
   "policyLabel": {
     "rate_limit": "频率限制",
     "order_size_limit": "订单规模限制",
-    "pnl_bounds_kill_switch": "盈亏熔断 (kill-switch)"
+    "spot_funds_pnl_bounds_kill_switch": "PnL 熔断开关"
   },
   "scope": {
     "broker": "经纪商",
+    "global": "全局",
     "asset": "资产",
     "account": "账户",
+    "account_group": "账户组",
     "account_asset": "账户 + 资产"
   },
   "kindHint": {
@@ -19,10 +21,10 @@
       "max_quantity": "positive decimal",
       "max_notional": "positive decimal"
     },
-    "pnl_bounds_kill_switch": {
-      "lower_bound": "decimal",
-      "upper_bound": "decimal",
-      "initial_pnl": "decimal, sets the starting realized PnL; only on creation"
+    "spot_funds_pnl_bounds_kill_switch": {
+      "lower_bound": "小数",
+      "upper_bound": "小数",
+      "initial_pnl": "小数，设置账户级初始已实现 P&L"
     }
   },
   "policy": {
@@ -34,9 +36,9 @@
       "label": "订单规模限制",
       "description": "按数量和名义价值限制单笔订单的规模，防止误操作（fat-finger）。"
     },
-    "pnl_bounds_kill_switch": {
-      "label": "盈亏熔断 (kill-switch)",
-      "description": "追踪累计已实现盈亏，当盈亏超出配置的下限或上限时封锁账户。"
+    "spot_funds_pnl_bounds_kill_switch": {
+      "label": "PnL 熔断开关",
+      "description": "使用引擎在账户币种中计算的已实现 PnL，并扣除可选传入佣金。若缺少必要输入，例如用于按账户币种估值已实现 PnL 的 FX 报价，引擎会封锁处于 PnL 控制下的账户，因为无法保证限额。仅在实际需要时才要求 FX：资产已使用账户币种时不需要，未处于 PnL 控制下的账户也不需要。"
     }
   },
   "policyField": {
@@ -60,7 +62,7 @@
         "hint": "正小数"
       }
     },
-    "pnl_bounds_kill_switch": {
+    "spot_funds_pnl_bounds_kill_switch": {
       "lower_bound": {
         "label": "下限",
         "hint": "小数，如 -1000"
@@ -70,8 +72,8 @@
         "hint": "小数，如 500"
       },
       "initial_pnl": {
-        "label": "初始盈亏",
-        "hint": "小数 — 设定已实现盈亏的起始值；仅在创建账户+资产屏障时可设"
+        "label": "初始 P&L",
+        "hint": "小数 — 设置账户级初始已实现 P&L；仅适用于账户范围"
       }
     }
   }

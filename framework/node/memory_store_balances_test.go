@@ -211,6 +211,12 @@ func (r *memoryRealm) RecordAccountAdjustment(
 			return domain.AccountAdjustmentRecord{}, err
 		}
 	}
+	if in.RealizedPnl != nil {
+		if err := r.setBalanceRealizedPnl(ctx, *in.RealizedPnl); err != nil {
+			r.restoreData(snapshot)
+			return domain.AccountAdjustmentRecord{}, err
+		}
+	}
 	stored, err := r.AppendAdjustment(ctx, in.Adjustment)
 	if err != nil {
 		r.restoreData(snapshot)
@@ -221,6 +227,28 @@ func (r *memoryRealm) RecordAccountAdjustment(
 		return domain.AccountAdjustmentRecord{}, err
 	}
 	return stored, nil
+}
+
+func (r *memoryRealm) setBalanceRealizedPnl(
+	ctx context.Context,
+	in store.BalanceRealizedPnlPersistence,
+) error {
+	current, _, err := r.GetBalance(ctx, in.Account, in.Asset)
+	if err != nil {
+		return err
+	}
+	current.Account = in.Account
+	current.Asset = in.Asset
+	current.RealizedPnl = in.RealizedPnl
+	upsert, deleteBalance := balanceSnapshotCommand(current)
+	if deleteBalance != nil {
+		if err := r.DeleteBalance(ctx, deleteBalance.Account, deleteBalance.Asset); err != nil &&
+			!errors.Is(err, domain.ErrNotFound) {
+			return err
+		}
+		return nil
+	}
+	return r.UpsertBalance(ctx, *upsert)
 }
 
 func (r *memoryRealm) ListAdjustments(

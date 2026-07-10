@@ -56,12 +56,6 @@
     "set_limit": {
       "description": "创建或修改风险限额 / 策略屏障。"
     },
-    "arm_killswitch": {
-      "description": "为账户/资产激活 P&L 熔断开关。"
-    },
-    "disarm_killswitch": {
-      "description": "为账户/资产解除 P&L 熔断开关。"
-    },
     "submit_order": {
       "description": "通过盘前校验提交订单意向，并获取已签名的审批令牌。"
     },

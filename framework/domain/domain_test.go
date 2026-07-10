@@ -514,28 +514,32 @@ func TestLimitOrderSize_Validate(t *testing.T) {
 	}
 }
 
-// --- LimitPnlBounds ---
-
-func TestLimitPnlBounds_Validate(t *testing.T) {
+func TestLimitSpotFundsPnlBounds_Validate(t *testing.T) {
 	t.Parallel()
 
 	ok := []struct {
 		name  string
-		limit domain.LimitPnlBounds
+		limit domain.LimitSpotFundsPnlBounds
 	}{
-		{"asset lower only", domain.LimitPnlBounds{
-			Scope: domain.ScopeAsset, Asset: "AAPL", LowerBound: "-1000"}},
-		{"asset upper only", domain.LimitPnlBounds{
-			Scope: domain.ScopeAsset, Asset: "AAPL", UpperBound: "5000"}},
-		{"account_asset both equal", domain.LimitPnlBounds{
-			Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "MSFT",
-			LowerBound: "0", UpperBound: "0"}},
-		{"account_asset both valid", domain.LimitPnlBounds{
-			Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL",
-			LowerBound: "-500", UpperBound: "1000"}},
-		{"account_asset initial_pnl", domain.LimitPnlBounds{
-			Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL",
-			LowerBound: "-500", InitialPnl: "10"}},
+		{"global", domain.LimitSpotFundsPnlBounds{
+			Scope:           domain.ScopeGlobal,
+			AccountCurrency: "USD",
+			LowerBound:      "-1000",
+		}},
+		{"account_group", domain.LimitSpotFundsPnlBounds{
+			Scope:           domain.ScopeAccountGroup,
+			AccountGroup:    "desk-a",
+			AccountCurrency: "USD",
+			UpperBound:      "500",
+		}},
+		{"account", domain.LimitSpotFundsPnlBounds{
+			Scope:           domain.ScopeAccount,
+			Account:         "acc-1",
+			AccountCurrency: "EUR",
+			LowerBound:      "-100",
+			UpperBound:      "100",
+			InitialPnl:      "12.34",
+		}},
 	}
 	for _, tc := range ok {
 		t.Run("ok/"+tc.name, func(t *testing.T) {
@@ -548,25 +552,54 @@ func TestLimitPnlBounds_Validate(t *testing.T) {
 
 	bad := []struct {
 		name  string
-		limit domain.LimitPnlBounds
+		limit domain.LimitSpotFundsPnlBounds
 	}{
-		{"neither bound", domain.LimitPnlBounds{
-			Scope: domain.ScopeAsset, Asset: "AAPL"}},
-		{"lower > upper", domain.LimitPnlBounds{
-			Scope: domain.ScopeAsset, Asset: "AAPL",
-			LowerBound: "100", UpperBound: "50"}},
-		{"lower not decimal", domain.LimitPnlBounds{
-			Scope: domain.ScopeAsset, Asset: "AAPL", LowerBound: "abc"}},
-		{"scope broker not allowed", domain.LimitPnlBounds{
-			Scope: domain.ScopeBroker, LowerBound: "-100"}},
-		{"scope account not allowed", domain.LimitPnlBounds{
-			Scope: domain.ScopeAccount, Account: "acc-1", LowerBound: "-100"}},
-		{"initial_pnl on asset scope", domain.LimitPnlBounds{
-			Scope: domain.ScopeAsset, Asset: "AAPL",
-			LowerBound: "-100", InitialPnl: "10"}},
-		{"initial_pnl not decimal", domain.LimitPnlBounds{
-			Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL",
-			LowerBound: "-100", InitialPnl: "abc"}},
+		{"missing currency", domain.LimitSpotFundsPnlBounds{
+			Scope:      domain.ScopeGlobal,
+			LowerBound: "-1",
+		}},
+		{"missing group", domain.LimitSpotFundsPnlBounds{
+			Scope:           domain.ScopeAccountGroup,
+			AccountCurrency: "USD",
+			LowerBound:      "-1",
+		}},
+		{"account group on account rejected", domain.LimitSpotFundsPnlBounds{
+			Scope:           domain.ScopeAccount,
+			Account:         "acc-1",
+			AccountGroup:    "desk-a",
+			AccountCurrency: "USD",
+			LowerBound:      "-1",
+		}},
+		{"neither bound", domain.LimitSpotFundsPnlBounds{
+			Scope:           domain.ScopeGlobal,
+			AccountCurrency: "USD",
+		}},
+		{"lower greater than upper", domain.LimitSpotFundsPnlBounds{
+			Scope:           domain.ScopeGlobal,
+			AccountCurrency: "USD",
+			LowerBound:      "10",
+			UpperBound:      "1",
+		}},
+		{"global initial_pnl rejected", domain.LimitSpotFundsPnlBounds{
+			Scope:           domain.ScopeGlobal,
+			AccountCurrency: "USD",
+			LowerBound:      "-1",
+			InitialPnl:      "5",
+		}},
+		{"group initial_pnl rejected", domain.LimitSpotFundsPnlBounds{
+			Scope:           domain.ScopeAccountGroup,
+			AccountGroup:    "desk-a",
+			AccountCurrency: "USD",
+			LowerBound:      "-1",
+			InitialPnl:      "5",
+		}},
+		{"initial_pnl not decimal", domain.LimitSpotFundsPnlBounds{
+			Scope:           domain.ScopeAccount,
+			Account:         "acc-1",
+			AccountCurrency: "USD",
+			LowerBound:      "-1",
+			InitialPnl:      "abc",
+		}},
 	}
 	for _, tc := range bad {
 		t.Run("err/"+tc.name, func(t *testing.T) {

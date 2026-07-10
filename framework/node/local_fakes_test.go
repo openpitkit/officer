@@ -565,6 +565,7 @@ func (e *fakeEngine) ApplyExecutionReport(
 			Quantity:   in.FillQuantity,
 			Price:      in.FillPrice,
 			LockPrice:  in.LockPrice,
+			Commission: in.Commission,
 		}
 	}
 	persistence := engine.ExecutionReportPersistence{
@@ -841,6 +842,18 @@ func (s *failAccountAdjustmentRecordRealm) RecordAccountAdjustment(
 	_ context.Context, _ store.AccountAdjustmentPersistence,
 ) (domain.AccountAdjustmentRecord, error) {
 	return domain.AccountAdjustmentRecord{}, s.err
+}
+
+type accountAdjustmentRecordProbeRealm struct {
+	store.RealmStore
+	records []store.AccountAdjustmentPersistence
+}
+
+func (s *accountAdjustmentRecordProbeRealm) RecordAccountAdjustment(
+	ctx context.Context, in store.AccountAdjustmentPersistence,
+) (domain.AccountAdjustmentRecord, error) {
+	s.records = append(s.records, in)
+	return s.RealmStore.RecordAccountAdjustment(ctx, in)
 }
 
 type failOrderSubmissionAfterApplyRealm struct {

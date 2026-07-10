@@ -40,7 +40,7 @@ import (
 // Snapshot is the engine state the control plane builds the engine from at
 // process start: accounts (and their stored engine ids and blocked state), the
 // account groups, the persisted balances, and the complete set of risk barriers
-// across the three typed limit tables. BuildOpenPitEngine consumes it once. A
+// across the typed limit tables. BuildOpenPitEngine consumes it once. A
 // Snapshot is plain data with no native handles, so the store layer can assemble
 // it without cgo.
 //
@@ -59,8 +59,9 @@ type Snapshot struct {
 	RateLimits []domain.LimitRate
 	// OrderSizeLimits are the persisted order-size barriers.
 	OrderSizeLimits []domain.LimitOrderSize
-	// PnlBoundsLimits are the persisted P&L-bounds barriers.
-	PnlBoundsLimits []domain.LimitPnlBounds
+	// SpotFundsPnlBoundsLimits are the persisted SpotFunds self-computed
+	// P&L-bounds barriers.
+	SpotFundsPnlBoundsLimits []domain.LimitSpotFundsPnlBounds
 	// Groups are the persisted account groups, carrying their stored engine group
 	// id, blocked state and reason. Membership lives on Accounts; this seeds group
 	// blocks only.
@@ -73,16 +74,16 @@ type Snapshot struct {
 // LimitSet is the complete typed barrier set for one policy, the carrier
 // ConfigurePolicy applies on the live handle. Only the slice matching the named
 // policy is consumed; the others are ignored. It lets a single ConfigurePolicy
-// method retune any of the three risk policies from its own typed table without
+// method retune any risk policy from its own typed table without
 // a per-policy method on the interface.
 type LimitSet struct {
 	// RateLimits is the complete rate-limit barrier set (used for rate_limit).
 	RateLimits []domain.LimitRate
 	// OrderSizeLimits is the complete order-size barrier set (order_size_limit).
 	OrderSizeLimits []domain.LimitOrderSize
-	// PnlBoundsLimits is the complete P&L-bounds barrier set
-	// (pnl_bounds_kill_switch).
-	PnlBoundsLimits []domain.LimitPnlBounds
+	// SpotFundsPnlBoundsLimits is the complete SpotFunds self-computed
+	// P&L-bounds barrier set (spot_funds_pnl_bounds_kill_switch).
+	SpotFundsPnlBoundsLimits []domain.LimitSpotFundsPnlBounds
 }
 
 // AdjustmentResult is the outcome of one ApplyAccountAdjustment call. Exactly

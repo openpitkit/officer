@@ -245,7 +245,11 @@ func (r *memoryRealm) renameAccountReferences(oldCode, newCode domain.AccountID)
 
 	r.rateLimits = renameAccountLimits(r.rateLimits, oldCode, newCode)
 	r.orderSizeLimits = renameAccountLimits(r.orderSizeLimits, oldCode, newCode)
-	r.pnlBoundsLimits = renameAccountLimits(r.pnlBoundsLimits, oldCode, newCode)
+	r.spotFundsPnlBoundsLimits = renameSpotFundsPnlBoundsLimits(
+		r.spotFundsPnlBoundsLimits,
+		oldCode,
+		newCode,
+	)
 
 	for i := range r.adjustments {
 		if r.adjustments[i].Account == oldCode {
@@ -266,7 +270,7 @@ func (r *memoryRealm) renameAccountReferences(oldCode, newCode domain.AccountID)
 }
 
 func renameAccountLimits[Limit interface {
-	domain.LimitRate | domain.LimitOrderSize | domain.LimitPnlBounds
+	domain.LimitRate | domain.LimitOrderSize
 }](
 	limits map[string]Limit,
 	oldCode domain.AccountID,
@@ -287,13 +291,28 @@ func renameAccountLimits[Limit interface {
 				key = limitKey(typed.Scope, typed.Account, typed.Asset)
 			}
 			out[key] = any(typed).(Limit)
-		case domain.LimitPnlBounds:
-			if typed.Account == oldCode {
-				typed.Account = newCode
-				key = limitKey(typed.Scope, typed.Account, typed.Asset)
-			}
-			out[key] = any(typed).(Limit)
 		}
+	}
+	return out
+}
+
+func renameSpotFundsPnlBoundsLimits(
+	limits map[string]domain.LimitSpotFundsPnlBounds,
+	oldCode domain.AccountID,
+	newCode domain.AccountID,
+) map[string]domain.LimitSpotFundsPnlBounds {
+	out := map[string]domain.LimitSpotFundsPnlBounds{}
+	for key, limit := range limits {
+		if limit.Account == oldCode {
+			limit.Account = newCode
+			key = spotFundsPnlBoundsLimitKey(
+				limit.Scope,
+				limit.Account,
+				limit.AccountGroup,
+				limit.AccountCurrency,
+			)
+		}
+		out[key] = limit
 	}
 	return out
 }

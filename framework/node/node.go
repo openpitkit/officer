@@ -57,7 +57,7 @@ type Health struct {
 	Store store.StoreHealth
 }
 
-// AccountLimits bundles the three typed barrier sets returned by the account-
+// AccountLimits bundles the typed barrier sets returned by the account-
 // addressed limit reads. Each slice holds the barriers of one policy; an empty
 // slice means the policy carries no matching barrier. It is the read-side
 // counterpart of the typed Put* mutators on the Node surface.
@@ -66,13 +66,15 @@ type AccountLimits struct {
 	RateLimits []domain.LimitRate
 	// OrderSizeLimits are the matching order-size barriers.
 	OrderSizeLimits []domain.LimitOrderSize
-	// PnlBoundsLimits are the matching P&L-bounds barriers.
-	PnlBoundsLimits []domain.LimitPnlBounds
+	// SpotFundsPnlBoundsLimits are the matching SpotFunds self-computed
+	// P&L-bounds barriers.
+	SpotFundsPnlBoundsLimits []domain.LimitSpotFundsPnlBounds
 }
 
 // LimitTarget addresses a single typed barrier for deletion: the policy it
-// belongs to plus the (scope, account, asset) composite the store keys it by.
-// The optional Account/Asset axes are present exactly when Scope carries them.
+// belongs to plus the composite the store keys it by. The optional Account,
+// AccountGroup, Asset and AccountCurrency axes are present exactly when the
+// policy and scope carry them.
 type LimitTarget struct {
 	// Policy is the policy the barrier belongs to (e.g. domain.PolicyRateLimit).
 	Policy string
@@ -80,8 +82,12 @@ type LimitTarget struct {
 	Scope domain.LimitScope
 	// Account is the account axis; empty unless Scope carries it.
 	Account domain.AccountID
+	// AccountGroup is the account-group axis; empty unless Scope carries it.
+	AccountGroup string
 	// Asset is the asset axis; empty unless Scope carries it.
 	Asset string
+	// AccountCurrency is the account-currency axis used by SpotFunds P&L bounds.
+	AccountCurrency string
 }
 
 // Node is one execution target: an engine plus its realm-scoped store, behind a
@@ -255,16 +261,17 @@ type Node interface {
 		ctx context.Context, limit domain.LimitOrderSize, caller domain.Caller,
 	) (marketdata.Sink, error)
 
-	// PutPnlBoundsLimit upserts the whole P&L-bounds barrier and reconfigures the
-	// live P&L-bounds policy, as PutRateLimit does for the rate policy.
-	PutPnlBoundsLimit(
-		ctx context.Context, limit domain.LimitPnlBounds, caller domain.Caller,
+	// PutSpotFundsPnlBoundsLimit upserts the whole SpotFunds self-computed
+	// P&L-bounds barrier and reconfigures the live SpotFunds policy.
+	PutSpotFundsPnlBoundsLimit(
+		ctx context.Context,
+		limit domain.LimitSpotFundsPnlBounds,
+		caller domain.Caller,
 	) (marketdata.Sink, error)
 
-	// DeleteLimit removes the barrier addressed by (policy, scope, account,
-	// asset) from the store, reconfigures the named policy from the persisted
-	// full barrier set, audits the action, and returns a replacement market-data
-	// sink only when the engine was rebuilt.
+	// DeleteLimit removes the addressed barrier from the store, reconfigures the
+	// named policy from the persisted full barrier set, audits the action, and
+	// returns a replacement market-data sink only when the engine was rebuilt.
 	DeleteLimit(
 		ctx context.Context, target LimitTarget, caller domain.Caller,
 	) (marketdata.Sink, error)
@@ -338,6 +345,14 @@ type Node interface {
 		ctx context.Context, key Key, externalID domain.ExternalID,
 		req domain.AdjustmentRequest, caller domain.Caller,
 	) (domain.AccountAdjustmentRecord, error)
+
+	// SetBalanceRealizedPnl writes the operator-supplied realized P&L snapshot
+	// for one per-(account, asset) balance row through the adjustment history
+	// path.
+	SetBalanceRealizedPnl(
+		ctx context.Context, key Key, asset string, realizedPnl string,
+		caller domain.Caller,
+	) (domain.Balance, error)
 
 	// ImportPositionSnapshot applies the engine-relevant fields of a persisted
 	// position snapshot through the spot-funds adjustment path, then stores the

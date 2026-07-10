@@ -16,13 +16,14 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 // Limits group of the SQLite store: one typed table per policy
-// (limit_rate, limit_order_size, limit_pnl_bound). Each row is keyed by the
-// natural composite (scope, account_id, asset_id); there is no external id and
-// no surrogate id outward. Account and asset are present only for scopes that
-// carry them; an empty code means the NULL axis (scope-wide). Domain Validate()
-// enforces allowed scopes and consistent axis presence before persist; the store
-// applies that rule by calling Validate() on every Put. Unknown account or asset
-// codes on a non-NULL axis are an error wrapping domain.ErrInvalid.
+// (limit_rate, limit_order_size, limit_spot_funds_pnl_bound).
+// Each row is keyed by its natural composite; there is no external id and no
+// surrogate id outward. Account, asset, account group and account currency are
+// present only for policies and scopes that carry them; an empty code means the
+// NULL axis (scope-wide). Domain Validate() enforces allowed scopes and
+// consistent axis presence before persist; the store applies that rule by
+// calling Validate() on every Put. Unknown dictionary codes on a non-NULL axis
+// are an error wrapping domain.ErrInvalid.
 
 package store
 
@@ -39,14 +40,15 @@ import (
 
 // --- Unified policy list (flattens the three barrier tables) -----------------
 
-// policyUnion projects the three typed barrier tables onto one common shape so
+// policyUnion projects the typed barrier tables onto one common shape so
 // they can be sorted, filtered, and paged together. Columns absent for a given
 // barrier kind are NULL; stable_id is the kind-prefixed surrogate id, unique
-// across the union, used as the deterministic sort tiebreak. The account/asset
+// across the union, used as the deterministic sort tiebreak. The dictionary
 // codes come from the same LEFT JOINs the per-kind reads use.
 const policyUnion = `
 SELECT 'rate_limit' AS kind, lr.scope AS scope,
-       a.code AS account_code, ast.code AS asset_code,
+       a.code AS account_code, NULL AS account_group_code,
+       ast.code AS asset_code, NULL AS account_currency_code,
        lr.max_orders AS max_orders, lr.window AS window,
        NULL AS max_quantity, NULL AS max_notional,
        NULL AS lower_bound, NULL AS upper_bound, NULL AS initial_pnl,
@@ -56,7 +58,8 @@ LEFT JOIN account a   ON a.id   = lr.account_id
 LEFT JOIN asset   ast ON ast.id = lr.asset_id
 UNION ALL
 SELECT 'order_size_limit' AS kind, los.scope AS scope,
-       a.code AS account_code, ast.code AS asset_code,
+       a.code AS account_code, NULL AS account_group_code,
+       ast.code AS asset_code, NULL AS account_currency_code,
        NULL AS max_orders, NULL AS window,
        los.max_quantity AS max_quantity, los.max_notional AS max_notional,
        NULL AS lower_bound, NULL AS upper_bound, NULL AS initial_pnl,
@@ -65,21 +68,22 @@ FROM limit_order_size los
 LEFT JOIN account a   ON a.id   = los.account_id
 LEFT JOIN asset   ast ON ast.id = los.asset_id
 UNION ALL
-SELECT 'pnl_bounds_kill_switch' AS kind, lpb.scope AS scope,
-       a.code AS account_code, ast.code AS asset_code,
+SELECT 'spot_funds_pnl_bounds_kill_switch' AS kind, lsfpb.scope AS scope,
+       a.code AS account_code, g.code AS account_group_code,
+       NULL AS asset_code, ac.code AS account_currency_code,
        NULL AS max_orders, NULL AS window,
        NULL AS max_quantity, NULL AS max_notional,
-       lpb.lower_bound AS lower_bound, lpb.upper_bound AS upper_bound,
-       lpb.initial_pnl AS initial_pnl,
-       'pnl_bounds_kill_switch:' || lpb.id AS stable_id
-FROM limit_pnl_bound lpb
-LEFT JOIN account a   ON a.id   = lpb.account_id
-LEFT JOIN asset   ast ON ast.id = lpb.asset_id`
+       lsfpb.lower_bound AS lower_bound, lsfpb.upper_bound AS upper_bound,
+       lsfpb.initial_pnl AS initial_pnl,
+       'spot_funds_pnl_bounds_kill_switch:' || lsfpb.id AS stable_id
+FROM limit_spot_funds_pnl_bound lsfpb
+LEFT JOIN account       a  ON a.id  = lsfpb.account_id
+LEFT JOIN account_group g  ON g.id  = lsfpb.account_group_id
+LEFT JOIN asset         ac ON ac.id = lsfpb.account_currency_asset_id`
 
-// ListPolicyRows returns the three typed barrier tables flattened into one
-// sorted, paged list with the pre-paging total. It applies the account and kind
-// filters in SQL and reconstructs each row's typed value from the projected
-// columns.
+// ListPolicyRows returns the typed barrier tables flattened into one sorted,
+// paged list with the pre-paging total. It applies filters in SQL and
+// reconstructs each row's typed value from the projected columns.
 func (r *realmStore) ListPolicyRows(
 	ctx context.Context, filter fwstore.PolicyListFilter,
 ) (fwstore.PolicyListPage, error) {
@@ -98,7 +102,8 @@ func (r *realmStore) ListPolicyRows(
 	}
 
 	queryArgs := append([]any{}, args...)
-	query := `SELECT kind, scope, account_code, asset_code,
+	query := `SELECT kind, scope, account_code, account_group_code,
+       asset_code, account_currency_code,
        max_orders, window, max_quantity, max_notional,
        lower_bound, upper_bound, initial_pnl` + from + policyListOrderBy(filter.Sort)
 	if filter.Page.Limit > 0 {
@@ -127,10 +132,12 @@ func (r *realmStore) ListPolicyRows(
 }
 
 func policyListWhere(filter fwstore.PolicyListFilter) (string, []any) {
-	clauses := make([]string, 0, 2)
-	args := make([]any, 0, 2)
+	clauses := make([]string, 0, 5)
+	args := make([]any, 0, 5)
 	appendMatcher(&clauses, &args, "account_code", filter.Account)
+	appendMatcher(&clauses, &args, "account_group_code", filter.AccountGroup)
 	appendMatcher(&clauses, &args, "asset_code", filter.Asset)
+	appendMatcher(&clauses, &args, "account_currency_code", filter.AccountCurrency)
 	if filter.Kind != nil {
 		clauses = append(clauses, "kind = ?")
 		args = append(args, string(*filter.Kind))
@@ -143,16 +150,18 @@ func policyListWhere(filter fwstore.PolicyListFilter) (string, []any) {
 
 func policyListOrderBy(sort fwstore.SortSpec) string {
 	columns := map[string]string{
-		"account":     "account_code",
-		"asset":       "asset_code",
-		"initialPnl":  "initial_pnl COLLATE DECIMAL",
-		"lowerBound":  "lower_bound COLLATE DECIMAL",
-		"maxNotional": "max_notional COLLATE DECIMAL",
-		"maxOrders":   "max_orders",
-		"maxQuantity": "max_quantity COLLATE DECIMAL",
-		"policy":      "kind",
-		"scope":       "scope",
-		"upperBound":  "upper_bound COLLATE DECIMAL",
+		"account":         "account_code",
+		"accountCurrency": "account_currency_code",
+		"accountGroup":    "account_group_code",
+		"asset":           "asset_code",
+		"initialPnl":      "initial_pnl COLLATE DECIMAL",
+		"lowerBound":      "lower_bound COLLATE DECIMAL",
+		"maxNotional":     "max_notional COLLATE DECIMAL",
+		"maxOrders":       "max_orders",
+		"maxQuantity":     "max_quantity COLLATE DECIMAL",
+		"policy":          "kind",
+		"scope":           "scope",
+		"upperBound":      "upper_bound COLLATE DECIMAL",
 	}
 	column := columns[sort.Column]
 	if column == "" {
@@ -169,26 +178,29 @@ func policyListOrderBy(sort fwstore.SortSpec) string {
 	// the per-table surrogate id. stable_id stays the final tiebreak for the
 	// degenerate case where the composite repeats across shards.
 	tie := "kind " + tieDirection + ", scope " + tieDirection +
-		", account_code " + tieDirection + ", asset_code " + tieDirection +
+		", account_code " + tieDirection +
+		", account_group_code " + tieDirection +
+		", asset_code " + tieDirection +
+		", account_currency_code " + tieDirection +
 		", stable_id " + tieDirection
 	return " ORDER BY " + column + " " + direction + ", " + tie
 }
 
 func scanPolicyRow(rows *sql.Rows) (fwstore.PolicyListRow, error) {
 	var (
-		kind                   string
-		scope                  string
-		accountCode, assetCode sql.NullString
-		maxOrders              sql.NullInt64
-		windowStr              sql.NullString
-		maxQuantity            sql.NullString
-		maxNotional            sql.NullString
-		lowerBound             sql.NullString
-		upperBound             sql.NullString
-		initialPnl             sql.NullString
+		kind                               string
+		scope                              string
+		accountCode, accountGroupCode      sql.NullString
+		assetCode, accountCurrencyCode     sql.NullString
+		maxOrders                          sql.NullInt64
+		windowStr                          sql.NullString
+		maxQuantity                        sql.NullString
+		maxNotional                        sql.NullString
+		lowerBound, upperBound, initialPnl sql.NullString
 	)
 	if err := rows.Scan(
-		&kind, &scope, &accountCode, &assetCode,
+		&kind, &scope, &accountCode, &accountGroupCode,
+		&assetCode, &accountCurrencyCode,
 		&maxOrders, &windowStr, &maxQuantity, &maxNotional,
 		&lowerBound, &upperBound, &initialPnl,
 	); err != nil {
@@ -196,10 +208,12 @@ func scanPolicyRow(rows *sql.Rows) (fwstore.PolicyListRow, error) {
 	}
 	account := domain.AccountID(accountCode.String)
 	row := fwstore.PolicyListRow{
-		Kind:    fwstore.PolicyKind(kind),
-		Scope:   scope,
-		Account: account,
-		Asset:   assetCode.String,
+		Kind:            fwstore.PolicyKind(kind),
+		Scope:           scope,
+		Account:         account,
+		AccountGroup:    accountGroupCode.String,
+		Asset:           assetCode.String,
+		AccountCurrency: accountCurrencyCode.String,
 	}
 	switch row.Kind {
 	case fwstore.PolicyKindRate:
@@ -224,14 +238,15 @@ func scanPolicyRow(rows *sql.Rows) (fwstore.PolicyListRow, error) {
 			MaxQuantity: maxQuantity.String,
 			MaxNotional: maxNotional.String,
 		}
-	case fwstore.PolicyKindPnlBounds:
-		row.PnlBounds = &domain.LimitPnlBounds{
-			Scope:      scope,
-			Account:    account,
-			Asset:      assetCode.String,
-			LowerBound: lowerBound.String,
-			UpperBound: upperBound.String,
-			InitialPnl: initialPnl.String,
+	case fwstore.PolicyKindSpotFundsPnlBounds:
+		row.SpotFundsPnlBounds = &domain.LimitSpotFundsPnlBounds{
+			Scope:           scope,
+			Account:         account,
+			AccountGroup:    accountGroupCode.String,
+			AccountCurrency: accountCurrencyCode.String,
+			LowerBound:      lowerBound.String,
+			UpperBound:      upperBound.String,
+			InitialPnl:      initialPnl.String,
 		}
 	default:
 		return fwstore.PolicyListRow{}, fmt.Errorf(
@@ -493,24 +508,27 @@ func scanOrderSizeLimit(rows *sql.Rows) (domain.LimitOrderSize, error) {
 	}, nil
 }
 
-// --- P&L-bounds barriers (limit_pnl_bound) ----------------------------------
+// --- SpotFunds P&L-bounds barriers (limit_spot_funds_pnl_bound) -------------
 
-// ListPnlBoundsLimits returns every P&L-bounds barrier. When account is
-// non-empty only barriers whose account_id matches are returned.
-func (r *realmStore) ListPnlBoundsLimits(
+// ListSpotFundsPnlBoundsLimits returns every SpotFunds self-computed
+// P&L-bounds barrier. When account is non-empty only account-scoped barriers
+// whose account_id matches are returned.
+func (r *realmStore) ListSpotFundsPnlBoundsLimits(
 	ctx context.Context, account domain.AccountID,
-) ([]domain.LimitPnlBounds, error) {
+) ([]domain.LimitSpotFundsPnlBounds, error) {
 	q := `
-SELECT lpb.scope, a.code, ast.code, lpb.lower_bound, lpb.upper_bound, lpb.initial_pnl
-FROM limit_pnl_bound lpb
-LEFT JOIN account a   ON a.id   = lpb.account_id
-LEFT JOIN asset   ast ON ast.id = lpb.asset_id`
+SELECT lsfpb.scope, a.code, g.code, ac.code,
+       lsfpb.lower_bound, lsfpb.upper_bound, lsfpb.initial_pnl
+FROM limit_spot_funds_pnl_bound lsfpb
+LEFT JOIN account       a  ON a.id  = lsfpb.account_id
+LEFT JOIN account_group g  ON g.id  = lsfpb.account_group_id
+LEFT JOIN asset         ac ON ac.id = lsfpb.account_currency_asset_id`
 	args := make([]any, 0, 1)
 	if account != "" {
 		q += ` WHERE a.code = ?`
 		args = append(args, account.String())
 	}
-	q += ` ORDER BY lpb.scope, a.code, ast.code`
+	q += ` ORDER BY lsfpb.scope, a.code, g.code, ac.code`
 
 	db, err := r.db()
 	if err != nil {
@@ -518,28 +536,31 @@ LEFT JOIN asset   ast ON ast.id = lpb.asset_id`
 	}
 	rows, err := db.QueryContext(ctx, q, args...)
 	if err != nil {
-		return nil, fmt.Errorf("store: list pnl bounds limits: %w", err)
+		return nil, fmt.Errorf("store: list spot funds pnl bounds limits: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	result := make([]domain.LimitPnlBounds, 0)
+	result := make([]domain.LimitSpotFundsPnlBounds, 0)
 	for rows.Next() {
-		l, err := scanPnlBoundsLimit(rows)
+		l, err := scanSpotFundsPnlBoundsLimit(rows)
 		if err != nil {
 			return nil, err
 		}
 		result = append(result, l)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: iterate pnl bounds limits: %w", err)
+		return nil, fmt.Errorf(
+			"store: iterate spot funds pnl bounds limits: %w", err,
+		)
 	}
 	return result, nil
 }
 
-// PutPnlBoundsLimit upserts one P&L-bounds barrier keyed by its composite.
-// Uses the same DELETE-then-INSERT pattern as PutRateLimit to handle nullable
-// axis columns correctly in SQLite's UNIQUE constraint.
-func (r *realmStore) PutPnlBoundsLimit(ctx context.Context, limit domain.LimitPnlBounds) error {
+// PutSpotFundsPnlBoundsLimit upserts one SpotFunds self-computed P&L-bounds
+// barrier keyed by its composite.
+func (r *realmStore) PutSpotFundsPnlBoundsLimit(
+	ctx context.Context, limit domain.LimitSpotFundsPnlBounds,
+) error {
 	if err := limit.Validate(); err != nil {
 		return err
 	}
@@ -547,19 +568,22 @@ func (r *realmStore) PutPnlBoundsLimit(ctx context.Context, limit domain.LimitPn
 	if err != nil {
 		return err
 	}
-	accountID, assetID, err := resolveLimitAxes(ctx, db, limit.Account, limit.Asset)
+	accountID, groupID, accountCurrencyID, err := resolveSpotFundsPnlBoundsAxes(
+		ctx, db, limit.Account, limit.AccountGroup, limit.AccountCurrency,
+	)
 	if err != nil {
 		return err
 	}
-	return putLimitRow(ctx, db, "limit_pnl_bound",
-		limit.Scope, accountID, assetID,
+	return putSpotFundsPnlBoundsRow(
+		ctx, db, limit.Scope, accountID, groupID, accountCurrencyID,
 		func(ctx context.Context, exec sqlExecer) error {
 			_, err := exec.ExecContext(
 				ctx,
-				`INSERT INTO limit_pnl_bound
-				 (scope, account_id, asset_id, lower_bound, upper_bound, initial_pnl)
-				 VALUES (?, ?, ?, ?, ?, ?)`,
-				limit.Scope, accountID, assetID,
+				`INSERT INTO limit_spot_funds_pnl_bound
+				 (scope, account_id, account_group_id, account_currency_asset_id,
+				  lower_bound, upper_bound, initial_pnl)
+				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				limit.Scope, accountID, groupID, accountCurrencyID,
 				nullableString(limit.LowerBound),
 				nullableString(limit.UpperBound),
 				nullableString(limit.InitialPnl),
@@ -569,50 +593,66 @@ func (r *realmStore) PutPnlBoundsLimit(ctx context.Context, limit domain.LimitPn
 	)
 }
 
-// DeletePnlBoundsLimit removes the P&L-bounds barrier with the given composite.
-// Returns domain.ErrNotFound when absent.
-func (r *realmStore) DeletePnlBoundsLimit(
-	ctx context.Context, scope domain.LimitScope, account domain.AccountID, asset string,
+// DeleteSpotFundsPnlBoundsLimit removes the SpotFunds self-computed P&L-bounds
+// barrier with the given composite. Returns domain.ErrNotFound when absent.
+func (r *realmStore) DeleteSpotFundsPnlBoundsLimit(
+	ctx context.Context,
+	scope domain.LimitScope,
+	account domain.AccountID,
+	accountGroup string,
+	accountCurrency string,
 ) error {
 	db, err := r.db()
 	if err != nil {
 		return err
 	}
-	accountID, assetID, err := resolveLimitAxes(ctx, db, account, asset)
+	accountID, groupID, accountCurrencyID, err := resolveSpotFundsPnlBoundsAxes(
+		ctx, db, account, accountGroup, accountCurrency,
+	)
 	if err != nil {
 		return err
 	}
 	res, err := db.ExecContext(
 		ctx,
-		`DELETE FROM limit_pnl_bound
-		 WHERE scope = ? AND account_id IS ? AND asset_id IS ?`,
-		scope, accountID, assetID,
+		`DELETE FROM limit_spot_funds_pnl_bound
+		 WHERE scope = ?
+		   AND account_id IS ?
+		   AND account_group_id IS ?
+		   AND account_currency_asset_id = ?`,
+		scope, accountID, groupID, accountCurrencyID,
 	)
 	if err != nil {
-		return fmt.Errorf("store: delete pnl bounds limit: %w", err)
+		return fmt.Errorf("store: delete spot funds pnl bounds limit: %w", err)
 	}
-	return notFoundIfNoRows(res, "pnl bounds limit", scope)
+	return notFoundIfNoRows(res, "spot funds pnl bounds limit", scope)
 }
 
-func scanPnlBoundsLimit(rows *sql.Rows) (domain.LimitPnlBounds, error) {
+func scanSpotFundsPnlBoundsLimit(
+	rows *sql.Rows,
+) (domain.LimitSpotFundsPnlBounds, error) {
 	var (
-		scope                              string
-		accountCode, assetCode             sql.NullString
-		lowerBound, upperBound, initialPnl sql.NullString
+		scope                         string
+		accountCode, accountGroupCode sql.NullString
+		accountCurrencyCode           sql.NullString
+		lowerBound, upperBound        sql.NullString
+		initialPnl                    sql.NullString
 	)
 	if err := rows.Scan(
-		&scope, &accountCode, &assetCode,
+		&scope, &accountCode, &accountGroupCode, &accountCurrencyCode,
 		&lowerBound, &upperBound, &initialPnl,
 	); err != nil {
-		return domain.LimitPnlBounds{}, fmt.Errorf("store: scan pnl bounds limit: %w", err)
+		return domain.LimitSpotFundsPnlBounds{}, fmt.Errorf(
+			"store: scan spot funds pnl bounds limit: %w", err,
+		)
 	}
-	return domain.LimitPnlBounds{
-		Scope:      scope,
-		Account:    domain.AccountID(accountCode.String),
-		Asset:      assetCode.String,
-		LowerBound: lowerBound.String,
-		UpperBound: upperBound.String,
-		InitialPnl: initialPnl.String,
+	return domain.LimitSpotFundsPnlBounds{
+		Scope:           scope,
+		Account:         domain.AccountID(accountCode.String),
+		AccountGroup:    accountGroupCode.String,
+		AccountCurrency: accountCurrencyCode.String,
+		LowerBound:      lowerBound.String,
+		UpperBound:      upperBound.String,
+		InitialPnl:      initialPnl.String,
 	}, nil
 }
 
@@ -680,4 +720,67 @@ func resolveLimitAxes(
 		assetID = sql.NullInt64{Int64: id, Valid: true}
 	}
 	return accountID, assetID, nil
+}
+
+func putSpotFundsPnlBoundsRow(
+	ctx context.Context,
+	db *sql.DB,
+	scope string,
+	accountID, groupID sql.NullInt64,
+	accountCurrencyID int64,
+	insertFn func(context.Context, sqlExecer) error,
+) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: begin put spot funds pnl bounds limit: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(
+		ctx,
+		`DELETE FROM limit_spot_funds_pnl_bound
+		 WHERE scope = ?
+		   AND account_id IS ?
+		   AND account_group_id IS ?
+		   AND account_currency_asset_id = ?`,
+		scope, accountID, groupID, accountCurrencyID,
+	); err != nil {
+		return fmt.Errorf("store: delete old spot funds pnl bounds limit: %w", err)
+	}
+	if err := insertFn(ctx, tx); err != nil {
+		return fmt.Errorf("store: insert spot funds pnl bounds limit: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit put spot funds pnl bounds limit: %w", err)
+	}
+	return nil
+}
+
+func resolveSpotFundsPnlBoundsAxes(
+	ctx context.Context,
+	q sqlQueryer,
+	account domain.AccountID,
+	accountGroup string,
+	accountCurrency string,
+) (sql.NullInt64, sql.NullInt64, int64, error) {
+	var accountID, groupID sql.NullInt64
+	if account != "" {
+		id, err := resolveAccountID(ctx, q, account)
+		if err != nil {
+			return sql.NullInt64{}, sql.NullInt64{}, 0, err
+		}
+		accountID = sql.NullInt64{Int64: id, Valid: true}
+	}
+	if accountGroup != "" {
+		id, err := resolveGroupID(ctx, q, accountGroup)
+		if err != nil {
+			return sql.NullInt64{}, sql.NullInt64{}, 0, err
+		}
+		groupID = sql.NullInt64{Int64: id, Valid: true}
+	}
+	accountCurrencyID, err := resolveAssetID(ctx, q, accountCurrency)
+	if err != nil {
+		return sql.NullInt64{}, sql.NullInt64{}, 0, err
+	}
+	return accountID, groupID, accountCurrencyID, nil
 }

@@ -985,16 +985,19 @@ func (s *Service) buildExecutionReportPayload(
 	fillQuantity := ""
 	fillPrice := ""
 	fillLockPrice := ""
+	var commission *domain.Commission
 	if persistence.Trade != nil {
 		fillQuantity = persistence.Trade.Quantity
 		fillPrice = persistence.Trade.Price
 		fillLockPrice = persistence.Trade.LockPrice
+		commission = persistence.Trade.Commission
 	}
 	payload.Result = &domain.AttestationResult{
 		Outcome:        "applied",
 		FillQuantity:   fillQuantity,
 		FillPrice:      fillPrice,
 		FillLockPrice:  fillLockPrice,
+		Commission:     commission,
 		LeavesQuantity: persistence.Leaves,
 		OrderStatus:    string(persistence.OrderStatus),
 		Blocks:         attestationBlocks(persistence.Blocks),

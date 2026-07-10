@@ -103,11 +103,20 @@ type BalanceKey struct {
 	Asset   string
 }
 
+// BalanceRealizedPnlPersistence sets one persisted cumulative realized-P&L
+// snapshot inside a larger atomic persistence command.
+type BalanceRealizedPnlPersistence struct {
+	Account     domain.AccountID
+	Asset       string
+	RealizedPnl string
+}
+
 // AccountAdjustmentPersistence is the atomic persistence command for one
 // engine-applied account adjustment or position snapshot.
 type AccountAdjustmentPersistence struct {
 	UpsertBalance *domain.Balance
 	DeleteBalance *BalanceKey
+	RealizedPnl   *BalanceRealizedPnlPersistence
 	Adjustment    domain.AccountAdjustmentRecord
 	Audit         AuditEntry
 }
@@ -375,7 +384,7 @@ type AssetClassListPage struct {
 	Total int
 }
 
-// PolicyKind discriminates the three typed limit barriers flattened into the
+// PolicyKind discriminates the typed limit barriers flattened into the
 // unified policy list. Its string values match the engine policy constants in
 // the domain package (domain.PolicyRateLimit and siblings).
 type PolicyKind string
@@ -385,18 +394,21 @@ const (
 	PolicyKindRate PolicyKind = "rate_limit"
 	// PolicyKindOrderSize is the order-size barrier.
 	PolicyKindOrderSize PolicyKind = "order_size_limit"
-	// PolicyKindPnlBounds is the P&L-bounds kill-switch barrier.
-	PolicyKindPnlBounds PolicyKind = "pnl_bounds_kill_switch"
+	// PolicyKindSpotFundsPnlBounds is the SpotFunds self-computed P&L-bounds
+	// kill-switch barrier.
+	PolicyKindSpotFundsPnlBounds PolicyKind = "spot_funds_pnl_bounds_kill_switch"
 )
 
 // PolicyListFilter narrows the unified policy-list read. Account mirrors the
 // Limits UI account filter; Kind, when set, restricts to one barrier kind.
 type PolicyListFilter struct {
-	Account TextMatcher
-	Asset   TextMatcher
-	Kind    *PolicyKind
-	Sort    SortSpec
-	Page    PageSpec
+	Account         TextMatcher
+	AccountGroup    TextMatcher
+	Asset           TextMatcher
+	AccountCurrency TextMatcher
+	Kind            *PolicyKind
+	Sort            SortSpec
+	Page            PageSpec
 }
 
 // PolicyListRow is one barrier flattened into the common policy shape: the kind
@@ -404,13 +416,15 @@ type PolicyListFilter struct {
 // and exactly one populated typed value matching Kind. The money and size fields
 // stay on the domain value types, never collapsed to a float.
 type PolicyListRow struct {
-	Kind      PolicyKind
-	Scope     domain.LimitScope
-	Account   domain.AccountID
-	Asset     string
-	Rate      *domain.LimitRate
-	OrderSize *domain.LimitOrderSize
-	PnlBounds *domain.LimitPnlBounds
+	Kind               PolicyKind
+	Scope              domain.LimitScope
+	Account            domain.AccountID
+	AccountGroup       string
+	Asset              string
+	AccountCurrency    string
+	Rate               *domain.LimitRate
+	OrderSize          *domain.LimitOrderSize
+	SpotFundsPnlBounds *domain.LimitSpotFundsPnlBounds
 }
 
 // PolicyListPage is a paged policy-list result with the total matching count
@@ -792,19 +806,24 @@ type RealmStore interface {
 		ctx context.Context, scope domain.LimitScope, account domain.AccountID, asset string,
 	) error
 
-	// ListPnlBoundsLimits returns every P&L-bounds barrier, optionally narrowed to
-	// the given account.
-	ListPnlBoundsLimits(
+	// ListSpotFundsPnlBoundsLimits returns every SpotFunds self-computed P&L
+	// barrier, optionally narrowed to the given account.
+	ListSpotFundsPnlBoundsLimits(
 		ctx context.Context, account domain.AccountID,
-	) ([]domain.LimitPnlBounds, error)
+	) ([]domain.LimitSpotFundsPnlBounds, error)
 
-	// PutPnlBoundsLimit upserts one P&L-bounds barrier keyed by its composite.
-	PutPnlBoundsLimit(ctx context.Context, limit domain.LimitPnlBounds) error
+	// PutSpotFundsPnlBoundsLimit upserts one SpotFunds self-computed P&L
+	// barrier keyed by its composite.
+	PutSpotFundsPnlBoundsLimit(ctx context.Context, limit domain.LimitSpotFundsPnlBounds) error
 
-	// DeletePnlBoundsLimit removes the P&L-bounds barrier with the given
-	// composite. Returns domain.ErrNotFound when absent.
-	DeletePnlBoundsLimit(
-		ctx context.Context, scope domain.LimitScope, account domain.AccountID, asset string,
+	// DeleteSpotFundsPnlBoundsLimit removes the SpotFunds self-computed P&L
+	// barrier with the given composite. Returns domain.ErrNotFound when absent.
+	DeleteSpotFundsPnlBoundsLimit(
+		ctx context.Context,
+		scope domain.LimitScope,
+		account domain.AccountID,
+		accountGroup string,
+		accountCurrency string,
 	) error
 
 	// --- Account adjustments (machine record, addressed by external id) ---

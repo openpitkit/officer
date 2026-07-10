@@ -96,6 +96,7 @@
     "order": "订单",
     "qty": "数量",
     "lockPrice": "锁定价格",
+    "commission": "佣金",
     "displayPrices": "显示价格",
     "signedIndicator": "此订单至少有一个已签名的事件。",
     "columnDescriptions": {
@@ -111,6 +112,7 @@
       "order": "此列将成交链接回其父订单。",
       "qty": "此列显示已执行的基础资产数量。",
       "lockPrice": "此列显示用于资金锁定的价格，如不同于执行价格。",
+      "commission": "此列按币种显示已记录的佣金小计。",
       "displayPrices": "此列显示风控引擎返回、供操作员查看的附加价格。"
     }
   },
@@ -206,6 +208,20 @@
       "calculateLeaves": "计算剩余数量",
       "lockPrice": "锁定价格（可选）",
       "lockPricePlaceholder": "可选",
+      "commissionAmount": "佣金金额（可选）",
+      "commissionAmountPlaceholder": "如 -0.25",
+      "commissionCurrency": "佣金币种",
+      "commissionCurrencyPlaceholder": "如 USD",
+      "economicsHelp": "佣金进入 PnL 熔断开关和显示；金额与币种必须同时填写。",
+      "economics": {
+        "commission": {
+          "title": "佣金",
+          "summary": "金额与币种为可选项，但必须同时填写。",
+          "infoAriaLabel": "佣金说明",
+          "infoTitle": "佣金",
+          "infoBody": "佣金以自身币种输入，并从引擎按账户币种计算的已实现 PnL 中扣除。负数表示费用或成本，正数表示返佣。"
+        }
+      },
       "status": "目标状态",
       "statusHelp": {
         "submitted": "将订单记录为已提交至交易场所。不产生成交，不影响余额。",
@@ -225,7 +241,8 @@
       "accountBlocked": "账户 {{account}} 已被封锁：",
       "done": "完成",
       "validationError": "成交状态需要填写数量和价格。",
-      "leavesRequired": "剩余数量为必填项。"
+      "leavesRequired": "剩余数量为必填项。",
+      "commissionRequired": "佣金金额和币种必须同时填写。"
     }
   },
 
@@ -246,6 +263,7 @@
       "fieldSource": "来源",
       "fieldSubmitted": "提交时间",
       "fieldDisplayPrices": "显示价格",
+      "fieldCommission": "佣金",
       "hold": {
         "title": "已保留的预留",
         "description": "此订单处于保留状态。确认以提交该预留，或取消以回滚该预留。",
@@ -262,6 +280,7 @@
         "fillQty": "数量 {{qty}}",
         "fillAt": "@ {{price}}",
         "fillLock": "（锁定 {{price}}）",
+        "commission": "佣金 {{value}}",
         "rejectCode": "代码 {{code}}",
         "rejectScope": "范围 {{scope}}",
         "rejectPolicy": "策略 {{policy}}",

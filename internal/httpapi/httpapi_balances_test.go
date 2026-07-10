@@ -18,11 +18,15 @@
 package httpapi
 
 import (
+	"bytes"
+	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/store"
 )
@@ -68,6 +72,117 @@ func TestListBalances_PropagatesFilters(t *testing.T) {
 	}
 	if svc.balanceFilter.Page.Limit != 10 || svc.balanceFilter.Page.Offset != 20 {
 		t.Fatalf("page filter = %+v", svc.balanceFilter.Page)
+	}
+}
+
+func TestSetBalanceRealizedPnl(t *testing.T) {
+	svc := &fakeService{balanceRealizedPnl: domain.Balance{
+		Account:     "acc-1",
+		Asset:       "USD",
+		RealizedPnl: "-12.50",
+	}}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"asset":"USD","realizedPnl":"-12.50"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/accounts/acc-1/balances/realized-pnl",
+		body,
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	if svc.realizedPnlAsset != "USD" || svc.realizedPnlValue != "-12.50" {
+		t.Fatalf(
+			"captured realized pnl = asset %q value %q",
+			svc.realizedPnlAsset,
+			svc.realizedPnlValue,
+		)
+	}
+	m := bodyMap(t, rec.Result())
+	bal, ok := m["balance"].(map[string]any)
+	if !ok {
+		t.Fatalf("response missing balance: %v", m)
+	}
+	if bal["realizedPnl"] != "-12.50" {
+		t.Fatalf("realizedPnl = %v, want -12.50", bal["realizedPnl"])
+	}
+}
+
+func TestSetBalanceRealizedPnl_BadJSON(t *testing.T) {
+	r, err := newRouter(&fakeService{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{bad`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/accounts/acc-1/balances/realized-pnl",
+		body,
+	))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+	errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
+	if errObj["code"] != "validation" {
+		t.Fatalf("want code=validation, got %v", errObj["code"])
+	}
+	if errObj["message"] != "invalid JSON" {
+		t.Fatalf("want invalid JSON message, got %v", errObj["message"])
+	}
+}
+
+func TestSetBalanceRealizedPnl_BadAccountID(t *testing.T) {
+	body := bytes.NewBufferString(`{"asset":"USD","realizedPnl":"-12.50"}`)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/accounts/bad/balances/realized-pnl",
+		body,
+	)
+	routeCtx := chi.NewRouteContext()
+	routeCtx.URLParams.Add("code", "%ZZ")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, routeCtx))
+	handleSetBalanceRealizedPnl(&fakeService{}).ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+	errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
+	if errObj["code"] != "validation" {
+		t.Fatalf("want code=validation, got %v", errObj["code"])
+	}
+	if errObj["message"] != "invalid URL encoding in account code" {
+		t.Fatalf("want account-id message, got %v", errObj["message"])
+	}
+}
+
+func TestSetBalanceRealizedPnl_ServiceError(t *testing.T) {
+	const msg = "bad realized pnl"
+	svc := &fakeService{stateErr: fmt.Errorf("%s: %w", msg, domain.ErrInvalid)}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"asset":"USD","realizedPnl":"bad"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/accounts/acc-1/balances/realized-pnl",
+		body,
+	))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+	errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
+	if errObj["code"] != "validation" {
+		t.Fatalf("want code=validation, got %v", errObj["code"])
+	}
+	if errObj["message"] != fmt.Sprintf("%s: %s", msg, domain.ErrInvalid) {
+		t.Fatalf("want wrapped message, got %v", errObj["message"])
 	}
 }
 

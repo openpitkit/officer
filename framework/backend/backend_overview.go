@@ -109,8 +109,8 @@ func (s *Service) Overview(ctx context.Context, since time.Time) (Overview, erro
 	if err != nil {
 		return Overview{}, err
 	}
-	limitCount := len(limits.RateLimits) +
-		len(limits.OrderSizeLimits) + len(limits.PnlBoundsLimits)
+	limitCount := len(limits.RateLimits) + len(limits.OrderSizeLimits) +
+		len(limits.SpotFundsPnlBoundsLimits)
 
 	var ordersActive, ordersToday, ordersTotal int
 	for i, target := range s.router.All() {

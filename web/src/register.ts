@@ -74,7 +74,7 @@ export function registerOpenOfficerDefaults(): void {
   registerLocaleResourceMap(openLocaleResources);
 
   // Vocabulary ids: broker, asset, account, account_asset, rate_limit,
-  // order_size_limit, pnl_bounds_kill_switch.
+  // order_size_limit.
   registerOpenVocabulary();
 
   // Route ids: dashboard, accounts, policies, limits-redirect, positions,

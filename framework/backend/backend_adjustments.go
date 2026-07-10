@@ -47,11 +47,51 @@ func (s *Service) ApplyAdjustment(
 	if err := domain.ValidateAccountID(account); err != nil {
 		return domain.AccountAdjustmentRecord{}, err
 	}
+	if req.RealizedPnl != "" {
+		normalized, err := domain.AddDecimals("", req.RealizedPnl)
+		if err != nil {
+			return domain.AccountAdjustmentRecord{}, err
+		}
+		req.RealizedPnl = normalized
+	}
 	n, err := s.router.Route(keyFor(account))
 	if err != nil {
 		return domain.AccountAdjustmentRecord{}, fmt.Errorf("backend: route account: %w", err)
 	}
 	return n.ApplyAdjustment(ctx, keyFor(account), externalID, req, auth.CallerFromContext(ctx))
+}
+
+// SetBalanceRealizedPnl validates and stores the current realized P&L snapshot
+// for one per-(account, asset) balance row through the account-adjustment
+// history path. This is not a SpotFunds account-currency kill-switch accumulator
+// seed.
+func (s *Service) SetBalanceRealizedPnl(
+	ctx context.Context,
+	account domain.AccountID,
+	asset string,
+	realizedPnl string,
+) (domain.Balance, error) {
+	if err := domain.ValidateAccountID(account); err != nil {
+		return domain.Balance{}, err
+	}
+	if err := domain.ValidateAsset(asset); err != nil {
+		return domain.Balance{}, err
+	}
+	normalized, err := domain.AddDecimals("", realizedPnl)
+	if err != nil {
+		return domain.Balance{}, err
+	}
+	n, err := s.router.Route(keyFor(account))
+	if err != nil {
+		return domain.Balance{}, fmt.Errorf("backend: route account: %w", err)
+	}
+	return n.SetBalanceRealizedPnl(
+		ctx,
+		keyFor(account),
+		asset,
+		normalized,
+		auth.CallerFromContext(ctx),
+	)
 }
 
 // ImportPositionSnapshot validates and imports a complete persisted position

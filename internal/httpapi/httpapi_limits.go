@@ -109,34 +109,40 @@ func handlePutOrderSizeLimit(svc Service) http.HandlerFunc {
 	}
 }
 
-// handlePutPnlBoundsLimit handles PUT /api/v1/limits/pnl-bounds. The body is the
-// typed P&L-bounds kill-switch barrier; the backend validates scope/axes and
+// handlePutSpotFundsPnlBoundsLimit handles
+// PUT /api/v1/limits/spot-funds-pnl-bounds. The body is the typed SpotFunds
+// self-computed P&L-bounds barrier; the backend validates scope/axes and
 // upserts it.
-func handlePutPnlBoundsLimit(svc Service) http.HandlerFunc {
+func handlePutSpotFundsPnlBoundsLimit(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req pnlBoundsLimitDTO
+		var req spotFundsPnlBoundsLimitDTO
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
-		limit := domain.LimitPnlBounds{
-			Scope:      req.Scope,
-			Account:    domain.AccountID(req.Account),
-			Asset:      req.Asset,
-			LowerBound: req.LowerBound,
-			UpperBound: req.UpperBound,
-			InitialPnl: req.InitialPnl,
+		limit := domain.LimitSpotFundsPnlBounds{
+			Scope:           req.Scope,
+			Account:         domain.AccountID(req.Account),
+			AccountGroup:    req.AccountGroup,
+			AccountCurrency: req.AccountCurrency,
+			LowerBound:      req.LowerBound,
+			UpperBound:      req.UpperBound,
+			InitialPnl:      req.InitialPnl,
 		}
-		if err := svc.PutPnlBoundsLimit(r.Context(), limit); err != nil {
+		if err := svc.PutSpotFundsPnlBoundsLimit(r.Context(), limit); err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
-		persisted, err := persistedPnlBoundsLimit(r.Context(), svc, limit)
+		persisted, err := persistedSpotFundsPnlBoundsLimit(
+			r.Context(), svc, limit,
+		)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{"pnlBoundsLimit": toPnlBoundsLimitDTO(persisted)})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{
+			"spotFundsPnlBoundsLimit": toSpotFundsPnlBoundsLimitDTO(persisted),
+		})
 	}
 }
 
@@ -172,20 +178,19 @@ func persistedOrderSizeLimit(
 	return domain.LimitOrderSize{}, domain.ErrNotFound
 }
 
-func persistedPnlBoundsLimit(
-	ctx context.Context, svc Service, target domain.LimitPnlBounds,
-) (domain.LimitPnlBounds, error) {
+func persistedSpotFundsPnlBoundsLimit(
+	ctx context.Context, svc Service, target domain.LimitSpotFundsPnlBounds,
+) (domain.LimitSpotFundsPnlBounds, error) {
 	limits, err := svc.ListLimits(ctx, target.Account)
 	if err != nil {
-		return domain.LimitPnlBounds{}, err
+		return domain.LimitSpotFundsPnlBounds{}, err
 	}
-	for _, limit := range limits.PnlBoundsLimits {
-		if sameLimitAddress(limit.Scope, limit.Account, limit.Asset,
-			target.Scope, target.Account, target.Asset) {
+	for _, limit := range limits.SpotFundsPnlBoundsLimits {
+		if sameSpotFundsPnlBoundsAddress(limit, target) {
 			return limit, nil
 		}
 	}
-	return domain.LimitPnlBounds{}, domain.ErrNotFound
+	return domain.LimitSpotFundsPnlBounds{}, domain.ErrNotFound
 }
 
 func sameLimitAddress(
@@ -195,17 +200,29 @@ func sameLimitAddress(
 	return leftScope == rightScope && leftAccount == rightAccount && leftAsset == rightAsset
 }
 
+func sameSpotFundsPnlBoundsAddress(
+	left domain.LimitSpotFundsPnlBounds,
+	right domain.LimitSpotFundsPnlBounds,
+) bool {
+	return left.Scope == right.Scope &&
+		left.Account == right.Account &&
+		left.AccountGroup == right.AccountGroup &&
+		left.AccountCurrency == right.AccountCurrency
+}
+
 // handleDeleteLimit handles
-// DELETE /api/v1/limits?policy=&scope=&account=&asset=. The barrier is addressed
-// by its (policy, scope, account-code, asset) composite.
+// DELETE /api/v1/limits?policy=&scope=&account=&asset=&accountGroup=&accountCurrency=.
+// The barrier is addressed by its policy-specific composite.
 func handleDeleteLimit(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		target := node.LimitTarget{
-			Policy:  q.Get("policy"),
-			Scope:   q.Get("scope"),
-			Account: domain.AccountID(q.Get("account")),
-			Asset:   q.Get("asset"),
+			Policy:          q.Get("policy"),
+			Scope:           q.Get("scope"),
+			Account:         domain.AccountID(q.Get("account")),
+			AccountGroup:    q.Get("accountGroup"),
+			Asset:           q.Get("asset"),
+			AccountCurrency: q.Get("accountCurrency"),
 		}
 		if err := svc.DeleteLimit(r.Context(), target); err != nil {
 			httpx.WriteErr(w, err)

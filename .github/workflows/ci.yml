@@ -26,25 +26,30 @@ on:
 permissions:
   contents: read
 
-env:
-  JUSTFILE: ${{ github.workspace }}/pipeline.just
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   go:
-    name: Go (build / vet / test)
-    runs-on: ubuntu-latest
+    name: Go (build / vet / test, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
 
     steps:
       - name: Check out officer (primary)
         uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
       - name: Load CI versions
-        shell: bash
-        run: cat "$GITHUB_WORKSPACE/.github/ci-versions.env" >> "$GITHUB_ENV"
+        run: python scripts/just_helpers.py export-ci-env
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -53,28 +58,33 @@ jobs:
           cache: true
 
       - name: Install golangci-lint
-        run: |
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
-            | sh -s -- -b "$(go env GOPATH)/bin" "v${CI_GOLANGCI_LINT}"
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v${{ env.CI_GOLANGCI_LINT }}
 
       - name: Setup just
         uses: extractions/setup-just@v3
 
       - name: Check Go
-        run: just --justfile "$JUSTFILE" ci-go
+        run: just --justfile pipeline.just ci-go
 
   frontend:
-    name: JS/TypeScript checks
-    runs-on: ubuntu-latest
+    name: JS/TypeScript checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
 
     steps:
       - name: Check out officer
         uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
       - name: Load CI versions
-        shell: bash
-        run: cat "$GITHUB_WORKSPACE/.github/ci-versions.env" >> "$GITHUB_ENV"
+        run: python scripts/just_helpers.py export-ci-env
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -87,7 +97,7 @@ jobs:
         uses: extractions/setup-just@v3
 
       - name: Check JS/TypeScript
-        run: just --justfile "$JUSTFILE" ci-js
+        run: just --justfile pipeline.just ci-js
 
   docker:
     name: Docker build (serve mode)
@@ -102,4 +112,4 @@ jobs:
         uses: extractions/setup-just@v3
 
       - name: Docker build
-        run: just --justfile "$JUSTFILE" docker-build pit-officer:ci
+        run: just --justfile pipeline.just docker-build pit-officer:ci

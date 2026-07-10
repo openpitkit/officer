@@ -71,11 +71,22 @@ const DialogContent = forwardRef<
             className,
           )}
           onCloseAutoFocus={(e) => {
-            // Radix leaves pointer-events:none on body when a popover/select inside
-            // the dialog is open at the moment the dialog closes (Escape race).
-            // Restore it on the next tick so the page stays interactive.
+            // Radix leaves pointer-events:none on body when a popover/select
+            // inside the dialog is open at the moment the dialog closes (Escape
+            // race). Restore it on the next tick so the page stays interactive,
+            // but only when no other dialog is still open: a nested dialog must
+            // not clobber the parent dialog's modality lock on close.
             setTimeout(() => {
-              document.body.style.pointerEvents = "";
+              if (typeof document === "undefined") {
+                return;
+              }
+              const stillOpen = document.querySelector(
+                '[role="dialog"][data-state="open"],' +
+                  '[role="alertdialog"][data-state="open"]',
+              );
+              if (!stillOpen) {
+                document.body.style.pointerEvents = "";
+              }
             }, 0);
             onCloseAutoFocus?.(e);
           }}

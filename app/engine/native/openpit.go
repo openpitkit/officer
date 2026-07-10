@@ -62,10 +62,9 @@ const envRuntimeLibraryPath = "OPENPIT_RUNTIME_LIBRARY_PATH"
 // Registered policy names. The built-in risk policies register under these
 // fixed names; the Configure surface targets a policy by name.
 const (
-	nameRateLimit           = policies.RateLimitPolicyName
-	nameOrderSizeLimit      = policies.OrderSizeLimitPolicyName
-	namePnlBoundsKillSwitch = policies.PnlBoundsKillSwitchPolicyName
-	nameSpotFunds           = policies.SpotFundsPolicyName
+	nameRateLimit      = policies.RateLimitPolicyName
+	nameOrderSizeLimit = policies.OrderSizeLimitPolicyName
+	nameSpotFunds      = policies.SpotFundsPolicyName
 )
 
 // openPitEngine is the concrete Engine adapter wrapping one OpenPit engine
@@ -73,9 +72,9 @@ const (
 //
 // The handle is built by BuildOpenPitEngine and lives until Stop; officer never
 // rebuilds it. Limit changes are applied dynamically through the binding's
-// Configure surface. rate_limit, order_size_limit, and pnl_bounds_kill_switch
+// Configure surface. rate_limit and order_size_limit
 // retune their axes wholesale (barriers added and removed at runtime). The
-// spot-funds policy is registered with its default settings and is not
+// spot-funds policy is registered at build time and its P&L-bounds axes are
 // reconfigured at runtime. The residual changes the Configure surface cannot
 // express are exactly: configuring a policy that was not registered at build
 // time (no runtime registration API), removing the last barrier of a registered
@@ -125,6 +124,10 @@ type openPitEngine struct {
 	// while other barriers remain is a not-implemented stub rather than a silent
 	// store/engine divergence. Updated only on a successful Configure.
 	brokerPresent map[string]bool
+	// spotFundsPnlBoundsSeeds tracks the account-scope seeds already applied to
+	// the live SpotFunds accumulator. Bounds-only reconfigures pass the complete
+	// barrier set, so unchanged seeds must not be force-set again.
+	spotFundsPnlBoundsSeeds map[spotFundsPnlBoundsSeedKey]param.Pnl
 
 	// registry tracks live held reservations by approval id. Its mutex is the
 	// outer lock of the two-lock discipline (registry.mu -> e.mu); native handles
@@ -157,14 +160,18 @@ type groupLane struct {
 // ownership of both the handle and the service lifecycle: neither must be
 // stopped/closed directly afterwards; use Engine.Stop instead, which stops the
 // engine and then closes the service. res is the code-to-engine-id resolver
-// built from the same Snapshot. BuildOpenPitEngine is the only caller; it
-// assembles the tracked state and owns the service before the engine is built.
+// built from the same Snapshot. spotFundsPnlBoundsSeeds is the account seed
+// tracker initialized after post-build SpotFunds P&L seeds are applied through
+// Configure().SetSpotFundsAccountPnl.
+// BuildOpenPitEngine is the only caller; it assembles the tracked state and
+// owns the service before the engine is built.
 func newOpenPitEngine(
 	eng *openpit.Engine,
 	async *asyncengine.AsyncEngine,
 	service *bindmd.Service,
 	registered map[string]struct{},
 	brokerPresent map[string]bool,
+	spotFundsPnlBoundsSeeds map[spotFundsPnlBoundsSeedKey]param.Pnl,
 	res idResolver,
 ) Engine {
 	if registered == nil {
@@ -173,6 +180,9 @@ func newOpenPitEngine(
 	if brokerPresent == nil {
 		brokerPresent = make(map[string]bool)
 	}
+	if spotFundsPnlBoundsSeeds == nil {
+		spotFundsPnlBoundsSeeds = make(map[spotFundsPnlBoundsSeedKey]param.Pnl)
+	}
 	if res.accounts == nil {
 		res.accounts = make(map[domain.AccountID]param.AccountID)
 	}
@@ -180,15 +190,16 @@ func newOpenPitEngine(
 		res.groups = make(map[string]param.AccountGroupID)
 	}
 	adapter := &openPitEngine{
-		eng:               eng,
-		async:             async,
-		res:               res,
-		sink:              newMarketDataSink(service),
-		marketDataService: service,
-		registered:        registered,
-		brokerPresent:     brokerPresent,
-		registry:          newReservationRegistry(),
-		running:           eng != nil && async != nil,
+		eng:                     eng,
+		async:                   async,
+		res:                     res,
+		sink:                    newMarketDataSink(service),
+		marketDataService:       service,
+		registered:              registered,
+		brokerPresent:           brokerPresent,
+		spotFundsPnlBoundsSeeds: spotFundsPnlBoundsSeeds,
+		registry:                newReservationRegistry(),
+		running:                 eng != nil && async != nil,
 	}
 	return adapter
 }
@@ -255,6 +266,13 @@ func BuildOpenPitEngine(runtimeLibraryPath string, snap Snapshot) (Engine, error
 	if err := seedBalances(eng, snap.Balances, res); err != nil {
 		return releaseOnErr(err)
 	}
+	initialSpotFundsPnlBoundsSeeds, err := spotFundsPnlBoundsSeeds(
+		snap.SpotFundsPnlBoundsLimits,
+		res,
+	)
+	if err != nil {
+		return releaseOnErr(err)
+	}
 	async, err := asyncengine.NewBuilder(eng).Dynamic().Build()
 	if err != nil {
 		return releaseOnErr(fmt.Errorf("engine: build async account dispatcher: %w", err))
@@ -264,7 +282,15 @@ func BuildOpenPitEngine(runtimeLibraryPath string, snap Snapshot) (Engine, error
 		nameRateLimit:      hasRateBrokerBarrier(snap.RateLimits),
 		nameOrderSizeLimit: hasOrderSizeBrokerBarrier(snap.OrderSizeLimits),
 	}
-	return newOpenPitEngine(eng, async, service, registered, brokerPresent, res), nil
+	return newOpenPitEngine(
+		eng,
+		async,
+		service,
+		registered,
+		brokerPresent,
+		spotFundsPnlBoundsSeedTracker(initialSpotFundsPnlBoundsSeeds),
+		res,
+	), nil
 }
 
 // hasRateBrokerBarrier reports whether a rate-limit barrier set carries a
@@ -295,8 +321,8 @@ func barrierCount(policy string, limits LimitSet) int {
 		return len(limits.RateLimits)
 	case domain.PolicyOrderSizeLimit:
 		return len(limits.OrderSizeLimits)
-	case domain.PolicyPnlBoundsKillSwitch:
-		return len(limits.PnlBoundsLimits)
+	case domain.PolicySpotFundsPnlBoundsKillSwitch:
+		return len(limits.SpotFundsPnlBoundsLimits)
 	default:
 		return 0
 	}
@@ -318,13 +344,15 @@ func (e *openPitEngine) Running() bool {
 // ConfigurePolicy applies the change to the live handle via the Configure
 // surface. limits is the complete barrier set for policy.
 //
-// rate_limit / order_size_limit / pnl_bounds_kill_switch: the full axes are
+// rate_limit / order_size_limit: the full axes are
 // rebuilt from the complete barrier set and replaced in one Configure call;
 // barriers are added and removed at runtime. rate_limit and order_size_limit
 // additionally return a not-implemented stub when the reconfigure would drop a
 // broker barrier the Configure surface cannot clear in isolation. Configuring an
-// unregistered policy, or removing the last barrier of a registered policy,
-// returns a not-implemented stub. The tracked state is updated only on success.
+// unregistered policy returns a not-implemented stub. Removing the last barrier
+// returns the same stub except for spot_funds_pnl_bounds_kill_switch, whose SDK
+// surface can clear empty axes online. The tracked state is updated only on
+// success.
 func (e *openPitEngine) ConfigurePolicy(
 	ctx context.Context, policy string, limits LimitSet,
 ) error {
@@ -344,7 +372,8 @@ func (e *openPitEngine) ConfigurePolicy(
 				"registration is not supported by the SDK yet: %w",
 			policy, domain.ErrNotImplemented)
 	}
-	if barrierCount(policy, limits) == 0 {
+	if policy != domain.PolicySpotFundsPnlBoundsKillSwitch &&
+		barrierCount(policy, limits) == 0 {
 		return fmt.Errorf(
 			"engine: cannot remove the last barrier of policy %q: empty policy "+
 				"settings are not supported by the SDK yet: %w",
@@ -356,8 +385,8 @@ func (e *openPitEngine) ConfigurePolicy(
 		return e.configureRateLimitLocked(limits.RateLimits)
 	case domain.PolicyOrderSizeLimit:
 		return e.configureOrderSizeLocked(limits.OrderSizeLimits)
-	case domain.PolicyPnlBoundsKillSwitch:
-		return e.configurePnlBoundsLocked(limits.PnlBoundsLimits)
+	case domain.PolicySpotFundsPnlBoundsKillSwitch:
+		return e.configureSpotFundsPnlBoundsLocked(limits.SpotFundsPnlBoundsLimits)
 	default:
 		return fmt.Errorf("engine: configure unknown policy %q", policy)
 	}
@@ -422,20 +451,83 @@ func (e *openPitEngine) configureOrderSizeLocked(limits []domain.LimitOrderSize)
 	return nil
 }
 
-// configurePnlBoundsLocked replaces the P&L bounds axes on the live handle from
-// the complete barrier set. Empty axes are passed as empty non-nil slices so
-// they are cleared rather than left unchanged. The account axis uses the Update
-// shape: it retunes bounds without resetting the live accumulated P&L. Callers
-// must hold e.mu.
-func (e *openPitEngine) configurePnlBoundsLocked(limits []domain.LimitPnlBounds) error {
-	brokers, accounts, err := pnlBoundsAxes(limits, e.res)
+// configureSpotFundsPnlBoundsLocked replaces the SpotFunds self-computed
+// account-currency P&L bounds axes on the live handle from the complete barrier
+// set. Empty axes are passed as empty non-nil slices so they are cleared rather
+// than left unchanged. Runtime bounds updates use the SDK's seedless Update
+// shape, then only account-scope barriers whose explicit initial_pnl is newly
+// introduced or changed reseed the live accumulated P&L through
+// SetSpotFundsAccountPnl. A barrier with no initial_pnl is never seeded, so
+// introducing one preserves the account's live accumulated P&L instead of
+// resetting it; global and group scopes cannot seed. Callers must hold e.mu.
+func (e *openPitEngine) configureSpotFundsPnlBoundsLocked(
+	limits []domain.LimitSpotFundsPnlBounds,
+) error {
+	desiredSeeds, err := spotFundsPnlBoundsSeeds(limits, e.res)
 	if err != nil {
 		return err
 	}
-	if err := e.eng.Configure().PnlBoundsKillSwitch(
-		namePnlBoundsKillSwitch, brokers, accounts,
+	changedSeeds, nextSeeds := changedSpotFundsPnlBoundsSeeds(
+		e.spotFundsPnlBoundsSeeds,
+		desiredSeeds,
+	)
+	appliedSeeds := make([]spotFundsPnlBoundsSeed, 0, len(changedSeeds))
+	rollbackSeeds := func() {
+		for i := len(appliedSeeds) - 1; i >= 0; i-- {
+			seed := appliedSeeds[i]
+			_ = e.eng.Configure().SetSpotFundsAccountPnl(
+				policies.SpotFundsPolicyName,
+				seed.account,
+				seed.accountCurrency,
+				spotFundsPnlBoundsRollbackPnl(
+					e.spotFundsPnlBoundsSeeds, seed,
+				),
+			)
+		}
+	}
+	for _, seed := range changedSeeds {
+		if err := e.eng.Configure().SetSpotFundsAccountPnl(
+			policies.SpotFundsPolicyName,
+			seed.account,
+			seed.accountCurrency,
+			seed.initialPnl,
+		); err != nil {
+			rollbackSeeds()
+			return fmt.Errorf("engine: reseed spot_funds account pnl: %w", err)
+		}
+		appliedSeeds = append(appliedSeeds, seed)
+	}
+	if err := configureSpotFundsPnlBounds(e.eng, e.res, limits); err != nil {
+		rollbackSeeds()
+		return err
+	}
+	e.spotFundsPnlBoundsSeeds = nextSeeds
+	return nil
+}
+
+func spotFundsPnlBoundsRollbackPnl(
+	current map[spotFundsPnlBoundsSeedKey]param.Pnl,
+	seed spotFundsPnlBoundsSeed,
+) param.Pnl {
+	if pnl, ok := current[seed.key()]; ok {
+		return pnl
+	}
+	return param.NewPnlZero()
+}
+
+func configureSpotFundsPnlBounds(
+	eng *openpit.Engine,
+	res idResolver,
+	limits []domain.LimitSpotFundsPnlBounds,
+) error {
+	global, groups, accounts, err := spotFundsPnlBoundsAxes(limits, res)
+	if err != nil {
+		return err
+	}
+	if err := eng.Configure().SpotFundsPnlBoundsKillSwitch(
+		policies.SpotFundsPolicyName, global, groups, accounts,
 	); err != nil {
-		return fmt.Errorf("engine: configure pnl_bounds_kill_switch: %w", err)
+		return fmt.Errorf("engine: configure spot_funds_pnl_bounds_kill_switch: %w", err)
 	}
 	return nil
 }
@@ -945,8 +1037,8 @@ func policyName(policy string) string {
 		return nameRateLimit
 	case domain.PolicyOrderSizeLimit:
 		return nameOrderSizeLimit
-	case domain.PolicyPnlBoundsKillSwitch:
-		return namePnlBoundsKillSwitch
+	case domain.PolicySpotFundsPnlBoundsKillSwitch:
+		return nameSpotFunds
 	default:
 		return policy
 	}
@@ -971,7 +1063,10 @@ func policyName(policy string) string {
 // service via WithMarketOrders(service, defaultMarketOrderSlippageBps): market
 // orders are priced off the mark quote rather than rejected. Instruments without
 // a live quote reject with MarkPriceUnavailable instead of UnsupportedOrderType.
-// Operator-configurable slippage and runtime enable/disable remain future work.
+// Account-scope SpotFunds P&L seeds are applied after Build through
+// Configure().SetSpotFundsAccountPnl, matching live config edits in
+// configureSpotFundsPnlBounds. Operator-configurable slippage and runtime
+// enable/disable remain future work.
 func buildEngine(
 	snap Snapshot, res idResolver,
 ) (*openpit.Engine, *bindmd.Service, map[string]struct{}, error) {
@@ -1015,21 +1110,38 @@ func buildEngine(
 		builder = builder.Builtin(ready)
 		registered[nameOrderSizeLimit] = struct{}{}
 	}
-	if len(snap.PnlBoundsLimits) > 0 {
-		ready, err := pnlBoundsReady(snap.PnlBoundsLimits, res)
-		if err != nil {
-			builder.Close()
-			service.Close()
-			return nil, nil, nil, err
-		}
-		builder = builder.Builtin(ready)
-		registered[namePnlBoundsKillSwitch] = struct{}{}
-	}
-
 	eng, err := builder.Build()
 	if err != nil {
 		service.Close()
 		return nil, nil, nil, fmt.Errorf("engine: build openpit engine: %w", err)
+	}
+	if len(snap.SpotFundsPnlBoundsLimits) > 0 {
+		releaseOnErr := func(err error) (*openpit.Engine, *bindmd.Service, map[string]struct{}, error) {
+			eng.Stop()
+			service.Close()
+			return nil, nil, nil, err
+		}
+		if err := configureSpotFundsPnlBounds(
+			eng, res, snap.SpotFundsPnlBoundsLimits,
+		); err != nil {
+			return releaseOnErr(err)
+		}
+		seeds, err := spotFundsPnlBoundsSeeds(snap.SpotFundsPnlBoundsLimits, res)
+		if err != nil {
+			return releaseOnErr(err)
+		}
+		for _, seed := range seeds {
+			if err := eng.Configure().SetSpotFundsAccountPnl(
+				policies.SpotFundsPolicyName,
+				seed.account,
+				seed.accountCurrency,
+				seed.initialPnl,
+			); err != nil {
+				return releaseOnErr(
+					fmt.Errorf("engine: seed spot_funds account pnl: %w", err),
+				)
+			}
+		}
 	}
 	return eng, service, registered, nil
 }

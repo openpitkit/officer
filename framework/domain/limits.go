@@ -69,28 +69,27 @@ type LimitOrderSize struct {
 	MaxNotional string
 }
 
-// LimitPnlBounds is the typed P&L kill-switch barrier: lower and/or upper
-// accumulated-P&L bounds that trip the kill switch for the addressed scope. It
-// maps to the engine's P&L-bounds policy. At least one of LowerBound or
-// UpperBound is set; when both are set LowerBound must be <= UpperBound.
-// InitialPnl seeds the accumulator and is valid only on the account-asset
-// scope. All three are exact decimal strings, never float; an unset bound is the
-// empty string.
-type LimitPnlBounds struct {
-	// Scope is the axis combination this barrier applies to.
+// LimitSpotFundsPnlBounds is the Officer meta-policy barrier for the SDK
+// SpotFunds self-computed account-currency P&L bounds. InitialPnl seeds the
+// account accumulator and is valid only on the account scope.
+type LimitSpotFundsPnlBounds struct {
+	// Scope is the cascade tier this barrier applies to.
 	Scope LimitScope
-	// Account is the account axis; empty unless Scope carries it.
+	// Account is required only for the account scope.
 	Account AccountID
-	// Asset is the asset axis; empty unless Scope carries it.
-	Asset string
-	// LowerBound is the lower accumulated-P&L bound (exact decimal); empty when
-	// unset.
+	// AccountGroup is required only for the account_group scope.
+	AccountGroup string
+	// AccountCurrency is the account-currency axis and is required on every
+	// barrier.
+	AccountCurrency string
+	// LowerBound is the lower account-currency P&L bound (exact decimal); empty
+	// when unset.
 	LowerBound string
-	// UpperBound is the upper accumulated-P&L bound (exact decimal); empty when
-	// unset.
+	// UpperBound is the upper account-currency P&L bound (exact decimal); empty
+	// when unset.
 	UpperBound string
-	// InitialPnl seeds the per-account accumulated P&L at barrier construction
-	// (exact decimal); valid only on the account-asset scope, empty otherwise.
+	// InitialPnl seeds the per-account account-currency P&L accumulator (exact
+	// decimal); valid only on the account scope, empty otherwise.
 	InitialPnl string
 }
 
@@ -98,16 +97,20 @@ type LimitPnlBounds struct {
 // mapping the typed validators enforce; only the storage shape changed when the
 // EAV table became three typed barriers.
 var allowedScopes = map[string][]LimitScope{
-	PolicyRateLimit:           {ScopeBroker, ScopeAsset, ScopeAccount, ScopeAccountAsset},
-	PolicyOrderSizeLimit:      {ScopeBroker, ScopeAsset, ScopeAccountAsset},
-	PolicyPnlBoundsKillSwitch: {ScopeAsset, ScopeAccountAsset},
+	PolicyRateLimit:      {ScopeBroker, ScopeAsset, ScopeAccount, ScopeAccountAsset},
+	PolicyOrderSizeLimit: {ScopeBroker, ScopeAsset, ScopeAccountAsset},
+	PolicySpotFundsPnlBoundsKillSwitch: {
+		ScopeGlobal, ScopeAccountGroup, ScopeAccount,
+	},
 }
 
 // Validate checks the rate barrier against the engine mapping: an allowed scope
 // for the rate policy, the account/asset axes present consistently with the
 // scope, and a positive order count over a positive, at-most-24h window.
 func (l LimitRate) Validate() error {
-	if err := validateScopeAndAxes(PolicyRateLimit, l.Scope, l.Account, l.Asset); err != nil {
+	if err := validateScopeAndAxes(
+		PolicyRateLimit, l.Scope, l.Account, l.Asset, "",
+	); err != nil {
 		return err
 	}
 	// The engine parses the order count with strconv.ParseUint, so the count is
@@ -129,7 +132,9 @@ func (l LimitRate) Validate() error {
 // scope for the order-size policy, consistent axes, and at least one positive
 // decimal ceiling.
 func (l LimitOrderSize) Validate() error {
-	if err := validateScopeAndAxes(PolicyOrderSizeLimit, l.Scope, l.Account, l.Asset); err != nil {
+	if err := validateScopeAndAxes(
+		PolicyOrderSizeLimit, l.Scope, l.Account, l.Asset, "",
+	); err != nil {
 		return err
 	}
 	if l.MaxQuantity == "" && l.MaxNotional == "" {
@@ -151,42 +156,30 @@ func (l LimitOrderSize) Validate() error {
 	return nil
 }
 
-// Validate checks the P&L-bounds barrier against the engine mapping: an allowed
-// scope for the P&L policy, consistent axes, at least one bound, lower <= upper
-// when both are present, and initial_pnl only on the account-asset scope.
-func (l LimitPnlBounds) Validate() error {
-	if err := validateScopeAndAxes(PolicyPnlBoundsKillSwitch, l.Scope, l.Account, l.Asset); err != nil {
+// Validate checks the SpotFunds self-computed P&L-bounds barrier against the
+// Officer meta-policy contract.
+func (l LimitSpotFundsPnlBounds) Validate() error {
+	if err := validateScopeAndAxes(
+		PolicySpotFundsPnlBoundsKillSwitch, l.Scope, l.Account, "", l.AccountGroup,
+	); err != nil {
 		return err
+	}
+	if l.AccountCurrency == "" {
+		return fmt.Errorf("account_currency is required: %w", ErrInvalid)
 	}
 	if l.LowerBound == "" && l.UpperBound == "" {
 		return fmt.Errorf(
-			"pnl_bounds_kill_switch requires at least lower_bound or upper_bound: %w",
+			"spot_funds_pnl_bounds_kill_switch requires at least lower_bound or upper_bound: %w",
 			ErrInvalid,
 		)
 	}
-	var lowerD, upperD decimal.Decimal
-	var err error
-	if l.LowerBound != "" {
-		lowerD, err = decimal.NewFromString(l.LowerBound)
-		if err != nil {
-			return fmt.Errorf("lower_bound is not a valid decimal: %w", ErrInvalid)
-		}
-	}
-	if l.UpperBound != "" {
-		upperD, err = decimal.NewFromString(l.UpperBound)
-		if err != nil {
-			return fmt.Errorf("upper_bound is not a valid decimal: %w", ErrInvalid)
-		}
-	}
-	if l.LowerBound != "" && l.UpperBound != "" && lowerD.GreaterThan(upperD) {
-		return fmt.Errorf("lower_bound must be <= upper_bound: %w", ErrInvalid)
+	if err := validatePnlBounds(l.LowerBound, l.UpperBound); err != nil {
+		return err
 	}
 	if l.InitialPnl != "" {
-		// initial_pnl seeds the per-account accumulated P&L at construction; it
-		// only exists on the account-asset barrier and is rejected elsewhere.
-		if l.Scope != ScopeAccountAsset {
+		if l.Scope != ScopeAccount {
 			return fmt.Errorf(
-				"initial_pnl is only valid for the account_asset scope, not %q: %w",
+				"initial_pnl is only valid for the account scope, not %q: %w",
 				l.Scope, ErrInvalid,
 			)
 		}
@@ -198,8 +191,11 @@ func (l LimitPnlBounds) Validate() error {
 }
 
 // validateScopeAndAxes checks that scope is allowed for policy and that the
-// account/asset axes are present exactly when the scope carries them.
-func validateScopeAndAxes(policy string, scope LimitScope, account AccountID, asset string) error {
+// account/asset/account-group axes are present exactly when the scope carries
+// them.
+func validateScopeAndAxes(
+	policy string, scope LimitScope, account AccountID, asset string, accountGroup string,
+) error {
 	allowed, ok := allowedScopes[policy]
 	if !ok {
 		return fmt.Errorf("unknown policy %q: %w", policy, ErrInvalid)
@@ -216,11 +212,12 @@ func validateScopeAndAxes(policy string, scope LimitScope, account AccountID, as
 	}
 
 	needsAccount := scope == ScopeAccount || scope == ScopeAccountAsset
+	needsAccountGroup := scope == ScopeAccountGroup
 	needsAsset := scope == ScopeAsset || scope == ScopeAccountAsset
 
-	// Only the presence rule is Officer's: the account/asset axis values are
-	// parsed and format-checked downstream by the engine barrier build
-	// (param.NewAsset / the account resolver), so no charset check here.
+	// Only the presence rule is Officer's: axis values are parsed and
+	// format-checked downstream by the engine barrier build or store resolvers,
+	// so no charset check here.
 	if needsAccount {
 		if account == "" {
 			return fmt.Errorf("scope %q requires an account: %w", scope, ErrInvalid)
@@ -228,12 +225,40 @@ func validateScopeAndAxes(policy string, scope LimitScope, account AccountID, as
 	} else if account != "" {
 		return fmt.Errorf("scope %q must not have account: %w", scope, ErrInvalid)
 	}
+	if needsAccountGroup {
+		if accountGroup == "" {
+			return fmt.Errorf("scope %q requires an account_group: %w", scope, ErrInvalid)
+		}
+	} else if accountGroup != "" {
+		return fmt.Errorf("scope %q must not have account_group: %w", scope, ErrInvalid)
+	}
 	if needsAsset {
 		if asset == "" {
 			return fmt.Errorf("scope %q requires an asset: %w", scope, ErrInvalid)
 		}
 	} else if asset != "" {
 		return fmt.Errorf("scope %q must not have asset: %w", scope, ErrInvalid)
+	}
+	return nil
+}
+
+func validatePnlBounds(lowerBound, upperBound string) error {
+	var lowerD, upperD decimal.Decimal
+	var err error
+	if lowerBound != "" {
+		lowerD, err = decimal.NewFromString(lowerBound)
+		if err != nil {
+			return fmt.Errorf("lower_bound is not a valid decimal: %w", ErrInvalid)
+		}
+	}
+	if upperBound != "" {
+		upperD, err = decimal.NewFromString(upperBound)
+		if err != nil {
+			return fmt.Errorf("upper_bound is not a valid decimal: %w", ErrInvalid)
+		}
+	}
+	if lowerBound != "" && upperBound != "" && lowerD.GreaterThan(upperD) {
+		return fmt.Errorf("lower_bound must be <= upper_bound: %w", ErrInvalid)
 	}
 	return nil
 }

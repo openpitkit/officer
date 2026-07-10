@@ -10,6 +10,17 @@
     "tooLong": "Актив должен быть не длиннее {{max}} символов",
     "whitespace": "Актив не должен содержать пробелов"
   },
+  "accountGroup": {
+    "required": "Группа счетов обязательна для данного скопа",
+    "tooLong": "Группа счетов должна быть не длиннее {{max}} символов",
+    "whitespace": "Группа счетов не должна начинаться или заканчиваться пробелом",
+    "printable": "Группа счетов должна содержать только печатаемые символы"
+  },
+  "accountCurrency": {
+    "required": "Валюта счёта обязательна для данной политики",
+    "tooLong": "Валюта счёта должна быть не длиннее {{max}} символов",
+    "whitespace": "Валюта счёта не должна содержать пробелов"
+  },
   "kind": {
     "maxOrders": {
       "integer": "max_orders должен быть целым числом больше 0",
@@ -29,9 +40,12 @@
     "scopeNotAllowed": "скоп {{scope}} не допускается для {{policy}}",
     "scopeNoAccount": "скоп {{scope}} не должен содержать счёт",
     "scopeNoAsset": "скоп {{scope}} не должен содержать актив",
+    "scopeNoAccountGroup": "скоп {{scope}} не должен содержать группу счетов",
+    "policyNoAccountGroup": "{{policy}} не должна содержать группу счетов",
+    "policyNoAccountCurrency": "{{policy}} не должна содержать валюту счёта",
     "rateLimitRequires": "rate_limit требует указания max_orders и window",
     "orderSizeRequires": "order_size_limit требует max_quantity или max_notional",
-    "pnlRequires": "pnl_bounds_kill_switch требует lower_bound или upper_bound",
+    "spotFundsInitialPnlAccountOnly": "initial_pnl доступен только для скопа счёта в spot_funds_pnl_bounds_kill_switch",
     "pnlBoundOrder": "lower_bound должен быть <= upper_bound"
   }
 }

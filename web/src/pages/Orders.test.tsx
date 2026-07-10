@@ -183,6 +183,7 @@ const sampleOrder: Order = {
   side: "buy",
   amountKind: "quantity",
   amountValue: "100",
+  commissionSubtotals: [],
   leavesQuantity: "100",
   price: "0",
   status: "accepted",
@@ -1323,6 +1324,180 @@ describe("Execution report status-driven fields", () => {
     },
   ];
 
+  it("clones execution-report event commission and resulting status", async () => {
+    const user = userEvent.setup();
+    const order = alphaFourOrder();
+    const events: OrderEvent[] = [
+      {
+        externalId: "evt-alpha-fill",
+        order: "ord-alpha-4",
+        at: "2026-06-24T11:08:00Z",
+        type: "fill",
+        source: "panel",
+        principal: "",
+        fillQuantity: "1",
+        fillPrice: "12",
+        fillLockPrice: "12",
+        leavesQuantity: "1",
+        orderStatus: "partially_filled",
+        commission: { amount: "-0.50", currency: "USD" },
+        signed: false,
+      },
+    ];
+
+    useOrdersMock.mockReturnValue(readyPage<Order>([order]));
+    fetchOrderDetailMock.mockResolvedValueOnce({
+      order,
+      events,
+      trades: [],
+      approval: null,
+    });
+    renderOrders("/orders");
+
+    await user.click(screen.getByText("ord-alpha-4"));
+    await screen.findByRole("dialog", { name: "Order ord-alpha-4" });
+    await user.click(
+      screen.getByLabelText("Clone execution report from order ord-alpha-4"),
+    );
+
+    expect(await screen.findByLabelText("Fill quantity")).toHaveValue("1");
+    expect(screen.getByLabelText("Fill price")).toHaveValue("12");
+    expect(screen.getByLabelText("Leaves quantity")).toHaveValue("1");
+    expect(screen.getByLabelText("Commission amount (optional)")).toHaveValue(
+      "-0.50",
+    );
+    expect(screen.getByLabelText("Commission currency")).toHaveValue("USD");
+
+    await user.click(screen.getByRole("button", { name: "Submit" }));
+    await waitFor(() =>
+      expect(submitExecutionReportMock).toHaveBeenCalledWith(
+        "ord-alpha-4",
+        {
+          status: "partially_filled",
+          quantity: "1",
+          price: "12",
+          leavesQuantity: "1",
+          lockPrice: "12",
+          commission: { amount: "-0.50", currency: "USD" },
+        },
+      ),
+    );
+  });
+
+  it("clones a filled execution-report event without replacing fill quantity by leaves", async () => {
+    const user = userEvent.setup();
+    const order = alphaFourOrder();
+    const events: OrderEvent[] = [
+      {
+        externalId: "evt-alpha-filled",
+        order: "ord-alpha-4",
+        at: "2026-06-24T11:09:00Z",
+        type: "fill",
+        source: "panel",
+        principal: "",
+        fillQuantity: "1",
+        fillPrice: "12",
+        fillLockPrice: "12",
+        leavesQuantity: "0",
+        orderStatus: "filled",
+        signed: false,
+      },
+    ];
+
+    useOrdersMock.mockReturnValue(readyPage<Order>([order]));
+    fetchOrderDetailMock.mockResolvedValueOnce({
+      order,
+      events,
+      trades: [],
+      approval: null,
+    });
+    renderOrders("/orders");
+
+    await user.click(screen.getByText("ord-alpha-4"));
+    await screen.findByRole("dialog", { name: "Order ord-alpha-4" });
+    await user.click(
+      screen.getByLabelText("Clone execution report from order ord-alpha-4"),
+    );
+
+    expect(await screen.findByLabelText("Fill quantity")).toHaveValue("1");
+    expect(screen.getByLabelText("Fill price")).toHaveValue("12");
+    expect(screen.getByLabelText("Leaves quantity")).toHaveValue("0");
+
+    await user.click(screen.getByRole("button", { name: "Submit" }));
+    await waitFor(() =>
+      expect(submitExecutionReportMock).toHaveBeenCalledWith(
+        "ord-alpha-4",
+        {
+          status: "filled",
+          quantity: "1",
+          price: "12",
+          leavesQuantity: "0",
+          lockPrice: "12",
+        },
+      ),
+    );
+  });
+
+  it("clones terminal fill reports with fill fields and economics intact", async () => {
+    const user = userEvent.setup();
+    const order = alphaFourOrder();
+    const events: OrderEvent[] = [
+      {
+        externalId: "evt-alpha-cancel-fill",
+        order: "ord-alpha-4",
+        at: "2026-06-24T11:10:00Z",
+        type: "fill",
+        source: "panel",
+        principal: "",
+        fillQuantity: "1.5",
+        fillPrice: "12",
+        fillLockPrice: "12",
+        leavesQuantity: "0.5",
+        orderStatus: "cancelled",
+        commission: { amount: "-0.75", currency: "USD" },
+        signed: false,
+      },
+    ];
+
+    useOrdersMock.mockReturnValue(readyPage<Order>([order]));
+    fetchOrderDetailMock.mockResolvedValueOnce({
+      order,
+      events,
+      trades: [],
+      approval: null,
+    });
+    renderOrders("/orders");
+
+    await user.click(screen.getByText("ord-alpha-4"));
+    await screen.findByRole("dialog", { name: "Order ord-alpha-4" });
+    await user.click(
+      screen.getByLabelText("Clone execution report from order ord-alpha-4"),
+    );
+
+    expect(await screen.findByLabelText("Fill quantity")).toHaveValue("1.5");
+    expect(screen.getByLabelText("Fill price")).toHaveValue("12");
+    expect(screen.getByLabelText("Leaves quantity")).toHaveValue("0.5");
+    expect(screen.getByLabelText("Commission amount (optional)")).toHaveValue(
+      "-0.75",
+    );
+    expect(screen.getByLabelText("Commission currency")).toHaveValue("USD");
+
+    await user.click(screen.getByRole("button", { name: "Submit" }));
+    await waitFor(() =>
+      expect(submitExecutionReportMock).toHaveBeenCalledWith(
+        "ord-alpha-4",
+        {
+          status: "cancelled",
+          quantity: "1.5",
+          price: "12",
+          leavesQuantity: "0.5",
+          lockPrice: "12",
+          commission: { amount: "-0.75", currency: "USD" },
+        },
+      ),
+    );
+  });
+
   it("hides fill fields but keeps the leaves field for a terminal non-fill status", async () => {
     const user = userEvent.setup();
     const order = alphaFourOrder();
@@ -1331,7 +1506,7 @@ describe("Execution report status-driven fields", () => {
     fetchOrderDetailMock.mockResolvedValueOnce({
       order,
       events: [],
-      trades: alphaFourTrades,
+      trades: [],
       approval: null,
     });
     renderOrders("/orders");
@@ -1339,7 +1514,7 @@ describe("Execution report status-driven fields", () => {
     await user.click(screen.getByText("ord-alpha-4"));
     await screen.findByRole("dialog", { name: "Order ord-alpha-4" });
     await user.click(
-      screen.getByLabelText("Clone execution report for trade trd-alpha-9"),
+      screen.getByRole("button", { name: "Submit execution report" }),
     );
     const focusSpy = vi
       .spyOn(HTMLElement.prototype, "focus")
@@ -1487,6 +1662,96 @@ describe("Execution report status-driven fields", () => {
     );
   });
 
+  it("submits structured commission when all optional fields are set", async () => {
+    const user = userEvent.setup();
+    const order = alphaFourOrder();
+
+    useOrdersMock.mockReturnValue(readyPage<Order>([order]));
+    fetchOrderDetailMock.mockResolvedValueOnce({
+      order,
+      events: [],
+      trades: [],
+      approval: null,
+    });
+    renderOrders("/orders");
+
+    await user.click(screen.getByText("ord-alpha-4"));
+    await screen.findByRole("dialog", { name: "Order ord-alpha-4" });
+    await user.click(
+      screen.getByRole("button", { name: "Submit execution report" }),
+    );
+
+    await screen.findByLabelText("Target status");
+    expect(screen.getAllByText("Commission").length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("button", { name: "Commission details" }));
+    expect(
+      await screen.findByText(
+        /Commission is entered in its own currency/,
+      ),
+    ).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await user.click(
+      screen.getByRole("button", { name: "Calculate leaves quantity" }),
+    );
+    await user.type(
+      screen.getByLabelText("Commission amount (optional)"),
+      "-0.50",
+    );
+    await user.type(screen.getByLabelText("Commission currency"), " USD ");
+    await user.click(screen.getByRole("button", { name: "Submit" }));
+
+    await waitFor(() =>
+      expect(submitExecutionReportMock).toHaveBeenCalledWith(
+        "ord-alpha-4",
+        {
+          status: "filled",
+          quantity: "2",
+          price: "12",
+          leavesQuantity: "0",
+          lockPrice: "12",
+          commission: { amount: "-0.50", currency: "USD" },
+        },
+      ),
+    );
+  });
+
+  it("rejects a partial commission before submitting a fill", async () => {
+    const user = userEvent.setup();
+    const order = alphaFourOrder();
+
+    useOrdersMock.mockReturnValue(readyPage<Order>([order]));
+    fetchOrderDetailMock.mockResolvedValueOnce({
+      order,
+      events: [],
+      trades: [],
+      approval: null,
+    });
+    renderOrders("/orders");
+
+    await user.click(screen.getByText("ord-alpha-4"));
+    await screen.findByRole("dialog", { name: "Order ord-alpha-4" });
+    await user.click(
+      screen.getByRole("button", { name: "Submit execution report" }),
+    );
+
+    await screen.findByLabelText("Target status");
+    await user.click(
+      screen.getByRole("button", { name: "Calculate leaves quantity" }),
+    );
+    await user.type(
+      screen.getByLabelText("Commission amount (optional)"),
+      "-0.50",
+    );
+    await user.click(screen.getByRole("button", { name: "Submit" }));
+
+    expect(
+      await screen.findByText(
+        "Commission amount and currency must be set together.",
+      ),
+    ).toBeInTheDocument();
+    expect(submitExecutionReportMock).not.toHaveBeenCalled();
+  });
+
   it("reflects the server's post-report state, not the requested one", async () => {
     const user = userEvent.setup();
     const order = { ...alphaFourOrder(), status: "partially_filled" as const };
@@ -1565,7 +1830,7 @@ describe("Execution report status-driven fields", () => {
     fetchOrderDetailMock.mockResolvedValueOnce({
       order,
       events: [],
-      trades: alphaFourTrades,
+      trades: [],
       approval: null,
     });
     renderOrders("/orders");
@@ -1573,7 +1838,7 @@ describe("Execution report status-driven fields", () => {
     await user.click(screen.getByText("ord-alpha-4"));
     await screen.findByRole("dialog", { name: "Order ord-alpha-4" });
     await user.click(
-      screen.getByLabelText("Clone execution report for trade trd-alpha-9"),
+      screen.getByRole("button", { name: "Submit execution report" }),
     );
     const focusSpy = vi
       .spyOn(HTMLElement.prototype, "focus")
@@ -1590,6 +1855,50 @@ describe("Execution report status-driven fields", () => {
     await user.click(screen.getByRole("button", { name: "Submit" }));
 
     // The report carries the operator-entered leaves.
+    await waitFor(() =>
+      expect(submitExecutionReportMock).toHaveBeenCalledWith(
+        "ord-alpha-4",
+        { status: "accepted", leavesQuantity: "2" },
+      ),
+    );
+  });
+
+  it("omits structured commission after switching to a non-fill status", async () => {
+    const user = userEvent.setup();
+    const order = alphaFourOrder();
+
+    useOrdersMock.mockReturnValue(readyPage<Order>([order]));
+    fetchOrderDetailMock.mockResolvedValueOnce({
+      order,
+      events: [],
+      trades: [],
+      approval: null,
+    });
+    renderOrders("/orders");
+
+    await user.click(screen.getByText("ord-alpha-4"));
+    await screen.findByRole("dialog", { name: "Order ord-alpha-4" });
+    await user.click(
+      screen.getByRole("button", { name: "Submit execution report" }),
+    );
+
+    await user.type(
+      screen.getByLabelText("Commission amount (optional)"),
+      "-0.50",
+    );
+    await user.type(screen.getByLabelText("Commission currency"), "USD");
+
+    const focusSpy = vi
+      .spyOn(HTMLElement.prototype, "focus")
+      .mockImplementation(() => {});
+    await user.click(await screen.findByLabelText("Target status"));
+    await user.click(screen.getByRole("option", { name: "Accepted" }));
+    focusSpy.mockRestore();
+
+    expect(screen.queryByLabelText("Commission amount (optional)")).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText("Leaves quantity"), "2");
+    await user.click(screen.getByRole("button", { name: "Submit" }));
+
     await waitFor(() =>
       expect(submitExecutionReportMock).toHaveBeenCalledWith(
         "ord-alpha-4",
@@ -1632,6 +1941,91 @@ describe("Execution report status-driven fields", () => {
       await screen.findByText("Leaves quantity is required."),
     ).toBeInTheDocument();
     expect(submitExecutionReportMock).not.toHaveBeenCalled();
+  });
+
+  it("seeds the order leaves when cloning from a trade row so calculate works", async () => {
+    const user = userEvent.setup();
+    const order = alphaFourOrder();
+
+    useOrdersMock.mockReturnValue(readyPage<Order>([order]));
+    fetchOrderDetailMock.mockResolvedValueOnce({
+      order,
+      events: [],
+      trades: alphaFourTrades,
+      approval: null,
+    });
+    renderOrders("/orders");
+
+    await user.click(screen.getByText("ord-alpha-4"));
+    await screen.findByRole("dialog", { name: "Order ord-alpha-4" });
+    await user.click(
+      screen.getByLabelText("Clone execution report for trade trd-alpha-9"),
+    );
+
+    await screen.findByLabelText("Target status");
+    // Fill fields carry the trade; leaves opens empty for the operator.
+    expect(screen.getByLabelText("Fill quantity")).toHaveValue("2");
+    expect(screen.getByLabelText("Fill price")).toHaveValue("12");
+    expect(screen.getByLabelText("Leaves quantity")).toHaveValue("");
+
+    // The order's remaining leaves (2) seeds the calculator: 2 - 2 = 0.
+    const calculate = screen.getByRole("button", {
+      name: "Calculate leaves quantity",
+    });
+    expect(calculate).toBeEnabled();
+    await user.click(calculate);
+    expect(screen.getByLabelText("Leaves quantity")).toHaveValue("0");
+
+    await user.click(screen.getByRole("button", { name: "Submit" }));
+    await waitFor(() =>
+      expect(submitExecutionReportMock).toHaveBeenCalledWith("ord-alpha-4", {
+        status: "filled",
+        quantity: "2",
+        price: "12",
+        leavesQuantity: "0",
+        lockPrice: "12",
+      }),
+    );
+  });
+
+  it("keeps the parent dialog's modality lock when a nested info dialog closes", async () => {
+    const user = userEvent.setup();
+    const order = alphaFourOrder();
+
+    useOrdersMock.mockReturnValue(readyPage<Order>([order]));
+    fetchOrderDetailMock.mockResolvedValueOnce({
+      order,
+      events: [],
+      trades: [],
+      approval: null,
+    });
+    renderOrders("/orders");
+
+    await user.click(screen.getByText("ord-alpha-4"));
+    await screen.findByRole("dialog", { name: "Order ord-alpha-4" });
+    await user.click(
+      screen.getByRole("button", { name: "Submit execution report" }),
+    );
+    await screen.findByLabelText("Target status");
+
+    // Radix locks background pointer events while the modal chain is open.
+    expect(document.body.style.pointerEvents).toBe("none");
+
+    // Open a nested info dialog inside the exec-report dialog, then close only
+    // that inner dialog.
+    await user.click(
+      screen.getByRole("button", { name: "Commission details" }),
+    );
+    const info = await screen.findByRole("dialog", { name: "Commission" });
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(info).not.toBeInTheDocument());
+
+    // The still-open parent dialog must keep the modality lock so it keeps
+    // receiving clicks; the inner close must not clear it.
+    expect(screen.getByLabelText("Target status")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(document.body.style.pointerEvents).toBe("none"),
+    );
   });
 });
 

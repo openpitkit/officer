@@ -40,8 +40,10 @@ import {
 /** Register the open product vocabulary used by pages and validation. */
 export function registerOpenVocabulary(): void {
   registerScope("broker");
+  registerScope("global");
   registerScope("asset");
   registerScope("account");
+  registerScope("account_group");
   registerScope("account_asset");
 
   registerPolicy({
@@ -65,8 +67,8 @@ export function registerOpenVocabulary(): void {
     },
   });
   registerPolicy({
-    id: "pnl_bounds_kill_switch",
-    allowedScopes: ["asset", "account_asset"],
+    id: "spot_funds_pnl_bounds_kill_switch",
+    allowedScopes: ["global", "account_group", "account"],
     kinds: [
       { kind: "lower_bound" },
       { kind: "upper_bound" },
@@ -74,7 +76,7 @@ export function registerOpenVocabulary(): void {
     ],
     catalog: {
       wikiUrl:
-        "https://github.com/openpitkit/pit/wiki/Policies#pnlboundskillswitchpolicy",
+        "https://github.com/openpitkit/pit/wiki/Spot-Funds#self-computed-pnl-kill-switch",
       fields: [
         { key: "lower_bound" },
         { key: "upper_bound" },

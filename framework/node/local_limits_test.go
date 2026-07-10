@@ -406,10 +406,9 @@ func TestLocalNode_PutAccountAssetRateLimit(t *testing.T) {
 	}
 }
 
-// TestLocalNode_PutOrderSizeAndPnlBoundsLimits verifies the order-size and
-// P&L-bounds put paths persist their typed barrier and configure the matching
-// policy from the store, exercising the typed limit surface beyond rate limits.
-func TestLocalNode_PutOrderSizeAndPnlBoundsLimits(t *testing.T) {
+// TestLocalNode_PutOrderSizeLimit verifies the typed order-size barrier is
+// persisted, applied to the engine, and returned by the limits read model.
+func TestLocalNode_PutOrderSizeLimit(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
 	n, st := newTestNode(t, eng)
@@ -419,46 +418,25 @@ func TestLocalNode_PutOrderSizeAndPnlBoundsLimits(t *testing.T) {
 	if _, err := n.PutOrderSizeLimit(ctx, size, testCaller); err != nil {
 		t.Fatalf("PutOrderSizeLimit: %v", err)
 	}
-	pnl := domain.LimitPnlBounds{Scope: domain.ScopeAsset, Asset: "USD", LowerBound: "-1000"}
-	if _, err := n.PutPnlBoundsLimit(ctx, pnl, testCaller); err != nil {
-		t.Fatalf("PutPnlBoundsLimit: %v", err)
-	}
 
-	storedSize, err := st.ListOrderSizeLimits(ctx, "")
+	stored, err := st.ListOrderSizeLimits(ctx, "")
 	if err != nil {
 		t.Fatalf("ListOrderSizeLimits: %v", err)
 	}
-	if len(storedSize) != 1 || storedSize[0] != size {
-		t.Fatalf("order-size barriers = %+v, want the one barrier", storedSize)
+	if len(stored) != 1 || stored[0] != size {
+		t.Fatalf("order-size barriers = %+v, want the one barrier", stored)
 	}
-	storedPnl, err := st.ListPnlBoundsLimits(ctx, "")
-	if err != nil {
-		t.Fatalf("ListPnlBoundsLimits: %v", err)
-	}
-	if len(storedPnl) != 1 || storedPnl[0] != pnl {
-		t.Fatalf("pnl-bounds barriers = %+v, want the one barrier", storedPnl)
-	}
-
-	// Two configure calls, one per policy, each carrying only its own slice.
-	if len(eng.configureCalls) != 2 {
-		t.Fatalf("configure calls = %d, want 2", len(eng.configureCalls))
-	}
-	if eng.configureCalls[0].policy != domain.PolicyOrderSizeLimit ||
+	if len(eng.configureCalls) != 1 ||
+		eng.configureCalls[0].policy != domain.PolicyOrderSizeLimit ||
 		len(eng.configureCalls[0].limits.OrderSizeLimits) != 1 {
-		t.Fatalf("first configure = %+v, want order-size policy", eng.configureCalls[0])
-	}
-	if eng.configureCalls[1].policy != domain.PolicyPnlBoundsKillSwitch ||
-		len(eng.configureCalls[1].limits.PnlBoundsLimits) != 1 {
-		t.Fatalf("second configure = %+v, want pnl-bounds policy", eng.configureCalls[1])
+		t.Fatalf("configure calls = %+v, want the order-size policy", eng.configureCalls)
 	}
 
-	// ListLimits bundles the matching barriers per policy into AccountLimits.
 	limits, err := n.ListLimits(ctx, "")
 	if err != nil {
 		t.Fatalf("ListLimits: %v", err)
 	}
-	if len(limits.OrderSizeLimits) != 1 || len(limits.PnlBoundsLimits) != 1 ||
-		len(limits.RateLimits) != 0 {
-		t.Fatalf("listed limits = %+v, want one order-size and one pnl-bounds", limits)
+	if len(limits.OrderSizeLimits) != 1 || len(limits.RateLimits) != 0 {
+		t.Fatalf("listed limits = %+v, want one order-size barrier", limits)
 	}
 }

@@ -39,13 +39,12 @@
 //     in range. The per-group test checks only 2 account; this tests at a scale
 //     that exercises the counter path rather than just the initial assignment.
 //
-//   - TestLimitPolicyUnique_AllThreeTables: asserts the coalesced unique index
-//     over (scope, account_id, asset_id) is enforced for all three per-policy
-//     tables, including the NULL-axis (broker scope = NULL, NULL) case where
-//     SQLite's handling of NULLs in plain UNIQUE constraints would silently allow
-//     duplicates. The per-group tests verify upsert semantics (same composite →
-//     update); this test verifies that a raw INSERT for the same composite
-//     actually conflicts.
+//   - TestLimitPolicyUnique_AllLimitTables: asserts the coalesced unique index
+//     is enforced for every per-policy table, including NULL-axis composites
+//     where SQLite's handling of NULLs in plain UNIQUE constraints would
+//     silently allow duplicates. The per-group tests verify upsert semantics
+//     (same composite → update); this test verifies that a raw INSERT for the
+//     same composite actually conflicts.
 
 package store
 
@@ -498,11 +497,11 @@ func TestEngineIDAssignment_ManyAccountsAndGroups(t *testing.T) {
 	}
 }
 
-// TestLimitPolicyUnique_AllThreeTables asserts the coalesced unique index over
-// (scope, account_id, asset_id) is enforced for all three per-policy tables,
-// with particular attention to the broker-scope (NULL, NULL) case. SQLite has a
-// special rule where two NULL values are NOT considered equal in a plain UNIQUE
-// constraint, so the schema must coalesce NULL axes in the unique index.
+// TestLimitPolicyUnique_AllLimitTables asserts the coalesced unique index is
+// enforced for every per-policy table, with particular attention to NULL-axis
+// cases. SQLite has a special rule where two NULL values are NOT considered
+// equal in a plain UNIQUE constraint, so the schema must coalesce NULL axes in
+// the unique index.
 //
 // The per-group tests already cover the upsert/update path (same composite →
 // replace value). This test exercises the raw constraint: the upsert methods
@@ -513,7 +512,7 @@ func TestEngineIDAssignment_ManyAccountsAndGroups(t *testing.T) {
 // Additionally, this test verifies that two distinct composites on different
 // policy tables can both carry broker-scoped NULL-axis rows without colliding
 // with each other across tables.
-func TestLimitPolicyUnique_AllThreeTables(t *testing.T) {
+func TestLimitPolicyUnique_AllLimitTables(t *testing.T) {
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 	r := rs.(*realmStore)
@@ -617,72 +616,156 @@ VALUES (?, NULL, NULL, ?)`, domain.ScopeBroker, "3000000"); err == nil {
 		t.Fatalf("raw duplicate limit_order_size broker-scope insert error = %v, want unique conflict", err)
 	}
 
-	// --- limit_pnl_bound ---
+	// --- limit_spot_funds_pnl_bound ---
 
-	if err := rs.PutPnlBoundsLimit(ctx, domain.LimitPnlBounds{
-		Scope:      domain.ScopeAsset,
-		Asset:      "AAPL",
-		LowerBound: "-100",
-		UpperBound: "100",
+	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Scope:           domain.ScopeGlobal,
+		AccountCurrency: "AAPL",
+		LowerBound:      "-100",
 	}); err != nil {
-		t.Fatalf("PutPnlBoundsLimit(asset): %v", err)
+		t.Fatalf("PutSpotFundsPnlBoundsLimit(global): %v", err)
 	}
-	if err := rs.PutPnlBoundsLimit(ctx, domain.LimitPnlBounds{
-		Scope:      domain.ScopeAsset,
-		Asset:      "AAPL",
-		LowerBound: "-200",
-		UpperBound: "200",
+	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Scope:           domain.ScopeGlobal,
+		AccountCurrency: "AAPL",
+		LowerBound:      "-200",
 	}); err != nil {
-		t.Fatalf("PutPnlBoundsLimit(asset, upsert): %v", err)
+		t.Fatalf("PutSpotFundsPnlBoundsLimit(global, upsert): %v", err)
 	}
-	bounds, err := rs.ListPnlBoundsLimits(ctx, "")
+	spotFunds, err := rs.ListSpotFundsPnlBoundsLimits(ctx, "")
 	if err != nil {
-		t.Fatalf("ListPnlBoundsLimits: %v", err)
+		t.Fatalf("ListSpotFundsPnlBoundsLimits: %v", err)
 	}
-	assetRows := 0
-	for _, b := range bounds {
-		if b.Scope == domain.ScopeAsset && b.Asset == "AAPL" {
-			assetRows++
+	globalSpotFunds := 0
+	for _, limit := range spotFunds {
+		if limit.Scope == domain.ScopeGlobal &&
+			limit.AccountCurrency == "AAPL" {
+			globalSpotFunds++
+			if limit.LowerBound != "-200" {
+				t.Fatalf("spot funds upsert did not update lower_bound: got %q, want -200",
+					limit.LowerBound)
+			}
 		}
 	}
-	if assetRows != 1 {
-		t.Fatalf("limit_pnl_bounds AAPL asset-scope rows after upsert = %d, want 1 (unique constraint)", assetRows)
-	}
-	// Confirm the update landed.
-	for _, b := range bounds {
-		if b.Scope == domain.ScopeAsset && b.Asset == "AAPL" && b.LowerBound != "-200" {
-			t.Fatalf("upsert did not update lower_bound: got %q, want -200", b.LowerBound)
-		}
+	if globalSpotFunds != 1 {
+		t.Fatalf("limit_spot_funds_pnl_bounds global rows after upsert = %d, want 1",
+			globalSpotFunds)
 	}
 	if _, err := r.rawDB().ExecContext(ctx, `
-INSERT INTO limit_pnl_bound (scope, account_id, asset_id, lower_bound, upper_bound)
-VALUES (?, NULL, (SELECT id FROM asset WHERE code = ?), ?, ?)`,
-		domain.ScopeAsset, "AAPL", "-300", "300"); err == nil {
-		t.Fatal("raw duplicate limit_pnl_bounds asset-scope insert succeeded, want unique conflict")
+INSERT INTO limit_spot_funds_pnl_bound
+       (scope, account_id, account_group_id, account_currency_asset_id, lower_bound)
+VALUES (?, NULL, NULL, (SELECT id FROM asset WHERE code = ?), ?)`,
+		domain.ScopeGlobal, "AAPL", "-300"); err == nil {
+		t.Fatal("raw duplicate limit_spot_funds_pnl_bounds global insert succeeded, want unique conflict")
 	} else if !isSQLiteUnique(err) {
-		t.Fatalf("raw duplicate limit_pnl_bounds asset-scope insert error = %v, want unique conflict", err)
+		t.Fatalf("raw duplicate limit_spot_funds_pnl_bounds global insert error = %v, want unique conflict", err)
 	}
 
-	// --- Cross-table isolation: broker row in limit_rate does not conflict with
-	// broker row in limit_order_size or limit_pnl_bound. The three tables are
-	// independent; their UNIQUE constraints are per-table.
-	if err := rs.PutPnlBoundsLimit(ctx, domain.LimitPnlBounds{
-		Scope:      domain.ScopeAccountAsset,
-		Account:    "acc-1",
-		Asset:      "AAPL",
-		LowerBound: "-50",
-	}); err != nil {
-		t.Fatalf("PutPnlBoundsLimit(account_asset): %v", err)
-	}
-	// All three tables should have their rows intact.
+	// The remaining limit tables should have their rows intact.
 	if _, err := rs.ListRateLimits(ctx, ""); err != nil {
 		t.Fatalf("ListRateLimits(final check): %v", err)
 	}
 	if _, err := rs.ListOrderSizeLimits(ctx, ""); err != nil {
 		t.Fatalf("ListOrderSizeLimits(final check): %v", err)
 	}
-	if _, err := rs.ListPnlBoundsLimits(ctx, ""); err != nil {
-		t.Fatalf("ListPnlBoundsLimits(final check): %v", err)
+	if _, err := rs.ListSpotFundsPnlBoundsLimits(ctx, ""); err != nil {
+		t.Fatalf("ListSpotFundsPnlBoundsLimits(final check): %v", err)
+	}
+}
+
+func TestSpotFundsPnlBoundsLimitRoundTripPolicyListAndDelete(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+
+	if err := rs.CreateAsset(ctx, domain.Asset{Code: "USD", Title: "US Dollar"}); err != nil {
+		t.Fatalf("CreateAsset(USD): %v", err)
+	}
+	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "desk-a"}); err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-1"}); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+
+	groupLimit := domain.LimitSpotFundsPnlBounds{
+		Scope:           domain.ScopeAccountGroup,
+		AccountGroup:    "desk-a",
+		AccountCurrency: "USD",
+		LowerBound:      "-1000",
+	}
+	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, groupLimit); err != nil {
+		t.Fatalf("PutSpotFundsPnlBoundsLimit(group): %v", err)
+	}
+	accountLimit := domain.LimitSpotFundsPnlBounds{
+		Scope:           domain.ScopeAccount,
+		Account:         "acc-1",
+		AccountCurrency: "USD",
+		UpperBound:      "500",
+		InitialPnl:      "12.50",
+	}
+	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, accountLimit); err != nil {
+		t.Fatalf("PutSpotFundsPnlBoundsLimit(account): %v", err)
+	}
+
+	limits, err := rs.ListSpotFundsPnlBoundsLimits(ctx, "")
+	if err != nil {
+		t.Fatalf("ListSpotFundsPnlBoundsLimits: %v", err)
+	}
+	if len(limits) != 2 {
+		t.Fatalf("spot funds limits count = %d, want 2: %+v", len(limits), limits)
+	}
+	for _, limit := range limits {
+		if limit.Scope == domain.ScopeAccount && limit.InitialPnl != "12.50" {
+			t.Fatalf("account initial_pnl = %q, want 12.50", limit.InitialPnl)
+		}
+	}
+
+	page, err := rs.ListPolicyRows(ctx, PolicyListFilter{})
+	if err != nil {
+		t.Fatalf("ListPolicyRows: %v", err)
+	}
+	var found bool
+	var foundAccount bool
+	for _, row := range page.Rows {
+		if row.Kind != PolicyKindSpotFundsPnlBounds {
+			continue
+		}
+		if row.AccountGroup == "desk-a" &&
+			row.AccountCurrency == "USD" &&
+			row.Asset == "" &&
+			row.SpotFundsPnlBounds != nil &&
+			row.SpotFundsPnlBounds.LowerBound == "-1000" {
+			found = true
+		}
+		if row.Account == "acc-1" &&
+			row.AccountCurrency == "USD" &&
+			row.SpotFundsPnlBounds != nil &&
+			row.SpotFundsPnlBounds.InitialPnl == "12.50" {
+			foundAccount = true
+		}
+	}
+	if !found {
+		t.Fatalf("policy list missing spot funds group row: %+v", page.Rows)
+	}
+	if !foundAccount {
+		t.Fatalf("policy list missing spot funds account seed row: %+v", page.Rows)
+	}
+
+	if err := rs.DeleteSpotFundsPnlBoundsLimit(
+		ctx,
+		domain.ScopeAccount,
+		"acc-1",
+		"",
+		"USD",
+	); err != nil {
+		t.Fatalf("DeleteSpotFundsPnlBoundsLimit: %v", err)
+	}
+	limits, err = rs.ListSpotFundsPnlBoundsLimits(ctx, "")
+	if err != nil {
+		t.Fatalf("ListSpotFundsPnlBoundsLimits(after delete): %v", err)
+	}
+	if len(limits) != 1 || limits[0].Scope != domain.ScopeAccountGroup {
+		t.Fatalf("after delete limits = %+v, want only group limit", limits)
 	}
 }
 

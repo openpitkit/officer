@@ -327,6 +327,52 @@ func TestGetOrder_EventAttestationReadBack(t *testing.T) {
 	assertNoSurrogateID(t, event)
 }
 
+// TestGetOrder_EventCommission covers the structured commission passthrough on
+// fill events.
+func TestGetOrder_EventCommission(t *testing.T) {
+	svc := &fakeService{orderDetail: domain.OrderDetail{
+		Order: domain.Order{
+			ExternalID: extID("order-1"), Account: "acc-1",
+			Status: domain.OrderStatusFilled,
+		},
+		Events: []domain.OrderEvent{
+			{
+				ExternalID: extID("event-fill"), Order: extID("order-1"),
+				Type: domain.OrderEventFill,
+				Payload: domain.OrderEventPayload{
+					FillQuantity: "2",
+					FillPrice:    "150.25",
+					Commission:   &domain.Commission{Amount: "-0.05", Currency: "USD"},
+				},
+			},
+			{
+				ExternalID: extID("event-submit"), Order: extID("order-1"),
+				Type: domain.OrderEventSubmitted,
+			},
+		},
+	}}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/api/v1/orders/"+extID("order-1").String(), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	events, ok := m["events"].([]any)
+	if !ok || len(events) != 2 {
+		t.Fatalf("want 2 events, got %v", m["events"])
+	}
+	fill, _ := events[0].(map[string]any)
+	commission, _ := fill["commission"].(map[string]any)
+	if commission["amount"] != "-0.05" || commission["currency"] != "USD" {
+		t.Fatalf("fill event commission = %v, want -0.05/USD", commission)
+	}
+}
+
 func TestGetOrder_EmptyChildLists(t *testing.T) {
 	// An order with no events or trades serialises those as [], never null.
 	svc := &fakeService{orderDetail: domain.OrderDetail{
@@ -628,7 +674,11 @@ func TestListAdjustments_Seeded(t *testing.T) {
 		adjustments: []domain.AccountAdjustmentRecord{
 			{
 				ExternalID: extID("adj-1"), Account: "acc-1",
-				Request: domain.AdjustmentRequest{Asset: "USD"},
+				Request: domain.AdjustmentRequest{Asset: "USD", RealizedPnl: "10"},
+				Accepted: &domain.AdjustmentOutcomeAccepted{
+					RealizedPnlDelta:  "3",
+					RealizedPnlResult: "10",
+				},
 			},
 		},
 	}
@@ -658,8 +708,71 @@ func TestListAdjustments_Seeded(t *testing.T) {
 	if a["externalId"] != extID("adj-1").String() {
 		t.Fatalf("want externalId, got %v", a["externalId"])
 	}
+	outcome, _ := a["outcome"].(map[string]any)
+	accepted, _ := outcome["accepted"].(map[string]any)
+	realized, _ := accepted["realizedPnlResult"].(map[string]any)
+	if realized["delta"] != "3" || realized["result"] != "10" {
+		t.Fatalf("realizedPnlResult = %v, want delta/result object", realized)
+	}
 	if m["total"] != float64(1) {
 		t.Fatalf("unexpected envelope: %v", m)
+	}
+}
+
+// TestListAdjustments_RealizedPnlAuthoritative locks in that the DTO surfaces the
+// persisted accepted realized-P&L result and delta verbatim, never the request's
+// proposed value: with a request realizedPnl that differs from the engine result,
+// the wire echoes the accepted result (and its consistent delta), and an empty
+// accepted result stays empty rather than falling back to the request.
+func TestListAdjustments_RealizedPnlAuthoritative(t *testing.T) {
+	svc := &fakeService{
+		adjustments: []domain.AccountAdjustmentRecord{
+			{
+				ExternalID: extID("adj-1"), Account: "acc-1",
+				Request: domain.AdjustmentRequest{Asset: "USD", RealizedPnl: "999"},
+				Accepted: &domain.AdjustmentOutcomeAccepted{
+					RealizedPnlDelta:  "5",
+					RealizedPnlResult: "42",
+				},
+			},
+			{
+				ExternalID: extID("adj-2"), Account: "acc-1",
+				Request: domain.AdjustmentRequest{Asset: "USD", RealizedPnl: "999"},
+				Accepted: &domain.AdjustmentOutcomeAccepted{
+					RealizedPnlDelta:  "0",
+					RealizedPnlResult: "",
+				},
+			},
+		},
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/adjustments", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	adjustments, ok := m["adjustments"].([]any)
+	if !ok || len(adjustments) != 2 {
+		t.Fatalf("want 2 adjustments, got %v", m["adjustments"])
+	}
+	realizedOf := func(i int) map[string]any {
+		a := adjustments[i].(map[string]any)
+		outcome, _ := a["outcome"].(map[string]any)
+		accepted, _ := outcome["accepted"].(map[string]any)
+		realized, _ := accepted["realizedPnlResult"].(map[string]any)
+		return realized
+	}
+	// Mixed path: request set to 999, engine result 42 -> DTO echoes 42, delta 5.
+	if r0 := realizedOf(0); r0["result"] != "42" || r0["delta"] != "5" {
+		t.Fatalf("realizedPnlResult[0] = %v, want result=42 delta=5", r0)
+	}
+	// Empty accepted result must NOT fall back to the request's 999.
+	if r1 := realizedOf(1); r1["result"] != "" || r1["delta"] != "0" {
+		t.Fatalf("realizedPnlResult[1] = %v, want result=\"\" delta=0", r1)
 	}
 }
 
@@ -1131,6 +1244,51 @@ func TestApplyExecutionReport_QuantityWithoutPrice(t *testing.T) {
 	}
 	if errObj["message"] != "quantity and price must be provided together" {
 		t.Fatalf("want quantity/price message, got %v", errObj["message"])
+	}
+}
+
+func TestApplyExecutionReport_PartialCommission(t *testing.T) {
+	r, err := newRouter(&fakeService{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(
+		`{"quantity":"1","price":"100","leavesQuantity":"0","status":"filled",` +
+			`"commission":{"amount":"-0.12"}}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports", body))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	m := bodyMap(t, rec.Result())
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "validation" {
+		t.Fatalf("want code=validation, got %v", errObj["code"])
+	}
+	if errObj["message"] != "commission amount and currency must be provided together" {
+		t.Fatalf("want commission message, got %v", errObj["message"])
+	}
+}
+
+func TestApplyExecutionReport_CommissionWithoutFill(t *testing.T) {
+	r, err := newRouter(&fakeService{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(
+		`{"leavesQuantity":"0","status":"cancelled",` +
+			`"commission":{"amount":"-0.12","currency":"USD"}}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports", body))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	m := bodyMap(t, rec.Result())
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["message"] != "commission requires quantity and price" {
+		t.Fatalf("want commission/fill message, got %v", errObj["message"])
 	}
 }
 

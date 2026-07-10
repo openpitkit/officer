@@ -43,7 +43,10 @@ func (s *Service) ListLimits(
 		}
 		out.RateLimits = append(out.RateLimits, part.RateLimits...)
 		out.OrderSizeLimits = append(out.OrderSizeLimits, part.OrderSizeLimits...)
-		out.PnlBoundsLimits = append(out.PnlBoundsLimits, part.PnlBoundsLimits...)
+		out.SpotFundsPnlBoundsLimits = append(
+			out.SpotFundsPnlBoundsLimits,
+			part.SpotFundsPnlBoundsLimits...,
+		)
 	}
 	return out, nil
 }
@@ -107,9 +110,11 @@ func (s *Service) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrder
 	return s.finishLimitChange(sink, err)
 }
 
-// PutPnlBoundsLimit validates the P&L-bounds barrier, routes to the owning node,
-// and upserts it.
-func (s *Service) PutPnlBoundsLimit(ctx context.Context, limit domain.LimitPnlBounds) error {
+// PutSpotFundsPnlBoundsLimit validates the SpotFunds P&L-bounds barrier, routes
+// to the owning node, and upserts it.
+func (s *Service) PutSpotFundsPnlBoundsLimit(
+	ctx context.Context, limit domain.LimitSpotFundsPnlBounds,
+) error {
 	if err := limit.Validate(); err != nil {
 		return err
 	}
@@ -117,7 +122,7 @@ func (s *Service) PutPnlBoundsLimit(ctx context.Context, limit domain.LimitPnlBo
 	if err != nil {
 		return fmt.Errorf("backend: route limit: %w", err)
 	}
-	sink, err := n.PutPnlBoundsLimit(ctx, limit, auth.CallerFromContext(ctx))
+	sink, err := n.PutSpotFundsPnlBoundsLimit(ctx, limit, auth.CallerFromContext(ctx))
 	return s.finishLimitChange(sink, err)
 }
 
@@ -163,10 +168,13 @@ func validateLimitTarget(target node.LimitTarget) error {
 			Scope: target.Scope, Account: target.Account, Asset: target.Asset,
 			MaxQuantity: "1",
 		}.Validate()
-	case domain.PolicyPnlBoundsKillSwitch:
-		return domain.LimitPnlBounds{
-			Scope: target.Scope, Account: target.Account, Asset: target.Asset,
-			LowerBound: "0",
+	case domain.PolicySpotFundsPnlBoundsKillSwitch:
+		return domain.LimitSpotFundsPnlBounds{
+			Scope:           target.Scope,
+			Account:         target.Account,
+			AccountGroup:    target.AccountGroup,
+			AccountCurrency: target.AccountCurrency,
+			LowerBound:      "0",
 		}.Validate()
 	default:
 		return fmt.Errorf("unknown policy %q: %w", target.Policy, domain.ErrInvalid)

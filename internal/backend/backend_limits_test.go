@@ -119,9 +119,9 @@ func TestService_DeleteLimitValidatesTarget(t *testing.T) {
 	svc, fn := newTestService()
 	ctx := context.Background()
 
-	// broker scope is not allowed for pnl_bounds; target validation must reject.
+	// broker scope is not allowed for SpotFunds P&L bounds; target validation must reject.
 	bad := node.LimitTarget{
-		Policy: domain.PolicyPnlBoundsKillSwitch,
+		Policy: domain.PolicySpotFundsPnlBoundsKillSwitch,
 		Scope:  domain.ScopeBroker,
 	}
 	if err := svc.DeleteLimit(ctx, bad); !errors.Is(err, domain.ErrInvalid) {

@@ -98,7 +98,9 @@ type ControlPlane interface {
 	) (store.PolicyListPage, error)
 	PutRateLimit(ctx context.Context, limit domain.LimitRate) error
 	PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize) error
-	PutPnlBoundsLimit(ctx context.Context, limit domain.LimitPnlBounds) error
+	PutSpotFundsPnlBoundsLimit(
+		ctx context.Context, limit domain.LimitSpotFundsPnlBounds,
+	) error
 	DeleteLimit(ctx context.Context, target node.LimitTarget) error
 	ListAudit(ctx context.Context, count int) ([]domain.AuditRow, error)
 	ListAuditFiltered(
@@ -154,6 +156,12 @@ type ControlPlane interface {
 		externalID domain.ExternalID,
 		req domain.AdjustmentRequest,
 	) (domain.AccountAdjustmentRecord, error)
+	SetBalanceRealizedPnl(
+		ctx context.Context,
+		account domain.AccountID,
+		asset string,
+		realizedPnl string,
+	) (domain.Balance, error)
 	ListBalances(ctx context.Context, account domain.AccountID, asset string) ([]domain.Balance, error)
 	ListBalanceRows(
 		ctx context.Context, filter store.BalanceListFilter,

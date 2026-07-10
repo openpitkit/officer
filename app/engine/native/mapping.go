@@ -275,72 +275,139 @@ func orderSizeAxes(limits []domain.LimitOrderSize, res idResolver) (
 	return broker, assets, accountAssets, nil
 }
 
-// pnlBoundsAxes maps a P&L bounds barrier set onto the public Configure axes:
-// broker and account-asset slices. Both slices are always non-nil so a
-// Configure call replaces each axis wholesale (an empty slice clears the axis).
-// The asset scope maps to a broker barrier carrying the settlement asset;
-// account_asset maps to an account barrier-update.
-//
-// The account axis is the Update shape (PnlBoundsAccountAssetBarrierUpdate),
-// which retunes bounds without touching the live accumulated P&L: the runtime
-// configure path must not reset accumulators when only bounds change.
-func pnlBoundsAxes(limits []domain.LimitPnlBounds, res idResolver) (
-	[]policies.PnlBoundsBrokerBarrier,
-	[]policies.PnlBoundsAccountAssetBarrierUpdate,
+// spotFundsPnlBoundsAxes maps SpotFunds self-computed account-currency P&L
+// bounds onto the runtime Configure axes. Every returned slice is non-nil so
+// Configure replaces all axes wholesale.
+func spotFundsPnlBoundsAxes(
+	limits []domain.LimitSpotFundsPnlBounds,
+	res idResolver,
+) (
+	[]policies.SpotFundsPnlBoundsBarrier,
+	[]policies.SpotFundsPnlBoundsAccountGroupBarrier,
+	[]policies.SpotFundsPnlBoundsAccountBarrierUpdate,
 	error,
 ) {
-	brokers := []policies.PnlBoundsBrokerBarrier{}
-	accounts := []policies.PnlBoundsAccountAssetBarrierUpdate{}
+	global := []policies.SpotFundsPnlBoundsBarrier{}
+	groups := []policies.SpotFundsPnlBoundsAccountGroupBarrier{}
+	accounts := []policies.SpotFundsPnlBoundsAccountBarrierUpdate{}
 
 	for _, limit := range limits {
-		lower, upper, initial, err := pnlBoundsValues(limit)
+		barrier, err := spotFundsPnlBoundsBarrier(limit)
 		if err != nil {
-			return nil, nil, err
-		}
-		// The runtime Configure path applies the barrier-update shape, which
-		// cannot reseed the live accumulated P&L. initial_pnl can only be honored
-		// when the barrier is first created at the one-time engine build, so reject
-		// it here rather than silently dropping it.
-		if _, ok := initial.Get(); ok {
-			return nil, nil, fmt.Errorf(
-				"engine: pnl_bounds initial_pnl cannot be set on a runtime barrier "+
-					"update; it is only applied when the barrier is first created: %w",
-				domain.ErrInvalid)
+			return nil, nil, nil, err
 		}
 		switch limit.Scope {
-		case domain.ScopeAsset:
-			asset, err := newAsset(limit.Asset)
+		case domain.ScopeGlobal:
+			global = append(global, barrier)
+		case domain.ScopeAccountGroup:
+			group, err := res.group(limit.AccountGroup)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
-			brokers = append(brokers, policies.PnlBoundsBrokerBarrier{
-				SettlementAsset: asset,
-				LowerBound:      lower,
-				UpperBound:      upper,
+			groups = append(groups, policies.SpotFundsPnlBoundsAccountGroupBarrier{
+				Barrier:        barrier,
+				AccountGroupID: group,
 			})
-		case domain.ScopeAccountAsset:
+		case domain.ScopeAccount:
 			account, err := res.account(limit.Account)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
-			asset, err := newAsset(limit.Asset)
-			if err != nil {
-				return nil, nil, err
-			}
-			accounts = append(accounts, policies.PnlBoundsAccountAssetBarrierUpdate{
+			accounts = append(accounts, policies.SpotFundsPnlBoundsAccountBarrierUpdate{
+				Barrier:   barrier,
 				AccountID: account,
-				Barrier: policies.PnlBoundsBrokerBarrier{
-					SettlementAsset: asset,
-					LowerBound:      lower,
-					UpperBound:      upper,
-				},
 			})
 		default:
-			return nil, nil, fmt.Errorf(
-				"engine: pnl_bounds_kill_switch unsupported scope %q", limit.Scope)
+			return nil, nil, nil, fmt.Errorf(
+				"engine: spot_funds_pnl_bounds_kill_switch unsupported scope %q",
+				limit.Scope,
+			)
 		}
 	}
-	return brokers, accounts, nil
+	return global, groups, accounts, nil
+}
+
+type spotFundsPnlBoundsSeed struct {
+	account         param.AccountID
+	accountCurrency param.Asset
+	initialPnl      param.Pnl
+}
+
+type spotFundsPnlBoundsSeedKey struct {
+	account         uint64
+	accountCurrency string
+}
+
+func (s spotFundsPnlBoundsSeed) key() spotFundsPnlBoundsSeedKey {
+	return spotFundsPnlBoundsSeedKey{
+		account:         uint64(s.account.Handle()),
+		accountCurrency: s.accountCurrency.String(),
+	}
+}
+
+// spotFundsPnlBoundsSeeds derives the account-scope initial-P&L seeds from a
+// barrier set. Only a barrier carrying an explicit initial_pnl yields a seed: an
+// empty initial_pnl must not force-set (and thereby reset) the account's live
+// accumulated P&L, so it is left unseeded. The account barrier itself is created
+// by the bounds axis, not by the seed, so a seedless barrier stays fully armed
+// against whatever P&L the engine has already accumulated for the account.
+func spotFundsPnlBoundsSeeds(
+	limits []domain.LimitSpotFundsPnlBounds,
+	res idResolver,
+) ([]spotFundsPnlBoundsSeed, error) {
+	seeds := make([]spotFundsPnlBoundsSeed, 0)
+	for _, limit := range limits {
+		if limit.Scope != domain.ScopeAccount || limit.InitialPnl == "" {
+			continue
+		}
+		account, err := res.account(limit.Account)
+		if err != nil {
+			return nil, err
+		}
+		accountCurrency, err := newAsset(limit.AccountCurrency)
+		if err != nil {
+			return nil, err
+		}
+		initialPnl, err := param.NewPnlFromString(limit.InitialPnl)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"engine: spot_funds_pnl_bounds initial_pnl %q: %w",
+				limit.InitialPnl,
+				err,
+			)
+		}
+		seeds = append(seeds, spotFundsPnlBoundsSeed{
+			account:         account,
+			accountCurrency: accountCurrency,
+			initialPnl:      initialPnl,
+		})
+	}
+	return seeds, nil
+}
+
+func spotFundsPnlBoundsSeedTracker(
+	seeds []spotFundsPnlBoundsSeed,
+) map[spotFundsPnlBoundsSeedKey]param.Pnl {
+	tracker := make(map[spotFundsPnlBoundsSeedKey]param.Pnl, len(seeds))
+	for _, seed := range seeds {
+		tracker[seed.key()] = seed.initialPnl
+	}
+	return tracker
+}
+
+func changedSpotFundsPnlBoundsSeeds(
+	current map[spotFundsPnlBoundsSeedKey]param.Pnl,
+	desired []spotFundsPnlBoundsSeed,
+) ([]spotFundsPnlBoundsSeed, map[spotFundsPnlBoundsSeedKey]param.Pnl) {
+	next := spotFundsPnlBoundsSeedTracker(desired)
+	changed := make([]spotFundsPnlBoundsSeed, 0)
+	for _, seed := range desired {
+		currentSeed, ok := current[seed.key()]
+		if !ok || currentSeed.Compare(seed.initialPnl) != 0 {
+			changed = append(changed, seed)
+		}
+	}
+	return changed, next
 }
 
 // rateLimitReady maps a rate-limit barrier set onto a ready builder. Each
@@ -464,68 +531,6 @@ func orderSizeReady(limits []domain.LimitOrderSize, res idResolver) (*policies.O
 	return ready, nil
 }
 
-// pnlBoundsReady maps a P&L bounds barrier set onto a ready builder. The asset
-// scope maps to a broker barrier carrying the settlement asset; account_asset
-// maps to an account barrier. This is the construction path: an account barrier
-// is created fresh, so its InitialPnl seed is honored here (from the optional
-// initial_pnl value, else zero). Domain validation guarantees initial_pnl only
-// reaches the account-asset scope; the runtime Configure path cannot reseed and
-// rejects it instead.
-func pnlBoundsReady(limits []domain.LimitPnlBounds, res idResolver) (*policies.PnlBoundsKillswitchReadyBuilder, error) {
-	builder := policies.BuildPnlBoundsKillswitch()
-	ready := builder.PolicyGroupID(0)
-
-	var (
-		brokers  []policies.PnlBoundsBrokerBarrier
-		accounts []policies.PnlBoundsAccountAssetBarrier
-	)
-	for _, limit := range limits {
-		lower, upper, initial, err := pnlBoundsValues(limit)
-		if err != nil {
-			return nil, err
-		}
-		switch limit.Scope {
-		case domain.ScopeAsset:
-			asset, err := newAsset(limit.Asset)
-			if err != nil {
-				return nil, err
-			}
-			brokers = append(brokers, policies.PnlBoundsBrokerBarrier{
-				SettlementAsset: asset,
-				LowerBound:      lower,
-				UpperBound:      upper,
-			})
-		case domain.ScopeAccountAsset:
-			account, err := res.account(limit.Account)
-			if err != nil {
-				return nil, err
-			}
-			asset, err := newAsset(limit.Asset)
-			if err != nil {
-				return nil, err
-			}
-			initialPnl := param.NewPnlZero()
-			if seed, ok := initial.Get(); ok {
-				initialPnl = seed
-			}
-			accounts = append(accounts, policies.PnlBoundsAccountAssetBarrier{
-				Barrier: policies.PnlBoundsBrokerBarrier{
-					SettlementAsset: asset,
-					LowerBound:      lower,
-					UpperBound:      upper,
-				},
-				AccountID:  account,
-				InitialPnl: initialPnl,
-			})
-		default:
-			return nil, fmt.Errorf("engine: pnl_bounds_kill_switch unsupported scope %q", limit.Scope)
-		}
-	}
-
-	ready = ready.BrokerBarriers(brokers...).AccountBarriers(accounts...)
-	return ready, nil
-}
-
 // rateLimitValue extracts the engine rate limit from a typed rate barrier.
 // Domain validation already bounds max_orders to (0, 1e9] and window to (0, 24h].
 func rateLimitValue(limit domain.LimitRate) (policies.RateLimit, error) {
@@ -577,42 +582,52 @@ func orderSizeValue(limit domain.LimitOrderSize) (policies.OrderSizeLimit, error
 	return out, nil
 }
 
-// pnlBoundsValues extracts the optional lower and upper P&L bounds plus the
-// optional initial P&L seed from a typed P&L barrier. initial_pnl is only
-// honored by the construction path (account-asset barrier); the runtime-update
-// path rejects it separately, since the binding's barrier-update shape cannot
-// reseed the live accumulator.
-func pnlBoundsValues(
-	limit domain.LimitPnlBounds,
-) (lower, upper, initial optional.Option[param.Pnl], err error) {
-	lower = optional.None[param.Pnl]()
-	upper = optional.None[param.Pnl]()
-	initial = optional.None[param.Pnl]()
-	if limit.LowerBound != "" {
-		p, perr := param.NewPnlFromString(limit.LowerBound)
-		if perr != nil {
-			return lower, upper, initial, fmt.Errorf(
-				"engine: pnl_bounds lower_bound %q: %w", limit.LowerBound, perr)
+func spotFundsPnlBoundsBarrier(
+	limit domain.LimitSpotFundsPnlBounds,
+) (policies.SpotFundsPnlBoundsBarrier, error) {
+	accountCurrency, err := newAsset(limit.AccountCurrency)
+	if err != nil {
+		return policies.SpotFundsPnlBoundsBarrier{}, err
+	}
+	lower, upper, err := pnlBoundOptions(
+		limit.LowerBound,
+		limit.UpperBound,
+		"spot_funds_pnl_bounds",
+	)
+	if err != nil {
+		return policies.SpotFundsPnlBoundsBarrier{}, err
+	}
+	return policies.SpotFundsPnlBoundsBarrier{
+		AccountCurrency: accountCurrency,
+		LowerBound:      lower,
+		UpperBound:      upper,
+	}, nil
+}
+
+func pnlBoundOptions(
+	lowerBound string,
+	upperBound string,
+	label string,
+) (optional.Option[param.Pnl], optional.Option[param.Pnl], error) {
+	lower := optional.None[param.Pnl]()
+	upper := optional.None[param.Pnl]()
+	if lowerBound != "" {
+		p, err := param.NewPnlFromString(lowerBound)
+		if err != nil {
+			return lower, upper, fmt.Errorf(
+				"engine: %s lower_bound %q: %w", label, lowerBound, err)
 		}
 		lower = optional.Some(p)
 	}
-	if limit.UpperBound != "" {
-		p, perr := param.NewPnlFromString(limit.UpperBound)
-		if perr != nil {
-			return lower, upper, initial, fmt.Errorf(
-				"engine: pnl_bounds upper_bound %q: %w", limit.UpperBound, perr)
+	if upperBound != "" {
+		p, err := param.NewPnlFromString(upperBound)
+		if err != nil {
+			return lower, upper, fmt.Errorf(
+				"engine: %s upper_bound %q: %w", label, upperBound, err)
 		}
 		upper = optional.Some(p)
 	}
-	if limit.InitialPnl != "" {
-		p, perr := param.NewPnlFromString(limit.InitialPnl)
-		if perr != nil {
-			return lower, upper, initial, fmt.Errorf(
-				"engine: pnl_bounds initial_pnl %q: %w", limit.InitialPnl, perr)
-		}
-		initial = optional.Some(p)
-	}
-	return lower, upper, initial, nil
+	return lower, upper, nil
 }
 
 // newAsset parses a caller-supplied asset code into a param.Asset. A bad format
@@ -1039,29 +1054,19 @@ func executionReportFromAccount(
 				"engine: fill quantity %q: %w: %w", in.FillQuantity, err, domain.ErrInvalid)
 		}
 		fill.SetLastTrade(model.NewExecutionReportTrade(price, quantity))
+		if in.Commission != nil {
+			commission, err := commissionFrom(*in.Commission)
+			if err != nil {
+				return model.ExecutionReport{}, err
+			}
+			fill.SetFee(commission)
+		}
 	}
 	fill.SetLeavesQuantity(leaves)
 	fill.SetIsFinal(isFinal)
 	if lockBytes != nil {
 		fill.SetLock(lockBytes)
 	}
-
-	// The financial-impact group carries the per-fill realized P&L and fee the
-	// P&L-bounds kill-switch accumulates. spot-funds ignores it, but the engine
-	// applies every configured policy to the same report, so the group is always
-	// set (defaulting to zero) to keep a P&L policy from rejecting on an absent
-	// group. Both are exact decimal deltas in the settlement asset.
-	pnl, err := pnlOrZero(in.RealizedPnl)
-	if err != nil {
-		return model.ExecutionReport{}, err
-	}
-	fee, err := feeOrZero(in.Fee)
-	if err != nil {
-		return model.ExecutionReport{}, err
-	}
-	impact := report.EnsureFinancialImpactView()
-	impact.SetPnl(pnl)
-	impact.SetFee(fee)
 	return report, nil
 }
 
@@ -1087,8 +1092,7 @@ func executionReportPersistenceFrom(
 	payload.FillLockPrice = in.LockPrice
 	payload.LeavesQuantity = in.LeavesQuantity
 	payload.OrderStatus = string(in.OrderStatus)
-	payload.RealizedPnl = in.RealizedPnl
-	payload.Fee = in.Fee
+	payload.Commission = in.Commission
 
 	events := make([]domain.OrderEvent, 0, 2)
 	hasFill := in.FillQuantity != "" && in.FillPrice != ""
@@ -1118,6 +1122,7 @@ func executionReportPersistenceFrom(
 			Quantity:   in.FillQuantity,
 			Price:      in.FillPrice,
 			LockPrice:  in.LockPrice,
+			Commission: in.Commission,
 		}
 	}
 
@@ -1160,30 +1165,29 @@ func executionBalanceSettlementsFrom(outcomes []BalanceOutcome) []domain.Balance
 	return settlements
 }
 
-// pnlOrZero parses a signed realized-P&L delta, treating an empty string as
-// zero; a malformed value is caller error (ErrInvalid).
-func pnlOrZero(s string) (param.Pnl, error) {
-	if s == "" {
-		return param.NewPnlZero(), nil
-	}
-	pnl, err := param.NewPnlFromString(s)
-	if err != nil {
-		return param.Pnl{}, fmt.Errorf("engine: realized pnl %q: %w: %w", s, err, domain.ErrInvalid)
-	}
-	return pnl, nil
-}
-
-// feeOrZero parses a fee/rebate delta, treating an empty string as zero; a
-// malformed value is caller error (ErrInvalid).
-func feeOrZero(s string) (param.Fee, error) {
-	if s == "" {
-		return param.NewFeeZero(), nil
-	}
+func sdkFeeFromContractAmount(field, s string) (param.Fee, error) {
 	fee, err := param.NewFeeFromString(s)
 	if err != nil {
-		return param.Fee{}, fmt.Errorf("engine: fee %q: %w: %w", s, err, domain.ErrInvalid)
+		return param.Fee{}, fmt.Errorf("engine: %s %q: %w: %w", field, s, err, domain.ErrInvalid)
+	}
+	fee, err = fee.CheckedNeg()
+	if err != nil {
+		return param.Fee{}, fmt.Errorf("engine: %s %q: %w: %w", field, s, err, domain.ErrInvalid)
 	}
 	return fee, nil
+}
+
+func commissionFrom(c domain.Commission) (param.MonetaryAmount, error) {
+	amount, err := sdkFeeFromContractAmount("commission amount", c.Amount)
+	if err != nil {
+		return param.MonetaryAmount{}, err
+	}
+	currency, err := newAsset(c.Currency)
+	if err != nil {
+		return param.MonetaryAmount{}, fmt.Errorf(
+			"engine: commission currency %q: %w", c.Currency, err)
+	}
+	return param.NewMonetaryAmount(amount, currency), nil
 }
 
 // immediateExecutionReport builds the synthetic fill that settles an immediate

@@ -60,7 +60,13 @@ func TestLocalNode_ApplyExecutionReportPersistsBothLegs(t *testing.T) {
 	eng := newFakeEngine()
 	eng.execReportOutcomes = []engine.BalanceOutcome{
 		{Asset: "AAPL", Outcome: domain.AdjustmentOutcomeAccepted{BalanceResult: "2"}},
-		{Asset: "USD", Outcome: domain.AdjustmentOutcomeAccepted{BalanceResult: "800"}},
+		{
+			Asset: "USD",
+			Outcome: domain.AdjustmentOutcomeAccepted{
+				BalanceResult:    "800",
+				RealizedPnlDelta: "12.50",
+			},
+		},
 	}
 	n, st := newTestNode(t, eng)
 	ctx := context.Background()
@@ -97,6 +103,9 @@ func TestLocalNode_ApplyExecutionReportPersistsBothLegs(t *testing.T) {
 	}
 	if quote.Available != "800" {
 		t.Fatalf("quote available = %q, want 800", quote.Available)
+	}
+	if quote.RealizedPnl != "12.5" {
+		t.Fatalf("quote realized_pnl = %q, want 12.5", quote.RealizedPnl)
 	}
 }
 
@@ -283,7 +292,7 @@ func TestLocalNode_ApplyExecutionReportAuditsEngineBlock(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
 	eng.execReportBlocks = []domain.ExecutionAccountBlock{
-		{Account: "acc-1", Code: "pnl_kill_switch", Reason: "loss limit breached"},
+		{Account: "acc-1", Code: "test_block", Reason: "account block triggered"},
 	}
 	n, st := newTestNode(t, eng)
 	ctx := context.Background()
@@ -311,7 +320,7 @@ func TestLocalNode_ApplyExecutionReportAuditsEngineBlock(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("GetAccount: %v ok=%v", err, ok)
 	}
-	wantReason := fmt.Sprintf("loss limit breached [code=pnl_kill_switch, order %s]", order.ExternalID)
+	wantReason := fmt.Sprintf("account block triggered [code=test_block, order %s]", order.ExternalID)
 	if !acc.Blocked || acc.BlockReason != wantReason {
 		t.Fatalf("account block reason = %q, want %q", acc.BlockReason, wantReason)
 	}
@@ -324,9 +333,9 @@ func TestLocalNode_ApplyExecutionReportAuditsEngineBlock(t *testing.T) {
 		t.Fatalf("events = %d, want 1 fill event", len(detail.Events))
 	}
 	payload := detail.Events[0].Payload
-	if payload.RejectCode != "pnl_kill_switch" ||
+	if payload.RejectCode != "test_block" ||
 		payload.RejectScope != "account" ||
-		payload.RejectReason != "loss limit breached" {
+		payload.RejectReason != "account block triggered" {
 		t.Fatalf("fill event reject payload = %+v", payload)
 	}
 
@@ -339,12 +348,12 @@ func TestLocalNode_ApplyExecutionReportAuditsEngineBlock(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("want 1 block audit row, got %d: %+v", len(rows), rows)
 	}
-	// A kill-switch block is engine-initiated: SourceSystem marks the channel and
-	// the actor is empty (system origin carries no principal dictionary code).
+	// An engine block is system-initiated: SourceSystem marks the channel and the
+	// actor is empty (system origin carries no principal dictionary code).
 	if rows[0].Source != domain.SourceSystem || rows[0].Actor != "" {
 		t.Fatalf("block not attributed to system with empty actor: %+v", rows[0])
 	}
-	if !strings.Contains(rows[0].Detail, "loss limit breached") {
+	if !strings.Contains(rows[0].Detail, "account block triggered") {
 		t.Fatalf("block detail missing reason: %q", rows[0].Detail)
 	}
 }

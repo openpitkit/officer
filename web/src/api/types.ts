@@ -216,11 +216,12 @@ export interface OrderSizeLimit {
   maxNotional: string;
 }
 
-/** Typed wire shape for a P&L-bounds kill-switch barrier. */
-export interface PnlBoundsLimit {
+/** Typed wire shape for a self-computed SpotFunds P&L-bounds barrier. */
+export interface SpotFundsPnlBoundsLimit {
   scope: string;
   account: string;
-  asset: string;
+  accountGroup: string;
+  accountCurrency: string;
   lowerBound: string;
   upperBound: string;
   initialPnl: string;
@@ -230,7 +231,7 @@ export interface PnlBoundsLimit {
 export interface AccountLimits {
   rateLimits: RateLimit[];
   orderSizeLimits: OrderSizeLimit[];
-  pnlBoundsLimits: PnlBoundsLimit[];
+  spotFundsPnlBoundsLimits: SpotFundsPnlBoundsLimit[];
 }
 
 /** One risk-limit barrier in the UI's flat policy/value model. Values is an
@@ -240,7 +241,9 @@ export interface Limit {
   policy: string;
   scope: string;
   account: string;
+  accountGroup?: string;
   asset: string;
+  accountCurrency?: string;
   values: Record<string, string>;
 }
 
@@ -248,7 +251,7 @@ export interface Limit {
 export type PolicyKind =
   | "rate_limit"
   | "order_size_limit"
-  | "pnl_bounds_kill_switch";
+  | "spot_funds_pnl_bounds_kill_switch";
 
 /** Rate-limit barrier values (window in ms, integer order cap). */
 export interface PolicyRateValues {
@@ -273,7 +276,7 @@ export interface PolicyPnlBoundsValues {
 export interface PolicyValues {
   rate?: PolicyRateValues;
   orderSize?: PolicyOrderSizeValues;
-  pnlBounds?: PolicyPnlBoundsValues;
+  spotFundsPnlBounds?: PolicyPnlBoundsValues;
 }
 
 /** One policy row from the unified, paged GET /limits list (the policyDTO wire
@@ -282,17 +285,25 @@ export interface Policy {
   kind: PolicyKind;
   scope: string;
   account: string;
+  accountGroup: string;
   asset: string;
+  accountCurrency: string;
   values: PolicyValues;
 }
 
 /** Policy-kind selector accepted by the GET /limits `policy` query param. */
-export type PolicyFilter = "all" | "rate" | "order_size" | "pnl_bounds";
+export type PolicyFilter =
+  | "all"
+  | "rate"
+  | "order_size"
+  | "spot_funds_pnl_bounds";
 
 /** Filter options accepted by the unified, paged GET /limits list. */
 export interface PolicyListFilters extends PageRequest, SortSpec {
   account?: string;
+  accountGroup?: string;
   asset?: string;
+  accountCurrency?: string;
   policy?: PolicyFilter;
 }
 
@@ -333,6 +344,12 @@ export interface AdjustmentAccepted {
   heldResult: string;
   incomingDelta: string;
   incomingResult: string;
+  realizedPnlResult?:
+    | string
+    | {
+        delta: string;
+        result: string;
+      };
 }
 
 /** The rejected side of an adjustment (mirrors adjustmentRejectedDTO). */
@@ -356,6 +373,7 @@ export interface AdjustmentRequest {
   heldBounds?: BoundsPair;
   incomingBounds?: BoundsPair;
   averageEntryPrice?: string;
+  realizedPnl?: string;
 }
 
 /** One balance adjustment record (mirrors adjustmentDTO). */
@@ -443,6 +461,11 @@ export interface BalanceListFilters extends PageRequest, SortSpec {
 }
 
 /** An order record. */
+export interface Commission {
+  amount: string;
+  currency: string;
+}
+
 export interface Order {
   externalId: string;
   account: string;
@@ -454,6 +477,7 @@ export interface Order {
   side: OrderSide;
   amountKind: AmountKind;
   amountValue: string;
+  commissionSubtotals: Commission[];
   /** Remaining open base quantity persisted from stored order/report data. */
   leavesQuantity: string;
   price: string;
@@ -482,6 +506,9 @@ export interface OrderEvent {
   fillQuantity?: string;
   fillPrice?: string;
   fillLockPrice?: string;
+  leavesQuantity?: string;
+  orderStatus?: string;
+  commission?: Commission;
   /** Whether this event carries a persisted Ed25519-signed attestation. */
   signed: boolean;
   /** The attestation's algorithm ("ed25519" | "none"); empty when unattested. */
@@ -502,6 +529,7 @@ export interface Trade {
   quantity: string;
   price: string;
   lockPrice: string;
+  commission?: Commission;
 }
 
 /** One pre-trade check reject entry (mirrors the checkRejectDTO wire shape). */

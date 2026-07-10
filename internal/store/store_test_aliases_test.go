@@ -44,13 +44,13 @@ type PolicyListFilter = fwstore.PolicyListFilter
 type PolicyListRow = fwstore.PolicyListRow
 
 const (
-	StatusFilterActive  = fwstore.StatusFilterActive
-	StatusFilterBlocked = fwstore.StatusFilterBlocked
-	CountFilterHas      = fwstore.CountFilterHas
-	CountFilterNone     = fwstore.CountFilterNone
-	PolicyKindRate      = fwstore.PolicyKindRate
-	PolicyKindOrderSize = fwstore.PolicyKindOrderSize
-	PolicyKindPnlBounds = fwstore.PolicyKindPnlBounds
+	StatusFilterActive           = fwstore.StatusFilterActive
+	StatusFilterBlocked          = fwstore.StatusFilterBlocked
+	CountFilterHas               = fwstore.CountFilterHas
+	CountFilterNone              = fwstore.CountFilterNone
+	PolicyKindRate               = fwstore.PolicyKindRate
+	PolicyKindOrderSize          = fwstore.PolicyKindOrderSize
+	PolicyKindSpotFundsPnlBounds = fwstore.PolicyKindSpotFundsPnlBounds
 )
 
 func ExactTextMatcher(value string) TextMatcher { return fwstore.ExactTextMatcher(value) }

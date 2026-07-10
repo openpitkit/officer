@@ -49,6 +49,7 @@ import type {
   CheckReject,
   CheckResult,
   CheckWouldBlock,
+  Commission,
   EngineHealth,
   ExecutionBlock,
   ExecutionOutcome,
@@ -87,7 +88,6 @@ import type {
   PublicKeyMaterial,
   PageRequest,
   PagedResult,
-  PnlBoundsLimit,
   Policy,
   PolicyListFilters,
   RateLimit,
@@ -102,6 +102,7 @@ import type {
   ServiceLogs,
   Source,
   SortOrder,
+  SpotFundsPnlBoundsLimit,
   Status,
   StoreHealth,
   TextMatchMode,
@@ -361,6 +362,10 @@ function normalizeAdjustmentRequest(v: unknown): AdjustmentRequest {
   if (aep !== undefined) {
     req.averageEntryPrice = asString(aep);
   }
+  const realizedPnl = pick(o, "realizedPnl", "RealizedPnl", "realized_pnl");
+  if (realizedPnl !== undefined) {
+    req.realizedPnl = asString(realizedPnl);
+  }
   return req;
 }
 
@@ -368,6 +373,9 @@ function normalizeAdjustmentAccepted(v: unknown): AdjustmentAccepted | undefined
   if (!isObject(v)) {
     return undefined;
   }
+  const realizedPnlResult = normalizeAdjustmentResultOptional(
+    pick(v, "realizedPnlResult", "RealizedPnlResult", "realized_pnl_result"),
+  );
   return {
     balanceDelta: asString(pick(v, "balanceDelta", "BalanceDelta", "balance_delta")),
     balanceResult: asString(pick(v, "balanceResult", "BalanceResult", "balance_result")),
@@ -375,7 +383,25 @@ function normalizeAdjustmentAccepted(v: unknown): AdjustmentAccepted | undefined
     heldResult: asString(pick(v, "heldResult", "HeldResult", "held_result")),
     incomingDelta: asString(pick(v, "incomingDelta", "IncomingDelta", "incoming_delta")),
     incomingResult: asString(pick(v, "incomingResult", "IncomingResult", "incoming_result")),
+    realizedPnlResult,
   };
+}
+
+function normalizeAdjustmentResultOptional(
+  v: unknown,
+): AdjustmentAccepted["realizedPnlResult"] {
+  // Legacy scalar shape: some payloads carry the result as a bare decimal
+  // string rather than the { delta, result } object. Map it to the object
+  // form so the type union is fully honored instead of silently dropped.
+  if (typeof v === "string") {
+    return v !== "" ? { delta: "", result: v } : undefined;
+  }
+  if (!isObject(v)) {
+    return undefined;
+  }
+  const delta = asString(pick(v, "delta", "Delta"));
+  const result = asString(pick(v, "result", "Result"));
+  return delta !== "" || result !== "" ? { delta, result } : undefined;
 }
 
 function normalizeAdjustmentRejected(v: unknown): AdjustmentRejected | undefined {
@@ -452,6 +478,10 @@ function normalizeOrder(v: unknown): Order {
     side: asString(pick(o, "side", "Side")) as Order["side"],
     amountKind: asString(pick(o, "amountKind", "AmountKind", "amount_kind")) as Order["amountKind"],
     amountValue,
+    commissionSubtotals: normalizeArray(
+      pick(o, "commissionSubtotals", "CommissionSubtotals", "commission_subtotals"),
+      normalizeCommission,
+    ),
     leavesQuantity,
     price: asString(pick(o, "price", "Price")),
     status: asString(pick(o, "status", "Status")),
@@ -507,6 +537,17 @@ function normalizeOrderEvent(v: unknown): OrderEvent {
   if (fillLockPrice !== undefined) {
     event.fillLockPrice = asString(fillLockPrice);
   }
+  const leavesQuantity = pick(o, "leavesQuantity", "LeavesQuantity", "leaves_quantity");
+  if (leavesQuantity !== undefined) {
+    event.leavesQuantity = asString(leavesQuantity);
+  }
+  const orderStatus = pick(o, "orderStatus", "OrderStatus", "order_status");
+  if (orderStatus !== undefined) {
+    event.orderStatus = asString(orderStatus);
+  }
+  event.commission = normalizeCommissionOptional(
+    pick(o, "commission", "Commission"),
+  );
   return event;
 }
 
@@ -525,7 +566,28 @@ function normalizeTrade(v: unknown): Trade {
     quantity: asString(pick(o, "quantity", "Quantity")),
     price: asString(pick(o, "price", "Price")),
     lockPrice: asString(pick(o, "lockPrice", "LockPrice", "lock_price")),
+    commission: normalizeCommissionOptional(
+      pick(o, "commission", "Commission"),
+    ),
   };
+}
+
+function normalizeCommission(v: unknown): Commission {
+  const o = isObject(v) ? v : {};
+  return {
+    amount: asString(pick(o, "amount", "Amount")),
+    currency: asString(pick(o, "currency", "Currency")),
+  };
+}
+
+function normalizeCommissionOptional(v: unknown): Commission | undefined {
+  if (!isObject(v)) {
+    return undefined;
+  }
+  const commission = normalizeCommission(v);
+  return commission.amount !== "" && commission.currency !== ""
+    ? commission
+    : undefined;
 }
 
 function normalizeValues(v: unknown): Record<string, string> {
@@ -560,7 +622,9 @@ function normalizeLimit(v: unknown): Limit {
     policy: asString(pick(o, "policy", "Policy")),
     scope: asString(pick(o, "scope", "Scope")),
     account: asString(pick(o, "account", "Account")),
+    accountGroup: asString(pick(o, "accountGroup", "AccountGroup")),
     asset: asString(pick(o, "asset", "Asset")),
+    accountCurrency: asString(pick(o, "accountCurrency", "AccountCurrency")),
     values: normalizeValues(pick(o, "values", "Values")),
   };
 }
@@ -587,12 +651,15 @@ function normalizeOrderSizeLimit(v: unknown): OrderSizeLimit {
   };
 }
 
-function normalizePnlBoundsLimit(v: unknown): PnlBoundsLimit {
+function normalizeSpotFundsPnlBoundsLimit(
+  v: unknown,
+): SpotFundsPnlBoundsLimit {
   const o = isObject(v) ? v : {};
   return {
     scope: asString(pick(o, "scope", "Scope")),
     account: asString(pick(o, "account", "Account")),
-    asset: asString(pick(o, "asset", "Asset")),
+    accountGroup: asString(pick(o, "accountGroup", "AccountGroup")),
+    accountCurrency: asString(pick(o, "accountCurrency", "AccountCurrency")),
     lowerBound: asString(pick(o, "lowerBound", "LowerBound", "lower_bound")),
     upperBound: asString(pick(o, "upperBound", "UpperBound", "upper_bound")),
     initialPnl: asString(pick(o, "initialPnl", "InitialPnl", "initial_pnl")),
@@ -610,9 +677,14 @@ function normalizeAccountLimits(v: unknown): AccountLimits {
       pick(o, "orderSizeLimits", "OrderSizeLimits", "order_size_limits"),
       normalizeOrderSizeLimit,
     ),
-    pnlBoundsLimits: normalizeArray(
-      pick(o, "pnlBoundsLimits", "PnlBoundsLimits", "pnl_bounds_limits"),
-      normalizePnlBoundsLimit,
+    spotFundsPnlBoundsLimits: normalizeArray(
+      pick(
+        o,
+        "spotFundsPnlBoundsLimits",
+        "SpotFundsPnlBoundsLimits",
+        "spot_funds_pnl_bounds_limits",
+      ),
+      normalizeSpotFundsPnlBoundsLimit,
     ),
   };
 }
@@ -639,11 +711,13 @@ function flattenAccountLimits(v: AccountLimits): Limit[] {
         max_notional: limit.maxNotional,
       },
     })),
-    ...v.pnlBoundsLimits.map((limit) => ({
-      policy: "pnl_bounds_kill_switch",
+    ...v.spotFundsPnlBoundsLimits.map((limit) => ({
+      policy: "spot_funds_pnl_bounds_kill_switch",
       scope: limit.scope,
       account: limit.account,
-      asset: limit.asset,
+      accountGroup: limit.accountGroup,
+      asset: "",
+      accountCurrency: limit.accountCurrency,
       values: {
         lower_bound: limit.lowerBound,
         upper_bound: limit.upperBound,
@@ -664,7 +738,7 @@ function normalizePolicyKind(v: unknown): Policy["kind"] {
   switch (v) {
     case "rate_limit":
     case "order_size_limit":
-    case "pnl_bounds_kill_switch":
+    case "spot_funds_pnl_bounds_kill_switch":
       return v;
     default:
       return "rate_limit";
@@ -681,7 +755,9 @@ function normalizePolicy(v: unknown): Policy {
     kind: normalizePolicyKind(pick(o, "kind", "Kind")),
     scope: asString(pick(o, "scope", "Scope")),
     account: asString(pick(o, "account", "Account")),
+    accountGroup: asString(pick(o, "accountGroup", "AccountGroup")),
     asset: asString(pick(o, "asset", "Asset")),
+    accountCurrency: asString(pick(o, "accountCurrency", "AccountCurrency")),
     values: {},
   };
   const rate = pick(values, "rate", "Rate");
@@ -702,17 +778,22 @@ function normalizePolicy(v: unknown): Policy {
       ),
     };
   }
-  const pnlBounds = pick(values, "pnlBounds", "PnlBounds", "pnl_bounds");
-  if (isObject(pnlBounds)) {
-    policy.values.pnlBounds = {
+  const spotFundsPnlBounds = pick(
+    values,
+    "spotFundsPnlBounds",
+    "SpotFundsPnlBounds",
+    "spot_funds_pnl_bounds",
+  );
+  if (isObject(spotFundsPnlBounds)) {
+    policy.values.spotFundsPnlBounds = {
       lowerBound: asString(
-        pick(pnlBounds, "lowerBound", "LowerBound", "lower_bound"),
+        pick(spotFundsPnlBounds, "lowerBound", "LowerBound", "lower_bound"),
       ),
       upperBound: asString(
-        pick(pnlBounds, "upperBound", "UpperBound", "upper_bound"),
+        pick(spotFundsPnlBounds, "upperBound", "UpperBound", "upper_bound"),
       ),
       initialPnl: asString(
-        pick(pnlBounds, "initialPnl", "InitialPnl", "initial_pnl"),
+        pick(spotFundsPnlBounds, "initialPnl", "InitialPnl", "initial_pnl"),
       ),
     };
   }
@@ -727,7 +808,9 @@ function policyToLimit(policy: Policy): Limit {
     policy: policy.kind,
     scope: policy.scope,
     account: policy.account,
+    accountGroup: policy.accountGroup,
     asset: policy.asset,
+    accountCurrency: policy.accountCurrency,
   };
   switch (policy.kind) {
     case "rate_limit": {
@@ -750,10 +833,11 @@ function policyToLimit(policy: Policy): Limit {
         },
       };
     }
-    case "pnl_bounds_kill_switch": {
-      const pnlBounds = policy.values.pnlBounds;
+    case "spot_funds_pnl_bounds_kill_switch": {
+      const pnlBounds = policy.values.spotFundsPnlBounds;
       return {
         ...base,
+        asset: "",
         values: {
           lower_bound: pnlBounds?.lowerBound ?? "",
           upper_bound: pnlBounds?.upperBound ?? "",
@@ -814,13 +898,14 @@ function limitEndpointBody(client: ApiClient, limit: Limit): { path: string; bod
           maxNotional: limit.values.max_notional ?? "",
         },
       };
-    case "pnl_bounds_kill_switch":
+    case "spot_funds_pnl_bounds_kill_switch":
       return {
-        path: `${client.baseUrl}/limits/pnl-bounds`,
+        path: `${client.baseUrl}/limits/spot-funds-pnl-bounds`,
         body: {
           scope: limit.scope,
           account: limit.account,
-          asset: limit.asset,
+          accountGroup: limit.accountGroup ?? "",
+          accountCurrency: limit.accountCurrency ?? "",
           lowerBound: limit.values.lower_bound ?? "",
           upperBound: limit.values.upper_bound ?? "",
           initialPnl: limit.values.initial_pnl ?? "",
@@ -851,7 +936,7 @@ function normalizePutLimitResponse(policy: string, v: unknown): Limit {
       return singleFlattenedLimit(policy, {
         rateLimits: [normalizeRateLimit(pick(o, "rateLimit", "RateLimit"))],
         orderSizeLimits: [],
-        pnlBoundsLimits: [],
+        spotFundsPnlBoundsLimits: [],
       });
     case "order_size_limit":
       return singleFlattenedLimit(policy, {
@@ -859,14 +944,16 @@ function normalizePutLimitResponse(policy: string, v: unknown): Limit {
         orderSizeLimits: [
           normalizeOrderSizeLimit(pick(o, "orderSizeLimit", "OrderSizeLimit")),
         ],
-        pnlBoundsLimits: [],
+        spotFundsPnlBoundsLimits: [],
       });
-    case "pnl_bounds_kill_switch":
+    case "spot_funds_pnl_bounds_kill_switch":
       return singleFlattenedLimit(policy, {
         rateLimits: [],
         orderSizeLimits: [],
-        pnlBoundsLimits: [
-          normalizePnlBoundsLimit(pick(o, "pnlBoundsLimit", "PnlBoundsLimit")),
+        spotFundsPnlBoundsLimits: [
+          normalizeSpotFundsPnlBoundsLimit(
+            pick(o, "spotFundsPnlBoundsLimit", "SpotFundsPnlBoundsLimit"),
+          ),
         ],
       });
     default:
@@ -1769,7 +1856,9 @@ function policyListQuery(filters?: PolicyListFilters): string {
   if (filters === undefined) return "";
   const params = new URLSearchParams();
   appendListFilter(params, "account", filters.account);
+  appendListFilter(params, "accountGroup", filters.accountGroup);
   appendListFilter(params, "asset", filters.asset);
+  appendListFilter(params, "accountCurrency", filters.accountCurrency);
   appendListFilter(params, "policy", filters.policy, "all");
   appendListFilter(params, "sort", filters.sort);
   appendListFilter(params, "order", filters.order);
@@ -2301,6 +2390,7 @@ export interface AdjustmentBody {
   id?: string;
   externalId?: string;
   asset: string;
+  realizedPnl?: string;
   averageEntryPrice?: string;
   balance?: { mode: string; value: string };
   held?: { mode: string; value: string };
@@ -2308,6 +2398,28 @@ export interface AdjustmentBody {
   balanceBounds?: { lower?: string; upper?: string };
   heldBounds?: { lower?: string; upper?: string };
   incomingBounds?: { lower?: string; upper?: string };
+}
+
+export interface BalanceRealizedPnlBody {
+  asset: string;
+  realizedPnl: string;
+}
+
+/** PUT /accounts/{code}/balances/realized-pnl. */
+async function setBalanceRealizedPnl(
+  client: ApiClient,
+  accountCode: string,
+  body: BalanceRealizedPnlBody,
+): Promise<Balance> {
+  const v = await client.request(
+    `${client.baseUrl}/accounts/${encode(accountCode)}/balances/realized-pnl`,
+    {
+      method: "PUT",
+      body,
+    },
+  );
+  const o = isObject(v) ? v : {};
+  return normalizeBalance(pick(o, "balance", "Balance"));
 }
 
 /** POST /accounts/{code}/adjustments. */
@@ -2496,6 +2608,7 @@ function minimalCreatedOrder(
     side: body.side as Order["side"],
     amountKind: body.amountKind as Order["amountKind"],
     amountValue: body.amountValue,
+    commissionSubtotals: [],
     leavesQuantity: body.amountValue,
     price: body.price ?? "0",
     status: "submitted",
@@ -2921,15 +3034,13 @@ async function fetchPublicKeyById(client: ApiClient,
   return { keyId, alg: "ed25519", format, key: "" };
 }
 
-// The web exec-report intentionally omits realizedPnl/fee: this is a manual
-// operator entry of a venue fill, and real P&L and fees arrive from venue
-// adapters via the MCP/API surfaces, not from a hand-typed panel report.
 export interface ExecutionReportBody {
   /** Fill fields: required for filled/partially_filled, ignored otherwise. */
   quantity?: string;
   price?: string;
   leavesQuantity?: string;
   lockPrice?: string;
+  commission?: Commission;
   status: string;
   force?: boolean;
 }
@@ -3157,7 +3268,9 @@ async function deleteLimit(client: ApiClient, target: {
   policy: string;
   scope: string;
   account: string;
+  accountGroup?: string;
   asset: string;
+  accountCurrency?: string;
 }): Promise<void> {
   const params = new URLSearchParams({
     policy: target.policy,
@@ -3166,8 +3279,14 @@ async function deleteLimit(client: ApiClient, target: {
   if (target.account) {
     params.set("account", target.account);
   }
+  if (target.accountGroup) {
+    params.set("accountGroup", target.accountGroup);
+  }
   if (target.asset) {
     params.set("asset", target.asset);
+  }
+  if (target.accountCurrency) {
+    params.set("accountCurrency", target.accountCurrency);
   }
   await client.request(`${client.baseUrl}/limits?${params.toString()}`, { method: "DELETE" });
 }
@@ -3481,6 +3600,7 @@ export function createOfficerApi(client: ApiClient) {
     deleteAssetClass: bind(deleteAssetClass),
     fetchBalancesPage: bind(fetchBalancesPage),
     fetchBalances: bind(fetchBalances),
+    setBalanceRealizedPnl: bind(setBalanceRealizedPnl),
     createAdjustment: bind(createAdjustment),
     fetchAccountAdjustments: bind(fetchAccountAdjustments),
     fetchAdjustmentsPage: bind(fetchAdjustmentsPage),

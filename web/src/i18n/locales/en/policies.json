@@ -22,15 +22,15 @@
   "table": {
     "policy": "Policy",
     "scope": "Scope",
-    "account": "Account",
-    "asset": "Asset",
+    "account": "Account / group",
+    "asset": "Asset / currency",
     "values": "Values",
     "actions": "Actions",
     "columnDescriptions": {
       "policy": "This column shows the risk policy applied by the barrier.",
-      "scope": "This column shows whether the barrier applies to an account, asset, broker, or combined target.",
-      "account": "This column shows the account targeted by the barrier when the scope includes one.",
-      "asset": "This column shows the asset targeted by the barrier when the scope includes one.",
+      "scope": "This column shows whether the barrier applies globally, to a group, account, asset, or combined target.",
+      "account": "This column shows the account or account group targeted by the barrier when that axis is present.",
+      "asset": "This column shows the asset or account currency targeted by the barrier when that axis is present.",
       "values": "This column shows the configured numeric or duration values for the policy barrier.",
       "actions": "This column contains row actions for sharing, editing, and deleting the barrier."
     },
@@ -48,7 +48,9 @@
     "title": "Delete policy barrier?",
     "description": "This removes the {{policy}} barrier on {{scope}}{{account}}{{asset}}.",
     "accountFragment": " account {{account}}",
-    "assetFragment": " asset {{asset}}"
+    "accountGroupFragment": " account group {{accountGroup}}",
+    "assetFragment": " asset {{asset}}",
+    "accountCurrencyFragment": " account currency {{accountCurrency}}"
   },
   "restartConfirm": {
     "title": "Rebuild risk engine?",
@@ -62,11 +64,16 @@
     "scope": "Scope",
     "account": "Account",
     "accountPlaceholder": "acc-1",
+    "accountGroup": "Account group",
+    "accountGroupPlaceholder": "desk-a",
     "asset": "Asset",
     "assetPlaceholder": "AAPL",
+    "accountCurrency": "Account currency",
+    "accountCurrencyPlaceholder": "USD",
     "values": "Values",
     "rateLimitFootnote": "Both max orders and window are required.",
     "atLeastOneFootnote": "At least one value is required.",
+    "fxFailSafeNote": "FX fail-safe: an account under PnL control is blocked when a required input is missing, for example an FX quote needed to value realized PnL in the account currency. FX is required only when needed, not for assets already in the account currency and not for accounts outside PnL control.",
     "save": "Save"
   },
   "duration": {

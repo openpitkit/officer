@@ -49,6 +49,36 @@ func handleListBalances(svc Service) http.HandlerFunc {
 	}
 }
 
+// handleSetBalanceRealizedPnl handles
+// PUT /api/v1/accounts/{id}/balances/realized-pnl.
+func handleSetBalanceRealizedPnl(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := httpx.PathAccountID(r)
+		if err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		var req balanceRealizedPnlRequestDTO
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			return
+		}
+		balance, err := svc.SetBalanceRealizedPnl(
+			r.Context(),
+			id,
+			req.Asset,
+			req.RealizedPnl,
+		)
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{
+			"balance": toBalanceDTO(balance),
+		})
+	}
+}
+
 // handleApplyAdjustment handles POST /api/v1/accounts/{id}/adjustments. A policy
 // reject is a successful call: the rejected record is returned in the body.
 func handleApplyAdjustment(svc Service) http.HandlerFunc {

@@ -323,8 +323,9 @@ type Data struct {
 	RateLimits []domain.LimitRate `json:"rateLimits,omitempty"`
 	// OrderSizeLimits are order-size barriers, linked by scope+codes.
 	OrderSizeLimits []domain.LimitOrderSize `json:"orderSizeLimits,omitempty"`
-	// PnlBoundsLimits are P&L-bounds barriers, linked by scope+codes.
-	PnlBoundsLimits []domain.LimitPnlBounds `json:"pnlBoundsLimits,omitempty"`
+	// SpotFundsPnlBoundsLimits are SpotFunds self-computed P&L-bounds barriers,
+	// linked by scope+codes.
+	SpotFundsPnlBoundsLimits []domain.LimitSpotFundsPnlBounds `json:"spotFundsPnlBoundsLimits,omitempty"`
 	// Adjustments are spot-funds adjustment records (by external id).
 	Adjustments []domain.AccountAdjustmentRecord `json:"adjustments,omitempty"`
 	// Orders are order records with their optional approvals (by external id).
@@ -557,7 +558,11 @@ func FilterData(data Data, scope Scope) Data {
 	if scope.Included(SectionRiskLimits) {
 		out.RateLimits = filterRateLimits(data.RateLimits, scope.Accounts, groupByAccount)
 		out.OrderSizeLimits = filterOrderSizeLimits(data.OrderSizeLimits, scope.Accounts, groupByAccount)
-		out.PnlBoundsLimits = filterPnlBoundsLimits(data.PnlBoundsLimits, scope.Accounts, groupByAccount)
+		out.SpotFundsPnlBoundsLimits = filterSpotFundsPnlBoundsLimits(
+			data.SpotFundsPnlBoundsLimits,
+			scope.Accounts,
+			groupByAccount,
+		)
 	}
 	if scope.Included(SectionMarketData) {
 		out.MarketDataInstances = append([]domain.MarketDataInstance(nil),
@@ -735,18 +740,51 @@ func filterOrderSizeLimits(
 	return out
 }
 
-func filterPnlBoundsLimits(
-	limits []domain.LimitPnlBounds,
+func filterSpotFundsPnlBoundsLimits(
+	limits []domain.LimitSpotFundsPnlBounds,
 	selector EntitySelector,
 	groupByAccount map[domain.AccountID]string,
-) []domain.LimitPnlBounds {
-	out := make([]domain.LimitPnlBounds, 0, len(limits))
+) []domain.LimitSpotFundsPnlBounds {
+	out := make([]domain.LimitSpotFundsPnlBounds, 0, len(limits))
 	for _, limit := range limits {
-		if matchLimitAccount(selector, limit.Account, groupByAccount) {
+		if matchSpotFundsPnlBoundsLimit(selector, limit, groupByAccount) {
 			out = append(out, limit)
 		}
 	}
 	return out
+}
+
+func matchSpotFundsPnlBoundsLimit(
+	selector EntitySelector,
+	limit domain.LimitSpotFundsPnlBounds,
+	groupByAccount map[domain.AccountID]string,
+) bool {
+	if limit.Account != "" {
+		return selectorMatchesAccount(selector, limit.Account, groupByAccount)
+	}
+	if limit.AccountGroup != "" {
+		return selectorMatchesGroup(selector, limit.AccountGroup, groupByAccount)
+	}
+	return selector.All || selector.Empty()
+}
+
+func selectorMatchesGroup(
+	selector EntitySelector,
+	group string,
+	groupByAccount map[domain.AccountID]string,
+) bool {
+	if selector.All || selector.Empty() {
+		return true
+	}
+	if slices.Contains(selector.Groups, group) {
+		return true
+	}
+	for _, account := range selector.Accounts {
+		if groupByAccount[domain.AccountID(account)] == group {
+			return true
+		}
+	}
+	return false
 }
 
 // matchLimitAccount keeps scope-wide barriers (empty account axis) whenever the

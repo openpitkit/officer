@@ -121,7 +121,7 @@
       "account": "This column shows the account targeted by the adjustment.",
       "asset": "This column shows the asset targeted by the adjustment.",
       "source": "This column shows whether the adjustment came from the panel, REST, MCP, or another source.",
-      "request": "This column shows the requested balance, held, incoming, or average-price change.",
+      "request": "This column shows the requested balance, held, incoming, average-price, or realized-PnL change.",
       "status": "This column shows whether the adjustment was accepted or rejected.",
       "outcome": "This column shows the stored result or rejection summary.",
       "externalId": "This column shows the immutable adjustment ID."
@@ -137,7 +137,8 @@
       "heldAbsolute": "held ={{value}}",
       "incomingDelta": "incoming Δ{{value}}",
       "incomingAbsolute": "incoming ={{value}}",
-      "avgPrice": "avg {{value}}"
+      "avgPrice": "avg {{value}}",
+      "realizedPnl": "realized PnL ={{value}}"
     },
     "status": {
       "rejected": "rejected",
@@ -154,7 +155,9 @@
       "account": "Account",
       "asset": "Asset",
       "avgEntryPrice": "Average entry price (optional)",
-      "avgEntryPriceHint": "Positive decimal. Leave blank to keep the current value."
+      "avgEntryPriceHint": "Positive decimal. Leave blank to keep the current value.",
+      "realizedPnl": "Realized PnL",
+      "realizedPnlPlaceholder": "e.g. -12.50"
     },
     "amounts": {
       "sectionLabel": "Amounts",
@@ -179,7 +182,8 @@
       "acceptedTitle": "Accepted",
       "fieldBalance": "balance",
       "fieldHeld": "held",
-      "fieldIncoming": "incoming"
+      "fieldIncoming": "incoming",
+      "fieldRealizedPnl": "realized PnL"
     },
     "footer": {
       "close": "Close",

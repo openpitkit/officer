@@ -434,6 +434,18 @@ function outcomeAmountText(
   return `Δ${delta} → ${result}`;
 }
 
+function adjustmentResultParts(
+  result: Exclude<NonNullable<Adjustment["accepted"]>["realizedPnlResult"], undefined>,
+): {
+  delta: string;
+  result: string;
+} {
+  if (typeof result === "string") {
+    return { delta: "", result };
+  }
+  return result;
+}
+
 type BalanceRangeKey =
   | "available"
   | "held"
@@ -876,6 +888,93 @@ function AveragePriceIntentRow({
   );
 }
 
+function RealizedPnlIntentRow({
+  current,
+  value,
+  valid,
+  disabled,
+  onChange,
+  onSubmit,
+}: {
+  current: string | undefined;
+  value: string;
+  valid: boolean;
+  disabled: boolean;
+  onChange: (next: string) => void;
+  onSubmit: () => void;
+}) {
+  const { t } = useTranslation("positions");
+  const invalid = hasValue(value) && !valid;
+  const result = hasValue(value) ? value.trim() : null;
+  const label = t("balances.columns.realizedPnl");
+
+  return (
+    <div className="grid gap-4 border-t border-border px-3 py-3 md:grid-cols-[minmax(8rem,1fr)_8rem_minmax(10rem,1.2fr)_minmax(8rem,1fr)] md:items-end">
+      <div>
+        <p className="text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted">
+          {label}
+        </p>
+        <p className="nums mt-1 text-sm text-text">{dash(current)}</p>
+      </div>
+      <div className="space-y-1">
+        <p className="text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted md:hidden">
+          {t("panel.columns.intent")}
+        </p>
+        <div
+          className="flex h-8 items-center rounded-card border border-border bg-surface px-3 text-xs text-muted-lt"
+          aria-label={t("panel.modeAriaLabel", { field: label })}
+        >
+          {t("dialog.mode.absolute")}
+        </div>
+      </div>
+      <div className="space-y-1">
+        <Label htmlFor="adjust-realized-pnl" className="md:hidden">
+          {t("panel.columns.amount")}
+        </Label>
+        <NumberStepper
+          id="adjust-realized-pnl"
+          value={value}
+          min={null}
+          spellCheck={false}
+          placeholder={t("panel.noChange")}
+          inputClassName="h-8 text-right text-xs"
+          disabled={disabled}
+          aria-label={t("dialog.fields.realizedPnl")}
+          clearLabel={t("common:filters.clearField")}
+          onClear={() => onChange("")}
+          onChange={onChange}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              onSubmit();
+            }
+          }}
+        />
+      </div>
+      <div>
+        <p className="text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted md:hidden">
+          {t("panel.columns.result")}
+        </p>
+        <p
+          className={cn(
+            "nums mt-1 text-sm md:pr-3 md:text-right",
+            invalid
+              ? "text-[var(--danger)]"
+              : result
+                ? "text-text"
+                : "text-muted-lt",
+          )}
+        >
+          {invalid
+            ? t("panel.invalidDecimal")
+            : result
+              ? result
+              : t("panel.noChange")}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function AmountIntentRow({
   id,
   label,
@@ -1084,6 +1183,7 @@ function AdjustmentPanel({
   const [held, setHeld] = useState<AmountDraftState>(emptyAmountDraft);
   const [incoming, setIncoming] = useState<AmountDraftState>(emptyAmountDraft);
   const [avgPrice, setAvgPrice] = useState("");
+  const [realizedPnl, setRealizedPnl] = useState("");
   const [balanceBounds, setBalanceBounds] =
     useState<BoundsDraftState>(emptyBoundsDraft);
   const [heldBounds, setHeldBounds] =
@@ -1125,6 +1225,8 @@ function AdjustmentPanel({
     return amountResult(current, field) !== null;
   });
   const avgPriceValid = !hasValue(avgPrice) || isDecimal(avgPrice);
+  const realizedPnlValid =
+    !hasValue(realizedPnl) || isDecimal(realizedPnl);
   const allBoundsValid =
     boundsAreValid(balanceBounds) &&
     boundsAreValid(heldBounds) &&
@@ -1139,7 +1241,10 @@ function AdjustmentPanel({
     incomingBounds,
   ].filter(boundsHaveValue).length;
   const hasChanges =
-    hasAmountChange || hasValue(avgPrice) || hasBoundsChange;
+    hasAmountChange ||
+    hasValue(avgPrice) ||
+    hasValue(realizedPnl) ||
+    hasBoundsChange;
   const hasFilledField =
     (!lockIdentity && (hasValue(account) || hasValue(asset))) ||
     hasChanges;
@@ -1149,6 +1254,7 @@ function AdjustmentPanel({
     hasChanges &&
     amountFieldsValid &&
     avgPriceValid &&
+    realizedPnlValid &&
     allBoundsValid &&
     !busy;
 
@@ -1161,6 +1267,7 @@ function AdjustmentPanel({
     setHeld(emptyAmountDraft());
     setIncoming(emptyAmountDraft());
     setAvgPrice("");
+    setRealizedPnl("");
     setBalanceBounds(emptyBoundsDraft());
     setHeldBounds(emptyBoundsDraft());
     setIncomingBounds(emptyBoundsDraft());
@@ -1181,7 +1288,12 @@ function AdjustmentPanel({
       setError(t("panel.noChangesError"));
       return;
     }
-    if (!amountFieldsValid || !avgPriceValid || !allBoundsValid) {
+    if (
+      !amountFieldsValid ||
+      !avgPriceValid ||
+      !realizedPnlValid ||
+      !allBoundsValid
+    ) {
       setError(t("panel.invalidDecimal"));
       return;
     }
@@ -1208,6 +1320,9 @@ function AdjustmentPanel({
       }
       if (hasValue(avgPrice)) {
         body.averageEntryPrice = avgPrice.trim();
+      }
+      if (hasValue(realizedPnl)) {
+        body.realizedPnl = realizedPnl.trim();
       }
       const bb = buildBoundsDraft(balanceBounds);
       if (bb) {
@@ -1335,6 +1450,14 @@ function AdjustmentPanel({
           valid={avgPriceValid}
           disabled={disabled}
           onChange={setAvgPrice}
+          onSubmit={() => void submit()}
+        />
+        <RealizedPnlIntentRow
+          current={balance?.realizedPnl}
+          value={realizedPnl}
+          valid={realizedPnlValid}
+          disabled={disabled}
+          onChange={setRealizedPnl}
           onSubmit={() => void submit()}
         />
       </div>
@@ -1914,6 +2037,15 @@ function AdjustOutcomeView({ adjustment }: AdjustOutcome) {
         result: accepted.incomingResult,
       });
     }
+    if (accepted.realizedPnlResult) {
+      const realizedPnl = adjustmentResultParts(accepted.realizedPnlResult);
+      rows.push({
+        label: t("dialog.outcome.fieldRealizedPnl"),
+        request: { mode: "absolute", value: adjustment.request.realizedPnl ?? "" },
+        delta: realizedPnl.delta,
+        result: realizedPnl.result,
+      });
+    }
     return (
       <div className="rounded-card border border-[var(--ok)] bg-[var(--ok-dim)] p-3 text-xs">
         <p className="font-medium text-[var(--ok)]">{t("dialog.outcome.acceptedTitle")}</p>
@@ -2100,6 +2232,7 @@ interface AdjustDialogProps {
   initialIncomingMode?: AdjustmentMode;
   initialIncomingValue?: string;
   initialAvgPrice?: string;
+  initialRealizedPnl?: string;
   initialBalanceBoundsLower?: string;
   initialBalanceBoundsUpper?: string;
   initialHeldBoundsLower?: string;
@@ -2123,6 +2256,7 @@ function AdjustDialog({
   initialIncomingMode,
   initialIncomingValue,
   initialAvgPrice,
+  initialRealizedPnl,
   initialBalanceBoundsLower,
   initialBalanceBoundsUpper,
   initialHeldBoundsLower,
@@ -2148,6 +2282,7 @@ function AdjustDialog({
   const [account, setAccount] = useState(initialAccount);
   const [asset, setAsset] = useState(initialAsset);
   const [avgPrice, setAvgPrice] = useState(initialAvgPrice ?? "");
+  const [realizedPnl, setRealizedPnl] = useState(initialRealizedPnl ?? "");
   const [balance, setBalance] = useState<AmountFieldState>(() => seedAmount(initialBalanceMode, initialBalanceValue));
   const [held, setHeld] = useState<AmountFieldState>(() => seedAmount(initialHeldMode, initialHeldValue));
   const [incoming, setIncoming] = useState<AmountFieldState>(() => seedAmount(initialIncomingMode, initialIncomingValue));
@@ -2176,6 +2311,7 @@ function AdjustDialog({
       setAccount(initialAccount);
       setAsset(initialAsset);
       setAvgPrice(initialAvgPrice ?? "");
+      setRealizedPnl(initialRealizedPnl ?? "");
       setBalance(seedAmount(initialBalanceMode, initialBalanceValue));
       setHeld(seedAmount(initialHeldMode, initialHeldValue));
       setIncoming(seedAmount(initialIncomingMode, initialIncomingValue));
@@ -2193,6 +2329,7 @@ function AdjustDialog({
     initialHeldMode, initialHeldValue,
     initialIncomingMode, initialIncomingValue,
     initialAvgPrice,
+    initialRealizedPnl,
     initialBalanceBoundsLower, initialBalanceBoundsUpper,
     initialHeldBoundsLower, initialHeldBoundsUpper,
     initialIncomingBoundsLower, initialIncomingBoundsUpper,
@@ -2217,11 +2354,25 @@ function AdjustDialog({
 
   const { t } = useTranslation("positions");
   const { createAdjustment } = useOfficerApi();
+  const hasModalAdjustmentChange =
+    hasValue(avgPrice) ||
+    (balance.enabled && hasValue(balance.value)) ||
+    (held.enabled && hasValue(held.value)) ||
+    (incoming.enabled && hasValue(incoming.value)) ||
+    (balanceBounds.enabled &&
+      (hasValue(balanceBounds.lower) || hasValue(balanceBounds.upper))) ||
+    (heldBounds.enabled &&
+      (hasValue(heldBounds.lower) || hasValue(heldBounds.upper))) ||
+    (incomingBounds.enabled &&
+      (hasValue(incomingBounds.lower) || hasValue(incomingBounds.upper)));
+  const hasModalChanges =
+    hasModalAdjustmentChange || hasValue(realizedPnl);
 
   const resetAllFields = () => {
     setAccount("");
     setAsset("");
     setAvgPrice("");
+    setRealizedPnl("");
     setBalance(emptyAmount());
     setHeld(emptyAmount());
     setIncoming(emptyAmount());
@@ -2243,6 +2394,14 @@ function AdjustDialog({
       setError(t("dialog.error.assetRequired"));
       return;
     }
+    if (!hasModalChanges) {
+      setError(t("panel.noChangesError"));
+      return;
+    }
+    if (realizedPnl.trim() && !isDecimal(realizedPnl)) {
+      setError(t("panel.invalidDecimal"));
+      return;
+    }
     setBusy(true);
     setError(null);
     setOutcome(null);
@@ -2259,6 +2418,9 @@ function AdjustDialog({
       }
       if (incoming.enabled && incoming.value.trim()) {
         body.incoming = { mode: incoming.mode, value: incoming.value.trim() };
+      }
+      if (realizedPnl.trim()) {
+        body.realizedPnl = realizedPnl.trim();
       }
       const bb = buildBounds(balanceBounds);
       if (bb) {
@@ -2323,6 +2485,24 @@ function AdjustDialog({
                 clearLabel={t("common:filters.clearField")}
               />
             </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="adj-realized-pnl">
+              {t("dialog.fields.realizedPnl")}
+            </Label>
+            <NumberStepper
+              id="adj-realized-pnl"
+              value={realizedPnl}
+              min={null}
+              spellCheck={false}
+              placeholder={t("dialog.fields.realizedPnlPlaceholder")}
+              inputClassName="text-xs"
+              disabled={busy}
+              onChange={setRealizedPnl}
+              onClear={() => setRealizedPnl("")}
+              clearLabel={t("common:filters.clearField")}
+            />
           </div>
 
           {/* Average entry price */}
@@ -2407,7 +2587,7 @@ function AdjustDialog({
           <Button
             size="sm"
             onClick={() => void submit()}
-            disabled={busy}
+            disabled={busy || !hasModalChanges}
           >
             {t("dialog.footer.submit")}
           </Button>
@@ -2457,6 +2637,16 @@ function HistoryRowOutcome({ adj }: { adj: Adjustment }) {
           adj.request.incoming,
           accepted.incomingDelta,
           accepted.incomingResult,
+        )}`,
+      );
+    }
+    if (accepted.realizedPnlResult) {
+      const realizedPnl = adjustmentResultParts(accepted.realizedPnlResult);
+      parts.push(
+        `${t("dialog.outcome.fieldRealizedPnl")} ${outcomeAmountText(
+          { mode: "absolute", value: adj.request.realizedPnl ?? "" },
+          realizedPnl.delta,
+          realizedPnl.result,
         )}`,
       );
     }
@@ -2510,6 +2700,9 @@ function HistoryRow({
   }
   if (req.averageEntryPrice) {
     reqParts.push(t("history.request.avgPrice", { value: req.averageEntryPrice }));
+  }
+  if (req.realizedPnl) {
+    reqParts.push(t("history.request.realizedPnl", { value: req.realizedPnl }));
   }
 
   return (
@@ -2730,6 +2923,7 @@ export function Positions() {
   const [adjustIncomingMode, setAdjustIncomingMode] = useState<AdjustmentMode | undefined>(undefined);
   const [adjustIncomingValue, setAdjustIncomingValue] = useState<string | undefined>(undefined);
   const [adjustAvgPrice, setAdjustAvgPrice] = useState<string | undefined>(undefined);
+  const [adjustRealizedPnl, setAdjustRealizedPnl] = useState<string | undefined>(undefined);
   const [adjustBalanceBoundsLower, setAdjustBalanceBoundsLower] = useState<string | undefined>(undefined);
   const [adjustBalanceBoundsUpper, setAdjustBalanceBoundsUpper] = useState<string | undefined>(undefined);
   const [adjustHeldBoundsLower, setAdjustHeldBoundsLower] = useState<string | undefined>(undefined);
@@ -2928,6 +3122,7 @@ export function Positions() {
     setAdjustIncomingMode(req.incoming?.mode);
     setAdjustIncomingValue(req.incoming?.value);
     setAdjustAvgPrice(req.averageEntryPrice);
+    setAdjustRealizedPnl(req.realizedPnl);
     setAdjustBalanceBoundsLower(req.balanceBounds?.lower);
     setAdjustBalanceBoundsUpper(req.balanceBounds?.upper);
     setAdjustHeldBoundsLower(req.heldBounds?.lower);
@@ -3929,6 +4124,7 @@ export function Positions() {
         initialIncomingMode={adjustIncomingMode}
         initialIncomingValue={adjustIncomingValue}
         initialAvgPrice={adjustAvgPrice}
+        initialRealizedPnl={adjustRealizedPnl}
         initialBalanceBoundsLower={adjustBalanceBoundsLower}
         initialBalanceBoundsUpper={adjustBalanceBoundsUpper}
         initialHeldBoundsLower={adjustHeldBoundsLower}

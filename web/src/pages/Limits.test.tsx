@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { I18nextProvider } from "react-i18next";
 import { MemoryRouter } from "react-router-dom";
@@ -42,6 +42,7 @@ vi.mock("@/api/useMarketData", () => ({
 const useLimitsMock = vi.mocked(useLimitsPage);
 const fetchAccountsMock = vi.fn();
 const fetchAssetsMock = vi.fn();
+const fetchGroupsMock = vi.fn();
 
 function readyPage(items: Limit[] = []): PollingResult<{
   items: Limit[];
@@ -69,7 +70,10 @@ function latestPolicyFiltersMatching(
   return undefined;
 }
 
-function renderLimits(initialEntry = "/policies") {
+function renderLimits(
+  initialEntry = "/policies",
+  options: { includeGroupsApi?: boolean } = {},
+) {
   render(
     <I18nextProvider i18n={i18n}>
       <ThemeProvider storageKey="pit-officer-test-theme" defaultMode="light">
@@ -89,6 +93,7 @@ function renderLimits(initialEntry = "/policies") {
       api: {
         fetchAccounts: fetchAccountsMock,
         fetchAssets: fetchAssetsMock,
+        ...(options.includeGroupsApi ? { fetchGroups: fetchGroupsMock } : {}),
       },
     },
   );
@@ -100,9 +105,75 @@ beforeEach(async () => {
   useLimitsMock.mockReturnValue(readyPage());
   fetchAccountsMock.mockResolvedValue([]);
   fetchAssetsMock.mockResolvedValue([]);
+  fetchGroupsMock.mockResolvedValue([]);
 });
 
 describe("Limits identity filters", () => {
+  it("renders the self-computed PnL policy", () => {
+    useLimitsMock.mockReturnValue(
+      readyPage([
+        {
+          policy: "spot_funds_pnl_bounds_kill_switch",
+          scope: "account_group",
+          account: "",
+          accountGroup: "desk-a",
+          asset: "",
+          accountCurrency: "USD",
+          values: { lower_bound: "-1000" },
+        },
+      ]),
+    );
+
+    renderLimits();
+
+    expect(screen.getByText("PnL Kill Switch")).toBeInTheDocument();
+    expect(screen.getByText("desk-a")).toBeInTheDocument();
+    expect(screen.getByText("USD")).toBeInTheDocument();
+  });
+
+  it("accepts the self-computed PnL policy filter from the URL", () => {
+    renderLimits("/policies?policy=spot_funds_pnl_bounds");
+
+    expect(
+      latestPolicyFiltersMatching(
+        (filters) => filters?.policy === "spot_funds_pnl_bounds",
+      ),
+    ).toEqual(
+      expect.objectContaining({ policy: "spot_funds_pnl_bounds" }),
+    );
+  });
+
+  it("accepts SpotFunds account-group and currency filters from the URL", () => {
+    renderLimits(
+      "/policies?policy=spot_funds_pnl_bounds&accountGroup=desk-a&accountCurrency=USD",
+    );
+
+    expect(
+      latestPolicyFiltersMatching(
+        (filters) =>
+          filters?.policy === "spot_funds_pnl_bounds" &&
+          filters.accountGroup === "desk-a" &&
+          filters.accountCurrency === "USD",
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        policy: "spot_funds_pnl_bounds",
+        accountGroup: "desk-a",
+        accountCurrency: "USD",
+      }),
+    );
+  });
+
+  it("loads group and currency suggestions with supported account sorting", async () => {
+    renderLimits("/policies", { includeGroupsApi: true });
+
+    await waitFor(() => expect(fetchGroupsMock).toHaveBeenCalled());
+    expect(fetchAccountsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 1000, sort: "code" }),
+      expect.any(AbortSignal),
+    );
+  });
+
   it("applies account and asset filters when Enter is pressed", async () => {
     const user = userEvent.setup();
     renderLimits();
@@ -148,5 +219,29 @@ describe("Limits identity filters", () => {
         }),
       ),
     );
+  });
+
+  it("keeps account-group and currency in the shared filter link", () => {
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    renderLimits(
+      "/policies?policy=spot_funds_pnl_bounds&account=acc-1" +
+        "&accountGroup=desk-a&asset=BTC&accountCurrency=USD",
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Copy a link to the current filter set",
+      }),
+      { ctrlKey: true },
+    );
+
+    expect(open).toHaveBeenCalledTimes(1);
+    const shared = new URL(open.mock.calls[0][0] as string);
+    expect(shared.pathname).toBe("/policies");
+    expect(shared.searchParams.get("account")).toBe("acc-1");
+    expect(shared.searchParams.get("accountGroup")).toBe("desk-a");
+    expect(shared.searchParams.get("asset")).toBe("BTC");
+    expect(shared.searchParams.get("accountCurrency")).toBe("USD");
+    expect(shared.searchParams.get("policy")).toBe("spot_funds_pnl_bounds");
   });
 });

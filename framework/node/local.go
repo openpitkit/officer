@@ -237,9 +237,11 @@ func (n *localNode) loadSnapshot(ctx context.Context) (engine.Snapshot, string, 
 	if err != nil {
 		return engine.Snapshot{}, "", fmt.Errorf("load order-size limits for build: %w", err)
 	}
-	pnlBoundsLimits, err := n.realm.ListPnlBoundsLimits(ctx, "")
+	spotFundsPnlBoundsLimits, err := n.realm.ListSpotFundsPnlBoundsLimits(ctx, "")
 	if err != nil {
-		return engine.Snapshot{}, "", fmt.Errorf("load pnl-bounds limits for build: %w", err)
+		return engine.Snapshot{}, "", fmt.Errorf(
+			"load spot funds pnl-bounds limits for build: %w", err,
+		)
 	}
 	groups, err := n.realm.ListGroups(ctx)
 	if err != nil {
@@ -256,14 +258,14 @@ func (n *localNode) loadSnapshot(ctx context.Context) (engine.Snapshot, string, 
 	}
 
 	snap := engine.Snapshot{
-		Accounts:        accounts,
-		RateLimits:      rateLimits,
-		OrderSizeLimits: orderSizeLimits,
-		PnlBoundsLimits: pnlBoundsLimits,
-		Groups:          groups,
-		Balances:        balances,
+		Accounts:                 accounts,
+		RateLimits:               rateLimits,
+		OrderSizeLimits:          orderSizeLimits,
+		SpotFundsPnlBoundsLimits: spotFundsPnlBoundsLimits,
+		Groups:                   groups,
+		Balances:                 balances,
 	}
-	barriers := len(rateLimits) + len(orderSizeLimits) + len(pnlBoundsLimits)
+	barriers := len(rateLimits) + len(orderSizeLimits) + len(spotFundsPnlBoundsLimits)
 	counts := fmt.Sprintf(
 		"hydrate %d accounts %d barriers %d groups %d balances",
 		len(accounts), barriers, len(groups), len(balances),

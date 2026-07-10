@@ -317,7 +317,8 @@ func TestApplyExecutionReport_Created(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bytes.NewBufferString(
-		`{"quantity":"1","price":"100","leavesQuantity":"0","status":"cancelled","force":true}`)
+		`{"quantity":"1","price":"100","leavesQuantity":"0","status":"cancelled","force":true,` +
+			`"commission":{"amount":"-0.12","currency":"USD"}}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports", body))
@@ -333,6 +334,11 @@ func TestApplyExecutionReport_Created(t *testing.T) {
 	}
 	if svc.execReportIn.LeavesQuantity != "0" {
 		t.Fatalf("leavesQuantity not forwarded: %q", svc.execReportIn.LeavesQuantity)
+	}
+	if svc.execReportIn.Commission == nil ||
+		svc.execReportIn.Commission.Amount != "-0.12" ||
+		svc.execReportIn.Commission.Currency != "USD" {
+		t.Fatalf("commission not forwarded: %+v", svc.execReportIn.Commission)
 	}
 	if svc.execReportIn.OrderStatus != domain.OrderStatusCancelled {
 		t.Fatalf("status not forwarded: %q", svc.execReportIn.OrderStatus)

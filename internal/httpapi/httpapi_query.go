@@ -405,16 +405,18 @@ var assetClassSortKeys = map[string]struct{}{
 }
 
 var policySortKeys = map[string]struct{}{
-	"account":     {},
-	"asset":       {},
-	"initialPnl":  {},
-	"lowerBound":  {},
-	"maxNotional": {},
-	"maxOrders":   {},
-	"maxQuantity": {},
-	"policy":      {},
-	"scope":       {},
-	"upperBound":  {},
+	"account":         {},
+	"accountCurrency": {},
+	"accountGroup":    {},
+	"asset":           {},
+	"initialPnl":      {},
+	"lowerBound":      {},
+	"maxNotional":     {},
+	"maxOrders":       {},
+	"maxQuantity":     {},
+	"policy":          {},
+	"scope":           {},
+	"upperBound":      {},
 }
 
 var balanceSortKeys = map[string]struct{}{
@@ -766,8 +768,8 @@ func policyKindFromQuery(q url.Values) (*store.PolicyKind, error) {
 	case "order_size":
 		kind := store.PolicyKindOrderSize
 		return &kind, nil
-	case "pnl_bounds":
-		kind := store.PolicyKindPnlBounds
+	case "spot_funds_pnl_bounds":
+		kind := store.PolicyKindSpotFundsPnlBounds
 		return &kind, nil
 	default:
 		return nil, fmt.Errorf("invalid policy")
@@ -776,7 +778,9 @@ func policyKindFromQuery(q url.Values) (*store.PolicyKind, error) {
 
 func policyListFilterFromQuery(q url.Values) (store.PolicyListFilter, error) {
 	account := store.ExactTextMatcher(q.Get("account"))
+	accountGroup := store.ExactTextMatcher(q.Get("accountGroup"))
 	asset := store.ExactTextMatcher(q.Get("asset"))
+	accountCurrency := store.ExactTextMatcher(q.Get("accountCurrency"))
 	kind, err := policyKindFromQuery(q)
 	if err != nil {
 		return store.PolicyListFilter{}, err
@@ -790,11 +794,13 @@ func policyListFilterFromQuery(q url.Values) (store.PolicyListFilter, error) {
 		return store.PolicyListFilter{}, err
 	}
 	return store.PolicyListFilter{
-		Account: account,
-		Asset:   asset,
-		Kind:    kind,
-		Sort:    sortSpec,
-		Page:    page,
+		Account:         account,
+		AccountGroup:    accountGroup,
+		Asset:           asset,
+		AccountCurrency: accountCurrency,
+		Kind:            kind,
+		Sort:            sortSpec,
+		Page:            page,
 	}, nil
 }
 

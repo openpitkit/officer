@@ -456,6 +456,134 @@ func TestOrderReproduction_ESignOff(t *testing.T) {
 	}
 }
 
+// TestOrderReproduction_SignedResultCommission proves an execution report
+// settled with a structured commission binds that commission into the signed
+// attestation: the reproduced canonicalApproval - the byte-identical signed
+// form - carries the commission amount and currency.
+func TestOrderReproduction_SignedResultCommission(t *testing.T) {
+	ctx := context.Background()
+	st := newReproSigningStore()
+	signer, err := appsigning.New(st)
+	if err != nil {
+		t.Fatalf("new signer: %v", err)
+	}
+	key, err := signer.GenerateKey(ctx)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	pub, err := signer.PublicKeyByID(ctx, key.KeyID, "pem-pkcs8")
+	if err != nil {
+		t.Fatalf("public key by id: %v", err)
+	}
+
+	id := extID("repro-commission")
+	payload := reproPayload(id)
+	payload.RequestType = string(domain.AttestationRequestExecutionReport)
+	payload.Result = &domain.AttestationResult{
+		Outcome:        "applied",
+		FillQuantity:   "3.5",
+		FillPrice:      "150.20",
+		FillLockPrice:  "150.25",
+		Commission:     &domain.Commission{Amount: "-0.30", Currency: "USDT"},
+		LeavesQuantity: "6.5",
+		OrderStatus:    string(domain.OrderStatusPartiallyFilled),
+		Blocks:         []domain.AttestationBlock{},
+	}
+	token, err := signer.Sign(payload)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	svc := &fakeService{
+		orderDetail:    reproDetail(id, attestationFromToken(t, token)),
+		publicKeysByID: map[string]string{key.KeyID: pub},
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, reproURL(id), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	m := bodyMap(t, rec.Result())
+	canon, _ := m["canonicalApproval"].(string)
+	if canon == "" {
+		t.Fatalf("want canonicalApproval string, got %T", m["canonicalApproval"])
+	}
+	// The signed bytes bind the structured commission (amount + currency).
+	if !strings.Contains(canon, `"commission":{"amount":"-0.30","currency":"USDT"}`) {
+		t.Fatalf("canonicalApproval missing structured commission:\n%s", canon)
+	}
+}
+
+func TestOrderReproduction_ConfirmCommissionSubtotalsArray(t *testing.T) {
+	ctx := context.Background()
+	st := newReproSigningStore()
+	signer, err := appsigning.New(st)
+	if err != nil {
+		t.Fatalf("new signer: %v", err)
+	}
+	key, err := signer.GenerateKey(ctx)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	pub, err := signer.PublicKeyByID(ctx, key.KeyID, "pem-pkcs8")
+	if err != nil {
+		t.Fatalf("public key by id: %v", err)
+	}
+
+	id := extID("repro-confirm")
+	payload := reproPayload(id)
+	payload.RequestType = string(domain.AttestationRequestConfirm)
+	payload.Result = &domain.AttestationResult{
+		Outcome:     "committed",
+		OrderStatus: string(domain.OrderStatusCommitted),
+		Blocks:      []domain.AttestationBlock{},
+	}
+	token, err := signer.Sign(payload)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	svc := &fakeService{
+		orderDetail:    reproDetail(id, attestationFromToken(t, token)),
+		publicKeysByID: map[string]string{key.KeyID: pub},
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, reproURL(id), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	m := bodyMap(t, rec.Result())
+	response, ok := m["response"].(map[string]any)
+	if !ok {
+		t.Fatalf("want response object, got %T", m["response"])
+	}
+	confirm, ok := response["confirm"].(map[string]any)
+	if !ok {
+		t.Fatalf("want confirm object, got %T", response["confirm"])
+	}
+	order, ok := confirm["order"].(map[string]any)
+	if !ok {
+		t.Fatalf("want confirm.order object, got %T", confirm["order"])
+	}
+	commissions, ok := order["commissionSubtotals"].([]any)
+	if !ok {
+		t.Fatalf(
+			"want commissionSubtotals array, got %T (%v)",
+			order["commissionSubtotals"],
+			order["commissionSubtotals"],
+		)
+	}
+	if len(commissions) != 0 {
+		t.Fatalf("commissionSubtotals = %v, want empty array", commissions)
+	}
+}
+
 // TestEventReproduction_NoAttestation verifies that an event with no persisted
 // attestation yields null attestation/request/response/canonicalApproval/
 // publicKey and a documented reason, while the event body is still present.

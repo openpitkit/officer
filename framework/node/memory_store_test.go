@@ -55,9 +55,9 @@ type memoryRealm struct {
 	accounts     map[domain.AccountID]domain.Account
 	balances     map[string]domain.Balance
 
-	rateLimits      map[string]domain.LimitRate
-	orderSizeLimits map[string]domain.LimitOrderSize
-	pnlBoundsLimits map[string]domain.LimitPnlBounds
+	rateLimits               map[string]domain.LimitRate
+	orderSizeLimits          map[string]domain.LimitOrderSize
+	spotFundsPnlBoundsLimits map[string]domain.LimitSpotFundsPnlBounds
 
 	adjustments  []domain.AccountAdjustmentRecord
 	orders       map[domain.ExternalID]domain.Order
@@ -87,26 +87,26 @@ func newMemoryStore(path string) *memoryStore {
 
 func newMemoryRealm(st *memoryStore) *memoryRealm {
 	return &memoryRealm{
-		store:           st,
-		assets:          map[string]domain.Asset{},
-		assetClasses:    map[string]domain.AssetClass{},
-		principals:      map[string]domain.Principal{},
-		groups:          map[string]domain.AccountGroup{},
-		accounts:        map[domain.AccountID]domain.Account{},
-		balances:        map[string]domain.Balance{},
-		rateLimits:      map[string]domain.LimitRate{},
-		orderSizeLimits: map[string]domain.LimitOrderSize{},
-		pnlBoundsLimits: map[string]domain.LimitPnlBounds{},
-		orders:          map[domain.ExternalID]domain.Order{},
-		attestations:    map[domain.ExternalID]domain.EventAttestation{},
-		instances:       map[domain.ExternalID]domain.MarketDataInstance{},
-		instruments:     map[string]domain.MarketDataInstrument{},
-		quotes:          map[string]domain.MarketDataQuote{},
-		signingKeys:     map[string]domain.SigningKey{},
-		signingConfig:   map[string]string{},
-		mcpAccess:       map[string]bool{},
-		userSettings:    map[string]domain.UserSetting{},
-		reservations:    map[string]domain.ReservationIntent{},
+		store:                    st,
+		assets:                   map[string]domain.Asset{},
+		assetClasses:             map[string]domain.AssetClass{},
+		principals:               map[string]domain.Principal{},
+		groups:                   map[string]domain.AccountGroup{},
+		accounts:                 map[domain.AccountID]domain.Account{},
+		balances:                 map[string]domain.Balance{},
+		rateLimits:               map[string]domain.LimitRate{},
+		orderSizeLimits:          map[string]domain.LimitOrderSize{},
+		spotFundsPnlBoundsLimits: map[string]domain.LimitSpotFundsPnlBounds{},
+		orders:                   map[domain.ExternalID]domain.Order{},
+		attestations:             map[domain.ExternalID]domain.EventAttestation{},
+		instances:                map[domain.ExternalID]domain.MarketDataInstance{},
+		instruments:              map[string]domain.MarketDataInstrument{},
+		quotes:                   map[string]domain.MarketDataQuote{},
+		signingKeys:              map[string]domain.SigningKey{},
+		signingConfig:            map[string]string{},
+		mcpAccess:                map[string]bool{},
+		userSettings:             map[string]domain.UserSetting{},
+		reservations:             map[string]domain.ReservationIntent{},
 	}
 }
 
@@ -154,6 +154,16 @@ func limitKey(scope domain.LimitScope, account domain.AccountID, asset string) s
 	return string(scope) + "\x00" + string(account) + "\x00" + asset
 }
 
+func spotFundsPnlBoundsLimitKey(
+	scope domain.LimitScope,
+	account domain.AccountID,
+	accountGroup string,
+	accountCurrency string,
+) string {
+	return string(scope) + "\x00" + string(account) + "\x00" + accountGroup +
+		"\x00" + accountCurrency
+}
+
 func instrumentKey(instance domain.ExternalID, externalSymbol string) string {
 	return instance.String() + "\x00" + externalSymbol
 }
@@ -162,7 +172,8 @@ func settingKey(userID, key string) string { return userID + "\x00" + key }
 
 func policyRowKey(row store.PolicyListRow) string {
 	return string(row.Kind) + "\x00" + row.Scope + "\x00" +
-		string(row.Account) + "\x00" + row.Asset
+		string(row.Account) + "\x00" + row.AccountGroup + "\x00" + row.Asset +
+		"\x00" + row.AccountCurrency
 }
 
 func pageRows[T any](rows []T, page store.PageSpec) []T {

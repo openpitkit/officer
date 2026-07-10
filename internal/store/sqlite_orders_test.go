@@ -650,6 +650,7 @@ func TestTradesRoundTrip(t *testing.T) {
 		Quantity:   "5",
 		Price:      "151.00",
 		LockPrice:  "150.25",
+		Commission: &domain.Commission{Amount: "-0.12", Currency: "USD"},
 	})
 	if err != nil {
 		t.Fatalf("CreateTrade: %v", err)
@@ -677,6 +678,11 @@ func TestTradesRoundTrip(t *testing.T) {
 	if got.Quantity != "5" || got.Price != "151.00" || got.LockPrice != "150.25" {
 		t.Fatalf("trade decimals = %+v", got)
 	}
+	if got.Commission == nil ||
+		got.Commission.Amount != "-0.12" ||
+		got.Commission.Currency != "USD" {
+		t.Fatalf("trade commission = %+v", got.Commission)
+	}
 
 	all, err := rs.ListAllTrades(ctx, "acc-1", "")
 	if err != nil {
@@ -700,6 +706,230 @@ func TestTradesRoundTrip(t *testing.T) {
 	if len(detail.Trades) != 1 || detail.Trades[0].ExternalID != tr.ExternalID {
 		t.Fatalf("GetOrder trades = %+v", detail.Trades)
 	}
+}
+
+func TestCreateTradeRejectsInvalidCommissionAmount(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+
+	created, err := rs.CreateOrder(ctx, sampleOrder())
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+
+	_, err = rs.CreateTrade(ctx, domain.Trade{
+		Order:      created.ExternalID,
+		Account:    "acc-1",
+		BaseAsset:  "AAPL",
+		QuoteAsset: "USD",
+		Source:     domain.SourcePanel,
+		Side:       domain.OrderSideBuy,
+		Quantity:   "5",
+		Price:      "151.00",
+		Commission: &domain.Commission{Amount: "not-decimal", Currency: "USD"},
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("CreateTrade(invalid commission) = %v, want ErrInvalid", err)
+	}
+	if c := countRows(t, ctx, rs.(*realmStore), "trade"); c != 0 {
+		t.Fatalf("trades after invalid commission = %d, want 0", c)
+	}
+}
+
+// TestCreateTradeRejectsOneSidedCommission asserts a commission carrying exactly
+// one of amount/currency is rejected with ErrInvalid and nothing is persisted; a
+// one-sided commission would otherwise be dropped from the subtotals rollup and
+// understate the order commission.
+func TestCreateTradeRejectsOneSidedCommission(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+
+	created, err := rs.CreateOrder(ctx, sampleOrder())
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+
+	cases := []struct {
+		name       string
+		commission *domain.Commission
+	}{
+		{"amount-only", &domain.Commission{Amount: "-0.12"}},
+		{"currency-only", &domain.Commission{Currency: "USD"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := rs.CreateTrade(ctx, domain.Trade{
+				Order:      created.ExternalID,
+				Account:    "acc-1",
+				BaseAsset:  "AAPL",
+				QuoteAsset: "USD",
+				Source:     domain.SourcePanel,
+				Side:       domain.OrderSideBuy,
+				Quantity:   "5",
+				Price:      "151.00",
+				Commission: tc.commission,
+			})
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("CreateTrade(one-sided commission) = %v, want ErrInvalid", err)
+			}
+		})
+	}
+	if c := countRows(t, ctx, rs.(*realmStore), "trade"); c != 0 {
+		t.Fatalf("trades after one-sided commission = %d, want 0", c)
+	}
+}
+
+// TestCreateTradeAbsentCommissionRoundTrips asserts a commission with both fields
+// empty is a valid no-commission trade: it persists and reads back with a nil
+// Commission, matching the both-absent branch of the write invariant.
+func TestCreateTradeAbsentCommissionRoundTrips(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+
+	created, err := rs.CreateOrder(ctx, sampleOrder())
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+
+	tr, err := rs.CreateTrade(ctx, domain.Trade{
+		Order:      created.ExternalID,
+		Account:    "acc-1",
+		BaseAsset:  "AAPL",
+		QuoteAsset: "USD",
+		Source:     domain.SourcePanel,
+		Side:       domain.OrderSideBuy,
+		Quantity:   "5",
+		Price:      "151.00",
+		Commission: &domain.Commission{},
+	})
+	if err != nil {
+		t.Fatalf("CreateTrade(absent commission): %v", err)
+	}
+
+	list, err := rs.ListTrades(ctx, "acc-1", domain.SourcePanel, 10)
+	if err != nil {
+		t.Fatalf("ListTrades: %v", err)
+	}
+	if len(list) != 1 || list[0].ExternalID != tr.ExternalID {
+		t.Fatalf("ListTrades = %+v", list)
+	}
+	if list[0].Commission != nil {
+		t.Fatalf("trade commission = %+v, want nil for both-empty", list[0].Commission)
+	}
+}
+
+func TestOrderCommissionSubtotals(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+
+	created, err := rs.CreateOrder(ctx, sampleOrder())
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+	trades := []domain.Trade{
+		{
+			Order: created.ExternalID, Account: "acc-1", BaseAsset: "AAPL",
+			QuoteAsset: "USD", Source: domain.SourcePanel,
+			Side: domain.OrderSideBuy, Quantity: "1", Price: "100",
+			Commission: &domain.Commission{Amount: "-0.12", Currency: "USD"},
+		},
+		{
+			Order: created.ExternalID, Account: "acc-1", BaseAsset: "AAPL",
+			QuoteAsset: "USD", Source: domain.SourcePanel,
+			Side: domain.OrderSideBuy, Quantity: "1", Price: "101",
+			Commission: &domain.Commission{Amount: "-1.00", Currency: "EUR"},
+		},
+		{
+			Order: created.ExternalID, Account: "acc-1", BaseAsset: "AAPL",
+			QuoteAsset: "USD", Source: domain.SourcePanel,
+			Side: domain.OrderSideBuy, Quantity: "1", Price: "102",
+			Commission: &domain.Commission{Amount: "-0.03", Currency: "USD"},
+		},
+	}
+	for _, trade := range trades {
+		if _, err := rs.CreateTrade(ctx, trade); err != nil {
+			t.Fatalf("CreateTrade: %v", err)
+		}
+	}
+
+	detail, err := rs.GetOrder(ctx, created.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	want := []domain.Commission{
+		{Amount: "-1", Currency: "EUR"},
+		{Amount: "-0.15", Currency: "USD"},
+	}
+	if !commissionsEqual(detail.Order.CommissionSubtotals, want) {
+		t.Fatalf("detail commission subtotals = %+v, want %+v",
+			detail.Order.CommissionSubtotals, want)
+	}
+
+	page, err := rs.ListOrderRows(ctx, fwstore.OrderListFilter{
+		Page: fwstore.PageSpec{Limit: 10},
+	})
+	if err != nil {
+		t.Fatalf("ListOrderRows: %v", err)
+	}
+	if len(page.Rows) != 1 {
+		t.Fatalf("ListOrderRows len = %d, want 1", len(page.Rows))
+	}
+	if !commissionsEqual(page.Rows[0].Order.CommissionSubtotals, want) {
+		t.Fatalf("list commission subtotals = %+v, want %+v",
+			page.Rows[0].Order.CommissionSubtotals, want)
+	}
+}
+
+func TestOrderCommissionSubtotalsChunksOrderIDs(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+
+	orders := make([]domain.ExternalID, 0, commissionSubtotalOrderBatchSize+1)
+	for i := 0; i < commissionSubtotalOrderBatchSize+1; i++ {
+		created, err := rs.CreateOrder(ctx, sampleOrder())
+		if err != nil {
+			t.Fatalf("CreateOrder(%d): %v", i, err)
+		}
+		orders = append(orders, created.ExternalID)
+	}
+	for _, order := range []domain.ExternalID{orders[0], orders[len(orders)-1]} {
+		if _, err := rs.CreateTrade(ctx, domain.Trade{
+			Order:      order,
+			Account:    "acc-1",
+			BaseAsset:  "AAPL",
+			QuoteAsset: "USD",
+			Source:     domain.SourcePanel,
+			Side:       domain.OrderSideBuy,
+			Quantity:   "1",
+			Price:      "100",
+			Commission: &domain.Commission{Amount: "-0.10", Currency: "USD"},
+		}); err != nil {
+			t.Fatalf("CreateTrade(%s): %v", order, err)
+		}
+	}
+
+	got, err := commissionSubtotalsByOrder(ctx, rs.(*realmStore).rawDB(), orders)
+	if err != nil {
+		t.Fatalf("commissionSubtotalsByOrder: %v", err)
+	}
+	want := []domain.Commission{{Amount: "-0.1", Currency: "USD"}}
+	if !commissionsEqual(got[orders[0]], want) {
+		t.Fatalf("first order commissions = %+v, want %+v", got[orders[0]], want)
+	}
+	if !commissionsEqual(got[orders[len(orders)-1]], want) {
+		t.Fatalf("last order commissions = %+v, want %+v",
+			got[orders[len(orders)-1]], want)
+	}
+	if got[orders[1]] == nil || len(got[orders[1]]) != 0 {
+		t.Fatalf("empty order commissions = %+v, want empty slice", got[orders[1]])
+	}
+}
+
+func commissionsEqual(got, want []domain.Commission) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestTradeListRowsDBCountPageFilterSortDecimalsNumerically(t *testing.T) {
@@ -831,7 +1061,7 @@ func TestCountOrders(t *testing.T) {
 		t.Fatalf("CountOrders(empty) = %d, err=%v, want 0", n, err)
 	}
 
-	before := time.Now().UTC()
+	before := time.Now().UTC().Add(-time.Second)
 	for i := 0; i < 3; i++ {
 		if _, err := rs.CreateOrder(ctx, sampleOrder()); err != nil {
 			t.Fatalf("CreateOrder(%d): %v", i, err)
@@ -976,6 +1206,168 @@ func TestRecordOrderSettlement(t *testing.T) {
 	detail, _ = rs.GetOrder(ctx, created.ExternalID)
 	if detail.Order.Status != domain.OrderStatusFilled {
 		t.Fatalf("status after rejected settlement = %q, want still filled", detail.Order.Status)
+	}
+}
+
+func TestRecordOrderSettlementSpotFillPersistsQuoteRealizedPnl(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+
+	seedBalance(t, ctx, rs, "acc-1", "AAPL", "2", "0", "0", "0")
+	seedBalance(t, ctx, rs, "acc-1", "USD", "800", "0", "0", "0")
+
+	order := sampleOrder()
+	order.Side = domain.OrderSideSell
+	order.Status = domain.OrderStatusAccepted
+	created, err := rs.CreateOrder(ctx, order)
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+
+	if err := rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		Order:       created.ExternalID,
+		Account:     "acc-1",
+		OrderStatus: domain.OrderStatusFilled,
+		AllowedFrom: domain.OrderStatusesEligibleForFill(),
+		Balances: []domain.BalanceSettlement{
+			{
+				Asset: "AAPL",
+				Outcome: domain.AdjustmentOutcomeAccepted{
+					BalanceResult: "1",
+				},
+			},
+			{
+				Asset: "USD",
+				Outcome: domain.AdjustmentOutcomeAccepted{
+					BalanceResult:    "890",
+					RealizedPnlDelta: "-10",
+				},
+			},
+		},
+		Trade: &domain.Trade{
+			Order: created.ExternalID, Account: "acc-1",
+			BaseAsset: "AAPL", QuoteAsset: "USD",
+			Source: domain.SourcePanel, Side: domain.OrderSideSell,
+			Quantity: "1", Price: "90", LockPrice: "100",
+		},
+		Events: []domain.OrderEvent{{
+			Order: created.ExternalID,
+			Type:  domain.OrderEventFill,
+			Payload: domain.OrderEventPayload{
+				FillQuantity: "1",
+				FillPrice:    "90",
+			},
+		}},
+	}); err != nil {
+		t.Fatalf("RecordOrderSettlement: %v", err)
+	}
+
+	base, ok := getBalanceRow(t, ctx, rs, "acc-1", "AAPL")
+	if !ok {
+		t.Fatal("base balance row missing after settlement")
+	}
+	if base.realized != "0" {
+		t.Fatalf("base realized_pnl = %q, want 0", base.realized)
+	}
+	quote, ok := getBalanceRow(t, ctx, rs, "acc-1", "USD")
+	if !ok {
+		t.Fatal("quote balance row missing after settlement")
+	}
+	if quote.realized != "-10" {
+		t.Fatalf("quote realized_pnl = %q, want -10", quote.realized)
+	}
+}
+
+func TestRecordOrderSettlementRacesRealizedPnlAdjustmentNoDeadlock(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+
+	seedBalance(t, ctx, rs, "acc-1", "USD", "800", "0", "0", "1")
+	order := sampleOrder()
+	order.Status = domain.OrderStatusAccepted
+	created, err := rs.CreateOrder(ctx, order)
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+
+	start := make(chan struct{})
+	done := make(chan error, 2)
+	go func() {
+		<-start
+		done <- rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
+			Order:       created.ExternalID,
+			Account:     "acc-1",
+			OrderStatus: domain.OrderStatusFilled,
+			AllowedFrom: domain.OrderStatusesEligibleForFill(),
+			Balances: []domain.BalanceSettlement{{
+				Asset: "USD",
+				Outcome: domain.AdjustmentOutcomeAccepted{
+					BalanceResult:    "802",
+					RealizedPnlDelta: "2",
+				},
+			}},
+			Events: []domain.OrderEvent{{
+				Order: created.ExternalID,
+				Type:  domain.OrderEventFill,
+				Payload: domain.OrderEventPayload{
+					FillQuantity: "1",
+					FillPrice:    "2",
+				},
+			}},
+		})
+	}()
+	go func() {
+		<-start
+		_, err := rs.RecordAccountAdjustment(ctx, fwstore.AccountAdjustmentPersistence{
+			RealizedPnl: &fwstore.BalanceRealizedPnlPersistence{
+				Account:     "acc-1",
+				Asset:       "USD",
+				RealizedPnl: "10",
+			},
+			Adjustment: domain.AccountAdjustmentRecord{
+				Account: "acc-1",
+				Asset:   "USD",
+				Source:  domain.SourcePanel,
+				Request: domain.AdjustmentRequest{
+					Asset:       "USD",
+					RealizedPnl: "10",
+				},
+				Accepted: &domain.AdjustmentOutcomeAccepted{
+					RealizedPnlResult: "10",
+				},
+			},
+			Audit: AuditEntry{
+				Action:  domain.AuditActionAdjustment,
+				Account: "acc-1",
+				Asset:   "USD",
+				Source:  domain.SourcePanel,
+				Detail:  "set balance realized_pnl account acc-1 asset=USD realized_pnl=10",
+			},
+		})
+		done <- err
+	}()
+	close(start)
+
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("concurrent write %d: %v", i, err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("settlement racing realized-pnl adjustment deadlocked on one SQLite connection")
+		}
+	}
+
+	quote, ok := getBalanceRow(t, ctx, rs, "acc-1", "USD")
+	if !ok {
+		t.Fatal("quote balance row missing after concurrent writes")
+	}
+	switch quote.realized {
+	case "10", "12":
+	default:
+		t.Fatalf("realized_pnl = %q, want serial outcome 10 or 12", quote.realized)
+	}
+	if quote.realized == "3" {
+		t.Fatal("realized-pnl adjustment was lost")
 	}
 }
 

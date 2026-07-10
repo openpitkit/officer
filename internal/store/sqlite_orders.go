@@ -32,6 +32,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -342,6 +343,10 @@ func (r *realmStore) GetOrder(
 	if err != nil {
 		return domain.OrderDetail{}, err
 	}
+	o.CommissionSubtotals, err = commissionSubtotals(trades)
+	if err != nil {
+		return domain.OrderDetail{}, err
+	}
 	return domain.OrderDetail{Order: o, Events: events, Trades: trades}, nil
 }
 
@@ -398,15 +403,24 @@ LEFT JOIN principal p ON p.id = o.principal_id` + where
 	defer func() { _ = rows.Close() }()
 
 	result := make([]fwstore.OrderListRow, 0)
+	orderIDs := make([]domain.ExternalID, 0)
 	for rows.Next() {
 		o, signed, err := scanOrderListRow(rows)
 		if err != nil {
 			return fwstore.OrderListPage{}, err
 		}
 		result = append(result, fwstore.OrderListRow{Order: o, Signed: signed})
+		orderIDs = append(orderIDs, o.ExternalID)
 	}
 	if err := rows.Err(); err != nil {
 		return fwstore.OrderListPage{}, fmt.Errorf("store: iterate order rows: %w", err)
+	}
+	subtotals, err := commissionSubtotalsByOrder(ctx, db, orderIDs)
+	if err != nil {
+		return fwstore.OrderListPage{}, err
+	}
+	for i := range result {
+		result[i].Order.CommissionSubtotals = subtotals[result[i].Order.ExternalID]
 	}
 	return fwstore.OrderListPage{Rows: result, Total: total}, nil
 }
@@ -768,7 +782,8 @@ func scanOrderEvent(rows *sql.Rows, order domain.ExternalID) (domain.OrderEvent,
 // principal are surfaced as codes.
 const tradeSelect = `
 SELECT t.external_id, o.external_id, a.code, ba.code, qa.code, p.code,
-       t.at, t.source, t.side, t.quantity, t.price, t.lock_price
+       t.at, t.source, t.side, t.quantity, t.price, t.lock_price,
+       t.commission_amount, t.commission_currency
 FROM trade t
 JOIN order_record o          ON o.id = t.order_id
 JOIN account a        ON a.id = t.account_id
@@ -806,6 +821,9 @@ func (r *realmStore) insertTrade(
 		sqlExecer
 	}, t domain.Trade,
 ) (domain.ExternalID, string, error) {
+	if err := validateCommission(t.Commission); err != nil {
+		return domain.ExternalID(""), "", err
+	}
 	orderID, err := lookupOrderID(ctx, exec, t.Order)
 	if err != nil {
 		return domain.ExternalID(""), "", err
@@ -834,11 +852,13 @@ func (r *realmStore) insertTrade(
 	if _, err := exec.ExecContext(
 		ctx,
 		`INSERT INTO trade
-		 (external_id, order_id, account_id, base_asset_id, quote_asset_id,
-		  principal_id, at, source, side, quantity, price, lock_price)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	 (external_id, order_id, account_id, base_asset_id, quote_asset_id,
+	  principal_id, at, source, side, quantity, price, lock_price,
+	  commission_amount, commission_currency)
+	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		xid.Bytes(), orderID, accountID, baseID, quoteID, principalID,
 		at, string(t.Source), string(t.Side), t.Quantity, t.Price, t.LockPrice,
+		commissionAmount(t.Commission), commissionCurrency(t.Commission),
 	); err != nil {
 		return domain.ExternalID(""), "", fmt.Errorf("store: create trade: %w", err)
 	}
@@ -891,7 +911,8 @@ LEFT JOIN principal p ON p.id = t.principal_id` + whereFromClauses(clauses)
 	sortColumn := tradeListSortColumn(filter.Sort)
 	query := `
 SELECT t.external_id, o.external_id, a.code, ba.code, qa.code, p.code,
-       t.at, t.source, t.side, t.quantity, t.price, t.lock_price
+       t.at, t.source, t.side, t.quantity, t.price, t.lock_price,
+       t.commission_amount, t.commission_currency
 FROM trade t
 JOIN order_record o          ON o.id = t.order_id
 JOIN account a        ON a.id = t.account_id
@@ -1060,16 +1081,18 @@ func scanTradeListRow(rows *sql.Rows) (domain.Trade, error) {
 		baseAsset, quoteAsset                     string
 		principal                                 sql.NullString
 		at, source, side, quantity, price, lockPx string
+		commissionAmount, commissionCurrency      string
 	)
 	if err := rows.Scan(
 		&tradeExtID, &orderExtID, &account, &baseAsset,
 		&quoteAsset, &principal, &at, &source, &side, &quantity, &price, &lockPx,
+		&commissionAmount, &commissionCurrency,
 	); err != nil {
 		return domain.Trade{}, fmt.Errorf("store: scan trade row: %w", err)
 	}
 	trade, err := tradeFromScanned(
 		tradeExtID, orderExtID, account, baseAsset, quoteAsset, principal,
-		at, source, side, quantity, price, lockPx,
+		at, source, side, quantity, price, lockPx, commissionAmount, commissionCurrency,
 	)
 	if err != nil {
 		return domain.Trade{}, err
@@ -1084,16 +1107,18 @@ func scanTrade(rows *sql.Rows) (domain.Trade, error) {
 		baseAsset, quoteAsset                     string
 		principal                                 sql.NullString
 		at, source, side, quantity, price, lockPx string
+		commissionAmount, commissionCurrency      string
 	)
 	if err := rows.Scan(
 		&tradeExtID, &orderExtID, &account, &baseAsset, &quoteAsset, &principal,
 		&at, &source, &side, &quantity, &price, &lockPx,
+		&commissionAmount, &commissionCurrency,
 	); err != nil {
 		return domain.Trade{}, fmt.Errorf("store: scan trade: %w", err)
 	}
 	return tradeFromScanned(
 		tradeExtID, orderExtID, account, baseAsset, quoteAsset, principal,
-		at, source, side, quantity, price, lockPx,
+		at, source, side, quantity, price, lockPx, commissionAmount, commissionCurrency,
 	)
 }
 
@@ -1110,6 +1135,8 @@ func tradeFromScanned(
 	quantity string,
 	price string,
 	lockPx string,
+	commissionAmount string,
+	commissionCurrency string,
 ) (domain.Trade, error) {
 	tradeXID, err := domain.ExternalIDFromBytes(tradeExtID)
 	if err != nil {
@@ -1123,7 +1150,7 @@ func tradeFromScanned(
 	if err != nil {
 		return domain.Trade{}, fmt.Errorf("store: parse trade at %q: %w", at, err)
 	}
-	return domain.Trade{
+	trade := domain.Trade{
 		ExternalID: tradeXID,
 		Order:      orderXID,
 		Account:    domain.AccountID(account),
@@ -1136,7 +1163,187 @@ func tradeFromScanned(
 		Quantity:   quantity,
 		Price:      price,
 		LockPrice:  lockPx,
-	}, nil
+	}
+	if commissionAmount != "" || commissionCurrency != "" {
+		trade.Commission = &domain.Commission{
+			Amount:   commissionAmount,
+			Currency: commissionCurrency,
+		}
+	}
+	return trade, nil
+}
+
+func commissionAmount(c *domain.Commission) string {
+	if c == nil {
+		return ""
+	}
+	return c.Amount
+}
+
+func commissionCurrency(c *domain.Commission) string {
+	if c == nil {
+		return ""
+	}
+	return c.Currency
+}
+
+// validateCommission enforces the write-time Commission invariant shared by
+// insertTrade and restoreTrade: a commission is either fully absent (both amount
+// and currency empty) or fully present, and a present amount must be a valid
+// decimal. A one-sided commission (exactly one of amount/currency set) would be
+// silently dropped from the CommissionSubtotals rollup, understating the order
+// commission, so it is rejected as invalid input rather than persisted.
+func validateCommission(c *domain.Commission) error {
+	amount := commissionAmount(c)
+	currency := commissionCurrency(c)
+	if (amount == "") != (currency == "") {
+		return fmt.Errorf(
+			"store: commission requires both amount and currency: %w",
+			domain.ErrInvalid,
+		)
+	}
+	if amount == "" {
+		return nil
+	}
+	if _, err := decimal.NewFromString(amount); err != nil {
+		return fmt.Errorf(
+			"store: commission amount %q is not a valid decimal: %w",
+			amount, domain.ErrInvalid,
+		)
+	}
+	return nil
+}
+
+func commissionSubtotals(trades []domain.Trade) ([]domain.Commission, error) {
+	amounts := make(map[string]decimal.Decimal)
+	for _, trade := range trades {
+		if trade.Commission == nil {
+			continue
+		}
+		c := trade.Commission
+		if c.Amount == "" || c.Currency == "" {
+			continue
+		}
+		amount, err := decimal.NewFromString(c.Amount)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"store: parse commission amount %q: %w", c.Amount, err)
+		}
+		amounts[c.Currency] = amounts[c.Currency].Add(amount)
+	}
+	return commissionsFromAmountMap(amounts), nil
+}
+
+func commissionSubtotalsByOrder(
+	ctx context.Context,
+	q sqlQueryer,
+	orders []domain.ExternalID,
+) (map[domain.ExternalID][]domain.Commission, error) {
+	result := make(map[domain.ExternalID][]domain.Commission, len(orders))
+	if len(orders) == 0 {
+		return result, nil
+	}
+
+	amountsByOrder := make(
+		map[domain.ExternalID]map[string]decimal.Decimal,
+		len(orders),
+	)
+	for start := 0; start < len(orders); start += commissionSubtotalOrderBatchSize {
+		end := start + commissionSubtotalOrderBatchSize
+		if end > len(orders) {
+			end = len(orders)
+		}
+		if err := accumulateCommissionSubtotalsByOrder(
+			ctx, q, orders[start:end], amountsByOrder,
+		); err != nil {
+			return nil, err
+		}
+	}
+	for _, order := range orders {
+		result[order] = commissionsFromAmountMap(amountsByOrder[order])
+	}
+	return result, nil
+}
+
+const commissionSubtotalOrderBatchSize = 500
+
+func accumulateCommissionSubtotalsByOrder(
+	ctx context.Context,
+	q sqlQueryer,
+	orders []domain.ExternalID,
+	amountsByOrder map[domain.ExternalID]map[string]decimal.Decimal,
+) error {
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(orders)), ",")
+	args := make([]any, 0, len(orders))
+	for _, order := range orders {
+		args = append(args, order.Bytes())
+	}
+	rows, err := q.QueryContext(
+		ctx,
+		`SELECT o.external_id, t.commission_amount, t.commission_currency
+FROM trade t
+JOIN order_record o ON o.id = t.order_id
+WHERE t.commission_amount <> ''
+  AND t.commission_currency <> ''
+  AND o.external_id IN (`+placeholders+`)`,
+		args...,
+	)
+	if err != nil {
+		return fmt.Errorf("store: list order commission subtotals: %w", err)
+	}
+	for rows.Next() {
+		var orderBytes []byte
+		var amountText, currency string
+		if err := rows.Scan(&orderBytes, &amountText, &currency); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("store: scan order commission subtotal: %w", err)
+		}
+		order, err := domain.ExternalIDFromBytes(orderBytes)
+		if err != nil {
+			_ = rows.Close()
+			return fmt.Errorf(
+				"store: decode order commission external id: %w", err)
+		}
+		amount, err := decimal.NewFromString(amountText)
+		if err != nil {
+			_ = rows.Close()
+			return fmt.Errorf(
+				"store: parse commission amount %q: %w", amountText, err)
+		}
+		amounts := amountsByOrder[order]
+		if amounts == nil {
+			amounts = make(map[string]decimal.Decimal)
+			amountsByOrder[order] = amounts
+		}
+		amounts[currency] = amounts[currency].Add(amount)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("store: iterate order commission subtotals: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("store: close order commission subtotals: %w", err)
+	}
+	return nil
+}
+
+func commissionsFromAmountMap(amounts map[string]decimal.Decimal) []domain.Commission {
+	if len(amounts) == 0 {
+		return []domain.Commission{}
+	}
+	currencies := make([]string, 0, len(amounts))
+	for currency := range amounts {
+		currencies = append(currencies, currency)
+	}
+	sort.Strings(currencies)
+	out := make([]domain.Commission, 0, len(currencies))
+	for _, currency := range currencies {
+		out = append(out, domain.Commission{
+			Amount:   amounts[currency].String(),
+			Currency: currency,
+		})
+	}
+	return out
 }
 
 // --- Settlement -------------------------------------------------------------

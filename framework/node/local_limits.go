@@ -52,7 +52,7 @@ func (n *localNode) ListPolicyRows(
 	return page, nil
 }
 
-// listLimits reads the three typed barrier tables narrowed to account (empty
+// listLimits reads the typed barrier tables narrowed to account (empty
 // returns every barrier) and bundles them into the read-side AccountLimits.
 func (n *localNode) listLimits(
 	ctx context.Context, account domain.AccountID,
@@ -65,14 +65,14 @@ func (n *localNode) listLimits(
 	if err != nil {
 		return AccountLimits{}, fmt.Errorf("list order-size limits: %w", err)
 	}
-	pnlBounds, err := n.realm.ListPnlBoundsLimits(ctx, account)
+	spotFundsPnlBounds, err := n.realm.ListSpotFundsPnlBoundsLimits(ctx, account)
 	if err != nil {
-		return AccountLimits{}, fmt.Errorf("list pnl-bounds limits: %w", err)
+		return AccountLimits{}, fmt.Errorf("list spot funds pnl-bounds limits: %w", err)
 	}
 	return AccountLimits{
-		RateLimits:      rate,
-		OrderSizeLimits: orderSize,
-		PnlBoundsLimits: pnlBounds,
+		RateLimits:               rate,
+		OrderSizeLimits:          orderSize,
+		SpotFundsPnlBoundsLimits: spotFundsPnlBounds,
 	}, nil
 }
 
@@ -170,10 +170,10 @@ func (n *localNode) PutOrderSizeLimit(
 	return sink, nil
 }
 
-// PutPnlBoundsLimit upserts the whole P&L-bounds barrier and reconfigures the
-// P&L-bounds policy, mirroring PutRateLimit for the rate policy.
-func (n *localNode) PutPnlBoundsLimit(
-	ctx context.Context, limit domain.LimitPnlBounds, caller domain.Caller,
+// PutSpotFundsPnlBoundsLimit upserts the whole SpotFunds self-computed
+// P&L-bounds barrier and reconfigures the SpotFunds policy.
+func (n *localNode) PutSpotFundsPnlBoundsLimit(
+	ctx context.Context, limit domain.LimitSpotFundsPnlBounds, caller domain.Caller,
 ) (marketdata.Sink, error) {
 	if err := n.beginEngineRestart(); err != nil {
 		return nil, err
@@ -181,35 +181,38 @@ func (n *localNode) PutPnlBoundsLimit(
 	defer n.endEngineRestart()
 
 	target := LimitTarget{
-		Policy:  domain.PolicyPnlBoundsKillSwitch,
-		Scope:   limit.Scope,
-		Account: limit.Account,
-		Asset:   limit.Asset,
+		Policy:          domain.PolicySpotFundsPnlBoundsKillSwitch,
+		Scope:           limit.Scope,
+		Account:         limit.Account,
+		AccountGroup:    limit.AccountGroup,
+		AccountCurrency: limit.AccountCurrency,
 	}
-	prev, hadPrev, err := n.readPnlBoundsBarrier(ctx, target)
+	prev, hadPrev, err := n.readSpotFundsPnlBoundsBarrier(ctx, target)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := n.ensureLimitAsset(
-		ctx, limit.Scope, limit.Asset, "pnl-bounds limit", caller,
+	if _, err := n.ensureAutoCreatedAsset(
+		ctx, limit.AccountCurrency, "spot funds pnl-bounds limit", caller,
 	); err != nil {
 		return nil, err
 	}
-	if err := n.realm.PutPnlBoundsLimit(ctx, limit); err != nil {
-		return nil, fmt.Errorf("put pnl-bounds limit: %w", err)
+	if err := n.realm.PutSpotFundsPnlBoundsLimit(ctx, limit); err != nil {
+		return nil, fmt.Errorf("put spot funds pnl-bounds limit: %w", err)
 	}
 
-	sink, applyErr := n.applyPolicyChangeLocked(ctx, domain.PolicyPnlBoundsKillSwitch)
+	sink, applyErr := n.applyPolicyChangeLocked(
+		ctx, domain.PolicySpotFundsPnlBoundsKillSwitch,
+	)
 	if applyErr != nil {
-		n.revertPnlBoundsBarrier(ctx, target, prev, hadPrev)
+		n.revertSpotFundsPnlBoundsBarrier(ctx, target, prev, hadPrev)
 		return nil, fmt.Errorf("configure policy after limit: %w", applyErr)
 	}
 
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action:  domain.AuditActionSetLimit,
 		Account: target.Account,
-		Detail:  setPnlBoundsLimitDetail(limit),
+		Detail:  setSpotFundsPnlBoundsLimitDetail(limit),
 	}); err != nil {
 		return sink, fmt.Errorf("audit set limit: %w", err)
 	}
@@ -274,15 +277,23 @@ func (n *localNode) deleteBarrier(
 			return nil, fmt.Errorf("delete order-size limit: %w", err)
 		}
 		return func() { n.revertOrderSizeBarrier(ctx, target, prev, hadPrev) }, nil
-	case domain.PolicyPnlBoundsKillSwitch:
-		prev, hadPrev, err := n.readPnlBoundsBarrier(ctx, target)
+	case domain.PolicySpotFundsPnlBoundsKillSwitch:
+		prev, hadPrev, err := n.readSpotFundsPnlBoundsBarrier(ctx, target)
 		if err != nil {
 			return nil, err
 		}
-		if err := n.realm.DeletePnlBoundsLimit(ctx, target.Scope, target.Account, target.Asset); err != nil {
-			return nil, fmt.Errorf("delete pnl-bounds limit: %w", err)
+		if err := n.realm.DeleteSpotFundsPnlBoundsLimit(
+			ctx,
+			target.Scope,
+			target.Account,
+			target.AccountGroup,
+			target.AccountCurrency,
+		); err != nil {
+			return nil, fmt.Errorf("delete spot funds pnl-bounds limit: %w", err)
 		}
-		return func() { n.revertPnlBoundsBarrier(ctx, target, prev, hadPrev) }, nil
+		return func() {
+			n.revertSpotFundsPnlBoundsBarrier(ctx, target, prev, hadPrev)
+		}, nil
 	default:
 		return nil, fmt.Errorf("unknown policy %q: %w", target.Policy, domain.ErrInvalid)
 	}
@@ -336,12 +347,14 @@ func (n *localNode) policyLimitSet(ctx context.Context, policy string) (engine.L
 			return engine.LimitSet{}, fmt.Errorf("read order-size limits: %w", err)
 		}
 		return engine.LimitSet{OrderSizeLimits: limits}, nil
-	case domain.PolicyPnlBoundsKillSwitch:
-		limits, err := n.realm.ListPnlBoundsLimits(ctx, "")
+	case domain.PolicySpotFundsPnlBoundsKillSwitch:
+		limits, err := n.realm.ListSpotFundsPnlBoundsLimits(ctx, "")
 		if err != nil {
-			return engine.LimitSet{}, fmt.Errorf("read pnl-bounds limits: %w", err)
+			return engine.LimitSet{}, fmt.Errorf(
+				"read spot funds pnl-bounds limits: %w", err,
+			)
 		}
-		return engine.LimitSet{PnlBoundsLimits: limits}, nil
+		return engine.LimitSet{SpotFundsPnlBoundsLimits: limits}, nil
 	default:
 		return engine.LimitSet{}, fmt.Errorf("unknown policy %q: %w", policy, domain.ErrInvalid)
 	}
@@ -421,31 +434,46 @@ func (n *localNode) revertOrderSizeBarrier(
 	_ = n.realm.DeleteOrderSizeLimit(ctx, target.Scope, target.Account, target.Asset)
 }
 
-// readPnlBoundsBarrier mirrors readRateBarrier for the P&L-bounds table.
-func (n *localNode) readPnlBoundsBarrier(
+// readSpotFundsPnlBoundsBarrier mirrors readRateBarrier for the SpotFunds
+// P&L-bounds table.
+func (n *localNode) readSpotFundsPnlBoundsBarrier(
 	ctx context.Context, target LimitTarget,
-) (domain.LimitPnlBounds, bool, error) {
-	limits, err := n.realm.ListPnlBoundsLimits(ctx, "")
+) (domain.LimitSpotFundsPnlBounds, bool, error) {
+	limits, err := n.realm.ListSpotFundsPnlBoundsLimits(ctx, "")
 	if err != nil {
-		return domain.LimitPnlBounds{}, false, fmt.Errorf("read pnl-bounds barrier: %w", err)
+		return domain.LimitSpotFundsPnlBounds{}, false,
+			fmt.Errorf("read spot funds pnl-bounds barrier: %w", err)
 	}
 	for _, limit := range limits {
-		if limit.Scope == target.Scope && limit.Account == target.Account && limit.Asset == target.Asset {
+		if limit.Scope == target.Scope &&
+			limit.Account == target.Account &&
+			limit.AccountGroup == target.AccountGroup &&
+			limit.AccountCurrency == target.AccountCurrency {
 			return limit, true, nil
 		}
 	}
-	return domain.LimitPnlBounds{}, false, nil
+	return domain.LimitSpotFundsPnlBounds{}, false, nil
 }
 
-// revertPnlBoundsBarrier mirrors revertRateBarrier for the P&L-bounds table.
-func (n *localNode) revertPnlBoundsBarrier(
-	ctx context.Context, target LimitTarget, prev domain.LimitPnlBounds, hadPrev bool,
+// revertSpotFundsPnlBoundsBarrier mirrors revertRateBarrier for the SpotFunds
+// P&L-bounds table.
+func (n *localNode) revertSpotFundsPnlBoundsBarrier(
+	ctx context.Context,
+	target LimitTarget,
+	prev domain.LimitSpotFundsPnlBounds,
+	hadPrev bool,
 ) {
 	if hadPrev {
-		_ = n.realm.PutPnlBoundsLimit(ctx, prev)
+		_ = n.realm.PutSpotFundsPnlBoundsLimit(ctx, prev)
 		return
 	}
-	_ = n.realm.DeletePnlBoundsLimit(ctx, target.Scope, target.Account, target.Asset)
+	_ = n.realm.DeleteSpotFundsPnlBoundsLimit(
+		ctx,
+		target.Scope,
+		target.Account,
+		target.AccountGroup,
+		target.AccountCurrency,
+	)
 }
 
 // ListAudit returns the most recent n audit rows, newest first.

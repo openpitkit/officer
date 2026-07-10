@@ -54,6 +54,9 @@ type fakeService struct {
 	groupRows             []store.GroupListRow
 	groupFilter           store.GroupListFilter
 	balances              []domain.Balance
+	balanceRealizedPnl    domain.Balance
+	realizedPnlAsset      string
+	realizedPnlValue      string
 	adjustments           []domain.AccountAdjustmentRecord
 	adjustmentPage        *store.AdjustmentListPage
 	adjustmentFilter      store.AdjustmentListFilter
@@ -115,10 +118,10 @@ type fakeService struct {
 	groupErr              error
 
 	// Captured typed-limit puts and delete target, for round-trip assertions.
-	rateLimitPut      domain.LimitRate
-	orderSizeLimitPut domain.LimitOrderSize
-	pnlBoundsLimitPut domain.LimitPnlBounds
-	deleteLimitTarget node.LimitTarget
+	rateLimitPut               domain.LimitRate
+	orderSizeLimitPut          domain.LimitOrderSize
+	spotFundsPnlBoundsLimitPut domain.LimitSpotFundsPnlBounds
+	deleteLimitTarget          node.LimitTarget
 	// Captured market-data instance create input.
 	mdCreateInstance domain.MarketDataInstance
 
@@ -395,8 +398,10 @@ func (f *fakeService) PutOrderSizeLimit(_ context.Context, l domain.LimitOrderSi
 	f.orderSizeLimitPut = l
 	return f.putLimErr
 }
-func (f *fakeService) PutPnlBoundsLimit(_ context.Context, l domain.LimitPnlBounds) error {
-	f.pnlBoundsLimitPut = l
+func (f *fakeService) PutSpotFundsPnlBoundsLimit(
+	_ context.Context, l domain.LimitSpotFundsPnlBounds,
+) error {
+	f.spotFundsPnlBoundsLimitPut = l
 	return f.putLimErr
 }
 func (f *fakeService) DeleteLimit(_ context.Context, t node.LimitTarget) error {
@@ -609,6 +614,26 @@ func (f *fakeService) ApplyAdjustment(
 ) (domain.AccountAdjustmentRecord, error) {
 	f.adjustmentExternalID = externalID
 	return f.adjustment, f.stateErr
+}
+func (f *fakeService) SetBalanceRealizedPnl(
+	_ context.Context, account domain.AccountID, asset string, realizedPnl string,
+) (domain.Balance, error) {
+	f.realizedPnlAsset = asset
+	f.realizedPnlValue = realizedPnl
+	if f.stateErr != nil {
+		return domain.Balance{}, f.stateErr
+	}
+	balance := f.balanceRealizedPnl
+	if balance.Account == "" {
+		balance.Account = account
+	}
+	if balance.Asset == "" {
+		balance.Asset = asset
+	}
+	if balance.RealizedPnl == "" {
+		balance.RealizedPnl = realizedPnl
+	}
+	return balance, nil
 }
 func (f *fakeService) ListBalances(
 	_ context.Context, _ domain.AccountID, _ string,

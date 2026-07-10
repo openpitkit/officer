@@ -173,26 +173,6 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 		true,
 		false,
 	), setMarketDataInstrumentHandler)
-	reg.Register(descriptor(
-		"arm_killswitch",
-		"Arm kill-switch",
-		"",
-		"Arm the P&L kill-switch for an account/asset.",
-		true,
-		true,
-		false,
-		false,
-	))
-	reg.Register(descriptor(
-		"disarm_killswitch",
-		"Disarm kill-switch",
-		"",
-		"Disarm the P&L kill-switch for an account/asset.",
-		true,
-		true,
-		false,
-		false,
-	))
 	registerTool(reg, descriptor(
 		submitOrderToolName,
 		"Submit order",
@@ -427,9 +407,9 @@ type accountDTO struct {
 }
 
 type limitsDTO struct {
-	RateLimits      []rateLimitDTO      `json:"rateLimits"`
-	OrderSizeLimits []orderSizeLimitDTO `json:"orderSizeLimits"`
-	PnlBoundsLimits []pnlBoundsLimitDTO `json:"pnlBoundsLimits"`
+	RateLimits               []rateLimitDTO               `json:"rateLimits"`
+	OrderSizeLimits          []orderSizeLimitDTO          `json:"orderSizeLimits"`
+	SpotFundsPnlBoundsLimits []spotFundsPnlBoundsLimitDTO `json:"spotFundsPnlBoundsLimits"`
 }
 
 type rateLimitDTO struct {
@@ -448,13 +428,14 @@ type orderSizeLimitDTO struct {
 	MaxNotional string `json:"maxNotional"`
 }
 
-type pnlBoundsLimitDTO struct {
-	Scope      string `json:"scope"`
-	Account    string `json:"account"`
-	Asset      string `json:"asset"`
-	LowerBound string `json:"lowerBound"`
-	UpperBound string `json:"upperBound"`
-	InitialPnl string `json:"initialPnl"`
+type spotFundsPnlBoundsLimitDTO struct {
+	Scope           string `json:"scope"`
+	Account         string `json:"account"`
+	AccountGroup    string `json:"accountGroup"`
+	AccountCurrency string `json:"accountCurrency"`
+	LowerBound      string `json:"lowerBound"`
+	UpperBound      string `json:"upperBound"`
+	InitialPnl      string `json:"initialPnl"`
 }
 
 type auditDTO struct {
@@ -467,17 +448,25 @@ type auditDTO struct {
 }
 
 type orderDTO struct {
-	At          time.Time `json:"at"`
-	ExternalID  string    `json:"externalId"`
-	Account     string    `json:"account"`
-	BaseAsset   string    `json:"baseAsset"`
-	QuoteAsset  string    `json:"quoteAsset"`
-	Side        string    `json:"side"`
-	AmountKind  string    `json:"amountKind"`
-	AmountValue string    `json:"amountValue"`
-	Price       string    `json:"price"`
-	Status      string    `json:"status"`
-	Source      string    `json:"source"`
+	At                  time.Time       `json:"at"`
+	ExternalID          string          `json:"externalId"`
+	Account             string          `json:"account"`
+	BaseAsset           string          `json:"baseAsset"`
+	QuoteAsset          string          `json:"quoteAsset"`
+	Side                string          `json:"side"`
+	AmountKind          string          `json:"amountKind"`
+	AmountValue         string          `json:"amountValue"`
+	CommissionSubtotals []commissionDTO `json:"commissionSubtotals"`
+	Price               string          `json:"price"`
+	Status              string          `json:"status"`
+	Source              string          `json:"source"`
+}
+
+// commissionDTO mirrors the HTTP commission shape (amount + currency) so an MCP
+// client sees the same commission data as the REST surface.
+type commissionDTO struct {
+	Amount   string `json:"amount"`
+	Currency string `json:"currency"`
 }
 
 type orderApprovalDTO struct {
@@ -490,12 +479,13 @@ type orderApprovalDTO struct {
 }
 
 type tradeDTO struct {
-	At         time.Time `json:"at"`
-	ExternalID string    `json:"externalId"`
-	Side       string    `json:"side"`
-	Quantity   string    `json:"quantity"`
-	Price      string    `json:"price"`
-	LockPrice  string    `json:"lockPrice"`
+	At         time.Time      `json:"at"`
+	ExternalID string         `json:"externalId"`
+	Side       string         `json:"side"`
+	Quantity   string         `json:"quantity"`
+	Price      string         `json:"price"`
+	LockPrice  string         `json:"lockPrice"`
+	Commission *commissionDTO `json:"commission,omitempty"`
 }
 
 type checkOrderRejectDTO struct {
@@ -544,22 +534,32 @@ func toLimitsDTO(l node.AccountLimits) limitsDTO {
 			MaxNotional: o.MaxNotional,
 		})
 	}
-	pnl := make([]pnlBoundsLimitDTO, 0, len(l.PnlBoundsLimits))
-	for _, p := range l.PnlBoundsLimits {
-		pnl = append(pnl, pnlBoundsLimitDTO{
-			Scope:      p.Scope,
-			Account:    string(p.Account),
-			Asset:      p.Asset,
-			LowerBound: p.LowerBound,
-			UpperBound: p.UpperBound,
-			InitialPnl: p.InitialPnl,
+	spotFundsPnl := make(
+		[]spotFundsPnlBoundsLimitDTO,
+		0,
+		len(l.SpotFundsPnlBoundsLimits),
+	)
+	for _, p := range l.SpotFundsPnlBoundsLimits {
+		spotFundsPnl = append(spotFundsPnl, spotFundsPnlBoundsLimitDTO{
+			Scope:           p.Scope,
+			Account:         string(p.Account),
+			AccountGroup:    p.AccountGroup,
+			AccountCurrency: p.AccountCurrency,
+			LowerBound:      p.LowerBound,
+			UpperBound:      p.UpperBound,
+			InitialPnl:      p.InitialPnl,
 		})
 	}
-	return limitsDTO{RateLimits: rate, OrderSizeLimits: size, PnlBoundsLimits: pnl}
+	return limitsDTO{
+		RateLimits:               rate,
+		OrderSizeLimits:          size,
+		SpotFundsPnlBoundsLimits: spotFundsPnl,
+	}
 }
 
 func limitsCount(l node.AccountLimits) int {
-	return len(l.RateLimits) + len(l.OrderSizeLimits) + len(l.PnlBoundsLimits)
+	return len(l.RateLimits) + len(l.OrderSizeLimits) +
+		len(l.SpotFundsPnlBoundsLimits)
 }
 
 func toAuditDTO(row domain.AuditRow) auditDTO {
@@ -575,18 +575,37 @@ func toAuditDTO(row domain.AuditRow) auditDTO {
 
 func toOrderDTO(o domain.Order) orderDTO {
 	return orderDTO{
-		At:          o.At,
-		ExternalID:  o.ExternalID.String(),
-		Account:     string(o.Account),
-		BaseAsset:   o.BaseAsset,
-		QuoteAsset:  o.QuoteAsset,
-		Side:        string(o.Side),
-		AmountKind:  string(o.AmountKind),
-		AmountValue: o.AmountValue,
-		Price:       o.Price,
-		Status:      string(o.Status),
-		Source:      string(o.Source),
+		At:                  o.At,
+		ExternalID:          o.ExternalID.String(),
+		Account:             string(o.Account),
+		BaseAsset:           o.BaseAsset,
+		QuoteAsset:          o.QuoteAsset,
+		Side:                string(o.Side),
+		AmountKind:          string(o.AmountKind),
+		AmountValue:         o.AmountValue,
+		CommissionSubtotals: toCommissionDTOs(o.CommissionSubtotals),
+		Price:               o.Price,
+		Status:              string(o.Status),
+		Source:              string(o.Source),
 	}
+}
+
+func toCommissionDTO(c *domain.Commission) *commissionDTO {
+	if c == nil {
+		return nil
+	}
+	return &commissionDTO{Amount: c.Amount, Currency: c.Currency}
+}
+
+func toCommissionDTOs(in []domain.Commission) []commissionDTO {
+	if in == nil {
+		return []commissionDTO{}
+	}
+	out := make([]commissionDTO, 0, len(in))
+	for i := range in {
+		out = append(out, *toCommissionDTO(&in[i]))
+	}
+	return out
 }
 
 // toOrderApprovalDTO maps the order's submit-verdict attestation onto the MCP
@@ -639,6 +658,7 @@ func toTradeDTOs(trades []domain.Trade) []tradeDTO {
 			Quantity:   t.Quantity,
 			Price:      t.Price,
 			LockPrice:  t.LockPrice,
+			Commission: toCommissionDTO(t.Commission),
 		})
 	}
 	return out

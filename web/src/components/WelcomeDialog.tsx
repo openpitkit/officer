@@ -104,13 +104,6 @@ const DEMO_LIMITS: Limit[] = [
     asset: "BTC",
     values: { max_quantity: "2", max_notional: "150000" },
   },
-  {
-    policy: "pnl_bounds_kill_switch",
-    scope: "account_asset",
-    account: DEMO_ACCOUNT_ID,
-    asset: "BTC",
-    values: { lower_bound: "-5000", upper_bound: "10000" },
-  },
 ];
 
 const DEMO_POSITIONS = [

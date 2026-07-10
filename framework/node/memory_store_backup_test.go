@@ -136,14 +136,18 @@ func (r *memoryRealm) RestoreBackup(
 
 func (r *memoryRealm) exportData(context.Context) backup.Data {
 	data := backup.Data{
-		Assets:                make([]domain.Asset, 0, len(r.assets)),
-		Principals:            make([]domain.Principal, 0, len(r.principals)),
-		Groups:                make([]backup.AccountGroup, 0, len(r.groups)),
-		Accounts:              make([]backup.Account, 0, len(r.accounts)),
-		Balances:              make([]domain.Balance, 0, len(r.balances)),
-		RateLimits:            make([]domain.LimitRate, 0, len(r.rateLimits)),
-		OrderSizeLimits:       make([]domain.LimitOrderSize, 0, len(r.orderSizeLimits)),
-		PnlBoundsLimits:       make([]domain.LimitPnlBounds, 0, len(r.pnlBoundsLimits)),
+		Assets:          make([]domain.Asset, 0, len(r.assets)),
+		Principals:      make([]domain.Principal, 0, len(r.principals)),
+		Groups:          make([]backup.AccountGroup, 0, len(r.groups)),
+		Accounts:        make([]backup.Account, 0, len(r.accounts)),
+		Balances:        make([]domain.Balance, 0, len(r.balances)),
+		RateLimits:      make([]domain.LimitRate, 0, len(r.rateLimits)),
+		OrderSizeLimits: make([]domain.LimitOrderSize, 0, len(r.orderSizeLimits)),
+		SpotFundsPnlBoundsLimits: make(
+			[]domain.LimitSpotFundsPnlBounds,
+			0,
+			len(r.spotFundsPnlBoundsLimits),
+		),
 		Adjustments:           append([]domain.AccountAdjustmentRecord(nil), r.adjustments...),
 		Orders:                make([]backup.OrderRecord, 0, len(r.orders)),
 		OrderEvents:           r.exportEvents(),
@@ -185,8 +189,8 @@ func (r *memoryRealm) exportData(context.Context) backup.Data {
 	for _, limit := range r.orderSizeLimits {
 		data.OrderSizeLimits = append(data.OrderSizeLimits, limit)
 	}
-	for _, limit := range r.pnlBoundsLimits {
-		data.PnlBoundsLimits = append(data.PnlBoundsLimits, limit)
+	for _, limit := range r.spotFundsPnlBoundsLimits {
+		data.SpotFundsPnlBoundsLimits = append(data.SpotFundsPnlBoundsLimits, limit)
 	}
 	for _, order := range r.orders {
 		data.Orders = append(data.Orders, backup.OrderRecord{Order: order})
@@ -260,9 +264,14 @@ func (r *memoryRealm) restoreData(data backup.Data) {
 	for _, limit := range data.OrderSizeLimits {
 		r.orderSizeLimits[limitKey(limit.Scope, limit.Account, limit.Asset)] = limit
 	}
-	r.pnlBoundsLimits = map[string]domain.LimitPnlBounds{}
-	for _, limit := range data.PnlBoundsLimits {
-		r.pnlBoundsLimits[limitKey(limit.Scope, limit.Account, limit.Asset)] = limit
+	r.spotFundsPnlBoundsLimits = map[string]domain.LimitSpotFundsPnlBounds{}
+	for _, limit := range data.SpotFundsPnlBoundsLimits {
+		r.spotFundsPnlBoundsLimits[spotFundsPnlBoundsLimitKey(
+			limit.Scope,
+			limit.Account,
+			limit.AccountGroup,
+			limit.AccountCurrency,
+		)] = limit
 	}
 	r.adjustments = append([]domain.AccountAdjustmentRecord(nil), data.Adjustments...)
 	r.orders = map[domain.ExternalID]domain.Order{}
@@ -321,7 +330,7 @@ func (r *memoryRealm) sectionCount(_ context.Context, section backup.Section) in
 	case backup.SectionPositions:
 		return len(r.balances)
 	case backup.SectionRiskLimits:
-		return len(r.rateLimits) + len(r.orderSizeLimits) + len(r.pnlBoundsLimits)
+		return len(r.rateLimits) + len(r.orderSizeLimits) + len(r.spotFundsPnlBoundsLimits)
 	case backup.SectionMarketData:
 		return len(r.instances) + len(r.instruments)
 	case backup.SectionMarketDataQuotes:

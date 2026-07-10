@@ -305,7 +305,7 @@
       },
       "trades": {
         "description": "Сделки доступны только для экспорта. Первая строка - заголовок.",
-        "columns": "external_id,order_external_id,at,account_code,source,principal,base_asset,quote_asset,side,quantity,price,lock_price"
+        "columns": "external_id,order_external_id,at,account_code,source,principal,base_asset,quote_asset,side,quantity,price,lock_price,commission_amount,commission_currency"
       }
     },
     "entities": {

@@ -35,6 +35,7 @@ import (
 	"go.openpit.dev/openpit/param"
 
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/marketdata"
 )
 
 const (
@@ -87,7 +88,7 @@ func newTestEngine(t *testing.T) *openPitEngine {
 		t.Fatalf("build engine: %v", err)
 	}
 	adapter := newOpenPitEngine(
-		eng, testAsyncEngine(t, eng), service, registered, nil, res,
+		eng, testAsyncEngine(t, eng), service, registered, nil, nil, res,
 	).(*openPitEngine)
 	t.Cleanup(adapter.Stop)
 
@@ -444,67 +445,152 @@ func TestApplyExecutionReport_MissingLeavesRejected(t *testing.T) {
 	}
 }
 
-// newTestEngineWithPnlBounds builds the test engine with an asset-scope P&L-
-// bounds kill-switch active, so a fill exercises that policy's post-trade
-// reading of the execution report's financial-impact group.
-func newTestEngineWithPnlBounds(t *testing.T) *openPitEngine {
+func newTestEngineWithSpotFundsPnlBounds(t *testing.T) *openPitEngine {
 	t.Helper()
+	acct := account(testAccount)
+	acct.Currency = testQuote
+	acct.GroupCode = "desk-a"
 	snap := Snapshot{
-		Accounts: []domain.Account{account(testAccount)},
-		PnlBoundsLimits: []domain.LimitPnlBounds{{
-			Scope:      domain.ScopeAsset,
-			Asset:      testQuote,
-			LowerBound: "-1000000",
+		Accounts: []domain.Account{acct},
+		Groups: []domain.AccountGroup{{
+			Code:          "desk-a",
+			EngineGroupID: 7,
+			Currency:      testQuote,
 		}},
+		Balances: []domain.Balance{
+			{
+				Account:   domain.AccountID(testAccount),
+				Asset:     testQuote,
+				Available: "2000",
+			},
+			{
+				Account:   domain.AccountID(testAccount),
+				Asset:     testBase,
+				Available: "10",
+			},
+		},
+		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
+			{
+				Scope:           domain.ScopeGlobal,
+				AccountCurrency: testQuote,
+				LowerBound:      "-1000000",
+			},
+			{
+				Scope:           domain.ScopeAccountGroup,
+				AccountGroup:    "desk-a",
+				AccountCurrency: testQuote,
+				LowerBound:      "-1000000",
+			},
+			{
+				Scope:           domain.ScopeAccount,
+				Account:         domain.AccountID(testAccount),
+				AccountCurrency: testQuote,
+				LowerBound:      "-6",
+				InitialPnl:      "-5",
+			},
+		},
 	}
-	res, err := newIDResolver(snap.Accounts, snap.Groups)
+	engine, err := BuildOpenPitEngine("", snap)
 	if err != nil {
-		t.Fatalf("newIDResolver: %v", err)
+		t.Fatalf("BuildOpenPitEngine: %v", err)
 	}
-	eng, service, registered, err := buildEngine(snap, res)
-	if err != nil {
-		t.Fatalf("build engine: %v", err)
-	}
-	adapter := newOpenPitEngine(
-		eng, testAsyncEngine(t, eng), service, registered, nil, res,
-	).(*openPitEngine)
+	adapter := engine.(*openPitEngine)
 	t.Cleanup(adapter.Stop)
-
-	if err := seedBalances(eng, []domain.Balance{{
-		Account:   domain.AccountID(testAccount),
-		Asset:     testQuote,
-		Available: testQuoteFund,
-	}}, res); err != nil {
-		t.Fatalf("seed balance: %v", err)
-	}
 	return adapter
 }
 
-// TestApplyExecutionReport_SettlesFillWithPnlBoundsNoBlock proves a fill settles
-// without a spurious account block when a P&L-bounds kill-switch is active. The
-// mapper sets the financial-impact group (P&L and fee) the policy reads, so an
-// absent group no longer trips missing_required_field. Spot-funds alone settled
-// the fill (it ignores the group); only the P&L policy exposed the gap.
-func TestApplyExecutionReport_SettlesFillWithPnlBoundsNoBlock(t *testing.T) {
-	e := newTestEngineWithPnlBounds(t)
+func TestSpotFundsPnlBoundsBuildConfiguresBasePolicyAndSeed(t *testing.T) {
+	e := newTestEngineWithSpotFundsPnlBounds(t)
 	ctx := context.Background()
 
-	held, err := e.ReserveHold(ctx, testOrder())
-	if err != nil || !held.Accepted {
-		t.Fatalf("ReserveHold: %v accepted=%v", err, held.Accepted)
+	if _, ok := e.registered[nameSpotFunds]; !ok || len(e.registered) != 1 {
+		t.Fatalf("registered policies = %+v, want only %s", e.registered, nameSpotFunds)
 	}
-	if err := e.CommitHeld(ctx, held.ApprovalID); err != nil {
-		t.Fatalf("CommitHeld: %v", err)
+	if err := e.sink.Push(marketdata.QuoteUpdate{
+		Base: testBase, Quote: testQuote, Mark: "100",
+	}); err != nil {
+		t.Fatalf("Push quote: %v", err)
+	}
+	market := testOrder()
+	market.Price = ""
+	market.AmountValue = "1"
+	if result, err := e.SubmitOrder(ctx, market); err != nil || !result.Accepted {
+		t.Fatalf("market SubmitOrder: err=%v result=%+v", err, result)
 	}
 
-	// RealizedPnl/Fee left empty (→ zero): a position-opening buy realizes nothing.
+	feeOrder := testOrder()
+	feeOrder.AmountValue = "1"
+	held, err := e.ReserveHold(ctx, feeOrder)
+	if err != nil {
+		t.Fatalf("ReserveHold fee order: %v", err)
+	}
+	if !held.Accepted {
+		t.Fatalf("fee order rejected before fill: %+v", held.Rejects)
+	}
+	if err := e.CommitHeld(ctx, held.ApprovalID); err != nil {
+		t.Fatalf("CommitHeld fee order: %v", err)
+	}
+
 	result, err := e.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		BaseAsset:      testBase,
 		QuoteAsset:     testQuote,
-		FillQuantity:   testQty,
+		FillQuantity:   "1",
 		FillPrice:      held.SettlementLockPrice,
 		LeavesQuantity: "0",
 		LockPrice:      held.SettlementLockPrice,
+		Commission:     &domain.Commission{Amount: "-2", Currency: testQuote},
+		Account:        domain.AccountID(testAccount),
+		Side:           domain.OrderSideBuy,
+		OrderStatus:    domain.OrderStatusFilled,
+	})
+	if err != nil {
+		t.Fatalf("ApplyExecutionReport fee order: %v", err)
+	}
+	if len(result.Blocks) == 0 {
+		t.Fatalf("fee fill did not block account; outcomes=%+v", result.Outcomes)
+	}
+	if result.Blocks[0].Account != domain.AccountID(testAccount) {
+		t.Fatalf("block account = %q, want %q", result.Blocks[0].Account, testAccount)
+	}
+}
+
+func TestConfigurePolicy_SpotFundsPnlBoundsClearsLastBarrierOnline(t *testing.T) {
+	e := newTestEngineWithSpotFundsPnlBounds(t)
+	ctx := context.Background()
+
+	engBefore := e.eng
+	if err := e.ConfigurePolicy(
+		ctx,
+		domain.PolicySpotFundsPnlBoundsKillSwitch,
+		LimitSet{},
+	); err != nil {
+		t.Fatalf("ConfigurePolicy clear spot funds pnl bounds: %v", err)
+	}
+	if e.eng != engBefore {
+		t.Fatal("ConfigurePolicy replaced engine handle, want online reconfigure")
+	}
+
+	feeOrder := testOrder()
+	feeOrder.AmountValue = "1"
+	held, err := e.ReserveHold(ctx, feeOrder)
+	if err != nil {
+		t.Fatalf("ReserveHold fee order: %v", err)
+	}
+	if !held.Accepted {
+		t.Fatalf("fee order rejected before fill: %+v", held.Rejects)
+	}
+	if err := e.CommitHeld(ctx, held.ApprovalID); err != nil {
+		t.Fatalf("CommitHeld fee order: %v", err)
+	}
+
+	result, err := e.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
+		BaseAsset:      testBase,
+		QuoteAsset:     testQuote,
+		FillQuantity:   "1",
+		FillPrice:      held.SettlementLockPrice,
+		LeavesQuantity: "0",
+		LockPrice:      held.SettlementLockPrice,
+		Commission:     &domain.Commission{Amount: "-2", Currency: testQuote},
 		Account:        domain.AccountID(testAccount),
 		Side:           domain.OrderSideBuy,
 		OrderStatus:    domain.OrderStatusFilled,
@@ -513,10 +599,200 @@ func TestApplyExecutionReport_SettlesFillWithPnlBoundsNoBlock(t *testing.T) {
 		t.Fatalf("ApplyExecutionReport: %v", err)
 	}
 	if len(result.Blocks) != 0 {
-		t.Fatalf("fill must not block with pnl_bounds active, got blocks=%+v", result.Blocks)
+		t.Fatalf("cleared spot funds bound still blocked fill: %+v", result.Blocks)
 	}
-	if len(result.Outcomes) == 0 {
-		t.Fatalf("want settlement outcomes, got none")
+}
+
+// newTestEngineGlobalSpotFundsPnlBounds builds a real engine whose SpotFunds P&L
+// bounds carry only permissive global and account-group barriers - no
+// account-scope barrier. A global or group barrier is enough for the policy to
+// accumulate per-account P&L, so an account-scope barrier introduced later at
+// runtime observes whatever P&L has already accrued.
+func newTestEngineGlobalSpotFundsPnlBounds(t *testing.T) *openPitEngine {
+	t.Helper()
+	acct := account(testAccount)
+	acct.Currency = testQuote
+	acct.GroupCode = "desk-a"
+	snap := Snapshot{
+		Accounts: []domain.Account{acct},
+		Groups: []domain.AccountGroup{{
+			Code:          "desk-a",
+			EngineGroupID: 7,
+			Currency:      testQuote,
+		}},
+		Balances: []domain.Balance{
+			{
+				Account:   domain.AccountID(testAccount),
+				Asset:     testQuote,
+				Available: "2000",
+			},
+			{
+				Account:   domain.AccountID(testAccount),
+				Asset:     testBase,
+				Available: "10",
+			},
+		},
+		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
+			{
+				Scope:           domain.ScopeGlobal,
+				AccountCurrency: testQuote,
+				LowerBound:      "-1000000",
+			},
+			{
+				Scope:           domain.ScopeAccountGroup,
+				AccountGroup:    "desk-a",
+				AccountCurrency: testQuote,
+				LowerBound:      "-1000000",
+			},
+		},
+	}
+	engine, err := BuildOpenPitEngine("", snap)
+	if err != nil {
+		t.Fatalf("BuildOpenPitEngine: %v", err)
+	}
+	adapter := engine.(*openPitEngine)
+	t.Cleanup(adapter.Stop)
+	return adapter
+}
+
+// commitSpotFundsFeeFill runs one buy fill of the base asset carrying a -2 quote
+// commission, so the SpotFunds policy accrues -2 of realized account-currency
+// P&L. It returns the execution result so a caller can assert the kill-switch
+// block state.
+func commitSpotFundsFeeFill(t *testing.T, e *openPitEngine) ExecutionReportResult {
+	t.Helper()
+	ctx := context.Background()
+	order := testOrder()
+	order.AmountValue = "1"
+	held, err := e.ReserveHold(ctx, order)
+	if err != nil {
+		t.Fatalf("ReserveHold fee order: %v", err)
+	}
+	if !held.Accepted {
+		t.Fatalf("fee order rejected before fill: %+v", held.Rejects)
+	}
+	if err := e.CommitHeld(ctx, held.ApprovalID); err != nil {
+		t.Fatalf("CommitHeld fee order: %v", err)
+	}
+	result, err := e.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
+		BaseAsset:      testBase,
+		QuoteAsset:     testQuote,
+		FillQuantity:   "1",
+		FillPrice:      held.SettlementLockPrice,
+		LeavesQuantity: "0",
+		LockPrice:      held.SettlementLockPrice,
+		Commission:     &domain.Commission{Amount: "-2", Currency: testQuote},
+		Account:        domain.AccountID(testAccount),
+		Side:           domain.OrderSideBuy,
+		OrderStatus:    domain.OrderStatusFilled,
+	})
+	if err != nil {
+		t.Fatalf("ApplyExecutionReport fee order: %v", err)
+	}
+	return result
+}
+
+// TestConfigurePolicy_SpotFundsPnlBoundsNewAccountBarrierPreservesLivePnl proves
+// that adding an account-scope barrier with no initial_pnl at runtime does not
+// reset the account's live accumulated P&L: the barrier arms against P&L already
+// accrued rather than starting from zero.
+func TestConfigurePolicy_SpotFundsPnlBoundsNewAccountBarrierPreservesLivePnl(t *testing.T) {
+	e := newTestEngineGlobalSpotFundsPnlBounds(t)
+	ctx := context.Background()
+
+	// The first fill accrues -2 of account P&L under the permissive global/group
+	// barriers; nothing breaches yet.
+	if first := commitSpotFundsFeeFill(t, e); len(first.Blocks) != 0 {
+		t.Fatalf("first fill blocked unexpectedly: %+v", first.Blocks)
+	}
+
+	// Introduce an account-scope barrier with no initial_pnl. It must not reset
+	// the -2 already accrued, so its -3 lower bound stays armed against live P&L.
+	limits := LimitSet{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
+		{
+			Scope:           domain.ScopeGlobal,
+			AccountCurrency: testQuote,
+			LowerBound:      "-1000000",
+		},
+		{
+			Scope:           domain.ScopeAccountGroup,
+			AccountGroup:    "desk-a",
+			AccountCurrency: testQuote,
+			LowerBound:      "-1000000",
+		},
+		{
+			Scope:           domain.ScopeAccount,
+			Account:         domain.AccountID(testAccount),
+			AccountCurrency: testQuote,
+			LowerBound:      "-3",
+		},
+	}}
+	if err := e.ConfigurePolicy(
+		ctx, domain.PolicySpotFundsPnlBoundsKillSwitch, limits,
+	); err != nil {
+		t.Fatalf("ConfigurePolicy add account barrier: %v", err)
+	}
+
+	// The second fill drives accrued P&L to -4, breaching the -3 bound. A reset to
+	// zero would leave it at -2 and pass, so a block proves the live P&L survived.
+	second := commitSpotFundsFeeFill(t, e)
+	if len(second.Blocks) == 0 {
+		t.Fatal("account barrier did not block on preserved live P&L; " +
+			"an empty initial_pnl reset the accumulator")
+	}
+	if second.Blocks[0].Account != domain.AccountID(testAccount) {
+		t.Fatalf("block account = %q, want %q", second.Blocks[0].Account, testAccount)
+	}
+}
+
+// TestConfigurePolicy_SpotFundsPnlBoundsNewAccountBarrierExplicitInitialPnlSeeds
+// proves that an explicit initial_pnl on an account-scope barrier added at
+// runtime still force-sets the live accumulated P&L, overriding what had already
+// accrued.
+func TestConfigurePolicy_SpotFundsPnlBoundsNewAccountBarrierExplicitInitialPnlSeeds(t *testing.T) {
+	e := newTestEngineGlobalSpotFundsPnlBounds(t)
+	ctx := context.Background()
+
+	if first := commitSpotFundsFeeFill(t, e); len(first.Blocks) != 0 {
+		t.Fatalf("first fill blocked unexpectedly: %+v", first.Blocks)
+	}
+
+	// An explicit initial_pnl reseeds the live accumulator to +5, discarding the
+	// -2 already accrued.
+	limits := LimitSet{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
+		{
+			Scope:           domain.ScopeGlobal,
+			AccountCurrency: testQuote,
+			LowerBound:      "-1000000",
+		},
+		{
+			Scope:           domain.ScopeAccountGroup,
+			AccountGroup:    "desk-a",
+			AccountCurrency: testQuote,
+			LowerBound:      "-1000000",
+		},
+		{
+			Scope:           domain.ScopeAccount,
+			Account:         domain.AccountID(testAccount),
+			AccountCurrency: testQuote,
+			LowerBound:      "-3",
+			InitialPnl:      "5",
+		},
+	}}
+	if err := e.ConfigurePolicy(
+		ctx, domain.PolicySpotFundsPnlBoundsKillSwitch, limits,
+	); err != nil {
+		t.Fatalf("ConfigurePolicy add seeded account barrier: %v", err)
+	}
+
+	// From the +5 seed the second fill lands at +3, clear of the -3 bound. Without
+	// the seed it would sit at -4 and block, so passing proves the seed applied.
+	second := commitSpotFundsFeeFill(t, e)
+	if len(second.Blocks) != 0 {
+		t.Fatalf(
+			"seeded barrier blocked though live P&L was reset above the bound: %+v",
+			second.Blocks,
+		)
 	}
 }
 
@@ -584,7 +860,7 @@ func TestStop_DrainsHeldReservations(t *testing.T) {
 		t.Fatalf("build engine: %v", err)
 	}
 	adapter := newOpenPitEngine(
-		eng, testAsyncEngine(t, eng), service, registered, nil, res,
+		eng, testAsyncEngine(t, eng), service, registered, nil, nil, res,
 	).(*openPitEngine)
 	if err := seedBalances(eng, []domain.Balance{{
 		Account:   domain.AccountID(testAccount),

@@ -198,7 +198,7 @@ var (
 	tradeHeader = []string{
 		"external_id", "order_external_id", "at", "account_code", "source",
 		"principal", "base_asset", "quote_asset", "side", "quantity", "price",
-		"lock_price",
+		"lock_price", "commission_amount", "commission_currency",
 	}
 )
 
@@ -321,9 +321,24 @@ func EncodeTrades(rows []domain.Trade, delimiter Delimiter) ([]byte, error) {
 			row.At.Format(time.RFC3339Nano), string(row.Account),
 			string(row.Source), row.Principal, row.BaseAsset, row.QuoteAsset,
 			string(row.Side), row.Quantity, row.Price, row.LockPrice,
+			commissionAmount(row.Commission), commissionCurrency(row.Commission),
 		})
 	}
 	return writeCSV(out, delimiter)
+}
+
+func commissionAmount(c *domain.Commission) string {
+	if c == nil {
+		return ""
+	}
+	return c.Amount
+}
+
+func commissionCurrency(c *domain.Commission) string {
+	if c == nil {
+		return ""
+	}
+	return c.Currency
 }
 
 // ParseImport parses an importable entity CSV body.

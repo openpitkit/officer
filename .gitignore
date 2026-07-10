@@ -69,3 +69,5 @@ officer-runtime.json
 .ruff_cache
 .venv
 __pycache__
+
+/.tmp

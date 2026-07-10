@@ -107,24 +107,6 @@ func TestCatalogParity(t *testing.T) {
 			DefaultEnabled:   false,
 		},
 		{
-			Name:             "arm_killswitch",
-			Title:            "Arm kill-switch",
-			AgentDescription: "Arm the P&L kill-switch for an account/asset.",
-			Mutating:         true,
-			Protective:       true,
-			Implemented:      false,
-			DefaultEnabled:   false,
-		},
-		{
-			Name:             "disarm_killswitch",
-			Title:            "Disarm kill-switch",
-			AgentDescription: "Disarm the P&L kill-switch for an account/asset.",
-			Mutating:         true,
-			Protective:       true,
-			Implemented:      false,
-			DefaultEnabled:   false,
-		},
-		{
 			Name:             "submit_order",
 			Title:            "Submit order",
 			AgentDescription: "Submit an order intent through pre-trade and obtain a signed approval token.",
@@ -222,9 +204,6 @@ func TestEffectiveMerge(t *testing.T) {
 	}
 	if eff["get_limits"] != true {
 		t.Errorf("get_limits should default on, got %v", eff["get_limits"])
-	}
-	if eff["arm_killswitch"] != false {
-		t.Errorf("arm_killswitch should default off, got %v", eff["arm_killswitch"])
 	}
 	if _, ok := eff["nonexistent"]; ok {
 		t.Errorf("stale stored name leaked into effective map")

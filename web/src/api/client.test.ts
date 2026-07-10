@@ -398,6 +398,44 @@ describe("balances client", () => {
       items: [{ account: "desk-alpha", asset: "AAPL" }],
     });
   });
+
+  it("sets realized PnL through the balance record endpoint", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        balance: {
+          account: "desk-alpha",
+          asset: "USD",
+          available: "1000",
+          held: "0",
+          incoming: "0",
+          averageEntryPrice: "",
+          realizedPnl: "-12.50",
+          updatedAt: "2026-06-24T00:00:00Z",
+        },
+      }),
+    );
+
+    const result = await api().setBalanceRealizedPnl("desk-alpha", {
+      asset: "USD",
+      realizedPnl: "-12.50",
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/accounts/desk-alpha/balances/realized-pnl",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          asset: "USD",
+          realizedPnl: "-12.50",
+        }),
+      }),
+    );
+    expect(result).toMatchObject({
+      account: "desk-alpha",
+      asset: "USD",
+      realizedPnl: "-12.50",
+    });
+  });
 });
 
 describe("business CSV client", () => {
@@ -711,8 +749,10 @@ describe("limits client", () => {
     const { fetchPoliciesPage } = api();
     await fetchPoliciesPage({
       account: "desk-alpha",
+      accountGroup: "group-alpha",
       asset: "AAPL",
-      policy: "pnl_bounds",
+      accountCurrency: "USD",
+      policy: "spot_funds_pnl_bounds",
       limit: 25,
       offset: 50,
     });
@@ -722,8 +762,10 @@ describe("limits client", () => {
     expect(Object.fromEntries(calledUrl.searchParams.entries())).toEqual(
       expect.objectContaining({
         account: "desk-alpha",
+        accountGroup: "group-alpha",
         asset: "AAPL",
-        policy: "pnl_bounds",
+        accountCurrency: "USD",
+        policy: "spot_funds_pnl_bounds",
         limit: "25",
         offset: "50",
       }),
@@ -748,8 +790,23 @@ describe("limits client", () => {
             asset: "AAPL",
             values: { orderSize: { maxQuantity: "10", maxNotional: "1500" } },
           },
+          {
+            kind: "spot_funds_pnl_bounds_kill_switch",
+            scope: "account_group",
+            account: "",
+            accountGroup: "desk-alpha",
+            asset: "",
+            accountCurrency: "USD",
+            values: {
+              spotFundsPnlBounds: {
+                lowerBound: "-1000",
+                upperBound: "",
+                initialPnl: "42",
+              },
+            },
+          },
         ],
-        total: 2,
+        total: 3,
       }),
     );
 
@@ -765,15 +822,28 @@ describe("limits client", () => {
         policy: "rate_limit",
         scope: "account",
         account: "desk-alpha",
+        accountGroup: "",
         asset: "",
+        accountCurrency: "",
         values: { max_orders: "20", window: "1m" },
       },
       {
         policy: "order_size_limit",
         scope: "account_asset",
         account: "desk-alpha",
+        accountGroup: "",
         asset: "AAPL",
+        accountCurrency: "",
         values: { max_quantity: "10", max_notional: "1500" },
+      },
+      {
+        policy: "spot_funds_pnl_bounds_kill_switch",
+        scope: "account_group",
+        account: "",
+        accountGroup: "desk-alpha",
+        asset: "",
+        accountCurrency: "USD",
+        values: { lower_bound: "-1000", upper_bound: "", initial_pnl: "42" },
       },
     ]);
   });
@@ -830,6 +900,89 @@ describe("limits client", () => {
     ).rejects.toThrow("rate limit max_orders must be an integer greater than 0");
     expect(fetch).not.toHaveBeenCalled();
   });
+
+  it("upserts self-computed PnL limits through the typed endpoint", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        spotFundsPnlBoundsLimit: {
+          scope: "account",
+          account: "desk-alpha",
+          accountCurrency: "USD",
+          lowerBound: "-1000",
+          upperBound: "500",
+          initialPnl: "42",
+        },
+      }),
+    );
+
+    const { putLimit } = api();
+    const limit = await putLimit({
+      policy: "spot_funds_pnl_bounds_kill_switch",
+      scope: "account",
+      account: "desk-alpha",
+      asset: "",
+      accountCurrency: "USD",
+      values: {
+        lower_bound: "-1000",
+        upper_bound: "500",
+        initial_pnl: "42",
+      },
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/limits/spot-funds-pnl-bounds",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          scope: "account",
+          account: "desk-alpha",
+          accountGroup: "",
+          accountCurrency: "USD",
+          lowerBound: "-1000",
+          upperBound: "500",
+          initialPnl: "42",
+        }),
+      }),
+    );
+    expect(limit).toEqual(
+      expect.objectContaining({
+        policy: "spot_funds_pnl_bounds_kill_switch",
+        account: "desk-alpha",
+        accountCurrency: "USD",
+        values: {
+          lower_bound: "-1000",
+          upper_bound: "500",
+          initial_pnl: "42",
+        },
+      }),
+    );
+  });
+
+  it("deletes self-computed PnL limits with account group and currency axes", async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 204 }));
+
+    const { deleteLimit } = api();
+    await deleteLimit({
+      policy: "spot_funds_pnl_bounds_kill_switch",
+      scope: "account_group",
+      account: "",
+      accountGroup: "desk-alpha",
+      asset: "",
+      accountCurrency: "USD",
+    });
+
+    const calledUrl = new URL(
+      String(vi.mocked(fetch).mock.calls[0][0]),
+      "http://test",
+    );
+    expect(calledUrl.pathname).toBe("/app/api/v1/limits");
+    expect(Object.fromEntries(calledUrl.searchParams.entries())).toEqual({
+      policy: "spot_funds_pnl_bounds_kill_switch",
+      scope: "account_group",
+      accountGroup: "desk-alpha",
+      accountCurrency: "USD",
+    });
+  });
 });
 
 describe("append-only list clients", () => {
@@ -846,7 +999,12 @@ describe("append-only list clients", () => {
               source: "panel",
               asset: "USD",
               status: "accepted",
-              request: { asset: "USD" },
+              request: { asset: "USD", realizedPnl: "-12.50" },
+              outcome: {
+                accepted: {
+                  realizedPnlResult: { delta: "-12.50", result: "-12.50" },
+                },
+              },
             },
           ],
           total: 3,
@@ -944,7 +1102,14 @@ describe("append-only list clients", () => {
 
     expect(adjustments).toMatchObject({
       total: 3,
-      items: [{ externalId: "adj-1" }],
+      items: [
+        {
+          externalId: "adj-1",
+          accepted: {
+            realizedPnlResult: { delta: "-12.50", result: "-12.50" },
+          },
+        },
+      ],
     });
     expect(trades).toMatchObject({
       total: 4,
@@ -1847,6 +2012,11 @@ describe("event reproduction client", () => {
           at: "2026-06-24T00:01:00Z",
           type: "fill",
           source: "api",
+          fillQuantity: "10",
+          fillPrice: "150.25",
+          leavesQuantity: "0",
+          orderStatus: "filled",
+          commission: { amount: "-0.50", currency: "USD" },
           alg: "ed25519",
           signed: true,
         },
@@ -1909,6 +2079,13 @@ describe("event reproduction client", () => {
 
     const result = await fetchEventReproduction("ord-1", "evt-fill");
     expect(result.requestType).toBe("execution_report");
+    expect(result.event).toMatchObject({
+      fillQuantity: "10",
+      fillPrice: "150.25",
+      leavesQuantity: "0",
+      orderStatus: "filled",
+      commission: { amount: "-0.50", currency: "USD" },
+    });
     expect(result.response?.executionReport?.attestationToken).toBe("tok-fill");
     // The per-asset outcomes surface through the reproduction facet verbatim.
     expect(result.response?.executionReport?.outcomes).toEqual([

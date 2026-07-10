@@ -121,7 +121,7 @@
       "account": "此列显示调整目标账户。",
       "asset": "此列显示调整目标资产。",
       "source": "此列显示调整来自面板、REST、MCP 或其他来源。",
-      "request": "此列显示请求的余额、冻结、待入账或平均价格变更。",
+      "request": "此列显示请求的余额、冻结、待入账、平均价格或已实现盈亏变更。",
       "status": "此列显示调整被接受还是拒绝。",
       "outcome": "此列显示保存的结果或拒绝摘要。",
       "externalId": "此列显示不可变的调整标识符。"
@@ -137,7 +137,8 @@
       "heldAbsolute": "冻结 ={{value}}",
       "incomingDelta": "待入账 Δ{{value}}",
       "incomingAbsolute": "待入账 ={{value}}",
-      "avgPrice": "均价 {{value}}"
+      "avgPrice": "均价 {{value}}",
+      "realizedPnl": "已实现盈亏 ={{value}}"
     },
     "status": {
       "rejected": "已拒绝",
@@ -154,7 +155,9 @@
       "account": "账户",
       "asset": "资产",
       "avgEntryPrice": "平均建仓价（可选）",
-      "avgEntryPriceHint": "正小数。留空则保留当前值。"
+      "avgEntryPriceHint": "正小数。留空则保留当前值。",
+      "realizedPnl": "已实现盈亏",
+      "realizedPnlPlaceholder": "如 -12.50"
     },
     "amounts": {
       "sectionLabel": "金额",
@@ -179,7 +182,8 @@
       "acceptedTitle": "已接受",
       "fieldBalance": "余额",
       "fieldHeld": "冻结",
-      "fieldIncoming": "待入账"
+      "fieldIncoming": "待入账",
+      "fieldRealizedPnl": "已实现盈亏"
     },
     "footer": {
       "close": "关闭",

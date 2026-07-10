@@ -119,16 +119,18 @@ func NewHasDependentsError(dependents []DependentCount) error {
 
 // Policy identifiers.
 const (
-	PolicyRateLimit           = "rate_limit"
-	PolicyOrderSizeLimit      = "order_size_limit"
-	PolicyPnlBoundsKillSwitch = "pnl_bounds_kill_switch"
+	PolicyRateLimit                    = "rate_limit"
+	PolicyOrderSizeLimit               = "order_size_limit"
+	PolicySpotFundsPnlBoundsKillSwitch = "spot_funds_pnl_bounds_kill_switch"
 )
 
 // Scope identifiers.
 const (
 	ScopeBroker       = "broker"
+	ScopeGlobal       = "global"
 	ScopeAsset        = "asset"
 	ScopeAccount      = "account"
+	ScopeAccountGroup = "account_group"
 	ScopeAccountAsset = "account_asset"
 )
 

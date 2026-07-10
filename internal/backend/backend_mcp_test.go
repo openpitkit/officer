@@ -74,9 +74,6 @@ func TestService_ListMcpAccessMergesDefaults(t *testing.T) {
 	if got["get_limits"] != true {
 		t.Errorf("get_limits should default on, got %v", got["get_limits"])
 	}
-	if got["arm_killswitch"] != false {
-		t.Errorf("arm_killswitch should default off, got %v", got["arm_killswitch"])
-	}
 }
 
 func TestService_SetMcpAccessValidatesCommand(t *testing.T) {

@@ -264,11 +264,31 @@ func (rt *restoreTx) pruneLimits(
 	if err := rt.pruneLimitTable(ctx, selector, accounts, "limit_order_size", sizeKeep); err != nil {
 		return err
 	}
-	pnlKeep := make(map[string]bool, len(data.PnlBoundsLimits))
-	for _, l := range data.PnlBoundsLimits {
-		pnlKeep[limitKey(l.Scope, l.Account, l.Asset)] = true
+	spotFundsKeep := make(map[string]bool, len(data.SpotFundsPnlBoundsLimits))
+	for _, l := range data.SpotFundsPnlBoundsLimits {
+		spotFundsKeep[spotFundsPnlBoundsLimitKey(
+			l.Scope,
+			l.Account,
+			l.AccountGroup,
+			l.AccountCurrency,
+		)] = true
 	}
-	return rt.pruneLimitTable(ctx, selector, accounts, "limit_pnl_bound", pnlKeep)
+	groupScope := make(map[string]bool, len(selector.Groups)+len(data.Accounts))
+	for _, group := range selector.Groups {
+		groupScope[group] = true
+	}
+	for _, account := range data.Accounts {
+		if accounts.in(account.Code) && account.GroupCode != "" {
+			groupScope[account.GroupCode] = true
+		}
+	}
+	return rt.pruneSpotFundsPnlBoundsLimits(
+		ctx,
+		selector,
+		accounts,
+		groupScope,
+		spotFundsKeep,
+	)
 }
 
 // pruneLimitTable deletes the in-scope rows of one limit table whose
@@ -327,6 +347,78 @@ func (rt *restoreTx) pruneLimitTable(
 	return nil
 }
 
+func (rt *restoreTx) pruneSpotFundsPnlBoundsLimits(
+	ctx context.Context,
+	selector backup.EntitySelector,
+	accounts accountScope,
+	groupScope map[string]bool,
+	keep map[string]bool,
+) error {
+	rows, err := rt.tx.QueryContext(
+		ctx,
+		`SELECT t.id, t.scope, a.code, g.code, ac.code
+		 FROM limit_spot_funds_pnl_bound t
+		 LEFT JOIN account       a  ON a.id  = t.account_id
+		 LEFT JOIN account_group g  ON g.id  = t.account_group_id
+		 LEFT JOIN asset         ac ON ac.id = t.account_currency_asset_id`,
+	)
+	if err != nil {
+		return fmt.Errorf("store: prune limit_spot_funds_pnl_bound scan: %w", err)
+	}
+	type limitRow struct {
+		id                              int64
+		scope, account, group, currency string
+	}
+	out := make([]limitRow, 0)
+	for rows.Next() {
+		var (
+			id                  int64
+			scopeStr            string
+			account, group, cur sql.NullString
+		)
+		if err := rows.Scan(&id, &scopeStr, &account, &group, &cur); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("store: prune limit_spot_funds_pnl_bound row: %w", err)
+		}
+		out = append(out, limitRow{
+			id:       id,
+			scope:    scopeStr,
+			account:  account.String,
+			group:    group.String,
+			currency: cur.String,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("store: prune limit_spot_funds_pnl_bound iterate: %w", err)
+	}
+	_ = rows.Close()
+	for _, l := range out {
+		if keep[spotFundsPnlBoundsLimitKey(
+			l.scope,
+			domain.AccountID(l.account),
+			l.group,
+			l.currency,
+		)] || !spotFundsPnlBoundsAxisInScope(
+			selector,
+			accounts,
+			groupScope,
+			l.account,
+			l.group,
+		) {
+			continue
+		}
+		if _, err := rt.tx.ExecContext(
+			ctx, `DELETE FROM limit_spot_funds_pnl_bound WHERE id = ?`, l.id,
+		); err != nil {
+			return fmt.Errorf(
+				"store: prune limit_spot_funds_pnl_bound id %d: %w", l.id, err,
+			)
+		}
+	}
+	return nil
+}
+
 // limitAxisInScope reports whether a limit barrier's account axis is in scope. A
 // realm-wide barrier (empty account) is in scope only when the selector imposes
 // no narrowing; an account-bound barrier is in scope when its account is.
@@ -335,6 +427,25 @@ func limitAxisInScope(selector backup.EntitySelector, accounts accountScope, acc
 		return selector.All || selector.Empty()
 	}
 	return accounts.in(account)
+}
+
+func spotFundsPnlBoundsAxisInScope(
+	selector backup.EntitySelector,
+	accounts accountScope,
+	groupScope map[string]bool,
+	account string,
+	group string,
+) bool {
+	if account != "" {
+		return limitAxisInScope(selector, accounts, account)
+	}
+	if group != "" {
+		if selector.All || selector.Empty() {
+			return true
+		}
+		return groupScope[group]
+	}
+	return selector.All || selector.Empty()
 }
 
 // pruneMarketData deletes the instruments and instances the archive omits.
@@ -786,6 +897,16 @@ func scanStrings(rows *sql.Rows, err error) ([]string, error) {
 // addressed by; empty account/asset codes denote an absent axis.
 func limitKey(scope string, account domain.AccountID, asset string) string {
 	return scope + "\x00" + account.String() + "\x00" + asset
+}
+
+func spotFundsPnlBoundsLimitKey(
+	scope string,
+	account domain.AccountID,
+	group string,
+	accountCurrency string,
+) string {
+	return scope + "\x00" + account.String() + "\x00" + group + "\x00" +
+		accountCurrency
 }
 
 // auditRowInScope reports whether an audit row is in scope. A row with no

@@ -168,22 +168,33 @@ CREATE INDEX idx_limit_order_size_asset ON limit_order_size (asset_id);
 CREATE UNIQUE INDEX uq_limit_order_size
     ON limit_order_size (scope, COALESCE(account_id, 0), COALESCE(asset_id, 0));
 
--- P&L-bounds kill-switch barriers: lower/upper accumulated-P&L bounds and an
--- optional seed for the per-account accumulator.
-CREATE TABLE limit_pnl_bound (
-    id          {{PK}},
-    scope       TEXT NOT NULL,
-    account_id  INTEGER REFERENCES account(id) ON DELETE CASCADE,
-    asset_id    INTEGER REFERENCES asset(id)   ON DELETE CASCADE,
-    lower_bound TEXT,
-    upper_bound TEXT,
-    initial_pnl TEXT
+-- SpotFunds self-computed account-currency P&L-bounds barriers. This Officer
+-- meta-policy maps to the SDK SpotFunds policy and cascades by
+-- global/account-group/account; account_currency_asset_id is the value axis.
+CREATE TABLE limit_spot_funds_pnl_bound (
+    id                        {{PK}},
+    scope                     TEXT NOT NULL,
+    account_id                INTEGER REFERENCES account(id)       ON DELETE CASCADE,
+    account_group_id          INTEGER REFERENCES account_group(id) ON DELETE CASCADE,
+    account_currency_asset_id INTEGER NOT NULL REFERENCES asset(id) ON DELETE CASCADE,
+    lower_bound               TEXT,
+    upper_bound               TEXT,
+    initial_pnl               TEXT
 );
 
-CREATE INDEX idx_limit_pnl_bounds_account ON limit_pnl_bound (account_id);
-CREATE INDEX idx_limit_pnl_bounds_asset ON limit_pnl_bound (asset_id);
-CREATE UNIQUE INDEX uq_limit_pnl_bounds
-    ON limit_pnl_bound (scope, COALESCE(account_id, 0), COALESCE(asset_id, 0));
+CREATE INDEX idx_limit_spot_funds_pnl_bounds_account
+    ON limit_spot_funds_pnl_bound (account_id);
+CREATE INDEX idx_limit_spot_funds_pnl_bounds_account_group
+    ON limit_spot_funds_pnl_bound (account_group_id);
+CREATE INDEX idx_limit_spot_funds_pnl_bounds_account_currency
+    ON limit_spot_funds_pnl_bound (account_currency_asset_id);
+CREATE UNIQUE INDEX uq_limit_spot_funds_pnl_bounds
+    ON limit_spot_funds_pnl_bound (
+        scope,
+        COALESCE(account_id, 0),
+        COALESCE(account_group_id, 0),
+        account_currency_asset_id
+    );
 
 -- Append-only history of spot-funds adjustments. request/outcome are opaque
 -- JSON. principal is cleared (SET NULL) when the principal is removed; account
@@ -289,7 +300,9 @@ CREATE TABLE event_attestation (
 CREATE INDEX idx_event_attestations_signing_key ON event_attestation (signing_key_id);
 
 -- Per-fill trade records ("reports"); one row per fill. lock_price is empty when
--- not applicable. order, account and asset cascade; principal is cleared.
+-- not applicable. commission_amount/commission_currency preserve the signed
+-- per-fill fee or rebate in its own currency. order, account and asset cascade;
+-- principal is cleared.
 CREATE TABLE trade (
     id             {{PK}},
     external_id    {{XID}} UNIQUE,
@@ -303,7 +316,9 @@ CREATE TABLE trade (
     side           TEXT    NOT NULL,
     quantity       TEXT    NOT NULL,
     price          TEXT    NOT NULL,
-    lock_price     TEXT    NOT NULL DEFAULT ''
+    lock_price     TEXT    NOT NULL DEFAULT '',
+    commission_amount   TEXT NOT NULL DEFAULT '',
+    commission_currency TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX idx_trades_account ON trade (account_id, at DESC, id DESC);

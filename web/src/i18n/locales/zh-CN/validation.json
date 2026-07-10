@@ -10,6 +10,17 @@
     "tooLong": "资产最多 {{max}} 个字符",
     "whitespace": "资产不得包含空格"
   },
+  "accountGroup": {
+    "required": "该范围下账户组为必填项",
+    "tooLong": "账户组最多 {{max}} 个字符",
+    "whitespace": "账户组首尾不得有空格",
+    "printable": "账户组只能包含可打印字符"
+  },
+  "accountCurrency": {
+    "required": "该策略下账户币种为必填项",
+    "tooLong": "账户币种最多 {{max}} 个字符",
+    "whitespace": "账户币种不得包含空格"
+  },
   "kind": {
     "maxOrders": {
       "integer": "max_orders 必须为大于 0 的整数",
@@ -29,9 +40,12 @@
     "scopeNotAllowed": "范围 {{scope}} 不允许用于 {{policy}}",
     "scopeNoAccount": "范围 {{scope}} 不得携带账户",
     "scopeNoAsset": "范围 {{scope}} 不得携带资产",
+    "scopeNoAccountGroup": "范围 {{scope}} 不得携带账户组",
+    "policyNoAccountGroup": "{{policy}} 不得携带账户组",
+    "policyNoAccountCurrency": "{{policy}} 不得携带账户币种",
     "rateLimitRequires": "rate_limit 需要同时指定 max_orders 和 window",
     "orderSizeRequires": "order_size_limit 需要指定 max_quantity 或 max_notional",
-    "pnlRequires": "pnl_bounds_kill_switch 需要指定 lower_bound 或 upper_bound",
+    "spotFundsInitialPnlAccountOnly": "initial_pnl 仅适用于 spot_funds_pnl_bounds_kill_switch 的账户范围",
     "pnlBoundOrder": "lower_bound 必须 <= upper_bound"
   }
 }

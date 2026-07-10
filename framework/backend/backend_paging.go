@@ -225,10 +225,9 @@ func pagePolicyRows(rows []store.PolicyListRow, page store.PageSpec) []store.Pol
 }
 
 // sortPolicyRows orders the merged policy rows under the same total order as the
-// connector's ORDER BY: the selected column first, then the
-// (kind, scope, account, asset) composite as the deterministic tiebreak. The
-// composite is unique across the union, so single-node and cross-shard listings
-// agree.
+// connector's ORDER BY: the selected column first, then the barrier composite as
+// the deterministic tiebreak. The composite is unique across the union, so
+// single-node and cross-shard listings agree.
 func sortPolicyRows(rows []store.PolicyListRow, spec store.SortSpec) {
 	desc := spec.Descending
 	column := spec.Column
@@ -245,6 +244,10 @@ func sortPolicyRows(rows []store.PolicyListRow, spec store.SortSpec) {
 			cmp = strings.Compare(left.Account.String(), right.Account.String())
 		case "asset":
 			cmp = strings.Compare(left.Asset, right.Asset)
+		case "accountGroup":
+			cmp = strings.Compare(left.AccountGroup, right.AccountGroup)
+		case "accountCurrency":
+			cmp = strings.Compare(left.AccountCurrency, right.AccountCurrency)
 		case "initialPnl":
 			cmp = decimalStringCompare(policyInitialPnl(left), policyInitialPnl(right))
 		case "lowerBound":
@@ -294,29 +297,32 @@ func policyMaxNotional(row store.PolicyListRow) string {
 }
 
 func policyLowerBound(row store.PolicyListRow) string {
-	if row.PnlBounds == nil {
+	switch {
+	case row.SpotFundsPnlBounds != nil:
+		return row.SpotFundsPnlBounds.LowerBound
+	default:
 		return ""
 	}
-	return row.PnlBounds.LowerBound
 }
 
 func policyUpperBound(row store.PolicyListRow) string {
-	if row.PnlBounds == nil {
+	switch {
+	case row.SpotFundsPnlBounds != nil:
+		return row.SpotFundsPnlBounds.UpperBound
+	default:
 		return ""
 	}
-	return row.PnlBounds.UpperBound
 }
 
 func policyInitialPnl(row store.PolicyListRow) string {
-	if row.PnlBounds == nil {
-		return ""
+	if row.SpotFundsPnlBounds != nil {
+		return row.SpotFundsPnlBounds.InitialPnl
 	}
-	return row.PnlBounds.InitialPnl
+	return ""
 }
 
-// policyCompositeCompare orders two policy rows by their unique
-// (kind, scope, account, asset) composite, the tiebreak that mirrors the
-// connector's ORDER BY.
+// policyCompositeCompare orders two policy rows by their unique composite, the
+// tiebreak that mirrors the connector's ORDER BY.
 func policyCompositeCompare(left, right store.PolicyListRow) int {
 	if cmp := strings.Compare(string(left.Kind), string(right.Kind)); cmp != 0 {
 		return cmp
@@ -327,7 +333,13 @@ func policyCompositeCompare(left, right store.PolicyListRow) int {
 	if cmp := strings.Compare(left.Account.String(), right.Account.String()); cmp != 0 {
 		return cmp
 	}
-	return strings.Compare(left.Asset, right.Asset)
+	if cmp := strings.Compare(left.AccountGroup, right.AccountGroup); cmp != 0 {
+		return cmp
+	}
+	if cmp := strings.Compare(left.Asset, right.Asset); cmp != 0 {
+		return cmp
+	}
+	return strings.Compare(left.AccountCurrency, right.AccountCurrency)
 }
 
 func boolCompare(left, right bool) int {

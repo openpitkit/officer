@@ -29,6 +29,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -164,6 +165,11 @@ func (r *realmStore) recordAccountAdjustment(
 				fmt.Errorf("store: delete adjustment balance: %w", err)
 		}
 	}
+	if in.RealizedPnl != nil {
+		if err := setBalanceRealizedPnlTx(ctx, tx, *in.RealizedPnl); err != nil {
+			return domain.AccountAdjustmentRecord{}, err
+		}
+	}
 
 	stored, err := appendAdjustment(ctx, tx, in.Adjustment)
 	if err != nil {
@@ -177,6 +183,60 @@ func (r *realmStore) recordAccountAdjustment(
 			fmt.Errorf("store: commit account adjustment tx: %w", err)
 	}
 	return stored, nil
+}
+
+func setBalanceRealizedPnlTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	in fwstore.BalanceRealizedPnlPersistence,
+) error {
+	accountID, err := resolveAccountID(ctx, tx, in.Account)
+	if err != nil {
+		return err
+	}
+	assetID, err := resolveAssetID(ctx, tx, in.Asset)
+	if err != nil {
+		return err
+	}
+	var available, held, incoming, averageEntryPrice string
+	err = tx.QueryRowContext(
+		ctx,
+		`SELECT available, held, incoming, average_entry_price
+		 FROM balance WHERE account_id = ? AND asset_id = ?`,
+		accountID, assetID,
+	).Scan(&available, &held, &incoming, &averageEntryPrice)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("store: read realized pnl balance %q: %w", in.Asset, err)
+	}
+
+	realizedPnl := settleOrZero(in.RealizedPnl)
+	if balanceAmountsEmpty(available, held, incoming, realizedPnl, averageEntryPrice) {
+		if _, err := tx.ExecContext(
+			ctx,
+			`DELETE FROM balance WHERE account_id = ? AND asset_id = ?`,
+			accountID, assetID,
+		); err != nil {
+			return fmt.Errorf("store: delete realized pnl balance %q: %w", in.Asset, err)
+		}
+		return nil
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		`INSERT OR REPLACE INTO balance
+		 (account_id, asset_id, available, held,
+		  incoming, realized_pnl, average_entry_price, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		accountID, assetID,
+		settleOrZero(available),
+		settleOrZero(held),
+		settleOrZero(incoming),
+		realizedPnl,
+		averageEntryPrice,
+		nowStr(),
+	); err != nil {
+		return fmt.Errorf("store: write realized pnl balance %q: %w", in.Asset, err)
+	}
+	return nil
 }
 
 // ListAdjustments returns the most recent n adjustment, newest first. A

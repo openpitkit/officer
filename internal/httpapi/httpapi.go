@@ -110,6 +110,7 @@ func RegisterRoutes(registry *httpx.RouteRegistry, svc Service, logs httpx.LogSo
 	register(registry, "accounts.notes.put", http.MethodPut, "/accounts/{code}/notes", handleSetAccountNotes(svc))
 	register(registry, "accounts.adjustments.list.get", http.MethodGet, "/accounts/{code}/adjustments", handleListAccountAdjustments(svc))
 	register(registry, "accounts.adjustments.apply.post", http.MethodPost, "/accounts/{code}/adjustments", handleApplyAdjustment(svc))
+	register(registry, "accounts.balances.realized_pnl.put", http.MethodPut, "/accounts/{code}/balances/realized-pnl", handleSetBalanceRealizedPnl(svc))
 
 	register(registry, "groups.list.get", http.MethodGet, "/groups", handleListGroups(svc))
 	register(registry, "groups.create.post", http.MethodPost, "/groups", handleCreateGroup(svc))
@@ -136,7 +137,7 @@ func RegisterRoutes(registry *httpx.RouteRegistry, svc Service, logs httpx.LogSo
 	register(registry, "limits.list.get", http.MethodGet, "/limits", handleListLimits(svc))
 	register(registry, "limits.rate.put", http.MethodPut, "/limits/rate", handlePutRateLimit(svc))
 	register(registry, "limits.order-size.put", http.MethodPut, "/limits/order-size", handlePutOrderSizeLimit(svc))
-	register(registry, "limits.pnl-bounds.put", http.MethodPut, "/limits/pnl-bounds", handlePutPnlBoundsLimit(svc))
+	register(registry, "limits.spot-funds-pnl-bounds.put", http.MethodPut, "/limits/spot-funds-pnl-bounds", handlePutSpotFundsPnlBoundsLimit(svc))
 	register(registry, "limits.delete", http.MethodDelete, "/limits", handleDeleteLimit(svc))
 
 	register(registry, "audit.list.get", http.MethodGet, "/audit", handleListAudit(svc))

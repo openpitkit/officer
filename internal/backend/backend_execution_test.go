@@ -144,6 +144,9 @@ func TestService_ApplyExecutionReportAttestsFillEvent(t *testing.T) {
 		fill.Attestation.Alg != fwsigning.AlgEd25519 {
 		t.Fatalf("report must stamp a signed attestation on the fill event, got %+v", fill)
 	}
+	if len(signer.signed) != 1 || signer.signed[0].Result == nil {
+		t.Fatalf("signed report result = %+v", signer.signed)
+	}
 }
 
 func TestService_ApplyExecutionReportSigningFailureFailsClosed(t *testing.T) {
