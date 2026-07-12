@@ -31,6 +31,29 @@ export function isDecimalString(value: string): boolean {
   return trimmed === "" || DECIMAL_PATTERN.test(trimmed);
 }
 
+/** Whether a required decimal field is syntactically valid and non-negative. */
+export function isNonNegativeDecimalString(value: string): boolean {
+  const decimal = parseDecimal(value);
+  return decimal !== null && decimal.units >= 0n;
+}
+
+/** Whether a required decimal field is syntactically valid and strictly positive. */
+export function isPositiveDecimalString(value: string): boolean {
+  const decimal = parseDecimal(value);
+  return decimal !== null && decimal.units > 0n;
+}
+
+/** Whether an optional decimal field is empty or strictly positive. */
+export function isOptionalPositiveDecimalString(value: string): boolean {
+  return value.trim() === "" || isPositiveDecimalString(value);
+}
+
+/** Whether an optional integer field is empty or a non-negative integer. */
+export function isOptionalNonNegativeIntegerString(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed === "" || /^\d+$/.test(trimmed);
+}
+
 function parseDecimal(value: string): DecimalValue | null {
   const match = DECIMAL_PATTERN.exec(value.trim());
   if (match === null) {
@@ -79,6 +102,52 @@ export function compareDecimalStrings(a: string, b: string): number | null {
     return null;
   }
   return compareDecimals(left, right);
+}
+
+/** Whether every visible field in a decimal range control is valid. */
+export function isDecimalRangeValid(
+  operator: string,
+  min: string,
+  max: string,
+): boolean {
+  if (!isDecimalString(min)) {
+    return false;
+  }
+  if (operator !== "between") {
+    return true;
+  }
+  if (!isDecimalString(max)) {
+    return false;
+  }
+  const minEmpty = min.trim() === "";
+  const maxEmpty = max.trim() === "";
+  if (minEmpty || maxEmpty) {
+    return minEmpty && maxEmpty;
+  }
+  return compareDecimalStrings(min, max) !== 1;
+}
+
+/** Whether every visible field in a non-negative integer range is valid. */
+export function isNonNegativeIntegerRangeValid(
+  operator: string,
+  min: string,
+  max: string,
+): boolean {
+  if (!isOptionalNonNegativeIntegerString(min)) {
+    return false;
+  }
+  if (operator !== "between") {
+    return true;
+  }
+  if (!isOptionalNonNegativeIntegerString(max)) {
+    return false;
+  }
+  const minEmpty = min.trim() === "";
+  const maxEmpty = max.trim() === "";
+  if (minEmpty || maxEmpty) {
+    return minEmpty && maxEmpty;
+  }
+  return BigInt(min.trim()) <= BigInt(max.trim());
 }
 
 function absDecimal(value: DecimalValue): DecimalValue {

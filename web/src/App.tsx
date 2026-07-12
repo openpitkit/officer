@@ -45,9 +45,9 @@ export default function App() {
 
   return (
     <SidebarProvider>
-      <div className="flex h-screen w-screen overflow-hidden bg-bg text-text">
+      <div className="flex h-dvh w-full overflow-hidden bg-bg text-text">
         <Sidebar />
-        <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <AppRoutes home="/" />
         </div>
       </div>

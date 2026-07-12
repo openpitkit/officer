@@ -18,11 +18,29 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  isDecimalRangeValid,
   isDecimalString,
+  isNonNegativeDecimalString,
+  isNonNegativeIntegerRangeValid,
+  isOptionalPositiveDecimalString,
+  isPositiveDecimalString,
   smartStep,
   stepValue,
   subtractDecimalStrings,
 } from "@/lib/numberStep";
+
+describe("isDecimalRangeValid", () => {
+  it("validates visible single and between range fields", () => {
+    expect(isDecimalRangeValid("eq", "12.5", "hidden-invalid")).toBe(true);
+    expect(isDecimalRangeValid("eq", "12x", "")).toBe(false);
+    expect(isDecimalRangeValid("between", "10", "20")).toBe(true);
+    expect(isDecimalRangeValid("between", "", "")).toBe(true);
+    expect(isDecimalRangeValid("between", "10", "")).toBe(false);
+    expect(isDecimalRangeValid("between", "", "20")).toBe(false);
+    expect(isDecimalRangeValid("between", "20", "10")).toBe(false);
+    expect(isDecimalRangeValid("between", "10", "20x")).toBe(false);
+  });
+});
 
 describe("isDecimalString", () => {
   it("accepts empty and decimal text values", () => {
@@ -36,6 +54,42 @@ describe("isDecimalString", () => {
   it("rejects non-decimal text values", () => {
     expect(isDecimalString("word")).toBe(false);
     expect(isDecimalString("12a")).toBe(false);
+  });
+});
+
+describe("decimal mutation validators", () => {
+  it("distinguishes positive and non-negative required decimals", () => {
+    expect(isPositiveDecimalString("0.01")).toBe(true);
+    expect(isPositiveDecimalString("0")).toBe(false);
+    expect(isPositiveDecimalString("-0.01")).toBe(false);
+    expect(isPositiveDecimalString("")).toBe(false);
+
+    expect(isNonNegativeDecimalString("0")).toBe(true);
+    expect(isNonNegativeDecimalString("1.25")).toBe(true);
+    expect(isNonNegativeDecimalString("-1")).toBe(false);
+    expect(isNonNegativeDecimalString("")).toBe(false);
+  });
+
+  it("accepts an empty optional price but requires a positive provided price", () => {
+    expect(isOptionalPositiveDecimalString("")).toBe(true);
+    expect(isOptionalPositiveDecimalString("  ")).toBe(true);
+    expect(isOptionalPositiveDecimalString("10.5")).toBe(true);
+    expect(isOptionalPositiveDecimalString("0")).toBe(false);
+    expect(isOptionalPositiveDecimalString("-10.5")).toBe(false);
+    expect(isOptionalPositiveDecimalString("price")).toBe(false);
+  });
+});
+
+describe("isNonNegativeIntegerRangeValid", () => {
+  it("rejects signed and fractional counts and validates visible bounds", () => {
+    expect(isNonNegativeIntegerRangeValid("eq", "12", "hidden-invalid")).toBe(true);
+    expect(isNonNegativeIntegerRangeValid("eq", "-1", "")).toBe(false);
+    expect(isNonNegativeIntegerRangeValid("eq", "1.5", "")).toBe(false);
+    expect(isNonNegativeIntegerRangeValid("between", "1", "2")).toBe(true);
+    expect(isNonNegativeIntegerRangeValid("between", "", "")).toBe(true);
+    expect(isNonNegativeIntegerRangeValid("between", "1", "")).toBe(false);
+    expect(isNonNegativeIntegerRangeValid("between", "", "2")).toBe(false);
+    expect(isNonNegativeIntegerRangeValid("between", "2", "1")).toBe(false);
   });
 });
 

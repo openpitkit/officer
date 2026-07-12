@@ -245,14 +245,6 @@ func (b *Builder) Build(
 		"profile", eng.BuildProfile(),
 	)
 
-	eng.SetReservationStore(realm)
-	if reconciled, err := localNode.ReconcileOrphans(ctx); err != nil {
-		_ = localNode.Close()
-		return nil, fmt.Errorf("inspect restarted reservations: %w", err)
-	} else if reconciled > 0 {
-		logger.Info("preserved held reservations after restart", "count", reconciled)
-	}
-
 	signer, err := b.signingFactory(realm)
 	if err != nil {
 		_ = localNode.Close()
@@ -548,9 +540,9 @@ func (a sourceAdapter) SubmitOrderToken(
 }
 
 func (a sourceAdapter) ConfirmExecution(
-	ctx context.Context, orderExternalID, token string, force bool,
+	ctx context.Context, orderExternalID, token string,
 ) (domain.Order, frameworkmcp.Attestation, error) {
-	order, att, err := a.service.ConfirmExecution(ctx, orderExternalID, token, force)
+	order, att, err := a.service.ConfirmExecution(ctx, orderExternalID, token)
 	if err != nil {
 		return domain.Order{}, frameworkmcp.Attestation{}, err
 	}
@@ -558,9 +550,9 @@ func (a sourceAdapter) ConfirmExecution(
 }
 
 func (a sourceAdapter) CancelOrder(
-	ctx context.Context, orderExternalID, token, reason string, force bool,
+	ctx context.Context, orderExternalID, token, reason string,
 ) (domain.Order, frameworkmcp.Attestation, error) {
-	order, att, err := a.service.CancelOrder(ctx, orderExternalID, token, reason, force)
+	order, att, err := a.service.CancelOrder(ctx, orderExternalID, token, reason)
 	if err != nil {
 		return domain.Order{}, frameworkmcp.Attestation{}, err
 	}

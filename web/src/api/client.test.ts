@@ -2034,13 +2034,37 @@ describe("event reproduction client", () => {
           orderExternalId: "ord-1",
           eventExternalId: "evt-fill",
           accountId: "acc-1",
+          executionReport: {
+            baseAsset: "AAPL",
+            quoteAsset: "USD",
+            fillQuantity: "10",
+            fillPrice: "150.25",
+            leavesQuantity: "0",
+            lockPrice: "149.75",
+            lock: "bG9jaw==",
+            commission: { amount: "-0.50", currency: "USD" },
+            order: "ord-1",
+            account: "acc-1",
+            side: "buy",
+            orderStatus: "filled",
+            force: false,
+          },
           result: {
             outcome: "filled",
             fillQuantity: "10",
             fillPrice: "150.25",
+            fillLockPrice: "149.75",
+            commission: { amount: "-0.50", currency: "USD" },
             leavesQuantity: "0",
             orderStatus: "filled",
-            blocks: [],
+            blocks: [
+              {
+                account: "acc-1",
+                code: "daily_loss",
+                reason: "blocked",
+                details: "limit=-1000",
+              },
+            ],
           },
         },
         response: {
@@ -2100,6 +2124,17 @@ describe("event reproduction client", () => {
       },
     ]);
     expect(result.request?.result?.orderStatus).toBe("filled");
+    expect(result.request?.executionReport).toMatchObject({
+      lockPrice: "149.75",
+      commission: { amount: "-0.50", currency: "USD" },
+      force: false,
+    });
+    expect(result.request?.executionReport).not.toHaveProperty("lock");
+    expect(result.request?.result).toMatchObject({
+      fillLockPrice: "149.75",
+      commission: { amount: "-0.50", currency: "USD" },
+      blocks: [expect.objectContaining({ code: "daily_loss" })],
+    });
     expect(result.response?.submitResponse).toBeNull();
   });
 
@@ -2593,7 +2628,7 @@ describe("Orders submitExecutionReport", () => {
   });
 });
 
-describe("Orders confirmHeldOrder and cancelHeldOrder", () => {
+describe("Orders confirmOrder and cancelOrder", () => {
   function orderMutationResponse(): Response {
     return new Response(
       JSON.stringify({
@@ -2620,19 +2655,18 @@ describe("Orders confirmHeldOrder and cancelHeldOrder", () => {
     );
   }
 
-  it("confirmHeldOrder sends force=false and decodes the mutation response", async () => {
+  it("confirmOrder sends only the token and decodes the mutation response", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(orderMutationResponse());
 
-    const result = await api().confirmHeldOrder("ord_alpha_0000000001", {
+    const result = await api().confirmOrder("ord_alpha_0000000001", {
       token: "approval-token",
-      force: false,
     });
 
     expect(fetch).toHaveBeenCalledWith(
       "/app/api/v1/orders/ord_alpha_0000000001/confirm",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ token: "approval-token", force: false }),
+        body: JSON.stringify({ token: "approval-token" }),
       }),
     );
     expect(result.order).toMatchObject({
@@ -2646,30 +2680,12 @@ describe("Orders confirmHeldOrder and cancelHeldOrder", () => {
     expect(result.signed).toBe(true);
   });
 
-  it("confirmHeldOrder sends force=true when the caller overrides safety checks", async () => {
+  it("cancelOrder sends token and reason and decodes the mutation response", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(orderMutationResponse());
 
-    await api().confirmHeldOrder("ord_alpha_0000000001", {
-      token: "approval-token",
-      force: true,
-    });
-
-    expect(fetch).toHaveBeenCalledWith(
-      "/app/api/v1/orders/ord_alpha_0000000001/confirm",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ token: "approval-token", force: true }),
-      }),
-    );
-  });
-
-  it("cancelHeldOrder sends force=false and decodes the mutation response", async () => {
-    vi.mocked(fetch).mockResolvedValueOnce(orderMutationResponse());
-
-    const result = await api().cancelHeldOrder("ord_alpha_0000000001", {
+    const result = await api().cancelOrder("ord_alpha_0000000001", {
       token: "approval-token",
       reason: "operator request",
-      force: false,
     });
 
     expect(fetch).toHaveBeenCalledWith(
@@ -2679,7 +2695,6 @@ describe("Orders confirmHeldOrder and cancelHeldOrder", () => {
         body: JSON.stringify({
           token: "approval-token",
           reason: "operator request",
-          force: false,
         }),
       }),
     );
@@ -2694,30 +2709,9 @@ describe("Orders confirmHeldOrder and cancelHeldOrder", () => {
     expect(result.signed).toBe(true);
   });
 
-  it("cancelHeldOrder sends force=true when the caller overrides safety checks", async () => {
-    vi.mocked(fetch).mockResolvedValueOnce(orderMutationResponse());
-
-    await api().cancelHeldOrder("ord_alpha_0000000001", {
-      token: "approval-token",
-      reason: "operator request",
-      force: true,
-    });
-
-    expect(fetch).toHaveBeenCalledWith(
-      "/app/api/v1/orders/ord_alpha_0000000001/cancel",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
-          token: "approval-token",
-          reason: "operator request",
-          force: true,
-        }),
-      }),
-    );
-  });
 });
 
-describe("Orders terminal_order error decode", () => {
+describe("Orders conflict error decode", () => {
   function terminalOrderResponse(): Response {
     return new Response(
       JSON.stringify({
@@ -2730,32 +2724,43 @@ describe("Orders terminal_order error decode", () => {
     );
   }
 
-  it("confirmHeldOrder surfaces a typed terminal_order ApiError on a 409", async () => {
-    vi.mocked(fetch).mockResolvedValueOnce(terminalOrderResponse());
+  function executionReportRequiredResponse(): Response {
+    return new Response(
+      JSON.stringify({
+        error: {
+          code: "execution_report_required",
+          message:
+            "order has execution-report activity; submit an explicit execution report",
+        },
+      }),
+      { status: 409, headers: { "Content-Type": "application/json" } },
+    );
+  }
+
+  it("confirmOrder surfaces execution_report_required on a 409", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(executionReportRequiredResponse());
 
     await expect(
-      api().confirmHeldOrder("ord_alpha_0000000001", {
+      api().confirmOrder("ord_alpha_0000000001", {
         token: "approval-token",
-        force: false,
       }),
     ).rejects.toMatchObject({
       name: "ApiError",
-      code: "terminal_order",
+      code: "execution_report_required",
       status: 409,
     });
   });
 
-  it("cancelHeldOrder surfaces a typed terminal_order ApiError on a 409", async () => {
-    vi.mocked(fetch).mockResolvedValueOnce(terminalOrderResponse());
+  it("cancelOrder surfaces execution_report_required on a 409", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(executionReportRequiredResponse());
 
     await expect(
-      api().cancelHeldOrder("ord_alpha_0000000001", {
+      api().cancelOrder("ord_alpha_0000000001", {
         token: "approval-token",
-        force: false,
       }),
     ).rejects.toMatchObject({
       name: "ApiError",
-      code: "terminal_order",
+      code: "execution_report_required",
       status: 409,
     });
   });

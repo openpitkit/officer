@@ -60,21 +60,21 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 
 	cases := []struct {
 		name string
-		// run drives one operation. mustHold and any other multi-step setup happen
+		// run drives one operation. mustWorkflow and any other multi-step setup happen
 		// before the measured operation; the case calls reset() to zero the counters
 		// just before the operation under test so the assertion covers only it. It
 		// returns the number of order fetches expected for the measured operation.
 		run func(t *testing.T, svc *backend.Service, fn *fakeNode, reset func()) int
 	}{
 		{
-			name: "submit hold",
+			name: "submit workflow",
 			run: func(t *testing.T, svc *backend.Service, _ *fakeNode, reset func()) int {
 				t.Helper()
 				reset()
 				if _, err := svc.SubmitOrderToken(
 					context.Background(), sampleOrder(), backend.SubmitModeHold,
 				); err != nil {
-					t.Fatalf("SubmitOrderToken hold: %v", err)
+					t.Fatalf("SubmitOrderToken workflow: %v", err)
 				}
 				// One fetch: the attest read-back that binds the verdict event.
 				return 1
@@ -98,41 +98,40 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 			name: "confirm accepted",
 			run: func(t *testing.T, svc *backend.Service, _ *fakeNode, reset func()) int {
 				t.Helper()
-				tok := mustHold(t, svc)
+				tok := mustWorkflow(t, svc)
 				reset()
 				if _, _, err := svc.ConfirmExecution(
-					context.Background(), tok.OrderExternalID, tok.Token, false,
+					context.Background(), tok.OrderExternalID, tok.Token,
 				); err != nil {
 					t.Fatalf("ConfirmExecution: %v", err)
 				}
-				// Two fetches: the token-binding read plus the attest read-back that
-				// binds the reservation_committed event.
+				// Two fetches: the token-binding read plus the attestation read-back
+				// that binds the confirmed event.
 				return 2
 			},
 		},
 		{
-			name: "confirm already committed idempotent",
+			name: "confirm history idempotent",
 			run: func(t *testing.T, svc *backend.Service, fn *fakeNode, reset func()) int {
 				t.Helper()
-				tok := mustHold(t, svc)
+				tok := mustWorkflow(t, svc)
 				if _, _, err := svc.ConfirmExecution(
-					context.Background(), tok.OrderExternalID, tok.Token, false,
+					context.Background(), tok.OrderExternalID, tok.Token,
 				); err != nil {
 					t.Fatalf("first confirm: %v", err)
 				}
 				reset()
-				fn.confirmErr = domain.ErrConflict
 				order, att, err := svc.ConfirmExecution(
-					context.Background(), tok.OrderExternalID, tok.Token, false,
+					context.Background(), tok.OrderExternalID, tok.Token,
 				)
 				if err != nil {
 					t.Fatalf("idempotent confirm: %v", err)
 				}
 				if order.Status != domain.OrderStatusCommitted || att.Token == "" {
-					t.Fatalf("idempotent confirm = %+v att=%+v, want committed with attestation",
+					t.Fatalf("idempotent confirm = %+v att=%+v, want unchanged status with attestation",
 						order, att)
 				}
-				// Two fetches: the token-binding read plus the committed-event
+				// Two fetches: the token-binding read plus the confirmed-event
 				// attestation read-back after the node returns without a new event.
 				return 2
 			},
@@ -141,18 +140,17 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 			name: "confirm conflict",
 			run: func(t *testing.T, svc *backend.Service, fn *fakeNode, reset func()) int {
 				t.Helper()
-				tok := mustHold(t, svc)
+				tok := mustWorkflow(t, svc)
 				if _, _, err := svc.CancelOrder(
-					context.Background(), tok.OrderExternalID, tok.Token, "operator", false,
+					context.Background(), tok.OrderExternalID, tok.Token, "operator",
 				); err != nil {
 					t.Fatalf("cancel setup: %v", err)
 				}
 				reset()
-				fn.confirmErr = domain.ErrConflict
 				if _, _, err := svc.ConfirmExecution(
-					context.Background(), tok.OrderExternalID, tok.Token, false,
-				); !errors.Is(err, domain.ErrTerminalOrder) {
-					t.Fatalf("confirm after cancel = %v, want terminal order", err)
+					context.Background(), tok.OrderExternalID, tok.Token,
+				); !errors.Is(err, domain.ErrExecutionReportRequired) {
+					t.Fatalf("confirm after cancel = %v, want explicit report", err)
 				}
 				// One fetch: the token-binding read happens before the node-level
 				// terminal guard rejects without attestation.
@@ -163,10 +161,10 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 			name: "cancel accepted",
 			run: func(t *testing.T, svc *backend.Service, _ *fakeNode, reset func()) int {
 				t.Helper()
-				tok := mustHold(t, svc)
+				tok := mustWorkflow(t, svc)
 				reset()
 				if _, _, err := svc.CancelOrder(
-					context.Background(), tok.OrderExternalID, tok.Token, "stale price", false,
+					context.Background(), tok.OrderExternalID, tok.Token, "stale price",
 				); err != nil {
 					t.Fatalf("CancelOrder: %v", err)
 				}
@@ -179,17 +177,17 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 			name: "cancel conflict",
 			run: func(t *testing.T, svc *backend.Service, fn *fakeNode, reset func()) int {
 				t.Helper()
-				tok := mustHold(t, svc)
-				if _, _, err := svc.ConfirmExecution(
-					context.Background(), tok.OrderExternalID, tok.Token, false,
+				tok := mustWorkflow(t, svc)
+				if _, _, err := svc.CancelOrder(
+					context.Background(), tok.OrderExternalID, tok.Token, "setup",
 				); err != nil {
-					t.Fatalf("confirm setup: %v", err)
+					t.Fatalf("cancel setup: %v", err)
 				}
 				reset()
 				if _, _, err := svc.CancelOrder(
-					context.Background(), tok.OrderExternalID, tok.Token, "too late", false,
-				); !errors.Is(err, domain.ErrConflict) {
-					t.Fatalf("cancel after confirm = %v, want conflict", err)
+					context.Background(), tok.OrderExternalID, tok.Token, "too late",
+				); !errors.Is(err, domain.ErrExecutionReportRequired) {
+					t.Fatalf("second cancel = %v, want explicit report", err)
 				}
 				// One fetch: the token-binding read happens before the node-level
 				// conflict rejects without attestation.
@@ -796,17 +794,6 @@ func (e *businessCSVRoundTripEngine) SubmitOrder(
 ) (engine.OrderResult, error) {
 	return engine.OrderResult{Accepted: true}, nil
 }
-func (e *businessCSVRoundTripEngine) ReserveHold(
-	context.Context, domain.Order,
-) (engine.HoldResult, error) {
-	return engine.HoldResult{Accepted: true}, nil
-}
-func (e *businessCSVRoundTripEngine) CommitHeld(context.Context, string) error {
-	return nil
-}
-func (e *businessCSVRoundTripEngine) RollbackHeld(context.Context, string) error {
-	return nil
-}
 func (e *businessCSVRoundTripEngine) SetAccountCurrency(
 	context.Context, domain.AccountID, string,
 ) error {
@@ -821,10 +808,6 @@ func (e *businessCSVRoundTripEngine) SubmitImmediate(
 	context.Context, domain.Order,
 ) (engine.ImmediateResult, error) {
 	return engine.ImmediateResult{Accepted: true}, nil
-}
-func (e *businessCSVRoundTripEngine) SetReservationStore(engine.ReservationStore) {}
-func (e *businessCSVRoundTripEngine) ReconcileOrphans(context.Context) (int, error) {
-	return 0, nil
 }
 func (e *businessCSVRoundTripEngine) RunAccountSynchronized(
 	_ context.Context, account domain.AccountID, fn func(engine.AccountLane) error,

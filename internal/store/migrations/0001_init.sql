@@ -270,9 +270,9 @@ CREATE TABLE order_event (
 CREATE INDEX idx_order_events_order ON order_event (order_id, at DESC, id DESC);
 CREATE INDEX idx_order_events_principal ON order_event (principal_id);
 
--- Signed attestation over (trading request + engine result), 1:1 with the
--- order_event that recorded the request; absent when no attestation was issued.
--- Every trading request the engine evaluates (submit, execution report, confirm,
+-- Signed attestation over a trading request and its recorded result, 1:1 with
+-- the order_event that recorded the request; absent when no attestation was
+-- issued. Every attested trading request (submit, execution report, confirm,
 -- cancel) produces one event, and its attestation binds here to that event.
 -- signing_key_id references the signing key surrogate and is RESTRICT so a key
 -- in use cannot be dropped. NULL means an unsigned (eSign-off) envelope.
@@ -282,9 +282,9 @@ CREATE INDEX idx_order_events_principal ON order_event (principal_id);
 -- constants (framework/signing.Alg*, domain.AttestationRequest*,
 -- framework/backend.SubmitMode*) are the source of truth for the CHECK sets
 -- below; mode is always "immediate" or "hold", including for the non-submit
--- request types (execution_report always signs under "immediate", confirm/
--- cancel always sign under "hold" via buildResolutionPayload), so '' is never
--- a real value.
+-- request types (explicit execution reports use "immediate", while the
+-- workflow confirm/cancel shortcuts retain the submit token's "hold" wire
+-- mode), so '' is never a real value.
 CREATE TABLE event_attestation (
     event_id       INTEGER PRIMARY KEY REFERENCES order_event(id) ON DELETE CASCADE,
     token          TEXT    NOT NULL,
@@ -437,19 +437,3 @@ CREATE TABLE user_setting (
     setting_value TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (user_id, setting_key)
 );
-
--- Reservation intents survive process restart; a held row stays held until an
--- operator/reconciliation resolves it. approval_id is the row's own UUID handle
--- (used in tokens). params is opaque transient JSON; lock is the SDK-serialized
--- pretrade.Lock blob.
-CREATE TABLE reservation_intent (
-    approval_id TEXT PRIMARY KEY,
-    order_id    INTEGER REFERENCES order_record(id)   ON DELETE CASCADE,
-    account_id  INTEGER NOT NULL REFERENCES account(id) ON DELETE CASCADE,
-    params      TEXT    NOT NULL,
-    lock        BLOB,
-    issued_at   TEXT    NOT NULL,
-    state       TEXT    NOT NULL DEFAULT 'held'
-);
-
-CREATE INDEX idx_reservation_intents_state ON reservation_intent (state);

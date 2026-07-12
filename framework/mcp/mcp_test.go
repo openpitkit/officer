@@ -266,7 +266,6 @@ func (s *guardSource) ConfirmExecution(
 	context.Context,
 	string,
 	string,
-	bool,
 ) (domain.Order, Attestation, error) {
 	return domain.Order{}, Attestation{}, nil
 }
@@ -276,7 +275,6 @@ func (s *guardSource) CancelOrder(
 	string,
 	string,
 	string,
-	bool,
 ) (domain.Order, Attestation, error) {
 	return domain.Order{}, Attestation{}, nil
 }

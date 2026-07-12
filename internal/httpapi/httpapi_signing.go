@@ -189,8 +189,10 @@ func handleSetSigningConfig(svc Service) http.HandlerFunc {
 
 // handleSubmitOrderToken handles POST /api/v1/orders/submit. The body carries
 // the order fields, an optional caller-supplied external id, and the submit mode
-// (hold | immediate). Submit CREATES the order exactly once: it runs the engine
-// pre-trade in the given mode and records the order, then issues a signed
+// (hold | immediate). The hold wire value is retained for compatibility and
+// selects the workflow path that waits for execution reports. Submit CREATES
+// the order exactly once: it runs pre-trade in the given mode and records the
+// order, then issues a signed
 // approval token on accept. The returned orderExternalId is the id actually used
 // (the supplied one when valid, else a generated one), so confirm/cancel resolve
 // the same order. There is no separate persisting create before submit.
@@ -249,8 +251,7 @@ func handleSubmitOrderToken(svc Service) http.HandlerFunc {
 }
 
 // handleConfirmExecution handles POST /api/v1/orders/{id}/confirm. The body
-// carries the approval token; the handler verifies it and commits the held
-// reservation.
+// carries the approval token used to record the order confirmation shortcut.
 func handleConfirmExecution(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orderID, err := httpx.PathOrderExternalID(r)
@@ -267,8 +268,7 @@ func handleConfirmExecution(svc Service) http.HandlerFunc {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "signing", "token is required")
 			return
 		}
-		order, att, err := svc.ConfirmExecution(
-			r.Context(), orderID, req.Token, req.Force)
+		order, att, err := svc.ConfirmExecution(r.Context(), orderID, req.Token)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
@@ -283,8 +283,7 @@ func handleConfirmExecution(svc Service) http.HandlerFunc {
 }
 
 // handleCancelOrder handles POST /api/v1/orders/{id}/cancel. The body carries
-// the approval token and an optional reason; the handler verifies the token and
-// rolls back the held reservation.
+// the approval token and an optional reason for the order-cancellation shortcut.
 func handleCancelOrder(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orderID, err := httpx.PathOrderExternalID(r)
@@ -302,7 +301,7 @@ func handleCancelOrder(svc Service) http.HandlerFunc {
 			return
 		}
 		order, att, err := svc.CancelOrder(
-			r.Context(), orderID, req.Token, req.Reason, req.Force)
+			r.Context(), orderID, req.Token, req.Reason)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return

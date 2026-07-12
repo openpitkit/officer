@@ -1748,7 +1748,6 @@ func accountDependents(
 		{"adjustment", `SELECT COUNT(*) FROM adjustment WHERE account_id = ?`},
 		{"limit_rate", `SELECT COUNT(*) FROM limit_rate WHERE account_id = ?`},
 		{"limit_order_size", `SELECT COUNT(*) FROM limit_order_size WHERE account_id = ?`},
-		{"reservation_intent", `SELECT COUNT(*) FROM reservation_intent WHERE account_id = ?`},
 	}
 	return collectDependents(ctx, q, checks, accountID)
 }

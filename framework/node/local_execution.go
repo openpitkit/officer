@@ -27,14 +27,12 @@ import (
 	"go.openpit.dev/officer/framework/store"
 )
 
-// ApplyExecutionReport applies every report through the engine, then persists
-// the execution-report persistence in one atomic RecordOrderSettlement transaction:
-// report events, optional trade, per-asset balances, engine-block UPDATEs, and
-// the reflected status/leaves. The node does not commit or roll back held
-// reservations around the report; any account effects must come from the engine
-// persistence. The observational block-audit row is written post-commit. A report
-// against an account Officer does not know yet auto-creates it, so it is
-// processed rather than rejected as invalid.
+// ApplyExecutionReport serializes every report on its account pipeline.
+// Reports carrying a fill, targeting a terminal status, or carrying a
+// commission settle through the engine; all other non-terminal reports only
+// record workflow state.
+// Engine settlement writes report events, an optional trade, per-asset
+// balances, engine-block UPDATEs, and reflected status/leaves atomically.
 func (n *localNode) ApplyExecutionReport(
 	ctx context.Context, key Key, in domain.ExecutionReportInput, caller domain.Caller,
 ) (engine.ExecutionReportResult, error) {
@@ -58,13 +56,17 @@ func (n *localNode) applyExecutionReport(
 	caller domain.Caller,
 	attest store.EventAttestor,
 ) (engine.ExecutionReportResult, error) {
+	request := domain.ExecutionReportRequestFromInput(in)
 	status := domain.ExecutionReportTargetStatus(in)
-	if !domain.OrderStatusSupported(status) {
-		return engine.ExecutionReportResult{}, fmt.Errorf(
-			"invalid execution report status %q: %w", status, domain.ErrInvalid)
-	}
 	// The report is a fact from the venue; caller cancellation must not cancel it.
 	ctx = context.WithoutCancel(ctx)
+	requiresEngine, err := domain.ExecutionReportRequiresEngine(in)
+	if err != nil {
+		return engine.ExecutionReportResult{}, err
+	}
+	if !requiresEngine {
+		return n.recordWorkflowExecutionReport(ctx, in, caller, attest, request)
+	}
 
 	routeDetail, err := n.realm.GetOrder(ctx, in.Order)
 	if err != nil {
@@ -74,9 +76,12 @@ func (n *localNode) applyExecutionReport(
 
 	// Register the order account and assets and rebuild pre-lane so the resolver
 	// knows them before RunAccountSynchronized resolves the account.
+	assets := []string{routeDetail.Order.BaseAsset, routeDetail.Order.QuoteAsset}
+	if in.Commission != nil {
+		assets = append(assets, in.Commission.Currency)
+	}
 	if err := n.ensureAccountAndAssetsRegisteredExclusive(
-		ctx, account, "execution report", caller,
-		routeDetail.Order.BaseAsset, routeDetail.Order.QuoteAsset,
+		ctx, account, "execution report", caller, assets...,
 	); err != nil {
 		return engine.ExecutionReportResult{}, err
 	}
@@ -108,23 +113,6 @@ func (n *localNode) applyExecutionReport(
 			in.Lock = detail.Order.Lock
 		}
 
-		reservationApprovalID := ""
-		reservationIntentState := domain.ReservationIntentState("")
-		if detail.Order.Status == domain.OrderStatusAccepted {
-			intent, found, err := n.realm.GetOpenReservationIntentByOrder(ctx, in.Order)
-			if err != nil {
-				return fmt.Errorf("get open reservation intent: %w", err)
-			}
-			if found {
-				reservationApprovalID = intent.ApprovalID
-				if executionReportCarriesFill(in) {
-					reservationIntentState = domain.ReservationIntentStateCommitted
-				} else if domain.OrderStatusTerminal(status) {
-					reservationIntentState = domain.ReservationIntentStateRolledBack
-				}
-			}
-		}
-
 		applied, err := lane.ApplyExecutionReport(ctx, in)
 		if err != nil {
 			return fmt.Errorf("apply execution report: %w", err)
@@ -134,7 +122,9 @@ func (n *localNode) applyExecutionReport(
 		if result.Persistence == nil {
 			return fmt.Errorf("apply execution report returned no persistence write set: %w", domain.ErrInvalid)
 		}
-		persistence := stampExecutionReportPersistence(*result.Persistence, caller)
+		persistence := stampExecutionReportPersistence(
+			*result.Persistence, caller, request,
+		)
 		settlement := domain.OrderSettlement{
 			Account:     in.Account,
 			Order:       in.Order,
@@ -144,10 +134,6 @@ func (n *localNode) applyExecutionReport(
 			Events:      persistence.Events,
 			Trade:       persistence.Trade,
 			Blocks:      accountBlockSettlementsFrom(in.Order, persistence.Blocks),
-		}
-		if reservationApprovalID != "" && reservationIntentState != "" {
-			settlement.ReservationApprovalID = reservationApprovalID
-			settlement.ReservationIntentState = reservationIntentState
 		}
 		if err := recordOrderSettlementWithAttestation(
 			ctx, n.realm, settlement, attest,
@@ -187,8 +173,96 @@ func (n *localNode) applyExecutionReport(
 	return result, nil
 }
 
-func executionReportCarriesFill(in domain.ExecutionReportInput) bool {
-	return in.FillQuantity != "" && in.FillPrice != ""
+func (n *localNode) recordWorkflowExecutionReport(
+	ctx context.Context,
+	in domain.ExecutionReportInput,
+	caller domain.Caller,
+	attest store.EventAttestor,
+	request *domain.ExecutionReportRequest,
+) (engine.ExecutionReportResult, error) {
+	routeDetail, err := n.realm.GetOrder(ctx, in.Order)
+	if err != nil {
+		return engine.ExecutionReportResult{}, fmt.Errorf("get execution report order: %w", err)
+	}
+	account := routeDetail.Order.Account
+	if err := n.ensureAccountAndAssetsRegisteredExclusive(
+		ctx, account, "workflow execution report", caller,
+	); err != nil {
+		return engine.ExecutionReportResult{}, err
+	}
+	accountID, err := n.accountDiagnosticID(ctx, account)
+	if err != nil {
+		return engine.ExecutionReportResult{}, err
+	}
+	eng, done, err := n.beginLane()
+	if err != nil {
+		return engine.ExecutionReportResult{}, err
+	}
+	defer done()
+
+	if err := eng.RunAccountSynchronized(ctx, account, func(_ engine.AccountLane) error {
+		detail, err := n.realm.GetOrder(ctx, in.Order)
+		if err != nil {
+			return fmt.Errorf("get execution report order: %w", err)
+		}
+		if err := domain.RequireOrderModifiable(detail.Order.Status, in.Force); err != nil {
+			return err
+		}
+		forcedTerminalBypass := in.Force &&
+			domain.OrderStatusTerminal(detail.Order.Status)
+		status := domain.ExecutionReportTargetStatus(in)
+		eventType, ok := domain.ExecutionReportStatusChangeEvent(status)
+		if !ok {
+			return fmt.Errorf(
+				"execution report status %q is not workflow-only: %w",
+				status,
+				domain.ErrInvalid,
+			)
+		}
+		in.Account = detail.Order.Account
+		in.BaseAsset = detail.Order.BaseAsset
+		in.QuoteAsset = detail.Order.QuoteAsset
+		settlement := domain.OrderSettlement{
+			Account:     in.Account,
+			Order:       in.Order,
+			OrderStatus: status,
+			Leaves:      in.LeavesQuantity,
+			AllowedFrom: []domain.OrderStatus{detail.Order.Status},
+			Events: []domain.OrderEvent{{
+				Order:     in.Order,
+				Type:      eventType,
+				Source:    caller.Source,
+				Principal: caller.Principal,
+				Payload: domain.OrderEventPayload{
+					LeavesQuantity:  request.LeavesQuantity,
+					OrderStatus:     string(request.OrderStatus),
+					ExecutionReport: request,
+				},
+			}},
+		}
+		if err := recordOrderSettlementWithAttestation(ctx, n.realm, settlement, attest); err != nil {
+			return fmt.Errorf("record workflow execution report: %w", err)
+		}
+		detailText := executionReportDetail(in, status, 0)
+		if forcedTerminalBypass {
+			detailText += " forced=true"
+		}
+		if err := n.audit(ctx, caller, store.AuditEntry{
+			Action:  domain.AuditActionExecutionReport,
+			Account: in.Account,
+			Detail:  detailText,
+		}); err != nil {
+			return n.fatalPostCommitAudit(
+				"audit workflow execution report",
+				accountID,
+				fmt.Errorf("audit workflow execution report: %w", err),
+			)
+		}
+		return nil
+	}); err != nil {
+		return engine.ExecutionReportResult{}, err
+	}
+	return engine.ExecutionReportResult{}, nil
 }
 
 // PersistEventAttestation stamps the signed attestation envelope onto the

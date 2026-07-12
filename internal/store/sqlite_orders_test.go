@@ -847,12 +847,56 @@ func TestOrderCommissionSubtotals(t *testing.T) {
 			t.Fatalf("CreateTrade: %v", err)
 		}
 	}
+	feeOnlyReport := &domain.ExecutionReportRequest{
+		Commission:  &domain.Commission{Amount: "-0.25", Currency: "BNB"},
+		Order:       created.ExternalID,
+		OrderStatus: domain.OrderStatusAccepted,
+	}
+	if _, err := rs.AppendOrderEvent(ctx, domain.OrderEvent{
+		Order: created.ExternalID,
+		Type:  domain.OrderEventPreTradeAccepted,
+		Payload: domain.OrderEventPayload{
+			Commission:      feeOnlyReport.Commission,
+			ExecutionReport: feeOnlyReport,
+		},
+	}); err != nil {
+		t.Fatalf("AppendOrderEvent(fee only): %v", err)
+	}
+
+	// A fill report may persist both a fill event and a terminal lifecycle event.
+	// Its commission is already represented by the trade and must not be added
+	// from either event.
+	fillReport := &domain.ExecutionReportRequest{
+		FillQuantity: "1",
+		FillPrice:    "100",
+		Commission:   &domain.Commission{Amount: "-0.12", Currency: "USD"},
+		Order:        created.ExternalID,
+		OrderStatus:  domain.OrderStatusCancelled,
+	}
+	for _, eventType := range []domain.OrderEventType{
+		domain.OrderEventFill,
+		domain.OrderEventCancelled,
+	} {
+		if _, err := rs.AppendOrderEvent(ctx, domain.OrderEvent{
+			Order: created.ExternalID,
+			Type:  eventType,
+			Payload: domain.OrderEventPayload{
+				FillQuantity:    fillReport.FillQuantity,
+				FillPrice:       fillReport.FillPrice,
+				Commission:      fillReport.Commission,
+				ExecutionReport: fillReport,
+			},
+		}); err != nil {
+			t.Fatalf("AppendOrderEvent(%s): %v", eventType, err)
+		}
+	}
 
 	detail, err := rs.GetOrder(ctx, created.ExternalID)
 	if err != nil {
 		t.Fatalf("GetOrder: %v", err)
 	}
 	want := []domain.Commission{
+		{Amount: "-0.25", Currency: "BNB"},
 		{Amount: "-1", Currency: "EUR"},
 		{Amount: "-0.15", Currency: "USD"},
 	}
@@ -902,6 +946,22 @@ func TestOrderCommissionSubtotalsChunksOrderIDs(t *testing.T) {
 			t.Fatalf("CreateTrade(%s): %v", order, err)
 		}
 	}
+	lastOrder := orders[len(orders)-1]
+	feeOnlyReport := &domain.ExecutionReportRequest{
+		Commission:  &domain.Commission{Amount: "-0.20", Currency: "BNB"},
+		Order:       lastOrder,
+		OrderStatus: domain.OrderStatusAccepted,
+	}
+	if _, err := rs.AppendOrderEvent(ctx, domain.OrderEvent{
+		Order: lastOrder,
+		Type:  domain.OrderEventPreTradeAccepted,
+		Payload: domain.OrderEventPayload{
+			Commission:      feeOnlyReport.Commission,
+			ExecutionReport: feeOnlyReport,
+		},
+	}); err != nil {
+		t.Fatalf("AppendOrderEvent(last fee only): %v", err)
+	}
 
 	got, err := commissionSubtotalsByOrder(ctx, rs.(*realmStore).rawDB(), orders)
 	if err != nil {
@@ -911,9 +971,13 @@ func TestOrderCommissionSubtotalsChunksOrderIDs(t *testing.T) {
 	if !commissionsEqual(got[orders[0]], want) {
 		t.Fatalf("first order commissions = %+v, want %+v", got[orders[0]], want)
 	}
-	if !commissionsEqual(got[orders[len(orders)-1]], want) {
+	wantLast := []domain.Commission{
+		{Amount: "-0.2", Currency: "BNB"},
+		{Amount: "-0.1", Currency: "USD"},
+	}
+	if !commissionsEqual(got[orders[len(orders)-1]], wantLast) {
 		t.Fatalf("last order commissions = %+v, want %+v",
-			got[orders[len(orders)-1]], want)
+			got[orders[len(orders)-1]], wantLast)
 	}
 	if got[orders[1]] == nil || len(got[orders[1]]) != 0 {
 		t.Fatalf("empty order commissions = %+v, want empty slice", got[orders[1]])
@@ -1105,8 +1169,8 @@ func TestCountActiveOrders(t *testing.T) {
 	}
 
 	n, err := rs.CountActiveOrders(ctx)
-	if err != nil || n != 3 {
-		t.Fatalf("CountActiveOrders = %d, err=%v, want 3", n, err)
+	if err != nil || n != 4 {
+		t.Fatalf("CountActiveOrders = %d, err=%v, want 4", n, err)
 	}
 }
 
@@ -1371,75 +1435,6 @@ func TestRecordOrderSettlementRacesRealizedPnlAdjustmentNoDeadlock(t *testing.T)
 	}
 }
 
-// TestRecordOrderSubmissionPersistsHeldIntentInSameTx is the regression guard for
-// the hold-submit self-deadlock: a held-accept settlement carries the reservation
-// intent, which must be written on the order transaction. Writing it on the pooled
-// *sql.DB from inside the transaction self-deadlocks under SetMaxOpenConns(1) - the
-// nested query waits forever for the one connection the transaction already holds.
-// The watchdog fails fast instead of hanging the suite if that regresses.
-func TestRecordOrderSubmissionPersistsHeldIntentInSameTx(t *testing.T) {
-	ctx, rs := seedOrderFixtures(t)
-	r := rs.(*realmStore)
-
-	order := sampleOrder()
-	order.ExternalID = domain.ExternalID("hold-order")
-	const approvalID = "held-approval-1"
-
-	done := make(chan error, 1)
-	go func() {
-		_, err := r.RecordOrderSubmission(
-			ctx,
-			order,
-			domain.OrderEvent{Type: domain.OrderEventSubmitted},
-			func(persisted domain.Order) (domain.OrderSettlement, error) {
-				intent := domain.ReservationIntent{
-					ApprovalID: approvalID,
-					Order:      persisted.ExternalID,
-					Account:    persisted.Account,
-					ParamsJSON: `{"order":{}}`,
-					Lock:       persisted.Lock,
-					IssuedAt:   time.Unix(0, 0).UTC(),
-					State:      domain.ReservationIntentStateHeld,
-				}
-				return domain.OrderSettlement{
-					Account:     persisted.Account,
-					Order:       persisted.ExternalID,
-					OrderStatus: domain.OrderStatusAccepted,
-					Events: []domain.OrderEvent{{
-						Order: persisted.ExternalID,
-						Type:  domain.OrderEventPreTradeAccepted,
-					}},
-					ReservationIntentUpsert: &intent,
-				}, nil
-			},
-		)
-		done <- err
-	}()
-
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("RecordOrderSubmission: %v", err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("RecordOrderSubmission deadlocked persisting the held intent inside the order transaction")
-	}
-
-	got, ok, err := rs.GetReservationIntent(ctx, approvalID)
-	if err != nil {
-		t.Fatalf("GetReservationIntent: %v", err)
-	}
-	if !ok {
-		t.Fatal("reservation intent was not persisted atomically with the order")
-	}
-	if got.Order != order.ExternalID {
-		t.Fatalf("intent order = %q, want %q", got.Order, order.ExternalID)
-	}
-	if got.State != domain.ReservationIntentStateHeld {
-		t.Fatalf("intent state = %q, want held", got.State)
-	}
-}
-
 func TestRecordOrderSubmissionAttestationFailureRollsBack(t *testing.T) {
 	ctx, rs := seedOrderFixtures(t)
 	seedSigningKey(t, ctx, rs, "key-1")
@@ -1509,16 +1504,6 @@ func TestRecordOrderSettlementPersistsEngineAbsoluteBalances(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateOrder: %v", err)
 	}
-	if err := rs.UpsertReservationIntent(ctx, domain.ReservationIntent{
-		ApprovalID: "approval-1",
-		Order:      created.ExternalID,
-		Account:    "acc-1",
-		ParamsJSON: "{}",
-		IssuedAt:   time.Now().UTC(),
-		State:      domain.ReservationIntentStateHeld,
-	}); err != nil {
-		t.Fatalf("UpsertReservationIntent: %v", err)
-	}
 
 	if err := rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
 		Account:     "acc-1",
@@ -1542,13 +1527,6 @@ func TestRecordOrderSettlementPersistsEngineAbsoluteBalances(t *testing.T) {
 		t.Fatalf("RecordOrderSettlement: %v", err)
 	}
 
-	intent, ok, err := rs.GetReservationIntent(ctx, "approval-1")
-	if err != nil || !ok {
-		t.Fatalf("GetReservationIntent: ok=%v err=%v", ok, err)
-	}
-	if intent.State != domain.ReservationIntentStateHeld {
-		t.Fatalf("intent state = %q, want held", intent.State)
-	}
 	detail, err := rs.GetOrder(ctx, created.ExternalID)
 	if err != nil {
 		t.Fatalf("GetOrder: %v", err)
@@ -1674,38 +1652,42 @@ func TestRecordOrderSettlementMissingOrder(t *testing.T) {
 	}
 }
 
-func TestRecordOrderSettlementInMemoryHold(t *testing.T) {
+func TestRecordOrderSettlementRejectsMissingOrderHandle(t *testing.T) {
 	ctx, rs := seedOrderFixtures(t)
 
 	seedBalance(t, ctx, rs, "acc-1", "USD", "1000", "0", "0", "0")
 
-	// A zero Order means an in-memory-only hold: only balance effects run, no
-	// order/event writes, and a missing order is NOT an error.
 	st := domain.OrderSettlement{
 		Account: "acc-1",
 		Balances: []domain.BalanceSettlement{
 			{Asset: "USD", Outcome: domain.AdjustmentOutcomeAccepted{BalanceResult: "1000", HeldResult: "100"}},
 		},
 	}
-	if err := rs.RecordOrderSettlement(ctx, st); err != nil {
-		t.Fatalf("RecordOrderSettlement(in-memory hold): %v", err)
+	if err := rs.RecordOrderSettlement(ctx, st); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("RecordOrderSettlement(zero order) = %v, want ErrInvalid", err)
 	}
 	bal, ok := getBalanceRow(t, ctx, rs, "acc-1", "USD")
 	if !ok {
-		t.Fatal("balance row missing after in-memory hold")
+		t.Fatal("seed balance missing")
 	}
-	if bal.held != "100" || bal.available != "1000" {
-		t.Fatalf("balance after hold = %+v", bal)
+	if bal.held != "0" || bal.available != "1000" {
+		t.Fatalf("rejected settlement changed balance: %+v", bal)
 	}
 }
 
 func TestRecordOrderSettlementPrunesEmptyBalance(t *testing.T) {
 	ctx, rs := seedOrderFixtures(t)
+	created, err := rs.CreateOrder(ctx, sampleOrder())
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
 
 	seedBalance(t, ctx, rs, "acc-1", "USD", "10", "0", "0", "0")
 
 	st := domain.OrderSettlement{
-		Account: "acc-1",
+		Order:       created.ExternalID,
+		Account:     "acc-1",
+		OrderStatus: domain.OrderStatusCommitted,
 		Balances: []domain.BalanceSettlement{
 			{
 				Asset: "USD",

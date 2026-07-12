@@ -343,7 +343,7 @@ func (r *realmStore) GetOrder(
 	if err != nil {
 		return domain.OrderDetail{}, err
 	}
-	o.CommissionSubtotals, err = commissionSubtotals(trades)
+	o.CommissionSubtotals, err = commissionSubtotals(trades, events)
 	if err != nil {
 		return domain.OrderDetail{}, err
 	}
@@ -531,9 +531,10 @@ func (r *realmStore) CountActiveOrders(ctx context.Context) (int, error) {
 	if err := db.QueryRowContext(
 		ctx,
 		`SELECT COUNT(*) FROM order_record
-		 WHERE status IN (?, ?, ?)`,
+		 WHERE status IN (?, ?, ?, ?)`,
 		domain.OrderStatusSubmitted,
 		domain.OrderStatusAccepted,
+		domain.OrderStatusCommitted,
 		domain.OrderStatusPartiallyFilled,
 	).Scan(&n); err != nil {
 		return 0, fmt.Errorf("store: count active orders: %w", err)
@@ -1214,24 +1215,75 @@ func validateCommission(c *domain.Commission) error {
 	return nil
 }
 
-func commissionSubtotals(trades []domain.Trade) ([]domain.Commission, error) {
+func commissionSubtotals(
+	trades []domain.Trade,
+	events []domain.OrderEvent,
+) ([]domain.Commission, error) {
 	amounts := make(map[string]decimal.Decimal)
 	for _, trade := range trades {
-		if trade.Commission == nil {
-			continue
+		if err := accumulateCommissionAmount(amounts, trade.Commission); err != nil {
+			return nil, err
 		}
-		c := trade.Commission
-		if c.Amount == "" || c.Currency == "" {
-			continue
+	}
+	for _, event := range events {
+		if err := accumulateCommissionAmount(
+			amounts,
+			feeOnlyExecutionReportCommission(event),
+		); err != nil {
+			return nil, err
 		}
-		amount, err := decimal.NewFromString(c.Amount)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"store: parse commission amount %q: %w", c.Amount, err)
-		}
-		amounts[c.Currency] = amounts[c.Currency].Add(amount)
 	}
 	return commissionsFromAmountMap(amounts), nil
+}
+
+// feeOnlyExecutionReportCommission returns the commission from the one
+// lifecycle event that canonically represents a report without a fill. Reports
+// carrying a fill are accounted from their trade instead: the same report may
+// persist both a fill event and a terminal-status event, so reading commission
+// from those events would count it two or three times.
+func feeOnlyExecutionReportCommission(event domain.OrderEvent) *domain.Commission {
+	report := event.Payload.ExecutionReport
+	if report == nil || report.Commission == nil ||
+		report.FillQuantity != "" || report.FillPrice != "" {
+		return nil
+	}
+	canonicalEvent, ok := domain.ExecutionReportStatusChangeEvent(report.OrderStatus)
+	if !ok || event.Type != canonicalEvent {
+		return nil
+	}
+	return report.Commission
+}
+
+func accumulateCommissionAmount(
+	amounts map[string]decimal.Decimal,
+	commission *domain.Commission,
+) error {
+	if commission == nil || commission.Amount == "" || commission.Currency == "" {
+		return nil
+	}
+	amount, err := decimal.NewFromString(commission.Amount)
+	if err != nil {
+		return fmt.Errorf(
+			"store: parse commission amount %q: %w", commission.Amount, err)
+	}
+	amounts[commission.Currency] = amounts[commission.Currency].Add(amount)
+	return nil
+}
+
+func accumulateCommissionAmountByOrder(
+	amountsByOrder map[domain.ExternalID]map[string]decimal.Decimal,
+	order domain.ExternalID,
+	commission *domain.Commission,
+) error {
+	if commission == nil || commission.Amount == "" || commission.Currency == "" {
+		return nil
+	}
+	amounts := amountsByOrder[order]
+	if amounts == nil {
+		amounts = make(map[string]decimal.Decimal)
+		amountsByOrder[order] = amounts
+	}
+	return accumulateCommissionAmount(amounts, commission)
 }
 
 func commissionSubtotalsByOrder(
@@ -1304,18 +1356,14 @@ WHERE t.commission_amount <> ''
 			return fmt.Errorf(
 				"store: decode order commission external id: %w", err)
 		}
-		amount, err := decimal.NewFromString(amountText)
-		if err != nil {
+		if err := accumulateCommissionAmountByOrder(
+			amountsByOrder,
+			order,
+			&domain.Commission{Amount: amountText, Currency: currency},
+		); err != nil {
 			_ = rows.Close()
-			return fmt.Errorf(
-				"store: parse commission amount %q: %w", amountText, err)
+			return err
 		}
-		amounts := amountsByOrder[order]
-		if amounts == nil {
-			amounts = make(map[string]decimal.Decimal)
-			amountsByOrder[order] = amounts
-		}
-		amounts[currency] = amounts[currency].Add(amount)
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
@@ -1323,6 +1371,57 @@ WHERE t.commission_amount <> ''
 	}
 	if err := rows.Close(); err != nil {
 		return fmt.Errorf("store: close order commission subtotals: %w", err)
+	}
+
+	eventRows, err := q.QueryContext(
+		ctx,
+		`SELECT o.external_id, e.type, e.payload
+FROM order_event e
+JOIN order_record o ON o.id = e.order_id
+WHERE o.external_id IN (`+placeholders+`)`,
+		args...,
+	)
+	if err != nil {
+		return fmt.Errorf("store: list order event commission subtotals: %w", err)
+	}
+	for eventRows.Next() {
+		var orderBytes []byte
+		var eventType string
+		var payloadJSON string
+		if err := eventRows.Scan(&orderBytes, &eventType, &payloadJSON); err != nil {
+			_ = eventRows.Close()
+			return fmt.Errorf("store: scan order event commission subtotal: %w", err)
+		}
+		order, err := domain.ExternalIDFromBytes(orderBytes)
+		if err != nil {
+			_ = eventRows.Close()
+			return fmt.Errorf(
+				"store: decode order event commission external id: %w", err)
+		}
+		var payload domain.OrderEventPayload
+		if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+			_ = eventRows.Close()
+			return fmt.Errorf("store: decode order event commission payload: %w", err)
+		}
+		commission := feeOnlyExecutionReportCommission(domain.OrderEvent{
+			Type:    domain.OrderEventType(eventType),
+			Payload: payload,
+		})
+		if err := accumulateCommissionAmountByOrder(
+			amountsByOrder,
+			order,
+			commission,
+		); err != nil {
+			_ = eventRows.Close()
+			return err
+		}
+	}
+	if err := eventRows.Err(); err != nil {
+		_ = eventRows.Close()
+		return fmt.Errorf("store: iterate order event commission subtotals: %w", err)
+	}
+	if err := eventRows.Close(); err != nil {
+		return fmt.Errorf("store: close order event commission subtotals: %w", err)
 	}
 	return nil
 }
@@ -1351,14 +1450,11 @@ func commissionsFromAmountMap(amounts map[string]decimal.Decimal) []domain.Commi
 // RecordOrderSettlement persists one fill/settlement atomically in a single
 // transaction: per-asset balance (realized P&L delta-accumulated inside the
 // tx), the engine-applied account blocks, the optional trade, the fill event(s),
-// the optional lock rewrite and the order
-// status advance commit or roll back together. A zero st.Order is an
-// in-memory-only hold with no order row: the order/event/lock writes are skipped
-// and only the balance and block effects run. When AllowedFrom is
-// non-empty the status UPDATE is guarded and a disallowed current status yields
-// domain.ErrConflict with nothing written; otherwise a missing order yields
-// domain.ErrNotFound. The block-audit row is NOT part of this tx; callers write
-// it separately after a successful commit.
+// the optional lock rewrite and the order status advance commit or roll back
+// together. When AllowedFrom is non-empty the status UPDATE is guarded and a
+// disallowed current status yields domain.ErrConflict with nothing written;
+// otherwise a missing order yields domain.ErrNotFound. The block-audit row is
+// NOT part of this tx; callers write it separately after a successful commit.
 func (r *realmStore) RecordOrderSettlement(
 	ctx context.Context, st domain.OrderSettlement,
 ) error {
@@ -1396,31 +1492,14 @@ func (r *realmStore) recordOrderSettlement(
 func (r *realmStore) recordOrderSettlementTx(
 	ctx context.Context, tx *sql.Tx, st domain.OrderSettlement, attest fwstore.EventAttestor,
 ) error {
+	if st.Order.IsZero() {
+		return fmt.Errorf("store: settlement order is required: %w", domain.ErrInvalid)
+	}
 	// Resolve the settling account once; balance and blocks reuse it. The
 	// account is the fill's account, always present on a settlement.
 	accountID, err := resolveAccountID(ctx, tx, st.Account)
 	if err != nil {
 		return err
-	}
-
-	if st.ReservationApprovalID != "" {
-		if _, err := tx.ExecContext(
-			ctx,
-			`UPDATE reservation_intent SET state = ? WHERE approval_id = ?`,
-			string(st.ReservationIntentState), st.ReservationApprovalID,
-		); err != nil {
-			return fmt.Errorf("store: settlement reservation intent state: %w", err)
-		}
-	}
-
-	// Insert the initial held-intent row for a hold-accept settlement in the same
-	// transaction as the order, so the order row and its durable reservation record
-	// are atomic. The engine builds the intent but never writes it (a nested write
-	// would self-deadlock on the single connection held by this transaction).
-	if st.ReservationIntentUpsert != nil {
-		if err := upsertReservationIntentTx(ctx, tx, *st.ReservationIntentUpsert); err != nil {
-			return err
-		}
 	}
 
 	// Per-asset balance: read-modify-write inside the tx so the realized-P&L
@@ -1453,13 +1532,6 @@ func (r *realmStore) recordOrderSettlementTx(
 		if _, _, err := r.insertTrade(ctx, tx, *st.Trade); err != nil {
 			return err
 		}
-	}
-
-	// The remaining writes touch the order row; an in-memory-only hold (zero
-	// Order) carries no order row, so skip them and only the balance/block
-	// effects above run.
-	if st.Order.IsZero() {
-		return nil
 	}
 
 	// Resolve the order surrogate id once; events, the optional lock rewrite and

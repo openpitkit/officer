@@ -1054,13 +1054,15 @@ func executionReportFromAccount(
 				"engine: fill quantity %q: %w: %w", in.FillQuantity, err, domain.ErrInvalid)
 		}
 		fill.SetLastTrade(model.NewExecutionReportTrade(price, quantity))
-		if in.Commission != nil {
-			commission, err := commissionFrom(*in.Commission)
-			if err != nil {
-				return model.ExecutionReport{}, err
-			}
-			fill.SetFee(commission)
+	}
+	// Commission is execution-report payload, not a LastTrade attribute. Keep
+	// this outside hasFill so commission-only corrections reach SpotFunds.
+	if in.Commission != nil {
+		commission, err := commissionFrom(*in.Commission)
+		if err != nil {
+			return model.ExecutionReport{}, err
 		}
+		fill.SetFee(commission)
 	}
 	fill.SetLeavesQuantity(leaves)
 	fill.SetIsFinal(isFinal)
@@ -1086,6 +1088,7 @@ func executionReportPersistenceFrom(
 	blocks []domain.ExecutionAccountBlock,
 	outcomes []BalanceOutcome,
 ) engine.ExecutionReportPersistence {
+	recordedLeaves := domain.ExecutionReportPersistedLeaves(in)
 	payload := executionAccountBlockPayload(blocks)
 	payload.FillQuantity = in.FillQuantity
 	payload.FillPrice = in.FillPrice
@@ -1128,8 +1131,9 @@ func executionReportPersistenceFrom(
 
 	return engine.ExecutionReportPersistence{
 		Trade:       trade,
+		Commission:  in.Commission,
 		OrderStatus: in.OrderStatus,
-		Leaves:      in.LeavesQuantity,
+		Leaves:      recordedLeaves,
 		Balances:    executionBalanceSettlementsFrom(outcomes),
 		Events:      events,
 		Blocks:      blocks,

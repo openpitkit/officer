@@ -24,6 +24,7 @@ export type ApiErrorCode =
   | "has_dependents"
   | "conflict"
   | "terminal_order"
+  | "execution_report_required"
   | "precondition"
   | "too_large"
   | "engine_restarting"
@@ -119,6 +120,7 @@ function asCode(v: unknown): ApiErrorCode {
     case "has_dependents":
     case "conflict":
     case "terminal_order":
+    case "execution_report_required":
     case "precondition":
     case "too_large":
     case "engine_restarting":
@@ -141,6 +143,8 @@ function defaultTranslate(
     has_dependents: "The resource has dependent rows.",
     conflict: "The request conflicts with the current state.",
     terminal_order: "The order is in a terminal status.",
+    execution_report_required:
+      "This order already has execution-report activity. Submit a complete execution report through the order workflow.",
     precondition: "A precondition for the request was not met.",
     too_large:
       "The import exceeds the maximum size of 128 MiB. Split the export into smaller files or use the API for bulk loading.",
@@ -180,7 +184,11 @@ function defaultMessage(
 }
 
 function clientOwnedMessage(code: ApiErrorCode): boolean {
-  return code === "terminal_order" || code === "too_large";
+  return (
+    code === "terminal_order" ||
+    code === "execution_report_required" ||
+    code === "too_large"
+  );
 }
 
 function asDependents(v: unknown): ApiErrorDependent[] | undefined {

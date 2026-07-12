@@ -53,7 +53,7 @@ const getOrderToolName = "get_order"
 const getOrderToolDescription = "Return one order addressed by its external id: " +
 	"its status, its 1:1 signed approval (when issued), and its fills with their " +
 	"display prices. Read-only - no secrets, no order-flow control. The opaque " +
-	"reservation lock is never exposed; only backend-derived display prices are."
+	"pre-trade lock is never exposed; only backend-derived display prices are."
 
 const getAuditToolName = "get_audit"
 const getAuditToolDescription = "Return recent control-plane audit entries " +
@@ -73,19 +73,20 @@ const setMarketDataInstrumentToolDescription = "Enable or disable one " +
 
 const submitOrderToolName = "submit_order"
 const submitOrderToolDescription = "Submit an order intent through pre-trade " +
-	"and obtain a signed approval token. Mutates engine state (holds or commits " +
-	"funds); protected and disabled by default."
+	"and obtain a signed approval token. Mutates engine state and records the " +
+	"pre-trade lock; protected and disabled by default."
 
 const confirmExecutionToolName = "confirm_execution"
-const confirmExecutionToolDescription = "Confirm execution (commit) of a " +
-	"previously approved hold-mode order, addressed by its external id, by " +
-	"presenting the approval token. Mutates engine state; protected and disabled " +
+const confirmExecutionToolDescription = "Record confirmation history for a " +
+	"previously approved workflow order by presenting its approval token. The " +
+	"shortcut is rejected after execution-report activity; protected and disabled " +
 	"by default."
 
 const cancelToolName = "cancel"
-const cancelToolDescription = "Cancel / revoke a pending approval token or " +
-	"held reservation by presenting the token. Releases held funds. " +
-	"Mutates engine state; protected and disabled by default."
+const cancelToolDescription = "Cancel an untouched workflow order by presenting " +
+	"its approval token. Officer derives a terminal report that releases the " +
+	"pre-trade lock; after execution-report activity, submit an explicit report. " +
+	"Protected and disabled by default."
 
 // RegisterTools registers the open Pit Officer MCP tools and catalog entries.
 func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
@@ -187,7 +188,7 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 		confirmExecutionToolName,
 		"Confirm execution",
 		confirmExecutionToolDescription,
-		"Confirm execution (commit) of a previously approved order.",
+		"Record confirmation history for an untouched workflow order.",
 		true,
 		true,
 		true,
@@ -197,7 +198,7 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 		cancelToolName,
 		"Cancel",
 		cancelToolDescription,
-		"Cancel / revoke a pending approval token or reservation.",
+		"Cancel an untouched workflow order with its approval token.",
 		true,
 		true,
 		true,
@@ -359,7 +360,7 @@ type submitOrderInput struct {
 	AmountKind  string `json:"amountKind" jsonschema:"quantity or volume"`
 	AmountValue string `json:"amountValue" jsonschema:"Order size as an exact decimal string"`
 	Price       string `json:"price,omitempty" jsonschema:"Limit price as an exact decimal string; omit for market"`
-	Mode        string `json:"mode,omitempty" jsonschema:"hold or immediate (default immediate)"`
+	Mode        string `json:"mode,omitempty" jsonschema:"hold (workflow compatibility value) or immediate (default immediate)"`
 	ExternalID  string `json:"externalId,omitempty" jsonschema:"Optional caller-supplied unique order external id; omit to have the server generate one"`
 }
 
@@ -374,7 +375,6 @@ type submitOrderOutput struct {
 type confirmExecutionInput struct {
 	OrderExternalID string `json:"orderExternalId" jsonschema:"Order external id returned by submit_order"`
 	Token           string `json:"token" jsonschema:"Approval token returned by submit_order"`
-	Force           bool   `json:"force,omitempty" jsonschema:"Bypass Officer's safety checks and route the operation straight to the engine"`
 }
 
 type confirmExecutionOutput struct {
@@ -388,7 +388,6 @@ type cancelInput struct {
 	OrderExternalID string `json:"orderExternalId" jsonschema:"Order external id returned by submit_order"`
 	Token           string `json:"token" jsonschema:"Approval token returned by submit_order"`
 	Reason          string `json:"reason,omitempty" jsonschema:"Human-readable cancellation reason"`
-	Force           bool   `json:"force,omitempty" jsonschema:"Bypass Officer's safety checks and route the operation straight to the engine"`
 }
 
 type cancelOutput struct {
@@ -991,7 +990,7 @@ func confirmExecutionHandler(
 		if token == "" {
 			return "", confirmExecutionOutput{}, fmt.Errorf("token is required")
 		}
-		order, att, err := src.ConfirmExecution(ctx, orderExternalID, token, in.Force)
+		order, att, err := src.ConfirmExecution(ctx, orderExternalID, token)
 		if err != nil {
 			return "", confirmExecutionOutput{}, fmt.Errorf("confirm execution failed: %s", err)
 		}
@@ -1030,7 +1029,6 @@ func cancelHandler(
 			orderExternalID,
 			token,
 			strings.TrimSpace(in.Reason),
-			in.Force,
 		)
 		if err != nil {
 			return "", cancelOutput{}, fmt.Errorf("cancel failed: %s", err)

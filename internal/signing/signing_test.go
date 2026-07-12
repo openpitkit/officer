@@ -102,7 +102,6 @@ func samplePayload() domain.ApprovalPayload {
 	return domain.ApprovalPayload{
 		Version:         1,
 		ApprovalID:      "11111111-1111-1111-1111-111111111111",
-		ReservationID:   "11111111-1111-1111-1111-111111111111",
 		Mode:            "hold",
 		OrderExternalID: "AAAAAAAAAAAAAAAAAAAAAA", // 22-char base64url ExternalID handle
 		Instrument:      "AAPL/USD",
@@ -359,8 +358,8 @@ func TestParamBindingTamperRejected(t *testing.T) {
 }
 
 func TestSignVerifyEmptyOrderExternalID(t *testing.T) {
-	// A held reservation may be signed before an order row exists; the order
-	// handle is then legitimately empty and must still sign and verify.
+	// The generic payload permits a request without an order handle and must still
+	// sign and verify it consistently.
 	svc, _ := newServiceWithKey(t)
 	p := samplePayload()
 	p.OrderExternalID = ""
@@ -426,8 +425,8 @@ func TestCanonicalBytesNoSurrogateAndCarriesHandle(t *testing.T) {
 	if strings.Contains(s, `"orderId"`) {
 		t.Fatalf("canonical bytes leaked surrogate orderId field: %s", s)
 	}
-	// An empty handle is omitted entirely (omitempty), keeping the held-reservation
-	// envelope free of any order reference.
+	// An empty handle is omitted entirely (omitempty), keeping the envelope free
+	// of any order reference.
 	p.OrderExternalID = ""
 	canonEmpty, err := CanonicalBytes(p)
 	if err != nil {

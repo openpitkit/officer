@@ -39,6 +39,8 @@ export interface NumberStepperProps
   onChange: (value: string) => void;
   /** Lower clamp for the +/- controls; defaults to 0. Use null for signed values. */
   min?: string | null;
+  /** Whether typed values may include an explicit sign. */
+  allowSignedInput?: boolean;
   /** Clears the field; when set, an inline reset icon shows while non-empty. */
   onClear?: () => void;
   /** Accessible name + tooltip for the inline reset icon. */
@@ -68,6 +70,7 @@ export const NumberStepper = forwardRef<HTMLInputElement, NumberStepperProps>(
       value,
       onChange,
       min = "0",
+      allowSignedInput = true,
       onClear,
       clearLabel,
       customValidity = "",
@@ -130,12 +133,16 @@ export const NumberStepper = forwardRef<HTMLInputElement, NumberStepperProps>(
           )}
           onChange={(e) => {
             const next = e.target.value;
-            const nextValid = isDecimalString(next);
+            const hasExplicitSign = /^[+-]/.test(next.trim());
+            const nextValid =
+              isDecimalString(next) && (allowSignedInput || !hasExplicitSign);
+            if (!allowSignedInput && hasExplicitSign) {
+              e.currentTarget.value = draftValue;
+              return;
+            }
             setDraftValue(next);
             e.target.setCustomValidity(nextValid ? customValidity : invalidMessage);
-            if (nextValid) {
-              onChange(next);
-            }
+            onChange(next);
           }}
           onKeyDown={(e) => {
             if (e.key === "ArrowUp") {

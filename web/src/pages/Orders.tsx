@@ -83,7 +83,13 @@ import {
 } from "@/lib/orderStatus";
 import { formatDateTime } from "@/i18n/format";
 import { DEFAULT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from "@/lib/useDebounce";
-import { subtractDecimalStrings } from "@/lib/numberStep";
+import {
+  isDecimalRangeValid,
+  isNonNegativeDecimalString,
+  isOptionalPositiveDecimalString,
+  isPositiveDecimalString,
+  subtractDecimalStrings,
+} from "@/lib/numberStep";
 import { shareUrl } from "@/lib/shareLink";
 import { sortDirection } from "@/lib/sortDirection";
 import { cn } from "@/lib/utils";
@@ -358,9 +364,9 @@ interface SubmitOrderDialogProps {
   onClose: () => void;
   onCreated: () => void;
   onOpenDetail: (externalId: string, banner?: string) => void;
-  /** Retain the approval token of a freshly created held order so the operator
-   *  can later confirm or cancel it. Called only for the hold submit mode. */
-  onHeldTokenIssued: (token: ApprovalToken) => void;
+  /** Retain the accepted approval token of a workflow order so the operator can
+   *  use the confirm/cancel shortcuts. Called only for accepted `hold` submits. */
+  onWorkflowTokenIssued: (token: ApprovalToken) => void;
   accountSuggestions: string[];
   assetSuggestions: string[];
   /** Pre-seed all input fields (clone path). */
@@ -372,7 +378,7 @@ function SubmitOrderDialog({
   onClose,
   onCreated,
   onOpenDetail,
-  onHeldTokenIssued,
+  onWorkflowTokenIssued,
 	accountSuggestions,
 	assetSuggestions,
 	initialValues,
@@ -499,7 +505,16 @@ function SubmitOrderDialog({
     const quoteT = quoteAsset.trim();
     const amountT = amountValue.trim();
     // Skip when required fields are absent.
-    if (!accountT || !baseT || !quoteT || !amountT || !amountKind || !side) {
+    if (
+      !accountT ||
+      !baseT ||
+      !quoteT ||
+      !amountT ||
+      !isPositiveDecimalString(amountT) ||
+      !isOptionalPositiveDecimalString(price) ||
+      !amountKind ||
+      !side
+    ) {
       // Reset to idle when the form is incomplete; intentional sync.
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setCheckState({ phase: "idle" });
@@ -601,7 +616,14 @@ function SubmitOrderDialog({
   }
 
   async function submit() {
-    if (!account.trim() || !baseAsset.trim() || !quoteAsset.trim() || !amountValue.trim()) {
+    if (
+      !account.trim() ||
+      !baseAsset.trim() ||
+      !quoteAsset.trim() ||
+      !amountValue.trim() ||
+      !isPositiveDecimalString(amountValue) ||
+      !isOptionalPositiveDecimalString(price)
+    ) {
       setError(t("addOrder.dialog.validationError"));
       return;
     }
@@ -642,10 +664,10 @@ function SubmitOrderDialog({
       if (controller.signal.aborted) {
         return;
       }
-      // A held order is not yet resolved: retain its approval token so the
-      // operator can confirm or cancel it from the detail view.
-      if (submitMode === "hold") {
-        onHeldTokenIssued(result.approval);
+      // A rejected pre-trade verdict has no accepted workflow to confirm or
+      // cancel. Retain only accepted `hold` tokens for the history shortcuts.
+      if (submitMode === "hold" && result.approval.verdict === "accept") {
+        onWorkflowTokenIssued(result.approval);
       }
       onCreated();
       reset();
@@ -671,6 +693,8 @@ function SubmitOrderDialog({
     baseAsset.trim() !== "" &&
     quoteAsset.trim() !== "" &&
     amountValue.trim() !== "" &&
+    isPositiveDecimalString(amountValue) &&
+    isOptionalPositiveDecimalString(price) &&
     side !== "" &&
     amountKind !== "" &&
     submitMode !== null;
@@ -890,8 +914,9 @@ function SubmitOrderDialog({
                 value={amountValue}
                 onChange={setAmountValue}
                 placeholder={t("addOrder.dialog.amountPlaceholder")}
-                disabled={busy}
-                className="flex-1"
+              disabled={busy}
+              allowSignedInput={false}
+              className="flex-1"
                 onClear={() => setAmountValue("")}
                 clearLabel={tc("filters.clearField")}
               />
@@ -905,6 +930,7 @@ function SubmitOrderDialog({
               onChange={setPrice}
               placeholder={t("addOrder.dialog.limitPricePlaceholder")}
               disabled={busy}
+              allowSignedInput={false}
               onClear={() => setPrice("")}
               clearLabel={tc("filters.clearField")}
             />
@@ -948,6 +974,8 @@ interface ExecReportInitialValues {
   leavesQuantity?: string;
 }
 
+type CommissionMode = "none" | "fee" | "rebate";
+
 const EXEC_REPORT_STATUS_OPTIONS = [
   "submitted",
   "accepted",
@@ -967,22 +995,73 @@ const EXEC_REPORT_FILL_STATUSES = new Set<ExecReportOrderStatus>([
   "partially_filled",
 ]);
 
+const EXEC_REPORT_TERMINAL_STATUSES = new Set<ExecReportOrderStatus>([
+  "rejected",
+  "rolled_back",
+  "filled",
+  "cancelled",
+]);
+
+function execReportShowsFillFields(
+  status: ExecReportOrderStatus,
+  hasFillPayload: boolean,
+): boolean {
+  return (
+    EXEC_REPORT_FILL_STATUSES.has(status) ||
+    (hasFillPayload && EXEC_REPORT_TERMINAL_STATUSES.has(status))
+  );
+}
+
 function asExecReportOrderStatus(value: string | undefined): ExecReportOrderStatus | undefined {
   return EXEC_REPORT_STATUS_OPTIONS.includes(value as ExecReportOrderStatus)
     ? (value as ExecReportOrderStatus)
     : undefined;
 }
 
-function execReportInitialValuesFromOrder(order: Order): ExecReportInitialValues {
+function remainingLeavesFromHistory(order: Order, events: OrderEvent[]): string {
+  if (order.amountKind !== "quantity") {
+    return "";
+  }
+  let remaining = order.amountValue;
+  for (const event of events) {
+    if (event.type !== "fill" || !event.fillQuantity) {
+      continue;
+    }
+    const next = subtractDecimalStrings(remaining, event.fillQuantity);
+    if (next === null) {
+      return "";
+    }
+    remaining = next;
+  }
+  return remaining;
+}
+
+function execReportInitialValuesFromOrder(
+  order: Order,
+  events: OrderEvent[] = [],
+): ExecReportInitialValues {
   const lockPrice = order.displayPrices.length > 0
     ? order.displayPrices[order.displayPrices.length - 1]
     : "";
   return {
-    quantity: "",
+    quantity: order.amountKind === "quantity" ? order.amountValue : "",
     price: lockPrice,
     lockPrice,
-    leaves: order.leavesQuantity,
+    leaves:
+      order.leavesQuantity ||
+      remainingLeavesFromHistory(order, events),
   };
+}
+
+function commissionModeFor(amount: string | undefined): CommissionMode {
+  if (amount === undefined || amount.trim() === "") {
+    return "none";
+  }
+  return amount.trim().startsWith("-") ? "fee" : "rebate";
+}
+
+function commissionMagnitude(amount: string | undefined): string {
+  return amount?.trim().replace(/^[+-]/, "") ?? "";
 }
 
 interface ExecReportDialogProps {
@@ -1008,12 +1087,15 @@ function execReportFieldsForStatus(
   leavesQuantity: string;
   lockPrice: string;
 } {
-  if (initialValues?.hasFillPayload === true) {
+  if (
+    initialValues?.hasFillPayload === true &&
+    execReportShowsFillFields(status, true)
+  ) {
     return {
-      quantity: initialValues.quantity ?? "",
-      price: initialValues.price ?? "",
+      quantity: initialValues.quantity,
+      price: initialValues.price,
       leavesQuantity: initialValues.leavesQuantity ?? "",
-      lockPrice: initialValues.lockPrice ?? "",
+      lockPrice: initialValues.lockPrice,
     };
   }
   if (status === "filled") {
@@ -1076,7 +1158,7 @@ function ExecReportDialog({
 }: ExecReportDialogProps) {
   const { t } = useTranslation("orders");
   const { t: tc } = useTranslation();
-  const { submitExecutionReport } = useOfficerApi();
+  const { fetchAssets, submitExecutionReport } = useOfficerApi();
   const statusTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   const initialStatus = initialValues?.status ?? "filled";
@@ -1088,10 +1170,13 @@ function ExecReportDialog({
   );
   const [lockPrice, setLockPrice] = useState(initialFields.lockPrice);
   const [commissionAmount, setCommissionAmount] = useState(
-    initialValues?.commission?.amount ?? "",
+    commissionMagnitude(initialValues?.commission?.amount),
   );
   const [commissionCurrency, setCommissionCurrency] = useState(
     initialValues?.commission?.currency ?? "",
+  );
+  const [commissionMode, setCommissionMode] = useState<CommissionMode>(() =>
+    commissionModeFor(initialValues?.commission?.amount),
   );
   const [status, setStatus] = useState<ExecReportOrderStatus>(initialStatus);
   const [force, setForce] = useState(false);
@@ -1099,31 +1184,76 @@ function ExecReportDialog({
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
   const [blocks, setBlocks] = useState<ExecutionBlock[]>([]);
+  const [commissionCurrencySuggestions, setCommissionCurrencySuggestions] =
+    useState<string[]>([]);
+  const debouncedCommissionCurrency = useDebouncedValue(
+    commissionCurrency.trim(),
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
 
-  const isFillStatus = EXEC_REPORT_FILL_STATUSES.has(status);
   const hasFillPayload = initialValues?.hasFillPayload === true;
-  const showFillFields = isFillStatus || hasFillPayload;
+  const showFillFields = execReportShowsFillFields(status, hasFillPayload);
+  const requiresLeaves =
+    showFillFields ||
+    EXEC_REPORT_TERMINAL_STATUSES.has(status) ||
+    commissionMode !== "none";
 
   function resetEconomicsFields(nextInitialValues?: ExecReportInitialValues) {
-    setCommissionAmount(nextInitialValues?.commission?.amount ?? "");
+    setCommissionMode(commissionModeFor(nextInitialValues?.commission?.amount));
+    setCommissionAmount(commissionMagnitude(nextInitialValues?.commission?.amount));
     setCommissionCurrency(nextInitialValues?.commission?.currency ?? "");
+    setCommissionCurrencySuggestions([]);
   }
+
+  useEffect(() => {
+    if (commissionMode === "none" || debouncedCommissionCurrency === "") {
+      return;
+    }
+    const controller = new AbortController();
+    fetchAssets(
+      {
+        code: debouncedCommissionCurrency,
+        codeMatch: "starts_with",
+        limit: 8,
+        sort: "code",
+      },
+      controller.signal,
+    )
+      .then((assets) => {
+        if (!controller.signal.aborted) {
+          setCommissionCurrencySuggestions(assets.map((asset) => asset.code));
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setCommissionCurrencySuggestions([]);
+        }
+      });
+    return () => controller.abort();
+  }, [commissionMode, debouncedCommissionCurrency, fetchAssets]);
 
   function applyStatus(next: ExecReportOrderStatus) {
     const wasShowingFillFields = showFillFields;
-    const nextShowsFillFields =
-      EXEC_REPORT_FILL_STATUSES.has(next) || hasFillPayload;
+    const nextShowsFillFields = execReportShowsFillFields(next, hasFillPayload);
+    const nextRequiresLeaves =
+      nextShowsFillFields ||
+      EXEC_REPORT_TERMINAL_STATUSES.has(next) ||
+      commissionMode !== "none";
     setStatus(next);
-    if (wasShowingFillFields && nextShowsFillFields) {
-      return;
+    if (wasShowingFillFields !== nextShowsFillFields) {
+      const fields = nextShowsFillFields
+        ? execReportFieldsForStatus(next, initialValues)
+        : execReportFieldsForStatus(next, undefined);
+      setQuantity(fields.quantity);
+      setPrice(fields.price);
+      setLockPrice(fields.lockPrice);
     }
-    const nextInitialValues = nextShowsFillFields ? initialValues : undefined;
-    const fields = execReportFieldsForStatus(next, nextInitialValues);
-    setQuantity(fields.quantity);
-    setPrice(fields.price);
-    setLeavesQuantity(fields.leavesQuantity);
-    setLockPrice(fields.lockPrice);
-    resetEconomicsFields(nextInitialValues);
+    if (!nextRequiresLeaves) {
+      setLeavesQuantity("");
+    } else if (!requiresLeaves) {
+      const fields = execReportFieldsForStatus(next, initialValues);
+      setLeavesQuantity(fields.leavesQuantity);
+    }
   }
 
   // Reseed from initialValues whenever the dialog opens (clone path).
@@ -1171,32 +1301,68 @@ function ExecReportDialog({
   function calculateLeavesQuantity() {
     const result = subtractDecimalStrings(
       initialValues?.leaves ?? "",
-      quantity.trim(),
+      showFillFields ? quantity.trim() : "0",
     );
     if (result !== null) {
       setLeavesQuantity(result);
     }
   }
 
-  const canCalculateLeaves = !busy
-    && (initialValues?.leaves ?? "").trim() !== ""
-    && quantity.trim() !== "";
+  const canCalculateLeaves =
+    !busy &&
+    (initialValues?.leaves ?? "").trim() !== "" &&
+    (!showFillFields ||
+      (quantity.trim() !== "" && isPositiveDecimalString(quantity)));
+
+  const fillFieldsValid =
+    !showFillFields ||
+    (quantity.trim() !== "" &&
+      isPositiveDecimalString(quantity) &&
+      price.trim() !== "" &&
+      isPositiveDecimalString(price) &&
+      isOptionalPositiveDecimalString(lockPrice));
+  const leavesValid =
+    !requiresLeaves ||
+    (leavesQuantity.trim() !== "" &&
+      isNonNegativeDecimalString(leavesQuantity));
+  const commissionValid =
+    commissionMode === "none" ||
+    (commissionAmount.trim() !== "" &&
+      isNonNegativeDecimalString(commissionAmount) &&
+      commissionCurrency.trim() !== "");
+  const canSubmit =
+    orderExternalId !== null &&
+    fillFieldsValid &&
+    leavesValid &&
+    commissionValid;
+
+  function selectCommissionMode(next: CommissionMode) {
+    setCommissionMode(next);
+    if (next === "none") {
+      setCommissionAmount("");
+      setCommissionCurrency("");
+      setCommissionCurrencySuggestions([]);
+      if (
+        !showFillFields &&
+        !EXEC_REPORT_TERMINAL_STATUSES.has(status)
+      ) {
+        setLeavesQuantity("");
+      }
+    }
+  }
 
   async function submit() {
-    if (showFillFields && (!quantity.trim() || !price.trim())) {
+    if (!fillFieldsValid) {
       setError(t("execReport.dialog.validationError"));
       return;
     }
-    if (!leavesQuantity.trim()) {
+    if (!leavesValid) {
       setError(t("execReport.dialog.leavesRequired"));
       return;
     }
     const commissionAmountValue = commissionAmount.trim();
     const commissionCurrencyValue = commissionCurrency.trim();
-    if (
-      showFillFields
-      && ((commissionAmountValue !== "") !== (commissionCurrencyValue !== ""))
-    ) {
+    if (!commissionValid) {
       setError(t("execReport.dialog.commissionRequired"));
       return;
     }
@@ -1213,14 +1379,19 @@ function ExecReportDialog({
         if (lockPrice.trim()) {
           body.lockPrice = lockPrice.trim();
         }
-        if (commissionAmountValue !== "" && commissionCurrencyValue !== "") {
-          body.commission = {
-            amount: commissionAmountValue,
-            currency: commissionCurrencyValue,
-          };
-        }
       }
-      body.leavesQuantity = leavesQuantity.trim();
+      if (requiresLeaves) {
+        body.leavesQuantity = leavesQuantity.trim();
+      }
+      if (commissionMode !== "none") {
+        body.commission = {
+          amount:
+            commissionMode === "fee"
+              ? `-${commissionAmountValue}`
+              : commissionAmountValue,
+          currency: commissionCurrencyValue,
+        };
+      }
       if (force) {
         body.force = true;
       }
@@ -1306,6 +1477,7 @@ function ExecReportDialog({
                       onChange={setQuantity}
                       placeholder={t("execReport.dialog.fillQtyPlaceholder")}
                       disabled={busy}
+                      allowSignedInput={false}
                       onClear={() => setQuantity("")}
                       clearLabel={tc("filters.clearField")}
                     />
@@ -1318,6 +1490,7 @@ function ExecReportDialog({
                       onChange={setPrice}
                       placeholder={t("execReport.dialog.fillPricePlaceholder")}
                       disabled={busy}
+                      allowSignedInput={false}
                       onClear={() => setPrice("")}
                       clearLabel={tc("filters.clearField")}
                     />
@@ -1331,12 +1504,16 @@ function ExecReportDialog({
                     onChange={setLockPrice}
                     placeholder={t("execReport.dialog.lockPricePlaceholder")}
                     disabled={busy}
+                    allowSignedInput={false}
                     onClear={() => setLockPrice("")}
                     clearLabel={tc("filters.clearField")}
                   />
                 </div>
-                <div className="space-y-3">
-                  <section className="space-y-2 rounded-card border border-border bg-surface-2 p-3">
+              </>
+            )}
+
+            <div className="space-y-3">
+              <section className="space-y-3 rounded-card border border-border bg-surface-2 p-3">
                     <div className="flex items-start justify-between gap-2">
                       <div>
                         <h3 className="text-xs font-semibold text-text">
@@ -1358,75 +1535,106 @@ function ExecReportDialog({
                         )}
                       />
                     </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1.5">
-                        <Label htmlFor="er-commission-amount">
-                          {t("execReport.dialog.commissionAmount")}
-                        </Label>
-                        <NumberStepper
-                          id="er-commission-amount"
-                          value={commissionAmount}
-                          onChange={setCommissionAmount}
-                          placeholder={t(
-                            "execReport.dialog.commissionAmountPlaceholder",
-                          )}
+                    <div
+                      className="flex flex-wrap gap-2"
+                      role="group"
+                      aria-label={t("execReport.dialog.economics.commission.title")}
+                    >
+                      {(["none", "fee", "rebate"] as const).map((mode) => (
+                        <Button
+                          key={mode}
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          aria-pressed={commissionMode === mode}
                           disabled={busy}
-                          onClear={() => setCommissionAmount("")}
-                          clearLabel={tc("filters.clearField")}
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label htmlFor="er-commission-currency">
-                          {t("execReport.dialog.commissionCurrency")}
-                        </Label>
-                        <ClearableInput
-                          id="er-commission-currency"
-                          value={commissionCurrency}
-                          onChange={(e) => setCommissionCurrency(e.target.value)}
-                          placeholder={t(
-                            "execReport.dialog.commissionCurrencyPlaceholder",
+                          onClick={() => selectCommissionMode(mode)}
+                          className={cn(
+                            mode === "none" && "text-muted hover:text-text",
+                            mode === "fee" && "border-[var(--danger)] text-[var(--danger)] hover:border-[var(--danger)] hover:bg-[var(--danger-dim)] hover:text-[var(--danger)]",
+                            mode === "rebate" && "border-[var(--ok)] text-[var(--ok)] hover:border-[var(--ok)] hover:bg-[var(--ok-dim)] hover:text-[var(--ok)]",
+                            commissionMode === mode && mode === "none" && "bg-surface-hover text-text",
+                            commissionMode === mode && mode === "fee" && "bg-[var(--danger-dim)]",
+                            commissionMode === mode && mode === "rebate" && "bg-[var(--ok-dim)]",
                           )}
-                          disabled={busy}
-                          onClear={() => setCommissionCurrency("")}
-                          clearLabel={tc("filters.clearField")}
-                          className="h-8 text-xs"
-                        />
-                      </div>
+                        >
+                          {t(`execReport.dialog.economics.commission.mode.${mode}`)}
+                        </Button>
+                      ))}
                     </div>
-                  </section>
-
-                </div>
-              </>
-            )}
-
-            <div className="space-y-1.5">
-              <Label htmlFor="er-leaves">
-                {t("execReport.dialog.leavesQty")}
-              </Label>
-              <div className="flex gap-2">
-                <NumberStepper
-                  id="er-leaves"
-                  value={leavesQuantity}
-                  onChange={setLeavesQuantity}
-                  placeholder={t("execReport.dialog.leavesQtyPlaceholder")}
-                  disabled={busy}
-                  onClear={() => setLeavesQuantity("")}
-                  clearLabel={tc("filters.clearField")}
-                  className="min-w-0 flex-1"
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  title={t("execReport.dialog.calculateLeaves")}
-                  aria-label={t("execReport.dialog.calculateLeaves")}
-                  disabled={!canCalculateLeaves}
-                  onClick={calculateLeavesQuantity}
-                >
-                  <Calculator />
-                </Button>
-              </div>
+                    {commissionMode !== "none" && (
+                      <div className="grid grid-cols-2 items-end gap-3">
+                        <div className="space-y-1.5">
+                          <Label htmlFor="er-commission-amount">
+                            {t("execReport.dialog.commissionAmount")}
+                          </Label>
+                          <NumberStepper
+                            id="er-commission-amount"
+                            value={commissionAmount}
+                            onChange={setCommissionAmount}
+                            placeholder={t(
+                              "execReport.dialog.commissionAmountPlaceholder",
+                            )}
+                            disabled={busy}
+                            allowSignedInput={false}
+                            onClear={() => setCommissionAmount("")}
+                            clearLabel={tc("filters.clearField")}
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <Label htmlFor="er-commission-currency">
+                            {t("execReport.dialog.commissionCurrency")}
+                          </Label>
+                          <Autocomplete
+                            id="er-commission-currency"
+                            value={commissionCurrency}
+                            onChange={setCommissionCurrency}
+                            suggestions={commissionCurrencySuggestions}
+                            placeholder={t(
+                              "execReport.dialog.commissionCurrencyPlaceholder",
+                            )}
+                            disabled={busy}
+                            onClear={() => setCommissionCurrency("")}
+                            clearLabel={tc("filters.clearField")}
+                            className="h-8 text-xs"
+                          />
+                        </div>
+                      </div>
+                    )}
+              </section>
             </div>
+
+            {requiresLeaves && (
+              <div className="space-y-1.5">
+                <Label htmlFor="er-leaves">
+                  {t("execReport.dialog.leavesQty")}
+                </Label>
+                <div className="flex gap-2">
+                  <NumberStepper
+                    id="er-leaves"
+                    value={leavesQuantity}
+                    onChange={setLeavesQuantity}
+                    placeholder={t("execReport.dialog.leavesQtyPlaceholder")}
+                    disabled={busy}
+                    allowSignedInput={false}
+                    onClear={() => setLeavesQuantity("")}
+                    clearLabel={tc("filters.clearField")}
+                    className="min-w-0 flex-1"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    title={t("execReport.dialog.calculateLeaves")}
+                    aria-label={t("execReport.dialog.calculateLeaves")}
+                    disabled={!canCalculateLeaves}
+                    onClick={calculateLeavesQuantity}
+                  >
+                    <Calculator />
+                  </Button>
+                </div>
+              </div>
+            )}
 
             <label className="flex items-center gap-2 text-xs text-text cursor-pointer select-none">
               <input
@@ -1447,7 +1655,7 @@ function ExecReportDialog({
               <Button variant="outline" size="sm" onClick={handleClose} disabled={busy}>
                 {tc("actions.cancel")}
               </Button>
-              <Button size="sm" onClick={submit} disabled={busy}>
+              <Button size="sm" onClick={submit} disabled={busy || !canSubmit}>
                 {busy ? t("execReport.dialog.submitBusy") : t("execReport.dialog.submit")}
               </Button>
             </DialogFooter>
@@ -1469,12 +1677,16 @@ interface OrderDetailDialogProps {
   onExecReport: (orderExternalId: string, values?: ExecReportInitialValues) => void;
   onCloneOrder: (values: OrderInitialValues) => void;
   onCloneExecReport: (orderExternalId: string, values: ExecReportInitialValues) => void;
-  /** Approval token for a held order awaiting confirm/cancel, or null when none
-   *  is retained (immediate order, or the token was lost on reload). */
-  heldToken: ApprovalToken | null;
-  /** Called after the held reservation is resolved (confirmed or cancelled) so
-   *  the page drops the now-spent token and refetches server state. */
-  onHeldResolved: (orderExternalId: string) => void;
+  /** Approval token for a workflow order, or null when none is retained
+   *  (immediate order, or the token was lost on reload). */
+  workflowToken: ApprovalToken | null;
+  /** Called after a workflow shortcut succeeds so the page refetches server
+   *  state. Confirmation keeps the token because it is history-only; a
+   *  successful cancellation consumes it. */
+  onWorkflowShortcutCompleted: (
+    orderExternalId: string,
+    action: "confirm" | "cancel",
+  ) => void;
   successBanner?: string;
 }
 
@@ -1509,10 +1721,10 @@ function accountBlockReason(ev: OrderEvent): string | null {
   return details.length > 0 ? `${reason} [${details.join(", ")}]` : reason;
 }
 
-function OrderDetailDialog({ orderExternalId, refreshKey, onClose, onExecReport, onCloneOrder, onCloneExecReport, heldToken, onHeldResolved, successBanner }: OrderDetailDialogProps) {
+function OrderDetailDialog({ orderExternalId, refreshKey, onClose, onExecReport, onCloneOrder, onCloneExecReport, workflowToken, onWorkflowShortcutCompleted, successBanner }: OrderDetailDialogProps) {
   const { t } = useTranslation("orders");
   const { t: tc } = useTranslation();
-  const { fetchOrderDetail, confirmHeldOrder, cancelHeldOrder } =
+  const { fetchOrderDetail, confirmOrder, cancelOrder } =
     useOfficerApi();
 
   const [state, setState] = useState<DetailState>({ phase: "loading" });
@@ -1520,13 +1732,11 @@ function OrderDetailDialog({ orderExternalId, refreshKey, onClose, onExecReport,
   // when the panel is closed. Officer signs each engine-processed request 1:1
   // with the event it produced, so verification is per timeline event.
   const [verifyEventId, setVerifyEventId] = useState<string | null>(null);
-  // Hold-resolution UI state: the in-flight action, an operator-set force flag,
-  // and the last error message from a failed confirm/cancel.
-  const [holdAction, setHoldAction] = useState<"confirm" | "cancel" | null>(
+  // Workflow-shortcut UI state: the in-flight action and the last error.
+  const [shortcutAction, setShortcutAction] = useState<"confirm" | "cancel" | null>(
     null,
   );
-  const [holdForce, setHoldForce] = useState(false);
-  const [holdError, setHoldError] = useState<string | null>(null);
+  const [shortcutError, setShortcutError] = useState<string | null>(null);
 
   useEffect(() => {
     if (orderExternalId === null) {
@@ -1536,9 +1746,8 @@ function OrderDetailDialog({ orderExternalId, refreshKey, onClose, onExecReport,
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setState({ phase: "loading" });
     setVerifyEventId(null);
-    setHoldAction(null);
-    setHoldForce(false);
-    setHoldError(null);
+    setShortcutAction(null);
+    setShortcutError(null);
     const controller = new AbortController();
     fetchOrderDetail(orderExternalId, controller.signal)
       .then(({ order, events, trades }) => {
@@ -1574,37 +1783,32 @@ function OrderDetailDialog({ orderExternalId, refreshKey, onClose, onExecReport,
     return price;
   }
 
-  // The backend owns status validation for held-resolution attempts; the UI only
-  // checks whether this session still carries a token it can submit.
-  const canResolveHold =
-    state.phase === "ready" && heldToken !== null;
+  // The backend owns activity validation; the UI only checks whether this
+  // session still carries a token it can submit.
+  const canUseWorkflowShortcut =
+    state.phase === "ready" && workflowToken !== null;
 
-  async function resolveHold(action: "confirm" | "cancel") {
-    if (orderExternalId === null || heldToken === null || holdAction !== null) {
+  async function runWorkflowShortcut(action: "confirm" | "cancel") {
+    if (orderExternalId === null || workflowToken === null || shortcutAction !== null) {
       return;
     }
-    setHoldAction(action);
-    setHoldError(null);
+    setShortcutAction(action);
+    setShortcutError(null);
     try {
       if (action === "confirm") {
-        await confirmHeldOrder(orderExternalId, {
-          token: heldToken.token,
-          force: holdForce || undefined,
+        await confirmOrder(orderExternalId, {
+          token: workflowToken.token,
         });
       } else {
-        await cancelHeldOrder(orderExternalId, {
-          token: heldToken.token,
-          force: holdForce || undefined,
+        await cancelOrder(orderExternalId, {
+          token: workflowToken.token,
         });
       }
-      // The token is spent; drop it and let the page refetch server truth. The
-      // detail refresh (via onHeldResolved bumping refreshKey) reloads this view
-      // so the resolved status comes from the engine, never the request.
-      onHeldResolved(orderExternalId);
+      onWorkflowShortcutCompleted(orderExternalId, action);
     } catch (err) {
-      setHoldError(errMessage(err));
+      setShortcutError(errMessage(err));
     } finally {
-      setHoldAction(null);
+      setShortcutAction(null);
     }
   }
 
@@ -2004,52 +2208,42 @@ function OrderDetailDialog({ orderExternalId, refreshKey, onClose, onExecReport,
               )}
             </div>
 
-            {canResolveHold && (
+            {canUseWorkflowShortcut && (
               <div className="space-y-3 rounded-card border border-border bg-surface-2 p-3">
                 <div>
                   <h4 className="text-xs font-bold text-text">
-                    {t("detail.dialog.hold.title")}
+                    {t("detail.dialog.workflow.title")}
                   </h4>
                   <p className="mt-0.5 text-[0.6875rem] text-muted">
-                    {t("detail.dialog.hold.description")}
+                    {t("detail.dialog.workflow.description")}
                   </p>
                 </div>
-                <label className="flex items-center gap-2 text-xs text-text cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={holdForce}
-                    onChange={(e) => setHoldForce(e.target.checked)}
-                    disabled={holdAction !== null}
-                    className="accent-[var(--accent)]"
-                  />
-                  {t("detail.dialog.hold.force")}
-                </label>
-                {holdError && (
+                {shortcutError && (
                   <ErrorBanner
-                    message={holdError}
-                    onDismiss={() => setHoldError(null)}
+                    message={shortcutError}
+                    onDismiss={() => setShortcutError(null)}
                   />
                 )}
                 <div className="flex gap-2">
                   <Button
                     size="sm"
-                    onClick={() => void resolveHold("confirm")}
-                    disabled={holdAction !== null}
+                    onClick={() => void runWorkflowShortcut("confirm")}
+                    disabled={shortcutAction !== null}
                   >
-                    {holdAction === "confirm"
-                      ? t("detail.dialog.hold.confirmBusy")
-                      : t("detail.dialog.hold.confirm")}
+                    {shortcutAction === "confirm"
+                      ? t("detail.dialog.workflow.confirmBusy")
+                      : t("detail.dialog.workflow.confirm")}
                   </Button>
                   <Button
                     variant="outline"
                     size="sm"
                     className="text-[var(--danger)] hover:border-[var(--danger)] hover:text-[var(--danger)]"
-                    onClick={() => void resolveHold("cancel")}
-                    disabled={holdAction !== null}
+                    onClick={() => void runWorkflowShortcut("cancel")}
+                    disabled={shortcutAction !== null}
                   >
-                    {holdAction === "cancel"
-                      ? t("detail.dialog.hold.cancelBusy")
-                      : t("detail.dialog.hold.cancel")}
+                    {shortcutAction === "cancel"
+                      ? t("detail.dialog.workflow.cancelBusy")
+                      : t("detail.dialog.workflow.cancel")}
                   </Button>
                 </div>
               </div>
@@ -2060,7 +2254,12 @@ function OrderDetailDialog({ orderExternalId, refreshKey, onClose, onExecReport,
                 variant="outline"
                 size="sm"
                 className="sm:mr-auto"
-                onClick={() => onExecReport(orderExternalId, execReportInitialValuesFromOrder(state.order))}
+                onClick={() =>
+                  onExecReport(
+                    orderExternalId,
+                    execReportInitialValuesFromOrder(state.order, state.events),
+                  )
+                }
               >
                 {t("detail.dialog.trades.submitExecReport")}
               </Button>
@@ -2995,6 +3194,17 @@ type TradeAdvancedFilterDraft = {
   lockPriceMax: string;
 };
 
+function rangeFilterControlsValid(
+  mode: RangeFilterMode,
+  min: string,
+  max: string,
+): boolean {
+  const activeMode = mode === "all" ? "greater_than" : mode;
+  const firstValue = activeMode === "less_than" ? max : min;
+  const secondValue = activeMode === "between" ? max : "";
+  return isDecimalRangeValid(activeMode, firstValue, secondValue);
+}
+
 /** The advanced-dialog status filter: checkboxes grouped by lifecycle phase,
  *  plus per-group quick selects and a reset. Multi-select over a status set;
  *  an empty selection means no status filter. */
@@ -3422,6 +3632,33 @@ export function Orders() {
   // over any advanced selection, overwriting it to match.
   const statusIsAll = orderStatuses.length === 0;
   const statusIsActive = sameStatusSet(orderStatuses, ACTIVE_STATUS_SET);
+  const orderAdvancedNumericValid =
+    rangeFilterControlsValid(
+      orderAdvancedDraft.amountMode,
+      orderAdvancedDraft.amountMin,
+      orderAdvancedDraft.amountMax,
+    ) &&
+    rangeFilterControlsValid(
+      orderAdvancedDraft.priceMode,
+      orderAdvancedDraft.priceMin,
+      orderAdvancedDraft.priceMax,
+    );
+  const tradeAdvancedNumericValid =
+    isDecimalRangeValid(
+      tradeAdvancedDraft.quantityMode,
+      tradeAdvancedDraft.quantityMin,
+      tradeAdvancedDraft.quantityMax,
+    ) &&
+    isDecimalRangeValid(
+      tradeAdvancedDraft.priceMode,
+      tradeAdvancedDraft.priceMin,
+      tradeAdvancedDraft.priceMax,
+    ) &&
+    isDecimalRangeValid(
+      tradeAdvancedDraft.lockPriceMode,
+      tradeAdvancedDraft.lockPriceMin,
+      tradeAdvancedDraft.lockPriceMax,
+    );
 
   function normalizeOrderStatusSet(
     statuses: readonly OrderStatusValue[],
@@ -3779,23 +4016,22 @@ export function Orders() {
   const [lookupBusy, setLookupBusy] = useState(false);
   const [lookupNotFoundOpen, setLookupNotFoundOpen] = useState(false);
   const [verifyTokenOpen, setVerifyTokenOpen] = useState(false);
-  // Approval tokens for held orders created in this session, keyed by order
-  // external id. A held order needs its token to confirm or cancel, and the
-  // token is only returned by submit; it is not persisted onto the order, so it
-  // lives here in memory until the operator resolves the hold or reloads.
-  const [heldOrderTokens, setHeldOrderTokens] = useState<
+  // Workflow approval tokens created in this session, keyed by order external
+  // id. The token is returned only by submit, so it remains in page state until
+  // cancellation, an explicit report, or reload; confirmation is history-only.
+  const [workflowOrderTokens, setWorkflowOrderTokens] = useState<
     Record<string, ApprovalToken>
   >({});
 
-  const rememberHeldToken = useCallback((token: ApprovalToken) => {
+  const rememberWorkflowToken = useCallback((token: ApprovalToken) => {
     if (token.token === "" || token.orderExternalId === "") {
       return;
     }
-    setHeldOrderTokens((prev) => ({ ...prev, [token.orderExternalId]: token }));
+    setWorkflowOrderTokens((prev) => ({ ...prev, [token.orderExternalId]: token }));
   }, []);
 
-  const forgetHeldToken = useCallback((orderExternalId: string) => {
-    setHeldOrderTokens((prev) => {
+  const forgetWorkflowToken = useCallback((orderExternalId: string) => {
+    setWorkflowOrderTokens((prev) => {
       if (!(orderExternalId in prev)) {
         return prev;
       }
@@ -5006,7 +5242,12 @@ export function Orders() {
             <Button
               type="button"
               onClick={applyAdvancedFilters}
-              disabled={tab === "orders" && orderStatusesDraft.length === 0}
+              disabled={
+                (tab === "orders" &&
+                  (orderStatusesDraft.length === 0 ||
+                    !orderAdvancedNumericValid)) ||
+                (tab === "trades" && !tradeAdvancedNumericValid)
+              }
             >
               {tc("filters.applyAdvanced")}
             </Button>
@@ -5105,7 +5346,7 @@ export function Orders() {
           id,
           banner ?? t("addOrder.added"),
         )}
-        onHeldTokenIssued={rememberHeldToken}
+        onWorkflowTokenIssued={rememberWorkflowToken}
         accountSuggestions={allAccountSuggestions}
         assetSuggestions={assetSuggestions}
         initialValues={submitInitialValues}
@@ -5118,13 +5359,15 @@ export function Orders() {
         onExecReport={openExecReport}
         onCloneOrder={openCloneOrder}
         onCloneExecReport={openCloneExecReport}
-        heldToken={
+        workflowToken={
           detailOrderExternalId !== null
-            ? (heldOrderTokens[detailOrderExternalId] ?? null)
+            ? (workflowOrderTokens[detailOrderExternalId] ?? null)
             : null
         }
-        onHeldResolved={(id) => {
-          forgetHeldToken(id);
+        onWorkflowShortcutCompleted={(id, action) => {
+          if (action === "cancel") {
+            forgetWorkflowToken(id);
+          }
           setDetailRefreshKey((value) => value + 1);
           ordersResult.reload();
         }}
@@ -5135,6 +5378,9 @@ export function Orders() {
         orderExternalId={execReportOrderExternalId}
         onClose={closeExecReport}
         onSubmitted={(update) => {
+          // Any explicit report permanently moves this order out of the safe
+          // shortcut case: later lifecycle changes require another full report.
+          forgetWorkflowToken(update.orderExternalId);
           // Reflect only server truth: refetch the table and the open detail so
           // the rendered status/leaves come from the engine, not the request.
           if (detailOrderExternalId === update.orderExternalId) {

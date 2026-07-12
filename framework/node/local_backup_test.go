@@ -581,9 +581,3 @@ func TestLocalNode_MissingAccountAdminNotFoundWithResolver(t *testing.T) {
 		t.Fatalf("SetAccountGroup: want ErrNotFound, got %v", err)
 	}
 }
-
-// --- Atomic held-resolution / settlement at the node layer -------------------
-
-// seedHeldOrder creates an accepted order plus a held reservation intent bound to
-// it, returning the order. It mirrors the seeding the backend would have done at
-// hold time so the node's confirm/cancel paths have a durable intent to resolve.

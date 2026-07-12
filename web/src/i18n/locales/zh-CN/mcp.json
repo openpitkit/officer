@@ -60,10 +60,10 @@
       "description": "通过盘前校验提交订单意向，并获取已签名的审批令牌。"
     },
     "confirm_execution": {
-      "description": "确认（提交）此前已审批订单的执行。"
+      "description": "为尚无执行报告活动的工作流订单记录确认历史。"
     },
     "cancel": {
-      "description": "取消 / 撤销待处理的审批令牌或预留。"
+      "description": "取消尚无执行报告活动的工作流订单。"
     },
     "get_next_token": {
       "description": "从注册表中获取下一个交易审批令牌。"

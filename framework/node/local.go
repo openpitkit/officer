@@ -196,6 +196,26 @@ func (n *localNode) fatalPostEnginePersistence(
 	return err
 }
 
+// fatalPostCommitAudit routes an audit failure after a durable store mutation
+// into the fatal-shutdown hook. The caller has already reported success to its
+// transactional persistence seam, so continuing would let a retry duplicate
+// history that the first request committed without its required audit row.
+func (n *localNode) fatalPostCommitAudit(
+	operation string, accountID string, err error,
+) error {
+	if err == nil {
+		return nil
+	}
+	if accountID == "" {
+		accountID = "unknown"
+	}
+	n.fatal(fmt.Errorf(
+		"operation=%q account_id=%s: post-commit audit failure: %w",
+		operation, accountID, err,
+	))
+	return err
+}
+
 // fatalPostEngineAuditByCode routes a post-engine audit-write failure into the
 // fatal-shutdown hook, identifying the subject by its operator-facing code
 // (subjectKind is "account" or "group") rather than the engine surrogate. The
@@ -488,7 +508,6 @@ func (n *localNode) rebuildEngineFromStore(ctx context.Context) error {
 	if next == nil {
 		return fmt.Errorf("build restored engine returned nil")
 	}
-	next.SetReservationStore(n.realm)
 	n.swapEngine(next)
 	return nil
 }

@@ -538,7 +538,7 @@ func TestConfirmExecution_HappyPath(t *testing.T) {
 			ExternalID: extID("order-1"), Status: domain.OrderStatusCommitted,
 		},
 	}
-	body, _ := json.Marshal(map[string]any{"token": "mytoken", "force": true})
+	body, _ := json.Marshal(map[string]any{"token": "mytoken"})
 	r, err := newRouter(svc)
 	if err != nil {
 		t.Fatal(err)
@@ -556,9 +556,6 @@ func TestConfirmExecution_HappyPath(t *testing.T) {
 		t.Errorf("want externalId=%s, got %v", extID("order-1").String(), ord["externalId"])
 	}
 	assertNoSurrogateID(t, ord)
-	if !svc.confirmForce {
-		t.Fatal("force was not forwarded to ConfirmExecution")
-	}
 }
 
 // TestConfirmExecution_MissingToken verifies that a missing token yields 400.
@@ -587,7 +584,7 @@ func TestCancelOrder_HappyPath(t *testing.T) {
 		},
 	}
 	body, _ := json.Marshal(map[string]any{
-		"token": "mytoken", "reason": "user request", "force": true,
+		"token": "mytoken", "reason": "user request",
 	})
 	r, err := newRouter(svc)
 	if err != nil {
@@ -606,9 +603,6 @@ func TestCancelOrder_HappyPath(t *testing.T) {
 		t.Errorf("want externalId=%s, got %v", extID("order-1").String(), ord["externalId"])
 	}
 	assertNoSurrogateID(t, ord)
-	if !svc.cancelForce {
-		t.Fatal("force was not forwarded to CancelOrder")
-	}
 }
 
 // TestCancelOrder_MissingToken verifies that a missing token yields 400.
@@ -629,11 +623,10 @@ func TestCancelOrder_MissingToken(t *testing.T) {
 }
 
 // TestConfirmExecution_TerminalOrderConflict verifies POST /orders/{id}/confirm
-// with force=false on a terminal-status order surfaces the node's ErrTerminalOrder
-// as 409 terminal_order.
+// surfaces the node's ErrTerminalOrder as 409 terminal_order.
 func TestConfirmExecution_TerminalOrderConflict(t *testing.T) {
 	svc := &fakeService{confirmErr: domain.ErrTerminalOrder}
-	body, _ := json.Marshal(map[string]any{"token": "mytoken", "force": false})
+	body, _ := json.Marshal(map[string]any{"token": "mytoken"})
 	r, err := newRouter(svc)
 	if err != nil {
 		t.Fatal(err)
@@ -650,18 +643,42 @@ func TestConfirmExecution_TerminalOrderConflict(t *testing.T) {
 	if errObj["code"] != "terminal_order" {
 		t.Fatalf("want code=terminal_order, got %v", errObj["code"])
 	}
-	if svc.confirmForce {
-		t.Fatal("force must be false in this test")
+}
+
+// TestConfirmExecution_ExecutionReportRequired verifies that the history-only
+// shortcut tells the caller to use the normal execution-report workflow once
+// the order already has report activity.
+func TestConfirmExecution_ExecutionReportRequired(t *testing.T) {
+	svc := &fakeService{confirmErr: domain.ErrExecutionReportRequired}
+	body, _ := json.Marshal(map[string]any{"token": "mytoken"})
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec,
+		httptest.NewRequest(http.MethodPost, "/api/v1/orders/"+extID("order-1").String()+"/confirm",
+			bytes.NewReader(body)))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+	m := bodyMap(t, rec.Result())
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "execution_report_required" {
+		t.Fatalf("want code=execution_report_required, got %v", errObj["code"])
+	}
+	if errObj["message"] != domain.ErrExecutionReportRequired.Error() {
+		t.Fatalf("want message=%q, got %v",
+			domain.ErrExecutionReportRequired.Error(), errObj["message"])
 	}
 }
 
-// TestCancelOrder_TerminalOrderConflict verifies POST /orders/{id}/cancel with
-// force=false on a terminal-status order surfaces ErrTerminalOrder as 409
-// terminal_order.
+// TestCancelOrder_TerminalOrderConflict verifies POST /orders/{id}/cancel on a
+// terminal-status order surfaces ErrTerminalOrder as 409 terminal_order.
 func TestCancelOrder_TerminalOrderConflict(t *testing.T) {
 	svc := &fakeService{cancelErr: domain.ErrTerminalOrder}
 	body, _ := json.Marshal(map[string]any{
-		"token": "mytoken", "reason": "user request", "force": false,
+		"token": "mytoken", "reason": "user request",
 	})
 	r, err := newRouter(svc)
 	if err != nil {
@@ -678,6 +695,35 @@ func TestCancelOrder_TerminalOrderConflict(t *testing.T) {
 	errObj, _ := m["error"].(map[string]any)
 	if errObj["code"] != "terminal_order" {
 		t.Fatalf("want code=terminal_order, got %v", errObj["code"])
+	}
+}
+
+// TestCancelOrder_ExecutionReportRequired verifies that Officer refuses to
+// infer a cancellation report after any explicit execution-report activity.
+func TestCancelOrder_ExecutionReportRequired(t *testing.T) {
+	svc := &fakeService{cancelErr: domain.ErrExecutionReportRequired}
+	body, _ := json.Marshal(map[string]any{
+		"token": "mytoken", "reason": "user request",
+	})
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec,
+		httptest.NewRequest(http.MethodPost, "/api/v1/orders/"+extID("order-1").String()+"/cancel",
+			bytes.NewReader(body)))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+	m := bodyMap(t, rec.Result())
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "execution_report_required" {
+		t.Fatalf("want code=execution_report_required, got %v", errObj["code"])
+	}
+	if errObj["message"] != domain.ErrExecutionReportRequired.Error() {
+		t.Fatalf("want message=%q, got %v",
+			domain.ErrExecutionReportRequired.Error(), errObj["message"])
 	}
 }
 

@@ -34,6 +34,7 @@ import {
   parseTokenApproval,
   verifyEd25519,
   type ParsedApproval,
+  type ParsedApprovalCommission,
 } from "@/lib/approvalEnvelope";
 import { cn } from "@/lib/utils";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
@@ -129,6 +130,23 @@ function BreakdownRow({
       </span>
     </div>
   );
+}
+
+function BreakdownSection({ label }: { label: string }): ReactElement {
+  return (
+    <div className="py-2 text-[0.625rem] font-semibold uppercase tracking-[0.08em] text-accent">
+      {label}
+    </div>
+  );
+}
+
+function breakdownCommission(
+  commission: ParsedApprovalCommission | null,
+): string {
+  if (commission === null) {
+    return "";
+  }
+  return [commission.amount, commission.currency].filter(Boolean).join(" ");
 }
 
 // ---------------------------------------------------------------------------
@@ -272,11 +290,34 @@ function ApprovalBreakdown({
       note={t("breakdown.readOnlyNote")}
     >
       <div className="divide-y divide-border rounded-card border border-border bg-surface-2 px-3">
+        <BreakdownRow label={t("breakdown.version")} value={fields.version} />
+        <BreakdownRow
+          label={t("breakdown.approvalId")}
+          value={fields.approvalId}
+        />
+        <BreakdownRow
+          label={t("breakdown.approvalRef")}
+          value={fields.approvalRef}
+        />
         <BreakdownRow
           label={t("breakdown.requestType")}
           value={requestType}
         />
+        <BreakdownRow label={t("breakdown.mode")} value={fields.mode} />
+        <BreakdownRow
+          label={t("breakdown.orderExternalId")}
+          value={fields.orderExternalId}
+        />
+        <BreakdownRow
+          label={t("breakdown.eventExternalId")}
+          value={fields.eventExternalId}
+        />
         <BreakdownRow label={t("breakdown.verdict")} value={fields.verdict} />
+        <BreakdownRow
+          label={t("breakdown.instrument")}
+          value={fields.instrument}
+        />
+        <BreakdownRow label={t("breakdown.venue")} value={fields.venue} />
         <BreakdownRow label={t("breakdown.side")} value={fields.side} />
         <BreakdownRow
           label={t("breakdown.quantity")}
@@ -295,23 +336,109 @@ function ApprovalBreakdown({
           value={fields.limitPrice}
         />
         <BreakdownRow
-          label={t("breakdown.estimatePrice")}
-          value={fields.estimatePrice}
+          label={t("breakdown.priceCurrency")}
+          value={fields.priceCurrency}
         />
         <BreakdownRow
-          label={t("breakdown.instrument")}
-          value={fields.instrument}
+          label={t("breakdown.timeInForce")}
+          value={fields.timeInForce}
         />
         <BreakdownRow
           label={t("breakdown.account")}
           value={fields.accountId}
         />
         <BreakdownRow
+          label={t("breakdown.accountGroup")}
+          value={fields.accountGroupId}
+        />
+        <BreakdownRow
+          label={t("breakdown.estimatePrice")}
+          value={fields.estimatePrice}
+        />
+        <BreakdownRow
+          label={t("breakdown.estimateSource")}
+          value={fields.estimateSource}
+        />
+        <BreakdownRow
           label={t("breakdown.policySummary")}
           value={fields.policySummary}
         />
+        <BreakdownRow
+          label={t("breakdown.rejectCode")}
+          value={fields.rejectCode}
+        />
+        <BreakdownRow
+          label={t("breakdown.rejectScope")}
+          value={fields.rejectScope}
+        />
+        <BreakdownRow
+          label={t("breakdown.rejectPolicy")}
+          value={fields.rejectPolicy}
+        />
+        <BreakdownRow
+          label={t("breakdown.rejectReason")}
+          value={fields.rejectReason}
+        />
+        <BreakdownRow
+          label={t("breakdown.principal")}
+          value={fields.principal}
+        />
+        {fields.executionReport ? (
+          <>
+            <BreakdownSection label={t("breakdown.executionReportRequest")} />
+            <BreakdownRow
+              label={t("breakdown.baseAsset")}
+              value={fields.executionReport.baseAsset}
+            />
+            <BreakdownRow
+              label={t("breakdown.quoteAsset")}
+              value={fields.executionReport.quoteAsset}
+            />
+            <BreakdownRow
+              label={t("breakdown.fillQuantity")}
+              value={fields.executionReport.fillQuantity}
+            />
+            <BreakdownRow
+              label={t("breakdown.fillPrice")}
+              value={fields.executionReport.fillPrice}
+            />
+            <BreakdownRow
+              label={t("breakdown.leavesQuantity")}
+              value={fields.executionReport.leavesQuantity}
+            />
+            <BreakdownRow
+              label={t("breakdown.lockPrice")}
+              value={fields.executionReport.lockPrice}
+            />
+            <BreakdownRow
+              label={t("breakdown.commission")}
+              value={breakdownCommission(fields.executionReport.commission)}
+            />
+            <BreakdownRow
+              label={t("breakdown.order")}
+              value={fields.executionReport.order}
+            />
+            <BreakdownRow
+              label={t("breakdown.account")}
+              value={fields.executionReport.account}
+            />
+            <BreakdownRow
+              label={t("breakdown.side")}
+              value={fields.executionReport.side}
+            />
+            <BreakdownRow
+              label={t("breakdown.orderStatus")}
+              value={fields.executionReport.orderStatus}
+            />
+            <BreakdownRow
+              label={t("breakdown.force")}
+              value={fields.executionReport.force}
+            />
+          </>
+        ) : null}
         {fields.result ? (
           <>
+            <BreakdownSection label={t("breakdown.recordedResult")} />
             <BreakdownRow
               label={t("breakdown.outcome")}
               value={fields.result.outcome}
@@ -325,6 +452,14 @@ function ApprovalBreakdown({
               value={fields.result.fillPrice}
             />
             <BreakdownRow
+              label={t("breakdown.fillLockPrice")}
+              value={fields.result.fillLockPrice}
+            />
+            <BreakdownRow
+              label={t("breakdown.commission")}
+              value={breakdownCommission(fields.result.commission)}
+            />
+            <BreakdownRow
               label={t("breakdown.leavesQuantity")}
               value={fields.result.leavesQuantity}
             />
@@ -332,8 +467,23 @@ function ApprovalBreakdown({
               label={t("breakdown.orderStatus")}
               value={fields.result.orderStatus}
             />
+            {fields.result.blocks.map((block, index) => (
+              <BreakdownRow
+                key={`${block.account}:${block.code}:${index}`}
+                label={t("breakdown.block", { index: index + 1 })}
+                value={[
+                  block.account,
+                  block.code,
+                  block.reason,
+                  block.details,
+                ].filter(Boolean).join(" · ")}
+              />
+            ))}
           </>
         ) : null}
+        <BreakdownRow label={t("breakdown.nonce")} value={fields.nonce} />
+        <BreakdownRow label={t("breakdown.keyId")} value={fields.keyId} />
+        <BreakdownRow label={t("breakdown.algorithm")} value={fields.alg} />
         <BreakdownRow label={t("breakdown.issuedAt")} value={issued} />
       </div>
     </LedgerBlock>

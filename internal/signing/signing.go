@@ -70,10 +70,10 @@ type Store interface {
 	SetSigningConfig(ctx context.Context, key, value string) error
 }
 
-// maxUsedNonces bounds the single-use replay set. A held-reservation resolution
-// or immediate submit each consume one nonce; the cap keeps recent nonces for
-// replay detection while bounding memory over an unbounded run. Eviction is FIFO
-// (oldest inserted first) once the cap is exceeded.
+// maxUsedNonces bounds the single-use replay set for immediate tokens. The cap
+// keeps recent nonces for replay detection while bounding memory over an
+// unbounded run. Eviction is FIFO (oldest inserted first) once the cap is
+// exceeded.
 const maxUsedNonces = 1 << 16
 
 // Service signs and verifies approval tokens against the persisted key set. The

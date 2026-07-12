@@ -107,7 +107,7 @@ const DEMO_LIMITS: Limit[] = [
 ];
 
 const DEMO_POSITIONS = [
-  { asset: "USD", balance: "100000" },
+  { asset: "USD", balance: "100000", averageEntryPrice: "1" },
   { asset: "BTC", balance: "1", averageEntryPrice: "65000" },
   { asset: "ETH", balance: "10", averageEntryPrice: "3500" },
   { asset: "USDT", balance: "25000", averageEntryPrice: "1" },

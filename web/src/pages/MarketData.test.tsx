@@ -343,6 +343,39 @@ describe("provider references", () => {
     expect(screen.queryByLabelText("Contract symbol")).not.toBeInTheDocument();
   });
 
+  it("requires a JSON-safe non-negative integer IB client ID when creating", async () => {
+    const user = userEvent.setup();
+    const onCreate = vi.fn().mockResolvedValue(true);
+    render(
+      <I18nextProvider i18n={i18n}>
+        <CreateInstanceDialog
+          provider={{ type: "ib", title: "Interactive Brokers" }}
+          existingLabels={[]}
+          busy={false}
+          onOpenChange={vi.fn()}
+          onCreate={onCreate}
+        />
+      </I18nextProvider>,
+    );
+
+    const submit = screen.getByRole("button", { name: "Add source" });
+    const clientId = screen.getByLabelText("Client ID");
+    expect(submit).toBeEnabled();
+
+    await user.type(clientId, "1.5");
+    expect(submit).toBeDisabled();
+    await user.clear(clientId);
+    await user.type(clientId, "-1");
+    expect(submit).toBeDisabled();
+    await user.clear(clientId);
+    await user.type(clientId, "9007199254740992");
+    expect(submit).toBeDisabled();
+    await user.clear(clientId);
+    await user.type(clientId, "7");
+    expect(submit).toBeEnabled();
+    expect(onCreate).not.toHaveBeenCalled();
+  });
+
   it("shows structured instrument metadata and duplicate pair warnings", () => {
     renderCard(
       ibInstance({
@@ -393,6 +426,68 @@ describe("provider references", () => {
   });
 });
 
+describe("manual market-data numeric guards", () => {
+  function manualInstance(
+    overrides: Partial<MarketDataInstance> = {},
+  ): MarketDataInstance {
+    return ibInstance({
+      externalId: "manual-1",
+      provider: "byo",
+      label: "Manual",
+      verifiesSymbols: false,
+      searchesSymbols: false,
+      settings: {},
+      ...overrides,
+    });
+  }
+
+  it("blocks instrument add until identifiers and the optional mark are valid", async () => {
+    const user = userEvent.setup();
+    const onUpsertInstrument = vi.fn().mockResolvedValue(true);
+    renderCard(manualInstance(), { onUpsertInstrument });
+
+    const add = screen.getByRole("button", { name: /add instrument/i });
+    await user.type(screen.getByPlaceholderText("External symbol"), "AAPL");
+    expect(add).toBeDisabled();
+    await user.type(screen.getByPlaceholderText("Base"), "AAPL");
+    expect(add).toBeEnabled();
+
+    await user.type(screen.getByPlaceholderText("Manual price"), "bad");
+    expect(add).toBeDisabled();
+    await user.clear(screen.getByPlaceholderText("Manual price"));
+    await user.type(screen.getByPlaceholderText("Manual price"), "-10.5");
+    expect(add).toBeEnabled();
+    expect(onUpsertInstrument).not.toHaveBeenCalled();
+  });
+
+  it("blocks sending a malformed manual mark on an existing instrument", async () => {
+    const user = userEvent.setup();
+    const onUpsertInstrument = vi.fn().mockResolvedValue(true);
+    renderCard(
+      manualInstance({
+        instruments: [{
+          instanceExternalId: "manual-1",
+          externalSymbol: "AAPL",
+          baseAsset: "AAPL",
+          quoteAsset: "USD",
+          manualPrice: "150",
+          enabled: true,
+          stale: false,
+        }],
+      }),
+      { onUpsertInstrument },
+    );
+
+    const mark = screen.getByLabelText("Manual price for AAPL");
+    const send = screen.getByRole("button", { name: "Send price" });
+    expect(send).toBeEnabled();
+    await user.clear(mark);
+    await user.type(mark, "bad");
+    expect(send).toBeDisabled();
+    expect(onUpsertInstrument).not.toHaveBeenCalled();
+  });
+});
+
 describe("IB feed resolver", () => {
   async function openIBAddDialog(user: ReturnType<typeof userEvent.setup>) {
     await user.click(screen.getByRole("button", { name: /add instrument/i }));
@@ -415,6 +510,40 @@ describe("IB feed resolver", () => {
     expect(within(dialog).getByLabelText("State")).toHaveClass(
       "h-[var(--dens-field-h)]",
     );
+  });
+
+  it("blocks add while visible IB contract numeric fields are invalid", async () => {
+    const user = userEvent.setup();
+    const onUpsertIBInstrument = vi.fn().mockResolvedValue(true);
+    renderCard(ibInstance(), { onUpsertIBInstrument });
+    const dialog = await openIBAddDialog(user);
+
+    await user.type(within(dialog).getByLabelText("External symbol"), "AAPL");
+    await user.type(within(dialog).getByLabelText("Base"), "AAPL");
+    const add = within(dialog).getByRole("button", { name: /add instrument/i });
+    expect(add).toBeEnabled();
+
+    await user.type(within(dialog).getByLabelText("Con ID"), "1.5");
+    expect(add).toBeDisabled();
+    await user.clear(within(dialog).getByLabelText("Con ID"));
+    await user.type(within(dialog).getByLabelText("Con ID"), "265598");
+    expect(add).toBeEnabled();
+
+    await user.type(within(dialog).getByLabelText("Multiplier"), "0");
+    expect(add).toBeDisabled();
+    await user.clear(within(dialog).getByLabelText("Multiplier"));
+    await user.type(within(dialog).getByLabelText("Multiplier"), "50");
+    expect(add).toBeEnabled();
+
+    const focusSpy = vi
+      .spyOn(HTMLElement.prototype, "focus")
+      .mockImplementation(() => {});
+    await user.click(within(dialog).getByLabelText("Security type"));
+    await user.click(screen.getByRole("option", { name: /Option/ }));
+    focusSpy.mockRestore();
+    await user.type(within(dialog).getByLabelText("Strike"), "bad");
+    expect(add).toBeDisabled();
+    expect(onUpsertIBInstrument).not.toHaveBeenCalled();
   });
 
   it("resolves with the typed query and maps the contract on a STK pick", async () => {
@@ -804,6 +933,7 @@ describe("IB instrument persistence (full-map send)", () => {
     await user.click(screen.getByRole("button", { name: /add instrument/i }));
     const dialog = await screen.findByRole("dialog");
     await user.type(within(dialog).getByLabelText("External symbol"), "AAPL");
+    await user.type(within(dialog).getByLabelText("Base"), "AAPL");
     await user.click(
       within(dialog).getByRole("button", { name: /add instrument/i }),
     );
@@ -925,6 +1055,30 @@ describe("IB advanced section removed", () => {
     expect(
       within(dialog).queryByLabelText("Generic ticks"),
     ).not.toBeInTheDocument();
+  });
+
+  it("keeps save disabled for a fractional IB client ID", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn().mockResolvedValue(true);
+    render(
+      <I18nextProvider i18n={i18n}>
+        <InstanceSettingsDialog
+          instance={ibInstance()}
+          busy={false}
+          existingLabels={[]}
+          onOpenChange={vi.fn()}
+          onSave={onSave}
+        />
+      </I18nextProvider>,
+    );
+
+    const clientId = screen.getByLabelText("Client ID");
+    const save = screen.getByRole("button", { name: "Save settings" });
+    expect(save).toBeEnabled();
+    await user.clear(clientId);
+    await user.type(clientId, "1.5");
+    expect(save).toBeDisabled();
+    expect(onSave).not.toHaveBeenCalled();
   });
 });
 

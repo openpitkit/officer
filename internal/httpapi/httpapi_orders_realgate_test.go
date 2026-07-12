@@ -166,6 +166,14 @@ func TestApplyExecutionReport_RealCommissionSignedAndReproduced(t *testing.T) {
 		t.Fatalf("fresh commission = %+v, want -0.30/USDT",
 			env.Approval.Result.Commission)
 	}
+	if env.Approval.ExecutionReport == nil ||
+		env.Approval.ExecutionReport.FillQuantity != "3.5" ||
+		env.Approval.ExecutionReport.FillPrice != "150.20" ||
+		env.Approval.ExecutionReport.LeavesQuantity != "6.5" ||
+		env.Approval.ExecutionReport.Order != order.ExternalID {
+		t.Fatalf("fresh attestation missing original report: %+v",
+			env.Approval.ExecutionReport)
+	}
 	canon, err := appsigning.CanonicalBytes(env.Approval)
 	if err != nil {
 		t.Fatalf("canonical bytes: %v", err)
@@ -195,6 +203,19 @@ func TestApplyExecutionReport_RealCommissionSignedAndReproduced(t *testing.T) {
 		fill.Payload.Commission.Currency != "USDT" {
 		t.Fatalf("fill event payload commission did not round-trip: %+v",
 			fill.Payload.Commission)
+	}
+	if fill.Payload.ExecutionReport == nil ||
+		fill.Payload.ExecutionReport.FillQuantity != "3.5" ||
+		fill.Payload.ExecutionReport.FillPrice != "150.20" ||
+		fill.Payload.ExecutionReport.LeavesQuantity != "6.5" ||
+		fill.Payload.ExecutionReport.Order != order.ExternalID ||
+		fill.Payload.ExecutionReport.Account != "" ||
+		fill.Payload.ExecutionReport.BaseAsset != "" ||
+		fill.Payload.ExecutionReport.QuoteAsset != "" ||
+		fill.Payload.ExecutionReport.Side != "" ||
+		fill.Payload.ExecutionReport.Force {
+		t.Fatalf("fill event did not preserve original HTTP report: %+v",
+			fill.Payload.ExecutionReport)
 	}
 
 	// Replay-from-event reconstruction path: the reproduction bundle decodes the
@@ -321,11 +342,6 @@ func (e *realGateEngine) ApplyAccountAdjustmentBatch(
 func (e *realGateEngine) SubmitOrder(context.Context, domain.Order) (engine.OrderResult, error) {
 	return engine.OrderResult{Accepted: true}, nil
 }
-func (e *realGateEngine) ReserveHold(context.Context, domain.Order) (engine.HoldResult, error) {
-	return engine.HoldResult{Accepted: true}, nil
-}
-func (e *realGateEngine) CommitHeld(context.Context, string) error   { return nil }
-func (e *realGateEngine) RollbackHeld(context.Context, string) error { return nil }
 func (e *realGateEngine) SetAccountCurrency(context.Context, domain.AccountID, string) error {
 	return nil
 }
@@ -336,10 +352,6 @@ func (e *realGateEngine) SubmitImmediate(
 	context.Context, domain.Order,
 ) (engine.ImmediateResult, error) {
 	return engine.ImmediateResult{Accepted: true}, nil
-}
-func (e *realGateEngine) SetReservationStore(engine.ReservationStore) {}
-func (e *realGateEngine) ReconcileOrphans(context.Context) (int, error) {
-	return 0, nil
 }
 func (e *realGateEngine) RunAccountSynchronized(
 	_ context.Context, _ domain.AccountID, fn func(engine.AccountLane) error,
@@ -355,8 +367,8 @@ func (e *realGateEngine) ApplyExecutionReport(
 	_ context.Context, in domain.ExecutionReportInput,
 ) (engine.ExecutionReportResult, error) {
 	// Mirror the native settlement builder (executionReportPersistenceFrom): copy
-	// the report-owned fill fields and structured commission onto both the fill
-	// event payload and the persisted trade so the attestation and listing agree.
+	// the report-owned fill fields and structured commission into persistence and
+	// the event payload; a fill also copies them onto the persisted trade.
 	// This fake carries no risk logic; it only shapes a well-formed write set so
 	// the node completes the settlement.
 	payload := domain.OrderEventPayload{
@@ -369,6 +381,7 @@ func (e *realGateEngine) ApplyExecutionReport(
 	}
 	persistence := engine.ExecutionReportPersistence{
 		OrderStatus: in.OrderStatus,
+		Commission:  in.Commission,
 		Leaves:      in.LeavesQuantity,
 		Events: []domain.OrderEvent{{
 			Order:   in.Order,

@@ -119,6 +119,7 @@ import { ClearFieldButton } from "@/components/ClearFieldButton";
 import { useDisplayPreferences } from "@/theme/display-context";
 import type { DensityMode } from "@/theme/display-context";
 import { operatorOptions } from "@/lib/dataControlLabels";
+import { isNonNegativeIntegerRangeValid } from "@/lib/numberStep";
 import { knownPageCount } from "@/lib/tablePagination";
 import { absoluteAppUrl, shareUrl } from "@/lib/shareLink";
 import { sortDirection } from "@/lib/sortDirection";
@@ -872,6 +873,18 @@ function AdvancedFilterDialog({
           : draft.accountMode,
       ...patch,
     });
+  const positionRangeValid = isNonNegativeIntegerRangeValid(
+    numberOperatorFromCountMode(draft.positionMode),
+    draft.positionMin,
+    draft.positionMax,
+  );
+  const accountRangeValid =
+    entity === "accounts" ||
+    isNonNegativeIntegerRangeValid(
+      numberOperatorFromCountMode(draft.accountMode),
+      draft.accountMin,
+      draft.accountMax,
+    );
   return (
     <Dialog
       open={open}
@@ -989,7 +1002,10 @@ function AdvancedFilterDialog({
             <Button type="button" variant="outline" onClick={onCancel}>
               {t("filters.advanced.cancel")}
             </Button>
-            <Button type="submit">
+            <Button
+              type="submit"
+              disabled={!positionRangeValid || !accountRangeValid}
+            >
               <Search className="h-3.5 w-3.5" />
               {t("common:filters.applyAdvanced")}
             </Button>

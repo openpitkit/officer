@@ -37,7 +37,9 @@ describe("orderStatus groups", () => {
   });
 
   it("exposes the active query as a stable comma-separated value", () => {
-    expect(ACTIVE_STATUS_QUERY).toBe("submitted,accepted,partially_filled");
+    expect(ACTIVE_STATUS_QUERY).toBe(
+      "submitted,accepted,committed,partially_filled",
+    );
   });
 });
 

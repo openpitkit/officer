@@ -22,7 +22,7 @@ import { describe, expect, it, vi } from "vitest";
 import { NumberStepper } from "@/components/ui/number-stepper";
 
 describe("NumberStepper", () => {
-  it("keeps invalid numeric drafts local and reports a validation error", async () => {
+  it("reports invalid numeric drafts to its owner and marks the input invalid", async () => {
     const onChange = vi.fn();
     const user = userEvent.setup();
 
@@ -34,7 +34,7 @@ describe("NumberStepper", () => {
     await user.type(input, "word");
 
     expect(input).toHaveValue("word");
-    expect(onChange).not.toHaveBeenCalled();
+    expect(onChange).toHaveBeenLastCalledWith("word");
     await waitFor(() => expect(input).toBeInvalid());
     expect(input).toHaveAttribute("aria-invalid", "true");
     expect(input).toHaveProperty("validationMessage", "Enter a valid number.");
@@ -58,5 +58,27 @@ describe("NumberStepper", () => {
     expect(onChange).toHaveBeenNthCalledWith(4, "12.5");
     expect(onChange).toHaveBeenLastCalledWith("");
     expect(input).toBeValid();
+  });
+
+  it("rejects explicit signs when signed input is disabled", async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <NumberStepper
+        aria-label="Amount"
+        value=""
+        onChange={onChange}
+        allowSignedInput={false}
+      />,
+    );
+
+    const input = screen.getByRole("textbox", { name: "Amount" });
+    await user.type(input, "+0.50");
+
+    expect(input).toHaveValue("0.50");
+    expect(onChange).not.toHaveBeenCalledWith(
+      expect.stringMatching(/^[+-]/),
+    );
   });
 });

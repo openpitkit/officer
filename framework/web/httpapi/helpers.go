@@ -109,6 +109,8 @@ func WriteErr(w http.ResponseWriter, err error) {
 		writeHasDependentsErr(w, err)
 	case errors.Is(err, domain.ErrTerminalOrder):
 		WriteErrMsg(w, http.StatusConflict, "terminal_order", domain.ErrTerminalOrder.Error())
+	case errors.Is(err, domain.ErrExecutionReportRequired):
+		WriteErrMsg(w, http.StatusConflict, "execution_report_required", err.Error())
 	case errors.Is(err, domain.ErrConflict):
 		WriteErrMsg(w, http.StatusConflict, "conflict", err.Error())
 	case errors.Is(err, domain.ErrEngineRestarting):

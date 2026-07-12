@@ -60,10 +60,10 @@
       "description": "Submit an order intent through pre-trade and obtain a signed approval token."
     },
     "confirm_execution": {
-      "description": "Confirm execution (commit) of a previously approved order."
+      "description": "Record confirmation history for a workflow order with no execution-report activity."
     },
     "cancel": {
-      "description": "Cancel / revoke a pending approval token or reservation."
+      "description": "Cancel a workflow order with no execution-report activity."
     },
     "get_next_token": {
       "description": "Fetch the next approval token for a trade from the registry."

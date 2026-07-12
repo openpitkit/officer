@@ -205,7 +205,7 @@ func TestLocalNode_ColdStartCreateAccountThenTrade(t *testing.T) {
 	}, testCaller); err != nil {
 		t.Fatalf("SubmitOrder: %v", err)
 	}
-	if _, result, err := n.SubmitHold(ctx, testKey("cold"), domain.Order{
+	if order, err := n.SubmitOrder(ctx, testKey("cold"), domain.Order{
 		BaseAsset:   "AAPL",
 		QuoteAsset:  "USD",
 		Side:        domain.OrderSideBuy,
@@ -213,9 +213,9 @@ func TestLocalNode_ColdStartCreateAccountThenTrade(t *testing.T) {
 		AmountValue: "5",
 		Price:       "100",
 	}, testCaller); err != nil {
-		t.Fatalf("SubmitHold: %v", err)
-	} else if !result.Accepted {
-		t.Fatalf("SubmitHold accepted = false, result = %+v", result)
+		t.Fatalf("second SubmitOrder: %v", err)
+	} else if order.Status != domain.OrderStatusCommitted {
+		t.Fatalf("second SubmitOrder status = %q, want committed", order.Status)
 	}
 }
 

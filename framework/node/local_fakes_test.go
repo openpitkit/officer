@@ -59,8 +59,8 @@ type fakeEngine struct {
 	adjustmentReject           *domain.AdjustmentOutcomeRejected
 	adjustmentNoop             bool
 	submitLock                 []byte
+	submitLeaves               string
 	submitOutcomes             []engine.BalanceOutcome
-	holdOutcomes               []engine.BalanceOutcome
 	submitReject               *domain.OrderReject
 	execReportBlocks           []domain.ExecutionAccountBlock
 	execReportOutcomes         []engine.BalanceOutcome
@@ -74,7 +74,6 @@ type fakeEngine struct {
 	laneDepth                  int
 	operationOutsideSync       bool
 	execReportOutsideSync      bool
-	reconcileCount             int
 
 	// Canned dry-run outcome and recorded probes for the check path.
 	checkResult domain.CheckResult
@@ -90,8 +89,6 @@ type fakeEngine struct {
 	failBlock         bool
 	failAdjustment    bool
 	failSubmit        bool
-	commitErr         error
-	rollbackErr       error
 	failExecReport    bool
 	failGroup         bool
 	failRegisterGroup string
@@ -99,12 +96,6 @@ type fakeEngine struct {
 	submitRelease     <-chan struct{}
 	blockGroupEntered chan string
 	blockGroupRelease <-chan struct{}
-
-	// resolveMu guards the held-resolution call logs so concurrent
-	// ConfirmHeld/CancelHeld goroutines can record under the race detector.
-	resolveMu         sync.Mutex
-	commitHeldCalls   []string
-	rollbackHeldCalls []string
 }
 
 type configureCall struct {
@@ -387,52 +378,22 @@ func (e *fakeEngine) SubmitOrder(
 	if e.submitReject != nil {
 		return engine.OrderResult{Accepted: false, Rejects: []domain.OrderReject{*e.submitReject}}, nil
 	}
+	leaves := e.submitLeaves
+	if leaves == "" && o.AmountKind == domain.OrderAmountKindQuantity {
+		leaves = o.AmountValue
+	}
+	estimateSource := domain.EstimateSourceMarketMark
+	if o.Price != "" {
+		estimateSource = domain.EstimateSourceLimit
+	}
 	return engine.OrderResult{
-		Accepted: true,
-		Lock:     e.submitLock,
-		Outcomes: e.submitOutcomes,
+		Accepted:            true,
+		Lock:                e.submitLock,
+		Outcomes:            e.submitOutcomes,
+		SettlementLockPrice: o.Price,
+		LeavesQuantity:      leaves,
+		EstimateSource:      estimateSource,
 	}, nil
-}
-
-// ReserveHold, CommitHeld, RollbackHeld, SubmitImmediate, and ReconcileOrphans
-// satisfy the held-reservation surface of the Engine interface.
-func (e *fakeEngine) ReserveHold(
-	_ context.Context, o domain.Order,
-) (engine.HoldResult, error) {
-	e.requireAccountSync()
-	if err := e.checkKnownAccount(o.Account); err != nil {
-		return engine.HoldResult{}, err
-	}
-	if e.failSubmit {
-		return engine.HoldResult{}, errors.New("reserve hold failed")
-	}
-	e.stateMu.Lock()
-	e.submitCalls = append(e.submitCalls, o)
-	e.stateMu.Unlock()
-	if e.submitReject != nil {
-		return engine.HoldResult{Accepted: false, Rejects: []domain.OrderReject{*e.submitReject}}, nil
-	}
-	return engine.HoldResult{
-		Accepted: true,
-		Lock:     e.submitLock,
-		Outcomes: e.holdOutcomes,
-	}, nil
-}
-
-func (e *fakeEngine) CommitHeld(_ context.Context, approvalID string) error {
-	e.requireAccountSync()
-	e.resolveMu.Lock()
-	e.commitHeldCalls = append(e.commitHeldCalls, approvalID)
-	e.resolveMu.Unlock()
-	return e.commitErr
-}
-
-func (e *fakeEngine) RollbackHeld(_ context.Context, approvalID string) error {
-	e.requireAccountSync()
-	e.resolveMu.Lock()
-	e.rollbackHeldCalls = append(e.rollbackHeldCalls, approvalID)
-	e.resolveMu.Unlock()
-	return e.rollbackErr
 }
 
 func (e *fakeEngine) SubmitImmediate(
@@ -456,12 +417,6 @@ func (e *fakeEngine) SubmitImmediate(
 		Lock:         e.submitLock,
 		FillQuantity: o.AmountValue,
 	}, nil
-}
-
-func (e *fakeEngine) SetReservationStore(_ engine.ReservationStore) {}
-
-func (e *fakeEngine) ReconcileOrphans(_ context.Context) (int, error) {
-	return e.reconcileCount, nil
 }
 
 func (e *fakeEngine) RunAccountSynchronized(
@@ -539,6 +494,9 @@ func (e *fakeEngine) ApplyExecutionReport(
 	payload.FillQuantity = in.FillQuantity
 	payload.FillPrice = in.FillPrice
 	payload.FillLockPrice = in.LockPrice
+	payload.LeavesQuantity = in.LeavesQuantity
+	payload.OrderStatus = string(in.OrderStatus)
+	payload.Commission = in.Commission
 	events := []domain.OrderEvent{}
 	if fakeExecutionReportCarriesFill(in) {
 		events = append(events, domain.OrderEvent{
@@ -570,8 +528,9 @@ func (e *fakeEngine) ApplyExecutionReport(
 	}
 	persistence := engine.ExecutionReportPersistence{
 		Trade:       trade,
+		Commission:  in.Commission,
 		OrderStatus: in.OrderStatus,
-		Leaves:      in.LeavesQuantity,
+		Leaves:      domain.ExecutionReportPersistedLeaves(in),
 		Balances:    balanceSettlementsFrom(e.execReportOutcomes),
 		Events:      events,
 		Blocks:      e.execReportBlocks,
@@ -737,50 +696,6 @@ func (s *failActionAuditRealm) AppendAudit(
 	return s.RealmStore.AppendAudit(ctx, entry)
 }
 
-type noFullScanReservationRealm struct {
-	store.RealmStore
-	mu              sync.Mutex
-	targetedLookups int
-	fullScans       int
-	failFullScan    bool
-}
-
-func (s *noFullScanReservationRealm) GetOpenReservationIntentByOrder(
-	ctx context.Context, order domain.ExternalID,
-) (domain.ReservationIntent, bool, error) {
-	s.mu.Lock()
-	s.targetedLookups++
-	s.mu.Unlock()
-	return s.RealmStore.GetOpenReservationIntentByOrder(ctx, order)
-}
-
-func (s *noFullScanReservationRealm) ListOpenReservationIntents(
-	ctx context.Context,
-) ([]domain.ReservationIntent, error) {
-	s.mu.Lock()
-	s.fullScans++
-	fail := s.failFullScan
-	s.mu.Unlock()
-	if fail {
-		return nil, errors.New("full reservation scan forbidden")
-	}
-	return s.RealmStore.ListOpenReservationIntents(ctx)
-}
-
-func (s *noFullScanReservationRealm) forbidFullScans() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.targetedLookups = 0
-	s.fullScans = 0
-	s.failFullScan = true
-}
-
-func (s *noFullScanReservationRealm) lookupCounts() (targeted, fullScans int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.targetedLookups, s.fullScans
-}
-
 // failRollbackRestoreRealm fails the rollback RestoreBackup (the second restore
 // call) while delegating the first to the wrapped realm store.
 type failRollbackRestoreRealm struct {
@@ -799,21 +714,6 @@ func (s *failRollbackRestoreRealm) RestoreBackup(
 		return backup.RestoreSummary{}, s.rollbackErr
 	}
 	return s.RealmStore.RestoreBackup(ctx, archive, opts)
-}
-
-// failResolveRealm fails ResolveOrderReservation with a canned error while
-// delegating everything else. It lets a node test assert that a store failure on
-// the atomic resolve leaves no partial persistence and does not re-resolve the
-// native handle.
-type failResolveRealm struct {
-	store.RealmStore
-	err error
-}
-
-func (s *failResolveRealm) ResolveOrderReservation(
-	_ context.Context, _ domain.ReservationResolution,
-) error {
-	return s.err
 }
 
 // failBusinessCSVImportRealm fails the final transactional ApplyBusinessCSVImport

@@ -154,13 +154,13 @@ func (s *setMDErrSource) SubmitOrderToken(
 }
 
 func (s *setMDErrSource) ConfirmExecution(
-	context.Context, string, string, bool,
+	context.Context, string, string,
 ) (domain.Order, Attestation, error) {
 	return domain.Order{}, Attestation{}, nil
 }
 
 func (s *setMDErrSource) CancelOrder(
-	context.Context, string, string, string, bool,
+	context.Context, string, string, string,
 ) (domain.Order, Attestation, error) {
 	return domain.Order{}, Attestation{}, nil
 }

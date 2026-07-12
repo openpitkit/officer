@@ -105,7 +105,6 @@ func reproPayload(id domain.ExternalID) domain.ApprovalPayload {
 	return domain.ApprovalPayload{
 		Version:         1,
 		ApprovalID:      "11111111-1111-1111-1111-111111111111",
-		ReservationID:   "11111111-1111-1111-1111-111111111111",
 		RequestType:     string(domain.AttestationRequestSubmit),
 		Mode:            "immediate",
 		OrderExternalID: id.String(),

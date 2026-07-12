@@ -2052,12 +2052,10 @@ paths:
         Advances the parent order to a target lifecycle status. The instrument,
         account, and side are taken from the parent order.
 
-
-        Every report is applied through the engine. `leavesQuantity` is required
-        on every report. When `quantity` and `price` are present, the report
-        carries a fill. Terminal no-trade statuses such as `rejected` and
-        `cancelled` release the remaining reservation through the engine using
-        the order's persisted lock and carry `leavesQuantity` of `"0"`.
+        Reports are serialized on the account pipeline. Reports carrying a fill
+        or commission, and reports targeting a terminal status, are settled
+        through the engine. Non-terminal reports without a fill or commission
+        record workflow state directly.
       tags: [orders]
       requestBody:
         required: true
@@ -2065,11 +2063,47 @@ paths:
           application/json:
             schema:
               type: object
-              required: [leavesQuantity, status]
+              required: [status]
               description: >
-                `quantity` and `price` must be provided together. No-trade
-                terminal reports may omit fill fields. `leavesQuantity` is
-                required on every report.
+                `quantity` and `price` must be provided together, and are only
+                accepted for fill statuses (`filled`, `partially_filled`) or
+                terminal statuses (`rejected`, `rolled_back`, `cancelled`); a
+                non-terminal workflow status (`submitted`, `accepted`,
+                `committed`) must not carry fill or lock fields. Reports carrying
+                a fill or commission, and reports targeting a terminal status,
+                require `leavesQuantity`. A non-terminal report without a fill
+                or commission may still carry the optional workflow
+                `leavesQuantity`.
+              dependentRequired:
+                quantity: [price, leavesQuantity]
+                price: [quantity, leavesQuantity]
+                commission: [leavesQuantity]
+              allOf:
+                - if:
+                    properties:
+                      status:
+                        enum: [filled, partially_filled]
+                    required: [status]
+                  then:
+                    required: [quantity, price, leavesQuantity]
+                - if:
+                    properties:
+                      status:
+                        enum: [rejected, rolled_back, cancelled]
+                    required: [status]
+                  then:
+                    required: [leavesQuantity]
+                - if:
+                    properties:
+                      status:
+                        enum: [submitted, accepted, committed]
+                    required: [status]
+                  then:
+                    not:
+                      anyOf:
+                        - required: [quantity]
+                        - required: [price]
+                        - required: [lockPrice]
               properties:
                 status:
                   type: string
@@ -2080,27 +2114,41 @@ paths:
                      filled, partially_filled, cancelled]
                 quantity:
                   type: string
-                  description: Fill quantity - exact decimal string. Fill statuses only.
+                  description: >
+                    Fill quantity - exact decimal string. Only permitted with a
+                    fill or terminal status. When present with `price`, routes
+                    the report through engine settlement.
                 price:
                   type: string
-                  description: Fill price - exact decimal string. Fill statuses only.
+                  description: >
+                    Fill price - exact decimal string. Only permitted with a
+                    fill or terminal status. When present with `quantity`,
+                    routes the report through engine settlement.
                 leavesQuantity:
                   type: string
                   description: >
-                    Order's remaining open base quantity after this report (FIX
-                    LeavesQty) - exact decimal string in base units. Required on
-                    every report; a terminal no-trade report carries `"0"`.
+                    Exact non-negative base-quantity decimal string. For a fill,
+                    the remaining open quantity after that fill. For a terminal
+                    report, the remaining quantity the engine must release;
+                    Officer records zero leaves after settlement. Required for
+                    fills and terminal statuses; optional for non-terminal
+                    reports without a fill or commission. Required whenever
+                    `commission` is present.
                 lockPrice:
                   type: string
-                  description: Lock price used for fund reservation - exact decimal string.
+                  description: >
+                    Lock price used for engine settlement - exact decimal
+                    string. Not accepted on non-terminal workflow reports.
                 commission:
                   type: object
                   description: >
-                    Optional commission for this fill. `amount` and `currency`
-                    must be provided together; Officer forwards them to the SDK
-                    as one structured value and does not convert currencies.
-                    Commission is accepted only when `quantity` and `price`
-                    create a trade.
+                    Optional report commission. `amount` and `currency` must be
+                    provided together; Officer forwards them to the SDK as one
+                    structured value and does not convert currencies. It is
+                    independent of `quantity` and `price`, so any report may
+                    carry a commission without a trade. A commission makes an
+                    otherwise workflow-only report engine-settled, which also
+                    requires `leavesQuantity`.
                   required: [amount, currency]
                   properties:
                     amount:
@@ -2120,12 +2168,13 @@ paths:
       responses:
         "201":
           description: >
-            Execution result plus the signed attestation over (report + engine
-            result). A fill status created a trade record and per-asset outcomes;
-            a non-fill status recorded the lifecycle transition only.
-            `attestationToken` is the robot's proof the engine passed this report;
-            signing or attestation persistence failures fail the request before
-            the report is recorded.
+            Recorded result plus the signed attestation over the report and its
+            result. Engine-settled reports may create a trade, update balances,
+            release a pre-trade lock, or block an account; non-terminal reports
+            without a fill or commission record the lifecycle transition only.
+            `attestationToken` proves which result Officer recorded. Signing or
+            attestation persistence failures fail the request before the report
+            is recorded.
           content:
             application/json:
               schema:
@@ -2994,7 +3043,10 @@ paths:
                   description: Exact decimal string. Omit for market orders.
                 mode:
                   type: string
-                  description: Submit mode. Defaults to `immediate`.
+                  description: >
+                    Submit mode. Defaults to `immediate`. The compatibility wire
+                    value `hold` selects the workflow path that waits for
+                    execution reports.
                   enum: [immediate, hold]
       responses:
         "201":
@@ -3018,9 +3070,11 @@ paths:
       - $ref: "#/components/parameters/OrderExternalId"
     post:
       operationId: confirmExecution
-      summary: Confirm a held order with its approval token
+      summary: Record order confirmation with its approval token
       description: >
-        Verifies the approval token and commits the held reservation.
+        Verifies the approval token and records confirmation history for an
+        order with no execution-report activity. If activity already exists,
+        the caller must submit an explicit execution report instead.
       tags: [signing]
       requestBody:
         required: true
@@ -3033,20 +3087,12 @@ paths:
                 token:
                   type: string
                   description: Approval token issued by submit.
-                force:
-                  type: boolean
-                  description: >
-                    Bypasses Officer's finalized-order safety check and routes
-                    straight to the engine. When omitted or false, confirming a
-                    terminal (already-finalized) order returns 409
-                    `terminal_order`.
       responses:
         "200":
           description: >
-            Order after confirmation, plus the signed attestation over the commit.
-            `attestationToken` is the robot's proof the engine committed this
-            reservation. Signing or attestation persistence failures fail the
-            request before the commit is recorded.
+            Order after confirmation, plus the signed attestation proving the
+            confirmation history Officer recorded. Signing or attestation
+            persistence failures fail the request.
           content:
             application/json:
               schema:
@@ -3056,7 +3102,7 @@ paths:
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "#/components/responses/TerminalOrderError"
+          $ref: "#/components/responses/OrderShortcutConflictError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -3065,9 +3111,12 @@ paths:
       - $ref: "#/components/parameters/OrderExternalId"
     post:
       operationId: cancelOrder
-      summary: Cancel a held order with its approval token
+      summary: Cancel an untouched order with its approval token
       description: >
-        Verifies the approval token and rolls back the held reservation.
+        Verifies the approval token and applies a terminal cancellation report
+        whose release fields Officer derives from an order with no prior
+        execution-report activity. If activity already exists, the caller must
+        submit an explicit execution report instead.
       tags: [signing]
       requestBody:
         required: true
@@ -3083,20 +3132,12 @@ paths:
                 reason:
                   type: string
                   description: Optional human-readable cancellation reason.
-                force:
-                  type: boolean
-                  description: >
-                    Bypasses Officer's finalized-order safety check and routes
-                    straight to the engine. When omitted or false, cancelling a
-                    terminal (already-finalized) order returns 409
-                    `terminal_order`.
       responses:
         "200":
           description: >
             Order after cancellation, plus the signed attestation over the
-            rollback. `attestationToken` is the robot's proof the engine rolled
-            back this reservation. Signing or attestation persistence failures
-            fail the request before the rollback is recorded.
+            terminal report Officer applied. Signing or attestation persistence
+            failures fail the request before the cancellation is recorded.
           content:
             application/json:
               schema:
@@ -3106,7 +3147,7 @@ paths:
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "#/components/responses/TerminalOrderError"
+          $ref: "#/components/responses/OrderShortcutConflictError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -3773,6 +3814,18 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
 
+    OrderShortcutConflictError:
+      description: >
+        The shortcut conflicts with the order or approval state. When the order
+        already has execution-report activity, Officer cannot safely infer the
+        mutation and returns `execution_report_required`; submit a complete
+        execution report through the normal order workflow instead. Other
+        approval-state conflicts return `conflict`.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
     HasDependentsError:
       description: Delete would remove dependent rows without force.
       content:
@@ -3842,8 +3895,10 @@ components:
               type: string
               description: >
                 Machine-readable code: `validation`, `not_found`, `conflict`,
-                `has_dependents`, `terminal_order`, `precondition`, `too_large`,
-                `engine_restarting`, `signing`, `not_implemented`, or `internal`.
+                `has_dependents`, `terminal_order`,
+                `execution_report_required`, `precondition`, `too_large`,
+                `engine_restarting`, `signing`, `not_implemented`, or
+                `internal`.
               example: not_found
             message:
               type: string
@@ -4648,7 +4703,7 @@ components:
           items:
             type: string
           description: >
-            Human-readable reservation lock prices derived from the opaque lock
+            Human-readable pre-trade lock prices derived from the opaque lock
             (settlement leg last) - exact decimal strings. The raw lock blob is
             never exposed.
         signed:
@@ -4664,7 +4719,8 @@ components:
       required: [token, keyId, alg, requestType, mode, issuedAt, signed]
       description: >
         An order-history event's persisted signed attestation envelope over
-        (trading request + engine result). No surrogate or engine id is present.
+        the trading request and its recorded result. No surrogate or engine id
+        is present.
       properties:
         token:
           type: string
@@ -4750,8 +4806,58 @@ components:
         fillLockPrice:
           type: string
           description: Exact decimal string; present on fill events.
+        leavesQuantity:
+          type: string
+          description: >
+            Exact leaves quantity received in the execution report. For a
+            terminal report this remains the quantity passed to the engine for
+            release and is not replaced by the resulting zero open leaves.
+        orderStatus:
+          type: string
+          description: Target status received in the execution report.
+        executionReport:
+          description: >
+            Audit-safe execution-report input captured before Officer enriches
+            order-derived fields or normalizes terminal leaves. The opaque
+            pre-trade lock is never exposed.
+          $ref: "#/components/schemas/ExecutionReportRequest"
         commission:
           $ref: "#/components/schemas/Commission"
+
+    ExecutionReportRequest:
+      type: object
+      required: [baseAsset, quoteAsset, fillQuantity, fillPrice, leavesQuantity, lockPrice, commission, order, account, side, orderStatus, force]
+      description: >
+        Audit-safe execution-report input as received by the node. Empty
+        strings, false, and null are retained. The opaque pre-trade lock is
+        engine-internal and is never serialized.
+      properties:
+        baseAsset:
+          type: string
+        quoteAsset:
+          type: string
+        fillQuantity:
+          type: string
+        fillPrice:
+          type: string
+        leavesQuantity:
+          type: string
+        lockPrice:
+          type: string
+        commission:
+          oneOf:
+            - $ref: "#/components/schemas/Commission"
+            - type: "null"
+        order:
+          $ref: "#/components/schemas/ExternalId"
+        account:
+          type: string
+        side:
+          type: string
+        orderStatus:
+          type: string
+        force:
+          type: boolean
 
     # Trade
 
@@ -4829,7 +4935,7 @@ components:
           items:
             type: string
           description: >
-            Human-readable reservation lock prices the order would lock - exact
+            Human-readable pre-trade lock prices the order would lock - exact
             decimal strings, never the opaque lock blob.
         wouldBlock:
           nullable: true
@@ -4874,8 +4980,8 @@ components:
       type: object
       required: [result, signed]
       description: >
-        The execution result plus the signed attestation over (report + engine
-        result), returned to the robot as proof the engine passed this report.
+        The recorded result plus the signed attestation over the report and its
+        result, returned to the robot as proof of what Officer recorded.
       properties:
         result:
           $ref: "#/components/schemas/ExecutionResult"
@@ -4894,9 +5000,8 @@ components:
       type: object
       required: [order, signed]
       description: >
-        The resolved order plus the signed attestation over the held-reservation
-        resolution (confirm commit or cancel rollback), returned to the robot as
-        proof the engine resolved this reservation.
+        The updated order plus the signed attestation over the confirmation or
+        cancellation shortcut, returned as proof of what Officer recorded.
       properties:
         order:
           $ref: "#/components/schemas/Order"
@@ -5768,15 +5873,15 @@ components:
 
     AttestationResult:
       type: object
-      required: [outcome, fillQuantity, fillPrice, fillLockPrice, leavesQuantity, orderStatus, blocks]
+      required: [outcome, fillQuantity, fillPrice, fillLockPrice, commission, leavesQuantity, orderStatus, blocks]
       description: >
-        The engine result section bound in the attestation payload; present only
-        for request types carrying an engine result beyond the submit verdict
-        (execution report, confirm, cancel).
+        The recorded result section bound in the attestation payload; present
+        for execution reports and order confirmation/cancellation shortcuts
+        beyond the submit verdict.
       properties:
         outcome:
           type: string
-          description: "Coarse engine outcome: `applied`, `committed`, or `rolled_back`."
+          description: "Coarse recorded outcome: `applied`, `confirmed`, `committed`, or `cancelled`."
         fillQuantity:
           type: string
         fillPrice:
@@ -5785,9 +5890,11 @@ components:
           type: string
         commission:
           description: >
-            Structured per-fill commission (amount + currency) bound from the
-            settled trade; omitted when the fill carried none.
-          $ref: "#/components/schemas/Commission"
+            Structured report commission (amount + currency), retained even
+            when the report carried no trade. Null when absent.
+          oneOf:
+            - $ref: "#/components/schemas/Commission"
+            - type: "null"
         leavesQuantity:
           type: string
         orderStatus:
@@ -5829,8 +5936,10 @@ components:
           type: string
         verdict:
           type: string
+        executionReport:
+          $ref: "#/components/schemas/ExecutionReportRequest"
         result:
-          description: The engine result section, or `null` for a plain submit verdict.
+          description: The recorded result section, or `null` for a plain submit verdict.
           oneOf:
             - $ref: "#/components/schemas/AttestationResult"
             - type: "null"

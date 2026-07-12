@@ -466,6 +466,24 @@ export interface Commission {
   currency: string;
 }
 
+/** Audit-safe execution-report input captured before Officer enriches it with
+ *  order-derived values or normalizes the persisted result. The opaque engine
+ *  lock is deliberately excluded. */
+export interface ExecutionReportRequestRecord {
+  baseAsset: string;
+  quoteAsset: string;
+  fillQuantity: string;
+  fillPrice: string;
+  leavesQuantity: string;
+  lockPrice: string;
+  commission: Commission | null;
+  order: string;
+  account: string;
+  side: string;
+  orderStatus: string;
+  force: boolean;
+}
+
 export interface Order {
   externalId: string;
   account: string;
@@ -482,7 +500,7 @@ export interface Order {
   leavesQuantity: string;
   price: string;
   status: string;
-  /** Human-readable reservation prices, as exact decimal strings. */
+  /** Human-readable pre-trade lock prices, as exact decimal strings. */
   displayPrices: string[];
   /** Whether the order carries a persisted Ed25519-signed approval envelope. */
   signed: boolean;
@@ -508,6 +526,7 @@ export interface OrderEvent {
   fillLockPrice?: string;
   leavesQuantity?: string;
   orderStatus?: string;
+  executionReport?: ExecutionReportRequestRecord;
   commission?: Commission;
   /** Whether this event carries a persisted Ed25519-signed attestation. */
   signed: boolean;
@@ -578,10 +597,10 @@ export interface ExecutionOutcome {
   incomingResult: string;
 }
 
-/** Result of POST /orders/{externalId}/execution-reports: the engine result
- *  (account blocks and per-asset outcomes) plus the attestation the robot
- *  receives as proof the engine passed this report. The attestation fields are
- *  empty when attestation was skipped or ran under eSign-off. */
+/** Result of POST /orders/{externalId}/execution-reports: the recorded result,
+ *  including any account blocks and per-asset outcomes, plus the attestation
+ *  proving what Officer recorded. The attestation fields are empty when
+ *  attestation was skipped or ran under eSign-off. */
 export interface ExecutionReportResult {
   blocks: ExecutionBlock[];
   outcomes: ExecutionOutcome[];
@@ -927,8 +946,8 @@ export interface SigningKeyResult {
 /** Signing algorithm used in the attestation envelope. */
 export type ApprovalAlg = "ed25519" | "none";
 
-/** The trading request an attestation binds. Officer signs each engine-processed
- *  request, so every attested event carries exactly one of these. */
+/** The trading request an attestation binds. Every attested event carries
+ *  exactly one of these. */
 export type AttestationRequestType =
   | "submit"
   | "execution_report"
@@ -959,7 +978,7 @@ export interface EventAttestation {
   alg: ApprovalAlg;
   /** The trading request this attestation binds. */
   requestType: string;
-  /** Submission mode; currently always "immediate". */
+  /** Wire submit mode carried by the attestation ("hold" | "immediate"). */
   mode: string;
   /** RFC3339Nano timestamp at which the envelope was issued. May be empty. */
   issuedAt: string;
@@ -989,21 +1008,22 @@ export interface AttestationBlock {
   details: string;
 }
 
-/** The engine result section bound in the attestation payload, present for
+/** The recorded result section bound in the attestation payload, present for
  *  request types carrying a result beyond the submit verdict. */
 export interface AttestationResult {
   outcome: string;
   fillQuantity: string;
   fillPrice: string;
   fillLockPrice: string;
+  commission?: Commission;
   leavesQuantity: string;
   orderStatus: string;
   blocks: AttestationBlock[];
 }
 
 /** The request bound in the attestation payload, reconstructed for reproduction
- *  from the decoded token: the request type, its material params, and the engine
- *  result section when present. Carries no private material. */
+ *  from the decoded token: the request type, its material params, and the
+ *  recorded result section when present. Carries no private material. */
 export interface EventReproductionRequest {
   requestType: string;
   orderExternalId: string;
@@ -1017,11 +1037,12 @@ export interface EventReproductionRequest {
   priceCurrency: string;
   accountId: string;
   verdict: string;
+  executionReport?: ExecutionReportRequestRecord;
   result: AttestationResult | null;
 }
 
-/** The execution-report facet of a reproduction response: the engine result plus
- *  the attestation token the robot received verbatim. */
+/** The execution-report facet of a reproduction response: the recorded result
+ *  plus the attestation token the robot received verbatim. */
 export interface ExecutionReportResponse {
   blocks: AttestationBlock[];
   outcomes: ExecutionOutcome[];

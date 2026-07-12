@@ -70,64 +70,65 @@ func (s *Service) SubmitOrder(
 	if err != nil {
 		return SubmitOrderResult{}, err
 	}
-	attest := eventAttestor(
-		signer, off, signingKeyID, domain.AttestationRequestSubmit,
-		func(event domain.OrderEvent) (domain.ApprovalPayload, bool, error) {
-			eventOrder := orderForEvent(o, key, event, caller)
-			switch event.Type {
-			case domain.OrderEventSubmitted:
-				p, err := buildSubmittedPayload(
-					eventOrder, SubmitModeImmediate, submitApprovalID)
-				return p, err == nil, err
-			case domain.OrderEventPreTradeAccepted:
-				nonce, err := newNonce()
-				if err != nil {
-					return domain.ApprovalPayload{}, false, err
+	attestFor := func(
+		persisted domain.Order, submitted engine.OrderResult,
+	) store.EventAttestor {
+		return eventAttestor(
+			signer, off, signingKeyID, domain.AttestationRequestSubmit,
+			func(event domain.OrderEvent) (domain.ApprovalPayload, bool, error) {
+				eventOrder := orderForEvent(persisted, key, event, caller)
+				switch event.Type {
+				case domain.OrderEventSubmitted:
+					p, err := buildSubmittedPayload(
+						eventOrder, SubmitModeHold, submitApprovalID)
+					return p, err == nil, err
+				case domain.OrderEventPreTradeAccepted:
+					nonce, err := newNonce()
+					if err != nil {
+						return domain.ApprovalPayload{}, false, err
+					}
+					return buildApprovalPayload(
+						eventOrder, SubmitModeHold, submitApprovalID,
+						submitted.SettlementLockPrice, submitted.EstimateSource,
+						time.Now().UTC(), nonce), true, nil
+				case domain.OrderEventPreTradeRejected:
+					nonce, err := newNonce()
+					if err != nil {
+						return domain.ApprovalPayload{}, false, err
+					}
+					reject := domain.OrderReject{
+						Code:    event.Payload.RejectCode,
+						Scope:   event.Payload.RejectScope,
+						Policy:  event.Payload.RejectPolicy,
+						Reason:  event.Payload.RejectReason,
+						Details: event.Payload.RejectDetails,
+					}
+					return buildRejectApprovalPayload(
+						eventOrder, SubmitModeHold, submitApprovalID, reject,
+						time.Now().UTC(), nonce), true, nil
+				case domain.OrderEventCommitted:
+					committed := eventOrder
+					committed.Status = domain.OrderStatusCommitted
+					p, err := s.buildLifecyclePayload(
+						committed, domain.AttestationRequestSubmit,
+						"committed", "", submitApprovalID)
+					return p, err == nil, err
+				default:
+					return domain.ApprovalPayload{}, false, nil
 				}
-				return buildApprovalPayload(
-					eventOrder, SubmitModeImmediate, submitApprovalID, "", "",
-					time.Now().UTC(), nonce), true, nil
-			case domain.OrderEventPreTradeRejected:
-				nonce, err := newNonce()
-				if err != nil {
-					return domain.ApprovalPayload{}, false, err
+			},
+			func(att Attestation, p domain.ApprovalPayload) {
+				if p.Result != nil || p.Verdict == "" {
+					return
 				}
-				reject := domain.OrderReject{
-					Code:    event.Payload.RejectCode,
-					Scope:   event.Payload.RejectScope,
-					Policy:  event.Payload.RejectPolicy,
-					Reason:  event.Payload.RejectReason,
-					Details: event.Payload.RejectDetails,
-				}
-				return buildRejectApprovalPayload(
-					eventOrder, SubmitModeImmediate, submitApprovalID, reject,
-					time.Now().UTC(), nonce), true, nil
-			case domain.OrderEventReservationCommitted:
-				committed := eventOrder
-				committed.Status = domain.OrderStatusCommitted
-				p, err := s.buildResolutionPayload(
-					committed, domain.AttestationRequestConfirm,
-					"committed", "", submitApprovalID)
-				if err != nil {
-					return domain.ApprovalPayload{}, false, err
-				}
-				p.Mode = SubmitModeImmediate
-				p.RequestType = string(domain.AttestationRequestConfirm)
-				return p, true, nil
-			default:
-				return domain.ApprovalPayload{}, false, nil
-			}
-		},
-		func(att Attestation, p domain.ApprovalPayload) {
-			if p.RequestType != string(domain.AttestationRequestSubmit) ||
-				p.Verdict == "" {
-				return
-			}
-			resultAttestation = att
-			resultPayload = p
-		},
+				resultAttestation = att
+				resultPayload = p
+			},
+		)
+	}
+	order, result, err := attesting.SubmitOrderWithAttestation(
+		ctx, key, o, caller, attestFor,
 	)
-	order, result, err := attesting.SubmitOrderWithAttestation(ctx, key, o, caller, attest)
 	if err != nil {
 		_ = s.auditApproval(ctx, n, key, domain.AuditActionApprovalFailed,
 			fmt.Sprintf("submit attestation failed: %v", err))
@@ -229,7 +230,11 @@ func (s *Service) ApplyExecutionReport(
 			}
 			persistence := engine.ExecutionReportPersistence{
 				OrderStatus: domain.OrderStatus(event.Payload.OrderStatus),
-				Leaves:      event.Payload.LeavesQuantity,
+				Commission:  event.Payload.Commission,
+				Leaves: domain.ExecutionReportPersistedLeavesFor(
+					domain.OrderStatus(event.Payload.OrderStatus),
+					event.Payload.LeavesQuantity,
+				),
 			}
 			if persistence.OrderStatus == "" {
 				persistence.OrderStatus = targetStatus
@@ -265,6 +270,7 @@ func (s *Service) ApplyExecutionReport(
 			if err != nil {
 				return domain.ApprovalPayload{}, false, err
 			}
+			p.ExecutionReport = event.Payload.ExecutionReport
 			return p, true, nil
 		},
 		func(got Attestation, p domain.ApprovalPayload) {

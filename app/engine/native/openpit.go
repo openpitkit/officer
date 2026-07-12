@@ -129,15 +129,6 @@ type openPitEngine struct {
 	// barrier set, so unchanged seeds must not be force-set again.
 	spotFundsPnlBoundsSeeds map[spotFundsPnlBoundsSeedKey]param.Pnl
 
-	// registry tracks live held reservations by approval id. Its mutex is the
-	// outer lock of the two-lock discipline (registry.mu -> e.mu); native handles
-	// in it are only touched under e.mu during resolution and the shutdown drain.
-	registry *reservationRegistry
-	// resStore persists reservation intents across the hold lifecycle. It is
-	// attached once at boot by the backend via SetReservationStore; nil leaves
-	// holds in memory only. Guarded by mu.
-	resStore ReservationStore
-
 	mu      sync.RWMutex
 	running bool
 }
@@ -198,7 +189,6 @@ func newOpenPitEngine(
 		registered:              registered,
 		brokerPresent:           brokerPresent,
 		spotFundsPnlBoundsSeeds: spotFundsPnlBoundsSeeds,
-		registry:                newReservationRegistry(),
 		running:                 eng != nil && async != nil,
 	}
 	return adapter
@@ -748,9 +738,19 @@ func (l accountLane) SubmitOrder(ctx context.Context, o domain.Order) (OrderResu
 		return OrderResult{Accepted: false, Rejects: orderRejectsFrom(rejects)}, nil
 	}
 
-	// Serialize the lock through the seam before closing; the reservation must
-	// not outlive this call.
-	lockBytes, err := serializeReservationLock(reservation)
+	lockBytes, settlement, source, err := captureReservation(reservation, o)
+	if err != nil {
+		reservation.RollbackAndClose()
+		return OrderResult{}, err
+	}
+	if reject, ok := volumeOrderSizingReject(o, settlement); ok {
+		reservation.RollbackAndClose()
+		return OrderResult{
+			Accepted: false,
+			Rejects:  []domain.OrderReject{reject},
+		}, nil
+	}
+	leaves, err := immediateFillQuantity(o, settlement)
 	if err != nil {
 		reservation.RollbackAndClose()
 		return OrderResult{}, err
@@ -759,7 +759,14 @@ func (l accountLane) SubmitOrder(ctx context.Context, o domain.Order) (OrderResu
 	// before closing, so the caller can mirror them into the balance snapshot.
 	outcomes := balanceOutcomesFromList(reservation.AccountAdjustments())
 	reservation.CommitAndClose()
-	return OrderResult{Accepted: true, Lock: lockBytes, Outcomes: outcomes}, nil
+	return OrderResult{
+		Accepted:            true,
+		Lock:                lockBytes,
+		Outcomes:            outcomes,
+		SettlementLockPrice: settlement,
+		LeavesQuantity:      leaves,
+		EstimateSource:      source,
+	}, nil
 }
 
 func (e *openPitEngine) RunAccountSynchronized(
@@ -992,11 +999,9 @@ func (e *openPitEngine) MarketDataSink() marketdata.Sink {
 	return e.sink
 }
 
-// Stop halts the engine and releases native resources. Under e.mu it drains the
-// reservation registry - rolling back and closing every non-terminal held
-// reservation so no native handle leaks across teardown - before stopping the
-// engine and closing the market-data service. Quote producers (the connector
-// manager) must be stopped before Stop. It is idempotent.
+// Stop halts the engine and releases native resources before closing the
+// market-data service. Quote producers (the connector manager) must be stopped
+// before Stop. It is idempotent.
 func (e *openPitEngine) Stop() {
 	e.mu.Lock()
 	if !e.running {
@@ -1012,9 +1017,6 @@ func (e *openPitEngine) Stop() {
 	}
 
 	e.mu.Lock()
-	// Drain held reservations before the engine stops so the rollbacks reach a
-	// live handle.
-	e.drainHeldLocked()
 	eng := e.eng
 	e.async = nil
 	e.eng = nil

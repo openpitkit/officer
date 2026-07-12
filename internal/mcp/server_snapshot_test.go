@@ -84,7 +84,7 @@ func TestServerToolSnapshot(t *testing.T) {
 			description: "Return one order addressed by its external id: its " +
 				"status, its 1:1 signed approval (when issued), and its fills with " +
 				"their display prices. Read-only - no secrets, no order-flow control. " +
-				"The opaque reservation lock is never exposed; only backend-derived " +
+				"The opaque pre-trade lock is never exposed; only backend-derived " +
 				"display prices are.",
 		},
 		{
@@ -109,21 +109,22 @@ func TestServerToolSnapshot(t *testing.T) {
 		{
 			name: "submit_order",
 			description: "Submit an order intent through pre-trade and obtain a " +
-				"signed approval token. Mutates engine state (holds or commits " +
-				"funds); protected and disabled by default.",
+				"signed approval token. Mutates engine state and records the pre-trade " +
+				"lock; protected and disabled by default.",
 		},
 		{
 			name: "confirm_execution",
-			description: "Confirm execution (commit) of a previously approved " +
-				"hold-mode order, addressed by its external id, by presenting the " +
-				"approval token. Mutates engine state; protected and disabled by " +
-				"default.",
+			description: "Record confirmation history for a previously approved " +
+				"workflow order by presenting its approval token. The shortcut is " +
+				"rejected after execution-report activity; protected and disabled " +
+				"by default.",
 		},
 		{
 			name: "cancel",
-			description: "Cancel / revoke a pending approval token or held " +
-				"reservation by presenting the token. Releases held funds. Mutates " +
-				"engine state; protected and disabled by default.",
+			description: "Cancel an untouched workflow order by presenting its " +
+				"approval token. Officer derives a terminal report that releases the " +
+				"pre-trade lock; after execution-report activity, submit an explicit " +
+				"report. Protected and disabled by default.",
 		},
 	}
 	if len(list.Tools) != len(want) {

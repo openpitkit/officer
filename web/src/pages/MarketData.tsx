@@ -48,6 +48,7 @@ import type {
   MarketDataSymbolVerification,
 } from "@/api/types";
 import { useMarketData } from "@/api/useMarketData";
+import { validateAsset } from "@/api/validate";
 import { Page } from "@/components/Page";
 import { ErrorBanner, ErrorState, TableSkeleton } from "@/components/PageStates";
 import { Badge } from "@/components/ui/badge";
@@ -76,6 +77,10 @@ import {
   useOfficerApi,
   type MarketDataSymbolSearchInput,
 } from "@/framework";
+import {
+  isDecimalString,
+  isOptionalPositiveDecimalString,
+} from "@/lib/numberStep";
 
 interface InstanceForm {
   provider: string;
@@ -116,6 +121,53 @@ const emptyInstrument: InstrumentDraft = {
 function hasNonZeroDecimal(value?: string): boolean {
   const trimmed = value?.trim() ?? "";
   return trimmed !== "" && !/^0+(?:\.0+)?$/u.test(trimmed);
+}
+
+function isOptionalDecimal(value?: string): boolean {
+  return isDecimalString(value ?? "");
+}
+
+function isOptionalInt64(value?: string): boolean {
+  const trimmed = value?.trim() ?? "";
+  if (trimmed === "") {
+    return true;
+  }
+  if (!/^[+-]?\d+$/u.test(trimmed)) {
+    return false;
+  }
+  const parsed = BigInt(trimmed);
+  return parsed >= -9223372036854775808n && parsed <= 9223372036854775807n;
+}
+
+function isOptionalJSONInt64(value?: string): boolean {
+  const trimmed = value?.trim() ?? "";
+  if (trimmed === "") {
+    return true;
+  }
+  if (!/^\+?\d+$/u.test(trimmed) || !isOptionalInt64(trimmed)) {
+    return false;
+  }
+  return Number.isSafeInteger(Number(trimmed));
+}
+
+function isInstrumentDraftValid(
+  draft: InstrumentDraft,
+  isManual: boolean,
+): boolean {
+  return (
+    draft.externalSymbol.trim() !== "" &&
+    validateAsset(draft.baseAsset.trim()) === null &&
+    validateAsset(draft.quoteAsset.trim()) === null &&
+    (!isManual || isOptionalDecimal(draft.manualPrice))
+  );
+}
+
+function isIBContractNumericValid(contract: IBContract): boolean {
+  return (
+    isOptionalInt64(contract.conId) &&
+    isOptionalDecimal(contract.strike) &&
+    isOptionalPositiveDecimalString(contract.multiplier ?? "")
+  );
 }
 
 // Structured IB contract carried alongside the instrument draft. Mirrors the
@@ -387,13 +439,12 @@ function providerSettingsReady(
 ): boolean {
   if (type === IB_PROVIDER) {
     const port = Number(draft.port);
-    const clientId = draft.clientId?.trim() === "" ? 1 : Number(draft.clientId);
     return (
       draft.host?.trim() !== "" &&
       Number.isInteger(port) &&
       port >= 1 &&
       port <= 65535 &&
-      Number.isFinite(clientId)
+      isOptionalJSONInt64(draft.clientId)
     );
   }
   if (type === ALPACA_PROVIDER) {
@@ -1731,7 +1782,11 @@ export function CreateInstanceDialog({
     if (!provider) {
       return;
     }
-    if (normalizedLabel === "" || labelTaken) {
+    if (
+      normalizedLabel === "" ||
+      labelTaken ||
+      !providerSettingsReady(provider.type, settingsDraft)
+    ) {
       return;
     }
     const ok = await onCreate({
@@ -2365,7 +2420,12 @@ export function InstanceSettingsDialog({
 
   const close = () => onOpenChange(false);
   const submit = async () => {
-    if (!instance || normalizedLabel === "" || labelTaken) {
+    if (
+      !instance ||
+      normalizedLabel === "" ||
+      labelTaken ||
+      !providerSettingsReady(instance.provider, settingsDraft, instance)
+    ) {
       return;
     }
     const ok = await onSave(instance, {
@@ -2553,6 +2613,8 @@ export function InstanceCard({
     draft.baseAsset,
     draft.quoteAsset,
   );
+  const instrumentDraftValid = isInstrumentDraftValid(draft, isManual);
+  const ibContractNumericValid = isIBContractNumericValid(contractDraft);
 
   const resetDraft = () => {
     setDraft(emptyInstrument);
@@ -2570,6 +2632,9 @@ export function InstanceCard({
   };
 
   const submitInstrument = async () => {
+    if (!instrumentDraftValid) {
+      return;
+    }
     if (await onUpsertInstrument(instance, draft)) {
       setDraft(emptyInstrument);
       setDraftVerify(null);
@@ -2579,6 +2644,9 @@ export function InstanceCard({
   // IB add: hand the draft and the structured contract to the page handler,
   // which persists the instrument first and then PUTs the full contracts map.
   const submitIBInstrument = async () => {
+    if (!instrumentDraftValid || !ibContractNumericValid) {
+      return;
+    }
     const symbol = contractDraft.symbol?.trim() || draft.externalSymbol.trim();
     const contract: IBContract = { ...contractDraft, symbol };
     if (await onUpsertIBInstrument(instance, draft, contract)) {
@@ -2676,16 +2744,20 @@ export function InstanceCard({
   const submitManualPrice = async (
     instrument: MarketDataInstance["instruments"][number],
   ) => {
+    const manualPrice = manualPriceValue(
+      instrument.externalSymbol,
+      instrument.manualPrice,
+    );
+    if (!isOptionalDecimal(manualPrice)) {
+      return;
+    }
     const ok = await onUpsertInstrument(
       instance,
       {
         externalSymbol: instrument.externalSymbol,
         baseAsset: instrument.baseAsset,
         quoteAsset: instrument.quoteAsset,
-        manualPrice: manualPriceValue(
-          instrument.externalSymbol,
-          instrument.manualPrice,
-        ),
+        manualPrice,
         enabled: instrument.enabled,
       },
       { reload: false },
@@ -2914,7 +2986,7 @@ export function InstanceCard({
               onClick={() => {
                 void (isIB ? submitIBInstrument() : submitInstrument());
               }}
-              disabled={busy || draft.externalSymbol.trim() === ""}
+              disabled={busy || !instrumentDraftValid}
             >
               <Plus />
               {t("actions.addInstrument")}
@@ -3040,7 +3112,9 @@ export function InstanceCard({
                   onClick={() => {
                     void submitIBInstrument();
                   }}
-                  disabled={busy || draft.externalSymbol.trim() === ""}
+                  disabled={
+                    busy || !instrumentDraftValid || !ibContractNumericValid
+                  }
                 >
                   <Plus />
                   {t("actions.addInstrument")}
@@ -3149,7 +3223,15 @@ export function InstanceCard({
                           size="icon"
                           aria-label={t("actions.sendPrice")}
                           title={t("actions.sendPrice")}
-                          disabled={busy}
+                          disabled={
+                            busy ||
+                            !isOptionalDecimal(
+                              manualPriceValue(
+                                instrument.externalSymbol,
+                                instrument.manualPrice,
+                              ),
+                            )
+                          }
                           onClick={() => {
                             void submitManualPrice(instrument);
                           }}

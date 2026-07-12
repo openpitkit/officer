@@ -30,112 +30,10 @@ import (
 	"go.openpit.dev/officer/framework/store"
 )
 
-func TestLocalNode_ReconcileOrphansPreservesOrders(t *testing.T) {
-	t.Parallel()
-	eng := newFakeEngine()
-	eng.reconcileCount = 1
-	n, st := newTestNode(t, eng)
-	ctx := context.Background()
-
-	seedTestAccount(t, st, "acc-1")
-	order, err := st.CreateOrder(ctx, domain.Order{
-		Account:     "acc-1",
-		Source:      domain.SourceAPI,
-		Principal:   "operator",
-		BaseAsset:   "AAPL",
-		QuoteAsset:  "USD",
-		Side:        domain.OrderSideBuy,
-		AmountKind:  domain.OrderAmountKindQuantity,
-		AmountValue: "10",
-		Price:       "100",
-		Status:      domain.OrderStatusAccepted,
-	})
-	if err != nil {
-		t.Fatalf("CreateOrder: %v", err)
-	}
-	if err := st.UpsertReservationIntent(ctx, domain.ReservationIntent{
-		ApprovalID: "approval-1",
-		Order:      order.ExternalID,
-		Account:    order.Account,
-		ParamsJSON: `{"id":1}`,
-		IssuedAt:   time.Now().UTC(),
-		State:      domain.ReservationIntentStateHeld,
-	}); err != nil {
-		t.Fatalf("UpsertReservationIntent: %v", err)
-	}
-
-	count, err := n.ReconcileOrphans(ctx)
-	if err != nil {
-		t.Fatalf("ReconcileOrphans: %v", err)
-	}
-	if count != 1 {
-		t.Fatalf("held intents = %d, want 1", count)
-	}
-	detail, err := st.GetOrder(ctx, order.ExternalID)
-	if err != nil {
-		t.Fatalf("GetOrder: %v", err)
-	}
-	if detail.Order.Status != domain.OrderStatusAccepted {
-		t.Fatalf("order status = %q, want accepted", detail.Order.Status)
-	}
-	events, err := st.ListOrderEvents(ctx, order.ExternalID)
-	if err != nil {
-		t.Fatalf("ListOrderEvents: %v", err)
-	}
-	if len(events) != 0 {
-		t.Fatalf("events = %+v, want no rollback events", events)
-	}
-}
-
-func TestLocalNode_SubmitHoldPersistsHeldBalances(t *testing.T) {
-	t.Parallel()
-	eng := newFakeEngine()
-	eng.submitLock = []byte("lock")
-	eng.holdOutcomes = []engine.BalanceOutcome{{
-		Asset: "USD",
-		Outcome: domain.AdjustmentOutcomeAccepted{
-			BalanceResult: "8000",
-			HeldResult:    "2000",
-		},
-	}}
-	n, st := newTestNode(t, eng)
-	ctx := context.Background()
-	if _, err := n.CreateAccount(ctx, testAccount("acc-1"), testCaller); err != nil {
-		t.Fatalf("CreateAccount: %v", err)
-	}
-	if err := st.UpsertBalance(ctx, domain.Balance{
-		Account: "acc-1", Asset: "USD", Available: "10000",
-	}); err != nil {
-		t.Fatalf("UpsertBalance: %v", err)
-	}
-
-	order, result, err := n.SubmitHold(ctx, testKey("acc-1"), domain.Order{
-		BaseAsset:   "AAPL",
-		QuoteAsset:  "USD",
-		Side:        domain.OrderSideBuy,
-		AmountKind:  domain.OrderAmountKindQuantity,
-		AmountValue: "20",
-		Price:       "100",
-	}, testCaller)
-	if err != nil {
-		t.Fatalf("SubmitHold: %v", err)
-	}
-	if !result.Accepted || order.Status != domain.OrderStatusAccepted {
-		t.Fatalf("hold not accepted: order=%+v result=%+v", order, result)
-	}
-	balance, ok, err := st.GetBalance(ctx, "acc-1", "USD")
-	if err != nil || !ok {
-		t.Fatalf("GetBalance: %v ok=%v", err, ok)
-	}
-	if balance.Available != "8000" || balance.Held != "2000" {
-		t.Fatalf("balance = %+v, want available=8000 held=2000", balance)
-	}
-}
-
-// TestLocalNode_SubmitOrderPersistsReservationBalances verifies the direct
-// submit path mirrors the reservation's balance effects into the snapshot, so
-// held funds and incoming quantity show up before any fill settles.
-func TestLocalNode_SubmitOrderPersistsReservationBalances(t *testing.T) {
+// TestLocalNode_SubmitOrderPersistsPreTradeBalances verifies the direct submit
+// path mirrors the engine's balance effects into the snapshot, so held funds
+// and incoming quantity show up before any fill settles.
+func TestLocalNode_SubmitOrderPersistsPreTradeBalances(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
 	eng.submitLock = []byte("lock")
@@ -178,6 +76,9 @@ func TestLocalNode_SubmitOrderPersistsReservationBalances(t *testing.T) {
 	}
 	if order.Status != domain.OrderStatusCommitted {
 		t.Fatalf("order status = %q, want committed", order.Status)
+	}
+	if order.Leaves != "20" {
+		t.Fatalf("order leaves = %q, want canonical quantity 20", order.Leaves)
 	}
 
 	quote, ok, err := st.GetBalance(ctx, "acc-1", "USD")
@@ -560,37 +461,6 @@ func TestLocalNode_SubmitOrderSameAccountSerializes(t *testing.T) {
 		if err := <-errs; err != nil {
 			t.Fatalf("SubmitOrder #%d: %v", i, err)
 		}
-	}
-}
-
-// TestLocalNode_SubmitHoldHonorsSuppliedExternalID covers the hold submit path:
-// the supplied id is recorded once and confirm/cancel can resolve the same order
-// by it.
-func TestLocalNode_SubmitHoldHonorsSuppliedExternalID(t *testing.T) {
-	t.Parallel()
-	eng := newFakeEngine()
-	n, st := newTestNode(t, eng)
-	ctx := context.Background()
-	seedTestAccount(t, st, "acc-1")
-
-	supplied := externalID(t, "supplied-hold-id")
-	order, _, err := n.SubmitHold(ctx, testKey("acc-1"), domain.Order{
-		ExternalID:  supplied,
-		BaseAsset:   "AAPL",
-		QuoteAsset:  "USD",
-		Side:        domain.OrderSideBuy,
-		AmountKind:  domain.OrderAmountKindQuantity,
-		AmountValue: "20",
-		Price:       "100",
-	}, testCaller)
-	if err != nil {
-		t.Fatalf("SubmitHold: %v", err)
-	}
-	if order.ExternalID != supplied {
-		t.Fatalf("returned order id = %q, want supplied %q", order.ExternalID, supplied)
-	}
-	if _, err := st.GetOrder(ctx, supplied); err != nil {
-		t.Fatalf("GetOrder by supplied id: %v", err)
 	}
 }
 

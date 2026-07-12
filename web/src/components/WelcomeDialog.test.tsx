@@ -446,6 +446,11 @@ describe("WelcomeDialog", () => {
         "stablecoin",
       );
       expect(createAdjustmentMock).toHaveBeenCalledTimes(4);
+      expect(createAdjustmentMock).toHaveBeenCalledWith("demo-main", {
+        asset: "USD",
+        balance: { mode: "absolute", value: "100000" },
+        averageEntryPrice: "1",
+      });
     });
     expect(createAssetMock.mock.invocationCallOrder[0]).toBeLessThan(
       createAdjustmentMock.mock.invocationCallOrder[0],

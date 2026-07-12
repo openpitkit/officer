@@ -66,10 +66,15 @@ var (
 	// retrying the same request.
 	ErrTooLarge = errors.New("too large")
 	// ErrConflict marks an operation that cannot proceed because the target is
-	// already in a terminal or incompatible state - for example confirming an
-	// approval whose held reservation was already rolled back. The surface layer
-	// maps it to an HTTP 409.
+	// already in a terminal or incompatible state. The surface layer maps it to
+	// an HTTP 409.
 	ErrConflict = errors.New("conflict")
+	// ErrExecutionReportRequired marks an order whose recorded execution-report
+	// activity makes an inferred lifecycle shortcut unsafe. The caller must submit
+	// a complete execution report instead.
+	ErrExecutionReportRequired = errors.New(
+		"order has execution-report activity; submit an explicit execution report",
+	)
 	// ErrHasDependents marks a delete that would cascade-delete dependent rows
 	// without an explicit force flag. The concrete error carries the blockers.
 	ErrHasDependents = errors.New("has dependents")
@@ -563,6 +568,16 @@ func validatePositiveDecimal(s string) error {
 	d, err := decimal.NewFromString(s)
 	if err != nil || !d.IsPositive() {
 		return fmt.Errorf("%q is not a positive decimal: %w", s, ErrInvalid)
+	}
+	return nil
+}
+
+// validateNonNegativeDecimal returns an error when s is not a non-negative
+// decimal.
+func validateNonNegativeDecimal(s string) error {
+	d, err := decimal.NewFromString(s)
+	if err != nil || d.IsNegative() {
+		return fmt.Errorf("%q is not a non-negative decimal: %w", s, ErrInvalid)
 	}
 	return nil
 }

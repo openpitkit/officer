@@ -335,7 +335,7 @@ describe("OrderVerificationPanel — reproduction mode", () => {
     expect(textareaByValue(fixture.canonical)).toBeDefined();
 
     // The rotation-safe key id is shown prominently.
-    expect(screen.getByText("key-1")).toBeInTheDocument();
+    expect(screen.getAllByText("key-1").length).toBeGreaterThan(0);
 
     // The request-type header names the localized request type (it also
     // reappears in the read-only breakdown row, so both occurrences are present).
@@ -491,13 +491,53 @@ describe("OrderVerificationPanel — verify token mode", () => {
 
   it("parses a generalized execution-report payload with its result section", async () => {
     const fixture = await buildSignedToken("key-gen", {
+      approvalId: "approval-exec-1",
+      approvalRef: "approval-submit-1",
       requestType: "execution_report",
+      mode: "hold",
+      eventExternalId: "evt-fill-1",
+      venue: "XNAS",
+      priceCurrency: "USD",
+      timeInForce: "GTC",
+      accountGroupId: "equity-desks",
+      estimateSource: "limit",
+      nonce: "nonce-exec-1",
+      rejectCode: "policy_reject",
+      rejectScope: "account",
+      rejectPolicy: "daily_loss",
+      rejectReason: "Daily loss threshold reached",
+      principal: "operator@example.test",
+      executionReport: {
+        baseAsset: "AAPL",
+        quoteAsset: "USD",
+        fillQuantity: "10",
+        fillPrice: "150.25",
+        leavesQuantity: "0",
+        lockPrice: "149.75",
+        lock: "opaque-lock",
+        commission: { amount: "-0.25", currency: "USD" },
+        order: "ord-repro-1",
+        account: "desk-alpha",
+        side: "buy",
+        orderStatus: "filled",
+        force: false,
+      },
       result: {
         outcome: "filled",
         fillQuantity: "10",
         fillPrice: "150.25",
+        fillLockPrice: "149.75",
+        commission: { amount: "-0.30", currency: "USD" },
         leavesQuantity: "0",
         orderStatus: "filled",
+        blocks: [
+          {
+            account: "desk-alpha",
+            code: "daily_loss",
+            reason: "Daily loss threshold reached",
+            details: "limit=-1000",
+          },
+        ],
       },
     });
     fetchPublicKeyByIdMock.mockResolvedValue({
@@ -521,7 +561,35 @@ describe("OrderVerificationPanel — verify token mode", () => {
       expect(screen.getByText("VALID")).toBeInTheDocument(),
     );
     // The result section is surfaced in the breakdown for a non-submit payload.
-    expect(screen.getByText("Order status")).toBeInTheDocument();
+    expect(screen.getAllByText("Order status")).toHaveLength(2);
+    expect(screen.getByText("Execution-report request")).toBeInTheDocument();
+    expect(screen.getByText("Version")).toBeInTheDocument();
+    expect(screen.getByText("approval-exec-1")).toBeInTheDocument();
+    expect(screen.getByText("approval-submit-1")).toBeInTheDocument();
+    expect(screen.getAllByText("ord-repro-1").length).toBeGreaterThan(0);
+    expect(screen.getByText("evt-fill-1")).toBeInTheDocument();
+    expect(screen.getByText("XNAS")).toBeInTheDocument();
+    expect(screen.getByText("GTC")).toBeInTheDocument();
+    expect(screen.getByText("equity-desks")).toBeInTheDocument();
+    expect(screen.getAllByText("limit").length).toBeGreaterThan(0);
+    expect(screen.getByText("nonce-exec-1")).toBeInTheDocument();
+    expect(screen.getByText("policy_reject")).toBeInTheDocument();
+    expect(screen.getByText("account")).toBeInTheDocument();
+    expect(screen.getByText("daily_loss")).toBeInTheDocument();
+    expect(screen.getAllByText("Daily loss threshold reached").length).toBeGreaterThan(0);
+    expect(screen.getByText("operator@example.test")).toBeInTheDocument();
+    // Even a legacy or hostile token carrying a lock field must not surface it.
+    expect(screen.queryByText("opaque-lock")).not.toBeInTheDocument();
+    expect(screen.getByText("-0.25 USD")).toBeInTheDocument();
+    expect(screen.getByText("Recorded result")).toBeInTheDocument();
+    expect(screen.getByText("Fill lock price")).toBeInTheDocument();
+    expect(screen.getByText("-0.30 USD")).toBeInTheDocument();
+    expect(screen.getByText("Block 1")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "desk-alpha · daily_loss · Daily loss threshold reached · limit=-1000",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("surfaces an unknown key id (404) as an inline error", async () => {

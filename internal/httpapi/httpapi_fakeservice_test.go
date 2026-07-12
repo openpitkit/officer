@@ -149,8 +149,6 @@ type fakeService struct {
 	approvalToken         backend.ApprovalToken
 	attestation           backend.Attestation
 	submitTokenMode       string
-	confirmForce          bool
-	cancelForce           bool
 	signingErr            error
 	// confirmErr/cancelErr inject a resolution failure (e.g. a terminal-order
 	// conflict) into ConfirmExecution/CancelOrder, kept distinct from signingErr so
@@ -810,9 +808,8 @@ func (f *fakeService) SubmitOrderToken(
 	return tok, nil
 }
 func (f *fakeService) ConfirmExecution(
-	_ context.Context, orderID string, _ string, force bool,
+	_ context.Context, orderID string, _ string,
 ) (domain.Order, backend.Attestation, error) {
-	f.confirmForce = force
 	if f.confirmErr != nil {
 		return domain.Order{}, backend.Attestation{}, f.confirmErr
 	}
@@ -826,9 +823,8 @@ func (f *fakeService) ConfirmExecution(
 	return f.submitOrder, f.attestation, nil
 }
 func (f *fakeService) CancelOrder(
-	_ context.Context, orderID string, _, _ string, force bool,
+	_ context.Context, orderID string, _, _ string,
 ) (domain.Order, backend.Attestation, error) {
-	f.cancelForce = force
 	if f.cancelErr != nil {
 		return domain.Order{}, backend.Attestation{}, f.cancelErr
 	}

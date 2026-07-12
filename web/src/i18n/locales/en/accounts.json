@@ -347,8 +347,7 @@
       "order_approvals": "Order approvals",
       "adjustments": "Adjustments",
       "limit_rate": "Rate limits",
-      "limit_order_size": "Order size limits",
-      "reservation_intents": "Reservation intents"
+      "limit_order_size": "Order size limits"
     },
     "cancel": "Cancel",
     "submit": "Delete",

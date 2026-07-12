@@ -74,7 +74,6 @@ type memoryRealm struct {
 	signingConfig map[string]string
 	mcpAccess     map[string]bool
 	userSettings  map[string]domain.UserSetting
-	reservations  map[string]domain.ReservationIntent
 	nextAccountID domain.EngineAccountID
 	nextGroupID   int
 }
@@ -106,7 +105,6 @@ func newMemoryRealm(st *memoryStore) *memoryRealm {
 		signingConfig:            map[string]string{},
 		mcpAccess:                map[string]bool{},
 		userSettings:             map[string]domain.UserSetting{},
-		reservations:             map[string]domain.ReservationIntent{},
 	}
 }
 

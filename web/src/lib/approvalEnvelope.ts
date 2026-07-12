@@ -102,39 +102,149 @@ export function extractApprovalJsonSubstring(envJson: string): string {
   return envJson.slice(start, i);
 }
 
-/** The engine result section a generalized (non-submit) payload may carry. */
+/** Structured commission captured in an execution-report request or result. */
+export interface ParsedApprovalCommission {
+  amount: string;
+  currency: string;
+}
+
+/** One account block recorded in an attested execution-report result. */
+export interface ParsedApprovalBlock {
+  account: string;
+  code: string;
+  reason: string;
+  details: string;
+}
+
+/** The audit-safe execution-report request bound into an approval payload. */
+export interface ParsedApprovalExecutionReport {
+  baseAsset: string;
+  quoteAsset: string;
+  fillQuantity: string;
+  fillPrice: string;
+  leavesQuantity: string;
+  lockPrice: string;
+  commission: ParsedApprovalCommission | null;
+  order: string;
+  account: string;
+  side: string;
+  orderStatus: string;
+  force: string;
+}
+
+/** The recorded result section a generalized (non-submit) payload may carry. */
 export interface ParsedApprovalResult {
   outcome: string;
   fillQuantity: string;
   fillPrice: string;
   fillLockPrice: string;
+  commission: ParsedApprovalCommission | null;
   leavesQuantity: string;
   orderStatus: string;
+  blocks: ParsedApprovalBlock[];
 }
 
 /** The fields parsed out of an approval payload for the read-only breakdown.
  *  The payload is generalized across request types, so requestType and the
- *  optional engine result section may be present. */
+ *  optional recorded result section may be present. */
 export interface ParsedApproval {
+  version: string;
+  approvalId: string;
+  approvalRef: string;
   alg: string;
   keyId: string;
   requestType: string;
+  mode: string;
+  orderExternalId: string;
+  eventExternalId: string;
   side: string;
   quantity: string;
   amountKind: string;
   orderType: string;
   limitPrice: string;
   instrument: string;
+  venue: string;
+  priceCurrency: string;
+  timeInForce: string;
   accountId: string;
+  accountGroupId: string;
   verdict: string;
   policySummary: string;
   estimatePrice: string;
+  estimateSource: string;
   issuedAt: string;
+  nonce: string;
+  rejectCode: string;
+  rejectScope: string;
+  rejectPolicy: string;
+  rejectReason: string;
+  principal: string;
+  executionReport: ParsedApprovalExecutionReport | null;
   result: ParsedApprovalResult | null;
 }
 
 function str(v: unknown): string {
   return typeof v === "string" ? v : "";
+}
+
+function numberStr(v: unknown): string {
+  return typeof v === "number" && Number.isFinite(v) ? String(v) : "";
+}
+
+function boolStr(v: unknown): string {
+  return typeof v === "boolean" ? String(v) : "";
+}
+
+function parseCommission(v: unknown): ParsedApprovalCommission | null {
+  if (typeof v !== "object" || v === null) {
+    return null;
+  }
+  const commission = v as Record<string, unknown>;
+  return {
+    amount: str(commission.amount),
+    currency: str(commission.currency),
+  };
+}
+
+function parseBlocks(v: unknown): ParsedApprovalBlock[] {
+  if (!Array.isArray(v)) {
+    return [];
+  }
+  return v.flatMap((value) => {
+    if (typeof value !== "object" || value === null) {
+      return [];
+    }
+    const block = value as Record<string, unknown>;
+    return [{
+      account: str(block.account),
+      code: str(block.code),
+      reason: str(block.reason),
+      details: str(block.details),
+    }];
+  });
+}
+
+function parseExecutionReport(
+  v: unknown,
+): ParsedApprovalExecutionReport | null {
+  if (typeof v !== "object" || v === null) {
+    return null;
+  }
+  const report = v as Record<string, unknown>;
+  return {
+    baseAsset: str(report.baseAsset),
+    quoteAsset: str(report.quoteAsset),
+    fillQuantity: str(report.fillQuantity),
+    fillPrice: str(report.fillPrice),
+    leavesQuantity: str(report.leavesQuantity),
+    lockPrice: str(report.lockPrice),
+    commission: parseCommission(report.commission),
+    order: str(report.order),
+    account: str(report.account),
+    side: str(report.side),
+    orderStatus: str(report.orderStatus),
+    force: boolStr(report.force),
+  };
 }
 
 function parseResult(v: unknown): ParsedApprovalResult | null {
@@ -147,8 +257,10 @@ function parseResult(v: unknown): ParsedApprovalResult | null {
     fillQuantity: str(r.fillQuantity),
     fillPrice: str(r.fillPrice),
     fillLockPrice: str(r.fillLockPrice),
+    commission: parseCommission(r.commission),
     leavesQuantity: str(r.leavesQuantity),
     orderStatus: str(r.orderStatus),
+    blocks: parseBlocks(r.blocks),
   };
 }
 
@@ -159,20 +271,38 @@ export function parseApprovalFields(
   approval: Record<string, unknown>,
 ): ParsedApproval {
   return {
+    version: numberStr(approval.version),
+    approvalId: str(approval.approvalId),
+    approvalRef: str(approval.approvalRef),
     alg: str(approval.alg),
     keyId: str(approval.keyId),
     requestType: str(approval.requestType),
+    mode: str(approval.mode),
+    orderExternalId: str(approval.orderExternalId),
+    eventExternalId: str(approval.eventExternalId),
     side: str(approval.side),
     quantity: str(approval.quantity),
     amountKind: str(approval.amountKind),
     orderType: str(approval.orderType),
     limitPrice: str(approval.limitPrice),
     instrument: str(approval.instrument),
+    venue: str(approval.venue),
+    priceCurrency: str(approval.priceCurrency),
+    timeInForce: str(approval.timeInForce),
     accountId: str(approval.accountId),
+    accountGroupId: str(approval.accountGroupId),
     verdict: str(approval.verdict),
     policySummary: str(approval.policySummary),
     estimatePrice: str(approval.estimatePrice),
+    estimateSource: str(approval.estimateSource),
     issuedAt: str(approval.issuedAt),
+    nonce: str(approval.nonce),
+    rejectCode: str(approval.rejectCode),
+    rejectScope: str(approval.rejectScope),
+    rejectPolicy: str(approval.rejectPolicy),
+    rejectReason: str(approval.rejectReason),
+    principal: str(approval.principal),
+    executionReport: parseExecutionReport(approval.executionReport),
     result: parseResult(approval.result),
   };
 }

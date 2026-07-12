@@ -115,6 +115,16 @@ type OrderResult struct {
 	// funds and incoming quantity). They must be persisted so the balance
 	// snapshot reflects the committed reservation before any fill arrives.
 	Outcomes []BalanceOutcome
+	// SettlementLockPrice is the settlement-leg lock price (the price a later
+	// fill settles at) as a decimal string; empty when no price was locked.
+	SettlementLockPrice string
+	// LeavesQuantity is the order's canonical open base quantity. Quantity orders
+	// carry their amount directly; volume orders are converted at the settlement
+	// lock price.
+	LeavesQuantity string
+	// EstimateSource is how the lock price was derived: domain.EstimateSourceLimit
+	// when the order carried a limit price, else domain.EstimateSourceMarketMark.
+	EstimateSource string
 	// Accepted reports whether the pre-trade passed and was committed.
 	Accepted bool
 }
@@ -131,39 +141,6 @@ type OrderResult struct {
 type BalanceOutcome struct {
 	Asset   string                           `json:"asset"`
 	Outcome domain.AdjustmentOutcomeAccepted `json:"outcome"`
-}
-
-// HoldResult is the outcome of one ReserveHold call on accept. The native
-// reservation stays held inside the engine adapter's registry, keyed by
-// ApprovalID, until CommitHeld or RollbackHeld resolves it. On reject ReserveHold
-// returns Rejects with Accepted false and holds nothing.
-type HoldResult struct {
-	// ApprovalID is the server UUID identifying the held reservation; it is the
-	// reservation id surfaced to clients. Empty when not accepted.
-	ApprovalID string
-	// Lock is the SDK-serialized reservation lock captured at issue, ready to
-	// persist verbatim on the order and reservation intent. Nil when the order
-	// locked nothing. Display prices are derived later via LockDisplayPrices.
-	Lock []byte
-	// SettlementLockPrice is the settlement-leg lock price (the price a fill
-	// settles at) as a decimal string; empty when no price was locked.
-	SettlementLockPrice string
-	// EstimateSource is how the lock price was derived: domain.EstimateSourceLimit
-	// when the order carried a limit price, else domain.EstimateSourceMarketMark.
-	EstimateSource string
-	// Outcomes are the per-asset balance effects produced by the reservation.
-	// They must be persisted so a later engine rebuild can seed the held amounts.
-	Outcomes []BalanceOutcome
-	// Rejects are the engine pre-trade rejects; non-empty only when not accepted.
-	Rejects []domain.OrderReject
-	// Intent is the durable reservation-intent record for the registered hold,
-	// ready to persist verbatim in the same transaction as the order. The engine
-	// registers the hold in-memory only and hands the durable write to the node
-	// (mirroring the commit/rollback paths); the caller persists it on accept.
-	// Zero when not accepted.
-	Intent domain.ReservationIntent
-	// Accepted reports whether the pre-trade passed and the hold was registered.
-	Accepted bool
 }
 
 // ImmediateResult is the outcome of one SubmitImmediate call. On accept the
@@ -197,15 +174,21 @@ type ImmediateResult struct {
 }
 
 // ExecutionReportPersistence is the Officer write set produced after the engine
-// applies an execution report. Report-owned order, trade, and event fields are
-// copied from the original report and stored without inventing extra values;
-// engine-owned account effects are limited to Balances and Blocks.
+// applies an execution report. Report-owned order, commission, trade, and event
+// fields are copied from the original report, except terminal leaves are
+// normalized after the engine consumes the release quantity; engine-owned
+// account effects are limited to Balances and Blocks.
 type ExecutionReportPersistence struct {
 	// Trade is the optional trade row to persist.
 	Trade *domain.Trade
+	// Commission is the report-level fee or rebate. It is retained even when the
+	// report carries no trade.
+	Commission *domain.Commission
 	// OrderStatus is the order status change the engine-facing layer accepted.
 	OrderStatus domain.OrderStatus
-	// Leaves is the remaining open quantity to persist; empty leaves it unchanged.
+	// Leaves is the remaining open quantity to persist; terminal settlements use
+	// zero after the engine consumes the report's release quantity. Empty leaves
+	// the stored value unchanged.
 	Leaves string
 	// Balances are the per-asset balance outcomes returned by the engine.
 	Balances []domain.BalanceSettlement
@@ -245,9 +228,6 @@ type AccountLane interface {
 		ctx context.Context, account domain.AccountID, req domain.AdjustmentRequest,
 	) (AdjustmentResult, error)
 	SubmitOrder(ctx context.Context, o domain.Order) (OrderResult, error)
-	ReserveHold(ctx context.Context, o domain.Order) (HoldResult, error)
-	CommitHeld(ctx context.Context, approvalID string) error
-	RollbackHeld(ctx context.Context, approvalID string) error
 	SubmitImmediate(ctx context.Context, o domain.Order) (ImmediateResult, error)
 	ApplyExecutionReport(
 		ctx context.Context, in domain.ExecutionReportInput,
@@ -302,18 +282,6 @@ type Engine interface {
 	// on the live engine handle via the binding's Configure surface. Only the
 	// LimitSet slice matching policy is consumed.
 	ConfigurePolicy(ctx context.Context, policy string, limits LimitSet) error
-
-	// SetReservationStore attaches the persistence layer the adapter uses to keep
-	// reservation intents durable across the hold lifecycle. It is called once at
-	// boot, before the first ReserveHold and before ReconcileOrphans. A nil store
-	// keeps holds in memory only.
-	SetReservationStore(store ReservationStore)
-
-	// ReconcileOrphans reports every persisted reservation intent still in the
-	// held state. Native reservation handles do not survive a restart, but held
-	// balance effects reseed from the store and resolution can fall back to the
-	// persisted intent. It returns the number found.
-	ReconcileOrphans(ctx context.Context) (int, error)
 
 	// RunAccountSynchronized runs fn on the engine's account-synchronized lane.
 	// Account-scoped node operations use this to keep Officer's own checks,

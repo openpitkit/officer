@@ -15,11 +15,11 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-// These tests exercise the held-reservation registry against a real OpenPit
-// engine and so require the native runtime dylib at run time (set
+// These tests exercise reservation settlement against a real OpenPit engine and
+// so require the native runtime dylib at run time (set
 // OPENPIT_RUNTIME_LIBRARY_PATH or build the workspace dylib first, as documented
 // for the Go bindings). They build one real engine through buildEngine, seed an
-// account balance, and drive the hold/commit/rollback paths through the adapter.
+// account balance, and drive order and execution-report paths through the adapter.
 
 package native
 
@@ -33,6 +33,7 @@ import (
 	"go.openpit.dev/openpit"
 	"go.openpit.dev/openpit/asyncengine"
 	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/pretrade/policies"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/marketdata"
@@ -102,6 +103,34 @@ func newTestEngine(t *testing.T) *openPitEngine {
 	return adapter
 }
 
+// newUnpricedTestEngine builds the adapter with validation only, deliberately
+// omitting SpotFunds and every other policy that could contribute a lock price.
+func newUnpricedTestEngine(t *testing.T) *openPitEngine {
+	t.Helper()
+	snap := Snapshot{Accounts: []domain.Account{account(testAccount)}}
+	res, err := newIDResolver(snap.Accounts, snap.Groups)
+	if err != nil {
+		t.Fatalf("newIDResolver: %v", err)
+	}
+	eng, err := openpit.NewEngineBuilder().AccountSync().
+		Builtin(policies.BuildOrderValidation()).
+		Build()
+	if err != nil {
+		t.Fatalf("build unpriced engine: %v", err)
+	}
+	adapter := newOpenPitEngine(
+		eng,
+		testAsyncEngine(t, eng),
+		nil,
+		map[string]struct{}{},
+		nil,
+		nil,
+		res,
+	).(*openPitEngine)
+	t.Cleanup(adapter.Stop)
+	return adapter
+}
+
 // testOrder is a limit buy that costs 500 quote, so a 1000-quote balance funds
 // exactly two of them. A limit price keeps the estimate source "limit" and
 // avoids needing a live market quote.
@@ -114,149 +143,6 @@ func testOrder() domain.Order {
 		AmountKind:  domain.OrderAmountKindQuantity,
 		AmountValue: testQty,
 		Price:       testLimit,
-	}
-}
-
-// registrySize reports the live registry entry count.
-func (e *openPitEngine) registrySize() int {
-	e.registry.mu.Lock()
-	defer e.registry.mu.Unlock()
-	return len(e.registry.by)
-}
-
-func TestReserveHold_AcceptCapturesEstimate(t *testing.T) {
-	e := newTestEngine(t)
-	ctx := context.Background()
-
-	res, err := e.ReserveHold(ctx, testOrder())
-	if err != nil {
-		t.Fatalf("ReserveHold: %v", err)
-	}
-	if !res.Accepted {
-		t.Fatalf("ReserveHold rejected: %+v", res.Rejects)
-	}
-	if res.ApprovalID == "" {
-		t.Fatal("ReserveHold: empty approval id")
-	}
-	if res.EstimateSource != domain.EstimateSourceLimit {
-		t.Fatalf("estimate source = %q, want %q", res.EstimateSource, domain.EstimateSourceLimit)
-	}
-	if res.SettlementLockPrice == "" {
-		t.Fatal("ReserveHold: empty settlement lock price")
-	}
-	if len(res.Lock) == 0 {
-		t.Fatal("ReserveHold: empty serialized lock")
-	}
-	// The serialized lock round-trips and its settlement price (last entry)
-	// matches the returned estimate.
-	prices, err := LockDisplayPrices(res.Lock)
-	if err != nil {
-		t.Fatalf("LockDisplayPrices: %v", err)
-	}
-	if len(prices) == 0 {
-		t.Fatal("serialized lock carries no prices")
-	}
-	gotSettle, _ := param.NewPriceFromString(prices[len(prices)-1])
-	wantSettle, _ := param.NewPriceFromString(res.SettlementLockPrice)
-	if gotSettle.Compare(wantSettle) != 0 {
-		t.Fatalf("lock settlement price %s != reported %s", prices[len(prices)-1], res.SettlementLockPrice)
-	}
-	if got := e.registrySize(); got != 1 {
-		t.Fatalf("registry size = %d, want 1", got)
-	}
-}
-
-func TestReserveHold_HoldsFundsUntilRolledBack(t *testing.T) {
-	e := newTestEngine(t)
-	ctx := context.Background()
-
-	first, err := e.ReserveHold(ctx, testOrder())
-	if err != nil || !first.Accepted {
-		t.Fatalf("first ReserveHold: %v accepted=%v", err, first.Accepted)
-	}
-	second, err := e.ReserveHold(ctx, testOrder())
-	if err != nil || !second.Accepted {
-		t.Fatalf("second ReserveHold: %v accepted=%v", err, second.Accepted)
-	}
-	third, err := e.ReserveHold(ctx, testOrder())
-	if err != nil {
-		t.Fatalf("third ReserveHold: %v", err)
-	}
-	if third.Accepted {
-		t.Fatal("third ReserveHold accepted but funds should be exhausted")
-	}
-
-	if err := e.RollbackHeld(ctx, first.ApprovalID); err != nil {
-		t.Fatalf("RollbackHeld: %v", err)
-	}
-	fourth, err := e.ReserveHold(ctx, testOrder())
-	if err != nil {
-		t.Fatalf("fourth ReserveHold: %v", err)
-	}
-	if !fourth.Accepted {
-		t.Fatal("fourth ReserveHold rejected after rollback returned funds")
-	}
-}
-
-func TestCommitHeld_SingleResolveGuard(t *testing.T) {
-	e := newTestEngine(t)
-	ctx := context.Background()
-
-	res, err := e.ReserveHold(ctx, testOrder())
-	if err != nil || !res.Accepted {
-		t.Fatalf("ReserveHold: %v accepted=%v", err, res.Accepted)
-	}
-
-	if err := e.CommitHeld(ctx, res.ApprovalID); err != nil {
-		t.Fatalf("first CommitHeld: %v", err)
-	}
-	err = e.CommitHeld(ctx, res.ApprovalID)
-	if !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("second CommitHeld error = %v, want ErrConflict", err)
-	}
-	if got := e.registrySize(); got != 0 {
-		t.Fatalf("registry size after commit = %d, want 0", got)
-	}
-}
-
-func TestCommitHeld_ConcurrentResolveNoPanic(t *testing.T) {
-	e := newTestEngine(t)
-	ctx := context.Background()
-
-	res, err := e.ReserveHold(ctx, testOrder())
-	if err != nil || !res.Accepted {
-		t.Fatalf("ReserveHold: %v accepted=%v", err, res.Accepted)
-	}
-
-	var wg sync.WaitGroup
-	errs := make([]error, 2)
-	wg.Add(2)
-	go func() { defer wg.Done(); errs[0] = e.CommitHeld(ctx, res.ApprovalID) }()
-	go func() { defer wg.Done(); errs[1] = e.RollbackHeld(ctx, res.ApprovalID) }()
-	wg.Wait()
-
-	if got := e.registrySize(); got != 0 {
-		t.Fatalf("registry size after race = %d, want 0", got)
-	}
-}
-
-func TestRollbackHeld_UnknownAndIdempotent(t *testing.T) {
-	e := newTestEngine(t)
-	ctx := context.Background()
-
-	if err := e.RollbackHeld(ctx, "no-such-id"); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("RollbackHeld(unknown) = %v, want ErrNotFound", err)
-	}
-
-	res, err := e.ReserveHold(ctx, testOrder())
-	if err != nil || !res.Accepted {
-		t.Fatalf("ReserveHold: %v accepted=%v", err, res.Accepted)
-	}
-	if err := e.RollbackHeld(ctx, res.ApprovalID); err != nil {
-		t.Fatalf("RollbackHeld: %v", err)
-	}
-	if err := e.RollbackHeld(ctx, res.ApprovalID); err != nil {
-		t.Fatalf("idempotent RollbackHeld: %v", err)
 	}
 }
 
@@ -280,15 +166,12 @@ func TestSubmitImmediate_NetsHeldToZero(t *testing.T) {
 	if len(res.Lock) == 0 {
 		t.Fatal("SubmitImmediate: empty serialized lock")
 	}
-	if got := e.registrySize(); got != 0 {
-		t.Fatalf("registry size after immediate = %d, want 0", got)
-	}
 }
 
 // TestApplyExecutionReport_SettlesFillNoBlock drives a fill end to end through
-// the real engine and the real executionReportFrom mapping: reserve a spot BUY
-// (holding quote funds), commit it, then apply a fill report carrying filled
-// an explicit leaves quantity. It asserts the report settles with no account
+// the real engine and the real executionReportFrom mapping: submit a spot BUY
+// (holding quote funds), then apply a fill report carrying an explicit leaves
+// quantity. It asserts the report settles with no account
 // block and produces a per-asset outcome for each spot leg. This locks in that
 // the mapper sets leaves quantity and terminal order status; without them the engine
 // rejects the fill with missing_required_field and blocks the account.
@@ -296,12 +179,9 @@ func TestApplyExecutionReport_SettlesFillNoBlock(t *testing.T) {
 	e := newTestEngine(t)
 	ctx := context.Background()
 
-	held, err := e.ReserveHold(ctx, testOrder())
-	if err != nil || !held.Accepted {
-		t.Fatalf("ReserveHold: %v accepted=%v", err, held.Accepted)
-	}
-	if err := e.CommitHeld(ctx, held.ApprovalID); err != nil {
-		t.Fatalf("CommitHeld: %v", err)
+	submitted, err := e.SubmitOrder(ctx, testOrder())
+	if err != nil || !submitted.Accepted {
+		t.Fatalf("SubmitOrder: %v accepted=%v", err, submitted.Accepted)
 	}
 
 	// A full fill of the 5-unit order at the reservation's settlement lock price
@@ -310,9 +190,9 @@ func TestApplyExecutionReport_SettlesFillNoBlock(t *testing.T) {
 		BaseAsset:      testBase,
 		QuoteAsset:     testQuote,
 		FillQuantity:   testQty,
-		FillPrice:      held.SettlementLockPrice,
+		FillPrice:      submitted.SettlementLockPrice,
 		LeavesQuantity: "0",
-		LockPrice:      held.SettlementLockPrice,
+		LockPrice:      submitted.SettlementLockPrice,
 		Account:        domain.AccountID(testAccount),
 		Side:           domain.OrderSideBuy,
 		OrderStatus:    domain.OrderStatusFilled,
@@ -347,12 +227,9 @@ func TestApplyExecutionReport_CanceledContextDoesNotEnterLane(t *testing.T) {
 	e := newTestEngine(t)
 	ctx := context.Background()
 
-	held, err := e.ReserveHold(ctx, testOrder())
-	if err != nil || !held.Accepted {
-		t.Fatalf("ReserveHold: %v accepted=%v", err, held.Accepted)
-	}
-	if err := e.CommitHeld(ctx, held.ApprovalID); err != nil {
-		t.Fatalf("CommitHeld: %v", err)
+	submitted, err := e.SubmitOrder(ctx, testOrder())
+	if err != nil || !submitted.Accepted {
+		t.Fatalf("SubmitOrder: %v accepted=%v", err, submitted.Accepted)
 	}
 
 	reportCtx, cancel := context.WithCancel(ctx)
@@ -361,9 +238,9 @@ func TestApplyExecutionReport_CanceledContextDoesNotEnterLane(t *testing.T) {
 		BaseAsset:      testBase,
 		QuoteAsset:     testQuote,
 		FillQuantity:   testQty,
-		FillPrice:      held.SettlementLockPrice,
+		FillPrice:      submitted.SettlementLockPrice,
 		LeavesQuantity: "0",
-		LockPrice:      held.SettlementLockPrice,
+		LockPrice:      submitted.SettlementLockPrice,
 		Account:        domain.AccountID(testAccount),
 		Side:           domain.OrderSideBuy,
 		Order:          "order-1",
@@ -422,20 +299,17 @@ func TestApplyExecutionReport_MissingLeavesRejected(t *testing.T) {
 	e := newTestEngine(t)
 	ctx := context.Background()
 
-	held, err := e.ReserveHold(ctx, testOrder())
-	if err != nil || !held.Accepted {
-		t.Fatalf("ReserveHold: %v accepted=%v", err, held.Accepted)
-	}
-	if err := e.CommitHeld(ctx, held.ApprovalID); err != nil {
-		t.Fatalf("CommitHeld: %v", err)
+	submitted, err := e.SubmitOrder(ctx, testOrder())
+	if err != nil || !submitted.Accepted {
+		t.Fatalf("SubmitOrder: %v accepted=%v", err, submitted.Accepted)
 	}
 
 	_, err = e.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		BaseAsset:    testBase,
 		QuoteAsset:   testQuote,
 		FillQuantity: testQty,
-		FillPrice:    held.SettlementLockPrice,
-		LockPrice:    held.SettlementLockPrice,
+		FillPrice:    submitted.SettlementLockPrice,
+		LockPrice:    submitted.SettlementLockPrice,
 		Account:      domain.AccountID(testAccount),
 		Side:         domain.OrderSideBuy,
 		OrderStatus:  domain.OrderStatusFilled,
@@ -520,24 +394,21 @@ func TestSpotFundsPnlBoundsBuildConfiguresBasePolicyAndSeed(t *testing.T) {
 
 	feeOrder := testOrder()
 	feeOrder.AmountValue = "1"
-	held, err := e.ReserveHold(ctx, feeOrder)
+	submitted, err := e.SubmitOrder(ctx, feeOrder)
 	if err != nil {
-		t.Fatalf("ReserveHold fee order: %v", err)
+		t.Fatalf("SubmitOrder fee order: %v", err)
 	}
-	if !held.Accepted {
-		t.Fatalf("fee order rejected before fill: %+v", held.Rejects)
-	}
-	if err := e.CommitHeld(ctx, held.ApprovalID); err != nil {
-		t.Fatalf("CommitHeld fee order: %v", err)
+	if !submitted.Accepted {
+		t.Fatalf("fee order rejected before fill: %+v", submitted.Rejects)
 	}
 
 	result, err := e.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		BaseAsset:      testBase,
 		QuoteAsset:     testQuote,
 		FillQuantity:   "1",
-		FillPrice:      held.SettlementLockPrice,
+		FillPrice:      submitted.SettlementLockPrice,
 		LeavesQuantity: "0",
-		LockPrice:      held.SettlementLockPrice,
+		LockPrice:      submitted.SettlementLockPrice,
 		Commission:     &domain.Commission{Amount: "-2", Currency: testQuote},
 		Account:        domain.AccountID(testAccount),
 		Side:           domain.OrderSideBuy,
@@ -572,24 +443,21 @@ func TestConfigurePolicy_SpotFundsPnlBoundsClearsLastBarrierOnline(t *testing.T)
 
 	feeOrder := testOrder()
 	feeOrder.AmountValue = "1"
-	held, err := e.ReserveHold(ctx, feeOrder)
+	submitted, err := e.SubmitOrder(ctx, feeOrder)
 	if err != nil {
-		t.Fatalf("ReserveHold fee order: %v", err)
+		t.Fatalf("SubmitOrder fee order: %v", err)
 	}
-	if !held.Accepted {
-		t.Fatalf("fee order rejected before fill: %+v", held.Rejects)
-	}
-	if err := e.CommitHeld(ctx, held.ApprovalID); err != nil {
-		t.Fatalf("CommitHeld fee order: %v", err)
+	if !submitted.Accepted {
+		t.Fatalf("fee order rejected before fill: %+v", submitted.Rejects)
 	}
 
 	result, err := e.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		BaseAsset:      testBase,
 		QuoteAsset:     testQuote,
 		FillQuantity:   "1",
-		FillPrice:      held.SettlementLockPrice,
+		FillPrice:      submitted.SettlementLockPrice,
 		LeavesQuantity: "0",
-		LockPrice:      held.SettlementLockPrice,
+		LockPrice:      submitted.SettlementLockPrice,
 		Commission:     &domain.Commission{Amount: "-2", Currency: testQuote},
 		Account:        domain.AccountID(testAccount),
 		Side:           domain.OrderSideBuy,
@@ -664,23 +532,20 @@ func commitSpotFundsFeeFill(t *testing.T, e *openPitEngine) ExecutionReportResul
 	ctx := context.Background()
 	order := testOrder()
 	order.AmountValue = "1"
-	held, err := e.ReserveHold(ctx, order)
+	submitted, err := e.SubmitOrder(ctx, order)
 	if err != nil {
-		t.Fatalf("ReserveHold fee order: %v", err)
+		t.Fatalf("SubmitOrder fee order: %v", err)
 	}
-	if !held.Accepted {
-		t.Fatalf("fee order rejected before fill: %+v", held.Rejects)
-	}
-	if err := e.CommitHeld(ctx, held.ApprovalID); err != nil {
-		t.Fatalf("CommitHeld fee order: %v", err)
+	if !submitted.Accepted {
+		t.Fatalf("fee order rejected before fill: %+v", submitted.Rejects)
 	}
 	result, err := e.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
 		BaseAsset:      testBase,
 		QuoteAsset:     testQuote,
 		FillQuantity:   "1",
-		FillPrice:      held.SettlementLockPrice,
+		FillPrice:      submitted.SettlementLockPrice,
 		LeavesQuantity: "0",
-		LockPrice:      held.SettlementLockPrice,
+		LockPrice:      submitted.SettlementLockPrice,
 		Commission:     &domain.Commission{Amount: "-2", Currency: testQuote},
 		Account:        domain.AccountID(testAccount),
 		Side:           domain.OrderSideBuy,
@@ -796,10 +661,9 @@ func TestConfigurePolicy_SpotFundsPnlBoundsNewAccountBarrierExplicitInitialPnlSe
 	}
 }
 
-// TestSubmitOrder_AcceptCapturesSerializedLock checks SubmitOrder returns the
-// SDK-serialized lock (not decimal prices) and that the lock round-trips through
-// the seam to the prices the order locked.
-func TestSubmitOrder_AcceptCapturesSerializedLock(t *testing.T) {
+// TestSubmitOrder_AcceptCapturesSettlement checks SubmitOrder returns the
+// durable lock and the canonical settlement inputs a later report needs.
+func TestSubmitOrder_AcceptCapturesSettlement(t *testing.T) {
 	e := newTestEngine(t)
 	ctx := context.Background()
 
@@ -820,156 +684,119 @@ func TestSubmitOrder_AcceptCapturesSerializedLock(t *testing.T) {
 	if len(prices) == 0 {
 		t.Fatal("serialized lock carries no prices")
 	}
+	if res.EstimateSource != domain.EstimateSourceLimit {
+		t.Fatalf("estimate source = %q, want limit", res.EstimateSource)
+	}
+	if res.SettlementLockPrice == "" {
+		t.Fatal("SubmitOrder: empty settlement lock price")
+	}
+	gotSettlement, err := param.NewPriceFromString(res.SettlementLockPrice)
+	if err != nil {
+		t.Fatalf("parse settlement lock price: %v", err)
+	}
+	wantSettlement, err := param.NewPriceFromString(prices[len(prices)-1])
+	if err != nil {
+		t.Fatalf("parse serialized settlement lock price: %v", err)
+	}
+	if gotSettlement.Compare(wantSettlement) != 0 {
+		t.Fatalf(
+			"settlement lock price = %s, want serialized lock price %s",
+			gotSettlement.String(), wantSettlement.String(),
+		)
+	}
+	if res.LeavesQuantity != testQty {
+		t.Fatalf("leaves quantity = %q, want %q", res.LeavesQuantity, testQty)
+	}
 }
 
-// TestResolvedReservationRetainedForDoubleResolve proves the resolved-entry
-// guard survives without any TTL: a committed id is remembered so a second
-// commit is recognised as already-resolved (conflict), not unknown.
-func TestResolvedReservationRetainedForDoubleResolve(t *testing.T) {
+func TestSubmitOrder_VolumeCapturesCanonicalBaseLeaves(t *testing.T) {
 	e := newTestEngine(t)
 	ctx := context.Background()
+	order := testOrder()
+	order.AmountKind = domain.OrderAmountKindVolume
+	order.AmountValue = "500.00"
 
-	res, err := e.ReserveHold(ctx, testOrder())
-	if err != nil || !res.Accepted {
-		t.Fatalf("ReserveHold: %v accepted=%v", err, res.Accepted)
+	res, err := e.SubmitOrder(ctx, order)
+	if err != nil {
+		t.Fatalf("SubmitOrder: %v", err)
 	}
-	if err := e.CommitHeld(ctx, res.ApprovalID); err != nil {
-		t.Fatalf("CommitHeld: %v", err)
+	if !res.Accepted {
+		t.Fatalf("SubmitOrder rejected: %+v", res.Rejects)
 	}
-	e.registry.mu.Lock()
-	if len(e.registry.resolved) != 1 {
-		t.Fatalf("resolved len after commit = %d, want 1", len(e.registry.resolved))
+	if res.SettlementLockPrice == "" {
+		t.Fatal("SubmitOrder: empty settlement lock price")
 	}
-	e.registry.mu.Unlock()
-
-	// A repeated commit of the same id is a conflict, not ErrNotFound: the terminal
-	// outcome is retained for double-resolve detection.
-	if err := e.CommitHeld(ctx, res.ApprovalID); !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("second CommitHeld = %v, want ErrConflict", err)
+	gotLeaves, err := param.NewQuantityFromString(res.LeavesQuantity)
+	if err != nil {
+		t.Fatalf("parse base leaves quantity: %v", err)
+	}
+	wantLeaves, _ := param.NewQuantityFromString("5")
+	if gotLeaves.Compare(wantLeaves) != 0 {
+		t.Fatalf("base leaves quantity = %q, want 5", res.LeavesQuantity)
 	}
 }
 
-func TestStop_DrainsHeldReservations(t *testing.T) {
-	snap := Snapshot{Accounts: []domain.Account{account(testAccount)}}
-	res, err := newIDResolver(snap.Accounts, snap.Groups)
-	if err != nil {
-		t.Fatalf("newIDResolver: %v", err)
-	}
-	eng, service, registered, err := buildEngine(snap, res)
-	if err != nil {
-		t.Fatalf("build engine: %v", err)
-	}
-	adapter := newOpenPitEngine(
-		eng, testAsyncEngine(t, eng), service, registered, nil, nil, res,
-	).(*openPitEngine)
-	if err := seedBalances(eng, []domain.Balance{{
-		Account:   domain.AccountID(testAccount),
-		Asset:     testQuote,
-		Available: testQuoteFund,
-	}}, res); err != nil {
-		adapter.Stop()
-		t.Fatalf("seed balance: %v", err)
-	}
+func TestSubmitOrder_UnpricedVolumeReturnsRecordedReject(t *testing.T) {
+	e := newUnpricedTestEngine(t)
+	order := testOrder()
+	order.AmountKind = domain.OrderAmountKindVolume
+	order.AmountValue = "500"
+	order.Price = ""
 
-	ctx := context.Background()
-	held, err := adapter.ReserveHold(ctx, testOrder())
-	if err != nil || !held.Accepted {
-		adapter.Stop()
-		t.Fatalf("ReserveHold: %v accepted=%v", err, held.Accepted)
+	res, err := e.SubmitOrder(context.Background(), order)
+	if err != nil {
+		t.Fatalf("SubmitOrder: %v", err)
 	}
-
-	adapter.Stop()
-	if got := adapter.registrySize(); got != 0 {
-		t.Fatalf("registry size after Stop = %d, want 0", got)
-	}
-	adapter.Stop()
+	assertUnpricedVolumeReject(t, res.Accepted, res.Rejects)
 }
 
-func TestStopWaitsForMidFlightHoldThenDrains(t *testing.T) {
-	adapter := newTestEngine(t)
-	ctx := context.Background()
+func TestSubmitImmediate_UnpricedVolumeReturnsRecordedReject(t *testing.T) {
+	e := newUnpricedTestEngine(t)
+	order := testOrder()
+	order.AmountKind = domain.OrderAmountKindVolume
+	order.AmountValue = "500"
+	order.Price = ""
 
-	entered := make(chan HoldResult, 1)
-	release := make(chan struct{})
-	laneDone := make(chan error, 1)
-	go func() {
-		laneDone <- adapter.RunAccountSynchronized(
-			ctx, domain.AccountID(testAccount), func(lane AccountLane) error {
-				held, err := lane.ReserveHold(ctx, testOrder())
-				if err != nil {
-					return err
-				}
-				entered <- held
-				<-release
-				return nil
-			})
-	}()
-
-	held := <-entered
-	if !held.Accepted {
-		close(release)
-		t.Fatal("mid-flight ReserveHold rejected")
+	res, err := e.SubmitImmediate(context.Background(), order)
+	if err != nil {
+		t.Fatalf("SubmitImmediate: %v", err)
 	}
-	stopDone := make(chan struct{})
-	go func() {
-		adapter.Stop()
-		close(stopDone)
-	}()
-	select {
-	case <-stopDone:
-		t.Fatal("Stop returned before the in-flight account lane finished")
-	case <-time.After(50 * time.Millisecond):
-	}
-	close(release)
-	select {
-	case err := <-laneDone:
-		if err != nil {
-			t.Fatalf("lane: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("account lane did not finish")
-	}
-	select {
-	case <-stopDone:
-	case <-time.After(time.Second):
-		t.Fatal("Stop did not finish after releasing the account lane")
-	}
-	if got := adapter.registrySize(); got != 0 {
-		t.Fatalf("registry size after Stop = %d, want 0", got)
-	}
+	assertUnpricedVolumeReject(t, res.Accepted, res.Rejects)
 }
 
-func TestReconcileOrphans_PreservesHeldIntents(t *testing.T) {
-	e := newTestEngine(t)
-	ctx := context.Background()
-
-	store := &fakeReservationStore{
-		intents: map[string]domain.ReservationIntent{
-			"orphan-1": {ApprovalID: "orphan-1", State: domain.ReservationIntentStateHeld},
-			"orphan-2": {ApprovalID: "orphan-2", State: domain.ReservationIntentStateHeld},
-		},
+func assertUnpricedVolumeReject(
+	t *testing.T, accepted bool, rejects []domain.OrderReject,
+) {
+	t.Helper()
+	if accepted {
+		t.Fatal("unpriced volume order accepted")
 	}
-	e.SetReservationStore(store)
-
-	n, err := e.ReconcileOrphans(ctx)
-	if err != nil {
-		t.Fatalf("ReconcileOrphans: %v", err)
+	if len(rejects) != 1 {
+		t.Fatalf("rejects = %+v, want one", rejects)
 	}
-	if n != 2 {
-		t.Fatalf("held intents = %d, want 2", n)
-	}
-	for id, intent := range store.intents {
-		if intent.State != domain.ReservationIntentStateHeld {
-			t.Fatalf("intent %q state = %q, want held", id, intent.State)
-		}
+	reject := rejects[0]
+	if reject.Code != "order_value_calculation_failed" ||
+		reject.Scope != "order" ||
+		reject.Reason != "volume order requires a settlement price" {
+		t.Fatalf("reject = %+v, want order sizing reject", reject)
 	}
 }
 
 func TestImmediateExecutionReport_VolumeSizing(t *testing.T) {
 	res := testResolver(testAccount)
+	quantity, err := immediateFillQuantity(domain.Order{
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "5.00",
+	}, "")
+	if err != nil {
+		t.Fatalf("immediateFillQuantity(quantity): %v", err)
+	}
+	if quantity != "5.00" {
+		t.Fatalf("immediateFillQuantity(quantity) = %q, want 5.00", quantity)
+	}
 
 	// A volume order with no settlement price cannot be sized into a fill.
-	_, err := immediateExecutionReport(domain.Order{
+	_, err = immediateExecutionReport(domain.Order{
 		Account:     domain.AccountID(testAccount),
 		BaseAsset:   testBase,
 		QuoteAsset:  testQuote,
@@ -1008,87 +835,6 @@ func TestImmediateExecutionReport_VolumeSizing(t *testing.T) {
 	if got.Compare(want) != 0 {
 		t.Fatalf("immediateFillQuantity = %q, want 5", qty)
 	}
-}
-
-// fakeReservationStore is an in-memory ReservationStore for reconcile tests. It
-// applies ResolveOrderReservation atomically against its own maps keyed by the
-// order's opaque external id: a single call flips the intent, advances the order
-// status, and records the events together. The status WHERE-guard is honoured so
-// a resolve that races a committed order yields domain.ErrConflict and writes
-// nothing, exactly like the real store.
-type fakeReservationStore struct {
-	mu      sync.Mutex
-	intents map[string]domain.ReservationIntent
-	events  []domain.OrderEvent
-	status  map[domain.ExternalID]domain.OrderStatus
-	// resolveCalls counts ResolveOrderReservation invocations - the single atomic
-	// entry point the confirm/cancel paths use.
-	resolveCalls int
-}
-
-func (s *fakeReservationStore) UpsertReservationIntent(
-	_ context.Context, intent domain.ReservationIntent,
-) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.intents[intent.ApprovalID] = intent
-	return nil
-}
-
-func (s *fakeReservationStore) ListOpenReservationIntents(
-	_ context.Context,
-) ([]domain.ReservationIntent, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]domain.ReservationIntent, 0, len(s.intents))
-	for _, intent := range s.intents {
-		if intent.State == domain.ReservationIntentStateHeld {
-			out = append(out, intent)
-		}
-	}
-	return out, nil
-}
-
-// ResolveOrderReservation applies one resolution atomically: it enforces the
-// AllowedFrom status guard first (no writes on conflict), then flips the intent,
-// advances the order status, and appends the events. A zero Order skips the
-// order/event writes and only flips the intent; a missing intent row is tolerated.
-func (s *fakeReservationStore) ResolveOrderReservation(
-	_ context.Context, r domain.ReservationResolution,
-) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.resolveCalls++
-	if s.status == nil {
-		s.status = make(map[domain.ExternalID]domain.OrderStatus)
-	}
-
-	if !r.Order.IsZero() && len(r.AllowedFrom) > 0 {
-		cur, known := s.status[r.Order]
-		if known {
-			allowed := false
-			for _, a := range r.AllowedFrom {
-				if cur == a {
-					allowed = true
-					break
-				}
-			}
-			if !allowed {
-				return domain.ErrConflict
-			}
-		}
-	}
-
-	if intent, ok := s.intents[r.ApprovalID]; ok {
-		intent.State = r.IntentState
-		s.intents[r.ApprovalID] = intent
-	}
-
-	if !r.Order.IsZero() {
-		s.status[r.Order] = r.OrderStatus
-		s.events = append(s.events, r.Events...)
-	}
-	return nil
 }
 
 // TestRunAccountSynchronized_SerializesSameAccount drives the real SDK account

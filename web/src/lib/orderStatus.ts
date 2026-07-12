@@ -25,12 +25,12 @@
 export const ACTIVE_ORDER_STATUSES = [
   "submitted",
   "accepted",
+  "committed",
   "partially_filled",
 ] as const;
 
 /** Resolved order statuses: no further work is expected. */
 export const TERMINAL_ORDER_STATUSES = [
-  "committed",
   "rolled_back",
   "filled",
   "rejected",

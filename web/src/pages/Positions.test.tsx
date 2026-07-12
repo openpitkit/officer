@@ -370,6 +370,31 @@ describe("Positions adjustment panel", () => {
     await waitFor(() => expect(createAdjustmentMock).toHaveBeenCalledTimes(2));
   });
 
+  it("disables adjustment submission while a numeric draft is invalid", async () => {
+    const user = userEvent.setup();
+    renderPositions();
+
+    await user.click(
+      screen.getByRole("button", {
+        name: /open adjustment panel for bucks mcmoneyface aapl/i,
+      }),
+    );
+
+    const scope = within(
+      screen.getByRole("region", { name: "Adjustment" }),
+    );
+    const amount = scope.getByLabelText("Available adjustment amount");
+    const submit = scope.getByRole("button", { name: /submit adjustment/i });
+    await user.type(amount, "600");
+    expect(submit).toBeEnabled();
+
+    await user.type(amount, "x");
+    expect(amount).toHaveValue("600x");
+    expect(amount).toBeInvalid();
+    expect(submit).toBeDisabled();
+    expect(createAdjustmentMock).not.toHaveBeenCalled();
+  });
+
   it("submits realized PnL through one adjustment request", async () => {
     const user = userEvent.setup();
     renderPositions();
@@ -679,7 +704,7 @@ describe("Positions business CSV", () => {
     );
   });
 
-  it("keeps advanced position filters open when a numeric value is invalid", async () => {
+  it("disables advanced position filters while a numeric value is invalid", async () => {
     const user = userEvent.setup();
     renderPositions();
 
@@ -688,11 +713,11 @@ describe("Positions business CSV", () => {
     const available = within(dialog).getAllByPlaceholderText("Value")[0];
     await user.type(available, "word");
 
-    await user.click(
+    expect(
       within(dialog).getByRole("button", {
         name: /apply advanced filter/i,
       }),
-    );
+    ).toBeDisabled();
 
     expect(screen.getByRole("dialog", { name: /more filters/i })).toBeInTheDocument();
     expect(available).toBeInvalid();
@@ -898,7 +923,7 @@ describe("Positions active-orders navigation", () => {
 
     expect(open).toHaveBeenCalledWith(
       expect.stringContaining(
-        "/orders?account=Bucks+McMoneyface&status=submitted%2Caccepted%2Cpartially_filled",
+        "/orders?account=Bucks+McMoneyface&status=submitted%2Caccepted%2Ccommitted%2Cpartially_filled",
       ),
       "_blank",
       "noopener,noreferrer",

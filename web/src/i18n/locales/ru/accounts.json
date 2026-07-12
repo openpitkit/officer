@@ -347,8 +347,7 @@
       "order_approvals": "Подтверждения ордеров",
       "adjustments": "Корректировки",
       "limit_rate": "Лимиты частоты",
-      "limit_order_size": "Лимиты размера ордера",
-      "reservation_intents": "Намерения резервирования"
+      "limit_order_size": "Лимиты размера ордера"
     },
     "cancel": "Отмена",
     "submit": "Удалить",

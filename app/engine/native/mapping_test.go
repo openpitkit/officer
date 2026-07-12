@@ -1385,6 +1385,43 @@ func TestExecutionReportFrom_CommissionUsesStructuredFee(t *testing.T) {
 	}
 }
 
+func TestExecutionReportFrom_NoTradeCommissionUsesStructuredFee(t *testing.T) {
+	t.Parallel()
+	res := testResolver("acc-1")
+	report, err := executionReportFrom(domain.ExecutionReportInput{
+		BaseAsset:      "AAPL",
+		QuoteAsset:     "USD",
+		LeavesQuantity: "1",
+		Commission: &domain.Commission{
+			Amount:   "-0.50",
+			Currency: "USD",
+		},
+		Account:     "acc-1",
+		Side:        domain.OrderSideBuy,
+		OrderStatus: domain.OrderStatusCancelled,
+	}, res)
+	if err != nil {
+		t.Fatalf("executionReportFrom: %v", err)
+	}
+	fill, ok := report.Fill().Get()
+	if !ok {
+		t.Fatal("Fill unset")
+	}
+	if _, ok := fill.LastTrade().Get(); ok {
+		t.Fatal("LastTrade set for a terminal report without a fill")
+	}
+	commission, ok := fill.Fee().Get()
+	if !ok {
+		t.Fatal("Fill.Fee unset")
+	}
+	if commission.Amount.String() != "0.50" {
+		t.Fatalf("commission amount = %q, want SDK fee 0.50", commission.Amount.String())
+	}
+	if commission.Currency.String() != "USD" {
+		t.Fatalf("commission currency = %q, want USD", commission.Currency.String())
+	}
+}
+
 // TestAdjustmentAmountFrom_InvalidInputs checks the adjustment amount mapper
 // wraps domain.ErrInvalid for a non-decimal value and for an unknown mode.
 func TestAdjustmentAmountFrom_InvalidInputs(t *testing.T) {
@@ -1472,12 +1509,13 @@ func TestSanitizeText_CleansInvalidUTF8AndControls(t *testing.T) {
 func TestExecutionReportPersistenceFrom_StatusOnlyNoAccountWrites(t *testing.T) {
 	t.Parallel()
 	in := domain.ExecutionReportInput{
-		Account:     domain.AccountID(testAccount),
-		Order:       testOrderXID(0x11),
-		BaseAsset:   testBase,
-		QuoteAsset:  testQuote,
-		Side:        domain.OrderSideBuy,
-		OrderStatus: domain.OrderStatusCancelled,
+		Account:        domain.AccountID(testAccount),
+		Order:          testOrderXID(0x11),
+		BaseAsset:      testBase,
+		QuoteAsset:     testQuote,
+		Side:           domain.OrderSideBuy,
+		LeavesQuantity: "2",
+		OrderStatus:    domain.OrderStatusCancelled,
 	}
 	persistence := executionReportPersistenceFrom(in, nil, nil)
 
@@ -1493,8 +1531,45 @@ func TestExecutionReportPersistenceFrom_StatusOnlyNoAccountWrites(t *testing.T) 
 	if persistence.OrderStatus != domain.OrderStatusCancelled {
 		t.Fatalf("persistence.OrderStatus = %q, want cancelled", persistence.OrderStatus)
 	}
+	if persistence.Leaves != "0" {
+		t.Fatalf("persistence.Leaves = %q, want zero after terminal release", persistence.Leaves)
+	}
 	if len(persistence.Events) == 0 {
 		t.Fatal("persistence.Events is empty, want the status-change event")
+	}
+	if persistence.Events[0].Payload.LeavesQuantity != "2" {
+		t.Fatalf(
+			"event leaves = %q, want original terminal release quantity",
+			persistence.Events[0].Payload.LeavesQuantity,
+		)
+	}
+}
+
+func TestExecutionReportPersistenceFrom_NoTradeCarriesCommission(t *testing.T) {
+	t.Parallel()
+	in := domain.ExecutionReportInput{
+		Account:        domain.AccountID(testAccount),
+		Order:          testOrderXID(0x13),
+		BaseAsset:      testBase,
+		QuoteAsset:     testQuote,
+		Side:           domain.OrderSideBuy,
+		LeavesQuantity: "2",
+		OrderStatus:    domain.OrderStatusCancelled,
+		Commission:     &domain.Commission{Amount: "-0.30", Currency: "USDT"},
+	}
+	persistence := executionReportPersistenceFrom(in, nil, nil)
+
+	if persistence.Trade != nil {
+		t.Fatalf("persistence.Trade = %+v, want nil", persistence.Trade)
+	}
+	if persistence.Commission == nil ||
+		persistence.Commission.Amount != "-0.30" ||
+		persistence.Commission.Currency != "USDT" {
+		t.Fatalf("report commission = %+v, want -0.30/USDT", persistence.Commission)
+	}
+	if len(persistence.Events) != 1 ||
+		persistence.Events[0].Payload.Commission == nil {
+		t.Fatalf("events lost report commission: %+v", persistence.Events)
 	}
 }
 

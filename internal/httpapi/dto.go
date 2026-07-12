@@ -1077,7 +1077,7 @@ func toAdjustmentRealizedPnlResultDTO(
 
 // orderDTO is the wire shape of one Officer-side order record. An order is a
 // machine record: its public handle is the opaque external id; no surrogate or
-// engine id is serialized. DisplayPrices are the human-readable reservation lock
+// engine id is serialized. DisplayPrices are the human-readable pre-trade lock
 // prices derived from the opaque lock blob by the engine seam (settlement leg
 // last); the raw lock is never serialized. All monetary and size values are
 // exact decimal strings passed through verbatim.
@@ -1198,32 +1198,33 @@ type eventReproductionESignDTO struct {
 // eventReproductionRequestDTO is the request bound in the attestation payload,
 // reconstructed for reproduction from the decoded token. It surfaces the request
 // type and its material params so a verifier sees which request produced the
-// engine result. It carries no private material.
+// recorded result. It carries no private material.
 type eventReproductionRequestDTO struct {
-	RequestType     string                `json:"requestType"`
-	OrderExternalID string                `json:"orderExternalId,omitempty"`
-	EventExternalID string                `json:"eventExternalId,omitempty"`
-	Instrument      string                `json:"instrument"`
-	Side            string                `json:"side"`
-	Quantity        string                `json:"quantity"`
-	AmountKind      string                `json:"amountKind"`
-	OrderType       string                `json:"orderType"`
-	LimitPrice      string                `json:"limitPrice"`
-	PriceCurrency   string                `json:"priceCurrency"`
-	AccountID       string                `json:"accountId"`
-	Verdict         string                `json:"verdict"`
-	Result          *attestationResultDTO `json:"result"`
+	RequestType     string                     `json:"requestType"`
+	OrderExternalID string                     `json:"orderExternalId,omitempty"`
+	EventExternalID string                     `json:"eventExternalId,omitempty"`
+	Instrument      string                     `json:"instrument"`
+	Side            string                     `json:"side"`
+	Quantity        string                     `json:"quantity"`
+	AmountKind      string                     `json:"amountKind"`
+	OrderType       string                     `json:"orderType"`
+	LimitPrice      string                     `json:"limitPrice"`
+	PriceCurrency   string                     `json:"priceCurrency"`
+	AccountID       string                     `json:"accountId"`
+	Verdict         string                     `json:"verdict"`
+	ExecutionReport *executionReportRequestDTO `json:"executionReport,omitempty"`
+	Result          *attestationResultDTO      `json:"result"`
 }
 
-// attestationResultDTO is the engine result section bound in the payload,
-// reconstructed for reproduction. Present only for request types carrying an
-// engine result beyond the submit verdict (execution report, confirm, cancel).
+// attestationResultDTO is the recorded result section bound in the payload,
+// reconstructed for reproduction. It is present for execution reports and
+// order confirmation/cancellation shortcuts beyond the submit verdict.
 type attestationResultDTO struct {
 	Outcome        string                `json:"outcome"`
 	FillQuantity   string                `json:"fillQuantity"`
 	FillPrice      string                `json:"fillPrice"`
 	FillLockPrice  string                `json:"fillLockPrice"`
-	Commission     *commissionDTO        `json:"commission,omitempty"`
+	Commission     *commissionDTO        `json:"commission"`
 	LeavesQuantity string                `json:"leavesQuantity"`
 	OrderStatus    string                `json:"orderStatus"`
 	Blocks         []attestationBlockDTO `json:"blocks"`
@@ -1375,23 +1376,45 @@ func toCheckResultDTO(r domain.CheckResult) checkResultDTO {
 // the event is unattested, so the web can render a per-event key icon and open
 // the per-event reproduction.
 type orderEventDTO struct {
-	At            time.Time      `json:"at"`
-	ExternalID    string         `json:"externalId"`
-	Order         string         `json:"order"`
-	Type          string         `json:"type"`
-	Source        string         `json:"source"`
-	Alg           string         `json:"alg,omitempty"`
-	Principal     string         `json:"principal,omitempty"`
-	RejectCode    string         `json:"rejectCode,omitempty"`
-	RejectScope   string         `json:"rejectScope,omitempty"`
-	RejectPolicy  string         `json:"rejectPolicy,omitempty"`
-	RejectReason  string         `json:"rejectReason,omitempty"`
-	RejectDetails string         `json:"rejectDetails,omitempty"`
-	FillQuantity  string         `json:"fillQuantity,omitempty"`
-	FillPrice     string         `json:"fillPrice,omitempty"`
-	FillLockPrice string         `json:"fillLockPrice,omitempty"`
-	Commission    *commissionDTO `json:"commission,omitempty"`
-	Signed        bool           `json:"signed"`
+	At              time.Time                  `json:"at"`
+	ExternalID      string                     `json:"externalId"`
+	Order           string                     `json:"order"`
+	Type            string                     `json:"type"`
+	Source          string                     `json:"source"`
+	Alg             string                     `json:"alg,omitempty"`
+	Principal       string                     `json:"principal,omitempty"`
+	RejectCode      string                     `json:"rejectCode,omitempty"`
+	RejectScope     string                     `json:"rejectScope,omitempty"`
+	RejectPolicy    string                     `json:"rejectPolicy,omitempty"`
+	RejectReason    string                     `json:"rejectReason,omitempty"`
+	RejectDetails   string                     `json:"rejectDetails,omitempty"`
+	FillQuantity    string                     `json:"fillQuantity,omitempty"`
+	FillPrice       string                     `json:"fillPrice,omitempty"`
+	FillLockPrice   string                     `json:"fillLockPrice,omitempty"`
+	LeavesQuantity  string                     `json:"leavesQuantity,omitempty"`
+	OrderStatus     string                     `json:"orderStatus,omitempty"`
+	ExecutionReport *executionReportRequestDTO `json:"executionReport,omitempty"`
+	Commission      *commissionDTO             `json:"commission,omitempty"`
+	Signed          bool                       `json:"signed"`
+}
+
+// executionReportRequestDTO is the audit-safe execution-report input captured
+// by the event before node enrichment. No public field is omitted so
+// empty/false/null values remain distinguishable. The opaque engine lock is
+// never exposed.
+type executionReportRequestDTO struct {
+	BaseAsset      string         `json:"baseAsset"`
+	QuoteAsset     string         `json:"quoteAsset"`
+	FillQuantity   string         `json:"fillQuantity"`
+	FillPrice      string         `json:"fillPrice"`
+	LeavesQuantity string         `json:"leavesQuantity"`
+	LockPrice      string         `json:"lockPrice"`
+	Commission     *commissionDTO `json:"commission"`
+	Order          string         `json:"order"`
+	Account        string         `json:"account"`
+	Side           string         `json:"side"`
+	OrderStatus    string         `json:"orderStatus"`
+	Force          bool           `json:"force"`
 }
 
 // toOrderEventDTO maps a domain.OrderEvent onto the wire DTO. Both the event and
@@ -1399,27 +1422,52 @@ type orderEventDTO struct {
 // The event's 1:1 attestation, when present, sets the signed flag and alg.
 func toOrderEventDTO(e domain.OrderEvent) orderEventDTO {
 	dto := orderEventDTO{
-		At:            e.At,
-		ExternalID:    e.ExternalID.String(),
-		Order:         e.Order.String(),
-		Type:          string(e.Type),
-		Source:        string(e.Source),
-		Principal:     e.Principal,
-		RejectCode:    e.Payload.RejectCode,
-		RejectScope:   e.Payload.RejectScope,
-		RejectPolicy:  e.Payload.RejectPolicy,
-		RejectReason:  e.Payload.RejectReason,
-		RejectDetails: e.Payload.RejectDetails,
-		FillQuantity:  e.Payload.FillQuantity,
-		FillPrice:     e.Payload.FillPrice,
-		FillLockPrice: e.Payload.FillLockPrice,
-		Commission:    toCommissionDTO(e.Payload.Commission),
+		At:              e.At,
+		ExternalID:      e.ExternalID.String(),
+		Order:           e.Order.String(),
+		Type:            string(e.Type),
+		Source:          string(e.Source),
+		Principal:       e.Principal,
+		RejectCode:      e.Payload.RejectCode,
+		RejectScope:     e.Payload.RejectScope,
+		RejectPolicy:    e.Payload.RejectPolicy,
+		RejectReason:    e.Payload.RejectReason,
+		RejectDetails:   e.Payload.RejectDetails,
+		FillQuantity:    e.Payload.FillQuantity,
+		FillPrice:       e.Payload.FillPrice,
+		FillLockPrice:   e.Payload.FillLockPrice,
+		LeavesQuantity:  e.Payload.LeavesQuantity,
+		OrderStatus:     e.Payload.OrderStatus,
+		ExecutionReport: toExecutionReportRequestDTO(e.Payload.ExecutionReport),
+		Commission:      toCommissionDTO(e.Payload.Commission),
 	}
 	if e.Attestation != nil {
 		dto.Alg = e.Attestation.Alg
 		dto.Signed = eventAttestationSigned(e.Attestation)
 	}
 	return dto
+}
+
+func toExecutionReportRequestDTO(
+	in *domain.ExecutionReportRequest,
+) *executionReportRequestDTO {
+	if in == nil {
+		return nil
+	}
+	return &executionReportRequestDTO{
+		BaseAsset:      in.BaseAsset,
+		QuoteAsset:     in.QuoteAsset,
+		FillQuantity:   in.FillQuantity,
+		FillPrice:      in.FillPrice,
+		LeavesQuantity: in.LeavesQuantity,
+		LockPrice:      in.LockPrice,
+		Commission:     toCommissionDTO(in.Commission),
+		Order:          in.Order.String(),
+		Account:        string(in.Account),
+		Side:           string(in.Side),
+		OrderStatus:    string(in.OrderStatus),
+		Force:          in.Force,
+	}
 }
 
 // --- trade ------------------------------------------------------------------
@@ -1508,10 +1556,10 @@ type executionBlockDTO struct {
 }
 
 // executionReportResponseDTO is the response of POST
-// /orders/{externalId}/execution-reports: the engine result plus the attestation
-// token the robot receives as proof the engine passed this report. AttestationToken
-// is present on success; signing or attestation persistence failures fail the
-// request before the report is committed.
+// /orders/{externalId}/execution-reports: the recorded result plus the
+// attestation token proving what Officer recorded. AttestationToken is present
+// on success; signing or attestation persistence failures fail the request
+// before the report is committed.
 type executionReportResponseDTO struct {
 	Result           executionResultDTO `json:"result"`
 	AttestationToken string             `json:"attestationToken,omitempty"`
@@ -1520,10 +1568,9 @@ type executionReportResponseDTO struct {
 }
 
 // orderMutationResponseDTO is the response of POST /orders/{externalId}/confirm
-// and .../cancel: the resolved order plus the attestation token the robot
-// receives as proof the engine resolved this reservation. AttestationToken is
-// present on success; signing or attestation persistence failures fail the
-// request before the reservation resolution is committed.
+// and .../cancel: the updated order plus the attestation token proving which
+// workflow shortcut Officer recorded. AttestationToken is present on success;
+// signing or attestation persistence failures fail the request.
 type orderMutationResponseDTO struct {
 	Order            orderDTO `json:"order"`
 	AttestationToken string   `json:"attestationToken,omitempty"`
@@ -1630,14 +1677,12 @@ type approvalTokenDTO struct {
 // confirmExecutionRequestDTO is the body of POST /orders/{externalId}/confirm.
 type confirmExecutionRequestDTO struct {
 	Token string `json:"token"`
-	Force bool   `json:"force"`
 }
 
 // cancelOrderRequestDTO is the body of POST /orders/{externalId}/cancel.
 type cancelOrderRequestDTO struct {
 	Token  string `json:"token"`
 	Reason string `json:"reason"`
-	Force  bool   `json:"force"`
 }
 
 // toSigningKeyDTO maps a domain.SigningKey onto the wire DTO. It NEVER copies

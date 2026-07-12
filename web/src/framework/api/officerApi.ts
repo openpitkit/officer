@@ -545,10 +545,46 @@ function normalizeOrderEvent(v: unknown): OrderEvent {
   if (orderStatus !== undefined) {
     event.orderStatus = asString(orderStatus);
   }
+  const executionReport = normalizeExecutionReportRequestRecord(
+    pick(o, "executionReport", "ExecutionReport", "execution_report"),
+  );
+  if (executionReport !== undefined) {
+    event.executionReport = executionReport;
+  }
   event.commission = normalizeCommissionOptional(
     pick(o, "commission", "Commission"),
   );
   return event;
+}
+
+function normalizeExecutionReportRequestRecord(
+  v: unknown,
+): OrderEvent["executionReport"] {
+  if (!isObject(v)) {
+    return undefined;
+  }
+  return {
+    baseAsset: asString(pick(v, "baseAsset", "BaseAsset", "base_asset")),
+    quoteAsset: asString(pick(v, "quoteAsset", "QuoteAsset", "quote_asset")),
+    fillQuantity: asString(
+      pick(v, "fillQuantity", "FillQuantity", "fill_quantity"),
+    ),
+    fillPrice: asString(pick(v, "fillPrice", "FillPrice", "fill_price")),
+    leavesQuantity: asString(
+      pick(v, "leavesQuantity", "LeavesQuantity", "leaves_quantity"),
+    ),
+    lockPrice: asString(pick(v, "lockPrice", "LockPrice", "lock_price")),
+    commission: normalizeCommissionOptional(
+      pick(v, "commission", "Commission"),
+    ) ?? null,
+    order: asString(pick(v, "order", "Order")),
+    account: asString(pick(v, "account", "Account")),
+    side: asString(pick(v, "side", "Side")),
+    orderStatus: asString(
+      pick(v, "orderStatus", "OrderStatus", "order_status"),
+    ),
+    force: asBool(pick(v, "force", "Force")),
+  };
 }
 
 function normalizeTrade(v: unknown): Trade {
@@ -2563,9 +2599,9 @@ export interface CreateOrderBody {
 export interface CreateOrderResult {
   order: Order;
   warning?: string;
-  /** The approval token issued by submit. For a hold order this is the token the
-   *  operator must present to confirm or cancel the held reservation, so the UI
-   *  retains it; for an immediate order it is already resolved and unused. */
+  /** The approval token issued by submit. For the `hold` compatibility mode,
+   *  the UI retains it for the workflow confirm/cancel shortcuts; for an
+   *  immediate order it is already resolved and unused. */
   approval: ApprovalToken;
 }
 
@@ -2613,9 +2649,8 @@ function minimalCreatedOrder(
     price: body.price ?? "0",
     status: "submitted",
     displayPrices: [],
-    // The held-reservation token is signed but not yet persisted onto the
-    // order (that only happens via the panel's own submit/accept path), so
-    // this placeholder reports unsigned until a real fetch replaces it.
+    // The submit token is signed but not yet reflected in this placeholder, so
+    // it reports unsigned until a real fetch replaces it.
     signed: false,
   };
 }
@@ -2883,6 +2918,9 @@ function normalizeAttestationResult(v: unknown): AttestationResult | null {
     fillLockPrice: asString(
       pick(v, "fillLockPrice", "FillLockPrice", "fill_lock_price"),
     ),
+    commission: normalizeCommissionOptional(
+      pick(v, "commission", "Commission"),
+    ),
     leavesQuantity: asString(
       pick(v, "leavesQuantity", "LeavesQuantity", "leaves_quantity"),
     ),
@@ -2916,6 +2954,9 @@ function normalizeEventReproductionRequest(
     ),
     accountId: asString(pick(v, "accountId", "AccountId", "account_id")),
     verdict: asString(pick(v, "verdict", "Verdict")),
+    executionReport: normalizeExecutionReportRequestRecord(
+      pick(v, "executionReport", "ExecutionReport", "execution_report"),
+    ),
     result: normalizeAttestationResult(pick(v, "result", "Result")),
   };
 }
@@ -3035,9 +3076,11 @@ async function fetchPublicKeyById(client: ApiClient,
 }
 
 export interface ExecutionReportBody {
-  /** Fill fields: required for filled/partially_filled, ignored otherwise. */
+  /** Fill fields route the report through engine settlement. */
   quantity?: string;
   price?: string;
+  /** Required for fills, terminal statuses, and any report carrying commission.
+   *  Terminal reports use the remaining quantity the engine must release. */
   leavesQuantity?: string;
   lockPrice?: string;
   commission?: Commission;
@@ -3068,9 +3111,9 @@ function normalizeExecutionOutcome(v: unknown): ExecutionOutcome {
   };
 }
 
-/** POST /orders/{externalId}/execution-reports. Returns the engine result -
- *  account blocks and per-asset outcomes caused by the fill - plus the
- *  attestation the robot receives as proof the engine passed this report. */
+/** POST /orders/{externalId}/execution-reports. Returns the recorded result,
+ *  including any engine blocks and balance outcomes, plus the attestation that
+ *  proves what Officer recorded for this report. */
 async function submitExecutionReport(client: ApiClient,
   orderExternalId: string,
   body: ExecutionReportBody,
@@ -3098,19 +3141,17 @@ async function submitExecutionReport(client: ApiClient,
   };
 }
 
-/** POST /orders/{externalId}/confirm body: the approval token from the hold
- *  submit, plus an optional force to bypass Officer's safety checks. */
-export interface ConfirmHeldOrderBody {
+/** POST /orders/{externalId}/confirm body: the approval token from the
+ *  workflow (`hold` wire mode) submit. */
+export interface ConfirmOrderBody {
   token: string;
-  force?: boolean;
 }
 
-/** POST /orders/{externalId}/cancel body: the approval token from the hold
- *  submit, an optional reason, and an optional force to bypass safety checks. */
-export interface CancelHeldOrderBody {
+/** POST /orders/{externalId}/cancel body: the approval token from the workflow
+ *  (`hold` wire mode) submit and an optional reason. */
+export interface CancelOrderBody {
   token: string;
   reason?: string;
-  force?: boolean;
 }
 
 function orderMutationResponseOrThrow(v: unknown): OrderMutationResponse {
@@ -3126,11 +3167,11 @@ function orderMutationResponseOrThrow(v: unknown): OrderMutationResponse {
   );
 }
 
-/** POST /orders/{externalId}/confirm. Verifies the approval token and commits
- *  the held reservation, returning the resolved order plus its attestation. */
-async function confirmHeldOrder(client: ApiClient,
+/** POST /orders/{externalId}/confirm. Verifies the approval token and records
+ *  order-confirmation history, returning the order plus its attestation. */
+async function confirmOrder(client: ApiClient,
   orderExternalId: string,
-  body: ConfirmHeldOrderBody,
+  body: ConfirmOrderBody,
   signal?: AbortSignal,
 ): Promise<OrderMutationResponse> {
   const v = await client.request(
@@ -3140,11 +3181,11 @@ async function confirmHeldOrder(client: ApiClient,
   return orderMutationResponseOrThrow(v);
 }
 
-/** POST /orders/{externalId}/cancel. Verifies the approval token and rolls back
- *  the held reservation, returning the resolved order plus its attestation. */
-async function cancelHeldOrder(client: ApiClient,
+/** POST /orders/{externalId}/cancel. Verifies the approval token and applies
+ *  the untouched-order cancellation shortcut. */
+async function cancelOrder(client: ApiClient,
   orderExternalId: string,
-  body: CancelHeldOrderBody,
+  body: CancelOrderBody,
   signal?: AbortSignal,
 ): Promise<OrderMutationResponse> {
   const v = await client.request(
@@ -3613,8 +3654,8 @@ export function createOfficerApi(client: ApiClient) {
     fetchOrderDetail: bind(fetchOrderDetail),
     fetchEventReproduction: bind(fetchEventReproduction),
     submitExecutionReport: bind(submitExecutionReport),
-    confirmHeldOrder: bind(confirmHeldOrder),
-    cancelHeldOrder: bind(cancelHeldOrder),
+    confirmOrder: bind(confirmOrder),
+    cancelOrder: bind(cancelOrder),
     fetchTradesPage: bind(fetchTradesPage),
     fetchTrades: bind(fetchTrades),
     fetchPoliciesPage: bind(fetchPoliciesPage),

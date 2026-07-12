@@ -163,7 +163,7 @@ func defaultMCPCatalog() catalog.Catalog {
 		{
 			Name:             "confirm_execution",
 			Title:            "Confirm execution",
-			AgentDescription: "Confirm execution (commit) of a previously approved order.",
+			AgentDescription: "Record confirmation history for an untouched workflow order.",
 			Mutating:         true,
 			Protective:       true,
 			Implemented:      true,
@@ -172,7 +172,7 @@ func defaultMCPCatalog() catalog.Catalog {
 		{
 			Name:             "cancel",
 			Title:            "Cancel",
-			AgentDescription: "Cancel / revoke a pending approval token or reservation.",
+			AgentDescription: "Cancel an untouched workflow order through a derived execution report.",
 			Mutating:         true,
 			Protective:       true,
 			Implemented:      true,

@@ -86,7 +86,6 @@ type fakeNode struct {
 	nextOrderSeq            byte
 	nextEventSeq            int
 	submitResult            *engine.OrderResult
-	holdResult              *engine.HoldResult
 	immediateResult         *engine.ImmediateResult
 	execReports             []domain.ExecutionReportInput
 	submitErr               error
@@ -97,8 +96,6 @@ type fakeNode struct {
 	skipAttestNewEvents     bool
 	cancelNoop              bool
 	execReportNoop          bool
-	reconciled              int
-	holdCalls               []string
 	confirmCalls            []string
 	cancelCalls             []string
 	persistAttestationCalls []domain.ExternalID
@@ -125,7 +122,6 @@ type fakeOrderTxnSnapshot struct {
 	orderEvents             map[domain.ExternalID][]domain.OrderEvent
 	attestations            map[domain.ExternalID]domain.EventAttestation
 	execReports             []domain.ExecutionReportInput
-	holdCalls               []string
 	confirmCalls            []string
 	cancelCalls             []string
 	persistAttestationCalls []domain.ExternalID
@@ -178,7 +174,6 @@ func (n *fakeNode) snapshotOrderTxn() fakeOrderTxnSnapshot {
 		orderEvents:             cloneOrderEventMap(n.orderEvents),
 		attestations:            cloneAttestationMap(n.attestations),
 		execReports:             slices.Clone(n.execReports),
-		holdCalls:               slices.Clone(n.holdCalls),
 		confirmCalls:            slices.Clone(n.confirmCalls),
 		cancelCalls:             slices.Clone(n.cancelCalls),
 		persistAttestationCalls: slices.Clone(n.persistAttestationCalls),
@@ -192,7 +187,6 @@ func (n *fakeNode) restoreOrderTxn(snapshot fakeOrderTxnSnapshot) {
 	n.orderEvents = snapshot.orderEvents
 	n.attestations = snapshot.attestations
 	n.execReports = snapshot.execReports
-	n.holdCalls = snapshot.holdCalls
 	n.confirmCalls = snapshot.confirmCalls
 	n.cancelCalls = snapshot.cancelCalls
 	n.persistAttestationCalls = snapshot.persistAttestationCalls
@@ -754,9 +748,14 @@ func (n *fakeNode) SubmitOrder(
 		order = n.orders[order.ExternalID]
 	} else {
 		order.Status = domain.OrderStatusCommitted
+		order.Leaves = o.AmountValue
+		if n.submitResult != nil {
+			order.Lock = slices.Clone(n.submitResult.Lock)
+			order.Leaves = n.submitResult.LeavesQuantity
+		}
 		n.orders[order.ExternalID] = order
 		n.appendEvent(order.ExternalID, domain.OrderEventPreTradeAccepted, domain.OrderEventPayload{})
-		n.appendEvent(order.ExternalID, domain.OrderEventReservationCommitted, domain.OrderEventPayload{})
+		n.appendEvent(order.ExternalID, domain.OrderEventCommitted, domain.OrderEventPayload{})
 	}
 	return order, nil
 }
@@ -766,7 +765,7 @@ func (n *fakeNode) SubmitOrderWithAttestation(
 	key node.Key,
 	o domain.Order,
 	caller domain.Caller,
-	attest store.EventAttestor,
+	attestFor func(domain.Order, engine.OrderResult) store.EventAttestor,
 ) (domain.Order, engine.OrderResult, error) {
 	snapshot := n.snapshotOrderTxn()
 	before := len(n.orderEvents[o.ExternalID])
@@ -777,65 +776,14 @@ func (n *fakeNode) SubmitOrderWithAttestation(
 	if o.ExternalID.IsZero() {
 		before = 0
 	}
-	if err := n.attestNewEvents(ctx, order.ExternalID, before, attest); err != nil {
-		n.restoreOrderTxn(snapshot)
-		return domain.Order{}, engine.OrderResult{}, err
-	}
-	if n.submitResult != nil {
-		return order, *n.submitResult, nil
-	}
-	return order, engine.OrderResult{Accepted: true}, nil
-}
-
-func (n *fakeNode) SubmitHold(
-	_ context.Context, key node.Key, o domain.Order, _ domain.Caller,
-) (domain.Order, engine.HoldResult, error) {
-	if n.submitErr != nil {
-		return domain.Order{}, engine.HoldResult{}, n.submitErr
-	}
-	order := o
-	order.ExternalID = n.recordedOrderExternalID(o)
-	order.Account = key.Account
-	n.appendEvent(order.ExternalID, domain.OrderEventSubmitted, domain.OrderEventPayload{})
-	if n.holdResult != nil {
-		if !n.holdResult.Accepted {
-			n.recordRejected(order, n.holdResult.Rejects)
-			return n.orders[order.ExternalID], *n.holdResult, nil
-		}
-		order.Status = domain.OrderStatusAccepted
-		order.Lock = n.holdResult.Lock
-		n.orders[order.ExternalID] = order
-		n.appendEvent(order.ExternalID, domain.OrderEventPreTradeAccepted, domain.OrderEventPayload{})
-		return order, *n.holdResult, nil
-	}
-	order.Status = domain.OrderStatusAccepted
-	n.orders[order.ExternalID] = order
-	n.appendEvent(order.ExternalID, domain.OrderEventPreTradeAccepted, domain.OrderEventPayload{})
-	result := engine.HoldResult{
+	result := engine.OrderResult{
 		Accepted:            true,
-		ApprovalID:          "approval-1",
 		SettlementLockPrice: "100",
 		EstimateSource:      domain.EstimateSourceLimit,
+		LeavesQuantity:      o.AmountValue,
 	}
-	n.holdCalls = append(n.holdCalls, result.ApprovalID)
-	return order, result, nil
-}
-
-func (n *fakeNode) SubmitHoldWithAttestation(
-	ctx context.Context,
-	key node.Key,
-	o domain.Order,
-	caller domain.Caller,
-	attestFor func(domain.Order, engine.HoldResult) store.EventAttestor,
-) (domain.Order, engine.HoldResult, error) {
-	snapshot := n.snapshotOrderTxn()
-	before := len(n.orderEvents[o.ExternalID])
-	order, result, err := n.SubmitHold(ctx, key, o, caller)
-	if err != nil {
-		return domain.Order{}, engine.HoldResult{}, err
-	}
-	if o.ExternalID.IsZero() {
-		before = 0
+	if n.submitResult != nil {
+		result = *n.submitResult
 	}
 	var attest store.EventAttestor
 	if attestFor != nil {
@@ -843,7 +791,7 @@ func (n *fakeNode) SubmitHoldWithAttestation(
 	}
 	if err := n.attestNewEvents(ctx, order.ExternalID, before, attest); err != nil {
 		n.restoreOrderTxn(snapshot)
-		return domain.Order{}, engine.HoldResult{}, err
+		return domain.Order{}, engine.OrderResult{}, err
 	}
 	return order, result, nil
 }
@@ -894,7 +842,7 @@ func (n *fakeNode) SubmitImmediateWithAttestation(
 		return domain.Order{}, engine.ImmediateResult{}, err
 	}
 	if result.Accepted {
-		n.appendEvent(order.ExternalID, domain.OrderEventReservationCommitted, domain.OrderEventPayload{})
+		n.appendEvent(order.ExternalID, domain.OrderEventCommitted, domain.OrderEventPayload{})
 		n.appendEvent(order.ExternalID, domain.OrderEventFill, domain.OrderEventPayload{
 			FillQuantity:  result.FillQuantity,
 			FillPrice:     result.SettlementLockPrice,
@@ -916,108 +864,106 @@ func (n *fakeNode) SubmitImmediateWithAttestation(
 	return order, result, nil
 }
 
-func (n *fakeNode) ConfirmHeld(
-	_ context.Context, orderID domain.ExternalID,
-	approvalID string, _ domain.Caller, force bool,
-) (domain.Order, bool, error) {
-	order := n.orders[orderID]
-	forcedBypass := false
-	switch order.Status {
-	case domain.OrderStatusCommitted:
-		return order, false, nil
-	case domain.OrderStatusAccepted:
-	default:
-		if err := domain.RequireOrderModifiable(order.Status, force); err != nil {
-			return domain.Order{}, false, err
-		}
-		if !domain.OrderStatusTerminal(order.Status) {
-			return domain.Order{}, false, domain.ErrConflict
-		}
-		forcedBypass = true
-	}
-	n.confirmCalls = append(n.confirmCalls, approvalID)
+func (n *fakeNode) ConfirmOrder(
+	_ context.Context, orderID domain.ExternalID, _ domain.Caller,
+) (domain.Order, error) {
 	if n.confirmErr != nil {
-		return domain.Order{}, false, n.confirmErr
+		return domain.Order{}, n.confirmErr
 	}
-	order.Status = domain.OrderStatusCommitted
-	n.orders[orderID] = order
-	n.appendEvent(orderID, domain.OrderEventReservationCommitted, domain.OrderEventPayload{})
-	return order, forcedBypass, nil
+	order := n.orders[orderID]
+	for _, event := range n.orderEvents[orderID] {
+		if event.Payload.ExecutionReport != nil {
+			return domain.Order{}, domain.ErrExecutionReportRequired
+		}
+		if event.Type == domain.OrderEventConfirmed {
+			return order, nil
+		}
+	}
+	n.confirmCalls = append(n.confirmCalls, orderID.String())
+	n.appendEvent(orderID, domain.OrderEventConfirmed, domain.OrderEventPayload{})
+	return order, nil
 }
 
-func (n *fakeNode) ConfirmHeldWithAttestation(
+func (n *fakeNode) ConfirmOrderWithAttestation(
 	ctx context.Context,
 	orderID domain.ExternalID,
-	approvalID string,
 	caller domain.Caller,
-	force bool,
 	attest store.EventAttestor,
-) (domain.Order, bool, error) {
+) (domain.Order, error) {
 	snapshot := n.snapshotOrderTxn()
 	before := len(n.orderEvents[orderID])
-	order, forced, err := n.ConfirmHeld(ctx, orderID, approvalID, caller, force)
+	order, err := n.ConfirmOrder(ctx, orderID, caller)
 	if err != nil {
-		return domain.Order{}, false, err
+		return domain.Order{}, err
 	}
 	if err := n.attestNewEvents(ctx, orderID, before, attest); err != nil {
 		n.restoreOrderTxn(snapshot)
-		return domain.Order{}, false, err
+		return domain.Order{}, err
 	}
-	return order, forced, nil
+	return order, nil
 }
 
-func (n *fakeNode) CancelHeld(
-	_ context.Context, orderID domain.ExternalID,
-	approvalID string, _ domain.Caller, force bool,
-) (domain.Order, bool, error) {
+func (n *fakeNode) CancelOrder(
+	_ context.Context, orderID domain.ExternalID, _ domain.Caller,
+) (domain.Order, engine.ExecutionReportResult, error) {
 	order := n.orders[orderID]
 	if n.cancelNoop {
-		return order, false, nil
+		return order, engine.ExecutionReportResult{}, nil
 	}
-	forcedBypass := false
-	if order.Status != domain.OrderStatusAccepted {
-		if err := domain.RequireOrderModifiable(order.Status, force); err != nil {
-			return domain.Order{}, false, err
-		}
-		if !domain.OrderStatusTerminal(order.Status) {
-			return domain.Order{}, false, domain.ErrConflict
-		}
-		forcedBypass = true
-	}
-	n.cancelCalls = append(n.cancelCalls, approvalID)
 	if n.cancelErr != nil {
-		return domain.Order{}, false, n.cancelErr
+		return domain.Order{}, engine.ExecutionReportResult{}, n.cancelErr
 	}
+	for _, event := range n.orderEvents[orderID] {
+		if event.Payload.ExecutionReport != nil {
+			return domain.Order{}, engine.ExecutionReportResult{},
+				domain.ErrExecutionReportRequired
+		}
+	}
+	n.cancelCalls = append(n.cancelCalls, orderID.String())
+	in := domain.ExecutionReportInput{
+		Order:          orderID,
+		Account:        order.Account,
+		BaseAsset:      order.BaseAsset,
+		QuoteAsset:     order.QuoteAsset,
+		Side:           order.Side,
+		LeavesQuantity: order.Leaves,
+		Lock:           slices.Clone(order.Lock),
+		OrderStatus:    domain.OrderStatusCancelled,
+	}
+	n.execReports = append(n.execReports, in)
+	request := domain.ExecutionReportRequestFromInput(in)
 	order.Status = domain.OrderStatusCancelled
+	order.Leaves = "0"
 	n.orders[orderID] = order
-	n.appendEvent(orderID, domain.OrderEventReservationRolledBack, domain.OrderEventPayload{})
-	n.appendEvent(orderID, domain.OrderEventCancelled, domain.OrderEventPayload{})
-	return order, forcedBypass, nil
+	n.appendEvent(orderID, domain.OrderEventCancelled, domain.OrderEventPayload{
+		LeavesQuantity:  in.LeavesQuantity,
+		OrderStatus:     string(in.OrderStatus),
+		ExecutionReport: request,
+	})
+	persistence := engine.ExecutionReportPersistence{
+		OrderStatus: domain.OrderStatusCancelled,
+		Leaves:      "0",
+	}
+	return order, engine.ExecutionReportResult{Persistence: &persistence}, nil
 }
 
-func (n *fakeNode) CancelHeldWithAttestation(
+func (n *fakeNode) CancelOrderWithAttestation(
 	ctx context.Context,
 	orderID domain.ExternalID,
-	approvalID string,
 	caller domain.Caller,
-	force bool,
 	attest store.EventAttestor,
-) (domain.Order, bool, error) {
+) (domain.Order, engine.ExecutionReportResult, error) {
 	snapshot := n.snapshotOrderTxn()
 	before := len(n.orderEvents[orderID])
-	order, forced, err := n.CancelHeld(ctx, orderID, approvalID, caller, force)
+	order, result, err := n.CancelOrder(ctx, orderID, caller)
 	if err != nil {
-		return domain.Order{}, false, err
+		return domain.Order{}, engine.ExecutionReportResult{}, err
 	}
 	if err := n.attestNewEvents(ctx, orderID, before, attest); err != nil {
 		n.restoreOrderTxn(snapshot)
-		return domain.Order{}, false, err
+		return domain.Order{}, engine.ExecutionReportResult{}, err
 	}
-	return order, forced, nil
-}
-
-func (n *fakeNode) ReconcileOrphans(context.Context) (int, error) {
-	return n.reconciled, nil
+	return order, result, nil
 }
 
 func (n *fakeNode) ApplyExecutionReport(
@@ -1038,17 +984,20 @@ func (n *fakeNode) ApplyExecutionReport(
 		}
 	}
 	n.execReports = append(n.execReports, in)
+	request := domain.ExecutionReportRequestFromInput(in)
 	// Model the node's event emission so the backend's attestation path finds the
 	// event it binds to: a fill event when the report carried a fill, else the
 	// mapped status-change event for the report's target status.
 	var events []domain.OrderEvent
 	if in.FillQuantity != "" && in.FillPrice != "" {
 		payload := domain.OrderEventPayload{
-			FillQuantity:   in.FillQuantity,
-			FillPrice:      in.FillPrice,
-			FillLockPrice:  in.LockPrice,
-			LeavesQuantity: in.LeavesQuantity,
-			OrderStatus:    string(domain.ExecutionReportTargetStatus(in)),
+			FillQuantity:    in.FillQuantity,
+			FillPrice:       in.FillPrice,
+			FillLockPrice:   in.LockPrice,
+			LeavesQuantity:  in.LeavesQuantity,
+			OrderStatus:     string(domain.ExecutionReportTargetStatus(in)),
+			Commission:      in.Commission,
+			ExecutionReport: request,
 		}
 		n.appendEvent(in.Order, domain.OrderEventFill, payload)
 		events = append(events, domain.OrderEvent{
@@ -1061,16 +1010,29 @@ func (n *fakeNode) ApplyExecutionReport(
 		domain.ExecutionReportTargetStatus(in),
 	); ok {
 		payload := domain.OrderEventPayload{
-			OrderStatus: string(domain.ExecutionReportTargetStatus(in)),
+			LeavesQuantity:  in.LeavesQuantity,
+			OrderStatus:     string(domain.ExecutionReportTargetStatus(in)),
+			Commission:      in.Commission,
+			ExecutionReport: request,
 		}
 		n.appendEvent(in.Order, typ, payload)
 		events = append(events, domain.OrderEvent{
 			Order: in.Order, Type: typ, Payload: payload,
 		})
 	}
+	if order, ok := n.orders[in.Order]; ok {
+		order.Status = domain.ExecutionReportTargetStatus(in)
+		if in.LeavesQuantity != "" {
+			order.Leaves = domain.ExecutionReportPersistedLeavesFor(
+				order.Status, in.LeavesQuantity,
+			)
+		}
+		n.orders[in.Order] = order
+	}
 	return engine.ExecutionReportResult{
 		Persistence: &engine.ExecutionReportPersistence{
 			OrderStatus: domain.ExecutionReportTargetStatus(in),
+			Commission:  in.Commission,
 			Leaves:      in.LeavesQuantity,
 			Events:      events,
 		},

@@ -1139,7 +1139,7 @@ describe("Accounts business CSV", () => {
     expect(within(reopened).getAllByPlaceholderText("Value")[0]).toHaveValue("");
   });
 
-  it("keeps account advanced search open when a numeric value is invalid", async () => {
+  it("disables account advanced search while a numeric value is invalid", async () => {
     const user = userEvent.setup();
     renderAccounts();
 
@@ -1148,11 +1148,11 @@ describe("Accounts business CSV", () => {
     const positionCount = within(dialog).getAllByPlaceholderText("Value")[0];
     await user.type(positionCount, "word");
 
-    await user.click(
+    expect(
       within(dialog).getByRole("button", {
         name: /apply advanced filter/i,
       }),
-    );
+    ).toBeDisabled();
 
     expect(
       screen.getByRole("dialog", { name: /find by fields/i }),
@@ -1169,6 +1169,22 @@ describe("Accounts business CSV", () => {
       }),
     );
     expect(screen.queryByText(/active filters/i)).not.toBeInTheDocument();
+
+    await user.clear(positionCount);
+    await user.type(positionCount, "1.5");
+    expect(
+      within(dialog).getByRole("button", {
+        name: /apply advanced filter/i,
+      }),
+    ).toBeDisabled();
+
+    await user.clear(positionCount);
+    await user.type(positionCount, "-1");
+    expect(
+      within(dialog).getByRole("button", {
+        name: /apply advanced filter/i,
+      }),
+    ).toBeDisabled();
   });
 
   it("maps less-than count filters to the visible value", async () => {

@@ -149,6 +149,46 @@ func TestService_ApplyExecutionReportAttestsFillEvent(t *testing.T) {
 	}
 }
 
+func TestService_ApplyExecutionReportAttestsNoTradeCommission(t *testing.T) {
+	t.Parallel()
+	signer := &fakeSigner{}
+	svc, fn := newTestServiceWithSigner(signer)
+	orderID := mdID("order-terminal-commission")
+	fn.orders[orderID] = domain.Order{
+		ExternalID: orderID,
+		Account:    "acc-1",
+		BaseAsset:  "AAPL",
+		QuoteAsset: "USD",
+		Side:       domain.OrderSideBuy,
+		Status:     domain.OrderStatusAccepted,
+	}
+	report := domain.ExecutionReportInput{
+		Order:          orderID,
+		LeavesQuantity: "2",
+		Commission: &domain.Commission{
+			Amount:   "-0.12",
+			Currency: "USD",
+		},
+		OrderStatus: domain.OrderStatusCancelled,
+	}
+
+	result, _, err := svc.ApplyExecutionReport(context.Background(), report)
+	if err != nil {
+		t.Fatalf("ApplyExecutionReport: %v", err)
+	}
+	if result.Persistence == nil || result.Persistence.Trade != nil {
+		t.Fatalf("terminal report persistence = %+v, want no trade", result.Persistence)
+	}
+	if len(signer.signed) != 1 || signer.signed[0].Result == nil {
+		t.Fatalf("signed report result = %+v", signer.signed)
+	}
+	commission := signer.signed[0].Result.Commission
+	if commission == nil || commission.Amount != "-0.12" ||
+		commission.Currency != "USD" {
+		t.Fatalf("signed report commission = %+v, want -0.12/USD", commission)
+	}
+}
+
 func TestService_ApplyExecutionReportSigningFailureFailsClosed(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{signErr: errors.New("report signing down")}

@@ -185,6 +185,7 @@ func (r *memoryRealm) CountActiveOrders(context.Context) (int, error) {
 		switch order.Status {
 		case domain.OrderStatusSubmitted,
 			domain.OrderStatusAccepted,
+			domain.OrderStatusCommitted,
 			domain.OrderStatusPartiallyFilled:
 			n++
 		}
@@ -209,12 +210,6 @@ func (r *memoryRealm) RecordOrderSettlement(
 ) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if st.ReservationApprovalID != "" {
-		if intent, ok := r.reservations[st.ReservationApprovalID]; ok {
-			intent.State = st.ReservationIntentState
-			r.reservations[st.ReservationApprovalID] = intent
-		}
-	}
 	if !st.Order.IsZero() {
 		order, ok := r.orders[st.Order]
 		if !ok {

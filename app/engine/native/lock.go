@@ -104,11 +104,9 @@ func pricesToStrings(prices []param.Price) []string {
 	return out
 }
 
-// serializeReservationLock serializes a held reservation's lock into the BLOB
-// bytes the store persists, via the lock seam (marshalLock). The reservation
-// must still be held (not yet closed); the caller owns the resulting snapshot
-// and may then commit or roll back the reservation. It is the single capture
-// point the order/reservation paths route their durable lock through.
-func serializeReservationLock(reservation *pretrade.Reservation) ([]byte, error) {
+// serializePreTradeLock serializes a live pre-trade reservation's lock into the
+// BLOB bytes the store persists, via the lock seam (marshalLock). The caller
+// captures it before committing and closing the SDK reservation.
+func serializePreTradeLock(reservation *pretrade.Reservation) ([]byte, error) {
 	return marshalLock(reservation.Lock())
 }

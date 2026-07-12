@@ -315,7 +315,7 @@ func buildEventReproduction(
 
 // toEventReproductionRequestDTO reconstructs the request bound in an attestation
 // payload for reproduction: the request type and its material params plus the
-// engine result section when the payload carries one. Every issued payload
+// recorded result section when the payload carries one. Every issued payload
 // stamps its request type, so an empty one is an unsupported payload and yields
 // no reconstructed request (nil), matching how the response facet is omitted for
 // an unrecognized request type.
@@ -336,6 +336,7 @@ func toEventReproductionRequestDTO(p domain.ApprovalPayload) *eventReproductionR
 		PriceCurrency:   p.PriceCurrency,
 		AccountID:       p.AccountID,
 		Verdict:         p.Verdict,
+		ExecutionReport: toExecutionReportRequestDTO(p.ExecutionReport),
 	}
 	if p.Result != nil {
 		blocks := make([]attestationBlockDTO, 0, len(p.Result.Blocks))
@@ -457,8 +458,8 @@ func orderMutationResponseFromPayload(
 }
 
 // handleApplyExecutionReport handles
-// POST /api/v1/orders/{id}/execution-reports. The fill's instrument, account,
-// and side are taken from the parent order; the body carries only the fill.
+// POST /api/v1/orders/{id}/execution-reports. The instrument, account, and side
+// are taken from the parent order; every report carries a target status.
 func handleApplyExecutionReport(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := httpx.PathOrderExternalID(r)
@@ -479,27 +480,11 @@ func handleApplyExecutionReport(svc Service) http.HandlerFunc {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
-		var status domain.OrderStatus
 		if req.Status == "" {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "status is required")
 			return
 		}
-		status = domain.OrderStatus(req.Status)
-		if !validOrderStatus(status) {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid status")
-			return
-		}
-		hasQuantity := req.Quantity != ""
-		hasPrice := req.Price != ""
-		if hasQuantity != hasPrice {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation",
-				"quantity and price must be provided together")
-			return
-		}
-		if req.LeavesQuantity == "" {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "leavesQuantity is required")
-			return
-		}
+		status := domain.OrderStatus(req.Status)
 		var commission *domain.Commission
 		if req.Commission != nil {
 			hasAmount := req.Commission.Amount != ""
@@ -510,21 +495,11 @@ func handleApplyExecutionReport(svc Service) http.HandlerFunc {
 				return
 			}
 			if hasAmount {
-				if !hasQuantity || !hasPrice {
-					httpx.WriteErrMsg(w, http.StatusBadRequest, "validation",
-						"commission requires quantity and price")
-					return
-				}
 				commission = &domain.Commission{
 					Amount:   req.Commission.Amount,
 					Currency: req.Commission.Currency,
 				}
 			}
-		}
-		orderID, err := domain.ParseExternalID(id)
-		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
-			return
 		}
 		in := domain.ExecutionReportInput{
 			FillQuantity:   req.Quantity,
@@ -532,10 +507,19 @@ func handleApplyExecutionReport(svc Service) http.HandlerFunc {
 			LeavesQuantity: req.LeavesQuantity,
 			LockPrice:      req.LockPrice,
 			Commission:     commission,
-			Order:          orderID,
 			OrderStatus:    status,
 			Force:          req.Force,
 		}
+		if _, err := domain.ExecutionReportRequiresEngine(in); err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		orderID, err := domain.ParseExternalID(id)
+		if err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		in.Order = orderID
 		result, att, err := svc.ApplyExecutionReport(r.Context(), in)
 		if err != nil {
 			httpx.WriteErr(w, err)

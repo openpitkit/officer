@@ -33,8 +33,9 @@ import (
 )
 
 // Submit modes for an approval token. SubmitModeImmediate is the default and
-// mirrors the current submit behaviour (commit and settle at the lock price);
-// SubmitModeHold keeps the reservation held for out-of-band approval.
+// commits and settles at the lock price. SubmitModeHold is the wire-compatible
+// name for the normal workflow submit, whose later state changes arrive as
+// execution reports.
 const (
 	SubmitModeImmediate = "immediate"
 	SubmitModeHold      = "hold"
@@ -67,23 +68,13 @@ type eventPayloadBuilder func(domain.OrderEvent) (domain.ApprovalPayload, bool, 
 
 type signedEventCapture func(Attestation, domain.ApprovalPayload)
 
-type submitHoldAttestingNode interface {
-	SubmitHoldWithAttestation(
-		ctx context.Context,
-		key node.Key,
-		o domain.Order,
-		caller domain.Caller,
-		attestFor func(domain.Order, engine.HoldResult) store.EventAttestor,
-	) (domain.Order, engine.HoldResult, error)
-}
-
 type submitOrderAttestingNode interface {
 	SubmitOrderWithAttestation(
 		ctx context.Context,
 		key node.Key,
 		o domain.Order,
 		caller domain.Caller,
-		attest store.EventAttestor,
+		attestFor func(domain.Order, engine.OrderResult) store.EventAttestor,
 	) (domain.Order, engine.OrderResult, error)
 }
 
@@ -107,26 +98,22 @@ type executionReportAttestingNode interface {
 	) (engine.ExecutionReportResult, error)
 }
 
-type confirmHeldAttestingNode interface {
-	ConfirmHeldWithAttestation(
+type confirmOrderAttestingNode interface {
+	ConfirmOrderWithAttestation(
 		ctx context.Context,
 		order domain.ExternalID,
-		approvalID string,
 		caller domain.Caller,
-		force bool,
 		attest store.EventAttestor,
-	) (domain.Order, bool, error)
+	) (domain.Order, error)
 }
 
-type cancelHeldAttestingNode interface {
-	CancelHeldWithAttestation(
+type cancelOrderAttestingNode interface {
+	CancelOrderWithAttestation(
 		ctx context.Context,
 		order domain.ExternalID,
-		approvalID string,
 		caller domain.Caller,
-		force bool,
 		attest store.EventAttestor,
-	) (domain.Order, bool, error)
+	) (domain.Order, engine.ExecutionReportResult, error)
 }
 
 // signerOrErr returns the configured signer or an unconfigured error. The
@@ -355,12 +342,13 @@ func (s *Service) SetNoESign(ctx context.Context, off bool) error {
 // --- Submit / confirm / cancel ----------------------------------------------
 
 // SubmitOrderToken runs the pre-trade pipeline for o in the given mode and, on
-// accept, issues a signed (or eSign-off) approval token. mode "hold" keeps the
-// reservation held until ConfirmExecution or CancelOrder resolves it; mode
-// "immediate" commits and settles the fill at the engine lock price in the same
-// call. A pre-trade reject is a successful signed decision and returns the
-// reject reasons with the same envelope shape as an accept verdict. The issued
-// token is audited as approval_issued.
+// accept, issues a signed (or eSign-off) approval token. Mode "hold" uses the
+// normal workflow submit: the engine commits the pre-trade effects and later
+// execution reports settle or release them. Mode "immediate" also settles a
+// fill at the engine lock price in the same call. A pre-trade reject is a
+// successful signed decision and returns the reject reasons with the same
+// envelope shape as an accept verdict. The issued token is audited as
+// approval_issued.
 func (s *Service) SubmitOrderToken(
 	ctx context.Context, o domain.Order, mode string,
 ) (ApprovalToken, error) {
@@ -383,7 +371,7 @@ func (s *Service) SubmitOrderToken(
 	// the account and assets and enforces the real trading rules.
 	//
 	// A caller-supplied order external id is used verbatim when valid: the order
-	// is created exactly once below (submitHold/submitImmediate record it), and
+	// is created exactly once below (submitOrder/submitImmediate record it), and
 	// the returned OrderExternalID is that created id, so confirm/cancel resolve
 	// the same order. Surface layers parse the wire string before this boundary;
 	// a duplicate id is rejected by the store with domain.ErrAlreadyExists.
@@ -394,12 +382,9 @@ func (s *Service) SubmitOrderToken(
 	}
 	caller := auth.CallerFromContext(ctx)
 	key := keyFor(o.Account)
-	immediateApprovalID := ""
-	if mode == SubmitModeImmediate {
-		immediateApprovalID, err = newNonce()
-		if err != nil {
-			return ApprovalToken{}, err
-		}
+	submitApprovalID, err := newNonce()
+	if err != nil {
+		return ApprovalToken{}, err
 	}
 
 	var (
@@ -412,40 +397,27 @@ func (s *Service) SubmitOrderToken(
 	)
 	switch mode {
 	case SubmitModeHold:
-		attesting, ok := n.(submitHoldAttestingNode)
+		attesting, ok := n.(submitOrderAttestingNode)
 		if !ok {
 			return ApprovalToken{}, fmt.Errorf(
-				"backend: submit hold attestation unsupported: %w",
+				"backend: workflow submit attestation unsupported: %w",
 				domain.ErrNotImplemented,
 			)
 		}
-		var result engine.HoldResult
+		var result engine.OrderResult
 		attestFor := func(
-			persisted domain.Order, hold engine.HoldResult,
+			persisted domain.Order, submitted engine.OrderResult,
 		) store.EventAttestor {
-			decisionID := hold.ApprovalID
-			var decisionIDErr error
-			if !hold.Accepted {
-				decisionID, decisionIDErr = newNonce()
-			}
 			return eventAttestor(
 				signer, off, keyID, domain.AttestationRequestSubmit,
 				func(event domain.OrderEvent) (domain.ApprovalPayload, bool, error) {
-					if decisionIDErr != nil {
-						return domain.ApprovalPayload{}, false, decisionIDErr
-					}
-					if event.Type != domain.OrderEventPreTradeAccepted &&
-						event.Type != domain.OrderEventPreTradeRejected &&
-						event.Type != domain.OrderEventSubmitted {
-						return domain.ApprovalPayload{}, false, nil
-					}
 					eventOrder := orderForEvent(persisted, key, event, caller)
-					if event.Type == domain.OrderEventSubmitted {
+					switch event.Type {
+					case domain.OrderEventSubmitted:
 						p, err := buildSubmittedPayload(
-							eventOrder, SubmitModeHold, decisionID)
+							eventOrder, SubmitModeHold, submitApprovalID)
 						return p, err == nil, err
-					}
-					if hold.Accepted {
+					case domain.OrderEventPreTradeAccepted:
 						nonce, err := newNonce()
 						if err != nil {
 							return domain.ApprovalPayload{}, false, err
@@ -453,29 +425,42 @@ func (s *Service) SubmitOrderToken(
 						return buildApprovalPayload(
 							eventOrder,
 							SubmitModeHold,
-							hold.ApprovalID,
-							hold.SettlementLockPrice,
-							hold.EstimateSource,
+							submitApprovalID,
+							submitted.SettlementLockPrice,
+							submitted.EstimateSource,
 							time.Now().UTC(),
 							nonce,
 						), true, nil
+					case domain.OrderEventPreTradeRejected:
+						nonce, err := newNonce()
+						if err != nil {
+							return domain.ApprovalPayload{}, false, err
+						}
+						return buildRejectApprovalPayload(
+							eventOrder, SubmitModeHold, submitApprovalID,
+							firstReject(submitted.Rejects), time.Now().UTC(), nonce,
+						), true, nil
+					case domain.OrderEventCommitted:
+						committed := eventOrder
+						committed.Status = domain.OrderStatusCommitted
+						p, err := s.buildLifecyclePayload(
+							committed, domain.AttestationRequestSubmit,
+							"committed", "", submitApprovalID,
+						)
+						return p, err == nil, err
+					default:
+						return domain.ApprovalPayload{}, false, nil
 					}
-					nonce, err := newNonce()
-					if err != nil {
-						return domain.ApprovalPayload{}, false, err
-					}
-					reject := firstReject(hold.Rejects)
-					return buildRejectApprovalPayload(
-						eventOrder, SubmitModeHold, decisionID, reject,
-						time.Now().UTC(), nonce), true, nil
 				},
 				func(att Attestation, p domain.ApprovalPayload) {
-					issued = att
-					payload = p
+					if p.Result == nil && p.Verdict != "" {
+						issued = att
+						payload = p
+					}
 				},
 			)
 		}
-		order, result, err = attesting.SubmitHoldWithAttestation(
+		order, result, err = attesting.SubmitOrderWithAttestation(
 			ctx, key, o, caller, attestFor)
 		if err != nil {
 			return ApprovalToken{}, err
@@ -501,7 +486,7 @@ func (s *Service) SubmitOrderToken(
 					switch event.Type {
 					case domain.OrderEventSubmitted:
 						p, err := buildSubmittedPayload(
-							eventOrder, SubmitModeImmediate, immediateApprovalID)
+							eventOrder, SubmitModeImmediate, submitApprovalID)
 						return p, err == nil, err
 					case domain.OrderEventPreTradeAccepted:
 						nonce, err := newNonce()
@@ -511,35 +496,30 @@ func (s *Service) SubmitOrderToken(
 						return buildApprovalPayload(
 							eventOrder,
 							SubmitModeImmediate,
-							immediateApprovalID,
+							submitApprovalID,
 							immediate.SettlementLockPrice,
 							immediate.EstimateSource,
 							time.Now().UTC(),
 							nonce,
 						), true, nil
 					case domain.OrderEventPreTradeRejected:
-						approvalID, err := newNonce()
-						if err != nil {
-							return domain.ApprovalPayload{}, false, err
-						}
 						nonce, err := newNonce()
 						if err != nil {
 							return domain.ApprovalPayload{}, false, err
 						}
 						return buildRejectApprovalPayload(
-							eventOrder, SubmitModeImmediate, approvalID,
+							eventOrder, SubmitModeImmediate, submitApprovalID,
 							firstReject(immediate.Rejects), time.Now().UTC(), nonce), true, nil
-					case domain.OrderEventReservationCommitted:
+					case domain.OrderEventCommitted:
 						committed := eventOrder
 						committed.Status = domain.OrderStatusCommitted
-						p, err := s.buildResolutionPayload(
-							committed, domain.AttestationRequestConfirm,
-							"committed", "", immediateApprovalID)
+						p, err := s.buildLifecyclePayload(
+							committed, domain.AttestationRequestSubmit,
+							"committed", "", submitApprovalID)
 						if err != nil {
 							return domain.ApprovalPayload{}, false, err
 						}
 						p.Mode = SubmitModeImmediate
-						p.RequestType = string(domain.AttestationRequestConfirm)
 						return p, true, nil
 					case domain.OrderEventFill:
 						filled := eventOrder
@@ -571,7 +551,7 @@ func (s *Service) SubmitOrderToken(
 					}
 				},
 				func(att Attestation, p domain.ApprovalPayload) {
-					if p.RequestType == string(domain.AttestationRequestSubmit) {
+					if p.Result == nil && p.Verdict != "" {
 						issued = att
 						payload = p
 					}
@@ -611,17 +591,13 @@ func (s *Service) SubmitOrderToken(
 	}, nil
 }
 
-// ConfirmExecution verifies token against the stored order, then commits the
-// held reservation it authorises. Verification recomputes the canonical bytes,
-// checks the signature when signed, and re-binds the bound params to the stored
-// order. The conflict/terminal-order guard is not enforced here: it lives in
-// node.ConfirmHeld, which re-reads the authoritative status inside the account
-// lane (serialized with fills and reports). A second confirm of an
-// already-committed order is an idempotent success there; a confirm of a
-// cancelled reservation is a conflict. The confirmation is audited as
-// approval_confirmed.
+// ConfirmExecution verifies the submit token against the stored order and
+// records an idempotent confirmation event. It never calls the engine and never
+// changes the order status or balances. The node re-checks execution-report
+// activity inside the account lane; after any such activity the shortcut is no
+// longer allowed because Officer cannot safely infer the venue state.
 func (s *Service) ConfirmExecution(
-	ctx context.Context, orderID string, token string, force bool,
+	ctx context.Context, orderID string, token string,
 ) (domain.Order, Attestation, error) {
 	signer, err := s.signerOrErr()
 	if err != nil {
@@ -644,10 +620,10 @@ func (s *Service) ConfirmExecution(
 	if err != nil {
 		return domain.Order{}, Attestation{}, err
 	}
-	if result.Payload.Mode != SubmitModeHold {
-		return domain.Order{}, Attestation{}, fmt.Errorf(
-			"backend: approval %s mode %q cannot be confirmed: %w",
-			result.Payload.ApprovalID, result.Payload.Mode, domain.ErrConflict)
+	if err := requireShortcutSubmitVerdict(
+		stored, token, result.Payload, "confirmed",
+	); err != nil {
+		return domain.Order{}, Attestation{}, err
 	}
 
 	caller := auth.CallerFromContext(ctx)
@@ -656,7 +632,7 @@ func (s *Service) ConfirmExecution(
 		return domain.Order{}, Attestation{}, err
 	}
 	var att Attestation
-	attesting, ok := n.(confirmHeldAttestingNode)
+	attesting, ok := n.(confirmOrderAttestingNode)
 	if !ok {
 		return domain.Order{}, Attestation{}, fmt.Errorf(
 			"backend: confirm attestation unsupported: %w",
@@ -666,16 +642,15 @@ func (s *Service) ConfirmExecution(
 	attest := eventAttestor(
 		signer, off, keyID, domain.AttestationRequestConfirm,
 		func(event domain.OrderEvent) (domain.ApprovalPayload, bool, error) {
-			if event.Type != domain.OrderEventReservationCommitted {
+			if event.Type != domain.OrderEventConfirmed {
 				return domain.ApprovalPayload{}, false, nil
 			}
 			confirmedOrder := stored.Order
-			confirmedOrder.Status = domain.OrderStatusCommitted
 			confirmedOrder.Source = caller.Source
 			confirmedOrder.Principal = caller.Principal
-			p, err := s.buildResolutionPayload(
+			p, err := s.buildLifecyclePayload(
 				confirmedOrder, domain.AttestationRequestConfirm,
-				"committed", "", result.Payload.ApprovalID)
+				"confirmed", "", result.Payload.ApprovalID)
 			if err != nil {
 				return domain.ApprovalPayload{}, false, err
 			}
@@ -685,19 +660,17 @@ func (s *Service) ConfirmExecution(
 			att = got
 		},
 	)
-	confirmed, forcedBypass, err := attesting.ConfirmHeldWithAttestation(
-		ctx, order, result.Payload.ApprovalID, caller, force, attest)
+	confirmed, err := attesting.ConfirmOrderWithAttestation(
+		ctx, order, caller, attest)
 	if err != nil {
 		return domain.Order{}, Attestation{}, err
 	}
 	if att.Token == "" {
 		var ok bool
-		if confirmed.Status == domain.OrderStatusCommitted {
-			att, ok, err = persistedEventAttestation(
-				ctx, n, order, domain.OrderEventReservationCommitted)
-			if err != nil {
-				return domain.Order{}, Attestation{}, err
-			}
+		att, ok, err = persistedEventAttestation(
+			ctx, n, order, domain.OrderEventConfirmed)
+		if err != nil {
+			return domain.Order{}, Attestation{}, err
 		}
 		if !ok {
 			return domain.Order{}, Attestation{}, missingAttestationError(
@@ -707,26 +680,17 @@ func (s *Service) ConfirmExecution(
 	key := keyFor(confirmed.Account)
 	detail := fmt.Sprintf(
 		"confirm approval %s order %s", result.Payload.ApprovalID, orderID)
-	// forced=true is audited only when force actually bypassed a terminal-order
-	// guard, matching the execution-report path; a force flag that changed nothing
-	// is not recorded as a forced bypass.
-	if forcedBypass {
-		detail += " forced=true"
-	}
 	_ = s.auditApproval(ctx, n, key, domain.AuditActionApprovalConfirmed, detail)
 	return confirmed, att, nil
 }
 
-// CancelOrder verifies token against the stored order, then rolls back the held
-// reservation it authorises, returning the held amount to available. The
-// conflict/terminal-order guard is not enforced here: it lives in
-// node.CancelHeld, which re-reads the authoritative status inside the account
-// lane (serialized with fills and reports). Rollback is idempotent: cancelling an
-// already-resolved reservation is a no-op on the engine side and still records
-// the cancelled lifecycle. The cancellation is audited as approval_cancelled,
-// with reason.
+// CancelOrder verifies the submit token, then asks the node to synthesize a
+// terminal cancellation execution report from the untouched stored order. The
+// normal engine path releases the order's remaining pre-trade effects. If any
+// execution report was already recorded, the shortcut fails and the caller must
+// provide an explicit report instead.
 func (s *Service) CancelOrder(
-	ctx context.Context, orderID string, token, reason string, force bool,
+	ctx context.Context, orderID string, token, reason string,
 ) (domain.Order, Attestation, error) {
 	signer, err := s.signerOrErr()
 	if err != nil {
@@ -749,10 +713,10 @@ func (s *Service) CancelOrder(
 	if err != nil {
 		return domain.Order{}, Attestation{}, err
 	}
-	if result.Payload.Mode != SubmitModeHold {
-		return domain.Order{}, Attestation{}, fmt.Errorf(
-			"backend: approval %s mode %q cannot be cancelled: %w",
-			result.Payload.ApprovalID, result.Payload.Mode, domain.ErrConflict)
+	if err := requireShortcutSubmitVerdict(
+		stored, token, result.Payload, "cancelled",
+	); err != nil {
+		return domain.Order{}, Attestation{}, err
 	}
 
 	caller := auth.CallerFromContext(ctx)
@@ -761,7 +725,7 @@ func (s *Service) CancelOrder(
 		return domain.Order{}, Attestation{}, err
 	}
 	var att Attestation
-	attesting, ok := n.(cancelHeldAttestingNode)
+	attesting, ok := n.(cancelOrderAttestingNode)
 	if !ok {
 		return domain.Order{}, Attestation{}, fmt.Errorf(
 			"backend: cancel attestation unsupported: %w",
@@ -771,20 +735,43 @@ func (s *Service) CancelOrder(
 	attest := eventAttestor(
 		signer, off, keyID, domain.AttestationRequestCancel,
 		func(event domain.OrderEvent) (domain.ApprovalPayload, bool, error) {
-			if event.Type != domain.OrderEventCancelled &&
-				event.Type != domain.OrderEventReservationRolledBack {
+			if event.Type != domain.OrderEventCancelled ||
+				event.Payload.ExecutionReport == nil {
 				return domain.ApprovalPayload{}, false, nil
 			}
+			status := domain.OrderStatus(event.Payload.OrderStatus)
+			if status == "" {
+				status = domain.OrderStatusCancelled
+			}
+			persistence := engine.ExecutionReportPersistence{
+				OrderStatus: status,
+				Commission:  event.Payload.Commission,
+				Leaves: domain.ExecutionReportPersistedLeavesFor(
+					status, event.Payload.LeavesQuantity,
+				),
+			}
+			if event.Payload.RejectCode != "" || event.Payload.RejectReason != "" {
+				persistence.Blocks = []domain.ExecutionAccountBlock{{
+					Account: stored.Order.Account,
+					Code:    event.Payload.RejectCode,
+					Reason:  event.Payload.RejectReason,
+					Details: event.Payload.RejectDetails,
+				}}
+			}
 			cancelledOrder := stored.Order
-			cancelledOrder.Status = domain.OrderStatusCancelled
+			cancelledOrder.Status = status
 			cancelledOrder.Source = caller.Source
 			cancelledOrder.Principal = caller.Principal
-			p, err := s.buildResolutionPayload(
-				cancelledOrder, domain.AttestationRequestCancel,
-				"rolled_back", reason, result.Payload.ApprovalID)
+			p, err := s.buildExecutionReportPayload(cancelledOrder, persistence)
 			if err != nil {
 				return domain.ApprovalPayload{}, false, err
 			}
+			p.Mode = SubmitModeHold
+			p.ApprovalRef = result.Payload.ApprovalID
+			p.PolicySummary = "order cancelled by shortcut"
+			p.ExecutionReport = event.Payload.ExecutionReport
+			p.Result.Outcome = "cancelled"
+			p.RejectReason = reason
 			return p, true, nil
 		},
 		func(got Attestation, p domain.ApprovalPayload) {
@@ -793,8 +780,8 @@ func (s *Service) CancelOrder(
 			}
 		},
 	)
-	cancelled, forcedBypass, err := attesting.CancelHeldWithAttestation(
-		ctx, order, result.Payload.ApprovalID, caller, force, attest)
+	cancelled, _, err := attesting.CancelOrderWithAttestation(
+		ctx, order, caller, attest)
 	if err != nil {
 		return domain.Order{}, Attestation{}, err
 	}
@@ -806,16 +793,62 @@ func (s *Service) CancelOrder(
 	detail := fmt.Sprintf(
 		"cancel approval %s order %s reason=%s",
 		result.Payload.ApprovalID, orderID, reason)
-	// forced=true is audited only when force actually bypassed a terminal-order
-	// guard, matching the execution-report path.
-	if forcedBypass {
-		detail += " forced=true"
-	}
 	_ = s.auditApproval(ctx, n, key, domain.AuditActionApprovalCancelled, detail)
 	return cancelled, att, nil
 }
 
 // --- helpers ----------------------------------------------------------------
+
+func requireShortcutSubmitVerdict(
+	stored domain.OrderDetail,
+	token string,
+	payload domain.ApprovalPayload,
+	action string,
+) error {
+	if payload.Mode != SubmitModeHold {
+		return fmt.Errorf(
+			"backend: approval %s mode %q cannot be %s: %w",
+			payload.ApprovalID, payload.Mode, action, domain.ErrConflict,
+		)
+	}
+	if payload.Verdict != "accept" {
+		return fmt.Errorf(
+			"backend: approval %s verdict %q cannot be %s: %w",
+			payload.ApprovalID, payload.Verdict, action, domain.ErrConflict,
+		)
+	}
+	if payload.RequestType != string(domain.AttestationRequestSubmit) ||
+		payload.Result != nil ||
+		payload.ExecutionReport != nil ||
+		payload.ApprovalRef != "" {
+		return fmt.Errorf(
+			"backend: approval %s is not an original submit verdict and cannot be %s: %w",
+			payload.ApprovalID, action, domain.ErrConflict,
+		)
+	}
+	eventID, err := domain.ParseExternalID(payload.EventExternalID)
+	if err != nil {
+		return fmt.Errorf(
+			"backend: approval %s is not bound to a recorded pre-trade verdict and cannot be %s: %w",
+			payload.ApprovalID, action, domain.ErrConflict,
+		)
+	}
+	for _, event := range stored.Events {
+		if event.ExternalID != eventID {
+			continue
+		}
+		if event.Type == domain.OrderEventPreTradeAccepted &&
+			event.Attestation != nil &&
+			event.Attestation.Token == token {
+			return nil
+		}
+		break
+	}
+	return fmt.Errorf(
+		"backend: approval %s does not identify the recorded pre-trade accept verdict and cannot be %s: %w",
+		payload.ApprovalID, action, domain.ErrConflict,
+	)
+}
 
 // buildApprovalPayload assembles the canonical approval payload from the
 // recorded order, the engine estimate, and the lifecycle timestamps. KeyID and
@@ -831,7 +864,6 @@ func buildApprovalPayload(
 	return domain.ApprovalPayload{
 		Version:         approvalPayloadVersion,
 		ApprovalID:      approvalID,
-		ReservationID:   approvalID,
 		Mode:            mode,
 		OrderExternalID: orderExternalID(order),
 		Instrument:      order.BaseAsset + "/" + order.QuoteAsset,
@@ -852,9 +884,8 @@ func buildApprovalPayload(
 }
 
 // orderExternalID renders the order's opaque public handle for an approval
-// payload, never a surrogate or engine id. A zero external id (an in-memory-only
-// held reservation signed before an order row exists) maps to the empty string so
-// the canonical payload omits the order handle entirely.
+// payload, never a surrogate or engine id. A zero external id maps to the empty
+// string so the canonical payload omits the order handle entirely.
 func orderExternalID(order domain.Order) string {
 	if order.ExternalID.IsZero() {
 		return ""
@@ -890,7 +921,6 @@ func buildRejectApprovalPayload(
 	return domain.ApprovalPayload{
 		Version:         approvalPayloadVersion,
 		ApprovalID:      approvalID,
-		ReservationID:   approvalID,
 		Mode:            mode,
 		OrderExternalID: orderExternalID(order),
 		Instrument:      order.BaseAsset + "/" + order.QuoteAsset,
@@ -942,7 +972,6 @@ func baseAttestationPayload(
 	return domain.ApprovalPayload{
 		Version:         approvalPayloadVersion,
 		ApprovalID:      approvalID,
-		ReservationID:   approvalID,
 		Mode:            mode,
 		OrderExternalID: orderExternalID(order),
 		Instrument:      order.BaseAsset + "/" + order.QuoteAsset,
@@ -960,10 +989,11 @@ func baseAttestationPayload(
 }
 
 // buildExecutionReportPayload assembles the attestation payload for an execution
-// report: the bound order params plus the engine persistence section (settled fill,
-// leaves, target status, and any account block the engine recorded). Verdict is
-// "accept" (the report was applied); a report that produced an account block
-// carries the first block onto the reject fields too, mirroring the fill event.
+// report: the bound order params plus its recorded persistence section
+// (optional fill and commission, leaves, target status, and any account block
+// the engine recorded). Verdict is "accept" (the report was applied); a report
+// that produced an account block carries the first block onto the reject fields
+// too, mirroring the fill event.
 func (s *Service) buildExecutionReportPayload(
 	order domain.Order,
 	persistence engine.ExecutionReportPersistence,
@@ -985,12 +1015,14 @@ func (s *Service) buildExecutionReportPayload(
 	fillQuantity := ""
 	fillPrice := ""
 	fillLockPrice := ""
-	var commission *domain.Commission
+	commission := persistence.Commission
 	if persistence.Trade != nil {
 		fillQuantity = persistence.Trade.Quantity
 		fillPrice = persistence.Trade.Price
 		fillLockPrice = persistence.Trade.LockPrice
-		commission = persistence.Trade.Commission
+		if commission == nil {
+			commission = persistence.Trade.Commission
+		}
 	}
 	payload.Result = &domain.AttestationResult{
 		Outcome:        "applied",
@@ -1011,11 +1043,11 @@ func (s *Service) buildExecutionReportPayload(
 	return payload, nil
 }
 
-// buildResolutionPayload assembles the attestation payload for a held-reservation
-// resolution (confirm commit or cancel rollback): the bound order params plus the
-// engine result section carrying the coarse outcome, the resulting status, and
-// the reservation approval id. reason, when present, is bound onto RejectReason.
-func (s *Service) buildResolutionPayload(
+// buildLifecyclePayload assembles the attestation payload for a recorded
+// lifecycle event. It binds the resulting order status and, when approvalRef is
+// present, links a workflow shortcut to the submit approval it acts on. reason,
+// when present, is bound onto RejectReason.
+func (s *Service) buildLifecyclePayload(
 	order domain.Order,
 	requestType domain.AttestationRequestType,
 	outcome, reason, approvalRef string,
@@ -1033,16 +1065,16 @@ func (s *Service) buildResolutionPayload(
 	payload := baseAttestationPayload(
 		order, SubmitModeHold, issuedAt, approvalID, nonce)
 	payload.Verdict = "accept"
-	payload.ReservationID = approvalRef
-	summary := "reservation committed"
-	if requestType == domain.AttestationRequestCancel {
-		summary = "reservation rolled back"
+	payload.ApprovalRef = approvalRef
+	payload.PolicySummary = "order lifecycle recorded"
+	if requestType == domain.AttestationRequestConfirm {
+		payload.PolicySummary = "order confirmation recorded"
 	}
-	payload.PolicySummary = summary
 	payload.Result = &domain.AttestationResult{
-		Outcome:     outcome,
-		OrderStatus: string(order.Status),
-		Blocks:      []domain.AttestationBlock{},
+		Outcome:        outcome,
+		LeavesQuantity: order.Leaves,
+		OrderStatus:    string(order.Status),
+		Blocks:         []domain.AttestationBlock{},
 	}
 	if reason != "" {
 		payload.RejectReason = reason

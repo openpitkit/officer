@@ -19,6 +19,7 @@ package domain_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"regexp"
@@ -29,6 +30,25 @@ import (
 
 	"go.openpit.dev/officer/framework/domain"
 )
+
+func TestExecutionReportRequestFromInputOmitsOpaqueLock(t *testing.T) {
+	t.Parallel()
+
+	request := domain.ExecutionReportRequestFromInput(domain.ExecutionReportInput{
+		LockPrice: "100.25",
+		Lock:      []byte{0x00, 0x7f, 0xff},
+	})
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	if bytes.Contains(encoded, []byte(`"lock":`)) {
+		t.Fatalf("execution-report audit snapshot exposed opaque lock: %s", encoded)
+	}
+	if !bytes.Contains(encoded, []byte(`"lockPrice":"100.25"`)) {
+		t.Fatalf("execution-report audit snapshot lost display price: %s", encoded)
+	}
+}
 
 // --- ValidateAccountID ---
 
@@ -388,6 +408,256 @@ func TestValidateEngineGroupID(t *testing.T) {
 	}
 	if err := domain.ValidateEngineGroupID(0); !errors.Is(err, domain.ErrInvalid) {
 		t.Errorf("ValidateEngineGroupID(0): expected ErrInvalid, got %v", err)
+	}
+}
+
+func TestExecutionReportRequiresEngine(t *testing.T) {
+	t.Parallel()
+
+	valid := []struct {
+		name           string
+		in             domain.ExecutionReportInput
+		requiresEngine bool
+	}{
+		{
+			name: "workflow without settlement fields",
+			in: domain.ExecutionReportInput{
+				OrderStatus: domain.OrderStatusAccepted,
+			},
+		},
+		{
+			name: "workflow with optional leaves",
+			in: domain.ExecutionReportInput{
+				LeavesQuantity: "1.5",
+				OrderStatus:    domain.OrderStatusCommitted,
+			},
+		},
+		{
+			name: "fill",
+			in: domain.ExecutionReportInput{
+				FillQuantity:   "1",
+				FillPrice:      "100",
+				LeavesQuantity: "0",
+				OrderStatus:    domain.OrderStatusFilled,
+			},
+			requiresEngine: true,
+		},
+		{
+			name: "terminal without fill",
+			in: domain.ExecutionReportInput{
+				LeavesQuantity: "2",
+				LockPrice:      "100",
+				OrderStatus:    domain.OrderStatusCancelled,
+			},
+			requiresEngine: true,
+		},
+		{
+			name: "workflow status with commission routes through engine",
+			in: domain.ExecutionReportInput{
+				LeavesQuantity: "2",
+				Commission: &domain.Commission{
+					Amount:   "-0.12",
+					Currency: "USD",
+				},
+				OrderStatus: domain.OrderStatusAccepted,
+			},
+			requiresEngine: true,
+		},
+		{
+			name: "submitted status with commission routes through engine",
+			in: domain.ExecutionReportInput{
+				LeavesQuantity: "2",
+				Commission: &domain.Commission{
+					Amount:   "-0.12",
+					Currency: "USD",
+				},
+				OrderStatus: domain.OrderStatusSubmitted,
+			},
+			requiresEngine: true,
+		},
+		{
+			name: "committed status with commission routes through engine",
+			in: domain.ExecutionReportInput{
+				LeavesQuantity: "2",
+				Commission: &domain.Commission{
+					Amount:   "-0.12",
+					Currency: "USD",
+				},
+				OrderStatus: domain.OrderStatusCommitted,
+			},
+			requiresEngine: true,
+		},
+		{
+			name: "terminal without fill with commission",
+			in: domain.ExecutionReportInput{
+				LeavesQuantity: "2",
+				Commission: &domain.Commission{
+					Amount:   "-0.12",
+					Currency: "USD",
+				},
+				OrderStatus: domain.OrderStatusCancelled,
+			},
+			requiresEngine: true,
+		},
+	}
+	for _, tc := range valid {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := domain.ExecutionReportRequiresEngine(tc.in)
+			if err != nil {
+				t.Fatalf("ExecutionReportRequiresEngine: %v", err)
+			}
+			if got != tc.requiresEngine {
+				t.Fatalf("requires engine = %t, want %t", got, tc.requiresEngine)
+			}
+		})
+	}
+
+	invalid := []struct {
+		name string
+		in   domain.ExecutionReportInput
+	}{
+		{
+			name: "invalid status",
+			in: domain.ExecutionReportInput{
+				OrderStatus: domain.OrderStatus("unknown"),
+			},
+		},
+		{
+			name: "one-sided fill",
+			in: domain.ExecutionReportInput{
+				FillQuantity: "1",
+				OrderStatus:  domain.OrderStatusFilled,
+			},
+		},
+		{
+			name: "fill status without fill",
+			in: domain.ExecutionReportInput{
+				LeavesQuantity: "0",
+				OrderStatus:    domain.OrderStatusPartiallyFilled,
+			},
+		},
+		{
+			name: "workflow with fill",
+			in: domain.ExecutionReportInput{
+				FillQuantity:   "1",
+				FillPrice:      "100",
+				LeavesQuantity: "0",
+				OrderStatus:    domain.OrderStatusSubmitted,
+			},
+		},
+		{
+			name: "engine report without leaves",
+			in: domain.ExecutionReportInput{
+				OrderStatus: domain.OrderStatusCancelled,
+			},
+		},
+		{
+			name: "negative leaves",
+			in: domain.ExecutionReportInput{
+				LeavesQuantity: "-1",
+				OrderStatus:    domain.OrderStatusAccepted,
+			},
+		},
+		{
+			name: "malformed leaves",
+			in: domain.ExecutionReportInput{
+				LeavesQuantity: "not-a-number",
+				OrderStatus:    domain.OrderStatusCommitted,
+			},
+		},
+		{
+			name: "workflow with lock price",
+			in: domain.ExecutionReportInput{
+				LockPrice:   "100",
+				OrderStatus: domain.OrderStatusAccepted,
+			},
+		},
+		{
+			name: "workflow with opaque lock",
+			in: domain.ExecutionReportInput{
+				Lock:        []byte{1},
+				OrderStatus: domain.OrderStatusCommitted,
+			},
+		},
+		{
+			name: "commission workflow with lock price",
+			in: domain.ExecutionReportInput{
+				LeavesQuantity: "1",
+				LockPrice:      "100",
+				Commission: &domain.Commission{
+					Amount:   "-1",
+					Currency: "USD",
+				},
+				OrderStatus: domain.OrderStatusAccepted,
+			},
+		},
+		{
+			name: "commission report without leaves",
+			in: domain.ExecutionReportInput{
+				Commission:  &domain.Commission{Amount: "-1", Currency: "USD"},
+				OrderStatus: domain.OrderStatusAccepted,
+			},
+		},
+		{
+			name: "terminal with one-sided commission",
+			in: domain.ExecutionReportInput{
+				LeavesQuantity: "1",
+				Commission: &domain.Commission{
+					Amount: "-1",
+				},
+				OrderStatus: domain.OrderStatusCancelled,
+			},
+		},
+	}
+	for _, tc := range invalid {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := domain.ExecutionReportRequiresEngine(tc.in); !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("ExecutionReportRequiresEngine error = %v, want ErrInvalid", err)
+			}
+		})
+	}
+}
+
+func TestExecutionReportPersistedLeaves(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		in   domain.ExecutionReportInput
+		want string
+	}{
+		{
+			name: "partial fill keeps remaining quantity",
+			in: domain.ExecutionReportInput{
+				LeavesQuantity: "2",
+				OrderStatus:    domain.OrderStatusPartiallyFilled,
+			},
+			want: "2",
+		},
+		{
+			name: "workflow keeps supplied leaves",
+			in: domain.ExecutionReportInput{
+				LeavesQuantity: "2",
+				OrderStatus:    domain.OrderStatusAccepted,
+			},
+			want: "2",
+		},
+		{
+			name: "terminal records zero after release",
+			in: domain.ExecutionReportInput{
+				LeavesQuantity: "2",
+				OrderStatus:    domain.OrderStatusCancelled,
+			},
+			want: "0",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := domain.ExecutionReportPersistedLeaves(tc.in); got != tc.want {
+				t.Fatalf("ExecutionReportPersistedLeaves = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

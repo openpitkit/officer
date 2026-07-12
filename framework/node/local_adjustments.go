@@ -19,7 +19,6 @@ package node
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/shopspring/decimal"
@@ -462,28 +461,6 @@ func balanceSnapshotCommand(balance domain.Balance) (*domain.Balance, *store.Bal
 	return &balance, nil
 }
 
-func (n *localNode) persistAdjustedBalance(
-	ctx context.Context, key Key, req domain.AdjustmentRequest, outcome domain.AdjustmentOutcomeAccepted,
-) error {
-	balance, deleteBalance, _, err := n.adjustedBalanceCommand(ctx, key, req, outcome)
-	if err != nil {
-		return err
-	}
-	if deleteBalance != nil {
-		err := n.realm.DeleteBalance(ctx, deleteBalance.Account, deleteBalance.Asset)
-		if err != nil && !errors.Is(err, domain.ErrNotFound) {
-			return fmt.Errorf("delete empty adjusted balance: %w", err)
-		}
-		return nil
-	}
-	if balance != nil {
-		if err := n.realm.UpsertBalance(ctx, *balance); err != nil {
-			return fmt.Errorf("upsert adjusted balance: %w", err)
-		}
-	}
-	return nil
-}
-
 func balanceIsEmpty(balance domain.Balance) bool {
 	return decimalZeroOrEmpty(balance.Available) &&
 		decimalZeroOrEmpty(balance.Held) &&
@@ -549,11 +526,21 @@ func fillSettlementEvent(
 }
 
 func stampExecutionReportPersistence(
-	persistence engine.ExecutionReportPersistence, caller domain.Caller,
+	persistence engine.ExecutionReportPersistence,
+	caller domain.Caller,
+	request *domain.ExecutionReportRequest,
 ) engine.ExecutionReportPersistence {
+	persistence.Commission = request.Commission
 	for i := range persistence.Events {
 		persistence.Events[i].Source = caller.Source
 		persistence.Events[i].Principal = caller.Principal
+		persistence.Events[i].Payload.ExecutionReport = request
+		persistence.Events[i].Payload.FillQuantity = request.FillQuantity
+		persistence.Events[i].Payload.FillPrice = request.FillPrice
+		persistence.Events[i].Payload.FillLockPrice = request.LockPrice
+		persistence.Events[i].Payload.LeavesQuantity = request.LeavesQuantity
+		persistence.Events[i].Payload.OrderStatus = string(request.OrderStatus)
+		persistence.Events[i].Payload.Commission = request.Commission
 	}
 	if persistence.Trade != nil {
 		persistence.Trade.Source = caller.Source

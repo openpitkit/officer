@@ -340,9 +340,22 @@ func TestGetOrder_EventCommission(t *testing.T) {
 				ExternalID: extID("event-fill"), Order: extID("order-1"),
 				Type: domain.OrderEventFill,
 				Payload: domain.OrderEventPayload{
-					FillQuantity: "2",
-					FillPrice:    "150.25",
-					Commission:   &domain.Commission{Amount: "-0.05", Currency: "USD"},
+					FillQuantity:   "2",
+					FillPrice:      "150.25",
+					LeavesQuantity: "3",
+					Commission:     &domain.Commission{Amount: "-0.05", Currency: "USD"},
+					ExecutionReport: domain.ExecutionReportRequestFromInput(
+						domain.ExecutionReportInput{
+							Order:          extID("order-1"),
+							FillQuantity:   "2",
+							FillPrice:      "150.25",
+							LeavesQuantity: "3",
+							Lock:           []byte("opaque-engine-lock"),
+							Commission:     &domain.Commission{Amount: "-0.05", Currency: "USD"},
+							OrderStatus:    domain.OrderStatusFilled,
+							Force:          true,
+						},
+					),
 				},
 			},
 			{
@@ -370,6 +383,23 @@ func TestGetOrder_EventCommission(t *testing.T) {
 	commission, _ := fill["commission"].(map[string]any)
 	if commission["amount"] != "-0.05" || commission["currency"] != "USD" {
 		t.Fatalf("fill event commission = %v, want -0.05/USD", commission)
+	}
+	if fill["leavesQuantity"] != "3" {
+		t.Fatalf("fill event leaves = %v, want original 3", fill["leavesQuantity"])
+	}
+	if _, ok := fill["resultLeavesQuantity"]; ok {
+		t.Fatalf("fill event leaked resulting order state: %v", fill)
+	}
+	report, _ := fill["executionReport"].(map[string]any)
+	if report["order"] != extID("order-1").String() || report["leavesQuantity"] != "3" ||
+		report["force"] != true {
+		t.Fatalf("execution report = %v, want audit-safe original request", report)
+	}
+	if _, ok := report["lock"]; ok {
+		t.Fatalf("execution report exposed opaque lock: %v", report)
+	}
+	if _, ok := report["commission"]; !ok {
+		t.Fatalf("execution report omitted null commission: %v", report)
 	}
 }
 
@@ -1272,23 +1302,38 @@ func TestApplyExecutionReport_PartialCommission(t *testing.T) {
 }
 
 func TestApplyExecutionReport_CommissionWithoutFill(t *testing.T) {
-	r, err := newRouter(&fakeService{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := bytes.NewBufferString(
-		`{"leavesQuantity":"0","status":"cancelled",` +
-			`"commission":{"amount":"-0.12","currency":"USD"}}`)
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports", body))
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
-	}
-	m := bodyMap(t, rec.Result())
-	errObj, _ := m["error"].(map[string]any)
-	if errObj["message"] != "commission requires quantity and price" {
-		t.Fatalf("want commission/fill message, got %v", errObj["message"])
+	for _, status := range []domain.OrderStatus{
+		domain.OrderStatusAccepted,
+		domain.OrderStatusCancelled,
+	} {
+		t.Run(string(status), func(t *testing.T) {
+			svc := &fakeService{}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := bytes.NewBufferString(
+				`{"leavesQuantity":"1","status":"` + string(status) + `",` +
+					`"commission":{"amount":"-0.12","currency":"USD"}}`,
+			)
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(
+				http.MethodPost,
+				"/api/v1/orders/"+extID("order-1").String()+"/execution-reports",
+				body,
+			))
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("want 201, got %d: %s", rec.Code, rec.Body.String())
+			}
+			if svc.execReportIn.FillQuantity != "" || svc.execReportIn.FillPrice != "" {
+				t.Fatalf("report unexpectedly gained a fill: %+v", svc.execReportIn)
+			}
+			if svc.execReportIn.Commission == nil ||
+				svc.execReportIn.Commission.Amount != "-0.12" ||
+				svc.execReportIn.Commission.Currency != "USD" {
+				t.Fatalf("commission not forwarded: %+v", svc.execReportIn.Commission)
+			}
+		})
 	}
 }
 

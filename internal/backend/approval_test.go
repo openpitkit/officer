@@ -97,7 +97,7 @@ func (s *fakeSigner) SignNone(payload domain.ApprovalPayload) (string, error) {
 }
 
 func (s *fakeSigner) Verify(
-	_ context.Context, _ string, _ fwsigning.VerifyParams,
+	_ context.Context, token string, _ fwsigning.VerifyParams,
 ) (fwsigning.VerifyResult, error) {
 	if s.verifyErr != nil {
 		return fwsigning.VerifyResult{}, s.verifyErr
@@ -105,11 +105,24 @@ func (s *fakeSigner) Verify(
 	if s.verifyResult != nil {
 		return *s.verifyResult, nil
 	}
+	if env, err := decodeApprovalEnvelope(token); err == nil {
+		return fwsigning.VerifyResult{
+			Payload: env.Approval,
+			Signed:  env.Alg != fwsigning.AlgNone,
+		}, nil
+	}
+	for i := len(s.signed) - 1; i >= 0; i-- {
+		payload := s.signed[i]
+		if payload.RequestType == string(domain.AttestationRequestSubmit) &&
+			payload.Verdict != "" && payload.Result == nil {
+			return fwsigning.VerifyResult{Payload: payload, Signed: true}, nil
+		}
+	}
 	return fwsigning.VerifyResult{
 		Payload: domain.ApprovalPayload{
-			ApprovalID:    "approval-1",
-			ReservationID: "approval-1",
-			Mode:          backend.SubmitModeHold,
+			ApprovalID: "approval-1",
+			Mode:       backend.SubmitModeHold,
+			Verdict:    "accept",
 		},
 		Signed: true,
 	}, nil
@@ -159,14 +172,14 @@ func sampleOrder() domain.Order {
 	}
 }
 
-func TestService_SubmitOrderTokenHoldIssuesSignedToken(t *testing.T) {
+func TestService_SubmitOrderTokenWorkflowIssuesSignedToken(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
 	svc, fn := newTestServiceWithSigner(signer)
 
 	tok, err := svc.SubmitOrderToken(context.Background(), sampleOrder(), backend.SubmitModeHold)
 	if err != nil {
-		t.Fatalf("SubmitOrderToken hold: %v", err)
+		t.Fatalf("SubmitOrderToken workflow: %v", err)
 	}
 	if tok.Token != "signed-token" || !tok.Signed || tok.KeyID != "key-1" {
 		t.Fatalf("token = %+v, want signed token with key-1", tok)
@@ -177,7 +190,7 @@ func TestService_SubmitOrderTokenHoldIssuesSignedToken(t *testing.T) {
 	if _, err := domain.ParseExternalID(tok.OrderExternalID); err != nil {
 		t.Fatalf("token order handle must be a valid external id: %v", err)
 	}
-	// The HTTP token is the hold-mode envelope; the submit also persists a separate
+	// The HTTP token is the workflow-mode envelope; the submit also persists a separate
 	// display envelope, so two payloads are signed.
 	p := httpTokenPayload(t, signer, backend.SubmitModeHold)
 	if p.Verdict != "accept" {
@@ -196,28 +209,29 @@ func TestService_SubmitOrderTokenHoldIssuesSignedToken(t *testing.T) {
 	if p.Nonce == "" || p.IssuedAt == "" {
 		t.Fatalf("payload lifecycle fields missing: %+v", p)
 	}
-	if orderByToken(t, fn, tok).Status != domain.OrderStatusAccepted {
-		t.Fatalf("hold must leave the order accepted (funds held), got %q",
+	if orderByToken(t, fn, tok).Status != domain.OrderStatusCommitted {
+		t.Fatalf("workflow submit must leave the order committed, got %q",
 			orderByToken(t, fn, tok).Status)
 	}
 	if !hasAudit(fn.auditCalls, domain.AuditActionApprovalIssued) {
-		t.Fatalf("hold must audit approval_issued: %+v", fn.auditCalls)
+		t.Fatalf("workflow submit must audit approval_issued: %+v", fn.auditCalls)
 	}
 	// The accepted order carries persisted 1:1 attestations on its submitted and
 	// verdict events, surfaced by GetOrder.
 	wantEvents := eventIDsByType(t, svc, tok.OrderExternalID,
 		domain.OrderEventSubmitted,
 		domain.OrderEventPreTradeAccepted,
+		domain.OrderEventCommitted,
 	)
 	if !reflect.DeepEqual(fn.persistAttestationCalls, wantEvents) {
-		t.Fatalf("hold attestations = %+v, want event ids %+v",
+		t.Fatalf("workflow attestations = %+v, want event ids %+v",
 			fn.persistAttestationCalls, wantEvents)
 	}
 	detail := getOrderByToken(t, svc, tok)
 	att := verdictAttestation(t, detail)
 	if att == nil || att.Token == "" || att.KeyID != "key-1" ||
 		att.Alg != fwsigning.AlgEd25519 {
-		t.Fatalf("hold order must surface a signed verdict attestation, got %+v", att)
+		t.Fatalf("workflow order must surface a signed verdict attestation, got %+v", att)
 	}
 }
 
@@ -246,7 +260,7 @@ func TestService_SubmitOrderTokenImmediateSettles(t *testing.T) {
 	wantEvents := eventIDsByType(t, svc, tok.OrderExternalID,
 		domain.OrderEventSubmitted,
 		domain.OrderEventPreTradeAccepted,
-		domain.OrderEventReservationCommitted,
+		domain.OrderEventCommitted,
 		domain.OrderEventFill,
 	)
 	if !reflect.DeepEqual(fn.persistAttestationCalls, wantEvents) {
@@ -281,7 +295,7 @@ func TestService_SubmitOrderTokenRejectPersistsVerdict(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
 	svc, fn := newTestServiceWithSigner(signer)
-	fn.holdResult = &engine.HoldResult{
+	fn.submitResult = &engine.OrderResult{
 		Accepted: false,
 		Rejects:  []domain.OrderReject{{Code: "insufficient_funds", Reason: "no funds"}},
 	}
@@ -365,6 +379,7 @@ func TestService_SubmitOrderTokenESignOff(t *testing.T) {
 	wantEvents := eventIDsByType(t, svc, tok.OrderExternalID,
 		domain.OrderEventSubmitted,
 		domain.OrderEventPreTradeAccepted,
+		domain.OrderEventCommitted,
 	)
 	if !reflect.DeepEqual(fn.persistAttestationCalls, wantEvents) {
 		t.Fatalf("eSign-off attestations = %+v, want event ids %+v",
@@ -378,14 +393,14 @@ func TestService_SubmitOrderTokenESignOff(t *testing.T) {
 	}
 }
 
-func TestService_ResolutionESignOffPersistsUnsignedLifecycleEvents(t *testing.T) {
+func TestService_ShortcutsESignOffPersistUnsignedEvents(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{noESign: true}
 	svc, fn := newTestServiceWithSigner(signer)
 
-	confirmTok := mustHold(t, svc)
+	confirmTok := mustWorkflow(t, svc)
 	confirmed, confirmAtt, err := svc.ConfirmExecution(
-		context.Background(), confirmTok.OrderExternalID, confirmTok.Token, false)
+		context.Background(), confirmTok.OrderExternalID, confirmTok.Token)
 	if err != nil {
 		t.Fatalf("ConfirmExecution: %v", err)
 	}
@@ -398,16 +413,17 @@ func TestService_ResolutionESignOffPersistsUnsignedLifecycleEvents(t *testing.T)
 	confirmEvents := eventIDsByType(t, svc, confirmTok.OrderExternalID,
 		domain.OrderEventSubmitted,
 		domain.OrderEventPreTradeAccepted,
-		domain.OrderEventReservationCommitted,
+		domain.OrderEventCommitted,
+		domain.OrderEventConfirmed,
 	)
-	if !slices.Contains(fn.persistAttestationCalls, confirmEvents[2]) {
-		t.Fatalf("confirm did not persist unsigned committed attestation: calls=%+v",
+	if !slices.Contains(fn.persistAttestationCalls, confirmEvents[3]) {
+		t.Fatalf("confirm did not persist unsigned confirmation attestation: calls=%+v",
 			fn.persistAttestationCalls)
 	}
 
-	cancelTok := mustHold(t, svc)
+	cancelTok := mustWorkflow(t, svc)
 	cancelled, cancelAtt, err := svc.CancelOrder(
-		context.Background(), cancelTok.OrderExternalID, cancelTok.Token, "operator", false)
+		context.Background(), cancelTok.OrderExternalID, cancelTok.Token, "operator")
 	if err != nil {
 		t.Fatalf("CancelOrder: %v", err)
 	}
@@ -420,38 +436,36 @@ func TestService_ResolutionESignOffPersistsUnsignedLifecycleEvents(t *testing.T)
 	cancelEvents := eventIDsByType(t, svc, cancelTok.OrderExternalID,
 		domain.OrderEventSubmitted,
 		domain.OrderEventPreTradeAccepted,
-		domain.OrderEventReservationRolledBack,
+		domain.OrderEventCommitted,
 		domain.OrderEventCancelled,
 	)
-	if !slices.Contains(fn.persistAttestationCalls, cancelEvents[2]) ||
-		!slices.Contains(fn.persistAttestationCalls, cancelEvents[3]) {
-		t.Fatalf("cancel did not persist unsigned rollback/cancel attestations: calls=%+v",
+	if !slices.Contains(fn.persistAttestationCalls, cancelEvents[3]) {
+		t.Fatalf("cancel did not persist unsigned cancellation attestation: calls=%+v",
 			fn.persistAttestationCalls)
 	}
 }
 
-func TestService_ConfirmExecutionCommits(t *testing.T) {
+func TestService_ConfirmExecutionRecordsHistoryOnly(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
 	svc, fn := newTestServiceWithSigner(signer)
-	tok := mustHold(t, svc)
+	tok := mustWorkflow(t, svc)
 
 	before := len(fn.persistAttestationCalls)
-	order, att, err := svc.ConfirmExecution(context.Background(), tok.OrderExternalID, tok.Token, false)
+	order, att, err := svc.ConfirmExecution(context.Background(), tok.OrderExternalID, tok.Token)
 	if err != nil {
 		t.Fatalf("ConfirmExecution: %v", err)
 	}
 	if order.Status != domain.OrderStatusCommitted {
-		t.Fatalf("confirm must commit, got %q", order.Status)
+		t.Fatalf("history-only confirm changed committed status to %q", order.Status)
 	}
-	if len(fn.confirmCalls) != 1 || fn.confirmCalls[0] != "approval-1" {
-		t.Fatalf("confirm must resolve by approval id: %+v", fn.confirmCalls)
+	if len(fn.confirmCalls) != 1 || fn.confirmCalls[0] != tok.OrderExternalID {
+		t.Fatalf("confirm shortcut calls = %+v", fn.confirmCalls)
 	}
 	if !hasAudit(fn.auditCalls, domain.AuditActionApprovalConfirmed) {
 		t.Fatalf("confirm must audit approval_confirmed")
 	}
-	// The confirm attests its reservation_committed event: a signed token is
-	// returned and one more attestation is persisted.
+	// The confirm attests a history-only confirmed event.
 	if att.Token == "" || !att.Signed {
 		t.Fatalf("confirm must return a signed attestation, got %+v", att)
 	}
@@ -463,26 +477,25 @@ func TestService_ConfirmExecutionCommits(t *testing.T) {
 func TestService_ConfirmExecutionIdempotent(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
-	svc, fn := newTestServiceWithSigner(signer)
-	tok := mustHold(t, svc)
+	svc, _ := newTestServiceWithSigner(signer)
+	tok := mustWorkflow(t, svc)
 
 	first, firstAtt, err := svc.ConfirmExecution(
-		context.Background(), tok.OrderExternalID, tok.Token, false)
+		context.Background(), tok.OrderExternalID, tok.Token)
 	if err != nil {
 		t.Fatalf("first confirm: %v", err)
 	}
 	if first.Status != domain.OrderStatusCommitted || firstAtt.Token == "" {
-		t.Fatalf("first confirm = %+v att=%+v, want committed with attestation",
+		t.Fatalf("first confirm = %+v att=%+v, want unchanged status with attestation",
 			first, firstAtt)
 	}
-	fn.confirmErr = domain.ErrConflict
 	second, secondAtt, err := svc.ConfirmExecution(
-		context.Background(), tok.OrderExternalID, tok.Token, false)
+		context.Background(), tok.OrderExternalID, tok.Token)
 	if err != nil {
 		t.Fatalf("second confirm must be idempotent success, got %v", err)
 	}
 	if second.Status != domain.OrderStatusCommitted {
-		t.Fatalf("idempotent confirm status = %q, want committed",
+		t.Fatalf("idempotent confirm changed status to %q",
 			second.Status)
 	}
 	if secondAtt != firstAtt {
@@ -491,14 +504,14 @@ func TestService_ConfirmExecutionIdempotent(t *testing.T) {
 	}
 }
 
-func TestService_ConfirmExecutionCommittedMissingAttestationFailsClosed(t *testing.T) {
+func TestService_ConfirmExecutionMissingAttestationFailsClosed(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
 	svc, fn := newTestServiceWithSigner(signer)
-	tok := mustHold(t, svc)
+	tok := mustWorkflow(t, svc)
 
 	if _, _, err := svc.ConfirmExecution(
-		context.Background(), tok.OrderExternalID, tok.Token, false); err != nil {
+		context.Background(), tok.OrderExternalID, tok.Token); err != nil {
 		t.Fatalf("first confirm: %v", err)
 	}
 	detail, err := svc.GetOrder(context.Background(), tok.OrderExternalID)
@@ -506,13 +519,13 @@ func TestService_ConfirmExecutionCommittedMissingAttestationFailsClosed(t *testi
 		t.Fatalf("GetOrder: %v", err)
 	}
 	for _, event := range detail.Events {
-		if event.Type == domain.OrderEventReservationCommitted {
+		if event.Type == domain.OrderEventConfirmed {
 			delete(fn.attestations, event.ExternalID)
 		}
 	}
 
 	_, _, err = svc.ConfirmExecution(
-		context.Background(), tok.OrderExternalID, tok.Token, false)
+		context.Background(), tok.OrderExternalID, tok.Token)
 	if err == nil {
 		t.Fatal("idempotent confirm succeeded without persisted attestation")
 	}
@@ -521,143 +534,143 @@ func TestService_ConfirmExecutionCommittedMissingAttestationFailsClosed(t *testi
 	}
 }
 
-func TestService_ConfirmAfterCancelConflicts(t *testing.T) {
+func TestService_ConfirmAfterCancelRequiresExplicitReport(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
 	svc, fn := newTestServiceWithSigner(signer)
-	tok := mustHold(t, svc)
+	tok := mustWorkflow(t, svc)
 
 	if _, _, err := svc.CancelOrder(
-		context.Background(), tok.OrderExternalID, tok.Token, "operator", false,
+		context.Background(), tok.OrderExternalID, tok.Token, "operator",
 	); err != nil {
 		t.Fatalf("cancel: %v", err)
 	}
-	// The cancelled order is terminal, so the default safety gate rejects before
-	// the engine commit path.
-	fn.confirmErr = domain.ErrConflict
-	_, _, err := svc.ConfirmExecution(context.Background(), tok.OrderExternalID, tok.Token, false)
-	if !errors.Is(err, domain.ErrTerminalOrder) {
-		t.Fatalf("confirm after cancel must report terminal order, got %v", err)
+	_, _, err := svc.ConfirmExecution(context.Background(), tok.OrderExternalID, tok.Token)
+	if !errors.Is(err, domain.ErrExecutionReportRequired) {
+		t.Fatalf("confirm after cancel = %v, want explicit report", err)
 	}
 	if len(fn.confirmCalls) != 0 {
-		t.Fatalf("confirm after cancel must not reach engine commit: %+v", fn.confirmCalls)
+		t.Fatalf("confirm after cancel must not append history: %+v", fn.confirmCalls)
 	}
 }
 
-func TestService_ConfirmAfterCancelForceReachesEngine(t *testing.T) {
+func TestService_ConfirmAfterWorkflowReportRequiresExplicitReport(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
 	svc, fn := newTestServiceWithSigner(signer)
-	tok := mustHold(t, svc)
+	tok := mustWorkflow(t, svc)
 
-	if _, _, err := svc.CancelOrder(
-		context.Background(), tok.OrderExternalID, tok.Token, "operator", false,
-	); err != nil {
-		t.Fatalf("cancel: %v", err)
+	if _, _, err := svc.ApplyExecutionReport(context.Background(), domain.ExecutionReportInput{
+		Order:          orderID(t, tok),
+		LeavesQuantity: "10",
+		OrderStatus:    domain.OrderStatusAccepted,
+	}); err != nil {
+		t.Fatalf("workflow report: %v", err)
 	}
-
-	order, _, err := svc.ConfirmExecution(context.Background(), tok.OrderExternalID, tok.Token, true)
-	if err != nil {
-		t.Fatalf("forced confirm after cancel: %v", err)
+	_, _, err := svc.ConfirmExecution(context.Background(), tok.OrderExternalID, tok.Token)
+	if !errors.Is(err, domain.ErrExecutionReportRequired) {
+		t.Fatalf("confirm after workflow report = %v, want explicit report", err)
 	}
-	if order.Status != domain.OrderStatusCommitted {
-		t.Fatalf("forced confirm status = %q, want committed", order.Status)
-	}
-	if len(fn.confirmCalls) != 1 || fn.confirmCalls[0] != "approval-1" {
-		t.Fatalf("forced confirm did not reach engine: %+v", fn.confirmCalls)
-	}
-	if !hasAuditDetail(fn.auditCalls, domain.AuditActionApprovalConfirmed, "forced=true") {
-		t.Fatalf("forced confirm must audit forced=true: %+v", fn.auditCalls)
+	if len(fn.confirmCalls) != 0 {
+		t.Fatalf("confirm after report appended history: %+v", fn.confirmCalls)
 	}
 }
 
-func TestService_CancelAfterConfirmConflictsBeforeRollback(t *testing.T) {
+func TestService_CancelAfterConfirmUsesNormalReport(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
 	svc, fn := newTestServiceWithSigner(signer)
-	tok := mustHold(t, svc)
+	tok := mustWorkflow(t, svc)
 
-	if _, _, err := svc.ConfirmExecution(context.Background(), tok.OrderExternalID, tok.Token, false); err != nil {
+	if _, _, err := svc.ConfirmExecution(context.Background(), tok.OrderExternalID, tok.Token); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
-	_, _, err := svc.CancelOrder(context.Background(), tok.OrderExternalID, tok.Token, "too late", false)
-	if !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("cancel after confirm must conflict, got %v", err)
-	}
-	if len(fn.cancelCalls) != 0 {
-		t.Fatalf("cancel after confirm must not reach engine rollback: %+v", fn.cancelCalls)
-	}
-}
-
-func TestService_CancelFilledOrderRequiresForce(t *testing.T) {
-	t.Parallel()
-	signer := &fakeSigner{}
-	svc, fn := newTestServiceWithSigner(signer)
-	tok := mustHold(t, svc)
-
-	oid := orderID(t, tok)
-	order := fn.orders[oid]
-	order.Status = domain.OrderStatusFilled
-	fn.orders[oid] = order
-
-	_, _, err := svc.CancelOrder(context.Background(), tok.OrderExternalID, tok.Token, "late", false)
-	if !errors.Is(err, domain.ErrTerminalOrder) {
-		t.Fatalf("cancel filled without force = %v, want terminal order", err)
-	}
-	if len(fn.cancelCalls) != 0 {
-		t.Fatalf("cancel filled without force reached engine: %+v", fn.cancelCalls)
-	}
-
-	order, _, err = svc.CancelOrder(context.Background(), tok.OrderExternalID, tok.Token, "late", true)
+	cancelled, _, err := svc.CancelOrder(
+		context.Background(), tok.OrderExternalID, tok.Token, "operator",
+	)
 	if err != nil {
-		t.Fatalf("forced cancel filled: %v", err)
+		t.Fatalf("cancel after history-only confirm: %v", err)
 	}
-	if order.Status != domain.OrderStatusCancelled {
-		t.Fatalf("forced cancel status = %q, want cancelled", order.Status)
-	}
-	if len(fn.cancelCalls) != 1 || fn.cancelCalls[0] != "approval-1" {
-		t.Fatalf("forced cancel did not reach engine: %+v", fn.cancelCalls)
-	}
-	if !hasAuditDetail(fn.auditCalls, domain.AuditActionApprovalCancelled, "forced=true") {
-		t.Fatalf("forced cancel must audit forced=true: %+v", fn.auditCalls)
+	if cancelled.Status != domain.OrderStatusCancelled || len(fn.cancelCalls) != 1 {
+		t.Fatalf("cancel after confirm = %+v calls=%+v", cancelled, fn.cancelCalls)
 	}
 }
 
-func TestService_CancelOrderRollsBack(t *testing.T) {
+func TestService_CancelAfterFillRequiresExplicitReport(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
 	svc, fn := newTestServiceWithSigner(signer)
-	tok := mustHold(t, svc)
+	tok := mustWorkflow(t, svc)
+
+	if _, _, err := svc.ApplyExecutionReport(context.Background(), domain.ExecutionReportInput{
+		Order:          orderID(t, tok),
+		FillQuantity:   "10",
+		FillPrice:      "100",
+		LeavesQuantity: "0",
+		OrderStatus:    domain.OrderStatusFilled,
+	}); err != nil {
+		t.Fatalf("fill report: %v", err)
+	}
+	_, _, err := svc.CancelOrder(context.Background(), tok.OrderExternalID, tok.Token, "late")
+	if !errors.Is(err, domain.ErrExecutionReportRequired) {
+		t.Fatalf("cancel after fill = %v, want explicit report", err)
+	}
+	if len(fn.cancelCalls) != 0 {
+		t.Fatalf("cancel after fill invoked shortcut: %+v", fn.cancelCalls)
+	}
+}
+
+func TestService_CancelOrderSynthesizesExecutionReport(t *testing.T) {
+	t.Parallel()
+	signer := &fakeSigner{}
+	svc, fn := newTestServiceWithSigner(signer)
+	tok := mustWorkflow(t, svc)
+	submitPayload := httpTokenPayload(t, signer, backend.SubmitModeHold)
 
 	before := len(fn.persistAttestationCalls)
-	order, att, err := svc.CancelOrder(context.Background(), tok.OrderExternalID, tok.Token, "stale price", false)
+	order, att, err := svc.CancelOrder(context.Background(), tok.OrderExternalID, tok.Token, "stale price")
 	if err != nil {
 		t.Fatalf("CancelOrder: %v", err)
 	}
 	if order.Status != domain.OrderStatusCancelled {
-		t.Fatalf("cancel must roll back, got %q", order.Status)
+		t.Fatalf("cancel status = %q, want cancelled", order.Status)
 	}
-	if len(fn.cancelCalls) != 1 || fn.cancelCalls[0] != "approval-1" {
-		t.Fatalf("cancel must resolve by approval id: %+v", fn.cancelCalls)
+	if len(fn.cancelCalls) != 1 || fn.cancelCalls[0] != tok.OrderExternalID {
+		t.Fatalf("cancel shortcut calls = %+v", fn.cancelCalls)
 	}
 	if !hasAudit(fn.auditCalls, domain.AuditActionApprovalCancelled) {
 		t.Fatalf("cancel must audit approval_cancelled")
 	}
-	// The cancel signs rollback and cancelled events; the returned token is bound
-	// to the cancelled event.
 	if att.Token == "" || !att.Signed {
 		t.Fatalf("cancel must return a signed attestation, got %+v", att)
 	}
-	if len(fn.persistAttestationCalls) != before+2 {
-		t.Fatalf("cancel must persist two attestations, calls=%+v", fn.persistAttestationCalls)
+	if len(fn.persistAttestationCalls) != before+1 {
+		t.Fatalf("cancel must persist one attestation, calls=%+v", fn.persistAttestationCalls)
 	}
 	cancelEvents := eventIDsByType(t, svc, tok.OrderExternalID,
-		domain.OrderEventReservationRolledBack,
 		domain.OrderEventCancelled,
 	)
-	if att.EventExternalID != cancelEvents[1].String() {
+	if att.EventExternalID != cancelEvents[0].String() {
 		t.Fatalf("returned cancel event = %q, want %q",
-			att.EventExternalID, cancelEvents[1].String())
+			att.EventExternalID, cancelEvents[0].String())
+	}
+	if len(fn.execReports) != 1 ||
+		fn.execReports[0].LeavesQuantity != "10" ||
+		fn.execReports[0].OrderStatus != domain.OrderStatusCancelled {
+		t.Fatalf("synthetic execution report = %+v", fn.execReports)
+	}
+	lastPayload := signer.signed[len(signer.signed)-1]
+	if lastPayload.ExecutionReport == nil ||
+		lastPayload.ApprovalRef != submitPayload.ApprovalID ||
+		lastPayload.Result == nil || lastPayload.Result.Outcome != "cancelled" {
+		t.Fatalf("cancel attestation payload = %+v", lastPayload)
+	}
+	canonical, err := json.Marshal(lastPayload)
+	if err != nil {
+		t.Fatalf("json.Marshal(cancel payload): %v", err)
+	}
+	if strings.Contains(string(canonical), `"lock":`) {
+		t.Fatalf("cancel attestation exposed opaque order lock: %s", canonical)
 	}
 }
 
@@ -665,11 +678,11 @@ func TestService_CancelOrderNoopMissingAttestationFailsClosed(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
 	svc, fn := newTestServiceWithSigner(signer)
-	tok := mustHold(t, svc)
+	tok := mustWorkflow(t, svc)
 	fn.cancelNoop = true
 
 	_, _, err := svc.CancelOrder(
-		context.Background(), tok.OrderExternalID, tok.Token, "already resolved", false)
+		context.Background(), tok.OrderExternalID, tok.Token, "already resolved")
 	if err == nil {
 		t.Fatal("cancel no-op succeeded without an attestation")
 	}
@@ -682,15 +695,15 @@ func TestService_ConfirmRejectsBadToken(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{verifyErr: domain.ErrInvalid}
 	svc, fn := newTestServiceWithSigner(signer)
-	tok := mustHold(t, svc)
+	tok := mustWorkflow(t, svc)
 	fn.confirmCalls = nil
 
-	_, _, err := svc.ConfirmExecution(context.Background(), tok.OrderExternalID, tok.Token, false)
+	_, _, err := svc.ConfirmExecution(context.Background(), tok.OrderExternalID, tok.Token)
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("bad token must reject before commit, got %v", err)
 	}
 	if len(fn.confirmCalls) != 0 {
-		t.Fatalf("verification failure must not reach the engine commit")
+		t.Fatalf("verification failure must not append confirmation history")
 	}
 }
 
@@ -699,9 +712,9 @@ func TestService_ConfirmImmediateTokenConflictsBeforeEngine(t *testing.T) {
 	signer := &fakeSigner{
 		verifyResult: &fwsigning.VerifyResult{
 			Payload: domain.ApprovalPayload{
-				ApprovalID:    "approval-immediate",
-				ReservationID: "approval-immediate",
-				Mode:          backend.SubmitModeImmediate,
+				ApprovalID: "approval-immediate",
+				Mode:       backend.SubmitModeImmediate,
+				Verdict:    "accept",
 			},
 			Signed: true,
 		},
@@ -709,15 +722,102 @@ func TestService_ConfirmImmediateTokenConflictsBeforeEngine(t *testing.T) {
 	svc, fn := newTestServiceWithSigner(signer)
 	tok, err := svc.SubmitOrderToken(context.Background(), sampleOrder(), backend.SubmitModeHold)
 	if err != nil {
-		t.Fatalf("hold setup: %v", err)
+		t.Fatalf("workflow setup: %v", err)
 	}
 
-	_, _, err = svc.ConfirmExecution(context.Background(), tok.OrderExternalID, tok.Token, false)
+	_, _, err = svc.ConfirmExecution(context.Background(), tok.OrderExternalID, tok.Token)
 	if !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("confirm immediate token must conflict, got %v", err)
 	}
 	if len(fn.confirmCalls) != 0 {
-		t.Fatalf("immediate token must not reach engine commit: %+v", fn.confirmCalls)
+		t.Fatalf("immediate token appended confirmation history: %+v", fn.confirmCalls)
+	}
+}
+
+func TestService_ShortcutsRejectNonAcceptVerdict(t *testing.T) {
+	t.Parallel()
+	signer := &fakeSigner{
+		verifyResult: &fwsigning.VerifyResult{
+			Payload: domain.ApprovalPayload{
+				ApprovalID: "approval-rejected",
+				Mode:       backend.SubmitModeHold,
+				Verdict:    "reject",
+			},
+			Signed: true,
+		},
+	}
+	svc, fn := newTestServiceWithSigner(signer)
+	tok, err := svc.SubmitOrderToken(
+		context.Background(), sampleOrder(), backend.SubmitModeHold,
+	)
+	if err != nil {
+		t.Fatalf("workflow setup: %v", err)
+	}
+	if _, _, err := svc.ConfirmExecution(
+		context.Background(), tok.OrderExternalID, tok.Token,
+	); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("confirm reject verdict = %v, want conflict", err)
+	}
+	if _, _, err := svc.CancelOrder(
+		context.Background(), tok.OrderExternalID, tok.Token, "operator",
+	); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("cancel reject verdict = %v, want conflict", err)
+	}
+	if len(fn.confirmCalls) != 0 || len(fn.cancelCalls) != 0 {
+		t.Fatalf("rejected verdict reached shortcuts: confirm=%+v cancel=%+v",
+			fn.confirmCalls, fn.cancelCalls)
+	}
+}
+
+func TestService_ShortcutsRejectCommittedEventAttestation(t *testing.T) {
+	t.Parallel()
+	signer := &fakeSigner{}
+	svc, fn := newTestServiceWithSigner(signer)
+	tok := mustWorkflow(t, svc)
+	detail := getOrderByToken(t, svc, tok)
+
+	var committedEvent domain.OrderEvent
+	for _, event := range detail.Events {
+		if event.Type == domain.OrderEventCommitted {
+			committedEvent = event
+			break
+		}
+	}
+	if committedEvent.ExternalID.IsZero() || committedEvent.Attestation == nil {
+		t.Fatalf("committed event attestation missing: %+v", detail.Events)
+	}
+	var committedPayload domain.ApprovalPayload
+	for _, payload := range signer.signed {
+		if payload.EventExternalID == committedEvent.ExternalID.String() {
+			committedPayload = payload
+			break
+		}
+	}
+	if committedPayload.Result == nil || committedPayload.ApprovalRef == "" {
+		t.Fatalf("committed payload is not derived lifecycle evidence: %+v", committedPayload)
+	}
+	signer.verifyResult = &fwsigning.VerifyResult{
+		Payload: committedPayload,
+		Signed:  true,
+	}
+	derivedToken := committedEvent.Attestation.Token
+
+	if _, _, err := svc.ConfirmExecution(
+		context.Background(), tok.OrderExternalID, derivedToken,
+	); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("confirm with committed attestation = %v, want conflict", err)
+	}
+	if _, _, err := svc.CancelOrder(
+		context.Background(), tok.OrderExternalID, derivedToken, "operator",
+	); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("cancel with committed attestation = %v, want conflict", err)
+	}
+	if len(fn.confirmCalls) != 0 || len(fn.cancelCalls) != 0 {
+		t.Fatalf(
+			"derived attestation reached shortcuts: confirm=%+v cancel=%+v",
+			fn.confirmCalls,
+			fn.cancelCalls,
+		)
 	}
 }
 
@@ -844,18 +944,15 @@ func eventIDsByType(
 	return out
 }
 
-// httpTokenPayload returns the recorded signed payload for the HTTP approval
-// token issued in the given submit mode. SubmitOrderToken signs two envelopes
-// per accepted submit: the persisted display envelope (buildOrderEnvelope,
-// always "immediate") and the returned HTTP token (buildApprovalPayload, the
-// submit mode). For a hold submit the two are distinguishable by mode; the
-// helper picks the one that matches the submit mode.
+// httpTokenPayload returns the signed pre-trade verdict payload for the given
+// submit mode. A submit records multiple attested lifecycle events; the returned
+// approval token is the one that carries the verdict and no result section.
 func httpTokenPayload(t *testing.T, signer *fakeSigner, mode string) domain.ApprovalPayload {
 	t.Helper()
 	for i := len(signer.signed) - 1; i >= 0; i-- {
 		if signer.signed[i].Mode == mode &&
 			signer.signed[i].RequestType == string(domain.AttestationRequestSubmit) &&
-			signer.signed[i].Verdict != "" {
+			signer.signed[i].Verdict != "" && signer.signed[i].Result == nil {
 			return signer.signed[i]
 		}
 	}
@@ -863,12 +960,12 @@ func httpTokenPayload(t *testing.T, signer *fakeSigner, mode string) domain.Appr
 	return domain.ApprovalPayload{}
 }
 
-// mustHold issues a hold token and fails the test on error.
-func mustHold(t *testing.T, svc *backend.Service) backend.ApprovalToken {
+// mustWorkflow issues a workflow token and fails the test on error.
+func mustWorkflow(t *testing.T, svc *backend.Service) backend.ApprovalToken {
 	t.Helper()
 	tok, err := svc.SubmitOrderToken(context.Background(), sampleOrder(), backend.SubmitModeHold)
 	if err != nil {
-		t.Fatalf("hold setup: %v", err)
+		t.Fatalf("workflow setup: %v", err)
 	}
 	return tok
 }
@@ -908,7 +1005,7 @@ func TestService_SubmitOrderApprovalReadBack(t *testing.T) {
 	if len(signer.signed) != 3 {
 		t.Fatalf("Sign calls = %d, want 3", len(signer.signed))
 	}
-	verdictPayload := httpTokenPayload(t, signer, backend.SubmitModeImmediate)
+	verdictPayload := httpTokenPayload(t, signer, backend.SubmitModeHold)
 	if verdictPayload.OrderExternalID != order.ExternalID.String() {
 		t.Fatalf("payload order handle = %q, want %q",
 			verdictPayload.OrderExternalID, order.ExternalID.String())
@@ -917,7 +1014,7 @@ func TestService_SubmitOrderApprovalReadBack(t *testing.T) {
 	wantEvents := eventIDsByType(t, svc, order.ExternalID.String(),
 		domain.OrderEventSubmitted,
 		domain.OrderEventPreTradeAccepted,
-		domain.OrderEventReservationCommitted,
+		domain.OrderEventCommitted,
 	)
 	if !reflect.DeepEqual(fn.persistAttestationCalls, wantEvents) {
 		t.Fatalf("attestations = %+v, want event ids %+v",
@@ -973,7 +1070,7 @@ func TestService_SubmitOrderApprovalReadBackESignOff(t *testing.T) {
 	wantEvents := eventIDsByType(t, svc, order.ExternalID.String(),
 		domain.OrderEventSubmitted,
 		domain.OrderEventPreTradeAccepted,
-		domain.OrderEventReservationCommitted,
+		domain.OrderEventCommitted,
 	)
 	if !reflect.DeepEqual(fn.persistAttestationCalls, wantEvents) {
 		t.Fatalf("attestations = %+v, want event ids %+v",
@@ -1116,13 +1213,13 @@ func TestService_SubmitOrderTokenSigningFailureFailsClosed(t *testing.T) {
 func TestService_ConfirmExecutionSigningFailureFailsClosed(t *testing.T) {
 	signer := &fakeSigner{}
 	svc, fn := newTestServiceWithSigner(signer)
-	tok := mustHold(t, svc)
+	tok := mustWorkflow(t, svc)
 	beforeOrder := fn.orders[domain.ExternalID(tok.OrderExternalID)]
 	beforeEvents := slices.Clone(fn.orderEvents[domain.ExternalID(tok.OrderExternalID)])
 	signer.signErr = errors.New("confirm signing down")
 
 	_, _, err := svc.ConfirmExecution(
-		context.Background(), tok.OrderExternalID, tok.Token, false)
+		context.Background(), tok.OrderExternalID, tok.Token)
 	if !errors.Is(err, signer.signErr) {
 		t.Fatalf("ConfirmExecution error = %v, want signing failure", err)
 	}
@@ -1140,13 +1237,13 @@ func TestService_ConfirmExecutionSigningFailureFailsClosed(t *testing.T) {
 func TestService_CancelOrderSigningFailureFailsClosed(t *testing.T) {
 	signer := &fakeSigner{}
 	svc, fn := newTestServiceWithSigner(signer)
-	tok := mustHold(t, svc)
+	tok := mustWorkflow(t, svc)
 	beforeOrder := fn.orders[domain.ExternalID(tok.OrderExternalID)]
 	beforeEvents := slices.Clone(fn.orderEvents[domain.ExternalID(tok.OrderExternalID)])
 	signer.signErr = errors.New("cancel signing down")
 
 	_, _, err := svc.CancelOrder(
-		context.Background(), tok.OrderExternalID, tok.Token, "operator", false)
+		context.Background(), tok.OrderExternalID, tok.Token, "operator")
 	if !errors.Is(err, signer.signErr) {
 		t.Fatalf("CancelOrder error = %v, want signing failure", err)
 	}
@@ -1164,7 +1261,7 @@ func TestService_CancelOrderSigningFailureFailsClosed(t *testing.T) {
 // TestService_SubmitOrderTokenHonorsSuppliedExternalID covers the create-once
 // id-honoring contract: a caller-supplied order external id is created exactly
 // once and the issued token (and the signed payload) carry that same id, so the
-// confirm that follows resolves the same order.
+// history-only confirm records against the same order.
 func TestService_SubmitOrderTokenHonorsSuppliedExternalID(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
@@ -1176,7 +1273,7 @@ func TestService_SubmitOrderTokenHonorsSuppliedExternalID(t *testing.T) {
 
 	tok, err := svc.SubmitOrderToken(context.Background(), o, backend.SubmitModeHold)
 	if err != nil {
-		t.Fatalf("SubmitOrderToken hold: %v", err)
+		t.Fatalf("SubmitOrderToken workflow: %v", err)
 	}
 	if tok.OrderExternalID != supplied.String() {
 		t.Fatalf("token order id = %q, want supplied %q",
@@ -1194,9 +1291,9 @@ func TestService_SubmitOrderTokenHonorsSuppliedExternalID(t *testing.T) {
 			signer.signed[0].OrderExternalID, supplied.String())
 	}
 
-	// Confirm resolves the very order the token created.
+	// Confirm records history against the very order the token created.
 	confirmed, _, err := svc.ConfirmExecution(
-		context.Background(), tok.OrderExternalID, tok.Token, false)
+		context.Background(), tok.OrderExternalID, tok.Token)
 	if err != nil {
 		t.Fatalf("ConfirmExecution: %v", err)
 	}
@@ -1205,7 +1302,7 @@ func TestService_SubmitOrderTokenHonorsSuppliedExternalID(t *testing.T) {
 			confirmed.ExternalID, supplied)
 	}
 	if confirmed.Status != domain.OrderStatusCommitted {
-		t.Fatalf("confirm must commit the supplied order, got %q", confirmed.Status)
+		t.Fatalf("confirm changed supplied order status to %q", confirmed.Status)
 	}
 }
 
@@ -1218,7 +1315,7 @@ func TestService_SubmitOrderTokenGeneratesExternalIDWhenAbsent(t *testing.T) {
 
 	tok, err := svc.SubmitOrderToken(context.Background(), sampleOrder(), backend.SubmitModeHold)
 	if err != nil {
-		t.Fatalf("SubmitOrderToken hold: %v", err)
+		t.Fatalf("SubmitOrderToken workflow: %v", err)
 	}
 	if tok.OrderExternalID == "" {
 		t.Fatalf("token must carry a generated order id")
@@ -1302,7 +1399,7 @@ func TestService_GetOrderAddressedByExternalID(t *testing.T) {
 	svc, _ := newTestServiceWithSigner(&fakeSigner{})
 	ctx := context.Background()
 
-	tok := mustHold(t, svc)
+	tok := mustWorkflow(t, svc)
 	detail, err := svc.GetOrder(ctx, tok.OrderExternalID)
 	if err != nil {
 		t.Fatalf("GetOrder by external id: %v", err)

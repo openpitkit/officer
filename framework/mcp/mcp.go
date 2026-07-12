@@ -64,23 +64,23 @@ type Source interface {
 	CommandEnabled(ctx context.Context, command string) (bool, error)
 	// SubmitOrderToken runs the pre-trade pipeline and issues an approval token.
 	SubmitOrderToken(ctx context.Context, o domain.Order, mode string) (SubmitOrderTokenResult, error)
-	// ConfirmExecution commits a held order after token verification. It also
-	// returns the signed attestation over the commit, so an MCP caller receives
-	// the same proof an HTTP caller does.
+	// ConfirmExecution verifies the token and records confirmation history for an
+	// order that has no execution-report activity. It also returns the resulting
+	// attestation, so an MCP caller receives the same proof an HTTP caller does.
 	ConfirmExecution(
-		ctx context.Context, orderExternalID, token string, force bool,
+		ctx context.Context, orderExternalID, token string,
 	) (domain.Order, Attestation, error)
-	// CancelOrder rolls back a held order after token verification. It also
-	// returns the signed attestation over the rollback, so an MCP caller receives
-	// the same proof an HTTP caller does.
+	// CancelOrder verifies the token and derives a cancellation report for an
+	// order that has no execution-report activity. It also returns the resulting
+	// attestation, so an MCP caller receives the same proof an HTTP caller does.
 	CancelOrder(
-		ctx context.Context, orderExternalID, token, reason string, force bool,
+		ctx context.Context, orderExternalID, token, reason string,
 	) (domain.Order, Attestation, error)
 }
 
-// Attestation is the surface-agnostic proof an MCP caller receives that the
-// engine resolved a held order's confirm or cancel. It mirrors the fields the
-// HTTP surface exposes; it is the zero value (Token empty) when attestation was
+// Attestation is the surface-agnostic proof an MCP caller receives for a
+// workflow confirmation or cancellation. It mirrors the fields the HTTP
+// surface exposes; it is the zero value (Token empty) when attestation was
 // skipped or failed best-effort.
 type Attestation struct {
 	// Token is the base64url-encoded attestation envelope; empty when none.

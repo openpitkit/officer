@@ -21,10 +21,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
+	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
@@ -78,14 +77,15 @@ func TestLocalNode_ApplyExecutionReportPersistsBothLegs(t *testing.T) {
 	order := testOrder(t, st, id)
 
 	if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
-		Order:        order.ExternalID,
-		BaseAsset:    "AAPL",
-		QuoteAsset:   "USD",
-		Side:         domain.OrderSideBuy,
-		FillQuantity: "2",
-		FillPrice:    "400",
-		LockPrice:    "400",
-		OrderStatus:  domain.OrderStatusFilled,
+		Order:          order.ExternalID,
+		BaseAsset:      "AAPL",
+		QuoteAsset:     "USD",
+		Side:           domain.OrderSideBuy,
+		FillQuantity:   "2",
+		FillPrice:      "400",
+		LeavesQuantity: "0",
+		LockPrice:      "400",
+		OrderStatus:    domain.OrderStatusFilled,
 	}, testCaller); err != nil {
 		t.Fatalf("ApplyExecutionReport: %v", err)
 	}
@@ -143,14 +143,15 @@ func TestLocalNode_ApplyExecutionReportPostEngineStoreFailureFatals(t *testing.T
 	order := testOrder(t, realm, "acc-1")
 
 	_, err = n.ApplyExecutionReport(ctx, testKey("acc-1"), domain.ExecutionReportInput{
-		Order:        order.ExternalID,
-		BaseAsset:    "AAPL",
-		QuoteAsset:   "USD",
-		Side:         domain.OrderSideBuy,
-		FillQuantity: "2",
-		FillPrice:    "400",
-		LockPrice:    "400",
-		OrderStatus:  domain.OrderStatusFilled,
+		Order:          order.ExternalID,
+		BaseAsset:      "AAPL",
+		QuoteAsset:     "USD",
+		Side:           domain.OrderSideBuy,
+		FillQuantity:   "2",
+		FillPrice:      "400",
+		LeavesQuantity: "0",
+		LockPrice:      "400",
+		OrderStatus:    domain.OrderStatusFilled,
 	}, testCaller)
 	if !errors.Is(err, storeErr) {
 		t.Fatalf("ApplyExecutionReport error = %v, want store failure", err)
@@ -170,6 +171,65 @@ func TestLocalNode_ApplyExecutionReportPostEngineStoreFailureFatals(t *testing.T
 		!strings.Contains(msg, fmt.Sprintf("account_id=%d", account.EngineAccountID.Uint64())) ||
 		!strings.Contains(msg, "record execution report failed") {
 		t.Fatalf("fatal error = %q, want operation, account_id, and cause", msg)
+	}
+}
+
+func TestLocalNode_ApplyExecutionReportWorkflowAuditFailureFatalsAfterCommit(
+	t *testing.T,
+) {
+	t.Parallel()
+	auditErr := errors.New("workflow execution report audit failed")
+	st := newRealmWrapStore(newMemoryStore("node.db"), func(r store.RealmStore) store.RealmStore {
+		return &failActionAuditRealm{
+			RealmStore: r,
+			action:     domain.AuditActionExecutionReport,
+			err:        auditErr,
+		}
+	})
+	ctx := context.Background()
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	eng := newFakeEngine()
+	var fatalErr error
+	n := newTestNodeWithStore(t, st, eng, WithFatalShutdownHook(func(err error) {
+		fatalErr = err
+	}))
+	realm := st.realm
+	order := testOrder(t, realm, "acc-1")
+
+	_, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), domain.ExecutionReportInput{
+		Order:       order.ExternalID,
+		OrderStatus: domain.OrderStatusAccepted,
+	}, testCaller)
+	if !errors.Is(err, auditErr) {
+		t.Fatalf("ApplyExecutionReport error = %v, want audit failure", err)
+	}
+	if len(eng.execReportCalls) != 0 {
+		t.Fatalf("workflow status reached engine: %+v", eng.execReportCalls)
+	}
+	if fatalErr == nil {
+		t.Fatal("fatal hook did not fire after committed workflow audit failure")
+	}
+	account, ok, err := realm.GetAccount(ctx, "acc-1")
+	if err != nil || !ok {
+		t.Fatalf("GetAccount: ok=%v err=%v", ok, err)
+	}
+	msg := fatalErr.Error()
+	if !strings.Contains(msg, `operation="audit workflow execution report"`) ||
+		!strings.Contains(msg, fmt.Sprintf("account_id=%d", account.EngineAccountID.Uint64())) ||
+		!strings.Contains(msg, "post-commit audit failure") ||
+		!strings.Contains(msg, auditErr.Error()) {
+		t.Fatalf("fatal error = %q, want operation, account_id, and cause", msg)
+	}
+	detail, err := realm.GetOrder(ctx, order.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if detail.Order.Status != domain.OrderStatusAccepted || len(detail.Events) != 1 {
+		t.Fatalf("committed workflow settlement = %+v", detail)
 	}
 }
 
@@ -198,8 +258,10 @@ func TestLocalNode_ApplyExecutionReportDeletesEmptySettledPosition(t *testing.T)
 		BaseAsset:      "AAPL",
 		QuoteAsset:     "USD",
 		Side:           domain.OrderSideBuy,
-		OrderStatus:    domain.OrderStatusRejected,
+		FillQuantity:   "1",
+		FillPrice:      "100",
 		LeavesQuantity: "0",
+		OrderStatus:    domain.OrderStatusFilled,
 	}, testCaller)
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport: %v", err)
@@ -222,14 +284,15 @@ func TestLocalNode_ApplyExecutionReportIgnoresReportAssetFields(t *testing.T) {
 	order := testOrder(t, st, id)
 
 	if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
-		Order:        order.ExternalID,
-		BaseAsset:    "GOLD",
-		QuoteAsset:   "EUR",
-		Side:         domain.OrderSideSell,
-		FillQuantity: "2",
-		FillPrice:    "400",
-		LockPrice:    "400",
-		OrderStatus:  domain.OrderStatusFilled,
+		Order:          order.ExternalID,
+		BaseAsset:      "GOLD",
+		QuoteAsset:     "EUR",
+		Side:           domain.OrderSideSell,
+		FillQuantity:   "2",
+		FillPrice:      "400",
+		LeavesQuantity: "0",
+		LockPrice:      "400",
+		OrderStatus:    domain.OrderStatusFilled,
 	}, testCaller); err != nil {
 		t.Fatalf("ApplyExecutionReport: %v", err)
 	}
@@ -268,11 +331,12 @@ func TestLocalNode_ApplyExecutionReportUsesOrderAccountOverRouteKey(t *testing.T
 	}
 
 	if _, err := n.ApplyExecutionReport(ctx, testKey("fresh-report"), domain.ExecutionReportInput{
-		Order:        order.ExternalID,
-		FillQuantity: "2",
-		FillPrice:    "100",
-		LockPrice:    "100",
-		OrderStatus:  domain.OrderStatusFilled,
+		Order:          order.ExternalID,
+		FillQuantity:   "2",
+		FillPrice:      "100",
+		LeavesQuantity: "0",
+		LockPrice:      "100",
+		OrderStatus:    domain.OrderStatusFilled,
 	}, testCaller); err != nil {
 		t.Fatalf("ApplyExecutionReport: %v", err)
 	}
@@ -304,14 +368,15 @@ func TestLocalNode_ApplyExecutionReportAuditsEngineBlock(t *testing.T) {
 	order := testOrder(t, st, id)
 
 	if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
-		Order:        order.ExternalID,
-		BaseAsset:    "AAPL",
-		QuoteAsset:   "USD",
-		Side:         domain.OrderSideBuy,
-		FillQuantity: "2",
-		FillPrice:    "400",
-		LockPrice:    "400",
-		OrderStatus:  domain.OrderStatusFilled,
+		Order:          order.ExternalID,
+		BaseAsset:      "AAPL",
+		QuoteAsset:     "USD",
+		Side:           domain.OrderSideBuy,
+		FillQuantity:   "2",
+		FillPrice:      "400",
+		LeavesQuantity: "0",
+		LockPrice:      "400",
+		OrderStatus:    domain.OrderStatusFilled,
 	}, testCaller); err != nil {
 		t.Fatalf("ApplyExecutionReport: %v", err)
 	}
@@ -453,12 +518,48 @@ func TestLocalNode_ApplyExecutionReportForceOnOpenOrderDoesNotAuditForced(t *tes
 	}
 }
 
-// TestLocalNode_ApplyExecutionReportStatusOnlyNoAccountWrites drives a
-// status-only report through the fake's real persistence mapper (no emptyExecReportPersistence
-// shortcut): the report carries no fill, no engine outcomes, and no blocks, so the
-// mapper emits nil Balances and empty Blocks. The node must then write zero
-// balance rows and zero account-block state/audit rows while still recording the
-// status change.
+func TestLocalNode_ApplyExecutionReportForceWorkflowAuditsBypass(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	order := testOrder(t, st, id)
+	if err := st.UpdateOrderStatus(
+		ctx, order.ExternalID, domain.OrderStatusFilled,
+	); err != nil {
+		t.Fatalf("UpdateOrderStatus: %v", err)
+	}
+
+	if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+		Order:       order.ExternalID,
+		Force:       true,
+		OrderStatus: domain.OrderStatusAccepted,
+	}, testCaller); err != nil {
+		t.Fatalf("ApplyExecutionReport force workflow: %v", err)
+	}
+	if len(eng.execReportCalls) != 0 {
+		t.Fatalf("workflow status reached engine: %+v", eng.execReportCalls)
+	}
+
+	rows, err := st.ListAuditFiltered(ctx, domain.AuditFilter{
+		Actions: []domain.AuditAction{domain.AuditActionExecutionReport},
+	}, 10)
+	if err != nil {
+		t.Fatalf("ListAuditFiltered: %v", err)
+	}
+	if len(rows) != 1 || !strings.Contains(rows[0].Detail, "forced=true") {
+		t.Fatalf("audit rows = %+v, want forced=true workflow report", rows)
+	}
+}
+
+// TestLocalNode_ApplyExecutionReportStatusOnlyNoAccountWrites verifies a
+// workflow-only report records its status without creating balances, blocks, or
+// engine execution-report calls.
 func TestLocalNode_ApplyExecutionReportStatusOnlyNoAccountWrites(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
@@ -473,12 +574,15 @@ func TestLocalNode_ApplyExecutionReportStatusOnlyNoAccountWrites(t *testing.T) {
 
 	if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
 		Order:       order.ExternalID,
-		BaseAsset:   "AAPL",
-		QuoteAsset:  "USD",
+		BaseAsset:   "UNUSED_BASE",
+		QuoteAsset:  "UNUSED_QUOTE",
 		Side:        domain.OrderSideBuy,
-		OrderStatus: domain.OrderStatusCancelled,
+		OrderStatus: domain.OrderStatusCommitted,
 	}, testCaller); err != nil {
 		t.Fatalf("ApplyExecutionReport status-only: %v", err)
+	}
+	if len(eng.execReportCalls) != 0 {
+		t.Fatalf("workflow status reached engine: %+v", eng.execReportCalls)
 	}
 
 	if _, ok, err := st.GetBalance(ctx, id, "AAPL"); err != nil || ok {
@@ -486,6 +590,12 @@ func TestLocalNode_ApplyExecutionReportStatusOnlyNoAccountWrites(t *testing.T) {
 	}
 	if _, ok, err := st.GetBalance(ctx, id, "USD"); err != nil || ok {
 		t.Fatalf("quote balance ok=%v err=%v, want no balance row written", ok, err)
+	}
+	if _, ok, err := st.GetAsset(ctx, "UNUSED_BASE"); err != nil || ok {
+		t.Fatalf("report base asset ok=%v err=%v, want no asset registration", ok, err)
+	}
+	if _, ok, err := st.GetAsset(ctx, "UNUSED_QUOTE"); err != nil || ok {
+		t.Fatalf("report quote asset ok=%v err=%v, want no asset registration", ok, err)
 	}
 	account, ok, err := st.GetAccount(ctx, id)
 	if err != nil || !ok {
@@ -508,8 +618,8 @@ func TestLocalNode_ApplyExecutionReportStatusOnlyNoAccountWrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetOrder: %v", err)
 	}
-	if detail.Order.Status != domain.OrderStatusCancelled {
-		t.Fatalf("status = %q, want cancelled (the venue-owned status change is recorded)",
+	if detail.Order.Status != domain.OrderStatusCommitted {
+		t.Fatalf("status = %q, want committed (the venue-owned status change is recorded)",
 			detail.Order.Status)
 	}
 }
@@ -620,380 +730,386 @@ func TestLocalNode_ApplyExecutionReportUsesAccountSyncLane(t *testing.T) {
 	}
 }
 
-func TestLocalNode_ApplyExecutionReportAlwaysUsesEngine(t *testing.T) {
+// TestLocalNode_ApplyExecutionReportRoutesFillableStatusesThroughEngine verifies
+// a report carrying a fill routes through the engine for every status that
+// legally accepts one: the fill statuses and the terminal statuses.
+func TestLocalNode_ApplyExecutionReportRoutesFillableStatusesThroughEngine(t *testing.T) {
 	t.Parallel()
-	persistedLock := []byte{0x01, 0x02, 0x03}
+	cases := []domain.OrderStatus{
+		domain.OrderStatusRejected,
+		domain.OrderStatusRolledBack,
+		domain.OrderStatusFilled,
+		domain.OrderStatusPartiallyFilled,
+		domain.OrderStatusCancelled,
+	}
+	for _, status := range cases {
+		t.Run(string(status), func(t *testing.T) {
+			t.Parallel()
+			eng := newFakeEngine()
+			n, st := newTestNode(t, eng)
+			ctx := context.Background()
+
+			const id domain.AccountID = "acc-1"
+			order := testOrder(t, st, id)
+			if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+				Order:          order.ExternalID,
+				FillQuantity:   "1",
+				FillPrice:      "400",
+				LeavesQuantity: "1",
+				OrderStatus:    status,
+			}, testCaller); err != nil {
+				t.Fatalf("ApplyExecutionReport: %v", err)
+			}
+			if len(eng.execReportCalls) != 1 {
+				t.Fatalf("engine calls = %+v, want one", eng.execReportCalls)
+			}
+			detail, err := st.GetOrder(ctx, order.ExternalID)
+			if err != nil {
+				t.Fatalf("GetOrder: %v", err)
+			}
+			wantLeaves := "1"
+			if domain.OrderStatusTerminal(status) {
+				wantLeaves = "0"
+			}
+			if detail.Order.Leaves != wantLeaves {
+				t.Fatalf(
+					"order leaves = %q, want %q for status %q",
+					detail.Order.Leaves,
+					wantLeaves,
+					status,
+				)
+			}
+		})
+	}
+}
+
+// TestLocalNode_ApplyExecutionReportRejectsFillWithNonTerminalWorkflowStatus
+// verifies a report carrying a fill is rejected before it reaches the engine
+// when paired with a non-terminal workflow status: settling such a report
+// through the engine while persisting an inconsistent lifecycle status would
+// desync the order from its balances.
+func TestLocalNode_ApplyExecutionReportRejectsFillWithNonTerminalWorkflowStatus(t *testing.T) {
+	t.Parallel()
+	cases := []domain.OrderStatus{
+		domain.OrderStatusSubmitted,
+		domain.OrderStatusAccepted,
+		domain.OrderStatusCommitted,
+	}
+	for _, status := range cases {
+		t.Run(string(status), func(t *testing.T) {
+			t.Parallel()
+			eng := newFakeEngine()
+			n, st := newTestNode(t, eng)
+			ctx := context.Background()
+
+			const id domain.AccountID = "acc-1"
+			order := testOrder(t, st, id)
+			_, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+				Order:          order.ExternalID,
+				FillQuantity:   "1",
+				FillPrice:      "400",
+				LeavesQuantity: "1",
+				OrderStatus:    status,
+			}, testCaller)
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("ApplyExecutionReport = %v, want ErrInvalid", err)
+			}
+			if len(eng.execReportCalls) != 0 {
+				t.Fatalf("fill with non-terminal workflow status reached engine: %+v",
+					eng.execReportCalls)
+			}
+		})
+	}
+}
+
+func TestLocalNode_ApplyExecutionReportRoutesTerminalReportsThroughEngine(t *testing.T) {
+	t.Parallel()
+	cases := []domain.OrderStatus{
+		domain.OrderStatusRejected,
+		domain.OrderStatusRolledBack,
+		domain.OrderStatusCancelled,
+	}
+	for _, status := range cases {
+		t.Run(string(status), func(t *testing.T) {
+			t.Parallel()
+			eng := newFakeEngine()
+			n, st := newTestNode(t, eng)
+			ctx := context.Background()
+
+			const id domain.AccountID = "acc-1"
+			order := testOrder(t, st, id)
+			commission := &domain.Commission{Amount: "-0.25", Currency: "USD"}
+			if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+				Order:          order.ExternalID,
+				LeavesQuantity: "2",
+				Commission:     commission,
+				OrderStatus:    status,
+			}, testCaller); err != nil {
+				t.Fatalf("ApplyExecutionReport: %v", err)
+			}
+			if len(eng.execReportCalls) != 1 {
+				t.Fatalf("engine calls = %+v, want one", eng.execReportCalls)
+			}
+			detail, err := st.GetOrder(ctx, order.ExternalID)
+			if err != nil {
+				t.Fatalf("GetOrder: %v", err)
+			}
+			if detail.Order.Status != status || detail.Order.Leaves != "0" {
+				t.Fatalf("order = %+v, want %s with zero leaves", detail.Order, status)
+			}
+			if len(detail.Events) != 1 {
+				t.Fatalf("events = %+v, want one terminal event", detail.Events)
+			}
+			payload := detail.Events[0].Payload
+			if payload.LeavesQuantity != "2" {
+				t.Fatalf("event leaves = %q, want original 2", payload.LeavesQuantity)
+			}
+			if payload.Commission == nil || payload.Commission.Amount != "-0.25" ||
+				payload.Commission.Currency != "USD" {
+				t.Fatalf("event commission = %+v, want -0.25/USD", payload.Commission)
+			}
+			if payload.ExecutionReport == nil ||
+				payload.ExecutionReport.Commission == nil {
+				t.Fatalf("original report lost commission: %+v", payload.ExecutionReport)
+			}
+		})
+	}
+}
+
+func TestLocalNode_ApplyExecutionReportRegistersThirdCommissionAsset(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.execReportOutcomes = []engine.BalanceOutcome{{
+		Asset: "BNB",
+		Outcome: domain.AdjustmentOutcomeAccepted{
+			BalanceResult: "9.99",
+		},
+	}}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	order := testOrder(t, st, "acc-1")
+
+	if _, ok, err := st.GetAsset(ctx, "BNB"); err != nil || ok {
+		t.Fatalf("GetAsset(BNB) before report = ok %v err %v, want absent", ok, err)
+	}
+	if _, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), domain.ExecutionReportInput{
+		Order:          order.ExternalID,
+		LeavesQuantity: "2",
+		Commission:     &domain.Commission{Amount: "-0.01", Currency: "BNB"},
+		OrderStatus:    domain.OrderStatusCommitted,
+	}, testCaller); err != nil {
+		t.Fatalf("ApplyExecutionReport(fee only): %v", err)
+	}
+
+	if _, ok, err := st.GetAsset(ctx, "BNB"); err != nil || !ok {
+		t.Fatalf("GetAsset(BNB) after report = ok %v err %v, want registered", ok, err)
+	}
+	balance, ok, err := st.GetBalance(ctx, "acc-1", "BNB")
+	if err != nil || !ok {
+		t.Fatalf("GetBalance(BNB) = ok %v err %v, want persisted outcome", ok, err)
+	}
+	if balance.Available != "9.99" {
+		t.Fatalf("BNB available = %q, want 9.99", balance.Available)
+	}
+	if len(eng.execReportCalls) != 1 {
+		t.Fatalf("engine calls = %+v, want one", eng.execReportCalls)
+	}
+	got := eng.execReportCalls[0]
+	if got.FillQuantity != "" || got.FillPrice != "" || got.Commission == nil ||
+		got.Commission.Amount != "-0.01" || got.Commission.Currency != "BNB" {
+		t.Fatalf("engine fee-only report = %+v", got)
+	}
+	detail, err := st.GetOrder(ctx, order.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if len(detail.Trades) != 0 {
+		t.Fatalf("fee-only report trades = %+v, want none", detail.Trades)
+	}
+}
+
+func TestLocalNode_ApplyExecutionReportPersistsAuditSafeOriginalRequest(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	order := testOrder(t, st, "acc-1")
+	in := domain.ExecutionReportInput{
+		BaseAsset:      "caller-base",
+		QuoteAsset:     "caller-quote",
+		FillQuantity:   "1.25",
+		FillPrice:      "101.50",
+		LeavesQuantity: "2.75",
+		LockPrice:      "100.25",
+		Lock:           []byte{0x00, 0x7f, 0xff},
+		Commission:     &domain.Commission{Amount: "-0.01", Currency: "EUR"},
+		Order:          order.ExternalID,
+		Account:        "caller-account",
+		Side:           domain.OrderSideSell,
+		OrderStatus:    domain.OrderStatusPartiallyFilled,
+		Force:          true,
+	}
+	want := domain.ExecutionReportRequestFromInput(in)
+	if _, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), in, testCaller); err != nil {
+		t.Fatalf("ApplyExecutionReport: %v", err)
+	}
+	detail, err := st.GetOrder(ctx, order.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if len(detail.Events) != 1 || detail.Events[0].Type != domain.OrderEventFill {
+		t.Fatalf("events = %+v, want one fill event", detail.Events)
+	}
+	got := detail.Events[0].Payload.ExecutionReport
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("execution report snapshot = %+v, want %+v", got, want)
+	}
+	if len(eng.execReportCalls) != 1 ||
+		eng.execReportCalls[0].Account != order.Account ||
+		eng.execReportCalls[0].BaseAsset != order.BaseAsset ||
+		eng.execReportCalls[0].QuoteAsset != order.QuoteAsset ||
+		eng.execReportCalls[0].Side != order.Side ||
+		len(eng.execReportCalls[0].Lock) == 0 {
+		t.Fatalf("engine input was not enriched from order: %+v", eng.execReportCalls)
+	}
+}
+
+func TestLocalNode_ApplyExecutionReportPersistsWorkflowStatusesWithoutEngine(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
-		name            string
-		input           domain.ExecutionReportInput
-		orderStatus     domain.OrderStatus
-		heldIntent      bool
-		outcomes        []engine.BalanceOutcome
-		blocks          []domain.ExecutionAccountBlock
-		wantStatus      domain.OrderStatus
-		wantLeaves      string
-		wantEvent       domain.OrderEventType
-		wantTrade       bool
-		wantBlocked     bool
-		wantNoQuote     bool
-		wantCommit      int
-		wantRollback    int
-		wantIntentState domain.ReservationIntentState
+		status domain.OrderStatus
+		event  domain.OrderEventType
+	}{
+		{domain.OrderStatusSubmitted, domain.OrderEventSubmitted},
+		{domain.OrderStatusAccepted, domain.OrderEventPreTradeAccepted},
+		{domain.OrderStatusCommitted, domain.OrderEventCommitted},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.status), func(t *testing.T) {
+			t.Parallel()
+			eng := newFakeEngine()
+			n, st := newTestNode(t, eng)
+			ctx := context.Background()
+
+			const id domain.AccountID = "acc-1"
+			order := testOrder(t, st, id)
+			result, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+				Order:          order.ExternalID,
+				LeavesQuantity: "1.5",
+				OrderStatus:    tc.status,
+			}, testCaller)
+			if err != nil {
+				t.Fatalf("ApplyExecutionReport: %v", err)
+			}
+			if len(result.Blocks) != 0 || len(result.Outcomes) != 0 || result.Persistence != nil {
+				t.Fatalf("result = %+v, want no engine result", result)
+			}
+			if len(eng.execReportCalls) != 0 {
+				t.Fatalf("workflow status reached engine: %+v", eng.execReportCalls)
+			}
+			if len(eng.accountSyncCalls) != 1 || eng.accountSyncCalls[0] != id {
+				t.Fatalf("account sync calls = %+v, want [%s]", eng.accountSyncCalls, id)
+			}
+			detail, err := st.GetOrder(ctx, order.ExternalID)
+			if err != nil {
+				t.Fatalf("GetOrder: %v", err)
+			}
+			if detail.Order.Status != tc.status {
+				t.Fatalf("order status = %q, want %q", detail.Order.Status, tc.status)
+			}
+			if detail.Order.Leaves != "1.5" {
+				t.Fatalf("leaves = %q, want 1.5", detail.Order.Leaves)
+			}
+			if len(detail.Events) != 1 || detail.Events[0].Type != tc.event {
+				t.Fatalf("events = %+v, want [%s]", detail.Events, tc.event)
+			}
+		})
+	}
+}
+
+func TestLocalNode_ApplyExecutionReportRejectsWorkflowSettlementFields(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		in   domain.ExecutionReportInput
 	}{
 		{
-			name: "committed reject releases funds",
-			input: domain.ExecutionReportInput{
-				OrderStatus:    domain.OrderStatusRejected,
-				LeavesQuantity: "0",
+			name: "malformed leaves",
+			in: domain.ExecutionReportInput{
+				LeavesQuantity: "not-a-number",
+				OrderStatus:    domain.OrderStatusAccepted,
 			},
-			orderStatus: domain.OrderStatusCommitted,
-			outcomes: []engine.BalanceOutcome{{
-				Asset: "USD",
-				Outcome: domain.AdjustmentOutcomeAccepted{
-					BalanceResult: "10000",
-					HeldResult:    "0",
+		},
+		{
+			name: "negative leaves",
+			in: domain.ExecutionReportInput{
+				LeavesQuantity: "-1",
+				OrderStatus:    domain.OrderStatusCommitted,
+			},
+		},
+		{
+			name: "lock price",
+			in: domain.ExecutionReportInput{
+				LockPrice:   "400",
+				OrderStatus: domain.OrderStatusSubmitted,
+			},
+		},
+		{
+			name: "opaque lock",
+			in: domain.ExecutionReportInput{
+				Lock:        []byte{1},
+				OrderStatus: domain.OrderStatusAccepted,
+			},
+		},
+		{
+			name: "commission with lock price",
+			in: domain.ExecutionReportInput{
+				LeavesQuantity: "1",
+				LockPrice:      "400",
+				Commission: &domain.Commission{
+					Amount:   "-1",
+					Currency: "USD",
 				},
-			}},
-			wantStatus: domain.OrderStatusRejected,
-			wantLeaves: "0",
-			wantEvent:  domain.OrderEventPreTradeRejected,
+				OrderStatus: domain.OrderStatusCommitted,
+			},
 		},
 		{
-			name: "committed cancel releases funds",
-			input: domain.ExecutionReportInput{
-				OrderStatus:    domain.OrderStatusCancelled,
-				LeavesQuantity: "0",
+			name: "commission without leaves",
+			in: domain.ExecutionReportInput{
+				Commission:  &domain.Commission{Amount: "-1", Currency: "USD"},
+				OrderStatus: domain.OrderStatusCommitted,
 			},
-			orderStatus: domain.OrderStatusCommitted,
-			outcomes: []engine.BalanceOutcome{{
-				Asset: "USD",
-				Outcome: domain.AdjustmentOutcomeAccepted{
-					BalanceResult: "10000",
-					HeldResult:    "0",
-				},
-			}},
-			wantStatus: domain.OrderStatusCancelled,
-			wantLeaves: "0",
-			wantEvent:  domain.OrderEventCancelled,
-		},
-		{
-			name: "fill stays fill settlement",
-			input: domain.ExecutionReportInput{
-				FillQuantity:   "2",
-				FillPrice:      "400",
-				LeavesQuantity: "0",
-				OrderStatus:    domain.OrderStatusFilled,
-			},
-			orderStatus: domain.OrderStatusCommitted,
-			outcomes: []engine.BalanceOutcome{
-				{Asset: "AAPL", Outcome: domain.AdjustmentOutcomeAccepted{BalanceResult: "2"}},
-				{Asset: "USD", Outcome: domain.AdjustmentOutcomeAccepted{HeldDelta: "0"}},
-			},
-			wantStatus:  domain.OrderStatusFilled,
-			wantLeaves:  "0",
-			wantEvent:   domain.OrderEventFill,
-			wantTrade:   true,
-			wantNoQuote: true,
-		},
-		{
-			name: "engine block still applies balances",
-			input: domain.ExecutionReportInput{
-				OrderStatus:    domain.OrderStatusRejected,
-				LeavesQuantity: "0",
-			},
-			orderStatus: domain.OrderStatusCommitted,
-			outcomes: []engine.BalanceOutcome{{
-				Asset: "USD",
-				Outcome: domain.AdjustmentOutcomeAccepted{
-					BalanceResult: "10000",
-					HeldResult:    "0",
-				},
-			}},
-			blocks: []domain.ExecutionAccountBlock{{
-				Account: "acc-1",
-				Code:    "post_trade_reject",
-				Reason:  "engine rejected report",
-			}},
-			wantStatus:  domain.OrderStatusRejected,
-			wantLeaves:  "0",
-			wantEvent:   domain.OrderEventPreTradeRejected,
-			wantBlocked: true,
-		},
-		{
-			name: "accepted held fill marks reservation committed",
-			input: domain.ExecutionReportInput{
-				FillQuantity:   "2",
-				FillPrice:      "400",
-				LeavesQuantity: "0",
-				OrderStatus:    domain.OrderStatusFilled,
-			},
-			orderStatus: domain.OrderStatusAccepted,
-			heldIntent:  true,
-			outcomes: []engine.BalanceOutcome{
-				{Asset: "AAPL", Outcome: domain.AdjustmentOutcomeAccepted{BalanceResult: "2"}},
-				{Asset: "USD", Outcome: domain.AdjustmentOutcomeAccepted{BalanceResult: "10000", HeldResult: "0"}},
-			},
-			wantStatus:      domain.OrderStatusFilled,
-			wantLeaves:      "0",
-			wantEvent:       domain.OrderEventFill,
-			wantTrade:       true,
-			wantIntentState: domain.ReservationIntentStateCommitted,
-		},
-		{
-			name: "accepted held reject applies only report engine adjustments",
-			input: domain.ExecutionReportInput{
-				OrderStatus:    domain.OrderStatusRejected,
-				LeavesQuantity: "0",
-			},
-			orderStatus: domain.OrderStatusAccepted,
-			heldIntent:  true,
-			outcomes: []engine.BalanceOutcome{{
-				Asset: "USD",
-				Outcome: domain.AdjustmentOutcomeAccepted{
-					BalanceResult: "10000",
-					HeldResult:    "0",
-				},
-			}},
-			wantStatus:      domain.OrderStatusRejected,
-			wantLeaves:      "0",
-			wantEvent:       domain.OrderEventPreTradeRejected,
-			wantIntentState: domain.ReservationIntentStateRolledBack,
-		},
-		{
-			name: "empty engine response changes no balances",
-			input: domain.ExecutionReportInput{
-				OrderStatus:    domain.OrderStatusRejected,
-				LeavesQuantity: "0",
-			},
-			orderStatus:     domain.OrderStatusAccepted,
-			heldIntent:      true,
-			wantStatus:      domain.OrderStatusRejected,
-			wantLeaves:      "0",
-			wantEvent:       domain.OrderEventPreTradeRejected,
-			wantIntentState: domain.ReservationIntentStateRolledBack,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			eng := newFakeEngine()
-			eng.execReportOutcomes = tc.outcomes
-			eng.execReportBlocks = tc.blocks
 			n, st := newTestNode(t, eng)
 			ctx := context.Background()
-
-			const id domain.AccountID = "acc-1"
-			if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
-				t.Fatalf("CreateAccount: %v", err)
-			}
-			order, err := st.CreateOrder(ctx, domain.Order{
-				Account:     id,
-				Source:      domain.SourceAPI,
-				Principal:   "operator",
-				BaseAsset:   "AAPL",
-				QuoteAsset:  "USD",
-				Side:        domain.OrderSideBuy,
-				AmountKind:  domain.OrderAmountKindQuantity,
-				AmountValue: "2",
-				Price:       "400",
-				Lock:        persistedLock,
-				Status:      tc.orderStatus,
-			})
-			if err != nil {
-				t.Fatalf("CreateOrder: %v", err)
-			}
-			if tc.heldIntent {
-				if err := st.UpsertBalance(ctx, domain.Balance{
-					Account:   id,
-					Asset:     "USD",
-					Available: "8000",
-					Held:      "2000",
-				}); err != nil {
-					t.Fatalf("UpsertBalance: %v", err)
-				}
-				if err := st.UpsertReservationIntent(ctx, domain.ReservationIntent{
-					ApprovalID: "approval-1",
-					Order:      order.ExternalID,
-					Account:    order.Account,
-					ParamsJSON: `{"id":1}`,
-					IssuedAt:   time.Now().UTC(),
-					State:      domain.ReservationIntentStateHeld,
-				}); err != nil {
-					t.Fatalf("UpsertReservationIntent: %v", err)
-				}
-			}
-
-			in := tc.input
+			order := testOrder(t, st, "acc-1")
+			in := tc.in
 			in.Order = order.ExternalID
-			in.BaseAsset = "AAPL"
-			in.QuoteAsset = "USD"
-			in.Side = domain.OrderSideBuy
-			result, err := n.ApplyExecutionReport(ctx, testKey(id), in, testCaller)
-			if err != nil {
-				t.Fatalf("ApplyExecutionReport: %v", err)
-			}
-			if len(result.Blocks) != len(tc.blocks) || len(result.Outcomes) != len(tc.outcomes) {
-				t.Fatalf("result = %+v, want blocks=%d outcomes=%d",
-					result, len(tc.blocks), len(tc.outcomes))
-			}
-			if len(eng.execReportCalls) != 1 {
-				t.Fatalf("engine calls = %+v, want one", eng.execReportCalls)
-			}
-			if len(eng.rollbackHeldCalls) != tc.wantRollback {
-				t.Fatalf("rollback calls = %+v, want %d", eng.rollbackHeldCalls, tc.wantRollback)
-			}
-			if len(eng.commitHeldCalls) != tc.wantCommit {
-				t.Fatalf("commit calls = %+v, want %d", eng.commitHeldCalls, tc.wantCommit)
-			}
-			call := eng.execReportCalls[0]
-			if call.Order != order.ExternalID ||
-				call.Account != id ||
-				!slices.Equal(call.Lock, persistedLock) {
-				t.Fatalf("engine call = %+v, want order/account/persisted lock", call)
-			}
-			if call.LeavesQuantity != in.LeavesQuantity {
-				t.Fatalf("engine leaves = %q, want request leaves %q",
-					call.LeavesQuantity, in.LeavesQuantity)
-			}
 
+			if _, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), in, testCaller); !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("ApplyExecutionReport error = %v, want ErrInvalid", err)
+			}
+			if len(eng.execReportCalls) != 0 || len(eng.accountSyncCalls) != 0 {
+				t.Fatalf(
+					"invalid workflow report reached account pipeline: engine=%+v sync=%+v",
+					eng.execReportCalls,
+					eng.accountSyncCalls,
+				)
+			}
 			detail, err := st.GetOrder(ctx, order.ExternalID)
 			if err != nil {
 				t.Fatalf("GetOrder: %v", err)
 			}
-			if detail.Order.Status != tc.wantStatus {
-				t.Fatalf("order status = %q, want %q", detail.Order.Status, tc.wantStatus)
-			}
-			if detail.Order.Leaves != tc.wantLeaves {
-				t.Fatalf("leaves = %q, want %q", detail.Order.Leaves, tc.wantLeaves)
-			}
-			if len(detail.Events) == 0 || detail.Events[0].Type != tc.wantEvent {
-				t.Fatalf("events = %+v, want first %s", detail.Events, tc.wantEvent)
-			}
-			if gotTrade := len(detail.Trades) == 1; gotTrade != tc.wantTrade {
-				t.Fatalf("trade present = %v, want %v: %+v", gotTrade, tc.wantTrade, detail.Trades)
-			}
-			if tc.heldIntent {
-				intent, ok, err := st.GetReservationIntent(ctx, "approval-1")
-				if err != nil || !ok {
-					t.Fatalf("GetReservationIntent: %v ok=%v", err, ok)
-				}
-				if intent.State != tc.wantIntentState {
-					t.Fatalf("intent state = %q, want %q", intent.State, tc.wantIntentState)
-				}
-				types := eventTypes(t, st, order.ExternalID)
-				if len(types) != 1 || types[0] != tc.wantEvent {
-					t.Fatalf("events = %+v, want [%s]", types, tc.wantEvent)
-				}
-			}
-
-			quote, ok, err := st.GetBalance(ctx, id, "USD")
-			if err != nil {
-				t.Fatalf("GetBalance quote: %v", err)
-			}
-			if tc.wantNoQuote {
-				if ok {
-					t.Fatalf("quote balance = %+v, want missing", quote)
-				}
-				return
-			}
-			if !ok {
-				t.Fatalf("GetBalance quote ok=false")
-			}
-			if tc.heldIntent {
-				wantAvailable := "10000"
-				if len(tc.outcomes) == 0 {
-					wantAvailable = "8000"
-				}
-				if quote.Available != wantAvailable {
-					t.Fatalf("quote available = %q, want %s", quote.Available, wantAvailable)
-				}
-			} else if len(tc.outcomes) > 0 && tc.outcomes[0].Asset == "USD" &&
-				quote.Available != "10000" {
-				t.Fatalf("quote available = %q, want 10000", quote.Available)
-			}
-			if tc.heldIntent {
-				wantHeld := "0"
-				if len(tc.outcomes) == 0 {
-					wantHeld = "2000"
-				}
-				if quote.Held != wantHeld {
-					t.Fatalf("quote held = %q, want %s", quote.Held, wantHeld)
-				}
-			}
-			if tc.wantBlocked {
-				acc, ok, err := st.GetAccount(ctx, id)
-				if err != nil || !ok {
-					t.Fatalf("GetAccount: %v ok=%v", err, ok)
-				}
-				if !acc.Blocked || !strings.Contains(acc.BlockReason, "engine rejected report") {
-					t.Fatalf("account block = %+v, want engine reason", acc)
-				}
+			if detail.Order.Status != order.Status || len(detail.Events) != 0 {
+				t.Fatalf("invalid workflow report mutated order: %+v", detail)
 			}
 		})
-	}
-}
-
-func TestLocalNode_ApplyExecutionReportUsesTargetedReservationLookup(t *testing.T) {
-	t.Parallel()
-	eng := newFakeEngine()
-	baseStore := newMemoryStore("node.db")
-	ctx := context.Background()
-	if err := baseStore.Migrate(ctx); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
-	t.Cleanup(func() { _ = baseStore.Close() })
-
-	wrapped := newRealmWrapStore(baseStore, func(inner store.RealmStore) store.RealmStore {
-		return &noFullScanReservationRealm{RealmStore: inner}
-	})
-	n := newTestNodeWithStore(t, wrapped, eng)
-	realm := wrapped.realm.(*noFullScanReservationRealm)
-
-	const id domain.AccountID = "acc-1"
-	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
-		t.Fatalf("CreateAccount: %v", err)
-	}
-	order, err := realm.CreateOrder(ctx, domain.Order{
-		Account:     id,
-		Source:      domain.SourceAPI,
-		Principal:   "operator",
-		BaseAsset:   "AAPL",
-		QuoteAsset:  "USD",
-		Side:        domain.OrderSideBuy,
-		AmountKind:  domain.OrderAmountKindQuantity,
-		AmountValue: "2",
-		Price:       "400",
-		Status:      domain.OrderStatusAccepted,
-	})
-	if err != nil {
-		t.Fatalf("CreateOrder: %v", err)
-	}
-	if err := realm.UpsertReservationIntent(ctx, domain.ReservationIntent{
-		ApprovalID: "approval-1",
-		Order:      order.ExternalID,
-		Account:    order.Account,
-		ParamsJSON: `{"id":1}`,
-		IssuedAt:   time.Now().UTC(),
-		State:      domain.ReservationIntentStateHeld,
-	}); err != nil {
-		t.Fatalf("UpsertReservationIntent: %v", err)
-	}
-
-	realm.forbidFullScans()
-	if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
-		Order:          order.ExternalID,
-		OrderStatus:    domain.OrderStatusCancelled,
-		LeavesQuantity: "0",
-	}, testCaller); err != nil {
-		t.Fatalf("ApplyExecutionReport: %v", err)
-	}
-	targeted, fullScans := realm.lookupCounts()
-	if targeted != 1 || fullScans != 0 {
-		t.Fatalf("reservation lookups targeted=%d fullScans=%d, want 1/0", targeted, fullScans)
-	}
-	if len(eng.rollbackHeldCalls) != 0 || len(eng.commitHeldCalls) != 0 {
-		t.Fatalf("commit=%+v rollback=%+v, want no explicit resolve calls",
-			eng.commitHeldCalls, eng.rollbackHeldCalls)
 	}
 }
 
@@ -1134,6 +1250,80 @@ func TestLocalNode_ApplyExecutionReportRejectsInvalidStatusBeforeEngine(t *testi
 	}
 	if detail.Order.Status != order.Status {
 		t.Fatalf("order status = %q, want unchanged %q", detail.Order.Status, order.Status)
+	}
+}
+
+func TestLocalNode_ApplyExecutionReportRejectsEngineReportWithoutLeaves(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		in   domain.ExecutionReportInput
+	}{
+		{
+			name: "fill",
+			in: domain.ExecutionReportInput{
+				FillQuantity: "1",
+				FillPrice:    "400",
+				OrderStatus:  domain.OrderStatusAccepted,
+			},
+		},
+		{
+			name: "terminal",
+			in: domain.ExecutionReportInput{
+				OrderStatus: domain.OrderStatusCancelled,
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			eng := newFakeEngine()
+			n, st := newTestNode(t, eng)
+			ctx := context.Background()
+
+			order := testOrder(t, st, "acc-1")
+			in := tc.in
+			in.Order = order.ExternalID
+			_, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), in, testCaller)
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("ApplyExecutionReport = %v, want invalid", err)
+			}
+			if len(eng.execReportCalls) != 0 {
+				t.Fatalf("report without leaves reached engine: %+v", eng.execReportCalls)
+			}
+		})
+	}
+}
+
+func TestLocalNode_ApplyExecutionReportRoutesTerminalFillThroughEngine(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	const id domain.AccountID = "acc-1"
+	order := testOrder(t, st, id)
+	_, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+		Order:          order.ExternalID,
+		FillQuantity:   "1",
+		FillPrice:      "400",
+		LeavesQuantity: "1",
+		OrderStatus:    domain.OrderStatusCancelled,
+	}, testCaller)
+	if err != nil {
+		t.Fatalf("ApplyExecutionReport terminal fill: %v", err)
+	}
+	if len(eng.execReportCalls) != 1 {
+		t.Fatalf("engine calls = %+v, want one", eng.execReportCalls)
+	}
+	detail, err := st.GetOrder(ctx, order.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if len(detail.Events) != 2 ||
+		detail.Events[0].Type != domain.OrderEventFill ||
+		detail.Events[1].Type != domain.OrderEventCancelled {
+		t.Fatalf("events = %+v, want [fill cancelled]", detail.Events)
 	}
 }
 

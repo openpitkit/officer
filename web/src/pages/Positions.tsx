@@ -116,6 +116,7 @@ import { absoluteAppUrl, shareUrl } from "@/lib/shareLink";
 import { ACTIVE_STATUS_QUERY } from "@/lib/orderStatus";
 import { DEFAULT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from "@/lib/useDebounce";
 import { operatorOptions } from "@/lib/dataControlLabels";
+import { isDecimalRangeValid } from "@/lib/numberStep";
 import { cn } from "@/lib/utils";
 
 // ---------------------------------------------------------------------------
@@ -2367,6 +2368,21 @@ function AdjustDialog({
       (hasValue(incomingBounds.lower) || hasValue(incomingBounds.upper)));
   const hasModalChanges =
     hasModalAdjustmentChange || hasValue(realizedPnl);
+  const amountFieldValid = (field: AmountFieldState) =>
+    !field.enabled || !hasValue(field.value) || isDecimal(field.value);
+  const boundsFieldValid = (field: BoundsFieldState) =>
+    !field.enabled ||
+    ((!hasValue(field.lower) || isDecimal(field.lower)) &&
+      (!hasValue(field.upper) || isDecimal(field.upper)));
+  const modalFieldsValid =
+    (!hasValue(avgPrice) || isDecimal(avgPrice)) &&
+    (!hasValue(realizedPnl) || isDecimal(realizedPnl)) &&
+    amountFieldValid(balance) &&
+    amountFieldValid(held) &&
+    amountFieldValid(incoming) &&
+    boundsFieldValid(balanceBounds) &&
+    boundsFieldValid(heldBounds) &&
+    boundsFieldValid(incomingBounds);
 
   const resetAllFields = () => {
     setAccount("");
@@ -2398,7 +2414,7 @@ function AdjustDialog({
       setError(t("panel.noChangesError"));
       return;
     }
-    if (realizedPnl.trim() && !isDecimal(realizedPnl)) {
+    if (!modalFieldsValid) {
       setError(t("panel.invalidDecimal"));
       return;
     }
@@ -2587,7 +2603,7 @@ function AdjustDialog({
           <Button
             size="sm"
             onClick={() => void submit()}
-            disabled={busy || !hasModalChanges}
+            disabled={busy || !hasModalChanges || !modalFieldsValid}
           >
             {t("dialog.footer.submit")}
           </Button>
@@ -3195,6 +3211,11 @@ export function Positions() {
     setBalancePage(0);
     setMoreFiltersOpen(false);
   };
+  const advancedNumericFiltersValid = NUMERIC_RANGE_KEYS.every((key) => {
+    const draft = balanceRangeDrafts[key];
+    const operator = draft.mode === "all" ? "eq" : draft.mode;
+    return isDecimalRangeValid(operator, draft.min, draft.max);
+  });
   const filterDraftChanged =
     accountDraft.trim() !== accountFilter ||
     groupDraft.trim() !== groupFilter ||
@@ -3862,7 +3883,11 @@ export function Positions() {
             >
               {tc("filters.removeAdvanced")}
             </Button>
-            <Button type="button" onClick={applyAdvancedFilters}>
+            <Button
+              type="button"
+              onClick={applyAdvancedFilters}
+              disabled={!advancedNumericFiltersValid}
+            >
               {tc("filters.applyAdvanced")}
             </Button>
           </DialogFooter>

@@ -141,13 +141,13 @@ func (f *fakeSource) SubmitOrderToken(
 }
 
 func (f *fakeSource) ConfirmExecution(
-	_ context.Context, _ string, _ string, _ bool,
+	_ context.Context, _ string, _ string,
 ) (domain.Order, Attestation, error) {
 	return domain.Order{}, Attestation{}, nil
 }
 
 func (f *fakeSource) CancelOrder(
-	_ context.Context, _ string, _, _ string, _ bool,
+	_ context.Context, _ string, _, _ string,
 ) (domain.Order, Attestation, error) {
 	return domain.Order{}, Attestation{}, nil
 }
@@ -698,12 +698,12 @@ func (c *captureNSource) SubmitOrderToken(
 	return SubmitOrderTokenResult{}, nil
 }
 func (c *captureNSource) ConfirmExecution(
-	context.Context, string, string, bool,
+	context.Context, string, string,
 ) (domain.Order, Attestation, error) {
 	return domain.Order{}, Attestation{}, nil
 }
 func (c *captureNSource) CancelOrder(
-	context.Context, string, string, string, bool,
+	context.Context, string, string, string,
 ) (domain.Order, Attestation, error) {
 	return domain.Order{}, Attestation{}, nil
 }
@@ -730,7 +730,7 @@ func TestGetOrderHappyPath(t *testing.T) {
 				AmountValue: "0.5",
 				Price:       "50000",
 				Status:      domain.OrderStatusFilled,
-				// Lock is the opaque reservation blob; it must never reach the wire.
+				// Lock is the opaque pre-trade blob; it must never reach the wire.
 				Lock: []byte{0x01, 0x02, 0x03, 0x04},
 			},
 			Events: []domain.OrderEvent{

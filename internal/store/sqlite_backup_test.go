@@ -1240,9 +1240,8 @@ var backupExportedTables = map[string]bool{
 // backupExcludedTables is the explicit allowlist of user tables the backup does
 // NOT carry, with the reason each is intentionally absent.
 var backupExcludedTables = map[string]bool{
-	"realm":              true, // realm identity row, re-established by the target connector
-	"schema_migration":   true, // migration bookkeeping, owned by Migrate
-	"reservation_intent": true, // ephemeral pre-trade reservations, not durable state
+	"realm":            true, // realm identity row, re-established by the target connector
+	"schema_migration": true, // migration bookkeeping, owned by Migrate
 }
 
 // TestBackupCompleteness introspects sqlite_master for every user table and

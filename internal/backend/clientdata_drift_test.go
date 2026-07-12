@@ -219,13 +219,6 @@ var clientDataAllowlist = []clientDataAllow{
 		Why:     "orders are export-only business CSV rows and omit opaque engine locks",
 	},
 	{
-		Surface: driftSchema,
-		Entity:  "reservation_intent",
-		Field:   "*",
-		Kind:    "internal",
-		Why:     "held reservation intents are transient engine coordination state",
-	},
-	{
 		Surface: driftBackup,
 		Entity:  "adjustments",
 		Field:   "adjustments.Accepted",
@@ -315,6 +308,13 @@ var clientDataAllowlist = []clientDataAllow{
 		Field:   "order-events.Payload.Commission",
 		Kind:    "optional-sentinel",
 		Why:     "event payload variants populate only fields owned by their event type",
+	},
+	{
+		Surface: driftBackup,
+		Entity:  "order-events",
+		Field:   "order-events.Payload.ExecutionReport",
+		Kind:    "optional-sentinel",
+		Why:     "only execution-report events carry the audit-safe original request",
 	},
 	{
 		Surface: driftBackup,
@@ -608,7 +608,6 @@ var expectedSchemaTableNames = []string{
 	"order_record",
 	"principal",
 	"realm",
-	"reservation_intent",
 	"signing_config",
 	"signing_key",
 	"trade",
@@ -616,8 +615,7 @@ var expectedSchemaTableNames = []string{
 }
 
 var nonClientDataSchemaTables = map[string]string{
-	"realm":              "single-row realm identity metadata, not portable realm contents",
-	"reservation_intent": "transient held-approval coordination state",
+	"realm": "single-row realm identity metadata, not portable realm contents",
 }
 
 // schemaClientTables is the canonical client-data contract. Each SQLite column
@@ -910,7 +908,6 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 			"setting_value": "Value",
 		},
 	},
-	"reservation_intent": {},
 }
 
 var businessCSVColumnSpecs = buildBusinessCSVColumnSpecs()
@@ -1288,6 +1285,23 @@ func seedClientDataDriftRealm(
 			LeavesQuantity: "4.25",
 			OrderStatus:    string(domain.OrderStatusFilled),
 			Commission:     &domain.Commission{Amount: "-0.30", Currency: "USDT"},
+			ExecutionReport: domain.ExecutionReportRequestFromInput(
+				domain.ExecutionReportInput{
+					BaseAsset:      "SENTINEL_BASE",
+					QuoteAsset:     "SENTINEL_QUOTE",
+					FillQuantity:   "7.00",
+					FillPrice:      "151.25",
+					LeavesQuantity: "4.25",
+					LockPrice:      "151.00",
+					Lock:           []byte{0x04, 0x05, 0x06},
+					Commission:     &domain.Commission{Amount: "-0.30", Currency: "USDT"},
+					Order:          order.ExternalID,
+					Account:        "sentinel-account",
+					Side:           domain.OrderSideBuy,
+					OrderStatus:    domain.OrderStatusFilled,
+					Force:          true,
+				},
+			),
 		},
 	})
 	if err != nil {

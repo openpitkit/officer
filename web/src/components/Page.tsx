@@ -30,9 +30,9 @@ export function Page({
   children: ReactNode;
 }) {
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       <TopBar title={title} actions={actions} />
-      <main className="flex-1 overflow-y-auto bg-bg px-[var(--dens-page-pad)] py-[calc(var(--dens-page-pad)*0.75)]">
+      <main className="min-h-0 flex-1 overflow-y-auto bg-bg px-[var(--dens-page-pad)] py-[calc(var(--dens-page-pad)*0.75)]">
         <div className="mx-auto w-full max-w-[var(--content-max)] space-y-[var(--dens-row-gap)]">
           <PendingRestartBanner />
           {children}

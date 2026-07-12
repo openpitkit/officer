@@ -19,15 +19,12 @@ package node
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"go.openpit.dev/officer/framework/domain"
-	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/store"
 )
 
@@ -849,146 +846,5 @@ func TestLocalNode_ApplyAdjustmentRejectsEmptyAssetOnRealizedPnlOnly(t *testing.
 	}
 	if len(balances) != 0 {
 		t.Fatalf("balances = %+v, want no row for empty asset", balances)
-	}
-}
-
-func TestLocalNode_CancelHeldFallbackReleasesPersistedHold(t *testing.T) {
-	t.Parallel()
-	eng := newFakeEngine()
-	eng.rollbackErr = fmt.Errorf("engine: reservation %q: %w", "approval-1", domain.ErrNotFound)
-	eng.adjustmentAccepted = &domain.AdjustmentOutcomeAccepted{
-		BalanceResult: "10000",
-		HeldResult:    "0",
-	}
-	n, st := newTestNode(t, eng)
-	ctx := context.Background()
-	seedTestAccount(t, st, "acc-1")
-	order, err := st.CreateOrder(ctx, domain.Order{
-		Account:     "acc-1",
-		Source:      domain.SourceAPI,
-		Principal:   "operator",
-		BaseAsset:   "AAPL",
-		QuoteAsset:  "USD",
-		Side:        domain.OrderSideBuy,
-		AmountKind:  domain.OrderAmountKindQuantity,
-		AmountValue: "20",
-		Price:       "100",
-		Status:      domain.OrderStatusAccepted,
-	})
-	if err != nil {
-		t.Fatalf("CreateOrder: %v", err)
-	}
-	if err := st.UpsertBalance(ctx, domain.Balance{
-		Account: "acc-1", Asset: "USD", Available: "8000", Held: "2000",
-	}); err != nil {
-		t.Fatalf("UpsertBalance: %v", err)
-	}
-	outcomes := []engine.BalanceOutcome{{
-		Asset: "USD",
-		Outcome: domain.AdjustmentOutcomeAccepted{
-			BalanceDelta: "-2000",
-			HeldDelta:    "2000",
-		},
-	}}
-	payload, err := json.Marshal(reservationIntentPayload{
-		Order:    order,
-		Outcomes: outcomes,
-	})
-	if err != nil {
-		t.Fatalf("Marshal payload: %v", err)
-	}
-	if err := st.UpsertReservationIntent(ctx, domain.ReservationIntent{
-		ApprovalID: "approval-1",
-		Order:      order.ExternalID,
-		Account:    order.Account,
-		ParamsJSON: string(payload),
-		IssuedAt:   time.Now().UTC(),
-		State:      domain.ReservationIntentStateHeld,
-	}); err != nil {
-		t.Fatalf("UpsertReservationIntent: %v", err)
-	}
-
-	cancelled, _, err := n.CancelHeld(ctx, order.ExternalID, "approval-1", testCaller, false)
-	if err != nil {
-		t.Fatalf("CancelHeld: %v", err)
-	}
-	if cancelled.Status != domain.OrderStatusCancelled {
-		t.Fatalf("order status = %q, want cancelled", cancelled.Status)
-	}
-	balance, ok, err := st.GetBalance(ctx, "acc-1", "USD")
-	if err != nil || !ok {
-		t.Fatalf("GetBalance: %v ok=%v", err, ok)
-	}
-	if balance.Available != "10000" || balance.Held != "0" {
-		t.Fatalf("balance = %+v, want available=10000 held=0", balance)
-	}
-	if len(eng.adjustmentCalls) != 1 {
-		t.Fatalf("engine adjustment calls = %d, want 1", len(eng.adjustmentCalls))
-	}
-	req := eng.adjustmentCalls[0].req
-	if req.Balance == nil || req.Balance.Value != "2000" ||
-		req.Held == nil || req.Held.Value != "-2000" {
-		t.Fatalf("release request = %+v, want balance +2000 held -2000", req)
-	}
-	open, err := st.ListOpenReservationIntents(ctx)
-	if err != nil {
-		t.Fatalf("ListOpenReservationIntents: %v", err)
-	}
-	if len(open) != 0 {
-		t.Fatalf("open intents = %+v, want none", open)
-	}
-}
-
-func TestDecodeReservationIntentPayloadWrapperWorks(t *testing.T) {
-	t.Parallel()
-	order := domain.Order{
-		ExternalID: externalID(t, "held-order-id"),
-		Account:    "acc-1",
-		BaseAsset:  "AAPL",
-		QuoteAsset: "USD",
-	}
-	outcomes := []engine.BalanceOutcome{{
-		Asset: "USD",
-		Outcome: domain.AdjustmentOutcomeAccepted{
-			BalanceDelta: "-100",
-			HeldDelta:    "100",
-		},
-	}}
-	raw, err := json.Marshal(reservationIntentPayload{Order: order, Outcomes: outcomes})
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
-
-	gotOrder, gotOutcomes, err := decodeReservationIntentPayload(string(raw))
-	if err != nil {
-		t.Fatalf("decodeReservationIntentPayload: %v", err)
-	}
-	if gotOrder.ExternalID != order.ExternalID || gotOrder.Account != order.Account {
-		t.Fatalf("order = %+v, want %+v", gotOrder, order)
-	}
-	if len(gotOutcomes) != 1 || gotOutcomes[0].Asset != "USD" {
-		t.Fatalf("outcomes = %+v, want one USD outcome", gotOutcomes)
-	}
-}
-
-func TestDecodeReservationIntentPayloadRejectsBareOrder(t *testing.T) {
-	t.Parallel()
-	order := domain.Order{
-		ExternalID: externalID(t, "bare-order-id"),
-		Account:    "acc-1",
-		BaseAsset:  "AAPL",
-		QuoteAsset: "USD",
-	}
-	raw, err := json.Marshal(order)
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
-
-	_, _, err = decodeReservationIntentPayload(string(raw))
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("decode bare order error = %v, want ErrInvalid", err)
-	}
-	if err == nil || !strings.Contains(err.Error(), "malformed reservation intent payload") {
-		t.Fatalf("decode bare order error = %v, want malformed payload message", err)
 	}
 }

@@ -1121,41 +1121,6 @@ type RealmStore interface {
 	// backups. An empty store returns a non-nil empty slice.
 	ListUserSettings(ctx context.Context) ([]domain.UserSetting, error)
 
-	// --- Reservation intents (approval_id is the row's own UUID handle) ---
-
-	// UpsertReservationIntent inserts or replaces a reservation intent row.
-	UpsertReservationIntent(ctx context.Context, intent domain.ReservationIntent) error
-
-	// GetReservationIntent returns the reservation intent for approvalID
-	// regardless of state; found is false when absent.
-	GetReservationIntent(
-		ctx context.Context, approvalID string,
-	) (domain.ReservationIntent, bool, error)
-
-	// GetOpenReservationIntentByOrder returns the held intent linked to order.
-	// found is false when no held reservation remains for the order.
-	GetOpenReservationIntentByOrder(
-		ctx context.Context, order domain.ExternalID,
-	) (domain.ReservationIntent, bool, error)
-
-	// ListOpenReservationIntents returns all intents whose state is held.
-	ListOpenReservationIntents(ctx context.Context) ([]domain.ReservationIntent, error)
-
-	// SetReservationIntentState updates the state of the identified intent.
-	// Returns domain.ErrNotFound when absent.
-	SetReservationIntentState(
-		ctx context.Context, approvalID string, state domain.ReservationIntentState,
-	) error
-
-	// ResolveOrderReservation resolves one reservation atomically in a single
-	// transaction: the intent state flip, the order status advance, and the
-	// lifecycle event(s) commit or roll back together. The order status UPDATE is
-	// guarded by AllowedFrom; a current status outside the guard yields
-	// domain.ErrConflict with nothing written, and a missing order yields
-	// domain.ErrNotFound. A missing intent row is tolerated as a no-op; a zero
-	// Order skips the order/event writes and only flips the intent.
-	ResolveOrderReservation(ctx context.Context, r domain.ReservationResolution) error
-
 	// --- Business CSV ---
 
 	// ApplyBusinessCSVImport persists all selected business CSV rows and their

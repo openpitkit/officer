@@ -141,24 +141,12 @@ func (e *fakeEngine) SubmitOrder(context.Context, domain.Order) (engine.OrderRes
 	return engine.OrderResult{}, nil
 }
 
-func (e *fakeEngine) ReserveHold(context.Context, domain.Order) (engine.HoldResult, error) {
-	return engine.HoldResult{}, nil
-}
-
-func (e *fakeEngine) CommitHeld(context.Context, string) error { return nil }
-
-func (e *fakeEngine) RollbackHeld(context.Context, string) error { return nil }
-
 func (e *fakeEngine) SubmitImmediate(
 	context.Context,
 	domain.Order,
 ) (engine.ImmediateResult, error) {
 	return engine.ImmediateResult{}, nil
 }
-
-func (e *fakeEngine) SetReservationStore(engine.ReservationStore) {}
-
-func (e *fakeEngine) ReconcileOrphans(context.Context) (int, error) { return 0, nil }
 
 func (e *fakeEngine) RunAccountSynchronized(
 	_ context.Context, _ domain.AccountID, fn func(engine.AccountLane) error,

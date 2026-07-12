@@ -22,9 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/store"
@@ -228,116 +226,5 @@ func TestLocalNode_ImportPositionSnapshotAutoCreatesUnknownAsset(t *testing.T) {
 		rows[0].Asset != "GOLD" ||
 		!strings.Contains(rows[0].Detail, "auto-created asset GOLD by position snapshot import") {
 		t.Fatalf("create-asset audit rows = %+v, want snapshot auto-create", rows)
-	}
-}
-
-// TestLocalNode_ConcurrentResolveNoDeadlockSingleResolution drives ConfirmHeld
-// and CancelHeld concurrently on sibling orders. Both paths take
-// n.beginMutation, so they serialize on the node's mutate lock rather than
-// deadlock: if a rollback path ever re-entered that lock (e.g. the engine
-// regaining a node reference and calling back through CancelHeld), the two
-// goroutines would hang. The test bounds the fan-out with a timeout and asserts
-// each order's reservation resolves exactly once through the engine.
-func TestLocalNode_ConcurrentResolveNoDeadlockSingleResolution(t *testing.T) {
-	t.Parallel()
-	eng := newFakeEngine()
-	n, st := newTestNode(t, eng)
-	ctx := context.Background()
-
-	// Two committed-buy orders, each with its own held reservation intent. One is
-	// confirmed, the sibling is cancelled, concurrently.
-	type held struct {
-		order      domain.Order
-		approvalID string
-	}
-	mk := func(i int) held {
-		account := domain.AccountID(fmt.Sprintf("acc-%d", i))
-		seedTestAccount(t, st, account)
-		order, err := st.CreateOrder(ctx, domain.Order{
-			Account:     account,
-			Source:      domain.SourceAPI,
-			Principal:   "operator",
-			BaseAsset:   "AAPL",
-			QuoteAsset:  "USD",
-			Side:        domain.OrderSideBuy,
-			AmountKind:  domain.OrderAmountKindQuantity,
-			AmountValue: "1",
-			Price:       "100",
-			Status:      domain.OrderStatusAccepted,
-		})
-		if err != nil {
-			t.Fatalf("CreateOrder %d: %v", i, err)
-		}
-		approval := fmt.Sprintf("approval-%d", i)
-		if err := st.UpsertReservationIntent(ctx, domain.ReservationIntent{
-			ApprovalID: approval,
-			Order:      order.ExternalID,
-			Account:    order.Account,
-			ParamsJSON: `{"id":1}`,
-			IssuedAt:   time.Now().UTC(),
-			State:      domain.ReservationIntentStateHeld,
-		}); err != nil {
-			t.Fatalf("UpsertReservationIntent %d: %v", i, err)
-		}
-		return held{order: order, approvalID: approval}
-	}
-	confirmTarget := mk(1)
-	cancelTarget := mk(2)
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-	errs := make([]error, 2)
-	go func() {
-		defer wg.Done()
-		_, _, errs[0] = n.ConfirmHeld(
-			ctx, confirmTarget.order.ExternalID, confirmTarget.approvalID, testCaller, false)
-	}()
-	go func() {
-		defer wg.Done()
-		_, _, errs[1] = n.CancelHeld(
-			ctx, cancelTarget.order.ExternalID, cancelTarget.approvalID, testCaller, false)
-	}()
-
-	done := make(chan struct{})
-	go func() { wg.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("concurrent ConfirmHeld/CancelHeld deadlocked")
-	}
-
-	if errs[0] != nil {
-		t.Fatalf("ConfirmHeld: %v", errs[0])
-	}
-	if errs[1] != nil {
-		t.Fatalf("CancelHeld: %v", errs[1])
-	}
-
-	// Each reservation resolved exactly once through the engine, on the right path.
-	eng.resolveMu.Lock()
-	commits := append([]string(nil), eng.commitHeldCalls...)
-	rollbacks := append([]string(nil), eng.rollbackHeldCalls...)
-	eng.resolveMu.Unlock()
-	if len(commits) != 1 || commits[0] != confirmTarget.approvalID {
-		t.Fatalf("commit calls = %+v, want exactly [%s]", commits, confirmTarget.approvalID)
-	}
-	if len(rollbacks) != 1 || rollbacks[0] != cancelTarget.approvalID {
-		t.Fatalf("rollback calls = %+v, want exactly [%s]", rollbacks, cancelTarget.approvalID)
-	}
-
-	// Durable resolution: committed and cancelled statuses landed in the store.
-	confirmed, err := st.GetOrder(ctx, confirmTarget.order.ExternalID)
-	if err != nil {
-		t.Fatalf("GetOrder confirmed: %v", err)
-	}
-	if confirmed.Order.Status != domain.OrderStatusCommitted {
-		t.Fatalf("confirmed status = %q, want committed", confirmed.Order.Status)
-	}
-	cancelled, err := st.GetOrder(ctx, cancelTarget.order.ExternalID)
-	if err != nil {
-		t.Fatalf("GetOrder cancelled: %v", err)
-	}
-	if cancelled.Order.Status != domain.OrderStatusCancelled {
-		t.Fatalf("cancelled status = %q, want cancelled", cancelled.Order.Status)
 	}
 }

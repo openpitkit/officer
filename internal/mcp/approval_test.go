@@ -58,14 +58,12 @@ type submitCall struct {
 type confirmCall struct {
 	orderExternalID string
 	token           string
-	force           bool
 }
 
 type cancelCallRecord struct {
 	orderExternalID string
 	token           string
 	reason          string
-	force           bool
 }
 
 func (f *approvalFakeSource) SubmitOrderToken(
@@ -76,24 +74,22 @@ func (f *approvalFakeSource) SubmitOrderToken(
 }
 
 func (f *approvalFakeSource) ConfirmExecution(
-	_ context.Context, orderExternalID string, token string, force bool,
+	_ context.Context, orderExternalID string, token string,
 ) (domain.Order, Attestation, error) {
 	f.confirmCalls = append(f.confirmCalls, confirmCall{
 		orderExternalID: orderExternalID,
 		token:           token,
-		force:           force,
 	})
 	return f.confirmOrder, f.confirmAtt, f.confirmErr
 }
 
 func (f *approvalFakeSource) CancelOrder(
-	_ context.Context, orderExternalID string, token, reason string, force bool,
+	_ context.Context, orderExternalID string, token, reason string,
 ) (domain.Order, Attestation, error) {
 	f.cancelCalls = append(f.cancelCalls, cancelCallRecord{
 		orderExternalID: orderExternalID,
 		token:           token,
 		reason:          reason,
-		force:           force,
 	})
 	return f.cancelOrder, f.cancelAtt, f.cancelErr
 }
@@ -451,7 +447,7 @@ func TestConfirmExecutionHappyPath(t *testing.T) {
 	}
 
 	res := callConfirmExecution(t, src, confirmExecutionInput{
-		OrderExternalID: testOrderEID, Token: " tok-abc ", Force: true,
+		OrderExternalID: testOrderEID, Token: " tok-abc ",
 	})
 
 	if res.IsError {
@@ -475,9 +471,6 @@ func TestConfirmExecutionHappyPath(t *testing.T) {
 	}
 	if src.confirmCalls[0].token != "tok-abc" {
 		t.Errorf("token: want tok-abc got %q", src.confirmCalls[0].token)
-	}
-	if !src.confirmCalls[0].force {
-		t.Error("force: want true")
 	}
 }
 
@@ -516,7 +509,7 @@ func TestCancelHappyPath(t *testing.T) {
 	}
 
 	res := callCancel(t, src, cancelInput{
-		OrderExternalID: testOrderEID, Token: " tok-xyz ", Reason: "operator", Force: true,
+		OrderExternalID: testOrderEID, Token: " tok-xyz ", Reason: "operator",
 	})
 
 	if res.IsError {
@@ -543,9 +536,6 @@ func TestCancelHappyPath(t *testing.T) {
 	}
 	if c.token != "tok-xyz" {
 		t.Errorf("token: want tok-xyz got %q", c.token)
-	}
-	if !c.force {
-		t.Error("force: want true")
 	}
 }
 

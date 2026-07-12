@@ -391,17 +391,6 @@ type Node interface {
 	// lifecycle events and final status, and audits the action.
 	SubmitOrder(ctx context.Context, key Key, o domain.Order, caller domain.Caller) (domain.Order, error)
 
-	// SubmitHold records the order, runs the engine pre-trade keeping the
-	// reservation held, persists the accept/reject lifecycle, and returns the
-	// recorded order with the engine hold result. On accept the held amount stays
-	// reserved on engine storage until ConfirmHeld or CancelHeld resolves it; the
-	// order status is left accepted. On reject the order is recorded rejected and
-	// the result carries the engine rejects. It does not audit; the backend audits
-	// approval_issued.
-	SubmitHold(
-		ctx context.Context, key Key, o domain.Order, caller domain.Caller,
-	) (domain.Order, engine.HoldResult, error)
-
 	// SubmitImmediate records the order, runs the engine pre-trade and, on accept,
 	// commits and settles the fill in the same engine call at the captured lock
 	// price, persists the lifecycle (filled on accept, rejected on reject), and
@@ -411,47 +400,26 @@ type Node interface {
 		ctx context.Context, key Key, o domain.Order, caller domain.Caller,
 	) (domain.Order, engine.ImmediateResult, error)
 
-	// ConfirmHeld commits the held reservation identified by approvalID through the
-	// engine, then atomically flips the intent, advances the order to committed,
-	// and records the reservation_committed event in one store transaction (the
-	// backend audits approval_confirmed). The order is addressed by its opaque
-	// external id. The order status advance is guarded against the accepted state: a
-	// fill that already moved the order to a terminal status (e.g. filled) yields
-	// domain.ErrConflict and nothing is written, preserving the fill. A second
-	// confirm on an already-resolved reservation returns domain.ErrConflict; an
-	// unknown reservation returns domain.ErrNotFound. The returned bool reports
-	// whether force actually bypassed a terminal-order guard, so the backend
-	// audits forced=true only on a real bypass.
-	ConfirmHeld(
-		ctx context.Context, order domain.ExternalID,
-		approvalID string, caller domain.Caller, force bool,
-	) (domain.Order, bool, error)
+	// ConfirmOrder adds one idempotent history event for an untouched workflow
+	// order. It never changes engine state, balances, locks, leaves, or status.
+	// Once any execution report has been recorded it returns
+	// domain.ErrExecutionReportRequired.
+	ConfirmOrder(
+		ctx context.Context, order domain.ExternalID, caller domain.Caller,
+	) (domain.Order, error)
 
-	// CancelHeld rolls back the held reservation identified by approvalID through
-	// the engine, then atomically flips the intent, advances the order to
-	// cancelled, and records the reservation_rolled_back and cancelled events in
-	// one store transaction (the backend audits approval_cancelled). The order is
-	// addressed by its opaque external id. The order status advance is guarded
-	// against the accepted state: a late fill that already moved the order to filled
-	// yields domain.ErrConflict and nothing is written, so the fill is never
-	// clobbered. It is tolerant of an already-resolved reservation in the engine
-	// (idempotent native rollback). The returned bool reports whether force
-	// actually bypassed a terminal-order guard, so the backend audits forced=true
-	// only on a real bypass.
-	CancelHeld(
-		ctx context.Context, order domain.ExternalID,
-		approvalID string, caller domain.Caller, force bool,
-	) (domain.Order, bool, error)
+	// CancelOrder synthesizes a terminal cancellation execution report for an
+	// untouched workflow order using its stored lock and leaves. The report runs
+	// through the engine and normal settlement persistence. Once any execution
+	// report has been recorded it returns domain.ErrExecutionReportRequired.
+	CancelOrder(
+		ctx context.Context, order domain.ExternalID, caller domain.Caller,
+	) (domain.Order, engine.ExecutionReportResult, error)
 
-	// ReconcileOrphans reports persisted reservation intents still held after
-	// restart. Held balance effects are durable, and confirm/cancel can fall
-	// back to the persisted intent when the native handle is gone. It returns the
-	// number found.
-	ReconcileOrphans(ctx context.Context) (int, error)
-
-	// ApplyExecutionReport applies every report through the engine, then persists
-	// the engine-returned patch in one atomic store transaction; observational
-	// block-audit rows are written post-commit, and the action is audited.
+	// ApplyExecutionReport serializes reports on the account pipeline. Reports
+	// carrying a fill, targeting a terminal status, or carrying a commission are
+	// applied through the engine; all other non-terminal reports write their
+	// workflow transition directly to the store. The action is audited.
 	ApplyExecutionReport(
 		ctx context.Context, key Key, in domain.ExecutionReportInput, caller domain.Caller,
 	) (engine.ExecutionReportResult, error)

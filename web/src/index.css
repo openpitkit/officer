@@ -326,6 +326,13 @@ Please see https://openpit.dev and the OWNERS file for details.
     border-color: var(--border);
   }
 
+  html,
+  body,
+  #root {
+    height: 100%;
+    overflow: hidden;
+  }
+
   html {
     font-family:
       "JetBrains Mono", ui-monospace, "Cascadia Code", "Fira Code", monospace;
@@ -337,7 +344,6 @@ Please see https://openpit.dev and the OWNERS file for details.
   body {
     background: var(--bg);
     color: var(--text);
-    min-height: 100vh;
     font-size: 14px;
   }
 

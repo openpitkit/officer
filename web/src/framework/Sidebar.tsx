@@ -94,7 +94,7 @@ export function Sidebar() {
       <aside
         className={cn(
           "fixed inset-y-0 left-0 z-50 w-[var(--sidebar-width)] shrink-0 transition-transform md:static md:translate-x-0",
-          "flex flex-col border-r border-border bg-surface",
+          "flex min-h-0 flex-col border-r border-border bg-surface",
           open ? "translate-x-0" : "-translate-x-full",
         )}
       >
@@ -110,7 +110,7 @@ export function Sidebar() {
           </div>
         </div>
 
-        <nav className="flex flex-1 flex-col gap-0.5 p-[var(--dens-sidebar-pad)]">
+        <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-[var(--dens-sidebar-pad)]">
           {getNav("primary").map((entry) =>
             entry.permission && !hasPermission(entry.permission)
               ? null
