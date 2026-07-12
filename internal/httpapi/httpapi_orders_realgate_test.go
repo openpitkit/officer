@@ -32,7 +32,7 @@ import (
 	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/framework/store"
 	appsigning "go.openpit.dev/officer/internal/signing"
-	appstore "go.openpit.dev/officer/internal/store"
+	"go.openpit.dev/officer/internal/store/sqlite"
 )
 
 // TestApplyExecutionReport_RealTerminalGate drives the execution-report endpoint
@@ -255,9 +255,9 @@ func TestApplyExecutionReport_RealCommissionSignedAndReproduced(t *testing.T) {
 func newRealServiceRouter(t *testing.T) (http.Handler, store.RealmStore) {
 	t.Helper()
 	ctx := context.Background()
-	st, err := appstore.NewSQLiteStore(t.TempDir() + "/httpapi-realgate.db")
+	st, err := sqlite.New(t.TempDir() + "/httpapi-realgate.db")
 	if err != nil {
-		t.Fatalf("NewSQLiteStore: %v", err)
+		t.Fatalf("sqlite.New: %v", err)
 	}
 	if err := st.Migrate(ctx); err != nil {
 		t.Fatalf("Migrate: %v", err)
@@ -320,8 +320,10 @@ type realGateEngine struct {
 func (e *realGateEngine) Version() string      { return "fake" }
 func (e *realGateEngine) BuildProfile() string { return "test" }
 func (e *realGateEngine) Running() bool        { return e.running }
-func (e *realGateEngine) ConfigurePolicy(context.Context, string, engine.LimitSet) error {
-	return nil
+func (e *realGateEngine) ConfigurePolicy(
+	context.Context, string, engine.LimitSet,
+) (engine.PolicyConfigurationResult, error) {
+	return engine.PolicyConfigurationResult{}, nil
 }
 func (e *realGateEngine) BlockAccount(context.Context, domain.AccountID, string) error { return nil }
 func (e *realGateEngine) UnblockAccount(context.Context, domain.AccountID) error       { return nil }
@@ -347,6 +349,11 @@ func (e *realGateEngine) SetAccountCurrency(context.Context, domain.AccountID, s
 }
 func (e *realGateEngine) ClearAccountCurrency(context.Context, domain.AccountID) error {
 	return nil
+}
+func (e *realGateEngine) SetAccountPnl(
+	context.Context, domain.AccountID, string,
+) ([]domain.AccountBlock, error) {
+	return nil, nil
 }
 func (e *realGateEngine) SubmitImmediate(
 	context.Context, domain.Order,

@@ -36,7 +36,7 @@ import (
 	appmarketdata "go.openpit.dev/officer/internal/marketdata"
 	"go.openpit.dev/officer/internal/mcp/tools"
 	appsigning "go.openpit.dev/officer/internal/signing"
-	appstore "go.openpit.dev/officer/internal/store"
+	"go.openpit.dev/officer/internal/store/sqlite"
 )
 
 // Register populates b with the open Officer concrete implementations.
@@ -45,7 +45,7 @@ func Register(b *frameworkapp.Builder) {
 		return
 	}
 	b.SetStoreFactory(func(path string) (store.Store, error) {
-		return appstore.NewSQLiteStore(path)
+		return sqlite.New(path)
 	})
 	b.SetEngineBuildFactory(func(cfg frameworkapp.Config) engine.BuildFunc {
 		return func(snap engine.Snapshot) (engine.Engine, error) {

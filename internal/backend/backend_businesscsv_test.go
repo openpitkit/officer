@@ -32,7 +32,7 @@ import (
 	"go.openpit.dev/officer/framework/node"
 	"go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/internal/backend"
-	appstore "go.openpit.dev/officer/internal/store"
+	"go.openpit.dev/officer/internal/store/sqlite"
 )
 
 func mdID(label string) domain.ExternalID {
@@ -642,9 +642,9 @@ func newBusinessCSVRealService(
 ) (*backend.Service, store.RealmStore, *businessCSVRoundTripEngine) {
 	t.Helper()
 	ctx := context.Background()
-	st, err := appstore.NewSQLiteStore(t.TempDir() + "/business-csv.db")
+	st, err := sqlite.New(t.TempDir() + "/business-csv.db")
 	if err != nil {
-		t.Fatalf("NewSQLiteStore: %v", err)
+		t.Fatalf("sqlite.New: %v", err)
 	}
 	if err := st.Migrate(ctx); err != nil {
 		t.Fatalf("Migrate: %v", err)
@@ -745,8 +745,8 @@ func (e *businessCSVRoundTripEngine) BuildProfile() string { return "test" }
 func (e *businessCSVRoundTripEngine) Running() bool        { return e.running }
 func (e *businessCSVRoundTripEngine) ConfigurePolicy(
 	context.Context, string, engine.LimitSet,
-) error {
-	return nil
+) (engine.PolicyConfigurationResult, error) {
+	return engine.PolicyConfigurationResult{}, nil
 }
 func (e *businessCSVRoundTripEngine) BlockAccount(context.Context, domain.AccountID, string) error {
 	return nil
@@ -803,6 +803,11 @@ func (e *businessCSVRoundTripEngine) ClearAccountCurrency(
 	context.Context, domain.AccountID,
 ) error {
 	return nil
+}
+func (e *businessCSVRoundTripEngine) SetAccountPnl(
+	context.Context, domain.AccountID, string,
+) ([]domain.AccountBlock, error) {
+	return nil, nil
 }
 func (e *businessCSVRoundTripEngine) SubmitImmediate(
 	context.Context, domain.Order,
@@ -923,5 +928,61 @@ func TestService_BusinessCSVExportAccountGroupFilterPresence(t *testing.T) {
 				t.Fatalf("auditCalls = %+v, want detail %q", fn.auditCalls, tc.wantDetail)
 			}
 		})
+	}
+}
+
+// A pnl_halt_reason the engine cannot map would fail the engine rebuild on the
+// next start, and CSV import performs no rebuild that would catch it - so the
+// import boundary must reject it before it reaches the store.
+func TestService_BusinessCSVImportRejectsUnmappablePnlHaltReason(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc, st, _ := newBusinessCSVRealService(t)
+
+	body := []byte(
+		"code,title,group_code,currency,pnl,pnl_halt_reason,notes,blocked,block_reason\n" +
+			"acc-bad,,,,0,missing_fxx,,false,\n",
+	)
+	_, err := svc.ImportBusinessCSV(ctx, backend.BusinessCSVImportRequest{
+		Entity:         businesscsv.EntityAccounts,
+		Delimiter:      businesscsv.DelimiterComma,
+		Filename:       "accounts.csv",
+		Payload:        body,
+		ConflictPolicy: businesscsv.ConflictReplace,
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("ImportBusinessCSV error = %v, want invalid", err)
+	}
+	if _, ok, err := st.GetAccount(ctx, "acc-bad"); err != nil || ok {
+		t.Fatalf("GetAccount acc-bad after failed import: %v ok=%v, want absent", err, ok)
+	}
+}
+
+// A known reason must still import, so the guard does not reject valid engine
+// halts round-tripped through CSV.
+func TestService_BusinessCSVImportAcceptsKnownPnlHaltReason(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc, st, _ := newBusinessCSVRealService(t)
+
+	body := []byte(
+		"code,title,group_code,currency,pnl,pnl_halt_reason,notes,blocked,block_reason\n" +
+			"acc-ok,,,,0,missing_fx,,false,\n",
+	)
+	if _, err := svc.ImportBusinessCSV(ctx, backend.BusinessCSVImportRequest{
+		Entity:         businesscsv.EntityAccounts,
+		Delimiter:      businesscsv.DelimiterComma,
+		Filename:       "accounts.csv",
+		Payload:        body,
+		ConflictPolicy: businesscsv.ConflictReplace,
+	}); err != nil {
+		t.Fatalf("ImportBusinessCSV error = %v, want nil", err)
+	}
+	account, ok, err := st.GetAccount(ctx, "acc-ok")
+	if err != nil || !ok {
+		t.Fatalf("GetAccount acc-ok: %v ok=%v, want present", err, ok)
+	}
+	if account.PnlHaltReason != domain.PnlHaltReasonMissingFx {
+		t.Fatalf("PnlHaltReason = %q, want %q", account.PnlHaltReason, domain.PnlHaltReasonMissingFx)
 	}
 }

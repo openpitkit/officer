@@ -157,6 +157,7 @@ const accounts: Account[] = [
     blockReason: "",
     group: "",
     notes: "",
+    pnlHaltReason: "",
   },
   {
     code: "desk-alpha",
@@ -165,6 +166,7 @@ const accounts: Account[] = [
     blockReason: "",
     group: "equity-desks",
     notes: "",
+    pnlHaltReason: "",
   },
 ];
 
@@ -264,6 +266,7 @@ beforeEach(async () => {
     currencyOrigin: "account",
     currencyCascade: { account: "EUR", group: "", default: "" },
     notes: "",
+        pnlHaltReason: "",
   });
   setGroupCurrencyMock.mockResolvedValue({
     code: "equity-desks",
@@ -355,6 +358,7 @@ describe("CreateAccountDialog", () => {
       currencyOrigin: "",
       currencyCascade: { account: "", group: "", default: "" },
       notes: "",
+        pnlHaltReason: "",
     });
     const onCreated = renderDialog();
 
@@ -390,6 +394,7 @@ describe("CreateAccountDialog", () => {
       currencyOrigin: "",
       currencyCascade: { account: "", group: "", default: "" },
       notes: "",
+        pnlHaltReason: "",
     });
     setAccountGroupMock.mockResolvedValue({
       code: "acc-spx",
@@ -402,6 +407,7 @@ describe("CreateAccountDialog", () => {
       currencyOrigin: "",
       currencyCascade: { account: "", group: "", default: "" },
       notes: "",
+        pnlHaltReason: "",
     });
     renderDialog();
 
@@ -583,6 +589,7 @@ describe("Accounts business CSV", () => {
         blockReason: "",
         group: "",
         notes: "",
+        pnlHaltReason: "",
       })),
       {
         code: "desk-alpha",
@@ -591,6 +598,7 @@ describe("Accounts business CSV", () => {
         blockReason: "",
         group: "equity-desks",
         notes: "",
+        pnlHaltReason: "",
       },
     ];
     useAccountsMock.mockImplementation((filters) =>
@@ -681,6 +689,7 @@ describe("Accounts business CSV", () => {
         currencyOrigin: "account",
         currencyCascade: { account: "USD", group: "", default: "" },
         notes: "",
+        pnlHaltReason: "",
         positionCount: 0,
       },
     ]));
@@ -725,6 +734,7 @@ describe("Accounts business CSV", () => {
         currencyOrigin: "account",
         currencyCascade: { account: "USD", group: "", default: "" },
         notes: "",
+        pnlHaltReason: "",
         positionCount: 0,
       },
     ]));
@@ -774,6 +784,7 @@ describe("Accounts business CSV", () => {
         currencyOrigin: "account",
         currencyCascade: { account: "USD", group: "", default: "" },
         notes: "",
+        pnlHaltReason: "",
         positionCount: 0,
       },
     ]));
@@ -857,6 +868,7 @@ describe("Accounts business CSV", () => {
           blockReason: "",
           group: "",
           notes: "",
+          pnlHaltReason: "",
         },
       ]),
     );
@@ -871,6 +883,109 @@ describe("Accounts business CSV", () => {
     ).toHaveLength(1);
   });
 
+  it("renders exact account PnL values without a currency suffix", () => {
+    useAccountsMock.mockReturnValue(
+      readyPage([
+        {
+          code: "pnl-positive",
+          title: "Positive PnL",
+          blocked: false,
+          blockReason: "",
+          group: "",
+          effectiveCurrency: "USD",
+          notes: "",
+          pnl: "123.4500",
+          pnlHaltReason: "",
+        },
+        {
+          code: "pnl-negative",
+          title: "Negative PnL",
+          blocked: false,
+          blockReason: "",
+          group: "",
+          effectiveCurrency: "USD",
+          notes: "",
+          pnl: "-0.1250",
+          pnlHaltReason: "",
+        },
+        {
+          code: "pnl-zero",
+          title: "Zero PnL",
+          blocked: false,
+          blockReason: "",
+          group: "",
+          effectiveCurrency: "USD",
+          notes: "",
+          pnl: "0.0000",
+          pnlHaltReason: "",
+        },
+        {
+          code: "pnl-empty",
+          title: "Empty PnL",
+          blocked: false,
+          blockReason: "",
+          group: "",
+          effectiveCurrency: "USD",
+          notes: "",
+          pnl: "",
+          pnlHaltReason: "",
+        },
+        {
+          code: "pnl-halted-known",
+          title: "Known halt",
+          blocked: false,
+          blockReason: "",
+          group: "",
+          effectiveCurrency: "USD",
+          notes: "",
+          pnl: "",
+          pnlHaltReason: "missing_cost_basis",
+        },
+        {
+          code: "pnl-halted-unknown",
+          title: "Unknown halt",
+          blocked: false,
+          blockReason: "",
+          group: "",
+          effectiveCurrency: "USD",
+          notes: "",
+          pnl: "",
+          pnlHaltReason: "future_reason",
+        },
+      ]),
+    );
+    renderAccounts();
+
+    const row = (title: string): HTMLElement => {
+      const result = screen.getByText(title).closest("tr");
+      expect(result).not.toBeNull();
+      return result as HTMLElement;
+    };
+    const cell = (title: string): HTMLElement =>
+      within(row(title)).getAllByRole("cell")[3];
+
+    expect(cell("Positive PnL")).toHaveTextContent("123.4500");
+    expect(cell("Positive PnL")).toHaveClass("text-[var(--pnl-pos)]");
+    expect(cell("Positive PnL")).not.toHaveTextContent("USD");
+    expect(cell("Negative PnL")).toHaveTextContent("-0.1250");
+    expect(cell("Negative PnL")).toHaveClass("text-[var(--pnl-neg)]");
+    expect(cell("Zero PnL")).toHaveTextContent("0.0000");
+    expect(cell("Zero PnL")).toHaveClass("text-[var(--pnl-flat)]");
+    expect(cell("Empty PnL")).toHaveTextContent("—");
+    expect(cell("Empty PnL")).toHaveClass("text-[var(--pnl-flat)]");
+    expect(within(row("Empty PnL")).queryByRole("note")).not.toBeInTheDocument();
+
+    const knownWarning = within(row("Known halt")).getByRole("note", {
+      name: /position cost basis is unavailable/i,
+    });
+    expect(knownWarning).toHaveAttribute("tabindex", "0");
+    expect(
+      within(row("Unknown halt")).getByRole("note", {
+        name: /stopped by the engine/i,
+      }),
+    ).toBeInTheDocument();
+  });
+
   it("loads blocked-account audit with the account block action", async () => {
     const user = userEvent.setup();
     useAccountsMock.mockReturnValue(
@@ -882,6 +997,7 @@ describe("Accounts business CSV", () => {
           blockReason: "Trading halt",
           group: "",
           notes: "",
+          pnlHaltReason: "",
         },
       ]),
     );
@@ -925,6 +1041,7 @@ describe("Accounts business CSV", () => {
           blockReason: "Trading halt",
           group: "",
           notes: "",
+          pnlHaltReason: "",
         },
       ]),
     );
@@ -965,6 +1082,7 @@ describe("Accounts business CSV", () => {
           blockReason: "Trading halt",
           group: "",
           notes: "",
+          pnlHaltReason: "",
         },
       ]),
     );
@@ -1418,7 +1536,9 @@ describe("Accounts business CSV", () => {
       name: /edit group currency/i,
     });
     expect(
-      within(dialog).getByText(/member accounts with balance or P&L rows/i),
+      within(dialog).getByText(
+        /member accounts holding non-zero positions or P&L/i,
+      ),
     ).toBeInTheDocument();
     const currency = within(dialog).getByLabelText(/^group currency$/i);
     await user.clear(currency);
@@ -1483,6 +1603,7 @@ describe("Accounts business CSV", () => {
         currencyOrigin: "group",
         currencyCascade: { account: "", group: "USD", default: "" },
         notes: "",
+        pnlHaltReason: "",
       },
     ]));
 

@@ -156,6 +156,14 @@ func NewLocalNode(
 		return nil, nil, fmt.Errorf("audit build: %w", err)
 	}
 
+	// Seeding the snapshot's persisted P&L can kill-switch an account before the
+	// node serves anything (an accumulated loss restored past its barrier blocks
+	// on sight). Mirror those blocks before the node is handed out.
+	if err := n.mirrorSeedAccountBlocks(ctx, eng); err != nil {
+		eng.Stop()
+		return nil, nil, fmt.Errorf("mirror seed account blocks: %w", err)
+	}
+
 	return n, eng, nil
 }
 
@@ -496,6 +504,33 @@ func (n *localNode) ensureOperatorPrincipal(
 	return nil
 }
 
+// seedAccountBlockSource is the optional capability an engine adapter exposes to
+// report the account blocks the engine latched while the handle was seeded from
+// persisted state: a restored P&L that is halted, or that already breaches its
+// barrier, kill-switches the account as it is seeded. engine.BuildFunc hands the
+// node only the Engine, so the blocks ride on the fresh handle and the node
+// drains them here. An adapter that cannot block while seeding just omits it.
+type seedAccountBlockSource interface {
+	SeedAccountBlocks() []domain.AccountBlock
+}
+
+// mirrorSeedAccountBlocks persists and audits the blocks eng latched while being
+// seeded. The engine already rejects every order for these accounts, so the
+// store must record the block before any lane runs, or the account reads as
+// tradable while every order dies with no audit row naming the cause. Callers
+// hold the restart or live-policy gate, so no lane can observe the gap.
+func (n *localNode) mirrorSeedAccountBlocks(
+	ctx context.Context, eng engine.Engine,
+) error {
+	source, ok := eng.(seedAccountBlockSource)
+	if !ok {
+		return nil
+	}
+	return n.mirrorPolicyConfigurationBlocks(
+		ctx, domain.PolicySpotFundsPnlBoundsKillSwitch, source.SeedAccountBlocks(),
+	)
+}
+
 func (n *localNode) rebuildEngineFromStore(ctx context.Context) error {
 	snap, _, err := n.loadSnapshot(ctx)
 	if err != nil {
@@ -509,7 +544,9 @@ func (n *localNode) rebuildEngineFromStore(ctx context.Context) error {
 		return fmt.Errorf("build restored engine returned nil")
 	}
 	n.swapEngine(next)
-	return nil
+	// The rebuilt handle is already live, so its seed blocks are mirrored after
+	// the swap: the store must agree with the engine that is now serving.
+	return n.mirrorSeedAccountBlocks(ctx, next)
 }
 
 func (n *localNode) swapEngine(next engine.Engine) {
@@ -577,6 +614,34 @@ func (n *localNode) beginMutation() error {
 
 func (n *localNode) endMutation() {
 	n.mutate.Unlock()
+}
+
+// beginLivePolicyConfiguration excludes account lanes while a policy update is
+// applied and its engine-reported account blocks are mirrored into the store.
+// Unlike beginEngineRestart it keeps the live engine in place and therefore
+// does not set restarting.
+func (n *localNode) beginLivePolicyConfiguration() error {
+	n.laneGate.Lock()
+	if n.restarting.Load() {
+		n.laneGate.Unlock()
+		return fmt.Errorf(
+			"engine restart in progress; mutating requests are rejected until rebuild completes: %w",
+			domain.ErrEngineRestarting)
+	}
+	n.mutate.Lock()
+	if n.restarting.Load() {
+		n.mutate.Unlock()
+		n.laneGate.Unlock()
+		return fmt.Errorf(
+			"engine restart in progress; mutating requests are rejected until rebuild completes: %w",
+			domain.ErrEngineRestarting)
+	}
+	return nil
+}
+
+func (n *localNode) endLivePolicyConfiguration() {
+	n.mutate.Unlock()
+	n.laneGate.Unlock()
 }
 
 func (n *localNode) beginEngineRestart() error {

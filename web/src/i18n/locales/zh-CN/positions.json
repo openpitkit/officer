@@ -57,11 +57,20 @@
       "updated": "此列显示该余额行最后更新时间。",
       "adjust": "此列包含打开持仓调整的行操作。"
     },
+    "pnlHalt": {
+      "missingFx": "PnL 计算已停止：缺少所需的 FX 报价。",
+      "missingAccountCurrency": "PnL 计算已停止：账户货币不可用。",
+      "missingInitialPnl": "PnL 计算已停止：缺少权威初始 PnL 值。",
+      "missingCostBasis": "PnL 计算已停止：缺少持仓成本基础。",
+      "arithmeticOverflow": "PnL 计算已停止：精确运算超出支持的数值范围。",
+      "unknown": "引擎已停止 PnL 计算。"
+    },
     "empty": {
       "title": "暂无余额",
       "hint": "使用「调整」功能为账户和资产设定现货资金余额。"
     },
-    "activeOrdersTitle": "{{account}} 的活跃订单"
+    "activeOrdersTitle": "{{account}} 的活跃订单",
+    "ordersTitle": "打开 {{account}} 的订单"
   },
   "inline": {
     "apply": "应用",

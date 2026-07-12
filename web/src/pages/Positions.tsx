@@ -16,9 +16,11 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import type { TFunction } from "i18next";
 import {
   ChevronDown,
   ChevronRight,
+  CircleAlert,
   Coins,
   Download,
   Plus,
@@ -164,6 +166,12 @@ function activeOrdersHref(account: string): string {
   query.set("account", account);
   query.set("status", ACTIVE_STATUS_QUERY);
   return absoluteAppUrl(`/orders?${query.toString()}`);
+}
+
+function ordersFilterHref(account: string): string {
+  const query = new URLSearchParams();
+  query.set("account", account);
+  return shareUrl("/orders", query);
 }
 
 /** Split a localized timestamp so the date and time are rendered as
@@ -445,6 +453,24 @@ function adjustmentResultParts(
     return { delta: "", result };
   }
   return result;
+}
+
+function pnlHaltText(t: TFunction, reason: string): string | null {
+  if (!reason) return null;
+  switch (reason) {
+    case "missing_fx":
+      return t("balances.pnlHalt.missingFx");
+    case "missing_account_currency":
+      return t("balances.pnlHalt.missingAccountCurrency");
+    case "missing_initial_pnl":
+      return t("balances.pnlHalt.missingInitialPnl");
+    case "missing_cost_basis":
+      return t("balances.pnlHalt.missingCostBasis");
+    case "arithmetic_overflow":
+      return t("balances.pnlHalt.arithmeticOverflow");
+    default:
+      return t("balances.pnlHalt.unknown");
+  }
 }
 
 type BalanceRangeKey =
@@ -1580,6 +1606,9 @@ function BalanceEditRow({
   const { t: tc } = useTranslation("common");
   const navigate = useNavigate();
   const b = balance;
+  const haltText = pnlHaltText(t, b.realizedPnlHaltReason);
+  const openOrders = () =>
+    navigate(`/orders?account=${encodeURIComponent(b.account)}`);
   const openActiveOrders = () =>
     navigate(
       `/orders?account=${encodeURIComponent(b.account)}` +
@@ -1601,12 +1630,18 @@ function BalanceEditRow({
               copyTitle={t("common:rowActions.copyId")}
               copiedTitle={t("common:rowActions.copiedId")}
             />
-            <span className="ml-auto flex shrink-0 items-center">
+            <span className="ml-auto flex shrink-0 items-center gap-1">
               <FilterByButton
                 size={28}
                 title={tc("rowActions.filterByTitle", { field: b.account })}
                 href={positionsFilterHref({ account: b.account })}
                 onClick={() => onFilterAccount(b.account)}
+              />
+              <OrdersButton
+                size={28}
+                title={t("balances.ordersTitle", { account: b.account })}
+                href={ordersFilterHref(b.account)}
+                onClick={openOrders}
               />
             </span>
           </div>
@@ -1665,7 +1700,19 @@ function BalanceEditRow({
         <TableCell
           className={cn("nums text-right text-xs", pnlClass(b.realizedPnl))}
         >
-          {dash(b.realizedPnl)}
+          {haltText ? (
+            <span
+              className="inline-flex text-[var(--warn)]"
+              title={haltText}
+              aria-label={haltText}
+              role="note"
+              tabIndex={0}
+            >
+              <CircleAlert className="size-4" aria-hidden="true" />
+            </span>
+          ) : (
+            dash(b.realizedPnl)
+          )}
         </TableCell>
         <TableCell className="text-xs text-muted-lt">
           <SplitTime iso={b.updatedAt} />
@@ -2008,6 +2055,10 @@ function AdjustOutcomeView({ adjustment }: AdjustOutcome) {
     );
   }
   if (accepted) {
+    const haltText = pnlHaltText(
+      t,
+      accepted.realizedPnlHaltReason ?? "",
+    );
     const rows: {
       label: string;
       request: AdjustmentAmount | undefined;
@@ -2048,8 +2099,22 @@ function AdjustOutcomeView({ adjustment }: AdjustOutcome) {
       });
     }
     return (
-      <div className="rounded-card border border-[var(--ok)] bg-[var(--ok-dim)] p-3 text-xs">
-        <p className="font-medium text-[var(--ok)]">{t("dialog.outcome.acceptedTitle")}</p>
+      <div
+        className={cn(
+          "rounded-card border p-3 text-xs",
+          haltText
+            ? "border-[var(--warn)] bg-[var(--warn-dim)]"
+            : "border-[var(--ok)] bg-[var(--ok-dim)]",
+        )}
+      >
+        <p
+          className={cn(
+            "font-medium",
+            haltText ? "text-[var(--warn)]" : "text-[var(--ok)]",
+          )}
+        >
+          {t("dialog.outcome.acceptedTitle")}
+        </p>
         {rows.length > 0 && (
           <div className="mt-2 space-y-1">
             {rows.map((r) => (
@@ -2061,6 +2126,15 @@ function AdjustOutcomeView({ adjustment }: AdjustOutcome) {
               </div>
             ))}
           </div>
+        )}
+        {haltText && (
+          <p
+            className="mt-2 text-[var(--warn)]"
+            aria-label={haltText}
+            role="note"
+          >
+            {haltText}
+          </p>
         )}
       </div>
     );
@@ -2628,6 +2702,10 @@ function HistoryRowOutcome({ adj }: { adj: Adjustment }) {
     );
   }
   if (accepted) {
+    const haltText = pnlHaltText(
+      t,
+      accepted.realizedPnlHaltReason ?? "",
+    );
     const parts: string[] = [];
     if (accepted.balanceDelta || accepted.balanceResult) {
       parts.push(
@@ -2666,8 +2744,13 @@ function HistoryRowOutcome({ adj }: { adj: Adjustment }) {
         )}`,
       );
     }
+    if (haltText) {
+      parts.push(haltText);
+    }
     return (
-      <span className="nums text-text">
+      <span
+        className={haltText ? "text-[var(--warn)]" : "nums text-text"}
+      >
         {parts.length > 0 ? parts.join(" · ") : "—"}
       </span>
     );
@@ -2690,6 +2773,7 @@ function HistoryRow({
   const { t: tc } = useTranslation();
   const isRejected = !!adj.rejected;
   const isAccepted = !!adj.accepted && !isRejected;
+  const hasPnlHalt = !!adj.accepted?.realizedPnlHaltReason;
 
   const req = adj.request;
   const reqParts: string[] = [];
@@ -2769,7 +2853,9 @@ function HistoryRow({
         {isRejected ? (
           <Badge variant="danger">{t("history.status.rejected")}</Badge>
         ) : isAccepted ? (
-          <Badge variant="ok">{t("history.status.accepted")}</Badge>
+          <Badge variant={hasPnlHalt ? "warn" : "ok"}>
+            {t("history.status.accepted")}
+          </Badge>
         ) : (
           <Badge variant="neutral">{adj.status}</Badge>
         )}

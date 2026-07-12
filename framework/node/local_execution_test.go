@@ -62,8 +62,9 @@ func TestLocalNode_ApplyExecutionReportPersistsBothLegs(t *testing.T) {
 		{
 			Asset: "USD",
 			Outcome: domain.AdjustmentOutcomeAccepted{
-				BalanceResult:    "800",
-				RealizedPnlDelta: "12.50",
+				BalanceResult:     "800",
+				RealizedPnlDelta:  "12.50",
+				RealizedPnlResult: "12.5",
 			},
 		},
 	}
@@ -71,7 +72,9 @@ func TestLocalNode_ApplyExecutionReportPersistsBothLegs(t *testing.T) {
 	ctx := context.Background()
 
 	const id domain.AccountID = "acc-1"
-	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
+	if _, err := n.CreateAccount(ctx, domain.Account{
+		Code: id, Currency: "USD",
+	}, testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 	order := testOrder(t, st, id)
@@ -106,6 +109,50 @@ func TestLocalNode_ApplyExecutionReportPersistsBothLegs(t *testing.T) {
 	}
 	if quote.RealizedPnl != "12.5" {
 		t.Fatalf("quote realized_pnl = %q, want 12.5", quote.RealizedPnl)
+	}
+	account, ok, err := st.GetAccount(ctx, id)
+	if err != nil || !ok {
+		t.Fatalf("GetAccount: ok=%v err=%v", ok, err)
+	}
+	if account.Pnl != "0" {
+		t.Fatalf("account pnl = %q, want unchanged 0 without an account PnL outcome", account.Pnl)
+	}
+}
+
+func TestLocalNode_ApplyExecutionReportLeavesAccountPnlUnchangedWithoutMatch(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.execReportOutcomes = []engine.BalanceOutcome{{
+		Asset: "AAPL",
+		Outcome: domain.AdjustmentOutcomeAccepted{
+			BalanceResult: "2", RealizedPnlResult: "99",
+		},
+	}}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, domain.Account{
+		Code: id, Currency: "USD", Pnl: "7",
+	}, testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	order := testOrder(t, st, id)
+	if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+		Order:          order.ExternalID,
+		FillQuantity:   "2",
+		FillPrice:      "400",
+		LeavesQuantity: "0",
+		LockPrice:      "400",
+		OrderStatus:    domain.OrderStatusFilled,
+	}, testCaller); err != nil {
+		t.Fatalf("ApplyExecutionReport: %v", err)
+	}
+	account, ok, err := st.GetAccount(ctx, id)
+	if err != nil || !ok {
+		t.Fatalf("GetAccount: ok=%v err=%v", ok, err)
+	}
+	if account.Pnl != "7" {
+		t.Fatalf("account pnl = %q, want unchanged 7", account.Pnl)
 	}
 }
 

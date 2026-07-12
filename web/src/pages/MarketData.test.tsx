@@ -59,6 +59,7 @@ const fetchMarketDataMock = vi.fn();
 const upsertMock = vi.fn();
 const updateSettingsMock = vi.fn();
 const deleteInstrumentMock = vi.fn();
+const deleteInstanceMock = vi.fn();
 const searchMock = vi.fn();
 
 function renderMarketDataPage() {
@@ -77,6 +78,7 @@ function renderMarketDataPage() {
     </I18nextProvider>,
     {
       api: {
+        deleteMarketDataInstance: deleteInstanceMock,
         deleteMarketDataInstrument: deleteInstrumentMock,
         fetchMarketData: fetchMarketDataMock,
         searchMarketDataSymbols: searchMock,
@@ -160,6 +162,7 @@ beforeEach(async () => {
   upsertMock.mockResolvedValue(status(ibInstance()));
   updateSettingsMock.mockResolvedValue(status(ibInstance()));
   deleteInstrumentMock.mockResolvedValue(undefined);
+  deleteInstanceMock.mockResolvedValue(undefined);
   searchMock.mockResolvedValue({ supported: true, matches: [] });
 });
 
@@ -1179,5 +1182,42 @@ describe("provider guide", () => {
       type: "finnhub",
       title: "Finnhub",
     });
+  });
+});
+
+describe("source deletion", () => {
+  it("deletes a source with configured instruments without force confirmation", async () => {
+    const user = userEvent.setup();
+    fetchMarketDataMock.mockResolvedValue(
+      status(
+        ibInstance({
+          instruments: [
+            {
+              instanceExternalId: "ib-1",
+              externalSymbol: "AAPL",
+              baseAsset: "AAPL",
+              quoteAsset: "USD",
+              manualPrice: "",
+              enabled: true,
+              stale: false,
+            },
+          ],
+        }),
+      ),
+    );
+
+    renderMarketDataPage();
+    await screen.findByText("IB Gateway");
+    await user.click(screen.getByRole("button", { name: "Delete source" }));
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Delete market-data source?",
+    });
+    expect(
+      within(dialog).queryByRole("button", { name: "Force delete" }),
+    ).not.toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: "Delete" }));
+    expect(deleteInstanceMock).toHaveBeenCalledWith("ib-1");
   });
 });

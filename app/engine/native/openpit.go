@@ -129,6 +129,13 @@ type openPitEngine struct {
 	// barrier set, so unchanged seeds must not be force-set again.
 	spotFundsPnlBoundsSeeds map[spotFundsPnlBoundsSeedKey]param.Pnl
 
+	// seedAccountBlocks are the blocks the engine latched while this handle was
+	// seeded: a seeded P&L that is halted, or that breaches its own barrier,
+	// kill-switches the account before the handle ever goes live. The build seam
+	// hands back only the Engine, so they ride on the handle until the node
+	// drains them into the store. Immutable after construction.
+	seedAccountBlocks []domain.AccountBlock
+
 	mu      sync.RWMutex
 	running bool
 }
@@ -153,7 +160,9 @@ type groupLane struct {
 // engine and then closes the service. res is the code-to-engine-id resolver
 // built from the same Snapshot. spotFundsPnlBoundsSeeds is the account seed
 // tracker initialized after post-build SpotFunds P&L seeds are applied through
-// Configure().SetSpotFundsAccountPnl.
+// their AsyncEngine account lanes. seedAccountBlocks are the blocks the engine
+// reported while applying those seeds, carried on the handle for the node to
+// mirror.
 // BuildOpenPitEngine is the only caller; it assembles the tracked state and
 // owns the service before the engine is built.
 func newOpenPitEngine(
@@ -163,6 +172,7 @@ func newOpenPitEngine(
 	registered map[string]struct{},
 	brokerPresent map[string]bool,
 	spotFundsPnlBoundsSeeds map[spotFundsPnlBoundsSeedKey]param.Pnl,
+	seedAccountBlocks []domain.AccountBlock,
 	res idResolver,
 ) Engine {
 	if registered == nil {
@@ -189,9 +199,18 @@ func newOpenPitEngine(
 		registered:              registered,
 		brokerPresent:           brokerPresent,
 		spotFundsPnlBoundsSeeds: spotFundsPnlBoundsSeeds,
+		seedAccountBlocks:       seedAccountBlocks,
 		running:                 eng != nil && async != nil,
 	}
 	return adapter
+}
+
+// SeedAccountBlocks returns the account blocks the engine latched while this
+// handle was seeded. The node mirrors them into its store before it admits
+// account work, so an account the engine already kill-switched never reads as
+// tradable. It is constant for the handle's lifetime and safe to call again.
+func (e *openPitEngine) SeedAccountBlocks() []domain.AccountBlock {
+	return e.seedAccountBlocks
 }
 
 // BuildOpenPitEngine builds the one stage-2 OpenPit engine plus its market-data
@@ -207,6 +226,14 @@ func newOpenPitEngine(
 // surface cannot express is an SDK gap, surfaced as an error, not
 // a trigger to call BuildOpenPitEngine again. On any seeding failure both the
 // engine and the already-built service are released so no native resource leaks.
+//
+// Seeding a P&L that is halted, or that breaches its own barrier, makes the
+// engine kill-switch the account while the handle is still being built - an
+// ordinary restart that reseeds an accumulated loss past the barrier does this.
+// Those blocks are harvested from the one authoritative per-account seed path
+// and carried on the returned Engine (see openPitEngine.SeedAccountBlocks) so
+// the node can mirror them durably; discarding them would leave the store
+// showing a tradable account the engine rejects.
 //
 // runtimeLibraryPath, when non-empty, is exported as
 // OPENPIT_RUNTIME_LIBRARY_PATH before the engine is built so the binding loads
@@ -228,14 +255,18 @@ func BuildOpenPitEngine(runtimeLibraryPath string, snap Snapshot) (Engine, error
 		return nil, err
 	}
 
-	eng, service, registered, err := buildEngine(snap, res)
+	eng, service, registered, buildBlocks, err := buildEngine(snap, res)
 	if err != nil {
 		return nil, err
 	}
 
 	// On any seeding failure stop the engine and close the service: the adapter
 	// is not yet constructed, so its Stop would not run.
+	var async *asyncengine.AsyncEngine
 	releaseOnErr := func(err error) (Engine, error) {
+		if async != nil {
+			_ = async.StopGraceful(context.Background())
+		}
 		eng.Stop()
 		service.Close()
 		return nil, err
@@ -248,6 +279,16 @@ func BuildOpenPitEngine(runtimeLibraryPath string, snap Snapshot) (Engine, error
 		return releaseOnErr(err)
 	}
 	if err := hydrateCurrencies(eng, snap.Accounts, snap.Groups, res); err != nil {
+		return releaseOnErr(err)
+	}
+	async, err = asyncengine.NewBuilder(eng).Dynamic().Build()
+	if err != nil {
+		return releaseOnErr(fmt.Errorf("engine: build async account dispatcher: %w", err))
+	}
+	accountPnlBlocks, err := seedSpotFundsAccountPnls(
+		async, eng, snap.Accounts, snap.SpotFundsPnlBoundsLimits, res,
+	)
+	if err != nil {
 		return releaseOnErr(err)
 	}
 	if err := blockGroups(eng, snap.Groups); err != nil {
@@ -263,11 +304,6 @@ func BuildOpenPitEngine(runtimeLibraryPath string, snap Snapshot) (Engine, error
 	if err != nil {
 		return releaseOnErr(err)
 	}
-	async, err := asyncengine.NewBuilder(eng).Dynamic().Build()
-	if err != nil {
-		return releaseOnErr(fmt.Errorf("engine: build async account dispatcher: %w", err))
-	}
-
 	brokerPresent := map[string]bool{
 		nameRateLimit:      hasRateBrokerBarrier(snap.RateLimits),
 		nameOrderSizeLimit: hasOrderSizeBrokerBarrier(snap.OrderSizeLimits),
@@ -279,6 +315,7 @@ func BuildOpenPitEngine(runtimeLibraryPath string, snap Snapshot) (Engine, error
 		registered,
 		brokerPresent,
 		spotFundsPnlBoundsSeedTracker(initialSpotFundsPnlBoundsSeeds),
+		append(buildBlocks, accountPnlBlocks...),
 		res,
 	), nil
 }
@@ -345,26 +382,26 @@ func (e *openPitEngine) Running() bool {
 // success.
 func (e *openPitEngine) ConfigurePolicy(
 	ctx context.Context, policy string, limits LimitSet,
-) error {
+) (PolicyConfigurationResult, error) {
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("engine: configure cancelled: %w", err)
+		return PolicyConfigurationResult{}, fmt.Errorf("engine: configure cancelled: %w", err)
 	}
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if !e.running {
-		return fmt.Errorf("engine: configure on stopped engine")
+		return PolicyConfigurationResult{}, fmt.Errorf("engine: configure on stopped engine")
 	}
 
 	if _, ok := e.registered[policyName(policy)]; !ok {
-		return fmt.Errorf(
+		return PolicyConfigurationResult{}, fmt.Errorf(
 			"engine: cannot configure unregistered policy %q: runtime policy "+
 				"registration is not supported by the SDK yet: %w",
 			policy, domain.ErrNotImplemented)
 	}
 	if policy != domain.PolicySpotFundsPnlBoundsKillSwitch &&
 		barrierCount(policy, limits) == 0 {
-		return fmt.Errorf(
+		return PolicyConfigurationResult{}, fmt.Errorf(
 			"engine: cannot remove the last barrier of policy %q: empty policy "+
 				"settings are not supported by the SDK yet: %w",
 			policy, domain.ErrNotImplemented)
@@ -372,13 +409,19 @@ func (e *openPitEngine) ConfigurePolicy(
 
 	switch policy {
 	case domain.PolicyRateLimit:
-		return e.configureRateLimitLocked(limits.RateLimits)
+		if err := e.configureRateLimitLocked(limits.RateLimits); err != nil {
+			return PolicyConfigurationResult{}, err
+		}
+		return PolicyConfigurationResult{}, nil
 	case domain.PolicyOrderSizeLimit:
-		return e.configureOrderSizeLocked(limits.OrderSizeLimits)
+		if err := e.configureOrderSizeLocked(limits.OrderSizeLimits); err != nil {
+			return PolicyConfigurationResult{}, err
+		}
+		return PolicyConfigurationResult{}, nil
 	case domain.PolicySpotFundsPnlBoundsKillSwitch:
 		return e.configureSpotFundsPnlBoundsLocked(limits.SpotFundsPnlBoundsLimits)
 	default:
-		return fmt.Errorf("engine: configure unknown policy %q", policy)
+		return PolicyConfigurationResult{}, fmt.Errorf("engine: configure unknown policy %q", policy)
 	}
 }
 
@@ -450,59 +493,70 @@ func (e *openPitEngine) configureOrderSizeLocked(limits []domain.LimitOrderSize)
 // SetSpotFundsAccountPnl. A barrier with no initial_pnl is never seeded, so
 // introducing one preserves the account's live accumulated P&L instead of
 // resetting it; global and group scopes cannot seed. Callers must hold e.mu.
+//
+// A failure part-way through leaves the already-applied seeds on the handle and
+// returns the error. The engine layer cannot undo them: the live accumulated
+// P&L a seed overwrote is not readable back from the SDK, so any "restore" here
+// could only publish a fabricated authoritative value - zero, or a stale earlier
+// seed - which would silently disarm the kill-switch while the operator is told
+// the update failed. Recovery belongs to the caller that owns the store: it
+// rebuilds the engine from persisted state, which reseeds every account from a
+// real value. e.spotFundsPnlBoundsSeeds is therefore advanced only on success,
+// so a retry re-applies every seed the failed attempt was asked for.
 func (e *openPitEngine) configureSpotFundsPnlBoundsLocked(
 	limits []domain.LimitSpotFundsPnlBounds,
-) error {
+) (PolicyConfigurationResult, error) {
 	desiredSeeds, err := spotFundsPnlBoundsSeeds(limits, e.res)
 	if err != nil {
-		return err
+		return PolicyConfigurationResult{}, err
 	}
 	changedSeeds, nextSeeds := changedSpotFundsPnlBoundsSeeds(
 		e.spotFundsPnlBoundsSeeds,
 		desiredSeeds,
 	)
-	appliedSeeds := make([]spotFundsPnlBoundsSeed, 0, len(changedSeeds))
-	rollbackSeeds := func() {
-		for i := len(appliedSeeds) - 1; i >= 0; i-- {
-			seed := appliedSeeds[i]
-			_ = e.eng.Configure().SetSpotFundsAccountPnl(
+	if err := configureSpotFundsPnlBounds(e.eng, e.res, limits); err != nil {
+		return PolicyConfigurationResult{}, err
+	}
+	if e.async == nil {
+		return PolicyConfigurationResult{}, fmt.Errorf(
+			"engine: reseed spot_funds account pnl without async dispatcher",
+		)
+	}
+	result := PolicyConfigurationResult{}
+	for _, seed := range changedSeeds {
+		var blocks []domain.AccountBlock
+		future := e.async.Submit(context.Background(), seed.account, func() error {
+			configuration, err := e.eng.Configure().SetSpotFundsAccountPnl(
 				policies.SpotFundsPolicyName,
 				seed.account,
-				seed.accountCurrency,
-				spotFundsPnlBoundsRollbackPnl(
-					e.spotFundsPnlBoundsSeeds, seed,
-				),
+				model.NewPnlState(seed.initialPnl),
+			)
+			if err != nil {
+				return err
+			}
+			blocks = policyConfigurationBlocksFrom(
+				configuration.AccountBlocks,
+				seed.code,
+				domain.PolicySpotFundsPnlBoundsKillSwitch,
+			)
+			return nil
+		})
+		_, err := future.Await(context.Background())
+		if err != nil {
+			return PolicyConfigurationResult{}, fmt.Errorf(
+				"engine: reseed spot_funds account pnl: %w", err,
 			)
 		}
-	}
-	for _, seed := range changedSeeds {
-		if err := e.eng.Configure().SetSpotFundsAccountPnl(
-			policies.SpotFundsPolicyName,
-			seed.account,
-			seed.accountCurrency,
-			seed.initialPnl,
-		); err != nil {
-			rollbackSeeds()
-			return fmt.Errorf("engine: reseed spot_funds account pnl: %w", err)
-		}
-		appliedSeeds = append(appliedSeeds, seed)
-	}
-	if err := configureSpotFundsPnlBounds(e.eng, e.res, limits); err != nil {
-		rollbackSeeds()
-		return err
+		result.AccountPnlUpdates = append(result.AccountPnlUpdates,
+			fwengine.AccountPnlUpdate{
+				Account: seed.code,
+				Pnl:     seed.initialPnl.String(),
+			},
+		)
+		result.AccountBlocks = append(result.AccountBlocks, blocks...)
 	}
 	e.spotFundsPnlBoundsSeeds = nextSeeds
-	return nil
-}
-
-func spotFundsPnlBoundsRollbackPnl(
-	current map[spotFundsPnlBoundsSeedKey]param.Pnl,
-	seed spotFundsPnlBoundsSeed,
-) param.Pnl {
-	if pnl, ok := current[seed.key()]; ok {
-		return pnl
-	}
-	return param.NewPnlZero()
+	return result, nil
 }
 
 func configureSpotFundsPnlBounds(
@@ -605,8 +659,45 @@ func (l accountLane) ClearAccountCurrency(ctx context.Context, id domain.Account
 	return nil
 }
 
+// SetAccountPnl force-sets the live SpotFunds account P&L accumulator through
+// the SDK's absolute upsert, which also clears a latched halt. The assignment
+// can itself kill-switch the account when the value breaches its own barrier,
+// so the blocks the SDK reports are mapped back for the node to mirror.
+//
+// e.spotFundsPnlBoundsSeeds is deliberately left alone: it tracks the seed each
+// account's configured barrier asks for, not the live accumulator. Dropping the
+// entry here would make the next bounds reconfigure re-apply the barrier's
+// initial_pnl and overwrite the value assigned here.
+func (l accountLane) SetAccountPnl(
+	ctx context.Context, id domain.AccountID, pnl string,
+) ([]domain.AccountBlock, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("engine: set account pnl cancelled: %w", err)
+	}
+	accountID, err := l.owner.res.account(id)
+	if err != nil {
+		return nil, fmt.Errorf("engine: set account pnl %q: %w", id, err)
+	}
+	value, err := param.NewPnlFromString(pnl)
+	if err != nil {
+		return nil, fmt.Errorf("engine: account pnl %q: %w", pnl, err)
+	}
+	configuration, err := l.eng.Configure().SetSpotFundsAccountPnl(
+		policies.SpotFundsPolicyName,
+		accountID,
+		model.NewPnlState(value),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("engine: set account pnl %q: %w", id, err)
+	}
+	return policyConfigurationBlocksFrom(
+		configuration.AccountBlocks, id, domain.PolicySpotFundsPnlBoundsKillSwitch,
+	), nil
+}
+
 // ApplyAccountAdjustmentBatch applies one atomic SDK account-adjustment batch
-// for account and maps accepted per-asset outcomes back to the request order.
+// for account, maps accepted per-asset outcomes back to the request order, and
+// surfaces any account block the engine latched while committing the batch.
 func (e *openPitEngine) ApplyAccountAdjustmentBatch(
 	ctx context.Context, account domain.AccountID, reqs []domain.AdjustmentRequest,
 ) ([]AdjustmentResult, *AdjustmentBatchReject, error) {
@@ -643,26 +734,37 @@ func (l accountLane) ApplyAccountAdjustmentBatch(
 		adjustments = append(adjustments, adjustment)
 	}
 
-	batch, outcomes, err := l.eng.ApplyAccountAdjustment(
-		accountID, adjustments)
+	batch, err := l.eng.ApplyAccountAdjustment(accountID, adjustments)
 	if err != nil {
 		return nil, nil, fmt.Errorf("engine: apply account adjustment: %w", err)
 	}
-	if rej, ok := batch.Get(); ok {
+	if rej, ok := batch.BatchError.Get(); ok {
 		rejected := outcomeRejectedFrom(rej)
 		return nil, &rejected, nil
 	}
-	if len(outcomes) == 0 {
+	// The engine reports the kill-switch it latched while committing the batch -
+	// a force-set that lands out of the account's P&L bounds blocks the account
+	// there and then. The block is batch-level, so it is stamped on every result
+	// of this batch; the caller mirrors blocks keyed by account, which collapses
+	// the repeats. Waiting for a later fill to rediscover the block is forbidden.
+	blocks := policyConfigurationBlocksFrom(
+		batch.AccountBlocks, account, domain.PolicySpotFundsPnlBoundsKillSwitch,
+	)
+	outcomes := batch.Outcomes
+	if len(outcomes) == 0 && len(blocks) == 0 {
 		return nil, nil, nil
 	}
 	results := make([]AdjustmentResult, 0, len(reqs))
 	for _, req := range reqs {
-		accepted, ok := outcomeAcceptedFromList(outcomes, req.Asset)
-		if !ok {
-			results = append(results, AdjustmentResult{})
-			continue
+		result := AdjustmentResult{AccountBlocks: blocks}
+		accepted, ok, err := outcomeAcceptedFromList(outcomes, req.Asset)
+		if err != nil {
+			return nil, nil, err
 		}
-		results = append(results, AdjustmentResult{Accepted: &accepted})
+		if ok {
+			result.Accepted = &accepted
+		}
+		results = append(results, result)
 	}
 	return results, nil, nil
 }
@@ -757,7 +859,11 @@ func (l accountLane) SubmitOrder(ctx context.Context, o domain.Order) (OrderResu
 	}
 	// Capture the reservation's balance effects (held funds, incoming quantity)
 	// before closing, so the caller can mirror them into the balance snapshot.
-	outcomes := balanceOutcomesFromList(reservation.AccountAdjustments())
+	outcomes, err := balanceOutcomesFromList(reservation.AccountAdjustments())
+	if err != nil {
+		reservation.RollbackAndClose()
+		return OrderResult{}, err
+	}
 	reservation.CommitAndClose()
 	return OrderResult{
 		Accepted:            true,
@@ -785,7 +891,8 @@ func (e *openPitEngine) RunAccountSynchronized(
 		return fmt.Errorf("engine: account-synchronized mutation on stopped engine")
 	}
 	lane := accountLane{owner: e, eng: eng, accountID: accountID}
-	_, err = async.Submit(ctx, accountID, func() error { return fn(lane) }).Await(ctx)
+	future := async.Submit(ctx, accountID, func() error { return fn(lane) })
+	_, err = future.Await(context.Background())
 	return err
 }
 
@@ -843,8 +950,24 @@ func (l accountLane) ApplyExecutionReport(
 	}
 
 	blocks := executionBlocksFrom(result.AccountBlocks, in.Account)
-	outcomes := balanceOutcomesFromList(result.AccountAdjustmentOutcomes)
-	persistence := executionReportPersistenceFrom(in, blocks, outcomes)
+	outcomes, err := balanceOutcomesFromList(result.AccountAdjustments)
+	if err != nil {
+		return ExecutionReportResult{}, err
+	}
+	accountPnl, accountPnlHaltReason, err := spotFundsAccountPnlFromList(
+		l.accountID,
+		result.AccountPnls,
+	)
+	if err != nil {
+		return ExecutionReportResult{}, err
+	}
+	persistence := executionReportPersistenceFrom(
+		in,
+		blocks,
+		outcomes,
+		accountPnl,
+		accountPnlHaltReason,
+	)
 	return ExecutionReportResult{
 		Persistence: &persistence,
 		Blocks:      blocks,
@@ -1048,10 +1171,12 @@ func policyName(policy string) string {
 
 // buildEngine constructs an OpenPit engine plus its market-data service,
 // registering the order-validation policy plus each risk policy that has at
-// least one barrier in the snapshot. It returns the engine, the service, and the
-// set of registered policy names. The risk policies validate their barrier
-// topology at build time, so a policy with no barriers is simply not registered.
-// res resolves account/group codes to engine ids for the account-scoped barriers.
+// least one barrier in the snapshot. It returns the engine, the service, the set
+// of registered policy names, and a reserved empty block result retained by the
+// private build seam. Account P&L is seeded later through AsyncEngine. The risk
+// policies validate their barrier topology at build time, so a policy with no
+// barriers is simply not registered. res resolves account/group codes to engine
+// ids for the account-scoped barriers.
 //
 // The market-data service is built unconditionally and before the engine (the
 // engine builder requires the service to exist first), even when nothing is
@@ -1065,19 +1190,19 @@ func policyName(policy string) string {
 // service via WithMarketOrders(service, defaultMarketOrderSlippageBps): market
 // orders are priced off the mark quote rather than rejected. Instruments without
 // a live quote reject with MarkPriceUnavailable instead of UnsupportedOrderType.
-// Account-scope SpotFunds P&L seeds are applied after Build through
-// Configure().SetSpotFundsAccountPnl, matching live config edits in
+// Account-scope SpotFunds P&L seeds are applied after Build through their
+// AsyncEngine lanes, matching live config edits in
 // configureSpotFundsPnlBounds. Operator-configurable slippage and runtime
 // enable/disable remain future work.
 func buildEngine(
 	snap Snapshot, res idResolver,
-) (*openpit.Engine, *bindmd.Service, map[string]struct{}, error) {
+) (*openpit.Engine, *bindmd.Service, map[string]struct{}, []domain.AccountBlock, error) {
 	// The market-data service is intentionally FullSync for every non-NoSync
 	// engine builder, and it must be built before the AccountSync engine.
 	eb := openpit.NewEngineBuilder().AccountSync()
 	service, err := eb.MarketData(defaultQuoteTTL).Build()
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("engine: build market-data service: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("engine: build market-data service: %w", err)
 	}
 
 	// OrderValidation first, then SpotFunds, then the conditional risk policies.
@@ -1097,7 +1222,7 @@ func buildEngine(
 		if err != nil {
 			builder.Close()
 			service.Close()
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		builder = builder.Builtin(ready)
 		registered[nameRateLimit] = struct{}{}
@@ -1107,7 +1232,7 @@ func buildEngine(
 		if err != nil {
 			builder.Close()
 			service.Close()
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		builder = builder.Builtin(ready)
 		registered[nameOrderSizeLimit] = struct{}{}
@@ -1115,37 +1240,23 @@ func buildEngine(
 	eng, err := builder.Build()
 	if err != nil {
 		service.Close()
-		return nil, nil, nil, fmt.Errorf("engine: build openpit engine: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("engine: build openpit engine: %w", err)
 	}
 	if len(snap.SpotFundsPnlBoundsLimits) > 0 {
-		releaseOnErr := func(err error) (*openpit.Engine, *bindmd.Service, map[string]struct{}, error) {
+		releaseOnErr := func(
+			err error,
+		) (*openpit.Engine, *bindmd.Service, map[string]struct{}, []domain.AccountBlock, error) {
 			eng.Stop()
 			service.Close()
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		if err := configureSpotFundsPnlBounds(
 			eng, res, snap.SpotFundsPnlBoundsLimits,
 		); err != nil {
 			return releaseOnErr(err)
 		}
-		seeds, err := spotFundsPnlBoundsSeeds(snap.SpotFundsPnlBoundsLimits, res)
-		if err != nil {
-			return releaseOnErr(err)
-		}
-		for _, seed := range seeds {
-			if err := eng.Configure().SetSpotFundsAccountPnl(
-				policies.SpotFundsPolicyName,
-				seed.account,
-				seed.accountCurrency,
-				seed.initialPnl,
-			); err != nil {
-				return releaseOnErr(
-					fmt.Errorf("engine: seed spot_funds account pnl: %w", err),
-				)
-			}
-		}
 	}
-	return eng, service, registered, nil
+	return eng, service, registered, nil, nil
 }
 
 // applyBlocks blocks every blocked account in accounts on the engine with its
@@ -1287,9 +1398,10 @@ func applyCurrencies(
 }
 
 // seedBalances applies each persisted balance as one absolute account
-// adjustment, setting available/held/incoming (and average-entry-price when
-// present) so the spot-funds policy starts from the stored holdings. A reject or
-// error signals corruption of our own persisted values and aborts startup.
+// adjustment, setting available/held/incoming, average-entry-price, and
+// realized PnL so the spot-funds policy starts from the stored holdings. A
+// reject or error signals corruption of our own persisted values and aborts
+// startup.
 func seedBalances(eng *openpit.Engine, balances []domain.Balance, res idResolver) error {
 	for _, balance := range balances {
 		account, err := res.account(balance.Account)
@@ -1300,18 +1412,124 @@ func seedBalances(eng *openpit.Engine, balances []domain.Balance, res idResolver
 		if err != nil {
 			return err
 		}
-		batch, _, err := eng.ApplyAccountAdjustment(
-			account, []model.AccountAdjustment{adjustment})
+		batch, err := eng.ApplyAccountAdjustment(account, []model.AccountAdjustment{adjustment})
 		if err != nil {
 			return fmt.Errorf("engine: seed balance %s/%s: %w",
 				balance.Account, balance.Asset, err)
 		}
-		if rej, ok := batch.Get(); ok {
+		if rej, ok := batch.BatchError.Get(); ok {
 			return fmt.Errorf("engine: seed balance %s/%s rejected: %s: %w",
 				balance.Account, balance.Asset, seedRejectReason(rej), domain.ErrInvalid)
 		}
 	}
 	return nil
+}
+
+type spotFundsAccountPnlSeed struct {
+	code    domain.AccountID
+	account param.AccountID
+	state   model.PnlState
+}
+
+func spotFundsAccountPnlSeeds(
+	accounts []domain.Account,
+	limits []domain.LimitSpotFundsPnlBounds,
+	res idResolver,
+) ([]spotFundsAccountPnlSeed, error) {
+	persisted := make(map[domain.AccountID]spotFundsAccountPnlSeed)
+	for _, account := range accounts {
+		if account.Pnl == "" && account.PnlHaltReason == "" {
+			continue
+		}
+		accountID, err := res.account(account.Code)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"engine: seed account pnl account %q: %w", account.Code, err)
+		}
+		state, err := pnlStateFrom(account.Pnl, account.PnlHaltReason)
+		if err != nil {
+			return nil, fmt.Errorf("engine: seed account pnl %q: %w", account.Code, err)
+		}
+		persisted[account.Code] = spotFundsAccountPnlSeed{
+			code:    account.Code,
+			account: accountID,
+			state:   state,
+		}
+	}
+
+	initial, err := spotFundsPnlBoundsSeeds(limits, res)
+	if err != nil {
+		return nil, err
+	}
+	seeds := make([]spotFundsAccountPnlSeed, 0, len(initial)+len(persisted))
+	seen := make(map[domain.AccountID]struct{}, len(initial))
+	for _, seed := range initial {
+		if _, duplicate := seen[seed.code]; duplicate {
+			continue
+		}
+		seen[seed.code] = struct{}{}
+		if stored, ok := persisted[seed.code]; ok {
+			seeds = append(seeds, stored)
+			delete(persisted, seed.code)
+			continue
+		}
+		seeds = append(seeds, spotFundsAccountPnlSeed{
+			code:    seed.code,
+			account: seed.account,
+			state:   model.NewPnlState(seed.initialPnl),
+		})
+	}
+	for _, account := range accounts {
+		if stored, ok := persisted[account.Code]; ok {
+			seeds = append(seeds, stored)
+			delete(persisted, account.Code)
+		}
+	}
+	return seeds, nil
+}
+
+// seedSpotFundsAccountPnls applies one authoritative P&L seed per account.
+// Persisted numeric or halted state overrides configuration InitialPnl.
+func seedSpotFundsAccountPnls(
+	async *asyncengine.AsyncEngine,
+	eng *openpit.Engine,
+	accounts []domain.Account,
+	limits []domain.LimitSpotFundsPnlBounds,
+	res idResolver,
+) ([]domain.AccountBlock, error) {
+	if async == nil {
+		return nil, fmt.Errorf("engine: seed account pnl without async dispatcher")
+	}
+	seeds, err := spotFundsAccountPnlSeeds(accounts, limits, res)
+	if err != nil {
+		return nil, err
+	}
+	var blocks []domain.AccountBlock
+	for _, seed := range seeds {
+		var seedBlocks []domain.AccountBlock
+		future := async.Submit(context.Background(), seed.account, func() error {
+			configuration, err := eng.Configure().SetSpotFundsAccountPnl(
+				policies.SpotFundsPolicyName,
+				seed.account,
+				seed.state,
+			)
+			if err != nil {
+				return err
+			}
+			seedBlocks = policyConfigurationBlocksFrom(
+				configuration.AccountBlocks,
+				seed.code,
+				domain.PolicySpotFundsPnlBoundsKillSwitch,
+			)
+			return nil
+		})
+		_, err := future.Await(context.Background())
+		if err != nil {
+			return nil, fmt.Errorf("engine: seed spot funds account pnl: %w", err)
+		}
+		blocks = append(blocks, seedBlocks...)
+	}
+	return blocks, nil
 }
 
 // balanceSeedAdjustment builds the absolute adjustment that seeds one stored
@@ -1329,11 +1547,13 @@ func balanceSeedAdjustment(balance domain.Balance) (model.AccountAdjustment, err
 		return &domain.AdjustmentAmount{Mode: domain.AdjustmentModeAbsolute, Value: v}
 	}
 	req := domain.AdjustmentRequest{
-		Asset:             balance.Asset,
-		AverageEntryPrice: balance.AverageEntryPrice,
-		Balance:           absField(balance.Available),
-		Held:              absField(balance.Held),
-		Incoming:          absField(balance.Incoming),
+		Asset:                 balance.Asset,
+		AverageEntryPrice:     balance.AverageEntryPrice,
+		RealizedPnl:           balance.RealizedPnl,
+		RealizedPnlHaltReason: balance.RealizedPnlHaltReason,
+		Balance:               absField(balance.Available),
+		Held:                  absField(balance.Held),
+		Incoming:              absField(balance.Incoming),
 	}
 	return accountAdjustmentFromRequest(req)
 }

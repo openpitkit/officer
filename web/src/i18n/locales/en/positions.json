@@ -57,11 +57,20 @@
       "updated": "This column shows when the balance row was last updated.",
       "adjust": "This column contains the row action for opening a position adjustment."
     },
+    "pnlHalt": {
+      "missingFx": "PnL calculation stopped: a required FX quote is unavailable.",
+      "missingAccountCurrency": "PnL calculation stopped: the account currency is unavailable.",
+      "missingInitialPnl": "PnL calculation stopped: an authoritative initial PnL value is unavailable.",
+      "missingCostBasis": "PnL calculation stopped: the position cost basis is unavailable.",
+      "arithmeticOverflow": "PnL calculation stopped: exact arithmetic exceeded the supported numeric range.",
+      "unknown": "PnL calculation stopped by the engine."
+    },
     "empty": {
       "title": "No balances",
       "hint": "Use Adjust to seed spot-funds balances for an account and asset."
     },
-    "activeOrdersTitle": "Active orders for {{account}}"
+    "activeOrdersTitle": "Active orders for {{account}}",
+    "ordersTitle": "Open orders for {{account}}"
   },
   "inline": {
     "apply": "Apply",

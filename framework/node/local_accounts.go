@@ -174,6 +174,90 @@ func (n *localNode) mirrorEngineBlocksAudit(
 	return nil
 }
 
+// mirrorPolicyConfigurationBlocks persists and audits blocks the engine already
+// applied while accepting a policy update. The caller holds the live-policy or
+// restart gate, so no account lane can observe the SDK block before the store
+// reflects it.
+func (n *localNode) mirrorPolicyConfigurationBlocks(
+	ctx context.Context, policy string, blocks []domain.AccountBlock,
+) error {
+	// The engine has already accepted the update and applied these blocks. A
+	// client disconnect must not cancel the durable mirror and leave the account
+	// appearing tradable to Officer while the engine rejects it.
+	ctx = context.WithoutCancel(ctx)
+	seen := make(map[domain.AccountID]struct{}, len(blocks))
+	for _, block := range blocks {
+		if block.Account == "" {
+			return n.fatalPostEngineAuditByCode(
+				"record policy configuration block", "account", "unknown",
+				fmt.Errorf("policy configuration block has no account"),
+			)
+		}
+		if _, duplicate := seen[block.Account]; duplicate {
+			continue
+		}
+		seen[block.Account] = struct{}{}
+		account, ok, err := n.realm.GetAccount(ctx, block.Account)
+		if err != nil {
+			return n.fatalPostEngineAuditByCode(
+				"read policy configuration block state", "account", block.Account.String(),
+				fmt.Errorf("read policy configuration block state: %w", err),
+			)
+		}
+		if !ok {
+			return n.fatalPostEngineAuditByCode(
+				"record policy configuration block", "account", block.Account.String(),
+				fmt.Errorf("account not found: %w", domain.ErrNotFound),
+			)
+		}
+		if account.Blocked {
+			continue
+		}
+
+		if err := n.realm.SetAccountBlocked(
+			ctx, block.Account, true, policyConfigurationBlockReason(policy, block),
+		); err != nil {
+			return n.fatalPostEngineAuditByCode(
+				"record policy configuration block", "account", block.Account.String(),
+				fmt.Errorf("record policy configuration block: %w", err),
+			)
+		}
+		if err := n.realm.AppendAudit(ctx, store.AuditEntry{
+			Source:  domain.SourceSystem,
+			Action:  domain.AuditActionBlock,
+			Account: block.Account,
+			Detail:  policyConfigurationBlockDetail(policy, block),
+		}); err != nil {
+			return n.fatalPostEngineAuditByCode(
+				"audit policy configuration block", "account", block.Account.String(),
+				fmt.Errorf("audit policy configuration block: %w", err),
+			)
+		}
+	}
+	return nil
+}
+
+func (n *localNode) mirrorPolicyConfigurationPnls(
+	ctx context.Context, updates []engine.AccountPnlUpdate,
+) error {
+	ctx = context.WithoutCancel(ctx)
+	for _, update := range updates {
+		if update.Account == "" {
+			return n.fatalPostEngineAuditByCode(
+				"record policy configuration pnl", "account", "unknown",
+				fmt.Errorf("policy configuration pnl update has no account"),
+			)
+		}
+		if err := n.realm.SetAccountPnl(ctx, update.Account, update.Pnl, ""); err != nil {
+			return n.fatalPostEngineAuditByCode(
+				"record policy configuration pnl", "account", update.Account.String(),
+				fmt.Errorf("record policy configuration pnl: %w", err),
+			)
+		}
+	}
+	return nil
+}
+
 // audit appends one audit row, stamping the caller's principal and source onto
 // the entry. Every mutation routes its audit through here so attribution is
 // applied uniformly.

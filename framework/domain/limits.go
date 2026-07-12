@@ -79,9 +79,6 @@ type LimitSpotFundsPnlBounds struct {
 	Account AccountID
 	// AccountGroup is required only for the account_group scope.
 	AccountGroup string
-	// AccountCurrency is the account-currency axis and is required on every
-	// barrier.
-	AccountCurrency string
 	// LowerBound is the lower account-currency P&L bound (exact decimal); empty
 	// when unset.
 	LowerBound string
@@ -163,9 +160,6 @@ func (l LimitSpotFundsPnlBounds) Validate() error {
 		PolicySpotFundsPnlBoundsKillSwitch, l.Scope, l.Account, "", l.AccountGroup,
 	); err != nil {
 		return err
-	}
-	if l.AccountCurrency == "" {
-		return fmt.Errorf("account_currency is required: %w", ErrInvalid)
 	}
 	if l.LowerBound == "" && l.UpperBound == "" {
 		return fmt.Errorf(

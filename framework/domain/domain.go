@@ -167,6 +167,12 @@ type Account struct {
 	Code AccountID
 	// Title is the mutable human-readable display name; may be empty.
 	Title string
+	// Pnl is the latest SpotFunds account-currency P&L snapshot. Its currency is
+	// always EffectiveCurrency and is deliberately not repeated on this surface.
+	Pnl string
+	// PnlHaltReason explains why the engine could not calculate account P&L on
+	// its latest reported operation. Empty means the latest P&L is authoritative.
+	PnlHaltReason PnlHaltReason
 	// Currency is the account-level realized P&L currency asset code. Empty
 	// means the account inherits from its group, then from the reserved default
 	// group, and finally disables realized P&L tracking when all tiers are empty.
@@ -539,11 +545,9 @@ func validateAsset(asset string) error {
 }
 
 // AddDecimals returns the exact decimal sum of base and delta as a string. An
-// empty operand is treated as zero so a fresh accumulator (or an absent delta)
-// is handled without a special case. It is used to accumulate balance
-// quantities (realized P&L) by applying the per-operation delta to the stored
-// value rather than overwriting with an absolute. Returns ErrInvalid when
-// either operand is a non-empty, non-decimal string.
+// empty operand is treated as zero. It is used for exact decimal validation and
+// normalization at API/import boundaries. Returns ErrInvalid when either
+// operand is a non-empty, non-decimal string.
 func AddDecimals(base, delta string) (string, error) {
 	baseD := decimal.Zero
 	deltaD := decimal.Zero

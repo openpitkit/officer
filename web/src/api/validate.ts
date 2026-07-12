@@ -100,17 +100,6 @@ function validateAccountGroup(group: string): FieldError | null {
   return null;
 }
 
-function validateAccountCurrency(currency: string): FieldError | null {
-  const err = validateAsset(currency);
-  if (!err) {
-    return null;
-  }
-  return {
-    key: err.key.replace(/^asset\./, "accountCurrency."),
-    values: err.values,
-  };
-}
-
 /** Loose decimal check: optional sign, digits with an optional fraction. */
 function isDecimal(value: string): boolean {
   return /^[+-]?(\d+\.?\d*|\.\d+)$/.test(value.trim());
@@ -308,11 +297,6 @@ export function validateLimit(limit: Limit): FieldError | null {
 
   if (isSpotFundsPnl) {
     const accountGroup = limit.accountGroup?.trim() ?? "";
-    const accountCurrency = limit.accountCurrency?.trim() ?? "";
-    const accountCurrencyErr = validateAccountCurrency(accountCurrency);
-    if (accountCurrencyErr) {
-      return accountCurrencyErr;
-    }
     if (scope === "account_group") {
       const err = validateAccountGroup(accountGroup);
       if (err) {
@@ -324,9 +308,6 @@ export function validateLimit(limit: Limit): FieldError | null {
   } else {
     if ((limit.accountGroup ?? "").trim().length > 0) {
       return { key: "limit.policyNoAccountGroup", values: { policy } };
-    }
-    if ((limit.accountCurrency ?? "").trim().length > 0) {
-      return { key: "limit.policyNoAccountCurrency", values: { policy } };
     }
   }
 

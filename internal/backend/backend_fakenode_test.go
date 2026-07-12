@@ -1293,7 +1293,7 @@ func (n *fakeNode) UpdateMarketDataInstanceSettings(
 }
 
 func (n *fakeNode) DeleteMarketDataInstance(
-	_ context.Context, id domain.ExternalID, _ bool, _ domain.Caller,
+	_ context.Context, id domain.ExternalID, _ domain.Caller,
 ) error {
 	for i := range n.mdInstances {
 		if n.mdInstances[i].ExternalID == id {

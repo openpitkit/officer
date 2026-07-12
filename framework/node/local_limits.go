@@ -108,10 +108,11 @@ func (n *localNode) PutRateLimit(
 		return nil, fmt.Errorf("put rate limit: %w", err)
 	}
 
-	sink, applyErr := n.applyPolicyChangeLocked(ctx, domain.PolicyRateLimit)
+	sink, applyErr := n.applyPolicyChangeLocked(ctx, domain.PolicyRateLimit, func() error {
+		return n.revertRateBarrier(context.WithoutCancel(ctx), target, prev, hadPrev)
+	})
 	if applyErr != nil {
-		n.revertRateBarrier(ctx, target, prev, hadPrev)
-		return nil, fmt.Errorf("configure policy after limit: %w", applyErr)
+		return sink, fmt.Errorf("configure policy after limit: %w", applyErr)
 	}
 
 	if err := n.audit(ctx, caller, store.AuditEntry{
@@ -154,12 +155,12 @@ func (n *localNode) PutOrderSizeLimit(
 		return nil, fmt.Errorf("put order-size limit: %w", err)
 	}
 
-	sink, applyErr := n.applyPolicyChangeLocked(ctx, domain.PolicyOrderSizeLimit)
+	sink, applyErr := n.applyPolicyChangeLocked(ctx, domain.PolicyOrderSizeLimit, func() error {
+		return n.revertOrderSizeBarrier(context.WithoutCancel(ctx), target, prev, hadPrev)
+	})
 	if applyErr != nil {
-		n.revertOrderSizeBarrier(ctx, target, prev, hadPrev)
-		return nil, fmt.Errorf("configure policy after limit: %w", applyErr)
+		return sink, fmt.Errorf("configure policy after limit: %w", applyErr)
 	}
-
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action:  domain.AuditActionSetLimit,
 		Account: target.Account,
@@ -175,46 +176,48 @@ func (n *localNode) PutOrderSizeLimit(
 func (n *localNode) PutSpotFundsPnlBoundsLimit(
 	ctx context.Context, limit domain.LimitSpotFundsPnlBounds, caller domain.Caller,
 ) (marketdata.Sink, error) {
-	if err := n.beginEngineRestart(); err != nil {
+	if err := n.beginLivePolicyConfiguration(); err != nil {
 		return nil, err
 	}
-	defer n.endEngineRestart()
+	defer n.endLivePolicyConfiguration()
 
 	target := LimitTarget{
-		Policy:          domain.PolicySpotFundsPnlBoundsKillSwitch,
-		Scope:           limit.Scope,
-		Account:         limit.Account,
-		AccountGroup:    limit.AccountGroup,
-		AccountCurrency: limit.AccountCurrency,
+		Policy:       domain.PolicySpotFundsPnlBoundsKillSwitch,
+		Scope:        limit.Scope,
+		Account:      limit.Account,
+		AccountGroup: limit.AccountGroup,
 	}
 	prev, hadPrev, err := n.readSpotFundsPnlBoundsBarrier(ctx, target)
 	if err != nil {
 		return nil, err
 	}
 
-	if _, err := n.ensureAutoCreatedAsset(
-		ctx, limit.AccountCurrency, "spot funds pnl-bounds limit", caller,
-	); err != nil {
-		return nil, err
-	}
 	if err := n.realm.PutSpotFundsPnlBoundsLimit(ctx, limit); err != nil {
 		return nil, fmt.Errorf("put spot funds pnl-bounds limit: %w", err)
 	}
 
 	sink, applyErr := n.applyPolicyChangeLocked(
-		ctx, domain.PolicySpotFundsPnlBoundsKillSwitch,
+		ctx, domain.PolicySpotFundsPnlBoundsKillSwitch, func() error {
+			return n.revertSpotFundsPnlBoundsBarrier(
+				context.WithoutCancel(ctx), target, prev, hadPrev,
+			)
+		},
 	)
 	if applyErr != nil {
-		n.revertSpotFundsPnlBoundsBarrier(ctx, target, prev, hadPrev)
-		return nil, fmt.Errorf("configure policy after limit: %w", applyErr)
+		return sink, fmt.Errorf("configure policy after limit: %w", applyErr)
 	}
+	ctx = context.WithoutCancel(ctx)
 
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action:  domain.AuditActionSetLimit,
 		Account: target.Account,
 		Detail:  setSpotFundsPnlBoundsLimitDetail(limit),
 	}); err != nil {
-		return sink, fmt.Errorf("audit set limit: %w", err)
+		return sink, n.fatalPostEngineAuditByCode(
+			"audit spot funds pnl-bounds limit", "policy",
+			domain.PolicySpotFundsPnlBoundsKillSwitch,
+			fmt.Errorf("audit set limit: %w", err),
+		)
 	}
 	return sink, nil
 }
@@ -226,20 +229,29 @@ func (n *localNode) PutSpotFundsPnlBoundsLimit(
 func (n *localNode) DeleteLimit(
 	ctx context.Context, target LimitTarget, caller domain.Caller,
 ) (marketdata.Sink, error) {
-	if err := n.beginEngineRestart(); err != nil {
-		return nil, err
+	if target.Policy == domain.PolicySpotFundsPnlBoundsKillSwitch {
+		if err := n.beginLivePolicyConfiguration(); err != nil {
+			return nil, err
+		}
+		defer n.endLivePolicyConfiguration()
+	} else {
+		if err := n.beginEngineRestart(); err != nil {
+			return nil, err
+		}
+		defer n.endEngineRestart()
 	}
-	defer n.endEngineRestart()
 
 	revert, err := n.deleteBarrier(ctx, target)
 	if err != nil {
 		return nil, err
 	}
 
-	sink, applyErr := n.applyPolicyChangeLocked(ctx, target.Policy)
+	sink, applyErr := n.applyPolicyChangeLocked(ctx, target.Policy, revert)
 	if applyErr != nil {
-		revert()
-		return nil, fmt.Errorf("configure policy after delete limit: %w", applyErr)
+		return sink, fmt.Errorf("configure policy after delete limit: %w", applyErr)
+	}
+	if target.Policy == domain.PolicySpotFundsPnlBoundsKillSwitch {
+		ctx = context.WithoutCancel(ctx)
 	}
 
 	if err := n.audit(ctx, caller, store.AuditEntry{
@@ -247,6 +259,13 @@ func (n *localNode) DeleteLimit(
 		Account: target.Account,
 		Detail:  deleteLimitDetail(target),
 	}); err != nil {
+		if target.Policy == domain.PolicySpotFundsPnlBoundsKillSwitch {
+			return sink, n.fatalPostEngineAuditByCode(
+				"audit delete spot funds pnl-bounds limit", "policy",
+				domain.PolicySpotFundsPnlBoundsKillSwitch,
+				fmt.Errorf("audit delete limit: %w", err),
+			)
+		}
 		return sink, fmt.Errorf("audit delete limit: %w", err)
 	}
 	return sink, nil
@@ -257,7 +276,7 @@ func (n *localNode) DeleteLimit(
 // best-effort revert closure that re-puts the previous barrier when one existed.
 func (n *localNode) deleteBarrier(
 	ctx context.Context, target LimitTarget,
-) (func(), error) {
+) (func() error, error) {
 	switch target.Policy {
 	case domain.PolicyRateLimit:
 		prev, hadPrev, err := n.readRateBarrier(ctx, target)
@@ -267,7 +286,9 @@ func (n *localNode) deleteBarrier(
 		if err := n.realm.DeleteRateLimit(ctx, target.Scope, target.Account, target.Asset); err != nil {
 			return nil, fmt.Errorf("delete rate limit: %w", err)
 		}
-		return func() { n.revertRateBarrier(ctx, target, prev, hadPrev) }, nil
+		return func() error {
+			return n.revertRateBarrier(context.WithoutCancel(ctx), target, prev, hadPrev)
+		}, nil
 	case domain.PolicyOrderSizeLimit:
 		prev, hadPrev, err := n.readOrderSizeBarrier(ctx, target)
 		if err != nil {
@@ -276,7 +297,11 @@ func (n *localNode) deleteBarrier(
 		if err := n.realm.DeleteOrderSizeLimit(ctx, target.Scope, target.Account, target.Asset); err != nil {
 			return nil, fmt.Errorf("delete order-size limit: %w", err)
 		}
-		return func() { n.revertOrderSizeBarrier(ctx, target, prev, hadPrev) }, nil
+		return func() error {
+			return n.revertOrderSizeBarrier(
+				context.WithoutCancel(ctx), target, prev, hadPrev,
+			)
+		}, nil
 	case domain.PolicySpotFundsPnlBoundsKillSwitch:
 		prev, hadPrev, err := n.readSpotFundsPnlBoundsBarrier(ctx, target)
 		if err != nil {
@@ -287,45 +312,111 @@ func (n *localNode) deleteBarrier(
 			target.Scope,
 			target.Account,
 			target.AccountGroup,
-			target.AccountCurrency,
 		); err != nil {
 			return nil, fmt.Errorf("delete spot funds pnl-bounds limit: %w", err)
 		}
-		return func() {
-			n.revertSpotFundsPnlBoundsBarrier(ctx, target, prev, hadPrev)
+		return func() error {
+			return n.revertSpotFundsPnlBoundsBarrier(
+				context.WithoutCancel(ctx), target, prev, hadPrev,
+			)
 		}, nil
 	default:
 		return nil, fmt.Errorf("unknown policy %q: %w", target.Policy, domain.ErrInvalid)
 	}
 }
 
-// applyPolicyChangeLocked applies a just-persisted barrier change for policy
-// to the engine via the runtime Configure surface. If the SDK cannot express
-// the change dynamically, the persisted snapshot becomes the source of truth and
-// the engine is rebuilt. Callers must hold the exclusive restart gate.
+// applyPolicyChangeLocked applies a just-persisted barrier change for policy to
+// the engine via the runtime Configure surface. revert restores the barrier the
+// caller just wrote and is invoked here, before any recovery reads the store.
+//
+// The engine's not-implemented stubs are pre-flight guards: they reject before
+// any engine mutation, so nothing has to be reconciled. Rate and order-size
+// callers keep the barrier and rebuild from the persisted snapshot, making the
+// store the desired truth; SpotFunds P&L-bounds callers revert instead, because
+// they never rebuild for a change the surface cannot express.
+//
+// Any other failure may have landed part-way. A SpotFunds P&L-bounds configure
+// force-sets account seeds one at a time, and the engine layer cannot take an
+// applied seed back: the live accumulated P&L it overwrote cannot be read out of
+// the SDK, so a compensating write could only publish a fabricated value - zero,
+// or a stale earlier seed - silently disarming the kill-switch while the
+// operator is told the update failed. So the barrier is reverted and the engine
+// rebuilt from that reverted store, which reseeds every account from a real
+// persisted value. The rebuild replaces the handle, so its sink is returned
+// alongside the error for the caller to re-adopt.
 func (n *localNode) applyPolicyChangeLocked(
-	ctx context.Context, policy string,
+	ctx context.Context, policy string, revert func() error,
 ) (marketdata.Sink, error) {
-	if err := n.reconfigurePolicy(ctx, policy); err != nil {
-		if !errors.Is(err, domain.ErrNotImplemented) {
+	result, err := n.reconfigurePolicy(ctx, policy)
+	if err == nil {
+		if err := n.mirrorPolicyConfigurationPnls(
+			ctx, result.AccountPnlUpdates,
+		); err != nil {
 			return nil, err
 		}
-		if err := n.rebuildEngineFromStore(ctx); err != nil {
+		if err := n.mirrorPolicyConfigurationBlocks(
+			ctx, policy, result.AccountBlocks,
+		); err != nil {
 			return nil, err
+		}
+		return nil, nil
+	}
+	spotFunds := policy == domain.PolicySpotFundsPnlBoundsKillSwitch
+	durableCtx := context.WithoutCancel(ctx)
+	revertPolicy := func() error {
+		if revertErr := revert(); revertErr != nil {
+			return n.fatalPostEngineAuditByCode(
+				"revert policy configuration", "policy", policy,
+				fmt.Errorf("revert policy configuration: %w", revertErr),
+			)
+		}
+		return nil
+	}
+
+	if errors.Is(err, domain.ErrNotImplemented) {
+		if spotFunds {
+			if revertErr := revertPolicy(); revertErr != nil {
+				return nil, revertErr
+			}
+			return nil, err
+		}
+		if rebuildErr := n.rebuildEngineFromStore(durableCtx); rebuildErr != nil {
+			return nil, rebuildErr
 		}
 		return n.currentMarketDataSink(), nil
 	}
-	return nil, nil
+
+	if revertErr := revertPolicy(); revertErr != nil {
+		return nil, revertErr
+	}
+	if !spotFunds {
+		return nil, err
+	}
+	if rebuildErr := n.rebuildEngineFromStore(durableCtx); rebuildErr != nil {
+		reconcileErr := errors.Join(err, fmt.Errorf(
+			"rebuild engine after failed spot funds pnl-bounds configure: %w",
+			rebuildErr,
+		))
+		return nil, n.fatalPostEngineAuditByCode(
+			"rebuild after failed spot funds pnl-bounds configuration",
+			"policy",
+			policy,
+			reconcileErr,
+		)
+	}
+	return n.currentMarketDataSink(), err
 }
 
 // reconfigurePolicy re-reads the full typed barrier set for policy from the
 // store and applies it to the engine via the runtime Configure surface. It
 // returns the engine error verbatim so the caller can decide whether to revert
 // or rebuild.
-func (n *localNode) reconfigurePolicy(ctx context.Context, policy string) error {
+func (n *localNode) reconfigurePolicy(
+	ctx context.Context, policy string,
+) (engine.PolicyConfigurationResult, error) {
 	limits, err := n.policyLimitSet(ctx, policy)
 	if err != nil {
-		return err
+		return engine.PolicyConfigurationResult{}, err
 	}
 	return n.engine.ConfigurePolicy(ctx, policy, limits)
 }
@@ -397,14 +488,17 @@ func (n *localNode) ensureLimitAsset(
 // state: re-put when it existed before, delete when it did not.
 func (n *localNode) revertRateBarrier(
 	ctx context.Context, target LimitTarget, prev domain.LimitRate, hadPrev bool,
-) {
+) error {
 	if hadPrev {
-		// Best-effort revert; the caller already surfaces the primary error.
-		_ = n.realm.PutRateLimit(ctx, prev)
-		return
+		if err := n.realm.PutRateLimit(ctx, prev); err != nil {
+			return fmt.Errorf("restore rate-limit barrier: %w", err)
+		}
+		return nil
 	}
-	// Best-effort revert; the caller already surfaces the primary error.
-	_ = n.realm.DeleteRateLimit(ctx, target.Scope, target.Account, target.Asset)
+	if err := n.realm.DeleteRateLimit(ctx, target.Scope, target.Account, target.Asset); err != nil {
+		return fmt.Errorf("remove rate-limit barrier: %w", err)
+	}
+	return nil
 }
 
 // readOrderSizeBarrier mirrors readRateBarrier for the order-size table.
@@ -426,12 +520,17 @@ func (n *localNode) readOrderSizeBarrier(
 // revertOrderSizeBarrier mirrors revertRateBarrier for the order-size table.
 func (n *localNode) revertOrderSizeBarrier(
 	ctx context.Context, target LimitTarget, prev domain.LimitOrderSize, hadPrev bool,
-) {
+) error {
 	if hadPrev {
-		_ = n.realm.PutOrderSizeLimit(ctx, prev)
-		return
+		if err := n.realm.PutOrderSizeLimit(ctx, prev); err != nil {
+			return fmt.Errorf("restore order-size barrier: %w", err)
+		}
+		return nil
 	}
-	_ = n.realm.DeleteOrderSizeLimit(ctx, target.Scope, target.Account, target.Asset)
+	if err := n.realm.DeleteOrderSizeLimit(ctx, target.Scope, target.Account, target.Asset); err != nil {
+		return fmt.Errorf("remove order-size barrier: %w", err)
+	}
+	return nil
 }
 
 // readSpotFundsPnlBoundsBarrier mirrors readRateBarrier for the SpotFunds
@@ -447,8 +546,7 @@ func (n *localNode) readSpotFundsPnlBoundsBarrier(
 	for _, limit := range limits {
 		if limit.Scope == target.Scope &&
 			limit.Account == target.Account &&
-			limit.AccountGroup == target.AccountGroup &&
-			limit.AccountCurrency == target.AccountCurrency {
+			limit.AccountGroup == target.AccountGroup {
 			return limit, true, nil
 		}
 	}
@@ -462,18 +560,22 @@ func (n *localNode) revertSpotFundsPnlBoundsBarrier(
 	target LimitTarget,
 	prev domain.LimitSpotFundsPnlBounds,
 	hadPrev bool,
-) {
+) error {
 	if hadPrev {
-		_ = n.realm.PutSpotFundsPnlBoundsLimit(ctx, prev)
-		return
+		if err := n.realm.PutSpotFundsPnlBoundsLimit(ctx, prev); err != nil {
+			return fmt.Errorf("restore spot funds pnl-bounds barrier: %w", err)
+		}
+		return nil
 	}
-	_ = n.realm.DeleteSpotFundsPnlBoundsLimit(
+	if err := n.realm.DeleteSpotFundsPnlBoundsLimit(
 		ctx,
 		target.Scope,
 		target.Account,
 		target.AccountGroup,
-		target.AccountCurrency,
-	)
+	); err != nil {
+		return fmt.Errorf("remove spot funds pnl-bounds barrier: %w", err)
+	}
+	return nil
 }
 
 // ListAudit returns the most recent n audit rows, newest first.

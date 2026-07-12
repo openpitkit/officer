@@ -19,7 +19,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ExternalLink } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import type { Limit } from "@/api/types";
+import type { Account, Limit } from "@/api/types";
 import { validateLimit } from "@/api/validate";
 import {
   getAllowedScopes,
@@ -41,6 +41,10 @@ import { ApiError, useOfficerApi } from "@/framework";
 import { Autocomplete } from "@/components/Autocomplete";
 import { ErrorBanner } from "@/components/PageStates";
 import {
+  DEFAULT_SEARCH_DEBOUNCE_MS,
+  useDebouncedValue,
+} from "@/lib/useDebounce";
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -59,8 +63,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { NumberStepper } from "@/components/ui/number-stepper";
 import {
   Select,
   SelectContent,
@@ -81,6 +85,10 @@ interface DurationParts {
 }
 
 const DURATION_UNITS: DurationUnit[] = ["ms", "s", "m", "h"];
+
+function mergeSuggestions(...groups: string[][]): string[] {
+  return Array.from(new Set(groups.flat()));
+}
 
 /** Parse a Go-duration string (e.g. "500ms", "12s", "2m", "1h") into parts.
  *  Returns null when the string is not a recognised single-unit duration. */
@@ -132,6 +140,7 @@ function DurationPicker({
   onChange: (goStr: string) => void;
 }) {
   const { t } = useTranslation("policies");
+  const { t: tc } = useTranslation();
   const initial = parseDuration(value) ?? { amount: "", unit: "s" as DurationUnit };
   const [parts, setParts] = useState<DurationParts>(initial);
 
@@ -157,16 +166,17 @@ function DurationPicker({
   return (
     <div className="space-y-1.5">
       <div className="flex gap-2">
-        <Input
+        <NumberStepper
           id={id}
-          type="number"
-          min={1}
-          step={1}
+          min="1"
           value={parts.amount}
           spellCheck={false}
           className="w-28"
           placeholder={t("duration.amountPlaceholder")}
-          onChange={(e) => update({ ...parts, amount: e.target.value })}
+          allowSignedInput={false}
+          onChange={(amount) => update({ ...parts, amount })}
+          onClear={() => update({ ...parts, amount: "" })}
+          clearLabel={tc("filters.clearField")}
         />
         <Select
           value={parts.unit}
@@ -199,7 +209,6 @@ interface FormState {
   account: string;
   accountGroup: string;
   asset: string;
-  accountCurrency: string;
   values: Record<string, string>;
 }
 
@@ -210,7 +219,6 @@ function emptyForm(initialAccount = ""): FormState {
     account: initialAccount,
     accountGroup: "",
     asset: "",
-    accountCurrency: "",
     values: {},
   };
 }
@@ -222,7 +230,6 @@ function fromLimit(limit: Limit): FormState {
     account: limit.account,
     accountGroup: limit.accountGroup ?? "",
     asset: limit.asset,
-    accountCurrency: limit.accountCurrency ?? "",
     values: { ...limit.values },
   };
 }
@@ -248,7 +255,6 @@ export function LimitDialog({
   assetSuggestions = [],
   accountSuggestions = [],
   accountGroupSuggestions = [],
-  currencySuggestions = [],
   policyCounts = {},
   onOpenChange,
   onSaved,
@@ -259,18 +265,46 @@ export function LimitDialog({
   assetSuggestions?: string[];
   accountSuggestions?: string[];
   accountGroupSuggestions?: string[];
-  currencySuggestions?: string[];
   policyCounts?: Partial<Record<Policy, number>>;
   onOpenChange: (open: boolean) => void;
   onSaved: () => void;
 }) {
   const { t } = useTranslation("policies");
   const { t: tc } = useTranslation();
-  const { putLimit } = useOfficerApi();
+  const officerApi = useOfficerApi();
+  const { fetchAccounts, fetchAssets, putLimit } = officerApi;
+  const fetchGroups =
+    "fetchGroups" in officerApi ? officerApi.fetchGroups : undefined;
   const [form, setForm] = useState<FormState>(() => emptyForm(initialAccount));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [dialogAccountSuggestions, setDialogAccountSuggestions] = useState<
+    Account[]
+  >([]);
+  const [dialogAssetSuggestions, setDialogAssetSuggestions] = useState<
+    string[]
+  >([]);
+  const [dialogAccountGroupSuggestions, setDialogAccountGroupSuggestions] =
+    useState<string[]>([]);
+
+  const isEdit = editing !== null;
+  const isSpotFundsPnl =
+    form.policy === "spot_funds_pnl_bounds_kill_switch";
+  const hasAccountGroupAxis =
+    isSpotFundsPnl && form.scope === "account_group";
+  const accountSearch = useDebouncedValue(
+    form.account.trim(),
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const assetSearch = useDebouncedValue(
+    form.asset.trim(),
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
+  const accountGroupSearch = useDebouncedValue(
+    form.accountGroup.trim(),
+    DEFAULT_SEARCH_DEBOUNCE_MS,
+  );
 
   // Reset the form whenever the dialog opens, seeding from the edited barrier.
   useEffect(() => {
@@ -284,13 +318,107 @@ export function LimitDialog({
     }
   }, [open, editing, initialAccount]);
 
-  const isEdit = editing !== null;
+  useEffect(() => {
+    if (
+      !open ||
+      isEdit ||
+      !scopeHasAccount(form.scope) ||
+      accountSearch === ""
+    ) {
+      return;
+    }
+    const controller = new AbortController();
+    void fetchAccounts(
+      {
+        code: accountSearch,
+        codeMatch: "starts_with",
+        limit: 8,
+        sort: "code",
+      },
+      controller.signal,
+    )
+      .then((accounts) => {
+        if (!controller.signal.aborted) {
+          setDialogAccountSuggestions(accounts);
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setDialogAccountSuggestions([]);
+        }
+      });
+    return () => controller.abort();
+  }, [accountSearch, fetchAccounts, form.scope, isEdit, open]);
+
+  useEffect(() => {
+    if (
+      !open ||
+      isEdit ||
+      isSpotFundsPnl ||
+      !scopeHasAsset(form.scope) ||
+      assetSearch === ""
+    ) {
+      return;
+    }
+    const controller = new AbortController();
+    void fetchAssets(
+      {
+        code: assetSearch,
+        codeMatch: "starts_with",
+        limit: 8,
+        sort: "code",
+      },
+      controller.signal,
+    )
+      .then((assets) => {
+        if (!controller.signal.aborted) {
+          setDialogAssetSuggestions(assets.map((asset) => asset.code));
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setDialogAssetSuggestions([]);
+        }
+      });
+    return () => controller.abort();
+  }, [assetSearch, fetchAssets, form.scope, isEdit, isSpotFundsPnl, open]);
+
+  useEffect(() => {
+    if (
+      !open ||
+      isEdit ||
+      !hasAccountGroupAxis ||
+      accountGroupSearch === "" ||
+      typeof fetchGroups !== "function"
+    ) {
+      return;
+    }
+    const controller = new AbortController();
+    void fetchGroups(
+      {
+        code: accountGroupSearch,
+        codeMatch: "starts_with",
+        limit: 8,
+        sort: "code",
+      },
+      controller.signal,
+    )
+      .then((groups) => {
+        if (!controller.signal.aborted) {
+          setDialogAccountGroupSuggestions(
+            groups.map((group) => group.code),
+          );
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setDialogAccountGroupSuggestions([]);
+        }
+      });
+    return () => controller.abort();
+  }, [accountGroupSearch, fetchGroups, hasAccountGroupAxis, isEdit, open]);
+
   const allowedScopes = getAllowedScopes(form.policy);
-  const isSpotFundsPnl =
-    form.policy === "spot_funds_pnl_bounds_kill_switch";
-  const hasAccountGroupAxis =
-    isSpotFundsPnl && form.scope === "account_group";
-  const hasAccountCurrencyAxis = isSpotFundsPnl;
   const kinds = getPolicyKinds(form.policy).filter(({ kind }) => {
     if (kind !== "initial_pnl") return true;
     if (isSpotFundsPnl) {
@@ -301,6 +429,23 @@ export function LimitDialog({
 
   // Pull the catalog entry for the current policy for descriptions + human labels.
   const catalogEntry = getPolicyCatalogEntry(form.policy);
+  const searchableAccountSuggestions = useMemo(
+    () =>
+      mergeSuggestions(
+        dialogAccountSuggestions.map((account) => account.code),
+        accountSuggestions,
+      ),
+    [accountSuggestions, dialogAccountSuggestions],
+  );
+  const searchableAssetSuggestions = useMemo(
+    () => mergeSuggestions(dialogAssetSuggestions, assetSuggestions),
+    [assetSuggestions, dialogAssetSuggestions],
+  );
+  const searchableAccountGroupSuggestions = useMemo(
+    () =>
+      mergeSuggestions(dialogAccountGroupSuggestions, accountGroupSuggestions),
+    [accountGroupSuggestions, dialogAccountGroupSuggestions],
+  );
 
   const candidate = useMemo<Limit>(() => {
     const values: Record<string, string> = {};
@@ -319,17 +464,17 @@ export function LimitDialog({
         !isSpotFundsPnl && scopeHasAsset(form.scope)
           ? form.asset.trim()
           : "",
-      accountCurrency: hasAccountCurrencyAxis
-        ? form.accountCurrency.trim()
-        : "",
       values,
     };
-  }, [form, hasAccountCurrencyAxis, hasAccountGroupAxis, isSpotFundsPnl, kinds]);
+  }, [form, hasAccountGroupAxis, isSpotFundsPnl, kinds]);
 
   const validation = validateLimit(candidate);
   const policyCount = policyCounts[form.policy];
   const requiresEngineRebuild =
-    !isEdit && policyCount !== undefined && policyCount === 0;
+    !isEdit &&
+    !isSpotFundsPnl &&
+    policyCount !== undefined &&
+    policyCount === 0;
 
   const setPolicy = (policy: Policy) => {
     // Switching policy resets scope to the first allowed one and clears values,
@@ -459,8 +604,7 @@ export function LimitDialog({
 
           {(scopeHasAccount(form.scope) ||
             hasAccountGroupAxis ||
-            scopeHasAsset(form.scope) ||
-            hasAccountCurrencyAxis) && (
+            scopeHasAsset(form.scope)) && (
             <div className="grid grid-cols-2 gap-3">
               {scopeHasAccount(form.scope) && (
                 <div className="space-y-1.5">
@@ -471,10 +615,17 @@ export function LimitDialog({
                     spellCheck={false}
                     placeholder={t("dialog.accountPlaceholder")}
                     disabled={isEdit}
-                    suggestions={accountSuggestions}
+                    suggestions={searchableAccountSuggestions}
                     onChange={(v) =>
                       setForm((prev) => ({ ...prev, account: v }))
                     }
+                    onSuggestionSelect={(account) =>
+                      setForm((prev) => ({ ...prev, account }))
+                    }
+                    onClear={() =>
+                      setForm((prev) => ({ ...prev, account: "" }))
+                    }
+                    clearLabel={tc("filters.clearField")}
                   />
                 </div>
               )}
@@ -489,10 +640,14 @@ export function LimitDialog({
                     spellCheck={false}
                     placeholder={t("dialog.accountGroupPlaceholder")}
                     disabled={isEdit}
-                    suggestions={accountGroupSuggestions}
+                    suggestions={searchableAccountGroupSuggestions}
                     onChange={(v) =>
                       setForm((prev) => ({ ...prev, accountGroup: v }))
                     }
+                    onClear={() =>
+                      setForm((prev) => ({ ...prev, accountGroup: "" }))
+                    }
+                    clearLabel={tc("filters.clearField")}
                   />
                 </div>
               )}
@@ -505,28 +660,14 @@ export function LimitDialog({
                     spellCheck={false}
                     placeholder={t("dialog.assetPlaceholder")}
                     disabled={isEdit}
-                    suggestions={assetSuggestions}
+                    suggestions={searchableAssetSuggestions}
                     onChange={(v) =>
                       setForm((prev) => ({ ...prev, asset: v }))
                     }
-                  />
-                </div>
-              )}
-              {hasAccountCurrencyAxis && (
-                <div className="space-y-1.5">
-                  <Label htmlFor="limit-account-currency">
-                    {t("dialog.accountCurrency")}
-                  </Label>
-                  <Autocomplete
-                    id="limit-account-currency"
-                    value={form.accountCurrency}
-                    spellCheck={false}
-                    placeholder={t("dialog.accountCurrencyPlaceholder")}
-                    disabled={isEdit}
-                    suggestions={currencySuggestions}
-                    onChange={(v) =>
-                      setForm((prev) => ({ ...prev, accountCurrency: v }))
+                    onClear={() =>
+                      setForm((prev) => ({ ...prev, asset: "" }))
                     }
+                    clearLabel={tc("filters.clearField")}
                   />
                 </div>
               )}
@@ -557,11 +698,15 @@ export function LimitDialog({
                     />
                   ) : (
                     <>
-                      <Input
+                      <NumberStepper
                         id={`kind-${kind}`}
                         value={form.values[kind] ?? ""}
                         spellCheck={false}
-                        onChange={(e) => setValue(kind, e.target.value)}
+                        min={isSpotFundsPnl ? null : "0"}
+                        allowSignedInput={isSpotFundsPnl}
+                        onChange={(value) => setValue(kind, value)}
+                        onClear={() => setValue(kind, "")}
+                        clearLabel={tc("filters.clearField")}
                       />
                       <p className="text-[0.6875rem] text-muted">{fieldHint}</p>
                     </>

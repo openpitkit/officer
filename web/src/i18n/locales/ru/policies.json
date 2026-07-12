@@ -49,8 +49,7 @@
     "description": "Барьер {{policy}} для {{scope}}{{account}}{{asset}} будет удалён.",
     "accountFragment": " счёт {{account}}",
     "accountGroupFragment": " группа счетов {{accountGroup}}",
-    "assetFragment": " актив {{asset}}",
-    "accountCurrencyFragment": " валюта счёта {{accountCurrency}}"
+    "assetFragment": " актив {{asset}}"
   },
   "restartConfirm": {
     "title": "Пересобрать риск-движок?",
@@ -68,8 +67,6 @@
     "accountGroupPlaceholder": "desk-a",
     "asset": "Актив",
     "assetPlaceholder": "AAPL",
-    "accountCurrency": "Валюта счёта",
-    "accountCurrencyPlaceholder": "USD",
     "values": "Значения",
     "rateLimitFootnote": "Необходимо указать и макс. ордеров, и окно.",
     "atLeastOneFootnote": "Требуется хотя бы одно значение.",

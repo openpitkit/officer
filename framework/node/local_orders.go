@@ -324,7 +324,12 @@ func (n *localNode) submitImmediate(
 				if attestFor != nil {
 					attest = attestFor(persisted, result)
 				}
-				return immediateAcceptedSettlement(key, persisted, result, caller), nil
+				return immediateAcceptedSettlement(
+					key,
+					persisted,
+					result,
+					caller,
+				), nil
 			},
 			attestSubmitted,
 		)
@@ -614,18 +619,23 @@ func submittedOrderEvent(caller domain.Caller) domain.OrderEvent {
 }
 
 func immediateAcceptedSettlement(
-	key Key, order domain.Order, result engine.ImmediateResult, caller domain.Caller,
+	key Key,
+	order domain.Order,
+	result engine.ImmediateResult,
+	caller domain.Caller,
 ) domain.OrderSettlement {
 	fillPayload := accountBlockPayload(result.Blocks)
 	fillPayload.FillQuantity = result.FillQuantity
 	fillPayload.FillPrice = result.SettlementLockPrice
 	fillPayload.FillLockPrice = result.SettlementLockPrice
 	return domain.OrderSettlement{
-		Account:     key.Account,
-		Order:       order.ExternalID,
-		OrderStatus: domain.OrderStatusFilled,
-		AllowedFrom: domain.OrderStatusesEligibleForFill(),
-		Balances:    balanceSettlementsFrom(result.Outcomes),
+		Account:              key.Account,
+		Order:                order.ExternalID,
+		OrderStatus:          domain.OrderStatusFilled,
+		AccountPnl:           result.AccountPnl,
+		AccountPnlHaltReason: result.AccountPnlHaltReason,
+		AllowedFrom:          domain.OrderStatusesEligibleForFill(),
+		Balances:             balanceSettlementsFrom(result.Outcomes),
 		Events: []domain.OrderEvent{
 			fillSettlementEvent(order.ExternalID, domain.OrderEventPreTradeAccepted, caller, domain.OrderEventPayload{}),
 			fillSettlementEvent(order.ExternalID, domain.OrderEventCommitted, caller, domain.OrderEventPayload{}),

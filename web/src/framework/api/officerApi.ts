@@ -255,6 +255,10 @@ function normalizeAccount(v: unknown): Account {
     blockReason: asString(pick(o, "blockReason", "BlockReason", "block_reason")),
     group: asString(pick(o, "group", "Group")),
     notes: asString(pick(o, "notes", "Notes")),
+    pnl: asString(pick(o, "pnl", "Pnl")),
+    pnlHaltReason: asString(
+      pick(o, "pnlHaltReason", "PnlHaltReason", "pnl_halt_reason"),
+    ),
     positionCount: asInt(pick(o, "positionCount", "PositionCount")),
   };
 }
@@ -288,6 +292,9 @@ function normalizeBalance(v: unknown): Balance {
     ),
     realizedPnl: asString(
       pick(o, "realizedPnl", "RealizedPnl", "realized_pnl"),
+    ),
+    realizedPnlHaltReason: asString(
+      pick(o, "realizedPnlHaltReason", "RealizedPnlHaltReason", "realized_pnl_halt_reason"),
     ),
     updatedAt: asString(pick(o, "updatedAt", "UpdatedAt", "updated_at")),
   };
@@ -376,6 +383,14 @@ function normalizeAdjustmentAccepted(v: unknown): AdjustmentAccepted | undefined
   const realizedPnlResult = normalizeAdjustmentResultOptional(
     pick(v, "realizedPnlResult", "RealizedPnlResult", "realized_pnl_result"),
   );
+  const realizedPnlHaltReason = asString(
+    pick(
+      v,
+      "realizedPnlHaltReason",
+      "RealizedPnlHaltReason",
+      "realized_pnl_halt_reason",
+    ),
+  );
   return {
     balanceDelta: asString(pick(v, "balanceDelta", "BalanceDelta", "balance_delta")),
     balanceResult: asString(pick(v, "balanceResult", "BalanceResult", "balance_result")),
@@ -384,6 +399,10 @@ function normalizeAdjustmentAccepted(v: unknown): AdjustmentAccepted | undefined
     incomingDelta: asString(pick(v, "incomingDelta", "IncomingDelta", "incoming_delta")),
     incomingResult: asString(pick(v, "incomingResult", "IncomingResult", "incoming_result")),
     realizedPnlResult,
+    ...(realizedPnlHaltReason ? { realizedPnlHaltReason } : {}),
+    averageEntryPrice: asString(
+      pick(v, "averageEntryPrice", "AverageEntryPrice", "average_entry_price"),
+    ),
   };
 }
 
@@ -660,7 +679,6 @@ function normalizeLimit(v: unknown): Limit {
     account: asString(pick(o, "account", "Account")),
     accountGroup: asString(pick(o, "accountGroup", "AccountGroup")),
     asset: asString(pick(o, "asset", "Asset")),
-    accountCurrency: asString(pick(o, "accountCurrency", "AccountCurrency")),
     values: normalizeValues(pick(o, "values", "Values")),
   };
 }
@@ -695,7 +713,6 @@ function normalizeSpotFundsPnlBoundsLimit(
     scope: asString(pick(o, "scope", "Scope")),
     account: asString(pick(o, "account", "Account")),
     accountGroup: asString(pick(o, "accountGroup", "AccountGroup")),
-    accountCurrency: asString(pick(o, "accountCurrency", "AccountCurrency")),
     lowerBound: asString(pick(o, "lowerBound", "LowerBound", "lower_bound")),
     upperBound: asString(pick(o, "upperBound", "UpperBound", "upper_bound")),
     initialPnl: asString(pick(o, "initialPnl", "InitialPnl", "initial_pnl")),
@@ -753,7 +770,6 @@ function flattenAccountLimits(v: AccountLimits): Limit[] {
       account: limit.account,
       accountGroup: limit.accountGroup,
       asset: "",
-      accountCurrency: limit.accountCurrency,
       values: {
         lower_bound: limit.lowerBound,
         upper_bound: limit.upperBound,
@@ -793,7 +809,6 @@ function normalizePolicy(v: unknown): Policy {
     account: asString(pick(o, "account", "Account")),
     accountGroup: asString(pick(o, "accountGroup", "AccountGroup")),
     asset: asString(pick(o, "asset", "Asset")),
-    accountCurrency: asString(pick(o, "accountCurrency", "AccountCurrency")),
     values: {},
   };
   const rate = pick(values, "rate", "Rate");
@@ -846,7 +861,6 @@ function policyToLimit(policy: Policy): Limit {
     account: policy.account,
     accountGroup: policy.accountGroup,
     asset: policy.asset,
-    accountCurrency: policy.accountCurrency,
   };
   switch (policy.kind) {
     case "rate_limit": {
@@ -941,7 +955,6 @@ function limitEndpointBody(client: ApiClient, limit: Limit): { path: string; bod
           scope: limit.scope,
           account: limit.account,
           accountGroup: limit.accountGroup ?? "",
-          accountCurrency: limit.accountCurrency ?? "",
           lowerBound: limit.values.lower_bound ?? "",
           upperBound: limit.values.upper_bound ?? "",
           initialPnl: limit.values.initial_pnl ?? "",
@@ -1489,14 +1502,16 @@ async function setMarketDataInstanceEnabled(client: ApiClient,
 }
 
 /** DELETE /market-data/instances/{externalId}. */
-async function deleteMarketDataInstance(client: ApiClient, 
+async function deleteMarketDataInstance(
+  client: ApiClient,
   externalId: string,
-  force = false,
 ): Promise<void> {
-  const query = force ? "?force=true" : "";
-  await client.request(`${client.baseUrl}/market-data/instances/${encode(externalId)}${query}`, {
-    method: "DELETE",
-  });
+  await client.request(
+    `${client.baseUrl}/market-data/instances/${encode(externalId)}`,
+    {
+      method: "DELETE",
+    },
+  );
 }
 
 /** PUT /market-data/instances/{externalId}/instruments. */
@@ -1894,7 +1909,6 @@ function policyListQuery(filters?: PolicyListFilters): string {
   appendListFilter(params, "account", filters.account);
   appendListFilter(params, "accountGroup", filters.accountGroup);
   appendListFilter(params, "asset", filters.asset);
-  appendListFilter(params, "accountCurrency", filters.accountCurrency);
   appendListFilter(params, "policy", filters.policy, "all");
   appendListFilter(params, "sort", filters.sort);
   appendListFilter(params, "order", filters.order);
@@ -2710,6 +2724,7 @@ function normalizeCheckWouldBlock(v: unknown): CheckWouldBlock | null {
   }
   return {
     account: asString(pick(v, "account", "Account")),
+    policy: asString(pick(v, "policy", "Policy")),
     code: asString(pick(v, "code", "Code")),
     reason: asString(pick(v, "reason", "Reason")),
     details: asString(pick(v, "details", "Details")),
@@ -2901,6 +2916,7 @@ function normalizeAttestationBlock(v: unknown): AttestationBlock {
   const o = isObject(v) ? v : {};
   return {
     account: asString(pick(o, "account", "Account")),
+    policy: asString(pick(o, "policy", "Policy")),
     code: asString(pick(o, "code", "Code")),
     reason: asString(pick(o, "reason", "Reason")),
     details: asString(pick(o, "details", "Details")),
@@ -3093,6 +3109,7 @@ function normalizeExecutionBlock(v: unknown): ExecutionBlock {
   return {
     account: asString(pick(o, "account", "Account")),
     code: asString(pick(o, "code", "Code")),
+    policy: asString(pick(o, "policy", "Policy")),
     reason: asString(pick(o, "reason", "Reason")),
     details: asString(pick(o, "details", "Details")),
   };
@@ -3100,6 +3117,14 @@ function normalizeExecutionBlock(v: unknown): ExecutionBlock {
 
 function normalizeExecutionOutcome(v: unknown): ExecutionOutcome {
   const o = isObject(v) ? v : {};
+  const realizedPnlHaltReason = asString(
+    pick(
+      o,
+      "realizedPnlHaltReason",
+      "RealizedPnlHaltReason",
+      "realized_pnl_halt_reason",
+    ),
+  );
   return {
     asset: asString(pick(o, "asset", "Asset")),
     balanceDelta: asString(pick(o, "balanceDelta", "BalanceDelta")),
@@ -3108,6 +3133,10 @@ function normalizeExecutionOutcome(v: unknown): ExecutionOutcome {
     heldResult: asString(pick(o, "heldResult", "HeldResult")),
     incomingDelta: asString(pick(o, "incomingDelta", "IncomingDelta")),
     incomingResult: asString(pick(o, "incomingResult", "IncomingResult")),
+    realizedPnlDelta: asString(pick(o, "realizedPnlDelta", "RealizedPnlDelta")),
+    realizedPnlResult: asString(pick(o, "realizedPnlResult", "RealizedPnlResult")),
+    ...(realizedPnlHaltReason ? { realizedPnlHaltReason } : {}),
+    averageEntryPrice: asString(pick(o, "averageEntryPrice", "AverageEntryPrice")),
   };
 }
 
@@ -3311,7 +3340,6 @@ async function deleteLimit(client: ApiClient, target: {
   account: string;
   accountGroup?: string;
   asset: string;
-  accountCurrency?: string;
 }): Promise<void> {
   const params = new URLSearchParams({
     policy: target.policy,
@@ -3325,9 +3353,6 @@ async function deleteLimit(client: ApiClient, target: {
   }
   if (target.asset) {
     params.set("asset", target.asset);
-  }
-  if (target.accountCurrency) {
-    params.set("accountCurrency", target.accountCurrency);
   }
   await client.request(`${client.baseUrl}/limits?${params.toString()}`, { method: "DELETE" });
 }

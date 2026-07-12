@@ -65,11 +65,10 @@ func setSpotFundsPnlBoundsLimitDetail(limit domain.LimitSpotFundsPnlBounds) stri
 	var b strings.Builder
 	b.WriteString("set limit ")
 	b.WriteString(axesDetail(LimitTarget{
-		Policy:          domain.PolicySpotFundsPnlBoundsKillSwitch,
-		Scope:           limit.Scope,
-		Account:         limit.Account,
-		AccountGroup:    limit.AccountGroup,
-		AccountCurrency: limit.AccountCurrency,
+		Policy:       domain.PolicySpotFundsPnlBoundsKillSwitch,
+		Scope:        limit.Scope,
+		Account:      limit.Account,
+		AccountGroup: limit.AccountGroup,
 	}))
 	if limit.LowerBound != "" {
 		b.WriteString(" lower_bound=")
@@ -108,16 +107,6 @@ func adjustmentDetail(id domain.AccountID, asset string, accepted bool) string {
 		disposition = "accepted"
 	}
 	return fmt.Sprintf("adjustment account %s asset=%s %s", id, asset, disposition)
-}
-
-// balanceRealizedPnlDetail renders a store-side realized-P&L snapshot update.
-func balanceRealizedPnlDetail(id domain.AccountID, asset, realizedPnl string) string {
-	return fmt.Sprintf(
-		"set balance realized_pnl account %s asset=%s realized_pnl=%s",
-		id,
-		asset,
-		realizedPnl,
-	)
 }
 
 // importPositionSnapshotDetail renders the internal snapshot-import adjustment
@@ -208,6 +197,39 @@ func engineBlockReason(order domain.ExternalID, block domain.ExecutionAccountBlo
 	return fmt.Sprintf("%s [%s]", reason, cause)
 }
 
+// policyConfigurationBlockDetail identifies an engine block that arose while
+// applying a live policy update, before any subsequent account work can run.
+func policyConfigurationBlockDetail(policy string, block domain.AccountBlock) string {
+	blockPolicy := block.Policy
+	if blockPolicy == "" {
+		blockPolicy = policy
+	}
+	detail := fmt.Sprintf("engine blocked account %s policy %s code=%s: %s",
+		block.Account, blockPolicy, block.Code, block.Reason)
+	if block.Details != "" {
+		detail += " (" + block.Details + ")"
+	}
+	return detail
+}
+
+// policyConfigurationBlockReason renders the engine cause stored with an
+// account that was blocked while a policy update was applied.
+func policyConfigurationBlockReason(policy string, block domain.AccountBlock) string {
+	blockPolicy := block.Policy
+	if blockPolicy == "" {
+		blockPolicy = policy
+	}
+	reason := block.Reason
+	if reason == "" {
+		reason = block.Code
+	}
+	cause := fmt.Sprintf("policy=%s, code=%s", blockPolicy, block.Code)
+	if block.Details != "" {
+		cause += ", " + block.Details
+	}
+	return fmt.Sprintf("%s [%s]", reason, cause)
+}
+
 // axesDetail renders the policy/scope axes of a typed barrier.
 func axesDetail(target LimitTarget) string {
 	var b strings.Builder
@@ -225,10 +247,6 @@ func axesDetail(target LimitTarget) string {
 	if target.Asset != "" {
 		b.WriteString(" asset=")
 		b.WriteString(target.Asset)
-	}
-	if target.AccountCurrency != "" {
-		b.WriteString(" account_currency=")
-		b.WriteString(target.AccountCurrency)
 	}
 	return b.String()
 }

@@ -249,10 +249,9 @@
   },
   "deleteInstance": {
     "title": "删除行情数据来源？",
-    "description": "{{label}} 将被永久删除。仅在明确强制确认后才会删除已配置工具。",
+    "description": "{{label}} 将被永久删除。",
     "cancel": "取消",
-    "submit": "删除",
-    "forceSubmit": "强制删除"
+    "submit": "删除"
   },
   "deleteInstrument": {
     "title": "删除工具？",

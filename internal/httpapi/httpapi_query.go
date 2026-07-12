@@ -405,18 +405,17 @@ var assetClassSortKeys = map[string]struct{}{
 }
 
 var policySortKeys = map[string]struct{}{
-	"account":         {},
-	"accountCurrency": {},
-	"accountGroup":    {},
-	"asset":           {},
-	"initialPnl":      {},
-	"lowerBound":      {},
-	"maxNotional":     {},
-	"maxOrders":       {},
-	"maxQuantity":     {},
-	"policy":          {},
-	"scope":           {},
-	"upperBound":      {},
+	"account":      {},
+	"accountGroup": {},
+	"asset":        {},
+	"initialPnl":   {},
+	"lowerBound":   {},
+	"maxNotional":  {},
+	"maxOrders":    {},
+	"maxQuantity":  {},
+	"policy":       {},
+	"scope":        {},
+	"upperBound":   {},
 }
 
 var balanceSortKeys = map[string]struct{}{
@@ -780,7 +779,6 @@ func policyListFilterFromQuery(q url.Values) (store.PolicyListFilter, error) {
 	account := store.ExactTextMatcher(q.Get("account"))
 	accountGroup := store.ExactTextMatcher(q.Get("accountGroup"))
 	asset := store.ExactTextMatcher(q.Get("asset"))
-	accountCurrency := store.ExactTextMatcher(q.Get("accountCurrency"))
 	kind, err := policyKindFromQuery(q)
 	if err != nil {
 		return store.PolicyListFilter{}, err
@@ -794,13 +792,12 @@ func policyListFilterFromQuery(q url.Values) (store.PolicyListFilter, error) {
 		return store.PolicyListFilter{}, err
 	}
 	return store.PolicyListFilter{
-		Account:         account,
-		AccountGroup:    accountGroup,
-		Asset:           asset,
-		AccountCurrency: accountCurrency,
-		Kind:            kind,
-		Sort:            sortSpec,
-		Page:            page,
+		Account:      account,
+		AccountGroup: accountGroup,
+		Asset:        asset,
+		Kind:         kind,
+		Sort:         sortSpec,
+		Page:         page,
 	}, nil
 }
 

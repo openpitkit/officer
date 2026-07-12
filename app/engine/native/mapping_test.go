@@ -23,8 +23,10 @@
 package native
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -32,10 +34,80 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"go.openpit.dev/openpit/accountadjustment"
+	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/reject"
 
 	"go.openpit.dev/officer/framework/domain"
 )
+
+func TestMergeBalanceOutcomes_PreservesOrderedPhaseEffects(t *testing.T) {
+	got, err := mergeBalanceOutcomes(
+		[]BalanceOutcome{
+			{Asset: "USD", Outcome: domain.AdjustmentOutcomeAccepted{
+				BalanceDelta: "-100", BalanceResult: "900",
+				HeldDelta: "100", HeldResult: "100",
+				RealizedPnlResult: "7", AverageEntryPrice: "1",
+			}},
+			{Asset: "BTC", Outcome: domain.AdjustmentOutcomeAccepted{
+				IncomingDelta: "1", IncomingResult: "1",
+				RealizedPnlResult: "3",
+			}},
+		},
+		[]BalanceOutcome{
+			{Asset: "USD", Outcome: domain.AdjustmentOutcomeAccepted{
+				BalanceDelta: "25", BalanceResult: "925",
+				HeldDelta: "-100", HeldResult: "0",
+				RealizedPnlDelta: "-1", RealizedPnlResult: "6",
+			}},
+			{Asset: "BTC", Outcome: domain.AdjustmentOutcomeAccepted{
+				BalanceDelta: "1", BalanceResult: "1",
+				IncomingDelta: "-1", IncomingResult: "0",
+				RealizedPnlHaltReason: domain.PnlHaltReasonMissingFx,
+				AverageEntryPrice:     "100",
+			}},
+		},
+	)
+	if err != nil {
+		t.Fatalf("mergeBalanceOutcomes: %v", err)
+	}
+	if len(got) != 2 || got[0].Asset != "USD" || got[1].Asset != "BTC" {
+		t.Fatalf("merged outcomes = %+v, want one USD then one BTC", got)
+	}
+	usd := got[0].Outcome
+	if usd.BalanceDelta != "-75" || usd.BalanceResult != "925" ||
+		usd.HeldDelta != "0" || usd.HeldResult != "0" ||
+		usd.RealizedPnlDelta != "-1" || usd.RealizedPnlResult != "6" ||
+		usd.AverageEntryPrice != "1" {
+		t.Fatalf("merged USD outcome = %+v", usd)
+	}
+	btc := got[1].Outcome
+	if btc.BalanceDelta != "1" || btc.BalanceResult != "1" ||
+		btc.IncomingDelta != "0" || btc.IncomingResult != "0" ||
+		btc.RealizedPnlResult != "" ||
+		btc.RealizedPnlHaltReason != domain.PnlHaltReasonMissingFx ||
+		btc.AverageEntryPrice != "100" {
+		t.Fatalf("merged BTC outcome = %+v", btc)
+	}
+}
+
+func TestSpotFundsAccountPnlFromList_NoOutcomeDoesNotWarn(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(previous)
+
+	pnl, halt, err := spotFundsAccountPnlFromList(
+		param.NewAccountIDFromUint64(7), nil,
+	)
+	if err != nil || pnl != "" || halt != "" {
+		t.Fatalf("spotFundsAccountPnlFromList = (%q, %q, %v), want unchanged", pnl, halt, err)
+	}
+	if logs.Len() != 0 {
+		t.Fatalf("normal missing P&L outcome logged: %s", logs.String())
+	}
+}
 
 // testEngineAccountID assigns a deterministic, distinct engine account id to a
 // test account code so the resolver maps it without hashing. Tests address
@@ -209,22 +281,19 @@ func TestSpotFundsPnlBoundsAxes_DistributesAndUsesNonNilSlices(t *testing.T) {
 	global, groups, accounts, err := spotFundsPnlBoundsAxes(
 		[]domain.LimitSpotFundsPnlBounds{
 			{
-				Scope:           domain.ScopeGlobal,
-				AccountCurrency: "USD",
-				LowerBound:      "-1000",
+				Scope:      domain.ScopeGlobal,
+				LowerBound: "-1000",
 			},
 			{
-				Scope:           domain.ScopeAccountGroup,
-				AccountGroup:    "desk-a",
-				AccountCurrency: "EUR",
-				UpperBound:      "500",
+				Scope:        domain.ScopeAccountGroup,
+				AccountGroup: "desk-a",
+				UpperBound:   "500",
 			},
 			{
-				Scope:           domain.ScopeAccount,
-				Account:         "acc-1",
-				AccountCurrency: "GBP",
-				LowerBound:      "-100",
-				UpperBound:      "100",
+				Scope:      domain.ScopeAccount,
+				Account:    "acc-1",
+				LowerBound: "-100",
+				UpperBound: "100",
 			},
 		},
 		res,
@@ -232,21 +301,26 @@ func TestSpotFundsPnlBoundsAxes_DistributesAndUsesNonNilSlices(t *testing.T) {
 	if err != nil {
 		t.Fatalf("spotFundsPnlBoundsAxes: %v", err)
 	}
-	if global == nil || groups == nil || accounts == nil {
-		t.Fatalf("axes must be non-nil")
+	globalBarrier, globalSet := global.Get()
+	if !globalSet || globalBarrier == nil || groups == nil || accounts == nil {
+		t.Fatalf("axes must set the global barrier and non-nil account slices")
 	}
-	if len(global) != 1 || len(groups) != 1 || len(accounts) != 1 {
+	if len(groups) != 1 || len(accounts) != 1 {
 		t.Fatalf(
-			"axis counts wrong: global=%d groups=%d accounts=%d",
-			len(global),
+			"axis counts wrong: global=%+v groups=%d accounts=%d",
+			globalBarrier,
 			len(groups),
 			len(accounts),
 		)
 	}
-	if global[0].AccountCurrency.String() != "USD" ||
-		groups[0].Barrier.AccountCurrency.String() != "EUR" ||
-		accounts[0].Barrier.AccountCurrency.String() != "GBP" {
-		t.Fatalf("account currencies not mapped: %+v %+v %+v", global, groups, accounts)
+	if _, ok := globalBarrier.LowerBound.Get(); !ok {
+		t.Fatalf("global lower bound not mapped: %+v", globalBarrier)
+	}
+	if _, ok := groups[0].Barrier.UpperBound.Get(); !ok {
+		t.Fatalf("account-group upper bound not mapped: %+v", groups[0])
+	}
+	if _, ok := accounts[0].Barrier.LowerBound.Get(); !ok {
+		t.Fatalf("P&L bounds not mapped: %+v %+v %+v", globalBarrier, groups, accounts)
 	}
 }
 
@@ -261,7 +335,7 @@ func TestBuildEngine_RegistersRiskPolicies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newIDResolver: %v", err)
 	}
-	eng, service, registered, err := buildEngine(snap, res)
+	eng, service, registered, _, err := buildEngine(snap, res)
 	if err != nil {
 		t.Fatalf("buildEngine: %v", err)
 	}
@@ -435,7 +509,7 @@ func TestBuildOpenPitEngine_SeedsFromSnapshot(t *testing.T) {
 	// Retune the rate-limit policy (broker barrier kept) on the live handle: the
 	// axes are replaced wholesale, no rebuild.
 	newLimits := LimitSet{RateLimits: []domain.LimitRate{rateLimit(domain.ScopeBroker, "", "", 5, time.Second)}}
-	if err := eng.ConfigurePolicy(ctx, domain.PolicyRateLimit, newLimits); err != nil {
+	if _, err := eng.ConfigurePolicy(ctx, domain.PolicyRateLimit, newLimits); err != nil {
 		t.Fatalf("ConfigurePolicy retune: %v", err)
 	}
 
@@ -475,7 +549,7 @@ func TestConfigurePolicy_RateLimitRetuneUnchangedKeys(t *testing.T) {
 		rateLimit(domain.ScopeBroker, "", "", 7, time.Second),
 		rateLimit(domain.ScopeAsset, "", "USD", 3, time.Second),
 	}}
-	if err := eng.ConfigurePolicy(context.Background(),
+	if _, err := eng.ConfigurePolicy(context.Background(),
 		domain.PolicyRateLimit, same); err != nil {
 		t.Fatalf("ConfigurePolicy retune: %v", err)
 	}
@@ -498,7 +572,7 @@ func TestConfigurePolicy_OrderSizeReplacesAxes(t *testing.T) {
 		orderSize(domain.ScopeBroker, "", "", "20", ""),
 		orderSize(domain.ScopeAsset, "", "USD", "5", ""),
 	}}
-	if err := eng.ConfigurePolicy(context.Background(),
+	if _, err := eng.ConfigurePolicy(context.Background(),
 		domain.PolicyOrderSizeLimit, replaced); err != nil {
 		t.Fatalf("ConfigurePolicy replace: %v", err)
 	}
@@ -521,7 +595,7 @@ func TestConfigurePolicy_OrderSizeDropBrokerStub(t *testing.T) {
 	defer eng.Stop()
 
 	dropped := LimitSet{OrderSizeLimits: []domain.LimitOrderSize{orderSize(domain.ScopeAsset, "", "USD", "5", "")}}
-	err = eng.ConfigurePolicy(context.Background(), domain.PolicyOrderSizeLimit, dropped)
+	_, err = eng.ConfigurePolicy(context.Background(), domain.PolicyOrderSizeLimit, dropped)
 	if !errors.Is(err, domain.ErrNotImplemented) {
 		t.Fatalf("want ErrNotImplemented for order_size broker drop, got %v", err)
 	}
@@ -545,7 +619,7 @@ func TestConfigurePolicy_OrderSizeNoBrokerReplace(t *testing.T) {
 		orderSize(domain.ScopeAsset, "", "USD", "7", ""),
 		orderSize(domain.ScopeAccountAsset, "acc-1", "USD", "3", ""),
 	}}
-	if err := eng.ConfigurePolicy(context.Background(),
+	if _, err := eng.ConfigurePolicy(context.Background(),
 		domain.PolicyOrderSizeLimit, replaced); err != nil {
 		t.Fatalf("ConfigurePolicy replace without broker: %v", err)
 	}
@@ -565,7 +639,7 @@ func TestConfigurePolicy_UnregisteredPolicyStub(t *testing.T) {
 	defer eng.Stop()
 
 	add := LimitSet{OrderSizeLimits: []domain.LimitOrderSize{orderSize(domain.ScopeBroker, "", "", "10", "")}}
-	err = eng.ConfigurePolicy(context.Background(), domain.PolicyOrderSizeLimit, add)
+	_, err = eng.ConfigurePolicy(context.Background(), domain.PolicyOrderSizeLimit, add)
 	if !errors.Is(err, domain.ErrNotImplemented) {
 		t.Fatalf("want ErrNotImplemented for unregistered policy, got %v", err)
 	}
@@ -584,7 +658,7 @@ func TestConfigurePolicy_RemoveLastBarrierStub(t *testing.T) {
 	}
 	defer eng.Stop()
 
-	err = eng.ConfigurePolicy(context.Background(), domain.PolicyRateLimit, LimitSet{})
+	_, err = eng.ConfigurePolicy(context.Background(), domain.PolicyRateLimit, LimitSet{})
 	if !errors.Is(err, domain.ErrNotImplemented) {
 		t.Fatalf("want ErrNotImplemented for empty settings, got %v", err)
 	}
@@ -608,12 +682,12 @@ func TestConfigurePolicy_RateLimitAddRemoveBarrier(t *testing.T) {
 		rateLimit(domain.ScopeBroker, "", "", 100, time.Second),
 		rateLimit(domain.ScopeAsset, "", "USD", 50, time.Second),
 	}}
-	if err := eng.ConfigurePolicy(ctx, domain.PolicyRateLimit, added); err != nil {
+	if _, err := eng.ConfigurePolicy(ctx, domain.PolicyRateLimit, added); err != nil {
 		t.Fatalf("ConfigurePolicy add: %v", err)
 	}
 
 	removed := LimitSet{RateLimits: []domain.LimitRate{rateLimit(domain.ScopeBroker, "", "", 100, time.Second)}}
-	if err := eng.ConfigurePolicy(ctx, domain.PolicyRateLimit, removed); err != nil {
+	if _, err := eng.ConfigurePolicy(ctx, domain.PolicyRateLimit, removed); err != nil {
 		t.Fatalf("ConfigurePolicy remove: %v", err)
 	}
 }
@@ -635,7 +709,7 @@ func TestConfigurePolicy_RateLimitDropBrokerStub(t *testing.T) {
 	defer eng.Stop()
 
 	dropped := LimitSet{RateLimits: []domain.LimitRate{rateLimit(domain.ScopeAsset, "", "USD", 50, time.Second)}}
-	err = eng.ConfigurePolicy(context.Background(), domain.PolicyRateLimit, dropped)
+	_, err = eng.ConfigurePolicy(context.Background(), domain.PolicyRateLimit, dropped)
 	if !errors.Is(err, domain.ErrNotImplemented) {
 		t.Fatalf("want ErrNotImplemented for rate_limit broker drop, got %v", err)
 	}
@@ -650,17 +724,15 @@ func TestSpotFundsPnlBoundsSeeds_OnlyExplicitInitialPnlSeeds(t *testing.T) {
 	seeds, err := spotFundsPnlBoundsSeeds(
 		[]domain.LimitSpotFundsPnlBounds{
 			{
-				Scope:           domain.ScopeAccount,
-				Account:         "acc-1",
-				AccountCurrency: "USD",
-				LowerBound:      "-100",
-				InitialPnl:      "12.50",
+				Scope:      domain.ScopeAccount,
+				Account:    "acc-1",
+				LowerBound: "-100",
+				InitialPnl: "12.50",
 			},
 			{
-				Scope:           domain.ScopeAccount,
-				Account:         "acc-2",
-				AccountCurrency: "EUR",
-				LowerBound:      "-100",
+				Scope:      domain.ScopeAccount,
+				Account:    "acc-2",
+				LowerBound: "-100",
 			},
 		},
 		testResolver("acc-1", "acc-2"),
@@ -674,10 +746,33 @@ func TestSpotFundsPnlBoundsSeeds_OnlyExplicitInitialPnlSeeds(t *testing.T) {
 	if seeds[0].initialPnl.String() != "12.50" {
 		t.Fatalf("initial_pnl = %s, want 12.50", seeds[0].initialPnl.String())
 	}
-	// The surviving seed is the explicit acc-1/USD barrier, not the empty acc-2/EUR
-	// one, so its account currency identifies which barrier was kept.
-	if seeds[0].accountCurrency.String() != "USD" {
-		t.Fatalf("seed account currency = %s, want USD", seeds[0].accountCurrency.String())
+	if seeds[0].account.Handle() != 1 {
+		t.Fatalf("seed account = %d, want acc-1", seeds[0].account.Handle())
+	}
+}
+
+func TestPolicyConfigurationBlocksFromCarriesAccountAndFallbackPolicy(t *testing.T) {
+	t.Parallel()
+	block := reject.NewAccountBlock(
+		reject.CodePnlKillSwitchTriggered,
+		"",
+		"P&L bound breached",
+		"lower=-100",
+	)
+	got := policyConfigurationBlocksFrom(
+		[]reject.AccountBlock{block},
+		"acc-1",
+		domain.PolicySpotFundsPnlBoundsKillSwitch,
+	)
+	if len(got) != 1 {
+		t.Fatalf("blocks = %+v, want one", got)
+	}
+	if got[0].Account != "acc-1" ||
+		got[0].Policy != domain.PolicySpotFundsPnlBoundsKillSwitch ||
+		got[0].Code != rejectCodeName(block.Code) ||
+		got[0].Reason != block.Reason ||
+		got[0].Details != block.Details {
+		t.Fatalf("mapped block = %+v, want account and binding block fields", got[0])
 	}
 }
 
@@ -688,10 +783,9 @@ func TestSpotFundsPnlBoundsSeeds_InvalidInitialPnl(t *testing.T) {
 	_, err := spotFundsPnlBoundsSeeds(
 		[]domain.LimitSpotFundsPnlBounds{
 			{
-				Scope:           domain.ScopeAccount,
-				Account:         "acc-1",
-				AccountCurrency: "USD",
-				InitialPnl:      "not-a-number",
+				Scope:      domain.ScopeAccount,
+				Account:    "acc-1",
+				InitialPnl: "not-a-number",
 			},
 		},
 		testResolver("acc-1"),
@@ -708,9 +802,8 @@ func TestSpotFundsPnlBoundsAxes_UnsupportedScope(t *testing.T) {
 	_, _, _, err := spotFundsPnlBoundsAxes(
 		[]domain.LimitSpotFundsPnlBounds{
 			{
-				Scope:           domain.ScopeAsset,
-				AccountCurrency: "USD",
-				LowerBound:      "-100",
+				Scope:      domain.ScopeAsset,
+				LowerBound: "-100",
 			},
 		},
 		testResolver(),
@@ -728,10 +821,9 @@ func TestSpotFundsPnlBoundsSeeds_IgnoresNonAccountInitialPnl(t *testing.T) {
 	seeds, err := spotFundsPnlBoundsSeeds(
 		[]domain.LimitSpotFundsPnlBounds{
 			{
-				Scope:           domain.ScopeGlobal,
-				AccountCurrency: "USD",
-				LowerBound:      "-100",
-				InitialPnl:      "1",
+				Scope:      domain.ScopeGlobal,
+				LowerBound: "-100",
+				InitialPnl: "1",
 			},
 		},
 		testResolver(),
@@ -750,11 +842,10 @@ func TestChangedSpotFundsPnlBoundsSeeds_IgnoresUnchangedCompleteSet(t *testing.T
 	currentSeeds, err := spotFundsPnlBoundsSeeds(
 		[]domain.LimitSpotFundsPnlBounds{
 			{
-				Scope:           domain.ScopeAccount,
-				Account:         "acc-1",
-				AccountCurrency: "USD",
-				LowerBound:      "-100",
-				InitialPnl:      "12.50",
+				Scope:      domain.ScopeAccount,
+				Account:    "acc-1",
+				LowerBound: "-100",
+				InitialPnl: "12.50",
 			},
 		},
 		res,
@@ -765,16 +856,14 @@ func TestChangedSpotFundsPnlBoundsSeeds_IgnoresUnchangedCompleteSet(t *testing.T
 	desiredSeeds, err := spotFundsPnlBoundsSeeds(
 		[]domain.LimitSpotFundsPnlBounds{
 			{
-				Scope:           domain.ScopeGlobal,
-				AccountCurrency: "USD",
-				LowerBound:      "-200",
+				Scope:      domain.ScopeGlobal,
+				LowerBound: "-200",
 			},
 			{
-				Scope:           domain.ScopeAccount,
-				Account:         "acc-1",
-				AccountCurrency: "USD",
-				LowerBound:      "-150",
-				InitialPnl:      "12.5",
+				Scope:      domain.ScopeAccount,
+				Account:    "acc-1",
+				LowerBound: "-150",
+				InitialPnl: "12.5",
 			},
 		},
 		res,
@@ -800,11 +889,10 @@ func TestChangedSpotFundsPnlBoundsSeeds_DetectsChangedSeed(t *testing.T) {
 	currentSeeds, err := spotFundsPnlBoundsSeeds(
 		[]domain.LimitSpotFundsPnlBounds{
 			{
-				Scope:           domain.ScopeAccount,
-				Account:         "acc-1",
-				AccountCurrency: "USD",
-				LowerBound:      "-100",
-				InitialPnl:      "12.50",
+				Scope:      domain.ScopeAccount,
+				Account:    "acc-1",
+				LowerBound: "-100",
+				InitialPnl: "12.50",
 			},
 		},
 		res,
@@ -815,11 +903,10 @@ func TestChangedSpotFundsPnlBoundsSeeds_DetectsChangedSeed(t *testing.T) {
 	desiredSeeds, err := spotFundsPnlBoundsSeeds(
 		[]domain.LimitSpotFundsPnlBounds{
 			{
-				Scope:           domain.ScopeAccount,
-				Account:         "acc-1",
-				AccountCurrency: "USD",
-				LowerBound:      "-100",
-				InitialPnl:      "13",
+				Scope:      domain.ScopeAccount,
+				Account:    "acc-1",
+				LowerBound: "-100",
+				InitialPnl: "13",
 			},
 		},
 		res,
@@ -844,11 +931,10 @@ func TestChangedSpotFundsPnlBoundsSeeds_RemovalOnlyDropsTracker(t *testing.T) {
 	currentSeeds, err := spotFundsPnlBoundsSeeds(
 		[]domain.LimitSpotFundsPnlBounds{
 			{
-				Scope:           domain.ScopeAccount,
-				Account:         "acc-1",
-				AccountCurrency: "USD",
-				LowerBound:      "-100",
-				InitialPnl:      "12.50",
+				Scope:      domain.ScopeAccount,
+				Account:    "acc-1",
+				LowerBound: "-100",
+				InitialPnl: "12.50",
 			},
 		},
 		testResolver("acc-1"),
@@ -865,72 +951,6 @@ func TestChangedSpotFundsPnlBoundsSeeds_RemovalOnlyDropsTracker(t *testing.T) {
 	}
 	if len(next) != 0 {
 		t.Fatalf("next tracker len = %d, want 0", len(next))
-	}
-}
-
-func TestSpotFundsPnlBoundsRollbackPnl_NewSeedUsesZero(t *testing.T) {
-	t.Parallel()
-	seeds, err := spotFundsPnlBoundsSeeds(
-		[]domain.LimitSpotFundsPnlBounds{
-			{
-				Scope:           domain.ScopeAccount,
-				Account:         "acc-1",
-				AccountCurrency: "USD",
-				LowerBound:      "-100",
-				InitialPnl:      "12.50",
-			},
-		},
-		testResolver("acc-1"),
-	)
-	if err != nil {
-		t.Fatalf("seeds: %v", err)
-	}
-	rollback := spotFundsPnlBoundsRollbackPnl(nil, seeds[0])
-	if !rollback.IsZero() {
-		t.Fatalf("rollback pnl = %s, want zero", rollback.String())
-	}
-}
-
-// TestSpotFundsPnlBoundsRollbackPnl_ExistingKeyRestoresPrior checks a reseed of
-// an already-tracked account key rolls back to its prior applied P&L, not zero,
-// so a failed reconfigure leaves the live accumulator at its previous seed.
-func TestSpotFundsPnlBoundsRollbackPnl_ExistingKeyRestoresPrior(t *testing.T) {
-	t.Parallel()
-	priorSeeds, err := spotFundsPnlBoundsSeeds(
-		[]domain.LimitSpotFundsPnlBounds{
-			{
-				Scope:           domain.ScopeAccount,
-				Account:         "acc-1",
-				AccountCurrency: "USD",
-				LowerBound:      "-100",
-				InitialPnl:      "7.25",
-			},
-		},
-		testResolver("acc-1"),
-	)
-	if err != nil {
-		t.Fatalf("prior seeds: %v", err)
-	}
-	current := spotFundsPnlBoundsSeedTracker(priorSeeds)
-
-	desiredSeeds, err := spotFundsPnlBoundsSeeds(
-		[]domain.LimitSpotFundsPnlBounds{
-			{
-				Scope:           domain.ScopeAccount,
-				Account:         "acc-1",
-				AccountCurrency: "USD",
-				LowerBound:      "-100",
-				InitialPnl:      "9",
-			},
-		},
-		testResolver("acc-1"),
-	)
-	if err != nil {
-		t.Fatalf("desired seeds: %v", err)
-	}
-	rollback := spotFundsPnlBoundsRollbackPnl(current, desiredSeeds[0])
-	if rollback.String() != "7.25" {
-		t.Fatalf("rollback pnl = %s, want 7.25 (prior applied seed)", rollback.String())
 	}
 }
 
@@ -1439,8 +1459,8 @@ func TestAdjustmentAmountFrom_InvalidInputs(t *testing.T) {
 }
 
 // TestAccountAdjustmentFromRequest_InvalidInputs checks the adjustment request
-// mapper wraps domain.ErrInvalid for a bad asset, a bad average-entry-price, and
-// a bad bound (all caller input).
+// mapper wraps domain.ErrInvalid for a bad asset, a bad average-entry-price, a
+// bad realized PnL, and a bad bound (all caller input).
 func TestAccountAdjustmentFromRequest_InvalidInputs(t *testing.T) {
 	t.Parallel()
 	delta := func(v string) *domain.AdjustmentAmount {
@@ -1459,12 +1479,264 @@ func TestAccountAdjustmentFromRequest_InvalidInputs(t *testing.T) {
 		t.Fatalf("want ErrInvalid for bad average entry price, got %v", err)
 	}
 
+	badRealizedPnl := domain.AdjustmentRequest{
+		Asset: "USD", Balance: delta("1"), RealizedPnl: "not-a-number",
+	}
+	if _, err := accountAdjustmentFromRequest(badRealizedPnl); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("want ErrInvalid for bad realized pnl, got %v", err)
+	}
+
 	badBound := domain.AdjustmentRequest{
 		Asset: "USD", Balance: delta("1"),
 		BalanceBounds: &domain.AdjustmentBounds{Lower: "not-a-number"},
 	}
 	if _, err := accountAdjustmentFromRequest(badBound); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid for bad bound, got %v", err)
+	}
+}
+
+func TestRejectCodeName_ArithmeticOverflow(t *testing.T) {
+	t.Parallel()
+	if got := rejectCodeName(reject.CodeArithmeticOverflow); got != "arithmetic_overflow" {
+		t.Fatalf("reject code name = %q, want arithmetic_overflow", got)
+	}
+}
+
+func TestExecutionBalanceSettlementsFrom_KeepsPositionPnl(t *testing.T) {
+	t.Parallel()
+	settlements := executionBalanceSettlementsFrom([]BalanceOutcome{{
+		Asset: "USD",
+		Outcome: domain.AdjustmentOutcomeAccepted{
+			BalanceResult:     "100",
+			RealizedPnlDelta:  "2",
+			RealizedPnlResult: "7",
+		},
+	}})
+	if len(settlements) != 1 {
+		t.Fatalf("settlements = %+v, want one", settlements)
+	}
+	if settlements[0].Outcome.BalanceResult != "100" ||
+		settlements[0].Outcome.RealizedPnlDelta != "2" ||
+		settlements[0].Outcome.RealizedPnlResult != "7" {
+		t.Fatalf("settlement outcome = %+v", settlements[0].Outcome)
+	}
+}
+
+func TestAccountAdjustmentFromRequest_ForwardsRealizedPnl(t *testing.T) {
+	t.Parallel()
+	adjustment, err := accountAdjustmentFromRequest(domain.AdjustmentRequest{
+		Asset: "BTC", RealizedPnl: "-12.50",
+		Balance: &domain.AdjustmentAmount{
+			Mode: domain.AdjustmentModeAbsolute, Value: "1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("accountAdjustmentFromRequest: %v", err)
+	}
+	operation, ok := adjustment.BalanceOperation().Get()
+	if !ok {
+		t.Fatal("balance operation is unset")
+	}
+	pnl, ok := operation.RealizedPnl().Get()
+	value, authoritative := pnl.Value()
+	if !ok || !authoritative || value.String() != "-12.50" {
+		t.Fatalf("realized pnl = (%v, %v) set=%v, want authoritative -12.50", value, authoritative, ok)
+	}
+}
+
+func TestBalanceSeedAdjustment_RestoresHaltedRealizedPnl(t *testing.T) {
+	t.Parallel()
+	adjustment, err := balanceSeedAdjustment(domain.Balance{
+		Asset:                 "BTC",
+		Available:             "1",
+		RealizedPnl:           "not-a-number",
+		RealizedPnlHaltReason: domain.PnlHaltReasonMissingFx,
+	})
+	if err != nil {
+		t.Fatalf("balanceSeedAdjustment: %v", err)
+	}
+	operation, ok := adjustment.BalanceOperation().Get()
+	if !ok {
+		t.Fatal("balance operation is unset")
+	}
+	state, ok := operation.RealizedPnl().Get()
+	if !ok {
+		t.Fatal("realized pnl is unset, want restored halt")
+	}
+	reason, halted := state.HaltReason()
+	if !halted || reason != model.PnlHaltReasonMissingFx {
+		t.Fatalf("realized pnl state = (%v, %v), want missing-fx halt", reason, halted)
+	}
+}
+
+func TestPnlHaltReasonFromSDKMapsEveryReason(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		in   model.PnlHaltReason
+		want domain.PnlHaltReason
+	}{
+		{
+			name: "missing fx",
+			in:   model.PnlHaltReasonMissingFx,
+			want: domain.PnlHaltReasonMissingFx,
+		},
+		{
+			name: "missing account currency",
+			in:   model.PnlHaltReasonMissingAccountCurrency,
+			want: domain.PnlHaltReasonMissingAccountCurrency,
+		},
+		{
+			name: "missing initial pnl",
+			in:   model.PnlHaltReasonMissingInitialPnl,
+			want: domain.PnlHaltReasonMissingInitialPnl,
+		},
+		{
+			name: "missing cost basis",
+			in:   model.PnlHaltReasonMissingCostBasis,
+			want: domain.PnlHaltReasonMissingCostBasis,
+		},
+		{
+			name: "arithmetic overflow",
+			in:   model.PnlHaltReasonArithmeticOverflow,
+			want: domain.PnlHaltReasonArithmeticOverflow,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := pnlHaltReasonFromSDK(test.in)
+			if err != nil {
+				t.Fatalf("pnlHaltReasonFromSDK(%v): %v", test.in, err)
+			}
+			if got != test.want {
+				t.Fatalf("pnlHaltReasonFromSDK(%v) = %q, want %q", test.in, got, test.want)
+			}
+			if err := domain.ValidatePnlHaltReason(got); err != nil {
+				t.Fatalf("ValidatePnlHaltReason(%q): %v", got, err)
+			}
+			// A mapped reason must round-trip: the engine rebuild at start
+			// replays persisted halts, so a reason this seam accepts but
+			// cannot return to the engine would block the next boot.
+			if _, err := pnlHaltReasonToSDK(got); err != nil {
+				t.Fatalf("pnlHaltReasonToSDK(%q): %v", got, err)
+			}
+		})
+	}
+}
+
+// A halt reason the engine gains but this seam does not know must fail at the
+// seam rather than reach storage as a value pnlHaltReasonToSDK would reject.
+func TestPnlHaltReasonFromSDKRejectsUnrecognizedReason(t *testing.T) {
+	t.Parallel()
+	got, err := pnlHaltReasonFromSDK(model.PnlHaltReason(255))
+	if err == nil {
+		t.Fatalf("pnlHaltReasonFromSDK(255) = %q, want error", got)
+	}
+	if got != "" {
+		t.Fatalf("pnlHaltReasonFromSDK(255) = %q, want empty reason", got)
+	}
+}
+
+func TestSpotFundsAccountPnlFromListSelectsAuthoritativeOutcome(t *testing.T) {
+	t.Parallel()
+	accountID := param.NewAccountIDFromUint64(7)
+	otherAccountID := param.NewAccountIDFromUint64(8)
+	computed := func(id param.AccountID, absolute string) accountadjustment.AccountPnlOutcome {
+		t.Helper()
+		delta, err := param.NewPnlFromString("1.250")
+		if err != nil {
+			t.Fatalf("NewPnlFromString(delta): %v", err)
+		}
+		value, err := param.NewPnlFromString(absolute)
+		if err != nil {
+			t.Fatalf("NewPnlFromString(absolute): %v", err)
+		}
+		return accountadjustment.NewAccountPnlOutcome(
+			1,
+			id,
+			accountadjustment.PnlOutcomeAmount{Delta: delta, Absolute: value},
+		)
+	}
+	halted := func(
+		id param.AccountID,
+		reason model.PnlHaltReason,
+	) accountadjustment.AccountPnlOutcome {
+		t.Helper()
+		outcome, err := accountadjustment.NewAccountPnlHaltedOutcome(
+			1,
+			id,
+			reason,
+		)
+		if err != nil {
+			t.Fatalf("NewAccountPnlHaltedOutcome: %v", err)
+		}
+		return outcome
+	}
+
+	tests := []struct {
+		name       string
+		outcomes   []accountadjustment.AccountPnlOutcome
+		wantPnl    string
+		wantReason domain.PnlHaltReason
+	}{
+		{
+			name:     "computed",
+			outcomes: []accountadjustment.AccountPnlOutcome{computed(accountID, "42.500")},
+			wantPnl:  "42.500",
+		},
+		{
+			name: "halted",
+			outcomes: []accountadjustment.AccountPnlOutcome{
+				halted(accountID, model.PnlHaltReasonMissingCostBasis),
+			},
+			wantReason: domain.PnlHaltReasonMissingCostBasis,
+		},
+		{
+			name:     "mismatched account",
+			outcomes: []accountadjustment.AccountPnlOutcome{computed(otherAccountID, "9")},
+		},
+		{
+			name: "first duplicate wins",
+			outcomes: []accountadjustment.AccountPnlOutcome{
+				computed(accountID, "17.250"),
+				halted(accountID, model.PnlHaltReasonArithmeticOverflow),
+			},
+			wantPnl: "17.250",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			gotPnl, gotReason, err := spotFundsAccountPnlFromList(accountID, test.outcomes)
+			if err != nil {
+				t.Fatalf("spotFundsAccountPnlFromList: %v", err)
+			}
+			if gotPnl != test.wantPnl || gotReason != test.wantReason {
+				t.Fatalf(
+					"spotFundsAccountPnlFromList = (%q, %q), want (%q, %q)",
+					gotPnl,
+					gotReason,
+					test.wantPnl,
+					test.wantReason,
+				)
+			}
+		})
+	}
+}
+
+func TestExecutionReportPersistenceFromCarriesAccountPnlOutcome(t *testing.T) {
+	t.Parallel()
+	persistence := executionReportPersistenceFrom(
+		domain.ExecutionReportInput{},
+		nil,
+		nil,
+		"12.340",
+		domain.PnlHaltReasonArithmeticOverflow,
+	)
+	if persistence.AccountPnl != "12.340" ||
+		persistence.AccountPnlHaltReason != domain.PnlHaltReasonArithmeticOverflow {
+		t.Fatalf("persistence = %+v, want exact account pnl outcome", persistence)
 	}
 }
 
@@ -1517,7 +1789,7 @@ func TestExecutionReportPersistenceFrom_StatusOnlyNoAccountWrites(t *testing.T) 
 		LeavesQuantity: "2",
 		OrderStatus:    domain.OrderStatusCancelled,
 	}
-	persistence := executionReportPersistenceFrom(in, nil, nil)
+	persistence := executionReportPersistenceFrom(in, nil, nil, "", "")
 
 	if persistence.Balances != nil {
 		t.Fatalf("persistence.Balances = %+v, want nil for a status-only report", persistence.Balances)
@@ -1557,7 +1829,7 @@ func TestExecutionReportPersistenceFrom_NoTradeCarriesCommission(t *testing.T) {
 		OrderStatus:    domain.OrderStatusCancelled,
 		Commission:     &domain.Commission{Amount: "-0.30", Currency: "USDT"},
 	}
-	persistence := executionReportPersistenceFrom(in, nil, nil)
+	persistence := executionReportPersistenceFrom(in, nil, nil, "", "")
 
 	if persistence.Trade != nil {
 		t.Fatalf("persistence.Trade = %+v, want nil", persistence.Trade)
@@ -1591,7 +1863,7 @@ func TestExecutionReportPersistenceFrom_FillCarriesCommission(t *testing.T) {
 		OrderStatus:    domain.OrderStatusPartiallyFilled,
 		Commission:     &domain.Commission{Amount: "-0.30", Currency: "USDT"},
 	}
-	persistence := executionReportPersistenceFrom(in, nil, nil)
+	persistence := executionReportPersistenceFrom(in, nil, nil, "", "")
 
 	if persistence.Trade == nil {
 		t.Fatal("persistence.Trade is nil, want a fill trade")

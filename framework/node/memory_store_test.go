@@ -156,10 +156,8 @@ func spotFundsPnlBoundsLimitKey(
 	scope domain.LimitScope,
 	account domain.AccountID,
 	accountGroup string,
-	accountCurrency string,
 ) string {
-	return string(scope) + "\x00" + string(account) + "\x00" + accountGroup +
-		"\x00" + accountCurrency
+	return string(scope) + "\x00" + string(account) + "\x00" + accountGroup
 }
 
 func instrumentKey(instance domain.ExternalID, externalSymbol string) string {
@@ -170,8 +168,7 @@ func settingKey(userID, key string) string { return userID + "\x00" + key }
 
 func policyRowKey(row store.PolicyListRow) string {
 	return string(row.Kind) + "\x00" + row.Scope + "\x00" +
-		string(row.Account) + "\x00" + row.AccountGroup + "\x00" + row.Asset +
-		"\x00" + row.AccountCurrency
+		string(row.Account) + "\x00" + row.AccountGroup + "\x00" + row.Asset
 }
 
 func pageRows[T any](rows []T, page store.PageSpec) []T {

@@ -175,6 +175,24 @@ func TestApplyBusinessCSVImport_BatchesAdjustmentsByAccount(t *testing.T) {
 	}
 }
 
+func TestSnapshotAdjustmentRequestReplaysAuthoritativePnlState(t *testing.T) {
+	t.Parallel()
+	numeric := snapshotAdjustmentRequest(domain.Balance{
+		Asset: "USD", RealizedPnl: "12.5",
+	})
+	if numeric.RealizedPnl != "12.5" || numeric.RealizedPnlHaltReason != "" {
+		t.Fatalf("numeric request = %+v, want realized P&L 12.5", numeric)
+	}
+	halted := snapshotAdjustmentRequest(domain.Balance{
+		Asset: "USD", RealizedPnl: "12.5",
+		RealizedPnlHaltReason: domain.PnlHaltReasonMissingFx,
+	})
+	if halted.RealizedPnl != "" ||
+		halted.RealizedPnlHaltReason != domain.PnlHaltReasonMissingFx {
+		t.Fatalf("halted request = %+v, want halt-over-value replay", halted)
+	}
+}
+
 func TestApplyBusinessCSVImport_AppliesSparseAdjustmentBatch(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
@@ -430,6 +448,125 @@ func TestApplyBusinessCSVImport_BatchRejectIsRecoverable(t *testing.T) {
 	}
 	if _, ok, err := st.GetAccount(ctx, "acc-1"); err != nil || ok {
 		t.Fatalf("GetAccount after reject: ok=%v err=%v, want absent", ok, err)
+	}
+}
+
+// A position snapshot whose force-set lands out of bounds kill-switches the
+// account inside the engine. The import's own account write carries the CSV's
+// blocked=false flag, so the mirror must survive it rather than be clobbered.
+func TestApplyBusinessCSVImport_MirrorsEngineAccountBlock(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.adjustmentBatchResults = []engine.AdjustmentResult{{
+		Accepted: &domain.AdjustmentOutcomeAccepted{BalanceResult: "10"},
+		AccountBlocks: []domain.AccountBlock{{
+			Account: "acc-1",
+			Policy:  domain.PolicySpotFundsPnlBoundsKillSwitch,
+			Code:    "pnl_bounds",
+			Reason:  "realized pnl below bound",
+		}},
+	}}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	if err := n.ApplyBusinessCSVImport(ctx, store.BusinessCSVImport{
+		Accounts: []store.BusinessCSVImportAccount{{
+			Account: domain.Account{Code: "acc-1"},
+		}},
+		Balances: []domain.Balance{{Account: "acc-1", Asset: "USD", Available: "10"}},
+	}, testCaller); err != nil {
+		t.Fatalf("ApplyBusinessCSVImport: %v", err)
+	}
+
+	account, ok, err := st.GetAccount(ctx, "acc-1")
+	if err != nil || !ok {
+		t.Fatalf("GetAccount = ok %v, err %v; want present", ok, err)
+	}
+	if !account.Blocked {
+		t.Fatalf("account = %+v, want blocked by the engine kill-switch", account)
+	}
+	if !strings.Contains(account.BlockReason, "realized pnl below bound") {
+		t.Fatalf("block reason = %q, want the engine reason", account.BlockReason)
+	}
+}
+
+func TestApplyBusinessCSVImport_SeedBlockWinsCSVUnblock(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := newMemoryStore("csv-seed-block.db")
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	eng := newSeedBlockEngine()
+	nRaw, _, err := NewLocalNode(ctx, st, seedBlockBuild(eng))
+	if err != nil {
+		t.Fatalf("NewLocalNode: %v", err)
+	}
+	n := nRaw.(*localNode)
+	seedTestPrincipal(t, n.realm)
+	eng.seedBlocks = []domain.AccountBlock{seedBlockOf("acc-1")}
+
+	if err := n.ApplyBusinessCSVImport(ctx, store.BusinessCSVImport{
+		Accounts: []store.BusinessCSVImportAccount{{
+			Account: domain.Account{Code: "acc-1", Blocked: false},
+		}},
+	}, testCaller); err != nil {
+		t.Fatalf("ApplyBusinessCSVImport: %v", err)
+	}
+	account, ok, err := n.realm.GetAccount(ctx, "acc-1")
+	if err != nil || !ok {
+		t.Fatalf("GetAccount: ok=%v err=%v", ok, err)
+	}
+	if !account.Blocked || !strings.Contains(account.BlockReason, "lower bound breached") {
+		t.Fatalf("account = %+v, want SDK seed block preserved", account)
+	}
+	if len(eng.unblockCalls) != 0 {
+		t.Fatalf("engine unblock calls = %+v, want none after SDK seed block", eng.unblockCalls)
+	}
+	rows, err := n.realm.ListAuditFiltered(ctx, domain.AuditFilter{
+		Actions: []domain.AuditAction{domain.AuditActionUnblock}, Account: "acc-1",
+	}, 10)
+	if err != nil {
+		t.Fatalf("ListAuditFiltered: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("unblock audits = %+v, want none", rows)
+	}
+}
+
+// An import the engine accepts without any kill-switch must not touch the
+// block state the CSV rows themselves define.
+func TestApplyBusinessCSVImport_WithoutBlocksLeavesBlockState(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	if err := n.ApplyBusinessCSVImport(ctx, store.BusinessCSVImport{
+		Accounts: []store.BusinessCSVImportAccount{{
+			Account: domain.Account{Code: "acc-1"},
+		}},
+		Balances: []domain.Balance{{Account: "acc-1", Asset: "USD", Available: "10"}},
+	}, testCaller); err != nil {
+		t.Fatalf("ApplyBusinessCSVImport: %v", err)
+	}
+
+	account, ok, err := st.GetAccount(ctx, "acc-1")
+	if err != nil || !ok {
+		t.Fatalf("GetAccount = ok %v, err %v; want present", ok, err)
+	}
+	if account.Blocked {
+		t.Fatalf("account = %+v, want unblocked", account)
+	}
+	rows, err := st.ListAuditFiltered(ctx, domain.AuditFilter{
+		Actions: []domain.AuditAction{domain.AuditActionBlock},
+	}, 10)
+	if err != nil {
+		t.Fatalf("ListAuditFiltered(block): %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("block audit rows = %+v, want none", rows)
 	}
 }
 

@@ -126,14 +126,16 @@ func (n *localNode) applyExecutionReport(
 			*result.Persistence, caller, request,
 		)
 		settlement := domain.OrderSettlement{
-			Account:     in.Account,
-			Order:       in.Order,
-			OrderStatus: persistence.OrderStatus,
-			Leaves:      persistence.Leaves,
-			Balances:    persistence.Balances,
-			Events:      persistence.Events,
-			Trade:       persistence.Trade,
-			Blocks:      accountBlockSettlementsFrom(in.Order, persistence.Blocks),
+			Account:              in.Account,
+			Order:                in.Order,
+			OrderStatus:          persistence.OrderStatus,
+			AccountPnl:           persistence.AccountPnl,
+			AccountPnlHaltReason: persistence.AccountPnlHaltReason,
+			Leaves:               persistence.Leaves,
+			Balances:             persistence.Balances,
+			Events:               persistence.Events,
+			Trade:                persistence.Trade,
+			Blocks:               accountBlockSettlementsFrom(in.Order, persistence.Blocks),
 		}
 		if err := recordOrderSettlementWithAttestation(
 			ctx, n.realm, settlement, attest,

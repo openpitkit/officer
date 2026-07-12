@@ -65,6 +65,48 @@ type Caller struct {
 	Role string
 }
 
+// PnlHaltReason identifies why the engine stopped a realized-P&L calculation.
+// Empty means that the engine reported an authoritative P&L amount.
+type PnlHaltReason string
+
+const (
+	// PnlHaltReasonMissingFx means a required FX quote was unavailable.
+	PnlHaltReasonMissingFx PnlHaltReason = "missing_fx"
+	// PnlHaltReasonMissingAccountCurrency means the account had no effective
+	// currency for the calculation.
+	PnlHaltReasonMissingAccountCurrency PnlHaltReason = "missing_account_currency"
+	// PnlHaltReasonMissingInitialPnl means an authoritative initial P&L value
+	// was unavailable for a position accumulator.
+	PnlHaltReasonMissingInitialPnl PnlHaltReason = "missing_initial_pnl"
+	// PnlHaltReasonMissingCostBasis means the position lacked the cost basis
+	// required to calculate realized P&L.
+	PnlHaltReasonMissingCostBasis PnlHaltReason = "missing_cost_basis"
+	// PnlHaltReasonArithmeticOverflow means exact P&L arithmetic exceeded the
+	// supported numeric range.
+	PnlHaltReasonArithmeticOverflow PnlHaltReason = "arithmetic_overflow"
+)
+
+// ValidatePnlHaltReason returns ErrInvalid unless r is empty (the engine
+// reported an authoritative amount) or a reason the engine can emit.
+//
+// Persisted halt reasons are replayed into the engine when it is rebuilt at
+// start, and a reason the engine does not accept fails that rebuild - so a
+// value that reaches storage from an untrusted source (CSV import, backup
+// restore) would block the next boot. Reject it at the boundary instead.
+func ValidatePnlHaltReason(r PnlHaltReason) error {
+	switch r {
+	case "",
+		PnlHaltReasonMissingFx,
+		PnlHaltReasonMissingAccountCurrency,
+		PnlHaltReasonMissingInitialPnl,
+		PnlHaltReasonMissingCostBasis,
+		PnlHaltReasonArithmeticOverflow:
+		return nil
+	default:
+		return fmt.Errorf("unknown pnl halt reason %q: %w", r, ErrInvalid)
+	}
+}
+
 // AccountGroup is the control-plane view of a named account grouping: a
 // dictionary entity addressed by its public Code, displayed under a mutable
 // Title, and run on the engine under EngineGroupID (its surrogate id).
@@ -211,10 +253,12 @@ type Balance struct {
 	Held string
 	// Incoming is funds in-flight (e.g. pending settlement).
 	Incoming string
-	// RealizedPnl is the cumulative settlement-asset realized P&L for this
-	// (account, asset). It is delta-accumulated from operation outcomes, never
-	// overwritten with an engine-reported absolute; a fresh row starts at "0".
+	// RealizedPnl is the cumulative realized P&L for this (account, asset), as
+	// last reported by the engine. A fresh or untracked row uses "0".
 	RealizedPnl string
+	// RealizedPnlHaltReason explains why the engine stopped calculating this
+	// position P&L. When set, RealizedPnl is historical rather than current.
+	RealizedPnlHaltReason PnlHaltReason
 	// AverageEntryPrice is optional; empty when not applicable.
 	AverageEntryPrice string
 	// Asset is the code of the asset, e.g. "AAPL".
@@ -356,8 +400,13 @@ type AdjustmentRequest struct {
 	// AverageEntryPrice is an optional replacement for the avg-entry field.
 	AverageEntryPrice string `json:"average_entry_price,omitempty"`
 	// RealizedPnl is an optional replacement for the persisted cumulative
-	// realized P&L snapshot. It is not sent to the SDK adjustment API.
+	// realized P&L snapshot. Supplying it re-arms a previously halted position
+	// P&L accumulator with an authoritative value.
 	RealizedPnl string `json:"realized_pnl,omitempty"`
+	// RealizedPnlHaltReason force-sets the position P&L accumulator to a halted
+	// state. Snapshot import uses it to restore a persisted halt; it takes
+	// precedence over RealizedPnl, whose retained value remains historical.
+	RealizedPnlHaltReason PnlHaltReason `json:"realized_pnl_halt_reason,omitempty"`
 	// Balance adjustment for the available field.
 	Balance *AdjustmentAmount `json:"balance,omitempty"`
 	// BalanceBounds optionally constrains the resulting balance.
@@ -387,13 +436,17 @@ type AdjustmentOutcomeAccepted struct {
 	IncomingDelta string `json:"incoming_delta"`
 	// IncomingResult is the resulting absolute incoming value.
 	IncomingResult string `json:"incoming_result"`
-	// RealizedPnlDelta is the signed change applied to the settlement-asset
-	// realized P&L by this operation. It is accumulated onto the stored
-	// balance; the engine's reported absolute is for display/cross-check only.
+	// RealizedPnlDelta is the signed realized-P&L change reported by the engine.
 	RealizedPnlDelta string `json:"realized_pnl_delta"`
 	// RealizedPnlResult is the engine-reported cumulative realized P&L after the
-	// operation. Display/cross-check only; never persisted as an absolute.
+	// operation and is the authoritative value Officer persists when present.
 	RealizedPnlResult string `json:"realized_pnl_result"`
+	// RealizedPnlHaltReason is reported when the engine stopped calculating this
+	// position P&L. An empty reason with a non-empty result clears a prior halt.
+	RealizedPnlHaltReason PnlHaltReason `json:"realized_pnl_halt_reason,omitempty"`
+	// AverageEntryPrice is the current average entry price reported by the engine
+	// when the outcome carries one.
+	AverageEntryPrice string `json:"average_entry_price,omitempty"`
 }
 
 // AdjustmentOutcomeRejected carries the structured rejection reason.
@@ -988,13 +1041,14 @@ func ExecutionReportRequestFromInput(in ExecutionReportInput) *ExecutionReportRe
 	}
 }
 
-// ExecutionAccountBlock is one engine-recorded account block returned by an
-// execution report. The engine has already applied the block; the node mirrors
-// it into the store. Account is carried from the report's account, since the
-// binding's block record does not name the account itself.
-type ExecutionAccountBlock struct {
+// AccountBlock is one engine-recorded account block. The engine has already
+// applied the block; the node mirrors it into the store. Account is carried by
+// the Officer adapter because the binding's block record does not name it.
+type AccountBlock struct {
 	// Account is the account the engine blocked.
 	Account AccountID
+	// Policy is the engine policy that produced the block.
+	Policy string
 	// Code is the stable reject code that triggered the block.
 	Code string
 	// Reason is the human-readable block reason.
@@ -1003,11 +1057,14 @@ type ExecutionAccountBlock struct {
 	Details string
 }
 
+// ExecutionAccountBlock is an AccountBlock produced while processing an
+// execution report. Kept as an alias to preserve the execution-facing API.
+type ExecutionAccountBlock = AccountBlock
+
 // BalanceSettlement is one per-asset balance outcome of a fill, expressed as a
 // plain data carrier so the store can persist it without importing the engine.
-// The settlement tx persists the engine-returned absolute result fields when
-// present and accumulates the realized-P&L delta; absent result fields leave the
-// previous stored balance component unchanged.
+// The settlement tx persists engine-returned absolute result fields when
+// present; absent result fields leave the previous component unchanged.
 type BalanceSettlement struct {
 	// Asset identifies the asset whose balance the fill moves.
 	Asset string
@@ -1030,6 +1087,13 @@ type OrderSettlement struct {
 	Account AccountID
 	// OrderStatus is the target status (e.g. filled or partially_filled).
 	OrderStatus OrderStatus
+	// AccountPnl is the SpotFunds account-currency P&L snapshot to persist. An
+	// empty value leaves it unchanged unless AccountPnlHaltReason is set.
+	AccountPnl string
+	// AccountPnlHaltReason is the reason the engine could not calculate account
+	// P&L for this settlement. An empty reason with a non-empty AccountPnl clears
+	// a prior halt.
+	AccountPnlHaltReason PnlHaltReason
 	// Lock is the opaque SDK-serialized reservation lock to write when SetLock is
 	// true; an empty (non-nil) slice clears it, nil leaves it. It replaces the
 	// former decimal-array lock: display prices are derived from the deserialized
@@ -1121,6 +1185,7 @@ type AttestationResult struct {
 // result. It mirrors ExecutionAccountBlock in the signed form.
 type AttestationBlock struct {
 	Account string `json:"account"`
+	Policy  string `json:"policy"`
 	Code    string `json:"code"`
 	Reason  string `json:"reason"`
 	Details string `json:"details"`

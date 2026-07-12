@@ -76,7 +76,6 @@ func (r *memoryRealm) ListPolicyRows(
 				Scope:              limit.Scope,
 				Account:            limit.Account,
 				AccountGroup:       limit.AccountGroup,
-				AccountCurrency:    limit.AccountCurrency,
 				SpotFundsPnlBounds: &value,
 			})
 		}
@@ -97,8 +96,6 @@ func sortPolicyRows(rows []store.PolicyListRow, spec store.SortSpec) {
 		switch spec.Column {
 		case "account":
 			cmp = compareStrings(string(left.Account), string(right.Account))
-		case "accountCurrency":
-			cmp = compareStrings(left.AccountCurrency, right.AccountCurrency)
 		case "accountGroup":
 			cmp = compareStrings(left.AccountGroup, right.AccountGroup)
 		case "asset":
@@ -250,7 +247,6 @@ func (r *memoryRealm) PutSpotFundsPnlBoundsLimit(
 		limit.Scope,
 		limit.Account,
 		limit.AccountGroup,
-		limit.AccountCurrency,
 	)] = limit
 	return nil
 }
@@ -260,9 +256,8 @@ func (r *memoryRealm) DeleteSpotFundsPnlBoundsLimit(
 	scope domain.LimitScope,
 	account domain.AccountID,
 	accountGroup string,
-	accountCurrency string,
 ) error {
-	key := spotFundsPnlBoundsLimitKey(scope, account, accountGroup, accountCurrency)
+	key := spotFundsPnlBoundsLimitKey(scope, account, accountGroup)
 	if _, ok := r.spotFundsPnlBoundsLimits[key]; !ok {
 		return domain.ErrNotFound
 	}

@@ -227,6 +227,19 @@ func (r *memoryRealm) RecordOrderSettlement(
 		}
 		r.orders[st.Order] = order
 	}
+	if st.AccountPnl != "" || st.AccountPnlHaltReason != "" {
+		account, ok := r.accounts[st.Account]
+		if !ok {
+			return domain.ErrNotFound
+		}
+		if st.AccountPnl != "" {
+			account.Pnl = st.AccountPnl
+			account.PnlHaltReason = st.AccountPnlHaltReason
+		} else {
+			account.PnlHaltReason = st.AccountPnlHaltReason
+		}
+		r.accounts[st.Account] = account
+	}
 	for _, balance := range st.Balances {
 		key := balanceKey(st.Account, balance.Asset)
 		current := r.balances[key]
@@ -250,11 +263,25 @@ func (r *memoryRealm) RecordOrderSettlement(
 		if current.Incoming == "" {
 			current.Incoming = "0"
 		}
-		next, err := domain.AddDecimals(current.RealizedPnl, balance.Outcome.RealizedPnlDelta)
-		if err != nil {
-			return err
+		if balance.Outcome.RealizedPnlResult != "" {
+			current.RealizedPnl = balance.Outcome.RealizedPnlResult
+			current.RealizedPnlHaltReason = ""
+		} else if balance.Outcome.RealizedPnlHaltReason != "" {
+			current.RealizedPnlHaltReason = balance.Outcome.RealizedPnlHaltReason
 		}
-		current.RealizedPnl = next
+		if current.RealizedPnl == "" {
+			current.RealizedPnl = "0"
+		}
+		if balance.Outcome.AverageEntryPrice != "" {
+			current.AverageEntryPrice = balance.Outcome.AverageEntryPrice
+		}
+		if decimalZeroOrEmpty(current.Available) &&
+			decimalZeroOrEmpty(current.Held) &&
+			decimalZeroOrEmpty(current.Incoming) {
+			// A closed position has no cost basis; realised PnL remains
+			// independent.
+			current.AverageEntryPrice = ""
+		}
 		if balanceIsEmpty(current) {
 			delete(r.balances, key)
 			continue

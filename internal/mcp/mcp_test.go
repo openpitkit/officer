@@ -513,12 +513,11 @@ func TestGetLimitsSpotFundsPnlBoundsOnly(t *testing.T) {
 	src := &fakeSource{limits: node.AccountLimits{
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
 			{
-				Scope:           domain.ScopeAccount,
-				Account:         "acc-spot",
-				AccountCurrency: "USD",
-				LowerBound:      "-10.25",
-				UpperBound:      "99.50",
-				InitialPnl:      "1.00",
+				Scope:      domain.ScopeAccount,
+				Account:    "acc-spot",
+				LowerBound: "-10.25",
+				UpperBound: "99.50",
+				InitialPnl: "1.00",
 			},
 		},
 	}}
@@ -541,7 +540,6 @@ func TestGetLimitsSpotFundsPnlBoundsOnly(t *testing.T) {
 	got := limits.SpotFundsPnlBoundsLimits[0]
 	if got.Scope != domain.ScopeAccount ||
 		got.Account != "acc-spot" ||
-		got.AccountCurrency != "USD" ||
 		got.LowerBound != "-10.25" ||
 		got.UpperBound != "99.50" ||
 		got.InitialPnl != "1.00" {

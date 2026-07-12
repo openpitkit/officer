@@ -170,11 +170,10 @@ func validateLimitTarget(target node.LimitTarget) error {
 		}.Validate()
 	case domain.PolicySpotFundsPnlBoundsKillSwitch:
 		return domain.LimitSpotFundsPnlBounds{
-			Scope:           target.Scope,
-			Account:         target.Account,
-			AccountGroup:    target.AccountGroup,
-			AccountCurrency: target.AccountCurrency,
-			LowerBound:      "0",
+			Scope:        target.Scope,
+			Account:      target.Account,
+			AccountGroup: target.AccountGroup,
+			LowerBound:   "0",
 		}.Validate()
 	default:
 		return fmt.Errorf("unknown policy %q: %w", target.Policy, domain.ErrInvalid)

@@ -128,7 +128,7 @@ type ControlPlane interface {
 	UpdateMarketDataInstanceSettings(
 		ctx context.Context, id, label, credentials string,
 	) error
-	DeleteMarketDataInstance(ctx context.Context, id string, force bool) error
+	DeleteMarketDataInstance(ctx context.Context, id string) error
 	UpsertMarketDataInstrument(ctx context.Context, instrument domain.MarketDataInstrument) error
 	SetMarketDataInstrumentEnabled(
 		ctx context.Context, instanceID, externalSymbol string, enabled bool,

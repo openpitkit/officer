@@ -93,7 +93,7 @@ func (r *memoryRealm) UpdateMarketDataInstanceSettings(
 }
 
 func (r *memoryRealm) DeleteMarketDataInstance(
-	_ context.Context, id domain.ExternalID, _ bool,
+	_ context.Context, id domain.ExternalID,
 ) error {
 	if _, ok := r.instances[id]; !ok {
 		return domain.ErrNotFound

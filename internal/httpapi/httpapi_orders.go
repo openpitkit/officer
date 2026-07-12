@@ -343,6 +343,7 @@ func toEventReproductionRequestDTO(p domain.ApprovalPayload) *eventReproductionR
 		for _, b := range p.Result.Blocks {
 			blocks = append(blocks, attestationBlockDTO{
 				Account: b.Account,
+				Policy:  b.Policy,
 				Code:    b.Code,
 				Reason:  b.Reason,
 				Details: b.Details,
@@ -419,6 +420,7 @@ func executionResultFromPayload(p domain.ApprovalPayload) executionResultDTO {
 		for _, b := range p.Result.Blocks {
 			blocks = append(blocks, executionBlockDTO{
 				Account: b.Account,
+				Policy:  b.Policy,
 				Code:    b.Code,
 				Reason:  b.Reason,
 				Details: b.Details,

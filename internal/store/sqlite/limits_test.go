@@ -1,0 +1,584 @@
+// Copyright The Pit Project Owners. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// Please see https://openpit.dev and the OWNERS file for details.
+
+// Limits-group tests: put/list/update(upsert)/delete for each policy type,
+// UNIQUE conflict upsert semantics, unknown FK code error, scope validation,
+// per-scope NULL-axis handling, and CASCADE on account/asset delete.
+
+package sqlite
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"go.openpit.dev/officer/framework/domain"
+)
+
+// seedLimitFixtures creates an account and an asset for limit tests.
+func seedLimitFixtures(t *testing.T) (context.Context, RealmStore) {
+	t.Helper()
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+	if err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL"}); err != nil {
+		t.Fatalf("CreateAsset(AAPL): %v", err)
+	}
+	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-1"}); err != nil {
+		t.Fatalf("CreateAccount(acc-1): %v", err)
+	}
+	return ctx, rs
+}
+
+// --- Rate limits (limit_rate) -------------------------------------------------
+
+func TestRateLimitPutListDeleteRoundTrip(t *testing.T) {
+	ctx, rs := seedLimitFixtures(t)
+
+	limit := domain.LimitRate{
+		Scope:     domain.ScopeAccountAsset,
+		Account:   "acc-1",
+		Asset:     "AAPL",
+		MaxOrders: 100,
+		Window:    5 * time.Minute,
+	}
+	if err := rs.PutRateLimit(ctx, limit); err != nil {
+		t.Fatalf("PutRateLimit: %v", err)
+	}
+
+	list, err := rs.ListRateLimits(ctx, "")
+	if err != nil {
+		t.Fatalf("ListRateLimits: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("ListRateLimits len = %d, want 1", len(list))
+	}
+	got := list[0]
+	if got.Scope != domain.ScopeAccountAsset || got.Account != "acc-1" || got.Asset != "AAPL" {
+		t.Fatalf("scope/account/asset = %q/%q/%q", got.Scope, got.Account, got.Asset)
+	}
+	if got.MaxOrders != 100 || got.Window != 5*time.Minute {
+		t.Fatalf("max_orders=%d window=%v", got.MaxOrders, got.Window)
+	}
+
+	// Filter by account.
+	filtered, err := rs.ListRateLimits(ctx, "acc-1")
+	if err != nil || len(filtered) != 1 {
+		t.Fatalf("ListRateLimits(acc-1) = %v err=%v", filtered, err)
+	}
+
+	// Delete removes the row.
+	if err := rs.DeleteRateLimit(ctx, domain.ScopeAccountAsset, "acc-1", "AAPL"); err != nil {
+		t.Fatalf("DeleteRateLimit: %v", err)
+	}
+	list, _ = rs.ListRateLimits(ctx, "")
+	if len(list) != 0 {
+		t.Fatalf("expected 0 after delete, got %d", len(list))
+	}
+
+	// Double delete is ErrNotFound.
+	if err := rs.DeleteRateLimit(ctx, domain.ScopeAccountAsset, "acc-1", "AAPL"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("DeleteRateLimit(missing) error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestRateLimitUpsertUpdatesValue(t *testing.T) {
+	ctx, rs := seedLimitFixtures(t)
+
+	if err := rs.PutRateLimit(ctx, domain.LimitRate{
+		Scope: domain.ScopeBroker, MaxOrders: 50, Window: time.Minute,
+	}); err != nil {
+		t.Fatalf("PutRateLimit (first): %v", err)
+	}
+	// Second put with same composite (broker, NULL, NULL) should update the
+	// value columns, not fail with a duplicate error.
+	if err := rs.PutRateLimit(ctx, domain.LimitRate{
+		Scope: domain.ScopeBroker, MaxOrders: 200, Window: 2 * time.Minute,
+	}); err != nil {
+		t.Fatalf("PutRateLimit (upsert): %v", err)
+	}
+
+	list, err := rs.ListRateLimits(ctx, "")
+	if err != nil {
+		t.Fatalf("ListRateLimits: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("expected 1 row after upsert, got %d", len(list))
+	}
+	if list[0].MaxOrders != 200 || list[0].Window != 2*time.Minute {
+		t.Fatalf("upsert did not update value: max_orders=%d window=%v", list[0].MaxOrders, list[0].Window)
+	}
+}
+
+func TestRateLimitBrokerScopeNullAxes(t *testing.T) {
+	ctx, rs := seedLimitFixtures(t)
+
+	// broker scope: no account, no asset.
+	limit := domain.LimitRate{
+		Scope: domain.ScopeBroker, MaxOrders: 1000, Window: time.Hour,
+	}
+	if err := rs.PutRateLimit(ctx, limit); err != nil {
+		t.Fatalf("PutRateLimit(broker): %v", err)
+	}
+	list, err := rs.ListRateLimits(ctx, "")
+	if err != nil {
+		t.Fatalf("ListRateLimits: %v", err)
+	}
+	if len(list) != 1 || list[0].Account != "" || list[0].Asset != "" {
+		t.Fatalf("broker limit axes = account=%q asset=%q", list[0].Account, list[0].Asset)
+	}
+	// Deleting by (broker, "", "") should find the row.
+	if err := rs.DeleteRateLimit(ctx, domain.ScopeBroker, "", ""); err != nil {
+		t.Fatalf("DeleteRateLimit(broker): %v", err)
+	}
+}
+
+func TestRateLimitInvalidScopeRejected(t *testing.T) {
+	ctx, rs := seedLimitFixtures(t)
+
+	err := rs.PutRateLimit(ctx, domain.LimitRate{
+		Scope: "bad_scope", MaxOrders: 1, Window: time.Minute,
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("PutRateLimit(bad scope) error = %v, want ErrInvalid", err)
+	}
+}
+
+func TestRateLimitUnknownAccountIsInvalid(t *testing.T) {
+	ctx, rs := seedLimitFixtures(t)
+
+	err := rs.PutRateLimit(ctx, domain.LimitRate{
+		Scope: domain.ScopeAccount, Account: "ghost",
+		MaxOrders: 1, Window: time.Minute,
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("PutRateLimit(unknown account) error = %v, want ErrInvalid", err)
+	}
+}
+
+func TestRateLimitUnknownAssetIsInvalid(t *testing.T) {
+	ctx, rs := seedLimitFixtures(t)
+
+	err := rs.PutRateLimit(ctx, domain.LimitRate{
+		Scope: domain.ScopeAsset, Asset: "GHOST",
+		MaxOrders: 1, Window: time.Minute,
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("PutRateLimit(unknown asset) error = %v, want ErrInvalid", err)
+	}
+}
+
+func TestRateLimitCascadeOnAccountDelete(t *testing.T) {
+	ctx, rs := seedLimitFixtures(t)
+
+	if err := rs.PutRateLimit(ctx, domain.LimitRate{
+		Scope:     domain.ScopeAccount,
+		Account:   "acc-1",
+		MaxOrders: 10,
+		Window:    time.Minute,
+	}); err != nil {
+		t.Fatalf("PutRateLimit: %v", err)
+	}
+
+	r := rs.(*realmStore)
+	if _, err := r.rawDB().ExecContext(ctx, `DELETE FROM account WHERE code = 'acc-1'`); err != nil {
+		t.Fatalf("delete account: %v", err)
+	}
+
+	list, err := rs.ListRateLimits(ctx, "")
+	if err != nil {
+		t.Fatalf("ListRateLimits after account delete: %v", err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("expected 0 limits after account cascade, got %d", len(list))
+	}
+}
+
+// --- Order-size limits (limit_order_size) ------------------------------------
+
+func TestOrderSizeLimitPutListDeleteRoundTrip(t *testing.T) {
+	ctx, rs := seedLimitFixtures(t)
+
+	limit := domain.LimitOrderSize{
+		Scope:       domain.ScopeAccountAsset,
+		Account:     "acc-1",
+		Asset:       "AAPL",
+		MaxQuantity: "500",
+		MaxNotional: "50000",
+	}
+	if err := rs.PutOrderSizeLimit(ctx, limit); err != nil {
+		t.Fatalf("PutOrderSizeLimit: %v", err)
+	}
+
+	list, err := rs.ListOrderSizeLimits(ctx, "")
+	if err != nil {
+		t.Fatalf("ListOrderSizeLimits: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("len = %d, want 1", len(list))
+	}
+	got := list[0]
+	if got.MaxQuantity != "500" || got.MaxNotional != "50000" {
+		t.Fatalf("max_quantity=%q max_notional=%q", got.MaxQuantity, got.MaxNotional)
+	}
+
+	// Upsert updates.
+	if err := rs.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+		Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL",
+		MaxQuantity: "1000",
+	}); err != nil {
+		t.Fatalf("PutOrderSizeLimit (upsert): %v", err)
+	}
+	list, _ = rs.ListOrderSizeLimits(ctx, "")
+	if len(list) != 1 || list[0].MaxQuantity != "1000" {
+		t.Fatalf("after upsert max_quantity = %q", list[0].MaxQuantity)
+	}
+
+	if err := rs.DeleteOrderSizeLimit(ctx, domain.ScopeAccountAsset, "acc-1", "AAPL"); err != nil {
+		t.Fatalf("DeleteOrderSizeLimit: %v", err)
+	}
+	list, _ = rs.ListOrderSizeLimits(ctx, "")
+	if len(list) != 0 {
+		t.Fatalf("expected 0 after delete, got %d", len(list))
+	}
+
+	if err := rs.DeleteOrderSizeLimit(ctx, domain.ScopeAccountAsset, "acc-1", "AAPL"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("DeleteOrderSizeLimit(missing) = %v, want ErrNotFound", err)
+	}
+}
+
+func TestOrderSizeLimitAccountFilter(t *testing.T) {
+	ctx, rs := seedLimitFixtures(t)
+
+	// One broker barrier and one account_asset barrier.
+	if err := rs.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+		Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL",
+		MaxQuantity: "100",
+	}); err != nil {
+		t.Fatalf("PutOrderSizeLimit(acc-1): %v", err)
+	}
+	if err := rs.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+		Scope: domain.ScopeBroker, MaxNotional: "999",
+	}); err != nil {
+		t.Fatalf("PutOrderSizeLimit(broker): %v", err)
+	}
+
+	// Filter by account returns only the account_asset row.
+	filtered, err := rs.ListOrderSizeLimits(ctx, "acc-1")
+	if err != nil {
+		t.Fatalf("ListOrderSizeLimits(acc-1): %v", err)
+	}
+	if len(filtered) != 1 || filtered[0].Scope != domain.ScopeAccountAsset {
+		t.Fatalf("filtered = %+v", filtered)
+	}
+}
+
+func TestOrderSizeLimitInvalidRejected(t *testing.T) {
+	ctx, rs := seedLimitFixtures(t)
+
+	// Both max_quantity and max_notional empty is invalid.
+	err := rs.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+		Scope: domain.ScopeBroker,
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("PutOrderSizeLimit(no values) error = %v, want ErrInvalid", err)
+	}
+}
+
+func TestOrderSizeLimitCascadeOnAssetDelete(t *testing.T) {
+	ctx, rs := seedLimitFixtures(t)
+
+	if err := rs.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+		Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL",
+		MaxQuantity: "100",
+	}); err != nil {
+		t.Fatalf("PutOrderSizeLimit: %v", err)
+	}
+
+	if err := rs.DeleteAsset(ctx, "AAPL", true); err != nil {
+		t.Fatalf("DeleteAsset: %v", err)
+	}
+
+	list, err := rs.ListOrderSizeLimits(ctx, "")
+	if err != nil {
+		t.Fatalf("ListOrderSizeLimits after asset delete: %v", err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("expected 0 limits after asset cascade, got %d", len(list))
+	}
+}
+
+func TestSpotFundsPnlBoundsInitialPnlOnlyForAccount(t *testing.T) {
+	ctx, rs := seedLimitFixtures(t)
+
+	for _, limit := range []domain.LimitSpotFundsPnlBounds{
+		{
+			Scope:      domain.ScopeGlobal,
+			LowerBound: "-100",
+			InitialPnl: "5",
+		},
+		{
+			Scope:        domain.ScopeAccountGroup,
+			AccountGroup: "desk-a",
+			LowerBound:   "-100",
+			InitialPnl:   "5",
+		},
+	} {
+		err := rs.PutSpotFundsPnlBoundsLimit(ctx, limit)
+		if !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf(
+				"PutSpotFundsPnlBoundsLimit(%s) error = %v, want ErrInvalid",
+				limit.Scope,
+				err,
+			)
+		}
+	}
+}
+
+func policyKeys(rows []PolicyListRow) []string {
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, string(row.Kind)+"|"+string(row.Account))
+	}
+	return out
+}
+
+// seedPolicyFixtures creates the accounts and asset plus one barrier of each
+// kind across two accounts, so a policy list test can exercise the UNION,
+// filters, and paging.
+func seedPolicyFixtures(t *testing.T) (context.Context, RealmStore) {
+	t.Helper()
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+	if err := rs.CreateAsset(ctx, domain.Asset{Code: "AAPL"}); err != nil {
+		t.Fatalf("CreateAsset(AAPL): %v", err)
+	}
+	for _, code := range []domain.AccountID{"acc-1", "acc-2"} {
+		if _, err := rs.CreateAccount(ctx, domain.Account{Code: code}); err != nil {
+			t.Fatalf("CreateAccount(%s): %v", code, err)
+		}
+	}
+	// acc-1 carries both supported kinds; acc-2 carries only a rate barrier.
+	if err := rs.PutRateLimit(ctx, domain.LimitRate{
+		Scope: domain.ScopeAccount, Account: "acc-1",
+		MaxOrders: 100, Window: time.Minute,
+	}); err != nil {
+		t.Fatalf("PutRateLimit(acc-1): %v", err)
+	}
+	if err := rs.PutRateLimit(ctx, domain.LimitRate{
+		Scope: domain.ScopeAccount, Account: "acc-2",
+		MaxOrders: 50, Window: time.Minute,
+	}); err != nil {
+		t.Fatalf("PutRateLimit(acc-2): %v", err)
+	}
+	if err := rs.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+		Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL",
+		MaxQuantity: "500",
+	}); err != nil {
+		t.Fatalf("PutOrderSizeLimit(acc-1): %v", err)
+	}
+	return ctx, rs
+}
+
+func TestListPolicyRowsUnionOrderAndTotal(t *testing.T) {
+	ctx, rs := seedPolicyFixtures(t)
+
+	// Unfiltered: all three barriers, ordered by the default key (kind, then the
+	// composite). Total counts every matching barrier before paging.
+	page, err := rs.ListPolicyRows(ctx, PolicyListFilter{})
+	if err != nil {
+		t.Fatalf("ListPolicyRows all: %v", err)
+	}
+	if page.Total != 3 {
+		t.Fatalf("total = %d, want 3", page.Total)
+	}
+	// kind sorts lexically: order_size_limit, rate_limit.
+	wantOrder := []string{
+		"order_size_limit|acc-1",
+		"rate_limit|acc-1",
+		"rate_limit|acc-2",
+	}
+	if got := policyKeys(page.Rows); !equalStrings(got, wantOrder) {
+		t.Fatalf("default order = %v, want %v", got, wantOrder)
+	}
+	// The order-size row reconstructs its typed value faithfully.
+	if page.Rows[0].OrderSize == nil || page.Rows[0].OrderSize.MaxQuantity != "500" {
+		t.Fatalf("order-size payload = %+v", page.Rows[0].OrderSize)
+	}
+	// The rate row reconstructs the count and window.
+	rateRow := page.Rows[1]
+	if rateRow.Rate == nil || rateRow.Rate.MaxOrders != 100 ||
+		rateRow.Rate.Window != time.Minute {
+		t.Fatalf("rate payload = %+v", rateRow.Rate)
+	}
+}
+
+func TestListPolicyRowsAccountAndKindFilter(t *testing.T) {
+	ctx, rs := seedPolicyFixtures(t)
+
+	// Exact account filter narrows to acc-1's two barriers.
+	page, err := rs.ListPolicyRows(ctx, PolicyListFilter{
+		Account: ExactTextMatcher("acc-1"),
+	})
+	if err != nil {
+		t.Fatalf("ListPolicyRows account: %v", err)
+	}
+	if page.Total != 2 {
+		t.Fatalf("acc-1 total = %d, want 2", page.Total)
+	}
+
+	// Kind filter narrows to the two rate barriers.
+	rate := PolicyKindRate
+	page, err = rs.ListPolicyRows(ctx, PolicyListFilter{Kind: &rate})
+	if err != nil {
+		t.Fatalf("ListPolicyRows kind: %v", err)
+	}
+	if got := policyKeys(page.Rows); !equalStrings(
+		got, []string{"rate_limit|acc-1", "rate_limit|acc-2"},
+	) {
+		t.Fatalf("rate-only rows = %v", got)
+	}
+
+	// Account and kind combine.
+	page, err = rs.ListPolicyRows(ctx, PolicyListFilter{
+		Account: ExactTextMatcher("acc-2"),
+		Kind:    &rate,
+	})
+	if err != nil {
+		t.Fatalf("ListPolicyRows account+kind: %v", err)
+	}
+	if got := policyKeys(page.Rows); !equalStrings(got, []string{"rate_limit|acc-2"}) {
+		t.Fatalf("acc-2 rate rows = %v", got)
+	}
+}
+
+func TestListPolicyRowsSpotFundsAxesFilter(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+
+	if err := rs.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
+		t.Fatalf("CreateAsset(USD): %v", err)
+	}
+	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "desk-a"}); err != nil {
+		t.Fatalf("CreateGroup(desk-a): %v", err)
+	}
+	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "desk-b"}); err != nil {
+		t.Fatalf("CreateGroup(desk-b): %v", err)
+	}
+	for _, limit := range []domain.LimitSpotFundsPnlBounds{
+		{
+			Scope:        domain.ScopeAccountGroup,
+			AccountGroup: "desk-a",
+			LowerBound:   "-1000",
+		},
+		{
+			Scope:        domain.ScopeAccountGroup,
+			AccountGroup: "desk-b",
+			LowerBound:   "-500",
+		},
+	} {
+		if err := rs.PutSpotFundsPnlBoundsLimit(ctx, limit); err != nil {
+			t.Fatalf("PutSpotFundsPnlBoundsLimit(%s): %v", limit.AccountGroup, err)
+		}
+	}
+
+	page, err := rs.ListPolicyRows(ctx, PolicyListFilter{
+		AccountGroup: ExactTextMatcher("desk-a"),
+	})
+	if err != nil {
+		t.Fatalf("ListPolicyRows spot funds axes: %v", err)
+	}
+	if page.Total != 1 {
+		t.Fatalf("spot funds total = %d, want 1", page.Total)
+	}
+	if len(page.Rows) != 1 {
+		t.Fatalf("spot funds rows len = %d, want 1: %+v", len(page.Rows), page.Rows)
+	}
+	row := page.Rows[0]
+	if row.Kind != PolicyKindSpotFundsPnlBounds {
+		t.Fatalf("spot funds kind = %q, want %q", row.Kind, PolicyKindSpotFundsPnlBounds)
+	}
+	if row.SpotFundsPnlBounds == nil {
+		t.Fatalf("spot funds payload is nil: %+v", row)
+	}
+	if row.AccountGroup != "desk-a" {
+		t.Fatalf("row axes = group %q", row.AccountGroup)
+	}
+	if row.SpotFundsPnlBounds.AccountGroup != "desk-a" {
+		t.Fatalf("payload axes = %+v", row.SpotFundsPnlBounds)
+	}
+}
+
+func TestListPolicyRowsSortAndPage(t *testing.T) {
+	ctx, rs := seedPolicyFixtures(t)
+
+	// Sort by account ascending: acc-1's two barriers (ordered by the kind
+	// tiebreak) then acc-2's rate barrier.
+	page, err := rs.ListPolicyRows(ctx, PolicyListFilter{
+		Sort: SortSpec{Column: "account"},
+	})
+	if err != nil {
+		t.Fatalf("ListPolicyRows sort account: %v", err)
+	}
+	wantOrder := []string{
+		"order_size_limit|acc-1",
+		"rate_limit|acc-1",
+		"rate_limit|acc-2",
+	}
+	if got := policyKeys(page.Rows); !equalStrings(got, wantOrder) {
+		t.Fatalf("account order = %v, want %v", got, wantOrder)
+	}
+
+	// First page of two; Total still reports the full match count.
+	page, err = rs.ListPolicyRows(ctx, PolicyListFilter{
+		Sort: SortSpec{Column: "account"},
+		Page: PageSpec{Limit: 2, Offset: 0},
+	})
+	if err != nil {
+		t.Fatalf("ListPolicyRows page 0: %v", err)
+	}
+	if page.Total != 3 {
+		t.Fatalf("page 0 total = %d, want 3", page.Total)
+	}
+	if got := policyKeys(page.Rows); !equalStrings(got, wantOrder[:2]) {
+		t.Fatalf("page 0 = %v, want %v", got, wantOrder[:2])
+	}
+
+	// Second page continues from the offset window.
+	page, err = rs.ListPolicyRows(ctx, PolicyListFilter{
+		Sort: SortSpec{Column: "account"},
+		Page: PageSpec{Limit: 2, Offset: 2},
+	})
+	if err != nil {
+		t.Fatalf("ListPolicyRows page 1: %v", err)
+	}
+	if got := policyKeys(page.Rows); !equalStrings(got, wantOrder[2:]) {
+		t.Fatalf("page 1 = %v, want %v", got, wantOrder[2:])
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

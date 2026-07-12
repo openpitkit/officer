@@ -20,7 +20,7 @@ import { describe, expect, it } from "vitest";
 import { validateLimit } from "@/api/validate";
 
 describe("validateLimit", () => {
-  it("accepts self-computed account-group PnL limits with account currency", () => {
+  it("accepts self-computed account-group PnL limits", () => {
     expect(
       validateLimit({
         policy: "spot_funds_pnl_bounds_kill_switch",
@@ -28,13 +28,12 @@ describe("validateLimit", () => {
         account: "",
         accountGroup: "desk-a",
         asset: "",
-        accountCurrency: "USD",
         values: { lower_bound: "-1000" },
       }),
     ).toBeNull();
   });
 
-  it("requires account currency for self-computed PnL limits", () => {
+  it("does not require account currency for self-computed PnL limits", () => {
     expect(
       validateLimit({
         policy: "spot_funds_pnl_bounds_kill_switch",
@@ -43,7 +42,7 @@ describe("validateLimit", () => {
         asset: "",
         values: { upper_bound: "500" },
       }),
-    ).toEqual({ key: "accountCurrency.required" });
+    ).toBeNull();
   });
 
   it("allows initial_pnl only on account-scoped self-computed PnL limits", () => {
@@ -54,7 +53,6 @@ describe("validateLimit", () => {
         account: "",
         accountGroup: "desk-a",
         asset: "",
-        accountCurrency: "USD",
         values: { lower_bound: "-1000", initial_pnl: "10" },
       }),
     ).toEqual({ key: "limit.spotFundsInitialPnlAccountOnly" });
@@ -65,7 +63,6 @@ describe("validateLimit", () => {
         scope: "account",
         account: "acc-1",
         asset: "",
-        accountCurrency: "USD",
         values: { lower_bound: "-1000", initial_pnl: "10" },
       }),
     ).toBeNull();

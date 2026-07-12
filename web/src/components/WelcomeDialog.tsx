@@ -111,6 +111,11 @@ const DEMO_POSITIONS = [
   { asset: "BTC", balance: "1", averageEntryPrice: "65000" },
   { asset: "ETH", balance: "10", averageEntryPrice: "3500" },
   { asset: "USDT", balance: "25000", averageEntryPrice: "1" },
+  { asset: "AAPL", balance: "100", averageEntryPrice: "200" },
+  { asset: "NVDA", balance: "50", averageEntryPrice: "150" },
+  { asset: "SPCX", balance: "10", averageEntryPrice: "300" },
+  { asset: "META", balance: "25", averageEntryPrice: "500" },
+  { asset: "KO", balance: "100", averageEntryPrice: "70" },
 ];
 
 const STATIC_MARKET_DATA_PRESET: PresetInstrument[] = [
@@ -216,6 +221,12 @@ const WELCOME_PRESET_ASSET_CLASSES: PresetAssetClass[] = [
     notes:
       "Native crypto assets used for demo balances and crypto venue risk checks.",
   },
+  {
+    code: "equity",
+    title: "Equities",
+    notes:
+      "Company shares and private-market equity positions used in demo portfolios.",
+  },
 ];
 
 const WELCOME_PRESET_ASSETS: PresetAsset[] = [
@@ -227,6 +238,11 @@ const WELCOME_PRESET_ASSETS: PresetAsset[] = [
   { code: "USDC", title: "USD Coin", assetClass: "stablecoin" },
   { code: "EURI", title: "Eurite", assetClass: "stablecoin" },
   { code: "AEUR", title: "Anchored Coins AEUR", assetClass: "stablecoin" },
+  { code: "AAPL", title: "Apple Inc.", assetClass: "equity" },
+  { code: "NVDA", title: "NVIDIA Corp.", assetClass: "equity" },
+  { code: "SPCX", title: "SpaceX", assetClass: "equity" },
+  { code: "META", title: "Facebook / Meta Platforms", assetClass: "equity" },
+  { code: "KO", title: "The Coca-Cola Company", assetClass: "equity" },
 ];
 
 function apiErrorMessage(error: unknown): string {
@@ -361,6 +377,7 @@ export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
     fetchMarketData,
     putLimit,
     restartMarketData,
+    setAccountCurrency,
     setAccountNotes,
     setMarketDataInstanceEnabled,
     setWelcomeSeen,
@@ -443,15 +460,17 @@ export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
     let applied = 0;
     try {
       const accounts = await fetchAccounts();
-      if (!accounts.some((account) => account.code === DEMO_ACCOUNT_ID)) {
-        await createAccount(DEMO_ACCOUNT_ID);
-        applied += 1;
-      }
-      await setAccountNotes(DEMO_ACCOUNT_ID, t("welcome.presets.accountNote"));
-      applied += 1;
       await ensureWelcomePresetAssets(() => {
         applied += 1;
       });
+      if (!accounts.some((account) => account.code === DEMO_ACCOUNT_ID)) {
+        await createAccount(DEMO_ACCOUNT_ID, "", "USD");
+        applied += 1;
+      }
+      await setAccountCurrency(DEMO_ACCOUNT_ID, "USD");
+      applied += 1;
+      await setAccountNotes(DEMO_ACCOUNT_ID, t("welcome.presets.accountNote"));
+      applied += 1;
       for (const position of DEMO_POSITIONS) {
         await createAdjustment(DEMO_ACCOUNT_ID, {
           asset: position.asset,

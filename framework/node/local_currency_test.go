@@ -21,11 +21,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
+	"go.openpit.dev/officer/framework/store"
 )
 
 func TestLocalNode_SetAccountCurrencyAuditsAndGuardsOpenBalances(t *testing.T) {
@@ -69,7 +71,7 @@ func TestLocalNode_SetAccountCurrencyAuditsAndGuardsOpenBalances(t *testing.T) {
 	err = n.SetAccountCurrency(ctx, testKey(id), "EUR", testCaller)
 	if !errors.Is(err, domain.ErrInvalid) ||
 		!strings.Contains(err.Error(), "acc-1") ||
-		!strings.Contains(err.Error(), "hold balance or P&L rows") {
+		!strings.Contains(err.Error(), "hold non-zero positions or P&L") {
 		t.Fatalf("SetAccountCurrency guarded = %v, want ErrInvalid with account", err)
 	}
 }
@@ -98,8 +100,506 @@ func TestLocalNode_SetAccountCurrencyGuardsRealizedPnlRows(t *testing.T) {
 	err := n.SetAccountCurrency(ctx, testKey(id), "EUR", testCaller)
 	if !errors.Is(err, domain.ErrInvalid) ||
 		!strings.Contains(err.Error(), "acc-1") ||
-		!strings.Contains(err.Error(), "balance or P&L rows") {
+		!strings.Contains(err.Error(), "non-zero positions or P&L") {
 		t.Fatalf("SetAccountCurrency guarded = %v, want ErrInvalid with account", err)
+	}
+}
+
+// An account with no currency halts its P&L with missing_account_currency, and
+// setting the currency is the remedy for that halt. A halt flag must therefore
+// never guard the currency change, or the account deadlocks. Blocking is a
+// separate manual decision and must survive the change untouched.
+func TestLocalNode_SetAccountCurrencyAllowedForHaltedAccountWithoutPositions(t *testing.T) {
+	t.Parallel()
+	n, st := newTestNode(t, newFakeEngine())
+	ctx := context.Background()
+	createCurrencyAssets(t, st, "USD")
+
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, domain.Account{
+		Code:          id,
+		PnlHaltReason: domain.PnlHaltReasonMissingAccountCurrency,
+	}, testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	// A zeroed position row that only remembers its halt: no number to recompute.
+	if err := st.UpsertBalance(ctx, domain.Balance{
+		Account:               id,
+		Asset:                 "USD",
+		RealizedPnlHaltReason: domain.PnlHaltReasonMissingCostBasis,
+	}); err != nil {
+		t.Fatalf("UpsertBalance: %v", err)
+	}
+	if err := n.SetAccountBlocked(
+		ctx, testKey(id), true, "pnl kill-switch", testCaller,
+	); err != nil {
+		t.Fatalf("SetAccountBlocked: %v", err)
+	}
+
+	if err := n.SetAccountCurrency(ctx, testKey(id), "USD", testCaller); err != nil {
+		t.Fatalf("SetAccountCurrency for halted account without positions: %v", err)
+	}
+	account, _, err := n.GetAccountState(ctx, testKey(id))
+	if err != nil {
+		t.Fatalf("GetAccountState: %v", err)
+	}
+	if account.EffectiveCurrency != "USD" {
+		t.Fatalf("account currency = %q, want USD", account.EffectiveCurrency)
+	}
+	if !account.Blocked {
+		t.Fatal("currency change cleared the account block; unblocking stays manual")
+	}
+}
+
+// Setting the currency on a halted, position-less account retires the halt
+// against zero - the only P&L such an account can have - in the engine first
+// and then in the store. The account block is not part of that reset.
+func TestLocalNode_SetAccountCurrencyResetsHaltedPnlWithoutPositions(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	createCurrencyAssets(t, st, "USD")
+
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, domain.Account{
+		Code:          id,
+		PnlHaltReason: domain.PnlHaltReasonMissingAccountCurrency,
+	}, testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if err := n.SetAccountBlocked(
+		ctx, testKey(id), true, "pnl kill-switch", testCaller,
+	); err != nil {
+		t.Fatalf("SetAccountBlocked: %v", err)
+	}
+
+	if err := n.SetAccountCurrency(ctx, testKey(id), "USD", testCaller); err != nil {
+		t.Fatalf("SetAccountCurrency: %v", err)
+	}
+
+	want := []accountPnlCall{{id: id, pnl: "0"}}
+	if !reflect.DeepEqual(eng.accountPnlCalls, want) {
+		t.Fatalf("engine pnl calls = %v, want %v", eng.accountPnlCalls, want)
+	}
+	account, _, err := n.GetAccountState(ctx, testKey(id))
+	if err != nil {
+		t.Fatalf("GetAccountState: %v", err)
+	}
+	if account.Pnl != "0" || account.PnlHaltReason != "" {
+		t.Fatalf(
+			"account pnl = %q halt = %q, want 0 with no halt",
+			account.Pnl, account.PnlHaltReason,
+		)
+	}
+	if !account.Blocked {
+		t.Fatal("pnl reset cleared the account block; unblocking stays manual")
+	}
+}
+
+// The engine leaves the prior P&L in place when it halts without a value, so a
+// halted account can hold a stale number. That number is historical, not
+// authoritative: there is nothing to recompute into the new currency, and the
+// change goes through exactly as it does for a halt carrying no number at all.
+func TestLocalNode_SetAccountCurrencyResetsStalePnlBehindHalt(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	createCurrencyAssets(t, st, "USD")
+
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, domain.Account{
+		Code:          id,
+		Pnl:           "-50000",
+		PnlHaltReason: domain.PnlHaltReasonMissingAccountCurrency,
+	}, testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if err := n.SetAccountBlocked(
+		ctx, testKey(id), true, "pnl kill-switch", testCaller,
+	); err != nil {
+		t.Fatalf("SetAccountBlocked: %v", err)
+	}
+
+	if err := n.SetAccountCurrency(ctx, testKey(id), "USD", testCaller); err != nil {
+		t.Fatalf("SetAccountCurrency: %v", err)
+	}
+
+	want := []accountPnlCall{{id: id, pnl: "0"}}
+	if !reflect.DeepEqual(eng.accountPnlCalls, want) {
+		t.Fatalf("engine pnl calls = %v, want %v", eng.accountPnlCalls, want)
+	}
+	account, _, err := n.GetAccountState(ctx, testKey(id))
+	if err != nil {
+		t.Fatalf("GetAccountState: %v", err)
+	}
+	if account.Pnl != "0" || account.PnlHaltReason != "" {
+		t.Fatalf(
+			"account pnl = %q halt = %q, want 0 with no halt",
+			account.Pnl, account.PnlHaltReason,
+		)
+	}
+	if !account.Blocked {
+		t.Fatal("pnl reset cleared the account block; unblocking stays manual")
+	}
+}
+
+// A zero seed can itself breach a barrier. The block the engine reports back is
+// applied, never suppressed.
+func TestLocalNode_SetAccountCurrencyMirrorsPnlResetBlock(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	const id domain.AccountID = "acc-1"
+	eng.accountPnlBlocks = map[domain.AccountID][]domain.AccountBlock{
+		id: {{
+			Account: id,
+			Policy:  domain.PolicySpotFundsPnlBoundsKillSwitch,
+			Code:    "account_blocked",
+			Reason:  "pnl below lower bound",
+		}},
+	}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	createCurrencyAssets(t, st, "USD")
+
+	if _, err := n.CreateAccount(ctx, domain.Account{
+		Code:          id,
+		PnlHaltReason: domain.PnlHaltReasonMissingAccountCurrency,
+	}, testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+
+	if err := n.SetAccountCurrency(ctx, testKey(id), "USD", testCaller); err != nil {
+		t.Fatalf("SetAccountCurrency: %v", err)
+	}
+
+	account, _, err := n.GetAccountState(ctx, testKey(id))
+	if err != nil {
+		t.Fatalf("GetAccountState: %v", err)
+	}
+	if !account.Blocked {
+		t.Fatal("engine block from the pnl reset was not mirrored into the store")
+	}
+	if !strings.Contains(account.BlockReason, "pnl below lower bound") {
+		t.Fatalf("block reason = %q, want the engine's reason", account.BlockReason)
+	}
+}
+
+func TestLocalNode_SetAccountCurrencyResetFailureRevertsCurrency(t *testing.T) {
+	t.Parallel()
+	resetErr := errors.New("reset account pnl failed")
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	createCurrencyAssets(t, st, "EUR", "USD")
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, domain.Account{
+		Code: id, Currency: "EUR",
+		PnlHaltReason: domain.PnlHaltReasonMissingFx,
+	}, testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	eng.accountPnlErr = resetErr
+
+	err := n.SetAccountCurrency(ctx, testKey(id), "USD", testCaller)
+	if !errors.Is(err, resetErr) {
+		t.Fatalf("SetAccountCurrency error = %v, want reset failure", err)
+	}
+	account, ok, getErr := st.GetAccount(ctx, id)
+	if getErr != nil || !ok {
+		t.Fatalf("GetAccount: ok=%v err=%v", ok, getErr)
+	}
+	if account.Currency != "EUR" || eng.accountCurrencies[id] != "EUR" {
+		t.Fatalf("currency after failed reset = store %q engine %q, want EUR/EUR",
+			account.Currency, eng.accountCurrencies[id])
+	}
+	if account.PnlHaltReason != domain.PnlHaltReasonMissingFx {
+		t.Fatalf("P&L halt = %q, want original missing_fx", account.PnlHaltReason)
+	}
+}
+
+func TestLocalNode_SetAccountCurrencyPnlPersistenceFailureFatals(t *testing.T) {
+	t.Parallel()
+	persistErr := errors.New("persist account pnl failed")
+	st := newRealmWrapStore(newMemoryStore("currency.db"), func(r store.RealmStore) store.RealmStore {
+		return &failSetAccountPnlRealm{RealmStore: r, err: persistErr}
+	})
+	ctx := context.Background()
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	eng := newFakeEngine()
+	var fatalErr error
+	n := newTestNodeWithStore(t, st, eng, WithFatalShutdownHook(func(err error) {
+		fatalErr = err
+	}))
+	createCurrencyAssets(t, n.realm, "USD")
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, domain.Account{
+		Code: id, PnlHaltReason: domain.PnlHaltReasonMissingAccountCurrency,
+	}, testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+
+	err := n.SetAccountCurrency(ctx, testKey(id), "USD", testCaller)
+	if !errors.Is(err, persistErr) {
+		t.Fatalf("SetAccountCurrency error = %v, want persistence failure", err)
+	}
+	if fatalErr == nil || !strings.Contains(fatalErr.Error(), "record account pnl reset") {
+		t.Fatalf("fatal error = %v, want post-engine P&L persistence failure", fatalErr)
+	}
+	if len(eng.accountPnlCalls) != 1 || eng.accountPnlCalls[0].pnl != "0" {
+		t.Fatalf("engine P&L calls = %+v, want committed zero reset", eng.accountPnlCalls)
+	}
+	account, ok, getErr := n.realm.GetAccount(ctx, id)
+	if getErr != nil || !ok || account.Currency != "USD" ||
+		account.PnlHaltReason != domain.PnlHaltReasonMissingAccountCurrency {
+		t.Fatalf("store after fatal = %+v ok=%v err=%v", account, ok, getErr)
+	}
+}
+
+func TestLocalNode_SetAccountCurrencyOpenBalanceReadFailureLeavesStateUntouched(t *testing.T) {
+	t.Parallel()
+	readErr := errors.New("list open balances failed")
+	st := newRealmWrapStore(newMemoryStore("currency.db"), func(r store.RealmStore) store.RealmStore {
+		return &failOpenBalancesRealm{RealmStore: r, err: readErr}
+	})
+	ctx := context.Background()
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	eng := newFakeEngine()
+	n := newTestNodeWithStore(t, st, eng)
+	createCurrencyAssets(t, n.realm, "EUR", "USD")
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, domain.Account{
+		Code: id, Currency: "EUR",
+		PnlHaltReason: domain.PnlHaltReasonMissingFx,
+	}, testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+
+	err := n.SetAccountCurrency(ctx, testKey(id), "USD", testCaller)
+	if !errors.Is(err, readErr) {
+		t.Fatalf("SetAccountCurrency error = %v, want open-balance read failure", err)
+	}
+	account, ok, getErr := n.realm.GetAccount(ctx, id)
+	if getErr != nil || !ok || account.Currency != "EUR" || eng.accountCurrencies[id] != "EUR" {
+		t.Fatalf("currency after preflight failure = store %+v engine %q ok=%v err=%v",
+			account, eng.accountCurrencies[id], ok, getErr)
+	}
+}
+
+func TestLocalNode_SetAccountCurrencyGuardsAverageEntryPriceOne(t *testing.T) {
+	t.Parallel()
+	n, st := newTestNode(t, newFakeEngine())
+	ctx := context.Background()
+	createCurrencyAssets(t, st, "EUR", "USD")
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, domain.Account{Code: id, Currency: "EUR"}, testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if err := st.UpsertBalance(ctx, domain.Balance{
+		Account: id, Asset: "USD", AverageEntryPrice: "1",
+	}); err != nil {
+		t.Fatalf("UpsertBalance: %v", err)
+	}
+	if err := n.SetAccountCurrency(ctx, testKey(id), "USD", testCaller); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("SetAccountCurrency = %v, want average-entry-price guard", err)
+	}
+}
+
+// A healthy P&L is a real number: setting the currency must not zero it, and no
+// engine assignment is issued for it.
+func TestLocalNode_SetAccountCurrencyKeepsHealthyPnl(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	createCurrencyAssets(t, st, "USD")
+
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, domain.Account{Code: id}, testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	// A healthy non-zero P&L would be guarded, so the account carries none: the
+	// assertion is that a non-halted account is never reset.
+	if err := n.SetAccountCurrency(ctx, testKey(id), "USD", testCaller); err != nil {
+		t.Fatalf("SetAccountCurrency: %v", err)
+	}
+	if len(eng.accountPnlCalls) != 0 {
+		t.Fatalf("engine pnl calls = %v, want none for a healthy account", eng.accountPnlCalls)
+	}
+	account, _, err := n.GetAccountState(ctx, testKey(id))
+	if err != nil {
+		t.Fatalf("GetAccountState: %v", err)
+	}
+	if account.PnlHaltReason != "" {
+		t.Fatalf("account halt = %q, want none", account.PnlHaltReason)
+	}
+}
+
+// A halted account still holding a number is guarded: the number is denominated
+// in the old currency and would need recomputing.
+func TestLocalNode_SetAccountCurrencyGuardsHaltedAccountHoldingPositions(t *testing.T) {
+	t.Parallel()
+	n, st := newTestNode(t, newFakeEngine())
+	ctx := context.Background()
+	createCurrencyAssets(t, st, "USD", "EUR")
+
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, domain.Account{
+		Code:          id,
+		Currency:      "USD",
+		PnlHaltReason: domain.PnlHaltReasonMissingFx,
+	}, testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if err := st.UpsertBalance(ctx, domain.Balance{
+		Account:               id,
+		Asset:                 "USD",
+		Available:             "4",
+		RealizedPnlHaltReason: domain.PnlHaltReasonMissingFx,
+	}); err != nil {
+		t.Fatalf("UpsertBalance: %v", err)
+	}
+
+	err := n.SetAccountCurrency(ctx, testKey(id), "EUR", testCaller)
+	if !errors.Is(err, domain.ErrInvalid) ||
+		!strings.Contains(err.Error(), "acc-1") ||
+		!strings.Contains(err.Error(), "non-zero positions or P&L") {
+		t.Fatalf("SetAccountCurrency guarded = %v, want ErrInvalid with account", err)
+	}
+}
+
+func TestLocalNode_CurrencyGuardsAccountPnlWithoutBalanceRows(t *testing.T) {
+	t.Parallel()
+
+	t.Run("direct account set and clear", func(t *testing.T) {
+		t.Parallel()
+		n, st := newTestNode(t, newFakeEngine())
+		ctx := context.Background()
+		createCurrencyAssets(t, st, "USD", "EUR")
+		if _, err := n.CreateAccount(ctx, domain.Account{
+			Code: "account", Currency: "USD", Pnl: "1",
+		}, testCaller); err != nil {
+			t.Fatalf("CreateAccount: %v", err)
+		}
+
+		for _, currency := range []string{"EUR", ""} {
+			assertAccountPnlCurrencyGuard(
+				t,
+				n.SetAccountCurrency(ctx, testKey("account"), currency, testCaller),
+				"account",
+			)
+		}
+	})
+
+	t.Run("group assignment", func(t *testing.T) {
+		t.Parallel()
+		n, st := newTestNode(t, newFakeEngine())
+		ctx := context.Background()
+		createCurrencyAssets(t, st, "USD", "EUR")
+		if err := n.SetDefaultGroupCurrency(ctx, "USD", testCaller); err != nil {
+			t.Fatalf("SetDefaultGroupCurrency: %v", err)
+		}
+		if _, err := n.CreateGroup(ctx, domain.AccountGroup{
+			Code: "desk-eur", Currency: "EUR",
+		}, testCaller); err != nil {
+			t.Fatalf("CreateGroup: %v", err)
+		}
+		if _, err := n.CreateAccount(ctx, domain.Account{Code: "account", Pnl: "1"}, testCaller); err != nil {
+			t.Fatalf("CreateAccount: %v", err)
+		}
+
+		assertAccountPnlCurrencyGuard(
+			t,
+			n.SetAccountGroup(ctx, testKey("account"), "desk-eur", testCaller),
+			"account",
+		)
+	})
+
+	t.Run("group currency mutation", func(t *testing.T) {
+		t.Parallel()
+		n, st := newTestNode(t, newFakeEngine())
+		ctx := context.Background()
+		createCurrencyAssets(t, st, "USD", "EUR")
+		if err := n.SetDefaultGroupCurrency(ctx, "USD", testCaller); err != nil {
+			t.Fatalf("SetDefaultGroupCurrency: %v", err)
+		}
+		if _, err := n.CreateGroup(ctx, domain.AccountGroup{
+			Code: "desk", Currency: "USD",
+		}, testCaller); err != nil {
+			t.Fatalf("CreateGroup: %v", err)
+		}
+		if _, err := n.CreateAccount(ctx, domain.Account{
+			Code: "account", GroupCode: "desk", Pnl: "1",
+		}, testCaller); err != nil {
+			t.Fatalf("CreateAccount: %v", err)
+		}
+
+		assertAccountPnlCurrencyGuard(
+			t,
+			n.SetGroupCurrency(ctx, "desk", "EUR", testCaller),
+			"account",
+		)
+	})
+
+	t.Run("default currency mutation and clear", func(t *testing.T) {
+		t.Parallel()
+		n, st := newTestNode(t, newFakeEngine())
+		ctx := context.Background()
+		createCurrencyAssets(t, st, "USD", "EUR")
+		if err := n.SetDefaultGroupCurrency(ctx, "USD", testCaller); err != nil {
+			t.Fatalf("SetDefaultGroupCurrency: %v", err)
+		}
+		if _, err := n.CreateAccount(ctx, domain.Account{Code: "account", Pnl: "1"}, testCaller); err != nil {
+			t.Fatalf("CreateAccount: %v", err)
+		}
+
+		for _, currency := range []string{"EUR", ""} {
+			assertAccountPnlCurrencyGuard(
+				t,
+				n.SetDefaultGroupCurrency(ctx, currency, testCaller),
+				"account",
+			)
+		}
+	})
+
+	t.Run("group delete", func(t *testing.T) {
+		t.Parallel()
+		n, st := newTestNode(t, newFakeEngine())
+		ctx := context.Background()
+		createCurrencyAssets(t, st, "USD", "EUR")
+		if err := n.SetDefaultGroupCurrency(ctx, "USD", testCaller); err != nil {
+			t.Fatalf("SetDefaultGroupCurrency: %v", err)
+		}
+		if _, err := n.CreateGroup(ctx, domain.AccountGroup{
+			Code: "desk-eur", Currency: "EUR",
+		}, testCaller); err != nil {
+			t.Fatalf("CreateGroup: %v", err)
+		}
+		if _, err := n.CreateAccount(ctx, domain.Account{
+			Code: "account", GroupCode: "desk-eur", Pnl: "1",
+		}, testCaller); err != nil {
+			t.Fatalf("CreateAccount: %v", err)
+		}
+
+		assertAccountPnlCurrencyGuard(
+			t,
+			n.DeleteGroup(ctx, "desk-eur", testCaller),
+			"account",
+		)
+	})
+}
+
+func assertAccountPnlCurrencyGuard(t *testing.T, err error, account string) {
+	t.Helper()
+	if !errors.Is(err, domain.ErrInvalid) || !strings.Contains(err.Error(), account) {
+		t.Fatalf("currency change error = %v, want ErrInvalid for %s", err, account)
 	}
 }
 
@@ -527,6 +1027,28 @@ type failSetAccountCurrencyEngine struct {
 	*fakeEngine
 	failSetCalls map[int]error
 	setCalls     int
+}
+
+type failSetAccountPnlRealm struct {
+	store.RealmStore
+	err error
+}
+
+func (r *failSetAccountPnlRealm) SetAccountPnl(
+	context.Context, domain.AccountID, string, domain.PnlHaltReason,
+) error {
+	return r.err
+}
+
+type failOpenBalancesRealm struct {
+	store.RealmStore
+	err error
+}
+
+func (r *failOpenBalancesRealm) ListAccountsWithOpenBalances(
+	context.Context, []domain.AccountID,
+) ([]domain.AccountID, error) {
+	return nil, r.err
 }
 
 func (e *failSetAccountCurrencyEngine) RunAccountSynchronized(

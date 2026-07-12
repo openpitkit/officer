@@ -51,8 +51,7 @@ export function registerOpenVocabulary(): void {
     allowedScopes: ["broker", "asset", "account", "account_asset"],
     kinds: [{ kind: "max_orders" }, { kind: "window" }],
     catalog: {
-      wikiUrl:
-        "https://github.com/openpitkit/pit/wiki/Policies#ratelimitpolicy",
+      wikiUrl: "https://wiki.openpit.dev/Policies/?officer#ratelimitpolicy",
       fields: [{ key: "max_orders" }, { key: "window" }],
     },
   });
@@ -62,7 +61,7 @@ export function registerOpenVocabulary(): void {
     kinds: [{ kind: "max_quantity" }, { kind: "max_notional" }],
     catalog: {
       wikiUrl:
-        "https://github.com/openpitkit/pit/wiki/Policies#ordersizelimitpolicy",
+        "https://wiki.openpit.dev/Policies/?officer#ordersizelimitpolicy",
       fields: [{ key: "max_quantity" }, { key: "max_notional" }],
     },
   });
@@ -76,7 +75,7 @@ export function registerOpenVocabulary(): void {
     ],
     catalog: {
       wikiUrl:
-        "https://github.com/openpitkit/pit/wiki/Spot-Funds#self-computed-pnl-kill-switch",
+        "https://wiki.openpit.dev/Spot-Funds/?officer#self-computed-pnl-kill-switch",
       fields: [
         { key: "lower_bound" },
         { key: "upper_bound" },

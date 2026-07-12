@@ -73,6 +73,8 @@ type storeHealthDTO struct {
 type accountDTO struct {
 	Code              string             `json:"code"`
 	Title             string             `json:"title"`
+	Pnl               string             `json:"pnl"`
+	PnlHaltReason     string             `json:"pnlHaltReason"`
 	Group             string             `json:"group"`
 	Currency          string             `json:"currency"`
 	EffectiveCurrency string             `json:"effectiveCurrency"`
@@ -128,16 +130,16 @@ type orderSizeLimitDTO struct {
 }
 
 // spotFundsPnlBoundsLimitDTO is the wire shape of a SpotFunds self-computed
-// P&L-bounds barrier. AccountCurrency is the account-currency axis; it is not
-// the legacy asset axis. InitialPnl is accepted only on account scope.
+// P&L-bounds barrier. P&L is always in the account currency, so the barrier
+// has no separate currency or asset axis. InitialPnl is accepted only on
+// account scope.
 type spotFundsPnlBoundsLimitDTO struct {
-	Scope           string `json:"scope"`
-	Account         string `json:"account"`
-	AccountGroup    string `json:"accountGroup"`
-	AccountCurrency string `json:"accountCurrency"`
-	LowerBound      string `json:"lowerBound"`
-	UpperBound      string `json:"upperBound"`
-	InitialPnl      string `json:"initialPnl"`
+	Scope        string `json:"scope"`
+	Account      string `json:"account"`
+	AccountGroup string `json:"accountGroup"`
+	LowerBound   string `json:"lowerBound"`
+	UpperBound   string `json:"upperBound"`
+	InitialPnl   string `json:"initialPnl"`
 }
 
 // accountLimitsDTO is the per-policy view of an account's typed barriers,
@@ -181,16 +183,14 @@ type policyValuesDTO struct {
 
 // policyDTO is the wire shape of one typed barrier flattened into the unified
 // policy list. The kind discriminator selects which member of values is set;
-// the scope/account/accountGroup/asset/accountCurrency axes are shared across
-// all kinds.
+// the scope/account/accountGroup/asset axes are shared across all kinds.
 type policyDTO struct {
-	Kind            string          `json:"kind"`
-	Scope           string          `json:"scope"`
-	Account         string          `json:"account"`
-	AccountGroup    string          `json:"accountGroup"`
-	Asset           string          `json:"asset"`
-	AccountCurrency string          `json:"accountCurrency"`
-	Values          policyValuesDTO `json:"values"`
+	Kind         string          `json:"kind"`
+	Scope        string          `json:"scope"`
+	Account      string          `json:"account"`
+	AccountGroup string          `json:"accountGroup"`
+	Asset        string          `json:"asset"`
+	Values       policyValuesDTO `json:"values"`
 }
 
 // auditDTO is the wire shape of a single audit row. An audit row is a machine
@@ -234,6 +234,8 @@ func toAccountDTO(a domain.Account) accountDTO {
 	return accountDTO{
 		Code:              string(a.Code),
 		Title:             a.Title,
+		Pnl:               a.Pnl,
+		PnlHaltReason:     string(a.PnlHaltReason),
 		Group:             a.GroupCode,
 		Currency:          a.Currency,
 		EffectiveCurrency: a.EffectiveCurrency,
@@ -309,13 +311,12 @@ func toSpotFundsPnlBoundsLimitDTO(
 	l domain.LimitSpotFundsPnlBounds,
 ) spotFundsPnlBoundsLimitDTO {
 	return spotFundsPnlBoundsLimitDTO{
-		Scope:           l.Scope,
-		Account:         string(l.Account),
-		AccountGroup:    l.AccountGroup,
-		AccountCurrency: l.AccountCurrency,
-		LowerBound:      l.LowerBound,
-		UpperBound:      l.UpperBound,
-		InitialPnl:      l.InitialPnl,
+		Scope:        l.Scope,
+		Account:      string(l.Account),
+		AccountGroup: l.AccountGroup,
+		LowerBound:   l.LowerBound,
+		UpperBound:   l.UpperBound,
+		InitialPnl:   l.InitialPnl,
 	}
 }
 
@@ -350,12 +351,11 @@ func toAccountLimitsDTO(limits node.AccountLimits) accountLimitsDTO {
 // row's kind, rendered with the same per-kind fields as toAccountLimitsDTO.
 func toPolicyRowDTO(row store.PolicyListRow) policyDTO {
 	dto := policyDTO{
-		Kind:            string(row.Kind),
-		Scope:           row.Scope,
-		Account:         string(row.Account),
-		AccountGroup:    row.AccountGroup,
-		Asset:           row.Asset,
-		AccountCurrency: row.AccountCurrency,
+		Kind:         string(row.Kind),
+		Scope:        row.Scope,
+		Account:      string(row.Account),
+		AccountGroup: row.AccountGroup,
+		Asset:        row.Asset,
 	}
 	switch {
 	case row.Rate != nil:
@@ -846,14 +846,15 @@ func toGroupRowDTO(row store.GroupListRow) groupDTO {
 // balanceDTO is the wire shape of one per-(account, asset) holdings snapshot.
 // All amounts are exact decimal strings passed through verbatim.
 type balanceDTO struct {
-	UpdatedAt         time.Time `json:"updatedAt"`
-	Account           string    `json:"account"`
-	Asset             string    `json:"asset"`
-	Available         string    `json:"available"`
-	Held              string    `json:"held"`
-	Incoming          string    `json:"incoming"`
-	RealizedPnl       string    `json:"realizedPnl"`
-	AverageEntryPrice string    `json:"averageEntryPrice"`
+	UpdatedAt             time.Time `json:"updatedAt"`
+	Account               string    `json:"account"`
+	Asset                 string    `json:"asset"`
+	Available             string    `json:"available"`
+	Held                  string    `json:"held"`
+	Incoming              string    `json:"incoming"`
+	RealizedPnl           string    `json:"realizedPnl"`
+	RealizedPnlHaltReason string    `json:"realizedPnlHaltReason"`
+	AverageEntryPrice     string    `json:"averageEntryPrice"`
 }
 
 // balanceRealizedPnlRequestDTO is the wire body for updating the realized P&L
@@ -866,14 +867,15 @@ type balanceRealizedPnlRequestDTO struct {
 // toBalanceDTO maps a domain.Balance onto the wire DTO.
 func toBalanceDTO(b domain.Balance) balanceDTO {
 	return balanceDTO{
-		UpdatedAt:         b.UpdatedAt,
-		Account:           string(b.Account),
-		Asset:             b.Asset,
-		Available:         b.Available,
-		Held:              b.Held,
-		Incoming:          b.Incoming,
-		RealizedPnl:       b.RealizedPnl,
-		AverageEntryPrice: b.AverageEntryPrice,
+		UpdatedAt:             b.UpdatedAt,
+		Account:               string(b.Account),
+		Asset:                 b.Asset,
+		Available:             b.Available,
+		Held:                  b.Held,
+		Incoming:              b.Incoming,
+		RealizedPnl:           b.RealizedPnl,
+		RealizedPnlHaltReason: string(b.RealizedPnlHaltReason),
+		AverageEntryPrice:     b.AverageEntryPrice,
 	}
 }
 
@@ -921,13 +923,15 @@ type adjustmentOutcomeDTO struct {
 
 // adjustmentAcceptedDTO carries the per-field delta and absolute result.
 type adjustmentAcceptedDTO struct {
-	BalanceDelta      string                         `json:"balanceDelta"`
-	BalanceResult     string                         `json:"balanceResult"`
-	HeldDelta         string                         `json:"heldDelta"`
-	HeldResult        string                         `json:"heldResult"`
-	IncomingDelta     string                         `json:"incomingDelta"`
-	IncomingResult    string                         `json:"incomingResult"`
-	RealizedPnlResult adjustmentRealizedPnlResultDTO `json:"realizedPnlResult"`
+	BalanceDelta          string                         `json:"balanceDelta"`
+	BalanceResult         string                         `json:"balanceResult"`
+	HeldDelta             string                         `json:"heldDelta"`
+	HeldResult            string                         `json:"heldResult"`
+	IncomingDelta         string                         `json:"incomingDelta"`
+	IncomingResult        string                         `json:"incomingResult"`
+	RealizedPnlResult     adjustmentRealizedPnlResultDTO `json:"realizedPnlResult"`
+	RealizedPnlHaltReason string                         `json:"realizedPnlHaltReason,omitempty"`
+	AverageEntryPrice     string                         `json:"averageEntryPrice,omitempty"`
 }
 
 type adjustmentRealizedPnlResultDTO struct {
@@ -1028,13 +1032,15 @@ func toAdjustmentDTO(r domain.AccountAdjustmentRecord) adjustmentDTO {
 	outcome := adjustmentOutcomeDTO{}
 	if r.Accepted != nil {
 		outcome.Accepted = &adjustmentAcceptedDTO{
-			BalanceDelta:      r.Accepted.BalanceDelta,
-			BalanceResult:     r.Accepted.BalanceResult,
-			HeldDelta:         r.Accepted.HeldDelta,
-			HeldResult:        r.Accepted.HeldResult,
-			IncomingDelta:     r.Accepted.IncomingDelta,
-			IncomingResult:    r.Accepted.IncomingResult,
-			RealizedPnlResult: toAdjustmentRealizedPnlResultDTO(r),
+			BalanceDelta:          r.Accepted.BalanceDelta,
+			BalanceResult:         r.Accepted.BalanceResult,
+			HeldDelta:             r.Accepted.HeldDelta,
+			HeldResult:            r.Accepted.HeldResult,
+			IncomingDelta:         r.Accepted.IncomingDelta,
+			IncomingResult:        r.Accepted.IncomingResult,
+			RealizedPnlResult:     toAdjustmentRealizedPnlResultDTO(r),
+			RealizedPnlHaltReason: string(r.Accepted.RealizedPnlHaltReason),
+			AverageEntryPrice:     r.Accepted.AverageEntryPrice,
 		}
 	}
 	if r.Rejected != nil {
@@ -1234,6 +1240,7 @@ type attestationResultDTO struct {
 // result, reconstructed for reproduction.
 type attestationBlockDTO struct {
 	Account string `json:"account"`
+	Policy  string `json:"policy"`
 	Code    string `json:"code"`
 	Reason  string `json:"reason"`
 	Details string `json:"details"`
@@ -1353,6 +1360,7 @@ func toCheckResultDTO(r domain.CheckResult) checkResultDTO {
 	if r.WouldBlock != nil {
 		block = &executionBlockDTO{
 			Account: string(r.WouldBlock.Account),
+			Policy:  r.WouldBlock.Policy,
 			Code:    r.WouldBlock.Code,
 			Reason:  r.WouldBlock.Reason,
 			Details: r.WouldBlock.Details,
@@ -1538,18 +1546,23 @@ type executionResultDTO struct {
 // executionOutcomeDTO is one per-asset balance effect of a fill, tagged with its
 // asset so the base and quote legs of a spot fill can be told apart.
 type executionOutcomeDTO struct {
-	Asset          string `json:"asset"`
-	BalanceDelta   string `json:"balanceDelta"`
-	BalanceResult  string `json:"balanceResult"`
-	HeldDelta      string `json:"heldDelta"`
-	HeldResult     string `json:"heldResult"`
-	IncomingDelta  string `json:"incomingDelta"`
-	IncomingResult string `json:"incomingResult"`
+	Asset                 string `json:"asset"`
+	BalanceDelta          string `json:"balanceDelta"`
+	BalanceResult         string `json:"balanceResult"`
+	HeldDelta             string `json:"heldDelta"`
+	HeldResult            string `json:"heldResult"`
+	IncomingDelta         string `json:"incomingDelta"`
+	IncomingResult        string `json:"incomingResult"`
+	RealizedPnlDelta      string `json:"realizedPnlDelta"`
+	RealizedPnlResult     string `json:"realizedPnlResult"`
+	RealizedPnlHaltReason string `json:"realizedPnlHaltReason,omitempty"`
+	AverageEntryPrice     string `json:"averageEntryPrice,omitempty"`
 }
 
 // executionBlockDTO is one engine-recorded account block from a report.
 type executionBlockDTO struct {
 	Account string `json:"account"`
+	Policy  string `json:"policy"`
 	Code    string `json:"code"`
 	Reason  string `json:"reason"`
 	Details string `json:"details"`
@@ -1584,6 +1597,7 @@ func toExecutionResultDTO(r engine.ExecutionReportResult) executionResultDTO {
 	for _, b := range r.Blocks {
 		blocks = append(blocks, executionBlockDTO{
 			Account: string(b.Account),
+			Policy:  b.Policy,
 			Code:    b.Code,
 			Reason:  b.Reason,
 			Details: b.Details,
@@ -1592,13 +1606,17 @@ func toExecutionResultDTO(r engine.ExecutionReportResult) executionResultDTO {
 	outcomes := make([]executionOutcomeDTO, 0, len(r.Outcomes))
 	for _, o := range r.Outcomes {
 		outcomes = append(outcomes, executionOutcomeDTO{
-			Asset:          o.Asset,
-			BalanceDelta:   o.Outcome.BalanceDelta,
-			BalanceResult:  o.Outcome.BalanceResult,
-			HeldDelta:      o.Outcome.HeldDelta,
-			HeldResult:     o.Outcome.HeldResult,
-			IncomingDelta:  o.Outcome.IncomingDelta,
-			IncomingResult: o.Outcome.IncomingResult,
+			Asset:                 o.Asset,
+			BalanceDelta:          o.Outcome.BalanceDelta,
+			BalanceResult:         o.Outcome.BalanceResult,
+			HeldDelta:             o.Outcome.HeldDelta,
+			HeldResult:            o.Outcome.HeldResult,
+			IncomingDelta:         o.Outcome.IncomingDelta,
+			IncomingResult:        o.Outcome.IncomingResult,
+			RealizedPnlDelta:      o.Outcome.RealizedPnlDelta,
+			RealizedPnlResult:     o.Outcome.RealizedPnlResult,
+			RealizedPnlHaltReason: string(o.Outcome.RealizedPnlHaltReason),
+			AverageEntryPrice:     o.Outcome.AverageEntryPrice,
 		})
 	}
 	return executionResultDTO{Blocks: blocks, Outcomes: outcomes}

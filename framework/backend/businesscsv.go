@@ -359,8 +359,9 @@ func (s *Service) applyBusinessCSVImport(
 				return conflicts, counts, err
 			}
 			in.Accounts = append(in.Accounts, store.BusinessCSVImportAccount{
-				Account: account,
-				Exists:  existing[key],
+				Account:      account,
+				Exists:       existing[key],
+				PnlSpecified: row.PnlSpecified,
 			})
 			existing[key] = true
 			selected++
@@ -479,31 +480,45 @@ func businessCSVAccountImport(row businesscsv.AccountRow) (domain.Account, error
 	if err := validateOptionalCurrency(row.Currency); err != nil {
 		return domain.Account{}, err
 	}
+	if row.PnlSpecified {
+		if _, err := domain.AddDecimals("", row.Pnl); err != nil {
+			return domain.Account{}, err
+		}
+		if err := domain.ValidatePnlHaltReason(row.PnlHaltReason); err != nil {
+			return domain.Account{}, err
+		}
+	}
 	return domain.Account{
-		Code:        row.Code,
-		Title:       row.Title,
-		GroupCode:   row.GroupCode,
-		Currency:    row.Currency,
-		Notes:       row.Notes,
-		Blocked:     row.Blocked,
-		BlockReason: row.BlockReason,
+		Code:          row.Code,
+		Title:         row.Title,
+		GroupCode:     row.GroupCode,
+		Currency:      row.Currency,
+		Pnl:           row.Pnl,
+		PnlHaltReason: row.PnlHaltReason,
+		Notes:         row.Notes,
+		Blocked:       row.Blocked,
+		BlockReason:   row.BlockReason,
 	}, nil
 }
 
 func businessCSVPositionImport(row businesscsv.PositionRow) (domain.Balance, error) {
 	balance := domain.Balance{
-		Account:           row.Account,
-		Asset:             row.Asset,
-		Available:         row.Available,
-		Held:              row.Held,
-		Incoming:          row.Incoming,
-		RealizedPnl:       row.RealizedPnl,
-		AverageEntryPrice: row.AverageEntryPrice,
+		Account:               row.Account,
+		Asset:                 row.Asset,
+		Available:             row.Available,
+		Held:                  row.Held,
+		Incoming:              row.Incoming,
+		RealizedPnl:           row.RealizedPnl,
+		RealizedPnlHaltReason: row.RealizedPnlHaltReason,
+		AverageEntryPrice:     row.AverageEntryPrice,
 	}
 	if err := domain.ValidateAccountID(balance.Account); err != nil {
 		return domain.Balance{}, err
 	}
 	if _, err := domain.AddDecimals("", balance.RealizedPnl); err != nil {
+		return domain.Balance{}, err
+	}
+	if err := domain.ValidatePnlHaltReason(balance.RealizedPnlHaltReason); err != nil {
 		return domain.Balance{}, err
 	}
 	return balance, nil

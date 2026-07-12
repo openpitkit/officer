@@ -23,6 +23,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   Ban,
   CircleCheck,
+  CircleAlert,
   Folder,
   Globe2,
   Plus,
@@ -2857,6 +2858,39 @@ function currencyText(currency: string): string {
   return currency.trim() === "" ? "—" : currency;
 }
 
+function pnlText(pnl: string | undefined): string {
+  return pnl && pnl !== "" ? pnl : "—";
+}
+
+function pnlHaltText(t: TFunction, reason: string): string | null {
+  if (!reason) return null;
+  switch (reason) {
+    case "missing_fx":
+      return t("accounts.pnlHalt.missingFx");
+    case "missing_account_currency":
+      return t("accounts.pnlHalt.missingAccountCurrency");
+    case "missing_initial_pnl":
+      return t("accounts.pnlHalt.missingInitialPnl");
+    case "missing_cost_basis":
+      return t("accounts.pnlHalt.missingCostBasis");
+    case "arithmetic_overflow":
+      return t("accounts.pnlHalt.arithmeticOverflow");
+    default:
+      return t("accounts.pnlHalt.unknown");
+  }
+}
+
+function pnlClass(pnl: string | undefined): string {
+  const value = (pnl ?? "").trim();
+  if (value === "" || /^0+(\.0+)?$/.test(value)) {
+    return "text-[var(--pnl-flat)]";
+  }
+  if (value.startsWith("-") || value.startsWith("−")) {
+    return "text-[var(--pnl-neg)]";
+  }
+  return "text-[var(--pnl-pos)]";
+}
+
 function CurrencyCell({
   currency,
   title,
@@ -3288,11 +3322,12 @@ function AccountsTable({
   };
 
   return (
-    <Table className="min-w-[62rem]">
+    <Table className="min-w-[68rem]">
         <colgroup>
           <col className="w-[13rem]" />
           <col className="w-[9rem]" />
           <col className="w-[7rem]" />
+          <col className="w-[6rem]" />
           <col className="w-[2.5rem]" />
           <col className={STATUS_COLUMN_CLASS} />
           <col />
@@ -3331,6 +3366,14 @@ function AccountsTable({
             <TableHead className="w-[7rem]">
               <ColumnHeader description={t("accounts.columnDescriptions.currency")}>
                 {t("accounts.columns.currency")}
+              </ColumnHeader>
+            </TableHead>
+            <TableHead className="w-[6rem] text-right">
+              <ColumnHeader
+                align="right"
+                description={t("accounts.columnDescriptions.pnl")}
+              >
+                {t("accounts.columns.pnl")}
               </ColumnHeader>
             </TableHead>
             <TableHead className="w-[2.5rem]">
@@ -3383,6 +3426,7 @@ function AccountsTable({
         <TableBody>
           {accounts.map((account) => {
             const title = account.title;
+            const haltText = pnlHaltText(t, account.pnlHaltReason);
             return (
               <TableRow
                 key={account.code}
@@ -3477,6 +3521,27 @@ function AccountsTable({
                     noneLabel={t("accounts.currencyCell.none")}
                     onEdit={() => onEditCurrency(account)}
                   />
+                </TableCell>
+
+                <TableCell
+                  className={cn(
+                    "w-[6rem] nums text-right text-xs",
+                    pnlClass(account.pnl),
+                  )}
+                >
+                  {haltText ? (
+                    <span
+                      className="inline-flex text-[var(--warn)]"
+                      title={haltText}
+                      aria-label={haltText}
+                      role="note"
+                      tabIndex={0}
+                    >
+                      <CircleAlert className="size-4" aria-hidden="true" />
+                    </span>
+                  ) : (
+                    pnlText(account.pnl)
+                  )}
                 </TableCell>
 
                 <TableCell className="w-[2.5rem] text-xs text-muted-lt">

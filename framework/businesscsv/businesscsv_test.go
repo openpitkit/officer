@@ -99,7 +99,7 @@ func TestEncodeDecodeAccounts(t *testing.T) {
 	accounts := []domain.Account{
 		{
 			Code: "acc-1", Title: "Desk A One", GroupCode: "desk-a",
-			Currency: "USD", Notes: "note",
+			Currency: "USD", Pnl: "12.5", PnlHaltReason: domain.PnlHaltReasonMissingInitialPnl, Notes: "note",
 		},
 		{Code: "acc-2", GroupCode: "", Notes: "", Blocked: true, BlockReason: "kyc"},
 	}
@@ -118,12 +118,15 @@ func TestEncodeDecodeAccounts(t *testing.T) {
 	}
 	a := rows.Accounts[0]
 	if a.Code != "acc-1" || a.Title != "Desk A One" || a.GroupCode != "desk-a" ||
-		a.Currency != "USD" || a.Notes != "note" || a.Blocked {
+		a.Currency != "USD" || a.Pnl != "12.5" ||
+		a.PnlHaltReason != domain.PnlHaltReasonMissingInitialPnl || a.Notes != "note" ||
+		a.Blocked || !a.PnlSpecified {
 		t.Errorf("account[0] = %+v", a)
 	}
 	a = rows.Accounts[1]
 	if a.Code != "acc-2" || a.Title != "" || a.GroupCode != "" ||
-		a.Currency != "" || !a.Blocked || a.BlockReason != "kyc" {
+		a.Currency != "" || a.Pnl != "" || !a.Blocked || a.BlockReason != "kyc" ||
+		!a.PnlSpecified {
 		t.Errorf("account[1] = %+v", a)
 	}
 }
@@ -139,8 +142,57 @@ func TestParseAccounts_LegacyHeaderDefaultsCurrency(t *testing.T) {
 		t.Fatalf("ParseImport: %v", err)
 	}
 	if len(rows.Accounts) != 1 || rows.Accounts[0].Currency != "" ||
-		rows.Accounts[0].Notes != "note" {
+		rows.Accounts[0].Pnl != "0" || rows.Accounts[0].Notes != "note" ||
+		rows.Accounts[0].PnlSpecified {
 		t.Fatalf("accounts = %+v", rows.Accounts)
+	}
+}
+
+func TestParseAccounts_PreviousHeaderDefaultsPnl(t *testing.T) {
+	t.Parallel()
+	csv := "code,title,group_code,currency,notes,blocked,block_reason\n" +
+		"acc-1,Desk A One,desk-a,USD,note,false,\n"
+	rows, err := businesscsv.ParseImport(
+		businesscsv.EntityAccounts, []byte(csv), businesscsv.DelimiterComma,
+	)
+	if err != nil {
+		t.Fatalf("ParseImport: %v", err)
+	}
+	if len(rows.Accounts) != 1 || rows.Accounts[0].Pnl != "0" ||
+		rows.Accounts[0].PnlSpecified {
+		t.Fatalf("accounts = %+v", rows.Accounts)
+	}
+}
+
+func TestParseAccounts_PreviousPnlHeaderDefaultsHaltReason(t *testing.T) {
+	t.Parallel()
+	csv := "code,title,group_code,currency,pnl,notes,blocked,block_reason\n" +
+		"acc-1,Desk A One,desk-a,USD,12.5,note,false,\n"
+	rows, err := businesscsv.ParseImport(
+		businesscsv.EntityAccounts, []byte(csv), businesscsv.DelimiterComma,
+	)
+	if err != nil {
+		t.Fatalf("ParseImport: %v", err)
+	}
+	if len(rows.Accounts) != 1 || rows.Accounts[0].Pnl != "12.5" ||
+		rows.Accounts[0].PnlHaltReason != "" || !rows.Accounts[0].PnlSpecified {
+		t.Fatalf("accounts = %+v", rows.Accounts)
+	}
+}
+
+func TestParseAccounts_ExplicitZeroIsSpecified(t *testing.T) {
+	t.Parallel()
+	csv := "code,title,group_code,currency,pnl,pnl_halt_reason,notes,blocked,block_reason\n" +
+		"acc-1,Desk A One,,USD,0,,note,false,\n"
+	rows, err := businesscsv.ParseImport(
+		businesscsv.EntityAccounts, []byte(csv), businesscsv.DelimiterComma,
+	)
+	if err != nil {
+		t.Fatalf("ParseImport: %v", err)
+	}
+	if len(rows.Accounts) != 1 || rows.Accounts[0].Pnl != "0" ||
+		!rows.Accounts[0].PnlSpecified {
+		t.Fatalf("accounts = %+v, want explicit zero marked present", rows.Accounts)
 	}
 }
 
@@ -164,7 +216,8 @@ func TestEncodeDecodePositions(t *testing.T) {
 		{
 			Account: "acc-1", Asset: "AAPL",
 			Available: "100", Held: "10", Incoming: "0",
-			RealizedPnl: "5.5", AverageEntryPrice: "150.25",
+			RealizedPnl: "5.5", RealizedPnlHaltReason: domain.PnlHaltReasonMissingCostBasis,
+			AverageEntryPrice: "150.25",
 		},
 	}
 	body, err := businesscsv.EncodePositions(balances, businesscsv.DelimiterComma)
@@ -182,8 +235,26 @@ func TestEncodeDecodePositions(t *testing.T) {
 	}
 	p := rows.Positions[0]
 	if p.Account != "acc-1" || p.Asset != "AAPL" || p.Available != "100" ||
-		p.RealizedPnl != "5.5" || p.AverageEntryPrice != "150.25" {
+		p.RealizedPnl != "5.5" || p.RealizedPnlHaltReason != domain.PnlHaltReasonMissingCostBasis ||
+		p.AverageEntryPrice != "150.25" {
 		t.Errorf("position = %+v", p)
+	}
+}
+
+func TestParsePositions_PreviousHeaderDefaultsHaltReason(t *testing.T) {
+	t.Parallel()
+	csv := "account_code,asset,available,held,incoming,realized_pnl,average_entry_price\n" +
+		"acc-1,AAPL,100,10,0,5.5,150.25\n"
+	rows, err := businesscsv.ParseImport(
+		businesscsv.EntityPositions, []byte(csv), businesscsv.DelimiterComma,
+	)
+	if err != nil {
+		t.Fatalf("ParseImport: %v", err)
+	}
+	if len(rows.Positions) != 1 || rows.Positions[0].RealizedPnl != "5.5" ||
+		rows.Positions[0].RealizedPnlHaltReason != "" ||
+		rows.Positions[0].AverageEntryPrice != "150.25" {
+		t.Fatalf("positions = %+v", rows.Positions)
 	}
 }
 

@@ -229,6 +229,10 @@ type Account struct {
 	Code string `json:"code"`
 	// Title is the mutable display name; may be empty.
 	Title string `json:"title,omitempty"`
+	// Pnl is the latest SpotFunds account-currency P&L snapshot.
+	Pnl string `json:"pnl"`
+	// PnlHaltReason records why the engine could not calculate account P&L.
+	PnlHaltReason domain.PnlHaltReason `json:"pnlHaltReason,omitempty"`
 	// Currency is the account-level realized P&L currency asset code.
 	Currency string `json:"currency,omitempty"`
 	// GroupCode links to the account's group by the group's code; empty means no

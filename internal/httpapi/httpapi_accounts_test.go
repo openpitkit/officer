@@ -35,7 +35,7 @@ func TestListAccounts(t *testing.T) {
 	svc := &fakeService{
 		accountRows: []store.AccountListRow{
 			{
-				Account:       domain.Account{Code: "acc-1", Title: "Account One"},
+				Account:       domain.Account{Code: "acc-1", Title: "Account One", Pnl: "12.5"},
 				PositionCount: 2,
 			},
 		},
@@ -61,6 +61,9 @@ func TestListAccounts(t *testing.T) {
 	}
 	if a["title"] != "Account One" {
 		t.Fatalf("want title=Account One, got %v", a["title"])
+	}
+	if a["pnl"] != "12.5" {
+		t.Fatalf("want pnl=12.5, got %v", a["pnl"])
 	}
 	assertNoSurrogateID(t, a)
 	if _, ok := a["blocked"]; !ok {

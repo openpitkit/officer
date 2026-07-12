@@ -49,8 +49,7 @@
     "description": "此操作将删除 {{scope}}{{account}}{{asset}} 上的 {{policy}} 屏障。",
     "accountFragment": " 账户 {{account}}",
     "accountGroupFragment": " 账户组 {{accountGroup}}",
-    "assetFragment": " 资产 {{asset}}",
-    "accountCurrencyFragment": " 账户币种 {{accountCurrency}}"
+    "assetFragment": " 资产 {{asset}}"
   },
   "restartConfirm": {
     "title": "重建风控引擎？",
@@ -68,8 +67,6 @@
     "accountGroupPlaceholder": "desk-a",
     "asset": "资产",
     "assetPlaceholder": "AAPL",
-    "accountCurrency": "账户币种",
-    "accountCurrencyPlaceholder": "USD",
     "values": "参数值",
     "rateLimitFootnote": "最大订单数和时间窗口均为必填项。",
     "atLeastOneFootnote": "至少需填写一个参数值。",

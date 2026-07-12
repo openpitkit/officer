@@ -36,7 +36,8 @@ import (
 // then persisted in one store transaction. That transaction is all-or-nothing,
 // so a failed import writes nothing. Because the engine effects already ran when
 // it fails, the engine is reconciled from the persisted store state so the
-// engine and store never diverge.
+// engine and store never diverge. Any account the engine kill-switched while
+// applying a position snapshot is mirrored once the transaction commits.
 func (n *localNode) ApplyBusinessCSVImport(
 	ctx context.Context,
 	in store.BusinessCSVImport,
@@ -168,6 +169,7 @@ func (n *localNode) ApplyBusinessCSVImport(
 		Groups:   append([]store.BusinessCSVImportGroup(nil), in.Groups...),
 		Accounts: append([]store.BusinessCSVImportAccount(nil), in.Accounts...),
 	}
+	sdkSeedBlocks := make(map[domain.AccountID]struct{})
 	if len(preStore.Groups) > 0 || len(preStore.Accounts) > 0 {
 		if err := n.realm.ApplyBusinessCSVImport(ctx, preStore); err != nil {
 			return n.rollbackStore(ctx, rollback, fmt.Errorf("apply business CSV dictionaries: %w", err))
@@ -181,6 +183,11 @@ func (n *localNode) ApplyBusinessCSVImport(
 		}
 		for i := range in.Accounts {
 			in.Accounts[i].Exists = true
+		}
+		sdkSeedBlocks, err = n.preserveSDKSeedAccountBlocks(ctx, &in)
+		if err != nil {
+			return n.rollbackStoreAndEngine(ctx, rollback,
+				fmt.Errorf("preserve SDK seed account blocks: %w", err))
 		}
 	}
 
@@ -196,6 +203,9 @@ func (n *localNode) ApplyBusinessCSVImport(
 		}
 	}
 	for _, row := range in.Accounts {
+		if _, preserve := sdkSeedBlocks[row.Account.Code]; preserve {
+			continue
+		}
 		applyErr := n.engine.RunAccountSynchronized(ctx, row.Account.Code,
 			func(lane engine.AccountLane) error {
 				return n.applyBlock(ctx, lane, row.Account.Code,
@@ -213,6 +223,12 @@ func (n *localNode) ApplyBusinessCSVImport(
 		}
 	}
 
+	// Blocks the engine latched while committing the position-snapshot batches.
+	// The mirror is deferred until the import transaction commits: that write
+	// carries every account row's CSV blocked flag and would otherwise clear a
+	// block the engine just latched. No lane can read the gap - the import holds
+	// the engine-restart gate throughout.
+	var adjustmentBlocks []domain.AccountBlock
 	balanceGroups := make(map[domain.AccountID][]domain.Balance)
 	balanceAccounts := make([]domain.AccountID, 0)
 	for _, balance := range in.Balances {
@@ -245,6 +261,9 @@ func (n *localNode) ApplyBusinessCSVImport(
 		if len(results) == 0 {
 			continue
 		}
+		// Batch-level, so every result of this batch repeats them; the sink
+		// collapses the repeats by account.
+		adjustmentBlocks = append(adjustmentBlocks, results[0].AccountBlocks...)
 		for i, result := range results {
 			if i >= len(balances) {
 				return n.rollbackStoreAndEngine(ctx, rollback,
@@ -283,7 +302,9 @@ func (n *localNode) ApplyBusinessCSVImport(
 		return n.rollbackStoreAndEngine(ctx, rollback,
 			fmt.Errorf("apply business CSV import: %w", err))
 	}
-	return nil
+	// The import is committed, so a mirror failure has no store state left to
+	// roll back to; the sink's fatal contract owns the outcome from here.
+	return n.mirrorAdjustmentAccountBlocks(ctx, adjustmentBlocks)
 }
 
 func businessCSVImportAccountKey(account domain.Account) string {
@@ -292,6 +313,60 @@ func businessCSVImportAccountKey(account domain.Account) string {
 
 func businessCSVImportBalanceKey(balance domain.Balance) string {
 	return string(balance.Account) + "\x00" + balance.Asset
+}
+
+func (n *localNode) preserveSDKSeedAccountBlocks(
+	ctx context.Context, in *store.BusinessCSVImport,
+) (map[domain.AccountID]struct{}, error) {
+	source, ok := n.engine.(seedAccountBlockSource)
+	if !ok {
+		return map[domain.AccountID]struct{}{}, nil
+	}
+	blocked := make(map[domain.AccountID]struct{})
+	for _, block := range source.SeedAccountBlocks() {
+		blocked[block.Account] = struct{}{}
+	}
+	if len(blocked) == 0 {
+		return blocked, nil
+	}
+
+	winners := make(map[domain.AccountID]struct{})
+	for i := range in.Accounts {
+		row := &in.Accounts[i]
+		if row.Account.Blocked {
+			continue
+		}
+		if _, ok := blocked[row.Account.Code]; !ok {
+			continue
+		}
+		stored, ok, err := n.realm.GetAccount(ctx, row.Account.Code)
+		if err != nil {
+			return nil, fmt.Errorf("read SDK-blocked account %q: %w", row.Account.Code, err)
+		}
+		if !ok || !stored.Blocked {
+			return nil, fmt.Errorf(
+				"SDK seed block for account %q was not mirrored: %w",
+				row.Account.Code,
+				domain.ErrInvalid,
+			)
+		}
+		row.Account.Blocked = true
+		row.Account.BlockReason = stored.BlockReason
+		winners[row.Account.Code] = struct{}{}
+	}
+	if len(winners) == 0 {
+		return winners, nil
+	}
+	audits := in.Audits[:0]
+	for _, audit := range in.Audits {
+		_, preserve := winners[audit.Account]
+		if preserve && audit.Action == domain.AuditActionUnblock {
+			continue
+		}
+		audits = append(audits, audit)
+	}
+	in.Audits = audits
+	return winners, nil
 }
 
 func (n *localNode) auditEntry(
@@ -303,9 +378,10 @@ func (n *localNode) auditEntry(
 }
 
 func snapshotAdjustmentRequest(snapshot domain.Balance) domain.AdjustmentRequest {
-	return domain.AdjustmentRequest{
-		Asset:             snapshot.Asset,
-		AverageEntryPrice: snapshot.AverageEntryPrice,
+	req := domain.AdjustmentRequest{
+		Asset:                 snapshot.Asset,
+		AverageEntryPrice:     snapshot.AverageEntryPrice,
+		RealizedPnlHaltReason: snapshot.RealizedPnlHaltReason,
 		Balance: &domain.AdjustmentAmount{
 			Mode: domain.AdjustmentModeAbsolute, Value: snapshot.Available,
 		},
@@ -316,6 +392,10 @@ func snapshotAdjustmentRequest(snapshot domain.Balance) domain.AdjustmentRequest
 			Mode: domain.AdjustmentModeAbsolute, Value: snapshot.Incoming,
 		},
 	}
+	if snapshot.RealizedPnlHaltReason == "" {
+		req.RealizedPnl = snapshot.RealizedPnl
+	}
+	return req
 }
 
 func (n *localNode) ensureAdjustmentExternalIDUnused(

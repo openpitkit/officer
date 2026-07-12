@@ -534,9 +534,10 @@ func (s *Service) UpdateMarketDataInstanceSettings(
 	)
 }
 
-// DeleteMarketDataInstance removes one source instance and its instruments.
+// DeleteMarketDataInstance removes one source instance and its feed-owned
+// instruments and quotes.
 func (s *Service) DeleteMarketDataInstance(
-	ctx context.Context, id string, force bool,
+	ctx context.Context, id string,
 ) error {
 	instanceID, err := domain.ParseExternalID(strings.TrimSpace(id))
 	if err != nil {
@@ -546,7 +547,7 @@ func (s *Service) DeleteMarketDataInstance(
 	if err != nil {
 		return err
 	}
-	return n.DeleteMarketDataInstance(ctx, instanceID, force, auth.CallerFromContext(ctx))
+	return n.DeleteMarketDataInstance(ctx, instanceID, auth.CallerFromContext(ctx))
 }
 
 // UpsertMarketDataInstrument validates and persists one instrument mapping,

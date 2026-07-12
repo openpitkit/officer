@@ -31,6 +31,13 @@ import (
 func TestLocalNode_ImportPositionSnapshotPersistsRealizedPnlAndAudits(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
+	eng.adjustmentAccepted = &domain.AdjustmentOutcomeAccepted{
+		BalanceResult:     "100.25",
+		HeldResult:        "10.5",
+		IncomingResult:    "2.75",
+		RealizedPnlResult: "7.125",
+		AverageEntryPrice: "99.5",
+	}
 	n, st := newTestNode(t, eng)
 	ctx := context.Background()
 	seedTestAccount(t, st, "acc-1")
@@ -62,6 +69,7 @@ func TestLocalNode_ImportPositionSnapshotPersistsRealizedPnlAndAudits(t *testing
 		req.Held.Value != "10.5" ||
 		req.Incoming == nil || req.Incoming.Mode != domain.AdjustmentModeAbsolute ||
 		req.Incoming.Value != "2.75" ||
+		req.RealizedPnl != "7.125" ||
 		req.AverageEntryPrice != "99.5" {
 		t.Fatalf("adjustment request = %+v", req)
 	}
@@ -85,6 +93,152 @@ func TestLocalNode_ImportPositionSnapshotPersistsRealizedPnlAndAudits(t *testing
 		!strings.Contains(rows[0].Detail, "import position snapshot account acc-1 asset=USD") ||
 		!strings.Contains(rows[0].Detail, "realized_pnl=7.125") {
 		t.Fatalf("audit rows = %+v", rows)
+	}
+}
+
+func TestLocalNode_ImportPositionSnapshotReplacesExistingStalePnlAndOnlyPositionHalt(
+	t *testing.T,
+) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.adjustmentAccepted = &domain.AdjustmentOutcomeAccepted{
+		BalanceResult: "10",
+	}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	if _, err := st.CreateAccount(ctx, domain.Account{
+		Code:          "acc-1",
+		PnlHaltReason: domain.PnlHaltReasonMissingAccountCurrency,
+	}); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if err := st.UpsertBalance(ctx, domain.Balance{
+		Account:               "acc-1",
+		Asset:                 "AAPL",
+		Available:             "5",
+		RealizedPnl:           "9.75",
+		RealizedPnlHaltReason: domain.PnlHaltReasonMissingFx,
+	}); err != nil {
+		t.Fatalf("UpsertBalance: %v", err)
+	}
+
+	if _, err := n.ImportPositionSnapshot(
+		ctx,
+		testKey("acc-1"),
+		domain.ExternalID(""),
+		domain.Balance{
+			Account:               "acc-1",
+			Asset:                 "AAPL",
+			Available:             "10",
+			RealizedPnl:           "4.25",
+			RealizedPnlHaltReason: domain.PnlHaltReasonMissingCostBasis,
+		},
+		testCaller,
+	); err != nil {
+		t.Fatalf("ImportPositionSnapshot: %v", err)
+	}
+	balance, ok, err := st.GetBalance(ctx, "acc-1", "AAPL")
+	if err != nil || !ok {
+		t.Fatalf("GetBalance: ok=%v err=%v", ok, err)
+	}
+	if balance.RealizedPnl != "4.25" ||
+		balance.RealizedPnlHaltReason != domain.PnlHaltReasonMissingCostBasis {
+		t.Fatalf(
+			"balance = %+v, want stale pnl 4.25 and missing_cost_basis halt",
+			balance,
+		)
+	}
+	if got := eng.adjustmentCalls[0].req.RealizedPnl; got != "" {
+		t.Fatalf("engine realized pnl = %q, want omitted for halted snapshot", got)
+	}
+	account, ok, err := st.GetAccount(ctx, "acc-1")
+	if err != nil || !ok {
+		t.Fatalf("GetAccount: ok=%v err=%v", ok, err)
+	}
+	if account.PnlHaltReason != domain.PnlHaltReasonMissingAccountCurrency {
+		t.Fatalf(
+			"account halt = %q, want preserved missing_account_currency",
+			account.PnlHaltReason,
+		)
+	}
+}
+
+func TestLocalNode_ImportPositionSnapshotPersistsHaltOnlyZeroPosition(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.adjustmentAccepted = &domain.AdjustmentOutcomeAccepted{
+		BalanceResult: "0", HeldResult: "0", IncomingResult: "0",
+	}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	seedTestAccount(t, st, "acc-1")
+
+	_, err := n.ImportPositionSnapshot(
+		ctx,
+		testKey("acc-1"),
+		domain.ExternalID(""),
+		domain.Balance{
+			Account:               "acc-1",
+			Asset:                 "AAPL",
+			Available:             "0",
+			Held:                  "0",
+			Incoming:              "0",
+			RealizedPnl:           "0",
+			RealizedPnlHaltReason: domain.PnlHaltReasonMissingCostBasis,
+		},
+		testCaller,
+	)
+	if err != nil {
+		t.Fatalf("ImportPositionSnapshot: %v", err)
+	}
+	if got := eng.adjustmentCalls[0].req.RealizedPnl; got != "" {
+		t.Fatalf("engine realized pnl = %q, want omitted for halted snapshot", got)
+	}
+	balance, ok, err := st.GetBalance(ctx, "acc-1", "AAPL")
+	if err != nil || !ok {
+		t.Fatalf("GetBalance: ok=%v err=%v", ok, err)
+	}
+	if balance.RealizedPnl != "0" ||
+		balance.RealizedPnlHaltReason != domain.PnlHaltReasonMissingCostBasis {
+		t.Fatalf("balance = %+v, want persisted halt-only zero position", balance)
+	}
+}
+
+func TestLocalNode_ImportPositionSnapshotPersistsNonzeroStaleRealizedPnl(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.adjustmentAccepted = &domain.AdjustmentOutcomeAccepted{
+		BalanceResult: "0", HeldResult: "0", IncomingResult: "0",
+	}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	seedTestAccount(t, st, "acc-1")
+
+	_, err := n.ImportPositionSnapshot(
+		ctx,
+		testKey("acc-1"),
+		domain.ExternalID(""),
+		domain.Balance{
+			Account:               "acc-1",
+			Asset:                 "AAPL",
+			RealizedPnl:           "17.250",
+			RealizedPnlHaltReason: domain.PnlHaltReasonArithmeticOverflow,
+		},
+		testCaller,
+	)
+	if err != nil {
+		t.Fatalf("ImportPositionSnapshot: %v", err)
+	}
+	if got := eng.adjustmentCalls[0].req.RealizedPnl; got != "" {
+		t.Fatalf("engine realized pnl = %q, want omitted for halted snapshot", got)
+	}
+	balance, ok, err := st.GetBalance(ctx, "acc-1", "AAPL")
+	if err != nil || !ok {
+		t.Fatalf("GetBalance: ok=%v err=%v", ok, err)
+	}
+	if balance.RealizedPnl != "17.250" ||
+		balance.RealizedPnlHaltReason != domain.PnlHaltReasonArithmeticOverflow {
+		t.Fatalf("balance = %+v, want exact stale pnl and arithmetic-overflow halt", balance)
 	}
 }
 
@@ -169,6 +323,13 @@ func TestLocalNode_ImportPositionSnapshotStoreFailureFatalsWithoutCompensation(t
 func TestLocalNode_ImportPositionSnapshotDeletesEmptyPosition(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
+	eng.adjustmentAccepted = &domain.AdjustmentOutcomeAccepted{
+		BalanceResult:     "0",
+		HeldResult:        "0",
+		IncomingResult:    "0",
+		RealizedPnlResult: "0",
+		AverageEntryPrice: "0.000",
+	}
 	n, st := newTestNode(t, eng)
 	ctx := context.Background()
 	seedTestAccount(t, st, "acc-1")

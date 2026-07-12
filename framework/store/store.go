@@ -22,8 +22,9 @@
 // uniqueness is per realm automatically and the realm is never a per-row column.
 //
 // Concrete connectors can live outside this module. The seam is kept narrow and
-// backend-agnostic, with the few per-backend SQL tokens isolated behind Dialect,
-// so a different backend can slot in without touching the node or backend layers.
+// backend-agnostic. framework/store/schema owns the canonical DDL and isolates
+// the few per-backend SQL tokens behind its Dialect interface, so a different
+// backend can slot in without touching the node or backend layers.
 //
 // Identity model surfaced by this interface: dictionaries (accounts, groups,
 // assets, principals, market-data instances, signing keys) are addressed by
@@ -83,8 +84,9 @@ type BusinessCSVImportGroup struct {
 // BusinessCSVImportAccount is one account row selected for a transactional
 // business CSV import.
 type BusinessCSVImportAccount struct {
-	Account domain.Account
-	Exists  bool
+	Account      domain.Account
+	Exists       bool
+	PnlSpecified bool
 }
 
 // BusinessCSVImport writes all selected business CSV rows and their per-row
@@ -103,20 +105,11 @@ type BalanceKey struct {
 	Asset   string
 }
 
-// BalanceRealizedPnlPersistence sets one persisted cumulative realized-P&L
-// snapshot inside a larger atomic persistence command.
-type BalanceRealizedPnlPersistence struct {
-	Account     domain.AccountID
-	Asset       string
-	RealizedPnl string
-}
-
 // AccountAdjustmentPersistence is the atomic persistence command for one
 // engine-applied account adjustment or position snapshot.
 type AccountAdjustmentPersistence struct {
 	UpsertBalance *domain.Balance
 	DeleteBalance *BalanceKey
-	RealizedPnl   *BalanceRealizedPnlPersistence
 	Adjustment    domain.AccountAdjustmentRecord
 	Audit         AuditEntry
 }
@@ -402,13 +395,12 @@ const (
 // PolicyListFilter narrows the unified policy-list read. Account mirrors the
 // Limits UI account filter; Kind, when set, restricts to one barrier kind.
 type PolicyListFilter struct {
-	Account         TextMatcher
-	AccountGroup    TextMatcher
-	Asset           TextMatcher
-	AccountCurrency TextMatcher
-	Kind            *PolicyKind
-	Sort            SortSpec
-	Page            PageSpec
+	Account      TextMatcher
+	AccountGroup TextMatcher
+	Asset        TextMatcher
+	Kind         *PolicyKind
+	Sort         SortSpec
+	Page         PageSpec
 }
 
 // PolicyListRow is one barrier flattened into the common policy shape: the kind
@@ -421,7 +413,6 @@ type PolicyListRow struct {
 	Account            domain.AccountID
 	AccountGroup       string
 	Asset              string
-	AccountCurrency    string
 	Rate               *domain.LimitRate
 	OrderSize          *domain.LimitOrderSize
 	SpotFundsPnlBounds *domain.LimitSpotFundsPnlBounds
@@ -716,6 +707,18 @@ type RealmStore interface {
 	// SetAccountCurrency sets or clears the account-level currency asset.
 	SetAccountCurrency(ctx context.Context, code domain.AccountID, currency string) error
 
+	// SetAccountPnl replaces the account-currency P&L snapshot and its halt
+	// reason together, mirroring an assignment the engine already applied. An
+	// empty haltReason records that pnl is authoritative. Returns
+	// domain.ErrNotFound when the account is absent, or an error wrapping
+	// domain.ErrInvalid when pnl is not a decimal.
+	SetAccountPnl(
+		ctx context.Context,
+		code domain.AccountID,
+		pnl string,
+		haltReason domain.PnlHaltReason,
+	) error
+
 	// SetAccountNotes replaces the notes of the identified account. Returns
 	// domain.ErrNotFound when absent.
 	SetAccountNotes(ctx context.Context, code domain.AccountID, notes string) error
@@ -751,9 +754,11 @@ type RealmStore interface {
 		ctx context.Context, account domain.AccountID, asset string,
 	) ([]domain.Balance, error)
 
-	// ListAccountsWithOpenBalances returns account codes that have at least one
-	// non-zero available, held, or incoming balance. Empty accounts means all
-	// accounts.
+	// ListAccountsWithOpenBalances returns account codes carrying a non-zero
+	// balance field, cost basis or account P&L. A halted P&L holds no trustworthy
+	// number and never counts an account as open - neither the halt itself nor
+	// any value retained behind it. Balance fields and cost basis are not P&L and
+	// count whether or not a P&L is halted. Empty accounts means all accounts.
 	ListAccountsWithOpenBalances(
 		ctx context.Context, accounts []domain.AccountID,
 	) ([]domain.AccountID, error)
@@ -823,7 +828,6 @@ type RealmStore interface {
 		scope domain.LimitScope,
 		account domain.AccountID,
 		accountGroup string,
-		accountCurrency string,
 	) error
 
 	// --- Account adjustments (machine record, addressed by external id) ---
@@ -918,8 +922,8 @@ type RealmStore interface {
 	CountOrdersSince(ctx context.Context, since time.Time) (int, error)
 
 	// RecordOrderSettlement persists one fill/settlement atomically in a single
-	// transaction: per-asset balances (realized P&L delta-accumulated inside the
-	// tx), the optional trade, the engine-applied account blocks, the optional
+	// transaction: per-asset engine balance snapshots, the optional trade, the
+	// engine-applied account blocks, the optional
 	// lock rewrite, the fill event(s),
 	// and the order status advance commit or roll back together. When AllowedFrom
 	// is non-empty the status UPDATE is guarded and a disallowed current status
@@ -1025,10 +1029,10 @@ type RealmStore interface {
 		ctx context.Context, id domain.ExternalID, label, credentials string,
 	) error
 
-	// DeleteMarketDataInstance removes the instance and (by cascade) its
-	// instruments and quotes when force is true. Without force, instruments
-	// return ErrHasDependents.
-	DeleteMarketDataInstance(ctx context.Context, id domain.ExternalID, force bool) error
+	// DeleteMarketDataInstance removes the source and its feed-owned
+	// instruments and quotes. Global assets referenced by those instruments
+	// are preserved.
+	DeleteMarketDataInstance(ctx context.Context, id domain.ExternalID) error
 
 	// --- Market-data instruments and quotes ---
 

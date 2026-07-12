@@ -40,7 +40,6 @@ import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
 import type {
-  ApiErrorDependent,
   MarketDataDiagnostic,
   MarketDataInstance,
   MarketDataProvider,
@@ -73,7 +72,6 @@ import {
 } from "@/components/ui/select";
 import { formatCompactDuration, formatDateTime } from "@/i18n/format";
 import {
-  ApiError,
   useOfficerApi,
   type MarketDataSymbolSearchInput,
 } from "@/framework";
@@ -3381,34 +3379,16 @@ export function InstanceCard({
   );
 }
 
-function DependentList({ dependents }: { dependents: ApiErrorDependent[] }) {
-  if (dependents.length === 0) return null;
-  return (
-    <div className="rounded-card border border-[var(--danger)] bg-[var(--danger-dim)] p-3 text-xs">
-      <ul className="space-y-1">
-        {dependents.map((dep) => (
-          <li key={dep.kind} className="flex justify-between gap-4">
-            <span className="nums">{dep.kind}</span>
-            <span className="nums">{dep.count}</span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
 function DeleteInstanceDialog({
   target,
-  dependents,
   busy,
   onOpenChange,
   onSubmit,
 }: {
   target: MarketDataInstance | null;
-  dependents: ApiErrorDependent[];
   busy: boolean;
   onOpenChange: (open: boolean) => void;
-  onSubmit: (force: boolean) => void;
+  onSubmit: () => void;
 }) {
   const { t } = useTranslation("marketData");
   return (
@@ -3422,20 +3402,17 @@ function DeleteInstanceDialog({
             })}
           </DialogDescription>
         </DialogHeader>
-        <DependentList dependents={dependents} />
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
             {t("deleteInstance.cancel")}
           </Button>
           <Button
-            onClick={() => onSubmit(dependents.length > 0)}
+            onClick={onSubmit}
             disabled={busy}
             className="border-[var(--danger)] bg-[var(--danger)] text-bg hover:border-[var(--danger)] hover:bg-[var(--danger)]"
           >
             <Trash2 />
-            {dependents.length > 0
-              ? t("deleteInstance.forceSubmit")
-              : t("deleteInstance.submit")}
+            {t("deleteInstance.submit")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -3510,9 +3487,6 @@ export function MarketData() {
   const [guideOpen, setGuideOpen] = useState(false);
   const [deleteInstanceTarget, setDeleteInstanceTarget] =
     useState<MarketDataInstance | null>(null);
-  const [deleteInstanceDependents, setDeleteInstanceDependents] = useState<
-    ApiErrorDependent[]
-  >([]);
   const [deleteInstrumentTarget, setDeleteInstrumentTarget] =
     useState<DeleteInstrumentTarget | null>(null);
 
@@ -3631,21 +3605,16 @@ export function MarketData() {
       });
     });
 
-  const submitDeleteInstance = async (force: boolean) => {
+  const submitDeleteInstance = async () => {
     if (!deleteInstanceTarget) return;
     setBusy(true);
     setMutationError("");
     try {
-      await deleteMarketDataInstance(deleteInstanceTarget.externalId, force);
+      await deleteMarketDataInstance(deleteInstanceTarget.externalId);
       setDeleteInstanceTarget(null);
-      setDeleteInstanceDependents([]);
       reload();
     } catch (err) {
-      if (err instanceof ApiError && err.code === "has_dependents") {
-        setDeleteInstanceDependents(err.dependents ?? []);
-      } else {
-        setMutationError(err instanceof Error ? err.message : String(err));
-      }
+      setMutationError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -3788,7 +3757,6 @@ export function MarketData() {
               }
               onDeleteInstance={(target) => {
                 setDeleteInstanceTarget(target);
-                setDeleteInstanceDependents([]);
               }}
               onUpsertInstrument={(target, draft, options) =>
                 run(
@@ -3826,16 +3794,14 @@ export function MarketData() {
           ))}
           <DeleteInstanceDialog
             target={deleteInstanceTarget}
-            dependents={deleteInstanceDependents}
             busy={busy}
             onOpenChange={(open) => {
               if (!open) {
                 setDeleteInstanceTarget(null);
-                setDeleteInstanceDependents([]);
               }
             }}
-            onSubmit={(force) => {
-              void submitDeleteInstance(force);
+            onSubmit={() => {
+              void submitDeleteInstance();
             }}
           />
           <DeleteInstrumentDialog

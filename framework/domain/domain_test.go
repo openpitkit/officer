@@ -108,6 +108,54 @@ func TestValidateAccountID(t *testing.T) {
 	}
 }
 
+func TestValidatePnlHaltReason(t *testing.T) {
+	t.Parallel()
+
+	ok := []struct {
+		name   string
+		reason domain.PnlHaltReason
+	}{
+		{"empty", ""},
+		{"missing fx", domain.PnlHaltReasonMissingFx},
+		{"missing account currency", domain.PnlHaltReasonMissingAccountCurrency},
+		{"missing initial pnl", domain.PnlHaltReasonMissingInitialPnl},
+		{"missing cost basis", domain.PnlHaltReasonMissingCostBasis},
+		{"arithmetic overflow", domain.PnlHaltReasonArithmeticOverflow},
+	}
+	for _, tc := range ok {
+		t.Run("ok/"+tc.name, func(t *testing.T) {
+			t.Parallel()
+			if err := domain.ValidatePnlHaltReason(tc.reason); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+
+	bad := []struct {
+		name   string
+		reason domain.PnlHaltReason
+	}{
+		{"typo", "missing_fxx"},
+		{"unmappable", "unknown"},
+		{"whitespace", " "},
+		{"padded known reason", " missing_fx"},
+		{"wrong case", "MISSING_FX"},
+		{"arbitrary text", "engine broke"},
+	}
+	for _, tc := range bad {
+		t.Run("err/"+tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := domain.ValidatePnlHaltReason(tc.reason)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("expected ErrInvalid, got %v", err)
+			}
+		})
+	}
+}
+
 func TestValidateTitle(t *testing.T) {
 	t.Parallel()
 
@@ -792,23 +840,20 @@ func TestLimitSpotFundsPnlBounds_Validate(t *testing.T) {
 		limit domain.LimitSpotFundsPnlBounds
 	}{
 		{"global", domain.LimitSpotFundsPnlBounds{
-			Scope:           domain.ScopeGlobal,
-			AccountCurrency: "USD",
-			LowerBound:      "-1000",
+			Scope:      domain.ScopeGlobal,
+			LowerBound: "-1000",
 		}},
 		{"account_group", domain.LimitSpotFundsPnlBounds{
-			Scope:           domain.ScopeAccountGroup,
-			AccountGroup:    "desk-a",
-			AccountCurrency: "USD",
-			UpperBound:      "500",
+			Scope:        domain.ScopeAccountGroup,
+			AccountGroup: "desk-a",
+			UpperBound:   "500",
 		}},
 		{"account", domain.LimitSpotFundsPnlBounds{
-			Scope:           domain.ScopeAccount,
-			Account:         "acc-1",
-			AccountCurrency: "EUR",
-			LowerBound:      "-100",
-			UpperBound:      "100",
-			InitialPnl:      "12.34",
+			Scope:      domain.ScopeAccount,
+			Account:    "acc-1",
+			LowerBound: "-100",
+			UpperBound: "100",
+			InitialPnl: "12.34",
 		}},
 	}
 	for _, tc := range ok {
@@ -824,51 +869,40 @@ func TestLimitSpotFundsPnlBounds_Validate(t *testing.T) {
 		name  string
 		limit domain.LimitSpotFundsPnlBounds
 	}{
-		{"missing currency", domain.LimitSpotFundsPnlBounds{
-			Scope:      domain.ScopeGlobal,
+		{"missing group", domain.LimitSpotFundsPnlBounds{
+			Scope:      domain.ScopeAccountGroup,
 			LowerBound: "-1",
 		}},
-		{"missing group", domain.LimitSpotFundsPnlBounds{
-			Scope:           domain.ScopeAccountGroup,
-			AccountCurrency: "USD",
-			LowerBound:      "-1",
-		}},
 		{"account group on account rejected", domain.LimitSpotFundsPnlBounds{
-			Scope:           domain.ScopeAccount,
-			Account:         "acc-1",
-			AccountGroup:    "desk-a",
-			AccountCurrency: "USD",
-			LowerBound:      "-1",
+			Scope:        domain.ScopeAccount,
+			Account:      "acc-1",
+			AccountGroup: "desk-a",
+			LowerBound:   "-1",
 		}},
 		{"neither bound", domain.LimitSpotFundsPnlBounds{
-			Scope:           domain.ScopeGlobal,
-			AccountCurrency: "USD",
+			Scope: domain.ScopeGlobal,
 		}},
 		{"lower greater than upper", domain.LimitSpotFundsPnlBounds{
-			Scope:           domain.ScopeGlobal,
-			AccountCurrency: "USD",
-			LowerBound:      "10",
-			UpperBound:      "1",
+			Scope:      domain.ScopeGlobal,
+			LowerBound: "10",
+			UpperBound: "1",
 		}},
 		{"global initial_pnl rejected", domain.LimitSpotFundsPnlBounds{
-			Scope:           domain.ScopeGlobal,
-			AccountCurrency: "USD",
-			LowerBound:      "-1",
-			InitialPnl:      "5",
+			Scope:      domain.ScopeGlobal,
+			LowerBound: "-1",
+			InitialPnl: "5",
 		}},
 		{"group initial_pnl rejected", domain.LimitSpotFundsPnlBounds{
-			Scope:           domain.ScopeAccountGroup,
-			AccountGroup:    "desk-a",
-			AccountCurrency: "USD",
-			LowerBound:      "-1",
-			InitialPnl:      "5",
+			Scope:        domain.ScopeAccountGroup,
+			AccountGroup: "desk-a",
+			LowerBound:   "-1",
+			InitialPnl:   "5",
 		}},
 		{"initial_pnl not decimal", domain.LimitSpotFundsPnlBounds{
-			Scope:           domain.ScopeAccount,
-			Account:         "acc-1",
-			AccountCurrency: "USD",
-			LowerBound:      "-1",
-			InitialPnl:      "abc",
+			Scope:      domain.ScopeAccount,
+			Account:    "acc-1",
+			LowerBound: "-1",
+			InitialPnl: "abc",
 		}},
 	}
 	for _, tc := range bad {

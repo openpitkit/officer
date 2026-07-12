@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"testing"
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
@@ -77,13 +78,23 @@ func (r *memoryRealm) ListAccountsWithOpenBalances(
 		allow[account] = struct{}{}
 	}
 	seen := make(map[domain.AccountID]struct{})
+	for accountID, account := range r.accounts {
+		if len(allow) > 0 {
+			if _, ok := allow[accountID]; !ok {
+				continue
+			}
+		}
+		if account.PnlHaltReason == "" && !decimalZeroOrEmpty(account.Pnl) {
+			seen[accountID] = struct{}{}
+		}
+	}
 	for _, balance := range r.balances {
 		if len(allow) > 0 {
 			if _, ok := allow[balance.Account]; !ok {
 				continue
 			}
 		}
-		if balanceIsEmpty(balance) {
+		if !balanceHoldsValue(balance) {
 			continue
 		}
 		seen[balance.Account] = struct{}{}
@@ -94,6 +105,77 @@ func (r *memoryRealm) ListAccountsWithOpenBalances(
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out, nil
+}
+
+// balanceHoldsValue mirrors the SQLite open-balance predicate: a non-zero
+// amount or cost basis, or a realized P&L that is not behind a halt. A halted
+// realized P&L is historical, not authoritative, so the number behind the halt
+// does not count. It is deliberately not balanceIsEmpty, which additionally
+// keeps a halted row alive so the halt stays persisted.
+func balanceHoldsValue(balance domain.Balance) bool {
+	return !decimalZeroOrEmpty(balance.Available) ||
+		!decimalZeroOrEmpty(balance.Held) ||
+		!decimalZeroOrEmpty(balance.Incoming) ||
+		!decimalZeroOrEmpty(balance.AverageEntryPrice) ||
+		(balance.RealizedPnlHaltReason == "" &&
+			!decimalZeroOrEmpty(balance.RealizedPnl))
+}
+
+func TestMemoryRealmListAccountsWithOpenBalancesIncludesAccountPnl(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	realm := newMemoryStore("node.db").realm
+	for _, account := range []domain.Account{
+		{Code: "account-pnl", Pnl: "0.000000000000000000000000000000000001"},
+		{Code: "zero-pnl", Pnl: "-0.000"},
+		{Code: "halted-pnl", PnlHaltReason: domain.PnlHaltReasonMissingAccountCurrency},
+		{
+			Code:          "halted-stale-pnl",
+			Pnl:           "-50000",
+			PnlHaltReason: domain.PnlHaltReasonMissingAccountCurrency,
+		},
+	} {
+		if _, err := realm.CreateAccount(ctx, account); err != nil {
+			t.Fatalf("CreateAccount(%s): %v", account.Code, err)
+		}
+	}
+	if err := realm.UpsertBalance(ctx, domain.Balance{
+		Account:               "halted-pnl",
+		Asset:                 "AAPL",
+		RealizedPnlHaltReason: domain.PnlHaltReasonMissingCostBasis,
+	}); err != nil {
+		t.Fatalf("UpsertBalance(halted-pnl): %v", err)
+	}
+
+	got, err := realm.ListAccountsWithOpenBalances(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListAccountsWithOpenBalances(all): %v", err)
+	}
+	if len(got) != 1 || got[0] != "account-pnl" {
+		t.Fatalf("ListAccountsWithOpenBalances(all) = %v, want account-pnl", got)
+	}
+
+	got, err = realm.ListAccountsWithOpenBalances(
+		ctx, []domain.AccountID{"zero-pnl"},
+	)
+	if err != nil {
+		t.Fatalf("ListAccountsWithOpenBalances(zero-pnl): %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("ListAccountsWithOpenBalances(zero-pnl) = %v, want empty", got)
+	}
+
+	// Neither a halt flag nor the stale number the engine left behind it carries
+	// a recomputable value, so neither counts.
+	got, err = realm.ListAccountsWithOpenBalances(
+		ctx, []domain.AccountID{"halted-pnl", "halted-stale-pnl"},
+	)
+	if err != nil {
+		t.Fatalf("ListAccountsWithOpenBalances(halted-pnl): %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("ListAccountsWithOpenBalances(halted-pnl) = %v, want empty", got)
+	}
 }
 
 func (r *memoryRealm) ListBalanceRows(
@@ -211,12 +293,6 @@ func (r *memoryRealm) RecordAccountAdjustment(
 			return domain.AccountAdjustmentRecord{}, err
 		}
 	}
-	if in.RealizedPnl != nil {
-		if err := r.setBalanceRealizedPnl(ctx, *in.RealizedPnl); err != nil {
-			r.restoreData(snapshot)
-			return domain.AccountAdjustmentRecord{}, err
-		}
-	}
 	stored, err := r.AppendAdjustment(ctx, in.Adjustment)
 	if err != nil {
 		r.restoreData(snapshot)
@@ -227,28 +303,6 @@ func (r *memoryRealm) RecordAccountAdjustment(
 		return domain.AccountAdjustmentRecord{}, err
 	}
 	return stored, nil
-}
-
-func (r *memoryRealm) setBalanceRealizedPnl(
-	ctx context.Context,
-	in store.BalanceRealizedPnlPersistence,
-) error {
-	current, _, err := r.GetBalance(ctx, in.Account, in.Asset)
-	if err != nil {
-		return err
-	}
-	current.Account = in.Account
-	current.Asset = in.Asset
-	current.RealizedPnl = in.RealizedPnl
-	upsert, deleteBalance := balanceSnapshotCommand(current)
-	if deleteBalance != nil {
-		if err := r.DeleteBalance(ctx, deleteBalance.Account, deleteBalance.Asset); err != nil &&
-			!errors.Is(err, domain.ErrNotFound) {
-			return err
-		}
-		return nil
-	}
-	return r.UpsertBalance(ctx, *upsert)
 }
 
 func (r *memoryRealm) ListAdjustments(

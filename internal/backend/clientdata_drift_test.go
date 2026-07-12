@@ -38,7 +38,7 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/internal/backend"
-	appstore "go.openpit.dev/officer/internal/store"
+	"go.openpit.dev/officer/internal/store/sqlite"
 )
 
 const (
@@ -592,9 +592,14 @@ var expectedSchemaTableNames = []string{
 	"account",
 	"account_group",
 	"adjustment",
+	"adjustment_status",
 	"asset",
 	"asset_class",
+	"attestation_alg",
+	"attestation_mode",
+	"attestation_request_type",
 	"audit",
+	"audit_action",
 	"balance",
 	"event_attestation",
 	"limit_order_size",
@@ -604,18 +609,33 @@ var expectedSchemaTableNames = []string{
 	"market_data_instrument",
 	"market_data_quote",
 	"mcp_access",
+	"order_amount_kind",
 	"order_event",
+	"order_event_type",
 	"order_record",
+	"order_side",
+	"order_status",
 	"principal",
 	"realm",
 	"signing_config",
 	"signing_key",
+	"source_kind",
 	"trade",
 	"user_setting",
 }
 
 var nonClientDataSchemaTables = map[string]string{
-	"realm": "single-row realm identity metadata, not portable realm contents",
+	"adjustment_status":        "closed-domain reference dictionary, not portable client data",
+	"attestation_alg":          "closed-domain reference dictionary, not portable client data",
+	"attestation_mode":         "closed-domain reference dictionary, not portable client data",
+	"attestation_request_type": "closed-domain reference dictionary, not portable client data",
+	"audit_action":             "closed-domain reference dictionary, not portable client data",
+	"order_amount_kind":        "closed-domain reference dictionary, not portable client data",
+	"order_event_type":         "closed-domain reference dictionary, not portable client data",
+	"order_side":               "closed-domain reference dictionary, not portable client data",
+	"order_status":             "closed-domain reference dictionary, not portable client data",
+	"realm":                    "single-row realm identity metadata, not portable realm contents",
+	"source_kind":              "closed-domain reference dictionary, not portable client data",
 }
 
 // schemaClientTables is the canonical client-data contract. Each SQLite column
@@ -668,6 +688,8 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 			"title":             "Title",
 			"group_id":          "GroupCode",
 			"currency_asset_id": "Currency",
+			"pnl":               "Pnl",
+			"pnl_halt_reason":   "PnlHaltReason",
 			"notes":             "Notes",
 			"blocked":           "Blocked",
 			"block_reason":      "BlockReason",
@@ -677,6 +699,8 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 			"title":             "title",
 			"group_id":          "group_code",
 			"currency_asset_id": "currency",
+			"pnl":               "pnl",
+			"pnl_halt_reason":   "pnl_halt_reason",
 			"notes":             "notes",
 			"blocked":           "blocked",
 			"block_reason":      "block_reason",
@@ -684,23 +708,25 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 	},
 	"balance": {
 		backup: map[string]string{
-			"account_id":          "Account",
-			"asset_id":            "Asset",
-			"available":           "Available",
-			"held":                "Held",
-			"incoming":            "Incoming",
-			"average_entry_price": "AverageEntryPrice",
-			"realized_pnl":        "RealizedPnl",
-			"updated_at":          "UpdatedAt",
+			"account_id":               "Account",
+			"asset_id":                 "Asset",
+			"available":                "Available",
+			"held":                     "Held",
+			"incoming":                 "Incoming",
+			"average_entry_price":      "AverageEntryPrice",
+			"realized_pnl":             "RealizedPnl",
+			"realized_pnl_halt_reason": "RealizedPnlHaltReason",
+			"updated_at":               "UpdatedAt",
 		},
 		businessCSV: map[string]string{
-			"account_id":          "account_code",
-			"asset_id":            "asset",
-			"available":           "available",
-			"held":                "held",
-			"incoming":            "incoming",
-			"average_entry_price": "average_entry_price",
-			"realized_pnl":        "realized_pnl",
+			"account_id":               "account_code",
+			"asset_id":                 "asset",
+			"available":                "available",
+			"held":                     "held",
+			"incoming":                 "incoming",
+			"average_entry_price":      "average_entry_price",
+			"realized_pnl":             "realized_pnl",
+			"realized_pnl_halt_reason": "realized_pnl_halt_reason",
 		},
 	},
 	"limit_rate": {
@@ -723,13 +749,12 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 	},
 	"limit_spot_funds_pnl_bound": {
 		backup: map[string]string{
-			"scope":                     "Scope",
-			"account_id":                "Account",
-			"account_group_id":          "AccountGroup",
-			"account_currency_asset_id": "AccountCurrency",
-			"lower_bound":               "LowerBound",
-			"upper_bound":               "UpperBound",
-			"initial_pnl":               "InitialPnl",
+			"scope":            "Scope",
+			"account_id":       "Account",
+			"account_group_id": "AccountGroup",
+			"lower_bound":      "LowerBound",
+			"upper_bound":      "UpperBound",
+			"initial_pnl":      "InitialPnl",
 		},
 	},
 	"adjustment": {
@@ -739,8 +764,8 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 			"asset_id":     "Asset",
 			"principal_id": "Principal",
 			"at":           "At",
-			"source":       "Source",
-			"status":       "Accepted/Rejected",
+			"source_id":    "Source",
+			"status_id":    "Accepted/Rejected",
 			"request":      "Request",
 			"outcome":      "Accepted/Rejected",
 		},
@@ -753,13 +778,13 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 			"quote_asset_id":  "QuoteAsset",
 			"principal_id":    "Principal",
 			"at":              "At",
-			"source":          "Source",
-			"side":            "Side",
-			"amount_kind":     "AmountKind",
+			"source_id":       "Source",
+			"side_id":         "Side",
+			"amount_kind_id":  "AmountKind",
 			"amount_value":    "AmountValue",
 			"leaves_quantity": "Leaves",
 			"price":           "Price",
-			"status":          "Status",
+			"status_id":       "Status",
 			"lock":            "Lock",
 		},
 		businessCSV: map[string]string{
@@ -769,13 +794,13 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 			"quote_asset_id":  "quote_asset",
 			"principal_id":    "principal",
 			"at":              "at",
-			"source":          "source",
-			"side":            "side",
-			"amount_kind":     "amount_kind",
+			"source_id":       "source",
+			"side_id":         "side",
+			"amount_kind_id":  "amount_kind",
 			"amount_value":    "amount_value",
 			"leaves_quantity": "",
 			"price":           "price",
-			"status":          "status",
+			"status_id":       "status",
 			"lock":            "",
 		},
 	},
@@ -785,20 +810,20 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 			"order_id":     "Order",
 			"principal_id": "Principal",
 			"at":           "At",
-			"type":         "Type",
-			"source":       "Source",
+			"type_id":      "Type",
+			"source_id":    "Source",
 			"payload":      "Payload",
 		},
 	},
 	"event_attestation": {
 		backup: map[string]string{
-			"event_id":       "OrderEvents.Attestation",
-			"token":          "Attestation.Token",
-			"signing_key_id": "Attestation.KeyID",
-			"alg":            "Attestation.Alg",
-			"request_type":   "Attestation.RequestType",
-			"mode":           "Attestation.Mode",
-			"issued_at":      "Attestation.IssuedAt",
+			"event_id":        "OrderEvents.Attestation",
+			"token":           "Attestation.Token",
+			"signing_key_id":  "Attestation.KeyID",
+			"alg_id":          "Attestation.Alg",
+			"request_type_id": "Attestation.RequestType",
+			"mode_id":         "Attestation.Mode",
+			"issued_at":       "Attestation.IssuedAt",
 		},
 	},
 	"trade": {
@@ -810,8 +835,8 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 			"quote_asset_id":      "QuoteAsset",
 			"principal_id":        "Principal",
 			"at":                  "At",
-			"source":              "Source",
-			"side":                "Side",
+			"source_id":           "Source",
+			"side_id":             "Side",
 			"quantity":            "Quantity",
 			"price":               "Price",
 			"lock_price":          "LockPrice",
@@ -826,8 +851,8 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 			"quote_asset_id":      "quote_asset",
 			"principal_id":        "principal",
 			"at":                  "at",
-			"source":              "source",
-			"side":                "side",
+			"source_id":           "source",
+			"side_id":             "side",
 			"quantity":            "quantity",
 			"price":               "price",
 			"lock_price":          "lock_price",
@@ -845,8 +870,8 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 			"actor_code":    "Actor",
 			"actor_title":   "ActorTitle",
 			"at":            "At",
-			"action":        "Action",
-			"source":        "Source",
+			"action_id":     "Action",
+			"source_id":     "Source",
 			"detail":        "Detail",
 		},
 	},
@@ -1150,9 +1175,9 @@ func newClientDataDriftRealm(
 	t *testing.T, ctx context.Context,
 ) (store.Store, store.RealmStore) {
 	t.Helper()
-	st, err := appstore.NewSQLiteStore(t.TempDir() + "/client-data-drift.db")
+	st, err := sqlite.New(t.TempDir() + "/client-data-drift.db")
 	if err != nil {
-		t.Fatalf("NewSQLiteStore: %v", err)
+		t.Fatalf("sqlite.New: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	if err := st.Migrate(ctx); err != nil {
@@ -1200,25 +1225,28 @@ func seedClientDataDriftRealm(
 	}
 	must(t, "SetGroupCurrency default", rs.SetGroupCurrency(ctx, "", "USD"))
 	if _, err := rs.CreateAccount(ctx, domain.Account{
-		Code:        "acc-1",
-		Title:       "Account Sentinel",
-		Currency:    "USD",
-		GroupCode:   "grp-1",
-		Notes:       "account notes sentinel",
-		BlockReason: "account block sentinel",
-		Blocked:     true,
+		Code:          "acc-1",
+		Title:         "Account Sentinel",
+		Currency:      "USD",
+		Pnl:           "12.34",
+		PnlHaltReason: domain.PnlHaltReasonMissingFx,
+		GroupCode:     "grp-1",
+		Notes:         "account notes sentinel",
+		BlockReason:   "account block sentinel",
+		Blocked:       true,
 	}); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 	must(t, "UpsertBalance", rs.UpsertBalance(ctx, domain.Balance{
-		Account:           "acc-1",
-		Asset:             "USD",
-		Available:         "123.45",
-		Held:              "6.78",
-		Incoming:          "9.01",
-		RealizedPnl:       "2.34",
-		AverageEntryPrice: "101.23",
-		UpdatedAt:         time.Date(2026, 7, 8, 10, 11, 12, 0, time.UTC),
+		Account:               "acc-1",
+		Asset:                 "USD",
+		Available:             "123.45",
+		Held:                  "6.78",
+		Incoming:              "9.01",
+		RealizedPnl:           "2.34",
+		RealizedPnlHaltReason: domain.PnlHaltReasonMissingFx,
+		AverageEntryPrice:     "101.23",
+		UpdatedAt:             time.Date(2026, 7, 8, 10, 11, 12, 0, time.UTC),
 	}))
 	must(t, "PutRateLimit", rs.PutRateLimit(ctx, domain.LimitRate{
 		Scope:     domain.ScopeAccountAsset,
@@ -1237,22 +1265,20 @@ func seedClientDataDriftRealm(
 	must(t, "PutSpotFundsPnlBoundsLimit", rs.PutSpotFundsPnlBoundsLimit(
 		ctx,
 		domain.LimitSpotFundsPnlBounds{
-			Scope:           domain.ScopeAccount,
-			Account:         "acc-1",
-			AccountCurrency: "USD",
-			LowerBound:      "-50.25",
-			UpperBound:      "100.75",
-			InitialPnl:      "3.50",
+			Scope:      domain.ScopeAccount,
+			Account:    "acc-1",
+			LowerBound: "-50.25",
+			UpperBound: "100.75",
+			InitialPnl: "3.50",
 		},
 	))
 	must(t, "PutSpotFundsPnlBoundsLimit group", rs.PutSpotFundsPnlBoundsLimit(
 		ctx,
 		domain.LimitSpotFundsPnlBounds{
-			Scope:           domain.ScopeAccountGroup,
-			AccountGroup:    "grp-1",
-			AccountCurrency: "USD",
-			LowerBound:      "-25.00",
-			UpperBound:      "75.00",
+			Scope:        domain.ScopeAccountGroup,
+			AccountGroup: "grp-1",
+			LowerBound:   "-25.00",
+			UpperBound:   "75.00",
 		},
 	))
 	order, err := rs.CreateOrder(ctx, domain.Order{
@@ -1373,25 +1399,28 @@ func seedClientDataDriftRealm(
 		Principal:  "operator",
 		Source:     domain.SourcePanel,
 		Request: domain.AdjustmentRequest{
-			Asset:             "USD",
-			AverageEntryPrice: "101.23",
-			Balance:           adjustmentAmount(domain.AdjustmentModeDelta, "5.50"),
-			BalanceBounds:     adjustmentBounds("1", "200"),
-			Held:              adjustmentAmount(domain.AdjustmentModeDelta, "1.25"),
-			HeldBounds:        adjustmentBounds("1", "20"),
-			Incoming:          adjustmentAmount(domain.AdjustmentModeDelta, "2.25"),
-			IncomingBounds:    adjustmentBounds("1", "30"),
-			RealizedPnl:       "2.84",
+			Asset:                 "USD",
+			AverageEntryPrice:     "101.23",
+			Balance:               adjustmentAmount(domain.AdjustmentModeDelta, "5.50"),
+			BalanceBounds:         adjustmentBounds("1", "200"),
+			Held:                  adjustmentAmount(domain.AdjustmentModeDelta, "1.25"),
+			HeldBounds:            adjustmentBounds("1", "20"),
+			Incoming:              adjustmentAmount(domain.AdjustmentModeDelta, "2.25"),
+			IncomingBounds:        adjustmentBounds("1", "30"),
+			RealizedPnl:           "2.84",
+			RealizedPnlHaltReason: domain.PnlHaltReasonMissingFx,
 		},
 		Accepted: &domain.AdjustmentOutcomeAccepted{
-			BalanceDelta:      "5.50",
-			BalanceResult:     "128.95",
-			HeldDelta:         "1.25",
-			HeldResult:        "8.03",
-			IncomingDelta:     "2.25",
-			IncomingResult:    "11.26",
-			RealizedPnlDelta:  "0.50",
-			RealizedPnlResult: "2.84",
+			BalanceDelta:          "5.50",
+			BalanceResult:         "128.95",
+			HeldDelta:             "1.25",
+			HeldResult:            "8.03",
+			IncomingDelta:         "2.25",
+			IncomingResult:        "11.26",
+			RealizedPnlDelta:      "0.50",
+			RealizedPnlResult:     "2.84",
+			RealizedPnlHaltReason: domain.PnlHaltReasonMissingAccountCurrency,
+			AverageEntryPrice:     "99.5",
 		},
 	}); err != nil {
 		t.Fatalf("AppendAdjustment: %v", err)
@@ -1403,15 +1432,16 @@ func seedClientDataDriftRealm(
 		Principal:  "operator",
 		Source:     domain.SourceAPI,
 		Request: domain.AdjustmentRequest{
-			Asset:             "USD",
-			AverageEntryPrice: "102.34",
-			Balance:           adjustmentAmount(domain.AdjustmentModeDelta, "6.50"),
-			BalanceBounds:     adjustmentBounds("1", "200"),
-			Held:              adjustmentAmount(domain.AdjustmentModeDelta, "2.25"),
-			HeldBounds:        adjustmentBounds("1", "20"),
-			Incoming:          adjustmentAmount(domain.AdjustmentModeDelta, "3.25"),
-			IncomingBounds:    adjustmentBounds("1", "30"),
-			RealizedPnl:       "3.84",
+			Asset:                 "USD",
+			AverageEntryPrice:     "102.34",
+			Balance:               adjustmentAmount(domain.AdjustmentModeDelta, "6.50"),
+			BalanceBounds:         adjustmentBounds("1", "200"),
+			Held:                  adjustmentAmount(domain.AdjustmentModeDelta, "2.25"),
+			HeldBounds:            adjustmentBounds("1", "20"),
+			Incoming:              adjustmentAmount(domain.AdjustmentModeDelta, "3.25"),
+			IncomingBounds:        adjustmentBounds("1", "30"),
+			RealizedPnl:           "3.84",
+			RealizedPnlHaltReason: domain.PnlHaltReasonMissingCostBasis,
 		},
 		Rejected: &domain.AdjustmentOutcomeRejected{
 			Code:    "limit_exceeded",
@@ -2022,7 +2052,7 @@ func parseClientDataSchema() (map[string][]string, error) {
 		return nil, fmt.Errorf("resolve test file path")
 	}
 	path := filepath.Join(
-		filepath.Dir(file), "..", "store", "migrations", "0001_init.sql",
+		filepath.Dir(file), "..", "..", "framework", "store", "schema", "migrations", "0001_init.sql",
 	)
 	raw, err := os.ReadFile(path)
 	if err != nil {

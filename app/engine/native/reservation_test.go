@@ -26,17 +26,22 @@ package native
 import (
 	"context"
 	"errors"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
 
 	"go.openpit.dev/openpit"
 	"go.openpit.dev/openpit/asyncengine"
+	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pretrade/policies"
 
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/marketdata"
+	"go.openpit.dev/officer/framework/node"
+	"go.openpit.dev/officer/internal/store/sqlite"
 )
 
 const (
@@ -84,12 +89,12 @@ func newTestEngine(t *testing.T) *openPitEngine {
 	if err != nil {
 		t.Fatalf("newIDResolver: %v", err)
 	}
-	eng, service, registered, err := buildEngine(snap, res)
+	eng, service, registered, _, err := buildEngine(snap, res)
 	if err != nil {
 		t.Fatalf("build engine: %v", err)
 	}
 	adapter := newOpenPitEngine(
-		eng, testAsyncEngine(t, eng), service, registered, nil, nil, res,
+		eng, testAsyncEngine(t, eng), service, registered, nil, nil, nil, res,
 	).(*openPitEngine)
 	t.Cleanup(adapter.Stop)
 
@@ -123,6 +128,7 @@ func newUnpricedTestEngine(t *testing.T) *openPitEngine {
 		testAsyncEngine(t, eng),
 		nil,
 		map[string]struct{}{},
+		nil,
 		nil,
 		nil,
 		res,
@@ -165,6 +171,151 @@ func TestSubmitImmediate_NetsHeldToZero(t *testing.T) {
 	}
 	if len(res.Lock) == 0 {
 		t.Fatal("SubmitImmediate: empty serialized lock")
+	}
+	seen := make(map[string]struct{}, len(res.Outcomes))
+	var quote *domain.AdjustmentOutcomeAccepted
+	for i := range res.Outcomes {
+		outcome := &res.Outcomes[i]
+		if _, duplicate := seen[outcome.Asset]; duplicate {
+			t.Fatalf("SubmitImmediate returned duplicate final asset %q: %+v",
+				outcome.Asset, res.Outcomes)
+		}
+		seen[outcome.Asset] = struct{}{}
+		if outcome.Asset == testQuote {
+			quote = &outcome.Outcome
+		}
+	}
+	if quote == nil || quote.HeldDelta != "0" || quote.HeldResult != "0" {
+		t.Fatalf("quote outcome = %+v, want reservation and settlement held effects netted to zero",
+			quote)
+	}
+	if res.AccountPnl != "" ||
+		res.AccountPnlHaltReason != domain.PnlHaltReasonMissingAccountCurrency {
+		t.Fatalf(
+			"account pnl outcome = (%q, %q), want missing-account-currency halt",
+			res.AccountPnl,
+			res.AccountPnlHaltReason,
+		)
+	}
+}
+
+func TestSubmitImmediate_SellCarriesReservationBaseBalance(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlite.New(t.TempDir() + "/officer.db")
+	if err != nil {
+		t.Fatalf("sqlite.New: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	n, _, err := node.NewLocalNode(
+		ctx,
+		store,
+		func(snapshot engine.Snapshot) (engine.Engine, error) {
+			return BuildOpenPitEngine("", snapshot)
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewLocalNode: %v", err)
+	}
+	t.Cleanup(func() { _ = n.Close() })
+
+	accountID := domain.AccountID("my3")
+	caller := domain.Caller{
+		Source:    domain.SourcePanel,
+		Principal: domain.PrincipalOperator,
+	}
+	if _, err := n.CreateAccount(ctx, domain.Account{
+		Code:     accountID,
+		Currency: "USDT",
+	}, caller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if _, err := n.ApplyAdjustment(
+		ctx,
+		node.Key{Account: accountID},
+		testOrderXID(0x01),
+		domain.AdjustmentRequest{
+			Asset:             "USDT",
+			AverageEntryPrice: "1",
+			RealizedPnl:       "0",
+			Balance: &domain.AdjustmentAmount{
+				Mode:  domain.AdjustmentModeAbsolute,
+				Value: "1000000",
+			},
+		},
+		caller,
+	); err != nil {
+		t.Fatalf("ApplyAdjustment: %v", err)
+	}
+
+	buy := domain.Order{
+		Account:     accountID,
+		BaseAsset:   "BTC",
+		QuoteAsset:  "USDT",
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "1",
+		Price:       "73406.8115",
+	}
+	if _, result, err := n.SubmitImmediate(ctx, node.Key{Account: accountID}, buy, caller); err != nil || !result.Accepted {
+		t.Fatalf("buy SubmitImmediate: %v result=%+v", err, result)
+	}
+
+	sell := buy
+	sell.Side = domain.OrderSideSell
+	sell.Price = "54268.522"
+	_, result, err := n.SubmitImmediate(ctx, node.Key{Account: accountID}, sell, caller)
+	if err != nil || !result.Accepted {
+		t.Fatalf("sell SubmitImmediate: %v result=%+v", err, result)
+	}
+	balance, ok, err := n.GetBalance(ctx, accountID, "BTC")
+	if err != nil || !ok {
+		t.Fatalf("GetBalance BTC: ok=%v err=%v", ok, err)
+	}
+	if balance.Available != "0" || balance.Held != "0" || balance.Incoming != "0" {
+		t.Fatalf("BTC balance = %+v, want no open position", balance)
+	}
+	if balance.AverageEntryPrice != "" {
+		t.Fatalf("BTC average entry price = %q, want empty", balance.AverageEntryPrice)
+	}
+	if balance.RealizedPnl != "-19138.2895" {
+		t.Fatalf("BTC realized PnL = %q, want -19138.2895", balance.RealizedPnl)
+	}
+}
+
+func TestSubmitImmediate_CarriesAuthoritativeAccountPnl(t *testing.T) {
+	acct := account(testAccount)
+	acct.Currency = testQuote
+	acct.EffectiveCurrency = testQuote
+	acct.Pnl = "7.25"
+	engine, err := BuildOpenPitEngine("", Snapshot{
+		Accounts: []domain.Account{acct},
+		Balances: []domain.Balance{{
+			Account: domain.AccountID(testAccount), Asset: testQuote,
+			Available: testQuoteFund,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("BuildOpenPitEngine: %v", err)
+	}
+	e := engine.(*openPitEngine)
+	t.Cleanup(e.Stop)
+
+	res, err := e.SubmitImmediate(context.Background(), testOrder())
+	if err != nil {
+		t.Fatalf("SubmitImmediate: %v", err)
+	}
+	if !res.Accepted {
+		t.Fatalf("SubmitImmediate rejected: %+v", res.Rejects)
+	}
+	if res.AccountPnl != "7.25" || res.AccountPnlHaltReason != "" {
+		t.Fatalf(
+			"account pnl outcome = (%q, %q), want authoritative 7.25",
+			res.AccountPnl,
+			res.AccountPnlHaltReason,
+		)
 	}
 }
 
@@ -220,6 +371,161 @@ func TestApplyExecutionReport_SettlesFillNoBlock(t *testing.T) {
 	if quote := outcomes[testQuote]; quote.BalanceDelta != "" ||
 		quote.HeldDelta != "-500" || quote.HeldResult != "0" {
 		t.Fatalf("quote outcome = %+v, want held-only release without balance double count", quote)
+	}
+}
+
+// TestApplyExecutionReport_UsesSeededRealizedPnlFromSDK reproduces a complete
+// position close. Officer seeds average price and realized PnL into OpenPit,
+// forwards the fill, and exposes the SDK outcome unchanged. Commission mapping
+// is covered independently so this test does not assume how SDK versions assign
+// fees to PnL.
+func TestApplyExecutionReport_UsesSeededRealizedPnlFromSDK(t *testing.T) {
+	acct := account(testAccount)
+	acct.Currency = testQuote
+	engine, err := BuildOpenPitEngine("", Snapshot{
+		Accounts: []domain.Account{acct},
+		Balances: []domain.Balance{
+			{
+				Account: domain.AccountID(testAccount), Asset: testBase,
+				Available: "1", AverageEntryPrice: "99000", RealizedPnl: "7",
+			},
+			{
+				Account: domain.AccountID(testAccount), Asset: testQuote,
+				Available: "1000000", RealizedPnl: "0",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildOpenPitEngine: %v", err)
+	}
+	e := engine.(*openPitEngine)
+	t.Cleanup(e.Stop)
+
+	ctx := context.Background()
+	order := domain.Order{
+		Account: domain.AccountID(testAccount), BaseAsset: testBase, QuoteAsset: testQuote,
+		Side: domain.OrderSideSell, AmountKind: domain.OrderAmountKindQuantity,
+		AmountValue: "1", Price: "50000",
+	}
+	submitted, err := e.SubmitOrder(ctx, order)
+	if err != nil || !submitted.Accepted {
+		t.Fatalf("SubmitOrder: %v accepted=%v rejects=%+v", err, submitted.Accepted, submitted.Rejects)
+	}
+
+	result, err := e.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
+		BaseAsset: testBase, QuoteAsset: testQuote,
+		FillQuantity: "1", FillPrice: "50000", LeavesQuantity: "0",
+		LockPrice: submitted.SettlementLockPrice,
+		Account:   domain.AccountID(testAccount), Side: domain.OrderSideSell,
+		OrderStatus: domain.OrderStatusFilled,
+	})
+	if err != nil {
+		t.Fatalf("ApplyExecutionReport: %v", err)
+	}
+	var base *domain.AdjustmentOutcomeAccepted
+	for i := range result.Outcomes {
+		if result.Outcomes[i].Asset == testBase {
+			base = &result.Outcomes[i].Outcome
+			break
+		}
+	}
+	if base == nil {
+		t.Fatalf("base outcome missing: %+v", result.Outcomes)
+	}
+	if base.RealizedPnlDelta != "-49000" || base.RealizedPnlResult != "-48993" {
+		t.Fatalf("base PnL outcome = %+v, want SDK delta -49000 absolute -48993", base)
+	}
+}
+
+func TestBuildOpenPitEngine_SeedsAccountPnlWithoutPnlBounds(t *testing.T) {
+	acct := account(testAccount)
+	acct.Currency = testQuote
+	acct.EffectiveCurrency = testQuote
+	acct.Pnl = "7.25"
+	eng, err := BuildOpenPitEngine("", Snapshot{Accounts: []domain.Account{acct}})
+	if err != nil {
+		t.Fatalf("BuildOpenPitEngine: %v", err)
+	}
+	eng.Stop()
+}
+
+func TestBuildOpenPitEngine_PersistedPnlAvoidsStaleInitialPnlBlock(t *testing.T) {
+	acct := account(testAccount)
+	acct.Currency = testQuote
+	acct.Pnl = "5"
+	limits := []domain.LimitSpotFundsPnlBounds{{
+		Scope: domain.ScopeAccount, Account: testAccount,
+		LowerBound: "-3", InitialPnl: "-5",
+	}}
+	built, err := BuildOpenPitEngine("", Snapshot{
+		Accounts: []domain.Account{acct}, SpotFundsPnlBoundsLimits: limits,
+	})
+	if err != nil {
+		t.Fatalf("BuildOpenPitEngine: %v", err)
+	}
+	eng := built.(*openPitEngine)
+	t.Cleanup(eng.Stop)
+	if blocks := eng.SeedAccountBlocks(); len(blocks) != 0 {
+		t.Fatalf("seed blocks = %+v, want persisted +5 to override blocking initial -5", blocks)
+	}
+	result, err := eng.ConfigurePolicy(
+		context.Background(),
+		domain.PolicySpotFundsPnlBoundsKillSwitch,
+		LimitSet{SpotFundsPnlBoundsLimits: limits},
+	)
+	if err != nil {
+		t.Fatalf("ConfigurePolicy unchanged after restart: %v", err)
+	}
+	if len(result.AccountPnlUpdates) != 0 {
+		t.Fatalf("unchanged restart config reseeded persisted P&L: %+v", result.AccountPnlUpdates)
+	}
+}
+
+func TestSpotFundsAccountPnlSeeds_RestoresHaltedAccountPnl(t *testing.T) {
+	acct := account(testAccount)
+	acct.Currency = testQuote
+	acct.EffectiveCurrency = testQuote
+	acct.Pnl = "not-a-number"
+	acct.PnlHaltReason = domain.PnlHaltReasonMissingFx
+	seeds, err := spotFundsAccountPnlSeeds(
+		[]domain.Account{acct, {Code: "no-override"}},
+		nil,
+		testResolver(testAccount, "no-override"),
+	)
+	if err != nil {
+		t.Fatalf("spotFundsAccountPnlSeeds: %v", err)
+	}
+	if len(seeds) != 1 {
+		t.Fatalf("seed count = %d, want 1 halted database state", len(seeds))
+	}
+	reason, halted := seeds[0].state.HaltReason()
+	if !halted || reason != model.PnlHaltReasonMissingFx {
+		t.Fatalf("seed state = (%v, %v), want restored missing-fx halt", reason, halted)
+	}
+	if seeds[0].account.Handle() != 1 {
+		t.Fatalf("seed account = %d, want %d", seeds[0].account.Handle(), 1)
+	}
+}
+
+func TestSpotFundsAccountPnlSeeds_PersistedStateOverridesInitialPnl(t *testing.T) {
+	acct := account(testAccount)
+	acct.Pnl = "7.25"
+	limits := []domain.LimitSpotFundsPnlBounds{{
+		Scope: domain.ScopeAccount, Account: testAccount,
+		LowerBound: "-100", InitialPnl: "-50",
+	}}
+	seeds, err := spotFundsAccountPnlSeeds(
+		[]domain.Account{acct}, limits, testResolver(testAccount),
+	)
+	if err != nil {
+		t.Fatalf("spotFundsAccountPnlSeeds: %v", err)
+	}
+	if len(seeds) != 1 {
+		t.Fatalf("seed count = %d, want one authoritative seed", len(seeds))
+	}
+	amount, ok := seeds[0].state.Value()
+	if !ok || amount.String() != "7.25" {
+		t.Fatalf("seed state = %+v, want persisted 7.25", seeds[0].state)
 	}
 }
 
@@ -345,22 +651,19 @@ func newTestEngineWithSpotFundsPnlBounds(t *testing.T) *openPitEngine {
 		},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
 			{
-				Scope:           domain.ScopeGlobal,
-				AccountCurrency: testQuote,
-				LowerBound:      "-1000000",
+				Scope:      domain.ScopeGlobal,
+				LowerBound: "-1000000",
 			},
 			{
-				Scope:           domain.ScopeAccountGroup,
-				AccountGroup:    "desk-a",
-				AccountCurrency: testQuote,
-				LowerBound:      "-1000000",
+				Scope:        domain.ScopeAccountGroup,
+				AccountGroup: "desk-a",
+				LowerBound:   "-1000000",
 			},
 			{
-				Scope:           domain.ScopeAccount,
-				Account:         domain.AccountID(testAccount),
-				AccountCurrency: testQuote,
-				LowerBound:      "-6",
-				InitialPnl:      "-5",
+				Scope:      domain.ScopeAccount,
+				Account:    domain.AccountID(testAccount),
+				LowerBound: "-6",
+				InitialPnl: "-5",
 			},
 		},
 	}
@@ -430,7 +733,7 @@ func TestConfigurePolicy_SpotFundsPnlBoundsClearsLastBarrierOnline(t *testing.T)
 	ctx := context.Background()
 
 	engBefore := e.eng
-	if err := e.ConfigurePolicy(
+	if _, err := e.ConfigurePolicy(
 		ctx,
 		domain.PolicySpotFundsPnlBoundsKillSwitch,
 		LimitSet{},
@@ -502,15 +805,13 @@ func newTestEngineGlobalSpotFundsPnlBounds(t *testing.T) *openPitEngine {
 		},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
 			{
-				Scope:           domain.ScopeGlobal,
-				AccountCurrency: testQuote,
-				LowerBound:      "-1000000",
+				Scope:      domain.ScopeGlobal,
+				LowerBound: "-1000000",
 			},
 			{
-				Scope:           domain.ScopeAccountGroup,
-				AccountGroup:    "desk-a",
-				AccountCurrency: testQuote,
-				LowerBound:      "-1000000",
+				Scope:        domain.ScopeAccountGroup,
+				AccountGroup: "desk-a",
+				LowerBound:   "-1000000",
 			},
 		},
 	}
@@ -575,24 +876,21 @@ func TestConfigurePolicy_SpotFundsPnlBoundsNewAccountBarrierPreservesLivePnl(t *
 	// the -2 already accrued, so its -3 lower bound stays armed against live P&L.
 	limits := LimitSet{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
 		{
-			Scope:           domain.ScopeGlobal,
-			AccountCurrency: testQuote,
-			LowerBound:      "-1000000",
+			Scope:      domain.ScopeGlobal,
+			LowerBound: "-1000000",
 		},
 		{
-			Scope:           domain.ScopeAccountGroup,
-			AccountGroup:    "desk-a",
-			AccountCurrency: testQuote,
-			LowerBound:      "-1000000",
+			Scope:        domain.ScopeAccountGroup,
+			AccountGroup: "desk-a",
+			LowerBound:   "-1000000",
 		},
 		{
-			Scope:           domain.ScopeAccount,
-			Account:         domain.AccountID(testAccount),
-			AccountCurrency: testQuote,
-			LowerBound:      "-3",
+			Scope:      domain.ScopeAccount,
+			Account:    domain.AccountID(testAccount),
+			LowerBound: "-3",
 		},
 	}}
-	if err := e.ConfigurePolicy(
+	if _, err := e.ConfigurePolicy(
 		ctx, domain.PolicySpotFundsPnlBoundsKillSwitch, limits,
 	); err != nil {
 		t.Fatalf("ConfigurePolicy add account barrier: %v", err)
@@ -626,28 +924,32 @@ func TestConfigurePolicy_SpotFundsPnlBoundsNewAccountBarrierExplicitInitialPnlSe
 	// -2 already accrued.
 	limits := LimitSet{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
 		{
-			Scope:           domain.ScopeGlobal,
-			AccountCurrency: testQuote,
-			LowerBound:      "-1000000",
+			Scope:      domain.ScopeGlobal,
+			LowerBound: "-1000000",
 		},
 		{
-			Scope:           domain.ScopeAccountGroup,
-			AccountGroup:    "desk-a",
-			AccountCurrency: testQuote,
-			LowerBound:      "-1000000",
+			Scope:        domain.ScopeAccountGroup,
+			AccountGroup: "desk-a",
+			LowerBound:   "-1000000",
 		},
 		{
-			Scope:           domain.ScopeAccount,
-			Account:         domain.AccountID(testAccount),
-			AccountCurrency: testQuote,
-			LowerBound:      "-3",
-			InitialPnl:      "5",
+			Scope:      domain.ScopeAccount,
+			Account:    domain.AccountID(testAccount),
+			LowerBound: "-3",
+			InitialPnl: "5",
 		},
 	}}
-	if err := e.ConfigurePolicy(
+	configured, err := e.ConfigurePolicy(
 		ctx, domain.PolicySpotFundsPnlBoundsKillSwitch, limits,
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatalf("ConfigurePolicy add seeded account barrier: %v", err)
+	}
+	if len(configured.AccountPnlUpdates) != 1 ||
+		configured.AccountPnlUpdates[0].Account != domain.AccountID(testAccount) ||
+		configured.AccountPnlUpdates[0].Pnl != "5" {
+		t.Fatalf("account P&L updates = %+v, want account %s at 5",
+			configured.AccountPnlUpdates, testAccount)
 	}
 
 	// From the +5 seed the second fill lands at +3, clear of the -3 bound. Without
@@ -658,6 +960,72 @@ func TestConfigurePolicy_SpotFundsPnlBoundsNewAccountBarrierExplicitInitialPnlSe
 			"seeded barrier blocked though live P&L was reset above the bound: %+v",
 			second.Blocks,
 		)
+	}
+}
+
+func TestConfigurePolicy_SpotFundsReseedWaitsForLaneAndUsesNewBounds(t *testing.T) {
+	e := newTestEngineGlobalSpotFundsPnlBounds(t)
+	ctx := context.Background()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	laneDone := make(chan error, 1)
+	go func() {
+		laneDone <- e.RunAccountSynchronized(ctx, testAccount, func(AccountLane) error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+
+	limits := LimitSet{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
+		{Scope: domain.ScopeGlobal, LowerBound: "-1000000"},
+		{Scope: domain.ScopeAccountGroup, AccountGroup: "desk-a", LowerBound: "-1000000"},
+		{Scope: domain.ScopeAccount, Account: testAccount, LowerBound: "-3", InitialPnl: "-5"},
+	}}
+	configured := make(chan PolicyConfigurationResult, 1)
+	configureErr := make(chan error, 1)
+	go func() {
+		result, err := e.ConfigurePolicy(
+			ctx, domain.PolicySpotFundsPnlBoundsKillSwitch, limits,
+		)
+		configured <- result
+		configureErr <- err
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	writerLocked := false
+	for time.Now().Before(deadline) {
+		if e.mu.TryRLock() {
+			e.mu.RUnlock()
+			runtime.Gosched()
+			continue
+		}
+		writerLocked = true
+		break
+	}
+	if !writerLocked {
+		t.Fatal("ConfigurePolicy did not enter live configuration")
+	}
+	select {
+	case err := <-configureErr:
+		t.Fatalf("ConfigurePolicy returned before occupied account lane completed: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(release)
+	if err := <-laneDone; err != nil {
+		t.Fatalf("RunAccountSynchronized: %v", err)
+	}
+	result := <-configured
+	if err := <-configureErr; err != nil {
+		t.Fatalf("ConfigurePolicy: %v", err)
+	}
+	if len(result.AccountPnlUpdates) != 1 || result.AccountPnlUpdates[0].Pnl != "-5" {
+		t.Fatalf("account P&L updates = %+v, want reseed -5", result.AccountPnlUpdates)
+	}
+	if len(result.AccountBlocks) != 1 ||
+		result.AccountBlocks[0].Account != domain.AccountID(testAccount) {
+		t.Fatalf("account blocks = %+v, want new -3 bound to block -5 seed", result.AccountBlocks)
 	}
 }
 
@@ -898,6 +1266,84 @@ func TestRunAccountSynchronized_SerializesSameAccount(t *testing.T) {
 	}
 	if want := goroutines * iterations; counter != want {
 		t.Fatalf("counter = %d, want %d (lane did not serialize increments)", counter, want)
+	}
+}
+
+func TestRunAccountSynchronized_CancellationWaitsForStartedCallback(t *testing.T) {
+	e := newTestEngine(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- e.RunAccountSynchronized(ctx, testAccount, func(AccountLane) error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+	cancel()
+	select {
+	case err := <-done:
+		t.Fatalf("RunAccountSynchronized returned while callback was running: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("RunAccountSynchronized after callback completion: %v", err)
+	}
+}
+
+func TestRunAccountSynchronized_CancellationWaitsForQueuedCallback(t *testing.T) {
+	e := newTestEngine(t)
+	ctx := context.Background()
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- e.RunAccountSynchronized(ctx, testAccount, func(AccountLane) error {
+			close(firstEntered)
+			<-releaseFirst
+			return nil
+		})
+	}()
+	<-firstEntered
+
+	queuedCtx, cancel := context.WithCancel(ctx)
+	callStarted := make(chan struct{})
+	callbackStarted := make(chan struct{})
+	queuedDone := make(chan error, 1)
+	go func() {
+		close(callStarted)
+		queuedDone <- e.RunAccountSynchronized(
+			queuedCtx, testAccount, func(AccountLane) error {
+				close(callbackStarted)
+				return nil
+			},
+		)
+	}()
+	<-callStarted
+	// The first callback keeps the account worker occupied while the second call
+	// reaches AsyncEngine.Submit and waits in its queue.
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-queuedDone:
+		t.Fatalf("queued callback released its caller gate on cancellation: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(releaseFirst)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first RunAccountSynchronized: %v", err)
+	}
+	select {
+	case <-callbackStarted:
+	case <-time.After(time.Second):
+		t.Fatal("accepted queued callback did not run")
+	}
+	if err := <-queuedDone; err != nil {
+		t.Fatalf("queued RunAccountSynchronized after callback completion: %v", err)
 	}
 }
 

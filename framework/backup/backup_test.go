@@ -190,9 +190,8 @@ func TestFilterDataSpotFundsPnlBoundsIncludeSelectedAccountsGroup(t *testing.T) 
 	}
 	got := filtered.SpotFundsPnlBoundsLimits[0]
 	if got.Scope != domain.ScopeAccountGroup ||
-		got.AccountGroup != "grp-1" ||
-		got.AccountCurrency != "USD" {
-		t.Fatalf("spotFundsPnlBoundsLimit = %+v, want grp-1/USD group barrier", got)
+		got.AccountGroup != "grp-1" {
+		t.Fatalf("spotFundsPnlBoundsLimit = %+v, want grp-1 group barrier", got)
 	}
 }
 
@@ -317,16 +316,14 @@ func fixtureData() Data {
 		},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
 			{
-				Scope:           domain.ScopeAccountGroup,
-				AccountGroup:    "grp-1",
-				AccountCurrency: "USD",
-				LowerBound:      "-100",
+				Scope:        domain.ScopeAccountGroup,
+				AccountGroup: "grp-1",
+				LowerBound:   "-100",
 			},
 			{
-				Scope:           domain.ScopeAccountGroup,
-				AccountGroup:    "grp-2",
-				AccountCurrency: "USD",
-				LowerBound:      "-200",
+				Scope:        domain.ScopeAccountGroup,
+				AccountGroup: "grp-2",
+				LowerBound:   "-200",
 			},
 		},
 		Adjustments: []domain.AccountAdjustmentRecord{

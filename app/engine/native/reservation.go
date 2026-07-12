@@ -98,6 +98,15 @@ func (l accountLane) SubmitImmediate(
 		return ImmediateResult{}, err
 	}
 
+	// Persist the reservation outcomes before the post-trade outcomes. A final
+	// execution report may omit an unchanged available balance after releasing a
+	// reservation, so the persisted snapshot still needs the reservation's
+	// available/held transition.
+	reservationOutcomes, err := balanceOutcomesFromList(reservation.AccountAdjustments())
+	if err != nil {
+		reservation.RollbackAndClose()
+		return ImmediateResult{}, err
+	}
 	// Ordering rationale: the SDK reservation exposes only Commit/Rollback, and a
 	// fill is settled by the engine-level ApplyExecutionReport, not by the
 	// reservation. The execution report settles against the reservation's reserved
@@ -120,14 +129,50 @@ func (l accountLane) SubmitImmediate(
 			orderExternalIDForError(o.ExternalID), o.Account, err,
 		)
 	}
+	// The reservation is committed and the report is settled, so an unmappable
+	// engine outcome cannot be undone here. Report it in the same terms as a
+	// failed settlement above: the engine state stands and only an operator can
+	// reconcile the missing snapshot.
+	postTradeOutcomes, err := balanceOutcomesFromList(postTrade.AccountAdjustments)
+	if err != nil {
+		return ImmediateResult{}, fmt.Errorf(
+			"engine: reservation committed and execution report settled for order %s "+
+				"(account %s), but its outcome is unmappable - the persisted balance "+
+				"snapshot needs manual reconciliation: %w",
+			orderExternalIDForError(o.ExternalID), o.Account, err,
+		)
+	}
+	finalOutcomes, err := mergeBalanceOutcomes(reservationOutcomes, postTradeOutcomes)
+	if err != nil {
+		return ImmediateResult{}, fmt.Errorf(
+			"engine: reservation committed and execution report settled for order %s "+
+				"(account %s), but its ordered outcomes cannot be combined - the "+
+				"persisted balance snapshot needs manual reconciliation: %w",
+			orderExternalIDForError(o.ExternalID), o.Account, err,
+		)
+	}
+	accountPnl, accountPnlHaltReason, err := spotFundsAccountPnlFromList(
+		l.accountID,
+		postTrade.AccountPnls,
+	)
+	if err != nil {
+		return ImmediateResult{}, fmt.Errorf(
+			"engine: reservation committed and execution report settled for order %s "+
+				"(account %s), but its account P&L outcome is unmappable - the "+
+				"persisted P&L needs manual reconciliation: %w",
+			orderExternalIDForError(o.ExternalID), o.Account, err,
+		)
+	}
 	return ImmediateResult{
-		Accepted:            true,
-		Lock:                lockBytes,
-		Blocks:              executionBlocksFrom(postTrade.AccountBlocks, o.Account),
-		Outcomes:            balanceOutcomesFromList(postTrade.AccountAdjustmentOutcomes),
-		SettlementLockPrice: settlement,
-		FillQuantity:        fillQuantity,
-		EstimateSource:      source,
+		Accepted:             true,
+		Lock:                 lockBytes,
+		Blocks:               executionBlocksFrom(postTrade.AccountBlocks, o.Account),
+		Outcomes:             finalOutcomes,
+		AccountPnl:           accountPnl,
+		AccountPnlHaltReason: accountPnlHaltReason,
+		SettlementLockPrice:  settlement,
+		FillQuantity:         fillQuantity,
+		EstimateSource:       source,
 	}, nil
 }
 

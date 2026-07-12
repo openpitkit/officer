@@ -19,6 +19,7 @@ package native
 
 import (
 	"fmt"
+	"log/slog"
 	"math"
 	"strings"
 	"unicode"
@@ -282,27 +283,30 @@ func spotFundsPnlBoundsAxes(
 	limits []domain.LimitSpotFundsPnlBounds,
 	res idResolver,
 ) (
-	[]policies.SpotFundsPnlBoundsBarrier,
+	optional.Option[*policies.SpotFundsPnlBoundsBarrier],
 	[]policies.SpotFundsPnlBoundsAccountGroupBarrier,
-	[]policies.SpotFundsPnlBoundsAccountBarrierUpdate,
+	[]policies.SpotFundsPnlBoundsAccountBarrier,
 	error,
 ) {
-	global := []policies.SpotFundsPnlBoundsBarrier{}
+	// A nil value in a set Option clears the global axis. Runtime configuration
+	// must replace the complete stored set, not leave a removed global barrier
+	// live on the engine.
+	global := optional.Some[*policies.SpotFundsPnlBoundsBarrier](nil)
 	groups := []policies.SpotFundsPnlBoundsAccountGroupBarrier{}
-	accounts := []policies.SpotFundsPnlBoundsAccountBarrierUpdate{}
+	accounts := []policies.SpotFundsPnlBoundsAccountBarrier{}
 
 	for _, limit := range limits {
 		barrier, err := spotFundsPnlBoundsBarrier(limit)
 		if err != nil {
-			return nil, nil, nil, err
+			return global, nil, nil, err
 		}
 		switch limit.Scope {
 		case domain.ScopeGlobal:
-			global = append(global, barrier)
+			global = optional.Some(&barrier)
 		case domain.ScopeAccountGroup:
 			group, err := res.group(limit.AccountGroup)
 			if err != nil {
-				return nil, nil, nil, err
+				return global, nil, nil, err
 			}
 			groups = append(groups, policies.SpotFundsPnlBoundsAccountGroupBarrier{
 				Barrier:        barrier,
@@ -311,14 +315,14 @@ func spotFundsPnlBoundsAxes(
 		case domain.ScopeAccount:
 			account, err := res.account(limit.Account)
 			if err != nil {
-				return nil, nil, nil, err
+				return global, nil, nil, err
 			}
-			accounts = append(accounts, policies.SpotFundsPnlBoundsAccountBarrierUpdate{
+			accounts = append(accounts, policies.SpotFundsPnlBoundsAccountBarrier{
 				Barrier:   barrier,
 				AccountID: account,
 			})
 		default:
-			return nil, nil, nil, fmt.Errorf(
+			return global, nil, nil, fmt.Errorf(
 				"engine: spot_funds_pnl_bounds_kill_switch unsupported scope %q",
 				limit.Scope,
 			)
@@ -328,21 +332,15 @@ func spotFundsPnlBoundsAxes(
 }
 
 type spotFundsPnlBoundsSeed struct {
-	account         param.AccountID
-	accountCurrency param.Asset
-	initialPnl      param.Pnl
+	code       domain.AccountID
+	account    param.AccountID
+	initialPnl param.Pnl
 }
 
-type spotFundsPnlBoundsSeedKey struct {
-	account         uint64
-	accountCurrency string
-}
+type spotFundsPnlBoundsSeedKey uint64
 
 func (s spotFundsPnlBoundsSeed) key() spotFundsPnlBoundsSeedKey {
-	return spotFundsPnlBoundsSeedKey{
-		account:         uint64(s.account.Handle()),
-		accountCurrency: s.accountCurrency.String(),
-	}
+	return spotFundsPnlBoundsSeedKey(s.account.Handle())
 }
 
 // spotFundsPnlBoundsSeeds derives the account-scope initial-P&L seeds from a
@@ -364,10 +362,6 @@ func spotFundsPnlBoundsSeeds(
 		if err != nil {
 			return nil, err
 		}
-		accountCurrency, err := newAsset(limit.AccountCurrency)
-		if err != nil {
-			return nil, err
-		}
 		initialPnl, err := param.NewPnlFromString(limit.InitialPnl)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -377,9 +371,9 @@ func spotFundsPnlBoundsSeeds(
 			)
 		}
 		seeds = append(seeds, spotFundsPnlBoundsSeed{
-			account:         account,
-			accountCurrency: accountCurrency,
-			initialPnl:      initialPnl,
+			code:       limit.Account,
+			account:    account,
+			initialPnl: initialPnl,
 		})
 	}
 	return seeds, nil
@@ -585,10 +579,6 @@ func orderSizeValue(limit domain.LimitOrderSize) (policies.OrderSizeLimit, error
 func spotFundsPnlBoundsBarrier(
 	limit domain.LimitSpotFundsPnlBounds,
 ) (policies.SpotFundsPnlBoundsBarrier, error) {
-	accountCurrency, err := newAsset(limit.AccountCurrency)
-	if err != nil {
-		return policies.SpotFundsPnlBoundsBarrier{}, err
-	}
 	lower, upper, err := pnlBoundOptions(
 		limit.LowerBound,
 		limit.UpperBound,
@@ -598,9 +588,8 @@ func spotFundsPnlBoundsBarrier(
 		return policies.SpotFundsPnlBoundsBarrier{}, err
 	}
 	return policies.SpotFundsPnlBoundsBarrier{
-		AccountCurrency: accountCurrency,
-		LowerBound:      lower,
-		UpperBound:      upper,
+		LowerBound: lower,
+		UpperBound: upper,
 	}, nil
 }
 
@@ -665,6 +654,13 @@ func accountAdjustmentFromRequest(
 		}
 		balanceOp.AverageEntryPrice = optional.Some(price)
 	}
+	if req.RealizedPnl != "" || req.RealizedPnlHaltReason != "" {
+		pnlState, perr := pnlStateFrom(req.RealizedPnl, req.RealizedPnlHaltReason)
+		if perr != nil {
+			return model.AccountAdjustment{}, perr
+		}
+		balanceOp.RealizedPnl = optional.Some(pnlState)
+	}
 
 	amount, err := adjustmentAmountValues(req)
 	if err != nil {
@@ -689,6 +685,47 @@ func accountAdjustmentFromRequest(
 		return model.AccountAdjustment{}, fmt.Errorf("engine: build account adjustment: %w", err)
 	}
 	return adjustment, nil
+}
+
+func pnlStateFrom(value string, haltReason domain.PnlHaltReason) (model.PnlState, error) {
+	if haltReason != "" {
+		reason, err := pnlHaltReasonToSDK(haltReason)
+		if err != nil {
+			return model.PnlState{}, err
+		}
+		state, err := model.NewPnlHaltedState(reason)
+		if err != nil {
+			return model.PnlState{}, fmt.Errorf(
+				"engine: adjustment realized_pnl halt %q: %w: %w",
+				haltReason, err, domain.ErrInvalid,
+			)
+		}
+		return state, nil
+	}
+	pnl, err := param.NewPnlFromString(value)
+	if err != nil {
+		return model.PnlState{}, fmt.Errorf(
+			"engine: adjustment realized_pnl %q: %w: %w", value, err, domain.ErrInvalid,
+		)
+	}
+	return model.NewPnlState(pnl), nil
+}
+
+func pnlHaltReasonToSDK(reason domain.PnlHaltReason) (model.PnlHaltReason, error) {
+	switch reason {
+	case domain.PnlHaltReasonMissingFx:
+		return model.PnlHaltReasonMissingFx, nil
+	case domain.PnlHaltReasonMissingAccountCurrency:
+		return model.PnlHaltReasonMissingAccountCurrency, nil
+	case domain.PnlHaltReasonMissingInitialPnl:
+		return model.PnlHaltReasonMissingInitialPnl, nil
+	case domain.PnlHaltReasonMissingCostBasis:
+		return model.PnlHaltReasonMissingCostBasis, nil
+	case domain.PnlHaltReasonArithmeticOverflow:
+		return model.PnlHaltReasonArithmeticOverflow, nil
+	default:
+		return 0, fmt.Errorf("engine: unsupported realized_pnl halt %q: %w", reason, domain.ErrInvalid)
+	}
 }
 
 // adjustmentAmountValues maps the per-field balance/held/incoming amounts of a
@@ -802,7 +839,7 @@ func adjustmentBoundsValues(
 // rework is intentionally deferred.
 func outcomeAcceptedFromList(
 	outcomes []accountadjustment.Outcome, asset string,
-) (domain.AdjustmentOutcomeAccepted, bool) {
+) (domain.AdjustmentOutcomeAccepted, bool, error) {
 	var result domain.AdjustmentOutcomeAccepted
 	found := false
 	for _, outcome := range outcomes {
@@ -810,15 +847,21 @@ func outcomeAcceptedFromList(
 		if entry.Asset.String() != asset {
 			continue
 		}
-		result = outcomeAcceptedFromEntry(entry)
+		accepted, err := outcomeAcceptedFromEntry(entry)
+		if err != nil {
+			return domain.AdjustmentOutcomeAccepted{}, false, err
+		}
+		result = accepted
 		found = true
 	}
-	return result, found
+	return result, found, nil
 }
 
 // balanceOutcomesFromList relies on the at-most-one-outcome-per-asset invariant
 // documented on outcomeAcceptedFromList and performs no per-asset dedup.
-func balanceOutcomesFromList(outcomes []accountadjustment.Outcome) []BalanceOutcome {
+func balanceOutcomesFromList(
+	outcomes []accountadjustment.Outcome,
+) ([]BalanceOutcome, error) {
 	result := make([]BalanceOutcome, 0, len(outcomes))
 	for _, outcome := range outcomes {
 		entry := outcome.Entry
@@ -826,17 +869,100 @@ func balanceOutcomesFromList(outcomes []accountadjustment.Outcome) []BalanceOutc
 		if asset == "" {
 			continue
 		}
-		result = append(result, BalanceOutcome{
-			Asset:   asset,
-			Outcome: outcomeAcceptedFromEntry(entry),
-		})
+		accepted, err := outcomeAcceptedFromEntry(entry)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, BalanceOutcome{Asset: asset, Outcome: accepted})
 	}
-	return result
+	return result, nil
+}
+
+func mergeBalanceOutcomes(phases ...[]BalanceOutcome) ([]BalanceOutcome, error) {
+	merged := make([]BalanceOutcome, 0)
+	byAsset := make(map[string]int)
+	for _, phase := range phases {
+		for _, outcome := range phase {
+			if outcome.Asset == "" {
+				return nil, fmt.Errorf("engine: merge balance outcome without asset")
+			}
+			index, ok := byAsset[outcome.Asset]
+			if !ok {
+				byAsset[outcome.Asset] = len(merged)
+				merged = append(merged, outcome)
+				continue
+			}
+			combined, err := mergeAcceptedOutcomes(
+				merged[index].Outcome, outcome.Outcome,
+			)
+			if err != nil {
+				return nil, fmt.Errorf("engine: merge balance outcome %q: %w", outcome.Asset, err)
+			}
+			merged[index].Outcome = combined
+		}
+	}
+	return merged, nil
+}
+
+func mergeAcceptedOutcomes(
+	current, next domain.AdjustmentOutcomeAccepted,
+) (domain.AdjustmentOutcomeAccepted, error) {
+	var err error
+	if current.BalanceDelta, err = mergeOutcomeDelta(
+		current.BalanceDelta, next.BalanceDelta,
+	); err != nil {
+		return domain.AdjustmentOutcomeAccepted{}, err
+	}
+	if current.HeldDelta, err = mergeOutcomeDelta(
+		current.HeldDelta, next.HeldDelta,
+	); err != nil {
+		return domain.AdjustmentOutcomeAccepted{}, err
+	}
+	if current.IncomingDelta, err = mergeOutcomeDelta(
+		current.IncomingDelta, next.IncomingDelta,
+	); err != nil {
+		return domain.AdjustmentOutcomeAccepted{}, err
+	}
+	if current.RealizedPnlDelta, err = mergeOutcomeDelta(
+		current.RealizedPnlDelta, next.RealizedPnlDelta,
+	); err != nil {
+		return domain.AdjustmentOutcomeAccepted{}, err
+	}
+	if next.BalanceResult != "" {
+		current.BalanceResult = next.BalanceResult
+	}
+	if next.HeldResult != "" {
+		current.HeldResult = next.HeldResult
+	}
+	if next.IncomingResult != "" {
+		current.IncomingResult = next.IncomingResult
+	}
+	if next.RealizedPnlHaltReason != "" {
+		current.RealizedPnlResult = ""
+		current.RealizedPnlHaltReason = next.RealizedPnlHaltReason
+	} else if next.RealizedPnlResult != "" {
+		current.RealizedPnlResult = next.RealizedPnlResult
+		current.RealizedPnlHaltReason = ""
+	}
+	if next.AverageEntryPrice != "" {
+		current.AverageEntryPrice = next.AverageEntryPrice
+	}
+	return current, nil
+}
+
+func mergeOutcomeDelta(current, next string) (string, error) {
+	if current == "" {
+		return next, nil
+	}
+	if next == "" {
+		return current, nil
+	}
+	return domain.AddDecimals(current, next)
 }
 
 func outcomeAcceptedFromEntry(
 	entry accountadjustment.AccountOutcomeEntry,
-) domain.AdjustmentOutcomeAccepted {
+) (domain.AdjustmentOutcomeAccepted, error) {
 	var result domain.AdjustmentOutcomeAccepted
 	if amt, ok := entry.Balance.Get(); ok {
 		result.BalanceDelta = amt.Delta.String()
@@ -850,11 +976,87 @@ func outcomeAcceptedFromEntry(
 		result.IncomingDelta = amt.Delta.String()
 		result.IncomingResult = amt.Absolute.String()
 	}
-	if amt, ok := entry.RealizedPnl.Get(); ok {
-		result.RealizedPnlDelta = amt.Delta.String()
-		result.RealizedPnlResult = amt.Absolute.String()
+	if pnlOutcome, ok := entry.RealizedPnl.Get(); ok {
+		if haltReason, halted := pnlOutcome.HaltReason(); halted {
+			reason, err := pnlHaltReasonFromSDK(haltReason)
+			if err != nil {
+				return domain.AdjustmentOutcomeAccepted{}, fmt.Errorf(
+					"engine: outcome for asset %q: %w", entry.Asset.String(), err,
+				)
+			}
+			result.RealizedPnlHaltReason = reason
+		} else if amount, computed := pnlOutcome.Amount(); computed {
+			result.RealizedPnlDelta = amount.Delta.String()
+			result.RealizedPnlResult = amount.Absolute.String()
+		}
 	}
-	return result
+	if price, ok := entry.AverageEntryPrice.Get(); ok {
+		result.AverageEntryPrice = price.String()
+	}
+	return result, nil
+}
+
+func spotFundsAccountPnlFromList(
+	account param.AccountID,
+	outcomes []accountadjustment.AccountPnlOutcome,
+) (string, domain.PnlHaltReason, error) {
+	selected := false
+	var pnl string
+	var haltReason domain.PnlHaltReason
+	for _, outcome := range outcomes {
+		if outcome.AccountID != account {
+			slog.Warn(
+				"skip spot funds account pnl outcome",
+				"account_id", outcome.AccountID,
+				"reason", "account does not match execution report",
+			)
+			continue
+		}
+		if selected {
+			slog.Warn(
+				"skip spot funds account pnl outcome",
+				"account_id", outcome.AccountID,
+				"reason", "matching outcome was already selected",
+			)
+			continue
+		}
+		selected = true
+		if engineHaltReason, halted := outcome.HaltReason(); halted {
+			reason, err := pnlHaltReasonFromSDK(engineHaltReason)
+			if err != nil {
+				return "", "", fmt.Errorf("engine: account pnl outcome: %w", err)
+			}
+			haltReason = reason
+		} else if amount, computed := outcome.Amount(); computed {
+			pnl = amount.Absolute.String()
+		}
+	}
+	return pnl, haltReason, nil
+}
+
+// pnlHaltReasonFromSDK maps an engine halt reason onto its domain constant.
+//
+// A reason this seam does not know is an engine/Officer version mismatch, not
+// operator input: substituting a placeholder would persist a halt that
+// pnlHaltReasonToSDK cannot replay, blocking the next engine rebuild. Fail here
+// instead, so a new engine reason must be added to both directions at once.
+func pnlHaltReasonFromSDK(
+	reason model.PnlHaltReason,
+) (domain.PnlHaltReason, error) {
+	switch reason {
+	case model.PnlHaltReasonMissingFx:
+		return domain.PnlHaltReasonMissingFx, nil
+	case model.PnlHaltReasonMissingAccountCurrency:
+		return domain.PnlHaltReasonMissingAccountCurrency, nil
+	case model.PnlHaltReasonMissingInitialPnl:
+		return domain.PnlHaltReasonMissingInitialPnl, nil
+	case model.PnlHaltReasonMissingCostBasis:
+		return domain.PnlHaltReasonMissingCostBasis, nil
+	case model.PnlHaltReasonArithmeticOverflow:
+		return domain.PnlHaltReasonArithmeticOverflow, nil
+	default:
+		return "", fmt.Errorf("engine: unrecognized realized_pnl halt reason %d", reason)
+	}
 }
 
 // outcomeRejectedFrom maps the first reject of a batch error onto the domain
@@ -1087,6 +1289,8 @@ func executionReportPersistenceFrom(
 	in domain.ExecutionReportInput,
 	blocks []domain.ExecutionAccountBlock,
 	outcomes []BalanceOutcome,
+	accountPnl string,
+	accountPnlHaltReason domain.PnlHaltReason,
 ) engine.ExecutionReportPersistence {
 	recordedLeaves := domain.ExecutionReportPersistedLeaves(in)
 	payload := executionAccountBlockPayload(blocks)
@@ -1130,13 +1334,15 @@ func executionReportPersistenceFrom(
 	}
 
 	return engine.ExecutionReportPersistence{
-		Trade:       trade,
-		Commission:  in.Commission,
-		OrderStatus: in.OrderStatus,
-		Leaves:      recordedLeaves,
-		Balances:    executionBalanceSettlementsFrom(outcomes),
-		Events:      events,
-		Blocks:      blocks,
+		Trade:                trade,
+		Commission:           in.Commission,
+		OrderStatus:          in.OrderStatus,
+		AccountPnl:           accountPnl,
+		AccountPnlHaltReason: accountPnlHaltReason,
+		Leaves:               recordedLeaves,
+		Balances:             executionBalanceSettlementsFrom(outcomes),
+		Events:               events,
+		Blocks:               blocks,
 	}
 }
 
@@ -1301,6 +1507,31 @@ func executionBlocksFrom(
 	for _, b := range blocks {
 		out = append(out, domain.ExecutionAccountBlock{
 			Account: account,
+			Policy:  sanitizeText(b.Policy),
+			Code:    rejectCodeName(b.Code),
+			Reason:  sanitizeText(b.Reason),
+			Details: sanitizeText(b.Details),
+		})
+	}
+	return out
+}
+
+// policyConfigurationBlocksFrom maps blocks emitted while configuring one
+// account's policy state. Configuration blocks name neither the Officer account
+// nor the policy update's target in the generic binding result, so the adapter
+// carries both across the engine boundary.
+func policyConfigurationBlocksFrom(
+	blocks []reject.AccountBlock, account domain.AccountID, policy string,
+) []domain.AccountBlock {
+	out := make([]domain.AccountBlock, 0, len(blocks))
+	for _, b := range blocks {
+		blockPolicy := sanitizeText(b.Policy)
+		if blockPolicy == "" {
+			blockPolicy = policy
+		}
+		out = append(out, domain.AccountBlock{
+			Account: account,
+			Policy:  blockPolicy,
 			Code:    rejectCodeName(b.Code),
 			Reason:  sanitizeText(b.Reason),
 			Details: sanitizeText(b.Details),
@@ -1332,6 +1563,7 @@ func accountBlockFrom(
 	if block != nil {
 		return &domain.ExecutionAccountBlock{
 			Account: account,
+			Policy:  sanitizeText(block.Policy),
 			Code:    rejectCodeName(block.Code),
 			Reason:  sanitizeText(block.Reason),
 			Details: sanitizeText(block.Details),
@@ -1343,6 +1575,7 @@ func accountBlockFrom(
 		}
 		return &domain.ExecutionAccountBlock{
 			Account: account,
+			Policy:  sanitizeText(r.Policy),
 			Code:    rejectCodeName(r.Code),
 			Reason:  sanitizeText(r.Reason),
 			Details: sanitizeText(r.Details),
@@ -1465,6 +1698,7 @@ var rejectCodeNames = map[reject.Code]string{
 	reject.CodeSystemUnavailable:               "system_unavailable",
 	reject.CodeMarkPriceUnavailable:            "mark_price_unavailable",
 	reject.CodeAccountAdjustmentBoundsExceeded: "account_adjustment_bounds_exceeded",
+	reject.CodeArithmeticOverflow:              "arithmetic_overflow",
 	reject.CodeCustom:                          "custom",
 	reject.CodeOther:                           "other",
 }

@@ -82,16 +82,14 @@ func TestListLimitsSpotFundsPnlBoundsValues(t *testing.T) {
 	svc := &fakeService{
 		policyRows: []store.PolicyListRow{
 			{
-				Kind:            store.PolicyKindSpotFundsPnlBounds,
-				Scope:           domain.ScopeAccountGroup,
-				AccountGroup:    "desk-a",
-				AccountCurrency: "USD",
+				Kind:         store.PolicyKindSpotFundsPnlBounds,
+				Scope:        domain.ScopeAccountGroup,
+				AccountGroup: "desk-a",
 				SpotFundsPnlBounds: &domain.LimitSpotFundsPnlBounds{
-					Scope:           domain.ScopeAccountGroup,
-					AccountGroup:    "desk-a",
-					AccountCurrency: "USD",
-					LowerBound:      "-1000.50",
-					UpperBound:      "5000.25",
+					Scope:        domain.ScopeAccountGroup,
+					AccountGroup: "desk-a",
+					LowerBound:   "-1000.50",
+					UpperBound:   "5000.25",
 				},
 			},
 		},
@@ -138,7 +136,7 @@ func TestListLimits_FilterAndPaging(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
 		"/api/v1/limits?account=acc-1&accountGroup=desk-a&asset=AAPL"+
-			"&accountCurrency=USD&policy=rate&sort=scope&order=desc&limit=20&offset=40",
+			"&policy=rate&sort=scope&order=desc&limit=20&offset=40",
 		nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
@@ -162,15 +160,6 @@ func TestListLimits_FilterAndPaging(t *testing.T) {
 	}
 	if !svc.policyFilter.Asset.AnchorStart || !svc.policyFilter.Asset.AnchorEnd {
 		t.Fatalf("asset not exact-anchored: %+v", svc.policyFilter.Asset)
-	}
-	if got := svc.policyFilter.AccountCurrency.Fragments; len(got) != 1 ||
-		got[0] != "USD" {
-		t.Fatalf("account currency fragments = %v", got)
-	}
-	if !svc.policyFilter.AccountCurrency.AnchorStart ||
-		!svc.policyFilter.AccountCurrency.AnchorEnd {
-		t.Fatalf("account currency not exact-anchored: %+v",
-			svc.policyFilter.AccountCurrency)
 	}
 	if svc.policyFilter.Kind == nil || *svc.policyFilter.Kind != store.PolicyKindRate {
 		t.Fatalf("kind filter = %v", svc.policyFilter.Kind)
@@ -316,11 +305,10 @@ func TestPutSpotFundsPnlBoundsLimit(t *testing.T) {
 		limits: node.AccountLimits{
 			SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
 				{
-					Scope:           domain.ScopeAccountGroup,
-					AccountGroup:    "desk-a",
-					AccountCurrency: "USD",
-					LowerBound:      "-999",
-					UpperBound:      "5001",
+					Scope:        domain.ScopeAccountGroup,
+					AccountGroup: "desk-a",
+					LowerBound:   "-999",
+					UpperBound:   "5001",
 				},
 			},
 		},
@@ -330,7 +318,7 @@ func TestPutSpotFundsPnlBoundsLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bytes.NewBufferString(`{
-		"scope":"account_group","accountGroup":"desk-a","accountCurrency":"USD",
+		"scope":"account_group","accountGroup":"desk-a",
 		"lowerBound":"-1000","upperBound":"5000"
 	}`)
 	rec := httptest.NewRecorder()
@@ -347,7 +335,6 @@ func TestPutSpotFundsPnlBoundsLimit(t *testing.T) {
 	}
 	if svc.spotFundsPnlBoundsLimitPut.Scope != domain.ScopeAccountGroup ||
 		svc.spotFundsPnlBoundsLimitPut.AccountGroup != "desk-a" ||
-		svc.spotFundsPnlBoundsLimitPut.AccountCurrency != "USD" ||
 		svc.spotFundsPnlBoundsLimitPut.LowerBound != "-1000" ||
 		svc.spotFundsPnlBoundsLimitPut.UpperBound != "5000" {
 		t.Fatalf(
@@ -361,7 +348,6 @@ func TestPutSpotFundsPnlBoundsLimit(t *testing.T) {
 		t.Fatalf("response missing spotFundsPnlBoundsLimit field: %v", m)
 	}
 	if pbl["accountGroup"] != "desk-a" ||
-		pbl["accountCurrency"] != "USD" ||
 		pbl["lowerBound"] != "-999" ||
 		pbl["upperBound"] != "5001" {
 		t.Fatalf("unexpected persisted spotFundsPnlBoundsLimit: %v", pbl)
@@ -373,12 +359,11 @@ func TestPutSpotFundsPnlBoundsLimit_AccountInitialPnl(t *testing.T) {
 		limits: node.AccountLimits{
 			SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
 				{
-					Scope:           domain.ScopeAccount,
-					Account:         "acc-1",
-					AccountCurrency: "USD",
-					LowerBound:      "-999",
-					UpperBound:      "5001",
-					InitialPnl:      "12.50",
+					Scope:      domain.ScopeAccount,
+					Account:    "acc-1",
+					LowerBound: "-999",
+					UpperBound: "5001",
+					InitialPnl: "12.50",
 				},
 			},
 		},
@@ -388,7 +373,7 @@ func TestPutSpotFundsPnlBoundsLimit_AccountInitialPnl(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bytes.NewBufferString(`{
-		"scope":"account","account":"acc-1","accountCurrency":"USD",
+		"scope":"account","account":"acc-1",
 		"lowerBound":"-1000","upperBound":"5000","initialPnl":"12.50"
 	}`)
 	rec := httptest.NewRecorder()
@@ -451,7 +436,7 @@ func TestPutSpotFundsPnlBoundsLimit_NotImplemented(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := bytes.NewBufferString(`{"scope":"account","account":"acc-1","accountCurrency":"USD","lowerBound":"-1000","upperBound":"5000"}`)
+	body := bytes.NewBufferString(`{"scope":"account","account":"acc-1","lowerBound":"-1000","upperBound":"5000"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(
 		http.MethodPut,
@@ -480,7 +465,7 @@ func TestPutSpotFundsPnlBoundsLimit_EngineRestarting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := bytes.NewBufferString(`{"scope":"account","account":"acc-1","accountCurrency":"USD","lowerBound":"-1000","upperBound":"5000"}`)
+	body := bytes.NewBufferString(`{"scope":"account","account":"acc-1","lowerBound":"-1000","upperBound":"5000"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(
 		http.MethodPut,
@@ -597,7 +582,7 @@ func TestDeleteSpotFundsPnlBoundsLimit(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete,
 		"/api/v1/limits?policy=spot_funds_pnl_bounds_kill_switch"+
-			"&scope=account_group&accountGroup=desk-a&accountCurrency=USD",
+			"&scope=account_group&accountGroup=desk-a",
 		nil))
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("want 204, got %d", rec.Code)
@@ -605,7 +590,6 @@ func TestDeleteSpotFundsPnlBoundsLimit(t *testing.T) {
 	if svc.deleteLimitTarget.Policy != domain.PolicySpotFundsPnlBoundsKillSwitch ||
 		svc.deleteLimitTarget.Scope != domain.ScopeAccountGroup ||
 		svc.deleteLimitTarget.AccountGroup != "desk-a" ||
-		svc.deleteLimitTarget.AccountCurrency != "USD" ||
 		svc.deleteLimitTarget.Asset != "" {
 		t.Fatalf("captured delete target = %+v", svc.deleteLimitTarget)
 	}
@@ -637,7 +621,7 @@ func TestLimitDTO_JSONShape(t *testing.T) {
 			{Scope: domain.ScopeBroker, MaxQuantity: "500", MaxNotional: "50000"},
 		},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
-			{Scope: domain.ScopeAccount, Account: "acc-1", AccountCurrency: "USD",
+			{Scope: domain.ScopeAccount, Account: "acc-1",
 				LowerBound: "-1000", UpperBound: "5000", InitialPnl: "12.50"},
 		},
 	}
@@ -675,7 +659,6 @@ func TestLimitDTO_JSONShape(t *testing.T) {
 		"scope",
 		"account",
 		"accountGroup",
-		"accountCurrency",
 		"lowerBound",
 		"upperBound",
 		"initialPnl",

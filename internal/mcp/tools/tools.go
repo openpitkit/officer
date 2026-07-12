@@ -428,13 +428,12 @@ type orderSizeLimitDTO struct {
 }
 
 type spotFundsPnlBoundsLimitDTO struct {
-	Scope           string `json:"scope"`
-	Account         string `json:"account"`
-	AccountGroup    string `json:"accountGroup"`
-	AccountCurrency string `json:"accountCurrency"`
-	LowerBound      string `json:"lowerBound"`
-	UpperBound      string `json:"upperBound"`
-	InitialPnl      string `json:"initialPnl"`
+	Scope        string `json:"scope"`
+	Account      string `json:"account"`
+	AccountGroup string `json:"accountGroup"`
+	LowerBound   string `json:"lowerBound"`
+	UpperBound   string `json:"upperBound"`
+	InitialPnl   string `json:"initialPnl"`
 }
 
 type auditDTO struct {
@@ -540,13 +539,12 @@ func toLimitsDTO(l node.AccountLimits) limitsDTO {
 	)
 	for _, p := range l.SpotFundsPnlBoundsLimits {
 		spotFundsPnl = append(spotFundsPnl, spotFundsPnlBoundsLimitDTO{
-			Scope:           p.Scope,
-			Account:         string(p.Account),
-			AccountGroup:    p.AccountGroup,
-			AccountCurrency: p.AccountCurrency,
-			LowerBound:      p.LowerBound,
-			UpperBound:      p.UpperBound,
-			InitialPnl:      p.InitialPnl,
+			Scope:        p.Scope,
+			Account:      string(p.Account),
+			AccountGroup: p.AccountGroup,
+			LowerBound:   p.LowerBound,
+			UpperBound:   p.UpperBound,
+			InitialPnl:   p.InitialPnl,
 		})
 	}
 	return limitsDTO{

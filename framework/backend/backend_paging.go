@@ -246,8 +246,6 @@ func sortPolicyRows(rows []store.PolicyListRow, spec store.SortSpec) {
 			cmp = strings.Compare(left.Asset, right.Asset)
 		case "accountGroup":
 			cmp = strings.Compare(left.AccountGroup, right.AccountGroup)
-		case "accountCurrency":
-			cmp = strings.Compare(left.AccountCurrency, right.AccountCurrency)
 		case "initialPnl":
 			cmp = decimalStringCompare(policyInitialPnl(left), policyInitialPnl(right))
 		case "lowerBound":
@@ -339,7 +337,7 @@ func policyCompositeCompare(left, right store.PolicyListRow) int {
 	if cmp := strings.Compare(left.Asset, right.Asset); cmp != 0 {
 		return cmp
 	}
-	return strings.Compare(left.AccountCurrency, right.AccountCurrency)
+	return 0
 }
 
 func boolCompare(left, right bool) int {

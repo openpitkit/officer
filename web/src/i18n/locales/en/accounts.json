@@ -124,12 +124,21 @@
   "accounts": {
     "heading": "Accounts",
     "clearFilter": "(clear filter)",
+    "pnlHalt": {
+      "missingFx": "PnL calculation stopped: a required FX quote is unavailable.",
+      "missingAccountCurrency": "PnL calculation stopped: the account currency is unavailable.",
+      "missingInitialPnl": "PnL calculation stopped: an authoritative initial PnL value is unavailable.",
+      "missingCostBasis": "PnL calculation stopped: the position cost basis is unavailable.",
+      "arithmeticOverflow": "PnL calculation stopped: exact arithmetic exceeded the supported numeric range.",
+      "unknown": "PnL calculation stopped by the engine."
+    },
     "filteredTo": "— filtered to",
     "filteredToDefault": "default group",
     "columns": {
       "account": "Account",
       "group": "Group",
       "currency": "Currency",
+      "pnl": "PnL",
       "positions": "Pos",
       "status": "Status",
       "notes": "Notes",
@@ -139,6 +148,7 @@
       "account": "This column shows the account code and display title.",
       "group": "This column shows the group assigned to the account.",
       "currency": "Account currency.",
+      "pnl": "This column shows the exact account PnL reported by Spot Funds.",
       "positions": "This column shows how many position rows are stored for the account.",
       "status": "This column shows whether the account is active or blocked.",
       "notes": "This column shows the operator notes stored on the account.",
@@ -235,7 +245,7 @@
       "group": "group",
       "default": "default"
     },
-    "blockedHint": "This account has balance or P&L rows. The backend will reject a change that would alter its effective currency.",
+    "blockedHint": "This account holds non-zero positions or P&L. The backend will reject a change that would alter its effective currency.",
     "currencyLabel": "Account currency",
     "currencyHint": "Clear the field to inherit from group and default tiers. Without an effective account currency, realized P&L for this account is not computed.",
     "cancel": "Cancel",
@@ -245,7 +255,7 @@
     "title": "Edit group currency",
     "description": "Set the group currency for {{group}}.",
     "defaultDescription": "Set the reserved default group currency.",
-    "blockedHint": "The backend rejects changes that would alter effective currency for member accounts with balance or P&L rows.",
+    "blockedHint": "The backend rejects changes that would alter effective currency for member accounts holding non-zero positions or P&L.",
     "currencyLabel": "Group currency",
     "cancel": "Cancel",
     "submit": "Save"

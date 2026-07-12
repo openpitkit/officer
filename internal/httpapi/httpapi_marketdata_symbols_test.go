@@ -24,7 +24,6 @@ import (
 	"testing"
 
 	"go.openpit.dev/officer/framework/backend"
-	"go.openpit.dev/officer/framework/domain"
 )
 
 func TestVerifyMarketDataSymbol_Unsupported(t *testing.T) {
@@ -86,20 +85,4 @@ func TestVerifyMarketDataSymbol_SuggestionFlows(t *testing.T) {
 	if v["suggestion"] != "ETHUSDT" {
 		t.Fatalf("want suggestion=ETHUSDT, got %v", v["suggestion"])
 	}
-}
-
-// TestDeleteMarketDataInstance_HasDependents asserts the same 409 wire shape for
-// the market-data instance delete endpoint.
-func TestDeleteMarketDataInstance_HasDependents(t *testing.T) {
-	svc := &fakeService{stateErr: domain.NewHasDependentsError([]domain.DependentCount{
-		{Kind: "instruments", Count: 2},
-	})}
-	r, err := newRouter(svc)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete,
-		"/api/v1/market-data/instances/inst-1", nil))
-	assertHasDependents409(t, rec, "instruments", 2)
 }

@@ -82,6 +82,9 @@ func (r *memoryRealm) CreateAccount(
 	}
 	r.nextAccountID++
 	account.EngineAccountID = r.nextAccountID
+	if account.Pnl == "" {
+		account.Pnl = "0"
+	}
 	r.accounts[account.Code] = account
 	return account, nil
 }
@@ -178,6 +181,25 @@ func (r *memoryRealm) SetAccountCurrency(
 		}
 	}
 	account.Currency = currency
+	r.accounts[code] = account
+	return nil
+}
+
+func (r *memoryRealm) SetAccountPnl(
+	_ context.Context,
+	code domain.AccountID,
+	pnl string,
+	haltReason domain.PnlHaltReason,
+) error {
+	account, ok := r.accounts[code]
+	if !ok {
+		return domain.ErrNotFound
+	}
+	if err := domain.ValidatePnlHaltReason(haltReason); err != nil {
+		return err
+	}
+	account.Pnl = pnl
+	account.PnlHaltReason = haltReason
 	r.accounts[code] = account
 	return nil
 }
@@ -309,7 +331,6 @@ func renameSpotFundsPnlBoundsLimits(
 				limit.Scope,
 				limit.Account,
 				limit.AccountGroup,
-				limit.AccountCurrency,
 			)
 		}
 		out[key] = limit

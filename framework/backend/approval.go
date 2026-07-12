@@ -1090,6 +1090,7 @@ func attestationBlocks(blocks []domain.ExecutionAccountBlock) []domain.Attestati
 	for _, b := range blocks {
 		out = append(out, domain.AttestationBlock{
 			Account: string(b.Account),
+			Policy:  b.Policy,
 			Code:    b.Code,
 			Reason:  b.Reason,
 			Details: b.Details,

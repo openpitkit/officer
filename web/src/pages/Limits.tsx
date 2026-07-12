@@ -22,6 +22,7 @@ import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 
 import type {
+  Account,
   Limit,
   PolicyFilter,
   PolicyListFilters,
@@ -184,9 +185,6 @@ function policyRowHref(limit: Limit): string {
   if ((limit.accountGroup ?? "") !== "") {
     query.set("accountGroup", limit.accountGroup ?? "");
   }
-  if ((limit.accountCurrency ?? "") !== "") {
-    query.set("accountCurrency", limit.accountCurrency ?? "");
-  }
   query.set("policy", limit.policy);
   return `/policies?${query.toString()}`;
 }
@@ -223,7 +221,6 @@ function DeleteConfirm({
         account: target.account,
         accountGroup: target.accountGroup,
         asset: target.asset,
-        accountCurrency: target.accountCurrency,
       });
       onOpenChange(false);
       onDone();
@@ -253,10 +250,6 @@ function DeleteConfirm({
                   : "",
                 asset: target?.asset
                   ? t("delete.assetFragment", { asset: target.asset })
-                  : target?.accountCurrency
-                    ? t("delete.accountCurrencyFragment", {
-                        accountCurrency: target.accountCurrency,
-                      })
                   : "",
               })}
             </span>
@@ -387,12 +380,12 @@ function PoliciesTable({
         <TableBody>
           {limits.map((limit) => {
             const accountAxis = limit.account || limit.accountGroup || "";
-            const assetAxis = limit.asset || limit.accountCurrency || "";
+            const assetAxis = limit.asset;
             const isAccountFilterable = limit.account.length > 0;
             const isAssetFilterable = limit.asset.length > 0;
             return (
               <TableRow
-                key={`${limit.policy}|${limit.scope}|${limit.account}|${limit.accountGroup ?? ""}|${limit.asset}|${limit.accountCurrency ?? ""}`}
+                key={`${limit.policy}|${limit.scope}|${limit.account}|${limit.accountGroup ?? ""}|${limit.asset}`}
                 className="hover:bg-transparent"
               >
                 <TableCell>
@@ -498,16 +491,12 @@ export function Limits() {
   const initialAccount = searchParams.get("account") ?? "";
   const initialAccountGroup = searchParams.get("accountGroup") ?? "";
   const initialAsset = searchParams.get("asset") ?? "";
-  const initialAccountCurrency = searchParams.get("accountCurrency") ?? "";
 
   const [accountFilter, setAccountFilter] = useState(initialAccount);
   const [accountGroupFilter, setAccountGroupFilter] = useState(
     initialAccountGroup,
   );
   const [assetFilter, setAssetFilter] = useState(initialAsset);
-  const [accountCurrencyFilter, setAccountCurrencyFilter] = useState(
-    initialAccountCurrency,
-  );
   const [accountDraft, setAccountDraft] = useState(initialAccount);
   const [assetDraft, setAssetDraft] = useState(initialAsset);
   const [policyFilter, setPolicyFilter] = useState<PolicyFilter>(() =>
@@ -527,7 +516,6 @@ export function Limits() {
     accountFilter !== "" ||
     accountGroupFilter !== "" ||
     assetFilter !== "" ||
-    accountCurrencyFilter !== "" ||
     policyFilter !== ALL;
   const clearFilters = () => {
     setAccountDraft("");
@@ -535,7 +523,6 @@ export function Limits() {
     setAccountGroupFilter("");
     setAssetDraft("");
     setAssetFilter("");
-    setAccountCurrencyFilter("");
     setPolicyFilter(ALL);
     setPage(0);
   };
@@ -546,7 +533,6 @@ export function Limits() {
         account: accountFilter || undefined,
         accountGroup: accountGroupFilter || undefined,
         asset: assetFilter || undefined,
-        accountCurrency: accountCurrencyFilter || undefined,
         policy: policyFilter,
         sort: sort.sort,
         order: sort.order,
@@ -558,7 +544,6 @@ export function Limits() {
     [
       accountFilter,
       accountGroupFilter,
-      accountCurrencyFilter,
       assetFilter,
       page,
       policyFilter,
@@ -599,12 +584,13 @@ export function Limits() {
     reloadPolicyCounts();
   }, [reload, reloadPolicyCounts]);
 
-  const [accountSuggestions, setAccountSuggestions] = useState<string[]>([]);
+  const [accountSuggestions, setAccountSuggestions] = useState<Account[]>([]);
   const [assetSuggestions, setAssetSuggestions] = useState<string[]>([]);
   const [accountGroupSuggestions, setAccountGroupSuggestions] = useState<string[]>([]);
-  const [currencySuggestions, setCurrencySuggestions] = useState<string[]>([]);
   const visibleAccountSuggestions =
-    deferredAccountDraft.trim() === "" ? [] : accountSuggestions;
+    deferredAccountDraft.trim() === ""
+      ? []
+      : accountSuggestions.map((account) => account.code);
   const visibleAssetSuggestions =
     deferredAssetDraft.trim() === "" ? [] : assetSuggestions;
 
@@ -618,9 +604,7 @@ export function Limits() {
       { code: query, codeMatch: "starts_with", limit: 8, sort: "code" },
       controller.signal,
     )
-      .then((accounts) =>
-        setAccountSuggestions(accounts.map((account) => account.code)),
-      )
+      .then(setAccountSuggestions)
       .catch((err: unknown) => {
         if (!controller.signal.aborted) {
           console.error(err);
@@ -657,40 +641,21 @@ export function Limits() {
       return;
     }
     const controller = new AbortController();
-    void Promise.all([
-      fetchGroups({ limit: 1000, sort: "code" }, controller.signal),
-      fetchAccounts({ limit: 1000, sort: "code" }, controller.signal),
-    ])
-      .then(([groups, accounts]) => {
+    void fetchGroups({ limit: 1000, sort: "code" }, controller.signal)
+      .then((groups) => {
         const groupCodes = groups
           .map((group) => group.code)
           .filter((code) => code !== "");
-        const currencyCodes = new Set<string>();
-        for (const group of groups) {
-          if (group.currency) {
-            currencyCodes.add(group.currency);
-          }
-        }
-        for (const account of accounts) {
-          if (account.currency) {
-            currencyCodes.add(account.currency);
-          }
-          if (account.effectiveCurrency) {
-            currencyCodes.add(account.effectiveCurrency);
-          }
-        }
         setAccountGroupSuggestions(groupCodes);
-        setCurrencySuggestions([...currencyCodes].sort());
       })
       .catch((err: unknown) => {
         if (!controller.signal.aborted) {
           console.error(err);
           setAccountGroupSuggestions([]);
-          setCurrencySuggestions([]);
         }
       });
     return () => controller.abort();
-  }, [fetchAccounts, fetchGroups]);
+  }, [fetchGroups]);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Limit | null>(null);
@@ -761,7 +726,6 @@ export function Limits() {
     const account = accountFilter.trim();
     const accountGroup = accountGroupFilter.trim();
     const asset = assetFilter.trim();
-    const accountCurrency = accountCurrencyFilter.trim();
     if (account !== "") {
       query.set("account", account);
     }
@@ -770,9 +734,6 @@ export function Limits() {
     }
     if (asset !== "") {
       query.set("asset", asset);
-    }
-    if (accountCurrency !== "") {
-      query.set("accountCurrency", accountCurrency);
     }
     if (policyFilter !== ALL) {
       query.set("policy", policyFilter);
@@ -789,7 +750,6 @@ export function Limits() {
     accountFilter,
     accountGroupFilter,
     assetFilter,
-    accountCurrencyFilter,
     policyFilter,
     sort.order,
     sort.sort,
@@ -969,9 +929,8 @@ export function Limits() {
         editing={editing}
         initialAccount={initialAccount}
         assetSuggestions={assetSuggestions}
-        accountSuggestions={accountSuggestions}
+        accountSuggestions={accountSuggestions.map((account) => account.code)}
         accountGroupSuggestions={accountGroupSuggestions}
-        currencySuggestions={currencySuggestions}
         policyCounts={policyCounts}
         onOpenChange={setDialogOpen}
         onSaved={reloadLimits}
@@ -981,6 +940,7 @@ export function Limits() {
         open={deleteTarget !== null}
         requiresEngineRebuild={
           deleteTarget !== null &&
+          deleteTarget.policy !== "spot_funds_pnl_bounds_kill_switch" &&
           policyCounts[deleteTarget.policy] !== undefined &&
           policyCounts[deleteTarget.policy] <= 1
         }

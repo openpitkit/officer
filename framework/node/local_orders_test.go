@@ -97,6 +97,284 @@ func TestLocalNode_SubmitOrderPersistsPreTradeBalances(t *testing.T) {
 	}
 }
 
+func TestLocalNode_SubmitImmediatePanelDoesNotInferAccountPnl(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.submitOutcomes = []engine.BalanceOutcome{
+		{
+			Asset: "AAPL",
+			Outcome: domain.AdjustmentOutcomeAccepted{
+				BalanceResult: "2", RealizedPnlResult: "9",
+			},
+		},
+		{
+			Asset: "USD",
+			Outcome: domain.AdjustmentOutcomeAccepted{
+				BalanceResult: "800", RealizedPnlResult: "2.5",
+			},
+		},
+	}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	if _, err := n.CreateAccount(ctx, domain.Account{
+		Code: "acc-1", Currency: "USD",
+	}, testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	panelCaller := testCaller
+	panelCaller.Source = domain.SourcePanel
+	order, result, err := n.SubmitImmediate(ctx, testKey("acc-1"), domain.Order{
+		BaseAsset:   "AAPL",
+		QuoteAsset:  "USD",
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "2",
+		Price:       "100",
+	}, panelCaller)
+	if err != nil {
+		t.Fatalf("SubmitImmediate: %v", err)
+	}
+	if !result.Accepted || order.Source != domain.SourcePanel {
+		t.Fatalf("immediate result=%+v order=%+v, want accepted panel order", result, order)
+	}
+	account, ok, err := st.GetAccount(ctx, "acc-1")
+	if err != nil || !ok {
+		t.Fatalf("GetAccount: ok=%v err=%v", ok, err)
+	}
+	if account.Pnl != "0" {
+		t.Fatalf("account pnl = %q, want unchanged 0", account.Pnl)
+	}
+	quote, ok, err := st.GetBalance(ctx, "acc-1", "USD")
+	if err != nil || !ok {
+		t.Fatalf("GetBalance USD: ok=%v err=%v", ok, err)
+	}
+	if quote.RealizedPnl != "2.5" {
+		t.Fatalf("quote realized pnl = %q, want 2.5", quote.RealizedPnl)
+	}
+}
+
+func TestLocalNode_SubmitImmediatePersistsAuthoritativeAccountPnl(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.submitAccountPnl = "12.340"
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	if _, err := n.CreateAccount(ctx, domain.Account{
+		Code:          "acc-1",
+		Currency:      "USD",
+		Pnl:           "7",
+		PnlHaltReason: domain.PnlHaltReasonMissingFx,
+	}, testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	_, result, err := n.SubmitImmediate(ctx, testKey("acc-1"), domain.Order{
+		BaseAsset:   "AAPL",
+		QuoteAsset:  "USD",
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "2",
+		Price:       "100",
+	}, testCaller)
+	if err != nil {
+		t.Fatalf("SubmitImmediate: %v", err)
+	}
+	if result.AccountPnl != "12.340" || result.AccountPnlHaltReason != "" {
+		t.Fatalf("immediate result = %+v, want authoritative account pnl", result)
+	}
+	account, ok, err := st.GetAccount(ctx, "acc-1")
+	if err != nil || !ok {
+		t.Fatalf("GetAccount: ok=%v err=%v", ok, err)
+	}
+	if account.Pnl != "12.340" || account.PnlHaltReason != "" {
+		t.Fatalf("account = %+v, want pnl 12.340 and cleared halt", account)
+	}
+}
+
+func TestLocalNode_SubmitImmediatePersistsAuthoritativeAccountPnlHalt(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.submitAccountPnlHaltReason = domain.PnlHaltReasonArithmeticOverflow
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	if _, err := n.CreateAccount(ctx, domain.Account{
+		Code: "acc-1", Currency: "USD", Pnl: "7",
+	}, testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	_, result, err := n.SubmitImmediate(ctx, testKey("acc-1"), domain.Order{
+		BaseAsset:   "AAPL",
+		QuoteAsset:  "USD",
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "2",
+		Price:       "100",
+	}, testCaller)
+	if err != nil {
+		t.Fatalf("SubmitImmediate: %v", err)
+	}
+	if result.AccountPnl != "" ||
+		result.AccountPnlHaltReason != domain.PnlHaltReasonArithmeticOverflow {
+		t.Fatalf("immediate result = %+v, want arithmetic-overflow halt", result)
+	}
+	account, ok, err := st.GetAccount(ctx, "acc-1")
+	if err != nil || !ok {
+		t.Fatalf("GetAccount: ok=%v err=%v", ok, err)
+	}
+	if account.Pnl != "7" ||
+		account.PnlHaltReason != domain.PnlHaltReasonArithmeticOverflow {
+		t.Fatalf("account = %+v, want preserved pnl and arithmetic-overflow halt", account)
+	}
+}
+
+func TestLocalNode_SubmitImmediateLeavesAccountPnlWithoutMatchingOutcome(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.submitOutcomes = []engine.BalanceOutcome{{
+		Asset: "AAPL",
+		Outcome: domain.AdjustmentOutcomeAccepted{
+			BalanceResult: "2", RealizedPnlResult: "99",
+		},
+	}}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	if _, err := n.CreateAccount(ctx, domain.Account{
+		Code: "acc-1", Currency: "USD", Pnl: "7",
+	}, testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	_, _, err := n.SubmitImmediate(ctx, testKey("acc-1"), domain.Order{
+		BaseAsset:   "AAPL",
+		QuoteAsset:  "USD",
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "2",
+		Price:       "100",
+	}, testCaller)
+	if err != nil {
+		t.Fatalf("SubmitImmediate: %v", err)
+	}
+	account, ok, err := st.GetAccount(ctx, "acc-1")
+	if err != nil || !ok {
+		t.Fatalf("GetAccount: ok=%v err=%v", ok, err)
+	}
+	if account.Pnl != "7" {
+		t.Fatalf("account pnl = %q, want unchanged 7", account.Pnl)
+	}
+}
+
+func TestLocalNode_SubmitImmediateDoesNotSelectAccountPnlFromBalanceOutcomes(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.submitOutcomes = []engine.BalanceOutcome{
+		{
+			Asset: "USD",
+			Outcome: domain.AdjustmentOutcomeAccepted{
+				BalanceResult: "800", RealizedPnlResult: "2.5",
+			},
+		},
+		{
+			Asset: "USD",
+			Outcome: domain.AdjustmentOutcomeAccepted{
+				RealizedPnlResult: "3.5",
+			},
+		},
+	}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	if _, err := n.CreateAccount(ctx, domain.Account{
+		Code: "acc-1", Currency: "USD",
+	}, testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	_, _, err := n.SubmitImmediate(ctx, testKey("acc-1"), domain.Order{
+		BaseAsset:   "AAPL",
+		QuoteAsset:  "USD",
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "2",
+		Price:       "100",
+	}, testCaller)
+	if err != nil {
+		t.Fatalf("SubmitImmediate: %v", err)
+	}
+	account, ok, err := st.GetAccount(ctx, "acc-1")
+	if err != nil || !ok {
+		t.Fatalf("GetAccount: ok=%v err=%v", ok, err)
+	}
+	if account.Pnl != "0" {
+		t.Fatalf("account pnl = %q, want unchanged 0", account.Pnl)
+	}
+}
+
+func TestLocalNode_SubmitImmediateDoesNotUseEffectiveCurrencyToInferAccountPnl(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.submitOutcomes = []engine.BalanceOutcome{
+		{
+			Asset: "USD",
+			Outcome: domain.AdjustmentOutcomeAccepted{
+				RealizedPnlResult: "2.5",
+			},
+		},
+		{
+			Asset: "EUR",
+			Outcome: domain.AdjustmentOutcomeAccepted{
+				RealizedPnlResult: "4.5",
+			},
+		},
+	}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	if _, err := n.CreateAccount(ctx, domain.Account{
+		Code: "acc-1", Currency: "USD",
+	}, testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	n.engineMu.Lock()
+	n.engine = &currencyChangingAccountLaneEngine{
+		fakeEngine: eng,
+		beforeLane: func() error {
+			return st.SetAccountCurrency(ctx, "acc-1", "EUR")
+		},
+	}
+	n.engineMu.Unlock()
+
+	_, _, err := n.SubmitImmediate(ctx, testKey("acc-1"), domain.Order{
+		BaseAsset:   "AAPL",
+		QuoteAsset:  "USD",
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "2",
+		Price:       "100",
+	}, testCaller)
+	if err != nil {
+		t.Fatalf("SubmitImmediate: %v", err)
+	}
+	account, ok, err := st.GetAccount(ctx, "acc-1")
+	if err != nil || !ok {
+		t.Fatalf("GetAccount: ok=%v err=%v", ok, err)
+	}
+	if account.EffectiveCurrency != "EUR" || account.Pnl != "0" {
+		t.Fatalf("account = %+v, want effective EUR and unchanged pnl", account)
+	}
+}
+
+type currencyChangingAccountLaneEngine struct {
+	*fakeEngine
+	beforeLane func() error
+}
+
+func (e *currencyChangingAccountLaneEngine) RunAccountSynchronized(
+	ctx context.Context,
+	account domain.AccountID,
+	fn func(engine.AccountLane) error,
+) error {
+	if err := e.beforeLane(); err != nil {
+		return err
+	}
+	return e.fakeEngine.RunAccountSynchronized(ctx, account, fn)
+}
+
 func TestLocalNode_SubmitOrderPostEngineStoreFailureFatals(t *testing.T) {
 	t.Parallel()
 	storeErr := errors.New("record order submission failed")
@@ -146,8 +424,61 @@ func TestLocalNode_SubmitOrderPostEngineStoreFailureFatals(t *testing.T) {
 	}
 }
 
-// TestLocalNode_SubmitImmediatePostEngineStoreFailureFatals mirrors the
-// SubmitOrder fatal test for the immediate path: the engine applies the order
+// TestLocalNode_SubmitImmediateDoesNotReadAccountDuringSubmissionApply guards
+// against reading the realm while RecordOrderSubmission owns its transaction.
+func TestLocalNode_SubmitImmediateDoesNotReadAccountDuringSubmissionApply(
+	t *testing.T,
+) {
+	t.Parallel()
+	var guard *accountReadGuardRealm
+	st := newRealmWrapStore(
+		newMemoryStore("node.db"),
+		func(realm store.RealmStore) store.RealmStore {
+			guard = &accountReadGuardRealm{RealmStore: realm}
+			return guard
+		},
+	)
+	ctx := context.Background()
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	n := newTestNodeWithStore(t, st, newFakeEngine())
+	if _, err := n.CreateAccount(
+		ctx, testAccount("acc-1"), testCaller,
+	); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+
+	order, result, err := n.SubmitImmediate(
+		ctx,
+		testKey("acc-1"),
+		domain.Order{
+			BaseAsset:   "AAPL",
+			QuoteAsset:  "USD",
+			Side:        domain.OrderSideBuy,
+			AmountKind:  domain.OrderAmountKindQuantity,
+			AmountValue: "20",
+			Price:       "100",
+		},
+		testCaller,
+	)
+	if err != nil {
+		t.Fatalf("SubmitImmediate: %v", err)
+	}
+	if !result.Accepted {
+		t.Fatalf("order=%+v result=%+v, want accepted", order, result)
+	}
+	if guard == nil {
+		t.Fatal("account read guard was not installed")
+	}
+	if guard.accountReadDuringApply {
+		t.Fatal("GetAccount was called during order submission apply")
+	}
+}
+
+// TestLocalNode_SubmitImmediatePostEngineStoreFailureFatals proves the engine evaluates
 // inside RecordOrderSubmission's apply callback, then the store write fails, so
 // the settlement can never be persisted and the node must fail-stop with the
 // "record immediate submission" operation label.

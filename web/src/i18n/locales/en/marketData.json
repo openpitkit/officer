@@ -249,10 +249,9 @@
   },
   "deleteInstance": {
     "title": "Delete market-data source?",
-    "description": "{{label}} will be permanently removed. Configured instruments are deleted only after explicit force confirmation.",
+    "description": "{{label}} will be permanently removed.",
     "cancel": "Cancel",
-    "submit": "Delete",
-    "forceSubmit": "Force delete"
+    "submit": "Delete"
   },
   "deleteInstrument": {
     "title": "Delete instrument?",

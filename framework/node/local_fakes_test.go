@@ -40,9 +40,16 @@ type fakeEngine struct {
 	knownGroups       map[string]struct{}
 	accountCurrencies map[domain.AccountID]string
 
-	configureCalls []configureCall
-	blockCalls     []blockCall
-	unblockCalls   []domain.AccountID
+	// accountPnlCalls records every engine P&L assignment in order, and
+	// accountPnlBlocks are the blocks the engine reports back for an account.
+	accountPnlCalls  []accountPnlCall
+	accountPnlBlocks map[domain.AccountID][]domain.AccountBlock
+
+	configureCalls  []configureCall
+	configurePnls   []engine.AccountPnlUpdate
+	configureBlocks []domain.AccountBlock
+	blockCalls      []blockCall
+	unblockCalls    []domain.AccountID
 
 	adjustmentCalls        []adjustmentCall
 	adjustmentBatchCalls   []adjustmentBatchCall
@@ -61,6 +68,8 @@ type fakeEngine struct {
 	submitLock                 []byte
 	submitLeaves               string
 	submitOutcomes             []engine.BalanceOutcome
+	submitAccountPnl           string
+	submitAccountPnlHaltReason domain.PnlHaltReason
 	submitReject               *domain.OrderReject
 	execReportBlocks           []domain.ExecutionAccountBlock
 	execReportOutcomes         []engine.BalanceOutcome
@@ -84,6 +93,7 @@ type fakeEngine struct {
 	// propagates through the node.
 	configureErr       error
 	accountCurrencyErr error
+	accountPnlErr      error
 
 	failConfigure     bool
 	failBlock         bool
@@ -106,6 +116,11 @@ type configureCall struct {
 type blockCall struct {
 	id     domain.AccountID
 	reason string
+}
+
+type accountPnlCall struct {
+	id  domain.AccountID
+	pnl string
 }
 
 type adjustmentCall struct {
@@ -236,15 +251,18 @@ func (e *fakeEngine) Running() bool        { return e.running }
 
 func (e *fakeEngine) ConfigurePolicy(
 	_ context.Context, policy string, limits engine.LimitSet,
-) error {
+) (engine.PolicyConfigurationResult, error) {
 	if e.configureErr != nil {
-		return e.configureErr
+		return engine.PolicyConfigurationResult{}, e.configureErr
 	}
 	if e.failConfigure {
-		return errors.New("configure failed")
+		return engine.PolicyConfigurationResult{}, errors.New("configure failed")
 	}
 	e.configureCalls = append(e.configureCalls, configureCall{policy, limits})
-	return nil
+	return engine.PolicyConfigurationResult{
+		AccountPnlUpdates: e.configurePnls,
+		AccountBlocks:     e.configureBlocks,
+	}, nil
 }
 
 func (e *fakeEngine) BlockAccount(
@@ -295,6 +313,22 @@ func (e *fakeEngine) ClearAccountCurrency(
 	}
 	delete(e.accountCurrencies, id)
 	return nil
+}
+
+func (e *fakeEngine) SetAccountPnl(
+	_ context.Context, id domain.AccountID, pnl string,
+) ([]domain.AccountBlock, error) {
+	if err := e.checkKnownAccount(id); err != nil {
+		return nil, err
+	}
+	if e.accountPnlErr != nil {
+		return nil, e.accountPnlErr
+	}
+	e.accountPnlCalls = append(e.accountPnlCalls, accountPnlCall{id, pnl})
+	if e.accountPnlBlocks == nil {
+		return nil, nil
+	}
+	return e.accountPnlBlocks[id], nil
 }
 
 func (e *fakeEngine) ApplyAccountAdjustment(
@@ -413,9 +447,13 @@ func (e *fakeEngine) SubmitImmediate(
 		return engine.ImmediateResult{Accepted: false, Rejects: []domain.OrderReject{*e.submitReject}}, nil
 	}
 	return engine.ImmediateResult{
-		Accepted:     true,
-		Lock:         e.submitLock,
-		FillQuantity: o.AmountValue,
+		Accepted:             true,
+		Lock:                 e.submitLock,
+		Outcomes:             e.submitOutcomes,
+		AccountPnl:           e.submitAccountPnl,
+		AccountPnlHaltReason: e.submitAccountPnlHaltReason,
+		SettlementLockPrice:  o.Price,
+		FillQuantity:         o.AmountValue,
 	}, nil
 }
 
@@ -754,6 +792,44 @@ func (s *accountAdjustmentRecordProbeRealm) RecordAccountAdjustment(
 ) (domain.AccountAdjustmentRecord, error) {
 	s.records = append(s.records, in)
 	return s.RealmStore.RecordAccountAdjustment(ctx, in)
+}
+
+type accountReadGuardRealm struct {
+	store.RealmStore
+	inOrderApply           bool
+	accountReadDuringApply bool
+}
+
+func (s *accountReadGuardRealm) RecordOrderSubmission(
+	ctx context.Context,
+	o domain.Order,
+	submitted domain.OrderEvent,
+	apply func(domain.Order) (domain.OrderSettlement, error),
+) (domain.Order, error) {
+	return s.RealmStore.RecordOrderSubmission(
+		ctx,
+		o,
+		submitted,
+		func(persisted domain.Order) (domain.OrderSettlement, error) {
+			s.inOrderApply = true
+			defer func() {
+				s.inOrderApply = false
+			}()
+			return apply(persisted)
+		},
+	)
+}
+
+func (s *accountReadGuardRealm) GetAccount(
+	ctx context.Context, code domain.AccountID,
+) (domain.Account, bool, error) {
+	if s.inOrderApply {
+		s.accountReadDuringApply = true
+		return domain.Account{}, false, errors.New(
+			"GetAccount called during order submission apply",
+		)
+	}
+	return s.RealmStore.GetAccount(ctx, code)
 }
 
 type failOrderSubmissionAfterApplyRealm struct {

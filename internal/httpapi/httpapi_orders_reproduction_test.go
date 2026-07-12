@@ -455,11 +455,9 @@ func TestOrderReproduction_ESignOff(t *testing.T) {
 	}
 }
 
-// TestOrderReproduction_SignedResultCommission proves an execution report
-// settled with a structured commission binds that commission into the signed
-// attestation: the reproduced canonicalApproval - the byte-identical signed
-// form - carries the commission amount and currency.
-func TestOrderReproduction_SignedResultCommission(t *testing.T) {
+// TestOrderReproduction_SignedResultFields proves an execution report preserves
+// structured commission and account block policy in its reproduction bundle.
+func TestOrderReproduction_SignedResultFields(t *testing.T) {
 	ctx := context.Background()
 	st := newReproSigningStore()
 	signer, err := appsigning.New(st)
@@ -475,7 +473,8 @@ func TestOrderReproduction_SignedResultCommission(t *testing.T) {
 		t.Fatalf("public key by id: %v", err)
 	}
 
-	id := extID("repro-commission")
+	id := extID("repro-result-fields")
+	const blockPolicy = domain.PolicySpotFundsPnlBoundsKillSwitch
 	payload := reproPayload(id)
 	payload.RequestType = string(domain.AttestationRequestExecutionReport)
 	payload.Result = &domain.AttestationResult{
@@ -486,7 +485,13 @@ func TestOrderReproduction_SignedResultCommission(t *testing.T) {
 		Commission:     &domain.Commission{Amount: "-0.30", Currency: "USDT"},
 		LeavesQuantity: "6.5",
 		OrderStatus:    string(domain.OrderStatusPartiallyFilled),
-		Blocks:         []domain.AttestationBlock{},
+		Blocks: []domain.AttestationBlock{{
+			Account: "acc-1",
+			Policy:  blockPolicy,
+			Code:    "pnl_bound_breached",
+			Reason:  "lower bound breached",
+			Details: "realized=-1500,lower=-1000",
+		}},
 	}
 	token, err := signer.Sign(payload)
 	if err != nil {
@@ -513,6 +518,26 @@ func TestOrderReproduction_SignedResultCommission(t *testing.T) {
 	// The signed bytes bind the structured commission (amount + currency).
 	if !strings.Contains(canon, `"commission":{"amount":"-0.30","currency":"USDT"}`) {
 		t.Fatalf("canonicalApproval missing structured commission:\n%s", canon)
+	}
+	request, ok := m["request"].(map[string]any)
+	if !ok {
+		t.Fatalf("want request object, got %T", m["request"])
+	}
+	result, ok := request["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("want request.result object, got %T", request["result"])
+	}
+	blocks, ok := result["blocks"].([]any)
+	if !ok || len(blocks) != 1 {
+		t.Fatalf("want one request.result block, got %#v", result["blocks"])
+	}
+	block, ok := blocks[0].(map[string]any)
+	if !ok {
+		t.Fatalf("want request.result block object, got %T", blocks[0])
+	}
+	if block["policy"] != blockPolicy {
+		t.Fatalf("request.result block policy = %v, want %s",
+			block["policy"], blockPolicy)
 	}
 }
 

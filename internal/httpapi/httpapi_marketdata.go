@@ -178,7 +178,7 @@ func handleDeleteMarketDataInstance(svc Service) http.HandlerFunc {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
-		if err := svc.DeleteMarketDataInstance(r.Context(), id, forceQuery(r)); err != nil {
+		if err := svc.DeleteMarketDataInstance(r.Context(), id); err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}

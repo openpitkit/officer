@@ -43,6 +43,7 @@ const fetchAssetClassesMock = vi.fn();
 const fetchMarketDataMock = vi.fn();
 const putLimitMock = vi.fn();
 const restartMarketDataMock = vi.fn();
+const setAccountCurrencyMock = vi.fn();
 const setAccountNotesMock = vi.fn();
 const setMarketDataInstanceEnabledMock = vi.fn();
 const upsertMarketDataInstrumentMock = vi.fn();
@@ -129,6 +130,7 @@ function renderWelcome(onOpenChange = vi.fn()) {
     fetchMarketData: fetchMarketDataMock,
     putLimit: putLimitMock,
     restartMarketData: restartMarketDataMock,
+    setAccountCurrency: setAccountCurrencyMock,
     setAccountNotes: setAccountNotesMock,
     setMarketDataInstanceEnabled: setMarketDataInstanceEnabledMock,
     setWelcomeSeen: setWelcomeSeenMock,
@@ -181,6 +183,7 @@ beforeEach(() => {
   restartMarketDataMock.mockResolvedValue(
     marketDataStatus({ instances: [byoInstance()] }),
   );
+  setAccountCurrencyMock.mockResolvedValue({});
   setWelcomeSeenMock.mockResolvedValue(true);
 });
 
@@ -343,7 +346,7 @@ describe("WelcomeDialog", () => {
     await waitFor(() => {
       expect(
         screen.getByText(
-          /Install FX and crypto static prices partially applied: 13 rows updated before failure: provider refused/i,
+          /Install FX and crypto static prices partially applied: 19 rows updated before failure: provider refused/i,
         ),
       ).toBeDefined();
     });
@@ -366,6 +369,12 @@ describe("WelcomeDialog", () => {
         notes:
           "Native crypto assets used for demo balances and crypto venue risk checks.",
       }),
+      assetClass({
+        code: "equity",
+        title: "Equities",
+        notes:
+          "Company shares and private-market equity positions used in demo portfolios.",
+      }),
     ]);
     fetchAssetsMock.mockResolvedValue([
       asset({ code: "USD", title: "", assetClass: "auto-created" }),
@@ -376,6 +385,11 @@ describe("WelcomeDialog", () => {
       asset({ code: "USDC", title: "", assetClass: "auto-created" }),
       asset({ code: "EURI", title: "", assetClass: "auto-created" }),
       asset({ code: "AEUR", title: "", assetClass: "auto-created" }),
+      asset({ code: "AAPL", title: "", assetClass: "auto-created" }),
+      asset({ code: "NVDA", title: "", assetClass: "auto-created" }),
+      asset({ code: "SPCX", title: "", assetClass: "auto-created" }),
+      asset({ code: "META", title: "", assetClass: "auto-created" }),
+      asset({ code: "KO", title: "", assetClass: "auto-created" }),
     ]);
     renderWelcome();
 
@@ -420,6 +434,8 @@ describe("WelcomeDialog", () => {
     );
 
     await waitFor(() => {
+      expect(createAccountMock).toHaveBeenCalledWith("demo-main", "", "USD");
+      expect(setAccountCurrencyMock).toHaveBeenCalledWith("demo-main", "USD");
       expect(createAssetClassMock).toHaveBeenCalledWith(
         "crypto",
         "Crypto assets",
@@ -445,15 +461,73 @@ describe("WelcomeDialog", () => {
         "Tether USD",
         "stablecoin",
       );
-      expect(createAdjustmentMock).toHaveBeenCalledTimes(4);
+      expect(createAssetClassMock).toHaveBeenCalledWith(
+        "equity",
+        "Equities",
+        "Company shares and private-market equity positions used in demo portfolios.",
+      );
+      expect(createAssetMock).toHaveBeenCalledWith(
+        "AAPL",
+        "Apple Inc.",
+        "equity",
+      );
+      expect(createAssetMock).toHaveBeenCalledWith(
+        "NVDA",
+        "NVIDIA Corp.",
+        "equity",
+      );
+      expect(createAssetMock).toHaveBeenCalledWith(
+        "SPCX",
+        "SpaceX",
+        "equity",
+      );
+      expect(createAssetMock).toHaveBeenCalledWith(
+        "META",
+        "Facebook / Meta Platforms",
+        "equity",
+      );
+      expect(createAssetMock).toHaveBeenCalledWith(
+        "KO",
+        "The Coca-Cola Company",
+        "equity",
+      );
+      expect(createAdjustmentMock).toHaveBeenCalledTimes(9);
       expect(createAdjustmentMock).toHaveBeenCalledWith("demo-main", {
         asset: "USD",
         balance: { mode: "absolute", value: "100000" },
         averageEntryPrice: "1",
       });
+      expect(createAdjustmentMock).toHaveBeenCalledWith("demo-main", {
+        asset: "AAPL",
+        balance: { mode: "absolute", value: "100" },
+        averageEntryPrice: "200",
+      });
+      expect(createAdjustmentMock).toHaveBeenCalledWith("demo-main", {
+        asset: "NVDA",
+        balance: { mode: "absolute", value: "50" },
+        averageEntryPrice: "150",
+      });
+      expect(createAdjustmentMock).toHaveBeenCalledWith("demo-main", {
+        asset: "SPCX",
+        balance: { mode: "absolute", value: "10" },
+        averageEntryPrice: "300",
+      });
+      expect(createAdjustmentMock).toHaveBeenCalledWith("demo-main", {
+        asset: "META",
+        balance: { mode: "absolute", value: "25" },
+        averageEntryPrice: "500",
+      });
+      expect(createAdjustmentMock).toHaveBeenCalledWith("demo-main", {
+        asset: "KO",
+        balance: { mode: "absolute", value: "100" },
+        averageEntryPrice: "70",
+      });
     });
     expect(createAssetMock.mock.invocationCallOrder[0]).toBeLessThan(
       createAdjustmentMock.mock.invocationCallOrder[0],
+    );
+    expect(createAssetMock.mock.invocationCallOrder[0]).toBeLessThan(
+      setAccountCurrencyMock.mock.invocationCallOrder[0],
     );
   });
 

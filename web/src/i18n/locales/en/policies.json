@@ -49,8 +49,7 @@
     "description": "This removes the {{policy}} barrier on {{scope}}{{account}}{{asset}}.",
     "accountFragment": " account {{account}}",
     "accountGroupFragment": " account group {{accountGroup}}",
-    "assetFragment": " asset {{asset}}",
-    "accountCurrencyFragment": " account currency {{accountCurrency}}"
+    "assetFragment": " asset {{asset}}"
   },
   "restartConfirm": {
     "title": "Rebuild risk engine?",
@@ -68,8 +67,6 @@
     "accountGroupPlaceholder": "desk-a",
     "asset": "Asset",
     "assetPlaceholder": "AAPL",
-    "accountCurrency": "Account currency",
-    "accountCurrencyPlaceholder": "USD",
     "values": "Values",
     "rateLimitFootnote": "Both max orders and window are required.",
     "atLeastOneFootnote": "At least one value is required.",

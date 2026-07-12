@@ -121,13 +121,12 @@ func handlePutSpotFundsPnlBoundsLimit(svc Service) http.HandlerFunc {
 			return
 		}
 		limit := domain.LimitSpotFundsPnlBounds{
-			Scope:           req.Scope,
-			Account:         domain.AccountID(req.Account),
-			AccountGroup:    req.AccountGroup,
-			AccountCurrency: req.AccountCurrency,
-			LowerBound:      req.LowerBound,
-			UpperBound:      req.UpperBound,
-			InitialPnl:      req.InitialPnl,
+			Scope:        req.Scope,
+			Account:      domain.AccountID(req.Account),
+			AccountGroup: req.AccountGroup,
+			LowerBound:   req.LowerBound,
+			UpperBound:   req.UpperBound,
+			InitialPnl:   req.InitialPnl,
 		}
 		if err := svc.PutSpotFundsPnlBoundsLimit(r.Context(), limit); err != nil {
 			httpx.WriteErr(w, err)
@@ -206,23 +205,21 @@ func sameSpotFundsPnlBoundsAddress(
 ) bool {
 	return left.Scope == right.Scope &&
 		left.Account == right.Account &&
-		left.AccountGroup == right.AccountGroup &&
-		left.AccountCurrency == right.AccountCurrency
+		left.AccountGroup == right.AccountGroup
 }
 
 // handleDeleteLimit handles
-// DELETE /api/v1/limits?policy=&scope=&account=&asset=&accountGroup=&accountCurrency=.
+// DELETE /api/v1/limits?policy=&scope=&account=&asset=&accountGroup=.
 // The barrier is addressed by its policy-specific composite.
 func handleDeleteLimit(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		target := node.LimitTarget{
-			Policy:          q.Get("policy"),
-			Scope:           q.Get("scope"),
-			Account:         domain.AccountID(q.Get("account")),
-			AccountGroup:    q.Get("accountGroup"),
-			Asset:           q.Get("asset"),
-			AccountCurrency: q.Get("accountCurrency"),
+			Policy:       q.Get("policy"),
+			Scope:        q.Get("scope"),
+			Account:      domain.AccountID(q.Get("account")),
+			AccountGroup: q.Get("accountGroup"),
+			Asset:        q.Get("asset"),
 		}
 		if err := svc.DeleteLimit(r.Context(), target); err != nil {
 			httpx.WriteErr(w, err)

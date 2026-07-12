@@ -122,25 +122,29 @@ type GroupRow struct {
 // is the mutable display name; GroupCode links to the account's group by its
 // code (empty = no group).
 type AccountRow struct {
-	Code        domain.AccountID
-	Title       string
-	GroupCode   string
-	Currency    string
-	Notes       string
-	BlockReason string
-	Blocked     bool
+	Code          domain.AccountID
+	Title         string
+	GroupCode     string
+	Currency      string
+	Pnl           string
+	PnlHaltReason domain.PnlHaltReason
+	Notes         string
+	BlockReason   string
+	Blocked       bool
+	PnlSpecified  bool
 }
 
 // PositionRow is one positions CSV row. Account is the account code; Asset is
 // the asset symbol (code).
 type PositionRow struct {
-	Account           domain.AccountID
-	Asset             string
-	Available         string
-	Held              string
-	Incoming          string
-	RealizedPnl       string
-	AverageEntryPrice string
+	Account               domain.AccountID
+	Asset                 string
+	Available             string
+	Held                  string
+	Incoming              string
+	RealizedPnl           string
+	RealizedPnlHaltReason domain.PnlHaltReason
+	AverageEntryPrice     string
 }
 
 // ImportRows carries parsed rows for exactly one importable entity.
@@ -177,6 +181,14 @@ func (e tooLargeError) Unwrap() error { return domain.ErrTooLarge }
 var (
 	groupHeader   = []string{"code", "title", "currency", "notes", "blocked", "block_reason"}
 	accountHeader = []string{
+		"code", "title", "group_code", "currency", "pnl", "pnl_halt_reason", "notes", "blocked",
+		"block_reason",
+	}
+	previousAccountHeader = []string{
+		"code", "title", "group_code", "currency", "pnl", "notes", "blocked",
+		"block_reason",
+	}
+	prePnlAccountHeader = []string{
 		"code", "title", "group_code", "currency", "notes", "blocked",
 		"block_reason",
 	}
@@ -187,6 +199,10 @@ var (
 		"code", "title", "group_code", "notes", "blocked", "block_reason",
 	}
 	positionHeader = []string{
+		"account_code", "asset", "available", "held", "incoming",
+		"realized_pnl", "realized_pnl_halt_reason", "average_entry_price",
+	}
+	previousPositionHeader = []string{
 		"account_code", "asset", "available", "held", "incoming",
 		"realized_pnl", "average_entry_price",
 	}
@@ -271,7 +287,7 @@ func EncodeAccounts(rows []domain.Account, delimiter Delimiter) ([]byte, error) 
 	for _, row := range rows {
 		out = append(out, []string{
 			row.Code.String(), row.Title, row.GroupCode, row.Currency,
-			row.Notes, formatBool(row.Blocked), row.BlockReason,
+			row.Pnl, string(row.PnlHaltReason), row.Notes, formatBool(row.Blocked), row.BlockReason,
 		})
 	}
 	return writeCSV(out, delimiter)
@@ -285,7 +301,7 @@ func EncodePositions(rows []domain.Balance, delimiter Delimiter) ([]byte, error)
 	for _, row := range rows {
 		out = append(out, []string{
 			string(row.Account), row.Asset, row.Available, row.Held,
-			row.Incoming, row.RealizedPnl, row.AverageEntryPrice,
+			row.Incoming, row.RealizedPnl, string(row.RealizedPnlHaltReason), row.AverageEntryPrice,
 		})
 	}
 	return writeCSV(out, delimiter)
@@ -479,30 +495,48 @@ func parseGroups(records [][]string) (ImportRows, error) {
 
 func parseAccounts(records [][]string) (ImportRows, error) {
 	header := accountHeader
-	legacy := false
+	hasCurrency := true
+	hasPnl := true
+	hasPnlHaltReason := true
 	if err := requireHeader(records[0], accountHeader); err != nil {
-		if legacyErr := requireHeader(records[0], legacyAccountHeader); legacyErr != nil {
+		if currentErr := requireHeader(records[0], previousAccountHeader); currentErr == nil {
+			header = previousAccountHeader
+			hasPnlHaltReason = false
+		} else if previousErr := requireHeader(records[0], prePnlAccountHeader); previousErr == nil {
+			header = prePnlAccountHeader
+			hasPnl = false
+			hasPnlHaltReason = false
+		} else if legacyErr := requireHeader(records[0], legacyAccountHeader); legacyErr == nil {
+			header = legacyAccountHeader
+			hasCurrency = false
+			hasPnl = false
+			hasPnlHaltReason = false
+		} else {
 			return ImportRows{}, err
 		}
-		header = legacyAccountHeader
-		legacy = true
 	}
 	rows := make([]AccountRow, 0, len(records)-1)
 	for i, rec := range records[1:] {
 		if len(rec) != len(header) {
 			return ImportRows{}, rowErr(i+2, "wrong field count")
 		}
+		index := 3
 		currency := ""
-		notesIndex := 3
-		blockedIndex := 4
-		reasonIndex := 5
-		if !legacy {
-			currency = strings.TrimSpace(rec[3])
-			notesIndex = 4
-			blockedIndex = 5
-			reasonIndex = 6
+		if hasCurrency {
+			currency = strings.TrimSpace(rec[index])
+			index++
 		}
-		blocked, err := parseBool(rec[blockedIndex], i+2)
+		pnl := "0"
+		if hasPnl {
+			pnl = strings.TrimSpace(rec[index])
+			index++
+		}
+		pnlHaltReason := domain.PnlHaltReason("")
+		if hasPnlHaltReason {
+			pnlHaltReason = domain.PnlHaltReason(strings.TrimSpace(rec[index]))
+			index++
+		}
+		blocked, err := parseBool(rec[index+1], i+2)
 		if err != nil {
 			return ImportRows{}, err
 		}
@@ -511,24 +545,34 @@ func parseAccounts(records [][]string) (ImportRows, error) {
 			return ImportRows{}, rowErr(i+2, "code is empty")
 		}
 		rows = append(rows, AccountRow{
-			Code:      domain.AccountID(code),
-			Title:     rec[1],
-			GroupCode: strings.TrimSpace(rec[2]),
-			Currency:  currency,
-			Notes:     rec[notesIndex],
-			Blocked:   blocked, BlockReason: rec[reasonIndex],
+			Code:          domain.AccountID(code),
+			Title:         rec[1],
+			GroupCode:     strings.TrimSpace(rec[2]),
+			Currency:      currency,
+			Pnl:           pnl,
+			PnlHaltReason: pnlHaltReason,
+			Notes:         rec[index],
+			Blocked:       blocked, BlockReason: rec[index+2],
+			PnlSpecified: hasPnl,
 		})
 	}
 	return ImportRows{Accounts: rows}, nil
 }
 
 func parsePositions(records [][]string) (ImportRows, error) {
+	header := positionHeader
+	hasPnlHaltReason := true
 	if err := requireHeader(records[0], positionHeader); err != nil {
-		return ImportRows{}, err
+		if previousErr := requireHeader(records[0], previousPositionHeader); previousErr == nil {
+			header = previousPositionHeader
+			hasPnlHaltReason = false
+		} else {
+			return ImportRows{}, err
+		}
 	}
 	rows := make([]PositionRow, 0, len(records)-1)
 	for i, rec := range records[1:] {
-		if len(rec) != len(positionHeader) {
+		if len(rec) != len(header) {
 			return ImportRows{}, rowErr(i+2, "wrong field count")
 		}
 		accountCode := strings.TrimSpace(rec[0])
@@ -539,10 +583,17 @@ func parsePositions(records [][]string) (ImportRows, error) {
 		if assetCode == "" {
 			return ImportRows{}, rowErr(i+2, "asset is empty")
 		}
+		pnlHaltReason := domain.PnlHaltReason("")
+		averageEntryPriceIndex := 6
+		if hasPnlHaltReason {
+			pnlHaltReason = domain.PnlHaltReason(strings.TrimSpace(rec[6]))
+			averageEntryPriceIndex++
+		}
 		rows = append(rows, PositionRow{
 			Account: domain.AccountID(accountCode),
 			Asset:   assetCode, Available: rec[2], Held: rec[3],
-			Incoming: rec[4], RealizedPnl: rec[5], AverageEntryPrice: rec[6],
+			Incoming: rec[4], RealizedPnl: rec[5],
+			RealizedPnlHaltReason: pnlHaltReason, AverageEntryPrice: rec[averageEntryPriceIndex],
 		})
 	}
 	return ImportRows{Positions: rows}, nil

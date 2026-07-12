@@ -73,8 +73,8 @@ type AccountLimits struct {
 
 // LimitTarget addresses a single typed barrier for deletion: the policy it
 // belongs to plus the composite the store keys it by. The optional Account,
-// AccountGroup, Asset and AccountCurrency axes are present exactly when the
-// policy and scope carry them.
+// AccountGroup, and Asset axes are present exactly when the policy and scope
+// carry them.
 type LimitTarget struct {
 	// Policy is the policy the barrier belongs to (e.g. domain.PolicyRateLimit).
 	Policy string
@@ -86,8 +86,6 @@ type LimitTarget struct {
 	AccountGroup string
 	// Asset is the asset axis; empty unless Scope carries it.
 	Asset string
-	// AccountCurrency is the account-currency axis used by SpotFunds P&L bounds.
-	AccountCurrency string
 }
 
 // Node is one execution target: an engine plus its realm-scoped store, behind a
@@ -546,7 +544,7 @@ type Node interface {
 	// DeleteMarketDataInstance removes one market-data source instance and
 	// audits the action.
 	DeleteMarketDataInstance(
-		ctx context.Context, id domain.ExternalID, force bool, caller domain.Caller,
+		ctx context.Context, id domain.ExternalID, caller domain.Caller,
 	) error
 
 	// ListMarketDataInstruments returns every configured instrument of an

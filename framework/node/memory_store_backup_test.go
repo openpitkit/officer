@@ -47,6 +47,9 @@ func (r *memoryRealm) ApplyBusinessCSVImport(
 		}
 	}
 	for _, account := range in.Accounts {
+		if account.Account.Pnl == "" {
+			account.Account.Pnl = "0"
+		}
 		if account.Exists {
 			current, ok := r.accounts[account.Account.Code]
 			if !ok {
@@ -175,8 +178,9 @@ func (r *memoryRealm) exportData(context.Context) backup.Data {
 	}
 	for _, account := range r.accounts {
 		data.Accounts = append(data.Accounts, backup.Account{
-			Code: string(account.Code), Title: account.Title,
-			GroupCode: account.GroupCode, Notes: account.Notes,
+			Code: string(account.Code), Title: account.Title, Pnl: account.Pnl,
+			PnlHaltReason: account.PnlHaltReason,
+			GroupCode:     account.GroupCode, Notes: account.Notes,
 			BlockReason: account.BlockReason, Blocked: account.Blocked,
 		})
 	}
@@ -244,10 +248,14 @@ func (r *memoryRealm) restoreData(data backup.Data) {
 	}
 	r.accounts = map[domain.AccountID]domain.Account{}
 	for _, account := range data.Accounts {
+		pnl := account.Pnl
+		if pnl == "" {
+			pnl = "0"
+		}
 		r.nextAccountID++
 		code := domain.AccountID(account.Code)
 		r.accounts[code] = domain.Account{
-			Code: code, Title: account.Title, GroupCode: account.GroupCode,
+			Code: code, Title: account.Title, Pnl: pnl, PnlHaltReason: account.PnlHaltReason, GroupCode: account.GroupCode,
 			Notes: account.Notes, BlockReason: account.BlockReason,
 			Blocked: account.Blocked, EngineAccountID: r.nextAccountID,
 		}
@@ -270,7 +278,6 @@ func (r *memoryRealm) restoreData(data backup.Data) {
 			limit.Scope,
 			limit.Account,
 			limit.AccountGroup,
-			limit.AccountCurrency,
 		)] = limit
 	}
 	r.adjustments = append([]domain.AccountAdjustmentRecord(nil), data.Adjustments...)

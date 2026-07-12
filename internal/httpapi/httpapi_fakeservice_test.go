@@ -473,9 +473,9 @@ func (f *fakeService) UpdateMarketDataInstanceSettings(
 	return f.stateErr
 }
 func (f *fakeService) DeleteMarketDataInstance(
-	_ context.Context, id string, force bool,
+	_ context.Context, id string,
 ) error {
-	f.mdCalls = append(f.mdCalls, fmt.Sprintf("delete-instance:%s:%v", id, force))
+	f.mdCalls = append(f.mdCalls, fmt.Sprintf("delete-instance:%s", id))
 	return f.stateErr
 }
 func (f *fakeService) UpsertMarketDataInstrument(

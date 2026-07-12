@@ -21,6 +21,7 @@ import "go.openpit.dev/officer/framework/engine"
 
 type Snapshot = engine.Snapshot
 type LimitSet = engine.LimitSet
+type PolicyConfigurationResult = engine.PolicyConfigurationResult
 type AdjustmentResult = engine.AdjustmentResult
 type AdjustmentBatchReject = engine.AdjustmentBatchReject
 type OrderResult = engine.OrderResult

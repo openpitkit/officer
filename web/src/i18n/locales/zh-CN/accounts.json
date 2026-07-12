@@ -124,12 +124,21 @@
   "accounts": {
     "heading": "账户",
     "clearFilter": "（清除筛选）",
+    "pnlHalt": {
+      "missingFx": "PnL 计算已停止：缺少所需的 FX 报价。",
+      "missingAccountCurrency": "PnL 计算已停止：账户货币不可用。",
+      "missingInitialPnl": "PnL 计算已停止：缺少权威初始 PnL 值。",
+      "missingCostBasis": "PnL 计算已停止：缺少持仓成本基础。",
+      "arithmeticOverflow": "PnL 计算已停止：精确运算超出支持的数值范围。",
+      "unknown": "引擎已停止 PnL 计算。"
+    },
     "filteredTo": "— 筛选至",
     "filteredToDefault": "默认分组",
     "columns": {
       "account": "账户",
       "group": "分组",
       "currency": "货币",
+      "pnl": "PnL",
       "positions": "持仓",
       "status": "状态",
       "notes": "备注",
@@ -139,6 +148,7 @@
       "account": "此列显示账户代码及其显示名称。",
       "group": "此列显示分配给该账户的账户组。",
       "currency": "账户货币。",
+      "pnl": "此列显示 Spot Funds 报告的账户精确盈亏。",
       "positions": "此列显示为该账户存储的持仓行数量。",
       "status": "此列显示该账户处于活跃还是封锁状态。",
       "notes": "此列显示为该账户保存的操作员备注。",
@@ -235,7 +245,7 @@
       "group": "分组",
       "default": "默认"
     },
-    "blockedHint": "此账户存在余额或 P&L 行。若变更会改变有效货币，后端将拒绝该操作。",
+    "blockedHint": "此账户持有非零持仓或 P&L。若变更会改变有效货币，后端将拒绝该操作。",
     "currencyLabel": "账户货币",
     "currencyHint": "清空字段可从分组和默认层级继承。未设置账户有效货币时，不计算该账户的已实现 P&L。",
     "cancel": "取消",
@@ -245,7 +255,7 @@
     "title": "编辑分组货币",
     "description": "为 {{group}} 设置分组货币。",
     "defaultDescription": "设置保留默认分组货币。",
-    "blockedHint": "若变更会改变存在余额或 P&L 行的成员账户有效货币，后端将拒绝该操作。",
+    "blockedHint": "若变更会改变持有非零持仓或 P&L 的成员账户有效货币，后端将拒绝该操作。",
     "currencyLabel": "分组货币",
     "cancel": "取消",
     "submit": "保存"

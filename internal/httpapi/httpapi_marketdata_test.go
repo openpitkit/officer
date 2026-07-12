@@ -474,7 +474,7 @@ func TestDeleteMarketDataInstance_NoContent(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("want 204, got %d", rec.Code)
 	}
-	if len(svc.mdCalls) != 1 || svc.mdCalls[0] != "delete-instance:bn-1:false" {
+	if len(svc.mdCalls) != 1 || svc.mdCalls[0] != "delete-instance:bn-1" {
 		t.Fatalf("unexpected service calls: %v", svc.mdCalls)
 	}
 }
@@ -493,7 +493,7 @@ func TestDeleteMarketDataInstance_URLEncodedID(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("want 204, got %d", rec.Code)
 	}
-	if len(svc.mdCalls) != 1 || svc.mdCalls[0] != "delete-instance:bn/1:false" {
+	if len(svc.mdCalls) != 1 || svc.mdCalls[0] != "delete-instance:bn/1" {
 		t.Fatalf("unexpected service calls: %v", svc.mdCalls)
 	}
 }

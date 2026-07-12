@@ -33,15 +33,17 @@ import (
 // asset that does not exist yet auto-creates it before applying, so an operator
 // can fund a fresh account or a fresh asset in one call. On accept it writes the
 // recomputed balance snapshot and the accepted record; on reject it records the
-// rejected adjustment and leaves balances unchanged. If the engine returns no
-// account modification and the request carries no realized P&L, the call returns
-// ErrNoChange without recording an adjustment or adjustment audit; a supplied
-// realized P&L is still a requested change and is persisted as a
-// realized-pnl-only adjustment.
+// rejected adjustment and leaves balances unchanged. The engine outcome is
+// authoritative: when the engine reports neither an accepted nor a rejected
+// outcome the call returns ErrNoChange and records no adjustment, balance, or
+// audit, even when the request carried a realized P&L.
 func (n *localNode) ApplyAdjustment(
 	ctx context.Context, key Key, externalID domain.ExternalID,
 	req domain.AdjustmentRequest, caller domain.Caller,
 ) (domain.AccountAdjustmentRecord, error) {
+	if err := domain.ValidateAsset(req.Asset); err != nil {
+		return domain.AccountAdjustmentRecord{}, err
+	}
 	// Auto-create the account and asset and rebuild the engine before entering
 	// the lane, so the live resolver knows them when RunAccountSynchronized
 	// resolves the account and so the rebuild never stops a live lane's runtime.
@@ -57,17 +59,6 @@ func (n *localNode) ApplyAdjustment(
 	if err != nil {
 		return domain.AccountAdjustmentRecord{}, err
 	}
-	if req.RealizedPnl != "" && !adjustmentRequestEngineOnly(req) {
-		// Keep realized-P&L snapshots out of the engine lane. The SQLite store
-		// serializes its adjustment and settlement transactions on one
-		// connection; settlement accumulates realized-P&L deltas inside its tx,
-		// while this path records an operator snapshot. Re-entering the lane
-		// here would add no ordering and risks the single-connection deadlock
-		// that the store transaction boundary avoids.
-		return n.recordRealizedPnlOnlyAdjustment(
-			ctx, key, accountID, externalID, req, caller,
-		)
-	}
 	eng, done, err := n.beginLane()
 	if err != nil {
 		return domain.AccountAdjustmentRecord{}, err
@@ -80,17 +71,11 @@ func (n *localNode) ApplyAdjustment(
 		if err != nil {
 			return fmt.Errorf("apply adjustment: %w", err)
 		}
+		if err := n.mirrorAdjustmentAccountBlocks(ctx, result.AccountBlocks); err != nil {
+			return err
+		}
 		if adjustmentResultNoChange(result) {
-			// Engine netted no change, but a supplied realized P&L is still a
-			// requested change: persist it alone in this same lane/tx.
-			if req.RealizedPnl == "" {
-				return domain.ErrNoChange
-			}
-			var recErr error
-			stored, recErr = n.recordRealizedPnlOnlyAdjustment(
-				ctx, key, accountID, externalID, req, caller,
-			)
-			return recErr
+			return domain.ErrNoChange
 		}
 
 		// A non-zero externalID is the caller-supplied handle, carried verbatim onto
@@ -109,19 +94,11 @@ func (n *localNode) ApplyAdjustment(
 		var balance *domain.Balance
 		var deleteBalance *store.BalanceKey
 		if result.Accepted != nil {
-			var pnl realizedPnlPersistedOutcome
-			var err error
-			balance, deleteBalance, pnl, err =
-				n.adjustedBalanceCommand(ctx, key, req, *result.Accepted)
+			balance, deleteBalance, err =
+				n.adjustedBalanceCommand(ctx, key, req.Asset, *result.Accepted)
 			if err != nil {
 				return err
 			}
-			// Record the realized P&L actually persisted, not the engine's own
-			// cross-check absolute, so the outcome is the single source of truth.
-			accepted := *result.Accepted
-			accepted.RealizedPnlResult = pnl.Result
-			accepted.RealizedPnlDelta = pnl.Delta
-			rec.Accepted = &accepted
 		}
 
 		audit := n.auditEntry(caller, store.AuditEntry{
@@ -200,8 +177,9 @@ func (n *localNode) ImportPositionSnapshot(
 	var stored domain.AccountAdjustmentRecord
 	if err := eng.RunAccountSynchronized(ctx, key.Account, func(lane engine.AccountLane) error {
 		req := domain.AdjustmentRequest{
-			Asset:             snapshot.Asset,
-			AverageEntryPrice: snapshot.AverageEntryPrice,
+			Asset:                 snapshot.Asset,
+			AverageEntryPrice:     snapshot.AverageEntryPrice,
+			RealizedPnlHaltReason: snapshot.RealizedPnlHaltReason,
 			Balance: &domain.AdjustmentAmount{
 				Mode: domain.AdjustmentModeAbsolute, Value: snapshot.Available,
 			},
@@ -212,9 +190,15 @@ func (n *localNode) ImportPositionSnapshot(
 				Mode: domain.AdjustmentModeAbsolute, Value: snapshot.Incoming,
 			},
 		}
+		if snapshot.RealizedPnlHaltReason == "" {
+			req.RealizedPnl = snapshot.RealizedPnl
+		}
 		result, err := lane.ApplyAccountAdjustment(ctx, key.Account, req)
 		if err != nil {
 			return fmt.Errorf("apply position snapshot adjustment: %w", err)
+		}
+		if err := n.mirrorAdjustmentAccountBlocks(ctx, result.AccountBlocks); err != nil {
+			return err
 		}
 		if adjustmentResultNoChange(result) {
 			return domain.ErrNoChange
@@ -234,13 +218,17 @@ func (n *localNode) ImportPositionSnapshot(
 		var balance *domain.Balance
 		var deleteBalance *store.BalanceKey
 		if result.Accepted != nil {
-			_, _, err := n.realm.GetBalance(ctx, key.Account, snapshot.Asset)
-			if err != nil {
-				return fmt.Errorf("read balance for position snapshot: %w", err)
+			adjusted, adjustErr := n.adjustedBalance(
+				ctx, key, snapshot.Asset, *result.Accepted,
+			)
+			if adjustErr != nil {
+				return adjustErr
 			}
-			balanceValue := snapshot
-			balanceValue.Account = key.Account
-			balance, deleteBalance = balanceSnapshotCommand(balanceValue)
+			if snapshot.RealizedPnlHaltReason != "" {
+				adjusted.RealizedPnl = snapshot.RealizedPnl
+				adjusted.RealizedPnlHaltReason = snapshot.RealizedPnlHaltReason
+			}
+			balance, deleteBalance = balanceSnapshotCommand(adjusted)
 		}
 
 		auditSnapshot := snapshot
@@ -274,158 +262,66 @@ func adjustmentResultNoChange(result engine.AdjustmentResult) bool {
 	return result.Accepted == nil && result.Rejected == nil
 }
 
-func adjustmentRequestEngineOnly(req domain.AdjustmentRequest) bool {
-	return req.Balance != nil ||
-		req.Held != nil ||
-		req.Incoming != nil ||
-		req.BalanceBounds != nil ||
-		req.HeldBounds != nil ||
-		req.IncomingBounds != nil ||
-		req.AverageEntryPrice != ""
-}
-
-func (n *localNode) recordRealizedPnlOnlyAdjustment(
-	ctx context.Context,
-	key Key,
-	accountID string,
-	externalID domain.ExternalID,
-	req domain.AdjustmentRequest,
-	caller domain.Caller,
-) (domain.AccountAdjustmentRecord, error) {
-	// This path bypasses the engine, so the engine seam that rejects an empty or
-	// malformed asset never runs; validate here before persisting a balance row
-	// keyed by (account, asset).
-	if err := domain.ValidateAsset(req.Asset); err != nil {
-		return domain.AccountAdjustmentRecord{}, err
-	}
-	prev, _, err := n.realm.GetBalance(ctx, key.Account, req.Asset)
-	if err != nil {
-		return domain.AccountAdjustmentRecord{}, fmt.Errorf(
-			"read balance for realized pnl adjustment: %w", err)
-	}
-	// The realized P&L is persisted as an absolute; the delta is its signed change
-	// from the previous stored value so the recorded outcome stays consistent.
-	delta, err := subtractDecimals(req.RealizedPnl, prev.RealizedPnl)
-	if err != nil {
-		return domain.AccountAdjustmentRecord{}, err
-	}
-	rec := domain.AccountAdjustmentRecord{
-		ExternalID: externalID,
-		Account:    key.Account,
-		Source:     caller.Source,
-		Principal:  caller.Principal,
-		Request:    req,
-		Accepted: &domain.AdjustmentOutcomeAccepted{
-			RealizedPnlResult: req.RealizedPnl,
-			RealizedPnlDelta:  delta,
-		},
-		Asset: req.Asset,
-	}
-	audit := n.auditEntry(caller, store.AuditEntry{
-		Action:  domain.AuditActionAdjustment,
-		Account: key.Account,
-		Asset:   req.Asset,
-		Detail:  balanceRealizedPnlDetail(key.Account, req.Asset, req.RealizedPnl),
-	})
-	stored, err := n.realm.RecordAccountAdjustment(ctx, store.AccountAdjustmentPersistence{
-		RealizedPnl: realizedPnlPersistence(key, req),
-		Adjustment:  rec,
-		Audit:       audit,
-	})
-	if err != nil {
-		return domain.AccountAdjustmentRecord{}, n.fatalPostEnginePersistence(
-			"record realized pnl adjustment",
-			accountID,
-			fmt.Errorf("record realized pnl adjustment: %w", err),
-		)
-	}
-	return stored, nil
-}
-
-func realizedPnlPersistence(
-	key Key, req domain.AdjustmentRequest,
-) *store.BalanceRealizedPnlPersistence {
-	if req.RealizedPnl == "" {
+// mirrorAdjustmentAccountBlocks records the kill-switch blocks the engine
+// latched while committing an adjustment batch, so the store agrees with the
+// engine within this same operation: an account the engine already refuses to
+// trade must never read as tradable while Officer waits for a later fill or
+// other post-trade event to rediscover the block.
+//
+// The blocks are mirrored before the no-change check, because a force-set that
+// only trips the kill-switch reports no accepted outcome yet still blocks. They
+// are batch-level and repeated on every result of a batch; the sink dedups by
+// account. Its failures are fatal by contract and are propagated unchanged.
+func (n *localNode) mirrorAdjustmentAccountBlocks(
+	ctx context.Context, blocks []domain.AccountBlock,
+) error {
+	if len(blocks) == 0 {
 		return nil
 	}
-	return &store.BalanceRealizedPnlPersistence{
-		Account:     key.Account,
-		Asset:       req.Asset,
-		RealizedPnl: req.RealizedPnl,
-	}
-}
-
-// realizedPnlPersistedOutcome carries the realized P&L an adjustment actually
-// persists and its signed delta from the previous stored value, so the recorded
-// outcome reflects what Officer stored rather than the engine's own cross-check
-// absolute.
-type realizedPnlPersistedOutcome struct {
-	Result string
-	Delta  string
+	return n.mirrorPolicyConfigurationBlocks(
+		ctx, domain.PolicySpotFundsPnlBoundsKillSwitch, blocks,
+	)
 }
 
 func (n *localNode) adjustedBalanceCommand(
-	ctx context.Context, key Key, req domain.AdjustmentRequest,
+	ctx context.Context, key Key, asset string,
 	outcome domain.AdjustmentOutcomeAccepted,
-) (*domain.Balance, *store.BalanceKey, realizedPnlPersistedOutcome, error) {
-	prev, _, err := n.realm.GetBalance(ctx, key.Account, req.Asset)
+) (*domain.Balance, *store.BalanceKey, error) {
+	balance, err := n.adjustedBalance(ctx, key, asset, outcome)
 	if err != nil {
-		return nil, nil, realizedPnlPersistedOutcome{},
-			fmt.Errorf("read balance for adjustment: %w", err)
-	}
-	realizedPnl, err := domain.AddDecimals(prev.RealizedPnl, outcome.RealizedPnlDelta)
-	if err != nil {
-		return nil, nil, realizedPnlPersistedOutcome{},
-			fmt.Errorf("accumulate realized pnl: %w", err)
-	}
-	// A supplied realized P&L overrides the accumulated value; recompute the
-	// delta against the previous stored value so the persisted result and delta
-	// stay mutually consistent.
-	delta := outcome.RealizedPnlDelta
-	if req.RealizedPnl != "" {
-		realizedPnl = req.RealizedPnl
-		delta, err = subtractDecimals(realizedPnl, prev.RealizedPnl)
-		if err != nil {
-			return nil, nil, realizedPnlPersistedOutcome{}, err
-		}
-	}
-	balance := domain.Balance{
-		Account:           key.Account,
-		Asset:             req.Asset,
-		Available:         pick(outcome.BalanceResult, prev.Available),
-		Held:              pick(outcome.HeldResult, prev.Held),
-		Incoming:          pick(outcome.IncomingResult, prev.Incoming),
-		RealizedPnl:       realizedPnl,
-		AverageEntryPrice: pick(req.AverageEntryPrice, prev.AverageEntryPrice),
+		return nil, nil, err
 	}
 	upsert, deleteKey := balanceSnapshotCommand(balance)
-	return upsert, deleteKey, realizedPnlPersistedOutcome{
-		Result: realizedPnl,
-		Delta:  delta,
-	}, nil
+	return upsert, deleteKey, nil
 }
 
-// subtractDecimals returns base minus subtrahend as an exact decimal string. An
-// empty operand is treated as zero. Returns ErrInvalid for a non-empty,
-// non-decimal operand.
-func subtractDecimals(base, subtrahend string) (string, error) {
-	baseD := decimal.Zero
-	subtrahendD := decimal.Zero
-	var err error
-	if base != "" {
-		baseD, err = decimal.NewFromString(base)
-		if err != nil {
-			return "", fmt.Errorf("base %q is not a valid decimal: %w", base, domain.ErrInvalid)
-		}
+func (n *localNode) adjustedBalance(
+	ctx context.Context, key Key, asset string,
+	outcome domain.AdjustmentOutcomeAccepted,
+) (domain.Balance, error) {
+	prev, _, err := n.realm.GetBalance(ctx, key.Account, asset)
+	if err != nil {
+		return domain.Balance{}, fmt.Errorf("read balance for adjustment: %w", err)
 	}
-	if subtrahend != "" {
-		subtrahendD, err = decimal.NewFromString(subtrahend)
-		if err != nil {
-			return "", fmt.Errorf(
-				"subtrahend %q is not a valid decimal: %w", subtrahend, domain.ErrInvalid)
-		}
+	realizedPnl := pick(outcome.RealizedPnlResult, prev.RealizedPnl)
+	if realizedPnl == "" {
+		realizedPnl = "0"
 	}
-	return baseD.Sub(subtrahendD).String(), nil
+	balance := domain.Balance{
+		Account:     key.Account,
+		Asset:       asset,
+		Available:   pick(outcome.BalanceResult, prev.Available),
+		Held:        pick(outcome.HeldResult, prev.Held),
+		Incoming:    pick(outcome.IncomingResult, prev.Incoming),
+		RealizedPnl: realizedPnl,
+		RealizedPnlHaltReason: pickPnlHaltReason(
+			outcome.RealizedPnlHaltReason,
+			prev.RealizedPnlHaltReason,
+			outcome.RealizedPnlResult != "",
+		),
+		AverageEntryPrice: pick(outcome.AverageEntryPrice, prev.AverageEntryPrice),
+	}
+	return balance, nil
 }
 
 func (n *localNode) balanceFromRealizedPnlRecord(
@@ -434,7 +330,9 @@ func (n *localNode) balanceFromRealizedPnlRecord(
 	rec domain.AccountAdjustmentRecord,
 	realizedPnl string,
 ) (domain.Balance, error) {
-	if rec.Request.RealizedPnl != "" {
+	if rec.Accepted != nil && rec.Accepted.RealizedPnlResult != "" {
+		realizedPnl = rec.Accepted.RealizedPnlResult
+	} else if rec.Request.RealizedPnl != "" {
 		realizedPnl = rec.Request.RealizedPnl
 	}
 	if rec.Request.Asset == "" {
@@ -466,7 +364,20 @@ func balanceIsEmpty(balance domain.Balance) bool {
 		decimalZeroOrEmpty(balance.Held) &&
 		decimalZeroOrEmpty(balance.Incoming) &&
 		decimalZeroOrEmpty(balance.RealizedPnl) &&
+		balance.RealizedPnlHaltReason == "" &&
 		decimalZeroOrEmpty(balance.AverageEntryPrice)
+}
+
+func pickPnlHaltReason(
+	next, prev domain.PnlHaltReason, successfulPnlResult bool,
+) domain.PnlHaltReason {
+	if next != "" {
+		return next
+	}
+	if successfulPnlResult {
+		return ""
+	}
+	return prev
 }
 
 func decimalZeroOrEmpty(value string) bool {
@@ -477,12 +388,8 @@ func decimalZeroOrEmpty(value string) bool {
 	return err == nil && parsed.IsZero()
 }
 
-// balanceSettlementsFrom maps the engine's per-asset outcomes onto the domain
-// settlement carrier RecordOrderSettlement consumes. The store persists the
-// engine-returned result fields and accumulates realized-P&L deltas inside the
-// settlement tx. The engine emits at most one outcome per asset (see
-// engine.BalanceOutcome), so the slice carries no duplicate-asset entries that
-// would double-count realized P&L.
+// balanceSettlementsFrom maps engine per-asset outcomes onto the settlement
+// carrier, including position P&L results and P&L-calculation halt reasons.
 func balanceSettlementsFrom(outcomes []engine.BalanceOutcome) []domain.BalanceSettlement {
 	if len(outcomes) == 0 {
 		return nil

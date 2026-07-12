@@ -19,6 +19,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -26,6 +27,7 @@ import (
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
+	"go.openpit.dev/officer/framework/store"
 )
 
 func TestLocalNode_PutRateLimitAppliesAndAudits(t *testing.T) {
@@ -438,5 +440,472 @@ func TestLocalNode_PutOrderSizeLimit(t *testing.T) {
 	}
 	if len(limits.OrderSizeLimits) != 1 || len(limits.RateLimits) != 0 {
 		t.Fatalf("listed limits = %+v, want one order-size barrier", limits)
+	}
+}
+
+type liveConfigureProbeEngine struct {
+	*fakeEngine
+	onConfigure func()
+}
+
+func (e *liveConfigureProbeEngine) ConfigurePolicy(
+	ctx context.Context, policy string, limits engine.LimitSet,
+) (engine.PolicyConfigurationResult, error) {
+	e.onConfigure()
+	return e.fakeEngine.ConfigurePolicy(ctx, policy, limits)
+}
+
+func setLiveConfigureProbe(
+	t *testing.T, n *localNode, eng *fakeEngine,
+) {
+	t.Helper()
+	n.engineMu.Lock()
+	n.engine = &liveConfigureProbeEngine{
+		fakeEngine: eng,
+		onConfigure: func() {
+			if n.restarting.Load() {
+				t.Error("live policy reconfiguration entered the engine-restart gate")
+			}
+		},
+	}
+	n.engineMu.Unlock()
+	n.build = func(engine.Snapshot) (engine.Engine, error) {
+		t.Error("live SpotFunds P&L-bounds reconfiguration rebuilt the engine")
+		return nil, fmt.Errorf("unexpected engine rebuild")
+	}
+}
+
+func TestLocalNode_PutSpotFundsPnlBoundsLimitConfiguresLiveEngine(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	setLiveConfigureProbe(t, n, eng)
+
+	limit := domain.LimitSpotFundsPnlBounds{
+		Scope:      domain.ScopeGlobal,
+		LowerBound: "-100",
+	}
+	sink, err := n.PutSpotFundsPnlBoundsLimit(ctx, limit, testCaller)
+	if err != nil {
+		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
+	}
+	if sink != nil {
+		t.Fatalf("PutSpotFundsPnlBoundsLimit sink = %T, want nil", sink)
+	}
+
+	stored, err := st.ListSpotFundsPnlBoundsLimits(ctx, "")
+	if err != nil {
+		t.Fatalf("ListSpotFundsPnlBoundsLimits: %v", err)
+	}
+	if len(stored) != 1 || stored[0] != limit {
+		t.Fatalf("stored SpotFunds P&L-bounds limits = %+v, want %+v", stored, limit)
+	}
+	if len(eng.configureCalls) != 1 ||
+		eng.configureCalls[0].policy != domain.PolicySpotFundsPnlBoundsKillSwitch ||
+		len(eng.configureCalls[0].limits.SpotFundsPnlBoundsLimits) != 1 ||
+		eng.configureCalls[0].limits.SpotFundsPnlBoundsLimits[0] != limit {
+		t.Fatalf("configure calls = %+v, want live SpotFunds update", eng.configureCalls)
+	}
+
+	rows, err := n.ListAudit(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	if len(rows) != 2 || rows[0].Action != domain.AuditActionSetLimit {
+		t.Fatalf("want newest set_limit over startup hydrate, got %+v", rows)
+	}
+}
+
+func TestLocalNode_PutSpotFundsInitialPnlPersistsAuthoritativeSnapshot(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.configurePnls = []engine.AccountPnlUpdate{{Account: "acc-1", Pnl: "12.5"}}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	seedTestAccount(t, st, "acc-1")
+	if err := st.SetAccountPnl(
+		ctx, "acc-1", "-9", domain.PnlHaltReasonMissingFx,
+	); err != nil {
+		t.Fatalf("SetAccountPnl: %v", err)
+	}
+
+	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Scope: domain.ScopeAccount, Account: "acc-1",
+		LowerBound: "-100", InitialPnl: "12.5",
+	}, testCaller); err != nil {
+		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
+	}
+	account, ok, err := st.GetAccount(ctx, "acc-1")
+	if err != nil || !ok {
+		t.Fatalf("GetAccount: ok=%v err=%v", ok, err)
+	}
+	if account.Pnl != "12.5" || account.PnlHaltReason != "" {
+		t.Fatalf("account P&L = (%q, %q), want authoritative 12.5 without halt",
+			account.Pnl, account.PnlHaltReason)
+	}
+}
+
+func TestLocalNode_PolicyConfigurationBlockPreservesFirstCause(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	seedTestAccount(t, st, "acc-1")
+	if err := n.SetAccountBlocked(
+		ctx, testKey("acc-1"), true, "operator hold", testCaller,
+	); err != nil {
+		t.Fatalf("SetAccountBlocked: %v", err)
+	}
+	eng.configureBlocks = []domain.AccountBlock{{
+		Account: "acc-1", Policy: domain.PolicySpotFundsPnlBoundsKillSwitch,
+		Code: "pnl_bound_breached", Reason: "later SDK cause",
+	}}
+	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Scope: domain.ScopeGlobal, LowerBound: "-100",
+	}, testCaller); err != nil {
+		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
+	}
+	account, ok, err := st.GetAccount(ctx, "acc-1")
+	if err != nil || !ok {
+		t.Fatalf("GetAccount: ok=%v err=%v", ok, err)
+	}
+	if !account.Blocked || account.BlockReason != "operator hold" {
+		t.Fatalf("account block = (%v, %q), want original operator cause",
+			account.Blocked, account.BlockReason)
+	}
+	rows, err := st.ListAuditFiltered(ctx, domain.AuditFilter{
+		Actions: []domain.AuditAction{domain.AuditActionBlock}, Account: "acc-1",
+	}, 10)
+	if err != nil {
+		t.Fatalf("ListAuditFiltered: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("block audits = %+v, want only original first cause", rows)
+	}
+}
+
+func TestLocalNode_SpotFundsLimitAuditFailureFatalsAfterPnlReseed(t *testing.T) {
+	t.Parallel()
+	auditErr := errors.New("set limit audit failed")
+	st := newRealmWrapStore(newMemoryStore("limits.db"), func(r store.RealmStore) store.RealmStore {
+		return &failActionAuditRealm{
+			RealmStore: r, action: domain.AuditActionSetLimit, err: auditErr,
+		}
+	})
+	ctx := context.Background()
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	eng := newFakeEngine()
+	var fatalErr error
+	n := newTestNodeWithStore(t, st, eng, WithFatalShutdownHook(func(err error) {
+		fatalErr = err
+	}))
+	seedTestAccount(t, n.realm, "acc-1")
+	eng.configurePnls = []engine.AccountPnlUpdate{{Account: "acc-1", Pnl: "4"}}
+
+	_, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Scope: domain.ScopeAccount, Account: "acc-1",
+		LowerBound: "-100", InitialPnl: "4",
+	}, testCaller)
+	if !errors.Is(err, auditErr) {
+		t.Fatalf("PutSpotFundsPnlBoundsLimit error = %v, want audit failure", err)
+	}
+	if fatalErr == nil || !strings.Contains(fatalErr.Error(), "audit spot funds pnl-bounds limit") {
+		t.Fatalf("fatal error = %v, want post-engine limit audit failure", fatalErr)
+	}
+	account, ok, getErr := n.realm.GetAccount(ctx, "acc-1")
+	if getErr != nil || !ok || account.Pnl != "4" {
+		t.Fatalf("account after fatal = %+v ok=%v err=%v, want committed P&L 4",
+			account, ok, getErr)
+	}
+}
+
+// rebuildProbe counts the engine (re)builds a node performs and captures the
+// snapshot of the last one, so a test can prove what the node rebuilt from.
+type rebuildProbe struct {
+	builds int
+	last   engine.Snapshot
+}
+
+func newRebuildProbeNode(t *testing.T, eng *fakeEngine) (*localNode, *rebuildProbe) {
+	t.Helper()
+	ctx := context.Background()
+	st := newMemoryStore("rebuild.db")
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	probe := &rebuildProbe{}
+	var seed engine.Snapshot
+	inner := fakeBuild(eng, &seed)
+	n, _, err := NewLocalNode(ctx, st, func(snap engine.Snapshot) (engine.Engine, error) {
+		probe.builds++
+		probe.last = snap
+		return inner(snap)
+	})
+	if err != nil {
+		t.Fatalf("NewLocalNode: %v", err)
+	}
+	local := n.(*localNode)
+	seedTestPrincipal(t, local.realm)
+	return local, probe
+}
+
+// TestLocalNode_FailedSpotFundsConfigureRebuildsFromRevertedStore pins the
+// contract that a failed P&L-bounds configure never publishes a fabricated P&L.
+// The engine layer cannot restore the live accumulated P&L a seed overwrote, so
+// the node reverts the barrier and rebuilds the engine from persisted state -
+// the rebuild must therefore read a store that no longer carries the barrier.
+func TestLocalNode_FailedSpotFundsConfigureRebuildsFromRevertedStore(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, probe := newRebuildProbeNode(t, eng)
+	ctx := context.Background()
+
+	const account domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, testAccount(account), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	buildsBefore := probe.builds
+
+	eng.failConfigure = true
+	sink, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Scope:      domain.ScopeAccount,
+		Account:    account,
+		LowerBound: "-100",
+		InitialPnl: "-50000",
+	}, testCaller)
+	if err == nil {
+		t.Fatal("PutSpotFundsPnlBoundsLimit succeeded, want the engine failure")
+	}
+	if probe.builds != buildsBefore+1 {
+		t.Fatalf("rebuilds = %d, want exactly one from the reverted store",
+			probe.builds-buildsBefore)
+	}
+	if len(probe.last.SpotFundsPnlBoundsLimits) != 0 {
+		t.Fatalf("rebuilt from %+v, want the store reverted before the rebuild read it",
+			probe.last.SpotFundsPnlBoundsLimits)
+	}
+	if sink == nil {
+		t.Fatal("sink = nil after the rebuild replaced the handle, want the new sink")
+	}
+
+	stored, err := n.realm.ListSpotFundsPnlBoundsLimits(ctx, "")
+	if err != nil {
+		t.Fatalf("ListSpotFundsPnlBoundsLimits: %v", err)
+	}
+	if len(stored) != 0 {
+		t.Fatalf("stored barriers = %+v, want the failed barrier reverted", stored)
+	}
+}
+
+func TestLocalNode_FailedSpotFundsConfigureRebuildFailureFatals(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, _ := newRebuildProbeNode(t, eng)
+	ctx := context.Background()
+	const account domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, testAccount(account), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	configureErr := errors.New("partial reseed failed")
+	rebuildErr := errors.New("reconciliation rebuild failed")
+	eng.configureErr = configureErr
+	n.build = func(engine.Snapshot) (engine.Engine, error) {
+		return nil, rebuildErr
+	}
+	var fatalErr error
+	n.fatal = func(err error) { fatalErr = err }
+
+	_, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Scope: domain.ScopeAccount, Account: account,
+		LowerBound: "-100", InitialPnl: "-50000",
+	}, testCaller)
+	if !errors.Is(err, configureErr) || !errors.Is(err, rebuildErr) {
+		t.Fatalf("PutSpotFundsPnlBoundsLimit error = %v, want configure and rebuild failures", err)
+	}
+	if fatalErr == nil ||
+		!strings.Contains(fatalErr.Error(), "rebuild after failed spot funds pnl-bounds configuration") {
+		t.Fatalf("fatal error = %v, want failed reconciliation fail-stop", fatalErr)
+	}
+}
+
+// TestLocalNode_NotImplementedSpotFundsConfigureDoesNotRebuild is the boundary
+// to the case above: the engine's not-implemented stub is a pre-flight guard
+// that rejects before mutating anything, so there is nothing to reconcile and
+// the node must revert without churning the handle.
+func TestLocalNode_NotImplementedSpotFundsConfigureDoesNotRebuild(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, probe := newRebuildProbeNode(t, eng)
+	ctx := context.Background()
+	buildsBefore := probe.builds
+
+	eng.configureErr = fmt.Errorf("configure spot funds: %w", domain.ErrNotImplemented)
+	sink, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Scope:      domain.ScopeGlobal,
+		LowerBound: "-100",
+	}, testCaller)
+	if !errors.Is(err, domain.ErrNotImplemented) {
+		t.Fatalf("error = %v, want ErrNotImplemented", err)
+	}
+	if sink != nil {
+		t.Fatalf("sink = %T, want nil without a rebuild", sink)
+	}
+	if probe.builds != buildsBefore {
+		t.Fatalf("rebuilds = %d, want none for a pre-flight rejection",
+			probe.builds-buildsBefore)
+	}
+}
+
+// TestLocalNode_PolicyConfigurationBlocksPersistAndAudit verifies an accepted
+// policy update mirrors every SDK-reported block into the account state before
+// the caller receives success, and records the engine cause as a system audit.
+func TestLocalNode_PolicyConfigurationBlocksPersistAndAudit(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.configureBlocks = []domain.AccountBlock{{
+		Account: "acc-1",
+		Policy:  "openpit.spot_funds",
+		Code:    "missing_fx",
+		Reason:  "account P&L halted",
+		Details: "USD/EUR quote unavailable",
+	}}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	const account domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, testAccount(account), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Scope:      domain.ScopeGlobal,
+		LowerBound: "-100",
+	}, testCaller); err != nil {
+		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
+	}
+
+	stored, ok, err := st.GetAccount(ctx, account)
+	if err != nil || !ok {
+		t.Fatalf("GetAccount: ok=%v err=%v", ok, err)
+	}
+	wantReason := "account P&L halted [policy=openpit.spot_funds, code=missing_fx, USD/EUR quote unavailable]"
+	if !stored.Blocked || stored.BlockReason != wantReason {
+		t.Fatalf("stored account = %+v, want blocked reason %q", stored, wantReason)
+	}
+
+	rows, err := st.ListAuditFiltered(ctx, domain.AuditFilter{
+		Actions: []domain.AuditAction{domain.AuditActionBlock},
+	}, 10)
+	if err != nil {
+		t.Fatalf("ListAuditFiltered: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("block audits = %+v, want one", rows)
+	}
+	if rows[0].Source != domain.SourceSystem || rows[0].Actor != "" {
+		t.Fatalf("block audit attribution = %+v, want system without actor", rows[0])
+	}
+	if !strings.Contains(rows[0].Detail, "policy openpit.spot_funds") ||
+		!strings.Contains(rows[0].Detail, "USD/EUR quote unavailable") {
+		t.Fatalf("block audit detail = %q, want policy and engine details", rows[0].Detail)
+	}
+}
+
+func TestLocalNode_DeleteLastSpotFundsPnlBoundsLimitConfiguresLiveEngine(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	limit := domain.LimitSpotFundsPnlBounds{
+		Scope:      domain.ScopeGlobal,
+		LowerBound: "-100",
+	}
+	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, limit, testCaller); err != nil {
+		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
+	}
+	setLiveConfigureProbe(t, n, eng)
+
+	target := LimitTarget{
+		Policy: domain.PolicySpotFundsPnlBoundsKillSwitch,
+		Scope:  limit.Scope,
+	}
+	sink, err := n.DeleteLimit(ctx, target, testCaller)
+	if err != nil {
+		t.Fatalf("DeleteLimit: %v", err)
+	}
+	if sink != nil {
+		t.Fatalf("DeleteLimit sink = %T, want nil", sink)
+	}
+
+	stored, err := st.ListSpotFundsPnlBoundsLimits(ctx, "")
+	if err != nil {
+		t.Fatalf("ListSpotFundsPnlBoundsLimits: %v", err)
+	}
+	if len(stored) != 0 {
+		t.Fatalf("stored SpotFunds P&L-bounds limits = %+v, want none", stored)
+	}
+	if len(eng.configureCalls) != 2 ||
+		eng.configureCalls[1].policy != domain.PolicySpotFundsPnlBoundsKillSwitch ||
+		len(eng.configureCalls[1].limits.SpotFundsPnlBoundsLimits) != 0 {
+		t.Fatalf("configure calls = %+v, want empty live SpotFunds update", eng.configureCalls)
+	}
+
+	rows, err := n.ListAudit(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	if len(rows) != 3 || rows[0].Action != domain.AuditActionDeleteLimit {
+		t.Fatalf("want newest delete_limit over set_limit and hydrate, got %+v", rows)
+	}
+}
+
+func TestLocalNode_DeleteSpotFundsPnlBoundsLimitNotImplementedRevertsWithoutRebuild(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	limit := domain.LimitSpotFundsPnlBounds{
+		Scope:      domain.ScopeGlobal,
+		LowerBound: "-100",
+	}
+	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, limit, testCaller); err != nil {
+		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
+	}
+	setLiveConfigureProbe(t, n, eng)
+	eng.configureErr = fmt.Errorf("configure spot funds: %w", domain.ErrNotImplemented)
+
+	target := LimitTarget{
+		Policy: domain.PolicySpotFundsPnlBoundsKillSwitch,
+		Scope:  limit.Scope,
+	}
+	sink, err := n.DeleteLimit(ctx, target, testCaller)
+	if !errors.Is(err, domain.ErrNotImplemented) {
+		t.Fatalf("DeleteLimit error = %v, want ErrNotImplemented", err)
+	}
+	if sink != nil {
+		t.Fatalf("DeleteLimit sink = %T, want nil", sink)
+	}
+
+	stored, err := st.ListSpotFundsPnlBoundsLimits(ctx, "")
+	if err != nil {
+		t.Fatalf("ListSpotFundsPnlBoundsLimits: %v", err)
+	}
+	if len(stored) != 1 || stored[0] != limit {
+		t.Fatalf("stored SpotFunds P&L-bounds limits = %+v, want %+v", stored, limit)
+	}
+
+	rows, err := n.ListAudit(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	if len(rows) != 2 || rows[0].Action != domain.AuditActionSetLimit {
+		t.Fatalf("want no delete audit after rejected reconfiguration, got %+v", rows)
 	}
 }

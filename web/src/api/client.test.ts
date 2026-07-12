@@ -34,6 +34,8 @@ function api() {
 
 const createMarketDataInstance = (...args: Parameters<ReturnType<typeof api>["createMarketDataInstance"]>) =>
   api().createMarketDataInstance(...args);
+const checkOrder = (...args: Parameters<ReturnType<typeof api>["checkOrder"]>) =>
+  api().checkOrder(...args);
 const exportBusinessCsv = (...args: Parameters<ReturnType<typeof api>["exportBusinessCsv"]>) =>
   api().exportBusinessCsv(...args);
 const fetchAccounts = (...args: Parameters<ReturnType<typeof api>["fetchAccounts"]>) =>
@@ -173,6 +175,7 @@ describe("accounts and groups client", () => {
             currency: "EUR",
             effectiveCurrency: "USD",
             currencyOrigin: "account",
+            pnl: "123.4500",
             currencyCascade: {
               account: "USD",
               group: "EUR",
@@ -185,6 +188,7 @@ describe("accounts and groups client", () => {
             Currency: "CHF",
             EffectiveCurrency: "JPY",
             CurrencyOrigin: "group",
+            Pnl: "-0.1250",
             CurrencyCascade: {
               Account: "",
               Group: "JPY",
@@ -197,6 +201,7 @@ describe("accounts and groups client", () => {
             currency: "GBP",
             effective_currency: "CAD",
             currency_origin: "default",
+            pnl: "0",
             currencyCascade: {
               Account: "",
               Group: "",
@@ -215,6 +220,7 @@ describe("accounts and groups client", () => {
         currency: "EUR",
         effectiveCurrency: "USD",
         currencyOrigin: "account",
+        pnl: "123.4500",
         currencyCascade: {
           account: "USD",
           group: "EUR",
@@ -226,6 +232,7 @@ describe("accounts and groups client", () => {
         currency: "CHF",
         effectiveCurrency: "JPY",
         currencyOrigin: "group",
+        pnl: "-0.1250",
         currencyCascade: {
           account: "",
           group: "JPY",
@@ -237,12 +244,39 @@ describe("accounts and groups client", () => {
         currency: "GBP",
         effectiveCurrency: "CAD",
         currencyOrigin: "default",
+        pnl: "0",
         currencyCascade: {
           account: "",
           group: "",
           default: "CAD",
         },
       }),
+    ]);
+  });
+
+  it("normalizes an empty account PnL without coercing decimal values", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        accounts: [
+          {
+            code: "account-empty",
+            pnl: "",
+            PnlHaltReason: "missing_initial_pnl",
+          },
+          { code: "account-number", pnl: 12.5 },
+        ],
+      }),
+    );
+
+    const result = await fetchAccounts();
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        code: "account-empty",
+        pnl: "",
+        pnlHaltReason: "missing_initial_pnl",
+      }),
+      expect.objectContaining({ code: "account-number", pnl: "" }),
     ]);
   });
 
@@ -370,7 +404,8 @@ describe("balances client", () => {
             held: "0",
             incoming: "0",
             averageEntryPrice: "100",
-            realizedPnl: "0",
+            realizedPnl: "0.000",
+            realized_pnl_halt_reason: "missing_cost_basis",
             updatedAt: "2026-06-24T00:00:00Z",
           },
         ],
@@ -395,7 +430,14 @@ describe("balances client", () => {
     expect(url.searchParams.get("assetMatch")).toBeNull();
     expect(result).toMatchObject({
       total: 1,
-      items: [{ account: "desk-alpha", asset: "AAPL" }],
+      items: [
+        {
+          account: "desk-alpha",
+          asset: "AAPL",
+          realizedPnl: "0.000",
+          realizedPnlHaltReason: "missing_cost_basis",
+        },
+      ],
     });
   });
 
@@ -751,7 +793,6 @@ describe("limits client", () => {
       account: "desk-alpha",
       accountGroup: "group-alpha",
       asset: "AAPL",
-      accountCurrency: "USD",
       policy: "spot_funds_pnl_bounds",
       limit: 25,
       offset: 50,
@@ -764,7 +805,6 @@ describe("limits client", () => {
         account: "desk-alpha",
         accountGroup: "group-alpha",
         asset: "AAPL",
-        accountCurrency: "USD",
         policy: "spot_funds_pnl_bounds",
         limit: "25",
         offset: "50",
@@ -796,7 +836,6 @@ describe("limits client", () => {
             account: "",
             accountGroup: "desk-alpha",
             asset: "",
-            accountCurrency: "USD",
             values: {
               spotFundsPnlBounds: {
                 lowerBound: "-1000",
@@ -824,7 +863,6 @@ describe("limits client", () => {
         account: "desk-alpha",
         accountGroup: "",
         asset: "",
-        accountCurrency: "",
         values: { max_orders: "20", window: "1m" },
       },
       {
@@ -833,7 +871,6 @@ describe("limits client", () => {
         account: "desk-alpha",
         accountGroup: "",
         asset: "AAPL",
-        accountCurrency: "",
         values: { max_quantity: "10", max_notional: "1500" },
       },
       {
@@ -842,7 +879,6 @@ describe("limits client", () => {
         account: "",
         accountGroup: "desk-alpha",
         asset: "",
-        accountCurrency: "USD",
         values: { lower_bound: "-1000", upper_bound: "", initial_pnl: "42" },
       },
     ]);
@@ -907,7 +943,6 @@ describe("limits client", () => {
         spotFundsPnlBoundsLimit: {
           scope: "account",
           account: "desk-alpha",
-          accountCurrency: "USD",
           lowerBound: "-1000",
           upperBound: "500",
           initialPnl: "42",
@@ -921,7 +956,6 @@ describe("limits client", () => {
       scope: "account",
       account: "desk-alpha",
       asset: "",
-      accountCurrency: "USD",
       values: {
         lower_bound: "-1000",
         upper_bound: "500",
@@ -937,7 +971,6 @@ describe("limits client", () => {
           scope: "account",
           account: "desk-alpha",
           accountGroup: "",
-          accountCurrency: "USD",
           lowerBound: "-1000",
           upperBound: "500",
           initialPnl: "42",
@@ -948,7 +981,6 @@ describe("limits client", () => {
       expect.objectContaining({
         policy: "spot_funds_pnl_bounds_kill_switch",
         account: "desk-alpha",
-        accountCurrency: "USD",
         values: {
           lower_bound: "-1000",
           upper_bound: "500",
@@ -958,7 +990,7 @@ describe("limits client", () => {
     );
   });
 
-  it("deletes self-computed PnL limits with account group and currency axes", async () => {
+  it("deletes self-computed PnL limits with the account-group axis", async () => {
     vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 204 }));
 
     const { deleteLimit } = api();
@@ -968,7 +1000,6 @@ describe("limits client", () => {
       account: "",
       accountGroup: "desk-alpha",
       asset: "",
-      accountCurrency: "USD",
     });
 
     const calledUrl = new URL(
@@ -980,7 +1011,6 @@ describe("limits client", () => {
       policy: "spot_funds_pnl_bounds_kill_switch",
       scope: "account_group",
       accountGroup: "desk-alpha",
-      accountCurrency: "USD",
     });
   });
 });
@@ -1003,6 +1033,7 @@ describe("append-only list clients", () => {
               outcome: {
                 accepted: {
                   realizedPnlResult: { delta: "-12.50", result: "-12.50" },
+                  RealizedPnlHaltReason: "arithmetic_overflow",
                 },
               },
             },
@@ -1107,6 +1138,7 @@ describe("append-only list clients", () => {
           externalId: "adj-1",
           accepted: {
             realizedPnlResult: { delta: "-12.50", result: "-12.50" },
+            realizedPnlHaltReason: "arithmetic_overflow",
           },
         },
       ],
@@ -2060,6 +2092,7 @@ describe("event reproduction client", () => {
             blocks: [
               {
                 account: "acc-1",
+                policy: "spot_funds_pnl_bounds_kill_switch",
                 code: "daily_loss",
                 reason: "blocked",
                 details: "limit=-1000",
@@ -2070,7 +2103,15 @@ describe("event reproduction client", () => {
         response: {
           executionReport: {
             result: {
-              blocks: [],
+              blocks: [
+                {
+                  account: "acc-1",
+                  policy: "spot_funds_pnl_bounds_kill_switch",
+                  code: "daily_loss",
+                  reason: "blocked",
+                  details: "limit=-1000",
+                },
+              ],
               outcomes: [
                 {
                   asset: "AAPL",
@@ -2121,6 +2162,9 @@ describe("event reproduction client", () => {
         heldResult: "0",
         incomingDelta: "0",
         incomingResult: "0",
+        realizedPnlDelta: "",
+        realizedPnlResult: "",
+        averageEntryPrice: "",
       },
     ]);
     expect(result.request?.result?.orderStatus).toBe("filled");
@@ -2133,8 +2177,22 @@ describe("event reproduction client", () => {
     expect(result.request?.result).toMatchObject({
       fillLockPrice: "149.75",
       commission: { amount: "-0.50", currency: "USD" },
-      blocks: [expect.objectContaining({ code: "daily_loss" })],
+      blocks: [
+        expect.objectContaining({
+          policy: "spot_funds_pnl_bounds_kill_switch",
+          code: "daily_loss",
+        }),
+      ],
     });
+    expect(result.response?.executionReport?.blocks).toEqual([
+      {
+        account: "acc-1",
+        policy: "spot_funds_pnl_bounds_kill_switch",
+        code: "daily_loss",
+        reason: "blocked",
+        details: "limit=-1000",
+      },
+    ]);
     expect(result.response?.submitResponse).toBeNull();
   });
 
@@ -2196,6 +2254,48 @@ describe("event reproduction client", () => {
     await expect(fetchPublicKeyById("missing", "raw-base64")).rejects.toMatchObject(
       { status: 404 },
     );
+  });
+});
+
+describe("order check client", () => {
+  it("preserves the policy on a dry-run wouldBlock", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        check: {
+          passed: false,
+          rejects: [],
+          wouldDisplayPrices: [],
+          wouldBlock: {
+            account: "acc-1",
+            policy: "spot_funds_pnl_bounds_kill_switch",
+            code: "pnl_bound_breached",
+            reason: "lower bound breached",
+            details: "realized=-1500,lower=-1000",
+          },
+        },
+      }),
+    );
+
+    const result = await checkOrder({
+      account: "acc-1",
+      baseAsset: "AAPL",
+      quoteAsset: "USD",
+      side: "buy",
+      amountKind: "quantity",
+      amountValue: "10",
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/orders/check",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(result.wouldBlock).toEqual({
+      account: "acc-1",
+      policy: "spot_funds_pnl_bounds_kill_switch",
+      code: "pnl_bound_breached",
+      reason: "lower bound breached",
+      details: "realized=-1500,lower=-1000",
+    });
   });
 });
 
@@ -2552,6 +2652,7 @@ describe("Orders submitExecutionReport", () => {
             {
               account: "desk-alpha",
               code: "spot_funds",
+              policy: "spot_funds_pnl_bounds_kill_switch",
               reason: "insufficient funds",
               details: "USD",
             },
@@ -2565,6 +2666,7 @@ describe("Orders submitExecutionReport", () => {
               heldResult: "0",
               incomingDelta: "0",
               incomingResult: "0",
+              realized_pnl_halt_reason: "missing_cost_basis",
             },
             {
               asset: "USD",
@@ -2574,6 +2676,7 @@ describe("Orders submitExecutionReport", () => {
               heldResult: "0",
               incomingDelta: "0",
               incomingResult: "0",
+              realizedPnlHaltReason: "missing_initial_pnl",
             },
           ],
         },
@@ -2598,6 +2701,7 @@ describe("Orders submitExecutionReport", () => {
       {
         account: "desk-alpha",
         code: "spot_funds",
+        policy: "spot_funds_pnl_bounds_kill_switch",
         reason: "insufficient funds",
         details: "USD",
       },
@@ -2611,6 +2715,10 @@ describe("Orders submitExecutionReport", () => {
         heldResult: "0",
         incomingDelta: "0",
         incomingResult: "0",
+        realizedPnlDelta: "",
+        realizedPnlResult: "",
+        realizedPnlHaltReason: "missing_cost_basis",
+        averageEntryPrice: "",
       },
       {
         asset: "USD",
@@ -2620,6 +2728,10 @@ describe("Orders submitExecutionReport", () => {
         heldResult: "0",
         incomingDelta: "0",
         incomingResult: "0",
+        realizedPnlDelta: "",
+        realizedPnlResult: "",
+        realizedPnlHaltReason: "missing_initial_pnl",
+        averageEntryPrice: "",
       },
     ]);
     expect(result.attestationToken).toBe("tok-report");

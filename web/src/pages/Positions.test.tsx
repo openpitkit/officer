@@ -24,7 +24,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { renderWithApi as render } from "@/test/apiClient";
 import { I18nextProvider } from "react-i18next";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
@@ -152,6 +152,7 @@ const account: Account = {
   blockReason: "",
   group: "",
   notes: "",
+  pnlHaltReason: "",
 };
 
 const balance: Balance = {
@@ -162,6 +163,7 @@ const balance: Balance = {
   incoming: "500",
   averageEntryPrice: "",
   realizedPnl: "0",
+  realizedPnlHaltReason: "",
   updatedAt: "2026-06-24T16:41:52Z",
 };
 
@@ -197,6 +199,20 @@ function acceptedAdjustment(request: Adjustment["request"]): Adjustment {
   };
 }
 
+function acceptedHaltedAdjustment(
+  request: Adjustment["request"],
+  reason: string,
+): Adjustment {
+  const adjustment = acceptedAdjustment(request);
+  return {
+    ...adjustment,
+    accepted: {
+      ...adjustment.accepted!,
+      realizedPnlHaltReason: reason,
+    },
+  };
+}
+
 function renderPositions(initialEntry = "/positions") {
   return render(
     <I18nextProvider i18n={i18n}>
@@ -209,6 +225,7 @@ function renderPositions(initialEntry = "/positions") {
             <SidebarProvider>
               <Positions />
             </SidebarProvider>
+            <LocationProbe />
           </MemoryRouter>
         </DisplayPreferencesProvider>
       </ThemeProvider>
@@ -226,6 +243,17 @@ function renderPositions(initialEntry = "/positions") {
         previewBusinessCsvImport: previewBusinessCsvImportMock,
       },
     },
+  );
+}
+
+function LocationProbe() {
+  const { pathname, search } = useLocation();
+  return (
+    <output
+      data-testid="location"
+      data-pathname={pathname}
+      data-search={search}
+    />
   );
 }
 
@@ -420,6 +448,46 @@ describe("Positions adjustment panel", () => {
     expect(setBalanceRealizedPnlMock).not.toHaveBeenCalled();
     expect(scope.getByText("realized PnL")).toBeInTheDocument();
     expect(scope.getAllByText("-12.50").length).toBeGreaterThan(0);
+  });
+
+  it("shows an accepted PnL halt without a numeric result", async () => {
+    const user = userEvent.setup();
+    createAdjustmentMock.mockImplementationOnce(async (_account, body) =>
+      acceptedHaltedAdjustment(
+        body as unknown as Adjustment["request"],
+        "missing_initial_pnl",
+      ),
+    );
+    renderPositions();
+
+    await user.click(
+      screen.getByRole("button", {
+        name: /open adjustment panel for bucks mcmoneyface aapl/i,
+      }),
+    );
+
+    const scope = within(
+      screen.getByRole("region", { name: "Adjustment" }),
+    );
+    await user.type(
+      scope.getByLabelText("Average entry price (optional)"),
+      "142.50",
+    );
+    await user.click(scope.getByRole("button", { name: /submit adjustment/i }));
+
+    const warning = await scope.findByRole("note", {
+      name: /authoritative initial PnL value is unavailable/i,
+    });
+    expect(warning.parentElement).toHaveClass(
+      "border-[var(--warn)]",
+      "bg-[var(--warn-dim)]",
+    );
+    expect(warning.parentElement).not.toHaveClass("border-[var(--ok)]");
+    expect(
+      within(warning.parentElement as HTMLElement).queryByText(
+        /^realized PnL$/i,
+      ),
+    ).not.toBeInTheDocument();
   });
 
   it("does not reapply a delta adjustment through a second realized-PnL call on retry", async () => {
@@ -893,6 +961,61 @@ describe("Positions balance row asset cell", () => {
       scope.getByRole("button", { name: /filter by aapl/i }),
     ).toBeInTheDocument();
   });
+
+  it("renders a focusable realized-PnL halt warning", () => {
+    useBalancesMock.mockReturnValue(
+      readyPage([
+        {
+          ...balance,
+          realizedPnlHaltReason: "arithmetic_overflow",
+        },
+      ]),
+    );
+
+    renderPositions();
+
+    const warning = within(balanceRow()).getByRole("note", {
+      name: /exact arithmetic exceeded the supported numeric range/i,
+    });
+    expect(warning).toHaveAttribute("tabindex", "0");
+  });
+});
+
+describe("Positions account orders navigation", () => {
+  it("opens all orders filtered to the balance account", async () => {
+    const user = userEvent.setup();
+    renderPositions();
+
+    const button = within(balanceRow()).getByRole("button", {
+      name: /open orders for Bucks McMoneyface/i,
+    });
+    await user.click(button);
+
+    const location = screen.getByTestId("location");
+    expect(location).toHaveAttribute("data-pathname", "/orders");
+    expect(
+      new URLSearchParams(location.getAttribute("data-search") ?? "").get(
+        "account",
+      ),
+    ).toBe("Bucks McMoneyface");
+  });
+
+  it("opens the account orders link in a new tab with a modifier click", () => {
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    renderPositions();
+
+    const button = within(balanceRow()).getByRole("button", {
+      name: /open orders for Bucks McMoneyface/i,
+    });
+    fireEvent.click(button, { metaKey: true });
+
+    expect(open).toHaveBeenCalledWith(
+      expect.stringContaining("/orders?account=Bucks+McMoneyface"),
+      "_blank",
+      "noopener,noreferrer",
+    );
+    open.mockRestore();
+  });
 });
 
 describe("Positions active-orders navigation", () => {
@@ -1011,6 +1134,37 @@ describe("Positions history row actions", () => {
       realizedPnl: "-12.50",
     });
     expect(setBalanceRealizedPnlMock).not.toHaveBeenCalled();
+  });
+
+  it("shows an accepted PnL halt without a numeric result", () => {
+    useAdjustmentsMock.mockReturnValue(
+      readyPage<Adjustment>([
+        acceptedHaltedAdjustment(
+          {
+            asset: "AAPL",
+            averageEntryPrice: "142.50",
+          },
+          "missing_initial_pnl",
+        ),
+      ]),
+    );
+    renderPositions("/positions?tab=history");
+
+    const row = screen
+      .getAllByRole("row")
+      .find(
+        (candidate) =>
+          candidate.textContent?.includes("Bucks McMoneyface") &&
+          candidate.textContent?.includes("AAPL"),
+      );
+    expect(row).toBeDefined();
+    const scope = within(row as HTMLElement);
+    expect(
+      scope.getByText(/authoritative initial PnL value is unavailable/i),
+    ).toHaveClass("text-[var(--warn)]");
+    expect(scope.getByText(/accepted/i)).toHaveClass(
+      "border-[var(--warn)]",
+    );
   });
 });
 

@@ -70,6 +70,8 @@ export interface Account {
   blockReason: string;
   group: string;
   notes: string;
+  pnl?: string;
+  pnlHaltReason: string;
   positionCount?: number;
 }
 
@@ -221,7 +223,6 @@ export interface SpotFundsPnlBoundsLimit {
   scope: string;
   account: string;
   accountGroup: string;
-  accountCurrency: string;
   lowerBound: string;
   upperBound: string;
   initialPnl: string;
@@ -243,7 +244,6 @@ export interface Limit {
   account: string;
   accountGroup?: string;
   asset: string;
-  accountCurrency?: string;
   values: Record<string, string>;
 }
 
@@ -287,7 +287,6 @@ export interface Policy {
   account: string;
   accountGroup: string;
   asset: string;
-  accountCurrency: string;
   values: PolicyValues;
 }
 
@@ -303,7 +302,6 @@ export interface PolicyListFilters extends PageRequest, SortSpec {
   account?: string;
   accountGroup?: string;
   asset?: string;
-  accountCurrency?: string;
   policy?: PolicyFilter;
 }
 
@@ -333,6 +331,7 @@ export interface Balance {
   incoming: string;
   averageEntryPrice: string;
   realizedPnl: string;
+  realizedPnlHaltReason: string;
   updatedAt: string;
 }
 
@@ -344,12 +343,14 @@ export interface AdjustmentAccepted {
   heldResult: string;
   incomingDelta: string;
   incomingResult: string;
+  averageEntryPrice?: string;
   realizedPnlResult?:
     | string
     | {
         delta: string;
         result: string;
       };
+  realizedPnlHaltReason?: string;
 }
 
 /** The rejected side of an adjustment (mirrors adjustmentRejectedDTO). */
@@ -563,6 +564,7 @@ export interface CheckReject {
 /** Would-be account block from a pre-trade check. */
 export interface CheckWouldBlock {
   account: string;
+  policy: string;
   code: string;
   reason: string;
   details: string;
@@ -580,6 +582,7 @@ export interface CheckResult {
 export interface ExecutionBlock {
   account: string;
   code: string;
+  policy: string;
   reason: string;
   details: string;
 }
@@ -595,6 +598,10 @@ export interface ExecutionOutcome {
   heldResult: string;
   incomingDelta: string;
   incomingResult: string;
+  realizedPnlDelta: string;
+  realizedPnlResult: string;
+  realizedPnlHaltReason?: string;
+  averageEntryPrice?: string;
 }
 
 /** Result of POST /orders/{externalId}/execution-reports: the recorded result,
@@ -1003,6 +1010,7 @@ export interface ApprovalTokenResponse {
 /** One engine-recorded account block bound in the attestation payload result. */
 export interface AttestationBlock {
   account: string;
+  policy: string;
   code: string;
   reason: string;
   details: string;

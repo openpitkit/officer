@@ -109,14 +109,14 @@ func (n *localNode) UpdateMarketDataInstanceSettings(
 }
 
 func (n *localNode) DeleteMarketDataInstance(
-	ctx context.Context, id domain.ExternalID, force bool, caller domain.Caller,
+	ctx context.Context, id domain.ExternalID, caller domain.Caller,
 ) error {
 	if err := n.beginMutation(); err != nil {
 		return err
 	}
 	defer n.endMutation()
 
-	if err := n.realm.DeleteMarketDataInstance(ctx, id, force); err != nil {
+	if err := n.realm.DeleteMarketDataInstance(ctx, id); err != nil {
 		return fmt.Errorf("delete market-data instance: %w", err)
 	}
 	if err := n.audit(ctx, caller, store.AuditEntry{

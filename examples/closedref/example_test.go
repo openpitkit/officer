@@ -349,8 +349,8 @@ func (e *fakeEngine) ConfigurePolicy(
 	context.Context,
 	string,
 	engine.LimitSet,
-) error {
-	return nil
+) (engine.PolicyConfigurationResult, error) {
+	return engine.PolicyConfigurationResult{}, nil
 }
 
 func (e *fakeEngine) BlockAccount(context.Context, domain.AccountID, string) error {
@@ -367,6 +367,12 @@ func (e *fakeEngine) SetAccountCurrency(context.Context, domain.AccountID, strin
 
 func (e *fakeEngine) ClearAccountCurrency(context.Context, domain.AccountID) error {
 	return nil
+}
+
+func (e *fakeEngine) SetAccountPnl(
+	context.Context, domain.AccountID, string,
+) ([]domain.AccountBlock, error) {
+	return nil, nil
 }
 
 func (e *fakeEngine) ApplyAccountAdjustmentBatch(

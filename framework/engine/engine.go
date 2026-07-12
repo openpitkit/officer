@@ -86,6 +86,21 @@ type LimitSet struct {
 	SpotFundsPnlBoundsLimits []domain.LimitSpotFundsPnlBounds
 }
 
+// AccountPnlUpdate is an authoritative account P&L force-set performed while
+// applying a live policy configuration.
+type AccountPnlUpdate struct {
+	Account domain.AccountID
+	Pnl     string
+}
+
+// PolicyConfigurationResult is the accepted outcome of a live policy update.
+// AccountPnlUpdates and AccountBlocks must be mirrored durably before the node
+// admits subsequent account work.
+type PolicyConfigurationResult struct {
+	AccountPnlUpdates []AccountPnlUpdate
+	AccountBlocks     []domain.AccountBlock
+}
+
 // AdjustmentResult is the outcome of one ApplyAccountAdjustment call. Exactly
 // one of Accepted/Rejected is non-nil, mirroring the binding's accept/reject
 // split for a single-asset adjustment.
@@ -94,6 +109,14 @@ type AdjustmentResult struct {
 	Accepted *domain.AdjustmentOutcomeAccepted
 	// Rejected carries the first reject on reject.
 	Rejected *domain.AdjustmentOutcomeRejected
+	// AccountBlocks are the blocks the engine latched while committing the
+	// adjustment batch this result belongs to (an out-of-bounds force-set trips
+	// the account's kill-switch). The engine has already applied them and the
+	// caller must mirror them durably in the same operation - deferring to a
+	// later fill or post-trade event is not allowed. They are batch-level, so
+	// every result of one batch repeats the same blocks; mirror them keyed by
+	// account.
+	AccountBlocks []domain.AccountBlock
 }
 
 // AdjustmentBatchReject is an atomic account-adjustment batch reject from the
@@ -159,6 +182,12 @@ type ImmediateResult struct {
 	// fill settlement, each tagged with its asset (both the base and the quote
 	// leg of a spot fill settle).
 	Outcomes []BalanceOutcome
+	// AccountPnl is the authoritative SpotFunds account-currency P&L snapshot
+	// produced by the immediate fill settlement. Empty means no amount outcome.
+	AccountPnl string
+	// AccountPnlHaltReason is the authoritative reason SpotFunds could not
+	// calculate account P&L for the immediate fill settlement.
+	AccountPnlHaltReason domain.PnlHaltReason
 	// SettlementLockPrice is the settlement-leg lock price the fill settled at as
 	// a decimal string; empty when no price was locked.
 	SettlementLockPrice string
@@ -186,6 +215,12 @@ type ExecutionReportPersistence struct {
 	Commission *domain.Commission
 	// OrderStatus is the order status change the engine-facing layer accepted.
 	OrderStatus domain.OrderStatus
+	// AccountPnl is the SpotFunds account-currency P&L snapshot. Empty means
+	// that the execution report carried no P&L amount.
+	AccountPnl string
+	// AccountPnlHaltReason is the engine-reported reason account P&L was not
+	// calculated. Empty with a non-empty AccountPnl clears a prior halt.
+	AccountPnlHaltReason domain.PnlHaltReason
 	// Leaves is the remaining open quantity to persist; terminal settlements use
 	// zero after the engine consumes the report's release quantity. Empty leaves
 	// the stored value unchanged.
@@ -221,6 +256,15 @@ type AccountLane interface {
 	UnblockAccount(ctx context.Context, id domain.AccountID) error
 	SetAccountCurrency(ctx context.Context, id domain.AccountID, currency string) error
 	ClearAccountCurrency(ctx context.Context, id domain.AccountID) error
+	// SetAccountPnl force-sets the live SpotFunds account-currency P&L
+	// accumulator to pnl, an absolute decimal-string assignment that also clears
+	// any halt latched on it. The returned blocks are the account blocks the
+	// engine latched while applying the assignment: a seeded value can breach its
+	// own kill-switch barrier, so the caller must mirror them rather than assume
+	// an accepted assignment leaves the account tradable.
+	SetAccountPnl(
+		ctx context.Context, id domain.AccountID, pnl string,
+	) ([]domain.AccountBlock, error)
 	ApplyAccountAdjustmentBatch(
 		ctx context.Context, account domain.AccountID, reqs []domain.AdjustmentRequest,
 	) ([]AdjustmentResult, *AdjustmentBatchReject, error)
@@ -280,8 +324,11 @@ type Engine interface {
 
 	// ConfigurePolicy reconfigures one policy from its complete typed barrier set
 	// on the live engine handle via the binding's Configure surface. Only the
-	// LimitSet slice matching policy is consumed.
-	ConfigurePolicy(ctx context.Context, policy string, limits LimitSet) error
+	// LimitSet slice matching policy is consumed. The returned blocks have
+	// already been applied by the engine and must be persisted by the caller.
+	ConfigurePolicy(
+		ctx context.Context, policy string, limits LimitSet,
+	) (PolicyConfigurationResult, error)
 
 	// RunAccountSynchronized runs fn on the engine's account-synchronized lane.
 	// Account-scoped node operations use this to keep Officer's own checks,

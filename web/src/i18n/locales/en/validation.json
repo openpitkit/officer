@@ -16,11 +16,6 @@
     "whitespace": "Account group must not have leading or trailing whitespace",
     "printable": "Account group must contain only printable characters"
   },
-  "accountCurrency": {
-    "required": "Account currency is required for this policy",
-    "tooLong": "Account currency must be at most {{max}} characters",
-    "whitespace": "Account currency must not contain whitespace"
-  },
   "kind": {
     "maxOrders": {
       "integer": "max_orders must be an integer greater than 0",
@@ -42,7 +37,6 @@
     "scopeNoAsset": "scope {{scope}} must not carry an asset",
     "scopeNoAccountGroup": "scope {{scope}} must not carry an account group",
     "policyNoAccountGroup": "{{policy}} must not carry an account group",
-    "policyNoAccountCurrency": "{{policy}} must not carry an account currency",
     "rateLimitRequires": "rate_limit requires both max_orders and window",
     "orderSizeRequires": "order_size_limit requires max_quantity or max_notional",
     "spotFundsInitialPnlAccountOnly": "initial_pnl is only available for account scope on spot_funds_pnl_bounds_kill_switch",
