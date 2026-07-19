@@ -31,6 +31,7 @@ import {
 } from "react";
 
 import { ClearInlineButton } from "@/components/ClearableInput";
+import { AUTOCOMPLETE_SUGGESTION_LIMIT } from "@/framework/constants";
 import { cn } from "@/lib/utils";
 
 export interface AutocompleteProps
@@ -43,7 +44,7 @@ export interface AutocompleteProps
   onSuggestionSelect?: (value: string) => void;
   /** Candidate list to filter suggestions from. May be empty. */
   suggestions: string[];
-  /** Maximum suggestions to show at once (default 8). */
+  /** Maximum suggestions to show at once. */
   maxSuggestions?: number;
   /** Clears the field; when set, the shared inline reset glyph shows while non-empty. */
   onClear?: () => void;
@@ -92,7 +93,7 @@ const Autocomplete = forwardRef<HTMLInputElement, AutocompleteProps>(
       onChange,
       onSuggestionSelect,
       suggestions,
-      maxSuggestions = 8,
+      maxSuggestions = AUTOCOMPLETE_SUGGESTION_LIMIT,
       className,
       onBlur,
       onFocus,

@@ -37,7 +37,11 @@ import {
   type Policy,
   type Scope,
 } from "@/api/vocabulary";
-import { ApiError, useOfficerApi } from "@/framework";
+import {
+  ApiError,
+  AUTOCOMPLETE_SUGGESTION_LIMIT,
+  useOfficerApi,
+} from "@/framework";
 import { Autocomplete } from "@/components/Autocomplete";
 import { ErrorBanner } from "@/components/PageStates";
 import {
@@ -332,7 +336,7 @@ export function LimitDialog({
       {
         code: accountSearch,
         codeMatch: "starts_with",
-        limit: 8,
+        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
         sort: "code",
       },
       controller.signal,
@@ -365,7 +369,7 @@ export function LimitDialog({
       {
         code: assetSearch,
         codeMatch: "starts_with",
-        limit: 8,
+        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
         sort: "code",
       },
       controller.signal,
@@ -398,7 +402,7 @@ export function LimitDialog({
       {
         code: accountGroupSearch,
         codeMatch: "starts_with",
-        limit: 8,
+        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
         sort: "code",
       },
       controller.signal,

@@ -322,7 +322,9 @@ export interface BoundsPair {
   upper?: string;
 }
 
-/** Spot-funds balance for one (account, asset) pair. */
+/** Spot-funds balance for one (account, asset) pair. `available`, `held` and
+ *  `incoming` are quantities of `asset`; `averageEntryPrice` and `realizedPnl`
+ *  are denominated in `accountCurrency` instead. */
 export interface Balance {
   account: string;
   asset: string;
@@ -332,6 +334,13 @@ export interface Balance {
   averageEntryPrice: string;
   realizedPnl: string;
   realizedPnlHaltReason: string;
+  /** Asset code denominating `averageEntryPrice` and `realizedPnl`: the
+   *  account's effective currency. One (account, asset) slot merges fills
+   *  against every quote asset the asset trades against, so a single fill's
+   *  quote asset never denominates these values. Empty when the account's
+   *  currency cascade sets no tier, leaving both values without a unit — which
+   *  is also what the engine reports as the `missing_account_currency` halt. */
+  accountCurrency: string;
   updatedAt: string;
 }
 
@@ -453,9 +462,16 @@ export interface BalanceListFilters extends PageRequest, SortSpec {
   averageEntryPriceMode?: RangeFilterMode;
   averageEntryPriceMin?: string;
   averageEntryPriceMax?: string;
+  /** Asset the average-entry-price bounds are expressed in. Required whenever
+   *  the mode is not `all`: the column is denominated per row, so only rows in
+   *  this currency are compared and the rest are excluded, never converted. */
+  averageEntryPriceCurrency?: string;
   realizedPnlMode?: RangeFilterMode;
   realizedPnlMin?: string;
   realizedPnlMax?: string;
+  /** Asset the realized-P&L bounds are expressed in. Required whenever the
+   *  mode is not `all`; see `averageEntryPriceCurrency`. */
+  realizedPnlCurrency?: string;
   updatedAtMode?: RangeFilterMode;
   updatedAfter?: string;
   updatedBefore?: string;

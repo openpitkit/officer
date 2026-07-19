@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 
 import {
+  AUTOCOMPLETE_SUGGESTION_LIMIT,
   ApiError,
   CloneButton,
   ColumnHeader,
@@ -435,7 +436,7 @@ function SubmitOrderDialog({
       {
         code: debouncedAccount,
         codeMatch: "starts_with",
-        limit: 8,
+        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
         sort: "code",
       },
       controller.signal,
@@ -471,7 +472,7 @@ function SubmitOrderDialog({
           {
             code: query,
             codeMatch: "starts_with",
-            limit: 8,
+            limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
             sort: "code",
           },
           controller.signal,
@@ -1214,7 +1215,7 @@ function ExecReportDialog({
       {
         code: debouncedCommissionCurrency,
         codeMatch: "starts_with",
-        limit: 8,
+        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
         sort: "code",
       },
       controller.signal,
@@ -3931,7 +3932,12 @@ export function Orders() {
     }
     const controller = new AbortController();
     fetchAccounts(
-      { code: query, codeMatch: "starts_with", limit: 8, sort: "code" },
+      {
+        code: query,
+        codeMatch: "starts_with",
+        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
+        sort: "code",
+      },
       controller.signal,
     )
       .then((accounts) => setAllAccountSuggestions(accounts.map((a) => a.code)))
@@ -3978,7 +3984,7 @@ export function Orders() {
           {
             code: query,
             codeMatch: "starts_with",
-            limit: 8,
+            limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
             sort: "code",
           },
           controller.signal,

@@ -834,23 +834,26 @@ func (m *Manager) Restart() error {
 	return m.Start(baseCtx)
 }
 
-// PushManual delivers an operator-set manual mark for one instrument into the
-// identified running instance's connector as a single quote. It is the
-// after-startup counterpart of the startup re-apply: the upsert path calls it
-// once after persisting an instrument with a manual price. It is a no-op when
+// PushManual delivers an operator-set manual mark for one applied instrument
+// into the identified running instance's connector as a single quote. It is
+// the after-startup counterpart of the startup re-apply: the upsert path calls
+// it once after persisting an instrument with a manual price. It is a no-op when
 // the manager is not running, the instance is not running, the instance's
-// connector is not push-capable, the instrument is disabled, or the price is
-// empty - mirroring what the startup re-apply would (or would not) push, so a
-// streaming provider is never affected. The push itself is non-blocking and
-// drains through the connector's channel into the sink like any quote.
+// connector is not push-capable, the instrument is disabled, the price is
+// empty, or the instrument is not part of the applied subscription set. The
+// last case leaves the price for the required Restart, which rebuilds the
+// subscription set before replaying stored manual prices. The push itself is
+// non-blocking and drains through the connector's channel into the sink like
+// any quote.
 func (m *Manager) PushManual(instanceID string, instrument domain.MarketDataInstrument) {
 	if !instrument.Enabled || instrument.ManualPrice == "" {
 		return
 	}
 	m.mu.Lock()
 	connector := m.byInstance[instanceID]
+	applied, appliedOK := m.appliedConfig[instanceID]
 	m.mu.Unlock()
-	if connector == nil {
+	if connector == nil || !appliedOK || !hasSubscription(applied.Subscriptions, instrument) {
 		return
 	}
 	if pushable, ok := connector.(Pushable); ok {
@@ -903,6 +906,17 @@ func externalSymbolsFor(subs []Subscription) map[quoteInstrumentKey]string {
 		symbols[quoteInstrumentKey{base: sub.Base, quote: sub.Quote}] = sub.External
 	}
 	return symbols
+}
+
+func hasSubscription(subs []Subscription, instrument domain.MarketDataInstrument) bool {
+	for _, sub := range subs {
+		if sub.External == instrument.ExternalSymbol &&
+			sub.Base == instrument.BaseAsset &&
+			sub.Quote == instrument.QuoteAsset {
+			return true
+		}
+	}
+	return false
 }
 
 // discard is an io.Writer that drops everything, backing the manager's default

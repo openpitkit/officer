@@ -138,6 +138,9 @@ func (s *Service) ListBalances(
 func (s *Service) ListBalanceRows(
 	ctx context.Context, filter store.BalanceListFilter,
 ) (store.BalanceListPage, error) {
+	if err := filter.Validate(); err != nil {
+		return store.BalanceListPage{}, err
+	}
 	nodes := s.router.All()
 	if len(nodes) == 1 {
 		return nodes[0].ListBalanceRows(ctx, filter)

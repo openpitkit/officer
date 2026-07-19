@@ -844,7 +844,10 @@ func toGroupRowDTO(row store.GroupListRow) groupDTO {
 // --- balance ----------------------------------------------------------------
 
 // balanceDTO is the wire shape of one per-(account, asset) holdings snapshot.
-// All amounts are exact decimal strings passed through verbatim.
+// All amounts are exact decimal strings passed through verbatim. Available,
+// held and incoming are quantities of Asset; realizedPnl and averageEntryPrice
+// are denominated in AccountCurrency, which is empty when the account's
+// currency cascade sets no tier and the two values therefore carry no unit.
 type balanceDTO struct {
 	UpdatedAt             time.Time `json:"updatedAt"`
 	Account               string    `json:"account"`
@@ -855,6 +858,7 @@ type balanceDTO struct {
 	RealizedPnl           string    `json:"realizedPnl"`
 	RealizedPnlHaltReason string    `json:"realizedPnlHaltReason"`
 	AverageEntryPrice     string    `json:"averageEntryPrice"`
+	AccountCurrency       string    `json:"accountCurrency"`
 }
 
 // balanceRealizedPnlRequestDTO is the wire body for updating the realized P&L
@@ -876,6 +880,7 @@ func toBalanceDTO(b domain.Balance) balanceDTO {
 		RealizedPnl:           b.RealizedPnl,
 		RealizedPnlHaltReason: string(b.RealizedPnlHaltReason),
 		AverageEntryPrice:     b.AverageEntryPrice,
+		AccountCurrency:       b.AccountCurrency,
 	}
 }
 

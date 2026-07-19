@@ -251,6 +251,23 @@ func decimalMatches(filter store.DecimalRangeFilter, value string) bool {
 	return true
 }
 
+// denominatedDecimalMatches mirrors the SQL connector: a threshold only applies
+// to a row carrying the same denomination, so a row in another currency is
+// excluded instead of compared against bounds that do not describe it.
+func denominatedDecimalMatches(
+	filter store.DenominatedDecimalRangeFilter,
+	value string,
+	currency string,
+) bool {
+	if filter.Empty() {
+		return true
+	}
+	if filter.Currency != currency {
+		return false
+	}
+	return decimalMatches(filter.Range, value)
+}
+
 func timeMatches(filter store.TimeRangeFilter, value time.Time) bool {
 	if filter.Empty() {
 		return true

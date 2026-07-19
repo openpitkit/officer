@@ -31,6 +31,12 @@
       "between": "介于",
       "min": "最小值",
       "max": "最大值"
+    },
+    "currency": {
+      "label": "CCY",
+      "placeholder": "USD",
+      "ariaLabel": "「{{field}}」阈值的货币",
+      "required": "请选择阈值所使用的货币。该数值以各账户自身的货币记账，缺少货币便无法比较。"
     }
   },
   "balances": {
@@ -52,11 +58,12 @@
       "available": "此列显示可立即使用的余额。",
       "held": "此列显示当前由待处理活动预留的余额。",
       "incoming": "此列显示尚未结转为可用余额的待入账余额。",
-      "avgEntryPrice": "此列显示为该余额保存的平均建仓价。",
-      "realizedPnl": "此列显示为该余额记录的已实现盈亏。",
+      "avgEntryPrice": "此列以账户货币显示为该余额保存的平均建仓价。",
+      "realizedPnl": "此列以账户货币显示为该余额记录的已实现盈亏。",
       "updated": "此列显示该余额行最后更新时间。",
       "adjust": "此列包含打开持仓调整的行操作。"
     },
+    "noAccountCurrencyHint": "该账户未设置货币，因此此数值没有计价单位。",
     "pnlHalt": {
       "missingFx": "PnL 计算已停止：缺少所需的 FX 报价。",
       "missingAccountCurrency": "PnL 计算已停止：账户货币不可用。",

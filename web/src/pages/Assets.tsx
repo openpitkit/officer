@@ -38,6 +38,7 @@ import {
   TablePagination,
 } from "@/components/TableControls";
 import {
+  AUTOCOMPLETE_SUGGESTION_LIMIT,
   ApiError,
   AutocompleteFilterField,
   ColumnHeader,
@@ -1357,7 +1358,12 @@ export function Assets() {
     }
     const controller = new AbortController();
     void fetchAssetClasses(
-      { code: query, codeMatch: "starts_with", limit: 8, sort: "code" },
+      {
+        code: query,
+        codeMatch: "starts_with",
+        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
+        sort: "code",
+      },
       controller.signal,
     )
       .then((rows) => {
@@ -1380,7 +1386,12 @@ export function Assets() {
     }
     const controller = new AbortController();
     void fetchAssets(
-      { code: query, codeMatch: "starts_with", limit: 8, sort: "code" },
+      {
+        code: query,
+        codeMatch: "starts_with",
+        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
+        sort: "code",
+      },
       controller.signal,
     )
       .then((rows) => {

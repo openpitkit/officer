@@ -38,6 +38,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"go.openpit.dev/officer/framework/backup"
@@ -200,6 +201,36 @@ func (f DecimalRangeFilter) Empty() bool {
 	return f.Min == nil && f.Max == nil && f.Equal == nil && f.NotEqual == nil
 }
 
+// DenominatedDecimalRangeFilter narrows rows by a decimal value that is only
+// comparable within a single denomination. Currency is the asset code the
+// bounds are expressed in; a row denominated in any other asset is excluded
+// rather than compared across denominations, and so is a row with no
+// denomination at all. Currency carries no default: a bare number cannot be
+// compared against a denominated column, so Validate rejects a non-empty Range
+// without one.
+type DenominatedDecimalRangeFilter struct {
+	Range    DecimalRangeFilter
+	Currency string
+}
+
+// Empty returns true when the decimal value is unrestricted.
+func (f DenominatedDecimalRangeFilter) Empty() bool { return f.Range.Empty() }
+
+// Validate reports whether the filter carries the denomination its bounds need.
+// field names the filter for the returned error.
+func (f DenominatedDecimalRangeFilter) Validate(field string) error {
+	if !f.Range.Empty() && f.Currency == "" {
+		return fmt.Errorf("%s: %w", field, ErrCurrencyRequired)
+	}
+	return nil
+}
+
+// ErrCurrencyRequired reports a threshold on a denominated value that names no
+// currency to compare in.
+var ErrCurrencyRequired = fmt.Errorf(
+	"currency is required to compare this value: %w", domain.ErrInvalid,
+)
+
 // TimeRangeFilter narrows rows by RFC3339Nano UTC text timestamps.
 type TimeRangeFilter struct {
 	Min          *time.Time
@@ -304,7 +335,11 @@ type OrderListPage struct {
 	Total int
 }
 
-// BalanceListFilter narrows balance-list reads in the store.
+// BalanceListFilter narrows balance-list reads in the store. Available, Held
+// and Incoming are quantities of the row's own asset, so the Asset matcher
+// already denominates them. AverageEntryPrice and RealizedPnl are denominated
+// in the account currency instead, which varies per row, so each carries the
+// currency its own bounds are expressed in.
 type BalanceListFilter struct {
 	Account           TextMatcher
 	GroupCode         *string
@@ -312,11 +347,19 @@ type BalanceListFilter struct {
 	Available         DecimalRangeFilter
 	Held              DecimalRangeFilter
 	Incoming          DecimalRangeFilter
-	AverageEntryPrice DecimalRangeFilter
-	RealizedPnl       DecimalRangeFilter
+	AverageEntryPrice DenominatedDecimalRangeFilter
+	RealizedPnl       DenominatedDecimalRangeFilter
 	UpdatedAt         TimeRangeFilter
 	Sort              SortSpec
 	Page              PageSpec
+}
+
+// Validate reports whether every denominated threshold names its currency.
+func (f BalanceListFilter) Validate() error {
+	if err := f.AverageEntryPrice.Validate("averageEntryPrice"); err != nil {
+		return err
+	}
+	return f.RealizedPnl.Validate("realizedPnl")
 }
 
 // BalanceListRow is a balance row plus list-only data.
@@ -739,7 +782,8 @@ type RealmStore interface {
 
 	// UpsertBalance inserts or replaces the balance snapshot for the
 	// (account, asset) the balance names. An unknown account or asset code is an
-	// error wrapping domain.ErrInvalid.
+	// error wrapping domain.ErrInvalid. AccountCurrency is read-only and derived
+	// from account settings when the balance is read.
 	UpsertBalance(ctx context.Context, balance domain.Balance) error
 
 	// GetBalance returns the balance for (account, asset). The bool is false when
@@ -764,7 +808,8 @@ type RealmStore interface {
 	) ([]domain.AccountID, error)
 
 	// ListBalanceRows returns balances matching filter, with total count before
-	// paging.
+	// paging. It returns filter validation errors, including a denominated range
+	// whose bounds do not name a currency.
 	ListBalanceRows(
 		ctx context.Context, filter BalanceListFilter,
 	) (BalanceListPage, error)

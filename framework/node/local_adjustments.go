@@ -345,10 +345,18 @@ func (n *localNode) balanceFromRealizedPnlRecord(
 	if ok {
 		return stored, nil
 	}
+	account, ok, err := n.realm.GetAccount(ctx, key.Account)
+	if err != nil {
+		return domain.Balance{}, fmt.Errorf("read account for realized pnl balance: %w", err)
+	}
+	if !ok {
+		return domain.Balance{}, fmt.Errorf("account %q: %w", key.Account, domain.ErrNotFound)
+	}
 	return domain.Balance{
-		Account:     key.Account,
-		Asset:       rec.Request.Asset,
-		RealizedPnl: realizedPnl,
+		Account:         key.Account,
+		Asset:           rec.Request.Asset,
+		RealizedPnl:     realizedPnl,
+		AccountCurrency: account.EffectiveCurrency,
 	}, nil
 }
 
@@ -497,6 +505,9 @@ func (n *localNode) ListBalances(
 func (n *localNode) ListBalanceRows(
 	ctx context.Context, filter store.BalanceListFilter,
 ) (store.BalanceListPage, error) {
+	if err := filter.Validate(); err != nil {
+		return store.BalanceListPage{}, err
+	}
 	balances, err := n.realm.ListBalanceRows(ctx, filter)
 	if err != nil {
 		return store.BalanceListPage{}, fmt.Errorf("list balance rows: %w", err)

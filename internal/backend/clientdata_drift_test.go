@@ -163,6 +163,14 @@ var clientDataAllowlist = []clientDataAllow{
 		Why:     "imported position snapshots receive a fresh write timestamp",
 	},
 	{
+		Surface: driftBusinessCSV,
+		Entity:  "positions",
+		Field:   "AccountCurrency",
+		Kind:    "uncovered",
+		Why: "derived from the account's currency cascade, not independent " +
+			"position state; the account row carries the currency it denominates in",
+	},
+	{
 		Surface: driftBackup,
 		Entity:  "orders",
 		Field:   "CommissionSubtotals",

@@ -31,6 +31,12 @@
       "between": "Between",
       "min": "Min",
       "max": "Max"
+    },
+    "currency": {
+      "label": "CCY",
+      "placeholder": "USD",
+      "ariaLabel": "Currency for the {{field}} threshold",
+      "required": "Select the currency the threshold is given in. This value is kept in each account's own currency, so it cannot be compared without one."
     }
   },
   "balances": {
@@ -52,11 +58,12 @@
       "available": "This column shows the immediately available balance.",
       "held": "This column shows the balance currently reserved by pending activity.",
       "incoming": "This column shows incoming balance that has not settled into availability yet.",
-      "avgEntryPrice": "This column shows the average entry price stored for the balance.",
-      "realizedPnl": "This column shows realized profit and loss recorded for the balance.",
+      "avgEntryPrice": "This column shows the average entry price stored for the balance, in the account currency.",
+      "realizedPnl": "This column shows realized profit and loss recorded for the balance, in the account currency.",
       "updated": "This column shows when the balance row was last updated.",
       "adjust": "This column contains the row action for opening a position adjustment."
     },
+    "noAccountCurrencyHint": "The account sets no currency, so this value has no unit.",
     "pnlHalt": {
       "missingFx": "PnL calculation stopped: a required FX quote is unavailable.",
       "missingAccountCurrency": "PnL calculation stopped: the account currency is unavailable.",

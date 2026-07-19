@@ -65,6 +65,8 @@ import {
   FilterBar,
   FilterByButton,
   IdCell,
+  AUTOCOMPLETE_SUGGESTION_LIMIT,
+  MAX_LIST_LIMIT,
   RowActions,
   ShareLinkButton,
   SortableHeader,
@@ -601,7 +603,12 @@ export function Limits() {
     }
     const controller = new AbortController();
     void fetchAccounts(
-      { code: query, codeMatch: "starts_with", limit: 8, sort: "code" },
+      {
+        code: query,
+        codeMatch: "starts_with",
+        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
+        sort: "code",
+      },
       controller.signal,
     )
       .then(setAccountSuggestions)
@@ -621,7 +628,12 @@ export function Limits() {
     }
     const controller = new AbortController();
     void fetchAssets(
-      { code: query, codeMatch: "starts_with", limit: 8, sort: "code" },
+      {
+        code: query,
+        codeMatch: "starts_with",
+        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
+        sort: "code",
+      },
       controller.signal,
     )
       .then((assets) =>
@@ -641,7 +653,7 @@ export function Limits() {
       return;
     }
     const controller = new AbortController();
-    void fetchGroups({ limit: 1000, sort: "code" }, controller.signal)
+    void fetchGroups({ limit: MAX_LIST_LIMIT, sort: "code" }, controller.signal)
       .then((groups) => {
         const groupCodes = groups
           .map((group) => group.code)

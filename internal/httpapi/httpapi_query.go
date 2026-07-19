@@ -419,14 +419,12 @@ var policySortKeys = map[string]struct{}{
 }
 
 var balanceSortKeys = map[string]struct{}{
-	"account":           {},
-	"asset":             {},
-	"available":         {},
-	"averageEntryPrice": {},
-	"held":              {},
-	"incoming":          {},
-	"realizedPnl":       {},
-	"updatedAt":         {},
+	"account":   {},
+	"asset":     {},
+	"available": {},
+	"held":      {},
+	"incoming":  {},
+	"updatedAt": {},
 }
 
 var adjustmentSortKeys = map[string]struct{}{
@@ -555,15 +553,13 @@ func balanceListFilterFromQuery(q url.Values) (store.BalanceListFilter, error) {
 	if err != nil {
 		return store.BalanceListFilter{}, err
 	}
-	averageEntryPrice, err := decimalRangeFromQuery(
-		q, "averageEntryPriceMode", "averageEntryPriceMin", "averageEntryPriceMax",
+	averageEntryPrice, err := denominatedDecimalRangeFromQuery(
+		q, "averageEntryPrice",
 	)
 	if err != nil {
 		return store.BalanceListFilter{}, err
 	}
-	realizedPnl, err := decimalRangeFromQuery(
-		q, "realizedPnlMode", "realizedPnlMin", "realizedPnlMax",
-	)
+	realizedPnl, err := denominatedDecimalRangeFromQuery(q, "realizedPnl")
 	if err != nil {
 		return store.BalanceListFilter{}, err
 	}
@@ -598,7 +594,29 @@ func balanceListFilterFromQuery(q url.Values) (store.BalanceListFilter, error) {
 		}
 		filter.GroupCode = &groupCode
 	}
+	if err := filter.Validate(); err != nil {
+		return store.BalanceListFilter{}, err
+	}
 	return filter, nil
+}
+
+// denominatedDecimalRangeFromQuery reads the `<field>Mode/Min/Max` range shared
+// by every numeric filter plus the `<field>Currency` the bounds are given in.
+// The currency has no default: the caller must name the asset its threshold is
+// expressed in, since the column it compares against is denominated per row.
+func denominatedDecimalRangeFromQuery(
+	q url.Values, field string,
+) (store.DenominatedDecimalRangeFilter, error) {
+	value, err := decimalRangeFromQuery(
+		q, field+"Mode", field+"Min", field+"Max",
+	)
+	if err != nil {
+		return store.DenominatedDecimalRangeFilter{}, err
+	}
+	return store.DenominatedDecimalRangeFilter{
+		Range:    value,
+		Currency: q.Get(field + "Currency"),
+	}, nil
 }
 
 func orderSideFromQuery(q url.Values) (*domain.OrderSide, error) {

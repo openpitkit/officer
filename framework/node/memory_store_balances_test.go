@@ -31,6 +31,7 @@ import (
 func (r *memoryRealm) UpsertBalance(_ context.Context, balance domain.Balance) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	balance.AccountCurrency = ""
 	r.balances[balanceKey(balance.Account, balance.Asset)] = balance
 	return nil
 }
@@ -41,6 +42,9 @@ func (r *memoryRealm) GetBalance(
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	balance, ok := r.balances[balanceKey(account, asset)]
+	if ok {
+		balance = r.balanceWithAccountCurrency(balance)
+	}
 	return balance, ok, nil
 }
 
@@ -57,7 +61,7 @@ func (r *memoryRealm) ListBalances(
 		if asset != "" && balance.Asset != asset {
 			continue
 		}
-		out = append(out, balance)
+		out = append(out, r.balanceWithAccountCurrency(balance))
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Account == out[j].Account {
@@ -66,6 +70,17 @@ func (r *memoryRealm) ListBalances(
 		return out[i].Account < out[j].Account
 	})
 	return out, nil
+}
+
+func (r *memoryRealm) balanceWithAccountCurrency(
+	balance domain.Balance,
+) domain.Balance {
+	account, ok := r.accounts[balance.Account]
+	if ok {
+		balance.AccountCurrency =
+			r.accountWithCurrencyCascade(account).EffectiveCurrency
+	}
+	return balance
 }
 
 func (r *memoryRealm) ListAccountsWithOpenBalances(
@@ -178,9 +193,60 @@ func TestMemoryRealmListAccountsWithOpenBalancesIncludesAccountPnl(t *testing.T)
 	}
 }
 
+func TestMemoryRealmListBalanceRowsValidatesAndDerivesCurrency(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	realm := newMemoryStore("node.db").realm
+	for _, code := range []string{"AAPL", "EUR", "USD"} {
+		if err := realm.CreateAsset(ctx, domain.Asset{Code: code}); err != nil {
+			t.Fatalf("CreateAsset(%s): %v", code, err)
+		}
+	}
+	if _, err := realm.CreateAccount(ctx, domain.Account{
+		Code:     "acc-1",
+		Currency: "USD",
+	}); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if err := realm.UpsertBalance(ctx, domain.Balance{
+		Account:         "acc-1",
+		Asset:           "AAPL",
+		RealizedPnl:     "100",
+		AccountCurrency: "EUR",
+	}); err != nil {
+		t.Fatalf("UpsertBalance: %v", err)
+	}
+
+	min := "50"
+	_, err := realm.ListBalanceRows(ctx, store.BalanceListFilter{
+		RealizedPnl: store.DenominatedDecimalRangeFilter{
+			Range: store.DecimalRangeFilter{Min: &min},
+		},
+	})
+	if !errors.Is(err, store.ErrCurrencyRequired) {
+		t.Fatalf("ListBalanceRows invalid filter = %v, want ErrCurrencyRequired", err)
+	}
+
+	page, err := realm.ListBalanceRows(ctx, store.BalanceListFilter{
+		RealizedPnl: store.DenominatedDecimalRangeFilter{
+			Range:    store.DecimalRangeFilter{Min: &min},
+			Currency: "USD",
+		},
+	})
+	if err != nil {
+		t.Fatalf("ListBalanceRows: %v", err)
+	}
+	if len(page.Rows) != 1 || page.Rows[0].Balance.AccountCurrency != "USD" {
+		t.Fatalf("rows = %+v, want one USD-denominated balance", page.Rows)
+	}
+}
+
 func (r *memoryRealm) ListBalanceRows(
 	ctx context.Context, filter store.BalanceListFilter,
 ) (store.BalanceListPage, error) {
+	if err := filter.Validate(); err != nil {
+		return store.BalanceListPage{}, err
+	}
 	balances, err := r.ListBalances(ctx, "", "")
 	if err != nil {
 		return store.BalanceListPage{}, err
@@ -193,8 +259,14 @@ func (r *memoryRealm) ListBalanceRows(
 			!decimalMatches(filter.Available, balance.Available) ||
 			!decimalMatches(filter.Held, balance.Held) ||
 			!decimalMatches(filter.Incoming, balance.Incoming) ||
-			!decimalMatches(filter.AverageEntryPrice, balance.AverageEntryPrice) ||
-			!decimalMatches(filter.RealizedPnl, balance.RealizedPnl) ||
+			!denominatedDecimalMatches(
+				filter.AverageEntryPrice,
+				balance.AverageEntryPrice,
+				balance.AccountCurrency,
+			) ||
+			!denominatedDecimalMatches(
+				filter.RealizedPnl, balance.RealizedPnl, balance.AccountCurrency,
+			) ||
 			!timeMatches(filter.UpdatedAt, balance.UpdatedAt) {
 			continue
 		}
@@ -238,10 +310,6 @@ func sortBalanceRows(rows []store.BalanceListRow, spec store.SortSpec) {
 			cmp = compareDecimalText(left.Held, right.Held)
 		case "incoming":
 			cmp = compareDecimalText(left.Incoming, right.Incoming)
-		case "averageEntryPrice":
-			cmp = compareDecimalText(left.AverageEntryPrice, right.AverageEntryPrice)
-		case "realizedPnl":
-			cmp = compareDecimalText(left.RealizedPnl, right.RealizedPnl)
 		case "updatedAt":
 			cmp = compareTimes(left.UpdatedAt, right.UpdatedAt)
 		default:

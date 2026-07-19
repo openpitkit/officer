@@ -539,6 +539,287 @@ func TestBalanceUnknownAssetIsInvalid(t *testing.T) {
 	}
 }
 
+// A position's realized P&L and average entry price are denominated in the
+// account currency, which the account itself may inherit. Every tier of the
+// cascade must denominate the row exactly as a directly assigned currency does.
+func TestBalanceAccountCurrencyResolvesEveryCascadeTier(t *testing.T) {
+	ctx, rs := seedBalanceFixtures(t)
+	if err := rs.CreateAsset(ctx, domain.Asset{Code: "EUR", Title: "Euro"}); err != nil {
+		t.Fatalf("CreateAsset(EUR): %v", err)
+	}
+	if err := rs.CreateAsset(ctx, domain.Asset{Code: "GBP", Title: "Pound"}); err != nil {
+		t.Fatalf("CreateAsset(GBP): %v", err)
+	}
+	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "grp-1"}); err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	if _, err := rs.CreateAccount(
+		ctx, domain.Account{Code: "acc-grp", GroupCode: "grp-1"},
+	); err != nil {
+		t.Fatalf("CreateAccount(acc-grp): %v", err)
+	}
+	for _, code := range []domain.AccountID{"acc-1", "acc-grp"} {
+		if err := rs.UpsertBalance(ctx, domain.Balance{
+			Account: code, Asset: "AAPL", AverageEntryPrice: "10", RealizedPnl: "1",
+		}); err != nil {
+			t.Fatalf("UpsertBalance(%s): %v", code, err)
+		}
+	}
+
+	currencyOf := func(t *testing.T, account domain.AccountID) string {
+		t.Helper()
+		got, ok, err := rs.GetBalance(ctx, account, "AAPL")
+		if err != nil || !ok {
+			t.Fatalf("GetBalance(%s): ok=%v err=%v", account, ok, err)
+		}
+		return got.AccountCurrency
+	}
+
+	// No tier set: the values carry no unit.
+	if got := currencyOf(t, "acc-1"); got != "" {
+		t.Fatalf("AccountCurrency with no tier set = %q, want empty", got)
+	}
+
+	// Default group tier is the last resort.
+	if err := rs.SetGroupCurrency(ctx, "", "GBP"); err != nil {
+		t.Fatalf("SetGroupCurrency(default): %v", err)
+	}
+	if got := currencyOf(t, "acc-grp"); got != "GBP" {
+		t.Fatalf("AccountCurrency from default tier = %q, want GBP", got)
+	}
+
+	// The account's own group outranks the default group.
+	if err := rs.SetGroupCurrency(ctx, "grp-1", "EUR"); err != nil {
+		t.Fatalf("SetGroupCurrency(grp-1): %v", err)
+	}
+	if got := currencyOf(t, "acc-grp"); got != "EUR" {
+		t.Fatalf("AccountCurrency from group tier = %q, want EUR", got)
+	}
+
+	// The account tier outranks both.
+	if err := rs.SetAccountCurrency(ctx, "acc-grp", "USD"); err != nil {
+		t.Fatalf("SetAccountCurrency(acc-grp): %v", err)
+	}
+	if got := currencyOf(t, "acc-grp"); got != "USD" {
+		t.Fatalf("AccountCurrency from account tier = %q, want USD", got)
+	}
+}
+
+// The motivating case: two accounts hold the same asset but keep their P&L in
+// different currencies. A threshold given in one currency must never be
+// compared against a row denominated in the other, so the currency the
+// threshold names selects which rows the numeric bounds even apply to.
+func TestBalanceListRowsComparesOnlyWithinNamedCurrency(t *testing.T) {
+	ctx, rs := seedBalanceFixtures(t)
+	if err := rs.CreateAsset(ctx, domain.Asset{Code: "EUR", Title: "Euro"}); err != nil {
+		t.Fatalf("CreateAsset(EUR): %v", err)
+	}
+	for _, seed := range []struct {
+		account  domain.AccountID
+		currency string
+		pnl      string
+	}{
+		{"acc-usd", "USD", "100"},
+		{"acc-eur", "EUR", "100"},
+		{"acc-none", "", "100"},
+	} {
+		if _, err := rs.CreateAccount(
+			ctx, domain.Account{Code: seed.account},
+		); err != nil {
+			t.Fatalf("CreateAccount(%s): %v", seed.account, err)
+		}
+		if seed.currency != "" {
+			if err := rs.SetAccountCurrency(
+				ctx, seed.account, seed.currency,
+			); err != nil {
+				t.Fatalf("SetAccountCurrency(%s): %v", seed.account, err)
+			}
+		}
+		if err := rs.UpsertBalance(ctx, domain.Balance{
+			Account:           seed.account,
+			Asset:             "AAPL",
+			AverageEntryPrice: seed.pnl,
+			RealizedPnl:       seed.pnl,
+		}); err != nil {
+			t.Fatalf("UpsertBalance(%s): %v", seed.account, err)
+		}
+	}
+
+	min50 := "50"
+	listAccounts := func(t *testing.T, filter fwstore.BalanceListFilter) []string {
+		t.Helper()
+		page, err := rs.ListBalanceRows(ctx, filter)
+		if err != nil {
+			t.Fatalf("ListBalanceRows: %v", err)
+		}
+		got := make([]string, 0, len(page.Rows))
+		for _, row := range page.Rows {
+			got = append(got, string(row.Balance.Account))
+		}
+		if page.Total != len(got) {
+			t.Fatalf("Total = %d, want %d matching rows", page.Total, len(got))
+		}
+		return got
+	}
+
+	// Every row clears 50 numerically, but only the USD row is denominated in
+	// the currency the threshold was given in.
+	got := listAccounts(t, fwstore.BalanceListFilter{
+		RealizedPnl: fwstore.DenominatedDecimalRangeFilter{
+			Range:    fwstore.DecimalRangeFilter{Min: &min50},
+			Currency: "USD",
+		},
+	})
+	if len(got) != 1 || got[0] != "acc-usd" {
+		t.Fatalf("realized P&L >= 50 USD = %v, want [acc-usd]", got)
+	}
+
+	// Naming the other currency selects the other row, not both.
+	got = listAccounts(t, fwstore.BalanceListFilter{
+		AverageEntryPrice: fwstore.DenominatedDecimalRangeFilter{
+			Range:    fwstore.DecimalRangeFilter{Min: &min50},
+			Currency: "EUR",
+		},
+	})
+	if len(got) != 1 || got[0] != "acc-eur" {
+		t.Fatalf("avg entry price >= 50 EUR = %v, want [acc-eur]", got)
+	}
+
+	// A row whose account names no currency has an unlabelled number and so
+	// cannot satisfy a threshold that names one.
+	got = listAccounts(t, fwstore.BalanceListFilter{
+		RealizedPnl: fwstore.DenominatedDecimalRangeFilter{
+			Range:    fwstore.DecimalRangeFilter{Min: &min50},
+			Currency: "GBP",
+		},
+	})
+	if len(got) != 0 {
+		t.Fatalf("realized P&L >= 50 GBP = %v, want no rows", got)
+	}
+
+	// Without a numeric condition the currency constrains nothing: it scopes a
+	// comparison, it is not an identity filter.
+	got = listAccounts(t, fwstore.BalanceListFilter{
+		Asset: fwstore.ExactTextMatcher("AAPL"),
+	})
+	if len(got) != 3 {
+		t.Fatalf("unfiltered AAPL rows = %v, want every seeded row", got)
+	}
+}
+
+func TestBalanceListRowsRejectsDenominatedRangeWithoutCurrency(t *testing.T) {
+	ctx, rs := seedBalanceFixtures(t)
+	min := "50"
+	_, err := rs.ListBalanceRows(ctx, fwstore.BalanceListFilter{
+		RealizedPnl: fwstore.DenominatedDecimalRangeFilter{
+			Range: fwstore.DecimalRangeFilter{Min: &min},
+		},
+	})
+	if !errors.Is(err, fwstore.ErrCurrencyRequired) {
+		t.Fatalf("ListBalanceRows invalid filter = %v, want ErrCurrencyRequired", err)
+	}
+}
+
+// An inherited currency denominates its rows exactly as a directly assigned one
+// does, so a threshold must reach rows whose account never names a currency of
+// its own.
+func TestBalanceListRowsComparesAgainstInheritedCurrency(t *testing.T) {
+	ctx, rs := seedBalanceFixtures(t)
+	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "grp-1"}); err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	if _, err := rs.CreateAccount(
+		ctx, domain.Account{Code: "acc-grp", GroupCode: "grp-1"},
+	); err != nil {
+		t.Fatalf("CreateAccount(acc-grp): %v", err)
+	}
+	if err := rs.SetGroupCurrency(ctx, "grp-1", "USD"); err != nil {
+		t.Fatalf("SetGroupCurrency: %v", err)
+	}
+	if err := rs.UpsertBalance(ctx, domain.Balance{
+		Account: "acc-grp", Asset: "AAPL", RealizedPnl: "100",
+	}); err != nil {
+		t.Fatalf("UpsertBalance: %v", err)
+	}
+
+	min50 := "50"
+	page, err := rs.ListBalanceRows(ctx, fwstore.BalanceListFilter{
+		RealizedPnl: fwstore.DenominatedDecimalRangeFilter{
+			Range:    fwstore.DecimalRangeFilter{Min: &min50},
+			Currency: "USD",
+		},
+	})
+	if err != nil {
+		t.Fatalf("ListBalanceRows: %v", err)
+	}
+	if len(page.Rows) != 1 || page.Rows[0].Balance.Account != "acc-grp" {
+		t.Fatalf("rows = %+v, want the group-inherited USD row", page.Rows)
+	}
+	if got := page.Rows[0].Balance.AccountCurrency; got != "USD" {
+		t.Fatalf("AccountCurrency = %q, want USD", got)
+	}
+}
+
+func TestBalanceListRowsUsesEveryCurrencyCascadeTier(t *testing.T) {
+	ctx, rs := seedBalanceFixtures(t)
+	for _, code := range []string{"EUR", "GBP"} {
+		if err := rs.CreateAsset(ctx, domain.Asset{Code: code}); err != nil {
+			t.Fatalf("CreateAsset(%s): %v", code, err)
+		}
+	}
+	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "grp-1"}); err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	for _, account := range []domain.Account{
+		{Code: "acc-default"},
+		{Code: "acc-group", GroupCode: "grp-1"},
+		{Code: "acc-account", GroupCode: "grp-1", Currency: "USD"},
+	} {
+		if _, err := rs.CreateAccount(ctx, account); err != nil {
+			t.Fatalf("CreateAccount(%s): %v", account.Code, err)
+		}
+		if err := rs.UpsertBalance(ctx, domain.Balance{
+			Account: account.Code, Asset: "AAPL", RealizedPnl: "100",
+		}); err != nil {
+			t.Fatalf("UpsertBalance(%s): %v", account.Code, err)
+		}
+	}
+	if err := rs.SetGroupCurrency(ctx, "", "GBP"); err != nil {
+		t.Fatalf("SetGroupCurrency(default): %v", err)
+	}
+	if err := rs.SetGroupCurrency(ctx, "grp-1", "EUR"); err != nil {
+		t.Fatalf("SetGroupCurrency(grp-1): %v", err)
+	}
+
+	min := "50"
+	for _, want := range []struct {
+		account  domain.AccountID
+		currency string
+	}{
+		{account: "acc-default", currency: "GBP"},
+		{account: "acc-group", currency: "EUR"},
+		{account: "acc-account", currency: "USD"},
+	} {
+		t.Run(want.currency, func(t *testing.T) {
+			page, err := rs.ListBalanceRows(ctx, fwstore.BalanceListFilter{
+				RealizedPnl: fwstore.DenominatedDecimalRangeFilter{
+					Range:    fwstore.DecimalRangeFilter{Min: &min},
+					Currency: want.currency,
+				},
+			})
+			if err != nil {
+				t.Fatalf("ListBalanceRows: %v", err)
+			}
+			if len(page.Rows) != 1 || page.Rows[0].Balance.Account != want.account {
+				t.Fatalf("rows = %+v, want account %q", page.Rows, want.account)
+			}
+			if got := page.Rows[0].Balance.AccountCurrency; got != want.currency {
+				t.Fatalf("account currency = %q, want %q", got, want.currency)
+			}
+		})
+	}
+}
+
 func TestBalanceEmptyAmountsDefaultToZero(t *testing.T) {
 	ctx, rs := seedBalanceFixtures(t)
 

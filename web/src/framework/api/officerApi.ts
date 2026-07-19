@@ -296,6 +296,9 @@ function normalizeBalance(v: unknown): Balance {
     realizedPnlHaltReason: asString(
       pick(o, "realizedPnlHaltReason", "RealizedPnlHaltReason", "realized_pnl_halt_reason"),
     ),
+    accountCurrency: asString(
+      pick(o, "accountCurrency", "AccountCurrency", "account_currency"),
+    ),
     updatedAt: asString(pick(o, "updatedAt", "UpdatedAt", "updated_at")),
   };
 }
@@ -2399,9 +2402,15 @@ function balanceListQuery(filter: BalanceListFilters = {}): string {
   appendListFilter(params, "averageEntryPriceMode", filter.averageEntryPriceMode, "all");
   appendListFilter(params, "averageEntryPriceMin", filter.averageEntryPriceMin);
   appendListFilter(params, "averageEntryPriceMax", filter.averageEntryPriceMax);
+  appendListFilter(
+    params,
+    "averageEntryPriceCurrency",
+    filter.averageEntryPriceCurrency,
+  );
   appendListFilter(params, "realizedPnlMode", filter.realizedPnlMode, "all");
   appendListFilter(params, "realizedPnlMin", filter.realizedPnlMin);
   appendListFilter(params, "realizedPnlMax", filter.realizedPnlMax);
+  appendListFilter(params, "realizedPnlCurrency", filter.realizedPnlCurrency);
   appendListFilter(params, "updatedAtMode", filter.updatedAtMode, "all");
   appendListFilter(params, "updatedAfter", filter.updatedAfter);
   appendListFilter(params, "updatedBefore", filter.updatedBefore);

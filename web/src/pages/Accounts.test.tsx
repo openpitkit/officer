@@ -34,7 +34,7 @@ import type { PollingResult } from "@/api/usePolling";
 import { useAccountsPage } from "@/api/useAccounts";
 import { useGroupsPage } from "@/api/useGroups";
 import { SidebarProvider } from "@/components/SidebarContext";
-import { ApiError } from "@/framework";
+import { ApiError, AUTOCOMPLETE_SUGGESTION_LIMIT } from "@/framework";
 import i18n from "@/i18n";
 import { Accounts, CreateAccountDialog } from "@/pages/Accounts";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
@@ -759,7 +759,7 @@ describe("Accounts business CSV", () => {
         expect.objectContaining({
           code: "EU",
           codeMatch: "starts_with",
-          limit: 8,
+          limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
           sort: "code",
         }),
         expect.any(AbortSignal),
@@ -1187,7 +1187,7 @@ describe("Accounts business CSV", () => {
       expect.objectContaining({
         code: "desk-a",
         codeMatch: "starts_with",
-        limit: 8,
+        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
         sort: "code",
       }),
       expect.any(AbortSignal),
@@ -1361,7 +1361,7 @@ describe("Accounts business CSV", () => {
       expect.objectContaining({
         code: "equity",
         codeMatch: "starts_with",
-        limit: 8,
+        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
         sort: "code",
       }),
       expect.any(AbortSignal),

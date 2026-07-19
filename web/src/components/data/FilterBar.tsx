@@ -23,6 +23,7 @@ import { Autocomplete } from "@/components/Autocomplete";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { AUTOCOMPLETE_SUGGESTION_LIMIT } from "@/framework/constants";
 
 export { ClearInlineButton };
 
@@ -213,7 +214,7 @@ export function AutocompleteFilterField({
   searchingLabel = "searching",
   width = 200,
   suggestions = [],
-  maxSuggestions = 8,
+  maxSuggestions = AUTOCOMPLETE_SUGGESTION_LIMIT,
   style,
 }: AutocompleteFilterFieldProps) {
   return (

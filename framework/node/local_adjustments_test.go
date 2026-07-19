@@ -293,6 +293,36 @@ func TestLocalNode_SetBalanceRealizedPnlPersistsAdjustmentRecord(t *testing.T) {
 	}
 }
 
+func TestLocalNode_SetBalanceRealizedPnlKeepsAccountCurrencyAfterDeletingFinalRow(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.adjustmentAccepted = &domain.AdjustmentOutcomeAccepted{
+		RealizedPnlDelta:  "0",
+		RealizedPnlResult: "0",
+	}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	if _, err := st.CreateAccount(ctx, domain.Account{
+		Code:     "acc-1",
+		Currency: "USD",
+	}); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+
+	balance, err := n.SetBalanceRealizedPnl(
+		ctx, testKey("acc-1"), "USD", "0", testCaller,
+	)
+	if err != nil {
+		t.Fatalf("SetBalanceRealizedPnl: %v", err)
+	}
+	if balance.AccountCurrency != "USD" {
+		t.Fatalf("account currency = %q, want USD", balance.AccountCurrency)
+	}
+	if _, ok, err := st.GetBalance(ctx, "acc-1", "USD"); err != nil || ok {
+		t.Fatalf("GetBalance(deleted) = ok %v err %v, want no balance row", ok, err)
+	}
+}
+
 func TestLocalNode_SetBalanceRealizedPnlClearsOnlyPositionHalt(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()

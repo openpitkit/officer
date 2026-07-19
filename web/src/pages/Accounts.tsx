@@ -71,6 +71,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   ActionButton,
+  AUTOCOMPLETE_SUGGESTION_LIMIT,
   ApiError,
   ColumnHeader,
   DeleteButton,
@@ -2835,7 +2836,12 @@ function useAssetCodeSuggestions(query: string, enabled: boolean): string[] {
     }
     const controller = new AbortController();
     void fetchAssets(
-      { code: trimmed, codeMatch: "starts_with", limit: 8, sort: "code" },
+      {
+        code: trimmed,
+        codeMatch: "starts_with",
+        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
+        sort: "code",
+      },
       controller.signal,
     )
       .then((assets) => {
@@ -3757,7 +3763,12 @@ export function Accounts() {
     }
     const controller = new AbortController();
     void fetchAccounts(
-      { code: query, codeMatch: "starts_with", limit: 8, sort: "code" },
+      {
+        code: query,
+        codeMatch: "starts_with",
+        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
+        sort: "code",
+      },
       controller.signal,
     )
       .then((items) =>
@@ -3779,7 +3790,12 @@ export function Accounts() {
     }
     const controller = new AbortController();
     void fetchGroups(
-      { code: query, codeMatch: "starts_with", limit: 8, sort: "code" },
+      {
+        code: query,
+        codeMatch: "starts_with",
+        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
+        sort: "code",
+      },
       controller.signal,
     )
       .then((items) => {
@@ -3808,7 +3824,12 @@ export function Accounts() {
     }
     const controller = new AbortController();
     void fetchGroups(
-      { code: query, codeMatch: "starts_with", limit: 8, sort: "code" },
+      {
+        code: query,
+        codeMatch: "starts_with",
+        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
+        sort: "code",
+      },
       controller.signal,
     )
       .then((items) =>

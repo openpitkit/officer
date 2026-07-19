@@ -149,10 +149,6 @@ func sortBalanceRows(rows []store.BalanceListRow, spec store.SortSpec) {
 			cmp = decimalStringCompare(left.Held, right.Held)
 		case "incoming":
 			cmp = decimalStringCompare(left.Incoming, right.Incoming)
-		case "averageEntryPrice":
-			cmp = decimalStringCompare(left.AverageEntryPrice, right.AverageEntryPrice)
-		case "realizedPnl":
-			cmp = decimalStringCompare(left.RealizedPnl, right.RealizedPnl)
 		case "updatedAt":
 			cmp = timeCompare(left.UpdatedAt, right.UpdatedAt)
 		case "account":

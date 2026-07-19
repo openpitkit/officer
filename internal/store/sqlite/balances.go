@@ -36,23 +36,43 @@ import (
 	fwstore "go.openpit.dev/officer/framework/store"
 )
 
-// balanceSelect is the shared projection for balance reads. The JOINs surface
+// balanceFrom is the shared source block for balance reads. The JOINs surface
 // the account and asset as their codes so the surrogate ids never leave the
-// store.
-const balanceSelect = `
-SELECT a.code, ast.code,
-       b.available, b.held, b.incoming, b.realized_pnl,
-       b.realized_pnl_halt_reason, b.average_entry_price, b.updated_at
+// store, and reach the three tiers of the account's currency cascade (account,
+// its group, the reserved default group) that denominate the row's realized
+// P&L and average entry price. It is shared by the projection and the count so
+// the two always filter over the same rows.
+const balanceFrom = `
 FROM balance b
 JOIN account a   ON a.id  = b.account_id
 LEFT JOIN account_group g ON g.id = a.group_id
-JOIN asset   ast ON ast.id = b.asset_id`
+JOIN asset   ast ON ast.id = b.asset_id
+LEFT JOIN asset ac ON ac.id = a.currency_asset_id
+LEFT JOIN asset gc ON gc.id = g.currency_asset_id
+LEFT JOIN account_group dg ON dg.code = ''
+LEFT JOIN asset dc ON dc.id = dg.currency_asset_id`
+
+// balanceAccountCurrency resolves the account currency cascade in SQL, mirroring
+// domain.ResolveCurrencyCascade: the first tier with a currency wins, and no
+// tier set yields the empty string. Rows are compared on this expression rather
+// than on the account tier alone, so an inherited currency denominates its rows
+// exactly as a directly assigned one does.
+const balanceAccountCurrency = `COALESCE(NULLIF(ac.code, ''), ` +
+	`NULLIF(gc.code, ''), NULLIF(dc.code, ''), '')`
+
+// balanceSelect is the shared projection for balance reads.
+const balanceSelect = `
+SELECT a.code, ast.code,
+       b.available, b.held, b.incoming, b.realized_pnl,
+       b.realized_pnl_halt_reason, b.average_entry_price, b.updated_at,
+       ` + balanceAccountCurrency + balanceFrom
 
 // UpsertBalance inserts or replaces the balance snapshot for the
 // (account, asset) named by balance. The caller supplies all amount fields
 // including realized_pnl as an absolute value (snapshot semantics). The
 // settlement path (settleBalanceTx) persists the engine absolute in its own tx;
 // it uses INSERT OR REPLACE directly, keeping the two paths consistent.
+// AccountCurrency is a read-only projection and is ignored on writes.
 func (r *realmStore) UpsertBalance(ctx context.Context, balance domain.Balance) error {
 	db, err := r.db()
 	if err != nil {
@@ -200,16 +220,15 @@ ORDER BY a.code`
 func (r *realmStore) ListBalanceRows(
 	ctx context.Context, filter fwstore.BalanceListFilter,
 ) (fwstore.BalanceListPage, error) {
+	if err := filter.Validate(); err != nil {
+		return fwstore.BalanceListPage{}, err
+	}
 	where, args := balanceListWhere(filter)
 	db, err := r.db()
 	if err != nil {
 		return fwstore.BalanceListPage{}, err
 	}
-	countQuery := `SELECT COUNT(*)
-FROM balance b
-JOIN account a   ON a.id  = b.account_id
-LEFT JOIN account_group g ON g.id = a.group_id
-JOIN asset   ast ON ast.id = b.asset_id` + where
+	countQuery := `SELECT COUNT(*)` + balanceFrom + where
 	var total int
 	if err := db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return fwstore.BalanceListPage{}, fmt.Errorf("store: count balance rows: %w", err)
@@ -257,10 +276,14 @@ func balanceListWhere(filter fwstore.BalanceListFilter) (string, []any) {
 	appendDecimalRangeFilter(&clauses, &args, "b.available", filter.Available)
 	appendDecimalRangeFilter(&clauses, &args, "b.held", filter.Held)
 	appendDecimalRangeFilter(&clauses, &args, "b.incoming", filter.Incoming)
-	appendDecimalRangeFilter(
-		&clauses, &args, "b.average_entry_price", filter.AverageEntryPrice,
+	appendDenominatedDecimalRangeFilter(
+		&clauses, &args, "b.average_entry_price", balanceAccountCurrency,
+		filter.AverageEntryPrice,
 	)
-	appendDecimalRangeFilter(&clauses, &args, "b.realized_pnl", filter.RealizedPnl)
+	appendDenominatedDecimalRangeFilter(
+		&clauses, &args, "b.realized_pnl", balanceAccountCurrency,
+		filter.RealizedPnl,
+	)
 	appendTimeRangeFilter(&clauses, &args, "b.updated_at", filter.UpdatedAt)
 	if len(clauses) == 0 {
 		return "", args
@@ -270,14 +293,12 @@ func balanceListWhere(filter fwstore.BalanceListFilter) (string, []any) {
 
 func balanceListOrderBy(sort fwstore.SortSpec) string {
 	columns := map[string]string{
-		"account":           "a.code",
-		"asset":             "ast.code",
-		"available":         "b.available",
-		"held":              "b.held",
-		"incoming":          "b.incoming",
-		"averageEntryPrice": "b.average_entry_price",
-		"realizedPnl":       "b.realized_pnl",
-		"updatedAt":         "b.updated_at",
+		"account":   "a.code",
+		"asset":     "ast.code",
+		"available": "b.available",
+		"held":      "b.held",
+		"incoming":  "b.incoming",
+		"updatedAt": "b.updated_at",
 	}
 	column := columns[sort.Column]
 	if column == "" {
@@ -334,17 +355,21 @@ func scanBalanceRow(row *sql.Row) (domain.Balance, error) {
 }
 
 // scanBalanceInto scans one balance projection into b. Amounts are exact text
-// decimals; updated_at is RFC3339Nano UTC text.
+// decimals; updated_at is RFC3339Nano UTC text. The three currency tiers are
+// resolved into the single effective account currency that denominates the
+// row's realized P&L and average entry price.
 func scanBalanceInto(scan func(...any) error, b *domain.Balance) error {
 	var (
 		accountCode, assetCode                                       string
 		available, held, incoming                                    string
 		realizedPnl, realizedPnlHaltReason, avgEntryPrice, updatedAt string
+		accountCurrency                                              string
 	)
 	if err := scan(
 		&accountCode, &assetCode,
 		&available, &held, &incoming, &realizedPnl, &realizedPnlHaltReason,
 		&avgEntryPrice, &updatedAt,
+		&accountCurrency,
 	); err != nil {
 		return err
 	}
@@ -360,6 +385,7 @@ func scanBalanceInto(scan func(...any) error, b *domain.Balance) error {
 	b.RealizedPnl = realizedPnl
 	b.RealizedPnlHaltReason = domain.PnlHaltReason(realizedPnlHaltReason)
 	b.AverageEntryPrice = avgEntryPrice
+	b.AccountCurrency = accountCurrency
 	b.UpdatedAt = t
 	return nil
 }

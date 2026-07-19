@@ -61,6 +61,27 @@ func appendDecimalRangeFilter(
 	}
 }
 
+// appendDenominatedDecimalRangeFilter binds bounds that are only meaningful in
+// one denomination. currencyExpr resolves a row's denomination; admitting the
+// numeric predicate only alongside currencyExpr = the filter's currency keeps
+// the comparison within a single denomination by construction, so a row
+// denominated in another asset is excluded rather than compared against a
+// threshold that does not apply to it.
+func appendDenominatedDecimalRangeFilter(
+	clauses *[]string,
+	args *[]any,
+	column string,
+	currencyExpr string,
+	filter fwstore.DenominatedDecimalRangeFilter,
+) {
+	if filter.Empty() {
+		return
+	}
+	*clauses = append(*clauses, currencyExpr+" = ?")
+	*args = append(*args, filter.Currency)
+	appendDecimalRangeFilter(clauses, args, column, filter.Range)
+}
+
 func appendTimeRangeFilter(
 	clauses *[]string,
 	args *[]any,

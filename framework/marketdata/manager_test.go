@@ -794,6 +794,52 @@ func TestManager_PushManualNonByoUntouched(t *testing.T) {
 	}
 }
 
+func TestManagerPushManualSkipsUnappliedInstrument(t *testing.T) {
+	t.Parallel()
+
+	instanceID := testExternalID("byo-1")
+	connector := newFakeConnector()
+	registry := NewRegistry()
+	if err := registry.Register(Provider{
+		Type: "byo",
+		Build: func(domain.MarketDataInstance) (Connector, error) {
+			return connector, nil
+		},
+	}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	store := &fakeStore{
+		instances: []domain.MarketDataInstance{
+			{ExternalID: instanceID, Provider: "byo", Enabled: true},
+		},
+		instruments: map[string][]domain.MarketDataInstrument{
+			instanceID.String(): {{
+				Instance: instanceID, ExternalSymbol: "USD/Z",
+				BaseAsset: "USD", QuoteAsset: "Z", Enabled: true,
+			}},
+		},
+	}
+	sink := &fakeSink{}
+	manager := mustNewManager(t, registry, store, sink, nil)
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer manager.Stop()
+
+	manager.PushManual(instanceID.String(), domain.MarketDataInstrument{
+		Instance: instanceID, ExternalSymbol: "Z/USD",
+		BaseAsset: "Z", QuoteAsset: "USD", ManualPrice: "2", Enabled: true,
+	})
+	time.Sleep(20 * time.Millisecond)
+
+	if sink.count() != 0 {
+		t.Fatalf("sink count = %d, want no push for an unapplied instrument", sink.count())
+	}
+	if got := store.quoteCount(); got != 0 {
+		t.Fatalf("stored quotes = %d, want no quote for an unapplied instrument", got)
+	}
+}
+
 func TestManagerQuoteUpdateIntervalUnknownThenGap(t *testing.T) {
 	t.Parallel()
 

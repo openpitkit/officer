@@ -19,6 +19,7 @@ package backend_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -134,6 +135,23 @@ func TestListBalanceRowsMergesNodesInGlobalNumericOrder(t *testing.T) {
 		if seen.Limit != 4 || seen.Offset != 0 {
 			t.Fatalf("node %s fetched page = %+v, want {Limit:4 Offset:0}", name, seen)
 		}
+	}
+}
+
+func TestListBalanceRowsRejectsDenominatedRangeWithoutCurrency(t *testing.T) {
+	nodeA := &fakeNode{}
+	svc := backend.New(&twoNodeRouter{nodes: []node.Node{nodeA}}, nil, nil)
+	min := "50"
+	_, err := svc.ListBalanceRows(context.Background(), store.BalanceListFilter{
+		RealizedPnl: store.DenominatedDecimalRangeFilter{
+			Range: store.DecimalRangeFilter{Min: &min},
+		},
+	})
+	if !errors.Is(err, store.ErrCurrencyRequired) {
+		t.Fatalf("ListBalanceRows invalid filter = %v, want ErrCurrencyRequired", err)
+	}
+	if !nodeA.lastBalanceFilter.RealizedPnl.Empty() {
+		t.Fatalf("node received invalid filter: %+v", nodeA.lastBalanceFilter)
 	}
 }
 

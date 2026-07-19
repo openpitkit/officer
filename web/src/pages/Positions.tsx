@@ -15,7 +15,14 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import type { TFunction } from "i18next";
 import {
   ChevronDown,
@@ -35,6 +42,7 @@ import {
   ActionButton,
   ApiError,
   AutocompleteFilterField,
+  AUTOCOMPLETE_SUGGESTION_LIMIT,
   CloneButton,
   ColumnHeader,
   ExactIdField,
@@ -44,6 +52,7 @@ import {
   FilterByButton,
   IdCell,
   MoreFiltersButton,
+  MAX_LIST_LIMIT,
   NumberRangeFilter,
   OrdersButton,
   reportInvalidFilterControls,
@@ -198,6 +207,40 @@ function SplitTime({ iso }: { iso: string }) {
 
 function dash(v: string | undefined): string {
   return v && v !== "" ? v : "—";
+}
+
+/** Render a position value next to the asset it is denominated in, so a figure
+ *  kept in one account's currency is never read as one in another's. An account
+ *  whose currency cascade sets no tier leaves the value with no unit at all;
+ *  that shows as the project's unset-currency dash rather than as a bare
+ *  number, which would read as though the unit were obvious. */
+function DenominatedAmount({
+  value,
+  currency,
+}: {
+  value: string | undefined;
+  currency: string;
+}) {
+  const { t } = useTranslation("positions");
+  if (!value || value.trim() === "") {
+    return <span className="text-muted-lt">—</span>;
+  }
+  const unit = currency.trim();
+  return (
+    <span className="inline-flex items-baseline justify-end gap-1">
+      <span>{value}</span>
+      {unit === "" ? (
+        <span
+          className="text-muted-lt"
+          title={t("balances.noAccountCurrencyHint")}
+        >
+          —
+        </span>
+      ) : (
+        <span className="text-muted-lt">{unit}</span>
+      )}
+    </span>
+  );
 }
 
 /** Whether a decimal amount string represents a non-zero value. Operates on the
@@ -365,7 +408,7 @@ function useAccountCodeSuggestions(query: string, enabled: boolean): string[] {
       {
         code: debouncedQuery,
         codeMatch: "starts_with",
-        limit: 8,
+        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
         sort: "code",
       },
       controller.signal,
@@ -403,7 +446,7 @@ function useAssetCodeSuggestions(query: string, enabled: boolean): string[] {
       {
         code: debouncedQuery,
         codeMatch: "starts_with",
-        limit: 8,
+        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
         sort: "code",
       },
       controller.signal,
@@ -422,6 +465,42 @@ function useAssetCodeSuggestions(query: string, enabled: boolean): string[] {
   }, [debouncedQuery, enabled, fetchAssets]);
 
   return enabled && debouncedQuery !== "" ? suggestions : [];
+}
+
+/** The distinct account currencies in use, offered as the units a denominated
+ *  threshold can be given in. A currency no account keeps its P&L in would
+ *  match no row, so the suggestions are drawn from the accounts themselves
+ *  rather than from the whole asset dictionary. */
+function useAccountCurrencySuggestions(enabled: boolean): string[] {
+  const { fetchAccounts } = useOfficerApi();
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+    const controller = new AbortController();
+    void fetchAccounts({ limit: MAX_LIST_LIMIT, sort: "code" }, controller.signal)
+      .then((accounts) => {
+        const codes = new Set<string>();
+        for (const account of accounts) {
+          if (account.effectiveCurrency) {
+            codes.add(account.effectiveCurrency);
+          }
+        }
+        const next = [...codes].sort();
+        setSuggestions((prev) => (sameStrings(prev, next) ? prev : next));
+      })
+      .catch((err: unknown) => {
+        if (!controller.signal.aborted) {
+          console.error(err);
+          setSuggestions((prev) => (prev.length === 0 ? prev : []));
+        }
+      });
+    return () => controller.abort();
+  }, [enabled, fetchAccounts]);
+
+  return suggestions;
 }
 
 function isDecimal(value: string): boolean {
@@ -485,17 +564,21 @@ type BalanceRangeDraft = {
   mode: RangeFilterMode;
   min: string;
   max: string;
+  /** Asset the bounds are expressed in. Only meaningful for the keys in
+   *  DENOMINATED_RANGE_KEYS, whose column is denominated per row rather than by
+   *  the position asset, and required once such a condition is active. */
+  currency: string;
 };
 
 type BalanceRangeDrafts = Record<BalanceRangeKey, BalanceRangeDraft>;
 
 const EMPTY_BALANCE_RANGES: Record<BalanceRangeKey, BalanceRangeDraft> = {
-  available: { mode: "all", min: "", max: "" },
-  held: { mode: "all", min: "", max: "" },
-  incoming: { mode: "all", min: "", max: "" },
-  averageEntryPrice: { mode: "all", min: "", max: "" },
-  realizedPnl: { mode: "all", min: "", max: "" },
-  updatedAt: { mode: "all", min: "", max: "" },
+  available: { mode: "all", min: "", max: "", currency: "" },
+  held: { mode: "all", min: "", max: "", currency: "" },
+  incoming: { mode: "all", min: "", max: "", currency: "" },
+  averageEntryPrice: { mode: "all", min: "", max: "", currency: "" },
+  realizedPnl: { mode: "all", min: "", max: "", currency: "" },
+  updatedAt: { mode: "all", min: "", max: "", currency: "" },
 };
 
 const NUMERIC_RANGE_KEYS: Exclude<BalanceRangeKey, "updatedAt">[] = [
@@ -506,9 +589,31 @@ const NUMERIC_RANGE_KEYS: Exclude<BalanceRangeKey, "updatedAt">[] = [
   "realizedPnl",
 ];
 
+/** Range keys whose column is denominated in the account currency rather than
+ *  in the position asset. A threshold on one of these is not comparable until
+ *  it names the asset it is expressed in, so the currency has no default. */
+const DENOMINATED_RANGE_KEYS: BalanceRangeKey[] = [
+  "averageEntryPrice",
+  "realizedPnl",
+];
+
+function isDenominatedRangeKey(key: BalanceRangeKey): boolean {
+  return DENOMINATED_RANGE_KEYS.includes(key);
+}
+
+/** Whether a denominated condition is missing the currency it needs. An
+ *  inactive condition compares nothing and so needs no currency. */
+function needsCurrency(
+  denominated: boolean,
+  draft: BalanceRangeDraft,
+): boolean {
+  return denominated && hasActiveRange(draft) && draft.currency.trim() === "";
+}
+
 /** Seed the balance range drafts from URL params so a shared link restores the
  *  full range filter set. Numeric ranges mirror the API `<key>Mode/Min/Max`
- *  params; the updatedAt range mirrors `updatedAtMode/updatedAfter/updatedBefore`. */
+ *  params, plus `<key>Currency` for the denominated ones; the updatedAt range
+ *  mirrors `updatedAtMode/updatedAfter/updatedBefore`. */
 function balanceRangesFromParams(
   params: URLSearchParams,
 ): BalanceRangeDrafts {
@@ -523,11 +628,16 @@ function balanceRangesFromParams(
   for (const key of NUMERIC_RANGE_KEYS) {
     const mode = params.get(`${key}Mode`);
     if (mode !== null) {
-      ranges[key] = {
+      const draft = {
         mode: mode as RangeFilterMode,
         min: params.get(`${key}Min`) ?? "",
         max: params.get(`${key}Max`) ?? "",
+        currency: params.get(`${key}Currency`) ?? "",
       };
+      ranges[key] =
+        isDenominatedRangeKey(key) && needsCurrency(true, draft)
+          ? { ...EMPTY_BALANCE_RANGES[key] }
+          : draft;
     }
   }
   const updatedMode = params.get("updatedAtMode");
@@ -536,6 +646,7 @@ function balanceRangesFromParams(
       mode: updatedMode as RangeFilterMode,
       min: params.get("updatedAfter") ?? "",
       max: params.get("updatedBefore") ?? "",
+      currency: "",
     };
   }
   return ranges;
@@ -570,6 +681,9 @@ function appendBalanceRanges(
     if (draft.max.trim() !== "") {
       query.set(`${key}Max`, draft.max.trim());
     }
+    if (isDenominatedRangeKey(key) && draft.currency.trim() !== "") {
+      query.set(`${key}Currency`, draft.currency.trim());
+    }
   }
   const updated = ranges.updatedAt;
   if (updated.mode !== "all") {
@@ -599,6 +713,10 @@ function localDateTimeFilter(value: string): string {
   return date.toISOString();
 }
 
+/** Translate one range draft into the API filter params. A denominated
+ *  condition is dropped entirely while it names no currency: its bounds are not
+ *  comparable against a per-row denominated column, so sending them would ask
+ *  the server to compare across currencies. */
 function addBalanceRange(
   filter: BalanceListFilters,
   key: Exclude<BalanceRangeKey, "updatedAt">,
@@ -607,7 +725,11 @@ function addBalanceRange(
   const target = filter as Record<string, string | undefined>;
   const min = rangeValue(draft.min);
   const max = rangeValue(draft.max);
+  const currency = draft.currency.trim();
   if (draft.mode === "all") {
+    return;
+  }
+  if (isDenominatedRangeKey(key) && currency === "") {
     return;
   }
   if (draft.mode === "greater_than" && min !== "") {
@@ -626,6 +748,9 @@ function addBalanceRange(
   } else if (min !== "") {
     target[`${key}Mode`] = draft.mode;
     target[`${key}Min`] = min;
+  }
+  if (isDenominatedRangeKey(key) && target[`${key}Mode`] !== undefined) {
+    target[`${key}Currency`] = currency;
   }
 }
 
@@ -657,21 +782,26 @@ function addUpdatedAtRange(
   }
 }
 
+/** Summarize a range for its filter chip. A denominated threshold shows the
+ *  currency it was given in, so the chip states the same unit the comparison
+ *  actually ran in. */
 function rangeChipValue(
   operator: string,
   mode: RangeFilterMode,
   min: string,
   max: string,
+  currency = "",
 ): string {
   const from = min.trim();
   const to = max.trim();
-  if (mode === "between") {
-    return [operator, from, to].filter(Boolean).join(" ");
-  }
-  if (mode === "less_than" || mode === "before") {
-    return [operator, to || from].filter(Boolean).join(" ");
-  }
-  return [operator, from || to].filter(Boolean).join(" ");
+  const unit = currency.trim();
+  const parts =
+    mode === "between"
+      ? [operator, from, to]
+      : mode === "less_than" || mode === "before"
+        ? [operator, to || from]
+        : [operator, from || to];
+  return [...parts, unit].filter(Boolean).join(" ");
 }
 
 function hasActiveRange(draft: BalanceRangeDraft): boolean {
@@ -681,17 +811,26 @@ function hasActiveRange(draft: BalanceRangeDraft): boolean {
   );
 }
 
+/** One advanced-filter row. When the column is denominated per row rather than
+ *  by the position asset, the row also carries the currency its bounds are
+ *  given in: the threshold cannot be compared without it, so an active
+ *  condition with no currency is reported inline and blocks Apply. */
 function PositionRangeFilter({
   label,
   draft,
   inputType = "text",
+  denominated = false,
+  currencySuggestions = [],
   onChange,
 }: {
   label: string;
   draft: BalanceRangeDraft;
   inputType?: "text" | "datetime-local";
+  denominated?: boolean;
+  currencySuggestions?: string[];
   onChange: (next: BalanceRangeDraft) => void;
 }) {
+  const { t } = useTranslation("positions");
   const { t: tc } = useTranslation();
   const operator =
     draft.mode === "all"
@@ -699,71 +838,116 @@ function PositionRangeFilter({
         ? "after"
         : "eq"
       : draft.mode;
+  const currencyMissing = needsCurrency(denominated, draft);
+  const currencyFieldId = `position-filter-currency-${useId()}`;
+  const currencyErrorId = `${currencyFieldId}-error`;
   return (
     <div className="grid gap-1">
       <FieldLabel>{label}</FieldLabel>
-      <div>
-        {inputType === "datetime-local" ? (
-          <TimeRangeFilter
-            operator={operator}
-            from={draft.min}
-            to={draft.max}
-            fluid
-            showPresets={false}
-            operators={operatorOptions(tc, "time")}
-            operatorAriaLabel={label}
-            clearLabel={tc("filters.clearField")}
-            onOperatorChange={(next) =>
-              onChange({ ...draft, mode: next as RangeFilterMode })
-            }
-            onFromChange={(value) =>
-              onChange({
-                ...draft,
-                mode:
-                  draft.mode === "all" ? (operator as RangeFilterMode) : draft.mode,
-                min: value,
-              })
-            }
-            onToChange={(value) =>
-              onChange({
-                ...draft,
-                mode:
-                  draft.mode === "all" ? (operator as RangeFilterMode) : draft.mode,
-                max: value,
-              })
-            }
-          />
-        ) : (
-          <NumberRangeFilter
-            operator={operator}
-            min={draft.min}
-            max={draft.max}
-            fluid
-            operators={operatorOptions(tc, "number")}
-            operatorAriaLabel={label}
-            clearLabel={tc("filters.clearField")}
-            onOperatorChange={(next) =>
-              onChange({ ...draft, mode: next as RangeFilterMode })
-            }
-            onMinChange={(value) =>
-              onChange({
-                ...draft,
-                mode:
-                  draft.mode === "all" ? (operator as RangeFilterMode) : draft.mode,
-                min: value,
-              })
-            }
-            onMaxChange={(value) =>
-              onChange({
-                ...draft,
-                mode:
-                  draft.mode === "all" ? (operator as RangeFilterMode) : draft.mode,
-                max: value,
-              })
-            }
-          />
+      <div
+        className={cn(
+          "grid gap-2",
+          denominated &&
+            "md:grid-cols-[minmax(0,1fr)_minmax(14rem,18rem)] md:items-center",
+        )}
+      >
+        <div className="min-w-0">
+          {inputType === "datetime-local" ? (
+            <TimeRangeFilter
+              operator={operator}
+              from={draft.min}
+              to={draft.max}
+              fluid
+              showPresets={false}
+              operators={operatorOptions(tc, "time")}
+              operatorAriaLabel={label}
+              clearLabel={tc("filters.clearField")}
+              onOperatorChange={(next) =>
+                onChange({ ...draft, mode: next as RangeFilterMode })
+              }
+              onFromChange={(value) =>
+                onChange({
+                  ...draft,
+                  mode:
+                    draft.mode === "all" ? (operator as RangeFilterMode) : draft.mode,
+                  min: value,
+                })
+              }
+              onToChange={(value) =>
+                onChange({
+                  ...draft,
+                  mode:
+                    draft.mode === "all" ? (operator as RangeFilterMode) : draft.mode,
+                  max: value,
+                })
+              }
+            />
+          ) : (
+            <NumberRangeFilter
+              operator={operator}
+              min={draft.min}
+              max={draft.max}
+              fluid
+              operators={operatorOptions(tc, "number")}
+              operatorAriaLabel={label}
+              clearLabel={tc("filters.clearField")}
+              onOperatorChange={(next) =>
+                onChange({ ...draft, mode: next as RangeFilterMode })
+              }
+              onMinChange={(value) =>
+                onChange({
+                  ...draft,
+                  mode:
+                    draft.mode === "all" ? (operator as RangeFilterMode) : draft.mode,
+                  min: value,
+                })
+              }
+              onMaxChange={(value) =>
+                onChange({
+                  ...draft,
+                  mode:
+                    draft.mode === "all" ? (operator as RangeFilterMode) : draft.mode,
+                  max: value,
+                })
+              }
+            />
+          )}
+        </div>
+        {denominated && (
+          <div className="flex min-w-0 items-center gap-2">
+            <Label
+              htmlFor={currencyFieldId}
+              className="shrink-0 whitespace-nowrap text-muted-lt"
+            >
+              {t("filters.currency.label")}
+            </Label>
+            <div className="min-w-0 flex-1">
+              <Autocomplete
+                id={currencyFieldId}
+                value={draft.currency}
+                spellCheck={false}
+                placeholder={t("filters.currency.placeholder")}
+                suggestions={currencySuggestions}
+                aria-invalid={currencyMissing}
+                aria-errormessage={currencyMissing ? currencyErrorId : undefined}
+                aria-label={t("filters.currency.ariaLabel", { field: label })}
+                className="h-8 text-xs"
+                clearLabel={tc("filters.clearField")}
+                onClear={() => onChange({ ...draft, currency: "" })}
+                onChange={(currency) => onChange({ ...draft, currency })}
+              />
+            </div>
+          </div>
         )}
       </div>
+      {denominated && currencyMissing && (
+        <p
+          id={currencyErrorId}
+          className="w-full text-[0.6875rem] text-[var(--danger)]"
+        >
+          {t("filters.currency.required")}
+        </p>
+      )}
     </div>
   );
 }
@@ -831,6 +1015,7 @@ function buildBoundsDraft(bounds: BoundsDraftState): BoundsPair | undefined {
 
 function AveragePriceIntentRow({
   current,
+  currency,
   value,
   valid,
   disabled,
@@ -838,6 +1023,7 @@ function AveragePriceIntentRow({
   onSubmit,
 }: {
   current: string | undefined;
+  currency: string;
   value: string;
   valid: boolean;
   disabled: boolean;
@@ -855,7 +1041,9 @@ function AveragePriceIntentRow({
         <p className="text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted">
           {label}
         </p>
-        <p className="nums mt-1 text-sm text-text">{dash(current)}</p>
+        <p className="nums mt-1 text-sm text-text">
+          <DenominatedAmount value={current} currency={currency} />
+        </p>
       </div>
       <div className="space-y-1">
         <p className="text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted md:hidden">
@@ -917,6 +1105,7 @@ function AveragePriceIntentRow({
 
 function RealizedPnlIntentRow({
   current,
+  currency,
   value,
   valid,
   disabled,
@@ -924,6 +1113,7 @@ function RealizedPnlIntentRow({
   onSubmit,
 }: {
   current: string | undefined;
+  currency: string;
   value: string;
   valid: boolean;
   disabled: boolean;
@@ -941,7 +1131,9 @@ function RealizedPnlIntentRow({
         <p className="text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted">
           {label}
         </p>
-        <p className="nums mt-1 text-sm text-text">{dash(current)}</p>
+        <p className="nums mt-1 text-sm text-text">
+          <DenominatedAmount value={current} currency={currency} />
+        </p>
       </div>
       <div className="space-y-1">
         <p className="text-[0.625rem] font-bold uppercase tracking-[0.07em] text-muted md:hidden">
@@ -1473,6 +1665,7 @@ function AdjustmentPanel({
         />
         <AveragePriceIntentRow
           current={balance?.averageEntryPrice}
+          currency={balance?.accountCurrency ?? ""}
           value={avgPrice}
           valid={avgPriceValid}
           disabled={disabled}
@@ -1481,6 +1674,7 @@ function AdjustmentPanel({
         />
         <RealizedPnlIntentRow
           current={balance?.realizedPnl}
+          currency={balance?.accountCurrency ?? ""}
           value={realizedPnl}
           valid={realizedPnlValid}
           disabled={disabled}
@@ -1695,11 +1889,17 @@ function BalanceEditRow({
           </div>
         </TableCell>
         <TableCell className="nums text-right text-xs">
-          {dash(b.averageEntryPrice)}
+          <DenominatedAmount
+            value={b.averageEntryPrice}
+            currency={b.accountCurrency}
+          />
         </TableCell>
         <TableCell
           className={cn("nums text-right text-xs", pnlClass(b.realizedPnl))}
         >
+          {/* A halted P&L holds no current number, so none is shown and there
+              is nothing to denominate; otherwise the figure carries the
+              account currency it is expressed in. */}
           {haltText ? (
             <span
               className="inline-flex text-[var(--warn)]"
@@ -1711,7 +1911,10 @@ function BalanceEditRow({
               <CircleAlert className="size-4" aria-hidden="true" />
             </span>
           ) : (
-            dash(b.realizedPnl)
+            <DenominatedAmount
+              value={b.realizedPnl}
+              currency={b.accountCurrency}
+            />
           )}
         </TableCell>
         <TableCell className="text-xs text-muted-lt">
@@ -1931,42 +2134,20 @@ function BalancesTable({
               />
             </TableHead>
             <TableHead className="text-right">
-              <SortableHeader
-                field="averageEntryPrice"
-                label={t("balances.columns.avgEntryPrice")}
-                description={t("balances.columnDescriptions.avgEntryPrice")}
-                direction={sortDirection(
-                  activeSort,
-                  activeOrder,
-                  "averageEntryPrice",
-                )}
+              <ColumnHeader
                 align="right"
-                onSort={(field, next) =>
-                  onSortChange(
-                    next === "none" ? undefined : field,
-                    next === "none" ? undefined : next,
-                  )
-                }
-              />
+                description={t("balances.columnDescriptions.avgEntryPrice")}
+              >
+                {t("balances.columns.avgEntryPrice")}
+              </ColumnHeader>
             </TableHead>
             <TableHead className="text-right">
-              <SortableHeader
-                field="realizedPnl"
-                label={t("balances.columns.realizedPnl")}
-                description={t("balances.columnDescriptions.realizedPnl")}
-                direction={sortDirection(
-                  activeSort,
-                  activeOrder,
-                  "realizedPnl",
-                )}
+              <ColumnHeader
                 align="right"
-                onSort={(field, next) =>
-                  onSortChange(
-                    next === "none" ? undefined : field,
-                    next === "none" ? undefined : next,
-                  )
-                }
-              />
+                description={t("balances.columnDescriptions.realizedPnl")}
+              >
+                {t("balances.columns.realizedPnl")}
+              </ColumnHeader>
             </TableHead>
             <TableHead>
               <SortableHeader
@@ -2893,10 +3074,8 @@ const BALANCE_SORT_KEYS = new Set([
   "account",
   "asset",
   "available",
-  "averageEntryPrice",
   "held",
   "incoming",
-  "realizedPnl",
   "updatedAt",
 ]);
 const HISTORY_SORT_KEYS = new Set([
@@ -3132,6 +3311,8 @@ export function Positions() {
   const [accountSuggestions, setAccountSuggestions] = useState<string[]>([]);
   const [groupSuggestions, setGroupSuggestions] = useState<string[]>([]);
   const [assetSuggestions, setAssetSuggestions] = useState<string[]>([]);
+  const accountCurrencySuggestions =
+    useAccountCurrencySuggestions(moreFiltersOpen);
   const visibleAccountSuggestions =
     deferredAccountDraft.trim() === "" ? [] : accountSuggestions;
   const visibleGroupSuggestions =
@@ -3146,7 +3327,12 @@ export function Positions() {
     }
     const controller = new AbortController();
     void fetchAccounts(
-      { code: query, codeMatch: "starts_with", limit: 8, sort: "code" },
+      {
+        code: query,
+        codeMatch: "starts_with",
+        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
+        sort: "code",
+      },
       controller.signal,
     )
       .then((accounts) => {
@@ -3169,7 +3355,12 @@ export function Positions() {
     }
     const controller = new AbortController();
     void fetchGroups(
-      { code: query, codeMatch: "starts_with", limit: 8, sort: "code" },
+      {
+        code: query,
+        codeMatch: "starts_with",
+        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
+        sort: "code",
+      },
       controller.signal,
     )
       .then((groups) => {
@@ -3192,7 +3383,12 @@ export function Positions() {
     }
     const controller = new AbortController();
     void fetchAssets(
-      { code: query, codeMatch: "starts_with", limit: 8, sort: "code" },
+      {
+        code: query,
+        codeMatch: "starts_with",
+        limit: AUTOCOMPLETE_SUGGESTION_LIMIT,
+        sort: "code",
+      },
       controller.signal,
     )
       .then((assets) => {
@@ -3300,7 +3496,10 @@ export function Positions() {
   const advancedNumericFiltersValid = NUMERIC_RANGE_KEYS.every((key) => {
     const draft = balanceRangeDrafts[key];
     const operator = draft.mode === "all" ? "eq" : draft.mode;
-    return isDecimalRangeValid(operator, draft.min, draft.max);
+    return (
+      isDecimalRangeValid(operator, draft.min, draft.max) &&
+      !needsCurrency(isDenominatedRangeKey(key), draft)
+    );
   });
   const filterDraftChanged =
     accountDraft.trim() !== accountFilter ||
@@ -3350,7 +3549,7 @@ export function Positions() {
         account: deferredAccount || undefined,
         asset: deferredAsset || undefined,
         source: deferredSource,
-        limit: 1000,
+        limit: MAX_LIST_LIMIT,
       });
       downloadCsv("position-adjustment-history.csv", [
         [
@@ -3614,8 +3813,15 @@ export function Positions() {
                 draft.mode,
                 draft.min,
                 draft.max,
+                isDenominatedRangeKey(key) ? draft.currency : "",
               ),
-              clear: () => updateBalanceRange(key, { mode: "all", min: "", max: "" }),
+              clear: () =>
+                updateBalanceRange(key, {
+                  mode: "all",
+                  min: "",
+                  max: "",
+                  currency: "",
+                }),
             };
           })
       : []),
@@ -3943,6 +4149,8 @@ export function Positions() {
               <PositionRangeFilter
                 label={t("balances.columns.avgEntryPrice")}
                 draft={balanceRangeDrafts.averageEntryPrice}
+                denominated
+                currencySuggestions={accountCurrencySuggestions}
                 onChange={(next) =>
                   updateBalanceRangeDraft("averageEntryPrice", next)
                 }
@@ -3950,6 +4158,8 @@ export function Positions() {
               <PositionRangeFilter
                 label={t("balances.columns.realizedPnl")}
                 draft={balanceRangeDrafts.realizedPnl}
+                denominated
+                currencySuggestions={accountCurrencySuggestions}
                 onChange={(next) => updateBalanceRangeDraft("realizedPnl", next)}
               />
               <PositionRangeFilter

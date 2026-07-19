@@ -45,7 +45,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ApiError, useOfficerApi } from "@/framework";
+import { ApiError, MAX_LIST_LIMIT, useOfficerApi } from "@/framework";
 import { cn } from "@/lib/utils";
 
 const DEMO_ACCOUNT_ID = "demo-main";
@@ -504,13 +504,13 @@ export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
   // running count incremented for every step that already succeeded, so
   // PresetApplyError does not undercount.
   //
-  // The {limit:1000} reads below are an implicit "fetch all existing" so the
+  // The max-size reads below are an implicit "fetch all existing" so the
   // presets can be matched against the current catalog; a deployment with more
-  // than 1000 asset classes or assets would truncate the list and could cause a
-  // preset to be recreated as a duplicate. Acceptable for the first-run welcome
-  // flow, which targets fresh installs.
+  // than MAX_LIST_LIMIT asset classes or assets would truncate the list and
+  // could cause a preset to be recreated as a duplicate. Acceptable for the
+  // first-run welcome flow, which targets fresh installs.
   const ensureWelcomePresetAssets = async (onApplied: () => void) => {
-    const existingClasses = await fetchAssetClasses({ limit: 1000 });
+    const existingClasses = await fetchAssetClasses({ limit: MAX_LIST_LIMIT });
     for (const preset of WELCOME_PRESET_ASSET_CLASSES) {
       const existing = existingClasses.find(
         (assetClass) => assetClass.code === preset.code,
@@ -529,7 +529,7 @@ export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
       }
     }
 
-    const existingAssets = await fetchAssets({ limit: 1000 });
+    const existingAssets = await fetchAssets({ limit: MAX_LIST_LIMIT });
     for (const preset of WELCOME_PRESET_ASSETS) {
       const existing = existingAssets.find((asset) => asset.code === preset.code);
       if (existing === undefined) {

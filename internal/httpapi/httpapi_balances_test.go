@@ -75,11 +75,111 @@ func TestListBalances_PropagatesFilters(t *testing.T) {
 	}
 }
 
+// The denominated thresholds reach the store paired with the currency they were
+// given in, so the search never compares them against a row kept in another.
+func TestListBalances_PropagatesDenominatedFilterCurrency(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/balances?realizedPnlMode=gt&realizedPnlMin=50"+
+			"&realizedPnlCurrency=USD"+
+			"&averageEntryPriceMode=lt&averageEntryPriceMax=200"+
+			"&averageEntryPriceCurrency=EUR",
+		nil,
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	pnl := svc.balanceFilter.RealizedPnl
+	if pnl.Currency != "USD" {
+		t.Fatalf("realized P&L currency = %q, want USD", pnl.Currency)
+	}
+	if pnl.Range.Min == nil || *pnl.Range.Min != "50" || !pnl.Range.MinExclusive {
+		t.Fatalf("realized P&L range = %+v", pnl.Range)
+	}
+	avg := svc.balanceFilter.AverageEntryPrice
+	if avg.Currency != "EUR" {
+		t.Fatalf("avg entry price currency = %q, want EUR", avg.Currency)
+	}
+	if avg.Range.Max == nil || *avg.Range.Max != "200" || !avg.Range.MaxExclusive {
+		t.Fatalf("avg entry price range = %+v", avg.Range)
+	}
+}
+
+// A threshold on a per-row denominated column cannot be evaluated without the
+// currency it was given in, and the request names no default to fall back on.
+func TestListBalances_RejectsDenominatedFilterWithoutCurrency(t *testing.T) {
+	for _, query := range []string{
+		"realizedPnlMode=gt&realizedPnlMin=50",
+		"averageEntryPriceMode=gt&averageEntryPriceMin=50",
+	} {
+		t.Run(query, func(t *testing.T) {
+			svc := &fakeService{}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(
+				http.MethodGet, "/api/v1/balances?"+query, nil,
+			))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("want 400, got %d", rec.Code)
+			}
+			if !svc.balanceFilter.RealizedPnl.Empty() ||
+				!svc.balanceFilter.AverageEntryPrice.Empty() {
+				t.Fatalf("rejected filter reached the store: %+v", svc.balanceFilter)
+			}
+		})
+	}
+}
+
+func TestListBalances_RejectsDenominatedSort(t *testing.T) {
+	for _, column := range []string{"averageEntryPrice", "realizedPnl"} {
+		t.Run(column, func(t *testing.T) {
+			svc := &fakeService{}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(
+				http.MethodGet, "/api/v1/balances?sort="+column, nil,
+			))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("want 400, got %d", rec.Code)
+			}
+		})
+	}
+}
+
+// An unrestricted list carries no threshold, so it needs no currency either.
+func TestListBalances_AllowsNoCurrencyWithoutThreshold(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet, "/api/v1/balances?realizedPnlMode=all", nil,
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+}
+
 func TestSetBalanceRealizedPnl(t *testing.T) {
 	svc := &fakeService{balanceRealizedPnl: domain.Balance{
-		Account:     "acc-1",
-		Asset:       "USD",
-		RealizedPnl: "-12.50",
+		Account:         "acc-1",
+		Asset:           "USD",
+		RealizedPnl:     "-12.50",
+		AccountCurrency: "USD",
 	}}
 	r, err := newRouter(svc)
 	if err != nil {
@@ -109,6 +209,9 @@ func TestSetBalanceRealizedPnl(t *testing.T) {
 	}
 	if bal["realizedPnl"] != "-12.50" {
 		t.Fatalf("realizedPnl = %v, want -12.50", bal["realizedPnl"])
+	}
+	if bal["accountCurrency"] != "USD" {
+		t.Fatalf("accountCurrency = %v, want USD", bal["accountCurrency"])
 	}
 }
 

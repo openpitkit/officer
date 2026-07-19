@@ -1575,6 +1575,17 @@ paths:
           schema:
             type: string
           description: Exact decimal upper bound for average entry price.
+        - name: averageEntryPriceCurrency
+          in: query
+          schema:
+            type: string
+          description: >-
+            Asset code the average-entry-price bounds are expressed in.
+            Required whenever the mode is not `all`: the column is denominated
+            per row in the account currency, so a bare number cannot be
+            compared against it and there is no default. Only rows whose
+            account currency is this asset are compared; rows in another
+            currency, or with none, are excluded rather than converted.
         - name: realizedPnlMode
           in: query
           schema:
@@ -1592,6 +1603,17 @@ paths:
           schema:
             type: string
           description: Exact decimal upper bound for realized P&L.
+        - name: realizedPnlCurrency
+          in: query
+          schema:
+            type: string
+          description: >-
+            Asset code the realized-P&L bounds are expressed in. Required
+            whenever the mode is not `all`: the column is denominated per row
+            in the account currency, so a bare number cannot be compared
+            against it and there is no default. Only rows whose account
+            currency is this asset are compared; rows in another currency, or
+            with none, are excluded rather than converted.
         - name: updatedAtMode
           in: query
           schema:
@@ -1615,7 +1637,7 @@ paths:
           in: query
           schema:
             type: string
-            enum: [account, asset, available, held, incoming, averageEntryPrice, realizedPnl, updatedAt]
+            enum: [account, asset, available, held, incoming, updatedAt]
           description: Balance list sort key. Unknown keys are rejected.
         - $ref: "#/components/parameters/SortOrder"
         - $ref: "#/components/parameters/LimitParam"
@@ -4414,7 +4436,7 @@ components:
 
     Balance:
       type: object
-      required: [account, asset, available, held, incoming, realizedPnl, realizedPnlHaltReason, averageEntryPrice, updatedAt]
+      required: [account, asset, available, held, incoming, realizedPnl, realizedPnlHaltReason, averageEntryPrice, accountCurrency, updatedAt]
       properties:
         account:
           type: string
@@ -4423,23 +4445,33 @@ components:
           description: Balance asset symbol.
         available:
           type: string
-          description: Exact decimal string.
+          description: Exact decimal string. A quantity of `asset`.
         held:
           type: string
-          description: Exact decimal string.
+          description: Exact decimal string. A quantity of `asset`.
         incoming:
           type: string
-          description: Exact decimal string.
+          description: Exact decimal string. A quantity of `asset`.
         realizedPnl:
           type: string
-          description: Exact decimal string.
+          description: Exact decimal string, denominated in `accountCurrency`.
         realizedPnlHaltReason:
           type: string
           enum: ["", missing_fx, missing_account_currency, missing_initial_pnl, missing_cost_basis, arithmetic_overflow]
           description: Engine-reported reason position P&L calculation is halted; empty when the P&L value is current.
         averageEntryPrice:
           type: string
-          description: Exact decimal string.
+          description: Exact decimal string, denominated in `accountCurrency`.
+        accountCurrency:
+          type: string
+          description: >-
+            Asset code denominating `realizedPnl` and `averageEntryPrice`: the
+            account's effective currency, resolved from the account, its group,
+            and the reserved default group. One (account, asset) slot merges
+            fills against every quote asset the asset trades against, so a
+            single fill's quote asset does not denominate these values. Empty
+            when no tier of the cascade is set, which leaves both values
+            without a unit.
         updatedAt:
           type: string
           format: date-time

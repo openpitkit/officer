@@ -254,13 +254,25 @@ type Balance struct {
 	// Incoming is funds in-flight (e.g. pending settlement).
 	Incoming string
 	// RealizedPnl is the cumulative realized P&L for this (account, asset), as
-	// last reported by the engine. A fresh or untracked row uses "0".
+	// last reported by the engine, denominated in AccountCurrency. A fresh or
+	// untracked row uses "0".
 	RealizedPnl string
 	// RealizedPnlHaltReason explains why the engine stopped calculating this
 	// position P&L. When set, RealizedPnl is historical rather than current.
 	RealizedPnlHaltReason PnlHaltReason
-	// AverageEntryPrice is optional; empty when not applicable.
+	// AverageEntryPrice is optional; empty when not applicable. It is
+	// denominated in AccountCurrency.
 	AverageEntryPrice string
+	// AccountCurrency is the account's effective currency: the denomination of
+	// RealizedPnl and AverageEntryPrice. One (account, asset) slot merges fills
+	// against every quote asset the asset trades against, so the quote asset of
+	// any single fill does not denominate these values - the account currency
+	// does. Empty when no tier of the account's currency cascade is set, which
+	// leaves both values without a unit; that is also what the engine reports
+	// as PnlHaltReasonMissingAccountCurrency, since it cannot calculate a P&L
+	// it has no currency to express. This read-only projection is derived on
+	// reads and is never persisted.
+	AccountCurrency string `json:"-"`
 	// Asset is the code of the asset, e.g. "AAPL".
 	Asset string
 	// Account is the code of the account that owns this balance.

@@ -42,6 +42,7 @@ import { useAccounts } from "@/api/useAccounts";
 import { useAdjustmentsPage } from "@/api/useAdjustments";
 import { useBalancesPage } from "@/api/useBalances";
 import { SidebarProvider } from "@/components/SidebarContext";
+import { MAX_LIST_LIMIT } from "@/framework";
 import i18n from "@/i18n";
 import { Positions } from "@/pages/Positions";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
@@ -164,6 +165,7 @@ const balance: Balance = {
   averageEntryPrice: "",
   realizedPnl: "0",
   realizedPnlHaltReason: "",
+  accountCurrency: "USD",
   updatedAt: "2026-06-24T16:41:52Z",
 };
 
@@ -799,6 +801,93 @@ describe("Positions business CSV", () => {
     expect(screen.queryByText(/active filters/i)).not.toBeInTheDocument();
   });
 
+  // Value inputs share the "Value" placeholder, so the advanced dialog's rows
+  // are addressed by their order: available, held, incoming, avg entry price,
+  // realized PnL, updated.
+  it.each([
+    ["avg entry price", 3, /currency for the avg entry price threshold/i, {
+      averageEntryPriceMode: "eq",
+      averageEntryPriceMin: "10",
+      averageEntryPriceCurrency: "USD",
+    }],
+    ["realized pnl", 4, /currency for the realized pnl threshold/i, {
+      realizedPnlMode: "eq",
+      realizedPnlMin: "10",
+      realizedPnlCurrency: "USD",
+    }],
+  ])(
+    "blocks a %s threshold until it names a currency, then sends both",
+    async (_label, valueIndex, currencyLabel, expected) => {
+      const user = userEvent.setup();
+      renderPositions();
+
+      await user.click(screen.getByRole("button", { name: /more filters/i }));
+      const dialog = screen.getByRole("dialog", { name: /more filters/i });
+      const field = within(dialog).getAllByPlaceholderText("Value")[valueIndex];
+      await user.type(field, "10");
+
+      // The threshold is set but carries no unit: it cannot be compared
+      // against a column each account keeps in its own currency.
+      const currency = within(dialog).getByRole("combobox", {
+        name: currencyLabel,
+      });
+      expect(currency).toBeInvalid();
+      expect(
+        within(dialog).getByText(/select the currency the threshold is given in/i),
+      ).toBeInTheDocument();
+      expect(
+        within(dialog).getByRole("button", { name: /apply advanced filter/i }),
+      ).toBeDisabled();
+
+      await user.type(currency, "USD");
+
+      expect(currency).not.toBeInvalid();
+      expect(
+        within(dialog).queryByText(/Only positions held in this account currency are compared/i),
+      ).not.toBeInTheDocument();
+      await user.click(
+        within(dialog).getByRole("button", { name: /apply advanced filter/i }),
+      );
+      await waitFor(() =>
+        expect(lastBalanceFilters()).toEqual(expect.objectContaining(expected)),
+      );
+    },
+  );
+
+  it("drops a denominated threshold without its currency from a shared link", async () => {
+    // A link can carry a threshold whose currency was dropped. Ignore it
+    // completely rather than showing a condition the backend never receives.
+    renderPositions("/positions?realizedPnlMode=gt&realizedPnlMin=50");
+
+    await waitFor(() => expect(lastBalanceFilters()).toBeDefined());
+    expect(lastBalanceFilters()).not.toEqual(
+      expect.objectContaining({ realizedPnlMode: "gt" }),
+    );
+    expect(lastBalanceFilters()).not.toEqual(
+      expect.objectContaining({ realizedPnlMin: expect.any(String) }),
+    );
+    expect(
+      screen.queryByText(/realized pnl: Greater than 50/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("restores a denominated threshold and its currency from a shared link", async () => {
+    renderPositions(
+      "/positions?realizedPnlMode=gt&realizedPnlMin=50&realizedPnlCurrency=EUR",
+    );
+
+    await waitFor(() =>
+      expect(lastBalanceFilters()).toEqual(
+        expect.objectContaining({
+          realizedPnlMode: "gt",
+          realizedPnlMin: "50",
+          realizedPnlCurrency: "EUR",
+        }),
+      ),
+    );
+    expect(screen.getByText(/realized pnl: Greater than 50 EUR/i)).toBeInTheDocument();
+  });
+
   it("suggests known groups while typing the group filter", async () => {
     const user = userEvent.setup();
     renderPositions();
@@ -881,7 +970,7 @@ describe("Positions business CSV", () => {
     await waitFor(() => expect(fetchAdjustmentsMock).toHaveBeenCalledTimes(1));
     expect(fetchAdjustmentsMock).toHaveBeenCalledWith({
       source: "mcp",
-      limit: 1000,
+      limit: MAX_LIST_LIMIT,
       account: undefined,
       asset: undefined,
     });
@@ -932,17 +1021,16 @@ describe("Positions business CSV", () => {
   });
 });
 
-/** Find the balance data row for the seeded account/asset by its text. */
-function balanceRow(): HTMLElement {
+/** Find a balance data row by its account, defaulting to the seeded one. */
+function balanceRow(account = "Bucks McMoneyface"): HTMLElement {
   const row = screen
     .getAllByRole("row")
     .find(
       (r) =>
-        r.textContent?.includes("Bucks McMoneyface") &&
-        r.textContent?.includes("AAPL"),
+        r.textContent?.includes(account) && r.textContent?.includes("AAPL"),
     );
   if (!row) {
-    throw new Error("balance row not found");
+    throw new Error(`balance row not found: ${account}`);
   }
   return row;
 }
@@ -1015,6 +1103,103 @@ describe("Positions account orders navigation", () => {
       "noopener,noreferrer",
     );
     open.mockRestore();
+  });
+});
+
+describe("Positions value denomination", () => {
+  it("does not offer sorting for account-currency values", () => {
+    renderPositions();
+
+    expect(
+      screen.queryByRole("button", { name: "Sort by Avg entry price" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Sort by Realized PnL" }),
+    ).not.toBeInTheDocument();
+  });
+
+  // The case the account currency exists for: one asset traded against several
+  // quote assets. No single fill's quote asset denominates the slot, so the
+  // account currency is what the table must show.
+  it("labels avg entry price and realized PnL with the account currency", () => {
+    useBalancesMock.mockReturnValue(
+      readyPage<Balance>([
+        {
+          ...balance,
+          averageEntryPrice: "185.25",
+          realizedPnl: "42.10",
+          accountCurrency: "USD",
+        },
+      ]),
+    );
+    renderPositions();
+
+    const row = balanceRow();
+    const scope = within(row);
+    expect(scope.getByText("185.25")).toBeInTheDocument();
+    expect(scope.getByText("42.10")).toBeInTheDocument();
+    // One unit label per denominated value, and it is the account currency —
+    // not the position asset and not any fill's quote asset.
+    expect(scope.getAllByText("USD")).toHaveLength(2);
+    expect(scope.queryByText("EUR")).not.toBeInTheDocument();
+  });
+
+  it("shows the same figures under each account's own currency", () => {
+    useBalancesMock.mockReturnValue(
+      readyPage<Balance>([
+        { ...balance, account: "usd-desk", realizedPnl: "100", accountCurrency: "USD" },
+        { ...balance, account: "eur-desk", realizedPnl: "100", accountCurrency: "EUR" },
+      ]),
+    );
+    renderPositions();
+
+    // Equal numbers, different units: the reader can tell they are not
+    // comparable without being told the currency.
+    expect(within(balanceRow("usd-desk")).getByText("USD")).toBeInTheDocument();
+    expect(within(balanceRow("eur-desk")).getByText("EUR")).toBeInTheDocument();
+  });
+
+  it("marks a value whose account sets no currency as having no unit", () => {
+    useBalancesMock.mockReturnValue(
+      readyPage<Balance>([
+        { ...balance, realizedPnl: "42.10", accountCurrency: "" },
+      ]),
+    );
+    renderPositions();
+
+    const scope = within(balanceRow());
+    expect(scope.getByText("42.10")).toBeInTheDocument();
+    expect(scope.queryByText("USD")).not.toBeInTheDocument();
+    expect(
+      scope.getByTitle(/account sets no currency/i),
+    ).toBeInTheDocument();
+  });
+
+  // A halted P&L and a denominated one are shown by the same cell. The halt
+  // wins: there is no current number to label. The average entry price is a
+  // separate value and keeps its unit regardless.
+  it("labels no unit on a halted PnL but still denominates avg entry price", () => {
+    useBalancesMock.mockReturnValue(
+      readyPage<Balance>([
+        {
+          ...balance,
+          averageEntryPrice: "185.25",
+          realizedPnl: "42.10",
+          realizedPnlHaltReason: "missing_fx",
+          accountCurrency: "USD",
+        },
+      ]),
+    );
+    renderPositions();
+
+    const scope = within(balanceRow());
+    expect(
+      scope.getByRole("note", { name: /a required FX quote is unavailable/i }),
+    ).toBeInTheDocument();
+    // The halted figure is withheld, so it carries no unit to misread.
+    expect(scope.queryByText("42.10")).not.toBeInTheDocument();
+    expect(scope.getByText("185.25")).toBeInTheDocument();
+    expect(scope.getAllByText("USD")).toHaveLength(1);
   });
 });
 

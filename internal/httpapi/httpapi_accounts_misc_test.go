@@ -33,6 +33,7 @@ import (
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/store"
 )
 
 type endlessSpaces struct{}
@@ -1143,6 +1144,19 @@ func TestListBalances_ServiceError(t *testing.T) {
 	errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
 	if errObj["code"] != "internal" {
 		t.Fatalf("want code=internal, got %v", errObj["code"])
+	}
+}
+
+func TestListBalances_CurrencyRequiredIsValidation(t *testing.T) {
+	r, _ := newRouter(&fakeService{balancesErr: store.ErrCurrencyRequired})
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/balances", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+	errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
+	if errObj["code"] != "validation" {
+		t.Fatalf("want code=validation, got %v", errObj["code"])
 	}
 }
 

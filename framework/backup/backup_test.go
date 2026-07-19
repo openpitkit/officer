@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -269,6 +270,19 @@ func TestNewArchiveOmitsVersionAndCarriesRealmLabel(t *testing.T) {
 	manifest := generic["manifest"].(map[string]any)
 	if got := int(manifest["formatVersion"].(float64)); got != FormatVersion {
 		t.Fatalf("json formatVersion = %d, want %d", got, FormatVersion)
+	}
+}
+
+func TestNewArchiveExcludesBalanceAccountCurrency(t *testing.T) {
+	data := fixtureData()
+	data.Balances[0].AccountCurrency = "USD"
+	archive := NewArchive(time.Now(), "src", RealmLabel{}, Scope{All: true}, data)
+	raw, err := json.Marshal(archive)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), "AccountCurrency") {
+		t.Fatalf("archive leaks derived balance currency: %s", raw)
 	}
 }
 
