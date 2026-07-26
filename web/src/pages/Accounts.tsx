@@ -16,7 +16,7 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import type { ComponentProps, CSSProperties } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -127,6 +127,7 @@ import { absoluteAppUrl, shareUrl } from "@/lib/shareLink";
 import { sortDirection } from "@/lib/sortDirection";
 import { formatDateTime } from "@/i18n/format";
 import { usePersistentPageSize } from "@/lib/tablePageSize";
+import { useGlobalAccountFilter } from "@/lib/globalAccountFilter";
 import {
   DEFAULT_SEARCH_DEBOUNCE_MS,
   useDebouncedValue,
@@ -673,6 +674,7 @@ function ListFilters({
   onStatus,
   onClearAdvanced,
   onOpenAdvanced,
+  accountGlobalToggle,
 }: {
   entity: "accounts" | "groups";
   code: string;
@@ -693,6 +695,9 @@ function ListFilters({
   onStatus: (value: StatusListFilter) => void;
   onClearAdvanced: (field: AdvancedSummaryEntry["field"]) => void;
   onOpenAdvanced: () => void;
+  accountGlobalToggle?: ComponentProps<
+    typeof AutocompleteFilterField
+  >["globalToggle"];
 }) {
   const { t } = useTranslation("accounts");
   const { t: tc } = useTranslation("common");
@@ -803,6 +808,9 @@ function ListFilters({
               onChange={onCode}
               onClear={() => onCode("")}
               clearLabel={tc("filters.clearField")}
+              globalToggle={
+                entity === "accounts" ? accountGlobalToggle : undefined
+              }
             />
             <FilterOperatorSelect
               value={codeMatch}
@@ -2710,7 +2718,7 @@ function BlockedDetailsDialog({
               <div className="space-y-2">
                 {entries.map((entry) => (
                   <div
-                    key={entry.externalId}
+                    key={entry.id}
                     className="rounded-card border border-border bg-surface-2 p-3 text-xs"
                   >
                     <div className="flex flex-wrap items-center gap-2">
@@ -3668,6 +3676,7 @@ export function Accounts() {
   const { fetchAccounts, fetchGroups } = useOfficerApi();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const globalAccountFilter = useGlobalAccountFilter();
   // A shared deep link seeds the initial filter set for the active tab (defaults
   // to accounts); the operator owns it thereafter.
   const initialTab: AccountsTab =
@@ -3680,7 +3689,7 @@ export function Accounts() {
     () => (seedAccounts ? searchParams.get("group") : null),
   );
   const [accountCode, setAccountCode] = useState(
-    seedAccounts ? (searchParams.get("code") ?? "") : "",
+    seedAccounts ? (globalAccountFilter.account || searchParams.get("code") || "") : "",
   );
   const [accountCodeMatch, setAccountCodeMatch] = useState<TextMatchMode>(
     () => (seedAccounts ? textMatchFromParams(searchParams) : "contains"),
@@ -3904,6 +3913,43 @@ export function Accounts() {
   const [groupSize, setGroupSize] = usePersistentPageSize(
     "pit-officer-groups-page-size",
   );
+  const accountGlobalLocked =
+    globalAccountFilter.account !== "" &&
+    accountCode.trim() === globalAccountFilter.account;
+  const accountGlobalToggle = {
+    active:
+      accountCode.trim() !== "" &&
+      accountCode.trim() === globalAccountFilter.account,
+    disabled: accountCode.trim() === "",
+    activeLabel: t("common:filters.globalAccount.active"),
+    inactiveLabel: t("common:filters.globalAccount.inactive"),
+    disabledLabel: t("common:filters.globalAccount.disabled"),
+    onToggle: () => {
+      const nextAccount = accountCode.trim();
+      if (nextAccount === "") {
+        return;
+      }
+      if (globalAccountFilter.account === nextAccount) {
+        globalAccountFilter.clear();
+        return;
+      }
+      globalAccountFilter.setAccount(nextAccount);
+      setAccountCode(nextAccount);
+      setAccountPage(0);
+    },
+  };
+
+  useEffect(() => {
+    const nextAccount = globalAccountFilter.account;
+    if (nextAccount === "") {
+      return;
+    }
+    // This page keeps filter draft state locally; the external global-account
+    // store is the source we intentionally mirror when it changes.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setAccountCode(nextAccount);
+    setAccountPage(0);
+  }, [globalAccountFilter.account]);
   const accountListFilters = useMemo<AccountListFilters>(
     () => ({
       ...accountFilters,
@@ -4001,8 +4047,10 @@ export function Accounts() {
     setGroupPage(0);
   };
   const clearAccountFilters = () => {
-    setAccountCode("");
-    setAccountCodeMatch("contains");
+    if (!accountGlobalLocked) {
+      setAccountCode("");
+      setAccountCodeMatch("contains");
+    }
     setAccountStatus("all");
     setSelectedGroupCode(null);
     accountGroupSearchRef.current = "";
@@ -4365,6 +4413,9 @@ export function Accounts() {
             shareHref={accountShareHref}
             onClearAll={clearAccountFilters}
             onCode={(value) => {
+              if (accountGlobalLocked && value.trim() === "") {
+                globalAccountFilter.clear();
+              }
               setAccountCode(value);
               setAccountPage(0);
             }}
@@ -4397,6 +4448,7 @@ export function Accounts() {
               setAccountPage(0);
             }}
             onOpenAdvanced={() => setAccountAdvancedOpen(true)}
+            accountGlobalToggle={accountGlobalToggle}
           />
           {accountLoadError !== null && accounts === null ? (
             <ErrorState message={accountLoadError} onRetry={reloadAll} />

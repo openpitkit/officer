@@ -108,6 +108,7 @@ export {
   type FieldLabelProps,
   type FilterBarProps,
   type FilterChipProps,
+  type GlobalFilterToggleProps,
   type FilterOperatorSelectProps,
   type FilterValueType,
   type IdCellProps,

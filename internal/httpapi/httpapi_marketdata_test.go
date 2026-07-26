@@ -94,8 +94,11 @@ func TestListMarketData_OK(t *testing.T) {
 		t.Fatalf("want 1 instance, got %v", md["instances"])
 	}
 	inst := instances[0].(map[string]any)
-	if inst["externalId"] != extID("bn-1").String() || inst["state"] != "ok" {
+	if inst["id"] != extID("bn-1").String() || inst["state"] != "ok" {
 		t.Fatalf("unexpected instance: %v", inst)
+	}
+	if _, leaked := inst["externalId"]; leaked {
+		t.Fatalf("market-data instance leaked externalId: %v", inst)
 	}
 	if inst["credentials"] != "" {
 		t.Fatalf("credentials = %q, want redacted empty string", inst["credentials"])
@@ -105,6 +108,12 @@ func TestListMarketData_OK(t *testing.T) {
 		t.Fatalf("want 1 instrument, got %v", inst["instruments"])
 	}
 	instrument := instruments[0].(map[string]any)
+	if instrument["instanceId"] != extID("bn-1").String() {
+		t.Fatalf("instrument instanceId = %v", instrument["instanceId"])
+	}
+	if _, leaked := instrument["instanceExternalId"]; leaked {
+		t.Fatalf("instrument leaked instanceExternalId: %v", instrument)
+	}
 	if instrument["syntheticInverse"] != true {
 		t.Fatalf("syntheticInverse = %v, want true", instrument["syntheticInverse"])
 	}
@@ -208,8 +217,8 @@ func TestCreateMarketDataInstance_Created(t *testing.T) {
 	if !ok {
 		t.Fatalf("want instance object, got %v", m["instance"])
 	}
-	if instance["externalId"] != created.ExternalID.String() {
-		t.Fatalf("want created externalId, got %v", instance["externalId"])
+	if instance["id"] != created.ExternalID.String() {
+		t.Fatalf("want created id, got %v", instance["id"])
 	}
 	// The public create request carries no instance id; the backend assigns it.
 	want := `create:ib:Backup:{"host":"127.0.0.1","port":7496}:true`
@@ -270,7 +279,7 @@ func TestCreateMarketDataInstance_SuppliedExternalID(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bytes.NewBufferString(fmt.Sprintf(
-		`{"externalId":%q,"provider":"ib","label":"Backup"}`, supplied.String()))
+		`{"id":%q,"provider":"ib","label":"Backup"}`, supplied.String()))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/market-data/instances", body))
@@ -313,7 +322,7 @@ func TestCreateMarketDataInstance_DuplicateConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bytes.NewBufferString(fmt.Sprintf(
-		`{"externalId":%q,"provider":"ib","label":"Backup"}`, extID("md-dup").String()))
+		`{"id":%q,"provider":"ib","label":"Backup"}`, extID("md-dup").String()))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/market-data/instances", body))
@@ -335,7 +344,7 @@ func TestCreateMarketDataInstance_OpaqueExternalID(t *testing.T) {
 		t.Fatal(err)
 	}
 	supplied := "bad-id"
-	body := bytes.NewBufferString(`{"externalId":"` + supplied + `","provider":"ib","label":"Backup"}`)
+	body := bytes.NewBufferString(`{"id":"` + supplied + `","provider":"ib","label":"Backup"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/market-data/instances", body))
@@ -343,7 +352,7 @@ func TestCreateMarketDataInstance_OpaqueExternalID(t *testing.T) {
 		t.Fatalf("want 201, got %d: %s", rec.Code, rec.Body.String())
 	}
 	if got := svc.mdCreateInstance.ExternalID.String(); got != supplied {
-		t.Fatalf("externalId: want %q got %q", supplied, got)
+		t.Fatalf("id: want %q got %q", supplied, got)
 	}
 }
 

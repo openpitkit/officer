@@ -38,6 +38,11 @@
     "invalidNumber": "请输入有效数字。",
     "invalidRange": "请输入下限不高于上限的范围。",
     "clearAll": "清除所有筛选",
+    "globalAccount": {
+      "active": "停止将此账户用作全局账户筛选",
+      "inactive": "将此账户用作所有屏幕的全局账户筛选",
+      "disabled": "请输入账户以设为全局账户筛选"
+    },
     "active": "已启用筛选",
     "advancedActive": "高级筛选已生效",
     "activeCount_one": "{{count}} 个筛选",
@@ -301,11 +306,11 @@
       },
       "orders": {
         "description": "订单仅支持导出。第一行为表头。",
-        "columns": "external_id,at,account_code,source,principal,base_asset,quote_asset,side,amount_kind,amount_value,price,status,display_prices"
+        "columns": "id,at,account_code,source,principal,base_asset,quote_asset,side,amount_kind,amount_value,price,status,display_prices"
       },
       "trades": {
         "description": "成交仅支持导出。第一行为表头。",
-        "columns": "external_id,order_external_id,at,account_code,source,principal,base_asset,quote_asset,side,quantity,price,lock_price,commission_amount,commission_currency"
+        "columns": "id,order_id,at,account_code,source,principal,base_asset,quote_asset,side,quantity,price,lock_price,commission_amount,commission_currency"
       }
     },
     "entities": {

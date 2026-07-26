@@ -243,6 +243,7 @@
       "submitBusy": "Submitting…",
       "submit": "Submit",
       "accepted": "Execution report accepted.",
+      "reportId": "Report ID",
       "accountBlocked": "Account {{account}} blocked:",
       "done": "Done",
       "validationError": "Quantity and price are required for a fill status.",

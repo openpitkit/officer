@@ -24,6 +24,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
@@ -218,6 +219,58 @@ func TestLocalNode_ApplyExecutionReportPostEngineStoreFailureFatals(t *testing.T
 		!strings.Contains(msg, fmt.Sprintf("account_id=%d", account.EngineAccountID.Uint64())) ||
 		!strings.Contains(msg, "record execution report failed") {
 		t.Fatalf("fatal error = %q, want operation, account_id, and cause", msg)
+	}
+}
+
+func TestLocalNode_ApplyExecutionReportDuplicateIDDoesNotReachEngineOrFatal(t *testing.T) {
+	t.Parallel()
+	st := newMemoryStore("node.db")
+	eng := newFakeEngine()
+	var fatalErr error
+	n := newTestNodeWithStore(t, st, eng, WithFatalShutdownHook(func(err error) {
+		fatalErr = err
+	}))
+	ctx := context.Background()
+	realm, err := st.ForRealm(ctx, domain.DefaultRealm)
+	if err != nil {
+		t.Fatalf("ForRealm: %v", err)
+	}
+	firstOrder := testOrder(t, realm, "acc-1")
+	secondOrder := firstOrder
+	secondOrder.ExternalID = ""
+	secondOrder.At = time.Time{}
+	secondOrder, err = realm.CreateOrder(ctx, secondOrder)
+	if err != nil {
+		t.Fatalf("CreateOrder second: %v", err)
+	}
+
+	input := domain.ExecutionReportInput{
+		Order:          firstOrder.ExternalID,
+		FillQuantity:   "2",
+		FillPrice:      "400",
+		LeavesQuantity: "0",
+		LockPrice:      "400",
+		OrderStatus:    domain.OrderStatusFilled,
+	}
+	first, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), input, testCaller)
+	if err != nil {
+		t.Fatalf("ApplyExecutionReport first: %v", err)
+	}
+	if first.ReportID.IsZero() {
+		t.Fatal("first report id is zero")
+	}
+
+	input.Order = secondOrder.ExternalID
+	input.ExternalID = first.ReportID
+	_, err = n.ApplyExecutionReport(ctx, testKey("acc-1"), input, testCaller)
+	if !errors.Is(err, domain.ErrAlreadyExists) {
+		t.Fatalf("duplicate ApplyExecutionReport = %v, want ErrAlreadyExists", err)
+	}
+	if len(eng.execReportCalls) != 1 {
+		t.Fatalf("engine report calls = %d, want one", len(eng.execReportCalls))
+	}
+	if fatalErr != nil {
+		t.Fatalf("duplicate report triggered fatal hook: %v", fatalErr)
 	}
 }
 
@@ -998,7 +1051,8 @@ func TestLocalNode_ApplyExecutionReportPersistsAuditSafeOriginalRequest(t *testi
 		Force:          true,
 	}
 	want := domain.ExecutionReportRequestFromInput(in)
-	if _, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), in, testCaller); err != nil {
+	result, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), in, testCaller)
+	if err != nil {
 		t.Fatalf("ApplyExecutionReport: %v", err)
 	}
 	detail, err := st.GetOrder(ctx, order.ExternalID)
@@ -1009,6 +1063,16 @@ func TestLocalNode_ApplyExecutionReportPersistsAuditSafeOriginalRequest(t *testi
 		t.Fatalf("events = %+v, want one fill event", detail.Events)
 	}
 	got := detail.Events[0].Payload.ExecutionReport
+	if got == nil || got.ExternalID.IsZero() {
+		t.Fatalf("execution report snapshot has no generated id: %+v", got)
+	}
+	if result.ReportID != got.ExternalID {
+		t.Fatalf("result id = %q, request id = %q", result.ReportID, got.ExternalID)
+	}
+	if detail.Events[0].ExternalID == got.ExternalID {
+		t.Fatalf("event id reused report id %q", got.ExternalID)
+	}
+	want.ExternalID = got.ExternalID
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("execution report snapshot = %+v, want %+v", got, want)
 	}
@@ -1038,10 +1102,12 @@ func TestLocalNode_ApplyExecutionReportPersistsWorkflowStatusesWithoutEngine(t *
 			eng := newFakeEngine()
 			n, st := newTestNode(t, eng)
 			ctx := context.Background()
+			reportID := domain.ExternalID("workflow-report-" + string(tc.status))
 
 			const id domain.AccountID = "acc-1"
 			order := testOrder(t, st, id)
 			result, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
+				ExternalID:     reportID,
 				Order:          order.ExternalID,
 				LeavesQuantity: "1.5",
 				OrderStatus:    tc.status,
@@ -1051,6 +1117,9 @@ func TestLocalNode_ApplyExecutionReportPersistsWorkflowStatusesWithoutEngine(t *
 			}
 			if len(result.Blocks) != 0 || len(result.Outcomes) != 0 || result.Persistence != nil {
 				t.Fatalf("result = %+v, want no engine result", result)
+			}
+			if result.ReportID != reportID {
+				t.Fatalf("result report id = %q, want %q", result.ReportID, reportID)
 			}
 			if len(eng.execReportCalls) != 0 {
 				t.Fatalf("workflow status reached engine: %+v", eng.execReportCalls)
@@ -1070,6 +1139,13 @@ func TestLocalNode_ApplyExecutionReportPersistsWorkflowStatusesWithoutEngine(t *
 			}
 			if len(detail.Events) != 1 || detail.Events[0].Type != tc.event {
 				t.Fatalf("events = %+v, want [%s]", detail.Events, tc.event)
+			}
+			request := detail.Events[0].Payload.ExecutionReport
+			if request == nil || request.ExternalID != reportID {
+				t.Fatalf("event report snapshot = %+v, want id %q", request, reportID)
+			}
+			if detail.Events[0].ExternalID == reportID {
+				t.Fatalf("event reused report id %q", reportID)
 			}
 		})
 	}

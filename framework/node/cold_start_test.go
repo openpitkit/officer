@@ -63,15 +63,15 @@ func (r *principalCheckingRealm) CreateOrder(
 
 func (r *principalCheckingRealm) RecordOrderSettlement(
 	ctx context.Context, settlement domain.OrderSettlement,
-) error {
+) (domain.ExternalID, error) {
 	for _, event := range settlement.Events {
 		if err := r.checkPrincipal(ctx, event.Principal); err != nil {
-			return err
+			return "", err
 		}
 	}
 	if settlement.Trade != nil {
 		if err := r.checkPrincipal(ctx, settlement.Trade.Principal); err != nil {
-			return err
+			return "", err
 		}
 	}
 	return r.RealmStore.RecordOrderSettlement(ctx, settlement)

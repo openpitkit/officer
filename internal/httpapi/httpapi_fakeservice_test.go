@@ -67,7 +67,6 @@ type fakeService struct {
 	orderDetail           domain.OrderDetail
 	adjustment            domain.AccountAdjustmentRecord
 	submitOrder           domain.Order
-	submitOrderToken      backend.ApprovalToken
 	execReportIn          domain.ExecutionReportInput
 	checkResult           domain.CheckResult
 	overview              backend.Overview
@@ -111,6 +110,7 @@ type fakeService struct {
 	unblockErr            error
 	stateErr              error
 	execReportErr         error
+	execReportResult      engine.ExecutionReportResult
 	listLimErr            error
 	putLimErr             error
 	delLimErr             error
@@ -674,20 +674,6 @@ func (f *fakeService) ListAdjustmentRows(
 	}
 	return store.AdjustmentListPage{Rows: f.adjustments, Total: len(f.adjustments)}, nil
 }
-func (f *fakeService) SubmitOrder(_ context.Context, o domain.Order) (backend.SubmitOrderResult, error) {
-	f.submitOrderIn = o
-	tok := f.submitOrderToken
-	if tok.Token == "" {
-		tok = backend.ApprovalToken{
-			Token:           "submit-token",
-			KeyID:           "key-1",
-			OrderExternalID: f.submitOrder.ExternalID.String(),
-			Verdict:         "accept",
-			Signed:          true,
-		}
-	}
-	return backend.SubmitOrderResult{Order: f.submitOrder, Token: tok}, f.stateErr
-}
 func (f *fakeService) CheckOrder(_ context.Context, _ domain.OrderProbe) (domain.CheckResult, error) {
 	return f.checkResult, f.stateErr
 }
@@ -698,7 +684,7 @@ func (f *fakeService) ApplyExecutionReport(
 	if f.execReportErr != nil {
 		return engine.ExecutionReportResult{}, backend.Attestation{}, f.execReportErr
 	}
-	return engine.ExecutionReportResult{}, f.attestation, f.stateErr
+	return f.execReportResult, f.attestation, f.stateErr
 }
 func (f *fakeService) GetOrder(_ context.Context, _ string) (domain.OrderDetail, error) {
 	return f.orderDetail, f.stateErr

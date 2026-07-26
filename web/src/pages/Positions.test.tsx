@@ -190,7 +190,7 @@ function acceptedAdjustment(request: Adjustment["request"]): Adjustment {
     accepted.realizedPnlResult = request.realizedPnl;
   }
   return {
-    externalId: "adj-alpha-10",
+    id: "adj-alpha-10",
     account: "Bucks McMoneyface",
     at: "2026-06-24T16:42:00Z",
     source: "panel",
@@ -1043,6 +1043,17 @@ describe("Positions business CSV", () => {
       account: undefined,
       asset: undefined,
     });
+    const blob = vi.mocked(URL.createObjectURL).mock.calls.at(-1)?.[0];
+    if (!(blob instanceof Blob)) {
+      throw new Error("history export did not create a CSV blob");
+    }
+    const body = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.addEventListener("load", () => resolve(String(reader.result)));
+      reader.addEventListener("error", () => reject(reader.error));
+      reader.readAsText(blob);
+    });
+    expect(body).toMatch(/^id,at,account,asset,/);
   });
 
   it("imports positions and reloads balances plus history after success", async () => {
@@ -1522,6 +1533,18 @@ describe("Positions share filter set", () => {
         sort: "status",
         source: "mcp",
       });
+    });
+  });
+
+  it("ignores the legacy externalId history query parameter", async () => {
+    renderPositions("/positions?tab=history&externalId=legacy-adjustment");
+
+    await waitFor(() => {
+      const filter =
+        useAdjustmentsMock.mock.calls[
+          useAdjustmentsMock.mock.calls.length - 1
+        ]?.[0];
+      expect(filter?.id).toBeUndefined();
     });
   });
 });

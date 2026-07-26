@@ -786,7 +786,7 @@ function sortProviders(providers: MarketDataProvider[]): MarketDataProvider[] {
 }
 
 function providerTitle(instance: MarketDataInstance): string {
-  return instance.label || instance.externalId;
+  return instance.label || instance.id;
 }
 
 function instrumentPairKey(baseAsset: string, quoteAsset: string): string {
@@ -808,7 +808,7 @@ function buildPairUsageMap(instances: MarketDataInstance[]): PairUsageMap {
       }
       map[key] ??= [];
       map[key].push({
-        instanceExternalId: instance.externalId,
+        instanceExternalId: instance.id,
         instanceLabel: providerTitle(instance),
         providerType: instance.provider,
         externalSymbol: instrument.externalSymbol,
@@ -2903,7 +2903,7 @@ export function InstanceCard({
       <CardContent className="space-y-4">
         {!usesInstrumentDialog && canSearch && (
           <ResolvePanel
-            id={`md-resolve-${instance.externalId}`}
+            id={`md-resolve-${instance.id}`}
             busy={busy}
             resolving={resolving}
             resolved={resolved}
@@ -3037,7 +3037,7 @@ export function InstanceCard({
               <div className="space-y-4">
                 {canSearch && (
                   <ResolvePanel
-                    id={`md-resolve-dialog-${instance.externalId}`}
+                    id={`md-resolve-dialog-${instance.id}`}
                     busy={busy}
                     resolving={resolving}
                     resolved={resolved}
@@ -3054,11 +3054,11 @@ export function InstanceCard({
                 )}
                 <div className="grid items-end gap-3 md:grid-cols-[1fr_0.7fr_0.7fr_0.5fr]">
                   <div className="space-y-2">
-                    <Label htmlFor={`md-add-${instance.externalId}-external`}>
+                    <Label htmlFor={`md-add-${instance.id}-external`}>
                       {t("instrument.externalSymbol")}
                     </Label>
                     <Input
-                      id={`md-add-${instance.externalId}-external`}
+                      id={`md-add-${instance.id}-external`}
                       value={draft.externalSymbol}
                       onChange={(e) => {
                         const externalSymbol = e.target.value;
@@ -3069,11 +3069,11 @@ export function InstanceCard({
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor={`md-add-${instance.externalId}-base`}>
+                    <Label htmlFor={`md-add-${instance.id}-base`}>
                       {t("instrument.baseAsset")}
                     </Label>
                     <Input
-                      id={`md-add-${instance.externalId}-base`}
+                      id={`md-add-${instance.id}-base`}
                       value={draft.baseAsset}
                       onChange={(e) =>
                         setDraft((d) => ({ ...d, baseAsset: e.target.value }))
@@ -3083,13 +3083,13 @@ export function InstanceCard({
                   </div>
                   <div className="space-y-2">
                     <div className="flex items-center gap-2">
-                      <Label htmlFor={`md-add-${instance.externalId}-quote`}>
+                      <Label htmlFor={`md-add-${instance.id}-quote`}>
                         {t("instrument.quoteAsset")}
                       </Label>
                       <PairUsageWarning usages={draftPairUsages} />
                     </div>
                     <Input
-                      id={`md-add-${instance.externalId}-quote`}
+                      id={`md-add-${instance.id}-quote`}
                       value={draft.quoteAsset}
                       onChange={(e) =>
                         setDraft((d) => ({ ...d, quoteAsset: e.target.value }))
@@ -3098,7 +3098,7 @@ export function InstanceCard({
                     />
                   </div>
                   <StateToggleField
-                    id={`md-add-${instance.externalId}-enabled`}
+                    id={`md-add-${instance.id}-enabled`}
                     enabled={draft.enabled}
                     busy={busy}
                     onToggle={() =>
@@ -3113,7 +3113,7 @@ export function InstanceCard({
                   <IBContractEditor
                     contract={contractDraft}
                     busy={busy}
-                    idPrefix={`md-ib-add-${instance.externalId}`}
+                    idPrefix={`md-ib-add-${instance.id}`}
                     onChange={(patch) =>
                       setContractDraft((prev) => ({ ...prev, ...patch }))
                     }
@@ -3188,7 +3188,7 @@ export function InstanceCard({
                   instrument.baseAsset,
                   instrument.quoteAsset,
                   {
-                    instanceExternalId: instance.externalId,
+                    instanceExternalId: instance.id,
                     externalSymbol: instrument.externalSymbol,
                   },
                 );
@@ -3555,7 +3555,7 @@ export function MarketData() {
     form: SettingsForm,
   ) =>
     run(async () => {
-      await updateMarketDataInstanceSettings(instance.externalId, form);
+      await updateMarketDataInstanceSettings(instance.id, form);
     });
 
   const restart = () =>
@@ -3572,7 +3572,7 @@ export function MarketData() {
   ): Promise<MarketDataSymbolVerification | null> => {
     setMutationError("");
     try {
-      return await verifyMarketDataSymbol(instance.externalId, externalSymbol);
+      return await verifyMarketDataSymbol(instance.id, externalSymbol);
     } catch (err) {
       setMutationError(err instanceof Error ? err.message : String(err));
       return null;
@@ -3588,7 +3588,7 @@ export function MarketData() {
   ): Promise<MarketDataSymbolMatch[] | null> => {
     setMutationError("");
     try {
-      const result = await searchMarketDataSymbols(instance.externalId, input);
+      const result = await searchMarketDataSymbols(instance.id, input);
       return result.supported ? result.matches : [];
     } catch (err) {
       setMutationError(err instanceof Error ? err.message : String(err));
@@ -3608,7 +3608,7 @@ export function MarketData() {
   ) =>
     run(async () => {
       const externalSymbol = draft.externalSymbol.trim();
-      await upsertMarketDataInstrument(instance.externalId, {
+      await upsertMarketDataInstrument(instance.id, {
         externalSymbol,
         baseAsset: draft.baseAsset.trim(),
         quoteAsset: draft.quoteAsset.trim(),
@@ -3619,7 +3619,7 @@ export function MarketData() {
         ...readIBContractsFromInstance(instance),
         [externalSymbol]: contract,
       };
-      await updateMarketDataInstanceSettings(instance.externalId, {
+      await updateMarketDataInstanceSettings(instance.id, {
         label: instance.label,
         credentials: buildProviderCredentials(
           IB_PROVIDER,
@@ -3634,7 +3634,7 @@ export function MarketData() {
     setBusy(true);
     setMutationError("");
     try {
-      await deleteMarketDataInstance(deleteInstanceTarget.externalId);
+      await deleteMarketDataInstance(deleteInstanceTarget.id);
       setDeleteInstanceTarget(null);
       reload();
     } catch (err) {
@@ -3649,12 +3649,12 @@ export function MarketData() {
       if (!deleteInstrumentTarget) return;
       if (deleteInstrumentTarget.ib) {
         await deleteMarketDataInstrument(
-          deleteInstrumentTarget.instance.externalId,
+          deleteInstrumentTarget.instance.id,
           deleteInstrumentTarget.externalSymbol,
         );
         const contracts = readIBContractsFromInstance(deleteInstrumentTarget.instance);
         delete contracts[deleteInstrumentTarget.externalSymbol];
-        await updateMarketDataInstanceSettings(deleteInstrumentTarget.instance.externalId, {
+        await updateMarketDataInstanceSettings(deleteInstrumentTarget.instance.id, {
           label: deleteInstrumentTarget.instance.label,
           credentials: buildProviderCredentials(
             IB_PROVIDER,
@@ -3664,7 +3664,7 @@ export function MarketData() {
         });
       } else {
         await deleteMarketDataInstrument(
-          deleteInstrumentTarget.instance.externalId,
+          deleteInstrumentTarget.instance.id,
           deleteInstrumentTarget.externalSymbol,
         );
       }
@@ -3738,7 +3738,7 @@ export function MarketData() {
         onCreate={createInstance}
       />
       <InstanceSettingsDialog
-        key={settingsInstance?.externalId ?? "settings-none"}
+        key={settingsInstance?.id ?? "settings-none"}
         instance={settingsInstance}
         busy={busy}
         existingLabels={existingLabels}
@@ -3767,7 +3767,7 @@ export function MarketData() {
           )}
           {load.data.instances.map((instance) => (
             <InstanceCard
-              key={instance.externalId}
+              key={instance.id}
               instance={instance}
               pairUsageMap={pairUsageMap}
               busy={busy}
@@ -3776,7 +3776,7 @@ export function MarketData() {
               onSearchSymbols={searchSymbols}
               onToggleInstance={(target) =>
                 run(() =>
-                  setMarketDataInstanceEnabled(target.externalId, !target.enabled),
+                  setMarketDataInstanceEnabled(target.id, !target.enabled),
                 )
               }
               onDeleteInstance={(target) => {
@@ -3785,7 +3785,7 @@ export function MarketData() {
               onUpsertInstrument={(target, draft, options) =>
                 run(
                   () =>
-                    upsertMarketDataInstrument(target.externalId, draft).then(() => { }),
+                    upsertMarketDataInstrument(target.id, draft).then(() => { }),
                   options,
                 )
               }
@@ -3793,7 +3793,7 @@ export function MarketData() {
               onToggleInstrument={(target, externalSymbol, enabled) =>
                 run(() =>
                   setMarketDataInstrumentEnabled(
-                    target.externalId,
+                    target.id,
                     externalSymbol,
                     enabled,
                   ),

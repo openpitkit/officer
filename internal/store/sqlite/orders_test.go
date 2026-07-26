@@ -1238,7 +1238,7 @@ func TestRecordOrderSettlement(t *testing.T) {
 		SetLock: true,
 		Lock:    []byte{}, // explicit clear
 	}
-	if err := rs.RecordOrderSettlement(ctx, st); err != nil {
+	if _, err := rs.RecordOrderSettlement(ctx, st); err != nil {
 		t.Fatalf("RecordOrderSettlement: %v", err)
 	}
 
@@ -1290,7 +1290,7 @@ func TestRecordOrderSettlement(t *testing.T) {
 	conflict := st
 	conflict.OrderStatus = domain.OrderStatusCancelled
 	conflict.AccountPnl = "999"
-	if err := rs.RecordOrderSettlement(ctx, conflict); !errors.Is(err, domain.ErrConflict) {
+	if _, err := rs.RecordOrderSettlement(ctx, conflict); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("RecordOrderSettlement(terminal) = %v, want ErrConflict", err)
 	}
 	detail, _ = rs.GetOrder(ctx, created.ExternalID)
@@ -1303,6 +1303,259 @@ func TestRecordOrderSettlement(t *testing.T) {
 	}
 	if account.Pnl != "7.25" {
 		t.Fatalf("account pnl after rejected settlement = %q, want 7.25", account.Pnl)
+	}
+}
+
+func TestRecordOrderSettlementPersistsExecutionReportIdentityAndEventLinks(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+	created, err := rs.CreateOrder(ctx, sampleOrder())
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+
+	supplied := domain.ExternalID("client-report-1")
+	request := &domain.ExecutionReportRequest{}
+	settlement := domain.OrderSettlement{
+		ReportID:    &supplied,
+		Order:       created.ExternalID,
+		Account:     created.Account,
+		OrderStatus: domain.OrderStatusPartiallyFilled,
+		Events: []domain.OrderEvent{
+			{
+				Order: created.ExternalID, Type: domain.OrderEventFill,
+				Source:  domain.SourceAPI,
+				Payload: domain.OrderEventPayload{ExecutionReport: request},
+			},
+			{
+				Order: created.ExternalID, Type: domain.OrderEventCommitted,
+				Source:  domain.SourceAPI,
+				Payload: domain.OrderEventPayload{ExecutionReport: request},
+			},
+		},
+	}
+	recorded, err := rs.RecordOrderSettlement(ctx, settlement)
+	if err != nil {
+		t.Fatalf("RecordOrderSettlement: %v", err)
+	}
+	if recorded != supplied {
+		t.Fatalf("recorded id = %q, want supplied %q", recorded, supplied)
+	}
+
+	r := rs.(*realmStore)
+	var reportCount, linkCount int
+	if err := r.rawDB().QueryRowContext(
+		ctx, `SELECT COUNT(*) FROM execution_report WHERE external_id = ?`, supplied.Bytes(),
+	).Scan(&reportCount); err != nil {
+		t.Fatalf("count execution report: %v", err)
+	}
+	if err := r.rawDB().QueryRowContext(
+		ctx,
+		`SELECT COUNT(*)
+		 FROM execution_report_event ree
+		 JOIN execution_report er ON er.id = ree.report_id
+		 WHERE er.external_id = ?`,
+		supplied.Bytes(),
+	).Scan(&linkCount); err != nil {
+		t.Fatalf("count execution report event links: %v", err)
+	}
+	if reportCount != 1 || linkCount != 2 {
+		t.Fatalf("report rows = %d, links = %d, want 1 and 2", reportCount, linkCount)
+	}
+
+	detail, err := rs.GetOrder(ctx, created.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if len(detail.Events) != 2 {
+		t.Fatalf("events = %d, want 2", len(detail.Events))
+	}
+	for _, event := range detail.Events {
+		if event.ExternalID == supplied {
+			t.Fatalf("event reused report id %q", supplied)
+		}
+		if event.Payload.ExecutionReport == nil ||
+			event.Payload.ExecutionReport.ExternalID != supplied {
+			t.Fatalf("event report snapshot = %+v, want id %q", event.Payload.ExecutionReport, supplied)
+		}
+	}
+}
+
+func TestRecordOrderSettlementGeneratesExecutionReportIDAtStoreBoundary(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+	created, err := rs.CreateOrder(ctx, sampleOrder())
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+
+	generated := domain.ExternalID("")
+	recorded, err := rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		ReportID:    &generated,
+		Order:       created.ExternalID,
+		Account:     created.Account,
+		OrderStatus: domain.OrderStatusAccepted,
+		Events: []domain.OrderEvent{{
+			Order: created.ExternalID, Type: domain.OrderEventPreTradeAccepted,
+			Source: domain.SourceAPI,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("RecordOrderSettlement: %v", err)
+	}
+	if recorded.IsZero() || generated != recorded {
+		t.Fatalf("recorded id = %q, settlement id = %q", recorded, generated)
+	}
+	if got := countRows(t, ctx, rs.(*realmStore), "execution_report"); got != 1 {
+		t.Fatalf("execution reports = %d, want 1", got)
+	}
+}
+
+func TestRecordOrderSettlementRejectsReportWithoutEventsAndRollsBack(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+	created, err := rs.CreateOrder(ctx, sampleOrder())
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+	r := rs.(*realmStore)
+	wantReports := countRows(t, ctx, r, "execution_report")
+	wantTrades := countRows(t, ctx, r, "trade")
+	wantAccount, ok, err := rs.GetAccount(ctx, created.Account)
+	if err != nil || !ok {
+		t.Fatalf("GetAccount before settlement: ok=%v err=%v", ok, err)
+	}
+
+	reportID := domain.ExternalID("report-without-events")
+	_, err = rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		ReportID:    &reportID,
+		Order:       created.ExternalID,
+		Account:     created.Account,
+		AccountPnl:  "999",
+		OrderStatus: domain.OrderStatusFilled,
+		Balances: []domain.BalanceSettlement{{
+			Asset: "USD",
+			Outcome: domain.AdjustmentOutcomeAccepted{
+				BalanceResult: "1", HeldResult: "0", IncomingResult: "0",
+			},
+		}},
+		Trade: &domain.Trade{
+			Order: created.ExternalID, Account: created.Account,
+			BaseAsset: created.BaseAsset, QuoteAsset: created.QuoteAsset,
+			Source: domain.SourceAPI, Side: created.Side, Quantity: "1", Price: "1",
+		},
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("RecordOrderSettlement = %v, want ErrInvalid", err)
+	}
+	if got := countRows(t, ctx, r, "execution_report"); got != wantReports {
+		t.Fatalf("execution reports = %d, want unchanged %d", got, wantReports)
+	}
+	if got := countRows(t, ctx, r, "trade"); got != wantTrades {
+		t.Fatalf("trades = %d, want unchanged %d", got, wantTrades)
+	}
+	if _, ok := getBalanceRow(t, ctx, rs, created.Account, "USD"); ok {
+		t.Fatal("report without events wrote a balance")
+	}
+	detail, err := rs.GetOrder(ctx, created.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if detail.Order.Status != domain.OrderStatusSubmitted {
+		t.Fatalf("status = %q, want submitted", detail.Order.Status)
+	}
+	account, ok, err := rs.GetAccount(ctx, created.Account)
+	if err != nil || !ok {
+		t.Fatalf("GetAccount after settlement: ok=%v err=%v", ok, err)
+	}
+	if account.Pnl != wantAccount.Pnl {
+		t.Fatalf("account pnl = %q, want unchanged %q", account.Pnl, wantAccount.Pnl)
+	}
+}
+
+func TestRecordOrderSettlementDuplicateReportRollsBackEverything(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+	created, err := rs.CreateOrder(ctx, sampleOrder())
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+
+	reportID := domain.ExternalID("duplicate-report-1")
+	if _, err := rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		ReportID:    &reportID,
+		Order:       created.ExternalID,
+		Account:     created.Account,
+		OrderStatus: domain.OrderStatusAccepted,
+		Events: []domain.OrderEvent{{
+			Order: created.ExternalID, Type: domain.OrderEventPreTradeAccepted,
+			Source: domain.SourceAPI,
+		}},
+	}); err != nil {
+		t.Fatalf("first RecordOrderSettlement: %v", err)
+	}
+	duplicateOrder, err := rs.CreateOrder(ctx, sampleOrder())
+	if err != nil {
+		t.Fatalf("CreateOrder for duplicate: %v", err)
+	}
+
+	r := rs.(*realmStore)
+	wantReports := countRows(t, ctx, r, "execution_report")
+	wantLinks := countRows(t, ctx, r, "execution_report_event")
+	wantEvents := countRows(t, ctx, r, "order_event")
+	wantTrades := countRows(t, ctx, r, "trade")
+	wantAccount, ok, err := rs.GetAccount(ctx, created.Account)
+	if err != nil || !ok {
+		t.Fatalf("GetAccount before duplicate: ok=%v err=%v", ok, err)
+	}
+	_, err = rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		ReportID:    &reportID,
+		Order:       duplicateOrder.ExternalID,
+		Account:     duplicateOrder.Account,
+		AccountPnl:  "999",
+		OrderStatus: domain.OrderStatusFilled,
+		Balances: []domain.BalanceSettlement{{
+			Asset: "USD",
+			Outcome: domain.AdjustmentOutcomeAccepted{
+				BalanceResult: "1", HeldResult: "0", IncomingResult: "0",
+			},
+		}},
+		Trade: &domain.Trade{
+			Order: duplicateOrder.ExternalID, Account: duplicateOrder.Account,
+			BaseAsset: duplicateOrder.BaseAsset, QuoteAsset: duplicateOrder.QuoteAsset,
+			Source: domain.SourceAPI, Side: duplicateOrder.Side, Quantity: "1", Price: "1",
+		},
+		Events: []domain.OrderEvent{{
+			Order: duplicateOrder.ExternalID, Type: domain.OrderEventFill, Source: domain.SourceAPI,
+		}},
+	})
+	if !errors.Is(err, domain.ErrAlreadyExists) {
+		t.Fatalf("duplicate RecordOrderSettlement = %v, want ErrAlreadyExists", err)
+	}
+	if got := countRows(t, ctx, r, "execution_report"); got != wantReports {
+		t.Fatalf("execution reports = %d, want unchanged %d", got, wantReports)
+	}
+	if got := countRows(t, ctx, r, "execution_report_event"); got != wantLinks {
+		t.Fatalf("execution report links = %d, want unchanged %d", got, wantLinks)
+	}
+	if got := countRows(t, ctx, r, "order_event"); got != wantEvents {
+		t.Fatalf("events = %d, want unchanged %d", got, wantEvents)
+	}
+	if got := countRows(t, ctx, r, "trade"); got != wantTrades {
+		t.Fatalf("trades = %d, want unchanged %d", got, wantTrades)
+	}
+	if _, ok := getBalanceRow(t, ctx, rs, created.Account, "USD"); ok {
+		t.Fatal("duplicate report wrote a balance")
+	}
+	detail, err := rs.GetOrder(ctx, duplicateOrder.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if detail.Order.Status != domain.OrderStatusSubmitted {
+		t.Fatalf("status = %q, want submitted", detail.Order.Status)
+	}
+	account, ok, err := rs.GetAccount(ctx, created.Account)
+	if err != nil || !ok {
+		t.Fatalf("GetAccount: ok=%v err=%v", ok, err)
+	}
+	if account.Pnl != wantAccount.Pnl {
+		t.Fatalf("account pnl = %q, want unchanged %q", account.Pnl, wantAccount.Pnl)
 	}
 }
 
@@ -1320,7 +1573,7 @@ func TestRecordOrderSettlementSpotFillPersistsEngineRealizedPnlAsset(t *testing.
 		t.Fatalf("CreateOrder: %v", err)
 	}
 
-	if err := rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
+	if _, err := rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
 		Order:       created.ExternalID,
 		Account:     "acc-1",
 		OrderStatus: domain.OrderStatusFilled,
@@ -1390,7 +1643,7 @@ func TestRecordOrderSettlementRacesRealizedPnlAdjustmentNoDeadlock(t *testing.T)
 	done := make(chan error, 2)
 	go func() {
 		<-start
-		done <- rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		_, err := rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
 			Order:       created.ExternalID,
 			Account:     "acc-1",
 			OrderStatus: domain.OrderStatusFilled,
@@ -1412,6 +1665,7 @@ func TestRecordOrderSettlementRacesRealizedPnlAdjustmentNoDeadlock(t *testing.T)
 				},
 			}},
 		})
+		done <- err
 	}()
 	go func() {
 		<-start
@@ -1538,7 +1792,7 @@ func TestRecordOrderSettlementPersistsEngineAbsoluteBalances(t *testing.T) {
 		t.Fatalf("CreateOrder: %v", err)
 	}
 
-	if err := rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
+	if _, err := rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
 		Account:     "acc-1",
 		Order:       created.ExternalID,
 		OrderStatus: domain.OrderStatusRejected,
@@ -1608,7 +1862,7 @@ func TestRecordOrderSettlementLeaves(t *testing.T) {
 
 	// An empty Leaves leaves the column unchanged; the status advance still
 	// applies.
-	if err := rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
+	if _, err := rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
 		Order:       created.ExternalID,
 		Account:     "acc-1",
 		OrderStatus: domain.OrderStatusAccepted,
@@ -1622,7 +1876,7 @@ func TestRecordOrderSettlementLeaves(t *testing.T) {
 	}
 
 	// A non-empty Leaves rewrites the column.
-	if err := rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
+	if _, err := rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
 		Order:       created.ExternalID,
 		Account:     "acc-1",
 		OrderStatus: domain.OrderStatusPartiallyFilled,
@@ -1660,7 +1914,7 @@ func TestRecordOrderSettlementAcceptsHighPrecisionBalance(t *testing.T) {
 			},
 		},
 	}
-	if err := rs.RecordOrderSettlement(ctx, st); err != nil {
+	if _, err := rs.RecordOrderSettlement(ctx, st); err != nil {
 		t.Fatalf("RecordOrderSettlement: %v", err)
 	}
 	bal, ok := getBalanceRow(t, ctx, rs, "acc-1", "AAPL")
@@ -1681,7 +1935,7 @@ func TestRecordOrderSettlementMissingOrder(t *testing.T) {
 		Account:     "acc-1",
 		OrderStatus: domain.OrderStatusFilled,
 	}
-	if err := rs.RecordOrderSettlement(ctx, st); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := rs.RecordOrderSettlement(ctx, st); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("RecordOrderSettlement(missing order) = %v, want ErrNotFound", err)
 	}
 }
@@ -1697,7 +1951,7 @@ func TestRecordOrderSettlementRejectsMissingOrderHandle(t *testing.T) {
 			{Asset: "USD", Outcome: domain.AdjustmentOutcomeAccepted{BalanceResult: "1000", HeldResult: "100"}},
 		},
 	}
-	if err := rs.RecordOrderSettlement(ctx, st); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := rs.RecordOrderSettlement(ctx, st); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("RecordOrderSettlement(zero order) = %v, want ErrInvalid", err)
 	}
 	bal, ok := getBalanceRow(t, ctx, rs, "acc-1", "USD")
@@ -1734,7 +1988,7 @@ func TestRecordOrderSettlementPrunesEmptyBalance(t *testing.T) {
 			},
 		},
 	}
-	if err := rs.RecordOrderSettlement(ctx, st); err != nil {
+	if _, err := rs.RecordOrderSettlement(ctx, st); err != nil {
 		t.Fatalf("RecordOrderSettlement: %v", err)
 	}
 	if _, ok := getBalanceRow(t, ctx, rs, "acc-1", "USD"); ok {
@@ -1755,7 +2009,7 @@ func TestRecordOrderSettlementAccountPnlHaltLifecycle(t *testing.T) {
 	}
 	settle := func(order domain.Order, pnl string, reason domain.PnlHaltReason) {
 		t.Helper()
-		if err := rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		if _, err := rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
 			Order: order.ExternalID, Account: "acc-1",
 			OrderStatus: domain.OrderStatusCommitted,
 			AccountPnl:  pnl, AccountPnlHaltReason: reason,
@@ -1805,7 +2059,7 @@ func TestRecordOrderSettlementPreservesAndPrunesHaltOnlyBalance(t *testing.T) {
 	}
 	settle := func(order domain.Order, realizedPnlResult string) {
 		t.Helper()
-		if err := rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		if _, err := rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
 			Order: order.ExternalID, Account: "acc-1",
 			OrderStatus: domain.OrderStatusCommitted,
 			Balances: []domain.BalanceSettlement{{

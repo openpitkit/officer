@@ -174,7 +174,7 @@ proto.setPointerCapture = () => {};
 proto.scrollIntoView = () => {};
 
 const sampleOrder: Order = {
-  externalId: "ord-alpha-1",
+  id: "ord-alpha-1",
   account: "desk-alpha",
   at: "2026-06-24T00:00:00Z",
   source: "panel",
@@ -244,7 +244,7 @@ beforeEach(async () => {
     approval: {
       token: "hold-token",
       keyId: "key-1",
-      orderExternalId: sampleOrder.externalId,
+      id: sampleOrder.id,
       verdict: "accept",
       reasons: [],
     },
@@ -254,6 +254,7 @@ beforeEach(async () => {
     filename: "business.csv",
   });
   submitExecutionReportMock.mockResolvedValue({
+    id: "report-alpha-1",
     blocks: [],
     outcomes: [],
     attestationToken: "",
@@ -920,7 +921,7 @@ describe("Orders workflow confirm/cancel shortcuts", () => {
       approval: {
         token: "rejected-hold-token",
         keyId: "key-1",
-        orderExternalId: rejectedOrder.externalId,
+        id: rejectedOrder.id,
         verdict: "reject",
         reasons: [{
           code: "policy_reject",
@@ -980,6 +981,8 @@ describe("Orders workflow confirm/cancel shortcuts", () => {
         { status: "accepted" },
       ),
     );
+    expect(await screen.findByText("Report ID")).toBeInTheDocument();
+    expect(screen.getByText("report-alpha-1")).toBeInTheDocument();
     await user.click(await screen.findByRole("button", { name: "Done" }));
 
     expect(
@@ -1025,7 +1028,7 @@ describe("Orders workflow confirm/cancel shortcuts", () => {
       approval: {
         token: "hold-token",
         keyId: "key-1",
-        orderExternalId: terminalOrder.externalId,
+        id: terminalOrder.id,
         verdict: "accept",
         reasons: [],
       },
@@ -1091,7 +1094,7 @@ describe("Orders row signed indicator", () => {
     useOrdersMock.mockReturnValue(
       readyPage<Order>([
         sampleOrder,
-        { ...sampleOrder, externalId: "ord-alpha-signed", signed: true },
+        { ...sampleOrder, id: "ord-alpha-signed", signed: true },
       ]),
     );
     renderOrders("/orders");
@@ -1144,7 +1147,7 @@ describe("Orders row filters", () => {
     useTradesMock.mockReturnValue(
       readyPage<Trade>([
         {
-          externalId: "trd-alpha-1",
+          id: "trd-alpha-1",
           order: "ord-alpha-1",
           account: "desk-alpha",
           at: "2026-06-24T00:00:00Z",
@@ -1170,10 +1173,10 @@ describe("Orders row filters", () => {
 describe("Order detail account block placement", () => {
   it("shows the account block reason beside the fill event that caused it", async () => {
     const user = userEvent.setup();
-    const order = { ...sampleOrder, externalId: "ord-alpha-3", status: "filled", price: "99" };
+    const order = { ...sampleOrder, id: "ord-alpha-3", status: "filled", price: "99" };
     const events: OrderEvent[] = [
       {
-        externalId: "evt-alpha-1",
+        id: "evt-alpha-1",
         order: "ord-alpha-3",
         at: "2026-06-24T11:07:00Z",
         type: "submitted",
@@ -1182,7 +1185,7 @@ describe("Order detail account block placement", () => {
         signed: false,
       },
       {
-        externalId: "evt-alpha-2",
+        id: "evt-alpha-2",
         order: "ord-alpha-3",
         at: "2026-06-24T11:08:00Z",
         type: "fill",
@@ -1232,10 +1235,10 @@ describe("Order detail account block placement", () => {
 describe("Order detail per-event verification", () => {
   it("shows a key icon on a signed event and opens its per-event panel", async () => {
     const user = userEvent.setup();
-    const order = { ...sampleOrder, externalId: "ord-signed-evt", signed: true };
+    const order = { ...sampleOrder, id: "ord-signed-evt", signed: true };
     const events: OrderEvent[] = [
       {
-        externalId: "evt-unsigned",
+        id: "evt-unsigned",
         order: "ord-signed-evt",
         at: "2026-06-24T11:07:00Z",
         type: "submitted",
@@ -1244,7 +1247,7 @@ describe("Order detail per-event verification", () => {
         signed: false,
       },
       {
-        externalId: "evt-signed",
+        id: "evt-signed",
         order: "ord-signed-evt",
         at: "2026-06-24T11:08:00Z",
         type: "fill",
@@ -1451,7 +1454,7 @@ describe("Execution report status-driven fields", () => {
   function alphaFourOrder() {
     return {
       ...sampleOrder,
-      externalId: "ord-alpha-4",
+      id: "ord-alpha-4",
       status: "filled",
       price: "12",
       leavesQuantity: "2",
@@ -1461,7 +1464,7 @@ describe("Execution report status-driven fields", () => {
 
   const alphaFourTrades: Trade[] = [
     {
-      externalId: "trd-alpha-9",
+      id: "trd-alpha-9",
       order: "ord-alpha-4",
       account: "desk-alpha",
       at: "2026-06-24T11:08:00Z",
@@ -1480,7 +1483,7 @@ describe("Execution report status-driven fields", () => {
     const order = alphaFourOrder();
     const events: OrderEvent[] = [
       {
-        externalId: "evt-alpha-fill",
+        id: "evt-alpha-fill",
         order: "ord-alpha-4",
         at: "2026-06-24T11:08:00Z",
         type: "fill",
@@ -1542,7 +1545,7 @@ describe("Execution report status-driven fields", () => {
     const order = alphaFourOrder();
     const events: OrderEvent[] = [
       {
-        externalId: "evt-alpha-filled",
+        id: "evt-alpha-filled",
         order: "ord-alpha-4",
         at: "2026-06-24T11:09:00Z",
         type: "fill",
@@ -1596,7 +1599,7 @@ describe("Execution report status-driven fields", () => {
     const order = alphaFourOrder();
     const events: OrderEvent[] = [
       {
-        externalId: "evt-alpha-cancel-fill",
+        id: "evt-alpha-cancel-fill",
         order: "ord-alpha-4",
         at: "2026-06-24T11:10:00Z",
         type: "fill",
@@ -2320,6 +2323,12 @@ describe("Execution report status-driven fields", () => {
 });
 
 describe("Orders filter, debounce, sort and pagination", () => {
+  it("ignores the legacy externalId trade query parameter", async () => {
+    renderOrders("/orders?externalId=legacy-trade");
+
+    await waitFor(() => expect(lastTradeFilters()?.id).toBeUndefined());
+  });
+
   it("applies an identity filter only after Enter", async () => {
     vi.useFakeTimers();
     fetchAccountsMock.mockResolvedValueOnce([{ code: "desk-zeta" }]);

@@ -298,6 +298,25 @@ type OrderRecord struct {
 	Order domain.Order `json:"order"`
 }
 
+// ExecutionReportRecord is one portable execution-report request identity.
+type ExecutionReportRecord struct {
+	// ExternalID is the report's caller-visible ID.
+	ExternalID domain.ExternalID `json:"id"`
+	// Order is the caller-visible ID of the parent order.
+	Order domain.ExternalID `json:"orderId"`
+	// At is when Officer persisted the report.
+	At time.Time `json:"at"`
+}
+
+// ExecutionReportEventLink preserves one report-to-event relationship without
+// serializing either table's surrogate key.
+type ExecutionReportEventLink struct {
+	// Report is the caller-visible report ID.
+	Report domain.ExternalID `json:"reportId"`
+	// Event is the caller-visible event ID.
+	Event domain.ExternalID `json:"eventId"`
+}
+
 // Data carries the portable rows of an archive. Dictionary sections are listed
 // first so foreign keys resolve on import: assets and principals are always
 // carried (every machine-record reference resolves against them), then groups
@@ -336,6 +355,10 @@ type Data struct {
 	// OrderEvents are order lifecycle events (by external id, linked to their
 	// order's external id).
 	OrderEvents []domain.OrderEvent `json:"orderEvents,omitempty"`
+	// ExecutionReports are request identities linked to their parent orders.
+	ExecutionReports []ExecutionReportRecord `json:"executionReports,omitempty"`
+	// ExecutionReportEvents link reports to all events they produced.
+	ExecutionReportEvents []ExecutionReportEventLink `json:"executionReportEvents,omitempty"`
 	// Trades are per-fill trade rows (by external id, linked to their order's
 	// external id).
 	Trades []domain.Trade `json:"trades,omitempty"`
@@ -597,6 +620,20 @@ func FilterData(data Data, scope Scope) Data {
 			orderIDs[rec.Order.ExternalID] = true
 		}
 		out.OrderEvents = filterOrderEvents(data.OrderEvents, orderIDs)
+		out.ExecutionReports = filterExecutionReports(data.ExecutionReports, orderIDs)
+		reportIDs := make(map[domain.ExternalID]bool, len(out.ExecutionReports))
+		for _, report := range out.ExecutionReports {
+			reportIDs[report.ExternalID] = true
+		}
+		eventIDs := make(map[domain.ExternalID]bool, len(out.OrderEvents))
+		for _, event := range out.OrderEvents {
+			eventIDs[event.ExternalID] = true
+		}
+		out.ExecutionReportEvents = filterExecutionReportEvents(
+			data.ExecutionReportEvents,
+			reportIDs,
+			eventIDs,
+		)
 		out.Trades = filterTrades(data.Trades, orderIDs)
 	}
 	if scope.Included(SectionAuditLog) {
@@ -839,6 +876,33 @@ func filterOrderEvents(
 	for _, event := range events {
 		if orderIDs[event.Order] {
 			out = append(out, event)
+		}
+	}
+	return out
+}
+
+func filterExecutionReports(
+	reports []ExecutionReportRecord,
+	orderIDs map[domain.ExternalID]bool,
+) []ExecutionReportRecord {
+	out := make([]ExecutionReportRecord, 0, len(reports))
+	for _, report := range reports {
+		if orderIDs[report.Order] {
+			out = append(out, report)
+		}
+	}
+	return out
+}
+
+func filterExecutionReportEvents(
+	links []ExecutionReportEventLink,
+	reportIDs map[domain.ExternalID]bool,
+	eventIDs map[domain.ExternalID]bool,
+) []ExecutionReportEventLink {
+	out := make([]ExecutionReportEventLink, 0, len(links))
+	for _, link := range links {
+		if reportIDs[link.Report] && eventIDs[link.Event] {
+			out = append(out, link)
 		}
 	}
 	return out

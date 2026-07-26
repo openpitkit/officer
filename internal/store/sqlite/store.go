@@ -19,7 +19,6 @@ package sqlite
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -362,11 +361,11 @@ func nowStr() string {
 // collision negligible. The connector fills this into the external_id column at
 // insert time (the SQLite dialect has no server-side random default).
 func newExternalID() (domain.ExternalID, error) {
-	var raw [domain.ExternalIDByteLen]byte
-	if _, err := rand.Read(raw[:]); err != nil {
+	id, err := domain.NewExternalID()
+	if err != nil {
 		return domain.ExternalID(""), fmt.Errorf("store: generate external id: %w", err)
 	}
-	return domain.GeneratedExternalIDFromBytes(raw[:])
+	return id, nil
 }
 
 // externalIDForInsert returns the external id to write for a user-created

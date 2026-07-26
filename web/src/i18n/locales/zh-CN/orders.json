@@ -243,6 +243,7 @@
       "submitBusy": "提交中…",
       "submit": "提交",
       "accepted": "执行报告已接受。",
+      "reportId": "报告 ID",
       "accountBlocked": "账户 {{account}} 已被封锁：",
       "done": "完成",
       "validationError": "成交状态需要填写数量和价格。",

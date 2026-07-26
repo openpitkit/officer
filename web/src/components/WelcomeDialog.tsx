@@ -568,14 +568,14 @@ export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
         throw new Error(t("welcome.status.marketDataInstanceMissing"));
       }
       if (!instance.enabled) {
-        await setMarketDataInstanceEnabled(instance.externalId, true);
+        await setMarketDataInstanceEnabled(instance.id, true);
         applied += 1;
       }
       await ensureWelcomePresetAssets(() => {
         applied += 1;
       });
       for (const instrument of STATIC_MARKET_DATA_PRESET) {
-        await upsertMarketDataInstrument(instance.externalId, {
+        await upsertMarketDataInstrument(instance.id, {
           ...instrument,
           enabled: true,
         });
@@ -606,14 +606,14 @@ export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
         throw new Error(t("welcome.status.binanceInstanceMissing"));
       }
       if (!instance.enabled) {
-        await setMarketDataInstanceEnabled(instance.externalId, true);
+        await setMarketDataInstanceEnabled(instance.id, true);
         applied += 1;
       }
       await ensureWelcomePresetAssets(() => {
         applied += 1;
       });
       for (const instrument of BINANCE_MARKET_DATA_PRESET) {
-        await upsertMarketDataInstrument(instance.externalId, {
+        await upsertMarketDataInstrument(instance.id, {
           ...instrument,
           enabled: true,
         });

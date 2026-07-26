@@ -36,13 +36,13 @@ func (r *attestorFailingSettlementRealm) RecordOrderSettlementWithAttestation(
 	ctx context.Context,
 	settlement domain.OrderSettlement,
 	attest store.EventAttestor,
-) error {
+) (domain.ExternalID, error) {
 	if attest == nil {
 		return r.RecordOrderSettlement(ctx, settlement)
 	}
 	for _, event := range settlement.Events {
 		if _, _, err := attest(ctx, event); err != nil {
-			return err
+			return "", err
 		}
 	}
 	return r.RecordOrderSettlement(ctx, settlement)
@@ -338,7 +338,7 @@ func TestLocalNode_ShortcutsRejectTerminalOrderWithoutReportEvent(t *testing.T) 
 	order := submitShortcutOrder(t, n, realm, eng)
 	ctx := context.Background()
 
-	if err := realm.RecordOrderSettlement(ctx, domain.OrderSettlement{
+	if _, err := realm.RecordOrderSettlement(ctx, domain.OrderSettlement{
 		Account:     order.Account,
 		Order:       order.ExternalID,
 		OrderStatus: domain.OrderStatusCancelled,

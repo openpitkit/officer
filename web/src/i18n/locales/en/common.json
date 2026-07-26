@@ -38,6 +38,11 @@
     "invalidNumber": "Enter a valid number.",
     "invalidRange": "Enter a range with the lower bound at or below the upper bound.",
     "clearAll": "Clear all filters",
+    "globalAccount": {
+      "active": "Stop using this account as the global account filter",
+      "inactive": "Use this account as the global account filter on every screen",
+      "disabled": "Enter an account to make it the global account filter"
+    },
     "active": "Active filters",
     "advancedActive": "Advanced filter in effect",
     "activeCount_one": "{{count}} filter",
@@ -301,11 +306,11 @@
       },
       "orders": {
         "description": "Orders are export-only. The first row is the header.",
-        "columns": "external_id,at,account_code,source,principal,base_asset,quote_asset,side,amount_kind,amount_value,price,status,display_prices"
+        "columns": "id,at,account_code,source,principal,base_asset,quote_asset,side,amount_kind,amount_value,price,status,display_prices"
       },
       "trades": {
         "description": "Trades are export-only. The first row is the header.",
-        "columns": "external_id,order_external_id,at,account_code,source,principal,base_asset,quote_asset,side,quantity,price,lock_price,commission_amount,commission_currency"
+        "columns": "id,order_id,at,account_code,source,principal,base_asset,quote_asset,side,quantity,price,lock_price,commission_amount,commission_currency"
       }
     },
     "entities": {

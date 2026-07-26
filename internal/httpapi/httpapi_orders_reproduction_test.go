@@ -239,8 +239,8 @@ func TestOrderReproduction_ByteExactSignedToken(t *testing.T) {
 
 	// event body is present and addressed by the opaque event handle.
 	eventDTO, _ := m["event"].(map[string]any)
-	if eventDTO["externalId"] != reproEventID().String() {
-		t.Errorf("want event externalId=%s, got %v", reproEventID(), eventDTO["externalId"])
+	if eventDTO["id"] != reproEventID().String() {
+		t.Errorf("want event id=%s, got %v", reproEventID(), eventDTO["id"])
 	}
 	if m["requestType"] != string(domain.AttestationRequestSubmit) {
 		t.Errorf("want requestType=submit, got %v", m["requestType"])
@@ -260,8 +260,8 @@ func TestOrderReproduction_ByteExactSignedToken(t *testing.T) {
 	if request["requestType"] != string(domain.AttestationRequestSubmit) {
 		t.Errorf("want request.requestType=submit, got %v", request["requestType"])
 	}
-	if request["eventExternalId"] != reproEventID().String() {
-		t.Errorf("want request.eventExternalId=%s, got %v", reproEventID(), request["eventExternalId"])
+	if request["eventId"] != reproEventID().String() {
+		t.Errorf("want request.eventId=%s, got %v", reproEventID(), request["eventId"])
 	}
 
 	// response.submitResponse reproduces the exact POST /orders/submit response.
@@ -279,8 +279,8 @@ func TestOrderReproduction_ByteExactSignedToken(t *testing.T) {
 	if submit["keyId"] != key.KeyID {
 		t.Errorf("want submitResponse keyId=%s, got %v", key.KeyID, submit["keyId"])
 	}
-	if submit["orderExternalId"] != id.String() {
-		t.Errorf("want submitResponse orderExternalId=%s, got %v", id, submit["orderExternalId"])
+	if submit["id"] != id.String() {
+		t.Errorf("want submitResponse id=%s, got %v", id, submit["id"])
 	}
 
 	// canonicalApproval byte-identical to the signed bytes.
@@ -474,6 +474,7 @@ func TestOrderReproduction_SignedResultFields(t *testing.T) {
 	}
 
 	id := extID("repro-result-fields")
+	reportID := extID("repro-report-id")
 	const blockPolicy = domain.PolicySpotFundsPnlBoundsKillSwitch
 	payload := reproPayload(id)
 	payload.RequestType = string(domain.AttestationRequestExecutionReport)
@@ -497,8 +498,12 @@ func TestOrderReproduction_SignedResultFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sign: %v", err)
 	}
+	detail := reproDetail(id, attestationFromToken(t, token))
+	detail.Events[0].Payload.ExecutionReport = &domain.ExecutionReportRequest{
+		ExternalID: reportID,
+	}
 	svc := &fakeService{
-		orderDetail:    reproDetail(id, attestationFromToken(t, token)),
+		orderDetail:    detail,
 		publicKeysByID: map[string]string{key.KeyID: pub},
 	}
 	r, err := newRouter(svc)
@@ -538,6 +543,17 @@ func TestOrderReproduction_SignedResultFields(t *testing.T) {
 	if block["policy"] != blockPolicy {
 		t.Fatalf("request.result block policy = %v, want %s",
 			block["policy"], blockPolicy)
+	}
+	response, ok := m["response"].(map[string]any)
+	if !ok {
+		t.Fatalf("want response object, got %T", m["response"])
+	}
+	report, ok := response["executionReport"].(map[string]any)
+	if !ok {
+		t.Fatalf("want executionReport object, got %T", response["executionReport"])
+	}
+	if report["id"] != reportID.String() {
+		t.Fatalf("executionReport.id = %v, want %s", report["id"], reportID)
 	}
 }
 
@@ -627,8 +643,8 @@ func TestEventReproduction_NoAttestation(t *testing.T) {
 	}
 	m := bodyMap(t, rec.Result())
 	eventDTO, _ := m["event"].(map[string]any)
-	if eventDTO["externalId"] != reproEventID().String() {
-		t.Errorf("want event externalId=%s, got %v", reproEventID(), eventDTO["externalId"])
+	if eventDTO["id"] != reproEventID().String() {
+		t.Errorf("want event id=%s, got %v", reproEventID(), eventDTO["id"])
 	}
 	for _, field := range []string{"attestation", "request", "response", "canonicalApproval", "publicKey"} {
 		if v, present := m[field]; !present || v != nil {

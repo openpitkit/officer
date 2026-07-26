@@ -29,14 +29,6 @@ import (
 	"go.openpit.dev/officer/framework/store"
 )
 
-// SubmitOrderResult is the like-API submit outcome. Order is always the
-// persisted Officer order record; Token is the signed pre-trade verdict envelope
-// for the submit decision.
-type SubmitOrderResult struct {
-	Order domain.Order
-	Token ApprovalToken
-}
-
 // ControlPlane is the backend seam consumed by HTTP and extension handlers.
 type ControlPlane interface {
 	Status(ctx context.Context) (Status, error)
@@ -175,7 +167,6 @@ type ControlPlane interface {
 	ListAdjustmentRows(
 		ctx context.Context, filter store.AdjustmentListFilter,
 	) (store.AdjustmentListPage, error)
-	SubmitOrder(ctx context.Context, o domain.Order) (SubmitOrderResult, error)
 	CheckOrder(ctx context.Context, probe domain.OrderProbe) (domain.CheckResult, error)
 	ApplyExecutionReport(
 		ctx context.Context, in domain.ExecutionReportInput,

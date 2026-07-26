@@ -1003,7 +1003,7 @@ describe("Accounts business CSV", () => {
     );
     fetchAuditMock.mockResolvedValue([
       {
-        externalId: "audit-1",
+        id: "audit-1",
         at: "2026-06-29T00:00:00Z",
         actor: "risk",
         actorTitle: "Risk",

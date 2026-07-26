@@ -334,9 +334,9 @@ function normalizeAdjustmentRequest(v: unknown): AdjustmentRequest {
   const req: AdjustmentRequest = {
     asset: asString(pick(o, "asset", "Asset")),
   };
-  const externalId = pick(o, "externalId", "ExternalId", "external_id", "id", "Id", "ID");
-  if (externalId !== undefined) {
-    req.externalId = asString(externalId);
+  const id = pick(o, "id", "Id", "ID");
+  if (id !== undefined) {
+    req.id = asString(id);
   }
   const balance = normalizeAdjustmentAmount(pick(o, "balance", "Balance"));
   if (balance) {
@@ -449,7 +449,7 @@ function normalizeAdjustment(v: unknown): Adjustment {
     ? (pick(o, "outcome", "Outcome") as Record<string, unknown>)
     : {};
   return {
-    externalId: asString(pick(o, "externalId", "ExternalId", "external_id", "id", "Id", "ID")),
+    id: asString(pick(o, "id", "Id", "ID")),
     account: asString(pick(o, "account", "Account")),
     at: asString(pick(o, "at", "At")),
     principal: asString(pick(o, "principal", "Principal")) || undefined,
@@ -490,7 +490,7 @@ function normalizeOrder(v: unknown): Order {
     "leaves_quantity",
   );
   return {
-    externalId: asString(pick(o, "externalId", "ExternalId", "external_id", "id", "Id", "ID")),
+    id: asString(pick(o, "id", "Id", "ID")),
     account: asString(pick(o, "account", "Account")),
     at: asString(pick(o, "at", "At")),
     principal: asString(pick(o, "principal", "Principal")) || undefined,
@@ -515,8 +515,8 @@ function normalizeOrder(v: unknown): Order {
 function normalizeOrderEvent(v: unknown): OrderEvent {
   const o = isObject(v) ? v : {};
   const event: OrderEvent = {
-    externalId: asString(pick(o, "externalId", "ExternalId", "external_id", "id", "Id", "ID")),
-    order: asString(pick(o, "order", "Order", "orderExternalId", "OrderExternalId", "order_external_id", "orderId", "OrderId", "order_id")),
+    id: asString(pick(o, "id", "Id", "ID")),
+    order: asString(pick(o, "order", "Order")),
     at: asString(pick(o, "at", "At")),
     type: asString(pick(o, "type", "Type")),
     source: asSource(pick(o, "source", "Source")),
@@ -586,6 +586,7 @@ function normalizeExecutionReportRequestRecord(
     return undefined;
   }
   return {
+    id: asString(pick(v, "id", "Id", "ID")),
     baseAsset: asString(pick(v, "baseAsset", "BaseAsset", "base_asset")),
     quoteAsset: asString(pick(v, "quoteAsset", "QuoteAsset", "quote_asset")),
     fillQuantity: asString(
@@ -612,8 +613,8 @@ function normalizeExecutionReportRequestRecord(
 function normalizeTrade(v: unknown): Trade {
   const o = isObject(v) ? v : {};
   return {
-    externalId: asString(pick(o, "externalId", "ExternalId", "external_id", "id", "Id", "ID")),
-    order: asString(pick(o, "order", "Order", "orderExternalId", "OrderExternalId", "order_external_id", "orderId", "OrderId", "order_id")),
+    id: asString(pick(o, "id")),
+    order: asString(pick(o, "order", "Order")),
     account: asString(pick(o, "account", "Account")),
     at: asString(pick(o, "at", "At")),
     principal: asString(pick(o, "principal", "Principal")) || undefined,
@@ -1009,7 +1010,7 @@ function normalizePutLimitResponse(policy: string, v: unknown): Limit {
 function normalizeAudit(v: unknown): AuditEntry {
   const o = isObject(v) ? v : {};
   return {
-    externalId: asString(pick(o, "externalId", "ExternalId", "external_id", "id", "Id", "ID")),
+    id: asString(pick(o, "id", "Id", "ID")),
     at: asString(pick(o, "at", "At")),
     actor: asString(pick(o, "actor", "Actor")),
     actorTitle: asString(pick(o, "actorTitle", "ActorTitle", "actor_title")),
@@ -1083,17 +1084,7 @@ function normalizeMarketDataInstrument(v: unknown): MarketDataInstrument {
   const o = isObject(v) ? v : {};
   const quote = normalizeMarketDataQuote(pick(o, "quote", "Quote"));
   const instrument: MarketDataInstrument = {
-    instanceExternalId: asString(
-      pick(
-        o,
-        "instanceExternalId",
-        "InstanceExternalId",
-        "instance_external_id",
-        "instanceId",
-        "InstanceID",
-        "instance_id",
-      ),
-    ),
+    instanceId: asString(pick(o, "instanceId", "InstanceID", "instance_id")),
     externalSymbol: asString(
       pick(o, "externalSymbol", "ExternalSymbol", "external_symbol"),
     ),
@@ -1189,7 +1180,7 @@ function normalizeMarketDataReferences(
 function normalizeMarketDataInstance(v: unknown): MarketDataInstance {
   const o = isObject(v) ? v : {};
   const instance: MarketDataInstance = {
-    externalId: asString(pick(o, "externalId", "ExternalId", "external_id", "id", "ID")),
+    id: asString(pick(o, "id", "ID")),
     provider: asString(pick(o, "provider", "Provider", "type", "Type")),
     label: asString(pick(o, "label", "Label")),
     credentials: asString(pick(o, "credentials", "Credentials")),
@@ -1462,7 +1453,7 @@ async function fetchMarketData(client: ApiClient,
 
 /** POST /market-data/instances. */
 async function createMarketDataInstance(client: ApiClient, body: {
-  externalId?: string;
+  id?: string;
   provider: string;
   label: string;
   credentials?: string;
@@ -1476,16 +1467,16 @@ async function createMarketDataInstance(client: ApiClient, body: {
   return normalizeMarketDataInstance(pick(o, "instance", "Instance"));
 }
 
-/** PUT /market-data/instances/{externalId}/settings. */
+/** PUT /market-data/instances/{id}/settings. */
 async function updateMarketDataInstanceSettings(client: ApiClient, 
-  externalId: string,
+  id: string,
   body: {
     label: string;
     credentials: string;
   },
 ): Promise<MarketDataStatus> {
   const v = await client.request(
-    `${client.baseUrl}/market-data/instances/${encode(externalId)}/settings`,
+    `${client.baseUrl}/market-data/instances/${encode(id)}/settings`,
     {
       method: "PUT",
       body,
@@ -1495,33 +1486,33 @@ async function updateMarketDataInstanceSettings(client: ApiClient,
   return normalizeMarketDataStatus(pick(o, "marketData", "MarketData"));
 }
 
-/** PUT /market-data/instances/{externalId}/enabled. */
+/** PUT /market-data/instances/{id}/enabled. */
 async function setMarketDataInstanceEnabled(client: ApiClient, 
-  externalId: string,
+  id: string,
   enabled: boolean,
 ): Promise<void> {
-  await client.request(`${client.baseUrl}/market-data/instances/${encode(externalId)}/enabled`, {
+  await client.request(`${client.baseUrl}/market-data/instances/${encode(id)}/enabled`, {
     method: "PUT",
     body: { enabled },
   });
 }
 
-/** DELETE /market-data/instances/{externalId}. */
+/** DELETE /market-data/instances/{id}. */
 async function deleteMarketDataInstance(
   client: ApiClient,
-  externalId: string,
+  id: string,
 ): Promise<void> {
   await client.request(
-    `${client.baseUrl}/market-data/instances/${encode(externalId)}`,
+    `${client.baseUrl}/market-data/instances/${encode(id)}`,
     {
       method: "DELETE",
     },
   );
 }
 
-/** PUT /market-data/instances/{externalId}/instruments. */
+/** PUT /market-data/instances/{id}/instruments. */
 async function upsertMarketDataInstrument(client: ApiClient, 
-  instanceExternalId: string,
+  id: string,
   body: {
     externalSymbol: string;
     baseAsset: string;
@@ -1531,33 +1522,33 @@ async function upsertMarketDataInstrument(client: ApiClient,
   },
 ): Promise<MarketDataStatus> {
   const v = await client.request(
-    `${client.baseUrl}/market-data/instances/${encode(instanceExternalId)}/instruments`,
+    `${client.baseUrl}/market-data/instances/${encode(id)}/instruments`,
     { method: "PUT", body },
   );
   const o = isObject(v) ? v : {};
   return normalizeMarketDataStatus(pick(o, "marketData", "MarketData"));
 }
 
-/** PUT /market-data/instances/{externalId}/instruments/enabled. */
+/** PUT /market-data/instances/{id}/instruments/enabled. */
 async function setMarketDataInstrumentEnabled(client: ApiClient, 
-  instanceExternalId: string,
+  id: string,
   externalSymbol: string,
   enabled: boolean,
 ): Promise<void> {
   await client.request(
-    `${client.baseUrl}/market-data/instances/${encode(instanceExternalId)}/instruments/enabled`,
+    `${client.baseUrl}/market-data/instances/${encode(id)}/instruments/enabled`,
     { method: "PUT", body: { externalSymbol, enabled } },
   );
 }
 
-/** DELETE /market-data/instances/{externalId}/instruments?externalSymbol=. */
+/** DELETE /market-data/instances/{id}/instruments?externalSymbol=. */
 async function deleteMarketDataInstrument(client: ApiClient, 
-  instanceExternalId: string,
+  id: string,
   externalSymbol: string,
 ): Promise<void> {
   const params = new URLSearchParams({ externalSymbol });
   await client.request(
-    `${client.baseUrl}/market-data/instances/${encode(instanceExternalId)}/instruments?${params.toString()}`,
+    `${client.baseUrl}/market-data/instances/${encode(id)}/instruments?${params.toString()}`,
     { method: "DELETE" },
   );
 }
@@ -1569,14 +1560,14 @@ async function restartMarketData(client: ApiClient, ): Promise<MarketDataStatus>
   return normalizeMarketDataStatus(pick(o, "marketData", "MarketData"));
 }
 
-/** POST /market-data/instances/{externalId}/verify-symbol - stateless symbol check.
+/** POST /market-data/instances/{id}/verify-symbol - stateless symbol check.
  *  Never disturbs live feeds; supported=false when the provider can't verify. */
 async function verifyMarketDataSymbol(client: ApiClient, 
-  instanceExternalId: string,
+  id: string,
   externalSymbol: string,
 ): Promise<MarketDataSymbolVerification> {
   const v = await client.request(
-    `${client.baseUrl}/market-data/instances/${encode(instanceExternalId)}/verify-symbol`,
+    `${client.baseUrl}/market-data/instances/${encode(id)}/verify-symbol`,
     { method: "POST", body: { externalSymbol } },
   );
   const o = isObject(v) ? v : {};
@@ -1598,12 +1589,12 @@ export interface MarketDataSymbolSearchInput {
   right?: string;
 }
 
-/** POST /market-data/instances/{externalId}/search-symbols - stateless contract
+/** POST /market-data/instances/{id}/search-symbols - stateless contract
  *  resolve. Never disturbs live feeds; supported=false when the provider can't
  *  search. The secType/exchange/currency criteria scope the resolve so crypto,
  *  forex, and futures resolve to an exact contract. */
 async function searchMarketDataSymbols(client: ApiClient, 
-  instanceExternalId: string,
+  id: string,
   input: MarketDataSymbolSearchInput,
 ): Promise<MarketDataSymbolSearch> {
   const body: Record<string, string> = { query: input.query };
@@ -1619,7 +1610,7 @@ async function searchMarketDataSymbols(client: ApiClient,
   putStr("right", input.right);
   putStr("strike", input.strike);
   const v = await client.request(
-    `${client.baseUrl}/market-data/instances/${encode(instanceExternalId)}/search-symbols`,
+    `${client.baseUrl}/market-data/instances/${encode(id)}/search-symbols`,
     { method: "POST", body },
   );
   const o = isObject(v) ? v : {};
@@ -2449,7 +2440,6 @@ async function fetchBalances(
 
 export interface AdjustmentBody {
   id?: string;
-  externalId?: string;
   asset: string;
   realizedPnl?: string;
   averageEntryPrice?: string;
@@ -2527,7 +2517,7 @@ async function fetchAccountAdjustments(client: ApiClient,
 }
 
 export interface GlobalAdjustmentsFilter extends PageRequest {
-  externalId?: string;
+  id?: string;
   account?: string;
   accountMatch?: TextMatchMode;
   asset?: string;
@@ -2565,7 +2555,7 @@ function normalizePagedResult<T>(
 
 function adjustmentListQuery(filter: GlobalAdjustmentsFilter = {}): string {
   const params = new URLSearchParams();
-  appendListFilter(params, "id", filter.externalId);
+  appendListFilter(params, "id", filter.id);
   appendListFilter(params, "account", filter.account);
   appendListFilter(params, "asset", filter.asset);
   appendListFilter(params, "source", filter.source);
@@ -2610,7 +2600,6 @@ async function fetchAdjustments(
 
 export interface CreateOrderBody {
   id?: string;
-  externalId?: string;
   account: string;
   baseAsset: string;
   quoteAsset: string;
@@ -2643,9 +2632,7 @@ function normalizeApprovalToken(v: unknown): ApprovalToken {
   return {
     token: asString(pick(o, "token", "Token")),
     keyId: asString(pick(o, "keyId", "KeyId", "key_id")),
-    orderExternalId: asString(
-      pick(o, "orderExternalId", "OrderExternalId", "order_external_id"),
-    ),
+    id: asString(pick(o, "id", "Id", "ID")),
     verdict: normalizeSubmitVerdict(pick(o, "verdict", "Verdict")),
     reasons: normalizeArray(pick(o, "reasons", "Reasons"), normalizeCheckReject),
   };
@@ -2660,7 +2647,7 @@ function minimalCreatedOrder(
   token: ApprovalToken,
 ): Order {
   return {
-    externalId: token.orderExternalId,
+    id: token.id,
     account: body.account,
     at: "",
     source: "panel",
@@ -2685,13 +2672,9 @@ async function submitOrder(client: ApiClient,
   body: CreateOrderBody,
   signal?: AbortSignal,
 ): Promise<ApprovalToken> {
-  const requestBody =
-    body.id !== undefined || body.externalId === undefined
-      ? body
-      : { ...body, id: body.externalId, externalId: undefined };
   const v = await client.request(`${client.baseUrl}/orders/submit`, {
     method: "POST",
-    body: requestBody,
+    body,
     signal,
   });
   return normalizeApprovalToken(v);
@@ -2705,7 +2688,7 @@ async function createOrder(client: ApiClient,
   const token = await submitOrder(client, body, signal);
   try {
     return {
-      order: (await fetchOrderDetail(client, token.orderExternalId, signal)).order,
+      order: (await fetchOrderDetail(client, token.id, signal)).order,
       approval: token,
     };
   } catch (error) {
@@ -2836,14 +2819,14 @@ async function fetchOrders(
   return (await fetchOrdersPage(client, filter, signal)).items;
 }
 
-/** GET /orders/{externalId}: the order plus its per-event signed timeline and
+/** GET /orders/{id}: the order plus its per-event signed timeline and
  *  trades. Signatures are sourced per event (each event carries its own signed
  *  flag and alg); there is no order-level approval envelope. */
 async function fetchOrderDetail(client: ApiClient,
-  externalId: string,
+  id: string,
   signal?: AbortSignal,
 ): Promise<{ order: Order; events: OrderEvent[]; trades: Trade[] }> {
-  const v = await client.request(`${client.baseUrl}/orders/${encode(externalId)}`, { signal });
+  const v = await client.request(`${client.baseUrl}/orders/${encode(id)}`, { signal });
   const o = isObject(v) ? v : {};
   return {
     order: normalizeOrder(pick(o, "order", "Order")),
@@ -2887,9 +2870,7 @@ function normalizeApprovalTokenResponse(v: unknown): ApprovalTokenResponse | nul
   return {
     token: asString(pick(v, "token", "Token")),
     keyId: asString(pick(v, "keyId", "KeyId", "key_id")),
-    orderExternalId: asString(
-      pick(v, "orderExternalId", "OrderExternalId", "order_external_id"),
-    ),
+    id: asString(pick(v, "id", "Id", "ID")),
     verdict: normalizeSubmitVerdict(pick(v, "verdict", "Verdict")),
     reasons: normalizeArray(pick(v, "reasons", "Reasons"), normalizeCheckReject),
   };
@@ -2964,12 +2945,8 @@ function normalizeEventReproductionRequest(
   }
   return {
     requestType: asString(pick(v, "requestType", "RequestType", "request_type")),
-    orderExternalId: asString(
-      pick(v, "orderExternalId", "OrderExternalId", "order_external_id"),
-    ),
-    eventExternalId: asString(
-      pick(v, "eventExternalId", "EventExternalId", "event_external_id"),
-    ),
+    orderId: asString(pick(v, "orderId")),
+    eventId: asString(pick(v, "eventId")),
     instrument: asString(pick(v, "instrument", "Instrument")),
     side: asString(pick(v, "side", "Side")),
     quantity: asString(pick(v, "quantity", "Quantity")),
@@ -2997,6 +2974,7 @@ function normalizeExecutionReportResponse(
   const result = pick(v, "result", "Result");
   const resultObj = isObject(result) ? result : {};
   return {
+    id: asString(pick(v, "id", "Id", "ID")),
     blocks: normalizeArray(
       pick(resultObj, "blocks", "Blocks"),
       normalizeAttestationBlock,
@@ -3049,18 +3027,18 @@ function normalizeEventReproductionResponse(
   };
 }
 
-/** GET /orders/{orderExternalId}/events/{eventId}/reproduction: the
+/** GET /orders/{id}/events/{eventId}/reproduction: the
  *  controller-facing per-event reproduction bundle. Officer signs every
  *  engine-processed request, so each attested event has its own bundle. Signed
  *  artifacts (token, canonicalApproval, signature, publicKey.key) are returned
  *  verbatim and are never re-serialized here. */
 async function fetchEventReproduction(client: ApiClient,
-  orderExternalId: string,
+  id: string,
   eventId: string,
   signal?: AbortSignal,
 ): Promise<EventReproduction> {
   const v = await client.request(
-    `${client.baseUrl}/orders/${encode(orderExternalId)}/events/${encode(eventId)}/reproduction`,
+    `${client.baseUrl}/orders/${encode(id)}/events/${encode(eventId)}/reproduction`,
     { signal },
   );
   const o = isObject(v) ? v : {};
@@ -3103,6 +3081,7 @@ async function fetchPublicKeyById(client: ApiClient,
 }
 
 export interface ExecutionReportBody {
+  id?: string;
   /** Fill fields route the report through engine settlement. */
   quantity?: string;
   price?: string;
@@ -3151,14 +3130,14 @@ function normalizeExecutionOutcome(v: unknown): ExecutionOutcome {
   };
 }
 
-/** POST /orders/{externalId}/execution-reports. Returns the recorded result,
+/** POST /orders/{id}/execution-reports. Returns the recorded result,
  *  including any engine blocks and balance outcomes, plus the attestation that
  *  proves what Officer recorded for this report. */
 async function submitExecutionReport(client: ApiClient,
-  orderExternalId: string,
+  id: string,
   body: ExecutionReportBody,
 ): Promise<ExecutionReportResult> {
-  const v = await client.request(`${client.baseUrl}/orders/${encode(orderExternalId)}/execution-reports`, {
+  const v = await client.request(`${client.baseUrl}/orders/${encode(id)}/execution-reports`, {
     method: "POST",
     body,
   });
@@ -3166,6 +3145,7 @@ async function submitExecutionReport(client: ApiClient,
   const result = pick(o, "result", "Result");
   const ro = isObject(result) ? result : {};
   return {
+    id: asString(pick(o, "id", "Id", "ID")),
     blocks: normalizeArray(pick(ro, "blocks", "Blocks"), normalizeExecutionBlock),
     outcomes: normalizeArray(
       pick(ro, "outcomes", "Outcomes"),
@@ -3181,13 +3161,13 @@ async function submitExecutionReport(client: ApiClient,
   };
 }
 
-/** POST /orders/{externalId}/confirm body: the approval token from the
+/** POST /orders/{id}/confirm body: the approval token from the
  *  workflow (`hold` wire mode) submit. */
 export interface ConfirmOrderBody {
   token: string;
 }
 
-/** POST /orders/{externalId}/cancel body: the approval token from the workflow
+/** POST /orders/{id}/cancel body: the approval token from the workflow
  *  (`hold` wire mode) submit and an optional reason. */
 export interface CancelOrderBody {
   token: string;
@@ -3207,36 +3187,36 @@ function orderMutationResponseOrThrow(v: unknown): OrderMutationResponse {
   );
 }
 
-/** POST /orders/{externalId}/confirm. Verifies the approval token and records
+/** POST /orders/{id}/confirm. Verifies the approval token and records
  *  order-confirmation history, returning the order plus its attestation. */
 async function confirmOrder(client: ApiClient,
-  orderExternalId: string,
+  id: string,
   body: ConfirmOrderBody,
   signal?: AbortSignal,
 ): Promise<OrderMutationResponse> {
   const v = await client.request(
-    `${client.baseUrl}/orders/${encode(orderExternalId)}/confirm`,
+    `${client.baseUrl}/orders/${encode(id)}/confirm`,
     { method: "POST", body, signal },
   );
   return orderMutationResponseOrThrow(v);
 }
 
-/** POST /orders/{externalId}/cancel. Verifies the approval token and applies
+/** POST /orders/{id}/cancel. Verifies the approval token and applies
  *  the untouched-order cancellation shortcut. */
 async function cancelOrder(client: ApiClient,
-  orderExternalId: string,
+  id: string,
   body: CancelOrderBody,
   signal?: AbortSignal,
 ): Promise<OrderMutationResponse> {
   const v = await client.request(
-    `${client.baseUrl}/orders/${encode(orderExternalId)}/cancel`,
+    `${client.baseUrl}/orders/${encode(id)}/cancel`,
     { method: "POST", body, signal },
   );
   return orderMutationResponseOrThrow(v);
 }
 
 export interface TradesFilter extends PageRequest {
-  externalId?: string;
+  id?: string;
   account?: string;
   baseAsset?: string;
   quoteAsset?: string;
@@ -3260,7 +3240,7 @@ export interface TradesFilter extends PageRequest {
 
 function tradeListQuery(filter: TradesFilter = {}): string {
   const params = new URLSearchParams();
-  appendListFilter(params, "id", filter.externalId);
+  appendListFilter(params, "id", filter.id);
   appendListFilter(params, "account", filter.account);
   appendListFilter(params, "baseAsset", filter.baseAsset);
   appendListFilter(params, "quoteAsset", filter.quoteAsset);
@@ -3371,7 +3351,7 @@ async function deleteLimit(client: ApiClient, target: {
 // --- Audit ---
 
 export interface AuditFilter extends PageRequest {
-  externalId?: string;
+  id?: string;
   account?: string;
   accountMatch?: TextMatchMode;
   asset?: string;
@@ -3449,7 +3429,7 @@ async function setWelcomeSeen(client: ApiClient, seen: boolean): Promise<boolean
 
 function auditListQuery(filter: AuditFilter = {}): string {
   const params = new URLSearchParams();
-  appendListFilter(params, "id", filter.externalId);
+  appendListFilter(params, "id", filter.id);
   appendListFilter(params, "account", filter.account);
   appendListFilter(params, "asset", filter.asset);
   appendListFilter(params, "actor", filter.actor);

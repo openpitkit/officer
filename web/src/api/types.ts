@@ -372,7 +372,6 @@ export interface AdjustmentRejected {
 /** The request body captured on an adjustment record. */
 export interface AdjustmentRequest {
   id?: string;
-  externalId?: string;
   asset: string;
   balance?: AdjustmentAmount;
   held?: AdjustmentAmount;
@@ -386,7 +385,7 @@ export interface AdjustmentRequest {
 
 /** One balance adjustment record (mirrors adjustmentDTO). */
 export interface Adjustment {
-  externalId: string;
+  id: string;
   account: string;
   at: string;
   principal?: string;
@@ -485,6 +484,7 @@ export interface Commission {
  *  order-derived values or normalizes the persisted result. The opaque engine
  *  lock is deliberately excluded. */
 export interface ExecutionReportRequestRecord {
+  id: string;
   baseAsset: string;
   quoteAsset: string;
   fillQuantity: string;
@@ -500,7 +500,7 @@ export interface ExecutionReportRequestRecord {
 }
 
 export interface Order {
-  externalId: string;
+  id: string;
   account: string;
   at: string;
   principal?: string;
@@ -525,7 +525,7 @@ export interface Order {
  * Reject fields are present on rejected events and account-blocking fill events.
  */
 export interface OrderEvent {
-  externalId: string;
+  id: string;
   order: string;
   at: string;
   type: string;
@@ -551,7 +551,7 @@ export interface OrderEvent {
 
 /** A completed trade derived from a fill. */
 export interface Trade {
-  externalId: string;
+  id: string;
   order: string;
   account: string;
   at: string;
@@ -618,11 +618,12 @@ export interface ExecutionOutcome {
   averageEntryPrice?: string;
 }
 
-/** Result of POST /orders/{externalId}/execution-reports: the recorded result,
+/** Result of POST /orders/{id}/execution-reports: the recorded result,
  *  including any account blocks and per-asset outcomes, plus the attestation
  *  proving what Officer recorded. The attestation fields are empty when
  *  attestation was skipped or ran under eSign-off. */
 export interface ExecutionReportResult {
+  id: string;
   blocks: ExecutionBlock[];
   outcomes: ExecutionOutcome[];
   attestationToken: string;
@@ -633,7 +634,7 @@ export interface ExecutionReportResult {
 export interface ApprovalToken {
   token: string;
   keyId: string;
-  orderExternalId: string;
+  id: string;
   verdict: "accept" | "reject" | "";
   reasons: CheckReject[];
 }
@@ -680,7 +681,7 @@ export interface MarketDataQuote {
 }
 
 export interface MarketDataInstrument {
-  instanceExternalId: string;
+  instanceId: string;
   externalSymbol: string;
   baseAsset: string;
   quoteAsset: string;
@@ -723,7 +724,7 @@ export interface MarketDataReferences {
 }
 
 export interface MarketDataInstance {
-  externalId: string;
+  id: string;
   provider: string;
   label: string;
   credentials: string;
@@ -743,7 +744,7 @@ export interface MarketDataInstance {
   references?: MarketDataReferences;
 }
 
-/** Outcome of POST /market-data/instances/{externalId}/verify-symbol. */
+/** Outcome of POST /market-data/instances/{id}/verify-symbol. */
 export interface MarketDataSymbolVerification {
   /** False when the provider cannot verify symbols. */
   supported: boolean;
@@ -772,7 +773,7 @@ export interface MarketDataSymbolMatch {
   tradingClass?: string;
 }
 
-/** Outcome of POST /market-data/instances/{externalId}/search-symbols. */
+/** Outcome of POST /market-data/instances/{id}/search-symbols. */
 export interface MarketDataSymbolSearch {
   /** False when the provider cannot search symbols. */
   supported: boolean;
@@ -1017,7 +1018,7 @@ export interface ApprovalTokenResponse {
   /** Signing key UUID, or empty string under eSign-off. */
   keyId: string;
   /** The order's opaque public handle. */
-  orderExternalId: string;
+  id: string;
   /** Signed pre-trade verdict. */
   verdict: "accept" | "reject" | "";
   /** Structured reject reasons; empty on accept. */
@@ -1051,8 +1052,8 @@ export interface AttestationResult {
  *  recorded result section when present. Carries no private material. */
 export interface EventReproductionRequest {
   requestType: string;
-  orderExternalId: string;
-  eventExternalId: string;
+  orderId: string;
+  eventId: string;
   instrument: string;
   side: string;
   quantity: string;
@@ -1069,6 +1070,7 @@ export interface EventReproductionRequest {
 /** The execution-report facet of a reproduction response: the recorded result
  *  plus the attestation token the robot received verbatim. */
 export interface ExecutionReportResponse {
+  id: string;
   blocks: AttestationBlock[];
   outcomes: ExecutionOutcome[];
   attestationToken: string;
@@ -1139,7 +1141,7 @@ export interface EventReproduction {
 
 /** One audit-log entry (mirrors the auditDTO wire shape). */
 export interface AuditEntry {
-  externalId: string;
+  id: string;
   at: string;
   actor: string;
   actorTitle: string;

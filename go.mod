@@ -10,7 +10,7 @@ require (
 	github.com/scmhub/ibapi v0.10.44
 	github.com/shopspring/decimal v1.4.0
 	go.openpit.dev/officer/framework v0.0.0
-	go.openpit.dev/openpit v0.6.0
+	go.openpit.dev/openpit v0.7.0
 	golang.org/x/crypto v0.53.0
 	modernc.org/sqlite v1.53.0
 )

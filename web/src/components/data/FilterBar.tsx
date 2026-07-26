@@ -15,7 +15,7 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { Hash, Search, SlidersHorizontal, X } from "lucide-react";
+import { Hash, Pin, PinOff, Search, SlidersHorizontal, X } from "lucide-react";
 import type { CSSProperties, KeyboardEventHandler, ReactNode } from "react";
 
 import { ClearInlineButton } from "@/components/ClearableInput";
@@ -132,6 +132,51 @@ export interface OnlineFilterFieldProps {
   width?: number;
   icon?: boolean;
   style?: CSSProperties;
+  globalToggle?: GlobalFilterToggleProps;
+}
+
+export interface GlobalFilterToggleProps {
+  active?: boolean;
+  disabled?: boolean;
+  onToggle?: () => void;
+  activeLabel: string;
+  inactiveLabel: string;
+  disabledLabel: string;
+}
+
+function GlobalFilterToggle({
+  active = false,
+  disabled = false,
+  onToggle,
+  activeLabel,
+  inactiveLabel,
+  disabledLabel,
+}: GlobalFilterToggleProps) {
+  const Icon = active ? Pin : PinOff;
+  const label = disabled
+    ? disabledLabel
+    : active
+      ? activeLabel
+      : inactiveLabel;
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      aria-pressed={active}
+      disabled={disabled}
+      className={cn(
+        "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-card border text-muted transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
+        active
+          ? "border-accent bg-accent-dim text-accent"
+          : "border-border bg-transparent hover:border-border-hover hover:bg-card-hover-bg hover:text-accent",
+      )}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={onToggle}
+    >
+      <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+    </button>
+  );
 }
 
 /** As-you-type filter. Server-side; consumer owns the debounce + fetch. */
@@ -147,38 +192,44 @@ export function OnlineFilterField({
   width = 200,
   icon = true,
   style,
+  globalToggle,
 }: OnlineFilterFieldProps) {
   const clearable = onClear !== undefined && value !== "";
   return (
     <label className="grid gap-1.5" style={style}>
       {label !== undefined && <FieldLabel>{label}</FieldLabel>}
-      <span className="relative block" style={{ width }}>
-        {icon && (
-          <Search
-            className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted"
-            aria-hidden="true"
-          />
-        )}
-        <Input
-          value={value}
-          placeholder={placeholder}
-          spellCheck={false}
-          className={cn(
-            "h-8 text-xs",
-            icon && "pl-8",
-            (loading || clearable) && "pr-7",
+      <span className="flex items-center gap-1.5">
+        <span className="relative block" style={{ width }}>
+          {icon && (
+            <Search
+              className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted"
+              aria-hidden="true"
+            />
           )}
-          onChange={(event) => onChange?.(event.target.value)}
-        />
-        {loading ? (
-          <span
-            aria-label={searchingLabel}
-            className="absolute right-2.5 top-1/2 h-1.5 w-1.5 -translate-y-1/2 animate-pulse rounded-full bg-accent"
+          <Input
+            value={value}
+            placeholder={placeholder}
+            spellCheck={false}
+            className={cn(
+              "h-8 text-xs",
+              icon && "pl-8",
+              (loading || clearable) && "pr-7",
+            )}
+            onChange={(event) => onChange?.(event.target.value)}
           />
-        ) : (
-          clearable && (
-            <ClearInlineButton label={clearLabel} onClick={() => onClear?.()} />
-          )
+          {loading ? (
+            <span
+              aria-label={searchingLabel}
+              className="absolute right-2.5 top-1/2 h-1.5 w-1.5 -translate-y-1/2 animate-pulse rounded-full bg-accent"
+            />
+          ) : (
+            clearable && (
+              <ClearInlineButton label={clearLabel} onClick={() => onClear?.()} />
+            )
+          )}
+        </span>
+        {globalToggle !== undefined && (
+          <GlobalFilterToggle {...globalToggle} />
         )}
       </span>
     </label>
@@ -216,33 +267,39 @@ export function AutocompleteFilterField({
   suggestions = [],
   maxSuggestions = AUTOCOMPLETE_SUGGESTION_LIMIT,
   style,
+  globalToggle,
 }: AutocompleteFilterFieldProps) {
   return (
     <label className="grid gap-1.5" style={style}>
       {label !== undefined && <FieldLabel>{label}</FieldLabel>}
-      <span className="relative block" style={{ width }}>
-        <Autocomplete
-          value={value}
-          placeholder={placeholder}
-          title={title}
-          aria-label={ariaLabel}
-          suggestions={suggestions}
-          maxSuggestions={maxSuggestions}
-          clearLabel={clearLabel}
-          onChange={(next) => onChange?.(next)}
-          onSuggestionSelect={onSuggestionSelect}
-          onKeyDown={onKeyDown}
-          onClear={onClear}
-          className={cn(
-            "h-8 text-xs",
-            loading && "pr-7",
-          )}
-        />
-        {loading && (
-          <span
-            aria-label={searchingLabel}
-            className="absolute right-2.5 top-1/2 h-1.5 w-1.5 -translate-y-1/2 animate-pulse rounded-full bg-accent"
+      <span className="flex items-center gap-1.5">
+        <span className="relative block" style={{ width }}>
+          <Autocomplete
+            value={value}
+            placeholder={placeholder}
+            title={title}
+            aria-label={ariaLabel}
+            suggestions={suggestions}
+            maxSuggestions={maxSuggestions}
+            clearLabel={clearLabel}
+            onChange={(next) => onChange?.(next)}
+            onSuggestionSelect={onSuggestionSelect}
+            onKeyDown={onKeyDown}
+            onClear={onClear}
+            className={cn(
+              "h-8 text-xs",
+              loading && "pr-7",
+            )}
           />
+          {loading && (
+            <span
+              aria-label={searchingLabel}
+              className="absolute right-2.5 top-1/2 h-1.5 w-1.5 -translate-y-1/2 animate-pulse rounded-full bg-accent"
+            />
+          )}
+        </span>
+        {globalToggle !== undefined && (
+          <GlobalFilterToggle {...globalToggle} />
         )}
       </span>
     </label>

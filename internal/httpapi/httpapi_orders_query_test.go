@@ -213,3 +213,25 @@ func TestListTrades_PropagatesFilters(t *testing.T) {
 		t.Fatalf("envelope = %v", m)
 	}
 }
+
+func TestListTrades_IgnoresLegacyExternalIDFilter(t *testing.T) {
+	svc := &fakeService{
+		tradePage: &store.TradeListPage{},
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/trades?externalId="+extID("legacy-trade").String(),
+		nil,
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	if !svc.tradeFilter.ExternalID.IsZero() {
+		t.Fatalf("legacy externalId filter was accepted: %s", svc.tradeFilter.ExternalID)
+	}
+}

@@ -1362,8 +1362,8 @@ type failOrderSettlementRealm struct {
 
 func (s *failOrderSettlementRealm) RecordOrderSettlement(
 	_ context.Context, _ domain.OrderSettlement,
-) error {
-	return s.err
+) (domain.ExternalID, error) {
+	return "", s.err
 }
 
 // laneProbeRealm records, for each block/group store write, whether a lane

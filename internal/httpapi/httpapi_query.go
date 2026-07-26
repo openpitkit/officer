@@ -58,8 +58,13 @@ func textMatcherFromQuery(q url.Values, valueKey, modeKey string) (
 func externalIDFromQuery(q url.Values) (domain.ExternalID, error) {
 	value := q.Get("id")
 	if value == "" {
-		value = q.Get("externalId")
+		return domain.ExternalID(""), nil
 	}
+	return domain.ParseExternalID(value)
+}
+
+func idFromQuery(q url.Values) (domain.ExternalID, error) {
+	value := q.Get("id")
 	if value == "" {
 		return domain.ExternalID(""), nil
 	}
@@ -819,7 +824,7 @@ func policyListFilterFromQuery(q url.Values) (store.PolicyListFilter, error) {
 }
 
 func adjustmentListFilterFromQuery(q url.Values) (store.AdjustmentListFilter, error) {
-	externalID, err := externalIDFromQuery(q)
+	externalID, err := idFromQuery(q)
 	if err != nil {
 		return store.AdjustmentListFilter{}, err
 	}
@@ -859,7 +864,7 @@ func adjustmentListFilterFromQuery(q url.Values) (store.AdjustmentListFilter, er
 
 func tradeListFilterFromQuery(q url.Values) (store.TradeListFilter, error) {
 	account := store.ExactTextMatcher(q.Get("account"))
-	externalID, err := externalIDFromQuery(q)
+	externalID, err := idFromQuery(q)
 	if err != nil {
 		return store.TradeListFilter{}, err
 	}

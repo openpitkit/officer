@@ -221,7 +221,7 @@ func (r *realmStore) recordOrderSubmission(
 	if submitted.Order.IsZero() {
 		submitted.Order = order.ExternalID
 	}
-	recordedSubmitted, err := appendOrderEventReturningTx(
+	recordedSubmitted, _, err := appendOrderEventReturningTx(
 		ctx, dictionaries, tx, orderID, submitted,
 	)
 	if err != nil {
@@ -241,7 +241,7 @@ func (r *realmStore) recordOrderSubmission(
 	if settlement.Account == "" {
 		settlement.Account = order.Account
 	}
-	if err := r.recordOrderSettlementTx(ctx, dictionaries, tx, settlement, attest); err != nil {
+	if _, err := r.recordOrderSettlementTx(ctx, dictionaries, tx, settlement, attest); err != nil {
 		return domain.Order{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -660,6 +660,31 @@ func (r *realmStore) CountOrdersSince(ctx context.Context, since time.Time) (int
 		return 0, fmt.Errorf("store: count orders since: %w", err)
 	}
 	return n, nil
+}
+
+func (r *realmStore) ExecutionReportExists(
+	ctx context.Context, id domain.ExternalID,
+) (bool, error) {
+	if id.IsZero() {
+		return false, nil
+	}
+	db, err := r.db()
+	if err != nil {
+		return false, err
+	}
+	var one int
+	err = db.QueryRowContext(
+		ctx,
+		`SELECT 1 FROM execution_report WHERE external_id = ?`,
+		id.Bytes(),
+	).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("store: check execution report %q: %w", id, err)
+	}
+	return true, nil
 }
 
 func scanOrderRow(
@@ -1690,8 +1715,9 @@ func commissionsFromAmountMap(amounts map[string]decimal.Decimal) []domain.Commi
 // --- Settlement -------------------------------------------------------------
 
 // RecordOrderSettlement persists one fill/settlement atomically in a single
-// transaction: per-asset engine balance snapshots, the engine-applied account
-// blocks, the optional trade, the fill event(s),
+// transaction: the optional execution-report identity and all of its event
+// links, per-asset engine balance snapshots, the engine-applied account blocks,
+// the optional trade, the fill event(s),
 // the optional lock rewrite and the order status advance commit or roll back
 // together. When AllowedFrom is non-empty the status UPDATE is guarded and a
 // disallowed current status yields domain.ErrConflict with nothing written;
@@ -1699,40 +1725,44 @@ func commissionsFromAmountMap(amounts map[string]decimal.Decimal) []domain.Commi
 // NOT part of this tx; callers write it separately after a successful commit.
 func (r *realmStore) RecordOrderSettlement(
 	ctx context.Context, st domain.OrderSettlement,
-) error {
+) (domain.ExternalID, error) {
 	return r.recordOrderSettlement(ctx, st, nil)
 }
 
 func (r *realmStore) RecordOrderSettlementWithAttestation(
 	ctx context.Context, st domain.OrderSettlement, attest fwstore.EventAttestor,
-) error {
+) (domain.ExternalID, error) {
 	return r.recordOrderSettlement(ctx, st, attest)
 }
 
 func (r *realmStore) recordOrderSettlement(
 	ctx context.Context, st domain.OrderSettlement, attest fwstore.EventAttestor,
-) error {
+) (domain.ExternalID, error) {
 	db, err := r.db()
 	if err != nil {
-		return err
+		return "", err
 	}
 	dictionaries, err := r.dictionaries()
 	if err != nil {
-		return err
+		return "", err
 	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("store: begin record_order_settlement: %w", err)
+		return "", fmt.Errorf("store: begin record_order_settlement: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := r.recordOrderSettlementTx(ctx, dictionaries, tx, st, attest); err != nil {
-		return err
+	reportID, err := r.recordOrderSettlementTx(ctx, dictionaries, tx, st, attest)
+	if err != nil {
+		return "", err
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("store: commit record_order_settlement: %w", err)
+		return "", fmt.Errorf("store: commit record_order_settlement: %w", err)
 	}
-	return nil
+	if st.ReportID != nil {
+		*st.ReportID = reportID
+	}
+	return reportID, nil
 }
 
 func (r *realmStore) recordOrderSettlementTx(
@@ -1741,20 +1771,45 @@ func (r *realmStore) recordOrderSettlementTx(
 	tx *sql.Tx,
 	st domain.OrderSettlement,
 	attest fwstore.EventAttestor,
-) error {
+) (domain.ExternalID, error) {
 	if st.Order.IsZero() {
-		return fmt.Errorf("store: settlement order is required: %w", domain.ErrInvalid)
+		return "", fmt.Errorf("store: settlement order is required: %w", domain.ErrInvalid)
 	}
 	// Resolve the settling account once; balance and blocks reuse it. The
 	// account is the fill's account, always present on a settlement.
 	accountID, err := resolveAccountID(ctx, tx, st.Account)
 	if err != nil {
-		return err
+		return "", err
+	}
+	// Resolve the order surrogate id before any writes. Events, the optional
+	// report, lock rewrite and status advance all reuse it.
+	orderID, err := lookupOrderID(ctx, tx, st.Order)
+	if err != nil {
+		return "", err
+	}
+	if attest != nil && len(st.Events) == 0 {
+		return "", fmt.Errorf(
+			"store: settlement has no event to attest: %w", domain.ErrInvalid,
+		)
+	}
+	if st.ReportID != nil && len(st.Events) == 0 {
+		return "", fmt.Errorf(
+			"store: execution report has no events: %w", domain.ErrInvalid,
+		)
 	}
 	if st.AccountPnl != "" {
 		if _, err := domain.AddDecimals("", st.AccountPnl); err != nil {
-			return fmt.Errorf("store: settlement account pnl %q: %w", st.Account, err)
+			return "", fmt.Errorf("store: settlement account pnl %q: %w", st.Account, err)
 		}
+	}
+	reportID, reportRowID, err := insertExecutionReportTx(
+		ctx, tx, orderID, st.ReportID,
+	)
+	if err != nil {
+		return "", err
+	}
+
+	if st.AccountPnl != "" {
 		if _, err := tx.ExecContext(
 			ctx,
 			`UPDATE account SET pnl = ?, pnl_halt_reason = ? WHERE id = ?`,
@@ -1762,7 +1817,7 @@ func (r *realmStore) recordOrderSettlementTx(
 			st.AccountPnlHaltReason,
 			accountID,
 		); err != nil {
-			return fmt.Errorf("store: settlement account pnl %q: %w", st.Account, err)
+			return "", fmt.Errorf("store: settlement account pnl %q: %w", st.Account, err)
 		}
 	} else if st.AccountPnlHaltReason != "" {
 		if _, err := tx.ExecContext(
@@ -1771,7 +1826,7 @@ func (r *realmStore) recordOrderSettlementTx(
 			st.AccountPnlHaltReason,
 			accountID,
 		); err != nil {
-			return fmt.Errorf("store: settlement account pnl halt %q: %w", st.Account, err)
+			return "", fmt.Errorf("store: settlement account pnl halt %q: %w", st.Account, err)
 		}
 	}
 
@@ -1779,7 +1834,7 @@ func (r *realmStore) recordOrderSettlementTx(
 	// engine omitted preserve their prior values.
 	for _, bal := range st.Balances {
 		if err := settleBalanceTx(ctx, tx, accountID, bal); err != nil {
-			return err
+			return "", err
 		}
 	}
 
@@ -1789,44 +1844,49 @@ func (r *realmStore) recordOrderSettlementTx(
 	for _, blk := range st.Blocks {
 		blkAccountID, err := resolveAccountID(ctx, tx, blk.Account)
 		if err != nil {
-			return err
+			return "", err
 		}
 		if _, err := tx.ExecContext(
 			ctx,
 			`UPDATE account SET blocked = ?, block_reason = ? WHERE id = ?`,
 			true, blk.Reason, blkAccountID,
 		); err != nil {
-			return fmt.Errorf("store: settlement mirror block %q: %w", blk.Account, err)
+			return "", fmt.Errorf("store: settlement mirror block %q: %w", blk.Account, err)
 		}
 	}
 
 	// Trade row.
 	if st.Trade != nil {
 		if _, _, err := r.insertTrade(ctx, tx, *st.Trade); err != nil {
-			return err
+			return "", err
 		}
-	}
-
-	// Resolve the order surrogate id once; events, the optional lock rewrite and
-	// the status advance all reuse it.
-	orderID, err := lookupOrderID(ctx, tx, st.Order)
-	if err != nil {
-		return err
-	}
-	if attest != nil && len(st.Events) == 0 {
-		return fmt.Errorf(
-			"store: settlement has no event to attest: %w", domain.ErrInvalid,
-		)
 	}
 
 	// Fill event(s).
 	for _, ev := range st.Events {
-		recorded, err := appendOrderEventReturningTx(ctx, dictionaries, tx, orderID, ev)
+		if !reportID.IsZero() && ev.Payload.ExecutionReport != nil {
+			request := *ev.Payload.ExecutionReport
+			request.ExternalID = reportID
+			ev.Payload.ExecutionReport = &request
+		}
+		recorded, eventRowID, err := appendOrderEventReturningTx(
+			ctx, dictionaries, tx, orderID, ev,
+		)
 		if err != nil {
-			return err
+			return "", err
+		}
+		if reportRowID != 0 {
+			if _, err := tx.ExecContext(
+				ctx,
+				`INSERT INTO execution_report_event (report_id, event_id) VALUES (?, ?)`,
+				reportRowID,
+				eventRowID,
+			); err != nil {
+				return "", fmt.Errorf("store: link execution report event: %w", err)
+			}
 		}
 		if err := attestOrderEventTx(ctx, dictionaries, tx, recorded, attest); err != nil {
-			return err
+			return "", err
 		}
 	}
 
@@ -1838,7 +1898,7 @@ func (r *realmStore) recordOrderSettlementTx(
 			`UPDATE order_record SET lock = ? WHERE id = ?`,
 			nullableBlob(st.Lock), orderID,
 		); err != nil {
-			return fmt.Errorf("store: settlement lock: %w", err)
+			return "", fmt.Errorf("store: settlement lock: %w", err)
 		}
 	}
 
@@ -1850,7 +1910,7 @@ func (r *realmStore) recordOrderSettlementTx(
 			`UPDATE order_record SET leaves_quantity = ? WHERE id = ?`,
 			st.Leaves, orderID,
 		); err != nil {
-			return fmt.Errorf("store: settlement leaves: %w", err)
+			return "", fmt.Errorf("store: settlement leaves: %w", err)
 		}
 	}
 
@@ -1858,10 +1918,45 @@ func (r *realmStore) recordOrderSettlementTx(
 	if err := guardedOrderStatus(
 		ctx, dictionaries, tx, orderID, st.Order, st.OrderStatus, st.AllowedFrom,
 	); err != nil {
-		return err
+		return "", err
 	}
 
-	return nil
+	return reportID, nil
+}
+
+func insertExecutionReportTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	orderID int64,
+	reportID *domain.ExternalID,
+) (domain.ExternalID, int64, error) {
+	if reportID == nil {
+		return "", 0, nil
+	}
+	xid, err := externalIDForInsert(*reportID)
+	if err != nil {
+		return "", 0, err
+	}
+	result, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO execution_report (external_id, order_id, at) VALUES (?, ?, ?)`,
+		xid.Bytes(),
+		orderID,
+		nowStr(),
+	)
+	if err != nil {
+		if isSQLiteUnique(err) {
+			return "", 0, fmt.Errorf(
+				"execution report %q: %w", xid.String(), domain.ErrAlreadyExists,
+			)
+		}
+		return "", 0, fmt.Errorf("store: insert execution report: %w", err)
+	}
+	reportRowID, err := result.LastInsertId()
+	if err != nil {
+		return "", 0, fmt.Errorf("store: execution report row id: %w", err)
+	}
+	return xid, reportRowID, nil
 }
 
 // guardedOrderStatus advances an order's status inside tx, addressing it by its
@@ -1934,42 +2029,47 @@ func appendOrderEventReturningTx(
 	tx *sql.Tx,
 	orderID int64,
 	ev domain.OrderEvent,
-) (domain.OrderEvent, error) {
+) (domain.OrderEvent, int64, error) {
 	ev.Source = storedSource(ev.Source)
 	principalID, err := resolveOptionalPrincipalID(ctx, tx, ev.Principal)
 	if err != nil {
-		return domain.OrderEvent{}, err
+		return domain.OrderEvent{}, 0, err
 	}
 	typeID, err := dictionaries.id(orderEventTypeTable, "order event type", string(ev.Type))
 	if err != nil {
-		return domain.OrderEvent{}, err
+		return domain.OrderEvent{}, 0, err
 	}
 	sourceID, err := dictionaries.id(sourceKindTable, "source", string(ev.Source))
 	if err != nil {
-		return domain.OrderEvent{}, err
+		return domain.OrderEvent{}, 0, err
 	}
 	xid, err := newExternalID()
 	if err != nil {
-		return domain.OrderEvent{}, err
+		return domain.OrderEvent{}, 0, err
 	}
 	at := nowStr()
 	payloadJSON, err := json.Marshal(ev.Payload)
 	if err != nil {
-		return domain.OrderEvent{}, fmt.Errorf("store: marshal event payload: %w", err)
+		return domain.OrderEvent{}, 0, fmt.Errorf("store: marshal event payload: %w", err)
 	}
-	if _, err := tx.ExecContext(
+	result, err := tx.ExecContext(
 		ctx,
 		`INSERT INTO order_event
 		 (external_id, order_id, principal_id, at, type_id, source_id, payload)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		xid.Bytes(), orderID, principalID, at,
 		typeID, sourceID, string(payloadJSON),
-	); err != nil {
-		return domain.OrderEvent{}, fmt.Errorf("store: append order event: %w", err)
+	)
+	if err != nil {
+		return domain.OrderEvent{}, 0, fmt.Errorf("store: append order event: %w", err)
+	}
+	eventRowID, err := result.LastInsertId()
+	if err != nil {
+		return domain.OrderEvent{}, 0, fmt.Errorf("store: order event row id: %w", err)
 	}
 	ev.ExternalID = xid
 	ev.At = mustParseTime(at)
-	return ev, nil
+	return ev, eventRowID, nil
 }
 
 func attestOrderEventTx(

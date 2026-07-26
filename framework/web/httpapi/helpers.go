@@ -61,9 +61,9 @@ func PathCommand(r *http.Request) (string, error) {
 	return pathString(r, "command", "invalid URL encoding in command")
 }
 
-// PathOrderExternalID reads and URL-decodes the {externalId} chi path parameter.
+// PathOrderExternalID reads and URL-decodes the order {id} path parameter.
 func PathOrderExternalID(r *http.Request) (string, error) {
-	return pathString(r, "externalId", "invalid URL encoding in order external id")
+	return pathString(r, "id", "invalid URL encoding in order id")
 }
 
 // PathOrderEventID reads and URL-decodes the {eventId} chi path parameter.

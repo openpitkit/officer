@@ -985,20 +985,24 @@ func TestService_SubmitOrderApprovalReadBack(t *testing.T) {
 	svc, fn := newTestServiceWithSigner(signer)
 	ctx := context.Background()
 
-	submitted, err := svc.SubmitOrder(ctx, sampleOrder())
+	token, err := svc.SubmitOrderToken(ctx, sampleOrder(), backend.SubmitModeHold)
 	if err != nil {
-		t.Fatalf("SubmitOrder: %v", err)
+		t.Fatalf("SubmitOrderToken: %v", err)
 	}
-	order := submitted.Order
+	detail, err := svc.GetOrder(ctx, token.OrderExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	order := detail.Order
 	if order.ExternalID.IsZero() {
 		t.Fatalf("submitted order must carry an external id")
 	}
-	if submitted.Token.Token == "" ||
-		submitted.Token.KeyID != "key-1" ||
-		submitted.Token.OrderExternalID != order.ExternalID.String() ||
-		submitted.Token.Verdict != "accept" ||
-		len(submitted.Token.Reasons) != 0 {
-		t.Fatalf("inline submit token = %+v, want signed accept verdict", submitted.Token)
+	if token.Token == "" ||
+		token.KeyID != "key-1" ||
+		token.OrderExternalID != order.ExternalID.String() ||
+		token.Verdict != "accept" ||
+		len(token.Reasons) != 0 {
+		t.Fatalf("inline submit token = %+v, want signed accept verdict", token)
 	}
 	// The signer recorded every lifecycle payload; the returned verdict payload
 	// must bind the order's external id, not any integer/surrogate handle.
@@ -1021,17 +1025,17 @@ func TestService_SubmitOrderApprovalReadBack(t *testing.T) {
 			fn.persistAttestationCalls, wantEvents)
 	}
 	wantVerdictToken := "token-" + wantEvents[1].String()
-	if submitted.Token.Token != wantVerdictToken {
+	if token.Token != wantVerdictToken {
 		t.Fatalf("inline submit token = %q, want pre-trade verdict token %q",
-			submitted.Token.Token, wantVerdictToken)
+			token.Token, wantVerdictToken)
 	}
-	if gotCommitToken := "token-" + wantEvents[2].String(); submitted.Token.Token == gotCommitToken {
+	if gotCommitToken := "token-" + wantEvents[2].String(); token.Token == gotCommitToken {
 		t.Fatalf("inline submit token returned committed attestation %q", gotCommitToken)
 	}
 
 	// Read the order back by its external-id handle: the verdict event carries its
 	// 1:1 signed attestation.
-	detail, err := svc.GetOrder(ctx, order.ExternalID.String())
+	detail, err = svc.GetOrder(ctx, order.ExternalID.String())
 	if err != nil {
 		t.Fatalf("GetOrder: %v", err)
 	}
@@ -1050,19 +1054,23 @@ func TestService_SubmitOrderApprovalReadBackESignOff(t *testing.T) {
 	svc, fn := newTestServiceWithSigner(signer)
 	ctx := context.Background()
 
-	submitted, err := svc.SubmitOrder(ctx, sampleOrder())
+	token, err := svc.SubmitOrderToken(ctx, sampleOrder(), backend.SubmitModeHold)
 	if err != nil {
-		t.Fatalf("SubmitOrder: %v", err)
+		t.Fatalf("SubmitOrderToken: %v", err)
 	}
-	order := submitted.Order
+	detail, err := svc.GetOrder(ctx, token.OrderExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	order := detail.Order
 	if order.ExternalID.IsZero() {
 		t.Fatalf("submitted order must carry an external id")
 	}
-	if submitted.Token.Token == "" ||
-		submitted.Token.KeyID != "" ||
-		submitted.Token.Verdict != "accept" ||
-		submitted.Token.Signed {
-		t.Fatalf("inline eSign-off submit token = %+v, want alg none verdict", submitted.Token)
+	if token.Token == "" ||
+		token.KeyID != "" ||
+		token.Verdict != "accept" ||
+		token.Signed {
+		t.Fatalf("inline eSign-off submit token = %+v, want alg none verdict", token)
 	}
 	if len(signer.signed) != 0 {
 		t.Fatalf("eSign-off must not sign")
@@ -1077,7 +1085,7 @@ func TestService_SubmitOrderApprovalReadBackESignOff(t *testing.T) {
 			fn.persistAttestationCalls, wantEvents)
 	}
 
-	detail, err := svc.GetOrder(ctx, order.ExternalID.String())
+	detail, err = svc.GetOrder(ctx, order.ExternalID.String())
 	if err != nil {
 		t.Fatalf("GetOrder: %v", err)
 	}
@@ -1099,23 +1107,31 @@ func TestService_SubmitOrderApprovalReadBackESignOff(t *testing.T) {
 	}
 }
 
-func TestService_SubmitOrderApprovalPersistFailureAudited(t *testing.T) {
-	signer := &fakeSigner{}
-	svc, fn := newTestServiceWithSigner(signer)
-	fn.persistAttestationErr = errors.New("approval store down")
+func TestService_SubmitOrderTokenApprovalPersistFailureAudited(t *testing.T) {
+	for _, mode := range []string{
+		backend.SubmitModeHold,
+		backend.SubmitModeImmediate,
+	} {
+		t.Run(mode, func(t *testing.T) {
+			signer := &fakeSigner{}
+			svc, fn := newTestServiceWithSigner(signer)
+			fn.persistAttestationErr = errors.New("approval store down")
 
-	_, err := svc.SubmitOrder(context.Background(), sampleOrder())
-	if !errors.Is(err, fn.persistAttestationErr) {
-		t.Fatalf("SubmitOrder error = %v, want attestation persist error", err)
-	}
-	if len(fn.persistAttestationCalls) != 0 {
-		t.Fatalf("persist attestation calls = %d, want rollback to 0", len(fn.persistAttestationCalls))
-	}
-	if hasAudit(fn.auditCalls, domain.AuditActionApprovalIssued) {
-		t.Fatalf("failed approval must not audit approval_issued: %+v", fn.auditCalls)
-	}
-	if !hasAuditDetail(fn.auditCalls, domain.AuditActionApprovalFailed, "approval store down") {
-		t.Fatalf("failed approval must audit approval_failed: %+v", fn.auditCalls)
+			_, err := svc.SubmitOrderToken(context.Background(), sampleOrder(), mode)
+			if !errors.Is(err, fn.persistAttestationErr) {
+				t.Fatalf("SubmitOrderToken error = %v, want persistence failure", err)
+			}
+			if hasAudit(fn.auditCalls, domain.AuditActionApprovalIssued) {
+				t.Fatalf("failed approval audited approval_issued: %+v", fn.auditCalls)
+			}
+			if !hasAuditDetail(
+				fn.auditCalls,
+				domain.AuditActionApprovalFailed,
+				"approval store down",
+			) {
+				t.Fatalf("failed approval did not audit approval_failed: %+v", fn.auditCalls)
+			}
+		})
 	}
 }
 
@@ -1125,7 +1141,9 @@ func TestService_SubmitOrderMissingAttestationFailsClosedInternal(t *testing.T) 
 	svc, fn := newTestServiceWithSigner(signer)
 	fn.skipAttestNewEvents = true
 
-	_, err := svc.SubmitOrder(context.Background(), sampleOrder())
+	_, err := svc.SubmitOrderToken(
+		context.Background(), sampleOrder(), backend.SubmitModeHold,
+	)
 	if err == nil {
 		t.Fatal("SubmitOrder succeeded without an attestation")
 	}
@@ -1160,33 +1178,39 @@ func TestService_SubmitOrderRiskRejectReturnsSignedDecision(t *testing.T) {
 	}
 	fn.submitResult = &engine.OrderResult{Accepted: false, Rejects: rejects}
 
-	submitted, err := svc.SubmitOrder(context.Background(), sampleOrder())
+	token, err := svc.SubmitOrderToken(
+		context.Background(), sampleOrder(), backend.SubmitModeHold,
+	)
 	if err != nil {
-		t.Fatalf("SubmitOrder: %v", err)
+		t.Fatalf("SubmitOrderToken: %v", err)
 	}
-	if submitted.Order.Status != domain.OrderStatusRejected {
-		t.Fatalf("order status = %q, want rejected", submitted.Order.Status)
+	detail, err := svc.GetOrder(context.Background(), token.OrderExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
 	}
-	if submitted.Token.Token == "" ||
-		submitted.Token.KeyID != "key-1" ||
-		submitted.Token.OrderExternalID != submitted.Order.ExternalID.String() ||
-		submitted.Token.Verdict != "reject" ||
-		!submitted.Token.Signed {
-		t.Fatalf("inline submit token = %+v, want signed reject verdict", submitted.Token)
+	if detail.Order.Status != domain.OrderStatusRejected {
+		t.Fatalf("order status = %q, want rejected", detail.Order.Status)
 	}
-	if !reflect.DeepEqual(submitted.Token.Reasons, rejects) {
-		t.Fatalf("reject reasons = %+v, want %+v", submitted.Token.Reasons, rejects)
+	if token.Token == "" ||
+		token.KeyID != "key-1" ||
+		token.OrderExternalID != detail.Order.ExternalID.String() ||
+		token.Verdict != "reject" ||
+		!token.Signed {
+		t.Fatalf("inline submit token = %+v, want signed reject verdict", token)
+	}
+	if !reflect.DeepEqual(token.Reasons, rejects) {
+		t.Fatalf("reject reasons = %+v, want %+v", token.Reasons, rejects)
 	}
 	if len(signer.signed) != 2 || signer.signed[1].Verdict != "reject" {
 		t.Fatalf("signed payloads = %+v, want one reject verdict", signer.signed)
 	}
-	wantEvents := eventIDsByType(t, svc, submitted.Order.ExternalID.String(),
+	wantEvents := eventIDsByType(t, svc, detail.Order.ExternalID.String(),
 		domain.OrderEventSubmitted,
 		domain.OrderEventPreTradeRejected,
 	)
-	if want := "token-" + wantEvents[1].String(); submitted.Token.Token != want {
+	if want := "token-" + wantEvents[1].String(); token.Token != want {
 		t.Fatalf("inline reject token = %q, want pre-trade reject token %q",
-			submitted.Token.Token, want)
+			token.Token, want)
 	}
 	if !hasAudit(fn.auditCalls, domain.AuditActionApprovalIssued) {
 		t.Fatalf("reject decision must audit approval_issued: %+v", fn.auditCalls)
@@ -1349,9 +1373,9 @@ func TestService_SubmitOrderTokenDuplicateSuppliedIDConflicts(t *testing.T) {
 	}
 }
 
-// TestService_SubmitOrderHonorsSuppliedExternalID covers the like-the-API submit
-// path (POST /orders): a supplied id is created once and returned verbatim.
-func TestService_SubmitOrderHonorsSuppliedExternalID(t *testing.T) {
+// TestService_SubmitOrderTokenHonorsSuppliedID covers the live submit path: a
+// supplied id is created once and returned verbatim.
+func TestService_SubmitOrderTokenHonorsSuppliedID(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
 	svc, fn := newTestServiceWithSigner(signer)
@@ -1359,36 +1383,25 @@ func TestService_SubmitOrderHonorsSuppliedExternalID(t *testing.T) {
 	supplied := mdID("supplied-submit-id")
 	o := sampleOrder()
 	o.ExternalID = supplied
-	submitted, err := svc.SubmitOrder(context.Background(), o)
+	token, err := svc.SubmitOrderToken(
+		context.Background(), o, backend.SubmitModeHold,
+	)
 	if err != nil {
-		t.Fatalf("SubmitOrder: %v", err)
+		t.Fatalf("SubmitOrderToken: %v", err)
 	}
-	order := submitted.Order
+	detail, err := svc.GetOrder(context.Background(), token.OrderExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	order := detail.Order
 	if order.ExternalID != supplied {
 		t.Fatalf("returned order id = %q, want supplied %q", order.ExternalID, supplied)
 	}
-	if submitted.Token.OrderExternalID != supplied.String() ||
-		submitted.Token.Verdict != "accept" {
-		t.Fatalf("submit token = %+v, want supplied id accept verdict", submitted.Token)
+	if token.OrderExternalID != supplied.String() || token.Verdict != "accept" {
+		t.Fatalf("submit token = %+v, want supplied id accept verdict", token)
 	}
 	if len(fn.orders) != 1 {
 		t.Fatalf("orders created = %d, want exactly 1", len(fn.orders))
-	}
-}
-
-// TestService_SubmitOrderDuplicateSuppliedIDConflicts covers the POST /orders
-// conflict propagation.
-func TestService_SubmitOrderDuplicateSuppliedIDConflicts(t *testing.T) {
-	t.Parallel()
-	signer := &fakeSigner{}
-	svc, fn := newTestServiceWithSigner(signer)
-	fn.submitErr = fmt.Errorf("create order: %w", domain.ErrAlreadyExists)
-
-	o := sampleOrder()
-	o.ExternalID = mdID("dup-submit-id")
-	_, err := svc.SubmitOrder(context.Background(), o)
-	if !errors.Is(err, domain.ErrAlreadyExists) {
-		t.Fatalf("duplicate supplied id error = %v, want ErrAlreadyExists", err)
 	}
 }
 
@@ -1427,8 +1440,8 @@ func hasAudit(entries []store.AuditEntry, action domain.AuditAction) bool {
 func hasAuditDetail(
 	entries []store.AuditEntry, action domain.AuditAction, detail string,
 ) bool {
-	for _, e := range entries {
-		if e.Action == action && strings.Contains(e.Detail, detail) {
+	for _, entry := range entries {
+		if entry.Action == action && strings.Contains(entry.Detail, detail) {
 			return true
 		}
 	}

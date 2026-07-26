@@ -126,14 +126,17 @@ func TestListAudit(t *testing.T) {
 		t.Fatalf("want 1 entry, got %v", m["entries"])
 	}
 	e := entries[0].(map[string]any)
-	for _, field := range []string{"externalId", "at", "actor", "action", "account", "detail"} {
+	for _, field := range []string{"id", "at", "actor", "action", "account", "detail"} {
 		if _, ok := e[field]; !ok {
 			t.Fatalf("audit entry missing field %q", field)
 		}
 	}
 	// The audit row is addressed by its opaque external id; no surrogate id leaks.
-	if e["externalId"] != extID("audit-1").String() {
-		t.Fatalf("want externalId=%s, got %v", extID("audit-1").String(), e["externalId"])
+	if e["id"] != extID("audit-1").String() {
+		t.Fatalf("want id=%s, got %v", extID("audit-1").String(), e["id"])
+	}
+	if _, leaked := e["externalId"]; leaked {
+		t.Fatalf("audit entry leaked externalId: %v", e)
 	}
 	assertNoSurrogateID(t, e)
 	if e["actor"] != "operator" {

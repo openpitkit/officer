@@ -126,12 +126,11 @@ func RegisterRoutes(registry *httpx.RouteRegistry, svc Service, logs httpx.LogSo
 	register(registry, "balances.list.get", http.MethodGet, "/balances", handleListBalances(svc))
 	register(registry, "adjustments.list.get", http.MethodGet, "/adjustments", handleListAdjustments(svc))
 
-	register(registry, "orders.submit.post", http.MethodPost, "/orders", handleSubmitOrder(svc))
 	register(registry, "orders.check.post", http.MethodPost, "/orders/check", handleCheckOrder(svc))
 	register(registry, "orders.list.get", http.MethodGet, "/orders", handleListOrders(svc))
-	register(registry, "orders.get", http.MethodGet, "/orders/{externalId}", handleGetOrder(svc))
-	register(registry, "orders.events.reproduction.get", http.MethodGet, "/orders/{externalId}/events/{eventId}/reproduction", handleGetOrderEventReproduction(svc))
-	register(registry, "orders.execution-reports.post", http.MethodPost, "/orders/{externalId}/execution-reports", handleApplyExecutionReport(svc))
+	register(registry, "orders.get", http.MethodGet, "/orders/{id}", handleGetOrder(svc))
+	register(registry, "orders.events.reproduction.get", http.MethodGet, "/orders/{id}/events/{eventId}/reproduction", handleGetOrderEventReproduction(svc))
+	register(registry, "orders.execution-reports.post", http.MethodPost, "/orders/{id}/execution-reports", handleApplyExecutionReport(svc))
 	register(registry, "trades.list.get", http.MethodGet, "/trades", handleListTrades(svc))
 
 	register(registry, "limits.list.get", http.MethodGet, "/limits", handleListLimits(svc))
@@ -157,8 +156,8 @@ func RegisterRoutes(registry *httpx.RouteRegistry, svc Service, logs httpx.LogSo
 	register(registry, "signing.config.get", http.MethodGet, "/signing/config", handleGetSigningConfig(svc))
 	register(registry, "signing.config.put", http.MethodPut, "/signing/config", handleSetSigningConfig(svc))
 	register(registry, "orders.submit-token.post", http.MethodPost, "/orders/submit", handleSubmitOrderToken(svc))
-	register(registry, "orders.confirm.post", http.MethodPost, "/orders/{externalId}/confirm", handleConfirmExecution(svc))
-	register(registry, "orders.cancel.post", http.MethodPost, "/orders/{externalId}/cancel", handleCancelOrder(svc))
+	register(registry, "orders.confirm.post", http.MethodPost, "/orders/{id}/confirm", handleConfirmExecution(svc))
+	register(registry, "orders.cancel.post", http.MethodPost, "/orders/{id}/cancel", handleCancelOrder(svc))
 
 	register(registry, "market-data.list.get", http.MethodGet, "/market-data", handleListMarketData(svc))
 	register(registry, "market-data.restart.post", http.MethodPost, "/market-data/restart", handleRestartMarketData(svc))

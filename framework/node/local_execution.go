@@ -64,6 +64,10 @@ func (n *localNode) applyExecutionReport(
 	if err != nil {
 		return engine.ExecutionReportResult{}, err
 	}
+	// Report ids are realm-wide while account lanes only serialize one account.
+	// Keep the availability check and persistence ordered across all lanes.
+	n.reportMu.Lock()
+	defer n.reportMu.Unlock()
 	if !requiresEngine {
 		return n.recordWorkflowExecutionReport(ctx, in, caller, attest, request)
 	}
@@ -94,6 +98,9 @@ func (n *localNode) applyExecutionReport(
 		return engine.ExecutionReportResult{}, err
 	}
 	defer done()
+	if err := n.requireExecutionReportIDAvailable(ctx, in.ExternalID); err != nil {
+		return engine.ExecutionReportResult{}, err
+	}
 
 	var result engine.ExecutionReportResult
 	if err := eng.RunAccountSynchronized(ctx, account, func(lane engine.AccountLane) error {
@@ -128,6 +135,7 @@ func (n *localNode) applyExecutionReport(
 		settlement := domain.OrderSettlement{
 			Account:              in.Account,
 			Order:                in.Order,
+			ReportID:             &in.ExternalID,
 			OrderStatus:          persistence.OrderStatus,
 			AccountPnl:           persistence.AccountPnl,
 			AccountPnlHaltReason: persistence.AccountPnlHaltReason,
@@ -137,15 +145,17 @@ func (n *localNode) applyExecutionReport(
 			Trade:                persistence.Trade,
 			Blocks:               accountBlockSettlementsFrom(in.Order, persistence.Blocks),
 		}
-		if err := recordOrderSettlementWithAttestation(
+		reportID, err := recordOrderSettlementWithAttestation(
 			ctx, n.realm, settlement, attest,
-		); err != nil {
+		)
+		if err != nil {
 			return n.fatalPostEnginePersistence(
 				"record execution report",
 				accountID,
 				fmt.Errorf("record execution report: %w", err),
 			)
 		}
+		result.ReportID = reportID
 
 		if err := n.mirrorEngineBlocksAudit(ctx, in.Order, result.Blocks); err != nil {
 			return n.fatalPostEnginePersistence(
@@ -201,6 +211,9 @@ func (n *localNode) recordWorkflowExecutionReport(
 		return engine.ExecutionReportResult{}, err
 	}
 	defer done()
+	if err := n.requireExecutionReportIDAvailable(ctx, in.ExternalID); err != nil {
+		return engine.ExecutionReportResult{}, err
+	}
 
 	if err := eng.RunAccountSynchronized(ctx, account, func(_ engine.AccountLane) error {
 		detail, err := n.realm.GetOrder(ctx, in.Order)
@@ -227,6 +240,7 @@ func (n *localNode) recordWorkflowExecutionReport(
 		settlement := domain.OrderSettlement{
 			Account:     in.Account,
 			Order:       in.Order,
+			ReportID:    &in.ExternalID,
 			OrderStatus: status,
 			Leaves:      in.LeavesQuantity,
 			AllowedFrom: []domain.OrderStatus{detail.Order.Status},
@@ -242,9 +256,13 @@ func (n *localNode) recordWorkflowExecutionReport(
 				},
 			}},
 		}
-		if err := recordOrderSettlementWithAttestation(ctx, n.realm, settlement, attest); err != nil {
+		reportID, err := recordOrderSettlementWithAttestation(
+			ctx, n.realm, settlement, attest,
+		)
+		if err != nil {
 			return fmt.Errorf("record workflow execution report: %w", err)
 		}
+		in.ExternalID = reportID
 		detailText := executionReportDetail(in, status, 0)
 		if forcedTerminalBypass {
 			detailText += " forced=true"
@@ -264,7 +282,23 @@ func (n *localNode) recordWorkflowExecutionReport(
 	}); err != nil {
 		return engine.ExecutionReportResult{}, err
 	}
-	return engine.ExecutionReportResult{}, nil
+	return engine.ExecutionReportResult{ReportID: in.ExternalID}, nil
+}
+
+func (n *localNode) requireExecutionReportIDAvailable(
+	ctx context.Context, id domain.ExternalID,
+) error {
+	if id.IsZero() {
+		return nil
+	}
+	exists, err := n.realm.ExecutionReportExists(ctx, id)
+	if err != nil {
+		return fmt.Errorf("check execution report id %q: %w", id, err)
+	}
+	if exists {
+		return fmt.Errorf("execution report %q: %w", id, domain.ErrAlreadyExists)
+	}
+	return nil
 }
 
 // PersistEventAttestation stamps the signed attestation envelope onto the

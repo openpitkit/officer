@@ -1031,7 +1031,7 @@ paths:
         Runs the adjustment through the engine. A policy reject is a successful
         call: the rejected record is returned in the body with `status` =
         `"rejected"`. HTTP errors indicate only system-level failures. The request
-        may carry an optional `externalId`: when supplied it is used as-is and a
+        may carry an optional `id`: when supplied it is used as-is and a
         duplicate is rejected with 409; when omitted the server generates one and
         returns it on the record. If the engine returns no account modifications,
         Officer records nothing and returns 204.
@@ -1674,15 +1674,9 @@ paths:
       summary: List adjustments across all accounts
       tags: [adjustments]
       parameters:
-        - name: externalId
-          in: query
-          deprecated: true
-          description: Exact adjustment external ID lookup. Prefer `id`.
-          schema:
-            type: string
         - name: id
           in: query
-          description: Exact adjustment external ID lookup.
+          description: Exact adjustment public ID lookup.
           schema:
             type: string
         - name: account
@@ -1877,65 +1871,6 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
-    post:
-      operationId: submitOrder
-      summary: Submit an order through pre-trade risk evaluation
-      description: >
-        Runs the order through the engine pre-trade checks and records the result.
-        An engine reject is a successful signed pre-trade decision: the returned
-        order carries `status` = `"rejected"` and `submitResponse` carries the
-        signed `verdict: reject` envelope plus structured reasons. HTTP errors
-        indicate invalid input or system-level failures.
-      tags: [orders]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [account, baseAsset, quoteAsset, side, amountKind, amountValue]
-              properties:
-                account:
-                  type: string
-                  description: Account code that owns the order.
-                baseAsset:
-                  type: string
-                  description: Asset being bought or sold.
-                quoteAsset:
-                  type: string
-                  description: Asset used for pricing and settlement.
-                side:
-                  type: string
-                  description: "`buy` or `sell`."
-                amountKind:
-                  type: string
-                  description: "Kind of amount - `quantity` or `volume`."
-                amountValue:
-                  type: string
-                  description: Exact decimal string.
-                price:
-                  type: string
-                  description: Exact decimal string. Omit for market orders.
-      responses:
-        "201":
-          description: >
-            Order record created (accepted or rejected by the engine), plus the
-            signed submit verdict envelope.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [order, submitResponse]
-                properties:
-                  order:
-                    $ref: "#/components/schemas/Order"
-                  submitResponse:
-                    $ref: "#/components/schemas/ApprovalToken"
-        "400":
-          $ref: "#/components/responses/ValidationError"
-        "500":
-          $ref: "#/components/responses/InternalError"
-
   /orders/check:
     post:
       operationId: checkOrder
@@ -1945,8 +1880,9 @@ paths:
         reports whether it would pass. Nothing is recorded and no state changes:
         no order is placed and no funds are reserved. An engine reject is a
         successful call returning `passed` = `false` with the reasons; HTTP
-        errors indicate only system-level failures. The request body is
-        identical to `POST /orders`.
+        errors indicate only system-level failures. The request body uses the
+        same order economics as `POST /orders/submit`, without its
+        caller-supplied request id.
       tags: [orders]
       requestBody:
         required: true
@@ -1993,9 +1929,9 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
-  /orders/{externalId}:
+  /orders/{id}:
     parameters:
-      - $ref: "#/components/parameters/OrderExternalId"
+      - $ref: "#/components/parameters/OrderId"
     get:
       operationId: getOrder
       summary: Get an order with its lifecycle events (each with its attestation) and trades
@@ -2029,9 +1965,9 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
-  /orders/{externalId}/events/{eventId}/reproduction:
+  /orders/{id}/events/{eventId}/reproduction:
     parameters:
-      - $ref: "#/components/parameters/OrderExternalId"
+      - $ref: "#/components/parameters/OrderId"
       - name: eventId
         in: path
         required: true
@@ -2064,9 +2000,9 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
-  /orders/{externalId}/execution-reports:
+  /orders/{id}/execution-reports:
     parameters:
-      - $ref: "#/components/parameters/OrderExternalId"
+      - $ref: "#/components/parameters/OrderId"
     post:
       operationId: applyExecutionReport
       summary: Apply an execution report to an order
@@ -2127,6 +2063,12 @@ paths:
                         - required: [price]
                         - required: [lockPrice]
               properties:
+                id:
+                  $ref: "#/components/schemas/Id"
+                  description: >
+                    Optional caller-supplied public id for this report. When
+                    omitted Officer generates one. IDs are globally unique
+                    across execution reports; a duplicate is a 409.
                 status:
                   type: string
                   description: >
@@ -2220,15 +2162,9 @@ paths:
       summary: List trade records
       tags: [trades]
       parameters:
-        - name: externalId
-          in: query
-          deprecated: true
-          description: Exact trade external ID lookup. Prefer `id`.
-          schema:
-            type: string
         - name: id
           in: query
-          description: Exact trade external ID lookup.
+          description: Exact trade ID lookup.
           schema:
             type: string
         - name: account
@@ -2578,15 +2514,9 @@ paths:
         index path stays O(page).
       tags: [audit]
       parameters:
-        - name: externalId
-          in: query
-          deprecated: true
-          description: Exact audit row external ID lookup. Prefer `id`.
-          schema:
-            type: string
         - name: id
           in: query
-          description: Exact audit row external ID lookup.
+          description: Exact audit row ID lookup.
           schema:
             type: string
         - name: account
@@ -3013,9 +2943,9 @@ paths:
         Submit CREATES the order exactly once from the request body: there is no
         separate persisting create beforehand. It runs the engine pre-trade in
         the given mode and records the order, then issues a signed approval token
-        on accept. `externalId` is optional: when supplied it is used as-is and a
+        on accept. `id` is optional: when supplied it is used as-is and a
         duplicate is rejected with 409; when omitted the server generates one. The
-        returned `orderExternalId` is the id actually used, so confirm/cancel
+        returned `id` is the id actually used, so confirm/cancel
         resolve the same order.
       tags: [signing]
       requestBody:
@@ -3026,10 +2956,10 @@ paths:
               type: object
               required: [account, baseAsset, quoteAsset, side, amountKind, amountValue]
               properties:
-                externalId:
-                  $ref: "#/components/schemas/ExternalId"
+                id:
+                  $ref: "#/components/schemas/Id"
                   description: >
-                    Optional caller-supplied opaque external id. When omitted
+                    Optional caller-supplied public id. When omitted
                     the server generates and returns one. A duplicate is a 409.
                     Never a surrogate or engine id.
                 account:
@@ -3077,9 +3007,9 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
-  /orders/{externalId}/confirm:
+  /orders/{id}/confirm:
     parameters:
-      - $ref: "#/components/parameters/OrderExternalId"
+      - $ref: "#/components/parameters/OrderId"
     post:
       operationId: confirmExecution
       summary: Record order confirmation with its approval token
@@ -3118,9 +3048,9 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
-  /orders/{externalId}/cancel:
+  /orders/{id}/cancel:
     parameters:
-      - $ref: "#/components/parameters/OrderExternalId"
+      - $ref: "#/components/parameters/OrderId"
     post:
       operationId: cancelOrder
       summary: Cancel an untouched order with its approval token
@@ -3715,23 +3645,23 @@ components:
         type: integer
         minimum: 0
 
-    OrderExternalId:
-      name: externalId
+    OrderId:
+      name: id
       in: path
       required: true
-      description: The order's opaque public handle (its external id).
+      description: The order's public id.
       schema:
-        $ref: "#/components/schemas/ExternalId"
+        $ref: "#/components/schemas/Id"
 
     MarketDataInstanceId:
       name: id
       in: path
       required: true
       description: >
-        URL-encoded market-data instance external id - the instance's opaque
+        URL-encoded market-data instance id - the instance's opaque
         public handle, never a surrogate or engine id.
       schema:
-        $ref: "#/components/schemas/ExternalId"
+        $ref: "#/components/schemas/Id"
 
     SourceFilter:
       name: source
@@ -3884,7 +3814,7 @@ components:
 
     # Shared identity
 
-    ExternalId:
+    Id:
       type: string
       description: >
         Opaque public handle. No surrogate or engine id is ever exposed.
@@ -4216,6 +4146,16 @@ components:
           description: Serialized order event rows.
           items:
             type: object
+        executionReports:
+          type: array
+          description: Serialized execution-report identity rows.
+          items:
+            $ref: "#/components/schemas/BackupExecutionReport"
+        executionReportEvents:
+          type: array
+          description: Serialized execution-report-to-event links.
+          items:
+            $ref: "#/components/schemas/BackupExecutionReportEvent"
         trades:
           type: array
           description: Serialized trade rows.
@@ -4241,6 +4181,29 @@ components:
           description: Serialized latest market-data quote rows.
           items:
             type: object
+
+    BackupExecutionReport:
+      type: object
+      additionalProperties: false
+      required: [id, orderId, at]
+      properties:
+        id:
+          $ref: "#/components/schemas/Id"
+        orderId:
+          $ref: "#/components/schemas/Id"
+        at:
+          type: string
+          format: date-time
+
+    BackupExecutionReportEvent:
+      type: object
+      additionalProperties: false
+      required: [reportId, eventId]
+      properties:
+        reportId:
+          $ref: "#/components/schemas/Id"
+        eventId:
+          $ref: "#/components/schemas/Id"
 
     BackupRestoreSummary:
       type: object
@@ -4514,12 +4477,12 @@ components:
       type: object
       required: [asset]
       properties:
-        externalId:
-          $ref: "#/components/schemas/ExternalId"
+        id:
+          $ref: "#/components/schemas/Id"
           description: >
-            Optional caller-supplied opaque external id for the adjustment record
+            Optional caller-supplied public id for the adjustment record.
             Write-only on create: when omitted the server generates one and
-            returns it under the record's `externalId`. A duplicate is a 409.
+            returns it under the record's `id`. A duplicate is a 409.
             Never a surrogate id.
         asset:
           type: string
@@ -4657,11 +4620,11 @@ components:
 
     Adjustment:
       type: object
-      required: [externalId, at, account, source, status, request, outcome]
+      required: [id, at, account, source, status, request, outcome]
       properties:
-        externalId:
+        id:
           description: The adjustment's opaque public handle.
-          $ref: "#/components/schemas/ExternalId"
+          $ref: "#/components/schemas/Id"
         at:
           type: string
           format: date-time
@@ -4700,11 +4663,11 @@ components:
 
     Order:
       type: object
-      required: [externalId, at, account, baseAsset, quoteAsset, side, amountKind, amountValue, commissionSubtotals, leavesQuantity, price, status, source, displayPrices, signed]
+      required: [id, at, account, baseAsset, quoteAsset, side, amountKind, amountValue, commissionSubtotals, leavesQuantity, price, status, source, displayPrices, signed]
       properties:
-        externalId:
+        id:
           description: The order's opaque public handle.
-          $ref: "#/components/schemas/ExternalId"
+          $ref: "#/components/schemas/Id"
         at:
           type: string
           format: date-time
@@ -4801,14 +4764,14 @@ components:
 
     OrderEvent:
       type: object
-      required: [externalId, order, at, type, source, signed]
+      required: [id, order, at, type, source, signed]
       properties:
-        externalId:
+        id:
           description: The event's opaque public handle.
-          $ref: "#/components/schemas/ExternalId"
+          $ref: "#/components/schemas/Id"
         order:
           description: The parent order's opaque public handle.
-          $ref: "#/components/schemas/ExternalId"
+          $ref: "#/components/schemas/Id"
         at:
           type: string
           format: date-time
@@ -4875,12 +4838,15 @@ components:
 
     ExecutionReportRequest:
       type: object
-      required: [baseAsset, quoteAsset, fillQuantity, fillPrice, leavesQuantity, lockPrice, commission, order, account, side, orderStatus, force]
+      required: [id, baseAsset, quoteAsset, fillQuantity, fillPrice, leavesQuantity, lockPrice, commission, order, account, side, orderStatus, force]
       description: >
         Audit-safe execution-report input as received by the node. Empty
         strings, false, and null are retained. The opaque pre-trade lock is
         engine-internal and is never serialized.
       properties:
+        id:
+          description: The execution report's public id.
+          $ref: "#/components/schemas/Id"
         baseAsset:
           type: string
         quoteAsset:
@@ -4898,7 +4864,7 @@ components:
             - $ref: "#/components/schemas/Commission"
             - type: "null"
         order:
-          $ref: "#/components/schemas/ExternalId"
+          $ref: "#/components/schemas/Id"
         account:
           type: string
         side:
@@ -4912,14 +4878,14 @@ components:
 
     Trade:
       type: object
-      required: [externalId, order, at, account, baseAsset, quoteAsset, side, quantity, price, lockPrice, source]
+      required: [id, order, at, account, baseAsset, quoteAsset, side, quantity, price, lockPrice, source]
       properties:
-        externalId:
+        id:
           description: The trade's opaque public handle.
-          $ref: "#/components/schemas/ExternalId"
+          $ref: "#/components/schemas/Id"
         order:
           description: The originating order's opaque public handle.
-          $ref: "#/components/schemas/ExternalId"
+          $ref: "#/components/schemas/Id"
         at:
           type: string
           format: date-time
@@ -5029,11 +4995,14 @@ components:
 
     ExecutionReportResponse:
       type: object
-      required: [result, signed]
+      required: [id, result, signed]
       description: >
         The recorded result plus the signed attestation over the report and its
         result, returned to the robot as proof of what Officer recorded.
       properties:
+        id:
+          description: The execution report's public id.
+          $ref: "#/components/schemas/Id"
         result:
           $ref: "#/components/schemas/ExecutionResult"
         attestationToken:
@@ -5245,11 +5214,11 @@ components:
 
     AuditEntry:
       type: object
-      required: [externalId, at, actor, actorTitle, action, account, accountTitle, detail, source]
+      required: [id, at, actor, actorTitle, action, account, accountTitle, detail, source]
       properties:
-        externalId:
+        id:
           description: The audit row's opaque public handle.
-          $ref: "#/components/schemas/ExternalId"
+          $ref: "#/components/schemas/Id"
         at:
           type: string
           format: date-time
@@ -5446,12 +5415,12 @@ components:
       type: object
       required: [provider, enabled]
       properties:
-        externalId:
-          $ref: "#/components/schemas/ExternalId"
+        id:
+          $ref: "#/components/schemas/Id"
           description: >
-            Optional caller-supplied opaque external id for the instance. When
-            omitted the server generates one and returns it in the instance's
-            `externalId`. A duplicate is a 409. Never a surrogate id.
+            Optional caller-supplied opaque id for the instance. When omitted
+            the server generates and returns one. A duplicate is a 409. Never
+            a surrogate id.
         provider:
           type: string
           description: Provider discriminator.
@@ -5483,7 +5452,7 @@ components:
       type: object
       required:
         [
-          externalId,
+          id,
           provider,
           label,
           credentials,
@@ -5493,9 +5462,9 @@ components:
           searchesSymbols,
         ]
       properties:
-        externalId:
+        id:
           description: The instance's opaque public handle.
-          $ref: "#/components/schemas/ExternalId"
+          $ref: "#/components/schemas/Id"
         provider:
           type: string
           description: Provider discriminator.
@@ -5618,11 +5587,11 @@ components:
       type: object
       required: [externalSymbol, baseAsset, quoteAsset, manualPrice, enabled]
       properties:
-        instanceExternalId:
+        instanceId:
           description: >
             The owning instance's opaque public handle. Present on read
             responses; omitted in request bodies (the path id is authoritative).
-          $ref: "#/components/schemas/ExternalId"
+          $ref: "#/components/schemas/Id"
         externalSymbol:
           type: string
           description: Provider-side instrument symbol.
@@ -5857,10 +5826,10 @@ components:
 
     ApprovalToken:
       type: object
-      required: [token, keyId, orderExternalId, verdict]
+      required: [token, keyId, id, verdict]
       description: >
         The signed submit decision issued for an order submit. The authorised
-        order is referenced by its opaque external id, never a surrogate id.
+        order is referenced by its public id, never a surrogate id.
         `verdict` distinguishes accepted and rejected pre-trade decisions.
         Event reproduction may return an empty verdict when the reproduced event
         has no pre-trade verdict, including submitted lifecycle events.
@@ -5871,9 +5840,9 @@ components:
         keyId:
           type: string
           description: Identifier of the signing key that produced the token.
-        orderExternalId:
+        id:
           description: The authorised order's opaque public handle.
-          $ref: "#/components/schemas/ExternalId"
+          $ref: "#/components/schemas/Id"
         verdict:
           type: string
           enum: [accept, reject, ""]
@@ -5965,9 +5934,9 @@ components:
         requestType:
           type: string
           enum: [submit, execution_report, confirm, cancel]
-        orderExternalId:
+        orderId:
           type: string
-        eventExternalId:
+        eventId:
           type: string
         instrument:
           type: string
@@ -6033,7 +6002,7 @@ components:
             unattested.
         event:
           description: >
-            Byte-identical to the event body in `GET /orders/{externalId}` (same
+            Byte-identical to the event body in `GET /orders/{id}` (same
             serializer).
           $ref: "#/components/schemas/OrderEvent"
         attestation:

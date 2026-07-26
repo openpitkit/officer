@@ -28,52 +28,6 @@ import (
 	appsigning "go.openpit.dev/officer/internal/signing"
 )
 
-func handleSubmitOrder(svc Service) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Account     string `json:"account"`
-			BaseAsset   string `json:"baseAsset"`
-			QuoteAsset  string `json:"quoteAsset"`
-			Side        string `json:"side"`
-			AmountKind  string `json:"amountKind"`
-			AmountValue string `json:"amountValue"`
-			Price       string `json:"price"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
-			return
-		}
-		order := domain.Order{
-			Account:     domain.AccountID(req.Account),
-			BaseAsset:   req.BaseAsset,
-			QuoteAsset:  req.QuoteAsset,
-			Side:        domain.OrderSide(req.Side),
-			AmountKind:  domain.OrderAmountKind(req.AmountKind),
-			AmountValue: req.AmountValue,
-			Price:       req.Price,
-		}
-		out, err := svc.SubmitOrder(r.Context(), order)
-		if err != nil {
-			httpx.WriteErr(w, err)
-			return
-		}
-		httpx.WriteJSON(w, http.StatusCreated,
-			map[string]any{
-				"order": toOrderDTO(
-					out.Order,
-					orderSignedByID(r.Context(), svc, out.Order.ExternalID),
-				),
-				"submitResponse": approvalTokenDTO{
-					Token:           out.Token.Token,
-					KeyID:           out.Token.KeyID,
-					OrderExternalID: out.Token.OrderExternalID,
-					Verdict:         out.Token.Verdict,
-					Reasons:         toOrderRejectDTOs(out.Token.Reasons),
-				},
-			})
-	}
-}
-
 // orderSignedByID reports the order-level rollup: whether the order named by id
 // currently carries at least one Ed25519-signed event attestation. It re-reads
 // the order detail because the mutation handlers (submit/confirm/cancel) only
@@ -148,7 +102,7 @@ func handleListOrders(svc Service) http.HandlerFunc {
 	}
 }
 
-// handleGetOrder handles GET /api/v1/orders/{externalId}. It returns the order,
+// handleGetOrder handles GET /api/v1/orders/{id}. It returns the order,
 // its 1:1 approval envelope (omitted when unsigned), its events, and its trades,
 // all addressed by opaque external ids.
 func handleGetOrder(svc Service) http.HandlerFunc {
@@ -183,7 +137,7 @@ func handleGetOrder(svc Service) http.HandlerFunc {
 }
 
 // handleGetOrderEventReproduction handles GET
-// /api/v1/orders/{externalId}/events/{eventId}/reproduction. It returns the
+// /api/v1/orders/{id}/events/{eventId}/reproduction. It returns the
 // controller-facing reproduction bundle for one order-history event's
 // attestation: byte-for-byte what a robot / AI agent received from the live APIs
 // for the request that produced this event, assembled from persisted state
@@ -381,7 +335,12 @@ func toEventReproductionResponseDTO(
 			Reasons:         submitPayloadRejectReasons(p),
 		}
 	case domain.AttestationRequestExecutionReport:
+		reportID := ""
+		if event.Payload.ExecutionReport != nil {
+			reportID = event.Payload.ExecutionReport.ExternalID.String()
+		}
 		out.ExecutionReport = &executionReportResponseDTO{
+			ID:               reportID,
 			Result:           executionResultFromPayload(p),
 			AttestationToken: att.Token,
 			AttestationKeyID: att.KeyID,
@@ -442,7 +401,7 @@ func orderMutationResponseFromPayload(
 	}
 	return &orderMutationResponseDTO{
 		Order: orderDTO{
-			ExternalID:          event.Order.String(),
+			ID:                  event.Order.String(),
 			Account:             p.AccountID,
 			Side:                p.Side,
 			AmountKind:          p.AmountKind,
@@ -470,6 +429,7 @@ func handleApplyExecutionReport(svc Service) http.HandlerFunc {
 			return
 		}
 		var req struct {
+			ID             string         `json:"id"`
 			Quantity       string         `json:"quantity"`
 			Price          string         `json:"price"`
 			LeavesQuantity string         `json:"leavesQuantity"`
@@ -512,6 +472,14 @@ func handleApplyExecutionReport(svc Service) http.HandlerFunc {
 			OrderStatus:    status,
 			Force:          req.Force,
 		}
+		if req.ID != "" {
+			reportID, err := domain.ParseExternalID(req.ID)
+			if err != nil {
+				httpx.WriteErr(w, err)
+				return
+			}
+			in.ExternalID = reportID
+		}
 		if _, err := domain.ExecutionReportRequiresEngine(in); err != nil {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
@@ -528,6 +496,7 @@ func handleApplyExecutionReport(svc Service) http.HandlerFunc {
 			return
 		}
 		httpx.WriteJSON(w, http.StatusCreated, executionReportResponseDTO{
+			ID:               result.ReportID.String(),
 			Result:           toExecutionResultDTO(result),
 			AttestationToken: att.Token,
 			AttestationKeyID: att.KeyID,

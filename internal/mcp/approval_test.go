@@ -496,7 +496,7 @@ func TestConfirmExecutionMissingOrderID(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("want IsError=true for missing orderExternalId")
 	}
-	if got := textContent(res.Content); got != "orderExternalId is required" {
+	if got := textContent(res.Content); got != "id is required" {
 		t.Errorf("unexpected error text: %q", got)
 	}
 }
@@ -559,7 +559,7 @@ func TestCancelMissingOrderID(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("want IsError=true for missing orderExternalId")
 	}
-	if got := textContent(res.Content); got != "orderExternalId is required" {
+	if got := textContent(res.Content); got != "id is required" {
 		t.Errorf("unexpected error text: %q", got)
 	}
 }

@@ -38,6 +38,11 @@
     "invalidNumber": "Введите корректное число.",
     "invalidRange": "Укажите нижнюю границу не выше верхней.",
     "clearAll": "Очистить все фильтры",
+    "globalAccount": {
+      "active": "Не использовать этот счёт как глобальный фильтр по счёту",
+      "inactive": "Использовать этот счёт как глобальный фильтр по всем экранам",
+      "disabled": "Введите счёт, чтобы сделать его глобальным фильтром"
+    },
     "active": "Активные фильтры",
     "advancedActive": "Расширенный фильтр в действии",
     "activeCount_one": "{{count}} фильтр",
@@ -301,11 +306,11 @@
       },
       "orders": {
         "description": "Ордера доступны только для экспорта. Первая строка - заголовок.",
-        "columns": "external_id,at,account_code,source,principal,base_asset,quote_asset,side,amount_kind,amount_value,price,status,display_prices"
+        "columns": "id,at,account_code,source,principal,base_asset,quote_asset,side,amount_kind,amount_value,price,status,display_prices"
       },
       "trades": {
         "description": "Сделки доступны только для экспорта. Первая строка - заголовок.",
-        "columns": "external_id,order_external_id,at,account_code,source,principal,base_asset,quote_asset,side,quantity,price,lock_price,commission_amount,commission_currency"
+        "columns": "id,order_id,at,account_code,source,principal,base_asset,quote_asset,side,quantity,price,lock_price,commission_amount,commission_currency"
       }
     },
     "entities": {

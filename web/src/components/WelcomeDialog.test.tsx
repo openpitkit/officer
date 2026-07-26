@@ -55,7 +55,7 @@ function byoInstance(
   overrides: Partial<MarketDataInstance> = {},
 ): MarketDataInstance {
   return {
-    externalId: "byo-1",
+    id: "byo-1",
     provider: "byo",
     label: "FX (static)",
     credentials: "",
@@ -77,7 +77,7 @@ function binanceInstance(
 ): MarketDataInstance {
   return {
     ...byoInstance({
-      externalId: "binance-1",
+      id: "binance-1",
       provider: "binance",
       label: "Binance spot",
       ...overrides,

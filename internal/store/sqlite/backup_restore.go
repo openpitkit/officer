@@ -693,10 +693,10 @@ func (rt *restoreTx) restoreUserSettings(ctx context.Context, settings []domain.
 
 // --- Restore: activity history ----------------------------------------------
 
-// restoreActivity restores adjustments, orders (with approvals), order events and
-// trades, each preserving its archived external id while resolving cross-row
-// links through the dictionaries inserted earlier. Orders land before their
-// events and trade so the order surrogate id those rows reference exists.
+// restoreActivity restores adjustments, orders (with approvals), order events,
+// execution reports and trades while resolving portable links. Orders land
+// before events, reports land after their events, and report-event links land
+// after both parent rows exist.
 func (rt *restoreTx) restoreActivity(ctx context.Context, data backup.Data) error {
 	for _, adj := range data.Adjustments {
 		if err := rt.restoreAdjustment(ctx, adj); err != nil {
@@ -710,6 +710,16 @@ func (rt *restoreTx) restoreActivity(ctx context.Context, data backup.Data) erro
 	}
 	for _, ev := range data.OrderEvents {
 		if err := rt.restoreOrderEvent(ctx, ev); err != nil {
+			return err
+		}
+	}
+	for _, report := range data.ExecutionReports {
+		if err := rt.restoreExecutionReport(ctx, report); err != nil {
+			return err
+		}
+	}
+	for _, link := range data.ExecutionReportEvents {
+		if err := rt.restoreExecutionReportEvent(ctx, link); err != nil {
 			return err
 		}
 	}
@@ -886,7 +896,18 @@ func (rt *restoreTx) restoreOrderEvent(ctx context.Context, ev domain.OrderEvent
 	if err != nil {
 		return err
 	}
-	if _, err := rt.tx.ExecContext(
+	if exists && rt.mode == backup.RestoreModeOverwrite {
+		if _, err := rt.tx.ExecContext(
+			ctx,
+			`UPDATE order_event
+			 SET order_id = ?, principal_id = ?, at = ?, type_id = ?, source_id = ?, payload = ?
+			 WHERE external_id = ?`,
+			orderID, principalID, atOrNow(ev.At), typeID, sourceID,
+			string(payloadJSON), ev.ExternalID.Bytes(),
+		); err != nil {
+			return fmt.Errorf("store: restore order event %q: %w", ev.ExternalID, err)
+		}
+	} else if _, err := rt.tx.ExecContext(
 		ctx,
 		`INSERT OR REPLACE INTO order_event
 		 (external_id, order_id, principal_id, at, type_id, source_id, payload)
@@ -898,6 +919,139 @@ func (rt *restoreTx) restoreOrderEvent(ctx context.Context, ev domain.OrderEvent
 	}
 	if err := rt.restoreEventAttestation(ctx, ev); err != nil {
 		return err
+	}
+	rt.summary.AddApplied(backup.SectionActivityHistory, 1)
+	return nil
+}
+
+func (rt *restoreTx) restoreExecutionReport(
+	ctx context.Context,
+	report backup.ExecutionReportRecord,
+) error {
+	orderID, err := lookupOrderID(ctx, rt.tx, report.Order)
+	if err != nil {
+		return err
+	}
+	exists, err := rowExists(
+		ctx,
+		rt.tx,
+		`SELECT 1 FROM execution_report WHERE external_id = ?`,
+		report.ExternalID.Bytes(),
+	)
+	if err != nil {
+		return err
+	}
+	if rt.skipMachine(backup.SectionActivityHistory, exists) {
+		return nil
+	}
+	if exists && rt.mode == backup.RestoreModeOverwrite {
+		if _, err := rt.tx.ExecContext(
+			ctx,
+			`UPDATE execution_report SET order_id = ?, at = ? WHERE external_id = ?`,
+			orderID,
+			atOrNow(report.At),
+			report.ExternalID.Bytes(),
+		); err != nil {
+			return fmt.Errorf(
+				"store: restore execution report %q: %w", report.ExternalID, err,
+			)
+		}
+		// A portable report id may collide with a target report attached to a
+		// different order. Keep target-only links only when they still satisfy the
+		// report/event same-order invariant after the overwrite.
+		if _, err := rt.tx.ExecContext(
+			ctx,
+			`DELETE FROM execution_report_event
+			 WHERE report_id = (
+			   SELECT id FROM execution_report WHERE external_id = ?
+			 )
+			 AND event_id IN (
+			   SELECT id FROM order_event WHERE order_id <> ?
+			 )`,
+			report.ExternalID.Bytes(),
+			orderID,
+		); err != nil {
+			return fmt.Errorf(
+				"store: reconcile execution report %q links: %w",
+				report.ExternalID,
+				err,
+			)
+		}
+	} else if _, err := rt.tx.ExecContext(
+		ctx,
+		`INSERT OR REPLACE INTO execution_report (external_id, order_id, at) VALUES (?, ?, ?)`,
+		report.ExternalID.Bytes(),
+		orderID,
+		atOrNow(report.At),
+	); err != nil {
+		return fmt.Errorf(
+			"store: restore execution report %q: %w", report.ExternalID, err,
+		)
+	}
+	rt.summary.AddApplied(backup.SectionActivityHistory, 1)
+	return nil
+}
+
+func (rt *restoreTx) restoreExecutionReportEvent(
+	ctx context.Context,
+	link backup.ExecutionReportEventLink,
+) error {
+	var reportRowID, reportOrderID int64
+	err := rt.tx.QueryRowContext(
+		ctx,
+		`SELECT id, order_id FROM execution_report WHERE external_id = ?`,
+		link.Report.Bytes(),
+	).Scan(&reportRowID, &reportOrderID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("execution report %q: %w", link.Report, domain.ErrNotFound)
+	}
+	if err != nil {
+		return fmt.Errorf("store: resolve execution report %q: %w", link.Report, err)
+	}
+	eventRowID, err := lookupOrderEventID(ctx, rt.tx, link.Event)
+	if err != nil {
+		return err
+	}
+	var eventOrderID int64
+	if err := rt.tx.QueryRowContext(
+		ctx,
+		`SELECT order_id FROM order_event WHERE id = ?`,
+		eventRowID,
+	).Scan(&eventOrderID); err != nil {
+		return fmt.Errorf("store: resolve order for event %q: %w", link.Event, err)
+	}
+	if reportOrderID != eventOrderID {
+		return fmt.Errorf(
+			"execution report %q and event %q belong to different orders: %w",
+			link.Report,
+			link.Event,
+			domain.ErrInvalid,
+		)
+	}
+	exists, err := rowExists(
+		ctx,
+		rt.tx,
+		`SELECT 1 FROM execution_report_event WHERE event_id = ?`,
+		eventRowID,
+	)
+	if err != nil {
+		return err
+	}
+	if rt.skipMachine(backup.SectionActivityHistory, exists) {
+		return nil
+	}
+	if _, err := rt.tx.ExecContext(
+		ctx,
+		`INSERT OR REPLACE INTO execution_report_event (report_id, event_id) VALUES (?, ?)`,
+		reportRowID,
+		eventRowID,
+	); err != nil {
+		return fmt.Errorf(
+			"store: restore execution report %q event %q: %w",
+			link.Report,
+			link.Event,
+			err,
+		)
 	}
 	rt.summary.AddApplied(backup.SectionActivityHistory, 1)
 	return nil

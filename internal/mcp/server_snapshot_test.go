@@ -19,7 +19,9 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -81,7 +83,7 @@ func TestServerToolSnapshot(t *testing.T) {
 		},
 		{
 			name: "get_order",
-			description: "Return one order addressed by its external id: its " +
+			description: "Return one order addressed by its id: its " +
 				"status, its 1:1 signed approval (when issued), and its fills with " +
 				"their display prices. Read-only - no secrets, no order-flow control. " +
 				"The opaque pre-trade lock is never exposed; only backend-derived " +
@@ -145,6 +147,31 @@ func TestServerToolSnapshot(t *testing.T) {
 		}
 		if got.InputSchema == nil || got.OutputSchema == nil {
 			t.Fatalf("tool %s must advertise input and output schemas", w.name)
+		}
+	}
+	for _, name := range []string{
+		"get_order", "submit_order", "confirm_execution", "cancel",
+		"set_market_data_instrument",
+	} {
+		tool := gotByName[name]
+		for schemaName, schema := range map[string]any{
+			"input": tool.InputSchema, "output": tool.OutputSchema,
+		} {
+			raw, err := json.Marshal(schema)
+			if err != nil {
+				t.Fatalf("marshal %s %s schema: %v", name, schemaName, err)
+			}
+			wire := string(raw)
+			if !strings.Contains(wire, `"id"`) {
+				t.Errorf("%s %s schema has no id: %s", name, schemaName, wire)
+			}
+			for _, alias := range []string{
+				"externalId", "orderExternalId", "instanceExternalId",
+			} {
+				if strings.Contains(wire, alias) {
+					t.Errorf("%s %s schema exposes %s: %s", name, schemaName, alias, wire)
+				}
+			}
 		}
 	}
 }

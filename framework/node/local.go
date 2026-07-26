@@ -87,6 +87,7 @@ type localNode struct {
 	fatal                func(error)
 
 	mutate     sync.Mutex
+	reportMu   sync.Mutex
 	laneGate   sync.RWMutex
 	restarting atomic.Bool
 }

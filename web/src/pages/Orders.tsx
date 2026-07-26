@@ -84,6 +84,7 @@ import {
 } from "@/lib/orderStatus";
 import { formatDateTime } from "@/i18n/format";
 import { DEFAULT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from "@/lib/useDebounce";
+import { useGlobalAccountFilter } from "@/lib/globalAccountFilter";
 import {
   isDecimalRangeValid,
   isNonNegativeDecimalString,
@@ -673,7 +674,7 @@ function SubmitOrderDialog({
       onCreated();
       reset();
       onClose();
-      onOpenDetail(result.order.externalId, result.warning);
+      onOpenDetail(result.order.id, result.warning);
     } catch (err) {
       if (controller.signal.aborted) {
         return;
@@ -1184,6 +1185,7 @@ function ExecReportDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  const [reportId, setReportId] = useState("");
   const [blocks, setBlocks] = useState<ExecutionBlock[]>([]);
   const [commissionCurrencySuggestions, setCommissionCurrencySuggestions] =
     useState<string[]>([]);
@@ -1273,6 +1275,7 @@ function ExecReportDialog({
       setBusy(false);
       setError(null);
       setDone(false);
+      setReportId("");
       setBlocks([]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1291,6 +1294,7 @@ function ExecReportDialog({
     setBusy(false);
     setError(null);
     setDone(false);
+    setReportId("");
     setBlocks([]);
   }
 
@@ -1398,6 +1402,7 @@ function ExecReportDialog({
       }
       const result = await submitExecutionReport(orderExternalId, body);
       setBlocks(result.blocks);
+      setReportId(result.id);
       setDone(true);
       onSubmitted({ orderExternalId });
     } catch (err) {
@@ -1426,6 +1431,16 @@ function ExecReportDialog({
         {done ? (
           <div className="space-y-3">
             <p className="text-xs text-[var(--ok)]">{t("execReport.dialog.accepted")}</p>
+            <div className="rounded-card border border-border bg-surface-2 px-3 py-2 text-xs">
+              <span className="text-muted-lt">{t("execReport.dialog.reportId")}</span>
+              <div className="mt-0.5">
+                <IdCell
+                  value={reportId}
+                  copyTitle={t("common:rowActions.copyId")}
+                  copiedTitle={t("common:rowActions.copiedId")}
+                />
+              </div>
+            </div>
             {blocks.length > 0 && (
               <div className="space-y-1 rounded-card border border-[var(--danger)] bg-[var(--danger-dim)] px-3 py-2 text-xs">
                 {blocks.map((block, i) => (
@@ -1870,7 +1885,7 @@ function OrderDetailDialog({ orderExternalId, refreshKey, onClose, onExecReport,
                 <span className="text-muted-lt">{t("table.externalId")}</span>
                 <div className="mt-0.5">
                   <IdCell
-                    value={state.order.externalId}
+                    value={state.order.id}
                     copyTitle={t("common:rowActions.copyId")}
                     copiedTitle={t("common:rowActions.copiedId")}
                   />
@@ -1937,7 +1952,7 @@ function OrderDetailDialog({ orderExternalId, refreshKey, onClose, onExecReport,
                     const blockReason = accountBlockReason(ev);
                     return (
                       <li
-                        key={ev.externalId}
+                        key={ev.id}
                         className="flex gap-3 rounded-card border border-border bg-surface-2 p-2.5 text-xs"
                       >
                       <div className="w-32 shrink-0">
@@ -2017,7 +2032,7 @@ function OrderDetailDialog({ orderExternalId, refreshKey, onClose, onExecReport,
                           type="button"
                           className={cn(
                             "shrink-0 self-start rounded-badge p-1 text-muted-lt transition-colors duration-[180ms] hover:text-accent focus-visible:text-accent",
-                            verifyEventId === ev.externalId && "text-accent",
+                            verifyEventId === ev.id && "text-accent",
                           )}
                           aria-label={
                             ev.signed
@@ -2029,7 +2044,7 @@ function OrderDetailDialog({ orderExternalId, refreshKey, onClose, onExecReport,
                               ? t("detail.dialog.timeline.verifySigned")
                               : t("detail.dialog.timeline.verifyUnsigned")
                           }
-                          onClick={() => setVerifyEventId(ev.externalId)}
+                          onClick={() => setVerifyEventId(ev.id)}
                         >
                           <KeyRound
                             className={cn(
@@ -2155,12 +2170,12 @@ function OrderDetailDialog({ orderExternalId, refreshKey, onClose, onExecReport,
                   <TableBody>
                     {state.trades.map((trade) => (
                       <TableRow
-                        key={trade.externalId}
+                        key={trade.id}
                         className="hover:bg-transparent"
                       >
                         <TableCell className="nums text-xs text-muted-lt">
                           <IdCell
-                            value={trade.externalId}
+                            value={trade.id}
                             copyTitle={t("common:rowActions.copyId")}
                             copiedTitle={t("common:rowActions.copiedId")}
                           />
@@ -2187,7 +2202,7 @@ function OrderDetailDialog({ orderExternalId, refreshKey, onClose, onExecReport,
                           <RowActions>
                             <CloneButton
                               title={t("clone.execReportAriaLabel", {
-                                tradeId: trade.externalId,
+                                tradeId: trade.id,
                               })}
                               onClick={() =>
                                 onCloneExecReport(orderExternalId, {
@@ -2486,7 +2501,7 @@ function OrdersTable({
         <TableBody>
 	          {orders.map((order, index) => (
 	            <TableRow
-	              key={order.externalId}
+	              key={order.id}
 	              ref={(node) => {
 	                rowRefs.current[index] = node;
 	              }}
@@ -2502,7 +2517,7 @@ function OrdersTable({
               <TableCell className="text-muted-lt">
                 <div className="flex min-w-0 items-center gap-1">
                   <IdCell
-                    value={order.externalId}
+                    value={order.id}
                     copyTitle={t("common:rowActions.copyId")}
                     copiedTitle={t("common:rowActions.copiedId")}
                   />
@@ -2594,14 +2609,14 @@ function OrdersTable({
                 <RowActions>
                   <ViewEntityButton
                     title={tc("rowActions.viewTitle", {
-                      entity: order.externalId,
+                      entity: order.id,
                     })}
-                    href={ordersFilterHref({ order: order.externalId })}
+                    href={ordersFilterHref({ order: order.id })}
                     onClick={() => onRowClick(order)}
                   />
                   <CloneButton
                     title={t("clone.orderAriaLabel", {
-                      orderExternalId: order.externalId,
+                      orderExternalId: order.id,
                     })}
                     onClick={() =>
                       onClone({
@@ -2792,7 +2807,7 @@ function TradesTable({
         <TableBody>
 	          {trades.map((trade, index) => (
 	            <TableRow
-	              key={trade.externalId}
+	              key={trade.id}
 	              ref={(node) => {
 	                rowRefs.current[index] = node;
 	              }}
@@ -2806,7 +2821,7 @@ function TradesTable({
 	            >
               <TableCell className="text-muted-lt">
                 <IdCell
-                  value={trade.externalId}
+                  value={trade.id}
                   copyTitle={t("common:rowActions.copyId")}
                   copiedTitle={t("common:rowActions.copiedId")}
                 />
@@ -2899,7 +2914,7 @@ function TradesTable({
                 <RowActions>
                   <CloneButton
                     title={t("clone.execReportAriaLabel", {
-                      tradeId: trade.externalId,
+                      tradeId: trade.id,
                     })}
                     onClick={() =>
                       onCloneExecReport(trade.order, {
@@ -3323,17 +3338,19 @@ export function Orders() {
   const openedTradeExternalIdRef = useRef<string | null>(null);
 
   const [params] = useSearchParams();
+  const globalAccountFilter = useGlobalAccountFilter();
   // A deep link from the Assets screen lands on the trades tab when asked
   // (?tab=trades) and seeds the matching base-asset filter on both tabs.
   const [tab, setTab] = useState<TabId>(
     params.get("tab") === "trades" ? "trades" : "orders",
   );
   const initialBaseAsset = params.get("baseAsset") ?? "";
+  const initialAccount = globalAccountFilter.account || params.get("account") || "";
 
   // Filter state — seeded from URL on mount
-  const [orderAccount, setOrderAccount] = useState(params.get("account") ?? "");
+  const [orderAccount, setOrderAccount] = useState(initialAccount);
   const [orderAccountDraft, setOrderAccountDraft] = useState(
-    params.get("account") ?? "",
+    initialAccount,
   );
   const [orderSource, setOrderSource] = useState(params.get("source") ?? "");
   const [orderSide, setOrderSide] = useState<"all" | OrderSide>(
@@ -3382,15 +3399,15 @@ export function Orders() {
     order?: SortOrder;
   }>({ sort: "at", order: "desc" });
 
-  const [tradeAccount, setTradeAccount] = useState(params.get("account") ?? "");
+  const [tradeAccount, setTradeAccount] = useState(initialAccount);
   const [tradeAccountDraft, setTradeAccountDraft] = useState(
-    params.get("account") ?? "",
+    initialAccount,
   );
   const [tradeExternalId, setTradeExternalId] = useState(
-    params.get("id") ?? params.get("externalId") ?? "",
+    params.get("id") ?? "",
   );
   const [appliedTradeExternalId, setAppliedTradeExternalId] = useState(
-    params.get("id") ?? params.get("externalId") ?? "",
+    params.get("id") ?? "",
   );
   const [tradeSource, setTradeSource] = useState(params.get("source") ?? "");
   const [tradeSide, setTradeSide] = useState<"all" | OrderSide>(
@@ -3557,6 +3574,22 @@ export function Orders() {
   function resetTradePage() {
     setTradePage(0);
   }
+
+  useEffect(() => {
+    const account = globalAccountFilter.account;
+    if (account === "") {
+      return;
+    }
+    // Mirror the external global-account store into both page-local account
+    // filters so tab switches keep the global account applied.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setOrderAccount(account);
+    setOrderAccountDraft(account);
+    setTradeAccount(account);
+    setTradeAccountDraft(account);
+    setOrderPage(0);
+    resetTradePage();
+  }, [globalAccountFilter.account]);
 
   function syncAdvancedDrafts() {
     setOrderStatusesDraft(
@@ -3744,6 +3777,32 @@ export function Orders() {
     resetTradePage();
   }
 
+  function accountGlobalToggle(
+    value: string,
+    applyAccount: (account: string) => void,
+  ) {
+    const nextAccount = value.trim();
+    return {
+      active:
+        nextAccount !== "" && nextAccount === globalAccountFilter.account,
+      disabled: nextAccount === "",
+      activeLabel: tc("filters.globalAccount.active"),
+      inactiveLabel: tc("filters.globalAccount.inactive"),
+      disabledLabel: tc("filters.globalAccount.disabled"),
+      onToggle: () => {
+        if (nextAccount === "") {
+          return;
+        }
+        if (globalAccountFilter.account === nextAccount) {
+          globalAccountFilter.clear();
+          return;
+        }
+        globalAccountFilter.setAccount(nextAccount);
+        applyAccount(nextAccount);
+      },
+    };
+  }
+
   function applyOrderIdentityFiltersOnEnter(
     event: KeyboardEvent<HTMLInputElement>,
   ) {
@@ -3827,7 +3886,7 @@ export function Orders() {
   const ordersResult = useOrdersPage(orderListFilters);
   const tradeListFilters = useMemo<TradesFilter>(() => {
     const filter: TradesFilter = {
-      externalId: appliedTradeExternalId.trim() || undefined,
+      id: appliedTradeExternalId.trim() || undefined,
       account: tradeAccount.trim() || undefined,
       source: normalizedTradeSource,
       limit: tradeSize,
@@ -4030,10 +4089,10 @@ export function Orders() {
   >({});
 
   const rememberWorkflowToken = useCallback((token: ApprovalToken) => {
-    if (token.token === "" || token.orderExternalId === "") {
+    if (token.token === "" || token.id === "") {
       return;
     }
-    setWorkflowOrderTokens((prev) => ({ ...prev, [token.orderExternalId]: token }));
+    setWorkflowOrderTokens((prev) => ({ ...prev, [token.id]: token }));
   }, []);
 
   const forgetWorkflowToken = useCallback((orderExternalId: string) => {
@@ -4103,7 +4162,7 @@ export function Orders() {
     if (openedTradeExternalIdRef.current === externalId) {
       return;
     }
-    const trade = tradeRows.find((row) => row.externalId === externalId);
+    const trade = tradeRows.find((row) => row.id === externalId);
     if (trade === undefined) {
       return;
     }
@@ -4153,13 +4212,16 @@ export function Orders() {
   // When the active tab is filtered to a single account, opening "Add order"
   // pre-fills that account; with no account filter, the form opens blank.
   const activeAccountFilter = (tab === "orders" ? orderAccount : tradeAccount).trim();
+  const activeAccountGlobalLocked =
+    globalAccountFilter.account !== "" &&
+    activeAccountFilter === globalAccountFilter.account;
   const activeSourceFilter =
     tab === "orders" ? normalizedOrderSource : normalizedTradeSource;
   const activeExportFilters = {
 	    ...(activeAccountFilter ? { account: activeAccountFilter } : {}),
 	    ...(activeSourceFilter ? { source: activeSourceFilter } : {}),
 	    ...(tab === "trades" && appliedTradeExternalId.trim()
-	      ? { externalId: appliedTradeExternalId.trim() }
+	      ? { id: appliedTradeExternalId.trim() }
 	      : {}),
 	  };
 
@@ -4285,6 +4347,9 @@ export function Orders() {
     if (tab === "orders") {
       if (orderAccount.trim() !== "") {
         add("account", `${t("table.account")}: ${orderAccount.trim()}`, () => {
+          if (orderAccount.trim() === globalAccountFilter.account) {
+            globalAccountFilter.clear();
+          }
           setOrderAccountDraft("");
           setOrderAccount("");
           setOrderPage(0);
@@ -4363,6 +4428,9 @@ export function Orders() {
     }
     if (tradeAccount.trim() !== "") {
       add("account", `${t("table.account")}: ${tradeAccount.trim()}`, () => {
+        if (tradeAccount.trim() === globalAccountFilter.account) {
+          globalAccountFilter.clear();
+        }
         setTradeAccountDraft("");
         setTradeAccount("");
         resetTradePage();
@@ -4475,6 +4543,7 @@ export function Orders() {
     tradeQuoteAsset,
     tradeSide,
     timeRangeValue,
+    globalAccountFilter,
   ]);
 
   const visibleFilterChips = useMemo(
@@ -4492,6 +4561,9 @@ export function Orders() {
   const advancedFilterCount = visibleFilterChips.length;
   const clearActiveFilters = () => {
     for (const entry of activeFilterChips) {
+      if (entry.key === "account" && activeAccountGlobalLocked) {
+        continue;
+      }
       entry.onRemove();
     }
   };
@@ -4557,7 +4629,7 @@ export function Orders() {
     try {
       const detail = await fetchOrderDetail(externalId);
       setLookupNotFoundOpen(false);
-      openDetail(detail.order.externalId);
+      openDetail(detail.order.id);
     } catch {
       setLookupNotFoundOpen(true);
     } finally {
@@ -4764,17 +4836,36 @@ export function Orders() {
                 value={orderAccountDraft}
                 placeholder={t("filter.accountPlaceholder")}
                 suggestions={visibleAccountSuggestions}
-                onChange={setOrderAccountDraft}
+                onChange={(value) => {
+                  if (
+                    orderAccount.trim() === globalAccountFilter.account &&
+                    value.trim() === ""
+                  ) {
+                    globalAccountFilter.clear();
+                  }
+                  setOrderAccountDraft(value);
+                }}
                 onSuggestionSelect={(value) =>
                   applyOrderIdentityField("account", value)
                 }
                 onKeyDown={applyOrderIdentityFiltersOnEnter}
                 onClear={() => {
+                  if (orderAccount.trim() === globalAccountFilter.account) {
+                    globalAccountFilter.clear();
+                  }
                   setOrderAccountDraft("");
                   setOrderAccount("");
                   setOrderPage(0);
                 }}
                 clearLabel={tc("filters.clearField")}
+                globalToggle={accountGlobalToggle(
+                  orderAccountDraft,
+                  (account) => {
+                    setOrderAccountDraft(account);
+                    setOrderAccount(account);
+                    setOrderPage(0);
+                  },
+                )}
               />
               <AutocompleteFilterField
                 label={t("filter.baseAssetLabel")}
@@ -4886,17 +4977,36 @@ export function Orders() {
                 value={tradeAccountDraft}
                 placeholder={t("filter.accountPlaceholder")}
                 suggestions={visibleAccountSuggestions}
-                onChange={setTradeAccountDraft}
+                onChange={(value) => {
+                  if (
+                    tradeAccount.trim() === globalAccountFilter.account &&
+                    value.trim() === ""
+                  ) {
+                    globalAccountFilter.clear();
+                  }
+                  setTradeAccountDraft(value);
+                }}
                 onSuggestionSelect={(value) =>
                   applyTradeIdentityField("account", value)
                 }
                 onKeyDown={applyTradeIdentityFiltersOnEnter}
                 onClear={() => {
+                  if (tradeAccount.trim() === globalAccountFilter.account) {
+                    globalAccountFilter.clear();
+                  }
                   setTradeAccountDraft("");
                   setTradeAccount("");
                   resetTradePage();
                 }}
                 clearLabel={tc("filters.clearField")}
+                globalToggle={accountGlobalToggle(
+                  tradeAccountDraft,
+                  (account) => {
+                    setTradeAccountDraft(account);
+                    setTradeAccount(account);
+                    resetTradePage();
+                  },
+                )}
               />
               <AutocompleteFilterField
                 label={t("filter.baseAssetLabel")}
@@ -5294,7 +5404,7 @@ export function Orders() {
                     setOrderSort(order === "none" ? {} : { sort, order });
                     setOrderPage(0);
                   }}
-                  onRowClick={(o) => openDetail(o.externalId)}
+                  onRowClick={(o) => openDetail(o.id)}
                   onFilterAccount={filterOrdersAccount}
                   onFilterInstrument={filterOrdersInstrument}
                   onClone={openCloneOrder}

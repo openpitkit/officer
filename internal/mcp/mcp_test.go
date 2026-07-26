@@ -281,13 +281,10 @@ func mustExternalID(t *testing.T, s string) domain.ExternalID {
 }
 
 // noSurrogateIDFields are JSON keys that would betray a leaked surrogate or
-// engine id on the MCP wire. The identity model forbids every one of them: only
-// dictionary codes/titles and opaque external ids may appear. structuredContent
-// is asserted against this set so a regression that reintroduces a numeric id is
-// caught at the surface, not in review.
+// engine id on the MCP wire. Public `id` fields are opaque caller-visible ids;
+// structuredContent is checked here only for explicitly internal identifiers.
 var noSurrogateIDFields = []string{
-	`"id":`, `"orderId":`, `"engineId":`, `"engineAccountId":`,
-	`"surrogate":`, `"rowId":`,
+	`"engineId":`, `"engineAccountId":`, `"surrogate":`, `"rowId":`,
 }
 
 // assertNoSurrogateID marshals v to JSON and fails if it carries any forbidden
@@ -787,7 +784,9 @@ func TestGetOrderHappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal output: %v", err)
 	}
-	for _, banned := range []string{`"lock"`, `"Lock"`, "AQIDBA"} {
+	for _, banned := range []string{
+		`"lock"`, `"Lock"`, "AQIDBA", `"externalId"`, `"orderExternalId"`,
+	} {
 		if strings.Contains(string(raw), banned) {
 			t.Errorf("opaque lock leaked into MCP output (%q): %s", banned, raw)
 		}
@@ -871,7 +870,7 @@ func TestGetOrderUnsigned(t *testing.T) {
 func TestGetOrderMissingID(t *testing.T) {
 	res := callGetOrder(t, &fakeSource{}, "   ")
 	requireToolError(t, res.IsError)
-	if got := textContent(res.Content); got != "orderExternalId is required" {
+	if got := textContent(res.Content); got != "id is required" {
 		t.Errorf("unexpected error text: %q", got)
 	}
 }

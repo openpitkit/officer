@@ -1018,7 +1018,7 @@ describe("append-only list clients", () => {
         jsonResponse({
           adjustments: [
             {
-              externalId: "adj-1",
+              id: "adj-1",
               account: "desk-alpha",
               at: "2026-06-24T00:00:00Z",
               source: "panel",
@@ -1040,7 +1040,7 @@ describe("append-only list clients", () => {
         jsonResponse({
           trades: [
             {
-              externalId: "trd-1",
+              id: "trd-1",
               order: "ord-1",
               account: "desk-alpha",
               at: "2026-06-24T00:00:00Z",
@@ -1052,6 +1052,10 @@ describe("append-only list clients", () => {
               price: "100",
               lockPrice: "99",
             },
+            {
+              id: "trd-legacy-order-alias",
+              orderExternalId: "ord-legacy",
+            },
           ],
           total: 4,
         }),
@@ -1060,7 +1064,7 @@ describe("append-only list clients", () => {
         jsonResponse({
           entries: [
             {
-              externalId: "aud-1",
+              id: "aud-1",
               at: "2026-06-24T00:00:00Z",
               actor: "operator",
               actorTitle: "Operator",
@@ -1076,7 +1080,7 @@ describe("append-only list clients", () => {
       );
 
     const adjustments = await officerApi.fetchAdjustmentsPage({
-      externalId: "adj-1",
+      id: "adj-1",
       account: "desk-alpha",
       accountMatch: "contains",
       asset: "USD",
@@ -1091,7 +1095,7 @@ describe("append-only list clients", () => {
       limit: 50,
     });
     const trades = await officerApi.fetchTradesPage({
-      externalId: "trd-1",
+      id: "trd-1",
       account: "desk-alpha",
       baseAsset: "AAP",
       quoteAsset: "USD",
@@ -1112,7 +1116,7 @@ describe("append-only list clients", () => {
       limit: 25,
     });
     const audit = await officerApi.fetchAuditPage({
-      externalId: "aud-1",
+      id: "aud-1",
       account: "desk-alpha",
       accountMatch: "contains",
       actor: "operator",
@@ -1130,7 +1134,7 @@ describe("append-only list clients", () => {
       total: 3,
       items: [
         {
-          externalId: "adj-1",
+          id: "adj-1",
           accepted: {
             realizedPnlResult: { delta: "-12.50", result: "-12.50" },
             realizedPnlHaltReason: "arithmetic_overflow",
@@ -1140,11 +1144,14 @@ describe("append-only list clients", () => {
     });
     expect(trades).toMatchObject({
       total: 4,
-      items: [{ externalId: "trd-1" }],
+      items: [
+        { id: "trd-1" },
+        { id: "trd-legacy-order-alias", order: "" },
+      ],
     });
     expect(audit).toMatchObject({
       total: 5,
-      items: [{ externalId: "aud-1" }],
+      items: [{ id: "aud-1" }],
     });
 
     const adjustmentUrl = new URL(
@@ -1425,7 +1432,7 @@ describe("market-data client settings payloads", () => {
           providers: [],
           instances: [
             {
-              externalId: "ib-1",
+              id: "ib-1",
               provider: "ib",
               label: "IB Gateway",
               enabled: true,
@@ -1454,7 +1461,7 @@ describe("market-data client settings payloads", () => {
     vi.mocked(fetch).mockResolvedValue(
       jsonResponse({
         instance: {
-          externalId: "md-created",
+          id: "md-created",
           provider: "ib",
           label: "IB Gateway",
           credentials: "",
@@ -1491,7 +1498,7 @@ describe("market-data client settings payloads", () => {
         }),
       }),
     );
-    expect(instance.externalId).toBe("md-created");
+    expect(instance.id).toBe("md-created");
   });
 
   it("sends blank secret placeholders on settings update", async () => {
@@ -1971,7 +1978,7 @@ describe("event reproduction client", () => {
       jsonResponse({
         requestType: "submit",
         event: {
-          externalId: "evt-1",
+          id: "evt-1",
           order: "ord-1",
           at: "2026-06-24T00:00:00Z",
           type: "submitted",
@@ -1990,7 +1997,7 @@ describe("event reproduction client", () => {
         },
         request: {
           requestType: "submit",
-          orderExternalId: "ord-1",
+          orderId: "ord-1",
           instrument: "AAPL/USD",
           side: "buy",
           quantity: "10",
@@ -2005,7 +2012,7 @@ describe("event reproduction client", () => {
           submitResponse: {
             token: "tok-verbatim",
             keyId: "key-1",
-            orderExternalId: "ord-1",
+            id: "ord-1",
             verdict: "reject",
             reasons: [
               {
@@ -2053,6 +2060,8 @@ describe("event reproduction client", () => {
     expect(result.canonicalApproval).toBe('{"version":1,"side":"buy"}');
     expect(result.signature).toBe("sig-base64");
     expect(result.publicKey?.keyId).toBe("key-1");
+    expect(result.event.id).toBe("evt-1");
+    expect(result.event.order).toBe("ord-1");
     expect(result.event.signed).toBe(true);
     expect(result.eSign).toEqual({
       alg: "ed25519",
@@ -2061,12 +2070,28 @@ describe("event reproduction client", () => {
     });
   });
 
+  it("fetchEventReproduction ignores legacy order aliases", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      jsonResponse({
+        event: {
+          id: "evt-legacy-order-alias",
+          orderExternalId: "ord-legacy",
+        },
+      }),
+    );
+
+    const result = await fetchEventReproduction("ord-1", "evt-legacy-order-alias");
+
+    expect(result.event.id).toBe("evt-legacy-order-alias");
+    expect(result.event.order).toBe("");
+  });
+
   it("fetchEventReproduction normalizes an execution-report facet with its verbatim token", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(
       jsonResponse({
         requestType: "execution_report",
         event: {
-          externalId: "evt-fill",
+          id: "evt-fill",
           order: "ord-1",
           at: "2026-06-24T00:01:00Z",
           type: "fill",
@@ -2090,8 +2115,8 @@ describe("event reproduction client", () => {
         },
         request: {
           requestType: "execution_report",
-          orderExternalId: "ord-1",
-          eventExternalId: "evt-fill",
+          orderId: "ord-1",
+          eventId: "evt-fill",
           accountId: "acc-1",
           executionReport: {
             baseAsset: "AAPL",
@@ -2227,7 +2252,7 @@ describe("event reproduction client", () => {
     vi.mocked(fetch).mockResolvedValueOnce(
       jsonResponse({
         requestType: "",
-        event: { externalId: "evt-bare", signed: false },
+        event: { id: "evt-bare", signed: false },
         attestation: null,
         request: null,
         response: null,
@@ -2336,7 +2361,7 @@ describe("Orders createOrder submit lifecycle", () => {
       JSON.stringify({
         token: "approval-token",
         keyId: "key-1",
-        orderExternalId,
+        id: orderExternalId,
         verdict: "accept",
       }),
       { status: 201, headers: { "Content-Type": "application/json" } },
@@ -2351,7 +2376,7 @@ describe("Orders createOrder submit lifecycle", () => {
         approval: {
           token: "approval-token",
           keyId: "key-1",
-          orderExternalId,
+          id: orderExternalId,
           verdict: "accept",
         },
       }),
@@ -2363,7 +2388,7 @@ describe("Orders createOrder submit lifecycle", () => {
     return new Response(
       JSON.stringify({
         order: {
-          externalId: orderExternalId,
+          id: orderExternalId,
           account: "desk-alpha",
           at: "2026-01-01T00:00:00Z",
           source: "panel",
@@ -2398,7 +2423,7 @@ describe("Orders createOrder submit lifecycle", () => {
     expect(result.approval).toMatchObject({
       token: "approval-token",
       keyId: "key-1",
-      orderExternalId: "ord_alpha_0000000001",
+      id: "ord_alpha_0000000001",
       verdict: "accept",
       reasons: [],
     });
@@ -2423,14 +2448,14 @@ describe("Orders createOrder submit lifecycle", () => {
     );
   });
 
-  it("sends caller-supplied externalId and hold mode", async () => {
+  it("sends caller-supplied id and hold mode", async () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce(approvalResponse("ord_supplied_000001"))
       .mockResolvedValueOnce(orderResponse("ord_supplied_000001"));
     const controller = new AbortController();
     const { createOrder } = api();
     await createOrder({
-      externalId: "ord_supplied_000001",
+      id: "ord_supplied_000001",
       account: "desk-alpha",
       baseAsset: "AAPL",
       quoteAsset: "USD",
@@ -2444,6 +2469,7 @@ describe("Orders createOrder submit lifecycle", () => {
       "/app/api/v1/orders/submit",
       expect.objectContaining({
         body: JSON.stringify({
+          id: "ord_supplied_000001",
           account: "desk-alpha",
           baseAsset: "AAPL",
           quoteAsset: "USD",
@@ -2451,7 +2477,6 @@ describe("Orders createOrder submit lifecycle", () => {
           amountKind: "quantity",
           amountValue: "100",
           mode: "hold",
-          id: "ord_supplied_000001",
         }),
         signal: controller.signal,
       }),
@@ -2478,7 +2503,7 @@ describe("Orders createOrder submit lifecycle", () => {
       amountKind: "quantity",
       amountValue: "100",
     });
-    expect(result.order.externalId).toBe("ord_wrapped_0000001");
+    expect(result.order.id).toBe("ord_wrapped_0000001");
     expect(fetch).toHaveBeenNthCalledWith(
       2,
       "/app/api/v1/orders/ord_wrapped_0000001",
@@ -2491,11 +2516,11 @@ describe("Orders createOrder submit lifecycle", () => {
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify({
-            order: { externalId: "ord_rejected_0000001" },
+            order: { id: "ord_rejected_0000001" },
             submitResponse: {
               token: "reject-token",
               keyId: "key-1",
-              orderExternalId: "ord_rejected_0000001",
+              id: "ord_rejected_0000001",
               verdict: "reject",
               reasons: [
                 {
@@ -2524,7 +2549,7 @@ describe("Orders createOrder submit lifecycle", () => {
     expect(result.approval).toEqual({
       token: "reject-token",
       keyId: "key-1",
-      orderExternalId: "ord_rejected_0000001",
+      id: "ord_rejected_0000001",
       verdict: "reject",
       reasons: [
         {
@@ -2543,11 +2568,11 @@ describe("Orders createOrder submit lifecycle", () => {
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify({
-            order: { externalId: "ord_legacy_0000001" },
+            order: { id: "ord_legacy_0000001" },
             submitResponse: {
               token: "legacy-token",
               keyId: "key-1",
-              orderExternalId: "ord_legacy_0000001",
+              id: "ord_legacy_0000001",
               verdict: "",
             },
           }),
@@ -2575,7 +2600,7 @@ describe("Orders createOrder submit lifecycle", () => {
         new Response(
           JSON.stringify({
             order: {
-              externalId: "ord_alpha_0000000001",
+              id: "ord_alpha_0000000001",
               account: "desk-alpha",
               at: "2026-01-01T00:00:00Z",
               source: "panel",
@@ -2626,7 +2651,7 @@ describe("Orders createOrder submit lifecycle", () => {
     });
 
     expect(result.order).toMatchObject({
-      externalId: "ord_alpha_0000000001",
+      id: "ord_alpha_0000000001",
       account: "desk-alpha",
       baseAsset: "AAPL",
       quoteAsset: "USD",
@@ -2646,7 +2671,7 @@ describe("Orders createOrder submit lifecycle", () => {
       jsonResponse({
         orders: [
           {
-            externalId: "ord_alpha_0000000001",
+            id: "ord_alpha_0000000001",
             account: "desk-alpha",
             at: "2026-01-01T00:00:00Z",
             source: "panel",
@@ -2674,6 +2699,7 @@ describe("Orders submitExecutionReport", () => {
   it("surfaces blocks, per-asset outcomes, and the attestation", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(
       jsonResponse({
+        id: "evt-report-1",
         result: {
           blocks: [
             {
@@ -2762,6 +2788,7 @@ describe("Orders submitExecutionReport", () => {
       },
     ]);
     expect(result.attestationToken).toBe("tok-report");
+    expect(result.id).toBe("evt-report-1");
     expect(result.attestationKeyId).toBe("key-7");
     expect(result.signed).toBe(true);
   });
@@ -2772,7 +2799,7 @@ describe("Orders confirmOrder and cancelOrder", () => {
     return new Response(
       JSON.stringify({
         order: {
-          externalId: "ord_alpha_0000000001",
+          id: "ord_alpha_0000000001",
           account: "desk-alpha",
           at: "2026-01-01T00:00:00Z",
           source: "panel",
@@ -2809,7 +2836,7 @@ describe("Orders confirmOrder and cancelOrder", () => {
       }),
     );
     expect(result.order).toMatchObject({
-      externalId: "ord_alpha_0000000001",
+      id: "ord_alpha_0000000001",
       leavesQuantity: "0",
       price: "150.25",
       status: "filled",
@@ -2838,7 +2865,7 @@ describe("Orders confirmOrder and cancelOrder", () => {
       }),
     );
     expect(result.order).toMatchObject({
-      externalId: "ord_alpha_0000000001",
+      id: "ord_alpha_0000000001",
       leavesQuantity: "0",
       price: "150.25",
       status: "filled",

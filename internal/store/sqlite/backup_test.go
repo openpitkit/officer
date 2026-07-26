@@ -507,6 +507,413 @@ func TestBackupRoundTripIntoIsolatedRealm(t *testing.T) {
 	}
 }
 
+func TestBackupRoundTripPreservesExecutionReportIdentityAndEventLinks(t *testing.T) {
+	ctx := context.Background()
+	_, src := newRealmStore(t, domain.DefaultRealm)
+	seedRealm(t, ctx, src)
+	order, err := src.CreateOrder(ctx, domain.Order{
+		Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
+		Principal: "operator", Source: domain.SourceAPI, Side: domain.OrderSideBuy,
+		AmountKind: domain.OrderAmountKindQuantity, AmountValue: "2",
+		Price: "151", Status: domain.OrderStatusSubmitted,
+	})
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+	reportID := domain.ExternalID("backup-report-1")
+	if _, err := src.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		ReportID:    &reportID,
+		Order:       order.ExternalID,
+		Account:     order.Account,
+		OrderStatus: domain.OrderStatusPartiallyFilled,
+		Events: []domain.OrderEvent{
+			{Order: order.ExternalID, Type: domain.OrderEventFill, Source: domain.SourceAPI},
+			{Order: order.ExternalID, Type: domain.OrderEventCommitted, Source: domain.SourceAPI},
+		},
+	}); err != nil {
+		t.Fatalf("RecordOrderSettlement: %v", err)
+	}
+
+	archive, err := src.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup: %v", err)
+	}
+	if len(archive.Data.ExecutionReports) != 1 {
+		t.Fatalf("execution reports = %+v, want one", archive.Data.ExecutionReports)
+	}
+	if got := archive.Data.ExecutionReports[0]; got.ExternalID != reportID || got.Order != order.ExternalID {
+		t.Fatalf("execution report = %+v, want id %q order %q", got, reportID, order.ExternalID)
+	}
+	if len(archive.Data.ExecutionReportEvents) != 2 {
+		t.Fatalf("execution report links = %+v, want two", archive.Data.ExecutionReportEvents)
+	}
+	for _, link := range archive.Data.ExecutionReportEvents {
+		if link.Report != reportID || link.Event.IsZero() {
+			t.Fatalf("execution report link = %+v", link)
+		}
+	}
+
+	_, dst := newRealmStore(t, domain.DefaultRealm)
+	if _, err := dst.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+	}); err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	restored, err := dst.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("restored ExportBackup: %v", err)
+	}
+	if len(restored.Data.ExecutionReports) != 1 ||
+		restored.Data.ExecutionReports[0].ExternalID != reportID ||
+		restored.Data.ExecutionReports[0].Order != order.ExternalID {
+		t.Fatalf("restored execution reports = %+v", restored.Data.ExecutionReports)
+	}
+	if len(restored.Data.ExecutionReportEvents) != 2 {
+		t.Fatalf("restored execution report links = %+v", restored.Data.ExecutionReportEvents)
+	}
+	wantEvents := map[domain.ExternalID]bool{}
+	for _, link := range archive.Data.ExecutionReportEvents {
+		wantEvents[link.Event] = true
+	}
+	for _, link := range restored.Data.ExecutionReportEvents {
+		if link.Report != reportID || !wantEvents[link.Event] {
+			t.Fatalf("restored execution report link = %+v", link)
+		}
+	}
+
+	extraReportID := domain.ExternalID("target-only-report")
+	if _, err := dst.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		ReportID:    &extraReportID,
+		Order:       order.ExternalID,
+		Account:     order.Account,
+		OrderStatus: domain.OrderStatusCommitted,
+		Events: []domain.OrderEvent{{
+			Order: order.ExternalID, Type: domain.OrderEventCommitted, Source: domain.SourceAPI,
+		}},
+	}); err != nil {
+		t.Fatalf("RecordOrderSettlement target-only report: %v", err)
+	}
+	if _, err := dst.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+	}); err != nil {
+		t.Fatalf("second RestoreBackup: %v", err)
+	}
+	pruned, err := dst.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("pruned ExportBackup: %v", err)
+	}
+	if len(pruned.Data.ExecutionReports) != 1 ||
+		pruned.Data.ExecutionReports[0].ExternalID != reportID {
+		t.Fatalf("reports after replace_all = %+v", pruned.Data.ExecutionReports)
+	}
+	if len(pruned.Data.ExecutionReportEvents) != 2 {
+		t.Fatalf("report links after replace_all = %+v", pruned.Data.ExecutionReportEvents)
+	}
+}
+
+func TestBackupRestoreOverwritePreservesTargetOnlyExecutionReportLinks(t *testing.T) {
+	ctx := context.Background()
+	_, src := newRealmStore(t, domain.DefaultRealm)
+	orderID := seedRealm(t, ctx, src)
+	order, err := src.GetOrder(ctx, orderID)
+	if err != nil {
+		t.Fatalf("GetOrder source: %v", err)
+	}
+	reportID := domain.ExternalID("overwrite-report")
+	if _, err := src.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		ReportID:    &reportID,
+		Order:       orderID,
+		Account:     order.Order.Account,
+		OrderStatus: domain.OrderStatusFilled,
+		Events: []domain.OrderEvent{{
+			Order: orderID, Type: domain.OrderEventFill, Source: domain.SourceAPI,
+		}},
+	}); err != nil {
+		t.Fatalf("RecordOrderSettlement source: %v", err)
+	}
+	archiveEvent, err := src.AppendOrderEvent(ctx, domain.OrderEvent{
+		Order: orderID, Type: domain.OrderEventCommitted, Source: domain.SourceAPI,
+	})
+	if err != nil {
+		t.Fatalf("AppendOrderEvent source: %v", err)
+	}
+	archive, err := src.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup source: %v", err)
+	}
+
+	_, dst := newRealmStore(t, domain.DefaultRealm)
+	if _, err := dst.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+	}); err != nil {
+		t.Fatalf("RestoreBackup initial: %v", err)
+	}
+	targetEvent, err := dst.AppendOrderEvent(ctx, domain.OrderEvent{
+		Order: orderID, Type: domain.OrderEventCommitted, Source: domain.SourceAPI,
+	})
+	if err != nil {
+		t.Fatalf("AppendOrderEvent target: %v", err)
+	}
+	r := dst.(*realmStore)
+	db, err := r.db()
+	if err != nil {
+		t.Fatalf("db: %v", err)
+	}
+	orderRowID, err := lookupOrderID(ctx, db, orderID)
+	if err != nil {
+		t.Fatalf("lookupOrderID: %v", err)
+	}
+	var reportRowID int64
+	if err := db.QueryRowContext(
+		ctx,
+		`SELECT id FROM execution_report WHERE external_id = ?`,
+		reportID.Bytes(),
+	).Scan(&reportRowID); err != nil {
+		t.Fatalf("resolve archived report: %v", err)
+	}
+	targetEventRowID, err := lookupOrderEventID(ctx, db, targetEvent.ExternalID)
+	if err != nil {
+		t.Fatalf("lookup target event: %v", err)
+	}
+	if _, err := db.ExecContext(
+		ctx,
+		`INSERT INTO execution_report_event (report_id, event_id) VALUES (?, ?)`,
+		reportRowID,
+		targetEventRowID,
+	); err != nil {
+		t.Fatalf("link target-only event: %v", err)
+	}
+
+	targetReportID := domain.ExternalID("target-only-report")
+	result, err := db.ExecContext(
+		ctx,
+		`INSERT INTO execution_report (external_id, order_id, at) VALUES (?, ?, ?)`,
+		targetReportID.Bytes(),
+		orderRowID,
+		nowStr(),
+	)
+	if err != nil {
+		t.Fatalf("insert target-only report: %v", err)
+	}
+	targetReportRowID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("target-only report row id: %v", err)
+	}
+	archiveEventRowID, err := lookupOrderEventID(ctx, db, archiveEvent.ExternalID)
+	if err != nil {
+		t.Fatalf("lookup archived event: %v", err)
+	}
+	if _, err := db.ExecContext(
+		ctx,
+		`INSERT INTO execution_report_event (report_id, event_id) VALUES (?, ?)`,
+		targetReportRowID,
+		archiveEventRowID,
+	); err != nil {
+		t.Fatalf("link target-only report: %v", err)
+	}
+
+	if _, err := dst.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeOverwrite,
+	}); err != nil {
+		t.Fatalf("RestoreBackup overwrite: %v", err)
+	}
+	restored, err := dst.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup restored: %v", err)
+	}
+	links := make(map[string]bool, len(restored.Data.ExecutionReportEvents))
+	for _, link := range restored.Data.ExecutionReportEvents {
+		links[link.Report.String()+"\x00"+link.Event.String()] = true
+	}
+	if !links[reportID.String()+"\x00"+targetEvent.ExternalID.String()] {
+		t.Fatal("overwrite dropped target-only event link from archived report")
+	}
+	if !links[targetReportID.String()+"\x00"+archiveEvent.ExternalID.String()] {
+		t.Fatal("overwrite dropped target-only report link from archived event")
+	}
+}
+
+func TestBackupRestoreRejectsCrossOrderExecutionReportLink(t *testing.T) {
+	ctx := context.Background()
+	_, src := newRealmStore(t, domain.DefaultRealm)
+	firstOrderID := seedRealm(t, ctx, src)
+	first, err := src.GetOrder(ctx, firstOrderID)
+	if err != nil {
+		t.Fatalf("GetOrder first: %v", err)
+	}
+	second, err := src.CreateOrder(ctx, domain.Order{
+		Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
+		Principal: "operator", Source: domain.SourceAPI, Side: domain.OrderSideBuy,
+		AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1",
+		Price: "150", Status: domain.OrderStatusSubmitted,
+	})
+	if err != nil {
+		t.Fatalf("CreateOrder second: %v", err)
+	}
+	firstReportID := domain.ExternalID("cross-order-report-a")
+	if _, err := src.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		ReportID: &firstReportID, Order: firstOrderID, Account: first.Order.Account,
+		OrderStatus: domain.OrderStatusFilled,
+		Events: []domain.OrderEvent{{
+			Order: firstOrderID, Type: domain.OrderEventFill, Source: domain.SourceAPI,
+		}},
+	}); err != nil {
+		t.Fatalf("RecordOrderSettlement first: %v", err)
+	}
+	secondReportID := domain.ExternalID("cross-order-report-b")
+	if _, err := src.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		ReportID: &secondReportID, Order: second.ExternalID, Account: second.Account,
+		OrderStatus: domain.OrderStatusFilled,
+		Events: []domain.OrderEvent{{
+			Order: second.ExternalID, Type: domain.OrderEventFill, Source: domain.SourceAPI,
+		}},
+	}); err != nil {
+		t.Fatalf("RecordOrderSettlement second: %v", err)
+	}
+	archive, err := src.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup: %v", err)
+	}
+	var secondEventID domain.ExternalID
+	for _, event := range archive.Data.OrderEvents {
+		if event.Order == second.ExternalID && event.Type == domain.OrderEventFill {
+			secondEventID = event.ExternalID
+		}
+	}
+	if secondEventID.IsZero() {
+		t.Fatal("second order fill event missing from archive")
+	}
+	archive.Data.ExecutionReportEvents = []backup.ExecutionReportEventLink{{
+		Report: firstReportID,
+		Event:  secondEventID,
+	}}
+
+	_, dst := newRealmStore(t, domain.DefaultRealm)
+	_, err = dst.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("RestoreBackup = %v, want ErrInvalid", err)
+	}
+	if _, err := dst.GetOrder(ctx, firstOrderID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("failed restore persisted first order: %v", err)
+	}
+}
+
+func TestBackupRestoreOverwriteReconcilesReparentedReportLinks(t *testing.T) {
+	ctx := context.Background()
+	reportID := domain.ExternalID("reparented-report")
+
+	_, dst := newRealmStore(t, domain.DefaultRealm)
+	targetOrderID := seedRealm(t, ctx, dst)
+	target, err := dst.GetOrder(ctx, targetOrderID)
+	if err != nil {
+		t.Fatalf("GetOrder target: %v", err)
+	}
+	if _, err := dst.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		ReportID: &reportID, Order: targetOrderID, Account: target.Order.Account,
+		OrderStatus: domain.OrderStatusFilled,
+		Events: []domain.OrderEvent{{
+			Order: targetOrderID, Type: domain.OrderEventFill, Source: domain.SourceAPI,
+		}},
+	}); err != nil {
+		t.Fatalf("RecordOrderSettlement target: %v", err)
+	}
+
+	_, src := newRealmStore(t, domain.DefaultRealm)
+	seedRealm(t, ctx, src)
+	sourceOrder, err := src.CreateOrder(ctx, domain.Order{
+		Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
+		Principal: "operator", Source: domain.SourceAPI, Side: domain.OrderSideBuy,
+		AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1",
+		Price: "151", Status: domain.OrderStatusSubmitted,
+	})
+	if err != nil {
+		t.Fatalf("CreateOrder source: %v", err)
+	}
+	if _, err := src.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		ReportID: &reportID, Order: sourceOrder.ExternalID, Account: sourceOrder.Account,
+		OrderStatus: domain.OrderStatusFilled,
+		Events: []domain.OrderEvent{{
+			Order: sourceOrder.ExternalID, Type: domain.OrderEventFill, Source: domain.SourceAPI,
+		}},
+	}); err != nil {
+		t.Fatalf("RecordOrderSettlement source: %v", err)
+	}
+	activityScope := backup.Scope{
+		Sections: []backup.Section{backup.SectionActivityHistory},
+	}
+	archive, err := src.ExportBackup(ctx, activityScope)
+	if err != nil {
+		t.Fatalf("ExportBackup source: %v", err)
+	}
+	if _, err := dst.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: activityScope, Mode: backup.RestoreModeOverwrite,
+	}); err != nil {
+		t.Fatalf("RestoreBackup overwrite: %v", err)
+	}
+
+	restored, err := dst.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup restored: %v", err)
+	}
+	eventOrders := make(map[domain.ExternalID]domain.ExternalID)
+	for _, event := range restored.Data.OrderEvents {
+		eventOrders[event.ExternalID] = event.Order
+	}
+	var restoredReport backup.ExecutionReportRecord
+	for _, report := range restored.Data.ExecutionReports {
+		if report.ExternalID == reportID {
+			restoredReport = report
+		}
+	}
+	if restoredReport.Order != sourceOrder.ExternalID {
+		t.Fatalf("restored report order = %q, want %q",
+			restoredReport.Order, sourceOrder.ExternalID)
+	}
+	var linkCount int
+	for _, link := range restored.Data.ExecutionReportEvents {
+		if link.Report != reportID {
+			continue
+		}
+		linkCount++
+		if eventOrders[link.Event] != sourceOrder.ExternalID {
+			t.Fatalf("restored report kept cross-order event link: %+v", link)
+		}
+	}
+	if linkCount != 1 {
+		t.Fatalf("restored report links = %d, want one source-order event", linkCount)
+	}
+}
+
+func TestRestoreExecutionReportEventMissingReportIsNotFound(t *testing.T) {
+	ctx := context.Background()
+	_, realm := newRealmStore(t, domain.DefaultRealm)
+	r := realm.(*realmStore)
+	db, err := r.db()
+	if err != nil {
+		t.Fatalf("db: %v", err)
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	summary := backup.NewSummary()
+	rt := restoreTx{
+		tx:      tx,
+		mode:    backup.RestoreModeOverwrite,
+		summary: &summary,
+	}
+	err = rt.restoreExecutionReportEvent(ctx, backup.ExecutionReportEventLink{
+		Report: domain.ExternalID("missing-report"),
+		Event:  domain.ExternalID("missing-event"),
+	})
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("restoreExecutionReportEvent = %v, want ErrNotFound", err)
+	}
+}
+
 // TestBackupMoveIsolatedToShared restores a realm's archive into a SHARED
 // database that already holds a different realm's rows, asserting no code
 // collision and that the destination engine ids do not collide with the rows
@@ -1303,6 +1710,8 @@ var backupExportedTables = map[string]bool{
 	"order_record":               true,
 	"event_attestation":          true,
 	"order_event":                true,
+	"execution_report":           true,
+	"execution_report_event":     true,
 	"trade":                      true,
 	"audit":                      true,
 	"market_data_instance":       true,

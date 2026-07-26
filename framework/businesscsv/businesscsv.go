@@ -176,8 +176,8 @@ func (e tooLargeError) Error() string { return e.message }
 func (e tooLargeError) Unwrap() error { return domain.ErrTooLarge }
 
 // Column headers. All human-facing identity fields use code or symbol, never a
-// surrogate id. Orders and trades use external_id; trades reference their order
-// via order_external_id.
+// surrogate id. Orders and trades use id; trades reference their order via
+// order_id.
 var (
 	groupHeader   = []string{"code", "title", "currency", "notes", "blocked", "block_reason"}
 	accountHeader = []string{
@@ -207,12 +207,12 @@ var (
 		"realized_pnl", "average_entry_price",
 	}
 	orderHeader = []string{
-		"external_id", "at", "account_code", "source", "principal",
+		"id", "at", "account_code", "source", "principal",
 		"base_asset", "quote_asset", "side", "amount_kind", "amount_value",
 		"price", "status",
 	}
 	tradeHeader = []string{
-		"external_id", "order_external_id", "at", "account_code", "source",
+		"id", "order_id", "at", "account_code", "source",
 		"principal", "base_asset", "quote_asset", "side", "quantity", "price",
 		"lock_price", "commission_amount", "commission_currency",
 	}
@@ -308,7 +308,7 @@ func EncodePositions(rows []domain.Balance, delimiter Delimiter) ([]byte, error)
 }
 
 // EncodeOrders serializes orders for export. Orders are export-only and are
-// addressed by external_id; no integer surrogate id is emitted. The account
+// addressed by id; no integer surrogate id is emitted. The account
 // column carries the account code; assets carry their symbols.
 func EncodeOrders(rows []domain.Order, delimiter Delimiter) ([]byte, error) {
 	out := make([][]string, 0, len(rows)+1)
@@ -326,8 +326,8 @@ func EncodeOrders(rows []domain.Order, delimiter Delimiter) ([]byte, error) {
 }
 
 // EncodeTrades serializes trades for export. Trades are export-only and are
-// addressed by external_id; the originating order is referenced by
-// order_external_id. No integer id is emitted.
+// addressed by id; the originating order is referenced by order_id. No integer
+// surrogate id is emitted.
 func EncodeTrades(rows []domain.Trade, delimiter Delimiter) ([]byte, error) {
 	out := make([][]string, 0, len(rows)+1)
 	out = append(out, tradeHeader)

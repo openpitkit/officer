@@ -310,7 +310,7 @@ func TestSubmitOrderToken_HappyPath(t *testing.T) {
 		},
 	}
 	body, _ := json.Marshal(map[string]any{
-		"externalId":  supplied,
+		"id":          supplied,
 		"account":     "acc-1",
 		"baseAsset":   "BTC",
 		"quoteAsset":  "USDT",
@@ -338,8 +338,8 @@ func TestSubmitOrderToken_HappyPath(t *testing.T) {
 		t.Errorf("supplied id not threaded onto order: got %s", svc.submitOrderIn.ExternalID)
 	}
 	// The authorised order is referenced by its opaque external id, never a surrogate.
-	if m["orderExternalId"] != supplied {
-		t.Errorf("want orderExternalId=%s, got %v", supplied, m["orderExternalId"])
+	if m["id"] != supplied {
+		t.Errorf("want id=%s, got %v", supplied, m["id"])
 	}
 	if _, present := m["orderId"]; present {
 		t.Errorf("response leaked surrogate orderId: %v", m)
@@ -356,8 +356,8 @@ func TestSubmitOrderToken_HappyPath(t *testing.T) {
 	}
 	confM := bodyMap(t, confRec.Result())
 	ord, _ := confM["order"].(map[string]any)
-	if ord["externalId"] != supplied {
-		t.Errorf("confirm resolved a different order: want %s, got %v", supplied, ord["externalId"])
+	if ord["id"] != supplied {
+		t.Errorf("confirm resolved a different order: want %s, got %v", supplied, ord["id"])
 	}
 }
 
@@ -379,7 +379,7 @@ func TestSubmitOrderToken_RiskRejectReturnsSignedDecision(t *testing.T) {
 		},
 	}
 	body, _ := json.Marshal(map[string]any{
-		"externalId":  supplied,
+		"id":          supplied,
 		"account":     "acc-1",
 		"baseAsset":   "BTC",
 		"quoteAsset":  "USDT",
@@ -412,7 +412,7 @@ func TestSubmitOrderToken_RiskRejectReturnsSignedDecision(t *testing.T) {
 	}
 }
 
-// TestSubmitOrderToken_GeneratesWhenAbsent verifies that omitting externalId has
+// TestSubmitOrderToken_GeneratesWhenAbsent verifies that omitting id has
 // the server generate and return a 22-char id.
 func TestSubmitOrderToken_GeneratesWhenAbsent(t *testing.T) {
 	svc := &fakeService{
@@ -441,7 +441,7 @@ func TestSubmitOrderToken_GeneratesWhenAbsent(t *testing.T) {
 		t.Errorf("absent id should leave order external id unset for the backend to generate")
 	}
 	m := bodyMap(t, rec.Result())
-	id, _ := m["orderExternalId"].(string)
+	id, _ := m["id"].(string)
 	if len(id) != domain.ExternalIDStringLen {
 		t.Errorf("want a generated %d-char id, got %q", domain.ExternalIDStringLen, id)
 	}
@@ -452,7 +452,7 @@ func TestSubmitOrderToken_GeneratesWhenAbsent(t *testing.T) {
 func TestSubmitOrderToken_DuplicateConflict(t *testing.T) {
 	svc := &fakeService{signingErr: domain.ErrAlreadyExists}
 	body, _ := json.Marshal(map[string]any{
-		"externalId":  extID("order-1").String(),
+		"id":          extID("order-1").String(),
 		"account":     "acc-1",
 		"baseAsset":   "BTC",
 		"quoteAsset":  "USDT",
@@ -484,7 +484,7 @@ func TestSubmitOrderToken_OpaqueID(t *testing.T) {
 	svc := &fakeService{}
 	supplied := "not-a-valid-external-id"
 	body, _ := json.Marshal(map[string]any{
-		"externalId":  supplied,
+		"id":          supplied,
 		"account":     "acc-1",
 		"baseAsset":   "BTC",
 		"quoteAsset":  "USDT",
@@ -552,8 +552,8 @@ func TestConfirmExecution_HappyPath(t *testing.T) {
 	}
 	m := bodyMap(t, rec.Result())
 	ord, _ := m["order"].(map[string]any)
-	if ord["externalId"] != extID("order-1").String() {
-		t.Errorf("want externalId=%s, got %v", extID("order-1").String(), ord["externalId"])
+	if ord["id"] != extID("order-1").String() {
+		t.Errorf("want id=%s, got %v", extID("order-1").String(), ord["id"])
 	}
 	assertNoSurrogateID(t, ord)
 }
@@ -575,7 +575,7 @@ func TestConfirmExecution_MissingToken(t *testing.T) {
 	}
 }
 
-// TestCancelOrder_HappyPath verifies POST /orders/{externalId}/cancel returns
+// TestCancelOrder_HappyPath verifies POST /orders/{id}/cancel returns
 // the updated order.
 func TestCancelOrder_HappyPath(t *testing.T) {
 	svc := &fakeService{
@@ -599,8 +599,8 @@ func TestCancelOrder_HappyPath(t *testing.T) {
 	}
 	m := bodyMap(t, rec.Result())
 	ord, _ := m["order"].(map[string]any)
-	if ord["externalId"] != extID("order-1").String() {
-		t.Errorf("want externalId=%s, got %v", extID("order-1").String(), ord["externalId"])
+	if ord["id"] != extID("order-1").String() {
+		t.Errorf("want id=%s, got %v", extID("order-1").String(), ord["id"])
 	}
 	assertNoSurrogateID(t, ord)
 }

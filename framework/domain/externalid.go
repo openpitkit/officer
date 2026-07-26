@@ -18,6 +18,7 @@
 package domain
 
 import (
+	"crypto/rand"
 	"encoding/base64"
 	"fmt"
 )
@@ -83,6 +84,15 @@ func GeneratedExternalIDFromBytes(b []byte) (ExternalID, error) {
 		)
 	}
 	return ExternalID(externalIDCodec.EncodeToString(b)), nil
+}
+
+// NewExternalID generates Officer's opaque wire id.
+func NewExternalID() (ExternalID, error) {
+	var raw [ExternalIDByteLen]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", fmt.Errorf("generate external id: %w", err)
+	}
+	return GeneratedExternalIDFromBytes(raw[:])
 }
 
 // ParseExternalID turns a non-empty wire id into an ExternalID. Caller-supplied

@@ -26,6 +26,7 @@ import (
 
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/engine"
 )
 
 func TestCheckOrder_Pass(t *testing.T) {
@@ -134,14 +135,12 @@ func TestCheckOrder_ValidationError(t *testing.T) {
 	}
 }
 
-// TestSubmitOrder_Created checks the submit path returns 201: the order row is
-// persisted on every success path (even an engine reject), so the resource-
-// creating POST is a 201 Created carrying the order.
-func TestSubmitOrder_Created(t *testing.T) {
-	svc := &fakeService{submitOrder: domain.Order{
-		ExternalID: extID("order-1"), Account: "acc-1", BaseAsset: "AAPL",
-		QuoteAsset: "USD", Side: domain.OrderSideBuy,
-		Status: domain.OrderStatusCommitted,
+func TestSubmitOrderToken_Created(t *testing.T) {
+	svc := &fakeService{approvalToken: backend.ApprovalToken{
+		Token:   "submit-token",
+		KeyID:   "key-1",
+		Verdict: "accept",
+		Signed:  true,
 	}}
 	r, err := newRouter(svc)
 	if err != nil {
@@ -150,27 +149,49 @@ func TestSubmitOrder_Created(t *testing.T) {
 	body := bytes.NewBufferString(
 		`{"account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"1","price":"100"}`)
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders", body))
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit", body))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("want 201, got %d", rec.Code)
 	}
 	m := bodyMap(t, rec.Result())
-	if _, ok := m["order"].(map[string]any); !ok {
-		t.Fatalf("want order object, got %v", m["order"])
-	}
-	submit, ok := m["submitResponse"].(map[string]any)
-	if !ok {
-		t.Fatalf("want submitResponse object, got %v", m["submitResponse"])
-	}
-	if submit["token"] != "submit-token" ||
-		submit["keyId"] != "key-1" ||
-		submit["orderExternalId"] != extID("order-1").String() ||
-		submit["verdict"] != "accept" {
-		t.Fatalf("unexpected submitResponse: %v", submit)
+	if m["token"] != "submit-token" ||
+		m["keyId"] != "key-1" ||
+		m["id"] != extID("generated-order").String() ||
+		m["verdict"] != "accept" {
+		t.Fatalf("unexpected submit response: %v", m)
 	}
 }
 
-func TestSubmitOrder_RiskRejectReturnsSignedDecision(t *testing.T) {
+func TestSubmitOrderToken_ForwardsCallerSuppliedID(t *testing.T) {
+	supplied := extID("client-order-1")
+	svc := &fakeService{approvalToken: backend.ApprovalToken{
+		Token: "submit-token", Verdict: "accept",
+	}}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(
+		`{"id":"` + supplied.String() + `","account":"acc-1","baseAsset":"AAPL",` +
+			`"quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"1"}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit", body))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if svc.submitOrderIn.ExternalID != supplied {
+		t.Fatalf("submitted id = %q, want %q", svc.submitOrderIn.ExternalID, supplied)
+	}
+	m := bodyMap(t, rec.Result())
+	if m["id"] != supplied.String() {
+		t.Fatalf("response = %v, want id=%s", m, supplied)
+	}
+	if _, leaked := m["externalId"]; leaked {
+		t.Fatalf("response leaked externalId: %v", m)
+	}
+}
+
+func TestSubmitOrderToken_RiskRejectResponse(t *testing.T) {
 	reject := map[string]any{
 		"code":    "max_order_size",
 		"scope":   "order",
@@ -179,12 +200,7 @@ func TestSubmitOrder_RiskRejectReturnsSignedDecision(t *testing.T) {
 		"details": "qty=100",
 	}
 	svc := &fakeService{
-		submitOrder: domain.Order{
-			ExternalID: extID("order-1"), Account: "acc-1", BaseAsset: "AAPL",
-			QuoteAsset: "USD", Side: domain.OrderSideBuy,
-			Status: domain.OrderStatusRejected,
-		},
-		submitOrderToken: backend.ApprovalToken{
+		approvalToken: backend.ApprovalToken{
 			Token:           "reject-token",
 			KeyID:           "key-1",
 			OrderExternalID: extID("order-1").String(),
@@ -206,24 +222,20 @@ func TestSubmitOrder_RiskRejectReturnsSignedDecision(t *testing.T) {
 	body := bytes.NewBufferString(
 		`{"account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"100","price":"100"}`)
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders", body))
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit", body))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("want 201, got %d body=%s", rec.Code, rec.Body.String())
 	}
 	m := bodyMap(t, rec.Result())
-	submit, ok := m["submitResponse"].(map[string]any)
-	if !ok {
-		t.Fatalf("want submitResponse object, got %v", m["submitResponse"])
+	if m["token"] != "reject-token" ||
+		m["keyId"] != "key-1" ||
+		m["id"] != extID("generated-order").String() ||
+		m["verdict"] != "reject" {
+		t.Fatalf("unexpected submit response: %v", m)
 	}
-	if submit["token"] != "reject-token" ||
-		submit["keyId"] != "key-1" ||
-		submit["orderExternalId"] != extID("order-1").String() ||
-		submit["verdict"] != "reject" {
-		t.Fatalf("unexpected submitResponse: %v", submit)
-	}
-	reasons, ok := submit["reasons"].([]any)
+	reasons, ok := m["reasons"].([]any)
 	if !ok || len(reasons) != 1 {
-		t.Fatalf("want one reject reason, got %v", submit["reasons"])
+		t.Fatalf("want one reject reason, got %v", m["reasons"])
 	}
 	if got := reasons[0]; !reflect.DeepEqual(got, reject) {
 		t.Fatalf("reject reason = %#v, want %#v", got, reject)
@@ -234,8 +246,8 @@ func TestSubmitOrder_RiskRejectReturnsSignedDecision(t *testing.T) {
 // decimal, or asset the engine mapper rejects with domain.ErrInvalid) surfaces
 // as 400, not the 500 default. The fake stands in for the engine mapper raising
 // ErrInvalid for, e.g., an unknown amount kind or a non-decimal amount.
-func TestSubmitOrder_ValidationError(t *testing.T) {
-	svc := &fakeService{stateErr: domain.ErrInvalid}
+func TestSubmitOrderToken_ValidationError(t *testing.T) {
+	svc := &fakeService{signingErr: domain.ErrInvalid}
 	r, err := newRouter(svc)
 	if err != nil {
 		t.Fatal(err)
@@ -243,7 +255,7 @@ func TestSubmitOrder_ValidationError(t *testing.T) {
 	body := bytes.NewBufferString(
 		`{"account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD","side":"buy","amountKind":"base","amountValue":"1"}`)
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders", body))
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit", body))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
@@ -251,6 +263,21 @@ func TestSubmitOrder_ValidationError(t *testing.T) {
 	errObj, _ := m["error"].(map[string]any)
 	if errObj["code"] != "validation" {
 		t.Fatalf("want code=validation, got %v", errObj["code"])
+	}
+}
+
+func TestSubmitOrderLegacyEndpointGone(t *testing.T) {
+	r, err := newRouter(&fakeService{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(
+		rec,
+		httptest.NewRequest(http.MethodPost, "/api/v1/orders", bytes.NewBufferString(`{}`)),
+	)
+	if rec.Code != http.StatusMethodNotAllowed && rec.Code != http.StatusNotFound {
+		t.Fatalf("POST /orders status = %d, want 404 or 405", rec.Code)
 	}
 }
 
@@ -278,8 +305,8 @@ func TestApplyAdjustment_Created(t *testing.T) {
 	if !ok {
 		t.Fatalf("want adjustment object, got %v", m["adjustment"])
 	}
-	if adj["externalId"] != extID("adj-1").String() {
-		t.Fatalf("want externalId=%s, got %v", extID("adj-1").String(), adj["externalId"])
+	if adj["id"] != extID("adj-1").String() {
+		t.Fatalf("want id=%s, got %v", extID("adj-1").String(), adj["id"])
 	}
 	assertNoSurrogateID(t, adj)
 }
@@ -306,18 +333,19 @@ func TestApplyAdjustment_NoChangeReturnsNoContent(t *testing.T) {
 // the trade row is created on the success path, so the resource-creating POST is
 // a 201 Created carrying the result.
 func TestApplyExecutionReport_Created(t *testing.T) {
-	svc := &fakeService{orderDetail: domain.OrderDetail{
-		Order: domain.Order{
+	svc := &fakeService{
+		orderDetail: domain.OrderDetail{Order: domain.Order{
 			ExternalID: extID("order-1"), Account: "acc-1", BaseAsset: "AAPL",
 			QuoteAsset: "USD", Side: domain.OrderSideBuy,
-		},
-	}}
+		}},
+		execReportResult: engine.ExecutionReportResult{ReportID: extID("report-1")},
+	}
 	r, err := newRouter(svc)
 	if err != nil {
 		t.Fatal(err)
 	}
 	body := bytes.NewBufferString(
-		`{"quantity":"1","price":"100","leavesQuantity":"0","status":"cancelled","force":true,` +
+		`{"id":"report-1","quantity":"1","price":"100","leavesQuantity":"0","status":"cancelled","force":true,` +
 			`"commission":{"amount":"-0.12","currency":"USD"}}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
@@ -343,11 +371,66 @@ func TestApplyExecutionReport_Created(t *testing.T) {
 	if svc.execReportIn.OrderStatus != domain.OrderStatusCancelled {
 		t.Fatalf("status not forwarded: %q", svc.execReportIn.OrderStatus)
 	}
+	if svc.execReportIn.ExternalID != "report-1" {
+		t.Fatalf("id not forwarded: %q", svc.execReportIn.ExternalID)
+	}
+	if m["id"] != svc.execReportResult.ReportID.String() {
+		t.Fatalf("response id = %v, want %s", m["id"], svc.execReportResult.ReportID)
+	}
 	if svc.execReportIn.Account != "" ||
 		svc.execReportIn.BaseAsset != "" ||
 		svc.execReportIn.QuoteAsset != "" ||
 		svc.execReportIn.Side != "" {
 		t.Fatalf("order-derived fields were populated by HTTP: %+v", svc.execReportIn)
+	}
+}
+
+func TestApplyExecutionReport_GeneratesIDWhenOmitted(t *testing.T) {
+	svc := &fakeService{
+		execReportResult: engine.ExecutionReportResult{ReportID: extID("generated-report")},
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(
+		`{"leavesQuantity":"0","status":"cancelled","force":true}`,
+	)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports",
+		body,
+	))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !svc.execReportIn.ExternalID.IsZero() {
+		t.Fatalf("request id = %q, want unset", svc.execReportIn.ExternalID)
+	}
+	m := bodyMap(t, rec.Result())
+	if m["id"] != svc.execReportResult.ReportID.String() {
+		t.Fatalf("response id = %v, want %s", m["id"], svc.execReportResult.ReportID)
+	}
+}
+
+func TestApplyExecutionReport_DuplicateIDReturnsConflict(t *testing.T) {
+	svc := &fakeService{execReportErr: domain.ErrAlreadyExists}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(
+		`{"id":"duplicate-report","leavesQuantity":"0","status":"cancelled","force":true}`,
+	)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports",
+		body,
+	))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

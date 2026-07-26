@@ -211,6 +211,15 @@ func TestFilterDataActivityHistoryKeepsOnlySelectedOrderChildren(t *testing.T) {
 	if len(filtered.OrderEvents) != 1 || filtered.OrderEvents[0].Order != keptXID {
 		t.Fatalf("order events = %+v, want only the kept order's", filtered.OrderEvents)
 	}
+	if len(filtered.ExecutionReports) != 1 ||
+		filtered.ExecutionReports[0].Order != keptXID {
+		t.Fatalf("execution reports = %+v, want only the kept order's", filtered.ExecutionReports)
+	}
+	if len(filtered.ExecutionReportEvents) != 1 ||
+		filtered.ExecutionReportEvents[0].Report != filtered.ExecutionReports[0].ExternalID ||
+		filtered.ExecutionReportEvents[0].Event != filtered.OrderEvents[0].ExternalID {
+		t.Fatalf("execution report links = %+v, want only kept children", filtered.ExecutionReportEvents)
+	}
 	if len(filtered.Trades) != 1 || filtered.Trades[0].Order != keptXID {
 		t.Fatalf("trades = %+v, want only the kept order's", filtered.Trades)
 	}
@@ -351,6 +360,14 @@ func fixtureData() Data {
 		OrderEvents: []domain.OrderEvent{
 			{ExternalID: mustXID(e1Bytes()), Order: order1XID, At: now},
 			{ExternalID: mustXID(e2Bytes()), Order: order2XID, At: now},
+		},
+		ExecutionReports: []ExecutionReportRecord{
+			{ExternalID: "report-1", Order: order1XID, At: now},
+			{ExternalID: "report-2", Order: order2XID, At: now},
+		},
+		ExecutionReportEvents: []ExecutionReportEventLink{
+			{Report: "report-1", Event: mustXID(e1Bytes())},
+			{Report: "report-2", Event: mustXID(e2Bytes())},
 		},
 		Trades: []domain.Trade{
 			{ExternalID: mustXID(tr1Bytes()), Order: order1XID, Account: "acc-1", At: now},

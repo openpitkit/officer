@@ -260,7 +260,7 @@ func TestParsePositions_PreviousHeaderDefaultsHaltReason(t *testing.T) {
 
 // --- Orders (export-only) ----------------------------------------------------
 
-func TestEncodeOrders_CarriesExternalIDNoSurrogateID(t *testing.T) {
+func TestEncodeOrdersUsesPublicIDHeader(t *testing.T) {
 	t.Parallel()
 	xid := mustExternalID(t, "AAAAAAAAAAAAAAAAAAAAAA")
 	orders := []domain.Order{
@@ -284,15 +284,15 @@ func TestEncodeOrders_CarriesExternalIDNoSurrogateID(t *testing.T) {
 		t.Fatalf("EncodeOrders: %v", err)
 	}
 	content := string(body)
-	if !strings.Contains(content, "external_id") {
-		t.Error("want external_id column in orders header")
+	if !strings.HasPrefix(content, "id,at,account_code,") {
+		t.Errorf("orders header does not start with public id column:\n%s", content)
 	}
-	if strings.Contains(content, ",id,") || strings.HasPrefix(content, "id,") {
-		t.Error("orders header must not carry integer id column")
+	if strings.Contains(content, "external_id") {
+		t.Error("orders header must not expose the internal external_id mnemonic")
 	}
-	// The external_id value must appear in the data row.
+	// The public id value must appear in the data row.
 	if !strings.Contains(content, xid.String()) {
-		t.Errorf("want external_id %q in row, content:\n%s", xid, content)
+		t.Errorf("want id %q in row, content:\n%s", xid, content)
 	}
 }
 
@@ -306,7 +306,7 @@ func TestOrdersNotImportable(t *testing.T) {
 
 // --- Trades (export-only) ----------------------------------------------------
 
-func TestEncodeTrades_CarriesExternalIDAndOrderExternalID(t *testing.T) {
+func TestEncodeTradesUsesPublicIDHeaders(t *testing.T) {
 	t.Parallel()
 	xid := mustExternalID(t, "BBBBBBBBBBBBBBBBBBBBBB")
 	orderXID := mustExternalID(t, "CCCCCCCCCCCCCCCCCCCCCC")
@@ -331,20 +331,17 @@ func TestEncodeTrades_CarriesExternalIDAndOrderExternalID(t *testing.T) {
 		t.Fatalf("EncodeTrades: %v", err)
 	}
 	content := string(body)
-	if !strings.Contains(content, "external_id") {
-		t.Error("want external_id column in trades header")
+	if !strings.HasPrefix(content, "id,order_id,at,account_code,") {
+		t.Errorf("trades header does not start with public id columns:\n%s", content)
 	}
-	if !strings.Contains(content, "order_external_id") {
-		t.Error("want order_external_id column in trades header")
-	}
-	if strings.Contains(content, "order_id,") || strings.Contains(content, ",order_id") {
-		t.Error("trades must not carry integer order_id")
+	if strings.Contains(content, "external_id") {
+		t.Error("trades header must not expose the internal external_id mnemonic")
 	}
 	if !strings.Contains(content, xid.String()) {
-		t.Errorf("want trade external_id %q in row", xid)
+		t.Errorf("want trade id %q in row", xid)
 	}
 	if !strings.Contains(content, orderXID.String()) {
-		t.Errorf("want order external_id %q in row", orderXID)
+		t.Errorf("want order id %q in row", orderXID)
 	}
 }
 

@@ -968,6 +968,9 @@ type OrderReject struct {
 // (BaseAsset, QuoteAsset), and LockPrice is the single reference price captured
 // at pre-trade time. All values are exact decimal strings; never float.
 type ExecutionReportInput struct {
+	// ExternalID is the optional caller-controlled public handle of this report.
+	// The store generates one when it is absent.
+	ExternalID ExternalID
 	// BaseAsset is the instrument underlying asset that was filled.
 	BaseAsset string
 	// QuoteAsset is the instrument settlement asset.
@@ -1014,6 +1017,7 @@ type ExecutionReportInput struct {
 // received report contract. The opaque pre-trade lock is engine-internal and is
 // deliberately excluded from events and signed attestations.
 type ExecutionReportRequest struct {
+	ExternalID     ExternalID  `json:"id"`
 	BaseAsset      string      `json:"baseAsset"`
 	QuoteAsset     string      `json:"quoteAsset"`
 	FillQuantity   string      `json:"fillQuantity"`
@@ -1038,6 +1042,7 @@ func ExecutionReportRequestFromInput(in ExecutionReportInput) *ExecutionReportRe
 		commission = &copyCommission
 	}
 	return &ExecutionReportRequest{
+		ExternalID:     in.ExternalID,
 		BaseAsset:      in.BaseAsset,
 		QuoteAsset:     in.QuoteAsset,
 		FillQuantity:   in.FillQuantity,
@@ -1095,6 +1100,10 @@ type BalanceSettlement struct {
 type OrderSettlement struct {
 	// Trade is the optional trade row to create in the same tx; nil to skip.
 	Trade *Trade
+	// ReportID identifies the execution-report request that produced this
+	// settlement. Nil means the settlement was not produced by an execution
+	// report; a non-nil zero value asks the store to generate the ID.
+	ReportID *ExternalID
 	// Account is the code of the account the fill settled against.
 	Account AccountID
 	// OrderStatus is the target status (e.g. filled or partially_filled).
@@ -1225,11 +1234,11 @@ type ApprovalPayload struct {
 	// OrderExternalID is the order's opaque public handle, never the internal
 	// surrogate key: a monotonic surrogate in a client-facing token would leak
 	// record counts/existence.
-	OrderExternalID string `json:"orderExternalId,omitempty"`
+	OrderExternalID string `json:"orderId,omitempty"`
 	// EventExternalID is the opaque public handle of the order-history event this
 	// attestation is bound 1:1 to. Empty on a submit token issued before the
 	// event id is known (kept omitempty so those tokens stay deterministic).
-	EventExternalID string `json:"eventExternalId,omitempty"`
+	EventExternalID string `json:"eventId,omitempty"`
 
 	// Bound order params — connector re-binds against the order it executes.
 	Instrument     string `json:"instrument"`

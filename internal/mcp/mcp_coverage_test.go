@@ -46,7 +46,7 @@ func callSetMarketDataInstrument(
 // -- set_market_data_instrument: required-field validation --
 
 // TestSetMarketDataInstrumentRequiredFields covers the two required-field
-// validation branches: a missing instanceExternalId and a missing externalSymbol each
+// validation branches: a missing id and a missing externalSymbol each
 // yield the matching tool error, and neither reaches the source mutation. The
 // command is enabled (default fakeSource) so the gate passes and validation
 // runs.
@@ -58,11 +58,11 @@ func TestSetMarketDataInstrumentRequiredFields(t *testing.T) {
 		wantMsg string
 	}{
 		{
-			name: "missing instanceExternalId",
+			name: "missing id",
 			in: setMarketDataInstrumentInput{
 				InstanceExternalID: "  ", ExternalSymbol: "AAPL", Enabled: true,
 			},
-			wantMsg: "instanceExternalId is required",
+			wantMsg: "id is required",
 		},
 		{
 			name: "missing externalSymbol",

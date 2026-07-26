@@ -64,7 +64,7 @@ func TestCatalogParity(t *testing.T) {
 		{
 			Name:             "get_order",
 			Title:            "Get order",
-			AgentDescription: "Read one order by external id with its approval envelope and fills.",
+			AgentDescription: "Read one order by id with its approval envelope and fills.",
 			Mutating:         false,
 			Protective:       false,
 			Implemented:      true,

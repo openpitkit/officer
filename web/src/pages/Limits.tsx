@@ -91,6 +91,7 @@ import { absoluteAppUrl } from "@/lib/shareLink";
 import { sortDirection } from "@/lib/sortDirection";
 import { knownPageCount } from "@/lib/tablePagination";
 import { usePersistentPageSize } from "@/lib/tablePageSize";
+import { useGlobalAccountFilter } from "@/lib/globalAccountFilter";
 import { LimitDialog } from "@/pages/LimitDialog";
 
 const ALL = "all";
@@ -490,7 +491,8 @@ export function Limits() {
   const fetchGroups =
     "fetchGroups" in officerApi ? officerApi.fetchGroups : undefined;
   const [searchParams] = useSearchParams();
-  const initialAccount = searchParams.get("account") ?? "";
+  const globalAccountFilter = useGlobalAccountFilter();
+  const initialAccount = globalAccountFilter.account || searchParams.get("account") || "";
   const initialAccountGroup = searchParams.get("accountGroup") ?? "";
   const initialAsset = searchParams.get("asset") ?? "";
 
@@ -514,20 +516,60 @@ export function Limits() {
 
   const deferredAccountDraft = useDeferredValue(accountDraft.trim());
   const deferredAssetDraft = useDeferredValue(assetDraft.trim());
+  const accountGlobalLocked =
+    globalAccountFilter.account !== "" &&
+    accountFilter.trim() === globalAccountFilter.account;
   const hasActiveFilters =
     accountFilter !== "" ||
     accountGroupFilter !== "" ||
     assetFilter !== "" ||
     policyFilter !== ALL;
   const clearFilters = () => {
-    setAccountDraft("");
-    setAccountFilter("");
+    if (!accountGlobalLocked) {
+      setAccountDraft("");
+      setAccountFilter("");
+    }
     setAccountGroupFilter("");
     setAssetDraft("");
     setAssetFilter("");
     setPolicyFilter(ALL);
     setPage(0);
   };
+  const accountGlobalToggle = {
+    active:
+      accountDraft.trim() !== "" &&
+      accountDraft.trim() === globalAccountFilter.account,
+    disabled: accountDraft.trim() === "",
+    activeLabel: tc("filters.globalAccount.active"),
+    inactiveLabel: tc("filters.globalAccount.inactive"),
+    disabledLabel: tc("filters.globalAccount.disabled"),
+    onToggle: () => {
+      const nextAccount = accountDraft.trim();
+      if (nextAccount === "") {
+        return;
+      }
+      if (globalAccountFilter.account === nextAccount) {
+        globalAccountFilter.clear();
+        return;
+      }
+      globalAccountFilter.setAccount(nextAccount);
+      setAccountDraft(nextAccount);
+      setAccountFilter(nextAccount);
+      setPage(0);
+    },
+  };
+
+  useEffect(() => {
+    const nextAccount = globalAccountFilter.account;
+    if (nextAccount === "") {
+      return;
+    }
+    // Mirror the external global-account store into this page-local filter.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setAccountDraft(nextAccount);
+    setAccountFilter(nextAccount);
+    setPage(0);
+  }, [globalAccountFilter.account]);
 
   const filters = useMemo<PolicyListFilters>(
     () => {
@@ -813,15 +855,24 @@ export function Limits() {
           value={accountDraft}
           placeholder={t("filter.accountPlaceholder")}
           suggestions={visibleAccountSuggestions}
-          onChange={setAccountDraft}
+          onChange={(value) => {
+            if (accountGlobalLocked && value.trim() === "") {
+              globalAccountFilter.clear();
+            }
+            setAccountDraft(value);
+          }}
           onSuggestionSelect={(value) => applyIdentityField("account", value)}
           onKeyDown={applyIdentityFiltersOnEnter}
           onClear={() => {
+            if (accountGlobalLocked) {
+              globalAccountFilter.clear();
+            }
             setAccountDraft("");
             setAccountFilter("");
             setPage(0);
           }}
           clearLabel={tc("filters.clearField")}
+          globalToggle={accountGlobalToggle}
         />
         <AutocompleteFilterField
           label={t("filter.asset")}

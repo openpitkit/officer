@@ -73,6 +73,7 @@ import {
   DEFAULT_SEARCH_DEBOUNCE_MS,
   useDebouncedValue,
 } from "@/lib/useDebounce";
+import { useGlobalAccountFilter } from "@/lib/globalAccountFilter";
 
 const SOURCES = ["panel", "api", "mcp", "system"] as const;
 const EMPTY_ACTION_GROUPS: AuditActionGroup[] = [];
@@ -187,27 +188,27 @@ function AuditTable({
       <TableBody>
         {entries.map((entry) => (
           <TableRow
-            key={entry.externalId}
+            key={entry.id}
             ref={(node) => {
               if (node === null) {
-                rowRefs.current.delete(entry.externalId);
+                rowRefs.current.delete(entry.id);
                 return;
               }
-              rowRefs.current.set(entry.externalId, node);
+              rowRefs.current.set(entry.id, node);
             }}
-            tabIndex={entry.externalId === exactExternalId ? 0 : -1}
+            tabIndex={entry.id === exactExternalId ? 0 : -1}
             className={
-              entry.externalId === exactExternalId
+              entry.id === exactExternalId
                 ? "hover:bg-transparent ring-1 ring-inset ring-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 : "hover:bg-transparent"
             }
           >
             <TableCell className="nums whitespace-nowrap text-xs">
               <div className="flex min-w-0 items-center gap-1">
-                <span className="min-w-0 truncate">{entry.externalId}</span>
+                <span className="min-w-0 truncate">{entry.id}</span>
                 <span className="ml-auto flex shrink-0 items-center">
                   <CopyIdButton
-                    value={entry.externalId}
+                    value={entry.id}
                     size={22}
                     title={t("common:rowActions.copyId")}
                     copiedTitle={t("common:rowActions.copiedId")}
@@ -379,16 +380,17 @@ export function Audit() {
   const { t } = useTranslation("audit");
   const { t: tc } = useTranslation();
   const [params] = useSearchParams();
+  const globalAccountFilter = useGlobalAccountFilter();
 
   // Seed filter state from URL so dashboard activity links and per-account
   // quick-links land here pre-filtered.
-  const [externalId, setExternalId] = useState(
-    params.get("id") ?? params.get("externalId") ?? "",
-  );
+  const [externalId, setExternalId] = useState(params.get("id") ?? "");
   const [appliedExternalId, setAppliedExternalId] = useState(
-    params.get("id") ?? params.get("externalId") ?? "",
+    params.get("id") ?? "",
   );
-  const [account, setAccount] = useState(params.get("account") ?? "");
+  const [account, setAccount] = useState(
+    globalAccountFilter.account || params.get("account") || "",
+  );
   const [asset, setAsset] = useState(params.get("asset") ?? "");
   const [actor, setActor] = useState(params.get("actor") ?? "");
   const [source, setSource] = useState(params.get("source") ?? "");
@@ -429,6 +431,17 @@ export function Audit() {
   const resetPage = () => {
     setPage(0);
   };
+
+  useEffect(() => {
+    const nextAccount = globalAccountFilter.account;
+    if (nextAccount === "") {
+      return;
+    }
+    // Mirror the external global-account store into this page-local filter.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setAccount(nextAccount);
+    resetPage();
+  }, [globalAccountFilter.account]);
 
   // Load the action catalogue from the server; the type filter is built
   // entirely from it.
@@ -491,7 +504,9 @@ export function Audit() {
   const clearFilters = () => {
     setExternalId("");
     setAppliedExternalId("");
-    setAccount("");
+    if (globalAccountFilter.account === "" || account !== globalAccountFilter.account) {
+      setAccount("");
+    }
     setAsset("");
     setActor("");
     setSource("");
@@ -501,6 +516,26 @@ export function Audit() {
     setSelectedActions(null);
     setDefaultActionCategory("all");
     resetPage();
+  };
+  const accountGlobalLocked =
+    globalAccountFilter.account !== "" && account.trim() === globalAccountFilter.account;
+  const accountGlobalToggle = {
+    active: accountGlobalLocked,
+    disabled: account.trim() === "",
+    activeLabel: tc("filters.globalAccount.active"),
+    inactiveLabel: tc("filters.globalAccount.inactive"),
+    disabledLabel: tc("filters.globalAccount.disabled"),
+    onToggle: () => {
+      const nextAccount = account.trim();
+      if (nextAccount === "") {
+        return;
+      }
+      if (accountGlobalLocked) {
+        globalAccountFilter.clear();
+        return;
+      }
+      globalAccountFilter.setAccount(nextAccount);
+    },
   };
   const requestAtMode =
     atMode === "between"
@@ -519,7 +554,7 @@ export function Audit() {
 
   const auditFilter = useMemo<AuditFilter>(
     () => ({
-      externalId: appliedExternalId.trim() || undefined,
+      id: appliedExternalId.trim() || undefined,
       account: debouncedAccount.trim() || undefined,
       asset: debouncedAsset.trim() || undefined,
       actor: debouncedActor.trim() || undefined,
@@ -664,10 +699,16 @@ export function Audit() {
               label={tc("fields.account")}
               value={account}
               onChange={(value) => {
+                if (accountGlobalLocked && value.trim() === "") {
+                  globalAccountFilter.clear();
+                }
                 setAccount(value);
                 resetPage();
               }}
               onClear={() => {
+                if (accountGlobalLocked) {
+                  globalAccountFilter.clear();
+                }
                 setAccount("");
                 resetPage();
               }}
@@ -677,6 +718,7 @@ export function Audit() {
               searchingLabel={tc("filters.onlineLoading", {
                 field: tc("fields.account"),
               })}
+              globalToggle={accountGlobalToggle}
             />
             <OnlineFilterField
               label={tc("fields.asset")}

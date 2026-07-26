@@ -577,14 +577,14 @@ var businessCSVEntityContracts = []businessCSVEntityContract{
 		entity:     string(businesscsv.EntityOrders),
 		table:      "order_record",
 		source:     reflect.TypeOf(domain.Order{}),
-		keyColumns: []string{"external_id"},
+		keyColumns: []string{"id"},
 		keyValues:  []string{"order-sentinel-1"},
 	},
 	{
 		entity:     string(businesscsv.EntityTrades),
 		table:      "trade",
 		source:     reflect.TypeOf(domain.Trade{}),
-		keyColumns: []string{"order_external_id"},
+		keyColumns: []string{"order_id"},
 		keyValues:  []string{"order-sentinel-1"},
 	},
 }
@@ -603,6 +603,8 @@ var expectedSchemaTableNames = []string{
 	"audit_action",
 	"balance",
 	"event_attestation",
+	"execution_report",
+	"execution_report_event",
 	"limit_order_size",
 	"limit_rate",
 	"limit_spot_funds_pnl_bound",
@@ -788,7 +790,7 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 			"lock":            "Lock",
 		},
 		businessCSV: map[string]string{
-			"external_id":     "external_id",
+			"external_id":     "id",
 			"account_id":      "account_code",
 			"base_asset_id":   "base_asset",
 			"quote_asset_id":  "quote_asset",
@@ -826,6 +828,19 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 			"issued_at":       "Attestation.IssuedAt",
 		},
 	},
+	"execution_report": {
+		backup: map[string]string{
+			"external_id": "ExternalID",
+			"order_id":    "Order",
+			"at":          "At",
+		},
+	},
+	"execution_report_event": {
+		backup: map[string]string{
+			"report_id": "Report",
+			"event_id":  "Event",
+		},
+	},
 	"trade": {
 		backup: map[string]string{
 			"external_id":         "ExternalID",
@@ -844,8 +859,8 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 			"commission_currency": "Commission.Currency",
 		},
 		businessCSV: map[string]string{
-			"external_id":         "external_id",
-			"order_id":            "order_external_id",
+			"external_id":         "id",
+			"order_id":            "order_id",
 			"account_id":          "account_code",
 			"base_asset_id":       "base_asset",
 			"quote_asset_id":      "quote_asset",
@@ -1312,6 +1327,7 @@ func seedClientDataDriftRealm(
 			Commission:     &domain.Commission{Amount: "-0.30", Currency: "USDT"},
 			ExecutionReport: domain.ExecutionReportRequestFromInput(
 				domain.ExecutionReportInput{
+					ExternalID:     "sentinel-report-id",
 					BaseAsset:      "SENTINEL_BASE",
 					QuoteAsset:     "SENTINEL_QUOTE",
 					FillQuantity:   "7.00",

@@ -155,8 +155,8 @@ export interface ParsedApproval {
   keyId: string;
   requestType: string;
   mode: string;
-  orderExternalId: string;
-  eventExternalId: string;
+  orderId: string;
+  eventId: string;
   side: string;
   quantity: string;
   amountKind: string;
@@ -278,8 +278,8 @@ export function parseApprovalFields(
     keyId: str(approval.keyId),
     requestType: str(approval.requestType),
     mode: str(approval.mode),
-    orderExternalId: str(approval.orderExternalId),
-    eventExternalId: str(approval.eventExternalId),
+    orderId: str(approval.orderId),
+    eventId: str(approval.eventId),
     side: str(approval.side),
     quantity: str(approval.quantity),
     amountKind: str(approval.amountKind),

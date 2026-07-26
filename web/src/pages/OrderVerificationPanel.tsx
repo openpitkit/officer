@@ -306,11 +306,11 @@ function ApprovalBreakdown({
         <BreakdownRow label={t("breakdown.mode")} value={fields.mode} />
         <BreakdownRow
           label={t("breakdown.orderExternalId")}
-          value={fields.orderExternalId}
+          value={fields.orderId}
         />
         <BreakdownRow
           label={t("breakdown.eventExternalId")}
-          value={fields.eventExternalId}
+          value={fields.eventId}
         />
         <BreakdownRow label={t("breakdown.verdict")} value={fields.verdict} />
         <BreakdownRow

@@ -216,7 +216,7 @@ export function MarketDataCard() {
                 : inst.instruments
                     .filter((instr) => instr.stale)
                     .map((instr) => ({
-                      key: `${inst.externalId}/${instr.externalSymbol}`,
+                      key: `${inst.id}/${instr.externalSymbol}`,
                       label: `${instr.baseAsset}/${instr.quoteAsset}`,
                     })),
             );
@@ -232,7 +232,7 @@ export function MarketDataCard() {
                   </Badge>
                 )}
                 {enabled.map((inst) => {
-                  const label = inst.label || inst.externalId;
+                  const label = inst.label || inst.id;
 
                   if (inst.state === "error") {
                     const errSuffix = inst.error
@@ -245,7 +245,7 @@ export function MarketDataCard() {
                       ? ` — ${latest.title.slice(0, 40)}${latest.title.length > 40 ? "…" : ""}`
                       : "";
                     return (
-                      <Badge key={inst.externalId} variant="danger">
+                      <Badge key={inst.id} variant="danger">
                         {t("marketData.instanceError")} {label}{errSuffix || diagSuffix}
                       </Badge>
                     );
@@ -253,7 +253,7 @@ export function MarketDataCard() {
 
                   if (inst.state === "pending") {
                     return (
-                      <Badge key={inst.externalId} variant="warn">
+                      <Badge key={inst.id} variant="warn">
                         {label} — {t("marketData.instanceNotApplied")}
                       </Badge>
                     );
@@ -279,7 +279,7 @@ export function MarketDataCard() {
 
                   return (
                     <span
-                      key={inst.externalId}
+                      key={inst.id}
                       className="flex flex-wrap items-center gap-1"
                     >
                       <Badge variant="neutral">{label}</Badge>
@@ -463,7 +463,7 @@ export function AuditStrip() {
           </div>
         )}
         {load.state === "ready" &&
-          load.data.map((e) => <AuditRow key={e.externalId} entry={e} />)}
+          load.data.map((e) => <AuditRow key={e.id} entry={e} />)}
       </CardContent>
     </Card>
   );

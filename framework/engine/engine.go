@@ -231,6 +231,9 @@ type ExecutionReportResult struct {
 	// Persistence is the explicit write set returned by the engine-facing layer.
 	// Nil means the report produced no Officer-side writes.
 	Persistence *ExecutionReportPersistence
+	// ReportID is the DB-authoritative handle of the persisted report request.
+	// The node fills it after the settlement transaction commits.
+	ReportID domain.ExternalID
 	// Blocks are the account blocks the engine recorded for this report.
 	Blocks []domain.ExecutionAccountBlock
 	// Outcomes are the per-asset adjustment outcomes policies produced, each

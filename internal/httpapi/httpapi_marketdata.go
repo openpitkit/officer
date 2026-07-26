@@ -74,13 +74,10 @@ func handleCreateMarketDataInstance(svc Service) http.HandlerFunc {
 			Credentials: req.Credentials,
 			Enabled:     req.Enabled,
 		}
-		// A caller-supplied external id is optional. When present, the backend
+		// A caller-supplied id is optional. When present, the backend
 		// uses it verbatim and rejects a duplicate with 409. When absent the
 		// backend generates one and returns it on the instance.
 		suppliedID := req.ID
-		if suppliedID == "" {
-			suppliedID = req.ExternalID
-		}
 		if suppliedID != "" {
 			id, err := domain.ParseExternalID(suppliedID)
 			if err != nil {

@@ -205,18 +205,37 @@ func (r *memoryRealm) CountOrdersSince(_ context.Context, since time.Time) (int,
 	return n, nil
 }
 
+func (r *memoryRealm) ExecutionReportExists(
+	_ context.Context, id domain.ExternalID,
+) (bool, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.reports[id]
+	return ok, nil
+}
+
 func (r *memoryRealm) RecordOrderSettlement(
 	_ context.Context, st domain.OrderSettlement,
-) error {
+) (domain.ExternalID, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	var reportID domain.ExternalID
+	if st.ReportID != nil {
+		reportID = *st.ReportID
+		if reportID.IsZero() {
+			reportID = r.nextExternalID()
+		}
+		if _, exists := r.reports[reportID]; exists {
+			return "", domain.ErrAlreadyExists
+		}
+	}
 	if !st.Order.IsZero() {
 		order, ok := r.orders[st.Order]
 		if !ok {
-			return domain.ErrNotFound
+			return "", domain.ErrNotFound
 		}
 		if len(st.AllowedFrom) > 0 && !slices.Contains(st.AllowedFrom, order.Status) {
-			return domain.ErrConflict
+			return "", domain.ErrConflict
 		}
 		order.Status = st.OrderStatus
 		if st.SetLock {
@@ -230,7 +249,7 @@ func (r *memoryRealm) RecordOrderSettlement(
 	if st.AccountPnl != "" || st.AccountPnlHaltReason != "" {
 		account, ok := r.accounts[st.Account]
 		if !ok {
-			return domain.ErrNotFound
+			return "", domain.ErrNotFound
 		}
 		if st.AccountPnl != "" {
 			account.Pnl = st.AccountPnl
@@ -298,6 +317,11 @@ func (r *memoryRealm) RecordOrderSettlement(
 		r.accounts[block.Account] = account
 	}
 	for _, event := range st.Events {
+		if !reportID.IsZero() && event.Payload.ExecutionReport != nil {
+			request := *event.Payload.ExecutionReport
+			request.ExternalID = reportID
+			event.Payload.ExecutionReport = &request
+		}
 		if event.Order.IsZero() {
 			event.Order = st.Order
 		}
@@ -319,7 +343,11 @@ func (r *memoryRealm) RecordOrderSettlement(
 		}
 		r.trades = append(r.trades, trade)
 	}
-	return nil
+	if st.ReportID != nil {
+		r.reports[reportID] = st.Order
+		*st.ReportID = reportID
+	}
+	return reportID, nil
 }
 
 func (r *memoryRealm) RecordOrderSubmission(
@@ -352,7 +380,7 @@ func (r *memoryRealm) RecordOrderSubmission(
 	if settlement.Account == "" {
 		settlement.Account = order.Account
 	}
-	if err := r.RecordOrderSettlement(ctx, settlement); err != nil {
+	if _, err := r.RecordOrderSettlement(ctx, settlement); err != nil {
 		r.restoreData(snapshot)
 		return domain.Order{}, err
 	}

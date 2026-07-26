@@ -50,7 +50,7 @@ const getLimitsToolDescription = "Return risk barriers, optionally filtered " +
 	"by account. Read-only - no secrets, no order-flow control."
 
 const getOrderToolName = "get_order"
-const getOrderToolDescription = "Return one order addressed by its external id: " +
+const getOrderToolDescription = "Return one order addressed by its id: " +
 	"its status, its 1:1 signed approval (when issued), and its fills with their " +
 	"display prices. Read-only - no secrets, no order-flow control. The opaque " +
 	"pre-trade lock is never exposed; only backend-derived display prices are."
@@ -128,7 +128,7 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 		getOrderToolName,
 		"Get order",
 		getOrderToolDescription,
-		"Read one order by external id with its approval envelope and fills.",
+		"Read one order by id with its approval envelope and fills.",
 		false,
 		false,
 		true,
@@ -304,7 +304,7 @@ type getLimitsOutput struct {
 }
 
 type getOrderInput struct {
-	OrderExternalID string `json:"orderExternalId" jsonschema:"Order external id returned by submit_order"`
+	OrderExternalID string `json:"id" jsonschema:"Order id returned by submit_order"`
 }
 
 type getOrderOutput struct {
@@ -341,13 +341,13 @@ type checkOrderOutput struct {
 }
 
 type setMarketDataInstrumentInput struct {
-	InstanceExternalID string `json:"instanceExternalId" jsonschema:"Market-data instance external identifier"`
+	InstanceExternalID string `json:"id" jsonschema:"Market-data instance id"`
 	ExternalSymbol     string `json:"externalSymbol" jsonschema:"Provider-side instrument symbol"`
 	Enabled            bool   `json:"enabled" jsonschema:"Whether the instrument should be enabled"`
 }
 
 type setMarketDataInstrumentOutput struct {
-	InstanceExternalID string `json:"instanceExternalId"`
+	InstanceExternalID string `json:"id"`
 	ExternalSymbol     string `json:"externalSymbol"`
 	Enabled            bool   `json:"enabled"`
 }
@@ -361,37 +361,37 @@ type submitOrderInput struct {
 	AmountValue string `json:"amountValue" jsonschema:"Order size as an exact decimal string"`
 	Price       string `json:"price,omitempty" jsonschema:"Limit price as an exact decimal string; omit for market"`
 	Mode        string `json:"mode,omitempty" jsonschema:"hold (workflow compatibility value) or immediate (default immediate)"`
-	ExternalID  string `json:"externalId,omitempty" jsonschema:"Optional caller-supplied unique order external id; omit to have the server generate one"`
+	ExternalID  string `json:"id,omitempty" jsonschema:"Optional caller-supplied unique order id; omit to have the server generate one"`
 }
 
 type submitOrderOutput struct {
 	Token           string                `json:"token"`
 	KeyID           string                `json:"keyId"`
-	OrderExternalID string                `json:"orderExternalId"`
+	OrderExternalID string                `json:"id"`
 	Verdict         string                `json:"verdict"`
 	Reasons         []checkOrderRejectDTO `json:"reasons,omitempty"`
 }
 
 type confirmExecutionInput struct {
-	OrderExternalID string `json:"orderExternalId" jsonschema:"Order external id returned by submit_order"`
+	OrderExternalID string `json:"id" jsonschema:"Order id returned by submit_order"`
 	Token           string `json:"token" jsonschema:"Approval token returned by submit_order"`
 }
 
 type confirmExecutionOutput struct {
-	OrderExternalID  string `json:"orderExternalId"`
+	OrderExternalID  string `json:"id"`
 	Status           string `json:"status"`
 	AttestationToken string `json:"attestationToken,omitempty"`
 	KeyID            string `json:"keyId,omitempty"`
 }
 
 type cancelInput struct {
-	OrderExternalID string `json:"orderExternalId" jsonschema:"Order external id returned by submit_order"`
+	OrderExternalID string `json:"id" jsonschema:"Order id returned by submit_order"`
 	Token           string `json:"token" jsonschema:"Approval token returned by submit_order"`
 	Reason          string `json:"reason,omitempty" jsonschema:"Human-readable cancellation reason"`
 }
 
 type cancelOutput struct {
-	OrderExternalID  string `json:"orderExternalId"`
+	OrderExternalID  string `json:"id"`
 	Status           string `json:"status"`
 	AttestationToken string `json:"attestationToken,omitempty"`
 	KeyID            string `json:"keyId,omitempty"`
@@ -441,12 +441,12 @@ type auditDTO struct {
 	Action     string    `json:"action"`
 	Account    string    `json:"account"`
 	Detail     string    `json:"detail"`
-	ExternalID string    `json:"externalId"`
+	ExternalID string    `json:"id"`
 }
 
 type orderDTO struct {
 	At                  time.Time       `json:"at"`
-	ExternalID          string          `json:"externalId"`
+	ExternalID          string          `json:"id"`
 	Account             string          `json:"account"`
 	BaseAsset           string          `json:"baseAsset"`
 	QuoteAsset          string          `json:"quoteAsset"`
@@ -477,7 +477,7 @@ type orderApprovalDTO struct {
 
 type tradeDTO struct {
 	At         time.Time      `json:"at"`
-	ExternalID string         `json:"externalId"`
+	ExternalID string         `json:"id"`
 	Side       string         `json:"side"`
 	Quantity   string         `json:"quantity"`
 	Price      string         `json:"price"`
@@ -784,7 +784,7 @@ func getOrderHandler(
 	) (string, getOrderOutput, error) {
 		id := strings.TrimSpace(in.OrderExternalID)
 		if id == "" {
-			return "", getOrderOutput{}, fmt.Errorf("orderExternalId is required")
+			return "", getOrderOutput{}, fmt.Errorf("id is required")
 		}
 		detail, err := src.GetOrder(ctx, id)
 		if err != nil {
@@ -888,7 +888,7 @@ func setMarketDataInstrumentHandler(
 		instanceID := strings.TrimSpace(in.InstanceExternalID)
 		externalSymbol := strings.TrimSpace(in.ExternalSymbol)
 		if instanceID == "" {
-			return "", setMarketDataInstrumentOutput{}, fmt.Errorf("instanceExternalId is required")
+			return "", setMarketDataInstrumentOutput{}, fmt.Errorf("id is required")
 		}
 		if externalSymbol == "" {
 			return "", setMarketDataInstrumentOutput{}, fmt.Errorf("externalSymbol is required")
@@ -940,7 +940,7 @@ func submitOrderHandler(
 		if supplied := strings.TrimSpace(in.ExternalID); supplied != "" {
 			id, err := domain.ParseExternalID(supplied)
 			if err != nil {
-				return "", submitOrderOutput{}, fmt.Errorf("invalid externalId: %s", err)
+				return "", submitOrderOutput{}, fmt.Errorf("invalid id: %s", err)
 			}
 			o.ExternalID = id
 		}
@@ -980,7 +980,7 @@ func confirmExecutionHandler(
 	) (string, confirmExecutionOutput, error) {
 		orderExternalID := strings.TrimSpace(in.OrderExternalID)
 		if orderExternalID == "" {
-			return "", confirmExecutionOutput{}, fmt.Errorf("orderExternalId is required")
+			return "", confirmExecutionOutput{}, fmt.Errorf("id is required")
 		}
 		token := strings.TrimSpace(in.Token)
 		if token == "" {
@@ -1014,7 +1014,7 @@ func cancelHandler(
 	) (string, cancelOutput, error) {
 		orderExternalID := strings.TrimSpace(in.OrderExternalID)
 		if orderExternalID == "" {
-			return "", cancelOutput{}, fmt.Errorf("orderExternalId is required")
+			return "", cancelOutput{}, fmt.Errorf("id is required")
 		}
 		token := strings.TrimSpace(in.Token)
 		if token == "" {

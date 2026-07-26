@@ -337,16 +337,16 @@ func TestParamBindingTamperRejected(t *testing.T) {
 		t.Fatalf("Sign: %v", err)
 	}
 	mutators := map[string]func(*fwsigning.VerifyParams){
-		"instrument":      func(e *fwsigning.VerifyParams) { e.Instrument = "MSFT/USD" },
-		"side":            func(e *fwsigning.VerifyParams) { e.Side = "sell" },
-		"quantity":        func(e *fwsigning.VerifyParams) { e.Quantity = "99" },
-		"amountKind":      func(e *fwsigning.VerifyParams) { e.AmountKind = "volume" },
-		"orderType":       func(e *fwsigning.VerifyParams) { e.OrderType = "market" },
-		"limitPrice":      func(e *fwsigning.VerifyParams) { e.LimitPrice = "999.99" },
-		"priceCurrency":   func(e *fwsigning.VerifyParams) { e.PriceCurrency = "EUR" },
-		"timeInForce":     func(e *fwsigning.VerifyParams) { e.TimeInForce = "ioc" },
-		"accountId":       func(e *fwsigning.VerifyParams) { e.AccountID = "acct-2" },
-		"orderExternalId": func(e *fwsigning.VerifyParams) { e.OrderExternalID = "BBBBBBBBBBBBBBBBBBBBBB" },
+		"instrument":    func(e *fwsigning.VerifyParams) { e.Instrument = "MSFT/USD" },
+		"side":          func(e *fwsigning.VerifyParams) { e.Side = "sell" },
+		"quantity":      func(e *fwsigning.VerifyParams) { e.Quantity = "99" },
+		"amountKind":    func(e *fwsigning.VerifyParams) { e.AmountKind = "volume" },
+		"orderType":     func(e *fwsigning.VerifyParams) { e.OrderType = "market" },
+		"limitPrice":    func(e *fwsigning.VerifyParams) { e.LimitPrice = "999.99" },
+		"priceCurrency": func(e *fwsigning.VerifyParams) { e.PriceCurrency = "EUR" },
+		"timeInForce":   func(e *fwsigning.VerifyParams) { e.TimeInForce = "ioc" },
+		"accountId":     func(e *fwsigning.VerifyParams) { e.AccountID = "acct-2" },
+		"orderId":       func(e *fwsigning.VerifyParams) { e.OrderExternalID = "BBBBBBBBBBBBBBBBBBBBBB" },
 	}
 	for name, mut := range mutators {
 		exp := expectFor(p)
@@ -372,7 +372,7 @@ func TestSignVerifyEmptyOrderExternalID(t *testing.T) {
 		t.Fatalf("Verify: %v", err)
 	}
 	if res.Payload.OrderExternalID != "" {
-		t.Fatalf("orderExternalId = %q, want empty", res.Payload.OrderExternalID)
+		t.Fatalf("orderId = %q, want empty", res.Payload.OrderExternalID)
 	}
 	// An empty expectation leaves the bound order handle unchecked; a populated
 	// payload handle verifies against an empty expectation (no surrogate to leak).
@@ -419,11 +419,11 @@ func TestCanonicalBytesNoSurrogateAndCarriesHandle(t *testing.T) {
 		t.Fatalf("CanonicalBytes: %v", err)
 	}
 	s := string(canon)
-	if !strings.Contains(s, `"orderExternalId":"`+p.OrderExternalID+`"`) {
+	if !strings.Contains(s, `"orderId":"`+p.OrderExternalID+`"`) {
 		t.Fatalf("canonical bytes missing order handle: %s", s)
 	}
-	if strings.Contains(s, `"orderId"`) {
-		t.Fatalf("canonical bytes leaked surrogate orderId field: %s", s)
+	if strings.Contains(s, `"orderExternalId"`) {
+		t.Fatalf("canonical bytes leaked internal identity mnemonic: %s", s)
 	}
 	// An empty handle is omitted entirely (omitempty), keeping the envelope free
 	// of any order reference.
@@ -432,7 +432,7 @@ func TestCanonicalBytesNoSurrogateAndCarriesHandle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CanonicalBytes empty: %v", err)
 	}
-	if strings.Contains(string(canonEmpty), `"orderExternalId"`) {
+	if strings.Contains(string(canonEmpty), `"orderId"`) {
 		t.Fatalf("empty order handle should be omitted: %s", canonEmpty)
 	}
 }

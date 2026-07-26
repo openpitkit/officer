@@ -191,11 +191,10 @@ type policyDTO struct {
 }
 
 // auditDTO is the wire shape of a single audit row. An audit row is a machine
-// record: its public handle is the opaque external id; no surrogate id appears.
+// record: its public handle is the opaque id; no surrogate id appears.
 type auditDTO struct {
 	At           time.Time `json:"at"`
 	ID           string    `json:"id"`
-	ExternalID   string    `json:"externalId"`
 	Actor        string    `json:"actor"`
 	ActorTitle   string    `json:"actorTitle"`
 	Action       string    `json:"action"`
@@ -374,11 +373,10 @@ func toPolicyRowDTO(row store.PolicyListRow) policyDTO {
 }
 
 // toAuditDTO maps a domain.AuditRow onto the wire DTO. The audit row's public
-// handle is its opaque external id; no surrogate id is serialized.
+// handle is its opaque id; no surrogate id is serialized.
 func toAuditDTO(row domain.AuditRow) auditDTO {
 	return auditDTO{
 		ID:           row.ExternalID.String(),
-		ExternalID:   row.ExternalID.String(),
 		At:           row.At,
 		Actor:        row.Actor,
 		ActorTitle:   row.ActorTitle,
@@ -454,10 +452,9 @@ type marketDataReferencesDTO struct {
 }
 
 type marketDataInstanceDTO struct {
-	// ExternalID is the instance's opaque public handle (a machine record). The
+	// ID is the instance's opaque public handle (a machine record). The
 	// store surrogate id is never serialized.
-	ID         string `json:"id"`
-	ExternalID string `json:"externalId"`
+	ID string `json:"id"`
 	// Provider is the provider discriminator (e.g. "ib", "binance").
 	Provider string `json:"provider"`
 	Label    string `json:"label"`
@@ -476,13 +473,12 @@ type marketDataInstanceDTO struct {
 }
 
 // marketDataCreateInstanceRequestDTO is the body of POST
-// /market-data/instances. ExternalID is the optional caller-supplied opaque
+// /market-data/instances. ID is the optional caller-supplied opaque
 // public handle for the instance; when omitted the server generates and returns
-// one (in the instance's externalId). A supplied id is accepted verbatim and
+// one. A supplied id is accepted verbatim and
 // must be unique (a duplicate is a 409); it is never a surrogate id.
 type marketDataCreateInstanceRequestDTO struct {
 	ID          string `json:"id,omitempty"`
-	ExternalID  string `json:"externalId,omitempty"`
 	Provider    string `json:"provider"`
 	Label       string `json:"label"`
 	Credentials string `json:"credentials"`
@@ -545,7 +541,7 @@ type marketDataDiagnosticDTO struct {
 type marketDataInstrumentDTO struct {
 	// InstanceExternalID is the owning instance's opaque public handle; omitted
 	// in request bodies (taken from the path) and set in responses.
-	InstanceExternalID string `json:"instanceExternalId,omitempty"`
+	InstanceExternalID string `json:"instanceId,omitempty"`
 	ExternalSymbol     string `json:"externalSymbol"`
 	BaseAsset          string `json:"baseAsset"`
 	QuoteAsset         string `json:"quoteAsset"`
@@ -628,7 +624,6 @@ func toMarketDataInstanceDTO(status backend.MarketDataInstanceStatus) marketData
 	}
 	return marketDataInstanceDTO{
 		ID:              status.Instance.ExternalID.String(),
-		ExternalID:      status.Instance.ExternalID.String(),
 		Provider:        status.Instance.Provider,
 		Label:           status.Instance.Label,
 		Credentials:     "",
@@ -898,12 +893,12 @@ type adjustmentBoundsDTO struct {
 }
 
 // adjustmentRequestDTO is the wire body of POST .../adjustments. All values are
-// exact decimal strings passed through verbatim. ExternalID is the optional
+// exact decimal strings passed through verbatim. ID is the optional
 // caller-supplied opaque public handle for the adjustment record; when omitted
-// the server generates and returns one (under the record's externalId). It is
+// the server generates and returns one. It is
 // write-only on create: a supplied id is accepted verbatim and must be unique
 // (a duplicate is a 409). It is omitted from the request echoed back in an
-// adjustment record (the record's own externalId carries the resolved handle).
+// adjustment record (the record's own id carries the resolved handle).
 type adjustmentRequestDTO struct {
 	Balance           *adjustmentAmountDTO `json:"balance,omitempty"`
 	BalanceBounds     *adjustmentBoundsDTO `json:"balanceBounds,omitempty"`
@@ -912,7 +907,6 @@ type adjustmentRequestDTO struct {
 	Incoming          *adjustmentAmountDTO `json:"incoming,omitempty"`
 	IncomingBounds    *adjustmentBoundsDTO `json:"incomingBounds,omitempty"`
 	ID                string               `json:"id,omitempty"`
-	ExternalID        string               `json:"externalId,omitempty"`
 	Asset             string               `json:"asset"`
 	AverageEntryPrice string               `json:"averageEntryPrice,omitempty"`
 	RealizedPnl       string               `json:"realizedPnl,omitempty"`
@@ -956,15 +950,14 @@ type adjustmentRejectedDTO struct {
 // adjustment is a machine record: its public handle is the opaque external id;
 // no surrogate id is serialized.
 type adjustmentDTO struct {
-	At         time.Time            `json:"at"`
-	ID         string               `json:"id"`
-	ExternalID string               `json:"externalId"`
-	Request    adjustmentRequestDTO `json:"request"`
-	Outcome    adjustmentOutcomeDTO `json:"outcome"`
-	Account    string               `json:"account"`
-	Principal  string               `json:"principal,omitempty"`
-	Source     string               `json:"source"`
-	Status     string               `json:"status"`
+	At        time.Time            `json:"at"`
+	ID        string               `json:"id"`
+	Request   adjustmentRequestDTO `json:"request"`
+	Outcome   adjustmentOutcomeDTO `json:"outcome"`
+	Account   string               `json:"account"`
+	Principal string               `json:"principal,omitempty"`
+	Source    string               `json:"source"`
+	Status    string               `json:"status"`
 }
 
 // fromAdjustmentRequestDTO maps a wire request body onto the domain request.
@@ -1058,15 +1051,14 @@ func toAdjustmentDTO(r domain.AccountAdjustmentRecord) adjustmentDTO {
 		}
 	}
 	return adjustmentDTO{
-		At:         r.At,
-		ID:         r.ExternalID.String(),
-		ExternalID: r.ExternalID.String(),
-		Request:    toAdjustmentRequestDTO(r.Request),
-		Outcome:    outcome,
-		Account:    string(r.Account),
-		Principal:  r.Principal,
-		Source:     string(r.Source),
-		Status:     string(status),
+		At:        r.At,
+		ID:        r.ExternalID.String(),
+		Request:   toAdjustmentRequestDTO(r.Request),
+		Outcome:   outcome,
+		Account:   string(r.Account),
+		Principal: r.Principal,
+		Source:    string(r.Source),
+		Status:    string(status),
 	}
 }
 
@@ -1093,7 +1085,7 @@ func toAdjustmentRealizedPnlResultDTO(
 // exact decimal strings passed through verbatim.
 type orderDTO struct {
 	At                  time.Time       `json:"at"`
-	ExternalID          string          `json:"externalId"`
+	ID                  string          `json:"id"`
 	Account             string          `json:"account"`
 	Principal           string          `json:"principal,omitempty"`
 	BaseAsset           string          `json:"baseAsset"`
@@ -1133,7 +1125,7 @@ func toOrderDTO(o domain.Order, signed bool) orderDTO {
 	}
 	return orderDTO{
 		At:          o.At,
-		ExternalID:  o.ExternalID.String(),
+		ID:          o.ExternalID.String(),
 		Account:     string(o.Account),
 		Principal:   o.Principal,
 		BaseAsset:   o.BaseAsset,
@@ -1211,8 +1203,8 @@ type eventReproductionESignDTO struct {
 // recorded result. It carries no private material.
 type eventReproductionRequestDTO struct {
 	RequestType     string                     `json:"requestType"`
-	OrderExternalID string                     `json:"orderExternalId,omitempty"`
-	EventExternalID string                     `json:"eventExternalId,omitempty"`
+	OrderExternalID string                     `json:"orderId,omitempty"`
+	EventExternalID string                     `json:"eventId,omitempty"`
 	Instrument      string                     `json:"instrument"`
 	Side            string                     `json:"side"`
 	Quantity        string                     `json:"quantity"`
@@ -1389,7 +1381,7 @@ func toCheckResultDTO(r domain.CheckResult) checkResultDTO {
 // the per-event reproduction.
 type orderEventDTO struct {
 	At              time.Time                  `json:"at"`
-	ExternalID      string                     `json:"externalId"`
+	ID              string                     `json:"id"`
 	Order           string                     `json:"order"`
 	Type            string                     `json:"type"`
 	Source          string                     `json:"source"`
@@ -1415,6 +1407,7 @@ type orderEventDTO struct {
 // empty/false/null values remain distinguishable. The opaque engine lock is
 // never exposed.
 type executionReportRequestDTO struct {
+	ID             string         `json:"id"`
 	BaseAsset      string         `json:"baseAsset"`
 	QuoteAsset     string         `json:"quoteAsset"`
 	FillQuantity   string         `json:"fillQuantity"`
@@ -1435,7 +1428,7 @@ type executionReportRequestDTO struct {
 func toOrderEventDTO(e domain.OrderEvent) orderEventDTO {
 	dto := orderEventDTO{
 		At:              e.At,
-		ExternalID:      e.ExternalID.String(),
+		ID:              e.ExternalID.String(),
 		Order:           e.Order.String(),
 		Type:            string(e.Type),
 		Source:          string(e.Source),
@@ -1467,6 +1460,7 @@ func toExecutionReportRequestDTO(
 		return nil
 	}
 	return &executionReportRequestDTO{
+		ID:             in.ExternalID.String(),
 		BaseAsset:      in.BaseAsset,
 		QuoteAsset:     in.QuoteAsset,
 		FillQuantity:   in.FillQuantity,
@@ -1488,7 +1482,7 @@ func toExecutionReportRequestDTO(
 // are exact decimal strings passed through verbatim.
 type tradeDTO struct {
 	At         time.Time      `json:"at"`
-	ExternalID string         `json:"externalId"`
+	ExternalID string         `json:"id"`
 	Order      string         `json:"order"`
 	Account    string         `json:"account"`
 	Principal  string         `json:"principal,omitempty"`
@@ -1573,18 +1567,19 @@ type executionBlockDTO struct {
 }
 
 // executionReportResponseDTO is the response of POST
-// /orders/{externalId}/execution-reports: the recorded result plus the
+// /orders/{id}/execution-reports: the recorded result plus the
 // attestation token proving what Officer recorded. AttestationToken is present
 // on success; signing or attestation persistence failures fail the request
 // before the report is committed.
 type executionReportResponseDTO struct {
+	ID               string             `json:"id"`
 	Result           executionResultDTO `json:"result"`
 	AttestationToken string             `json:"attestationToken,omitempty"`
 	AttestationKeyID string             `json:"attestationKeyId,omitempty"`
 	Signed           bool               `json:"signed"`
 }
 
-// orderMutationResponseDTO is the response of POST /orders/{externalId}/confirm
+// orderMutationResponseDTO is the response of POST /orders/{id}/confirm
 // and .../cancel: the updated order plus the attestation token proving which
 // workflow shortcut Officer recorded. AttestationToken is present on success;
 // signing or attestation persistence failures fail the request.
@@ -1675,7 +1670,6 @@ type publicKeyMaterialDTO struct {
 // id.
 type submitOrderTokenRequestDTO struct {
 	ID          string `json:"id,omitempty"`
-	ExternalID  string `json:"externalId,omitempty"`
 	Account     string `json:"account"`
 	BaseAsset   string `json:"baseAsset"`
 	QuoteAsset  string `json:"quoteAsset"`
@@ -1691,17 +1685,17 @@ type submitOrderTokenRequestDTO struct {
 type approvalTokenDTO struct {
 	Token           string           `json:"token"`
 	KeyID           string           `json:"keyId"`
-	OrderExternalID string           `json:"orderExternalId"`
+	OrderExternalID string           `json:"id"`
 	Verdict         string           `json:"verdict"`
 	Reasons         []orderRejectDTO `json:"reasons,omitempty"`
 }
 
-// confirmExecutionRequestDTO is the body of POST /orders/{externalId}/confirm.
+// confirmExecutionRequestDTO is the body of POST /orders/{id}/confirm.
 type confirmExecutionRequestDTO struct {
 	Token string `json:"token"`
 }
 
-// cancelOrderRequestDTO is the body of POST /orders/{externalId}/cancel.
+// cancelOrderRequestDTO is the body of POST /orders/{id}/cancel.
 type cancelOrderRequestDTO struct {
 	Token  string `json:"token"`
 	Reason string `json:"reason"`

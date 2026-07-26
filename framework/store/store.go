@@ -966,8 +966,13 @@ type RealmStore interface {
 	// after since. Timestamps are compared as RFC3339Nano UTC text.
 	CountOrdersSince(ctx context.Context, since time.Time) (int, error)
 
+	// ExecutionReportExists reports whether id is already bound to a persisted
+	// execution-report request in this realm.
+	ExecutionReportExists(ctx context.Context, id domain.ExternalID) (bool, error)
+
 	// RecordOrderSettlement persists one fill/settlement atomically in a single
-	// transaction: per-asset engine balance snapshots, the optional trade, the
+	// transaction: the optional execution-report identity and all of its event
+	// links, per-asset engine balance snapshots, the optional trade, the
 	// engine-applied account blocks, the optional
 	// lock rewrite, the fill event(s),
 	// and the order status advance commit or roll back together. When AllowedFrom
@@ -975,7 +980,9 @@ type RealmStore interface {
 	// yields domain.ErrConflict with nothing written; otherwise a missing order
 	// yields domain.ErrNotFound. The block-audit row is NOT part of this tx;
 	// callers write it separately after a successful commit.
-	RecordOrderSettlement(ctx context.Context, st domain.OrderSettlement) error
+	RecordOrderSettlement(
+		ctx context.Context, st domain.OrderSettlement,
+	) (domain.ExternalID, error)
 
 	// RecordOrderSubmission persists the submitted order and submitted event,
 	// invokes apply with the persisted order while the same SQL transaction is

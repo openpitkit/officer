@@ -184,7 +184,7 @@ func TestBalanceSettlePersistsEngineRealizedPnlAbsolute(t *testing.T) {
 			{Source: domain.SourcePanel, Type: domain.OrderEventFill},
 		},
 	}
-	if err := rs.RecordOrderSettlement(ctx, st); err != nil {
+	if _, err := rs.RecordOrderSettlement(ctx, st); err != nil {
 		t.Fatalf("RecordOrderSettlement (first): %v", err)
 	}
 	got, _, _ := rs.GetBalance(ctx, "acc-1", "AAPL")

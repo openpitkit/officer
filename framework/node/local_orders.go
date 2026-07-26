@@ -44,7 +44,7 @@ type orderSettlementAttestingRealm interface {
 		ctx context.Context,
 		st domain.OrderSettlement,
 		attest store.EventAttestor,
-	) error
+	) (domain.ExternalID, error)
 }
 
 func recordOrderSubmissionWithAttestation(
@@ -74,13 +74,13 @@ func recordOrderSettlementWithAttestation(
 	realm store.RealmStore,
 	st domain.OrderSettlement,
 	attest store.EventAttestor,
-) error {
+) (domain.ExternalID, error) {
 	if attest == nil {
 		return realm.RecordOrderSettlement(ctx, st)
 	}
 	attesting, ok := realm.(orderSettlementAttestingRealm)
 	if !ok {
-		return fmt.Errorf(
+		return "", fmt.Errorf(
 			"store: order settlement attestation unsupported: %w",
 			domain.ErrNotImplemented,
 		)
@@ -411,7 +411,7 @@ func (n *localNode) confirmOrder(
 				confirmed = detail.Order
 				return nil
 			}
-			if err := recordOrderSettlementWithAttestation(
+			if _, err := recordOrderSettlementWithAttestation(
 				ctx,
 				n.realm,
 				domain.OrderSettlement{
@@ -539,7 +539,7 @@ func (n *localNode) cancelOrder(
 					order, persistence.Blocks,
 				),
 			}
-			if err := recordOrderSettlementWithAttestation(
+			if _, err := recordOrderSettlementWithAttestation(
 				ctx, n.realm, settlement, attest,
 			); err != nil {
 				return n.fatalPostEnginePersistence(

@@ -28,6 +28,7 @@ import {
   FilterBar,
   FilterChip,
   FilterByButton,
+  AutocompleteFilterField,
   OnlineFilterField,
   OPERATORS,
   NumberRangeFilter,
@@ -151,6 +152,53 @@ describe("data controls", () => {
     await user.click(screen.getByRole("button", { name: "Clear all filters" }));
     expect(screen.getByLabelText("query")).toHaveTextContent("");
     expect(screen.queryByText("Active filters")).not.toBeInTheDocument();
+  });
+
+  it("renders account-global filter toggles with pressed and disabled states", async () => {
+    const user = userEvent.setup();
+    const onToggle = vi.fn();
+
+    const { rerender } = render(
+      <OnlineFilterField
+        label="Account"
+        value=""
+        globalToggle={{
+          disabled: true,
+          active: false,
+          onToggle,
+          activeLabel: "Stop using this account globally",
+          inactiveLabel: "Use this account globally",
+          disabledLabel: "Enter an account first",
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Enter an account first" }),
+    ).toBeDisabled();
+
+    rerender(
+      <AutocompleteFilterField
+        ariaLabel="Account"
+        value="ACC-1"
+        globalToggle={{
+          disabled: false,
+          active: true,
+          onToggle,
+          activeLabel: "Stop using this account globally",
+          inactiveLabel: "Use this account globally",
+          disabledLabel: "Enter an account first",
+        }}
+      />,
+    );
+
+    const toggle = screen.getByRole("button", {
+      name: "Stop using this account globally",
+    });
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(toggle);
+    expect(onToggle).toHaveBeenCalledTimes(1);
   });
 
   it("copies raw IDs and deep links", async () => {

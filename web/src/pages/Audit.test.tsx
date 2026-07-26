@@ -75,7 +75,7 @@ function auditPage(
 }
 
 const sampleEntry: AuditEntry = {
-  externalId: "aud-alpha-000000000001",
+  id: "aud-alpha-000000000001",
   at: "2026-06-24T00:00:00Z",
   actor: "operator",
   actorTitle: "Operator",

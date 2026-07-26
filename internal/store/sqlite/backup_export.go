@@ -143,6 +143,97 @@ func (r *realmStore) exportOrderEvents(ctx context.Context) ([]domain.OrderEvent
 	return out, nil
 }
 
+func (r *realmStore) exportExecutionReports(
+	ctx context.Context,
+) ([]backup.ExecutionReportRecord, error) {
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, `
+		SELECT er.external_id, o.external_id, er.at
+		FROM execution_report er
+		JOIN order_record o ON o.id = er.order_id
+		ORDER BY er.at ASC, er.id ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("store: export execution reports: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]backup.ExecutionReportRecord, 0)
+	for rows.Next() {
+		var reportRaw, orderRaw []byte
+		var atRaw string
+		if err := rows.Scan(&reportRaw, &orderRaw, &atRaw); err != nil {
+			return nil, fmt.Errorf("store: scan execution report export: %w", err)
+		}
+		reportID, err := domain.ExternalIDFromBytes(reportRaw)
+		if err != nil {
+			return nil, fmt.Errorf("store: scan execution report id: %w", err)
+		}
+		orderID, err := domain.ExternalIDFromBytes(orderRaw)
+		if err != nil {
+			return nil, fmt.Errorf("store: scan execution report order id: %w", err)
+		}
+		at, err := time.Parse(time.RFC3339Nano, atRaw)
+		if err != nil {
+			return nil, fmt.Errorf("store: scan execution report time: %w", err)
+		}
+		out = append(out, backup.ExecutionReportRecord{
+			ExternalID: reportID,
+			Order:      orderID,
+			At:         at.UTC(),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: iterate execution reports for export: %w", err)
+	}
+	return out, nil
+}
+
+func (r *realmStore) exportExecutionReportEvents(
+	ctx context.Context,
+) ([]backup.ExecutionReportEventLink, error) {
+	db, err := r.db()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, `
+		SELECT er.external_id, oe.external_id
+		FROM execution_report_event ere
+		JOIN execution_report er ON er.id = ere.report_id
+		JOIN order_event oe ON oe.id = ere.event_id
+		ORDER BY er.id ASC, oe.id ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("store: export execution report events: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]backup.ExecutionReportEventLink, 0)
+	for rows.Next() {
+		var reportRaw, eventRaw []byte
+		if err := rows.Scan(&reportRaw, &eventRaw); err != nil {
+			return nil, fmt.Errorf("store: scan execution report event export: %w", err)
+		}
+		reportID, err := domain.ExternalIDFromBytes(reportRaw)
+		if err != nil {
+			return nil, fmt.Errorf("store: scan linked report id: %w", err)
+		}
+		eventID, err := domain.ExternalIDFromBytes(eventRaw)
+		if err != nil {
+			return nil, fmt.Errorf("store: scan linked event id: %w", err)
+		}
+		out = append(out, backup.ExecutionReportEventLink{
+			Report: reportID,
+			Event:  eventID,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: iterate execution report events for export: %w", err)
+	}
+	return out, nil
+}
+
 // exportAudit scans the whole audit trail, oldest first, so the archive restores
 // in the order rows were recorded. It uses the audit-group projection and scan
 // helper directly to avoid a limit-bounded, newest-first UI read.

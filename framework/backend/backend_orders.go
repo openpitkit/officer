@@ -22,137 +22,12 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/store"
 )
-
-// SubmitOrder validates the order's account and assets, routes to the owning
-// node, and runs the engine pre-trade. The returned order carries the recorded
-// lifecycle status, including a rejected status; an engine reject is a
-// successful call, not an error.
-func (s *Service) SubmitOrder(
-	ctx context.Context, o domain.Order,
-) (SubmitOrderResult, error) {
-	// Officer applies no boundary id/asset format checks: the engine seam parses
-	// the account and assets and enforces the real trading rules. Existence is
-	// never checked: any well-formed account or asset is accepted (existing or
-	// not), per the surface contract. A caller-supplied order external id is used
-	// verbatim when valid; the store rejects a duplicate with
-	// domain.ErrAlreadyExists.
-	n, err := s.router.Route(keyFor(o.Account))
-	if err != nil {
-		return SubmitOrderResult{}, fmt.Errorf("backend: route order: %w", err)
-	}
-	key := keyFor(o.Account)
-	signer, err := s.signerOrErr()
-	if err != nil {
-		return SubmitOrderResult{}, err
-	}
-	off, signingKeyID, err := signingMode(ctx, signer)
-	if err != nil {
-		return SubmitOrderResult{}, err
-	}
-	caller := auth.CallerFromContext(ctx)
-	attesting, ok := n.(submitOrderAttestingNode)
-	if !ok {
-		return SubmitOrderResult{}, fmt.Errorf(
-			"backend: submit order attestation unsupported: %w",
-			domain.ErrNotImplemented,
-		)
-	}
-	var resultAttestation Attestation
-	var resultPayload domain.ApprovalPayload
-	submitApprovalID, err := newNonce()
-	if err != nil {
-		return SubmitOrderResult{}, err
-	}
-	attestFor := func(
-		persisted domain.Order, submitted engine.OrderResult,
-	) store.EventAttestor {
-		return eventAttestor(
-			signer, off, signingKeyID, domain.AttestationRequestSubmit,
-			func(event domain.OrderEvent) (domain.ApprovalPayload, bool, error) {
-				eventOrder := orderForEvent(persisted, key, event, caller)
-				switch event.Type {
-				case domain.OrderEventSubmitted:
-					p, err := buildSubmittedPayload(
-						eventOrder, SubmitModeHold, submitApprovalID)
-					return p, err == nil, err
-				case domain.OrderEventPreTradeAccepted:
-					nonce, err := newNonce()
-					if err != nil {
-						return domain.ApprovalPayload{}, false, err
-					}
-					return buildApprovalPayload(
-						eventOrder, SubmitModeHold, submitApprovalID,
-						submitted.SettlementLockPrice, submitted.EstimateSource,
-						time.Now().UTC(), nonce), true, nil
-				case domain.OrderEventPreTradeRejected:
-					nonce, err := newNonce()
-					if err != nil {
-						return domain.ApprovalPayload{}, false, err
-					}
-					reject := domain.OrderReject{
-						Code:    event.Payload.RejectCode,
-						Scope:   event.Payload.RejectScope,
-						Policy:  event.Payload.RejectPolicy,
-						Reason:  event.Payload.RejectReason,
-						Details: event.Payload.RejectDetails,
-					}
-					return buildRejectApprovalPayload(
-						eventOrder, SubmitModeHold, submitApprovalID, reject,
-						time.Now().UTC(), nonce), true, nil
-				case domain.OrderEventCommitted:
-					committed := eventOrder
-					committed.Status = domain.OrderStatusCommitted
-					p, err := s.buildLifecyclePayload(
-						committed, domain.AttestationRequestSubmit,
-						"committed", "", submitApprovalID)
-					return p, err == nil, err
-				default:
-					return domain.ApprovalPayload{}, false, nil
-				}
-			},
-			func(att Attestation, p domain.ApprovalPayload) {
-				if p.Result != nil || p.Verdict == "" {
-					return
-				}
-				resultAttestation = att
-				resultPayload = p
-			},
-		)
-	}
-	order, result, err := attesting.SubmitOrderWithAttestation(
-		ctx, key, o, caller, attestFor,
-	)
-	if err != nil {
-		_ = s.auditApproval(ctx, n, key, domain.AuditActionApprovalFailed,
-			fmt.Sprintf("submit attestation failed: %v", err))
-		return SubmitOrderResult{}, err
-	}
-	if resultPayload.Verdict == "" || resultAttestation.Token == "" {
-		return SubmitOrderResult{}, missingAttestationError(
-			domain.AttestationRequestSubmit)
-	}
-	_ = s.auditApproval(ctx, n, key, domain.AuditActionApprovalIssued,
-		fmt.Sprintf("issue attestation order %s request=%s",
-			order.ExternalID.String(), domain.AttestationRequestSubmit))
-	return SubmitOrderResult{
-		Order: order,
-		Token: ApprovalToken{
-			Token:           resultAttestation.Token,
-			KeyID:           resultAttestation.KeyID,
-			OrderExternalID: order.ExternalID.String(),
-			Verdict:         resultPayload.Verdict,
-			Reasons:         rejectReasons(resultPayload, result.Rejects),
-			Signed:          resultAttestation.Signed,
-		},
-	}, nil
-}
 
 // CheckOrder validates the probe's account and assets, routes to the owning
 // node, and runs the engine pre-trade as a non-mutating dry-run. It mutates no
@@ -163,7 +38,7 @@ func (s *Service) CheckOrder(
 ) (domain.CheckResult, error) {
 	// Officer applies no boundary id/asset format checks; the engine seam parses
 	// the account and assets and enforces the real trading rules. Existence is
-	// never checked, mirroring SubmitOrder.
+	// never checked.
 	n, err := s.router.Route(keyFor(probe.Account))
 	if err != nil {
 		return domain.CheckResult{}, fmt.Errorf("backend: route check: %w", err)

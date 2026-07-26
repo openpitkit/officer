@@ -463,6 +463,8 @@ func (s *Service) SubmitOrderToken(
 		order, result, err = attesting.SubmitOrderWithAttestation(
 			ctx, key, o, caller, attestFor)
 		if err != nil {
+			_ = s.auditApproval(ctx, n, key, domain.AuditActionApprovalFailed,
+				fmt.Sprintf("submit attestation failed: %v", err))
 			return ApprovalToken{}, err
 		}
 		accepted = result.Accepted
@@ -561,6 +563,8 @@ func (s *Service) SubmitOrderToken(
 		order, result, err = attesting.SubmitImmediateWithAttestation(
 			ctx, key, o, caller, attestFor)
 		if err != nil {
+			_ = s.auditApproval(ctx, n, key, domain.AuditActionApprovalFailed,
+				fmt.Sprintf("submit attestation failed: %v", err))
 			return ApprovalToken{}, err
 		}
 		accepted = result.Accepted

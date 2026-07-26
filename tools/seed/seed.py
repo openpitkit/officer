@@ -935,16 +935,18 @@ def seed(base: str) -> None:
         if "price" in order_def:
             body["price"] = order_def["price"]
 
-        resp = _post(base, "/orders", body, conflict_ok=False)
-        order = resp.get("order", {})
-        order_id = order.get("externalId")
-        status = order.get("status", "?")
-
-        if order_id is None:
-            msg = f"submit order {instrument} for '{acct_id}': {resp}"
+        token = _post(base, "/orders/submit", body, conflict_ok=False)
+        order_id = token.get("id")
+        if not isinstance(order_id, str) or not order_id:
+            msg = f"submit order {instrument} for '{acct_id}': {token}"
             print(f"  [!] {msg}", file=sys.stderr)
             errors.append(msg)
             continue
+
+        order_url_id = urllib.parse.quote(order_id, safe="")
+        resp = _get(base, f"/orders/{order_url_id}")
+        order = resp.get("order", {})
+        status = order.get("status", "?")
 
         print(f"  [+] order {order_id}  {instrument}  {order_def['side']}  status={status}")
         orders_submitted += 1
@@ -972,7 +974,6 @@ def seed(base: str) -> None:
             errors.append(msg)
             continue
 
-        order_url_id = urllib.parse.quote(order_id, safe="")
         order_quantity = Decimal(order_def["amountValue"])
         cumulative_filled = Decimal(0)
         for er in fills:

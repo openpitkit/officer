@@ -201,6 +201,12 @@ func (r *realmStore) exportData(ctx context.Context) (backup.Data, error) {
 	if data.OrderEvents, err = r.exportOrderEvents(ctx); err != nil {
 		return backup.Data{}, err
 	}
+	if data.ExecutionReports, err = r.exportExecutionReports(ctx); err != nil {
+		return backup.Data{}, err
+	}
+	if data.ExecutionReportEvents, err = r.exportExecutionReportEvents(ctx); err != nil {
+		return backup.Data{}, err
+	}
 	if data.Trades, err = r.ListAllTrades(ctx, "", ""); err != nil {
 		return backup.Data{}, err
 	}

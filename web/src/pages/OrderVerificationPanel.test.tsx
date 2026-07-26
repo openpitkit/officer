@@ -32,7 +32,7 @@ import { renderWithApi } from "@/test/apiClient";
 
 // A minimal but complete event body for the reproduction bundle.
 const sampleEvent: OrderEvent = {
-  externalId: "evt-repro-1",
+  id: "evt-repro-1",
   order: "ord-repro-1",
   at: "2026-06-24T00:00:00Z",
   type: "submitted",
@@ -89,7 +89,7 @@ async function buildSignedToken(
     version: 1,
     mode: "immediate",
     requestType: "submit",
-    orderExternalId: "ord-repro-1",
+    orderId: "ord-repro-1",
     instrument: "AAPL/USD",
     side: "buy",
     quantity: "10",
@@ -146,8 +146,8 @@ function submitBundleFrom(fixture: SignedFixture): EventReproduction {
     },
     request: {
       requestType: "submit",
-      orderExternalId: "ord-repro-1",
-      eventExternalId: "evt-repro-1",
+      orderId: "ord-repro-1",
+      eventId: "evt-repro-1",
       instrument: "AAPL/USD",
       side: "buy",
       quantity: "10",
@@ -163,7 +163,7 @@ function submitBundleFrom(fixture: SignedFixture): EventReproduction {
       submitResponse: {
         token: fixture.token,
         keyId: fixture.keyId,
-        orderExternalId: "ord-repro-1",
+        id: "ord-repro-1",
         verdict: "accept",
         reasons: [],
       },
@@ -188,7 +188,7 @@ function submitBundleFrom(fixture: SignedFixture): EventReproduction {
 // non-submit request type end-to-end (its own facet, token, and result).
 function execReportBundleFrom(fixture: SignedFixture): EventReproduction {
   const fillEvent: OrderEvent = {
-    externalId: "evt-fill-1",
+    id: "evt-fill-1",
     order: "ord-repro-1",
     at: "2026-06-24T00:01:00Z",
     type: "fill",
@@ -210,8 +210,8 @@ function execReportBundleFrom(fixture: SignedFixture): EventReproduction {
     },
     request: {
       requestType: "execution_report",
-      orderExternalId: "ord-repro-1",
-      eventExternalId: "evt-fill-1",
+      orderId: "ord-repro-1",
+      eventId: "evt-fill-1",
       instrument: "AAPL/USD",
       side: "buy",
       quantity: "10",
@@ -234,6 +234,7 @@ function execReportBundleFrom(fixture: SignedFixture): EventReproduction {
     response: {
       submitResponse: null,
       executionReport: {
+        id: "evt-fill-1",
         blocks: [],
         outcomes: [],
         attestationToken: fixture.token,
@@ -495,7 +496,7 @@ describe("OrderVerificationPanel — verify token mode", () => {
       approvalRef: "approval-submit-1",
       requestType: "execution_report",
       mode: "hold",
-      eventExternalId: "evt-fill-1",
+      eventId: "evt-fill-1",
       venue: "XNAS",
       priceCurrency: "USD",
       timeInForce: "GTC",

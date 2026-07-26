@@ -339,6 +339,30 @@ CREATE TABLE event_attestation (
 
 CREATE INDEX idx_event_attestations_signing_key ON event_attestation (signing_key_id);
 
+-- One inbound execution-report request. external_id is the caller's handle on
+-- the request; the one or two order events it produced link through
+-- execution_report_event. The event payload remains the report snapshot.
+CREATE TABLE execution_report (
+    id          {{PK}},
+    external_id {{XID}} UNIQUE,
+    order_id    INTEGER NOT NULL REFERENCES order_record(id) ON DELETE CASCADE,
+    at          TEXT    NOT NULL
+);
+
+CREATE INDEX idx_execution_report_order
+    ON execution_report (order_id, at DESC, id DESC);
+
+-- Report -> produced events (fill and/or status change). An event belongs to at
+-- most one execution report.
+CREATE TABLE execution_report_event (
+    report_id INTEGER NOT NULL REFERENCES execution_report(id) ON DELETE CASCADE,
+    event_id  INTEGER NOT NULL REFERENCES order_event(id) ON DELETE CASCADE,
+    PRIMARY KEY (report_id, event_id)
+);
+
+CREATE UNIQUE INDEX uq_execution_report_event
+    ON execution_report_event (event_id);
+
 -- Per-fill trade records ("reports"); one row per fill. lock_price is empty when
 -- not applicable. commission_amount/commission_currency preserve the signed
 -- per-fill fee or rebate in its own currency. order, account and asset cascade;

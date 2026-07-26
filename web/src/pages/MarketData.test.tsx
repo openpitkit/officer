@@ -93,7 +93,7 @@ function ibInstance(
   overrides: Partial<MarketDataInstance> = {},
 ): MarketDataInstance {
   return {
-    externalId: "ib-1",
+    id: "ib-1",
     provider: "ib",
     label: "IB Gateway",
     credentials: "",
@@ -205,7 +205,7 @@ describe("provider references", () => {
   it("links Alpaca symbols to the current assets documentation", () => {
     renderCard(
       ibInstance({
-        externalId: "alpaca-1",
+        id: "alpaca-1",
         provider: "alpaca",
         label: "Alpaca",
         searchesSymbols: false,
@@ -223,14 +223,14 @@ describe("provider references", () => {
   it("hides symbol verification buttons when the feed cannot verify", () => {
     renderCard(
       ibInstance({
-        externalId: "alpaca-1",
+        id: "alpaca-1",
         provider: "alpaca",
         label: "Alpaca",
         verifiesSymbols: false,
         searchesSymbols: false,
         instruments: [
           {
-            instanceExternalId: "alpaca-1",
+            instanceId: "alpaca-1",
             externalSymbol: "AAPL",
             baseAsset: "AAPL",
             quoteAsset: "USD",
@@ -252,7 +252,7 @@ describe("provider references", () => {
     const user = userEvent.setup();
     renderCard(
       ibInstance({
-        externalId: "binance-1",
+        id: "binance-1",
         provider: "binance",
         label: "Binance",
         searchesSymbols: false,
@@ -385,7 +385,7 @@ describe("provider references", () => {
       ibInstance({
         instruments: [
           {
-            instanceExternalId: "ib-1",
+            instanceId: "ib-1",
             externalSymbol: "AAPL",
             baseAsset: "AAPL",
             quoteAsset: "USD",
@@ -436,7 +436,7 @@ describe("manual market-data numeric guards", () => {
     overrides: Partial<MarketDataInstance> = {},
   ): MarketDataInstance {
     return ibInstance({
-      externalId: "manual-1",
+      id: "manual-1",
       provider: "byo",
       label: "Manual",
       verifiesSymbols: false,
@@ -471,7 +471,7 @@ describe("manual market-data numeric guards", () => {
     renderCard(
       manualInstance({
         instruments: [{
-          instanceExternalId: "manual-1",
+          instanceId: "manual-1",
           externalSymbol: "AAPL",
           baseAsset: "AAPL",
           quoteAsset: "USD",
@@ -697,7 +697,7 @@ describe("IB feed resolver", () => {
     const onUpsertInstrument = vi.fn().mockResolvedValue(true);
     renderCard(
       ibInstance({
-        externalId: "bn-1",
+        id: "bn-1",
         provider: "binance",
         label: "Binance",
         searchesSymbols: true,
@@ -713,7 +713,7 @@ describe("IB feed resolver", () => {
 
     expect(onSearchSymbols).toHaveBeenCalledTimes(1);
     const [searchedInstance, input] = onSearchSymbols.mock.calls[0];
-    expect(searchedInstance.externalId).toBe("bn-1");
+    expect(searchedInstance.id).toBe("bn-1");
     expect(input).toMatchObject({ query: "BTC/USDT" });
 
     const result = await screen.findByRole("button", { name: /BTCUSDT/ });
@@ -751,7 +751,7 @@ describe("IB feed resolver", () => {
     ]);
     renderCard(
       ibInstance({
-        externalId: "bn-1",
+        id: "bn-1",
         provider: "binance",
         label: "Binance",
         searchesSymbols: true,
@@ -789,7 +789,7 @@ describe("IB feed resolver", () => {
     const onUpsertInstrument = vi.fn().mockResolvedValue(true);
     renderCard(
       ibInstance({
-        externalId: "bn-1",
+        id: "bn-1",
         provider: "binance",
         label: "Binance",
         searchesSymbols: true,
@@ -829,7 +829,7 @@ describe("IB feed resolver", () => {
     const onSearchSymbols = vi.fn().mockResolvedValue([match]);
     renderCard(
       ibInstance({
-        externalId: "fh-1",
+        id: "fh-1",
         provider: "finnhub",
         label: "Finnhub",
         searchesSymbols: true,
@@ -861,12 +861,12 @@ describe("IB feed resolver", () => {
   it("shows the source venue under an exchange-qualified instrument row", () => {
     renderCard(
       ibInstance({
-        externalId: "fh-1",
+        id: "fh-1",
         provider: "finnhub",
         label: "Finnhub",
         instruments: [
           {
-            instanceExternalId: "fh-1",
+            instanceId: "fh-1",
             externalSymbol: "BINANCE:ETHUSDT",
             baseAsset: "ETH",
             quoteAsset: "USDT",
@@ -913,7 +913,7 @@ describe("IB instrument persistence (full-map send)", () => {
     const instance = ibInstance({
       instruments: [
         {
-          instanceExternalId: "ib-1",
+          instanceId: "ib-1",
           externalSymbol: "MSFT",
           baseAsset: "MSFT",
           quoteAsset: "USD",
@@ -979,7 +979,7 @@ describe("IB instrument persistence (full-map send)", () => {
     const instance = ibInstance({
       instruments: [
         {
-          instanceExternalId: "ib-1",
+          instanceId: "ib-1",
           externalSymbol: "MSFT",
           baseAsset: "MSFT",
           quoteAsset: "USD",
@@ -989,7 +989,7 @@ describe("IB instrument persistence (full-map send)", () => {
           stale: false,
         },
         {
-          instanceExternalId: "ib-1",
+          instanceId: "ib-1",
           externalSymbol: "AAPL",
           baseAsset: "AAPL",
           quoteAsset: "USD",
@@ -1098,7 +1098,7 @@ describe("stale quote rendering", () => {
       ibInstance({
         instruments: [
           {
-            instanceExternalId: "ib-1",
+            instanceId: "ib-1",
             externalSymbol: "AAPL",
             baseAsset: "AAPL",
             quoteAsset: "USD",
@@ -1137,7 +1137,7 @@ describe("stale quote rendering", () => {
       ibInstance({
         instruments: [
           {
-            instanceExternalId: "ib-1",
+            instanceId: "ib-1",
             externalSymbol: "AAPL",
             baseAsset: "AAPL",
             quoteAsset: "USD",
@@ -1172,7 +1172,7 @@ describe("synthetic inverse price rendering", () => {
       ibInstance({
         instruments: [
           {
-            instanceExternalId: "ib-1",
+            instanceId: "ib-1",
             externalSymbol: "EURUSD",
             baseAsset: "EUR",
             quoteAsset: "USD",
@@ -1210,7 +1210,7 @@ describe("synthetic inverse price rendering", () => {
       ibInstance({
         instruments: [
           {
-            instanceExternalId: "ib-1",
+            instanceId: "ib-1",
             externalSymbol: "EURUSD",
             baseAsset: "EUR",
             quoteAsset: "USD",
@@ -1281,7 +1281,7 @@ describe("source deletion", () => {
         ibInstance({
           instruments: [
             {
-              instanceExternalId: "ib-1",
+              instanceId: "ib-1",
               externalSymbol: "AAPL",
               baseAsset: "AAPL",
               quoteAsset: "USD",

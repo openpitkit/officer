@@ -98,9 +98,6 @@ func handleApplyAdjustment(svc Service) http.HandlerFunc {
 		// backend generates one and returns it on the record.
 		var externalID domain.ExternalID
 		suppliedID := req.ID
-		if suppliedID == "" {
-			suppliedID = req.ExternalID
-		}
 		if suppliedID != "" {
 			externalID, err = domain.ParseExternalID(suppliedID)
 			if err != nil {
@@ -174,10 +171,3 @@ func toAdjustmentDTOs(recs []domain.AccountAdjustmentRecord) []adjustmentDTO {
 	}
 	return dtos
 }
-
-// --- trading ----------------------------------------------------------------
-
-// handleSubmitOrder handles POST /api/v1/orders. This is the submit-like-the-API
-// path: it runs the engine pre-trade and records every event, rejects included.
-// An engine reject is a successful call returning the order in its rejected
-// status, not an HTTP error.

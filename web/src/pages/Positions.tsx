@@ -126,6 +126,7 @@ import { usePersistentPageSize } from "@/lib/tablePageSize";
 import { absoluteAppUrl, shareUrl } from "@/lib/shareLink";
 import { ACTIVE_STATUS_QUERY } from "@/lib/orderStatus";
 import { DEFAULT_SEARCH_DEBOUNCE_MS, useDebouncedValue } from "@/lib/useDebounce";
+import { useGlobalAccountFilter } from "@/lib/globalAccountFilter";
 import { operatorOptions } from "@/lib/dataControlLabels";
 import { isDecimalRangeValid } from "@/lib/numberStep";
 import { cn } from "@/lib/utils";
@@ -280,7 +281,7 @@ function downloadCsv(filename: string, rows: string[][]): void {
 
 function adjustmentCsvRow(adj: Adjustment): string[] {
   return [
-    adj.externalId,
+    adj.id,
     adj.at,
     adj.account,
     adj.asset,
@@ -3060,7 +3061,7 @@ function HistoryRow({
       </TableCell>
       <TableCell className="text-muted-lt">
         <IdCell
-          value={adj.externalId}
+          value={adj.id}
           copyTitle={t("common:rowActions.copyId")}
           copiedTitle={t("common:rowActions.copiedId")}
         />
@@ -3068,7 +3069,7 @@ function HistoryRow({
       <TableCell className="text-right">
         <RowActions align="flex-end">
           <CloneButton
-            title={tc("rowActions.cloneTitle", { entity: adj.externalId })}
+            title={tc("rowActions.cloneTitle", { entity: adj.id })}
             onClick={() => onClone(adj)}
           />
         </RowActions>
@@ -3120,7 +3121,8 @@ export function Positions() {
   const { fetchAccounts, fetchAdjustmentsPage, fetchAssets, fetchGroups } =
     useOfficerApi();
   const [searchParams] = useSearchParams();
-  const initialAccount = searchParams.get("account") ?? "";
+  const globalAccountFilter = useGlobalAccountFilter();
+  const initialAccount = globalAccountFilter.account || searchParams.get("account") || "";
   const initialGroup = searchParams.get("group") ?? "";
   const initialAsset = searchParams.get("asset") ?? "";
   const initialTab: PositionsTab =
@@ -3138,10 +3140,10 @@ export function Positions() {
     return SOURCES.includes(source as Source) ? (source as Source) : "__all__";
   });
   const [historyExternalId, setHistoryExternalId] = useState(
-    searchParams.get("id") ?? searchParams.get("externalId") ?? "",
+    searchParams.get("id") ?? "",
   );
   const [appliedHistoryExternalId, setAppliedHistoryExternalId] = useState(
-    searchParams.get("id") ?? searchParams.get("externalId") ?? "",
+    searchParams.get("id") ?? "",
   );
   const [historyStatusFilter, setHistoryStatusFilter] = useState<
     Adjustment["status"] | "__all__"
@@ -3205,6 +3207,19 @@ export function Positions() {
   const resetHistoryPage = () => {
     setHistoryPage(0);
   };
+
+  useEffect(() => {
+    const account = globalAccountFilter.account;
+    if (account === "") {
+      return;
+    }
+    // Mirror the external global-account store into this page-local filter.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setAccountDraft(account);
+    setAccountFilter(account);
+    setBalancePage(0);
+    resetHistoryPage();
+  }, [globalAccountFilter.account]);
 
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [adjustAccount, setAdjustAccount] = useState("");
@@ -3308,7 +3323,7 @@ export function Positions() {
           : {};
   const adjustmentsLoad = useAdjustmentsPage(
     {
-      externalId: appliedHistoryExternalId.trim() || undefined,
+      id: appliedHistoryExternalId.trim() || undefined,
       account: deferredAccount || undefined,
       asset: deferredAsset || undefined,
       source: deferredSource,
@@ -3519,6 +3534,33 @@ export function Positions() {
     accountDraft.trim() !== accountFilter ||
     groupDraft.trim() !== groupFilter ||
     assetDraft.trim() !== assetFilter;
+  const accountGlobalLocked =
+    globalAccountFilter.account !== "" &&
+    accountFilter.trim() === globalAccountFilter.account;
+  const accountGlobalToggle = {
+    active:
+      accountDraft.trim() !== "" &&
+      accountDraft.trim() === globalAccountFilter.account,
+    disabled: accountDraft.trim() === "",
+    activeLabel: tc("filters.globalAccount.active"),
+    inactiveLabel: tc("filters.globalAccount.inactive"),
+    disabledLabel: tc("filters.globalAccount.disabled"),
+    onToggle: () => {
+      const nextAccount = accountDraft.trim();
+      if (nextAccount === "") {
+        return;
+      }
+      if (globalAccountFilter.account === nextAccount) {
+        globalAccountFilter.clear();
+        return;
+      }
+      globalAccountFilter.setAccount(nextAccount);
+      setAccountDraft(nextAccount);
+      setAccountFilter(nextAccount);
+      setBalancePage(0);
+      resetHistoryPage();
+    },
+  };
   const applyIdentityFilters = () => {
     const nextAccount = accountDraft.trim();
     const nextGroup = groupDraft.trim();
@@ -3567,7 +3609,7 @@ export function Positions() {
       });
       downloadCsv("position-adjustment-history.csv", [
         [
-          "external_id",
+          "id",
           "at",
           "account",
           "asset",
@@ -3861,6 +3903,9 @@ export function Positions() {
   const advancedFilterCount = visibleFilterChips.length;
   const clearActiveFilters = () => {
     for (const entry of activeFilterChips) {
+      if (entry.key === "account" && accountGlobalLocked) {
+        continue;
+      }
       entry.clear();
     }
   };
@@ -4027,16 +4072,25 @@ export function Positions() {
           value={accountDraft}
           placeholder="acc-1"
           suggestions={visibleAccountSuggestions}
-          onChange={setAccountDraft}
+          onChange={(value) => {
+            if (accountGlobalLocked && value.trim() === "") {
+              globalAccountFilter.clear();
+            }
+            setAccountDraft(value);
+          }}
           onSuggestionSelect={(value) => applyIdentityField("account", value)}
           onKeyDown={applyIdentityFiltersOnEnter}
           onClear={() => {
+            if (accountGlobalLocked) {
+              globalAccountFilter.clear();
+            }
             setAccountDraft("");
             setAccountFilter("");
             setBalancePage(0);
             resetHistoryPage();
           }}
           clearLabel={t("common:filters.clearField")}
+          globalToggle={accountGlobalToggle}
         />
         <AutocompleteFilterField
           label={t("filters.byAsset")}
@@ -4432,7 +4486,7 @@ export function Positions() {
                   <TableBody>
                     {pagedAdjustments.map((adj) => (
                       <HistoryRow
-                        key={adj.externalId}
+                        key={adj.id}
                         adj={adj}
                         onClone={openCloneAdjust}
                         onFilterAccount={filterHistoryAccount}

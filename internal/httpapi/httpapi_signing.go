@@ -193,7 +193,7 @@ func handleSetSigningConfig(svc Service) http.HandlerFunc {
 // selects the workflow path that waits for execution reports. Submit CREATES
 // the order exactly once: it runs pre-trade in the given mode and records the
 // order, then issues a signed
-// approval token on accept. The returned orderExternalId is the id actually used
+// approval token on accept. The returned id is the one actually used
 // (the supplied one when valid, else a generated one), so confirm/cancel resolve
 // the same order. There is no separate persisting create before submit.
 func handleSubmitOrderToken(svc Service) http.HandlerFunc {
@@ -220,13 +220,10 @@ func handleSubmitOrderToken(svc Service) http.HandlerFunc {
 			AmountValue: req.AmountValue,
 			Price:       req.Price,
 		}
-		// A caller-supplied external id is optional. When present, the backend
+		// A caller-supplied id is optional. When present, the backend
 		// uses it verbatim and rejects a duplicate with 409. When absent the
 		// backend generates one and returns it.
 		suppliedID := req.ID
-		if suppliedID == "" {
-			suppliedID = req.ExternalID
-		}
 		if suppliedID != "" {
 			id, err := domain.ParseExternalID(suppliedID)
 			if err != nil {

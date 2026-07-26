@@ -59,8 +59,8 @@ func TestListOrders_Seeded(t *testing.T) {
 	if o["account"] != "acc-1" || o["baseAsset"] != "AAPL" || o["price"] != "100" {
 		t.Fatalf("order fields not on the wire: %v", o)
 	}
-	if o["externalId"] != extID("order-1").String() {
-		t.Fatalf("want externalId=%s, got %v", extID("order-1").String(), o["externalId"])
+	if o["id"] != extID("order-1").String() {
+		t.Fatalf("want id=%s, got %v", extID("order-1").String(), o["id"])
 	}
 	assertNoSurrogateID(t, o)
 	// displayPrices must serialise as an empty array, never null.
@@ -243,8 +243,8 @@ func TestGetOrder_Found(t *testing.T) {
 		t.Fatalf("want order object, got %v", m["order"])
 	}
 	assertNoSurrogateID(t, order)
-	if order["externalId"] != extID("order-1").String() {
-		t.Fatalf("want externalId=%s, got %v", extID("order-1").String(), order["externalId"])
+	if order["id"] != extID("order-1").String() {
+		t.Fatalf("want id=%s, got %v", extID("order-1").String(), order["id"])
 	}
 	events, ok := m["events"].([]any)
 	if !ok || len(events) != 1 {
@@ -566,8 +566,11 @@ func TestListTrades_Seeded(t *testing.T) {
 	if tr["account"] != "acc-1" || tr["quantity"] != "1" || tr["price"] != "100" {
 		t.Fatalf("trade fields not on the wire: %v", tr)
 	}
-	if tr["externalId"] != extID("trade-1").String() {
-		t.Fatalf("want externalId, got %v", tr["externalId"])
+	if tr["id"] != extID("trade-1").String() {
+		t.Fatalf("want id, got %v", tr["id"])
+	}
+	if _, leaked := tr["externalId"]; leaked {
+		t.Fatalf("trade leaked externalId: %v", tr)
 	}
 	assertNoSurrogateID(t, tr)
 	if m["total"] != float64(1) {
@@ -735,8 +738,8 @@ func TestListAdjustments_Seeded(t *testing.T) {
 		t.Fatalf("want status=accepted, got %v", a["status"])
 	}
 	assertNoSurrogateID(t, a)
-	if a["externalId"] != extID("adj-1").String() {
-		t.Fatalf("want externalId, got %v", a["externalId"])
+	if a["id"] != extID("adj-1").String() {
+		t.Fatalf("want id, got %v", a["id"])
 	}
 	outcome, _ := a["outcome"].(map[string]any)
 	accepted, _ := outcome["accepted"].(map[string]any)
@@ -1118,7 +1121,7 @@ func TestApplyAdjustment_SuppliedExternalID(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bytes.NewBufferString(fmt.Sprintf(
-		`{"externalId":%q,"asset":"USD","balance":{"mode":"delta","value":"100"}}`,
+		`{"id":%q,"asset":"USD","balance":{"mode":"delta","value":"100"}}`,
 		supplied.String()))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
@@ -1132,8 +1135,8 @@ func TestApplyAdjustment_SuppliedExternalID(t *testing.T) {
 	}
 	m := bodyMap(t, rec.Result())
 	adj, _ := m["adjustment"].(map[string]any)
-	if adj["externalId"] != supplied.String() {
-		t.Errorf("want externalId=%s, got %v", supplied.String(), adj["externalId"])
+	if adj["id"] != supplied.String() {
+		t.Errorf("want id=%s, got %v", supplied.String(), adj["id"])
 	}
 	assertNoSurrogateID(t, adj)
 }
@@ -1172,7 +1175,7 @@ func TestApplyAdjustment_DuplicateConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bytes.NewBufferString(fmt.Sprintf(
-		`{"externalId":%q,"asset":"USD","balance":{"mode":"delta","value":"100"}}`,
+		`{"id":%q,"asset":"USD","balance":{"mode":"delta","value":"100"}}`,
 		extID("adj-dup").String()))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
@@ -1197,7 +1200,7 @@ func TestApplyAdjustment_OpaqueExternalID(t *testing.T) {
 	}
 	supplied := "not-valid"
 	body := bytes.NewBufferString(
-		`{"externalId":"` + supplied + `","asset":"USD","balance":{"mode":"delta","value":"100"}}`)
+		`{"id":"` + supplied + `","asset":"USD","balance":{"mode":"delta","value":"100"}}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/accounts/acc-1/adjustments", body))

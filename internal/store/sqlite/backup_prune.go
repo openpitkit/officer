@@ -711,12 +711,19 @@ func (rt *restoreTx) pruneUserSettings(ctx context.Context, settings []domain.Us
 	return nil
 }
 
-// pruneActivity deletes the in-scope adjustments and orders the archive omits.
-// Deleting an order cascades its events, trades and approval; order events and
-// trades therefore need no separate prune. The account selector decides scope.
+// pruneActivity deletes the in-scope adjustments, execution reports and orders
+// the archive omits. Report links are pruned independently so a retained report
+// cannot keep a relationship absent from the archive. Deleting an omitted order
+// cascades its remaining children. The account selector decides scope.
 func (rt *restoreTx) pruneActivity(
 	ctx context.Context, accounts accountScope, data backup.Data,
 ) error {
+	if err := rt.pruneExecutionReportLinks(ctx, accounts, data.ExecutionReportEvents); err != nil {
+		return err
+	}
+	if err := rt.pruneExecutionReports(ctx, accounts, data.ExecutionReports); err != nil {
+		return err
+	}
 	keepAdj := make(map[string]bool, len(data.Adjustments))
 	for _, adj := range data.Adjustments {
 		keepAdj[adj.ExternalID.String()] = true
@@ -731,6 +738,130 @@ func (rt *restoreTx) pruneActivity(
 		keepOrders[rec.Order.ExternalID.String()] = true
 	}
 	return rt.pruneByExternalID(ctx, accounts, "order_record", keepOrders)
+}
+
+func (rt *restoreTx) pruneExecutionReports(
+	ctx context.Context,
+	accounts accountScope,
+	reports []backup.ExecutionReportRecord,
+) error {
+	keep := make(map[string]bool, len(reports))
+	for _, report := range reports {
+		keep[report.ExternalID.String()] = true
+	}
+	rows, err := rt.tx.QueryContext(ctx, `
+		SELECT er.external_id, a.code
+		FROM execution_report er
+		JOIN order_record o ON o.id = er.order_id
+		JOIN account a ON a.id = o.account_id`)
+	if err != nil {
+		return fmt.Errorf("store: prune execution reports scan: %w", err)
+	}
+	type reportRow struct {
+		id      []byte
+		account string
+	}
+	var stored []reportRow
+	for rows.Next() {
+		var row reportRow
+		if err := rows.Scan(&row.id, &row.account); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("store: prune execution report row: %w", err)
+		}
+		row.id = append([]byte(nil), row.id...)
+		stored = append(stored, row)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("store: prune execution reports iterate: %w", err)
+	}
+	_ = rows.Close()
+	for _, row := range stored {
+		id, err := domain.ExternalIDFromBytes(row.id)
+		if err != nil {
+			return fmt.Errorf("store: prune execution report id: %w", err)
+		}
+		if keep[id.String()] || !accounts.in(row.account) {
+			continue
+		}
+		if _, err := rt.tx.ExecContext(
+			ctx, `DELETE FROM execution_report WHERE external_id = ?`, row.id,
+		); err != nil {
+			return fmt.Errorf("store: prune execution report %q: %w", id, err)
+		}
+	}
+	return nil
+}
+
+func (rt *restoreTx) pruneExecutionReportLinks(
+	ctx context.Context,
+	accounts accountScope,
+	links []backup.ExecutionReportEventLink,
+) error {
+	keep := make(map[string]bool, len(links))
+	for _, link := range links {
+		keep[link.Report.String()+"\x00"+link.Event.String()] = true
+	}
+	rows, err := rt.tx.QueryContext(ctx, `
+		SELECT er.external_id, oe.external_id, ere.event_id, a.code
+		FROM execution_report_event ere
+		JOIN execution_report er ON er.id = ere.report_id
+		JOIN order_event oe ON oe.id = ere.event_id
+		JOIN order_record o ON o.id = er.order_id
+		JOIN account a ON a.id = o.account_id`)
+	if err != nil {
+		return fmt.Errorf("store: prune execution report links scan: %w", err)
+	}
+	type linkRow struct {
+		reportID   []byte
+		eventID    []byte
+		eventRowID int64
+		account    string
+	}
+	var stored []linkRow
+	for rows.Next() {
+		var row linkRow
+		if err := rows.Scan(
+			&row.reportID, &row.eventID, &row.eventRowID, &row.account,
+		); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("store: prune execution report link row: %w", err)
+		}
+		row.reportID = append([]byte(nil), row.reportID...)
+		row.eventID = append([]byte(nil), row.eventID...)
+		stored = append(stored, row)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("store: prune execution report links iterate: %w", err)
+	}
+	_ = rows.Close()
+	for _, row := range stored {
+		reportID, err := domain.ExternalIDFromBytes(row.reportID)
+		if err != nil {
+			return fmt.Errorf("store: prune linked execution report id: %w", err)
+		}
+		eventID, err := domain.ExternalIDFromBytes(row.eventID)
+		if err != nil {
+			return fmt.Errorf("store: prune linked execution event id: %w", err)
+		}
+		if keep[reportID.String()+"\x00"+eventID.String()] || !accounts.in(row.account) {
+			continue
+		}
+		if _, err := rt.tx.ExecContext(
+			ctx,
+			`DELETE FROM execution_report_event WHERE event_id = ?`,
+			row.eventRowID,
+		); err != nil {
+			return fmt.Errorf(
+				"store: prune execution report %q event %q: %w",
+				reportID,
+				eventID,
+				err,
+			)
+		}
+	}
+	return nil
 }
 
 // pruneByExternalID deletes the in-scope rows of an account-addressed,

@@ -481,10 +481,10 @@ func rebind(p domain.ApprovalPayload, expect fwsigning.VerifyParams) error {
 	if expect.OrderExternalID != "" {
 		// Once an order row exists, its opaque handle is a required binding.
 		if p.OrderExternalID == "" {
-			return fmt.Errorf("signing: orderExternalId missing for order %q: %w",
+			return fmt.Errorf("signing: orderId missing for order %q: %w",
 				expect.OrderExternalID, domain.ErrInvalid)
 		}
-		if err := check("orderExternalId", expect.OrderExternalID, p.OrderExternalID); err != nil {
+		if err := check("orderId", expect.OrderExternalID, p.OrderExternalID); err != nil {
 			return err
 		}
 	}
