@@ -146,12 +146,10 @@ func TestService_ResetDatabaseNodeError(t *testing.T) {
 	}
 }
 
-// TestService_RestartMarketDataReadoptsCurrentSink proves the welcome-flow fix:
-// an engine rebuild (account/group create) replaces the engine's market-data
-// service, so a restart must re-adopt the node's current sink instead of reusing
-// a cached one that now points at a closed service ("market-data service is
-// null"). The fake node reports a fresh current sink; RestartMarketData must
-// stop the runtime, UseSink that sink, and restart.
+// TestService_RestartMarketDataReadoptsCurrentSink proves an explicit feed
+// restart re-adopts the node's current sink. Reset and residual recovery may
+// replace the engine's market-data service, so reusing a cached native sink can
+// otherwise leave every push targeting the closed service.
 func TestService_RestartMarketDataReadoptsCurrentSink(t *testing.T) {
 	t.Parallel()
 	md := &fakeMarketDataRuntime{}
@@ -199,8 +197,10 @@ func TestService_RestoreBackupGeneralSettingsDoesNotStopMarketData(t *testing.T)
 	t.Parallel()
 	md := &fakeMarketDataRuntime{}
 	svc, _ := newTestServiceWithMarketDataRuntime(md)
-	_, err := svc.RestoreBackup(context.Background(), backup.Archive{}, backup.RestoreOptions{
-		Scope: backup.Scope{Sections: []backup.Section{backup.SectionGeneralSettings}},
+	_, err := svc.RestoreBackup(context.Background(), restoreArchive(
+		backup.SectionGeneralSettings,
+	), backup.RestoreOptions{
+		Scope: backup.Scope{All: true},
 		Mode:  backup.RestoreModeOverwrite,
 	})
 	if err != nil {
@@ -211,21 +211,63 @@ func TestService_RestoreBackupGeneralSettingsDoesNotStopMarketData(t *testing.T)
 	}
 }
 
-func TestService_RestoreBackupRuntimeReconnectsMarketData(t *testing.T) {
+func TestService_RestoreBackupAccountOnlyKeepsMarketDataRunning(t *testing.T) {
 	t.Parallel()
-	md := &fakeMarketDataRuntime{}
+	originalSink := &backendTestSink{}
+	md := &fakeMarketDataRuntime{sink: originalSink}
+	svc, _ := newTestServiceWithMarketDataRuntime(md)
+	_, err := svc.RestoreBackup(context.Background(), restoreArchive(
+		backup.SectionAccountsGroups,
+	), backup.RestoreOptions{
+		Scope: backup.Scope{Sections: []backup.Section{backup.SectionAccountsGroups}},
+		Mode:  backup.RestoreModeOverwrite,
+	})
+	if err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	if md.stops != 0 || md.restarts != 0 || md.sink != originalSink {
+		t.Fatalf("market-data lifecycle stops=%d restarts=%d sink=%#v",
+			md.stops, md.restarts, md.sink)
+	}
+}
+
+func TestService_RestoreBackupResidualRebuildKeepsMarketDataRunning(t *testing.T) {
+	t.Parallel()
+	originalSink := &backendTestSink{}
+	md := &fakeMarketDataRuntime{sink: originalSink}
 	svc, fn := newTestServiceWithMarketDataRuntime(md)
-	sink := &backendTestSink{}
-	fn.restoreSink = sink
+	fn.restoreSink = &backendTestSink{}
 	fn.restoreSummary = backup.RestoreSummary{
 		Applied:         map[backup.Section]int{},
 		Skipped:         map[backup.Section]int{},
 		RestartRequired: true,
 	}
-	_, err := svc.RestoreBackup(context.Background(), backup.Archive{}, backup.RestoreOptions{
+	_, err := svc.RestoreBackup(context.Background(), restoreArchive(
+		backup.SectionPositions,
+	), backup.RestoreOptions{
 		Scope: backup.Scope{Sections: []backup.Section{backup.SectionPositions}},
 		Mode:  backup.RestoreModeOverwrite,
 	})
+	if err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	if md.stops != 0 || md.restarts != 0 || md.sink != originalSink {
+		t.Fatalf("market-data lifecycle stops=%d restarts=%d sink=%#v",
+			md.stops, md.restarts, md.sink)
+	}
+}
+
+func TestService_RestoreBackupMarketDataTopologyRestartsOnce(t *testing.T) {
+	t.Parallel()
+	md := &fakeMarketDataRuntime{}
+	svc, fn := newTestServiceWithMarketDataRuntime(md)
+	sink := &backendTestSink{}
+	fn.restoreSink = sink
+	_, err := svc.RestoreBackup(context.Background(), marketDataTopologyArchive(),
+		backup.RestoreOptions{
+			Scope: backup.Scope{Sections: []backup.Section{backup.SectionMarketData}},
+			Mode:  backup.RestoreModeOverwrite,
+		})
 	if err != nil {
 		t.Fatalf("RestoreBackup: %v", err)
 	}
@@ -235,17 +277,92 @@ func TestService_RestoreBackupRuntimeReconnectsMarketData(t *testing.T) {
 	}
 }
 
-func TestService_RestoreBackupRuntimeErrorRestartsReturnedSink(t *testing.T) {
+func TestService_RestoreBackupQuotesOnlyKeepsUnchangedFeedsRunning(t *testing.T) {
+	t.Parallel()
+	instance := restoredMarketDataInstance()
+	instrument := restoredMarketDataInstrument(instance.ExternalID)
+	originalSink := &backendTestSink{}
+	md := &fakeMarketDataRuntime{sink: originalSink}
+	svc, fn := newTestServiceWithMarketDataRuntime(md)
+	fn.mdInstances = []domain.MarketDataInstance{instance}
+	fn.mdInstruments = map[string][]domain.MarketDataInstrument{
+		instance.ExternalID.String(): {instrument},
+	}
+	archive := backup.Archive{
+		Manifest: backup.Manifest{Sections: []backup.Section{
+			backup.SectionMarketData,
+			backup.SectionMarketDataQuotes,
+		}},
+		Data: backup.Data{
+			MarketDataInstances:   []domain.MarketDataInstance{instance},
+			MarketDataInstruments: []domain.MarketDataInstrument{instrument},
+			MarketDataQuotes: []domain.MarketDataQuote{{
+				Instance: instance.ExternalID, ExternalSymbol: instrument.ExternalSymbol,
+				BaseAsset: instrument.BaseAsset, QuoteAsset: instrument.QuoteAsset,
+				Mark: "2",
+			}},
+		},
+	}
+	_, err := svc.RestoreBackup(context.Background(), archive, backup.RestoreOptions{
+		Scope: backup.Scope{Sections: []backup.Section{backup.SectionMarketDataQuotes}},
+		Mode:  backup.RestoreModeOverwrite,
+	})
+	if err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	if md.stops != 0 || md.restarts != 0 || md.sink != originalSink {
+		t.Fatalf("market-data lifecycle stops=%d restarts=%d sink=%#v",
+			md.stops, md.restarts, md.sink)
+	}
+}
+
+func TestService_RestoreBackupManualPriceReconcilesOnline(t *testing.T) {
+	t.Parallel()
+	instance := restoredMarketDataInstance()
+	currentInstrument := restoredMarketDataInstrument(instance.ExternalID)
+	restoredInstrument := currentInstrument
+	restoredInstrument.ManualPrice = ""
+	md := &fakeMarketDataRuntime{sink: &backendTestSink{}}
+	svc, fn := newTestServiceWithMarketDataRuntime(md)
+	fn.mdInstances = []domain.MarketDataInstance{instance}
+	fn.mdInstruments = map[string][]domain.MarketDataInstrument{
+		instance.ExternalID.String(): {currentInstrument},
+	}
+	archive := backup.Archive{
+		Manifest: backup.Manifest{Sections: []backup.Section{backup.SectionMarketData}},
+		Data: backup.Data{
+			MarketDataInstances:   []domain.MarketDataInstance{instance},
+			MarketDataInstruments: []domain.MarketDataInstrument{restoredInstrument},
+		},
+	}
+	_, err := svc.RestoreBackup(context.Background(), archive, backup.RestoreOptions{
+		Scope: backup.Scope{Sections: []backup.Section{backup.SectionMarketData}},
+		Mode:  backup.RestoreModeOverwrite,
+	})
+	if err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	if md.stops != 0 || md.restarts != 0 {
+		t.Fatalf("market-data lifecycle stops=%d restarts=%d",
+			md.stops, md.restarts)
+	}
+	if len(md.pushed) != 1 || md.pushed[0] != restoredInstrument {
+		t.Fatalf("manual updates = %+v, want cleared restored instrument", md.pushed)
+	}
+}
+
+func TestService_RestoreBackupMarketDataTopologyErrorRestartsReturnedSink(t *testing.T) {
 	t.Parallel()
 	md := &fakeMarketDataRuntime{}
 	svc, fn := newTestServiceWithMarketDataRuntime(md)
 	sink := &backendTestSink{}
 	fn.restoreSink = sink
 	fn.restoreErr = errors.New("restore failed")
-	_, err := svc.RestoreBackup(context.Background(), backup.Archive{}, backup.RestoreOptions{
-		Scope: backup.Scope{Sections: []backup.Section{backup.SectionPositions}},
-		Mode:  backup.RestoreModeOverwrite,
-	})
+	_, err := svc.RestoreBackup(context.Background(), marketDataTopologyArchive(),
+		backup.RestoreOptions{
+			Scope: backup.Scope{Sections: []backup.Section{backup.SectionMarketData}},
+			Mode:  backup.RestoreModeOverwrite,
+		})
 	if err == nil {
 		t.Fatal("RestoreBackup succeeded, want error")
 	}
@@ -255,20 +372,16 @@ func TestService_RestoreBackupRuntimeErrorRestartsReturnedSink(t *testing.T) {
 	}
 }
 
-func TestService_RestoreBackupRuntimeUseSinkErrorStillRestarts(t *testing.T) {
+func TestService_RestoreBackupMarketDataUseSinkErrorStillRestarts(t *testing.T) {
 	t.Parallel()
 	md := &fakeMarketDataRuntime{useSinkErr: errors.New("use sink failed")}
 	svc, fn := newTestServiceWithMarketDataRuntime(md)
 	fn.restoreSink = &backendTestSink{}
-	fn.restoreSummary = backup.RestoreSummary{
-		Applied:         map[backup.Section]int{},
-		Skipped:         map[backup.Section]int{},
-		RestartRequired: true,
-	}
-	_, err := svc.RestoreBackup(context.Background(), backup.Archive{}, backup.RestoreOptions{
-		Scope: backup.Scope{Sections: []backup.Section{backup.SectionPositions}},
-		Mode:  backup.RestoreModeOverwrite,
-	})
+	_, err := svc.RestoreBackup(context.Background(), marketDataTopologyArchive(),
+		backup.RestoreOptions{
+			Scope: backup.Scope{Sections: []backup.Section{backup.SectionMarketData}},
+			Mode:  backup.RestoreModeOverwrite,
+		})
 	if err == nil {
 		t.Fatal("RestoreBackup succeeded, want UseSink error")
 	}
@@ -278,26 +391,101 @@ func TestService_RestoreBackupRuntimeUseSinkErrorStillRestarts(t *testing.T) {
 	}
 }
 
-func TestService_RestoreBackupRuntimeRestartErrorIsReturned(t *testing.T) {
+func TestService_RestoreBackupMarketDataRestartErrorIsReturned(t *testing.T) {
 	t.Parallel()
 	md := &fakeMarketDataRuntime{restartErr: errors.New("restart failed")}
 	svc, fn := newTestServiceWithMarketDataRuntime(md)
 	sink := &backendTestSink{}
 	fn.restoreSink = sink
 	fn.restoreSummary = backup.RestoreSummary{
-		Applied:         map[backup.Section]int{},
+		Applied:         map[backup.Section]int{backup.SectionMarketData: 1},
 		Skipped:         map[backup.Section]int{},
 		RestartRequired: true,
 	}
-	_, err := svc.RestoreBackup(context.Background(), backup.Archive{}, backup.RestoreOptions{
-		Scope: backup.Scope{Sections: []backup.Section{backup.SectionPositions}},
-		Mode:  backup.RestoreModeOverwrite,
-	})
+	summary, err := svc.RestoreBackup(context.Background(), marketDataTopologyArchive(),
+		backup.RestoreOptions{
+			Scope: backup.Scope{Sections: []backup.Section{backup.SectionMarketData}},
+			Mode:  backup.RestoreModeOverwrite,
+		})
 	if err == nil {
 		t.Fatal("RestoreBackup succeeded, want Restart error")
+	}
+	if summary.Applied[backup.SectionMarketData] != 1 || !summary.RestartRequired {
+		t.Fatalf("RestoreBackup summary = %+v, want committed restore summary", summary)
 	}
 	if md.stops != 1 || md.restarts != 1 || md.sink != sink {
 		t.Fatalf("market-data recovery stops=%d restarts=%d sink=%#v",
 			md.stops, md.restarts, md.sink)
+	}
+}
+
+func TestService_RestoreBackupManualReconciliationErrorReturnsSummary(t *testing.T) {
+	t.Parallel()
+	instance := restoredMarketDataInstance()
+	currentInstrument := restoredMarketDataInstrument(instance.ExternalID)
+	restoredInstrument := currentInstrument
+	restoredInstrument.ManualPrice = ""
+	md := &fakeMarketDataRuntime{
+		sink:    &backendTestSink{},
+		pushErr: errors.New("manual reconciliation failed"),
+	}
+	svc, fn := newTestServiceWithMarketDataRuntime(md)
+	fn.mdInstances = []domain.MarketDataInstance{instance}
+	fn.mdInstruments = map[string][]domain.MarketDataInstrument{
+		instance.ExternalID.String(): {currentInstrument},
+	}
+	fn.restoreSummary = backup.RestoreSummary{
+		Applied: map[backup.Section]int{backup.SectionMarketData: 1},
+		Skipped: map[backup.Section]int{},
+	}
+	archive := backup.Archive{
+		Manifest: backup.Manifest{Sections: []backup.Section{backup.SectionMarketData}},
+		Data: backup.Data{
+			MarketDataInstances:   []domain.MarketDataInstance{instance},
+			MarketDataInstruments: []domain.MarketDataInstrument{restoredInstrument},
+		},
+	}
+	summary, err := svc.RestoreBackup(context.Background(), archive, backup.RestoreOptions{
+		Scope: backup.Scope{Sections: []backup.Section{backup.SectionMarketData}},
+		Mode:  backup.RestoreModeOverwrite,
+	})
+	if err == nil {
+		t.Fatal("RestoreBackup succeeded, want manual reconciliation error")
+	}
+	if summary.Applied[backup.SectionMarketData] != 1 {
+		t.Fatalf("RestoreBackup summary = %+v, want committed restore summary", summary)
+	}
+}
+
+func restoreArchive(sections ...backup.Section) backup.Archive {
+	return backup.Archive{Manifest: backup.Manifest{Sections: sections}}
+}
+
+func marketDataTopologyArchive() backup.Archive {
+	return backup.Archive{
+		Manifest: backup.Manifest{Sections: []backup.Section{backup.SectionMarketData}},
+		Data: backup.Data{
+			MarketDataInstances: []domain.MarketDataInstance{restoredMarketDataInstance()},
+		},
+	}
+}
+
+func restoredMarketDataInstance() domain.MarketDataInstance {
+	return domain.MarketDataInstance{
+		ExternalID: domain.ExternalID("restored-byo"),
+		Provider:   domain.MarketDataProviderBYO,
+		Label:      "Restored BYO",
+		Enabled:    true,
+	}
+}
+
+func restoredMarketDataInstrument(instance domain.ExternalID) domain.MarketDataInstrument {
+	return domain.MarketDataInstrument{
+		Instance:       instance,
+		ExternalSymbol: "Z\\USD",
+		BaseAsset:      "Z",
+		QuoteAsset:     "USD",
+		ManualPrice:    "2",
+		Enabled:        true,
 	}
 }

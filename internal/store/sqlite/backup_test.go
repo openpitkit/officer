@@ -18,7 +18,7 @@
 // Store-level backup/restore tests: the export -> restore round-trip on public
 // identity, a realm moved isolated <-> shared in both directions, restore modes
 // and selectors, dictionary-first foreign-key resolution, and engine-id
-// reassignment with the touched-runtime engine-rebuild signal.
+// reassignment. Engine replacement is classified by the node after restore.
 
 package sqlite
 
@@ -100,7 +100,6 @@ func seedRealm(t *testing.T, ctx context.Context, rs RealmStore) domain.External
 		Account:    "acc-1",
 		LowerBound: "-250",
 		UpperBound: "500",
-		InitialPnl: "12.50",
 	}); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 	}
@@ -326,8 +325,8 @@ func TestBackupRestorePreservesGroupCurrencies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RestoreBackup: %v", err)
 	}
-	if !summary.RestartRequired {
-		t.Fatal("RestartRequired = false, want true for group currency restore")
+	if summary.RestartRequired {
+		t.Fatal("RestartRequired = true at store boundary, want node classification")
 	}
 	group, ok, err := dst.GetGroup(ctx, "desk-a")
 	if err != nil || !ok {
@@ -343,6 +342,10 @@ func TestBackupRestorePreservesGroupCurrencies(t *testing.T) {
 	if defaultGroup.Currency != "USD" {
 		t.Fatalf("restored default currency = %q, want USD",
 			defaultGroup.Currency)
+	}
+	if defaultGroup.EngineGroupID != 0 {
+		t.Fatalf("restored default engine id = %d, want reserved 0",
+			defaultGroup.EngineGroupID)
 	}
 	groups, err := dst.ListGroups(ctx)
 	if err != nil {
@@ -377,8 +380,8 @@ func TestBackupRestorePreservesAccountCurrency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RestoreBackup: %v", err)
 	}
-	if !summary.RestartRequired {
-		t.Fatal("RestartRequired = false, want true for account currency restore")
+	if summary.RestartRequired {
+		t.Fatal("RestartRequired = true at store boundary, want node classification")
 	}
 	account, ok, err := dst.GetAccount(ctx, "acc-jpy")
 	if err != nil || !ok {
@@ -420,8 +423,8 @@ func TestBackupRestoreOverwriteClearsDefaultGroupCurrency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RestoreBackup overwrite: %v", err)
 	}
-	if !summary.RestartRequired {
-		t.Fatal("RestartRequired = false, want true for default currency clear")
+	if summary.RestartRequired {
+		t.Fatal("RestartRequired = true at store boundary, want node classification")
 	}
 	defaultGroup, ok, err := dst.GetGroup(ctx, "")
 	if err != nil || !ok {
@@ -484,8 +487,8 @@ func TestBackupRoundTripIntoIsolatedRealm(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RestoreBackup: %v", err)
 	}
-	if !summary.RestartRequired {
-		t.Fatal("RestartRequired = false, want true for a full restore")
+	if summary.RestartRequired {
+		t.Fatal("RestartRequired = true at store boundary, want node classification")
 	}
 
 	assertRealmsEqualOnPublicIdentity(t, ctx, src, dst, orderXID)
@@ -1187,8 +1190,8 @@ func TestBackupRestoreReplaceAllPrunesSpotFundsGroupLimitForSelectedAccount(
 }
 
 // TestBackupRestoreSelectorSubset restores only the general-settings section and
-// asserts it does NOT raise the engine-rebuild signal and does not pull in the
-// account-addressed sections.
+// asserts the store leaves restart classification to the node and does not pull
+// in the account-addressed sections.
 func TestBackupRestoreSelectorSubset(t *testing.T) {
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
@@ -1543,16 +1546,13 @@ func TestBackupRestoreActivityOnlyForceIncludesSigningKey(t *testing.T) {
 	}
 }
 
-// TestBackupRestoreAuditOnlyForceIncludedGroupRaisesRestart asserts that a
-// restore whose REQUESTED scope names only the (observational) audit log still
-// raises RestartRequired when it lands a group the target did not have. Normalize
-// force-includes the accounts+groups dictionary so the audit rows resolve, and
-// that force-include inserts a new group into the fresh target; the restart
-// signal must reflect the row actually written so the caller rebuilds the live
-// resolver. Against the old TouchesRuntime(opts.Scope) code the audit-only scope
-// read as observational and RestartRequired was false, leaving the store holding
-// a group the resolver never learned.
-func TestBackupRestoreAuditOnlyForceIncludedGroupRaisesRestart(t *testing.T) {
+// TestBackupRestoreAuditOnlyForceIncludedGroupDefersRestartClassification
+// asserts that a restore whose requested scope names only the audit log can
+// still land its force-included accounts/groups dictionary, while the store
+// leaves engine replacement classification to the node.
+func TestBackupRestoreAuditOnlyForceIncludedGroupDefersRestartClassification(
+	t *testing.T,
+) {
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)
 	seedRealm(t, ctx, src)
@@ -1569,8 +1569,8 @@ func TestBackupRestoreAuditOnlyForceIncludedGroupRaisesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RestoreBackup audit-only: %v", err)
 	}
-	if !summary.RestartRequired {
-		t.Fatalf("RestartRequired = false, want true for a force-included group insert")
+	if summary.RestartRequired {
+		t.Fatalf("RestartRequired = true at store boundary, want node classification")
 	}
 	// The force-included group landed even though only the audit log was requested.
 	if _, ok, err := dst.GetGroup(ctx, "grp-1"); err != nil || !ok {
@@ -1723,8 +1723,7 @@ func assertRealmsEqualOnPublicIdentity(
 	if len(srcSpotFunds) != len(dstSpotFunds) || len(dstSpotFunds) != 1 ||
 		dstSpotFunds[0].Account != "acc-1" ||
 		dstSpotFunds[0].LowerBound != "-250" ||
-		dstSpotFunds[0].UpperBound != "500" ||
-		dstSpotFunds[0].InitialPnl != "12.50" {
+		dstSpotFunds[0].UpperBound != "500" {
 		t.Fatalf("spot funds pnl bounds differ: %v vs %v", srcSpotFunds, dstSpotFunds)
 	}
 

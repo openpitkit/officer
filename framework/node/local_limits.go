@@ -83,10 +83,10 @@ func (n *localNode) listLimits(
 func (n *localNode) PutRateLimit(
 	ctx context.Context, limit domain.LimitRate, caller domain.Caller,
 ) (marketdata.Sink, error) {
-	if err := n.beginEngineRestart(); err != nil {
+	if err := n.beginLivePolicyConfiguration(); err != nil {
 		return nil, err
 	}
-	defer n.endEngineRestart()
+	defer n.endLivePolicyConfiguration()
 
 	target := LimitTarget{
 		Policy:  domain.PolicyRateLimit,
@@ -98,29 +98,49 @@ func (n *localNode) PutRateLimit(
 	if err != nil {
 		return nil, err
 	}
-
 	if err := n.ensureLimitAsset(
 		ctx, limit.Scope, limit.Asset, "rate limit", caller,
 	); err != nil {
 		return nil, err
 	}
-	if err := n.realm.PutRateLimit(ctx, limit); err != nil {
-		return nil, fmt.Errorf("put rate limit: %w", err)
-	}
 
-	sink, applyErr := n.applyPolicyChangeLocked(ctx, domain.PolicyRateLimit, func() error {
-		return n.revertRateBarrier(context.WithoutCancel(ctx), target, prev, hadPrev)
-	})
-	if applyErr != nil {
-		return sink, fmt.Errorf("configure policy after limit: %w", applyErr)
+	snapshot, _, err := n.loadSnapshot(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load rate policy lifecycle snapshot: %w", err)
 	}
-
+	var sink marketdata.Sink
+	if !hadPrev && len(snapshot.RateLimits) == 0 {
+		snapshot.RateLimits = []domain.LimitRate{limit}
+		durableCtx := context.WithoutCancel(ctx)
+		sink, err = n.replaceEngineForPolicyLifecycle(
+			ctx, domain.PolicyRateLimit, snapshot, func() error {
+				return n.realm.PutRateLimit(durableCtx, limit)
+			},
+		)
+		if err != nil {
+			return sink, fmt.Errorf("install first rate limit: %w", err)
+		}
+	} else {
+		if err := n.realm.PutRateLimit(ctx, limit); err != nil {
+			return nil, fmt.Errorf("put rate limit: %w", err)
+		}
+		sink, err = n.applyPolicyChangeLocked(ctx, domain.PolicyRateLimit, func() error {
+			return n.revertRateBarrier(context.WithoutCancel(ctx), target, prev, hadPrev)
+		})
+		if err != nil {
+			return sink, fmt.Errorf("configure policy after limit: %w", err)
+		}
+	}
+	ctx = context.WithoutCancel(ctx)
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action:  domain.AuditActionSetLimit,
 		Account: target.Account,
 		Detail:  setRateLimitDetail(limit),
 	}); err != nil {
-		return sink, fmt.Errorf("audit set limit: %w", err)
+		return sink, n.fatalPostEngineAuditByCode(
+			"audit rate limit", "policy", domain.PolicyRateLimit,
+			fmt.Errorf("audit set limit: %w", err),
+		)
 	}
 	return sink, nil
 }
@@ -130,10 +150,10 @@ func (n *localNode) PutRateLimit(
 func (n *localNode) PutOrderSizeLimit(
 	ctx context.Context, limit domain.LimitOrderSize, caller domain.Caller,
 ) (marketdata.Sink, error) {
-	if err := n.beginEngineRestart(); err != nil {
+	if err := n.beginLivePolicyConfiguration(); err != nil {
 		return nil, err
 	}
-	defer n.endEngineRestart()
+	defer n.endLivePolicyConfiguration()
 
 	target := LimitTarget{
 		Policy:  domain.PolicyOrderSizeLimit,
@@ -145,28 +165,53 @@ func (n *localNode) PutOrderSizeLimit(
 	if err != nil {
 		return nil, err
 	}
-
 	if err := n.ensureLimitAsset(
 		ctx, limit.Scope, limit.Asset, "order-size limit", caller,
 	); err != nil {
 		return nil, err
 	}
-	if err := n.realm.PutOrderSizeLimit(ctx, limit); err != nil {
-		return nil, fmt.Errorf("put order-size limit: %w", err)
-	}
 
-	sink, applyErr := n.applyPolicyChangeLocked(ctx, domain.PolicyOrderSizeLimit, func() error {
-		return n.revertOrderSizeBarrier(context.WithoutCancel(ctx), target, prev, hadPrev)
-	})
-	if applyErr != nil {
-		return sink, fmt.Errorf("configure policy after limit: %w", applyErr)
+	snapshot, _, err := n.loadSnapshot(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load order-size policy lifecycle snapshot: %w", err)
 	}
+	var sink marketdata.Sink
+	if !hadPrev && len(snapshot.OrderSizeLimits) == 0 {
+		snapshot.OrderSizeLimits = []domain.LimitOrderSize{limit}
+		durableCtx := context.WithoutCancel(ctx)
+		sink, err = n.replaceEngineForPolicyLifecycle(
+			ctx, domain.PolicyOrderSizeLimit, snapshot, func() error {
+				return n.realm.PutOrderSizeLimit(durableCtx, limit)
+			},
+		)
+		if err != nil {
+			return sink, fmt.Errorf("install first order-size limit: %w", err)
+		}
+	} else {
+		if err := n.realm.PutOrderSizeLimit(ctx, limit); err != nil {
+			return nil, fmt.Errorf("put order-size limit: %w", err)
+		}
+		sink, err = n.applyPolicyChangeLocked(
+			ctx, domain.PolicyOrderSizeLimit, func() error {
+				return n.revertOrderSizeBarrier(
+					context.WithoutCancel(ctx), target, prev, hadPrev,
+				)
+			},
+		)
+		if err != nil {
+			return sink, fmt.Errorf("configure policy after limit: %w", err)
+		}
+	}
+	ctx = context.WithoutCancel(ctx)
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action:  domain.AuditActionSetLimit,
 		Account: target.Account,
 		Detail:  setOrderSizeLimitDetail(limit),
 	}); err != nil {
-		return sink, fmt.Errorf("audit set limit: %w", err)
+		return sink, n.fatalPostEngineAuditByCode(
+			"audit order-size limit", "policy", domain.PolicyOrderSizeLimit,
+			fmt.Errorf("audit set limit: %w", err),
+		)
 	}
 	return sink, nil
 }
@@ -229,44 +274,35 @@ func (n *localNode) PutSpotFundsPnlBoundsLimit(
 func (n *localNode) DeleteLimit(
 	ctx context.Context, target LimitTarget, caller domain.Caller,
 ) (marketdata.Sink, error) {
-	if target.Policy == domain.PolicySpotFundsPnlBoundsKillSwitch {
-		if err := n.beginLivePolicyConfiguration(); err != nil {
-			return nil, err
-		}
-		defer n.endLivePolicyConfiguration()
-	} else {
-		if err := n.beginEngineRestart(); err != nil {
-			return nil, err
-		}
-		defer n.endEngineRestart()
-	}
-
-	revert, err := n.deleteBarrier(ctx, target)
-	if err != nil {
+	if err := n.beginLivePolicyConfiguration(); err != nil {
 		return nil, err
 	}
+	defer n.endLivePolicyConfiguration()
 
-	sink, applyErr := n.applyPolicyChangeLocked(ctx, target.Policy, revert)
-	if applyErr != nil {
-		return sink, fmt.Errorf("configure policy after delete limit: %w", applyErr)
+	sink, prepared, err := n.deleteLastPolicyBarrierPrepared(ctx, target)
+	if err != nil {
+		return sink, fmt.Errorf("delete last policy barrier: %w", err)
 	}
-	if target.Policy == domain.PolicySpotFundsPnlBoundsKillSwitch {
-		ctx = context.WithoutCancel(ctx)
+	if !prepared {
+		revert, err := n.deleteBarrier(ctx, target)
+		if err != nil {
+			return nil, err
+		}
+		sink, err = n.applyPolicyChangeLocked(ctx, target.Policy, revert)
+		if err != nil {
+			return sink, fmt.Errorf("configure policy after delete limit: %w", err)
+		}
 	}
-
+	ctx = context.WithoutCancel(ctx)
 	if err := n.audit(ctx, caller, store.AuditEntry{
 		Action:  domain.AuditActionDeleteLimit,
 		Account: target.Account,
 		Detail:  deleteLimitDetail(target),
 	}); err != nil {
-		if target.Policy == domain.PolicySpotFundsPnlBoundsKillSwitch {
-			return sink, n.fatalPostEngineAuditByCode(
-				"audit delete spot funds pnl-bounds limit", "policy",
-				domain.PolicySpotFundsPnlBoundsKillSwitch,
-				fmt.Errorf("audit delete limit: %w", err),
-			)
-		}
-		return sink, fmt.Errorf("audit delete limit: %w", err)
+		return sink, n.fatalPostEngineAuditByCode(
+			"audit delete limit", "policy", target.Policy,
+			fmt.Errorf("audit delete limit: %w", err),
+		)
 	}
 	return sink, nil
 }
@@ -325,6 +361,118 @@ func (n *localNode) deleteBarrier(
 	}
 }
 
+// replaceEngineForPolicyLifecycle builds the policy's next lifecycle shape and
+// commits the durable barrier change as part of the engine transition.
+func (n *localNode) replaceEngineForPolicyLifecycle(
+	ctx context.Context,
+	policy string,
+	snapshot engine.Snapshot,
+	commit func() error,
+) (marketdata.Sink, error) {
+	previousEngine := n.currentEngine()
+	next, err := n.build(snapshot)
+	if err != nil {
+		return nil, fmt.Errorf("build engine for %s lifecycle: %w", policy, err)
+	}
+	if next == nil {
+		return nil, fmt.Errorf("build engine for %s lifecycle returned nil", policy)
+	}
+	if next == previousEngine {
+		return nil, fmt.Errorf("build engine for %s lifecycle returned current engine", policy)
+	}
+	transition, err := n.beginMarketDataTransition(next)
+	if err != nil {
+		next.Stop()
+		return nil, fmt.Errorf("prepare %s lifecycle market data: %w", policy, err)
+	}
+	if err := n.replayMarketDataInto(ctx, next); err != nil {
+		n.cancelMarketDataTransition(transition)
+		next.Stop()
+		return nil, fmt.Errorf("replay market data for %s lifecycle: %w", policy, err)
+	}
+	prev, err := n.commitMarketDataTransitionWithHook(transition, next, commit)
+	if err != nil {
+		n.cancelMarketDataTransition(transition)
+		next.Stop()
+		return nil, fmt.Errorf("commit %s lifecycle engine transition: %w", policy, err)
+	}
+	if prev != nil && prev != next {
+		prev.Stop()
+	}
+	if err := n.mirrorSeedAccountBlocks(context.WithoutCancel(ctx), next); err != nil {
+		return n.currentMarketDataSink(), n.fatalReconciliation(
+			"mirror policy lifecycle seed blocks",
+			fmt.Errorf("mirror %s lifecycle seed blocks: %w", policy, err),
+		)
+	}
+	return n.currentMarketDataSink(), nil
+}
+
+func (n *localNode) deleteLastPolicyBarrierPrepared(
+	ctx context.Context,
+	target LimitTarget,
+) (marketdata.Sink, bool, error) {
+	durableCtx := context.WithoutCancel(ctx)
+	switch target.Policy {
+	case domain.PolicyRateLimit:
+		prev, hadPrev, err := n.readRateBarrier(ctx, target)
+		if err != nil {
+			return nil, false, err
+		}
+		limits, err := n.realm.ListRateLimits(ctx, "")
+		if err != nil {
+			return nil, false, fmt.Errorf("list rate limits for lifecycle delete: %w", err)
+		}
+		if !hadPrev || len(limits) != 1 {
+			return nil, false, nil
+		}
+		snapshot, _, err := n.loadSnapshot(ctx)
+		if err != nil {
+			return nil, false, fmt.Errorf("load rate policy lifecycle snapshot: %w", err)
+		}
+		snapshot.RateLimits = nil
+		sink, err := n.replaceEngineForPolicyLifecycle(
+			ctx, target.Policy, snapshot, func() error {
+				return n.realm.DeleteRateLimit(
+					durableCtx, prev.Scope, prev.Account, prev.Asset,
+				)
+			},
+		)
+		return sink, true, err
+	case domain.PolicyOrderSizeLimit:
+		prev, hadPrev, err := n.readOrderSizeBarrier(ctx, target)
+		if err != nil {
+			return nil, false, err
+		}
+		limits, err := n.realm.ListOrderSizeLimits(ctx, "")
+		if err != nil {
+			return nil, false, fmt.Errorf(
+				"list order-size limits for lifecycle delete: %w", err,
+			)
+		}
+		if !hadPrev || len(limits) != 1 {
+			return nil, false, nil
+		}
+		snapshot, _, err := n.loadSnapshot(ctx)
+		if err != nil {
+			return nil, false, fmt.Errorf(
+				"load order-size policy lifecycle snapshot: %w", err,
+			)
+		}
+		snapshot.OrderSizeLimits = nil
+		sink, err := n.replaceEngineForPolicyLifecycle(
+			ctx, target.Policy, snapshot, func() error {
+				return n.realm.DeleteOrderSizeLimit(
+					durableCtx, prev.Scope, prev.Account, prev.Asset,
+				)
+			},
+		)
+		return sink, true, err
+	default:
+		return nil, false, nil
+	}
+}
+
 // applyPolicyChangeLocked applies a just-persisted barrier change for policy to
 // the engine via the runtime Configure surface. revert restores the barrier the
 // caller just wrote and is invoked here, before any recovery reads the store.
@@ -336,24 +484,15 @@ func (n *localNode) deleteBarrier(
 // they never rebuild for a change the surface cannot express.
 //
 // Any other failure may have landed part-way. A SpotFunds P&L-bounds configure
-// force-sets account seeds one at a time, and the engine layer cannot take an
-// applied seed back: the live accumulated P&L it overwrote cannot be read out of
-// the SDK, so a compensating write could only publish a fabricated value - zero,
-// or a stale earlier seed - silently disarming the kill-switch while the
-// operator is told the update failed. So the barrier is reverted and the engine
-// rebuilt from that reverted store, which reseeds every account from a real
-// persisted value. The rebuild replaces the handle, so its sink is returned
+// is expressed by the SDK runtime surface, so the node reverts the just-written
+// barrier and rebuilds from the reverted store to make the live handle match
+// durable state. The rebuild replaces the handle, so its sink is returned
 // alongside the error for the caller to re-adopt.
 func (n *localNode) applyPolicyChangeLocked(
 	ctx context.Context, policy string, revert func() error,
 ) (marketdata.Sink, error) {
 	result, err := n.reconfigurePolicy(ctx, policy)
 	if err == nil {
-		if err := n.mirrorPolicyConfigurationPnls(
-			ctx, result.AccountPnlUpdates,
-		); err != nil {
-			return nil, err
-		}
 		if err := n.mirrorPolicyConfigurationBlocks(
 			ctx, policy, result.AccountBlocks,
 		); err != nil {
@@ -381,7 +520,13 @@ func (n *localNode) applyPolicyChangeLocked(
 			return nil, err
 		}
 		if rebuildErr := n.rebuildEngineFromStore(durableCtx); rebuildErr != nil {
-			return nil, rebuildErr
+			return nil, n.fatalReconciliation(
+				"reconcile unexpected policy lifecycle gap",
+				errors.Join(
+					err,
+					fmt.Errorf("rebuild %s policy after online lifecycle gap: %w", policy, rebuildErr),
+				),
+			)
 		}
 		return n.currentMarketDataSink(), nil
 	}
@@ -418,7 +563,7 @@ func (n *localNode) reconfigurePolicy(
 	if err != nil {
 		return engine.PolicyConfigurationResult{}, err
 	}
-	return n.engine.ConfigurePolicy(ctx, policy, limits)
+	return n.currentEngine().ConfigurePolicy(ctx, policy, limits)
 }
 
 // policyLimitSet reads the full barrier set for one policy from its typed table

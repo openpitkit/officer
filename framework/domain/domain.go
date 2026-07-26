@@ -147,7 +147,6 @@ const (
 	KindMaxNotional = "max_notional"
 	KindLowerBound  = "lower_bound"
 	KindUpperBound  = "upper_bound"
-	KindInitialPnl  = "initial_pnl"
 )
 
 // AccountID is the operator-chosen account code: the human handle a dictionary

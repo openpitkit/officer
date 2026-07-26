@@ -433,7 +433,6 @@ type spotFundsPnlBoundsLimitDTO struct {
 	AccountGroup string `json:"accountGroup"`
 	LowerBound   string `json:"lowerBound"`
 	UpperBound   string `json:"upperBound"`
-	InitialPnl   string `json:"initialPnl"`
 }
 
 type auditDTO struct {
@@ -544,7 +543,6 @@ func toLimitsDTO(l node.AccountLimits) limitsDTO {
 			AccountGroup: p.AccountGroup,
 			LowerBound:   p.LowerBound,
 			UpperBound:   p.UpperBound,
-			InitialPnl:   p.InitialPnl,
 		})
 	}
 	return limitsDTO{

@@ -338,13 +338,6 @@ var clientDataAllowlist = []clientDataAllow{
 		Kind:    "optional-sentinel",
 		Why:     "account and group scopes populate their own identity axis",
 	},
-	{
-		Surface: driftBackup,
-		Entity:  "spot-funds-pnl-bounds-limits",
-		Field:   "spot-funds-pnl-bounds-limits.InitialPnl",
-		Kind:    "optional-sentinel",
-		Why:     "initial PnL is available only for account scope",
-	},
 }
 
 type paritySpec struct {
@@ -762,7 +755,6 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 			"account_group_id": "AccountGroup",
 			"lower_bound":      "LowerBound",
 			"upper_bound":      "UpperBound",
-			"initial_pnl":      "InitialPnl",
 		},
 	},
 	"adjustment": {
@@ -1277,7 +1269,6 @@ func seedClientDataDriftRealm(
 			Account:    "acc-1",
 			LowerBound: "-50.25",
 			UpperBound: "100.75",
-			InitialPnl: "3.50",
 		},
 	))
 	must(t, "PutSpotFundsPnlBoundsLimit group", rs.PutSpotFundsPnlBoundsLimit(

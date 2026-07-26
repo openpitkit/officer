@@ -23,8 +23,7 @@
     },
     "spot_funds_pnl_bounds_kill_switch": {
       "lower_bound": "decimal",
-      "upper_bound": "decimal",
-      "initial_pnl": "decimal, sets the account-level starting realized PnL"
+      "upper_bound": "decimal"
     }
   },
   "policy": {
@@ -70,10 +69,6 @@
       "upper_bound": {
         "label": "upper bound",
         "hint": "decimal, e.g. 500"
-      },
-      "initial_pnl": {
-        "label": "initial PnL",
-        "hint": "decimal — sets the account-level starting realized PnL; account scope only"
       }
     }
   }

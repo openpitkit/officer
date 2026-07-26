@@ -582,7 +582,7 @@ func TestLocalNode_SubmitOrderAutoCreatesUnknownAccount(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
 	// Enforce the resolver so a submit against an unknown account would error
-	// unless the auto-create runs first and rebuilds the engine.
+	// unless the auto-create publishes the account before the lane starts.
 	eng.enforceResolver = true
 	n, st := newTestNode(t, eng)
 	ctx := context.Background()

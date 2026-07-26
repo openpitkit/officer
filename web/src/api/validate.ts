@@ -244,8 +244,7 @@ export function validateKindValue(
       return null;
     }
     case "lower_bound":
-    case "upper_bound":
-    case "initial_pnl": {
+    case "upper_bound": {
       if (!isDecimal(value)) {
         return { key: "kind.decimal", values: { kind } };
       }
@@ -324,18 +323,10 @@ export function validateLimit(limit: Limit): FieldError | null {
       return { key: "limit.orderSizeRequires" };
     }
   } else if (policy === SPOT_FUNDS_PNL_POLICY) {
-    // initial_pnl alone is not sufficient; at least one bound is always required.
     const hasBound =
       kinds.includes("lower_bound") || kinds.includes("upper_bound");
     if (!hasBound) {
       return { key: "limit.pnlRequires" };
-    }
-    if (
-      policy === SPOT_FUNDS_PNL_POLICY &&
-      scope !== "account" &&
-      kinds.includes("initial_pnl")
-    ) {
-      return { key: "limit.spotFundsInitialPnlAccountOnly" };
     }
   }
 

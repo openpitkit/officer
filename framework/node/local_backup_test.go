@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -64,14 +65,68 @@ func testArchive(scope backup.Scope, data backup.Data) backup.Archive {
 	)
 }
 
-func TestLocalNode_RestoreBackupRebuildsEngineFromRestoredStore(t *testing.T) {
+type restoreCommitProbeRealm struct {
+	store.RealmStore
+	afterCommit func()
+}
+
+func (r *restoreCommitProbeRealm) ExportBackup(
+	ctx context.Context, scope backup.Scope,
+) (backup.Archive, error) {
+	if err := ctx.Err(); err != nil {
+		return backup.Archive{}, err
+	}
+	return r.RealmStore.ExportBackup(ctx, scope)
+}
+
+func (r *restoreCommitProbeRealm) RestoreBackup(
+	ctx context.Context,
+	archive backup.Archive,
+	opts backup.RestoreOptions,
+) (backup.RestoreSummary, error) {
+	summary, err := r.RealmStore.RestoreBackup(ctx, archive, opts)
+	if err == nil && r.afterCommit != nil {
+		r.afterCommit()
+	}
+	return summary, err
+}
+
+type cancelAfterResetStore struct {
+	store.Store
+	cancel context.CancelFunc
+}
+
+func (s *cancelAfterResetStore) ForRealm(
+	ctx context.Context, realm domain.RealmID,
+) (store.RealmStore, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return s.Store.ForRealm(ctx, realm)
+}
+
+func (s *cancelAfterResetStore) Reset(ctx context.Context) error {
+	if err := s.Store.Reset(ctx); err != nil {
+		return err
+	}
+	if s.cancel != nil {
+		s.cancel()
+	}
+	return nil
+}
+
+func TestLocalNode_RestoreBackupPublishesInsertedAccountOnline(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	oldEngine := newFakeEngine()
+	oldEngine.enforceResolver = true
 	n, st := newTestNode(t, oldEngine)
-	nextEngine := newFakeEngine()
-	var captured engine.Snapshot
-	n.build = fakeBuild(nextEngine, &captured)
+	oldSink := oldEngine.MarketDataSink()
+	builds := 0
+	n.build = func(engine.Snapshot) (engine.Engine, error) {
+		builds++
+		return newFakeEngine(), nil
+	}
 	archive := testArchive(
 		backup.Scope{All: true},
 		backup.Data{Accounts: []backup.Account{{Code: "restored"}}},
@@ -79,22 +134,25 @@ func TestLocalNode_RestoreBackupRebuildsEngineFromRestoredStore(t *testing.T) {
 
 	summary, _, err := n.RestoreBackup(ctx, archive, backup.RestoreOptions{
 		Scope: backup.Scope{All: true},
-		Mode:  backup.RestoreModeReplaceAll,
+		Mode:  backup.RestoreModeInsertMissing,
 	}, testCaller)
 	if err != nil {
 		t.Fatalf("RestoreBackup: %v", err)
 	}
-	if !summary.RestartRequired {
-		t.Fatalf("RestartRequired = false, want true")
+	if summary.RestartRequired {
+		t.Fatalf("RestartRequired = true, want online publication")
 	}
-	if oldEngine.running {
-		t.Fatalf("old engine still running after restore swap")
+	if !oldEngine.running || n.currentEngine() != oldEngine {
+		t.Fatalf("restore replaced or stopped the live engine")
 	}
-	if !nextEngine.running {
-		t.Fatalf("next engine not running after restore")
+	if builds != 0 {
+		t.Fatalf("build calls = %d, want 0", builds)
 	}
-	if len(captured.Accounts) != 1 || captured.Accounts[0].Code != "restored" {
-		t.Fatalf("build snapshot accounts = %+v", captured.Accounts)
+	if n.currentMarketDataSink() != oldSink {
+		t.Fatalf("restore replaced market-data sink")
+	}
+	if _, ok := oldEngine.knownAccounts["restored"]; !ok {
+		t.Fatalf("live resolver missing restored account: %+v", oldEngine.knownAccounts)
 	}
 	rows, err := st.ListAudit(ctx, 10)
 	if err != nil {
@@ -105,28 +163,377 @@ func TestLocalNode_RestoreBackupRebuildsEngineFromRestoredStore(t *testing.T) {
 	}
 }
 
-// TestLocalNode_RestoreBackupNonRuntimeScopeRebuildsForForceIncludedGroup proves
-// a restore whose REQUESTED scope names only a non-runtime section (the audit
-// log) still rebuilds the engine when the archive carries a group the local
-// resolver has not seen. Normalize force-includes the accounts+groups dictionary
-// so the archived group lands, and the store now raises RestartRequired from the
-// rows actually written, so the node takes the exclusive restart gate and
-// rebuilds. Against the old TouchesRuntime(opts.Scope) code the audit-only scope
-// read as observational: no rebuild ran, the store held the new group but the
-// live resolver did not, and the SetGroupBlocked below rejected the group it
-// lists with ErrInvalid.
-func TestLocalNode_RestoreBackupNonRuntimeScopeRebuildsForForceIncludedGroup(t *testing.T) {
+func TestLocalNode_RestoreBackupDetachesReconciliationAfterCommit(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	base := newMemoryStore("restore-post-commit-cancel.db")
+	t.Cleanup(func() { _ = base.Close() })
+	var probe *restoreCommitProbeRealm
+	st := newRealmWrapStore(base, func(realm store.RealmStore) store.RealmStore {
+		probe = &restoreCommitProbeRealm{RealmStore: realm}
+		return probe
+	})
+	eng := newFakeEngine()
+	eng.enforceResolver = true
+	n := newTestNodeWithStore(t, st, eng)
+	probe.afterCommit = cancel
+	var fatalErr error
+	n.fatal = func(err error) { fatalErr = err }
+
+	summary, _, err := n.RestoreBackup(
+		ctx,
+		testArchive(backup.Scope{All: true}, backup.Data{
+			Accounts: []backup.Account{{Code: "restored"}},
+		}),
+		backup.RestoreOptions{
+			Scope: backup.Scope{All: true}, Mode: backup.RestoreModeInsertMissing,
+		},
+		testCaller,
+	)
+	if err != nil {
+		t.Fatalf("RestoreBackup after request cancellation: %v", err)
+	}
+	if ctx.Err() == nil {
+		t.Fatal("restore commit hook did not cancel the request context")
+	}
+	if fatalErr != nil {
+		t.Fatalf("post-commit request cancellation triggered fatal path: %v", fatalErr)
+	}
+	if summary.RestartRequired {
+		t.Fatal("insert-only restore unexpectedly rebuilt the engine")
+	}
+	if _, ok := eng.knownAccounts["restored"]; !ok {
+		t.Fatalf("restored account was not published after cancellation: %+v", eng.knownAccounts)
+	}
+}
+
+func TestLocalNode_RestoreBackupOverwriteUpdatesRuntimeOnline(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	eng := newFakeEngine()
+	eng.enforceResolver = true
+	n, _ := newTestNode(t, eng)
+	group, err := n.CreateGroup(ctx, domain.AccountGroup{Code: "desk"}, testCaller)
+	if err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	account, err := n.CreateAccount(ctx, testAccount("existing"), testCaller)
+	if err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	initialRate := rateLimit(domain.ScopeBroker, "", "", 10, time.Second)
+	prepared := newFakeEngine()
+	prepared.enforceResolver = true
+	n.build = fakeBuild(prepared, new(engine.Snapshot))
+	if _, err := n.PutRateLimit(ctx, initialRate, testCaller); err != nil {
+		t.Fatalf("PutRateLimit: %v", err)
+	}
+	eng = prepared
+	eng.configureCalls = nil
+	sinkBefore := eng.MarketDataSink()
+	builds := 0
+	n.build = func(engine.Snapshot) (engine.Engine, error) {
+		builds++
+		return newFakeEngine(), nil
+	}
+	archive := testArchive(backup.Scope{All: true}, backup.Data{
+		Assets: []domain.Asset{{Code: "USD"}},
+		Groups: []backup.AccountGroup{{
+			Code: "desk", Blocked: true, BlockReason: "restored group block",
+		}},
+		Accounts: []backup.Account{
+			{
+				Code: "existing", GroupCode: "desk", Pnl: "7",
+				Blocked: true, BlockReason: "restored account block",
+			},
+			{Code: "added", Pnl: "3"},
+		},
+		Balances: []domain.Balance{{
+			Account: "existing", Asset: "USD", Available: "12",
+			Held: "2", Incoming: "1", RealizedPnl: "4",
+		}},
+		RateLimits: []domain.LimitRate{
+			rateLimit(domain.ScopeBroker, "", "", 20, 2*time.Second),
+		},
+	})
+
+	summary, sink, err := n.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeOverwrite,
+	}, testCaller)
+	if err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	if summary.RestartRequired || builds != 0 || n.currentEngine() != eng {
+		t.Fatalf("overwrite rebuilt engine: summary=%+v builds=%d", summary, builds)
+	}
+	if sink != sinkBefore || n.currentMarketDataSink() != sinkBefore {
+		t.Fatal("overwrite replaced market-data sink")
+	}
+	if eng.accountResolverIDs[account.Code] != account.EngineAccountID {
+		t.Fatalf("existing account engine id changed: got %d want %d",
+			eng.accountResolverIDs[account.Code], account.EngineAccountID)
+	}
+	if eng.groupResolverIDs[group.Code] != group.EngineGroupID {
+		t.Fatalf("existing group engine id changed: got %d want %d",
+			eng.groupResolverIDs[group.Code], group.EngineGroupID)
+	}
+	if _, ok := eng.knownAccounts["added"]; !ok {
+		t.Fatalf("live resolver missing added account: %+v", eng.knownAccounts)
+	}
+	if got := eng.accountGroups["existing"]; got != "desk" {
+		t.Fatalf("existing account group = %q, want desk", got)
+	}
+	if len(eng.accountPnlStateCalls) < 2 {
+		t.Fatalf("account pnl state calls = %+v, want restored accounts", eng.accountPnlStateCalls)
+	}
+	if len(eng.blockCalls) == 0 || eng.blockCalls[len(eng.blockCalls)-1].id != "existing" {
+		t.Fatalf("account block calls = %+v", eng.blockCalls)
+	}
+	if len(eng.blockGroupCalls) == 0 ||
+		eng.blockGroupCalls[len(eng.blockGroupCalls)-1].groupID != "desk" {
+		t.Fatalf("group block calls = %+v", eng.blockGroupCalls)
+	}
+	if len(eng.configureCalls) != 1 ||
+		eng.configureCalls[0].policy != domain.PolicyRateLimit ||
+		eng.configureCalls[0].limits.RateLimits[0].MaxOrders != 20 {
+		t.Fatalf("restored policy configure calls = %+v", eng.configureCalls)
+	}
+	if len(eng.adjustmentBatchCalls) != 1 ||
+		eng.adjustmentBatchCalls[0].account != "existing" ||
+		len(eng.adjustmentBatchCalls[0].reqs) != 1 ||
+		eng.adjustmentBatchCalls[0].reqs[0].Balance.Value != "12" {
+		t.Fatalf("restored balance batches = %+v", eng.adjustmentBatchCalls)
+	}
+}
+
+func TestLocalNode_RestoreBackupAccountDeletionStillRebuilds(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	old := newFakeEngine()
+	n, _ := newTestNode(t, old)
+	if _, err := n.CreateAccount(ctx, testAccount("delete-me"), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	next := newFakeEngine()
+	builds := 0
+	n.build = func(snap engine.Snapshot) (engine.Engine, error) {
+		builds++
+		return fakeBuild(next, new(engine.Snapshot))(snap)
+	}
+
+	summary, sink, err := n.RestoreBackup(
+		ctx,
+		testArchive(backup.Scope{All: true}, backup.Data{}),
+		backup.RestoreOptions{
+			Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+		},
+		testCaller,
+	)
+	if err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	if !summary.RestartRequired || builds != 1 {
+		t.Fatalf("account-deleting restore summary=%+v builds=%d, want one rebuild",
+			summary, builds)
+	}
+	if old.running || n.currentEngine() != next || sink != next.MarketDataSink() {
+		t.Fatalf("account-deleting restore did not swap engine")
+	}
+}
+
+func TestLocalNode_RestoreBackupReservesRestartBeforeCommit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	base := newMemoryStore("restore-restart-reservation.db")
+	t.Cleanup(func() { _ = base.Close() })
+	committed := make(chan struct{})
+	release := make(chan struct{})
+	var probe *restoreCommitProbeRealm
+	st := newRealmWrapStore(base, func(realm store.RealmStore) store.RealmStore {
+		probe = &restoreCommitProbeRealm{RealmStore: realm}
+		return probe
+	})
+	old := newFakeEngine()
+	n := newTestNodeWithStore(t, st, old)
+	if _, err := n.CreateAccount(ctx, testAccount("delete-me"), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	next := newFakeEngine()
+	n.build = fakeBuild(next, new(engine.Snapshot))
+	probe.afterCommit = func() {
+		close(committed)
+		<-release
+	}
+	var fatalErr error
+	n.fatal = func(err error) { fatalErr = err }
+
+	type restoreResult struct {
+		summary backup.RestoreSummary
+		err     error
+	}
+	results := make(chan restoreResult, 1)
+	go func() {
+		summary, _, err := n.RestoreBackup(
+			ctx,
+			testArchive(backup.Scope{All: true}, backup.Data{}),
+			backup.RestoreOptions{
+				Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+			},
+			testCaller,
+		)
+		results <- restoreResult{summary: summary, err: err}
+	}()
+	<-committed
+	if !n.restarting.Load() {
+		close(release)
+		<-results
+		t.Fatal("runtime restore did not reserve restart ownership before commit")
+	}
+	if err := n.beginEngineRestart(); !errors.Is(err, domain.ErrEngineRestarting) {
+		close(release)
+		<-results
+		if err == nil {
+			n.endEngineRestart()
+		}
+		t.Fatalf("concurrent engine restart error = %v, want ErrEngineRestarting", err)
+	}
+	close(release)
+	result := <-results
+	if result.err != nil {
+		t.Fatalf("RestoreBackup: %v", result.err)
+	}
+	if !result.summary.RestartRequired || n.currentEngine() != next {
+		t.Fatalf("restore result = %+v engine=%T, want reserved rebuild", result.summary, n.currentEngine())
+	}
+	if fatalErr != nil {
+		t.Fatalf("concurrent restart attempt triggered fatal path: %v", fatalErr)
+	}
+}
+
+func TestLocalNode_RestoreBackupPublishesDefaultCurrencyOnline(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	eng := newFakeEngine()
+	eng.enforceResolver = true
+	n, _ := newTestNode(t, eng)
+	sinkBefore := eng.MarketDataSink()
+	builds := 0
+	n.build = func(engine.Snapshot) (engine.Engine, error) {
+		builds++
+		return newFakeEngine(), nil
+	}
+
+	summary, sink, err := n.RestoreBackup(
+		ctx,
+		testArchive(backup.Scope{All: true}, backup.Data{
+			Assets:               []domain.Asset{{Code: "EUR"}},
+			DefaultGroupCurrency: "EUR",
+		}),
+		backup.RestoreOptions{
+			Scope: backup.Scope{All: true}, Mode: backup.RestoreModeOverwrite,
+		},
+		testCaller,
+	)
+	if err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	if summary.RestartRequired || builds != 0 || n.currentEngine() != eng {
+		t.Fatalf("default currency restore rebuilt: summary=%+v builds=%d", summary, builds)
+	}
+	if sink != sinkBefore || eng.groupCurrencies[""] != "EUR" {
+		t.Fatalf("default currency not published online: sink=%T currencies=%+v",
+			sink, eng.groupCurrencies)
+	}
+	if _, ok := eng.knownGroups[""]; !ok {
+		t.Fatalf("default group resolver entry missing: %+v", eng.knownGroups)
+	}
+	if eng.groupResolverIDs[""] != 0 {
+		t.Fatalf("default group resolver id = %d, want reserved 0",
+			eng.groupResolverIDs[""])
+	}
+}
+
+func TestLocalNode_RestoreBackupClearsDefaultCurrencyWithoutRemovingResolver(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	eng := newFakeEngine()
+	eng.enforceResolver = true
+	n, _ := newTestNode(t, eng)
+	if _, _, err := n.RestoreBackup(
+		ctx,
+		testArchive(backup.Scope{All: true}, backup.Data{
+			Assets:               []domain.Asset{{Code: "EUR"}},
+			DefaultGroupCurrency: "EUR",
+		}),
+		backup.RestoreOptions{
+			Scope: backup.Scope{All: true}, Mode: backup.RestoreModeOverwrite,
+		},
+		testCaller,
+	); err != nil {
+		t.Fatalf("seed RestoreBackup: %v", err)
+	}
+
+	summary, _, err := n.RestoreBackup(
+		ctx,
+		testArchive(backup.Scope{All: true}, backup.Data{}),
+		backup.RestoreOptions{
+			Scope: backup.Scope{All: true}, Mode: backup.RestoreModeOverwrite,
+		},
+		testCaller,
+	)
+	if err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	if summary.RestartRequired {
+		t.Fatal("default currency clear unexpectedly rebuilt the engine")
+	}
+	if _, ok := eng.knownGroups[""]; !ok {
+		t.Fatalf("default group resolver entry was removed: %+v", eng.knownGroups)
+	}
+	if _, ok := eng.groupCurrencies[""]; ok {
+		t.Fatalf("default group currency was not cleared: %+v", eng.groupCurrencies)
+	}
+}
+
+func TestMemoryRealmRestoreDefaultGroupSemantics(t *testing.T) {
+	t.Parallel()
+	realm := newMemoryStore("memory-default-restore.db").realm
+
+	realm.restoreData(backup.Data{})
+	if _, ok := realm.groups[""]; ok {
+		t.Fatal("empty restore invented an absent default group")
+	}
+
+	realm.restoreData(backup.Data{DefaultGroupCurrency: "USD"})
+	group, ok := realm.groups[""]
+	if !ok || group.Currency != "USD" || group.EngineGroupID != 0 {
+		t.Fatalf("non-empty default restore = %+v ok=%v, want USD with id 0", group, ok)
+	}
+
+	realm.restoreData(backup.Data{})
+	group, ok = realm.groups[""]
+	if !ok || group.Currency != "" || group.EngineGroupID != 0 {
+		t.Fatalf("cleared default restore = %+v ok=%v, want retained row with id 0", group, ok)
+	}
+}
+
+// TestLocalNode_RestoreBackupNonRuntimeScopePublishesForceIncludedGroup proves
+// normalized force-included dictionaries take the exclusive live-publication
+// gate even when the requested section itself is observational.
+func TestLocalNode_RestoreBackupNonRuntimeScopePublishesForceIncludedGroup(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	oldEngine := newFakeEngine()
 	n, _ := newTestNode(t, oldEngine)
 
-	// A strict resolver rejects any group it has not seen in a build snapshot.
-	// The rebuilt engine adopts the snapshot, so it learns the restored group.
-	nextEngine := newFakeEngine()
-	nextEngine.enforceResolver = true
-	var captured engine.Snapshot
-	n.build = fakeBuild(nextEngine, &captured)
+	oldEngine.enforceResolver = true
+	oldSink := oldEngine.MarketDataSink()
+	builds := 0
+	n.build = func(engine.Snapshot) (engine.Engine, error) {
+		builds++
+		return newFakeEngine(), nil
+	}
 
 	// The archive carries a new group (and its member account) but the caller
 	// requests ONLY the audit log: Normalize force-includes accounts+groups so the
@@ -146,14 +553,17 @@ func TestLocalNode_RestoreBackupNonRuntimeScopeRebuildsForForceIncludedGroup(t *
 	if err != nil {
 		t.Fatalf("RestoreBackup: %v", err)
 	}
-	if !summary.RestartRequired {
-		t.Fatalf("RestartRequired = false, want true for a force-included group write")
+	if summary.RestartRequired {
+		t.Fatalf("RestartRequired = true, want online force-included dictionary publication")
 	}
-	if oldEngine.running {
-		t.Fatalf("old engine still running: rebuild did not swap the engine")
+	if !oldEngine.running || n.currentEngine() != oldEngine || builds != 0 {
+		t.Fatalf("force-included restore replaced the engine: builds=%d", builds)
 	}
-	if _, ok := nextEngine.knownGroups["restored-desk"]; !ok {
-		t.Fatalf("rebuilt resolver missing restored-desk: %+v", nextEngine.knownGroups)
+	if n.currentMarketDataSink() != oldSink {
+		t.Fatalf("force-included restore replaced market-data sink")
+	}
+	if _, ok := oldEngine.knownGroups["restored-desk"]; !ok {
+		t.Fatalf("live resolver missing restored-desk: %+v", oldEngine.knownGroups)
 	}
 
 	// The store lists the group and, because the rebuild reconciled the resolver,
@@ -161,14 +571,14 @@ func TestLocalNode_RestoreBackupNonRuntimeScopeRebuildsForForceIncludedGroup(t *
 	if err := n.SetGroupBlocked(ctx, "restored-desk", true, "risk", testCaller); err != nil {
 		t.Fatalf("SetGroupBlocked into restored group: %v", err)
 	}
-	if len(nextEngine.blockGroupCalls) != 1 ||
-		nextEngine.blockGroupCalls[0].groupID != "restored-desk" {
+	if len(oldEngine.blockGroupCalls) != 1 ||
+		oldEngine.blockGroupCalls[0].groupID != "restored-desk" {
 		t.Fatalf("block group calls = %+v, want one for restored-desk",
-			nextEngine.blockGroupCalls)
+			oldEngine.blockGroupCalls)
 	}
 }
 
-func TestLocalNode_RestoreBackupRollsBackStoreOnRebuildFailure(t *testing.T) {
+func TestLocalNode_RestoreBackupBuildFailureKeepsCommittedStoreAndFatals(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	oldEngine := newFakeEngine()
@@ -176,36 +586,142 @@ func TestLocalNode_RestoreBackupRollsBackStoreOnRebuildFailure(t *testing.T) {
 	if _, err := n.CreateAccount(ctx, testAccount("keep"), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
+	buildErr := errors.New("build failed")
 	n.build = func(engine.Snapshot) (engine.Engine, error) {
-		return nil, errors.New("build failed")
+		return nil, buildErr
 	}
+	var fatalErr error
+	n.fatal = func(err error) { fatalErr = err }
 	archive := testArchive(
 		backup.Scope{All: true},
 		backup.Data{Accounts: []backup.Account{{Code: "new"}}},
 	)
 
-	if _, _, err := n.RestoreBackup(ctx, archive, backup.RestoreOptions{
+	_, _, err := n.RestoreBackup(ctx, archive, backup.RestoreOptions{
 		Scope: backup.Scope{All: true},
 		Mode:  backup.RestoreModeReplaceAll,
-	}, testCaller); err == nil {
-		t.Fatal("RestoreBackup succeeded, want rebuild failure")
+	}, testCaller)
+	if !errors.Is(err, buildErr) {
+		t.Fatalf("RestoreBackup error = %v, want build failure", err)
 	}
-	if !oldEngine.running {
-		t.Fatalf("old engine stopped after failed rebuild")
+	if fatalErr == nil || !errors.Is(fatalErr, buildErr) {
+		t.Fatalf("fatal error = %v, want build failure", fatalErr)
 	}
-	// The pre-restore state is restored exactly: the rollback re-applies the
-	// captured archive with replace-all, so the account that existed before the
-	// failed restore is present and the account the failed forward restore
-	// inserted is gone (replace-all deletes rows the rollback archive omits).
-	if _, ok, err := st.GetAccount(ctx, "keep"); err != nil || !ok {
-		t.Fatalf("keep account ok=%v err=%v, want present", ok, err)
+	if n.currentEngine() != oldEngine || !oldEngine.running {
+		t.Fatal("prepared rebuild failure replaced or stopped the old engine")
 	}
-	if _, ok, err := st.GetAccount(ctx, "new"); err != nil || ok {
-		t.Fatalf("new account ok=%v err=%v, want removed by rollback", ok, err)
+	if _, ok, getErr := st.GetAccount(ctx, "keep"); getErr != nil || ok {
+		t.Fatalf("keep account ok=%v err=%v, want removed by committed restore", ok, getErr)
+	}
+	if _, ok, getErr := st.GetAccount(ctx, "new"); getErr != nil || !ok {
+		t.Fatalf("new account ok=%v err=%v, want committed", ok, getErr)
 	}
 }
 
-func TestLocalNode_RestoreBackupRollsBackStoreAndEngineOnAuditFailure(t *testing.T) {
+func TestLocalNode_RestoreBackupReplayFailureKeepsCommittedStoreAndFatals(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	old := newFakeEngine()
+	n, realm := newTestNode(t, old)
+	instance := seedReplayInstance(t, realm)
+	instrument := seedReplayInstrument(
+		t, realm, instance.ExternalID, "EURUSD", "EUR", "USD", "2",
+	)
+	now := time.Now().UTC()
+	if err := realm.UpsertMarketDataQuote(ctx, domain.MarketDataQuote{
+		AsOf:           now,
+		ReceivedAt:     now,
+		Instance:       instance.ExternalID,
+		ExternalSymbol: instrument.ExternalSymbol,
+		BaseAsset:      instrument.BaseAsset,
+		QuoteAsset:     instrument.QuoteAsset,
+		Mark:           "2",
+	}); err != nil {
+		t.Fatalf("UpsertMarketDataQuote: %v", err)
+	}
+	if _, err := n.CreateAccount(ctx, testAccount("keep"), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	archive, err := realm.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup: %v", err)
+	}
+	archive.Data.Accounts = nil
+
+	replayErr := errors.New("restore replay failed")
+	next := newFakeEngine()
+	next.sink = &marketDataReplaySink{err: replayErr}
+	n.build = fakeBuild(next, new(engine.Snapshot))
+	var fatalErr error
+	n.fatal = func(err error) { fatalErr = err }
+	_, _, err = n.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true},
+		Mode:  backup.RestoreModeReplaceAll,
+	}, testCaller)
+	if !errors.Is(err, replayErr) {
+		t.Fatalf("RestoreBackup error = %v, want replay failure", err)
+	}
+	if fatalErr == nil || !errors.Is(fatalErr, replayErr) {
+		t.Fatalf("fatal error = %v, want replay failure", fatalErr)
+	}
+	if n.currentEngine() != old || !old.running || next.running {
+		t.Fatalf(
+			"engine state after replay failure: current=%p old=%v next=%v",
+			n.currentEngine(), old.running, next.running,
+		)
+	}
+	if _, ok, getErr := realm.GetAccount(ctx, "keep"); getErr != nil || ok {
+		t.Fatalf("keep account after committed restore: ok=%v err=%v, want absent", ok, getErr)
+	}
+}
+
+func TestLocalNode_RestoreBackupPostSwapMirrorFailureDoesNotRollback(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	old := newFakeEngine()
+	var fatalErr error
+	n, realm := newTestNode(t, old)
+	n.fatal = func(err error) { fatalErr = err }
+	if _, err := n.CreateAccount(ctx, testAccount("removed"), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	next := &seedBlockEngine{
+		fakeEngine: newFakeEngine(),
+		seedBlocks: []domain.AccountBlock{seedBlockOf("missing")},
+	}
+	n.build = func(snapshot engine.Snapshot) (engine.Engine, error) {
+		if _, err := fakeBuild(next.fakeEngine, new(engine.Snapshot))(snapshot); err != nil {
+			return nil, err
+		}
+		return next, nil
+	}
+	archive := testArchive(backup.Scope{All: true}, backup.Data{})
+
+	_, _, err := n.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true},
+		Mode:  backup.RestoreModeReplaceAll,
+	}, testCaller)
+	if err == nil {
+		t.Fatal("RestoreBackup succeeded, want post-swap mirror failure")
+	}
+	if fatalErr == nil {
+		t.Fatal("fatal error = nil after post-swap mirror failure")
+	}
+	if n.currentEngine() != next || old.running || !next.running {
+		t.Fatalf(
+			"engine state after post-swap failure: current=%p old=%v next=%v",
+			n.currentEngine(), old.running, next.running,
+		)
+	}
+	if _, ok, getErr := realm.GetAccount(ctx, "removed"); getErr != nil || ok {
+		t.Fatalf(
+			"removed account after committed restore: ok=%v err=%v, want absent",
+			ok, getErr,
+		)
+	}
+}
+
+func TestLocalNode_RestoreBackupAuditFailureKeepsCommittedRuntimeAndFatals(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	oldEngine := newFakeEngine()
@@ -220,20 +736,13 @@ func TestLocalNode_RestoreBackupRollsBackStoreAndEngineOnAuditFailure(t *testing
 	})
 
 	nextEngine := newFakeEngine()
-	rollbackEngine := newFakeEngine()
-	var buildCount int
-	var rollbackSnapshot engine.Snapshot
-	build := func(snap engine.Snapshot) (engine.Engine, error) {
+	buildCount := 0
+	build := func(engine.Snapshot) (engine.Engine, error) {
 		buildCount++
-		switch buildCount {
-		case 1:
+		if buildCount == 1 {
 			return oldEngine, nil
-		case 2:
-			return nextEngine, nil
-		default:
-			rollbackSnapshot = snap
-			return rollbackEngine, nil
 		}
+		return nextEngine, nil
 	}
 	nn, _, err := NewLocalNode(ctx, st, build)
 	if err != nil {
@@ -244,48 +753,41 @@ func TestLocalNode_RestoreBackupRollsBackStoreAndEngineOnAuditFailure(t *testing
 	if _, err := n.CreateAccount(ctx, testAccount("keep"), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
+	var fatalErr error
+	n.fatal = func(err error) { fatalErr = err }
 	archive := testArchive(
 		backup.Scope{All: true},
 		backup.Data{Accounts: []backup.Account{{Code: "new"}}},
 	)
 
-	if _, _, err := n.RestoreBackup(ctx, archive, backup.RestoreOptions{
+	_, _, err = n.RestoreBackup(ctx, archive, backup.RestoreOptions{
 		Scope: backup.Scope{All: true},
 		Mode:  backup.RestoreModeReplaceAll,
-	}, testCaller); err == nil {
-		t.Fatal("RestoreBackup succeeded, want audit failure")
+	}, testCaller)
+	if !errors.Is(err, errRestoreAuditFailed) {
+		t.Fatalf("RestoreBackup error = %v, want audit failure", err)
 	}
-	if nextEngine.running {
-		t.Fatalf("restored engine still running after rollback")
+	if fatalErr == nil || !errors.Is(fatalErr, errRestoreAuditFailed) {
+		t.Fatalf("fatal error = %v, want audit failure", fatalErr)
 	}
-	if !rollbackEngine.running {
-		t.Fatalf("rollback engine not running")
+	if n.currentEngine() != nextEngine || !nextEngine.running || oldEngine.running {
+		t.Fatalf(
+			"engine state after audit failure: current=%p old=%v next=%v",
+			n.currentEngine(), oldEngine.running, nextEngine.running,
+		)
+	}
+	if buildCount != 2 {
+		t.Fatalf("build count = %d, want initial plus committed restore", buildCount)
 	}
 	realm, err := real.ForRealm(ctx, domain.DefaultRealm)
 	if err != nil {
 		t.Fatalf("ForRealm: %v", err)
 	}
-	if _, ok, err := realm.GetAccount(ctx, "keep"); err != nil || !ok {
-		t.Fatalf("keep account ok=%v err=%v, want present", ok, err)
+	if _, ok, getErr := realm.GetAccount(ctx, "keep"); getErr != nil || ok {
+		t.Fatalf("keep account ok=%v err=%v, want removed", ok, getErr)
 	}
-	// The replace-all rollback deletes the account the failed forward restore
-	// inserted: it is not in the captured pre-restore archive.
-	if _, ok, err := realm.GetAccount(ctx, "new"); err != nil || ok {
-		t.Fatalf("new account ok=%v err=%v, want removed by rollback", ok, err)
-	}
-	// The rollback engine is rebuilt from the restored pre-restore snapshot, which
-	// carries the account that existed before the failed restore.
-	if len(rollbackSnapshot.Accounts) == 0 {
-		t.Fatalf("rollback snapshot accounts = %+v, want the pre-restore account", rollbackSnapshot.Accounts)
-	}
-	found := false
-	for _, a := range rollbackSnapshot.Accounts {
-		if a.Code == "keep" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("rollback snapshot accounts = %+v, want to include keep", rollbackSnapshot.Accounts)
+	if _, ok, getErr := realm.GetAccount(ctx, "new"); getErr != nil || !ok {
+		t.Fatalf("new account ok=%v err=%v, want committed", ok, getErr)
 	}
 }
 
@@ -310,19 +812,33 @@ func TestLocalNode_RestoreBackupRollsBackStoreOnAuditFailureWithoutRuntime(t *te
 		return &failRestoreAuditRealm{RealmStore: r}
 	})
 	n := newTestNodeWithStore(t, st, oldEngine)
+	if _, err := n.CreateAccount(ctx, testAccount("keep-runtime"), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	var fatalErr error
+	n.fatal = func(err error) { fatalErr = err }
 	archive := testArchive(
 		backup.Scope{Sections: []backup.Section{backup.SectionGeneralSettings}},
 		backup.Data{McpAccess: map[string]bool{"submit_order": false}},
 	)
 
 	if _, _, err := n.RestoreBackup(ctx, archive, backup.RestoreOptions{
-		Scope: backup.Scope{Sections: []backup.Section{backup.SectionGeneralSettings}},
+		// All means every section available in this archive, not every possible
+		// section. The manifest carries only general settings, so this restore is
+		// non-runtime and remains safely rollback-capable.
+		Scope: backup.Scope{All: true},
 		Mode:  backup.RestoreModeReplaceAll,
 	}, testCaller); err == nil {
 		t.Fatal("RestoreBackup succeeded, want audit failure")
 	}
+	if fatalErr != nil {
+		t.Fatalf("fatal error = %v, want non-runtime rollback", fatalErr)
+	}
 	if !oldEngine.running {
 		t.Fatalf("engine stopped for non-runtime rollback")
+	}
+	if _, ok, err := realm0.GetAccount(ctx, "keep-runtime"); err != nil || !ok {
+		t.Fatalf("runtime account after settings-only restore: ok=%v err=%v", ok, err)
 	}
 	access, err := realm0.ListMcpAccess(ctx)
 	if err != nil {
@@ -330,6 +846,56 @@ func TestLocalNode_RestoreBackupRollsBackStoreOnAuditFailureWithoutRuntime(t *te
 	}
 	if access["submit_order"] != true {
 		t.Fatalf("mcp access = %+v, want rollback to true", access)
+	}
+}
+
+func TestLocalNode_RestoreBackupRollbackPreservesExactSelectors(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	real := newMemoryStore("restore-selector-scope.db")
+	if err := real.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = real.Close() })
+
+	var probe *restoreScopeProbeRealm
+	st := newRealmWrapStore(real, func(r store.RealmStore) store.RealmStore {
+		probe = &restoreScopeProbeRealm{RealmStore: r}
+		return probe
+	})
+	n := newTestNodeWithStore(t, st, newFakeEngine())
+	scope := backup.Scope{
+		Sections: []backup.Section{backup.SectionUserSettings},
+		Accounts: backup.EntitySelector{
+			Accounts: []string{"selected-account"},
+			Groups:   []string{"selected-group"},
+		},
+		Positions: backup.EntitySelector{
+			Accounts: []string{"selected-position-account"},
+		},
+	}
+	archive := testArchive(scope, backup.Data{UserSettings: []domain.UserSetting{{
+		UserID: "user", Key: "layout", Value: "restored",
+	}}})
+
+	if _, _, err := n.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: scope,
+		Mode:  backup.RestoreModeReplaceAll,
+	}, testCaller); !errors.Is(err, errRestoreAuditFailed) {
+		t.Fatalf("RestoreBackup error = %v, want audit failure", err)
+	}
+	if len(probe.exportScopes) != 1 {
+		t.Fatalf("rollback export scopes = %+v, want one", probe.exportScopes)
+	}
+	if len(probe.restoreScopes) != 2 {
+		t.Fatalf("restore scopes = %+v, want restore plus rollback", probe.restoreScopes)
+	}
+	want := scope.Normalize()
+	if !reflect.DeepEqual(probe.exportScopes[0], want) {
+		t.Fatalf("rollback export scope = %+v, want %+v", probe.exportScopes[0], want)
+	}
+	if !reflect.DeepEqual(probe.restoreScopes[1], want) {
+		t.Fatalf("rollback restore scope = %+v, want %+v", probe.restoreScopes[1], want)
 	}
 }
 
@@ -357,6 +923,8 @@ func TestLocalNode_RestoreBackupJoinsRollbackRestoreFailure(t *testing.T) {
 		}
 	})
 	n := newTestNodeWithStore(t, st, newFakeEngine())
+	var fatalErr error
+	n.fatal = func(err error) { fatalErr = err }
 	archive := testArchive(
 		backup.Scope{Sections: []backup.Section{backup.SectionGeneralSettings}},
 		backup.Data{McpAccess: map[string]bool{"submit_order": false}},
@@ -374,6 +942,113 @@ func TestLocalNode_RestoreBackupJoinsRollbackRestoreFailure(t *testing.T) {
 	}
 	if !errors.Is(err, errRestoreAuditFailed) {
 		t.Fatalf("RestoreBackup error = %v, want audit failure", err)
+	}
+	if fatalErr == nil || !errors.Is(fatalErr, rollbackErr) {
+		t.Fatalf("fatal error = %v, want rollback restore failure", fatalErr)
+	}
+}
+
+func TestLocalNode_RollbackStoreAndEngineRebuildFailureIsFatal(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	old := newFakeEngine()
+	n, realm := newTestNode(t, old)
+	rollback, err := realm.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup: %v", err)
+	}
+	rebuildErr := errors.New("rollback rebuild failed")
+	n.build = func(engine.Snapshot) (engine.Engine, error) {
+		return nil, rebuildErr
+	}
+	var fatalErr error
+	n.fatal = func(err error) { fatalErr = err }
+	cause := errors.New("online publication failed")
+
+	err = n.rollbackStoreAndEngine(ctx, rollback, cause)
+	if !errors.Is(err, cause) || !errors.Is(err, rebuildErr) {
+		t.Fatalf("rollbackStoreAndEngine error = %v, want cause and rebuild failure", err)
+	}
+	if fatalErr == nil || !errors.Is(fatalErr, rebuildErr) {
+		t.Fatalf("fatal error = %v, want rebuild failure", fatalErr)
+	}
+	if n.currentEngine() != old || !old.running {
+		t.Fatal("rollback rebuild failure replaced or stopped old engine")
+	}
+}
+
+func TestLocalNode_ResetDatabaseRebuildFailureIsFatal(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := newMemoryStore("reset-rebuild-failure.db")
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	old := newFakeEngine()
+	n := newTestNodeWithStore(t, st, old)
+	if _, err := n.CreateAccount(ctx, testAccount("reset-me"), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	rebuildErr := errors.New("reset rebuild failed")
+	n.build = func(engine.Snapshot) (engine.Engine, error) {
+		return nil, rebuildErr
+	}
+	var fatalErr error
+	n.fatal = func(err error) { fatalErr = err }
+
+	_, err := n.ResetDatabase(ctx, testCaller)
+	if !errors.Is(err, rebuildErr) {
+		t.Fatalf("ResetDatabase error = %v, want rebuild failure", err)
+	}
+	if fatalErr == nil || !errors.Is(fatalErr, rebuildErr) {
+		t.Fatalf("fatal error = %v, want rebuild failure", fatalErr)
+	}
+}
+
+func TestLocalNode_ResetDatabaseDetachesReconciliationAfterCommit(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	base := newMemoryStore("reset-post-commit-cancel.db")
+	t.Cleanup(func() { _ = base.Close() })
+	st := &cancelAfterResetStore{Store: base}
+	old := newFakeEngine()
+	next := newFakeEngine()
+	builds := 0
+	nn, _, err := NewLocalNode(
+		context.Background(), st,
+		func(engine.Snapshot) (engine.Engine, error) {
+			builds++
+			if builds == 1 {
+				return old, nil
+			}
+			return next, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewLocalNode: %v", err)
+	}
+	n := nn.(*localNode)
+	seedTestPrincipal(t, n.realm)
+	st.cancel = cancel
+	var fatalErr error
+	n.fatal = func(err error) { fatalErr = err }
+
+	if _, err := n.ResetDatabase(ctx, testCaller); err != nil {
+		t.Fatalf("ResetDatabase after request cancellation: %v", err)
+	}
+	if ctx.Err() == nil {
+		t.Fatal("reset commit hook did not cancel the request context")
+	}
+	if fatalErr != nil {
+		t.Fatalf("post-commit request cancellation triggered fatal path: %v", fatalErr)
+	}
+	if builds != 2 || n.currentEngine() != next || old.running {
+		t.Fatalf(
+			"reset reconciliation builds=%d engine=%T old_running=%v, want replacement",
+			builds, n.currentEngine(), old.running,
+		)
 	}
 }
 
@@ -412,10 +1087,10 @@ func TestLocalNode_ResetDatabaseRecreatesStoreAndAudits(t *testing.T) {
 	if sink == nil {
 		t.Fatalf("ResetDatabase returned nil sink")
 	}
-	// Three builds: the initial seed, the rebuild CreateAccount triggers so the
-	// new account enters the resolver, and the rebuild ResetDatabase performs.
-	if builds != 3 {
-		t.Fatalf("build calls = %d, want 3", builds)
+	// CreateAccount publishes into the live resolver. Only ResetDatabase replaces
+	// the engine after the initial seed.
+	if builds != 2 {
+		t.Fatalf("build calls = %d, want 2", builds)
 	}
 	if oldEngine.running {
 		t.Fatalf("old engine still running after reset")

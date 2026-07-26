@@ -131,15 +131,13 @@ type orderSizeLimitDTO struct {
 
 // spotFundsPnlBoundsLimitDTO is the wire shape of a SpotFunds self-computed
 // P&L-bounds barrier. P&L is always in the account currency, so the barrier
-// has no separate currency or asset axis. InitialPnl is accepted only on
-// account scope.
+// has no separate currency or asset axis.
 type spotFundsPnlBoundsLimitDTO struct {
 	Scope        string `json:"scope"`
 	Account      string `json:"account"`
 	AccountGroup string `json:"accountGroup"`
 	LowerBound   string `json:"lowerBound"`
 	UpperBound   string `json:"upperBound"`
-	InitialPnl   string `json:"initialPnl"`
 }
 
 // accountLimitsDTO is the per-policy view of an account's typed barriers,
@@ -165,11 +163,10 @@ type policyOrderSizeValuesDTO struct {
 }
 
 // policyPnlBoundsValuesDTO carries the P&L-bounds-specific values of a policy
-// row. The bounds and seed are exact decimal strings; an unset value is empty.
+// row. The bounds are exact decimal strings; an unset value is empty.
 type policyPnlBoundsValuesDTO struct {
 	LowerBound string `json:"lowerBound"`
 	UpperBound string `json:"upperBound"`
-	InitialPnl string `json:"initialPnl"`
 }
 
 // policyValuesDTO is the heterogeneous value payload of a policy row: exactly
@@ -316,7 +313,6 @@ func toSpotFundsPnlBoundsLimitDTO(
 		AccountGroup: l.AccountGroup,
 		LowerBound:   l.LowerBound,
 		UpperBound:   l.UpperBound,
-		InitialPnl:   l.InitialPnl,
 	}
 }
 
@@ -372,7 +368,6 @@ func toPolicyRowDTO(row store.PolicyListRow) policyDTO {
 		dto.Values.SpotFundsPnlBounds = &policyPnlBoundsValuesDTO{
 			LowerBound: row.SpotFundsPnlBounds.LowerBound,
 			UpperBound: row.SpotFundsPnlBounds.UpperBound,
-			InitialPnl: row.SpotFundsPnlBounds.InitialPnl,
 		}
 	}
 	return dto
@@ -561,8 +556,10 @@ type marketDataInstrumentDTO struct {
 	// not an age that grows between ticks.
 	UpdateIntervalMs int                 `json:"updateIntervalMs,omitempty"`
 	Enabled          bool                `json:"enabled"`
+	SyntheticInverse bool                `json:"syntheticInverse"`
 	Stale            bool                `json:"stale"`
 	Quote            *marketDataQuoteDTO `json:"quote,omitempty"`
+	InverseQuote     *marketDataQuoteDTO `json:"inverseQuote,omitempty"`
 }
 
 type marketDataQuoteDTO struct {
@@ -786,8 +783,10 @@ func toMarketDataInstrumentDTO(
 		ManualPrice:        status.Instrument.ManualPrice,
 		UpdateIntervalMs:   intervalMs,
 		Enabled:            status.Instrument.Enabled,
+		SyntheticInverse:   status.SyntheticInverse,
 		Stale:              status.Stale,
 		Quote:              toMarketDataQuoteDTO(status.Quote),
+		InverseQuote:       toMarketDataQuoteDTO(status.InverseQuote),
 	}
 }
 

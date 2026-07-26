@@ -141,10 +141,10 @@ func (n *localNode) ListMarketDataInstruments(
 func (n *localNode) UpsertMarketDataInstrument(
 	ctx context.Context, instrument domain.MarketDataInstrument, caller domain.Caller,
 ) error {
-	if err := n.beginEngineRestart(); err != nil {
+	if err := n.beginMutation(); err != nil {
 		return err
 	}
-	defer n.endEngineRestart()
+	defer n.endMutation()
 
 	if err := n.ensureMarketDataAssets(ctx, instrument, caller); err != nil {
 		return err
@@ -165,17 +165,9 @@ func (n *localNode) UpsertMarketDataInstrument(
 func (n *localNode) ensureMarketDataAssets(
 	ctx context.Context, instrument domain.MarketDataInstrument, caller domain.Caller,
 ) error {
-	created, err := n.ensureAutoCreatedAssets(ctx, instrument.BaseAsset,
+	_, err := n.ensureAutoCreatedAssets(ctx, instrument.BaseAsset,
 		instrument.QuoteAsset, "market-data instrument upsert", caller)
-	if err != nil {
-		return err
-	}
-	if created {
-		if err := n.rebuildEngineFromStore(ctx); err != nil {
-			return fmt.Errorf("rebuild engine after asset create: %w", err)
-		}
-	}
-	return nil
+	return err
 }
 
 func (n *localNode) SetMarketDataInstrumentEnabled(

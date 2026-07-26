@@ -20,12 +20,32 @@ package backend_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/node"
 )
+
+type blockingStopMarketDataRuntime struct {
+	*fakeMarketDataRuntime
+	mu           sync.Mutex
+	stopCalls    int
+	stopEntered  chan struct{}
+	firstRelease chan struct{}
+}
+
+func (r *blockingStopMarketDataRuntime) Stop() {
+	r.mu.Lock()
+	r.stopCalls++
+	call := r.stopCalls
+	r.mu.Unlock()
+	r.stopEntered <- struct{}{}
+	if call == 1 {
+		<-r.firstRelease
+	}
+}
 
 func TestService_PutLimitValidatesBeforeRouting(t *testing.T) {
 	t.Parallel()
@@ -111,6 +131,120 @@ func TestService_PutLimitReconnectsMarketDataOnRebuild(t *testing.T) {
 	if md.stops != 1 || md.restarts != 1 || md.sink != sink {
 		t.Fatalf("market-data reconnect = stops:%d restarts:%d sink:%T",
 			md.stops, md.restarts, md.sink)
+	}
+}
+
+func TestService_PutLimitSerializesMarketDataReconnect(t *testing.T) {
+	md := &blockingStopMarketDataRuntime{
+		fakeMarketDataRuntime: &fakeMarketDataRuntime{},
+		stopEntered:           make(chan struct{}, 2),
+		firstRelease:          make(chan struct{}),
+	}
+	released := false
+	t.Cleanup(func() {
+		if !released {
+			close(md.firstRelease)
+		}
+	})
+	svc, fn := newTestServiceWithMarketDataRuntime(md)
+	fn.restoreSink = &backendTestSink{}
+	limit := domain.LimitRate{
+		Scope: domain.ScopeBroker, MaxOrders: 100, Window: time.Second,
+	}
+	putDone := make(chan error, 1)
+	go func() {
+		putDone <- svc.PutRateLimit(context.Background(), limit)
+	}()
+	select {
+	case <-md.stopEntered:
+	case <-time.After(time.Second):
+		t.Fatal("PutRateLimit did not enter market-data reconnect")
+	}
+
+	restartDone := make(chan error, 1)
+	go func() {
+		restartDone <- svc.RestartMarketData(context.Background())
+	}()
+	select {
+	case <-md.stopEntered:
+		t.Fatal("concurrent market-data reconnect was not serialized")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(md.firstRelease)
+	released = true
+	if err := <-putDone; err != nil {
+		t.Fatalf("PutRateLimit: %v", err)
+	}
+	select {
+	case <-md.stopEntered:
+	case <-time.After(time.Second):
+		t.Fatal("RestartMarketData did not continue after PutRateLimit reconnect")
+	}
+	if err := <-restartDone; err != nil {
+		t.Fatalf("RestartMarketData: %v", err)
+	}
+}
+
+func TestService_PutLimitSerializesNodeMutationWithMarketDataReconnect(t *testing.T) {
+	md := &fakeMarketDataRuntime{}
+	svc, fn := newTestServiceWithMarketDataRuntime(md)
+	fn.restoreSink = &backendTestSink{}
+	rateEntered := make(chan struct{})
+	rateRelease := make(chan struct{})
+	orderEntered := make(chan struct{})
+	released := false
+	t.Cleanup(func() {
+		if !released {
+			close(rateRelease)
+		}
+	})
+	fn.putRateLimitHook = func() {
+		close(rateEntered)
+		<-rateRelease
+	}
+	fn.putOrderSizeLimitHook = func() {
+		close(orderEntered)
+	}
+
+	rateDone := make(chan error, 1)
+	go func() {
+		rateDone <- svc.PutRateLimit(context.Background(), domain.LimitRate{
+			Scope: domain.ScopeBroker, MaxOrders: 100, Window: time.Second,
+		})
+	}()
+	select {
+	case <-rateEntered:
+	case <-time.After(time.Second):
+		t.Fatal("PutRateLimit did not enter node mutation")
+	}
+
+	orderDone := make(chan error, 1)
+	go func() {
+		orderDone <- svc.PutOrderSizeLimit(context.Background(), domain.LimitOrderSize{
+			Scope:       domain.ScopeAccountAsset,
+			Account:     "acc-1",
+			Asset:       "AAPL",
+			MaxQuantity: "1",
+		})
+	}()
+	select {
+	case <-orderEntered:
+		t.Fatal("concurrent limit mutation reached node before first reconnect")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(rateRelease)
+	released = true
+	if err := <-rateDone; err != nil {
+		t.Fatalf("PutRateLimit: %v", err)
+	}
+	select {
+	case <-orderEntered:
+	case <-time.After(time.Second):
+		t.Fatal("PutOrderSizeLimit did not continue after first reconnect")
+	}
+	if err := <-orderDone; err != nil {
+		t.Fatalf("PutOrderSizeLimit: %v", err)
 	}
 }
 

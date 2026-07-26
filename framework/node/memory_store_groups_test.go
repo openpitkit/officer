@@ -176,6 +176,11 @@ func (r *memoryRealm) DeleteGroup(_ context.Context, code string) error {
 			r.accounts[id] = account
 		}
 	}
+	for key, limit := range r.spotFundsPnlBoundsLimits {
+		if limit.Scope == domain.ScopeAccountGroup && limit.AccountGroup == code {
+			delete(r.spotFundsPnlBoundsLimits, key)
+		}
+	}
 	return nil
 }
 

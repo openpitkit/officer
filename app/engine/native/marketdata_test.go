@@ -24,6 +24,7 @@
 package native
 
 import (
+	"errors"
 	"testing"
 
 	"go.openpit.dev/openpit"
@@ -108,6 +109,44 @@ func TestMarketDataSink_PushSecondQuoteSameInstrument(t *testing.T) {
 	usd, _ := param.NewAsset("USD")
 	if got := readMark(t, service, param.NewInstrument(msft, usd)); got != "2100" {
 		t.Fatalf("mark = %q, want 2100 (replaced)", got)
+	}
+}
+
+func TestMarketDataSink_ClearRemovesStoredQuote(t *testing.T) {
+	t.Parallel()
+	sink, service := newTestSink(t)
+
+	if err := sink.Push(marketdata.QuoteUpdate{
+		Base: "EUR", Quote: "USD", Mark: "2",
+	}); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+	if err := sink.Clear("EUR", "USD"); err != nil {
+		t.Fatalf("Clear: %v", err)
+	}
+
+	eur, _ := param.NewAsset("EUR")
+	usd, _ := param.NewAsset("USD")
+	id, ok := service.Resolve(param.NewInstrument(eur, usd))
+	if !ok {
+		t.Fatal("Resolve: cleared instrument was unregistered")
+	}
+	_, err := service.Get(
+		id,
+		param.NewAccountIDFromUint64(1),
+		noGroupAccountInfo{},
+		bindmd.QuoteResolutionAccountThenGroupThenDefault,
+	)
+	if !errors.Is(err, bindmd.ErrQuoteUnavailable) {
+		t.Fatalf("Get after Clear error = %v, want ErrQuoteUnavailable", err)
+	}
+}
+
+func TestMarketDataSink_ClearUnknownInstrumentIsNoop(t *testing.T) {
+	t.Parallel()
+	sink, _ := newTestSink(t)
+	if err := sink.Clear("EUR", "USD"); err != nil {
+		t.Fatalf("Clear unknown instrument: %v", err)
 	}
 }
 

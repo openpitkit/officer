@@ -50,7 +50,11 @@ func (l accountLane) SubmitImmediate(
 		return ImmediateResult{}, fmt.Errorf("engine: submit immediate cancelled: %w", err)
 	}
 
-	order, err := orderModelFromAccount(o, l.accountID)
+	accountID, err := l.routedAccountID(o.Account)
+	if err != nil {
+		return ImmediateResult{}, err
+	}
+	order, err := orderModelFromAccount(o, accountID)
 	if err != nil {
 		return ImmediateResult{}, err
 	}
@@ -92,7 +96,7 @@ func (l accountLane) SubmitImmediate(
 		Side:           o.Side,
 		Order:          o.ExternalID,
 		OrderStatus:    domain.OrderStatusFilled,
-	}, l.accountID)
+	}, accountID)
 	if err != nil {
 		reservation.RollbackAndClose()
 		return ImmediateResult{}, err
@@ -152,7 +156,7 @@ func (l accountLane) SubmitImmediate(
 		)
 	}
 	accountPnl, accountPnlHaltReason, err := spotFundsAccountPnlFromList(
-		l.accountID,
+		accountID,
 		postTrade.AccountPnls,
 	)
 	if err != nil {

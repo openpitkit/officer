@@ -39,7 +39,6 @@
     "policyNoAccountGroup": "{{policy}} не должна содержать группу счетов",
     "rateLimitRequires": "rate_limit требует указания max_orders и window",
     "orderSizeRequires": "order_size_limit требует max_quantity или max_notional",
-    "spotFundsInitialPnlAccountOnly": "initial_pnl доступен только для скопа счёта в spot_funds_pnl_bounds_kill_switch",
     "pnlBoundOrder": "lower_bound должен быть <= upper_bound"
   }
 }

@@ -242,8 +242,6 @@ func sortPolicyRows(rows []store.PolicyListRow, spec store.SortSpec) {
 			cmp = strings.Compare(left.Asset, right.Asset)
 		case "accountGroup":
 			cmp = strings.Compare(left.AccountGroup, right.AccountGroup)
-		case "initialPnl":
-			cmp = decimalStringCompare(policyInitialPnl(left), policyInitialPnl(right))
 		case "lowerBound":
 			cmp = decimalStringCompare(policyLowerBound(left), policyLowerBound(right))
 		case "maxNotional":
@@ -306,13 +304,6 @@ func policyUpperBound(row store.PolicyListRow) string {
 	default:
 		return ""
 	}
-}
-
-func policyInitialPnl(row store.PolicyListRow) string {
-	if row.SpotFundsPnlBounds != nil {
-		return row.SpotFundsPnlBounds.InitialPnl
-	}
-	return ""
 }
 
 // policyCompositeCompare orders two policy rows by their unique composite, the

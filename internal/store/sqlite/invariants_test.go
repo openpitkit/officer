@@ -695,7 +695,6 @@ func TestSpotFundsPnlBoundsLimitRoundTripPolicyListAndDelete(t *testing.T) {
 		Scope:      domain.ScopeAccount,
 		Account:    "acc-1",
 		UpperBound: "500",
-		InitialPnl: "12.50",
 	}
 	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, accountLimit); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit(account): %v", err)
@@ -708,12 +707,6 @@ func TestSpotFundsPnlBoundsLimitRoundTripPolicyListAndDelete(t *testing.T) {
 	if len(limits) != 2 {
 		t.Fatalf("spot funds limits count = %d, want 2: %+v", len(limits), limits)
 	}
-	for _, limit := range limits {
-		if limit.Scope == domain.ScopeAccount && limit.InitialPnl != "12.50" {
-			t.Fatalf("account initial_pnl = %q, want 12.50", limit.InitialPnl)
-		}
-	}
-
 	page, err := rs.ListPolicyRows(ctx, PolicyListFilter{})
 	if err != nil {
 		t.Fatalf("ListPolicyRows: %v", err)
@@ -732,7 +725,7 @@ func TestSpotFundsPnlBoundsLimitRoundTripPolicyListAndDelete(t *testing.T) {
 		}
 		if row.Account == "acc-1" &&
 			row.SpotFundsPnlBounds != nil &&
-			row.SpotFundsPnlBounds.InitialPnl == "12.50" {
+			row.SpotFundsPnlBounds.UpperBound == "500" {
 			foundAccount = true
 		}
 	}

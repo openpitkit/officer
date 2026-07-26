@@ -1193,9 +1193,10 @@ type RealmStore interface {
 	// while preserving the archive's code and external id values; machine records
 	// then resolve their cross-row links through those preserved identities. The
 	// restore honors opts.Mode (replace-all, overwrite, insert-missing) and the
-	// scope selectors, and reports per-section counts. RestoreSummary.Restart
-	// Required is the engine-rebuild signal: it is true when the restore touched
-	// runtime-affecting sections, telling the node to rebuild the live engine.
+	// scope selectors, and reports per-section counts. The store does not decide
+	// whether an engine replacement is required; the node classifies and publishes
+	// the committed runtime delta online, setting RestoreSummary.RestartRequired
+	// only if it actually replaces the engine.
 	RestoreBackup(
 		ctx context.Context, archive backup.Archive, opts backup.RestoreOptions,
 	) (backup.RestoreSummary, error)

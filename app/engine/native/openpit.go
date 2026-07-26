@@ -28,6 +28,7 @@ import (
 	bindmd "go.openpit.dev/openpit/marketdata"
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/pkg/optional"
 	"go.openpit.dev/openpit/pretrade/policies"
 	"go.openpit.dev/openpit/reject"
 
@@ -70,39 +71,33 @@ const (
 // openPitEngine is the concrete Engine adapter wrapping one OpenPit engine
 // handle and its market-data service.
 //
-// The handle is built by BuildOpenPitEngine and lives until Stop; officer never
-// rebuilds it. Limit changes are applied dynamically through the binding's
-// Configure surface. rate_limit and order_size_limit
+// The handle is built by BuildOpenPitEngine and lives until Stop. Online limit
+// changes are applied through the binding's Configure surface. rate_limit and
+// order_size_limit
 // retune their axes wholesale (barriers added and removed at runtime). The
 // spot-funds policy is registered at build time and its P&L-bounds axes are
-// reconfigured at runtime. The residual changes the Configure surface cannot
-// express are exactly: configuring a policy that was not registered at build
-// time (no runtime registration API), removing the last barrier of a registered
-// policy (the SDK cannot unregister), and dropping a broker barrier of
-// rate_limit or order_size while other barriers remain (broker is an Option the
-// surface cannot clear in isolation). Each returns an error wrapping
+// reconfigured at runtime, including broker-axis removal through the explicit
+// optional update shape. The residual changes the Configure surface cannot
+// express are configuring a policy that was not registered at build time and
+// removing its last barrier: the SDK requires at least one barrier both when a
+// policy is built and after every update. Those return errors wrapping
 // domain.ErrNotImplemented, which tells the node to rebuild from the persisted
-// store snapshot for policy CRUD instead of keeping store and engine divergent.
+// store snapshot instead of keeping store and engine divergent.
 //
 // The adapter owns the market-data service for its engine handle lifetime. The
 // service is built unconditionally and Stop closes it after stopping the engine,
 // so connector producers must stop before Stop.
 //
-// The adapter tracks the minimal state this requires: the set of policies
-// registered at build time, and per-policy whether a broker barrier is currently
-// live (for the broker-drop guard), all updated only on a successful call. All
-// handle fields and runtime Configure state are guarded by mu. Account-scoped
-// engine calls run through asyncengine lanes and use the handle snapshot
-// captured before submission instead of taking this mutex on the hot path.
+// The adapter tracks the set of policies registered at build time. All handle
+// fields and runtime Configure state are guarded by mu. Account-scoped engine
+// calls run through asyncengine lanes and use the handle snapshot captured before
+// submission instead of taking this mutex on the hot path.
 type openPitEngine struct {
 	eng   *openpit.Engine
 	async *asyncengine.AsyncEngine
 
-	// res resolves account/group codes to the stored integer engine ids the
-	// handle runs on. It is built once from the build Snapshot and is immutable
-	// for the handle's lifetime: the engine is rebuilt from a fresh Snapshot when
-	// the account/group set changes, so the resolver always covers every account
-	// and group the live handle runs. It replaces the former FNV string-hashing.
+	// res resolves mutable dictionary aliases to stable stored integer engine ids.
+	// Its shared state is safe for concurrent hot-path lookup and publication.
 	res idResolver
 
 	// sink publishes normalized quotes into marketDataService. It owns the
@@ -117,17 +112,6 @@ type openPitEngine struct {
 	// of an unregistered policy is a not-implemented stub: there is no runtime
 	// policy-registration API.
 	registered map[string]struct{}
-	// brokerPresent reports, per policy name, whether that policy currently
-	// carries a broker barrier on the handle. Only rate_limit and order_size_limit
-	// have a broker axis the Configure surface cannot clear in isolation (a nil
-	// broker leaves it unchanged), so a reconfigure that drops the broker barrier
-	// while other barriers remain is a not-implemented stub rather than a silent
-	// store/engine divergence. Updated only on a successful Configure.
-	brokerPresent map[string]bool
-	// spotFundsPnlBoundsSeeds tracks the account-scope seeds already applied to
-	// the live SpotFunds accumulator. Bounds-only reconfigures pass the complete
-	// barrier set, so unchanged seeds must not be force-set again.
-	spotFundsPnlBoundsSeeds map[spotFundsPnlBoundsSeedKey]param.Pnl
 
 	// seedAccountBlocks are the blocks the engine latched while this handle was
 	// seeded: a seeded P&L that is halted, or that breaches its own barrier,
@@ -141,28 +125,28 @@ type openPitEngine struct {
 }
 
 type accountLane struct {
-	owner     *openPitEngine
-	eng       *openpit.Engine
-	accountID param.AccountID
+	owner        *openPitEngine
+	eng          *openpit.Engine
+	accountAlias domain.AccountID
+	accountID    param.AccountID
 }
 
 type groupLane struct {
-	owner *openPitEngine
-	eng   *openpit.Engine
+	owner      *openPitEngine
+	eng        *openpit.Engine
+	accountIDs map[domain.AccountID]param.AccountID
+	groupAlias string
+	groupID    param.AccountGroupID
 }
 
 // newOpenPitEngine wraps an already-built *openpit.Engine and its market-data
 // service into the Engine adapter. registered is the set of policy names live on
-// the handle and brokerPresent records, per policy, whether it was built with a
-// broker barrier; both are taken over by the adapter. The adapter takes
-// ownership of both the handle and the service lifecycle: neither must be
-// stopped/closed directly afterwards; use Engine.Stop instead, which stops the
-// engine and then closes the service. res is the code-to-engine-id resolver
-// built from the same Snapshot. spotFundsPnlBoundsSeeds is the account seed
-// tracker initialized after post-build SpotFunds P&L seeds are applied through
-// their AsyncEngine account lanes. seedAccountBlocks are the blocks the engine
-// reported while applying those seeds, carried on the handle for the node to
-// mirror.
+// the handle and is taken over by the adapter. The adapter takes ownership of
+// both the handle and the service lifecycle: neither must be stopped/closed
+// directly afterwards; use Engine.Stop instead, which stops the engine and then
+// closes the service. res is the code-to-engine-id resolver built from the same
+// Snapshot. seedAccountBlocks are the blocks the engine reported while applying
+// persisted account P&L state, carried on the handle for the node to mirror.
 // BuildOpenPitEngine is the only caller; it assembles the tracked state and
 // owns the service before the engine is built.
 func newOpenPitEngine(
@@ -170,39 +154,59 @@ func newOpenPitEngine(
 	async *asyncengine.AsyncEngine,
 	service *bindmd.Service,
 	registered map[string]struct{},
-	brokerPresent map[string]bool,
-	spotFundsPnlBoundsSeeds map[spotFundsPnlBoundsSeedKey]param.Pnl,
 	seedAccountBlocks []domain.AccountBlock,
 	res idResolver,
 ) Engine {
 	if registered == nil {
 		registered = make(map[string]struct{})
 	}
-	if brokerPresent == nil {
-		brokerPresent = make(map[string]bool)
-	}
-	if spotFundsPnlBoundsSeeds == nil {
-		spotFundsPnlBoundsSeeds = make(map[spotFundsPnlBoundsSeedKey]param.Pnl)
-	}
-	if res.accounts == nil {
-		res.accounts = make(map[domain.AccountID]param.AccountID)
-	}
-	if res.groups == nil {
-		res.groups = make(map[string]param.AccountGroupID)
-	}
+	res.ensureInitialized()
 	adapter := &openPitEngine{
-		eng:                     eng,
-		async:                   async,
-		res:                     res,
-		sink:                    newMarketDataSink(service),
-		marketDataService:       service,
-		registered:              registered,
-		brokerPresent:           brokerPresent,
-		spotFundsPnlBoundsSeeds: spotFundsPnlBoundsSeeds,
-		seedAccountBlocks:       seedAccountBlocks,
-		running:                 eng != nil && async != nil,
+		eng:               eng,
+		async:             async,
+		res:               res,
+		sink:              newMarketDataSink(service),
+		marketDataService: service,
+		registered:        registered,
+		seedAccountBlocks: seedAccountBlocks,
+		running:           eng != nil && async != nil,
 	}
 	return adapter
+}
+
+// AddAccountResolverEntry publishes a newly persisted account alias and its
+// stable engine id. The SDK accepts the numeric id dynamically, so this changes
+// only Officer's dictionary resolver and does not replace the engine handle.
+func (e *openPitEngine) AddAccountResolverEntry(account domain.Account) error {
+	return e.res.addAccountResolverEntry(account)
+}
+
+// RenameAccountResolverEntry atomically replaces an account alias while
+// preserving the persisted engine id.
+func (e *openPitEngine) RenameAccountResolverEntry(
+	oldCode domain.AccountID, account domain.Account,
+) error {
+	return e.res.renameAccountResolverEntry(oldCode, account)
+}
+
+// AddGroupResolverEntry publishes a newly persisted group alias and its stable
+// engine id without replacing the engine handle.
+func (e *openPitEngine) AddGroupResolverEntry(group domain.AccountGroup) error {
+	return e.res.addGroupResolverEntry(group)
+}
+
+// RenameGroupResolverEntry atomically replaces a group alias while preserving
+// the persisted engine id.
+func (e *openPitEngine) RenameGroupResolverEntry(
+	oldCode string, group domain.AccountGroup,
+) error {
+	return e.res.renameGroupResolverEntry(oldCode, group)
+}
+
+// RemoveGroupResolverEntry removes a persisted group alias from Officer's
+// resolver. It does not remove SDK account state or replace the engine handle.
+func (e *openPitEngine) RemoveGroupResolverEntry(group domain.AccountGroup) error {
+	return e.res.removeGroupResolverEntry(group)
 }
 
 // SeedAccountBlocks returns the account blocks the engine latched while this
@@ -221,11 +225,11 @@ func (e *openPitEngine) SeedAccountBlocks() []domain.AccountBlock {
 // builders). Blocked accounts from snap.Accounts are then applied with their
 // persisted reasons.
 //
-// The handle and the market-data service live until Stop. Officer builds the
-// engine exactly once and never rebuilds it: a change the runtime Configure
-// surface cannot express is an SDK gap, surfaced as an error, not
-// a trigger to call BuildOpenPitEngine again. On any seeding failure both the
-// engine and the already-built service are released so no native resource leaks.
+// The handle and the market-data service live until Stop. Officer normally keeps
+// them stable; administrative operations and SDK-unsupported transitions may
+// build a replacement under the node's rebuild gate. On any seeding failure both
+// the engine and the already-built service are released so no native resource
+// leaks.
 //
 // Seeding a P&L that is halted, or that breaches its own barrier, makes the
 // engine kill-switch the account while the handle is still being built - an
@@ -286,7 +290,7 @@ func BuildOpenPitEngine(runtimeLibraryPath string, snap Snapshot) (Engine, error
 		return releaseOnErr(fmt.Errorf("engine: build async account dispatcher: %w", err))
 	}
 	accountPnlBlocks, err := seedSpotFundsAccountPnls(
-		async, eng, snap.Accounts, snap.SpotFundsPnlBoundsLimits, res,
+		async, eng, snap.Accounts, res,
 	)
 	if err != nil {
 		return releaseOnErr(err)
@@ -297,49 +301,14 @@ func BuildOpenPitEngine(runtimeLibraryPath string, snap Snapshot) (Engine, error
 	if err := seedBalances(eng, snap.Balances, res); err != nil {
 		return releaseOnErr(err)
 	}
-	initialSpotFundsPnlBoundsSeeds, err := spotFundsPnlBoundsSeeds(
-		snap.SpotFundsPnlBoundsLimits,
-		res,
-	)
-	if err != nil {
-		return releaseOnErr(err)
-	}
-	brokerPresent := map[string]bool{
-		nameRateLimit:      hasRateBrokerBarrier(snap.RateLimits),
-		nameOrderSizeLimit: hasOrderSizeBrokerBarrier(snap.OrderSizeLimits),
-	}
 	return newOpenPitEngine(
 		eng,
 		async,
 		service,
 		registered,
-		brokerPresent,
-		spotFundsPnlBoundsSeedTracker(initialSpotFundsPnlBoundsSeeds),
 		append(buildBlocks, accountPnlBlocks...),
 		res,
 	), nil
-}
-
-// hasRateBrokerBarrier reports whether a rate-limit barrier set carries a
-// broker-scoped barrier.
-func hasRateBrokerBarrier(limits []domain.LimitRate) bool {
-	for _, limit := range limits {
-		if limit.Scope == domain.ScopeBroker {
-			return true
-		}
-	}
-	return false
-}
-
-// hasOrderSizeBrokerBarrier reports whether an order-size barrier set carries a
-// broker-scoped barrier.
-func hasOrderSizeBrokerBarrier(limits []domain.LimitOrderSize) bool {
-	for _, limit := range limits {
-		if limit.Scope == domain.ScopeBroker {
-			return true
-		}
-	}
-	return false
 }
 
 func barrierCount(policy string, limits LimitSet) int {
@@ -371,15 +340,13 @@ func (e *openPitEngine) Running() bool {
 // ConfigurePolicy applies the change to the live handle via the Configure
 // surface. limits is the complete barrier set for policy.
 //
-// rate_limit / order_size_limit: the full axes are
-// rebuilt from the complete barrier set and replaced in one Configure call;
-// barriers are added and removed at runtime. rate_limit and order_size_limit
-// additionally return a not-implemented stub when the reconfigure would drop a
-// broker barrier the Configure surface cannot clear in isolation. Configuring an
-// unregistered policy returns a not-implemented stub. Removing the last barrier
-// returns the same stub except for spot_funds_pnl_bounds_kill_switch, whose SDK
-// surface can clear empty axes online. The tracked state is updated only on
-// success.
+// rate_limit / order_size_limit: the full axes are rebuilt from the complete
+// barrier set and replaced in one Configure call. Barriers, including a broker
+// barrier, are added and removed at runtime while the policy remains non-empty.
+// Configuring an unregistered policy returns a not-implemented stub. Removing
+// the last barrier returns the same stub except for
+// spot_funds_pnl_bounds_kill_switch, whose separate SDK surface can clear empty
+// axes online. Live state is changed only on success.
 func (e *openPitEngine) ConfigurePolicy(
 	ctx context.Context, policy string, limits LimitSet,
 ) (PolicyConfigurationResult, error) {
@@ -403,10 +370,9 @@ func (e *openPitEngine) ConfigurePolicy(
 		barrierCount(policy, limits) == 0 {
 		return PolicyConfigurationResult{}, fmt.Errorf(
 			"engine: cannot remove the last barrier of policy %q: empty policy "+
-				"settings are not supported by the SDK yet: %w",
+				"settings are rejected by the SDK: %w",
 			policy, domain.ErrNotImplemented)
 	}
-
 	switch policy {
 	case domain.PolicyRateLimit:
 		if err := e.configureRateLimitLocked(limits.RateLimits); err != nil {
@@ -429,134 +395,52 @@ func (e *openPitEngine) ConfigurePolicy(
 // the complete barrier set. The asset/account/account-asset axes are passed as
 // non-nil (possibly empty) slices so each is replaced wholesale; barriers are
 // added and removed at runtime and a surviving key keeps its live counter. The
-// broker axis is a pointer (nil = unchanged), so dropping the broker barrier
-// while other barriers remain is a not-implemented stub - the Configure surface
-// cannot clear it in isolation, and silently leaving the old broker barrier on
-// the handle would diverge the engine from the store. Callers must hold e.mu.
+// broker axis uses the explicit optional update shape, so a nil broker clears it
+// rather than leaving it unchanged. Callers must hold e.mu.
 func (e *openPitEngine) configureRateLimitLocked(limits []domain.LimitRate) error {
-	nextBroker := hasRateBrokerBarrier(limits)
-	if e.brokerPresent[nameRateLimit] && !nextBroker {
-		return fmt.Errorf(
-			"engine: cannot remove a rate_limit broker barrier: the SDK's "+
-				"rate-limit configure cannot clear a broker barrier in isolation: %w",
-			domain.ErrNotImplemented)
-	}
-
 	broker, assets, accounts, accountAssets, err := rateLimitAxes(limits, e.res)
 	if err != nil {
 		return err
 	}
-	if err := e.eng.Configure().RateLimit(
-		nameRateLimit, broker, assets, accounts, accountAssets,
+	if err := e.eng.Configure().RateLimitUpdate(
+		nameRateLimit, optional.Some(broker), assets, accounts, accountAssets,
 	); err != nil {
 		return fmt.Errorf("engine: configure rate_limit: %w", err)
 	}
-	e.brokerPresent[nameRateLimit] = nextBroker
 	return nil
 }
 
 // configureOrderSizeLocked replaces the order-size axes on the live handle from
 // the complete barrier set. Empty asset/account-asset axes are passed as empty
 // non-nil slices so they are cleared rather than left unchanged. The Configure
-// surface cannot clear a broker barrier in isolation (a nil broker leaves it
-// unchanged), so dropping the broker barrier while other barriers remain is a
-// not-implemented stub - silently leaving the old broker barrier on the handle
-// would diverge the engine from the store. Callers must hold e.mu.
+// broker axis uses the explicit optional update shape, so a nil broker clears it
+// rather than leaving it unchanged. Callers must hold e.mu.
 func (e *openPitEngine) configureOrderSizeLocked(limits []domain.LimitOrderSize) error {
-	nextBroker := hasOrderSizeBrokerBarrier(limits)
-	if e.brokerPresent[nameOrderSizeLimit] && !nextBroker {
-		return fmt.Errorf(
-			"engine: cannot remove an order_size_limit broker barrier: the SDK's "+
-				"order-size configure cannot clear a broker barrier in isolation: %w",
-			domain.ErrNotImplemented)
-	}
-
 	broker, assets, accountAssets, err := orderSizeAxes(limits, e.res)
 	if err != nil {
 		return err
 	}
-	if err := e.eng.Configure().OrderSizeLimit(
-		nameOrderSizeLimit, broker, assets, accountAssets,
+	if err := e.eng.Configure().OrderSizeLimitUpdate(
+		nameOrderSizeLimit, optional.Some(broker), assets, accountAssets,
 	); err != nil {
 		return fmt.Errorf("engine: configure order_size_limit: %w", err)
 	}
-	e.brokerPresent[nameOrderSizeLimit] = nextBroker
 	return nil
 }
 
 // configureSpotFundsPnlBoundsLocked replaces the SpotFunds self-computed
 // account-currency P&L bounds axes on the live handle from the complete barrier
 // set. Empty axes are passed as empty non-nil slices so they are cleared rather
-// than left unchanged. Runtime bounds updates use the SDK's seedless Update
-// shape, then only account-scope barriers whose explicit initial_pnl is newly
-// introduced or changed reseed the live accumulated P&L through
-// SetSpotFundsAccountPnl. A barrier with no initial_pnl is never seeded, so
-// introducing one preserves the account's live accumulated P&L instead of
-// resetting it; global and group scopes cannot seed. Callers must hold e.mu.
-//
-// A failure part-way through leaves the already-applied seeds on the handle and
-// returns the error. The engine layer cannot undo them: the live accumulated
-// P&L a seed overwrote is not readable back from the SDK, so any "restore" here
-// could only publish a fabricated authoritative value - zero, or a stale earlier
-// seed - which would silently disarm the kill-switch while the operator is told
-// the update failed. Recovery belongs to the caller that owns the store: it
-// rebuilds the engine from persisted state, which reseeds every account from a
-// real value. e.spotFundsPnlBoundsSeeds is therefore advanced only on success,
-// so a retry re-applies every seed the failed attempt was asked for.
+// than left unchanged. Runtime bounds updates never touch the live account P&L
+// accumulator; account P&L is set through the dedicated account operation.
+// Callers must hold e.mu.
 func (e *openPitEngine) configureSpotFundsPnlBoundsLocked(
 	limits []domain.LimitSpotFundsPnlBounds,
 ) (PolicyConfigurationResult, error) {
-	desiredSeeds, err := spotFundsPnlBoundsSeeds(limits, e.res)
-	if err != nil {
-		return PolicyConfigurationResult{}, err
-	}
-	changedSeeds, nextSeeds := changedSpotFundsPnlBoundsSeeds(
-		e.spotFundsPnlBoundsSeeds,
-		desiredSeeds,
-	)
 	if err := configureSpotFundsPnlBounds(e.eng, e.res, limits); err != nil {
 		return PolicyConfigurationResult{}, err
 	}
-	if e.async == nil {
-		return PolicyConfigurationResult{}, fmt.Errorf(
-			"engine: reseed spot_funds account pnl without async dispatcher",
-		)
-	}
-	result := PolicyConfigurationResult{}
-	for _, seed := range changedSeeds {
-		var blocks []domain.AccountBlock
-		future := e.async.Submit(context.Background(), seed.account, func() error {
-			configuration, err := e.eng.Configure().SetSpotFundsAccountPnl(
-				policies.SpotFundsPolicyName,
-				seed.account,
-				model.NewPnlState(seed.initialPnl),
-			)
-			if err != nil {
-				return err
-			}
-			blocks = policyConfigurationBlocksFrom(
-				configuration.AccountBlocks,
-				seed.code,
-				domain.PolicySpotFundsPnlBoundsKillSwitch,
-			)
-			return nil
-		})
-		_, err := future.Await(context.Background())
-		if err != nil {
-			return PolicyConfigurationResult{}, fmt.Errorf(
-				"engine: reseed spot_funds account pnl: %w", err,
-			)
-		}
-		result.AccountPnlUpdates = append(result.AccountPnlUpdates,
-			fwengine.AccountPnlUpdate{
-				Account: seed.code,
-				Pnl:     seed.initialPnl.String(),
-			},
-		)
-		result.AccountBlocks = append(result.AccountBlocks, blocks...)
-	}
-	e.spotFundsPnlBoundsSeeds = nextSeeds
-	return result, nil
+	return PolicyConfigurationResult{}, nil
 }
 
 func configureSpotFundsPnlBounds(
@@ -594,7 +478,7 @@ func (l accountLane) BlockAccount(
 		return fmt.Errorf("engine: block cancelled: %w", err)
 	}
 
-	accountID, err := l.owner.res.account(id)
+	accountID, err := l.routedAccountID(id)
 	if err != nil {
 		return fmt.Errorf("engine: block account %q: %w", id, err)
 	}
@@ -616,7 +500,7 @@ func (l accountLane) UnblockAccount(ctx context.Context, id domain.AccountID) er
 		return fmt.Errorf("engine: unblock cancelled: %w", err)
 	}
 
-	accountID, err := l.owner.res.account(id)
+	accountID, err := l.routedAccountID(id)
 	if err != nil {
 		return fmt.Errorf("engine: unblock account %q: %w", id, err)
 	}
@@ -631,7 +515,7 @@ func (l accountLane) SetAccountCurrency(
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("engine: set account currency cancelled: %w", err)
 	}
-	accountID, err := l.owner.res.account(id)
+	accountID, err := l.routedAccountID(id)
 	if err != nil {
 		return fmt.Errorf("engine: set account currency %q: %w", id, err)
 	}
@@ -651,7 +535,7 @@ func (l accountLane) ClearAccountCurrency(ctx context.Context, id domain.Account
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("engine: clear account currency cancelled: %w", err)
 	}
-	accountID, err := l.owner.res.account(id)
+	accountID, err := l.routedAccountID(id)
 	if err != nil {
 		return fmt.Errorf("engine: clear account currency %q: %w", id, err)
 	}
@@ -663,32 +547,45 @@ func (l accountLane) ClearAccountCurrency(ctx context.Context, id domain.Account
 // the SDK's absolute upsert, which also clears a latched halt. The assignment
 // can itself kill-switch the account when the value breaches its own barrier,
 // so the blocks the SDK reports are mapped back for the node to mirror.
-//
-// e.spotFundsPnlBoundsSeeds is deliberately left alone: it tracks the seed each
-// account's configured barrier asks for, not the live accumulator. Dropping the
-// entry here would make the next bounds reconfigure re-apply the barrier's
-// initial_pnl and overwrite the value assigned here.
 func (l accountLane) SetAccountPnl(
 	ctx context.Context, id domain.AccountID, pnl string,
 ) ([]domain.AccountBlock, error) {
+	return l.SetAccountPnlState(ctx, id, pnl, "")
+}
+
+// SetAccountPnlState force-sets a numeric or halted SpotFunds account P&L
+// state. A halted state carries only its reason; a numeric state carries only
+// its decimal value.
+func (l accountLane) SetAccountPnlState(
+	ctx context.Context,
+	id domain.AccountID,
+	pnl string,
+	haltReason domain.PnlHaltReason,
+) ([]domain.AccountBlock, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("engine: set account pnl cancelled: %w", err)
+		return nil, fmt.Errorf("engine: set account pnl state cancelled: %w", err)
 	}
-	accountID, err := l.owner.res.account(id)
+	accountID, err := l.routedAccountID(id)
 	if err != nil {
-		return nil, fmt.Errorf("engine: set account pnl %q: %w", id, err)
+		return nil, fmt.Errorf("engine: set account pnl state %q: %w", id, err)
 	}
-	value, err := param.NewPnlFromString(pnl)
+	if pnl != "" && haltReason != "" {
+		return nil, fmt.Errorf(
+			"engine: account pnl state has both value %q and halt reason %q: %w",
+			pnl, haltReason, domain.ErrInvalid,
+		)
+	}
+	state, err := pnlStateFrom(pnl, haltReason)
 	if err != nil {
-		return nil, fmt.Errorf("engine: account pnl %q: %w", pnl, err)
+		return nil, fmt.Errorf("engine: account pnl state: %w", err)
 	}
 	configuration, err := l.eng.Configure().SetSpotFundsAccountPnl(
 		policies.SpotFundsPolicyName,
 		accountID,
-		model.NewPnlState(value),
+		state,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("engine: set account pnl %q: %w", id, err)
+		return nil, fmt.Errorf("engine: set account pnl state %q: %w", id, err)
 	}
 	return policyConfigurationBlocksFrom(
 		configuration.AccountBlocks, id, domain.PolicySpotFundsPnlBoundsKillSwitch,
@@ -721,7 +618,7 @@ func (l accountLane) ApplyAccountAdjustmentBatch(
 		return nil, nil, nil
 	}
 
-	accountID, err := l.owner.res.account(account)
+	accountID, err := l.routedAccountID(account)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -827,7 +724,11 @@ func (l accountLane) SubmitOrder(ctx context.Context, o domain.Order) (OrderResu
 		return OrderResult{}, fmt.Errorf("engine: submit order cancelled: %w", err)
 	}
 
-	order, err := orderModelFromAccount(o, l.accountID)
+	accountID, err := l.routedAccountID(o.Account)
+	if err != nil {
+		return OrderResult{}, err
+	}
+	order, err := orderModelFromAccount(o, accountID)
 	if err != nil {
 		return OrderResult{}, err
 	}
@@ -890,7 +791,9 @@ func (e *openPitEngine) RunAccountSynchronized(
 	if !running || async == nil || eng == nil {
 		return fmt.Errorf("engine: account-synchronized mutation on stopped engine")
 	}
-	lane := accountLane{owner: e, eng: eng, accountID: accountID}
+	lane := accountLane{
+		owner: e, eng: eng, accountAlias: account, accountID: accountID,
+	}
 	future := async.Submit(ctx, accountID, func() error { return fn(lane) })
 	_, err = future.Await(context.Background())
 	return err
@@ -899,9 +802,13 @@ func (e *openPitEngine) RunAccountSynchronized(
 func (e *openPitEngine) RunGroupSynchronized(
 	ctx context.Context, groupID string, fn func(fwengine.GroupLane) error,
 ) error {
-	group, err := e.res.group(groupID)
-	if err != nil {
-		return err
+	group := param.DefaultAccountGroup
+	if groupID != "" {
+		var err error
+		group, err = e.res.group(groupID)
+		if err != nil {
+			return err
+		}
 	}
 	e.mu.RLock()
 	eng := e.eng
@@ -911,14 +818,68 @@ func (e *openPitEngine) RunGroupSynchronized(
 	if !running || async == nil || eng == nil {
 		return fmt.Errorf("engine: group-synchronized mutation on stopped engine")
 	}
-	lane := groupLane{owner: e, eng: eng}
-	_, err = async.Submit(ctx, groupRoutingKey(group), func() error { return fn(lane) }).Await(ctx)
+	lane := groupLane{
+		owner: e, eng: eng,
+		accountIDs: e.res.accountIDSnapshot(),
+		groupAlias: groupID,
+		groupID:    group,
+	}
+	future := async.Submit(ctx, groupRoutingKey(group), func() error { return fn(lane) })
+	_, err := future.Await(context.Background())
 	return err
 }
 
 func groupRoutingKey(group param.AccountGroupID) param.AccountID {
 	const groupRoutingKeyMask = uint64(1) << 63
 	return param.NewAccountIDFromUint64(groupRoutingKeyMask | uint64(group.Handle()))
+}
+
+func (l accountLane) routedAccountID(alias domain.AccountID) (param.AccountID, error) {
+	if alias == l.accountAlias {
+		return l.accountID, nil
+	}
+	resolved, err := l.owner.res.account(alias)
+	if err != nil {
+		return param.AccountID{}, err
+	}
+	if resolved.Handle() != l.accountID.Handle() {
+		return param.AccountID{}, fmt.Errorf(
+			"engine: account lane routed alias %q to id %s, argument %q resolves to %s: %w",
+			l.accountAlias, l.accountID, alias, resolved, domain.ErrInvalid,
+		)
+	}
+	return l.accountID, nil
+}
+
+func (l groupLane) routedGroupID(alias string) (param.AccountGroupID, error) {
+	if alias == l.groupAlias {
+		return l.groupID, nil
+	}
+	resolved, err := l.owner.res.group(alias)
+	if err != nil {
+		return param.AccountGroupID{}, err
+	}
+	if resolved.Handle() != l.groupID.Handle() {
+		return param.AccountGroupID{}, fmt.Errorf(
+			"engine: group lane routed alias %q to id %s, argument %q resolves to %s: %w",
+			l.groupAlias, l.groupID, alias, resolved, domain.ErrInvalid,
+		)
+	}
+	return l.groupID, nil
+}
+
+func (l groupLane) routedAccountIDs(
+	aliases []domain.AccountID,
+) ([]param.AccountID, error) {
+	ids := make([]param.AccountID, 0, len(aliases))
+	for _, alias := range aliases {
+		id, ok := l.accountIDs[alias]
+		if !ok {
+			return nil, unknownAccountAliasError(alias)
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 // ApplyExecutionReport settles a report and returns the engine-owned persistence
@@ -939,7 +900,11 @@ func (e *openPitEngine) ApplyExecutionReport(
 func (l accountLane) ApplyExecutionReport(
 	ctx context.Context, in domain.ExecutionReportInput,
 ) (ExecutionReportResult, error) {
-	report, err := executionReportFromAccount(in, l.accountID)
+	accountID, err := l.routedAccountID(in.Account)
+	if err != nil {
+		return ExecutionReportResult{}, err
+	}
+	report, err := executionReportFromAccount(in, accountID)
 	if err != nil {
 		return ExecutionReportResult{}, err
 	}
@@ -955,7 +920,7 @@ func (l accountLane) ApplyExecutionReport(
 		return ExecutionReportResult{}, err
 	}
 	accountPnl, accountPnlHaltReason, err := spotFundsAccountPnlFromList(
-		l.accountID,
+		accountID,
 		result.AccountPnls,
 	)
 	if err != nil {
@@ -982,11 +947,11 @@ func (l groupLane) RegisterGroup(
 		return fmt.Errorf("engine: register group cancelled: %w", err)
 	}
 
-	ids, err := l.owner.res.accountIDs(accounts)
+	ids, err := l.routedAccountIDs(accounts)
 	if err != nil {
 		return err
 	}
-	group, err := l.owner.res.group(groupID)
+	group, err := l.routedGroupID(groupID)
 	if err != nil {
 		return err
 	}
@@ -1003,11 +968,11 @@ func (l groupLane) UnregisterGroup(
 		return fmt.Errorf("engine: unregister group cancelled: %w", err)
 	}
 
-	ids, err := l.owner.res.accountIDs(accounts)
+	ids, err := l.routedAccountIDs(accounts)
 	if err != nil {
 		return err
 	}
-	group, err := l.owner.res.group(groupID)
+	group, err := l.routedGroupID(groupID)
 	if err != nil {
 		return err
 	}
@@ -1022,7 +987,7 @@ func (l groupLane) BlockGroup(ctx context.Context, groupID, reason string) error
 		return fmt.Errorf("engine: block group cancelled: %w", err)
 	}
 
-	group, err := l.owner.res.group(groupID)
+	group, err := l.routedGroupID(groupID)
 	if err != nil {
 		return err
 	}
@@ -1041,13 +1006,47 @@ func (l groupLane) UnblockGroup(ctx context.Context, groupID string) error {
 		return fmt.Errorf("engine: unblock group cancelled: %w", err)
 	}
 
-	group, err := l.owner.res.group(groupID)
+	group, err := l.routedGroupID(groupID)
 	if err != nil {
 		return err
 	}
 	if err := l.eng.Accounts().UnblockGroup(group); err != nil {
 		return fmt.Errorf("engine: unblock group %q: %w", groupID, err)
 	}
+	return nil
+}
+
+func (l groupLane) SetGroupCurrency(
+	ctx context.Context, groupID, currency string,
+) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("engine: set group currency cancelled: %w", err)
+	}
+
+	group, err := l.routedGroupID(groupID)
+	if err != nil {
+		return err
+	}
+	asset, err := param.NewAsset(currency)
+	if err != nil {
+		return fmt.Errorf("engine: group %q currency %q: %w", groupID, currency, err)
+	}
+	if err := l.eng.Accounts().SetGroupCurrency(group, asset); err != nil {
+		return fmt.Errorf("engine: set group %q currency: %w", groupID, err)
+	}
+	return nil
+}
+
+func (l groupLane) ClearGroupCurrency(ctx context.Context, groupID string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("engine: clear group currency cancelled: %w", err)
+	}
+
+	group, err := l.routedGroupID(groupID)
+	if err != nil {
+		return err
+	}
+	l.eng.Accounts().ClearGroupCurrency(group)
 	return nil
 }
 
@@ -1077,6 +1076,10 @@ func (l accountLane) CheckOrder(
 		return domain.CheckResult{}, fmt.Errorf("engine: check order cancelled: %w", err)
 	}
 
+	accountID, err := l.routedAccountID(probe.Account)
+	if err != nil {
+		return domain.CheckResult{}, err
+	}
 	order, err := orderModelFromAccount(domain.Order{
 		Account:     probe.Account,
 		BaseAsset:   probe.BaseAsset,
@@ -1085,7 +1088,7 @@ func (l accountLane) CheckOrder(
 		AmountKind:  probe.AmountKind,
 		AmountValue: probe.AmountValue,
 		Price:       probe.Price,
-	}, l.accountID)
+	}, accountID)
 	if err != nil {
 		return domain.CheckResult{}, err
 	}
@@ -1173,10 +1176,10 @@ func policyName(policy string) string {
 // registering the order-validation policy plus each risk policy that has at
 // least one barrier in the snapshot. It returns the engine, the service, the set
 // of registered policy names, and a reserved empty block result retained by the
-// private build seam. Account P&L is seeded later through AsyncEngine. The risk
-// policies validate their barrier topology at build time, so a policy with no
-// barriers is simply not registered. res resolves account/group codes to engine
-// ids for the account-scoped barriers.
+// private build seam. Account P&L is seeded later through AsyncEngine. The SDK
+// rejects empty rate-limit and order-size-limit settings, so those policies are
+// not registered until their snapshots contain a barrier. res resolves
+// account/group codes to engine ids for account-scoped barriers.
 //
 // The market-data service is built unconditionally and before the engine (the
 // engine builder requires the service to exist first), even when nothing is
@@ -1190,9 +1193,9 @@ func policyName(policy string) string {
 // service via WithMarketOrders(service, defaultMarketOrderSlippageBps): market
 // orders are priced off the mark quote rather than rejected. Instruments without
 // a live quote reject with MarkPriceUnavailable instead of UnsupportedOrderType.
-// Account-scope SpotFunds P&L seeds are applied after Build through their
-// AsyncEngine lanes, matching live config edits in
-// configureSpotFundsPnlBounds. Operator-configurable slippage and runtime
+// Persisted account P&L state is applied after Build through AsyncEngine lanes.
+// Runtime P&L-bounds changes only replace barrier axes; they never reset or
+// seed the live accumulator. Operator-configurable slippage and runtime
 // enable/disable remain future work.
 func buildEngine(
 	snap Snapshot, res idResolver,
@@ -1433,10 +1436,9 @@ type spotFundsAccountPnlSeed struct {
 
 func spotFundsAccountPnlSeeds(
 	accounts []domain.Account,
-	limits []domain.LimitSpotFundsPnlBounds,
 	res idResolver,
 ) ([]spotFundsAccountPnlSeed, error) {
-	persisted := make(map[domain.AccountID]spotFundsAccountPnlSeed)
+	seeds := make([]spotFundsAccountPnlSeed, 0)
 	for _, account := range accounts {
 		if account.Pnl == "" && account.PnlHaltReason == "" {
 			continue
@@ -1450,57 +1452,27 @@ func spotFundsAccountPnlSeeds(
 		if err != nil {
 			return nil, fmt.Errorf("engine: seed account pnl %q: %w", account.Code, err)
 		}
-		persisted[account.Code] = spotFundsAccountPnlSeed{
+		seeds = append(seeds, spotFundsAccountPnlSeed{
 			code:    account.Code,
 			account: accountID,
 			state:   state,
-		}
-	}
-
-	initial, err := spotFundsPnlBoundsSeeds(limits, res)
-	if err != nil {
-		return nil, err
-	}
-	seeds := make([]spotFundsAccountPnlSeed, 0, len(initial)+len(persisted))
-	seen := make(map[domain.AccountID]struct{}, len(initial))
-	for _, seed := range initial {
-		if _, duplicate := seen[seed.code]; duplicate {
-			continue
-		}
-		seen[seed.code] = struct{}{}
-		if stored, ok := persisted[seed.code]; ok {
-			seeds = append(seeds, stored)
-			delete(persisted, seed.code)
-			continue
-		}
-		seeds = append(seeds, spotFundsAccountPnlSeed{
-			code:    seed.code,
-			account: seed.account,
-			state:   model.NewPnlState(seed.initialPnl),
 		})
-	}
-	for _, account := range accounts {
-		if stored, ok := persisted[account.Code]; ok {
-			seeds = append(seeds, stored)
-			delete(persisted, account.Code)
-		}
 	}
 	return seeds, nil
 }
 
-// seedSpotFundsAccountPnls applies one authoritative P&L seed per account.
-// Persisted numeric or halted state overrides configuration InitialPnl.
+// seedSpotFundsAccountPnls applies one authoritative persisted P&L state per
+// account.
 func seedSpotFundsAccountPnls(
 	async *asyncengine.AsyncEngine,
 	eng *openpit.Engine,
 	accounts []domain.Account,
-	limits []domain.LimitSpotFundsPnlBounds,
 	res idResolver,
 ) ([]domain.AccountBlock, error) {
 	if async == nil {
 		return nil, fmt.Errorf("engine: seed account pnl without async dispatcher")
 	}
-	seeds, err := spotFundsAccountPnlSeeds(accounts, limits, res)
+	seeds, err := spotFundsAccountPnlSeeds(accounts, res)
 	if err != nil {
 		return nil, err
 	}

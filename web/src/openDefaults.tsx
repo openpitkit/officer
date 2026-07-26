@@ -68,18 +68,13 @@ export function registerOpenVocabulary(): void {
   registerPolicy({
     id: "spot_funds_pnl_bounds_kill_switch",
     allowedScopes: ["global", "account_group", "account"],
-    kinds: [
-      { kind: "lower_bound" },
-      { kind: "upper_bound" },
-      { kind: "initial_pnl" },
-    ],
+    kinds: [{ kind: "lower_bound" }, { kind: "upper_bound" }],
     catalog: {
       wikiUrl:
         "https://wiki.openpit.dev/Spot-Funds/?officer#self-computed-pnl-kill-switch",
       fields: [
         { key: "lower_bound" },
         { key: "upper_bound" },
-        { key: "initial_pnl" },
       ],
     },
   });

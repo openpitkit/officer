@@ -233,8 +233,7 @@ CREATE TABLE limit_spot_funds_pnl_bound (
     account_id       INTEGER REFERENCES account(id)       ON DELETE CASCADE,
     account_group_id INTEGER REFERENCES account_group(id) ON DELETE CASCADE,
     lower_bound      TEXT,
-    upper_bound      TEXT,
-    initial_pnl      TEXT
+    upper_bound      TEXT
 );
 
 CREATE INDEX idx_limit_spot_funds_pnl_bounds_account

@@ -718,7 +718,6 @@ function normalizeSpotFundsPnlBoundsLimit(
     accountGroup: asString(pick(o, "accountGroup", "AccountGroup")),
     lowerBound: asString(pick(o, "lowerBound", "LowerBound", "lower_bound")),
     upperBound: asString(pick(o, "upperBound", "UpperBound", "upper_bound")),
-    initialPnl: asString(pick(o, "initialPnl", "InitialPnl", "initial_pnl")),
   };
 }
 
@@ -776,7 +775,6 @@ function flattenAccountLimits(v: AccountLimits): Limit[] {
       values: {
         lower_bound: limit.lowerBound,
         upper_bound: limit.upperBound,
-        initial_pnl: limit.initialPnl,
       },
     })),
   ];
@@ -846,9 +844,6 @@ function normalizePolicy(v: unknown): Policy {
       upperBound: asString(
         pick(spotFundsPnlBounds, "upperBound", "UpperBound", "upper_bound"),
       ),
-      initialPnl: asString(
-        pick(spotFundsPnlBounds, "initialPnl", "InitialPnl", "initial_pnl"),
-      ),
     };
   }
   return policy;
@@ -894,7 +889,6 @@ function policyToLimit(policy: Policy): Limit {
         values: {
           lower_bound: pnlBounds?.lowerBound ?? "",
           upper_bound: pnlBounds?.upperBound ?? "",
-          initial_pnl: pnlBounds?.initialPnl ?? "",
         },
       };
     }
@@ -960,7 +954,6 @@ function limitEndpointBody(client: ApiClient, limit: Limit): { path: string; bod
           accountGroup: limit.accountGroup ?? "",
           lowerBound: limit.values.lower_bound ?? "",
           upperBound: limit.values.upper_bound ?? "",
-          initialPnl: limit.values.initial_pnl ?? "",
         },
       };
     default:
@@ -1108,6 +1101,9 @@ function normalizeMarketDataInstrument(v: unknown): MarketDataInstrument {
     quoteAsset: asString(pick(o, "quoteAsset", "QuoteAsset", "quote_asset")),
     manualPrice: asString(pick(o, "manualPrice", "ManualPrice", "manual_price")),
     enabled: asBool(pick(o, "enabled", "Enabled")),
+    syntheticInverse: asBool(
+      pick(o, "syntheticInverse", "SyntheticInverse", "synthetic_inverse"),
+    ),
     stale: asBool(pick(o, "stale", "Stale")),
   };
   // Omitted (omitempty) on the wire when unknown; keep it undefined then so the
@@ -1120,6 +1116,12 @@ function normalizeMarketDataInstrument(v: unknown): MarketDataInstrument {
   }
   if (quote) {
     instrument.quote = quote;
+  }
+  const inverseQuote = normalizeMarketDataQuote(
+    pick(o, "inverseQuote", "InverseQuote", "inverse_quote"),
+  );
+  if (inverseQuote) {
+    instrument.inverseQuote = inverseQuote;
   }
   return instrument;
 }

@@ -47,9 +47,8 @@ import (
 // The accounts and groups carry their stored engine ids (EngineAccountID /
 // EngineGroupID), assigned collision-free by the connector. The engine adapter
 // builds its code-to-engine-id resolver from them, so it never hashes a code
-// into an engine id. The engine is rebuilt from a fresh full Snapshot whenever
-// the account/group/limit set changes, so the resolver always covers every
-// account and group the live handle runs.
+// into an engine id. Persisted dictionary additions and alias renames can then
+// be published through DictionaryResolver without replacing the engine.
 type Snapshot struct {
 	// Accounts are the accounts to apply, including their stored engine account
 	// id, blocked state and block reason. Group membership is read from each
@@ -86,19 +85,11 @@ type LimitSet struct {
 	SpotFundsPnlBoundsLimits []domain.LimitSpotFundsPnlBounds
 }
 
-// AccountPnlUpdate is an authoritative account P&L force-set performed while
-// applying a live policy configuration.
-type AccountPnlUpdate struct {
-	Account domain.AccountID
-	Pnl     string
-}
-
 // PolicyConfigurationResult is the accepted outcome of a live policy update.
-// AccountPnlUpdates and AccountBlocks must be mirrored durably before the node
-// admits subsequent account work.
+// AccountBlocks must be mirrored durably before the node admits subsequent
+// account work.
 type PolicyConfigurationResult struct {
-	AccountPnlUpdates []AccountPnlUpdate
-	AccountBlocks     []domain.AccountBlock
+	AccountBlocks []domain.AccountBlock
 }
 
 // AdjustmentResult is the outcome of one ApplyAccountAdjustment call. Exactly
@@ -265,6 +256,14 @@ type AccountLane interface {
 	SetAccountPnl(
 		ctx context.Context, id domain.AccountID, pnl string,
 	) ([]domain.AccountBlock, error)
+	// SetAccountPnlState force-sets either a numeric account P&L or a halted
+	// state. Exactly one of pnl and haltReason must be non-empty.
+	SetAccountPnlState(
+		ctx context.Context,
+		id domain.AccountID,
+		pnl string,
+		haltReason domain.PnlHaltReason,
+	) ([]domain.AccountBlock, error)
 	ApplyAccountAdjustmentBatch(
 		ctx context.Context, account domain.AccountID, reqs []domain.AdjustmentRequest,
 	) ([]AdjustmentResult, *AdjustmentBatchReject, error)
@@ -284,6 +283,8 @@ type AccountLane interface {
 type GroupLane interface {
 	BlockGroup(ctx context.Context, groupID, reason string) error
 	UnblockGroup(ctx context.Context, groupID string) error
+	SetGroupCurrency(ctx context.Context, groupID, currency string) error
+	ClearGroupCurrency(ctx context.Context, groupID string) error
 	RegisterGroup(ctx context.Context, accounts []domain.AccountID, groupID string) error
 	UnregisterGroup(ctx context.Context, accounts []domain.AccountID, groupID string) error
 }
@@ -292,6 +293,21 @@ type GroupLane interface {
 // construction and for administrative rebuilds. Production wires it to the app
 // engine adapter bound to a runtime-library path. Tests substitute a fake.
 type BuildFunc func(snap Snapshot) (Engine, error)
+
+// DictionaryResolver is the optional live dictionary capability of an Engine
+// adapter. Definitions passed here must already be persisted and carry their
+// stable numeric engine ids. Each successful call publishes the complete
+// resolver change before it returns; failures leave every alias unchanged.
+//
+// These methods update Officer's alias resolver only. They do not model an SDK
+// account registry and must not replace the engine or its market-data sink.
+type DictionaryResolver interface {
+	AddAccountResolverEntry(account domain.Account) error
+	RenameAccountResolverEntry(oldCode domain.AccountID, account domain.Account) error
+	AddGroupResolverEntry(group domain.AccountGroup) error
+	RenameGroupResolverEntry(oldCode string, group domain.AccountGroup) error
+	RemoveGroupResolverEntry(group domain.AccountGroup) error
+}
 
 // Health reports the observable condition of an engine adapter for the
 // dashboard and health checks.

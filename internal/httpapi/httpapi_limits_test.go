@@ -121,8 +121,7 @@ func TestListLimitsSpotFundsPnlBoundsValues(t *testing.T) {
 		t.Fatalf("want spotFundsPnlBounds values, got %v", values)
 	}
 	if spotFunds["lowerBound"] != "-1000.50" ||
-		spotFunds["upperBound"] != "5000.25" ||
-		spotFunds["initialPnl"] != "" {
+		spotFunds["upperBound"] != "5000.25" {
 		t.Fatalf("unexpected spot-funds values: %v", spotFunds)
 	}
 }
@@ -354,7 +353,7 @@ func TestPutSpotFundsPnlBoundsLimit(t *testing.T) {
 	}
 }
 
-func TestPutSpotFundsPnlBoundsLimit_AccountInitialPnl(t *testing.T) {
+func TestPutSpotFundsPnlBoundsLimit_Account(t *testing.T) {
 	svc := &fakeService{
 		limits: node.AccountLimits{
 			SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
@@ -363,7 +362,6 @@ func TestPutSpotFundsPnlBoundsLimit_AccountInitialPnl(t *testing.T) {
 					Account:    "acc-1",
 					LowerBound: "-999",
 					UpperBound: "5001",
-					InitialPnl: "12.50",
 				},
 			},
 		},
@@ -374,7 +372,7 @@ func TestPutSpotFundsPnlBoundsLimit_AccountInitialPnl(t *testing.T) {
 	}
 	body := bytes.NewBufferString(`{
 		"scope":"account","account":"acc-1",
-		"lowerBound":"-1000","upperBound":"5000","initialPnl":"12.50"
+		"lowerBound":"-1000","upperBound":"5000"
 	}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(
@@ -389,8 +387,7 @@ func TestPutSpotFundsPnlBoundsLimit_AccountInitialPnl(t *testing.T) {
 		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
 	if svc.spotFundsPnlBoundsLimitPut.Scope != domain.ScopeAccount ||
-		svc.spotFundsPnlBoundsLimitPut.Account != "acc-1" ||
-		svc.spotFundsPnlBoundsLimitPut.InitialPnl != "12.50" {
+		svc.spotFundsPnlBoundsLimitPut.Account != "acc-1" {
 		t.Fatalf(
 			"captured spot funds pnl-bounds limit = %+v",
 			svc.spotFundsPnlBoundsLimitPut,
@@ -402,7 +399,6 @@ func TestPutSpotFundsPnlBoundsLimit_AccountInitialPnl(t *testing.T) {
 		t.Fatalf("response missing spotFundsPnlBoundsLimit field: %v", m)
 	}
 	if pbl["account"] != "acc-1" ||
-		pbl["initialPnl"] != "12.50" ||
 		pbl["lowerBound"] != "-999" ||
 		pbl["upperBound"] != "5001" {
 		t.Fatalf("unexpected persisted spotFundsPnlBoundsLimit: %v", pbl)
@@ -622,7 +618,7 @@ func TestLimitDTO_JSONShape(t *testing.T) {
 		},
 		SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
 			{Scope: domain.ScopeAccount, Account: "acc-1",
-				LowerBound: "-1000", UpperBound: "5000", InitialPnl: "12.50"},
+				LowerBound: "-1000", UpperBound: "5000"},
 		},
 	}
 	b, err := json.Marshal(toAccountLimitsDTO(limits))
@@ -661,7 +657,6 @@ func TestLimitDTO_JSONShape(t *testing.T) {
 		"accountGroup",
 		"lowerBound",
 		"upperBound",
-		"initialPnl",
 	} {
 		if _, ok := spotFundsPnl[key]; !ok {
 			t.Fatalf("spotFundsPnlBoundsLimitDTO missing JSON key %q", key)

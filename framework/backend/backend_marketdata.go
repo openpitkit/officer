@@ -41,12 +41,16 @@ type MarketDataProvider struct {
 // and instrument are enabled. UpdateInterval, when non-nil, is the elapsed time
 // between the two most recent ticks of this instrument's quote, as observed by
 // the running manager; it is nil until a second tick has arrived since the last
-// (re)subscribe.
+// (re)subscribe. SyntheticInverse is the currently applied post-restart state;
+// InverseQuote is its derived display quote when the latest source quote has at
+// least one invertible field.
 type MarketDataInstrumentStatus struct {
-	Instrument     domain.MarketDataInstrument
-	Quote          *domain.MarketDataQuote
-	UpdateInterval *time.Duration
-	Stale          bool
+	Instrument       domain.MarketDataInstrument
+	Quote            *domain.MarketDataQuote
+	InverseQuote     *domain.MarketDataQuote
+	UpdateInterval   *time.Duration
+	SyntheticInverse bool
+	Stale            bool
 }
 
 // MarketDataInstanceStatus is one configured source, all of its instruments,
@@ -78,6 +82,9 @@ type MarketDataStatus struct {
 // ListMarketData returns configured providers, instances, instruments, and the
 // latest quote snapshot for each configured instrument.
 func (s *Service) ListMarketData(ctx context.Context) (MarketDataStatus, error) {
+	s.marketDataMu.Lock()
+	defer s.marketDataMu.Unlock()
+
 	n, err := s.groupNode()
 	if err != nil {
 		return MarketDataStatus{}, err
@@ -85,6 +92,20 @@ func (s *Service) ListMarketData(ctx context.Context) (MarketDataStatus, error) 
 	instances, err := n.ListMarketDataInstances(ctx)
 	if err != nil {
 		return MarketDataStatus{}, fmt.Errorf("backend: list market-data instances: %w", err)
+	}
+	instrumentsByInstance := make(map[string][]domain.MarketDataInstrument, len(instances))
+	configuredPairs := make(map[string]struct{})
+	for _, instance := range instances {
+		instruments, err := n.ListMarketDataInstruments(ctx, instance.ExternalID)
+		if err != nil {
+			return MarketDataStatus{}, fmt.Errorf("backend: list market-data instruments: %w", err)
+		}
+		instrumentsByInstance[instance.ExternalID.String()] = instruments
+		for _, instrument := range instruments {
+			configuredPairs[marketDataPairKey(
+				instrument.BaseAsset, instrument.QuoteAsset,
+			)] = struct{}{}
+		}
 	}
 	quotes, err := n.ListMarketDataQuotes(ctx, domain.ExternalID(""))
 	if err != nil {
@@ -107,22 +128,31 @@ func (s *Service) ListMarketData(ctx context.Context) (MarketDataStatus, error) 
 	currentConfig := make(map[string]marketdata.AppliedInstanceConfig, len(instances))
 	for _, instance := range instances {
 		instanceID := instance.ExternalID.String()
-		instruments, err := n.ListMarketDataInstruments(ctx, instance.ExternalID)
-		if err != nil {
-			return MarketDataStatus{}, fmt.Errorf("backend: list market-data instruments: %w", err)
-		}
+		instruments := instrumentsByInstance[instanceID]
 		if instance.Enabled {
-			currentConfig[instanceID] = marketDataAppliedConfig(instance, instruments)
+			currentConfig[instanceID] = marketDataAppliedConfig(
+				instance, instruments, configuredPairs,
+			)
 		}
 		instStatuses := make([]MarketDataInstrumentStatus, 0, len(instruments))
 		for _, instrument := range instruments {
 			var quotePtr *domain.MarketDataQuote
-			if quote, ok := quoteByInstrument[marketDataKey(instrument.Instance.String(), instrument.ExternalSymbol)]; ok {
+			// Clearing a BYO mark leaves the last persisted snapshot as historical
+			// evidence, but it is no longer a configured current quote. Hide it from
+			// live status just as replay hides it from the engine.
+			manualCleared := instance.Provider == domain.MarketDataProviderBYO &&
+				instrument.ManualPrice == ""
+			if quote, ok := quoteByInstrument[marketDataKey(
+				instrument.Instance.String(), instrument.ExternalSymbol,
+			)]; ok && !manualCleared {
 				q := quote
 				quotePtr = &q
 			}
 			stale := marketDataInstrumentStale(
 				instance.Enabled, instrument, quotePtr, now,
+			)
+			syntheticInverse := marketDataSyntheticInverseApplied(
+				appliedConfig[instanceID], instrument,
 			)
 			var interval *time.Duration
 			if s.md != nil {
@@ -133,10 +163,12 @@ func (s *Service) ListMarketData(ctx context.Context) (MarketDataStatus, error) 
 				}
 			}
 			instStatuses = append(instStatuses, MarketDataInstrumentStatus{
-				Instrument:     instrument,
-				Quote:          quotePtr,
-				UpdateInterval: interval,
-				Stale:          stale,
+				Instrument:       instrument,
+				Quote:            quotePtr,
+				InverseQuote:     marketDataInverseQuote(quotePtr, syntheticInverse),
+				UpdateInterval:   interval,
+				SyntheticInverse: syntheticInverse,
+				Stale:            stale,
 			})
 		}
 		rt := runtimeStatuses[instanceID]
@@ -163,13 +195,15 @@ func (s *Service) ListMarketData(ctx context.Context) (MarketDataStatus, error) 
 // RestartMarketData re-applies the market-data configuration by stopping and
 // restarting the connector manager. With no runtime wired it is a no-op.
 //
-// It re-adopts the node's current engine sink before restarting. Account,
-// group, restore, and reset mutations rebuild the engine and replace its
-// market-data service, which leaves any sink the manager cached pointing at a
-// closed service (every push then fails with "market-data service is null").
-// Re-adopting on restart converges every feed-change path - including the
-// welcome flow - onto a restart that always wires the live sink.
+// It re-adopts the node's current engine sink before restarting. Residual
+// lifecycle rebuilds and database reset replace the engine's market-data
+// service, which leaves any cached sink pointing at a closed service (every push
+// then fails with "market-data service is null"). Re-adopting on restart
+// converges every feed-change path onto the live sink.
 func (s *Service) RestartMarketData(ctx context.Context) error {
+	s.marketDataMu.Lock()
+	defer s.marketDataMu.Unlock()
+
 	if s.md == nil {
 		return nil
 	}
@@ -367,21 +401,75 @@ func marketDataInstanceState(
 func marketDataAppliedConfig(
 	instance domain.MarketDataInstance,
 	instruments []domain.MarketDataInstrument,
+	configuredPairs map[string]struct{},
 ) marketdata.AppliedInstanceConfig {
 	subs := make([]marketdata.Subscription, 0, len(instruments))
 	for _, instrument := range instruments {
 		if !instrument.Enabled {
 			continue
 		}
+		_, reverseConfigured := configuredPairs[marketDataPairKey(
+			instrument.QuoteAsset, instrument.BaseAsset,
+		)]
 		subs = append(subs, marketdata.Subscription{
-			External: instrument.ExternalSymbol,
-			Base:     instrument.BaseAsset,
-			Quote:    instrument.QuoteAsset,
+			External:         instrument.ExternalSymbol,
+			Base:             instrument.BaseAsset,
+			Quote:            instrument.QuoteAsset,
+			SyntheticInverse: !reverseConfigured,
 		})
 	}
 	return marketdata.AppliedInstanceConfig{
 		Provider:      instance.Provider,
 		Subscriptions: subs,
+	}
+}
+
+func marketDataPairKey(base, quote string) string {
+	return base + "\x00" + quote
+}
+
+func marketDataSyntheticInverseApplied(
+	applied marketdata.AppliedInstanceConfig,
+	instrument domain.MarketDataInstrument,
+) bool {
+	for _, sub := range applied.Subscriptions {
+		if sub.External == instrument.ExternalSymbol &&
+			sub.Base == instrument.BaseAsset &&
+			sub.Quote == instrument.QuoteAsset {
+			return sub.SyntheticInverse
+		}
+	}
+	return false
+}
+
+func marketDataInverseQuote(
+	quote *domain.MarketDataQuote,
+	syntheticInverse bool,
+) *domain.MarketDataQuote {
+	if quote == nil || !syntheticInverse {
+		return nil
+	}
+	inverted, ok := marketdata.InvertQuote(marketdata.QuoteUpdate{
+		AsOf:  quote.AsOf,
+		Base:  quote.BaseAsset,
+		Quote: quote.QuoteAsset,
+		Mark:  quote.Mark,
+		Bid:   quote.Bid,
+		Ask:   quote.Ask,
+	})
+	if !ok {
+		return nil
+	}
+	return &domain.MarketDataQuote{
+		AsOf:           inverted.AsOf,
+		ReceivedAt:     quote.ReceivedAt,
+		Instance:       quote.Instance,
+		ExternalSymbol: quote.ExternalSymbol,
+		BaseAsset:      inverted.Base,
+		QuoteAsset:     inverted.Quote,
+		Mark:           inverted.Mark,
+		Bid:            inverted.Bid,
+		Ask:            inverted.Ask,
 	}
 }
 
@@ -429,7 +517,13 @@ func sameMarketDataSubscriptions(a, b []marketdata.Subscription) bool {
 func marketDataSubscriptionKeys(subs []marketdata.Subscription) []string {
 	keys := make([]string, 0, len(subs))
 	for _, sub := range subs {
-		keys = append(keys, sub.External+"\x00"+sub.Base+"\x00"+sub.Quote)
+		synthetic := "0"
+		if sub.SyntheticInverse {
+			synthetic = "1"
+		}
+		keys = append(keys,
+			sub.External+"\x00"+sub.Base+"\x00"+sub.Quote+"\x00"+synthetic,
+		)
 	}
 	sort.Strings(keys)
 	return keys
@@ -443,6 +537,9 @@ func marketDataSubscriptionKeys(subs []marketdata.Subscription) []string {
 func (s *Service) CreateMarketDataInstance(
 	ctx context.Context, instance domain.MarketDataInstance,
 ) (domain.MarketDataInstance, error) {
+	s.marketDataMu.Lock()
+	defer s.marketDataMu.Unlock()
+
 	instance.Provider = strings.TrimSpace(instance.Provider)
 	instance.Label = strings.TrimSpace(instance.Label)
 	instance.Credentials = strings.TrimSpace(instance.Credentials)
@@ -476,6 +573,9 @@ func (s *Service) CreateMarketDataInstance(
 func (s *Service) SetMarketDataInstanceEnabled(
 	ctx context.Context, id string, enabled bool,
 ) error {
+	s.marketDataMu.Lock()
+	defer s.marketDataMu.Unlock()
+
 	instanceID, err := domain.ParseExternalID(strings.TrimSpace(id))
 	if err != nil {
 		return fmt.Errorf("market-data instance id: %w", err)
@@ -493,6 +593,9 @@ func (s *Service) SetMarketDataInstanceEnabled(
 func (s *Service) UpdateMarketDataInstanceSettings(
 	ctx context.Context, id, label, credentials string,
 ) error {
+	s.marketDataMu.Lock()
+	defer s.marketDataMu.Unlock()
+
 	label = strings.TrimSpace(label)
 	credentials = strings.TrimSpace(credentials)
 	instanceID, err := domain.ParseExternalID(strings.TrimSpace(id))
@@ -539,6 +642,9 @@ func (s *Service) UpdateMarketDataInstanceSettings(
 func (s *Service) DeleteMarketDataInstance(
 	ctx context.Context, id string,
 ) error {
+	s.marketDataMu.Lock()
+	defer s.marketDataMu.Unlock()
+
 	instanceID, err := domain.ParseExternalID(strings.TrimSpace(id))
 	if err != nil {
 		return fmt.Errorf("market-data instance id: %w", err)
@@ -551,13 +657,16 @@ func (s *Service) DeleteMarketDataInstance(
 }
 
 // UpsertMarketDataInstrument validates and persists one instrument mapping,
-// then pushes its operator-set manual mark once into the running instance. The
-// push is a no-op for streaming providers and for instruments without a manual
-// price (see MarketDataRuntime.PushManual), so only a manual instrument with a
-// price reaches the engine, and exactly once per upsert.
+// then publishes its operator-set manual state into the running instance. A
+// non-empty BYO mark is pushed once; clearing that mark removes the direct and
+// applied synthetic quotes online. Streaming providers and unapplied topology
+// changes remain no-ops until their explicit manager restart.
 func (s *Service) UpsertMarketDataInstrument(
 	ctx context.Context, instrument domain.MarketDataInstrument,
 ) error {
+	s.marketDataMu.Lock()
+	defer s.marketDataMu.Unlock()
+
 	instrument.ExternalSymbol = strings.TrimSpace(instrument.ExternalSymbol)
 	instrument.BaseAsset = strings.TrimSpace(instrument.BaseAsset)
 	instrument.QuoteAsset = strings.TrimSpace(instrument.QuoteAsset)
@@ -573,7 +682,12 @@ func (s *Service) UpsertMarketDataInstrument(
 		return err
 	}
 	if s.md != nil {
-		s.md.PushManual(instrument.Instance.String(), instrument)
+		if err := s.md.PushManual(ctx, instrument.Instance.String(), instrument); err != nil {
+			return fmt.Errorf(
+				"market-data instrument configuration saved; live manual update pending reconciliation: %w",
+				err,
+			)
+		}
 	}
 	return nil
 }
@@ -582,6 +696,9 @@ func (s *Service) UpsertMarketDataInstrument(
 func (s *Service) SetMarketDataInstrumentEnabled(
 	ctx context.Context, instanceID, externalSymbol string, enabled bool,
 ) error {
+	s.marketDataMu.Lock()
+	defer s.marketDataMu.Unlock()
+
 	externalSymbol = strings.TrimSpace(externalSymbol)
 	instance, err := domain.ParseExternalID(strings.TrimSpace(instanceID))
 	if err != nil {
@@ -603,6 +720,9 @@ func (s *Service) SetMarketDataInstrumentEnabled(
 func (s *Service) DeleteMarketDataInstrument(
 	ctx context.Context, instanceID, externalSymbol string,
 ) error {
+	s.marketDataMu.Lock()
+	defer s.marketDataMu.Unlock()
+
 	externalSymbol = strings.TrimSpace(externalSymbol)
 	instance, err := domain.ParseExternalID(strings.TrimSpace(instanceID))
 	if err != nil {

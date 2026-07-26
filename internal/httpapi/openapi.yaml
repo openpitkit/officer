@@ -2396,7 +2396,7 @@ paths:
           in: query
           schema:
             type: string
-            enum: [policy, scope, account, accountGroup, asset, maxOrders, maxQuantity, maxNotional, lowerBound, upperBound, initialPnl]
+            enum: [policy, scope, account, accountGroup, asset, maxOrders, maxQuantity, maxNotional, lowerBound, upperBound]
           description: Policy list sort key. Unknown keys are rejected.
         - $ref: "#/components/parameters/SortOrder"
         - $ref: "#/components/parameters/LimitParam"
@@ -5140,7 +5140,7 @@ components:
 
     SpotFundsPnlBoundsLimit:
       type: object
-      required: [scope, account, accountGroup, lowerBound, upperBound, initialPnl]
+      required: [scope, account, accountGroup, lowerBound, upperBound]
       properties:
         scope:
           $ref: "#/components/schemas/SpotFundsPnlBoundsScope"
@@ -5156,10 +5156,6 @@ components:
         upperBound:
           type: string
           description: Upper P&L bound - exact decimal string; empty when unset.
-        initialPnl:
-          type: string
-          description: Account-scope seed P&L value - exact decimal string; empty means zero. Rejected for global and accountGroup scopes.
-
     AccountLimits:
       type: object
       required: [rateLimits, orderSizeLimits, spotFundsPnlBoundsLimits]
@@ -5237,7 +5233,7 @@ components:
               type: object
               description: >
                 Value payload for kind spot_funds_pnl_bounds_kill_switch.
-              required: [lowerBound, upperBound, initialPnl]
+              required: [lowerBound, upperBound]
               properties:
                 lowerBound:
                   type: string
@@ -5245,10 +5241,6 @@ components:
                 upperBound:
                   type: string
                   description: Upper P&L bound - exact decimal string; empty when unset.
-                initialPnl:
-                  type: string
-                  description: Seed P&L value - exact decimal string; empty when unset.
-
     # Audit
 
     AuditEntry:
@@ -5648,6 +5640,12 @@ components:
         enabled:
           type: boolean
           description: Whether this instrument mapping is enabled.
+        syntheticInverse:
+          type: boolean
+          readOnly: true
+          description: >
+            Whether the currently applied runtime emits a synthetic reverse
+            quote for this mapping.
         updateIntervalMs:
           type: integer
           description: >
@@ -5660,6 +5658,12 @@ components:
             False when the source or instrument is disabled.
         quote:
           description: Latest quote for this mapping on read responses.
+          $ref: "#/components/schemas/MarketDataQuote"
+        inverseQuote:
+          readOnly: true
+          description: >
+            Synthetic reverse of the latest quote when `syntheticInverse` is
+            active and at least one source field is invertible.
           $ref: "#/components/schemas/MarketDataQuote"
 
     MarketDataSymbolVerificationRequest:

@@ -70,8 +70,7 @@ type LimitOrderSize struct {
 }
 
 // LimitSpotFundsPnlBounds is the Officer meta-policy barrier for the SDK
-// SpotFunds self-computed account-currency P&L bounds. InitialPnl seeds the
-// account accumulator and is valid only on the account scope.
+// SpotFunds self-computed account-currency P&L bounds.
 type LimitSpotFundsPnlBounds struct {
 	// Scope is the cascade tier this barrier applies to.
 	Scope LimitScope
@@ -85,9 +84,6 @@ type LimitSpotFundsPnlBounds struct {
 	// UpperBound is the upper account-currency P&L bound (exact decimal); empty
 	// when unset.
 	UpperBound string
-	// InitialPnl seeds the per-account account-currency P&L accumulator (exact
-	// decimal); valid only on the account scope, empty otherwise.
-	InitialPnl string
 }
 
 // allowedScopes maps each policy to its permitted scopes. It is the engine
@@ -169,17 +165,6 @@ func (l LimitSpotFundsPnlBounds) Validate() error {
 	}
 	if err := validatePnlBounds(l.LowerBound, l.UpperBound); err != nil {
 		return err
-	}
-	if l.InitialPnl != "" {
-		if l.Scope != ScopeAccount {
-			return fmt.Errorf(
-				"initial_pnl is only valid for the account scope, not %q: %w",
-				l.Scope, ErrInvalid,
-			)
-		}
-		if _, err := decimal.NewFromString(l.InitialPnl); err != nil {
-			return fmt.Errorf("initial_pnl is not a valid decimal: %w", ErrInvalid)
-		}
 	}
 	return nil
 }

@@ -585,6 +585,75 @@ describe("Positions adjustment panel", () => {
     ).toBeInTheDocument();
   });
 
+  it("requires a non-zero amount before creating a position", async () => {
+    const user = userEvent.setup();
+    renderPositions();
+
+    const draftRow = screen
+      .getAllByRole("row")
+      .find((r) => r.textContent?.includes("New position"));
+    await user.click(
+      within(draftRow!).getByRole("button", {
+        name: /open new adjustment panel/i,
+      }),
+    );
+
+    const scope = within(screen.getByRole("region", { name: "Adjustment" }));
+    await user.type(scope.getByLabelText("Account"), "my");
+    await user.type(scope.getByLabelText("Asset"), "AAPL");
+    const average = scope.getByLabelText(/average entry price/i);
+    await user.type(average, "150");
+
+    const submit = scope.getByRole("button", { name: /submit adjustment/i });
+    expect(submit).toBeDisabled();
+    await user.keyboard("{Enter}");
+    expect(
+      scope.getByText(
+        "Enter a non-zero Available, Held, or Incoming value to create a position.",
+      ),
+    ).toBeInTheDocument();
+    expect(createAdjustmentMock).not.toHaveBeenCalled();
+
+    const amount = scope.getByLabelText("Available adjustment amount");
+    await user.type(amount, "0");
+    expect(submit).toBeDisabled();
+    await user.clear(amount);
+    await user.type(amount, "1");
+    expect(submit).toBeEnabled();
+  });
+
+  it("reports an invalid amount before the new-position amount rule", async () => {
+    const user = userEvent.setup();
+    renderPositions();
+
+    const draftRow = screen
+      .getAllByRole("row")
+      .find((row) => row.textContent?.includes("New position"));
+    await user.click(
+      within(draftRow!).getByRole("button", {
+        name: /open new adjustment panel/i,
+      }),
+    );
+
+    const scope = within(screen.getByRole("region", { name: "Adjustment" }));
+    await user.type(scope.getByLabelText("Account"), "my");
+    await user.type(scope.getByLabelText("Asset"), "AAPL");
+    await user.type(scope.getByLabelText(/average entry price/i), "150");
+    await user.type(
+      scope.getByLabelText("Available adjustment amount"),
+      "invalid",
+    );
+
+    await user.keyboard("{Enter}");
+    expect(scope.getByRole("alert")).toHaveTextContent("Invalid decimal");
+    expect(
+      scope.queryByText(
+        "Enter a non-zero Available, Held, or Incoming value to create a position.",
+      ),
+    ).not.toBeInTheDocument();
+    expect(createAdjustmentMock).not.toHaveBeenCalled();
+  });
+
   it("keeps draft values after submit and clears them with reset all", async () => {
     const user = userEvent.setup();
     renderPositions();

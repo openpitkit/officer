@@ -375,6 +375,24 @@ func (e *fakeEngine) SetAccountPnl(
 	return nil, nil
 }
 
+func (e *fakeEngine) SetAccountPnlState(
+	ctx context.Context,
+	id domain.AccountID,
+	pnl string,
+	haltReason domain.PnlHaltReason,
+) ([]domain.AccountBlock, error) {
+	if (pnl == "") == (haltReason == "") {
+		return nil, domain.ErrInvalid
+	}
+	if err := domain.ValidatePnlHaltReason(haltReason); err != nil {
+		return nil, err
+	}
+	if haltReason != "" {
+		return nil, nil
+	}
+	return e.SetAccountPnl(ctx, id, pnl)
+}
+
 func (e *fakeEngine) ApplyAccountAdjustmentBatch(
 	context.Context,
 	domain.AccountID,
@@ -432,6 +450,10 @@ func (e *fakeEngine) UnregisterGroup(context.Context, []domain.AccountID, string
 func (e *fakeEngine) BlockGroup(context.Context, string, string) error { return nil }
 
 func (e *fakeEngine) UnblockGroup(context.Context, string) error { return nil }
+
+func (e *fakeEngine) SetGroupCurrency(context.Context, string, string) error { return nil }
+
+func (e *fakeEngine) ClearGroupCurrency(context.Context, string) error { return nil }
 
 func (e *fakeEngine) CheckOrder(
 	context.Context,

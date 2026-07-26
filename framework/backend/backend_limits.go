@@ -88,12 +88,14 @@ func (s *Service) PutRateLimit(ctx context.Context, limit domain.LimitRate) erro
 	if err := limit.Validate(); err != nil {
 		return err
 	}
+	s.marketDataMu.Lock()
+	defer s.marketDataMu.Unlock()
 	n, err := s.router.Route(keyFor(limit.Account))
 	if err != nil {
 		return fmt.Errorf("backend: route limit: %w", err)
 	}
 	sink, err := n.PutRateLimit(ctx, limit, auth.CallerFromContext(ctx))
-	return s.finishLimitChange(sink, err)
+	return s.finishLimitChangeLocked(sink, err)
 }
 
 // PutOrderSizeLimit validates the order-size barrier, routes to the owning node,
@@ -102,12 +104,14 @@ func (s *Service) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrder
 	if err := limit.Validate(); err != nil {
 		return err
 	}
+	s.marketDataMu.Lock()
+	defer s.marketDataMu.Unlock()
 	n, err := s.router.Route(keyFor(limit.Account))
 	if err != nil {
 		return fmt.Errorf("backend: route limit: %w", err)
 	}
 	sink, err := n.PutOrderSizeLimit(ctx, limit, auth.CallerFromContext(ctx))
-	return s.finishLimitChange(sink, err)
+	return s.finishLimitChangeLocked(sink, err)
 }
 
 // PutSpotFundsPnlBoundsLimit validates the SpotFunds P&L-bounds barrier, routes
@@ -118,12 +122,14 @@ func (s *Service) PutSpotFundsPnlBoundsLimit(
 	if err := limit.Validate(); err != nil {
 		return err
 	}
+	s.marketDataMu.Lock()
+	defer s.marketDataMu.Unlock()
 	n, err := s.router.Route(keyFor(limit.Account))
 	if err != nil {
 		return fmt.Errorf("backend: route limit: %w", err)
 	}
 	sink, err := n.PutSpotFundsPnlBoundsLimit(ctx, limit, auth.CallerFromContext(ctx))
-	return s.finishLimitChange(sink, err)
+	return s.finishLimitChangeLocked(sink, err)
 }
 
 // DeleteLimit validates the target's scope/axes for its policy, routes to the
@@ -132,15 +138,17 @@ func (s *Service) DeleteLimit(ctx context.Context, target node.LimitTarget) erro
 	if err := validateLimitTarget(target); err != nil {
 		return err
 	}
+	s.marketDataMu.Lock()
+	defer s.marketDataMu.Unlock()
 	n, err := s.router.Route(keyFor(target.Account))
 	if err != nil {
 		return fmt.Errorf("backend: route limit: %w", err)
 	}
 	sink, err := n.DeleteLimit(ctx, target, auth.CallerFromContext(ctx))
-	return s.finishLimitChange(sink, err)
+	return s.finishLimitChangeLocked(sink, err)
 }
 
-func (s *Service) finishLimitChange(sink marketdata.Sink, err error) error {
+func (s *Service) finishLimitChangeLocked(sink marketdata.Sink, err error) error {
 	if sink == nil || s.md == nil {
 		return err
 	}

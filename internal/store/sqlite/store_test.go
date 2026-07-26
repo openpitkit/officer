@@ -888,12 +888,23 @@ func TestAccountRoundTripEngineIDAndGroupLink(t *testing.T) {
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
-	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "alpha"}); err != nil {
+	for _, code := range []string{"EUR", "USD"} {
+		if err := rs.CreateAsset(ctx, domain.Asset{Code: code}); err != nil {
+			t.Fatalf("CreateAsset(%s): %v", code, err)
+		}
+	}
+	if err := rs.SetGroupCurrency(ctx, "", "USD"); err != nil {
+		t.Fatalf("SetGroupCurrency(default): %v", err)
+	}
+	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{
+		Code: "alpha", Currency: "EUR",
+	}); err != nil {
 		t.Fatalf("CreateGroup: %v", err)
 	}
 
 	a1, err := rs.CreateAccount(ctx, domain.Account{
-		Code: "acc-1", Title: "Account 1", GroupCode: "alpha", Notes: "n",
+		Code: "acc-1", Title: "Account 1", GroupCode: "alpha", Notes: "n", Pnl: "12.5",
+		Blocked: true, BlockReason: "risk",
 		PnlHaltReason: domain.PnlHaltReasonMissingAccountCurrency,
 	})
 	if err != nil {
@@ -902,6 +913,17 @@ func TestAccountRoundTripEngineIDAndGroupLink(t *testing.T) {
 	if err := domain.ValidateEngineAccountID(a1.EngineAccountID); err != nil {
 		t.Fatalf("assigned engine account id out of range: %v", err)
 	}
+	if a1.Title != "Account 1" || a1.Pnl != "12.5" ||
+		a1.PnlHaltReason != domain.PnlHaltReasonMissingAccountCurrency ||
+		a1.GroupCode != "alpha" || a1.Notes != "n" ||
+		!a1.Blocked || a1.BlockReason != "risk" {
+		t.Fatalf("CreateAccount result lost stored fields: %+v", a1)
+	}
+	if a1.Currency != "" || a1.GroupCurrency != "EUR" ||
+		a1.DefaultCurrency != "USD" || a1.EffectiveCurrency != "EUR" ||
+		a1.CurrencyOrigin != domain.CurrencyOriginGroup {
+		t.Fatalf("CreateAccount result currency cascade = %+v, want group EUR", a1)
+	}
 
 	a2, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-2"})
 	if err != nil {
@@ -909,6 +931,11 @@ func TestAccountRoundTripEngineIDAndGroupLink(t *testing.T) {
 	}
 	if a1.EngineAccountID == a2.EngineAccountID {
 		t.Fatalf("engine account ids collided: %d", a1.EngineAccountID)
+	}
+	if a2.Pnl != "0" || a2.DefaultCurrency != "USD" ||
+		a2.EffectiveCurrency != "USD" ||
+		a2.CurrencyOrigin != domain.CurrencyOriginDefault {
+		t.Fatalf("CreateAccount default-currency result = %+v, want default USD", a2)
 	}
 
 	// Read back surfaces the group code, not a surrogate id.

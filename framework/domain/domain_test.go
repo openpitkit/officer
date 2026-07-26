@@ -853,7 +853,6 @@ func TestLimitSpotFundsPnlBounds_Validate(t *testing.T) {
 			Account:    "acc-1",
 			LowerBound: "-100",
 			UpperBound: "100",
-			InitialPnl: "12.34",
 		}},
 	}
 	for _, tc := range ok {
@@ -886,23 +885,6 @@ func TestLimitSpotFundsPnlBounds_Validate(t *testing.T) {
 			Scope:      domain.ScopeGlobal,
 			LowerBound: "10",
 			UpperBound: "1",
-		}},
-		{"global initial_pnl rejected", domain.LimitSpotFundsPnlBounds{
-			Scope:      domain.ScopeGlobal,
-			LowerBound: "-1",
-			InitialPnl: "5",
-		}},
-		{"group initial_pnl rejected", domain.LimitSpotFundsPnlBounds{
-			Scope:        domain.ScopeAccountGroup,
-			AccountGroup: "desk-a",
-			LowerBound:   "-1",
-			InitialPnl:   "5",
-		}},
-		{"initial_pnl not decimal", domain.LimitSpotFundsPnlBounds{
-			Scope:      domain.ScopeAccount,
-			Account:    "acc-1",
-			LowerBound: "-1",
-			InitialPnl: "abc",
 		}},
 	}
 	for _, tc := range bad {

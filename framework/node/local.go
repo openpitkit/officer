@@ -32,6 +32,30 @@ import (
 	"go.openpit.dev/officer/framework/store"
 )
 
+type engineRebuildPhase uint8
+
+const (
+	engineRebuildPrepared engineRebuildPhase = iota
+	engineRebuildCommitted
+)
+
+type engineRebuildError struct {
+	err   error
+	phase engineRebuildPhase
+}
+
+func (e *engineRebuildError) Error() string {
+	phase := "prepared"
+	if e.phase == engineRebuildCommitted {
+		phase = "committed"
+	}
+	return fmt.Sprintf("%s engine rebuild failure: %v", phase, e.err)
+}
+
+func (e *engineRebuildError) Unwrap() error {
+	return e.err
+}
+
 // localNode is the in-process Node: one engine and one realm-scoped store
 // running together behind the control plane. In the single-binary deployment
 // there is exactly one localNode, bound to domain.DefaultRealm, and it owns
@@ -54,10 +78,13 @@ import (
 type localNode struct {
 	engineMu sync.RWMutex
 	engine   engine.Engine
-	build    engine.BuildFunc
-	db       store.Store
-	realm    store.RealmStore
-	fatal    func(error)
+	// marketDataTransition fans provider updates into both the current and the
+	// freshly built engine while persisted quotes are replayed before a swap.
+	marketDataTransition marketdata.Sink
+	build                engine.BuildFunc
+	db                   store.Store
+	realm                store.RealmStore
+	fatal                func(error)
 
 	mutate     sync.Mutex
 	laneGate   sync.RWMutex
@@ -247,6 +274,30 @@ func (n *localNode) fatalPostEngineAuditByCode(
 	return err
 }
 
+func (n *localNode) fatalReconciliation(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	n.fatal(fmt.Errorf(
+		"operation=%q: engine/store reconciliation failure: %w",
+		operation, err,
+	))
+	return err
+}
+
+func (n *localNode) reconcileEngineAfterFailure(
+	ctx context.Context, operation string, cause error,
+) error {
+	rebuildErr := n.rebuildEngineFromStore(ctx)
+	if rebuildErr == nil {
+		return cause
+	}
+	return n.fatalReconciliation(operation, errors.Join(
+		cause,
+		fmt.Errorf("rebuild engine from current store: %w", rebuildErr),
+	))
+}
+
 // loadSnapshot reads the full engine seed from the bound realm: accounts (with
 // their blocked state and group membership), the complete typed barrier set,
 // groups, and balances. It returns the assembled snapshot and a human-readable
@@ -390,23 +441,50 @@ func (n *localNode) ExportBackup(
 	return archive, nil
 }
 
-// RestoreBackup imports a portable archive and rebuilds the live engine from
-// the restored store snapshot when the restored sections affect runtime state.
+// RestoreBackup imports a portable archive and publishes every runtime delta
+// the engine can express through its synchronized online surfaces. A replacement
+// engine is built only for an SDK lifecycle gap or for recovery after a partial
+// online mutation.
+func effectiveRestoreScope(
+	requested backup.Scope,
+	available []backup.Section,
+) backup.Scope {
+	scope := requested.Normalize()
+	availableSet := make(map[backup.Section]struct{}, len(available))
+	for _, section := range available {
+		availableSet[section] = struct{}{}
+	}
+	if scope.All {
+		scope.All = false
+		scope.Sections = append([]backup.Section(nil), available...)
+		return scope
+	}
+	sections := scope.Sections[:0]
+	for _, section := range scope.Sections {
+		if _, ok := availableSet[section]; ok {
+			sections = append(sections, section)
+		}
+	}
+	scope.Sections = sections
+	return scope
+}
+
 func (n *localNode) RestoreBackup(
 	ctx context.Context,
 	archive backup.Archive,
 	opts backup.RestoreOptions,
 	caller domain.Caller,
 ) (backup.RestoreSummary, marketdata.Sink, error) {
-	// Decide the lock from the normalized scope, not the raw requested one. A
-	// restore of an account-addressed section (audit log, activity history) force-
-	// includes the accounts+groups dictionary for FK resolution, and landing a new
-	// group there requires an engine rebuild the store gates on the applied rows.
-	// The rebuild swaps the engine, so it must run under the exclusive restart gate
-	// that quiesces every lane; take it whenever the normalized scope could write a
-	// runtime dictionary. Only a purely observational restore (settings, or a
-	// non-account-addressed section) takes the lighter mutation lock.
-	if backup.TouchesRuntime(opts.Scope.Normalize()) {
+	normalizedScope := effectiveRestoreScope(
+		opts.Scope, archive.Manifest.Sections,
+	)
+	runtimeScope := backup.TouchesRuntime(normalizedScope)
+	if runtimeScope {
+		// Reserve restart ownership before waiting for the exclusive gates. A
+		// concurrent rebuild must reject instead of reserving restarting while this
+		// restore commits and then forcing a fatal post-commit collision. The
+		// reservation does not itself require an engine replacement: expressible
+		// deltas still publish into the current engine below.
 		if err := n.beginEngineRestart(); err != nil {
 			return backup.RestoreSummary{}, n.currentMarketDataSink(), err
 		}
@@ -418,26 +496,90 @@ func (n *localNode) RestoreBackup(
 		defer n.endMutation()
 	}
 
-	before, err := n.realm.ExportBackup(ctx, backup.Scope{All: true})
+	var beforeRuntime restoreRuntimeSnapshot
+	var rollback backup.Archive
+	var err error
+	if runtimeScope {
+		beforeRuntime, _, err = n.captureRestoreRuntimeSnapshot(ctx)
+	} else {
+		rollback, err = n.realm.ExportBackup(ctx, normalizedScope)
+	}
 	if err != nil {
 		return backup.RestoreSummary{}, n.currentMarketDataSink(),
-			fmt.Errorf("capture restore rollback backup: %w", err)
+			fmt.Errorf("capture restore rollback state: %w", err)
 	}
 
-	summary, err := n.realm.RestoreBackup(ctx, archive, opts)
+	effectiveOpts := opts
+	effectiveOpts.Scope = normalizedScope
+	summary, err := n.realm.RestoreBackup(ctx, archive, effectiveOpts)
 	if err != nil {
 		return backup.RestoreSummary{}, n.currentMarketDataSink(),
 			fmt.Errorf("restore backup: %w", err)
 	}
+	durableCtx := context.WithoutCancel(ctx)
+	// A runtime restore is already the committed desired truth. Portable
+	// rollback would assign fresh stable engine ids and can overwrite quotes
+	// arriving from the market-data manager outside this gate. Do not roll it
+	// back behind a serving engine; fail-stop and let restart hydrate the
+	// committed store. Non-runtime scopes have no engine identity and are safe
+	// to roll back with their exact scoped archive.
+	failAfterCommit := func(operation string, cause error) error {
+		if runtimeScope {
+			return n.fatalReconciliation(operation, cause)
+		}
+		return n.rollbackStore(
+			durableCtx, rollback, normalizedScope, cause,
+		)
+	}
 
-	if summary.RestartRequired {
-		if err := n.rebuildEngineFromStore(ctx); err != nil {
+	var afterRuntime restoreRuntimeSnapshot
+	plan := restoreRuntimePlan{}
+	if runtimeScope {
+		afterRuntime, _, err = n.captureRestoreRuntimeSnapshot(durableCtx)
+		if err != nil {
 			return backup.RestoreSummary{}, n.currentMarketDataSink(),
-				n.rollbackStore(ctx, before, err)
+				failAfterCommit(
+					"capture committed restore runtime state",
+					fmt.Errorf("capture restored runtime snapshot: %w", err),
+				)
+		}
+		plan = classifyRestoreRuntimeDelta(beforeRuntime, afterRuntime)
+		if plan.marketDataNeedsClear && !plan.rebuild {
+			if _, ok := n.currentMarketDataSink().(marketdata.QuoteClearer); !ok {
+				plan.rebuild = true
+				plan.reason = "live market-data sink cannot clear restored quotes"
+			}
 		}
 	}
 
-	if err := n.audit(ctx, caller, store.AuditEntry{
+	if plan.rebuild {
+		if err := n.rebuildEngineFromStore(durableCtx); err != nil {
+			return backup.RestoreSummary{}, n.currentMarketDataSink(),
+				failAfterCommit(
+					"rebuild engine for committed backup restore",
+					fmt.Errorf(
+						"rebuild engine for backup restore (%s): %w",
+						plan.reason, err,
+					),
+				)
+		}
+		summary.RestartRequired = true
+	} else {
+		summary.RestartRequired = false
+		if plan.runtimeChanged {
+			if err := n.applyRestoreRuntimeDelta(
+				durableCtx, beforeRuntime, afterRuntime, plan,
+			); err != nil {
+				return backup.RestoreSummary{}, n.currentMarketDataSink(),
+					failAfterCommit(
+						"publish committed backup restore online",
+						fmt.Errorf("publish restored runtime state online: %w", err),
+					)
+			}
+		}
+	}
+
+	if err := n.audit(durableCtx, caller, store.AuditEntry{
 		Action: domain.AuditActionRestoreBackup,
 		Detail: fmt.Sprintf(
 			"restore backup realm %s mode %s",
@@ -445,13 +587,11 @@ func (n *localNode) RestoreBackup(
 			opts.Mode,
 		),
 	}); err != nil {
-		err = fmt.Errorf("audit restore backup: %w", err)
-		if summary.RestartRequired {
-			return backup.RestoreSummary{}, n.currentMarketDataSink(),
-				n.rollbackStoreAndEngine(ctx, before, err)
-		}
 		return backup.RestoreSummary{}, n.currentMarketDataSink(),
-			n.rollbackStore(ctx, before, err)
+			failAfterCommit(
+				"audit committed backup restore",
+				fmt.Errorf("audit restore backup: %w", err),
+			)
 	}
 
 	return summary, n.currentMarketDataSink(), nil
@@ -469,26 +609,38 @@ func (n *localNode) ResetDatabase(
 	if err := n.db.Reset(ctx); err != nil {
 		return n.currentMarketDataSink(), fmt.Errorf("reset database: %w", err)
 	}
-	// Reset recreates the backing database, so the previous realm handle is
-	// stale; re-bind the fixed realm against the fresh database before the
-	// rebuild reads from it.
-	realm, err := n.db.ForRealm(ctx, domain.DefaultRealm)
+	durableCtx := context.WithoutCancel(ctx)
+	// Reset is the durable commit point: the previous store no longer exists.
+	// Every later failure is fatal because the old engine cannot be reconciled
+	// by rolling the database back.
+	committedFailure := func(operation string, err error) (marketdata.Sink, error) {
+		return n.currentMarketDataSink(), n.fatalReconciliation(operation, err)
+	}
+	realm, err := n.db.ForRealm(durableCtx, domain.DefaultRealm)
 	if err != nil {
-		return n.currentMarketDataSink(), fmt.Errorf("rebind realm after reset: %w", err)
+		return committedFailure(
+			"rebind realm after database reset",
+			fmt.Errorf("rebind realm after reset: %w", err),
+		)
 	}
 	n.realm = realm
-	if err := n.ensureOperatorPrincipal(ctx, realm); err != nil {
-		return n.currentMarketDataSink(), err
+	if err := n.ensureOperatorPrincipal(durableCtx, realm); err != nil {
+		return committedFailure("ensure operator after database reset", err)
 	}
-	if err := n.rebuildEngineFromStore(ctx); err != nil {
-		return n.currentMarketDataSink(), err
+	if err := n.rebuildEngineFromStore(durableCtx); err != nil {
+		return committedFailure(
+			"rebuild engine after database reset",
+			fmt.Errorf("rebuild engine after reset: %w", err),
+		)
 	}
-	if err := n.audit(ctx, caller, store.AuditEntry{
+	if err := n.audit(durableCtx, caller, store.AuditEntry{
 		Action: domain.AuditActionResetDatabase,
 		Detail: "reset database from scratch",
 	}); err != nil {
-		return n.currentMarketDataSink(),
-			fmt.Errorf("audit reset database: %w", err)
+		return committedFailure(
+			"audit database reset",
+			fmt.Errorf("audit reset database: %w", err),
+		)
 	}
 	return n.currentMarketDataSink(), nil
 }
@@ -532,39 +684,62 @@ func (n *localNode) mirrorSeedAccountBlocks(
 }
 
 func (n *localNode) rebuildEngineFromStore(ctx context.Context) error {
+	preparedFailure := func(err error) error {
+		return &engineRebuildError{err: err, phase: engineRebuildPrepared}
+	}
 	snap, _, err := n.loadSnapshot(ctx)
 	if err != nil {
-		return fmt.Errorf("load restored snapshot: %w", err)
+		return preparedFailure(fmt.Errorf("load restored snapshot: %w", err))
 	}
 	next, err := n.build(snap)
 	if err != nil {
-		return fmt.Errorf("build restored engine: %w", err)
+		return preparedFailure(fmt.Errorf("build restored engine: %w", err))
 	}
 	if next == nil {
-		return fmt.Errorf("build restored engine returned nil")
+		return preparedFailure(fmt.Errorf("build restored engine returned nil"))
 	}
-	n.swapEngine(next)
-	// The rebuilt handle is already live, so its seed blocks are mirrored after
-	// the swap: the store must agree with the engine that is now serving.
-	return n.mirrorSeedAccountBlocks(ctx, next)
-}
-
-func (n *localNode) swapEngine(next engine.Engine) {
-	n.engineMu.Lock()
-	prev := n.engine
-	n.engine = next
-	n.engineMu.Unlock()
-	// Never stop the handle just installed: a real build always returns a fresh
-	// handle (prev != next), but a degenerate build that hands back the current
-	// one must not be torn down out from under the node.
+	transition, err := n.beginMarketDataTransition(next)
+	if err != nil {
+		if next != n.currentEngine() {
+			next.Stop()
+		}
+		return preparedFailure(fmt.Errorf("prepare restored engine market data: %w", err))
+	}
+	if err := n.replayMarketDataInto(ctx, next); err != nil {
+		n.cancelMarketDataTransition(transition)
+		if next != n.currentEngine() {
+			next.Stop()
+		}
+		return preparedFailure(fmt.Errorf("replay market data into restored engine: %w", err))
+	}
+	prev, err := n.commitMarketDataTransition(transition, next)
+	if err != nil {
+		if next != n.currentEngine() {
+			next.Stop()
+		}
+		return preparedFailure(fmt.Errorf("commit restored engine market data: %w", err))
+	}
 	if prev != nil && prev != next {
 		prev.Stop()
 	}
+	// The rebuilt handle is already live. Any failure from this point must be
+	// handled as committed: rolling the store back would put it behind the
+	// replacement engine that is now serving.
+	if err := n.mirrorSeedAccountBlocks(ctx, next); err != nil {
+		return &engineRebuildError{
+			err:   fmt.Errorf("mirror rebuilt engine seed blocks: %w", err),
+			phase: engineRebuildCommitted,
+		}
+	}
+	return nil
 }
 
 func (n *localNode) currentMarketDataSink() marketdata.Sink {
 	n.engineMu.RLock()
 	defer n.engineMu.RUnlock()
+	if n.marketDataTransition != nil {
+		return n.marketDataTransition
+	}
 	return n.engine.MarketDataSink()
 }
 
@@ -644,6 +819,50 @@ func (n *localNode) endLivePolicyConfiguration() {
 	n.laneGate.Unlock()
 }
 
+// beginLiveIdentityPublication quiesces every account lane while Officer
+// publishes account or group dictionary changes into the live adapter and
+// engine. This is not a synthetic group lane or an engine restart: it keeps the
+// current engine and market-data sink in place and does not set restarting.
+func (n *localNode) beginLiveIdentityPublication() error {
+	n.laneGate.Lock()
+	if n.restarting.Load() {
+		n.laneGate.Unlock()
+		return fmt.Errorf(
+			"engine restart in progress; mutating requests are rejected until rebuild completes: %w",
+			domain.ErrEngineRestarting)
+	}
+	n.mutate.Lock()
+	if n.restarting.Load() {
+		n.mutate.Unlock()
+		n.laneGate.Unlock()
+		return fmt.Errorf(
+			"engine restart in progress; mutating requests are rejected until rebuild completes: %w",
+			domain.ErrEngineRestarting)
+	}
+	return nil
+}
+
+func (n *localNode) endLiveIdentityPublication() {
+	n.mutate.Unlock()
+	n.laneGate.Unlock()
+}
+
+func (n *localNode) beginEngineRestartFromLane(endLane func()) error {
+	if !n.restarting.CompareAndSwap(false, true) {
+		endLane()
+		return fmt.Errorf(
+			"engine restart in progress; mutating requests are rejected until rebuild completes: %w",
+			domain.ErrEngineRestarting,
+		)
+	}
+	// Reserve the restart before releasing the admitted lane. New lane and
+	// store-only mutations now reject instead of entering the uncertain state.
+	endLane()
+	n.laneGate.Lock()
+	n.mutate.Lock()
+	return nil
+}
+
 func (n *localNode) beginEngineRestart() error {
 	if !n.restarting.CompareAndSwap(false, true) {
 		return fmt.Errorf(
@@ -664,13 +883,29 @@ func (n *localNode) endEngineRestart() {
 	n.laneGate.Unlock()
 }
 
-func (n *localNode) rollbackStore(ctx context.Context, rollback backup.Archive, err error) error {
+func rollbackArchiveScope(archive backup.Archive) backup.Scope {
+	return backup.Scope{
+		Sections:  append([]backup.Section(nil), archive.Manifest.Sections...),
+		Accounts:  backup.EntitySelector{All: true},
+		Positions: backup.EntitySelector{All: true},
+	}
+}
+
+func (n *localNode) rollbackStore(
+	ctx context.Context,
+	rollback backup.Archive,
+	scope backup.Scope,
+	err error,
+) error {
 	_, restoreErr := n.realm.RestoreBackup(ctx, rollback, backup.RestoreOptions{
-		Scope: backup.Scope{All: true},
+		Scope: scope,
 		Mode:  backup.RestoreModeReplaceAll,
 	})
 	if restoreErr != nil {
-		return errors.Join(err, fmt.Errorf("rollback restore backup: %w", restoreErr))
+		return n.fatalReconciliation(
+			"rollback store",
+			errors.Join(err, fmt.Errorf("rollback restore backup: %w", restoreErr)),
+		)
 	}
 	return err
 }
@@ -680,9 +915,25 @@ func (n *localNode) rollbackStoreAndEngine(
 	rollback backup.Archive,
 	err error,
 ) error {
-	err = n.rollbackStore(ctx, rollback, err)
+	_, restoreErr := n.realm.RestoreBackup(ctx, rollback, backup.RestoreOptions{
+		Scope: rollbackArchiveScope(rollback),
+		Mode:  backup.RestoreModeReplaceAll,
+	})
+	var reconcileErr error
+	if restoreErr != nil {
+		reconcileErr = fmt.Errorf("rollback restore backup: %w", restoreErr)
+	}
 	if rebuildErr := n.rebuildEngineFromStore(ctx); rebuildErr != nil {
-		return errors.Join(err, fmt.Errorf("rollback restored engine: %w", rebuildErr))
+		reconcileErr = errors.Join(
+			reconcileErr,
+			fmt.Errorf("rollback restored engine: %w", rebuildErr),
+		)
+	}
+	if reconcileErr != nil {
+		return n.fatalReconciliation(
+			"rollback store and engine",
+			errors.Join(err, reconcileErr),
+		)
 	}
 	return err
 }

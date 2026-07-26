@@ -33,25 +33,42 @@ import (
 // ApplyBusinessCSVImport persists a prepared business CSV import atomically in
 // the store and mirrors the selected rows into the live engine. The engine
 // adjustments, group moves, and blocks are applied first; the selected rows are
-// then persisted in one store transaction. That transaction is all-or-nothing,
-// so a failed import writes nothing. Because the engine effects already ran when
-// it fails, the engine is reconciled from the persisted store state so the
-// engine and store never diverge. Any account the engine kill-switched while
-// applying a position snapshot is mirrored once the transaction commits.
+// then persisted in one store transaction. Newly persisted account and group
+// ids are published to the live resolver before those effects run, without
+// replacing the engine. The transaction is all-or-nothing, so a failed import
+// writes nothing. Because engine effects already ran when it fails, the engine
+// is reconciled from the persisted store state so the engine and store never
+// diverge. Any account the engine kill-switched while applying a P&L or position
+// snapshot is mirrored once the transaction commits.
+func businessCSVRollbackScope() backup.Scope {
+	return backup.Scope{
+		Sections: []backup.Section{
+			backup.SectionAccountsGroups,
+			backup.SectionPositions,
+			backup.SectionActivityHistory,
+			backup.SectionAuditLog,
+		},
+		Accounts:  backup.EntitySelector{All: true},
+		Positions: backup.EntitySelector{All: true},
+	}
+}
+
 func (n *localNode) ApplyBusinessCSVImport(
 	ctx context.Context,
 	in store.BusinessCSVImport,
 	caller domain.Caller,
 ) error {
-	if err := n.beginEngineRestart(); err != nil {
+	if err := n.beginLiveIdentityPublication(); err != nil {
 		return err
 	}
-	defer n.endEngineRestart()
+	defer n.endLiveIdentityPublication()
+	eng := n.currentEngine()
 
-	rollback, err := n.realm.ExportBackup(ctx, backup.Scope{All: true})
+	rollback, err := n.realm.ExportBackup(ctx, businessCSVRollbackScope())
 	if err != nil {
 		return fmt.Errorf("capture business CSV rollback backup: %w", err)
 	}
+	rollbackCtx := context.WithoutCancel(ctx)
 
 	seenBalances := make(map[string]struct{}, len(in.Balances))
 	for _, balance := range in.Balances {
@@ -63,7 +80,10 @@ func (n *localNode) ApplyBusinessCSVImport(
 		seenBalances[balanceKey] = struct{}{}
 	}
 
-	ensuredGroups := make(map[string]bool)
+	ensuredGroups := make(map[string]bool, len(in.Groups))
+	for _, row := range in.Groups {
+		ensuredGroups[row.Group.Code] = true
+	}
 	pendingAccounts := make(map[string]domain.Account)
 	type accountGroupMove struct {
 		account domain.AccountID
@@ -137,8 +157,8 @@ func (n *localNode) ApplyBusinessCSVImport(
 				Detail:  setAccountGroupDetail(row.Account.Code, row.Account.GroupCode),
 			}))
 		}
-		// Account blocks for CSV-created accounts run after the import rebuilds
-		// the resolver; see the engine-effects phase below.
+		// Account blocks for CSV-created accounts run after their persisted numeric
+		// ids are published to the live resolver; see the engine-effects phase.
 		if !row.Exists {
 			in.Audits = append(in.Audits, n.auditEntry(caller, store.AuditEntry{
 				Action:  domain.AuditActionCreateAccount,
@@ -169,14 +189,61 @@ func (n *localNode) ApplyBusinessCSVImport(
 		Groups:   append([]store.BusinessCSVImportGroup(nil), in.Groups...),
 		Accounts: append([]store.BusinessCSVImportAccount(nil), in.Accounts...),
 	}
-	sdkSeedBlocks := make(map[domain.AccountID]struct{})
+	newGroups := make([]string, 0, len(preStore.Groups))
+	for _, row := range preStore.Groups {
+		if !row.Exists {
+			newGroups = append(newGroups, row.Group.Code)
+		}
+	}
+	newAccounts := make([]domain.AccountID, 0, len(preStore.Accounts))
+	for _, row := range preStore.Accounts {
+		if !row.Exists {
+			newAccounts = append(newAccounts, row.Account.Code)
+		}
+	}
 	if len(preStore.Groups) > 0 || len(preStore.Accounts) > 0 {
 		if err := n.realm.ApplyBusinessCSVImport(ctx, preStore); err != nil {
-			return n.rollbackStore(ctx, rollback, fmt.Errorf("apply business CSV dictionaries: %w", err))
+			// This is the first transactional store write and no engine effect has
+			// run yet. RealmStore guarantees the transaction is all-or-nothing, so
+			// the current engine and the pre-import store already agree.
+			return fmt.Errorf("apply business CSV dictionaries: %w", err)
 		}
-		if err := n.rebuildEngineFromStore(ctx); err != nil {
-			return n.rollbackStoreAndEngine(ctx, rollback,
-				fmt.Errorf("rebuild engine after business CSV dictionaries: %w", err))
+		if len(newGroups) > 0 || len(newAccounts) > 0 {
+			resolver, err := requireDictionaryResolver(eng)
+			if err != nil {
+				return n.rollbackStoreAndEngine(rollbackCtx, rollback,
+					fmt.Errorf("resolve live business CSV dictionary: %w", err))
+			}
+			for _, code := range newGroups {
+				group, ok, err := n.realm.GetGroup(ctx, code)
+				if err != nil {
+					return n.rollbackStoreAndEngine(rollbackCtx, rollback,
+						fmt.Errorf("read persisted business CSV group %q: %w", code, err))
+				}
+				if !ok {
+					return n.rollbackStoreAndEngine(rollbackCtx, rollback,
+						fmt.Errorf("persisted business CSV group %q: %w", code, domain.ErrNotFound))
+				}
+				if err := resolver.AddGroupResolverEntry(group); err != nil {
+					return n.rollbackStoreAndEngine(rollbackCtx, rollback,
+						fmt.Errorf("publish business CSV group %q: %w", code, err))
+				}
+			}
+			for _, code := range newAccounts {
+				account, ok, err := n.realm.GetAccount(ctx, code)
+				if err != nil {
+					return n.rollbackStoreAndEngine(rollbackCtx, rollback,
+						fmt.Errorf("read persisted business CSV account %q: %w", code, err))
+				}
+				if !ok {
+					return n.rollbackStoreAndEngine(rollbackCtx, rollback,
+						fmt.Errorf("persisted business CSV account %q: %w", code, domain.ErrNotFound))
+				}
+				if err := resolver.AddAccountResolverEntry(account); err != nil {
+					return n.rollbackStoreAndEngine(rollbackCtx, rollback,
+						fmt.Errorf("publish business CSV account %q: %w", code, err))
+				}
+			}
 		}
 		for i := range in.Groups {
 			in.Groups[i].Exists = true
@@ -184,50 +251,108 @@ func (n *localNode) ApplyBusinessCSVImport(
 		for i := range in.Accounts {
 			in.Accounts[i].Exists = true
 		}
-		sdkSeedBlocks, err = n.preserveSDKSeedAccountBlocks(ctx, &in)
-		if err != nil {
-			return n.rollbackStoreAndEngine(ctx, rollback,
-				fmt.Errorf("preserve SDK seed account blocks: %w", err))
-		}
 	}
 
 	for _, row := range in.Groups {
-		applyErr := n.engine.RunGroupSynchronized(ctx, row.Group.Code,
+		applyErr := eng.RunGroupSynchronized(ctx, row.Group.Code,
 			func(lane engine.GroupLane) error {
+				if err := applyGroupCurrency(
+					ctx, lane, row.Group.Code, row.Group.Currency,
+				); err != nil {
+					return fmt.Errorf("apply group currency: %w", err)
+				}
 				return n.applyGroupBlock(ctx, lane, row.Group.Code,
 					row.Group.Blocked, row.Group.BlockReason)
 			})
 		if applyErr != nil {
-			return n.rollbackStoreAndEngine(ctx, rollback,
+			return n.rollbackStoreAndEngine(rollbackCtx, rollback,
 				fmt.Errorf("apply group block: %w", applyErr))
 		}
 	}
-	for _, row := range in.Accounts {
-		if _, preserve := sdkSeedBlocks[row.Account.Code]; preserve {
-			continue
-		}
-		applyErr := n.engine.RunAccountSynchronized(ctx, row.Account.Code,
-			func(lane engine.AccountLane) error {
-				return n.applyBlock(ctx, lane, row.Account.Code,
-					row.Account.Blocked, row.Account.BlockReason)
-			})
-		if applyErr != nil {
-			return n.rollbackStoreAndEngine(ctx, rollback,
-				fmt.Errorf("apply account block: %w", applyErr))
-		}
-	}
+	// Match cold hydration order: group membership must be live before an
+	// account P&L seed evaluates group-scoped barriers and kill-switches.
 	for _, move := range groupMoves {
-		if err := n.applyGroupMove(ctx, n.engine, move.account, move.old, move.next); err != nil {
-			return n.rollbackStoreAndEngine(ctx, rollback,
+		if err := n.applyGroupMove(ctx, eng, move.account, move.old, move.next); err != nil {
+			return n.rollbackStoreAndEngine(rollbackCtx, rollback,
 				fmt.Errorf("apply account group: %w", err))
 		}
 	}
 
+	importedAccounts := make(map[domain.AccountID]store.BusinessCSVImportAccount, len(in.Accounts))
+	for _, row := range in.Accounts {
+		importedAccounts[row.Account.Code] = row
+	}
+	persistedAccounts, err := n.realm.ListAccounts(ctx)
+	if err != nil {
+		return n.rollbackStoreAndEngine(rollbackCtx, rollback,
+			fmt.Errorf("list accounts after business CSV dictionaries: %w", err))
+	}
+	pnlBlocked := make(map[domain.AccountID]struct{})
+	var pnlBlocks []domain.AccountBlock
+	for _, account := range persistedAccounts {
+		row, imported := importedAccounts[account.Code]
+		if !imported {
+			continue
+		}
+		applyErr := eng.RunAccountSynchronized(ctx, account.Code,
+			func(lane engine.AccountLane) error {
+				// Account runtime state carries only the explicit account override.
+				// Group/default inheritance is owned by the group lane above.
+				if err := applyAccountCurrency(
+					ctx, lane, account.Code, account.Currency,
+				); err != nil {
+					return fmt.Errorf("apply account currency: %w", err)
+				}
+				if row.PnlSpecified {
+					pnl := row.Account.Pnl
+					if pnl == "" {
+						pnl = "0"
+					}
+					if row.Account.PnlHaltReason != "" {
+						pnl = ""
+					}
+					blocks, err := lane.SetAccountPnlState(
+						ctx,
+						account.Code,
+						pnl,
+						row.Account.PnlHaltReason,
+					)
+					if err != nil {
+						return fmt.Errorf("apply account pnl: %w", err)
+					}
+					if len(blocks) > 0 {
+						pnlBlocked[account.Code] = struct{}{}
+						pnlBlocks = append(pnlBlocks, blocks...)
+					}
+				}
+				if _, blockedByPnl := pnlBlocked[account.Code]; blockedByPnl &&
+					!row.Account.Blocked {
+					return nil
+				}
+				return n.applyBlock(ctx, lane, account.Code,
+					row.Account.Blocked, row.Account.BlockReason)
+			})
+		if applyErr != nil {
+			return n.rollbackStoreAndEngine(rollbackCtx, rollback,
+				fmt.Errorf("apply business CSV account %q: %w", account.Code, applyErr))
+		}
+	}
+	if len(pnlBlocked) > 0 {
+		audits := in.Audits[:0]
+		for _, audit := range in.Audits {
+			_, blockedByPnl := pnlBlocked[audit.Account]
+			if blockedByPnl && audit.Action == domain.AuditActionUnblock {
+				continue
+			}
+			audits = append(audits, audit)
+		}
+		in.Audits = audits
+	}
 	// Blocks the engine latched while committing the position-snapshot batches.
 	// The mirror is deferred until the import transaction commits: that write
 	// carries every account row's CSV blocked flag and would otherwise clear a
 	// block the engine just latched. No lane can read the gap - the import holds
-	// the engine-restart gate throughout.
+	// the live identity-publication gate throughout.
 	var adjustmentBlocks []domain.AccountBlock
 	balanceGroups := make(map[domain.AccountID][]domain.Balance)
 	balanceAccounts := make([]domain.AccountID, 0)
@@ -245,16 +370,16 @@ func (n *localNode) ApplyBusinessCSVImport(
 		}
 		var results []engine.AdjustmentResult
 		var batchReject *engine.AdjustmentBatchReject
-		if err := n.engine.RunAccountSynchronized(ctx, account, func(lane engine.AccountLane) error {
+		if err := eng.RunAccountSynchronized(ctx, account, func(lane engine.AccountLane) error {
 			var err error
 			results, batchReject, err = lane.ApplyAccountAdjustmentBatch(ctx, account, reqs)
 			return err
 		}); err != nil {
-			return n.rollbackStoreAndEngine(ctx, rollback,
+			return n.rollbackStoreAndEngine(rollbackCtx, rollback,
 				fmt.Errorf("apply position snapshot adjustment: %w", err))
 		}
 		if batchReject != nil {
-			return n.rollbackStoreAndEngine(ctx, rollback,
+			return n.rollbackStoreAndEngine(rollbackCtx, rollback,
 				fmt.Errorf("position snapshot adjustment batch for account %s rejected: %s: %w",
 					account, batchReject.Reason, domain.ErrInvalid))
 		}
@@ -266,7 +391,7 @@ func (n *localNode) ApplyBusinessCSVImport(
 		adjustmentBlocks = append(adjustmentBlocks, results[0].AccountBlocks...)
 		for i, result := range results {
 			if i >= len(balances) {
-				return n.rollbackStoreAndEngine(ctx, rollback,
+				return n.rollbackStoreAndEngine(rollbackCtx, rollback,
 					fmt.Errorf("position snapshot adjustment batch for account %s returned extra outcome %d for %d requests: %w",
 						account, len(results), len(balances), domain.ErrInvalid))
 			}
@@ -282,7 +407,7 @@ func (n *localNode) ApplyBusinessCSVImport(
 				Asset:     balance.Asset,
 			}
 			if result.Rejected != nil {
-				return n.rollbackStoreAndEngine(ctx, rollback,
+				return n.rollbackStoreAndEngine(rollbackCtx, rollback,
 					fmt.Errorf("position %s/%s snapshot adjustment rejected: %s: %w",
 						balance.Account, balance.Asset, result.Rejected.Reason, domain.ErrInvalid))
 			}
@@ -299,12 +424,12 @@ func (n *localNode) ApplyBusinessCSVImport(
 	}
 
 	if err := n.realm.ApplyBusinessCSVImport(ctx, in); err != nil {
-		return n.rollbackStoreAndEngine(ctx, rollback,
+		return n.rollbackStoreAndEngine(rollbackCtx, rollback,
 			fmt.Errorf("apply business CSV import: %w", err))
 	}
 	// The import is committed, so a mirror failure has no store state left to
 	// roll back to; the sink's fatal contract owns the outcome from here.
-	return n.mirrorAdjustmentAccountBlocks(ctx, adjustmentBlocks)
+	return n.mirrorAdjustmentAccountBlocks(ctx, append(pnlBlocks, adjustmentBlocks...))
 }
 
 func businessCSVImportAccountKey(account domain.Account) string {
@@ -313,60 +438,6 @@ func businessCSVImportAccountKey(account domain.Account) string {
 
 func businessCSVImportBalanceKey(balance domain.Balance) string {
 	return string(balance.Account) + "\x00" + balance.Asset
-}
-
-func (n *localNode) preserveSDKSeedAccountBlocks(
-	ctx context.Context, in *store.BusinessCSVImport,
-) (map[domain.AccountID]struct{}, error) {
-	source, ok := n.engine.(seedAccountBlockSource)
-	if !ok {
-		return map[domain.AccountID]struct{}{}, nil
-	}
-	blocked := make(map[domain.AccountID]struct{})
-	for _, block := range source.SeedAccountBlocks() {
-		blocked[block.Account] = struct{}{}
-	}
-	if len(blocked) == 0 {
-		return blocked, nil
-	}
-
-	winners := make(map[domain.AccountID]struct{})
-	for i := range in.Accounts {
-		row := &in.Accounts[i]
-		if row.Account.Blocked {
-			continue
-		}
-		if _, ok := blocked[row.Account.Code]; !ok {
-			continue
-		}
-		stored, ok, err := n.realm.GetAccount(ctx, row.Account.Code)
-		if err != nil {
-			return nil, fmt.Errorf("read SDK-blocked account %q: %w", row.Account.Code, err)
-		}
-		if !ok || !stored.Blocked {
-			return nil, fmt.Errorf(
-				"SDK seed block for account %q was not mirrored: %w",
-				row.Account.Code,
-				domain.ErrInvalid,
-			)
-		}
-		row.Account.Blocked = true
-		row.Account.BlockReason = stored.BlockReason
-		winners[row.Account.Code] = struct{}{}
-	}
-	if len(winners) == 0 {
-		return winners, nil
-	}
-	audits := in.Audits[:0]
-	for _, audit := range in.Audits {
-		_, preserve := winners[audit.Account]
-		if preserve && audit.Action == domain.AuditActionUnblock {
-			continue
-		}
-		audits = append(audits, audit)
-	}
-	in.Audits = audits
-	return winners, nil
 }
 
 func (n *localNode) auditEntry(
@@ -422,68 +493,96 @@ func (n *localNode) ensureAdjustmentExternalIDUnused(
 // one call instead of failing with an unknown-account error. The new account
 // joins the default group (empty GroupCode, no group assigned); its id is
 // validated the same way CreateAccount validates it, and the creation is
-// audited like a standalone CreateAccount, naming operation as the trigger. It
-// reports whether the account was newly created so the caller rebuilds the
-// engine once before entering the account lane. It runs under the mutation lock
-// the caller already holds and must not rebuild the engine itself: a rebuild
-// stops the live engine's async runtime, which would deadlock if run inside a
-// lane callback.
+// audited like a standalone CreateAccount, naming operation as the trigger. The
+// caller holds the live identity-publication gate, so the store-assigned numeric
+// id is published to the current resolver before any account lane can admit work
+// for the alias.
 func (n *localNode) ensureAutoCreatedAccount(
 	ctx context.Context, id domain.AccountID, operation string, caller domain.Caller,
-) (bool, error) {
+) error {
 	if _, ok, err := n.realm.GetAccount(ctx, id); err != nil {
-		return false, fmt.Errorf("read account for %s: %w", operation, err)
+		return fmt.Errorf("read account for %s: %w", operation, err)
 	} else if ok {
-		return false, nil
+		return nil
 	}
 	if err := domain.ValidateAccountID(id); err != nil {
-		return false, err
+		return err
 	}
 	account, err := n.realm.CreateAccount(ctx, domain.Account{Code: id})
 	if err != nil {
 		if errors.Is(err, domain.ErrAlreadyExists) {
-			return false, nil
+			return nil
 		}
-		return false, fmt.Errorf("create account for %s: %w", operation, err)
+		return fmt.Errorf("create account for %s: %w", operation, err)
 	}
-	if err := n.audit(ctx, caller, store.AuditEntry{
+	resolver, err := requireDictionaryResolver(n.currentEngine())
+	if err != nil {
+		return n.rollbackAutoCreatedAccountPublication(
+			ctx,
+			account,
+			fmt.Errorf("resolve live account dictionary for %s: %w", operation, err),
+		)
+	}
+	if err := resolver.AddAccountResolverEntry(account); err != nil {
+		return n.rollbackAutoCreatedAccountPublication(
+			ctx,
+			account,
+			fmt.Errorf("publish auto-created account for %s: %w", operation, err),
+		)
+	}
+	if err := n.audit(context.WithoutCancel(ctx), caller, store.AuditEntry{
 		Action:       domain.AuditActionCreateAccount,
 		Account:      account.Code,
 		AccountTitle: account.Title,
 		Detail:       fmt.Sprintf("auto-created account %s by %s", account.Code, operation),
 	}); err != nil {
-		return false, fmt.Errorf("audit create account: %w", err)
+		return n.fatalPostEngineAuditByCode(
+			"audit auto-created account", "account", account.Code.String(),
+			fmt.Errorf("audit create account: %w", err),
+		)
 	}
-	return true, nil
+	return nil
 }
 
-// ensureAccountAndAssetsRegistered auto-creates the account and each named asset
-// pre-lane and rebuilds the engine once when anything was newly created, so the
-// live resolver knows the account and both assets before the caller enters the
-// account lane. Empty asset codes are skipped. The rebuild swaps n.engine, so
-// the caller must read n.engine again after this returns.
+func (n *localNode) rollbackAutoCreatedAccountPublication(
+	ctx context.Context, account domain.Account, cause error,
+) error {
+	durableCtx := context.WithoutCancel(ctx)
+	if err := n.realm.DeleteAccount(durableCtx, account.Code, false); err == nil {
+		return cause
+	} else {
+		reconcileErr := n.rebuildEngineFromStore(durableCtx)
+		combined := errors.Join(
+			cause,
+			fmt.Errorf("rollback auto-created account %q: %w", account.Code, err),
+			reconcileErr,
+		)
+		return n.fatalPostEngineAuditByCode(
+			"rollback auto-created account publication",
+			"account",
+			account.Code.String(),
+			combined,
+		)
+	}
+}
+
+// ensureAccountAndAssetsRegistered auto-creates the account, then each named
+// asset, pre-lane. The account's stable numeric id is published to the live
+// resolver; assets are Officer dictionary state and need no engine replacement.
+// Empty asset codes are skipped.
 func (n *localNode) ensureAccountAndAssetsRegistered(
 	ctx context.Context, id domain.AccountID, operation string,
 	caller domain.Caller, assets ...string,
 ) error {
-	accountCreated, err := n.ensureAutoCreatedAccount(ctx, id, operation, caller)
-	if err != nil {
+	if err := n.ensureAutoCreatedAccount(ctx, id, operation, caller); err != nil {
 		return err
 	}
-	assetsCreated := false
 	for _, code := range assets {
 		if code == "" {
 			continue
 		}
-		created, err := n.ensureAutoCreatedAsset(ctx, code, operation, caller)
-		if err != nil {
+		if _, err := n.ensureAutoCreatedAsset(ctx, code, operation, caller); err != nil {
 			return err
-		}
-		assetsCreated = assetsCreated || created
-	}
-	if accountCreated || assetsCreated {
-		if err := n.rebuildEngineFromStore(ctx); err != nil {
-			return fmt.Errorf("rebuild engine after auto-create: %w", err)
 		}
 	}
 	return nil
@@ -521,9 +620,9 @@ func (n *localNode) ensureAccountAndAssetsRegisteredExclusive(
 	if !needed {
 		return nil
 	}
-	if err := n.beginEngineRestart(); err != nil {
+	if err := n.beginLiveIdentityPublication(); err != nil {
 		return err
 	}
-	defer n.endEngineRestart()
+	defer n.endLiveIdentityPublication()
 	return n.ensureAccountAndAssetsRegistered(ctx, id, operation, caller, assets...)
 }

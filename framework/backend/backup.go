@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/backup"
@@ -44,13 +45,17 @@ func (s *Service) ExportBackup(
 	return archive, backup.Filename(archive.Manifest.CreatedAt), nil
 }
 
-// RestoreBackup imports a portable archive and reconnects market-data feeds to
-// the restored engine sink when runtime state changed.
+// RestoreBackup imports a portable archive. Market-data connectors keep running
+// across online publication and residual engine rebuilds; they are stopped only
+// when the effective restore changes their applied configuration.
 func (s *Service) RestoreBackup(
 	ctx context.Context,
 	archive backup.Archive,
 	opts backup.RestoreOptions,
 ) (backup.RestoreSummary, error) {
+	s.marketDataMu.Lock()
+	defer s.marketDataMu.Unlock()
+
 	if opts.Mode == "" {
 		return backup.RestoreSummary{},
 			fmt.Errorf("backup restore mode: %w", domain.ErrInvalid)
@@ -60,14 +65,15 @@ func (s *Service) RestoreBackup(
 		return backup.RestoreSummary{}, err
 	}
 
-	// Gate the market-data stop/reconnect on the normalized scope, matching the
-	// node's rebuild decision. An account-addressed restore (audit log, activity
-	// history) force-includes the market-data and accounts+groups parents, so it
-	// can rebuild the engine and mint a fresh sink; the raw requested scope would
-	// miss that and leave the feed pushing into the swapped-out engine's sink.
-	runtimeRestore := backup.TouchesRuntime(opts.Scope.Normalize())
+	mdPlan := marketDataRestorePlan{}
+	if s.md != nil {
+		mdPlan, err = planMarketDataRestore(ctx, n, archive, opts)
+		if err != nil {
+			return backup.RestoreSummary{}, err
+		}
+	}
 	mdStopped := false
-	if runtimeRestore && s.md != nil {
+	if mdPlan.restart && s.md != nil {
 		s.md.Stop()
 		mdStopped = true
 	}
@@ -83,15 +89,252 @@ func (s *Service) RestoreBackup(
 	}
 	if mdStopped {
 		if err := s.restoreMarketDataAfterBackup(sink); err != nil {
-			return backup.RestoreSummary{}, err
+			return summary, fmt.Errorf(
+				"backend: backup restored; market-data restart pending reconciliation: %w",
+				err,
+			)
+		}
+	} else if s.md != nil {
+		for _, instrument := range mdPlan.manualUpdates {
+			if err := s.md.PushManual(
+				ctx, instrument.Instance.String(), instrument,
+			); err != nil {
+				return summary, fmt.Errorf(
+					"backend: backup restored; live manual market-data update pending reconciliation: %w",
+					err,
+				)
+			}
 		}
 	}
 	return summary, nil
 }
 
+type marketDataRestorePlan struct {
+	restart       bool
+	manualUpdates []domain.MarketDataInstrument
+}
+
+type marketDataInstanceRuntime struct {
+	provider    string
+	credentials string
+	enabled     bool
+}
+
+type marketDataInstrumentRuntime struct {
+	instance       domain.ExternalID
+	externalSymbol string
+	baseAsset      string
+	quoteAsset     string
+	enabled        bool
+}
+
+func planMarketDataRestore(
+	ctx context.Context,
+	n interface {
+		ListMarketDataInstances(context.Context) ([]domain.MarketDataInstance, error)
+		ListMarketDataInstruments(
+			context.Context, domain.ExternalID,
+		) ([]domain.MarketDataInstrument, error)
+	},
+	archive backup.Archive,
+	opts backup.RestoreOptions,
+) (marketDataRestorePlan, error) {
+	scope := opts.Scope.Normalize()
+	if !scope.Included(backup.SectionMarketData) ||
+		!archiveCarriesSection(archive, backup.SectionMarketData) {
+		return marketDataRestorePlan{}, nil
+	}
+
+	currentInstances, err := n.ListMarketDataInstances(ctx)
+	if err != nil {
+		return marketDataRestorePlan{}, fmt.Errorf(
+			"backend: list market-data instances before restore: %w", err,
+		)
+	}
+	currentInstruments := make([]domain.MarketDataInstrument, 0)
+	for _, instance := range currentInstances {
+		instruments, err := n.ListMarketDataInstruments(ctx, instance.ExternalID)
+		if err != nil {
+			return marketDataRestorePlan{}, fmt.Errorf(
+				"backend: list market-data instruments for %s before restore: %w",
+				instance.ExternalID, err,
+			)
+		}
+		currentInstruments = append(currentInstruments, instruments...)
+	}
+
+	data := backup.FilterData(archive.Data, scope)
+	desiredInstances, desiredInstruments := projectMarketDataRestore(
+		currentInstances, currentInstruments,
+		data.MarketDataInstances, data.MarketDataInstruments,
+		opts.Mode,
+	)
+	if !sameMarketDataRuntime(
+		currentInstances, currentInstruments,
+		desiredInstances, desiredInstruments,
+	) {
+		return marketDataRestorePlan{restart: true}, nil
+	}
+
+	currentByKey := make(map[string]domain.MarketDataInstrument, len(currentInstruments))
+	for _, instrument := range currentInstruments {
+		currentByKey[marketDataInstrumentKey(instrument)] = instrument
+	}
+	desiredInstancesByID := make(
+		map[domain.ExternalID]domain.MarketDataInstance, len(desiredInstances),
+	)
+	for _, instance := range desiredInstances {
+		desiredInstancesByID[instance.ExternalID] = instance
+	}
+	manualUpdates := make([]domain.MarketDataInstrument, 0)
+	for _, instrument := range desiredInstruments {
+		previous, ok := currentByKey[marketDataInstrumentKey(instrument)]
+		instance := desiredInstancesByID[instrument.Instance]
+		if !ok || previous.ManualPrice == instrument.ManualPrice ||
+			instance.Provider != domain.MarketDataProviderBYO ||
+			!instance.Enabled || !instrument.Enabled {
+			continue
+		}
+		manualUpdates = append(manualUpdates, instrument)
+	}
+	sort.Slice(manualUpdates, func(i, j int) bool {
+		left, right := manualUpdates[i], manualUpdates[j]
+		if left.Instance != right.Instance {
+			return left.Instance.String() < right.Instance.String()
+		}
+		return left.ExternalSymbol < right.ExternalSymbol
+	})
+	return marketDataRestorePlan{manualUpdates: manualUpdates}, nil
+}
+
+func archiveCarriesSection(archive backup.Archive, section backup.Section) bool {
+	for _, carried := range archive.Manifest.Sections {
+		if carried == section {
+			return true
+		}
+	}
+	return false
+}
+
+func projectMarketDataRestore(
+	currentInstances []domain.MarketDataInstance,
+	currentInstruments []domain.MarketDataInstrument,
+	archivedInstances []domain.MarketDataInstance,
+	archivedInstruments []domain.MarketDataInstrument,
+	mode backup.RestoreMode,
+) ([]domain.MarketDataInstance, []domain.MarketDataInstrument) {
+	instances := make(map[domain.ExternalID]domain.MarketDataInstance)
+	instruments := make(map[string]domain.MarketDataInstrument)
+	if mode != backup.RestoreModeReplaceAll {
+		for _, instance := range currentInstances {
+			instances[instance.ExternalID] = instance
+		}
+		for _, instrument := range currentInstruments {
+			instruments[marketDataInstrumentKey(instrument)] = instrument
+		}
+	}
+	for _, instance := range archivedInstances {
+		if _, exists := instances[instance.ExternalID]; mode == backup.RestoreModeInsertMissing && exists {
+			continue
+		}
+		instances[instance.ExternalID] = instance
+	}
+	for _, instrument := range archivedInstruments {
+		key := marketDataInstrumentKey(instrument)
+		if _, exists := instruments[key]; mode == backup.RestoreModeInsertMissing && exists {
+			continue
+		}
+		instruments[key] = instrument
+	}
+	instanceRows := make([]domain.MarketDataInstance, 0, len(instances))
+	for _, instance := range instances {
+		instanceRows = append(instanceRows, instance)
+	}
+	instrumentRows := make([]domain.MarketDataInstrument, 0, len(instruments))
+	for _, instrument := range instruments {
+		instrumentRows = append(instrumentRows, instrument)
+	}
+	return instanceRows, instrumentRows
+}
+
+func sameMarketDataRuntime(
+	leftInstances []domain.MarketDataInstance,
+	leftInstruments []domain.MarketDataInstrument,
+	rightInstances []domain.MarketDataInstance,
+	rightInstruments []domain.MarketDataInstrument,
+) bool {
+	leftInstanceRuntime := make(
+		map[domain.ExternalID]marketDataInstanceRuntime, len(leftInstances),
+	)
+	for _, instance := range leftInstances {
+		leftInstanceRuntime[instance.ExternalID] = marketDataInstanceRuntime{
+			provider: instance.Provider, credentials: instance.Credentials,
+			enabled: instance.Enabled,
+		}
+	}
+	rightInstanceRuntime := make(
+		map[domain.ExternalID]marketDataInstanceRuntime, len(rightInstances),
+	)
+	for _, instance := range rightInstances {
+		rightInstanceRuntime[instance.ExternalID] = marketDataInstanceRuntime{
+			provider: instance.Provider, credentials: instance.Credentials,
+			enabled: instance.Enabled,
+		}
+	}
+	if !equalMarketDataInstanceRuntime(leftInstanceRuntime, rightInstanceRuntime) {
+		return false
+	}
+	leftInstrumentRuntime := make(map[string]marketDataInstrumentRuntime, len(leftInstruments))
+	for _, instrument := range leftInstruments {
+		leftInstrumentRuntime[marketDataInstrumentKey(instrument)] = marketDataInstrumentRuntime{
+			instance: instrument.Instance, externalSymbol: instrument.ExternalSymbol,
+			baseAsset: instrument.BaseAsset, quoteAsset: instrument.QuoteAsset,
+			enabled: instrument.Enabled,
+		}
+	}
+	rightInstrumentRuntime := make(map[string]marketDataInstrumentRuntime, len(rightInstruments))
+	for _, instrument := range rightInstruments {
+		rightInstrumentRuntime[marketDataInstrumentKey(instrument)] = marketDataInstrumentRuntime{
+			instance: instrument.Instance, externalSymbol: instrument.ExternalSymbol,
+			baseAsset: instrument.BaseAsset, quoteAsset: instrument.QuoteAsset,
+			enabled: instrument.Enabled,
+		}
+	}
+	if len(leftInstrumentRuntime) != len(rightInstrumentRuntime) {
+		return false
+	}
+	for key, left := range leftInstrumentRuntime {
+		if rightInstrumentRuntime[key] != left {
+			return false
+		}
+	}
+	return true
+}
+
+func equalMarketDataInstanceRuntime(
+	left, right map[domain.ExternalID]marketDataInstanceRuntime,
+) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for id, runtime := range left {
+		if right[id] != runtime {
+			return false
+		}
+	}
+	return true
+}
+
+func marketDataInstrumentKey(instrument domain.MarketDataInstrument) string {
+	return instrument.Instance.String() + "\x00" + instrument.ExternalSymbol
+}
+
 // ResetDatabase recreates the store from scratch and reconnects market-data
 // feeds to the reset engine sink.
 func (s *Service) ResetDatabase(ctx context.Context) error {
+	s.marketDataMu.Lock()
+	defer s.marketDataMu.Unlock()
+
 	n, err := s.groupNode()
 	if err != nil {
 		return err

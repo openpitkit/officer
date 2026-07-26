@@ -19,28 +19,27 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/store"
 )
 
-// CreateAccount persists a new account, rebuilds the live engine so the account
-// enters the resolver, and audits the action. The resolver is built from the
-// snapshot and the engine has no incremental account registration, so a new
-// account stays invisible to the engine — its adjustments, group moves, and
-// orders reject as "unknown account" — until the engine is rebuilt from the
-// store. This mirrors the rebuild DeleteAccount performs when the account set
-// shrinks. The store assigns the engine account id and returns the populated
-// account.
+// CreateAccount persists a new account, publishes its stable engine id into the
+// live resolver, applies the initial runtime state through synchronized lanes,
+// and audits the action. The live identity gate keeps the engine, dispatcher,
+// and market-data sink in place while no admitted lane can observe a partial
+// identity publication.
 func (n *localNode) CreateAccount(
 	ctx context.Context, account domain.Account, caller domain.Caller,
 ) (domain.Account, error) {
-	if err := n.beginEngineRestart(); err != nil {
+	if err := n.beginLiveIdentityPublication(); err != nil {
 		return domain.Account{}, err
 	}
-	defer n.endEngineRestart()
+	defer n.endLiveIdentityPublication()
 
 	if account.Currency != "" {
 		if _, err := n.ensureAutoCreatedAsset(
@@ -49,26 +48,91 @@ func (n *localNode) CreateAccount(
 			return domain.Account{}, err
 		}
 	}
+	eng := n.currentEngine()
+	resolver, err := requireDictionaryResolver(eng)
+	if err != nil {
+		return domain.Account{}, err
+	}
 
-	account, err := n.realm.CreateAccount(ctx, account)
+	created, err := n.realm.CreateAccount(ctx, account)
 	if err != nil {
 		return domain.Account{}, fmt.Errorf("create account: %w", err)
 	}
 
-	if err := n.rebuildEngineFromStore(ctx); err != nil {
-		return domain.Account{}, fmt.Errorf("rebuild engine after account create: %w", err)
+	if err := resolver.AddAccountResolverEntry(created); err != nil {
+		rollbackErr := n.realm.DeleteAccount(context.WithoutCancel(ctx), created.Code, true)
+		resultErr := errors.Join(
+			fmt.Errorf("publish account resolver entry: %w", err),
+			optionalOperationError("rollback created account", rollbackErr),
+		)
+		if rollbackErr != nil {
+			resultErr = n.reconcileEngineAfterFailure(
+				context.WithoutCancel(ctx),
+				"reconcile engine after account rollback failure",
+				resultErr,
+			)
+		}
+		return domain.Account{}, resultErr
 	}
 
-	if err := n.audit(ctx, caller, store.AuditEntry{
-		Action:       domain.AuditActionCreateAccount,
-		Account:      account.Code,
-		AccountTitle: account.Title,
-		Detail:       fmt.Sprintf("create account %s", account.Code),
-	}); err != nil {
-		return domain.Account{}, fmt.Errorf("audit create account: %w", err)
+	applyErr := eng.RunAccountSynchronized(ctx, created.Code, func(lane engine.AccountLane) error {
+		if created.Currency != "" {
+			if err := lane.SetAccountCurrency(ctx, created.Code, created.Currency); err != nil {
+				return fmt.Errorf("apply initial account currency: %w", err)
+			}
+		}
+		if created.Blocked {
+			if err := lane.BlockAccount(ctx, created.Code, created.BlockReason); err != nil {
+				return fmt.Errorf("apply initial account block: %w", err)
+			}
+		}
+		return nil
+	})
+	if applyErr == nil && created.GroupCode != "" {
+		applyErr = n.applyGroupMove(ctx, eng, created.Code, "", created.GroupCode)
 	}
-	return account, nil
+	if applyErr != nil {
+		// Account retirement is not available in the SDK yet. Once the resolver
+		// alias was published, a failed initial runtime mutation is reconciled by
+		// deleting the store row and rebuilding from the surviving snapshot.
+		mutationCtx := context.WithoutCancel(ctx)
+		rollbackErr := n.realm.DeleteAccount(mutationCtx, created.Code, true)
+		cause := errors.Join(
+			fmt.Errorf("apply created account runtime state: %w", applyErr),
+			optionalOperationError("rollback created account", rollbackErr),
+		)
+		return domain.Account{}, n.reconcileEngineAfterFailure(
+			mutationCtx, "reconcile engine after account create failure", cause,
+		)
+	}
+
+	if err := n.audit(context.WithoutCancel(ctx), caller, store.AuditEntry{
+		Action:       domain.AuditActionCreateAccount,
+		Account:      created.Code,
+		AccountTitle: created.Title,
+		Detail:       fmt.Sprintf("create account %s", created.Code),
+	}); err != nil {
+		return domain.Account{}, n.fatalPostEngineAuditByCode(
+			"audit create account", "account", created.Code.String(),
+			fmt.Errorf("audit create account: %w", err),
+		)
+	}
+	return created, nil
 }
+
+func optionalOperationError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", operation, err)
+}
+
+type liveIdentityReconcileError struct {
+	cause error
+}
+
+func (e *liveIdentityReconcileError) Error() string { return e.cause.Error() }
+func (e *liveIdentityReconcileError) Unwrap() error { return e.cause }
 
 // SetAccountBlocked blocks or unblocks the account in the store, then the
 // engine, reverting the store on engine failure, and audits the action.
@@ -79,61 +143,99 @@ func (n *localNode) SetAccountBlocked(
 	if err != nil {
 		return err
 	}
-	defer done()
 
-	// Pre-lane existence check: the engine resolves the account before entering
-	// the lane and rejects an unknown code with ErrInvalid, so a missing account
-	// must be surfaced as ErrNotFound here (before the lane) or the closure below
-	// never runs to report it.
-	if _, ok, err := n.realm.GetAccount(ctx, key.Account); err != nil {
-		return fmt.Errorf("read account for block: %w", err)
-	} else if !ok {
-		return fmt.Errorf("account %q: %w", key.Account, domain.ErrNotFound)
-	}
-
-	// Serialize the prev-read, store write, engine block, revert, and audit on
-	// the one account lane so concurrent same-account admin ops cannot interleave
-	// the store write with the engine block and diverge. The lane also serializes
-	// against fills and the execution-report kill-switch, which mutate the same
-	// account's engine block state on that lane.
-	return eng.RunAccountSynchronized(ctx, key.Account, func(lane engine.AccountLane) error {
-		prev, ok, err := n.realm.GetAccount(ctx, key.Account)
-		if err != nil {
+	runErr := func() error {
+		// The engine resolves the account before entering the lane and rejects an
+		// unknown code with ErrInvalid, so surface ErrNotFound before submission.
+		if _, ok, err := n.realm.GetAccount(ctx, key.Account); err != nil {
 			return fmt.Errorf("read account for block: %w", err)
-		}
-		if !ok {
+		} else if !ok {
 			return fmt.Errorf("account %q: %w", key.Account, domain.ErrNotFound)
 		}
 
-		if err := n.realm.SetAccountBlocked(ctx, key.Account, blocked, reason); err != nil {
-			return fmt.Errorf("set account blocked: %w", err)
-		}
+		return eng.RunAccountSynchronized(
+			ctx, key.Account, func(lane engine.AccountLane) error {
+				prev, ok, err := n.realm.GetAccount(ctx, key.Account)
+				if err != nil {
+					return fmt.Errorf("read account for block: %w", err)
+				}
+				if !ok {
+					return fmt.Errorf("account %q: %w", key.Account, domain.ErrNotFound)
+				}
+				if err := n.realm.SetAccountBlocked(
+					ctx, key.Account, blocked, reason,
+				); err != nil {
+					return fmt.Errorf("set account blocked: %w", err)
+				}
 
-		if applyErr := n.applyBlock(ctx, lane, key.Account, blocked, reason); applyErr != nil {
-			// Revert the store to the previously persisted blocked state.
-			_ = n.realm.SetAccountBlocked(ctx, key.Account, prev.Blocked, prev.BlockReason)
-			return fmt.Errorf("apply account block: %w", applyErr)
-		}
+				if applyErr := n.applyBlock(
+					ctx, lane, key.Account, blocked, reason,
+				); applyErr != nil {
+					mutationCtx := context.WithoutCancel(ctx)
+					revertEngineErr := n.applyBlock(
+						mutationCtx, lane, key.Account,
+						prev.Blocked, prev.BlockReason,
+					)
+					revertStoreErr := n.realm.SetAccountBlocked(
+						mutationCtx, key.Account,
+						prev.Blocked, prev.BlockReason,
+					)
+					cause := errors.Join(
+						fmt.Errorf("apply account block: %w", applyErr),
+						optionalOperationError(
+							"revert account block runtime", revertEngineErr,
+						),
+						optionalOperationError(
+							"revert account block store", revertStoreErr,
+						),
+					)
+					if revertEngineErr != nil || revertStoreErr != nil {
+						return &liveIdentityReconcileError{cause: cause}
+					}
+					return cause
+				}
 
-		action := domain.AuditActionBlock
-		detail := fmt.Sprintf("block account %s", key.Account)
-		if !blocked {
-			action = domain.AuditActionUnblock
-			detail = fmt.Sprintf("unblock account %s", key.Account)
-		}
-		if err := n.audit(ctx, caller, store.AuditEntry{
-			Action:       action,
-			Account:      key.Account,
-			AccountTitle: prev.Title,
-			Detail:       detail,
-		}); err != nil {
-			return n.fatalPostEngineAuditByCode(
-				"audit account block", "account", key.Account.String(),
-				fmt.Errorf("audit account block: %w", err),
-			)
-		}
-		return nil
-	})
+				action := domain.AuditActionBlock
+				detail := fmt.Sprintf("block account %s", key.Account)
+				if !blocked {
+					action = domain.AuditActionUnblock
+					detail = fmt.Sprintf("unblock account %s", key.Account)
+				}
+				if err := n.audit(
+					context.WithoutCancel(ctx), caller, store.AuditEntry{
+						Action:       action,
+						Account:      key.Account,
+						AccountTitle: prev.Title,
+						Detail:       detail,
+					},
+				); err != nil {
+					return n.fatalPostEngineAuditByCode(
+						"audit account block", "account", key.Account.String(),
+						fmt.Errorf("audit account block: %w", err),
+					)
+				}
+				return nil
+			},
+		)
+	}()
+
+	var reconcileErr *liveIdentityReconcileError
+	if !errors.As(runErr, &reconcileErr) {
+		done()
+		return runErr
+	}
+	if err := n.beginEngineRestartFromLane(done); err != nil {
+		return n.fatalReconciliation(
+			"acquire account block reconciliation gate",
+			errors.Join(reconcileErr.cause, err),
+		)
+	}
+	defer n.endEngineRestart()
+	return n.reconcileEngineAfterFailure(
+		context.WithoutCancel(ctx),
+		"reconcile engine after account block failure",
+		reconcileErr.cause,
+	)
 }
 
 // applyBlock applies the desired blocked state to the engine.
@@ -237,27 +339,6 @@ func (n *localNode) mirrorPolicyConfigurationBlocks(
 	return nil
 }
 
-func (n *localNode) mirrorPolicyConfigurationPnls(
-	ctx context.Context, updates []engine.AccountPnlUpdate,
-) error {
-	ctx = context.WithoutCancel(ctx)
-	for _, update := range updates {
-		if update.Account == "" {
-			return n.fatalPostEngineAuditByCode(
-				"record policy configuration pnl", "account", "unknown",
-				fmt.Errorf("policy configuration pnl update has no account"),
-			)
-		}
-		if err := n.realm.SetAccountPnl(ctx, update.Account, update.Pnl, ""); err != nil {
-			return n.fatalPostEngineAuditByCode(
-				"record policy configuration pnl", "account", update.Account.String(),
-				fmt.Errorf("record policy configuration pnl: %w", err),
-			)
-		}
-	}
-	return nil
-}
-
 // audit appends one audit row, stamping the caller's principal and source onto
 // the entry. Every mutation routes its audit through here so attribution is
 // applied uniformly.
@@ -303,45 +384,34 @@ func (n *localNode) GetAccountState(
 // it on the engine (unregister from the old group, register into the new),
 // reverts the store on engine failure, and audits the action.
 //
-// A brand-new target group is auto-created and the engine rebuilt from the store
-// under the exclusive engine-restart gate before the lane, so the live resolver
-// knows the group when the in-lane RegisterGroup resolves it; an already-known
-// target group skips the gate and goes straight to the lane. The account move
-// itself (prev-read, store link write, engine membership move, revert, audit)
-// runs on the one account lane so concurrent same-account admin ops cannot
-// interleave and diverge.
+// A brand-new target group is persisted and published into the live resolver
+// under the identity gate. The account move itself still runs through the
+// account lane and the concrete old/new group lanes.
 func (n *localNode) SetAccountGroup(
 	ctx context.Context, key Key, groupCode string, caller domain.Caller,
 ) error {
-	// Pre-lane existence check: the engine resolves the account before entering
-	// the lane and rejects an unknown code with ErrInvalid, so a missing account
-	// must be surfaced as ErrNotFound here (before the lane) or the closure below
-	// never runs to report it.
+	if err := n.beginLiveIdentityPublication(); err != nil {
+		return err
+	}
+	defer n.endLiveIdentityPublication()
+
 	if _, ok, err := n.realm.GetAccount(ctx, key.Account); err != nil {
 		return fmt.Errorf("read account for set group: %w", err)
 	} else if !ok {
 		return fmt.Errorf("account %q: %w", key.Account, domain.ErrNotFound)
 	}
-
-	// Auto-create the target group and rebuild the engine before entering the
-	// lane, so the live resolver knows it when the in-lane RegisterGroup resolves
-	// it and so the rebuild never stops a live lane's runtime. Only a genuinely
-	// new group escalates to the gate; an existing one is already registered.
-	if err := n.ensureGroupRegisteredExclusive(ctx, groupCode); err != nil {
-		return err
-	}
-
-	eng, done, err := n.beginLane()
+	eng := n.currentEngine()
+	resolver, err := requireDictionaryResolver(eng)
 	if err != nil {
 		return err
 	}
-	defer done()
+	if groupCode != "" {
+		if _, _, err := n.ensureGroupRegisteredLocked(ctx, groupCode, resolver); err != nil {
+			return fmt.Errorf("ensure group for set: %w", err)
+		}
+	}
 
-	// Serialize the prev-read, store link write, engine membership move, revert,
-	// and audit on the one account lane. The prev.GroupCode read must live inside
-	// the lane so the unregister/register move is computed from lane-serialized
-	// state and never from a group that a concurrent move already changed.
-	return eng.RunAccountSynchronized(ctx, key.Account, func(lane engine.AccountLane) error {
+	runErr := eng.RunAccountSynchronized(ctx, key.Account, func(engine.AccountLane) error {
 		prev, ok, err := n.realm.GetAccount(ctx, key.Account)
 		if err != nil {
 			return fmt.Errorf("read account for set group: %w", err)
@@ -386,12 +456,15 @@ func (n *localNode) SetAccountGroup(
 		if applyErr := n.applyGroupMove(
 			ctx, eng, key.Account, prev.GroupCode, groupCode,
 		); applyErr != nil {
-			// Best-effort revert; the caller already surfaces the primary error.
-			_ = n.realm.SetAccountGroup(ctx, key.Account, prev.GroupCode)
-			return fmt.Errorf("apply account group: %w", applyErr)
+			revertStoreErr := n.realm.SetAccountGroup(
+				context.WithoutCancel(ctx), key.Account, prev.GroupCode,
+			)
+			return &liveIdentityReconcileError{cause: errors.Join(
+				fmt.Errorf("apply account group: %w", applyErr),
+				optionalOperationError("revert account group store", revertStoreErr),
+			)}
 		}
-
-		if err := n.audit(ctx, caller, store.AuditEntry{
+		if err := n.audit(context.WithoutCancel(ctx), caller, store.AuditEntry{
 			Action:       domain.AuditActionSetGroup,
 			Account:      key.Account,
 			AccountTitle: prev.Title,
@@ -404,39 +477,15 @@ func (n *localNode) SetAccountGroup(
 		}
 		return nil
 	})
-}
-
-// ensureGroupRegisteredExclusive auto-creates the target group record and
-// rebuilds the engine from the store under the exclusive engine-restart gate
-// when the group is not already known, so the live resolver knows it before the
-// caller enters an account lane and RegisterGroup resolves it. An empty code
-// ("no group") and an already-persisted group skip the gate: an existing store
-// group is already engine-registered because its creation rebuilt the engine.
-func (n *localNode) ensureGroupRegisteredExclusive(
-	ctx context.Context, groupCode string,
-) error {
-	if groupCode == "" {
-		return nil
+	var reconcileErr *liveIdentityReconcileError
+	if errors.As(runErr, &reconcileErr) {
+		return n.reconcileEngineAfterFailure(
+			context.WithoutCancel(ctx),
+			"reconcile engine after account group failure",
+			reconcileErr.cause,
+		)
 	}
-	if _, ok, err := n.realm.GetGroup(ctx, groupCode); err != nil {
-		return fmt.Errorf("read group for set: %w", err)
-	} else if ok {
-		return nil
-	}
-	if err := n.beginEngineRestart(); err != nil {
-		return err
-	}
-	defer n.endEngineRestart()
-
-	if err := n.ensureGroupRecordLocked(ctx, groupCode); err != nil {
-		return fmt.Errorf("ensure group record on set: %w", err)
-	}
-	// The auto-created record is unknown to the resolver until the engine is
-	// rebuilt from the store, so rebuild before the lane runs.
-	if err := n.rebuildEngineFromStore(ctx); err != nil {
-		return fmt.Errorf("rebuild engine after group ensure: %w", err)
-	}
-	return nil
+	return runErr
 }
 
 // applyGroupMove moves one account between groups on the engine. Each concrete
@@ -458,12 +507,19 @@ func (n *localNode) applyGroupMove(
 		if err := eng.RunGroupSynchronized(ctx, newGroup, func(lane engine.GroupLane) error {
 			return lane.RegisterGroup(ctx, accounts, newGroup)
 		}); err != nil {
+			var revertErr error
 			if oldGroup != "" {
-				_ = eng.RunGroupSynchronized(ctx, oldGroup, func(lane engine.GroupLane) error {
-					return lane.RegisterGroup(ctx, accounts, oldGroup)
-				})
+				mutationCtx := context.WithoutCancel(ctx)
+				revertErr = eng.RunGroupSynchronized(
+					mutationCtx, oldGroup, func(lane engine.GroupLane) error {
+						return lane.RegisterGroup(mutationCtx, accounts, oldGroup)
+					},
+				)
 			}
-			return err
+			return errors.Join(
+				err,
+				optionalOperationError("restore previous account group", revertErr),
+			)
 		}
 	}
 	return nil
@@ -494,20 +550,20 @@ func (n *localNode) SetAccountNotes(
 	return nil
 }
 
-// UpdateAccount replaces an account's public code and title, rebuilds the
-// engine resolver, and audits the change. It takes no account lane: the code
-// change is applied by a full engine rebuild (which cannot run inside a lane),
-// already serialized against every lane by the exclusive restart gate.
+// UpdateAccount replaces an account's public code and title and atomically
+// renames its live resolver alias without replacing the engine. The stable
+// EngineAccountID keeps every SDK-owned account state attached to the same
+// account while the operator-facing code changes.
 func (n *localNode) UpdateAccount(
 	ctx context.Context,
 	key Key,
 	account domain.Account,
 	caller domain.Caller,
 ) (domain.Account, error) {
-	if err := n.beginEngineRestart(); err != nil {
+	if err := n.beginLiveIdentityPublication(); err != nil {
 		return domain.Account{}, err
 	}
-	defer n.endEngineRestart()
+	defer n.endLiveIdentityPublication()
 
 	prev, ok, err := n.realm.GetAccount(ctx, key.Account)
 	if err != nil {
@@ -521,11 +577,25 @@ func (n *localNode) UpdateAccount(
 	if err != nil {
 		return domain.Account{}, fmt.Errorf("update account: %w", err)
 	}
-	if err := n.rebuildEngineFromStore(ctx); err != nil {
-		return domain.Account{},
-			fmt.Errorf("rebuild engine after account update: %w", err)
+	resolver, err := requireDictionaryResolver(n.currentEngine())
+	if err == nil {
+		err = resolver.RenameAccountResolverEntry(prev.Code, updated)
 	}
-	if err := n.audit(ctx, caller, store.AuditEntry{
+	if err != nil {
+		mutationCtx := context.WithoutCancel(ctx)
+		_, rollbackErr := n.realm.UpdateAccount(mutationCtx, updated.Code, prev)
+		if rollbackErr != nil {
+			cause := errors.Join(
+				fmt.Errorf("publish account resolver rename: %w", err),
+				fmt.Errorf("rollback account rename: %w", rollbackErr),
+			)
+			return domain.Account{}, n.reconcileEngineAfterFailure(
+				mutationCtx, "reconcile engine after account rename failure", cause,
+			)
+		}
+		return domain.Account{}, fmt.Errorf("publish account resolver rename: %w", err)
+	}
+	if err := n.audit(context.WithoutCancel(ctx), caller, store.AuditEntry{
 		Action:       domain.AuditActionUpdateAccount,
 		Account:      updated.Code,
 		AccountTitle: updated.Title,
@@ -535,13 +605,17 @@ func (n *localNode) UpdateAccount(
 			updated.Code,
 		),
 	}); err != nil {
-		return domain.Account{}, fmt.Errorf("audit update account: %w", err)
+		return domain.Account{}, n.fatalPostEngineAuditByCode(
+			"audit update account", "account", updated.Code.String(),
+			fmt.Errorf("audit update account: %w", err),
+		)
 	}
 	return updated, nil
 }
 
 // DeleteAccount removes an account from the store, rebuilds the engine from the
-// surviving rows, and audits the action.
+// surviving rows, and audits the action. Account retirement is not available
+// through the SDK runtime API yet, so this remains an intentional rebuild path.
 func (n *localNode) DeleteAccount(
 	ctx context.Context, key Key, force bool, caller domain.Caller,
 ) error {
@@ -557,19 +631,94 @@ func (n *localNode) DeleteAccount(
 	if !ok {
 		return fmt.Errorf("account %q: %w", key.Account, domain.ErrNotFound)
 	}
-	if err := n.realm.DeleteAccount(ctx, key.Account, force); err != nil {
-		return fmt.Errorf("delete account: %w", err)
+
+	snapshot, _, err := n.loadSnapshot(ctx)
+	if err != nil {
+		return fmt.Errorf("load snapshot for account delete: %w", err)
 	}
-	if err := n.rebuildEngineFromStore(ctx); err != nil {
-		return fmt.Errorf("rebuild engine after account delete: %w", err)
+	snapshot = snapshotWithoutAccount(snapshot, account.Code)
+	previousEngine := n.currentEngine()
+	next, err := n.build(snapshot)
+	if err != nil {
+		return fmt.Errorf("build engine for account delete: %w", err)
 	}
-	if err := n.audit(ctx, caller, store.AuditEntry{
+	if next == nil {
+		return fmt.Errorf("build engine for account delete returned nil")
+	}
+	if next == previousEngine {
+		return fmt.Errorf("build engine for account delete returned current engine")
+	}
+	transition, err := n.beginMarketDataTransition(next)
+	if err != nil {
+		next.Stop()
+		return fmt.Errorf("prepare account delete market data: %w", err)
+	}
+	if err := n.replayMarketDataInto(ctx, next); err != nil {
+		n.cancelMarketDataTransition(transition)
+		next.Stop()
+		return fmt.Errorf("replay market data for account delete: %w", err)
+	}
+
+	// DeleteAccount is the durable commit point. The transition flushes every
+	// provider update first, then executes this hook while both sink-routing
+	// locks are held. A failed store transaction restores the old sink route and
+	// leaves the old engine current. A successful transaction is followed only
+	// by the infallible engine/sink pointer swap.
+	durableCtx := context.WithoutCancel(ctx)
+	prev, err := n.commitMarketDataTransitionWithHook(transition, next, func() error {
+		if err := n.realm.DeleteAccount(durableCtx, account.Code, force); err != nil {
+			return fmt.Errorf("delete account: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		n.cancelMarketDataTransition(transition)
+		next.Stop()
+		return fmt.Errorf("commit account delete engine transition: %w", err)
+	}
+	if prev != nil && prev != next {
+		prev.Stop()
+	}
+	if err := n.mirrorSeedAccountBlocks(durableCtx, next); err != nil {
+		return n.fatalPostEngineAuditByCode(
+			"mirror account delete seed blocks", "account", account.Code.String(),
+			fmt.Errorf("mirror account delete seed blocks: %w", err),
+		)
+	}
+	if err := n.audit(durableCtx, caller, store.AuditEntry{
 		Action:       domain.AuditActionDeleteAccount,
-		Account:      key.Account,
+		Account:      account.Code,
 		AccountTitle: account.Title,
-		Detail:       fmt.Sprintf("delete account %s", key.Account),
+		Detail:       fmt.Sprintf("delete account %s", account.Code),
 	}); err != nil {
-		return fmt.Errorf("audit delete account: %w", err)
+		return n.fatalPostEngineAuditByCode(
+			"audit delete account", "account", account.Code.String(),
+			fmt.Errorf("audit delete account: %w", err),
+		)
 	}
 	return nil
+}
+
+func snapshotWithoutAccount(
+	snapshot engine.Snapshot, account domain.AccountID,
+) engine.Snapshot {
+	snapshot.Accounts = slices.DeleteFunc(snapshot.Accounts, func(row domain.Account) bool {
+		return row.Code == account
+	})
+	snapshot.Balances = slices.DeleteFunc(snapshot.Balances, func(row domain.Balance) bool {
+		return row.Account == account
+	})
+	snapshot.RateLimits = slices.DeleteFunc(
+		snapshot.RateLimits,
+		func(row domain.LimitRate) bool { return row.Account == account },
+	)
+	snapshot.OrderSizeLimits = slices.DeleteFunc(
+		snapshot.OrderSizeLimits,
+		func(row domain.LimitOrderSize) bool { return row.Account == account },
+	)
+	snapshot.SpotFundsPnlBoundsLimits = slices.DeleteFunc(
+		snapshot.SpotFundsPnlBoundsLimits,
+		func(row domain.LimitSpotFundsPnlBounds) bool { return row.Account == account },
+	)
+	return snapshot
 }

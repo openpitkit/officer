@@ -840,7 +840,6 @@ describe("limits client", () => {
               spotFundsPnlBounds: {
                 lowerBound: "-1000",
                 upperBound: "",
-                initialPnl: "42",
               },
             },
           },
@@ -879,7 +878,7 @@ describe("limits client", () => {
         account: "",
         accountGroup: "desk-alpha",
         asset: "",
-        values: { lower_bound: "-1000", upper_bound: "", initial_pnl: "42" },
+        values: { lower_bound: "-1000", upper_bound: "" },
       },
     ]);
   });
@@ -945,7 +944,6 @@ describe("limits client", () => {
           account: "desk-alpha",
           lowerBound: "-1000",
           upperBound: "500",
-          initialPnl: "42",
         },
       }),
     );
@@ -959,7 +957,6 @@ describe("limits client", () => {
       values: {
         lower_bound: "-1000",
         upper_bound: "500",
-        initial_pnl: "42",
       },
     });
 
@@ -973,7 +970,6 @@ describe("limits client", () => {
           accountGroup: "",
           lowerBound: "-1000",
           upperBound: "500",
-          initialPnl: "42",
         }),
       }),
     );
@@ -984,7 +980,6 @@ describe("limits client", () => {
         values: {
           lower_bound: "-1000",
           upper_bound: "500",
-          initial_pnl: "42",
         },
       }),
     );
@@ -1423,6 +1418,38 @@ describe("backup client", () => {
 });
 
 describe("market-data client settings payloads", () => {
+  it("normalizes the synthetic inverse flag to a required boolean", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        marketData: {
+          providers: [],
+          instances: [
+            {
+              externalId: "ib-1",
+              provider: "ib",
+              label: "IB Gateway",
+              enabled: true,
+              instruments: [
+                {
+                  externalSymbol: "EURUSD",
+                  syntheticInverse: true,
+                },
+                { externalSymbol: "AAPL" },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+
+    const result = await api().fetchMarketData();
+
+    expect(result.instances[0]?.instruments).toMatchObject([
+      { externalSymbol: "EURUSD", syntheticInverse: true },
+      { externalSymbol: "AAPL", syntheticInverse: false },
+    ]);
+  });
+
   it("sends provider credentials when creating an IB source", async () => {
     vi.mocked(fetch).mockResolvedValue(
       jsonResponse({

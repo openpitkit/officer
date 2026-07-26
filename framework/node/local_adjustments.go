@@ -44,9 +44,9 @@ func (n *localNode) ApplyAdjustment(
 	if err := domain.ValidateAsset(req.Asset); err != nil {
 		return domain.AccountAdjustmentRecord{}, err
 	}
-	// Auto-create the account and asset and rebuild the engine before entering
-	// the lane, so the live resolver knows them when RunAccountSynchronized
-	// resolves the account and so the rebuild never stops a live lane's runtime.
+	// Auto-create the account and asset before entering the lane and publish the
+	// new account's stable id through the live resolver, so
+	// RunAccountSynchronized can resolve it without replacing the engine.
 	if err := n.ensureAccountAndAssetsRegisteredExclusive(
 		ctx, key.Account, "adjustment", caller, req.Asset,
 	); err != nil {
@@ -67,12 +67,26 @@ func (n *localNode) ApplyAdjustment(
 
 	var stored domain.AccountAdjustmentRecord
 	if err := eng.RunAccountSynchronized(ctx, key.Account, func(lane engine.AccountLane) error {
+		requiresExistingBalance := adjustmentRequiresExistingBalance(req)
+		balanceExists := true
+		if requiresExistingBalance {
+			_, exists, err := n.realm.GetBalance(
+				ctx, key.Account, req.Asset,
+			)
+			if err != nil {
+				return fmt.Errorf("read balance before average adjustment: %w", err)
+			}
+			balanceExists = exists
+		}
 		result, err := lane.ApplyAccountAdjustment(ctx, key.Account, req)
 		if err != nil {
 			return fmt.Errorf("apply adjustment: %w", err)
 		}
 		if err := n.mirrorAdjustmentAccountBlocks(ctx, result.AccountBlocks); err != nil {
 			return err
+		}
+		if requiresExistingBalance && !balanceExists && result.Accepted != nil {
+			return domain.ErrNoChange
 		}
 		if adjustmentResultNoChange(result) {
 			return domain.ErrNoChange
@@ -394,6 +408,27 @@ func decimalZeroOrEmpty(value string) bool {
 	}
 	parsed, err := decimal.NewFromString(value)
 	return err == nil && parsed.IsZero()
+}
+
+// adjustmentRequiresExistingBalance reports adjustments that only change the
+// average entry price without creating any economic position state.
+func adjustmentRequiresExistingBalance(req domain.AdjustmentRequest) bool {
+	if req.AverageEntryPrice == "" || req.RealizedPnl != "" || req.RealizedPnlHaltReason != "" {
+		return false
+	}
+	for _, amount := range []*domain.AdjustmentAmount{req.Balance, req.Held, req.Incoming} {
+		if amount == nil {
+			continue
+		}
+		if amount.Mode != domain.AdjustmentModeAbsolute && amount.Mode != domain.AdjustmentModeDelta {
+			return false
+		}
+		value, err := decimal.NewFromString(amount.Value)
+		if err != nil || !value.IsZero() {
+			return false
+		}
+	}
+	return true
 }
 
 // balanceSettlementsFrom maps engine per-asset outcomes onto the settlement

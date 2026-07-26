@@ -39,7 +39,6 @@
     "policyNoAccountGroup": "{{policy}} 不得携带账户组",
     "rateLimitRequires": "rate_limit 需要同时指定 max_orders 和 window",
     "orderSizeRequires": "order_size_limit 需要指定 max_quantity 或 max_notional",
-    "spotFundsInitialPnlAccountOnly": "initial_pnl 仅适用于 spot_funds_pnl_bounds_kill_switch 的账户范围",
     "pnlBoundOrder": "lower_bound 必须 <= upper_bound"
   }
 }

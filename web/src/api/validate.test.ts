@@ -44,27 +44,4 @@ describe("validateLimit", () => {
       }),
     ).toBeNull();
   });
-
-  it("allows initial_pnl only on account-scoped self-computed PnL limits", () => {
-    expect(
-      validateLimit({
-        policy: "spot_funds_pnl_bounds_kill_switch",
-        scope: "account_group",
-        account: "",
-        accountGroup: "desk-a",
-        asset: "",
-        values: { lower_bound: "-1000", initial_pnl: "10" },
-      }),
-    ).toEqual({ key: "limit.spotFundsInitialPnlAccountOnly" });
-
-    expect(
-      validateLimit({
-        policy: "spot_funds_pnl_bounds_kill_switch",
-        scope: "account",
-        account: "acc-1",
-        asset: "",
-        values: { lower_bound: "-1000", initial_pnl: "10" },
-      }),
-    ).toBeNull();
-  });
 });

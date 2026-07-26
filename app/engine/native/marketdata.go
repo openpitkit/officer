@@ -81,6 +81,29 @@ func (s *marketDataSink) Push(update marketdata.QuoteUpdate) error {
 	return nil
 }
 
+// Clear removes the live quote for one instrument without unregistering its
+// stable service id. An instrument this sink has never observed is a no-op.
+func (s *marketDataSink) Clear(base, quote string) error {
+	instrument, err := instrumentFrom(base, quote)
+	if err != nil {
+		return err
+	}
+
+	key := instrumentKey{base: base, quote: quote}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id, ok := s.ids[key]
+	if !ok {
+		id, ok = s.service.Resolve(instrument)
+		if !ok {
+			return nil
+		}
+		s.ids[key] = id
+	}
+	s.service.Clear(id)
+	return nil
+}
+
 // resolveID returns the cached instrument id, registering it on first sight. A
 // concurrent first-sight register that loses the race surfaces as
 // ErrAlreadyRegistered, which is resolved to the existing id. The whole

@@ -1437,6 +1437,15 @@ function AdjustmentPanel({
   const hasAmountChange = amountFields.some(({ field }) =>
     hasValue(field.value),
   );
+  const averageEntryPriceAllowed =
+    !hasValue(avgPrice) ||
+    hasValue(realizedPnl) ||
+    balance !== undefined ||
+    amountFields.some(({ current, field }) => {
+      const result = amountResult(current, field);
+      const parsed = result === null ? null : parseDecimal(result);
+      return parsed !== null && parsed.units !== 0n;
+    });
   const amountFieldsValid = amountFields.every(({ current, field }) => {
     if (!hasValue(field.value)) {
       return true;
@@ -1471,6 +1480,7 @@ function AdjustmentPanel({
     trimAccount !== "" &&
     trimAsset !== "" &&
     hasChanges &&
+    averageEntryPriceAllowed &&
     amountFieldsValid &&
     avgPriceValid &&
     realizedPnlValid &&
@@ -1514,6 +1524,10 @@ function AdjustmentPanel({
       !allBoundsValid
     ) {
       setError(t("panel.invalidDecimal"));
+      return;
+    }
+    if (!averageEntryPriceAllowed) {
+      setError(t("panel.positionAmountRequired"));
       return;
     }
     setBusy(true);

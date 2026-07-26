@@ -670,7 +670,8 @@ func (r *realmStore) CreateGroup(
 	return group, nil
 }
 
-// GetGroup returns the group with the given code.
+// GetGroup returns the group with the given code. The persisted default-group
+// row is exposed with reserved EngineGroupID 0 rather than its SQLite row id.
 func (r *realmStore) GetGroup(
 	ctx context.Context, code string,
 ) (domain.AccountGroup, bool, error) {
@@ -680,7 +681,8 @@ func (r *realmStore) GetGroup(
 	}
 	row := db.QueryRowContext(
 		ctx,
-		`SELECT g.id, g.code, g.title, ca.code, g.notes, g.blocked,
+		`SELECT CASE WHEN g.code = '' THEN 0 ELSE g.id END,
+		        g.code, g.title, ca.code, g.notes, g.blocked,
 		        g.block_reason
 		 FROM account_group g
 		 LEFT JOIN asset ca ON ca.id = g.currency_asset_id
@@ -1083,16 +1085,14 @@ func (r *realmStore) CreateAccount(
 		}
 		return domain.Account{}, fmt.Errorf("store: create account: %w", err)
 	}
+	created, err := scanAccountRow(tx.QueryRowContext(
+		ctx, accountSelect+` WHERE a.code = ?`, account.Code.String(),
+	))
+	if err != nil {
+		return domain.Account{}, fmt.Errorf("store: read created account: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return domain.Account{}, fmt.Errorf("store: commit create account: %w", err)
-	}
-	created, ok, err := r.GetAccount(ctx, account.Code)
-	if err != nil {
-		return domain.Account{}, err
-	}
-	if !ok {
-		return domain.Account{},
-			fmt.Errorf("account %q: %w", account.Code, domain.ErrNotFound)
 	}
 	return created, nil
 }
@@ -1788,6 +1788,8 @@ func accountDependents(
 		{"adjustment", `SELECT COUNT(*) FROM adjustment WHERE account_id = ?`},
 		{"limit_rate", `SELECT COUNT(*) FROM limit_rate WHERE account_id = ?`},
 		{"limit_order_size", `SELECT COUNT(*) FROM limit_order_size WHERE account_id = ?`},
+		{"limit_spot_funds_pnl_bound", `SELECT COUNT(*)
+		 FROM limit_spot_funds_pnl_bound WHERE account_id = ?`},
 	}
 	return collectDependents(ctx, q, checks, accountID)
 }

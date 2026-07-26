@@ -39,7 +39,6 @@
     "policyNoAccountGroup": "{{policy}} must not carry an account group",
     "rateLimitRequires": "rate_limit requires both max_orders and window",
     "orderSizeRequires": "order_size_limit requires max_quantity or max_notional",
-    "spotFundsInitialPnlAccountOnly": "initial_pnl is only available for account scope on spot_funds_pnl_bounds_kill_switch",
     "pnlBoundOrder": "lower_bound must be <= upper_bound"
   }
 }

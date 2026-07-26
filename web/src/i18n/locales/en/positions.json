@@ -105,6 +105,7 @@
     "noChange": "No change",
     "invalidDecimal": "Invalid decimal",
     "noChangesError": "Enter at least one amount, average price, or bound.",
+    "positionAmountRequired": "Enter a non-zero Available, Held, or Incoming value to create a position.",
     "resetAll": "Reset all",
     "submit": "Submit adjustment",
     "saving": "Submitting",

@@ -842,6 +842,30 @@ function bestPriceLabel(
   return quote.mark || quote.bid || quote.ask;
 }
 
+function syntheticPriceLabel(
+  quote: MarketDataInstance["instruments"][number]["quote"],
+  inverseQuote: MarketDataInstance["instruments"][number]["inverseQuote"],
+): string {
+  if (!quote || !inverseQuote) return "";
+  const pairs = [
+    [quote.mark, inverseQuote.mark],
+    [quote.bid, inverseQuote.ask],
+    [quote.ask, inverseQuote.bid],
+  ];
+  for (const [received, inverse] of pairs) {
+    if (received && inverse) return `${received} -> ${inverse}`;
+  }
+  return "";
+}
+
+function displayedPriceLabel(
+  instrument: MarketDataInstance["instruments"][number],
+): string {
+  const received = bestPriceLabel(instrument.quote);
+  if (!received || !instrument.syntheticInverse) return received;
+  return syntheticPriceLabel(instrument.quote, instrument.inverseQuote) || received;
+}
+
 function diagnosticLevelVariant(
   level: string,
 ): "danger" | "warn" | "neutral" {
@@ -3240,7 +3264,7 @@ export function InstanceCard({
                     </td>
                   )}
                   <td className="nums py-2 pr-3 text-text">
-                    {bestPriceLabel(instrument.quote) || "—"}
+                    {displayedPriceLabel(instrument) || "—"}
                   </td>
                   <td className="nums py-2 pr-3 text-muted">
                     {instrument.quote ? (

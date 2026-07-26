@@ -107,14 +107,37 @@ func (r *memoryRealm) RestoreBackup(
 	data := archive.Data
 	// Mirror the real store: the normalized scope drives whether runtime data can
 	// land (Normalize force-includes the accounts+groups and market-data parents an
-	// account-addressed restore lands), and the restart signal is driven off the
-	// rows actually written, not the raw requested scope.
+	// account-addressed restore lands). The node, not the store, classifies whether
+	// the committed delta requires an engine replacement.
 	writesRuntime := opts.Scope.All || backup.TouchesRuntime(opts.Scope.Normalize())
 	if writesRuntime {
+		previousAccounts := r.accounts
+		previousGroups := r.groups
 		// Runtime sections are replaced wholesale in the test store. This is
 		// enough for LocalNode rollback/rebuild tests and keeps the fake honest
 		// about the restart signal.
 		r.restoreData(data)
+		// The real connector updates dictionary rows by code and preserves their
+		// stable engine ids in every restore mode. Keep the memory connector honest
+		// about that identity contract so online-restore tests do not manufacture an
+		// id change which SQLite never makes for a surviving code.
+		for code, account := range r.accounts {
+			if previous, ok := previousAccounts[code]; ok {
+				account.EngineAccountID = previous.EngineAccountID
+				r.accounts[code] = account
+			}
+		}
+		for code, group := range r.groups {
+			if code == "" {
+				group.EngineGroupID = 0
+				r.groups[code] = group
+				continue
+			}
+			if previous, ok := previousGroups[code]; ok {
+				group.EngineGroupID = previous.EngineGroupID
+				r.groups[code] = group
+			}
+		}
 	} else {
 		for key := range r.mcpAccess {
 			delete(r.mcpAccess, key)
@@ -130,9 +153,6 @@ func (r *memoryRealm) RestoreBackup(
 	for _, section := range opts.Scope.Normalize().IncludedSections() {
 		count := r.sectionCount(ctx, section)
 		summary.AddApplied(section, count)
-		if count > 0 && backup.RuntimeSection(section) {
-			summary.RestartRequired = true
-		}
 	}
 	return summary, nil
 }
@@ -171,8 +191,12 @@ func (r *memoryRealm) exportData(context.Context) backup.Data {
 		data.Principals = append(data.Principals, principal)
 	}
 	for _, group := range r.groups {
+		if group.Code == "" {
+			data.DefaultGroupCurrency = group.Currency
+			continue
+		}
 		data.Groups = append(data.Groups, backup.AccountGroup{
-			Code: group.Code, Title: group.Title, Notes: group.Notes,
+			Code: group.Code, Title: group.Title, Currency: group.Currency, Notes: group.Notes,
 			BlockReason: group.BlockReason, Blocked: group.Blocked,
 		})
 	}
@@ -180,6 +204,7 @@ func (r *memoryRealm) exportData(context.Context) backup.Data {
 		data.Accounts = append(data.Accounts, backup.Account{
 			Code: string(account.Code), Title: account.Title, Pnl: account.Pnl,
 			PnlHaltReason: account.PnlHaltReason,
+			Currency:      account.Currency,
 			GroupCode:     account.GroupCode, Notes: account.Notes,
 			BlockReason: account.BlockReason, Blocked: account.Blocked,
 		})
@@ -229,6 +254,7 @@ func (r *memoryRealm) exportData(context.Context) backup.Data {
 }
 
 func (r *memoryRealm) restoreData(data backup.Data) {
+	defaultGroup, hadDefaultGroup := r.groups[""]
 	r.assets = map[string]domain.Asset{}
 	for _, asset := range data.Assets {
 		r.assets[asset.Code] = asset
@@ -241,10 +267,16 @@ func (r *memoryRealm) restoreData(data backup.Data) {
 	for _, group := range data.Groups {
 		r.nextGroupID++
 		r.groups[group.Code] = domain.AccountGroup{
-			Code: group.Code, Title: group.Title, Notes: group.Notes,
+			Code: group.Code, Title: group.Title, Currency: group.Currency, Notes: group.Notes,
 			BlockReason: group.BlockReason, Blocked: group.Blocked,
 			EngineGroupID: domain.EngineGroupID(r.nextGroupID),
 		}
+	}
+	if hadDefaultGroup || data.DefaultGroupCurrency != "" {
+		defaultGroup.Code = ""
+		defaultGroup.Currency = data.DefaultGroupCurrency
+		defaultGroup.EngineGroupID = 0
+		r.groups[""] = defaultGroup
 	}
 	r.accounts = map[domain.AccountID]domain.Account{}
 	for _, account := range data.Accounts {
@@ -255,7 +287,8 @@ func (r *memoryRealm) restoreData(data backup.Data) {
 		r.nextAccountID++
 		code := domain.AccountID(account.Code)
 		r.accounts[code] = domain.Account{
-			Code: code, Title: account.Title, Pnl: pnl, PnlHaltReason: account.PnlHaltReason, GroupCode: account.GroupCode,
+			Code: code, Title: account.Title, Pnl: pnl, PnlHaltReason: account.PnlHaltReason,
+			Currency: account.Currency, GroupCode: account.GroupCode,
 			Notes: account.Notes, BlockReason: account.BlockReason,
 			Blocked: account.Blocked, EngineAccountID: r.nextAccountID,
 		}

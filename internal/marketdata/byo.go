@@ -64,14 +64,15 @@ func (c *byoConnector) Subscribe(
 }
 
 // Push forwards one quote onto the subscription channel. After Close it is a
-// no-op, so a late push never panics. The send races done so a closed connector
-// (consumer gone) never blocks the producer. The in-flight count registered
-// under the lock guarantees Close cannot close the channel mid-send.
-func (c *byoConnector) Push(update QuoteUpdate) {
+// no-op, so a late push never panics. The send races done and ctx so a closed
+// connector or unavailable consumer never blocks the producer indefinitely.
+// The in-flight count registered under the lock guarantees Close cannot close
+// the channel mid-send.
+func (c *byoConnector) Push(ctx context.Context, update QuoteUpdate) error {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
-		return
+		return nil
 	}
 	c.wg.Add(1)
 	c.mu.Unlock()
@@ -79,7 +80,11 @@ func (c *byoConnector) Push(update QuoteUpdate) {
 
 	select {
 	case <-c.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	case c.ch <- update:
+		return nil
 	}
 }
 

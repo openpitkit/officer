@@ -48,6 +48,8 @@ type fakeNode struct {
 
 	putRateLimitCalls               []domain.LimitRate
 	putOrderSizeLimitCalls          []domain.LimitOrderSize
+	putRateLimitHook                func()
+	putOrderSizeLimitHook           func()
 	putSpotFundsPnlBoundsLimitCalls []domain.LimitSpotFundsPnlBounds
 	deleteLimitCalls                []node.LimitTarget
 	createAssetCalls                []domain.Asset
@@ -488,6 +490,9 @@ func (n *fakeNode) ListPolicyRows(
 func (n *fakeNode) PutRateLimit(
 	_ context.Context, limit domain.LimitRate, _ domain.Caller,
 ) (marketdata.Sink, error) {
+	if n.putRateLimitHook != nil {
+		n.putRateLimitHook()
+	}
 	n.putRateLimitCalls = append(n.putRateLimitCalls, limit)
 	return n.restoreSink, nil
 }
@@ -495,6 +500,9 @@ func (n *fakeNode) PutRateLimit(
 func (n *fakeNode) PutOrderSizeLimit(
 	_ context.Context, limit domain.LimitOrderSize, _ domain.Caller,
 ) (marketdata.Sink, error) {
+	if n.putOrderSizeLimitHook != nil {
+		n.putOrderSizeLimitHook()
+	}
 	n.putOrderSizeLimitCalls = append(n.putOrderSizeLimitCalls, limit)
 	return n.restoreSink, nil
 }
@@ -1386,6 +1394,7 @@ type fakeMarketDataRuntime struct {
 	applied    map[string]marketdata.AppliedInstanceConfig
 	intervals  map[string]time.Duration
 	pushed     []domain.MarketDataInstrument
+	pushErr    error
 	restarts   int
 	stops      int
 	sink       marketdata.Sink
@@ -1434,9 +1443,10 @@ func (r *fakeMarketDataRuntime) UseSink(sink marketdata.Sink) error {
 }
 
 func (r *fakeMarketDataRuntime) PushManual(
-	_ string, instrument domain.MarketDataInstrument,
-) {
+	_ context.Context, _ string, instrument domain.MarketDataInstrument,
+) error {
 	r.pushed = append(r.pushed, instrument)
+	return r.pushErr
 }
 
 func newTestService() (*backend.Service, *fakeNode) {

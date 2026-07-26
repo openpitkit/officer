@@ -96,8 +96,9 @@ type LimitTarget struct {
 // engine and the bound realm store. Every mutation follows one protocol (see
 // localNode): the store is the source of truth and is written first, the engine
 // is applied from persisted state, the store is reverted on engine failure, and
-// an audit row is appended last. Runtime administrative changes rebuild the
-// engine and reject new mutating requests while the rebuild is in progress.
+// an audit row is appended last. Administrative resets/restores and transitions
+// the SDK cannot express online rebuild the engine and reject new mutating
+// requests while the rebuild is in progress.
 type Node interface {
 	// Health returns the current aggregate health of the node's engine and
 	// store.
@@ -142,9 +143,9 @@ type Node interface {
 	ResetDatabase(ctx context.Context, caller domain.Caller) (marketdata.Sink, error)
 
 	// CurrentMarketDataSink returns the quote sink of the node's current engine.
-	// The engine is rebuilt (and its market-data service replaced) by account,
-	// group, restore, and reset mutations, so the market-data runtime must
-	// re-adopt this sink on restart rather than caching one across a rebuild.
+	// Administrative and SDK-required rebuilds replace the market-data service, so
+	// the market-data runtime must re-adopt the returned/current sink rather than
+	// caching one across a rebuild. Normal account and group mutations stay online.
 	CurrentMarketDataSink() marketdata.Sink
 
 	// ListAssets returns every persisted asset.
@@ -219,7 +220,7 @@ type Node interface {
 	SetAccountNotes(ctx context.Context, key Key, notes string, caller domain.Caller) error
 
 	// UpdateAccount replaces the account's public code and display title in the
-	// store, rebuilds the engine resolver, and audits the action.
+	// store, publishes the alias change to the live resolver, and audits the action.
 	UpdateAccount(
 		ctx context.Context,
 		key Key,
@@ -305,8 +306,8 @@ type Node interface {
 	// SetDefaultGroupCurrency sets or clears the reserved default group currency.
 	SetDefaultGroupCurrency(ctx context.Context, currency string, caller domain.Caller) error
 
-	// UpdateGroup replaces the group's public code and display title in the
-	// store, rebuilds the engine resolver, and audits the action.
+	// UpdateGroup replaces the group's public code and display title in the store,
+	// publishes the alias change to the live resolver, and audits the action.
 	UpdateGroup(
 		ctx context.Context,
 		oldCode string,

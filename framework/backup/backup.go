@@ -142,18 +142,17 @@ type RestoreOptions struct {
 	Mode RestoreMode `json:"mode"`
 }
 
-// RestoreSummary reports the restore outcome per section. RestartRequired is the
-// engine-rebuild signal: it is true when the restore touched runtime-affecting
-// state (accounts/groups, positions, limits or market data), telling the node to
-// rebuild the live engine and reconnect the market-data sinks from the restored
-// store. It is the same signal a touched-runtime restore raised before the
-// portable rebuild; only the identity it carries changed.
+// RestoreSummary reports the restore outcome per section. RestartRequired is
+// true only when the node actually replaced the engine because the restored
+// delta crossed a lifecycle boundary the live adapter cannot publish online.
+// Restarting the market-data manager is a separate control-plane concern and
+// does not set this field.
 type RestoreSummary struct {
 	// Applied counts the rows written per section.
 	Applied map[Section]int `json:"applied"`
 	// Skipped counts the rows skipped per section (insert-missing collisions).
 	Skipped map[Section]int `json:"skipped"`
-	// RestartRequired is the engine-rebuild signal for a touched-runtime restore.
+	// RestartRequired reports that this restore actually replaced the engine.
 	RestartRequired bool `json:"restartRequired"`
 }
 
@@ -397,11 +396,11 @@ func Filename(createdAt time.Time) string {
 		createdAt.UTC().Format("20060102T150405Z") + ".json"
 }
 
-// RuntimeSection reports whether restoring section changes live runtime state,
-// so a restore that writes at least one of its rows must rebuild the engine and
-// reconnect the market-data sinks. The accounts+groups, positions, risk-limits
-// and market-data sections are projected into the live engine resolver; general/
-// user settings, activity history and the audit log are observational.
+// RuntimeSection reports whether restoring section changes live runtime state.
+// The accounts+groups, positions, risk-limits and market-data sections are
+// projected into the live engine; general/user settings, activity history and
+// the audit log are observational. A runtime delta can usually be published
+// online and does not by itself imply an engine replacement.
 //
 // The shared support dictionaries (asset classes, assets, principals) are NOT a
 // runtime section: they travel with every restore for foreign-key resolution but
@@ -419,19 +418,18 @@ func RuntimeSection(section Section) bool {
 	}
 }
 
-// TouchesRuntime reports whether restoring scope changes live runtime state and
-// therefore requires the engine to be rebuilt and the market-data sinks
-// reconnected. It is the scope-level half of the engine-rebuild signal.
+// TouchesRuntime reports whether restoring scope can change live runtime state.
+// The node uses this to select its synchronization gate. The backend plans any
+// market-data-manager lifecycle separately from the actual configuration delta.
 //
 // It evaluates the sections carried in scope as given. Passed the caller's raw
 // requested scope it answers "did the caller ask for a runtime section"; passed
 // scope.Normalize() it answers "could this restore write a runtime dictionary",
 // since Normalize force-includes the accounts+groups (and market-data) parent
 // sections an account-addressed restore lands to keep foreign keys resolving. The
-// node and backend decide the restore lock and market-data reconnect from the
-// normalized scope so any runtime write runs under the exclusive gate; the store
-// reports RestartRequired from the rows actually applied, so a force-included
-// parent that inserts nothing does not needlessly rebuild.
+// node decides the restore lock from the normalized scope so any runtime write
+// runs under the exclusive gate. It then classifies the actual delta and replaces
+// the engine only for residual lifecycle gaps.
 func TouchesRuntime(scope Scope) bool {
 	if scope.All {
 		return true

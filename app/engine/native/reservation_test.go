@@ -26,7 +26,6 @@ package native
 import (
 	"context"
 	"errors"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -94,7 +93,7 @@ func newTestEngine(t *testing.T) *openPitEngine {
 		t.Fatalf("build engine: %v", err)
 	}
 	adapter := newOpenPitEngine(
-		eng, testAsyncEngine(t, eng), service, registered, nil, nil, nil, res,
+		eng, testAsyncEngine(t, eng), service, registered, nil, res,
 	).(*openPitEngine)
 	t.Cleanup(adapter.Stop)
 
@@ -129,12 +128,397 @@ func newUnpricedTestEngine(t *testing.T) *openPitEngine {
 		nil,
 		map[string]struct{}{},
 		nil,
-		nil,
-		nil,
 		res,
 	).(*openPitEngine)
 	t.Cleanup(adapter.Stop)
 	return adapter
+}
+
+func TestOpenPitEngineDictionaryResolverMutationsKeepHandleAndSink(t *testing.T) {
+	e := newTestEngine(t)
+	var resolver engine.DictionaryResolver = e
+	engineBefore := e.eng
+	asyncBefore := e.async
+	sinkBefore := e.MarketDataSink()
+
+	account := domain.Account{Code: "added-account", EngineAccountID: 42}
+	if err := resolver.AddAccountResolverEntry(account); err != nil {
+		t.Fatalf("AddAccountResolverEntry: %v", err)
+	}
+	accountLaneRan := false
+	if err := e.RunAccountSynchronized(
+		context.Background(), account.Code, func(engine.AccountLane) error {
+			accountLaneRan = true
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("RunAccountSynchronized after add: %v", err)
+	}
+	if !accountLaneRan {
+		t.Fatal("account resolver entry was not published before lane submission")
+	}
+
+	group := domain.AccountGroup{Code: "added-group", EngineGroupID: 43}
+	if err := resolver.AddGroupResolverEntry(group); err != nil {
+		t.Fatalf("AddGroupResolverEntry: %v", err)
+	}
+	if err := e.RunGroupSynchronized(
+		context.Background(), group.Code, func(engine.GroupLane) error { return nil },
+	); err != nil {
+		t.Fatalf("RunGroupSynchronized after add: %v", err)
+	}
+
+	renamedAccount := account
+	renamedAccount.Code = "renamed-account"
+	if err := resolver.RenameAccountResolverEntry(account.Code, renamedAccount); err != nil {
+		t.Fatalf("RenameAccountResolverEntry: %v", err)
+	}
+	if err := e.RunAccountSynchronized(
+		context.Background(), renamedAccount.Code, func(engine.AccountLane) error { return nil },
+	); err != nil {
+		t.Fatalf("RunAccountSynchronized after rename: %v", err)
+	}
+	if err := e.RunAccountSynchronized(
+		context.Background(), account.Code, func(engine.AccountLane) error { return nil },
+	); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("old account alias error = %v, want ErrInvalid", err)
+	}
+
+	renamedGroup := group
+	renamedGroup.Code = "renamed-group"
+	if err := resolver.RenameGroupResolverEntry(group.Code, renamedGroup); err != nil {
+		t.Fatalf("RenameGroupResolverEntry: %v", err)
+	}
+	if err := e.RunGroupSynchronized(
+		context.Background(), renamedGroup.Code, func(engine.GroupLane) error { return nil },
+	); err != nil {
+		t.Fatalf("RunGroupSynchronized after rename: %v", err)
+	}
+	if err := e.RunGroupSynchronized(
+		context.Background(), group.Code, func(engine.GroupLane) error { return nil },
+	); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("old group alias error = %v, want ErrInvalid", err)
+	}
+	if err := resolver.RemoveGroupResolverEntry(renamedGroup); err != nil {
+		t.Fatalf("RemoveGroupResolverEntry: %v", err)
+	}
+	if err := e.RunGroupSynchronized(
+		context.Background(), renamedGroup.Code, func(engine.GroupLane) error { return nil },
+	); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("removed group alias error = %v, want ErrInvalid", err)
+	}
+
+	if e.eng != engineBefore || e.async != asyncBefore {
+		t.Fatal("resolver mutation replaced the engine handle or async dispatcher")
+	}
+	if got := e.MarketDataSink(); got != sinkBefore {
+		t.Fatal("resolver mutation replaced MarketDataSink")
+	}
+}
+
+func TestGroupLaneCurrencyNamedAndDefaultKeepHandleAndSink(t *testing.T) {
+	e := newTestEngine(t)
+	ctx := context.Background()
+	engineBefore := e.eng
+	asyncBefore := e.async
+	sinkBefore := e.MarketDataSink()
+
+	group := domain.AccountGroup{Code: "currency-group", EngineGroupID: 44}
+	if err := e.AddGroupResolverEntry(group); err != nil {
+		t.Fatalf("AddGroupResolverEntry: %v", err)
+	}
+	for _, alias := range []string{group.Code, ""} {
+		if err := e.RunGroupSynchronized(
+			ctx, alias, func(lane engine.GroupLane) error {
+				if err := lane.SetGroupCurrency(ctx, alias, "USD"); err != nil {
+					return err
+				}
+				return lane.ClearGroupCurrency(ctx, alias)
+			},
+		); err != nil {
+			t.Fatalf("set and clear group currency %q: %v", alias, err)
+		}
+	}
+
+	if e.eng != engineBefore || e.async != asyncBefore {
+		t.Fatal("group currency mutation replaced engine handle or async dispatcher")
+	}
+	if got := e.MarketDataSink(); got != sinkBefore {
+		t.Fatal("group currency mutation replaced MarketDataSink")
+	}
+}
+
+func TestQueuedAccountLaneKeepsRoutedIDAcrossAliasReuse(t *testing.T) {
+	e := newTestEngine(t)
+	ctx := context.Background()
+	oldAlias := domain.AccountID(testAccount)
+	routedID, err := e.res.account(oldAlias)
+	if err != nil {
+		t.Fatalf("resolve routed account: %v", err)
+	}
+	lane := accountLane{
+		owner: e, eng: e.eng, accountAlias: oldAlias, accountID: routedID,
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	first := e.async.Submit(ctx, routedID, func() error {
+		close(started)
+		<-release
+		return nil
+	})
+	<-started
+	queued := e.async.Submit(ctx, routedID, func() error {
+		return lane.BlockAccount(ctx, oldAlias, "queued block")
+	})
+
+	renamed := domain.Account{Code: "renamed-account", EngineAccountID: 1}
+	if err := e.RenameAccountResolverEntry(oldAlias, renamed); err != nil {
+		t.Fatalf("rename account resolver entry: %v", err)
+	}
+	const reusedEngineID domain.EngineAccountID = 42
+	if err := e.AddAccountResolverEntry(domain.Account{
+		Code: oldAlias, EngineAccountID: reusedEngineID,
+	}); err != nil {
+		t.Fatalf("reuse old account alias: %v", err)
+	}
+	close(release)
+	if _, err := first.Await(ctx); err != nil {
+		t.Fatalf("first account lane: %v", err)
+	}
+	if _, err := queued.Await(ctx); err != nil {
+		t.Fatalf("queued account lane: %v", err)
+	}
+
+	if err := e.eng.Accounts().ReplaceBlockReason(routedID, "routed"); err != nil {
+		t.Fatalf("queued work did not block routed account id: %v", err)
+	}
+	reusedID := param.NewAccountIDFromUint64(reusedEngineID.Uint64())
+	if err := e.eng.Accounts().ReplaceBlockReason(reusedID, "reused"); err == nil {
+		t.Fatal("queued work was redirected to the reused account alias")
+	}
+	if err := e.RunAccountSynchronized(
+		ctx, renamed.Code, func(lane engine.AccountLane) error {
+			return lane.UnblockAccount(ctx, renamed.Code)
+		},
+	); err != nil {
+		t.Fatalf("new work through renamed account alias: %v", err)
+	}
+	if err := e.eng.Accounts().ReplaceBlockReason(routedID, "still blocked"); err == nil {
+		t.Fatal("renamed alias did not route new work to the stable account id")
+	}
+}
+
+func TestQueuedGroupLaneKeepsRoutedIDAcrossAliasReuse(t *testing.T) {
+	e := newTestEngine(t)
+	ctx := context.Background()
+	oldAlias := "group-old"
+	group := domain.AccountGroup{Code: oldAlias, EngineGroupID: 9}
+	if err := e.AddGroupResolverEntry(group); err != nil {
+		t.Fatalf("add group resolver entry: %v", err)
+	}
+	routedID, err := e.res.group(oldAlias)
+	if err != nil {
+		t.Fatalf("resolve routed group: %v", err)
+	}
+	lane := groupLane{
+		owner: e, eng: e.eng,
+		accountIDs: e.res.accountIDSnapshot(),
+		groupAlias: oldAlias,
+		groupID:    routedID,
+	}
+	routingKey := groupRoutingKey(routedID)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	first := e.async.Submit(ctx, routingKey, func() error {
+		close(started)
+		<-release
+		return nil
+	})
+	<-started
+	queued := e.async.Submit(ctx, routingKey, func() error {
+		capturedID, err := lane.routedGroupID(oldAlias)
+		if err != nil {
+			return err
+		}
+		if capturedID.Handle() != routedID.Handle() {
+			return errors.New("queued group lane lost its captured numeric id")
+		}
+		if err := lane.SetGroupCurrency(ctx, oldAlias, "EUR"); err != nil {
+			return err
+		}
+		if err := lane.RegisterGroup(
+			ctx, []domain.AccountID{testAccount}, oldAlias,
+		); err != nil {
+			return err
+		}
+		return lane.BlockGroup(ctx, oldAlias, "queued block")
+	})
+
+	renamedAccount := domain.Account{Code: "account-new", EngineAccountID: 1}
+	if err := e.RenameAccountResolverEntry(testAccount, renamedAccount); err != nil {
+		t.Fatalf("rename account resolver entry: %v", err)
+	}
+	if err := e.AddAccountResolverEntry(domain.Account{
+		Code: testAccount, EngineAccountID: 42,
+	}); err != nil {
+		t.Fatalf("reuse old account alias: %v", err)
+	}
+	renamed := group
+	renamed.Code = "group-new"
+	if err := e.RenameGroupResolverEntry(oldAlias, renamed); err != nil {
+		t.Fatalf("rename group resolver entry: %v", err)
+	}
+	const reusedEngineID domain.EngineGroupID = 10
+	if err := e.AddGroupResolverEntry(domain.AccountGroup{
+		Code: oldAlias, EngineGroupID: reusedEngineID,
+	}); err != nil {
+		t.Fatalf("reuse old group alias: %v", err)
+	}
+	close(release)
+	if _, err := first.Await(ctx); err != nil {
+		t.Fatalf("first group lane: %v", err)
+	}
+	if _, err := queued.Await(ctx); err != nil {
+		t.Fatalf("queued group lane: %v", err)
+	}
+
+	if err := e.eng.Accounts().ReplaceGroupBlockReason(routedID, "routed"); err != nil {
+		t.Fatalf("queued work did not block routed group id: %v", err)
+	}
+	reusedID, err := param.NewAccountGroupIDFromUint32(reusedEngineID.Uint32())
+	if err != nil {
+		t.Fatalf("reused group id: %v", err)
+	}
+	if err := e.eng.Accounts().ReplaceGroupBlockReason(reusedID, "reused"); err == nil {
+		t.Fatal("queued work was redirected to the reused group alias")
+	}
+	order := testOrder()
+	order.Account = renamedAccount.Code
+	result, err := e.SubmitOrder(ctx, order)
+	if err != nil {
+		t.Fatalf("submit order through renamed account alias: %v", err)
+	}
+	if result.Accepted {
+		t.Fatal("queued group registration was redirected to the reused account alias")
+	}
+	if err := e.RunGroupSynchronized(
+		ctx, renamed.Code, func(lane engine.GroupLane) error {
+			if err := lane.UnregisterGroup(
+				ctx, []domain.AccountID{renamedAccount.Code}, renamed.Code,
+			); err != nil {
+				return err
+			}
+			return lane.UnblockGroup(ctx, renamed.Code)
+		},
+	); err != nil {
+		t.Fatalf("new work through renamed group alias: %v", err)
+	}
+	if err := e.eng.Accounts().ReplaceGroupBlockReason(routedID, "still blocked"); err == nil {
+		t.Fatal("renamed alias did not route new work to the stable group id")
+	}
+}
+
+func TestRunGroupSynchronizedWaitsForCallbackAfterCallerCancellation(t *testing.T) {
+	e := newTestEngine(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	callbackEntered := make(chan struct{})
+	callbackRelease := make(chan struct{})
+	result := make(chan error, 1)
+	callbackErr := errors.New("group callback result")
+
+	go func() {
+		result <- e.RunGroupSynchronized(
+			ctx, "", func(engine.GroupLane) error {
+				close(callbackEntered)
+				<-callbackRelease
+				return callbackErr
+			},
+		)
+	}()
+	<-callbackEntered
+	cancel()
+
+	select {
+	case err := <-result:
+		t.Fatalf("RunGroupSynchronized returned before callback completed: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	close(callbackRelease)
+	select {
+	case err := <-result:
+		if !errors.Is(err, callbackErr) {
+			t.Fatalf("RunGroupSynchronized error = %v, want callback result", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RunGroupSynchronized did not return after callback completed")
+	}
+}
+
+func TestAccountLaneSetAccountPnlState(t *testing.T) {
+	e := newTestEngine(t)
+	ctx := context.Background()
+	sinkBefore := e.MarketDataSink()
+	engineBefore := e.eng
+
+	var numericBlocks []domain.AccountBlock
+	if err := e.RunAccountSynchronized(
+		ctx, testAccount, func(lane engine.AccountLane) error {
+			var err error
+			numericBlocks, err = lane.SetAccountPnlState(ctx, testAccount, "2.5", "")
+			return err
+		},
+	); err != nil {
+		t.Fatalf("numeric SetAccountPnlState: %v", err)
+	}
+	if len(numericBlocks) != 0 {
+		t.Fatalf("numeric SetAccountPnlState blocks = %v, want none", numericBlocks)
+	}
+
+	var haltedBlocks []domain.AccountBlock
+	if err := e.RunAccountSynchronized(
+		ctx, testAccount, func(lane engine.AccountLane) error {
+			var err error
+			haltedBlocks, err = lane.SetAccountPnlState(
+				ctx, testAccount, "", domain.PnlHaltReasonMissingFx,
+			)
+			return err
+		},
+	); err != nil {
+		t.Fatalf("halted SetAccountPnlState: %v", err)
+	}
+	if len(haltedBlocks) != 0 {
+		t.Fatalf("halted SetAccountPnlState blocks = %+v, want none", haltedBlocks)
+	}
+
+	for _, test := range []struct {
+		name       string
+		pnl        string
+		haltReason domain.PnlHaltReason
+	}{
+		{name: "both", pnl: "1", haltReason: domain.PnlHaltReasonMissingFx},
+		{name: "empty"},
+		{name: "unknown reason", haltReason: "unknown"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := e.RunAccountSynchronized(
+				ctx, testAccount, func(lane engine.AccountLane) error {
+					_, err := lane.SetAccountPnlState(
+						ctx, testAccount, test.pnl, test.haltReason,
+					)
+					return err
+				},
+			)
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("SetAccountPnlState error = %v, want ErrInvalid", err)
+			}
+		})
+	}
+	if e.eng != engineBefore || e.MarketDataSink() != sinkBefore {
+		t.Fatal("SetAccountPnlState replaced the engine or MarketDataSink")
+	}
 }
 
 // testOrder is a limit buy that costs 500 quote, so a 1000-quote balance funds
@@ -189,10 +573,9 @@ func TestSubmitImmediate_NetsHeldToZero(t *testing.T) {
 		t.Fatalf("quote outcome = %+v, want reservation and settlement held effects netted to zero",
 			quote)
 	}
-	if res.AccountPnl != "" ||
-		res.AccountPnlHaltReason != domain.PnlHaltReasonMissingAccountCurrency {
+	if res.AccountPnl != "" || res.AccountPnlHaltReason != "" {
 		t.Fatalf(
-			"account pnl outcome = (%q, %q), want missing-account-currency halt",
+			"account pnl outcome = (%q, %q), want no opening-fill P&L outcome",
 			res.AccountPnl,
 			res.AccountPnlHaltReason,
 		)
@@ -285,7 +668,7 @@ func TestSubmitImmediate_SellCarriesReservationBaseBalance(t *testing.T) {
 	}
 }
 
-func TestSubmitImmediate_CarriesAuthoritativeAccountPnl(t *testing.T) {
+func TestSubmitImmediate_OpeningFillDoesNotEmitNoopAccountPnl(t *testing.T) {
 	acct := account(testAccount)
 	acct.Currency = testQuote
 	acct.EffectiveCurrency = testQuote
@@ -310,9 +693,9 @@ func TestSubmitImmediate_CarriesAuthoritativeAccountPnl(t *testing.T) {
 	if !res.Accepted {
 		t.Fatalf("SubmitImmediate rejected: %+v", res.Rejects)
 	}
-	if res.AccountPnl != "7.25" || res.AccountPnlHaltReason != "" {
+	if res.AccountPnl != "" || res.AccountPnlHaltReason != "" {
 		t.Fatalf(
-			"account pnl outcome = (%q, %q), want authoritative 7.25",
+			"account pnl outcome = (%q, %q), want no opening-fill P&L outcome",
 			res.AccountPnl,
 			res.AccountPnlHaltReason,
 		)
@@ -449,13 +832,14 @@ func TestBuildOpenPitEngine_SeedsAccountPnlWithoutPnlBounds(t *testing.T) {
 	eng.Stop()
 }
 
-func TestBuildOpenPitEngine_PersistedPnlAvoidsStaleInitialPnlBlock(t *testing.T) {
+func TestBuildOpenPitEngine_PersistedPnlKeepsBoundsClear(t *testing.T) {
 	acct := account(testAccount)
 	acct.Currency = testQuote
 	acct.Pnl = "5"
 	limits := []domain.LimitSpotFundsPnlBounds{{
-		Scope: domain.ScopeAccount, Account: testAccount,
-		LowerBound: "-3", InitialPnl: "-5",
+		Scope:      domain.ScopeAccount,
+		Account:    testAccount,
+		LowerBound: "-3",
 	}}
 	built, err := BuildOpenPitEngine("", Snapshot{
 		Accounts: []domain.Account{acct}, SpotFundsPnlBoundsLimits: limits,
@@ -466,7 +850,7 @@ func TestBuildOpenPitEngine_PersistedPnlAvoidsStaleInitialPnlBlock(t *testing.T)
 	eng := built.(*openPitEngine)
 	t.Cleanup(eng.Stop)
 	if blocks := eng.SeedAccountBlocks(); len(blocks) != 0 {
-		t.Fatalf("seed blocks = %+v, want persisted +5 to override blocking initial -5", blocks)
+		t.Fatalf("seed blocks = %+v, want persisted +5 to stay clear of -3", blocks)
 	}
 	result, err := eng.ConfigurePolicy(
 		context.Background(),
@@ -476,8 +860,8 @@ func TestBuildOpenPitEngine_PersistedPnlAvoidsStaleInitialPnlBlock(t *testing.T)
 	if err != nil {
 		t.Fatalf("ConfigurePolicy unchanged after restart: %v", err)
 	}
-	if len(result.AccountPnlUpdates) != 0 {
-		t.Fatalf("unchanged restart config reseeded persisted P&L: %+v", result.AccountPnlUpdates)
+	if len(result.AccountBlocks) != 0 {
+		t.Fatalf("unchanged restart config blocks = %+v, want none", result.AccountBlocks)
 	}
 }
 
@@ -489,7 +873,6 @@ func TestSpotFundsAccountPnlSeeds_RestoresHaltedAccountPnl(t *testing.T) {
 	acct.PnlHaltReason = domain.PnlHaltReasonMissingFx
 	seeds, err := spotFundsAccountPnlSeeds(
 		[]domain.Account{acct, {Code: "no-override"}},
-		nil,
 		testResolver(testAccount, "no-override"),
 	)
 	if err != nil {
@@ -507,15 +890,11 @@ func TestSpotFundsAccountPnlSeeds_RestoresHaltedAccountPnl(t *testing.T) {
 	}
 }
 
-func TestSpotFundsAccountPnlSeeds_PersistedStateOverridesInitialPnl(t *testing.T) {
+func TestSpotFundsAccountPnlSeeds_RestoresPersistedNumericAccountPnl(t *testing.T) {
 	acct := account(testAccount)
 	acct.Pnl = "7.25"
-	limits := []domain.LimitSpotFundsPnlBounds{{
-		Scope: domain.ScopeAccount, Account: testAccount,
-		LowerBound: "-100", InitialPnl: "-50",
-	}}
 	seeds, err := spotFundsAccountPnlSeeds(
-		[]domain.Account{acct}, limits, testResolver(testAccount),
+		[]domain.Account{acct}, testResolver(testAccount),
 	)
 	if err != nil {
 		t.Fatalf("spotFundsAccountPnlSeeds: %v", err)
@@ -630,6 +1009,7 @@ func newTestEngineWithSpotFundsPnlBounds(t *testing.T) *openPitEngine {
 	acct := account(testAccount)
 	acct.Currency = testQuote
 	acct.GroupCode = "desk-a"
+	acct.Pnl = "-5"
 	snap := Snapshot{
 		Accounts: []domain.Account{acct},
 		Groups: []domain.AccountGroup{{
@@ -663,7 +1043,6 @@ func newTestEngineWithSpotFundsPnlBounds(t *testing.T) *openPitEngine {
 				Scope:      domain.ScopeAccount,
 				Account:    domain.AccountID(testAccount),
 				LowerBound: "-6",
-				InitialPnl: "-5",
 			},
 		},
 	}
@@ -676,7 +1055,7 @@ func newTestEngineWithSpotFundsPnlBounds(t *testing.T) *openPitEngine {
 	return adapter
 }
 
-func TestSpotFundsPnlBoundsBuildConfiguresBasePolicyAndSeed(t *testing.T) {
+func TestSpotFundsPnlBoundsBuildConfiguresBasePolicyAndAccountPnl(t *testing.T) {
 	e := newTestEngineWithSpotFundsPnlBounds(t)
 	ctx := context.Background()
 
@@ -859,9 +1238,9 @@ func commitSpotFundsFeeFill(t *testing.T, e *openPitEngine) ExecutionReportResul
 }
 
 // TestConfigurePolicy_SpotFundsPnlBoundsNewAccountBarrierPreservesLivePnl proves
-// that adding an account-scope barrier with no initial_pnl at runtime does not
-// reset the account's live accumulated P&L: the barrier arms against P&L already
-// accrued rather than starting from zero.
+// that adding an account-scope barrier at runtime does not reset the account's
+// live accumulated P&L: the barrier arms against P&L already accrued rather
+// than starting from zero.
 func TestConfigurePolicy_SpotFundsPnlBoundsNewAccountBarrierPreservesLivePnl(t *testing.T) {
 	e := newTestEngineGlobalSpotFundsPnlBounds(t)
 	ctx := context.Background()
@@ -872,8 +1251,8 @@ func TestConfigurePolicy_SpotFundsPnlBoundsNewAccountBarrierPreservesLivePnl(t *
 		t.Fatalf("first fill blocked unexpectedly: %+v", first.Blocks)
 	}
 
-	// Introduce an account-scope barrier with no initial_pnl. It must not reset
-	// the -2 already accrued, so its -3 lower bound stays armed against live P&L.
+	// Introduce an account-scope barrier. It must not reset the -2 already
+	// accrued, so its -3 lower bound stays armed against live P&L.
 	limits := LimitSet{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
 		{
 			Scope:      domain.ScopeGlobal,
@@ -901,131 +1280,10 @@ func TestConfigurePolicy_SpotFundsPnlBoundsNewAccountBarrierPreservesLivePnl(t *
 	second := commitSpotFundsFeeFill(t, e)
 	if len(second.Blocks) == 0 {
 		t.Fatal("account barrier did not block on preserved live P&L; " +
-			"an empty initial_pnl reset the accumulator")
+			"ConfigurePolicy reset the accumulator")
 	}
 	if second.Blocks[0].Account != domain.AccountID(testAccount) {
 		t.Fatalf("block account = %q, want %q", second.Blocks[0].Account, testAccount)
-	}
-}
-
-// TestConfigurePolicy_SpotFundsPnlBoundsNewAccountBarrierExplicitInitialPnlSeeds
-// proves that an explicit initial_pnl on an account-scope barrier added at
-// runtime still force-sets the live accumulated P&L, overriding what had already
-// accrued.
-func TestConfigurePolicy_SpotFundsPnlBoundsNewAccountBarrierExplicitInitialPnlSeeds(t *testing.T) {
-	e := newTestEngineGlobalSpotFundsPnlBounds(t)
-	ctx := context.Background()
-
-	if first := commitSpotFundsFeeFill(t, e); len(first.Blocks) != 0 {
-		t.Fatalf("first fill blocked unexpectedly: %+v", first.Blocks)
-	}
-
-	// An explicit initial_pnl reseeds the live accumulator to +5, discarding the
-	// -2 already accrued.
-	limits := LimitSet{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
-		{
-			Scope:      domain.ScopeGlobal,
-			LowerBound: "-1000000",
-		},
-		{
-			Scope:        domain.ScopeAccountGroup,
-			AccountGroup: "desk-a",
-			LowerBound:   "-1000000",
-		},
-		{
-			Scope:      domain.ScopeAccount,
-			Account:    domain.AccountID(testAccount),
-			LowerBound: "-3",
-			InitialPnl: "5",
-		},
-	}}
-	configured, err := e.ConfigurePolicy(
-		ctx, domain.PolicySpotFundsPnlBoundsKillSwitch, limits,
-	)
-	if err != nil {
-		t.Fatalf("ConfigurePolicy add seeded account barrier: %v", err)
-	}
-	if len(configured.AccountPnlUpdates) != 1 ||
-		configured.AccountPnlUpdates[0].Account != domain.AccountID(testAccount) ||
-		configured.AccountPnlUpdates[0].Pnl != "5" {
-		t.Fatalf("account P&L updates = %+v, want account %s at 5",
-			configured.AccountPnlUpdates, testAccount)
-	}
-
-	// From the +5 seed the second fill lands at +3, clear of the -3 bound. Without
-	// the seed it would sit at -4 and block, so passing proves the seed applied.
-	second := commitSpotFundsFeeFill(t, e)
-	if len(second.Blocks) != 0 {
-		t.Fatalf(
-			"seeded barrier blocked though live P&L was reset above the bound: %+v",
-			second.Blocks,
-		)
-	}
-}
-
-func TestConfigurePolicy_SpotFundsReseedWaitsForLaneAndUsesNewBounds(t *testing.T) {
-	e := newTestEngineGlobalSpotFundsPnlBounds(t)
-	ctx := context.Background()
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	laneDone := make(chan error, 1)
-	go func() {
-		laneDone <- e.RunAccountSynchronized(ctx, testAccount, func(AccountLane) error {
-			close(entered)
-			<-release
-			return nil
-		})
-	}()
-	<-entered
-
-	limits := LimitSet{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
-		{Scope: domain.ScopeGlobal, LowerBound: "-1000000"},
-		{Scope: domain.ScopeAccountGroup, AccountGroup: "desk-a", LowerBound: "-1000000"},
-		{Scope: domain.ScopeAccount, Account: testAccount, LowerBound: "-3", InitialPnl: "-5"},
-	}}
-	configured := make(chan PolicyConfigurationResult, 1)
-	configureErr := make(chan error, 1)
-	go func() {
-		result, err := e.ConfigurePolicy(
-			ctx, domain.PolicySpotFundsPnlBoundsKillSwitch, limits,
-		)
-		configured <- result
-		configureErr <- err
-	}()
-
-	deadline := time.Now().Add(time.Second)
-	writerLocked := false
-	for time.Now().Before(deadline) {
-		if e.mu.TryRLock() {
-			e.mu.RUnlock()
-			runtime.Gosched()
-			continue
-		}
-		writerLocked = true
-		break
-	}
-	if !writerLocked {
-		t.Fatal("ConfigurePolicy did not enter live configuration")
-	}
-	select {
-	case err := <-configureErr:
-		t.Fatalf("ConfigurePolicy returned before occupied account lane completed: %v", err)
-	case <-time.After(25 * time.Millisecond):
-	}
-	close(release)
-	if err := <-laneDone; err != nil {
-		t.Fatalf("RunAccountSynchronized: %v", err)
-	}
-	result := <-configured
-	if err := <-configureErr; err != nil {
-		t.Fatalf("ConfigurePolicy: %v", err)
-	}
-	if len(result.AccountPnlUpdates) != 1 || result.AccountPnlUpdates[0].Pnl != "-5" {
-		t.Fatalf("account P&L updates = %+v, want reseed -5", result.AccountPnlUpdates)
-	}
-	if len(result.AccountBlocks) != 1 ||
-		result.AccountBlocks[0].Account != domain.AccountID(testAccount) {
-		t.Fatalf("account blocks = %+v, want new -3 bound to block -5 seed", result.AccountBlocks)
 	}
 }
 

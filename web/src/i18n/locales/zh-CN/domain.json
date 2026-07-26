@@ -23,8 +23,7 @@
     },
     "spot_funds_pnl_bounds_kill_switch": {
       "lower_bound": "小数",
-      "upper_bound": "小数",
-      "initial_pnl": "小数，设置账户级初始已实现 P&L"
+      "upper_bound": "小数"
     }
   },
   "policy": {
@@ -70,10 +69,6 @@
       "upper_bound": {
         "label": "上限",
         "hint": "小数，如 500"
-      },
-      "initial_pnl": {
-        "label": "初始 P&L",
-        "hint": "小数 — 设置账户级初始已实现 P&L；仅适用于账户范围"
       }
     }
   }

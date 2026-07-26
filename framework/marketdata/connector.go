@@ -94,6 +94,9 @@ type Subscription struct {
 	Base string
 	// Quote is the instrument settlement asset the symbol maps to.
 	Quote string
+	// SyntheticInverse reports whether the applied runtime also emits the
+	// reverse pair for this subscription.
+	SyntheticInverse bool
 }
 
 // Connector streams quotes from one external source. It is stream-first:
@@ -235,7 +238,7 @@ type StatusReporting interface {
 // connector implements it; streaming providers do not. The manager uses it to
 // deliver an operator-set manual mark price once - at startup and on upsert -
 // onto the connector's subscription channel, from where it drains into the sink
-// like any other quote.
+// like any other quote. Push must stop waiting when ctx is cancelled.
 type Pushable interface {
-	Push(update QuoteUpdate)
+	Push(ctx context.Context, update QuoteUpdate) error
 }

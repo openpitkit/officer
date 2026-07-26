@@ -423,13 +423,7 @@ export function LimitDialog({
   }, [accountGroupSearch, fetchGroups, hasAccountGroupAxis, isEdit, open]);
 
   const allowedScopes = getAllowedScopes(form.policy);
-  const kinds = getPolicyKinds(form.policy).filter(({ kind }) => {
-    if (kind !== "initial_pnl") return true;
-    if (isSpotFundsPnl) {
-      return form.scope === "account";
-    }
-    return false;
-  });
+  const kinds = getPolicyKinds(form.policy);
 
   // Pull the catalog entry for the current policy for descriptions + human labels.
   const catalogEntry = getPolicyCatalogEntry(form.policy);

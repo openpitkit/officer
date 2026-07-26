@@ -47,6 +47,19 @@ func sampleMarketData() backend.MarketDataStatus {
 					Enabled:     true,
 				},
 				State: "ok",
+				Instruments: []backend.MarketDataInstrumentStatus{{
+					Instrument: domain.MarketDataInstrument{
+						Instance: extID("bn-1"), ExternalSymbol: "EURUSD",
+						BaseAsset: "EUR", QuoteAsset: "USD", Enabled: true,
+					},
+					Quote: &domain.MarketDataQuote{
+						Mark: "2", Bid: "4", Ask: "8",
+					},
+					InverseQuote: &domain.MarketDataQuote{
+						Mark: "0.5", Bid: "0.125", Ask: "0.25",
+					},
+					SyntheticInverse: true,
+				}},
 			},
 		},
 		FreshnessSeconds: 30,
@@ -86,6 +99,19 @@ func TestListMarketData_OK(t *testing.T) {
 	}
 	if inst["credentials"] != "" {
 		t.Fatalf("credentials = %q, want redacted empty string", inst["credentials"])
+	}
+	instruments, _ := inst["instruments"].([]any)
+	if len(instruments) != 1 {
+		t.Fatalf("want 1 instrument, got %v", inst["instruments"])
+	}
+	instrument := instruments[0].(map[string]any)
+	if instrument["syntheticInverse"] != true {
+		t.Fatalf("syntheticInverse = %v, want true", instrument["syntheticInverse"])
+	}
+	inverseQuote, _ := instrument["inverseQuote"].(map[string]any)
+	if inverseQuote["mark"] != "0.5" || inverseQuote["bid"] != "0.125" ||
+		inverseQuote["ask"] != "0.25" {
+		t.Fatalf("inverseQuote = %v", inverseQuote)
 	}
 	secrets, _ := inst["secrets"].(map[string]any)
 	if secrets["token"] != true {

@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"math"
 	"strings"
+	"sync"
 	"unicode"
 
 	"go.openpit.dev/openpit/accountadjustment"
@@ -38,17 +39,21 @@ import (
 
 // --- engine-id resolution ---------------------------------------------------
 
-// idResolver maps domain dictionary codes onto the stored integer engine ids
-// the engine runs on. It is built once from the build Snapshot (each account /
-// group carries its connector-assigned engine id), so a code is converted to an
-// engine id by lookup rather than by hashing the string: hashing
-// (param.NewAccountIDFromString / NewAccountGroupIDFromString) risks collisions
-// and is never used here. The engine is rebuilt from a fresh full Snapshot when
-// the account/group set changes, so a live handle's resolver always covers every
-// account and group it runs.
+// idResolver maps domain dictionary aliases onto stored integer engine ids.
+// Copies share one state so passing a resolver through mapping helpers never
+// copies its mutex. Aliases can be published or renamed while hot-path lookups
+// continue; numeric ids remain stable and are never derived by hashing aliases.
 type idResolver struct {
-	accounts map[domain.AccountID]param.AccountID
-	groups   map[string]param.AccountGroupID
+	shared *idResolverState
+}
+
+type idResolverState struct {
+	mu sync.RWMutex
+
+	accounts       map[domain.AccountID]param.AccountID
+	accountAliases map[uint64]domain.AccountID
+	groups         map[string]param.AccountGroupID
+	groupAliases   map[uint32]string
 }
 
 // newIDResolver builds the resolver from the snapshot's accounts and groups,
@@ -58,65 +63,262 @@ type idResolver struct {
 // unassigned/out of range, is corruption of our own persisted ids and aborts the
 // build.
 func newIDResolver(accounts []domain.Account, groups []domain.AccountGroup) (idResolver, error) {
-	r := idResolver{
-		accounts: make(map[domain.AccountID]param.AccountID, len(accounts)),
-		groups:   make(map[string]param.AccountGroupID, len(groups)),
-	}
+	r := newEmptyIDResolver(len(accounts), len(groups))
 	for _, account := range accounts {
-		id, err := engineAccountID(account.EngineAccountID, account.Code)
-		if err != nil {
+		if err := r.addAccountResolverEntry(account); err != nil {
 			return idResolver{}, err
 		}
-		r.accounts[account.Code] = id
 	}
 	for _, group := range groups {
-		if group.Code == "" {
-			r.groups[group.Code] = param.DefaultAccountGroup
-			continue
-		}
-		id, err := engineGroupID(group.EngineGroupID, group.Code)
-		if err != nil {
+		if err := r.addGroupResolverEntry(group); err != nil {
 			return idResolver{}, err
 		}
-		r.groups[group.Code] = id
 	}
 	return r, nil
+}
+
+func newEmptyIDResolver(accountCount, groupCount int) idResolver {
+	return idResolver{shared: &idResolverState{
+		accounts:       make(map[domain.AccountID]param.AccountID, accountCount),
+		accountAliases: make(map[uint64]domain.AccountID, accountCount),
+		groups:         make(map[string]param.AccountGroupID, groupCount),
+		groupAliases:   make(map[uint32]string, groupCount),
+	}}
+}
+
+func (r *idResolver) ensureInitialized() {
+	if r.shared == nil {
+		*r = newEmptyIDResolver(0, 0)
+	}
 }
 
 // account resolves an account code to its engine account id. An unknown code is
 // caller input (e.g. an order for an account the live engine does not run) and
 // wraps domain.ErrInvalid so the HTTP surface reports 400 rather than 500.
 func (r idResolver) account(code domain.AccountID) (param.AccountID, error) {
-	id, ok := r.accounts[code]
+	if r.shared == nil {
+		return param.AccountID{}, unknownAccountAliasError(code)
+	}
+	r.shared.mu.RLock()
+	id, ok := r.shared.accounts[code]
+	r.shared.mu.RUnlock()
 	if !ok {
-		return param.AccountID{}, fmt.Errorf(
-			"engine: unknown account %q: %w", code, domain.ErrInvalid)
+		return param.AccountID{}, unknownAccountAliasError(code)
 	}
 	return id, nil
 }
 
-// accountIDs resolves a slice of account codes to engine account ids.
-func (r idResolver) accountIDs(codes []domain.AccountID) ([]param.AccountID, error) {
-	ids := make([]param.AccountID, 0, len(codes))
-	for _, code := range codes {
-		id, err := r.account(code)
-		if err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
+func (r idResolver) accountIDSnapshot() map[domain.AccountID]param.AccountID {
+	if r.shared == nil {
+		return map[domain.AccountID]param.AccountID{}
 	}
-	return ids, nil
+	r.shared.mu.RLock()
+	defer r.shared.mu.RUnlock()
+
+	accounts := make(map[domain.AccountID]param.AccountID, len(r.shared.accounts))
+	for alias, id := range r.shared.accounts {
+		accounts[alias] = id
+	}
+	return accounts
 }
 
 // group resolves a group code to its engine group id. An unknown code is caller
 // input and wraps domain.ErrInvalid.
 func (r idResolver) group(code string) (param.AccountGroupID, error) {
-	id, ok := r.groups[code]
+	if r.shared == nil {
+		return param.AccountGroupID{}, unknownGroupAliasError(code)
+	}
+	r.shared.mu.RLock()
+	id, ok := r.shared.groups[code]
+	r.shared.mu.RUnlock()
 	if !ok {
-		return param.AccountGroupID{}, fmt.Errorf(
-			"engine: unknown group %q: %w", code, domain.ErrInvalid)
+		return param.AccountGroupID{}, unknownGroupAliasError(code)
 	}
 	return id, nil
+}
+
+func unknownAccountAliasError(code domain.AccountID) error {
+	return fmt.Errorf("engine: unknown account resolver alias %q: %w", code, domain.ErrInvalid)
+}
+
+func unknownGroupAliasError(code string) error {
+	return fmt.Errorf("engine: unknown group resolver alias %q: %w", code, domain.ErrInvalid)
+}
+
+func (r idResolver) addAccountResolverEntry(account domain.Account) error {
+	id, err := engineAccountID(account.EngineAccountID, account.Code)
+	if err != nil {
+		return err
+	}
+	if r.shared == nil {
+		return fmt.Errorf("engine: account resolver is not initialized")
+	}
+
+	idKey := uint64(id.Handle())
+	r.shared.mu.Lock()
+	defer r.shared.mu.Unlock()
+	if _, exists := r.shared.accounts[account.Code]; exists {
+		return fmt.Errorf(
+			"engine: account resolver alias %q already exists: %w",
+			account.Code, domain.ErrAlreadyExists,
+		)
+	}
+	if alias, exists := r.shared.accountAliases[idKey]; exists {
+		return fmt.Errorf(
+			"engine: account engine id %d already belongs to resolver alias %q: %w",
+			account.EngineAccountID, alias, domain.ErrInvalid,
+		)
+	}
+	r.shared.accounts[account.Code] = id
+	r.shared.accountAliases[idKey] = account.Code
+	return nil
+}
+
+func (r idResolver) renameAccountResolverEntry(
+	oldCode domain.AccountID, account domain.Account,
+) error {
+	targetID, err := engineAccountID(account.EngineAccountID, account.Code)
+	if err != nil {
+		return err
+	}
+	if r.shared == nil {
+		return unknownAccountAliasError(oldCode)
+	}
+
+	r.shared.mu.Lock()
+	defer r.shared.mu.Unlock()
+	currentID, exists := r.shared.accounts[oldCode]
+	if !exists {
+		return unknownAccountAliasError(oldCode)
+	}
+	if currentID.Handle() != targetID.Handle() {
+		return fmt.Errorf(
+			"engine: account resolver alias %q has engine id %s, target %q has %d: %w",
+			oldCode, currentID, account.Code, account.EngineAccountID, domain.ErrInvalid,
+		)
+	}
+	if oldCode == account.Code {
+		return nil
+	}
+	if _, exists := r.shared.accounts[account.Code]; exists {
+		return fmt.Errorf(
+			"engine: account resolver alias %q already exists: %w",
+			account.Code, domain.ErrAlreadyExists,
+		)
+	}
+
+	delete(r.shared.accounts, oldCode)
+	r.shared.accounts[account.Code] = currentID
+	r.shared.accountAliases[uint64(currentID.Handle())] = account.Code
+	return nil
+}
+
+func (r idResolver) addGroupResolverEntry(group domain.AccountGroup) error {
+	id, err := resolverGroupID(group)
+	if err != nil {
+		return err
+	}
+	if r.shared == nil {
+		return fmt.Errorf("engine: group resolver is not initialized")
+	}
+
+	idKey := uint32(id.Handle())
+	r.shared.mu.Lock()
+	defer r.shared.mu.Unlock()
+	if _, exists := r.shared.groups[group.Code]; exists {
+		return fmt.Errorf(
+			"engine: group resolver alias %q already exists: %w",
+			group.Code, domain.ErrAlreadyExists,
+		)
+	}
+	if alias, exists := r.shared.groupAliases[idKey]; exists {
+		return fmt.Errorf(
+			"engine: group engine id %d already belongs to resolver alias %q: %w",
+			group.EngineGroupID, alias, domain.ErrInvalid,
+		)
+	}
+	r.shared.groups[group.Code] = id
+	r.shared.groupAliases[idKey] = group.Code
+	return nil
+}
+
+func (r idResolver) renameGroupResolverEntry(
+	oldCode string, group domain.AccountGroup,
+) error {
+	targetID, err := resolverGroupID(group)
+	if err != nil {
+		return err
+	}
+	if r.shared == nil {
+		return unknownGroupAliasError(oldCode)
+	}
+
+	r.shared.mu.Lock()
+	defer r.shared.mu.Unlock()
+	currentID, exists := r.shared.groups[oldCode]
+	if !exists {
+		return unknownGroupAliasError(oldCode)
+	}
+	if currentID.Handle() != targetID.Handle() {
+		return fmt.Errorf(
+			"engine: group resolver alias %q has engine id %s, target %q has %d: %w",
+			oldCode, currentID, group.Code, group.EngineGroupID, domain.ErrInvalid,
+		)
+	}
+	if oldCode == group.Code {
+		return nil
+	}
+	if _, exists := r.shared.groups[group.Code]; exists {
+		return fmt.Errorf(
+			"engine: group resolver alias %q already exists: %w",
+			group.Code, domain.ErrAlreadyExists,
+		)
+	}
+
+	delete(r.shared.groups, oldCode)
+	r.shared.groups[group.Code] = currentID
+	r.shared.groupAliases[uint32(currentID.Handle())] = group.Code
+	return nil
+}
+
+func (r idResolver) removeGroupResolverEntry(group domain.AccountGroup) error {
+	targetID, err := resolverGroupID(group)
+	if err != nil {
+		return err
+	}
+	if r.shared == nil {
+		return unknownGroupAliasError(group.Code)
+	}
+
+	r.shared.mu.Lock()
+	defer r.shared.mu.Unlock()
+	currentID, exists := r.shared.groups[group.Code]
+	if !exists {
+		return unknownGroupAliasError(group.Code)
+	}
+	if currentID.Handle() != targetID.Handle() {
+		return fmt.Errorf(
+			"engine: group resolver alias %q has engine id %s, removal target has %d: %w",
+			group.Code, currentID, group.EngineGroupID, domain.ErrInvalid,
+		)
+	}
+
+	delete(r.shared.groups, group.Code)
+	delete(r.shared.groupAliases, uint32(currentID.Handle()))
+	return nil
+}
+
+func resolverGroupID(group domain.AccountGroup) (param.AccountGroupID, error) {
+	if group.Code == "" {
+		if group.EngineGroupID != 0 {
+			return param.AccountGroupID{}, fmt.Errorf(
+				"engine: default group engine id %d, want 0: %w",
+				group.EngineGroupID, domain.ErrInvalid,
+			)
+		}
+		return param.DefaultAccountGroup, nil
+	}
+	return engineGroupID(group.EngineGroupID, group.Code)
 }
 
 // engineAccountID converts a stored engine account id into a param.AccountID via
@@ -152,11 +354,9 @@ func engineGroupID(id domain.EngineGroupID, code string) (param.AccountGroupID, 
 // an optional broker barrier and per-asset/account/account-asset slices. The
 // asset/account/account-asset slices are always non-nil so a Configure call
 // replaces each axis wholesale (an empty slice clears the axis); barriers are
-// added and removed at runtime and a surviving key keeps its live counter. A nil
-// broker leaves the broker barrier unchanged: the SDK's Configure surface has no
-// way to clear a rate-limit broker barrier in isolation, so the caller
-// (configureRateLimitLocked) rejects a broker-barrier drop as not-implemented
-// before reaching this point.
+// added and removed at runtime and a surviving key keeps its live counter. The
+// caller wraps broker in the explicit optional update shape, so nil clears the
+// broker axis instead of leaving it unchanged.
 func rateLimitAxes(limits []domain.LimitRate, res idResolver) (
 	*policies.RateLimitBrokerBarrier,
 	[]policies.RateLimitAssetBarrier,
@@ -220,13 +420,9 @@ func rateLimitAxes(limits []domain.LimitRate, res idResolver) (
 // orderSizeAxes maps an order-size barrier set onto the public Configure axes:
 // an optional broker barrier and per-asset/account-asset slices. The slices are
 // always non-nil so a Configure call replaces each axis wholesale (an empty
-// slice clears the axis). A nil broker leaves the broker barrier unchanged: the
-// SDK's Configure surface has no way to clear an order-size broker barrier in
-// isolation. The caller (configureOrderSizeLocked) therefore rejects a
-// broker-barrier drop as not-implemented before reaching this point, so this
-// mapping never has to clear a broker barrier. The at-least-one-barrier rule is
-// likewise enforced by the caller, which rejects an empty barrier set as
-// not-implemented.
+// slice clears the axis). The caller wraps broker in the explicit optional
+// update shape, so nil clears the broker axis instead of leaving it unchanged.
+// The at-least-one-barrier rule is enforced before this mapper runs.
 func orderSizeAxes(limits []domain.LimitOrderSize, res idResolver) (
 	*policies.OrderSizeBrokerBarrier,
 	[]policies.OrderSizeAssetBarrier,
@@ -329,79 +525,6 @@ func spotFundsPnlBoundsAxes(
 		}
 	}
 	return global, groups, accounts, nil
-}
-
-type spotFundsPnlBoundsSeed struct {
-	code       domain.AccountID
-	account    param.AccountID
-	initialPnl param.Pnl
-}
-
-type spotFundsPnlBoundsSeedKey uint64
-
-func (s spotFundsPnlBoundsSeed) key() spotFundsPnlBoundsSeedKey {
-	return spotFundsPnlBoundsSeedKey(s.account.Handle())
-}
-
-// spotFundsPnlBoundsSeeds derives the account-scope initial-P&L seeds from a
-// barrier set. Only a barrier carrying an explicit initial_pnl yields a seed: an
-// empty initial_pnl must not force-set (and thereby reset) the account's live
-// accumulated P&L, so it is left unseeded. The account barrier itself is created
-// by the bounds axis, not by the seed, so a seedless barrier stays fully armed
-// against whatever P&L the engine has already accumulated for the account.
-func spotFundsPnlBoundsSeeds(
-	limits []domain.LimitSpotFundsPnlBounds,
-	res idResolver,
-) ([]spotFundsPnlBoundsSeed, error) {
-	seeds := make([]spotFundsPnlBoundsSeed, 0)
-	for _, limit := range limits {
-		if limit.Scope != domain.ScopeAccount || limit.InitialPnl == "" {
-			continue
-		}
-		account, err := res.account(limit.Account)
-		if err != nil {
-			return nil, err
-		}
-		initialPnl, err := param.NewPnlFromString(limit.InitialPnl)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"engine: spot_funds_pnl_bounds initial_pnl %q: %w",
-				limit.InitialPnl,
-				err,
-			)
-		}
-		seeds = append(seeds, spotFundsPnlBoundsSeed{
-			code:       limit.Account,
-			account:    account,
-			initialPnl: initialPnl,
-		})
-	}
-	return seeds, nil
-}
-
-func spotFundsPnlBoundsSeedTracker(
-	seeds []spotFundsPnlBoundsSeed,
-) map[spotFundsPnlBoundsSeedKey]param.Pnl {
-	tracker := make(map[spotFundsPnlBoundsSeedKey]param.Pnl, len(seeds))
-	for _, seed := range seeds {
-		tracker[seed.key()] = seed.initialPnl
-	}
-	return tracker
-}
-
-func changedSpotFundsPnlBoundsSeeds(
-	current map[spotFundsPnlBoundsSeedKey]param.Pnl,
-	desired []spotFundsPnlBoundsSeed,
-) ([]spotFundsPnlBoundsSeed, map[spotFundsPnlBoundsSeedKey]param.Pnl) {
-	next := spotFundsPnlBoundsSeedTracker(desired)
-	changed := make([]spotFundsPnlBoundsSeed, 0)
-	for _, seed := range desired {
-		currentSeed, ok := current[seed.key()]
-		if !ok || currentSeed.Compare(seed.initialPnl) != 0 {
-			changed = append(changed, seed)
-		}
-	}
-	return changed, next
 }
 
 // rateLimitReady maps a rate-limit barrier set onto a ready builder. Each
@@ -1010,6 +1133,9 @@ func spotFundsAccountPnlFromList(
 				"account_id", outcome.AccountID,
 				"reason", "account does not match execution report",
 			)
+			continue
+		}
+		if amount, computed := outcome.Amount(); computed && amount.Delta.IsZero() {
 			continue
 		}
 		if selected {

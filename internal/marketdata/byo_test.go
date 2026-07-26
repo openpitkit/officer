@@ -19,6 +19,7 @@ package marketdata
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -36,7 +37,9 @@ func TestBYOConnector_PushForwards(t *testing.T) {
 	}
 
 	want := QuoteUpdate{Base: "AAPL", Quote: "USD", Mark: "100"}
-	c.Push(want)
+	if err := c.Push(context.Background(), want); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
 
 	select {
 	case got := <-ch:
@@ -60,10 +63,32 @@ func TestBYOConnector_PushAfterCloseIsNoop(t *testing.T) {
 
 	c.Close()
 	// Must not panic on a closed channel.
-	c.Push(QuoteUpdate{Base: "AAPL", Quote: "USD", Mark: "1"})
+	if err := c.Push(
+		context.Background(), QuoteUpdate{Base: "AAPL", Quote: "USD", Mark: "1"},
+	); err != nil {
+		t.Fatalf("Push after Close: %v", err)
+	}
 
 	// Draining a closed channel ends.
 	for range ch { //nolint:revive // intentional drain
+	}
+}
+
+func TestBYOConnector_PushHonorsContextWhenQueueIsFull(t *testing.T) {
+	t.Parallel()
+	c := NewBYOConnector(1)
+	defer c.Close()
+
+	if err := c.Push(
+		context.Background(), QuoteUpdate{Base: "AAPL", Quote: "USD", Mark: "1"},
+	); err != nil {
+		t.Fatalf("first Push: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	err := c.Push(ctx, QuoteUpdate{Base: "AAPL", Quote: "USD", Mark: "2"})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("second Push error = %v, want context deadline exceeded", err)
 	}
 }
 

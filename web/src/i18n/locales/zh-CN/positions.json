@@ -105,6 +105,7 @@
     "noChange": "不变",
     "invalidDecimal": "无效的小数",
     "noChangesError": "请至少输入一个金额、平均价格或边界。",
+    "positionAmountRequired": "要创建持仓，请在“可用”、“冻结”或“待入账”中输入非零值。",
     "resetAll": "全部重置",
     "submit": "提交调整",
     "saving": "正在提交",

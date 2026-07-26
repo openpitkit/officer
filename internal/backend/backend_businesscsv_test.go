@@ -657,13 +657,16 @@ func newBusinessCSVRealService(
 	}
 	eng := &businessCSVRoundTripEngine{running: true}
 	n, _, err := node.NewLocalNode(ctx, st, func(snap engine.Snapshot) (engine.Engine, error) {
-		// Mirror the real adapter and the framework/node fakeEngine: the resolver
-		// learns its accounts from the seed snapshot on every build/rebuild, so a
-		// later RunAccountSynchronized can resolve the account before entering the
-		// lane. Re-seed on each build to reflect the current persisted account set.
+		// Mirror the real adapter and the framework/node fakeEngine: seed the
+		// resolver from the snapshot, then let live dictionary calls publish later
+		// account and group changes without rebuilding the engine.
 		eng.knownAccounts = map[domain.AccountID]struct{}{}
 		for _, account := range snap.Accounts {
 			eng.knownAccounts[account.Code] = struct{}{}
+		}
+		eng.knownGroups = map[string]struct{}{}
+		for _, group := range snap.Groups {
+			eng.knownGroups[group.Code] = struct{}{}
 		}
 		return eng, nil
 	})
@@ -682,6 +685,7 @@ type businessCSVRoundTripEngine struct {
 	running              bool
 	enforceResolver      bool
 	knownAccounts        map[domain.AccountID]struct{}
+	knownGroups          map[string]struct{}
 	adjustmentCalls      []domain.AdjustmentRequest
 	adjustmentBatchCalls [][]domain.AdjustmentRequest
 }
@@ -699,6 +703,68 @@ func (e *businessCSVRoundTripEngine) resolveAccount(account domain.AccountID) er
 	if _, ok := e.knownAccounts[account]; !ok {
 		return fmt.Errorf("engine: unknown account %q: %w", account, domain.ErrInvalid)
 	}
+	return nil
+}
+
+func (e *businessCSVRoundTripEngine) AddAccountResolverEntry(account domain.Account) error {
+	if e.knownAccounts == nil {
+		e.knownAccounts = map[domain.AccountID]struct{}{}
+	}
+	if _, exists := e.knownAccounts[account.Code]; exists {
+		return fmt.Errorf("engine: duplicate account %q: %w", account.Code, domain.ErrInvalid)
+	}
+	e.knownAccounts[account.Code] = struct{}{}
+	return nil
+}
+
+func (e *businessCSVRoundTripEngine) RenameAccountResolverEntry(
+	oldCode domain.AccountID, account domain.Account,
+) error {
+	if _, exists := e.knownAccounts[oldCode]; !exists {
+		return fmt.Errorf("engine: unknown account %q: %w", oldCode, domain.ErrInvalid)
+	}
+	if oldCode != account.Code {
+		if _, exists := e.knownAccounts[account.Code]; exists {
+			return fmt.Errorf("engine: duplicate account %q: %w", account.Code, domain.ErrInvalid)
+		}
+	}
+	delete(e.knownAccounts, oldCode)
+	e.knownAccounts[account.Code] = struct{}{}
+	return nil
+}
+
+func (e *businessCSVRoundTripEngine) AddGroupResolverEntry(group domain.AccountGroup) error {
+	if e.knownGroups == nil {
+		e.knownGroups = map[string]struct{}{}
+	}
+	if _, exists := e.knownGroups[group.Code]; exists {
+		return fmt.Errorf("engine: duplicate group %q: %w", group.Code, domain.ErrInvalid)
+	}
+	e.knownGroups[group.Code] = struct{}{}
+	return nil
+}
+
+func (e *businessCSVRoundTripEngine) RenameGroupResolverEntry(
+	oldCode string, group domain.AccountGroup,
+) error {
+	if _, exists := e.knownGroups[oldCode]; !exists {
+		return fmt.Errorf("engine: unknown group %q: %w", oldCode, domain.ErrInvalid)
+	}
+	if oldCode != group.Code {
+		if _, exists := e.knownGroups[group.Code]; exists {
+			return fmt.Errorf("engine: duplicate group %q: %w", group.Code, domain.ErrInvalid)
+		}
+	}
+	delete(e.knownGroups, oldCode)
+	e.knownGroups[group.Code] = struct{}{}
+	return nil
+}
+
+func (e *businessCSVRoundTripEngine) RemoveGroupResolverEntry(group domain.AccountGroup) error {
+	if _, exists := e.knownGroups[group.Code]; !exists {
+		return fmt.Errorf("engine: unknown group %q: %w", group.Code, domain.ErrInvalid)
+	}
+	delete(e.knownGroups, group.Code)
 	return nil
 }
 
@@ -809,6 +875,24 @@ func (e *businessCSVRoundTripEngine) SetAccountPnl(
 ) ([]domain.AccountBlock, error) {
 	return nil, nil
 }
+
+func (e *businessCSVRoundTripEngine) SetAccountPnlState(
+	ctx context.Context,
+	id domain.AccountID,
+	pnl string,
+	haltReason domain.PnlHaltReason,
+) ([]domain.AccountBlock, error) {
+	if (pnl == "") == (haltReason == "") {
+		return nil, domain.ErrInvalid
+	}
+	if err := domain.ValidatePnlHaltReason(haltReason); err != nil {
+		return nil, err
+	}
+	if haltReason != "" {
+		return nil, nil
+	}
+	return e.SetAccountPnl(ctx, id, pnl)
+}
 func (e *businessCSVRoundTripEngine) SubmitImmediate(
 	context.Context, domain.Order,
 ) (engine.ImmediateResult, error) {
@@ -851,6 +935,18 @@ func (e *businessCSVRoundTripEngine) BlockGroup(context.Context, string, string)
 	return nil
 }
 func (e *businessCSVRoundTripEngine) UnblockGroup(context.Context, string) error {
+	return nil
+}
+
+func (e *businessCSVRoundTripEngine) SetGroupCurrency(
+	context.Context, string, string,
+) error {
+	return nil
+}
+
+func (e *businessCSVRoundTripEngine) ClearGroupCurrency(
+	context.Context, string,
+) error {
 	return nil
 }
 func (e *businessCSVRoundTripEngine) CheckOrder(

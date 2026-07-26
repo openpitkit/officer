@@ -106,6 +106,31 @@ func TestLocalNode_ApplyAdjustmentNoChangeDoesNotPersist(t *testing.T) {
 	}
 }
 
+func TestLocalNode_ApplyAdjustmentRejectsAverageOnlyForMissingBalance(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.adjustmentAccepted = &domain.AdjustmentOutcomeAccepted{AverageEntryPrice: "1"}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	seedTestAccount(t, st, "acc-1")
+
+	_, err := n.ApplyAdjustment(ctx, testKey("acc-1"), domain.ExternalID(""),
+		domain.AdjustmentRequest{Asset: "USD", AverageEntryPrice: "1"}, testCaller)
+	if !errors.Is(err, domain.ErrNoChange) {
+		t.Fatalf("ApplyAdjustment error = %v, want ErrNoChange", err)
+	}
+	if len(eng.adjustmentCalls) != 1 {
+		t.Fatalf("engine adjustment calls = %+v, want one validation call", eng.adjustmentCalls)
+	}
+	records, err := st.ListAdjustments(ctx, "acc-1", "", 10)
+	if err != nil {
+		t.Fatalf("ListAdjustments: %v", err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("stored adjustments = %+v, want none", records)
+	}
+}
+
 func TestLocalNode_ApplyAdjustmentDoesNotInventRealizedPnl(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
@@ -661,7 +686,7 @@ func TestLocalNode_ApplyAdjustmentAutoCreatesUnknownAccount(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
 	// Enforce the resolver so an adjustment to an unknown account would error
-	// unless the auto-create runs first and rebuilds the engine.
+	// unless the auto-create publishes the account before the lane starts.
 	eng.enforceResolver = true
 	eng.adjustmentAccepted = &domain.AdjustmentOutcomeAccepted{BalanceResult: "100"}
 	n, st := newTestNode(t, eng)
@@ -768,7 +793,7 @@ func TestLocalNode_ApplyAdjustmentRejectsMalformedAccountID(t *testing.T) {
 	bad := domain.AccountID("bad-id ")
 	_, err := n.ApplyAdjustment(ctx, testKey(bad), domain.ExternalID(""),
 		domain.AdjustmentRequest{
-			Asset:   "USD",
+			Asset:   "GOLD",
 			Balance: &domain.AdjustmentAmount{Mode: domain.AdjustmentModeDelta, Value: "100"},
 		}, testCaller)
 	if !errors.Is(err, domain.ErrInvalid) {
@@ -776,6 +801,9 @@ func TestLocalNode_ApplyAdjustmentRejectsMalformedAccountID(t *testing.T) {
 	}
 	if _, ok, err := st.GetAccount(ctx, bad); err != nil || ok {
 		t.Fatalf("GetAccount(malformed) = ok %v err %v, want absent", ok, err)
+	}
+	if _, ok, err := st.GetAsset(ctx, "GOLD"); err != nil || ok {
+		t.Fatalf("GetAsset(GOLD) = ok %v err %v, want no asset side effect", ok, err)
 	}
 }
 

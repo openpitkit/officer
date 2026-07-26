@@ -408,7 +408,6 @@ var policySortKeys = map[string]struct{}{
 	"account":      {},
 	"accountGroup": {},
 	"asset":        {},
-	"initialPnl":   {},
 	"lowerBound":   {},
 	"maxNotional":  {},
 	"maxOrders":    {},

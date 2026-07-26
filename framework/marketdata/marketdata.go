@@ -19,7 +19,12 @@
 // engine and node implementations.
 package marketdata
 
-import "time"
+import (
+	"math"
+	"time"
+
+	"github.com/shopspring/decimal"
+)
 
 // FreshnessTTL is the officer-wide quote freshness window: a quote whose
 // source AsOf is older than this is displayed as absent.
@@ -42,6 +47,60 @@ type QuoteUpdate struct {
 	Bid string
 	// Ask is the best-ask price as an exact decimal string; empty when absent.
 	Ask string
+
+	// The manual fields are manager-internal controls. A BYO manual clear travels
+	// through the connector channel so it is ordered after every already queued
+	// manual refresh without widening the public Sink contract. Generation and
+	// token reject work from superseded manager lifecycles before touching a sink.
+	clear            bool
+	clearDone        chan error
+	clearDirect      bool
+	clearSynthetic   bool
+	manual           bool
+	manualGeneration uint64
+	manualToken      uint64
+}
+
+// InvertQuote returns the synthetic reverse quote using exact decimal
+// arithmetic. Fields that are empty, zero, or invalid are omitted; ok is false
+// when no field can be inverted.
+func InvertQuote(update QuoteUpdate) (inverted QuoteUpdate, ok bool) {
+	inverted = QuoteUpdate{
+		AsOf:  update.AsOf,
+		Base:  update.Quote,
+		Quote: update.Base,
+	}
+	inverted.Mark = invertDecimal(update.Mark)
+	inverted.Bid = invertDecimal(update.Ask)
+	inverted.Ask = invertDecimal(update.Bid)
+	ok = inverted.Mark != "" || inverted.Bid != "" || inverted.Ask != ""
+	return inverted, ok
+}
+
+func invertDecimal(value string) string {
+	if value == "" {
+		return ""
+	}
+	d, err := decimal.NewFromString(value)
+	if err != nil || !d.IsPositive() {
+		return ""
+	}
+	precision := int64(decimal.DivisionPrecision)
+	coefficient := d.Coefficient()
+	coefficient.Abs(coefficient)
+	coefficientDigits := len(coefficient.String())
+	adjustedExponent := int64(coefficientDigits-1) + int64(d.Exponent())
+	if adjustedExponent >= 0 {
+		precision += adjustedExponent
+	}
+	if precision > math.MaxInt32 {
+		return ""
+	}
+	inverted := decimal.NewFromInt(1).DivRound(d, int32(precision))
+	if inverted.IsZero() {
+		return ""
+	}
+	return inverted.String()
 }
 
 // Sink receives normalized quotes and forwards them to the engine.
@@ -49,4 +108,13 @@ type Sink interface {
 	// Push forwards one normalized quote into the engine. It returns an error if
 	// the quote cannot be registered or pushed.
 	Push(update QuoteUpdate) error
+}
+
+// QuoteClearer is an optional Sink capability for removing one live quote
+// without replacing the engine. Native Officer engines implement it through
+// the SDK market-data service; adapters that cannot clear may omit it.
+type QuoteClearer interface {
+	// Clear removes the stored quote for the identified instrument. Clearing an
+	// instrument that has never been registered is a no-op.
+	Clear(base, quote string) error
 }

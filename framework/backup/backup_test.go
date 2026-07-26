@@ -16,7 +16,7 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 // Unit tests for the realm-portable archive contract: scope/selector filtering,
-// dictionary-first carriage, and the touched-runtime engine-rebuild signal. The
+// dictionary-first carriage, and runtime-section classification. The
 // store-level export -> restore round-trip (identity preservation, isolated <->
 // shared moves, modes, FK resolution and engine-id reassignment) lives in the
 // store package, where a real connector is available.

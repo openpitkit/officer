@@ -236,6 +236,7 @@ describe("provider references", () => {
             quoteAsset: "USD",
             manualPrice: "",
             enabled: true,
+            syntheticInverse: false,
             stale: false,
           },
         ],
@@ -390,6 +391,7 @@ describe("provider references", () => {
             quoteAsset: "USD",
             manualPrice: "",
             enabled: true,
+            syntheticInverse: false,
             stale: false,
           },
         ],
@@ -475,6 +477,7 @@ describe("manual market-data numeric guards", () => {
           quoteAsset: "USD",
           manualPrice: "150",
           enabled: true,
+          syntheticInverse: false,
           stale: false,
         }],
       }),
@@ -869,6 +872,7 @@ describe("IB feed resolver", () => {
             quoteAsset: "USDT",
             manualPrice: "",
             enabled: true,
+            syntheticInverse: false,
             stale: false,
           },
         ],
@@ -915,6 +919,7 @@ describe("IB instrument persistence (full-map send)", () => {
           quoteAsset: "USD",
           manualPrice: "",
           enabled: true,
+          syntheticInverse: false,
           stale: false,
         },
       ],
@@ -980,6 +985,7 @@ describe("IB instrument persistence (full-map send)", () => {
           quoteAsset: "USD",
           manualPrice: "",
           enabled: true,
+          syntheticInverse: false,
           stale: false,
         },
         {
@@ -989,6 +995,7 @@ describe("IB instrument persistence (full-map send)", () => {
           quoteAsset: "USD",
           manualPrice: "",
           enabled: true,
+          syntheticInverse: false,
           stale: false,
         },
       ],
@@ -1097,6 +1104,7 @@ describe("stale quote rendering", () => {
             quoteAsset: "USD",
             manualPrice: "",
             enabled: true,
+            syntheticInverse: false,
             stale: true,
             updateIntervalMs: 30_000,
             quote: {
@@ -1135,6 +1143,7 @@ describe("stale quote rendering", () => {
             quoteAsset: "USD",
             manualPrice: "",
             enabled: true,
+            syntheticInverse: false,
             stale: true,
             updateIntervalMs: 30_000,
             quote: {
@@ -1152,6 +1161,85 @@ describe("stale quote rendering", () => {
     const row = screen.getByText("AAPL").closest("tr") as HTMLElement;
     // Relative age in seconds should be visible (format: -Ns).
     expect(within(row).getByText(/^-\d+s$/)).toBeInTheDocument();
+  });
+});
+
+describe("synthetic inverse price rendering", () => {
+  it.each(["0", "not-a-price"])(
+    "falls through an uninvertible mark %s to bid-to-ask semantics",
+    (mark) => {
+    renderCard(
+      ibInstance({
+        instruments: [
+          {
+            instanceExternalId: "ib-1",
+            externalSymbol: "EURUSD",
+            baseAsset: "EUR",
+            quoteAsset: "USD",
+            manualPrice: "",
+            enabled: true,
+            syntheticInverse: true,
+            stale: false,
+            quote: {
+              asOf: new Date().toISOString(),
+              receivedAt: new Date().toISOString(),
+              mark,
+              bid: "4",
+              ask: "8",
+            },
+            inverseQuote: {
+              asOf: new Date().toISOString(),
+              receivedAt: new Date().toISOString(),
+              mark: "",
+              bid: "0.125",
+              ask: "0.25",
+            },
+          },
+        ],
+      }),
+    );
+
+    const row = screen.getByText("EURUSD").closest("tr") as HTMLElement;
+    expect(within(row).getByText("4 -> 0.25")).toBeInTheDocument();
+    expect(within(row).queryByText(`${mark} ->`)).not.toBeInTheDocument();
+    },
+  );
+
+  it("keeps the single received price when the inverse is suppressed", () => {
+    renderCard(
+      ibInstance({
+        instruments: [
+          {
+            instanceExternalId: "ib-1",
+            externalSymbol: "EURUSD",
+            baseAsset: "EUR",
+            quoteAsset: "USD",
+            manualPrice: "",
+            enabled: true,
+            syntheticInverse: false,
+            stale: false,
+            quote: {
+              asOf: new Date().toISOString(),
+              receivedAt: new Date().toISOString(),
+              mark: "2",
+              bid: "",
+              ask: "",
+            },
+            inverseQuote: {
+              asOf: new Date().toISOString(),
+              receivedAt: new Date().toISOString(),
+              mark: "0.5",
+              bid: "",
+              ask: "",
+            },
+          },
+        ],
+      }),
+    );
+
+    const row = screen.getByText("EURUSD").closest("tr") as HTMLElement;
+    expect(within(row).getByText("2")).toBeInTheDocument();
+    expect(within(row).queryByText(/->/u)).not.toBeInTheDocument();
   });
 });
 
@@ -1199,6 +1287,7 @@ describe("source deletion", () => {
               quoteAsset: "USD",
               manualPrice: "",
               enabled: true,
+              syntheticInverse: false,
               stale: false,
             },
           ],

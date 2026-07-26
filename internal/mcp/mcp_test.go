@@ -517,7 +517,6 @@ func TestGetLimitsSpotFundsPnlBoundsOnly(t *testing.T) {
 				Account:    "acc-spot",
 				LowerBound: "-10.25",
 				UpperBound: "99.50",
-				InitialPnl: "1.00",
 			},
 		},
 	}}
@@ -541,8 +540,7 @@ func TestGetLimitsSpotFundsPnlBoundsOnly(t *testing.T) {
 	if got.Scope != domain.ScopeAccount ||
 		got.Account != "acc-spot" ||
 		got.LowerBound != "-10.25" ||
-		got.UpperBound != "99.50" ||
-		got.InitialPnl != "1.00" {
+		got.UpperBound != "99.50" {
 		t.Fatalf("spot-funds P&L limit = %+v", got)
 	}
 }

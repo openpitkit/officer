@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -33,24 +34,71 @@ func testExternalID(label string) domain.ExternalID {
 }
 
 type fakeStore struct {
-	mu          sync.Mutex
-	instances   []domain.MarketDataInstance
-	instruments map[string][]domain.MarketDataInstrument
-	quotes      []domain.MarketDataQuote
-	instErr     error
+	mu                    sync.Mutex
+	instances             []domain.MarketDataInstance
+	instruments           map[string][]domain.MarketDataInstrument
+	configuredInstances   []domain.MarketDataInstance
+	configuredInstruments map[string][]domain.MarketDataInstrument
+	quotes                []domain.MarketDataQuote
+	instErr               error
+	listEntered           chan struct{}
+	listRelease           chan struct{}
+}
+
+func (s *fakeStore) ListMarketDataInstances(context.Context) ([]domain.MarketDataInstance, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]domain.MarketDataInstance(nil), s.configuredInstances...), nil
 }
 
 func (s *fakeStore) ListEnabledMarketDataInstances(context.Context) ([]domain.MarketDataInstance, error) {
-	return s.instances, nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]domain.MarketDataInstance(nil), s.instances...), nil
 }
 
 func (s *fakeStore) ListEnabledMarketDataInstruments(
 	_ context.Context, instance domain.ExternalID,
 ) ([]domain.MarketDataInstrument, error) {
+	s.mu.Lock()
+	if s.instErr != nil {
+		s.mu.Unlock()
+		return nil, s.instErr
+	}
+	out := append(
+		[]domain.MarketDataInstrument(nil), s.instruments[instance.String()]...,
+	)
+	entered, release := s.listEntered, s.listRelease
+	s.listEntered = nil
+	s.listRelease = nil
+	s.mu.Unlock()
+	if entered != nil {
+		close(entered)
+		<-release
+	}
+	return out, nil
+}
+
+func (s *fakeStore) blockNextEnabledInstrumentList() (<-chan struct{}, chan<- struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.listEntered = make(chan struct{})
+	s.listRelease = make(chan struct{})
+	return s.listEntered, s.listRelease
+}
+
+func (s *fakeStore) ListMarketDataInstruments(
+	_ context.Context, instance domain.ExternalID,
+) ([]domain.MarketDataInstrument, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.instErr != nil {
 		return nil, s.instErr
 	}
-	return s.instruments[instance.String()], nil
+	return append(
+		[]domain.MarketDataInstrument(nil),
+		s.configuredInstruments[instance.String()]...,
+	), nil
 }
 
 func (s *fakeStore) UpsertMarketDataQuote(
@@ -74,11 +122,27 @@ func (s *fakeStore) quotesSnapshot() []domain.MarketDataQuote {
 	return append([]domain.MarketDataQuote(nil), s.quotes...)
 }
 
+func (s *fakeStore) setEnabledInstruments(
+	instance domain.ExternalID, instruments []domain.MarketDataInstrument,
+) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.instruments[instance.String()] = append(
+		[]domain.MarketDataInstrument(nil), instruments...,
+	)
+}
+
 type blockingQuoteStore struct {
 	instances   []domain.MarketDataInstance
 	instruments map[string][]domain.MarketDataInstrument
 	entered     chan struct{}
 	release     chan struct{}
+}
+
+func (s *blockingQuoteStore) ListMarketDataInstances(
+	context.Context,
+) ([]domain.MarketDataInstance, error) {
+	return nil, nil
 }
 
 func (s *blockingQuoteStore) ListEnabledMarketDataInstances(
@@ -91,6 +155,12 @@ func (s *blockingQuoteStore) ListEnabledMarketDataInstruments(
 	_ context.Context, instance domain.ExternalID,
 ) ([]domain.MarketDataInstrument, error) {
 	return s.instruments[instance.String()], nil
+}
+
+func (s *blockingQuoteStore) ListMarketDataInstruments(
+	context.Context, domain.ExternalID,
+) ([]domain.MarketDataInstrument, error) {
+	return nil, nil
 }
 
 func (s *blockingQuoteStore) UpsertMarketDataQuote(
@@ -106,25 +176,151 @@ func (s *blockingQuoteStore) UpsertMarketDataQuote(
 }
 
 type fakeSink struct {
-	mu      sync.Mutex
-	pushed  []QuoteUpdate
-	pushErr error
+	mu           sync.Mutex
+	pushed       []QuoteUpdate
+	cleared      []quoteInstrumentKey
+	live         map[quoteInstrumentKey]QuoteUpdate
+	clearCalls   int
+	pushErr      error
+	clearErr     error
+	blockNext    bool
+	blockEntered chan struct{}
+	blockRelease chan struct{}
+	clearEntered chan struct{}
+	clearRelease chan struct{}
 }
 
 func (s *fakeSink) Push(update QuoteUpdate) error {
 	s.mu.Lock()
+	if s.blockNext {
+		s.blockNext = false
+		entered := s.blockEntered
+		release := s.blockRelease
+		s.mu.Unlock()
+		close(entered)
+		<-release
+		s.mu.Lock()
+	}
 	defer s.mu.Unlock()
 	if s.pushErr != nil {
 		return s.pushErr
 	}
 	s.pushed = append(s.pushed, update)
+	if s.live == nil {
+		s.live = make(map[quoteInstrumentKey]QuoteUpdate)
+	}
+	s.live[quoteInstrumentKey{base: update.Base, quote: update.Quote}] = update
 	return nil
+}
+
+func (s *fakeSink) Clear(base, quote string) error {
+	s.mu.Lock()
+	if s.clearEntered != nil {
+		entered := s.clearEntered
+		release := s.clearRelease
+		s.clearEntered = nil
+		s.clearRelease = nil
+		s.mu.Unlock()
+		close(entered)
+		<-release
+		s.mu.Lock()
+	}
+	defer s.mu.Unlock()
+	s.clearCalls++
+	if s.clearErr != nil {
+		return s.clearErr
+	}
+	pair := quoteInstrumentKey{base: base, quote: quote}
+	s.cleared = append(s.cleared, pair)
+	delete(s.live, pair)
+	return nil
+}
+
+func (s *fakeSink) blockNextClear() (<-chan struct{}, chan struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.clearEntered = make(chan struct{})
+	s.clearRelease = make(chan struct{})
+	return s.clearEntered, s.clearRelease
+}
+
+func startManualReconciliationTestManager(
+	t *testing.T, sink *fakeSink, refreshInterval time.Duration,
+) (*Manager, *fakeStore, domain.ExternalID, domain.MarketDataInstrument) {
+	t.Helper()
+	instanceID := testExternalID("byo-reconciliation")
+	instance := domain.MarketDataInstance{
+		ExternalID: instanceID,
+		Provider:   domain.MarketDataProviderBYO,
+		Enabled:    true,
+	}
+	instrument := domain.MarketDataInstrument{
+		Instance: instanceID, ExternalSymbol: "Z/USD",
+		BaseAsset: "Z", QuoteAsset: "USD", ManualPrice: "2", Enabled: true,
+	}
+	registry := NewRegistry()
+	if err := registry.Register(Provider{
+		Type: domain.MarketDataProviderBYO,
+		Build: func(domain.MarketDataInstance) (Connector, error) {
+			return newFakeConnector(), nil
+		},
+	}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	store := &fakeStore{
+		instances:             []domain.MarketDataInstance{instance},
+		configuredInstances:   []domain.MarketDataInstance{instance},
+		instruments:           map[string][]domain.MarketDataInstrument{instanceID.String(): {instrument}},
+		configuredInstruments: map[string][]domain.MarketDataInstrument{instanceID.String(): {instrument}},
+	}
+	manager := mustNewManager(t, registry, store, sink, nil)
+	manager.manualRefreshInterval = refreshInterval
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(manager.Stop)
+	waitFor(t, time.Second, func() bool { return sink.count() >= 2 })
+	return manager, store, instanceID, instrument
+}
+
+func (s *fakeSink) blockNextPush() (<-chan struct{}, chan<- struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.blockNext = true
+	s.blockEntered = make(chan struct{})
+	s.blockRelease = make(chan struct{})
+	return s.blockEntered, s.blockRelease
 }
 
 func (s *fakeSink) count() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.pushed)
+}
+
+func (s *fakeSink) snapshot() []QuoteUpdate {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]QuoteUpdate(nil), s.pushed...)
+}
+
+func (s *fakeSink) clearedSnapshot() []quoteInstrumentKey {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]quoteInstrumentKey(nil), s.cleared...)
+}
+
+func (s *fakeSink) clearCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.clearCalls
+}
+
+func (s *fakeSink) liveQuote(pair quoteInstrumentKey) (QuoteUpdate, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	update, ok := s.live[pair]
+	return update, ok
 }
 
 func mustNewManager(
@@ -142,13 +338,39 @@ func mustNewManager(
 	return manager
 }
 
+func mustPush(t *testing.T, pushable Pushable, update QuoteUpdate) {
+	t.Helper()
+	if err := pushable.Push(context.Background(), update); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+}
+
 type fakeConnector struct {
 	ch     chan QuoteUpdate
+	done   chan struct{}
+	mu     sync.Mutex
+	wg     sync.WaitGroup
 	closed bool
 }
 
 func newFakeConnector() *fakeConnector {
-	return &fakeConnector{ch: make(chan QuoteUpdate, 4)}
+	return &fakeConnector{
+		ch:   make(chan QuoteUpdate, 4),
+		done: make(chan struct{}),
+	}
+}
+
+type reportingConnector struct {
+	*fakeConnector
+	statusReporter StatusReporter
+}
+
+func newReportingConnector() *reportingConnector {
+	return &reportingConnector{fakeConnector: newFakeConnector()}
+}
+
+func (c *reportingConnector) SetStatusReporter(report StatusReporter) {
+	c.statusReporter = report
 }
 
 func (c *fakeConnector) Subscribe(
@@ -158,15 +380,35 @@ func (c *fakeConnector) Subscribe(
 }
 
 func (c *fakeConnector) Close() {
+	c.mu.Lock()
 	if c.closed {
+		c.mu.Unlock()
 		return
 	}
 	c.closed = true
+	close(c.done)
+	c.mu.Unlock()
+	c.wg.Wait()
 	close(c.ch)
 }
 
-func (c *fakeConnector) Push(update QuoteUpdate) {
-	c.ch <- update
+func (c *fakeConnector) Push(ctx context.Context, update QuoteUpdate) error {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil
+	}
+	c.wg.Add(1)
+	c.mu.Unlock()
+	defer c.wg.Done()
+	select {
+	case <-c.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case c.ch <- update:
+		return nil
+	}
 }
 
 func (c *fakeConnector) VerifySymbol(
@@ -251,8 +493,13 @@ func (c *blockingPushConnector) Close() {
 	close(c.ch)
 }
 
-func (c *blockingPushConnector) Push(update QuoteUpdate) {
-	c.ch <- update
+func (c *blockingPushConnector) Push(ctx context.Context, update QuoteUpdate) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case c.ch <- update:
+		return nil
+	}
 }
 
 func TestManagerNoEnabledIsCleanNoop(t *testing.T) {
@@ -334,11 +581,11 @@ func TestManagerStopTimesOutStuckConnectorClose(t *testing.T) {
 func TestManagerStartReplaysManualQuotesOutsideLock(t *testing.T) {
 	t.Parallel()
 
-	instanceID := testExternalID("mock-1")
+	instanceID := testExternalID("byo-1")
 	connector := newBlockingPushConnector()
 	registry := NewRegistry()
 	if err := registry.Register(Provider{
-		Type: "mock",
+		Type: domain.MarketDataProviderBYO,
 		Build: func(domain.MarketDataInstance) (Connector, error) {
 			return connector, nil
 		},
@@ -347,7 +594,11 @@ func TestManagerStartReplaysManualQuotesOutsideLock(t *testing.T) {
 	}
 	store := &fakeStore{
 		instances: []domain.MarketDataInstance{
-			{ExternalID: instanceID, Provider: "mock", Enabled: true},
+			{
+				ExternalID: instanceID,
+				Provider:   domain.MarketDataProviderBYO,
+				Enabled:    true,
+			},
 		},
 		instruments: map[string][]domain.MarketDataInstrument{
 			instanceID.String(): {{
@@ -407,7 +658,7 @@ func TestManagerFansMockQuotesToSink(t *testing.T) {
 	if err := manager.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	connector.Push(QuoteUpdate{Base: "AAPL", Quote: "USD", Mark: "185"})
+	mustPush(t, connector, QuoteUpdate{Base: "AAPL", Quote: "USD", Mark: "185"})
 	waitFor(t, time.Second, func() bool { return sink.count() == 1 })
 	manager.Stop()
 	quotes := store.quotesSnapshot()
@@ -449,8 +700,8 @@ func TestManager_PushErrorDoesNotStopFeed(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	defer manager.Stop()
-	connector.Push(QuoteUpdate{Base: "AAPL", Quote: "USD", Mark: "185"})
-	connector.Push(QuoteUpdate{Base: "AAPL", Quote: "USD", Mark: "186"})
+	mustPush(t, connector, QuoteUpdate{Base: "AAPL", Quote: "USD", Mark: "185"})
+	mustPush(t, connector, QuoteUpdate{Base: "AAPL", Quote: "USD", Mark: "186"})
 	waitFor(t, time.Second, func() bool { return store.quoteCount() == 2 })
 
 	status := manager.InstanceStatuses()[instanceID.String()]
@@ -540,7 +791,7 @@ func TestManagerStopCancelsQuoteWriteContext(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	defer manager.Stop()
-	connector.Push(QuoteUpdate{Base: "AAPL", Quote: "USD", Mark: "185"})
+	mustPush(t, connector, QuoteUpdate{Base: "AAPL", Quote: "USD", Mark: "185"})
 	select {
 	case <-store.entered:
 	case <-time.After(time.Second):
@@ -639,7 +890,7 @@ func TestManagerStopPreservesRestartContext(t *testing.T) {
 	if got := manager.AppliedConfig(); len(got) == 0 {
 		t.Fatalf("applied config after Restart is empty")
 	}
-	connectors[1].Push(QuoteUpdate{Base: "AAPL", Quote: "USD", Mark: "185"})
+	mustPush(t, connectors[1], QuoteUpdate{Base: "AAPL", Quote: "USD", Mark: "185"})
 	waitFor(t, time.Second, func() bool { return sink.count() == 1 })
 	manager.Stop()
 }
@@ -706,6 +957,791 @@ func TestManagerPushesStoredManualPriceOnceAtStartup(t *testing.T) {
 	}
 }
 
+func TestManagerManualRefreshTracksLiveUpdateAndClear(t *testing.T) {
+	instanceID := testExternalID("byo-refresh")
+	connector := newFakeConnector()
+	registry := NewRegistry()
+	if err := registry.Register(Provider{
+		Type: domain.MarketDataProviderBYO,
+		Build: func(domain.MarketDataInstance) (Connector, error) {
+			return connector, nil
+		},
+	}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	instrument := domain.MarketDataInstrument{
+		Instance: instanceID, ExternalSymbol: "Z/USD",
+		BaseAsset: "Z", QuoteAsset: "USD", ManualPrice: "2", Enabled: true,
+	}
+	store := &fakeStore{
+		instances: []domain.MarketDataInstance{{
+			ExternalID: instanceID,
+			Provider:   domain.MarketDataProviderBYO,
+			Enabled:    true,
+		}},
+		instruments: map[string][]domain.MarketDataInstrument{
+			instanceID.String(): {instrument},
+		},
+	}
+	sink := &fakeSink{}
+	manager := mustNewManager(t, registry, store, sink, nil)
+	manager.manualRefreshInterval = 10 * time.Millisecond
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer manager.Stop()
+
+	// Startup publishes once; subsequent ticks must keep the static mark fresh.
+	waitFor(t, time.Second, func() bool { return sink.count() >= 3 })
+
+	instrument.ManualPrice = "3"
+	store.setEnabledInstruments(instanceID, []domain.MarketDataInstrument{instrument})
+	waitFor(t, time.Second, func() bool {
+		for _, update := range sink.snapshot() {
+			if update.Mark == "3" {
+				return true
+			}
+		}
+		return false
+	})
+
+	instrument.ManualPrice = ""
+	store.setEnabledInstruments(instanceID, []domain.MarketDataInstrument{instrument})
+	// Allow a tick that already read the old value to drain, then require the
+	// count to remain stable across several refresh intervals.
+	time.Sleep(3 * manager.manualRefreshInterval)
+	countAfterClear := sink.count()
+	time.Sleep(5 * manager.manualRefreshInterval)
+	if got := sink.count(); got != countAfterClear {
+		t.Fatalf("quotes after manual clear = %d -> %d, want refresh stopped",
+			countAfterClear, got)
+	}
+}
+
+func TestManagerManualClearIsAfterOldHeartbeatAndClearsSynthetic(t *testing.T) {
+	instanceID := testExternalID("byo-clear-order")
+	connector := newFakeConnector()
+	registry := NewRegistry()
+	if err := registry.Register(Provider{
+		Type: domain.MarketDataProviderBYO,
+		Build: func(domain.MarketDataInstance) (Connector, error) {
+			return connector, nil
+		},
+	}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	instance := domain.MarketDataInstance{
+		ExternalID: instanceID,
+		Provider:   domain.MarketDataProviderBYO,
+		Enabled:    true,
+	}
+	instrument := domain.MarketDataInstrument{
+		Instance: instanceID, ExternalSymbol: "Z/USD",
+		BaseAsset: "Z", QuoteAsset: "USD", ManualPrice: "2", Enabled: true,
+	}
+	store := &fakeStore{
+		instances:           []domain.MarketDataInstance{instance},
+		configuredInstances: []domain.MarketDataInstance{instance},
+		instruments: map[string][]domain.MarketDataInstrument{
+			instanceID.String(): {instrument},
+		},
+		configuredInstruments: map[string][]domain.MarketDataInstrument{
+			instanceID.String(): {instrument},
+		},
+	}
+	sink := &fakeSink{}
+	manager := mustNewManager(t, registry, store, sink, nil)
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer manager.Stop()
+	waitFor(t, time.Second, func() bool { return sink.count() == 2 })
+
+	entered, release := sink.blockNextPush()
+	mustPush(t, connector, manualQuote(instrument))
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("old heartbeat did not reach sink")
+	}
+
+	cleared := instrument
+	cleared.ManualPrice = ""
+	store.setEnabledInstruments(instanceID, []domain.MarketDataInstrument{cleared})
+	clearResult := make(chan error, 1)
+	go func() {
+		clearResult <- manager.PushManual(context.Background(), instanceID.String(), cleared)
+	}()
+	close(release)
+	select {
+	case err := <-clearResult:
+		if err != nil {
+			t.Fatalf("PushManual(clear): %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("manual clear did not drain after old heartbeat")
+	}
+
+	// Queue another stale old tick before a second clear barrier. The desired
+	// mark is already empty, so drain must drop the stale tick; the barrier proves
+	// it was observed before the assertions below.
+	mustPush(t, connector, manualQuote(instrument))
+	if err := manager.PushManual(context.Background(), instanceID.String(), cleared); err != nil {
+		t.Fatalf("second PushManual(clear): %v", err)
+	}
+	if got := sink.count(); got != 4 {
+		t.Fatalf("pushed quotes after clear = %d, want direct+synthetic startup and pre-clear heartbeat", got)
+	}
+	wantCleared := []quoteInstrumentKey{
+		{base: "Z", quote: "USD"},
+		{base: "USD", quote: "Z"},
+		{base: "Z", quote: "USD"},
+		{base: "USD", quote: "Z"},
+	}
+	gotCleared := sink.clearedSnapshot()
+	if len(gotCleared) != len(wantCleared) {
+		t.Fatalf("cleared pairs = %+v, want %+v", gotCleared, wantCleared)
+	}
+	for i := range wantCleared {
+		if gotCleared[i] != wantCleared[i] {
+			t.Fatalf("cleared pair %d = %+v, want %+v", i, gotCleared[i], wantCleared[i])
+		}
+	}
+}
+
+func TestManagerManualClearInvalidatesAlreadyReadRefresh(t *testing.T) {
+	instanceID := testExternalID("byo-clear-read-race")
+	connector := newFakeConnector()
+	registry := NewRegistry()
+	if err := registry.Register(Provider{
+		Type: domain.MarketDataProviderBYO,
+		Build: func(domain.MarketDataInstance) (Connector, error) {
+			return connector, nil
+		},
+	}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	instance := domain.MarketDataInstance{
+		ExternalID: instanceID,
+		Provider:   domain.MarketDataProviderBYO,
+		Enabled:    true,
+	}
+	instrument := domain.MarketDataInstrument{
+		Instance: instanceID, ExternalSymbol: "Z/USD",
+		BaseAsset: "Z", QuoteAsset: "USD", ManualPrice: "2", Enabled: true,
+	}
+	store := &fakeStore{
+		instances:           []domain.MarketDataInstance{instance},
+		configuredInstances: []domain.MarketDataInstance{instance},
+		instruments: map[string][]domain.MarketDataInstrument{
+			instanceID.String(): {instrument},
+		},
+		configuredInstruments: map[string][]domain.MarketDataInstrument{
+			instanceID.String(): {instrument},
+		},
+	}
+	sink := &fakeSink{}
+	manager := mustNewManager(t, registry, store, sink, nil)
+	manager.manualRefreshInterval = 0
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer manager.Stop()
+	waitFor(t, time.Second, func() bool { return sink.count() == 2 })
+
+	read, release := store.blockNextEnabledInstrumentList()
+	refreshDone := make(chan struct{})
+	go func() {
+		manager.refreshManualMarksOnce(context.Background())
+		close(refreshDone)
+	}()
+	select {
+	case <-read:
+	case <-time.After(time.Second):
+		t.Fatal("manual refresh did not read the old mark")
+	}
+
+	cleared := instrument
+	cleared.ManualPrice = ""
+	store.setEnabledInstruments(instanceID, []domain.MarketDataInstrument{cleared})
+	if err := manager.PushManual(context.Background(), instanceID.String(), cleared); err != nil {
+		t.Fatalf("PushManual(clear): %v", err)
+	}
+	close(release)
+	select {
+	case <-refreshDone:
+	case <-time.After(time.Second):
+		t.Fatal("stale refresh snapshot did not finish")
+	}
+
+	// A second clear is a FIFO barrier after the stale refresh attempt.
+	if err := manager.PushManual(context.Background(), instanceID.String(), cleared); err != nil {
+		t.Fatalf("second PushManual(clear): %v", err)
+	}
+	if got := sink.count(); got != 2 {
+		t.Fatalf("stale already-read heartbeat reached sink: pushes=%d", got)
+	}
+	if got := len(sink.clearedSnapshot()); got != 4 {
+		t.Fatalf("direct+synthetic clear calls = %d, want 4", got)
+	}
+}
+
+func TestManagerManualClearFailureRetriesStoredConfiguration(t *testing.T) {
+	sink := &fakeSink{}
+	manager, store, instanceID, instrument := startManualReconciliationTestManager(
+		t, sink, 10*time.Millisecond,
+	)
+
+	cleared := instrument
+	cleared.ManualPrice = ""
+	sink.mu.Lock()
+	sink.clearErr = errors.New("clear unavailable")
+	sink.mu.Unlock()
+	store.setEnabledInstruments(instanceID, []domain.MarketDataInstrument{cleared})
+	err := manager.PushManual(context.Background(), instanceID.String(), cleared)
+	if err == nil || !strings.Contains(err.Error(), "pending reconciliation") {
+		t.Fatalf("PushManual(clear) error = %v, want pending reconciliation", err)
+	}
+	sink.mu.Lock()
+	sink.clearErr = nil
+	sink.mu.Unlock()
+
+	waitFor(t, time.Second, func() bool {
+		return len(sink.clearedSnapshot()) == 2
+	})
+	manager.mu.Lock()
+	mark := manager.manualMarks[instanceID.String()][quoteInstrumentKey{
+		base: instrument.BaseAsset, quote: instrument.QuoteAsset,
+	}]
+	manager.mu.Unlock()
+	if mark != "" {
+		t.Fatalf("observed manual mark = %q, want acknowledged clear", mark)
+	}
+	status := manager.InstanceStatuses()[instanceID.String()]
+	foundPending := false
+	for _, diag := range status.Diagnostics {
+		if diag.Title == "Manual quote reconciliation pending" {
+			foundPending = true
+			break
+		}
+	}
+	if !foundPending {
+		t.Fatalf("diagnostics = %+v, want pending reconciliation", status.Diagnostics)
+	}
+}
+
+func TestManagerManualClearTimeoutReleasesPublisherAndPreservesNewMark(t *testing.T) {
+	sink := &fakeSink{}
+	manager, store, instanceID, instrument := startManualReconciliationTestManager(
+		t, sink, 0,
+	)
+	manager.stopGrace = 20 * time.Millisecond
+	entered, release := sink.blockNextClear()
+	released := false
+	t.Cleanup(func() {
+		if !released {
+			close(release)
+		}
+	})
+
+	cleared := instrument
+	cleared.ManualPrice = ""
+	store.setEnabledInstruments(instanceID, []domain.MarketDataInstrument{cleared})
+	started := time.Now()
+	err := manager.PushManual(context.Background(), instanceID.String(), cleared)
+	if err == nil || !strings.Contains(err.Error(), "pending reconciliation") {
+		t.Fatalf("PushManual(clear) error = %v, want pending reconciliation", err)
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("PushManual(clear) elapsed = %s, want bounded return", elapsed)
+	}
+	select {
+	case <-entered:
+	default:
+		t.Fatal("manual clear did not reach the sink")
+	}
+
+	updated := instrument
+	updated.ManualPrice = "3"
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if err := manager.PushManual(ctx, instanceID.String(), updated); err != nil {
+		t.Fatalf("PushManual(new mark) while old clear is pending: %v", err)
+	}
+	close(release)
+	released = true
+	waitFor(t, time.Second, func() bool {
+		for _, update := range sink.snapshot() {
+			if update.Base == "Z" && update.Quote == "USD" && update.Mark == "3" {
+				return true
+			}
+		}
+		return false
+	})
+	manager.mu.Lock()
+	mark := manager.manualMarks[instanceID.String()][quoteInstrumentKey{
+		base: instrument.BaseAsset, quote: instrument.QuoteAsset,
+	}]
+	manager.mu.Unlock()
+	if mark != "3" {
+		t.Fatalf("observed manual mark = %q, want newer mark 3", mark)
+	}
+}
+
+func TestManagerPushManualCancellationWhilePublisherIsBusy(t *testing.T) {
+	sink := &fakeSink{}
+	manager, _, instanceID, instrument := startManualReconciliationTestManager(
+		t, sink, 0,
+	)
+	if err := manager.acquireGate(
+		context.Background(), manager.manualPublisherGate,
+	); err != nil {
+		t.Fatalf("acquire publisher gate: %v", err)
+	}
+	defer manager.releaseGate(manager.manualPublisherGate)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	instrument.ManualPrice = "3"
+	err := manager.PushManual(ctx, instanceID.String(), instrument)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("PushManual error = %v, want context cancellation", err)
+	}
+}
+
+func TestManagerPendingManualClearSurvivesRestart(t *testing.T) {
+	sink := &fakeSink{}
+	manager, store, instanceID, instrument := startManualReconciliationTestManager(
+		t, sink, 0,
+	)
+	cleared := instrument
+	cleared.ManualPrice = ""
+	sink.mu.Lock()
+	sink.clearErr = errors.New("clear unavailable")
+	sink.mu.Unlock()
+	store.setEnabledInstruments(instanceID, []domain.MarketDataInstrument{cleared})
+	if err := manager.PushManual(
+		context.Background(), instanceID.String(), cleared,
+	); err == nil {
+		t.Fatal("PushManual(clear) succeeded, want pending reconciliation")
+	}
+	sink.mu.Lock()
+	sink.clearErr = nil
+	sink.mu.Unlock()
+	if err := manager.Restart(); err != nil {
+		t.Fatalf("Restart: %v", err)
+	}
+	waitFor(t, time.Second, func() bool {
+		return len(sink.clearedSnapshot()) == 2
+	})
+}
+
+func TestManagerRestartClearsDisabledManualDirectAndSyntheticPairs(t *testing.T) {
+	sink := &fakeSink{}
+	manager, store, instanceID, _ := startManualReconciliationTestManager(
+		t, sink, 0,
+	)
+	store.setEnabledInstruments(instanceID, nil)
+	if err := manager.Restart(); err != nil {
+		t.Fatalf("Restart: %v", err)
+	}
+	waitFor(t, time.Second, func() bool {
+		return len(sink.clearedSnapshot()) == 2
+	})
+	want := []quoteInstrumentKey{
+		{base: "Z", quote: "USD"},
+		{base: "USD", quote: "Z"},
+	}
+	got := sink.clearedSnapshot()
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("cleared pair %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestManagerRetriesFailedStartupClearAfterIdentityRemoval(t *testing.T) {
+	sink := &fakeSink{}
+	manager, store, _, _ := startManualReconciliationTestManager(
+		t, sink, 10*time.Millisecond,
+	)
+	sink.mu.Lock()
+	sink.clearErr = errors.New("clear unavailable")
+	sink.mu.Unlock()
+	store.mu.Lock()
+	store.instances = nil
+	store.mu.Unlock()
+	if err := manager.Restart(); err != nil {
+		t.Fatalf("Restart: %v", err)
+	}
+	waitFor(t, time.Second, func() bool { return sink.clearCount() > 0 })
+	sink.mu.Lock()
+	sink.clearErr = nil
+	sink.mu.Unlock()
+	waitFor(t, time.Second, func() bool {
+		return len(sink.clearedSnapshot()) == 2
+	})
+}
+
+func TestManagerRetriesFailedSyntheticTopologyClear(t *testing.T) {
+	sink := &fakeSink{}
+	manager, store, instanceID, instrument := startManualReconciliationTestManager(
+		t, sink, 10*time.Millisecond,
+	)
+	reverse := domain.MarketDataInstrument{
+		Instance: instanceID, ExternalSymbol: "USD/Z",
+		BaseAsset: "USD", QuoteAsset: "Z", Enabled: false,
+	}
+	store.mu.Lock()
+	store.configuredInstruments[instanceID.String()] =
+		[]domain.MarketDataInstrument{instrument, reverse}
+	store.mu.Unlock()
+	sink.mu.Lock()
+	sink.clearErr = errors.New("clear unavailable")
+	sink.mu.Unlock()
+	if err := manager.Restart(); err != nil {
+		t.Fatalf("Restart: %v", err)
+	}
+	waitFor(t, time.Second, func() bool { return sink.clearCount() > 0 })
+	sink.mu.Lock()
+	sink.clearErr = nil
+	sink.mu.Unlock()
+	waitFor(t, time.Second, func() bool {
+		return len(sink.clearedSnapshot()) == 1
+	})
+	cleared := sink.clearedSnapshot()[0]
+	if want := (quoteInstrumentKey{base: "USD", quote: "Z"}); cleared != want {
+		t.Fatalf("cleared pair = %+v, want synthetic %+v", cleared, want)
+	}
+	if update, ok := sink.liveQuote(quoteInstrumentKey{base: "Z", quote: "USD"}); !ok || update.Mark != "2" {
+		t.Fatalf("live direct quote = %+v/%v, want mark 2", update, ok)
+	}
+}
+
+func TestManagerRestartBarrierOrdersStreamingTickAfterOldManualClear(t *testing.T) {
+	instanceID := testExternalID("byo-to-streaming")
+	byoConnector := newFakeConnector()
+	streamConnector := newFakeConnector()
+	registry := NewRegistry()
+	if err := registry.Register(Provider{
+		Type: domain.MarketDataProviderBYO,
+		Build: func(domain.MarketDataInstance) (Connector, error) {
+			return byoConnector, nil
+		},
+	}); err != nil {
+		t.Fatalf("register BYO: %v", err)
+	}
+	if err := registry.Register(Provider{
+		Type: domain.MarketDataProviderMock,
+		Build: func(domain.MarketDataInstance) (Connector, error) {
+			return streamConnector, nil
+		},
+	}); err != nil {
+		t.Fatalf("register streaming: %v", err)
+	}
+	instance := domain.MarketDataInstance{
+		ExternalID: instanceID,
+		Provider:   domain.MarketDataProviderBYO,
+		Enabled:    true,
+	}
+	instrument := domain.MarketDataInstrument{
+		Instance: instanceID, ExternalSymbol: "Z/USD",
+		BaseAsset: "Z", QuoteAsset: "USD", ManualPrice: "2", Enabled: true,
+	}
+	store := &fakeStore{
+		instances:             []domain.MarketDataInstance{instance},
+		configuredInstances:   []domain.MarketDataInstance{instance},
+		instruments:           map[string][]domain.MarketDataInstrument{instanceID.String(): {instrument}},
+		configuredInstruments: map[string][]domain.MarketDataInstrument{instanceID.String(): {instrument}},
+	}
+	sink := &fakeSink{}
+	manager := mustNewManager(t, registry, store, sink, nil)
+	manager.manualRefreshInterval = 0
+	manager.stopGrace = 20 * time.Millisecond
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(manager.Stop)
+	waitFor(t, time.Second, func() bool { return sink.count() == 2 })
+	entered, release := sink.blockNextClear()
+	released := false
+	t.Cleanup(func() {
+		if !released {
+			close(release)
+		}
+	})
+	cleared := instrument
+	cleared.ManualPrice = ""
+	if err := manager.PushManual(
+		context.Background(), instanceID.String(), cleared,
+	); err == nil {
+		t.Fatal("PushManual(clear) succeeded, want timeout")
+	}
+	select {
+	case <-entered:
+	default:
+		t.Fatal("old manual clear did not enter sink")
+	}
+	streamingInstance := instance
+	streamingInstance.Provider = domain.MarketDataProviderMock
+	streamingInstrument := instrument
+	streamingInstrument.ManualPrice = ""
+	store.mu.Lock()
+	store.instances = []domain.MarketDataInstance{streamingInstance}
+	store.configuredInstances = []domain.MarketDataInstance{streamingInstance}
+	store.instruments[instanceID.String()] =
+		[]domain.MarketDataInstrument{streamingInstrument}
+	store.configuredInstruments[instanceID.String()] =
+		[]domain.MarketDataInstrument{streamingInstrument}
+	store.mu.Unlock()
+	if err := manager.Restart(); err != nil {
+		t.Fatalf("Restart: %v", err)
+	}
+	mustPush(t, streamConnector, QuoteUpdate{
+		Base: "Z", Quote: "USD", Mark: "9",
+	})
+	close(release)
+	released = true
+	waitFor(t, time.Second, func() bool {
+		update, ok := sink.liveQuote(quoteInstrumentKey{base: "Z", quote: "USD"})
+		return sink.clearCount() >= 4 && ok && update.Mark == "9"
+	})
+}
+
+func TestManagerRejectsOldGenerationClearBeforeSink(t *testing.T) {
+	sink := &fakeSink{}
+	manager, _, instanceID, instrument := startManualReconciliationTestManager(
+		t, sink, 0,
+	)
+	pair := quoteInstrumentKey{base: instrument.BaseAsset, quote: instrument.QuoteAsset}
+	manager.mu.Lock()
+	state := manualClearState{
+		generation: manager.manualGeneration,
+		token:      manager.nextManualTokenLocked(),
+		direct:     true,
+		synthetic:  true,
+	}
+	manager.pendingManualClears[manualQuoteIdentity{
+		instanceID: instanceID.String(), pair: pair,
+	}] = state
+	manager.manualGeneration++
+	manager.mu.Unlock()
+	if err := manager.applyManualClear(
+		context.Background(), instanceID.String(), manualClearUpdate(pair, state),
+	); err != nil {
+		t.Fatalf("apply stale clear: %v", err)
+	}
+	if got := len(sink.clearedSnapshot()); got != 0 {
+		t.Fatalf("stale generation cleared %d pairs, want none", got)
+	}
+}
+
+func TestManagerStopTimeoutOrdersNewRunMarkAfterOldClear(t *testing.T) {
+	sink := &fakeSink{}
+	manager, store, instanceID, instrument := startManualReconciliationTestManager(
+		t, sink, 0,
+	)
+	manager.stopGrace = 20 * time.Millisecond
+	entered, release := sink.blockNextClear()
+	released := false
+	t.Cleanup(func() {
+		if !released {
+			close(release)
+		}
+	})
+	cleared := instrument
+	cleared.ManualPrice = ""
+	store.setEnabledInstruments(instanceID, []domain.MarketDataInstrument{cleared})
+	if err := manager.PushManual(
+		context.Background(), instanceID.String(), cleared,
+	); err == nil {
+		t.Fatal("PushManual(clear) succeeded, want timeout")
+	}
+	select {
+	case <-entered:
+	default:
+		t.Fatal("old clear did not enter sink")
+	}
+	updated := instrument
+	updated.ManualPrice = "3"
+	store.setEnabledInstruments(instanceID, []domain.MarketDataInstrument{updated})
+	if err := manager.Restart(); err != nil {
+		t.Fatalf("Restart: %v", err)
+	}
+	close(release)
+	released = true
+	waitFor(t, time.Second, func() bool {
+		manager.mu.Lock()
+		defer manager.mu.Unlock()
+		acknowledged := manager.manualAcknowledged[manualQuoteIdentity{
+			instanceID: instanceID.String(),
+			pair: quoteInstrumentKey{
+				base: instrument.BaseAsset, quote: instrument.QuoteAsset,
+			},
+		}]
+		return acknowledged.mark == "3"
+	})
+}
+
+func TestManagerStopTimeoutOrdersNewStreamingQuoteAfterOldPush(t *testing.T) {
+	instanceID := testExternalID("streaming-stop-timeout")
+	oldConnector := newReportingConnector()
+	newConnector := newReportingConnector()
+	registry := NewRegistry()
+	builds := 0
+	if err := registry.Register(Provider{
+		Type: domain.MarketDataProviderMock,
+		Build: func(domain.MarketDataInstance) (Connector, error) {
+			builds++
+			if builds == 1 {
+				return oldConnector, nil
+			}
+			return newConnector, nil
+		},
+	}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	store := &fakeStore{
+		instances: []domain.MarketDataInstance{{
+			ExternalID: instanceID,
+			Provider:   domain.MarketDataProviderMock,
+			Enabled:    true,
+		}},
+		instruments: map[string][]domain.MarketDataInstrument{
+			instanceID.String(): {{
+				Instance:       instanceID,
+				ExternalSymbol: "Z/USD",
+				BaseAsset:      "Z",
+				QuoteAsset:     "USD",
+				Enabled:        true,
+			}},
+		},
+	}
+	sink := &fakeSink{}
+	manager := mustNewManager(t, registry, store, sink, nil)
+	manager.stopGrace = 20 * time.Millisecond
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(manager.Stop)
+
+	entered, release := sink.blockNextPush()
+	released := false
+	t.Cleanup(func() {
+		if !released {
+			close(release)
+		}
+	})
+	mustPush(t, oldConnector, QuoteUpdate{Base: "Z", Quote: "USD", Mark: "1"})
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("old streaming quote did not enter sink")
+	}
+	if err := manager.Restart(); err != nil {
+		t.Fatalf("Restart: %v", err)
+	}
+	if oldConnector.statusReporter == nil {
+		t.Fatal("old connector did not receive status reporter")
+	}
+	oldConnector.statusReporter(false, "stale connection error")
+	status := manager.InstanceStatuses()[instanceID.String()]
+	if status.State != StateOK || status.Error != "" {
+		t.Fatalf("old callback replaced new status: %+v", status)
+	}
+	for _, diag := range status.Diagnostics {
+		if diag.Detail == "stale connection error" {
+			t.Fatalf("old callback recorded stale diagnostic: %+v", diag)
+		}
+	}
+
+	mustPush(t, newConnector, QuoteUpdate{Base: "Z", Quote: "USD", Mark: "2"})
+	close(release)
+	released = true
+	waitFor(t, time.Second, func() bool {
+		update, ok := sink.liveQuote(quoteInstrumentKey{base: "Z", quote: "USD"})
+		return ok && update.Mark == "2"
+	})
+}
+
+func TestManagerStopEndsManualRefresh(t *testing.T) {
+	instanceID := testExternalID("byo-stop-refresh")
+	connector := newFakeConnector()
+	registry := NewRegistry()
+	if err := registry.Register(Provider{
+		Type: domain.MarketDataProviderBYO,
+		Build: func(domain.MarketDataInstance) (Connector, error) {
+			return connector, nil
+		},
+	}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	store := &fakeStore{
+		instances: []domain.MarketDataInstance{{
+			ExternalID: instanceID,
+			Provider:   domain.MarketDataProviderBYO,
+			Enabled:    true,
+		}},
+		instruments: map[string][]domain.MarketDataInstrument{
+			instanceID.String(): {{
+				Instance: instanceID, ExternalSymbol: "Z/USD",
+				BaseAsset: "Z", QuoteAsset: "USD", ManualPrice: "2", Enabled: true,
+			}},
+		},
+	}
+	sink := &fakeSink{}
+	manager := mustNewManager(t, registry, store, sink, nil)
+	manager.manualRefreshInterval = 10 * time.Millisecond
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitFor(t, time.Second, func() bool { return sink.count() >= 2 })
+	manager.Stop()
+	countAfterStop := sink.count()
+	time.Sleep(5 * manager.manualRefreshInterval)
+	if got := sink.count(); got != countAfterStop {
+		t.Fatalf("quotes after Stop = %d -> %d, want heartbeat stopped",
+			countAfterStop, got)
+	}
+}
+
+func TestManagerDoesNotRefreshPushableStreamingProvider(t *testing.T) {
+	instanceID := testExternalID("mock-pushable")
+	connector := newFakeConnector()
+	registry := NewRegistry()
+	if err := registry.Register(Provider{
+		Type: domain.MarketDataProviderMock,
+		Build: func(domain.MarketDataInstance) (Connector, error) {
+			return connector, nil
+		},
+	}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	store := &fakeStore{
+		instances: []domain.MarketDataInstance{{
+			ExternalID: instanceID,
+			Provider:   domain.MarketDataProviderMock,
+			Enabled:    true,
+		}},
+		instruments: map[string][]domain.MarketDataInstrument{
+			instanceID.String(): {{
+				Instance: instanceID, ExternalSymbol: "EURUSD",
+				BaseAsset: "EUR", QuoteAsset: "USD", ManualPrice: "2", Enabled: true,
+			}},
+		},
+	}
+	sink := &fakeSink{}
+	manager := mustNewManager(t, registry, store, sink, nil)
+	manager.manualRefreshInterval = 10 * time.Millisecond
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer manager.Stop()
+	time.Sleep(5 * manager.manualRefreshInterval)
+	if got := sink.count(); got != 0 {
+		t.Fatalf("streaming provider manual refresh count = %d, want zero", got)
+	}
+}
+
 func TestManagerPushManualAfterStartupPushesOnce(t *testing.T) {
 	t.Parallel()
 
@@ -736,10 +1772,12 @@ func TestManagerPushManualAfterStartupPushesOnce(t *testing.T) {
 	if err := manager.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	manager.PushManual(instanceID.String(), domain.MarketDataInstrument{
+	if err := manager.PushManual(context.Background(), instanceID.String(), domain.MarketDataInstrument{
 		Instance: instanceID, ExternalSymbol: "USDT/USD",
 		BaseAsset: "USDT", QuoteAsset: "USD", ManualPrice: "1", Enabled: true,
-	})
+	}); err != nil {
+		t.Fatalf("PushManual: %v", err)
+	}
 	waitFor(t, time.Second, func() bool { return sink.count() == 1 })
 	manager.Stop()
 	if got := store.quotesSnapshot()[0]; got.ExternalSymbol != "USDT/USD" ||
@@ -780,10 +1818,12 @@ func TestManager_PushManualNonByoUntouched(t *testing.T) {
 	}
 	defer manager.Stop()
 
-	manager.PushManual(instanceID.String(), domain.MarketDataInstrument{
+	if err := manager.PushManual(context.Background(), instanceID.String(), domain.MarketDataInstrument{
 		Instance: instanceID, ExternalSymbol: "AAPL",
 		BaseAsset: "AAPL", QuoteAsset: "USD", ManualPrice: "185", Enabled: true,
-	})
+	}); err != nil {
+		t.Fatalf("PushManual: %v", err)
+	}
 
 	time.Sleep(20 * time.Millisecond)
 	if sink.count() != 0 {
@@ -826,10 +1866,12 @@ func TestManagerPushManualSkipsUnappliedInstrument(t *testing.T) {
 	}
 	defer manager.Stop()
 
-	manager.PushManual(instanceID.String(), domain.MarketDataInstrument{
+	if err := manager.PushManual(context.Background(), instanceID.String(), domain.MarketDataInstrument{
 		Instance: instanceID, ExternalSymbol: "Z/USD",
 		BaseAsset: "Z", QuoteAsset: "USD", ManualPrice: "2", Enabled: true,
-	})
+	}); err != nil {
+		t.Fatalf("PushManual: %v", err)
+	}
 	time.Sleep(20 * time.Millisecond)
 
 	if sink.count() != 0 {
@@ -872,13 +1914,13 @@ func TestManagerQuoteUpdateIntervalUnknownThenGap(t *testing.T) {
 	if err := manager.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	connector.Push(QuoteUpdate{Base: "AAPL", Quote: "USD", Mark: "100"})
+	mustPush(t, connector, QuoteUpdate{Base: "AAPL", Quote: "USD", Mark: "100"})
 	waitFor(t, time.Second, func() bool { return store.quoteCount() == 1 })
 	if _, ok := manager.QuoteUpdateInterval(instanceID.String(), "AAPL"); ok {
 		t.Fatalf("interval known after first quote")
 	}
 	time.Sleep(5 * time.Millisecond)
-	connector.Push(QuoteUpdate{Base: "AAPL", Quote: "USD", Mark: "101"})
+	mustPush(t, connector, QuoteUpdate{Base: "AAPL", Quote: "USD", Mark: "101"})
 	waitFor(t, time.Second, func() bool {
 		interval, ok := manager.QuoteUpdateInterval(instanceID.String(), "AAPL")
 		return ok && interval > 0

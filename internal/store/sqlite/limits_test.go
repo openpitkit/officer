@@ -322,30 +322,56 @@ func TestOrderSizeLimitCascadeOnAssetDelete(t *testing.T) {
 	}
 }
 
-func TestSpotFundsPnlBoundsInitialPnlOnlyForAccount(t *testing.T) {
+func TestDeleteAccountWithoutForceRejectsSpotFundsPnlBoundsDependent(t *testing.T) {
 	ctx, rs := seedLimitFixtures(t)
 
-	for _, limit := range []domain.LimitSpotFundsPnlBounds{
-		{
-			Scope:      domain.ScopeGlobal,
-			LowerBound: "-100",
-			InitialPnl: "5",
-		},
-		{
-			Scope:        domain.ScopeAccountGroup,
-			AccountGroup: "desk-a",
-			LowerBound:   "-100",
-			InitialPnl:   "5",
-		},
-	} {
-		err := rs.PutSpotFundsPnlBoundsLimit(ctx, limit)
-		if !errors.Is(err, domain.ErrInvalid) {
-			t.Fatalf(
-				"PutSpotFundsPnlBoundsLimit(%s) error = %v, want ErrInvalid",
-				limit.Scope,
-				err,
-			)
-		}
+	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Scope: domain.ScopeAccount, Account: "acc-1", LowerBound: "-100",
+	}); err != nil {
+		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
+	}
+
+	err := rs.DeleteAccount(ctx, "acc-1", false)
+	var dependentErr domain.HasDependentsError
+	if !errors.As(err, &dependentErr) {
+		t.Fatalf("DeleteAccount(no force) error = %v, want HasDependentsError", err)
+	}
+	if len(dependentErr.Dependents) != 1 ||
+		dependentErr.Dependents[0].Kind != "limit_spot_funds_pnl_bound" ||
+		dependentErr.Dependents[0].Count != 1 {
+		t.Fatalf("DeleteAccount(no force) dependents = %+v", dependentErr.Dependents)
+	}
+	if _, ok, getErr := rs.GetAccount(ctx, "acc-1"); getErr != nil || !ok {
+		t.Fatalf("GetAccount after rejected delete: ok=%v err=%v", ok, getErr)
+	}
+	limits, listErr := rs.ListSpotFundsPnlBoundsLimits(ctx, "acc-1")
+	if listErr != nil || len(limits) != 1 {
+		t.Fatalf("ListSpotFundsPnlBoundsLimits after rejected delete = %+v err=%v",
+			limits, listErr)
+	}
+}
+
+func TestDeleteAccountForceCascadesSpotFundsPnlBoundsDependent(t *testing.T) {
+	ctx, rs := seedLimitFixtures(t)
+
+	if err := rs.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Scope: domain.ScopeAccount, Account: "acc-1", LowerBound: "-100",
+	}); err != nil {
+		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
+	}
+	if err := rs.DeleteAccount(ctx, "acc-1", true); err != nil {
+		t.Fatalf("DeleteAccount(force): %v", err)
+	}
+
+	if _, ok, err := rs.GetAccount(ctx, "acc-1"); err != nil || ok {
+		t.Fatalf("GetAccount after forced delete: ok=%v err=%v", ok, err)
+	}
+	limits, err := rs.ListSpotFundsPnlBoundsLimits(ctx, "")
+	if err != nil {
+		t.Fatalf("ListSpotFundsPnlBoundsLimits after forced delete: %v", err)
+	}
+	if len(limits) != 0 {
+		t.Fatalf("spot funds limits after forced delete = %+v, want none", limits)
 	}
 }
 

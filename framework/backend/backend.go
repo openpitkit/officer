@@ -24,6 +24,7 @@ package backend
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
@@ -46,11 +47,12 @@ type MarketDataRuntime interface {
 	// ticks of the identified instrument's quote, and whether it is known yet.
 	QuoteUpdateInterval(instanceID, external string) (time.Duration, bool)
 	Restart() error
-	// PushManual delivers one instrument's operator-set manual mark into the
-	// running instance as a single quote. It is a no-op when the instance is not
-	// running, its connector is not push-capable, or the instrument is disabled
-	// or has no manual price.
-	PushManual(instanceID string, instrument domain.MarketDataInstrument)
+	// PushManual delivers or clears one instrument's operator-set manual mark in
+	// the running instance. It is a no-op when the instance is not running, its
+	// connector is not push-capable, or the applied subscription does not match.
+	PushManual(
+		ctx context.Context, instanceID string, instrument domain.MarketDataInstrument,
+	) error
 	// Stop halts running connectors before a control-plane restore swaps the
 	// underlying engine sink.
 	Stop()
@@ -77,6 +79,7 @@ type Service struct {
 	signer         fwsigning.Service
 	commands       catalog.Provider
 	lockSettlement LockSettlementEstimator
+	marketDataMu   sync.Mutex
 }
 
 type adjustmentRowNode interface {

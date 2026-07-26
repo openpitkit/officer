@@ -26,8 +26,8 @@
 // and engine ids in the target while PRESERVING the archive's code and external id
 // values, then inserts machine records whose cross-row links are resolved through
 // those preserved identities. The whole restore runs in one transaction so a
-// failure leaves the target realm untouched; a touched-runtime restore raises the
-// engine-rebuild signal in the returned summary.
+// failure leaves the target realm untouched. Engine replacement is classified by
+// the node after commit, not by the store.
 
 package sqlite
 
@@ -237,10 +237,10 @@ func (r *realmStore) exportData(ctx context.Context) (backup.Data, error) {
 // transaction. Dictionaries land first (assigning fresh surrogate and engine ids
 // while preserving code/external id), then the account-addressed facts whose
 // cross-row links resolve through the freshly inserted dictionaries. The restore
-// honors opts.Mode and the scope selectors and reports per-section counts; the
-// returned summary's RestartRequired is the engine-rebuild signal for a
-// touched-runtime restore. A failure rolls the whole transaction back, leaving
-// the target realm untouched.
+// honors opts.Mode and the scope selectors and reports per-section counts. A
+// failure rolls the whole transaction back, leaving the target realm untouched.
+// RestartRequired remains false here because only the node can decide whether
+// the committed delta crossed a live engine lifecycle boundary.
 func (r *realmStore) RestoreBackup(
 	ctx context.Context, archive backup.Archive, opts backup.RestoreOptions,
 ) (backup.RestoreSummary, error) {
@@ -287,14 +287,6 @@ func (r *realmStore) RestoreBackup(
 		return backup.RestoreSummary{}, fmt.Errorf("store: commit restore: %w", err)
 	}
 
-	// Drive the restart signal off the rows actually written, not the requested
-	// scope. Normalize force-includes the accounts+groups (and market-data) parent
-	// dictionaries whenever an account-addressed section is restored, so an
-	// audit-only or activity-history-only request can still land a new runtime
-	// dictionary row the live resolver has not seen; when it does, the engine must
-	// rebuild. A force-included parent that inserted no runtime row leaves the
-	// signal off, keeping an observational restore observational.
-	summary.RestartRequired = rt.runtimeApplied
 	return summary, nil
 }
 
@@ -311,28 +303,18 @@ func validateRestoreMode(mode backup.RestoreMode) (backup.RestoreMode, error) {
 }
 
 // restoreTx carries the in-flight restore transaction, the mode and the running
-// per-section summary so the per-table insert helpers stay small. runtimeApplied
-// records whether any genuinely runtime-affecting row (account, group, balance,
-// limit, market-data instance/instrument or quote) was written, driving the
-// engine-rebuild signal. It is tracked separately from the summary counts because
-// the shared support dictionaries (asset classes, assets, principals) roll into
-// the accounts+groups summary section but are not part of the engine snapshot, so
-// they must not by themselves flip the restart signal.
+// per-section summary so the per-table insert helpers stay small.
 type restoreTx struct {
-	tx             *sql.Tx
-	dictionaries   *enumDictionaries
-	mode           backup.RestoreMode
-	summary        *backup.RestoreSummary
-	runtimeApplied bool
+	tx           *sql.Tx
+	dictionaries *enumDictionaries
+	mode         backup.RestoreMode
+	summary      *backup.RestoreSummary
 }
 
-// applyRuntime records n runtime rows written to section: it bumps the summary
-// count and, when section is a runtime section, raises the engine-rebuild signal.
+// applyRuntime records n runtime rows written to section. The node classifies
+// the resulting runtime delta after the transaction commits.
 func (rt *restoreTx) applyRuntime(section backup.Section, n int) {
 	rt.summary.AddApplied(section, n)
-	if n > 0 && backup.RuntimeSection(section) {
-		rt.runtimeApplied = true
-	}
 }
 
 // run inserts every included section in dictionary-first order. Assets and

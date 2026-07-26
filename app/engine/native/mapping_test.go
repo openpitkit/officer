@@ -26,9 +26,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode"
@@ -353,10 +355,17 @@ func TestBuildEngine_RegistersRiskPolicies(t *testing.T) {
 
 func TestAccountLaneSetAccountCurrency_InvalidCurrencyIsDomainInvalid(t *testing.T) {
 	t.Parallel()
-	lane := accountLane{
-		owner: &openPitEngine{res: testResolver("acc-1")},
+	res := testResolver("acc-1")
+	accountID, err := res.account("acc-1")
+	if err != nil {
+		t.Fatalf("resolve account: %v", err)
 	}
-	err := lane.SetAccountCurrency(context.Background(), "acc-1", "  ")
+	lane := accountLane{
+		owner:        &openPitEngine{res: res},
+		accountAlias: "acc-1",
+		accountID:    accountID,
+	}
+	err = lane.SetAccountCurrency(context.Background(), "acc-1", "  ")
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("SetAccountCurrency invalid currency = %v, want ErrInvalid", err)
 	}
@@ -405,6 +414,277 @@ func TestNewIDResolver_UsesStoredEngineIDs(t *testing.T) {
 	}
 	if grp.String() != want.String() {
 		t.Fatalf("group engine id = %s, want %s", grp, want)
+	}
+}
+
+func TestIDResolver_AddsAndRenamesAliases(t *testing.T) {
+	t.Parallel()
+	res, err := newIDResolver(
+		[]domain.Account{{Code: "account-old", EngineAccountID: 7}},
+		[]domain.AccountGroup{{Code: "group-old", EngineGroupID: 9}},
+	)
+	if err != nil {
+		t.Fatalf("newIDResolver: %v", err)
+	}
+	if err := res.addAccountResolverEntry(domain.Account{
+		Code: "account-added", EngineAccountID: 8,
+	}); err != nil {
+		t.Fatalf("add account resolver entry: %v", err)
+	}
+	if err := res.addGroupResolverEntry(domain.AccountGroup{
+		Code: "group-added", EngineGroupID: 10,
+	}); err != nil {
+		t.Fatalf("add group resolver entry: %v", err)
+	}
+	if err := res.renameAccountResolverEntry("account-old", domain.Account{
+		Code: "account-new", EngineAccountID: 7,
+	}); err != nil {
+		t.Fatalf("rename account resolver entry: %v", err)
+	}
+	if err := res.renameGroupResolverEntry("group-old", domain.AccountGroup{
+		Code: "group-new", EngineGroupID: 9,
+	}); err != nil {
+		t.Fatalf("rename group resolver entry: %v", err)
+	}
+
+	for code, want := range map[domain.AccountID]uint64{
+		"account-added": 8,
+		"account-new":   7,
+	} {
+		id, err := res.account(code)
+		if err != nil {
+			t.Fatalf("resolve account %q: %v", code, err)
+		}
+		if got := uint64(id.Handle()); got != want {
+			t.Errorf("account %q engine id = %d, want %d", code, got, want)
+		}
+	}
+	for code, want := range map[string]uint32{
+		"group-added": 10,
+		"group-new":   9,
+	} {
+		id, err := res.group(code)
+		if err != nil {
+			t.Fatalf("resolve group %q: %v", code, err)
+		}
+		if got := uint32(id.Handle()); got != want {
+			t.Errorf("group %q engine id = %d, want %d", code, got, want)
+		}
+	}
+	if _, err := res.account("account-old"); !errors.Is(err, domain.ErrInvalid) {
+		t.Errorf("old account alias error = %v, want ErrInvalid", err)
+	}
+	if _, err := res.group("group-old"); !errors.Is(err, domain.ErrInvalid) {
+		t.Errorf("old group alias error = %v, want ErrInvalid", err)
+	}
+}
+
+func TestIDResolver_RejectsInvalidMutationsWithoutPartialChange(t *testing.T) {
+	t.Parallel()
+	res, err := newIDResolver(
+		[]domain.Account{
+			{Code: "account-a", EngineAccountID: 7},
+			{Code: "account-b", EngineAccountID: 8},
+		},
+		[]domain.AccountGroup{
+			{Code: "group-a", EngineGroupID: 9},
+			{Code: "group-b", EngineGroupID: 10},
+		},
+	)
+	if err != nil {
+		t.Fatalf("newIDResolver: %v", err)
+	}
+
+	accountMutations := []struct {
+		name string
+		err  error
+	}{
+		{
+			name: "duplicate alias",
+			err: res.addAccountResolverEntry(domain.Account{
+				Code: "account-a", EngineAccountID: 11,
+			}),
+		},
+		{
+			name: "duplicate engine id",
+			err: res.addAccountResolverEntry(domain.Account{
+				Code: "account-c", EngineAccountID: 7,
+			}),
+		},
+		{
+			name: "unknown old alias",
+			err: res.renameAccountResolverEntry("account-missing", domain.Account{
+				Code: "account-c", EngineAccountID: 7,
+			}),
+		},
+		{
+			name: "mismatched target id",
+			err: res.renameAccountResolverEntry("account-a", domain.Account{
+				Code: "account-c", EngineAccountID: 12,
+			}),
+		},
+		{
+			name: "duplicate target alias",
+			err: res.renameAccountResolverEntry("account-a", domain.Account{
+				Code: "account-b", EngineAccountID: 7,
+			}),
+		},
+		{
+			name: "corrupt target id",
+			err: res.renameAccountResolverEntry("account-a", domain.Account{
+				Code: "account-c", EngineAccountID: 0,
+			}),
+		},
+	}
+	for _, mutation := range accountMutations {
+		if mutation.err == nil {
+			t.Errorf("%s: want error", mutation.name)
+		}
+	}
+	for code, want := range map[domain.AccountID]uint64{
+		"account-a": 7,
+		"account-b": 8,
+	} {
+		id, err := res.account(code)
+		if err != nil || uint64(id.Handle()) != want {
+			t.Errorf("account %q after failed mutations = (%v, %v), want id %d", code, id, err, want)
+		}
+	}
+	if _, err := res.account("account-c"); !errors.Is(err, domain.ErrInvalid) {
+		t.Errorf("partial account alias published: %v", err)
+	}
+
+	groupMutations := []error{
+		res.addGroupResolverEntry(domain.AccountGroup{
+			Code: "group-a", EngineGroupID: 11,
+		}),
+		res.addGroupResolverEntry(domain.AccountGroup{
+			Code: "group-c", EngineGroupID: 9,
+		}),
+		res.renameGroupResolverEntry("group-missing", domain.AccountGroup{
+			Code: "group-c", EngineGroupID: 9,
+		}),
+		res.renameGroupResolverEntry("group-a", domain.AccountGroup{
+			Code: "group-c", EngineGroupID: 12,
+		}),
+		res.renameGroupResolverEntry("group-a", domain.AccountGroup{
+			Code: "group-b", EngineGroupID: 9,
+		}),
+		res.renameGroupResolverEntry("group-a", domain.AccountGroup{
+			Code: "group-c", EngineGroupID: 0,
+		}),
+	}
+	for i, mutationErr := range groupMutations {
+		if mutationErr == nil {
+			t.Errorf("group mutation %d: want error", i)
+		}
+	}
+	for code, want := range map[string]uint32{"group-a": 9, "group-b": 10} {
+		id, err := res.group(code)
+		if err != nil || uint32(id.Handle()) != want {
+			t.Errorf("group %q after failed mutations = (%v, %v), want id %d", code, id, err, want)
+		}
+	}
+	if _, err := res.group("group-c"); !errors.Is(err, domain.ErrInvalid) {
+		t.Errorf("partial group alias published: %v", err)
+	}
+}
+
+func TestIDResolver_RemovesGroupAliasWithStableIDValidation(t *testing.T) {
+	t.Parallel()
+	res, err := newIDResolver(nil, []domain.AccountGroup{{
+		Code: "group-a", EngineGroupID: 9,
+	}})
+	if err != nil {
+		t.Fatalf("newIDResolver: %v", err)
+	}
+
+	if err := res.removeGroupResolverEntry(domain.AccountGroup{
+		Code: "group-a", EngineGroupID: 10,
+	}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("mismatched removal error = %v, want ErrInvalid", err)
+	}
+	if id, err := res.group("group-a"); err != nil || uint32(id.Handle()) != 9 {
+		t.Fatalf("mismatched removal changed alias = (%v, %v)", id, err)
+	}
+
+	if err := res.removeGroupResolverEntry(domain.AccountGroup{
+		Code: "group-a", EngineGroupID: 9,
+	}); err != nil {
+		t.Fatalf("remove group resolver entry: %v", err)
+	}
+	if _, err := res.group("group-a"); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("removed group alias error = %v, want ErrInvalid", err)
+	}
+	if err := res.removeGroupResolverEntry(domain.AccountGroup{
+		Code: "group-a", EngineGroupID: 9,
+	}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("unknown removal error = %v, want ErrInvalid", err)
+	}
+}
+
+func TestIDResolver_ConcurrentLookupAndMutation(t *testing.T) {
+	res, err := newIDResolver(
+		[]domain.Account{
+			{Code: "stable-account", EngineAccountID: 7},
+			{Code: "moving-account-a", EngineAccountID: 8},
+		},
+		[]domain.AccountGroup{
+			{Code: "stable-group", EngineGroupID: 9},
+			{Code: "moving-group-a", EngineGroupID: 10},
+		},
+	)
+	if err != nil {
+		t.Fatalf("newIDResolver: %v", err)
+	}
+
+	const iterations = 500
+	errCh := make(chan error, 9)
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func(resolver idResolver) {
+			defer wg.Done()
+			for range iterations {
+				if id, err := resolver.account("stable-account"); err != nil ||
+					uint64(id.Handle()) != 7 {
+					errCh <- fmt.Errorf("stable account lookup = (%v, %v)", id, err)
+					return
+				}
+				if id, err := resolver.group("stable-group"); err != nil ||
+					uint32(id.Handle()) != 9 {
+					errCh <- fmt.Errorf("stable group lookup = (%v, %v)", id, err)
+					return
+				}
+			}
+		}(res)
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		accountOld, accountNew := domain.AccountID("moving-account-a"), domain.AccountID("moving-account-b")
+		groupOld, groupNew := "moving-group-a", "moving-group-b"
+		for range iterations {
+			if err := res.renameAccountResolverEntry(accountOld, domain.Account{
+				Code: accountNew, EngineAccountID: 8,
+			}); err != nil {
+				errCh <- err
+				return
+			}
+			accountOld, accountNew = accountNew, accountOld
+			if err := res.renameGroupResolverEntry(groupOld, domain.AccountGroup{
+				Code: groupNew, EngineGroupID: 10,
+			}); err != nil {
+				errCh <- err
+				return
+			}
+			groupOld, groupNew = groupNew, groupOld
+		}
+	}()
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Error(err)
 	}
 }
 
@@ -578,9 +858,9 @@ func TestConfigurePolicy_OrderSizeReplacesAxes(t *testing.T) {
 	}
 }
 
-// TestConfigurePolicy_OrderSizeDropBrokerStub checks the order-size broker-drop
-// stub returns ErrNotImplemented.
-func TestConfigurePolicy_OrderSizeDropBrokerStub(t *testing.T) {
+// TestConfigurePolicy_OrderSizeDropsBrokerOnline checks the explicit optional
+// update clears a broker axis while an asset axis keeps the policy non-empty.
+func TestConfigurePolicy_OrderSizeDropsBrokerOnline(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
 		OrderSizeLimits: []domain.LimitOrderSize{
@@ -593,11 +873,18 @@ func TestConfigurePolicy_OrderSizeDropBrokerStub(t *testing.T) {
 		t.Fatalf("BuildOpenPitEngine: %v", err)
 	}
 	defer eng.Stop()
+	adapter := eng.(*openPitEngine)
+	engineBefore := adapter.eng
+	sinkBefore := adapter.MarketDataSink()
 
 	dropped := LimitSet{OrderSizeLimits: []domain.LimitOrderSize{orderSize(domain.ScopeAsset, "", "USD", "5", "")}}
-	_, err = eng.ConfigurePolicy(context.Background(), domain.PolicyOrderSizeLimit, dropped)
-	if !errors.Is(err, domain.ErrNotImplemented) {
-		t.Fatalf("want ErrNotImplemented for order_size broker drop, got %v", err)
+	if _, err := eng.ConfigurePolicy(
+		context.Background(), domain.PolicyOrderSizeLimit, dropped,
+	); err != nil {
+		t.Fatalf("ConfigurePolicy drop order-size broker: %v", err)
+	}
+	if adapter.eng != engineBefore || adapter.MarketDataSink() != sinkBefore {
+		t.Fatal("dropping order-size broker replaced engine or market-data sink")
 	}
 }
 
@@ -625,12 +912,14 @@ func TestConfigurePolicy_OrderSizeNoBrokerReplace(t *testing.T) {
 	}
 }
 
-// TestConfigurePolicy_UnregisteredPolicyStub checks configuring a policy not
-// registered at build time returns ErrNotImplemented.
+// TestConfigurePolicy_UnregisteredPolicyStub checks a policy absent from the
+// cold snapshot still needs a rebuild because the SDK rejects empty policies.
 func TestConfigurePolicy_UnregisteredPolicyStub(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
-		RateLimits: []domain.LimitRate{rateLimit(domain.ScopeBroker, "", "", 100, time.Second)},
+		RateLimits: []domain.LimitRate{
+			rateLimit(domain.ScopeBroker, "", "", 100, time.Second),
+		},
 	}
 	eng, err := BuildOpenPitEngine("", snap)
 	if err != nil {
@@ -638,19 +927,23 @@ func TestConfigurePolicy_UnregisteredPolicyStub(t *testing.T) {
 	}
 	defer eng.Stop()
 
-	add := LimitSet{OrderSizeLimits: []domain.LimitOrderSize{orderSize(domain.ScopeBroker, "", "", "10", "")}}
+	add := LimitSet{OrderSizeLimits: []domain.LimitOrderSize{
+		orderSize(domain.ScopeBroker, "", "", "10", ""),
+	}}
 	_, err = eng.ConfigurePolicy(context.Background(), domain.PolicyOrderSizeLimit, add)
 	if !errors.Is(err, domain.ErrNotImplemented) {
 		t.Fatalf("want ErrNotImplemented for unregistered policy, got %v", err)
 	}
 }
 
-// TestConfigurePolicy_RemoveLastBarrierStub checks an empty barrier set for a
-// registered policy returns ErrNotImplemented.
+// TestConfigurePolicy_RemoveLastBarrierStub checks an empty barrier set returns
+// ErrNotImplemented before the SDK rejects the resulting empty policy.
 func TestConfigurePolicy_RemoveLastBarrierStub(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
-		RateLimits: []domain.LimitRate{rateLimit(domain.ScopeBroker, "", "", 100, time.Second)},
+		RateLimits: []domain.LimitRate{
+			rateLimit(domain.ScopeAsset, "", "USD", 100, time.Second),
+		},
 	}
 	eng, err := BuildOpenPitEngine("", snap)
 	if err != nil {
@@ -692,9 +985,9 @@ func TestConfigurePolicy_RateLimitAddRemoveBarrier(t *testing.T) {
 	}
 }
 
-// TestConfigurePolicy_RateLimitDropBrokerStub checks the rate-limit broker-drop
-// stub returns ErrNotImplemented.
-func TestConfigurePolicy_RateLimitDropBrokerStub(t *testing.T) {
+// TestConfigurePolicy_RateLimitDropsBrokerOnline checks the explicit optional
+// update clears a broker axis while an asset axis keeps the policy non-empty.
+func TestConfigurePolicy_RateLimitDropsBrokerOnline(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
 		RateLimits: []domain.LimitRate{
@@ -707,47 +1000,18 @@ func TestConfigurePolicy_RateLimitDropBrokerStub(t *testing.T) {
 		t.Fatalf("BuildOpenPitEngine: %v", err)
 	}
 	defer eng.Stop()
+	adapter := eng.(*openPitEngine)
+	engineBefore := adapter.eng
+	sinkBefore := adapter.MarketDataSink()
 
 	dropped := LimitSet{RateLimits: []domain.LimitRate{rateLimit(domain.ScopeAsset, "", "USD", 50, time.Second)}}
-	_, err = eng.ConfigurePolicy(context.Background(), domain.PolicyRateLimit, dropped)
-	if !errors.Is(err, domain.ErrNotImplemented) {
-		t.Fatalf("want ErrNotImplemented for rate_limit broker drop, got %v", err)
+	if _, err := eng.ConfigurePolicy(
+		context.Background(), domain.PolicyRateLimit, dropped,
+	); err != nil {
+		t.Fatalf("ConfigurePolicy drop rate-limit broker: %v", err)
 	}
-}
-
-// TestSpotFundsPnlBoundsSeeds_OnlyExplicitInitialPnlSeeds checks a barrier with
-// an explicit initial_pnl yields a seed while an empty initial_pnl yields none:
-// an empty seed would force-set (reset) the account's live accumulated P&L, so
-// the barrier is created without touching it.
-func TestSpotFundsPnlBoundsSeeds_OnlyExplicitInitialPnlSeeds(t *testing.T) {
-	t.Parallel()
-	seeds, err := spotFundsPnlBoundsSeeds(
-		[]domain.LimitSpotFundsPnlBounds{
-			{
-				Scope:      domain.ScopeAccount,
-				Account:    "acc-1",
-				LowerBound: "-100",
-				InitialPnl: "12.50",
-			},
-			{
-				Scope:      domain.ScopeAccount,
-				Account:    "acc-2",
-				LowerBound: "-100",
-			},
-		},
-		testResolver("acc-1", "acc-2"),
-	)
-	if err != nil {
-		t.Fatalf("spotFundsPnlBoundsSeeds: %v", err)
-	}
-	if len(seeds) != 1 {
-		t.Fatalf("seed count = %d, want 1 (only the explicit initial_pnl)", len(seeds))
-	}
-	if seeds[0].initialPnl.String() != "12.50" {
-		t.Fatalf("initial_pnl = %s, want 12.50", seeds[0].initialPnl.String())
-	}
-	if seeds[0].account.Handle() != 1 {
-		t.Fatalf("seed account = %d, want acc-1", seeds[0].account.Handle())
+	if adapter.eng != engineBefore || adapter.MarketDataSink() != sinkBefore {
+		t.Fatal("dropping rate-limit broker replaced engine or market-data sink")
 	}
 }
 
@@ -776,25 +1040,6 @@ func TestPolicyConfigurationBlocksFromCarriesAccountAndFallbackPolicy(t *testing
 	}
 }
 
-// TestSpotFundsPnlBoundsSeeds_InvalidInitialPnl checks a malformed explicit
-// initial_pnl is reported rather than silently dropped.
-func TestSpotFundsPnlBoundsSeeds_InvalidInitialPnl(t *testing.T) {
-	t.Parallel()
-	_, err := spotFundsPnlBoundsSeeds(
-		[]domain.LimitSpotFundsPnlBounds{
-			{
-				Scope:      domain.ScopeAccount,
-				Account:    "acc-1",
-				InitialPnl: "not-a-number",
-			},
-		},
-		testResolver("acc-1"),
-	)
-	if err == nil {
-		t.Fatal("want error for malformed initial_pnl, got nil")
-	}
-}
-
 // TestSpotFundsPnlBoundsAxes_UnsupportedScope checks a scope the SpotFunds P&L
 // bounds axes cannot express is rejected rather than silently dropped.
 func TestSpotFundsPnlBoundsAxes_UnsupportedScope(t *testing.T) {
@@ -813,144 +1058,6 @@ func TestSpotFundsPnlBoundsAxes_UnsupportedScope(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unsupported scope") {
 		t.Fatalf("error = %v, want unsupported scope", err)
-	}
-}
-
-func TestSpotFundsPnlBoundsSeeds_IgnoresNonAccountInitialPnl(t *testing.T) {
-	t.Parallel()
-	seeds, err := spotFundsPnlBoundsSeeds(
-		[]domain.LimitSpotFundsPnlBounds{
-			{
-				Scope:      domain.ScopeGlobal,
-				LowerBound: "-100",
-				InitialPnl: "1",
-			},
-		},
-		testResolver(),
-	)
-	if err != nil {
-		t.Fatalf("spotFundsPnlBoundsSeeds: %v", err)
-	}
-	if len(seeds) != 0 {
-		t.Fatalf("seed count = %d, want 0", len(seeds))
-	}
-}
-
-func TestChangedSpotFundsPnlBoundsSeeds_IgnoresUnchangedCompleteSet(t *testing.T) {
-	t.Parallel()
-	res := testResolver("acc-1")
-	currentSeeds, err := spotFundsPnlBoundsSeeds(
-		[]domain.LimitSpotFundsPnlBounds{
-			{
-				Scope:      domain.ScopeAccount,
-				Account:    "acc-1",
-				LowerBound: "-100",
-				InitialPnl: "12.50",
-			},
-		},
-		res,
-	)
-	if err != nil {
-		t.Fatalf("current seeds: %v", err)
-	}
-	desiredSeeds, err := spotFundsPnlBoundsSeeds(
-		[]domain.LimitSpotFundsPnlBounds{
-			{
-				Scope:      domain.ScopeGlobal,
-				LowerBound: "-200",
-			},
-			{
-				Scope:      domain.ScopeAccount,
-				Account:    "acc-1",
-				LowerBound: "-150",
-				InitialPnl: "12.5",
-			},
-		},
-		res,
-	)
-	if err != nil {
-		t.Fatalf("desired seeds: %v", err)
-	}
-	changed, next := changedSpotFundsPnlBoundsSeeds(
-		spotFundsPnlBoundsSeedTracker(currentSeeds),
-		desiredSeeds,
-	)
-	if len(changed) != 0 {
-		t.Fatalf("changed seeds = %+v, want none", changed)
-	}
-	if len(next) != 1 {
-		t.Fatalf("next tracker len = %d, want 1", len(next))
-	}
-}
-
-func TestChangedSpotFundsPnlBoundsSeeds_DetectsChangedSeed(t *testing.T) {
-	t.Parallel()
-	res := testResolver("acc-1")
-	currentSeeds, err := spotFundsPnlBoundsSeeds(
-		[]domain.LimitSpotFundsPnlBounds{
-			{
-				Scope:      domain.ScopeAccount,
-				Account:    "acc-1",
-				LowerBound: "-100",
-				InitialPnl: "12.50",
-			},
-		},
-		res,
-	)
-	if err != nil {
-		t.Fatalf("current seeds: %v", err)
-	}
-	desiredSeeds, err := spotFundsPnlBoundsSeeds(
-		[]domain.LimitSpotFundsPnlBounds{
-			{
-				Scope:      domain.ScopeAccount,
-				Account:    "acc-1",
-				LowerBound: "-100",
-				InitialPnl: "13",
-			},
-		},
-		res,
-	)
-	if err != nil {
-		t.Fatalf("desired seeds: %v", err)
-	}
-	changed, next := changedSpotFundsPnlBoundsSeeds(
-		spotFundsPnlBoundsSeedTracker(currentSeeds),
-		desiredSeeds,
-	)
-	if len(changed) != 1 || changed[0].initialPnl.String() != "13" {
-		t.Fatalf("changed seeds = %+v, want one seed at 13", changed)
-	}
-	if len(next) != 1 {
-		t.Fatalf("next tracker len = %d, want 1", len(next))
-	}
-}
-
-func TestChangedSpotFundsPnlBoundsSeeds_RemovalOnlyDropsTracker(t *testing.T) {
-	t.Parallel()
-	currentSeeds, err := spotFundsPnlBoundsSeeds(
-		[]domain.LimitSpotFundsPnlBounds{
-			{
-				Scope:      domain.ScopeAccount,
-				Account:    "acc-1",
-				LowerBound: "-100",
-				InitialPnl: "12.50",
-			},
-		},
-		testResolver("acc-1"),
-	)
-	if err != nil {
-		t.Fatalf("current seeds: %v", err)
-	}
-	changed, next := changedSpotFundsPnlBoundsSeeds(
-		spotFundsPnlBoundsSeedTracker(currentSeeds),
-		nil,
-	)
-	if len(changed) != 0 {
-		t.Fatalf("changed seeds = %+v, want none", changed)
-	}
-	if len(next) != 0 {
-		t.Fatalf("next tracker len = %d, want 0", len(next))
 	}
 }
 
@@ -1642,9 +1749,13 @@ func TestSpotFundsAccountPnlFromListSelectsAuthoritativeOutcome(t *testing.T) {
 	t.Parallel()
 	accountID := param.NewAccountIDFromUint64(7)
 	otherAccountID := param.NewAccountIDFromUint64(8)
-	computed := func(id param.AccountID, absolute string) accountadjustment.AccountPnlOutcome {
+	computed := func(
+		id param.AccountID,
+		deltaValue string,
+		absolute string,
+	) accountadjustment.AccountPnlOutcome {
 		t.Helper()
-		delta, err := param.NewPnlFromString("1.250")
+		delta, err := param.NewPnlFromString(deltaValue)
 		if err != nil {
 			t.Fatalf("NewPnlFromString(delta): %v", err)
 		}
@@ -1681,9 +1792,17 @@ func TestSpotFundsAccountPnlFromListSelectsAuthoritativeOutcome(t *testing.T) {
 		wantReason domain.PnlHaltReason
 	}{
 		{
-			name:     "computed",
-			outcomes: []accountadjustment.AccountPnlOutcome{computed(accountID, "42.500")},
-			wantPnl:  "42.500",
+			name: "computed",
+			outcomes: []accountadjustment.AccountPnlOutcome{
+				computed(accountID, "1.250", "42.500"),
+			},
+			wantPnl: "42.500",
+		},
+		{
+			name: "computed zero delta",
+			outcomes: []accountadjustment.AccountPnlOutcome{
+				computed(accountID, "0", "7.250"),
+			},
 		},
 		{
 			name: "halted",
@@ -1693,13 +1812,15 @@ func TestSpotFundsAccountPnlFromListSelectsAuthoritativeOutcome(t *testing.T) {
 			wantReason: domain.PnlHaltReasonMissingCostBasis,
 		},
 		{
-			name:     "mismatched account",
-			outcomes: []accountadjustment.AccountPnlOutcome{computed(otherAccountID, "9")},
+			name: "mismatched account",
+			outcomes: []accountadjustment.AccountPnlOutcome{
+				computed(otherAccountID, "1.250", "9"),
+			},
 		},
 		{
 			name: "first duplicate wins",
 			outcomes: []accountadjustment.AccountPnlOutcome{
-				computed(accountID, "17.250"),
+				computed(accountID, "1.250", "17.250"),
 				halted(accountID, model.PnlHaltReasonArithmeticOverflow),
 			},
 			wantPnl: "17.250",

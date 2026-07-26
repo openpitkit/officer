@@ -20,11 +20,13 @@ package node
 import (
 	"context"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/store"
@@ -261,10 +263,9 @@ func TestApplyBusinessCSVImport_RoutesGroupMembershipByGroupLane(t *testing.T) {
 // the import with the fake engine's resolver enforced, so BlockAccount/BlockGroup/
 // RegisterGroup reject any account or group unknown to the engine. Importing a
 // brand-new blocked account and group plus a group move for a new account only
-// succeeds if the store write and engine rebuild register the entities before
-// the engine effects run. It locks in that create+register+rebuild precedes the
-// engine effect, guarding against a future reorder of an engine effect ahead of
-// the rebuild.
+// succeeds if the store write and online resolver publication register the
+// entities before the engine effects run. It locks in that publication ordering
+// without requiring an engine replacement.
 func TestApplyBusinessCSVImport_CreatesBlocksAndMovesNewEntitiesWithResolver(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
@@ -359,6 +360,146 @@ func TestApplyBusinessCSVImport_RollsBackRegisteredGroupsOnGroupError(t *testing
 	}
 }
 
+func TestApplyBusinessCSVImport_DictionaryTransactionFailureDoesNotRebuild(
+	t *testing.T,
+) {
+	t.Parallel()
+	ctx := context.Background()
+	errStoreWrite := errors.New("business csv dictionary write failed")
+	real := newMemoryStore("csv-dictionary-failure.db")
+	if err := real.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = real.Close() })
+
+	var failureRealm *failBusinessCSVImportRealm
+	st := newRealmWrapStore(real, func(r store.RealmStore) store.RealmStore {
+		failureRealm = &failBusinessCSVImportRealm{
+			RealmStore:       r,
+			err:              errStoreWrite,
+			failDictionaries: true,
+		}
+		return failureRealm
+	})
+	eng := newFakeEngine()
+	buildCount := 0
+	build := func(snap engine.Snapshot) (engine.Engine, error) {
+		buildCount++
+		return fakeBuild(eng, new(engine.Snapshot))(snap)
+	}
+	nn, _, err := NewLocalNode(ctx, st, build)
+	if err != nil {
+		t.Fatalf("NewLocalNode: %v", err)
+	}
+	n := nn.(*localNode)
+	seedTestPrincipal(t, n.realm)
+	if _, err := n.CreateGroup(ctx, domain.AccountGroup{Code: "existing-group"}, testCaller); err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	if _, err := n.CreateAccount(ctx, domain.Account{
+		Code: "existing-account", GroupCode: "existing-group",
+	}, testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	instance := seedReplayInstance(t, n.realm)
+	instrument := seedReplayInstrument(
+		t, n.realm, instance.ExternalID, "EURUSD", "EUR", "USD", "2",
+	)
+	now := time.Now().UTC()
+	quote := domain.MarketDataQuote{
+		AsOf: now, ReceivedAt: now,
+		Instance: instance.ExternalID, ExternalSymbol: instrument.ExternalSymbol,
+		BaseAsset: instrument.BaseAsset, QuoteAsset: instrument.QuoteAsset, Mark: "2",
+	}
+	if err := n.realm.UpsertMarketDataQuote(ctx, quote); err != nil {
+		t.Fatalf("UpsertMarketDataQuote: %v", err)
+	}
+
+	accountsBefore, err := n.realm.ListAccounts(ctx)
+	if err != nil {
+		t.Fatalf("ListAccounts before: %v", err)
+	}
+	groupsBefore, err := n.realm.ListGroups(ctx)
+	if err != nil {
+		t.Fatalf("ListGroups before: %v", err)
+	}
+	instancesBefore, err := n.realm.ListMarketDataInstances(ctx)
+	if err != nil {
+		t.Fatalf("ListMarketDataInstances before: %v", err)
+	}
+	instrumentsBefore, err := n.realm.ListMarketDataInstruments(ctx, instance.ExternalID)
+	if err != nil {
+		t.Fatalf("ListMarketDataInstruments before: %v", err)
+	}
+	quotesBefore, err := n.realm.ListMarketDataQuotes(ctx, instance.ExternalID)
+	if err != nil {
+		t.Fatalf("ListMarketDataQuotes before: %v", err)
+	}
+	auditsBefore, err := n.realm.ListAudit(ctx, 100)
+	if err != nil {
+		t.Fatalf("ListAudit before: %v", err)
+	}
+	buildsBefore := buildCount
+	engineBefore := n.currentEngine()
+	sinkBefore := n.currentMarketDataSink()
+
+	err = n.ApplyBusinessCSVImport(ctx, store.BusinessCSVImport{
+		Groups: []store.BusinessCSVImportGroup{{
+			Group: domain.AccountGroup{Code: "new-group"},
+		}},
+		Accounts: []store.BusinessCSVImportAccount{{
+			Account: domain.Account{Code: "new-account", GroupCode: "new-group"},
+		}},
+	}, testCaller)
+	if !errors.Is(err, errStoreWrite) {
+		t.Fatalf("ApplyBusinessCSVImport error = %v, want dictionary failure", err)
+	}
+	if buildCount != buildsBefore {
+		t.Fatalf("build count = %d, want unchanged %d", buildCount, buildsBefore)
+	}
+	if n.currentEngine() != engineBefore || n.currentMarketDataSink() != sinkBefore {
+		t.Fatal("dictionary transaction failure replaced engine or market-data sink")
+	}
+	if len(failureRealm.restoreScopes) != 0 {
+		t.Fatalf("rollback restore scopes = %+v, want none", failureRealm.restoreScopes)
+	}
+
+	accountsAfter, listErr := n.realm.ListAccounts(ctx)
+	if listErr != nil {
+		t.Fatalf("ListAccounts after: %v", listErr)
+	}
+	groupsAfter, listErr := n.realm.ListGroups(ctx)
+	if listErr != nil {
+		t.Fatalf("ListGroups after: %v", listErr)
+	}
+	instancesAfter, listErr := n.realm.ListMarketDataInstances(ctx)
+	if listErr != nil {
+		t.Fatalf("ListMarketDataInstances after: %v", listErr)
+	}
+	instrumentsAfter, listErr := n.realm.ListMarketDataInstruments(ctx, instance.ExternalID)
+	if listErr != nil {
+		t.Fatalf("ListMarketDataInstruments after: %v", listErr)
+	}
+	quotesAfter, listErr := n.realm.ListMarketDataQuotes(ctx, instance.ExternalID)
+	if listErr != nil {
+		t.Fatalf("ListMarketDataQuotes after: %v", listErr)
+	}
+	auditsAfter, listErr := n.realm.ListAudit(ctx, 100)
+	if listErr != nil {
+		t.Fatalf("ListAudit after: %v", listErr)
+	}
+	if !reflect.DeepEqual(accountsAfter, accountsBefore) ||
+		!reflect.DeepEqual(groupsAfter, groupsBefore) ||
+		!reflect.DeepEqual(auditsAfter, auditsBefore) {
+		t.Fatalf("store changed after failed dictionary transaction")
+	}
+	if !reflect.DeepEqual(instancesAfter, instancesBefore) ||
+		!reflect.DeepEqual(instrumentsAfter, instrumentsBefore) ||
+		!reflect.DeepEqual(quotesAfter, quotesBefore) {
+		t.Fatalf("market data changed after failed dictionary transaction")
+	}
+}
+
 // TestApplyBusinessCSVImport_ReconcilesEngineOnStoreFailure proves the atomicity
 // seam: when the engine adjustments succeeded but the final transactional store
 // write fails, the node rebuilds the engine from the persisted (rolled-back)
@@ -375,8 +516,13 @@ func TestApplyBusinessCSVImport_ReconcilesEngineOnStoreFailure(t *testing.T) {
 		t.Fatalf("Migrate: %v", err)
 	}
 	t.Cleanup(func() { _ = real.Close() })
+	var failureRealm *failBusinessCSVImportRealm
 	st := newRealmWrapStore(real, func(r store.RealmStore) store.RealmStore {
-		return &failBusinessCSVImportRealm{RealmStore: r, err: errStoreWrite}
+		failureRealm = &failBusinessCSVImportRealm{
+			RealmStore: r,
+			err:        errStoreWrite,
+		}
+		return failureRealm
 	})
 
 	var buildCount int
@@ -422,6 +568,30 @@ func TestApplyBusinessCSVImport_ReconcilesEngineOnStoreFailure(t *testing.T) {
 	if buildCount <= buildsBefore {
 		t.Fatalf("engine was not rebuilt to reconcile after store failure: builds %d -> %d",
 			buildsBefore, buildCount)
+	}
+	wantRollbackScope := businessCSVRollbackScope()
+	if len(failureRealm.exportScopes) != 1 ||
+		!reflect.DeepEqual(failureRealm.exportScopes[0], wantRollbackScope) {
+		t.Fatalf("rollback export scopes = %+v, want %+v",
+			failureRealm.exportScopes, wantRollbackScope)
+	}
+	wantRestoreScope := wantRollbackScope.Normalize()
+	if len(failureRealm.restoreScopes) != 1 {
+		t.Fatalf("rollback restore scopes = %+v, want %+v",
+			failureRealm.restoreScopes, wantRestoreScope)
+	}
+	gotRestoreScope := failureRealm.restoreScopes[0]
+	if !slices.Equal(gotRestoreScope.Sections, wantRestoreScope.Sections) ||
+		!gotRestoreScope.Accounts.All || !gotRestoreScope.Positions.All ||
+		gotRestoreScope.All {
+		t.Fatalf("rollback restore scope = %+v, want %+v",
+			gotRestoreScope, wantRestoreScope)
+	}
+	for _, section := range failureRealm.restoreScopes[0].Sections {
+		if section == backup.SectionMarketData ||
+			section == backup.SectionMarketDataQuotes {
+			t.Fatalf("business CSV rollback includes market-data section %q", section)
+		}
 	}
 }
 
@@ -490,7 +660,7 @@ func TestApplyBusinessCSVImport_MirrorsEngineAccountBlock(t *testing.T) {
 	}
 }
 
-func TestApplyBusinessCSVImport_SeedBlockWinsCSVUnblock(t *testing.T) {
+func TestApplyBusinessCSVImport_StaleSeedBlockDoesNotOverrideLiveUnblock(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := newMemoryStore("csv-seed-block.db")
@@ -518,11 +688,11 @@ func TestApplyBusinessCSVImport_SeedBlockWinsCSVUnblock(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("GetAccount: ok=%v err=%v", ok, err)
 	}
-	if !account.Blocked || !strings.Contains(account.BlockReason, "lower bound breached") {
-		t.Fatalf("account = %+v, want SDK seed block preserved", account)
+	if account.Blocked {
+		t.Fatalf("account = %+v, want live CSV unblock", account)
 	}
-	if len(eng.unblockCalls) != 0 {
-		t.Fatalf("engine unblock calls = %+v, want none after SDK seed block", eng.unblockCalls)
+	if !slices.Equal(eng.unblockCalls, []domain.AccountID{"acc-1"}) {
+		t.Fatalf("engine unblock calls = %+v, want acc-1", eng.unblockCalls)
 	}
 	rows, err := n.realm.ListAuditFiltered(ctx, domain.AuditFilter{
 		Actions: []domain.AuditAction{domain.AuditActionUnblock}, Account: "acc-1",
@@ -530,8 +700,8 @@ func TestApplyBusinessCSVImport_SeedBlockWinsCSVUnblock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListAuditFiltered: %v", err)
 	}
-	if len(rows) != 0 {
-		t.Fatalf("unblock audits = %+v, want none", rows)
+	if len(rows) != 1 {
+		t.Fatalf("unblock audits = %+v, want one live CSV audit", rows)
 	}
 }
 

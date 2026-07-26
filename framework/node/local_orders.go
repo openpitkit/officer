@@ -661,8 +661,7 @@ func immediateAcceptedSettlement(
 
 // ensureAutoCreatedAssets creates the base and quote assets when missing and
 // reports whether either was newly created. It is a pure store helper: it never
-// rebuilds the engine, so the caller decides when the rebuild is safe (pre-lane
-// for account-scoped operations).
+// touches the engine because assets are Officer dictionary state.
 func (n *localNode) ensureAutoCreatedAssets(
 	ctx context.Context, baseAsset string, quoteAsset string,
 	operation string, caller domain.Caller,

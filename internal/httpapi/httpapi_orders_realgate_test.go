@@ -355,6 +355,24 @@ func (e *realGateEngine) SetAccountPnl(
 ) ([]domain.AccountBlock, error) {
 	return nil, nil
 }
+
+func (e *realGateEngine) SetAccountPnlState(
+	ctx context.Context,
+	id domain.AccountID,
+	pnl string,
+	haltReason domain.PnlHaltReason,
+) ([]domain.AccountBlock, error) {
+	if (pnl == "") == (haltReason == "") {
+		return nil, domain.ErrInvalid
+	}
+	if err := domain.ValidatePnlHaltReason(haltReason); err != nil {
+		return nil, err
+	}
+	if haltReason != "" {
+		return nil, nil
+	}
+	return e.SetAccountPnl(ctx, id, pnl)
+}
 func (e *realGateEngine) SubmitImmediate(
 	context.Context, domain.Order,
 ) (engine.ImmediateResult, error) {
@@ -419,6 +437,10 @@ func (e *realGateEngine) UnregisterGroup(context.Context, []domain.AccountID, st
 }
 func (e *realGateEngine) BlockGroup(context.Context, string, string) error { return nil }
 func (e *realGateEngine) UnblockGroup(context.Context, string) error       { return nil }
+
+func (e *realGateEngine) SetGroupCurrency(context.Context, string, string) error { return nil }
+
+func (e *realGateEngine) ClearGroupCurrency(context.Context, string) error { return nil }
 func (e *realGateEngine) CheckOrder(
 	context.Context, domain.OrderProbe,
 ) (domain.CheckResult, error) {

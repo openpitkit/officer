@@ -214,7 +214,7 @@ func applyAccountCurrency(
 }
 
 // SetGroupCurrency sets or clears a persisted account-group currency and
-// rebuilds the live engine from the new snapshot.
+// applies the group-level SDK state through its async-engine group lane.
 func (n *localNode) SetGroupCurrency(
 	ctx context.Context, code string, currency string, caller domain.Caller,
 ) error {
@@ -222,7 +222,7 @@ func (n *localNode) SetGroupCurrency(
 }
 
 // SetDefaultGroupCurrency sets or clears the reserved default group currency and
-// rebuilds the live engine from the new snapshot.
+// applies the default-group SDK state through its async-engine group lane.
 func (n *localNode) SetDefaultGroupCurrency(
 	ctx context.Context, currency string, caller domain.Caller,
 ) error {
@@ -240,10 +240,10 @@ func (n *localNode) setGroupCurrency(
 	if defaultGroup {
 		operation = "set default group currency"
 	}
-	if err := n.beginEngineRestart(); err != nil {
+	if err := n.beginLiveIdentityPublication(); err != nil {
 		return err
 	}
-	defer n.endEngineRestart()
+	defer n.endLiveIdentityPublication()
 
 	prevCurrency := ""
 	if !defaultGroup {
@@ -274,24 +274,59 @@ func (n *localNode) setGroupCurrency(
 	if err := n.ensureCurrencyAsset(ctx, currency, operation, caller); err != nil {
 		return err
 	}
-
 	if err := n.realm.SetGroupCurrency(ctx, code, currency); err != nil {
 		return fmt.Errorf("set group currency: %w", err)
 	}
-	if err := n.rebuildEngineFromStore(ctx); err != nil {
-		return fmt.Errorf("rebuild engine after group currency: %w", err)
+	eng := n.currentEngine()
+	applyErr := eng.RunGroupSynchronized(ctx, code, func(lane engine.GroupLane) error {
+		return applyGroupCurrency(ctx, lane, code, currency)
+	})
+	if applyErr != nil {
+		mutationCtx := context.WithoutCancel(ctx)
+		revertRuntimeErr := eng.RunGroupSynchronized(
+			mutationCtx, code, func(lane engine.GroupLane) error {
+				return applyGroupCurrency(mutationCtx, lane, code, prevCurrency)
+			},
+		)
+		revertStoreErr := n.realm.SetGroupCurrency(mutationCtx, code, prevCurrency)
+		if revertRuntimeErr != nil || revertStoreErr != nil {
+			cause := errors.Join(
+				fmt.Errorf("apply group currency: %w", applyErr),
+				optionalOperationError("restore group currency runtime", revertRuntimeErr),
+				optionalOperationError("restore group currency store", revertStoreErr),
+			)
+			return n.reconcileEngineAfterFailure(
+				mutationCtx, "reconcile engine after group currency failure", cause,
+			)
+		}
+		return fmt.Errorf("apply group currency: %w", applyErr)
 	}
 	label := code
 	if defaultGroup {
 		label = "default"
 	}
-	if err := n.audit(ctx, caller, store.AuditEntry{
+	if err := n.audit(context.WithoutCancel(ctx), caller, store.AuditEntry{
 		Action: domain.AuditActionSetGroupCurrency,
 		Detail: currencyDetail("set group currency", label, prevCurrency, currency),
 	}); err != nil {
-		return fmt.Errorf("audit group currency: %w", err)
+		return n.fatalPostEngineAuditByCode(
+			"audit group currency", "group", label,
+			fmt.Errorf("audit group currency: %w", err),
+		)
 	}
 	return nil
+}
+
+func applyGroupCurrency(
+	ctx context.Context,
+	lane engine.GroupLane,
+	group string,
+	currency string,
+) error {
+	if currency == "" {
+		return lane.ClearGroupCurrency(ctx, group)
+	}
+	return lane.SetGroupCurrency(ctx, group, currency)
 }
 
 func (n *localNode) ensureCurrencyAsset(

@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"sync"
 	"testing"
@@ -34,19 +35,25 @@ import (
 
 type fakeEngine struct {
 	running bool
+	sink    marketdata.Sink
 
-	enforceResolver   bool
-	knownAccounts     map[domain.AccountID]struct{}
-	knownGroups       map[string]struct{}
-	accountCurrencies map[domain.AccountID]string
+	enforceResolver    bool
+	knownAccounts      map[domain.AccountID]struct{}
+	knownGroups        map[string]struct{}
+	accountResolverIDs map[domain.AccountID]domain.EngineAccountID
+	groupResolverIDs   map[string]domain.EngineGroupID
+	accountCurrencies  map[domain.AccountID]string
+	groupCurrencies    map[string]string
+	accountGroups      map[domain.AccountID]string
+	resolverMu         sync.RWMutex
 
 	// accountPnlCalls records every engine P&L assignment in order, and
 	// accountPnlBlocks are the blocks the engine reports back for an account.
-	accountPnlCalls  []accountPnlCall
-	accountPnlBlocks map[domain.AccountID][]domain.AccountBlock
+	accountPnlCalls      []accountPnlCall
+	accountPnlStateCalls []accountPnlStateCall
+	accountPnlBlocks     map[domain.AccountID][]domain.AccountBlock
 
 	configureCalls  []configureCall
-	configurePnls   []engine.AccountPnlUpdate
 	configureBlocks []domain.AccountBlock
 	blockCalls      []blockCall
 	unblockCalls    []domain.AccountID
@@ -93,6 +100,9 @@ type fakeEngine struct {
 	// propagates through the node.
 	configureErr       error
 	accountCurrencyErr error
+	groupCurrencyErr   error
+	groupCurrencyFails map[int]error
+	groupCurrencyCalls int
 	accountPnlErr      error
 
 	failConfigure     bool
@@ -123,6 +133,12 @@ type accountPnlCall struct {
 	pnl string
 }
 
+type accountPnlStateCall struct {
+	id         domain.AccountID
+	pnl        string
+	haltReason domain.PnlHaltReason
+}
+
 type adjustmentCall struct {
 	account domain.AccountID
 	req     domain.AdjustmentRequest
@@ -148,6 +164,8 @@ type blockGroupCall struct {
 	reason  string
 }
 
+var _ engine.DictionaryResolver = (*fakeEngine)(nil)
+
 // fakeExecutionReportCarriesFill deliberately mirrors the engine's fill
 // predicate: the fake emits a fill event and trade exactly when the real engine
 // would, so a report input with both a fill quantity and price drives the fill
@@ -159,7 +177,143 @@ func fakeExecutionReportCarriesFill(in domain.ExecutionReportInput) bool {
 func newFakeEngine() *fakeEngine {
 	return &fakeEngine{
 		running:      true,
+		sink:         nopSink{},
 		accountLanes: make(map[domain.AccountID]*sync.Mutex),
+	}
+}
+
+func TestFakeEngineDictionaryResolverMutations(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.enforceResolver = true
+	var captured engine.Snapshot
+	if _, err := fakeBuild(eng, &captured)(engine.Snapshot{
+		Accounts: []domain.Account{{Code: "account-old", EngineAccountID: 7}},
+		Groups:   []domain.AccountGroup{{Code: "group-old", EngineGroupID: 9}},
+	}); err != nil {
+		t.Fatalf("fakeBuild: %v", err)
+	}
+	sinkBefore := eng.MarketDataSink()
+
+	if err := eng.AddAccountResolverEntry(domain.Account{
+		Code: "account-added", EngineAccountID: 8,
+	}); err != nil {
+		t.Fatalf("AddAccountResolverEntry: %v", err)
+	}
+	if err := eng.AddGroupResolverEntry(domain.AccountGroup{
+		Code: "group-added", EngineGroupID: 10,
+	}); err != nil {
+		t.Fatalf("AddGroupResolverEntry: %v", err)
+	}
+	if err := eng.RenameAccountResolverEntry("account-old", domain.Account{
+		Code: "account-new", EngineAccountID: 7,
+	}); err != nil {
+		t.Fatalf("RenameAccountResolverEntry: %v", err)
+	}
+	if err := eng.RenameGroupResolverEntry("group-old", domain.AccountGroup{
+		Code: "group-new", EngineGroupID: 9,
+	}); err != nil {
+		t.Fatalf("RenameGroupResolverEntry: %v", err)
+	}
+
+	if err := eng.RunAccountSynchronized(
+		context.Background(), "account-new", func(engine.AccountLane) error { return nil },
+	); err != nil {
+		t.Fatalf("RunAccountSynchronized renamed alias: %v", err)
+	}
+	if err := eng.RunGroupSynchronized(
+		context.Background(), "group-new", func(engine.GroupLane) error { return nil },
+	); err != nil {
+		t.Fatalf("RunGroupSynchronized renamed alias: %v", err)
+	}
+	if err := eng.RenameAccountResolverEntry("account-new", domain.Account{
+		Code: "account-bad", EngineAccountID: 99,
+	}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("mismatched account id error = %v, want ErrInvalid", err)
+	}
+	if err := eng.RunAccountSynchronized(
+		context.Background(), "account-new", func(engine.AccountLane) error { return nil },
+	); err != nil {
+		t.Fatalf("failed rename changed existing alias: %v", err)
+	}
+	if err := eng.RemoveGroupResolverEntry(domain.AccountGroup{
+		Code: "group-new", EngineGroupID: 11,
+	}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("mismatched group removal error = %v, want ErrInvalid", err)
+	}
+	if err := eng.RunGroupSynchronized(
+		context.Background(), "group-new", func(engine.GroupLane) error { return nil },
+	); err != nil {
+		t.Fatalf("failed removal changed existing group alias: %v", err)
+	}
+	if err := eng.RemoveGroupResolverEntry(domain.AccountGroup{
+		Code: "group-new", EngineGroupID: 9,
+	}); err != nil {
+		t.Fatalf("RemoveGroupResolverEntry: %v", err)
+	}
+	if err := eng.RunGroupSynchronized(
+		context.Background(), "group-new", func(engine.GroupLane) error { return nil },
+	); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("removed group alias error = %v, want ErrInvalid", err)
+	}
+	if got := eng.MarketDataSink(); got != sinkBefore {
+		t.Fatal("fake resolver mutation replaced MarketDataSink")
+	}
+}
+
+func TestFakeEngineSetAccountPnlState(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.accountPnlBlocks = map[domain.AccountID][]domain.AccountBlock{
+		"account": {{Account: "account", Reason: "halted"}},
+	}
+	sinkBefore := eng.MarketDataSink()
+
+	if _, err := eng.SetAccountPnlState(
+		context.Background(), "account", "2.5", "",
+	); err != nil {
+		t.Fatalf("numeric SetAccountPnlState: %v", err)
+	}
+	blocks, err := eng.SetAccountPnlState(
+		context.Background(), "account", "", domain.PnlHaltReasonMissingFx,
+	)
+	if err != nil {
+		t.Fatalf("halted SetAccountPnlState: %v", err)
+	}
+	if len(blocks) != 1 || blocks[0].Account != "account" {
+		t.Fatalf("halted blocks = %+v, want account block", blocks)
+	}
+	want := []accountPnlStateCall{
+		{id: "account", pnl: "2.5"},
+		{id: "account", haltReason: domain.PnlHaltReasonMissingFx},
+	}
+	if !reflect.DeepEqual(eng.accountPnlStateCalls, want) {
+		t.Fatalf("account pnl state calls = %+v, want %+v", eng.accountPnlStateCalls, want)
+	}
+
+	for _, test := range []struct {
+		name       string
+		pnl        string
+		haltReason domain.PnlHaltReason
+	}{
+		{name: "both", pnl: "1", haltReason: domain.PnlHaltReasonMissingFx},
+		{name: "empty"},
+		{name: "unknown reason", haltReason: "unknown"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := eng.SetAccountPnlState(
+				context.Background(), "account", test.pnl, test.haltReason,
+			)
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("SetAccountPnlState error = %v, want ErrInvalid", err)
+			}
+		})
+	}
+	if len(eng.accountPnlStateCalls) != 2 {
+		t.Fatalf("invalid states were recorded: %+v", eng.accountPnlStateCalls)
+	}
+	if eng.MarketDataSink() != sinkBefore {
+		t.Fatal("SetAccountPnlState replaced fake MarketDataSink")
 	}
 }
 
@@ -200,17 +354,33 @@ func (e *fakeEngine) accountLane(account domain.AccountID) *sync.Mutex {
 func fakeBuild(eng *fakeEngine, captured *engine.Snapshot) engine.BuildFunc {
 	return func(snap engine.Snapshot) (engine.Engine, error) {
 		*captured = snap
+		eng.resolverMu.Lock()
+		defer eng.resolverMu.Unlock()
 		eng.knownAccounts = map[domain.AccountID]struct{}{}
+		eng.accountResolverIDs = map[domain.AccountID]domain.EngineAccountID{}
 		for _, account := range snap.Accounts {
 			eng.knownAccounts[account.Code] = struct{}{}
+			eng.accountResolverIDs[account.Code] = account.EngineAccountID
 		}
 		eng.knownGroups = map[string]struct{}{}
+		eng.groupResolverIDs = map[string]domain.EngineGroupID{}
 		for _, group := range snap.Groups {
 			eng.knownGroups[group.Code] = struct{}{}
+			eng.groupResolverIDs[group.Code] = group.EngineGroupID
 		}
 		eng.accountCurrencies = map[domain.AccountID]string{}
+		eng.groupCurrencies = map[string]string{}
+		eng.accountGroups = map[domain.AccountID]string{}
 		for _, account := range snap.Accounts {
-			eng.accountCurrencies[account.Code] = account.EffectiveCurrency
+			if account.Currency != "" {
+				eng.accountCurrencies[account.Code] = account.Currency
+			}
+			eng.accountGroups[account.Code] = account.GroupCode
+		}
+		for _, group := range snap.Groups {
+			if group.Currency != "" {
+				eng.groupCurrencies[group.Code] = group.Currency
+			}
 		}
 		return eng, nil
 	}
@@ -220,6 +390,8 @@ func (e *fakeEngine) checkKnownAccount(account domain.AccountID) error {
 	if !e.enforceResolver {
 		return nil
 	}
+	e.resolverMu.RLock()
+	defer e.resolverMu.RUnlock()
 	if _, ok := e.knownAccounts[account]; !ok {
 		return fmt.Errorf("engine: unknown account %q: %w", account, domain.ErrInvalid)
 	}
@@ -239,6 +411,8 @@ func (e *fakeEngine) checkKnownGroup(groupID string) error {
 	if !e.enforceResolver || groupID == "" {
 		return nil
 	}
+	e.resolverMu.RLock()
+	defer e.resolverMu.RUnlock()
 	if _, ok := e.knownGroups[groupID]; !ok {
 		return fmt.Errorf("engine: unknown group %q: %w", groupID, domain.ErrInvalid)
 	}
@@ -248,6 +422,193 @@ func (e *fakeEngine) checkKnownGroup(groupID string) error {
 func (e *fakeEngine) Version() string      { return "fake" }
 func (e *fakeEngine) BuildProfile() string { return "test" }
 func (e *fakeEngine) Running() bool        { return e.running }
+
+func (e *fakeEngine) AddAccountResolverEntry(account domain.Account) error {
+	if err := domain.ValidateEngineAccountID(account.EngineAccountID); err != nil {
+		return fmt.Errorf("engine: account %q engine id: %w", account.Code, err)
+	}
+	e.resolverMu.Lock()
+	defer e.resolverMu.Unlock()
+	if _, exists := e.knownAccounts[account.Code]; exists {
+		return fmt.Errorf(
+			"engine: account resolver alias %q already exists: %w",
+			account.Code, domain.ErrAlreadyExists,
+		)
+	}
+	for alias, id := range e.accountResolverIDs {
+		if id == account.EngineAccountID {
+			return fmt.Errorf(
+				"engine: account engine id %d already belongs to resolver alias %q: %w",
+				id, alias, domain.ErrInvalid,
+			)
+		}
+	}
+	if e.knownAccounts == nil {
+		e.knownAccounts = map[domain.AccountID]struct{}{}
+	}
+	if e.accountResolverIDs == nil {
+		e.accountResolverIDs = map[domain.AccountID]domain.EngineAccountID{}
+	}
+	e.knownAccounts[account.Code] = struct{}{}
+	e.accountResolverIDs[account.Code] = account.EngineAccountID
+	return nil
+}
+
+func (e *fakeEngine) RenameAccountResolverEntry(
+	oldCode domain.AccountID, account domain.Account,
+) error {
+	if err := domain.ValidateEngineAccountID(account.EngineAccountID); err != nil {
+		return fmt.Errorf("engine: account %q engine id: %w", account.Code, err)
+	}
+	e.resolverMu.Lock()
+	defer e.resolverMu.Unlock()
+	currentID, exists := e.accountResolverIDs[oldCode]
+	if !exists {
+		return fmt.Errorf(
+			"engine: unknown account resolver alias %q: %w",
+			oldCode, domain.ErrInvalid,
+		)
+	}
+	if currentID != account.EngineAccountID {
+		return fmt.Errorf(
+			"engine: account resolver alias %q has engine id %d, target %q has %d: %w",
+			oldCode, currentID, account.Code, account.EngineAccountID, domain.ErrInvalid,
+		)
+	}
+	if oldCode == account.Code {
+		return nil
+	}
+	if _, exists := e.knownAccounts[account.Code]; exists {
+		return fmt.Errorf(
+			"engine: account resolver alias %q already exists: %w",
+			account.Code, domain.ErrAlreadyExists,
+		)
+	}
+	delete(e.knownAccounts, oldCode)
+	delete(e.accountResolverIDs, oldCode)
+	e.knownAccounts[account.Code] = struct{}{}
+	e.accountResolverIDs[account.Code] = currentID
+	if currency, ok := e.accountCurrencies[oldCode]; ok {
+		delete(e.accountCurrencies, oldCode)
+		e.accountCurrencies[account.Code] = currency
+	}
+	if group, ok := e.accountGroups[oldCode]; ok {
+		delete(e.accountGroups, oldCode)
+		e.accountGroups[account.Code] = group
+	}
+	return nil
+}
+
+func (e *fakeEngine) AddGroupResolverEntry(group domain.AccountGroup) error {
+	if err := validateFakeResolverGroup(group); err != nil {
+		return fmt.Errorf("engine: group %q engine id: %w", group.Code, err)
+	}
+	e.resolverMu.Lock()
+	defer e.resolverMu.Unlock()
+	if _, exists := e.knownGroups[group.Code]; exists {
+		return fmt.Errorf(
+			"engine: group resolver alias %q already exists: %w",
+			group.Code, domain.ErrAlreadyExists,
+		)
+	}
+	for alias, id := range e.groupResolverIDs {
+		if id == group.EngineGroupID {
+			return fmt.Errorf(
+				"engine: group engine id %d already belongs to resolver alias %q: %w",
+				id, alias, domain.ErrInvalid,
+			)
+		}
+	}
+	if e.knownGroups == nil {
+		e.knownGroups = map[string]struct{}{}
+	}
+	if e.groupResolverIDs == nil {
+		e.groupResolverIDs = map[string]domain.EngineGroupID{}
+	}
+	e.knownGroups[group.Code] = struct{}{}
+	e.groupResolverIDs[group.Code] = group.EngineGroupID
+	return nil
+}
+
+func (e *fakeEngine) RenameGroupResolverEntry(
+	oldCode string, group domain.AccountGroup,
+) error {
+	if err := validateFakeResolverGroup(group); err != nil {
+		return fmt.Errorf("engine: group %q engine id: %w", group.Code, err)
+	}
+	e.resolverMu.Lock()
+	defer e.resolverMu.Unlock()
+	currentID, exists := e.groupResolverIDs[oldCode]
+	if !exists {
+		return fmt.Errorf(
+			"engine: unknown group resolver alias %q: %w",
+			oldCode, domain.ErrInvalid,
+		)
+	}
+	if currentID != group.EngineGroupID {
+		return fmt.Errorf(
+			"engine: group resolver alias %q has engine id %d, target %q has %d: %w",
+			oldCode, currentID, group.Code, group.EngineGroupID, domain.ErrInvalid,
+		)
+	}
+	if oldCode == group.Code {
+		return nil
+	}
+	if _, exists := e.knownGroups[group.Code]; exists {
+		return fmt.Errorf(
+			"engine: group resolver alias %q already exists: %w",
+			group.Code, domain.ErrAlreadyExists,
+		)
+	}
+	delete(e.knownGroups, oldCode)
+	delete(e.groupResolverIDs, oldCode)
+	e.knownGroups[group.Code] = struct{}{}
+	e.groupResolverIDs[group.Code] = currentID
+	if currency, ok := e.groupCurrencies[oldCode]; ok {
+		delete(e.groupCurrencies, oldCode)
+		e.groupCurrencies[group.Code] = currency
+	}
+	for account, memberGroup := range e.accountGroups {
+		if memberGroup == oldCode {
+			e.accountGroups[account] = group.Code
+		}
+	}
+	return nil
+}
+
+func (e *fakeEngine) RemoveGroupResolverEntry(group domain.AccountGroup) error {
+	if err := validateFakeResolverGroup(group); err != nil {
+		return fmt.Errorf("engine: group %q engine id: %w", group.Code, err)
+	}
+	e.resolverMu.Lock()
+	defer e.resolverMu.Unlock()
+	currentID, exists := e.groupResolverIDs[group.Code]
+	if !exists {
+		return fmt.Errorf(
+			"engine: unknown group resolver alias %q: %w",
+			group.Code, domain.ErrInvalid,
+		)
+	}
+	if currentID != group.EngineGroupID {
+		return fmt.Errorf(
+			"engine: group resolver alias %q has engine id %d, removal target has %d: %w",
+			group.Code, currentID, group.EngineGroupID, domain.ErrInvalid,
+		)
+	}
+	delete(e.knownGroups, group.Code)
+	delete(e.groupResolverIDs, group.Code)
+	return nil
+}
+
+func validateFakeResolverGroup(group domain.AccountGroup) error {
+	if group.Code == "" {
+		if group.EngineGroupID != 0 {
+			return domain.ErrInvalid
+		}
+		return nil
+	}
+	return domain.ValidateEngineGroupID(group.EngineGroupID)
+}
 
 func (e *fakeEngine) ConfigurePolicy(
 	_ context.Context, policy string, limits engine.LimitSet,
@@ -260,8 +621,7 @@ func (e *fakeEngine) ConfigurePolicy(
 	}
 	e.configureCalls = append(e.configureCalls, configureCall{policy, limits})
 	return engine.PolicyConfigurationResult{
-		AccountPnlUpdates: e.configurePnls,
-		AccountBlocks:     e.configureBlocks,
+		AccountBlocks: e.configureBlocks,
 	}, nil
 }
 
@@ -315,8 +675,64 @@ func (e *fakeEngine) ClearAccountCurrency(
 	return nil
 }
 
+func (e *fakeEngine) SetGroupCurrency(
+	_ context.Context, groupID, currency string,
+) error {
+	if err := e.checkKnownGroup(groupID); err != nil {
+		return err
+	}
+	e.groupCurrencyCalls++
+	if err := e.groupCurrencyFails[e.groupCurrencyCalls]; err != nil {
+		return err
+	}
+	if e.groupCurrencyErr != nil {
+		return e.groupCurrencyErr
+	}
+	if e.groupCurrencies == nil {
+		e.groupCurrencies = map[string]string{}
+	}
+	e.groupCurrencies[groupID] = currency
+	return nil
+}
+
+func (e *fakeEngine) ClearGroupCurrency(
+	_ context.Context, groupID string,
+) error {
+	if err := e.checkKnownGroup(groupID); err != nil {
+		return err
+	}
+	e.groupCurrencyCalls++
+	if err := e.groupCurrencyFails[e.groupCurrencyCalls]; err != nil {
+		return err
+	}
+	if e.groupCurrencyErr != nil {
+		return e.groupCurrencyErr
+	}
+	delete(e.groupCurrencies, groupID)
+	return nil
+}
+
+func (e *fakeEngine) effectiveAccountCurrency(account domain.AccountID) string {
+	if currency := e.accountCurrencies[account]; currency != "" {
+		return currency
+	}
+	if currency := e.groupCurrencies[e.accountGroups[account]]; currency != "" {
+		return currency
+	}
+	return e.groupCurrencies[""]
+}
+
 func (e *fakeEngine) SetAccountPnl(
-	_ context.Context, id domain.AccountID, pnl string,
+	ctx context.Context, id domain.AccountID, pnl string,
+) ([]domain.AccountBlock, error) {
+	return e.SetAccountPnlState(ctx, id, pnl, "")
+}
+
+func (e *fakeEngine) SetAccountPnlState(
+	_ context.Context,
+	id domain.AccountID,
+	pnl string,
+	haltReason domain.PnlHaltReason,
 ) ([]domain.AccountBlock, error) {
 	if err := e.checkKnownAccount(id); err != nil {
 		return nil, err
@@ -324,7 +740,24 @@ func (e *fakeEngine) SetAccountPnl(
 	if e.accountPnlErr != nil {
 		return nil, e.accountPnlErr
 	}
-	e.accountPnlCalls = append(e.accountPnlCalls, accountPnlCall{id, pnl})
+	if pnl != "" && haltReason != "" {
+		return nil, fmt.Errorf(
+			"engine: account pnl state has both value %q and halt reason %q: %w",
+			pnl, haltReason, domain.ErrInvalid,
+		)
+	}
+	if err := domain.ValidatePnlHaltReason(haltReason); err != nil {
+		return nil, err
+	}
+	if pnl == "" && haltReason == "" {
+		return nil, fmt.Errorf("engine: account pnl state is empty: %w", domain.ErrInvalid)
+	}
+	e.accountPnlStateCalls = append(e.accountPnlStateCalls, accountPnlStateCall{
+		id: id, pnl: pnl, haltReason: haltReason,
+	})
+	if haltReason == "" {
+		e.accountPnlCalls = append(e.accountPnlCalls, accountPnlCall{id, pnl})
+	}
 	if e.accountPnlBlocks == nil {
 		return nil, nil
 	}
@@ -596,6 +1029,12 @@ func (e *fakeEngine) RegisterGroup(
 		return errors.New("register group failed")
 	}
 	e.registerGroupCalls = append(e.registerGroupCalls, groupCall{accounts, groupID})
+	if e.accountGroups == nil {
+		e.accountGroups = map[domain.AccountID]string{}
+	}
+	for _, account := range accounts {
+		e.accountGroups[account] = groupID
+	}
 	return nil
 }
 
@@ -612,6 +1051,11 @@ func (e *fakeEngine) UnregisterGroup(
 		return errors.New("unregister group failed")
 	}
 	e.unregisterGroupCalls = append(e.unregisterGroupCalls, groupCall{accounts, groupID})
+	for _, account := range accounts {
+		if e.accountGroups[account] == groupID {
+			delete(e.accountGroups, account)
+		}
+	}
 	return nil
 }
 
@@ -653,9 +1097,8 @@ func (e *fakeEngine) CheckOrder(
 	return e.checkResult, nil
 }
 
-// MarketDataSink returns a no-op sink: the node tests do not exercise quote
-// ingestion, and the fake engine carries no market-data service.
-func (e *fakeEngine) MarketDataSink() marketdata.Sink { return nopSink{} }
+// MarketDataSink returns the stable no-op sink owned by this fake handle.
+func (e *fakeEngine) MarketDataSink() marketdata.Sink { return e.sink }
 
 func (e *fakeEngine) Stop() { e.running = false }
 
@@ -664,6 +1107,7 @@ func (e *fakeEngine) Stop() { e.running = false }
 type nopSink struct{}
 
 func (nopSink) Push(marketdata.QuoteUpdate) error { return nil }
+func (nopSink) Clear(string, string) error        { return nil }
 
 // realmWrapStore decorates a store.Store so its ForRealm returns a realm handle
 // produced by wrap. It lets a test inject a failing/overriding RealmStore while
@@ -713,6 +1157,40 @@ func (s *failRestoreAuditRealm) AppendAudit(
 	return s.RealmStore.AppendAudit(ctx, entry)
 }
 
+// restoreScopeProbeRealm records the exact export and restore scopes used by
+// LocalNode recovery. It also fails the final restore audit so tests can drive
+// the rollback path without changing the wrapped store's backup semantics.
+type restoreScopeProbeRealm struct {
+	store.RealmStore
+	exportScopes  []backup.Scope
+	restoreScopes []backup.Scope
+}
+
+func (s *restoreScopeProbeRealm) ExportBackup(
+	ctx context.Context, scope backup.Scope,
+) (backup.Archive, error) {
+	s.exportScopes = append(s.exportScopes, scope)
+	return s.RealmStore.ExportBackup(ctx, scope)
+}
+
+func (s *restoreScopeProbeRealm) RestoreBackup(
+	ctx context.Context,
+	archive backup.Archive,
+	opts backup.RestoreOptions,
+) (backup.RestoreSummary, error) {
+	s.restoreScopes = append(s.restoreScopes, opts.Scope)
+	return s.RealmStore.RestoreBackup(ctx, archive, opts)
+}
+
+func (s *restoreScopeProbeRealm) AppendAudit(
+	ctx context.Context, entry store.AuditEntry,
+) error {
+	if entry.Action == domain.AuditActionRestoreBackup {
+		return errRestoreAuditFailed
+	}
+	return s.RealmStore.AppendAudit(ctx, entry)
+}
+
 // failActionAuditRealm fails the AppendAudit write for one specific audit action
 // while delegating every other action (startup hydrate, create_account,
 // create_group) so setup succeeds. It drives the admin block/group/set-group
@@ -754,18 +1232,39 @@ func (s *failRollbackRestoreRealm) RestoreBackup(
 	return s.RealmStore.RestoreBackup(ctx, archive, opts)
 }
 
-// failBusinessCSVImportRealm fails the final transactional ApplyBusinessCSVImport
-// store write while delegating everything else, so a node test can drive the
-// engine/store reconcile-on-failure path.
+// failBusinessCSVImportRealm can fail either the initial dictionary transaction
+// or the final transactional store write while delegating everything else.
 type failBusinessCSVImportRealm struct {
 	store.RealmStore
-	err error
+	err              error
+	failDictionaries bool
+	exportScopes     []backup.Scope
+	restoreScopes    []backup.Scope
+}
+
+func (s *failBusinessCSVImportRealm) ExportBackup(
+	ctx context.Context, scope backup.Scope,
+) (backup.Archive, error) {
+	s.exportScopes = append(s.exportScopes, scope)
+	return s.RealmStore.ExportBackup(ctx, scope)
+}
+
+func (s *failBusinessCSVImportRealm) RestoreBackup(
+	ctx context.Context,
+	archive backup.Archive,
+	opts backup.RestoreOptions,
+) (backup.RestoreSummary, error) {
+	s.restoreScopes = append(s.restoreScopes, opts.Scope)
+	return s.RealmStore.RestoreBackup(ctx, archive, opts)
 }
 
 func (s *failBusinessCSVImportRealm) ApplyBusinessCSVImport(
 	ctx context.Context, in store.BusinessCSVImport,
 ) error {
 	if len(in.Balances) == 0 && len(in.Adjustments) == 0 {
+		if s.failDictionaries && (len(in.Groups) > 0 || len(in.Accounts) > 0) {
+			return s.err
+		}
 		return s.RealmStore.ApplyBusinessCSVImport(ctx, in)
 	}
 	return s.err

@@ -371,12 +371,11 @@ func (rt *restoreTx) restoreLimits(ctx context.Context, data backup.Data) error 
 			accountID,
 			groupID,
 			`INSERT INTO limit_spot_funds_pnl_bound
-			 (scope, account_id, account_group_id, lower_bound, upper_bound, initial_pnl)
-			 VALUES (?, ?, ?, ?, ?, ?)`,
+				 (scope, account_id, account_group_id, lower_bound, upper_bound)
+				 VALUES (?, ?, ?, ?, ?)`,
 			[]any{
 				l.Scope, accountID, groupID,
 				nullableString(l.LowerBound), nullableString(l.UpperBound),
-				nullableString(l.InitialPnl),
 			},
 		)
 		if err != nil {

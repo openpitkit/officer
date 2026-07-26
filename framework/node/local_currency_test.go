@@ -834,8 +834,11 @@ func TestLocalNode_DeleteGroupGuardsOnlyEffectiveCurrencyChanges(t *testing.T) {
 		}, testCaller); err != nil {
 			t.Fatalf("CreateAccount clear: %v", err)
 		}
-		if got := eng.accountCurrencies["clear"]; got != "EUR" {
-			t.Fatalf("live engine currency before delete = %q, want EUR", got)
+		if _, ok := eng.accountCurrencies["clear"]; ok {
+			t.Fatal("inherited group currency was materialized as an account override")
+		}
+		if got := eng.effectiveAccountCurrency("clear"); got != "EUR" {
+			t.Fatalf("live effective currency before delete = %q, want EUR", got)
 		}
 
 		if err := n.DeleteGroup(ctx, "desk-a", testCaller); err != nil {
@@ -850,9 +853,12 @@ func TestLocalNode_DeleteGroupGuardsOnlyEffectiveCurrencyChanges(t *testing.T) {
 			account.CurrencyOrigin != domain.CurrencyOriginDefault {
 			t.Fatalf("account after group delete = %+v", account)
 		}
-		if got := eng.accountCurrencies["clear"]; got != account.EffectiveCurrency {
+		if _, ok := eng.accountCurrencies["clear"]; ok {
+			t.Fatal("group delete materialized default currency as an account override")
+		}
+		if got := eng.effectiveAccountCurrency("clear"); got != account.EffectiveCurrency {
 			t.Fatalf(
-				"live engine currency after delete = %q, store effective = %q",
+				"live effective currency after delete = %q, store effective = %q",
 				got,
 				account.EffectiveCurrency,
 			)
@@ -1095,12 +1101,20 @@ func fakeBuildWithSetAccountCurrencyFailures(
 			base.knownAccounts[account.Code] = struct{}{}
 		}
 		base.knownGroups = map[string]struct{}{}
+		base.groupCurrencies = map[string]string{}
 		for _, group := range snap.Groups {
 			base.knownGroups[group.Code] = struct{}{}
+			if group.Currency != "" {
+				base.groupCurrencies[group.Code] = group.Currency
+			}
 		}
 		base.accountCurrencies = map[domain.AccountID]string{}
+		base.accountGroups = map[domain.AccountID]string{}
 		for _, account := range snap.Accounts {
-			base.accountCurrencies[account.Code] = account.EffectiveCurrency
+			if account.Currency != "" {
+				base.accountCurrencies[account.Code] = account.Currency
+			}
+			base.accountGroups[account.Code] = account.GroupCode
 		}
 		return eng, nil
 	}

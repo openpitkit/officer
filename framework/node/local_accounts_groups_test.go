@@ -26,8 +26,28 @@ import (
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/engine"
 	"go.openpit.dev/officer/framework/store"
 )
+
+type failAccountBlockRevertRealm struct {
+	store.RealmStore
+	revertErr error
+	calls     int
+}
+
+func (r *failAccountBlockRevertRealm) SetAccountBlocked(
+	ctx context.Context,
+	id domain.AccountID,
+	blocked bool,
+	reason string,
+) error {
+	r.calls++
+	if r.calls == 2 {
+		return r.revertErr
+	}
+	return r.RealmStore.SetAccountBlocked(ctx, id, blocked, reason)
+}
 
 func TestLocalNode_BlockUnblockAccount(t *testing.T) {
 	t.Parallel()
@@ -177,12 +197,10 @@ func TestLocalNode_SetAccountGroupAutoCreatesUnknownGroup(t *testing.T) {
 	}
 }
 
-// TestLocalNode_SetGroupBlockedRunsUnderRestartGate proves the group block runs
-// under the exclusive engine-restart gate rather than on the group lane: it
-// applies the engine block directly (no RunGroupSynchronized call) and, while it
-// holds the gate, a concurrent engine-restart request is rejected with
-// ErrEngineRestarting.
-func TestLocalNode_SetGroupBlockedRunsUnderRestartGate(t *testing.T) {
+// TestLocalNode_SetGroupBlockedRunsUnderLiveIdentityGate proves the group block
+// keeps the live engine while fencing concurrent identity publications until
+// the async-engine group lane finishes.
+func TestLocalNode_SetGroupBlockedRunsUnderLiveIdentityGate(t *testing.T) {
 	t.Parallel()
 	entered := make(chan string, 1)
 	release := make(chan struct{})
@@ -208,15 +226,23 @@ func TestLocalNode_SetGroupBlockedRunsUnderRestartGate(t *testing.T) {
 		t.Fatal("SetGroupBlocked did not reach the engine block")
 	}
 
-	// The exclusive gate is held: a concurrent engine-restart request is rejected
-	// rather than interleaving with the in-flight group block.
-	if _, err := n.CreateGroup(ctx, domain.AccountGroup{Code: "desk-b"}, testCaller); !errors.Is(err, domain.ErrEngineRestarting) {
-		t.Fatalf("concurrent CreateGroup error = %v, want ErrEngineRestarting", err)
+	created := make(chan error, 1)
+	go func() {
+		_, err := n.CreateGroup(ctx, domain.AccountGroup{Code: "desk-b"}, testCaller)
+		created <- err
+	}()
+	select {
+	case err := <-created:
+		t.Fatalf("concurrent CreateGroup completed before group block: %v", err)
+	case <-time.After(20 * time.Millisecond):
 	}
 
 	close(release)
 	if err := <-errs; err != nil {
 		t.Fatalf("SetGroupBlocked: %v", err)
+	}
+	if err := <-created; err != nil {
+		t.Fatalf("concurrent CreateGroup after group block: %v", err)
 	}
 	if len(eng.blockGroupCalls) != 1 {
 		t.Fatalf("block group calls = %+v, want one", eng.blockGroupCalls)
@@ -483,6 +509,8 @@ func TestLocalNode_BlockEngineFailureRevertsStore(t *testing.T) {
 	}
 
 	eng.failBlock = true
+	next := newFakeEngine()
+	n.build = fakeBuild(next, new(engine.Snapshot))
 	if err := n.SetAccountBlocked(ctx, testKey(id), true, "risk", testCaller); err == nil {
 		t.Fatalf("block: want error on engine failure")
 	}
@@ -493,6 +521,44 @@ func TestLocalNode_BlockEngineFailureRevertsStore(t *testing.T) {
 	}
 	if account.Blocked {
 		t.Fatalf("store not reverted: account still blocked")
+	}
+}
+
+func TestLocalNode_BlockRevertFailureAndRebuildFailureIsFatal(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	real := newMemoryStore("account-block-revert.db")
+	if err := real.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	t.Cleanup(func() { _ = real.Close() })
+	revertErr := errors.New("account block store revert failed")
+	st := newRealmWrapStore(real, func(realm store.RealmStore) store.RealmStore {
+		return &failAccountBlockRevertRealm{
+			RealmStore: realm,
+			revertErr:  revertErr,
+		}
+	})
+	eng := newFakeEngine()
+	n := newTestNodeWithStore(t, st, eng)
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	eng.failBlock = true
+	rebuildErr := errors.New("account block reconciliation rebuild failed")
+	n.build = func(engine.Snapshot) (engine.Engine, error) {
+		return nil, rebuildErr
+	}
+	var fatalErr error
+	n.fatal = func(err error) { fatalErr = err }
+
+	err := n.SetAccountBlocked(ctx, testKey(id), true, "risk", testCaller)
+	if !errors.Is(err, revertErr) || !errors.Is(err, rebuildErr) {
+		t.Fatalf("SetAccountBlocked error = %v, want revert and rebuild failures", err)
+	}
+	if fatalErr == nil || !errors.Is(fatalErr, rebuildErr) {
+		t.Fatalf("fatal error = %v, want rebuild failure", fatalErr)
 	}
 }
 

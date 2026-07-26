@@ -100,8 +100,6 @@ func sortPolicyRows(rows []store.PolicyListRow, spec store.SortSpec) {
 			cmp = compareStrings(left.AccountGroup, right.AccountGroup)
 		case "asset":
 			cmp = compareStrings(left.Asset, right.Asset)
-		case "initialPnl":
-			cmp = compareDecimalText(policyInitialPnl(left), policyInitialPnl(right))
 		case "lowerBound":
 			cmp = compareDecimalText(policyLowerBound(left), policyLowerBound(right))
 		case "maxNotional":
@@ -155,13 +153,6 @@ func policyLowerBound(row store.PolicyListRow) string {
 func policyUpperBound(row store.PolicyListRow) string {
 	if row.SpotFundsPnlBounds != nil {
 		return row.SpotFundsPnlBounds.UpperBound
-	}
-	return ""
-}
-
-func policyInitialPnl(row store.PolicyListRow) string {
-	if row.SpotFundsPnlBounds != nil {
-		return row.SpotFundsPnlBounds.InitialPnl
 	}
 	return ""
 }

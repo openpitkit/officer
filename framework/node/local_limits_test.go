@@ -30,10 +30,20 @@ import (
 	"go.openpit.dev/officer/framework/store"
 )
 
+func preparePolicyLifecycleBuild(
+	n *localNode,
+) (*fakeEngine, *engine.Snapshot) {
+	next := newFakeEngine()
+	snapshot := new(engine.Snapshot)
+	n.build = fakeBuild(next, snapshot)
+	return next, snapshot
+}
+
 func TestLocalNode_PutRateLimitAppliesAndAudits(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
 	n, st := newTestNode(t, eng)
+	preparePolicyLifecycleBuild(n)
 	ctx := context.Background()
 
 	if _, err := n.PutRateLimit(ctx, rateLimit(domain.ScopeBroker, "", "", 100, time.Second), testCaller); err != nil {
@@ -62,6 +72,7 @@ func TestLocalNode_PutAssetRateLimitAutoCreatesUnknownAsset(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
 	n, st := newTestNode(t, eng)
+	preparePolicyLifecycleBuild(n)
 	ctx := context.Background()
 
 	limit := rateLimit(domain.ScopeAsset, "", "GOLD", 100, time.Second)
@@ -121,26 +132,23 @@ func TestLocalNode_PutRateLimitEngineFailureRevertsStore(t *testing.T) {
 
 func TestLocalNode_PutRateLimitConfiguresPolicyFromStore(t *testing.T) {
 	t.Parallel()
-	eng := newFakeEngine()
-	n, _ := newTestNode(t, eng)
+	old := newFakeEngine()
+	n, _ := newTestNode(t, old)
+	next, snapshot := preparePolicyLifecycleBuild(n)
 	ctx := context.Background()
 
 	limit := rateLimit(domain.ScopeBroker, "", "", 100, time.Second)
 	if _, err := n.PutRateLimit(ctx, limit, testCaller); err != nil {
 		t.Fatalf("PutRateLimit: %v", err)
 	}
-
-	if len(eng.configureCalls) != 1 {
-		t.Fatalf("configure calls = %d, want 1", len(eng.configureCalls))
+	if old.running {
+		t.Fatal("old engine still running after first policy barrier")
 	}
-	if eng.configureCalls[0].policy != domain.PolicyRateLimit {
-		t.Fatalf("configured policy = %q, want rate_limit", eng.configureCalls[0].policy)
+	if !next.running {
+		t.Fatal("prepared engine is not running")
 	}
-	if len(eng.configureCalls[0].limits.RateLimits) != 1 {
-		t.Fatalf("configured limits = %d, want 1", len(eng.configureCalls[0].limits.RateLimits))
-	}
-	if eng.configureCalls[0].limits.RateLimits[0] != limit {
-		t.Fatalf("configured wrong barrier: %+v", eng.configureCalls[0].limits.RateLimits[0])
+	if len(snapshot.RateLimits) != 1 || snapshot.RateLimits[0] != limit {
+		t.Fatalf("prepared rate limits = %+v, want the new barrier", snapshot.RateLimits)
 	}
 }
 
@@ -174,84 +182,78 @@ func TestLocalNode_PutRateLimitNotImplementedRebuildsFromStore(t *testing.T) {
 	}
 }
 
-// TestLocalNode_CreateAccountRebuildsEngineWithNewAccount verifies a freshly
-// created account is wired into the live engine. The resolver has no incremental
-// account registration, so the node rebuilds from the store on create; without
-// the rebuild the account would persist but stay unknown to the engine
-// (adjustments, group moves, and orders would reject as "unknown account") until
-// a restart.
-func TestLocalNode_CreateAccountRebuildsEngineWithNewAccount(t *testing.T) {
+// TestLocalNode_CreateAccountPublishesIntoLiveEngine verifies a freshly created
+// account is immediately routable without replacing the engine.
+func TestLocalNode_CreateAccountPublishesIntoLiveEngine(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
+	eng.enforceResolver = true
 	n, _ := newTestNode(t, eng)
 	ctx := context.Background()
-	next := newFakeEngine()
-	var rebuilt engine.Snapshot
-	n.build = fakeBuild(next, &rebuilt)
+	builds := 0
+	n.build = func(engine.Snapshot) (engine.Engine, error) {
+		builds++
+		return newFakeEngine(), nil
+	}
+	sink := n.CurrentMarketDataSink()
 
 	if _, err := n.CreateAccount(ctx, testAccount("fresh"), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	if eng.running {
-		t.Fatal("old engine still running after create rebuild")
+	if err := eng.RunAccountSynchronized(
+		ctx, "fresh", func(engine.AccountLane) error { return nil },
+	); err != nil {
+		t.Fatalf("new account is not routable: %v", err)
 	}
-	if !next.running {
-		t.Fatal("replacement engine is not running after create rebuild")
+	if builds != 0 {
+		t.Fatalf("build calls = %d, want none", builds)
 	}
-	found := false
-	for _, a := range rebuilt.Accounts {
-		if a.Code == "fresh" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("rebuilt accounts = %+v, want the new account", rebuilt.Accounts)
+	if !eng.running || n.currentEngine() != eng || n.CurrentMarketDataSink() != sink {
+		t.Fatal("CreateAccount replaced the live engine or market-data sink")
 	}
 }
 
-// TestLocalNode_CreateGroupRebuildsEngineWithNewGroup verifies a freshly created
-// group is wired into the live engine for the same reason: a runtime-created
-// group is unknown to the resolver until the engine is rebuilt from the store.
-func TestLocalNode_CreateGroupRebuildsEngineWithNewGroup(t *testing.T) {
+// TestLocalNode_CreateGroupPublishesIntoLiveEngine verifies a freshly created
+// group is immediately routable without replacing the engine.
+func TestLocalNode_CreateGroupPublishesIntoLiveEngine(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
+	eng.enforceResolver = true
 	n, _ := newTestNode(t, eng)
 	ctx := context.Background()
-	next := newFakeEngine()
-	var rebuilt engine.Snapshot
-	n.build = fakeBuild(next, &rebuilt)
+	builds := 0
+	n.build = func(engine.Snapshot) (engine.Engine, error) {
+		builds++
+		return newFakeEngine(), nil
+	}
+	sink := n.CurrentMarketDataSink()
 
 	if _, err := n.CreateGroup(ctx, domain.AccountGroup{Code: "vips"}, testCaller); err != nil {
 		t.Fatalf("CreateGroup: %v", err)
 	}
-	if eng.running {
-		t.Fatal("old engine still running after create rebuild")
+	if err := eng.RunGroupSynchronized(
+		ctx, "vips", func(engine.GroupLane) error { return nil },
+	); err != nil {
+		t.Fatalf("new group is not routable: %v", err)
 	}
-	if !next.running {
-		t.Fatal("replacement engine is not running after create rebuild")
+	if builds != 0 {
+		t.Fatalf("build calls = %d, want none", builds)
 	}
-	found := false
-	for _, g := range rebuilt.Groups {
-		if g.Code == "vips" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("rebuilt groups = %+v, want the new group", rebuilt.Groups)
+	if !eng.running || n.currentEngine() != eng || n.CurrentMarketDataSink() != sink {
+		t.Fatal("CreateGroup replaced the live engine or market-data sink")
 	}
 }
 
 func TestLocalNode_PutRateLimitSamePolicyDifferentAccountsRetunesOnePolicy(t *testing.T) {
 	t.Parallel()
-	eng := newFakeEngine()
-	n, _ := newTestNode(t, eng)
+	old := newFakeEngine()
+	n, _ := newTestNode(t, old)
 	ctx := context.Background()
 	buildCalls := 0
-	n.build = func(engine.Snapshot) (engine.Engine, error) {
+	current := newFakeEngine()
+	n.build = func(snap engine.Snapshot) (engine.Engine, error) {
 		buildCalls++
-		return newFakeEngine(), nil
+		return fakeBuild(current, new(engine.Snapshot))(snap)
 	}
 
 	seedTestAccount(t, n.realm, "acc-1")
@@ -265,13 +267,13 @@ func TestLocalNode_PutRateLimitSamePolicyDifferentAccountsRetunesOnePolicy(t *te
 		t.Fatalf("PutRateLimit second: %v", err)
 	}
 
-	if buildCalls != 0 {
-		t.Fatalf("build calls = %d, want 0", buildCalls)
+	if buildCalls != 1 {
+		t.Fatalf("build calls = %d, want one lifecycle build", buildCalls)
 	}
-	if len(eng.configureCalls) != 2 {
-		t.Fatalf("configure calls = %d, want 2", len(eng.configureCalls))
+	if len(current.configureCalls) != 1 {
+		t.Fatalf("configure calls = %d, want one online retune", len(current.configureCalls))
 	}
-	last := eng.configureCalls[1]
+	last := current.configureCalls[0]
 	if last.policy != domain.PolicyRateLimit {
 		t.Fatalf("configured policy = %q, want rate_limit", last.policy)
 	}
@@ -289,8 +291,9 @@ func TestLocalNode_PutRateLimitSamePolicyDifferentAccountsRetunesOnePolicy(t *te
 
 func TestLocalNode_PutRateLimitEngineFailureRestoresPrevious(t *testing.T) {
 	t.Parallel()
-	eng := newFakeEngine()
-	n, st := newTestNode(t, eng)
+	old := newFakeEngine()
+	n, st := newTestNode(t, old)
+	current, _ := preparePolicyLifecycleBuild(n)
 	ctx := context.Background()
 
 	first := rateLimit(domain.ScopeBroker, "", "", 100, time.Second)
@@ -298,7 +301,7 @@ func TestLocalNode_PutRateLimitEngineFailureRestoresPrevious(t *testing.T) {
 		t.Fatalf("PutRateLimit first: %v", err)
 	}
 
-	eng.failConfigure = true
+	current.failConfigure = true
 	second := rateLimit(domain.ScopeBroker, "", "", 5, 2*time.Second)
 	if _, err := n.PutRateLimit(ctx, second, testCaller); err == nil {
 		t.Fatalf("PutRateLimit second: want error")
@@ -320,12 +323,14 @@ func TestLocalNode_DeleteLimitAppliesAndAudits(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
 	n, st := newTestNode(t, eng)
+	preparePolicyLifecycleBuild(n)
 	ctx := context.Background()
 
 	if _, err := n.PutRateLimit(ctx, rateLimit(domain.ScopeBroker, "", "", 100, time.Second), testCaller); err != nil {
 		t.Fatalf("PutRateLimit: %v", err)
 	}
 
+	preparePolicyLifecycleBuild(n)
 	target := LimitTarget{Policy: domain.PolicyRateLimit, Scope: domain.ScopeBroker}
 	if _, err := n.DeleteLimit(ctx, target, testCaller); err != nil {
 		t.Fatalf("DeleteLimit: %v", err)
@@ -351,16 +356,15 @@ func TestLocalNode_DeleteLimitAppliesAndAudits(t *testing.T) {
 
 func TestLocalNode_DeleteLastLimitRebuildsFromStore(t *testing.T) {
 	t.Parallel()
-	eng := newFakeEngine()
-	n, st := newTestNode(t, eng)
+	old := newFakeEngine()
+	n, st := newTestNode(t, old)
+	current, _ := preparePolicyLifecycleBuild(n)
 	ctx := context.Background()
 
 	if _, err := n.PutRateLimit(ctx, rateLimit(domain.ScopeBroker, "", "", 100, time.Second), testCaller); err != nil {
 		t.Fatalf("PutRateLimit: %v", err)
 	}
 
-	eng.configureErr = fmt.Errorf("engine: empty policy settings: %w",
-		domain.ErrNotImplemented)
 	next := newFakeEngine()
 	var rebuilt engine.Snapshot
 	n.build = fakeBuild(next, &rebuilt)
@@ -372,7 +376,7 @@ func TestLocalNode_DeleteLastLimitRebuildsFromStore(t *testing.T) {
 	if sink == nil {
 		t.Fatal("DeleteLimit returned nil sink after rebuild")
 	}
-	if eng.running {
+	if current.running {
 		t.Fatal("old engine still running after rebuild")
 	}
 	if !next.running {
@@ -394,6 +398,7 @@ func TestLocalNode_PutAccountAssetRateLimit(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
 	n, st := newTestNode(t, eng)
+	_, snapshot := preparePolicyLifecycleBuild(n)
 	ctx := context.Background()
 
 	// An account-asset scope barrier links a real account and asset; the store
@@ -403,8 +408,8 @@ func TestLocalNode_PutAccountAssetRateLimit(t *testing.T) {
 	if _, err := n.PutRateLimit(ctx, limit, testCaller); err != nil {
 		t.Fatalf("PutRateLimit account-asset: %v", err)
 	}
-	if len(eng.configureCalls) != 1 {
-		t.Fatalf("configure calls = %d, want 1", len(eng.configureCalls))
+	if len(snapshot.RateLimits) != 1 || snapshot.RateLimits[0] != limit {
+		t.Fatalf("prepared rate limits = %+v, want account-asset barrier", snapshot.RateLimits)
 	}
 }
 
@@ -414,6 +419,7 @@ func TestLocalNode_PutOrderSizeLimit(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
 	n, st := newTestNode(t, eng)
+	_, snapshot := preparePolicyLifecycleBuild(n)
 	ctx := context.Background()
 
 	size := domain.LimitOrderSize{Scope: domain.ScopeBroker, MaxQuantity: "100"}
@@ -428,10 +434,8 @@ func TestLocalNode_PutOrderSizeLimit(t *testing.T) {
 	if len(stored) != 1 || stored[0] != size {
 		t.Fatalf("order-size barriers = %+v, want the one barrier", stored)
 	}
-	if len(eng.configureCalls) != 1 ||
-		eng.configureCalls[0].policy != domain.PolicyOrderSizeLimit ||
-		len(eng.configureCalls[0].limits.OrderSizeLimits) != 1 {
-		t.Fatalf("configure calls = %+v, want the order-size policy", eng.configureCalls)
+	if len(snapshot.OrderSizeLimits) != 1 || snapshot.OrderSizeLimits[0] != size {
+		t.Fatalf("prepared order-size limits = %+v, want the new barrier", snapshot.OrderSizeLimits)
 	}
 
 	limits, err := n.ListLimits(ctx, "")
@@ -470,7 +474,7 @@ func setLiveConfigureProbe(
 	}
 	n.engineMu.Unlock()
 	n.build = func(engine.Snapshot) (engine.Engine, error) {
-		t.Error("live SpotFunds P&L-bounds reconfiguration rebuilt the engine")
+		t.Error("live policy reconfiguration rebuilt the engine")
 		return nil, fmt.Errorf("unexpected engine rebuild")
 	}
 }
@@ -517,35 +521,6 @@ func TestLocalNode_PutSpotFundsPnlBoundsLimitConfiguresLiveEngine(t *testing.T) 
 	}
 }
 
-func TestLocalNode_PutSpotFundsInitialPnlPersistsAuthoritativeSnapshot(t *testing.T) {
-	t.Parallel()
-	eng := newFakeEngine()
-	eng.configurePnls = []engine.AccountPnlUpdate{{Account: "acc-1", Pnl: "12.5"}}
-	n, st := newTestNode(t, eng)
-	ctx := context.Background()
-	seedTestAccount(t, st, "acc-1")
-	if err := st.SetAccountPnl(
-		ctx, "acc-1", "-9", domain.PnlHaltReasonMissingFx,
-	); err != nil {
-		t.Fatalf("SetAccountPnl: %v", err)
-	}
-
-	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
-		Scope: domain.ScopeAccount, Account: "acc-1",
-		LowerBound: "-100", InitialPnl: "12.5",
-	}, testCaller); err != nil {
-		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
-	}
-	account, ok, err := st.GetAccount(ctx, "acc-1")
-	if err != nil || !ok {
-		t.Fatalf("GetAccount: ok=%v err=%v", ok, err)
-	}
-	if account.Pnl != "12.5" || account.PnlHaltReason != "" {
-		t.Fatalf("account P&L = (%q, %q), want authoritative 12.5 without halt",
-			account.Pnl, account.PnlHaltReason)
-	}
-}
-
 func TestLocalNode_PolicyConfigurationBlockPreservesFirstCause(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
@@ -585,7 +560,7 @@ func TestLocalNode_PolicyConfigurationBlockPreservesFirstCause(t *testing.T) {
 	}
 }
 
-func TestLocalNode_SpotFundsLimitAuditFailureFatalsAfterPnlReseed(t *testing.T) {
+func TestLocalNode_SpotFundsLimitAuditFailureFatalsAfterConfigure(t *testing.T) {
 	t.Parallel()
 	auditErr := errors.New("set limit audit failed")
 	st := newRealmWrapStore(newMemoryStore("limits.db"), func(r store.RealmStore) store.RealmStore {
@@ -604,22 +579,16 @@ func TestLocalNode_SpotFundsLimitAuditFailureFatalsAfterPnlReseed(t *testing.T) 
 		fatalErr = err
 	}))
 	seedTestAccount(t, n.realm, "acc-1")
-	eng.configurePnls = []engine.AccountPnlUpdate{{Account: "acc-1", Pnl: "4"}}
 
 	_, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
 		Scope: domain.ScopeAccount, Account: "acc-1",
-		LowerBound: "-100", InitialPnl: "4",
+		LowerBound: "-100",
 	}, testCaller)
 	if !errors.Is(err, auditErr) {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit error = %v, want audit failure", err)
 	}
 	if fatalErr == nil || !strings.Contains(fatalErr.Error(), "audit spot funds pnl-bounds limit") {
 		t.Fatalf("fatal error = %v, want post-engine limit audit failure", fatalErr)
-	}
-	account, ok, getErr := n.realm.GetAccount(ctx, "acc-1")
-	if getErr != nil || !ok || account.Pnl != "4" {
-		t.Fatalf("account after fatal = %+v ok=%v err=%v, want committed P&L 4",
-			account, ok, getErr)
 	}
 }
 
@@ -656,10 +625,9 @@ func newRebuildProbeNode(t *testing.T, eng *fakeEngine) (*localNode, *rebuildPro
 }
 
 // TestLocalNode_FailedSpotFundsConfigureRebuildsFromRevertedStore pins the
-// contract that a failed P&L-bounds configure never publishes a fabricated P&L.
-// The engine layer cannot restore the live accumulated P&L a seed overwrote, so
-// the node reverts the barrier and rebuilds the engine from persisted state -
-// the rebuild must therefore read a store that no longer carries the barrier.
+// contract that a failed P&L-bounds configure is reconciled from the reverted
+// store. The rebuild must therefore read a store that no longer carries the
+// failed barrier.
 func TestLocalNode_FailedSpotFundsConfigureRebuildsFromRevertedStore(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
@@ -677,7 +645,6 @@ func TestLocalNode_FailedSpotFundsConfigureRebuildsFromRevertedStore(t *testing.
 		Scope:      domain.ScopeAccount,
 		Account:    account,
 		LowerBound: "-100",
-		InitialPnl: "-50000",
 	}, testCaller)
 	if err == nil {
 		t.Fatal("PutSpotFundsPnlBoundsLimit succeeded, want the engine failure")
@@ -712,7 +679,7 @@ func TestLocalNode_FailedSpotFundsConfigureRebuildFailureFatals(t *testing.T) {
 	if _, err := n.CreateAccount(ctx, testAccount(account), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	configureErr := errors.New("partial reseed failed")
+	configureErr := errors.New("partial configure failed")
 	rebuildErr := errors.New("reconciliation rebuild failed")
 	eng.configureErr = configureErr
 	n.build = func(engine.Snapshot) (engine.Engine, error) {
@@ -722,8 +689,9 @@ func TestLocalNode_FailedSpotFundsConfigureRebuildFailureFatals(t *testing.T) {
 	n.fatal = func(err error) { fatalErr = err }
 
 	_, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
-		Scope: domain.ScopeAccount, Account: account,
-		LowerBound: "-100", InitialPnl: "-50000",
+		Scope:      domain.ScopeAccount,
+		Account:    account,
+		LowerBound: "-100",
 	}, testCaller)
 	if !errors.Is(err, configureErr) || !errors.Is(err, rebuildErr) {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit error = %v, want configure and rebuild failures", err)

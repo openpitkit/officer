@@ -225,7 +225,6 @@ export interface SpotFundsPnlBoundsLimit {
   accountGroup: string;
   lowerBound: string;
   upperBound: string;
-  initialPnl: string;
 }
 
 /** Per-policy typed limits returned by the account-state and limit-list APIs. */
@@ -269,7 +268,6 @@ export interface PolicyOrderSizeValues {
 export interface PolicyPnlBoundsValues {
   lowerBound: string;
   upperBound: string;
-  initialPnl: string;
 }
 
 /** Discriminated value carrier: exactly one member is present per `kind`. */
@@ -690,12 +688,15 @@ export interface MarketDataInstrument {
    *  Applies only to bring-your-own (manual) instruments. */
   manualPrice: string;
   enabled: boolean;
+  /** Whether the currently applied runtime emits the synthetic reverse pair. */
+  syntheticInverse: boolean;
   stale: boolean;
   /** Elapsed milliseconds between the two most recent ticks of this quote, as
    *  observed by the running manager. Undefined until a second tick has arrived
    *  since the last (re)subscribe. A fixed measurement, not an age. */
   updateIntervalMs?: number;
   quote?: MarketDataQuote;
+  inverseQuote?: MarketDataQuote;
 }
 
 export interface MarketDataDiagnosticAction {

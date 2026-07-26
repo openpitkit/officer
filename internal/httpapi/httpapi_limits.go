@@ -126,7 +126,6 @@ func handlePutSpotFundsPnlBoundsLimit(svc Service) http.HandlerFunc {
 			AccountGroup: req.AccountGroup,
 			LowerBound:   req.LowerBound,
 			UpperBound:   req.UpperBound,
-			InitialPnl:   req.InitialPnl,
 		}
 		if err := svc.PutSpotFundsPnlBoundsLimit(r.Context(), limit); err != nil {
 			httpx.WriteErr(w, err)

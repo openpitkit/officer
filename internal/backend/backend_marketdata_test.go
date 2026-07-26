@@ -30,6 +30,24 @@ import (
 	"go.openpit.dev/officer/internal/backend"
 )
 
+type blockingStatusMarketDataRuntime struct {
+	*fakeMarketDataRuntime
+	statusEntered chan struct{}
+	statusRelease chan struct{}
+	stopCalled    chan struct{}
+}
+
+func (r *blockingStatusMarketDataRuntime) InstanceStatuses() map[string]marketdata.InstanceRuntimeStatus {
+	close(r.statusEntered)
+	<-r.statusRelease
+	return r.fakeMarketDataRuntime.InstanceStatuses()
+}
+
+func (r *blockingStatusMarketDataRuntime) Stop() {
+	r.stopCalled <- struct{}{}
+	r.fakeMarketDataRuntime.Stop()
+}
+
 func TestService_ListMarketDataBuildsStatus(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService()
@@ -119,6 +137,55 @@ func TestService_ListMarketDataBuildsStatus(t *testing.T) {
 	}
 }
 
+func TestService_ListMarketDataSerializesManagerLifecycle(t *testing.T) {
+	md := &blockingStatusMarketDataRuntime{
+		fakeMarketDataRuntime: &fakeMarketDataRuntime{},
+		statusEntered:         make(chan struct{}),
+		statusRelease:         make(chan struct{}),
+		stopCalled:            make(chan struct{}, 1),
+	}
+	released := false
+	t.Cleanup(func() {
+		if !released {
+			close(md.statusRelease)
+		}
+	})
+	svc, _ := newTestServiceWithMarketDataRuntime(md)
+	listDone := make(chan error, 1)
+	go func() {
+		_, err := svc.ListMarketData(context.Background())
+		listDone <- err
+	}()
+	select {
+	case <-md.statusEntered:
+	case <-time.After(time.Second):
+		t.Fatal("ListMarketData did not enter runtime status read")
+	}
+
+	restartDone := make(chan error, 1)
+	go func() {
+		restartDone <- svc.RestartMarketData(context.Background())
+	}()
+	select {
+	case <-md.stopCalled:
+		t.Fatal("RestartMarketData entered manager lifecycle during ListMarketData")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(md.statusRelease)
+	released = true
+	if err := <-listDone; err != nil {
+		t.Fatalf("ListMarketData: %v", err)
+	}
+	select {
+	case <-md.stopCalled:
+	case <-time.After(time.Second):
+		t.Fatal("RestartMarketData did not continue after ListMarketData")
+	}
+	if err := <-restartDone; err != nil {
+		t.Fatalf("RestartMarketData: %v", err)
+	}
+}
+
 func TestMarketDataFreshnessTTLContract(t *testing.T) {
 	t.Parallel()
 
@@ -131,6 +198,106 @@ func TestMarketDataFreshnessTTLContract(t *testing.T) {
 			backend.MarketDataFreshnessTTL,
 			marketdata.FreshnessTTL,
 		)
+	}
+}
+
+func TestService_ListMarketDataSurfacesAppliedSyntheticInverse(t *testing.T) {
+	t.Parallel()
+	md := &fakeMarketDataRuntime{
+		statuses: map[string]marketdata.InstanceRuntimeStatus{
+			mdID("mock-1").String(): {State: marketdata.StateOK},
+		},
+		applied: map[string]marketdata.AppliedInstanceConfig{
+			mdID("mock-1").String(): {
+				Provider: domain.MarketDataProviderMock,
+				Subscriptions: []marketdata.Subscription{{
+					External: "EURUSD", Base: "EUR", Quote: "USD",
+					SyntheticInverse: true,
+				}},
+			},
+		},
+	}
+	svc, fn := newTestServiceWithMarketDataRuntime(md)
+	now := time.Now().UTC()
+	fn.mdInstances = []domain.MarketDataInstance{{
+		ExternalID: mdID("mock-1"), Provider: domain.MarketDataProviderMock, Enabled: true,
+	}}
+	fn.mdInstruments = map[string][]domain.MarketDataInstrument{
+		mdID("mock-1").String(): {{
+			Instance: mdID("mock-1"), ExternalSymbol: "EURUSD",
+			BaseAsset: "EUR", QuoteAsset: "USD", Enabled: true,
+		}},
+	}
+	fn.mdQuotes = []domain.MarketDataQuote{{
+		Instance: mdID("mock-1"), ExternalSymbol: "EURUSD",
+		BaseAsset: "EUR", QuoteAsset: "USD",
+		Mark: "2", Bid: "4", Ask: "8", AsOf: now, ReceivedAt: now,
+	}}
+
+	status, err := svc.ListMarketData(context.Background())
+	if err != nil {
+		t.Fatalf("ListMarketData: %v", err)
+	}
+	got := status.Instances[0].Instruments[0]
+	if !got.SyntheticInverse || got.InverseQuote == nil {
+		t.Fatalf("synthetic inverse status = %+v", got)
+	}
+	if got.InverseQuote.BaseAsset != "USD" || got.InverseQuote.QuoteAsset != "EUR" ||
+		got.InverseQuote.Mark != "0.5" || got.InverseQuote.Bid != "0.125" ||
+		got.InverseQuote.Ask != "0.25" {
+		t.Fatalf("inverse quote = %+v", got.InverseQuote)
+	}
+	if status.RestartRequired {
+		t.Fatal("RestartRequired = true for matching synthetic plan")
+	}
+}
+
+func TestService_ListMarketDataSuppressesInverseForConfiguredDisabledReverse(t *testing.T) {
+	t.Parallel()
+	md := &fakeMarketDataRuntime{
+		statuses: map[string]marketdata.InstanceRuntimeStatus{
+			mdID("mock-1").String(): {State: marketdata.StateOK},
+		},
+		applied: map[string]marketdata.AppliedInstanceConfig{
+			mdID("mock-1").String(): {
+				Provider: domain.MarketDataProviderMock,
+				Subscriptions: []marketdata.Subscription{{
+					External: "EURUSD", Base: "EUR", Quote: "USD",
+				}},
+			},
+		},
+	}
+	svc, fn := newTestServiceWithMarketDataRuntime(md)
+	now := time.Now().UTC()
+	fn.mdInstances = []domain.MarketDataInstance{
+		{ExternalID: mdID("mock-1"), Provider: domain.MarketDataProviderMock, Enabled: true},
+		{ExternalID: mdID("dead-reverse"), Provider: domain.MarketDataProviderMock, Enabled: false},
+	}
+	fn.mdInstruments = map[string][]domain.MarketDataInstrument{
+		mdID("mock-1").String(): {{
+			Instance: mdID("mock-1"), ExternalSymbol: "EURUSD",
+			BaseAsset: "EUR", QuoteAsset: "USD", Enabled: true,
+		}},
+		mdID("dead-reverse").String(): {{
+			Instance: mdID("dead-reverse"), ExternalSymbol: "USD/EUR",
+			BaseAsset: "USD", QuoteAsset: "EUR", Enabled: false,
+		}},
+	}
+	fn.mdQuotes = []domain.MarketDataQuote{{
+		Instance: mdID("mock-1"), ExternalSymbol: "EURUSD",
+		BaseAsset: "EUR", QuoteAsset: "USD", Mark: "2", AsOf: now, ReceivedAt: now,
+	}}
+
+	status, err := svc.ListMarketData(context.Background())
+	if err != nil {
+		t.Fatalf("ListMarketData: %v", err)
+	}
+	got := status.Instances[0].Instruments[0]
+	if got.SyntheticInverse || got.InverseQuote != nil {
+		t.Fatalf("suppressed synthetic inverse status = %+v", got)
+	}
+	if status.RestartRequired {
+		t.Fatal("RestartRequired = true for matching suppressed plan")
 	}
 }
 
@@ -191,7 +358,10 @@ func TestService_ListMarketDataDetectsRestartRequired(t *testing.T) {
 			mdID("mock-1").String(): {
 				Provider: domain.MarketDataProviderMock,
 				Subscriptions: []marketdata.Subscription{
-					{External: "AAPL", Base: "AAPL", Quote: "USD"},
+					{
+						External: "AAPL", Base: "AAPL", Quote: "USD",
+						SyntheticInverse: true,
+					},
 				},
 			},
 		},
@@ -452,7 +622,10 @@ func TestService_ListMarketDataManualPriceDoesNotRequireRestart(t *testing.T) {
 			mdID("byo-1").String(): {
 				Provider: domain.MarketDataProviderBYO,
 				Subscriptions: []marketdata.Subscription{
-					{External: "USDT/USD", Base: "USDT", Quote: "USD"},
+					{
+						External: "USDT/USD", Base: "USDT", Quote: "USD",
+						SyntheticInverse: true,
+					},
 				},
 			},
 		},
@@ -480,6 +653,57 @@ func TestService_ListMarketDataManualPriceDoesNotRequireRestart(t *testing.T) {
 	}
 	if status.RestartRequired {
 		t.Fatal("RestartRequired = true, want false for manual price change")
+	}
+}
+
+func TestService_ListMarketDataClearedManualHidesHistoricalQuote(t *testing.T) {
+	t.Parallel()
+	instanceID := mdID("byo-cleared")
+	md := &fakeMarketDataRuntime{
+		statuses: map[string]marketdata.InstanceRuntimeStatus{
+			instanceID.String(): {State: marketdata.StateOK},
+		},
+		applied: map[string]marketdata.AppliedInstanceConfig{
+			instanceID.String(): {
+				Provider: domain.MarketDataProviderBYO,
+				Subscriptions: []marketdata.Subscription{{
+					External: "Z/USD", Base: "Z", Quote: "USD",
+					SyntheticInverse: true,
+				}},
+			},
+		},
+	}
+	svc, fn := newTestServiceWithMarketDataRuntime(md)
+	fn.mdInstances = []domain.MarketDataInstance{{
+		ExternalID: instanceID,
+		Provider:   domain.MarketDataProviderBYO,
+		Enabled:    true,
+	}}
+	fn.mdInstruments = map[string][]domain.MarketDataInstrument{
+		instanceID.String(): {{
+			Instance: instanceID, ExternalSymbol: "Z/USD",
+			BaseAsset: "Z", QuoteAsset: "USD", ManualPrice: "", Enabled: true,
+		}},
+	}
+	fn.mdQuotes = []domain.MarketDataQuote{{
+		Instance: instanceID, ExternalSymbol: "Z/USD",
+		BaseAsset: "Z", QuoteAsset: "USD", Mark: "2",
+		AsOf: time.Now().UTC(), ReceivedAt: time.Now().UTC(),
+	}}
+
+	status, err := svc.ListMarketData(context.Background())
+	if err != nil {
+		t.Fatalf("ListMarketData: %v", err)
+	}
+	if status.RestartRequired {
+		t.Fatal("RestartRequired = true for same-mapping manual clear")
+	}
+	got := status.Instances[0].Instruments[0]
+	if got.Quote != nil || got.InverseQuote != nil || !got.Stale {
+		t.Fatalf("cleared manual status = %+v, want hidden historical quote and stale", got)
+	}
+	if len(fn.mdQuotes) != 1 || fn.mdQuotes[0].Mark != "2" {
+		t.Fatalf("historical persisted quote was mutated: %+v", fn.mdQuotes)
 	}
 }
 

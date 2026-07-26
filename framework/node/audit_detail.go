@@ -78,10 +78,6 @@ func setSpotFundsPnlBoundsLimitDetail(limit domain.LimitSpotFundsPnlBounds) stri
 		b.WriteString(" upper_bound=")
 		b.WriteString(limit.UpperBound)
 	}
-	if limit.InitialPnl != "" {
-		b.WriteString(" initial_pnl=")
-		b.WriteString(limit.InitialPnl)
-	}
 	return b.String()
 }
 
