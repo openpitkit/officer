@@ -140,6 +140,12 @@ func (f *fakeSource) SubmitOrderToken(
 	return SubmitOrderTokenResult{}, nil
 }
 
+func (f *fakeSource) SubmitDropCopyOrder(
+	context.Context, domain.Order,
+) (SubmitDropCopyOrderResult, error) {
+	return SubmitDropCopyOrderResult{}, nil
+}
+
 func (f *fakeSource) ConfirmExecution(
 	_ context.Context, _ string, _ string,
 ) (domain.Order, Attestation, error) {
@@ -689,6 +695,12 @@ func (c *captureNSource) SubmitOrderToken(
 	context.Context, domain.Order, string,
 ) (SubmitOrderTokenResult, error) {
 	return SubmitOrderTokenResult{}, nil
+}
+
+func (c *captureNSource) SubmitDropCopyOrder(
+	context.Context, domain.Order,
+) (SubmitDropCopyOrderResult, error) {
+	return SubmitDropCopyOrderResult{}, nil
 }
 func (c *captureNSource) ConfirmExecution(
 	context.Context, string, string,

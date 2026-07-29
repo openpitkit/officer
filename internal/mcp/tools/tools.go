@@ -76,6 +76,13 @@ const submitOrderToolDescription = "Submit an order intent through pre-trade " +
 	"and obtain a signed approval token. Mutates engine state and records the " +
 	"pre-trade lock; protected and disabled by default."
 
+const submitDropCopyOrderToolName = "submit_drop_copy_order"
+const submitDropCopyOrderToolDescription = "Submit a drop-copy order through " +
+	"the normal policy pipeline while ignoring policy rejects and existing " +
+	"account or group kill-switch blocks. Policies retain their normal state " +
+	"changes. The id is optional; when omitted, the store assigns it. No lifecycle " +
+	"event is signed. Mutates engine state; protected and disabled by default."
+
 const confirmExecutionToolName = "confirm_execution"
 const confirmExecutionToolDescription = "Record confirmation history for a " +
 	"previously approved workflow order by presenting its approval token. The " +
@@ -184,6 +191,19 @@ func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
 		true,
 		false,
 	), submitOrderHandler)
+	registerTool(reg, descriptor(
+		submitDropCopyOrderToolName,
+		"Submit drop-copy order",
+		submitDropCopyOrderToolDescription,
+		"Submit a drop-copy order through the normal policy pipeline while "+
+			"ignoring policy rejects and existing account or group kill-switch "+
+			"blocks; policies retain normal state changes, id is optional and "+
+			"the store assigns it when omitted, and no lifecycle event is signed.",
+		true,
+		true,
+		true,
+		false,
+	), submitDropCopyOrderHandler)
 	registerTool(reg, descriptor(
 		confirmExecutionToolName,
 		"Confirm execution",
@@ -364,12 +384,28 @@ type submitOrderInput struct {
 	ExternalID  string `json:"id,omitempty" jsonschema:"Optional caller-supplied unique order id; omit to have the server generate one"`
 }
 
+type submitDropCopyOrderInput struct {
+	Account     string `json:"account" jsonschema:"Account code"`
+	BaseAsset   string `json:"baseAsset" jsonschema:"Asset being bought or sold"`
+	QuoteAsset  string `json:"quoteAsset" jsonschema:"Asset used for pricing"`
+	Side        string `json:"side" jsonschema:"buy or sell"`
+	AmountKind  string `json:"amountKind" jsonschema:"quantity or volume"`
+	AmountValue string `json:"amountValue" jsonschema:"Order size as an exact decimal string"`
+	Price       string `json:"price,omitempty" jsonschema:"Required limit price as an exact decimal string; market orders are rejected for drop-copy"`
+	ExternalID  string `json:"id,omitempty" jsonschema:"Optional caller-supplied unique order id; omit to have the store assign one"`
+}
+
 type submitOrderOutput struct {
 	Token           string                `json:"token"`
 	KeyID           string                `json:"keyId"`
 	OrderExternalID string                `json:"id"`
 	Verdict         string                `json:"verdict"`
 	Reasons         []checkOrderRejectDTO `json:"reasons,omitempty"`
+}
+
+type submitDropCopyOrderOutput struct {
+	OrderExternalID string `json:"id"`
+	Status          string `json:"status"`
 }
 
 type confirmExecutionInput struct {
@@ -457,6 +493,7 @@ type orderDTO struct {
 	Price               string          `json:"price"`
 	Status              string          `json:"status"`
 	Source              string          `json:"source"`
+	DropCopy            bool            `json:"dropCopy"`
 }
 
 // commissionDTO mirrors the HTTP commission shape (amount + currency) so an MCP
@@ -582,6 +619,7 @@ func toOrderDTO(o domain.Order) orderDTO {
 		Price:               o.Price,
 		Status:              string(o.Status),
 		Source:              string(o.Source),
+		DropCopy:            o.DropCopy,
 	}
 }
 
@@ -970,6 +1008,51 @@ func submitOrderHandler(
 	}
 }
 
+func submitDropCopyOrderHandler(
+	src frameworkmcp.Source,
+) frameworkmcp.ToolBody[submitDropCopyOrderInput, submitDropCopyOrderOutput] {
+	return func(
+		ctx context.Context,
+		_ *sdkmcp.ServerSession,
+		in submitDropCopyOrderInput,
+	) (string, submitDropCopyOrderOutput, error) {
+		account := domain.AccountID(strings.TrimSpace(in.Account))
+		if account == "" {
+			return "", submitDropCopyOrderOutput{}, fmt.Errorf("account is required")
+		}
+		o := domain.Order{
+			Account:     account,
+			BaseAsset:   strings.TrimSpace(in.BaseAsset),
+			QuoteAsset:  strings.TrimSpace(in.QuoteAsset),
+			Side:        domain.OrderSide(strings.TrimSpace(in.Side)),
+			AmountKind:  domain.OrderAmountKind(strings.TrimSpace(in.AmountKind)),
+			AmountValue: strings.TrimSpace(in.AmountValue),
+			Price:       strings.TrimSpace(in.Price),
+		}
+		if supplied := strings.TrimSpace(in.ExternalID); supplied != "" {
+			id, err := domain.ParseExternalID(supplied)
+			if err != nil {
+				return "", submitDropCopyOrderOutput{}, fmt.Errorf("invalid id: %s", err)
+			}
+			o.ExternalID = id
+		}
+		res, err := src.SubmitDropCopyOrder(ctx, o)
+		if err != nil {
+			return "", submitDropCopyOrderOutput{}, fmt.Errorf(
+				"submit drop-copy order failed: %w", err,
+			)
+		}
+		out := submitDropCopyOrderOutput{
+			OrderExternalID: res.OrderExternalID,
+			Status:          string(res.Status),
+		}
+		return fmt.Sprintf(
+			"drop-copy order %s recorded without approval token",
+			res.OrderExternalID,
+		), out, nil
+	}
+}
+
 func confirmExecutionHandler(
 	src frameworkmcp.Source,
 ) frameworkmcp.ToolBody[confirmExecutionInput, confirmExecutionOutput] {
@@ -1090,6 +1173,8 @@ type SetMarketDataInstrumentInput = setMarketDataInstrumentInput
 type SetMarketDataInstrumentOutput = setMarketDataInstrumentOutput
 type SubmitOrderInput = submitOrderInput
 type SubmitOrderOutput = submitOrderOutput
+type SubmitDropCopyOrderInput = submitDropCopyOrderInput
+type SubmitDropCopyOrderOutput = submitDropCopyOrderOutput
 type ConfirmExecutionInput = confirmExecutionInput
 type ConfirmExecutionOutput = confirmExecutionOutput
 type CancelInput = cancelInput
@@ -1129,6 +1214,12 @@ func SetMarketDataInstrumentHandler(
 
 func SubmitOrderHandler(src frameworkmcp.Source) frameworkmcp.ToolBody[SubmitOrderInput, SubmitOrderOutput] {
 	return submitOrderHandler(src)
+}
+
+func SubmitDropCopyOrderHandler(
+	src frameworkmcp.Source,
+) frameworkmcp.ToolBody[SubmitDropCopyOrderInput, SubmitDropCopyOrderOutput] {
+	return submitDropCopyOrderHandler(src)
 }
 
 func ConfirmExecutionHandler(

@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
 )
 
@@ -35,9 +36,12 @@ const testOrderEID = "b3JkZXItZXh0ZXJuYWwtMQ"
 type approvalFakeSource struct {
 	fakeSource
 
-	submitResult SubmitOrderTokenResult
-	submitErr    error
-	submitCalls  []submitCall
+	submitResult   SubmitOrderTokenResult
+	dropCopyResult SubmitDropCopyOrderResult
+	submitErr      error
+	submitCalls    []submitCall
+	dropCopyCalls  int
+	dropCopyCaller domain.Caller
 
 	confirmOrder domain.Order
 	confirmAtt   Attestation
@@ -73,6 +77,15 @@ func (f *approvalFakeSource) SubmitOrderToken(
 	return f.submitResult, f.submitErr
 }
 
+func (f *approvalFakeSource) SubmitDropCopyOrder(
+	ctx context.Context, o domain.Order,
+) (SubmitDropCopyOrderResult, error) {
+	f.dropCopyCalls++
+	f.dropCopyCaller = auth.CallerFromContext(ctx)
+	f.submitCalls = append(f.submitCalls, submitCall{order: o})
+	return f.dropCopyResult, f.submitErr
+}
+
 func (f *approvalFakeSource) ConfirmExecution(
 	_ context.Context, orderExternalID string, token string,
 ) (domain.Order, Attestation, error) {
@@ -105,6 +118,21 @@ func callSubmitOrder(
 		&sdkmcp.CallToolParamsFor[submitOrderInput]{Arguments: in})
 	if err != nil {
 		t.Fatalf("submitOrderHandler returned protocol error: %v", err)
+	}
+	return res
+}
+
+func callSubmitDropCopyOrder(
+	t *testing.T, src Source, in submitDropCopyOrderInput,
+) *sdkmcp.CallToolResultFor[submitDropCopyOrderOutput] {
+	t.Helper()
+	h := submitDropCopyOrderHandler(src)
+	res, err := h(
+		context.Background(), nil,
+		&sdkmcp.CallToolParamsFor[submitDropCopyOrderInput]{Arguments: in},
+	)
+	if err != nil {
+		t.Fatalf("submitDropCopyOrderHandler returned protocol error: %v", err)
 	}
 	return res
 }
@@ -279,6 +307,99 @@ func TestSubmitOrderHappyPath(t *testing.T) {
 	}
 	if call.mode != "hold" {
 		t.Errorf("mode: want hold got %s", call.mode)
+	}
+}
+
+func TestSubmitDropCopyOrderHappyPath(t *testing.T) {
+	src := &approvalFakeSource{
+		dropCopyResult: SubmitDropCopyOrderResult{
+			OrderExternalID: testOrderEID,
+			Status:          domain.OrderStatusCommitted,
+		},
+	}
+
+	res := callSubmitDropCopyOrder(t, src, submitDropCopyOrderInput{
+		Account: "acc1", BaseAsset: "BTC", QuoteAsset: "USD",
+		Side: "buy", AmountKind: "quantity", AmountValue: "0.5",
+		ExternalID: testOrderEID,
+	})
+	if res.IsError {
+		t.Fatalf("unexpected error: %v", res.Content)
+	}
+	if src.dropCopyCalls != 1 {
+		t.Fatalf("drop-copy calls = %d, want 1", src.dropCopyCalls)
+	}
+	if src.dropCopyCaller.Source != domain.SourceMCP ||
+		src.dropCopyCaller.Principal != "mcp" {
+		t.Fatalf("drop-copy caller = %+v, want MCP caller", src.dropCopyCaller)
+	}
+	if res.StructuredContent.OrderExternalID != testOrderEID ||
+		res.StructuredContent.Status != string(domain.OrderStatusCommitted) {
+		t.Fatalf("result = %+v", res.StructuredContent)
+	}
+}
+
+func TestSubmitDropCopyOrderGeneratesWhenAbsent(t *testing.T) {
+	src := &approvalFakeSource{
+		dropCopyResult: SubmitDropCopyOrderResult{
+			OrderExternalID: testOrderEID,
+			Status:          domain.OrderStatusCommitted,
+		},
+	}
+
+	res := callSubmitDropCopyOrder(t, src, submitDropCopyOrderInput{
+		Account: "acc1", BaseAsset: "BTC", QuoteAsset: "USD",
+		Side: "buy", AmountKind: "quantity", AmountValue: "0.5",
+	})
+	if res.IsError {
+		t.Fatalf("unexpected error: %v", res.Content)
+	}
+	if len(src.submitCalls) != 1 {
+		t.Fatalf("drop-copy submit calls = %d, want 1", len(src.submitCalls))
+	}
+	if !src.submitCalls[0].order.ExternalID.IsZero() {
+		t.Fatalf("absent id should leave external id unset, got %s",
+			src.submitCalls[0].order.ExternalID)
+	}
+	if res.StructuredContent.OrderExternalID != testOrderEID {
+		t.Fatalf("order external id = %q, want generated %q",
+			res.StructuredContent.OrderExternalID, testOrderEID)
+	}
+}
+
+func TestSubmitDropCopyOrderDuplicateSuppliedIDConflicts(t *testing.T) {
+	src := &approvalFakeSource{submitErr: domain.ErrAlreadyExists}
+
+	res := callSubmitDropCopyOrder(t, src, submitDropCopyOrderInput{
+		Account: "acc1", BaseAsset: "BTC", QuoteAsset: "USD",
+		Side: "buy", AmountKind: "quantity", AmountValue: "0.5",
+		ExternalID: testOrderEID,
+	})
+	if !res.IsError {
+		t.Fatal("want IsError=true for duplicate id")
+	}
+	if len(src.submitCalls) != 1 {
+		t.Fatalf("drop-copy submit calls = %d, want 1", len(src.submitCalls))
+	}
+	if got := src.submitCalls[0].order.ExternalID.String(); got != testOrderEID {
+		t.Fatalf("forwarded external id = %q, want %q", got, testOrderEID)
+	}
+}
+
+func TestSubmitDropCopyOrderBackendErrorPreservesEngineMessage(t *testing.T) {
+	const sdkError = "engine: execute pre-trade: failed to access field 'limit price': invalid"
+	src := &approvalFakeSource{submitErr: errors.New(sdkError)}
+
+	res := callSubmitDropCopyOrder(t, src, submitDropCopyOrderInput{
+		Account: "acc1", BaseAsset: "BTC", QuoteAsset: "USD",
+		Side: "buy", AmountKind: "quantity", AmountValue: "0.5",
+	})
+	if !res.IsError {
+		t.Fatal("want IsError=true for a drop-copy admission error")
+	}
+	if got := textContent(res.Content); got !=
+		"submit drop-copy order failed: "+sdkError {
+		t.Fatalf("MCP error = %q, want engine message", got)
 	}
 }
 

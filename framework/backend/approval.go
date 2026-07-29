@@ -352,6 +352,15 @@ func (s *Service) SetNoESign(ctx context.Context, off bool) error {
 func (s *Service) SubmitOrderToken(
 	ctx context.Context, o domain.Order, mode string,
 ) (ApprovalToken, error) {
+	if isDropCopyOrder(o) {
+		return ApprovalToken{}, dropCopySigningError()
+	}
+	return s.submitOrderToken(ctx, o, mode)
+}
+
+func (s *Service) submitOrderToken(
+	ctx context.Context, o domain.Order, mode string,
+) (ApprovalToken, error) {
 	signer, err := s.signerOrErr()
 	if err != nil {
 		return ApprovalToken{}, err
@@ -595,6 +604,39 @@ func (s *Service) SubmitOrderToken(
 	}, nil
 }
 
+// SubmitDropCopyOrder submits one non-enforcing pre-trade order without ever
+// creating an approval token or lifecycle attestation. A caller-supplied
+// external id is preserved; when omitted, the store assigns one. Duplicate ids
+// follow the ordinary unique-store conflict path.
+func (s *Service) SubmitDropCopyOrder(
+	ctx context.Context, o domain.Order,
+) (domain.Order, error) {
+	o.DropCopy = true
+	caller := auth.CallerFromContext(ctx)
+
+	n, err := s.router.Route(keyFor(o.Account))
+	if err != nil {
+		return domain.Order{}, fmt.Errorf("backend: route drop-copy submit: %w", err)
+	}
+
+	// A drop-copy submit must never be signed. Its pre-trade decision was not
+	// enforced, so a submit attestation would falsely claim risk approval.
+	return n.SubmitOrder(ctx, keyFor(o.Account), o, caller)
+}
+
+func isDropCopyOrder(order domain.Order) bool {
+	return order.DropCopy
+}
+
+func dropCopySigningError() error {
+	// A drop-copy pre-trade decision was not enforced. Signing that decision or
+	// a token shortcut would falsely claim that risk approved the order.
+	return fmt.Errorf(
+		"backend: drop-copy submit has no signing token; submit an explicit execution report: %w",
+		domain.ErrInvalid,
+	)
+}
+
 // ConfirmExecution verifies the submit token against the stored order and
 // records an idempotent confirmation event. It never calls the engine and never
 // changes the order status or balances. The node re-checks execution-report
@@ -603,10 +645,6 @@ func (s *Service) SubmitOrderToken(
 func (s *Service) ConfirmExecution(
 	ctx context.Context, orderID string, token string,
 ) (domain.Order, Attestation, error) {
-	signer, err := s.signerOrErr()
-	if err != nil {
-		return domain.Order{}, Attestation{}, err
-	}
 	order, err := domain.ParseExternalID(orderID)
 	if err != nil {
 		return domain.Order{}, Attestation{}, err
@@ -617,6 +655,13 @@ func (s *Service) ConfirmExecution(
 	}
 
 	stored, err := n.GetOrder(ctx, order)
+	if err != nil {
+		return domain.Order{}, Attestation{}, err
+	}
+	if isDropCopyOrder(stored.Order) {
+		return domain.Order{}, Attestation{}, dropCopySigningError()
+	}
+	signer, err := s.signerOrErr()
 	if err != nil {
 		return domain.Order{}, Attestation{}, err
 	}
@@ -696,10 +741,6 @@ func (s *Service) ConfirmExecution(
 func (s *Service) CancelOrder(
 	ctx context.Context, orderID string, token, reason string,
 ) (domain.Order, Attestation, error) {
-	signer, err := s.signerOrErr()
-	if err != nil {
-		return domain.Order{}, Attestation{}, err
-	}
 	order, err := domain.ParseExternalID(orderID)
 	if err != nil {
 		return domain.Order{}, Attestation{}, err
@@ -710,6 +751,13 @@ func (s *Service) CancelOrder(
 	}
 
 	stored, err := n.GetOrder(ctx, order)
+	if err != nil {
+		return domain.Order{}, Attestation{}, err
+	}
+	if isDropCopyOrder(stored.Order) {
+		return domain.Order{}, Attestation{}, dropCopySigningError()
+	}
+	signer, err := s.signerOrErr()
 	if err != nil {
 		return domain.Order{}, Attestation{}, err
 	}

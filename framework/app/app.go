@@ -539,6 +539,19 @@ func (a sourceAdapter) SubmitOrderToken(
 	}, nil
 }
 
+func (a sourceAdapter) SubmitDropCopyOrder(
+	ctx context.Context, o domain.Order,
+) (frameworkmcp.SubmitDropCopyOrderResult, error) {
+	order, err := a.service.SubmitDropCopyOrder(ctx, o)
+	if err != nil {
+		return frameworkmcp.SubmitDropCopyOrderResult{}, err
+	}
+	return frameworkmcp.SubmitDropCopyOrderResult{
+		OrderExternalID: order.ExternalID.String(),
+		Status:          order.Status,
+	}, nil
+}
+
 func (a sourceAdapter) ConfirmExecution(
 	ctx context.Context, orderExternalID, token string,
 ) (domain.Order, frameworkmcp.Attestation, error) {

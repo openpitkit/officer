@@ -301,8 +301,14 @@ func TestListAuditActions(t *testing.T) {
 	}
 
 	// The trading group is exactly the high-volume order/execution stream.
-	if !slices.Equal(tradingActions, []string{"submit_order", "execution_report"}) {
-		t.Fatalf("trading group = %v, want [submit_order execution_report]", tradingActions)
+	if !slices.Equal(
+		tradingActions,
+		[]string{"submit_order", "submit_drop_copy_order", "execution_report"},
+	) {
+		t.Fatalf(
+			"trading group = %v, want [submit_order submit_drop_copy_order execution_report]",
+			tradingActions,
+		)
 	}
 
 	// The concatenation of all groups equals the full canonical catalogue in

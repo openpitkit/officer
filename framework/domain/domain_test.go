@@ -903,6 +903,7 @@ func TestAuditAction_Category(t *testing.T) {
 	t.Parallel()
 	trading := map[domain.AuditAction]bool{
 		domain.AuditActionSubmitOrder:     true,
+		domain.AuditActionSubmitDropCopy:  true,
 		domain.AuditActionExecutionReport: true,
 	}
 	for _, action := range domain.AllAuditActions() {
@@ -925,8 +926,8 @@ func TestAuditActionsByCategory_PartitionsCatalogue(t *testing.T) {
 	if len(control)+len(trading) != len(all) {
 		t.Fatalf("partition sizes %d+%d != %d", len(control), len(trading), len(all))
 	}
-	if len(trading) != 2 {
-		t.Fatalf("trading category = %d actions, want 2: %+v", len(trading), trading)
+	if len(trading) != 3 {
+		t.Fatalf("trading category = %d actions, want 3: %+v", len(trading), trading)
 	}
 	seen := make(map[domain.AuditAction]int, len(all))
 	for _, action := range append(append([]domain.AuditAction{}, control...), trading...) {

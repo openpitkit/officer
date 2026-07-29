@@ -194,6 +194,7 @@ type ControlPlane interface {
 	GetNoESign(ctx context.Context) (bool, error)
 	SetNoESign(ctx context.Context, off bool) error
 	SubmitOrderToken(ctx context.Context, o domain.Order, mode string) (ApprovalToken, error)
+	SubmitDropCopyOrder(ctx context.Context, o domain.Order) (domain.Order, error)
 	ConfirmExecution(
 		ctx context.Context, orderID string, token string,
 	) (domain.Order, Attestation, error)

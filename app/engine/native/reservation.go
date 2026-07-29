@@ -59,9 +59,9 @@ func (l accountLane) SubmitImmediate(
 		return ImmediateResult{}, err
 	}
 
-	reservation, rejects, err := l.eng.ExecutePreTrade(order)
+	reservation, rejects, err := l.executePreTrade(order, o.DropCopy)
 	if err != nil {
-		return ImmediateResult{}, fmt.Errorf("engine: execute pre-trade: %w", err)
+		return ImmediateResult{}, wrapPreTradeError(o, err)
 	}
 	if rejects != nil {
 		return ImmediateResult{Accepted: false, Rejects: orderRejectsFrom(rejects)}, nil

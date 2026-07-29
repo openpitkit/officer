@@ -2013,7 +2013,9 @@ paths:
         Reports are serialized on the account pipeline. Reports carrying a fill
         or commission, and reports targeting a terminal status, are settled
         through the engine. Non-terminal reports without a fill or commission
-        record workflow state directly.
+        record workflow state directly. Reports for ordinary orders are signed
+        and attested fail-closed. Reports for drop-copy orders remain unsigned
+        and unattested because drop-copy did not enforce a pre-trade verdict.
       tags: [orders]
       requestBody:
         required: true
@@ -2132,13 +2134,13 @@ paths:
       responses:
         "201":
           description: >
-            Recorded result plus the signed attestation over the report and its
-            result. Engine-settled reports may create a trade, update balances,
-            release a pre-trade lock, or block an account; non-terminal reports
-            without a fill or commission record the lifecycle transition only.
-            `attestationToken` proves which result Officer recorded. Signing or
-            attestation persistence failures fail the request before the report
-            is recorded.
+            Recorded result plus an attestation for an ordinary order. Drop-copy
+            reports return an empty attestation and `signed: false`. Engine-settled
+            reports may create a trade, update balances, release a pre-trade
+            lock, or block an account; non-terminal reports without a fill or
+            commission record the lifecycle transition only. For ordinary orders,
+            `attestationToken` proves which result Officer recorded, and signing
+            or attestation persistence failures fail before the report is recorded.
           content:
             application/json:
               schema:
@@ -2953,43 +2955,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              required: [account, baseAsset, quoteAsset, side, amountKind, amountValue]
-              properties:
-                id:
-                  $ref: "#/components/schemas/Id"
-                  description: >
-                    Optional caller-supplied public id. When omitted
-                    the server generates and returns one. A duplicate is a 409.
-                    Never a surrogate or engine id.
-                account:
-                  type: string
-                  description: Account code that owns the order.
-                baseAsset:
-                  type: string
-                  description: Asset being bought or sold.
-                quoteAsset:
-                  type: string
-                  description: Asset used for pricing and settlement.
-                side:
-                  type: string
-                  description: "`buy` or `sell`."
-                amountKind:
-                  type: string
-                  description: "Kind of amount - `quantity` or `volume`."
-                amountValue:
-                  type: string
-                  description: Exact decimal string.
-                price:
-                  type: string
-                  description: Exact decimal string. Omit for market orders.
-                mode:
-                  type: string
-                  description: >
-                    Submit mode. Defaults to `immediate`. The compatibility wire
-                    value `hold` selects the workflow path that waits for
-                    execution reports.
-                  enum: [immediate, hold]
+              $ref: "#/components/schemas/SubmitOrderRequest"
       responses:
         "201":
           description: >
@@ -3000,6 +2966,42 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApprovalToken"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /orders/drop-copy/submit:
+    post:
+      operationId: submitDropCopyOrder
+      summary: Create an unsigned drop-copy order
+      description: >
+        Creates a workflow order and reserves it after running every pre-trade
+        policy without enforcing policy rejects or existing account or
+        account-group blocks. A caller-supplied `id` is preserved verbatim;
+        when omitted, the store assigns one. Reusing a caller-supplied id returns
+        the ordinary unique-store conflict. The drop-copy submit is unsigned
+        because its pre-trade decision was not enforced. Its later
+        execution reports are also unsigned and unattested. The SDK rejects
+        market orders for drop-copy because they cannot be reconciled without a
+        limit price. Requests without a price therefore return the SDK
+        validation error instead of creating an order.
+      tags: [orders]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DropCopyOrderRequest"
+      responses:
+        "201":
+          description: Drop-copy order created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DropCopyOrderResponse"
         "400":
           $ref: "#/components/responses/ValidationError"
         "409":
@@ -4636,7 +4638,8 @@ components:
           description: Principal that performed the adjustment; omitted when absent.
         source:
           type: string
-          description: "Originating surface: `panel`, `api`, `mcp`, or `system`."
+          description: >
+            Originating surface: `panel`, `api`, `mcp`, or `system`.
           enum: [panel, api, mcp, system]
         status:
           type: string
@@ -4663,7 +4666,7 @@ components:
 
     Order:
       type: object
-      required: [id, at, account, baseAsset, quoteAsset, side, amountKind, amountValue, commissionSubtotals, leavesQuantity, price, status, source, displayPrices, signed]
+      required: [id, at, account, baseAsset, quoteAsset, side, amountKind, amountValue, commissionSubtotals, leavesQuantity, price, status, source, displayPrices, dropCopy, signed]
       properties:
         id:
           description: The order's opaque public handle.
@@ -4698,9 +4701,11 @@ components:
         leavesQuantity:
           type: string
           description: >
-            Remaining open base quantity as an exact decimal string: equals
-            `amountValue` before any fill, the released remainder after a partial
-            fill, and `0` once the order is filled or terminal.
+            Remaining open base quantity as an exact decimal string. Before any
+            fill, quantity-sized orders use `amountValue`. Volume-sized orders
+            use the canonical base quantity derived from the effective price.
+            Partial fills expose the remaining base quantity, and filled or
+            terminal orders expose `0`.
         price:
           type: string
           description: Exact decimal string.
@@ -4708,7 +4713,8 @@ components:
           type: string
         source:
           type: string
-          description: "Originating surface: `panel`, `api`, `mcp`, or `system`."
+          description: >
+            Originating surface: `panel`, `api`, `mcp`, or `system`.
           enum: [panel, api, mcp, system]
         displayPrices:
           type: array
@@ -4718,6 +4724,9 @@ components:
             Human-readable pre-trade lock prices derived from the opaque lock
             (settlement leg last) - exact decimal strings. The raw lock blob is
             never exposed.
+        dropCopy:
+          type: boolean
+          description: Whether the order was submitted through the drop-copy operation.
         signed:
           type: boolean
           description: >
@@ -4997,8 +5006,9 @@ components:
       type: object
       required: [id, result, signed]
       description: >
-        The recorded result plus the signed attestation over the report and its
-        result, returned to the robot as proof of what Officer recorded.
+        The recorded result. Ordinary orders also return the signed attestation
+        over the report and result. Drop-copy orders return no attestation token
+        because their lifecycle is deliberately unsigned.
       properties:
         id:
           description: The execution report's public id.
@@ -5008,13 +5018,16 @@ components:
         attestationToken:
           type: string
           description: >
-            The base64url attestation envelope returned on success.
+            The base64url attestation envelope for an ordinary order. Empty for
+            a drop-copy order.
         attestationKeyId:
           type: string
           description: The signing key id; empty under eSign-off or when absent.
         signed:
           type: boolean
-          description: Whether the attestation carries an Ed25519 signature.
+          description: >
+            Whether the attestation carries an Ed25519 signature. Always false
+            for a drop-copy order.
 
     OrderMutationResponse:
       type: object
@@ -5240,7 +5253,8 @@ components:
           type: string
         source:
           type: string
-          description: "Originating surface: `panel`, `api`, `mcp`, or `system`."
+          description: >
+            Originating surface: `panel`, `api`, `mcp`, or `system`.
           enum: [panel, api, mcp, system]
 
     AuditActionGroup:
@@ -5823,6 +5837,73 @@ components:
         publicKey:
           type: string
           description: The active signing key's public key in the requested format.
+
+    OrderSubmissionRequest:
+      type: object
+      required: [account, baseAsset, quoteAsset, side, amountKind, amountValue]
+      properties:
+        account:
+          type: string
+          description: Account code that owns the order.
+        baseAsset:
+          type: string
+          description: Asset being bought or sold.
+        quoteAsset:
+          type: string
+          description: Asset used for pricing and settlement.
+        side:
+          type: string
+          description: "`buy` or `sell`."
+        amountKind:
+          type: string
+          description: "Kind of amount - `quantity` or `volume`."
+        amountValue:
+          type: string
+          description: Exact decimal string.
+        price:
+          type: string
+          description: Exact decimal string. Omit for market orders.
+
+    SubmitOrderRequest:
+      allOf:
+        - $ref: "#/components/schemas/OrderSubmissionRequest"
+        - type: object
+          properties:
+            id:
+              $ref: "#/components/schemas/Id"
+              description: >
+                Optional caller-supplied public id. When omitted the server
+                generates and returns one. A duplicate is a 409.
+            mode:
+              type: string
+              description: >
+                Submit mode. Defaults to `immediate`. The compatibility wire
+                value `hold` waits for execution reports.
+              enum: [immediate, hold]
+
+    DropCopyOrderRequest:
+      allOf:
+        - $ref: "#/components/schemas/OrderSubmissionRequest"
+        - type: object
+          description: >
+            `price` remains optional at the REST boundary, but the SDK rejects a
+            missing price for drop-copy orders as a validation error.
+          properties:
+            id:
+              $ref: "#/components/schemas/Id"
+              description: >
+                Optional caller-supplied unique order id. Omit it to have the
+                store assign one.
+
+    DropCopyOrderResponse:
+      type: object
+      required: [id, status]
+      properties:
+        id:
+          $ref: "#/components/schemas/Id"
+        status:
+          type: string
+          description: Persisted order status.
 
     ApprovalToken:
       type: object

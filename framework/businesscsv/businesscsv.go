@@ -209,7 +209,7 @@ var (
 	orderHeader = []string{
 		"id", "at", "account_code", "source", "principal",
 		"base_asset", "quote_asset", "side", "amount_kind", "amount_value",
-		"price", "status",
+		"price", "status", "drop_copy",
 	}
 	tradeHeader = []string{
 		"id", "order_id", "at", "account_code", "source",
@@ -319,7 +319,7 @@ func EncodeOrders(rows []domain.Order, delimiter Delimiter) ([]byte, error) {
 			string(row.Account), string(row.Source), row.Principal,
 			row.BaseAsset, row.QuoteAsset, string(row.Side),
 			string(row.AmountKind), row.AmountValue, row.Price,
-			string(row.Status),
+			string(row.Status), formatBool(row.DropCopy),
 		})
 	}
 	return writeCSV(out, delimiter)

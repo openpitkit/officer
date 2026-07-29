@@ -107,7 +107,7 @@ func seedRealm(t *testing.T, ctx context.Context, rs RealmStore) domain.External
 		Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
 		Principal: "operator", Source: domain.SourcePanel, Side: domain.OrderSideBuy,
 		AmountKind: domain.OrderAmountKindQuantity, AmountValue: "10",
-		Price: "150", Status: domain.OrderStatusFilled,
+		Price: "150", Status: domain.OrderStatusFilled, DropCopy: true,
 	})
 	if err != nil {
 		t.Fatalf("CreateOrder: %v", err)
@@ -2146,7 +2146,8 @@ func assertRealmsEqualOnPublicIdentity(
 			srcOrder.Order.ExternalID, dstOrder.Order.ExternalID)
 	}
 	if srcOrder.Order.AmountValue != dstOrder.Order.AmountValue ||
-		srcOrder.Order.Price != dstOrder.Order.Price {
+		srcOrder.Order.Price != dstOrder.Order.Price ||
+		!srcOrder.Order.DropCopy || !dstOrder.Order.DropCopy {
 		t.Fatalf("order decimals differ: %+v vs %+v", srcOrder.Order, dstOrder.Order)
 	}
 	if len(dstOrder.Events) != 1 || len(dstOrder.Trades) != 1 {

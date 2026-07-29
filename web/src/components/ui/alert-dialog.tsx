@@ -23,7 +23,10 @@ import {
   type HTMLAttributes,
 } from "react";
 
-import { buttonVariants } from "@/components/ui/button";
+import {
+  buttonVariants,
+  type ButtonProps,
+} from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 const AlertDialog = AlertDialogPrimitive.Root;
@@ -116,11 +119,16 @@ AlertDialogDescription.displayName =
 
 const AlertDialogAction = forwardRef<
   ElementRef<typeof AlertDialogPrimitive.Action>,
-  ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Action>
->(({ className, ...props }, ref) => (
+  ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Action> &
+    Pick<ButtonProps, "variant">
+>(({ className, variant, ...props }, ref) => (
   <AlertDialogPrimitive.Action
     ref={ref}
-    className={cn(buttonVariants(), "h-8 px-3 text-xs", className)}
+    className={cn(
+      buttonVariants({ variant }),
+      "h-8 px-3 text-xs",
+      className,
+    )}
     {...props}
   />
 ));

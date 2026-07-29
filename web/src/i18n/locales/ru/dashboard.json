@@ -56,6 +56,7 @@
       "adjustment": "Корректировка",
       "balanceUpdate": "Обновление баланса",
       "order": "Ордер",
+      "dropCopyOrder": "Drop-copy ордер",
       "tradeFill": "Сделка / исполнение",
       "resetDatabase": "Сброс базы данных",
       "restartService": "Перезапуск сервиса",

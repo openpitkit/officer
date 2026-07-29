@@ -478,6 +478,7 @@ var backupParitySpecs = []paritySpec{
 			"Side":        "Order.Side",
 			"AmountKind":  "Order.AmountKind",
 			"Status":      "Order.Status",
+			"DropCopy":    "Order.DropCopy",
 		},
 	},
 	{
@@ -787,6 +788,7 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 			"leaves_quantity": "Leaves",
 			"price":           "Price",
 			"status_id":       "Status",
+			"drop_copy":       "DropCopy",
 			"lock":            "Lock",
 		},
 		businessCSV: map[string]string{
@@ -803,6 +805,7 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 			"leaves_quantity": "",
 			"price":           "price",
 			"status_id":       "status",
+			"drop_copy":       "drop_copy",
 			"lock":            "",
 		},
 	},
@@ -1308,6 +1311,7 @@ func seedClientDataDriftRealm(
 		Leaves:      "4.25",
 		Price:       "151.25",
 		Status:      domain.OrderStatusFilled,
+		DropCopy:    true,
 		Lock:        []byte{0x01, 0x02, 0x03},
 	})
 	if err != nil {

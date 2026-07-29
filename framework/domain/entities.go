@@ -766,6 +766,10 @@ type Order struct {
 	Account AccountID
 	// Source is the channel that submitted the order.
 	Source Source
+	// DropCopy reports that the order was submitted through the drop-copy
+	// operation. Policies still ran and mutated their normal state, but their
+	// rejects and account or group blocks did not prevent the submission.
+	DropCopy bool `json:"dropCopy,omitempty"`
 	// Side is buy or sell.
 	Side OrderSide
 	// AmountKind distinguishes quantity-based from volume-based sizing.

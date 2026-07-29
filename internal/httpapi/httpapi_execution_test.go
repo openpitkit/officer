@@ -19,6 +19,7 @@ package httpapi
 
 import (
 	"bytes"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -159,6 +160,117 @@ func TestSubmitOrderToken_Created(t *testing.T) {
 		m["id"] != extID("generated-order").String() ||
 		m["verdict"] != "accept" {
 		t.Fatalf("unexpected submit response: %v", m)
+	}
+}
+
+func TestSubmitDropCopyOrder_UsesDistinctUnsignedOperation(t *testing.T) {
+	tests := []struct {
+		name   string
+		prefix string
+		source domain.Source
+	}{
+		{name: "api", prefix: "/api/v1", source: domain.SourceAPI},
+		{name: "panel", prefix: "/app/api/v1", source: domain.SourcePanel},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &fakeService{}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := bytes.NewBufferString(
+				`{"id":"drop-copy-1","account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD",` +
+					`"side":"buy","amountKind":"quantity","amountValue":"1",` +
+					`"price":"100"}`,
+			)
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(
+				http.MethodPost, tt.prefix+"/orders/drop-copy/submit", body,
+			))
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("want 201, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			if !svc.submitOrderIn.DropCopy {
+				t.Fatal("drop-copy operation did not reach the distinct service method")
+			}
+			if svc.submitOrderIn.Source != tt.source ||
+				svc.submitOrderIn.Principal != domain.PrincipalOperator {
+				t.Fatalf(
+					"drop-copy caller = %+v, want %s operator",
+					svc.submitOrderIn, tt.source,
+				)
+			}
+			m := bodyMap(t, rec.Result())
+			if m["id"] != "drop-copy-1" || m["status"] != "committed" {
+				t.Fatalf("unexpected response: %v", m)
+			}
+			if _, present := m["token"]; present {
+				t.Fatalf("drop-copy response contains token: %v", m)
+			}
+		})
+	}
+}
+
+func TestSubmitDropCopyOrder_GeneratesIDWhenOmitted(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(
+		`{"account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD",` +
+			`"side":"buy","amountKind":"quantity","amountValue":"1"}`,
+	)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost, "/api/v1/orders/drop-copy/submit", body,
+	))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !svc.submitOrderIn.ExternalID.IsZero() {
+		t.Fatalf("omitted id reached service as %q, want zero", svc.submitOrderIn.ExternalID)
+	}
+	response := bodyMap(t, rec.Result())
+	if response["id"] != extID("generated-drop-copy-order").String() {
+		t.Fatalf("response id = %v, want generated id", response["id"])
+	}
+	if response["status"] != string(domain.OrderStatusCommitted) {
+		t.Fatalf("response status = %v, want committed", response["status"])
+	}
+}
+
+func TestSubmitDropCopyOrder_ValidationErrorPreservesEngineMessage(t *testing.T) {
+	svc := &fakeService{
+		signingErr: fmt.Errorf(
+			"engine: execute pre-trade: failed to access field 'limit price': %w",
+			domain.ErrInvalid,
+		),
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(
+		`{"account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD",` +
+			`"side":"buy","amountKind":"quantity","amountValue":"1"}`,
+	)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost, "/api/v1/orders/drop-copy/submit", body,
+	))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	m := bodyMap(t, rec.Result())
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "validation" {
+		t.Fatalf("want code=validation, got %v", errObj["code"])
+	}
+	if errObj["message"] !=
+		"engine: execute pre-trade: failed to access field 'limit price': invalid" {
+		t.Fatalf("unexpected validation message: %v", errObj["message"])
 	}
 }
 

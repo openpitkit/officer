@@ -184,9 +184,22 @@ func (n *localNode) submitOrder(
 			}
 			return err
 		}
+		if result.Accepted {
+			if err := n.mirrorEngineBlocksAudit(
+				ctx, order.ExternalID, result.Blocks,
+			); err != nil {
+				return n.fatalPostEnginePersistence(
+					"audit pre-trade engine blocks", accountID, err,
+				)
+			}
+		}
 
+		action := domain.AuditActionSubmitOrder
+		if order.DropCopy {
+			action = domain.AuditActionSubmitDropCopy
+		}
 		if err := n.audit(ctx, caller, store.AuditEntry{
-			Action:  domain.AuditActionSubmitOrder,
+			Action:  action,
 			Account: key.Account,
 			Detail:  submitOrderDetail(order, result.Accepted),
 		}); err != nil {
@@ -212,6 +225,7 @@ func orderAcceptedSettlement(
 		OrderStatus: domain.OrderStatusCommitted,
 		Leaves:      result.LeavesQuantity,
 		Balances:    balanceSettlementsFrom(result.Outcomes),
+		Blocks:      accountBlockSettlementsFrom(order.ExternalID, result.Blocks),
 		Events: []domain.OrderEvent{
 			fillSettlementEvent(order.ExternalID, domain.OrderEventPreTradeAccepted, caller, domain.OrderEventPayload{}),
 			fillSettlementEvent(order.ExternalID, domain.OrderEventCommitted, caller, domain.OrderEventPayload{}),

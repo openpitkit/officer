@@ -97,6 +97,62 @@ func TestLocalNode_SubmitOrderPersistsPreTradeBalances(t *testing.T) {
 	}
 }
 
+func TestLocalNode_SubmitDropCopyPersistsBlockCallerAndAudit(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.submitBlocks = []domain.ExecutionAccountBlock{{
+		Account: "acc-1", Policy: "pnl_bounds", Code: "account_blocked",
+		Reason: "kill-switch tripped", Details: "daily loss",
+	}}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	if _, err := n.CreateAccount(ctx, testAccount("acc-1"), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	caller := domain.Caller{
+		Source: domain.SourceAPI, Principal: domain.PrincipalOperator,
+	}
+	id := domain.ExternalID("drop-copy-order")
+	order, err := n.SubmitOrder(ctx, testKey("acc-1"), domain.Order{
+		ExternalID: id, Account: "acc-1", DropCopy: true,
+		BaseAsset: "AAPL", QuoteAsset: "USD", Side: domain.OrderSideBuy,
+		AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1", Price: "100",
+	}, caller)
+	if err != nil {
+		t.Fatalf("SubmitOrder: %v", err)
+	}
+	if order.Source != domain.SourceAPI || !order.DropCopy {
+		t.Fatalf("order = %+v", order)
+	}
+	account, ok, err := st.GetAccount(ctx, "acc-1")
+	if err != nil || !ok {
+		t.Fatalf("GetAccount: ok=%v err=%v", ok, err)
+	}
+	if !account.Blocked || !strings.Contains(account.BlockReason, "kill-switch tripped") {
+		t.Fatalf("account = %+v", account)
+	}
+	detail, err := st.GetOrder(ctx, id)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	for _, event := range detail.Events {
+		if event.Source != domain.SourceAPI {
+			t.Fatalf("event = %+v, want api source", event)
+		}
+	}
+	rows, err := st.ListAuditFiltered(ctx, domain.AuditFilter{
+		Source:  domain.SourceAPI,
+		Actions: []domain.AuditAction{domain.AuditActionSubmitDropCopy},
+	}, 10)
+	if err != nil {
+		t.Fatalf("ListAuditFiltered: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Account != "acc-1" ||
+		rows[0].Actor != domain.PrincipalOperator {
+		t.Fatalf("drop-copy audit rows = %+v", rows)
+	}
+}
+
 func TestLocalNode_SubmitImmediatePanelDoesNotInferAccountPnl(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()

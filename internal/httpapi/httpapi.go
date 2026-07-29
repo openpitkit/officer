@@ -156,6 +156,7 @@ func RegisterRoutes(registry *httpx.RouteRegistry, svc Service, logs httpx.LogSo
 	register(registry, "signing.config.get", http.MethodGet, "/signing/config", handleGetSigningConfig(svc))
 	register(registry, "signing.config.put", http.MethodPut, "/signing/config", handleSetSigningConfig(svc))
 	register(registry, "orders.submit-token.post", http.MethodPost, "/orders/submit", handleSubmitOrderToken(svc))
+	register(registry, "orders.submit-drop-copy.post", http.MethodPost, "/orders/drop-copy/submit", handleSubmitDropCopyOrder(svc))
 	register(registry, "orders.confirm.post", http.MethodPost, "/orders/{id}/confirm", handleConfirmExecution(svc))
 	register(registry, "orders.cancel.post", http.MethodPost, "/orders/{id}/cancel", handleCancelOrder(svc))
 

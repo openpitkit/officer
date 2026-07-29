@@ -123,6 +123,10 @@ type OrderResult struct {
 	// was committed, ready to persist verbatim on the order. Nil when the order
 	// locked nothing. Display prices are derived later via LockDisplayPrices.
 	Lock []byte
+	// Blocks are account blocks the engine recorded while creating the
+	// reservation. They are non-empty only for a non-enforcing drop-copy path and
+	// must be mirrored durably with the accepted order.
+	Blocks []domain.ExecutionAccountBlock
 	// Rejects are the engine pre-trade rejects; non-empty only when not accepted.
 	Rejects []domain.OrderReject
 	// Outcomes are the per-asset balance effects the reservation produced (held

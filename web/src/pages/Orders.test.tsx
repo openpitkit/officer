@@ -34,6 +34,8 @@ import type {
 } from "@/api/types";
 import type { PollingResult } from "@/api/usePolling";
 import { ApiError } from "@/framework";
+import { badgeVariants } from "@/components/ui/badge";
+import { buttonVariants } from "@/components/ui/button";
 import { SidebarProvider } from "@/components/SidebarContext";
 import i18n from "@/i18n";
 import { Orders } from "@/pages/Orders";
@@ -188,6 +190,7 @@ const sampleOrder: Order = {
   price: "0",
   status: "accepted",
   displayPrices: [],
+  dropCopy: false,
   signed: false,
 };
 
@@ -710,7 +713,9 @@ describe("Orders submit mode", () => {
     expect(submitButton).toBeDisabled();
 
     const modeGroup = within(dialog).getByRole("radiogroup", { name: "Submit mode" });
-    await user.click(within(modeGroup).getByRole("radio", { name: /record executed trade/i }));
+    await user.click(
+      within(modeGroup).getByRole("radio", { name: /submit and settle/i }),
+    );
     // Everything chosen — submission is unblocked.
     expect(submitButton).toBeEnabled();
 
@@ -732,6 +737,129 @@ describe("Orders submit mode", () => {
     expect(signal).toBeInstanceOf(AbortSignal);
   });
 
+  it("requires confirmation for the exclusive drop-copy mode", async () => {
+    const user = userEvent.setup();
+    createOrderMock.mockResolvedValueOnce({
+      order: {
+        ...sampleOrder,
+        id: "ord-drop-copy-000001",
+        source: "panel",
+        dropCopy: true,
+      },
+    });
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+
+    await user.type(within(dialog).getByLabelText("Account"), "desk-alpha");
+    await user.type(within(dialog).getByLabelText("Base asset"), "AAPL");
+    await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
+    await user.type(within(dialog).getByLabelText("Amount"), "100");
+    await user.click(within(dialog).getByRole("radio", { name: /buy/i }));
+    await user.click(
+      within(dialog).getByRole("radio", { name: /quantity/i }),
+    );
+    await user.click(
+      within(dialog).getByRole("radio", { name: /^drop copy/i }),
+    );
+
+    const modeGroup = within(dialog).getByRole("radiogroup", {
+      name: "Submit mode",
+    });
+    expect(within(modeGroup).getAllByRole("radio")).toHaveLength(3);
+    expect(
+      within(modeGroup).getByRole("radio", { name: /^drop copy/i }),
+    ).toHaveAttribute("aria-checked", "true");
+    expect(
+      within(modeGroup).getByRole("radio", { name: /submit and wait/i }),
+    ).toHaveAttribute("aria-checked", "false");
+    expect(within(dialog).getByLabelText("ID (optional)")).toHaveAttribute(
+      "placeholder",
+      "server generated when blank",
+    );
+    expect(
+      within(dialog).getByText(/use your own unique ID when you need a stable order handle/i),
+    ).toBeInTheDocument();
+    const submit = within(dialog).getByRole("button", {
+      name: /submit drop-copy/i,
+    });
+    const price = within(dialog).getByLabelText(
+      "Limit price (required for drop-copy)",
+    );
+    expect(price).toHaveAttribute("placeholder", "required");
+    expect(
+      within(dialog).getByText(/market orders cannot be submitted as drop-copy/i),
+    ).toBeInTheDocument();
+    expect(submit).toBeDisabled();
+    await user.type(price, "0");
+    expect(submit).toBeDisabled();
+    await user.clear(price);
+    await user.type(price, "10");
+    expect(submit).toBeEnabled();
+
+    await user.click(submit);
+    expect(createOrderMock).not.toHaveBeenCalled();
+
+    const confirmation = await screen.findByRole("alertdialog", {
+      name: /submit without enforced pre-trade approval/i,
+    });
+    expect(
+      within(confirmation).getByText(
+        /neither this submit nor later execution reports are signed or attested/i,
+      ),
+    ).toBeInTheDocument();
+    const confirmAction = within(confirmation).getByRole("button", {
+      name: /submit drop-copy/i,
+    });
+    expect(confirmAction).toHaveClass(
+      ...buttonVariants({ variant: "danger", size: null }).split(" "),
+    );
+    await user.click(confirmAction);
+
+    await waitFor(() => expect(createOrderMock).toHaveBeenCalledTimes(1));
+    expect(createOrderMock.mock.calls[0][0]).toMatchObject({
+      mode: "drop_copy",
+    });
+    expect(createOrderMock.mock.calls[0][0]).not.toHaveProperty("id");
+    expect(createOrderMock.mock.calls[0][0]).not.toHaveProperty("dropCopy");
+  });
+
+  it("surfaces a drop-copy validation error returned by the API", async () => {
+    const user = userEvent.setup();
+    const apiMessage = "Drop-copy market orders require a limit price.";
+    createOrderMock.mockRejectedValueOnce(
+      new ApiError(apiMessage, "validation", 400),
+    );
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+
+    await user.type(within(dialog).getByLabelText("Account"), "desk-alpha");
+    await user.type(within(dialog).getByLabelText("Base asset"), "AAPL");
+    await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
+    await user.type(within(dialog).getByLabelText("Amount"), "100");
+    await user.click(within(dialog).getByRole("radio", { name: /buy/i }));
+    await user.click(
+      within(dialog).getByRole("radio", { name: /quantity/i }),
+    );
+    await user.click(
+      within(dialog).getByRole("radio", { name: /^drop copy/i }),
+    );
+    await user.type(
+      within(dialog).getByLabelText("Limit price (required for drop-copy)"),
+      "10",
+    );
+    await user.click(
+      within(dialog).getByRole("button", { name: /submit drop-copy/i }),
+    );
+    const confirmation = await screen.findByRole("alertdialog", {
+      name: /submit without enforced pre-trade approval/i,
+    });
+    await user.click(
+      within(confirmation).getByRole("button", { name: /submit drop-copy/i }),
+    );
+
+    expect(await screen.findByText(apiMessage)).toBeInTheDocument();
+  });
+
   it("disables order submission when a numeric field contains an invalid draft", async () => {
     const user = userEvent.setup();
     renderOrders("/orders");
@@ -746,7 +874,7 @@ describe("Orders submit mode", () => {
       within(dialog).getByRole("radio", { name: /quantity/i }),
     );
     await user.click(
-      within(dialog).getByRole("radio", { name: /record executed trade/i }),
+      within(dialog).getByRole("radio", { name: /submit and settle/i }),
     );
 
     expect(within(dialog).getByLabelText("Amount")).toHaveValue("100x");
@@ -768,7 +896,7 @@ describe("Orders submit mode", () => {
     await user.click(within(dialog).getByRole("radio", { name: /buy/i }));
     await user.click(within(dialog).getByRole("radio", { name: /quantity/i }));
     await user.click(
-      within(dialog).getByRole("radio", { name: /record executed trade/i }),
+      within(dialog).getByRole("radio", { name: /submit and settle/i }),
     );
 
     const submit = within(dialog).getByRole("button", { name: /add order/i });
@@ -800,7 +928,9 @@ describe("Orders submit mode", () => {
     await user.type(within(dialog).getByLabelText("Amount"), "100");
     await user.click(within(dialog).getByRole("radio", { name: /buy/i }));
     await user.click(within(dialog).getByRole("radio", { name: /quantity/i }));
-    await user.click(within(dialog).getByRole("radio", { name: /record executed trade/i }));
+    await user.click(
+      within(dialog).getByRole("radio", { name: /submit and settle/i }),
+    );
     await user.click(within(dialog).getByRole("button", { name: /add order/i }));
 
     expect(await screen.findByText(warning)).toBeInTheDocument();
@@ -824,7 +954,9 @@ describe("Orders submit mode", () => {
     await user.type(within(dialog).getByLabelText("Amount"), "100");
     await user.click(within(dialog).getByRole("radio", { name: /buy/i }));
     await user.click(within(dialog).getByRole("radio", { name: /quantity/i }));
-    await user.click(within(dialog).getByRole("radio", { name: /record executed trade/i }));
+    await user.click(
+      within(dialog).getByRole("radio", { name: /submit and settle/i }),
+    );
     await user.click(within(dialog).getByRole("button", { name: /add order/i }));
     await waitFor(() => expect(createOrderMock).toHaveBeenCalledTimes(1));
 
@@ -838,7 +970,9 @@ describe("Orders submit mode", () => {
     await user.type(within(dialog).getByLabelText("Amount"), "100");
     await user.click(within(dialog).getByRole("radio", { name: /buy/i }));
     await user.click(within(dialog).getByRole("radio", { name: /quantity/i }));
-    await user.click(within(dialog).getByRole("radio", { name: /record executed trade/i }));
+    await user.click(
+      within(dialog).getByRole("radio", { name: /submit and settle/i }),
+    );
 
     expect(within(dialog).getByRole("button", { name: /add order/i })).toBeEnabled();
   });
@@ -1115,6 +1249,109 @@ describe("Orders row signed indicator", () => {
     expect(
       within(signedRow as HTMLElement).getByRole("img", { hidden: true }),
     ).toBeInTheDocument();
+  });
+});
+
+describe("Orders drop-copy marker", () => {
+  // The badge tone only exists as cva classes, so compare against the exact
+  // class set `variant="danger"` produces; `neutral` shares none of them.
+  function expectDangerBadge(badge: HTMLElement): void {
+    for (const className of badgeVariants({ variant: "danger" }).split(" ")) {
+      expect(badge).toHaveClass(className);
+    }
+  }
+
+  it("shows the danger badge in both the table and detail dialog", async () => {
+    const user = userEvent.setup();
+    const order: Order = {
+      ...sampleOrder,
+      id: "ord-drop-copy-1",
+      source: "panel",
+      dropCopy: true,
+    };
+    useOrdersMock.mockReturnValue(readyPage<Order>([order]));
+    fetchOrderDetailMock.mockResolvedValueOnce({
+      order,
+      events: [],
+      trades: [],
+      approval: null,
+    });
+    renderOrders("/orders");
+
+    const row = screen
+      .getAllByRole("row")
+      .find((candidate) => candidate.textContent?.includes(order.id));
+    expect(row).toBeDefined();
+    const rowBadge = within(row as HTMLElement).getByText("DROP COPY");
+    expect(rowBadge).toBeInTheDocument();
+    expectDangerBadge(rowBadge);
+
+    await user.click(within(row as HTMLElement).getByText(order.id));
+    const detail = await screen.findByRole("dialog", {
+      name: `Order ${order.id}`,
+    });
+    const detailBadge = within(detail).getByText("DROP COPY");
+    expect(detailBadge).toBeInTheDocument();
+    expectDangerBadge(detailBadge);
+  });
+});
+
+describe("Orders drop-copy submission id", () => {
+  async function submitDropCopy(externalId?: string) {
+    const user = userEvent.setup();
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+
+    if (externalId) {
+      await user.type(
+        within(dialog).getByLabelText("ID (optional)"),
+        externalId,
+      );
+    }
+    await user.type(within(dialog).getByLabelText("Account"), "desk-alpha");
+    await user.type(within(dialog).getByLabelText("Base asset"), "AAPL");
+    await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
+    await user.type(within(dialog).getByLabelText("Amount"), "100");
+    await user.click(within(dialog).getByRole("radio", { name: /buy/i }));
+    await user.click(
+      within(dialog).getByRole("radio", { name: /quantity/i }),
+    );
+    await user.click(
+      within(dialog).getByRole("radio", { name: /^drop copy/i }),
+    );
+    await user.type(
+      within(dialog).getByLabelText("Limit price (required for drop-copy)"),
+      "10",
+    );
+    await user.click(
+      within(dialog).getByRole("button", { name: /submit drop-copy/i }),
+    );
+
+    const confirmation = await screen.findByRole("alertdialog", {
+      name: /submit without enforced pre-trade approval/i,
+    });
+    await user.click(
+      within(confirmation).getByRole("button", { name: /submit drop-copy/i }),
+    );
+
+    await waitFor(() => expect(createOrderMock).toHaveBeenCalledTimes(1));
+    return createOrderMock.mock.calls[0][0];
+  }
+
+  it("does not send an ID when the operator leaves it blank", async () => {
+    const submitted = await submitDropCopy();
+
+    expect(submitted).toMatchObject({ mode: "drop_copy" });
+    expect(submitted).not.toHaveProperty("id");
+  });
+
+  it("forwards an operator-supplied ID", async () => {
+    const submitted = await submitDropCopy("drop-copy-supplied-000001");
+
+    expect(submitted).toMatchObject({
+      id: "drop-copy-supplied-000001",
+      mode: "drop_copy",
+    });
   });
 });
 

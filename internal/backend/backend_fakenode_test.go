@@ -90,6 +90,7 @@ type fakeNode struct {
 	submitResult            *engine.OrderResult
 	immediateResult         *engine.ImmediateResult
 	execReports             []domain.ExecutionReportInput
+	execReportCallers       []domain.Caller
 	submitErr               error
 	confirmErr              error
 	cancelErr               error
@@ -742,14 +743,23 @@ func (n *fakeNode) recordRejected(order domain.Order, rejects []domain.OrderReje
 }
 
 func (n *fakeNode) SubmitOrder(
-	_ context.Context, key node.Key, o domain.Order, _ domain.Caller,
+	_ context.Context, key node.Key, o domain.Order, caller domain.Caller,
 ) (domain.Order, error) {
 	if n.submitErr != nil {
 		return domain.Order{}, n.submitErr
 	}
 	order := o
 	order.ExternalID = n.recordedOrderExternalID(o)
+	if _, exists := n.orders[order.ExternalID]; exists {
+		return domain.Order{}, fmt.Errorf(
+			"fake node: order %q already exists: %w",
+			order.ExternalID,
+			domain.ErrAlreadyExists,
+		)
+	}
 	order.Account = key.Account
+	order.Source = caller.Source
+	order.Principal = caller.Principal
 	n.appendEvent(order.ExternalID, domain.OrderEventSubmitted, domain.OrderEventPayload{})
 	if n.submitResult != nil && !n.submitResult.Accepted {
 		n.recordRejected(order, n.submitResult.Rejects)
@@ -975,8 +985,9 @@ func (n *fakeNode) CancelOrderWithAttestation(
 }
 
 func (n *fakeNode) ApplyExecutionReport(
-	_ context.Context, _ node.Key, in domain.ExecutionReportInput, _ domain.Caller,
+	_ context.Context, _ node.Key, in domain.ExecutionReportInput, caller domain.Caller,
 ) (engine.ExecutionReportResult, error) {
+	n.execReportCallers = append(n.execReportCallers, caller)
 	if n.execReportNoop {
 		n.execReports = append(n.execReports, in)
 		return engine.ExecutionReportResult{

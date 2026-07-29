@@ -1101,6 +1101,7 @@ type orderDTO struct {
 	Status         string   `json:"status"`
 	Source         string   `json:"source"`
 	DisplayPrices  []string `json:"displayPrices"`
+	DropCopy       bool     `json:"dropCopy"`
 	// Signed is the order-level rollup: whether at least one of the order's events
 	// carries a persisted Ed25519-signed attestation.
 	Signed bool `json:"signed"`
@@ -1141,6 +1142,7 @@ func toOrderDTO(o domain.Order, signed bool) orderDTO {
 		Status:         string(o.Status),
 		Source:         string(o.Source),
 		DisplayPrices:  prices,
+		DropCopy:       o.DropCopy,
 		Signed:         signed,
 	}
 }
@@ -1680,6 +1682,40 @@ type submitOrderTokenRequestDTO struct {
 	Mode        string `json:"mode"`
 }
 
+func (d submitOrderTokenRequestDTO) orderFields() submitOrderFieldsDTO {
+	return submitOrderFieldsDTO{
+		ID: d.ID, Account: d.Account, BaseAsset: d.BaseAsset,
+		QuoteAsset: d.QuoteAsset, Side: d.Side, AmountKind: d.AmountKind,
+		AmountValue: d.AmountValue, Price: d.Price,
+	}
+}
+
+type submitDropCopyOrderRequestDTO struct {
+	ID          string `json:"id"`
+	Account     string `json:"account"`
+	BaseAsset   string `json:"baseAsset"`
+	QuoteAsset  string `json:"quoteAsset"`
+	Side        string `json:"side"`
+	AmountKind  string `json:"amountKind"`
+	AmountValue string `json:"amountValue"`
+	Price       string `json:"price"`
+}
+
+func (d submitDropCopyOrderRequestDTO) orderFields() submitOrderFieldsDTO {
+	return submitOrderFieldsDTO(d)
+}
+
+type submitOrderFieldsDTO struct {
+	ID          string
+	Account     string
+	BaseAsset   string
+	QuoteAsset  string
+	Side        string
+	AmountKind  string
+	AmountValue string
+	Price       string
+}
+
 // approvalTokenDTO is the response of POST /orders/submit. The authorised order
 // is referenced by its opaque external id, never a surrogate id.
 type approvalTokenDTO struct {
@@ -1688,6 +1724,11 @@ type approvalTokenDTO struct {
 	OrderExternalID string           `json:"id"`
 	Verdict         string           `json:"verdict"`
 	Reasons         []orderRejectDTO `json:"reasons,omitempty"`
+}
+
+type dropCopyOrderResponseDTO struct {
+	OrderExternalID string `json:"id"`
+	Status          string `json:"status"`
 }
 
 // confirmExecutionRequestDTO is the body of POST /orders/{id}/confirm.

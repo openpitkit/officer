@@ -264,6 +264,7 @@ const (
 	AuditActionUpdateAssetClass   AuditAction = "update_asset_class"
 	AuditActionDeleteAssetClass   AuditAction = "delete_asset_class"
 	AuditActionSubmitOrder        AuditAction = "submit_order"
+	AuditActionSubmitDropCopy     AuditAction = "submit_drop_copy_order"
 	AuditActionExecutionReport    AuditAction = "execution_report"
 	AuditActionSetMcpAccess       AuditAction = "set_mcp_access"
 	AuditActionSetMarketData      AuditAction = "set_market_data"
@@ -304,7 +305,7 @@ const (
 // are trading activity; every other action is control-plane.
 func (a AuditAction) Category() AuditCategory {
 	switch a {
-	case AuditActionSubmitOrder, AuditActionExecutionReport:
+	case AuditActionSubmitOrder, AuditActionSubmitDropCopy, AuditActionExecutionReport:
 		return AuditCategoryTrading
 	default:
 		return AuditCategoryControl
@@ -358,6 +359,7 @@ func AllAuditActions() []AuditAction {
 		AuditActionApprovalConfirmed,
 		AuditActionApprovalCancelled,
 		AuditActionSubmitOrder,
+		AuditActionSubmitDropCopy,
 		AuditActionExecutionReport,
 	}
 }

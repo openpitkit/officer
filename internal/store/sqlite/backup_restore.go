@@ -839,12 +839,12 @@ func (rt *restoreTx) restoreOrder(ctx context.Context, rec backup.OrderRecord) e
 			`UPDATE order_record
 			 SET account_id = ?, base_asset_id = ?, quote_asset_id = ?, principal_id = ?,
 			     at = ?, source_id = ?, side_id = ?, amount_kind_id = ?, amount_value = ?,
-			     leaves_quantity = ?, price = ?, status_id = ?, lock = ?
+			     leaves_quantity = ?, price = ?, status_id = ?, drop_copy = ?, lock = ?
 			 WHERE external_id = ?`,
 			accountID, baseID, quoteID, principalID, atOrNow(o.At), sourceID,
 			sideID, amountKindID, o.AmountValue,
 			o.Leaves, o.Price,
-			statusID, nullableBlob(o.Lock), o.ExternalID.Bytes(),
+			statusID, o.DropCopy, nullableBlob(o.Lock), o.ExternalID.Bytes(),
 		); err != nil {
 			return fmt.Errorf("store: restore order %q: %w", o.ExternalID, err)
 		}
@@ -853,12 +853,12 @@ func (rt *restoreTx) restoreOrder(ctx context.Context, rec backup.OrderRecord) e
 		`INSERT OR REPLACE INTO order_record
 		 (external_id, account_id, base_asset_id, quote_asset_id, principal_id,
 		  at, source_id, side_id, amount_kind_id, amount_value,
-		  leaves_quantity, price, status_id, lock)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  leaves_quantity, price, status_id, drop_copy, lock)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		o.ExternalID.Bytes(), accountID, baseID, quoteID, principalID,
 		atOrNow(o.At), sourceID, sideID, amountKindID,
 		o.AmountValue, o.Leaves, o.Price,
-		statusID, nullableBlob(o.Lock),
+		statusID, o.DropCopy, nullableBlob(o.Lock),
 	); err != nil {
 		return fmt.Errorf("store: restore order %q: %w", o.ExternalID, err)
 	}

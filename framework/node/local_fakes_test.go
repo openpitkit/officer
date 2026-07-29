@@ -75,6 +75,7 @@ type fakeEngine struct {
 	submitLock                 []byte
 	submitLeaves               string
 	submitOutcomes             []engine.BalanceOutcome
+	submitBlocks               []domain.ExecutionAccountBlock
 	submitAccountPnl           string
 	submitAccountPnlHaltReason domain.PnlHaltReason
 	submitReject               *domain.OrderReject
@@ -856,6 +857,7 @@ func (e *fakeEngine) SubmitOrder(
 	return engine.OrderResult{
 		Accepted:            true,
 		Lock:                e.submitLock,
+		Blocks:              e.submitBlocks,
 		Outcomes:            e.submitOutcomes,
 		SettlementLockPrice: o.Price,
 		LeavesQuantity:      leaves,

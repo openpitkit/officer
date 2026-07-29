@@ -35,6 +35,7 @@ type NodeHealth = frameworkmcp.NodeHealth
 type EngineHealth = frameworkmcp.EngineHealth
 type StoreHealth = frameworkmcp.StoreHealth
 type SubmitOrderTokenResult = frameworkmcp.SubmitOrderTokenResult
+type SubmitDropCopyOrderResult = frameworkmcp.SubmitDropCopyOrderResult
 type Attestation = frameworkmcp.Attestation
 type VersionSource = frameworkmcp.VersionSource
 type ToolRegistry = frameworkmcp.ToolRegistry

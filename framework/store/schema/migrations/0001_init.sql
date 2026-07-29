@@ -291,6 +291,7 @@ CREATE TABLE order_record (
     leaves_quantity {{DECIMAL}} NOT NULL DEFAULT '',
     price           {{DECIMAL}} NOT NULL DEFAULT '',
     status_id       INTEGER NOT NULL REFERENCES order_status(id),
+    drop_copy       INTEGER NOT NULL DEFAULT 0,
     lock            BLOB
 );
 

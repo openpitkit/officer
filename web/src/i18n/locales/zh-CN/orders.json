@@ -166,9 +166,14 @@
       "amountPlaceholder": "如 100",
       "limitPrice": "限价（可选）",
       "limitPricePlaceholder": "留空 = 市价",
+      "limitPriceDropCopy": "限价（drop-copy 必填）",
+      "limitPriceDropCopyPlaceholder": "必填",
+      "limitPriceDropCopyHint": "市价单不能以 drop-copy 模式提交。",
       "submitMode": "提交模式",
-      "submitModeImmediate": "记录已成交",
-      "submitModeImmediateHelp": "交易已发生：立即在 Officer 中记录成交。",
+      "submitModeImmediate": "提交并结算",
+      "submitModeImmediateHelp": "执行交易前检查、预留资金并立即按锁定价格结算。",
+      "submitModeDropCopy": "Drop copy",
+      "submitModeDropCopyHelp": "执行所有策略，但不应用拒绝结果或账户及账户组封锁。必须提供正数限价。",
       "submitModeHold": "提交并等待",
       "submitModeHoldHelp": "执行交易前检查、记录锁定状态并等待执行报告。",
       "submitModeRequired": "请选择提交模式。",
@@ -177,8 +182,16 @@
       "openApi": "OpenAPI",
       "submitBusy": "添加中…",
       "submit": "添加订单",
+      "submitDropCopy": "提交 drop-copy 订单",
+      "dropCopyConfirmTitle": "在不执行交易前批准结果的情况下提交？",
+      "dropCopyConfirmDescription": "所有策略都会执行并更新状态，但策略拒绝以及账户或账户组封锁不会阻止此订单。本次提交及后续执行报告均不签名，也不记录认证。",
+      "dropCopyPriceRequired": "请为 drop-copy 输入正数限价。",
       "validationError": "账户、标的和数量为必填项。"
     }
+  },
+
+  "dropCopy": {
+    "badge": "DROP COPY"
   },
 
   "check": {

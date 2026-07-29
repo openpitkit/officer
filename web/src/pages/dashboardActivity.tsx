@@ -18,6 +18,7 @@
 // Dashboard-local helpers: activity grouping + audit action icons.
 
 import {
+  AlertTriangle,
   ArrowLeftRight,
   Ban,
   CircleDollarSign,
@@ -165,7 +166,13 @@ export function auditActionMeta(action: string): AuditIconMeta {
     return { Icon: CircleDollarSign, variant: "neutral", titleKey: "audit.action.balanceUpdate" };
 
   // Orders / trades
-  if (a === "order" || a === "submit_order" || a === "create_order")
+  if (a === "submit_drop_copy_order")
+    return { Icon: AlertTriangle, variant: "danger", titleKey: "audit.action.dropCopyOrder" };
+  if (
+    a === "order" ||
+    a === "submit_order" ||
+    a === "create_order"
+  )
     return { Icon: ClipboardList,    variant: "neutral", titleKey: "audit.action.order" };
   if (a === "trade" || a === "fill")
     return { Icon: ArrowLeftRight,   variant: "ok",      titleKey: "audit.action.tradeFill" };

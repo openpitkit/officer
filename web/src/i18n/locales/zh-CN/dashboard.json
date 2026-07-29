@@ -56,6 +56,7 @@
       "adjustment": "调整",
       "balanceUpdate": "余额更新",
       "order": "订单",
+      "dropCopyOrder": "Drop-copy 订单",
       "tradeFill": "成交",
       "resetDatabase": "重置数据库",
       "restartService": "重启服务",

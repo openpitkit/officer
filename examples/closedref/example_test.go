@@ -305,6 +305,12 @@ func (s *referenceSource) SubmitOrderToken(
 	return mcp.SubmitOrderTokenResult{}, nil
 }
 
+func (s *referenceSource) SubmitDropCopyOrder(
+	context.Context, domain.Order,
+) (mcp.SubmitDropCopyOrderResult, error) {
+	return mcp.SubmitDropCopyOrderResult{}, nil
+}
+
 func (s *referenceSource) ConfirmExecution(
 	context.Context,
 	string,

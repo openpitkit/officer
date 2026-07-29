@@ -20,6 +20,7 @@ import type { KeyboardEvent, MouseEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
+  AlertTriangle,
   Calculator,
   ExternalLink,
   Plus,
@@ -111,6 +112,16 @@ import {
   TablePagination,
 } from "@/components/TableControls";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { ClearableInput } from "@/components/ClearableInput";
 import {
@@ -381,12 +392,12 @@ function SubmitOrderDialog({
   onCreated,
   onOpenDetail,
   onWorkflowTokenIssued,
-	accountSuggestions,
-	assetSuggestions,
-	initialValues,
+  accountSuggestions,
+  assetSuggestions,
+  initialValues,
 }: SubmitOrderDialogProps) {
-	  const { t } = useTranslation("orders");
-			  const { t: tc } = useTranslation();
+  const { t } = useTranslation("orders");
+  const { t: tc } = useTranslation();
   const { checkOrder, createOrder, fetchAccounts, fetchAssets } =
     useOfficerApi();
 
@@ -398,7 +409,10 @@ function SubmitOrderDialog({
   const [amountKind, setAmountKind] = useState<string>(initialValues?.amountKind ?? "");
   const [amountValue, setAmountValue] = useState(initialValues?.amountValue ?? "");
   const [price, setPrice] = useState(initialValues?.price ?? "");
-  const [submitMode, setSubmitMode] = useState<"immediate" | "hold" | null>(null);
+  const [submitMode, setSubmitMode] = useState<
+    "immediate" | "drop_copy" | "hold" | null
+  >(null);
+  const [dropCopyConfirmOpen, setDropCopyConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [checkState, setCheckState] = useState<CheckState>({ phase: "idle" });
@@ -502,6 +516,15 @@ function SubmitOrderDialog({
 
   // Debounced live check: fires after the shared search interval.
   useEffect(() => {
+    if (submitMode === "drop_copy") {
+      checkAbortRef.current?.abort();
+      checkAbortRef.current = null;
+      // Drop-copy still runs policies, but their rejects are intentionally not
+      // an operator-facing verdict for this operation.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setCheckState({ phase: "idle" });
+      return;
+    }
     const accountT = account.trim();
     const baseT = baseAsset.trim();
     const quoteT = quoteAsset.trim();
@@ -518,7 +541,6 @@ function SubmitOrderDialog({
       !side
     ) {
       // Reset to idle when the form is incomplete; intentional sync.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setCheckState({ phase: "idle" });
       return;
     }
@@ -567,6 +589,7 @@ function SubmitOrderDialog({
     amountKind,
     amountValue,
     price,
+    submitMode,
   ]);
 
   // Reseed from initialValues whenever the dialog opens (clone path).
@@ -582,6 +605,7 @@ function SubmitOrderDialog({
       setAmountValue(initialValues?.amountValue ?? "");
       setPrice(initialValues?.price ?? "");
       setSubmitMode(null);
+      setDropCopyConfirmOpen(false);
       setBusy(false);
       setError(null);
       setCheckState({ phase: "idle" });
@@ -603,6 +627,7 @@ function SubmitOrderDialog({
     setAmountValue(initialValues?.amountValue ?? "");
     setPrice(initialValues?.price ?? "");
     setSubmitMode(null);
+    setDropCopyConfirmOpen(false);
     setBusy(false);
     setError(null);
     setCheckState({ phase: "idle" });
@@ -623,8 +648,7 @@ function SubmitOrderDialog({
       !baseAsset.trim() ||
       !quoteAsset.trim() ||
       !amountValue.trim() ||
-      !isPositiveDecimalString(amountValue) ||
-      !isOptionalPositiveDecimalString(price)
+      !isPositiveDecimalString(amountValue)
     ) {
       setError(t("addOrder.dialog.validationError"));
       return;
@@ -641,34 +665,50 @@ function SubmitOrderDialog({
       setError(t("addOrder.dialog.submitModeRequired"));
       return;
     }
+    if (
+      !isOptionalPositiveDecimalString(price) ||
+      (submitMode === "drop_copy" && !isPositiveDecimalString(price))
+    ) {
+      setError(
+        t(
+          submitMode === "drop_copy"
+            ? "addOrder.dialog.dropCopyPriceRequired"
+            : "addOrder.dialog.validationError",
+        ),
+      );
+      return;
+    }
     setBusy(true);
     setError(null);
     submitAbortRef.current?.abort();
     const controller = new AbortController();
     submitAbortRef.current = controller;
     try {
-      const body: Parameters<typeof createOrder>[0] = {
+      const submissionID = externalId.trim();
+      const commonBody = {
         account: account.trim(),
         baseAsset: baseAsset.trim(),
         quoteAsset: quoteAsset.trim(),
         side: side as OrderSide,
         amountKind,
         amountValue: amountValue.trim(),
+        ...(price.trim() ? { price: price.trim() } : {}),
       };
-      if (price.trim()) {
-        body.price = price.trim();
-      }
-      if (externalId.trim()) {
-        body.id = externalId.trim();
-      }
-      body.mode = submitMode;
+      const body: Parameters<typeof createOrder>[0] = {
+        ...commonBody,
+        ...(submissionID ? { id: submissionID } : {}),
+        mode: submitMode,
+      };
       const result = await createOrder(body, controller.signal);
       if (controller.signal.aborted) {
         return;
       }
       // A rejected pre-trade verdict has no accepted workflow to confirm or
       // cancel. Retain only accepted `hold` tokens for the history shortcuts.
-      if (submitMode === "hold" && result.approval.verdict === "accept") {
+      if (
+        submitMode === "hold" &&
+        result.approval?.verdict === "accept"
+      ) {
         onWorkflowTokenIssued(result.approval);
       }
       onCreated();
@@ -688,6 +728,14 @@ function SubmitOrderDialog({
     }
   }
 
+  function requestSubmit() {
+    if (submitMode === "drop_copy") {
+      setDropCopyConfirmOpen(true);
+      return;
+    }
+    void submit();
+  }
+
   // Every required choice must be made before the order can be submitted; the
   // button stays disabled until then so nothing slips through without a mode.
   const canSubmit =
@@ -697,6 +745,7 @@ function SubmitOrderDialog({
     amountValue.trim() !== "" &&
     isPositiveDecimalString(amountValue) &&
     isOptionalPositiveDecimalString(price) &&
+    (submitMode !== "drop_copy" || isPositiveDecimalString(price)) &&
     side !== "" &&
     amountKind !== "" &&
     submitMode !== null;
@@ -845,9 +894,9 @@ function SubmitOrderDialog({
             <div
               role="radiogroup"
               aria-labelledby="so-mode-label"
-              className="grid grid-cols-2 gap-2"
+              className="grid grid-cols-3 gap-2"
             >
-              {(["immediate", "hold"] as const).map((mode) => {
+              {(["immediate", "drop_copy", "hold"] as const).map((mode) => {
                 const selected = submitMode === mode;
                 return (
                   <button
@@ -865,15 +914,22 @@ function SubmitOrderDialog({
                         : "border-border bg-surface-2 text-muted-lt hover:bg-surface-hover hover:text-text",
                     ].join(" ")}
                   >
-                    <span className="block text-xs font-semibold text-text">
+                    <span className="flex items-center gap-1.5 text-xs font-semibold text-text">
+                      {mode === "drop_copy" && (
+                        <AlertTriangle className="h-3.5 w-3.5 text-[var(--danger)]" />
+                      )}
                       {mode === "immediate"
                         ? t("addOrder.dialog.submitModeImmediate")
-                        : t("addOrder.dialog.submitModeHold")}
+                        : mode === "drop_copy"
+                          ? t("addOrder.dialog.submitModeDropCopy")
+                          : t("addOrder.dialog.submitModeHold")}
                     </span>
                     <span className="mt-1 block text-[0.6875rem] leading-snug">
                       {mode === "immediate"
                         ? t("addOrder.dialog.submitModeImmediateHelp")
-                        : t("addOrder.dialog.submitModeHoldHelp")}
+                        : mode === "drop_copy"
+                          ? t("addOrder.dialog.submitModeDropCopyHelp")
+                          : t("addOrder.dialog.submitModeHoldHelp")}
                     </span>
                   </button>
                 );
@@ -925,20 +981,35 @@ function SubmitOrderDialog({
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="so-price">{t("addOrder.dialog.limitPrice")}</Label>
+            <Label htmlFor="so-price">
+              {t(
+                submitMode === "drop_copy"
+                  ? "addOrder.dialog.limitPriceDropCopy"
+                  : "addOrder.dialog.limitPrice",
+              )}
+            </Label>
             <NumberStepper
               id="so-price"
               value={price}
               onChange={setPrice}
-              placeholder={t("addOrder.dialog.limitPricePlaceholder")}
+              placeholder={t(
+                submitMode === "drop_copy"
+                  ? "addOrder.dialog.limitPriceDropCopyPlaceholder"
+                  : "addOrder.dialog.limitPricePlaceholder",
+              )}
               disabled={busy}
               allowSignedInput={false}
               onClear={() => setPrice("")}
               clearLabel={tc("filters.clearField")}
             />
+            {submitMode === "drop_copy" && (
+              <p className="text-xs text-muted">
+                {t("addOrder.dialog.limitPriceDropCopyHint")}
+              </p>
+            )}
           </div>
 
-          <CheckPreview state={checkState} />
+          {submitMode !== "drop_copy" && <CheckPreview state={checkState} />}
 
           {error && (
             <ErrorBanner message={error} onDismiss={() => setError(null)} />
@@ -948,12 +1019,46 @@ function SubmitOrderDialog({
             <Button variant="outline" size="sm" onClick={handleClose} disabled={busy}>
               {tc("actions.cancel")}
             </Button>
-            <Button size="sm" onClick={submit} disabled={busy || !canSubmit}>
-              {busy ? t("addOrder.dialog.submitBusy") : t("addOrder.dialog.submit")}
+            <Button size="sm" onClick={requestSubmit} disabled={busy || !canSubmit}>
+              {busy
+                ? t("addOrder.dialog.submitBusy")
+                : submitMode === "drop_copy"
+                  ? t("addOrder.dialog.submitDropCopy")
+                  : t("addOrder.dialog.submit")}
             </Button>
           </DialogFooter>
         </div>
       </DialogContent>
+      <AlertDialog
+        open={dropCopyConfirmOpen}
+        onOpenChange={setDropCopyConfirmOpen}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-[var(--danger)]">
+              {t("addOrder.dialog.dropCopyConfirmTitle")}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("addOrder.dialog.dropCopyConfirmDescription")}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy}>
+              {tc("actions.cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="danger"
+              disabled={busy}
+              onClick={() => {
+                setDropCopyConfirmOpen(false);
+                void submit();
+              }}
+            >
+              {t("addOrder.dialog.submitDropCopy")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Dialog>
   );
 }
@@ -1889,6 +1994,9 @@ function OrderDetailDialog({ orderExternalId, refreshKey, onClose, onExecReport,
                     copyTitle={t("common:rowActions.copyId")}
                     copiedTitle={t("common:rowActions.copiedId")}
                   />
+                  {state.order.dropCopy && (
+                    <Badge variant="danger">{t("dropCopy.badge")}</Badge>
+                  )}
                 </div>
               </div>
               <div>
@@ -2530,6 +2638,11 @@ function OrdersTable({
                     >
                       <KeyRound className="h-3.5 w-3.5 text-muted-lt" />
                     </span>
+                  )}
+                  {order.dropCopy && (
+                    <Badge variant="danger" className="shrink-0">
+                      {t("dropCopy.badge")}
+                    </Badge>
                   )}
                 </div>
               </TableCell>

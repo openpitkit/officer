@@ -64,6 +64,10 @@ type Source interface {
 	CommandEnabled(ctx context.Context, command string) (bool, error)
 	// SubmitOrderToken runs the pre-trade pipeline and issues an approval token.
 	SubmitOrderToken(ctx context.Context, o domain.Order, mode string) (SubmitOrderTokenResult, error)
+	// SubmitDropCopyOrder submits through the distinct unsigned operation.
+	SubmitDropCopyOrder(
+		ctx context.Context, o domain.Order,
+	) (SubmitDropCopyOrderResult, error)
 	// ConfirmExecution verifies the token and records confirmation history for an
 	// order that has no execution-report activity. It also returns the resulting
 	// attestation, so an MCP caller receives the same proof an HTTP caller does.
@@ -104,6 +108,15 @@ type SubmitOrderTokenResult struct {
 	Verdict string
 	// Reasons carries engine reject reasons when Verdict is "reject".
 	Reasons []domain.OrderReject
+}
+
+// SubmitDropCopyOrderResult identifies the unsigned drop-copy order recorded by
+// a successful submission.
+type SubmitDropCopyOrderResult struct {
+	// OrderExternalID is the order's opaque public handle.
+	OrderExternalID string
+	// Status is the persisted order status returned by the submission.
+	Status domain.OrderStatus
 }
 
 // VersionSource reports the engine version used as the MCP server version.

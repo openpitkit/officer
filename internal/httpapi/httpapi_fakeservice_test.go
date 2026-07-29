@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"time"
 
+	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/businesscsv"
@@ -792,6 +793,30 @@ func (f *fakeService) SubmitOrderToken(
 	tok := f.approvalToken
 	tok.OrderExternalID = used.String()
 	return tok, nil
+}
+
+func (f *fakeService) SubmitDropCopyOrder(
+	ctx context.Context, o domain.Order,
+) (domain.Order, error) {
+	caller := auth.CallerFromContext(ctx)
+	o.DropCopy = true
+	o.Source = caller.Source
+	o.Principal = caller.Principal
+	o.Status = domain.OrderStatusCommitted
+	f.submitOrderIn = o
+	if f.signingErr != nil {
+		return domain.Order{}, f.signingErr
+	}
+	used := o.ExternalID
+	if used.IsZero() {
+		used = extID("generated-drop-copy-order")
+	}
+	o.ExternalID = used
+	if f.submittedOrders == nil {
+		f.submittedOrders = make(map[string]domain.Order)
+	}
+	f.submittedOrders[used.String()] = o
+	return o, nil
 }
 func (f *fakeService) ConfirmExecution(
 	_ context.Context, orderID string, _ string,

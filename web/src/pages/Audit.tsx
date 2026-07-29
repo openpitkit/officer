@@ -79,14 +79,15 @@ const SOURCES = ["panel", "api", "mcp", "system"] as const;
 const EMPTY_ACTION_GROUPS: AuditActionGroup[] = [];
 type ActionDefaultCategory = "control" | "all";
 
-/** Map an audit action to a badge tone. Blocking and deletions read as
- *  destructive; creations and unblocks as positive. */
+/** Map an audit action to a badge tone. Destructive control and unsigned
+ *  submissions read as dangerous; creations and unblocks as positive. */
 function actionVariant(action: string): BadgeProps["variant"] {
   switch (action) {
     case "block":
     case "delete_limit":
     case "reset_database":
     case "stop_service":
+    case "submit_drop_copy_order":
       return "danger";
     case "restart_service":
       return "warn";

@@ -52,7 +52,7 @@ import (
 const orderSelect = `
 SELECT o.external_id, a.code, ba.code, qa.code, p.code,
        o.at, o.source_id, o.side_id, o.amount_kind_id, o.amount_value,
-       o.leaves_quantity, o.price, o.status_id, o.lock
+       o.leaves_quantity, o.price, o.status_id, o.drop_copy, o.lock
 FROM order_record o
 JOIN account a       ON a.id = o.account_id
 JOIN asset ba        ON ba.id = o.base_asset_id
@@ -66,7 +66,7 @@ LEFT JOIN principal p ON p.id = o.principal_id`
 const orderListSelect = `
 SELECT o.external_id, a.code, ba.code, qa.code, p.code,
        o.at, o.source_id, o.side_id, o.amount_kind_id, o.amount_value,
-       o.leaves_quantity, o.price, o.status_id, o.lock,
+       o.leaves_quantity, o.price, o.status_id, o.drop_copy, o.lock,
        EXISTS (
            SELECT 1 FROM order_event e
            JOIN event_attestation ea ON ea.event_id = e.id
@@ -151,12 +151,12 @@ func createOrderTx(
 		`INSERT INTO order_record
 		 (external_id, account_id, base_asset_id, quote_asset_id, principal_id,
 		  at, source_id, side_id, amount_kind_id, amount_value,
-		  leaves_quantity, price, status_id, lock)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  leaves_quantity, price, status_id, drop_copy, lock)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		xid.Bytes(), accountID, baseID, quoteID, principalID,
 		at, sourceID, sideID, amountKindID,
 		o.AmountValue, o.Leaves, o.Price,
-		statusID, nullableBlob(o.Lock),
+		statusID, o.DropCopy, nullableBlob(o.Lock),
 	); err != nil {
 		if isSQLiteUnique(err) {
 			return o, fmt.Errorf(
@@ -731,12 +731,13 @@ func scanOrderInto(
 		sourceID, sideID, amountKindID int64
 		statusID                       int64
 		amountValue, leaves, price     string
+		dropCopy                       bool
 		lock                           []byte
 	)
 	if err := scan(
 		&extID, &o.Account, &o.BaseAsset, &o.QuoteAsset, &principal,
 		&at, &sourceID, &sideID, &amountKindID, &amountValue,
-		&leaves, &price, &statusID, &lock,
+		&leaves, &price, &statusID, &dropCopy, &lock,
 	); err != nil {
 		return err
 	}
@@ -776,6 +777,7 @@ func scanOrderInto(
 	o.Leaves = leaves
 	o.Price = price
 	o.Status = domain.OrderStatus(status)
+	o.DropCopy = dropCopy
 	o.Lock = lock
 	return nil
 }

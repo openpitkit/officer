@@ -31,6 +31,8 @@ const buttonVariants = cva(
           "border border-border bg-transparent text-text hover:border-border-hover hover:bg-card-hover-bg hover:text-accent",
         ghost:
           "border border-transparent bg-transparent text-muted-lt hover:bg-accent-dim hover:text-accent",
+        danger:
+          "border border-[var(--danger)] bg-[var(--danger)] text-bg hover:border-[var(--danger)] hover:bg-[var(--danger)]",
       },
       size: {
         default: "h-[var(--dens-button-h)] px-[var(--dens-button-px)] py-1",

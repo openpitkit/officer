@@ -166,9 +166,14 @@
       "amountPlaceholder": "e.g. 100",
       "limitPrice": "Limit price (optional)",
       "limitPricePlaceholder": "leave empty = market",
+      "limitPriceDropCopy": "Limit price (required for drop-copy)",
+      "limitPriceDropCopyPlaceholder": "required",
+      "limitPriceDropCopyHint": "Market orders cannot be submitted as drop-copy.",
       "submitMode": "Submit mode",
-      "submitModeImmediate": "Record executed trade",
-      "submitModeImmediateHelp": "The trade already happened: record the fill in Officer now.",
+      "submitModeImmediate": "Submit and settle",
+      "submitModeImmediateHelp": "Run pre-trade, reserve, and settle at the lock price now.",
+      "submitModeDropCopy": "Drop copy",
+      "submitModeDropCopyHelp": "Run every policy but enforce no rejects or account and group blocks. A positive limit price is required.",
       "submitModeHold": "Submit and wait",
       "submitModeHoldHelp": "Run pre-trade, record the lock, and wait for execution reports.",
       "submitModeRequired": "Select a submit mode.",
@@ -177,8 +182,16 @@
       "openApi": "OpenAPI",
       "submitBusy": "Adding…",
       "submit": "Add Order",
+      "submitDropCopy": "Submit drop-copy",
+      "dropCopyConfirmTitle": "Submit without enforced pre-trade approval?",
+      "dropCopyConfirmDescription": "Every policy will run and update state, but policy rejects and account or group blocks will not stop this order. Neither this submit nor later execution reports are signed or attested.",
+      "dropCopyPriceRequired": "Enter a positive limit price for drop-copy.",
       "validationError": "Account, instrument, and amount are required."
     }
+  },
+
+  "dropCopy": {
+    "badge": "DROP COPY"
   },
 
   "check": {

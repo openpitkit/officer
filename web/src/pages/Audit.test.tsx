@@ -30,6 +30,7 @@ import type {
 import type { PollingResult } from "@/api/usePolling";
 import type { AuditFilter } from "@/framework";
 import { SidebarProvider } from "@/components/SidebarContext";
+import { badgeVariants } from "@/components/ui/badge";
 import i18n from "@/i18n";
 import { Audit } from "@/pages/Audit";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
@@ -296,5 +297,25 @@ describe("Audit empty state", () => {
 
     expect(await screen.findByText("blocked desk-alpha")).toBeInTheDocument();
     expect(screen.queryByText("No audit entries")).not.toBeInTheDocument();
+  });
+});
+
+describe("Audit action tones", () => {
+  it("marks drop-copy submissions as dangerous", async () => {
+    useAuditPageMock.mockReturnValue(
+      auditPage([
+        {
+          ...sampleEntry,
+          action: "submit_drop_copy_order",
+          detail: "submitted unsigned drop-copy order",
+        },
+      ]),
+    );
+    renderAudit();
+
+    const action = await screen.findByText("submit_drop_copy_order");
+    expect(action).toHaveClass(
+      ...badgeVariants({ variant: "danger" }).split(" "),
+    );
   });
 });

@@ -156,6 +156,7 @@ func sampleOrder() domain.Order {
 		AmountValue: "10",
 		Price:       "150.25",
 		Status:      domain.OrderStatusSubmitted,
+		DropCopy:    true,
 		Lock:        []byte{0x00, 0x01, 0x02, 0xff, 0x10},
 	}
 }
@@ -196,7 +197,7 @@ func TestCreateOrderGetListRoundTrip(t *testing.T) {
 	if got.Source != domain.SourcePanel || got.Side != domain.OrderSideBuy ||
 		got.AmountKind != domain.OrderAmountKindQuantity ||
 		got.AmountValue != "10" || got.Price != "150.25" ||
-		got.Status != domain.OrderStatusSubmitted {
+		got.Status != domain.OrderStatusSubmitted || !got.DropCopy {
 		t.Fatalf("GetOrder fields = %+v", got)
 	}
 
@@ -205,14 +206,16 @@ func TestCreateOrderGetListRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListOrders: %v", err)
 	}
-	if len(list) != 1 || list[0].ExternalID != created.ExternalID {
+	if len(list) != 1 || list[0].ExternalID != created.ExternalID ||
+		!list[0].DropCopy {
 		t.Fatalf("ListOrders = %+v", list)
 	}
 	all, err := rs.ListAllOrders(ctx, "acc-1", domain.SourcePanel)
 	if err != nil {
 		t.Fatalf("ListAllOrders: %v", err)
 	}
-	if len(all) != 1 || all[0].ExternalID != created.ExternalID {
+	if len(all) != 1 || all[0].ExternalID != created.ExternalID ||
+		!all[0].DropCopy {
 		t.Fatalf("ListAllOrders = %+v", all)
 	}
 
@@ -232,6 +235,30 @@ func TestCreateOrderGetListRoundTrip(t *testing.T) {
 	}
 	if len(none) != 0 {
 		t.Fatalf("ListAllOrders(mcp) = %+v, want empty", none)
+	}
+}
+
+func TestCreateOrderDropCopyDefaultsFalse(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+	order := sampleOrder()
+	order.DropCopy = false
+	created, err := rs.CreateOrder(ctx, order)
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+	detail, err := rs.GetOrder(ctx, created.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if detail.Order.DropCopy {
+		t.Fatalf("GetOrder DropCopy = true, want false")
+	}
+	list, err := rs.ListOrders(ctx, "acc-1", "", 10)
+	if err != nil {
+		t.Fatalf("ListOrders: %v", err)
+	}
+	if len(list) != 1 || list[0].DropCopy {
+		t.Fatalf("ListOrders = %+v, want false drop-copy flag", list)
 	}
 }
 

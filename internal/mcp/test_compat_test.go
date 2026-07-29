@@ -54,6 +54,8 @@ type setMarketDataInstrumentInput = tools.SetMarketDataInstrumentInput
 type setMarketDataInstrumentOutput = tools.SetMarketDataInstrumentOutput
 type submitOrderInput = tools.SubmitOrderInput
 type submitOrderOutput = tools.SubmitOrderOutput
+type submitDropCopyOrderInput = tools.SubmitDropCopyOrderInput
+type submitDropCopyOrderOutput = tools.SubmitDropCopyOrderOutput
 type confirmExecutionInput = tools.ConfirmExecutionInput
 type confirmExecutionOutput = tools.ConfirmExecutionOutput
 type cancelInput = tools.CancelInput
@@ -125,6 +127,18 @@ func submitOrderHandler(src Source) func(
 	*sdkmcp.CallToolParamsFor[submitOrderInput],
 ) (*sdkmcp.CallToolResultFor[submitOrderOutput], error) {
 	return testGuard("submit_order", src, tools.SubmitOrderHandler(src))
+}
+
+func submitDropCopyOrderHandler(src Source) func(
+	context.Context,
+	*sdkmcp.ServerSession,
+	*sdkmcp.CallToolParamsFor[submitDropCopyOrderInput],
+) (*sdkmcp.CallToolResultFor[submitDropCopyOrderOutput], error) {
+	return testGuard(
+		"submit_drop_copy_order",
+		src,
+		tools.SubmitDropCopyOrderHandler(src),
+	)
 }
 
 func confirmExecutionHandler(src Source) func(

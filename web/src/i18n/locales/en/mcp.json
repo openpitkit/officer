@@ -59,6 +59,9 @@
     "submit_order": {
       "description": "Submit an order intent through pre-trade and obtain a signed approval token."
     },
+    "submit_drop_copy_order": {
+      "description": "Submit an unsigned drop-copy order. Policies retain their normal state changes, but policy rejects and account or group kill-switch blocks do not stop the order."
+    },
     "confirm_execution": {
       "description": "Record confirmation history for a workflow order with no execution-report activity."
     },

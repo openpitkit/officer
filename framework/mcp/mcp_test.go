@@ -262,6 +262,12 @@ func (s *guardSource) SubmitOrderToken(
 	return SubmitOrderTokenResult{}, nil
 }
 
+func (s *guardSource) SubmitDropCopyOrder(
+	context.Context, domain.Order,
+) (SubmitDropCopyOrderResult, error) {
+	return SubmitDropCopyOrderResult{}, nil
+}
+
 func (s *guardSource) ConfirmExecution(
 	context.Context,
 	string,

@@ -508,6 +508,7 @@ function normalizeOrder(v: unknown): Order {
     price: asString(pick(o, "price", "Price")),
     status: asString(pick(o, "status", "Status")),
     displayPrices: Array.isArray(rawDisplay) ? rawDisplay.map(asString) : [],
+    dropCopy: asBool(pick(o, "dropCopy", "DropCopy", "drop_copy")),
     signed: asBool(pick(o, "signed", "Signed")),
   };
 }
@@ -2598,8 +2599,7 @@ async function fetchAdjustments(
 
 // --- Orders / Trading ---
 
-export interface CreateOrderBody {
-  id?: string;
+interface CreateOrderFields {
   account: string;
   baseAsset: string;
   quoteAsset: string;
@@ -2607,16 +2607,19 @@ export interface CreateOrderBody {
   amountKind: string;
   amountValue: string;
   price?: string;
-  mode?: "immediate" | "hold";
+}
+
+export interface CreateOrderBody extends CreateOrderFields {
+  mode?: "immediate" | "drop_copy" | "hold";
+  id?: string;
 }
 
 export interface CreateOrderResult {
   order: Order;
   warning?: string;
-  /** The approval token issued by submit. For the `hold` compatibility mode,
-   *  the UI retains it for the workflow confirm/cancel shortcuts; for an
-   *  immediate order it is already resolved and unused. */
-  approval: ApprovalToken;
+  /** The approval token issued by an ordinary submit. For `hold`, the UI
+   *  retains it for workflow shortcuts; drop-copy never returns one. */
+  approval?: ApprovalToken;
 }
 
 function normalizeApprovalToken(v: unknown): ApprovalToken {
@@ -2644,10 +2647,10 @@ function normalizeSubmitVerdict(v: unknown): ApprovalToken["verdict"] {
 
 function minimalCreatedOrder(
   body: CreateOrderBody,
-  token: ApprovalToken,
+  submitted: SubmittedOrder,
 ): Order {
   return {
-    id: token.id,
+    id: submitted.id,
     account: body.account,
     at: "",
     source: "panel",
@@ -2659,45 +2662,74 @@ function minimalCreatedOrder(
     commissionSubtotals: [],
     leavesQuantity: body.amountValue,
     price: body.price ?? "0",
-    status: "submitted",
+    status: submitted.status ?? "submitted",
     displayPrices: [],
+    dropCopy: body.mode === "drop_copy",
     // The submit token is signed but not yet reflected in this placeholder, so
     // it reports unsigned until a real fetch replaces it.
     signed: false,
   };
 }
 
-/** POST /orders/submit. Submit creates the order and returns an approval token. */
-async function submitOrder(client: ApiClient, 
+export interface SubmittedOrder {
+  id: string;
+  status?: string;
+  approval?: ApprovalToken;
+}
+
+/** Submit an order and return its public id plus any approval token. */
+async function submitOrder(
+  client: ApiClient,
   body: CreateOrderBody,
   signal?: AbortSignal,
-): Promise<ApprovalToken> {
-  const v = await client.request(`${client.baseUrl}/orders/submit`, {
+): Promise<SubmittedOrder> {
+  const dropCopy = body.mode === "drop_copy";
+  const { mode, ...commonBody } = body;
+  const requestBody = dropCopy ? commonBody : { ...commonBody, mode };
+  const path = dropCopy ? "/orders/drop-copy/submit" : "/orders/submit";
+  const v = await client.request(`${client.baseUrl}${path}`, {
     method: "POST",
-    body,
+    body: requestBody,
     signal,
   });
-  return normalizeApprovalToken(v);
+  if (dropCopy) {
+    const response = isObject(v) ? v : {};
+    return {
+      id: requireStringField(response, "drop-copy order id", "id", "Id"),
+      status: requireStringField(
+        response,
+        "drop-copy order status",
+        "status",
+        "Status",
+      ),
+    };
+  }
+  const approval = normalizeApprovalToken(v);
+  return { id: approval.id, approval };
 }
 
 /** POST /orders/submit, then fetch the created order for the dashboard table. */
-async function createOrder(client: ApiClient, 
+async function createOrder(
+  client: ApiClient,
   body: CreateOrderBody,
   signal?: AbortSignal,
 ): Promise<CreateOrderResult> {
-  const token = await submitOrder(client, body, signal);
+  const submitted = await submitOrder(client, body, signal);
   try {
-    return {
-      order: (await fetchOrderDetail(client, token.id, signal)).order,
-      approval: token,
-    };
+    const order = (await fetchOrderDetail(client, submitted.id, signal)).order;
+    return submitted.approval
+      ? { order, approval: submitted.approval }
+      : { order };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return {
-      order: minimalCreatedOrder(body, token),
+    const result: CreateOrderResult = {
+      order: minimalCreatedOrder(body, submitted),
       warning: `Order was created, but detail enrichment failed: ${message}`,
-      approval: token,
     };
+    if (submitted.approval) {
+      result.approval = submitted.approval;
+    }
+    return result;
   }
 }
 

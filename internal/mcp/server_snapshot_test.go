@@ -115,6 +115,14 @@ func TestServerToolSnapshot(t *testing.T) {
 				"lock; protected and disabled by default.",
 		},
 		{
+			name: "submit_drop_copy_order",
+			description: "Submit a drop-copy order through the normal policy pipeline " +
+				"while ignoring policy rejects and existing account or group kill-switch " +
+				"blocks. Policies retain their normal state changes. The id is optional; " +
+				"when omitted, the store assigns it. No lifecycle event is signed. " +
+				"Mutates engine state; protected and disabled by default.",
+		},
+		{
 			name: "confirm_execution",
 			description: "Record confirmation history for a previously approved " +
 				"workflow order by presenting its approval token. The shortcut is " +
@@ -150,7 +158,7 @@ func TestServerToolSnapshot(t *testing.T) {
 		}
 	}
 	for _, name := range []string{
-		"get_order", "submit_order", "confirm_execution", "cancel",
+		"get_order", "submit_order", "submit_drop_copy_order", "confirm_execution", "cancel",
 		"set_market_data_instrument",
 	} {
 		tool := gotByName[name]
@@ -162,6 +170,19 @@ func TestServerToolSnapshot(t *testing.T) {
 				t.Fatalf("marshal %s %s schema: %v", name, schemaName, err)
 			}
 			wire := string(raw)
+			if name == "submit_drop_copy_order" && schemaName == "input" {
+				var shape struct {
+					Required []string `json:"required"`
+				}
+				if err := json.Unmarshal(raw, &shape); err != nil {
+					t.Fatalf("decode drop-copy input schema: %v", err)
+				}
+				for _, required := range shape.Required {
+					if required == "id" {
+						t.Fatalf("drop-copy input schema requires optional id: %s", wire)
+					}
+				}
+			}
 			if !strings.Contains(wire, `"id"`) {
 				t.Errorf("%s %s schema has no id: %s", name, schemaName, wire)
 			}

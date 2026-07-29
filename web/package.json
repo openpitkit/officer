@@ -4,6 +4,10 @@
   "type": "module",
   "description": "Operator dashboard for Pit Officer.",
   "license": "Apache-2.0",
+  "allowScripts": {
+    "esbuild@0.24.2": true,
+    "fsevents@2.3.3": true
+  },
   "scripts": {
     "dev": "vite",
     "build": "npm run prepare:dist && tsc -b && vite build",

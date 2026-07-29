@@ -211,26 +211,10 @@ func handleSubmitOrderToken(svc Service) http.HandlerFunc {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "signing", "mode must be hold or immediate")
 			return
 		}
-		order := domain.Order{
-			Account:     domain.AccountID(req.Account),
-			BaseAsset:   req.BaseAsset,
-			QuoteAsset:  req.QuoteAsset,
-			Side:        domain.OrderSide(req.Side),
-			AmountKind:  domain.OrderAmountKind(req.AmountKind),
-			AmountValue: req.AmountValue,
-			Price:       req.Price,
-		}
-		// A caller-supplied id is optional. When present, the backend
-		// uses it verbatim and rejects a duplicate with 409. When absent the
-		// backend generates one and returns it.
-		suppliedID := req.ID
-		if suppliedID != "" {
-			id, err := domain.ParseExternalID(suppliedID)
-			if err != nil {
-				httpx.WriteErr(w, err)
-				return
-			}
-			order.ExternalID = id
+		order, err := submitOrderFromDTO(req.orderFields())
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
 		}
 		tok, err := svc.SubmitOrderToken(r.Context(), order, mode)
 		if err != nil {
@@ -245,6 +229,55 @@ func handleSubmitOrderToken(svc Service) http.HandlerFunc {
 			Reasons:         toOrderRejectDTOs(tok.Reasons),
 		})
 	}
+}
+
+// handleSubmitDropCopyOrder handles the distinct unsigned drop-copy submit.
+// Its external id is optional; when omitted, the store assigns one. Duplicate
+// ids follow the ordinary unique-store conflict path; no approval token is
+// produced.
+func handleSubmitDropCopyOrder(svc Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req submitDropCopyOrderRequestDTO
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+			return
+		}
+		order, err := submitOrderFromDTO(req.orderFields())
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		created, err := svc.SubmitDropCopyOrder(r.Context(), order)
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		httpx.WriteJSON(w, http.StatusCreated, dropCopyOrderResponseDTO{
+			OrderExternalID: created.ExternalID.String(),
+			Status:          string(created.Status),
+		})
+	}
+}
+
+func submitOrderFromDTO(req submitOrderFieldsDTO) (domain.Order, error) {
+	order := domain.Order{
+		Account:     domain.AccountID(req.Account),
+		BaseAsset:   req.BaseAsset,
+		QuoteAsset:  req.QuoteAsset,
+		Side:        domain.OrderSide(req.Side),
+		AmountKind:  domain.OrderAmountKind(req.AmountKind),
+		AmountValue: req.AmountValue,
+		Price:       req.Price,
+	}
+	if req.ID == "" {
+		return order, nil
+	}
+	id, err := domain.ParseExternalID(req.ID)
+	if err != nil {
+		return domain.Order{}, err
+	}
+	order.ExternalID = id
+	return order, nil
 }
 
 // handleConfirmExecution handles POST /api/v1/orders/{id}/confirm. The body

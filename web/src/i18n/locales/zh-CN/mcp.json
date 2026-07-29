@@ -59,6 +59,9 @@
     "submit_order": {
       "description": "通过盘前校验提交订单意向，并获取已签名的审批令牌。"
     },
+    "submit_drop_copy_order": {
+      "description": "提交不签名的 drop-copy 订单。策略保留正常状态变更，但策略拒绝以及账户或账户组风控封锁不会阻止该订单。"
+    },
     "confirm_execution": {
       "description": "为尚无执行报告活动的工作流订单记录确认历史。"
     },

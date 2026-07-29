@@ -56,6 +56,7 @@
       "adjustment": "Adjustment",
       "balanceUpdate": "Balance update",
       "order": "Order",
+      "dropCopyOrder": "Drop-copy order",
       "tradeFill": "Trade / fill",
       "resetDatabase": "Reset database",
       "restartService": "Restart service",

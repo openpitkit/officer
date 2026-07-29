@@ -161,6 +161,15 @@ func defaultMCPCatalog() catalog.Catalog {
 			DefaultEnabled:   false,
 		},
 		{
+			Name:             "submit_drop_copy_order",
+			Title:            "Submit drop-copy order",
+			AgentDescription: "Submit a drop-copy order through the normal policy pipeline while ignoring policy rejects and existing account or group kill-switch blocks; policies retain normal state changes, id is optional and the store assigns it when omitted, and no lifecycle event is signed.",
+			Mutating:         true,
+			Protective:       true,
+			Implemented:      true,
+			DefaultEnabled:   false,
+		},
+		{
 			Name:             "confirm_execution",
 			Title:            "Confirm execution",
 			AgentDescription: "Record confirmation history for an untouched workflow order.",

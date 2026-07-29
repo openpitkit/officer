@@ -46,6 +46,7 @@ export {
   type ConfirmOrderBody,
   type CreateOrderBody,
   type CreateOrderResult,
+  type SubmittedOrder,
   type AuditFilter,
   type ExecutionReportBody,
   type GlobalAdjustmentsFilter,

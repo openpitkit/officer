@@ -46,11 +46,9 @@ func (s *Service) CheckOrder(
 	return n.CheckOrder(ctx, keyFor(probe.Account), probe)
 }
 
-// ApplyExecutionReport validates the target status, routes the report to the
-// owning node for account-synchronized application, and signs an attestation over
-// the engine persistence bound to the fill/status-change event it produced.
-// Signing and attestation persistence are fail-closed: either the event and its
-// attestation commit together or the report call fails.
+// ApplyExecutionReport validates the target status and routes the report to the
+// owning node for account-synchronized application. Ordinary order reports are
+// signed and persisted fail-closed; drop-copy reports remain unattested.
 func (s *Service) ApplyExecutionReport(
 	ctx context.Context, in domain.ExecutionReportInput,
 ) (engine.ExecutionReportResult, Attestation, error) {
@@ -67,6 +65,13 @@ func (s *Service) ApplyExecutionReport(
 	stored, err := n.GetOrder(ctx, in.Order)
 	if err != nil {
 		return engine.ExecutionReportResult{}, Attestation{}, err
+	}
+	caller := auth.CallerFromContext(ctx)
+	if isDropCopyOrder(stored.Order) {
+		// Drop-copy never enforced a pre-trade verdict, so signing its lifecycle
+		// would falsely represent risk approval.
+		result, err := n.ApplyExecutionReport(ctx, key, in, caller)
+		return result, Attestation{}, err
 	}
 	signer, err := s.signerOrErr()
 	if err != nil {
@@ -85,7 +90,6 @@ func (s *Service) ApplyExecutionReport(
 	}
 	var att Attestation
 	attPriority := 0
-	caller := auth.CallerFromContext(ctx)
 	attest := eventAttestor(
 		signer, off, signingKeyID, domain.AttestationRequestExecutionReport,
 		func(event domain.OrderEvent) (domain.ApprovalPayload, bool, error) {

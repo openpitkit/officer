@@ -517,6 +517,8 @@ export interface Order {
   status: string;
   /** Human-readable pre-trade lock prices, as exact decimal strings. */
   displayPrices: string[];
+  /** Whether this order was submitted through the drop-copy operation. */
+  dropCopy: boolean;
   /** Whether the order carries a persisted Ed25519-signed approval envelope. */
   signed: boolean;
 }

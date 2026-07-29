@@ -2384,7 +2384,10 @@ describe("Orders createOrder submit lifecycle", () => {
     );
   }
 
-  function orderResponse(orderExternalId = "ord_alpha_0000000001"): Response {
+  function orderResponse(
+    orderExternalId = "ord_alpha_0000000001",
+    dropCopy = false,
+  ): Response {
     return new Response(
       JSON.stringify({
         order: {
@@ -2401,6 +2404,7 @@ describe("Orders createOrder submit lifecycle", () => {
           price: "0",
           status: "accepted",
           displayPrices: [],
+          dropCopy,
         },
       }),
       { status: 200, headers: { "Content-Type": "application/json" } },
@@ -2445,6 +2449,95 @@ describe("Orders createOrder submit lifecycle", () => {
       2,
       "/app/api/v1/orders/ord_alpha_0000000001",
       expect.any(Object),
+    );
+  });
+
+  it("routes drop-copy orders through the distinct endpoint", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: "ord_drop_copy_000001",
+            status: "committed",
+          }),
+          { status: 201, headers: { "Content-Type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(orderResponse("ord_drop_copy_000001", true));
+    const { createOrder } = api();
+
+    const result = await createOrder({
+      account: "desk-alpha",
+      baseAsset: "AAPL",
+      quoteAsset: "USD",
+      side: "buy",
+      amountKind: "quantity",
+      amountValue: "100",
+      id: "ord_drop_copy_000001",
+      mode: "drop_copy",
+    });
+
+    expect(result.order.dropCopy).toBe(true);
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      "/app/api/v1/orders/drop-copy/submit",
+      expect.objectContaining({
+        body: JSON.stringify({
+          account: "desk-alpha",
+          baseAsset: "AAPL",
+          quoteAsset: "USD",
+          side: "buy",
+          amountKind: "quantity",
+          amountValue: "100",
+          id: "ord_drop_copy_000001",
+        }),
+      }),
+    );
+    expect(result.approval).toBeUndefined();
+  });
+
+  it("keeps the drop-copy status when detail enrichment fails", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: "ord_drop_copy_fallback",
+            status: "committed",
+          }),
+          { status: 201, headers: { "Content-Type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: { message: "store down" } }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    const { createOrder } = api();
+
+    const result = await createOrder({
+      account: "desk-alpha",
+      baseAsset: "AAPL",
+      quoteAsset: "USD",
+      side: "buy",
+      amountKind: "quantity",
+      amountValue: "100",
+      price: "10",
+      id: "ord_drop_copy_fallback",
+      mode: "drop_copy",
+    });
+
+    expect(result.order).toMatchObject({
+      id: "ord_drop_copy_fallback",
+      status: "committed",
+      source: "panel",
+      leavesQuantity: "100",
+      dropCopy: true,
+      signed: false,
+    });
+    expect(result.approval).toBeUndefined();
+    expect(result.warning).toContain(
+      "Order was created, but detail enrichment failed",
     );
   });
 
@@ -2589,8 +2682,8 @@ describe("Orders createOrder submit lifecycle", () => {
       amountKind: "quantity",
       amountValue: "100",
     });
-    expect(result.approval.verdict).toBe("");
-    expect(result.approval.reasons).toEqual([]);
+    expect(result.approval?.verdict).toBe("");
+    expect(result.approval?.reasons).toEqual([]);
   });
 
   it("normalizes displayPrices from the fetched order", async () => {
@@ -2658,6 +2751,7 @@ describe("Orders createOrder submit lifecycle", () => {
       side: "buy",
       amountKind: "quantity",
       amountValue: "100",
+      leavesQuantity: "100",
       price: "0",
       status: "submitted",
     });

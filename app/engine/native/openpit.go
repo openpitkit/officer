@@ -29,6 +29,7 @@ import (
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pkg/optional"
+	"go.openpit.dev/openpit/pretrade"
 	"go.openpit.dev/openpit/pretrade/policies"
 	"go.openpit.dev/openpit/reject"
 
@@ -733,9 +734,9 @@ func (l accountLane) SubmitOrder(ctx context.Context, o domain.Order) (OrderResu
 		return OrderResult{}, err
 	}
 
-	reservation, rejects, err := l.eng.ExecutePreTrade(order)
+	reservation, rejects, err := l.executePreTrade(order, o.DropCopy)
 	if err != nil {
-		return OrderResult{}, fmt.Errorf("engine: execute pre-trade: %w", err)
+		return OrderResult{}, wrapPreTradeError(o, err)
 	}
 	if rejects != nil {
 		return OrderResult{Accepted: false, Rejects: orderRejectsFrom(rejects)}, nil
@@ -746,6 +747,9 @@ func (l accountLane) SubmitOrder(ctx context.Context, o domain.Order) (OrderResu
 		reservation.RollbackAndClose()
 		return OrderResult{}, err
 	}
+	// Drop-copy bypasses risk enforcement, not missing order data. A volume
+	// order without any settlement price has no base quantity Officer can
+	// persist or later reconcile, so it remains an invalid materialization.
 	if reject, ok := volumeOrderSizingReject(o, settlement); ok {
 		reservation.RollbackAndClose()
 		return OrderResult{
@@ -765,15 +769,40 @@ func (l accountLane) SubmitOrder(ctx context.Context, o domain.Order) (OrderResu
 		reservation.RollbackAndClose()
 		return OrderResult{}, err
 	}
+	// The pre-trade pipeline latches at most one winning account block per
+	// reservation; Officer mirrors it as a list to match the post-trade shape.
+	var latched []reject.AccountBlock
+	if block := reservation.AccountBlock(); block != nil {
+		latched = append(latched, *block)
+	}
+	blocks := executionBlocksFrom(latched, o.Account)
 	reservation.CommitAndClose()
 	return OrderResult{
 		Accepted:            true,
 		Lock:                lockBytes,
+		Blocks:              blocks,
 		Outcomes:            outcomes,
 		SettlementLockPrice: settlement,
 		LeavesQuantity:      leaves,
 		EstimateSource:      source,
 	}, nil
+}
+
+func (l accountLane) executePreTrade(
+	order model.Order, dropCopy bool,
+) (*pretrade.Reservation, []reject.Reject, error) {
+	if dropCopy {
+		reservation, err := l.eng.ExecutePreTradeDropCopy(order)
+		return reservation, nil, err
+	}
+	return l.eng.ExecutePreTrade(order)
+}
+
+func wrapPreTradeError(o domain.Order, err error) error {
+	if o.DropCopy && o.Price == "" {
+		return fmt.Errorf("engine: execute pre-trade: %w: %w", err, domain.ErrInvalid)
+	}
+	return fmt.Errorf("engine: execute pre-trade: %w", err)
 }
 
 func (e *openPitEngine) RunAccountSynchronized(

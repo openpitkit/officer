@@ -26,6 +26,7 @@ package native
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -579,6 +580,45 @@ func TestSubmitImmediate_NetsHeldToZero(t *testing.T) {
 			res.AccountPnl,
 			res.AccountPnlHaltReason,
 		)
+	}
+}
+
+func TestSubmitImmediate_DropCopySettlesWhileAccountIsBlocked(t *testing.T) {
+	acct := blockedAccount(testAccount, "account block")
+	acct.Currency = testQuote
+	eng, err := BuildOpenPitEngine("", Snapshot{Accounts: []domain.Account{acct}})
+	if err != nil {
+		t.Fatalf("BuildOpenPitEngine: %v", err)
+	}
+	e := eng.(*openPitEngine)
+	t.Cleanup(e.Stop)
+
+	order := testOrder()
+	order.DropCopy = true
+	result, err := e.SubmitImmediate(context.Background(), order)
+	if err != nil {
+		t.Fatalf("SubmitImmediate(drop copy): %v", err)
+	}
+	if !result.Accepted || len(result.Rejects) != 0 {
+		t.Fatalf("drop-copy immediate result = %+v, want accepted", result)
+	}
+	if result.FillQuantity != testQty {
+		t.Fatalf("fill quantity = %q, want %q", result.FillQuantity, testQty)
+	}
+}
+
+func TestSubmitOrder_DropCopyMarketOrderPropagatesNativeInputError(t *testing.T) {
+	e := newTestEngine(t)
+	order := testOrder()
+	order.DropCopy = true
+	order.Price = ""
+
+	_, err := e.SubmitOrder(context.Background(), order)
+	if err == nil {
+		t.Fatal("SubmitOrder(drop-copy market): want admission error")
+	}
+	if !strings.Contains(err.Error(), "limit price") {
+		t.Fatalf("SubmitOrder(drop-copy market) error = %v", err)
 	}
 }
 
@@ -1335,10 +1375,114 @@ func TestSubmitOrder_AcceptCapturesSettlement(t *testing.T) {
 	}
 }
 
-func TestSubmitOrder_VolumeCapturesCanonicalBaseLeaves(t *testing.T) {
+func TestSubmitOrder_DropCopyIgnoresBlocksAndKeepsNegativeAvailable(t *testing.T) {
+	acct := blockedAccount(testAccount, "account block")
+	acct.Currency = testQuote
+	acct.GroupCode = "desk-a"
+	eng, err := BuildOpenPitEngine("", Snapshot{
+		Accounts: []domain.Account{acct},
+		Groups: []domain.AccountGroup{{
+			Code: "desk-a", EngineGroupID: 7,
+			Blocked: true, BlockReason: "group block",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("BuildOpenPitEngine: %v", err)
+	}
+	e := eng.(*openPitEngine)
+	t.Cleanup(e.Stop)
+
+	order := testOrder()
+	order.DropCopy = true
+	result, err := e.SubmitOrder(context.Background(), order)
+	if err != nil {
+		t.Fatalf("SubmitOrder(drop copy): %v", err)
+	}
+	if !result.Accepted || len(result.Rejects) != 0 {
+		t.Fatalf("drop-copy result = %+v, want accepted without rejects", result)
+	}
+	var quote *domain.AdjustmentOutcomeAccepted
+	for i := range result.Outcomes {
+		if result.Outcomes[i].Asset == testQuote {
+			quote = &result.Outcomes[i].Outcome
+			break
+		}
+	}
+	if quote == nil {
+		t.Fatalf("quote outcome missing: %+v", result.Outcomes)
+	}
+	if quote.BalanceResult != "-500" || quote.HeldResult != "500" {
+		t.Fatalf(
+			"quote outcome = %+v, want available -500 and held 500",
+			quote,
+		)
+	}
+
+	ordinary := testOrder()
+	ordinaryResult, err := e.SubmitOrder(context.Background(), ordinary)
+	if err != nil {
+		t.Fatalf("SubmitOrder(ordinary): %v", err)
+	}
+	if ordinaryResult.Accepted || len(ordinaryResult.Rejects) == 0 {
+		t.Fatalf("ordinary blocked order = %+v, want reject", ordinaryResult)
+	}
+}
+
+// A drop-copy order never reports policy rejects, but an account block a
+// policy derives while it runs must still reach the caller so Officer can
+// mirror it. The halted PnL state already latches the block when it is set, so
+// this pins the surfacing, not the moment of latching.
+func TestSubmitOrder_DropCopySurfacesHaltedPnlAccountBlock(t *testing.T) {
+	// A PnL barrier must be configured for a halted PnL state to matter.
+	e := newTestEngineWithSpotFundsPnlBounds(t)
+	ctx := context.Background()
+	var setupBlocks []domain.AccountBlock
+	if err := e.RunAccountSynchronized(
+		ctx, testAccount, func(lane engine.AccountLane) error {
+			var err error
+			setupBlocks, err = lane.SetAccountPnlState(
+				ctx, testAccount, "", domain.PnlHaltReasonMissingFx,
+			)
+			return err
+		},
+	); err != nil {
+		t.Fatalf("SetAccountPnlState: %v", err)
+	}
+	// Recorded precondition: the halt assignment itself latches the block, so
+	// the block seen below cannot be attributed to the drop-copy order alone.
+	if len(setupBlocks) != 1 {
+		t.Fatalf("setup blocks = %+v, want exactly one", setupBlocks)
+	}
+
+	order := testOrder()
+	order.DropCopy = true
+	result, err := e.SubmitOrder(ctx, order)
+	if err != nil {
+		t.Fatalf("SubmitOrder(drop copy): %v", err)
+	}
+	if !result.Accepted || len(result.Rejects) != 0 {
+		t.Fatalf("drop-copy result = %+v, want accepted without rejects", result)
+	}
+	if len(result.Blocks) != 1 {
+		t.Fatalf("drop-copy blocks = %+v, want exactly one", result.Blocks)
+	}
+	block := result.Blocks[0]
+	if block.Account != domain.AccountID(testAccount) {
+		t.Fatalf("block account = %q, want %q", block.Account, testAccount)
+	}
+	if block.Code != "account_blocked" {
+		t.Fatalf("block code = %q, want account_blocked", block.Code)
+	}
+	if block.Policy == "" || block.Reason == "" {
+		t.Fatalf("block = %+v, want policy and reason", block)
+	}
+}
+
+func TestSubmitOrder_DropCopyVolumeCapturesCanonicalBaseLeaves(t *testing.T) {
 	e := newTestEngine(t)
 	ctx := context.Background()
 	order := testOrder()
+	order.DropCopy = true
 	order.AmountKind = domain.OrderAmountKindVolume
 	order.AmountValue = "500.00"
 

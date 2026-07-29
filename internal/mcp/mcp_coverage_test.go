@@ -153,6 +153,12 @@ func (s *setMDErrSource) SubmitOrderToken(
 	return SubmitOrderTokenResult{}, nil
 }
 
+func (s *setMDErrSource) SubmitDropCopyOrder(
+	context.Context, domain.Order,
+) (SubmitDropCopyOrderResult, error) {
+	return SubmitDropCopyOrderResult{}, nil
+}
+
 func (s *setMDErrSource) ConfirmExecution(
 	context.Context, string, string,
 ) (domain.Order, Attestation, error) {
