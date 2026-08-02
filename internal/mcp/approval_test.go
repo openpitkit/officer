@@ -55,8 +55,9 @@ type approvalFakeSource struct {
 }
 
 type submitCall struct {
-	order domain.Order
-	mode  string
+	order   domain.Order
+	mode    string
+	missing domain.MissingAccountPolicy
 }
 
 type confirmCall struct {
@@ -72,17 +73,20 @@ type cancelCallRecord struct {
 
 func (f *approvalFakeSource) SubmitOrderToken(
 	_ context.Context, o domain.Order, mode string,
+	missing domain.MissingAccountPolicy,
 ) (SubmitOrderTokenResult, error) {
-	f.submitCalls = append(f.submitCalls, submitCall{order: o, mode: mode})
+	f.submitCalls = append(f.submitCalls, submitCall{
+		order: o, mode: mode, missing: missing,
+	})
 	return f.submitResult, f.submitErr
 }
 
 func (f *approvalFakeSource) SubmitDropCopyOrder(
-	ctx context.Context, o domain.Order,
+	ctx context.Context, o domain.Order, missing domain.MissingAccountPolicy,
 ) (SubmitDropCopyOrderResult, error) {
 	f.dropCopyCalls++
 	f.dropCopyCaller = auth.CallerFromContext(ctx)
-	f.submitCalls = append(f.submitCalls, submitCall{order: o})
+	f.submitCalls = append(f.submitCalls, submitCall{order: o, missing: missing})
 	return f.dropCopyResult, f.submitErr
 }
 
@@ -174,6 +178,7 @@ func TestSubmitOrderGateMutating(t *testing.T) {
 	res := callSubmitOrder(t, src, submitOrderInput{
 		Account: "acc1", BaseAsset: "BTC", QuoteAsset: "USD",
 		Side: "buy", AmountKind: "quantity", AmountValue: "1",
+		MissingAccount: "create",
 	})
 
 	if res.IsError {
@@ -193,6 +198,7 @@ func TestSubmitOrderGateMutatingAccessError(t *testing.T) {
 	res := callSubmitOrder(t, src, submitOrderInput{
 		Account: "acc1", BaseAsset: "BTC", QuoteAsset: "USD",
 		Side: "buy", AmountKind: "quantity", AmountValue: "1",
+		MissingAccount: "create",
 	})
 
 	if !res.IsError {
@@ -273,14 +279,15 @@ func TestSubmitOrderHappyPath(t *testing.T) {
 	}
 
 	res := callSubmitOrder(t, src, submitOrderInput{
-		Account:     "acc1",
-		BaseAsset:   "BTC",
-		QuoteAsset:  "USD",
-		Side:        "buy",
-		AmountKind:  "quantity",
-		AmountValue: "0.5",
-		Price:       "50000",
-		Mode:        "hold",
+		Account:        "acc1",
+		BaseAsset:      "BTC",
+		QuoteAsset:     "USD",
+		Side:           "buy",
+		AmountKind:     "quantity",
+		AmountValue:    "0.5",
+		Price:          "50000",
+		Mode:           "hold",
+		MissingAccount: "create",
 	})
 
 	if res.IsError {
@@ -321,7 +328,8 @@ func TestSubmitDropCopyOrderHappyPath(t *testing.T) {
 	res := callSubmitDropCopyOrder(t, src, submitDropCopyOrderInput{
 		Account: "acc1", BaseAsset: "BTC", QuoteAsset: "USD",
 		Side: "buy", AmountKind: "quantity", AmountValue: "0.5",
-		ExternalID: testOrderEID,
+		ExternalID:     testOrderEID,
+		MissingAccount: "create",
 	})
 	if res.IsError {
 		t.Fatalf("unexpected error: %v", res.Content)
@@ -350,6 +358,7 @@ func TestSubmitDropCopyOrderGeneratesWhenAbsent(t *testing.T) {
 	res := callSubmitDropCopyOrder(t, src, submitDropCopyOrderInput{
 		Account: "acc1", BaseAsset: "BTC", QuoteAsset: "USD",
 		Side: "buy", AmountKind: "quantity", AmountValue: "0.5",
+		MissingAccount: "create",
 	})
 	if res.IsError {
 		t.Fatalf("unexpected error: %v", res.Content)
@@ -373,7 +382,8 @@ func TestSubmitDropCopyOrderDuplicateSuppliedIDConflicts(t *testing.T) {
 	res := callSubmitDropCopyOrder(t, src, submitDropCopyOrderInput{
 		Account: "acc1", BaseAsset: "BTC", QuoteAsset: "USD",
 		Side: "buy", AmountKind: "quantity", AmountValue: "0.5",
-		ExternalID: testOrderEID,
+		ExternalID:     testOrderEID,
+		MissingAccount: "create",
 	})
 	if !res.IsError {
 		t.Fatal("want IsError=true for duplicate id")
@@ -393,6 +403,7 @@ func TestSubmitDropCopyOrderBackendErrorPreservesEngineMessage(t *testing.T) {
 	res := callSubmitDropCopyOrder(t, src, submitDropCopyOrderInput{
 		Account: "acc1", BaseAsset: "BTC", QuoteAsset: "USD",
 		Side: "buy", AmountKind: "quantity", AmountValue: "0.5",
+		MissingAccount: "create",
 	})
 	if !res.IsError {
 		t.Fatal("want IsError=true for a drop-copy admission error")
@@ -420,14 +431,15 @@ func TestSubmitOrderRiskRejectReturnsDecision(t *testing.T) {
 	}
 
 	res := callSubmitOrder(t, src, submitOrderInput{
-		Account:     "acc1",
-		BaseAsset:   "BTC",
-		QuoteAsset:  "USD",
-		Side:        "buy",
-		AmountKind:  "quantity",
-		AmountValue: "0.5",
-		Price:       "50000",
-		Mode:        "hold",
+		Account:        "acc1",
+		BaseAsset:      "BTC",
+		QuoteAsset:     "USD",
+		Side:           "buy",
+		AmountKind:     "quantity",
+		AmountValue:    "0.5",
+		Price:          "50000",
+		Mode:           "hold",
+		MissingAccount: "create",
 	})
 
 	if res.IsError {
@@ -468,6 +480,7 @@ func TestSubmitOrderBackendError(t *testing.T) {
 	res := callSubmitOrder(t, src, submitOrderInput{
 		Account: "acc1", BaseAsset: "BTC", QuoteAsset: "USD",
 		Side: "buy", AmountKind: "quantity", AmountValue: "1",
+		MissingAccount: "create",
 	})
 
 	if !res.IsError {
@@ -484,7 +497,8 @@ func TestSubmitOrderSuppliedExternalID(t *testing.T) {
 	res := callSubmitOrder(t, src, submitOrderInput{
 		Account: "acc1", BaseAsset: "BTC", QuoteAsset: "USD",
 		Side: "buy", AmountKind: "quantity", AmountValue: "1",
-		ExternalID: testOrderEID,
+		MissingAccount: "create",
+		ExternalID:     testOrderEID,
 	})
 	if res.IsError {
 		t.Fatalf("unexpected error: %v", res.Content)
@@ -513,6 +527,7 @@ func TestSubmitOrderGeneratesWhenAbsent(t *testing.T) {
 	res := callSubmitOrder(t, src, submitOrderInput{
 		Account: "acc1", BaseAsset: "BTC", QuoteAsset: "USD",
 		Side: "buy", AmountKind: "quantity", AmountValue: "1",
+		MissingAccount: "create",
 	})
 	if res.IsError {
 		t.Fatalf("unexpected error: %v", res.Content)
@@ -535,7 +550,8 @@ func TestSubmitOrderOpaqueExternalID(t *testing.T) {
 	res := callSubmitOrder(t, src, submitOrderInput{
 		Account: "acc1", BaseAsset: "BTC", QuoteAsset: "USD",
 		Side: "buy", AmountKind: "quantity", AmountValue: "1",
-		ExternalID: supplied,
+		MissingAccount: "create",
+		ExternalID:     supplied,
 	})
 	if res.IsError {
 		t.Fatalf("unexpected error: %v", res.Content)
@@ -552,7 +568,8 @@ func TestSubmitOrderDuplicateConflict(t *testing.T) {
 	res := callSubmitOrder(t, src, submitOrderInput{
 		Account: "acc1", BaseAsset: "BTC", QuoteAsset: "USD",
 		Side: "buy", AmountKind: "quantity", AmountValue: "1",
-		ExternalID: testOrderEID,
+		MissingAccount: "create",
+		ExternalID:     testOrderEID,
 	})
 	if !res.IsError {
 		t.Fatalf("want IsError=true for duplicate id")

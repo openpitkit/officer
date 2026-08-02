@@ -154,7 +154,7 @@ func defaultMCPCatalog() catalog.Catalog {
 		{
 			Name:             "submit_order",
 			Title:            "Submit order",
-			AgentDescription: "Submit an order intent through pre-trade and obtain a signed approval token.",
+			AgentDescription: "Submit an order intent through pre-trade and obtain a signed approval token. The required missingAccount input chooses create or reject for an account that does not exist yet.",
 			Mutating:         true,
 			Protective:       true,
 			Implemented:      true,
@@ -163,7 +163,7 @@ func defaultMCPCatalog() catalog.Catalog {
 		{
 			Name:             "submit_drop_copy_order",
 			Title:            "Submit drop-copy order",
-			AgentDescription: "Submit a drop-copy order through the normal policy pipeline while ignoring policy rejects and existing account or group kill-switch blocks; policies retain normal state changes, id is optional and the store assigns it when omitted, and no lifecycle event is signed.",
+			AgentDescription: "Submit a drop-copy order through the normal policy pipeline while ignoring policy rejects and existing account or group kill-switch blocks; policies retain normal state changes, id is optional and the store assigns it when omitted, and no lifecycle event is signed. The required missingAccount input must be create, because a drop-copy reports an execution that already happened.",
 			Mutating:         true,
 			Protective:       true,
 			Implemented:      true,

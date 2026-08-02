@@ -425,7 +425,7 @@ func TestLocalNode_ApplyExecutionReportUsesOrderAccountOverRouteKey(t *testing.T
 		AmountKind:  domain.OrderAmountKindQuantity,
 		AmountValue: "2",
 		Price:       "100",
-	}, testCaller)
+	}, domain.MissingAccountCreate, testCaller)
 	if err != nil {
 		t.Fatalf("SubmitOrder: %v", err)
 	}

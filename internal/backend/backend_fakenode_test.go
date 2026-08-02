@@ -60,6 +60,10 @@ type fakeNode struct {
 	adjustmentExternalIDs           []domain.ExternalID
 	adjustmentErr                   error
 
+	// missingAccountCalls records the missing-account choice each mutating
+	// command received, so a routing test can assert the parameter is threaded.
+	missingAccountCalls []domain.MissingAccountPolicy
+
 	checkResult domain.CheckResult
 	checkProbes []domain.OrderProbe
 
@@ -460,8 +464,10 @@ func (n *fakeNode) CreateAccount(
 }
 
 func (n *fakeNode) SetAccountBlocked(
-	_ context.Context, key node.Key, blocked bool, reason string, _ domain.Caller,
+	_ context.Context, key node.Key, blocked bool, reason string,
+	missing domain.MissingAccountPolicy, _ domain.Caller,
 ) error {
+	n.missingAccountCalls = append(n.missingAccountCalls, missing)
 	n.blockCalls = append(n.blockCalls, blockCall{key, blocked, reason})
 	return nil
 }
@@ -489,8 +495,10 @@ func (n *fakeNode) ListPolicyRows(
 }
 
 func (n *fakeNode) PutRateLimit(
-	_ context.Context, limit domain.LimitRate, _ domain.Caller,
+	_ context.Context, limit domain.LimitRate,
+	missing domain.MissingAccountPolicy, _ domain.Caller,
 ) (marketdata.Sink, error) {
+	n.missingAccountCalls = append(n.missingAccountCalls, missing)
 	if n.putRateLimitHook != nil {
 		n.putRateLimitHook()
 	}
@@ -499,8 +507,10 @@ func (n *fakeNode) PutRateLimit(
 }
 
 func (n *fakeNode) PutOrderSizeLimit(
-	_ context.Context, limit domain.LimitOrderSize, _ domain.Caller,
+	_ context.Context, limit domain.LimitOrderSize,
+	missing domain.MissingAccountPolicy, _ domain.Caller,
 ) (marketdata.Sink, error) {
+	n.missingAccountCalls = append(n.missingAccountCalls, missing)
 	if n.putOrderSizeLimitHook != nil {
 		n.putOrderSizeLimitHook()
 	}
@@ -509,8 +519,10 @@ func (n *fakeNode) PutOrderSizeLimit(
 }
 
 func (n *fakeNode) PutSpotFundsPnlBoundsLimit(
-	_ context.Context, limit domain.LimitSpotFundsPnlBounds, _ domain.Caller,
+	_ context.Context, limit domain.LimitSpotFundsPnlBounds,
+	missing domain.MissingAccountPolicy, _ domain.Caller,
 ) (marketdata.Sink, error) {
+	n.missingAccountCalls = append(n.missingAccountCalls, missing)
 	n.putSpotFundsPnlBoundsLimitCalls = append(
 		n.putSpotFundsPnlBoundsLimitCalls,
 		limit,
@@ -526,8 +538,10 @@ func (n *fakeNode) DeleteLimit(
 }
 
 func (n *fakeNode) SetAccountGroup(
-	context.Context, node.Key, string, domain.Caller,
+	_ context.Context, _ node.Key, _ string,
+	missing domain.MissingAccountPolicy, _ domain.Caller,
 ) error {
+	n.missingAccountCalls = append(n.missingAccountCalls, missing)
 	return nil
 }
 
@@ -645,8 +659,10 @@ func (n *fakeNode) ApplyBusinessCSVImport(
 
 func (n *fakeNode) ApplyAdjustment(
 	_ context.Context, key node.Key, externalID domain.ExternalID,
-	req domain.AdjustmentRequest, caller domain.Caller,
+	req domain.AdjustmentRequest, missing domain.MissingAccountPolicy,
+	caller domain.Caller,
 ) (domain.AccountAdjustmentRecord, error) {
+	n.missingAccountCalls = append(n.missingAccountCalls, missing)
 	n.adjustmentExternalIDs = append(n.adjustmentExternalIDs, externalID)
 	if n.adjustmentErr != nil {
 		return domain.AccountAdjustmentRecord{}, n.adjustmentErr
@@ -668,8 +684,9 @@ func (n *fakeNode) ApplyAdjustment(
 
 func (n *fakeNode) SetBalanceRealizedPnl(
 	_ context.Context, key node.Key, asset string, realizedPnl string,
-	_ domain.Caller,
+	missing domain.MissingAccountPolicy, _ domain.Caller,
 ) (domain.Balance, error) {
+	n.missingAccountCalls = append(n.missingAccountCalls, missing)
 	return domain.Balance{
 		Account:     key.Account,
 		Asset:       asset,
@@ -743,8 +760,10 @@ func (n *fakeNode) recordRejected(order domain.Order, rejects []domain.OrderReje
 }
 
 func (n *fakeNode) SubmitOrder(
-	_ context.Context, key node.Key, o domain.Order, caller domain.Caller,
+	_ context.Context, key node.Key, o domain.Order,
+	missing domain.MissingAccountPolicy, caller domain.Caller,
 ) (domain.Order, error) {
+	n.missingAccountCalls = append(n.missingAccountCalls, missing)
 	if n.submitErr != nil {
 		return domain.Order{}, n.submitErr
 	}
@@ -782,12 +801,13 @@ func (n *fakeNode) SubmitOrderWithAttestation(
 	ctx context.Context,
 	key node.Key,
 	o domain.Order,
+	missing domain.MissingAccountPolicy,
 	caller domain.Caller,
 	attestFor func(domain.Order, engine.OrderResult) store.EventAttestor,
 ) (domain.Order, engine.OrderResult, error) {
 	snapshot := n.snapshotOrderTxn()
 	before := len(n.orderEvents[o.ExternalID])
-	order, err := n.SubmitOrder(ctx, key, o, caller)
+	order, err := n.SubmitOrder(ctx, key, o, missing, caller)
 	if err != nil {
 		return domain.Order{}, engine.OrderResult{}, err
 	}
@@ -815,8 +835,10 @@ func (n *fakeNode) SubmitOrderWithAttestation(
 }
 
 func (n *fakeNode) SubmitImmediate(
-	_ context.Context, key node.Key, o domain.Order, _ domain.Caller,
+	_ context.Context, key node.Key, o domain.Order,
+	missing domain.MissingAccountPolicy, _ domain.Caller,
 ) (domain.Order, engine.ImmediateResult, error) {
+	n.missingAccountCalls = append(n.missingAccountCalls, missing)
 	if n.submitErr != nil {
 		return domain.Order{}, engine.ImmediateResult{}, n.submitErr
 	}
@@ -850,12 +872,13 @@ func (n *fakeNode) SubmitImmediateWithAttestation(
 	ctx context.Context,
 	key node.Key,
 	o domain.Order,
+	missing domain.MissingAccountPolicy,
 	caller domain.Caller,
 	attestFor func(domain.Order, engine.ImmediateResult) store.EventAttestor,
 ) (domain.Order, engine.ImmediateResult, error) {
 	snapshot := n.snapshotOrderTxn()
 	before := len(n.orderEvents[o.ExternalID])
-	order, result, err := n.SubmitImmediate(ctx, key, o, caller)
+	order, result, err := n.SubmitImmediate(ctx, key, o, missing, caller)
 	if err != nil {
 		return domain.Order{}, engine.ImmediateResult{}, err
 	}

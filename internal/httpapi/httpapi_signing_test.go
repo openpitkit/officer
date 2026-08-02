@@ -325,7 +325,7 @@ func TestSubmitOrderToken_HappyPath(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec,
-		httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit", bytes.NewReader(body)))
+		httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit?missingAccount=create", bytes.NewReader(body)))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("want 201, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -394,7 +394,7 @@ func TestSubmitOrderToken_RiskRejectReturnsSignedDecision(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec,
-		httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit", bytes.NewReader(body)))
+		httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit?missingAccount=create", bytes.NewReader(body)))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("want 201, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -433,7 +433,7 @@ func TestSubmitOrderToken_GeneratesWhenAbsent(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec,
-		httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit", bytes.NewReader(body)))
+		httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit?missingAccount=create", bytes.NewReader(body)))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("want 201, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -467,7 +467,7 @@ func TestSubmitOrderToken_DuplicateConflict(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec,
-		httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit", bytes.NewReader(body)))
+		httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit?missingAccount=create", bytes.NewReader(body)))
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("want 409, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -499,7 +499,7 @@ func TestSubmitOrderToken_OpaqueID(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec,
-		httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit", bytes.NewReader(body)))
+		httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit?missingAccount=create", bytes.NewReader(body)))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("want 201, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -519,7 +519,7 @@ func TestSubmitOrderToken_BadMode(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec,
-		httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit", bytes.NewReader(body)))
+		httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit?missingAccount=create", bytes.NewReader(body)))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}

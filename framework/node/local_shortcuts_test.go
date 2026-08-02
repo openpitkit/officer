@@ -77,7 +77,7 @@ func submitShortcutOrder(
 		AmountKind:  domain.OrderAmountKindQuantity,
 		AmountValue: "20",
 		Price:       "100",
-	}, testCaller)
+	}, domain.MissingAccountCreate, testCaller)
 	if err != nil {
 		t.Fatalf("SubmitOrder: %v", err)
 	}

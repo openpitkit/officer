@@ -135,10 +135,21 @@ func (e *liveIdentityReconcileError) Error() string { return e.cause.Error() }
 func (e *liveIdentityReconcileError) Unwrap() error { return e.cause }
 
 // SetAccountBlocked blocks or unblocks the account in the store, then the
-// engine, reverting the store on engine failure, and audits the action.
+// engine, reverting the store on engine failure, and audits the action. missing
+// decides whether a kill-switch aimed at an account Officer does not know yet
+// registers it first or is rejected.
 func (n *localNode) SetAccountBlocked(
-	ctx context.Context, key Key, blocked bool, reason string, caller domain.Caller,
+	ctx context.Context, key Key, blocked bool, reason string,
+	missing domain.MissingAccountPolicy, caller domain.Caller,
 ) error {
+	// Resolve the account before entering the lane: the exclusive helper takes
+	// the identity gate itself, which the lane's read lock would deadlock against,
+	// and a created account must be published before the lane resolves it.
+	if err := n.ensureAccountAndAssetsRegisteredExclusive(
+		ctx, key.Account, missing, blockOperation(blocked), caller,
+	); err != nil {
+		return err
+	}
 	eng, done, err := n.beginLane()
 	if err != nil {
 		return err
@@ -147,6 +158,8 @@ func (n *localNode) SetAccountBlocked(
 	runErr := func() error {
 		// The engine resolves the account before entering the lane and rejects an
 		// unknown code with ErrInvalid, so surface ErrNotFound before submission.
+		// Only a delete racing this call can reach it: the account was resolved
+		// above.
 		if _, ok, err := n.realm.GetAccount(ctx, key.Account); err != nil {
 			return fmt.Errorf("read account for block: %w", err)
 		} else if !ok {
@@ -236,6 +249,15 @@ func (n *localNode) SetAccountBlocked(
 		"reconcile engine after account block failure",
 		reconcileErr.cause,
 	)
+}
+
+// blockOperation names the triggering operation recorded on an account created
+// by a kill-switch request.
+func blockOperation(blocked bool) string {
+	if blocked {
+		return "block account"
+	}
+	return "unblock account"
 }
 
 // applyBlock applies the desired blocked state to the engine.
@@ -386,19 +408,24 @@ func (n *localNode) GetAccountState(
 //
 // A brand-new target group is persisted and published into the live resolver
 // under the identity gate. The account move itself still runs through the
-// account lane and the concrete old/new group lanes.
+// account lane and the concrete old/new group lanes. missing decides whether an
+// account Officer does not know yet is registered before the move or rejected.
 func (n *localNode) SetAccountGroup(
-	ctx context.Context, key Key, groupCode string, caller domain.Caller,
+	ctx context.Context, key Key, groupCode string,
+	missing domain.MissingAccountPolicy, caller domain.Caller,
 ) error {
 	if err := n.beginLiveIdentityPublication(); err != nil {
 		return err
 	}
 	defer n.endLiveIdentityPublication()
 
-	if _, ok, err := n.realm.GetAccount(ctx, key.Account); err != nil {
-		return fmt.Errorf("read account for set group: %w", err)
-	} else if !ok {
-		return fmt.Errorf("account %q: %w", key.Account, domain.ErrNotFound)
+	// The identity gate is already held, so the account is resolved through the
+	// non-acquiring helper; ensureAccountAndAssetsRegisteredExclusive would
+	// deadlock re-entering the same gate.
+	if err := n.ensureAccount(
+		ctx, key.Account, missing, "set account group", caller,
+	); err != nil {
+		return err
 	}
 	eng := n.currentEngine()
 	resolver, err := requireDictionaryResolver(eng)

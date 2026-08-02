@@ -51,6 +51,7 @@ export {
   type ExecutionReportBody,
   type GlobalAdjustmentsFilter,
   type MarketDataSymbolSearchInput,
+  type MissingAccountPolicy,
   type OfficerApi,
   type TradesFilter,
 } from "./api/officerApi";

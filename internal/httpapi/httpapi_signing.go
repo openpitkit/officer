@@ -187,7 +187,8 @@ func handleSetSigningConfig(svc Service) http.HandlerFunc {
 
 // --- approval token ---------------------------------------------------------
 
-// handleSubmitOrderToken handles POST /api/v1/orders/submit. The body carries
+// handleSubmitOrderToken handles
+// POST /api/v1/orders/submit?missingAccount=create|reject. The body carries
 // the order fields, an optional caller-supplied external id, and the submit mode
 // (hold | immediate). The hold wire value is retained for compatibility and
 // selects the workflow path that waits for execution reports. Submit CREATES
@@ -216,7 +217,12 @@ func handleSubmitOrderToken(svc Service) http.HandlerFunc {
 			httpx.WriteErr(w, err)
 			return
 		}
-		tok, err := svc.SubmitOrderToken(r.Context(), order, mode)
+		missing, err := missingAccountQuery(r, order.Account)
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		tok, err := svc.SubmitOrderToken(r.Context(), order, mode, missing)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
@@ -231,10 +237,11 @@ func handleSubmitOrderToken(svc Service) http.HandlerFunc {
 	}
 }
 
-// handleSubmitDropCopyOrder handles the distinct unsigned drop-copy submit.
-// Its external id is optional; when omitted, the store assigns one. Duplicate
-// ids follow the ordinary unique-store conflict path; no approval token is
-// produced.
+// handleSubmitDropCopyOrder handles the distinct unsigned drop-copy submit at
+// POST /api/v1/orders/drop-copy/submit?missingAccount=create. Its external id is
+// optional; when omitted, the store assigns one. Duplicate ids follow the
+// ordinary unique-store conflict path; no approval token is produced. Only
+// missingAccount=create is accepted here (see the backend).
 func handleSubmitDropCopyOrder(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req submitDropCopyOrderRequestDTO
@@ -247,7 +254,12 @@ func handleSubmitDropCopyOrder(svc Service) http.HandlerFunc {
 			httpx.WriteErr(w, err)
 			return
 		}
-		created, err := svc.SubmitDropCopyOrder(r.Context(), order)
+		missing, err := missingAccountQuery(r, order.Account)
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		created, err := svc.SubmitDropCopyOrder(r.Context(), order, missing)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return

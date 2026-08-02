@@ -668,6 +668,7 @@ func TestSubmitImmediate_SellCarriesReservationBaseBalance(t *testing.T) {
 				Value: "1000000",
 			},
 		},
+		domain.MissingAccountCreate,
 		caller,
 	); err != nil {
 		t.Fatalf("ApplyAdjustment: %v", err)
@@ -682,14 +683,14 @@ func TestSubmitImmediate_SellCarriesReservationBaseBalance(t *testing.T) {
 		AmountValue: "1",
 		Price:       "73406.8115",
 	}
-	if _, result, err := n.SubmitImmediate(ctx, node.Key{Account: accountID}, buy, caller); err != nil || !result.Accepted {
+	if _, result, err := n.SubmitImmediate(ctx, node.Key{Account: accountID}, buy, domain.MissingAccountCreate, caller); err != nil || !result.Accepted {
 		t.Fatalf("buy SubmitImmediate: %v result=%+v", err, result)
 	}
 
 	sell := buy
 	sell.Side = domain.OrderSideSell
 	sell.Price = "54268.522"
-	_, result, err := n.SubmitImmediate(ctx, node.Key{Account: accountID}, sell, caller)
+	_, result, err := n.SubmitImmediate(ctx, node.Key{Account: accountID}, sell, domain.MissingAccountCreate, caller)
 	if err != nil || !result.Accepted {
 		t.Fatalf("sell SubmitImmediate: %v result=%+v", err, result)
 	}

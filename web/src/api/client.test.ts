@@ -342,6 +342,33 @@ describe("accounts and groups client", () => {
       title: "",
     });
   });
+
+  it("appends missingAccount when blocking, unblocking, and grouping an account", async () => {
+    // A fresh Response per call: Response bodies are one-shot streams, and a
+    // single shared mockResolvedValue would fail res.json() on the 2nd/3rd call.
+    vi.mocked(fetch).mockImplementation(async () =>
+      jsonResponse({ account: { code: "acc-1" } }),
+    );
+
+    const client = api();
+    await client.blockAccount("acc-1", "risk breach", "reject");
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/accounts/acc-1/block?missingAccount=reject",
+      expect.objectContaining({ method: "POST" }),
+    );
+
+    await client.unblockAccount("acc-1", "reject");
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/accounts/acc-1/unblock?missingAccount=reject",
+      expect.objectContaining({ method: "POST" }),
+    );
+
+    await client.setAccountGroup("acc-1", "desk-a", "create");
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/accounts/acc-1/group?missingAccount=create",
+      expect.objectContaining({ method: "PUT" }),
+    );
+  });
 });
 
 describe("assets client", () => {
@@ -457,13 +484,17 @@ describe("balances client", () => {
       }),
     );
 
-    const result = await api().setBalanceRealizedPnl("desk-alpha", {
-      asset: "USD",
-      realizedPnl: "-12.50",
-    });
+    const result = await api().setBalanceRealizedPnl(
+      "desk-alpha",
+      {
+        asset: "USD",
+        realizedPnl: "-12.50",
+      },
+      "reject",
+    );
 
     expect(fetch).toHaveBeenCalledWith(
-      "/app/api/v1/accounts/desk-alpha/balances/realized-pnl",
+      "/app/api/v1/accounts/desk-alpha/balances/realized-pnl?missingAccount=reject",
       expect.objectContaining({
         method: "PUT",
         body: JSON.stringify({
@@ -897,16 +928,19 @@ describe("limits client", () => {
     );
 
     const { putLimit } = api();
-    const limit = await putLimit({
-      policy: "rate_limit",
-      scope: "account",
-      account: "desk-alpha",
-      asset: "",
-      values: { max_orders: "20", window: "1m" },
-    });
+    const limit = await putLimit(
+      {
+        policy: "rate_limit",
+        scope: "account",
+        account: "desk-alpha",
+        asset: "",
+        values: { max_orders: "20", window: "1m" },
+      },
+      "reject",
+    );
 
     expect(fetch).toHaveBeenCalledWith(
-      "/app/api/v1/limits/rate",
+      "/app/api/v1/limits/rate?missingAccount=reject",
       expect.objectContaining({
         method: "PUT",
         body: JSON.stringify({
@@ -921,17 +955,114 @@ describe("limits client", () => {
     expect(limit.values.window).toBe("1m");
   });
 
-  it("rejects invalid max_orders before sending rate limits", async () => {
-    const { putLimit } = api();
+  it("resends the rate limit with missingAccount=create after account creation is confirmed", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        rateLimit: {
+          scope: "account",
+          account: "desk-alpha",
+          asset: "",
+          windowMs: 60000,
+          maxOrders: 20,
+        },
+      }),
+    );
 
-    await expect(
-      putLimit({
+    const { putLimit } = api();
+    await putLimit(
+      {
         policy: "rate_limit",
         scope: "account",
         account: "desk-alpha",
         asset: "",
-        values: { max_orders: "", window: "1m" },
+        values: { max_orders: "20", window: "1m" },
+      },
+      "create",
+    );
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/limits/rate?missingAccount=create",
+      expect.any(Object),
+    );
+  });
+
+  it("omits missingAccount for a limit scope without an account axis", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        orderSizeLimit: {
+          scope: "asset",
+          account: "",
+          asset: "AAPL",
+          maxQuantity: "10",
+          maxNotional: "1500",
+        },
       }),
+    );
+
+    const { putLimit } = api();
+    await putLimit(
+      {
+        policy: "order_size_limit",
+        scope: "asset",
+        account: "",
+        asset: "AAPL",
+        values: { max_quantity: "10", max_notional: "1500" },
+      },
+      "reject",
+    );
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/limits/order-size",
+      expect.any(Object),
+    );
+  });
+
+  it("omits missingAccount for a self-computed PnL bound scoped to an account group", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse({
+        spotFundsPnlBoundsLimit: {
+          scope: "account_group",
+          account: "",
+          accountGroup: "desk-alpha",
+          lowerBound: "-1000",
+          upperBound: "",
+        },
+      }),
+    );
+
+    const { putLimit } = api();
+    await putLimit(
+      {
+        policy: "spot_funds_pnl_bounds_kill_switch",
+        scope: "account_group",
+        account: "",
+        accountGroup: "desk-alpha",
+        asset: "",
+        values: { lower_bound: "-1000", upper_bound: "" },
+      },
+      "reject",
+    );
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/limits/spot-funds-pnl-bounds",
+      expect.any(Object),
+    );
+  });
+
+  it("rejects invalid max_orders before sending rate limits", async () => {
+    const { putLimit } = api();
+
+    await expect(
+      putLimit(
+        {
+          policy: "rate_limit",
+          scope: "account",
+          account: "desk-alpha",
+          asset: "",
+          values: { max_orders: "", window: "1m" },
+        },
+        "reject",
+      ),
     ).rejects.toThrow("rate limit max_orders must be an integer greater than 0");
     expect(fetch).not.toHaveBeenCalled();
   });
@@ -949,19 +1080,22 @@ describe("limits client", () => {
     );
 
     const { putLimit } = api();
-    const limit = await putLimit({
-      policy: "spot_funds_pnl_bounds_kill_switch",
-      scope: "account",
-      account: "desk-alpha",
-      asset: "",
-      values: {
-        lower_bound: "-1000",
-        upper_bound: "500",
+    const limit = await putLimit(
+      {
+        policy: "spot_funds_pnl_bounds_kill_switch",
+        scope: "account",
+        account: "desk-alpha",
+        asset: "",
+        values: {
+          lower_bound: "-1000",
+          upper_bound: "500",
+        },
       },
-    });
+      "reject",
+    );
 
     expect(fetch).toHaveBeenCalledWith(
-      "/app/api/v1/limits/spot-funds-pnl-bounds",
+      "/app/api/v1/limits/spot-funds-pnl-bounds?missingAccount=reject",
       expect.objectContaining({
         method: "PUT",
         body: JSON.stringify({
@@ -1187,13 +1321,52 @@ describe("append-only list clients", () => {
   it("returns null when an adjustment produces no engine-side change", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(new Response(null, { status: 204 }));
 
-    const result = await api().createAdjustment("desk-alpha", { asset: "USD" });
+    const result = await api().createAdjustment(
+      "desk-alpha",
+      { asset: "USD" },
+      "reject",
+    );
 
     expect(result).toBeNull();
     expect(fetch).toHaveBeenCalledWith(
-      "/app/api/v1/accounts/desk-alpha/adjustments",
+      "/app/api/v1/accounts/desk-alpha/adjustments?missingAccount=reject",
       expect.objectContaining({ method: "POST" }),
     );
+  });
+
+  it("resends an adjustment with missingAccount=create after account creation is confirmed", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    await api().createAdjustment("desk-alpha", { asset: "USD" }, "create");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/app/api/v1/accounts/desk-alpha/adjustments?missingAccount=create",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("parses an account_missing 404 into a typed ApiError carrying the account code", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: "account_missing",
+            message: 'block account: account "acc-1" does not exist',
+            account: "acc-1",
+          },
+        }),
+        { status: 404, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    await expect(
+      api().createAdjustment("acc-1", { asset: "USD" }, "reject"),
+    ).rejects.toMatchObject({
+      name: "ApiError",
+      code: "account_missing",
+      account: "acc-1",
+      status: 404,
+    });
   });
 });
 
@@ -2416,14 +2589,17 @@ describe("Orders createOrder submit lifecycle", () => {
       .mockResolvedValueOnce(approvalResponse())
       .mockResolvedValueOnce(orderResponse());
     const { createOrder } = api();
-    const result = await createOrder({
-      account: "desk-alpha",
-      baseAsset: "AAPL",
-      quoteAsset: "USD",
-      side: "buy",
-      amountKind: "quantity",
-      amountValue: "100",
-    });
+    const result = await createOrder(
+      {
+        account: "desk-alpha",
+        baseAsset: "AAPL",
+        quoteAsset: "USD",
+        side: "buy",
+        amountKind: "quantity",
+        amountValue: "100",
+      },
+      "reject",
+    );
     expect(result.approval).toMatchObject({
       token: "approval-token",
       keyId: "key-1",
@@ -2433,7 +2609,7 @@ describe("Orders createOrder submit lifecycle", () => {
     });
     expect(fetch).toHaveBeenNthCalledWith(
       1,
-      "/app/api/v1/orders/submit",
+      "/app/api/v1/orders/submit?missingAccount=reject",
       expect.objectContaining({
         body: JSON.stringify({
           account: "desk-alpha",
@@ -2466,21 +2642,24 @@ describe("Orders createOrder submit lifecycle", () => {
       .mockResolvedValueOnce(orderResponse("ord_drop_copy_000001", true));
     const { createOrder } = api();
 
-    const result = await createOrder({
-      account: "desk-alpha",
-      baseAsset: "AAPL",
-      quoteAsset: "USD",
-      side: "buy",
-      amountKind: "quantity",
-      amountValue: "100",
-      id: "ord_drop_copy_000001",
-      mode: "drop_copy",
-    });
+    const result = await createOrder(
+      {
+        account: "desk-alpha",
+        baseAsset: "AAPL",
+        quoteAsset: "USD",
+        side: "buy",
+        amountKind: "quantity",
+        amountValue: "100",
+        id: "ord_drop_copy_000001",
+        mode: "drop_copy",
+      },
+      "create",
+    );
 
     expect(result.order.dropCopy).toBe(true);
     expect(fetch).toHaveBeenNthCalledWith(
       1,
-      "/app/api/v1/orders/drop-copy/submit",
+      "/app/api/v1/orders/drop-copy/submit?missingAccount=create",
       expect.objectContaining({
         body: JSON.stringify({
           account: "desk-alpha",
@@ -2515,17 +2694,20 @@ describe("Orders createOrder submit lifecycle", () => {
       );
     const { createOrder } = api();
 
-    const result = await createOrder({
-      account: "desk-alpha",
-      baseAsset: "AAPL",
-      quoteAsset: "USD",
-      side: "buy",
-      amountKind: "quantity",
-      amountValue: "100",
-      price: "10",
-      id: "ord_drop_copy_fallback",
-      mode: "drop_copy",
-    });
+    const result = await createOrder(
+      {
+        account: "desk-alpha",
+        baseAsset: "AAPL",
+        quoteAsset: "USD",
+        side: "buy",
+        amountKind: "quantity",
+        amountValue: "100",
+        price: "10",
+        id: "ord_drop_copy_fallback",
+        mode: "drop_copy",
+      },
+      "create",
+    );
 
     expect(result.order).toMatchObject({
       id: "ord_drop_copy_fallback",
@@ -2547,19 +2729,23 @@ describe("Orders createOrder submit lifecycle", () => {
       .mockResolvedValueOnce(orderResponse("ord_supplied_000001"));
     const controller = new AbortController();
     const { createOrder } = api();
-    await createOrder({
-      id: "ord_supplied_000001",
-      account: "desk-alpha",
-      baseAsset: "AAPL",
-      quoteAsset: "USD",
-      side: "buy",
-      amountKind: "quantity",
-      amountValue: "100",
-      mode: "hold",
-    }, controller.signal);
+    await createOrder(
+      {
+        id: "ord_supplied_000001",
+        account: "desk-alpha",
+        baseAsset: "AAPL",
+        quoteAsset: "USD",
+        side: "buy",
+        amountKind: "quantity",
+        amountValue: "100",
+        mode: "hold",
+      },
+      "reject",
+      controller.signal,
+    );
     expect(fetch).toHaveBeenNthCalledWith(
       1,
-      "/app/api/v1/orders/submit",
+      "/app/api/v1/orders/submit?missingAccount=reject",
       expect.objectContaining({
         body: JSON.stringify({
           id: "ord_supplied_000001",
@@ -2588,14 +2774,17 @@ describe("Orders createOrder submit lifecycle", () => {
       .mockResolvedValueOnce(wrappedApprovalResponse("ord_wrapped_0000001"))
       .mockResolvedValueOnce(orderResponse("ord_wrapped_0000001"));
     const { createOrder } = api();
-    const result = await createOrder({
-      account: "desk-alpha",
-      baseAsset: "AAPL",
-      quoteAsset: "USD",
-      side: "buy",
-      amountKind: "quantity",
-      amountValue: "100",
-    });
+    const result = await createOrder(
+      {
+        account: "desk-alpha",
+        baseAsset: "AAPL",
+        quoteAsset: "USD",
+        side: "buy",
+        amountKind: "quantity",
+        amountValue: "100",
+      },
+      "reject",
+    );
     expect(result.order.id).toBe("ord_wrapped_0000001");
     expect(fetch).toHaveBeenNthCalledWith(
       2,
@@ -2631,14 +2820,17 @@ describe("Orders createOrder submit lifecycle", () => {
       )
       .mockResolvedValueOnce(orderResponse("ord_rejected_0000001"));
     const { createOrder } = api();
-    const result = await createOrder({
-      account: "desk-alpha",
-      baseAsset: "AAPL",
-      quoteAsset: "USD",
-      side: "buy",
-      amountKind: "quantity",
-      amountValue: "100",
-    });
+    const result = await createOrder(
+      {
+        account: "desk-alpha",
+        baseAsset: "AAPL",
+        quoteAsset: "USD",
+        side: "buy",
+        amountKind: "quantity",
+        amountValue: "100",
+      },
+      "reject",
+    );
     expect(result.approval).toEqual({
       token: "reject-token",
       keyId: "key-1",
@@ -2674,14 +2866,17 @@ describe("Orders createOrder submit lifecycle", () => {
       )
       .mockResolvedValueOnce(orderResponse("ord_legacy_0000001"));
     const { createOrder } = api();
-    const result = await createOrder({
-      account: "desk-alpha",
-      baseAsset: "AAPL",
-      quoteAsset: "USD",
-      side: "buy",
-      amountKind: "quantity",
-      amountValue: "100",
-    });
+    const result = await createOrder(
+      {
+        account: "desk-alpha",
+        baseAsset: "AAPL",
+        quoteAsset: "USD",
+        side: "buy",
+        amountKind: "quantity",
+        amountValue: "100",
+      },
+      "reject",
+    );
     expect(result.approval?.verdict).toBe("");
     expect(result.approval?.reasons).toEqual([]);
   });
@@ -2712,14 +2907,17 @@ describe("Orders createOrder submit lifecycle", () => {
         ),
       );
     const { createOrder } = api();
-    const result = await createOrder({
-      account: "desk-alpha",
-      baseAsset: "AAPL",
-      quoteAsset: "USD",
-      side: "buy",
-      amountKind: "quantity",
-      amountValue: "100",
-    });
+    const result = await createOrder(
+      {
+        account: "desk-alpha",
+        baseAsset: "AAPL",
+        quoteAsset: "USD",
+        side: "buy",
+        amountKind: "quantity",
+        amountValue: "100",
+      },
+      "reject",
+    );
     expect(result.order.displayPrices).toEqual(["101.20"]);
     expect(result.warning).toBeUndefined();
   });
@@ -2734,14 +2932,17 @@ describe("Orders createOrder submit lifecycle", () => {
         }),
       );
     const { createOrder } = api();
-    const result = await createOrder({
-      account: "desk-alpha",
-      baseAsset: "AAPL",
-      quoteAsset: "USD",
-      side: "buy",
-      amountKind: "quantity",
-      amountValue: "100",
-    });
+    const result = await createOrder(
+      {
+        account: "desk-alpha",
+        baseAsset: "AAPL",
+        quoteAsset: "USD",
+        side: "buy",
+        amountKind: "quantity",
+        amountValue: "100",
+      },
+      "reject",
+    );
 
     expect(result.order).toMatchObject({
       id: "ord_alpha_0000000001",

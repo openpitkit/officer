@@ -42,7 +42,7 @@ import { useAccounts } from "@/api/useAccounts";
 import { useAdjustmentsPage } from "@/api/useAdjustments";
 import { useBalancesPage } from "@/api/useBalances";
 import { SidebarProvider } from "@/components/SidebarContext";
-import { MAX_LIST_LIMIT } from "@/framework";
+import { ApiError, MAX_LIST_LIMIT } from "@/framework";
 import i18n from "@/i18n";
 import { Positions } from "@/pages/Positions";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
@@ -358,15 +358,19 @@ describe("Positions adjustment panel", () => {
     expect(scope.getByText("balance")).toBeInTheDocument();
     expect(scope.getAllByText("600").length).toBeGreaterThan(0);
     expect(scope.queryByText(/Δ600/)).not.toBeInTheDocument();
-    expect(createAdjustmentMock).toHaveBeenCalledWith("Bucks McMoneyface", {
-      asset: "AAPL",
-      balance: { mode: "absolute", value: "600" },
-      held: { mode: "absolute", value: "10" },
-      incoming: { mode: "absolute", value: "-50" },
-      averageEntryPrice: "142.50",
-      realizedPnl: "-12.50",
-      balanceBounds: { lower: "-100", upper: "1000" },
-    });
+    expect(createAdjustmentMock).toHaveBeenCalledWith(
+      "Bucks McMoneyface",
+      {
+        asset: "AAPL",
+        balance: { mode: "absolute", value: "600" },
+        held: { mode: "absolute", value: "10" },
+        incoming: { mode: "absolute", value: "-50" },
+        averageEntryPrice: "142.50",
+        realizedPnl: "-12.50",
+        balanceBounds: { lower: "-100", upper: "1000" },
+      },
+      "reject",
+    );
     expect(setBalanceRealizedPnlMock).not.toHaveBeenCalled();
   });
 
@@ -443,10 +447,14 @@ describe("Positions adjustment panel", () => {
     await waitFor(() =>
       expect(createAdjustmentMock).toHaveBeenCalledTimes(1),
     );
-    expect(createAdjustmentMock).toHaveBeenCalledWith("Bucks McMoneyface", {
-      asset: "AAPL",
-      realizedPnl: "-12.50",
-    });
+    expect(createAdjustmentMock).toHaveBeenCalledWith(
+      "Bucks McMoneyface",
+      {
+        asset: "AAPL",
+        realizedPnl: "-12.50",
+      },
+      "reject",
+    );
     expect(setBalanceRealizedPnlMock).not.toHaveBeenCalled();
     expect(scope.getByText("realized PnL")).toBeInTheDocument();
     expect(scope.getAllByText("-12.50").length).toBeGreaterThan(0);
@@ -528,11 +536,15 @@ describe("Positions adjustment panel", () => {
     await waitFor(() => expect(createAdjustmentMock).toHaveBeenCalledTimes(2));
     expect(setBalanceRealizedPnlMock).not.toHaveBeenCalled();
     expect(appliedDeltas).toEqual(["25"]);
-    expect(createAdjustmentMock).toHaveBeenLastCalledWith("Bucks McMoneyface", {
-      asset: "AAPL",
-      balance: { mode: "delta", value: "25" },
-      realizedPnl: "-12.50",
-    });
+    expect(createAdjustmentMock).toHaveBeenLastCalledWith(
+      "Bucks McMoneyface",
+      {
+        asset: "AAPL",
+        balance: { mode: "delta", value: "25" },
+        realizedPnl: "-12.50",
+      },
+      "reject",
+    );
   });
 
   it("clears a single amount field with its inline reset control", async () => {
@@ -683,10 +695,14 @@ describe("Positions adjustment panel", () => {
 
     await user.click(scope.getByRole("button", { name: /submit adjustment/i }));
     await waitFor(() => expect(createAdjustmentMock).toHaveBeenCalledTimes(1));
-    expect(createAdjustmentMock).toHaveBeenCalledWith("my", {
-      asset: "AAPL",
-      balance: { mode: "absolute", value: "600" },
-    });
+    expect(createAdjustmentMock).toHaveBeenCalledWith(
+      "my",
+      {
+        asset: "AAPL",
+        balance: { mode: "absolute", value: "600" },
+      },
+      "reject",
+    );
     expect(account).toHaveValue("my");
     expect(asset).toHaveValue("AAPL");
     expect(amount).toHaveValue("600");
@@ -1393,12 +1409,70 @@ describe("Positions history row actions", () => {
     await user.click(screen.getByRole("button", { name: /submit/i }));
 
     await waitFor(() => expect(createAdjustmentMock).toHaveBeenCalledTimes(1));
-    expect(createAdjustmentMock).toHaveBeenCalledWith("Bucks McMoneyface", {
-      asset: "AAPL",
-      balance: { mode: "delta", value: "25" },
-      realizedPnl: "-12.50",
-    });
+    expect(createAdjustmentMock).toHaveBeenCalledWith(
+      "Bucks McMoneyface",
+      {
+        asset: "AAPL",
+        balance: { mode: "delta", value: "25" },
+        realizedPnl: "-12.50",
+      },
+      "reject",
+    );
     expect(setBalanceRealizedPnlMock).not.toHaveBeenCalled();
+  });
+
+  it("offers to create a missing account from the adjust dialog and resubmits with create", async () => {
+    const user = userEvent.setup();
+    useAdjustmentsMock.mockReturnValue(
+      readyPage<Adjustment>([
+        acceptedAdjustment({
+          asset: "AAPL",
+          balance: { mode: "delta", value: "25" },
+          realizedPnl: "-12.50",
+        }),
+      ]),
+    );
+    createAdjustmentMock.mockRejectedValueOnce(
+      new ApiError(
+        'block account: account "Bucks McMoneyface" does not exist',
+        "account_missing",
+        404,
+        undefined,
+        "Bucks McMoneyface",
+      ),
+    );
+    createAdjustmentMock.mockImplementationOnce(async (_account, body) =>
+      acceptedAdjustment(body as unknown as Adjustment["request"]),
+    );
+    renderPositions("/positions?tab=history");
+
+    await user.click(
+      screen.getByRole("button", { name: /clone adj-alpha-10/i }),
+    );
+    await user.click(screen.getByRole("button", { name: /submit/i }));
+
+    const confirmDialog = await screen.findByRole("alertdialog", {
+      name: "Account does not exist",
+    });
+    expect(createAdjustmentMock).toHaveBeenCalledTimes(1);
+
+    await user.click(
+      within(confirmDialog).getByRole("button", {
+        name: "Create account and continue",
+      }),
+    );
+
+    await waitFor(() => expect(createAdjustmentMock).toHaveBeenCalledTimes(2));
+    expect(createAdjustmentMock).toHaveBeenNthCalledWith(
+      2,
+      "Bucks McMoneyface",
+      {
+        asset: "AAPL",
+        balance: { mode: "delta", value: "25" },
+        realizedPnl: "-12.50",
+      },
+      "create",
+    );
   });
 
   it("shows an accepted PnL halt without a numeric result", () => {

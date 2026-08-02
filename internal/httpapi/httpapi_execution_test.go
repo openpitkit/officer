@@ -150,7 +150,7 @@ func TestSubmitOrderToken_Created(t *testing.T) {
 	body := bytes.NewBufferString(
 		`{"account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"1","price":"100"}`)
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit", body))
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit?missingAccount=create", body))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("want 201, got %d", rec.Code)
 	}
@@ -186,7 +186,7 @@ func TestSubmitDropCopyOrder_UsesDistinctUnsignedOperation(t *testing.T) {
 			)
 			rec := httptest.NewRecorder()
 			r.ServeHTTP(rec, httptest.NewRequest(
-				http.MethodPost, tt.prefix+"/orders/drop-copy/submit", body,
+				http.MethodPost, tt.prefix+"/orders/drop-copy/submit?missingAccount=create", body,
 			))
 			if rec.Code != http.StatusCreated {
 				t.Fatalf("want 201, got %d body=%s", rec.Code, rec.Body.String())
@@ -224,7 +224,7 @@ func TestSubmitDropCopyOrder_GeneratesIDWhenOmitted(t *testing.T) {
 	)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(
-		http.MethodPost, "/api/v1/orders/drop-copy/submit", body,
+		http.MethodPost, "/api/v1/orders/drop-copy/submit?missingAccount=create", body,
 	))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("want 201, got %d body=%s", rec.Code, rec.Body.String())
@@ -258,7 +258,7 @@ func TestSubmitDropCopyOrder_ValidationErrorPreservesEngineMessage(t *testing.T)
 	)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(
-		http.MethodPost, "/api/v1/orders/drop-copy/submit", body,
+		http.MethodPost, "/api/v1/orders/drop-copy/submit?missingAccount=create", body,
 	))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d body=%s", rec.Code, rec.Body.String())
@@ -287,7 +287,7 @@ func TestSubmitOrderToken_ForwardsCallerSuppliedID(t *testing.T) {
 		`{"id":"` + supplied.String() + `","account":"acc-1","baseAsset":"AAPL",` +
 			`"quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"1"}`)
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit", body))
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit?missingAccount=create", body))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("want 201, got %d body=%s", rec.Code, rec.Body.String())
 	}
@@ -334,7 +334,7 @@ func TestSubmitOrderToken_RiskRejectResponse(t *testing.T) {
 	body := bytes.NewBufferString(
 		`{"account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"100","price":"100"}`)
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit", body))
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit?missingAccount=create", body))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("want 201, got %d body=%s", rec.Code, rec.Body.String())
 	}
@@ -367,7 +367,7 @@ func TestSubmitOrderToken_ValidationError(t *testing.T) {
 	body := bytes.NewBufferString(
 		`{"account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD","side":"buy","amountKind":"base","amountValue":"1"}`)
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit", body))
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit?missingAccount=create", body))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
@@ -408,7 +408,7 @@ func TestApplyAdjustment_Created(t *testing.T) {
 	body := bytes.NewBufferString(
 		`{"asset":"USD","balance":{"mode":"delta","value":"100"}}`)
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/accounts/acc-1/adjustments", body))
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/accounts/acc-1/adjustments?missingAccount=create", body))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("want 201, got %d", rec.Code)
 	}
@@ -432,7 +432,7 @@ func TestApplyAdjustment_NoChangeReturnsNoContent(t *testing.T) {
 	body := bytes.NewBufferString(
 		`{"asset":"USD","balance":{"mode":"delta","value":"0"}}`)
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/accounts/acc-1/adjustments", body))
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/accounts/acc-1/adjustments?missingAccount=create", body))
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("want 204, got %d", rec.Code)
 	}

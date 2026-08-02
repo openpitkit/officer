@@ -62,6 +62,7 @@ func TestLocalNode_ApplyAdjustmentRejectsAverageEntryPriceOnly(t *testing.T) {
 		node.Key{Account: testAccount},
 		domain.ExternalID(""),
 		domain.AdjustmentRequest{Asset: testQuote, AverageEntryPrice: "1"},
+		domain.MissingAccountCreate,
 		caller,
 	)
 	if !errors.Is(err, domain.ErrNoChange) {

@@ -117,16 +117,23 @@ func (s *Service) UpdateAccount(
 	)
 }
 
-// BlockAccount validates the id and blocks the account with reason.
+// BlockAccount validates the id and blocks the account with reason. missing is
+// the caller's required choice for an account that does not exist yet.
 func (s *Service) BlockAccount(
-	ctx context.Context, id domain.AccountID, reason string,
+	ctx context.Context,
+	id domain.AccountID,
+	reason string,
+	missing domain.MissingAccountPolicy,
 ) error {
-	return s.setAccountBlocked(ctx, id, true, reason)
+	return s.setAccountBlocked(ctx, id, true, reason, missing)
 }
 
-// UnblockAccount validates the id and unblocks the account.
-func (s *Service) UnblockAccount(ctx context.Context, id domain.AccountID) error {
-	return s.setAccountBlocked(ctx, id, false, "")
+// UnblockAccount validates the id and unblocks the account. missing follows
+// BlockAccount.
+func (s *Service) UnblockAccount(
+	ctx context.Context, id domain.AccountID, missing domain.MissingAccountPolicy,
+) error {
+	return s.setAccountBlocked(ctx, id, false, "", missing)
 }
 
 // DeleteAccount validates the id and removes the account. Destructive cascades
@@ -146,15 +153,21 @@ func (s *Service) DeleteAccount(
 
 func (s *Service) setAccountBlocked(
 	ctx context.Context, id domain.AccountID, blocked bool, reason string,
+	missing domain.MissingAccountPolicy,
 ) error {
 	if err := domain.ValidateAccountID(id); err != nil {
+		return err
+	}
+	if err := validateMissingAccountPolicy(id, missing); err != nil {
 		return err
 	}
 	n, err := s.router.Route(keyFor(id))
 	if err != nil {
 		return fmt.Errorf("backend: route account: %w", err)
 	}
-	return n.SetAccountBlocked(ctx, keyFor(id), blocked, reason, auth.CallerFromContext(ctx))
+	return n.SetAccountBlocked(
+		ctx, keyFor(id), blocked, reason, missing, auth.CallerFromContext(ctx),
+	)
 }
 
 // GetAccountState validates the id and returns the account row and its
@@ -175,10 +188,17 @@ func (s *Service) GetAccountState(
 
 // SetAccountGroup validates the account id, routes to the owning node, and sets
 // or clears (empty groupCode) the account's group membership by the group's code.
+// missing is the caller's required choice for an account that does not exist yet.
 func (s *Service) SetAccountGroup(
-	ctx context.Context, id domain.AccountID, groupCode string,
+	ctx context.Context,
+	id domain.AccountID,
+	groupCode string,
+	missing domain.MissingAccountPolicy,
 ) error {
 	if err := domain.ValidateAccountID(id); err != nil {
+		return err
+	}
+	if err := validateMissingAccountPolicy(id, missing); err != nil {
 		return err
 	}
 	if groupCode != "" {
@@ -190,7 +210,9 @@ func (s *Service) SetAccountGroup(
 	if err != nil {
 		return fmt.Errorf("backend: route account: %w", err)
 	}
-	return n.SetAccountGroup(ctx, keyFor(id), groupCode, auth.CallerFromContext(ctx))
+	return n.SetAccountGroup(
+		ctx, keyFor(id), groupCode, missing, auth.CallerFromContext(ctx),
+	)
 }
 
 // SetAccountCurrency validates and sets or clears the account-level currency.

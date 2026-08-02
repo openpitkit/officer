@@ -492,36 +492,60 @@ describe("WelcomeDialog", () => {
         "equity",
       );
       expect(createAdjustmentMock).toHaveBeenCalledTimes(9);
-      expect(createAdjustmentMock).toHaveBeenCalledWith("demo-main", {
-        asset: "USD",
-        balance: { mode: "absolute", value: "100000" },
-        averageEntryPrice: "1",
-      });
-      expect(createAdjustmentMock).toHaveBeenCalledWith("demo-main", {
-        asset: "AAPL",
-        balance: { mode: "absolute", value: "100" },
-        averageEntryPrice: "200",
-      });
-      expect(createAdjustmentMock).toHaveBeenCalledWith("demo-main", {
-        asset: "NVDA",
-        balance: { mode: "absolute", value: "50" },
-        averageEntryPrice: "150",
-      });
-      expect(createAdjustmentMock).toHaveBeenCalledWith("demo-main", {
-        asset: "SPCX",
-        balance: { mode: "absolute", value: "10" },
-        averageEntryPrice: "300",
-      });
-      expect(createAdjustmentMock).toHaveBeenCalledWith("demo-main", {
-        asset: "META",
-        balance: { mode: "absolute", value: "25" },
-        averageEntryPrice: "500",
-      });
-      expect(createAdjustmentMock).toHaveBeenCalledWith("demo-main", {
-        asset: "KO",
-        balance: { mode: "absolute", value: "100" },
-        averageEntryPrice: "70",
-      });
+      expect(createAdjustmentMock).toHaveBeenCalledWith(
+        "demo-main",
+        {
+          asset: "USD",
+          balance: { mode: "absolute", value: "100000" },
+          averageEntryPrice: "1",
+        },
+        "reject",
+      );
+      expect(createAdjustmentMock).toHaveBeenCalledWith(
+        "demo-main",
+        {
+          asset: "AAPL",
+          balance: { mode: "absolute", value: "100" },
+          averageEntryPrice: "200",
+        },
+        "reject",
+      );
+      expect(createAdjustmentMock).toHaveBeenCalledWith(
+        "demo-main",
+        {
+          asset: "NVDA",
+          balance: { mode: "absolute", value: "50" },
+          averageEntryPrice: "150",
+        },
+        "reject",
+      );
+      expect(createAdjustmentMock).toHaveBeenCalledWith(
+        "demo-main",
+        {
+          asset: "SPCX",
+          balance: { mode: "absolute", value: "10" },
+          averageEntryPrice: "300",
+        },
+        "reject",
+      );
+      expect(createAdjustmentMock).toHaveBeenCalledWith(
+        "demo-main",
+        {
+          asset: "META",
+          balance: { mode: "absolute", value: "25" },
+          averageEntryPrice: "500",
+        },
+        "reject",
+      );
+      expect(createAdjustmentMock).toHaveBeenCalledWith(
+        "demo-main",
+        {
+          asset: "KO",
+          balance: { mode: "absolute", value: "100" },
+          averageEntryPrice: "70",
+        },
+        "reject",
+      );
     });
     expect(createAssetMock.mock.invocationCallOrder[0]).toBeLessThan(
       createAdjustmentMock.mock.invocationCallOrder[0],

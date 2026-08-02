@@ -78,20 +78,42 @@ type ControlPlane interface {
 		account domain.Account,
 	) (domain.Account, error)
 	GetAccountState(ctx context.Context, id domain.AccountID) (domain.Account, node.AccountLimits, error)
-	BlockAccount(ctx context.Context, id domain.AccountID, reason string) error
-	UnblockAccount(ctx context.Context, id domain.AccountID) error
+	BlockAccount(
+		ctx context.Context,
+		id domain.AccountID,
+		reason string,
+		missing domain.MissingAccountPolicy,
+	) error
+	UnblockAccount(
+		ctx context.Context, id domain.AccountID, missing domain.MissingAccountPolicy,
+	) error
 	DeleteAccount(ctx context.Context, id domain.AccountID, force bool) error
-	SetAccountGroup(ctx context.Context, id domain.AccountID, groupCode string) error
+	SetAccountGroup(
+		ctx context.Context,
+		id domain.AccountID,
+		groupCode string,
+		missing domain.MissingAccountPolicy,
+	) error
 	SetAccountCurrency(ctx context.Context, id domain.AccountID, currency string) error
 	SetAccountNotes(ctx context.Context, id domain.AccountID, notes string) error
 	ListLimits(ctx context.Context, account domain.AccountID) (node.AccountLimits, error)
 	ListPolicyRows(
 		ctx context.Context, filter store.PolicyListFilter,
 	) (store.PolicyListPage, error)
-	PutRateLimit(ctx context.Context, limit domain.LimitRate) error
-	PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize) error
+	PutRateLimit(
+		ctx context.Context,
+		limit domain.LimitRate,
+		missing domain.MissingAccountPolicy,
+	) error
+	PutOrderSizeLimit(
+		ctx context.Context,
+		limit domain.LimitOrderSize,
+		missing domain.MissingAccountPolicy,
+	) error
 	PutSpotFundsPnlBoundsLimit(
-		ctx context.Context, limit domain.LimitSpotFundsPnlBounds,
+		ctx context.Context,
+		limit domain.LimitSpotFundsPnlBounds,
+		missing domain.MissingAccountPolicy,
 	) error
 	DeleteLimit(ctx context.Context, target node.LimitTarget) error
 	ListAudit(ctx context.Context, count int) ([]domain.AuditRow, error)
@@ -147,12 +169,14 @@ type ControlPlane interface {
 		account domain.AccountID,
 		externalID domain.ExternalID,
 		req domain.AdjustmentRequest,
+		missing domain.MissingAccountPolicy,
 	) (domain.AccountAdjustmentRecord, error)
 	SetBalanceRealizedPnl(
 		ctx context.Context,
 		account domain.AccountID,
 		asset string,
 		realizedPnl string,
+		missing domain.MissingAccountPolicy,
 	) (domain.Balance, error)
 	ListBalances(ctx context.Context, account domain.AccountID, asset string) ([]domain.Balance, error)
 	ListBalanceRows(
@@ -193,8 +217,15 @@ type ControlPlane interface {
 	PublicKeyByID(ctx context.Context, keyID, format string) (string, error)
 	GetNoESign(ctx context.Context) (bool, error)
 	SetNoESign(ctx context.Context, off bool) error
-	SubmitOrderToken(ctx context.Context, o domain.Order, mode string) (ApprovalToken, error)
-	SubmitDropCopyOrder(ctx context.Context, o domain.Order) (domain.Order, error)
+	SubmitOrderToken(
+		ctx context.Context,
+		o domain.Order,
+		mode string,
+		missing domain.MissingAccountPolicy,
+	) (ApprovalToken, error)
+	SubmitDropCopyOrder(
+		ctx context.Context, o domain.Order, missing domain.MissingAccountPolicy,
+	) (domain.Order, error)
 	ConfirmExecution(
 		ctx context.Context, orderID string, token string,
 	) (domain.Order, Attestation, error)

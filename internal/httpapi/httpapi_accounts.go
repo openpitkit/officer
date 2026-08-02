@@ -124,12 +124,18 @@ func handleUpdateAccount(svc Service) http.HandlerFunc {
 	}
 }
 
-// handleBlockAccount handles POST /api/v1/accounts/{id}/block.
+// handleBlockAccount handles
+// POST /api/v1/accounts/{id}/block?missingAccount=create|reject.
 func handleBlockAccount(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := httpx.PathAccountID(r)
 		if err != nil {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		missing, err := missingAccountQuery(r, id)
+		if err != nil {
+			httpx.WriteErr(w, err)
 			return
 		}
 		var req struct {
@@ -139,7 +145,7 @@ func handleBlockAccount(svc Service) http.HandlerFunc {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
-		if err := svc.BlockAccount(r.Context(), id, req.Reason); err != nil {
+		if err := svc.BlockAccount(r.Context(), id, req.Reason, missing); err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
@@ -147,7 +153,8 @@ func handleBlockAccount(svc Service) http.HandlerFunc {
 	}
 }
 
-// handleUnblockAccount handles POST /api/v1/accounts/{id}/unblock.
+// handleUnblockAccount handles
+// POST /api/v1/accounts/{id}/unblock?missingAccount=create|reject.
 func handleUnblockAccount(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := httpx.PathAccountID(r)
@@ -155,7 +162,12 @@ func handleUnblockAccount(svc Service) http.HandlerFunc {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
-		if err := svc.UnblockAccount(r.Context(), id); err != nil {
+		missing, err := missingAccountQuery(r, id)
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		if err := svc.UnblockAccount(r.Context(), id, missing); err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
@@ -192,13 +204,19 @@ func writeAccount(w http.ResponseWriter, svc Service, r *http.Request, id domain
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"account": toAccountDTO(account)})
 }
 
-// handleSetAccountGroup handles PUT /api/v1/accounts/{id}/group. An empty group
+// handleSetAccountGroup handles
+// PUT /api/v1/accounts/{id}/group?missingAccount=create|reject. An empty group
 // clears membership.
 func handleSetAccountGroup(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := httpx.PathAccountID(r)
 		if err != nil {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		missing, err := missingAccountQuery(r, id)
+		if err != nil {
+			httpx.WriteErr(w, err)
 			return
 		}
 		var req struct {
@@ -208,7 +226,7 @@ func handleSetAccountGroup(svc Service) http.HandlerFunc {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
 			return
 		}
-		if err := svc.SetAccountGroup(r.Context(), id, req.Group); err != nil {
+		if err := svc.SetAccountGroup(r.Context(), id, req.Group, missing); err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}

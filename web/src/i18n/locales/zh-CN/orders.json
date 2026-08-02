@@ -186,7 +186,10 @@
       "dropCopyConfirmTitle": "在不执行交易前批准结果的情况下提交？",
       "dropCopyConfirmDescription": "所有策略都会执行并更新状态，但策略拒绝以及账户或账户组封锁不会阻止此订单。本次提交及后续执行报告均不签名，也不记录认证。",
       "dropCopyPriceRequired": "请为 drop-copy 输入正数限价。",
-      "validationError": "账户、标的和数量为必填项。"
+      "validationError": "账户、标的和数量为必填项。",
+      "missingAccountConfirmTitle": "账户不存在",
+      "missingAccountConfirmDescription": "账户 {{account}} 尚不存在。是否以默认设置（无分组、无货币）创建该账户并继续？",
+      "missingAccountConfirmAction": "创建账户并继续"
     }
   },
 

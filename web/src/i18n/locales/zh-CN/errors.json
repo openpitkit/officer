@@ -10,6 +10,7 @@
     "too_large": "导入超过 128 MiB 最大限制。请将导出拆分为较小文件，或使用 API 进行批量加载。",
     "engine_restarting": "风控引擎正在重启；请在完成后重试。",
     "not_implemented": "请求的操作尚未实现。",
+    "account_missing": "该账户不存在。",
     "internal": "服务遇到内部错误。",
     "network": "无法连接到服务。",
     "signing": "签名操作被拒绝。"

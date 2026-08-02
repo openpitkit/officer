@@ -152,14 +152,14 @@ func TestService_BlockAccountValidates(t *testing.T) {
 	svc, fn := newTestService()
 	ctx := context.Background()
 
-	if err := svc.BlockAccount(ctx, "", "risk"); !errors.Is(err, domain.ErrInvalid) {
+	if err := svc.BlockAccount(ctx, "", "risk", domain.MissingAccountCreate); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid for empty id, got %v", err)
 	}
 	if len(fn.blockCalls) != 0 {
 		t.Fatalf("invalid id must not reach the node")
 	}
 
-	if err := svc.BlockAccount(ctx, "acc-1", "risk"); err != nil {
+	if err := svc.BlockAccount(ctx, "acc-1", "risk", domain.MissingAccountCreate); err != nil {
 		t.Fatalf("BlockAccount: %v", err)
 	}
 	if len(fn.blockCalls) != 1 || !fn.blockCalls[0].blocked ||

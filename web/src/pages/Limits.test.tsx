@@ -27,6 +27,7 @@ import { useLimitsPage } from "@/api/useLimits";
 import type { PollingResult } from "@/api/usePolling";
 import { SidebarProvider } from "@/components/SidebarContext";
 import { renderWithApi as render } from "@/test/apiClient";
+import { ApiError } from "@/framework";
 import i18n from "@/i18n";
 import { Limits } from "@/pages/Limits";
 import { DisplayPreferencesProvider } from "@/theme/DisplayPreferencesProvider";
@@ -480,14 +481,86 @@ describe("LimitDialog framework controls", () => {
       screen.queryByRole("button", { name: "Rebuild and apply" }),
     ).not.toBeInTheDocument();
     await waitFor(() =>
-      expect(putLimitMock).toHaveBeenCalledWith({
+      expect(putLimitMock).toHaveBeenCalledWith(
+        {
+          policy: "spot_funds_pnl_bounds_kill_switch",
+          scope: "account",
+          account: "acc-usd",
+          accountGroup: "",
+          asset: "",
+          values: { lower_bound: "-100" },
+        },
+        "reject",
+      ),
+    );
+  });
+
+  it("offers to create a missing account and resubmits with missingAccount=create", async () => {
+    const user = userEvent.setup();
+    fetchAccountsMock.mockResolvedValue([]);
+    putLimitMock.mockRejectedValueOnce(
+      new ApiError(
+        'block account: account "acc-new" does not exist',
+        "account_missing",
+        404,
+        undefined,
+        "acc-new",
+      ),
+    );
+    putLimitMock.mockResolvedValueOnce({
+      policy: "spot_funds_pnl_bounds_kill_switch",
+      scope: "account",
+      account: "acc-new",
+      accountGroup: "",
+      asset: "",
+      values: { lower_bound: "-100" },
+    });
+    renderLimits();
+
+    await user.click(
+      screen.getAllByRole("button", { name: "Add policy" })[0],
+    );
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getAllByRole("combobox")[0]);
+    await user.click(
+      within(dialog).getByRole("option", { name: "PnL Kill Switch" }),
+    );
+    await user.click(within(dialog).getAllByRole("combobox")[1]);
+    await user.click(within(dialog).getByRole("option", { name: "Account" }));
+
+    const account = within(dialog).getByLabelText("Account");
+    await user.type(account, "acc-new");
+    await user.type(within(dialog).getByLabelText("lower bound"), "-100");
+
+    await user.click(within(dialog).getByRole("button", { name: "Add policy" }));
+    // The PnL policy never requires an engine rebuild confirm, so this is the
+    // account_missing confirm and only it.
+    const confirmDialog = await screen.findByRole("alertdialog", {
+      name: "Account does not exist",
+    });
+    expect(
+      within(confirmDialog).getByText(/does not exist yet/),
+    ).toBeInTheDocument();
+    expect(putLimitMock).toHaveBeenCalledTimes(1);
+
+    await user.click(
+      within(confirmDialog).getByRole("button", {
+        name: "Create account and continue",
+      }),
+    );
+
+    await waitFor(() => expect(putLimitMock).toHaveBeenCalledTimes(2));
+    expect(putLimitMock).toHaveBeenNthCalledWith(
+      2,
+      {
         policy: "spot_funds_pnl_bounds_kill_switch",
         scope: "account",
-        account: "acc-usd",
+        account: "acc-new",
         accountGroup: "",
         asset: "",
         values: { lower_bound: "-100" },
-      }),
+      },
+      "create",
     );
   });
 });

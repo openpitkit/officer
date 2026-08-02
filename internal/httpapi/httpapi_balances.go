@@ -50,12 +50,17 @@ func handleListBalances(svc Service) http.HandlerFunc {
 }
 
 // handleSetBalanceRealizedPnl handles
-// PUT /api/v1/accounts/{id}/balances/realized-pnl.
+// PUT /api/v1/accounts/{id}/balances/realized-pnl?missingAccount=create|reject.
 func handleSetBalanceRealizedPnl(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := httpx.PathAccountID(r)
 		if err != nil {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		missing, err := missingAccountQuery(r, id)
+		if err != nil {
+			httpx.WriteErr(w, err)
 			return
 		}
 		var req balanceRealizedPnlRequestDTO
@@ -68,6 +73,7 @@ func handleSetBalanceRealizedPnl(svc Service) http.HandlerFunc {
 			id,
 			req.Asset,
 			req.RealizedPnl,
+			missing,
 		)
 		if err != nil {
 			httpx.WriteErr(w, err)
@@ -79,13 +85,19 @@ func handleSetBalanceRealizedPnl(svc Service) http.HandlerFunc {
 	}
 }
 
-// handleApplyAdjustment handles POST /api/v1/accounts/{id}/adjustments. A policy
+// handleApplyAdjustment handles
+// POST /api/v1/accounts/{id}/adjustments?missingAccount=create|reject. A policy
 // reject is a successful call: the rejected record is returned in the body.
 func handleApplyAdjustment(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := httpx.PathAccountID(r)
 		if err != nil {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			return
+		}
+		missing, err := missingAccountQuery(r, id)
+		if err != nil {
+			httpx.WriteErr(w, err)
 			return
 		}
 		var req adjustmentRequestDTO
@@ -106,7 +118,7 @@ func handleApplyAdjustment(svc Service) http.HandlerFunc {
 			}
 		}
 		record, err := svc.ApplyAdjustment(
-			r.Context(), id, externalID, fromAdjustmentRequestDTO(req))
+			r.Context(), id, externalID, fromAdjustmentRequestDTO(req), missing)
 		if err != nil {
 			if errors.Is(err, domain.ErrNoChange) {
 				w.WriteHeader(http.StatusNoContent)

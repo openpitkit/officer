@@ -148,13 +148,13 @@ func (s *setMDErrSource) CommandEnabled(context.Context, string) (bool, error) {
 }
 
 func (s *setMDErrSource) SubmitOrderToken(
-	context.Context, domain.Order, string,
+	context.Context, domain.Order, string, domain.MissingAccountPolicy,
 ) (SubmitOrderTokenResult, error) {
 	return SubmitOrderTokenResult{}, nil
 }
 
 func (s *setMDErrSource) SubmitDropCopyOrder(
-	context.Context, domain.Order,
+	context.Context, domain.Order, domain.MissingAccountPolicy,
 ) (SubmitDropCopyOrderResult, error) {
 	return SubmitDropCopyOrderResult{}, nil
 }

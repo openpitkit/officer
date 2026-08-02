@@ -382,6 +382,8 @@ type submitOrderInput struct {
 	Price       string `json:"price,omitempty" jsonschema:"Limit price as an exact decimal string; omit for market"`
 	Mode        string `json:"mode,omitempty" jsonschema:"hold (workflow compatibility value) or immediate (default immediate)"`
 	ExternalID  string `json:"id,omitempty" jsonschema:"Optional caller-supplied unique order id; omit to have the server generate one"`
+
+	MissingAccount string `json:"missingAccount" jsonschema:"Required: create to register an account that does not exist yet, reject to fail the submit instead"`
 }
 
 type submitDropCopyOrderInput struct {
@@ -393,6 +395,8 @@ type submitDropCopyOrderInput struct {
 	AmountValue string `json:"amountValue" jsonschema:"Order size as an exact decimal string"`
 	Price       string `json:"price,omitempty" jsonschema:"Required limit price as an exact decimal string; market orders are rejected for drop-copy"`
 	ExternalID  string `json:"id,omitempty" jsonschema:"Optional caller-supplied unique order id; omit to have the store assign one"`
+
+	MissingAccount string `json:"missingAccount" jsonschema:"Required: must be create; a drop-copy reports an execution that already happened and cannot reject an account that does not exist yet"`
 }
 
 type submitOrderOutput struct {
@@ -966,6 +970,10 @@ func submitOrderHandler(
 		if account == "" {
 			return "", submitOrderOutput{}, fmt.Errorf("account is required")
 		}
+		missing := domain.MissingAccountPolicy(strings.TrimSpace(in.MissingAccount))
+		if missing == "" {
+			return "", submitOrderOutput{}, fmt.Errorf("missingAccount is required")
+		}
 		o := domain.Order{
 			Account:     account,
 			BaseAsset:   strings.TrimSpace(in.BaseAsset),
@@ -983,7 +991,7 @@ func submitOrderHandler(
 			o.ExternalID = id
 		}
 		mode := strings.TrimSpace(in.Mode)
-		res, err := src.SubmitOrderToken(ctx, o, mode)
+		res, err := src.SubmitOrderToken(ctx, o, mode, missing)
 		if err != nil {
 			return "", submitOrderOutput{}, fmt.Errorf("submit order failed: %s", err)
 		}
@@ -1020,6 +1028,10 @@ func submitDropCopyOrderHandler(
 		if account == "" {
 			return "", submitDropCopyOrderOutput{}, fmt.Errorf("account is required")
 		}
+		missing := domain.MissingAccountPolicy(strings.TrimSpace(in.MissingAccount))
+		if missing == "" {
+			return "", submitDropCopyOrderOutput{}, fmt.Errorf("missingAccount is required")
+		}
 		o := domain.Order{
 			Account:     account,
 			BaseAsset:   strings.TrimSpace(in.BaseAsset),
@@ -1036,7 +1048,7 @@ func submitDropCopyOrderHandler(
 			}
 			o.ExternalID = id
 		}
-		res, err := src.SubmitDropCopyOrder(ctx, o)
+		res, err := src.SubmitDropCopyOrder(ctx, o, missing)
 		if err != nil {
 			return "", submitDropCopyOrderOutput{}, fmt.Errorf(
 				"submit drop-copy order failed: %w", err,

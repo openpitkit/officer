@@ -82,53 +82,74 @@ func (s *Service) ListPolicyRows(
 }
 
 // PutRateLimit validates the rate-limit barrier, routes to the owning node, and
-// upserts it. The barrier may name an account that does not exist yet: a policy
-// rule can be created before the account is registered.
-func (s *Service) PutRateLimit(ctx context.Context, limit domain.LimitRate) error {
-	if err := limit.Validate(); err != nil {
-		return err
-	}
-	s.marketDataMu.Lock()
-	defer s.marketDataMu.Unlock()
-	n, err := s.router.Route(keyFor(limit.Account))
-	if err != nil {
-		return fmt.Errorf("backend: route limit: %w", err)
-	}
-	sink, err := n.PutRateLimit(ctx, limit, auth.CallerFromContext(ctx))
-	return s.finishLimitChangeLocked(sink, err)
-}
-
-// PutOrderSizeLimit validates the order-size barrier, routes to the owning node,
-// and upserts it.
-func (s *Service) PutOrderSizeLimit(ctx context.Context, limit domain.LimitOrderSize) error {
-	if err := limit.Validate(); err != nil {
-		return err
-	}
-	s.marketDataMu.Lock()
-	defer s.marketDataMu.Unlock()
-	n, err := s.router.Route(keyFor(limit.Account))
-	if err != nil {
-		return fmt.Errorf("backend: route limit: %w", err)
-	}
-	sink, err := n.PutOrderSizeLimit(ctx, limit, auth.CallerFromContext(ctx))
-	return s.finishLimitChangeLocked(sink, err)
-}
-
-// PutSpotFundsPnlBoundsLimit validates the SpotFunds P&L-bounds barrier, routes
-// to the owning node, and upserts it.
-func (s *Service) PutSpotFundsPnlBoundsLimit(
-	ctx context.Context, limit domain.LimitSpotFundsPnlBounds,
+// upserts it. A barrier whose scope carries an account axis may name an account
+// that does not exist yet; missing is the caller's required choice between
+// registering that account and rejecting the request with
+// domain.ErrAccountMissing, and is ignored for a scope that names no account.
+func (s *Service) PutRateLimit(
+	ctx context.Context, limit domain.LimitRate, missing domain.MissingAccountPolicy,
 ) error {
 	if err := limit.Validate(); err != nil {
 		return err
 	}
+	if err := validateMissingAccountPolicy(limit.Account, missing); err != nil {
+		return err
+	}
 	s.marketDataMu.Lock()
 	defer s.marketDataMu.Unlock()
 	n, err := s.router.Route(keyFor(limit.Account))
 	if err != nil {
 		return fmt.Errorf("backend: route limit: %w", err)
 	}
-	sink, err := n.PutSpotFundsPnlBoundsLimit(ctx, limit, auth.CallerFromContext(ctx))
+	sink, err := n.PutRateLimit(ctx, limit, missing, auth.CallerFromContext(ctx))
+	return s.finishLimitChangeLocked(sink, err)
+}
+
+// PutOrderSizeLimit validates the order-size barrier, routes to the owning node,
+// and upserts it. missing follows PutRateLimit.
+func (s *Service) PutOrderSizeLimit(
+	ctx context.Context,
+	limit domain.LimitOrderSize,
+	missing domain.MissingAccountPolicy,
+) error {
+	if err := limit.Validate(); err != nil {
+		return err
+	}
+	if err := validateMissingAccountPolicy(limit.Account, missing); err != nil {
+		return err
+	}
+	s.marketDataMu.Lock()
+	defer s.marketDataMu.Unlock()
+	n, err := s.router.Route(keyFor(limit.Account))
+	if err != nil {
+		return fmt.Errorf("backend: route limit: %w", err)
+	}
+	sink, err := n.PutOrderSizeLimit(ctx, limit, missing, auth.CallerFromContext(ctx))
+	return s.finishLimitChangeLocked(sink, err)
+}
+
+// PutSpotFundsPnlBoundsLimit validates the SpotFunds P&L-bounds barrier, routes
+// to the owning node, and upserts it. missing follows PutRateLimit.
+func (s *Service) PutSpotFundsPnlBoundsLimit(
+	ctx context.Context,
+	limit domain.LimitSpotFundsPnlBounds,
+	missing domain.MissingAccountPolicy,
+) error {
+	if err := limit.Validate(); err != nil {
+		return err
+	}
+	if err := validateMissingAccountPolicy(limit.Account, missing); err != nil {
+		return err
+	}
+	s.marketDataMu.Lock()
+	defer s.marketDataMu.Unlock()
+	n, err := s.router.Route(keyFor(limit.Account))
+	if err != nil {
+		return fmt.Errorf("backend: route limit: %w", err)
+	}
+	sink, err := n.PutSpotFundsPnlBoundsLimit(
+		ctx, limit, missing, auth.CallerFromContext(ctx),
+	)
 	return s.finishLimitChangeLocked(sink, err)
 }
 

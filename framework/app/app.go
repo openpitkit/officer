@@ -524,9 +524,12 @@ func (a sourceAdapter) CommandEnabled(ctx context.Context, command string) (bool
 }
 
 func (a sourceAdapter) SubmitOrderToken(
-	ctx context.Context, o domain.Order, mode string,
+	ctx context.Context,
+	o domain.Order,
+	mode string,
+	missing domain.MissingAccountPolicy,
 ) (frameworkmcp.SubmitOrderTokenResult, error) {
-	tok, err := a.service.SubmitOrderToken(ctx, o, mode)
+	tok, err := a.service.SubmitOrderToken(ctx, o, mode, missing)
 	if err != nil {
 		return frameworkmcp.SubmitOrderTokenResult{}, err
 	}
@@ -540,9 +543,9 @@ func (a sourceAdapter) SubmitOrderToken(
 }
 
 func (a sourceAdapter) SubmitDropCopyOrder(
-	ctx context.Context, o domain.Order,
+	ctx context.Context, o domain.Order, missing domain.MissingAccountPolicy,
 ) (frameworkmcp.SubmitDropCopyOrderResult, error) {
-	order, err := a.service.SubmitDropCopyOrder(ctx, o)
+	order, err := a.service.SubmitDropCopyOrder(ctx, o, missing)
 	if err != nil {
 		return frameworkmcp.SubmitDropCopyOrderResult{}, err
 	}

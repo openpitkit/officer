@@ -472,11 +472,15 @@ export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
       await setAccountNotes(DEMO_ACCOUNT_ID, t("welcome.presets.accountNote"));
       applied += 1;
       for (const position of DEMO_POSITIONS) {
-        await createAdjustment(DEMO_ACCOUNT_ID, {
-          asset: position.asset,
-          balance: { mode: "absolute", value: position.balance },
-          averageEntryPrice: position.averageEntryPrice,
-        });
+        await createAdjustment(
+          DEMO_ACCOUNT_ID,
+          {
+            asset: position.asset,
+            balance: { mode: "absolute", value: position.balance },
+            averageEntryPrice: position.averageEntryPrice,
+          },
+          "reject",
+        );
         applied += 1;
       }
       return applied;
@@ -489,7 +493,7 @@ export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
     let applied = 0;
     try {
       for (const limit of DEMO_LIMITS) {
-        await putLimit(limit);
+        await putLimit(limit, "reject");
         applied += 1;
       }
       return applied;

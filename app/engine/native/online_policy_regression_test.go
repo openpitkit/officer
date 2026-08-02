@@ -59,12 +59,12 @@ func TestLocalNode_BrokerBarrierRemovalKeepsNativeEngineAndSink(t *testing.T) {
 
 	if sink, err := n.PutRateLimit(ctx, domain.LimitRate{
 		Scope: domain.ScopeBroker, MaxOrders: 100, Window: time.Second,
-	}, caller); err != nil || sink == nil {
+	}, domain.MissingAccountCreate, caller); err != nil || sink == nil {
 		t.Fatalf("PutRateLimit first barrier = (sink %T, %v), want one SDK-required rebuild", sink, err)
 	}
 	if sink, err := n.PutRateLimit(ctx, domain.LimitRate{
 		Scope: domain.ScopeAsset, Asset: "USD", MaxOrders: 50, Window: time.Second,
-	}, caller); err != nil || sink != nil {
+	}, domain.MissingAccountCreate, caller); err != nil || sink != nil {
 		t.Fatalf("PutRateLimit asset = (sink %T, %v), want online success", sink, err)
 	}
 	sinkBefore := n.CurrentMarketDataSink()
@@ -80,12 +80,12 @@ func TestLocalNode_BrokerBarrierRemovalKeepsNativeEngineAndSink(t *testing.T) {
 
 	if sink, err := n.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
 		Scope: domain.ScopeBroker, MaxQuantity: "100",
-	}, caller); err != nil || sink == nil {
+	}, domain.MissingAccountCreate, caller); err != nil || sink == nil {
 		t.Fatalf("PutOrderSizeLimit first barrier = (sink %T, %v), want one SDK-required rebuild", sink, err)
 	}
 	if sink, err := n.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
 		Scope: domain.ScopeAsset, Asset: "USD", MaxQuantity: "50",
-	}, caller); err != nil || sink != nil {
+	}, domain.MissingAccountCreate, caller); err != nil || sink != nil {
 		t.Fatalf("PutOrderSizeLimit asset = (sink %T, %v), want online success", sink, err)
 	}
 	sinkBefore = n.CurrentMarketDataSink()

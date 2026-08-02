@@ -1027,7 +1027,7 @@ func TestUnblockAccount_NotFound(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-		"/api/v1/accounts/acc-x/unblock", nil))
+		"/api/v1/accounts/acc-x/unblock?missingAccount=create", nil))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d", rec.Code)
 	}
@@ -1043,7 +1043,7 @@ func TestUnblockAccount_ServiceError(t *testing.T) {
 	r, _ := newRouter(&fakeService{unblockErr: fmt.Errorf("boom")})
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-		"/api/v1/accounts/acc-1/unblock", nil))
+		"/api/v1/accounts/acc-1/unblock?missingAccount=create", nil))
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("want 500, got %d", rec.Code)
 	}
@@ -1175,7 +1175,7 @@ func TestSetAccountGroup(t *testing.T) {
 	body := bytes.NewBufferString(`{"group":"vip"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut,
-		"/api/v1/accounts/acc-1/group", body))
+		"/api/v1/accounts/acc-1/group?missingAccount=create", body))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
@@ -1199,7 +1199,7 @@ func TestSetAccountGroup_ClearMembership(t *testing.T) {
 	body := bytes.NewBufferString(`{"group":""}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut,
-		"/api/v1/accounts/acc-1/group", body))
+		"/api/v1/accounts/acc-1/group?missingAccount=create", body))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
@@ -1213,7 +1213,7 @@ func TestSetAccountGroup_InvalidJSON(t *testing.T) {
 	body := bytes.NewBufferString(`{bad`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut,
-		"/api/v1/accounts/acc-1/group", body))
+		"/api/v1/accounts/acc-1/group?missingAccount=create", body))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
@@ -1234,7 +1234,7 @@ func TestSetAccountGroup_NotFound(t *testing.T) {
 	body := bytes.NewBufferString(`{"group":"vip"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut,
-		"/api/v1/accounts/acc-x/group", body))
+		"/api/v1/accounts/acc-x/group?missingAccount=create", body))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d", rec.Code)
 	}
@@ -1251,7 +1251,7 @@ func TestSetAccountGroup_ServiceError(t *testing.T) {
 	body := bytes.NewBufferString(`{"group":"vip"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut,
-		"/api/v1/accounts/acc-1/group", body))
+		"/api/v1/accounts/acc-1/group?missingAccount=create", body))
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("want 500, got %d", rec.Code)
 	}

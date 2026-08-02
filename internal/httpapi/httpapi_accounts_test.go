@@ -354,7 +354,7 @@ func TestBlockAccount(t *testing.T) {
 	body := bytes.NewBufferString(`{"reason":"compliance"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-		"/api/v1/accounts/acc-1/block", body))
+		"/api/v1/accounts/acc-1/block?missingAccount=create", body))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}
@@ -369,7 +369,7 @@ func TestBlockAccount_NotFound(t *testing.T) {
 	body := bytes.NewBufferString(`{"reason":"x"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-		"/api/v1/accounts/acc-x/block", body))
+		"/api/v1/accounts/acc-x/block?missingAccount=create", body))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d", rec.Code)
 	}
@@ -385,7 +385,7 @@ func TestUnblockAccount(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-		"/api/v1/accounts/acc-1/unblock", nil))
+		"/api/v1/accounts/acc-1/unblock?missingAccount=create", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
 	}

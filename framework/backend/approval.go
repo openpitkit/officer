@@ -73,6 +73,7 @@ type submitOrderAttestingNode interface {
 		ctx context.Context,
 		key node.Key,
 		o domain.Order,
+		missing domain.MissingAccountPolicy,
 		caller domain.Caller,
 		attestFor func(domain.Order, engine.OrderResult) store.EventAttestor,
 	) (domain.Order, engine.OrderResult, error)
@@ -83,6 +84,7 @@ type submitImmediateAttestingNode interface {
 		ctx context.Context,
 		key node.Key,
 		o domain.Order,
+		missing domain.MissingAccountPolicy,
 		caller domain.Caller,
 		attestFor func(domain.Order, engine.ImmediateResult) store.EventAttestor,
 	) (domain.Order, engine.ImmediateResult, error)
@@ -348,19 +350,30 @@ func (s *Service) SetNoESign(ctx context.Context, off bool) error {
 // fill at the engine lock price in the same call. A pre-trade reject is a
 // successful signed decision and returns the reject reasons with the same
 // envelope shape as an accept verdict. The issued token is audited as
-// approval_issued.
+// approval_issued. missing is the caller's required choice for an order naming
+// an account that does not exist yet: register it with no group and no currency,
+// or fail with domain.ErrAccountMissing.
 func (s *Service) SubmitOrderToken(
-	ctx context.Context, o domain.Order, mode string,
+	ctx context.Context,
+	o domain.Order,
+	mode string,
+	missing domain.MissingAccountPolicy,
 ) (ApprovalToken, error) {
 	if isDropCopyOrder(o) {
 		return ApprovalToken{}, dropCopySigningError()
 	}
-	return s.submitOrderToken(ctx, o, mode)
+	return s.submitOrderToken(ctx, o, mode, missing)
 }
 
 func (s *Service) submitOrderToken(
-	ctx context.Context, o domain.Order, mode string,
+	ctx context.Context,
+	o domain.Order,
+	mode string,
+	missing domain.MissingAccountPolicy,
 ) (ApprovalToken, error) {
+	if err := validateMissingAccountPolicy(o.Account, missing); err != nil {
+		return ApprovalToken{}, err
+	}
 	signer, err := s.signerOrErr()
 	if err != nil {
 		return ApprovalToken{}, err
@@ -470,7 +483,7 @@ func (s *Service) submitOrderToken(
 			)
 		}
 		order, result, err = attesting.SubmitOrderWithAttestation(
-			ctx, key, o, caller, attestFor)
+			ctx, key, o, missing, caller, attestFor)
 		if err != nil {
 			_ = s.auditApproval(ctx, n, key, domain.AuditActionApprovalFailed,
 				fmt.Sprintf("submit attestation failed: %v", err))
@@ -570,7 +583,7 @@ func (s *Service) submitOrderToken(
 			)
 		}
 		order, result, err = attesting.SubmitImmediateWithAttestation(
-			ctx, key, o, caller, attestFor)
+			ctx, key, o, missing, caller, attestFor)
 		if err != nil {
 			_ = s.auditApproval(ctx, n, key, domain.AuditActionApprovalFailed,
 				fmt.Sprintf("submit attestation failed: %v", err))
@@ -607,10 +620,17 @@ func (s *Service) submitOrderToken(
 // SubmitDropCopyOrder submits one non-enforcing pre-trade order without ever
 // creating an approval token or lifecycle attestation. A caller-supplied
 // external id is preserved; when omitted, the store assigns one. Duplicate ids
-// follow the ordinary unique-store conflict path.
+// follow the ordinary unique-store conflict path. missing must be an explicit
+// domain.MissingAccountCreate: see dropCopyMissingAccountError.
 func (s *Service) SubmitDropCopyOrder(
-	ctx context.Context, o domain.Order,
+	ctx context.Context, o domain.Order, missing domain.MissingAccountPolicy,
 ) (domain.Order, error) {
+	if err := validateMissingAccountPolicy(o.Account, missing); err != nil {
+		return domain.Order{}, err
+	}
+	if missing == domain.MissingAccountReject {
+		return domain.Order{}, dropCopyMissingAccountError()
+	}
 	o.DropCopy = true
 	caller := auth.CallerFromContext(ctx)
 
@@ -621,7 +641,18 @@ func (s *Service) SubmitDropCopyOrder(
 
 	// A drop-copy submit must never be signed. Its pre-trade decision was not
 	// enforced, so a submit attestation would falsely claim risk approval.
-	return n.SubmitOrder(ctx, keyFor(o.Account), o, caller)
+	return n.SubmitOrder(ctx, keyFor(o.Account), o, missing, caller)
+}
+
+func dropCopyMissingAccountError() error {
+	// A drop-copy report describes an execution that already happened elsewhere.
+	// Refusing to record it because Officer has not seen the account would drop
+	// a real fill, so the account is always registered instead.
+	return fmt.Errorf(
+		"backend: drop-copy reports an execution that already happened and "+
+			"cannot reject a missing account; use missingAccount=%s: %w",
+		domain.MissingAccountCreate, domain.ErrInvalid,
+	)
 }
 
 func isDropCopyOrder(order domain.Order) bool {

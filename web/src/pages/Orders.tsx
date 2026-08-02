@@ -54,6 +54,7 @@ import {
   useOpenInNewTabHint,
   useOfficerApi,
   type ExecutionReportBody,
+  type MissingAccountPolicy,
   type SortDirection,
   type TradesFilter,
 } from "@/framework";
@@ -413,6 +414,8 @@ function SubmitOrderDialog({
     "immediate" | "drop_copy" | "hold" | null
   >(null);
   const [dropCopyConfirmOpen, setDropCopyConfirmOpen] = useState(false);
+  const [missingAccountConfirmOpen, setMissingAccountConfirmOpen] =
+    useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [checkState, setCheckState] = useState<CheckState>({ phase: "idle" });
@@ -628,6 +631,7 @@ function SubmitOrderDialog({
     setPrice(initialValues?.price ?? "");
     setSubmitMode(null);
     setDropCopyConfirmOpen(false);
+    setMissingAccountConfirmOpen(false);
     setBusy(false);
     setError(null);
     setCheckState({ phase: "idle" });
@@ -642,7 +646,7 @@ function SubmitOrderDialog({
     onClose();
   }
 
-  async function submit() {
+  async function submit(missingAccount: MissingAccountPolicy = "reject") {
     if (
       !account.trim() ||
       !baseAsset.trim() ||
@@ -699,7 +703,15 @@ function SubmitOrderDialog({
         ...(submissionID ? { id: submissionID } : {}),
         mode: submitMode,
       };
-      const result = await createOrder(body, controller.signal);
+      // Drop-copy reports a fact that already happened, so its endpoint only
+      // accepts "create" for an unknown account; "reject" is a 400 there.
+      const effectiveMissingAccount: MissingAccountPolicy =
+        submitMode === "drop_copy" ? "create" : missingAccount;
+      const result = await createOrder(
+        body,
+        effectiveMissingAccount,
+        controller.signal,
+      );
       if (controller.signal.aborted) {
         return;
       }
@@ -717,6 +729,15 @@ function SubmitOrderDialog({
       onOpenDetail(result.order.id, result.warning);
     } catch (err) {
       if (controller.signal.aborted) {
+        return;
+      }
+      if (
+        missingAccount === "reject" &&
+        submitMode !== "drop_copy" &&
+        err instanceof ApiError &&
+        err.code === "account_missing"
+      ) {
+        setMissingAccountConfirmOpen(true);
         return;
       }
       setError(errMessage(err));
@@ -1055,6 +1076,37 @@ function SubmitOrderDialog({
               }}
             >
               {t("addOrder.dialog.submitDropCopy")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog
+        open={missingAccountConfirmOpen}
+        onOpenChange={setMissingAccountConfirmOpen}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {t("addOrder.dialog.missingAccountConfirmTitle")}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("addOrder.dialog.missingAccountConfirmDescription", {
+                account: account.trim(),
+              })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy}>
+              {tc("actions.cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={busy}
+              onClick={() => {
+                setMissingAccountConfirmOpen(false);
+                void submit("create");
+              }}
+            >
+              {t("addOrder.dialog.missingAccountConfirmAction")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

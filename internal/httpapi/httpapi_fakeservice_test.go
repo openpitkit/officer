@@ -169,6 +169,10 @@ type fakeService struct {
 	adjustmentExternalID domain.ExternalID
 	submitOrderIn        domain.Order
 
+	// missingAccount is the missing-account choice the last mutating command
+	// received, so a handler test can assert the query parameter was threaded.
+	missingAccount domain.MissingAccountPolicy
+
 	// orders submitted-then-resolved, keyed by their used external id, so a fake
 	// SubmitOrderToken can create once and confirm/cancel resolve the same order.
 	submittedOrders map[string]domain.Order
@@ -366,10 +370,17 @@ func (f *fakeService) GetAccountState(_ context.Context, id domain.AccountID) (d
 	}
 	return domain.Account{}, node.AccountLimits{}, domain.ErrNotFound
 }
-func (f *fakeService) BlockAccount(_ context.Context, _ domain.AccountID, _ string) error {
+func (f *fakeService) BlockAccount(
+	_ context.Context, _ domain.AccountID, _ string,
+	missing domain.MissingAccountPolicy,
+) error {
+	f.missingAccount = missing
 	return f.blockErr
 }
-func (f *fakeService) UnblockAccount(_ context.Context, _ domain.AccountID) error {
+func (f *fakeService) UnblockAccount(
+	_ context.Context, _ domain.AccountID, missing domain.MissingAccountPolicy,
+) error {
+	f.missingAccount = missing
 	return f.unblockErr
 }
 func (f *fakeService) DeleteAccount(
@@ -389,18 +400,27 @@ func (f *fakeService) ListPolicyRows(
 	}
 	return store.PolicyListPage{Rows: f.policyRows, Total: len(f.policyRows)}, nil
 }
-func (f *fakeService) PutRateLimit(_ context.Context, l domain.LimitRate) error {
+func (f *fakeService) PutRateLimit(
+	_ context.Context, l domain.LimitRate, missing domain.MissingAccountPolicy,
+) error {
 	f.rateLimitPut = l
+	f.missingAccount = missing
 	return f.putLimErr
 }
-func (f *fakeService) PutOrderSizeLimit(_ context.Context, l domain.LimitOrderSize) error {
+func (f *fakeService) PutOrderSizeLimit(
+	_ context.Context, l domain.LimitOrderSize, missing domain.MissingAccountPolicy,
+) error {
 	f.orderSizeLimitPut = l
+	f.missingAccount = missing
 	return f.putLimErr
 }
 func (f *fakeService) PutSpotFundsPnlBoundsLimit(
-	_ context.Context, l domain.LimitSpotFundsPnlBounds,
+	_ context.Context,
+	l domain.LimitSpotFundsPnlBounds,
+	missing domain.MissingAccountPolicy,
 ) error {
 	f.spotFundsPnlBoundsLimitPut = l
+	f.missingAccount = missing
 	return f.putLimErr
 }
 func (f *fakeService) DeleteLimit(_ context.Context, t node.LimitTarget) error {
@@ -511,7 +531,11 @@ func (f *fakeService) SearchMarketDataSymbols(
 	f.mdSearchInput = input
 	return f.mdSearch, f.mdSearchErr
 }
-func (f *fakeService) SetAccountGroup(_ context.Context, _ domain.AccountID, _ string) error {
+func (f *fakeService) SetAccountGroup(
+	_ context.Context, _ domain.AccountID, _ string,
+	missing domain.MissingAccountPolicy,
+) error {
+	f.missingAccount = missing
 	return f.stateErr
 }
 func (f *fakeService) SetAccountCurrency(
@@ -609,16 +633,19 @@ func (f *fakeService) DeleteGroup(_ context.Context, _ string) error {
 }
 func (f *fakeService) ApplyAdjustment(
 	_ context.Context, _ domain.AccountID, externalID domain.ExternalID,
-	_ domain.AdjustmentRequest,
+	_ domain.AdjustmentRequest, missing domain.MissingAccountPolicy,
 ) (domain.AccountAdjustmentRecord, error) {
 	f.adjustmentExternalID = externalID
+	f.missingAccount = missing
 	return f.adjustment, f.stateErr
 }
 func (f *fakeService) SetBalanceRealizedPnl(
 	_ context.Context, account domain.AccountID, asset string, realizedPnl string,
+	missing domain.MissingAccountPolicy,
 ) (domain.Balance, error) {
 	f.realizedPnlAsset = asset
 	f.realizedPnlValue = realizedPnl
+	f.missingAccount = missing
 	if f.stateErr != nil {
 		return domain.Balance{}, f.stateErr
 	}
@@ -775,9 +802,11 @@ func (f *fakeService) SetNoESign(_ context.Context, off bool) error {
 // before any create, so duplicate/malformed-id rejection can be exercised.
 func (f *fakeService) SubmitOrderToken(
 	_ context.Context, o domain.Order, mode string,
+	missing domain.MissingAccountPolicy,
 ) (backend.ApprovalToken, error) {
 	f.submitTokenMode = mode
 	f.submitOrderIn = o
+	f.missingAccount = missing
 	if f.signingErr != nil {
 		return backend.ApprovalToken{}, f.signingErr
 	}
@@ -796,9 +825,10 @@ func (f *fakeService) SubmitOrderToken(
 }
 
 func (f *fakeService) SubmitDropCopyOrder(
-	ctx context.Context, o domain.Order,
+	ctx context.Context, o domain.Order, missing domain.MissingAccountPolicy,
 ) (domain.Order, error) {
 	caller := auth.CallerFromContext(ctx)
+	f.missingAccount = missing
 	o.DropCopy = true
 	o.Source = caller.Source
 	o.Principal = caller.Principal

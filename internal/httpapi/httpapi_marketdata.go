@@ -187,6 +187,23 @@ func forceQuery(r *http.Request) bool {
 	return r.URL.Query().Get("force") == "true"
 }
 
+// missingAccountQuery reads the ?missingAccount= request parameter for a request
+// that names account. It mirrors forceQuery deliberately: a query flag rather
+// than a body field, so endpoints with and without a request body read the
+// choice the same way and no request DTO grows an optional field.
+//
+// The parameter is required exactly when the request names a non-empty account
+// code; a request that names none (a broker/global/asset-scoped barrier) needs
+// no decision, and a value supplied anyway is ignored.
+func missingAccountQuery(
+	r *http.Request, account domain.AccountID,
+) (domain.MissingAccountPolicy, error) {
+	if account == "" {
+		return "", nil
+	}
+	return domain.ParseMissingAccountPolicy(r.URL.Query().Get("missingAccount"))
+}
+
 func handleUpsertMarketDataInstrument(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := httpx.PathID(r)

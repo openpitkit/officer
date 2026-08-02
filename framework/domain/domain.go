@@ -78,6 +78,12 @@ var (
 	// ErrHasDependents marks a delete that would cascade-delete dependent rows
 	// without an explicit force flag. The concrete error carries the blockers.
 	ErrHasDependents = errors.New("has dependents")
+	// ErrAccountMissing marks a request that named an account code Officer does
+	// not know and asked to reject rather than create it (see
+	// MissingAccountPolicy). It is deliberately not an ErrNotFound: the account
+	// is a request parameter the same call could have created, not an addressed
+	// resource that turned out to be absent. The concrete error carries the code.
+	ErrAccountMissing = errors.New("account does not exist")
 	// ErrTerminalOrder marks the remaining Officer safety net for terminal
 	// orders; callers can bypass it with force and route straight to the engine.
 	ErrTerminalOrder = errors.New("order in terminal status")
@@ -120,6 +126,68 @@ func (e HasDependentsError) Unwrap() error { return ErrHasDependents }
 // NewHasDependentsError creates a typed delete-policy error.
 func NewHasDependentsError(dependents []DependentCount) error {
 	return HasDependentsError{Dependents: dependents}
+}
+
+// AccountMissingError carries the account code a rejecting request named, so a
+// surface can report it as a structured field instead of parsing the message.
+type AccountMissingError struct {
+	Account AccountID
+}
+
+// Error names the account the request could not resolve.
+func (e AccountMissingError) Error() string {
+	return fmt.Sprintf("account %q does not exist", e.Account)
+}
+
+// Unwrap lets callers match the typed error with errors.Is.
+func (e AccountMissingError) Unwrap() error { return ErrAccountMissing }
+
+// NewAccountMissingError creates a typed missing-account error.
+func NewAccountMissingError(account AccountID) error {
+	return AccountMissingError{Account: account}
+}
+
+// MissingAccountPolicy is the caller's explicit choice for a request that names
+// an account code Officer does not know yet. Officer can register the account on
+// the spot, which is what an integration bootstrapping itself wants, or refuse
+// the request, which is what an operator guarding against a typo wants. Neither
+// is safe as a silent default, so every surface that accepts an account code in
+// the request makes the choice a required parameter.
+type MissingAccountPolicy string
+
+const (
+	// MissingAccountCreate registers the named account with default settings (no
+	// group, no currency) before the request is applied.
+	MissingAccountCreate MissingAccountPolicy = "create"
+	// MissingAccountReject fails the request with ErrAccountMissing when the
+	// named account does not exist.
+	MissingAccountReject MissingAccountPolicy = "reject"
+)
+
+// ValidateMissingAccountPolicy returns an error wrapping ErrInvalid when policy
+// is empty or is not a recognised MissingAccountPolicy value.
+func ValidateMissingAccountPolicy(policy MissingAccountPolicy) error {
+	switch policy {
+	case MissingAccountCreate, MissingAccountReject:
+		return nil
+	case "":
+		return fmt.Errorf("missingAccount is required: %w", ErrInvalid)
+	default:
+		return fmt.Errorf(
+			"missingAccount %q must be %q or %q: %w",
+			string(policy), MissingAccountCreate, MissingAccountReject, ErrInvalid,
+		)
+	}
+}
+
+// ParseMissingAccountPolicy validates a wire value of the missingAccount request
+// parameter and returns the typed policy.
+func ParseMissingAccountPolicy(value string) (MissingAccountPolicy, error) {
+	policy := MissingAccountPolicy(value)
+	if err := ValidateMissingAccountPolicy(policy); err != nil {
+		return "", err
+	}
+	return policy, nil
 }
 
 // Policy identifiers.

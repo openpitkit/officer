@@ -59,7 +59,7 @@ func TestService_PutLimitValidatesBeforeRouting(t *testing.T) {
 		Account:     "acc-1",
 		MaxQuantity: "1",
 	}
-	if err := svc.PutOrderSizeLimit(ctx, bad); !errors.Is(err, domain.ErrInvalid) {
+	if err := svc.PutOrderSizeLimit(ctx, bad, domain.MissingAccountCreate); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid, got %v", err)
 	}
 	if len(fn.putOrderSizeLimitCalls) != 0 {
@@ -82,7 +82,7 @@ func TestService_PutLimitAcceptsNonExistentAccount(t *testing.T) {
 		MaxOrders: 100,
 		Window:    time.Second,
 	}
-	if err := svc.PutRateLimit(ctx, limit); err != nil {
+	if err := svc.PutRateLimit(ctx, limit, domain.MissingAccountCreate); err != nil {
 		t.Fatalf("PutRateLimit for non-existent account: %v", err)
 	}
 	if len(fn.putRateLimitCalls) != 1 {
@@ -100,7 +100,7 @@ func TestService_PutLimitForwardsTypedBarrier(t *testing.T) {
 		MaxOrders: 100,
 		Window:    time.Second,
 	}
-	if err := svc.PutRateLimit(ctx, limit); err != nil {
+	if err := svc.PutRateLimit(ctx, limit, domain.MissingAccountCreate); err != nil {
 		t.Fatalf("PutRateLimit: %v", err)
 	}
 	if len(fn.putRateLimitCalls) != 1 {
@@ -125,7 +125,7 @@ func TestService_PutLimitReconnectsMarketDataOnRebuild(t *testing.T) {
 		MaxOrders: 100,
 		Window:    time.Second,
 	}
-	if err := svc.PutRateLimit(ctx, limit); err != nil {
+	if err := svc.PutRateLimit(ctx, limit, domain.MissingAccountCreate); err != nil {
 		t.Fatalf("PutRateLimit: %v", err)
 	}
 	if md.stops != 1 || md.restarts != 1 || md.sink != sink {
@@ -153,7 +153,7 @@ func TestService_PutLimitSerializesMarketDataReconnect(t *testing.T) {
 	}
 	putDone := make(chan error, 1)
 	go func() {
-		putDone <- svc.PutRateLimit(context.Background(), limit)
+		putDone <- svc.PutRateLimit(context.Background(), limit, domain.MissingAccountCreate)
 	}()
 	select {
 	case <-md.stopEntered:
@@ -210,7 +210,7 @@ func TestService_PutLimitSerializesNodeMutationWithMarketDataReconnect(t *testin
 	go func() {
 		rateDone <- svc.PutRateLimit(context.Background(), domain.LimitRate{
 			Scope: domain.ScopeBroker, MaxOrders: 100, Window: time.Second,
-		})
+		}, domain.MissingAccountCreate)
 	}()
 	select {
 	case <-rateEntered:
@@ -225,7 +225,7 @@ func TestService_PutLimitSerializesNodeMutationWithMarketDataReconnect(t *testin
 			Account:     "acc-1",
 			Asset:       "AAPL",
 			MaxQuantity: "1",
-		})
+		}, domain.MissingAccountCreate)
 	}()
 	select {
 	case <-orderEntered:

@@ -72,7 +72,7 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 				t.Helper()
 				reset()
 				if _, err := svc.SubmitOrderToken(
-					context.Background(), sampleOrder(), backend.SubmitModeHold,
+					context.Background(), sampleOrder(), backend.SubmitModeHold, domain.MissingAccountCreate,
 				); err != nil {
 					t.Fatalf("SubmitOrderToken workflow: %v", err)
 				}
@@ -86,7 +86,7 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 				t.Helper()
 				reset()
 				if _, err := svc.SubmitOrderToken(
-					context.Background(), sampleOrder(), backend.SubmitModeImmediate,
+					context.Background(), sampleOrder(), backend.SubmitModeImmediate, domain.MissingAccountCreate,
 				); err != nil {
 					t.Fatalf("SubmitOrderToken immediate: %v", err)
 				}

@@ -201,3 +201,15 @@ func (s *Service) Status(ctx context.Context) (Status, error) {
 func keyFor(id domain.AccountID) node.Key {
 	return node.Key{Account: id}
 }
+
+// validateMissingAccountPolicy enforces the missing-account request contract:
+// the caller must choose explicitly exactly when the request names an account,
+// and a value supplied for a request that names none is ignored.
+func validateMissingAccountPolicy(
+	account domain.AccountID, missing domain.MissingAccountPolicy,
+) error {
+	if account == "" {
+		return nil
+	}
+	return domain.ValidateMissingAccountPolicy(missing)
+}

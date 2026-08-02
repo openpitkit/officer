@@ -92,13 +92,13 @@ func recordOrderSettlementWithAttestation(
 // order, submitted event, and engine outcome in one store transaction. On accept
 // it records pre_trade_accepted and committed, persists the lock, canonical
 // leaves, balance outcomes, and committed status; on reject it records
-// pre_trade_rejected and rejected status. An order for an account Officer does
-// not know yet auto-creates it (like a fresh adjustment target), so submitting
-// against an unknown account is processed rather than rejected as invalid.
+// pre_trade_rejected and rejected status. missing decides whether an order for
+// an account Officer does not know yet registers that account or is rejected.
 func (n *localNode) SubmitOrder(
-	ctx context.Context, key Key, o domain.Order, caller domain.Caller,
+	ctx context.Context, key Key, o domain.Order,
+	missing domain.MissingAccountPolicy, caller domain.Caller,
 ) (domain.Order, error) {
-	order, _, err := n.submitOrder(ctx, key, o, caller, nil)
+	order, _, err := n.submitOrder(ctx, key, o, missing, caller, nil)
 	return order, err
 }
 
@@ -106,23 +106,26 @@ func (n *localNode) SubmitOrderWithAttestation(
 	ctx context.Context,
 	key Key,
 	o domain.Order,
+	missing domain.MissingAccountPolicy,
 	caller domain.Caller,
 	attestFor func(domain.Order, engine.OrderResult) store.EventAttestor,
 ) (domain.Order, engine.OrderResult, error) {
-	return n.submitOrder(ctx, key, o, caller, attestFor)
+	return n.submitOrder(ctx, key, o, missing, caller, attestFor)
 }
 
 func (n *localNode) submitOrder(
 	ctx context.Context,
 	key Key,
 	o domain.Order,
+	missing domain.MissingAccountPolicy,
 	caller domain.Caller,
 	attestFor func(domain.Order, engine.OrderResult) store.EventAttestor,
 ) (domain.Order, engine.OrderResult, error) {
-	// Register the account and both order assets and rebuild pre-lane so the
-	// resolver knows them before RunAccountSynchronized resolves the account.
+	// Resolve the account and register both order assets pre-lane so the resolver
+	// knows them before RunAccountSynchronized resolves the account.
 	if err := n.ensureAccountAndAssetsRegisteredExclusive(
-		ctx, key.Account, "submit order", caller, o.BaseAsset, o.QuoteAsset,
+		ctx, key.Account, missing, "submit order", caller,
+		o.BaseAsset, o.QuoteAsset,
 	); err != nil {
 		return domain.Order{}, engine.OrderResult{}, err
 	}
@@ -260,34 +263,39 @@ func orderRejectedSettlement(
 // SubmitImmediate records the order, runs the engine pre-trade and, on accept,
 // commits and settles the fill in the same engine call at the captured lock
 // price so the held amount nets to zero, then persists the filled lifecycle. On
-// reject the order is recorded rejected. The backend audits the issued approval.
+// reject the order is recorded rejected. missing is handled as in SubmitOrder.
+// The backend audits the issued approval.
 func (n *localNode) SubmitImmediate(
-	ctx context.Context, key Key, o domain.Order, caller domain.Caller,
+	ctx context.Context, key Key, o domain.Order,
+	missing domain.MissingAccountPolicy, caller domain.Caller,
 ) (domain.Order, engine.ImmediateResult, error) {
-	return n.submitImmediate(ctx, key, o, caller, nil)
+	return n.submitImmediate(ctx, key, o, missing, caller, nil)
 }
 
 func (n *localNode) SubmitImmediateWithAttestation(
 	ctx context.Context,
 	key Key,
 	o domain.Order,
+	missing domain.MissingAccountPolicy,
 	caller domain.Caller,
 	attestFor func(domain.Order, engine.ImmediateResult) store.EventAttestor,
 ) (domain.Order, engine.ImmediateResult, error) {
-	return n.submitImmediate(ctx, key, o, caller, attestFor)
+	return n.submitImmediate(ctx, key, o, missing, caller, attestFor)
 }
 
 func (n *localNode) submitImmediate(
 	ctx context.Context,
 	key Key,
 	o domain.Order,
+	missing domain.MissingAccountPolicy,
 	caller domain.Caller,
 	attestFor func(domain.Order, engine.ImmediateResult) store.EventAttestor,
 ) (domain.Order, engine.ImmediateResult, error) {
-	// Register the account and both order assets and rebuild pre-lane (see
+	// Resolve the account and register both order assets pre-lane (see
 	// SubmitOrder).
 	if err := n.ensureAccountAndAssetsRegisteredExclusive(
-		ctx, key.Account, "submit immediate", caller, o.BaseAsset, o.QuoteAsset,
+		ctx, key.Account, missing, "submit immediate", caller,
+		o.BaseAsset, o.QuoteAsset,
 	); err != nil {
 		return domain.Order{}, engine.ImmediateResult{}, err
 	}

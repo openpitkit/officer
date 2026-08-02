@@ -822,7 +822,7 @@ func TestService_ApplyAdjustmentHonorsSuppliedExternalID(t *testing.T) {
 
 	supplied := mdID("supplied-adj-id")
 	rec, err := svc.ApplyAdjustment(
-		context.Background(), "acc-1", supplied, sampleAdjustmentRequest())
+		context.Background(), "acc-1", supplied, sampleAdjustmentRequest(), domain.MissingAccountCreate)
 	if err != nil {
 		t.Fatalf("ApplyAdjustment: %v", err)
 	}
@@ -841,7 +841,7 @@ func TestService_ApplyAdjustmentGeneratesExternalIDWhenAbsent(t *testing.T) {
 	svc, fn := newTestService()
 
 	rec, err := svc.ApplyAdjustment(
-		context.Background(), "acc-1", domain.ExternalID(""), sampleAdjustmentRequest())
+		context.Background(), "acc-1", domain.ExternalID(""), sampleAdjustmentRequest(), domain.MissingAccountCreate)
 	if err != nil {
 		t.Fatalf("ApplyAdjustment: %v", err)
 	}
@@ -862,7 +862,7 @@ func TestService_ApplyAdjustmentDuplicateSuppliedIDConflicts(t *testing.T) {
 	fn.adjustmentErr = fmt.Errorf("append adjustment: %w", domain.ErrAlreadyExists)
 
 	_, err := svc.ApplyAdjustment(
-		context.Background(), "acc-1", mdID("dup-adj-id"), sampleAdjustmentRequest())
+		context.Background(), "acc-1", mdID("dup-adj-id"), sampleAdjustmentRequest(), domain.MissingAccountCreate)
 	if !errors.Is(err, domain.ErrAlreadyExists) {
 		t.Fatalf("duplicate supplied id error = %v, want ErrAlreadyExists", err)
 	}

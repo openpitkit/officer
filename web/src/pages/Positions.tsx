@@ -62,6 +62,7 @@ import {
   SortableHeader,
   TimeRangeFilter,
   useOfficerApi,
+  type MissingAccountPolicy,
 } from "@/framework";
 import { formatDate, formatTime } from "@/i18n/format";
 import type {
@@ -92,6 +93,16 @@ import {
   PageSizeSelect,
   TablePagination,
 } from "@/components/TableControls";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -1414,6 +1425,8 @@ function AdjustmentPanel({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<Adjustment | null>(null);
+  const [missingAccountConfirmOpen, setMissingAccountConfirmOpen] =
+    useState(false);
   const localAccountSuggestions = useAccountCodeSuggestions(
     account,
     !lockIdentity,
@@ -1503,9 +1516,10 @@ function AdjustmentPanel({
     setIncomingBounds(emptyBoundsDraft());
     setError(null);
     setOutcome(null);
+    setMissingAccountConfirmOpen(false);
   };
 
-  const submit = async () => {
+  const submit = async (missingAccount: MissingAccountPolicy = "reject") => {
     if (!trimAccount) {
       setError(t("dialog.error.accountRequired"));
       return;
@@ -1570,11 +1584,20 @@ function AdjustmentPanel({
       if (ib) {
         body.incomingBounds = ib;
       }
-      const result = await createAdjustment(trimAccount, body);
+      const result = await createAdjustment(trimAccount, body, missingAccount);
       setOutcome(result);
       onDone();
     } catch (err) {
-      setError(errMessage(err));
+      if (
+        !lockIdentity &&
+        missingAccount === "reject" &&
+        err instanceof ApiError &&
+        err.code === "account_missing"
+      ) {
+        setMissingAccountConfirmOpen(true);
+      } else {
+        setError(errMessage(err));
+      }
     } finally {
       setBusy(false);
     }
@@ -1585,6 +1608,7 @@ function AdjustmentPanel({
   const disabled = busy;
 
   return (
+    <>
     <div
       role="region"
       aria-label={t("panel.title")}
@@ -1785,6 +1809,37 @@ function AdjustmentPanel({
         </Button>
       </div>
     </div>
+    <AlertDialog
+      open={missingAccountConfirmOpen}
+      onOpenChange={setMissingAccountConfirmOpen}
+    >
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>
+            {t("missingAccountConfirm.title")}
+          </AlertDialogTitle>
+          <AlertDialogDescription>
+            {t("missingAccountConfirm.description", { account: trimAccount })}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={busy}>
+            {t("actions.cancel", { ns: "common" })}
+          </AlertDialogCancel>
+          <AlertDialogAction
+            onClick={(e) => {
+              e.preventDefault();
+              setMissingAccountConfirmOpen(false);
+              void submit("create");
+            }}
+            disabled={busy}
+          >
+            {t("missingAccountConfirm.confirm")}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    </>
   );
 }
 
@@ -2563,6 +2618,8 @@ function AdjustDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<Adjustment | null>(null);
+  const [missingAccountConfirmOpen, setMissingAccountConfirmOpen] =
+    useState(false);
   const localAccountSuggestions = useAccountCodeSuggestions(account, open);
   const localAssetSuggestions = useAssetCodeSuggestions(asset, open);
   const mergedAccountSuggestions = useMemo(
@@ -2592,6 +2649,7 @@ function AdjustDialog({
       setBusy(false);
       setError(null);
       setOutcome(null);
+      setMissingAccountConfirmOpen(false);
     }
   }, [
     open,
@@ -2667,9 +2725,10 @@ function AdjustDialog({
     setIncomingBounds(emptyBounds());
     setError(null);
     setOutcome(null);
+    setMissingAccountConfirmOpen(false);
   };
 
-  const submit = async () => {
+  const submit = async (missingAccount: MissingAccountPolicy = "reject") => {
     const trimAccount = account.trim();
     const trimAsset = asset.trim();
     if (!trimAccount) {
@@ -2720,17 +2779,26 @@ function AdjustDialog({
       if (ib) {
         body.incomingBounds = ib;
       }
-      const result = await createAdjustment(trimAccount, body);
+      const result = await createAdjustment(trimAccount, body, missingAccount);
       setOutcome(result);
       onDone();
     } catch (err) {
-      setError(errMessage(err));
+      if (
+        missingAccount === "reject" &&
+        err instanceof ApiError &&
+        err.code === "account_missing"
+      ) {
+        setMissingAccountConfirmOpen(true);
+      } else {
+        setError(errMessage(err));
+      }
     } finally {
       setBusy(false);
     }
   };
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
@@ -2880,6 +2948,39 @@ function AdjustDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    <AlertDialog
+      open={missingAccountConfirmOpen}
+      onOpenChange={setMissingAccountConfirmOpen}
+    >
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>
+            {t("missingAccountConfirm.title")}
+          </AlertDialogTitle>
+          <AlertDialogDescription>
+            {t("missingAccountConfirm.description", {
+              account: account.trim(),
+            })}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={busy}>
+            {t("actions.cancel", { ns: "common" })}
+          </AlertDialogCancel>
+          <AlertDialogAction
+            onClick={(e) => {
+              e.preventDefault();
+              setMissingAccountConfirmOpen(false);
+              void submit("create");
+            }}
+            disabled={busy}
+          >
+            {t("missingAccountConfirm.confirm")}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    </>
   );
 }
 

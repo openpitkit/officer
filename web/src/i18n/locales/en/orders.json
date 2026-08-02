@@ -186,7 +186,10 @@
       "dropCopyConfirmTitle": "Submit without enforced pre-trade approval?",
       "dropCopyConfirmDescription": "Every policy will run and update state, but policy rejects and account or group blocks will not stop this order. Neither this submit nor later execution reports are signed or attested.",
       "dropCopyPriceRequired": "Enter a positive limit price for drop-copy.",
-      "validationError": "Account, instrument, and amount are required."
+      "validationError": "Account, instrument, and amount are required.",
+      "missingAccountConfirmTitle": "Account does not exist",
+      "missingAccountConfirmDescription": "Account {{account}} does not exist yet. Create it with default settings (no group, no currency) and continue?",
+      "missingAccountConfirmAction": "Create account and continue"
     }
   },
 

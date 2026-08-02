@@ -301,12 +301,13 @@ func (s *referenceSource) SubmitOrderToken(
 	context.Context,
 	domain.Order,
 	string,
+	domain.MissingAccountPolicy,
 ) (mcp.SubmitOrderTokenResult, error) {
 	return mcp.SubmitOrderTokenResult{}, nil
 }
 
 func (s *referenceSource) SubmitDropCopyOrder(
-	context.Context, domain.Order,
+	context.Context, domain.Order, domain.MissingAccountPolicy,
 ) (mcp.SubmitDropCopyOrderResult, error) {
 	return mcp.SubmitDropCopyOrderResult{}, nil
 }

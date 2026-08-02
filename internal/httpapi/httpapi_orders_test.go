@@ -1055,7 +1055,7 @@ func TestApplyAdjustment_InvalidJSON(t *testing.T) {
 	body := bytes.NewBufferString(`{bad`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-		"/api/v1/accounts/acc-1/adjustments", body))
+		"/api/v1/accounts/acc-1/adjustments?missingAccount=create", body))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
@@ -1077,7 +1077,7 @@ func TestApplyAdjustment_ValidationError(t *testing.T) {
 	body := bytes.NewBufferString(`{"asset":"USD","balance":{"mode":"delta","value":"x"}}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-		"/api/v1/accounts/acc-1/adjustments", body))
+		"/api/v1/accounts/acc-1/adjustments?missingAccount=create", body))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
@@ -1097,7 +1097,7 @@ func TestApplyAdjustment_ServiceError(t *testing.T) {
 	body := bytes.NewBufferString(`{"asset":"USD","balance":{"mode":"delta","value":"100"}}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-		"/api/v1/accounts/acc-1/adjustments", body))
+		"/api/v1/accounts/acc-1/adjustments?missingAccount=create", body))
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("want 500, got %d", rec.Code)
 	}
@@ -1125,7 +1125,7 @@ func TestApplyAdjustment_SuppliedExternalID(t *testing.T) {
 		supplied.String()))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-		"/api/v1/accounts/acc-1/adjustments", body))
+		"/api/v1/accounts/acc-1/adjustments?missingAccount=create", body))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("want 201, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -1156,7 +1156,7 @@ func TestApplyAdjustment_AbsentExternalID(t *testing.T) {
 		`{"asset":"USD","balance":{"mode":"delta","value":"100"}}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-		"/api/v1/accounts/acc-1/adjustments", body))
+		"/api/v1/accounts/acc-1/adjustments?missingAccount=create", body))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("want 201, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -1179,7 +1179,7 @@ func TestApplyAdjustment_DuplicateConflict(t *testing.T) {
 		extID("adj-dup").String()))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-		"/api/v1/accounts/acc-1/adjustments", body))
+		"/api/v1/accounts/acc-1/adjustments?missingAccount=create", body))
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("want 409, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -1203,7 +1203,7 @@ func TestApplyAdjustment_OpaqueExternalID(t *testing.T) {
 		`{"id":"` + supplied + `","asset":"USD","balance":{"mode":"delta","value":"100"}}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-		"/api/v1/accounts/acc-1/adjustments", body))
+		"/api/v1/accounts/acc-1/adjustments?missingAccount=create", body))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("want 201, got %d: %s", rec.Code, rec.Body.String())
 	}

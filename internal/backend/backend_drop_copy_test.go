@@ -24,6 +24,7 @@ import (
 
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/internal/backend"
 )
 
 func dropCopyOrder(id domain.ExternalID) domain.Order {
@@ -39,6 +40,67 @@ func dropCopyOrder(id domain.ExternalID) domain.Order {
 	}
 }
 
+// TestService_SubmitDropCopyOrderRejectsRefusingMissingAccount covers the
+// drop-copy exception to the missing-account choice: the report describes an
+// execution that already happened, so refusing it over an unknown account would
+// drop a real fill. The request is invalid and never reaches the node.
+func TestService_SubmitDropCopyOrderRejectsRefusingMissingAccount(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService()
+	ctx := auth.ContextWithCaller(context.Background(), domain.Caller{
+		Source: domain.SourcePanel, Principal: "operator",
+	})
+
+	_, err := svc.SubmitDropCopyOrder(
+		ctx, dropCopyOrder(""), domain.MissingAccountReject,
+	)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("SubmitDropCopyOrder(reject) = %v, want ErrInvalid", err)
+	}
+	if len(fn.orders) != 0 {
+		t.Fatalf("orders = %+v, want none recorded", fn.orders)
+	}
+	if len(fn.missingAccountCalls) != 0 {
+		t.Fatalf("node saw %+v, want no submit", fn.missingAccountCalls)
+	}
+}
+
+// TestService_SubmitDropCopyOrderRequiresMissingAccountChoice covers the
+// required-parameter boundary at the backend seam, which both the HTTP and the
+// MCP surfaces share.
+func TestService_SubmitDropCopyOrderRequiresMissingAccountChoice(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService()
+	ctx := auth.ContextWithCaller(context.Background(), domain.Caller{
+		Source: domain.SourcePanel, Principal: "operator",
+	})
+
+	if _, err := svc.SubmitDropCopyOrder(ctx, dropCopyOrder(""), ""); !errors.Is(
+		err, domain.ErrInvalid,
+	) {
+		t.Fatalf("SubmitDropCopyOrder(empty) = %v, want ErrInvalid", err)
+	}
+	if len(fn.missingAccountCalls) != 0 {
+		t.Fatalf("node saw %+v, want no submit", fn.missingAccountCalls)
+	}
+}
+
+// TestService_SubmitOrderTokenRequiresMissingAccountChoice covers the same
+// boundary for the signed submit path.
+func TestService_SubmitOrderTokenRequiresMissingAccountChoice(t *testing.T) {
+	t.Parallel()
+	svc, fn := newTestService()
+
+	if _, err := svc.SubmitOrderToken(
+		context.Background(), sampleOrder(), backend.SubmitModeHold, "",
+	); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("SubmitOrderToken(empty) = %v, want ErrInvalid", err)
+	}
+	if len(fn.missingAccountCalls) != 0 {
+		t.Fatalf("node saw %+v, want no submit", fn.missingAccountCalls)
+	}
+}
+
 func TestService_SubmitDropCopyOrderGeneratesExternalIDWhenAbsent(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService()
@@ -46,7 +108,7 @@ func TestService_SubmitDropCopyOrderGeneratesExternalIDWhenAbsent(t *testing.T) 
 		Source: domain.SourcePanel, Principal: "operator",
 	})
 
-	created, err := svc.SubmitDropCopyOrder(ctx, dropCopyOrder(""))
+	created, err := svc.SubmitDropCopyOrder(ctx, dropCopyOrder(""), domain.MissingAccountCreate)
 	if err != nil {
 		t.Fatalf("SubmitDropCopyOrder: %v", err)
 	}
@@ -76,7 +138,7 @@ func TestService_SubmitOrderTokenRefusesDropCopy(t *testing.T) {
 	order.DropCopy = true
 
 	if _, err := svc.SubmitOrderToken(
-		context.Background(), order, "hold",
+		context.Background(), order, "hold", domain.MissingAccountCreate,
 	); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("SubmitOrderToken error = %v, want ErrInvalid", err)
 	}
@@ -96,7 +158,7 @@ func TestService_SubmitDropCopyOrderPreservesSuppliedIDAndConflictsOnDuplicate(
 		Source: domain.SourcePanel, Principal: "operator",
 	})
 
-	created, err := svc.SubmitDropCopyOrder(ctx, o)
+	created, err := svc.SubmitDropCopyOrder(ctx, o, domain.MissingAccountCreate)
 	if err != nil {
 		t.Fatalf("SubmitDropCopyOrder: %v", err)
 	}
@@ -113,7 +175,7 @@ func TestService_SubmitDropCopyOrderPreservesSuppliedIDAndConflictsOnDuplicate(
 	}
 	eventCount := len(fn.orderEvents[id])
 
-	_, err = svc.SubmitDropCopyOrder(ctx, o)
+	_, err = svc.SubmitDropCopyOrder(ctx, o, domain.MissingAccountCreate)
 	if !errors.Is(err, domain.ErrAlreadyExists) {
 		t.Fatalf("duplicate supplied id error = %v, want ErrAlreadyExists", err)
 	}

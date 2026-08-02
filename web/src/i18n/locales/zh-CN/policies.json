@@ -56,6 +56,11 @@
     "description": "此策略变更会从已保存的账户、限额、规则和余额重建风控引擎。重建期间，传入的变更请求会被拒绝。",
     "confirm": "重建并应用"
   },
+  "missingAccountConfirm": {
+    "title": "账户不存在",
+    "description": "账户 {{account}} 尚不存在。是否以默认设置（无分组、无货币）创建该账户并继续？",
+    "confirm": "创建账户并继续"
+  },
   "dialog": {
     "editTitle": "编辑策略",
     "addTitle": "添加策略",

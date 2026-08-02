@@ -722,7 +722,8 @@ describe("Orders submit mode", () => {
     await user.click(submitButton);
     await waitFor(() => expect(createOrderMock).toHaveBeenCalledTimes(1));
     const submitted = createOrderMock.mock.calls[0][0];
-    const signal = createOrderMock.mock.calls[0][1];
+    const missingAccount = createOrderMock.mock.calls[0][1];
+    const signal = createOrderMock.mock.calls[0][2];
     expect(submitted).toMatchObject({
       id: "ord-supplied-000001",
       account: "desk-alpha",
@@ -734,6 +735,7 @@ describe("Orders submit mode", () => {
       mode: "immediate",
     });
     expect(submitted).not.toHaveProperty("submitMode");
+    expect(missingAccount).toBe("reject");
     expect(signal).toBeInstanceOf(AbortSignal);
   });
 
@@ -821,6 +823,55 @@ describe("Orders submit mode", () => {
     });
     expect(createOrderMock.mock.calls[0][0]).not.toHaveProperty("id");
     expect(createOrderMock.mock.calls[0][0]).not.toHaveProperty("dropCopy");
+    // Drop-copy reports a fact that already happened, so the account is
+    // always created on demand rather than asked about.
+    expect(createOrderMock.mock.calls[0][1]).toBe("create");
+  });
+
+  it("offers to create a missing account for an immediate submit and resubmits with create", async () => {
+    const user = userEvent.setup();
+    createOrderMock.mockRejectedValueOnce(
+      new ApiError(
+        'block account: account "desk-new" does not exist',
+        "account_missing",
+        404,
+        undefined,
+        "desk-new",
+      ),
+    );
+    createOrderMock.mockResolvedValueOnce({ order: sampleOrder });
+    renderOrders("/orders");
+    const dialog = await openDialog(user);
+
+    await user.type(within(dialog).getByLabelText("Account"), "desk-new");
+    await user.type(within(dialog).getByLabelText("Base asset"), "AAPL");
+    await user.type(within(dialog).getByLabelText("Quote asset"), "USD");
+    await user.type(within(dialog).getByLabelText("Amount"), "100");
+    await user.click(within(dialog).getByRole("radio", { name: /buy/i }));
+    await user.click(within(dialog).getByRole("radio", { name: /quantity/i }));
+    await user.click(
+      within(dialog).getByRole("radio", { name: /submit and settle/i }),
+    );
+    await user.click(within(dialog).getByRole("button", { name: /add order/i }));
+
+    const confirmation = await screen.findByRole("alertdialog", {
+      name: "Account does not exist",
+    });
+    expect(createOrderMock).toHaveBeenCalledTimes(1);
+    expect(createOrderMock.mock.calls[0][1]).toBe("reject");
+
+    await user.click(
+      within(confirmation).getByRole("button", {
+        name: "Create account and continue",
+      }),
+    );
+
+    await waitFor(() => expect(createOrderMock).toHaveBeenCalledTimes(2));
+    expect(createOrderMock.mock.calls[1][0]).toMatchObject({
+      account: "desk-new",
+      mode: "immediate",
+    });
+    expect(createOrderMock.mock.calls[1][1]).toBe("create");
   });
 
   it("surfaces a drop-copy validation error returned by the API", async () => {
@@ -938,7 +989,7 @@ describe("Orders submit mode", () => {
 
   it("clears busy after aborting an in-flight submit", async () => {
     const user = userEvent.setup();
-    createOrderMock.mockImplementation((_body, signal) => (
+    createOrderMock.mockImplementation((_body, _missingAccount, signal) => (
       new Promise((_, reject) => {
         signal?.addEventListener("abort", () => {
           reject(new DOMException("aborted", "AbortError"));

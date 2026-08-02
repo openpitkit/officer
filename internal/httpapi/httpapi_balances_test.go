@@ -189,7 +189,7 @@ func TestSetBalanceRealizedPnl(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(
 		http.MethodPut,
-		"/api/v1/accounts/acc-1/balances/realized-pnl",
+		"/api/v1/accounts/acc-1/balances/realized-pnl?missingAccount=create",
 		body,
 	))
 	if rec.Code != http.StatusOK {
@@ -224,7 +224,7 @@ func TestSetBalanceRealizedPnl_BadJSON(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(
 		http.MethodPut,
-		"/api/v1/accounts/acc-1/balances/realized-pnl",
+		"/api/v1/accounts/acc-1/balances/realized-pnl?missingAccount=create",
 		body,
 	))
 	if rec.Code != http.StatusBadRequest {
@@ -244,7 +244,7 @@ func TestSetBalanceRealizedPnl_BadAccountID(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(
 		http.MethodPut,
-		"/api/v1/accounts/bad/balances/realized-pnl",
+		"/api/v1/accounts/bad/balances/realized-pnl?missingAccount=create",
 		body,
 	)
 	routeCtx := chi.NewRouteContext()
@@ -274,7 +274,7 @@ func TestSetBalanceRealizedPnl_ServiceError(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(
 		http.MethodPut,
-		"/api/v1/accounts/acc-1/balances/realized-pnl",
+		"/api/v1/accounts/acc-1/balances/realized-pnl?missingAccount=create",
 		body,
 	))
 	if rec.Code != http.StatusBadRequest {

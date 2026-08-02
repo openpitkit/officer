@@ -201,6 +201,9 @@ func validateScopeAndAxes(
 		if account == "" {
 			return fmt.Errorf("scope %q requires an account: %w", scope, ErrInvalid)
 		}
+		if err := ValidateAccountID(account); err != nil {
+			return err
+		}
 	} else if account != "" {
 		return fmt.Errorf("scope %q must not have account: %w", scope, ErrInvalid)
 	}

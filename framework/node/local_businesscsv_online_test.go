@@ -327,7 +327,7 @@ func TestAutoCreateInheritsDefaultCurrencyWithoutAccountOverride(t *testing.T) {
 			Balance: &domain.AdjustmentAmount{
 				Mode: domain.AdjustmentModeAbsolute, Value: "10",
 			},
-		}, testCaller); err != nil {
+		}, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("ApplyAdjustment: %v", err)
 	}
 	eng.mu.Lock()
@@ -359,7 +359,7 @@ func TestAutoCreateDoesNotTouchAccountCurrencyOverride(t *testing.T) {
 	eng.accountCurrencyErr = errors.New("account currency must not be touched")
 
 	err := n.ensureAccountAndAssetsRegisteredExclusive(
-		ctx, "fresh", "test", testCaller, "USD",
+		ctx, "fresh", domain.MissingAccountCreate, "test", testCaller, "USD",
 	)
 	if err != nil {
 		t.Fatalf("auto-create: %v", err)
@@ -394,7 +394,7 @@ func TestAutoCreatePublishesAccountWithoutRebuild(t *testing.T) {
 			Balance: &domain.AdjustmentAmount{
 				Mode: domain.AdjustmentModeAbsolute, Value: "10",
 			},
-		}, testCaller); err != nil {
+		}, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("ApplyAdjustment on fresh account: %v", err)
 	}
 	if probe.builds != 1 {
@@ -532,7 +532,7 @@ func TestAutoCreateResolverRollbackFailureReconcilesAndFailsStop(t *testing.T) {
 	seedTestPrincipal(t, n.realm)
 
 	err = n.ensureAccountAndAssetsRegisteredExclusive(
-		ctx, "fresh", "test", testCaller, "USD",
+		ctx, "fresh", domain.MissingAccountCreate, "test", testCaller, "USD",
 	)
 	if !errors.Is(err, resolverErr) || !errors.Is(err, deleteErr) {
 		t.Fatalf("auto-create error = %v, want resolver and delete failures", err)

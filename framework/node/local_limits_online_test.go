@@ -90,13 +90,13 @@ func TestLocalNode_RateAndOrderSizeCRUDConfigureLive(t *testing.T) {
 	}
 
 	if _, err := n.PutRateLimit(
-		ctx, rateLimit(domain.ScopeBroker, "", "", 100, time.Second), testCaller,
+		ctx, rateLimit(domain.ScopeBroker, "", "", 100, time.Second), domain.MissingAccountCreate, testCaller,
 	); err != nil {
 		t.Fatalf("put first rate: %v", err)
 	}
 	if _, err := n.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
 		Scope: domain.ScopeBroker, MaxQuantity: "100",
-	}, testCaller); err != nil {
+	}, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("put first order size: %v", err)
 	}
 	if _, err := n.DeleteLimit(ctx, LimitTarget{
@@ -135,7 +135,7 @@ func TestLocalNode_OrderSizeConfigureFailureRevertsWithoutRebuild(t *testing.T) 
 	current, _ := preparePolicyLifecycleBuild(n)
 	ctx := context.Background()
 	initial := domain.LimitOrderSize{Scope: domain.ScopeBroker, MaxQuantity: "50"}
-	if _, err := n.PutOrderSizeLimit(ctx, initial, testCaller); err != nil {
+	if _, err := n.PutOrderSizeLimit(ctx, initial, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutOrderSizeLimit initial: %v", err)
 	}
 	current.configureErr = configureErr
@@ -147,7 +147,7 @@ func TestLocalNode_OrderSizeConfigureFailureRevertsWithoutRebuild(t *testing.T) 
 
 	sink, err := n.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
 		Scope: domain.ScopeBroker, MaxQuantity: "100",
-	}, testCaller)
+	}, domain.MissingAccountCreate, testCaller)
 	if !errors.Is(err, configureErr) {
 		t.Fatalf("PutOrderSizeLimit error = %v, want configure failure", err)
 	}
@@ -211,7 +211,7 @@ func TestLocalNode_LivePolicyConfigurationQuiescesAccountLanes(t *testing.T) {
 		_, err := n.PutRateLimit(
 			context.Background(),
 			rateLimit(domain.ScopeBroker, "", "", 100, time.Second),
-			testCaller,
+			domain.MissingAccountCreate, testCaller,
 		)
 		configureDone <- err
 	}()
@@ -270,7 +270,7 @@ func TestLocalNode_RateLimitAuditFailureFatalsAfterConfigure(t *testing.T) {
 	sink, err := n.PutRateLimit(
 		ctx,
 		rateLimit(domain.ScopeBroker, "", "", 100, time.Second),
-		testCaller,
+		domain.MissingAccountCreate, testCaller,
 	)
 	if !errors.Is(err, auditErr) {
 		t.Fatalf("PutRateLimit error = %v, want audit failure", err)
@@ -302,7 +302,7 @@ func TestLocalNode_FirstRateLimitBuildFailureIsAtomic(t *testing.T) {
 	}
 
 	sink, err := n.PutRateLimit(
-		ctx, rateLimit(domain.ScopeBroker, "", "", 100, time.Second), testCaller,
+		ctx, rateLimit(domain.ScopeBroker, "", "", 100, time.Second), domain.MissingAccountCreate, testCaller,
 	)
 	if !errors.Is(err, buildErr) {
 		t.Fatalf("PutRateLimit error = %v, want build failure", err)
@@ -343,7 +343,7 @@ func TestLocalNode_FirstRateLimitStoreCommitFailureIsAtomic(t *testing.T) {
 	n.build = fakeBuild(next, new(engine.Snapshot))
 
 	_, err := n.PutRateLimit(
-		ctx, rateLimit(domain.ScopeBroker, "", "", 100, time.Second), testCaller,
+		ctx, rateLimit(domain.ScopeBroker, "", "", 100, time.Second), domain.MissingAccountCreate, testCaller,
 	)
 	if !errors.Is(err, commitErr) {
 		t.Fatalf("PutRateLimit error = %v, want store commit failure", err)
@@ -381,7 +381,7 @@ func TestLocalNode_LastRateLimitStoreCommitFailureIsAtomic(t *testing.T) {
 	current := newFakeEngine()
 	n.build = fakeBuild(current, new(engine.Snapshot))
 	limit := rateLimit(domain.ScopeBroker, "", "", 100, time.Second)
-	if _, err := n.PutRateLimit(ctx, limit, testCaller); err != nil {
+	if _, err := n.PutRateLimit(ctx, limit, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutRateLimit: %v", err)
 	}
 

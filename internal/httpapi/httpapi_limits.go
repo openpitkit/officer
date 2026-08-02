@@ -51,8 +51,10 @@ func handleListLimits(svc Service) http.HandlerFunc {
 	}
 }
 
-// handlePutRateLimit handles PUT /api/v1/limits/rate. The body is the typed
-// rate-limit barrier; the backend validates scope/axes and upserts it.
+// handlePutRateLimit handles
+// PUT /api/v1/limits/rate[?missingAccount=create|reject]. The body is the typed
+// rate-limit barrier; the backend validates scope/axes and upserts it. The query
+// parameter is required when the scope names an account.
 func handlePutRateLimit(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req rateLimitDTO
@@ -67,7 +69,12 @@ func handlePutRateLimit(svc Service) http.HandlerFunc {
 			Window:    time.Duration(req.WindowMs) * time.Millisecond,
 			MaxOrders: req.MaxOrders,
 		}
-		if err := svc.PutRateLimit(r.Context(), limit); err != nil {
+		missing, err := missingAccountQuery(r, limit.Account)
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		if err := svc.PutRateLimit(r.Context(), limit, missing); err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
@@ -80,8 +87,10 @@ func handlePutRateLimit(svc Service) http.HandlerFunc {
 	}
 }
 
-// handlePutOrderSizeLimit handles PUT /api/v1/limits/order-size. The body is the
-// typed order-size barrier; the backend validates scope/axes and upserts it.
+// handlePutOrderSizeLimit handles
+// PUT /api/v1/limits/order-size[?missingAccount=create|reject]. The body is the
+// typed order-size barrier; the backend validates scope/axes and upserts it. The
+// query parameter is required when the scope names an account.
 func handlePutOrderSizeLimit(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req orderSizeLimitDTO
@@ -96,7 +105,12 @@ func handlePutOrderSizeLimit(svc Service) http.HandlerFunc {
 			MaxQuantity: req.MaxQuantity,
 			MaxNotional: req.MaxNotional,
 		}
-		if err := svc.PutOrderSizeLimit(r.Context(), limit); err != nil {
+		missing, err := missingAccountQuery(r, limit.Account)
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		if err := svc.PutOrderSizeLimit(r.Context(), limit, missing); err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
@@ -110,9 +124,10 @@ func handlePutOrderSizeLimit(svc Service) http.HandlerFunc {
 }
 
 // handlePutSpotFundsPnlBoundsLimit handles
-// PUT /api/v1/limits/spot-funds-pnl-bounds. The body is the typed SpotFunds
-// self-computed P&L-bounds barrier; the backend validates scope/axes and
-// upserts it.
+// PUT /api/v1/limits/spot-funds-pnl-bounds[?missingAccount=create|reject]. The
+// body is the typed SpotFunds self-computed P&L-bounds barrier; the backend
+// validates scope/axes and upserts it. The query parameter is required when the
+// scope names an account.
 func handlePutSpotFundsPnlBoundsLimit(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req spotFundsPnlBoundsLimitDTO
@@ -127,7 +142,14 @@ func handlePutSpotFundsPnlBoundsLimit(svc Service) http.HandlerFunc {
 			LowerBound:   req.LowerBound,
 			UpperBound:   req.UpperBound,
 		}
-		if err := svc.PutSpotFundsPnlBoundsLimit(r.Context(), limit); err != nil {
+		missing, err := missingAccountQuery(r, limit.Account)
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
+		if err := svc.PutSpotFundsPnlBoundsLimit(
+			r.Context(), limit, missing,
+		); err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}

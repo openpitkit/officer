@@ -60,7 +60,7 @@ func TestLocalNode_BlockUnblockAccount(t *testing.T) {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 
-	if err := n.SetAccountBlocked(ctx, testKey(id), true, "risk", testCaller); err != nil {
+	if err := n.SetAccountBlocked(ctx, testKey(id), true, "risk", domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("block: %v", err)
 	}
 	if len(eng.blockCalls) != 1 || eng.blockCalls[0].reason != "risk" {
@@ -75,7 +75,7 @@ func TestLocalNode_BlockUnblockAccount(t *testing.T) {
 		t.Fatalf("account not blocked in store: %+v", account)
 	}
 
-	if err := n.SetAccountBlocked(ctx, testKey(id), false, "", testCaller); err != nil {
+	if err := n.SetAccountBlocked(ctx, testKey(id), false, "", domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("unblock: %v", err)
 	}
 	if len(eng.unblockCalls) != 1 {
@@ -106,7 +106,7 @@ func TestLocalNode_SetAccountBlockedUsesAccountLane(t *testing.T) {
 	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	if err := n.SetAccountBlocked(ctx, testKey(id), true, "risk", testCaller); err != nil {
+	if err := n.SetAccountBlocked(ctx, testKey(id), true, "risk", domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("block: %v", err)
 	}
 	if len(eng.blockCalls) != 1 {
@@ -134,7 +134,7 @@ func TestLocalNode_SetAccountGroupUsesGroupLane(t *testing.T) {
 	if _, err := n.CreateGroup(ctx, domain.AccountGroup{Code: "desk-a"}, testCaller); err != nil {
 		t.Fatalf("CreateGroup: %v", err)
 	}
-	if err := n.SetAccountGroup(ctx, testKey(id), "desk-a", testCaller); err != nil {
+	if err := n.SetAccountGroup(ctx, testKey(id), "desk-a", domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("SetAccountGroup: %v", err)
 	}
 	if len(eng.registerGroupCalls) != 1 {
@@ -170,7 +170,7 @@ func TestLocalNode_SetAccountGroupAutoCreatesUnknownGroup(t *testing.T) {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 
-	if err := n.SetAccountGroup(ctx, testKey(id), "new-desk", testCaller); err != nil {
+	if err := n.SetAccountGroup(ctx, testKey(id), "new-desk", domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("SetAccountGroup into unknown group: %v", err)
 	}
 
@@ -315,7 +315,7 @@ func TestLocalNode_SetAccountBlockedAuditFailureFatals(t *testing.T) {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 
-	err := n.SetAccountBlocked(ctx, testKey(id), true, "risk", testCaller)
+	err := n.SetAccountBlocked(ctx, testKey(id), true, "risk", domain.MissingAccountCreate, testCaller)
 	if !errors.Is(err, auditErr) {
 		t.Fatalf("SetAccountBlocked error = %v, want audit failure", err)
 	}
@@ -369,7 +369,7 @@ func TestLocalNode_SetAccountGroupAuditFailureFatals(t *testing.T) {
 		t.Fatalf("CreateGroup: %v", err)
 	}
 
-	err := n.SetAccountGroup(ctx, testKey(id), "desk-a", testCaller)
+	err := n.SetAccountGroup(ctx, testKey(id), "desk-a", domain.MissingAccountCreate, testCaller)
 	if !errors.Is(err, auditErr) {
 		t.Fatalf("SetAccountGroup error = %v, want audit failure", err)
 	}
@@ -478,7 +478,7 @@ func TestLocalNode_SetGroupNotesAutoCreatesRegisteredGroup(t *testing.T) {
 
 	// The group is now engine-registered, so moving an account into it succeeds
 	// against the strict resolver.
-	if err := n.SetAccountGroup(ctx, testKey(id), "new-desk", testCaller); err != nil {
+	if err := n.SetAccountGroup(ctx, testKey(id), "new-desk", domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("SetAccountGroup into notes-created group: %v", err)
 	}
 	if len(eng.registerGroupCalls) != 1 ||
@@ -511,7 +511,7 @@ func TestLocalNode_BlockEngineFailureRevertsStore(t *testing.T) {
 	eng.failBlock = true
 	next := newFakeEngine()
 	n.build = fakeBuild(next, new(engine.Snapshot))
-	if err := n.SetAccountBlocked(ctx, testKey(id), true, "risk", testCaller); err == nil {
+	if err := n.SetAccountBlocked(ctx, testKey(id), true, "risk", domain.MissingAccountCreate, testCaller); err == nil {
 		t.Fatalf("block: want error on engine failure")
 	}
 
@@ -553,7 +553,7 @@ func TestLocalNode_BlockRevertFailureAndRebuildFailureIsFatal(t *testing.T) {
 	var fatalErr error
 	n.fatal = func(err error) { fatalErr = err }
 
-	err := n.SetAccountBlocked(ctx, testKey(id), true, "risk", testCaller)
+	err := n.SetAccountBlocked(ctx, testKey(id), true, "risk", domain.MissingAccountCreate, testCaller)
 	if !errors.Is(err, revertErr) || !errors.Is(err, rebuildErr) {
 		t.Fatalf("SetAccountBlocked error = %v, want revert and rebuild failures", err)
 	}
@@ -595,7 +595,7 @@ func TestLocalNode_SetAccountBlockedStoreWriteInsideLane(t *testing.T) {
 	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	if err := n.SetAccountBlocked(ctx, testKey(id), true, "risk", testCaller); err != nil {
+	if err := n.SetAccountBlocked(ctx, testKey(id), true, "risk", domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("block: %v", err)
 	}
 	if len(probe.inLane) != 1 || !probe.inLane[0] {
@@ -617,7 +617,7 @@ func TestLocalNode_SetAccountBlockedStoreFailureInLaneLeavesEngineUntouched(t *t
 		t.Fatalf("CreateAccount: %v", err)
 	}
 	probe.failErr = errors.New("store write failed")
-	if err := n.SetAccountBlocked(ctx, testKey(id), true, "risk", testCaller); err == nil {
+	if err := n.SetAccountBlocked(ctx, testKey(id), true, "risk", domain.MissingAccountCreate, testCaller); err == nil {
 		t.Fatalf("block: want error on store write failure")
 	}
 	if len(probe.inLane) != 1 || !probe.inLane[0] {
@@ -644,7 +644,7 @@ func TestLocalNode_SetAccountGroupStoreWriteInsideLane(t *testing.T) {
 	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	if err := n.SetAccountGroup(ctx, testKey(id), "desk-a", testCaller); err != nil {
+	if err := n.SetAccountGroup(ctx, testKey(id), "desk-a", domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("SetAccountGroup: %v", err)
 	}
 	if len(probe.inLane) != 1 || !probe.inLane[0] {
@@ -666,7 +666,7 @@ func TestLocalNode_SetAccountGroupStoreFailureInLaneLeavesEngineUntouched(t *tes
 		t.Fatalf("CreateAccount: %v", err)
 	}
 	probe.failErr = errors.New("store write failed")
-	if err := n.SetAccountGroup(ctx, testKey(id), "desk-a", testCaller); err == nil {
+	if err := n.SetAccountGroup(ctx, testKey(id), "desk-a", domain.MissingAccountCreate, testCaller); err == nil {
 		t.Fatalf("SetAccountGroup: want error on store write failure")
 	}
 	if len(probe.inLane) != 1 || !probe.inLane[0] {

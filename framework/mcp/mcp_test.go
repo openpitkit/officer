@@ -258,12 +258,13 @@ func (s *guardSource) SubmitOrderToken(
 	context.Context,
 	domain.Order,
 	string,
+	domain.MissingAccountPolicy,
 ) (SubmitOrderTokenResult, error) {
 	return SubmitOrderTokenResult{}, nil
 }
 
 func (s *guardSource) SubmitDropCopyOrder(
-	context.Context, domain.Order,
+	context.Context, domain.Order, domain.MissingAccountPolicy,
 ) (SubmitDropCopyOrderResult, error) {
 	return SubmitDropCopyOrderResult{}, nil
 }

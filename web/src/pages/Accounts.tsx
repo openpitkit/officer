@@ -1070,7 +1070,8 @@ export function CreateAccountDialog({
     try {
       await createAccount(code, "", currency.trim());
       if (group.trim().length > 0) {
-        await setAccountGroup(code, group.trim());
+        // The account was just created above, so it is guaranteed to exist.
+        await setAccountGroup(code, group.trim(), "reject");
       }
       setOpen(false);
       reset();
@@ -1365,7 +1366,7 @@ function BlockAccountDialog({
     setBusy(true);
     setError(null);
     try {
-      const updated = await blockAccount(account.code, trimmed);
+      const updated = await blockAccount(account.code, trimmed, "reject");
       onOpenChange(false);
       setReason("");
       onDone(updated);
@@ -1452,7 +1453,7 @@ function UnblockAccountConfirm({
     setBusy(true);
     setError(null);
     try {
-      const updated = await unblockAccount(account.code);
+      const updated = await unblockAccount(account.code, "reject");
       onOpenChange(false);
       onDone(updated);
     } catch (err) {
@@ -2219,7 +2220,7 @@ function AssignGroupDialog({
           // assignment below surfaces any genuine error.
         }
       }
-      const updated = await setAccountGroup(account.code, trimmed);
+      const updated = await setAccountGroup(account.code, trimmed, "reject");
       onOpenChange(false);
       setGroup("");
       onDone(updated);

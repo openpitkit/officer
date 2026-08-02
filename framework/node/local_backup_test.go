@@ -226,7 +226,7 @@ func TestLocalNode_RestoreBackupOverwriteUpdatesRuntimeOnline(t *testing.T) {
 	prepared := newFakeEngine()
 	prepared.enforceResolver = true
 	n.build = fakeBuild(prepared, new(engine.Snapshot))
-	if _, err := n.PutRateLimit(ctx, initialRate, testCaller); err != nil {
+	if _, err := n.PutRateLimit(ctx, initialRate, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutRateLimit: %v", err)
 	}
 	eng = prepared
@@ -1206,13 +1206,17 @@ func TestLocalNode_ErrorMessagesNoNodePrefix(t *testing.T) {
 		t.Fatalf("error message must not start with \"node: \", got: %s", msg)
 	}
 
-	// SetAccountBlocked on a missing account must also not carry "node: ".
-	err = n.SetAccountBlocked(ctx, testKey("no-such-account"), true, "test", testCaller)
+	// A rejecting SetAccountBlocked on a missing account must also not carry
+	// "node: ".
+	err = n.SetAccountBlocked(
+		ctx, testKey("no-such-account"), true, "test",
+		domain.MissingAccountReject, testCaller,
+	)
 	if err == nil {
 		t.Fatal("want error for missing account on block, got nil")
 	}
-	if !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("want ErrNotFound, got %v", err)
+	if !errors.Is(err, domain.ErrAccountMissing) {
+		t.Fatalf("want ErrAccountMissing, got %v", err)
 	}
 	msg = err.Error()
 	if len(msg) >= 6 && msg[:6] == "node: " {
@@ -1220,39 +1224,46 @@ func TestLocalNode_ErrorMessagesNoNodePrefix(t *testing.T) {
 	}
 }
 
-// TestLocalNode_MissingAccountAdminNotFoundWithResolver guards the pre-lane
-// existence check in SetAccountBlocked and SetAccountGroup. The fake engine runs
-// with enforceResolver=true, so its RunAccountSynchronized rejects an unknown
-// account with domain.ErrInvalid before the closure runs, mirroring the real
-// adapter. The only way these methods can still surface domain.ErrNotFound is
-// the pre-lane realm existence check: remove it and the missing account would
-// fall through to the resolver, regressing 404 (ErrNotFound) to 400 (ErrInvalid).
-func TestLocalNode_MissingAccountAdminNotFoundWithResolver(t *testing.T) {
+// TestLocalNode_MissingAccountAdminRejectsWithResolver guards the pre-lane
+// missing-account resolution in SetAccountBlocked and SetAccountGroup. The fake
+// engine runs with enforceResolver=true, so its RunAccountSynchronized rejects
+// an unknown account with domain.ErrInvalid before the closure runs, mirroring
+// the real adapter. The only way a rejecting request can still surface
+// domain.ErrAccountMissing is the pre-lane realm check: remove it and the
+// missing account would fall through to the resolver, regressing 404
+// (ErrAccountMissing) to 400 (ErrInvalid).
+func TestLocalNode_MissingAccountAdminRejectsWithResolver(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
 	eng.enforceResolver = true
 	n, _ := newTestNode(t, eng)
 	ctx := context.Background()
 
-	// SetAccountBlocked on a missing account must be ErrNotFound (404), not the
-	// resolver's ErrInvalid (400).
-	err := n.SetAccountBlocked(ctx, testKey("no-such-account"), true, "risk", testCaller)
+	// SetAccountBlocked on a missing account must be ErrAccountMissing (404),
+	// not the resolver's ErrInvalid (400).
+	err := n.SetAccountBlocked(
+		ctx, testKey("no-such-account"), true, "risk",
+		domain.MissingAccountReject, testCaller,
+	)
 	if err == nil {
 		t.Fatal("SetAccountBlocked: want error for missing account, got nil")
 	}
-	if !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("SetAccountBlocked: want ErrNotFound, got %v", err)
+	if !errors.Is(err, domain.ErrAccountMissing) {
+		t.Fatalf("SetAccountBlocked: want ErrAccountMissing, got %v", err)
 	}
 
-	// SetAccountGroup on a missing account must likewise be ErrNotFound (404).
+	// SetAccountGroup on a missing account must likewise be ErrAccountMissing.
 	if _, err := n.CreateGroup(ctx, domain.AccountGroup{Code: "desk-a"}, testCaller); err != nil {
 		t.Fatalf("CreateGroup: %v", err)
 	}
-	err = n.SetAccountGroup(ctx, testKey("no-such-account"), "desk-a", testCaller)
+	err = n.SetAccountGroup(
+		ctx, testKey("no-such-account"), "desk-a",
+		domain.MissingAccountReject, testCaller,
+	)
 	if err == nil {
 		t.Fatal("SetAccountGroup: want error for missing account, got nil")
 	}
-	if !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("SetAccountGroup: want ErrNotFound, got %v", err)
+	if !errors.Is(err, domain.ErrAccountMissing) {
+		t.Fatalf("SetAccountGroup: want ErrAccountMissing, got %v", err)
 	}
 }

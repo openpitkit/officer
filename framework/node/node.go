@@ -202,15 +202,21 @@ type Node interface {
 	CreateAccount(ctx context.Context, account domain.Account, caller domain.Caller) (domain.Account, error)
 
 	// SetAccountBlocked blocks or unblocks the account in the store and engine
-	// and audits the action.
+	// and audits the action. missing decides whether an account that does not
+	// exist yet is registered first or reported as domain.ErrAccountMissing.
 	SetAccountBlocked(
-		ctx context.Context, key Key, blocked bool, reason string, caller domain.Caller,
+		ctx context.Context, key Key, blocked bool, reason string,
+		missing domain.MissingAccountPolicy, caller domain.Caller,
 	) error
 
 	// SetAccountGroup sets or clears the account's group membership in the store
 	// and engine (unregistering from the old group and registering into the new),
-	// then audits the action. An empty groupCode clears membership.
-	SetAccountGroup(ctx context.Context, key Key, groupCode string, caller domain.Caller) error
+	// then audits the action. An empty groupCode clears membership. missing
+	// follows SetAccountBlocked.
+	SetAccountGroup(
+		ctx context.Context, key Key, groupCode string,
+		missing domain.MissingAccountPolicy, caller domain.Caller,
+	) error
 
 	// SetAccountCurrency sets or clears the account-level realized P&L currency.
 	SetAccountCurrency(ctx context.Context, key Key, currency string, caller domain.Caller) error
@@ -249,22 +255,30 @@ type Node interface {
 	// PutRateLimit upserts the whole rate-limit barrier in the store,
 	// reconfigures the live rate-limit policy from the persisted full barrier
 	// set, audits the action, and returns a replacement market-data sink only
-	// when the engine was rebuilt.
+	// when the engine was rebuilt. When the barrier's scope carries an account
+	// axis, missing decides whether an account that does not exist yet is
+	// registered first or reported as domain.ErrAccountMissing; a created account
+	// is published at once, so the barrier is live from this call.
 	PutRateLimit(
-		ctx context.Context, limit domain.LimitRate, caller domain.Caller,
+		ctx context.Context, limit domain.LimitRate,
+		missing domain.MissingAccountPolicy, caller domain.Caller,
 	) (marketdata.Sink, error)
 
 	// PutOrderSizeLimit upserts the whole order-size barrier and reconfigures the
-	// live order-size policy, as PutRateLimit does for the rate policy.
+	// live order-size policy, as PutRateLimit does for the rate policy, including
+	// its handling of missing.
 	PutOrderSizeLimit(
-		ctx context.Context, limit domain.LimitOrderSize, caller domain.Caller,
+		ctx context.Context, limit domain.LimitOrderSize,
+		missing domain.MissingAccountPolicy, caller domain.Caller,
 	) (marketdata.Sink, error)
 
 	// PutSpotFundsPnlBoundsLimit upserts the whole SpotFunds self-computed
-	// P&L-bounds barrier and reconfigures the live SpotFunds policy.
+	// P&L-bounds barrier and reconfigures the live SpotFunds policy. missing
+	// follows PutRateLimit; only the account scope carries an account axis here.
 	PutSpotFundsPnlBoundsLimit(
 		ctx context.Context,
 		limit domain.LimitSpotFundsPnlBounds,
+		missing domain.MissingAccountPolicy,
 		caller domain.Caller,
 	) (marketdata.Sink, error)
 
@@ -339,18 +353,20 @@ type Node interface {
 	// record is recorded. externalID is the caller-supplied id for the adjustment
 	// record: when non-zero it is carried onto the record verbatim (the store
 	// rejects a duplicate with domain.ErrAlreadyExists); when zero the store mints
-	// one.
+	// one. missing decides whether an account that does not exist yet is
+	// registered first or reported as domain.ErrAccountMissing.
 	ApplyAdjustment(
 		ctx context.Context, key Key, externalID domain.ExternalID,
-		req domain.AdjustmentRequest, caller domain.Caller,
+		req domain.AdjustmentRequest, missing domain.MissingAccountPolicy,
+		caller domain.Caller,
 	) (domain.AccountAdjustmentRecord, error)
 
 	// SetBalanceRealizedPnl writes the operator-supplied realized P&L snapshot
 	// for one per-(account, asset) balance row through the adjustment history
-	// path.
+	// path. missing follows ApplyAdjustment.
 	SetBalanceRealizedPnl(
 		ctx context.Context, key Key, asset string, realizedPnl string,
-		caller domain.Caller,
+		missing domain.MissingAccountPolicy, caller domain.Caller,
 	) (domain.Balance, error)
 
 	// ImportPositionSnapshot applies the engine-relevant fields of a persisted
@@ -387,16 +403,22 @@ type Node interface {
 	) ([]domain.AccountAdjustmentRecord, error)
 
 	// SubmitOrder records the order, runs the engine pre-trade, persists the
-	// lifecycle events and final status, and audits the action.
-	SubmitOrder(ctx context.Context, key Key, o domain.Order, caller domain.Caller) (domain.Order, error)
+	// lifecycle events and final status, and audits the action. missing decides
+	// whether an account that does not exist yet is registered first or reported
+	// as domain.ErrAccountMissing.
+	SubmitOrder(
+		ctx context.Context, key Key, o domain.Order,
+		missing domain.MissingAccountPolicy, caller domain.Caller,
+	) (domain.Order, error)
 
 	// SubmitImmediate records the order, runs the engine pre-trade and, on accept,
 	// commits and settles the fill in the same engine call at the captured lock
 	// price, persists the lifecycle (filled on accept, rejected on reject), and
-	// returns the recorded order with the engine immediate result. It does not
-	// audit; the backend audits approval_issued.
+	// returns the recorded order with the engine immediate result. missing follows
+	// SubmitOrder. It does not audit; the backend audits approval_issued.
 	SubmitImmediate(
-		ctx context.Context, key Key, o domain.Order, caller domain.Caller,
+		ctx context.Context, key Key, o domain.Order,
+		missing domain.MissingAccountPolicy, caller domain.Caller,
 	) (domain.Order, engine.ImmediateResult, error)
 
 	// ConfirmOrder adds one idempotent history event for an untouched workflow

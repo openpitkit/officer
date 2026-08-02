@@ -420,7 +420,11 @@ describe("CreateAccountDialog", () => {
       expect(createAccountMock).toHaveBeenCalledWith("acc-spx", "", "");
     });
     expect(setAccountGroupMock).toHaveBeenCalledTimes(1);
-    expect(setAccountGroupMock).toHaveBeenCalledWith("acc-spx", "equity-desks");
+    expect(setAccountGroupMock).toHaveBeenCalledWith(
+      "acc-spx",
+      "equity-desks",
+      "reject",
+    );
   });
 
   it("shows an inline validation message and does not submit an invalid id", async () => {
@@ -672,7 +676,11 @@ describe("Accounts business CSV", () => {
     await waitFor(() =>
       expect(createGroupMock).toHaveBeenCalledWith("new-desk", "", ""),
     );
-    expect(setAccountGroupMock).toHaveBeenCalledWith("desk-default", "new-desk");
+    expect(setAccountGroupMock).toHaveBeenCalledWith(
+      "desk-default",
+      "new-desk",
+      "reject",
+    );
   });
 
   it("sets an account currency from the account currency dialog", async () => {
@@ -1103,7 +1111,10 @@ describe("Accounts business CSV", () => {
     );
 
     await waitFor(() =>
-      expect(unblockAccountMock).toHaveBeenCalledWith("algo-infinite-loop"),
+      expect(unblockAccountMock).toHaveBeenCalledWith(
+        "algo-infinite-loop",
+        "reject",
+      ),
     );
     await waitFor(() =>
       expect(

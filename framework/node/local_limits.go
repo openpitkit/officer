@@ -80,8 +80,12 @@ func (n *localNode) listLimits(
 // the rate policy from the persisted full barrier set, reverts the store on
 // engine-apply failure, and audits the action. It returns a replacement
 // market-data sink only when the policy change had to rebuild the engine.
+//
+// missing decides what happens when an account-carrying scope names an account
+// Officer does not know yet.
 func (n *localNode) PutRateLimit(
-	ctx context.Context, limit domain.LimitRate, caller domain.Caller,
+	ctx context.Context, limit domain.LimitRate,
+	missing domain.MissingAccountPolicy, caller domain.Caller,
 ) (marketdata.Sink, error) {
 	if err := n.beginLivePolicyConfiguration(); err != nil {
 		return nil, err
@@ -96,6 +100,11 @@ func (n *localNode) PutRateLimit(
 	}
 	prev, hadPrev, err := n.readRateBarrier(ctx, target)
 	if err != nil {
+		return nil, err
+	}
+	if err := n.ensureLimitAccount(
+		ctx, limit.Scope, limit.Account, missing, "put rate limit", caller,
+	); err != nil {
 		return nil, err
 	}
 	if err := n.ensureLimitAsset(
@@ -146,9 +155,11 @@ func (n *localNode) PutRateLimit(
 }
 
 // PutOrderSizeLimit upserts the whole order-size barrier and reconfigures the
-// order-size policy, mirroring PutRateLimit for the rate policy.
+// order-size policy, mirroring PutRateLimit for the rate policy, including its
+// handling of missing.
 func (n *localNode) PutOrderSizeLimit(
-	ctx context.Context, limit domain.LimitOrderSize, caller domain.Caller,
+	ctx context.Context, limit domain.LimitOrderSize,
+	missing domain.MissingAccountPolicy, caller domain.Caller,
 ) (marketdata.Sink, error) {
 	if err := n.beginLivePolicyConfiguration(); err != nil {
 		return nil, err
@@ -163,6 +174,11 @@ func (n *localNode) PutOrderSizeLimit(
 	}
 	prev, hadPrev, err := n.readOrderSizeBarrier(ctx, target)
 	if err != nil {
+		return nil, err
+	}
+	if err := n.ensureLimitAccount(
+		ctx, limit.Scope, limit.Account, missing, "put order-size limit", caller,
+	); err != nil {
 		return nil, err
 	}
 	if err := n.ensureLimitAsset(
@@ -217,9 +233,11 @@ func (n *localNode) PutOrderSizeLimit(
 }
 
 // PutSpotFundsPnlBoundsLimit upserts the whole SpotFunds self-computed
-// P&L-bounds barrier and reconfigures the SpotFunds policy.
+// P&L-bounds barrier and reconfigures the SpotFunds policy. missing is handled
+// as in PutRateLimit; only the account scope carries an account axis here.
 func (n *localNode) PutSpotFundsPnlBoundsLimit(
-	ctx context.Context, limit domain.LimitSpotFundsPnlBounds, caller domain.Caller,
+	ctx context.Context, limit domain.LimitSpotFundsPnlBounds,
+	missing domain.MissingAccountPolicy, caller domain.Caller,
 ) (marketdata.Sink, error) {
 	if err := n.beginLivePolicyConfiguration(); err != nil {
 		return nil, err
@@ -234,6 +252,12 @@ func (n *localNode) PutSpotFundsPnlBoundsLimit(
 	}
 	prev, hadPrev, err := n.readSpotFundsPnlBoundsBarrier(ctx, target)
 	if err != nil {
+		return nil, err
+	}
+	if err := n.ensureLimitAccount(
+		ctx, limit.Scope, limit.Account, missing,
+		"put spot-funds P&L bounds limit", caller,
+	); err != nil {
 		return nil, err
 	}
 
@@ -611,6 +635,34 @@ func (n *localNode) readRateBarrier(
 		}
 	}
 	return domain.LimitRate{}, false, nil
+}
+
+// ensureLimitAccount applies the request's missing-account choice to a barrier
+// whose scope carries the account axis. Scopes without that axis (broker,
+// global, asset, account_group) name no account and need no decision.
+//
+// The Put* callers hold beginLivePolicyConfiguration, which locks the same
+// (laneGate, mutate) pair as beginLiveIdentityPublication and therefore already
+// provides the account-lane exclusion ensureAutoCreatedAccount requires.
+// ensureAccount is used directly for that reason: the self-acquiring
+// ensureAccountAndAssetsRegisteredExclusive would deadlock on the held gate.
+//
+// Creating the account here publishes its resolver entry immediately, so the
+// barrier resolves to a real engine id and is enforced from the same call.
+func (n *localNode) ensureLimitAccount(
+	ctx context.Context,
+	scope domain.LimitScope,
+	account domain.AccountID,
+	missing domain.MissingAccountPolicy,
+	operation string,
+	caller domain.Caller,
+) error {
+	switch scope {
+	case domain.ScopeAccount, domain.ScopeAccountAsset:
+		return n.ensureAccount(ctx, account, missing, operation, caller)
+	default:
+		return nil
+	}
 }
 
 func (n *localNode) ensureLimitAsset(

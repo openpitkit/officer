@@ -29,26 +29,28 @@ import (
 )
 
 // ApplyAdjustment applies one spot-funds adjustment through the engine, which
-// is the authority for the resulting holdings. An adjustment to an account or
-// asset that does not exist yet auto-creates it before applying, so an operator
-// can fund a fresh account or a fresh asset in one call. On accept it writes the
-// recomputed balance snapshot and the accepted record; on reject it records the
-// rejected adjustment and leaves balances unchanged. The engine outcome is
-// authoritative: when the engine reports neither an accepted nor a rejected
-// outcome the call returns ErrNoChange and records no adjustment, balance, or
-// audit, even when the request carried a realized P&L.
+// is the authority for the resulting holdings. missing decides whether an
+// adjustment naming an unknown account registers it or is rejected; an asset
+// that does not exist yet is always auto-created, so an operator can fund a
+// fresh asset in one call. On accept it writes the recomputed balance snapshot
+// and the accepted record; on reject it records the rejected adjustment and
+// leaves balances unchanged. The engine outcome is authoritative: when the
+// engine reports neither an accepted nor a rejected outcome the call returns
+// ErrNoChange and records no adjustment, balance, or audit, even when the
+// request carried a realized P&L.
 func (n *localNode) ApplyAdjustment(
 	ctx context.Context, key Key, externalID domain.ExternalID,
-	req domain.AdjustmentRequest, caller domain.Caller,
+	req domain.AdjustmentRequest, missing domain.MissingAccountPolicy,
+	caller domain.Caller,
 ) (domain.AccountAdjustmentRecord, error) {
 	if err := domain.ValidateAsset(req.Asset); err != nil {
 		return domain.AccountAdjustmentRecord{}, err
 	}
-	// Auto-create the account and asset before entering the lane and publish the
-	// new account's stable id through the live resolver, so
+	// Resolve the account and auto-create the asset before entering the lane and
+	// publish a new account's stable id through the live resolver, so
 	// RunAccountSynchronized can resolve it without replacing the engine.
 	if err := n.ensureAccountAndAssetsRegisteredExclusive(
-		ctx, key.Account, "adjustment", caller, req.Asset,
+		ctx, key.Account, missing, "adjustment", caller, req.Asset,
 	); err != nil {
 		return domain.AccountAdjustmentRecord{}, err
 	}
@@ -143,15 +145,17 @@ func (n *localNode) ApplyAdjustment(
 
 // SetBalanceRealizedPnl writes the current realized-P&L control-plane value for
 // one per-(account, asset) balance row through the adjustment history path.
+// missing is handled as in ApplyAdjustment, which this runs through.
 func (n *localNode) SetBalanceRealizedPnl(
 	ctx context.Context, key Key, asset string, realizedPnl string,
-	caller domain.Caller,
+	missing domain.MissingAccountPolicy, caller domain.Caller,
 ) (domain.Balance, error) {
 	rec, err := n.ApplyAdjustment(
 		ctx,
 		key,
 		domain.ExternalID(""),
 		domain.AdjustmentRequest{Asset: asset, RealizedPnl: realizedPnl},
+		missing,
 		caller,
 	)
 	if err != nil {
@@ -170,8 +174,11 @@ func (n *localNode) ImportPositionSnapshot(
 	snapshot domain.Balance, caller domain.Caller,
 ) (domain.AccountAdjustmentRecord, error) {
 	// Register the account and asset and rebuild pre-lane (see ApplyAdjustment).
+	// A CSV row carries a full account definition, so the import always creates
+	// the account rather than asking the caller for a missing-account choice.
 	if err := n.ensureAccountAndAssetsRegisteredExclusive(
-		ctx, key.Account, "position snapshot import", caller, snapshot.Asset,
+		ctx, key.Account, domain.MissingAccountCreate,
+		"position snapshot import", caller, snapshot.Asset,
 	); err != nil {
 		return domain.AccountAdjustmentRecord{}, err
 	}

@@ -1,5 +1,10 @@
 {
   "title": "Positions",
+  "missingAccountConfirm": {
+    "title": "Account does not exist",
+    "description": "Account {{account}} does not exist yet. Create it with default settings (no group, no currency) and continue?",
+    "confirm": "Create account and continue"
+  },
   "actions": {
     "adjust": "Adjustment",
     "adjustAriaLabel": "Adjust {{account}} {{asset}}",

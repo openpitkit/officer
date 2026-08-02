@@ -147,7 +147,7 @@ func TestLocalNode_AccountGroupCurrencyCRUDStaysOnline(t *testing.T) {
 		t.Fatalf("created account effective currency = %q, want inherited USD", got)
 	}
 	if err := n.SetAccountBlocked(
-		ctx, testKey(createdAccount.Code), true, "online", testCaller,
+		ctx, testKey(createdAccount.Code), true, "online", domain.MissingAccountCreate, testCaller,
 	); err != nil {
 		t.Fatalf("new account lane: %v", err)
 	}
@@ -300,7 +300,7 @@ func TestLocalNode_DeleteGroupClearsCascadedSpotFundsBarrierOnline(t *testing.T)
 	}
 	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
 		Scope: domain.ScopeAccountGroup, AccountGroup: "desk", LowerBound: "-10",
-	}, testCaller); err != nil {
+	}, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 	}
 	eng.configureCalls = nil
@@ -340,7 +340,7 @@ func TestLocalNode_DeleteGroupPolicyFailureRebuildsPostDeleteStore(t *testing.T)
 	}
 	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
 		Scope: domain.ScopeAccountGroup, AccountGroup: "desk", UpperBound: "10",
-	}, testCaller); err != nil {
+	}, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 	}
 	configureErr := errors.New("partial configure failure")
@@ -376,7 +376,7 @@ func TestLocalNode_ImplicitGroupPublicationStaysOnline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	if err := n.SetAccountGroup(ctx, testKey(account.Code), "auto", testCaller); err != nil {
+	if err := n.SetAccountGroup(ctx, testKey(account.Code), "auto", domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("SetAccountGroup auto-create: %v", err)
 	}
 	if err := n.SetGroupNotes(ctx, "notes-auto", "online", testCaller); err != nil {

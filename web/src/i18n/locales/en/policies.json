@@ -56,6 +56,11 @@
     "description": "This policy change rebuilds the risk engine from persisted accounts, limits, rules, and balances. Incoming mutating requests are rejected while the rebuild is in progress.",
     "confirm": "Rebuild and apply"
   },
+  "missingAccountConfirm": {
+    "title": "Account does not exist",
+    "description": "Account {{account}} does not exist yet. Create it with default settings (no group, no currency) and continue?",
+    "confirm": "Create account and continue"
+  },
   "dialog": {
     "editTitle": "Edit policy",
     "addTitle": "Add policy",

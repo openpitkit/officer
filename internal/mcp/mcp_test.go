@@ -135,13 +135,13 @@ func (f *fakeSource) SetMarketDataInstrumentEnabled(
 // fakeSource stubs for the approval-token methods. They are never called in
 // the existing tests; approval_test.go overrides them via approvalFakeSource.
 func (f *fakeSource) SubmitOrderToken(
-	_ context.Context, _ domain.Order, _ string,
+	_ context.Context, _ domain.Order, _ string, _ domain.MissingAccountPolicy,
 ) (SubmitOrderTokenResult, error) {
 	return SubmitOrderTokenResult{}, nil
 }
 
 func (f *fakeSource) SubmitDropCopyOrder(
-	context.Context, domain.Order,
+	context.Context, domain.Order, domain.MissingAccountPolicy,
 ) (SubmitDropCopyOrderResult, error) {
 	return SubmitDropCopyOrderResult{}, nil
 }
@@ -692,13 +692,13 @@ func (c *captureNSource) CommandEnabled(context.Context, string) (bool, error) {
 	return true, nil
 }
 func (c *captureNSource) SubmitOrderToken(
-	context.Context, domain.Order, string,
+	context.Context, domain.Order, string, domain.MissingAccountPolicy,
 ) (SubmitOrderTokenResult, error) {
 	return SubmitOrderTokenResult{}, nil
 }
 
 func (c *captureNSource) SubmitDropCopyOrder(
-	context.Context, domain.Order,
+	context.Context, domain.Order, domain.MissingAccountPolicy,
 ) (SubmitDropCopyOrderResult, error) {
 	return SubmitDropCopyOrderResult{}, nil
 }

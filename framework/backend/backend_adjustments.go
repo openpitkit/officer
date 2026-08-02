@@ -32,8 +32,9 @@ import (
 // node, and applies one spot-funds adjustment. The returned record carries the
 // accepted-or-rejected outcome; a policy reject is a successful call, not an
 // error, and is persisted to the adjustment history and audit log like an
-// accepted one. An adjustment to an account that does not exist yet auto-creates
-// it in the default group (no group assigned) before applying.
+// accepted one. missing is the caller's required choice for an account that does
+// not exist yet: register it with no group and no currency, or fail with
+// domain.ErrAccountMissing.
 //
 // externalID is the caller-supplied external id for the adjustment record. When
 // non-zero it is used verbatim and must be canonical; a duplicate is rejected by
@@ -43,8 +44,12 @@ func (s *Service) ApplyAdjustment(
 	account domain.AccountID,
 	externalID domain.ExternalID,
 	req domain.AdjustmentRequest,
+	missing domain.MissingAccountPolicy,
 ) (domain.AccountAdjustmentRecord, error) {
 	if err := domain.ValidateAccountID(account); err != nil {
+		return domain.AccountAdjustmentRecord{}, err
+	}
+	if err := validateMissingAccountPolicy(account, missing); err != nil {
 		return domain.AccountAdjustmentRecord{}, err
 	}
 	if req.RealizedPnl != "" {
@@ -58,20 +63,26 @@ func (s *Service) ApplyAdjustment(
 	if err != nil {
 		return domain.AccountAdjustmentRecord{}, fmt.Errorf("backend: route account: %w", err)
 	}
-	return n.ApplyAdjustment(ctx, keyFor(account), externalID, req, auth.CallerFromContext(ctx))
+	return n.ApplyAdjustment(
+		ctx, keyFor(account), externalID, req, missing, auth.CallerFromContext(ctx),
+	)
 }
 
 // SetBalanceRealizedPnl validates and stores the current realized P&L snapshot
 // for one per-(account, asset) balance row through the account-adjustment
 // history path. This is not a SpotFunds account-currency kill-switch accumulator
-// seed.
+// seed. missing follows ApplyAdjustment.
 func (s *Service) SetBalanceRealizedPnl(
 	ctx context.Context,
 	account domain.AccountID,
 	asset string,
 	realizedPnl string,
+	missing domain.MissingAccountPolicy,
 ) (domain.Balance, error) {
 	if err := domain.ValidateAccountID(account); err != nil {
+		return domain.Balance{}, err
+	}
+	if err := validateMissingAccountPolicy(account, missing); err != nil {
 		return domain.Balance{}, err
 	}
 	if err := domain.ValidateAsset(asset); err != nil {
@@ -90,6 +101,7 @@ func (s *Service) SetBalanceRealizedPnl(
 		keyFor(account),
 		asset,
 		normalized,
+		missing,
 		auth.CallerFromContext(ctx),
 	)
 }

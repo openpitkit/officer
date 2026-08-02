@@ -566,15 +566,40 @@ func (n *localNode) rollbackAutoCreatedAccountPublication(
 	}
 }
 
-// ensureAccountAndAssetsRegistered auto-creates the account, then each named
-// asset, pre-lane. The account's stable numeric id is published to the live
-// resolver; assets are Officer dictionary state and need no engine replacement.
-// Empty asset codes are skipped.
+// ensureAccount applies the request's missing-account choice to id: "create"
+// registers the account with default settings, "reject" requires it to exist
+// already and reports domain.ErrAccountMissing otherwise. Like
+// ensureAutoCreatedAccount it takes no gate of its own; the caller must already
+// hold one that excludes account lanes.
+func (n *localNode) ensureAccount(
+	ctx context.Context, id domain.AccountID,
+	missing domain.MissingAccountPolicy, operation string, caller domain.Caller,
+) error {
+	switch missing {
+	case domain.MissingAccountCreate:
+		return n.ensureAutoCreatedAccount(ctx, id, operation, caller)
+	case domain.MissingAccountReject:
+		if _, ok, err := n.realm.GetAccount(ctx, id); err != nil {
+			return fmt.Errorf("read account for %s: %w", operation, err)
+		} else if !ok {
+			return domain.NewAccountMissingError(id)
+		}
+		return nil
+	default:
+		return domain.ValidateMissingAccountPolicy(missing)
+	}
+}
+
+// ensureAccountAndAssetsRegistered applies the missing-account choice to the
+// account, then auto-creates each named asset, pre-lane. The account's stable
+// numeric id is published to the live resolver; assets are Officer dictionary
+// state and need no engine replacement. Empty asset codes are skipped.
 func (n *localNode) ensureAccountAndAssetsRegistered(
-	ctx context.Context, id domain.AccountID, operation string,
+	ctx context.Context, id domain.AccountID,
+	missing domain.MissingAccountPolicy, operation string,
 	caller domain.Caller, assets ...string,
 ) error {
-	if err := n.ensureAutoCreatedAccount(ctx, id, operation, caller); err != nil {
+	if err := n.ensureAccount(ctx, id, missing, operation, caller); err != nil {
 		return err
 	}
 	for _, code := range assets {
@@ -609,8 +634,13 @@ func (n *localNode) accountOrAssetsNeedAutoCreate(
 	return false, nil
 }
 
+// ensureAccountAndAssetsRegisteredExclusive self-acquires the live identity
+// gate, so it must never be called from a method that already holds a node gate.
+// The missing-account decision is taken under that gate rather than before it,
+// so a concurrent delete cannot turn a rejected request into a created account.
 func (n *localNode) ensureAccountAndAssetsRegisteredExclusive(
-	ctx context.Context, id domain.AccountID, operation string,
+	ctx context.Context, id domain.AccountID,
+	missing domain.MissingAccountPolicy, operation string,
 	caller domain.Caller, assets ...string,
 ) error {
 	needed, err := n.accountOrAssetsNeedAutoCreate(ctx, id, assets...)
@@ -624,5 +654,7 @@ func (n *localNode) ensureAccountAndAssetsRegisteredExclusive(
 		return err
 	}
 	defer n.endLiveIdentityPublication()
-	return n.ensureAccountAndAssetsRegistered(ctx, id, operation, caller, assets...)
+	return n.ensureAccountAndAssetsRegistered(
+		ctx, id, missing, operation, caller, assets...,
+	)
 }

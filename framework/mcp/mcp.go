@@ -63,10 +63,19 @@ type Source interface {
 	// CommandEnabled reports whether the operator has the named MCP command enabled.
 	CommandEnabled(ctx context.Context, command string) (bool, error)
 	// SubmitOrderToken runs the pre-trade pipeline and issues an approval token.
-	SubmitOrderToken(ctx context.Context, o domain.Order, mode string) (SubmitOrderTokenResult, error)
-	// SubmitDropCopyOrder submits through the distinct unsigned operation.
+	// missing is the caller's explicit choice for an order naming an account that
+	// does not exist yet.
+	SubmitOrderToken(
+		ctx context.Context,
+		o domain.Order,
+		mode string,
+		missing domain.MissingAccountPolicy,
+	) (SubmitOrderTokenResult, error)
+	// SubmitDropCopyOrder submits through the distinct unsigned operation. missing
+	// accepts only domain.MissingAccountCreate: a drop-copy reports an execution
+	// that already happened, so it cannot refuse an unknown account.
 	SubmitDropCopyOrder(
-		ctx context.Context, o domain.Order,
+		ctx context.Context, o domain.Order, missing domain.MissingAccountPolicy,
 	) (SubmitDropCopyOrderResult, error)
 	// ConfirmExecution verifies the token and records confirmation history for an
 	// order that has no execution-report activity. It also returns the resulting

@@ -111,6 +111,18 @@ import type {
 
 type Json = Record<string, unknown>;
 
+/**
+ * Choice for an account-naming request whose account code does not exist yet:
+ * `"create"` creates it with default settings (no group, no currency) and
+ * proceeds; `"reject"` fails the request instead. Required whenever the
+ * request names a non-empty account code; ignored otherwise.
+ */
+export type MissingAccountPolicy = "create" | "reject";
+
+function missingAccountQuery(missingAccount: MissingAccountPolicy): string {
+  return `missingAccount=${missingAccount}`;
+}
+
 function isObject(v: unknown): v is Json {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
@@ -923,11 +935,21 @@ function limitMaxOrders(limit: Limit): number {
   return value;
 }
 
-function limitEndpointBody(client: ApiClient, limit: Limit): { path: string; body: unknown } {
+function limitEndpointBody(
+  client: ApiClient,
+  limit: Limit,
+  missingAccount: MissingAccountPolicy,
+): { path: string; body: unknown } {
+  // Only an account-carrying scope names an account the backend could need to
+  // create or reject; a broker/asset/group scope must not send the parameter
+  // at all, since the backend ignores it there.
+  const query = limit.account.trim() !== ""
+    ? `?${missingAccountQuery(missingAccount)}`
+    : "";
   switch (limit.policy) {
     case "rate_limit":
       return {
-        path: `${client.baseUrl}/limits/rate`,
+        path: `${client.baseUrl}/limits/rate${query}`,
         body: {
           scope: limit.scope,
           account: limit.account,
@@ -938,7 +960,7 @@ function limitEndpointBody(client: ApiClient, limit: Limit): { path: string; bod
       };
     case "order_size_limit":
       return {
-        path: `${client.baseUrl}/limits/order-size`,
+        path: `${client.baseUrl}/limits/order-size${query}`,
         body: {
           scope: limit.scope,
           account: limit.account,
@@ -949,7 +971,7 @@ function limitEndpointBody(client: ApiClient, limit: Limit): { path: string; bod
       };
     case "spot_funds_pnl_bounds_kill_switch":
       return {
-        path: `${client.baseUrl}/limits/spot-funds-pnl-bounds`,
+        path: `${client.baseUrl}/limits/spot-funds-pnl-bounds${query}`,
         body: {
           scope: limit.scope,
           account: limit.account,
@@ -1991,36 +2013,49 @@ async function fetchAccountState(client: ApiClient,
 }
 
 /** POST /accounts/{code}/block. Returns the updated account. */
-async function blockAccount(client: ApiClient, 
+async function blockAccount(client: ApiClient,
   code: string,
   reason: string,
+  missingAccount: MissingAccountPolicy,
 ): Promise<Account> {
-  const v = await client.request(`${client.baseUrl}/accounts/${encode(code)}/block`, {
-    method: "POST",
-    body: { reason },
-  });
+  const v = await client.request(
+    `${client.baseUrl}/accounts/${encode(code)}/block?${missingAccountQuery(missingAccount)}`,
+    {
+      method: "POST",
+      body: { reason },
+    },
+  );
   const o = isObject(v) ? v : {};
   return normalizeAccount(pick(o, "account", "Account"));
 }
 
 /** POST /accounts/{code}/unblock. Returns the updated account. */
-async function unblockAccount(client: ApiClient, code: string): Promise<Account> {
-  const v = await client.request(`${client.baseUrl}/accounts/${encode(code)}/unblock`, {
-    method: "POST",
-  });
+async function unblockAccount(
+  client: ApiClient,
+  code: string,
+  missingAccount: MissingAccountPolicy,
+): Promise<Account> {
+  const v = await client.request(
+    `${client.baseUrl}/accounts/${encode(code)}/unblock?${missingAccountQuery(missingAccount)}`,
+    { method: "POST" },
+  );
   const o = isObject(v) ? v : {};
   return normalizeAccount(pick(o, "account", "Account"));
 }
 
 /** PUT /accounts/{code}/group. Returns the updated account. */
-async function setAccountGroup(client: ApiClient, 
+async function setAccountGroup(client: ApiClient,
   code: string,
   group: string,
+  missingAccount: MissingAccountPolicy,
 ): Promise<Account> {
-  const v = await client.request(`${client.baseUrl}/accounts/${encode(code)}/group`, {
-    method: "PUT",
-    body: { group },
-  });
+  const v = await client.request(
+    `${client.baseUrl}/accounts/${encode(code)}/group?${missingAccountQuery(missingAccount)}`,
+    {
+      method: "PUT",
+      body: { group },
+    },
+  );
   const o = isObject(v) ? v : {};
   return normalizeAccount(pick(o, "account", "Account"));
 }
@@ -2462,9 +2497,10 @@ async function setBalanceRealizedPnl(
   client: ApiClient,
   accountCode: string,
   body: BalanceRealizedPnlBody,
+  missingAccount: MissingAccountPolicy,
 ): Promise<Balance> {
   const v = await client.request(
-    `${client.baseUrl}/accounts/${encode(accountCode)}/balances/realized-pnl`,
+    `${client.baseUrl}/accounts/${encode(accountCode)}/balances/realized-pnl?${missingAccountQuery(missingAccount)}`,
     {
       method: "PUT",
       body,
@@ -2475,14 +2511,18 @@ async function setBalanceRealizedPnl(
 }
 
 /** POST /accounts/{code}/adjustments. */
-async function createAdjustment(client: ApiClient, 
+async function createAdjustment(client: ApiClient,
   accountCode: string,
   body: AdjustmentBody,
+  missingAccount: MissingAccountPolicy,
 ): Promise<Adjustment | null> {
-  const v = await client.request(`${client.baseUrl}/accounts/${encode(accountCode)}/adjustments`, {
-    method: "POST",
-    body,
-  });
+  const v = await client.request(
+    `${client.baseUrl}/accounts/${encode(accountCode)}/adjustments?${missingAccountQuery(missingAccount)}`,
+    {
+      method: "POST",
+      body,
+    },
+  );
   if (v === undefined) {
     return null;
   }
@@ -2677,21 +2717,27 @@ export interface SubmittedOrder {
   approval?: ApprovalToken;
 }
 
-/** Submit an order and return its public id plus any approval token. */
+/** Submit an order and return its public id plus any approval token. The
+ *  drop-copy endpoint only accepts `missingAccount: "create"`; `"reject"`
+ *  is a validation error there since a drop-copy report cannot be refused. */
 async function submitOrder(
   client: ApiClient,
   body: CreateOrderBody,
+  missingAccount: MissingAccountPolicy,
   signal?: AbortSignal,
 ): Promise<SubmittedOrder> {
   const dropCopy = body.mode === "drop_copy";
   const { mode, ...commonBody } = body;
   const requestBody = dropCopy ? commonBody : { ...commonBody, mode };
   const path = dropCopy ? "/orders/drop-copy/submit" : "/orders/submit";
-  const v = await client.request(`${client.baseUrl}${path}`, {
-    method: "POST",
-    body: requestBody,
-    signal,
-  });
+  const v = await client.request(
+    `${client.baseUrl}${path}?${missingAccountQuery(missingAccount)}`,
+    {
+      method: "POST",
+      body: requestBody,
+      signal,
+    },
+  );
   if (dropCopy) {
     const response = isObject(v) ? v : {};
     return {
@@ -2712,9 +2758,10 @@ async function submitOrder(
 async function createOrder(
   client: ApiClient,
   body: CreateOrderBody,
+  missingAccount: MissingAccountPolicy,
   signal?: AbortSignal,
 ): Promise<CreateOrderResult> {
-  const submitted = await submitOrder(client, body, signal);
+  const submitted = await submitOrder(client, body, missingAccount, signal);
   try {
     const order = (await fetchOrderDetail(client, submitted.id, signal)).order;
     return submitted.approval
@@ -3350,8 +3397,12 @@ async function fetchLimits(
 }
 
 /** PUT /limits/{policy}: upsert a typed barrier. */
-async function putLimit(client: ApiClient, limit: Limit): Promise<Limit> {
-  const { path, body } = limitEndpointBody(client, limit);
+async function putLimit(
+  client: ApiClient,
+  limit: Limit,
+  missingAccount: MissingAccountPolicy,
+): Promise<Limit> {
+  const { path, body } = limitEndpointBody(client, limit, missingAccount);
   const v = await client.request(path, { method: "PUT", body });
   return normalizePutLimitResponse(limit.policy, v);
 }

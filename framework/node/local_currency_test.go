@@ -131,7 +131,7 @@ func TestLocalNode_SetAccountCurrencyAllowedForHaltedAccountWithoutPositions(t *
 		t.Fatalf("UpsertBalance: %v", err)
 	}
 	if err := n.SetAccountBlocked(
-		ctx, testKey(id), true, "pnl kill-switch", testCaller,
+		ctx, testKey(id), true, "pnl kill-switch", domain.MissingAccountCreate, testCaller,
 	); err != nil {
 		t.Fatalf("SetAccountBlocked: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestLocalNode_SetAccountCurrencyResetsHaltedPnlWithoutPositions(t *testing.
 		t.Fatalf("CreateAccount: %v", err)
 	}
 	if err := n.SetAccountBlocked(
-		ctx, testKey(id), true, "pnl kill-switch", testCaller,
+		ctx, testKey(id), true, "pnl kill-switch", domain.MissingAccountCreate, testCaller,
 	); err != nil {
 		t.Fatalf("SetAccountBlocked: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestLocalNode_SetAccountCurrencyResetsStalePnlBehindHalt(t *testing.T) {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 	if err := n.SetAccountBlocked(
-		ctx, testKey(id), true, "pnl kill-switch", testCaller,
+		ctx, testKey(id), true, "pnl kill-switch", domain.MissingAccountCreate, testCaller,
 	); err != nil {
 		t.Fatalf("SetAccountBlocked: %v", err)
 	}
@@ -517,7 +517,7 @@ func TestLocalNode_CurrencyGuardsAccountPnlWithoutBalanceRows(t *testing.T) {
 
 		assertAccountPnlCurrencyGuard(
 			t,
-			n.SetAccountGroup(ctx, testKey("account"), "desk-eur", testCaller),
+			n.SetAccountGroup(ctx, testKey("account"), "desk-eur", domain.MissingAccountCreate, testCaller),
 			"account",
 		)
 	})

@@ -41,6 +41,7 @@ import {
   ApiError,
   AUTOCOMPLETE_SUGGESTION_LIMIT,
   useOfficerApi,
+  type MissingAccountPolicy,
 } from "@/framework";
 import { Autocomplete } from "@/components/Autocomplete";
 import { ErrorBanner } from "@/components/PageStates";
@@ -283,6 +284,8 @@ export function LimitDialog({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [missingAccountConfirmOpen, setMissingAccountConfirmOpen] =
+    useState(false);
   const [dialogAccountSuggestions, setDialogAccountSuggestions] = useState<
     Account[]
   >([]);
@@ -319,6 +322,7 @@ export function LimitDialog({
       setError(null);
       setBusy(false);
       setConfirmOpen(false);
+      setMissingAccountConfirmOpen(false);
     }
   }, [open, editing, initialAccount]);
 
@@ -508,7 +512,7 @@ export function LimitDialog({
     void submit();
   };
 
-  const submit = async () => {
+  const submit = async (missingAccount: MissingAccountPolicy = "reject") => {
     if (validation) {
       setError(t(validation.key, validation.values));
       setConfirmOpen(false);
@@ -517,11 +521,22 @@ export function LimitDialog({
     setBusy(true);
     setError(null);
     try {
-      await putLimit(candidate);
+      await putLimit(candidate, missingAccount);
       setConfirmOpen(false);
+      setMissingAccountConfirmOpen(false);
       onOpenChange(false);
       onSaved();
     } catch (err) {
+      if (
+        missingAccount === "reject" &&
+        err instanceof ApiError &&
+        err.code === "account_missing"
+      ) {
+        setConfirmOpen(false);
+        setMissingAccountConfirmOpen(true);
+        setBusy(false);
+        return;
+      }
       setError(errMessage(err));
       setBusy(false);
     }
@@ -771,6 +786,38 @@ export function LimitDialog({
             disabled={busy}
           >
             {t("restartConfirm.confirm")}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    <AlertDialog
+      open={missingAccountConfirmOpen}
+      onOpenChange={setMissingAccountConfirmOpen}
+    >
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{t("missingAccountConfirm.title")}</AlertDialogTitle>
+          <AlertDialogDescription>
+            {t("missingAccountConfirm.description", {
+              account: candidate.account,
+            })}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        {error && (
+          <ErrorBanner message={error} onDismiss={() => setError(null)} />
+        )}
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={busy}>
+            {tc("actions.cancel")}
+          </AlertDialogCancel>
+          <AlertDialogAction
+            onClick={(e) => {
+              e.preventDefault();
+              void submit("create");
+            }}
+            disabled={busy}
+          >
+            {t("missingAccountConfirm.confirm")}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

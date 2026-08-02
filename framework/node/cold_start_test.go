@@ -158,7 +158,7 @@ func TestLocalNode_AdjustmentUnderOperatorCallerOnColdStore(t *testing.T) {
 				Mode:  domain.AdjustmentModeAbsolute,
 				Value: "1000",
 			},
-		}, testCaller)
+		}, domain.MissingAccountCreate, testCaller)
 	if err != nil {
 		t.Fatalf("ApplyAdjustment: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestLocalNode_ColdStartCreateAccountThenTrade(t *testing.T) {
 				Mode:  domain.AdjustmentModeAbsolute,
 				Value: "10000",
 			},
-		}, testCaller); err != nil {
+		}, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("ApplyAdjustment: %v", err)
 	}
 	if _, err := n.SubmitOrder(ctx, testKey("cold"), domain.Order{
@@ -202,7 +202,7 @@ func TestLocalNode_ColdStartCreateAccountThenTrade(t *testing.T) {
 		AmountKind:  domain.OrderAmountKindQuantity,
 		AmountValue: "10",
 		Price:       "100",
-	}, testCaller); err != nil {
+	}, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("SubmitOrder: %v", err)
 	}
 	if order, err := n.SubmitOrder(ctx, testKey("cold"), domain.Order{
@@ -212,7 +212,7 @@ func TestLocalNode_ColdStartCreateAccountThenTrade(t *testing.T) {
 		AmountKind:  domain.OrderAmountKindQuantity,
 		AmountValue: "5",
 		Price:       "100",
-	}, testCaller); err != nil {
+	}, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("second SubmitOrder: %v", err)
 	} else if order.Status != domain.OrderStatusCommitted {
 		t.Fatalf("second SubmitOrder status = %q, want committed", order.Status)
@@ -232,7 +232,7 @@ func TestLocalNode_ColdStartCreateGroupThenAssign(t *testing.T) {
 	if _, err := n.CreateAccount(ctx, testAccount("cold"), testCaller); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
-	if err := n.SetAccountGroup(ctx, testKey("cold"), "vips", testCaller); err != nil {
+	if err := n.SetAccountGroup(ctx, testKey("cold"), "vips", domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("SetAccountGroup: %v", err)
 	}
 }

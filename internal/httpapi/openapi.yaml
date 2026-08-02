@@ -820,6 +820,8 @@ paths:
       operationId: blockAccount
       summary: Block an account
       tags: [accounts]
+      parameters:
+        - $ref: "#/components/parameters/MissingAccount"
       requestBody:
         required: true
         content:
@@ -845,7 +847,7 @@ paths:
         "400":
           $ref: "#/components/responses/ValidationError"
         "404":
-          $ref: "#/components/responses/NotFoundError"
+          $ref: "#/components/responses/AccountMissingOrNotFoundError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -856,6 +858,8 @@ paths:
       operationId: unblockAccount
       summary: Unblock an account
       tags: [accounts]
+      parameters:
+        - $ref: "#/components/parameters/MissingAccount"
       requestBody:
         required: false
         content:
@@ -876,7 +880,7 @@ paths:
         "400":
           $ref: "#/components/responses/ValidationError"
         "404":
-          $ref: "#/components/responses/NotFoundError"
+          $ref: "#/components/responses/AccountMissingOrNotFoundError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -891,6 +895,8 @@ paths:
         membership. The request is rejected when changing membership would alter
         the account's effective currency while it has balance or P&L rows.
       tags: [accounts]
+      parameters:
+        - $ref: "#/components/parameters/MissingAccount"
       requestBody:
         required: true
         content:
@@ -916,7 +922,7 @@ paths:
         "400":
           $ref: "#/components/responses/ValidationError"
         "404":
-          $ref: "#/components/responses/NotFoundError"
+          $ref: "#/components/responses/AccountMissingOrNotFoundError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -1036,6 +1042,8 @@ paths:
         returns it on the record. If the engine returns no account modifications,
         Officer records nothing and returns 204.
       tags: [adjustments]
+      parameters:
+        - $ref: "#/components/parameters/MissingAccount"
       requestBody:
         required: true
         content:
@@ -1058,7 +1066,7 @@ paths:
         "400":
           $ref: "#/components/responses/ValidationError"
         "404":
-          $ref: "#/components/responses/NotFoundError"
+          $ref: "#/components/responses/AccountMissingOrNotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
         "500":
@@ -1458,6 +1466,8 @@ paths:
         call the SDK account adjustment API and does not seed the SpotFunds
         account-currency P&L kill-switch accumulator.
       tags: [balances]
+      parameters:
+        - $ref: "#/components/parameters/MissingAccount"
       requestBody:
         required: true
         content:
@@ -1478,7 +1488,7 @@ paths:
         "400":
           $ref: "#/components/responses/ValidationError"
         "404":
-          $ref: "#/components/responses/NotFoundError"
+          $ref: "#/components/responses/AccountMissingOrNotFoundError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -2410,7 +2420,15 @@ paths:
     put:
       operationId: putRateLimit
       summary: Upsert a rate-limit barrier
+      description: >
+        A barrier whose scope carries the account axis (`account`,
+        `account_asset`) may name an account that does not exist yet;
+        `missingAccount` is the caller's required choice between registering it
+        and refusing the request. A created account's barrier is enforced from
+        this call onward.
       tags: [limits]
+      parameters:
+        - $ref: "#/components/parameters/MissingAccount"
       requestBody:
         required: true
         content:
@@ -2430,6 +2448,8 @@ paths:
                     $ref: "#/components/schemas/RateLimit"
         "400":
           $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/AccountMissingError"
         "501":
           $ref: "#/components/responses/NotImplementedError"
         "503":
@@ -2441,7 +2461,12 @@ paths:
     put:
       operationId: putOrderSizeLimit
       summary: Upsert an order-size barrier
+      description: >
+        `missingAccount` follows the rate-limit barrier: it is required when the
+        scope carries the account axis and ignored otherwise.
       tags: [limits]
+      parameters:
+        - $ref: "#/components/parameters/MissingAccount"
       requestBody:
         required: true
         content:
@@ -2461,6 +2486,8 @@ paths:
                     $ref: "#/components/schemas/OrderSizeLimit"
         "400":
           $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/AccountMissingError"
         "501":
           $ref: "#/components/responses/NotImplementedError"
         "503":
@@ -2472,7 +2499,12 @@ paths:
     put:
       operationId: putSpotFundsPnlBoundsLimit
       summary: Upsert a SpotFunds P&L-bounds barrier
+      description: >
+        `missingAccount` follows the rate-limit barrier; only the `account`
+        scope carries an account axis here.
       tags: [limits]
+      parameters:
+        - $ref: "#/components/parameters/MissingAccount"
       requestBody:
         required: true
         content:
@@ -2492,6 +2524,8 @@ paths:
                     $ref: "#/components/schemas/SpotFundsPnlBoundsLimit"
         "400":
           $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/AccountMissingError"
         "501":
           $ref: "#/components/responses/NotImplementedError"
         "503":
@@ -2950,6 +2984,8 @@ paths:
         returned `id` is the id actually used, so confirm/cancel
         resolve the same order.
       tags: [signing]
+      parameters:
+        - $ref: "#/components/parameters/MissingAccount"
       requestBody:
         required: true
         content:
@@ -2968,6 +3004,8 @@ paths:
                 $ref: "#/components/schemas/ApprovalToken"
         "400":
           $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/AccountMissingError"
         "409":
           $ref: "#/components/responses/ConflictError"
         "500":
@@ -2987,8 +3025,12 @@ paths:
         execution reports are also unsigned and unattested. The SDK rejects
         market orders for drop-copy because they cannot be reconciled without a
         limit price. Requests without a price therefore return the SDK
-        validation error instead of creating an order.
+        validation error instead of creating an order. `missingAccount` is
+        required and accepts only `create`: a drop-copy reports an execution
+        that already happened, so it cannot refuse an unknown account.
       tags: [orders]
+      parameters:
+        - $ref: "#/components/parameters/MissingAccount"
       requestBody:
         required: true
         content:
@@ -3690,6 +3732,21 @@ components:
         type: boolean
         default: false
 
+    MissingAccount:
+      name: missingAccount
+      in: query
+      required: true
+      description: >
+        Explicit choice for a request that names an account Officer does not
+        know yet: `create` registers it with default settings (no group, no
+        currency) and applies the request; `reject` fails with 404
+        `account_missing`. There is no default - the value is required whenever
+        the request names a non-empty account code, and is ignored by a barrier
+        whose scope carries no account axis.
+      schema:
+        type: string
+        enum: [create, reject]
+
     LimitParam:
       name: limit
       in: query
@@ -3773,6 +3830,28 @@ components:
           schema:
             $ref: "#/components/schemas/HasDependentsError"
 
+    AccountMissingError:
+      description: >
+        The request named an account Officer does not know and asked to reject
+        rather than create it (`missingAccount=reject`). The error `code` is
+        `account_missing` and the envelope carries the offending account code.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/AccountMissingError"
+
+    AccountMissingOrNotFoundError:
+      description: >
+        Either the addressed resource does not exist (`not_found`) or the
+        request named an unknown account and asked to reject it
+        (`account_missing`, with the account code in the envelope).
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: "#/components/schemas/Error"
+              - $ref: "#/components/schemas/AccountMissingError"
+
     UpstreamError:
       description: Upstream provider request failed.
       content:
@@ -3834,11 +3913,11 @@ components:
             code:
               type: string
               description: >
-                Machine-readable code: `validation`, `not_found`, `conflict`,
-                `has_dependents`, `terminal_order`,
-                `execution_report_required`, `precondition`, `too_large`,
-                `engine_restarting`, `signing`, `not_implemented`, or
-                `internal`.
+                Machine-readable code: `validation`, `not_found`,
+                `account_missing`, `conflict`, `has_dependents`,
+                `terminal_order`, `execution_report_required`, `precondition`,
+                `too_large`, `engine_restarting`, `signing`, `not_implemented`,
+                or `internal`.
               example: not_found
             message:
               type: string
@@ -3874,6 +3953,25 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/DependentCount"
+
+    AccountMissingError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, account]
+          properties:
+            code:
+              type: string
+              enum: [account_missing]
+            message:
+              type: string
+              example: account "acc-1" does not exist
+            account:
+              type: string
+              description: The account code the request named.
+              example: acc-1
 
     # Business CSV
 

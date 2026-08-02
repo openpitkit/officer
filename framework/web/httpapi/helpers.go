@@ -101,6 +101,10 @@ func WriteErr(w http.ResponseWriter, err error) {
 		WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 	case errors.Is(err, domain.ErrForbidden):
 		WriteErrMsg(w, http.StatusForbidden, "forbidden", domain.ErrForbidden.Error())
+	// A rejected missing account is matched before the generic not-found case so
+	// it keeps its own code and its structured account field.
+	case errors.Is(err, domain.ErrAccountMissing):
+		writeAccountMissingErr(w, err)
 	case errors.Is(err, domain.ErrNotFound):
 		WriteErrMsg(w, http.StatusNotFound, "not_found", err.Error())
 	case errors.Is(err, domain.ErrAlreadyExists):
@@ -145,6 +149,23 @@ func writeHasDependentsErr(w http.ResponseWriter, err error) {
 			"code":       "has_dependents",
 			"message":    domain.ErrHasDependents.Error(),
 			"dependents": dependents,
+		},
+	})
+}
+
+// writeAccountMissingErr reports a request that named an unknown account and
+// asked to reject it. The account code travels as its own envelope field so a
+// client matches on structure rather than on the human-readable message.
+func writeAccountMissingErr(w http.ResponseWriter, err error) {
+	var typed domain.AccountMissingError
+	if !errors.As(err, &typed) {
+		typed = domain.AccountMissingError{}
+	}
+	WriteJSON(w, http.StatusNotFound, map[string]any{
+		"error": map[string]any{
+			"code":    "account_missing",
+			"message": err.Error(),
+			"account": typed.Account.String(),
 		},
 	})
 }

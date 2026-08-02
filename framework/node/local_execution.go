@@ -84,8 +84,11 @@ func (n *localNode) applyExecutionReport(
 	if in.Commission != nil {
 		assets = append(assets, in.Commission.Currency)
 	}
+	// The account comes from the stored order, not from the request, so there is
+	// no missing-account choice to make: it is registered unconditionally.
 	if err := n.ensureAccountAndAssetsRegisteredExclusive(
-		ctx, account, "execution report", caller, assets...,
+		ctx, account, domain.MissingAccountCreate, "execution report", caller,
+		assets...,
 	); err != nil {
 		return engine.ExecutionReportResult{}, err
 	}
@@ -198,7 +201,8 @@ func (n *localNode) recordWorkflowExecutionReport(
 	}
 	account := routeDetail.Order.Account
 	if err := n.ensureAccountAndAssetsRegisteredExclusive(
-		ctx, account, "workflow execution report", caller,
+		ctx, account, domain.MissingAccountCreate,
+		"workflow execution report", caller,
 	); err != nil {
 		return engine.ExecutionReportResult{}, err
 	}

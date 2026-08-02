@@ -233,7 +233,7 @@ func TestPutRateLimit(t *testing.T) {
 		"windowMs":1000,"maxOrders":100
 	}`)
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits/rate", body))
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits/rate?missingAccount=create", body))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
@@ -278,7 +278,7 @@ func TestPutOrderSizeLimit(t *testing.T) {
 		"maxQuantity":"500","maxNotional":"50000"
 	}`)
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits/order-size", body))
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits/order-size?missingAccount=create", body))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
@@ -325,7 +325,7 @@ func TestPutSpotFundsPnlBoundsLimit(t *testing.T) {
 		rec,
 		httptest.NewRequest(
 			http.MethodPut,
-			"/api/v1/limits/spot-funds-pnl-bounds",
+			"/api/v1/limits/spot-funds-pnl-bounds?missingAccount=create",
 			body,
 		),
 	)
@@ -379,7 +379,7 @@ func TestPutSpotFundsPnlBoundsLimit_Account(t *testing.T) {
 		rec,
 		httptest.NewRequest(
 			http.MethodPut,
-			"/api/v1/limits/spot-funds-pnl-bounds",
+			"/api/v1/limits/spot-funds-pnl-bounds?missingAccount=create",
 			body,
 		),
 	)
@@ -415,7 +415,7 @@ func TestPutSpotFundsPnlBoundsLimit_ValidationError(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(
 		http.MethodPut,
-		"/api/v1/limits/spot-funds-pnl-bounds",
+		"/api/v1/limits/spot-funds-pnl-bounds?missingAccount=create",
 		body,
 	))
 	if rec.Code != http.StatusBadRequest {
@@ -436,7 +436,7 @@ func TestPutSpotFundsPnlBoundsLimit_NotImplemented(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(
 		http.MethodPut,
-		"/api/v1/limits/spot-funds-pnl-bounds",
+		"/api/v1/limits/spot-funds-pnl-bounds?missingAccount=create",
 		body,
 	))
 	if rec.Code != http.StatusNotImplemented {
@@ -465,7 +465,7 @@ func TestPutSpotFundsPnlBoundsLimit_EngineRestarting(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(
 		http.MethodPut,
-		"/api/v1/limits/spot-funds-pnl-bounds",
+		"/api/v1/limits/spot-funds-pnl-bounds?missingAccount=create",
 		body,
 	))
 	if rec.Code != http.StatusServiceUnavailable {
@@ -489,7 +489,7 @@ func TestPutRateLimit_ValidationError(t *testing.T) {
 	}
 	body := bytes.NewBufferString(`{"scope":"broker","windowMs":1000,"maxOrders":100}`)
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits/rate", body))
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits/rate?missingAccount=create", body))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
@@ -509,7 +509,7 @@ func TestPutRateLimit_NotImplemented(t *testing.T) {
 	}
 	body := bytes.NewBufferString(`{"scope":"asset","asset":"AAPL","windowMs":1000,"maxOrders":100}`)
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits/rate", body))
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits/rate?missingAccount=create", body))
 	if rec.Code != http.StatusNotImplemented {
 		t.Fatalf("want 501, got %d", rec.Code)
 	}
@@ -534,7 +534,7 @@ func TestPutRateLimit_EngineRestarting(t *testing.T) {
 	}
 	body := bytes.NewBufferString(`{"scope":"asset","asset":"AAPL","windowMs":1000,"maxOrders":100}`)
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits/rate", body))
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits/rate?missingAccount=create", body))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("want 503, got %d", rec.Code)
 	}

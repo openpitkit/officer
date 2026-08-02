@@ -70,7 +70,7 @@ func TestLocalNode_SubmitOrderPersistsPreTradeBalances(t *testing.T) {
 		AmountKind:  domain.OrderAmountKindQuantity,
 		AmountValue: "20",
 		Price:       "100",
-	}, testCaller)
+	}, domain.MissingAccountCreate, testCaller)
 	if err != nil {
 		t.Fatalf("SubmitOrder: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestLocalNode_SubmitDropCopyPersistsBlockCallerAndAudit(t *testing.T) {
 		ExternalID: id, Account: "acc-1", DropCopy: true,
 		BaseAsset: "AAPL", QuoteAsset: "USD", Side: domain.OrderSideBuy,
 		AmountKind: domain.OrderAmountKindQuantity, AmountValue: "1", Price: "100",
-	}, caller)
+	}, domain.MissingAccountCreate, caller)
 	if err != nil {
 		t.Fatalf("SubmitOrder: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestLocalNode_SubmitImmediatePanelDoesNotInferAccountPnl(t *testing.T) {
 		AmountKind:  domain.OrderAmountKindQuantity,
 		AmountValue: "2",
 		Price:       "100",
-	}, panelCaller)
+	}, domain.MissingAccountCreate, panelCaller)
 	if err != nil {
 		t.Fatalf("SubmitImmediate: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestLocalNode_SubmitImmediatePersistsAuthoritativeAccountPnl(t *testing.T) 
 		AmountKind:  domain.OrderAmountKindQuantity,
 		AmountValue: "2",
 		Price:       "100",
-	}, testCaller)
+	}, domain.MissingAccountCreate, testCaller)
 	if err != nil {
 		t.Fatalf("SubmitImmediate: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestLocalNode_SubmitImmediatePersistsAuthoritativeAccountPnlHalt(t *testing
 		AmountKind:  domain.OrderAmountKindQuantity,
 		AmountValue: "2",
 		Price:       "100",
-	}, testCaller)
+	}, domain.MissingAccountCreate, testCaller)
 	if err != nil {
 		t.Fatalf("SubmitImmediate: %v", err)
 	}
@@ -305,7 +305,7 @@ func TestLocalNode_SubmitImmediateLeavesAccountPnlWithoutMatchingOutcome(t *test
 		AmountKind:  domain.OrderAmountKindQuantity,
 		AmountValue: "2",
 		Price:       "100",
-	}, testCaller)
+	}, domain.MissingAccountCreate, testCaller)
 	if err != nil {
 		t.Fatalf("SubmitImmediate: %v", err)
 	}
@@ -349,7 +349,7 @@ func TestLocalNode_SubmitImmediateDoesNotSelectAccountPnlFromBalanceOutcomes(t *
 		AmountKind:  domain.OrderAmountKindQuantity,
 		AmountValue: "2",
 		Price:       "100",
-	}, testCaller)
+	}, domain.MissingAccountCreate, testCaller)
 	if err != nil {
 		t.Fatalf("SubmitImmediate: %v", err)
 	}
@@ -402,7 +402,7 @@ func TestLocalNode_SubmitImmediateDoesNotUseEffectiveCurrencyToInferAccountPnl(t
 		AmountKind:  domain.OrderAmountKindQuantity,
 		AmountValue: "2",
 		Price:       "100",
-	}, testCaller)
+	}, domain.MissingAccountCreate, testCaller)
 	if err != nil {
 		t.Fatalf("SubmitImmediate: %v", err)
 	}
@@ -458,7 +458,7 @@ func TestLocalNode_SubmitOrderPostEngineStoreFailureFatals(t *testing.T) {
 		AmountKind:  domain.OrderAmountKindQuantity,
 		AmountValue: "20",
 		Price:       "100",
-	}, testCaller)
+	}, domain.MissingAccountCreate, testCaller)
 	if !errors.Is(err, storeErr) {
 		t.Fatalf("SubmitOrder error = %v, want store failure", err)
 	}
@@ -518,7 +518,7 @@ func TestLocalNode_SubmitImmediateDoesNotReadAccountDuringSubmissionApply(
 			AmountValue: "20",
 			Price:       "100",
 		},
-		testCaller,
+		domain.MissingAccountCreate, testCaller,
 	)
 	if err != nil {
 		t.Fatalf("SubmitImmediate: %v", err)
@@ -565,7 +565,7 @@ func TestLocalNode_SubmitImmediatePostEngineStoreFailureFatals(t *testing.T) {
 		AmountKind:  domain.OrderAmountKindQuantity,
 		AmountValue: "20",
 		Price:       "100",
-	}, testCaller)
+	}, domain.MissingAccountCreate, testCaller)
 	if !errors.Is(err, storeErr) {
 		t.Fatalf("SubmitImmediate error = %v, want store failure", err)
 	}
@@ -601,7 +601,7 @@ func TestLocalNode_SubmitOrderAutoCreatesUnknownAsset(t *testing.T) {
 		AmountKind:  domain.OrderAmountKindQuantity,
 		AmountValue: "2",
 		Price:       "100",
-	}, testCaller)
+	}, domain.MissingAccountCreate, testCaller)
 	if err != nil {
 		t.Fatalf("SubmitOrder: %v", err)
 	}
@@ -650,7 +650,7 @@ func TestLocalNode_SubmitOrderAutoCreatesUnknownAccount(t *testing.T) {
 		AmountKind:  domain.OrderAmountKindQuantity,
 		AmountValue: "2",
 		Price:       "100",
-	}, testCaller)
+	}, domain.MissingAccountCreate, testCaller)
 	if err != nil {
 		t.Fatalf("SubmitOrder: %v", err)
 	}
@@ -693,7 +693,7 @@ func TestLocalNode_SubmitOrderHonorsSuppliedExternalID(t *testing.T) {
 		AmountKind:  domain.OrderAmountKindQuantity,
 		AmountValue: "20",
 		Price:       "100",
-	}, testCaller)
+	}, domain.MissingAccountCreate, testCaller)
 	if err != nil {
 		t.Fatalf("SubmitOrder: %v", err)
 	}
@@ -725,7 +725,7 @@ func TestLocalNode_SubmitOrderGeneratesExternalIDWhenAbsent(t *testing.T) {
 		AmountKind:  domain.OrderAmountKindQuantity,
 		AmountValue: "20",
 		Price:       "100",
-	}, testCaller)
+	}, domain.MissingAccountCreate, testCaller)
 	if err != nil {
 		t.Fatalf("SubmitOrder: %v", err)
 	}
@@ -759,10 +759,10 @@ func TestLocalNode_SubmitOrderDuplicateSuppliedIDConflicts(t *testing.T) {
 			Price:       "100",
 		}
 	}
-	if _, err := n.SubmitOrder(ctx, testKey("acc-1"), mk(), testCaller); err != nil {
+	if _, err := n.SubmitOrder(ctx, testKey("acc-1"), mk(), domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("first SubmitOrder: %v", err)
 	}
-	_, err := n.SubmitOrder(ctx, testKey("acc-1"), mk(), testCaller)
+	_, err := n.SubmitOrder(ctx, testKey("acc-1"), mk(), domain.MissingAccountCreate, testCaller)
 	if !errors.Is(err, domain.ErrAlreadyExists) {
 		t.Fatalf("duplicate supplied id error = %v, want ErrAlreadyExists", err)
 	}
@@ -785,7 +785,7 @@ func TestLocalNode_SubmitOrderDifferentAccountsProceedConcurrently(t *testing.T)
 			BaseAsset: "AAPL", QuoteAsset: "USD",
 			Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity,
 			AmountValue: "1", Price: "10",
-		}, testCaller)
+		}, domain.MissingAccountCreate, testCaller)
 		errs <- err
 	}
 	errs := make(chan error, 2)
@@ -826,7 +826,7 @@ func TestLocalNode_SubmitOrderSameAccountSerializes(t *testing.T) {
 			BaseAsset: "AAPL", QuoteAsset: "USD",
 			Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity,
 			AmountValue: "1", Price: "10",
-		}, testCaller)
+		}, domain.MissingAccountCreate, testCaller)
 		errs <- err
 	}
 	errs := make(chan error, 2)
