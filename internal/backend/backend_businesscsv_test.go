@@ -1030,6 +1030,58 @@ func TestService_BusinessCSVExportAccountGroupFilterPresence(t *testing.T) {
 // A pnl_halt_reason the engine cannot map would fail the engine rebuild on the
 // next start, and CSV import performs no rebuild that would catch it - so the
 // import boundary must reject it before it reaches the store.
+// TestService_BusinessCSVImportRejectsReservedGroupCode closes the CSV hole in
+// the reserved-sentinel rule. "-" addresses the realm default group in a path
+// position, so a real group carrying that code is shadowed by the default-group
+// route and can never be renamed or deleted again. The REST handlers refuse it,
+// but the import bypasses them entirely - the guard therefore lives in
+// domain.ValidateGroupID, which every writer goes through.
+func TestService_BusinessCSVImportRejectsReservedGroupCode(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc, st, _ := newBusinessCSVRealService(t)
+
+	body := []byte(
+		"code,title,currency,notes,blocked,block_reason\n" +
+			"-,Default Impostor,,,false,\n",
+	)
+	_, err := svc.ImportBusinessCSV(ctx, backend.BusinessCSVImportRequest{
+		Entity:         businesscsv.EntityAccountGroups,
+		Delimiter:      businesscsv.DelimiterComma,
+		Filename:       "groups.csv",
+		Payload:        body,
+		ConflictPolicy: businesscsv.ConflictReplace,
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("ImportBusinessCSV error = %v, want invalid", err)
+	}
+	if _, ok, err := st.GetGroup(ctx, "-"); err != nil || ok {
+		t.Fatalf("GetGroup \"-\" after failed import: %v ok=%v, want absent", err, ok)
+	}
+	// An account row naming the sentinel as its group must not slip a "-" group
+	// in through the import's auto-create path either.
+	accounts := []byte(
+		"code,title,group_code,notes,blocked,block_reason\n" +
+			"acc-bad,,-,,false,\n",
+	)
+	_, err = svc.ImportBusinessCSV(ctx, backend.BusinessCSVImportRequest{
+		Entity:         businesscsv.EntityAccounts,
+		Delimiter:      businesscsv.DelimiterComma,
+		Filename:       "accounts.csv",
+		Payload:        accounts,
+		ConflictPolicy: businesscsv.ConflictReplace,
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("ImportBusinessCSV(accounts) error = %v, want invalid", err)
+	}
+	if _, ok, err := st.GetGroup(ctx, "-"); err != nil || ok {
+		t.Fatalf("GetGroup \"-\" after account import: %v ok=%v, want absent", err, ok)
+	}
+	if _, ok, err := st.GetAccount(ctx, "acc-bad"); err != nil || ok {
+		t.Fatalf("GetAccount acc-bad after failed import: %v ok=%v, want absent", err, ok)
+	}
+}
+
 func TestService_BusinessCSVImportRejectsUnmappablePnlHaltReason(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

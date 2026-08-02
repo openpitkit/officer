@@ -26,6 +26,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -1192,6 +1193,86 @@ func TestBackupRestoreReplaceAllUsesArchiveGroupForActivityPrune(t *testing.T) {
 	}
 	if _, err := rs.GetOrder(ctx, order.ExternalID); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("GetOrder after archive-group restore = %v, want ErrNotFound", err)
+	}
+}
+
+// TestRestoreValidatesDictionaryCodes proves the restore path is behind the
+// same code-validation seam as the live API. An archive is caller-supplied
+// data, so without this a hand-crafted file could plant a code carrying a NUL,
+// a newline, or an unbounded length straight into the dictionaries.
+func TestRestoreValidatesDictionaryCodes(t *testing.T) {
+	longCode := strings.Repeat("x", 10_000)
+	cases := []struct {
+		name string
+		data backup.Data
+	}{
+		{"account newline", backup.Data{
+			Accounts: []backup.Account{{Code: "acc\n1"}},
+		}},
+		{"account dot segment", backup.Data{
+			Accounts: []backup.Account{{Code: ".."}},
+		}},
+		{"account oversized", backup.Data{
+			Accounts: []backup.Account{{Code: longCode}},
+		}},
+		{"account block reason newline", backup.Data{
+			Accounts: []backup.Account{{
+				Code: "acc-1", Blocked: true,
+				BlockReason: "risk\nblock account acc-2: forged",
+			}},
+		}},
+		{"group nul", backup.Data{
+			Groups: []backup.AccountGroup{{Code: "grp\x001"}},
+		}},
+		{"group dot segment", backup.Data{
+			Groups: []backup.AccountGroup{{Code: "."}},
+		}},
+		{"group block reason newline", backup.Data{
+			Groups: []backup.AccountGroup{{
+				Code: "grp-1", Blocked: true,
+				BlockReason: "risk\nblock group grp-2: forged",
+			}},
+		}},
+		{"asset nul", backup.Data{
+			Assets: []domain.Asset{{Code: "US\x00D"}},
+		}},
+		{"asset class dot segment", backup.Data{
+			AssetClasses: []domain.AssetClass{{Code: ".."}},
+		}},
+		{"principal newline", backup.Data{
+			Principals: []domain.Principal{{Code: "oper\nator"}},
+		}},
+		{"principal oversized", backup.Data{
+			Principals: []domain.Principal{{Code: longCode}},
+		}},
+		{"principal invalid title", backup.Data{
+			Principals: []domain.Principal{{
+				Code: "operator", Title: "Desk\x00Operator",
+			}},
+		}},
+		{"account invalid UTF-8", backup.Data{
+			Accounts: []backup.Account{{Code: "acc\xff"}},
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			_, rs := newTestStore(t)
+			archive := backup.NewArchive(
+				time.Now().UTC(),
+				"test",
+				backup.RealmLabel{Code: string(domain.DefaultRealm)},
+				backup.Scope{All: true},
+				tc.data,
+			)
+			_, err := rs.RestoreBackup(ctx, archive, backup.RestoreOptions{
+				Scope: backup.Scope{All: true},
+				Mode:  backup.RestoreModeOverwrite,
+			})
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("RestoreBackup = %v, want ErrInvalid", err)
+			}
+		})
 	}
 }
 

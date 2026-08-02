@@ -86,13 +86,33 @@ func deleteLimitDetail(target LimitTarget) string {
 	return "delete limit " + axesDetail(target)
 }
 
-// setAccountGroupDetail renders an account group change; an empty groupCode is a
-// clear.
-func setAccountGroupDetail(id domain.AccountID, groupCode string) string {
-	if groupCode == "" {
-		return fmt.Sprintf("clear group account %s", id)
+// setAccountGroupDetail renders an account group change. The move is filed under
+// each non-empty side, so the line names both: a reader who found the row under
+// the origin group and one who found it under the destination group must both
+// see where the account came from and where it went.
+func setAccountGroupDetail(id domain.AccountID, prevGroupCode, groupCode string) string {
+	return fmt.Sprintf(
+		"set group account %s from=%s to=%s",
+		id, groupSideDetail(prevGroupCode), groupSideDetail(groupCode),
+	)
+}
+
+// updateGroupDetail renders a group update. A renamed group is filed under both
+// codes, so the line names both; a title-only update has no transition to state.
+func updateGroupDetail(prevCode, code string) string {
+	if prevCode == code {
+		return fmt.Sprintf("update group %s", code)
 	}
-	return fmt.Sprintf("set group account %s group=%s", id, groupCode)
+	return fmt.Sprintf("update group %s -> %s", prevCode, code)
+}
+
+// groupSideDetail renders one side of a group transition. The empty code is the
+// reserved default group, which has no operator-facing code to name.
+func groupSideDetail(code string) string {
+	if code == "" {
+		return "<none>"
+	}
+	return code
 }
 
 // adjustmentDetail renders one spot-funds adjustment and its accept/reject
@@ -162,6 +182,42 @@ func executionReportDetail(
 ) string {
 	return fmt.Sprintf("execution report order %s account %s %s/%s qty=%s %s blocks=%d",
 		in.Order, in.Account, in.BaseAsset, in.QuoteAsset, in.FillQuantity, status, blocks)
+}
+
+// blockDetail renders one operator-initiated account block. The reason is the
+// only record of why the operator acted: account.block_reason is overwritten in
+// place and cleared on unblock, so after block-unblock-block the first reason
+// survives nowhere else.
+func blockDetail(id domain.AccountID, reason string) string {
+	return blockReasonDetail("block account", id.String(), reason)
+}
+
+// unblockDetail renders one operator-initiated account unblock. reason must be
+// empty: an unblock is never justified by the reason of the block it lifts, and
+// rendering that text would read as the operator's justification for unblocking.
+func unblockDetail(id domain.AccountID, reason string) string {
+	return blockReasonDetail("unblock account", id.String(), reason)
+}
+
+// blockGroupDetail renders one operator-initiated group block.
+func blockGroupDetail(code, reason string) string {
+	return blockReasonDetail("block group", code, reason)
+}
+
+// unblockGroupDetail renders one operator-initiated group unblock. reason
+// follows unblockDetail and must be empty.
+func unblockGroupDetail(code, reason string) string {
+	return blockReasonDetail("unblock group", code, reason)
+}
+
+// blockReasonDetail appends the operator's reason to a bare block detail line,
+// falling back to the bare form when no reason was given. The reason is
+// validated as printable upstream, so it cannot forge an extra audit line here.
+func blockReasonDetail(operation, code, reason string) string {
+	if reason == "" {
+		return fmt.Sprintf("%s %s", operation, code)
+	}
+	return fmt.Sprintf("%s %s: %s", operation, code, reason)
 }
 
 // engineBlockDetail renders one engine-initiated (kill-switch) account block,

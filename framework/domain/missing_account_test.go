@@ -84,6 +84,26 @@ func TestParseMissingAccountPolicyUnknown(t *testing.T) {
 	}
 }
 
+// TestValidateDropCopyMissingAccountPolicy locks the shared create-only
+// invariant used by every drop-copy surface.
+func TestValidateDropCopyMissingAccountPolicy(t *testing.T) {
+	t.Parallel()
+	if err := domain.ValidateDropCopyMissingAccountPolicy(
+		domain.MissingAccountCreate,
+	); err != nil {
+		t.Fatalf("create policy: %v", err)
+	}
+	for _, policy := range []domain.MissingAccountPolicy{
+		"", "maybe", domain.MissingAccountReject,
+	} {
+		if err := domain.ValidateDropCopyMissingAccountPolicy(policy); !errors.Is(
+			err, domain.ErrInvalid,
+		) {
+			t.Fatalf("policy %q error = %v, want ErrInvalid", policy, err)
+		}
+	}
+}
+
 // TestAccountMissingErrorMatching covers the sentinel contract: the typed error
 // matches ErrAccountMissing, carries the offending code, and is deliberately not
 // an ErrNotFound so the surface can emit a distinct error code.

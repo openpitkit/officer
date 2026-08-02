@@ -379,11 +379,12 @@ func importAudit(
 		if _, err := tx.ExecContext(
 			ctx,
 			`INSERT INTO audit
-			 (external_id, account_id, account_code, account_title, actor_code,
-			  actor_title, at, action_id, source_id, detail)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 (external_id, account_id, account_code, account_title, group_code,
+			  actor_code, actor_title, at, action_id, source_id, detail)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			xid.Bytes(), accountID, entry.Account.String(), accountTitle,
-			entry.Actor, actorTitle, nowStr(), actionID, sourceID, entry.Detail,
+			entry.Group, entry.Actor, actorTitle, nowStr(), actionID, sourceID,
+			entry.Detail,
 		); err != nil {
 			return fmt.Errorf("store: import audit row: %w", err)
 		}

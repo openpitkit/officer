@@ -106,11 +106,12 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [scope]
               properties:
                 scope:
                   description: Backup scope that selects sections and entities to export.
-                  $ref: "#/components/schemas/BackupScope"
+                  $ref: "#/components/schemas/BackupExportScope"
                 zip:
                   type: boolean
                   description: Return a ZIP archive containing the JSON backup.
@@ -139,6 +140,11 @@ paths:
     post:
       operationId: restoreBackup
       summary: Restore a portable database backup
+      description: >
+        Unlike every other mutation, unknown members are ignored here instead of
+        rejected: the body embeds a whole backup archive, a portable artifact
+        another Officer build may have written with fields this build does not
+        know.
       tags: [backup]
       requestBody:
         required: true
@@ -292,6 +298,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [confirm]
               properties:
                 confirm:
@@ -378,6 +385,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [code]
               properties:
                 code:
@@ -427,6 +435,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [code]
               properties:
                 code:
@@ -535,6 +544,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [code]
               properties:
                 code:
@@ -584,6 +594,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [code]
               properties:
                 code:
@@ -653,7 +664,9 @@ paths:
           in: query
           schema:
             type: string
-          description: Search account block reason.
+          description: >-
+            Search the effective block reason - the account's own reason, or its
+            group's when the block comes from the group.
         - $ref: "#/components/parameters/BlockReasonMatch"
         - name: group
           in: query
@@ -665,7 +678,9 @@ paths:
           schema:
             type: string
             enum: [code, title, group, status, blockReason, positionCount]
-          description: Account list sort key. Unknown keys are rejected.
+          description: >-
+            Account list sort key. Unknown keys are rejected. `blockReason`
+            orders by the effective reason, the same value the filter searches.
         - $ref: "#/components/parameters/SortOrder"
         - $ref: "#/components/parameters/LimitParam"
         - $ref: "#/components/parameters/OffsetParam"
@@ -701,6 +716,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [code]
               properties:
                 code:
@@ -767,6 +783,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [code, title]
               properties:
                 code:
@@ -828,6 +845,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [reason]
               properties:
                 reason:
@@ -866,6 +884,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
       responses:
         "200":
           description: Account after unblocking.
@@ -903,6 +922,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [group]
               properties:
                 group:
@@ -943,6 +963,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [currency]
               properties:
                 currency:
@@ -979,6 +1000,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [notes]
               properties:
                 notes:
@@ -1153,11 +1175,16 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [code]
               properties:
                 code:
                   type: string
-                  description: Group public code.
+                  description: >-
+                    Group public code. `-` is rejected with `validation`: it is
+                    reserved for addressing the realm default group, so a group
+                    carrying it could never be reached through any group
+                    operation.
                 title:
                   type: string
                   maxLength: 256
@@ -1211,6 +1238,8 @@ paths:
                       $ref: "#/components/schemas/Account"
         "400":
           $ref: "#/components/responses/ValidationError"
+        "403":
+          $ref: "#/components/responses/ReservedGroupError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "500":
@@ -1226,11 +1255,15 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [code, title]
               properties:
                 code:
                   type: string
-                  description: Replacement group public code.
+                  description: >-
+                    Replacement group public code. `-` is rejected with
+                    `validation`: it is reserved for addressing the realm
+                    default group.
                 title:
                   type: string
                   maxLength: 256
@@ -1248,6 +1281,8 @@ paths:
                     $ref: "#/components/schemas/Group"
         "400":
           $ref: "#/components/responses/ValidationError"
+        "403":
+          $ref: "#/components/responses/ReservedGroupError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
@@ -1268,6 +1303,8 @@ paths:
           description: Group deleted.
         "400":
           $ref: "#/components/responses/ValidationError"
+        "403":
+          $ref: "#/components/responses/ReservedGroupError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "500":
@@ -1289,6 +1326,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [currency]
               properties:
                 currency:
@@ -1328,6 +1366,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [currency]
               properties:
                 currency:
@@ -1346,6 +1385,8 @@ paths:
                     $ref: "#/components/schemas/Group"
         "400":
           $ref: "#/components/responses/ValidationError"
+        "403":
+          $ref: "#/components/responses/ReservedGroupError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "500":
@@ -1364,6 +1405,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [notes]
               properties:
                 notes:
@@ -1382,6 +1424,8 @@ paths:
                     $ref: "#/components/schemas/Group"
         "400":
           $ref: "#/components/responses/ValidationError"
+        "403":
+          $ref: "#/components/responses/ReservedGroupError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "500":
@@ -1400,6 +1444,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [reason]
               properties:
                 reason:
@@ -1418,6 +1463,8 @@ paths:
                     $ref: "#/components/schemas/Group"
         "400":
           $ref: "#/components/responses/ValidationError"
+        "403":
+          $ref: "#/components/responses/ReservedGroupError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "500":
@@ -1436,6 +1483,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
       responses:
         "200":
           description: Group after unblocking.
@@ -1449,6 +1497,8 @@ paths:
                     $ref: "#/components/schemas/Group"
         "400":
           $ref: "#/components/responses/ValidationError"
+        "403":
+          $ref: "#/components/responses/ReservedGroupError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "500":
@@ -1900,6 +1950,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [account, baseAsset, quoteAsset, side, amountKind, amountValue]
               properties:
                 account:
@@ -2033,6 +2084,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [status]
               description: >
                 `quantity` and `price` must be provided together, and are only
@@ -2428,7 +2480,7 @@ paths:
         this call onward.
       tags: [limits]
       parameters:
-        - $ref: "#/components/parameters/MissingAccount"
+        - $ref: "#/components/parameters/MissingAccountOptional"
       requestBody:
         required: true
         content:
@@ -2466,7 +2518,7 @@ paths:
         scope carries the account axis and ignored otherwise.
       tags: [limits]
       parameters:
-        - $ref: "#/components/parameters/MissingAccount"
+        - $ref: "#/components/parameters/MissingAccountOptional"
       requestBody:
         required: true
         content:
@@ -2504,7 +2556,7 @@ paths:
         scope carries an account axis here.
       tags: [limits]
       parameters:
-        - $ref: "#/components/parameters/MissingAccount"
+        - $ref: "#/components/parameters/MissingAccountOptional"
       requestBody:
         required: true
         content:
@@ -2563,6 +2615,14 @@ paths:
         - name: asset
           in: query
           description: Exact asset code.
+          schema:
+            type: string
+        - name: group
+          in: query
+          description: >-
+            Exact account group code. It selects a group's rows by identity;
+            searching the free-form `detail` text instead can surface another
+            group's rows.
           schema:
             type: string
         - name: actor
@@ -2722,6 +2782,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [enabled]
               properties:
                 enabled:
@@ -2822,6 +2883,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [key, format]
               properties:
                 key:
@@ -3030,7 +3092,7 @@ paths:
         that already happened, so it cannot refuse an unknown account.
       tags: [orders]
       parameters:
-        - $ref: "#/components/parameters/MissingAccount"
+        - $ref: "#/components/parameters/MissingAccountCreate"
       requestBody:
         required: true
         content:
@@ -3068,6 +3130,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [token]
               properties:
                 token:
@@ -3110,6 +3173,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [token]
               properties:
                 token:
@@ -3225,6 +3289,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [enabled]
               properties:
                 enabled:
@@ -3372,7 +3437,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/MarketDataInstrument"
+              $ref: "#/components/schemas/MarketDataInstrumentUpsert"
       responses:
         "200":
           description: Instrument persisted; returns the refreshed market-data snapshot.
@@ -3422,6 +3487,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [externalSymbol, enabled]
               properties:
                 externalSymbol:
@@ -3590,7 +3656,12 @@ components:
       name: code
       in: path
       required: true
-      description: URL-encoded group public code.
+      description: >-
+        URL-encoded group public code. The value `-` addresses the reserved
+        default group, which is not an operator-owned group: every operation on
+        it is refused with `reserved_group`, reads included. `-` is therefore
+        not a legal group code either: creating a group with it, or renaming
+        one to it, is refused with `validation`.
       schema:
         type: string
 
@@ -3633,7 +3704,10 @@ components:
     StatusFilter:
       name: status
       in: query
-      description: Filter by blocked state.
+      description: >-
+        Filter by blocked state. On the account list this is the effective
+        state: `blocked` also selects accounts blocked only through their
+        group, and `active` excludes them.
       schema:
         type: string
         enum: [all, active, blocked]
@@ -3741,11 +3815,34 @@ components:
         know yet: `create` registers it with default settings (no group, no
         currency) and applies the request; `reject` fails with 404
         `account_missing`. There is no default - the value is required whenever
-        the request names a non-empty account code, and is ignored by a barrier
-        whose scope carries no account axis.
+        the request names a non-empty account code.
       schema:
         type: string
         enum: [create, reject]
+
+    MissingAccountOptional:
+      name: missingAccount
+      in: query
+      description: >
+        Required when the request scope carries a non-empty account code:
+        `create` registers an unknown account with default settings and applies
+        the request; `reject` fails with 404 `account_missing`. Omit it when the
+        scope has no account axis; a supplied value is ignored in that case.
+      schema:
+        type: string
+        enum: [create, reject]
+
+    MissingAccountCreate:
+      name: missingAccount
+      in: query
+      required: true
+      description: >
+        Must be `create`. A drop-copy request reports an execution that already
+        happened, so Officer registers an unknown account with default settings
+        rather than refusing to record the report.
+      schema:
+        type: string
+        enum: [create]
 
     LimitParam:
       name: limit
@@ -3801,6 +3898,18 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
 
+    ReservedGroupError:
+      description: >
+        The operation targets the reserved default account group, addressed as
+        `-`. That group is the terminal tier of the currency cascade every
+        account resolves through, not an operator-owned group, so no operation
+        addressed at `-` is carried out - reads included. The error `code` is
+        `reserved_group`.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
     TerminalOrderError:
       description: >
         Non-forced mutation of a terminal (already-finalized) order. The error
@@ -3848,7 +3957,7 @@ components:
       content:
         application/json:
           schema:
-            oneOf:
+            anyOf:
               - $ref: "#/components/schemas/Error"
               - $ref: "#/components/schemas/AccountMissingError"
 
@@ -3916,7 +4025,8 @@ components:
                 Machine-readable code: `validation`, `not_found`,
                 `account_missing`, `conflict`, `has_dependents`,
                 `terminal_order`, `execution_report_required`, `precondition`,
-                `too_large`, `engine_restarting`, `signing`, `not_implemented`,
+                `too_large`, `forbidden`, `reserved_group`,
+                `engine_restarting`, `signing`, `upstream`, `not_implemented`,
                 or `internal`.
               example: not_found
             message:
@@ -3993,6 +4103,7 @@ components:
 
     BusinessCSVExportFilters:
       type: object
+      additionalProperties: false
       properties:
         groupCode:
           type: [string, "null"]
@@ -4013,6 +4124,7 @@ components:
 
     BusinessCSVExportRequest:
       type: object
+      additionalProperties: false
       required: [entity, delimiter]
       properties:
         entity:
@@ -4025,7 +4137,7 @@ components:
         filters:
           $ref: "#/components/schemas/BusinessCSVExportFilters"
 
-    BusinessCSVImportPreviewRequest:
+    BusinessCSVImportPayload:
       type: object
       required: [entity, delimiter, filename, payloadBase64]
       properties:
@@ -4041,14 +4153,20 @@ components:
           format: byte
           description: Base64-encoded CSV or ZIP payload.
 
+    BusinessCSVImportPreviewRequest:
+      allOf:
+        - $ref: "#/components/schemas/BusinessCSVImportPayload"
+      unevaluatedProperties: false
+
     BusinessCSVImportRequest:
       allOf:
-        - $ref: "#/components/schemas/BusinessCSVImportPreviewRequest"
+        - $ref: "#/components/schemas/BusinessCSVImportPayload"
         - type: object
           required: [conflictPolicy]
           properties:
             conflictPolicy:
               $ref: "#/components/schemas/BusinessCSVConflictPolicy"
+      unevaluatedProperties: false
 
     BusinessCSVImportFile:
       type: object
@@ -4121,6 +4239,43 @@ components:
     BackupRestoreMode:
       type: string
       enum: [replace_all, overwrite, insert_missing]
+
+    BackupExportEntitySelector:
+      type: object
+      additionalProperties: false
+      properties:
+        all:
+          type: boolean
+          description: Select every entity in the selector's category.
+        accounts:
+          type: array
+          description: Account codes to include.
+          items:
+            type: string
+        groups:
+          type: array
+          description: Group codes to include.
+          items:
+            type: string
+
+    BackupExportScope:
+      type: object
+      additionalProperties: false
+      properties:
+        all:
+          type: boolean
+          description: Include every section when true.
+        sections:
+          type: array
+          description: Backup sections to include when `all` is false.
+          items:
+            $ref: "#/components/schemas/BackupSection"
+        accounts:
+          description: Account and group selector for account-owned data.
+          $ref: "#/components/schemas/BackupExportEntitySelector"
+        positions:
+          description: Account and group selector for position-related data.
+          $ref: "#/components/schemas/BackupExportEntitySelector"
 
     BackupEntitySelector:
       type: object
@@ -4411,7 +4566,7 @@ components:
 
     Account:
       type: object
-      required: [code, title, pnl, pnlHaltReason, group, currency, effectiveCurrency, currencyOrigin, currencyCascade, notes, positionCount, blocked, blockReason]
+      required: [code, title, pnl, pnlHaltReason, group, currency, effectiveCurrency, currencyOrigin, currencyCascade, notes, positionCount, blocked, blockReason, blockSource, accountBlocked, accountBlockReason, groupBlocked, groupBlockReason]
       properties:
         code:
           type: string
@@ -4461,9 +4616,40 @@ components:
           description: Number of stored position/balance rows for the account.
         blocked:
           type: boolean
+          description: >-
+            Effective kill-switch state: the account's own block OR the block of
+            the group it belongs to. The engine rejects every order from a
+            member of a blocked group before any policy runs, so this is the
+            answer to "can this account trade right now".
         blockReason:
           type: string
-          description: Non-empty when `blocked` is true.
+          description: >-
+            Effective block reason: the account's own reason when the account
+            itself is blocked, otherwise its group's reason. Empty when
+            `blocked` is false.
+        blockSource:
+          type: string
+          enum: [none, account, group]
+          description: >-
+            Tier the effective block came from. `account` when the account
+            carries its own block (it wins attribution over a group block),
+            `group` when only its group is blocked, `none` when it can trade.
+        accountBlocked:
+          type: boolean
+          description: >-
+            The account's own latched block. Unblocking the account clears only
+            this tier; a group block stays in force.
+        accountBlockReason:
+          type: string
+          description: Reason latched on the account itself; empty when `accountBlocked` is false.
+        groupBlocked:
+          type: boolean
+          description: >-
+            The group the account currently belongs to is blocked. Unblocking
+            the group leaves an individually blocked account blocked.
+        groupBlockReason:
+          type: string
+          description: Reason latched on the account's group; empty when `groupBlocked` is false.
 
     # Group
 
@@ -4541,6 +4727,7 @@ components:
 
     BalanceRealizedPnlRequest:
       type: object
+      additionalProperties: false
       required: [asset, realizedPnl]
       properties:
         asset:
@@ -4575,6 +4762,7 @@ components:
 
     AdjustmentRequest:
       type: object
+      additionalProperties: false
       required: [asset]
       properties:
         id:
@@ -5179,6 +5367,7 @@ components:
 
     RateLimit:
       type: object
+      additionalProperties: false
       required: [scope, account, asset, windowMs, maxOrders]
       properties:
         scope:
@@ -5201,6 +5390,7 @@ components:
 
     OrderSizeLimit:
       type: object
+      additionalProperties: false
       required: [scope, account, asset, maxQuantity, maxNotional]
       properties:
         scope:
@@ -5220,6 +5410,7 @@ components:
 
     SpotFundsPnlBoundsLimit:
       type: object
+      additionalProperties: false
       required: [scope, account, accountGroup, lowerBound, upperBound]
       properties:
         scope:
@@ -5325,7 +5516,7 @@ components:
 
     AuditEntry:
       type: object
-      required: [id, at, actor, actorTitle, action, account, accountTitle, detail, source]
+      required: [id, at, actor, actorTitle, action, account, accountTitle, group, detail, source]
       properties:
         id:
           description: The audit row's opaque public handle.
@@ -5347,6 +5538,13 @@ components:
         accountTitle:
           type: string
           description: Account title captured when the audit row was written.
+        group:
+          type: string
+          description: >-
+            Account group the action applied to, or empty when the action
+            targeted no group. It is the structured handle to select a group's
+            rows by; matching the free-form `detail` text instead lets one group
+            code be mistaken for another.
         detail:
           type: string
         source:
@@ -5380,7 +5578,9 @@ components:
           description: Total accounts.
         accountsActive:
           type: integer
-          description: Accounts that are not blocked.
+          description: >-
+            Accounts that can trade: neither blocked themselves nor members of
+            a blocked group.
         groups:
           type: integer
           description: Total account groups.
@@ -5480,6 +5680,7 @@ components:
 
     UserSettings:
       type: object
+      additionalProperties: false
       required: [welcomeSeen]
       properties:
         welcomeSeen:
@@ -5525,6 +5726,7 @@ components:
 
     MarketDataInstanceCreate:
       type: object
+      additionalProperties: false
       required: [provider, enabled]
       properties:
         id:
@@ -5549,6 +5751,7 @@ components:
 
     MarketDataInstanceSettingsUpdate:
       type: object
+      additionalProperties: false
       properties:
         label:
           type: string
@@ -5695,14 +5898,38 @@ components:
           type: string
           description: Action target identifier.
 
+    MarketDataInstrumentUpsert:
+      type: object
+      additionalProperties: false
+      required: [externalSymbol, baseAsset, quoteAsset, manualPrice, enabled]
+      properties:
+        externalSymbol:
+          type: string
+          description: Provider-side instrument symbol.
+        baseAsset:
+          type: string
+          description: Asset being bought or sold for this mapping.
+        quoteAsset:
+          type: string
+          description: Asset used for pricing and settlement for this mapping.
+        manualPrice:
+          type: string
+          description: >
+            Exact decimal manual mark used by BYO/manual providers. Use an
+            empty string "" for instruments or providers without a manual mark.
+        enabled:
+          type: boolean
+          description: Whether this instrument mapping is enabled.
+
     MarketDataInstrument:
       type: object
+      additionalProperties: false
       required: [externalSymbol, baseAsset, quoteAsset, manualPrice, enabled]
       properties:
         instanceId:
           description: >
-            The owning instance's opaque public handle. Present on read
-            responses; omitted in request bodies (the path id is authoritative).
+            The owning instance's opaque public handle.
+          readOnly: true
           $ref: "#/components/schemas/Id"
         externalSymbol:
           type: string
@@ -5716,8 +5943,8 @@ components:
         manualPrice:
           type: string
           description: >
-            Exact decimal manual mark used by BYO/manual providers. On write,
-            use an empty string "" for instruments or providers without a manual mark.
+            Exact decimal manual mark used by BYO/manual providers. Empty when
+            the instrument or provider has no manual mark.
         enabled:
           type: boolean
           description: Whether this instrument mapping is enabled.
@@ -5749,6 +5976,7 @@ components:
 
     MarketDataSymbolVerificationRequest:
       type: object
+      additionalProperties: false
       required: [externalSymbol]
       properties:
         externalSymbol:
@@ -5774,6 +6002,7 @@ components:
 
     MarketDataSymbolSearchRequest:
       type: object
+      additionalProperties: false
       required: [query]
       properties:
         query:
@@ -5922,6 +6151,7 @@ components:
 
     SigningConfig:
       type: object
+      additionalProperties: false
       required: [noESign]
       properties:
         noESign:
@@ -5978,6 +6208,7 @@ components:
                 Submit mode. Defaults to `immediate`. The compatibility wire
                 value `hold` waits for execution reports.
               enum: [immediate, hold]
+      unevaluatedProperties: false
 
     DropCopyOrderRequest:
       allOf:
@@ -5992,6 +6223,7 @@ components:
               description: >
                 Optional caller-supplied unique order id. Omit it to have the
                 store assign one.
+      unevaluatedProperties: false
 
     DropCopyOrderResponse:
       type: object

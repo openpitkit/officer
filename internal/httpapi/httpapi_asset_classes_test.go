@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 
 	"go.openpit.dev/officer/framework/domain"
@@ -161,6 +162,58 @@ func TestCreateAssetClass_InvalidJSON(t *testing.T) {
 	}
 	if len(svc.assetClasses) != 0 {
 		t.Fatalf("invalid JSON must not persist, got %v", svc.assetClasses)
+	}
+}
+
+// TestCreateAssetClass_UnknownField proves a mutation refuses a member it does
+// not understand instead of acknowledging an intent it never carried out.
+// "blocked": true is a safety instruction; answering it with 201 Created and an
+// unblocked class tells the client its request succeeded while silently
+// discarding the part that mattered. Postel's-law leniency is defensible for
+// reads and for additive optional fields, not for a mutation whose acknowledged
+// effect differs from the requested one.
+func TestCreateAssetClass_UnknownField(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(`{"code":"equity","blocked":true}`)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/asset-classes", body))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "validation" {
+		t.Fatalf("want code=validation, got %v", errObj["code"])
+	}
+	message, _ := errObj["message"].(string)
+	if !strings.Contains(message, "blocked") {
+		t.Fatalf("message %q must name the rejected field", message)
+	}
+	if len(svc.assetClasses) != 0 {
+		t.Fatalf("rejected request must not create the class, got %v", svc.assetClasses)
+	}
+}
+
+// TestCreateAssetClass_EmptyBodyIsInvalid pins the request-body contract: the
+// mutation requires an object, so an absent body must fail at the boundary and
+// never reach the control plane.
+func TestCreateAssetClass_EmptyBodyIsInvalid(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/asset-classes", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(svc.assetClasses) != 0 {
+		t.Fatalf("empty request reached the control plane: %v", svc.assetClasses)
 	}
 }
 

@@ -18,12 +18,67 @@
 package httpapi
 
 import (
-	"encoding/json"
+	"errors"
 	"net/http"
 
 	"go.openpit.dev/officer/framework/domain"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
+
+// refuseReservedGroup answers a group operation aimed at the reserved default
+// group and reports that it did. domain.ReservedGroupCode is the URL sentinel
+// addressing it, as in PUT /groups/-/default/currency; the default group is
+// stored under the empty code and is the terminal tier of the currency cascade
+// every account resolves through, so it is not an operator-owned group and
+// cannot be addressed as one. Every /groups/{code} operation refuses the
+// sentinel, reads included: refusing it on only some routes would leave the
+// rest reporting a validation error about a group id the client never sent.
+// The request is well-formed, so the refusal is categorical (403) rather than
+// a validation error.
+func refuseReservedGroup(w http.ResponseWriter, code string) bool {
+	if code != domain.ReservedGroupCode {
+		return false
+	}
+	writeReservedGroupErr(w)
+	return true
+}
+
+// writeReservedGroupErr writes the typed refusal used by both the path
+// sentinel guard and the engine's own reserved-group error.
+func writeReservedGroupErr(w http.ResponseWriter) {
+	httpx.WriteErrMsg(
+		w, http.StatusForbidden, "reserved_group",
+		"the default account group is reserved: it is not an operator-owned "+
+			"group and cannot be addressed as one",
+	)
+}
+
+// refuseReservedGroupCode answers a request that would give a group the
+// reserved sentinel as its literal code and reports that it did. The sentinel
+// addresses the realm default group in every group route, so a group carrying
+// it would be created but then unreachable. It is a malformed value, hence
+// 400, not the categorical 403 the sentinel path itself returns.
+func refuseReservedGroupCode(w http.ResponseWriter, code string) bool {
+	if code != domain.ReservedGroupCode {
+		return false
+	}
+	httpx.WriteErrMsg(
+		w, http.StatusBadRequest, "validation",
+		"group code "+domain.ReservedGroupCode+" is reserved for addressing the "+
+			"realm default group",
+	)
+	return true
+}
+
+// writeGroupErr maps a failed group mutation, reporting a reserved-group
+// refusal under its own code instead of the generic forbidden envelope.
+func writeGroupErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, domain.ErrReservedGroup) {
+		writeReservedGroupErr(w)
+		return
+	}
+	httpx.WriteErr(w, err)
+}
 
 func handleListGroups(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -59,8 +114,10 @@ func handleCreateGroup(svc Service) http.HandlerFunc {
 			Currency string `json:"currency"`
 			Notes    string `json:"notes"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
+			return
+		}
+		if refuseReservedGroupCode(w, req.Code) {
 			return
 		}
 		group := domain.AccountGroup{
@@ -70,7 +127,7 @@ func handleCreateGroup(svc Service) http.HandlerFunc {
 			Notes:    req.Notes,
 		}
 		if _, err := svc.CreateGroup(r.Context(), group); err != nil {
-			httpx.WriteErr(w, err)
+			writeGroupErr(w, err)
 			return
 		}
 		writeGroup(w, svc, r, req.Code, http.StatusCreated)
@@ -85,14 +142,19 @@ func handleGetGroup(svc Service) http.HandlerFunc {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
+		if refuseReservedGroup(w, code) {
+			return
+		}
 		group, accounts, err := svc.GetGroup(r.Context(), code)
 		if err != nil {
-			httpx.WriteErr(w, err)
+			writeGroupErr(w, err)
 			return
 		}
 		dtos := make([]accountDTO, 0, len(accounts))
 		for _, a := range accounts {
-			dtos = append(dtos, toAccountDTO(a))
+			// Every member resolves against this very group, so the block joins
+			// without a second read.
+			dtos = append(dtos, toAccountDTO(a, domain.ResolveAccountBlock(a, group)))
 		}
 		httpx.WriteJSON(w, http.StatusOK, map[string]any{
 			"group":    toGroupDTO(group),
@@ -110,12 +172,17 @@ func handleUpdateGroup(svc Service) http.HandlerFunc {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
+		if refuseReservedGroup(w, code) {
+			return
+		}
 		var req struct {
 			Code  string `json:"code"`
 			Title string `json:"title"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
+			return
+		}
+		if refuseReservedGroupCode(w, req.Code) {
 			return
 		}
 		group, err := svc.UpdateGroup(r.Context(), code, domain.AccountGroup{
@@ -123,7 +190,7 @@ func handleUpdateGroup(svc Service) http.HandlerFunc {
 			Title: req.Title,
 		})
 		if err != nil {
-			httpx.WriteErr(w, err)
+			writeGroupErr(w, err)
 			return
 		}
 		httpx.WriteJSON(w, http.StatusOK, map[string]any{"group": toGroupDTO(group)})
@@ -138,15 +205,17 @@ func handleSetGroupCurrency(svc Service) http.HandlerFunc {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
+		if refuseReservedGroup(w, code) {
+			return
+		}
 		var req struct {
 			Currency string `json:"currency"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		if err := svc.SetGroupCurrency(r.Context(), code, req.Currency); err != nil {
-			httpx.WriteErr(w, err)
+			writeGroupErr(w, err)
 			return
 		}
 		writeGroup(w, svc, r, code, http.StatusOK)
@@ -159,8 +228,7 @@ func handleSetDefaultGroupCurrency(svc Service) http.HandlerFunc {
 		var req struct {
 			Currency string `json:"currency"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		if err := svc.SetDefaultGroupCurrency(r.Context(), req.Currency); err != nil {
@@ -184,15 +252,17 @@ func handleSetGroupNotes(svc Service) http.HandlerFunc {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
+		if refuseReservedGroup(w, code) {
+			return
+		}
 		var req struct {
 			Notes string `json:"notes"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		if err := svc.SetGroupNotes(r.Context(), code, req.Notes); err != nil {
-			httpx.WriteErr(w, err)
+			writeGroupErr(w, err)
 			return
 		}
 		writeGroup(w, svc, r, code, http.StatusOK)
@@ -207,15 +277,17 @@ func handleBlockGroup(svc Service) http.HandlerFunc {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
+		if refuseReservedGroup(w, code) {
+			return
+		}
 		var req struct {
 			Reason string `json:"reason"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		if err := svc.SetGroupBlocked(r.Context(), code, true, req.Reason); err != nil {
-			httpx.WriteErr(w, err)
+			writeGroupErr(w, err)
 			return
 		}
 		writeGroup(w, svc, r, code, http.StatusOK)
@@ -230,8 +302,11 @@ func handleUnblockGroup(svc Service) http.HandlerFunc {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
+		if refuseReservedGroup(w, code) {
+			return
+		}
 		if err := svc.SetGroupBlocked(r.Context(), code, false, ""); err != nil {
-			httpx.WriteErr(w, err)
+			writeGroupErr(w, err)
 			return
 		}
 		writeGroup(w, svc, r, code, http.StatusOK)
@@ -246,8 +321,11 @@ func handleDeleteGroup(svc Service) http.HandlerFunc {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
+		if refuseReservedGroup(w, code) {
+			return
+		}
 		if err := svc.DeleteGroup(r.Context(), code); err != nil {
-			httpx.WriteErr(w, err)
+			writeGroupErr(w, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -260,7 +338,7 @@ func handleDeleteGroup(svc Service) http.HandlerFunc {
 func writeGroup(w http.ResponseWriter, svc Service, r *http.Request, code string, status int) {
 	group, _, err := svc.GetGroup(r.Context(), code)
 	if err != nil {
-		httpx.WriteErr(w, err)
+		writeGroupErr(w, err)
 		return
 	}
 	httpx.WriteJSON(w, status, map[string]any{"group": toGroupDTO(group)})

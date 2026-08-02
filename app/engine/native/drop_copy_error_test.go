@@ -19,27 +19,28 @@ package native
 
 import (
 	"context"
-	"errors"
-	"strings"
 	"testing"
-
-	"go.openpit.dev/officer/framework/domain"
 )
 
-func TestSubmitOrder_DropCopyMarketOrderReturnsInvalidInput(t *testing.T) {
+func TestSubmitOrder_DropCopyMarketOrderReturnsPolicyReject(t *testing.T) {
 	e := newTestEngine(t)
 	order := testOrder()
 	order.DropCopy = true
 	order.Price = ""
 
-	_, err := e.SubmitOrder(context.Background(), order)
-	if err == nil {
-		t.Fatal("SubmitOrder(drop-copy market): want admission error")
+	result, err := e.SubmitOrder(context.Background(), order)
+	if err != nil {
+		t.Fatalf("SubmitOrder(drop-copy market): %v", err)
 	}
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("SubmitOrder(drop-copy market) error = %v, want ErrInvalid", err)
+	if result.Accepted || len(result.Rejects) != 1 {
+		t.Fatalf(
+			"drop-copy market result = %+v, want one policy reject", result,
+		)
 	}
-	if !strings.Contains(err.Error(), "failed to access field 'limit price'") {
-		t.Fatalf("SubmitOrder(drop-copy market) error = %v", err)
+	if result.Rejects[0].Code != "missing_required_field" {
+		t.Fatalf(
+			"drop-copy market reject = %+v, want missing_required_field",
+			result.Rejects[0],
+		)
 	}
 }

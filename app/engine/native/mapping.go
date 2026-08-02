@@ -376,6 +376,12 @@ func rateLimitAxes(limits []domain.LimitRate, res idResolver) (
 		}
 		switch limit.Scope {
 		case domain.ScopeBroker:
+			// The axis holds one barrier; a second one would silently replace the
+			// first and lose a configured limit.
+			if broker != nil {
+				return nil, nil, nil, nil, fmt.Errorf(
+					"engine: rate_limit carries more than one broker barrier")
+			}
 			broker = &policies.RateLimitBrokerBarrier{Limit: rate}
 		case domain.ScopeAsset:
 			asset, err := newAsset(limit.Asset)
@@ -440,6 +446,12 @@ func orderSizeAxes(limits []domain.LimitOrderSize, res idResolver) (
 		}
 		switch limit.Scope {
 		case domain.ScopeBroker:
+			// The axis holds one barrier; a second one would silently replace the
+			// first and lose a configured limit.
+			if broker != nil {
+				return nil, nil, nil, fmt.Errorf(
+					"engine: order_size_limit carries more than one broker barrier")
+			}
 			broker = &policies.OrderSizeBrokerBarrier{Limit: size}
 		case domain.ScopeAsset:
 			asset, err := newAsset(limit.Asset)
@@ -488,6 +500,7 @@ func spotFundsPnlBoundsAxes(
 	// must replace the complete stored set, not leave a removed global barrier
 	// live on the engine.
 	global := optional.Some[*policies.SpotFundsPnlBoundsBarrier](nil)
+	globalSet := false
 	groups := []policies.SpotFundsPnlBoundsAccountGroupBarrier{}
 	accounts := []policies.SpotFundsPnlBoundsAccountBarrier{}
 
@@ -498,7 +511,14 @@ func spotFundsPnlBoundsAxes(
 		}
 		switch limit.Scope {
 		case domain.ScopeGlobal:
+			// The axis holds one barrier; a second one would silently replace the
+			// first and lose a configured bound.
+			if globalSet {
+				return global, nil, nil, fmt.Errorf(
+					"engine: spot_funds_pnl_bounds_kill_switch carries more than one global barrier")
+			}
 			global = optional.Some(&barrier)
+			globalSet = true
 		case domain.ScopeAccountGroup:
 			group, err := res.group(limit.AccountGroup)
 			if err != nil {
@@ -536,7 +556,7 @@ func rateLimitReady(limits []domain.LimitRate, res idResolver) (*policies.RateLi
 	ready := builder.PolicyGroupID(0)
 
 	var (
-		brokers       []policies.RateLimitBrokerBarrier
+		broker        *policies.RateLimitBrokerBarrier
 		assets        []policies.RateLimitAssetBarrier
 		accounts      []policies.RateLimitAccountBarrier
 		accountAssets []policies.RateLimitAccountAssetBarrier
@@ -548,7 +568,12 @@ func rateLimitReady(limits []domain.LimitRate, res idResolver) (*policies.RateLi
 		}
 		switch limit.Scope {
 		case domain.ScopeBroker:
-			brokers = append(brokers, policies.RateLimitBrokerBarrier{Limit: rate})
+			// The builder takes one broker barrier; a second one would silently
+			// replace the first and lose a configured limit.
+			if broker != nil {
+				return nil, fmt.Errorf("engine: rate_limit carries more than one broker barrier")
+			}
+			broker = &policies.RateLimitBrokerBarrier{Limit: rate}
 		case domain.ScopeAsset:
 			asset, err := newAsset(limit.Asset)
 			if err != nil {
@@ -586,8 +611,8 @@ func rateLimitReady(limits []domain.LimitRate, res idResolver) (*policies.RateLi
 		}
 	}
 
-	if len(brokers) > 0 {
-		ready = ready.BrokerBarrier(brokers[len(brokers)-1])
+	if broker != nil {
+		ready = ready.BrokerBarrier(*broker)
 	}
 	ready = ready.AssetBarriers(assets...).
 		AccountBarriers(accounts...).
@@ -601,7 +626,7 @@ func orderSizeReady(limits []domain.LimitOrderSize, res idResolver) (*policies.O
 	ready := builder.PolicyGroupID(0)
 
 	var (
-		brokers       []policies.OrderSizeBrokerBarrier
+		broker        *policies.OrderSizeBrokerBarrier
 		assets        []policies.OrderSizeAssetBarrier
 		accountAssets []policies.OrderSizeAccountAssetBarrier
 	)
@@ -612,7 +637,12 @@ func orderSizeReady(limits []domain.LimitOrderSize, res idResolver) (*policies.O
 		}
 		switch limit.Scope {
 		case domain.ScopeBroker:
-			brokers = append(brokers, policies.OrderSizeBrokerBarrier{Limit: size})
+			// The builder takes one broker barrier; a second one would silently
+			// replace the first and lose a configured limit.
+			if broker != nil {
+				return nil, fmt.Errorf("engine: order_size_limit carries more than one broker barrier")
+			}
+			broker = &policies.OrderSizeBrokerBarrier{Limit: size}
 		case domain.ScopeAsset:
 			asset, err := newAsset(limit.Asset)
 			if err != nil {
@@ -641,8 +671,8 @@ func orderSizeReady(limits []domain.LimitOrderSize, res idResolver) (*policies.O
 		}
 	}
 
-	if len(brokers) > 0 {
-		ready = ready.BrokerBarrier(brokers[len(brokers)-1])
+	if broker != nil {
+		ready = ready.BrokerBarrier(*broker)
 	}
 	ready = ready.AssetBarriers(assets...).AccountAssetBarriers(accountAssets...)
 	return ready, nil
@@ -953,13 +983,10 @@ func adjustmentBoundsValues(
 // empty string (it was not adjusted). The spot-funds policy emits one outcome
 // carrying the single adjusted asset's entry.
 //
-// Load-bearing invariant: the engine emits at most one account-adjustment
-// outcome per asset. This function collapses per-asset entries by last-wins, and
-// balanceOutcomesFromList emits one BalanceOutcome per outcome without merging,
-// so both rely on that engine guarantee. Handling multiple outcomes for the same
-// asset would require reworking the outcome model end to end (summing deltas and
-// reconciling absolutes through the engine adapter and node persistence); that
-// rework is intentionally deferred.
+// One outcome per asset is expected, and a second one for the same asset is an
+// error rather than a quiet choice: reporting the last would drop engine numbers,
+// and combining them would invent an answer (summing deltas and reconciling
+// absolutes is a model rework across the engine adapter and node persistence).
 func outcomeAcceptedFromList(
 	outcomes []accountadjustment.Outcome, asset string,
 ) (domain.AdjustmentOutcomeAccepted, bool, error) {
@@ -969,6 +996,10 @@ func outcomeAcceptedFromList(
 		entry := outcome.Entry
 		if entry.Asset.String() != asset {
 			continue
+		}
+		if found {
+			return domain.AdjustmentOutcomeAccepted{}, false, fmt.Errorf(
+				"engine: account adjustment returned several outcomes for asset %q", asset)
 		}
 		accepted, err := outcomeAcceptedFromEntry(entry)
 		if err != nil {
@@ -980,8 +1011,8 @@ func outcomeAcceptedFromList(
 	return result, found, nil
 }
 
-// balanceOutcomesFromList relies on the at-most-one-outcome-per-asset invariant
-// documented on outcomeAcceptedFromList and performs no per-asset dedup.
+// balanceOutcomesFromList emits one BalanceOutcome per engine outcome and
+// performs no per-asset dedup; mergeBalanceOutcomes combines the phases.
 func balanceOutcomesFromList(
 	outcomes []accountadjustment.Outcome,
 ) ([]BalanceOutcome, error) {
@@ -1185,16 +1216,23 @@ func pnlHaltReasonFromSDK(
 	}
 }
 
-// outcomeRejectedFrom maps the first reject of a batch error onto the domain
-// rejected outcome.
-func outcomeRejectedFrom(batch reject.AccountAdjustmentBatchError) domain.AdjustmentOutcomeRejected {
+// outcomeRejectedFrom maps a batch error onto the domain rejected outcome,
+// carrying the index of the adjustment the engine stopped on so the reject stays
+// attributable to its request.
+//
+// A batch error without a reject is a broken engine contract: the batch failed
+// and named no cause, and Officer has no answer to put in its place.
+func outcomeRejectedFrom(
+	batch reject.AccountAdjustmentBatchError,
+) (domain.AdjustmentOutcomeRejected, error) {
 	if len(batch.Rejects) == 0 {
-		return domain.AdjustmentOutcomeRejected{
-			Code:   rejectCodeName(0),
-			Reason: "account adjustment rejected",
-		}
+		return domain.AdjustmentOutcomeRejected{}, fmt.Errorf(
+			"engine: account adjustment batch rejected at index %d without a reject",
+			batch.FailedAdjustmentIndex)
 	}
-	return adjustmentRejectFrom(batch.Rejects[0])
+	rejected := adjustmentRejectFrom(batch.Rejects[0])
+	rejected.FailedAdjustmentIndex = batch.FailedAdjustmentIndex
+	return rejected, nil
 }
 
 // adjustmentRejectFrom maps one binding reject onto the domain rejected outcome.
@@ -1312,10 +1350,11 @@ func orderRejectsFrom(rejects []reject.Reject) []domain.OrderReject {
 // executionReportFrom maps a domain execution-report input onto a
 // model.ExecutionReport: the operation (instrument/account/side) and the fill
 // (last trade price+quantity, leaves quantity, the terminal-status flag, and the
-// lock reconstructed from the single reference price when present). The engine
-// requires leaves quantity and the terminal flag to settle the fill; an empty or
-// invalid leaves quantity is caller error (ErrInvalid). The account is resolved
-// to its stored engine id.
+// pre-trade lock - the input's own lock when it carries one, else one
+// reconstructed from the single reference price). The engine requires leaves
+// quantity and the terminal flag to settle the fill; an empty or invalid leaves
+// quantity is caller error (ErrInvalid). The account is resolved to its stored
+// engine id.
 func executionReportFrom(in domain.ExecutionReportInput, res idResolver) (model.ExecutionReport, error) {
 	account, err := res.account(in.Account)
 	if err != nil {
@@ -1419,13 +1458,18 @@ func executionReportPersistenceFrom(
 	accountPnlHaltReason domain.PnlHaltReason,
 ) engine.ExecutionReportPersistence {
 	recordedLeaves := domain.ExecutionReportPersistedLeaves(in)
-	payload := executionAccountBlockPayload(blocks)
-	payload.FillQuantity = in.FillQuantity
-	payload.FillPrice = in.FillPrice
-	payload.FillLockPrice = in.LockPrice
-	payload.LeavesQuantity = in.LeavesQuantity
-	payload.OrderStatus = string(in.OrderStatus)
-	payload.Commission = in.Commission
+	// The payload holds one reject slot while the engine may report several
+	// blocks, so it carries none of them: every block travels whole in Blocks.
+	// Filling the slot would mean picking one block and naming a scope the block
+	// record does not carry.
+	payload := domain.OrderEventPayload{
+		FillQuantity:   in.FillQuantity,
+		FillPrice:      in.FillPrice,
+		FillLockPrice:  in.LockPrice,
+		LeavesQuantity: in.LeavesQuantity,
+		OrderStatus:    string(in.OrderStatus),
+		Commission:     in.Commission,
+	}
 
 	events := make([]domain.OrderEvent, 0, 2)
 	hasFill := in.FillQuantity != "" && in.FillPrice != ""
@@ -1472,21 +1516,6 @@ func executionReportPersistenceFrom(
 	}
 }
 
-func executionAccountBlockPayload(
-	blocks []domain.ExecutionAccountBlock,
-) domain.OrderEventPayload {
-	if len(blocks) == 0 {
-		return domain.OrderEventPayload{}
-	}
-	block := blocks[0]
-	return domain.OrderEventPayload{
-		RejectCode:    block.Code,
-		RejectScope:   "account",
-		RejectReason:  block.Reason,
-		RejectDetails: block.Details,
-	}
-}
-
 func executionBalanceSettlementsFrom(outcomes []BalanceOutcome) []domain.BalanceSettlement {
 	if len(outcomes) == 0 {
 		return nil
@@ -1524,32 +1553,6 @@ func commissionFrom(c domain.Commission) (param.MonetaryAmount, error) {
 			"engine: commission currency %q: %w", c.Currency, err)
 	}
 	return param.NewMonetaryAmount(amount, currency), nil
-}
-
-// immediateExecutionReport builds the synthetic fill that settles an immediate
-// order at the captured settlement lock price. The fill quantity is the order's
-// base quantity so the reservation's held amount nets to zero: a quantity order
-// fills its quantity directly; a volume order's base quantity is the volume
-// divided by the settlement price. The fill price and the lock are both the
-// settlement price, so the post-trade settlement realizes exactly what the
-// reservation held. Settle is final (the immediate fill closes the order).
-func immediateExecutionReport(o domain.Order, settlementPrice string, res idResolver) (model.ExecutionReport, error) {
-	quantity, err := immediateFillQuantity(o, settlementPrice)
-	if err != nil {
-		return model.ExecutionReport{}, err
-	}
-	return executionReportFrom(domain.ExecutionReportInput{
-		BaseAsset:      o.BaseAsset,
-		QuoteAsset:     o.QuoteAsset,
-		FillQuantity:   quantity,
-		FillPrice:      settlementPrice,
-		LeavesQuantity: "0",
-		LockPrice:      settlementPrice,
-		Account:        o.Account,
-		Side:           o.Side,
-		Order:          o.ExternalID,
-		OrderStatus:    domain.OrderStatusFilled,
-	}, res)
 }
 
 // immediateFillQuantity resolves the base quantity an immediate fill settles.
@@ -1595,6 +1598,11 @@ func immediateFillQuantity(o domain.Order, settlementPrice string) (string, erro
 // the binding within the same call, so Lock.Bytes() (the in-process layout) is
 // correct here, whereas the durable order/reservation lock is serialized through
 // the lock seam (marshalLock).
+//
+// It is the last-resort fallback for reports that carry no lock of their own.
+// The reconstruction holds a single default-policy-group entry, so it cannot
+// stand in for an engine lock that recorded other policy groups: a caller that
+// has the engine's lock must pass it through instead.
 func fillLockBytes(lockPrice string) ([]byte, error) {
 	if lockPrice == "" {
 		return nil, nil
@@ -1612,6 +1620,10 @@ func fillLockBytes(lockPrice string) ([]byte, error) {
 	return lock.Bytes(), nil
 }
 
+// executionReportLockBytes resolves the lock a report hands to the binding. A
+// carried lock is the engine's own artifact and is passed through verbatim
+// (decoded from the durable seam encoding into the in-process layout); only a
+// report without one falls back to the single-price reconstruction.
 func executionReportLockBytes(in domain.ExecutionReportInput) ([]byte, error) {
 	if len(in.Lock) > 0 {
 		lock, err := unmarshalLock(in.Lock)
@@ -1671,43 +1683,25 @@ func policyConfigurationBlocksFrom(
 // account). It is the single-block counterpart of executionBlocksFrom, used by
 // the pre-trade dry-run.
 //
-// The new core signals a would-be account block in two ways, and this maps both
-// onto the single WouldBlock field:
-//   - block (report.AccountBlock()) is non-nil when an account-scope reject
-//     would have latched a fresh block during this dry-run (e.g. a kill-switch
-//     policy tripping on the probe); it is preferred.
-//   - when no fresh block would latch but the report carries an account-scope
-//     reject (the probe account is already kill-switched, so the core re-emits
-//     the standing block as an account-scope reject rather than latching a new
-//     one), the would-block is derived from that reject.
-//
-// Returns nil when neither signal is present. This is faithful delegation: it
-// reads only what the core emitted and adds no officer-side validation.
+// block (report.AccountBlock()) is non-nil only when an account-scope reject
+// would have latched a fresh block during this dry-run, e.g. a kill-switch
+// policy tripping on the probe. A nil block is the engine's answer - nothing
+// would latch - and is returned as nil: an account that is already kill-switched
+// re-emits its standing block as an account-scope reject, which reaches the
+// caller through the report's reject list, so there is nothing here to derive.
 func accountBlockFrom(
-	block *reject.AccountBlock, rejects []reject.Reject, account domain.AccountID,
+	block *reject.AccountBlock, account domain.AccountID,
 ) *domain.ExecutionAccountBlock {
-	if block != nil {
-		return &domain.ExecutionAccountBlock{
-			Account: account,
-			Policy:  sanitizeText(block.Policy),
-			Code:    rejectCodeName(block.Code),
-			Reason:  sanitizeText(block.Reason),
-			Details: sanitizeText(block.Details),
-		}
+	if block == nil {
+		return nil
 	}
-	for _, r := range rejects {
-		if r.Scope != reject.ScopeAccount {
-			continue
-		}
-		return &domain.ExecutionAccountBlock{
-			Account: account,
-			Policy:  sanitizeText(r.Policy),
-			Code:    rejectCodeName(r.Code),
-			Reason:  sanitizeText(r.Reason),
-			Details: sanitizeText(r.Details),
-		}
+	return &domain.ExecutionAccountBlock{
+		Account: account,
+		Policy:  sanitizeText(block.Policy),
+		Code:    rejectCodeName(block.Code),
+		Reason:  sanitizeText(block.Reason),
+		Details: sanitizeText(block.Details),
 	}
-	return nil
 }
 
 // --- reject code/scope naming -----------------------------------------------
@@ -1722,39 +1716,21 @@ func accountBlockFrom(
 // details for an account-blocked (Engine-scope) dry-run reject, so the control
 // plane scrubs them here rather than render mojibake. An empty result is fine
 // when the field was entirely garbage.
+//
+// Encoding is the only judgement made here. Whatever survives the scrub is the
+// engine's own wording and is transcribed as is, including short values such as
+// "0.5", ">10" or "-5%" that carry the whole answer.
 func sanitizeText(s string) string {
 	if s == "" {
 		return ""
 	}
 	valid := strings.ToValidUTF8(s, "")
-	cleaned := strings.TrimSpace(strings.Map(func(r rune) rune {
+	return strings.TrimSpace(strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {
 			return -1
 		}
 		return r
 	}, valid))
-	if looksLikeShortGarbledText(cleaned) {
-		return ""
-	}
-	return cleaned
-}
-
-func looksLikeShortGarbledText(s string) bool {
-	if s == "" {
-		return false
-	}
-	allDigits := true
-	count := 0
-	for _, r := range s {
-		count++
-		if unicode.IsLetter(r) {
-			return false
-		}
-		if !unicode.IsDigit(r) {
-			allDigits = false
-		}
-	}
-	return count <= 4 && !allDigits
 }
 
 // rejectCodeName maps a binding reject code onto a stable lower-snake string for

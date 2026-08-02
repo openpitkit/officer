@@ -44,8 +44,7 @@ func handleExportBackup(svc Service) http.HandlerFunc {
 			Scope backup.Scope `json:"scope"`
 			Zip   bool         `json:"zip"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		if !validBackupScope(req.Scope) {
@@ -90,8 +89,7 @@ func handleExportBusinessCSV(svc Service) http.HandlerFunc {
 			} `json:"filters"`
 			Zip bool `json:"zip"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		file, err := svc.ExportBusinessCSV(r.Context(), backend.BusinessCSVExportRequest{
@@ -161,32 +159,45 @@ func handleImportBusinessCSV(svc Service) http.HandlerFunc {
 	}
 }
 
+type businessCSVImportPayloadDTO struct {
+	Entity        string `json:"entity"`
+	Delimiter     string `json:"delimiter"`
+	Filename      string `json:"filename"`
+	PayloadBase64 string `json:"payloadBase64"`
+}
+
+type businessCSVImportRequestDTO struct {
+	businessCSVImportPayloadDTO
+	ConflictPolicy string `json:"conflictPolicy"`
+}
+
 func readBusinessCSVImportRequest(
 	w http.ResponseWriter, r *http.Request, requirePolicy bool,
 ) (backend.BusinessCSVImportRequest, bool) {
-	var req struct {
-		Entity         string `json:"entity"`
-		Delimiter      string `json:"delimiter"`
-		Filename       string `json:"filename"`
-		PayloadBase64  string `json:"payloadBase64"`
-		ConflictPolicy string `json:"conflictPolicy"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+	var requestPayload businessCSVImportPayloadDTO
+	conflictPolicy := ""
+	if requirePolicy {
+		var req businessCSVImportRequestDTO
+		if !httpx.DecodeBody(w, r, &req) {
+			return backend.BusinessCSVImportRequest{}, false
+		}
+		requestPayload = req.businessCSVImportPayloadDTO
+		conflictPolicy = req.ConflictPolicy
+	} else if !httpx.DecodeBody(w, r, &requestPayload) {
 		return backend.BusinessCSVImportRequest{}, false
 	}
-	if req.PayloadBase64 == "" {
+	if requestPayload.PayloadBase64 == "" {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "validation",
 			"payloadBase64 is required")
 		return backend.BusinessCSVImportRequest{}, false
 	}
-	if requirePolicy && req.ConflictPolicy == "" {
+	if requirePolicy && conflictPolicy == "" {
 		httpx.WriteErrMsg(w, http.StatusBadRequest, "validation",
 			"conflictPolicy is required")
 		return backend.BusinessCSVImportRequest{}, false
 	}
 	payload, err := decodeBusinessCSVPayloadBase64(
-		req.PayloadBase64, businesscsv.MaxImportBytes,
+		requestPayload.PayloadBase64, businesscsv.MaxImportBytes,
 	)
 	if err != nil {
 		if errors.Is(err, domain.ErrTooLarge) {
@@ -198,11 +209,11 @@ func readBusinessCSVImportRequest(
 		return backend.BusinessCSVImportRequest{}, false
 	}
 	return backend.BusinessCSVImportRequest{
-		Entity:         businesscsv.Entity(req.Entity),
-		Delimiter:      businesscsv.Delimiter(req.Delimiter),
-		Filename:       req.Filename,
+		Entity:         businesscsv.Entity(requestPayload.Entity),
+		Delimiter:      businesscsv.Delimiter(requestPayload.Delimiter),
+		Filename:       requestPayload.Filename,
 		Payload:        payload,
-		ConflictPolicy: businesscsv.ConflictPolicy(req.ConflictPolicy),
+		ConflictPolicy: businesscsv.ConflictPolicy(conflictPolicy),
 	}, true
 }
 
@@ -230,8 +241,12 @@ func handleRestoreBackup(svc Service) http.HandlerFunc {
 			Scope           backup.Scope       `json:"scope"`
 			Mode            backup.RestoreMode `json:"mode"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		// Deliberately lenient, unlike every other mutation: the body embeds a
+		// whole backup.Archive, a portable artifact that another Officer build may
+		// have written with fields this build does not know. Rejecting it here
+		// would also disagree with the sibling archiveFile path, which decodes the
+		// very same document leniently.
+		if !httpx.DecodeBodyAllowUnknownFields(w, r, &req) {
 			return
 		}
 		if req.Mode == "" {
@@ -280,8 +295,7 @@ func handleResetDatabase(svc Service) http.HandlerFunc {
 		var req struct {
 			Confirm bool `json:"confirm"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		if !req.Confirm {
@@ -350,14 +364,20 @@ func parseBackupArchiveFile(
 		}
 	}
 	var archive backup.Archive
+	if !httpx.ValidJSONUnicode(raw) {
+		return backup.Archive{}, invalidBackupArchiveJSONError(filename)
+	}
 	if err := json.Unmarshal(raw, &archive); err != nil {
-		if filename == "" {
-			return backup.Archive{}, fmt.Errorf("invalid backup archive JSON")
-		}
-		return backup.Archive{},
-			fmt.Errorf("invalid backup archive JSON in %s", filename)
+		return backup.Archive{}, invalidBackupArchiveJSONError(filename)
 	}
 	return archive, nil
+}
+
+func invalidBackupArchiveJSONError(filename string) error {
+	if filename == "" {
+		return errors.New("invalid backup archive JSON")
+	}
+	return fmt.Errorf("invalid backup archive JSON in %s", filename)
 }
 
 func isZipPayload(raw []byte) bool {

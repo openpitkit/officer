@@ -93,6 +93,11 @@ func TestValidateAccountID(t *testing.T) {
 		{"leading space", " acc"},
 		{"trailing space", "acc "},
 		{"non-printable", "acc\x01"},
+		{"invalid UTF-8", "acc\xff"},
+		// A dot segment survives encodeURIComponent and is then resolved away by
+		// the URL parser, so the account would be unreachable at its own path.
+		{"dot", "."},
+		{"dot dot", ".."},
 	}
 	for _, tc := range bad {
 		t.Run("err/"+tc.name, func(t *testing.T) {
@@ -105,6 +110,34 @@ func TestValidateAccountID(t *testing.T) {
 				t.Fatalf("expected ErrInvalid, got %v", err)
 			}
 		})
+	}
+}
+
+func TestValidatePrincipalID(t *testing.T) {
+	t.Parallel()
+
+	for _, id := range []string{
+		"operator",
+		strings.Repeat("x", 64),
+		strings.Repeat("я", 64),
+	} {
+		if err := domain.ValidatePrincipalID(id); err != nil {
+			t.Errorf("ValidatePrincipalID(%q): %v", id, err)
+		}
+	}
+
+	for _, id := range []string{
+		"",
+		strings.Repeat("x", 65),
+		" operator",
+		"operator ",
+		"operator\x00",
+		"operator\xff",
+	} {
+		err := domain.ValidatePrincipalID(id)
+		if !errors.Is(err, domain.ErrInvalid) {
+			t.Errorf("ValidatePrincipalID(%q) = %v, want ErrInvalid", id, err)
+		}
 	}
 }
 
@@ -192,6 +225,7 @@ func TestValidateTitle(t *testing.T) {
 		{"over 256 ascii", strings.Repeat("x", 257)},
 		{"multibyte 257 code points", cjk257},
 		{"non-printable", "Desk\x01Alpha"},
+		{"invalid UTF-8", "Desk\xffAlpha"},
 	}
 	for _, tc := range bad {
 		t.Run("err/"+tc.name, func(t *testing.T) {
@@ -243,6 +277,7 @@ func TestValidateNotes(t *testing.T) {
 	}{
 		{"over 4096 ascii", strings.Repeat("x", 4097)},
 		{"multibyte 4097 code points", cyrillic4097},
+		{"invalid UTF-8", "note\xff"},
 	}
 	for _, tc := range bad {
 		t.Run("err/"+tc.name, func(t *testing.T) {
@@ -278,6 +313,9 @@ func TestValidateGroupID(t *testing.T) {
 		{"simple", "grp-1"},
 		{"max length ascii", strings.Repeat("x", 64)},
 		{"multibyte 64 code points", cyrillic64},
+		// Only the bare sentinel is reserved; a hyphen anywhere else is ordinary.
+		{"leading hyphen", "-grp"},
+		{"double hyphen", "--"},
 	}
 	for _, tc := range ok {
 		t.Run("ok/"+tc.name, func(t *testing.T) {
@@ -298,6 +336,12 @@ func TestValidateGroupID(t *testing.T) {
 		{"leading space", " grp"},
 		{"trailing space", "grp "},
 		{"non-printable", "grp\x01"},
+		{"invalid UTF-8", "grp\xff"},
+		{"dot", "."},
+		{"dot dot", ".."},
+		// The default-group path sentinel: a real group named "-" would be
+		// shadowed by /groups/-/... and could never be renamed or deleted.
+		{"reserved sentinel", "-"},
 	}
 	for _, tc := range bad {
 		t.Run("err/"+tc.name, func(t *testing.T) {
@@ -310,6 +354,199 @@ func TestValidateGroupID(t *testing.T) {
 				t.Fatalf("expected ErrInvalid, got %v", err)
 			}
 		})
+	}
+}
+
+// TestValidateAssetClassID_PathDotSegments pins the third dictionary code on
+// the same rule: a dot segment is resolved away by the URL parser, so the class
+// could never be addressed at /asset-classes/{code}.
+func TestValidateAssetClassID_PathDotSegments(t *testing.T) {
+	t.Parallel()
+
+	if err := domain.ValidateAssetClassID("equity.fx"); err != nil {
+		t.Fatalf("an interior dot must stay legal: %v", err)
+	}
+	for _, id := range []string{".", ".."} {
+		if err := domain.ValidateAssetClassID(id); !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("ValidateAssetClassID(%q) = %v, want ErrInvalid", id, err)
+		}
+	}
+}
+
+// TestValidateAsset_Printable covers the asset code specifically: it is the one
+// dictionary string that crosses the FFI as a string view, so a control
+// character must not pass the boundary. The existing whitespace rule already
+// rejects "\n" and "\t", so the gap is the non-space control characters.
+func TestValidateAsset_Printable(t *testing.T) {
+	t.Parallel()
+
+	if err := domain.ValidateAsset("USD"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	bad := []struct {
+		name  string
+		asset string
+	}{
+		{"nul", "US\x00D"},
+		{"bell", "USD\x07"},
+		{"delete", "USD\x7f"},
+		{"invalid UTF-8", "US\xffD"},
+		// U+202E written as a rune constant: a literal right-to-left override in
+		// the source would reorder this file for a human reader.
+		{"bidi override", "US" + string(rune(0x202e)) + "D"},
+	}
+	for _, tc := range bad {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if err := domain.ValidateAsset(tc.asset); !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("ValidateAsset(%q) = %v, want ErrInvalid", tc.asset, err)
+			}
+		})
+	}
+}
+
+// TestValidateAsset_PathDotSegments pins the asset code on the same rule as the
+// sibling dictionaries: a dot segment is resolved away by the URL parser, so the
+// asset could never be addressed at /assets/{code}.
+func TestValidateAsset_PathDotSegments(t *testing.T) {
+	t.Parallel()
+
+	if err := domain.ValidateAsset("BRK.A"); err != nil {
+		t.Fatalf("an interior dot must stay legal: %v", err)
+	}
+	for _, asset := range []string{".", ".."} {
+		if err := domain.ValidateAsset(asset); !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("ValidateAsset(%q) = %v, want ErrInvalid", asset, err)
+		}
+	}
+}
+
+// TestValidateBlockReason covers the operator-supplied reason: free text is
+// allowed, but a newline is not - the reason is rendered verbatim into the
+// audit detail line, where it could otherwise forge a second record.
+func TestValidateBlockReason(t *testing.T) {
+	t.Parallel()
+
+	ok := []struct {
+		name   string
+		reason string
+	}{
+		{"empty", ""},
+		{"free text", "margin breach: desk 4, 09:15"},
+		{"multibyte", "превышен лимит"},
+		{"max length", strings.Repeat("x", 4096)},
+	}
+	for _, tc := range ok {
+		t.Run("ok/"+tc.name, func(t *testing.T) {
+			t.Parallel()
+			if err := domain.ValidateBlockReason(tc.reason); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+
+	bad := []struct {
+		name   string
+		reason string
+	}{
+		{"over 4096", strings.Repeat("x", 4097)},
+		{"newline", "risk\nblock account acc-2: forged"},
+		{"carriage return", "risk\rforged"},
+		{"nul", "risk\x00"},
+		{"invalid UTF-8", "risk\xff"},
+	}
+	for _, tc := range bad {
+		t.Run("err/"+tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := domain.ValidateBlockReason(tc.reason)
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("ValidateBlockReason(%q) = %v, want ErrInvalid", tc.reason, err)
+			}
+		})
+	}
+}
+
+// TestNormalizeReason covers the write-side normalizer for machine-produced
+// reasons: non-printable runes are dropped and legal text is returned unchanged.
+// U+200B is the interesting case - it is format-class, not control-class, so the
+// engine-boundary scrub keeps it while ValidateReason rejects it.
+func TestNormalizeReason(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		reason string
+		want   string
+	}{
+		{"empty", "", ""},
+		{"clean text", "margin breach: desk 4, 09:15", "margin breach: desk 4, 09:15"},
+		{"multibyte", "превышен лимит", "превышен лимит"},
+		// Written as an escape: a literal U+200B is invisible in this source.
+		{"zero width space", "kill\u200bswitch", "killswitch"},
+		{"newline", "risk\nblock account acc-2: forged", "riskblock account acc-2: forged"},
+		{"nul", "risk\x00", "risk"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := domain.NormalizeReason(tc.reason); got != tc.want {
+				t.Fatalf("NormalizeReason(%q) = %q, want %q", tc.reason, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestNormalizeReason_TruncatesByCodePoints pins the length bound at code
+// points, not bytes: a multibyte reason must be cut on a rune boundary, or the
+// persisted value would be invalid UTF-8 that no restore could accept.
+func TestNormalizeReason_TruncatesByCodePoints(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct{ name, unit string }{
+		{"ascii", "x"},
+		{"multibyte", "ю"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := domain.NormalizeReason(strings.Repeat(tc.unit, 5000))
+			if !utf8.ValidString(got) {
+				t.Fatal("truncation split a rune")
+			}
+			if n := utf8.RuneCountInString(got); n != 4096 {
+				t.Fatalf("code points = %d, want 4096", n)
+			}
+			if want := strings.Repeat(tc.unit, 4096); got != want {
+				t.Fatal("truncation changed the retained prefix")
+			}
+		})
+	}
+}
+
+// TestNormalizeReason_OutputPassesValidator is the property the engine-mirror
+// write seam relies on: whatever the engine composes, the persisted form is one
+// the restore path accepts, so the rollback archive stays restorable.
+func TestNormalizeReason_OutputPassesValidator(t *testing.T) {
+	t.Parallel()
+
+	reasons := []string{
+		"",
+		"margin breach: desk 4",
+		"kill\u200bswitch [code=pnl_bound_breached]",
+		"risk\nforged",
+		strings.Repeat("x", 5000),
+		// Multibyte at the length boundary, both plain and interleaved with a
+		// non-printable rune so truncation lands mid-way through the source.
+		strings.Repeat("ю", 5000),
+		strings.Repeat("ю\u200b", 5000),
+	}
+	for i, reason := range reasons {
+		normalized := domain.NormalizeReason(reason)
+		if err := domain.ValidateReason(normalized); err != nil {
+			t.Fatalf("reason %d: ValidateReason after NormalizeReason: %v", i, err)
+		}
+		if err := domain.ValidateBlockReason(normalized); err != nil {
+			t.Fatalf("reason %d: ValidateBlockReason after NormalizeReason: %v", i, err)
+		}
 	}
 }
 

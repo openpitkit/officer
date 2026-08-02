@@ -96,7 +96,14 @@ func pageTradeRows(rows []domain.Trade, page store.PageSpec) []domain.Trade {
 	return rows[start:end]
 }
 
-func sortAccountRows(rows []store.AccountListRow, spec store.SortSpec) {
+// sortAccountRows orders the merged account rows under the same total order as
+// the connector's ORDER BY. groups resolves the group tier of the kill-switch,
+// which the block axes order by: a connector sorts them on the effective state,
+// so a merge reading the account's own flag alone would drop a group-blocked
+// account among the active ones while its own badge says blocked.
+func sortAccountRows(
+	rows []store.AccountListRow, spec store.SortSpec, groups domain.GroupBlockIndex,
+) {
 	desc := spec.Descending
 	column := spec.Column
 	if column == "" {
@@ -107,13 +114,19 @@ func sortAccountRows(rows []store.AccountListRow, spec store.SortSpec) {
 		cmp := 0
 		switch column {
 		case "blockReason":
-			cmp = strings.Compare(left.Account.BlockReason, right.Account.BlockReason)
+			cmp = strings.Compare(
+				groups.Resolve(left.Account).Reason,
+				groups.Resolve(right.Account).Reason,
+			)
 		case "group":
 			cmp = strings.Compare(left.Account.GroupCode, right.Account.GroupCode)
 		case "positionCount":
 			cmp = left.PositionCount - right.PositionCount
 		case "status":
-			cmp = boolCompare(left.Account.Blocked, right.Account.Blocked)
+			cmp = boolCompare(
+				groups.Resolve(left.Account).Blocked,
+				groups.Resolve(right.Account).Blocked,
+			)
 		case "title":
 			cmp = strings.Compare(left.Account.Title, right.Account.Title)
 		case "code":

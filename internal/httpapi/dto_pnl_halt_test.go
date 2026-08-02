@@ -29,12 +29,14 @@ func TestPnlHaltReasonDTOsSerializeRequiredAndOptionalFields(t *testing.T) {
 	t.Run("account required", func(t *testing.T) {
 		got := marshalDTOMap(t, toAccountDTO(domain.Account{
 			PnlHaltReason: domain.PnlHaltReasonMissingInitialPnl,
-		}))
+		}, domain.AccountBlockState{}))
 		if got["pnlHaltReason"] != "missing_initial_pnl" {
 			t.Fatalf("pnlHaltReason = %v", got["pnlHaltReason"])
 		}
 
-		empty := marshalDTOMap(t, toAccountDTO(domain.Account{}))
+		empty := marshalDTOMap(t, toAccountDTO(
+			domain.Account{}, domain.AccountBlockState{},
+		))
 		if value, ok := empty["pnlHaltReason"]; !ok || value != "" {
 			t.Fatalf("empty pnlHaltReason = %v, present = %v", value, ok)
 		}

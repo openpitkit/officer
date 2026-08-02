@@ -162,6 +162,36 @@ func TestBusinessCSVImport(t *testing.T) {
 	}
 }
 
+func TestBusinessCSVImportPreviewRejectsConflictPolicy(t *testing.T) {
+	payload := base64.StdEncoding.EncodeToString([]byte("account_id\nacc-1\n"))
+	for _, policy := range []string{`"replace"`, "null"} {
+		t.Run(policy, func(t *testing.T) {
+			svc := &fakeService{}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := bytes.NewBufferString(fmt.Sprintf(`{
+				"entity":"accounts",
+				"delimiter":"comma",
+				"filename":"accounts.csv",
+				"payloadBase64":%q,
+				"conflictPolicy":%s
+			}`, payload, policy))
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(
+				http.MethodPost, "/api/v1/business-csv/import/preview", body,
+			))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("want 400, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			if svc.csvPreviewReq.Payload != nil {
+				t.Fatalf("invalid preview reached service: %+v", svc.csvPreviewReq)
+			}
+		})
+	}
+}
+
 func TestDecodeBusinessCSVPayloadBase64SizeGuard(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

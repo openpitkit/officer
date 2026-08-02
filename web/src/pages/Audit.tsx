@@ -393,6 +393,8 @@ export function Audit() {
     globalAccountFilter.account || params.get("account") || "",
   );
   const [asset, setAsset] = useState(params.get("asset") ?? "");
+  // Exact account-group code; block-details deep links land here.
+  const [group, setGroup] = useState(params.get("group") ?? "");
   const [actor, setActor] = useState(params.get("actor") ?? "");
   const [source, setSource] = useState(params.get("source") ?? "");
   const [atMode, setAtMode] = useState(params.get("atMode") ?? "after");
@@ -425,6 +427,7 @@ export function Audit() {
     DEFAULT_SEARCH_DEBOUNCE_MS,
   );
   const debouncedAsset = useDebouncedValue(asset, DEFAULT_SEARCH_DEBOUNCE_MS);
+  const debouncedGroup = useDebouncedValue(group, DEFAULT_SEARCH_DEBOUNCE_MS);
   const debouncedActor = useDebouncedValue(actor, DEFAULT_SEARCH_DEBOUNCE_MS);
   const debouncedAtMin = useDebouncedValue(atMin, DEFAULT_SEARCH_DEBOUNCE_MS);
   const debouncedAtMax = useDebouncedValue(atMax, DEFAULT_SEARCH_DEBOUNCE_MS);
@@ -497,6 +500,7 @@ export function Audit() {
     !!appliedExternalId ||
     !!account ||
     !!asset ||
+    !!group ||
     !!actor ||
     !!source ||
     atMin.trim() !== "" ||
@@ -509,6 +513,7 @@ export function Audit() {
       setAccount("");
     }
     setAsset("");
+    setGroup("");
     setActor("");
     setSource("");
     setAtMode("after");
@@ -558,6 +563,7 @@ export function Audit() {
       id: appliedExternalId.trim() || undefined,
       account: debouncedAccount.trim() || undefined,
       asset: debouncedAsset.trim() || undefined,
+      group: debouncedGroup.trim() || undefined,
       actor: debouncedActor.trim() || undefined,
       actorMatch: debouncedActor.trim() ? "contains" : undefined,
       source: source || undefined,
@@ -577,6 +583,7 @@ export function Audit() {
       debouncedAsset,
       debouncedAtMax,
       debouncedAtMin,
+      debouncedGroup,
       page,
       requestAtMode,
       size,
@@ -615,6 +622,9 @@ export function Audit() {
     if (asset.trim() !== "") {
       query.set("asset", asset.trim());
     }
+    if (group.trim() !== "") {
+      query.set("group", group.trim());
+    }
     if (source !== "") {
       query.set("source", source);
     }
@@ -641,6 +651,7 @@ export function Audit() {
     atMax,
     atMin,
     atMode,
+    group,
     source,
   ]);
   const pager = (
@@ -737,6 +748,24 @@ export function Audit() {
               loading={load.state === "loading" && asset.trim() !== ""}
               searchingLabel={tc("filters.onlineLoading", {
                 field: tc("fields.asset"),
+              })}
+            />
+            <OnlineFilterField
+              label={tc("fields.group")}
+              value={group}
+              onChange={(value) => {
+                setGroup(value);
+                resetPage();
+              }}
+              onClear={() => {
+                setGroup("");
+                resetPage();
+              }}
+              clearLabel={tc("filters.clearField")}
+              placeholder={t("filter.group.placeholder")}
+              loading={load.state === "loading" && group.trim() !== ""}
+              searchingLabel={tc("filters.onlineLoading", {
+                field: tc("fields.group"),
               })}
             />
             <OnlineFilterField

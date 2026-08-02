@@ -401,6 +401,9 @@ CREATE INDEX idx_trades_lock_price ON trade (lock_price COLLATE DECIMAL, id DESC
 -- snapshots, so compliance history survives dictionary deletes unchanged.
 -- account_id is only a nullable identity link used for current-code filtering
 -- after account renames; deleting the account clears the link, not the row.
+-- group_code is the structured handle of a group action. Group actions target
+-- no account, so without it a group's rows could only be selected by matching
+-- the free-form detail text, which a crafted group code can spoof.
 CREATE TABLE audit (
     id            {{PK}},
     external_id   {{XID}} UNIQUE,
@@ -408,6 +411,7 @@ CREATE TABLE audit (
     account_code  TEXT NOT NULL DEFAULT '',
     account_title TEXT NOT NULL DEFAULT '',
     asset_code    TEXT NOT NULL DEFAULT '',
+    group_code    TEXT NOT NULL DEFAULT '',
     actor_code    TEXT NOT NULL DEFAULT '',
     actor_title   TEXT NOT NULL DEFAULT '',
     at            TEXT NOT NULL,
@@ -420,6 +424,7 @@ CREATE INDEX idx_audit_at ON audit (at DESC, id DESC);
 CREATE INDEX idx_audit_account_id ON audit (account_id, at DESC, id DESC);
 CREATE INDEX idx_audit_account_code ON audit (account_code, at DESC, id DESC);
 CREATE INDEX idx_audit_asset_code ON audit (asset_code, at DESC, id DESC);
+CREATE INDEX idx_audit_group_code ON audit (group_code, at DESC, id DESC);
 CREATE INDEX idx_audit_action ON audit (action_id, at DESC, id DESC);
 CREATE INDEX idx_audit_source ON audit (source_id, at DESC, id DESC);
 CREATE INDEX idx_audit_actor_code ON audit (actor_code, at DESC, id DESC);

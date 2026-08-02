@@ -49,6 +49,8 @@ export interface ActionButtonProps {
   active?: boolean;
   /** Use the danger hue on hover/active (block, delete). */
   danger?: boolean;
+  /** Render the action as unavailable; the title should say why. */
+  disabled?: boolean;
   href?: string;
   newTabHint?: string;
   onClick?: ActionButtonClick;
@@ -92,6 +94,7 @@ export function ActionButton({
   title,
   active = false,
   danger = false,
+  disabled = false,
   href,
   newTabHint,
   onClick,
@@ -106,11 +109,14 @@ export function ActionButton({
       type="button"
       title={tooltip}
       aria-label={title}
+      disabled={disabled}
       className={cn(
         "inline-flex shrink-0 items-center justify-center rounded-badge bg-transparent text-muted transition-colors hover:bg-accent-dim hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         active && "bg-accent-dim text-accent",
         danger &&
           "hover:bg-[var(--danger-dim)] hover:text-[var(--danger)]",
+        disabled &&
+          "cursor-not-allowed opacity-40 hover:bg-transparent hover:text-muted",
       )}
       style={{
         width: `min(${size}px, var(--dens-row-action-size, ${size}px))`,

@@ -18,7 +18,6 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"net/http"
 
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
@@ -26,6 +25,10 @@ import (
 
 type userSettingsDTO struct {
 	WelcomeSeen bool `json:"welcomeSeen"`
+}
+
+type userSettingsUpdateDTO struct {
+	WelcomeSeen *bool `json:"welcomeSeen"`
 }
 
 // handleGetUserSettings handles GET /api/v1/user-settings, returning the current
@@ -45,16 +48,21 @@ func handleGetUserSettings(svc Service) http.HandlerFunc {
 // operator's UI preferences and echoing the stored state.
 func handleSetUserSettings(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req userSettingsDTO
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		var req userSettingsUpdateDTO
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
-		if err := svc.SetWelcomeSeen(r.Context(), req.WelcomeSeen); err != nil {
+		if req.WelcomeSeen == nil {
+			httpx.WriteErrMsg(
+				w, http.StatusBadRequest, "validation", "welcomeSeen is required",
+			)
+			return
+		}
+		if err := svc.SetWelcomeSeen(r.Context(), *req.WelcomeSeen); err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, userSettingsDTO{WelcomeSeen: req.WelcomeSeen})
+		httpx.WriteJSON(w, http.StatusOK, userSettingsDTO{WelcomeSeen: *req.WelcomeSeen})
 	}
 }
 

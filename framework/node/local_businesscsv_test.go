@@ -32,6 +32,41 @@ import (
 	"go.openpit.dev/officer/framework/store"
 )
 
+// TestEnsureAccountAndAssetsValidatesPolicyOnFastPath proves an existing
+// account cannot bypass the public node contract's policy validation.
+func TestEnsureAccountAndAssetsValidatesPolicyOnFastPath(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	n, _ := newTestNode(t, newFakeEngine())
+	if _, err := n.CreateAccount(ctx, testAccount("acc-1"), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+
+	err := n.ensureAccountAndAssetsRegisteredExclusive(
+		ctx, "acc-1", "maybe", "test", testCaller,
+	)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("invalid policy error = %v, want ErrInvalid", err)
+	}
+}
+
+// TestEnsureAccountRejectValidatesAccountIDBeforeExistence proves malformed
+// account ids remain validation errors instead of becoming account_missing.
+func TestEnsureAccountRejectValidatesAccountIDBeforeExistence(t *testing.T) {
+	t.Parallel()
+	n, _ := newTestNode(t, newFakeEngine())
+
+	err := n.ensureAccountAndAssetsRegisteredExclusive(
+		context.Background(), "", domain.MissingAccountReject, "test", testCaller,
+	)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("empty account error = %v, want ErrInvalid", err)
+	}
+	if errors.Is(err, domain.ErrAccountMissing) {
+		t.Fatalf("empty account error = %v, must not be ErrAccountMissing", err)
+	}
+}
+
 func TestUpsertMarketDataInstrumentCreatesAssets(t *testing.T) {
 	t.Parallel()
 	n, realm := newTestNode(t, newFakeEngine())
@@ -737,6 +772,106 @@ func TestApplyBusinessCSVImport_WithoutBlocksLeavesBlockState(t *testing.T) {
 	}
 	if len(rows) != 0 {
 		t.Fatalf("block audit rows = %+v, want none", rows)
+	}
+}
+
+// A CSV row may legally carry blocked=false next to a leftover reason. That
+// reason belongs to the block being lifted, so the unblock audit line - the only
+// durable record of the act - must not render it as the operator's
+// justification for unblocking.
+func TestApplyBusinessCSVImport_UnblockAuditCarriesNoReason(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	if err := n.ApplyBusinessCSVImport(ctx, store.BusinessCSVImport{
+		Groups: []store.BusinessCSVImportGroup{{
+			Group: domain.AccountGroup{Code: "desk-a", BlockReason: "margin breach"},
+		}},
+		Accounts: []store.BusinessCSVImportAccount{{
+			Account: domain.Account{
+				Code: "acc-1", GroupCode: "desk-a", BlockReason: "margin breach",
+			},
+		}},
+	}, testCaller); err != nil {
+		t.Fatalf("ApplyBusinessCSVImport: %v", err)
+	}
+
+	for _, tc := range []struct {
+		action domain.AuditAction
+		want   string
+	}{
+		{domain.AuditActionUnblockGroup, "unblock group desk-a"},
+		{domain.AuditActionUnblock, "unblock account acc-1"},
+	} {
+		rows, err := st.ListAuditFiltered(ctx, domain.AuditFilter{
+			Actions: []domain.AuditAction{tc.action},
+		}, 10)
+		if err != nil {
+			t.Fatalf("ListAuditFiltered(%s): %v", tc.action, err)
+		}
+		if len(rows) != 1 || rows[0].Detail != tc.want {
+			t.Fatalf("%s audit rows = %+v, want one %q", tc.action, rows, tc.want)
+		}
+	}
+}
+
+// The import moves members between groups in bulk, so it files each membership
+// change under both groups exactly like the interactive path. Its audit rows are
+// written in the import transaction, so both rows land or neither does.
+func TestApplyBusinessCSVImport_SetGroupAuditFilesMoveUnderBothGroups(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	for _, code := range []string{"desk-a", "desk-b"} {
+		if _, err := n.CreateGroup(
+			ctx, domain.AccountGroup{Code: code}, testCaller,
+		); err != nil {
+			t.Fatalf("CreateGroup %q: %v", code, err)
+		}
+	}
+	if _, err := n.CreateAccount(ctx, domain.Account{
+		Code:      "acc-1",
+		GroupCode: "desk-a",
+	}, testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+
+	if err := n.ApplyBusinessCSVImport(ctx, store.BusinessCSVImport{
+		Accounts: []store.BusinessCSVImportAccount{{
+			Account: domain.Account{Code: "acc-1", GroupCode: "desk-b"},
+			Exists:  true,
+		}},
+	}, testCaller); err != nil {
+		t.Fatalf("ApplyBusinessCSVImport: %v", err)
+	}
+
+	const wantDetail = "set group account acc-1 from=desk-a to=desk-b"
+	for _, code := range []string{"desk-a", "desk-b"} {
+		page, err := st.ListAuditRows(ctx, store.AuditListFilter{
+			Group:   store.ExactTextMatcher(code),
+			Actions: []domain.AuditAction{domain.AuditActionSetGroup},
+		})
+		if err != nil {
+			t.Fatalf("ListAuditRows group=%q: %v", code, err)
+		}
+		if len(page.Rows) != 1 || page.Rows[0].Detail != wantDetail ||
+			page.Rows[0].Account != "acc-1" {
+			t.Fatalf("set-group rows under %q = %+v, want one %q for acc-1",
+				code, page.Rows, wantDetail)
+		}
+	}
+	page, err := st.ListAuditRows(ctx, store.AuditListFilter{
+		Actions: []domain.AuditAction{domain.AuditActionSetGroup},
+	})
+	if err != nil {
+		t.Fatalf("ListAuditRows set group: %v", err)
+	}
+	if len(page.Rows) != 2 {
+		t.Fatalf("set-group rows = %+v, want exactly one per group", page.Rows)
 	}
 }
 

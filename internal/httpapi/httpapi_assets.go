@@ -18,7 +18,6 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"go.openpit.dev/officer/framework/domain"
@@ -57,8 +56,7 @@ func handleCreateAsset(svc Service) http.HandlerFunc {
 			Title      string `json:"title"`
 			AssetClass string `json:"assetClass"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		asset := domain.Asset{
@@ -91,8 +89,7 @@ func handleUpdateAsset(svc Service) http.HandlerFunc {
 			Title      string `json:"title"`
 			AssetClass string `json:"assetClass"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		updated, err := svc.UpdateAsset(r.Context(), code, domain.Asset{
@@ -141,8 +138,7 @@ func handleCreateAssetClass(svc Service) http.HandlerFunc {
 			Title string `json:"title"`
 			Notes string `json:"notes"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		created, err := svc.CreateAssetClass(r.Context(), domain.AssetClass{
@@ -173,8 +169,7 @@ func handleUpdateAssetClass(svc Service) http.HandlerFunc {
 			Title string `json:"title"`
 			Notes string `json:"notes"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		updated, err := svc.UpdateAssetClass(r.Context(), code, domain.AssetClass{

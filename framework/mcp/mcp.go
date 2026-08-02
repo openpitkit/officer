@@ -43,6 +43,10 @@ type Source interface {
 	// GetAccountState returns the account row and its account-scoped barriers.
 	GetAccountState(ctx context.Context, id domain.AccountID) (
 		domain.Account, node.AccountLimits, error)
+	// ListGroups returns every account group with its block state. An account
+	// row carries only its own latched block, so the tool surface joins the
+	// group tier in to report the effective one.
+	ListGroups(ctx context.Context) ([]domain.AccountGroup, error)
 	// ListLimits returns the typed barriers filtered by account code.
 	ListLimits(ctx context.Context, account domain.AccountID) (
 		node.AccountLimits, error)

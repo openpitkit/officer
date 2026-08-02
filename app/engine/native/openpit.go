@@ -19,6 +19,7 @@ package native
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -29,7 +30,6 @@ import (
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pkg/optional"
-	"go.openpit.dev/openpit/pretrade"
 	"go.openpit.dev/openpit/pretrade/policies"
 	"go.openpit.dev/openpit/reject"
 
@@ -637,7 +637,10 @@ func (l accountLane) ApplyAccountAdjustmentBatch(
 		return nil, nil, fmt.Errorf("engine: apply account adjustment: %w", err)
 	}
 	if rej, ok := batch.BatchError.Get(); ok {
-		rejected := outcomeRejectedFrom(rej)
+		rejected, err := outcomeRejectedFrom(rej)
+		if err != nil {
+			return nil, nil, err
+		}
 		return nil, &rejected, nil
 	}
 	// The engine reports the kill-switch it latched while committing the batch -
@@ -734,22 +737,28 @@ func (l accountLane) SubmitOrder(ctx context.Context, o domain.Order) (OrderResu
 		return OrderResult{}, err
 	}
 
-	reservation, rejects, err := l.executePreTrade(order, o.DropCopy)
+	if o.DropCopy {
+		return l.submitDropCopyOrder(o, order)
+	}
+
+	reservation, rejects, err := l.eng.ExecutePreTrade(order)
 	if err != nil {
-		return OrderResult{}, wrapPreTradeError(o, err)
+		return OrderResult{}, wrapPreTradeError(err)
 	}
 	if rejects != nil {
 		return OrderResult{Accepted: false, Rejects: orderRejectsFrom(rejects)}, nil
 	}
 
-	lockBytes, settlement, source, err := captureReservation(reservation, o)
+	lock, err := reservation.Lock()
+	if err != nil {
+		reservation.RollbackAndClose()
+		return OrderResult{}, fmt.Errorf("engine: read reservation lock: %w", err)
+	}
+	lockBytes, settlement, source, err := capturePreTradeOutput(lock, o)
 	if err != nil {
 		reservation.RollbackAndClose()
 		return OrderResult{}, err
 	}
-	// Drop-copy bypasses risk enforcement, not missing order data. A volume
-	// order without any settlement price has no base quantity Officer can
-	// persist or later reconcile, so it remains an invalid materialization.
 	if reject, ok := volumeOrderSizingReject(o, settlement); ok {
 		reservation.RollbackAndClose()
 		return OrderResult{
@@ -764,23 +773,20 @@ func (l accountLane) SubmitOrder(ctx context.Context, o domain.Order) (OrderResu
 	}
 	// Capture the reservation's balance effects (held funds, incoming quantity)
 	// before closing, so the caller can mirror them into the balance snapshot.
-	outcomes, err := balanceOutcomesFromList(reservation.AccountAdjustments())
+	adjustments, err := reservation.AccountAdjustments()
 	if err != nil {
 		reservation.RollbackAndClose()
 		return OrderResult{}, err
 	}
-	// The pre-trade pipeline latches at most one winning account block per
-	// reservation; Officer mirrors it as a list to match the post-trade shape.
-	var latched []reject.AccountBlock
-	if block := reservation.AccountBlock(); block != nil {
-		latched = append(latched, *block)
+	outcomes, err := balanceOutcomesFromList(adjustments)
+	if err != nil {
+		reservation.RollbackAndClose()
+		return OrderResult{}, err
 	}
-	blocks := executionBlocksFrom(latched, o.Account)
 	reservation.CommitAndClose()
 	return OrderResult{
 		Accepted:            true,
 		Lock:                lockBytes,
-		Blocks:              blocks,
 		Outcomes:            outcomes,
 		SettlementLockPrice: settlement,
 		LeavesQuantity:      leaves,
@@ -788,20 +794,93 @@ func (l accountLane) SubmitOrder(ctx context.Context, o domain.Order) (OrderResu
 	}, nil
 }
 
-func (l accountLane) executePreTrade(
-	order model.Order, dropCopy bool,
-) (*pretrade.Reservation, []reject.Reject, error) {
-	if dropCopy {
-		reservation, err := l.eng.ExecutePreTradeDropCopy(order)
-		return reservation, nil, err
+func (l accountLane) submitDropCopyOrder(
+	o domain.Order, order model.Order,
+) (OrderResult, error) {
+	result, rejects, err := l.eng.ApplyDropCopy(order)
+	if err != nil {
+		return OrderResult{}, wrapPreTradeError(err)
 	}
-	return l.eng.ExecutePreTrade(order)
+	if rejects != nil {
+		return OrderResult{Accepted: false, Rejects: orderRejectsFrom(rejects)}, nil
+	}
+	// Guard the FFI contract: Close dereferences the result, so a nil one must
+	// not reach the defer below.
+	if result == nil {
+		return OrderResult{}, fmt.Errorf(
+			"engine: drop-copy returned neither a result nor rejects",
+		)
+	}
+	defer result.Close()
+
+	lock, err := result.Lock()
+	if err != nil {
+		return OrderResult{}, dropCopyReconciliationError(o, "read applied lock", err)
+	}
+	lockBytes, settlement, source, err := capturePreTradeOutput(lock, o)
+	if err != nil {
+		return OrderResult{}, dropCopyReconciliationError(o, "materialize lock", err)
+	}
+	if reject, ok := volumeOrderSizingReject(o, settlement); ok {
+		return OrderResult{}, dropCopyReconciliationError(
+			o,
+			"size volume order",
+			fmt.Errorf("%s: %s", reject.Reason, reject.Details),
+		)
+	}
+	leaves, err := immediateFillQuantity(o, settlement)
+	if err != nil {
+		return OrderResult{}, dropCopyReconciliationError(
+			o, "derive immediate fill quantity", err,
+		)
+	}
+	adjustments, err := result.AccountAdjustments()
+	if err != nil {
+		return OrderResult{}, dropCopyReconciliationError(
+			o, "read applied balance outcomes", err,
+		)
+	}
+	outcomes, err := balanceOutcomesFromList(adjustments)
+	if err != nil {
+		return OrderResult{}, dropCopyReconciliationError(
+			o, "map balance outcomes", err,
+		)
+	}
+	block, err := result.AccountBlock()
+	if err != nil {
+		return OrderResult{}, dropCopyReconciliationError(
+			o, "read applied account block", err,
+		)
+	}
+	var blocks []reject.AccountBlock
+	if block != nil {
+		blocks = append(blocks, *block)
+	}
+	return OrderResult{
+		Accepted:            true,
+		Lock:                lockBytes,
+		Blocks:              executionBlocksFrom(blocks, o.Account),
+		Outcomes:            outcomes,
+		SettlementLockPrice: settlement,
+		LeavesQuantity:      leaves,
+		EstimateSource:      source,
+	}, nil
 }
 
-func wrapPreTradeError(o domain.Order, err error) error {
-	if o.DropCopy && o.Price == "" {
-		return fmt.Errorf("engine: execute pre-trade: %w: %w", err, domain.ErrInvalid)
-	}
+// dropCopyReconciliationError reports state the engine already applied and the
+// caller must reconcile by hand. The cause is rendered, not wrapped: causes
+// carrying domain.ErrInvalid would answer 400 "fix your input and retry", which
+// contradicts the message and hides an internal failure.
+func dropCopyReconciliationError(o domain.Order, action string, err error) error {
+	return fmt.Errorf(
+		"engine: drop-copy already applied for order %s (account %s), "+
+			"but Officer could not %s; engine state needs manual reconciliation - "+
+			"do not retry blindly: %v",
+		orderExternalIDForError(o.ExternalID), o.Account, action, err,
+	)
+}
+
+func wrapPreTradeError(err error) error {
 	return fmt.Errorf("engine: execute pre-trade: %w", err)
 }
 
@@ -1021,13 +1100,34 @@ func (l groupLane) BlockGroup(ctx context.Context, groupID, reason string) error
 		return err
 	}
 	accounts := l.eng.Accounts()
-	if err := accounts.UnblockGroup(group); err != nil {
-		return fmt.Errorf("engine: block group %q: %w", groupID, err)
-	}
+	// Block keeps the first recorded reason, so the reason is refreshed through
+	// ReplaceGroupBlockReason instead of an unblock/re-block pair: group work runs
+	// on its own lane, concurrently with the orders of its member accounts, so
+	// lifting the block would let an order pass the group tier unblocked.
 	if err := accounts.BlockGroup(group, reason); err != nil {
-		return fmt.Errorf("engine: block group %q: %w", groupID, err)
+		return groupBlockError("block group", groupID, err)
+	}
+	if err := accounts.ReplaceGroupBlockReason(group, reason); err != nil {
+		return groupBlockError("block group", groupID, err)
 	}
 	return nil
+}
+
+// groupBlockError translates an engine account-block failure. The engine keeps
+// its default group reserved and refuses to block, unblock, or re-reason it, so
+// that refusal is surfaced as the typed reserved-group error instead of an
+// opaque internal failure.
+func groupBlockError(op, groupID string, err error) error {
+	var blockErr *reject.AccountBlockError
+	if errors.As(err, &blockErr) &&
+		blockErr.Kind == reject.AccountBlockErrorKindReservedGroup {
+		// Both errors stay in the chain: callers match the sentinel, logs keep the
+		// engine's own diagnostic.
+		return fmt.Errorf(
+			"engine: %s %q: %w: %w", op, groupID, err, domain.ErrReservedGroup,
+		)
+	}
+	return fmt.Errorf("engine: %s %q: %w", op, groupID, err)
 }
 
 func (l groupLane) UnblockGroup(ctx context.Context, groupID string) error {
@@ -1040,7 +1140,7 @@ func (l groupLane) UnblockGroup(ctx context.Context, groupID string) error {
 		return err
 	}
 	if err := l.eng.Accounts().UnblockGroup(group); err != nil {
-		return fmt.Errorf("engine: unblock group %q: %w", groupID, err)
+		return groupBlockError("unblock group", groupID, err)
 	}
 	return nil
 }
@@ -1128,18 +1228,37 @@ func (l accountLane) CheckOrder(
 	}
 	defer report.Close()
 
-	if !report.IsPass() {
-		rejects := report.Rejects()
+	passed, err := report.IsPass()
+	if err != nil {
+		return domain.CheckResult{}, fmt.Errorf("engine: read dry-run verdict: %w", err)
+	}
+	if !passed {
+		rejects, err := report.Rejects()
+		if err != nil {
+			return domain.CheckResult{}, fmt.Errorf(
+				"engine: read dry-run rejects: %w", err,
+			)
+		}
+		block, err := report.AccountBlock()
+		if err != nil {
+			return domain.CheckResult{}, fmt.Errorf(
+				"engine: read dry-run account block: %w", err,
+			)
+		}
 		return domain.CheckResult{
 			Passed:     false,
 			Rejects:    orderRejectsFrom(rejects),
-			WouldBlock: accountBlockFrom(report.AccountBlock(), rejects, probe.Account),
+			WouldBlock: accountBlockFrom(block, probe.Account),
 		}, nil
 	}
 
-	prices, err := report.Lock().Prices()
+	lock, err := report.Lock()
 	if err != nil {
 		return domain.CheckResult{}, fmt.Errorf("engine: read dry-run lock: %w", err)
+	}
+	prices, err := lock.Prices()
+	if err != nil {
+		return domain.CheckResult{}, fmt.Errorf("engine: read dry-run lock prices: %w", err)
 	}
 	lockPrices := make([]string, 0, len(prices))
 	for _, price := range prices {
@@ -1351,7 +1470,7 @@ func blockGroups(eng *openpit.Engine, groups []domain.AccountGroup) error {
 	for _, group := range groups {
 		if group.Code == "" {
 			if group.Blocked {
-				return fmt.Errorf("engine: default group cannot be blocked: %w", domain.ErrInvalid)
+				return fmt.Errorf("engine: block default group: %w", domain.ErrReservedGroup)
 			}
 			continue
 		}
@@ -1363,7 +1482,7 @@ func blockGroups(eng *openpit.Engine, groups []domain.AccountGroup) error {
 			return err
 		}
 		if err := handle.BlockGroup(id, group.BlockReason); err != nil {
-			return fmt.Errorf("engine: block group %q: %w", group.Code, err)
+			return groupBlockError("block group", group.Code, err)
 		}
 	}
 	return nil

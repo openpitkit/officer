@@ -14,6 +14,9 @@
     "asset": {
       "placeholder": "Filter by asset…"
     },
+    "group": {
+      "placeholder": "Exact group code…"
+    },
     "source": {
       "ariaLabel": "Source",
       "all": "All sources"

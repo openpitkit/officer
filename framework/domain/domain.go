@@ -151,8 +151,8 @@ func NewAccountMissingError(account AccountID) error {
 // an account code Officer does not know yet. Officer can register the account on
 // the spot, which is what an integration bootstrapping itself wants, or refuse
 // the request, which is what an operator guarding against a typo wants. Neither
-// is safe as a silent default, so every surface that accepts an account code in
-// the request makes the choice a required parameter.
+// is safe as a silent default, so every mutation that supports on-demand
+// account registration makes the choice explicit.
 type MissingAccountPolicy string
 
 const (
@@ -188,6 +188,22 @@ func ParseMissingAccountPolicy(value string) (MissingAccountPolicy, error) {
 		return "", err
 	}
 	return policy, nil
+}
+
+// ValidateDropCopyMissingAccountPolicy enforces the drop-copy exception: a
+// report describes an execution that already happened, so an unknown account
+// must be registered rather than used to reject the report.
+func ValidateDropCopyMissingAccountPolicy(policy MissingAccountPolicy) error {
+	if err := ValidateMissingAccountPolicy(policy); err != nil {
+		return err
+	}
+	if policy != MissingAccountCreate {
+		return fmt.Errorf(
+			"drop-copy reports an execution that already happened and cannot reject a missing account; use missingAccount=%s: %w",
+			MissingAccountCreate, ErrInvalid,
+		)
+	}
+	return nil
 }
 
 // Policy identifiers.
@@ -493,6 +509,10 @@ type AuditRow struct {
 	AccountTitle string
 	// Asset is the code of the asset the action targeted; empty when none.
 	Asset string
+	// Group is the code of the account group the action targeted; empty when
+	// none. It is a structured snapshot so a reader selects a group's rows by
+	// identity instead of matching the free-form detail text.
+	Group string
 	// Detail is a short human-readable description of the action.
 	Detail string
 	// Source is the channel through which the action was initiated.
@@ -538,12 +558,19 @@ type CheckResult struct {
 }
 
 // ValidateAccountID returns an error wrapping ErrInvalid when id is not a
-// well-formed account identifier: non-empty, at most 64 code points, printable,
-// no leading or trailing whitespace.
+// well-formed account identifier: non-empty, not a relative path segment, at
+// most 64 code points, valid UTF-8, printable, no leading or trailing
+// whitespace.
 func ValidateAccountID(id AccountID) error {
 	s := string(id)
 	if s == "" {
 		return fmt.Errorf("account id is empty: %w", ErrInvalid)
+	}
+	if !utf8.ValidString(s) {
+		return fmt.Errorf("account id contains invalid UTF-8: %w", ErrInvalid)
+	}
+	if isPathDotSegment(s) {
+		return fmt.Errorf("account id %q is a reserved path segment: %w", s, ErrInvalid)
 	}
 	if utf8.RuneCountInString(s) > 64 {
 		return fmt.Errorf("account id exceeds 64 code points: %w", ErrInvalid)
@@ -560,9 +587,10 @@ func ValidateAccountID(id AccountID) error {
 }
 
 // ValidateAsset returns an error wrapping ErrInvalid when asset is not a
-// well-formed asset identifier (non-empty, no whitespace, at most 32 chars). It
-// is the boundary format check the spot-funds and trading surfaces apply to an
-// asset id; it never checks existence.
+// well-formed asset identifier (non-empty, not a relative path segment,
+// valid UTF-8, printable, no whitespace, at most 32 chars). It is the boundary
+// format check the spot-funds and trading surfaces apply to an asset id; it
+// never checks existence.
 func ValidateAsset(asset string) error {
 	return validateAsset(asset)
 }
@@ -597,10 +625,19 @@ func ValidateMarketDataStrike(strike string) error {
 }
 
 // validateAsset returns an error when the asset string is not well-formed:
-// non-empty, no whitespace, at most 32 chars.
+// non-empty, not a relative path segment, valid UTF-8, no whitespace,
+// printable, at most 32 chars. The asset code is the one dictionary string that
+// crosses the FFI verbatim, so a control character must not survive the
+// boundary.
 func validateAsset(asset string) error {
 	if asset == "" {
 		return fmt.Errorf("asset is empty: %w", ErrInvalid)
+	}
+	if !utf8.ValidString(asset) {
+		return fmt.Errorf("asset contains invalid UTF-8: %w", ErrInvalid)
+	}
+	if isPathDotSegment(asset) {
+		return fmt.Errorf("asset %q is a reserved path segment: %w", asset, ErrInvalid)
 	}
 	if len(asset) > 32 {
 		return fmt.Errorf("asset exceeds 32 chars: %w", ErrInvalid)
@@ -608,6 +645,9 @@ func validateAsset(asset string) error {
 	for _, r := range asset {
 		if unicode.IsSpace(r) {
 			return fmt.Errorf("asset contains whitespace: %w", ErrInvalid)
+		}
+		if !unicode.IsPrint(r) {
+			return fmt.Errorf("asset contains non-printable character: %w", ErrInvalid)
 		}
 	}
 	return nil

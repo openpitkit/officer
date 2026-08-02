@@ -19,7 +19,6 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 
 	"go.openpit.dev/officer/framework/domain"
@@ -56,8 +55,7 @@ func handleCheckOrder(svc Service) http.HandlerFunc {
 			AmountValue string `json:"amountValue"`
 			Price       string `json:"price"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		probe := domain.OrderProbe{
@@ -438,8 +436,7 @@ func handleApplyExecutionReport(svc Service) http.HandlerFunc {
 			Status         string         `json:"status"`
 			Force          bool           `json:"force"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		if req.Status == "" {

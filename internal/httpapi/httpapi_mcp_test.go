@@ -118,3 +118,33 @@ func TestSetMcpAccess_InvalidJSON(t *testing.T) {
 		t.Fatalf("invalid JSON must not persist")
 	}
 }
+
+func TestSetMcpAccess_RejectsUnknownAndMissingEnabled(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"unknown member", `{"enable":true}`},
+		{"missing member", `{}`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeService{}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(
+				http.MethodPut, "/api/v1/mcp-access/health",
+				bytes.NewBufferString(tc.body),
+			))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("want 400, got %d", rec.Code)
+			}
+			if len(svc.setMcpCalls) != 0 {
+				t.Fatalf("invalid request persisted: %+v", svc.setMcpCalls)
+			}
+		})
+	}
+}

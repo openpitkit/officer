@@ -42,7 +42,8 @@ import (
 // never selected.
 const auditSelect = `
 SELECT au.external_id, au.account_code, au.account_title, au.asset_code,
-       au.actor_code, au.actor_title, au.at, au.action_id, au.source_id, au.detail
+       au.group_code, au.actor_code, au.actor_title, au.at, au.action_id,
+       au.source_id, au.detail
 FROM audit au`
 
 // AppendAudit persists a new append-only audit record, assigning the external id
@@ -51,33 +52,74 @@ FROM audit au`
 func (r *realmStore) AppendAudit(
 	ctx context.Context, entry fwstore.AuditEntry,
 ) error {
-	xid, err := newExternalID()
+	db, err := r.db()
 	if err != nil {
 		return err
+	}
+	dictionaries, err := r.dictionaries()
+	if err != nil {
+		return err
+	}
+	return appendAudit(ctx, db, dictionaries, entry)
+}
+
+// AppendAuditBatch persists all entries in one transaction, so a multi-row
+// compliance event is either wholly visible or wholly absent.
+func (r *realmStore) AppendAuditBatch(
+	ctx context.Context, entries []fwstore.AuditEntry,
+) error {
+	if len(entries) == 0 {
+		return nil
 	}
 	db, err := r.db()
 	if err != nil {
 		return err
 	}
+	dictionaries, err := r.dictionaries()
+	if err != nil {
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: begin audit batch: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, entry := range entries {
+		if err := appendAudit(ctx, tx, dictionaries, entry); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit audit batch: %w", err)
+	}
+	return nil
+}
+
+func appendAudit(
+	ctx context.Context,
+	q sqlReadWriter,
+	dictionaries *enumDictionaries,
+	entry fwstore.AuditEntry,
+) error {
+	xid, err := newExternalID()
+	if err != nil {
+		return err
+	}
 	accountTitle := entry.AccountTitle
 	if accountTitle == "" && entry.Account != "" {
-		accountTitle = lookupTitle(ctx, db, "account", entry.Account.String())
+		accountTitle = lookupTitle(ctx, q, "account", entry.Account.String())
 	}
 	actorTitle := entry.ActorTitle
 	if actorTitle == "" && entry.Actor != "" {
-		actorTitle = lookupTitle(ctx, db, "principal", entry.Actor)
+		actorTitle = lookupTitle(ctx, q, "principal", entry.Actor)
 	}
-	accountID, err := lookupID(ctx, db, "account", entry.Account.String())
+	accountID, err := lookupID(ctx, q, "account", entry.Account.String())
 	if err != nil {
 		return err
 	}
 	source := entry.Source
 	if source == "" {
 		source = domain.SourceSystem
-	}
-	dictionaries, err := r.dictionaries()
-	if err != nil {
-		return err
 	}
 	actionID, err := dictionaries.id(auditActionTable, "audit action", string(entry.Action))
 	if err != nil {
@@ -87,14 +129,14 @@ func (r *realmStore) AppendAudit(
 	if err != nil {
 		return err
 	}
-	if _, err := db.ExecContext(
+	if _, err := q.ExecContext(
 		ctx,
 		`INSERT INTO audit
 		 (external_id, account_id, account_code, account_title, asset_code,
-		  actor_code, actor_title, at, action_id, source_id, detail)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  group_code, actor_code, actor_title, at, action_id, source_id, detail)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		xid.Bytes(), accountID, entry.Account.String(), accountTitle, entry.Asset,
-		entry.Actor, actorTitle, nowStr(), actionID, sourceID,
+		entry.Group, entry.Actor, actorTitle, nowStr(), actionID, sourceID,
 		entry.Detail,
 	); err != nil {
 		return fmt.Errorf("store: append audit: %w", err)
@@ -244,7 +286,8 @@ func buildAuditListQuery(
 	queryArgs := append([]any{}, args...)
 	query := `
 SELECT au.external_id, au.account_code, au.account_title, au.asset_code,
-       au.actor_code, au.actor_title, au.at, au.action_id, au.source_id, au.detail
+       au.group_code, au.actor_code, au.actor_title, au.at, au.action_id,
+       au.source_id, au.detail
 FROM audit au` +
 		whereFromClauses(clauses) +
 		` ORDER BY au.at DESC, au.id DESC`
@@ -267,6 +310,7 @@ func auditListClauses(
 	}
 	appendAuditAccountMatcher(&clauses, &args, filter.Account)
 	appendMatcher(&clauses, &args, "au.asset_code", filter.Asset)
+	appendMatcher(&clauses, &args, "au.group_code", filter.Group)
 	appendMatcher(&clauses, &args, "au.actor_code", filter.Actor)
 	if filter.Source != "" {
 		id, err := dictionaries.id(sourceKindTable, "source", string(filter.Source))
@@ -350,21 +394,21 @@ func scanAuditListRow(
 	rows *sql.Rows,
 ) (domain.AuditRow, error) {
 	var (
-		extID                                           []byte
-		account, accountTitle, asset, actor, actorTitle string
-		at                                              string
-		actionID, sourceID                              int64
-		detail                                          string
+		extID                                                  []byte
+		account, accountTitle, asset, group, actor, actorTitle string
+		at                                                     string
+		actionID, sourceID                                     int64
+		detail                                                 string
 	)
 	if err := rows.Scan(
-		&extID, &account, &accountTitle, &asset, &actor,
+		&extID, &account, &accountTitle, &asset, &group, &actor,
 		&actorTitle, &at, &actionID, &sourceID, &detail,
 	); err != nil {
 		return domain.AuditRow{}, fmt.Errorf("store: scan audit row: %w", err)
 	}
 	row, err := auditRowFromScanned(
-		dictionaries, extID, account, accountTitle, asset, actor, actorTitle, at,
-		actionID, sourceID, detail,
+		dictionaries, extID, account, accountTitle, asset, group, actor, actorTitle,
+		at, actionID, sourceID, detail,
 	)
 	if err != nil {
 		return domain.AuditRow{}, err
@@ -376,21 +420,21 @@ func scanAuditListRow(
 // at timestamp.
 func scanAuditRow(dictionaries *enumDictionaries, rows *sql.Rows) (domain.AuditRow, error) {
 	var (
-		extID                                           []byte
-		account, accountTitle, asset, actor, actorTitle string
-		at                                              string
-		actionID, sourceID                              int64
-		detail                                          string
+		extID                                                  []byte
+		account, accountTitle, asset, group, actor, actorTitle string
+		at                                                     string
+		actionID, sourceID                                     int64
+		detail                                                 string
 	)
 	if err := rows.Scan(
-		&extID, &account, &accountTitle, &asset, &actor, &actorTitle,
+		&extID, &account, &accountTitle, &asset, &group, &actor, &actorTitle,
 		&at, &actionID, &sourceID, &detail,
 	); err != nil {
 		return domain.AuditRow{}, fmt.Errorf("store: scan audit: %w", err)
 	}
 	return auditRowFromScanned(
-		dictionaries, extID, account, accountTitle, asset, actor, actorTitle, at,
-		actionID, sourceID, detail,
+		dictionaries, extID, account, accountTitle, asset, group, actor, actorTitle,
+		at, actionID, sourceID, detail,
 	)
 }
 
@@ -400,6 +444,7 @@ func auditRowFromScanned(
 	account string,
 	accountTitle string,
 	asset string,
+	group string,
 	actor string,
 	actorTitle string,
 	at string,
@@ -428,6 +473,7 @@ func auditRowFromScanned(
 		Account:      domain.AccountID(account),
 		AccountTitle: accountTitle,
 		Asset:        asset,
+		Group:        group,
 		Actor:        actor,
 		ActorTitle:   actorTitle,
 		At:           parsedAt,

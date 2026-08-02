@@ -215,6 +215,20 @@ describe("WelcomeDialog", () => {
     ).toBeDefined();
   });
 
+  it("applies the policy preset with missingAccount=create so an unknown demo account is registered", async () => {
+    const user = userEvent.setup();
+    renderWelcome();
+
+    await user.click(
+      screen.getByRole("button", { name: /Add starter policy barriers/i }),
+    );
+
+    await waitFor(() => expect(putLimitMock).toHaveBeenCalledTimes(2));
+    for (const call of putLimitMock.mock.calls) {
+      expect(call[1]).toBe("create");
+    }
+  });
+
   it("applies static market-data preset without closing", async () => {
     const user = userEvent.setup();
     const onOpenChange = renderWelcome();

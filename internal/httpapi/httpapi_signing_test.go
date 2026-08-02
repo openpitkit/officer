@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -277,21 +278,54 @@ func TestGetSigningConfig_HappyPath(t *testing.T) {
 
 // TestSetSigningConfig_HappyPath verifies PUT /signing/config persists the flag.
 func TestSetSigningConfig_HappyPath(t *testing.T) {
-	svc := &fakeService{}
-	r, err := newRouter(svc)
-	if err != nil {
-		t.Fatal(err)
+	for _, noESign := range []bool{false, true} {
+		t.Run(strconv.FormatBool(noESign), func(t *testing.T) {
+			svc := &fakeService{}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := json.Marshal(map[string]any{"noESign": noESign})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(
+				http.MethodPut, "/api/v1/signing/config", bytes.NewReader(body),
+			))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("want 200, got %d", rec.Code)
+			}
+			if svc.noESignCalls != 1 || svc.noESignSet != noESign {
+				t.Fatalf(
+					"SetNoESign calls=%d value=%v, want 1/%v",
+					svc.noESignCalls, svc.noESignSet, noESign,
+				)
+			}
+		})
 	}
-	body, _ := json.Marshal(map[string]any{"noESign": true})
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec,
-		httptest.NewRequest(http.MethodPut, "/api/v1/signing/config",
-			bytes.NewReader(body)))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	if !svc.noESignSet {
-		t.Error("want SetNoESign called with true")
+}
+
+func TestSetSigningConfig_RequiresNoESign(t *testing.T) {
+	for _, body := range []string{`{}`, `{"noESign":null}`} {
+		t.Run(body, func(t *testing.T) {
+			svc := &fakeService{}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(
+				http.MethodPut, "/api/v1/signing/config",
+				bytes.NewBufferString(body),
+			))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("want 400, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			if svc.noESignCalls != 0 {
+				t.Fatalf("invalid request reached service %d times", svc.noESignCalls)
+			}
+		})
 	}
 }
 

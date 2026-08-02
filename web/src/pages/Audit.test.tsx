@@ -83,6 +83,7 @@ const sampleEntry: AuditEntry = {
   action: "block",
   account: "desk-alpha",
   accountTitle: "Desk Alpha",
+  group: "",
   detail: "blocked desk-alpha",
   source: "panel",
 };

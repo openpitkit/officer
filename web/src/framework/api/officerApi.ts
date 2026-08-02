@@ -18,6 +18,7 @@
 import { ApiError, type ApiClient } from "./createApiClient";
 import type {
   Account,
+  AccountBlockSource,
   AccountListFilters,
   AccountLimits,
   Adjustment,
@@ -202,6 +203,22 @@ function asSource(v: unknown): Source {
   }
 }
 
+/**
+ * Reads the tier an account's effective block came from. An unrecognized value
+ * reads as "none", so the panel never disables the per-account Unblock action
+ * on a guess.
+ */
+function asAccountBlockSource(v: unknown): AccountBlockSource {
+  switch (v) {
+    case "none":
+    case "account":
+    case "group":
+      return v;
+    default:
+      return "none";
+  }
+}
+
 function normalizeEngine(v: unknown): EngineHealth {
   const o = isObject(v) ? v : {};
   return {
@@ -265,6 +282,19 @@ function normalizeAccount(v: unknown): Account {
     },
     blocked: asBool(pick(o, "blocked", "Blocked")),
     blockReason: asString(pick(o, "blockReason", "BlockReason", "block_reason")),
+    blockSource: asAccountBlockSource(
+      pick(o, "blockSource", "BlockSource", "block_source"),
+    ),
+    accountBlocked: asBool(
+      pick(o, "accountBlocked", "AccountBlocked", "account_blocked"),
+    ),
+    accountBlockReason: asString(
+      pick(o, "accountBlockReason", "AccountBlockReason", "account_block_reason"),
+    ),
+    groupBlocked: asBool(pick(o, "groupBlocked", "GroupBlocked", "group_blocked")),
+    groupBlockReason: asString(
+      pick(o, "groupBlockReason", "GroupBlockReason", "group_block_reason"),
+    ),
     group: asString(pick(o, "group", "Group")),
     notes: asString(pick(o, "notes", "Notes")),
     pnl: asString(pick(o, "pnl", "Pnl")),
@@ -1040,6 +1070,7 @@ function normalizeAudit(v: unknown): AuditEntry {
     action: asString(pick(o, "action", "Action")),
     account: asString(pick(o, "account", "Account")),
     accountTitle: asString(pick(o, "accountTitle", "AccountTitle", "account_title")),
+    group: asString(pick(o, "group", "Group")),
     detail: asString(pick(o, "detail", "Detail")),
     source: asSource(pick(o, "source", "Source")),
   };
@@ -3438,6 +3469,8 @@ export interface AuditFilter extends PageRequest {
   account?: string;
   accountMatch?: TextMatchMode;
   asset?: string;
+  /** Exact account group code; selects a group's rows by identity. */
+  group?: string;
   actor?: string;
   actorMatch?: TextMatchMode;
   source?: string;
@@ -3515,6 +3548,7 @@ function auditListQuery(filter: AuditFilter = {}): string {
   appendListFilter(params, "id", filter.id);
   appendListFilter(params, "account", filter.account);
   appendListFilter(params, "asset", filter.asset);
+  appendListFilter(params, "group", filter.group);
   appendListFilter(params, "actor", filter.actor);
   appendListFilter(params, "actorMatch", filter.actorMatch, "contains");
   appendListFilter(params, "source", filter.source);

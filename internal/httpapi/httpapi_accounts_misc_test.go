@@ -239,6 +239,27 @@ func TestBackupExportRejectsUnknownSection(t *testing.T) {
 	}
 }
 
+func TestBackupExportRejectsUnknownNestedScopeField(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost, "/api/v1/backup/export",
+		bytes.NewBufferString(`{
+			"scope":{
+				"sections":["accounts_groups"],
+				"accounts":{"all":true,"ignored":true}
+			}
+		}`),
+	))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestBackupExportServiceErrorReturnsInternal(t *testing.T) {
 	r, err := newRouter(&fakeService{backupErr: fmt.Errorf("boom")})
 	if err != nil {
@@ -340,6 +361,65 @@ func TestBackupRestore(t *testing.T) {
 		!svc.restoreOptions.Scope.All {
 		t.Fatalf("restore call = archive %+v options %+v",
 			svc.restoreArchive.Manifest, svc.restoreOptions)
+	}
+}
+
+func TestBackupRestoreRejectsInvalidJSONFraming(t *testing.T) {
+	archive := backup.NewArchive(
+		time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC),
+		"test",
+		backup.RealmLabel{Code: "test"},
+		backup.Scope{All: true},
+		backup.Data{},
+	)
+	body, err := json.Marshal(map[string]any{
+		"archive": archive,
+		"scope":   backup.Scope{All: true},
+		"mode":    backup.RestoreModeOverwrite,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidUTF8 := bytes.Clone(body)
+	needle := []byte(`"source":"test"`)
+	index := bytes.Index(invalidUTF8, needle)
+	if index < 0 {
+		t.Fatalf("source field not found in %s", body)
+	}
+	invalidUTF8[index+len(`"source":"`)] = 0xff
+	invalidSurrogate := bytes.Replace(
+		body, needle, []byte(`"source":"\ud800"`), 1,
+	)
+	tests := []struct {
+		name string
+		body []byte
+	}{
+		{
+			"trailing value",
+			append(bytes.Clone(body), []byte(`{"ignored":true}`)...),
+		},
+		{"invalid UTF-8", invalidUTF8},
+		{"invalid UTF-16 surrogate", invalidSurrogate},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeService{}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(
+				http.MethodPost, "/api/v1/backup/restore", bytes.NewReader(tc.body),
+			))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("want 400, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			if svc.restoreOptions.Mode != "" {
+				t.Fatalf("RestoreBackup was called with options %+v",
+					svc.restoreOptions)
+			}
+		})
 	}
 }
 
@@ -497,6 +577,22 @@ func TestBackupRestoreFileValidation(t *testing.T) {
 			filename: "backup.json",
 			encoded:  base64.StdEncoding.EncodeToString([]byte("{")),
 			want:     "invalid backup archive JSON in backup.json",
+		},
+		{
+			name:     "invalid UTF-8 json file",
+			filename: "backup.json",
+			encoded: base64.StdEncoding.EncodeToString(
+				[]byte{'{', '"', 'x', '"', ':', '"', 0xff, '"', '}'},
+			),
+			want: "invalid backup archive JSON in backup.json",
+		},
+		{
+			name:     "invalid UTF-16 surrogate json file",
+			filename: "backup.json",
+			encoded: base64.StdEncoding.EncodeToString(
+				[]byte(`{"x":"\ud800"}`),
+			),
+			want: "invalid backup archive JSON in backup.json",
 		},
 		{
 			name:    "invalid json file without filename",

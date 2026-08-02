@@ -241,6 +241,118 @@ func TestEncodeDecodePositions(t *testing.T) {
 	}
 }
 
+// TestExportNeutralizesSpreadsheetFormulas covers CSV injection: a code, title,
+// note or block reason starting with a formula leader is executed by Excel,
+// LibreOffice and Sheets when the operator opens the export. The sink prefixes
+// an apostrophe, and the import strips it again, so the guard costs no
+// fidelity. Validation is not an alternative: these fields are free text and
+// may legitimately begin with "=".
+func TestExportNeutralizesSpreadsheetFormulas(t *testing.T) {
+	t.Parallel()
+
+	groups := []domain.AccountGroup{{
+		Code:        "=cmd|' /C calc'!A0",
+		Title:       "+SUM(A1)",
+		Notes:       "@import",
+		Blocked:     true,
+		BlockReason: "-2+3+cmd|' /C calc'!A0",
+	}}
+	body, err := businesscsv.EncodeGroups(groups, businesscsv.DelimiterComma)
+	if err != nil {
+		t.Fatalf("EncodeGroups: %v", err)
+	}
+
+	// Every dangerous field leaves the writer behind an apostrophe, so no cell
+	// in the exported file begins with a formula leader.
+	for _, line := range strings.Split(strings.TrimSpace(string(body)), "\n") {
+		for _, cell := range strings.Split(strings.TrimSuffix(line, "\r"), ",") {
+			bare := strings.TrimPrefix(strings.TrimSuffix(cell, `"`), `"`)
+			if bare == "" {
+				continue
+			}
+			if strings.ContainsRune("=+@\t\r", rune(bare[0])) {
+				t.Fatalf("cell %q left the export as a live formula", cell)
+			}
+		}
+	}
+	if !strings.Contains(string(body), `'=cmd`) {
+		t.Fatalf("escaped code missing from export:\n%s", body)
+	}
+
+	// Round trip: the import must return the original values, not the escaped
+	// ones, or the guard would silently corrupt a re-imported export.
+	rows, err := businesscsv.ParseImport(
+		businesscsv.EntityAccountGroups, body, businesscsv.DelimiterComma,
+	)
+	if err != nil {
+		t.Fatalf("ParseImport: %v", err)
+	}
+	if len(rows.Groups) != 1 {
+		t.Fatalf("want 1 group, got %d", len(rows.Groups))
+	}
+	got := rows.Groups[0]
+	if got.Code != groups[0].Code || got.Title != groups[0].Title ||
+		got.Notes != groups[0].Notes || got.BlockReason != groups[0].BlockReason {
+		t.Fatalf("round trip = %+v, want %+v", got, groups[0])
+	}
+}
+
+// TestExportFormulaEscapeStacksOnApostrophe pins the escape as a bijection: a
+// value that already starts with the apostrophe marker gains another one, so
+// the import removes exactly the apostrophe the export added.
+func TestExportFormulaEscapeStacksOnApostrophe(t *testing.T) {
+	t.Parallel()
+
+	groups := []domain.AccountGroup{{Code: "grp-1", Notes: "'=already quoted"}}
+	body, err := businesscsv.EncodeGroups(groups, businesscsv.DelimiterComma)
+	if err != nil {
+		t.Fatalf("EncodeGroups: %v", err)
+	}
+	if !strings.Contains(string(body), `''=already quoted`) {
+		t.Fatalf("apostrophe not stacked:\n%s", body)
+	}
+	rows, err := businesscsv.ParseImport(
+		businesscsv.EntityAccountGroups, body, businesscsv.DelimiterComma,
+	)
+	if err != nil {
+		t.Fatalf("ParseImport: %v", err)
+	}
+	if len(rows.Groups) != 1 || rows.Groups[0].Notes != "'=already quoted" {
+		t.Fatalf("round trip notes = %+v, want the original", rows.Groups)
+	}
+}
+
+// TestExportKeepsNegativeNumbersNumeric guards the one exemption: a value that
+// parses as a complete decimal is not a formula in any spreadsheet, and quoting
+// it would turn every negative balance and P&L in the export into text the
+// operator cannot sum.
+func TestExportKeepsNegativeNumbersNumeric(t *testing.T) {
+	t.Parallel()
+
+	balances := []domain.Balance{{
+		Account: "acc-1", Asset: "AAPL",
+		Available: "-100", Held: "0", Incoming: "0",
+		RealizedPnl: "-5.5", AverageEntryPrice: "150.25",
+	}}
+	body, err := businesscsv.EncodePositions(balances, businesscsv.DelimiterComma)
+	if err != nil {
+		t.Fatalf("EncodePositions: %v", err)
+	}
+	if strings.Contains(string(body), "'-100") || strings.Contains(string(body), "'-5.5") {
+		t.Fatalf("negative decimals must stay numeric in the export:\n%s", body)
+	}
+	rows, err := businesscsv.ParseImport(
+		businesscsv.EntityPositions, body, businesscsv.DelimiterComma,
+	)
+	if err != nil {
+		t.Fatalf("ParseImport: %v", err)
+	}
+	if len(rows.Positions) != 1 || rows.Positions[0].Available != "-100" ||
+		rows.Positions[0].RealizedPnl != "-5.5" {
+		t.Fatalf("positions = %+v, want the original negatives", rows.Positions)
+	}
+}
+
 func TestParsePositions_PreviousHeaderDefaultsHaltReason(t *testing.T) {
 	t.Parallel()
 	csv := "account_code,asset,available,held,incoming,realized_pnl,average_entry_price\n" +

@@ -18,7 +18,6 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"go.openpit.dev/officer/framework/domain"
@@ -41,8 +40,7 @@ func handleGenerateSigningKey(svc Service) http.HandlerFunc {
 func handleImportSigningKey(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req signingKeyImportRequestDTO
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		if req.Key == "" {
@@ -172,16 +170,21 @@ func handleGetSigningConfig(svc Service) http.HandlerFunc {
 // the new eSign-off state.
 func handleSetSigningConfig(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req signingConfigDTO
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		var req signingConfigUpdateDTO
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
-		if err := svc.SetNoESign(r.Context(), req.NoESign); err != nil {
+		if req.NoESign == nil {
+			httpx.WriteErrMsg(
+				w, http.StatusBadRequest, "validation", "noESign is required",
+			)
+			return
+		}
+		if err := svc.SetNoESign(r.Context(), *req.NoESign); err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, signingConfigDTO{NoESign: req.NoESign})
+		httpx.WriteJSON(w, http.StatusOK, signingConfigDTO{NoESign: *req.NoESign})
 	}
 }
 
@@ -200,8 +203,7 @@ func handleSetSigningConfig(svc Service) http.HandlerFunc {
 func handleSubmitOrderToken(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req submitOrderTokenRequestDTO
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		mode := req.Mode
@@ -245,8 +247,7 @@ func handleSubmitOrderToken(svc Service) http.HandlerFunc {
 func handleSubmitDropCopyOrder(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req submitDropCopyOrderRequestDTO
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		order, err := submitOrderFromDTO(req.orderFields())
@@ -281,6 +282,12 @@ func submitOrderFromDTO(req submitOrderFieldsDTO) (domain.Order, error) {
 		AmountValue: req.AmountValue,
 		Price:       req.Price,
 	}
+	// The backend seam validates the id too, for callers that never pass here.
+	// The surface repeats it so a malformed account is reported ahead of the
+	// secondary missingAccount parameter error.
+	if err := domain.ValidateAccountID(order.Account); err != nil {
+		return domain.Order{}, err
+	}
 	if req.ID == "" {
 		return order, nil
 	}
@@ -302,8 +309,7 @@ func handleConfirmExecution(svc Service) http.HandlerFunc {
 			return
 		}
 		var req confirmExecutionRequestDTO
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		if req.Token == "" {
@@ -334,8 +340,7 @@ func handleCancelOrder(svc Service) http.HandlerFunc {
 			return
 		}
 		var req cancelOrderRequestDTO
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		if req.Token == "" {

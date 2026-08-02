@@ -208,6 +208,27 @@ func TestMissingAccountParameterUnknownValue(t *testing.T) {
 	}
 }
 
+// TestOrderSubmitRejectsEmptyAccountBeforeMissingAccountPolicy proves malformed
+// identity wins over the secondary missing-account choice on both submit paths.
+func TestOrderSubmitRejectsEmptyAccountBeforeMissingAccountPolicy(t *testing.T) {
+	for _, route := range missingAccountRoutes() {
+		if route.name != "orders.submit" &&
+			route.name != "orders.drop-copy.submit" {
+			continue
+		}
+		t.Run(route.name, func(t *testing.T) {
+			route.body = strings.Replace(route.body, `"account":"acc-1"`, `"account":""`, 1)
+			rec := callMissingAccountRoute(
+				t, newMissingAccountService(), route, "?missingAccount=reject",
+			)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body)
+			}
+			assertValidationCode(t, rec, "account id is empty")
+		})
+	}
+}
+
 // TestMissingAccountParameterThreaded covers the happy path: the chosen policy
 // reaches the backend verbatim on every endpoint. Drop-copy takes only "create",
 // so it is exercised with that value alone.

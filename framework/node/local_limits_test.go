@@ -130,6 +130,36 @@ func TestLocalNode_PutRateLimitEngineFailureRevertsStore(t *testing.T) {
 	}
 }
 
+// TestLocalNode_FailedRateLimitKeepsExplicitlyCreatedAccount locks the retry
+// contract: missingAccount=create persists the identity even when the barrier
+// itself is reverted after an engine failure.
+func TestLocalNode_FailedRateLimitKeepsExplicitlyCreatedAccount(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.failConfigure = true
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	_, err := n.PutRateLimit(
+		ctx,
+		rateLimit(domain.ScopeAccount, "fresh", "", 100, time.Second),
+		domain.MissingAccountCreate,
+		testCaller,
+	)
+	if err == nil {
+		t.Fatal("PutRateLimit: want error on engine failure")
+	}
+
+	assertAutoCreatedAccount(t, st, "fresh", "put rate limit")
+	stored, listErr := st.ListRateLimits(ctx, "fresh")
+	if listErr != nil {
+		t.Fatalf("ListRateLimits: %v", listErr)
+	}
+	if len(stored) != 0 {
+		t.Fatalf("stored rate limits = %+v, want reverted barrier", stored)
+	}
+}
+
 func TestLocalNode_PutRateLimitConfiguresPolicyFromStore(t *testing.T) {
 	t.Parallel()
 	old := newFakeEngine()
@@ -781,6 +811,51 @@ func TestLocalNode_PolicyConfigurationBlocksPersistAndAudit(t *testing.T) {
 	if !strings.Contains(rows[0].Detail, "policy openpit.spot_funds") ||
 		!strings.Contains(rows[0].Detail, "USD/EUR quote unavailable") {
 		t.Fatalf("block audit detail = %q, want policy and engine details", rows[0].Detail)
+	}
+}
+
+// TestLocalNode_PolicyConfigurationBlockReasonIsRestorable pins the mirror seam
+// for a machine-composed cause. The engine-boundary scrub only strips control
+// characters, so a format-class rune such as U+200B survives into this write and
+// the restore path rejects it. Refusing the write would drop a real kill-switch
+// record, so the reason is normalized and the realm stays restorable - including
+// from Officer's own rollback archive.
+func TestLocalNode_PolicyConfigurationBlockReasonIsRestorable(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.configureBlocks = []domain.AccountBlock{{
+		Account: "acc-1",
+		Policy:  "openpit.spot_funds",
+		Code:    "missing_fx",
+		Reason:  "account P&L\u200bhalted",
+	}}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+
+	const account domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, testAccount(account), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if _, err := n.PutSpotFundsPnlBoundsLimit(ctx, domain.LimitSpotFundsPnlBounds{
+		Scope:      domain.ScopeGlobal,
+		LowerBound: "-100",
+	}, domain.MissingAccountCreate, testCaller); err != nil {
+		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
+	}
+
+	stored, ok, err := st.GetAccount(ctx, account)
+	if err != nil || !ok {
+		t.Fatalf("GetAccount: ok=%v err=%v", ok, err)
+	}
+	if !stored.Blocked {
+		t.Fatal("mirrored policy configuration block did not block the account")
+	}
+	wantReason := "account P&Lhalted [policy=openpit.spot_funds, code=missing_fx]"
+	if stored.BlockReason != wantReason {
+		t.Fatalf("block reason = %q, want %q", stored.BlockReason, wantReason)
+	}
+	if err := domain.ValidateBlockReason(stored.BlockReason); err != nil {
+		t.Fatalf("persisted block reason is not restorable: %v", err)
 	}
 }
 

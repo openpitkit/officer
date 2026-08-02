@@ -111,6 +111,100 @@ func TestSpotFundsAccountPnlFromList_NoOutcomeDoesNotWarn(t *testing.T) {
 	}
 }
 
+// testAdjustmentOutcome builds a binding account-adjustment outcome tagged with
+// asset and carrying no adjusted field; the mapping tests only need the tag.
+func testAdjustmentOutcome(t *testing.T, asset string) accountadjustment.Outcome {
+	t.Helper()
+	tag, err := param.NewAsset(asset)
+	if err != nil {
+		t.Fatalf("param.NewAsset(%q): %v", asset, err)
+	}
+	return accountadjustment.Outcome{
+		Entry: accountadjustment.AccountOutcomeEntry{Asset: tag},
+	}
+}
+
+// TestOutcomeAcceptedFromList_DuplicateAssetIsError proves several engine
+// outcomes for one asset surface as an error instead of the last one quietly
+// winning: Officer cannot merge engine numbers it was not given.
+func TestOutcomeAcceptedFromList_DuplicateAssetIsError(t *testing.T) {
+	t.Parallel()
+	_, _, err := outcomeAcceptedFromList(
+		[]accountadjustment.Outcome{
+			testAdjustmentOutcome(t, "USD"),
+			testAdjustmentOutcome(t, "USD"),
+		},
+		"USD",
+	)
+	if err == nil {
+		t.Fatal("want error for several outcomes on one asset, got nil")
+	}
+	if !strings.Contains(err.Error(), "several outcomes") {
+		t.Fatalf("error = %v, want several outcomes", err)
+	}
+}
+
+// TestOutcomeAcceptedFromList_OtherAssetsAreNotDuplicates keeps the duplicate
+// check scoped to the requested asset.
+func TestOutcomeAcceptedFromList_OtherAssetsAreNotDuplicates(t *testing.T) {
+	t.Parallel()
+	_, found, err := outcomeAcceptedFromList(
+		[]accountadjustment.Outcome{
+			testAdjustmentOutcome(t, "BTC"),
+			testAdjustmentOutcome(t, "USD"),
+		},
+		"USD",
+	)
+	if err != nil {
+		t.Fatalf("outcomeAcceptedFromList: %v", err)
+	}
+	if !found {
+		t.Fatal("the USD outcome must be found")
+	}
+}
+
+// TestOutcomeRejectedFrom_CarriesFailedAdjustmentIndex proves the batch reject
+// keeps the index of the adjustment the engine stopped on.
+func TestOutcomeRejectedFrom_CarriesFailedAdjustmentIndex(t *testing.T) {
+	t.Parallel()
+	rejected, err := outcomeRejectedFrom(reject.AccountAdjustmentBatchError{
+		Rejects: []reject.Reject{reject.New(
+			reject.CodeAccountAdjustmentBoundsExceeded,
+			"spot_funds",
+			"balance below lower bound",
+			"lower=0",
+			reject.ScopeAccount,
+		)},
+		FailedAdjustmentIndex: 2,
+	})
+	if err != nil {
+		t.Fatalf("outcomeRejectedFrom: %v", err)
+	}
+	if rejected.FailedAdjustmentIndex != 2 {
+		t.Fatalf("failed adjustment index = %d, want 2", rejected.FailedAdjustmentIndex)
+	}
+	if rejected.Code != rejectCodeName(reject.CodeAccountAdjustmentBoundsExceeded) ||
+		rejected.Scope != "account" ||
+		rejected.Policy != "spot_funds" ||
+		rejected.Reason != "balance below lower bound" ||
+		rejected.Details != "lower=0" {
+		t.Fatalf("rejected = %+v, want the engine reject transcribed", rejected)
+	}
+}
+
+// TestOutcomeRejectedFrom_NoRejectIsError proves a batch error that names no
+// cause is reported as an error instead of being answered with an
+// Officer-authored reject.
+func TestOutcomeRejectedFrom_NoRejectIsError(t *testing.T) {
+	t.Parallel()
+	rejected, err := outcomeRejectedFrom(
+		reject.AccountAdjustmentBatchError{FailedAdjustmentIndex: 1},
+	)
+	if err == nil {
+		t.Fatalf("want error for a batch error without rejects, got %+v", rejected)
+	}
+}
+
 // testEngineAccountID assigns a deterministic, distinct engine account id to a
 // test account code so the resolver maps it without hashing. Tests address
 // accounts by code; the connector would assign these ids collision-free.
@@ -208,6 +302,39 @@ func TestRateLimitReady_UnknownAccountInvalid(t *testing.T) {
 	}
 }
 
+// TestRateLimitReady_SecondBrokerBarrierIsError checks a second broker barrier
+// is refused instead of silently replacing the first: the builder takes one
+// broker barrier, and dropping the other would lose a configured limit.
+func TestRateLimitReady_SecondBrokerBarrierIsError(t *testing.T) {
+	t.Parallel()
+	_, err := rateLimitReady([]domain.LimitRate{
+		rateLimit(domain.ScopeBroker, "", "", 1000, time.Minute),
+		rateLimit(domain.ScopeBroker, "", "", 10, time.Minute),
+	}, testResolver())
+	if err == nil {
+		t.Fatal("want error for a second broker barrier, got nil")
+	}
+	if !strings.Contains(err.Error(), "more than one broker barrier") {
+		t.Fatalf("error = %v, want more than one broker barrier", err)
+	}
+}
+
+// TestOrderSizeReady_SecondBrokerBarrierIsError is the order-size counterpart of
+// TestRateLimitReady_SecondBrokerBarrierIsError.
+func TestOrderSizeReady_SecondBrokerBarrierIsError(t *testing.T) {
+	t.Parallel()
+	_, err := orderSizeReady([]domain.LimitOrderSize{
+		orderSize(domain.ScopeBroker, "", "", "10", ""),
+		orderSize(domain.ScopeBroker, "", "", "1", ""),
+	}, testResolver())
+	if err == nil {
+		t.Fatal("want error for a second broker barrier, got nil")
+	}
+	if !strings.Contains(err.Error(), "more than one broker barrier") {
+		t.Fatalf("error = %v, want more than one broker barrier", err)
+	}
+}
+
 func TestOrderSizeValue_ParsesBoth(t *testing.T) {
 	t.Parallel()
 	limit, err := orderSizeValue(orderSize(domain.ScopeBroker, "", "", "10", "1000"))
@@ -268,6 +395,57 @@ func TestOrderSizeAxes_EmptyAxesNonNil(t *testing.T) {
 	}
 	if len(assets) != 0 || len(accountAssets) != 0 {
 		t.Fatalf("want empty asset/account-asset axes")
+	}
+}
+
+// TestRateLimitAxes_SecondBrokerBarrierIsError checks the runtime axes refuse a
+// second broker barrier instead of quietly configuring the last one.
+func TestRateLimitAxes_SecondBrokerBarrierIsError(t *testing.T) {
+	t.Parallel()
+	_, _, _, _, err := rateLimitAxes([]domain.LimitRate{
+		rateLimit(domain.ScopeBroker, "", "", 1000, time.Minute),
+		rateLimit(domain.ScopeBroker, "", "", 10, time.Minute),
+	}, testResolver())
+	if err == nil {
+		t.Fatal("want error for a second broker barrier, got nil")
+	}
+	if !strings.Contains(err.Error(), "more than one broker barrier") {
+		t.Fatalf("error = %v, want more than one broker barrier", err)
+	}
+}
+
+// TestOrderSizeAxes_SecondBrokerBarrierIsError is the order-size counterpart of
+// TestRateLimitAxes_SecondBrokerBarrierIsError.
+func TestOrderSizeAxes_SecondBrokerBarrierIsError(t *testing.T) {
+	t.Parallel()
+	_, _, _, err := orderSizeAxes([]domain.LimitOrderSize{
+		orderSize(domain.ScopeBroker, "", "", "10", ""),
+		orderSize(domain.ScopeBroker, "", "", "1", ""),
+	}, testResolver())
+	if err == nil {
+		t.Fatal("want error for a second broker barrier, got nil")
+	}
+	if !strings.Contains(err.Error(), "more than one broker barrier") {
+		t.Fatalf("error = %v, want more than one broker barrier", err)
+	}
+}
+
+// TestSpotFundsPnlBoundsAxes_SecondGlobalBarrierIsError checks a second global
+// P&L bound is refused instead of overwriting the first one in the loop.
+func TestSpotFundsPnlBoundsAxes_SecondGlobalBarrierIsError(t *testing.T) {
+	t.Parallel()
+	_, _, _, err := spotFundsPnlBoundsAxes(
+		[]domain.LimitSpotFundsPnlBounds{
+			{Scope: domain.ScopeGlobal, LowerBound: "-1000"},
+			{Scope: domain.ScopeGlobal, LowerBound: "-10"},
+		},
+		testResolver(),
+	)
+	if err == nil {
+		t.Fatal("want error for a second global barrier, got nil")
+	}
+	if !strings.Contains(err.Error(), "more than one global barrier") {
+		t.Fatalf("error = %v, want more than one global barrier", err)
 	}
 }
 
@@ -1177,10 +1355,11 @@ func TestEngine_CheckOrderRejectStructured(t *testing.T) {
 	}
 }
 
-// TestEngine_CheckOrderWouldBlock runs a dry-run for an account the engine has
-// kill-switched and checks the account-scoped reject surfaces a would-be block
-// stamped with the probe's account.
-func TestEngine_CheckOrderWouldBlock(t *testing.T) {
+// TestEngine_CheckOrderStandingBlockIsRejectOnly runs a dry-run for an account
+// the engine has kill-switched. The engine latches nothing new, so the report
+// carries no would-be block: the standing block reaches the caller as the
+// account-scope reject the engine emitted, and WouldBlock stays nil.
+func TestEngine_CheckOrderStandingBlockIsRejectOnly(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
 		Accounts: []domain.Account{blockedAccount("acc-1", "risk")},
@@ -1202,21 +1381,24 @@ func TestEngine_CheckOrderWouldBlock(t *testing.T) {
 	if out.Passed {
 		t.Fatalf("want reject for blocked account")
 	}
-	if out.WouldBlock == nil {
-		t.Fatalf("blocked account must surface a would-be block")
+	if len(out.Rejects) != 1 {
+		t.Fatalf("rejects = %+v, want the standing block as one reject", out.Rejects)
 	}
-	if out.WouldBlock.Account != "acc-1" {
-		t.Fatalf("would-block must be stamped with the probe account, got %q", out.WouldBlock.Account)
+	if out.Rejects[0].Scope != "account" || out.Rejects[0].Reason != "risk" {
+		t.Fatalf("reject = %+v, want the account-scope standing block", out.Rejects[0])
 	}
-	if out.WouldBlock.Reason != "risk" {
-		t.Fatalf("would-block reason = %q, want risk", out.WouldBlock.Reason)
+	if out.WouldBlock != nil {
+		t.Fatalf("no block was latched, want nil would-block, got %+v", out.WouldBlock)
 	}
 }
 
-func TestEngine_CheckOrderDropsGarbledAccountBlockReason(t *testing.T) {
+// TestEngine_CheckOrderKeepsShortRejectText proves a short engine reason is
+// transcribed instead of being classified as garbage: the operator sees the
+// engine's own wording.
+func TestEngine_CheckOrderKeepsShortRejectText(t *testing.T) {
 	t.Parallel()
 	snap := Snapshot{
-		Accounts: []domain.Account{blockedAccount("acc-1", "0}")},
+		Accounts: []domain.Account{blockedAccount("acc-1", "-5%")},
 		Balances: []domain.Balance{
 			fundedBalance("acc-1", "USD", "1000000"),
 			fundedBalance("acc-1", "AAPL", "1000000"),
@@ -1238,14 +1420,35 @@ func TestEngine_CheckOrderDropsGarbledAccountBlockReason(t *testing.T) {
 	if len(out.Rejects) != 1 {
 		t.Fatalf("rejects len = %d, want 1", len(out.Rejects))
 	}
-	if out.Rejects[0].Reason != "" || out.Rejects[0].Details != "" {
-		t.Fatalf("garbled reject text must be empty, got %+v", out.Rejects[0])
+	if out.Rejects[0].Reason != "-5%" {
+		t.Fatalf("reject reason = %q, want the engine text -5%%", out.Rejects[0].Reason)
 	}
-	if out.WouldBlock == nil {
-		t.Fatalf("blocked account must surface a would-be block")
+}
+
+// TestAccountBlockFrom_OnlyTranscribesLatchedBlock pins the dry-run block
+// mapper: a latched engine block is transcribed and stamped with the probe
+// account, and no block at all maps to nil rather than to a manufactured one.
+func TestAccountBlockFrom_OnlyTranscribesLatchedBlock(t *testing.T) {
+	t.Parallel()
+	block := reject.NewAccountBlock(
+		reject.CodePnlKillSwitchTriggered,
+		"spot_funds",
+		"P&L bound breached",
+		"lower=-100",
+	)
+	got := accountBlockFrom(&block, "acc-1")
+	if got == nil {
+		t.Fatal("latched engine block must be transcribed")
 	}
-	if out.WouldBlock.Reason != "" || out.WouldBlock.Details != "" {
-		t.Fatalf("garbled would-block text must be empty, got %+v", out.WouldBlock)
+	if got.Account != "acc-1" ||
+		got.Policy != block.Policy ||
+		got.Code != rejectCodeName(block.Code) ||
+		got.Reason != block.Reason ||
+		got.Details != block.Details {
+		t.Fatalf("mapped block = %+v, want the engine block stamped with the account", got)
+	}
+	if got := accountBlockFrom(nil, "acc-1"); got != nil {
+		t.Fatalf("no latched block must map to nil, got %+v", got)
 	}
 }
 
@@ -1887,10 +2090,15 @@ func TestSanitizeText_CleansInvalidUTF8AndControls(t *testing.T) {
 	if got := sanitizeText("404"); got != "404" {
 		t.Fatalf("clean numeric text must pass through, got %q", got)
 	}
-	for _, input := range []string{"\x80\xff\x01", "0}", "}"} {
-		if got := sanitizeText(input); got != "" {
-			t.Fatalf("garbage text %q must sanitize to empty, got %q", input, got)
+	// Short engine text is still the engine's answer: only encoding is judged
+	// here, never plausibility.
+	for _, input := range []string{"0.5", ">10", "<0", "-5%", "1/2", "0}", "}"} {
+		if got := sanitizeText(input); got != input {
+			t.Fatalf("engine text %q must survive, got %q", input, got)
 		}
+	}
+	if got := sanitizeText("\x80\xff\x01"); got != "" {
+		t.Fatalf("text that is entirely invalid must sanitize to empty, got %q", got)
 	}
 }
 
@@ -2009,5 +2217,53 @@ func TestExecutionReportPersistenceFrom_FillCarriesCommission(t *testing.T) {
 		fill.Payload.Commission.Currency != "USDT" {
 		t.Fatalf("fill event commission = %+v, want -0.30/USDT",
 			fill.Payload.Commission)
+	}
+}
+
+// TestExecutionReportPersistenceFrom_KeepsEveryBlockOffTheEventPayload proves
+// the mapper neither truncates the engine's block list nor stamps reject fields
+// the engine never produced for the fill: every block travels whole in Blocks
+// while the event payload stays free of reject text and scope.
+func TestExecutionReportPersistenceFrom_KeepsEveryBlockOffTheEventPayload(t *testing.T) {
+	t.Parallel()
+	in := domain.ExecutionReportInput{
+		Account:        domain.AccountID(testAccount),
+		Order:          testOrderXID(0x14),
+		BaseAsset:      testBase,
+		QuoteAsset:     testQuote,
+		Side:           domain.OrderSideBuy,
+		FillQuantity:   "1",
+		FillPrice:      "100",
+		LeavesQuantity: "0",
+		OrderStatus:    domain.OrderStatusFilled,
+	}
+	blocks := []domain.ExecutionAccountBlock{
+		{
+			Account: domain.AccountID(testAccount),
+			Policy:  "spot_funds",
+			Code:    "pnl_kill_switch_triggered",
+			Reason:  "first block",
+		},
+		{
+			Account: domain.AccountID(testAccount),
+			Policy:  "order_validation",
+			Code:    "account_blocked",
+			Reason:  "second block",
+		},
+	}
+	persistence := executionReportPersistenceFrom(in, blocks, nil, "", "")
+
+	if len(persistence.Blocks) != 2 {
+		t.Fatalf("persistence.Blocks = %+v, want both engine blocks", persistence.Blocks)
+	}
+	if len(persistence.Events) == 0 {
+		t.Fatal("persistence.Events is empty, want the fill event")
+	}
+	for _, event := range persistence.Events {
+		payload := event.Payload
+		if payload.RejectCode != "" || payload.RejectScope != "" ||
+			payload.RejectReason != "" || payload.RejectDetails != "" {
+			t.Fatalf("event %q payload carries reject fields: %+v", event.Type, payload)
+		}
 	}
 }

@@ -1191,6 +1191,11 @@ export function CreateAccountDialog({
 // Create group dialog
 // ---------------------------------------------------------------------------
 
+// The API spends this code on addressing the realm default group in a path
+// position (PUT /groups/-/default/currency), so the backend refuses it as a
+// group id. Rejecting it here explains why instead of showing a bare 400.
+const RESERVED_GROUP_CODE = "-";
+
 function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
   const { t } = useTranslation("accounts");
   const { createGroup } = useOfficerApi();
@@ -1205,6 +1210,7 @@ function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
 
   const codeTrimmed = code.trim();
   const titleTrimmed = title.trim();
+  const codeReserved = codeTrimmed === RESERVED_GROUP_CODE;
 
   const reset = () => {
     setCode("");
@@ -1216,7 +1222,7 @@ function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
   };
 
   const submit = async () => {
-    if (codeTrimmed.length === 0) return;
+    if (codeTrimmed.length === 0 || codeReserved) return;
     setBusy(true);
     setError(null);
     try {
@@ -1267,6 +1273,11 @@ function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
                 }
               }}
             />
+            {codeReserved && (
+              <p className="text-[0.6875rem] text-[var(--danger)]">
+                {t("reservedGroupCode")}
+              </p>
+            )}
           </div>
           <div className="space-y-2">
             <Label htmlFor="group-title">{t("createGroup.titleLabel")}</Label>
@@ -1328,7 +1339,7 @@ function CreateGroupDialog({ onCreated }: { onCreated: () => void }) {
           <Button
             size="sm"
             onClick={() => void submit()}
-            disabled={busy || codeTrimmed.length === 0}
+            disabled={busy || codeTrimmed.length === 0 || codeReserved}
           >
             {t("createGroup.submit")}
           </Button>
@@ -1472,6 +1483,16 @@ function UnblockAccountConfirm({
             {t("unblockAccount.descriptionPrefix")}{" "}
             <span className="nums text-accent">{account?.code}</span>{" "}
             {t("unblockAccount.descriptionSuffix")}
+            {/* The action stays enabled while the account carries its own
+                block, but lifting it leaves the group block in force, so the
+                confirmation must not promise that orders flow again. */}
+            {account?.groupBlocked && (
+              <span className="mt-2 block text-[var(--warn)]">
+                {t("unblockAccount.groupStillBlocked", {
+                  group: account.group,
+                })}
+              </span>
+            )}
           </AlertDialogDescription>
         </AlertDialogHeader>
         {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
@@ -2206,18 +2227,26 @@ function AssignGroupDialog({
 
   const submit = async () => {
     if (!account) return;
+    const trimmed = group.trim();
+    if (trimmed === RESERVED_GROUP_CODE) {
+      setError(t("reservedGroupCode"));
+      return;
+    }
     setBusy(true);
     setError(null);
-    const trimmed = group.trim();
     try {
       // Assigning to a group the engine doesn't know yet creates it on the fly,
       // so the operator never has to pre-register a group before using it.
       if (trimmed.length > 0 && !groupSuggestions.includes(trimmed)) {
         try {
           await createGroup(trimmed, "", "");
-        } catch {
-          // The group may already exist outside the loaded suggestions; the
-          // assignment below surfaces any genuine error.
+        } catch (err) {
+          // The group may already exist outside the loaded suggestions, which
+          // the assignment below handles. Every other failure is real and must
+          // reach the operator instead of being swallowed here.
+          if (!(err instanceof ApiError) || err.code !== "conflict") {
+            throw err;
+          }
         }
       }
       const updated = await setAccountGroup(account.code, trimmed, "reject");
@@ -2573,13 +2602,22 @@ function blockedDetailsReason(target: BlockedDetailsTarget): string {
     : target.group.blockReason;
 }
 
-function groupAuditMatches(entry: AuditEntry, groupCode: string): boolean {
-  const needle = groupCode.toLowerCase();
-  return (
-    entry.account.toLowerCase() === needle ||
-    entry.accountTitle.toLowerCase() === needle ||
-    entry.detail.toLowerCase().includes(needle)
-  );
+// The unblock addresses the target's own tier only. An account blocked solely
+// through its group holds no block of its own, so there is nothing here to
+// lift and the operator must unblock the group instead.
+function unblockableTarget(target: BlockedDetailsTarget): boolean {
+  return target.kind === "group" || target.account.accountBlocked;
+}
+
+// A group-sourced block is recorded in the group's rows, so a group target and
+// an account blocked through its group both address the audit by the group
+// handle; an account filter would select rows this block never wrote.
+function blockedDetailsAuditGroup(
+  target: BlockedDetailsTarget | null,
+): string | null {
+  if (target === null) return null;
+  if (target.kind === "group") return target.group.code;
+  return target.account.blockSource === "group" ? target.account.group : null;
 }
 
 function BlockedDetailsDialog({
@@ -2614,29 +2652,41 @@ function BlockedDetailsDialog({
       try {
         let next: AuditEntry[] = [];
         if (target.kind === "account") {
-          next = await fetchAudit({
-            account: code,
-            actions: ["block"],
-            limit: 1,
-          });
-          if (next.length === 0) {
-            next = await fetchAudit({ account: code, limit: 3 });
+          const { account } = target;
+          if (account.blockSource === "group") {
+            // The block was never written on this account, so its own rows
+            // cannot carry it; the group's rows are its only true record.
+            next = await fetchAudit({
+              group: account.group,
+              actions: ["block_group"],
+              limit: 3,
+            });
+          } else {
+            next = await fetchAudit({
+              account: code,
+              actions: ["block"],
+              limit: 1,
+            });
+            if (next.length === 0) {
+              next = await fetchAudit({ account: code, limit: 3 });
+            }
           }
         } else {
-          const blockEntries = await fetchAudit({
+          // A group's rows are selected by the structured group handle. The
+          // free-form detail text is not a handle: one group code can appear
+          // inside another's detail, so matching it can show a different
+          // group's block as this group's.
+          next = await fetchAudit({
+            group: code,
             actions: ["block_group"],
-            limit: 20,
+            limit: 3,
           });
-          next = blockEntries
-            .filter((entry) => groupAuditMatches(entry, code))
-            .slice(0, 3);
           if (next.length === 0) {
-            next = blockEntries.slice(0, 3);
+            next = await fetchAudit({ group: code, limit: 3 });
           }
         }
-        if (next.length === 0) {
-          next = await fetchAudit(3);
-        }
+        // No realm-wide fallback: rows that belong to another target are not
+        // this block's record, and presenting them as one misattributes it.
         if (!cancelled) {
           setEntries(next.slice(0, 3));
         }
@@ -2667,10 +2717,13 @@ function BlockedDetailsDialog({
     onOpenChange(next);
   };
 
+  const targetAccount = target?.kind === "account" ? target.account : null;
+  const auditGroup = blockedDetailsAuditGroup(target);
+  const auditAccount = target === null ? "" : blockedDetailsCode(target);
   const auditPath =
-    target?.kind === "account"
-      ? `/audit?account=${encodeURIComponent(blockedDetailsCode(target))}&actions=block`
-      : "/audit?actions=block_group";
+    auditGroup !== null
+      ? `/audit?group=${encodeURIComponent(auditGroup)}&actions=block_group`
+      : `/audit?account=${encodeURIComponent(auditAccount)}&actions=block`;
 
   return (
     <Dialog open={open} onOpenChange={changeOpen}>
@@ -2690,6 +2743,32 @@ function BlockedDetailsDialog({
         </DialogHeader>
 
         <div className="space-y-4">
+          {/* "none" means the backend named no tier - against a build that
+              predates blockSource every value degrades to it - so the section
+              is dropped rather than claiming a tier it does not know. */}
+          {targetAccount !== null && targetAccount.blockSource !== "none" && (
+            <section className="space-y-2">
+              <p className="text-[0.6875rem] font-bold uppercase tracking-[0.07em] text-muted">
+                {t("blockDetails.source")}
+              </p>
+              <p className="text-xs text-text">
+                {targetAccount.blockSource === "group"
+                  ? t("blockDetails.sourceGroup", {
+                      group: targetAccount.group,
+                    })
+                  : t("blockDetails.sourceAccount")}
+              </p>
+              {targetAccount.blockSource === "account" &&
+                targetAccount.groupBlocked && (
+                  <p className="text-xs text-muted-lt">
+                    {t("blockDetails.alsoGroupBlocked", {
+                      group: targetAccount.group,
+                    })}
+                  </p>
+                )}
+            </section>
+          )}
+
           <section className="space-y-2">
             <p className="text-[0.6875rem] font-bold uppercase tracking-[0.07em] text-muted">
               {t("blockDetails.reason")}
@@ -2747,6 +2826,16 @@ function BlockedDetailsDialog({
           </section>
         </div>
 
+        {/* No unblock is offered for a block this account does not hold, so
+            the page has to say where the block actually lives. */}
+        {targetAccount !== null && targetAccount.blockSource === "group" && (
+          <p className="text-xs text-[var(--warn)]">
+            {t("blockDetails.unblockGroupBlocked", {
+              group: targetAccount.group,
+            })}
+          </p>
+        )}
+
         <DialogFooter>
           <Button
             variant="outline"
@@ -2765,7 +2854,7 @@ function BlockedDetailsDialog({
           >
             {t("blockDetails.openAudit")}
           </Button>
-          {target !== null && (
+          {target !== null && unblockableTarget(target) && (
             <Button
               size="sm"
               onClick={() => {
@@ -3567,34 +3656,40 @@ function AccountsTable({
                   className={STATUS_COLUMN_CLASS}
                   title={account.blockReason || undefined}
                 >
-                  {account.blocked ? (
-                    <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-1">
+                    {/* The badge reports the effective state - what the engine
+                        does with the account's orders right now. */}
+                    {account.blocked ? (
                       <Badge variant="danger" className="shrink-0">
                         <StatusDot tone="danger" />
                         {t("accounts.status.blocked")}
                       </Badge>
-                      <div className="accounts-status-action-area">
+                    ) : (
+                      <Badge variant="ok" className="shrink-0">
+                        <StatusDot tone="ok" />
+                        {t("accounts.status.active")}
+                      </Badge>
+                    )}
+                    <div className="accounts-status-action-area">
+                      {account.blocked && (
                         <ActionButton
                           icon="view"
                           size={28}
                           onClick={() => onShowBlockDetails(account)}
                           title={t("accounts.actions.viewBlockDetails")}
                         />
+                      )}
+                      {/* The tiers are independent, so the action follows
+                          the account's own block: an account held down only
+                          by its group still needs a Block of its own. */}
+                      {account.accountBlocked ? (
                         <ActionButton
                           icon="check"
                           size={28}
                           onClick={() => onUnblock(account)}
                           title={t("accounts.actions.unblock")}
                         />
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-1">
-                      <Badge variant="ok" className="shrink-0">
-                        <StatusDot tone="ok" />
-                        {t("accounts.status.active")}
-                      </Badge>
-                      <div className="accounts-status-action-area">
+                      ) : (
                         <ActionButton
                           icon="block"
                           size={28}
@@ -3602,9 +3697,9 @@ function AccountsTable({
                           title={t("accounts.actions.block")}
                           danger
                         />
-                      </div>
+                      )}
                     </div>
-                  )}
+                  </div>
                 </TableCell>
 
                 <TableCell
@@ -4724,6 +4819,10 @@ export function Accounts() {
           setBlockGroupTarget(null);
           setLocalGroups(null);
           reloadGroups();
+          // A group block changes the effective block of every member account,
+          // so the accounts tab must not keep showing them as tradable.
+          setLocalAccounts(null);
+          reloadAccounts();
         }}
       />
       <UnblockGroupConfirm
@@ -4744,6 +4843,8 @@ export function Accounts() {
           }
           setLocalGroups(null);
           reloadGroups();
+          setLocalAccounts(null);
+          reloadAccounts();
         }}
       />
       <DeleteGroupConfirm
@@ -4764,6 +4865,8 @@ export function Accounts() {
           }
           setLocalGroups(null);
           reloadGroups();
+          setLocalAccounts(null);
+          reloadAccounts();
         }}
       />
     </Page>

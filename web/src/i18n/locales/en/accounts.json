@@ -304,6 +304,7 @@
     "title": "Unblock account?",
     "descriptionPrefix": "Account",
     "descriptionSuffix": "will accept new orders again. This is recorded in the audit log.",
+    "groupStillBlocked": "Group {{group}} is blocked. This account will stay blocked until the group is unblocked.",
     "cancel": "Cancel",
     "submit": "Unblock"
   },
@@ -318,7 +319,7 @@
   "unblockGroup": {
     "title": "Unblock group?",
     "descriptionPrefix": "Group",
-    "descriptionSuffix": "accounts will accept new orders again. This is recorded in the audit log.",
+    "descriptionSuffix": "accounts will accept new orders again. This is recorded in the audit log. Accounts blocked individually stay blocked.",
     "cancel": "Cancel",
     "submit": "Unblock"
   },
@@ -326,6 +327,11 @@
     "accountTitle": "Blocked account",
     "groupTitle": "Blocked group",
     "description": "Full block reason and the nearest audit record for this block.",
+    "source": "Block source",
+    "sourceAccount": "Blocked on the account itself.",
+    "sourceGroup": "Blocked through group {{group}}, not on the account itself.",
+    "alsoGroupBlocked": "Group {{group}} is blocked as well. Unblocking the account leaves the group block in force.",
+    "unblockGroupBlocked": "The block comes from group {{group}}. Unblock the group to let this account trade.",
     "reason": "Reason",
     "noReason": "No reason recorded.",
     "audit": "Audit",
@@ -400,5 +406,6 @@
     "cancel": "Cancel",
     "assign": "Assign",
     "clear": "Clear"
-  }
+  },
+  "reservedGroupCode": "The code “-” is reserved for addressing the default group. Choose a different code."
 }

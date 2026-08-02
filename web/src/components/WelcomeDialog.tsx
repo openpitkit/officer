@@ -493,7 +493,7 @@ export function WelcomeDialog({ onOpenChange, open }: WelcomeDialogProps) {
     let applied = 0;
     try {
       for (const limit of DEMO_LIMITS) {
-        await putLimit(limit, "reject");
+        await putLimit(limit, "create");
         applied += 1;
       }
       return applied;

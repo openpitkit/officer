@@ -18,6 +18,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -26,6 +27,160 @@ import (
 
 	"go.openpit.dev/officer/framework/domain"
 )
+
+func TestDecodeBodyRequiresOneNonNullValue(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"empty", ""},
+		{"null", "null"},
+		{"trailing value", `{"enabled":true}{"ignored":true}`},
+		{"trailing garbage", `{"enabled":true}garbage`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(
+				http.MethodPut, "/", bytes.NewBufferString(tc.body),
+			)
+			var dst struct {
+				Enabled bool `json:"enabled"`
+			}
+			if DecodeBody(rec, req, &dst) {
+				t.Fatal("DecodeBody accepted an invalid mutation body")
+			}
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+			}
+		})
+	}
+}
+
+func TestDecodeBodyRejectsUnknownField(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPut, "/",
+		bytes.NewBufferString(`{"enabled":true,"ignored":true}`),
+	)
+	var dst struct {
+		Enabled bool `json:"enabled"`
+	}
+	if DecodeBody(rec, req, &dst) {
+		t.Fatal("DecodeBody accepted an unknown field")
+	}
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestDecodeBodyRejectsInvalidUnicode(t *testing.T) {
+	t.Parallel()
+
+	invalidUTF8 := append([]byte(`{"value":"`), 0xff)
+	invalidUTF8 = append(invalidUTF8, []byte(`"}`)...)
+	tests := []struct {
+		name string
+		body []byte
+	}{
+		{"invalid UTF-8", invalidUTF8},
+		{"lone high surrogate", []byte(`{"value":"\ud800"}`)},
+		{"lone low surrogate", []byte(`{"value":"\udc00"}`)},
+		{"mismatched surrogate pair", []byte(`{"value":"\ud800\u0041"}`)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(
+				http.MethodPut, "/", bytes.NewReader(tc.body),
+			)
+			var dst struct {
+				Value string `json:"value"`
+			}
+			if DecodeBody(rec, req, &dst) {
+				t.Fatal("DecodeBody accepted invalid Unicode")
+			}
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+			}
+		})
+	}
+}
+
+func TestDecodeBodyAcceptsValidUnicodeEscapes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"surrogate pair", `{"value":"\ud83d\ude00"}`, "😀"},
+		{"uppercase surrogate pair", `{"value":"\uD83D\uDE00"}`, "😀"},
+		{"replacement character", `{"value":"\ufffd"}`, "\ufffd"},
+		{"escaped backslash", `{"value":"\\ud800"}`, `\ud800`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(
+				http.MethodPut, "/", bytes.NewBufferString(tc.body),
+			)
+			var dst struct {
+				Value string `json:"value"`
+			}
+			if !DecodeBody(rec, req, &dst) {
+				t.Fatalf("valid Unicode rejected: %s", rec.Body.String())
+			}
+			if dst.Value != tc.want {
+				t.Fatalf("value = %q, want %q", dst.Value, tc.want)
+			}
+		})
+	}
+}
+
+func TestDecodeBodyAllowUnknownFields(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPost, "/",
+		bytes.NewBufferString(`{"enabled":true,"future":{"value":1}}`),
+	)
+	var dst struct {
+		Enabled bool `json:"enabled"`
+	}
+	if !DecodeBodyAllowUnknownFields(rec, req, &dst) {
+		t.Fatalf("unknown field rejected: %s", rec.Body.String())
+	}
+	if !dst.Enabled {
+		t.Fatal("declared field was not decoded")
+	}
+}
+
+func TestDecodeBodyAllowUnknownFieldsRejectsInvalidUnicode(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPost, "/",
+		bytes.NewBufferString(`{"enabled":true,"future":"\ud800"}`),
+	)
+	var dst struct {
+		Enabled bool `json:"enabled"`
+	}
+	if DecodeBodyAllowUnknownFields(rec, req, &dst) {
+		t.Fatal("unknown field with invalid Unicode was accepted")
+	}
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
 
 // TestWriteErrAccountMissing covers the account_missing envelope: a 404 with its
 // own code and the offending account code as a structured field, so a client

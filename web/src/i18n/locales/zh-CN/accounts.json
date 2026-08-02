@@ -304,6 +304,7 @@
     "title": "解封账户？",
     "descriptionPrefix": "账户",
     "descriptionSuffix": "将重新接受新订单。此操作将记录至审计日志。",
+    "groupStillBlocked": "分组 {{group}} 处于封锁状态。在该分组解封之前，此账户仍将保持封锁。",
     "cancel": "取消",
     "submit": "解封"
   },
@@ -318,7 +319,7 @@
   "unblockGroup": {
     "title": "解封分组？",
     "descriptionPrefix": "分组",
-    "descriptionSuffix": "下的账户将重新接受新订单。此操作将记录至审计日志。",
+    "descriptionSuffix": "下的账户将重新接受新订单。此操作将记录至审计日志。单独封锁的账户仍将保持封锁。",
     "cancel": "取消",
     "submit": "解封"
   },
@@ -326,6 +327,11 @@
     "accountTitle": "已封锁账户",
     "groupTitle": "已封锁分组",
     "description": "完整封锁原因以及最接近此次封锁的审计记录。",
+    "source": "封锁来源",
+    "sourceAccount": "封锁设置在账户本身。",
+    "sourceGroup": "封锁来自分组 {{group}}，账户本身未被封锁。",
+    "alsoGroupBlocked": "分组 {{group}} 同样处于封锁状态。解封账户不会解除分组的封锁。",
+    "unblockGroupBlocked": "封锁来自分组 {{group}}。请解封该分组，此账户方可交易。",
     "reason": "原因",
     "noReason": "未记录原因。",
     "audit": "审计",
@@ -400,5 +406,6 @@
     "cancel": "取消",
     "assign": "分配",
     "clear": "清除"
-  }
+  },
+  "reservedGroupCode": "代码“-”已保留用于寻址默认分组。请改用其他代码。"
 }

@@ -307,6 +307,7 @@ func (n *localNode) setGroupCurrency(
 	}
 	if err := n.audit(context.WithoutCancel(ctx), caller, store.AuditEntry{
 		Action: domain.AuditActionSetGroupCurrency,
+		Group:  code,
 		Detail: currencyDetail("set group currency", label, prevCurrency, currency),
 	}); err != nil {
 		return n.fatalPostEngineAuditByCode(

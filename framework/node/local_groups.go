@@ -110,6 +110,7 @@ func (n *localNode) CreateGroup(
 	}
 	if err := n.audit(context.WithoutCancel(ctx), caller, store.AuditEntry{
 		Action: domain.AuditActionCreateGroup,
+		Group:  created.Code,
 		Detail: fmt.Sprintf("create group %s", group.Code),
 	}); err != nil {
 		return domain.AccountGroup{}, n.fatalPostEngineAuditByCode(
@@ -187,6 +188,7 @@ func (n *localNode) SetGroupNotes(
 	}
 	if err := n.audit(context.WithoutCancel(ctx), caller, store.AuditEntry{
 		Action: domain.AuditActionSetGroupNotes,
+		Group:  code,
 		Detail: fmt.Sprintf("set notes group %s", code),
 	}); err != nil {
 		if !created {
@@ -243,20 +245,35 @@ func (n *localNode) UpdateGroup(
 		}
 		return domain.AccountGroup{}, fmt.Errorf("publish group resolver rename: %w", err)
 	}
-	if err := n.audit(context.WithoutCancel(ctx), caller, store.AuditEntry{
-		Action: domain.AuditActionUpdateGroup,
-		Detail: fmt.Sprintf(
-			"update group %s -> %s",
-			prev.Code,
-			updated.Code,
-		),
-	}); err != nil {
+	detail := updateGroupDetail(prev.Code, updated.Code)
+	// A rename concerns both codes: file it under each so selecting by the old
+	// code shows where the group went and selecting by the new one shows where it
+	// came from. A title-only update leaves one code and one row.
+	codes := renamedGroupAuditCodes(prev.Code, updated.Code)
+	entries := make([]store.AuditEntry, 0, len(codes))
+	for _, code := range codes {
+		entries = append(entries, store.AuditEntry{
+			Action: domain.AuditActionUpdateGroup,
+			Group:  code,
+			Detail: detail,
+		})
+	}
+	if err := n.auditBatch(context.WithoutCancel(ctx), caller, entries); err != nil {
 		return domain.AccountGroup{}, n.fatalPostEngineAuditByCode(
 			"audit update group", "group", updated.Code,
 			fmt.Errorf("audit update group: %w", err),
 		)
 	}
 	return updated, nil
+}
+
+// renamedGroupAuditCodes lists the group codes a group update is filed under:
+// both codes for a rename, the single unchanged code otherwise.
+func renamedGroupAuditCodes(prevCode, code string) []string {
+	if prevCode == code {
+		return []string{code}
+	}
+	return []string{prevCode, code}
 }
 
 // SetGroupBlocked blocks or unblocks the group in the store, then the engine,
@@ -318,13 +335,14 @@ func (n *localNode) SetGroupBlocked(
 	}
 
 	action := domain.AuditActionBlockGroup
-	detail := fmt.Sprintf("block group %s", code)
+	detail := blockGroupDetail(code, reason)
 	if !blocked {
 		action = domain.AuditActionUnblockGroup
-		detail = fmt.Sprintf("unblock group %s", code)
+		detail = unblockGroupDetail(code, reason)
 	}
 	if err := n.audit(context.WithoutCancel(ctx), caller, store.AuditEntry{
 		Action: action,
+		Group:  code,
 		Detail: detail,
 	}); err != nil {
 		return n.fatalPostEngineAuditByCode(
@@ -561,6 +579,7 @@ func (n *localNode) DeleteGroup(
 	}
 	if err := n.audit(context.WithoutCancel(ctx), caller, store.AuditEntry{
 		Action: domain.AuditActionDeleteGroup,
+		Group:  code,
 		Detail: fmt.Sprintf("delete group %s", code),
 	}); err != nil {
 		return n.fatalPostEngineAuditByCode(

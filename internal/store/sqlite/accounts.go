@@ -529,6 +529,12 @@ func assetClassListOrderBy(sort fwstore.SortSpec) string {
 func (r *realmStore) CreatePrincipal(
 	ctx context.Context, principal domain.Principal,
 ) error {
+	if err := domain.ValidatePrincipalID(principal.Code); err != nil {
+		return err
+	}
+	if err := domain.ValidateTitle(principal.Title); err != nil {
+		return err
+	}
 	db, err := r.db()
 	if err != nil {
 		return err
@@ -600,6 +606,12 @@ func (r *realmStore) ListPrincipals(ctx context.Context) ([]domain.Principal, er
 func (r *realmStore) UpdatePrincipal(
 	ctx context.Context, principal domain.Principal,
 ) error {
+	if err := domain.ValidatePrincipalID(principal.Code); err != nil {
+		return err
+	}
+	if err := domain.ValidateTitle(principal.Title); err != nil {
+		return err
+	}
 	db, err := r.db()
 	if err != nil {
 		return err
@@ -1449,12 +1461,30 @@ func scanAccount(rows *sql.Rows) (domain.Account, error) {
 	return account, nil
 }
 
+// accountEffectiveBlockedExpr is an account's effective kill-switch state: its
+// own latched block OR the block of the group it belongs to. The engine rejects
+// every order from a member of a blocked group, so the account list's status
+// axis resolves the same join instead of reading a.blocked alone. It relies on
+// the group LEFT JOIN present in every account query.
+const accountEffectiveBlockedExpr = `(CASE
+    WHEN a.blocked = 1 OR COALESCE(g.blocked, 0) = 1 THEN 1 ELSE 0 END)`
+
+// accountEffectiveBlockReasonExpr is the reason behind that effective state,
+// under the same attribution the domain applies: the account's own block wins,
+// otherwise the group's reason answers. The account DTO publishes this reason,
+// so filtering or sorting on a.block_reason alone would hide a group-blocked
+// account from a search for the very text its own row displays.
+const accountEffectiveBlockReasonExpr = `(CASE
+    WHEN a.blocked = 1 THEN a.block_reason
+    WHEN COALESCE(g.blocked, 0) = 1 THEN COALESCE(g.block_reason, '')
+    ELSE '' END)`
+
 func accountListWhere(filter fwstore.AccountListFilter) (string, []any) {
 	clauses := make([]string, 0)
 	args := make([]any, 0)
 	appendMatcherAny(&clauses, &args, []string{"a.code", "a.title"}, filter.Code)
-	appendMatcher(&clauses, &args, "a.block_reason", filter.BlockReason)
-	appendStatusFilter(&clauses, filter.Status, "a.blocked")
+	appendMatcher(&clauses, &args, accountEffectiveBlockReasonExpr, filter.BlockReason)
+	appendStatusFilter(&clauses, filter.Status, accountEffectiveBlockedExpr)
 	if filter.GroupCode != nil {
 		if *filter.GroupCode == "" {
 			clauses = append(clauses, "a.group_id IS NULL")
@@ -1471,11 +1501,13 @@ func accountListWhere(filter fwstore.AccountListFilter) (string, []any) {
 
 func accountListOrderBy(sort fwstore.SortSpec) string {
 	columns := map[string]string{
-		"blockReason":   "a.block_reason",
+		// Both block axes order by the same effective state the filters and the
+		// account DTO report, so a sorted page cannot disagree with its badges.
+		"blockReason":   accountEffectiveBlockReasonExpr,
 		"code":          "a.code",
 		"group":         "g.code",
 		"positionCount": "position_count",
-		"status":        "a.blocked",
+		"status":        accountEffectiveBlockedExpr,
 		"title":         "a.title",
 	}
 	column := columns[sort.Column]

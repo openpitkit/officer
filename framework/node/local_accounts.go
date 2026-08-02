@@ -209,10 +209,10 @@ func (n *localNode) SetAccountBlocked(
 				}
 
 				action := domain.AuditActionBlock
-				detail := fmt.Sprintf("block account %s", key.Account)
+				detail := blockDetail(key.Account, reason)
 				if !blocked {
 					action = domain.AuditActionUnblock
-					detail = fmt.Sprintf("unblock account %s", key.Account)
+					detail = unblockDetail(key.Account, reason)
 				}
 				if err := n.audit(
 					context.WithoutCancel(ctx), caller, store.AuditEntry{
@@ -338,8 +338,12 @@ func (n *localNode) mirrorPolicyConfigurationBlocks(
 			continue
 		}
 
+		// The reason is engine-composed, never operator input: refusing it would
+		// drop a real kill-switch record, so it is normalized to the rule the
+		// restore path validates rather than rejected.
 		if err := n.realm.SetAccountBlocked(
-			ctx, block.Account, true, policyConfigurationBlockReason(policy, block),
+			ctx, block.Account, true,
+			domain.NormalizeReason(policyConfigurationBlockReason(policy, block)),
 		); err != nil {
 			return n.fatalPostEngineAuditByCode(
 				"record policy configuration block", "account", block.Account.String(),
@@ -368,6 +372,16 @@ func (n *localNode) audit(ctx context.Context, caller domain.Caller, entry store
 	entry.Actor = caller.Principal
 	entry.Source = caller.Source
 	return n.realm.AppendAudit(ctx, entry)
+}
+
+func (n *localNode) auditBatch(
+	ctx context.Context, caller domain.Caller, entries []store.AuditEntry,
+) error {
+	for i := range entries {
+		entries[i].Actor = caller.Principal
+		entries[i].Source = caller.Source
+	}
+	return n.realm.AppendAuditBatch(ctx, entries)
 }
 
 // AppendAudit persists one audit row stamped with the caller. It is the seam
@@ -491,12 +505,22 @@ func (n *localNode) SetAccountGroup(
 				optionalOperationError("revert account group store", revertStoreErr),
 			)}
 		}
-		if err := n.audit(context.WithoutCancel(ctx), caller, store.AuditEntry{
-			Action:       domain.AuditActionSetGroup,
-			Account:      key.Account,
-			AccountTitle: prev.Title,
-			Detail:       setAccountGroupDetail(key.Account, groupCode),
-		}); err != nil {
+		detail := setAccountGroupDetail(key.Account, prev.GroupCode, groupCode)
+		// The move is a membership event of both groups, so it is filed under each
+		// of them; a group that loses a member must not have to be found through
+		// the destination group's rows.
+		groupCodes := accountGroupAuditCodes(prev.GroupCode, groupCode)
+		entries := make([]store.AuditEntry, 0, len(groupCodes))
+		for _, code := range groupCodes {
+			entries = append(entries, store.AuditEntry{
+				Action:       domain.AuditActionSetGroup,
+				Account:      key.Account,
+				AccountTitle: prev.Title,
+				Group:        code,
+				Detail:       detail,
+			})
+		}
+		if err := n.auditBatch(context.WithoutCancel(ctx), caller, entries); err != nil {
 			return n.fatalPostEngineAuditByCode(
 				"audit set account group", "account", key.Account.String(),
 				fmt.Errorf("audit set account group: %w", err),
@@ -550,6 +574,21 @@ func (n *localNode) applyGroupMove(
 		}
 	}
 	return nil
+}
+
+// accountGroupAuditCodes lists the group codes a membership change is filed
+// under: both the origin and the destination when the account moves between two
+// groups, and only the non-empty side when it joins from or leaves to no group.
+// The empty code is the reserved default group and collects no membership rows.
+func accountGroupAuditCodes(prevGroupCode, groupCode string) []string {
+	codes := make([]string, 0, 2)
+	if prevGroupCode != "" {
+		codes = append(codes, prevGroupCode)
+	}
+	if groupCode != "" && groupCode != prevGroupCode {
+		codes = append(codes, groupCode)
+	}
+	return codes
 }
 
 // SetAccountNotes replaces the account's notes in the store and audits the

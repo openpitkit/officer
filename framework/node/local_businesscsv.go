@@ -95,22 +95,27 @@ func (n *localNode) ApplyBusinessCSVImport(
 		if row.Exists {
 			in.Audits = append(in.Audits, n.auditEntry(caller, store.AuditEntry{
 				Action: domain.AuditActionSetGroupNotes,
+				Group:  row.Group.Code,
 				Detail: fmt.Sprintf("set notes group %s", row.Group.Code),
 			}))
 		} else {
 			in.Audits = append(in.Audits, n.auditEntry(caller, store.AuditEntry{
 				Action: domain.AuditActionCreateGroup,
+				Group:  row.Group.Code,
 				Detail: fmt.Sprintf("create group %s", row.Group.Code),
 			}))
 		}
 		action := domain.AuditActionBlockGroup
-		detail := fmt.Sprintf("block group %s", row.Group.Code)
+		detail := blockGroupDetail(row.Group.Code, row.Group.BlockReason)
 		if !row.Group.Blocked {
 			action = domain.AuditActionUnblockGroup
-			detail = fmt.Sprintf("unblock group %s", row.Group.Code)
+			// A row may keep a reason next to blocked=false; it belongs to the
+			// block being lifted, so rendering it would invert the audit line.
+			detail = unblockGroupDetail(row.Group.Code, "")
 		}
 		in.Audits = append(in.Audits, n.auditEntry(caller, store.AuditEntry{
 			Action: action,
+			Group:  row.Group.Code,
 			Detail: detail,
 		}))
 	}
@@ -151,11 +156,20 @@ func (n *localNode) ApplyBusinessCSVImport(
 				old:     prev.GroupCode,
 				next:    row.Account.GroupCode,
 			})
-			in.Audits = append(in.Audits, n.auditEntry(caller, store.AuditEntry{
-				Action:  domain.AuditActionSetGroup,
-				Account: row.Account.Code,
-				Detail:  setAccountGroupDetail(row.Account.Code, row.Account.GroupCode),
-			}))
+			detail := setAccountGroupDetail(
+				row.Account.Code, prev.GroupCode, row.Account.GroupCode,
+			)
+			// Filed under both sides, as on the interactive path.
+			for _, code := range accountGroupAuditCodes(
+				prev.GroupCode, row.Account.GroupCode,
+			) {
+				in.Audits = append(in.Audits, n.auditEntry(caller, store.AuditEntry{
+					Action:  domain.AuditActionSetGroup,
+					Account: row.Account.Code,
+					Group:   code,
+					Detail:  detail,
+				}))
+			}
 		}
 		// Account blocks for CSV-created accounts run after their persisted numeric
 		// ids are published to the live resolver; see the engine-effects phase.
@@ -172,10 +186,11 @@ func (n *localNode) ApplyBusinessCSVImport(
 			Detail:  fmt.Sprintf("set notes account %s", row.Account.Code),
 		}))
 		action := domain.AuditActionBlock
-		detail := fmt.Sprintf("block account %s", row.Account.Code)
+		detail := blockDetail(row.Account.Code, row.Account.BlockReason)
 		if !row.Account.Blocked {
 			action = domain.AuditActionUnblock
-			detail = fmt.Sprintf("unblock account %s", row.Account.Code)
+			// As for groups: a stale row reason is not a justification to unblock.
+			detail = unblockDetail(row.Account.Code, "")
 		}
 		in.Audits = append(in.Audits, n.auditEntry(caller, store.AuditEntry{
 			Action:  action,
@@ -575,6 +590,9 @@ func (n *localNode) ensureAccount(
 	ctx context.Context, id domain.AccountID,
 	missing domain.MissingAccountPolicy, operation string, caller domain.Caller,
 ) error {
+	if err := domain.ValidateAccountID(id); err != nil {
+		return err
+	}
 	switch missing {
 	case domain.MissingAccountCreate:
 		return n.ensureAutoCreatedAccount(ctx, id, operation, caller)
@@ -636,13 +654,16 @@ func (n *localNode) accountOrAssetsNeedAutoCreate(
 
 // ensureAccountAndAssetsRegisteredExclusive self-acquires the live identity
 // gate, so it must never be called from a method that already holds a node gate.
-// The missing-account decision is taken under that gate rather than before it,
-// so a concurrent delete cannot turn a rejected request into a created account.
+// Missing dictionary state is rechecked and resolved under that gate before the
+// caller enters its account lane.
 func (n *localNode) ensureAccountAndAssetsRegisteredExclusive(
 	ctx context.Context, id domain.AccountID,
 	missing domain.MissingAccountPolicy, operation string,
 	caller domain.Caller, assets ...string,
 ) error {
+	if err := domain.ValidateMissingAccountPolicy(missing); err != nil {
+		return err
+	}
 	needed, err := n.accountOrAssetsNeedAutoCreate(ctx, id, assets...)
 	if err != nil {
 		return err

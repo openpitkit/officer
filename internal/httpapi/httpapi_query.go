@@ -20,6 +20,7 @@ package httpapi
 import (
 	"fmt"
 	"math"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -30,6 +31,22 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/store"
 )
+
+// missingAccountQuery reads the ?missingAccount= request parameter for a
+// request that names an account. The query parameter keeps endpoints with and
+// without request bodies on the same wire contract.
+//
+// The parameter is required exactly when the request names a non-empty account
+// code; a request that names none (a broker/global/asset-scoped barrier) needs
+// no decision, and a value supplied anyway is ignored.
+func missingAccountQuery(
+	r *http.Request, account domain.AccountID,
+) (domain.MissingAccountPolicy, error) {
+	if account == "" {
+		return "", nil
+	}
+	return domain.ParseMissingAccountPolicy(r.URL.Query().Get("missingAccount"))
+}
 
 func textMatcherFromQuery(q url.Values, valueKey, modeKey string) (
 	store.TextMatcher, error,
@@ -921,6 +938,7 @@ func tradeListFilterFromQuery(q url.Values) (store.TradeListFilter, error) {
 func auditListFilterFromQuery(q url.Values) (store.AuditListFilter, error) {
 	account := store.ExactTextMatcher(q.Get("account"))
 	asset := store.ExactTextMatcher(q.Get("asset"))
+	group := store.ExactTextMatcher(q.Get("group"))
 	externalID, err := externalIDFromQuery(q)
 	if err != nil {
 		return store.AuditListFilter{}, err
@@ -955,6 +973,7 @@ func auditListFilterFromQuery(q url.Values) (store.AuditListFilter, error) {
 	return store.AuditListFilter{
 		Account:    account,
 		Asset:      asset,
+		Group:      group,
 		ExternalID: externalID,
 		Actor:      actor,
 		Source:     source,

@@ -437,12 +437,22 @@ type cancelOutput struct {
 	KeyID            string `json:"keyId,omitempty"`
 }
 
+// accountDTO mirrors the HTTP account shape for the block state: blocked,
+// blockReason and blockSource are EFFECTIVE (the account's own block joined
+// with its group's), so an agent reading only blocked learns whether the
+// account can trade right now; the per-tier fields carry the two independent
+// underlying blocks.
 type accountDTO struct {
-	Code        string `json:"code"`
-	Title       string `json:"title"`
-	Group       string `json:"group"`
-	BlockReason string `json:"blockReason"`
-	Blocked     bool   `json:"blocked"`
+	Code               string `json:"code"`
+	Title              string `json:"title"`
+	Group              string `json:"group"`
+	BlockReason        string `json:"blockReason"`
+	BlockSource        string `json:"blockSource"`
+	AccountBlockReason string `json:"accountBlockReason"`
+	GroupBlockReason   string `json:"groupBlockReason"`
+	Blocked            bool   `json:"blocked"`
+	AccountBlocked     bool   `json:"accountBlocked"`
+	GroupBlocked       bool   `json:"groupBlocked"`
 }
 
 type limitsDTO struct {
@@ -476,12 +486,16 @@ type spotFundsPnlBoundsLimitDTO struct {
 }
 
 type auditDTO struct {
-	At         time.Time `json:"at"`
-	Actor      string    `json:"actor"`
-	Action     string    `json:"action"`
-	Account    string    `json:"account"`
-	Detail     string    `json:"detail"`
-	ExternalID string    `json:"id"`
+	At      time.Time `json:"at"`
+	Actor   string    `json:"actor"`
+	Action  string    `json:"action"`
+	Account string    `json:"account"`
+	// Group is the structured group handle of a group action, so an agent
+	// selects a group's rows by identity instead of matching the free-form
+	// detail text, where one group's code can appear inside another's.
+	Group      string `json:"group"`
+	Detail     string `json:"detail"`
+	ExternalID string `json:"id"`
 }
 
 type orderDTO struct {
@@ -541,14 +555,34 @@ type checkOrderBlockDTO struct {
 	Details string `json:"details"`
 }
 
-func toAccountDTO(a domain.Account) accountDTO {
+func toAccountDTO(a domain.Account, block domain.AccountBlockState) accountDTO {
 	return accountDTO{
-		Code:        string(a.Code),
-		Title:       a.Title,
-		Group:       a.GroupCode,
-		BlockReason: a.BlockReason,
-		Blocked:     a.Blocked,
+		Code:               string(a.Code),
+		Title:              a.Title,
+		Group:              a.GroupCode,
+		BlockReason:        block.Reason,
+		BlockSource:        string(block.Source),
+		AccountBlockReason: block.AccountReason,
+		GroupBlockReason:   block.GroupReason,
+		Blocked:            block.Blocked,
+		AccountBlocked:     block.AccountBlocked,
+		GroupBlocked:       block.GroupBlocked,
 	}
+}
+
+// accountBlock resolves the account's effective block. An account in no group
+// needs no group read: nothing but its own flag can block it.
+func accountBlock(
+	ctx context.Context, src frameworkmcp.Source, a domain.Account,
+) (domain.AccountBlockState, error) {
+	if a.GroupCode == "" {
+		return domain.ResolveAccountBlock(a, domain.AccountGroup{}), nil
+	}
+	groups, err := src.ListGroups(ctx)
+	if err != nil {
+		return domain.AccountBlockState{}, err
+	}
+	return domain.NewGroupBlockIndex(groups).Resolve(a), nil
 }
 
 func toLimitsDTO(l node.AccountLimits) limitsDTO {
@@ -605,6 +639,7 @@ func toAuditDTO(row domain.AuditRow) auditDTO {
 		Actor:      row.Actor,
 		Action:     string(row.Action),
 		Account:    string(row.Account),
+		Group:      row.Group,
 		Detail:     row.Detail,
 	}
 }
@@ -788,13 +823,31 @@ func getAccountStateHandler(
 			if isNotFound(err) {
 				return "", getAccountStateOutput{}, fmt.Errorf("account %q not found", id)
 			}
+			// A rejected id is the caller's mistake to correct, not an outage
+			// to retry, so the domain message must reach the agent.
+			if errors.Is(err, domain.ErrInvalid) {
+				return "", getAccountStateOutput{}, err
+			}
 			return "", getAccountStateOutput{}, fmt.Errorf("get account state failed")
 		}
+		block, err := accountBlock(ctx, src, acc)
+		if err != nil {
+			return "", getAccountStateOutput{},
+				fmt.Errorf("resolve account block failed")
+		}
 		out := getAccountStateOutput{
-			Account: toAccountDTO(acc),
+			Account: toAccountDTO(acc, block),
 			Limits:  toLimitsDTO(limits),
 		}
-		return fmt.Sprintf("account %s: %d limit(s)", id, limitsCount(limits)), out, nil
+		summary := fmt.Sprintf(
+			"account %s: %d limit(s)", id, limitsCount(limits),
+		)
+		if block.Blocked {
+			// Name the blocking tier only; the operator-supplied reason stays
+			// in the structured content.
+			summary += fmt.Sprintf(" - blocked (%s)", block.Source)
+		}
+		return summary, out, nil
 	}
 }
 
@@ -970,9 +1023,11 @@ func submitOrderHandler(
 		if account == "" {
 			return "", submitOrderOutput{}, fmt.Errorf("account is required")
 		}
-		missing := domain.MissingAccountPolicy(strings.TrimSpace(in.MissingAccount))
-		if missing == "" {
-			return "", submitOrderOutput{}, fmt.Errorf("missingAccount is required")
+		missing, err := domain.ParseMissingAccountPolicy(
+			strings.TrimSpace(in.MissingAccount),
+		)
+		if err != nil {
+			return "", submitOrderOutput{}, err
 		}
 		o := domain.Order{
 			Account:     account,
@@ -1029,8 +1084,8 @@ func submitDropCopyOrderHandler(
 			return "", submitDropCopyOrderOutput{}, fmt.Errorf("account is required")
 		}
 		missing := domain.MissingAccountPolicy(strings.TrimSpace(in.MissingAccount))
-		if missing == "" {
-			return "", submitDropCopyOrderOutput{}, fmt.Errorf("missingAccount is required")
+		if err := domain.ValidateDropCopyMissingAccountPolicy(missing); err != nil {
+			return "", submitDropCopyOrderOutput{}, err
 		}
 		o := domain.Order{
 			Account:     account,

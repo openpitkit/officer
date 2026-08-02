@@ -885,6 +885,7 @@ var schemaClientTables = map[string]schemaSurfaceSpec{
 			"account_code":  "Account",
 			"account_title": "AccountTitle",
 			"asset_code":    "Asset",
+			"group_code":    "Group",
 			"actor_code":    "Actor",
 			"actor_title":   "ActorTitle",
 			"at":            "At",
@@ -1479,6 +1480,7 @@ func seedClientDataDriftRealm(
 		Account:      "acc-1",
 		AccountTitle: "Account Sentinel",
 		Asset:        "USD",
+		Group:        "grp-1",
 		Detail:       "audit detail sentinel",
 		Source:       domain.SourcePanel,
 	}))

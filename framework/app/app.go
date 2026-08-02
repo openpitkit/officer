@@ -485,6 +485,12 @@ func (a sourceAdapter) GetAccountState(
 	return a.service.GetAccountState(ctx, id)
 }
 
+func (a sourceAdapter) ListGroups(
+	ctx context.Context,
+) ([]domain.AccountGroup, error) {
+	return a.service.ListGroups(ctx)
+}
+
 func (a sourceAdapter) ListLimits(
 	ctx context.Context, account domain.AccountID,
 ) (node.AccountLimits, error) {

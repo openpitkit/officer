@@ -144,9 +144,13 @@ func (s *Service) Overview(ctx context.Context, since time.Time) (Overview, erro
 		return Overview{}, err
 	}
 
+	// An account counts as active only when it can actually trade: the engine
+	// rejects every order from a member of a blocked group, so the group tier
+	// is joined in here as it is on the account read paths.
+	blocks := domain.NewGroupBlockIndex(groups)
 	accountsActive := 0
 	for _, account := range accounts {
-		if !account.Blocked {
+		if !blocks.Resolve(account).Blocked {
 			accountsActive++
 		}
 	}

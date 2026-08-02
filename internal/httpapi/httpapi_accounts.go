@@ -18,12 +18,28 @@
 package httpapi
 
 import (
-	"encoding/json"
+	"context"
+	"errors"
 	"net/http"
 
 	"go.openpit.dev/officer/framework/domain"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
+
+// groupBlocks reads the realm's groups so an account list can report the
+// effective block. The engine rejects every order from a member of a blocked
+// group, while the account row carries only the account's own latched flag, so
+// the group tier is joined in on every account read path. Only the list path
+// needs the whole dictionary; accountBlock resolves a single account.
+func groupBlocks(
+	ctx context.Context, svc Service,
+) (domain.GroupBlockIndex, error) {
+	groups, err := svc.ListGroups(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return domain.NewGroupBlockIndex(groups), nil
+}
 
 func handleListAccounts(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -37,9 +53,14 @@ func handleListAccounts(svc Service) http.HandlerFunc {
 			httpx.WriteErr(w, err)
 			return
 		}
+		blocks, err := groupBlocks(r.Context(), svc)
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
 		dtos := make([]accountDTO, 0, len(accounts.Rows))
 		for _, row := range accounts.Rows {
-			dtos = append(dtos, toAccountRowDTO(row))
+			dtos = append(dtos, toAccountRowDTO(row, blocks.Resolve(row.Account)))
 		}
 		httpx.WriteJSON(w, http.StatusOK, map[string]any{
 			"accounts": dtos,
@@ -58,8 +79,7 @@ func handleCreateAccount(svc Service) http.HandlerFunc {
 			Title    string `json:"title"`
 			Currency string `json:"currency"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		account, err := svc.CreateAccount(r.Context(), domain.Account{
@@ -71,7 +91,7 @@ func handleCreateAccount(svc Service) http.HandlerFunc {
 			httpx.WriteErr(w, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusCreated, map[string]any{"account": toAccountDTO(account)})
+		writeAccountBody(w, r, svc, account, http.StatusCreated)
 	}
 }
 
@@ -88,8 +108,13 @@ func handleGetAccount(svc Service) http.HandlerFunc {
 			httpx.WriteErr(w, err)
 			return
 		}
+		block, err := accountBlock(r.Context(), svc, account)
+		if err != nil {
+			httpx.WriteErr(w, err)
+			return
+		}
 		httpx.WriteJSON(w, http.StatusOK, map[string]any{
-			"account": toAccountDTO(account),
+			"account": toAccountDTO(account, block),
 			"limits":  toAccountLimitsDTO(limits),
 		})
 	}
@@ -108,8 +133,7 @@ func handleUpdateAccount(svc Service) http.HandlerFunc {
 			Code  string `json:"code"`
 			Title string `json:"title"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		account, err := svc.UpdateAccount(r.Context(), id, domain.Account{
@@ -120,7 +144,7 @@ func handleUpdateAccount(svc Service) http.HandlerFunc {
 			httpx.WriteErr(w, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{"account": toAccountDTO(account)})
+		writeAccountBody(w, r, svc, account, http.StatusOK)
 	}
 }
 
@@ -141,8 +165,7 @@ func handleBlockAccount(svc Service) http.HandlerFunc {
 		var req struct {
 			Reason string `json:"reason"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		if err := svc.BlockAccount(r.Context(), id, req.Reason, missing); err != nil {
@@ -201,7 +224,45 @@ func writeAccount(w http.ResponseWriter, svc Service, r *http.Request, id domain
 		httpx.WriteErr(w, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"account": toAccountDTO(account)})
+	writeAccountBody(w, r, svc, account, http.StatusOK)
+}
+
+// writeAccountBody writes {"account": {...}} with status, joining the group
+// tier of the block onto the account first.
+func writeAccountBody(
+	w http.ResponseWriter,
+	r *http.Request,
+	svc Service,
+	account domain.Account,
+	status int,
+) {
+	block, err := accountBlock(r.Context(), svc, account)
+	if err != nil {
+		httpx.WriteErr(w, err)
+		return
+	}
+	httpx.WriteJSON(w, status, map[string]any{"account": toAccountDTO(account, block)})
+}
+
+// accountBlock resolves one account's effective block. An account in no group
+// needs no group read: nothing but its own flag can block it. One member reads
+// its own group only - the whole dictionary is a list-path cost, not a
+// single-account one.
+func accountBlock(
+	ctx context.Context, svc Service, account domain.Account,
+) (domain.AccountBlockState, error) {
+	if account.GroupCode == "" {
+		return domain.ResolveAccountBlock(account, domain.AccountGroup{}), nil
+	}
+	group, _, err := svc.GetGroup(ctx, account.GroupCode)
+	if err != nil {
+		// A dangling group code contributes no block, as in GroupBlockIndex.
+		if !errors.Is(err, domain.ErrNotFound) {
+			return domain.AccountBlockState{}, err
+		}
+		group = domain.AccountGroup{}
+	}
+	return domain.ResolveAccountBlock(account, group), nil
 }
 
 // handleSetAccountGroup handles
@@ -222,8 +283,7 @@ func handleSetAccountGroup(svc Service) http.HandlerFunc {
 		var req struct {
 			Group string `json:"group"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		if err := svc.SetAccountGroup(r.Context(), id, req.Group, missing); err != nil {
@@ -245,8 +305,7 @@ func handleSetAccountCurrency(svc Service) http.HandlerFunc {
 		var req struct {
 			Currency string `json:"currency"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		if err := svc.SetAccountCurrency(r.Context(), id, req.Currency); err != nil {
@@ -268,8 +327,7 @@ func handleSetAccountNotes(svc Service) http.HandlerFunc {
 		var req struct {
 			Notes string `json:"notes"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		if err := svc.SetAccountNotes(r.Context(), id, req.Notes); err != nil {

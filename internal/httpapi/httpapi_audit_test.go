@@ -97,6 +97,32 @@ func TestListAudit_PropagatesFilters(t *testing.T) {
 	}
 }
 
+// The account-group axis is its own filter: an operator narrowing the trail to
+// one desk must not have the code matched against the account column.
+func TestListAudit_PropagatesGroupFilter(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet, "/api/v1/audit?group=desk", nil,
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if got := svc.auditListFilter.Group.Fragments; !slices.Equal(got, []string{"desk"}) {
+		t.Fatalf("group fragments = %v", got)
+	}
+	if !svc.auditListFilter.Group.AnchorStart || !svc.auditListFilter.Group.AnchorEnd {
+		t.Fatalf("group matcher = %+v", svc.auditListFilter.Group)
+	}
+	if len(svc.auditListFilter.Account.Fragments) != 0 {
+		t.Fatalf("account matcher = %+v", svc.auditListFilter.Account)
+	}
+}
+
 func TestListAudit(t *testing.T) {
 	ts := time.Date(2026, 6, 11, 10, 0, 0, 1, time.UTC)
 	svc := &fakeService{

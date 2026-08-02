@@ -18,7 +18,6 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -64,15 +63,20 @@ func handleRestartMarketData(svc Service) http.HandlerFunc {
 func handleCreateMarketDataInstance(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req marketDataCreateInstanceRequestDTO
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
+			return
+		}
+		if req.Enabled == nil {
+			httpx.WriteErrMsg(
+				w, http.StatusBadRequest, "validation", "enabled is required",
+			)
 			return
 		}
 		instance := domain.MarketDataInstance{
 			Provider:    req.Provider,
 			Label:       req.Label,
 			Credentials: req.Credentials,
-			Enabled:     req.Enabled,
+			Enabled:     *req.Enabled,
 		}
 		// A caller-supplied id is optional. When present, the backend
 		// uses it verbatim and rejects a duplicate with 409. When absent the
@@ -107,8 +111,7 @@ func handleUpdateMarketDataInstanceSettings(svc Service) http.HandlerFunc {
 			return
 		}
 		var req marketDataUpdateInstanceSettingsRequestDTO
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		if err := svc.UpdateMarketDataInstanceSettings(
@@ -141,13 +144,18 @@ func handleSetMarketDataInstanceEnabled(svc Service) http.HandlerFunc {
 			return
 		}
 		var req struct {
-			Enabled bool `json:"enabled"`
+			Enabled *bool `json:"enabled"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
-		if err := svc.SetMarketDataInstanceEnabled(r.Context(), id, req.Enabled); err != nil {
+		if req.Enabled == nil {
+			httpx.WriteErrMsg(
+				w, http.StatusBadRequest, "validation", "enabled is required",
+			)
+			return
+		}
+		if err := svc.SetMarketDataInstanceEnabled(r.Context(), id, *req.Enabled); err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
@@ -187,23 +195,6 @@ func forceQuery(r *http.Request) bool {
 	return r.URL.Query().Get("force") == "true"
 }
 
-// missingAccountQuery reads the ?missingAccount= request parameter for a request
-// that names account. It mirrors forceQuery deliberately: a query flag rather
-// than a body field, so endpoints with and without a request body read the
-// choice the same way and no request DTO grows an optional field.
-//
-// The parameter is required exactly when the request names a non-empty account
-// code; a request that names none (a broker/global/asset-scoped barrier) needs
-// no decision, and a value supplied anyway is ignored.
-func missingAccountQuery(
-	r *http.Request, account domain.AccountID,
-) (domain.MissingAccountPolicy, error) {
-	if account == "" {
-		return "", nil
-	}
-	return domain.ParseMissingAccountPolicy(r.URL.Query().Get("missingAccount"))
-}
-
 func handleUpsertMarketDataInstrument(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := httpx.PathID(r)
@@ -211,9 +202,20 @@ func handleUpsertMarketDataInstrument(svc Service) http.HandlerFunc {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
 			return
 		}
-		var req marketDataInstrumentDTO
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		var req marketDataUpsertInstrumentRequestDTO
+		if !httpx.DecodeBody(w, r, &req) {
+			return
+		}
+		if req.ManualPrice == nil {
+			httpx.WriteErrMsg(
+				w, http.StatusBadRequest, "validation", "manualPrice is required",
+			)
+			return
+		}
+		if req.Enabled == nil {
+			httpx.WriteErrMsg(
+				w, http.StatusBadRequest, "validation", "enabled is required",
+			)
 			return
 		}
 		instanceID, err := domain.ParseExternalID(id)
@@ -226,8 +228,8 @@ func handleUpsertMarketDataInstrument(svc Service) http.HandlerFunc {
 			ExternalSymbol: req.ExternalSymbol,
 			BaseAsset:      req.BaseAsset,
 			QuoteAsset:     req.QuoteAsset,
-			ManualPrice:    req.ManualPrice,
-			Enabled:        req.Enabled,
+			ManualPrice:    *req.ManualPrice,
+			Enabled:        *req.Enabled,
 		}
 		if err := svc.UpsertMarketDataInstrument(r.Context(), instrument); err != nil {
 			httpx.WriteErr(w, err)
@@ -253,19 +255,24 @@ func handleSetMarketDataInstrumentEnabled(svc Service) http.HandlerFunc {
 		}
 		var req struct {
 			ExternalSymbol string `json:"externalSymbol"`
-			Enabled        bool   `json:"enabled"`
+			Enabled        *bool  `json:"enabled"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
+			return
+		}
+		if req.Enabled == nil {
+			httpx.WriteErrMsg(
+				w, http.StatusBadRequest, "validation", "enabled is required",
+			)
 			return
 		}
 		if err := svc.SetMarketDataInstrumentEnabled(
-			r.Context(), id, req.ExternalSymbol, req.Enabled,
+			r.Context(), id, req.ExternalSymbol, *req.Enabled,
 		); err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{"enabled": req.Enabled})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"enabled": *req.Enabled})
 	}
 }
 
@@ -300,8 +307,7 @@ func handleVerifyMarketDataSymbol(svc Service) http.HandlerFunc {
 		var req struct {
 			ExternalSymbol string `json:"externalSymbol"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		out, err := svc.VerifyMarketDataSymbol(r.Context(), id, req.ExternalSymbol)
@@ -337,8 +343,7 @@ func handleSearchMarketDataSymbols(svc Service) http.HandlerFunc {
 			Right                        string `json:"right"`
 			Strike                       string `json:"strike"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		if strings.TrimSpace(req.Query) == "" {

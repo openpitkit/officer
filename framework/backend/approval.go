@@ -371,6 +371,12 @@ func (s *Service) submitOrderToken(
 	mode string,
 	missing domain.MissingAccountPolicy,
 ) (ApprovalToken, error) {
+	// Malformed identity is refused here, not only at a surface: every caller -
+	// HTTP, MCP, or an embedder - reaches the engine lane through this seam, and
+	// an account registered under an unaddressable code could never be read back.
+	if err := domain.ValidateAccountID(o.Account); err != nil {
+		return ApprovalToken{}, err
+	}
 	if err := validateMissingAccountPolicy(o.Account, missing); err != nil {
 		return ApprovalToken{}, err
 	}
@@ -389,8 +395,8 @@ func (s *Service) submitOrderToken(
 		return ApprovalToken{}, fmt.Errorf("backend: submit mode %q: %w", mode, domain.ErrInvalid)
 	}
 
-	// Officer applies no boundary id/asset format checks; the engine seam parses
-	// the account and assets and enforces the real trading rules.
+	// The account id was validated above, before the engine lane is entered. The
+	// engine seam parses asset identifiers and enforces the trading rules.
 	//
 	// A caller-supplied order external id is used verbatim when valid: the order
 	// is created exactly once below (submitOrder/submitImmediate record it), and
@@ -621,15 +627,19 @@ func (s *Service) submitOrderToken(
 // creating an approval token or lifecycle attestation. A caller-supplied
 // external id is preserved; when omitted, the store assigns one. Duplicate ids
 // follow the ordinary unique-store conflict path. missing must be an explicit
-// domain.MissingAccountCreate: see dropCopyMissingAccountError.
+// domain.MissingAccountCreate, enforced by the shared domain validator.
 func (s *Service) SubmitDropCopyOrder(
 	ctx context.Context, o domain.Order, missing domain.MissingAccountPolicy,
 ) (domain.Order, error) {
+	// See submitOrderToken: identity format is a seam check, not a surface check.
+	if err := domain.ValidateAccountID(o.Account); err != nil {
+		return domain.Order{}, err
+	}
 	if err := validateMissingAccountPolicy(o.Account, missing); err != nil {
 		return domain.Order{}, err
 	}
-	if missing == domain.MissingAccountReject {
-		return domain.Order{}, dropCopyMissingAccountError()
+	if err := domain.ValidateDropCopyMissingAccountPolicy(missing); err != nil {
+		return domain.Order{}, fmt.Errorf("backend: %w", err)
 	}
 	o.DropCopy = true
 	caller := auth.CallerFromContext(ctx)
@@ -642,17 +652,6 @@ func (s *Service) SubmitDropCopyOrder(
 	// A drop-copy submit must never be signed. Its pre-trade decision was not
 	// enforced, so a submit attestation would falsely claim risk approval.
 	return n.SubmitOrder(ctx, keyFor(o.Account), o, missing, caller)
-}
-
-func dropCopyMissingAccountError() error {
-	// A drop-copy report describes an execution that already happened elsewhere.
-	// Refusing to record it because Officer has not seen the account would drop
-	// a real fill, so the account is always registered instead.
-	return fmt.Errorf(
-		"backend: drop-copy reports an execution that already happened and "+
-			"cannot reject a missing account; use missingAccount=%s: %w",
-		domain.MissingAccountCreate, domain.ErrInvalid,
-	)
 }
 
 func isDropCopyOrder(order domain.Order) bool {
@@ -774,6 +773,11 @@ func (s *Service) CancelOrder(
 ) (domain.Order, Attestation, error) {
 	order, err := domain.ParseExternalID(orderID)
 	if err != nil {
+		return domain.Order{}, Attestation{}, err
+	}
+	// The reason is signed into the payload and rendered verbatim into the audit
+	// detail line, where a control character could forge a second record.
+	if err := domain.ValidateReason(reason); err != nil {
 		return domain.Order{}, Attestation{}, err
 	}
 	n, err := s.router.Route(keyFor(""))

@@ -25,6 +25,7 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/internal/mcp/tools"
 )
 
 // testOrderEID is a valid 22-char order external-id handle used across the
@@ -468,6 +469,70 @@ func TestSubmitOrderMissingAccount(t *testing.T) {
 
 	if !res.IsError {
 		t.Fatalf("want IsError=true for missing account")
+	}
+}
+
+// TestSubmitOrderValidatesMissingAccountPolicy proves the raw MCP tool body
+// preserves the domain validation sentinel for absent and unknown policies.
+func TestSubmitOrderValidatesMissingAccountPolicy(t *testing.T) {
+	for _, policy := range []string{"", "maybe"} {
+		t.Run("policy="+policy, func(t *testing.T) {
+			src := &approvalFakeSource{}
+			_, _, err := tools.SubmitOrderHandler(src)(
+				context.Background(), nil, submitOrderInput{
+					Account: "acc1", BaseAsset: "BTC", QuoteAsset: "USD",
+					Side: "buy", AmountKind: "quantity", AmountValue: "1",
+					MissingAccount: policy,
+				})
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("missingAccount error = %v, want ErrInvalid", err)
+			}
+			if len(src.submitCalls) != 0 {
+				t.Fatalf("submit calls = %d, want 0", len(src.submitCalls))
+			}
+		})
+	}
+}
+
+// TestSubmitOrderForwardsRejectMissingAccountPolicy covers the valid refusing
+// choice through the guarded MCP surface.
+func TestSubmitOrderForwardsRejectMissingAccountPolicy(t *testing.T) {
+	src := &approvalFakeSource{
+		submitResult: SubmitOrderTokenResult{OrderExternalID: testOrderEID},
+	}
+	res := callSubmitOrder(t, src, submitOrderInput{
+		Account: "acc1", BaseAsset: "BTC", QuoteAsset: "USD",
+		Side: "buy", AmountKind: "quantity", AmountValue: "1",
+		MissingAccount: "reject",
+	})
+	if res.IsError {
+		t.Fatalf("unexpected error: %v", res.Content)
+	}
+	if len(src.submitCalls) != 1 ||
+		src.submitCalls[0].missing != domain.MissingAccountReject {
+		t.Fatalf("submit calls = %+v, want one reject policy", src.submitCalls)
+	}
+}
+
+// TestSubmitDropCopyOrderValidatesMissingAccountPolicy proves the raw MCP tool
+// body uses the shared create-only drop-copy invariant.
+func TestSubmitDropCopyOrderValidatesMissingAccountPolicy(t *testing.T) {
+	for _, policy := range []string{"", "maybe", "reject"} {
+		t.Run("policy="+policy, func(t *testing.T) {
+			src := &approvalFakeSource{}
+			_, _, err := tools.SubmitDropCopyOrderHandler(src)(
+				context.Background(), nil, submitDropCopyOrderInput{
+					Account: "acc1", BaseAsset: "BTC", QuoteAsset: "USD",
+					Side: "buy", AmountKind: "quantity", AmountValue: "1",
+					MissingAccount: policy,
+				})
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("missingAccount error = %v, want ErrInvalid", err)
+			}
+			if src.dropCopyCalls != 0 {
+				t.Fatalf("drop-copy calls = %d, want 0", src.dropCopyCalls)
+			}
+		})
 	}
 }
 

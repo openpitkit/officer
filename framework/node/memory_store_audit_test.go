@@ -29,7 +29,23 @@ import (
 func (r *memoryRealm) AppendAudit(_ context.Context, entry store.AuditEntry) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	row := domain.AuditRow{
+	r.audit = append(r.audit, r.auditRow(entry))
+	return nil
+}
+
+func (r *memoryRealm) AppendAuditBatch(
+	_ context.Context, entries []store.AuditEntry,
+) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, entry := range entries {
+		r.audit = append(r.audit, r.auditRow(entry))
+	}
+	return nil
+}
+
+func (r *memoryRealm) auditRow(entry store.AuditEntry) domain.AuditRow {
+	return domain.AuditRow{
 		At:           time.Now().UTC(),
 		ExternalID:   r.nextExternalID(),
 		Actor:        entry.Actor,
@@ -38,11 +54,10 @@ func (r *memoryRealm) AppendAudit(_ context.Context, entry store.AuditEntry) err
 		Account:      entry.Account,
 		AccountTitle: entry.AccountTitle,
 		Asset:        entry.Asset,
+		Group:        entry.Group,
 		Detail:       entry.Detail,
 		Source:       entry.Source,
 	}
-	r.audit = append(r.audit, row)
-	return nil
 }
 
 func (r *memoryRealm) ListAudit(_ context.Context, n int) ([]domain.AuditRow, error) {
@@ -97,6 +112,7 @@ func (r *memoryRealm) ListAuditRows(
 		}
 		if !textMatches(filter.Account, row.Account.String()) ||
 			!textMatches(filter.Asset, row.Asset) ||
+			!textMatches(filter.Group, row.Group) ||
 			!textMatches(filter.Actor, row.Actor) {
 			continue
 		}

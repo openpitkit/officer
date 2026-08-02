@@ -1953,6 +1953,55 @@ func TestRecordOrderSettlementAcceptsHighPrecisionBalance(t *testing.T) {
 	}
 }
 
+// TestRecordOrderSettlementNormalizesMirroredBlockReason pins the engine-mirror
+// write seam. The engine-boundary scrub only strips control characters, so a
+// format-class rune such as U+200B reaches this write; the restore path rejects
+// it. Persisting it verbatim would leave the realm - including Officer's own
+// rollback archive - unrestorable, so the mirror normalizes instead of rejecting.
+func TestRecordOrderSettlementNormalizesMirroredBlockReason(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+	created, err := rs.CreateOrder(ctx, sampleOrder())
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+
+	reason := "kill\u200bswitch [code=pnl_bound_breached, order " +
+		created.ExternalID.String() + "]"
+	if _, err := rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		Order:       created.ExternalID,
+		Account:     "acc-1",
+		OrderStatus: domain.OrderStatusCommitted,
+		AllowedFrom: domain.OrderStatusesEligibleForFill(),
+		Blocks: []domain.ExecutionAccountBlock{{
+			Account: "acc-1",
+			Code:    "pnl_bound_breached",
+			Reason:  reason,
+		}},
+	}); err != nil {
+		t.Fatalf("RecordOrderSettlement: %v", err)
+	}
+
+	account, ok, err := rs.GetAccount(ctx, "acc-1")
+	if err != nil {
+		t.Fatalf("GetAccount: %v", err)
+	}
+	if !ok {
+		t.Fatal("account missing after settlement")
+	}
+	if !account.Blocked {
+		t.Fatal("mirrored engine block did not block the account")
+	}
+	if strings.Contains(account.BlockReason, "\u200b") {
+		t.Fatalf("block reason = %q, want the non-printable rune dropped", account.BlockReason)
+	}
+	if !strings.HasPrefix(account.BlockReason, "killswitch [code=pnl_bound_breached") {
+		t.Fatalf("block reason = %q, want the engine cause preserved", account.BlockReason)
+	}
+	if err := domain.ValidateBlockReason(account.BlockReason); err != nil {
+		t.Fatalf("persisted block reason is not restorable: %v", err)
+	}
+}
+
 func TestRecordOrderSettlementMissingOrder(t *testing.T) {
 	ctx, rs := seedOrderFixtures(t)
 

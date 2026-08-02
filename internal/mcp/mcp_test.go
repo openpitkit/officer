@@ -35,6 +35,8 @@ type fakeSource struct {
 	status        Status
 	statusErr     error
 	account       domain.Account
+	groups        []domain.AccountGroup
+	listGroupsErr error
 	limits        node.AccountLimits
 	orderDetail   domain.OrderDetail
 	getOrderErr   error
@@ -86,6 +88,12 @@ func (f *fakeSource) GetAccountState(
 			fmt.Errorf("account %q: %w", id, domain.ErrNotFound)
 	}
 	return f.account, f.limits, nil
+}
+
+func (f *fakeSource) ListGroups(
+	_ context.Context,
+) ([]domain.AccountGroup, error) {
+	return f.groups, f.listGroupsErr
 }
 
 func (f *fakeSource) ListLimits(
@@ -430,6 +438,20 @@ func TestGetAccountStateSourceFailure(t *testing.T) {
 	}
 }
 
+// A rejected account id is the caller's mistake: the domain message must reach
+// the agent so it corrects the id instead of retrying a supposed outage.
+func TestGetAccountStateInvalidID(t *testing.T) {
+	src := &fakeSource{accStateErr: fmt.Errorf(
+		"account id %q is a reserved path segment: %w", ".", domain.ErrInvalid,
+	)}
+	res := callGetAccountState(t, src, ".")
+	requireToolError(t, res.IsError)
+	got := textContent(res.Content)
+	if !strings.Contains(got, "reserved path segment") {
+		t.Errorf("expected the domain message, got %q", got)
+	}
+}
+
 func TestGetAccountStateEmptyAccount(t *testing.T) {
 	res := callGetAccountState(t, &fakeSource{}, "")
 	requireToolError(t, res.IsError)
@@ -453,6 +475,131 @@ func TestGetAccountStateBlockedAccount(t *testing.T) {
 	}
 	if res.StructuredContent.Account.BlockReason != "compliance hold" {
 		t.Errorf("wrong block reason: %q", res.StructuredContent.Account.BlockReason)
+	}
+	if res.StructuredContent.Account.BlockSource != "account" {
+		t.Errorf("wrong block source: %q", res.StructuredContent.Account.BlockSource)
+	}
+}
+
+// An agent that reads only `blocked` must learn that a member of a blocked
+// group cannot trade: the engine rejects its every order.
+func TestGetAccountStateGroupBlockedAccount(t *testing.T) {
+	src := &fakeSource{
+		account: domain.Account{Code: "acc-3", GroupCode: "desk"},
+		groups: []domain.AccountGroup{
+			{Code: "desk", Blocked: true, BlockReason: "desk halt"},
+		},
+	}
+	res := callGetAccountState(t, src, "acc-3")
+	requireNotToolError(t, res.IsError)
+	account := res.StructuredContent.Account
+	if !account.Blocked || account.BlockSource != "group" {
+		t.Fatalf("blocked = %v, source = %q", account.Blocked, account.BlockSource)
+	}
+	if account.BlockReason != "desk halt" ||
+		account.GroupBlockReason != "desk halt" {
+		t.Errorf(
+			"reasons = %q / %q", account.BlockReason, account.GroupBlockReason,
+		)
+	}
+	if account.AccountBlocked || account.AccountBlockReason != "" {
+		t.Errorf(
+			"account tier = %v / %q",
+			account.AccountBlocked, account.AccountBlockReason,
+		)
+	}
+	if !account.GroupBlocked {
+		t.Error("want groupBlocked:true")
+	}
+	const wantSummary = "account acc-3: 0 limit(s) - blocked (group)"
+	if got := textContent(res.Content); got != wantSummary {
+		t.Errorf("summary hides the block: %q", got)
+	}
+}
+
+// The account's own block wins reason attribution, mirroring the engine, so an
+// operator is sent to the tier that actually holds the account rather than to
+// the group.
+func TestGetAccountStateBothTiersBlocked(t *testing.T) {
+	src := &fakeSource{
+		account: domain.Account{
+			Code:        "acc-4",
+			GroupCode:   "desk",
+			Blocked:     true,
+			BlockReason: "compliance hold",
+		},
+		groups: []domain.AccountGroup{
+			{Code: "desk", Blocked: true, BlockReason: "desk halt"},
+		},
+	}
+	res := callGetAccountState(t, src, "acc-4")
+	requireNotToolError(t, res.IsError)
+	account := res.StructuredContent.Account
+	if !account.Blocked || account.BlockSource != "account" {
+		t.Fatalf("blocked = %v, source = %q", account.Blocked, account.BlockSource)
+	}
+	if account.BlockReason != "compliance hold" {
+		t.Errorf("effective reason = %q", account.BlockReason)
+	}
+	if !account.AccountBlocked ||
+		account.AccountBlockReason != "compliance hold" {
+		t.Errorf(
+			"account tier = %v / %q",
+			account.AccountBlocked, account.AccountBlockReason,
+		)
+	}
+	if !account.GroupBlocked || account.GroupBlockReason != "desk halt" {
+		t.Errorf(
+			"group tier = %v / %q",
+			account.GroupBlocked, account.GroupBlockReason,
+		)
+	}
+	const wantSummary = "account acc-4: 0 limit(s) - blocked (account)"
+	if got := textContent(res.Content); got != wantSummary {
+		t.Errorf("summary names the wrong tier: %q", got)
+	}
+}
+
+// An account whose group is absent from the group store resolves through its
+// own tier alone: no stale or default group block is inherited.
+func TestGetAccountStateUnknownGroup(t *testing.T) {
+	src := &fakeSource{
+		account: domain.Account{Code: "acc-5", GroupCode: "gone"},
+		groups: []domain.AccountGroup{
+			{Code: "desk", Blocked: true, BlockReason: "desk halt"},
+		},
+	}
+	res := callGetAccountState(t, src, "acc-5")
+	requireNotToolError(t, res.IsError)
+	account := res.StructuredContent.Account
+	if account.Blocked || account.BlockSource != "none" {
+		t.Fatalf("blocked = %v, source = %q", account.Blocked, account.BlockSource)
+	}
+	if account.GroupBlocked || account.GroupBlockReason != "" {
+		t.Errorf(
+			"group tier = %v / %q",
+			account.GroupBlocked, account.GroupBlockReason,
+		)
+	}
+	if got := textContent(res.Content); strings.Contains(got, "blocked") {
+		t.Errorf("summary reports a block: %q", got)
+	}
+}
+
+// A failed group read must fail the tool closed: answering from the account's
+// own flag alone would call a member of a blocked group tradeable.
+func TestGetAccountStateGroupReadFailure(t *testing.T) {
+	src := &fakeSource{
+		account:       domain.Account{Code: "acc-6", GroupCode: "desk"},
+		listGroupsErr: fmt.Errorf("store down"),
+	}
+	res := callGetAccountState(t, src, "acc-6")
+	requireToolError(t, res.IsError)
+	if got := textContent(res.Content); got != "resolve account block failed" {
+		t.Errorf("unexpected error text: %q", got)
+	}
+	if got := res.StructuredContent.Account; got.Code != "" {
+		t.Errorf("partial account body returned: %+v", got)
 	}
 }
 
@@ -606,6 +753,36 @@ func TestGetAuditHappyPath(t *testing.T) {
 	}
 }
 
+// A group action carries its structured group handle onto the MCP wire, so an
+// agent selects a group's rows by identity instead of matching the free-form
+// detail text, where one group's code can appear inside another's.
+func TestGetAuditGroupHandle(t *testing.T) {
+	src := &fakeSource{
+		auditRows: []domain.AuditRow{
+			{
+				ExternalID: mustExternalID(t, "AAAAAAAAAAAAAAAAAAAAAg"),
+				At:         time.Date(2026, 6, 11, 10, 0, 0, 0, time.UTC),
+				Actor:      "operator",
+				Action:     domain.AuditActionBlockGroup,
+				Group:      "desk",
+				Detail:     "block group desk",
+			},
+		},
+	}
+	res := callGetAudit(t, src, 0)
+	requireNotToolError(t, res.IsError)
+	if len(res.StructuredContent.Entries) != 1 {
+		t.Fatalf("want 1 entry, got %d", len(res.StructuredContent.Entries))
+	}
+	e := res.StructuredContent.Entries[0]
+	if e.Group != "desk" {
+		t.Errorf("group handle = %q, want desk", e.Group)
+	}
+	if e.Account != "" {
+		t.Errorf("group row carries an account: %q", e.Account)
+	}
+}
+
 func TestGetAuditDefaultLimit(t *testing.T) {
 	// Source receives the default 50 when caller passes 0.
 	src := &captureNSource{}
@@ -660,6 +837,10 @@ func (c *captureNSource) Status(_ context.Context) (Status, error) {
 func (c *captureNSource) GetAccountState(_ context.Context, _ domain.AccountID) (
 	domain.Account, node.AccountLimits, error) {
 	return domain.Account{}, node.AccountLimits{}, nil
+}
+func (c *captureNSource) ListGroups(_ context.Context) (
+	[]domain.AccountGroup, error) {
+	return nil, nil
 }
 func (c *captureNSource) ListLimits(_ context.Context, _ domain.AccountID) (
 	node.AccountLimits, error) {

@@ -21,6 +21,8 @@ import (
 	"context"
 	"fmt"
 
+	"go.openpit.dev/openpit/model"
+	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pretrade"
 	"go.openpit.dev/openpit/reject"
 
@@ -28,9 +30,11 @@ import (
 	fwengine "go.openpit.dev/officer/framework/engine"
 )
 
-// SubmitImmediate runs the pre-trade pipeline and, on accept, commits the
-// reservation and settles a fill at the captured settlement lock price in the
-// same call so the held amount nets to zero.
+// SubmitImmediate runs the pre-trade pipeline and, on accept, settles a fill in
+// the same call so the held amount nets to zero: the fill is priced at the
+// captured settlement lock price and carries the pre-trade lock the engine
+// itself produced. Regular pre-trade commits its reservation first; drop-copy
+// arrives already applied.
 func (e *openPitEngine) SubmitImmediate(
 	ctx context.Context, o domain.Order,
 ) (ImmediateResult, error) {
@@ -58,16 +62,24 @@ func (l accountLane) SubmitImmediate(
 	if err != nil {
 		return ImmediateResult{}, err
 	}
+	if o.DropCopy {
+		return l.submitImmediateDropCopy(o, order, accountID)
+	}
 
-	reservation, rejects, err := l.executePreTrade(order, o.DropCopy)
+	reservation, rejects, err := l.eng.ExecutePreTrade(order)
 	if err != nil {
-		return ImmediateResult{}, wrapPreTradeError(o, err)
+		return ImmediateResult{}, wrapPreTradeError(err)
 	}
 	if rejects != nil {
 		return ImmediateResult{Accepted: false, Rejects: orderRejectsFrom(rejects)}, nil
 	}
 
-	lockBytes, settlement, source, err := captureReservation(reservation, o)
+	lock, err := reservation.Lock()
+	if err != nil {
+		reservation.RollbackAndClose()
+		return ImmediateResult{}, fmt.Errorf("engine: read reservation lock: %w", err)
+	}
+	lockBytes, settlement, source, err := capturePreTradeOutput(lock, o)
 	if err != nil {
 		reservation.RollbackAndClose()
 		return ImmediateResult{}, err
@@ -85,6 +97,10 @@ func (l accountLane) SubmitImmediate(
 		reservation.RollbackAndClose()
 		return ImmediateResult{}, err
 	}
+	// The report goes straight back to the engine, so it carries the lock the
+	// engine produced for this very reservation. A lock is an opaque engine
+	// artifact; the LockPrice fallback would rebuild a single-entry
+	// default-policy-group lock and drop every other group's leg.
 	report, err := executionReportFromAccount(domain.ExecutionReportInput{
 		BaseAsset:      o.BaseAsset,
 		QuoteAsset:     o.QuoteAsset,
@@ -92,6 +108,7 @@ func (l accountLane) SubmitImmediate(
 		FillPrice:      settlement,
 		LeavesQuantity: "0",
 		LockPrice:      settlement,
+		Lock:           lockBytes,
 		Account:        o.Account,
 		Side:           o.Side,
 		Order:          o.ExternalID,
@@ -106,7 +123,12 @@ func (l accountLane) SubmitImmediate(
 	// execution report may omit an unchanged available balance after releasing a
 	// reservation, so the persisted snapshot still needs the reservation's
 	// available/held transition.
-	reservationOutcomes, err := balanceOutcomesFromList(reservation.AccountAdjustments())
+	adjustments, err := reservation.AccountAdjustments()
+	if err != nil {
+		reservation.RollbackAndClose()
+		return ImmediateResult{}, err
+	}
+	reservationOutcomes, err := balanceOutcomesFromList(adjustments)
 	if err != nil {
 		reservation.RollbackAndClose()
 		return ImmediateResult{}, err
@@ -118,41 +140,151 @@ func (l accountLane) SubmitImmediate(
 	// against an unrealized reservation would not net the held amount to zero.
 	// Settle-then-commit is therefore not expressible with this SDK.
 	reservation.CommitAndClose()
+	return l.settleImmediateApplied(
+		o,
+		accountID,
+		report,
+		reservationOutcomes,
+		nil,
+		lockBytes,
+		settlement,
+		fillQuantity,
+		source,
+		"reservation committed",
+	)
+}
 
-	// CommitAndClose has already closed the reservation, so there is no
-	// compensating rollback available if the post-trade settlement fails. A
-	// failure here leaves the funds committed but the fill unsettled, which only an
-	// operator can reconcile; surface that explicitly rather than as a bare wrapped
-	// error so the caller does not retry blindly.
+func (l accountLane) submitImmediateDropCopy(
+	o domain.Order,
+	order model.Order,
+	accountID param.AccountID,
+) (ImmediateResult, error) {
+	result, rejects, err := l.eng.ApplyDropCopy(order)
+	if err != nil {
+		return ImmediateResult{}, wrapPreTradeError(err)
+	}
+	if rejects != nil {
+		return ImmediateResult{
+			Accepted: false,
+			Rejects:  orderRejectsFrom(rejects),
+		}, nil
+	}
+	// Guard the FFI contract: Close dereferences the result, so a nil one must
+	// not reach the defer below.
+	if result == nil {
+		return ImmediateResult{}, fmt.Errorf(
+			"engine: drop-copy returned neither a result nor rejects",
+		)
+	}
+	defer result.Close()
+
+	lock, err := result.Lock()
+	if err != nil {
+		return ImmediateResult{}, dropCopyReconciliationError(
+			o, "read applied lock", err,
+		)
+	}
+	lockBytes, settlement, source, err := capturePreTradeOutput(lock, o)
+	if err != nil {
+		return ImmediateResult{}, dropCopyReconciliationError(o, "materialize lock", err)
+	}
+	if reject, ok := volumeOrderSizingReject(o, settlement); ok {
+		return ImmediateResult{}, dropCopyReconciliationError(
+			o,
+			"size volume order",
+			fmt.Errorf("%s: %s", reject.Reason, reject.Details),
+		)
+	}
+	fillQuantity, err := immediateFillQuantity(o, settlement)
+	if err != nil {
+		return ImmediateResult{}, dropCopyReconciliationError(
+			o, "derive immediate fill quantity", err,
+		)
+	}
+	// Same contract as the regular branch: hand back the lock this drop-copy
+	// result produced, not the single-entry one the LockPrice fallback rebuilds.
+	report, err := executionReportFromAccount(domain.ExecutionReportInput{
+		BaseAsset:      o.BaseAsset,
+		QuoteAsset:     o.QuoteAsset,
+		FillQuantity:   fillQuantity,
+		FillPrice:      settlement,
+		LeavesQuantity: "0",
+		LockPrice:      settlement,
+		Lock:           lockBytes,
+		Account:        o.Account,
+		Side:           o.Side,
+		Order:          o.ExternalID,
+		OrderStatus:    domain.OrderStatusFilled,
+	}, accountID)
+	if err != nil {
+		return ImmediateResult{}, dropCopyReconciliationError(
+			o, "build immediate execution report", err,
+		)
+	}
+	adjustments, err := result.AccountAdjustments()
+	if err != nil {
+		return ImmediateResult{}, dropCopyReconciliationError(
+			o, "read applied balance outcomes", err,
+		)
+	}
+	preTradeOutcomes, err := balanceOutcomesFromList(adjustments)
+	if err != nil {
+		return ImmediateResult{}, dropCopyReconciliationError(
+			o, "map balance outcomes", err,
+		)
+	}
+	block, err := result.AccountBlock()
+	if err != nil {
+		return ImmediateResult{}, dropCopyReconciliationError(
+			o, "read applied account block", err,
+		)
+	}
+	var blocks []reject.AccountBlock
+	if block != nil {
+		blocks = append(blocks, *block)
+	}
+	return l.settleImmediateApplied(
+		o,
+		accountID,
+		report,
+		preTradeOutcomes,
+		blocks,
+		lockBytes,
+		settlement,
+		fillQuantity,
+		source,
+		"drop-copy applied",
+	)
+}
+
+func (l accountLane) settleImmediateApplied(
+	o domain.Order,
+	accountID param.AccountID,
+	report model.ExecutionReport,
+	preTradeOutcomes []BalanceOutcome,
+	preTradeBlocks []reject.AccountBlock,
+	lockBytes []byte,
+	settlement string,
+	fillQuantity string,
+	source string,
+	state string,
+) (ImmediateResult, error) {
 	postTrade, err := l.eng.ApplyExecutionReport(report)
 	if err != nil {
-		return ImmediateResult{}, fmt.Errorf(
-			"engine: reservation committed but execution report failed for order %s "+
-				"(account %s); funds are committed and the fill is unsettled - the "+
-				"engine needs manual reconciliation: %w",
-			orderExternalIDForError(o.ExternalID), o.Account, err,
+		return ImmediateResult{}, immediateReconciliationError(
+			o, state, "the execution report failed and the fill is unsettled", err,
 		)
 	}
-	// The reservation is committed and the report is settled, so an unmappable
-	// engine outcome cannot be undone here. Report it in the same terms as a
-	// failed settlement above: the engine state stands and only an operator can
-	// reconcile the missing snapshot.
 	postTradeOutcomes, err := balanceOutcomesFromList(postTrade.AccountAdjustments)
 	if err != nil {
-		return ImmediateResult{}, fmt.Errorf(
-			"engine: reservation committed and execution report settled for order %s "+
-				"(account %s), but its outcome is unmappable - the persisted balance "+
-				"snapshot needs manual reconciliation: %w",
-			orderExternalIDForError(o.ExternalID), o.Account, err,
+		return ImmediateResult{}, immediateReconciliationError(
+			o, state, "the settled outcome is unmappable", err,
 		)
 	}
-	finalOutcomes, err := mergeBalanceOutcomes(reservationOutcomes, postTradeOutcomes)
+	finalOutcomes, err := mergeBalanceOutcomes(preTradeOutcomes, postTradeOutcomes)
 	if err != nil {
-		return ImmediateResult{}, fmt.Errorf(
-			"engine: reservation committed and execution report settled for order %s "+
-				"(account %s), but its ordered outcomes cannot be combined - the "+
-				"persisted balance snapshot needs manual reconciliation: %w",
-			orderExternalIDForError(o.ExternalID), o.Account, err,
+		return ImmediateResult{}, immediateReconciliationError(
+			o, state, "the ordered outcomes cannot be combined", err,
 		)
 	}
 	accountPnl, accountPnlHaltReason, err := spotFundsAccountPnlFromList(
@@ -160,17 +292,21 @@ func (l accountLane) SubmitImmediate(
 		postTrade.AccountPnls,
 	)
 	if err != nil {
-		return ImmediateResult{}, fmt.Errorf(
-			"engine: reservation committed and execution report settled for order %s "+
-				"(account %s), but its account P&L outcome is unmappable - the "+
-				"persisted P&L needs manual reconciliation: %w",
-			orderExternalIDForError(o.ExternalID), o.Account, err,
+		return ImmediateResult{}, immediateReconciliationError(
+			o, state, "the account P&L outcome is unmappable", err,
 		)
 	}
+	// Build a fresh slice: appending to the caller's slice could write into its
+	// backing array.
+	blocks := make(
+		[]reject.AccountBlock, 0, len(preTradeBlocks)+len(postTrade.AccountBlocks),
+	)
+	blocks = append(blocks, preTradeBlocks...)
+	blocks = append(blocks, postTrade.AccountBlocks...)
 	return ImmediateResult{
 		Accepted:             true,
 		Lock:                 lockBytes,
-		Blocks:               executionBlocksFrom(postTrade.AccountBlocks, o.Account),
+		Blocks:               executionBlocksFrom(blocks, o.Account),
 		Outcomes:             finalOutcomes,
 		AccountPnl:           accountPnl,
 		AccountPnlHaltReason: accountPnlHaltReason,
@@ -180,10 +316,26 @@ func (l accountLane) SubmitImmediate(
 	}, nil
 }
 
+// immediateReconciliationError reports state the engine already applied and the
+// caller must reconcile by hand. The cause is rendered, not wrapped: causes
+// carrying domain.ErrInvalid would answer 400 "fix your input and retry", which
+// contradicts the message and hides an internal failure.
+func immediateReconciliationError(
+	o domain.Order, state string, action string, err error,
+) error {
+	return fmt.Errorf(
+		"engine: %s for order %s (account %s), but %s; engine state needs "+
+			"manual reconciliation - do not retry blindly: %v",
+		state, orderExternalIDForError(o.ExternalID), o.Account, action, err,
+	)
+}
+
 // volumeOrderSizingReject converts a policy pass without a usable volume
-// conversion price into a normal order reject. Pricing is known only after the
-// policy pipeline returns its lock, so rejecting here avoids a duplicate dry
-// run while still rolling the reservation back before any state is committed.
+// conversion price into a normal order reject for regular pre-trade. Pricing
+// is known only after the policy pipeline returns its lock, so rejecting here
+// avoids a duplicate dry run while the reservation can still be rolled back.
+// Drop-copy callers convert the same condition into a reconciliation error
+// because its one-shot state has already been applied.
 func volumeOrderSizingReject(
 	o domain.Order, settlementPrice string,
 ) (domain.OrderReject, bool) {
@@ -205,19 +357,19 @@ func orderExternalIDForError(id domain.ExternalID) string {
 	return id.String()
 }
 
-// captureReservation serializes a reservation's lock and derives its settlement
-// estimate while the reservation is still open. The caller owns the resulting
-// snapshot and may then commit or roll back the reservation.
-func captureReservation(
-	reservation *pretrade.Reservation, o domain.Order,
+// capturePreTradeOutput serializes a pre-trade output's lock and derives its
+// settlement estimate for either a live reservation or an already-applied
+// drop-copy result.
+func capturePreTradeOutput(
+	lock pretrade.Lock, o domain.Order,
 ) ([]byte, string, string, error) {
-	lockBytes, err := serializePreTradeLock(reservation)
+	lockBytes, err := serializePreTradeLock(lock)
 	if err != nil {
 		return nil, "", "", err
 	}
-	prices, err := reservation.Lock().Prices()
+	prices, err := lock.Prices()
 	if err != nil {
-		return nil, "", "", fmt.Errorf("engine: read reservation lock: %w", err)
+		return nil, "", "", fmt.Errorf("engine: read pre-trade lock: %w", err)
 	}
 	settlement, source := settlementEstimate(pricesToStrings(prices), o)
 	return lockBytes, settlement, source, nil

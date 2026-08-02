@@ -18,7 +18,6 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"net/http"
 
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
@@ -51,13 +50,18 @@ func handleSetMcpAccess(svc Service) http.HandlerFunc {
 			return
 		}
 		var req struct {
-			Enabled bool `json:"enabled"`
+			Enabled *bool `json:"enabled"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
-		if err := svc.SetMcpAccess(r.Context(), command, req.Enabled); err != nil {
+		if req.Enabled == nil {
+			httpx.WriteErrMsg(
+				w, http.StatusBadRequest, "validation", "enabled is required",
+			)
+			return
+		}
+		if err := svc.SetMcpAccess(r.Context(), command, *req.Enabled); err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}

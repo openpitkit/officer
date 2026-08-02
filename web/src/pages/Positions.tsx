@@ -269,9 +269,31 @@ function isNonZeroAmount(value: string | undefined): boolean {
   return /[1-9]/.test(trimmed);
 }
 
+/** Leading characters a spreadsheet application reads as the start of a formula
+ *  or DDE command. A field beginning with one of them executes when the
+ *  operator opens the export, so the export neutralizes it. Mirrors the
+ *  server-side businesscsv guard. */
+const CSV_FORMULA_LEADERS = "=+-@\t\r";
+
+/** A complete decimal number: the one exemption from formula quoting. A number
+ *  is never a formula, and quoting it would turn every negative balance and
+ *  P&L in the export into text the operator cannot sum. */
+const CSV_DECIMAL = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
+
+function csvFieldIsFormula(text: string): boolean {
+  // Leading apostrophes are the "treat as text" marker, so they are stripped
+  // before the check and the prefix stacks, exactly as the server does.
+  const bare = text.replace(/^'+/, "");
+  if (bare === "" || !CSV_FORMULA_LEADERS.includes(bare.charAt(0))) {
+    return false;
+  }
+  return !CSV_DECIMAL.test(bare);
+}
+
 function csvCell(value: string | number | undefined): string {
-  const text = value === undefined ? "" : String(value);
-  if (/[",\n\r]/.test(text)) {
+  const raw = value === undefined ? "" : String(value);
+  const text = csvFieldIsFormula(raw) ? `'${raw}` : raw;
+  if (/[",\n\r\t]/.test(text)) {
     return `"${text.replaceAll("\"", "\"\"")}"`;
   }
   return text;

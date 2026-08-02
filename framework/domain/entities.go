@@ -172,13 +172,70 @@ type Principal struct {
 	Title string
 }
 
-// ValidateGroupID returns ErrInvalid for group codes that are empty, exceed 64
-// code points, have leading/trailing whitespace, or contain non-printable
-// characters. Mirrors ValidateAccountID - groups and accounts share the same
-// code contract.
+// ValidatePrincipalID returns ErrInvalid for principal codes that are empty,
+// exceed 64 code points, have leading or trailing whitespace, contain invalid
+// UTF-8, or contain non-printable characters.
+func ValidatePrincipalID(id string) error {
+	if id == "" {
+		return fmt.Errorf("principal id is empty: %w", ErrInvalid)
+	}
+	if !utf8.ValidString(id) {
+		return fmt.Errorf("principal id contains invalid UTF-8: %w", ErrInvalid)
+	}
+	if utf8.RuneCountInString(id) > 64 {
+		return fmt.Errorf("principal id exceeds 64 code points: %w", ErrInvalid)
+	}
+	if strings.TrimSpace(id) != id {
+		return fmt.Errorf(
+			"principal id has leading or trailing whitespace: %w", ErrInvalid,
+		)
+	}
+	for _, r := range id {
+		if !unicode.IsPrint(r) {
+			return fmt.Errorf(
+				"principal id contains non-printable character: %w", ErrInvalid,
+			)
+		}
+	}
+	return nil
+}
+
+// isPathDotSegment reports whether a dictionary code is a relative path
+// segment. Such a code is not addressable through a normal client stack:
+// browsers, proxies, and any path.Clean-ing intermediary silently rewrite a dot
+// segment out of the URL, so the request that arrives names something else. A
+// stored identity must not depend on every hop leaving it alone.
+func isPathDotSegment(code string) bool {
+	return code == "." || code == ".."
+}
+
+// ReservedGroupCode is the API sentinel that addresses the realm default group
+// in a path position, as in PUT /groups/-/default/currency. It is reserved for
+// groups only: no other dictionary route puts a literal segment where its code
+// goes, so account, asset and asset-class codes are unaffected.
+const ReservedGroupCode = "-"
+
+// ValidateGroupID returns ErrInvalid for group codes that are empty, the
+// reserved default-group sentinel, a relative path segment, exceed 64 code
+// points, have leading/trailing whitespace, contain invalid UTF-8, or contain
+// non-printable characters. Mirrors ValidateAccountID - groups and accounts
+// share the same code contract, plus the group-only sentinel.
+//
+// The sentinel is rejected here rather than only at the REST boundary so every
+// writer inherits it: a group actually named "-" would be shadowed by the
+// default-group route and could never be renamed or deleted again.
 func ValidateGroupID(id string) error {
 	if id == "" {
 		return fmt.Errorf("group id is empty: %w", ErrInvalid)
+	}
+	if !utf8.ValidString(id) {
+		return fmt.Errorf("group id contains invalid UTF-8: %w", ErrInvalid)
+	}
+	if id == ReservedGroupCode {
+		return fmt.Errorf("group id %q is reserved: %w", id, ErrInvalid)
+	}
+	if isPathDotSegment(id) {
+		return fmt.Errorf("group id %q is a reserved path segment: %w", id, ErrInvalid)
 	}
 	if utf8.RuneCountInString(id) > 64 {
 		return fmt.Errorf("group id exceeds 64 code points: %w", ErrInvalid)
@@ -195,12 +252,19 @@ func ValidateGroupID(id string) error {
 }
 
 // ValidateAssetClassID returns ErrInvalid for asset-class codes that are empty,
-// exceed 64 code points, have leading/trailing whitespace, or contain
-// non-printable characters. Mirrors ValidateGroupID - asset classes are a
-// dictionary addressed by the same code contract as groups.
+// a relative path segment, exceed 64 code points, have leading/trailing
+// whitespace, contain invalid UTF-8, or contain non-printable characters.
+// Mirrors ValidateGroupID - asset classes are a dictionary addressed by the
+// same code contract as groups.
 func ValidateAssetClassID(id string) error {
 	if id == "" {
 		return fmt.Errorf("asset class id is empty: %w", ErrInvalid)
+	}
+	if !utf8.ValidString(id) {
+		return fmt.Errorf("asset class id contains invalid UTF-8: %w", ErrInvalid)
+	}
+	if isPathDotSegment(id) {
+		return fmt.Errorf("asset class id %q is a reserved path segment: %w", id, ErrInvalid)
 	}
 	if utf8.RuneCountInString(id) > 64 {
 		return fmt.Errorf("asset class id exceeds 64 code points: %w", ErrInvalid)
@@ -216,17 +280,91 @@ func ValidateAssetClassID(id string) error {
 	return nil
 }
 
-// ValidateNotes returns ErrInvalid when notes exceed 4096 code points.
+// ValidateNotes returns ErrInvalid when notes contain invalid UTF-8 or exceed
+// 4096 code points.
 func ValidateNotes(notes string) error {
+	if !utf8.ValidString(notes) {
+		return fmt.Errorf("notes contain invalid UTF-8: %w", ErrInvalid)
+	}
 	if utf8.RuneCountInString(notes) > 4096 {
 		return fmt.Errorf("notes exceed 4096 code points: %w", ErrInvalid)
 	}
 	return nil
 }
 
-// ValidateTitle returns ErrInvalid when a display title exceeds 256 code points
-// or contains non-printable characters. Empty titles are allowed.
+// maxReasonRunes is the length bound of a free-form reason and isReasonRune its
+// per-rune rule. ValidateReason and NormalizeReason are both written in terms of
+// them so the write-side normalizer cannot drift from the rule the read side
+// enforces.
+const maxReasonRunes = 4096
+
+func isReasonRune(r rune) bool { return unicode.IsPrint(r) }
+
+// ValidateReason returns ErrInvalid when an operator-supplied free-form reason
+// contains invalid UTF-8, exceeds 4096 code points, or contains non-printable
+// characters. A reason is persisted on the entity, rendered verbatim into the
+// audit detail line, and crosses the FFI as a string view, so a control
+// character - a newline above all - could forge an extra audit or log record.
+// Empty reasons are allowed.
+func ValidateReason(reason string) error {
+	if !utf8.ValidString(reason) {
+		return fmt.Errorf("reason contains invalid UTF-8: %w", ErrInvalid)
+	}
+	if utf8.RuneCountInString(reason) > maxReasonRunes {
+		return fmt.Errorf("reason exceeds %d code points: %w", maxReasonRunes, ErrInvalid)
+	}
+	for _, r := range reason {
+		if !isReasonRune(r) {
+			return fmt.Errorf("reason contains non-printable character: %w", ErrInvalid)
+		}
+	}
+	return nil
+}
+
+// NormalizeReason returns reason in the exact shape ValidateReason accepts:
+// non-printable runes are dropped, then the result is cut to the same length
+// bound on a code-point boundary.
+//
+// It exists for machine-produced reasons only - an engine block cause mirrored
+// onto the account row. Such a reason is not operator input, so rejecting it
+// would discard a real kill-switch record; but it lands in a row the restore
+// path validates, and Officer's own rollback archive is replayed through that
+// same path. A reason legal only on the write side would make the realm
+// unrestorable and kill the node on its next rollback. Operator-supplied
+// reasons keep failing loudly through ValidateReason instead.
+func NormalizeReason(reason string) string {
+	printable := strings.Map(func(r rune) rune {
+		if !isReasonRune(r) {
+			return -1
+		}
+		return r
+	}, reason)
+	runes := 0
+	for i := range printable {
+		if runes == maxReasonRunes {
+			return printable[:i]
+		}
+		runes++
+	}
+	return printable
+}
+
+// ValidateBlockReason applies the shared reason rule to an operator-supplied
+// block reason. The prefix keeps the operator-facing wording of the block paths.
+func ValidateBlockReason(reason string) error {
+	if err := ValidateReason(reason); err != nil {
+		return fmt.Errorf("block %w", err)
+	}
+	return nil
+}
+
+// ValidateTitle returns ErrInvalid when a display title contains invalid UTF-8,
+// exceeds 256 code points, or contains non-printable characters. Empty titles
+// are allowed.
 func ValidateTitle(title string) error {
+	if !utf8.ValidString(title) {
+		return fmt.Errorf("title contains invalid UTF-8: %w", ErrInvalid)
+	}
 	if utf8.RuneCountInString(title) > 256 {
 		return fmt.Errorf("title exceeds 256 code points: %w", ErrInvalid)
 	}
@@ -468,6 +606,10 @@ type AdjustmentOutcomeRejected struct {
 	Policy  string `json:"policy,omitempty"`
 	Reason  string `json:"reason"`
 	Details string `json:"details,omitempty"`
+	// FailedAdjustmentIndex is the zero-based index, within the submitted batch,
+	// of the adjustment the engine rejected on. A batch reject is atomic, so it
+	// is the only request the reject can be attributed to.
+	FailedAdjustmentIndex int `json:"failed_adjustment_index"`
 }
 
 // AccountAdjustmentRecord is the append-only history of a single spot-funds

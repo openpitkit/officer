@@ -118,13 +118,19 @@ type fakeService struct {
 	auditErr              error
 	groupErr              error
 
+	// Captured account writes, so a test can prove a rejected request changed
+	// nothing. The account fixtures themselves stay untouched.
+	createdAccounts    []domain.Account
+	accountNotesWrites []accountNotesWrite
+
 	// Captured typed-limit puts and delete target, for round-trip assertions.
 	rateLimitPut               domain.LimitRate
 	orderSizeLimitPut          domain.LimitOrderSize
 	spotFundsPnlBoundsLimitPut domain.LimitSpotFundsPnlBounds
 	deleteLimitTarget          node.LimitTarget
-	// Captured market-data instance create input.
-	mdCreateInstance domain.MarketDataInstance
+	// Captured market-data mutation inputs.
+	mdCreateInstance   domain.MarketDataInstance
+	mdUpsertInstrument domain.MarketDataInstrument
 
 	// Error fields for list handlers whose service methods otherwise return a
 	// hardcoded nil; default nil so existing tests are unaffected.
@@ -147,6 +153,7 @@ type fakeService struct {
 	activePublicKeyFormat string
 	noESign               bool
 	noESignSet            bool
+	noESignCalls          int
 	approvalToken         backend.ApprovalToken
 	attestation           backend.Attestation
 	submitTokenMode       string
@@ -345,10 +352,18 @@ func (f *fakeService) DeleteAsset(_ context.Context, code string, force bool) er
 	}
 	return domain.ErrNotFound
 }
+
+// accountNotesWrite is one accepted SetAccountNotes call.
+type accountNotesWrite struct {
+	Code  domain.AccountID
+	Notes string
+}
+
 func (f *fakeService) CreateAccount(_ context.Context, account domain.Account) (domain.Account, error) {
 	if f.createErr != nil {
 		return domain.Account{}, f.createErr
 	}
+	f.createdAccounts = append(f.createdAccounts, account)
 	return account, nil
 }
 func (f *fakeService) UpdateAccount(
@@ -502,6 +517,7 @@ func (f *fakeService) DeleteMarketDataInstance(
 func (f *fakeService) UpsertMarketDataInstrument(
 	_ context.Context, instrument domain.MarketDataInstrument,
 ) error {
+	f.mdUpsertInstrument = instrument
 	f.mdCalls = append(f.mdCalls, "upsert-instrument:"+instrument.ExternalSymbol)
 	return f.stateErr
 }
@@ -549,8 +565,16 @@ func (f *fakeService) SetAccountCurrency(
 	}
 	return f.stateErr
 }
-func (f *fakeService) SetAccountNotes(_ context.Context, _ domain.AccountID, _ string) error {
-	return f.stateErr
+func (f *fakeService) SetAccountNotes(
+	_ context.Context, code domain.AccountID, notes string,
+) error {
+	if f.stateErr != nil {
+		return f.stateErr
+	}
+	f.accountNotesWrites = append(
+		f.accountNotesWrites, accountNotesWrite{Code: code, Notes: notes},
+	)
+	return nil
 }
 func (f *fakeService) CreateGroup(
 	_ context.Context, g domain.AccountGroup,
@@ -790,6 +814,7 @@ func (f *fakeService) GetNoESign(_ context.Context) (bool, error) {
 	return f.noESign, f.signingErr
 }
 func (f *fakeService) SetNoESign(_ context.Context, off bool) error {
+	f.noESignCalls++
 	f.noESignSet = off
 	return f.signingErr
 }

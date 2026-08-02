@@ -452,6 +452,9 @@ func businessCSVGroupImport(row businesscsv.GroupRow) (domain.AccountGroup, erro
 	if err := domain.ValidateNotes(row.Notes); err != nil {
 		return domain.AccountGroup{}, err
 	}
+	if err := domain.ValidateBlockReason(row.BlockReason); err != nil {
+		return domain.AccountGroup{}, err
+	}
 	return domain.AccountGroup{
 		Code:        row.Code,
 		Title:       row.Title,
@@ -478,6 +481,9 @@ func businessCSVAccountImport(row businesscsv.AccountRow) (domain.Account, error
 		return domain.Account{}, err
 	}
 	if err := validateOptionalCurrency(row.Currency); err != nil {
+		return domain.Account{}, err
+	}
+	if err := domain.ValidateBlockReason(row.BlockReason); err != nil {
 		return domain.Account{}, err
 	}
 	if row.PnlSpecified {

@@ -19,7 +19,6 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"time"
 
@@ -58,8 +57,7 @@ func handleListLimits(svc Service) http.HandlerFunc {
 func handlePutRateLimit(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req rateLimitDTO
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		limit := domain.LimitRate{
@@ -94,8 +92,7 @@ func handlePutRateLimit(svc Service) http.HandlerFunc {
 func handlePutOrderSizeLimit(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req orderSizeLimitDTO
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		limit := domain.LimitOrderSize{
@@ -131,8 +128,7 @@ func handlePutOrderSizeLimit(svc Service) http.HandlerFunc {
 func handlePutSpotFundsPnlBoundsLimit(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req spotFundsPnlBoundsLimitDTO
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		limit := domain.LimitSpotFundsPnlBounds{

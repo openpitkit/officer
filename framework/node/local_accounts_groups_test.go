@@ -728,5 +728,368 @@ func TestLocalNode_SetGroupBlockedStoreFailureLeavesEngineUntouched(t *testing.T
 	}
 }
 
+// TestLocalNode_BlockAccountAuditRecordsReason proves the operator's reason
+// reaches the audit trail and survives there. account.block_reason is
+// overwritten in place and cleared on unblock, so after block-unblock-block the
+// first reason exists nowhere but the trail - which is the property the trail
+// exists to provide.
+func TestLocalNode_BlockAccountAuditRecordsReason(t *testing.T) {
+	t.Parallel()
+	n, st := newTestNode(t, newFakeEngine())
+	ctx := context.Background()
+
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	block := func(reason string) {
+		t.Helper()
+		if err := n.SetAccountBlocked(
+			ctx, testKey(id), true, reason, domain.MissingAccountCreate, testCaller,
+		); err != nil {
+			t.Fatalf("block %q: %v", reason, err)
+		}
+	}
+	block("margin breach")
+	if err := n.SetAccountBlocked(
+		ctx, testKey(id), false, "", domain.MissingAccountCreate, testCaller,
+	); err != nil {
+		t.Fatalf("unblock: %v", err)
+	}
+	block("suspected fraud")
+
+	account, _, err := n.GetAccountState(ctx, testKey(id))
+	if err != nil {
+		t.Fatalf("GetAccountState: %v", err)
+	}
+	if account.BlockReason != "suspected fraud" {
+		t.Fatalf("account block reason = %q, want the latest reason", account.BlockReason)
+	}
+
+	rows, err := st.ListAudit(ctx, 20)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	details := make([]string, 0, len(rows))
+	for _, row := range rows {
+		details = append(details, row.Detail)
+	}
+	if !slices.Contains(details, "block account acc-1: margin breach") {
+		t.Fatalf("first block reason lost from the trail: %v", details)
+	}
+	if !slices.Contains(details, "block account acc-1: suspected fraud") {
+		t.Fatalf("second block reason missing from the trail: %v", details)
+	}
+	if !slices.Contains(details, "unblock account acc-1") {
+		t.Fatalf("reasonless unblock must keep the bare form: %v", details)
+	}
+}
+
+// TestLocalNode_BlockGroupAuditRecordsReasonAndGroup proves the group block
+// records both the operator's reason and the structured group handle. The
+// structured field matters because group rows carry no account: a reader
+// selecting them by a substring of Detail would match any group whose code is
+// a substring of another's, and a crafted code can forge the match outright.
+func TestLocalNode_BlockGroupAuditRecordsReasonAndGroup(t *testing.T) {
+	t.Parallel()
+	n, st := newTestNode(t, newFakeEngine())
+	ctx := context.Background()
+
+	for _, code := range []string{"a", "desk-a"} {
+		if _, err := n.CreateGroup(ctx, domain.AccountGroup{Code: code}, testCaller); err != nil {
+			t.Fatalf("CreateGroup %q: %v", code, err)
+		}
+	}
+	if err := n.SetGroupBlocked(ctx, "desk-a", true, "desk over limit", testCaller); err != nil {
+		t.Fatalf("SetGroupBlocked: %v", err)
+	}
+	if err := n.SetGroupBlocked(ctx, "desk-a", false, "", testCaller); err != nil {
+		t.Fatalf("SetGroupBlocked unblock: %v", err)
+	}
+
+	page, err := st.ListAuditRows(ctx, store.AuditListFilter{
+		Group: store.ExactTextMatcher("desk-a"),
+	})
+	if err != nil {
+		t.Fatalf("ListAuditRows: %v", err)
+	}
+	wantDetails := []string{
+		"unblock group desk-a",
+		"block group desk-a: desk over limit",
+		"create group desk-a",
+	}
+	got := make([]string, 0, len(page.Rows))
+	for _, row := range page.Rows {
+		if row.Group != "desk-a" {
+			t.Fatalf("row %+v leaked into the desk-a filter", row)
+		}
+		got = append(got, row.Detail)
+	}
+	if !slices.Equal(got, wantDetails) {
+		t.Fatalf("desk-a audit rows = %v, want %v", got, wantDetails)
+	}
+
+	// The one-character group "a" is a substring of "desk-a"; the structured
+	// filter must not confuse the two the way a detail substring match would.
+	page, err = st.ListAuditRows(ctx, store.AuditListFilter{
+		Group: store.ExactTextMatcher("a"),
+	})
+	if err != nil {
+		t.Fatalf("ListAuditRows for group a: %v", err)
+	}
+	if len(page.Rows) != 1 || page.Rows[0].Detail != "create group a" {
+		t.Fatalf("group a audit rows = %+v, want only its own create row", page.Rows)
+	}
+}
+
+// auditGroupRows returns the rows of one action filed under a group code. The
+// structured group column is the reader's only identity handle on a group, so
+// the tests below select through it instead of matching detail text.
+func auditGroupRows(
+	t *testing.T, ctx context.Context, st store.RealmStore,
+	code string, action domain.AuditAction,
+) []domain.AuditRow {
+	t.Helper()
+	page, err := st.ListAuditRows(ctx, store.AuditListFilter{
+		Group:   store.ExactTextMatcher(code),
+		Actions: []domain.AuditAction{action},
+	})
+	if err != nil {
+		t.Fatalf("ListAuditRows group=%q: %v", code, err)
+	}
+	return page.Rows
+}
+
+// auditActionRows returns every row of one action whatever group it is filed
+// under, so a test can count the rows an event produced and see the ones filed
+// under no group at all.
+func auditActionRows(
+	t *testing.T, ctx context.Context, st store.RealmStore, action domain.AuditAction,
+) []domain.AuditRow {
+	t.Helper()
+	page, err := st.ListAuditRows(ctx, store.AuditListFilter{
+		Actions: []domain.AuditAction{action},
+	})
+	if err != nil {
+		t.Fatalf("ListAuditRows action=%q: %v", action, err)
+	}
+	return page.Rows
+}
+
+// TestLocalNode_UpdateGroupAuditFilesRenameUnderBothCodes proves a rename is
+// filed under both codes and names both. Filed under the new code only, the old
+// code's history ends with nothing saying where the group went; filed under the
+// old one only, the new code starts with no history at all.
+func TestLocalNode_UpdateGroupAuditFilesRenameUnderBothCodes(t *testing.T) {
+	t.Parallel()
+	n, st := newTestNode(t, newFakeEngine())
+	ctx := context.Background()
+
+	if _, err := n.CreateGroup(
+		ctx, domain.AccountGroup{Code: "desk-old"}, testCaller,
+	); err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	if _, err := n.UpdateGroup(ctx, "desk-old", domain.AccountGroup{
+		Code:  "desk-new",
+		Title: "renamed",
+	}, testCaller); err != nil {
+		t.Fatalf("UpdateGroup: %v", err)
+	}
+
+	const wantDetail = "update group desk-old -> desk-new"
+	for _, code := range []string{"desk-old", "desk-new"} {
+		rows := auditGroupRows(t, ctx, st, code, domain.AuditActionUpdateGroup)
+		if len(rows) != 1 || rows[0].Detail != wantDetail {
+			t.Fatalf("update rows under %q = %+v, want one %q", code, rows, wantDetail)
+		}
+	}
+	if rows := auditActionRows(
+		t, ctx, st, domain.AuditActionUpdateGroup,
+	); len(rows) != 2 {
+		t.Fatalf("update rows = %+v, want exactly one per code", rows)
+	}
+}
+
+// TestLocalNode_UpdateGroupTitleOnlyAuditsOnce proves a title-only update stays
+// a single row: there is no second code to file it under, and a duplicate would
+// read as two separate updates.
+func TestLocalNode_UpdateGroupTitleOnlyAuditsOnce(t *testing.T) {
+	t.Parallel()
+	n, st := newTestNode(t, newFakeEngine())
+	ctx := context.Background()
+
+	if _, err := n.CreateGroup(
+		ctx, domain.AccountGroup{Code: "desk-a"}, testCaller,
+	); err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	if _, err := n.UpdateGroup(ctx, "desk-a", domain.AccountGroup{
+		Code:  "desk-a",
+		Title: "renamed",
+	}, testCaller); err != nil {
+		t.Fatalf("UpdateGroup: %v", err)
+	}
+
+	rows := auditActionRows(t, ctx, st, domain.AuditActionUpdateGroup)
+	if len(rows) != 1 || rows[0].Group != "desk-a" ||
+		rows[0].Detail != "update group desk-a" {
+		t.Fatalf("update rows = %+v, want one row filed under desk-a", rows)
+	}
+}
+
+// TestLocalNode_SetAccountGroupAuditFilesMoveUnderBothGroups proves a membership
+// move is filed under the origin and the destination. Membership is the
+// operationally decisive group event: a group that loses a member must show that
+// loss in its own rows, not only in the rows of the group that gained it.
+func TestLocalNode_SetAccountGroupAuditFilesMoveUnderBothGroups(t *testing.T) {
+	t.Parallel()
+	n, st := newTestNode(t, newFakeEngine())
+	ctx := context.Background()
+
+	for _, code := range []string{"desk-a", "desk-b"} {
+		if _, err := n.CreateGroup(
+			ctx, domain.AccountGroup{Code: code}, testCaller,
+		); err != nil {
+			t.Fatalf("CreateGroup %q: %v", code, err)
+		}
+	}
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, domain.Account{
+		Code:      id,
+		Title:     "desk account",
+		GroupCode: "desk-a",
+	}, testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+
+	if err := n.SetAccountGroup(
+		ctx, testKey(id), "desk-b", domain.MissingAccountCreate, testCaller,
+	); err != nil {
+		t.Fatalf("SetAccountGroup: %v", err)
+	}
+
+	const wantDetail = "set group account acc-1 from=desk-a to=desk-b"
+	for _, code := range []string{"desk-a", "desk-b"} {
+		rows := auditGroupRows(t, ctx, st, code, domain.AuditActionSetGroup)
+		if len(rows) != 1 || rows[0].Detail != wantDetail {
+			t.Fatalf("set-group rows under %q = %+v, want one %q", code, rows, wantDetail)
+		}
+		if rows[0].Account != id || rows[0].AccountTitle != "desk account" {
+			t.Fatalf("set-group row under %q = %+v, want the account handle kept", code, rows[0])
+		}
+	}
+	if rows := auditActionRows(
+		t, ctx, st, domain.AuditActionSetGroup,
+	); len(rows) != 2 {
+		t.Fatalf("set-group rows = %+v, want exactly one per group", rows)
+	}
+}
+
+// TestLocalNode_SetAccountGroupAuditFilesOpenEndedMoveOnce proves joining from
+// no group and leaving to no group each leave one row, filed under the group
+// that is actually named. The empty code is the reserved default group; a row
+// filed under it would make every ungrouped membership change collect there.
+func TestLocalNode_SetAccountGroupAuditFilesOpenEndedMoveOnce(t *testing.T) {
+	t.Parallel()
+	n, st := newTestNode(t, newFakeEngine())
+	ctx := context.Background()
+
+	if _, err := n.CreateGroup(
+		ctx, domain.AccountGroup{Code: "desk-a"}, testCaller,
+	); err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	const id domain.AccountID = "acc-1"
+	if _, err := n.CreateAccount(ctx, testAccount(id), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+
+	if err := n.SetAccountGroup(
+		ctx, testKey(id), "desk-a", domain.MissingAccountCreate, testCaller,
+	); err != nil {
+		t.Fatalf("SetAccountGroup join: %v", err)
+	}
+	rows := auditActionRows(t, ctx, st, domain.AuditActionSetGroup)
+	wantJoin := "set group account acc-1 from=<none> to=desk-a"
+	if len(rows) != 1 || rows[0].Group != "desk-a" || rows[0].Detail != wantJoin {
+		t.Fatalf("join rows = %+v, want one desk-a row %q", rows, wantJoin)
+	}
+
+	if err := n.SetAccountGroup(
+		ctx, testKey(id), "", domain.MissingAccountCreate, testCaller,
+	); err != nil {
+		t.Fatalf("SetAccountGroup leave: %v", err)
+	}
+	rows = auditActionRows(t, ctx, st, domain.AuditActionSetGroup)
+	wantLeave := "set group account acc-1 from=desk-a to=<none>"
+	// Newest first: the leave precedes the join in the listing.
+	if len(rows) != 2 || rows[0].Group != "desk-a" || rows[0].Detail != wantLeave {
+		t.Fatalf("leave rows = %+v, want one more desk-a row %q", rows, wantLeave)
+	}
+	for _, row := range rows {
+		if row.Group == "" {
+			t.Fatalf("row %+v was filed under the reserved default group", row)
+		}
+	}
+	if got := auditGroupRows(
+		t, ctx, st, "desk-a", domain.AuditActionSetGroup,
+	); len(got) != 2 {
+		t.Fatalf("desk-a set-group rows = %+v, want both the join and the leave", got)
+	}
+}
+
+// TestLocalNode_BusinessCSVImportAuditRecordsBlockReasons proves the CSV import
+// path records the same reasons as the interactive block: the import is the one
+// route that can block many accounts and groups at once, so a trail that names
+// none of the reasons is the least useful exactly where it matters most.
+func TestLocalNode_BusinessCSVImportAuditRecordsBlockReasons(t *testing.T) {
+	t.Parallel()
+	n, st := newTestNode(t, newFakeEngine())
+	ctx := context.Background()
+
+	err := n.ApplyBusinessCSVImport(ctx, store.BusinessCSVImport{
+		Groups: []store.BusinessCSVImportGroup{{
+			Group: domain.AccountGroup{
+				Code:        "desk-a",
+				Blocked:     true,
+				BlockReason: "desk suspended",
+			},
+		}},
+		Accounts: []store.BusinessCSVImportAccount{{
+			Account: domain.Account{
+				Code:        "acc-1",
+				Blocked:     true,
+				BlockReason: "imported block",
+			},
+		}},
+	}, testCaller)
+	if err != nil {
+		t.Fatalf("ApplyBusinessCSVImport: %v", err)
+	}
+
+	rows, err := st.ListAudit(ctx, 50)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	details := make([]string, 0, len(rows))
+	for _, row := range rows {
+		details = append(details, row.Detail)
+	}
+	for _, want := range []string{
+		"block account acc-1: imported block",
+		"block group desk-a: desk suspended",
+	} {
+		if !slices.Contains(details, want) {
+			t.Fatalf("audit details %v missing %q", details, want)
+		}
+	}
+	for _, row := range rows {
+		if row.Action == domain.AuditActionBlockGroup && row.Group != "desk-a" {
+			t.Fatalf("imported group block row %+v carries no structured group", row)
+		}
+	}
+}
+
 // testOrder records a committed buy order so an execution report has a parent
 // order row to attach its event and trade to.

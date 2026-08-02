@@ -648,7 +648,10 @@ func (n *localNode) readRateBarrier(
 // ensureAccountAndAssetsRegisteredExclusive would deadlock on the held gate.
 //
 // Creating the account here publishes its resolver entry immediately, so the
-// barrier resolves to a real engine id and is enforced from the same call.
+// barrier resolves to a real engine id and is enforced from the same call. The
+// explicit create is an independent identity mutation: a later barrier store or
+// engine failure reverts the barrier, but deliberately keeps the account (and
+// any auto-created asset) registered for an idempotent retry.
 func (n *localNode) ensureLimitAccount(
 	ctx context.Context,
 	scope domain.LimitScope,

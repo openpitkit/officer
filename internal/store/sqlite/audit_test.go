@@ -128,6 +128,45 @@ func TestAuditAppendListAndExternalID(t *testing.T) {
 	}
 }
 
+func TestAppendAuditBatchIsAtomic(t *testing.T) {
+	ctx, rs := seedAuditFixtures(t)
+
+	err := rs.AppendAuditBatch(ctx, []AuditEntry{
+		{
+			Action: domain.AuditActionCreateAccount,
+			Detail: "first row must roll back",
+		},
+		{
+			Action: domain.AuditAction("unknown_action"),
+			Detail: "invalid second row",
+		},
+	})
+	if err == nil {
+		t.Fatal("AppendAuditBatch succeeded with an invalid second entry")
+	}
+	rows, listErr := rs.ListAudit(ctx, 10)
+	if listErr != nil {
+		t.Fatalf("ListAudit: %v", listErr)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("failed batch persisted partial rows: %+v", rows)
+	}
+
+	if err := rs.AppendAuditBatch(ctx, []AuditEntry{
+		{Action: domain.AuditActionCreateAccount, Detail: "first"},
+		{Action: domain.AuditActionUpdateAccount, Detail: "second"},
+	}); err != nil {
+		t.Fatalf("AppendAuditBatch: %v", err)
+	}
+	rows, err = rs.ListAudit(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListAudit after successful batch: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("successful batch rows = %d, want 2", len(rows))
+	}
+}
+
 func TestAuditAppendUnknownRefIsSnapshot(t *testing.T) {
 	ctx, rs := seedAuditFixtures(t)
 

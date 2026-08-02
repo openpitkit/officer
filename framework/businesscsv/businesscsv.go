@@ -32,6 +32,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shopspring/decimal"
 	"go.openpit.dev/officer/framework/domain"
 )
 
@@ -422,6 +423,51 @@ func WrapExport(
 	}, nil
 }
 
+// formulaLeaders are the leading characters a spreadsheet application reads as
+// the start of a formula or DDE command. A field beginning with one of them
+// executes when the operator opens the export in Excel, LibreOffice or Sheets,
+// so the sink neutralizes it. Validation cannot substitute for this guard:
+// titles, notes and block reasons are free text and may legitimately start with
+// "=".
+const formulaLeaders = "=+-@\t\r"
+
+// escapeCSVField neutralizes a spreadsheet formula by prefixing an apostrophe,
+// the conventional "treat as text" marker. The prefix stacks on a value that is
+// already apostrophe-prefixed, which makes unescapeCSVField its exact inverse
+// so an export re-imports to the original value.
+//
+// A value that parses as a complete decimal number is exempt: a number is never
+// a formula in any spreadsheet, and quoting it would turn every negative
+// balance and P&L in the export into text the operator cannot sum.
+func escapeCSVField(field string) string {
+	if !csvFieldIsFormula(field) {
+		return field
+	}
+	return "'" + field
+}
+
+// unescapeCSVField removes one apostrophe added by escapeCSVField. A field the
+// operator hand-authored is unaffected unless it carries the same marker, in
+// which case the spreadsheet convention already means the apostrophe is not
+// part of the value.
+func unescapeCSVField(field string) string {
+	if !strings.HasPrefix(field, "'") || !csvFieldIsFormula(field) {
+		return field
+	}
+	return field[1:]
+}
+
+func csvFieldIsFormula(field string) bool {
+	bare := strings.TrimLeft(field, "'")
+	if bare == "" || !strings.ContainsRune(formulaLeaders, rune(bare[0])) {
+		return false
+	}
+	if _, err := decimal.NewFromString(bare); err == nil {
+		return false
+	}
+	return true
+}
+
 func writeCSV(records [][]string, delimiter Delimiter) ([]byte, error) {
 	comma, err := delimiter.Rune()
 	if err != nil {
@@ -430,7 +476,17 @@ func writeCSV(records [][]string, delimiter Delimiter) ([]byte, error) {
 	var buf bytes.Buffer
 	w := csv.NewWriter(&buf)
 	w.Comma = comma
-	if err := w.WriteAll(records); err != nil {
+	for _, record := range records {
+		escaped := make([]string, len(record))
+		for i, field := range record {
+			escaped[i] = escapeCSVField(field)
+		}
+		if err := w.Write(escaped); err != nil {
+			return nil, fmt.Errorf("write CSV: %w", err)
+		}
+	}
+	w.Flush()
+	if err := w.Error(); err != nil {
 		return nil, fmt.Errorf("write CSV: %w", err)
 	}
 	return buf.Bytes(), nil
@@ -447,6 +503,12 @@ func readCSV(body []byte, delimiter Delimiter) ([][]string, error) {
 	records, err := r.ReadAll()
 	if err != nil {
 		return nil, fmt.Errorf("read CSV: %w: %w", err, domain.ErrInvalid)
+	}
+	// Mirror of writeCSV's escape so an exported file re-imports unchanged.
+	for _, record := range records {
+		for i, field := range record {
+			record[i] = unescapeCSVField(field)
+		}
 	}
 	return records, nil
 }

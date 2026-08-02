@@ -151,6 +151,11 @@ const account: Account = {
   title: "Bucks McMoneyface",
   blocked: false,
   blockReason: "",
+  blockSource: "none",
+  accountBlocked: false,
+  accountBlockReason: "",
+  groupBlocked: false,
+  groupBlockReason: "",
   group: "",
   notes: "",
   pnlHaltReason: "",
@@ -717,6 +722,67 @@ describe("Positions adjustment panel", () => {
     ).toBeDisabled();
   });
 
+  it("offers to create a missing account from the new-position adjustment", async () => {
+    const user = userEvent.setup();
+    createAdjustmentMock
+      .mockRejectedValueOnce(
+        new ApiError(
+          'adjustment: account "fresh-account" does not exist',
+          "account_missing",
+          404,
+          undefined,
+          "fresh-account",
+        ),
+      )
+      .mockImplementationOnce(async (_account, body) =>
+        acceptedAdjustment(body as unknown as Adjustment["request"]),
+      );
+    renderPositions();
+
+    const draftRow = screen
+      .getAllByRole("row")
+      .find((row) => row.textContent?.includes("New position"));
+    await user.click(
+      within(draftRow!).getByRole("button", {
+        name: /open new adjustment panel/i,
+      }),
+    );
+    const scope = within(screen.getByRole("region", { name: "Adjustment" }));
+    await user.type(scope.getByLabelText("Account"), "fresh-account");
+    await user.type(scope.getByLabelText("Asset"), "AAPL");
+    await user.type(scope.getByLabelText("Available adjustment amount"), "10");
+    await user.click(scope.getByRole("button", { name: /submit adjustment/i }));
+
+    const confirmDialog = await screen.findByRole("alertdialog", {
+      name: "Account does not exist",
+    });
+    expect(createAdjustmentMock).toHaveBeenNthCalledWith(
+      1,
+      "fresh-account",
+      {
+        asset: "AAPL",
+        balance: { mode: "absolute", value: "10" },
+      },
+      "reject",
+    );
+
+    await user.click(
+      within(confirmDialog).getByRole("button", {
+        name: "Create account and continue",
+      }),
+    );
+    await waitFor(() => expect(createAdjustmentMock).toHaveBeenCalledTimes(2));
+    expect(createAdjustmentMock).toHaveBeenNthCalledWith(
+      2,
+      "fresh-account",
+      {
+        asset: "AAPL",
+        balance: { mode: "absolute", value: "10" },
+      },
+      "create",
+    );
+  });
+
   it("opens the draft panel from the page action with current filters", async () => {
     const user = userEvent.setup();
     renderPositions("/positions?account=Bucks%20McMoneyface");
@@ -1070,6 +1136,55 @@ describe("Positions business CSV", () => {
       reader.readAsText(blob);
     });
     expect(body).toMatch(/^id,at,account,asset,/);
+  });
+
+  // A cell the operator's spreadsheet would execute on open is neutralized with
+  // the "treat as text" apostrophe, exactly as the server-side export does.
+  // Decimal amounts are exempt, or every negative balance in the file would
+  // become text the operator cannot sum.
+  it("neutralizes spreadsheet formulas in the history CSV but not decimals", async () => {
+    const user = userEvent.setup();
+    fetchAdjustmentsMock.mockResolvedValue({
+      items: [
+        {
+          id: "adj-formula",
+          account: "Bucks McMoneyface",
+          at: "2026-06-24T16:42:00Z",
+          source: "panel",
+          asset: "AAPL",
+          status: "rejected",
+          request: {
+            asset: "AAPL",
+            balance: { mode: "absolute", value: "-10.5" },
+          },
+          rejected: {
+            code: "balance_bound",
+            reason: "=cmd|calc!A1",
+            details: "@SUM(1)",
+          },
+        },
+      ],
+      total: 1,
+    });
+    renderPositions("/positions?tab=history");
+
+    await user.click(screen.getByRole("button", { name: /export history csv/i }));
+
+    await waitFor(() => expect(fetchAdjustmentsMock).toHaveBeenCalledTimes(1));
+    const blob = vi.mocked(URL.createObjectURL).mock.calls.at(-1)?.[0];
+    if (!(blob instanceof Blob)) {
+      throw new Error("history export did not create a CSV blob");
+    }
+    const body = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.addEventListener("load", () => resolve(String(reader.result)));
+      reader.addEventListener("error", () => reject(reader.error));
+      reader.readAsText(blob);
+    });
+    expect(body).toContain("'=cmd|calc!A1");
+    expect(body).toContain("'@SUM(1)");
+    expect(body).toContain(",-10.5,");
+    expect(body).not.toContain("'-10.5");
   });
 
   it("imports positions and reloads balances plus history after success", async () => {

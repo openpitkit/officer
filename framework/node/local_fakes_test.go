@@ -1214,6 +1214,17 @@ func (s *failActionAuditRealm) AppendAudit(
 	return s.RealmStore.AppendAudit(ctx, entry)
 }
 
+func (s *failActionAuditRealm) AppendAuditBatch(
+	ctx context.Context, entries []store.AuditEntry,
+) error {
+	for _, entry := range entries {
+		if entry.Action == s.action {
+			return s.err
+		}
+	}
+	return s.RealmStore.AppendAuditBatch(ctx, entries)
+}
+
 // failRollbackRestoreRealm fails the rollback RestoreBackup (the second restore
 // call) while delegating the first to the wrapped realm store.
 type failRollbackRestoreRealm struct {

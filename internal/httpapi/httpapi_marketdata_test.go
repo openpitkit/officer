@@ -19,6 +19,7 @@ package httpapi
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -249,6 +250,97 @@ func TestCreateMarketDataInstance_InvalidJSON(t *testing.T) {
 	}
 }
 
+func TestMarketDataMutationsRequireExplicitValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{
+			"create missing enabled",
+			http.MethodPost,
+			"/api/v1/market-data/instances",
+			`{"provider":"ib"}`,
+		},
+		{
+			"create null enabled",
+			http.MethodPost,
+			"/api/v1/market-data/instances",
+			`{"provider":"ib","enabled":null}`,
+		},
+		{
+			"instance toggle missing enabled",
+			http.MethodPut,
+			"/api/v1/market-data/instances/bn-1/enabled",
+			`{}`,
+		},
+		{
+			"instance toggle null enabled",
+			http.MethodPut,
+			"/api/v1/market-data/instances/bn-1/enabled",
+			`{"enabled":null}`,
+		},
+		{
+			"upsert missing manual price",
+			http.MethodPut,
+			"/api/v1/market-data/instances/bn-1/instruments",
+			`{"externalSymbol":"BTCUSDT","baseAsset":"BTC","quoteAsset":"USDT","enabled":true}`,
+		},
+		{
+			"upsert null manual price",
+			http.MethodPut,
+			"/api/v1/market-data/instances/bn-1/instruments",
+			`{"externalSymbol":"BTCUSDT","baseAsset":"BTC",` +
+				`"quoteAsset":"USDT","manualPrice":null,"enabled":true}`,
+		},
+		{
+			"upsert missing enabled",
+			http.MethodPut,
+			"/api/v1/market-data/instances/bn-1/instruments",
+			`{"externalSymbol":"BTCUSDT","baseAsset":"BTC","quoteAsset":"USDT","manualPrice":""}`,
+		},
+		{
+			"upsert null enabled",
+			http.MethodPut,
+			"/api/v1/market-data/instances/bn-1/instruments",
+			`{"externalSymbol":"BTCUSDT","baseAsset":"BTC",` +
+				`"quoteAsset":"USDT","manualPrice":"","enabled":null}`,
+		},
+		{
+			"instrument toggle missing enabled",
+			http.MethodPut,
+			"/api/v1/market-data/instances/bn-1/instruments/enabled",
+			`{"externalSymbol":"BTCUSDT"}`,
+		},
+		{
+			"instrument toggle null enabled",
+			http.MethodPut,
+			"/api/v1/market-data/instances/bn-1/instruments/enabled",
+			`{"externalSymbol":"BTCUSDT","enabled":null}`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeService{}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(
+				tc.method, tc.path, bytes.NewBufferString(tc.body),
+			))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("want 400, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			if len(svc.mdCalls) != 0 {
+				t.Fatalf("invalid request reached service: %v", svc.mdCalls)
+			}
+		})
+	}
+}
+
 func TestCreateMarketDataInstance_ServiceError(t *testing.T) {
 	// The backend rejects a malformed instance with ErrInvalid -> 400.
 	svc := &fakeService{stateErr: domain.ErrInvalid}
@@ -256,7 +348,7 @@ func TestCreateMarketDataInstance_ServiceError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := bytes.NewBufferString(`{"provider":"binance"}`)
+	body := bytes.NewBufferString(`{"provider":"binance","enabled":false}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/market-data/instances", body))
@@ -279,7 +371,8 @@ func TestCreateMarketDataInstance_SuppliedExternalID(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bytes.NewBufferString(fmt.Sprintf(
-		`{"id":%q,"provider":"ib","label":"Backup"}`, supplied.String()))
+		`{"id":%q,"provider":"ib","label":"Backup","enabled":false}`,
+		supplied.String()))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/market-data/instances", body))
@@ -300,7 +393,8 @@ func TestCreateMarketDataInstance_AbsentExternalID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := bytes.NewBufferString(`{"provider":"ib","label":"Backup"}`)
+	body := bytes.NewBufferString(
+		`{"provider":"ib","label":"Backup","enabled":false}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/market-data/instances", body))
@@ -322,7 +416,8 @@ func TestCreateMarketDataInstance_DuplicateConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bytes.NewBufferString(fmt.Sprintf(
-		`{"id":%q,"provider":"ib","label":"Backup"}`, extID("md-dup").String()))
+		`{"id":%q,"provider":"ib","label":"Backup","enabled":false}`,
+		extID("md-dup").String()))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/market-data/instances", body))
@@ -344,7 +439,9 @@ func TestCreateMarketDataInstance_OpaqueExternalID(t *testing.T) {
 		t.Fatal(err)
 	}
 	supplied := "bad-id"
-	body := bytes.NewBufferString(`{"id":"` + supplied + `","provider":"ib","label":"Backup"}`)
+	body := bytes.NewBufferString(
+		`{"id":"` + supplied +
+			`","provider":"ib","label":"Backup","enabled":false}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/market-data/instances", body))
@@ -552,27 +649,56 @@ func TestDeleteMarketDataInstance_NotFound(t *testing.T) {
 // --- PUT /market-data/instances/{id}/instruments ----------------------------
 
 func TestUpsertMarketDataInstrument_OK(t *testing.T) {
-	svc := &fakeService{marketData: sampleMarketData()}
-	r, err := newRouter(svc)
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name        string
+		manualPrice string
+		enabled     bool
+	}{
+		{"enabled without manual price", "", true},
+		{"disabled with manual price", "150", false},
 	}
-	body := bytes.NewBufferString(
-		`{"externalSymbol":"BTCUSDT","baseAsset":"BTC","quoteAsset":"USDT","enabled":true}`)
-	rec := httptest.NewRecorder()
-	// The upsert-instrument route parses the path id as the instance's opaque
-	// external id, so the path carries a valid external-id wire form.
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut,
-		"/api/v1/market-data/instances/"+extID("bn-1").String()+"/instruments", body))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	m := bodyMap(t, rec.Result())
-	if _, ok := m["marketData"].(map[string]any); !ok {
-		t.Fatalf("want marketData object, got %v", m["marketData"])
-	}
-	if len(svc.mdCalls) != 1 || svc.mdCalls[0] != "upsert-instrument:BTCUSDT" {
-		t.Fatalf("unexpected service calls: %v", svc.mdCalls)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeService{marketData: sampleMarketData()}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := json.Marshal(map[string]any{
+				"externalSymbol": "BTCUSDT",
+				"baseAsset":      "BTC",
+				"quoteAsset":     "USDT",
+				"manualPrice":    tc.manualPrice,
+				"enabled":        tc.enabled,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			instanceID := extID("bn-1")
+			r.ServeHTTP(rec, httptest.NewRequest(
+				http.MethodPut,
+				"/api/v1/market-data/instances/"+
+					instanceID.String()+"/instruments",
+				bytes.NewReader(body),
+			))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("want 200, got %d", rec.Code)
+			}
+			m := bodyMap(t, rec.Result())
+			if _, ok := m["marketData"].(map[string]any); !ok {
+				t.Fatalf("want marketData object, got %v", m["marketData"])
+			}
+			got := svc.mdUpsertInstrument
+			if got.Instance != instanceID ||
+				got.ExternalSymbol != "BTCUSDT" ||
+				got.BaseAsset != "BTC" ||
+				got.QuoteAsset != "USDT" ||
+				got.ManualPrice != tc.manualPrice ||
+				got.Enabled != tc.enabled {
+				t.Fatalf("upsert input = %+v", got)
+			}
+		})
 	}
 }
 
@@ -601,7 +727,9 @@ func TestUpsertMarketDataInstrument_ServiceError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := bytes.NewBufferString(`{"externalSymbol":"BTCUSDT"}`)
+	body := bytes.NewBufferString(
+		`{"externalSymbol":"BTCUSDT","baseAsset":"BTC",` +
+			`"quoteAsset":"USDT","manualPrice":"","enabled":true}`)
 	rec := httptest.NewRecorder()
 	// A valid external-id path reaches the service so the ErrInvalid the backend
 	// returns drives the 400, not the path-parse guard.

@@ -211,6 +211,13 @@ func (s *guardSource) GetAccountState(context.Context, domain.AccountID) (
 	return domain.Account{}, node.AccountLimits{}, nil
 }
 
+func (s *guardSource) ListGroups(context.Context) (
+	[]domain.AccountGroup,
+	error,
+) {
+	return nil, nil
+}
+
 func (s *guardSource) ListLimits(context.Context, domain.AccountID) (
 	node.AccountLimits,
 	error,

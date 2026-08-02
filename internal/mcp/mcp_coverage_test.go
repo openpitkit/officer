@@ -107,6 +107,12 @@ func (s *setMDErrSource) GetAccountState(
 	return domain.Account{}, node.AccountLimits{}, nil
 }
 
+func (s *setMDErrSource) ListGroups(
+	context.Context,
+) ([]domain.AccountGroup, error) {
+	return nil, nil
+}
+
 func (s *setMDErrSource) ListLimits(
 	context.Context, domain.AccountID,
 ) (node.AccountLimits, error) {

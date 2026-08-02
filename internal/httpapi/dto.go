@@ -70,20 +70,30 @@ type storeHealthDTO struct {
 // accountDTO is the wire shape of a single account. An account is a dictionary
 // record: its public handle is the code, paired with a mutable title.
 // The engine account id and the store surrogate id are never serialized.
+//
+// The blocked/blockReason/blockSource triple is the EFFECTIVE kill-switch
+// state: the account's own block joined with its group's, so a consumer that
+// reads only blocked gets the answer to "can this account trade right now".
+// The per-tier fields carry the two independent underlying blocks.
 type accountDTO struct {
-	Code              string             `json:"code"`
-	Title             string             `json:"title"`
-	Pnl               string             `json:"pnl"`
-	PnlHaltReason     string             `json:"pnlHaltReason"`
-	Group             string             `json:"group"`
-	Currency          string             `json:"currency"`
-	EffectiveCurrency string             `json:"effectiveCurrency"`
-	CurrencyOrigin    string             `json:"currencyOrigin"`
-	CurrencyCascade   currencyCascadeDTO `json:"currencyCascade"`
-	Notes             string             `json:"notes"`
-	PositionCount     int                `json:"positionCount"`
-	BlockReason       string             `json:"blockReason"`
-	Blocked           bool               `json:"blocked"`
+	Code               string             `json:"code"`
+	Title              string             `json:"title"`
+	Pnl                string             `json:"pnl"`
+	PnlHaltReason      string             `json:"pnlHaltReason"`
+	Group              string             `json:"group"`
+	Currency           string             `json:"currency"`
+	EffectiveCurrency  string             `json:"effectiveCurrency"`
+	CurrencyOrigin     string             `json:"currencyOrigin"`
+	CurrencyCascade    currencyCascadeDTO `json:"currencyCascade"`
+	Notes              string             `json:"notes"`
+	PositionCount      int                `json:"positionCount"`
+	BlockReason        string             `json:"blockReason"`
+	BlockSource        string             `json:"blockSource"`
+	AccountBlockReason string             `json:"accountBlockReason"`
+	GroupBlockReason   string             `json:"groupBlockReason"`
+	Blocked            bool               `json:"blocked"`
+	AccountBlocked     bool               `json:"accountBlocked"`
+	GroupBlocked       bool               `json:"groupBlocked"`
 }
 
 type currencyCascadeDTO struct {
@@ -200,8 +210,12 @@ type auditDTO struct {
 	Action       string    `json:"action"`
 	Account      string    `json:"account"`
 	AccountTitle string    `json:"accountTitle"`
-	Detail       string    `json:"detail"`
-	Source       string    `json:"source"`
+	// Group is the structured group handle of a group action, so a reader
+	// selects a group's rows by identity instead of matching the free-form
+	// detail text, which a crafted group code can spoof.
+	Group  string `json:"group"`
+	Detail string `json:"detail"`
+	Source string `json:"source"`
 }
 
 // toStatusDTO maps a backend.Status onto the wire DTO.
@@ -225,8 +239,10 @@ func toStatusDTO(status backend.Status) statusDTO {
 }
 
 // toAccountDTO maps a domain.Account onto the wire DTO. The account's public
-// handle is its code; the engine account id is never serialized.
-func toAccountDTO(a domain.Account) accountDTO {
+// handle is its code; the engine account id is never serialized. block is the
+// account joined with its group, resolved by the caller, which owns the group
+// read; the account row alone carries only the account's own latched flag.
+func toAccountDTO(a domain.Account, block domain.AccountBlockState) accountDTO {
 	return accountDTO{
 		Code:              string(a.Code),
 		Title:             a.Title,
@@ -241,15 +257,22 @@ func toAccountDTO(a domain.Account) accountDTO {
 			Group:   a.GroupCurrency,
 			Default: a.DefaultCurrency,
 		},
-		Notes:       a.Notes,
-		BlockReason: a.BlockReason,
-		Blocked:     a.Blocked,
+		Notes:              a.Notes,
+		BlockReason:        block.Reason,
+		BlockSource:        string(block.Source),
+		AccountBlockReason: block.AccountReason,
+		GroupBlockReason:   block.GroupReason,
+		Blocked:            block.Blocked,
+		AccountBlocked:     block.AccountBlocked,
+		GroupBlocked:       block.GroupBlocked,
 	}
 }
 
 // toAccountRowDTO maps a list row onto the account wire DTO.
-func toAccountRowDTO(row store.AccountListRow) accountDTO {
-	dto := toAccountDTO(row.Account)
+func toAccountRowDTO(
+	row store.AccountListRow, block domain.AccountBlockState,
+) accountDTO {
+	dto := toAccountDTO(row.Account, block)
 	dto.PositionCount = row.PositionCount
 	return dto
 }
@@ -383,6 +406,7 @@ func toAuditDTO(row domain.AuditRow) auditDTO {
 		Action:       string(row.Action),
 		Account:      string(row.Account),
 		AccountTitle: row.AccountTitle,
+		Group:        row.Group,
 		Detail:       row.Detail,
 		Source:       string(row.Source),
 	}
@@ -482,12 +506,20 @@ type marketDataCreateInstanceRequestDTO struct {
 	Provider    string `json:"provider"`
 	Label       string `json:"label"`
 	Credentials string `json:"credentials"`
-	Enabled     bool   `json:"enabled"`
+	Enabled     *bool  `json:"enabled"`
 }
 
 type marketDataUpdateInstanceSettingsRequestDTO struct {
 	Label       string `json:"label"`
 	Credentials string `json:"credentials"`
+}
+
+type marketDataUpsertInstrumentRequestDTO struct {
+	ExternalSymbol string  `json:"externalSymbol"`
+	BaseAsset      string  `json:"baseAsset"`
+	QuoteAsset     string  `json:"quoteAsset"`
+	ManualPrice    *string `json:"manualPrice"`
+	Enabled        *bool   `json:"enabled"`
 }
 
 // marketDataSymbolVerificationDTO is the body of POST
@@ -1645,6 +1677,10 @@ type signingKeyImportRequestDTO struct {
 // signingConfigDTO is the body of GET/PUT /signing/config.
 type signingConfigDTO struct {
 	NoESign bool `json:"noESign"`
+}
+
+type signingConfigUpdateDTO struct {
+	NoESign *bool `json:"noESign"`
 }
 
 // publicKeyDTO is the body of GET /signing/keys/active/public.

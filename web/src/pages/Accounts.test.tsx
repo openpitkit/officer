@@ -120,6 +120,7 @@ const fetchAuditMock = vi.fn();
 const fetchAssetsMock = vi.fn();
 const fetchAccountsMock = vi.fn();
 const fetchGroupsMock = vi.fn();
+const blockAccountMock = vi.fn();
 const unblockAccountMock = vi.fn();
 const unblockGroupMock = vi.fn();
 const useAccountsMock = vi.mocked(useAccountsPage);
@@ -149,6 +150,30 @@ function readyPage<T>(items: T[]): PollingResult<{ items: T[]; total: number }> 
   return ready({ items, total: items.length });
 }
 
+/** An account fixture without the derived effective-block fields. */
+type AccountFixture = Omit<
+  Account,
+  | "blockSource"
+  | "accountBlocked"
+  | "accountBlockReason"
+  | "groupBlocked"
+  | "groupBlockReason"
+>;
+
+// Fixtures declare the account's own block; the effective state mirrors it,
+// which is an account whose group is not blocked. A test that exercises a
+// group block spells the group fields out instead.
+function accountFixture(account: AccountFixture): Account {
+  return {
+    ...account,
+    blockSource: account.blocked ? "account" : "none",
+    accountBlocked: account.blocked,
+    accountBlockReason: account.blockReason,
+    groupBlocked: false,
+    groupBlockReason: "",
+  };
+}
+
 const accounts: Account[] = [
   {
     code: "desk-default",
@@ -168,7 +193,7 @@ const accounts: Account[] = [
     notes: "",
     pnlHaltReason: "",
   },
-];
+].map(accountFixture);
 
 const groups: Group[] = [
   {
@@ -237,6 +262,7 @@ function renderAccounts(initialEntry = "/accounts") {
         fetchAssets: fetchAssetsMock,
         fetchAccounts: fetchAccountsMock,
         fetchGroups: fetchGroupsMock,
+        blockAccount: blockAccountMock,
         unblockAccount: unblockAccountMock,
         unblockGroup: unblockGroupMock,
       },
@@ -314,6 +340,14 @@ beforeEach(async () => {
   fetchAssetsMock.mockResolvedValue([]);
   fetchAccountsMock.mockResolvedValue(accounts);
   fetchGroupsMock.mockResolvedValue(groups);
+  blockAccountMock.mockResolvedValue({
+    code: "desk-alpha",
+    title: "Desk alpha",
+    blocked: true,
+    blockReason: "Desk freeze",
+    group: "equity-desks",
+    notes: "",
+  });
   unblockAccountMock.mockResolvedValue({
     code: "algo-infinite-loop",
     title: "",
@@ -604,7 +638,7 @@ describe("Accounts business CSV", () => {
         notes: "",
         pnlHaltReason: "",
       },
-    ];
+    ].map(accountFixture);
     useAccountsMock.mockImplementation((filters) =>
       readyPage(filters?.group === "equity-desks" ? [pagedAccounts[51]] : pagedAccounts),
     );
@@ -700,7 +734,7 @@ describe("Accounts business CSV", () => {
         pnlHaltReason: "",
         positionCount: 0,
       },
-    ]));
+    ].map(accountFixture)));
     renderAccounts();
 
     const row = screen.getByText("Desk alpha").closest("tr");
@@ -745,7 +779,7 @@ describe("Accounts business CSV", () => {
         pnlHaltReason: "",
         positionCount: 0,
       },
-    ]));
+    ].map(accountFixture)));
     renderAccounts();
 
     const row = screen.getByText("Desk alpha").closest("tr");
@@ -795,7 +829,7 @@ describe("Accounts business CSV", () => {
         pnlHaltReason: "",
         positionCount: 0,
       },
-    ]));
+    ].map(accountFixture)));
     renderAccounts();
 
     const row = screen.getByText("Desk alpha").closest("tr");
@@ -878,7 +912,7 @@ describe("Accounts business CSV", () => {
           notes: "",
           pnlHaltReason: "",
         },
-      ]),
+      ].map(accountFixture)),
     );
 
     renderAccounts();
@@ -960,7 +994,7 @@ describe("Accounts business CSV", () => {
           pnl: "",
           pnlHaltReason: "future_reason",
         },
-      ]),
+      ].map(accountFixture)),
     );
     renderAccounts();
 
@@ -1007,7 +1041,7 @@ describe("Accounts business CSV", () => {
           notes: "",
           pnlHaltReason: "",
         },
-      ]),
+      ].map(accountFixture)),
     );
     fetchAuditMock.mockResolvedValue([
       {
@@ -1051,7 +1085,7 @@ describe("Accounts business CSV", () => {
           notes: "",
           pnlHaltReason: "",
         },
-      ]),
+      ].map(accountFixture)),
     );
 
     renderAccounts();
@@ -1092,7 +1126,7 @@ describe("Accounts business CSV", () => {
           notes: "",
           pnlHaltReason: "",
         },
-      ]),
+      ].map(accountFixture)),
     );
 
     renderAccounts();
@@ -1120,6 +1154,261 @@ describe("Accounts business CSV", () => {
       expect(
         screen.queryByRole("dialog", { name: /blocked account/i }),
       ).not.toBeInTheDocument(),
+    );
+  });
+
+  // The tiers are independent: an account blocked only through its group holds
+  // no block of its own, so the row offers Block - the operator has to be able
+  // to hold this one account down past the group's unblock - and offers no
+  // account-level unblock, which would have nothing to lift.
+  it("offers block on an account blocked only through its group", async () => {
+    const user = userEvent.setup();
+    useAccountsMock.mockReturnValue(
+      readyPage([
+        {
+          code: "desk-alpha",
+          title: "Desk alpha",
+          blocked: true,
+          blockReason: "Desk halt",
+          blockSource: "group",
+          accountBlocked: false,
+          accountBlockReason: "",
+          groupBlocked: true,
+          groupBlockReason: "Desk halt",
+          group: "equity-desks",
+          notes: "",
+          pnlHaltReason: "",
+        },
+      ]),
+    );
+
+    renderAccounts();
+    const row = screen.getByText("Desk alpha").closest("tr");
+    expect(row).not.toBeNull();
+    expect(within(row as HTMLElement).getByText(/blocked/i)).toBeInTheDocument();
+    expect(
+      within(row as HTMLElement).getByRole("button", { name: /^block$/i }),
+    ).toBeEnabled();
+    expect(
+      within(row as HTMLElement).queryByRole("button", {
+        name: /^unblock$/i,
+      }),
+    ).not.toBeInTheDocument();
+
+    await user.click(
+      within(row as HTMLElement).getByRole("button", {
+        name: /view block details/i,
+      }),
+    );
+    const details = await screen.findByRole("dialog", {
+      name: /blocked account/i,
+    });
+    expect(
+      within(details).getByText(/blocked through group equity-desks/i),
+    ).toBeInTheDocument();
+    // The explanation stays; the dead button does not.
+    expect(
+      within(details).getByText(/unblock the group to let this account trade/i),
+    ).toBeInTheDocument();
+    expect(
+      within(details).queryByRole("button", { name: /^unblock$/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("blocks an account that carries only its group's block", async () => {
+    const user = userEvent.setup();
+    useAccountsMock.mockReturnValue(
+      readyPage([
+        {
+          code: "desk-alpha",
+          title: "Desk alpha",
+          blocked: true,
+          blockReason: "Desk halt",
+          blockSource: "group",
+          accountBlocked: false,
+          accountBlockReason: "",
+          groupBlocked: true,
+          groupBlockReason: "Desk halt",
+          group: "equity-desks",
+          notes: "",
+          pnlHaltReason: "",
+        },
+      ]),
+    );
+
+    renderAccounts();
+    const row = screen.getByText("Desk alpha").closest("tr");
+    expect(row).not.toBeNull();
+    await user.click(
+      within(row as HTMLElement).getByRole("button", { name: /^block$/i }),
+    );
+
+    const dialog = await screen.findByRole("dialog", {
+      name: /block account/i,
+    });
+    await user.type(within(dialog).getByLabelText(/^reason$/i), "Desk freeze");
+    await user.click(within(dialog).getByRole("button", { name: /^block$/i }));
+
+    await waitFor(() =>
+      expect(blockAccountMock).toHaveBeenCalledWith(
+        "desk-alpha",
+        "Desk freeze",
+        "reject",
+      ),
+    );
+  });
+
+  it("offers only block while neither tier is blocked", async () => {
+    renderAccounts();
+    const row = screen.getByText("Desk alpha").closest("tr");
+    expect(row).not.toBeNull();
+    expect(
+      within(row as HTMLElement).getByRole("button", { name: /^block$/i }),
+    ).toBeEnabled();
+    expect(
+      within(row as HTMLElement).queryByRole("button", {
+        name: /^unblock$/i,
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(row as HTMLElement).queryByRole("button", {
+        name: /view block details/i,
+      }),
+    ).not.toBeInTheDocument();
+  });
+
+  // The block never touched this account, so its own rows cannot record it;
+  // the group's rows are the only truthful source.
+  it("resolves a group-blocked account's audit through the group handle", async () => {
+    const user = userEvent.setup();
+    useAccountsMock.mockReturnValue(
+      readyPage([
+        {
+          code: "desk-alpha",
+          title: "Desk alpha",
+          blocked: true,
+          blockReason: "Desk halt",
+          blockSource: "group",
+          accountBlocked: false,
+          accountBlockReason: "",
+          groupBlocked: true,
+          groupBlockReason: "Desk halt",
+          group: "equity-desks",
+          notes: "",
+          pnlHaltReason: "",
+        },
+      ]),
+    );
+
+    renderAccounts();
+    await user.click(
+      screen.getByRole("button", { name: /view block details/i }),
+    );
+    const details = await screen.findByRole("dialog", {
+      name: /blocked account/i,
+    });
+
+    await waitFor(() =>
+      expect(fetchAuditMock).toHaveBeenCalledWith({
+        group: "equity-desks",
+        actions: ["block_group"],
+        limit: 3,
+      }),
+    );
+    // Neither the account's unrelated rows nor the realm-wide tail may stand
+    // in for this block's record.
+    expect(fetchAuditMock).not.toHaveBeenCalledWith({
+      account: "desk-alpha",
+      limit: 3,
+    });
+    expect(fetchAuditMock).not.toHaveBeenCalledWith(3);
+    expect(
+      await within(details).findByText(/no audit records found/i),
+    ).toBeInTheDocument();
+  });
+
+  // Both tiers latched: the account-level unblock is real work, so it stays
+  // enabled, but it cannot make the account tradable on its own.
+  it("keeps unblock enabled for an account blocked on both tiers", async () => {
+    const user = userEvent.setup();
+    useAccountsMock.mockReturnValue(
+      readyPage([
+        {
+          code: "desk-alpha",
+          title: "Desk alpha",
+          blocked: true,
+          blockReason: "Account halt",
+          blockSource: "account",
+          accountBlocked: true,
+          accountBlockReason: "Account halt",
+          groupBlocked: true,
+          groupBlockReason: "Desk halt",
+          group: "equity-desks",
+          notes: "",
+          pnlHaltReason: "",
+        },
+      ]),
+    );
+
+    renderAccounts();
+    const row = screen.getByText("Desk alpha").closest("tr");
+    expect(row).not.toBeNull();
+    expect(
+      within(row as HTMLElement).getByRole("button", { name: /^unblock$/i }),
+    ).toBeEnabled();
+    expect(
+      within(row as HTMLElement).queryByRole("button", { name: /^block$/i }),
+    ).not.toBeInTheDocument();
+
+    await user.click(
+      within(row as HTMLElement).getByRole("button", {
+        name: /view block details/i,
+      }),
+    );
+    const details = await screen.findByRole("dialog", {
+      name: /blocked account/i,
+    });
+    expect(
+      within(details).getByText(/group equity-desks is blocked as well/i),
+    ).toBeInTheDocument();
+    expect(
+      within(details).getByRole("button", { name: /^unblock$/i }),
+    ).toBeEnabled();
+  });
+
+  it("warns that the group block outlives an account unblock", async () => {
+    const user = userEvent.setup();
+    useAccountsMock.mockReturnValue(
+      readyPage([
+        {
+          code: "desk-alpha",
+          title: "Desk alpha",
+          blocked: true,
+          blockReason: "Account halt",
+          blockSource: "account",
+          accountBlocked: true,
+          accountBlockReason: "Account halt",
+          groupBlocked: true,
+          groupBlockReason: "Desk halt",
+          group: "equity-desks",
+          notes: "",
+          pnlHaltReason: "",
+        },
+      ]),
+    );
+
+    renderAccounts();
+    const row = screen.getByText("Desk alpha").closest("tr");
+    expect(row).not.toBeNull();
+    await user.click(
+      within(row as HTMLElement).getByRole("button", { name: /^unblock$/i }),
+    );
+
+    const confirmation = await screen.findByRole("alertdialog", {
+      name: /unblock account/i,
+    });
+    expect(confirmation).toHaveTextContent(
+      "Group equity-desks is blocked. This account will stay blocked until the group is unblocked.",
     );
   });
 
@@ -1616,7 +1905,7 @@ describe("Accounts business CSV", () => {
         notes: "",
         pnlHaltReason: "",
       },
-    ]));
+    ].map(accountFixture)));
 
     renderAccounts();
 

@@ -34,12 +34,27 @@ import (
 
 // --- Restore: dictionaries --------------------------------------------------
 
+// An archive is caller-supplied data, not trusted state: it reaches the tables
+// without passing the API code-validation seam, so every restored dictionary
+// code is checked here against the same contract the live surfaces enforce.
+// Otherwise a hand-crafted archive could plant a code carrying a NUL, a
+// newline, or an unbounded length.
+
 // restoreAssetClasses inserts (or updates) the asset-class dictionary before the
 // assets, so an asset's class_id foreign key resolves on import.
 func (rt *restoreTx) restoreAssetClasses(
 	ctx context.Context, classes []domain.AssetClass,
 ) error {
 	for _, c := range classes {
+		if err := domain.ValidateAssetClassID(c.Code); err != nil {
+			return fmt.Errorf("store: restore asset class %q: %w", c.Code, err)
+		}
+		if err := domain.ValidateTitle(c.Title); err != nil {
+			return fmt.Errorf("store: restore asset class %q: %w", c.Code, err)
+		}
+		if err := domain.ValidateNotes(c.Notes); err != nil {
+			return fmt.Errorf("store: restore asset class %q: %w", c.Code, err)
+		}
 		exists, err := rowExists(ctx, rt.tx, `SELECT 1 FROM asset_class WHERE code = ?`, c.Code)
 		if err != nil {
 			return err
@@ -67,6 +82,17 @@ func (rt *restoreTx) restoreAssetClasses(
 
 func (rt *restoreTx) restoreAssets(ctx context.Context, assets []domain.Asset) error {
 	for _, a := range assets {
+		if err := domain.ValidateAsset(a.Code); err != nil {
+			return fmt.Errorf("store: restore asset %q: %w", a.Code, err)
+		}
+		if err := domain.ValidateTitle(a.Title); err != nil {
+			return fmt.Errorf("store: restore asset %q: %w", a.Code, err)
+		}
+		if a.AssetClass != "" {
+			if err := domain.ValidateAssetClassID(a.AssetClass); err != nil {
+				return fmt.Errorf("store: restore asset %q: %w", a.Code, err)
+			}
+		}
 		exists, err := rowExists(ctx, rt.tx, `SELECT 1 FROM asset WHERE code = ?`, a.Code)
 		if err != nil {
 			return err
@@ -102,6 +128,12 @@ func (rt *restoreTx) restoreAssets(ctx context.Context, assets []domain.Asset) e
 
 func (rt *restoreTx) restorePrincipals(ctx context.Context, principals []domain.Principal) error {
 	for _, p := range principals {
+		if err := domain.ValidatePrincipalID(p.Code); err != nil {
+			return fmt.Errorf("store: restore principal %q: %w", p.Code, err)
+		}
+		if err := domain.ValidateTitle(p.Title); err != nil {
+			return fmt.Errorf("store: restore principal %q: %w", p.Code, err)
+		}
 		exists, err := rowExists(ctx, rt.tx, `SELECT 1 FROM principal WHERE code = ?`, p.Code)
 		if err != nil {
 			return err
@@ -133,7 +165,22 @@ func (rt *restoreTx) restoreGroups(
 	groups []backup.AccountGroup,
 	defaultCurrency string,
 ) error {
+	// The archive never carries the reserved default group (code empty); its
+	// currency travels separately through restoreDefaultGroupCurrency, so the
+	// non-empty group-code contract applies to every row here.
 	for _, g := range groups {
+		if err := domain.ValidateGroupID(g.Code); err != nil {
+			return fmt.Errorf("store: restore group %q: %w", g.Code, err)
+		}
+		if err := domain.ValidateTitle(g.Title); err != nil {
+			return fmt.Errorf("store: restore group %q: %w", g.Code, err)
+		}
+		if err := domain.ValidateNotes(g.Notes); err != nil {
+			return fmt.Errorf("store: restore group %q: %w", g.Code, err)
+		}
+		if err := domain.ValidateBlockReason(g.BlockReason); err != nil {
+			return fmt.Errorf("store: restore group %q: %w", g.Code, err)
+		}
 		exists, err := rowExists(ctx, rt.tx, `SELECT 1 FROM account_group WHERE code = ?`, g.Code)
 		if err != nil {
 			return err
@@ -217,6 +264,23 @@ func (rt *restoreTx) restoreDefaultGroupCurrency(
 // account runs on its surrogate id (the engine account id).
 func (rt *restoreTx) restoreAccounts(ctx context.Context, accounts []backup.Account) error {
 	for _, a := range accounts {
+		if err := domain.ValidateAccountID(domain.AccountID(a.Code)); err != nil {
+			return fmt.Errorf("store: restore account %q: %w", a.Code, err)
+		}
+		if err := domain.ValidateTitle(a.Title); err != nil {
+			return fmt.Errorf("store: restore account %q: %w", a.Code, err)
+		}
+		if err := domain.ValidateNotes(a.Notes); err != nil {
+			return fmt.Errorf("store: restore account %q: %w", a.Code, err)
+		}
+		if err := domain.ValidateBlockReason(a.BlockReason); err != nil {
+			return fmt.Errorf("store: restore account %q: %w", a.Code, err)
+		}
+		if a.GroupCode != "" {
+			if err := domain.ValidateGroupID(a.GroupCode); err != nil {
+				return fmt.Errorf("store: restore account %q: %w", a.Code, err)
+			}
+		}
 		pnl := a.Pnl
 		if pnl == "" {
 			pnl = "0"
@@ -1207,10 +1271,10 @@ func (rt *restoreTx) restoreAudit(ctx context.Context, rows []domain.AuditRow) e
 			ctx,
 			`INSERT OR REPLACE INTO audit
 			 (external_id, account_id, account_code, account_title, asset_code,
-			  actor_code, actor_title, at, action_id, source_id, detail)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			  group_code, actor_code, actor_title, at, action_id, source_id, detail)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			row.ExternalID.Bytes(), accountID, row.Account.String(),
-			row.AccountTitle, row.Asset, row.Actor, row.ActorTitle,
+			row.AccountTitle, row.Asset, row.Group, row.Actor, row.ActorTitle,
 			atOrNow(row.At), actionID, sourceID, row.Detail,
 		); err != nil {
 			return fmt.Errorf("store: restore audit %q: %w", row.ExternalID, err)

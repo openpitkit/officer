@@ -62,7 +62,15 @@ func (s *Service) ListAccountRows(
 		total += part.Total
 		accounts = append(accounts, part.Rows...)
 	}
-	sortAccountRows(accounts, filter.Sort)
+	// Every node ordered its own page by the effective kill-switch state, so the
+	// merge needs the group tier too; a single node returns its page unmerged and
+	// pays nothing for this.
+	groups, err := s.ListGroups(ctx)
+	if err != nil {
+		return store.AccountListPage{},
+			fmt.Errorf("backend: list groups for account merge: %w", err)
+	}
+	sortAccountRows(accounts, filter.Sort, domain.NewGroupBlockIndex(groups))
 	accounts = pageAccountRows(accounts, filter.Page)
 	return store.AccountListPage{Rows: accounts, Total: total}, nil
 }
@@ -77,6 +85,9 @@ func (s *Service) CreateAccount(
 		return domain.Account{}, err
 	}
 	if err := domain.ValidateTitle(account.Title); err != nil {
+		return domain.Account{}, err
+	}
+	if err := domain.ValidateBlockReason(account.BlockReason); err != nil {
 		return domain.Account{}, err
 	}
 	if err := validateOptionalCurrency(account.Currency); err != nil {
@@ -156,6 +167,9 @@ func (s *Service) setAccountBlocked(
 	missing domain.MissingAccountPolicy,
 ) error {
 	if err := domain.ValidateAccountID(id); err != nil {
+		return err
+	}
+	if err := domain.ValidateBlockReason(reason); err != nil {
 		return err
 	}
 	if err := validateMissingAccountPolicy(id, missing); err != nil {

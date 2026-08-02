@@ -24,18 +24,22 @@
 package native
 
 import (
+	"bytes"
 	"context"
 	"errors"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"go.openpit.dev/openpit"
+	"go.openpit.dev/openpit/accountadjustment"
 	"go.openpit.dev/openpit/asyncengine"
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/pretrade"
 	"go.openpit.dev/openpit/pretrade/policies"
+	"go.openpit.dev/openpit/reject"
+	"go.openpit.dev/openpit/tx"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
@@ -246,6 +250,30 @@ func TestGroupLaneCurrencyNamedAndDefaultKeepHandleAndSink(t *testing.T) {
 	}
 	if got := e.MarketDataSink(); got != sinkBefore {
 		t.Fatal("group currency mutation replaced MarketDataSink")
+	}
+}
+
+// The engine reserves its default group - addressed here by the empty group
+// code - and refuses to block or unblock it. The adapter must translate that
+// typed engine refusal into the domain sentinel the HTTP seam maps to a
+// conflict, rather than leak an opaque internal failure.
+func TestGroupLaneDefaultGroupBlockAndUnblockAreReserved(t *testing.T) {
+	e := newTestEngine(t)
+	ctx := context.Background()
+
+	if err := e.RunGroupSynchronized(
+		ctx, "", func(lane engine.GroupLane) error {
+			return lane.BlockGroup(ctx, "", "kill switch")
+		},
+	); !errors.Is(err, domain.ErrReservedGroup) {
+		t.Fatalf("BlockGroup(default group) error = %v, want ErrReservedGroup", err)
+	}
+	if err := e.RunGroupSynchronized(
+		ctx, "", func(lane engine.GroupLane) error {
+			return lane.UnblockGroup(ctx, "")
+		},
+	); !errors.Is(err, domain.ErrReservedGroup) {
+		t.Fatalf("UnblockGroup(default group) error = %v, want ErrReservedGroup", err)
 	}
 }
 
@@ -607,18 +635,191 @@ func TestSubmitImmediate_DropCopySettlesWhileAccountIsBlocked(t *testing.T) {
 	}
 }
 
-func TestSubmitOrder_DropCopyMarketOrderPropagatesNativeInputError(t *testing.T) {
-	e := newTestEngine(t)
-	order := testOrder()
-	order.DropCopy = true
-	order.Price = ""
+// lockSpyPolicyGroupID tags the extra lock leg executionLockSpy contributes. It
+// is deliberately not the default policy group: SpotFunds owns that one, and a
+// lock rebuilt from a single settlement price carries the default group alone,
+// so a non-default leg is what tells the engine's own lock apart from a
+// reconstruction.
+const lockSpyPolicyGroupID model.PolicyGroupID = 42
 
-	_, err := e.SubmitOrder(context.Background(), order)
-	if err == nil {
-		t.Fatal("SubmitOrder(drop-copy market): want admission error")
+// executionLockSpy is a pre-trade policy that records one lock price under
+// lockSpyPolicyGroupID and captures the pre-trade lock of every execution report
+// the engine receives, so a test can assert which lock the adapter handed back.
+// It mirrors the order's limit price so the settlement estimate - the last lock
+// price - stays the price the fill settles at.
+type executionLockSpy struct {
+	price       param.Price
+	pushErr     error
+	reportLocks [][]byte
+	guard       sync.Mutex
+}
+
+func (*executionLockSpy) Close() {}
+
+func (*executionLockSpy) Name() string { return "officer-test-lock-spy" }
+
+func (*executionLockSpy) PolicyGroupID() model.PolicyGroupID {
+	return lockSpyPolicyGroupID
+}
+
+func (*executionLockSpy) CheckPreTradeStart(
+	pretrade.Context, model.Order,
+) []reject.Reject {
+	return nil
+}
+
+func (s *executionLockSpy) PerformPreTradeCheck(
+	_ pretrade.Context,
+	_ model.Order,
+	_ tx.Mutations,
+	result pretrade.Result,
+) []reject.Reject {
+	if err := result.PushLockPrice(s.price); err != nil {
+		s.guard.Lock()
+		s.pushErr = err
+		s.guard.Unlock()
 	}
-	if !strings.Contains(err.Error(), "limit price") {
-		t.Fatalf("SubmitOrder(drop-copy market) error = %v", err)
+	return nil
+}
+
+func (s *executionLockSpy) ApplyExecutionReport(
+	_ pretrade.PostTradeContext,
+	report model.ExecutionReport,
+	_ pretrade.PostTradeAdjustments,
+	_ pretrade.PostTradePnls,
+) []reject.AccountBlock {
+	// Copy: the report and its lock belong to the binding for this call only.
+	var lock []byte
+	if fill, ok := report.Fill().Get(); ok {
+		lock = append([]byte(nil), fill.Lock()...)
+	}
+	s.guard.Lock()
+	defer s.guard.Unlock()
+	s.reportLocks = append(s.reportLocks, lock)
+	return nil
+}
+
+func (*executionLockSpy) ApplyAccountAdjustment(
+	accountadjustment.Context,
+	param.AccountID,
+	model.AccountAdjustment,
+	tx.Mutations,
+	pretrade.AccountOutcomes,
+) (pretrade.PolicyAccountAdjustmentResult, []reject.Reject) {
+	return pretrade.PolicyAccountAdjustmentResult{}, nil
+}
+
+func (s *executionLockSpy) recordedReportLocks() [][]byte {
+	s.guard.Lock()
+	defer s.guard.Unlock()
+	return append([][]byte(nil), s.reportLocks...)
+}
+
+func (s *executionLockSpy) pushError() error {
+	s.guard.Lock()
+	defer s.guard.Unlock()
+	return s.pushErr
+}
+
+// newLockSpyTestEngine builds the adapter over a real engine carrying the
+// ordinary Officer policy set plus spy, so every accepted order produces a
+// pre-trade lock with one default-group leg (SpotFunds) and one non-default leg.
+func newLockSpyTestEngine(t *testing.T, spy *executionLockSpy) *openPitEngine {
+	t.Helper()
+	snap := Snapshot{Accounts: []domain.Account{account(testAccount)}}
+	res, err := newIDResolver(snap.Accounts, snap.Groups)
+	if err != nil {
+		t.Fatalf("newIDResolver: %v", err)
+	}
+	eng, err := openpit.NewEngineBuilder().AccountSync().
+		Builtin(policies.BuildOrderValidation()).
+		Builtin(policies.BuildSpotFunds().PolicyGroupID(0)).
+		PreTrade(spy).
+		Build()
+	if err != nil {
+		t.Fatalf("build lock spy engine: %v", err)
+	}
+	adapter := newOpenPitEngine(
+		eng,
+		testAsyncEngine(t, eng),
+		nil,
+		map[string]struct{}{nameSpotFunds: {}},
+		nil,
+		res,
+	).(*openPitEngine)
+	t.Cleanup(adapter.Stop)
+
+	if err := seedBalances(eng, []domain.Balance{{
+		Account:   domain.AccountID(testAccount),
+		Asset:     testQuote,
+		Available: testQuoteFund,
+	}}, res); err != nil {
+		t.Fatalf("seed balance: %v", err)
+	}
+	return adapter
+}
+
+// TestSubmitImmediate_ReportCarriesEngineLock pins the pre-trade lock the
+// execution report hands back to the engine. A lock is an opaque engine
+// artifact, so the report must carry the one this very operation produced;
+// rebuilding it from the settlement price yields a single default-group entry
+// and silently drops every other policy group's leg. The spy contributes such a
+// leg and reads the report the engine actually received, so the assertion holds
+// for both the regular pre-trade branch and the drop-copy branch.
+func TestSubmitImmediate_ReportCarriesEngineLock(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		dropCopy bool
+	}{
+		{name: "pre trade"},
+		{name: "drop copy", dropCopy: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			price, err := param.NewPriceFromString(testLimit)
+			if err != nil {
+				t.Fatalf("lock spy price: %v", err)
+			}
+			spy := &executionLockSpy{price: price}
+			e := newLockSpyTestEngine(t, spy)
+
+			order := testOrder()
+			order.DropCopy = test.dropCopy
+			res, err := e.SubmitImmediate(context.Background(), order)
+			if err != nil {
+				t.Fatalf("SubmitImmediate: %v", err)
+			}
+			if !res.Accepted {
+				t.Fatalf("SubmitImmediate rejected: %+v", res.Rejects)
+			}
+			if err := spy.pushError(); err != nil {
+				t.Fatalf("lock spy PushLockPrice: %v", err)
+			}
+
+			locks := spy.recordedReportLocks()
+			if len(locks) != 1 {
+				t.Fatalf("execution reports reaching the engine = %d, want 1", len(locks))
+			}
+			// The result carries the same serialized lock the report was built
+			// from, so the report's in-process lock must decode from it.
+			want, err := unmarshalLock(res.Lock)
+			if err != nil {
+				t.Fatalf("unmarshal returned lock: %v", err)
+			}
+			if !bytes.Equal(locks[0], want.Bytes()) {
+				t.Fatal("execution report did not carry the engine's own pre-trade lock")
+			}
+			prices, err := pretrade.NewLockFromBytes(locks[0]).
+				PricesOf(lockSpyPolicyGroupID)
+			if err != nil {
+				t.Fatalf("read report lock spy-group prices: %v", err)
+			}
+			if len(prices) != 1 {
+				t.Fatalf(
+					"report lock spy-group prices = %d, want the engine lock's own leg",
+					len(prices),
+				)
+			}
+		})
 	}
 }
 
@@ -1449,8 +1650,9 @@ func TestSubmitOrder_DropCopySurfacesHaltedPnlAccountBlock(t *testing.T) {
 	); err != nil {
 		t.Fatalf("SetAccountPnlState: %v", err)
 	}
-	// Recorded precondition: the halt assignment itself latches the block, so
-	// the block seen below cannot be attributed to the drop-copy order alone.
+	// The precondition remains the live registry state. The historical
+	// drop-copy result below must instead expose the PnL policy's request-local
+	// block.
 	if len(setupBlocks) != 1 {
 		t.Fatalf("setup blocks = %+v, want exactly one", setupBlocks)
 	}
@@ -1473,6 +1675,54 @@ func TestSubmitOrder_DropCopySurfacesHaltedPnlAccountBlock(t *testing.T) {
 	}
 	if block.Code != "account_blocked" {
 		t.Fatalf("block code = %q, want account_blocked", block.Code)
+	}
+	if block.Policy == "" || block.Reason == "" {
+		t.Fatalf("block = %+v, want policy and reason", block)
+	}
+}
+
+// SubmitImmediate settles the drop-copy fill in the same call, so its pre-trade
+// account block has to survive the merge with the settlement blocks. The
+// drop-copy block comes first; the settlement of a halted account may add its
+// own kill-switch block behind it.
+func TestSubmitImmediate_DropCopySurfacesHaltedPnlAccountBlock(t *testing.T) {
+	// A PnL barrier must be configured for a halted PnL state to matter.
+	e := newTestEngineWithSpotFundsPnlBounds(t)
+	ctx := context.Background()
+	var setupBlocks []domain.AccountBlock
+	if err := e.RunAccountSynchronized(
+		ctx, testAccount, func(lane engine.AccountLane) error {
+			var err error
+			setupBlocks, err = lane.SetAccountPnlState(
+				ctx, testAccount, "", domain.PnlHaltReasonMissingFx,
+			)
+			return err
+		},
+	); err != nil {
+		t.Fatalf("SetAccountPnlState: %v", err)
+	}
+	if len(setupBlocks) != 1 {
+		t.Fatalf("setup blocks = %+v, want exactly one", setupBlocks)
+	}
+
+	order := testOrder()
+	order.DropCopy = true
+	result, err := e.SubmitImmediate(ctx, order)
+	if err != nil {
+		t.Fatalf("SubmitImmediate(drop copy): %v", err)
+	}
+	if !result.Accepted || len(result.Rejects) != 0 {
+		t.Fatalf("drop-copy immediate result = %+v, want accepted without rejects", result)
+	}
+	if len(result.Blocks) == 0 {
+		t.Fatal("drop-copy immediate result carries no account block")
+	}
+	block := result.Blocks[0]
+	if block.Account != domain.AccountID(testAccount) {
+		t.Fatalf("block account = %q, want %q", block.Account, testAccount)
+	}
+	if block.Code != "account_blocked" {
+		t.Fatalf("first block = %+v, want the drop-copy pre-trade block", block)
 	}
 	if block.Policy == "" || block.Reason == "" {
 		t.Fatalf("block = %+v, want policy and reason", block)
@@ -1553,8 +1803,7 @@ func assertUnpricedVolumeReject(
 	}
 }
 
-func TestImmediateExecutionReport_VolumeSizing(t *testing.T) {
-	res := testResolver(testAccount)
+func TestImmediateFillQuantity_VolumeSizing(t *testing.T) {
 	quantity, err := immediateFillQuantity(domain.Order{
 		AmountKind:  domain.OrderAmountKindQuantity,
 		AmountValue: "5.00",
@@ -1567,30 +1816,15 @@ func TestImmediateExecutionReport_VolumeSizing(t *testing.T) {
 	}
 
 	// A volume order with no settlement price cannot be sized into a fill.
-	_, err = immediateExecutionReport(domain.Order{
-		Account:     domain.AccountID(testAccount),
-		BaseAsset:   testBase,
-		QuoteAsset:  testQuote,
-		Side:        domain.OrderSideBuy,
+	_, err = immediateFillQuantity(domain.Order{
 		AmountKind:  domain.OrderAmountKindVolume,
 		AmountValue: "500",
-	}, "", res)
+	}, "")
 	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("immediateExecutionReport(volume, no price) = %v, want ErrInvalid", err)
+		t.Fatalf("immediateFillQuantity(volume, no price) = %v, want ErrInvalid", err)
 	}
 
 	// With a settlement price the volume sizes to base quantity (500/100 = 5).
-	if _, err := immediateExecutionReport(domain.Order{
-		Account:     domain.AccountID(testAccount),
-		BaseAsset:   testBase,
-		QuoteAsset:  testQuote,
-		Side:        domain.OrderSideBuy,
-		AmountKind:  domain.OrderAmountKindVolume,
-		AmountValue: "500",
-	}, "100", res); err != nil {
-		t.Fatalf("immediateExecutionReport(volume): %v", err)
-	}
-
 	qty, err := immediateFillQuantity(domain.Order{
 		AmountKind:  domain.OrderAmountKindVolume,
 		AmountValue: "500",

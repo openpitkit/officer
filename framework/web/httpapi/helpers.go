@@ -18,16 +18,168 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"go.openpit.dev/officer/framework/domain"
 )
+
+// DecodeBody decodes exactly one non-null JSON value into dst, rejecting any
+// member the target does not declare, and writes the standard typed 400
+// "validation" envelope when it cannot. It reports whether the handler may
+// continue.
+//
+// Strictness is the point: a control-plane mutation that silently drops an
+// unknown member acknowledges an intent it did not carry out - "blocked": true
+// answered with 201 Created and an unblocked entity. Leniency stays acceptable
+// for reads; for a mutation the acknowledged effect must be the requested one.
+func DecodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
+	return decodeBody(w, r, dst, false)
+}
+
+// DecodeBodyAllowUnknownFields decodes exactly one non-null JSON value into
+// dst while accepting object members the target does not declare. Use it only
+// for forward-compatible import formats, such as portable backup archives,
+// where another version may legitimately add fields. Control-plane mutations
+// must use DecodeBody so the server never acknowledges ignored intent.
+func DecodeBodyAllowUnknownFields(
+	w http.ResponseWriter, r *http.Request, dst any,
+) bool {
+	return decodeBody(w, r, dst, true)
+}
+
+// ValidJSONUnicode reports whether raw uses valid UTF-8 and every JSON \u
+// escape that denotes a UTF-16 surrogate belongs to a valid pair. It does not
+// validate the remaining JSON syntax.
+func ValidJSONUnicode(raw []byte) bool {
+	inString := false
+	for index := 0; index < len(raw); index++ {
+		if raw[index] >= utf8.RuneSelf {
+			_, size := utf8.DecodeRune(raw[index:])
+			if size == 1 {
+				return false
+			}
+			index += size - 1
+			continue
+		}
+		switch raw[index] {
+		case '"':
+			inString = !inString
+		case '\\':
+			if !inString {
+				continue
+			}
+			index++
+			if index >= len(raw) {
+				return false
+			}
+			if raw[index] != 'u' {
+				continue
+			}
+			first, ok := jsonUTF16CodeUnit(raw[index+1:])
+			if !ok {
+				return false
+			}
+			index += 4
+			if first >= 0xdc00 && first <= 0xdfff {
+				return false
+			}
+			if first < 0xd800 || first > 0xdbff {
+				continue
+			}
+			if index+6 >= len(raw) ||
+				raw[index+1] != '\\' || raw[index+2] != 'u' {
+				return false
+			}
+			second, ok := jsonUTF16CodeUnit(raw[index+3:])
+			if !ok || second < 0xdc00 || second > 0xdfff {
+				return false
+			}
+			index += 6
+		}
+	}
+	return true
+}
+
+func jsonUTF16CodeUnit(raw []byte) (uint16, bool) {
+	if len(raw) < 4 {
+		return 0, false
+	}
+	var codeUnit uint16
+	for _, char := range raw[:4] {
+		codeUnit <<= 4
+		switch {
+		case char >= '0' && char <= '9':
+			codeUnit += uint16(char - '0')
+		case char >= 'a' && char <= 'f':
+			codeUnit += uint16(char-'a') + 10
+		case char >= 'A' && char <= 'F':
+			codeUnit += uint16(char-'A') + 10
+		default:
+			return 0, false
+		}
+	}
+	return codeUnit, true
+}
+
+func decodeBody(
+	w http.ResponseWriter, r *http.Request, dst any, allowUnknownFields bool,
+) bool {
+	decoder := json.NewDecoder(r.Body)
+	var raw json.RawMessage
+	if err := decoder.Decode(&raw); err != nil {
+		WriteErrMsg(w, http.StatusBadRequest, "validation", decodeBodyMessage(err))
+		return false
+	}
+	if !ValidJSONUnicode(raw) {
+		WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		return false
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		return false
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		return false
+	}
+	valueDecoder := json.NewDecoder(bytes.NewReader(raw))
+	if !allowUnknownFields {
+		valueDecoder.DisallowUnknownFields()
+	}
+	if err := valueDecoder.Decode(dst); err != nil {
+		WriteErrMsg(w, http.StatusBadRequest, "validation", decodeBodyMessage(err))
+		return false
+	}
+	return true
+}
+
+// decodeBodyMessage names the offending member for an unknown-field rejection,
+// but only within a length bound, and keeps the opaque "invalid JSON" wording
+// for every other decode failure. Nothing but the member name is ever echoed:
+// the name is caller-controlled text that ends up in an operator's error toast,
+// so a body carrying a megabyte-long member is refused without repeating it.
+func decodeBodyMessage(err error) string {
+	const unknownFieldPrefix = "json: unknown field "
+	msg := err.Error()
+	if !strings.HasPrefix(msg, unknownFieldPrefix) {
+		return "invalid JSON"
+	}
+	quoted := strings.TrimPrefix(msg, unknownFieldPrefix)
+	if utf8.RuneCountInString(strings.Trim(quoted, `"`)) > 64 {
+		return "unknown field in request body"
+	}
+	return "unknown field " + quoted
+}
 
 // LimitParam reads the ?limit= query parameter, defaulting to def and capping
 // at capN. A non-positive or non-integer value is an error.

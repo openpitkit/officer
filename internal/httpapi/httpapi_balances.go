@@ -18,7 +18,6 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -64,8 +63,7 @@ func handleSetBalanceRealizedPnl(svc Service) http.HandlerFunc {
 			return
 		}
 		var req balanceRealizedPnlRequestDTO
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		balance, err := svc.SetBalanceRealizedPnl(
@@ -101,8 +99,7 @@ func handleApplyAdjustment(svc Service) http.HandlerFunc {
 			return
 		}
 		var req adjustmentRequestDTO
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		if !httpx.DecodeBody(w, r, &req) {
 			return
 		}
 		// A caller-supplied external id is optional. When present, the backend

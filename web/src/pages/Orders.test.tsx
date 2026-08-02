@@ -809,6 +809,11 @@ describe("Orders submit mode", () => {
         /neither this submit nor later execution reports are signed or attested/i,
       ),
     ).toBeInTheDocument();
+    expect(
+      within(confirmation).getByText(
+        /if the account is unknown, it will be created with default settings/i,
+      ),
+    ).toBeInTheDocument();
     const confirmAction = within(confirmation).getByRole("button", {
       name: /submit drop-copy/i,
     });

@@ -63,6 +63,11 @@ type AuditEntry struct {
 	AccountTitle string
 	// Asset is the code of the asset the action targeted, if any.
 	Asset string
+	// Group is the code of the account group the action targeted, if any. Group
+	// actions carry no account, so this is the only structured handle a reader
+	// can select them by; without it a group's rows are only reachable through
+	// a substring match on Detail, which a crafted code can spoof.
+	Group string
 	// Detail is a short human-readable description of the action.
 	Detail string
 	// Source is the channel that initiated the action.
@@ -512,6 +517,7 @@ type TradeListPage struct {
 type AuditListFilter struct {
 	Account    TextMatcher
 	Asset      TextMatcher
+	Group      TextMatcher
 	ExternalID domain.ExternalID
 	Actor      TextMatcher
 	Source     domain.Source
@@ -1031,6 +1037,10 @@ type RealmStore interface {
 
 	// AppendAudit persists a new append-only audit record.
 	AppendAudit(ctx context.Context, entry AuditEntry) error
+
+	// AppendAuditBatch persists all audit records atomically. An empty batch is a
+	// no-op; any validation or write failure leaves every entry unapplied.
+	AppendAuditBatch(ctx context.Context, entries []AuditEntry) error
 
 	// ListAudit returns the most recent n audit rows, newest first. A non-positive
 	// n returns an empty slice.

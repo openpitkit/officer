@@ -15,6 +15,9 @@
     "asset": {
       "placeholder": "按资产筛选…"
     },
+    "group": {
+      "placeholder": "精确分组代码…"
+    },
     "source": {
       "ariaLabel": "来源",
       "all": "所有来源"

@@ -54,6 +54,9 @@ export interface Health {
 
 // --- Accounts ---
 
+/** Tier an account's effective block came from. */
+export type AccountBlockSource = "none" | "account" | "group";
+
 /** An operator account (mirrors the accountDTO wire shape). */
 export interface Account {
   code: string;
@@ -66,8 +69,22 @@ export interface Account {
     group: string;
     default: string;
   };
+  /**
+   * Effective kill-switch state: the account's own block or its group's. The
+   * engine refuses every order from a member of a blocked group, so this is
+   * the answer to whether the account can trade right now.
+   */
   blocked: boolean;
+  /** Effective reason: the account's own when it is blocked, else its group's. */
   blockReason: string;
+  /** Tier that produced the effective block. */
+  blockSource: AccountBlockSource;
+  /** The account's own latched block, independent of its group's. */
+  accountBlocked: boolean;
+  accountBlockReason: string;
+  /** The block of the group the account currently belongs to. */
+  groupBlocked: boolean;
+  groupBlockReason: string;
   group: string;
   notes: string;
   pnl?: string;
@@ -1150,6 +1167,12 @@ export interface AuditEntry {
   action: string;
   account: string;
   accountTitle: string;
+  /**
+   * Account group the action targeted, empty when it targeted none. It is the
+   * structured handle for selecting a group's rows; the free-form `detail`
+   * text is not, since another entity's code can appear inside it.
+   */
+  group: string;
   detail: string;
   source: Source;
 }

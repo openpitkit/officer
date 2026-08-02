@@ -52,6 +52,9 @@ func (s *Service) CreateGroup(
 	if err := domain.ValidateNotes(group.Notes); err != nil {
 		return domain.AccountGroup{}, err
 	}
+	if err := domain.ValidateBlockReason(group.BlockReason); err != nil {
+		return domain.AccountGroup{}, err
+	}
 	if err := validateOptionalCurrency(group.Currency); err != nil {
 		return domain.AccountGroup{}, err
 	}
@@ -184,6 +187,9 @@ func (s *Service) SetGroupBlocked(
 	ctx context.Context, code string, blocked bool, reason string,
 ) error {
 	if err := domain.ValidateGroupID(code); err != nil {
+		return err
+	}
+	if err := domain.ValidateBlockReason(reason); err != nil {
 		return err
 	}
 	n, err := s.groupNode()

@@ -1151,6 +1151,107 @@ func TestListAccountRowsFiltersAndCounts(t *testing.T) {
 	}
 }
 
+// The engine rejects every order from a member of a blocked group, so the
+// account status axis must resolve the group tier too: a member of a blocked
+// group is blocked, not active.
+func TestListAccountRowsStatusFilterIsEffective(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+
+	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "desk"}); err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	for _, account := range []domain.Account{
+		{Code: "group-member", GroupCode: "desk"},
+		{Code: "own-block", Blocked: true, BlockReason: "risk halt"},
+		{Code: "clear"},
+	} {
+		if _, err := rs.CreateAccount(ctx, account); err != nil {
+			t.Fatalf("CreateAccount %s: %v", account.Code, err)
+		}
+	}
+	if err := rs.SetGroupBlocked(ctx, "desk", true, "desk halt"); err != nil {
+		t.Fatalf("SetGroupBlocked: %v", err)
+	}
+
+	blocked, err := rs.ListAccountRows(ctx, AccountListFilter{
+		Status: StatusFilterBlocked,
+	})
+	if err != nil {
+		t.Fatalf("ListAccountRows blocked: %v", err)
+	}
+	got := accountRowCodes(blocked.Rows)
+	slices.Sort(got)
+	if !slices.Equal(got, []string{"group-member", "own-block"}) {
+		t.Fatalf("blocked rows = %v, want [group-member own-block]", got)
+	}
+	if blocked.Total != 2 {
+		t.Fatalf("blocked total = %d, want 2", blocked.Total)
+	}
+
+	active, err := rs.ListAccountRows(ctx, AccountListFilter{
+		Status: StatusFilterActive,
+	})
+	if err != nil {
+		t.Fatalf("ListAccountRows active: %v", err)
+	}
+	if got := accountRowCodes(active.Rows); !slices.Equal(got, []string{"clear"}) {
+		t.Fatalf("active rows = %v, want [clear]", got)
+	}
+	if active.Total != 1 {
+		t.Fatalf("active total = %d, want 1", active.Total)
+	}
+}
+
+// TestListAccountRowsBlockReasonFilterIsEffective holds the reason axis to the
+// same effective join as the status axis. The account DTO publishes the group's
+// reason for a group-blocked member, so a filter on that exact text must return
+// the row that displays it.
+func TestListAccountRowsBlockReasonFilterIsEffective(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+
+	if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "desk"}); err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	for _, account := range []domain.Account{
+		{Code: "group-member", GroupCode: "desk"},
+		{Code: "own-block", Blocked: true, BlockReason: "risk halt"},
+		{Code: "clear"},
+	} {
+		if _, err := rs.CreateAccount(ctx, account); err != nil {
+			t.Fatalf("CreateAccount %s: %v", account.Code, err)
+		}
+	}
+	if err := rs.SetGroupBlocked(ctx, "desk", true, "desk halt"); err != nil {
+		t.Fatalf("SetGroupBlocked: %v", err)
+	}
+
+	page, err := rs.ListAccountRows(ctx, AccountListFilter{
+		BlockReason: ExactTextMatcher("desk halt"),
+	})
+	if err != nil {
+		t.Fatalf("ListAccountRows group reason: %v", err)
+	}
+	if got := accountRowCodes(page.Rows); !slices.Equal(got, []string{"group-member"}) {
+		t.Fatalf("group reason rows = %v, want [group-member]", got)
+	}
+	if page.Total != 1 {
+		t.Fatalf("group reason total = %d, want 1", page.Total)
+	}
+
+	// The account's own block still wins attribution, as in the domain.
+	page, err = rs.ListAccountRows(ctx, AccountListFilter{
+		BlockReason: ExactTextMatcher("risk halt"),
+	})
+	if err != nil {
+		t.Fatalf("ListAccountRows own reason: %v", err)
+	}
+	if got := accountRowCodes(page.Rows); !slices.Equal(got, []string{"own-block"}) {
+		t.Fatalf("own reason rows = %v, want [own-block]", got)
+	}
+}
+
 func TestListRowsMatchTitleAndGroupCode(t *testing.T) {
 	ctx := context.Background()
 	_, rs := newTestStore(t)

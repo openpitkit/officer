@@ -72,3 +72,34 @@ func TestUserSettings_PutInvalidJSON(t *testing.T) {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 }
+
+func TestUserSettings_PutRequiresWelcomeSeen(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"empty body", ""},
+		{"null body", "null"},
+		{"missing member", `{}`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeService{welcomeSeen: true}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(
+				http.MethodPut, "/api/v1/user-settings",
+				bytes.NewBufferString(tc.body),
+			))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("want 400, got %d", rec.Code)
+			}
+			if !svc.welcomeSeen {
+				t.Fatal("invalid request changed welcomeSeen")
+			}
+		})
+	}
+}
