@@ -1039,57 +1039,5 @@ func TestLocalNode_SetAccountGroupAuditFilesOpenEndedMoveOnce(t *testing.T) {
 	}
 }
 
-// TestLocalNode_BusinessCSVImportAuditRecordsBlockReasons proves the CSV import
-// path records the same reasons as the interactive block: the import is the one
-// route that can block many accounts and groups at once, so a trail that names
-// none of the reasons is the least useful exactly where it matters most.
-func TestLocalNode_BusinessCSVImportAuditRecordsBlockReasons(t *testing.T) {
-	t.Parallel()
-	n, st := newTestNode(t, newFakeEngine())
-	ctx := context.Background()
-
-	err := n.ApplyBusinessCSVImport(ctx, store.BusinessCSVImport{
-		Groups: []store.BusinessCSVImportGroup{{
-			Group: domain.AccountGroup{
-				Code:        "desk-a",
-				Blocked:     true,
-				BlockReason: "desk suspended",
-			},
-		}},
-		Accounts: []store.BusinessCSVImportAccount{{
-			Account: domain.Account{
-				Code:        "acc-1",
-				Blocked:     true,
-				BlockReason: "imported block",
-			},
-		}},
-	}, testCaller)
-	if err != nil {
-		t.Fatalf("ApplyBusinessCSVImport: %v", err)
-	}
-
-	rows, err := st.ListAudit(ctx, 50)
-	if err != nil {
-		t.Fatalf("ListAudit: %v", err)
-	}
-	details := make([]string, 0, len(rows))
-	for _, row := range rows {
-		details = append(details, row.Detail)
-	}
-	for _, want := range []string{
-		"block account acc-1: imported block",
-		"block group desk-a: desk suspended",
-	} {
-		if !slices.Contains(details, want) {
-			t.Fatalf("audit details %v missing %q", details, want)
-		}
-	}
-	for _, row := range rows {
-		if row.Action == domain.AuditActionBlockGroup && row.Group != "desk-a" {
-			t.Fatalf("imported group block row %+v carries no structured group", row)
-		}
-	}
-}
-
 // testOrder records a committed buy order so an execution report has a parent
 // order row to attach its event and trade to.

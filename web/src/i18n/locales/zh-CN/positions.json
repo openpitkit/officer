@@ -9,7 +9,6 @@
     "adjust": "调整",
     "adjustAriaLabel": "打开 {{account}} {{asset}} 的调整",
     "refreshHistoryAriaLabel": "刷新历史记录",
-    "importCsv": "导入持仓 CSV",
     "exportCsv": "导出持仓 CSV",
     "exportHistoryCsv": "导出历史 CSV",
     "historyExporting": "正在导出"

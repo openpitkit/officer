@@ -23,68 +23,7 @@ import (
 
 	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/domain"
-	"go.openpit.dev/officer/framework/store"
 )
-
-func (r *memoryRealm) ApplyBusinessCSVImport(
-	ctx context.Context, in store.BusinessCSVImport,
-) error {
-	snapshot := r.exportData(ctx)
-	for _, group := range in.Groups {
-		if group.Exists {
-			current, ok := r.groups[group.Group.Code]
-			if !ok {
-				r.restoreData(snapshot)
-				return domain.ErrInvalid
-			}
-			group.Group.EngineGroupID = current.EngineGroupID
-			r.groups[group.Group.Code] = group.Group
-		} else {
-			if _, err := r.CreateGroup(ctx, group.Group); err != nil {
-				r.restoreData(snapshot)
-				return err
-			}
-		}
-	}
-	for _, account := range in.Accounts {
-		if account.Account.Pnl == "" {
-			account.Account.Pnl = "0"
-		}
-		if account.Exists {
-			current, ok := r.accounts[account.Account.Code]
-			if !ok {
-				r.restoreData(snapshot)
-				return domain.ErrInvalid
-			}
-			account.Account.EngineAccountID = current.EngineAccountID
-			r.accounts[account.Account.Code] = account.Account
-		} else {
-			if _, err := r.CreateAccount(ctx, account.Account); err != nil {
-				r.restoreData(snapshot)
-				return err
-			}
-		}
-	}
-	for _, balance := range in.Balances {
-		if err := r.UpsertBalance(ctx, balance); err != nil {
-			r.restoreData(snapshot)
-			return err
-		}
-	}
-	for _, adjustment := range in.Adjustments {
-		if _, err := r.AppendAdjustment(ctx, adjustment); err != nil {
-			r.restoreData(snapshot)
-			return err
-		}
-	}
-	for _, audit := range in.Audits {
-		if err := r.AppendAudit(ctx, audit); err != nil {
-			r.restoreData(snapshot)
-			return err
-		}
-	}
-	return nil
-}
 
 func (r *memoryRealm) ExportBackup(
 	ctx context.Context, scope backup.Scope,

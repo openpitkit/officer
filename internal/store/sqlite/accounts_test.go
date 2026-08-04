@@ -55,6 +55,32 @@ func TestSetAccountPnl(t *testing.T) {
 		)
 	}
 
+	if err := rs.SetAccountPnl(
+		ctx, "acc-1", "", domain.PnlHaltReasonMissingFx,
+	); err != nil {
+		t.Fatalf("SetAccountPnl(empty halt): %v", err)
+	}
+	account, ok, err = rs.GetAccount(ctx, "acc-1")
+	if err != nil || !ok {
+		t.Fatalf("GetAccount(empty halt): %v, ok = %v", err, ok)
+	}
+	if account.Pnl != "" || account.PnlHaltReason != domain.PnlHaltReasonMissingFx {
+		t.Fatalf(
+			"account pnl = %q halt = %q, want no value with missing_fx",
+			account.Pnl,
+			account.PnlHaltReason,
+		)
+	}
+	var storedPnl any
+	if err := rs.(*realmStore).rawDB().QueryRowContext(
+		ctx, `SELECT pnl FROM account WHERE code = ?`, "acc-1",
+	).Scan(&storedPnl); err != nil {
+		t.Fatalf("read stored halted pnl: %v", err)
+	}
+	if storedPnl != nil {
+		t.Fatalf("stored halted pnl = %#v, want NULL", storedPnl)
+	}
+
 	// A halted account holds no trustworthy number, so it never counts as open
 	// and cannot block the currency change the reset rides on.
 	open, err := rs.ListAccountsWithOpenBalances(ctx, []domain.AccountID{"acc-1"})

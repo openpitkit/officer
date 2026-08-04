@@ -286,30 +286,29 @@
   "businessCsv": {
     "menu": {
       "trigger": "File",
-      "ariaLabel": "Import or export CSV"
+      "ariaLabel": "Export CSV"
     },
-    "entityLabel": "Entity",
     "delimiterLabel": "Delimiter",
     "format": {
       "heading": "CSV format",
       "account_groups": {
-        "description": "One account group per row. The first row must be the header.",
-        "columns": "code,title,notes,blocked,block_reason"
+        "description": "One account group per row.",
+        "columns": "code,title,currency,notes,blocked,block_reason"
       },
       "accounts": {
-        "description": "One account per row. The first row must be the header.",
-        "columns": "code,title,group_code,notes,blocked,block_reason"
+        "description": "One account per row.",
+        "columns": "code,title,group_code,currency,pnl,pnl_halt_reason,notes,blocked,block_reason"
       },
       "positions": {
-        "description": "One spot-funds position per row. The first row must be the header.",
-        "columns": "account_code,asset,available,held,incoming,realized_pnl,average_entry_price"
+        "description": "One spot-funds position per row.",
+        "columns": "account_code,asset,available,held,incoming,realized_pnl,realized_pnl_halt_reason,average_entry_price"
       },
       "orders": {
-        "description": "Orders are export-only. The first row is the header.",
-        "columns": "id,at,account_code,source,principal,base_asset,quote_asset,side,amount_kind,amount_value,price,status,display_prices"
+        "description": "One order per row.",
+        "columns": "id,at,account_code,source,principal,base_asset,quote_asset,side,amount_kind,amount_value,price,lock_price,leaves,status,drop_copy"
       },
       "trades": {
-        "description": "Trades are export-only. The first row is the header.",
+        "description": "One trade per row.",
         "columns": "id,order_id,at,account_code,source,principal,base_asset,quote_asset,side,quantity,price,lock_price,commission_amount,commission_currency"
       }
     },
@@ -325,30 +324,6 @@
       "semicolon": "Semicolon",
       "tab": "Tab",
       "pipe": "Pipe"
-    },
-    "conflictPolicy": {
-      "skip": "Skip conflicts",
-      "replace": "Replace conflicts",
-      "stop": "Stop at first conflict"
-    },
-    "import": {
-      "trigger": "Import CSV",
-      "title": "Import business CSV",
-      "description": "Upload one CSV file, a ZIP with one CSV file, or paste CSV text for backend validation before applying it.",
-      "chooseFile": "Choose CSV or ZIP",
-      "noFile": "No file selected",
-      "pastePlaceholder": "Paste CSV rows here",
-      "fileTakesPriority": "The selected file is used instead of pasted text.",
-      "fileTooLarge": "File is too large. Choose a file up to {{limit}} MiB.",
-      "preview": "Preview upload",
-      "previewing": "Previewing…",
-      "previewReady": "Preview ready for {{file}}",
-      "counts": "Rows {{rows}} · applied {{applied}} · skipped {{skipped}} · conflicts {{conflicts}}",
-      "conflictsFound": "{{count}} conflicts found.",
-      "apply": "Apply import",
-      "applied": "Import applied",
-      "conflictTitle": "Conflicts found",
-      "conflictDescription": "{{count}} uploaded rows intersect with existing business data. Choose how Officer should apply this import."
     },
     "export": {
       "trigger": "Export CSV",

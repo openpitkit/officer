@@ -56,7 +56,6 @@ type fakeNode struct {
 	createAssetClassCalls           []domain.AssetClass
 	createCalls                     []domain.Account
 	blockCalls                      []blockCall
-	positionSnapshots               []domain.Balance
 	adjustmentExternalIDs           []domain.ExternalID
 	adjustmentErr                   error
 
@@ -87,6 +86,7 @@ type fakeNode struct {
 	resetErr                error
 	currentSink             marketdata.Sink
 	orders                  map[domain.ExternalID]domain.Order
+	allOrders               []domain.Order
 	orderEvents             map[domain.ExternalID][]domain.OrderEvent
 	attestations            map[domain.ExternalID]domain.EventAttestation
 	nextOrderSeq            byte
@@ -632,31 +632,6 @@ func (n *fakeNode) DeleteGroup(context.Context, string, domain.Caller) error {
 	return nil
 }
 
-func (n *fakeNode) ApplyBusinessCSVImport(
-	_ context.Context,
-	in store.BusinessCSVImport,
-	_ domain.Caller,
-) error {
-	for _, row := range in.Accounts {
-		if !row.Exists {
-			n.createCalls = append(n.createCalls, row.Account)
-		}
-		found := false
-		for i, account := range n.accounts {
-			if account.Code == row.Account.Code {
-				n.accounts[i] = row.Account
-				found = true
-				break
-			}
-		}
-		if !found {
-			n.accounts = append(n.accounts, row.Account)
-		}
-	}
-	n.positionSnapshots = append(n.positionSnapshots, in.Balances...)
-	return nil
-}
-
 func (n *fakeNode) ApplyAdjustment(
 	_ context.Context, key node.Key, externalID domain.ExternalID,
 	req domain.AdjustmentRequest, missing domain.MissingAccountPolicy,
@@ -691,16 +666,6 @@ func (n *fakeNode) SetBalanceRealizedPnl(
 		Account:     key.Account,
 		Asset:       asset,
 		RealizedPnl: realizedPnl,
-	}, nil
-}
-
-func (n *fakeNode) ImportPositionSnapshot(
-	_ context.Context, _ node.Key, _ domain.ExternalID,
-	snapshot domain.Balance, _ domain.Caller,
-) (domain.AccountAdjustmentRecord, error) {
-	n.positionSnapshots = append(n.positionSnapshots, snapshot)
-	return domain.AccountAdjustmentRecord{
-		Accepted: &domain.AdjustmentOutcomeAccepted{},
 	}, nil
 }
 
@@ -785,10 +750,8 @@ func (n *fakeNode) SubmitOrder(
 		order = n.orders[order.ExternalID]
 	} else {
 		order.Status = domain.OrderStatusCommitted
-		order.Leaves = o.AmountValue
 		if n.submitResult != nil {
 			order.Lock = slices.Clone(n.submitResult.Lock)
-			order.Leaves = n.submitResult.LeavesQuantity
 		}
 		n.orders[order.ExternalID] = order
 		n.appendEvent(order.ExternalID, domain.OrderEventPreTradeAccepted, domain.OrderEventPayload{})
@@ -817,8 +780,6 @@ func (n *fakeNode) SubmitOrderWithAttestation(
 	result := engine.OrderResult{
 		Accepted:            true,
 		SettlementLockPrice: "100",
-		EstimateSource:      domain.EstimateSourceLimit,
-		LeavesQuantity:      o.AmountValue,
 	}
 	if n.submitResult != nil {
 		result = *n.submitResult
@@ -860,11 +821,15 @@ func (n *fakeNode) SubmitImmediate(
 	order.Status = domain.OrderStatusFilled
 	n.orders[order.ExternalID] = order
 	n.appendEvent(order.ExternalID, domain.OrderEventPreTradeAccepted, domain.OrderEventPayload{})
+	tradePrice := o.Price
+	if tradePrice == "" {
+		tradePrice = "100"
+	}
 	return order, engine.ImmediateResult{
 		Accepted:            true,
 		SettlementLockPrice: "100",
+		TradePrice:          tradePrice,
 		FillQuantity:        o.AmountValue,
-		EstimateSource:      domain.EstimateSourceLimit,
 	}, nil
 }
 
@@ -886,7 +851,7 @@ func (n *fakeNode) SubmitImmediateWithAttestation(
 		n.appendEvent(order.ExternalID, domain.OrderEventCommitted, domain.OrderEventPayload{})
 		n.appendEvent(order.ExternalID, domain.OrderEventFill, domain.OrderEventPayload{
 			FillQuantity:  result.FillQuantity,
-			FillPrice:     result.SettlementLockPrice,
+			FillPrice:     result.TradePrice,
 			FillLockPrice: result.SettlementLockPrice,
 			OrderStatus:   string(domain.OrderStatusFilled),
 		})
@@ -945,7 +910,10 @@ func (n *fakeNode) ConfirmOrderWithAttestation(
 }
 
 func (n *fakeNode) CancelOrder(
-	_ context.Context, orderID domain.ExternalID, _ domain.Caller,
+	_ context.Context,
+	orderID domain.ExternalID,
+	leavesQuantity string,
+	_ domain.Caller,
 ) (domain.Order, engine.ExecutionReportResult, error) {
 	order := n.orders[orderID]
 	if n.cancelNoop {
@@ -967,14 +935,17 @@ func (n *fakeNode) CancelOrder(
 		BaseAsset:      order.BaseAsset,
 		QuoteAsset:     order.QuoteAsset,
 		Side:           order.Side,
-		LeavesQuantity: order.Leaves,
+		LeavesQuantity: leavesQuantity,
 		Lock:           slices.Clone(order.Lock),
 		OrderStatus:    domain.OrderStatusCancelled,
+	}
+	if _, err := domain.ExecutionReportRequiresEngine(in); err != nil {
+		return domain.Order{}, engine.ExecutionReportResult{}, err
 	}
 	n.execReports = append(n.execReports, in)
 	request := domain.ExecutionReportRequestFromInput(in)
 	order.Status = domain.OrderStatusCancelled
-	order.Leaves = "0"
+	order.Leaves = leavesQuantity
 	n.orders[orderID] = order
 	n.appendEvent(orderID, domain.OrderEventCancelled, domain.OrderEventPayload{
 		LeavesQuantity:  in.LeavesQuantity,
@@ -983,7 +954,7 @@ func (n *fakeNode) CancelOrder(
 	})
 	persistence := engine.ExecutionReportPersistence{
 		OrderStatus: domain.OrderStatusCancelled,
-		Leaves:      "0",
+		Leaves:      leavesQuantity,
 	}
 	return order, engine.ExecutionReportResult{Persistence: &persistence}, nil
 }
@@ -991,12 +962,13 @@ func (n *fakeNode) CancelOrder(
 func (n *fakeNode) CancelOrderWithAttestation(
 	ctx context.Context,
 	orderID domain.ExternalID,
+	leavesQuantity string,
 	caller domain.Caller,
 	attest store.EventAttestor,
 ) (domain.Order, engine.ExecutionReportResult, error) {
 	snapshot := n.snapshotOrderTxn()
 	before := len(n.orderEvents[orderID])
-	order, result, err := n.CancelOrder(ctx, orderID, caller)
+	order, result, err := n.CancelOrder(ctx, orderID, leavesQuantity, caller)
 	if err != nil {
 		return domain.Order{}, engine.ExecutionReportResult{}, err
 	}
@@ -1015,7 +987,7 @@ func (n *fakeNode) ApplyExecutionReport(
 		n.execReports = append(n.execReports, in)
 		return engine.ExecutionReportResult{
 			Persistence: &engine.ExecutionReportPersistence{
-				OrderStatus: domain.ExecutionReportTargetStatus(in),
+				OrderStatus: in.OrderStatus,
 				Leaves:      in.LeavesQuantity,
 			},
 		}, nil
@@ -1037,7 +1009,7 @@ func (n *fakeNode) ApplyExecutionReport(
 			FillPrice:       in.FillPrice,
 			FillLockPrice:   in.LockPrice,
 			LeavesQuantity:  in.LeavesQuantity,
-			OrderStatus:     string(domain.ExecutionReportTargetStatus(in)),
+			OrderStatus:     string(in.OrderStatus),
 			Commission:      in.Commission,
 			ExecutionReport: request,
 		}
@@ -1048,12 +1020,10 @@ func (n *fakeNode) ApplyExecutionReport(
 			Payload: payload,
 		})
 	}
-	if typ, ok := domain.ExecutionReportStatusChangeEvent(
-		domain.ExecutionReportTargetStatus(in),
-	); ok {
+	if typ, ok := domain.ExecutionReportStatusChangeEvent(in.OrderStatus); ok {
 		payload := domain.OrderEventPayload{
 			LeavesQuantity:  in.LeavesQuantity,
-			OrderStatus:     string(domain.ExecutionReportTargetStatus(in)),
+			OrderStatus:     string(in.OrderStatus),
 			Commission:      in.Commission,
 			ExecutionReport: request,
 		}
@@ -1063,17 +1033,15 @@ func (n *fakeNode) ApplyExecutionReport(
 		})
 	}
 	if order, ok := n.orders[in.Order]; ok {
-		order.Status = domain.ExecutionReportTargetStatus(in)
+		order.Status = in.OrderStatus
 		if in.LeavesQuantity != "" {
-			order.Leaves = domain.ExecutionReportPersistedLeavesFor(
-				order.Status, in.LeavesQuantity,
-			)
+			order.Leaves = in.LeavesQuantity
 		}
 		n.orders[in.Order] = order
 	}
 	return engine.ExecutionReportResult{
 		Persistence: &engine.ExecutionReportPersistence{
-			OrderStatus: domain.ExecutionReportTargetStatus(in),
+			OrderStatus: in.OrderStatus,
 			Commission:  in.Commission,
 			Leaves:      in.LeavesQuantity,
 			Events:      events,
@@ -1168,7 +1136,7 @@ func (n *fakeNode) ListOrderRows(
 func (n *fakeNode) ListAllOrders(
 	context.Context, domain.AccountID, domain.Source,
 ) ([]domain.Order, error) {
-	return nil, nil
+	return append([]domain.Order(nil), n.allOrders...), nil
 }
 
 func (n *fakeNode) CountOrders(context.Context) (int, error) {

@@ -46,6 +46,9 @@ func marshalLock(lock pretrade.Lock) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("engine: marshal lock: %w", err)
 	}
+	if len(payload) == 0 {
+		return nil, fmt.Errorf("engine: marshal lock returned an empty payload")
+	}
 	return payload, nil
 }
 
@@ -65,10 +68,10 @@ func unmarshalLock(payload []byte) (pretrade.Lock, error) {
 // LockDisplayPrices deserializes a stored lock BLOB and returns its prices as
 // exact decimal strings, in the lock's iteration order (default-group records
 // first, then each non-default group in insertion order). It is the seam the
-// presentation layer (backend/httpapi) calls to render an order's locked prices
-// without itself depending on the SDK or decoding the opaque BLOB. A nil/empty
-// lock means the order locked nothing and yields an empty slice with no error;
-// the settlement leg is the last entry (see settlementEstimate).
+// presentation layer calls before enforcing the single-price contract, without
+// itself depending on the SDK or decoding the opaque BLOB. A nil/empty BLOB
+// means no lock was captured, as on a rejected or legacy order, and yields an
+// empty slice with no error; settlementPrice owns the cardinality check.
 func LockDisplayPrices(lock []byte) ([]string, error) {
 	if len(lock) == 0 {
 		return []string{}, nil
@@ -84,15 +87,14 @@ func LockDisplayPrices(lock []byte) ([]string, error) {
 	return pricesToStrings(prices), nil
 }
 
-// LockSettlementEstimate derives the settlement-leg lock price and estimate
-// source from a stored order lock using the same rule as live reservations.
-func LockSettlementEstimate(lock []byte, order domain.Order) (string, string, error) {
+// LockSettlementPrice restores the SDK lock and returns its single settlement
+// price using the same rule as live reservations.
+func LockSettlementPrice(lock []byte, order domain.Order) (string, error) {
 	prices, err := LockDisplayPrices(lock)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
-	settlement, source := settlementEstimate(prices, order)
-	return settlement, source, nil
+	return settlementPrice(prices, orderExternalIDForError(order.ExternalID)), nil
 }
 
 // pricesToStrings renders a binding price slice as exact decimal strings.

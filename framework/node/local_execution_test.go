@@ -485,9 +485,11 @@ func TestLocalNode_ApplyExecutionReportAuditsEngineBlock(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("GetAccount: %v ok=%v", err, ok)
 	}
-	wantReason := fmt.Sprintf("account block triggered [code=test_block, order %s]", order.ExternalID)
-	if !acc.Blocked || acc.BlockReason != wantReason {
-		t.Fatalf("account block reason = %q, want %q", acc.BlockReason, wantReason)
+	// The account keeps the engine's own reason, verbatim: the reject code and the
+	// triggering order are carried by the block audit line, not composed into the
+	// stored reason.
+	if !acc.Blocked || acc.BlockReason != "account block triggered" {
+		t.Fatalf("account block reason = %q, want the engine reason", acc.BlockReason)
 	}
 
 	detail, err := st.GetOrder(ctx, order.ExternalID)
@@ -518,8 +520,10 @@ func TestLocalNode_ApplyExecutionReportAuditsEngineBlock(t *testing.T) {
 	if rows[0].Source != domain.SourceSystem || rows[0].Actor != "" {
 		t.Fatalf("block not attributed to system with empty actor: %+v", rows[0])
 	}
-	if !strings.Contains(rows[0].Detail, "account block triggered") {
-		t.Fatalf("block detail missing reason: %q", rows[0].Detail)
+	if !strings.Contains(rows[0].Detail, "account block triggered") ||
+		!strings.Contains(rows[0].Detail, "code=test_block") ||
+		!strings.Contains(rows[0].Detail, order.ExternalID.String()) {
+		t.Fatalf("block detail missing reason, code or order: %q", rows[0].Detail)
 	}
 }
 
@@ -867,15 +871,12 @@ func TestLocalNode_ApplyExecutionReportRoutesFillableStatusesThroughEngine(t *te
 			if err != nil {
 				t.Fatalf("GetOrder: %v", err)
 			}
-			wantLeaves := "1"
-			if domain.OrderStatusTerminal(status) {
-				wantLeaves = "0"
-			}
-			if detail.Order.Leaves != wantLeaves {
+			// Every status, terminal included, records the leaves the report
+			// carried: the report is filed as it arrived.
+			if detail.Order.Leaves != "1" {
 				t.Fatalf(
-					"order leaves = %q, want %q for status %q",
+					"order leaves = %q, want reported 1 for status %q",
 					detail.Order.Leaves,
-					wantLeaves,
 					status,
 				)
 			}
@@ -954,8 +955,10 @@ func TestLocalNode_ApplyExecutionReportRoutesTerminalReportsThroughEngine(t *tes
 			if err != nil {
 				t.Fatalf("GetOrder: %v", err)
 			}
-			if detail.Order.Status != status || detail.Order.Leaves != "0" {
-				t.Fatalf("order = %+v, want %s with zero leaves", detail.Order, status)
+			// A terminal report carrying a non-zero release quantity records that
+			// quantity: Officer stores the report, not a status-derived value.
+			if detail.Order.Status != status || detail.Order.Leaves != "2" {
+				t.Fatalf("order = %+v, want %s with reported leaves 2", detail.Order, status)
 			}
 			if len(detail.Events) != 1 {
 				t.Fatalf("events = %+v, want one terminal event", detail.Events)
@@ -1107,10 +1110,9 @@ func TestLocalNode_ApplyExecutionReportPersistsWorkflowStatusesWithoutEngine(t *
 			const id domain.AccountID = "acc-1"
 			order := testOrder(t, st, id)
 			result, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
-				ExternalID:     reportID,
-				Order:          order.ExternalID,
-				LeavesQuantity: "1.5",
-				OrderStatus:    tc.status,
+				ExternalID:  reportID,
+				Order:       order.ExternalID,
+				OrderStatus: tc.status,
 			}, testCaller)
 			if err != nil {
 				t.Fatalf("ApplyExecutionReport: %v", err)
@@ -1134,8 +1136,8 @@ func TestLocalNode_ApplyExecutionReportPersistsWorkflowStatusesWithoutEngine(t *
 			if detail.Order.Status != tc.status {
 				t.Fatalf("order status = %q, want %q", detail.Order.Status, tc.status)
 			}
-			if detail.Order.Leaves != "1.5" {
-				t.Fatalf("leaves = %q, want 1.5", detail.Order.Leaves)
+			if detail.Order.Leaves != "" {
+				t.Fatalf("leaves = %q, want unchanged empty", detail.Order.Leaves)
 			}
 			if len(detail.Events) != 1 || detail.Events[0].Type != tc.event {
 				t.Fatalf("events = %+v, want [%s]", detail.Events, tc.event)
@@ -1151,26 +1153,12 @@ func TestLocalNode_ApplyExecutionReportPersistsWorkflowStatusesWithoutEngine(t *
 	}
 }
 
-func TestLocalNode_ApplyExecutionReportRejectsWorkflowSettlementFields(t *testing.T) {
+func TestLocalNode_ApplyExecutionReportRejectsInvalidWorkflowReport(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name string
 		in   domain.ExecutionReportInput
 	}{
-		{
-			name: "malformed leaves",
-			in: domain.ExecutionReportInput{
-				LeavesQuantity: "not-a-number",
-				OrderStatus:    domain.OrderStatusAccepted,
-			},
-		},
-		{
-			name: "negative leaves",
-			in: domain.ExecutionReportInput{
-				LeavesQuantity: "-1",
-				OrderStatus:    domain.OrderStatusCommitted,
-			},
-		},
 		{
 			name: "lock price",
 			in: domain.ExecutionReportInput{
@@ -1198,10 +1186,17 @@ func TestLocalNode_ApplyExecutionReportRejectsWorkflowSettlementFields(t *testin
 			},
 		},
 		{
-			name: "commission without leaves",
+			name: "malformed leaves",
 			in: domain.ExecutionReportInput{
-				Commission:  &domain.Commission{Amount: "-1", Currency: "USD"},
-				OrderStatus: domain.OrderStatusCommitted,
+				LeavesQuantity: "not-a-number",
+				OrderStatus:    domain.OrderStatusCommitted,
+			},
+		},
+		{
+			name: "negative leaves",
+			in: domain.ExecutionReportInput{
+				LeavesQuantity: "-1",
+				OrderStatus:    domain.OrderStatusAccepted,
 			},
 		},
 	}
@@ -1231,6 +1226,93 @@ func TestLocalNode_ApplyExecutionReportRejectsWorkflowSettlementFields(t *testin
 			}
 			if detail.Order.Status != order.Status || len(detail.Events) != 0 {
 				t.Fatalf("invalid workflow report mutated order: %+v", detail)
+			}
+		})
+	}
+}
+
+func TestLocalNode_ApplyExecutionReportWorkflowLeavesStaysDBOnly(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	order := testOrder(t, st, "acc-1")
+
+	if _, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), domain.ExecutionReportInput{
+		Order:          order.ExternalID,
+		LeavesQuantity: "2",
+		OrderStatus:    domain.OrderStatusAccepted,
+	}, testCaller); err != nil {
+		t.Fatalf("ApplyExecutionReport: %v", err)
+	}
+	if len(eng.execReportCalls) != 0 {
+		t.Fatalf("workflow leaves reached engine: %+v", eng.execReportCalls)
+	}
+	detail, err := st.GetOrder(ctx, order.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if detail.Order.Leaves != "2" {
+		t.Fatalf("order leaves = %q, want reported 2", detail.Order.Leaves)
+	}
+	if len(detail.Events) != 1 || detail.Events[0].Payload.LeavesQuantity != "2" {
+		t.Fatalf("events = %+v, want reported leaves 2", detail.Events)
+	}
+}
+
+// The engine's post-trade path has no reject channel, so a report settled by
+// the engine without leaves must be refused before the account pipeline.
+func TestLocalNode_ApplyExecutionReportRequiresLeavesForEngineReports(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		in   domain.ExecutionReportInput
+	}{
+		{
+			name: "terminal",
+			in: domain.ExecutionReportInput{
+				OrderStatus: domain.OrderStatusCancelled,
+			},
+		},
+		{
+			name: "fill",
+			in: domain.ExecutionReportInput{
+				FillQuantity: "1",
+				FillPrice:    "100",
+				OrderStatus:  domain.OrderStatusFilled,
+			},
+		},
+		{
+			name: "commission",
+			in: domain.ExecutionReportInput{
+				Commission: &domain.Commission{
+					Amount:   "-1",
+					Currency: "USD",
+				},
+				OrderStatus: domain.OrderStatusAccepted,
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			eng := newFakeEngine()
+			n, st := newTestNode(t, eng)
+			ctx := context.Background()
+			order := testOrder(t, st, "acc-1")
+			in := tc.in
+			in.Order = order.ExternalID
+
+			if _, err := n.ApplyExecutionReport(
+				ctx, testKey("acc-1"), in, testCaller,
+			); !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("ApplyExecutionReport error = %v, want ErrInvalid", err)
+			}
+			if len(eng.execReportCalls) != 0 || len(eng.accountSyncCalls) != 0 {
+				t.Fatalf(
+					"report without leaves reached account pipeline: engine=%+v sync=%+v",
+					eng.execReportCalls,
+					eng.accountSyncCalls,
+				)
 			}
 		})
 	}
@@ -1376,45 +1458,23 @@ func TestLocalNode_ApplyExecutionReportRejectsInvalidStatusBeforeEngine(t *testi
 	}
 }
 
-func TestLocalNode_ApplyExecutionReportRejectsEngineReportWithoutLeaves(t *testing.T) {
+func TestLocalNode_ApplyExecutionReportRejectsFillOnWorkflowStatus(t *testing.T) {
 	t.Parallel()
-	cases := []struct {
-		name string
-		in   domain.ExecutionReportInput
-	}{
-		{
-			name: "fill",
-			in: domain.ExecutionReportInput{
-				FillQuantity: "1",
-				FillPrice:    "400",
-				OrderStatus:  domain.OrderStatusAccepted,
-			},
-		},
-		{
-			name: "terminal",
-			in: domain.ExecutionReportInput{
-				OrderStatus: domain.OrderStatusCancelled,
-			},
-		},
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	order := testOrder(t, st, "acc-1")
+	_, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), domain.ExecutionReportInput{
+		Order:        order.ExternalID,
+		FillQuantity: "1",
+		FillPrice:    "400",
+		OrderStatus:  domain.OrderStatusAccepted,
+	}, testCaller)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("ApplyExecutionReport = %v, want invalid", err)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			eng := newFakeEngine()
-			n, st := newTestNode(t, eng)
-			ctx := context.Background()
-
-			order := testOrder(t, st, "acc-1")
-			in := tc.in
-			in.Order = order.ExternalID
-			_, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), in, testCaller)
-			if !errors.Is(err, domain.ErrInvalid) {
-				t.Fatalf("ApplyExecutionReport = %v, want invalid", err)
-			}
-			if len(eng.execReportCalls) != 0 {
-				t.Fatalf("report without leaves reached engine: %+v", eng.execReportCalls)
-			}
-		})
+	if len(eng.execReportCalls) != 0 {
+		t.Fatalf("workflow fill reached engine: %+v", eng.execReportCalls)
 	}
 }
 
@@ -1448,54 +1508,6 @@ func TestLocalNode_ApplyExecutionReportRoutesTerminalFillThroughEngine(t *testin
 		detail.Events[1].Type != domain.OrderEventCancelled {
 		t.Fatalf("events = %+v, want [fill cancelled]", detail.Events)
 	}
-}
-
-// TestEngineBlockReason verifies the account block_reason composed for an
-// engine-initiated block carries the engine reason plus the cause (code and
-// triggering order), falling back to the code when no reason is given and
-// appending details when present.
-func TestEngineBlockReason(t *testing.T) {
-	t.Parallel()
-	order := mustExternalID(t)
-	cases := []struct {
-		name  string
-		block domain.ExecutionAccountBlock
-		want  string
-	}{
-		{
-			name:  "reason and code",
-			block: domain.ExecutionAccountBlock{Account: "acc-1", Code: "pnl_kill_switch", Reason: "loss limit breached"},
-			want:  fmt.Sprintf("loss limit breached [code=pnl_kill_switch, order %s]", order),
-		},
-		{
-			name:  "empty reason falls back to code",
-			block: domain.ExecutionAccountBlock{Account: "acc-1", Code: "pnl_kill_switch"},
-			want:  fmt.Sprintf("pnl_kill_switch [code=pnl_kill_switch, order %s]", order),
-		},
-		{
-			name:  "details appended",
-			block: domain.ExecutionAccountBlock{Account: "acc-1", Code: "pnl_kill_switch", Reason: "loss limit breached", Details: "upper bound 1000"},
-			want:  fmt.Sprintf("loss limit breached [code=pnl_kill_switch, order %s, upper bound 1000]", order),
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := engineBlockReason(order, tc.block); got != tc.want {
-				t.Fatalf("engineBlockReason = %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
-// mustExternalID returns a fixed generated external id for the audit-detail
-// tests that need a stable order handle to render.
-func mustExternalID(t *testing.T) domain.ExternalID {
-	t.Helper()
-	id, err := domain.ParseExternalID("AAAAAAAAAAAAAAAAAAAAAA")
-	if err != nil {
-		t.Fatalf("ParseExternalID: %v", err)
-	}
-	return id
 }
 
 // externalID derives a deterministic, canonical external id from a short label

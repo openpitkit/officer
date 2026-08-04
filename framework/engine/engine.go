@@ -119,9 +119,9 @@ type AdjustmentBatchReject = domain.AdjustmentOutcomeRejected
 // reservation lock captured before commit; on reject Rejects holds the engine
 // rejects.
 type OrderResult struct {
-	// Lock is the SDK-serialized reservation lock captured before the reservation
-	// was committed, ready to persist verbatim on the order. Nil when the order
-	// locked nothing. Display prices are derived later via LockDisplayPrices.
+	// Lock is the non-empty SDK-serialized reservation lock captured before the
+	// reservation was committed, ready to persist verbatim on an accepted order.
+	// Display prices are derived later via LockDisplayPrices.
 	Lock []byte
 	// Blocks are account blocks the engine recorded while creating the
 	// reservation. They are non-empty only for a non-enforcing drop-copy path and
@@ -133,16 +133,9 @@ type OrderResult struct {
 	// funds and incoming quantity). They must be persisted so the balance
 	// snapshot reflects the committed reservation before any fill arrives.
 	Outcomes []BalanceOutcome
-	// SettlementLockPrice is the settlement-leg lock price (the price a later
-	// fill settles at) as a decimal string; empty when no price was locked.
+	// SettlementLockPrice is the display settlement leg decoded from the engine
+	// lock as a decimal string; empty when no price was locked.
 	SettlementLockPrice string
-	// LeavesQuantity is the order's canonical open base quantity. Quantity orders
-	// carry their amount directly; volume orders are converted at the settlement
-	// lock price.
-	LeavesQuantity string
-	// EstimateSource is how the lock price was derived: domain.EstimateSourceLimit
-	// when the order carried a limit price, else domain.EstimateSourceMarketMark.
-	EstimateSource string
 	// Accepted reports whether the pre-trade passed and was committed.
 	Accepted bool
 }
@@ -162,13 +155,14 @@ type BalanceOutcome struct {
 }
 
 // ImmediateResult is the outcome of one SubmitImmediate call. On accept the
-// reservation is committed and settled in the same call via a synthetic
-// ApplyExecutionReport at the captured lock price, so the held amount nets to
-// zero; on reject Rejects holds the engine rejects and nothing settles.
+// reservation is committed and settled in the same call via an execution
+// report carrying the request quantity, request limit price (or the lock price
+// for a market order), and the original engine lock. On reject Rejects holds
+// the engine rejects and nothing settles.
 type ImmediateResult struct {
-	// Lock is the SDK-serialized reservation lock captured before commit, ready
-	// to persist verbatim on the order. Nil when the order locked nothing. Display
-	// prices are derived later via LockDisplayPrices.
+	// Lock is the non-empty SDK-serialized reservation lock captured before
+	// commit, ready to persist verbatim on an accepted order. Display prices are
+	// derived later via LockDisplayPrices.
 	Lock []byte
 	// Blocks are the account blocks the engine recorded while settling the
 	// immediate fill.
@@ -183,14 +177,14 @@ type ImmediateResult struct {
 	// AccountPnlHaltReason is the authoritative reason SpotFunds could not
 	// calculate account P&L for the immediate fill settlement.
 	AccountPnlHaltReason domain.PnlHaltReason
-	// SettlementLockPrice is the settlement-leg lock price the fill settled at as
-	// a decimal string; empty when no price was locked.
+	// SettlementLockPrice is the display settlement leg decoded from the engine
+	// lock as a decimal string; empty when no price was locked.
 	SettlementLockPrice string
-	// FillQuantity is the base quantity settled by the immediate fill.
+	// FillQuantity is the request's base quantity settled by the immediate fill.
 	FillQuantity string
-	// EstimateSource is how the lock price was derived: domain.EstimateSourceLimit
-	// when the order carried a limit price, else domain.EstimateSourceMarketMark.
-	EstimateSource string
+	// TradePrice is the fill price recorded for the immediate order. It is the
+	// request limit price, or the engine lock price for a market order.
+	TradePrice string
 	// Rejects are the engine pre-trade rejects; non-empty only when not accepted.
 	Rejects []domain.OrderReject
 	// Accepted reports whether the pre-trade passed and the fill settled.
@@ -198,10 +192,9 @@ type ImmediateResult struct {
 }
 
 // ExecutionReportPersistence is the Officer write set produced after the engine
-// applies an execution report. Report-owned order, commission, trade, and event
-// fields are copied from the original report, except terminal leaves are
-// normalized after the engine consumes the release quantity; engine-owned
-// account effects are limited to Balances and Blocks.
+// applies an execution report. Report-owned order, commission, trade, event,
+// and leaves fields are copied from the original report; engine-owned account
+// effects are limited to Balances and Blocks.
 type ExecutionReportPersistence struct {
 	// Trade is the optional trade row to persist.
 	Trade *domain.Trade
@@ -216,9 +209,8 @@ type ExecutionReportPersistence struct {
 	// AccountPnlHaltReason is the engine-reported reason account P&L was not
 	// calculated. Empty with a non-empty AccountPnl clears a prior halt.
 	AccountPnlHaltReason domain.PnlHaltReason
-	// Leaves is the remaining open quantity to persist; terminal settlements use
-	// zero after the engine consumes the report's release quantity. Empty leaves
-	// the stored value unchanged.
+	// Leaves is the report's remaining open quantity, copied verbatim. Empty
+	// leaves the stored value unchanged.
 	Leaves string
 	// Balances are the per-asset balance outcomes returned by the engine.
 	Balances []domain.BalanceSettlement

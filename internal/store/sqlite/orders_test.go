@@ -113,7 +113,7 @@ func getBalanceRow(
 	var b balanceRow
 	err = r.rawDB().QueryRowContext(
 		ctx,
-		`SELECT available, held, incoming, realized_pnl
+		`SELECT available, held, incoming, COALESCE(realized_pnl, '')
 		 FROM balance WHERE account_id = ? AND asset_id = ?`,
 		accountID, assetID,
 	).Scan(&b.available, &b.held, &b.incoming, &b.realized)
@@ -1024,6 +1024,131 @@ func TestOrderCommissionSubtotalsChunksOrderIDs(t *testing.T) {
 	}
 	if got[orders[1]] == nil || len(got[orders[1]]) != 0 {
 		t.Fatalf("empty order commissions = %+v, want empty slice", got[orders[1]])
+	}
+}
+
+// TestOrderCommissionSubtotalsFeeOnlyReportAgreesAcrossReads pins the detail
+// read and the list read to the shared rollup implementation across trade-row,
+// fee-only, mixed-currency, and canonical-event cases.
+func TestOrderCommissionSubtotalsFeeOnlyReportAgreesAcrossReads(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+
+	mixed, err := rs.CreateOrder(ctx, sampleOrder())
+	if err != nil {
+		t.Fatalf("CreateOrder(mixed): %v", err)
+	}
+	feeOnly, err := rs.CreateOrder(ctx, sampleOrder())
+	if err != nil {
+		t.Fatalf("CreateOrder(fee only): %v", err)
+	}
+	mixedID := mixed.ExternalID
+	feeOnlyID := feeOnly.ExternalID
+
+	addTrade := func(order domain.ExternalID, amount, currency string) {
+		t.Helper()
+		if _, err := rs.CreateTrade(ctx, domain.Trade{
+			Order: order, Account: "acc-1", BaseAsset: "AAPL",
+			QuoteAsset: "USD", Source: domain.SourcePanel,
+			Side: domain.OrderSideBuy, Quantity: "1", Price: "100",
+			Commission: &domain.Commission{Amount: amount, Currency: currency},
+		}); err != nil {
+			t.Fatalf("CreateTrade(%s %s): %v", amount, currency, err)
+		}
+	}
+	addReportEvent := func(
+		order domain.ExternalID,
+		eventType domain.OrderEventType,
+		report *domain.ExecutionReportRequest,
+	) {
+		t.Helper()
+		if _, err := rs.AppendOrderEvent(ctx, domain.OrderEvent{
+			Order: order,
+			Type:  eventType,
+			Payload: domain.OrderEventPayload{
+				Commission:      report.Commission,
+				OrderStatus:     string(report.OrderStatus),
+				ExecutionReport: report,
+			},
+		}); err != nil {
+			t.Fatalf("AppendOrderEvent(%s): %v", eventType, err)
+		}
+	}
+
+	addTrade(mixedID, "-0.10", "USD")
+	addTrade(mixedID, "-0.05", "USD")
+	// A fee-only report in the currency of the trade fees must land in that same
+	// currency bucket rather than open a second one.
+	addReportEvent(mixedID, domain.OrderEventPreTradeAccepted,
+		&domain.ExecutionReportRequest{
+			Commission:  &domain.Commission{Amount: "-0.02", Currency: "USD"},
+			Order:       mixedID,
+			OrderStatus: domain.OrderStatusAccepted,
+		})
+	cancelFee := &domain.ExecutionReportRequest{
+		Commission:  &domain.Commission{Amount: "-0.25", Currency: "BNB"},
+		Order:       mixedID,
+		OrderStatus: domain.OrderStatusCancelled,
+	}
+	addReportEvent(mixedID, domain.OrderEventCancelled, cancelFee)
+	// The same report carried by a non-canonical event must not add its fee twice.
+	addReportEvent(mixedID, domain.OrderEventSubmitted, cancelFee)
+
+	addReportEvent(feeOnlyID, domain.OrderEventPreTradeAccepted,
+		&domain.ExecutionReportRequest{
+			Commission:  &domain.Commission{Amount: "-0.30", Currency: "USD"},
+			Order:       feeOnlyID,
+			OrderStatus: domain.OrderStatusAccepted,
+		})
+
+	page, err := rs.ListOrderRows(ctx, fwstore.OrderListFilter{
+		Page: fwstore.PageSpec{Limit: 10},
+	})
+	if err != nil {
+		t.Fatalf("ListOrderRows: %v", err)
+	}
+	listed := make(map[domain.ExternalID][]domain.Commission, len(page.Rows))
+	for _, row := range page.Rows {
+		listed[row.Order.ExternalID] = row.Order.CommissionSubtotals
+	}
+
+	for _, testCase := range []struct {
+		name  string
+		order domain.ExternalID
+		want  []domain.Commission
+	}{
+		{
+			name:  "trade fees and fee-only report",
+			order: mixedID,
+			want: []domain.Commission{
+				{Amount: "-0.25", Currency: "BNB"},
+				{Amount: "-0.17", Currency: "USD"},
+			},
+		},
+		{
+			name:  "fee-only report alone",
+			order: feeOnlyID,
+			want:  []domain.Commission{{Amount: "-0.3", Currency: "USD"}},
+		},
+	} {
+		detail, err := rs.GetOrder(ctx, testCase.order)
+		if err != nil {
+			t.Fatalf("GetOrder(%s): %v", testCase.name, err)
+		}
+		if !commissionsEqual(detail.Order.CommissionSubtotals, testCase.want) {
+			t.Fatalf("%s: detail subtotals = %+v, want %+v",
+				testCase.name, detail.Order.CommissionSubtotals, testCase.want)
+		}
+		if !commissionsEqual(listed[testCase.order], testCase.want) {
+			t.Fatalf("%s: list subtotals = %+v, want %+v",
+				testCase.name, listed[testCase.order], testCase.want)
+		}
+		if !commissionsEqual(
+			listed[testCase.order], detail.Order.CommissionSubtotals,
+		) {
+			t.Fatalf("%s: list subtotals %+v disagree with detail %+v",
+				testCase.name, listed[testCase.order],
+				detail.Order.CommissionSubtotals)
+		}
 	}
 }
 
@@ -2101,6 +2226,18 @@ func TestRecordOrderSettlementAccountPnlHaltLifecycle(t *testing.T) {
 	}
 	if account.PnlHaltReason != domain.PnlHaltReasonMissingFx {
 		t.Fatalf("account halt reason = %q", account.PnlHaltReason)
+	}
+	if account.Pnl != "" {
+		t.Fatalf("account pnl after halt = %q, want empty", account.Pnl)
+	}
+	var storedPnl any
+	if err := rs.(*realmStore).rawDB().QueryRowContext(
+		ctx, `SELECT pnl FROM account WHERE code = ?`, "acc-1",
+	).Scan(&storedPnl); err != nil {
+		t.Fatalf("read stored halted pnl: %v", err)
+	}
+	if storedPnl != nil {
+		t.Fatalf("stored halted pnl = %#v, want NULL", storedPnl)
 	}
 
 	settle(createOrder(), "", "")

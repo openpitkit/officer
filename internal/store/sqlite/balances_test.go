@@ -59,7 +59,7 @@ func TestBalanceUpsertGetDeleteRoundTrip(t *testing.T) {
 		Available:             "100",
 		Held:                  "10",
 		Incoming:              "5",
-		RealizedPnl:           "2.5",
+		RealizedPnl:           "",
 		RealizedPnlHaltReason: domain.PnlHaltReasonMissingCostBasis,
 		AverageEntryPrice:     "150",
 		UpdatedAt:             time.Now().UTC().Truncate(time.Second),
@@ -78,8 +78,8 @@ func TestBalanceUpsertGetDeleteRoundTrip(t *testing.T) {
 	if got.Available != "100" || got.Held != "10" || got.Incoming != "5" {
 		t.Fatalf("GetBalance amounts = avail=%q held=%q incoming=%q", got.Available, got.Held, got.Incoming)
 	}
-	if got.RealizedPnl != "2.5" {
-		t.Fatalf("GetBalance realized_pnl = %q, want 2.5", got.RealizedPnl)
+	if got.RealizedPnl != "" {
+		t.Fatalf("GetBalance realized_pnl = %q, want no value while halted", got.RealizedPnl)
 	}
 	if got.RealizedPnlHaltReason != domain.PnlHaltReasonMissingCostBasis {
 		t.Fatalf("GetBalance realized PnL halt reason = %q", got.RealizedPnlHaltReason)
@@ -823,7 +823,7 @@ func TestBalanceListRowsUsesEveryCurrencyCascadeTier(t *testing.T) {
 func TestBalanceEmptyAmountsDefaultToZero(t *testing.T) {
 	ctx, rs := seedBalanceFixtures(t)
 
-	// Zero-value amounts should persist as "0", not an empty string.
+	// Quantity amounts default to zero; an unreported realized P&L stays absent.
 	if err := rs.UpsertBalance(ctx, domain.Balance{
 		Account: "acc-1", Asset: "AAPL",
 	}); err != nil {
@@ -833,7 +833,7 @@ func TestBalanceEmptyAmountsDefaultToZero(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("GetBalance: ok=%v err=%v", ok, err)
 	}
-	if got.Available != "0" || got.Held != "0" || got.Incoming != "0" || got.RealizedPnl != "0" {
-		t.Fatalf("zero amounts not stored as 0: %+v", got)
+	if got.Available != "0" || got.Held != "0" || got.Incoming != "0" || got.RealizedPnl != "" {
+		t.Fatalf("default balance amounts = %+v", got)
 	}
 }

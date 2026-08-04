@@ -4348,13 +4348,6 @@ export function Accounts() {
           />
           <RefreshButton onClick={reloadAll} busy={isLoading} />
           <CsvTransferMenu
-            imports={[
-              {
-                defaultEntity: "accounts",
-                entities: ["account_groups", "accounts"],
-                label: t("businessCsv.importCsv"),
-              },
-            ]}
             exports={[
               {
                 entity: "account_groups",
@@ -4366,7 +4359,6 @@ export function Accounts() {
                 label: t("businessCsv.exportAccountsCsv"),
               },
             ]}
-            onImported={reloadAll}
           />
           <CreateGroupDialog
             onCreated={() => {

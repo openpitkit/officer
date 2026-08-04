@@ -32,7 +32,7 @@ import (
 
 func TestCheckOrder_Pass(t *testing.T) {
 	svc := &fakeService{checkResult: domain.CheckResult{
-		Passed: true, WouldLockPrices: []string{"100"},
+		Passed: true, WouldLockPrice: "100",
 	}}
 	r, err := newRouter(svc)
 	if err != nil {
@@ -53,9 +53,8 @@ func TestCheckOrder_Pass(t *testing.T) {
 	if check["passed"] != true {
 		t.Fatalf("want passed=true, got %v", check["passed"])
 	}
-	prices, ok := check["wouldDisplayPrices"].([]any)
-	if !ok || len(prices) != 1 || prices[0] != "100" {
-		t.Fatalf("want wouldDisplayPrices=[100], got %v", check["wouldDisplayPrices"])
+	if check["wouldDisplayPrice"] != "100" {
+		t.Fatalf("want wouldDisplayPrice=100, got %v", check["wouldDisplayPrice"])
 	}
 	if check["wouldBlock"] != nil {
 		t.Fatalf("want wouldBlock=null, got %v", check["wouldBlock"])
@@ -641,14 +640,6 @@ func TestApplyExecutionReport_WorkflowRejectsInvalidSettlementFields(t *testing.
 		body string
 	}{
 		{
-			name: "malformed leaves",
-			body: `{"status":"accepted","leavesQuantity":"not-a-number"}`,
-		},
-		{
-			name: "negative leaves",
-			body: `{"status":"committed","leavesQuantity":"-1"}`,
-		},
-		{
 			name: "lock price",
 			body: `{"status":"submitted","lockPrice":"100"}`,
 		},
@@ -675,21 +666,77 @@ func TestApplyExecutionReport_WorkflowRejectsInvalidSettlementFields(t *testing.
 	}
 }
 
-func TestApplyExecutionReport_TerminalMissingLeaves(t *testing.T) {
-	svc := &fakeService{}
-	r, err := newRouter(svc)
-	if err != nil {
-		t.Fatal(err)
+// Workflow-only reports bypass the SDK, so the HTTP boundary rejects malformed
+// leaves before the value can reach storage.
+func TestApplyExecutionReport_RejectsInvalidWorkflowLeaves(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{
+			name: "malformed",
+			body: `{"status":"accepted","leavesQuantity":"not-a-number"}`,
+		},
+		{
+			name: "negative",
+			body: `{"status":"committed","leavesQuantity":"-1"}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeService{}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(
+				http.MethodPost,
+				"/api/v1/orders/"+extID("order-1").String()+"/execution-reports",
+				bytes.NewBufferString(tc.body),
+			))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
+			}
+			if !svc.execReportIn.Order.IsZero() {
+				t.Fatalf("invalid workflow report reached service: %+v", svc.execReportIn)
+			}
+		})
 	}
-	body := bytes.NewBufferString(`{"status":"cancelled"}`)
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports", body))
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("want 400, got %d", rec.Code)
-	}
-	if svc.execReportIn.Order != "" {
-		t.Fatalf("terminal report without leaves reached service: %+v", svc.execReportIn)
+}
+
+// The engine's post-trade path has no reject channel, so an engine-settled
+// report without leaves must be refused at the boundary instead of blocking the
+// account downstream.
+func TestApplyExecutionReport_EngineSettledMissingLeavesRejected(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "terminal", body: `{"status":"cancelled"}`},
+		{
+			name: "commission",
+			body: `{"status":"accepted","commission":{"amount":"-1","currency":"USD"}}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeService{}
+			r, err := newRouter(svc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(
+				http.MethodPost,
+				"/api/v1/orders/"+extID("order-1").String()+"/execution-reports",
+				bytes.NewBufferString(tc.body),
+			))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
+			}
+			if !svc.execReportIn.Order.IsZero() {
+				t.Fatalf("report without leaves reached service: %+v", svc.execReportIn)
+			}
+		})
 	}
 }
 

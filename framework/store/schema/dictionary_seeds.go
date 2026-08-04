@@ -119,7 +119,6 @@ func EnumDictionarySeeds() []EnumDictionarySeed {
 			{30, string(domain.AuditActionExportBackup)},
 			{31, string(domain.AuditActionRestoreBackup)},
 			{32, string(domain.AuditActionExportBusinessCSV)},
-			{33, string(domain.AuditActionImportBusinessCSV)},
 			{34, string(domain.AuditActionResetDatabase)},
 			{35, string(domain.AuditActionRestartService)},
 			{36, string(domain.AuditActionStopService)},

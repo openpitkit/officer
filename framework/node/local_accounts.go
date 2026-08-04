@@ -338,12 +338,9 @@ func (n *localNode) mirrorPolicyConfigurationBlocks(
 			continue
 		}
 
-		// The reason is engine-composed, never operator input: refusing it would
-		// drop a real kill-switch record, so it is normalized to the rule the
-		// restore path validates rather than rejected.
+		// The engine reason is normalized for restore validation, never rewritten.
 		if err := n.realm.SetAccountBlocked(
-			ctx, block.Account, true,
-			domain.NormalizeReason(policyConfigurationBlockReason(policy, block)),
+			ctx, block.Account, true, domain.NormalizeReason(block.Reason),
 		); err != nil {
 			return n.fatalPostEngineAuditByCode(
 				"record policy configuration block", "account", block.Account.String(),

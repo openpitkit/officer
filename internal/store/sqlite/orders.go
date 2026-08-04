@@ -407,7 +407,7 @@ func (r *realmStore) GetOrder(
 	if err != nil {
 		return domain.OrderDetail{}, err
 	}
-	o.CommissionSubtotals, err = commissionSubtotals(trades, events)
+	o.CommissionSubtotals, err = commissionSubtotals(id, trades, events)
 	if err != nil {
 		return domain.OrderDetail{}, err
 	}
@@ -1477,48 +1477,49 @@ func validateCommission(c *domain.Commission) error {
 	return nil
 }
 
+// commissionSubtotals rolls up the recorded commissions of the one order whose
+// rows are already in memory. It folds them through the same commissionRollup
+// the batched list read uses, so the detail and the list surface cannot report
+// different totals for the same order.
 func commissionSubtotals(
+	order domain.ExternalID,
 	trades []domain.Trade,
 	events []domain.OrderEvent,
 ) ([]domain.Commission, error) {
-	amounts := make(map[string]decimal.Decimal)
+	rollup := newCommissionRollup(1)
 	for _, trade := range trades {
-		if err := accumulateCommissionAmount(amounts, trade.Commission); err != nil {
+		if err := rollup.add(order, trade.Commission); err != nil {
 			return nil, err
 		}
 	}
 	for _, event := range events {
-		if err := accumulateCommissionAmount(
-			amounts,
-			feeOnlyExecutionReportCommission(event),
-		); err != nil {
+		if err := rollup.addEvent(order, event.Type, event.Payload); err != nil {
 			return nil, err
 		}
 	}
-	return commissionsFromAmountMap(amounts), nil
+	return rollup.subtotals(order), nil
 }
 
-// feeOnlyExecutionReportCommission returns the commission from the one
-// lifecycle event that canonically represents a report without a fill. Reports
-// carrying a fill are accounted from their trade instead: the same report may
-// persist both a fill event and a terminal-status event, so reading commission
-// from those events would count it two or three times.
-func feeOnlyExecutionReportCommission(event domain.OrderEvent) *domain.Commission {
-	report := event.Payload.ExecutionReport
-	if report == nil || report.Commission == nil ||
-		report.FillQuantity != "" || report.FillPrice != "" {
-		return nil
-	}
-	canonicalEvent, ok := domain.ExecutionReportStatusChangeEvent(report.OrderStatus)
-	if !ok || event.Type != canonicalEvent {
-		return nil
-	}
-	return report.Commission
+// commissionRollup sums recorded order commissions per order and currency. It
+// owns the rule that decides which commission counts, so the two order reads -
+// the detail read folding in-memory rows and the batched list read folding SQL
+// rows - share one implementation instead of two that must be kept in step.
+// Currencies are grouped, never converted or collapsed, and amounts are summed
+// as exact decimals.
+type commissionRollup struct {
+	byOrder map[domain.ExternalID]map[string]decimal.Decimal
 }
 
-func accumulateCommissionAmount(
-	amounts map[string]decimal.Decimal,
-	commission *domain.Commission,
+func newCommissionRollup(orders int) *commissionRollup {
+	return &commissionRollup{
+		byOrder: make(map[domain.ExternalID]map[string]decimal.Decimal, orders),
+	}
+}
+
+// add folds one recorded commission, the trade-row case. A commission missing
+// either half is not a recorded commission and contributes nothing.
+func (rollup *commissionRollup) add(
+	order domain.ExternalID, commission *domain.Commission,
 ) error {
 	if commission == nil || commission.Amount == "" || commission.Currency == "" {
 		return nil
@@ -1528,26 +1529,61 @@ func accumulateCommissionAmount(
 		return fmt.Errorf(
 			"store: parse commission amount %q: %w", commission.Amount, err)
 	}
+	amounts := rollup.byOrder[order]
+	if amounts == nil {
+		amounts = make(map[string]decimal.Decimal)
+		rollup.byOrder[order] = amounts
+	}
 	amounts[commission.Currency] = amounts[commission.Currency].Add(amount)
 	return nil
 }
 
-func accumulateCommissionAmountByOrder(
-	amountsByOrder map[domain.ExternalID]map[string]decimal.Decimal,
+// addEvent folds one lifecycle event's commission, which counts only when no
+// trade row already represents it.
+func (rollup *commissionRollup) addEvent(
 	order domain.ExternalID,
-	commission *domain.Commission,
+	eventType domain.OrderEventType,
+	payload domain.OrderEventPayload,
 ) error {
-	if commission == nil || commission.Amount == "" || commission.Currency == "" {
-		return nil
-	}
-	amounts := amountsByOrder[order]
-	if amounts == nil {
-		amounts = make(map[string]decimal.Decimal)
-		amountsByOrder[order] = amounts
-	}
-	return accumulateCommissionAmount(amounts, commission)
+	return rollup.add(
+		order, feeOnlyExecutionReportCommission(eventType, payload))
 }
 
+// subtotals returns one order's per-currency subtotals; empty when the order
+// has no recorded commission.
+func (rollup *commissionRollup) subtotals(
+	order domain.ExternalID,
+) []domain.Commission {
+	return commissionsFromAmountMap(rollup.byOrder[order])
+}
+
+// feeOnlyExecutionReportCommission returns the commission of an execution
+// report that no trade row represents. A report without a fill writes no trade,
+// so its lifecycle event is the only record of the fee and dropping it would
+// lose the fee outright. Reports carrying a fill are accounted from their trade
+// instead: the same report may persist both a fill event and a terminal-status
+// event, so reading commission from those events would count it two or three
+// times. Of the events one report writes, only its canonical status-change
+// event contributes.
+func feeOnlyExecutionReportCommission(
+	eventType domain.OrderEventType,
+	payload domain.OrderEventPayload,
+) *domain.Commission {
+	report := payload.ExecutionReport
+	if report == nil || report.Commission == nil ||
+		report.FillQuantity != "" || report.FillPrice != "" {
+		return nil
+	}
+	canonicalEvent, ok := domain.ExecutionReportStatusChangeEvent(report.OrderStatus)
+	if !ok || eventType != canonicalEvent {
+		return nil
+	}
+	return report.Commission
+}
+
+// commissionSubtotalsByOrder rolls up recorded commissions for a list page. The
+// order ids are chunked so the IN clauses stay inside the SQLite variable
+// limit; every chunk feeds one rollup, which then answers per order.
 func commissionSubtotalsByOrder(
 	ctx context.Context,
 	dictionaries *enumDictionaries,
@@ -1559,23 +1595,20 @@ func commissionSubtotalsByOrder(
 		return result, nil
 	}
 
-	amountsByOrder := make(
-		map[domain.ExternalID]map[string]decimal.Decimal,
-		len(orders),
-	)
+	rollup := newCommissionRollup(len(orders))
 	for start := 0; start < len(orders); start += commissionSubtotalOrderBatchSize {
 		end := start + commissionSubtotalOrderBatchSize
 		if end > len(orders) {
 			end = len(orders)
 		}
 		if err := accumulateCommissionSubtotalsByOrder(
-			ctx, dictionaries, q, orders[start:end], amountsByOrder,
+			ctx, dictionaries, q, orders[start:end], rollup,
 		); err != nil {
 			return nil, err
 		}
 	}
 	for _, order := range orders {
-		result[order] = commissionsFromAmountMap(amountsByOrder[order])
+		result[order] = rollup.subtotals(order)
 	}
 	return result, nil
 }
@@ -1587,7 +1620,7 @@ func accumulateCommissionSubtotalsByOrder(
 	dictionaries *enumDictionaries,
 	q sqlQueryer,
 	orders []domain.ExternalID,
-	amountsByOrder map[domain.ExternalID]map[string]decimal.Decimal,
+	rollup *commissionRollup,
 ) error {
 	placeholders := strings.TrimRight(strings.Repeat("?,", len(orders)), ",")
 	args := make([]any, 0, len(orders))
@@ -1620,8 +1653,7 @@ WHERE t.commission_amount <> ''
 			return fmt.Errorf(
 				"store: decode order commission external id: %w", err)
 		}
-		if err := accumulateCommissionAmountByOrder(
-			amountsByOrder,
+		if err := rollup.add(
 			order,
 			&domain.Commission{Amount: amountText, Currency: currency},
 		); err != nil {
@@ -1672,14 +1704,10 @@ WHERE o.external_id IN (`+placeholders+`)`,
 			_ = eventRows.Close()
 			return err
 		}
-		commission := feeOnlyExecutionReportCommission(domain.OrderEvent{
-			Type:    domain.OrderEventType(eventType),
-			Payload: payload,
-		})
-		if err := accumulateCommissionAmountByOrder(
-			amountsByOrder,
+		if err := rollup.addEvent(
 			order,
-			commission,
+			domain.OrderEventType(eventType),
+			payload,
 		); err != nil {
 			_ = eventRows.Close()
 			return err
@@ -1811,24 +1839,22 @@ func (r *realmStore) recordOrderSettlementTx(
 		return "", err
 	}
 
-	if st.AccountPnl != "" {
+	// The engine reports the P&L value and its halt as one fact, so both columns
+	// move together. NULL is the absence of a value, which a halt always is; a
+	// settlement reporting neither leaves the stored pair untouched.
+	if st.AccountPnlHaltReason != "" || st.AccountPnl != "" {
+		var storedPnl any
+		if st.AccountPnl != "" && st.AccountPnlHaltReason == "" {
+			storedPnl = st.AccountPnl
+		}
 		if _, err := tx.ExecContext(
 			ctx,
 			`UPDATE account SET pnl = ?, pnl_halt_reason = ? WHERE id = ?`,
-			st.AccountPnl,
+			storedPnl,
 			st.AccountPnlHaltReason,
 			accountID,
 		); err != nil {
 			return "", fmt.Errorf("store: settlement account pnl %q: %w", st.Account, err)
-		}
-	} else if st.AccountPnlHaltReason != "" {
-		if _, err := tx.ExecContext(
-			ctx,
-			`UPDATE account SET pnl_halt_reason = ? WHERE id = ?`,
-			st.AccountPnlHaltReason,
-			accountID,
-		); err != nil {
-			return "", fmt.Errorf("store: settlement account pnl halt %q: %w", st.Account, err)
 		}
 	}
 
@@ -2116,7 +2142,8 @@ func settleBalanceTx(
 	if err != nil {
 		return err
 	}
-	var prevAvail, prevHeld, prevIncoming, prevRealized, prevPnlHaltReason, prevAvgPx string
+	var prevAvail, prevHeld, prevIncoming, prevPnlHaltReason, prevAvgPx string
+	var prevRealized sql.NullString
 	err = tx.QueryRowContext(
 		ctx,
 		`SELECT available, held, incoming, realized_pnl, realized_pnl_halt_reason, average_entry_price
@@ -2130,13 +2157,16 @@ func settleBalanceTx(
 	available := settleOrZero(settlementResultOrPrevious(bal.Outcome.BalanceResult, prevAvail))
 	held := settleOrZero(settlementResultOrPrevious(bal.Outcome.HeldResult, prevHeld))
 	incoming := settleOrZero(settlementResultOrPrevious(bal.Outcome.IncomingResult, prevIncoming))
-	realized := settleOrZero(settlementResultOrPrevious(
-		bal.Outcome.RealizedPnlResult, prevRealized))
+	realized := settlementResultOrPrevious(
+		bal.Outcome.RealizedPnlResult, prevRealized.String)
 	pnlHaltReason := settlementPnlHaltReason(
 		bal.Outcome.RealizedPnlHaltReason,
 		prevPnlHaltReason,
 		bal.Outcome.RealizedPnlResult != "",
 	)
+	if pnlHaltReason != "" {
+		realized = ""
+	}
 	averageEntryPrice := settlementResultOrPrevious(
 		bal.Outcome.AverageEntryPrice, prevAvgPx)
 	if decimalZeroOrEmpty(available) &&
@@ -2152,7 +2182,9 @@ func settleBalanceTx(
 		  incoming, realized_pnl, realized_pnl_halt_reason, average_entry_price, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		accountID, assetID,
-		available, held, incoming, realized, pnlHaltReason, averageEntryPrice,
+		available, held, incoming,
+		nullablePnl(realized, domain.PnlHaltReason(pnlHaltReason)),
+		pnlHaltReason, averageEntryPrice,
 		nowStr(),
 	); err != nil {
 		return fmt.Errorf("store: settle balance %q write: %w", bal.Asset, err)
@@ -2288,6 +2320,16 @@ func settleOrZero(s string) string {
 		return "0"
 	}
 	return s
+}
+
+// nullablePnl stores an engine-reported P&L value only while it is
+// authoritative. Empty and halted states are represented as SQL NULL, never as
+// a zero Officer invented.
+func nullablePnl(pnl string, haltReason domain.PnlHaltReason) any {
+	if pnl == "" || haltReason != "" {
+		return nil
+	}
+	return pnl
 }
 
 func settlementResultOrPrevious(next, prev string) string {

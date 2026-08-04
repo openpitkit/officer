@@ -58,13 +58,8 @@ const fetchPublicKeyById = (
 ) => api().fetchPublicKeyById(...args);
 const generateSigningKey = (...args: Parameters<ReturnType<typeof api>["generateSigningKey"]>) =>
   api().generateSigningKey(...args);
-const importBusinessCsv = (...args: Parameters<ReturnType<typeof api>["importBusinessCsv"]>) =>
-  api().importBusinessCsv(...args);
 const importSigningKey = (...args: Parameters<ReturnType<typeof api>["importSigningKey"]>) =>
   api().importSigningKey(...args);
-const previewBusinessCsvImport = (
-  ...args: Parameters<ReturnType<typeof api>["previewBusinessCsvImport"]>
-) => api().previewBusinessCsvImport(...args);
 const restartService = (...args: Parameters<ReturnType<typeof api>["restartService"]>) =>
   api().restartService(...args);
 const resetDatabase = (...args: Parameters<ReturnType<typeof api>["resetDatabase"]>) =>
@@ -613,73 +608,6 @@ describe("business CSV client", () => {
     });
   });
 
-  it("previews and applies imports with payloadBase64 and conflictPolicy", async () => {
-    vi.mocked(fetch)
-      .mockResolvedValueOnce(
-        jsonResponse({
-          preview: {
-            file: { name: "accounts.csv", type: "csv" },
-            counts: {
-              rows: 2,
-              applied: 0,
-              skipped: 0,
-              conflicts: 1,
-              stopped: false,
-            },
-            conflicts: [{ row: 2, key: "desk-alpha" }],
-          },
-        }),
-      )
-      .mockResolvedValueOnce(
-        jsonResponse({
-          result: {
-            file: { name: "accounts.csv", type: "csv" },
-            counts: {
-              rows: 2,
-              applied: 1,
-              skipped: 1,
-              conflicts: 1,
-              stopped: false,
-            },
-            conflicts: [{ row: 2, key: "desk-alpha" }],
-          },
-        }),
-      );
-
-    const preview = await previewBusinessCsvImport({
-      entity: "accounts",
-      delimiter: "comma",
-      filename: "accounts.csv",
-      payloadBase64: "YWNjb3VudF9pZAo=",
-    });
-    const result = await importBusinessCsv({
-      entity: "accounts",
-      delimiter: "comma",
-      filename: "accounts.csv",
-      payloadBase64: "YWNjb3VudF9pZAo=",
-      conflictPolicy: "replace",
-    });
-
-    const previewBody = JSON.parse(
-      String((vi.mocked(fetch).mock.calls[0][1] as RequestInit).body),
-    );
-    const importBody = JSON.parse(
-      String((vi.mocked(fetch).mock.calls[1][1] as RequestInit).body),
-    );
-    expect(previewBody).toEqual({
-      entity: "accounts",
-      delimiter: "comma",
-      filename: "accounts.csv",
-      payloadBase64: "YWNjb3VudF9pZAo=",
-    });
-    expect(importBody).toEqual({
-      ...previewBody,
-      conflictPolicy: "replace",
-    });
-    expect(preview.conflicts[0]).toEqual({ row: 2, key: "desk-alpha" });
-    expect(result.counts.applied).toBe(1);
-  });
-
   it("surfaces business CSV HTTP errors as ApiError", async () => {
     vi.mocked(fetch).mockResolvedValue(
       new Response(
@@ -702,115 +630,6 @@ describe("business CSV client", () => {
     });
   });
 
-  it("surfaces business CSV preview HTTP errors as ApiError", async () => {
-    vi.mocked(fetch).mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          error: { code: "validation", message: "invalid CSV header" },
-        }),
-        {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
-        },
-      ),
-    );
-
-    await expect(
-      previewBusinessCsvImport({
-        entity: "accounts",
-        delimiter: "comma",
-        filename: "accounts.csv",
-        payloadBase64: "YWNjb3VudF9pZAo=",
-      }),
-    ).rejects.toMatchObject({
-      name: "ApiError",
-      code: "validation",
-      message: "invalid CSV header",
-    });
-  });
-
-  it("surfaces business CSV import HTTP errors as ApiError", async () => {
-    vi.mocked(fetch).mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          error: { code: "conflict", message: "account already exists" },
-        }),
-        {
-          status: 409,
-          headers: { "Content-Type": "application/json" },
-        },
-      ),
-    );
-
-    await expect(
-      importBusinessCsv({
-        entity: "accounts",
-        delimiter: "comma",
-        filename: "accounts.csv",
-        payloadBase64: "YWNjb3VudF9pZAo=",
-        conflictPolicy: "stop",
-      }),
-    ).rejects.toMatchObject({
-      name: "ApiError",
-      code: "conflict",
-      message: "account already exists",
-    });
-  });
-
-  it("localizes known too_large API errors instead of backend prose", async () => {
-    vi.mocked(fetch).mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          error: { code: "too_large", message: "server-side English detail" },
-        }),
-        {
-          status: 413,
-          headers: { "Content-Type": "application/json" },
-        },
-      ),
-    );
-
-    await expect(
-      previewBusinessCsvImport({
-        entity: "accounts",
-        delimiter: "comma",
-        filename: "accounts.csv",
-        payloadBase64: "YWNjb3VudF9pZAo=",
-      }),
-    ).rejects.toMatchObject({
-      name: "ApiError",
-      code: "too_large",
-      message:
-        "The import exceeds the maximum size of 128 MiB. Split the export into smaller files or use the API for bulk loading.",
-    });
-  });
-
-  it("falls back to backend prose for unknown API error codes", async () => {
-    vi.mocked(fetch).mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          error: { code: "new_backend_code", message: "backend detail" },
-        }),
-        {
-          status: 418,
-          headers: { "Content-Type": "application/json" },
-        },
-      ),
-    );
-
-    await expect(
-      previewBusinessCsvImport({
-        entity: "accounts",
-        delimiter: "comma",
-        filename: "accounts.csv",
-        payloadBase64: "YWNjb3VudF9pZAo=",
-      }),
-    ).rejects.toMatchObject({
-      name: "ApiError",
-      code: "internal",
-      message: "backend detail",
-    });
-  });
 });
 
 describe("limits client", () => {
@@ -2489,7 +2308,7 @@ describe("order check client", () => {
         check: {
           passed: false,
           rejects: [],
-          wouldDisplayPrices: [],
+          wouldDisplayPrice: "",
           wouldBlock: {
             account: "acc-1",
             policy: "spot_funds_pnl_bounds_kill_switch",
@@ -2576,7 +2395,7 @@ describe("Orders createOrder submit lifecycle", () => {
           leavesQuantity: "100",
           price: "0",
           status: "accepted",
-          displayPrices: [],
+          displayPrice: "",
           dropCopy,
         },
       }),
@@ -2881,7 +2700,7 @@ describe("Orders createOrder submit lifecycle", () => {
     expect(result.approval?.reasons).toEqual([]);
   });
 
-  it("normalizes displayPrices from the fetched order", async () => {
+  it("normalizes displayPrice from the fetched order", async () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce(approvalResponse())
       .mockResolvedValueOnce(
@@ -2900,7 +2719,7 @@ describe("Orders createOrder submit lifecycle", () => {
               leavesQuantity: "100",
               price: "0",
               status: "accepted",
-              displayPrices: ["101.20"],
+              displayPrice: "101.20",
             },
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
@@ -2918,7 +2737,7 @@ describe("Orders createOrder submit lifecycle", () => {
       },
       "reject",
     );
-    expect(result.order.displayPrices).toEqual(["101.20"]);
+    expect(result.order.displayPrice).toBe("101.20");
     expect(result.warning).toBeUndefined();
   });
 
@@ -2977,7 +2796,7 @@ describe("Orders createOrder submit lifecycle", () => {
             amountValue: "100",
             price: "0",
             status: "accepted",
-            displayPrices: [],
+            displayPrice: "",
           },
         ],
       }),
@@ -3106,7 +2925,7 @@ describe("Orders confirmOrder and cancelOrder", () => {
           leavesQuantity: "0",
           price: "150.25",
           status: "filled",
-          displayPrices: [],
+          displayPrice: "",
         },
         attestationToken: "tok-confirm",
         attestationKeyId: "key-9",
@@ -3141,11 +2960,12 @@ describe("Orders confirmOrder and cancelOrder", () => {
     expect(result.signed).toBe(true);
   });
 
-  it("cancelOrder sends token and reason and decodes the mutation response", async () => {
+  it("cancelOrder sends token, leaves, and reason and decodes the mutation response", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(orderMutationResponse());
 
     const result = await api().cancelOrder("ord_alpha_0000000001", {
       token: "approval-token",
+      leavesQuantity: "7.5",
       reason: "operator request",
     });
 
@@ -3155,6 +2975,7 @@ describe("Orders confirmOrder and cancelOrder", () => {
         method: "POST",
         body: JSON.stringify({
           token: "approval-token",
+          leavesQuantity: "7.5",
           reason: "operator request",
         }),
       }),
@@ -3218,6 +3039,7 @@ describe("Orders conflict error decode", () => {
     await expect(
       api().cancelOrder("ord_alpha_0000000001", {
         token: "approval-token",
+        leavesQuantity: "7.5",
       }),
     ).rejects.toMatchObject({
       name: "ApiError",

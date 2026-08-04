@@ -19,6 +19,7 @@ package httpapi
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 
 	"go.openpit.dev/officer/framework/domain"
@@ -27,17 +28,30 @@ import (
 	appsigning "go.openpit.dev/officer/internal/signing"
 )
 
-// orderSignedByID reports the order-level rollup: whether the order named by id
-// currently carries at least one Ed25519-signed event attestation. It re-reads
-// the order detail because the mutation handlers (submit/confirm/cancel) only
-// get back the bare order; a lookup failure degrades to unsigned rather than
-// failing the response, since the mutation itself already succeeded.
-func orderSignedByID(ctx context.Context, svc Service, id domain.ExternalID) bool {
+type orderPresentation struct {
+	displayPrice string
+	signed       bool
+}
+
+// orderPresentationByID re-reads presentation data after a successful
+// mutation. A lookup failure cannot safely fail an already-applied mutation,
+// so it is logged and the response falls back to empty presentation fields.
+func orderPresentationByID(
+	ctx context.Context, svc Service, id domain.ExternalID,
+) orderPresentation {
 	detail, err := svc.GetOrder(ctx, id.String())
 	if err != nil {
-		return false
+		slog.Warn(
+			"order presentation unavailable after mutation",
+			"order", id,
+			"error", err,
+		)
+		return orderPresentation{}
 	}
-	return detail.Signed()
+	return orderPresentation{
+		displayPrice: detail.DisplayPrice,
+		signed:       detail.Signed(),
+	}
 }
 
 // handleCheckOrder handles POST /api/v1/orders/check. It runs the engine
@@ -91,7 +105,9 @@ func handleListOrders(svc Service) http.HandlerFunc {
 		}
 		dtos := make([]orderDTO, 0, len(orders.Rows))
 		for _, o := range orders.Rows {
-			dtos = append(dtos, toOrderDTO(o.Order, o.Signed))
+			dtos = append(dtos, toOrderDTO(
+				o.Order, o.DisplayPrice, o.Signed,
+			))
 		}
 		httpx.WriteJSON(w, http.StatusOK, map[string]any{
 			"orders": dtos,
@@ -126,7 +142,9 @@ func handleGetOrder(svc Service) http.HandlerFunc {
 		// signed is the order-level rollup (any event carries a signed
 		// attestation); per-event attestation metadata rides on each event DTO.
 		body := map[string]any{
-			"order":  toOrderDTO(detail.Order, detail.Signed()),
+			"order": toOrderDTO(
+				detail.Order, detail.DisplayPrice, detail.Signed(),
+			),
 			"events": events,
 			"trades": trades,
 		}
@@ -407,7 +425,7 @@ func orderMutationResponseFromPayload(
 			CommissionSubtotals: toCommissionDTOs(nil),
 			Price:               p.LimitPrice,
 			Status:              status,
-			DisplayPrices:       []string{},
+			DisplayPrice:        "",
 			Signed:              eventAttestationSigned(att),
 		},
 		AttestationToken: att.Token,

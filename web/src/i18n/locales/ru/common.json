@@ -286,30 +286,29 @@
   "businessCsv": {
     "menu": {
       "trigger": "Файл",
-      "ariaLabel": "Импорт или экспорт CSV"
+      "ariaLabel": "Экспорт CSV"
     },
-    "entityLabel": "Сущность",
     "delimiterLabel": "Разделитель",
     "format": {
       "heading": "Формат CSV",
       "account_groups": {
-        "description": "Одна группа счетов в строке. Первая строка должна быть заголовком.",
-        "columns": "code,title,notes,blocked,block_reason"
+        "description": "Одна группа счетов в строке.",
+        "columns": "code,title,currency,notes,blocked,block_reason"
       },
       "accounts": {
-        "description": "Один счёт в строке. Первая строка должна быть заголовком.",
-        "columns": "code,title,group_code,notes,blocked,block_reason"
+        "description": "Один счёт в строке.",
+        "columns": "code,title,group_code,currency,pnl,pnl_halt_reason,notes,blocked,block_reason"
       },
       "positions": {
-        "description": "Одна позиция спот-баланса в строке. Первая строка должна быть заголовком.",
-        "columns": "account_code,asset,available,held,incoming,realized_pnl,average_entry_price"
+        "description": "Одна позиция спот-баланса в строке.",
+        "columns": "account_code,asset,available,held,incoming,realized_pnl,realized_pnl_halt_reason,average_entry_price"
       },
       "orders": {
-        "description": "Ордера доступны только для экспорта. Первая строка - заголовок.",
-        "columns": "id,at,account_code,source,principal,base_asset,quote_asset,side,amount_kind,amount_value,price,status,display_prices"
+        "description": "Один ордер в строке.",
+        "columns": "id,at,account_code,source,principal,base_asset,quote_asset,side,amount_kind,amount_value,price,lock_price,leaves,status,drop_copy"
       },
       "trades": {
-        "description": "Сделки доступны только для экспорта. Первая строка - заголовок.",
+        "description": "Одна сделка в строке.",
         "columns": "id,order_id,at,account_code,source,principal,base_asset,quote_asset,side,quantity,price,lock_price,commission_amount,commission_currency"
       }
     },
@@ -325,30 +324,6 @@
       "semicolon": "Точка с запятой",
       "tab": "Табуляция",
       "pipe": "Вертикальная черта"
-    },
-    "conflictPolicy": {
-      "skip": "Пропустить конфликты",
-      "replace": "Перезаписать конфликты",
-      "stop": "Остановиться на первом конфликте"
-    },
-    "import": {
-      "trigger": "Импорт CSV",
-      "title": "Импорт CSV бизнес-сущностей",
-      "description": "Загрузите один CSV-файл, ZIP с одним CSV-файлом или вставьте CSV-текст для серверной проверки перед применением.",
-      "chooseFile": "Выбрать CSV или ZIP",
-      "noFile": "Файл не выбран",
-      "pastePlaceholder": "Вставьте строки CSV здесь",
-      "fileTakesPriority": "Выбранный файл используется вместо вставленного текста.",
-      "fileTooLarge": "Файл слишком большой. Выберите файл до {{limit}} МиБ.",
-      "preview": "Предпросмотр",
-      "previewing": "Предпросмотр…",
-      "previewReady": "Предпросмотр готов для {{file}}",
-      "counts": "Строки {{rows}} · применено {{applied}} · пропущено {{skipped}} · конфликты {{conflicts}}",
-      "conflictsFound": "Найдено конфликтов: {{count}}.",
-      "apply": "Применить импорт",
-      "applied": "Импорт применён",
-      "conflictTitle": "Найдены конфликты",
-      "conflictDescription": "{{count}} загруженных строк пересекаются с существующими бизнес-данными. Выберите, как Officer должен применить этот импорт."
     },
     "export": {
       "trigger": "Экспорт CSV",

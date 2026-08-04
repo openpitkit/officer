@@ -22,9 +22,6 @@ import fwstore "go.openpit.dev/officer/framework/store"
 type Store = fwstore.Store
 type RealmStore = fwstore.RealmStore
 type AuditEntry = fwstore.AuditEntry
-type BusinessCSVImport = fwstore.BusinessCSVImport
-type BusinessCSVImportGroup = fwstore.BusinessCSVImportGroup
-type BusinessCSVImportAccount = fwstore.BusinessCSVImportAccount
 type TextMatcher = fwstore.TextMatcher
 type SortSpec = fwstore.SortSpec
 type PageSpec = fwstore.PageSpec

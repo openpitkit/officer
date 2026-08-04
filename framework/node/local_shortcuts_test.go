@@ -62,7 +62,6 @@ func submitShortcutOrder(
 		t.Fatalf("UpsertBalance: %v", err)
 	}
 	eng.submitLock = []byte("stored-lock")
-	eng.submitLeaves = "20"
 	eng.submitOutcomes = []engine.BalanceOutcome{{
 		Asset: "USD",
 		Outcome: domain.AdjustmentOutcomeAccepted{
@@ -128,7 +127,7 @@ func TestLocalNode_ConfirmOrderIsHistoryOnlyAndIdempotent(t *testing.T) {
 	}
 }
 
-func TestLocalNode_CancelOrderUsesStoredLockAndLeaves(t *testing.T) {
+func TestLocalNode_CancelOrderUsesStoredLockAndCallerLeaves(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
 	n, realm := newTestNode(t, eng)
@@ -145,12 +144,14 @@ func TestLocalNode_CancelOrderUsesStoredLockAndLeaves(t *testing.T) {
 	if _, err := n.ConfirmOrder(ctx, order.ExternalID, testCaller); err != nil {
 		t.Fatalf("ConfirmOrder before cancel: %v", err)
 	}
-	cancelled, result, err := n.CancelOrder(ctx, order.ExternalID, testCaller)
+	cancelled, result, err := n.CancelOrder(
+		ctx, order.ExternalID, "7.5", testCaller,
+	)
 	if err != nil {
 		t.Fatalf("CancelOrder: %v", err)
 	}
-	if cancelled.Status != domain.OrderStatusCancelled || cancelled.Leaves != "0" {
-		t.Fatalf("cancelled order = %+v, want cancelled with zero leaves", cancelled)
+	if cancelled.Status != domain.OrderStatusCancelled || cancelled.Leaves != "7.5" {
+		t.Fatalf("cancelled order = %+v, want reported leaves 7.5", cancelled)
 	}
 	if result.Persistence == nil {
 		t.Fatal("CancelOrder result has no persistence")
@@ -160,7 +161,7 @@ func TestLocalNode_CancelOrderUsesStoredLockAndLeaves(t *testing.T) {
 	}
 	input := eng.execReportCalls[0]
 	if input.Order != order.ExternalID || input.OrderStatus != domain.OrderStatusCancelled ||
-		input.LeavesQuantity != "20" || !bytes.Equal(input.Lock, []byte("stored-lock")) ||
+		input.LeavesQuantity != "7.5" || !bytes.Equal(input.Lock, []byte("stored-lock")) ||
 		input.FillQuantity != "" || input.FillPrice != "" {
 		t.Fatalf("synthetic cancellation input = %+v", input)
 	}
@@ -174,7 +175,7 @@ func TestLocalNode_CancelOrderUsesStoredLockAndLeaves(t *testing.T) {
 		request := event.Payload.ExecutionReport
 		if event.Type == domain.OrderEventCancelled && request != nil {
 			foundReport = request.OrderStatus == domain.OrderStatusCancelled &&
-				request.LeavesQuantity == "20"
+				request.LeavesQuantity == "7.5"
 		}
 	}
 	if !foundReport {
@@ -231,7 +232,7 @@ func TestLocalNode_CancelOrderAttestorFailureFailsStop(t *testing.T) {
 	}
 
 	if _, _, err := n.CancelOrderWithAttestation(
-		ctx, order.ExternalID, testCaller, attest,
+		ctx, order.ExternalID, "20", testCaller, attest,
 	); !errors.Is(err, attestErr) {
 		t.Fatalf("CancelOrderWithAttestation error = %v, want attestor error", err)
 	}
@@ -281,11 +282,11 @@ func TestLocalNode_CancelOrderAfterEngineRebuildUsesStoredState(t *testing.T) {
 		t.Fatalf("rebuildEngineFromStore: %v", err)
 	}
 
-	cancelled, _, err := n.CancelOrder(ctx, order.ExternalID, testCaller)
+	cancelled, _, err := n.CancelOrder(ctx, order.ExternalID, "20", testCaller)
 	if err != nil {
 		t.Fatalf("CancelOrder after rebuild: %v", err)
 	}
-	if cancelled.Status != domain.OrderStatusCancelled || cancelled.Leaves != "0" {
+	if cancelled.Status != domain.OrderStatusCancelled || cancelled.Leaves != "20" {
 		t.Fatalf("cancelled order = %+v", cancelled)
 	}
 	if len(initialEngine.execReportCalls) != 0 {
@@ -323,11 +324,11 @@ func TestLocalNode_ShortcutsRequireExplicitReportAfterActivity(t *testing.T) {
 	if _, err := n.ConfirmOrder(ctx, order.ExternalID, testCaller); !errors.Is(err, domain.ErrExecutionReportRequired) {
 		t.Fatalf("ConfirmOrder error = %v, want ErrExecutionReportRequired", err)
 	}
-	if _, _, err := n.CancelOrder(ctx, order.ExternalID, testCaller); !errors.Is(err, domain.ErrExecutionReportRequired) {
+	if _, _, err := n.CancelOrder(ctx, order.ExternalID, "", testCaller); !errors.Is(err, domain.ErrExecutionReportRequired) {
 		t.Fatalf("CancelOrder error = %v, want ErrExecutionReportRequired", err)
 	}
 	if len(eng.execReportCalls) != 0 {
-		t.Fatalf("guarded shortcut reached engine: %+v", eng.execReportCalls)
+		t.Fatalf("leaves-only report reached engine: %+v", eng.execReportCalls)
 	}
 }
 
@@ -360,7 +361,7 @@ func TestLocalNode_ShortcutsRejectTerminalOrderWithoutReportEvent(t *testing.T) 
 		t.Fatalf("ConfirmOrder error = %v, want ErrTerminalOrder", err)
 	}
 	if _, _, err := n.CancelOrder(
-		ctx, order.ExternalID, testCaller,
+		ctx, order.ExternalID, "", testCaller,
 	); !errors.Is(err, domain.ErrTerminalOrder) {
 		t.Fatalf("CancelOrder error = %v, want ErrTerminalOrder", err)
 	}

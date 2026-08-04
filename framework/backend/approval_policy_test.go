@@ -61,7 +61,7 @@ func TestCancelOrderValidatesReason(t *testing.T) {
 	svc := &Service{router: router}
 	ctx := context.Background()
 
-	_, _, err := svc.CancelOrder(ctx, orderID, "token",
+	_, _, err := svc.CancelOrder(ctx, orderID, "token", "",
 		"typo\ncancel approval 00000000 order ord-2 reason=routine")
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("CancelOrder with a newline reason = %v, want ErrInvalid", err)
@@ -70,7 +70,7 @@ func TestCancelOrderValidatesReason(t *testing.T) {
 		t.Fatal("cancel reached the node with an unvalidated reason")
 	}
 
-	_, _, err = svc.CancelOrder(ctx, orderID, "token", "typo")
+	_, _, err = svc.CancelOrder(ctx, orderID, "token", "", "typo")
 	if errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("CancelOrder with a plain reason = %v, want it accepted", err)
 	}

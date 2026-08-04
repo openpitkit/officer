@@ -247,7 +247,9 @@ func TestService_DropCopySigningShortcutsAreRefused(t *testing.T) {
 			return err
 		},
 		"cancel": func() error {
-			_, _, err := svc.CancelOrder(context.Background(), id.String(), "token", "")
+			_, _, err := svc.CancelOrder(
+				context.Background(), id.String(), "token", "", "",
+			)
 			return err
 		},
 	} {

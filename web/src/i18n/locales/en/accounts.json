@@ -261,36 +261,8 @@
     "submit": "Save"
   },
   "businessCsv": {
-    "importCsv": "Import CSV",
     "exportGroupsCsv": "Export groups CSV",
     "exportAccountsCsv": "Export accounts CSV"
-  },
-  "loadAccounts": {
-    "trigger": "Load accounts",
-    "title": "Load accounts from CSV",
-    "formatHeading": "CSV format",
-    "formatLine1": "One account per line:",
-    "formatCode1": "code[,title[,group_code[,notes]]]",
-    "formatLine2prefix": "is required;",
-    "formatLine2middle": "and",
-    "formatLine2suffix": "are optional.",
-    "formatLine3prefix": "A header row (",
-    "formatLine3code": "code,title,group_code,notes",
-    "formatLine3suffix": ") is allowed and skipped automatically.",
-    "examplesHeading": "Examples",
-    "chooseFile": "Choose file…",
-    "orPasteBelow": "or paste below",
-    "parsedRows_one": "{{count}} row parsed.",
-    "parsedRows_other": "{{count}} rows parsed.",
-    "results": {
-      "summary": "Results — {{created}} created, {{skipped}} skipped, {{errors}} errors"
-    },
-    "import_one": "Import {{count}} row",
-    "import_other": "Import {{count}} rows",
-    "importEmpty": "Import",
-    "close": "Close",
-    "cancel": "Cancel",
-    "alreadyExists": "already exists"
   },
   "blockAccount": {
     "titlePrefix": "Block account",

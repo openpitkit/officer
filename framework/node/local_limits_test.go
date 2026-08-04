@@ -791,7 +791,9 @@ func TestLocalNode_PolicyConfigurationBlocksPersistAndAudit(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("GetAccount: ok=%v err=%v", ok, err)
 	}
-	wantReason := "account P&L halted [policy=openpit.spot_funds, code=missing_fx, USD/EUR quote unavailable]"
+	// The stored reason is the engine's own, verbatim; the policy, code and
+	// details are carried by the audit line below.
+	wantReason := "account P&L halted"
 	if !stored.Blocked || stored.BlockReason != wantReason {
 		t.Fatalf("stored account = %+v, want blocked reason %q", stored, wantReason)
 	}
@@ -809,13 +811,14 @@ func TestLocalNode_PolicyConfigurationBlocksPersistAndAudit(t *testing.T) {
 		t.Fatalf("block audit attribution = %+v, want system without actor", rows[0])
 	}
 	if !strings.Contains(rows[0].Detail, "policy openpit.spot_funds") ||
+		!strings.Contains(rows[0].Detail, "code=missing_fx") ||
 		!strings.Contains(rows[0].Detail, "USD/EUR quote unavailable") {
-		t.Fatalf("block audit detail = %q, want policy and engine details", rows[0].Detail)
+		t.Fatalf("block audit detail = %q, want policy, code and engine details", rows[0].Detail)
 	}
 }
 
 // TestLocalNode_PolicyConfigurationBlockReasonIsRestorable pins the mirror seam
-// for a machine-composed cause. The engine-boundary scrub only strips control
+// for an engine-produced reason. The engine-boundary scrub only strips control
 // characters, so a format-class rune such as U+200B survives into this write and
 // the restore path rejects it. Refusing the write would drop a real kill-switch
 // record, so the reason is normalized and the realm stays restorable - including
@@ -850,7 +853,7 @@ func TestLocalNode_PolicyConfigurationBlockReasonIsRestorable(t *testing.T) {
 	if !stored.Blocked {
 		t.Fatal("mirrored policy configuration block did not block the account")
 	}
-	wantReason := "account P&Lhalted [policy=openpit.spot_funds, code=missing_fx]"
+	wantReason := "account P&Lhalted"
 	if stored.BlockReason != wantReason {
 		t.Fatalf("block reason = %q, want %q", stored.BlockReason, wantReason)
 	}

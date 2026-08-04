@@ -29,6 +29,50 @@ import (
 	"go.openpit.dev/officer/framework/store"
 )
 
+// OrderListRow is an order row enriched with backend-owned presentation data.
+type OrderListRow struct {
+	Order        domain.Order
+	DisplayPrice string
+	Signed       bool
+}
+
+// OrderListPage is a page of backend-enriched order rows.
+type OrderListPage struct {
+	Rows  []OrderListRow
+	Total int
+}
+
+func (s *Service) orderDisplayPrice(order domain.Order) (string, error) {
+	if len(order.Lock) == 0 || s.lockSettlement == nil {
+		return "", nil
+	}
+	price, err := s.lockSettlement(order.Lock, order)
+	if err != nil {
+		return "", fmt.Errorf(
+			"backend: restore order %s display price: %w",
+			order.ExternalID,
+			err,
+		)
+	}
+	return price, nil
+}
+
+func (s *Service) enrichOrderListPage(page store.OrderListPage) (OrderListPage, error) {
+	rows := make([]OrderListRow, 0, len(page.Rows))
+	for _, row := range page.Rows {
+		price, err := s.orderDisplayPrice(row.Order)
+		if err != nil {
+			return OrderListPage{}, err
+		}
+		rows = append(rows, OrderListRow{
+			Order:        row.Order,
+			DisplayPrice: price,
+			Signed:       row.Signed,
+		})
+	}
+	return OrderListPage{Rows: rows, Total: page.Total}, nil
+}
+
 // CheckOrder validates the probe's account and assets, routes to the owning
 // node, and runs the engine pre-trade as a non-mutating dry-run. It mutates no
 // state and writes no audit row; an engine reject is a successful call carrying
@@ -52,7 +96,7 @@ func (s *Service) CheckOrder(
 func (s *Service) ApplyExecutionReport(
 	ctx context.Context, in domain.ExecutionReportInput,
 ) (engine.ExecutionReportResult, Attestation, error) {
-	targetStatus := domain.ExecutionReportTargetStatus(in)
+	targetStatus := in.OrderStatus
 	if !domain.OrderStatusSupported(targetStatus) {
 		return engine.ExecutionReportResult{}, Attestation{}, fmt.Errorf(
 			"backend: invalid execution report status %q: %w", targetStatus, domain.ErrInvalid)
@@ -110,10 +154,9 @@ func (s *Service) ApplyExecutionReport(
 			persistence := engine.ExecutionReportPersistence{
 				OrderStatus: domain.OrderStatus(event.Payload.OrderStatus),
 				Commission:  event.Payload.Commission,
-				Leaves: domain.ExecutionReportPersistedLeavesFor(
-					domain.OrderStatus(event.Payload.OrderStatus),
-					event.Payload.LeavesQuantity,
-				),
+				// The signed attestation must bind the report as it arrived: the
+				// leaves the report carried, never one derived from its status.
+				Leaves: event.Payload.LeavesQuantity,
 			}
 			if persistence.OrderStatus == "" {
 				persistence.OrderStatus = targetStatus
@@ -190,7 +233,15 @@ func (s *Service) GetOrder(
 	if err != nil {
 		return domain.OrderDetail{}, fmt.Errorf("backend: route order: %w", err)
 	}
-	return n.GetOrder(ctx, order)
+	detail, err := n.GetOrder(ctx, order)
+	if err != nil {
+		return domain.OrderDetail{}, err
+	}
+	detail.DisplayPrice, err = s.orderDisplayPrice(detail.Order)
+	if err != nil {
+		return domain.OrderDetail{}, err
+	}
+	return detail, nil
 }
 
 // ListOrders returns the most recent n orders, optionally narrowed to a
@@ -198,7 +249,7 @@ func (s *Service) GetOrder(
 func (s *Service) ListOrders(
 	ctx context.Context, account domain.AccountID, source domain.Source, n int,
 ) ([]domain.Order, error) {
-	page, err := s.ListOrderRows(ctx, store.OrderListFilter{
+	page, err := s.listOrderRows(ctx, store.OrderListFilter{
 		Account: account,
 		Source:  source,
 		Sort:    store.SortSpec{Column: "at", Descending: true},
@@ -216,6 +267,16 @@ func (s *Service) ListOrders(
 
 // ListOrderRows returns order rows aggregated across all nodes.
 func (s *Service) ListOrderRows(
+	ctx context.Context, filter store.OrderListFilter,
+) (OrderListPage, error) {
+	page, err := s.listOrderRows(ctx, filter)
+	if err != nil {
+		return OrderListPage{}, err
+	}
+	return s.enrichOrderListPage(page)
+}
+
+func (s *Service) listOrderRows(
 	ctx context.Context, filter store.OrderListFilter,
 ) (store.OrderListPage, error) {
 	if filter.Account != "" {

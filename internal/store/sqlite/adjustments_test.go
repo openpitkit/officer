@@ -185,6 +185,56 @@ func TestRecordAccountAdjustmentPersistsEngineBalanceInSameTx(t *testing.T) {
 	}
 }
 
+func TestRecordAccountAdjustmentPersistsHaltedRealizedPnlWithoutValue(t *testing.T) {
+	ctx, rs := seedAdjustmentFixtures(t)
+	halt := domain.PnlHaltReasonMissingFx
+
+	_, err := rs.RecordAccountAdjustment(ctx, fwstore.AccountAdjustmentPersistence{
+		UpsertBalance: &domain.Balance{
+			Account: "acc-1", Asset: "AAPL",
+			RealizedPnlHaltReason: halt,
+		},
+		Adjustment: domain.AccountAdjustmentRecord{
+			Account: "acc-1", Asset: "AAPL", Source: domain.SourcePanel,
+			Request: domain.AdjustmentRequest{
+				Asset: "AAPL", RealizedPnlHaltReason: halt,
+			},
+			Accepted: &domain.AdjustmentOutcomeAccepted{
+				RealizedPnlHaltReason: halt,
+			},
+		},
+		Audit: AuditEntry{
+			Action: domain.AuditActionAdjustment, Account: "acc-1",
+			Asset: "AAPL", Source: domain.SourcePanel,
+			Detail: "halt balance realized_pnl account acc-1 asset=AAPL",
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordAccountAdjustment: %v", err)
+	}
+	balance, ok, err := rs.GetBalance(ctx, "acc-1", "AAPL")
+	if err != nil || !ok {
+		t.Fatalf("GetBalance: ok=%v err=%v", ok, err)
+	}
+	if balance.RealizedPnl != "" || balance.RealizedPnlHaltReason != halt {
+		t.Fatalf("halted balance = %+v, want no realized P&L value", balance)
+	}
+	var stored any
+	if err := rs.(*realmStore).rawDB().QueryRowContext(
+		ctx,
+		`SELECT realized_pnl FROM balance b
+		 JOIN account a ON a.id = b.account_id
+		 JOIN asset ast ON ast.id = b.asset_id
+		 WHERE a.code = ? AND ast.code = ?`,
+		"acc-1", "AAPL",
+	).Scan(&stored); err != nil {
+		t.Fatalf("read stored realized P&L: %v", err)
+	}
+	if stored != nil {
+		t.Fatalf("stored realized P&L = %#v, want NULL", stored)
+	}
+}
+
 func TestRecordAccountAdjustmentDeletesEngineEmptyBalance(t *testing.T) {
 	ctx, rs := seedAdjustmentFixtures(t)
 	seedBalance(t, ctx, rs, "acc-1", "AAPL", "", "", "", "1")

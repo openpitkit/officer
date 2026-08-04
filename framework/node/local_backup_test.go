@@ -948,35 +948,6 @@ func TestLocalNode_RestoreBackupJoinsRollbackRestoreFailure(t *testing.T) {
 	}
 }
 
-func TestLocalNode_RollbackStoreAndEngineRebuildFailureIsFatal(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	old := newFakeEngine()
-	n, realm := newTestNode(t, old)
-	rollback, err := realm.ExportBackup(ctx, backup.Scope{All: true})
-	if err != nil {
-		t.Fatalf("ExportBackup: %v", err)
-	}
-	rebuildErr := errors.New("rollback rebuild failed")
-	n.build = func(engine.Snapshot) (engine.Engine, error) {
-		return nil, rebuildErr
-	}
-	var fatalErr error
-	n.fatal = func(err error) { fatalErr = err }
-	cause := errors.New("online publication failed")
-
-	err = n.rollbackStoreAndEngine(ctx, rollback, cause)
-	if !errors.Is(err, cause) || !errors.Is(err, rebuildErr) {
-		t.Fatalf("rollbackStoreAndEngine error = %v, want cause and rebuild failure", err)
-	}
-	if fatalErr == nil || !errors.Is(fatalErr, rebuildErr) {
-		t.Fatalf("fatal error = %v, want rebuild failure", fatalErr)
-	}
-	if n.currentEngine() != old || !old.running {
-		t.Fatal("rollback rebuild failure replaced or stopped old engine")
-	}
-}
-
 func TestLocalNode_ResetDatabaseRebuildFailureIsFatal(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

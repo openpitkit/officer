@@ -344,9 +344,9 @@ function CheckPreview({ state }: { state: CheckState }) {
           })}
         </ul>
       )}
-      {result.wouldDisplayPrices.length > 0 && (
+      {result.wouldDisplayPrice !== "" && (
         <div className="text-muted-lt">
-          {t("check.displayPrices", { prices: result.wouldDisplayPrices.join(", ") })}
+          {t("check.displayPrice", { price: result.wouldDisplayPrice })}
         </div>
       )}
       {wouldBlock && (
@@ -1199,9 +1199,7 @@ function execReportInitialValuesFromOrder(
   order: Order,
   events: OrderEvent[] = [],
 ): ExecReportInitialValues {
-  const lockPrice = order.displayPrices.length > 0
-    ? order.displayPrices[order.displayPrices.length - 1]
-    : "";
+  const lockPrice = order.displayPrice;
   return {
     quantity: order.amountKind === "quantity" ? order.amountValue : "",
     price: lockPrice,
@@ -1910,6 +1908,8 @@ function OrderDetailDialog({ orderExternalId, refreshKey, onClose, onExecReport,
     null,
   );
   const [shortcutError, setShortcutError] = useState<string | null>(null);
+  const [cancelFormOpen, setCancelFormOpen] = useState(false);
+  const [cancelLeavesQuantity, setCancelLeavesQuantity] = useState("");
 
   useEffect(() => {
     if (orderExternalId === null) {
@@ -1921,6 +1921,8 @@ function OrderDetailDialog({ orderExternalId, refreshKey, onClose, onExecReport,
     setVerifyEventId(null);
     setShortcutAction(null);
     setShortcutError(null);
+    setCancelFormOpen(false);
+    setCancelLeavesQuantity("");
     const controller = new AbortController();
     fetchOrderDetail(orderExternalId, controller.signal)
       .then(({ order, events, trades }) => {
@@ -1961,8 +1963,17 @@ function OrderDetailDialog({ orderExternalId, refreshKey, onClose, onExecReport,
   const canUseWorkflowShortcut =
     state.phase === "ready" && workflowToken !== null;
 
+  // The cancellation is settled by the engine, so leaves must be present and
+  // well-formed before the request leaves the operator panel.
+  const cancelLeavesValid =
+    cancelLeavesQuantity.trim() !== "" &&
+    isNonNegativeDecimalString(cancelLeavesQuantity);
+
   async function runWorkflowShortcut(action: "confirm" | "cancel") {
     if (orderExternalId === null || workflowToken === null || shortcutAction !== null) {
+      return;
+    }
+    if (action === "cancel" && !cancelLeavesValid) {
       return;
     }
     setShortcutAction(action);
@@ -1975,6 +1986,7 @@ function OrderDetailDialog({ orderExternalId, refreshKey, onClose, onExecReport,
       } else {
         await cancelOrder(orderExternalId, {
           token: workflowToken.token,
+          leavesQuantity: cancelLeavesQuantity.trim(),
         });
       }
       onWorkflowShortcutCompleted(orderExternalId, action);
@@ -2081,11 +2093,11 @@ function OrderDetailDialog({ orderExternalId, refreshKey, onClose, onExecReport,
                 <span className="text-muted-lt">{t("detail.dialog.fieldSubmitted")}</span>
                 <div className="nums mt-0.5 text-muted-lt">{formatDateTime(state.order.at)}</div>
               </div>
-              {state.order.displayPrices.length > 0 && (
+              {state.order.displayPrice !== "" && (
                 <div className="col-span-3">
-                  <span className="text-muted-lt">{t("detail.dialog.fieldDisplayPrices")}</span>
+                  <span className="text-muted-lt">{t("detail.dialog.fieldDisplayPrice")}</span>
                   <div className="nums mt-0.5 text-text">
-                    {state.order.displayPrices.join(", ")}
+                    {state.order.displayPrice}
                   </div>
                 </div>
               )}
@@ -2410,18 +2422,55 @@ function OrderDetailDialog({ orderExternalId, refreshKey, onClose, onExecReport,
                       ? t("detail.dialog.workflow.confirmBusy")
                       : t("detail.dialog.workflow.confirm")}
                   </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="text-[var(--danger)] hover:border-[var(--danger)] hover:text-[var(--danger)]"
-                    onClick={() => void runWorkflowShortcut("cancel")}
-                    disabled={shortcutAction !== null}
-                  >
-                    {shortcutAction === "cancel"
-                      ? t("detail.dialog.workflow.cancelBusy")
-                      : t("detail.dialog.workflow.cancel")}
-                  </Button>
+                  {!cancelFormOpen && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="text-[var(--danger)] hover:border-[var(--danger)] hover:text-[var(--danger)]"
+                      onClick={() => setCancelFormOpen(true)}
+                      disabled={shortcutAction !== null}
+                    >
+                      {t("detail.dialog.workflow.cancel")}
+                    </Button>
+                  )}
                 </div>
+                {cancelFormOpen && (
+                  <div className="space-y-2 border-t border-border pt-3">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="workflow-cancel-leaves">
+                        {t("execReport.dialog.leavesQty")}
+                      </Label>
+                      <NumberStepper
+                        id="workflow-cancel-leaves"
+                        value={cancelLeavesQuantity}
+                        onChange={setCancelLeavesQuantity}
+                        placeholder={t(
+                          "execReport.dialog.leavesQtyPlaceholder",
+                        )}
+                        disabled={shortcutAction !== null}
+                        allowSignedInput={false}
+                        onClear={() => setCancelLeavesQuantity("")}
+                        clearLabel={tc("filters.clearField")}
+                      />
+                      {!cancelLeavesValid && (
+                        <p className="text-[0.6875rem] text-muted">
+                          {t("execReport.dialog.leavesRequired")}
+                        </p>
+                      )}
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="text-[var(--danger)] hover:border-[var(--danger)] hover:text-[var(--danger)]"
+                      onClick={() => void runWorkflowShortcut("cancel")}
+                      disabled={shortcutAction !== null || !cancelLeavesValid}
+                    >
+                      {shortcutAction === "cancel"
+                        ? t("detail.dialog.workflow.cancelBusy")
+                        : t("detail.dialog.workflow.cancel")}
+                    </Button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -2618,9 +2667,9 @@ function OrdersTable({
             </TableHead>
             <TableHead>
               <ColumnHeader
-                description={t("table.columnDescriptions.displayPrices")}
+                description={t("table.columnDescriptions.displayPrice")}
               >
-                {t("table.displayPrices")}
+                {t("table.displayPrice")}
               </ColumnHeader>
             </TableHead>
             <TableHead>
@@ -2751,8 +2800,8 @@ function OrdersTable({
                 {priceLabel(order.price)}
               </TableCell>
               <TableCell className="nums text-xs text-muted-lt">
-                {order.displayPrices.length > 0
-                  ? order.displayPrices.join(", ")
+                {order.displayPrice !== ""
+                  ? order.displayPrice
                   : tc("value.none")}
               </TableCell>
               <TableCell className="nums text-xs text-muted-lt">

@@ -150,7 +150,11 @@ CREATE TABLE account (
     title        TEXT    NOT NULL DEFAULT '',
     group_id     INTEGER REFERENCES account_group(id) ON DELETE SET NULL,
     currency_asset_id INTEGER REFERENCES asset(id) ON DELETE RESTRICT,
-    pnl          {{DECIMAL}} NOT NULL DEFAULT '0',
+    -- NULL means the account has no P&L value: either the accumulator is halted
+    -- (pnl_halt_reason non-empty) or the engine has not reported on the account
+    -- yet. A number is stored only when there actually is one, so "no value" and
+    -- "zero" are different rows.
+    pnl          {{DECIMAL}},
     pnl_halt_reason TEXT    NOT NULL DEFAULT '',
     notes        TEXT    NOT NULL DEFAULT '',
     blocked      {{BOOL}} NOT NULL DEFAULT 0,
@@ -163,8 +167,9 @@ CREATE INDEX idx_accounts_title ON account (title, code);
 
 -- Per-(account, asset) holdings snapshot. Amounts are exact {{DECIMAL}} values,
 -- never float; the indexes below order numerically. realized_pnl stores the
--- latest engine-reported absolute (a fresh row starts at '0'). Both references
--- cascade so deleting an account or asset removes its balance.
+-- latest engine-reported absolute and stays NULL until the engine reports a
+-- value, including while its accumulator is halted. Both references cascade so
+-- deleting an account or asset removes its balance.
 CREATE TABLE balance (
     account_id          INTEGER NOT NULL REFERENCES account(id) ON DELETE CASCADE,
     asset_id            INTEGER NOT NULL REFERENCES asset(id)   ON DELETE CASCADE,
@@ -172,7 +177,7 @@ CREATE TABLE balance (
     held                {{DECIMAL}} NOT NULL DEFAULT '0',
     incoming            {{DECIMAL}} NOT NULL DEFAULT '0',
     average_entry_price {{DECIMAL}} NOT NULL DEFAULT '',
-    realized_pnl        {{DECIMAL}} NOT NULL DEFAULT '0',
+    realized_pnl        {{DECIMAL}},
     realized_pnl_halt_reason TEXT NOT NULL DEFAULT '',
     updated_at          TEXT    NOT NULL,
     PRIMARY KEY (account_id, asset_id)

@@ -576,9 +576,6 @@ func TestSubmitImmediate_NetsHeldToZero(t *testing.T) {
 	if !res.Accepted {
 		t.Fatalf("SubmitImmediate rejected: %+v", res.Rejects)
 	}
-	if res.EstimateSource != domain.EstimateSourceLimit {
-		t.Fatalf("estimate source = %q, want %q", res.EstimateSource, domain.EstimateSourceLimit)
-	}
 	if res.SettlementLockPrice == "" {
 		t.Fatal("SubmitImmediate: empty settlement lock price")
 	}
@@ -648,10 +645,11 @@ const lockSpyPolicyGroupID model.PolicyGroupID = 42
 // It mirrors the order's limit price so the settlement estimate - the last lock
 // price - stays the price the fill settles at.
 type executionLockSpy struct {
-	price       param.Price
-	pushErr     error
-	reportLocks [][]byte
-	guard       sync.Mutex
+	price         param.Price
+	pushErr       error
+	rollbackPanic string
+	reportLocks   [][]byte
+	guard         sync.Mutex
 }
 
 func (*executionLockSpy) Close() {}
@@ -671,9 +669,17 @@ func (*executionLockSpy) CheckPreTradeStart(
 func (s *executionLockSpy) PerformPreTradeCheck(
 	_ pretrade.Context,
 	_ model.Order,
-	_ tx.Mutations,
+	mutations tx.Mutations,
 	result pretrade.Result,
 ) []reject.Reject {
+	if s.rollbackPanic != "" {
+		err := mutations.Push(func() {}, func() { panic(s.rollbackPanic) })
+		if err != nil {
+			s.guard.Lock()
+			s.pushErr = err
+			s.guard.Unlock()
+		}
+	}
 	if err := result.PushLockPrice(s.price); err != nil {
 		s.guard.Lock()
 		s.pushErr = err
@@ -969,6 +975,7 @@ func TestApplyExecutionReport_SettlesFillNoBlock(t *testing.T) {
 		FillPrice:      submitted.SettlementLockPrice,
 		LeavesQuantity: "0",
 		LockPrice:      submitted.SettlementLockPrice,
+		Lock:           submitted.Lock,
 		Account:        domain.AccountID(testAccount),
 		Side:           domain.OrderSideBuy,
 		OrderStatus:    domain.OrderStatusFilled,
@@ -1041,6 +1048,7 @@ func TestApplyExecutionReport_UsesSeededRealizedPnlFromSDK(t *testing.T) {
 		BaseAsset: testBase, QuoteAsset: testQuote,
 		FillQuantity: "1", FillPrice: "50000", LeavesQuantity: "0",
 		LockPrice: submitted.SettlementLockPrice,
+		Lock:      submitted.Lock,
 		Account:   domain.AccountID(testAccount), Side: domain.OrderSideSell,
 		OrderStatus: domain.OrderStatusFilled,
 	})
@@ -1168,6 +1176,7 @@ func TestApplyExecutionReport_CanceledContextDoesNotEnterLane(t *testing.T) {
 		FillPrice:      submitted.SettlementLockPrice,
 		LeavesQuantity: "0",
 		LockPrice:      submitted.SettlementLockPrice,
+		Lock:           submitted.Lock,
 		Account:        domain.AccountID(testAccount),
 		Side:           domain.OrderSideBuy,
 		Order:          "order-1",
@@ -1219,32 +1228,11 @@ func TestApplyExecutionReport_NoTradeFinalReleasesReservation(t *testing.T) {
 	}
 }
 
-// TestApplyExecutionReport_MissingLeavesRejected proves the mapper treats an
-// empty leaves quantity as caller error: the report is rejected with
-// domain.ErrInvalid before it reaches the engine, with no account block.
-func TestApplyExecutionReport_MissingLeavesRejected(t *testing.T) {
-	e := newTestEngine(t)
-	ctx := context.Background()
-
-	submitted, err := e.SubmitOrder(ctx, testOrder())
-	if err != nil || !submitted.Accepted {
-		t.Fatalf("SubmitOrder: %v accepted=%v", err, submitted.Accepted)
-	}
-
-	_, err = e.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
-		BaseAsset:    testBase,
-		QuoteAsset:   testQuote,
-		FillQuantity: testQty,
-		FillPrice:    submitted.SettlementLockPrice,
-		LockPrice:    submitted.SettlementLockPrice,
-		Account:      domain.AccountID(testAccount),
-		Side:         domain.OrderSideBuy,
-		OrderStatus:  domain.OrderStatusFilled,
-	})
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("ApplyExecutionReport(empty leaves) = %v, want ErrInvalid", err)
-	}
-}
+// An execution report that reaches the adapter without leaves is no longer
+// refused here: the presence rule belongs to the intake boundary
+// (domain.ExecutionReportRequiresEngine, covered by the domain and node tests),
+// because the engine's post-trade path cannot reject an incomplete report.
+// TestExecutionReportFrom_EmptyLeavesIsNotSet covers what the mapper does now.
 
 func newTestEngineWithSpotFundsPnlBounds(t *testing.T) *openPitEngine {
 	t.Helper()
@@ -1333,6 +1321,7 @@ func TestSpotFundsPnlBoundsBuildConfiguresBasePolicyAndAccountPnl(t *testing.T) 
 		FillPrice:      submitted.SettlementLockPrice,
 		LeavesQuantity: "0",
 		LockPrice:      submitted.SettlementLockPrice,
+		Lock:           submitted.Lock,
 		Commission:     &domain.Commission{Amount: "-2", Currency: testQuote},
 		Account:        domain.AccountID(testAccount),
 		Side:           domain.OrderSideBuy,
@@ -1382,6 +1371,7 @@ func TestConfigurePolicy_SpotFundsPnlBoundsClearsLastBarrierOnline(t *testing.T)
 		FillPrice:      submitted.SettlementLockPrice,
 		LeavesQuantity: "0",
 		LockPrice:      submitted.SettlementLockPrice,
+		Lock:           submitted.Lock,
 		Commission:     &domain.Commission{Amount: "-2", Currency: testQuote},
 		Account:        domain.AccountID(testAccount),
 		Side:           domain.OrderSideBuy,
@@ -1468,6 +1458,7 @@ func commitSpotFundsFeeFill(t *testing.T, e *openPitEngine) ExecutionReportResul
 		FillPrice:      submitted.SettlementLockPrice,
 		LeavesQuantity: "0",
 		LockPrice:      submitted.SettlementLockPrice,
+		Lock:           submitted.Lock,
 		Commission:     &domain.Commission{Amount: "-2", Currency: testQuote},
 		Account:        domain.AccountID(testAccount),
 		Side:           domain.OrderSideBuy,
@@ -1552,9 +1543,6 @@ func TestSubmitOrder_AcceptCapturesSettlement(t *testing.T) {
 	if len(prices) == 0 {
 		t.Fatal("serialized lock carries no prices")
 	}
-	if res.EstimateSource != domain.EstimateSourceLimit {
-		t.Fatalf("estimate source = %q, want limit", res.EstimateSource)
-	}
 	if res.SettlementLockPrice == "" {
 		t.Fatal("SubmitOrder: empty settlement lock price")
 	}
@@ -1571,9 +1559,6 @@ func TestSubmitOrder_AcceptCapturesSettlement(t *testing.T) {
 			"settlement lock price = %s, want serialized lock price %s",
 			gotSettlement.String(), wantSettlement.String(),
 		)
-	}
-	if res.LeavesQuantity != testQty {
-		t.Fatalf("leaves quantity = %q, want %q", res.LeavesQuantity, testQty)
 	}
 }
 
@@ -1729,7 +1714,7 @@ func TestSubmitImmediate_DropCopySurfacesHaltedPnlAccountBlock(t *testing.T) {
 	}
 }
 
-func TestSubmitOrder_DropCopyVolumeCapturesCanonicalBaseLeaves(t *testing.T) {
+func TestSubmitOrder_DropCopyVolumeDoesNotDeriveQuantity(t *testing.T) {
 	e := newTestEngine(t)
 	ctx := context.Background()
 	order := testOrder()
@@ -1747,17 +1732,9 @@ func TestSubmitOrder_DropCopyVolumeCapturesCanonicalBaseLeaves(t *testing.T) {
 	if res.SettlementLockPrice == "" {
 		t.Fatal("SubmitOrder: empty settlement lock price")
 	}
-	gotLeaves, err := param.NewQuantityFromString(res.LeavesQuantity)
-	if err != nil {
-		t.Fatalf("parse base leaves quantity: %v", err)
-	}
-	wantLeaves, _ := param.NewQuantityFromString("5")
-	if gotLeaves.Compare(wantLeaves) != 0 {
-		t.Fatalf("base leaves quantity = %q, want 5", res.LeavesQuantity)
-	}
 }
 
-func TestSubmitOrder_UnpricedVolumeReturnsRecordedReject(t *testing.T) {
+func TestSubmitOrder_UnpricedVolumeDoesNotInventReject(t *testing.T) {
 	e := newUnpricedTestEngine(t)
 	order := testOrder()
 	order.AmountKind = domain.OrderAmountKindVolume
@@ -1768,46 +1745,29 @@ func TestSubmitOrder_UnpricedVolumeReturnsRecordedReject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitOrder: %v", err)
 	}
-	assertUnpricedVolumeReject(t, res.Accepted, res.Rejects)
+	if !res.Accepted || len(res.Rejects) != 0 {
+		t.Fatalf("SubmitOrder volume result = %+v, want accepted", res)
+	}
 }
 
-func TestSubmitImmediate_UnpricedVolumeReturnsRecordedReject(t *testing.T) {
+func TestSubmitImmediate_UnpricedVolumeIsInvalid(t *testing.T) {
 	e := newUnpricedTestEngine(t)
 	order := testOrder()
 	order.AmountKind = domain.OrderAmountKindVolume
 	order.AmountValue = "500"
 	order.Price = ""
 
-	res, err := e.SubmitImmediate(context.Background(), order)
-	if err != nil {
-		t.Fatalf("SubmitImmediate: %v", err)
-	}
-	assertUnpricedVolumeReject(t, res.Accepted, res.Rejects)
-}
-
-func assertUnpricedVolumeReject(
-	t *testing.T, accepted bool, rejects []domain.OrderReject,
-) {
-	t.Helper()
-	if accepted {
-		t.Fatal("unpriced volume order accepted")
-	}
-	if len(rejects) != 1 {
-		t.Fatalf("rejects = %+v, want one", rejects)
-	}
-	reject := rejects[0]
-	if reject.Code != "order_value_calculation_failed" ||
-		reject.Scope != "order" ||
-		reject.Reason != "volume order requires a settlement price" {
-		t.Fatalf("reject = %+v, want order sizing reject", reject)
+	_, err := e.SubmitImmediate(context.Background(), order)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("SubmitImmediate(volume) = %v, want ErrInvalid", err)
 	}
 }
 
-func TestImmediateFillQuantity_VolumeSizing(t *testing.T) {
+func TestImmediateFillQuantity_RequiresQuantity(t *testing.T) {
 	quantity, err := immediateFillQuantity(domain.Order{
 		AmountKind:  domain.OrderAmountKindQuantity,
 		AmountValue: "5.00",
-	}, "")
+	})
 	if err != nil {
 		t.Fatalf("immediateFillQuantity(quantity): %v", err)
 	}
@@ -1815,30 +1775,28 @@ func TestImmediateFillQuantity_VolumeSizing(t *testing.T) {
 		t.Fatalf("immediateFillQuantity(quantity) = %q, want 5.00", quantity)
 	}
 
-	// A volume order with no settlement price cannot be sized into a fill.
 	_, err = immediateFillQuantity(domain.Order{
 		AmountKind:  domain.OrderAmountKindVolume,
 		AmountValue: "500",
-	}, "")
+	})
 	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("immediateFillQuantity(volume, no price) = %v, want ErrInvalid", err)
+		t.Fatalf("immediateFillQuantity(volume) = %v, want ErrInvalid", err)
+	}
+}
+
+func TestImmediateTradePrice_UsesRequestOrMarketLock(t *testing.T) {
+	limit, err := immediateTradePrice(domain.Order{Price: "99"}, "101")
+	if err != nil || limit != "99" {
+		t.Fatalf("limit trade price = (%q, %v), want request price 99", limit, err)
 	}
 
-	// With a settlement price the volume sizes to base quantity (500/100 = 5).
-	qty, err := immediateFillQuantity(domain.Order{
-		AmountKind:  domain.OrderAmountKindVolume,
-		AmountValue: "500",
-	}, "100")
-	if err != nil {
-		t.Fatalf("immediateFillQuantity: %v", err)
+	market, err := immediateTradePrice(domain.Order{}, "101")
+	if err != nil || market != "101" {
+		t.Fatalf("market trade price = (%q, %v), want lock price 101", market, err)
 	}
-	got, err := param.NewQuantityFromString(qty)
-	if err != nil {
-		t.Fatalf("parse fill quantity %q: %v", qty, err)
-	}
-	want, _ := param.NewQuantityFromString("5")
-	if got.Compare(want) != 0 {
-		t.Fatalf("immediateFillQuantity = %q, want 5", qty)
+
+	if _, err := immediateTradePrice(domain.Order{}, ""); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("market trade price without lock = %v, want ErrInvalid", err)
 	}
 }
 

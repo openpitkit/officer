@@ -20,6 +20,7 @@ package native
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
@@ -31,10 +32,11 @@ import (
 )
 
 // SubmitImmediate runs the pre-trade pipeline and, on accept, settles a fill in
-// the same call so the held amount nets to zero: the fill is priced at the
-// captured settlement lock price and carries the pre-trade lock the engine
-// itself produced. Regular pre-trade commits its reservation first; drop-copy
-// arrives already applied.
+// the same call so the held amount nets to zero: the fill carries the request
+// limit price (or the lock price for a market order) and the pre-trade lock the
+// engine itself produced. Both branches finalize their engine-side state first - the
+// reservation commit and the drop-copy commit - because the report settles
+// against realized state.
 func (e *openPitEngine) SubmitImmediate(
 	ctx context.Context, o domain.Order,
 ) (ImmediateResult, error) {
@@ -52,6 +54,9 @@ func (l accountLane) SubmitImmediate(
 ) (ImmediateResult, error) {
 	if err := ctx.Err(); err != nil {
 		return ImmediateResult{}, fmt.Errorf("engine: submit immediate cancelled: %w", err)
+	}
+	if err := domain.ValidateImmediateOrderAmountKind(o.AmountKind); err != nil {
+		return ImmediateResult{}, err
 	}
 
 	accountID, err := l.routedAccountID(o.Account)
@@ -79,20 +84,17 @@ func (l accountLane) SubmitImmediate(
 		reservation.RollbackAndClose()
 		return ImmediateResult{}, fmt.Errorf("engine: read reservation lock: %w", err)
 	}
-	lockBytes, settlement, source, err := capturePreTradeOutput(lock, o)
+	lockBytes, settlement, err := capturePreTradeOutput(lock, o)
 	if err != nil {
 		reservation.RollbackAndClose()
 		return ImmediateResult{}, err
 	}
-	if reject, ok := volumeOrderSizingReject(o, settlement); ok {
+	tradePrice, err := immediateTradePrice(o, settlement)
+	if err != nil {
 		reservation.RollbackAndClose()
-		return ImmediateResult{
-			Accepted: false,
-			Rejects:  []domain.OrderReject{reject},
-		}, nil
+		return ImmediateResult{}, err
 	}
-
-	fillQuantity, err := immediateFillQuantity(o, settlement)
+	fillQuantity, err := immediateFillQuantity(o)
 	if err != nil {
 		reservation.RollbackAndClose()
 		return ImmediateResult{}, err
@@ -105,7 +107,7 @@ func (l accountLane) SubmitImmediate(
 		BaseAsset:      o.BaseAsset,
 		QuoteAsset:     o.QuoteAsset,
 		FillQuantity:   fillQuantity,
-		FillPrice:      settlement,
+		FillPrice:      tradePrice,
 		LeavesQuantity: "0",
 		LockPrice:      settlement,
 		Lock:           lockBytes,
@@ -149,17 +151,34 @@ func (l accountLane) SubmitImmediate(
 		lockBytes,
 		settlement,
 		fillQuantity,
-		source,
+		tradePrice,
 		"reservation committed",
 	)
 }
 
+type preparedImmediateDropCopy struct {
+	report       model.ExecutionReport
+	outcomes     []BalanceOutcome
+	blocks       []reject.AccountBlock
+	lockBytes    []byte
+	settlement   string
+	fillQuantity string
+	tradePrice   string
+}
+
+// submitImmediateDropCopy mirrors the regular branch on the drop-copy rollback
+// window: everything the settlement needs is derived while the applied
+// mutations can still be compensated. The commit stays ahead of
+// ApplyExecutionReport for the same reason the reservation commit does - a
+// report settled against unrealized state would not net the held amount to
+// zero - so a settlement failure past that point is still a reconciliation
+// error, now the only one left on this path.
 func (l accountLane) submitImmediateDropCopy(
 	o domain.Order,
 	order model.Order,
 	accountID param.AccountID,
 ) (ImmediateResult, error) {
-	result, rejects, err := l.eng.ApplyDropCopy(order)
+	operation, rejects, err := l.eng.ApplyDropCopy(order)
 	if err != nil {
 		return ImmediateResult{}, wrapPreTradeError(err)
 	}
@@ -169,91 +188,91 @@ func (l accountLane) submitImmediateDropCopy(
 			Rejects:  orderRejectsFrom(rejects),
 		}, nil
 	}
-	// Guard the FFI contract: Close dereferences the result, so a nil one must
-	// not reach the defer below.
-	if result == nil {
+	if operation == nil {
 		return ImmediateResult{}, fmt.Errorf(
-			"engine: drop-copy returned neither a result nor rejects",
+			"engine: drop-copy returned neither an operation nor rejects",
 		)
 	}
-	defer result.Close()
-
-	lock, err := result.Lock()
+	prepared, err := finalizeDropCopy(
+		operation,
+		func() (preparedImmediateDropCopy, error) {
+			lock, err := operation.Lock()
+			if err != nil {
+				return preparedImmediateDropCopy{}, fmt.Errorf(
+					"engine: read drop-copy lock: %w", err,
+				)
+			}
+			lockBytes, settlement, err := capturePreTradeOutput(lock, o)
+			if err != nil {
+				return preparedImmediateDropCopy{}, err
+			}
+			tradePrice, err := immediateTradePrice(o, settlement)
+			if err != nil {
+				return preparedImmediateDropCopy{}, err
+			}
+			fillQuantity, err := immediateFillQuantity(o)
+			if err != nil {
+				return preparedImmediateDropCopy{}, err
+			}
+			// Hand back the lock this operation produced, not a reconstruction
+			// from one display price.
+			report, err := executionReportFromAccount(domain.ExecutionReportInput{
+				BaseAsset:      o.BaseAsset,
+				QuoteAsset:     o.QuoteAsset,
+				FillQuantity:   fillQuantity,
+				FillPrice:      tradePrice,
+				LeavesQuantity: "0",
+				LockPrice:      settlement,
+				Lock:           lockBytes,
+				Account:        o.Account,
+				Side:           o.Side,
+				Order:          o.ExternalID,
+				OrderStatus:    domain.OrderStatusFilled,
+			}, accountID)
+			if err != nil {
+				return preparedImmediateDropCopy{}, err
+			}
+			adjustments, err := operation.AccountAdjustments()
+			if err != nil {
+				return preparedImmediateDropCopy{}, err
+			}
+			outcomes, err := balanceOutcomesFromList(adjustments)
+			if err != nil {
+				return preparedImmediateDropCopy{}, err
+			}
+			block, err := operation.AccountBlock()
+			if err != nil {
+				return preparedImmediateDropCopy{}, err
+			}
+			var blocks []reject.AccountBlock
+			if block != nil {
+				blocks = append(blocks, *block)
+			}
+			return preparedImmediateDropCopy{
+				report:       report,
+				outcomes:     outcomes,
+				blocks:       blocks,
+				lockBytes:    lockBytes,
+				settlement:   settlement,
+				fillQuantity: fillQuantity,
+				tradePrice:   tradePrice,
+			}, nil
+		},
+	)
 	if err != nil {
-		return ImmediateResult{}, dropCopyReconciliationError(
-			o, "read applied lock", err,
-		)
-	}
-	lockBytes, settlement, source, err := capturePreTradeOutput(lock, o)
-	if err != nil {
-		return ImmediateResult{}, dropCopyReconciliationError(o, "materialize lock", err)
-	}
-	if reject, ok := volumeOrderSizingReject(o, settlement); ok {
-		return ImmediateResult{}, dropCopyReconciliationError(
-			o,
-			"size volume order",
-			fmt.Errorf("%s: %s", reject.Reason, reject.Details),
-		)
-	}
-	fillQuantity, err := immediateFillQuantity(o, settlement)
-	if err != nil {
-		return ImmediateResult{}, dropCopyReconciliationError(
-			o, "derive immediate fill quantity", err,
-		)
-	}
-	// Same contract as the regular branch: hand back the lock this drop-copy
-	// result produced, not the single-entry one the LockPrice fallback rebuilds.
-	report, err := executionReportFromAccount(domain.ExecutionReportInput{
-		BaseAsset:      o.BaseAsset,
-		QuoteAsset:     o.QuoteAsset,
-		FillQuantity:   fillQuantity,
-		FillPrice:      settlement,
-		LeavesQuantity: "0",
-		LockPrice:      settlement,
-		Lock:           lockBytes,
-		Account:        o.Account,
-		Side:           o.Side,
-		Order:          o.ExternalID,
-		OrderStatus:    domain.OrderStatusFilled,
-	}, accountID)
-	if err != nil {
-		return ImmediateResult{}, dropCopyReconciliationError(
-			o, "build immediate execution report", err,
-		)
-	}
-	adjustments, err := result.AccountAdjustments()
-	if err != nil {
-		return ImmediateResult{}, dropCopyReconciliationError(
-			o, "read applied balance outcomes", err,
-		)
-	}
-	preTradeOutcomes, err := balanceOutcomesFromList(adjustments)
-	if err != nil {
-		return ImmediateResult{}, dropCopyReconciliationError(
-			o, "map balance outcomes", err,
-		)
-	}
-	block, err := result.AccountBlock()
-	if err != nil {
-		return ImmediateResult{}, dropCopyReconciliationError(
-			o, "read applied account block", err,
-		)
-	}
-	var blocks []reject.AccountBlock
-	if block != nil {
-		blocks = append(blocks, *block)
+		return ImmediateResult{}, err
 	}
 	return l.settleImmediateApplied(
 		o,
 		accountID,
-		report,
-		preTradeOutcomes,
-		blocks,
-		lockBytes,
-		settlement,
-		fillQuantity,
-		source,
-		"drop-copy applied",
+		prepared.report,
+		prepared.outcomes,
+		prepared.blocks,
+		prepared.lockBytes,
+		prepared.settlement,
+		prepared.fillQuantity,
+		prepared.tradePrice,
+		"drop-copy committed",
 	)
 }
 
@@ -266,7 +285,7 @@ func (l accountLane) settleImmediateApplied(
 	lockBytes []byte,
 	settlement string,
 	fillQuantity string,
-	source string,
+	tradePrice string,
 	state string,
 ) (ImmediateResult, error) {
 	postTrade, err := l.eng.ApplyExecutionReport(report)
@@ -312,7 +331,7 @@ func (l accountLane) settleImmediateApplied(
 		AccountPnlHaltReason: accountPnlHaltReason,
 		SettlementLockPrice:  settlement,
 		FillQuantity:         fillQuantity,
-		EstimateSource:       source,
+		TradePrice:           tradePrice,
 	}, nil
 }
 
@@ -330,24 +349,17 @@ func immediateReconciliationError(
 	)
 }
 
-// volumeOrderSizingReject converts a policy pass without a usable volume
-// conversion price into a normal order reject for regular pre-trade. Pricing
-// is known only after the policy pipeline returns its lock, so rejecting here
-// avoids a duplicate dry run while the reservation can still be rolled back.
-// Drop-copy callers convert the same condition into a reconciliation error
-// because its one-shot state has already been applied.
-func volumeOrderSizingReject(
-	o domain.Order, settlementPrice string,
-) (domain.OrderReject, bool) {
-	if o.AmountKind != domain.OrderAmountKindVolume || settlementPrice != "" {
-		return domain.OrderReject{}, false
+func immediateTradePrice(o domain.Order, settlementLockPrice string) (string, error) {
+	if o.Price != "" {
+		return o.Price, nil
 	}
-	return domain.OrderReject{
-		Code:    rejectCodeName(reject.CodeOrderValueCalculationFailed),
-		Scope:   "order",
-		Reason:  "volume order requires a settlement price",
-		Details: "no configured policy produced a settlement price",
-	}, true
+	if settlementLockPrice == "" {
+		return "", fmt.Errorf(
+			"engine: market immediate order has no lock price: %w",
+			domain.ErrInvalid,
+		)
+	}
+	return settlementLockPrice, nil
 }
 
 func orderExternalIDForError(id domain.ExternalID) string {
@@ -357,36 +369,40 @@ func orderExternalIDForError(id domain.ExternalID) string {
 	return id.String()
 }
 
-// capturePreTradeOutput serializes a pre-trade output's lock and derives its
-// settlement estimate for either a live reservation or an already-applied
-// drop-copy result.
+// capturePreTradeOutput reads a live lock once and serializes it for storage.
+// Stored-lock consumers decode through LockSettlementPrice later.
 func capturePreTradeOutput(
 	lock pretrade.Lock, o domain.Order,
-) ([]byte, string, string, error) {
-	lockBytes, err := serializePreTradeLock(lock)
-	if err != nil {
-		return nil, "", "", err
-	}
+) ([]byte, string, error) {
 	prices, err := lock.Prices()
 	if err != nil {
-		return nil, "", "", fmt.Errorf("engine: read pre-trade lock: %w", err)
+		return nil, "", fmt.Errorf("engine: read lock prices: %w", err)
 	}
-	settlement, source := settlementEstimate(pricesToStrings(prices), o)
-	return lockBytes, settlement, source, nil
+	lockBytes, err := serializePreTradeLock(lock)
+	if err != nil {
+		return nil, "", err
+	}
+	settlement := settlementPrice(
+		pricesToStrings(prices),
+		orderExternalIDForError(o.ExternalID),
+	)
+	return lockBytes, settlement, nil
 }
 
-// settlementEstimate derives the settlement-leg lock price and the estimate
-// source for an order. The settlement leg is the last lock price (default-group
-// records come first, the spot-funds settlement leg last); the source is "limit"
-// when the order carried a limit price, else "market_mark".
-func settlementEstimate(lockPrices []string, o domain.Order) (string, string) {
-	settlement := ""
+// settlementPrice returns the lock's single settlement price.
+// The current Spot Funds engine contract emits exactly one lock price. Any other
+// cardinality is an engine/adapter bug, but a non-empty result still degrades to
+// the documented settlement leg at the end of the list.
+func settlementPrice(lockPrices []string, orderIdentifier string) string {
+	if len(lockPrices) > 1 {
+		slog.Warn(
+			"pre-trade lock carries unexpected price count",
+			"count", len(lockPrices),
+			"order", orderIdentifier,
+		)
+	}
 	if len(lockPrices) > 0 {
-		settlement = lockPrices[len(lockPrices)-1]
+		return lockPrices[len(lockPrices)-1]
 	}
-	source := domain.EstimateSourceMarketMark
-	if o.Price != "" {
-		source = domain.EstimateSourceLimit
-	}
-	return settlement, source
+	return ""
 }

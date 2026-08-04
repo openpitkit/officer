@@ -65,8 +65,6 @@ func TestRouteRegistrySurfaceBaseline(t *testing.T) {
 		"POST /backup/export",
 		"POST /backup/restore",
 		"POST /business-csv/export",
-		"POST /business-csv/import/preview",
-		"POST /business-csv/import",
 		"POST /database/reset",
 		"GET /assets",
 		"POST /assets",
@@ -289,5 +287,23 @@ func TestNewRouter_MissingSPA(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("want error for nil SPA")
+	}
+}
+
+func TestRequestBodyLimitUsesBackupRestoreCap(t *testing.T) {
+	t.Parallel()
+
+	for _, path := range []string{
+		"/api/v1/backup/restore",
+		"/app/api/v1/backup/restore",
+	} {
+		req := httptest.NewRequest(http.MethodPost, path, nil)
+		if got := BodyLimitPolicy()(req); got != maxBackupRestoreBody {
+			t.Fatalf("request body limit for %s = %d, want %d", path, got, maxBackupRestoreBody)
+		}
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit", nil)
+	if got := BodyLimitPolicy()(req); got != maxRequestBody {
+		t.Fatalf("default request body limit = %d, want %d", got, maxRequestBody)
 	}
 }

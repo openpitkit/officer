@@ -46,11 +46,6 @@ const maxRequestBody = 1 << 20
 // archive. Keeping this separate avoids widening every v1 endpoint's body cap.
 const maxBackupRestoreBody = 64 << 20
 
-// maxImportBody admits a base64-encoded MaxImportBytes payload plus a small
-// JSON envelope so the handler can return the domain 413 instead of the
-// transport cap's generic decode failure.
-const maxImportBody = 192 << 20
-
 // listDefaultLimit is the default page size for the orders, trades, and
 // adjustments list endpoints; listCapREST bounds an explicit ?limit=.
 const (
@@ -84,8 +79,6 @@ func RegisterRoutes(registry *httpx.RouteRegistry, svc Service, logs httpx.LogSo
 	register(registry, "backup.export.post", http.MethodPost, "/backup/export", handleExportBackup(svc))
 	register(registry, "backup.restore.post", http.MethodPost, "/backup/restore", handleRestoreBackup(svc))
 	register(registry, "business-csv.export.post", http.MethodPost, "/business-csv/export", handleExportBusinessCSV(svc))
-	register(registry, "business-csv.import-preview.post", http.MethodPost, "/business-csv/import/preview", handlePreviewBusinessCSVImport(svc))
-	register(registry, "business-csv.import.post", http.MethodPost, "/business-csv/import", handleImportBusinessCSV(svc))
 	register(registry, "database.reset.post", http.MethodPost, "/database/reset", handleResetDatabase(svc))
 
 	register(registry, "assets.list.get", http.MethodGet, "/assets", handleListAssets(svc))
@@ -183,12 +176,8 @@ func NewRouteRegistry(svc Service, logs httpx.LogSource) *httpx.RouteRegistry {
 // BodyLimitPolicy returns the open app's per-path request body cap policy.
 func BodyLimitPolicy() func(*http.Request) int64 {
 	return httpx.BodyLimitPolicy(maxRequestBody, map[string]int64{
-		"/api/v1/backup/restore":                  maxBackupRestoreBody,
-		"/app/api/v1/backup/restore":              maxBackupRestoreBody,
-		"/api/v1/business-csv/import":             maxImportBody,
-		"/app/api/v1/business-csv/import":         maxImportBody,
-		"/api/v1/business-csv/import/preview":     maxImportBody,
-		"/app/api/v1/business-csv/import/preview": maxImportBody,
+		"/api/v1/backup/restore":     maxBackupRestoreBody,
+		"/app/api/v1/backup/restore": maxBackupRestoreBody,
 	})
 }
 

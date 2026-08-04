@@ -572,9 +572,11 @@ func (a sourceAdapter) ConfirmExecution(
 }
 
 func (a sourceAdapter) CancelOrder(
-	ctx context.Context, orderExternalID, token, reason string,
+	ctx context.Context, orderExternalID, token, leavesQuantity, reason string,
 ) (domain.Order, frameworkmcp.Attestation, error) {
-	order, att, err := a.service.CancelOrder(ctx, orderExternalID, token, reason)
+	order, att, err := a.service.CancelOrder(
+		ctx, orderExternalID, token, leavesQuantity, reason,
+	)
 	if err != nil {
 		return domain.Order{}, frameworkmcp.Attestation{}, err
 	}

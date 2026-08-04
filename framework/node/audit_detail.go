@@ -125,27 +125,6 @@ func adjustmentDetail(id domain.AccountID, asset string, accepted bool) string {
 	return fmt.Sprintf("adjustment account %s asset=%s %s", id, asset, disposition)
 }
 
-// importPositionSnapshotDetail renders the internal snapshot-import adjustment
-// with all persisted position values that do not fit in the public adjustment
-// request.
-func importPositionSnapshotDetail(snapshot domain.Balance, accepted bool) string {
-	disposition := "rejected"
-	if accepted {
-		disposition = "accepted"
-	}
-	return fmt.Sprintf(
-		"import position snapshot account %s asset=%s available=%s held=%s incoming=%s realized_pnl=%s average_entry_price=%s %s",
-		snapshot.Account,
-		snapshot.Asset,
-		snapshot.Available,
-		snapshot.Held,
-		snapshot.Incoming,
-		snapshot.RealizedPnl,
-		snapshot.AverageEntryPrice,
-		disposition,
-	)
-}
-
 // setMcpAccessDetail renders one MCP command access toggle.
 func setMcpAccessDetail(command string, enabled bool) string {
 	state := "disable"
@@ -232,23 +211,6 @@ func engineBlockDetail(order domain.ExternalID, block domain.ExecutionAccountBlo
 	return detail
 }
 
-// engineBlockReason composes the block_reason persisted on the account for an
-// engine-initiated (kill-switch) block: the engine's human reason plus the
-// cause (stable reject code and triggering order). Persisting the cause on the
-// account itself - not only in the audit log - lets the Accounts surface show
-// what blocked the account and why.
-func engineBlockReason(order domain.ExternalID, block domain.ExecutionAccountBlock) string {
-	reason := block.Reason
-	if reason == "" {
-		reason = block.Code
-	}
-	cause := fmt.Sprintf("code=%s, order %s", block.Code, order)
-	if block.Details != "" {
-		cause += ", " + block.Details
-	}
-	return fmt.Sprintf("%s [%s]", reason, cause)
-}
-
 // policyConfigurationBlockDetail identifies an engine block that arose while
 // applying a live policy update, before any subsequent account work can run.
 func policyConfigurationBlockDetail(policy string, block domain.AccountBlock) string {
@@ -262,24 +224,6 @@ func policyConfigurationBlockDetail(policy string, block domain.AccountBlock) st
 		detail += " (" + block.Details + ")"
 	}
 	return detail
-}
-
-// policyConfigurationBlockReason renders the engine cause stored with an
-// account that was blocked while a policy update was applied.
-func policyConfigurationBlockReason(policy string, block domain.AccountBlock) string {
-	blockPolicy := block.Policy
-	if blockPolicy == "" {
-		blockPolicy = policy
-	}
-	reason := block.Reason
-	if reason == "" {
-		reason = block.Code
-	}
-	cause := fmt.Sprintf("policy=%s, code=%s", blockPolicy, block.Code)
-	if block.Details != "" {
-		cause += ", " + block.Details
-	}
-	return fmt.Sprintf("%s [%s]", reason, cause)
 }
 
 // axesDetail renders the policy/scope axes of a typed barrier.

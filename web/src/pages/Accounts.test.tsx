@@ -27,7 +27,6 @@ import type {
   Asset,
   BusinessCsvEntity,
   BusinessCsvExportFilters,
-  BusinessCsvImportEntity,
   Group,
 } from "@/api/types";
 import type { PollingResult } from "@/api/usePolling";
@@ -61,35 +60,14 @@ vi.mock("@/components/TableControls", async () => {
     ...actual,
     CsvTransferMenu: ({
       exports,
-      imports,
-      onImported,
     }: {
       exports?: {
         entity: BusinessCsvEntity;
         filters?: BusinessCsvExportFilters;
         label: string;
       }[];
-      imports?: {
-        defaultEntity?: BusinessCsvImportEntity;
-        entities: BusinessCsvImportEntity[];
-        label: string;
-      }[];
-      onImported?: () => void;
     }) => (
       <>
-        {imports?.map((item) => (
-          <dialogs.BusinessCsvImportDialog
-            key={`import-${item.label}`}
-            defaultEntity={item.defaultEntity}
-            entities={item.entities}
-            onImported={onImported ?? (() => {})}
-            trigger={(open) => (
-              <button type="button" onClick={open}>
-                {item.label}
-              </button>
-            )}
-          />
-        ))}
         {exports?.map((item) => (
           <dialogs.BusinessCsvExportDialog
             key={`export-${item.entity}-${item.label}`}
@@ -109,8 +87,6 @@ vi.mock("@/components/TableControls", async () => {
 
 const createAccountMock = vi.fn();
 const exportBusinessCsvMock = vi.fn();
-const importBusinessCsvMock = vi.fn();
-const previewBusinessCsvImportMock = vi.fn();
 const setAccountGroupMock = vi.fn();
 const setAccountCurrencyMock = vi.fn();
 const createGroupMock = vi.fn();
@@ -251,8 +227,6 @@ function renderAccounts(initialEntry = "/accounts") {
       api: {
         createAccount: createAccountMock,
         exportBusinessCsv: exportBusinessCsvMock,
-        importBusinessCsv: importBusinessCsvMock,
-        previewBusinessCsvImport: previewBusinessCsvImportMock,
         setAccountGroup: setAccountGroupMock,
         setAccountCurrency: setAccountCurrencyMock,
         createGroup: createGroupMock,
@@ -313,28 +287,6 @@ beforeEach(async () => {
     currency: "EUR",
     accountCount: 1,
     positionCount: 0,
-  });
-  previewBusinessCsvImportMock.mockResolvedValue({
-    file: { name: "accounts.csv", type: "csv" },
-    counts: {
-      rows: 2,
-      applied: 0,
-      skipped: 0,
-      conflicts: 0,
-      stopped: false,
-    },
-    conflicts: [],
-  });
-  importBusinessCsvMock.mockResolvedValue({
-    file: { name: "accounts.csv", type: "csv" },
-    counts: {
-      rows: 2,
-      applied: 2,
-      skipped: 0,
-      conflicts: 0,
-      stopped: false,
-    },
-    conflicts: [],
   });
   fetchAuditMock.mockResolvedValue([]);
   fetchAssetsMock.mockResolvedValue([]);
@@ -537,82 +489,6 @@ describe("Accounts business CSV", () => {
       expect.objectContaining({
         entity: "accounts",
         filters: { groupCode: "" },
-      }),
-    );
-  });
-
-  it("previews pasted import data and applies the no-conflict result", async () => {
-    const user = userEvent.setup();
-    renderAccounts();
-
-    await user.click(screen.getByRole("button", { name: /import csv/i }));
-    expect(screen.getByText("Entity")).toBeInTheDocument();
-    expect(screen.getByText("Delimiter")).toBeInTheDocument();
-    const input = document.querySelector<HTMLInputElement>('input[type="file"]');
-    expect(input?.getAttribute("accept")).toContain(".zip");
-
-    await user.type(
-      screen.getByPlaceholderText(/paste csv rows here/i),
-      "account_id,group_id,notes\nacc-new,,New account\n",
-    );
-    await user.click(screen.getByRole("button", { name: /preview upload/i }));
-    await waitFor(() =>
-      expect(previewBusinessCsvImportMock).toHaveBeenCalledTimes(1),
-    );
-    expect(previewBusinessCsvImportMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entity: "accounts",
-        delimiter: "comma",
-        filename: "pasted.csv",
-      }),
-    );
-    await user.click(screen.getByRole("button", { name: /apply import/i }));
-    await waitFor(() => expect(importBusinessCsvMock).toHaveBeenCalledTimes(1));
-    expect(importBusinessCsvMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        conflictPolicy: "skip",
-      }),
-    );
-  });
-
-  it("shows skip, replace, and stop choices when preview reports conflicts", async () => {
-    const user = userEvent.setup();
-    previewBusinessCsvImportMock.mockResolvedValueOnce({
-      file: { name: "accounts.csv", type: "csv" },
-      counts: {
-        rows: 2,
-        applied: 0,
-        skipped: 0,
-        conflicts: 1,
-        stopped: false,
-      },
-      conflicts: [{ row: 2, key: "desk-alpha" }],
-    });
-    renderAccounts();
-
-    await user.click(screen.getByRole("button", { name: /import csv/i }));
-    await user.type(
-      screen.getByPlaceholderText(/paste csv rows here/i),
-      "account_id,group_id\nacc-new,\n",
-    );
-    await user.click(screen.getByRole("button", { name: /preview upload/i }));
-
-    expect(await screen.findByText("Conflicts found")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /skip conflicts/i }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /replace conflicts/i }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /stop at first conflict/i }),
-    ).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: /skip conflicts/i }));
-    await waitFor(() => expect(importBusinessCsvMock).toHaveBeenCalledTimes(1));
-    expect(importBusinessCsvMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        conflictPolicy: "skip",
       }),
     );
   });

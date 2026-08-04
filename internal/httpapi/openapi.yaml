@@ -49,7 +49,7 @@ tags:
   - name: backup
     description: Portable database backup and restore
   - name: business-csv
-    description: Business-entity CSV import and export
+    description: Business-entity CSV export
   - name: dashboard
     description: Overview and service information
 
@@ -216,74 +216,6 @@ paths:
                 format: binary
         "400":
           $ref: "#/components/responses/ValidationError"
-        "500":
-          $ref: "#/components/responses/InternalError"
-
-  /business-csv/import/preview:
-    post:
-      operationId: previewBusinessCSVImport
-      summary: Decode business CSV and report import conflicts
-      tags: [business-csv]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/BusinessCSVImportPreviewRequest"
-      responses:
-        "200":
-          description: Parsed file metadata and conflict summary.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [preview]
-                properties:
-                  preview:
-                    $ref: "#/components/schemas/BusinessCSVImportPreview"
-        "400":
-          $ref: "#/components/responses/ValidationError"
-        "413":
-          $ref: "#/components/responses/TooLargeError"
-        "500":
-          $ref: "#/components/responses/InternalError"
-
-  /business-csv/import:
-    post:
-      operationId: importBusinessCSV
-      summary: Import business entities from CSV or ZIP
-      description: >
-        Applies validated business CSV rows atomically. Any row error rolls
-        back the entire import, so no entity rows or per-row audit rows are
-        persisted. The stop conflict policy deliberately commits rows applied
-        before the first conflict and returns 200 with counts.stopped=true and
-        the conflict list; it is not reported as HTTP 409. A 409 response is
-        only reachable through a concurrent-create race while the import is
-        applying.
-      tags: [business-csv]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/BusinessCSVImportRequest"
-      responses:
-        "200":
-          description: Import applied.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [result]
-                properties:
-                  result:
-                    $ref: "#/components/schemas/BusinessCSVImportResult"
-        "400":
-          $ref: "#/components/responses/ValidationError"
-        "409":
-          $ref: "#/components/responses/ConflictError"
-        "413":
-          $ref: "#/components/responses/TooLargeError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -2093,9 +2025,12 @@ paths:
                 non-terminal workflow status (`submitted`, `accepted`,
                 `committed`) must not carry fill or lock fields. Reports carrying
                 a fill or commission, and reports targeting a terminal status,
-                require `leavesQuantity`. A non-terminal report without a fill
-                or commission may still carry the optional workflow
-                `leavesQuantity`.
+                are routed through the engine and must carry `leavesQuantity`:
+                the engine's post-trade path has no reject channel, so it cannot
+                refuse an incomplete report. The value is caller-supplied and
+                forwarded to the engine unchanged - Officer never infers it - and
+                remains optional only for a workflow status update that carries
+                no fill and no commission.
               dependentRequired:
                 quantity: [price, leavesQuantity]
                 price: [quantity, leavesQuantity]
@@ -2155,13 +2090,11 @@ paths:
                 leavesQuantity:
                   type: string
                   description: >
-                    Exact non-negative base-quantity decimal string. For a fill,
-                    the remaining open quantity after that fill. For a terminal
-                    report, the remaining quantity the engine must release;
-                    Officer records zero leaves after settlement. Required for
-                    fills and terminal statuses; optional for non-terminal
-                    reports without a fill or commission. Required whenever
-                    `commission` is present.
+                    Caller-supplied remaining base quantity forwarded unchanged
+                    to the engine; Officer never infers it. Required for every
+                    engine-settled report - a fill, a commission, or a terminal
+                    status - because the engine cannot reject an incomplete
+                    report. The engine still validates the value itself.
                 lockPrice:
                   type: string
                   description: >
@@ -3162,10 +3095,12 @@ paths:
       operationId: cancelOrder
       summary: Cancel an untouched order with its approval token
       description: >
-        Verifies the approval token and applies a terminal cancellation report
-        whose release fields Officer derives from an order with no prior
-        execution-report activity. If activity already exists, the caller must
-        submit an explicit execution report instead.
+        Verifies the approval token and forwards a terminal cancellation report
+        for an order with no prior execution-report activity. The report is
+        settled by the engine, so `leavesQuantity` is required; Officer still
+        never derives it from stored order state, the caller must supply it. If
+        activity already exists, the caller must submit an explicit execution
+        report instead.
       tags: [signing]
       requestBody:
         required: true
@@ -3174,11 +3109,17 @@ paths:
             schema:
               type: object
               additionalProperties: false
-              required: [token]
+              required: [token, leavesQuantity]
               properties:
                 token:
                   type: string
                   description: Approval token issued by submit.
+                leavesQuantity:
+                  type: string
+                  description: >
+                    Leaves quantity forwarded unchanged to the engine. Required:
+                    the cancellation is settled by the engine, which cannot
+                    reject an incomplete report. Officer never infers it.
                 reason:
                   type: string
                   description: Optional human-readable cancellation reason.
@@ -3989,13 +3930,6 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
 
-    TooLargeError:
-      description: Import payload exceeds the server-side size limit.
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/Error"
-
   # ---------------------------------------------------------------------------
   # Schemas
   # ---------------------------------------------------------------------------
@@ -4089,17 +4023,9 @@ components:
       type: string
       enum: [account_groups, accounts, positions, orders, trades]
 
-    BusinessCSVImportEntity:
-      type: string
-      enum: [account_groups, accounts, positions]
-
     BusinessCSVDelimiter:
       type: string
       enum: [comma, semicolon, tab, pipe]
-
-    BusinessCSVConflictPolicy:
-      type: string
-      enum: [skip, replace, stop]
 
     BusinessCSVExportFilters:
       type: object
@@ -4136,91 +4062,6 @@ components:
           description: Return a ZIP with one CSV entry, using best compression.
         filters:
           $ref: "#/components/schemas/BusinessCSVExportFilters"
-
-    BusinessCSVImportPayload:
-      type: object
-      required: [entity, delimiter, filename, payloadBase64]
-      properties:
-        entity:
-          $ref: "#/components/schemas/BusinessCSVImportEntity"
-        delimiter:
-          $ref: "#/components/schemas/BusinessCSVDelimiter"
-        filename:
-          type: string
-          description: Original uploaded filename; `.zip` triggers ZIP decoding.
-        payloadBase64:
-          type: string
-          format: byte
-          description: Base64-encoded CSV or ZIP payload.
-
-    BusinessCSVImportPreviewRequest:
-      allOf:
-        - $ref: "#/components/schemas/BusinessCSVImportPayload"
-      unevaluatedProperties: false
-
-    BusinessCSVImportRequest:
-      allOf:
-        - $ref: "#/components/schemas/BusinessCSVImportPayload"
-        - type: object
-          required: [conflictPolicy]
-          properties:
-            conflictPolicy:
-              $ref: "#/components/schemas/BusinessCSVConflictPolicy"
-      unevaluatedProperties: false
-
-    BusinessCSVImportFile:
-      type: object
-      required: [name, type]
-      properties:
-        name:
-          type: string
-          description: Plain filename or selected ZIP entry name.
-        type:
-          type: string
-          enum: [csv, zip]
-
-    BusinessCSVConflict:
-      type: object
-      required: [row, key]
-      properties:
-        row:
-          type: integer
-          description: One-based CSV row number including the header row.
-        key:
-          type: string
-          description: Conflicting business key.
-
-    BusinessCSVImportCounts:
-      type: object
-      required: [rows, applied, skipped, conflicts, stopped]
-      properties:
-        rows:
-          type: integer
-        applied:
-          type: integer
-        skipped:
-          type: integer
-        conflicts:
-          type: integer
-        stopped:
-          type: boolean
-
-    BusinessCSVImportPreview:
-      type: object
-      required: [file, counts, conflicts]
-      properties:
-        file:
-          $ref: "#/components/schemas/BusinessCSVImportFile"
-        counts:
-          $ref: "#/components/schemas/BusinessCSVImportCounts"
-        conflicts:
-          type: array
-          items:
-            $ref: "#/components/schemas/BusinessCSVConflict"
-
-    BusinessCSVImportResult:
-      allOf:
-        - $ref: "#/components/schemas/BusinessCSVImportPreview"
 
     # Backup / restore
 
@@ -4576,7 +4417,11 @@ components:
           description: Mutable display name.
         pnl:
           type: string
-          description: Latest SpotFunds account P&L in the effective account currency.
+          description: >
+            Latest SpotFunds account P&L in the effective account currency.
+            Empty means the account has no P&L value - the accumulator is
+            halted, or the engine has not reported on the account yet - and is
+            never the same as a reported zero.
         pnlHaltReason:
           type: string
           enum: ["", missing_fx, missing_account_currency, missing_initial_pnl, missing_cost_basis, arithmetic_overflow]
@@ -4952,7 +4797,7 @@ components:
 
     Order:
       type: object
-      required: [id, at, account, baseAsset, quoteAsset, side, amountKind, amountValue, commissionSubtotals, leavesQuantity, price, status, source, displayPrices, dropCopy, signed]
+      required: [id, at, account, baseAsset, quoteAsset, side, amountKind, amountValue, commissionSubtotals, leavesQuantity, price, status, source, displayPrice, dropCopy, signed]
       properties:
         id:
           description: The order's opaque public handle.
@@ -4987,11 +4832,9 @@ components:
         leavesQuantity:
           type: string
           description: >
-            Remaining open base quantity as an exact decimal string. Before any
-            fill, quantity-sized orders use `amountValue`. Volume-sized orders
-            use the canonical base quantity derived from the effective price.
-            Partial fills expose the remaining base quantity, and filled or
-            terminal orders expose `0`.
+            Exact decimal string carried by the last accepted execution report,
+            or an empty string before any such report supplies one. Officer
+            stores it unchanged and never substitutes a value.
         price:
           type: string
           description: Exact decimal string.
@@ -5002,14 +4845,13 @@ components:
           description: >
             Originating surface: `panel`, `api`, `mcp`, or `system`.
           enum: [panel, api, mcp, system]
-        displayPrices:
-          type: array
-          items:
-            type: string
+        displayPrice:
+          type: string
           description: >
-            Human-readable pre-trade lock prices derived from the opaque lock
-            (settlement leg last) - exact decimal strings. The raw lock blob is
-            never exposed.
+            Human-readable pre-trade lock price derived by restoring the opaque
+            SDK lock. The current Spot Funds lock contract contains exactly one
+            price; an unexpected count is logged as an engine/adapter bug. The
+            raw lock blob is never exposed.
         dropCopy:
           type: boolean
           description: Whether the order was submitted through the drop-copy operation.
@@ -5116,17 +4958,15 @@ components:
         leavesQuantity:
           type: string
           description: >
-            Exact leaves quantity received in the execution report. For a
-            terminal report this remains the quantity passed to the engine for
-            release and is not replaced by the resulting zero open leaves.
+            Exact decimal string carried by the accepted execution report.
+            Officer stores it unchanged and never substitutes a value.
         orderStatus:
           type: string
           description: Target status received in the execution report.
         executionReport:
           description: >
-            Audit-safe execution-report input captured before Officer enriches
-            order-derived fields or normalizes terminal leaves. The opaque
-            pre-trade lock is never exposed.
+            Audit-safe client-visible execution-report input as received by
+            Officer. The opaque pre-trade lock is never exposed.
           $ref: "#/components/schemas/ExecutionReportRequest"
         commission:
           $ref: "#/components/schemas/Commission"
@@ -5230,7 +5070,7 @@ components:
 
     CheckResult:
       type: object
-      required: [passed, rejects, wouldDisplayPrices, wouldBlock]
+      required: [passed, rejects, wouldDisplayPrice, wouldBlock]
       properties:
         passed:
           type: boolean
@@ -5240,13 +5080,11 @@ components:
           items:
             $ref: "#/components/schemas/OrderReject"
           description: Engine pre-trade rejects; empty when the check passed.
-        wouldDisplayPrices:
-          type: array
-          items:
-            type: string
+        wouldDisplayPrice:
+          type: string
           description: >
-            Human-readable pre-trade lock prices the order would lock - exact
-            decimal strings, never the opaque lock blob.
+            Human-readable pre-trade settlement price the order would lock -
+            an exact decimal string, never the opaque lock blob.
         wouldBlock:
           nullable: true
           allOf:

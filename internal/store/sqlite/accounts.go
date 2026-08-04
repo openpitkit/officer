@@ -1075,12 +1075,18 @@ func (r *realmStore) CreateAccount(
 	if err != nil {
 		return domain.Account{}, err
 	}
-	pnl := account.Pnl
-	if pnl == "" {
-		pnl = "0"
+	if account.Pnl != "" {
+		if _, err := domain.AddDecimals("", account.Pnl); err != nil {
+			return domain.Account{}, fmt.Errorf(
+				"account %q pnl %q: %w", account.Code, account.Pnl, err,
+			)
+		}
 	}
-	if _, err := domain.AddDecimals("", pnl); err != nil {
-		return domain.Account{}, fmt.Errorf("account %q pnl %q: %w", account.Code, pnl, err)
+	// NULL is the absence of a P&L value, whether the accumulator is halted or
+	// the engine has not reported on the account yet. Never substitute a number.
+	var storedPnl any
+	if account.Pnl != "" && account.PnlHaltReason == "" {
+		storedPnl = account.Pnl
 	}
 	_, err = tx.ExecContext(
 		ctx,
@@ -1088,7 +1094,7 @@ func (r *realmStore) CreateAccount(
 		 (code, title, group_id, currency_asset_id, pnl, pnl_halt_reason, notes, blocked, block_reason)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		account.Code.String(), account.Title,
-		groupID, currencyID, pnl, account.PnlHaltReason, account.Notes, account.Blocked, account.BlockReason,
+		groupID, currencyID, storedPnl, account.PnlHaltReason, account.Notes, account.Blocked, account.BlockReason,
 	)
 	if err != nil {
 		if isSQLiteUnique(err) {
@@ -1280,10 +1286,16 @@ func (r *realmStore) SetAccountPnl(
 	if err := domain.ValidatePnlHaltReason(haltReason); err != nil {
 		return fmt.Errorf("store: account pnl halt %q: %w", code, err)
 	}
+	// NULL is the absence of a P&L value: a halted accumulator, or no value
+	// reported at all. Never substitute a number.
+	var storedPnl any
+	if pnl != "" && haltReason == "" {
+		storedPnl = pnl
+	}
 	res, err := db.ExecContext(
 		ctx,
 		`UPDATE account SET pnl = ?, pnl_halt_reason = ? WHERE code = ?`,
-		pnl, haltReason, code.String(),
+		storedPnl, haltReason, code.String(),
 	)
 	if err != nil {
 		return fmt.Errorf("store: set account pnl: %w", err)
@@ -1419,6 +1431,7 @@ func scanAccountListRow(rows *sql.Rows) (fwstore.AccountListRow, error) {
 	var (
 		account         domain.Account
 		engineID        int64
+		pnl             sql.NullString
 		currency        sql.NullString
 		groupCode       sql.NullString
 		groupCurrency   sql.NullString
@@ -1426,7 +1439,7 @@ func scanAccountListRow(rows *sql.Rows) (fwstore.AccountListRow, error) {
 		positionCount   int
 	)
 	if err := rows.Scan(
-		&engineID, &account.Code, &account.Title, &account.Pnl, &account.PnlHaltReason, &currency,
+		&engineID, &account.Code, &account.Title, &pnl, &account.PnlHaltReason, &currency,
 		&groupCode, &groupCurrency, &defaultCurrency,
 		&account.Notes, &account.Blocked, &account.BlockReason,
 		&positionCount,
@@ -1434,6 +1447,7 @@ func scanAccountListRow(rows *sql.Rows) (fwstore.AccountListRow, error) {
 		return fwstore.AccountListRow{}, fmt.Errorf("store: scan account row: %w", err)
 	}
 	account.EngineAccountID = domain.EngineAccountID(engineID)
+	account.Pnl = pnl.String
 	account.GroupCode = groupCode.String
 	setAccountCurrencyFields(&account, currency, groupCurrency, defaultCurrency)
 	return fwstore.AccountListRow{Account: account, PositionCount: positionCount}, nil
@@ -1443,19 +1457,21 @@ func scanAccount(rows *sql.Rows) (domain.Account, error) {
 	var (
 		account         domain.Account
 		engineID        int64
+		pnl             sql.NullString
 		currency        sql.NullString
 		groupCode       sql.NullString
 		groupCurrency   sql.NullString
 		defaultCurrency sql.NullString
 	)
 	if err := rows.Scan(
-		&engineID, &account.Code, &account.Title, &account.Pnl, &account.PnlHaltReason, &currency,
+		&engineID, &account.Code, &account.Title, &pnl, &account.PnlHaltReason, &currency,
 		&groupCode, &groupCurrency, &defaultCurrency,
 		&account.Notes, &account.Blocked, &account.BlockReason,
 	); err != nil {
 		return domain.Account{}, fmt.Errorf("store: scan account: %w", err)
 	}
 	account.EngineAccountID = domain.EngineAccountID(engineID)
+	account.Pnl = pnl.String
 	account.GroupCode = groupCode.String
 	setAccountCurrencyFields(&account, currency, groupCurrency, defaultCurrency)
 	return account, nil
@@ -1701,19 +1717,21 @@ func scanAccountRow(row *sql.Row) (domain.Account, error) {
 	var (
 		account         domain.Account
 		engineID        int64
+		pnl             sql.NullString
 		currency        sql.NullString
 		groupCode       sql.NullString
 		groupCurrency   sql.NullString
 		defaultCurrency sql.NullString
 	)
 	if err := row.Scan(
-		&engineID, &account.Code, &account.Title, &account.Pnl, &account.PnlHaltReason, &currency,
+		&engineID, &account.Code, &account.Title, &pnl, &account.PnlHaltReason, &currency,
 		&groupCode, &groupCurrency, &defaultCurrency,
 		&account.Notes, &account.Blocked, &account.BlockReason,
 	); err != nil {
 		return domain.Account{}, err
 	}
 	account.EngineAccountID = domain.EngineAccountID(engineID)
+	account.Pnl = pnl.String
 	account.GroupCode = groupCode.String
 	setAccountCurrencyFields(&account, currency, groupCurrency, defaultCurrency)
 	return account, nil

@@ -172,7 +172,7 @@ func (s *setMDErrSource) ConfirmExecution(
 }
 
 func (s *setMDErrSource) CancelOrder(
-	context.Context, string, string, string,
+	context.Context, string, string, string, string,
 ) (domain.Order, Attestation, error) {
 	return domain.Order{}, Attestation{}, nil
 }

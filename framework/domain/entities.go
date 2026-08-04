@@ -91,8 +91,8 @@ const (
 //
 // Persisted halt reasons are replayed into the engine when it is rebuilt at
 // start, and a reason the engine does not accept fails that rebuild - so a
-// value that reaches storage from an untrusted source (CSV import, backup
-// restore) would block the next boot. Reject it at the boundary instead.
+// value that reaches storage from an untrusted backup restore would block the
+// next boot. Reject it at the boundary instead.
 func ValidatePnlHaltReason(r PnlHaltReason) error {
 	switch r {
 	case "",
@@ -666,6 +666,19 @@ const (
 	OrderAmountKindVolume   OrderAmountKind = "volume"
 )
 
+// ValidateImmediateOrderAmountKind rejects sizing modes Officer cannot settle
+// without deriving execution data that the caller did not supply.
+func ValidateImmediateOrderAmountKind(kind OrderAmountKind) error {
+	if kind != OrderAmountKindVolume {
+		return nil
+	}
+	return fmt.Errorf(
+		"executed quantity of a cash-denominated order is not derived by "+
+			"Officer and was not supplied in the request: %w",
+		ErrInvalid,
+	)
+}
+
 // OrderStatus is the lifecycle state of an order recorded by Officer.
 type OrderStatus string
 
@@ -738,29 +751,6 @@ func ExecutionReportStatusChangeEvent(status OrderStatus) (OrderEventType, bool)
 	}
 }
 
-// ExecutionReportTargetStatus resolves the persisted order status for an
-// execution report.
-func ExecutionReportTargetStatus(in ExecutionReportInput) OrderStatus {
-	return in.OrderStatus
-}
-
-// ExecutionReportPersistedLeavesFor normalizes the leaves an execution report
-// persists for a target status: a terminal report closes the order, so it
-// records zero open quantity regardless of the release quantity it carried.
-func ExecutionReportPersistedLeavesFor(status OrderStatus, leaves string) string {
-	if OrderStatusTerminal(status) {
-		return "0"
-	}
-	return leaves
-}
-
-// ExecutionReportPersistedLeaves returns the order leaves recorded after a
-// report. A terminal report carries the quantity the engine must release, but
-// the closed order itself has no remaining open quantity.
-func ExecutionReportPersistedLeaves(in ExecutionReportInput) string {
-	return ExecutionReportPersistedLeavesFor(ExecutionReportTargetStatus(in), in.LeavesQuantity)
-}
-
 type executionReportValidationError struct {
 	message string
 	cause   error
@@ -774,24 +764,21 @@ func invalidExecutionReport(message string) error {
 	return executionReportValidationError{message: message, cause: ErrInvalid}
 }
 
-func invalidExecutionReportCause(message string, cause error) error {
-	return executionReportValidationError{message: message, cause: cause}
-}
-
 // executionReportCarriesEnginePayload reports whether an execution report has
-// status-independent data owned by the engine. Keep every new engine-owned
-// field in this predicate: workflow routing must not discard economic payload
-// merely because the lifecycle status itself needs no settlement.
+// a fill or commission owned by the engine. Leaves matters only for a terminal
+// report, which routes by status.
 func executionReportCarriesEnginePayload(in ExecutionReportInput) bool {
 	return in.FillQuantity != "" || in.Commission != nil
 }
 
 // ExecutionReportRequiresEngine validates an execution report's routing shape
-// and reports whether it needs engine settlement. Non-terminal workflow reports
+// and reports whether it needs engine settlement. A report settled by the engine
+// (a fill, a commission, or a terminal status) must carry LeavesQuantity; it is
+// optional only for pure workflow status updates. Non-terminal workflow reports
 // without engine-owned payload are recorded directly. A workflow status still
 // cannot carry fill or caller-supplied settlement-lock fields.
 func ExecutionReportRequiresEngine(in ExecutionReportInput) (bool, error) {
-	status := ExecutionReportTargetStatus(in)
+	status := in.OrderStatus
 	if !OrderStatusSupported(status) {
 		return false, invalidExecutionReport(fmt.Sprintf("invalid status %q", status))
 	}
@@ -829,18 +816,28 @@ func ExecutionReportRequiresEngine(in ExecutionReportInput) (bool, error) {
 			)
 		}
 	}
+	// The engine's post-trade path has no reject channel: a report that reaches
+	// settlement without leaves is not refused, it latches an account block and
+	// applies nothing. Presence must therefore be enforced before the engine call.
+	// Value and range checks stay engine-owned on that path.
 	if requiresEngine && in.LeavesQuantity == "" {
-		return false, invalidExecutionReport("leavesQuantity is required")
+		return false, invalidExecutionReport(
+			"leavesQuantity is required for reports settled by the engine",
+		)
 	}
-	if in.LeavesQuantity != "" {
+	// Pure workflow reports bypass the engine seam, so Officer must still guard
+	// the quantity shape before putting the caller's exact value into the store.
+	if !requiresEngine && in.LeavesQuantity != "" {
 		if err := validateNonNegativeDecimal(in.LeavesQuantity); err != nil {
-			return false, invalidExecutionReportCause(
-				"leavesQuantity must be a non-negative decimal",
-				err,
+			return false, invalidExecutionReport(
+				fmt.Sprintf("invalid leavesQuantity: %v", err),
 			)
 		}
 	}
 	_, isWorkflowStatus := ExecutionReportStatusChangeEvent(status)
+	// A non-terminal workflow report cannot carry caller-supplied settlement
+	// lock fields. Officer injects the stored order lock only after an engine
+	// route.
 	if isWorkflowStatus && !OrderStatusTerminal(status) &&
 		(in.LockPrice != "" || len(in.Lock) > 0) {
 		return false, invalidExecutionReport(
@@ -884,9 +881,8 @@ type Order struct {
 	ExternalID ExternalID
 	// AmountValue is the size of the order (exact decimal string).
 	AmountValue string
-	// Leaves is the persisted remaining open base quantity (exact decimal string).
-	// It is persisted from the request and later replaced only by the
-	// LeavesQuantity carried by an accepted execution-report patch.
+	// Leaves is the exact decimal string carried by the last accepted execution
+	// report. Officer stores it unchanged and never substitutes it.
 	Leaves string
 	// Price is the limit price (exact decimal string); empty for market orders.
 	Price string
@@ -1005,10 +1001,9 @@ type OrderEventPayload struct {
 	// currency independently of whether the report carried a fill.
 	Commission *Commission `json:"commission,omitempty"`
 
-	// ExecutionReport is the complete input as received by the node, before
-	// Officer fills order-derived fields or normalizes terminal leaves. It is
-	// repeated on every event emitted for the same report so each event remains
-	// a self-contained immutable audit record.
+	// ExecutionReport is the complete client-visible input as received by the
+	// node. It is repeated on every event emitted for the same report so each
+	// event remains a self-contained immutable audit record.
 	ExecutionReport *ExecutionReportRequest `json:"execution_report,omitempty"`
 }
 
@@ -1077,9 +1072,12 @@ type Trade struct {
 // Attestation) when one was issued; the order is "signed" when at least one of
 // its events is attested.
 type OrderDetail struct {
-	Order  Order
-	Events []OrderEvent
-	Trades []Trade
+	Order Order
+	// DisplayPrice is a presentation-only value restored from the opaque engine
+	// lock by the backend seam. It is never part of persisted or backup data.
+	DisplayPrice string `json:"-"`
+	Events       []OrderEvent
+	Trades       []Trade
 }
 
 // Signed reports the order-level rollup: the order carries at least one
@@ -1127,15 +1125,17 @@ type ExecutionReportInput struct {
 	FillPrice string
 	// LeavesQuantity is an exact base-quantity decimal string. For a fill it is
 	// the open quantity after the fill. For a terminal report it is the remaining
-	// quantity the engine must release; Officer persists zero leaves after the
-	// terminal settlement. It is optional for non-terminal workflow reports.
+	// quantity the engine must release; Officer records it as reported, without
+	// substituting a value of its own. It is required whenever the report is
+	// settled by the engine - a fill, a commission, or a terminal status - and
+	// optional only for pure workflow status updates.
 	LeavesQuantity string
 	// LockPrice is the reference price for the fill's PnL lock; empty when the
 	// originating order carried no lock.
 	LockPrice string
 	// Lock is the opaque SDK-serialized pre-trade lock persisted on the order.
-	// When present, the engine adapter passes it through instead of
-	// reconstructing a default-group lock from LockPrice.
+	// It is the only lock the engine adapter accepts; LockPrice is display data
+	// and is never used to assemble a replacement.
 	Lock []byte
 	// Commission is the optional report commission. When set, both Amount and
 	// Currency must be present and are forwarded to the SDK independently of the
@@ -1308,14 +1308,6 @@ type SigningKey struct {
 	Active bool
 }
 
-// EstimateSource names how the engine derived an approval's estimate/lock
-// price: the order's limit price when present, otherwise the market mark quote
-// (plus slippage). It is the EstimateSource value carried in ApprovalPayload.
-const (
-	EstimateSourceLimit      = "limit"
-	EstimateSourceMarketMark = "market_mark"
-)
-
 // AttestationResult is the recorded result section of an attestation payload.
 // It is present for execution reports and recorded lifecycle events;
 // nil for a plain submit accept whose verdict and estimate already carry the
@@ -1331,7 +1323,7 @@ type AttestationResult struct {
 	FillQuantity string `json:"fillQuantity"`
 	// FillPrice is the settled fill price (execution report); empty otherwise.
 	FillPrice string `json:"fillPrice"`
-	// FillLockPrice is the reference lock price used for the fill (execution
+	// FillLockPrice is the display lock price carried beside the fill (execution
 	// report); empty otherwise.
 	FillLockPrice string `json:"fillLockPrice"`
 	// Commission is the structured report commission (amount + currency); nil
@@ -1400,10 +1392,9 @@ type ApprovalPayload struct {
 	AccountGroupID string `json:"accountGroupId,omitempty"`
 
 	// Verdict / estimate.
-	Verdict        string `json:"verdict"` // "accept" | "reject"
-	PolicySummary  string `json:"policySummary"`
-	EstimatePrice  string `json:"estimatePrice"`  // decimal string = engine lock price
-	EstimateSource string `json:"estimateSource"` // "limit" | "market_mark"
+	Verdict       string `json:"verdict"` // "accept" | "reject"
+	PolicySummary string `json:"policySummary"`
+	EstimatePrice string `json:"estimatePrice"` // decimal string = engine lock price
 
 	// Lifecycle / anti-replay.
 	IssuedAt string `json:"issuedAt"` // RFC3339Nano UTC

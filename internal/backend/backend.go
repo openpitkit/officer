@@ -32,9 +32,6 @@ type Activity = fwbackend.Activity
 type ActivityKind = fwbackend.ActivityKind
 type ApprovalToken = fwbackend.ApprovalToken
 type BusinessCSVExportRequest = fwbackend.BusinessCSVExportRequest
-type BusinessCSVImportPreview = fwbackend.BusinessCSVImportPreview
-type BusinessCSVImportRequest = fwbackend.BusinessCSVImportRequest
-type BusinessCSVImportResult = fwbackend.BusinessCSVImportResult
 type Command = fwbackend.Command
 type ControlPlane = fwbackend.ControlPlane
 type Counts = fwbackend.Counts
@@ -49,6 +46,8 @@ type MarketDataSymbolSearchInput = fwbackend.MarketDataSymbolSearchInput
 type MarketDataSymbolVerification = fwbackend.MarketDataSymbolVerification
 type McpCommand = fwbackend.McpCommand
 type Overview = fwbackend.Overview
+type OrderListPage = fwbackend.OrderListPage
+type OrderListRow = fwbackend.OrderListRow
 type Service = fwbackend.Service
 type ServiceDatabase = fwbackend.ServiceDatabase
 type ServiceInfo = fwbackend.ServiceInfo
@@ -73,7 +72,7 @@ func New(
 		signer,
 		fwbackend.WithMarketDataRegistry(appmarketdata.DefaultRegistry()),
 		fwbackend.WithMCPCatalog(defaultMCPCatalog()),
-		fwbackend.WithLockSettlementEstimator(native.LockSettlementEstimate),
+		fwbackend.WithLockSettlementPrice(native.LockSettlementPrice),
 	)
 }
 

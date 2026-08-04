@@ -22,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"slices"
 	"sync"
 	"testing"
 
@@ -73,7 +72,8 @@ type fakeEngine struct {
 	adjustmentReject           *domain.AdjustmentOutcomeRejected
 	adjustmentNoop             bool
 	submitLock                 []byte
-	submitLeaves               string
+	submitSettlementLockPrice  string
+	submitTradePrice           string
 	submitOutcomes             []engine.BalanceOutcome
 	submitBlocks               []domain.ExecutionAccountBlock
 	submitAccountPnl           string
@@ -153,11 +153,6 @@ type adjustmentBatchCall struct {
 type groupCall struct {
 	accounts []domain.AccountID
 	groupID  string
-}
-
-func groupCallEqual(left, right groupCall) bool {
-	return left.groupID == right.groupID &&
-		slices.Equal(left.accounts, right.accounts)
 }
 
 type blockGroupCall struct {
@@ -846,22 +841,12 @@ func (e *fakeEngine) SubmitOrder(
 	if e.submitReject != nil {
 		return engine.OrderResult{Accepted: false, Rejects: []domain.OrderReject{*e.submitReject}}, nil
 	}
-	leaves := e.submitLeaves
-	if leaves == "" && o.AmountKind == domain.OrderAmountKindQuantity {
-		leaves = o.AmountValue
-	}
-	estimateSource := domain.EstimateSourceMarketMark
-	if o.Price != "" {
-		estimateSource = domain.EstimateSourceLimit
-	}
 	return engine.OrderResult{
 		Accepted:            true,
 		Lock:                e.submitLock,
 		Blocks:              e.submitBlocks,
 		Outcomes:            e.submitOutcomes,
 		SettlementLockPrice: o.Price,
-		LeavesQuantity:      leaves,
-		EstimateSource:      estimateSource,
 	}, nil
 }
 
@@ -881,14 +866,26 @@ func (e *fakeEngine) SubmitImmediate(
 	if e.submitReject != nil {
 		return engine.ImmediateResult{Accepted: false, Rejects: []domain.OrderReject{*e.submitReject}}, nil
 	}
+	settlementPrice := e.submitSettlementLockPrice
+	if settlementPrice == "" {
+		settlementPrice = o.Price
+	}
+	tradePrice := e.submitTradePrice
+	if tradePrice == "" {
+		tradePrice = o.Price
+		if tradePrice == "" {
+			tradePrice = settlementPrice
+		}
+	}
 	return engine.ImmediateResult{
 		Accepted:             true,
 		Lock:                 e.submitLock,
 		Outcomes:             e.submitOutcomes,
 		AccountPnl:           e.submitAccountPnl,
 		AccountPnlHaltReason: e.submitAccountPnlHaltReason,
-		SettlementLockPrice:  o.Price,
+		SettlementLockPrice:  settlementPrice,
 		FillQuantity:         o.AmountValue,
+		TradePrice:           tradePrice,
 	}, nil
 }
 
@@ -1003,7 +1000,7 @@ func (e *fakeEngine) ApplyExecutionReport(
 		Trade:       trade,
 		Commission:  in.Commission,
 		OrderStatus: in.OrderStatus,
-		Leaves:      domain.ExecutionReportPersistedLeaves(in),
+		Leaves:      in.LeavesQuantity,
 		Balances:    balanceSettlementsFrom(e.execReportOutcomes),
 		Events:      events,
 		Blocks:      e.execReportBlocks,
@@ -1243,44 +1240,6 @@ func (s *failRollbackRestoreRealm) RestoreBackup(
 		return backup.RestoreSummary{}, s.rollbackErr
 	}
 	return s.RealmStore.RestoreBackup(ctx, archive, opts)
-}
-
-// failBusinessCSVImportRealm can fail either the initial dictionary transaction
-// or the final transactional store write while delegating everything else.
-type failBusinessCSVImportRealm struct {
-	store.RealmStore
-	err              error
-	failDictionaries bool
-	exportScopes     []backup.Scope
-	restoreScopes    []backup.Scope
-}
-
-func (s *failBusinessCSVImportRealm) ExportBackup(
-	ctx context.Context, scope backup.Scope,
-) (backup.Archive, error) {
-	s.exportScopes = append(s.exportScopes, scope)
-	return s.RealmStore.ExportBackup(ctx, scope)
-}
-
-func (s *failBusinessCSVImportRealm) RestoreBackup(
-	ctx context.Context,
-	archive backup.Archive,
-	opts backup.RestoreOptions,
-) (backup.RestoreSummary, error) {
-	s.restoreScopes = append(s.restoreScopes, opts.Scope)
-	return s.RealmStore.RestoreBackup(ctx, archive, opts)
-}
-
-func (s *failBusinessCSVImportRealm) ApplyBusinessCSVImport(
-	ctx context.Context, in store.BusinessCSVImport,
-) error {
-	if len(in.Balances) == 0 && len(in.Adjustments) == 0 {
-		if s.failDictionaries && (len(in.Groups) > 0 || len(in.Accounts) > 0) {
-			return s.err
-		}
-		return s.RealmStore.ApplyBusinessCSVImport(ctx, in)
-	}
-	return s.err
 }
 
 type failAccountAdjustmentRecordRealm struct {

@@ -261,36 +261,8 @@
     "submit": "Сохранить"
   },
   "businessCsv": {
-    "importCsv": "Импорт CSV",
     "exportGroupsCsv": "Экспорт групп CSV",
     "exportAccountsCsv": "Экспорт счетов CSV"
-  },
-  "loadAccounts": {
-    "trigger": "Загрузить счета",
-    "title": "Загрузить счета из CSV",
-    "formatHeading": "Формат CSV",
-    "formatLine1": "Один счёт на строку:",
-    "formatCode1": "code[,title[,group_code[,notes]]]",
-    "formatLine2prefix": "обязателен;",
-    "formatLine2middle": "и",
-    "formatLine2suffix": "необязательны.",
-    "formatLine3prefix": "Заголовочная строка (",
-    "formatLine3code": "code,title,group_code,notes",
-    "formatLine3suffix": ") допускается и пропускается автоматически.",
-    "examplesHeading": "Примеры",
-    "chooseFile": "Выбрать файл…",
-    "orPasteBelow": "или вставьте ниже",
-    "parsedRows_one": "Разобрана {{count}} строка.",
-    "parsedRows_other": "Разобрано {{count}} строк.",
-    "results": {
-      "summary": "Результаты — {{created}} создано, {{skipped}} пропущено, {{errors}} ошибок"
-    },
-    "import_one": "Импортировать {{count}} строку",
-    "import_other": "Импортировать {{count}} строк",
-    "importEmpty": "Импортировать",
-    "close": "Закрыть",
-    "cancel": "Отмена",
-    "alreadyExists": "уже существует"
   },
   "blockAccount": {
     "titlePrefix": "Заблокировать счёт",

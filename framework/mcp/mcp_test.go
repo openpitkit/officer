@@ -289,6 +289,7 @@ func (s *guardSource) CancelOrder(
 	string,
 	string,
 	string,
+	string,
 ) (domain.Order, Attestation, error) {
 	return domain.Order{}, Attestation{}, nil
 }

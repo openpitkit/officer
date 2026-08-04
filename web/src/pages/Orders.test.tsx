@@ -26,7 +26,6 @@ import type {
   Balance,
   BusinessCsvEntity,
   BusinessCsvExportFilters,
-  BusinessCsvImportEntity,
   Order,
   OrderEvent,
   OrderListFilters,
@@ -69,35 +68,14 @@ vi.mock("@/components/TableControls", async () => {
     ...actual,
     CsvTransferMenu: ({
       exports,
-      imports,
-      onImported,
     }: {
       exports?: {
         entity: BusinessCsvEntity;
         filters?: BusinessCsvExportFilters;
         label: string;
       }[];
-      imports?: {
-        defaultEntity?: BusinessCsvImportEntity;
-        entities: BusinessCsvImportEntity[];
-        label: string;
-      }[];
-      onImported?: () => void;
     }) => (
       <>
-        {imports?.map((item) => (
-          <dialogs.BusinessCsvImportDialog
-            key={`import-${item.label}`}
-            defaultEntity={item.defaultEntity}
-            entities={item.entities}
-            onImported={onImported ?? (() => {})}
-            trigger={(open) => (
-              <button type="button" onClick={open}>
-                {item.label}
-              </button>
-            )}
-          />
-        ))}
         {exports?.map((item) => (
           <dialogs.BusinessCsvExportDialog
             key={`export-${item.entity}-${item.label}`}
@@ -189,7 +167,7 @@ const sampleOrder: Order = {
   leavesQuantity: "100",
   price: "0",
   status: "accepted",
-  displayPrices: [],
+  displayPrice: "",
   dropCopy: false,
   signed: false,
 };
@@ -239,7 +217,7 @@ beforeEach(async () => {
   checkOrderMock.mockResolvedValue({
     passed: true,
     rejects: [],
-    wouldDisplayPrices: [],
+    wouldDisplayPrice: "",
     wouldBlock: null,
   });
   createOrderMock.mockResolvedValue({
@@ -1076,14 +1054,36 @@ describe("Orders workflow confirm/cancel shortcuts", () => {
       name: "Cancel order",
     });
     await user.click(cancel);
+    await user.type(within(detail).getByLabelText("Leaves quantity"), "100");
+    await user.click(
+      within(detail).getByRole("button", { name: "Cancel order" }),
+    );
     await waitFor(() =>
       expect(cancelOrderMock).toHaveBeenCalledWith("ord-alpha-1", {
         token: "hold-token",
+        leavesQuantity: "100",
       }),
     );
   });
 
-  it("cancels a workflow order without a force override", async () => {
+  it("opens cancellation leaves empty", async () => {
+    const user = userEvent.setup();
+    renderOrders("/orders");
+
+    await submitWorkflowOrder(user);
+
+    const detail = await screen.findByRole("dialog", {
+      name: "Order ord-alpha-1",
+    });
+
+    await user.click(
+      within(detail).getByRole("button", { name: "Cancel order" }),
+    );
+
+    expect(within(detail).getByLabelText("Leaves quantity")).toHaveValue("");
+  });
+
+  it("cancels a workflow order with caller-supplied leaves", async () => {
     const user = userEvent.setup();
     renderOrders("/orders");
 
@@ -1095,12 +1095,44 @@ describe("Orders workflow confirm/cancel shortcuts", () => {
     await user.click(
       within(detail).getByRole("button", { name: "Cancel order" }),
     );
+    const leaves = within(detail).getByLabelText("Leaves quantity");
+    await user.type(leaves, "7.5");
+    await user.click(
+      within(detail).getByRole("button", { name: "Cancel order" }),
+    );
 
     await waitFor(() =>
       expect(cancelOrderMock).toHaveBeenCalledWith("ord-alpha-1", {
         token: "hold-token",
+        leavesQuantity: "7.5",
       }),
     );
+  });
+
+  // The engine settles the cancellation and has no reject channel, so the
+  // panel must not send a report without leaves.
+  it("blocks cancellation while leaves is empty or malformed", async () => {
+    const user = userEvent.setup();
+    renderOrders("/orders");
+
+    await submitWorkflowOrder(user);
+
+    const detail = await screen.findByRole("dialog", {
+      name: "Order ord-alpha-1",
+    });
+    await user.click(
+      within(detail).getByRole("button", { name: "Cancel order" }),
+    );
+    const leaves = within(detail).getByLabelText("Leaves quantity");
+
+    const cancel = within(detail).getByRole("button", {
+      name: "Cancel order",
+    });
+    await waitFor(() => expect(cancel).toBeDisabled());
+
+    await user.type(leaves, "not-a-number");
+    await waitFor(() => expect(cancel).toBeDisabled());
+    expect(cancelOrderMock).not.toHaveBeenCalled();
   });
 
   it("does not retain shortcuts for a rejected workflow submit", async () => {
@@ -1751,7 +1783,7 @@ describe("Execution report status-driven fields", () => {
       status: "filled",
       price: "12",
       leavesQuantity: "2",
-      displayPrices: ["12"],
+      displayPrice: "12",
     };
   }
 

@@ -19,6 +19,7 @@ package httpapi
 
 import (
 	"net/http"
+	"strings"
 
 	"go.openpit.dev/officer/framework/domain"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
@@ -321,8 +322,13 @@ func handleConfirmExecution(svc Service) http.HandlerFunc {
 			httpx.WriteErr(w, err)
 			return
 		}
+		presentation := orderPresentationByID(
+			r.Context(), svc, order.ExternalID,
+		)
 		httpx.WriteJSON(w, http.StatusOK, orderMutationResponseDTO{
-			Order:            toOrderDTO(order, orderSignedByID(r.Context(), svc, order.ExternalID)),
+			Order: toOrderDTO(
+				order, presentation.displayPrice, presentation.signed,
+			),
 			AttestationToken: att.Token,
 			AttestationKeyID: att.KeyID,
 			Signed:           att.Signed,
@@ -331,7 +337,8 @@ func handleConfirmExecution(svc Service) http.HandlerFunc {
 }
 
 // handleCancelOrder handles POST /api/v1/orders/{id}/cancel. The body carries
-// the approval token and an optional reason for the order-cancellation shortcut.
+// the approval token, the caller-supplied leaves the engine-settled
+// cancellation requires, and an optional reason for the shortcut.
 func handleCancelOrder(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		orderID, err := httpx.PathOrderExternalID(r)
@@ -347,14 +354,26 @@ func handleCancelOrder(svc Service) http.HandlerFunc {
 			httpx.WriteErrMsg(w, http.StatusBadRequest, "signing", "token is required")
 			return
 		}
+		leavesQuantity := strings.TrimSpace(req.LeavesQuantity)
+		if leavesQuantity == "" {
+			httpx.WriteErrMsg(
+				w, http.StatusBadRequest, "validation", "leavesQuantity is required",
+			)
+			return
+		}
 		order, att, err := svc.CancelOrder(
-			r.Context(), orderID, req.Token, req.Reason)
+			r.Context(), orderID, req.Token, leavesQuantity, req.Reason)
 		if err != nil {
 			httpx.WriteErr(w, err)
 			return
 		}
+		presentation := orderPresentationByID(
+			r.Context(), svc, order.ExternalID,
+		)
 		httpx.WriteJSON(w, http.StatusOK, orderMutationResponseDTO{
-			Order:            toOrderDTO(order, orderSignedByID(r.Context(), svc, order.ExternalID)),
+			Order: toOrderDTO(
+				order, presentation.displayPrice, presentation.signed,
+			),
 			AttestationToken: att.Token,
 			AttestationKeyID: att.KeyID,
 			Signed:           att.Signed,

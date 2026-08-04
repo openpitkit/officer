@@ -77,8 +77,8 @@ func TestLocalNode_SubmitOrderPersistsPreTradeBalances(t *testing.T) {
 	if order.Status != domain.OrderStatusCommitted {
 		t.Fatalf("order status = %q, want committed", order.Status)
 	}
-	if order.Leaves != "20" {
-		t.Fatalf("order leaves = %q, want canonical quantity 20", order.Leaves)
+	if order.Leaves != "" {
+		t.Fatalf("order leaves = %q, want empty before the first report", order.Leaves)
 	}
 
 	quote, ok, err := st.GetBalance(ctx, "acc-1", "USD")
@@ -94,6 +94,102 @@ func TestLocalNode_SubmitOrderPersistsPreTradeBalances(t *testing.T) {
 	}
 	if base.Incoming != "20" {
 		t.Fatalf("AAPL incoming = %q, want 20", base.Incoming)
+	}
+}
+
+// An order has no reported leaves at submit, so the field stays empty until the
+// first execution report supplies it. Officer is a registrar here: it records
+// the caller's value without inventing one from the submitted amount.
+func TestLocalNode_VolumeOrderLeavesComeFromFirstExecutionReport(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.submitLock = []byte("stored-lock")
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	if _, err := n.CreateAccount(ctx, testAccount("acc-1"), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+
+	order, err := n.SubmitOrder(ctx, testKey("acc-1"), domain.Order{
+		BaseAsset: "AAPL", QuoteAsset: "USD", Side: domain.OrderSideBuy,
+		AmountKind: domain.OrderAmountKindVolume, AmountValue: "500", Price: "100",
+	}, domain.MissingAccountCreate, testCaller)
+	if err != nil {
+		t.Fatalf("SubmitOrder: %v", err)
+	}
+	if order.Leaves != "" {
+		t.Fatalf("volume order leaves = %q, want empty", order.Leaves)
+	}
+
+	if _, err := n.ApplyExecutionReport(ctx, testKey("acc-1"),
+		domain.ExecutionReportInput{
+			Order: order.ExternalID, FillQuantity: "2", FillPrice: "100",
+			LeavesQuantity: "3", OrderStatus: domain.OrderStatusPartiallyFilled,
+		}, testCaller); err != nil {
+		t.Fatalf("ApplyExecutionReport: %v", err)
+	}
+	detail, err := st.GetOrder(ctx, order.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if detail.Order.Leaves != "3" {
+		t.Fatalf("reported leaves = %q, want 3", detail.Order.Leaves)
+	}
+}
+
+func TestLocalNode_SubmitImmediateRejectsVolumeBeforeEngine(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	n, _ := newTestNode(t, eng)
+	_, _, err := n.SubmitImmediate(
+		context.Background(), testKey("acc-1"), domain.Order{
+			BaseAsset: "AAPL", QuoteAsset: "USD", Side: domain.OrderSideBuy,
+			AmountKind: domain.OrderAmountKindVolume, AmountValue: "500", Price: "100",
+		}, domain.MissingAccountCreate, testCaller,
+	)
+	if !errors.Is(err, domain.ErrInvalid) ||
+		!strings.Contains(err.Error(), "executed quantity") {
+		t.Fatalf("SubmitImmediate error = %v, want invalid executed quantity", err)
+	}
+	if len(eng.submitCalls) != 0 {
+		t.Fatalf("volume immediate reached engine: %+v", eng.submitCalls)
+	}
+}
+
+func TestLocalNode_SubmitImmediateSeparatesTradeAndLockPrices(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.submitTradePrice = "99"
+	eng.submitSettlementLockPrice = "101"
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	if _, err := n.CreateAccount(ctx, testAccount("acc-1"), testCaller); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+
+	order, result, err := n.SubmitImmediate(ctx, testKey("acc-1"), domain.Order{
+		BaseAsset: "AAPL", QuoteAsset: "USD", Side: domain.OrderSideBuy,
+		AmountKind: domain.OrderAmountKindQuantity, AmountValue: "2", Price: "99",
+	}, domain.MissingAccountCreate, testCaller)
+	if err != nil {
+		t.Fatalf("SubmitImmediate: %v", err)
+	}
+	if result.TradePrice != "99" || result.SettlementLockPrice != "101" {
+		t.Fatalf("immediate result = %+v, want trade 99 and lock 101", result)
+	}
+	detail, err := st.GetOrder(ctx, order.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if len(detail.Trades) != 1 || detail.Trades[0].Price != "99" ||
+		detail.Trades[0].LockPrice != "101" {
+		t.Fatalf("trades = %+v, want price 99 and lock price 101", detail.Trades)
+	}
+	for _, event := range detail.Events {
+		if event.Type == domain.OrderEventFill &&
+			(event.Payload.FillPrice != "99" || event.Payload.FillLockPrice != "101") {
+			t.Fatalf("fill event = %+v, want price 99 and lock price 101", event)
+		}
 	}
 }
 

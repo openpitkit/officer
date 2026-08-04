@@ -41,6 +41,7 @@ import (
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
+	fwstore "go.openpit.dev/officer/framework/store"
 )
 
 // rawDB returns the realm's shared connection pool directly, for tests that
@@ -334,10 +335,10 @@ func TestRealmDataOpAfterCloseReturnsClosedError(t *testing.T) {
 	}
 
 	// Transaction-opening path (BeginTx).
-	if err := rs.ApplyBusinessCSVImport(ctx, BusinessCSVImport{
-		Balances: []domain.Balance{{Account: "acc-1", Asset: "USD", Available: "1"}},
-	}); err == nil || !strings.Contains(err.Error(), want) {
-		t.Fatalf("ApplyBusinessCSVImport after close = %v, want %q", err, want)
+	if _, err := rs.RecordAccountAdjustment(
+		ctx, fwstore.AccountAdjustmentPersistence{},
+	); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("RecordAccountAdjustment after close = %v, want %q", err, want)
 	}
 }
 
@@ -913,7 +914,7 @@ func TestAccountRoundTripEngineIDAndGroupLink(t *testing.T) {
 	if err := domain.ValidateEngineAccountID(a1.EngineAccountID); err != nil {
 		t.Fatalf("assigned engine account id out of range: %v", err)
 	}
-	if a1.Title != "Account 1" || a1.Pnl != "12.5" ||
+	if a1.Title != "Account 1" || a1.Pnl != "" ||
 		a1.PnlHaltReason != domain.PnlHaltReasonMissingAccountCurrency ||
 		a1.GroupCode != "alpha" || a1.Notes != "n" ||
 		!a1.Blocked || a1.BlockReason != "risk" {
@@ -932,7 +933,9 @@ func TestAccountRoundTripEngineIDAndGroupLink(t *testing.T) {
 	if a1.EngineAccountID == a2.EngineAccountID {
 		t.Fatalf("engine account ids collided: %d", a1.EngineAccountID)
 	}
-	if a2.Pnl != "0" || a2.DefaultCurrency != "USD" ||
+	// A fresh account has no P&L value at all: the column is NULL, which reads
+	// back as empty, and is never the zero a reported P&L would carry.
+	if a2.Pnl != "" || a2.DefaultCurrency != "USD" ||
 		a2.EffectiveCurrency != "USD" ||
 		a2.CurrencyOrigin != domain.CurrencyOriginDefault {
 		t.Fatalf("CreateAccount default-currency result = %+v, want default USD", a2)
@@ -1585,14 +1588,4 @@ func findGroupRow(rows []GroupListRow, code string) (GroupListRow, bool) {
 		}
 	}
 	return GroupListRow{}, false
-}
-
-func TestApplyBusinessCSVImport_EmptyBatchIsNoOp(t *testing.T) {
-	ctx := context.Background()
-	_, rs := newTestStore(t)
-
-	// An empty import batch commits cleanly and produces no rows.
-	if err := rs.ApplyBusinessCSVImport(ctx, BusinessCSVImport{}); err != nil {
-		t.Fatalf("ApplyBusinessCSVImport(empty): %v", err)
-	}
 }

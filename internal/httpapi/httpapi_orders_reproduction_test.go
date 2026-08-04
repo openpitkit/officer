@@ -120,7 +120,6 @@ func reproPayload(id domain.ExternalID) domain.ApprovalPayload {
 		Verdict:         "accept",
 		PolicySummary:   "accepted",
 		EstimatePrice:   "150.25",
-		EstimateSource:  "limit",
 		IssuedAt:        now.Format(time.RFC3339Nano),
 		Nonce:           "Zm9vYmFyYmF6cXV4MTIzNA",
 	}

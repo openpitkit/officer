@@ -532,8 +532,8 @@ export interface Order {
   leavesQuantity: string;
   price: string;
   status: string;
-  /** Human-readable pre-trade lock prices, as exact decimal strings. */
-  displayPrices: string[];
+  /** Human-readable pre-trade lock price, as an exact decimal string. */
+  displayPrice: string;
   /** Whether this order was submitted through the drop-copy operation. */
   dropCopy: boolean;
   /** Whether the order carries a persisted Ed25519-signed approval envelope. */
@@ -607,7 +607,7 @@ export interface CheckWouldBlock {
 export interface CheckResult {
   passed: boolean;
   rejects: CheckReject[];
-  wouldDisplayPrices: string[];
+  wouldDisplayPrice: string;
   wouldBlock: CheckWouldBlock | null;
 }
 
@@ -894,7 +894,7 @@ export interface BackupRestoreSummary {
   restartRequired: boolean;
 }
 
-// --- Business CSV import / export ---
+// --- Business CSV export ---
 
 export type BusinessCsvEntity =
   | "account_groups"
@@ -903,14 +903,7 @@ export type BusinessCsvEntity =
   | "orders"
   | "trades";
 
-export type BusinessCsvImportEntity =
-  | "account_groups"
-  | "accounts"
-  | "positions";
-
 export type BusinessCsvDelimiter = "comma" | "semicolon" | "tab" | "pipe";
-
-export type BusinessCsvConflictPolicy = "skip" | "replace" | "stop";
 
 export interface BusinessCsvExportFilters {
   groupCode?: string | null;
@@ -918,32 +911,6 @@ export interface BusinessCsvExportFilters {
   asset?: string;
   source?: Source;
 }
-
-export interface BusinessCsvImportFile {
-  name: string;
-  type: "csv" | "zip" | string;
-}
-
-export interface BusinessCsvImportCounts {
-  rows: number;
-  applied: number;
-  skipped: number;
-  conflicts: number;
-  stopped: boolean;
-}
-
-export interface BusinessCsvConflict {
-  row: number;
-  key: string;
-}
-
-export interface BusinessCsvImportPreview {
-  file: BusinessCsvImportFile;
-  counts: BusinessCsvImportCounts;
-  conflicts: BusinessCsvConflict[];
-}
-
-export type BusinessCsvImportResult = BusinessCsvImportPreview;
 
 // --- MCP access ---
 

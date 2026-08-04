@@ -390,9 +390,8 @@ func (n *localNode) ensureGroupRegisteredLocked(
 	return group, true, nil
 }
 
-// applyGroupBlock applies the desired blocked state for a group to the engine
-// through the supplied group view. SetGroupBlocked passes the live engine under
-// the live identity gate; the business CSV import passes a group lane.
+// applyGroupBlock applies the desired blocked state through a synchronized
+// group lane while the caller holds the live identity gate.
 func (n *localNode) applyGroupBlock(
 	ctx context.Context, lane engine.GroupLane, code string, blocked bool, reason string,
 ) error {
@@ -428,6 +427,7 @@ func (n *localNode) DeleteGroup(
 	if err := n.guardGroupDeleteCurrencyChange(ctx, code); err != nil {
 		return err
 	}
+	haltedAccounts := haltedAccountsForGroupDeletion(members)
 	eng := n.currentEngine()
 	resolver, err := requireDictionaryResolver(eng)
 	if err != nil {
@@ -527,6 +527,39 @@ func (n *localNode) DeleteGroup(
 			)
 		}
 		membershipRemoved = true
+	}
+
+	restateBlocks, restateErr := n.restateHaltedAccountPnlsRuntime(
+		ctx, eng, haltedAccounts,
+	)
+	if restateErr != nil {
+		mutationCtx := context.WithoutCancel(ctx)
+		revertErr := revertRuntime(
+			mutationCtx, currencyTouched, membershipRemoved, false,
+		)
+		return n.reconcileEngineAfterFailure(
+			mutationCtx,
+			"reconcile engine after group delete pnl restatement failure",
+			errors.Join(
+				fmt.Errorf("restate halted account pnl after group delete: %w", restateErr),
+				revertErr,
+			),
+		)
+	}
+	if err := n.mirrorPolicyConfigurationBlocks(
+		ctx, domain.PolicySpotFundsPnlBoundsKillSwitch, restateBlocks,
+	); err != nil {
+		return err
+	}
+	if err := n.persistHaltedAccountPnlRestatements(
+		context.WithoutCancel(ctx), haltedAccounts,
+	); err != nil {
+		return n.fatalPostEngineAuditByCode(
+			"persist halted account pnl after group delete",
+			"group",
+			code,
+			fmt.Errorf("persist halted account pnl: %w", err),
+		)
 	}
 
 	unblocked := false

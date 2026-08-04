@@ -286,30 +286,29 @@
   "businessCsv": {
     "menu": {
       "trigger": "文件",
-      "ariaLabel": "导入或导出 CSV"
+      "ariaLabel": "导出 CSV"
     },
-    "entityLabel": "实体",
     "delimiterLabel": "分隔符",
     "format": {
       "heading": "CSV 格式",
       "account_groups": {
-        "description": "每行一个账户组。第一行必须是表头。",
-        "columns": "code,title,notes,blocked,block_reason"
+        "description": "每行一个账户组。",
+        "columns": "code,title,currency,notes,blocked,block_reason"
       },
       "accounts": {
-        "description": "每行一个账户。第一行必须是表头。",
-        "columns": "code,title,group_code,notes,blocked,block_reason"
+        "description": "每行一个账户。",
+        "columns": "code,title,group_code,currency,pnl,pnl_halt_reason,notes,blocked,block_reason"
       },
       "positions": {
-        "description": "每行一个现货资金持仓。第一行必须是表头。",
-        "columns": "account_code,asset,available,held,incoming,realized_pnl,average_entry_price"
+        "description": "每行一个现货资金持仓。",
+        "columns": "account_code,asset,available,held,incoming,realized_pnl,realized_pnl_halt_reason,average_entry_price"
       },
       "orders": {
-        "description": "订单仅支持导出。第一行为表头。",
-        "columns": "id,at,account_code,source,principal,base_asset,quote_asset,side,amount_kind,amount_value,price,status,display_prices"
+        "description": "每行一个订单。",
+        "columns": "id,at,account_code,source,principal,base_asset,quote_asset,side,amount_kind,amount_value,price,lock_price,leaves,status,drop_copy"
       },
       "trades": {
-        "description": "成交仅支持导出。第一行为表头。",
+        "description": "每行一笔成交。",
         "columns": "id,order_id,at,account_code,source,principal,base_asset,quote_asset,side,quantity,price,lock_price,commission_amount,commission_currency"
       }
     },
@@ -325,30 +324,6 @@
       "semicolon": "分号",
       "tab": "制表符",
       "pipe": "竖线"
-    },
-    "conflictPolicy": {
-      "skip": "跳过冲突",
-      "replace": "替换冲突",
-      "stop": "在首个冲突处停止"
-    },
-    "import": {
-      "trigger": "导入 CSV",
-      "title": "导入业务 CSV",
-      "description": "上传一个 CSV 文件、包含一个 CSV 文件的 ZIP，或粘贴 CSV 文本，由后端验证后再应用。",
-      "chooseFile": "选择 CSV 或 ZIP",
-      "noFile": "未选择文件",
-      "pastePlaceholder": "在此粘贴 CSV 行",
-      "fileTakesPriority": "已选择文件时，将使用文件而不是粘贴文本。",
-      "fileTooLarge": "文件过大。请选择不超过 {{limit}} MiB 的文件。",
-      "preview": "预览上传",
-      "previewing": "正在预览…",
-      "previewReady": "{{file}} 的预览已就绪",
-      "counts": "行 {{rows}} · 已应用 {{applied}} · 已跳过 {{skipped}} · 冲突 {{conflicts}}",
-      "conflictsFound": "发现 {{count}} 个冲突。",
-      "apply": "应用导入",
-      "applied": "导入已应用",
-      "conflictTitle": "发现冲突",
-      "conflictDescription": "{{count}} 个上传行与现有业务数据重叠。请选择 Officer 应如何应用此导入。"
     },
     "export": {
       "trigger": "导出 CSV",

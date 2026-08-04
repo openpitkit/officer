@@ -196,8 +196,8 @@ func TestService_SubmitOrderTokenWorkflowIssuesSignedToken(t *testing.T) {
 	if p.Verdict != "accept" {
 		t.Fatalf("payload verdict = %q, want accept", p.Verdict)
 	}
-	if p.EstimatePrice != "100" || p.EstimateSource != domain.EstimateSourceLimit {
-		t.Fatalf("payload estimate = %q/%q, want engine lock price", p.EstimatePrice, p.EstimateSource)
+	if p.EstimatePrice != "100" {
+		t.Fatalf("payload estimate = %q, want engine lock price", p.EstimatePrice)
 	}
 	if p.OrderExternalID != tok.OrderExternalID {
 		t.Fatalf("payload order handle = %q, want %q", p.OrderExternalID, tok.OrderExternalID)
@@ -423,7 +423,7 @@ func TestService_ShortcutsESignOffPersistUnsignedEvents(t *testing.T) {
 
 	cancelTok := mustWorkflow(t, svc)
 	cancelled, cancelAtt, err := svc.CancelOrder(
-		context.Background(), cancelTok.OrderExternalID, cancelTok.Token, "operator")
+		context.Background(), cancelTok.OrderExternalID, cancelTok.Token, "10", "operator")
 	if err != nil {
 		t.Fatalf("CancelOrder: %v", err)
 	}
@@ -541,7 +541,7 @@ func TestService_ConfirmAfterCancelRequiresExplicitReport(t *testing.T) {
 	tok := mustWorkflow(t, svc)
 
 	if _, _, err := svc.CancelOrder(
-		context.Background(), tok.OrderExternalID, tok.Token, "operator",
+		context.Background(), tok.OrderExternalID, tok.Token, "10", "operator",
 	); err != nil {
 		t.Fatalf("cancel: %v", err)
 	}
@@ -586,7 +586,7 @@ func TestService_CancelAfterConfirmUsesNormalReport(t *testing.T) {
 		t.Fatalf("confirm: %v", err)
 	}
 	cancelled, _, err := svc.CancelOrder(
-		context.Background(), tok.OrderExternalID, tok.Token, "operator",
+		context.Background(), tok.OrderExternalID, tok.Token, "10", "operator",
 	)
 	if err != nil {
 		t.Fatalf("cancel after history-only confirm: %v", err)
@@ -611,7 +611,9 @@ func TestService_CancelAfterFillRequiresExplicitReport(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("fill report: %v", err)
 	}
-	_, _, err := svc.CancelOrder(context.Background(), tok.OrderExternalID, tok.Token, "late")
+	_, _, err := svc.CancelOrder(
+		context.Background(), tok.OrderExternalID, tok.Token, "0", "late",
+	)
 	if !errors.Is(err, domain.ErrExecutionReportRequired) {
 		t.Fatalf("cancel after fill = %v, want explicit report", err)
 	}
@@ -620,7 +622,7 @@ func TestService_CancelAfterFillRequiresExplicitReport(t *testing.T) {
 	}
 }
 
-func TestService_CancelOrderSynthesizesExecutionReport(t *testing.T) {
+func TestService_CancelOrderForwardsCallerLeaves(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
 	svc, fn := newTestServiceWithSigner(signer)
@@ -628,7 +630,9 @@ func TestService_CancelOrderSynthesizesExecutionReport(t *testing.T) {
 	submitPayload := httpTokenPayload(t, signer, backend.SubmitModeHold)
 
 	before := len(fn.persistAttestationCalls)
-	order, att, err := svc.CancelOrder(context.Background(), tok.OrderExternalID, tok.Token, "stale price")
+	order, att, err := svc.CancelOrder(
+		context.Background(), tok.OrderExternalID, tok.Token, "7.5", "stale price",
+	)
 	if err != nil {
 		t.Fatalf("CancelOrder: %v", err)
 	}
@@ -655,12 +659,13 @@ func TestService_CancelOrderSynthesizesExecutionReport(t *testing.T) {
 			att.EventExternalID, cancelEvents[0].String())
 	}
 	if len(fn.execReports) != 1 ||
-		fn.execReports[0].LeavesQuantity != "10" ||
+		fn.execReports[0].LeavesQuantity != "7.5" ||
 		fn.execReports[0].OrderStatus != domain.OrderStatusCancelled {
 		t.Fatalf("synthetic execution report = %+v", fn.execReports)
 	}
 	lastPayload := signer.signed[len(signer.signed)-1]
 	if lastPayload.ExecutionReport == nil ||
+		lastPayload.ExecutionReport.LeavesQuantity != "7.5" ||
 		lastPayload.ApprovalRef != submitPayload.ApprovalID ||
 		lastPayload.Result == nil || lastPayload.Result.Outcome != "cancelled" {
 		t.Fatalf("cancel attestation payload = %+v", lastPayload)
@@ -682,7 +687,7 @@ func TestService_CancelOrderNoopMissingAttestationFailsClosed(t *testing.T) {
 	fn.cancelNoop = true
 
 	_, _, err := svc.CancelOrder(
-		context.Background(), tok.OrderExternalID, tok.Token, "already resolved")
+		context.Background(), tok.OrderExternalID, tok.Token, "10", "already resolved")
 	if err == nil {
 		t.Fatal("cancel no-op succeeded without an attestation")
 	}
@@ -759,7 +764,7 @@ func TestService_ShortcutsRejectNonAcceptVerdict(t *testing.T) {
 		t.Fatalf("confirm reject verdict = %v, want conflict", err)
 	}
 	if _, _, err := svc.CancelOrder(
-		context.Background(), tok.OrderExternalID, tok.Token, "operator",
+		context.Background(), tok.OrderExternalID, tok.Token, "10", "operator",
 	); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("cancel reject verdict = %v, want conflict", err)
 	}
@@ -808,7 +813,7 @@ func TestService_ShortcutsRejectCommittedEventAttestation(t *testing.T) {
 		t.Fatalf("confirm with committed attestation = %v, want conflict", err)
 	}
 	if _, _, err := svc.CancelOrder(
-		context.Background(), tok.OrderExternalID, derivedToken, "operator",
+		context.Background(), tok.OrderExternalID, derivedToken, "", "operator",
 	); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("cancel with committed attestation = %v, want conflict", err)
 	}
@@ -1267,7 +1272,7 @@ func TestService_CancelOrderSigningFailureFailsClosed(t *testing.T) {
 	signer.signErr = errors.New("cancel signing down")
 
 	_, _, err := svc.CancelOrder(
-		context.Background(), tok.OrderExternalID, tok.Token, "operator")
+		context.Background(), tok.OrderExternalID, tok.Token, "10", "operator")
 	if !errors.Is(err, signer.signErr) {
 		t.Fatalf("CancelOrder error = %v, want signing failure", err)
 	}

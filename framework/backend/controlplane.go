@@ -46,14 +46,6 @@ type ControlPlane interface {
 		ctx context.Context,
 		req BusinessCSVExportRequest,
 	) (businesscsv.ExportFile, error)
-	PreviewBusinessCSVImport(
-		ctx context.Context,
-		req BusinessCSVImportRequest,
-	) (BusinessCSVImportPreview, error)
-	ImportBusinessCSV(
-		ctx context.Context,
-		req BusinessCSVImportRequest,
-	) (BusinessCSVImportResult, error)
 	ResetDatabase(ctx context.Context) error
 	ListAssets(ctx context.Context) ([]domain.Asset, error)
 	ListAssetRows(
@@ -201,7 +193,7 @@ type ControlPlane interface {
 	) ([]domain.Order, error)
 	ListOrderRows(
 		ctx context.Context, filter store.OrderListFilter,
-	) (store.OrderListPage, error)
+	) (OrderListPage, error)
 	ListTrades(
 		ctx context.Context, account domain.AccountID, source domain.Source, n int,
 	) ([]domain.Trade, error)
@@ -230,6 +222,6 @@ type ControlPlane interface {
 		ctx context.Context, orderID string, token string,
 	) (domain.Order, Attestation, error)
 	CancelOrder(
-		ctx context.Context, orderID string, token, reason string,
+		ctx context.Context, orderID string, token, leavesQuantity, reason string,
 	) (domain.Order, Attestation, error)
 }

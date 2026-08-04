@@ -30,6 +30,7 @@ import (
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pkg/optional"
+	"go.openpit.dev/openpit/pretrade"
 	"go.openpit.dev/openpit/pretrade/policies"
 	"go.openpit.dev/openpit/reject"
 
@@ -754,19 +755,7 @@ func (l accountLane) SubmitOrder(ctx context.Context, o domain.Order) (OrderResu
 		reservation.RollbackAndClose()
 		return OrderResult{}, fmt.Errorf("engine: read reservation lock: %w", err)
 	}
-	lockBytes, settlement, source, err := capturePreTradeOutput(lock, o)
-	if err != nil {
-		reservation.RollbackAndClose()
-		return OrderResult{}, err
-	}
-	if reject, ok := volumeOrderSizingReject(o, settlement); ok {
-		reservation.RollbackAndClose()
-		return OrderResult{
-			Accepted: false,
-			Rejects:  []domain.OrderReject{reject},
-		}, nil
-	}
-	leaves, err := immediateFillQuantity(o, settlement)
+	lockBytes, settlement, err := capturePreTradeOutput(lock, o)
 	if err != nil {
 		reservation.RollbackAndClose()
 		return OrderResult{}, err
@@ -789,95 +778,85 @@ func (l accountLane) SubmitOrder(ctx context.Context, o domain.Order) (OrderResu
 		Lock:                lockBytes,
 		Outcomes:            outcomes,
 		SettlementLockPrice: settlement,
-		LeavesQuantity:      leaves,
-		EstimateSource:      source,
 	}, nil
 }
 
+// submitDropCopyOrder records a historical order through the drop-copy rollback
+// window: the same shape as the regular reservation branch above. Everything
+// Officer must persist is derived while the applied mutations can still be
+// compensated, and the commit - the point of no return - happens only once no
+// derivation is left that could fail.
 func (l accountLane) submitDropCopyOrder(
 	o domain.Order, order model.Order,
 ) (OrderResult, error) {
-	result, rejects, err := l.eng.ApplyDropCopy(order)
+	operation, rejects, err := l.eng.ApplyDropCopy(order)
 	if err != nil {
 		return OrderResult{}, wrapPreTradeError(err)
 	}
 	if rejects != nil {
 		return OrderResult{Accepted: false, Rejects: orderRejectsFrom(rejects)}, nil
 	}
-	// Guard the FFI contract: Close dereferences the result, so a nil one must
-	// not reach the defer below.
-	if result == nil {
+	if operation == nil {
 		return OrderResult{}, fmt.Errorf(
-			"engine: drop-copy returned neither a result nor rejects",
+			"engine: drop-copy returned neither an operation nor rejects",
 		)
 	}
-	defer result.Close()
-
-	lock, err := result.Lock()
-	if err != nil {
-		return OrderResult{}, dropCopyReconciliationError(o, "read applied lock", err)
-	}
-	lockBytes, settlement, source, err := capturePreTradeOutput(lock, o)
-	if err != nil {
-		return OrderResult{}, dropCopyReconciliationError(o, "materialize lock", err)
-	}
-	if reject, ok := volumeOrderSizingReject(o, settlement); ok {
-		return OrderResult{}, dropCopyReconciliationError(
-			o,
-			"size volume order",
-			fmt.Errorf("%s: %s", reject.Reason, reject.Details),
-		)
-	}
-	leaves, err := immediateFillQuantity(o, settlement)
-	if err != nil {
-		return OrderResult{}, dropCopyReconciliationError(
-			o, "derive immediate fill quantity", err,
-		)
-	}
-	adjustments, err := result.AccountAdjustments()
-	if err != nil {
-		return OrderResult{}, dropCopyReconciliationError(
-			o, "read applied balance outcomes", err,
-		)
-	}
-	outcomes, err := balanceOutcomesFromList(adjustments)
-	if err != nil {
-		return OrderResult{}, dropCopyReconciliationError(
-			o, "map balance outcomes", err,
-		)
-	}
-	block, err := result.AccountBlock()
-	if err != nil {
-		return OrderResult{}, dropCopyReconciliationError(
-			o, "read applied account block", err,
-		)
-	}
-	var blocks []reject.AccountBlock
-	if block != nil {
-		blocks = append(blocks, *block)
-	}
-	return OrderResult{
-		Accepted:            true,
-		Lock:                lockBytes,
-		Blocks:              executionBlocksFrom(blocks, o.Account),
-		Outcomes:            outcomes,
-		SettlementLockPrice: settlement,
-		LeavesQuantity:      leaves,
-		EstimateSource:      source,
-	}, nil
+	return finalizeDropCopy(operation, func() (OrderResult, error) {
+		lock, err := operation.Lock()
+		if err != nil {
+			return OrderResult{}, fmt.Errorf(
+				"engine: read drop-copy lock: %w", err,
+			)
+		}
+		lockBytes, settlement, err := capturePreTradeOutput(lock, o)
+		if err != nil {
+			return OrderResult{}, err
+		}
+		adjustments, err := operation.AccountAdjustments()
+		if err != nil {
+			return OrderResult{}, err
+		}
+		outcomes, err := balanceOutcomesFromList(adjustments)
+		if err != nil {
+			return OrderResult{}, err
+		}
+		block, err := operation.AccountBlock()
+		if err != nil {
+			return OrderResult{}, err
+		}
+		var blocks []reject.AccountBlock
+		if block != nil {
+			blocks = append(blocks, *block)
+		}
+		return OrderResult{
+			Accepted:            true,
+			Lock:                lockBytes,
+			Blocks:              executionBlocksFrom(blocks, o.Account),
+			Outcomes:            outcomes,
+			SettlementLockPrice: settlement,
+		}, nil
+	})
 }
 
-// dropCopyReconciliationError reports state the engine already applied and the
-// caller must reconcile by hand. The cause is rendered, not wrapped: causes
-// carrying domain.ErrInvalid would answer 400 "fix your input and retry", which
-// contradicts the message and hides an internal failure.
-func dropCopyReconciliationError(o domain.Order, action string, err error) error {
-	return fmt.Errorf(
-		"engine: drop-copy already applied for order %s (account %s), "+
-			"but Officer could not %s; engine state needs manual reconciliation - "+
-			"do not retry blindly: %v",
-		orderExternalIDForError(o.ExternalID), o.Account, action, err,
-	)
+// finalizeDropCopy commits only a fully materialized operation. On a derivation
+// error it compensates every applied mutation before releasing the native
+// handle. Rollback is intentionally void in the SDK: a callback failure arms
+// the engine-wide kill switch and appears on the next pre-trade call as
+// SystemUnavailable. The SDK exposes neither a finalizer result nor a live
+// kill-switch query, so Officer cannot mirror that block here without guessing.
+func finalizeDropCopy[Result any](
+	operation *pretrade.DropCopyOperation,
+	materialize func() (Result, error),
+) (Result, error) {
+	defer operation.Close()
+	result, err := materialize()
+	if err != nil {
+		operation.Rollback()
+		var zero Result
+		return zero, err
+	}
+	operation.Commit()
+	return result, nil
 }
 
 func wrapPreTradeError(err error) error {
@@ -1182,8 +1161,8 @@ func (l groupLane) ClearGroupCurrency(ctx context.Context, groupID string) error
 // CheckOrder runs the pre-trade pipeline for probe as a non-mutating dry-run.
 // It builds the same model.Order as SubmitOrder and runs ExecutePreTradeDryRun,
 // which evaluates every policy but commits nothing: no reservation is taken and
-// no account state changes. On pass it captures the would-be reservation lock
-// prices exactly as SubmitOrder captures them; on reject it returns the engine
+// no account state changes. On pass it reads the would-be settlement price
+// directly from the live lock; on reject it returns the engine
 // rejects plus the account block the engine would record. The dry-run report
 // owns native memory and never escapes the adapter.
 func (e *openPitEngine) CheckOrder(
@@ -1258,13 +1237,14 @@ func (l accountLane) CheckOrder(
 	}
 	prices, err := lock.Prices()
 	if err != nil {
-		return domain.CheckResult{}, fmt.Errorf("engine: read dry-run lock prices: %w", err)
+		return domain.CheckResult{}, fmt.Errorf(
+			"engine: read dry-run lock prices: %w", err,
+		)
 	}
-	lockPrices := make([]string, 0, len(prices))
-	for _, price := range prices {
-		lockPrices = append(lockPrices, price.String())
-	}
-	return domain.CheckResult{Passed: true, WouldLockPrices: lockPrices}, nil
+	lockPrice := settlementPrice(
+		pricesToStrings(prices), "dry-run:"+string(probe.Account),
+	)
+	return domain.CheckResult{Passed: true, WouldLockPrice: lockPrice}, nil
 }
 
 // MarketDataSink returns the quote sink backed by the engine's market-data

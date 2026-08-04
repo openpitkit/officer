@@ -281,15 +281,19 @@ func (rt *restoreTx) restoreAccounts(ctx context.Context, accounts []backup.Acco
 				return fmt.Errorf("store: restore account %q: %w", a.Code, err)
 			}
 		}
-		pnl := a.Pnl
-		if pnl == "" {
-			pnl = "0"
-		}
-		if _, err := domain.AddDecimals("", pnl); err != nil {
-			return fmt.Errorf("store: restore account %q pnl %q: %w", a.Code, pnl, err)
+		if a.Pnl != "" {
+			if _, err := domain.AddDecimals("", a.Pnl); err != nil {
+				return fmt.Errorf("store: restore account %q pnl %q: %w", a.Code, a.Pnl, err)
+			}
 		}
 		if err := domain.ValidatePnlHaltReason(a.PnlHaltReason); err != nil {
 			return fmt.Errorf("store: restore account %q: %w", a.Code, err)
+		}
+		// Restore stores what the archive carried: an absent P&L stays absent
+		// instead of becoming a zero the source never had.
+		var storedPnl any
+		if a.Pnl != "" && a.PnlHaltReason == "" {
+			storedPnl = a.Pnl
 		}
 		groupID, err := optionalGroupID(ctx, rt.tx, a.GroupCode)
 		if err != nil {
@@ -313,7 +317,7 @@ func (rt *restoreTx) restoreAccounts(ctx context.Context, accounts []backup.Acco
 				 SET title = ?, group_id = ?, currency_asset_id = ?, pnl = ?, pnl_halt_reason = ?,
 				     notes = ?, blocked = ?, block_reason = ?
 				 WHERE code = ?`,
-				a.Title, groupID, currencyID, pnl, a.PnlHaltReason, a.Notes, a.Blocked,
+				a.Title, groupID, currencyID, storedPnl, a.PnlHaltReason, a.Notes, a.Blocked,
 				a.BlockReason, a.Code,
 			); err != nil {
 				return fmt.Errorf("store: restore account %q: %w", a.Code, err)
@@ -323,7 +327,7 @@ func (rt *restoreTx) restoreAccounts(ctx context.Context, accounts []backup.Acco
 			`INSERT INTO account
 			 (code, title, group_id, currency_asset_id, pnl, pnl_halt_reason, notes, blocked, block_reason)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			a.Code, a.Title, groupID, currencyID, pnl, a.PnlHaltReason, a.Notes, a.Blocked,
+			a.Code, a.Title, groupID, currencyID, storedPnl, a.PnlHaltReason, a.Notes, a.Blocked,
 			a.BlockReason,
 		); err != nil {
 			return fmt.Errorf("store: restore account %q: %w", a.Code, err)
@@ -366,7 +370,7 @@ func (rt *restoreTx) restoreBalances(ctx context.Context, balances []domain.Bala
 		available := settleOrZero(b.Available)
 		held := settleOrZero(b.Held)
 		incoming := settleOrZero(b.Incoming)
-		realizedPnl := settleOrZero(b.RealizedPnl)
+		realizedPnl := nullablePnl(b.RealizedPnl, b.RealizedPnlHaltReason)
 		if _, err := rt.tx.ExecContext(
 			ctx,
 			`INSERT OR REPLACE INTO balance

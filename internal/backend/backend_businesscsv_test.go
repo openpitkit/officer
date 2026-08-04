@@ -18,21 +18,17 @@
 package backend_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/csv"
 	"errors"
-	"fmt"
 	"slices"
 	"strings"
 	"testing"
 
 	"go.openpit.dev/officer/framework/businesscsv"
 	"go.openpit.dev/officer/framework/domain"
-	"go.openpit.dev/officer/framework/engine"
-	"go.openpit.dev/officer/framework/marketdata"
-	"go.openpit.dev/officer/framework/node"
-	"go.openpit.dev/officer/framework/store"
 	"go.openpit.dev/officer/internal/backend"
-	"go.openpit.dev/officer/internal/store/sqlite"
 )
 
 func mdID(label string) domain.ExternalID {
@@ -142,7 +138,7 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 				t.Helper()
 				tok := mustWorkflow(t, svc)
 				if _, _, err := svc.CancelOrder(
-					context.Background(), tok.OrderExternalID, tok.Token, "operator",
+					context.Background(), tok.OrderExternalID, tok.Token, "10", "operator",
 				); err != nil {
 					t.Fatalf("cancel setup: %v", err)
 				}
@@ -164,7 +160,7 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 				tok := mustWorkflow(t, svc)
 				reset()
 				if _, _, err := svc.CancelOrder(
-					context.Background(), tok.OrderExternalID, tok.Token, "stale price",
+					context.Background(), tok.OrderExternalID, tok.Token, "10", "stale price",
 				); err != nil {
 					t.Fatalf("CancelOrder: %v", err)
 				}
@@ -179,13 +175,13 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 				t.Helper()
 				tok := mustWorkflow(t, svc)
 				if _, _, err := svc.CancelOrder(
-					context.Background(), tok.OrderExternalID, tok.Token, "setup",
+					context.Background(), tok.OrderExternalID, tok.Token, "10", "setup",
 				); err != nil {
 					t.Fatalf("cancel setup: %v", err)
 				}
 				reset()
 				if _, _, err := svc.CancelOrder(
-					context.Background(), tok.OrderExternalID, tok.Token, "too late",
+					context.Background(), tok.OrderExternalID, tok.Token, "10", "too late",
 				); !errors.Is(err, domain.ErrExecutionReportRequired) {
 					t.Fatalf("second cancel = %v, want explicit report", err)
 				}
@@ -219,394 +215,6 @@ func TestService_OrderFlowsRouteOnceFetchAtMostOnce(t *testing.T) {
 	}
 }
 
-func TestService_BusinessCSVImportStopKeepsPreviousRowsAndAudits(t *testing.T) {
-	t.Parallel()
-	svc, fn := newTestService()
-	fn.accounts = []domain.Account{{
-		Code: "acc-existing",
-	}}
-
-	body := []byte(
-		"code,title,group_code,notes,blocked,block_reason\n" +
-			"acc-new,,desk-a,new note,false,\n" +
-			"acc-existing,,desk-a,old note,false,\n" +
-			"acc-after,,desk-a,after,false,\n",
-	)
-	result, err := svc.ImportBusinessCSV(context.Background(),
-		backend.BusinessCSVImportRequest{
-			Entity:         businesscsv.EntityAccounts,
-			Delimiter:      businesscsv.DelimiterComma,
-			Filename:       "accounts.csv",
-			Payload:        body,
-			ConflictPolicy: businesscsv.ConflictStop,
-		})
-	if err != nil {
-		t.Fatalf("ImportBusinessCSV: %v", err)
-	}
-	if result.Counts.Applied != 1 || result.Counts.Conflicts != 1 ||
-		!result.Counts.Stopped || len(fn.createCalls) != 1 ||
-		fn.createCalls[0].Code != "acc-new" {
-		t.Fatalf("result=%+v createCalls=%+v", result.Counts, fn.createCalls)
-	}
-	if len(fn.auditCalls) != 1 ||
-		fn.auditCalls[0].Action != domain.AuditActionImportBusinessCSV ||
-		!strings.Contains(fn.auditCalls[0].Detail, "policy=stop") {
-		t.Fatalf("auditCalls = %+v", fn.auditCalls)
-	}
-}
-
-func TestService_BusinessCSVPartialImportFailureAuditsFileAttempt(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	svc, st, eng := newBusinessCSVRealService(t)
-
-	body := []byte(
-		"code,title,group_code,notes,blocked,block_reason\n" +
-			"acc-good,,,first note,false,\n" +
-			",,,bad note,false,\n",
-	)
-	_, err := svc.ImportBusinessCSV(ctx, backend.BusinessCSVImportRequest{
-		Entity:         businesscsv.EntityAccounts,
-		Delimiter:      businesscsv.DelimiterComma,
-		Filename:       "accounts.csv",
-		Payload:        body,
-		ConflictPolicy: businesscsv.ConflictReplace,
-	})
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("ImportBusinessCSV error = %v, want invalid", err)
-	}
-
-	if _, ok, err := st.GetAccount(ctx, "acc-good"); err != nil || ok {
-		t.Fatalf("GetAccount acc-good after failed import: %v ok=%v, want absent", err, ok)
-	}
-
-	operationAudits, err := st.ListAuditFiltered(ctx, domain.AuditFilter{
-		Actions: []domain.AuditAction{
-			domain.AuditActionCreateAccount,
-			domain.AuditActionSetNotes,
-			domain.AuditActionSetGroup,
-			domain.AuditActionBlock,
-			domain.AuditActionUnblock,
-		},
-		Account: "acc-good",
-	}, 10)
-	if err != nil {
-		t.Fatalf("ListAuditFiltered operations: %v", err)
-	}
-	if len(operationAudits) != 0 {
-		t.Fatalf("operation audits = %+v, want none after rollback", operationAudits)
-	}
-	if len(eng.adjustmentCalls) != 0 {
-		t.Fatalf("engine adjustment calls = %d, want none", len(eng.adjustmentCalls))
-	}
-
-	importAudits, err := st.ListAuditFiltered(ctx, domain.AuditFilter{
-		Actions: []domain.AuditAction{domain.AuditActionImportBusinessCSV},
-	}, 10)
-	if err != nil {
-		t.Fatalf("ListAuditFiltered import: %v", err)
-	}
-	if len(importAudits) != 1 ||
-		!strings.Contains(importAudits[0].Detail, "entity=accounts") ||
-		!strings.Contains(importAudits[0].Detail, "delimiter=comma") ||
-		!strings.Contains(importAudits[0].Detail, "file=accounts.csv") ||
-		!strings.Contains(importAudits[0].Detail, "policy=replace") ||
-		!strings.Contains(importAudits[0].Detail, "rows=2") ||
-		!strings.Contains(importAudits[0].Detail, "applied=0") ||
-		!strings.Contains(importAudits[0].Detail, "error=") {
-		t.Fatalf("import audit rows = %+v", importAudits)
-	}
-}
-
-func TestService_BusinessCSVImportRejectsInvalidTitle(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	svc, st, _ := newBusinessCSVRealService(t)
-	longTitle := strings.Repeat("x", 257)
-
-	body := []byte(
-		"code,title,group_code,notes,blocked,block_reason\n" +
-			"acc-bad," + longTitle + ",,,false,\n",
-	)
-	_, err := svc.ImportBusinessCSV(ctx, backend.BusinessCSVImportRequest{
-		Entity:         businesscsv.EntityAccounts,
-		Delimiter:      businesscsv.DelimiterComma,
-		Filename:       "accounts.csv",
-		Payload:        body,
-		ConflictPolicy: businesscsv.ConflictReplace,
-	})
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("ImportBusinessCSV error = %v, want invalid", err)
-	}
-	if _, ok, err := st.GetAccount(ctx, "acc-bad"); err != nil || ok {
-		t.Fatalf("GetAccount acc-bad after failed import: %v ok=%v, want absent", err, ok)
-	}
-}
-
-func TestService_BusinessCSVPositionsRoundTripPreservesRealizedPnl(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	sourceSvc, sourceStore, _ := newBusinessCSVRealService(t)
-	if err := sourceStore.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
-		t.Fatalf("CreateAsset source: %v", err)
-	}
-	if _, err := sourceStore.CreateAccount(ctx, domain.Account{
-		Code: "acc-1",
-	}); err != nil {
-		t.Fatalf("CreateAccount source: %v", err)
-	}
-	want := domain.Balance{
-		Account:           "acc-1",
-		Asset:             "USD",
-		Available:         "100.25",
-		Held:              "10.5",
-		Incoming:          "2.75",
-		RealizedPnl:       "7.125",
-		AverageEntryPrice: "99.5",
-	}
-	if err := sourceStore.UpsertBalance(ctx, want); err != nil {
-		t.Fatalf("UpsertBalance source: %v", err)
-	}
-
-	file, err := sourceSvc.ExportBusinessCSV(ctx, backend.BusinessCSVExportRequest{
-		Entity:    businesscsv.EntityPositions,
-		Delimiter: businesscsv.DelimiterSemicolon,
-	})
-	if err != nil {
-		t.Fatalf("ExportBusinessCSV: %v", err)
-	}
-	if !strings.Contains(string(file.Body), "7.125") {
-		t.Fatalf("exported body %q does not contain realized_pnl", file.Body)
-	}
-
-	targetSvc, targetStore, targetEngine := newBusinessCSVRealService(t)
-	// Positions reference an existing account and asset by code; the relational
-	// store enforces those foreign keys, so seed the dictionary rows before import.
-	if err := targetStore.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
-		t.Fatalf("CreateAsset target: %v", err)
-	}
-	if _, err := targetStore.CreateAccount(ctx, domain.Account{Code: "acc-1"}); err != nil {
-		t.Fatalf("CreateAccount target: %v", err)
-	}
-	result, err := targetSvc.ImportBusinessCSV(ctx, backend.BusinessCSVImportRequest{
-		Entity:         businesscsv.EntityPositions,
-		Delimiter:      businesscsv.DelimiterSemicolon,
-		Filename:       file.Name,
-		Payload:        file.Body,
-		ConflictPolicy: businesscsv.ConflictReplace,
-	})
-	if err != nil {
-		t.Fatalf("ImportBusinessCSV: %v", err)
-	}
-	if result.Counts.Applied != 1 || result.Counts.Conflicts != 0 {
-		t.Fatalf("import counts = %+v", result.Counts)
-	}
-	if len(targetEngine.adjustmentCalls) != 1 {
-		t.Fatalf("engine adjustment calls = %d, want 1", len(targetEngine.adjustmentCalls))
-	}
-	got, ok, err := targetStore.GetBalance(ctx, "acc-1", "USD")
-	if err != nil || !ok {
-		t.Fatalf("GetBalance target: %v ok=%v", err, ok)
-	}
-	if got.Available != want.Available || got.Held != want.Held ||
-		got.Incoming != want.Incoming || got.RealizedPnl != want.RealizedPnl ||
-		got.AverageEntryPrice != want.AverageEntryPrice {
-		t.Fatalf("target balance = %+v, want %+v", got, want)
-	}
-	audits, err := targetStore.ListAuditFiltered(ctx, domain.AuditFilter{
-		Actions: []domain.AuditAction{domain.AuditActionAdjustment},
-		Account: "acc-1",
-	}, 10)
-	if err != nil {
-		t.Fatalf("ListAuditFiltered adjustment: %v", err)
-	}
-	if len(audits) != 1 ||
-		!strings.Contains(audits[0].Detail, "import position snapshot account acc-1 asset=USD") ||
-		!strings.Contains(audits[0].Detail, "realized_pnl=7.125") {
-		t.Fatalf("adjustment audit rows = %+v", audits)
-	}
-	importAudits, err := targetStore.ListAuditFiltered(ctx, domain.AuditFilter{
-		Actions: []domain.AuditAction{domain.AuditActionImportBusinessCSV},
-	}, 10)
-	if err != nil {
-		t.Fatalf("ListAuditFiltered import: %v", err)
-	}
-	if len(importAudits) != 1 || !strings.Contains(importAudits[0].Detail, "applied=1") {
-		t.Fatalf("import audit rows = %+v", importAudits)
-	}
-}
-
-func TestService_BusinessCSVGroupsRoundTripPreservesCurrency(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	sourceSvc, sourceStore, _ := newBusinessCSVRealService(t)
-	if err := sourceStore.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
-		t.Fatalf("CreateAsset source USD: %v", err)
-	}
-	if _, err := sourceStore.CreateGroup(ctx, domain.AccountGroup{
-		Code: "desk-us", Title: "US Desk", Currency: "USD",
-	}); err != nil {
-		t.Fatalf("CreateGroup source: %v", err)
-	}
-
-	file, err := sourceSvc.ExportBusinessCSV(ctx, backend.BusinessCSVExportRequest{
-		Entity:    businesscsv.EntityAccountGroups,
-		Delimiter: businesscsv.DelimiterComma,
-	})
-	if err != nil {
-		t.Fatalf("ExportBusinessCSV: %v", err)
-	}
-	body := string(file.Body)
-	if !strings.Contains(body, "currency") || !strings.Contains(body, "USD") {
-		t.Fatalf("exported group CSV lost currency: %q", body)
-	}
-
-	targetSvc, targetStore, _ := newBusinessCSVRealService(t)
-	if err := targetStore.CreateAsset(ctx, domain.Asset{Code: "USD"}); err != nil {
-		t.Fatalf("CreateAsset target USD: %v", err)
-	}
-	result, err := targetSvc.ImportBusinessCSV(ctx, backend.BusinessCSVImportRequest{
-		Entity:         businesscsv.EntityAccountGroups,
-		Delimiter:      businesscsv.DelimiterComma,
-		Filename:       file.Name,
-		Payload:        file.Body,
-		ConflictPolicy: businesscsv.ConflictReplace,
-	})
-	if err != nil {
-		t.Fatalf("ImportBusinessCSV: %v", err)
-	}
-	if result.Counts.Applied != 1 || result.Counts.Conflicts != 0 {
-		t.Fatalf("import counts = %+v", result.Counts)
-	}
-	group, ok, err := targetStore.GetGroup(ctx, "desk-us")
-	if err != nil || !ok {
-		t.Fatalf("GetGroup target: ok=%v err=%v", ok, err)
-	}
-	if group.Currency != "USD" {
-		t.Fatalf("target group currency = %q, want USD", group.Currency)
-	}
-}
-
-func TestService_BusinessCSVAccountsRoundTripPreservesCurrency(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	sourceSvc, sourceStore, _ := newBusinessCSVRealService(t)
-	if err := sourceStore.CreateAsset(ctx, domain.Asset{Code: "JPY"}); err != nil {
-		t.Fatalf("CreateAsset source JPY: %v", err)
-	}
-	if _, err := sourceStore.CreateGroup(ctx, domain.AccountGroup{Code: "desk-jp"}); err != nil {
-		t.Fatalf("CreateGroup source: %v", err)
-	}
-	if _, err := sourceStore.CreateAccount(ctx, domain.Account{
-		Code: "acc-jpy", GroupCode: "desk-jp", Currency: "JPY",
-	}); err != nil {
-		t.Fatalf("CreateAccount source: %v", err)
-	}
-
-	file, err := sourceSvc.ExportBusinessCSV(ctx, backend.BusinessCSVExportRequest{
-		Entity:    businesscsv.EntityAccounts,
-		Delimiter: businesscsv.DelimiterComma,
-	})
-	if err != nil {
-		t.Fatalf("ExportBusinessCSV: %v", err)
-	}
-	body := string(file.Body)
-	if !strings.Contains(body, "currency") || !strings.Contains(body, "JPY") {
-		t.Fatalf("exported account CSV lost currency: %q", body)
-	}
-
-	targetSvc, targetStore, _ := newBusinessCSVRealService(t)
-	if err := targetStore.CreateAsset(ctx, domain.Asset{Code: "JPY"}); err != nil {
-		t.Fatalf("CreateAsset target JPY: %v", err)
-	}
-	if _, err := targetStore.CreateGroup(ctx, domain.AccountGroup{Code: "desk-jp"}); err != nil {
-		t.Fatalf("CreateGroup target: %v", err)
-	}
-	result, err := targetSvc.ImportBusinessCSV(ctx, backend.BusinessCSVImportRequest{
-		Entity:         businesscsv.EntityAccounts,
-		Delimiter:      businesscsv.DelimiterComma,
-		Filename:       file.Name,
-		Payload:        file.Body,
-		ConflictPolicy: businesscsv.ConflictReplace,
-	})
-	if err != nil {
-		t.Fatalf("ImportBusinessCSV: %v", err)
-	}
-	if result.Counts.Applied != 1 || result.Counts.Conflicts != 0 {
-		t.Fatalf("import counts = %+v", result.Counts)
-	}
-	account, ok, err := targetStore.GetAccount(ctx, "acc-jpy")
-	if err != nil || !ok {
-		t.Fatalf("GetAccount target: ok=%v err=%v", ok, err)
-	}
-	if account.Currency != "JPY" ||
-		account.EffectiveCurrency != "JPY" ||
-		account.CurrencyOrigin != domain.CurrencyOriginAccount {
-		t.Fatalf("target account currency = %+v", account)
-	}
-}
-
-func TestService_BusinessCSVPreviewRejectsMissingCurrencyAsset(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	svc, targetStore, _ := newBusinessCSVRealService(t)
-	if _, err := targetStore.CreateGroup(ctx, domain.AccountGroup{Code: "desk-jp"}); err != nil {
-		t.Fatalf("CreateGroup target: %v", err)
-	}
-
-	body := []byte(
-		"code,title,group_code,currency,notes,blocked,block_reason\n" +
-			"acc-jpy,,desk-jp,JPY,,false,\n",
-	)
-	_, err := svc.PreviewBusinessCSVImport(ctx, backend.BusinessCSVImportRequest{
-		Entity:    businesscsv.EntityAccounts,
-		Delimiter: businesscsv.DelimiterComma,
-		Filename:  "accounts.csv",
-		Payload:   body,
-	})
-	if !errors.Is(err, domain.ErrInvalid) ||
-		!strings.Contains(err.Error(), "row 2 JPY") {
-		t.Fatalf("PreviewBusinessCSVImport error = %v, want missing JPY invalid", err)
-	}
-}
-
-func TestService_BusinessCSVImportMissingCurrencyAssetAuditsAttempt(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	svc, targetStore, _ := newBusinessCSVRealService(t)
-
-	body := []byte(
-		"code,title,currency,notes,blocked,block_reason\n" +
-			"desk-us,US Desk,USD,,false,\n",
-	)
-	_, err := svc.ImportBusinessCSV(ctx, backend.BusinessCSVImportRequest{
-		Entity:         businesscsv.EntityAccountGroups,
-		Delimiter:      businesscsv.DelimiterComma,
-		Filename:       "account_groups.csv",
-		Payload:        body,
-		ConflictPolicy: businesscsv.ConflictReplace,
-	})
-	if !errors.Is(err, domain.ErrInvalid) ||
-		!strings.Contains(err.Error(), "row 2 USD") {
-		t.Fatalf("ImportBusinessCSV error = %v, want missing USD invalid", err)
-	}
-	if _, ok, err := targetStore.GetGroup(ctx, "desk-us"); err != nil || ok {
-		t.Fatalf("GetGroup desk-us after failed import: %v ok=%v, want absent", err, ok)
-	}
-	audits, err := targetStore.ListAuditFiltered(ctx, domain.AuditFilter{
-		Actions: []domain.AuditAction{domain.AuditActionImportBusinessCSV},
-	}, 10)
-	if err != nil {
-		t.Fatalf("ListAuditFiltered import: %v", err)
-	}
-	if len(audits) != 1 ||
-		!strings.Contains(audits[0].Detail, "entity=account_groups") ||
-		!strings.Contains(audits[0].Detail, "rows=1") ||
-		!strings.Contains(audits[0].Detail, "error=") {
-		t.Fatalf("import audit rows = %+v", audits)
-	}
-}
-
 func TestService_BusinessCSVExportAuditsAndDoesNotReuseBackupAction(t *testing.T) {
 	t.Parallel()
 	svc, fn := newTestService()
@@ -636,328 +244,6 @@ func TestService_BusinessCSVExportAuditsAndDoesNotReuseBackupAction(t *testing.T
 		t.Fatalf("auditCalls = %+v", fn.auditCalls)
 	}
 }
-
-func newBusinessCSVRealService(
-	t *testing.T,
-) (*backend.Service, store.RealmStore, *businessCSVRoundTripEngine) {
-	t.Helper()
-	ctx := context.Background()
-	st, err := sqlite.New(t.TempDir() + "/business-csv.db")
-	if err != nil {
-		t.Fatalf("sqlite.New: %v", err)
-	}
-	if err := st.Migrate(ctx); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
-	// All data access hangs off the realm handle; the single-realm SQLite store
-	// serves domain.DefaultRealm.
-	realm, err := st.ForRealm(ctx, domain.DefaultRealm)
-	if err != nil {
-		t.Fatalf("ForRealm: %v", err)
-	}
-	eng := &businessCSVRoundTripEngine{running: true}
-	n, _, err := node.NewLocalNode(ctx, st, func(snap engine.Snapshot) (engine.Engine, error) {
-		// Mirror the real adapter and the framework/node fakeEngine: seed the
-		// resolver from the snapshot, then let live dictionary calls publish later
-		// account and group changes without rebuilding the engine.
-		eng.knownAccounts = map[domain.AccountID]struct{}{}
-		for _, account := range snap.Accounts {
-			eng.knownAccounts[account.Code] = struct{}{}
-		}
-		eng.knownGroups = map[string]struct{}{}
-		for _, group := range snap.Groups {
-			eng.knownGroups[group.Code] = struct{}{}
-		}
-		return eng, nil
-	})
-	if err != nil {
-		t.Fatalf("NewLocalNode: %v", err)
-	}
-	t.Cleanup(func() { _ = n.Close() })
-	router, err := node.NewLocalRouter(n)
-	if err != nil {
-		t.Fatalf("NewLocalRouter: %v", err)
-	}
-	return backend.New(router, nil, nil), realm, eng
-}
-
-type businessCSVRoundTripEngine struct {
-	running              bool
-	enforceResolver      bool
-	knownAccounts        map[domain.AccountID]struct{}
-	knownGroups          map[string]struct{}
-	adjustmentCalls      []domain.AdjustmentRequest
-	adjustmentBatchCalls [][]domain.AdjustmentRequest
-}
-
-// resolveAccount mirrors the real adapter's pre-lane account resolution and the
-// framework/node fakeEngine: the engine resolver knows only the accounts it was
-// seeded with from a build/rebuild snapshot. Enforcement is opt-in (like
-// fakeEngine.enforceResolver) so a test that legitimately seeds an account
-// directly in the store, without the rebuild production would perform, still
-// resolves; the resolve step itself always runs before the lane callback.
-func (e *businessCSVRoundTripEngine) resolveAccount(account domain.AccountID) error {
-	if !e.enforceResolver {
-		return nil
-	}
-	if _, ok := e.knownAccounts[account]; !ok {
-		return fmt.Errorf("engine: unknown account %q: %w", account, domain.ErrInvalid)
-	}
-	return nil
-}
-
-func (e *businessCSVRoundTripEngine) AddAccountResolverEntry(account domain.Account) error {
-	if e.knownAccounts == nil {
-		e.knownAccounts = map[domain.AccountID]struct{}{}
-	}
-	if _, exists := e.knownAccounts[account.Code]; exists {
-		return fmt.Errorf("engine: duplicate account %q: %w", account.Code, domain.ErrInvalid)
-	}
-	e.knownAccounts[account.Code] = struct{}{}
-	return nil
-}
-
-func (e *businessCSVRoundTripEngine) RenameAccountResolverEntry(
-	oldCode domain.AccountID, account domain.Account,
-) error {
-	if _, exists := e.knownAccounts[oldCode]; !exists {
-		return fmt.Errorf("engine: unknown account %q: %w", oldCode, domain.ErrInvalid)
-	}
-	if oldCode != account.Code {
-		if _, exists := e.knownAccounts[account.Code]; exists {
-			return fmt.Errorf("engine: duplicate account %q: %w", account.Code, domain.ErrInvalid)
-		}
-	}
-	delete(e.knownAccounts, oldCode)
-	e.knownAccounts[account.Code] = struct{}{}
-	return nil
-}
-
-func (e *businessCSVRoundTripEngine) AddGroupResolverEntry(group domain.AccountGroup) error {
-	if e.knownGroups == nil {
-		e.knownGroups = map[string]struct{}{}
-	}
-	if _, exists := e.knownGroups[group.Code]; exists {
-		return fmt.Errorf("engine: duplicate group %q: %w", group.Code, domain.ErrInvalid)
-	}
-	e.knownGroups[group.Code] = struct{}{}
-	return nil
-}
-
-func (e *businessCSVRoundTripEngine) RenameGroupResolverEntry(
-	oldCode string, group domain.AccountGroup,
-) error {
-	if _, exists := e.knownGroups[oldCode]; !exists {
-		return fmt.Errorf("engine: unknown group %q: %w", oldCode, domain.ErrInvalid)
-	}
-	if oldCode != group.Code {
-		if _, exists := e.knownGroups[group.Code]; exists {
-			return fmt.Errorf("engine: duplicate group %q: %w", group.Code, domain.ErrInvalid)
-		}
-	}
-	delete(e.knownGroups, oldCode)
-	e.knownGroups[group.Code] = struct{}{}
-	return nil
-}
-
-func (e *businessCSVRoundTripEngine) RemoveGroupResolverEntry(group domain.AccountGroup) error {
-	if _, exists := e.knownGroups[group.Code]; !exists {
-		return fmt.Errorf("engine: unknown group %q: %w", group.Code, domain.ErrInvalid)
-	}
-	delete(e.knownGroups, group.Code)
-	return nil
-}
-
-// TestBusinessCSVRoundTripEngine_RunAccountSynchronizedResolvesBeforeCallback
-// guards the fake's account-lane seam: an unknown account must reject before the
-// lane callback runs, and a known account must resolve and run it. This proves
-// the resolve-before-callback fix is not a permissive no-op.
-func TestBusinessCSVRoundTripEngine_RunAccountSynchronizedResolvesBeforeCallback(t *testing.T) {
-	t.Parallel()
-	eng := &businessCSVRoundTripEngine{
-		running:         true,
-		enforceResolver: true,
-		knownAccounts:   map[domain.AccountID]struct{}{"acc-known": {}},
-	}
-
-	ran := false
-	err := eng.RunAccountSynchronized(context.Background(), "acc-missing",
-		func(engine.AccountLane) error {
-			ran = true
-			return nil
-		})
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("unknown account error = %v, want ErrInvalid before callback", err)
-	}
-	if ran {
-		t.Fatal("callback ran for an unresolved account; the lane seam is not gated")
-	}
-
-	ran = false
-	if err := eng.RunAccountSynchronized(context.Background(), "acc-known",
-		func(engine.AccountLane) error {
-			ran = true
-			return nil
-		}); err != nil {
-		t.Fatalf("known account RunAccountSynchronized: %v", err)
-	}
-	if !ran {
-		t.Fatal("callback did not run for a resolved account")
-	}
-}
-
-func (e *businessCSVRoundTripEngine) Version() string      { return "fake" }
-func (e *businessCSVRoundTripEngine) BuildProfile() string { return "test" }
-func (e *businessCSVRoundTripEngine) Running() bool        { return e.running }
-func (e *businessCSVRoundTripEngine) ConfigurePolicy(
-	context.Context, string, engine.LimitSet,
-) (engine.PolicyConfigurationResult, error) {
-	return engine.PolicyConfigurationResult{}, nil
-}
-func (e *businessCSVRoundTripEngine) BlockAccount(context.Context, domain.AccountID, string) error {
-	return nil
-}
-func (e *businessCSVRoundTripEngine) UnblockAccount(context.Context, domain.AccountID) error {
-	return nil
-}
-func (e *businessCSVRoundTripEngine) ApplyAccountAdjustment(
-	ctx context.Context, account domain.AccountID, req domain.AdjustmentRequest,
-) (engine.AdjustmentResult, error) {
-	results, batchReject, err := e.ApplyAccountAdjustmentBatch(ctx, account,
-		[]domain.AdjustmentRequest{req})
-	if err != nil {
-		return engine.AdjustmentResult{}, err
-	}
-	if batchReject != nil {
-		return engine.AdjustmentResult{Rejected: batchReject}, nil
-	}
-	return results[0], nil
-}
-func (e *businessCSVRoundTripEngine) ApplyAccountAdjustmentBatch(
-	_ context.Context, _ domain.AccountID, reqs []domain.AdjustmentRequest,
-) ([]engine.AdjustmentResult, *engine.AdjustmentBatchReject, error) {
-	e.adjustmentBatchCalls = append(e.adjustmentBatchCalls,
-		append([]domain.AdjustmentRequest(nil), reqs...))
-	results := make([]engine.AdjustmentResult, 0, len(reqs))
-	for _, req := range reqs {
-		e.adjustmentCalls = append(e.adjustmentCalls, req)
-		accepted := &domain.AdjustmentOutcomeAccepted{}
-		if req.Balance != nil {
-			accepted.BalanceResult = req.Balance.Value
-		}
-		if req.Held != nil {
-			accepted.HeldResult = req.Held.Value
-		}
-		if req.Incoming != nil {
-			accepted.IncomingResult = req.Incoming.Value
-		}
-		results = append(results, engine.AdjustmentResult{Accepted: accepted})
-	}
-	return results, nil, nil
-}
-func (e *businessCSVRoundTripEngine) SubmitOrder(
-	context.Context, domain.Order,
-) (engine.OrderResult, error) {
-	return engine.OrderResult{Accepted: true}, nil
-}
-func (e *businessCSVRoundTripEngine) SetAccountCurrency(
-	context.Context, domain.AccountID, string,
-) error {
-	return nil
-}
-func (e *businessCSVRoundTripEngine) ClearAccountCurrency(
-	context.Context, domain.AccountID,
-) error {
-	return nil
-}
-func (e *businessCSVRoundTripEngine) SetAccountPnl(
-	context.Context, domain.AccountID, string,
-) ([]domain.AccountBlock, error) {
-	return nil, nil
-}
-
-func (e *businessCSVRoundTripEngine) SetAccountPnlState(
-	ctx context.Context,
-	id domain.AccountID,
-	pnl string,
-	haltReason domain.PnlHaltReason,
-) ([]domain.AccountBlock, error) {
-	if (pnl == "") == (haltReason == "") {
-		return nil, domain.ErrInvalid
-	}
-	if err := domain.ValidatePnlHaltReason(haltReason); err != nil {
-		return nil, err
-	}
-	if haltReason != "" {
-		return nil, nil
-	}
-	return e.SetAccountPnl(ctx, id, pnl)
-}
-func (e *businessCSVRoundTripEngine) SubmitImmediate(
-	context.Context, domain.Order,
-) (engine.ImmediateResult, error) {
-	return engine.ImmediateResult{Accepted: true}, nil
-}
-func (e *businessCSVRoundTripEngine) RunAccountSynchronized(
-	_ context.Context, account domain.AccountID, fn func(engine.AccountLane) error,
-) error {
-	// Mirror the real adapter (openPitEngine.RunAccountSynchronized) and the
-	// framework/node fakeEngine: resolve the account before entering the lane, so a
-	// brand-new account rejects here and its callback never runs unless a pre-lane
-	// rebuild has already registered it. Resolving before fn is what exercises the
-	// account-lane seam.
-	if err := e.resolveAccount(account); err != nil {
-		return err
-	}
-	return fn(e)
-}
-func (e *businessCSVRoundTripEngine) RunGroupSynchronized(
-	_ context.Context, _ string, fn func(engine.GroupLane) error,
-) error {
-	return fn(e)
-}
-func (e *businessCSVRoundTripEngine) ApplyExecutionReport(
-	context.Context, domain.ExecutionReportInput,
-) (engine.ExecutionReportResult, error) {
-	return engine.ExecutionReportResult{}, nil
-}
-func (e *businessCSVRoundTripEngine) RegisterGroup(
-	context.Context, []domain.AccountID, string,
-) error {
-	return nil
-}
-func (e *businessCSVRoundTripEngine) UnregisterGroup(
-	context.Context, []domain.AccountID, string,
-) error {
-	return nil
-}
-func (e *businessCSVRoundTripEngine) BlockGroup(context.Context, string, string) error {
-	return nil
-}
-func (e *businessCSVRoundTripEngine) UnblockGroup(context.Context, string) error {
-	return nil
-}
-
-func (e *businessCSVRoundTripEngine) SetGroupCurrency(
-	context.Context, string, string,
-) error {
-	return nil
-}
-
-func (e *businessCSVRoundTripEngine) ClearGroupCurrency(
-	context.Context, string,
-) error {
-	return nil
-}
-func (e *businessCSVRoundTripEngine) CheckOrder(
-	context.Context, domain.OrderProbe,
-) (domain.CheckResult, error) {
-	return domain.CheckResult{}, nil
-}
-func (e *businessCSVRoundTripEngine) MarketDataSink() marketdata.Sink {
-	return &backendTestSink{}
-}
-func (e *businessCSVRoundTripEngine) Stop() { e.running = false }
 
 func TestService_BusinessCSVExportAccountGroupFilterPresence(t *testing.T) {
 	t.Parallel()
@@ -1027,110 +313,46 @@ func TestService_BusinessCSVExportAccountGroupFilterPresence(t *testing.T) {
 	}
 }
 
-// A pnl_halt_reason the engine cannot map would fail the engine rebuild on the
-// next start, and CSV import performs no rebuild that would catch it - so the
-// import boundary must reject it before it reaches the store.
-// TestService_BusinessCSVImportRejectsReservedGroupCode closes the CSV hole in
-// the reserved-sentinel rule. "-" addresses the realm default group in a path
-// position, so a real group carrying that code is shadowed by the default-group
-// route and can never be renamed or deleted again. The REST handlers refuse it,
-// but the import bypasses them entirely - the guard therefore lives in
-// domain.ValidateGroupID, which every writer goes through.
-func TestService_BusinessCSVImportRejectsReservedGroupCode(t *testing.T) {
+func TestService_BusinessCSVOrderExportKeepsUnreadableLockRow(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
-	svc, st, _ := newBusinessCSVRealService(t)
+	svc, fn := newTestService()
+	fn.allOrders = []domain.Order{{
+		ExternalID:  "order-corrupt-lock",
+		Account:     "acc-1",
+		BaseAsset:   "AAPL",
+		QuoteAsset:  "USD",
+		Principal:   "operator",
+		Source:      domain.SourcePanel,
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "1",
+		Price:       "152",
+		Leaves:      "1",
+		Status:      domain.OrderStatusAccepted,
+		Lock:        []byte{0x01, 0x02, 0x03},
+	}}
 
-	body := []byte(
-		"code,title,currency,notes,blocked,block_reason\n" +
-			"-,Default Impostor,,,false,\n",
-	)
-	_, err := svc.ImportBusinessCSV(ctx, backend.BusinessCSVImportRequest{
-		Entity:         businesscsv.EntityAccountGroups,
-		Delimiter:      businesscsv.DelimiterComma,
-		Filename:       "groups.csv",
-		Payload:        body,
-		ConflictPolicy: businesscsv.ConflictReplace,
-	})
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("ImportBusinessCSV error = %v, want invalid", err)
+	file, err := svc.ExportBusinessCSV(context.Background(),
+		backend.BusinessCSVExportRequest{
+			Entity:    businesscsv.EntityOrders,
+			Delimiter: businesscsv.DelimiterComma,
+		})
+	if err != nil {
+		t.Fatalf("ExportBusinessCSV(orders): %v", err)
 	}
-	if _, ok, err := st.GetGroup(ctx, "-"); err != nil || ok {
-		t.Fatalf("GetGroup \"-\" after failed import: %v ok=%v, want absent", err, ok)
+	rows, err := csv.NewReader(bytes.NewReader(file.Body)).ReadAll()
+	if err != nil {
+		t.Fatalf("read orders CSV: %v", err)
 	}
-	// An account row naming the sentinel as its group must not slip a "-" group
-	// in through the import's auto-create path either.
-	accounts := []byte(
-		"code,title,group_code,notes,blocked,block_reason\n" +
-			"acc-bad,,-,,false,\n",
-	)
-	_, err = svc.ImportBusinessCSV(ctx, backend.BusinessCSVImportRequest{
-		Entity:         businesscsv.EntityAccounts,
-		Delimiter:      businesscsv.DelimiterComma,
-		Filename:       "accounts.csv",
-		Payload:        accounts,
-		ConflictPolicy: businesscsv.ConflictReplace,
-	})
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("ImportBusinessCSV(accounts) error = %v, want invalid", err)
+	if len(rows) != 2 {
+		t.Fatalf("orders CSV rows = %d, want header and corrupt-lock order", len(rows))
 	}
-	if _, ok, err := st.GetGroup(ctx, "-"); err != nil || ok {
-		t.Fatalf("GetGroup \"-\" after account import: %v ok=%v, want absent", err, ok)
+	column := make(map[string]int, len(rows[0]))
+	for index, name := range rows[0] {
+		column[name] = index
 	}
-	if _, ok, err := st.GetAccount(ctx, "acc-bad"); err != nil || ok {
-		t.Fatalf("GetAccount acc-bad after failed import: %v ok=%v, want absent", err, ok)
-	}
-}
-
-func TestService_BusinessCSVImportRejectsUnmappablePnlHaltReason(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	svc, st, _ := newBusinessCSVRealService(t)
-
-	body := []byte(
-		"code,title,group_code,currency,pnl,pnl_halt_reason,notes,blocked,block_reason\n" +
-			"acc-bad,,,,0,missing_fxx,,false,\n",
-	)
-	_, err := svc.ImportBusinessCSV(ctx, backend.BusinessCSVImportRequest{
-		Entity:         businesscsv.EntityAccounts,
-		Delimiter:      businesscsv.DelimiterComma,
-		Filename:       "accounts.csv",
-		Payload:        body,
-		ConflictPolicy: businesscsv.ConflictReplace,
-	})
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("ImportBusinessCSV error = %v, want invalid", err)
-	}
-	if _, ok, err := st.GetAccount(ctx, "acc-bad"); err != nil || ok {
-		t.Fatalf("GetAccount acc-bad after failed import: %v ok=%v, want absent", err, ok)
-	}
-}
-
-// A known reason must still import, so the guard does not reject valid engine
-// halts round-tripped through CSV.
-func TestService_BusinessCSVImportAcceptsKnownPnlHaltReason(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	svc, st, _ := newBusinessCSVRealService(t)
-
-	body := []byte(
-		"code,title,group_code,currency,pnl,pnl_halt_reason,notes,blocked,block_reason\n" +
-			"acc-ok,,,,0,missing_fx,,false,\n",
-	)
-	if _, err := svc.ImportBusinessCSV(ctx, backend.BusinessCSVImportRequest{
-		Entity:         businesscsv.EntityAccounts,
-		Delimiter:      businesscsv.DelimiterComma,
-		Filename:       "accounts.csv",
-		Payload:        body,
-		ConflictPolicy: businesscsv.ConflictReplace,
-	}); err != nil {
-		t.Fatalf("ImportBusinessCSV error = %v, want nil", err)
-	}
-	account, ok, err := st.GetAccount(ctx, "acc-ok")
-	if err != nil || !ok {
-		t.Fatalf("GetAccount acc-ok: %v ok=%v, want present", err, ok)
-	}
-	if account.PnlHaltReason != domain.PnlHaltReasonMissingFx {
-		t.Fatalf("PnlHaltReason = %q, want %q", account.PnlHaltReason, domain.PnlHaltReasonMissingFx)
+	if rows[1][column["id"]] != "order-corrupt-lock" ||
+		rows[1][column["lock_price"]] != "" {
+		t.Fatalf("corrupt-lock row = %v, want retained with empty lock_price", rows[1])
 	}
 }

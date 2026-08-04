@@ -1174,36 +1174,3 @@ func TestLocalNode_ApplyAdjustmentWithoutBlocksLeavesBlockState(t *testing.T) {
 		t.Fatalf("block audit rows = %+v, want none", rows)
 	}
 }
-
-// ImportPositionSnapshot shares the adjustment path, so an engine block it
-// triggers must reach the store the same way.
-func TestLocalNode_ImportPositionSnapshotMirrorsEngineAccountBlock(t *testing.T) {
-	t.Parallel()
-	eng := newFakeEngine()
-	eng.adjustmentBatchResults = []engine.AdjustmentResult{{
-		Accepted: &domain.AdjustmentOutcomeAccepted{BalanceResult: "10"},
-		AccountBlocks: []domain.AccountBlock{{
-			Account: "acc-1",
-			Policy:  domain.PolicySpotFundsPnlBoundsKillSwitch,
-			Code:    "pnl_bounds",
-			Reason:  "realized pnl below bound",
-		}},
-	}}
-	n, st := newTestNode(t, eng)
-	ctx := context.Background()
-	seedTestAccount(t, st, "acc-1")
-
-	if _, err := n.ImportPositionSnapshot(ctx, testKey("acc-1"), domain.ExternalID(""),
-		domain.Balance{Account: "acc-1", Asset: "USD", Available: "10"},
-		testCaller); err != nil {
-		t.Fatalf("ImportPositionSnapshot: %v", err)
-	}
-
-	account, ok, err := st.GetAccount(ctx, "acc-1")
-	if err != nil || !ok {
-		t.Fatalf("GetAccount = ok %v, err %v; want present", ok, err)
-	}
-	if !account.Blocked {
-		t.Fatalf("account = %+v, want blocked by the engine kill-switch", account)
-	}
-}

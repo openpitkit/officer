@@ -711,7 +711,7 @@ func TestExecutionReportRequiresEngine(t *testing.T) {
 			},
 		},
 		{
-			name: "workflow with optional leaves",
+			name: "workflow with leaves stays DB-only",
 			in: domain.ExecutionReportInput{
 				LeavesQuantity: "1.5",
 				OrderStatus:    domain.OrderStatusCommitted,
@@ -784,6 +784,12 @@ func TestExecutionReportRequiresEngine(t *testing.T) {
 			},
 			requiresEngine: true,
 		},
+		{
+			name: "workflow status without leaves stays DB-only",
+			in: domain.ExecutionReportInput{
+				OrderStatus: domain.OrderStatusSubmitted,
+			},
+		},
 	}
 	for _, tc := range valid {
 		t.Run(tc.name, func(t *testing.T) {
@@ -832,26 +838,6 @@ func TestExecutionReportRequiresEngine(t *testing.T) {
 			},
 		},
 		{
-			name: "engine report without leaves",
-			in: domain.ExecutionReportInput{
-				OrderStatus: domain.OrderStatusCancelled,
-			},
-		},
-		{
-			name: "negative leaves",
-			in: domain.ExecutionReportInput{
-				LeavesQuantity: "-1",
-				OrderStatus:    domain.OrderStatusAccepted,
-			},
-		},
-		{
-			name: "malformed leaves",
-			in: domain.ExecutionReportInput{
-				LeavesQuantity: "not-a-number",
-				OrderStatus:    domain.OrderStatusCommitted,
-			},
-		},
-		{
 			name: "workflow with lock price",
 			in: domain.ExecutionReportInput{
 				LockPrice:   "100",
@@ -878,13 +864,6 @@ func TestExecutionReportRequiresEngine(t *testing.T) {
 			},
 		},
 		{
-			name: "commission report without leaves",
-			in: domain.ExecutionReportInput{
-				Commission:  &domain.Commission{Amount: "-1", Currency: "USD"},
-				OrderStatus: domain.OrderStatusAccepted,
-			},
-		},
-		{
 			name: "terminal with one-sided commission",
 			in: domain.ExecutionReportInput{
 				LeavesQuantity: "1",
@@ -892,6 +871,44 @@ func TestExecutionReportRequiresEngine(t *testing.T) {
 					Amount: "-1",
 				},
 				OrderStatus: domain.OrderStatusCancelled,
+			},
+		},
+		{
+			name: "fill without leaves",
+			in: domain.ExecutionReportInput{
+				FillQuantity: "1",
+				FillPrice:    "100",
+				OrderStatus:  domain.OrderStatusFilled,
+			},
+		},
+		{
+			name: "commission without leaves",
+			in: domain.ExecutionReportInput{
+				Commission: &domain.Commission{
+					Amount:   "-1",
+					Currency: "USD",
+				},
+				OrderStatus: domain.OrderStatusAccepted,
+			},
+		},
+		{
+			name: "terminal without leaves",
+			in: domain.ExecutionReportInput{
+				OrderStatus: domain.OrderStatusCancelled,
+			},
+		},
+		{
+			name: "workflow with malformed leaves",
+			in: domain.ExecutionReportInput{
+				LeavesQuantity: "not-a-number",
+				OrderStatus:    domain.OrderStatusCommitted,
+			},
+		},
+		{
+			name: "workflow with negative leaves",
+			in: domain.ExecutionReportInput{
+				LeavesQuantity: "-1",
+				OrderStatus:    domain.OrderStatusAccepted,
 			},
 		},
 	}
@@ -903,46 +920,14 @@ func TestExecutionReportRequiresEngine(t *testing.T) {
 			}
 		})
 	}
-}
 
-func TestExecutionReportPersistedLeaves(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name string
-		in   domain.ExecutionReportInput
-		want string
-	}{
-		{
-			name: "partial fill keeps remaining quantity",
-			in: domain.ExecutionReportInput{
-				LeavesQuantity: "2",
-				OrderStatus:    domain.OrderStatusPartiallyFilled,
-			},
-			want: "2",
-		},
-		{
-			name: "workflow keeps supplied leaves",
-			in: domain.ExecutionReportInput{
-				LeavesQuantity: "2",
-				OrderStatus:    domain.OrderStatusAccepted,
-			},
-			want: "2",
-		},
-		{
-			name: "terminal records zero after release",
-			in: domain.ExecutionReportInput{
-				LeavesQuantity: "2",
-				OrderStatus:    domain.OrderStatusCancelled,
-			},
-			want: "0",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			if got := domain.ExecutionReportPersistedLeaves(tc.in); got != tc.want {
-				t.Fatalf("ExecutionReportPersistedLeaves = %q, want %q", got, tc.want)
-			}
-		})
+	_, err := domain.ExecutionReportRequiresEngine(domain.ExecutionReportInput{
+		Commission:  &domain.Commission{Amount: "-1"},
+		OrderStatus: domain.OrderStatusCancelled,
+	})
+	if !errors.Is(err, domain.ErrInvalid) ||
+		!strings.Contains(err.Error(), "commission amount and currency") {
+		t.Fatalf("one-sided commission error = %v, want commission error", err)
 	}
 }
 
@@ -1235,5 +1220,26 @@ func TestValidateMarketDataMark(t *testing.T) {
 				t.Fatalf("mark %q: expected ErrInvalid, got %v", mark, err)
 			}
 		})
+	}
+}
+
+func TestValidateImmediateOrderAmountKind(t *testing.T) {
+	t.Parallel()
+
+	if err := domain.ValidateImmediateOrderAmountKind(
+		domain.OrderAmountKindQuantity,
+	); err != nil {
+		t.Fatalf("quantity order: %v", err)
+	}
+	err := domain.ValidateImmediateOrderAmountKind(
+		domain.OrderAmountKindVolume,
+	)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("volume order error = %v, want ErrInvalid", err)
+	}
+	want := "executed quantity of a cash-denominated order is not derived by " +
+		"Officer and was not supplied in the request"
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("volume order error = %q, want %q", err, want)
 	}
 }

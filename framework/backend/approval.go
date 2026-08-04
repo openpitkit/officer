@@ -113,6 +113,7 @@ type cancelOrderAttestingNode interface {
 	CancelOrderWithAttestation(
 		ctx context.Context,
 		order domain.ExternalID,
+		leavesQuantity string,
 		caller domain.Caller,
 		attest store.EventAttestor,
 	) (domain.Order, engine.ExecutionReportResult, error)
@@ -455,7 +456,6 @@ func (s *Service) submitOrderToken(
 							SubmitModeHold,
 							submitApprovalID,
 							submitted.SettlementLockPrice,
-							submitted.EstimateSource,
 							time.Now().UTC(),
 							nonce,
 						), true, nil
@@ -528,7 +528,6 @@ func (s *Service) submitOrderToken(
 							SubmitModeImmediate,
 							submitApprovalID,
 							immediate.SettlementLockPrice,
-							immediate.EstimateSource,
 							time.Now().UTC(),
 							nonce,
 						), true, nil
@@ -565,7 +564,7 @@ func (s *Service) submitOrderToken(
 								QuoteAsset: eventOrder.QuoteAsset,
 								Side:       eventOrder.Side,
 								Quantity:   immediate.FillQuantity,
-								Price:      immediate.SettlementLockPrice,
+								Price:      immediate.TradePrice,
 								LockPrice:  immediate.SettlementLockPrice,
 							},
 							Blocks: immediate.Blocks,
@@ -763,13 +762,13 @@ func (s *Service) ConfirmExecution(
 	return confirmed, att, nil
 }
 
-// CancelOrder verifies the submit token, then asks the node to synthesize a
-// terminal cancellation execution report from the untouched stored order. The
-// normal engine path releases the order's remaining pre-trade effects. If any
-// execution report was already recorded, the shortcut fails and the caller must
-// provide an explicit report instead.
+// CancelOrder verifies the submit token, then forwards a caller-supplied
+// terminal cancellation report for the untouched stored order. Officer requires
+// leaves before settlement; the engine validates the supplied quantity value.
+// If any execution report was already recorded, the shortcut fails and the
+// caller must provide an explicit report instead.
 func (s *Service) CancelOrder(
-	ctx context.Context, orderID string, token, reason string,
+	ctx context.Context, orderID string, token, leavesQuantity, reason string,
 ) (domain.Order, Attestation, error) {
 	order, err := domain.ParseExternalID(orderID)
 	if err != nil {
@@ -833,9 +832,9 @@ func (s *Service) CancelOrder(
 			persistence := engine.ExecutionReportPersistence{
 				OrderStatus: status,
 				Commission:  event.Payload.Commission,
-				Leaves: domain.ExecutionReportPersistedLeavesFor(
-					status, event.Payload.LeavesQuantity,
-				),
+				// The signed attestation must bind the report as it arrived: the
+				// leaves the report carried, never one derived from its status.
+				Leaves: event.Payload.LeavesQuantity,
 			}
 			if event.Payload.RejectCode != "" || event.Payload.RejectReason != "" {
 				persistence.Blocks = []domain.ExecutionAccountBlock{{
@@ -868,7 +867,7 @@ func (s *Service) CancelOrder(
 		},
 	)
 	cancelled, _, err := attesting.CancelOrderWithAttestation(
-		ctx, order, caller, attest)
+		ctx, order, leavesQuantity, caller, attest)
 	if err != nil {
 		return domain.Order{}, Attestation{}, err
 	}
@@ -941,7 +940,7 @@ func requireShortcutSubmitVerdict(
 // recorded order, the engine estimate, and the lifecycle timestamps. KeyID and
 // Alg are set by the signer; the rest are bound here.
 func buildApprovalPayload(
-	order domain.Order, mode, approvalID, settlement, estimateSource string,
+	order domain.Order, mode, approvalID, settlement string,
 	issuedAt time.Time, nonce string,
 ) domain.ApprovalPayload {
 	orderType := "market"
@@ -964,7 +963,6 @@ func buildApprovalPayload(
 		Verdict:         "accept",
 		PolicySummary:   "accepted",
 		EstimatePrice:   settlement,
-		EstimateSource:  estimateSource,
 		IssuedAt:        issuedAt.Format(time.RFC3339Nano),
 		Nonce:           nonce,
 	}

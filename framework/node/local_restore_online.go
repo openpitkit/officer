@@ -431,8 +431,7 @@ func (n *localNode) applyRestoreRuntimeDelta(
 			return fmt.Errorf("apply restored account %q state: %w", code, err)
 		}
 		// Reapplying P&L against changed SpotFunds bounds evaluates live blocks.
-		// Keep the restored historical row exact; a halted row retains its
-		// numeric history.
+		// Keep the restored row exact; a halted row carries no numeric value.
 		if plan.spotFundsChanged {
 			if err := n.realm.SetAccountPnl(
 				context.WithoutCancel(ctx), code, next.Pnl, next.PnlHaltReason,

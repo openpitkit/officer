@@ -34,7 +34,6 @@ import type {
   BalanceListFilters,
   BusinessCsvEntity,
   BusinessCsvExportFilters,
-  BusinessCsvImportEntity,
   Group,
 } from "@/api/types";
 import type { PollingResult } from "@/api/usePolling";
@@ -70,35 +69,14 @@ vi.mock("@/components/TableControls", async () => {
     ...actual,
     CsvTransferMenu: ({
       exports,
-      imports,
-      onImported,
     }: {
       exports?: {
         entity: BusinessCsvEntity;
         filters?: BusinessCsvExportFilters;
         label: string;
       }[];
-      imports?: {
-        defaultEntity?: BusinessCsvImportEntity;
-        entities: BusinessCsvImportEntity[];
-        label: string;
-      }[];
-      onImported?: () => void;
     }) => (
       <>
-        {imports?.map((item) => (
-          <dialogs.BusinessCsvImportDialog
-            key={`import-${item.label}`}
-            defaultEntity={item.defaultEntity}
-            entities={item.entities}
-            onImported={onImported ?? (() => {})}
-            trigger={(open) => (
-              <button type="button" onClick={open}>
-                {item.label}
-              </button>
-            )}
-          />
-        ))}
         {exports?.map((item) => (
           <dialogs.BusinessCsvExportDialog
             key={`export-${item.entity}-${item.label}`}
@@ -130,8 +108,6 @@ const createAdjustmentMock = vi.fn();
 const setBalanceRealizedPnlMock = vi.fn();
 const exportBusinessCsvMock = vi.fn();
 const fetchAdjustmentsMock = vi.fn();
-const importBusinessCsvMock = vi.fn();
-const previewBusinessCsvImportMock = vi.fn();
 
 function lastBalanceFilters(): BalanceListFilters | undefined {
   const calls = useBalancesMock.mock.calls;
@@ -246,8 +222,6 @@ function renderPositions(initialEntry = "/positions") {
         fetchAdjustmentsPage: fetchAdjustmentsMock,
         fetchAssets: async () => [{ code: balance.asset, title: balance.asset, assetClass: "" }],
         fetchGroups: async () => [group],
-        importBusinessCsv: importBusinessCsvMock,
-        previewBusinessCsvImport: previewBusinessCsvImportMock,
       },
     },
   );
@@ -285,28 +259,6 @@ beforeEach(async () => {
     filename: "positions.csv",
   });
   fetchAdjustmentsMock.mockResolvedValue({ items: [], total: 0 });
-  previewBusinessCsvImportMock.mockResolvedValue({
-    file: { name: "positions.csv", type: "csv" },
-    counts: {
-      rows: 1,
-      applied: 0,
-      skipped: 0,
-      conflicts: 0,
-      stopped: false,
-    },
-    conflicts: [],
-  });
-  importBusinessCsvMock.mockResolvedValue({
-    file: { name: "positions.csv", type: "csv" },
-    counts: {
-      rows: 1,
-      applied: 1,
-      skipped: 0,
-      conflicts: 0,
-      stopped: false,
-    },
-    conflicts: [],
-  });
   Object.defineProperty(URL, "createObjectURL", {
     configurable: true,
     value: vi.fn(() => "blob:positions-csv"),
@@ -1187,49 +1139,6 @@ describe("Positions business CSV", () => {
     expect(body).not.toContain("'-10.5");
   });
 
-  it("imports positions and reloads balances plus history after success", async () => {
-    const user = userEvent.setup();
-    const balancesReload = vi.fn();
-    const adjustmentsReload = vi.fn();
-    useBalancesMock.mockReturnValue({
-      load: { state: "ready", data: { items: [balance], total: 1 }, error: null },
-      reload: balancesReload,
-    });
-    useAdjustmentsMock.mockReturnValue({
-      load: { state: "ready", data: { items: [], total: 0 }, error: null },
-      reload: adjustmentsReload,
-    });
-    renderPositions();
-
-    await user.click(
-      screen.getByRole("button", { name: /import positions csv/i }),
-    );
-    await user.type(
-      screen.getByPlaceholderText(/paste csv rows here/i),
-      "account_id,asset,available\nBucks McMoneyface,AAPL,10\n",
-    );
-    await user.click(screen.getByRole("button", { name: /preview upload/i }));
-    await waitFor(() =>
-      expect(previewBusinessCsvImportMock).toHaveBeenCalledTimes(1),
-    );
-    expect(previewBusinessCsvImportMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entity: "positions",
-        filename: "pasted.csv",
-      }),
-    );
-
-    await user.click(screen.getByRole("button", { name: /apply import/i }));
-    await waitFor(() => expect(importBusinessCsvMock).toHaveBeenCalledTimes(1));
-    expect(importBusinessCsvMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entity: "positions",
-        conflictPolicy: "skip",
-      }),
-    );
-    expect(balancesReload).toHaveBeenCalledTimes(1);
-    expect(adjustmentsReload).toHaveBeenCalledTimes(1);
-  });
 });
 
 /** Find a balance data row by its account, defaulting to the seeded one. */

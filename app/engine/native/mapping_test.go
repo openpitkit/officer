@@ -111,6 +111,35 @@ func TestSpotFundsAccountPnlFromList_NoOutcomeDoesNotWarn(t *testing.T) {
 	}
 }
 
+func TestSettlementPrice_MultiplePricesWarnAndEmptyIsSilent(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(previous)
+
+	price := settlementPrice([]string{"99", "100"}, "order-1")
+	if price != "100" {
+		t.Fatalf("settlementPrice = %q, want 100", price)
+	}
+	logLine := logs.String()
+	for _, want := range []string{
+		"pre-trade lock carries unexpected price count", "count=2", "order=order-1",
+	} {
+		if !strings.Contains(logLine, want) {
+			t.Fatalf("warning = %q, want %q", logLine, want)
+		}
+	}
+
+	logs.Reset()
+	price = settlementPrice(nil, "order-2")
+	if price != "" {
+		t.Fatalf("empty settlementPrice = %q, want empty", price)
+	}
+	if got := logs.String(); got != "" {
+		t.Fatalf("warning = %q, want none", got)
+	}
+}
+
 // testAdjustmentOutcome builds a binding account-adjustment outcome tagged with
 // asset and carrying no adjusted field; the mapping tests only need the tag.
 func testAdjustmentOutcome(t *testing.T, asset string) accountadjustment.Outcome {
@@ -1330,6 +1359,37 @@ func TestEngine_CheckOrderPassCapturesLock(t *testing.T) {
 	}
 }
 
+func TestEngine_CheckOrderMultiplePricesUsesDryRunIdentifier(t *testing.T) {
+	price, err := param.NewPriceFromString("100")
+	if err != nil {
+		t.Fatalf("lock spy price: %v", err)
+	}
+	e := newLockSpyTestEngine(t, &executionLockSpy{price: price})
+
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(previous)
+
+	out, err := e.CheckOrder(
+		context.Background(),
+		checkProbe(testAccount, domain.OrderSideBuy, "1", "100"),
+	)
+	if err != nil {
+		t.Fatalf("CheckOrder: %v", err)
+	}
+	if !out.Passed || out.WouldLockPrice != "100" {
+		t.Fatalf("CheckOrder result = %+v, want passing lock price 100", out)
+	}
+	logLine := logs.String()
+	if !strings.Contains(logLine, "order=dry-run:"+testAccount) {
+		t.Fatalf("warning = %q, want dry-run account identifier", logLine)
+	}
+	if strings.Contains(logLine, "<unassigned>") {
+		t.Fatalf("warning = %q, must not invent an unassigned order", logLine)
+	}
+}
+
 // TestEngine_CheckOrderRejectStructured runs a dry-run for an unfunded buy and
 // checks it rejects with a structured reject (insufficient funds), not an error.
 func TestEngine_CheckOrderRejectStructured(t *testing.T) {
@@ -1599,15 +1659,38 @@ func TestOrderModelFrom_InvalidInputs(t *testing.T) {
 	}
 }
 
+// TestExecutionReportFrom_MissingLockDoesNotRebuildFromLockPrice pins the hard
+// refusal added when Officer stopped reconstructing engine-produced locks.
+func TestExecutionReportFrom_MissingLockDoesNotRebuildFromLockPrice(t *testing.T) {
+	t.Parallel()
+	_, err := executionReportFrom(domain.ExecutionReportInput{
+		BaseAsset:      "AAPL",
+		QuoteAsset:     "USD",
+		Account:        "acc-1",
+		Side:           domain.OrderSideBuy,
+		FillQuantity:   "1",
+		FillPrice:      "100",
+		LeavesQuantity: "0",
+		LockPrice:      "100",
+		OrderStatus:    domain.OrderStatusFilled,
+	}, testResolver("acc-1"))
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("missing stored lock error = %v, want ErrInvalid", err)
+	}
+	if !strings.Contains(err.Error(), "carries no request or stored order lock") {
+		t.Fatalf("missing stored lock error = %v, want explicit lock failure", err)
+	}
+}
+
 // TestExecutionReportFrom_InvalidInputs checks the execution-report mapper wraps
-// domain.ErrInvalid for a bad fill price, a bad fill quantity, an empty or bad
-// leaves quantity, and a bad lock price (all caller input).
+// domain.ErrInvalid for malformed fill, leaves, commission, and lock inputs.
 func TestExecutionReportFrom_InvalidInputs(t *testing.T) {
 	t.Parallel()
 	res := testResolver("acc-1")
 	base := domain.ExecutionReportInput{
 		BaseAsset: "AAPL", QuoteAsset: "USD", Account: "acc-1", Side: domain.OrderSideBuy,
 		FillQuantity: "1", FillPrice: "100", LeavesQuantity: "0",
+		Lock:        storedExecutionReportLock(t),
 		OrderStatus: domain.OrderStatusFilled,
 	}
 
@@ -1623,22 +1706,10 @@ func TestExecutionReportFrom_InvalidInputs(t *testing.T) {
 		t.Fatalf("want ErrInvalid for bad fill quantity, got %v", err)
 	}
 
-	emptyLeaves := base
-	emptyLeaves.LeavesQuantity = ""
-	if _, err := executionReportFrom(emptyLeaves, res); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("want ErrInvalid for empty leaves quantity, got %v", err)
-	}
-
 	badLeaves := base
 	badLeaves.LeavesQuantity = "not-a-number"
 	if _, err := executionReportFrom(badLeaves, res); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid for bad leaves quantity, got %v", err)
-	}
-
-	badLock := base
-	badLock.LockPrice = "not-a-number"
-	if _, err := executionReportFrom(badLock, res); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("want ErrInvalid for bad lock price, got %v", err)
 	}
 
 	badCommissionAmount := base
@@ -1670,10 +1741,45 @@ func TestExecutionReportFrom_InvalidInputs(t *testing.T) {
 	noTradeCancel.FillPrice = ""
 	noTradeCancel.LeavesQuantity = "1"
 	noTradeCancel.OrderStatus = domain.OrderStatusCancelled
-	noTradeCancel.LockPrice = "100"
 	if _, err := executionReportFrom(noTradeCancel, res); err != nil {
 		t.Fatalf("no-trade cancel must map: %v", err)
 	}
+}
+
+// TestExecutionReportFrom_EmptyLeavesIsNotSet documents where the presence rule
+// lives: the mapper leaves the fill's leaves quantity unset instead of refusing
+// the report. Requiring leaves for an engine-settled report is the intake's job
+// (domain.ExecutionReportRequiresEngine), because the engine's post-trade path
+// has no reject channel and would latch an account block instead.
+func TestExecutionReportFrom_EmptyLeavesIsNotSet(t *testing.T) {
+	t.Parallel()
+	res := testResolver("acc-1")
+	report, err := executionReportFrom(domain.ExecutionReportInput{
+		BaseAsset: "AAPL", QuoteAsset: "USD", Account: "acc-1",
+		Side:         domain.OrderSideBuy,
+		FillQuantity: "1", FillPrice: "100",
+		Lock:        storedExecutionReportLock(t),
+		OrderStatus: domain.OrderStatusFilled,
+	}, res)
+	if err != nil {
+		t.Fatalf("executionReportFrom: %v", err)
+	}
+	fill, ok := report.Fill().Get()
+	if !ok {
+		t.Fatal("Fill unset")
+	}
+	if _, ok := fill.LeavesQuantity().Get(); ok {
+		t.Fatal("Fill.LeavesQuantity must stay unset for an empty leaves input")
+	}
+}
+
+func storedExecutionReportLock(t *testing.T) []byte {
+	t.Helper()
+	lock, err := marshalLock(lockFromPrices(t, "100"))
+	if err != nil {
+		t.Fatalf("marshal execution-report lock: %v", err)
+	}
+	return lock
 }
 
 func TestExecutionReportFrom_CommissionUsesStructuredFee(t *testing.T) {
@@ -1685,6 +1791,7 @@ func TestExecutionReportFrom_CommissionUsesStructuredFee(t *testing.T) {
 		FillQuantity:   "1",
 		FillPrice:      "100",
 		LeavesQuantity: "0",
+		Lock:           storedExecutionReportLock(t),
 		Commission: &domain.Commission{
 			Amount:   "-0.50",
 			Currency: "USD",
@@ -1722,6 +1829,7 @@ func TestExecutionReportFrom_NoTradeCommissionUsesStructuredFee(t *testing.T) {
 		BaseAsset:      "AAPL",
 		QuoteAsset:     "USD",
 		LeavesQuantity: "1",
+		Lock:           storedExecutionReportLock(t),
 		Commission: &domain.Commission{
 			Amount:   "-0.50",
 			Currency: "USD",
@@ -2132,15 +2240,15 @@ func TestExecutionReportPersistenceFrom_StatusOnlyNoAccountWrites(t *testing.T) 
 	if persistence.OrderStatus != domain.OrderStatusCancelled {
 		t.Fatalf("persistence.OrderStatus = %q, want cancelled", persistence.OrderStatus)
 	}
-	if persistence.Leaves != "0" {
-		t.Fatalf("persistence.Leaves = %q, want zero after terminal release", persistence.Leaves)
+	if persistence.Leaves != "2" {
+		t.Fatalf("persistence.Leaves = %q, want request value", persistence.Leaves)
 	}
 	if len(persistence.Events) == 0 {
 		t.Fatal("persistence.Events is empty, want the status-change event")
 	}
 	if persistence.Events[0].Payload.LeavesQuantity != "2" {
 		t.Fatalf(
-			"event leaves = %q, want original terminal release quantity",
+			"event leaves = %q, want request value 2",
 			persistence.Events[0].Payload.LeavesQuantity,
 		)
 	}

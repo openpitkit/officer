@@ -90,8 +90,8 @@ func recordOrderSettlementWithAttestation(
 
 // SubmitOrder runs the pre-trade submit on the account lane and persists the
 // order, submitted event, and engine outcome in one store transaction. On accept
-// it records pre_trade_accepted and committed, persists the lock, canonical
-// leaves, balance outcomes, and committed status; on reject it records
+// it records pre_trade_accepted and committed, persists the lock, request
+// leaves for quantity orders, balance outcomes, and committed status; on reject it records
 // pre_trade_rejected and rejected status. missing decides whether an order for
 // an account Officer does not know yet registers that account or is rejected.
 func (n *localNode) SubmitOrder(
@@ -226,9 +226,8 @@ func orderAcceptedSettlement(
 		Account:     key.Account,
 		Order:       order.ExternalID,
 		OrderStatus: domain.OrderStatusCommitted,
-		Leaves:      result.LeavesQuantity,
 		Balances:    balanceSettlementsFrom(result.Outcomes),
-		Blocks:      accountBlockSettlementsFrom(order.ExternalID, result.Blocks),
+		Blocks:      result.Blocks,
 		Events: []domain.OrderEvent{
 			fillSettlementEvent(order.ExternalID, domain.OrderEventPreTradeAccepted, caller, domain.OrderEventPayload{}),
 			fillSettlementEvent(order.ExternalID, domain.OrderEventCommitted, caller, domain.OrderEventPayload{}),
@@ -261,7 +260,7 @@ func orderRejectedSettlement(
 }
 
 // SubmitImmediate records the order, runs the engine pre-trade and, on accept,
-// commits and settles the fill in the same engine call at the captured lock
+// commits and settles the fill in the same engine call at the request trade
 // price so the held amount nets to zero, then persists the filled lifecycle. On
 // reject the order is recorded rejected. missing is handled as in SubmitOrder.
 // The backend audits the issued approval.
@@ -291,6 +290,9 @@ func (n *localNode) submitImmediate(
 	caller domain.Caller,
 	attestFor func(domain.Order, engine.ImmediateResult) store.EventAttestor,
 ) (domain.Order, engine.ImmediateResult, error) {
+	if err := domain.ValidateImmediateOrderAmountKind(o.AmountKind); err != nil {
+		return domain.Order{}, engine.ImmediateResult{}, err
+	}
 	// Resolve the account and register both order assets pre-lane (see
 	// SubmitOrder).
 	if err := n.ensureAccountAndAssetsRegisteredExclusive(
@@ -461,26 +463,31 @@ func (n *localNode) confirmOrder(
 	return confirmed, nil
 }
 
-// CancelOrder synthesizes a terminal execution report for an untouched
-// workflow order. The normal engine settlement path releases its stored lock.
+// CancelOrder forwards a terminal execution report for an untouched workflow
+// order. The caller supplies leaves and the stored engine lock is restored.
 func (n *localNode) CancelOrder(
-	ctx context.Context, order domain.ExternalID, caller domain.Caller,
+	ctx context.Context,
+	order domain.ExternalID,
+	leavesQuantity string,
+	caller domain.Caller,
 ) (domain.Order, engine.ExecutionReportResult, error) {
-	return n.cancelOrder(ctx, order, caller, nil)
+	return n.cancelOrder(ctx, order, leavesQuantity, caller, nil)
 }
 
 func (n *localNode) CancelOrderWithAttestation(
 	ctx context.Context,
 	order domain.ExternalID,
+	leavesQuantity string,
 	caller domain.Caller,
 	attest store.EventAttestor,
 ) (domain.Order, engine.ExecutionReportResult, error) {
-	return n.cancelOrder(ctx, order, caller, attest)
+	return n.cancelOrder(ctx, order, leavesQuantity, caller, attest)
 }
 
 func (n *localNode) cancelOrder(
 	ctx context.Context,
 	order domain.ExternalID,
+	leavesQuantity string,
 	caller domain.Caller,
 	attest store.EventAttestor,
 ) (domain.Order, engine.ExecutionReportResult, error) {
@@ -528,7 +535,7 @@ func (n *localNode) cancelOrder(
 				BaseAsset:      detail.Order.BaseAsset,
 				QuoteAsset:     detail.Order.QuoteAsset,
 				Side:           detail.Order.Side,
-				LeavesQuantity: detail.Order.Leaves,
+				LeavesQuantity: leavesQuantity,
 				Lock:           append([]byte(nil), detail.Order.Lock...),
 				OrderStatus:    domain.OrderStatusCancelled,
 			}
@@ -557,9 +564,7 @@ func (n *localNode) cancelOrder(
 				Balances:    persistence.Balances,
 				Events:      persistence.Events,
 				Trade:       persistence.Trade,
-				Blocks: accountBlockSettlementsFrom(
-					order, persistence.Blocks,
-				),
+				Blocks:      persistence.Blocks,
 			}
 			if _, err := recordOrderSettlementWithAttestation(
 				ctx, n.realm, settlement, attest,
@@ -648,7 +653,7 @@ func immediateAcceptedSettlement(
 ) domain.OrderSettlement {
 	fillPayload := accountBlockPayload(result.Blocks)
 	fillPayload.FillQuantity = result.FillQuantity
-	fillPayload.FillPrice = result.SettlementLockPrice
+	fillPayload.FillPrice = result.TradePrice
 	fillPayload.FillLockPrice = result.SettlementLockPrice
 	return domain.OrderSettlement{
 		Account:              key.Account,
@@ -672,10 +677,10 @@ func immediateAcceptedSettlement(
 			QuoteAsset: order.QuoteAsset,
 			Side:       order.Side,
 			Quantity:   result.FillQuantity,
-			Price:      result.SettlementLockPrice,
+			Price:      result.TradePrice,
 			LockPrice:  result.SettlementLockPrice,
 		},
-		Blocks:  accountBlockSettlementsFrom(order.ExternalID, result.Blocks),
+		Blocks:  result.Blocks,
 		Lock:    result.Lock,
 		SetLock: true,
 	}

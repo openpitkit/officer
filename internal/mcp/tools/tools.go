@@ -91,9 +91,11 @@ const confirmExecutionToolDescription = "Record confirmation history for a " +
 
 const cancelToolName = "cancel"
 const cancelToolDescription = "Cancel an untouched workflow order by presenting " +
-	"its approval token. Officer derives a terminal report that releases the " +
-	"pre-trade lock; after execution-report activity, submit an explicit report. " +
-	"Protected and disabled by default."
+	"its approval token and a caller-supplied current leavesQuantity. get_order " +
+	"leaves it empty until an execution report is accepted, so obtain the value " +
+	"from venue state. Officer forwards it in the terminal report that releases " +
+	"the pre-trade lock; after execution-report activity, submit an explicit " +
+	"report. Protected and disabled by default."
 
 // RegisterTools registers the open Pit Officer MCP tools and catalog entries.
 func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
@@ -354,10 +356,10 @@ type checkOrderInput struct {
 }
 
 type checkOrderOutput struct {
-	WouldBlock         *checkOrderBlockDTO   `json:"wouldBlock"`
-	Rejects            []checkOrderRejectDTO `json:"rejects"`
-	WouldDisplayPrices []string              `json:"wouldDisplayPrices"`
-	Passed             bool                  `json:"passed"`
+	WouldBlock        *checkOrderBlockDTO   `json:"wouldBlock"`
+	Rejects           []checkOrderRejectDTO `json:"rejects"`
+	WouldDisplayPrice string                `json:"wouldDisplayPrice"`
+	Passed            bool                  `json:"passed"`
 }
 
 type setMarketDataInstrumentInput struct {
@@ -427,6 +429,7 @@ type confirmExecutionOutput struct {
 type cancelInput struct {
 	OrderExternalID string `json:"id" jsonschema:"Order id returned by submit_order"`
 	Token           string `json:"token" jsonschema:"Approval token returned by submit_order"`
+	LeavesQuantity  string `json:"leavesQuantity" jsonschema:"Required current leaves quantity supplied by the caller and forwarded to the engine"`
 	Reason          string `json:"reason,omitempty" jsonschema:"Human-readable cancellation reason"`
 }
 
@@ -508,9 +511,11 @@ type orderDTO struct {
 	AmountKind          string          `json:"amountKind"`
 	AmountValue         string          `json:"amountValue"`
 	CommissionSubtotals []commissionDTO `json:"commissionSubtotals"`
+	LeavesQuantity      string          `json:"leavesQuantity"`
 	Price               string          `json:"price"`
 	Status              string          `json:"status"`
 	Source              string          `json:"source"`
+	DisplayPrice        string          `json:"displayPrice"`
 	DropCopy            bool            `json:"dropCopy"`
 }
 
@@ -644,7 +649,8 @@ func toAuditDTO(row domain.AuditRow) auditDTO {
 	}
 }
 
-func toOrderDTO(o domain.Order) orderDTO {
+func toOrderDTO(detail domain.OrderDetail) orderDTO {
+	o := detail.Order
 	return orderDTO{
 		At:                  o.At,
 		ExternalID:          o.ExternalID.String(),
@@ -655,9 +661,11 @@ func toOrderDTO(o domain.Order) orderDTO {
 		AmountKind:          string(o.AmountKind),
 		AmountValue:         o.AmountValue,
 		CommissionSubtotals: toCommissionDTOs(o.CommissionSubtotals),
+		LeavesQuantity:      o.Leaves,
 		Price:               o.Price,
 		Status:              string(o.Status),
 		Source:              string(o.Source),
+		DisplayPrice:        detail.DisplayPrice,
 		DropCopy:            o.DropCopy,
 	}
 }
@@ -749,10 +757,6 @@ func toCheckOrderOutput(r domain.CheckResult) checkOrderOutput {
 	for _, rej := range r.Rejects {
 		rejects = append(rejects, toMCPRejectDTO(rej))
 	}
-	prices := r.WouldLockPrices
-	if prices == nil {
-		prices = []string{}
-	}
 	var block *checkOrderBlockDTO
 	if r.WouldBlock != nil {
 		block = &checkOrderBlockDTO{
@@ -763,10 +767,10 @@ func toCheckOrderOutput(r domain.CheckResult) checkOrderOutput {
 		}
 	}
 	return checkOrderOutput{
-		WouldBlock:         block,
-		Rejects:            rejects,
-		WouldDisplayPrices: prices,
-		Passed:             r.Passed,
+		WouldBlock:        block,
+		Rejects:           rejects,
+		WouldDisplayPrice: r.WouldLockPrice,
+		Passed:            r.Passed,
 	}
 }
 
@@ -889,7 +893,7 @@ func getOrderHandler(
 			return "", getOrderOutput{}, fmt.Errorf("get order failed")
 		}
 		out := getOrderOutput{
-			Order:    toOrderDTO(detail.Order),
+			Order:    toOrderDTO(detail),
 			Approval: toOrderApprovalDTO(detail),
 			Trades:   toTradeDTOs(detail.Trades),
 		}
@@ -1170,10 +1174,15 @@ func cancelHandler(
 		if token == "" {
 			return "", cancelOutput{}, fmt.Errorf("token is required")
 		}
+		leavesQuantity := strings.TrimSpace(in.LeavesQuantity)
+		if leavesQuantity == "" {
+			return "", cancelOutput{}, fmt.Errorf("leavesQuantity is required")
+		}
 		order, att, err := src.CancelOrder(
 			ctx,
 			orderExternalID,
 			token,
+			leavesQuantity,
 			strings.TrimSpace(in.Reason),
 		)
 		if err != nil {

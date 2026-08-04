@@ -140,7 +140,7 @@ func TestNewLocalNode_NilArgs(t *testing.T) {
 func TestLocalNode_CheckOrderDelegatesToEngine(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
-	eng.checkResult = domain.CheckResult{Passed: true, WouldLockPrices: []string{"100"}}
+	eng.checkResult = domain.CheckResult{Passed: true, WouldLockPrice: "100"}
 	n, _ := newTestNode(t, eng)
 	ctx := context.Background()
 
@@ -153,7 +153,7 @@ func TestLocalNode_CheckOrderDelegatesToEngine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckOrder: %v", err)
 	}
-	if !out.Passed || len(out.WouldLockPrices) != 1 {
+	if !out.Passed || out.WouldLockPrice != "100" {
 		t.Fatalf("engine result not propagated: %+v", out)
 	}
 	if len(eng.checkProbes) != 1 || eng.checkProbes[0].Account != "acc-1" {

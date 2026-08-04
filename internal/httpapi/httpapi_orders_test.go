@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
 )
 
@@ -32,12 +33,17 @@ import (
 
 func TestListOrders_Seeded(t *testing.T) {
 	svc := &fakeService{
-		orders: []domain.Order{
-			{
-				ExternalID: extID("order-1"), Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
-				Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity,
-				AmountValue: "1", Price: "100", Status: domain.OrderStatusCommitted,
-			},
+		orderPage: &backend.OrderListPage{
+			Rows: []backend.OrderListRow{{
+				Order: domain.Order{
+					ExternalID: extID("order-1"), Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
+					Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity,
+					AmountValue: "1", Price: "100", Status: domain.OrderStatusCommitted,
+					Lock: []byte{0xff},
+				},
+				DisplayPrice: "101.25",
+			}},
+			Total: 1,
 		},
 	}
 	r, err := newRouter(svc)
@@ -63,9 +69,8 @@ func TestListOrders_Seeded(t *testing.T) {
 		t.Fatalf("want id=%s, got %v", extID("order-1").String(), o["id"])
 	}
 	assertNoSurrogateID(t, o)
-	// displayPrices must serialise as an empty array, never null.
-	if prices, ok := o["displayPrices"].([]any); !ok || len(prices) != 0 {
-		t.Fatalf("want displayPrices=[], got %v", o["displayPrices"])
+	if price, ok := o["displayPrice"].(string); !ok || price != "101.25" {
+		t.Fatalf("want displayPrice=101.25, got %v", o["displayPrice"])
 	}
 }
 
@@ -220,7 +225,9 @@ func TestGetOrder_Found(t *testing.T) {
 		Order: domain.Order{
 			ExternalID: extID("order-1"), Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
 			Side: domain.OrderSideBuy, Status: domain.OrderStatusFilled,
+			Lock: []byte{0xff},
 		},
+		DisplayPrice: "101.25",
 		Events: []domain.OrderEvent{
 			{ExternalID: extID("event-1"), Order: extID("order-1"), At: ts, Type: domain.OrderEventSubmitted},
 		},
@@ -245,6 +252,9 @@ func TestGetOrder_Found(t *testing.T) {
 	assertNoSurrogateID(t, order)
 	if order["id"] != extID("order-1").String() {
 		t.Fatalf("want id=%s, got %v", extID("order-1").String(), order["id"])
+	}
+	if order["displayPrice"] != "101.25" {
+		t.Fatalf("want displayPrice=101.25, got %v", order["displayPrice"])
 	}
 	events, ok := m["events"].([]any)
 	if !ok || len(events) != 1 {

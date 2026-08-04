@@ -87,11 +87,14 @@ type Source interface {
 	ConfirmExecution(
 		ctx context.Context, orderExternalID, token string,
 	) (domain.Order, Attestation, error)
-	// CancelOrder verifies the token and derives a cancellation report for an
-	// order that has no execution-report activity. It also returns the resulting
-	// attestation, so an MCP caller receives the same proof an HTTP caller does.
+	// CancelOrder verifies the token and forwards a cancellation report for an
+	// order that has no execution-report activity. Leaves remain caller-supplied
+	// and are required before the engine validates their quantity value. It also
+	// returns the resulting attestation, so an MCP caller receives the same proof
+	// an HTTP caller does.
 	CancelOrder(
-		ctx context.Context, orderExternalID, token, reason string,
+		ctx context.Context,
+		orderExternalID, token, leavesQuantity, reason string,
 	) (domain.Order, Attestation, error)
 }
 

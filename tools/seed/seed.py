@@ -520,7 +520,7 @@ def _existing_limit_keys(base: str) -> set[tuple[str, str, str, str]]:
 
 # Orders: account, baseAsset, quoteAsset, side, amountKind, amountValue, price.
 # execution_reports: quantity, price, status. The fill's lockPrice is taken from
-# the order's settlement-leg display price (the LAST entry of order.displayPrices).
+# the order's single displayPrice restored from the engine lock.
 # leavesQuantity (FIX LeavesQty - the order's remaining open base quantity after
 # the fill) is computed per fill from the running cumulative filled quantity; it
 # is required by the engine to settle. Every filled order here is "quantity" kind,
@@ -956,10 +956,14 @@ def seed(base: str) -> None:
                 print("      fills skipped: order rejected")
             continue
 
-        # The settlement-leg lock price is the LAST entry of displayPrices; it is
-        # the price the engine locked the reservation at and what a fill settles to.
-        display_prices: list[str] = order.get("displayPrices", [])
-        lock_price: str | None = display_prices[-1] if display_prices else None
+        # displayPrice is the single price restored from the engine lock; it is
+        # what a fill settles to.
+        display_price = order.get("displayPrice")
+        lock_price: str | None = (
+            display_price
+            if isinstance(display_price, str) and display_price
+            else None
+        )
 
         fills = order_def.get("execution_reports", [])
         # leavesQuantity is base-unit remaining; we can only derive it for a

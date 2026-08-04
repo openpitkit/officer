@@ -100,7 +100,7 @@ func (r *realmStore) UpsertBalance(ctx context.Context, balance domain.Balance) 
 		settleOrZero(balance.Available),
 		settleOrZero(balance.Held),
 		settleOrZero(balance.Incoming),
-		settleOrZero(balance.RealizedPnl),
+		nullablePnl(balance.RealizedPnl, balance.RealizedPnlHaltReason),
 		balance.RealizedPnlHaltReason,
 		balance.AverageEntryPrice,
 		updatedAt.UTC().Format(time.RFC3339Nano),
@@ -158,12 +158,14 @@ func (r *realmStore) ListBalances(
 }
 
 // ListAccountsWithOpenBalances returns accounts carrying a non-zero balance,
-// cost-basis or P&L value. A halted P&L holds no trustworthy number, so neither
-// the halt flag nor the number behind it counts an account as open: the engine
-// leaves the prior P&L in place when it reports a halt without a value, and
-// that retained number is historical, not authoritative. Quantities and cost
-// basis are not P&L and keep counting regardless: a halted position still
-// holds real units at a real cost basis, applied from the report's own inputs.
+// cost-basis or P&L value. An account P&L of NULL is the absence of a value -
+// a halted accumulator, or an account the engine has not reported on - and
+// never counts as open, which is why the predicate tests it explicitly rather
+// than relying on a comparison against NULL being falsy.
+// A halted P&L holds no trustworthy number, so neither its NULL value nor the
+// halt flag counts an account as open. Quantities and cost basis are not P&L and
+// keep counting regardless: a halted position still holds real units at a real
+// cost basis, applied from the report's own inputs.
 // The account outer join keeps accounts whose only value is the account-level
 // P&L, which survives the deletion of every balance row.
 func (r *realmStore) ListAccountsWithOpenBalances(
@@ -191,9 +193,10 @@ WHERE (
     (b.held <> '' AND b.held COLLATE DECIMAL <> '0') OR
     (b.incoming <> '' AND b.incoming COLLATE DECIMAL <> '0') OR
     (b.average_entry_price <> '' AND b.average_entry_price COLLATE DECIMAL <> '0') OR
-    (b.realized_pnl_halt_reason = '' AND
+    (b.realized_pnl_halt_reason = '' AND b.realized_pnl IS NOT NULL AND
      b.realized_pnl <> '' AND b.realized_pnl COLLATE DECIMAL <> '0') OR
-    (a.pnl_halt_reason = '' AND a.pnl <> '' AND a.pnl COLLATE DECIMAL <> '0')
+    (a.pnl_halt_reason = '' AND a.pnl IS NOT NULL AND a.pnl <> '' AND
+     a.pnl COLLATE DECIMAL <> '0')
 )` + accountWhere + `
 ORDER BY a.code`
 	rows, err := db.QueryContext(ctx, query, args...)
@@ -360,10 +363,11 @@ func scanBalanceRow(row *sql.Row) (domain.Balance, error) {
 // row's realized P&L and average entry price.
 func scanBalanceInto(scan func(...any) error, b *domain.Balance) error {
 	var (
-		accountCode, assetCode                                       string
-		available, held, incoming                                    string
-		realizedPnl, realizedPnlHaltReason, avgEntryPrice, updatedAt string
-		accountCurrency                                              string
+		accountCode, assetCode                          string
+		available, held, incoming                       string
+		realizedPnl                                     sql.NullString
+		realizedPnlHaltReason, avgEntryPrice, updatedAt string
+		accountCurrency                                 string
 	)
 	if err := scan(
 		&accountCode, &assetCode,
@@ -382,7 +386,7 @@ func scanBalanceInto(scan func(...any) error, b *domain.Balance) error {
 	b.Available = available
 	b.Held = held
 	b.Incoming = incoming
-	b.RealizedPnl = realizedPnl
+	b.RealizedPnl = realizedPnl.String
 	b.RealizedPnlHaltReason = domain.PnlHaltReason(realizedPnlHaltReason)
 	b.AverageEntryPrice = avgEntryPrice
 	b.AccountCurrency = accountCurrency

@@ -338,15 +338,6 @@ type Node interface {
 	// DeleteGroup removes the group (store-only) and audits the action.
 	DeleteGroup(ctx context.Context, code string, caller domain.Caller) error
 
-	// ApplyBusinessCSVImport persists a prepared business CSV import and its
-	// per-row audit records atomically in the store, then applies the matching
-	// live-engine projection changes.
-	ApplyBusinessCSVImport(
-		ctx context.Context,
-		in store.BusinessCSVImport,
-		caller domain.Caller,
-	) error
-
 	// ApplyAdjustment applies one spot-funds adjustment through the engine,
 	// persists the resulting balance snapshot and adjustment record, and audits
 	// the action. On reject the balances are left unchanged and the rejected
@@ -368,15 +359,6 @@ type Node interface {
 		ctx context.Context, key Key, asset string, realizedPnl string,
 		missing domain.MissingAccountPolicy, caller domain.Caller,
 	) (domain.Balance, error)
-
-	// ImportPositionSnapshot applies the engine-relevant fields of a persisted
-	// position snapshot through the spot-funds adjustment path, then stores the
-	// full snapshot and audits the import operation. externalID follows
-	// ApplyAdjustment semantics for the internal adjustment record.
-	ImportPositionSnapshot(
-		ctx context.Context, key Key, externalID domain.ExternalID,
-		snapshot domain.Balance, caller domain.Caller,
-	) (domain.AccountAdjustmentRecord, error)
 
 	// ListBalances returns the balance rows filtered by the non-empty account and
 	// asset.
@@ -429,12 +411,15 @@ type Node interface {
 		ctx context.Context, order domain.ExternalID, caller domain.Caller,
 	) (domain.Order, error)
 
-	// CancelOrder synthesizes a terminal cancellation execution report for an
-	// untouched workflow order using its stored lock and leaves. The report runs
-	// through the engine and normal settlement persistence. Once any execution
-	// report has been recorded it returns domain.ErrExecutionReportRequired.
+	// CancelOrder forwards a caller-supplied terminal cancellation report for an
+	// untouched workflow order using its stored lock. Leaves are never inferred
+	// from stored order state. Once any execution report has been recorded it
+	// returns domain.ErrExecutionReportRequired.
 	CancelOrder(
-		ctx context.Context, order domain.ExternalID, caller domain.Caller,
+		ctx context.Context,
+		order domain.ExternalID,
+		leavesQuantity string,
+		caller domain.Caller,
 	) (domain.Order, engine.ExecutionReportResult, error)
 
 	// ApplyExecutionReport serializes reports on the account pipeline. Reports

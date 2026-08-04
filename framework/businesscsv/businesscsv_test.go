@@ -20,7 +20,6 @@ package businesscsv_test
 import (
 	"archive/zip"
 	"bytes"
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -29,517 +28,172 @@ import (
 	"go.openpit.dev/officer/framework/domain"
 )
 
-// --- Groups ------------------------------------------------------------------
-
-func TestEncodeDecodeGroups(t *testing.T) {
+func TestEncodeBusinessEntities(t *testing.T) {
 	t.Parallel()
-	groups := []domain.AccountGroup{
+
+	tests := []struct {
+		name       string
+		encode     func() ([]byte, error)
+		wantHeader string
+		wantRow    string
+	}{
 		{
-			Code: "desk-a", Title: "Desk A", Currency: "USD",
-			Notes: "note one", Blocked: false,
+			name: "groups",
+			encode: func() ([]byte, error) {
+				return businesscsv.EncodeGroups([]domain.AccountGroup{{
+					Code: "desk-a", Title: "Desk A", Currency: "USD",
+					Notes: "note", Blocked: true, BlockReason: "hold",
+				}}, businesscsv.DelimiterComma)
+			},
+			wantHeader: "code,title,currency,notes,blocked,block_reason",
+			wantRow:    "desk-a,Desk A,USD,note,true,hold",
 		},
 		{
-			Code: "desk-b", Title: "Desk B", Notes: "",
-			Blocked: true, BlockReason: "compliance hold",
+			name: "accounts",
+			encode: func() ([]byte, error) {
+				return businesscsv.EncodeAccounts([]domain.Account{{
+					Code: "acc-1", Title: "Account 1", GroupCode: "desk-a",
+					Currency: "USD", Pnl: "12.5", Notes: "note",
+				}}, businesscsv.DelimiterComma)
+			},
+			wantHeader: "code,title,group_code,currency,pnl,pnl_halt_reason,notes,blocked,block_reason",
+			wantRow:    "acc-1,Account 1,desk-a,USD,12.5,,note,false,",
 		},
-	}
-	body, err := businesscsv.EncodeGroups(groups, businesscsv.DelimiterComma)
-	if err != nil {
-		t.Fatalf("EncodeGroups: %v", err)
-	}
-	rows, err := businesscsv.ParseImport(businesscsv.EntityAccountGroups, body, businesscsv.DelimiterComma)
-	if err != nil {
-		t.Fatalf("ParseImport: %v", err)
-	}
-	if len(rows.Groups) != 2 {
-		t.Fatalf("want 2 groups, got %d", len(rows.Groups))
-	}
-	g := rows.Groups[0]
-	if g.Code != "desk-a" || g.Title != "Desk A" || g.Currency != "USD" ||
-		g.Notes != "note one" || g.Blocked {
-		t.Errorf("group[0] = %+v", g)
-	}
-	g = rows.Groups[1]
-	if g.Code != "desk-b" || g.Title != "Desk B" || g.Currency != "" ||
-		!g.Blocked || g.BlockReason != "compliance hold" {
-		t.Errorf("group[1] = %+v", g)
-	}
-}
-
-func TestParseGroups_LegacyHeaderDefaultsCurrency(t *testing.T) {
-	t.Parallel()
-	csv := "code,title,notes,blocked,block_reason\ndesk-a,Desk A,note,false,\n"
-	rows, err := businesscsv.ParseImport(
-		businesscsv.EntityAccountGroups, []byte(csv), businesscsv.DelimiterComma,
-	)
-	if err != nil {
-		t.Fatalf("ParseImport: %v", err)
-	}
-	if len(rows.Groups) != 1 || rows.Groups[0].Currency != "" ||
-		rows.Groups[0].Notes != "note" {
-		t.Fatalf("groups = %+v", rows.Groups)
-	}
-}
-
-func TestParseGroups_EmptyCode(t *testing.T) {
-	t.Parallel()
-	csv := "code,title,notes,blocked,block_reason\n,Title,note,false,\n"
-	_, err := businesscsv.ParseImport(
-		businesscsv.EntityAccountGroups, []byte(csv), businesscsv.DelimiterComma,
-	)
-	if err == nil || !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("want ErrInvalid for empty code, got %v", err)
-	}
-}
-
-// --- Accounts ----------------------------------------------------------------
-
-func TestEncodeDecodeAccounts(t *testing.T) {
-	t.Parallel()
-	accounts := []domain.Account{
 		{
-			Code: "acc-1", Title: "Desk A One", GroupCode: "desk-a",
-			Currency: "USD", Pnl: "12.5", PnlHaltReason: domain.PnlHaltReasonMissingInitialPnl, Notes: "note",
-		},
-		{Code: "acc-2", GroupCode: "", Notes: "", Blocked: true, BlockReason: "kyc"},
-	}
-	body, err := businesscsv.EncodeAccounts(accounts, businesscsv.DelimiterComma)
-	if err != nil {
-		t.Fatalf("EncodeAccounts: %v", err)
-	}
-	rows, err := businesscsv.ParseImport(
-		businesscsv.EntityAccounts, body, businesscsv.DelimiterComma,
-	)
-	if err != nil {
-		t.Fatalf("ParseImport: %v", err)
-	}
-	if len(rows.Accounts) != 2 {
-		t.Fatalf("want 2 accounts, got %d", len(rows.Accounts))
-	}
-	a := rows.Accounts[0]
-	if a.Code != "acc-1" || a.Title != "Desk A One" || a.GroupCode != "desk-a" ||
-		a.Currency != "USD" || a.Pnl != "12.5" ||
-		a.PnlHaltReason != domain.PnlHaltReasonMissingInitialPnl || a.Notes != "note" ||
-		a.Blocked || !a.PnlSpecified {
-		t.Errorf("account[0] = %+v", a)
-	}
-	a = rows.Accounts[1]
-	if a.Code != "acc-2" || a.Title != "" || a.GroupCode != "" ||
-		a.Currency != "" || a.Pnl != "" || !a.Blocked || a.BlockReason != "kyc" ||
-		!a.PnlSpecified {
-		t.Errorf("account[1] = %+v", a)
-	}
-}
-
-func TestParseAccounts_LegacyHeaderDefaultsCurrency(t *testing.T) {
-	t.Parallel()
-	csv := "code,title,group_code,notes,blocked,block_reason\n" +
-		"acc-1,Desk A One,desk-a,note,false,\n"
-	rows, err := businesscsv.ParseImport(
-		businesscsv.EntityAccounts, []byte(csv), businesscsv.DelimiterComma,
-	)
-	if err != nil {
-		t.Fatalf("ParseImport: %v", err)
-	}
-	if len(rows.Accounts) != 1 || rows.Accounts[0].Currency != "" ||
-		rows.Accounts[0].Pnl != "0" || rows.Accounts[0].Notes != "note" ||
-		rows.Accounts[0].PnlSpecified {
-		t.Fatalf("accounts = %+v", rows.Accounts)
-	}
-}
-
-func TestParseAccounts_PreviousHeaderDefaultsPnl(t *testing.T) {
-	t.Parallel()
-	csv := "code,title,group_code,currency,notes,blocked,block_reason\n" +
-		"acc-1,Desk A One,desk-a,USD,note,false,\n"
-	rows, err := businesscsv.ParseImport(
-		businesscsv.EntityAccounts, []byte(csv), businesscsv.DelimiterComma,
-	)
-	if err != nil {
-		t.Fatalf("ParseImport: %v", err)
-	}
-	if len(rows.Accounts) != 1 || rows.Accounts[0].Pnl != "0" ||
-		rows.Accounts[0].PnlSpecified {
-		t.Fatalf("accounts = %+v", rows.Accounts)
-	}
-}
-
-func TestParseAccounts_PreviousPnlHeaderDefaultsHaltReason(t *testing.T) {
-	t.Parallel()
-	csv := "code,title,group_code,currency,pnl,notes,blocked,block_reason\n" +
-		"acc-1,Desk A One,desk-a,USD,12.5,note,false,\n"
-	rows, err := businesscsv.ParseImport(
-		businesscsv.EntityAccounts, []byte(csv), businesscsv.DelimiterComma,
-	)
-	if err != nil {
-		t.Fatalf("ParseImport: %v", err)
-	}
-	if len(rows.Accounts) != 1 || rows.Accounts[0].Pnl != "12.5" ||
-		rows.Accounts[0].PnlHaltReason != "" || !rows.Accounts[0].PnlSpecified {
-		t.Fatalf("accounts = %+v", rows.Accounts)
-	}
-}
-
-func TestParseAccounts_ExplicitZeroIsSpecified(t *testing.T) {
-	t.Parallel()
-	csv := "code,title,group_code,currency,pnl,pnl_halt_reason,notes,blocked,block_reason\n" +
-		"acc-1,Desk A One,,USD,0,,note,false,\n"
-	rows, err := businesscsv.ParseImport(
-		businesscsv.EntityAccounts, []byte(csv), businesscsv.DelimiterComma,
-	)
-	if err != nil {
-		t.Fatalf("ParseImport: %v", err)
-	}
-	if len(rows.Accounts) != 1 || rows.Accounts[0].Pnl != "0" ||
-		!rows.Accounts[0].PnlSpecified {
-		t.Fatalf("accounts = %+v, want explicit zero marked present", rows.Accounts)
-	}
-}
-
-func TestParseAccounts_NoSurrogateIDColumn(t *testing.T) {
-	t.Parallel()
-	// Old header had "account_id"; the new header must be "code".
-	old := "account_id,group_id,notes,blocked,block_reason\nacc-1,,note,false,\n"
-	_, err := businesscsv.ParseImport(
-		businesscsv.EntityAccounts, []byte(old), businesscsv.DelimiterComma,
-	)
-	if err == nil || !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("want ErrInvalid for old header, got %v", err)
-	}
-}
-
-// --- Positions ---------------------------------------------------------------
-
-func TestEncodeDecodePositions(t *testing.T) {
-	t.Parallel()
-	balances := []domain.Balance{
-		{
-			Account: "acc-1", Asset: "AAPL",
-			Available: "100", Held: "10", Incoming: "0",
-			RealizedPnl: "5.5", RealizedPnlHaltReason: domain.PnlHaltReasonMissingCostBasis,
-			AverageEntryPrice: "150.25",
+			name: "positions",
+			encode: func() ([]byte, error) {
+				return businesscsv.EncodePositions([]domain.Balance{{
+					Account: "acc-1", Asset: "AAPL", Available: "10",
+					Held: "2", Incoming: "1", RealizedPnl: "3.5",
+					AverageEntryPrice: "150",
+				}}, businesscsv.DelimiterComma)
+			},
+			wantHeader: "account_code,asset,available,held,incoming,realized_pnl,realized_pnl_halt_reason,average_entry_price",
+			wantRow:    "acc-1,AAPL,10,2,1,3.5,,150",
 		},
 	}
-	body, err := businesscsv.EncodePositions(balances, businesscsv.DelimiterComma)
-	if err != nil {
-		t.Fatalf("EncodePositions: %v", err)
-	}
-	rows, err := businesscsv.ParseImport(
-		businesscsv.EntityPositions, body, businesscsv.DelimiterComma,
-	)
-	if err != nil {
-		t.Fatalf("ParseImport: %v", err)
-	}
-	if len(rows.Positions) != 1 {
-		t.Fatalf("want 1 position, got %d", len(rows.Positions))
-	}
-	p := rows.Positions[0]
-	if p.Account != "acc-1" || p.Asset != "AAPL" || p.Available != "100" ||
-		p.RealizedPnl != "5.5" || p.RealizedPnlHaltReason != domain.PnlHaltReasonMissingCostBasis ||
-		p.AverageEntryPrice != "150.25" {
-		t.Errorf("position = %+v", p)
-	}
-}
 
-// TestExportNeutralizesSpreadsheetFormulas covers CSV injection: a code, title,
-// note or block reason starting with a formula leader is executed by Excel,
-// LibreOffice and Sheets when the operator opens the export. The sink prefixes
-// an apostrophe, and the import strips it again, so the guard costs no
-// fidelity. Validation is not an alternative: these fields are free text and
-// may legitimately begin with "=".
-func TestExportNeutralizesSpreadsheetFormulas(t *testing.T) {
-	t.Parallel()
-
-	groups := []domain.AccountGroup{{
-		Code:        "=cmd|' /C calc'!A0",
-		Title:       "+SUM(A1)",
-		Notes:       "@import",
-		Blocked:     true,
-		BlockReason: "-2+3+cmd|' /C calc'!A0",
-	}}
-	body, err := businesscsv.EncodeGroups(groups, businesscsv.DelimiterComma)
-	if err != nil {
-		t.Fatalf("EncodeGroups: %v", err)
-	}
-
-	// Every dangerous field leaves the writer behind an apostrophe, so no cell
-	// in the exported file begins with a formula leader.
-	for _, line := range strings.Split(strings.TrimSpace(string(body)), "\n") {
-		for _, cell := range strings.Split(strings.TrimSuffix(line, "\r"), ",") {
-			bare := strings.TrimPrefix(strings.TrimSuffix(cell, `"`), `"`)
-			if bare == "" {
-				continue
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			body, err := tc.encode()
+			if err != nil {
+				t.Fatalf("encode: %v", err)
 			}
-			if strings.ContainsRune("=+@\t\r", rune(bare[0])) {
-				t.Fatalf("cell %q left the export as a live formula", cell)
+			content := strings.ReplaceAll(string(body), "\r\n", "\n")
+			if !strings.HasPrefix(content, tc.wantHeader+"\n") ||
+				!strings.Contains(content, tc.wantRow+"\n") {
+				t.Fatalf("CSV =\n%s", content)
 			}
+		})
+	}
+}
+
+func TestEncodeOrdersIncludesRestoredLockPrice(t *testing.T) {
+	t.Parallel()
+	id := mustExternalID(t, "AAAAAAAAAAAAAAAAAAAAAA")
+	body, err := businesscsv.EncodeOrders([]domain.Order{{
+		ExternalID: id,
+		At:         time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Account:    "acc-1", Source: domain.SourcePanel,
+		BaseAsset: "AAPL", QuoteAsset: "USD", Side: domain.OrderSideBuy,
+		AmountKind: domain.OrderAmountKindQuantity, AmountValue: "10",
+		Price: "150", Leaves: "7", Status: domain.OrderStatusAccepted,
+	}}, businesscsv.DelimiterComma, func(order domain.Order) string {
+		if order.ExternalID != id {
+			t.Fatalf("lock price order = %q, want %q", order.ExternalID, id)
 		}
-	}
-	if !strings.Contains(string(body), `'=cmd`) {
-		t.Fatalf("escaped code missing from export:\n%s", body)
-	}
-
-	// Round trip: the import must return the original values, not the escaped
-	// ones, or the guard would silently corrupt a re-imported export.
-	rows, err := businesscsv.ParseImport(
-		businesscsv.EntityAccountGroups, body, businesscsv.DelimiterComma,
-	)
-	if err != nil {
-		t.Fatalf("ParseImport: %v", err)
-	}
-	if len(rows.Groups) != 1 {
-		t.Fatalf("want 1 group, got %d", len(rows.Groups))
-	}
-	got := rows.Groups[0]
-	if got.Code != groups[0].Code || got.Title != groups[0].Title ||
-		got.Notes != groups[0].Notes || got.BlockReason != groups[0].BlockReason {
-		t.Fatalf("round trip = %+v, want %+v", got, groups[0])
-	}
-}
-
-// TestExportFormulaEscapeStacksOnApostrophe pins the escape as a bijection: a
-// value that already starts with the apostrophe marker gains another one, so
-// the import removes exactly the apostrophe the export added.
-func TestExportFormulaEscapeStacksOnApostrophe(t *testing.T) {
-	t.Parallel()
-
-	groups := []domain.AccountGroup{{Code: "grp-1", Notes: "'=already quoted"}}
-	body, err := businesscsv.EncodeGroups(groups, businesscsv.DelimiterComma)
-	if err != nil {
-		t.Fatalf("EncodeGroups: %v", err)
-	}
-	if !strings.Contains(string(body), `''=already quoted`) {
-		t.Fatalf("apostrophe not stacked:\n%s", body)
-	}
-	rows, err := businesscsv.ParseImport(
-		businesscsv.EntityAccountGroups, body, businesscsv.DelimiterComma,
-	)
-	if err != nil {
-		t.Fatalf("ParseImport: %v", err)
-	}
-	if len(rows.Groups) != 1 || rows.Groups[0].Notes != "'=already quoted" {
-		t.Fatalf("round trip notes = %+v, want the original", rows.Groups)
-	}
-}
-
-// TestExportKeepsNegativeNumbersNumeric guards the one exemption: a value that
-// parses as a complete decimal is not a formula in any spreadsheet, and quoting
-// it would turn every negative balance and P&L in the export into text the
-// operator cannot sum.
-func TestExportKeepsNegativeNumbersNumeric(t *testing.T) {
-	t.Parallel()
-
-	balances := []domain.Balance{{
-		Account: "acc-1", Asset: "AAPL",
-		Available: "-100", Held: "0", Incoming: "0",
-		RealizedPnl: "-5.5", AverageEntryPrice: "150.25",
-	}}
-	body, err := businesscsv.EncodePositions(balances, businesscsv.DelimiterComma)
-	if err != nil {
-		t.Fatalf("EncodePositions: %v", err)
-	}
-	if strings.Contains(string(body), "'-100") || strings.Contains(string(body), "'-5.5") {
-		t.Fatalf("negative decimals must stay numeric in the export:\n%s", body)
-	}
-	rows, err := businesscsv.ParseImport(
-		businesscsv.EntityPositions, body, businesscsv.DelimiterComma,
-	)
-	if err != nil {
-		t.Fatalf("ParseImport: %v", err)
-	}
-	if len(rows.Positions) != 1 || rows.Positions[0].Available != "-100" ||
-		rows.Positions[0].RealizedPnl != "-5.5" {
-		t.Fatalf("positions = %+v, want the original negatives", rows.Positions)
-	}
-}
-
-func TestParsePositions_PreviousHeaderDefaultsHaltReason(t *testing.T) {
-	t.Parallel()
-	csv := "account_code,asset,available,held,incoming,realized_pnl,average_entry_price\n" +
-		"acc-1,AAPL,100,10,0,5.5,150.25\n"
-	rows, err := businesscsv.ParseImport(
-		businesscsv.EntityPositions, []byte(csv), businesscsv.DelimiterComma,
-	)
-	if err != nil {
-		t.Fatalf("ParseImport: %v", err)
-	}
-	if len(rows.Positions) != 1 || rows.Positions[0].RealizedPnl != "5.5" ||
-		rows.Positions[0].RealizedPnlHaltReason != "" ||
-		rows.Positions[0].AverageEntryPrice != "150.25" {
-		t.Fatalf("positions = %+v", rows.Positions)
-	}
-}
-
-// --- Orders (export-only) ----------------------------------------------------
-
-func TestEncodeOrdersUsesPublicIDHeader(t *testing.T) {
-	t.Parallel()
-	xid := mustExternalID(t, "AAAAAAAAAAAAAAAAAAAAAA")
-	orders := []domain.Order{
-		{
-			ExternalID:  xid,
-			At:          time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-			Account:     "acc-1",
-			Source:      domain.SourcePanel,
-			Principal:   "op",
-			BaseAsset:   "AAPL",
-			QuoteAsset:  "USD",
-			Side:        domain.OrderSideBuy,
-			AmountKind:  domain.OrderAmountKindQuantity,
-			AmountValue: "10",
-			Price:       "150",
-			Status:      domain.OrderStatusAccepted,
-		},
-	}
-	body, err := businesscsv.EncodeOrders(orders, businesscsv.DelimiterComma)
+		return "149.5"
+	})
 	if err != nil {
 		t.Fatalf("EncodeOrders: %v", err)
 	}
 	content := string(body)
-	if !strings.HasPrefix(content, "id,at,account_code,") {
-		t.Errorf("orders header does not start with public id column:\n%s", content)
-	}
-	if strings.Contains(content, "external_id") {
-		t.Error("orders header must not expose the internal external_id mnemonic")
-	}
-	// The public id value must appear in the data row.
-	if !strings.Contains(content, xid.String()) {
-		t.Errorf("want id %q in row, content:\n%s", xid, content)
+	if !strings.Contains(content, "price,lock_price,leaves,status") ||
+		!strings.Contains(content, ",150,149.5,7,accepted,false") {
+		t.Fatalf("orders CSV misses lock price:\n%s", content)
 	}
 }
 
-func TestOrdersNotImportable(t *testing.T) {
+func TestEncodeTradesUsesPublicIDs(t *testing.T) {
 	t.Parallel()
-	err := businesscsv.ValidateImportEntity(businesscsv.EntityOrders)
-	if err == nil || !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("orders must not be importable, got %v", err)
-	}
-}
-
-// --- Trades (export-only) ----------------------------------------------------
-
-func TestEncodeTradesUsesPublicIDHeaders(t *testing.T) {
-	t.Parallel()
-	xid := mustExternalID(t, "BBBBBBBBBBBBBBBBBBBBBB")
-	orderXID := mustExternalID(t, "CCCCCCCCCCCCCCCCCCCCCC")
-	trades := []domain.Trade{
-		{
-			ExternalID: xid,
-			Order:      orderXID,
-			At:         time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
-			Account:    "acc-1",
-			Source:     domain.SourcePanel,
-			Principal:  "op",
-			BaseAsset:  "AAPL",
-			QuoteAsset: "USD",
-			Side:       domain.OrderSideBuy,
-			Quantity:   "10",
-			Price:      "151",
-			LockPrice:  "150",
-		},
-	}
-	body, err := businesscsv.EncodeTrades(trades, businesscsv.DelimiterComma)
+	id := mustExternalID(t, "BBBBBBBBBBBBBBBBBBBBBB")
+	orderID := mustExternalID(t, "CCCCCCCCCCCCCCCCCCCCCC")
+	body, err := businesscsv.EncodeTrades([]domain.Trade{{
+		ExternalID: id, Order: orderID,
+		At:      time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
+		Account: "acc-1", Source: domain.SourcePanel,
+		BaseAsset: "AAPL", QuoteAsset: "USD", Side: domain.OrderSideBuy,
+		Quantity: "10", Price: "151", LockPrice: "150",
+	}}, businesscsv.DelimiterComma)
 	if err != nil {
 		t.Fatalf("EncodeTrades: %v", err)
 	}
 	content := string(body)
-	if !strings.HasPrefix(content, "id,order_id,at,account_code,") {
-		t.Errorf("trades header does not start with public id columns:\n%s", content)
-	}
-	if strings.Contains(content, "external_id") {
-		t.Error("trades header must not expose the internal external_id mnemonic")
-	}
-	if !strings.Contains(content, xid.String()) {
-		t.Errorf("want trade id %q in row", xid)
-	}
-	if !strings.Contains(content, orderXID.String()) {
-		t.Errorf("want order id %q in row", orderXID)
+	if !strings.HasPrefix(content, "id,order_id,at,account_code,") ||
+		!strings.Contains(content, id.String()) ||
+		!strings.Contains(content, orderID.String()) {
+		t.Fatalf("trades CSV =\n%s", content)
 	}
 }
 
-func TestTradesNotImportable(t *testing.T) {
+func TestExportNeutralizesFormulasButKeepsNegativeNumbers(t *testing.T) {
 	t.Parallel()
-	err := businesscsv.ValidateImportEntity(businesscsv.EntityTrades)
-	if err == nil || !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("trades must not be importable, got %v", err)
+	groups, err := businesscsv.EncodeGroups([]domain.AccountGroup{{
+		Code: "desk-a", Title: "=SUM(A1)", Notes: "'=quoted",
+	}}, businesscsv.DelimiterComma)
+	if err != nil {
+		t.Fatalf("EncodeGroups: %v", err)
+	}
+	if !strings.Contains(string(groups), "'=SUM(A1)") ||
+		!strings.Contains(string(groups), "''=quoted") {
+		t.Fatalf("formula fields were not neutralized:\n%s", groups)
+	}
+	positions, err := businesscsv.EncodePositions([]domain.Balance{{
+		Account: "acc-1", Asset: "USD", Available: "-100", RealizedPnl: "-5.5",
+	}}, businesscsv.DelimiterComma)
+	if err != nil {
+		t.Fatalf("EncodePositions: %v", err)
+	}
+	if strings.Contains(string(positions), "'-100") ||
+		strings.Contains(string(positions), "'-5.5") {
+		t.Fatalf("negative decimals must remain numeric:\n%s", positions)
 	}
 }
 
-// --- Delimiters --------------------------------------------------------------
-
-func TestDelimiterImportExport(t *testing.T) {
+func TestExportDelimiters(t *testing.T) {
 	t.Parallel()
-	delimiters := []businesscsv.Delimiter{
+	for _, delimiter := range []businesscsv.Delimiter{
 		businesscsv.DelimiterComma,
 		businesscsv.DelimiterSemicolon,
 		businesscsv.DelimiterTab,
 		businesscsv.DelimiterPipe,
-	}
-	for _, delimiter := range delimiters {
+	} {
+		delimiter := delimiter
 		t.Run(string(delimiter), func(t *testing.T) {
-			body, err := businesscsv.EncodeAccounts([]domain.Account{{
-				Code: "acc-1", Title: "Desk A One", GroupCode: "desk-a", Notes: "note",
-			}}, delimiter)
+			t.Parallel()
+			sep, err := delimiter.Rune()
+			if err != nil {
+				t.Fatalf("Rune: %v", err)
+			}
+			body, err := businesscsv.EncodeAccounts(
+				[]domain.Account{{Code: "acc-1", Title: "Account 1"}}, delimiter,
+			)
 			if err != nil {
 				t.Fatalf("EncodeAccounts: %v", err)
 			}
-			rows, err := businesscsv.ParseImport(
-				businesscsv.EntityAccounts, body, delimiter,
-			)
-			if err != nil {
-				t.Fatalf("ParseImport: %v", err)
-			}
-			if len(rows.Accounts) != 1 ||
-				rows.Accounts[0].Code != "acc-1" ||
-				rows.Accounts[0].Title != "Desk A One" ||
-				rows.Accounts[0].GroupCode != "desk-a" {
-				t.Fatalf("rows = %+v", rows.Accounts)
+			if !strings.ContainsRune(strings.SplitN(string(body), "\n", 2)[0], sep) {
+				t.Fatalf("header does not use %q: %s", sep, body)
 			}
 		})
 	}
 }
 
-// --- ZIP handling ------------------------------------------------------------
-
-func TestDecodeImportFileZipEdgeCases(t *testing.T) {
-	t.Run("one real file", func(t *testing.T) {
-		payload := testZip(t, map[string]string{
-			".DS_Store":          "junk",
-			"__MACOSX/._acc.csv": "junk",
-			"accounts.csv":       "code,title,group_code,notes,blocked,block_reason\n",
-		})
-		file, err := businesscsv.DecodeImportFile("accounts.zip", payload)
-		if err != nil {
-			t.Fatalf("DecodeImportFile: %v", err)
-		}
-		if file.Name != "accounts.csv" || file.Type != "zip" {
-			t.Fatalf("file = %+v", file)
-		}
-	})
-
-	t.Run("multiple real files", func(t *testing.T) {
-		payload := testZip(t, map[string]string{
-			"a.csv": "",
-			"b.csv": "",
-		})
-		_, err := businesscsv.DecodeImportFile("accounts.zip", payload)
-		if err == nil || !strings.Contains(err.Error(), "multiple real files") {
-			t.Fatalf("err = %v", err)
-		}
-	})
-
-	t.Run("malformed zip", func(t *testing.T) {
-		_, err := businesscsv.DecodeImportFile("accounts.zip", []byte("bad"))
-		if err == nil || !strings.Contains(err.Error(), "invalid business CSV zip") {
-			t.Fatalf("err = %v", err)
-		}
-	})
-}
-
 func TestWrapExportZip(t *testing.T) {
+	t.Parallel()
 	file, err := businesscsv.WrapExport(
 		businesscsv.EntityAccounts,
-		[]byte("code,title,group_code,notes,blocked,block_reason\n"),
+		[]byte("code,title\n"),
 		true,
 		time.Date(2026, 6, 25, 10, 0, 0, 0, time.UTC),
 	)
@@ -561,34 +215,11 @@ func TestWrapExportZip(t *testing.T) {
 	}
 }
 
-// --- Helpers -----------------------------------------------------------------
-
-func testZip(t *testing.T, files map[string]string) []byte {
+func mustExternalID(t *testing.T, value string) domain.ExternalID {
 	t.Helper()
-	var buf bytes.Buffer
-	zw := zip.NewWriter(&buf)
-	for name, body := range files {
-		w, err := zw.Create(name)
-		if err != nil {
-			t.Fatalf("Create(%s): %v", name, err)
-		}
-		if _, err := w.Write([]byte(body)); err != nil {
-			t.Fatalf("Write(%s): %v", name, err)
-		}
-	}
-	if err := zw.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	return buf.Bytes()
-}
-
-// mustExternalID decodes a 22-char base64url string into a domain.ExternalID
-// for test fixtures. Panics on invalid input.
-func mustExternalID(t *testing.T, s string) domain.ExternalID {
-	t.Helper()
-	id, err := domain.ParseExternalID(s)
+	id, err := domain.ParseExternalID(value)
 	if err != nil {
-		t.Fatalf("ParseExternalID(%q): %v", s, err)
+		t.Fatalf("ParseExternalID(%q): %v", value, err)
 	}
 	return id
 }

@@ -332,6 +332,7 @@ func (s *referenceSource) CancelOrder(
 	string,
 	string,
 	string,
+	string,
 ) (domain.Order, mcp.Attestation, error) {
 	return domain.Order{}, mcp.Attestation{}, nil
 }

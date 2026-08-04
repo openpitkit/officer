@@ -93,8 +93,8 @@ func Register(b *frameworkapp.Builder) {
 			signer,
 			fwbackend.WithMarketDataRegistry(registry),
 			fwbackend.WithMCPCatalogProvider(mcpRegistry),
-			fwbackend.WithLockSettlementEstimator(
-				enginenative.LockSettlementEstimate,
+			fwbackend.WithLockSettlementPrice(
+				enginenative.LockSettlementPrice,
 			),
 		), nil
 	})

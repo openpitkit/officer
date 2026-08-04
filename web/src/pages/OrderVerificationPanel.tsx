@@ -356,10 +356,6 @@ function ApprovalBreakdown({
           value={fields.estimatePrice}
         />
         <BreakdownRow
-          label={t("breakdown.estimateSource")}
-          value={fields.estimateSource}
-        />
-        <BreakdownRow
           label={t("breakdown.policySummary")}
           value={fields.policySummary}
         />

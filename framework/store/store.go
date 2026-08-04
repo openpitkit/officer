@@ -80,31 +80,6 @@ type EventAttestor func(
 	ctx context.Context, event domain.OrderEvent,
 ) (domain.EventAttestation, bool, error)
 
-// BusinessCSVImportGroup is one account-group row selected for a transactional
-// business CSV import.
-type BusinessCSVImportGroup struct {
-	Group  domain.AccountGroup
-	Exists bool
-}
-
-// BusinessCSVImportAccount is one account row selected for a transactional
-// business CSV import.
-type BusinessCSVImportAccount struct {
-	Account      domain.Account
-	Exists       bool
-	PnlSpecified bool
-}
-
-// BusinessCSVImport writes all selected business CSV rows and their per-row
-// audit records in one store transaction.
-type BusinessCSVImport struct {
-	Groups      []BusinessCSVImportGroup
-	Accounts    []BusinessCSVImportAccount
-	Balances    []domain.Balance
-	Adjustments []domain.AccountAdjustmentRecord
-	Audits      []AuditEntry
-}
-
 // BalanceKey addresses one balance snapshot by account and asset.
 type BalanceKey struct {
 	Account domain.AccountID
@@ -112,7 +87,7 @@ type BalanceKey struct {
 }
 
 // AccountAdjustmentPersistence is the atomic persistence command for one
-// engine-applied account adjustment or position snapshot.
+// engine-applied account adjustment.
 type AccountAdjustmentPersistence struct {
 	UpsertBalance *domain.Balance
 	DeleteBalance *BalanceKey
@@ -758,7 +733,8 @@ type RealmStore interface {
 
 	// SetAccountPnl replaces the account-currency P&L snapshot and its halt
 	// reason together, mirroring an assignment the engine already applied. An
-	// empty haltReason records that pnl is authoritative. Returns
+	// empty haltReason records that a non-empty pnl is authoritative. A non-empty
+	// haltReason stores no numeric value even if pnl is also supplied. Returns
 	// domain.ErrNotFound when the account is absent, or an error wrapping
 	// domain.ErrInvalid when pnl is not a decimal.
 	SetAccountPnl(
@@ -1186,13 +1162,6 @@ type RealmStore interface {
 	// ListUserSettings returns every persisted user setting, ordered for stable
 	// backups. An empty store returns a non-nil empty slice.
 	ListUserSettings(ctx context.Context) ([]domain.UserSetting, error)
-
-	// --- Business CSV ---
-
-	// ApplyBusinessCSVImport persists all selected business CSV rows and their
-	// per-row audit records in one transaction. Any store error rolls the whole
-	// import back, including audit rows.
-	ApplyBusinessCSVImport(ctx context.Context, in BusinessCSVImport) error
 
 	// --- Backup / restore (realm-portable) ---
 

@@ -250,8 +250,11 @@ type Account struct {
 	Code AccountID
 	// Title is the mutable human-readable display name; may be empty.
 	Title string
-	// Pnl is the latest SpotFunds account-currency P&L snapshot. Its currency is
-	// always EffectiveCurrency and is deliberately not repeated on this surface.
+	// Pnl is the latest SpotFunds account-currency P&L snapshot. It is empty
+	// whenever the account has no P&L value: while PnlHaltReason is set, because
+	// a halted accumulator has no numeric value, and on an account the engine has
+	// not reported on yet. Empty is the absence of a value, never zero. Its
+	// currency is EffectiveCurrency and is deliberately not repeated here.
 	Pnl string
 	// PnlHaltReason explains why the engine could not calculate account P&L on
 	// its latest reported operation. Empty means the latest P&L is authoritative.
@@ -355,7 +358,6 @@ const (
 	AuditActionExportBackup       AuditAction = "export_backup"
 	AuditActionRestoreBackup      AuditAction = "restore_backup"
 	AuditActionExportBusinessCSV  AuditAction = "export_business_csv"
-	AuditActionImportBusinessCSV  AuditAction = "import_business_csv"
 	AuditActionResetDatabase      AuditAction = "reset_database"
 	AuditActionRestartService     AuditAction = "restart_service"
 	AuditActionStopService        AuditAction = "stop_service"
@@ -431,7 +433,6 @@ func AllAuditActions() []AuditAction {
 		AuditActionExportBackup,
 		AuditActionRestoreBackup,
 		AuditActionExportBusinessCSV,
-		AuditActionImportBusinessCSV,
 		AuditActionResetDatabase,
 		AuditActionRestartService,
 		AuditActionStopService,
@@ -542,7 +543,7 @@ type OrderProbe struct {
 }
 
 // CheckResult is the outcome of a non-mutating order check (pre-trade dry-run).
-// On pass WouldLockPrices holds the prices the engine would lock at reservation
+// On pass WouldLockPrice holds the settlement price the engine would lock at reservation
 // time; on reject Rejects holds the structured engine rejects and WouldBlock,
 // when non-nil, is the account block the engine would record.
 type CheckResult struct {
@@ -550,9 +551,9 @@ type CheckResult struct {
 	WouldBlock *ExecutionAccountBlock
 	// Rejects are the engine pre-trade rejects; empty when the check passed.
 	Rejects []OrderReject
-	// WouldLockPrices are the reservation lock prices the order would lock
-	// (exact decimal strings); empty when nothing would be locked.
-	WouldLockPrices []string
+	// WouldLockPrice is the settlement lock price (exact decimal string); empty
+	// when nothing would be locked.
+	WouldLockPrice string
 	// Passed reports whether the order would pass pre-trade.
 	Passed bool
 }

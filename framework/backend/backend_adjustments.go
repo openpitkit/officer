@@ -106,27 +106,6 @@ func (s *Service) SetBalanceRealizedPnl(
 	)
 }
 
-// ImportPositionSnapshot validates and imports a complete persisted position
-// snapshot. It is intentionally narrower than the public adjustment API: CSV
-// import needs to round-trip realized P&L that the engine adjustment request
-// cannot express as an absolute field.
-func (s *Service) ImportPositionSnapshot(
-	ctx context.Context, externalID domain.ExternalID, snapshot domain.Balance,
-) (domain.AccountAdjustmentRecord, error) {
-	if err := domain.ValidateAccountID(snapshot.Account); err != nil {
-		return domain.AccountAdjustmentRecord{}, err
-	}
-	if _, err := domain.AddDecimals("", snapshot.RealizedPnl); err != nil {
-		return domain.AccountAdjustmentRecord{}, err
-	}
-	n, err := s.router.Route(keyFor(snapshot.Account))
-	if err != nil {
-		return domain.AccountAdjustmentRecord{}, fmt.Errorf("backend: route account: %w", err)
-	}
-	return n.ImportPositionSnapshot(
-		ctx, keyFor(snapshot.Account), externalID, snapshot, auth.CallerFromContext(ctx))
-}
-
 // ListBalances returns the balance rows for the realm, optionally narrowed to a
 // non-empty account and/or asset. It aggregates across nodes.
 func (s *Service) ListBalances(

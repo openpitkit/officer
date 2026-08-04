@@ -20,10 +20,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  BusinessCsvExportDialog,
-  BusinessCsvImportDialog,
-} from "@/components/BusinessCsvDialogs";
+import { BusinessCsvExportDialog } from "@/components/BusinessCsvDialogs";
 import { PendingRestartBanner } from "@/components/PendingRestartBanner";
 import { WelcomeDialog } from "@/components/WelcomeDialog";
 import { renderWithApi } from "@/test/apiClient";
@@ -159,35 +156,4 @@ describe("API provider injection", () => {
     expectInjectedRequest(fetchMock.mock.calls[0], "/business-csv/export");
   });
 
-  it("routes business CSV import preview through the injected API client", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse({
-        preview: {
-          counts: { rows: 1, applied: 1, skipped: 0, conflicts: 0 },
-          conflicts: [],
-        },
-      }),
-    );
-
-    renderWithInjectedApi(
-      <BusinessCsvImportDialog
-        entities={["accounts"]}
-        onImported={vi.fn()}
-        triggerLabel="Open import"
-      />,
-      fetchMock as unknown as typeof fetch,
-    );
-
-    await userEvent.click(screen.getByRole("button", { name: "Open import" }));
-    await userEvent.type(
-      screen.getByPlaceholderText(/paste/i),
-      "code,title\nacc-1,Main\n",
-    );
-    await userEvent.click(
-      screen.getByRole("button", { name: /preview upload/i }),
-    );
-
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    expectInjectedRequest(fetchMock.mock.calls[0], "/business-csv/import/preview");
-  });
 });

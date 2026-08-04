@@ -33,11 +33,14 @@ import (
 	"testing"
 	"time"
 
+	"go.openpit.dev/openpit/model"
+	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/pretrade"
+
 	"go.openpit.dev/officer/framework/backup"
 	"go.openpit.dev/officer/framework/businesscsv"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/store"
-	"go.openpit.dev/officer/internal/backend"
 	"go.openpit.dev/officer/internal/store/sqlite"
 )
 
@@ -46,6 +49,26 @@ const (
 	driftBusinessCSV = "business-csv"
 	driftSchema      = "schema"
 )
+
+func clientDataDriftLock(t *testing.T, value string) []byte {
+	t.Helper()
+	price, err := param.NewPriceFromString(value)
+	if err != nil {
+		t.Fatalf("lock price %q: %v", value, err)
+	}
+	lock, err := pretrade.NewLockFromEntries([]pretrade.Entry{{
+		PolicyGroupID: model.DefaultPolicyGroupID,
+		Price:         price,
+	}})
+	if err != nil {
+		t.Fatalf("NewLockFromEntries: %v", err)
+	}
+	payload, err := lock.MarshalMsgpack()
+	if err != nil {
+		t.Fatalf("MarshalMsgpack: %v", err)
+	}
+	return payload
+}
 
 type clientDataDrift struct {
 	Surface string
@@ -160,7 +183,7 @@ var clientDataAllowlist = []clientDataAllow{
 		Entity:  "positions",
 		Field:   "UpdatedAt",
 		Kind:    "uncovered",
-		Why:     "imported position snapshots receive a fresh write timestamp",
+		Why:     "position update timestamps are not part of the business export",
 	},
 	{
 		Surface: driftBusinessCSV,
@@ -210,7 +233,7 @@ var clientDataAllowlist = []clientDataAllow{
 		Entity:  "balance",
 		Field:   "updated_at",
 		Kind:    "business-csv-uncovered",
-		Why:     "CSV position import records a fresh snapshot timestamp",
+		Why:     "the export omits the internal snapshot timestamp",
 	},
 	{
 		Surface: driftSchema,
@@ -239,6 +262,34 @@ var clientDataAllowlist = []clientDataAllow{
 		Field:   "adjustments.Rejected",
 		Kind:    "optional-sentinel",
 		Why:     "accepted/rejected adjustment variants are covered by separate sentinel rows",
+	},
+	{
+		Surface: driftBackup,
+		Entity:  "accounts",
+		Field:   "accounts.Pnl",
+		Kind:    "optional-sentinel",
+		Why:     "a halted account carries no P&L number; the pair is covered by separate sentinel accounts",
+	},
+	{
+		Surface: driftBackup,
+		Entity:  "accounts",
+		Field:   "accounts.PnlHaltReason",
+		Kind:    "optional-sentinel",
+		Why:     "an account with a P&L number is not halted; the pair is covered by separate sentinel accounts",
+	},
+	{
+		Surface: driftBackup,
+		Entity:  "positions",
+		Field:   "positions.RealizedPnl",
+		Kind:    "optional-sentinel",
+		Why:     "a halted realized P&L carries no number; the pair is covered by separate sentinel positions",
+	},
+	{
+		Surface: driftBackup,
+		Entity:  "positions",
+		Field:   "positions.RealizedPnlHaltReason",
+		Kind:    "optional-sentinel",
+		Why:     "an authoritative realized P&L number is not halted; the pair is covered by separate sentinel positions",
 	},
 	{
 		Surface: driftBackup,
@@ -376,7 +427,21 @@ type businessCSVEntityContract struct {
 	source     reflect.Type
 	keyColumns []string
 	keyValues  []string
-	importable bool
+	// omitColumns names business-CSV columns the primary sentinel row cannot
+	// carry because another row in extraRows owns them. Only for genuinely
+	// mutually exclusive columns; every column must stay required on some row,
+	// which TestClientDataBusinessCSVSentinelRowsCoverEveryColumn enforces.
+	omitColumns []string
+	// extraRows are further sentinel rows for a table whose columns cannot all
+	// be non-empty at once.
+	extraRows []csvSentinelRow
+}
+
+// csvSentinelRow is one additional keyed sentinel row of an entity, identified
+// by the contract's keyColumns, that deliberately leaves omitColumns empty.
+type csvSentinelRow struct {
+	keyValues   []string
+	omitColumns []string
 }
 
 var backupParitySpecs = []paritySpec{
@@ -556,7 +621,6 @@ var businessCSVEntityContracts = []businessCSVEntityContract{
 		source:     reflect.TypeOf(domain.AccountGroup{}),
 		keyColumns: []string{"code"},
 		keyValues:  []string{"grp-1"},
-		importable: true,
 	},
 	{
 		entity:     string(businesscsv.EntityAccounts),
@@ -564,7 +628,13 @@ var businessCSVEntityContracts = []businessCSVEntityContract{
 		source:     reflect.TypeOf(domain.Account{}),
 		keyColumns: []string{"code"},
 		keyValues:  []string{"acc-1"},
-		importable: true,
+		// A halted account carries no P&L number and an account with a number
+		// is not halted, so the two columns are covered by one row each.
+		omitColumns: []string{"pnl_halt_reason"},
+		extraRows: []csvSentinelRow{{
+			keyValues:   []string{"acc-halted"},
+			omitColumns: []string{"pnl"},
+		}},
 	},
 	{
 		entity:     string(businesscsv.EntityPositions),
@@ -572,7 +642,13 @@ var businessCSVEntityContracts = []businessCSVEntityContract{
 		source:     reflect.TypeOf(domain.Balance{}),
 		keyColumns: []string{"account_code", "asset"},
 		keyValues:  []string{"acc-1", "USD"},
-		importable: true,
+		// Realized P&L and its halt reason are mutually exclusive, like the
+		// account-level accumulator above.
+		omitColumns: []string{"realized_pnl_halt_reason"},
+		extraRows: []csvSentinelRow{{
+			keyValues:   []string{"acc-halted", "AAPL"},
+			omitColumns: []string{"realized_pnl"},
+		}},
 	},
 	{
 		entity:     string(businesscsv.EntityOrders),
@@ -989,9 +1065,9 @@ func TestClientDataBackupRoundTripDrift(t *testing.T) {
 	reportClientDataDrift(t, findings)
 }
 
-func TestClientDataBusinessCSVRoundTripDrift(t *testing.T) {
+func TestClientDataBusinessCSVExportDrift(t *testing.T) {
 	ctx := context.Background()
-	sourceSvc, source, _ := newBusinessCSVRealService(t)
+	_, source := newClientDataDriftRealm(t, ctx)
 	seedClientDataDriftRealm(t, ctx, source)
 
 	var findings []clientDataDrift
@@ -999,83 +1075,108 @@ func TestClientDataBusinessCSVRoundTripDrift(t *testing.T) {
 		businesscsv.EntityAccountGroups,
 		businesscsv.EntityAccounts,
 		businesscsv.EntityPositions,
-	} {
-		file, err := sourceSvc.ExportBusinessCSV(ctx, backend.BusinessCSVExportRequest{
-			Entity:    entity,
-			Delimiter: businesscsv.DelimiterSemicolon,
-		})
-		if err != nil {
-			t.Fatalf("ExportBusinessCSV(%s): %v", entity, err)
-		}
-		findings = append(findings, csvNonZeroFindings(string(entity), file.Body)...)
-		targetSvc, target, _ := newBusinessCSVRealService(t)
-		seedBusinessCSVTargetForEntity(t, ctx, target, entity)
-		_, err = targetSvc.ImportBusinessCSV(ctx, backend.BusinessCSVImportRequest{
-			Entity:         entity,
-			Delimiter:      businesscsv.DelimiterSemicolon,
-			Filename:       file.Name,
-			Payload:        file.Body,
-			ConflictPolicy: businesscsv.ConflictReplace,
-		})
-		if err != nil {
-			field := "import"
-			detail := err.Error()
-			if entity == businesscsv.EntityAccountGroups &&
-				hasBusinessCSVReservedGroupRow(file.Body) {
-				field = "reserved-row"
-				detail = "reserved/default group row is exported with an " +
-					"empty code but the import path rejects it: " + err.Error()
-			}
-			findings = append(findings, clientDataDrift{
-				Surface: driftBusinessCSV,
-				Entity:  string(entity),
-				Field:   field,
-				Kind:    "import-error",
-				Detail:  detail,
-			})
-			continue
-		}
-		got, err := targetSvc.ExportBusinessCSV(ctx, backend.BusinessCSVExportRequest{
-			Entity:    entity,
-			Delimiter: businesscsv.DelimiterSemicolon,
-		})
-		if err != nil {
-			t.Fatalf("ExportBusinessCSV target(%s): %v", entity, err)
-		}
-		if !bytes.Equal(file.Body, got.Body) {
-			findings = append(findings, clientDataDrift{
-				Surface: driftBusinessCSV,
-				Entity:  string(entity),
-				Field:   "body",
-				Kind:    "dropped",
-				Detail:  "export -> import -> export body differs",
-			})
-		}
-	}
-
-	for _, entity := range []businesscsv.Entity{
 		businesscsv.EntityOrders,
 		businesscsv.EntityTrades,
 	} {
-		file, err := sourceSvc.ExportBusinessCSV(ctx, backend.BusinessCSVExportRequest{
-			Entity:    entity,
-			Delimiter: businesscsv.DelimiterSemicolon,
-		})
+		body, err := encodeBusinessCSVFromStore(ctx, source, entity)
 		if err != nil {
-			t.Fatalf("ExportBusinessCSV(%s): %v", entity, err)
+			t.Fatalf("encode business CSV %s: %v", entity, err)
 		}
-		findings = append(findings, csvNonZeroFindings(string(entity), file.Body)...)
-		if businessCSVImportable(entity) {
-			findings = append(findings, clientDataDrift{
-				Surface: driftBusinessCSV,
-				Entity:  string(entity),
-				Field:   "import",
-				Kind:    "missing-import",
-				Detail:  "entity is missing import on the business CSV surface",
-			})
-		}
+		findings = append(findings, csvNonZeroFindings(string(entity), body)...)
 	}
 	reportClientDataDrift(t, findings)
+}
+
+// TestClientDataBusinessCSVSentinelRowsCoverEveryColumn keeps the per-row
+// omitColumns escape hatch honest: splitting a mutually exclusive pair across
+// two sentinel rows is allowed, dropping a column from every row is not, since
+// that would leave the column unexercised while the export drift check still
+// passed.
+func TestClientDataBusinessCSVSentinelRowsCoverEveryColumn(t *testing.T) {
+	for _, contract := range businessCSVEntityContracts {
+		surface := schemaClientTables[contract.table]
+		if surface.businessCSV == nil {
+			continue
+		}
+		covered := map[string]bool{}
+		for _, spec := range businessCSVSentinelSpecs[contract.entity] {
+			for _, column := range spec.requiredColumns {
+				covered[column] = true
+			}
+		}
+		for _, column := range surface.businessCSV {
+			if column == "" || covered[column] {
+				continue
+			}
+			t.Errorf(
+				"business CSV %s column %q is required by no sentinel row",
+				contract.entity, column,
+			)
+		}
+	}
+}
+
+func encodeBusinessCSVFromStore(
+	ctx context.Context,
+	realm store.RealmStore,
+	entity businesscsv.Entity,
+) ([]byte, error) {
+	const delimiter = businesscsv.DelimiterSemicolon
+	switch entity {
+	case businesscsv.EntityAccountGroups:
+		groups, err := realm.ListGroups(ctx)
+		if err != nil {
+			return nil, err
+		}
+		filtered := groups[:0]
+		for _, group := range groups {
+			if group.Code != "" {
+				filtered = append(filtered, group)
+			}
+		}
+		return businesscsv.EncodeGroups(filtered, delimiter)
+	case businesscsv.EntityAccounts:
+		rows, err := realm.ListAccounts(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return businesscsv.EncodeAccounts(rows, delimiter)
+	case businesscsv.EntityPositions:
+		rows, err := realm.ListBalances(ctx, "", "")
+		if err != nil {
+			return nil, err
+		}
+		return businesscsv.EncodePositions(rows, delimiter)
+	case businesscsv.EntityOrders:
+		rows, err := realm.ListAllOrders(ctx, "", "")
+		if err != nil {
+			return nil, err
+		}
+		return businesscsv.EncodeOrders(rows, delimiter, storedLockPrice)
+	case businesscsv.EntityTrades:
+		rows, err := realm.ListAllTrades(ctx, "", "")
+		if err != nil {
+			return nil, err
+		}
+		return businesscsv.EncodeTrades(rows, delimiter)
+	default:
+		return nil, fmt.Errorf("unknown business CSV entity %q", entity)
+	}
+}
+
+func storedLockPrice(order domain.Order) string {
+	if len(order.Lock) == 0 {
+		return ""
+	}
+	lock, err := pretrade.NewLockFromMsgPack(order.Lock)
+	if err != nil {
+		return ""
+	}
+	prices, err := lock.Prices()
+	if err != nil || len(prices) != 1 {
+		return ""
+	}
+	return prices[0].String()
 }
 
 func TestClientDataStructParityDrift(t *testing.T) {
@@ -1243,29 +1344,53 @@ func seedClientDataDriftRealm(
 		t.Fatalf("CreateGroup: %v", err)
 	}
 	must(t, "SetGroupCurrency default", rs.SetGroupCurrency(ctx, "", "USD"))
+	// Pnl and PnlHaltReason are mutually exclusive by design: a halted
+	// accumulator has no numeric value, so the store writes pnl = NULL whenever
+	// a halt reason is set. One account cannot carry both sentinels, so the
+	// pair is split across two accounts and each surface covers the union.
 	if _, err := rs.CreateAccount(ctx, domain.Account{
-		Code:          "acc-1",
-		Title:         "Account Sentinel",
-		Currency:      "USD",
-		Pnl:           "12.34",
-		PnlHaltReason: domain.PnlHaltReasonMissingFx,
-		GroupCode:     "grp-1",
-		Notes:         "account notes sentinel",
-		BlockReason:   "account block sentinel",
-		Blocked:       true,
+		Code:        "acc-1",
+		Title:       "Account Sentinel",
+		Currency:    "USD",
+		Pnl:         "12.34",
+		GroupCode:   "grp-1",
+		Notes:       "account notes sentinel",
+		BlockReason: "account block sentinel",
+		Blocked:     true,
 	}); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
+	if _, err := rs.CreateAccount(ctx, domain.Account{
+		Code:          "acc-halted",
+		Title:         "Halted Account Sentinel",
+		Currency:      "USD",
+		PnlHaltReason: domain.PnlHaltReasonMissingFx,
+		GroupCode:     "grp-1",
+		Notes:         "halted account notes sentinel",
+		BlockReason:   "halted account block sentinel",
+		Blocked:       true,
+	}); err != nil {
+		t.Fatalf("CreateAccount halted: %v", err)
+	}
 	must(t, "UpsertBalance", rs.UpsertBalance(ctx, domain.Balance{
-		Account:               "acc-1",
-		Asset:                 "USD",
-		Available:             "123.45",
-		Held:                  "6.78",
-		Incoming:              "9.01",
-		RealizedPnl:           "2.34",
+		Account:           "acc-1",
+		Asset:             "USD",
+		Available:         "123.45",
+		Held:              "6.78",
+		Incoming:          "9.01",
+		RealizedPnl:       "2.34",
+		AverageEntryPrice: "101.23",
+		UpdatedAt:         time.Date(2026, 7, 8, 10, 11, 12, 0, time.UTC),
+	}))
+	must(t, "UpsertBalance halted", rs.UpsertBalance(ctx, domain.Balance{
+		Account:               "acc-halted",
+		Asset:                 "AAPL",
+		Available:             "223.45",
+		Held:                  "16.78",
+		Incoming:              "19.01",
 		RealizedPnlHaltReason: domain.PnlHaltReasonMissingFx,
-		AverageEntryPrice:     "101.23",
-		UpdatedAt:             time.Date(2026, 7, 8, 10, 11, 12, 0, time.UTC),
+		AverageEntryPrice:     "201.23",
+		UpdatedAt:             time.Date(2026, 7, 8, 10, 12, 12, 0, time.UTC),
 	}))
 	must(t, "PutRateLimit", rs.PutRateLimit(ctx, domain.LimitRate{
 		Scope:     domain.ScopeAccountAsset,
@@ -1313,7 +1438,7 @@ func seedClientDataDriftRealm(
 		Price:       "151.25",
 		Status:      domain.OrderStatusFilled,
 		DropCopy:    true,
-		Lock:        []byte{0x01, 0x02, 0x03},
+		Lock:        clientDataDriftLock(t, "151.00"),
 	})
 	if err != nil {
 		t.Fatalf("CreateOrder: %v", err)
@@ -1464,11 +1589,12 @@ func seedClientDataDriftRealm(
 			RealizedPnlHaltReason: domain.PnlHaltReasonMissingCostBasis,
 		},
 		Rejected: &domain.AdjustmentOutcomeRejected{
-			Code:    "limit_exceeded",
-			Scope:   "account",
-			Policy:  "manual_adjustment",
-			Reason:  "sentinel rejected adjustment",
-			Details: "rejected adjustment details sentinel",
+			Code:                  "limit_exceeded",
+			Scope:                 "account",
+			Policy:                "manual_adjustment",
+			Reason:                "sentinel rejected adjustment",
+			Details:               "rejected adjustment details sentinel",
+			FailedAdjustmentIndex: 1,
 		},
 	}); err != nil {
 		t.Fatalf("AppendAdjustment(rejected): %v", err)
@@ -1524,47 +1650,6 @@ func seedClientDataDriftRealm(
 	))
 }
 
-func seedBusinessCSVTargetForEntity(
-	t *testing.T,
-	ctx context.Context,
-	rs store.RealmStore,
-	entity businesscsv.Entity,
-) {
-	t.Helper()
-	switch entity {
-	case businesscsv.EntityAccountGroups:
-		must(t, "CreateAsset target USD", rs.CreateAsset(ctx, domain.Asset{
-			Code:  "USD",
-			Title: "US Dollar Sentinel",
-		}))
-	case businesscsv.EntityAccounts:
-		must(t, "CreateAsset target USD", rs.CreateAsset(ctx, domain.Asset{
-			Code:  "USD",
-			Title: "US Dollar Sentinel",
-		}))
-		if _, err := rs.CreateGroup(ctx, domain.AccountGroup{
-			Code:        "grp-1",
-			Title:       "Desk Sentinel",
-			Notes:       "group notes sentinel",
-			BlockReason: "group block sentinel",
-			Blocked:     true,
-		}); err != nil {
-			t.Fatalf("CreateGroup target: %v", err)
-		}
-	case businesscsv.EntityPositions:
-		must(t, "CreateAsset target USD", rs.CreateAsset(ctx, domain.Asset{
-			Code:  "USD",
-			Title: "US Dollar Sentinel",
-		}))
-		if _, err := rs.CreateAccount(ctx, domain.Account{
-			Code:  "acc-1",
-			Title: "Account Sentinel",
-		}); err != nil {
-			t.Fatalf("CreateAccount target: %v", err)
-		}
-	}
-}
-
 func buildBusinessCSVColumnSpecs() []csvColumnSpec {
 	out := make([]csvColumnSpec, 0, len(businessCSVEntityContracts))
 	for _, contract := range businessCSVEntityContracts {
@@ -1601,29 +1686,44 @@ func buildBusinessCSVSentinelSpecs() map[string][]csvSentinelSpec {
 		if surface.businessCSV == nil {
 			continue
 		}
-		required := make([]string, 0, len(surface.businessCSV))
+		columns := make([]string, 0, len(surface.businessCSV))
 		for _, column := range surface.businessCSV {
 			if column != "" {
-				required = append(required, column)
+				columns = append(columns, column)
 			}
 		}
-		sort.Strings(required)
-		out[contract.entity] = []csvSentinelSpec{{
-			keyColumns:      contract.keyColumns,
-			keyValues:       contract.keyValues,
-			requiredColumns: required,
-		}}
+		sort.Strings(columns)
+		rows := append(
+			[]csvSentinelRow{{
+				keyValues:   contract.keyValues,
+				omitColumns: contract.omitColumns,
+			}},
+			contract.extraRows...,
+		)
+		specs := make([]csvSentinelSpec, 0, len(rows))
+		for _, row := range rows {
+			specs = append(specs, csvSentinelSpec{
+				keyColumns:      contract.keyColumns,
+				keyValues:       row.keyValues,
+				requiredColumns: withoutColumns(columns, row.omitColumns),
+			})
+		}
+		out[contract.entity] = specs
 	}
 	return out
 }
 
-func businessCSVImportable(entity businesscsv.Entity) bool {
-	for _, contract := range businessCSVEntityContracts {
-		if contract.entity == string(entity) {
-			return contract.importable
+func withoutColumns(columns, omit []string) []string {
+	if len(omit) == 0 {
+		return columns
+	}
+	out := make([]string, 0, len(columns))
+	for _, column := range columns {
+		if !slices.Contains(omit, column) {
+			out = append(out, column)
 		}
 	}
-	return false
+	return out
 }
 
 func compareStructParity(spec paritySpec) []clientDataDrift {
@@ -1906,24 +2006,6 @@ func csvNonZeroFindings(entity string, body []byte) []clientDataDrift {
 		}
 	}
 	return findings
-}
-
-func hasBusinessCSVReservedGroupRow(body []byte) bool {
-	header, rows, err := readBusinessCSVRows(body)
-	if err != nil {
-		return false
-	}
-	headerIndex := csvHeaderIndex(header)
-	codeIdx, ok := headerIndex["code"]
-	if !ok {
-		return false
-	}
-	for _, row := range rows {
-		if codeIdx < len(row) && row[codeIdx] == "" {
-			return true
-		}
-	}
-	return false
 }
 
 func readBusinessCSVRows(body []byte) ([]string, [][]string, error) {

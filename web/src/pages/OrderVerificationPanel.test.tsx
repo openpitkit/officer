@@ -501,7 +501,6 @@ describe("OrderVerificationPanel — verify token mode", () => {
       priceCurrency: "USD",
       timeInForce: "GTC",
       accountGroupId: "equity-desks",
-      estimateSource: "limit",
       nonce: "nonce-exec-1",
       rejectCode: "policy_reject",
       rejectScope: "account",

@@ -618,7 +618,7 @@ func TestCancelOrder_HappyPath(t *testing.T) {
 		},
 	}
 	body, _ := json.Marshal(map[string]any{
-		"token": "mytoken", "reason": "user request",
+		"token": "mytoken", "leavesQuantity": "3.5", "reason": "user request",
 	})
 	r, err := newRouter(svc)
 	if err != nil {
@@ -630,6 +630,9 @@ func TestCancelOrder_HappyPath(t *testing.T) {
 			bytes.NewReader(body)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if svc.cancelLeavesQuantity != "3.5" {
+		t.Fatalf("forwarded leaves = %q, want 3.5", svc.cancelLeavesQuantity)
 	}
 	m := bodyMap(t, rec.Result())
 	ord, _ := m["order"].(map[string]any)
@@ -653,6 +656,77 @@ func TestCancelOrder_MissingToken(t *testing.T) {
 			bytes.NewReader(body)))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d", rec.Code)
+	}
+}
+
+// TestCancelOrder_MissingLeavesQuantity verifies that a cancellation rejected
+// by the public contract never reaches the signing service or an account lane.
+func TestCancelOrder_MissingLeavesQuantity(t *testing.T) {
+	svc := &fakeService{}
+	body, _ := json.Marshal(map[string]any{"token": "mytoken"})
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec,
+		httptest.NewRequest(http.MethodPost, "/api/v1/orders/"+extID("order-1").String()+"/cancel",
+			bytes.NewReader(body)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if svc.cancelCalls != 0 {
+		t.Fatalf("cancel reached service %d time(s)", svc.cancelCalls)
+	}
+}
+
+// TestCancelOrder_TrimsLeavesQuantity verifies the boundary forwards the same
+// trimmed value it validated, so HTTP and MCP callers reach the engine alike.
+func TestCancelOrder_TrimsLeavesQuantity(t *testing.T) {
+	svc := &fakeService{
+		submitOrder: domain.Order{
+			ExternalID: extID("order-1"), Status: domain.OrderStatusRejected,
+		},
+	}
+	body, _ := json.Marshal(map[string]any{
+		"token": "mytoken", "leavesQuantity": "  3.5  ",
+	})
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec,
+		httptest.NewRequest(http.MethodPost, "/api/v1/orders/"+extID("order-1").String()+"/cancel",
+			bytes.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if svc.cancelLeavesQuantity != "3.5" {
+		t.Fatalf("forwarded leaves = %q, want 3.5", svc.cancelLeavesQuantity)
+	}
+}
+
+// TestCancelOrder_BlankLeavesQuantity verifies a whitespace-only value is
+// refused at the boundary rather than forwarded as an empty report field.
+func TestCancelOrder_BlankLeavesQuantity(t *testing.T) {
+	svc := &fakeService{}
+	body, _ := json.Marshal(map[string]any{
+		"token": "mytoken", "leavesQuantity": "   ",
+	})
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec,
+		httptest.NewRequest(http.MethodPost, "/api/v1/orders/"+extID("order-1").String()+"/cancel",
+			bytes.NewReader(body)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if svc.cancelCalls != 0 {
+		t.Fatalf("cancel reached service %d time(s)", svc.cancelCalls)
 	}
 }
 
@@ -712,7 +786,7 @@ func TestConfirmExecution_ExecutionReportRequired(t *testing.T) {
 func TestCancelOrder_TerminalOrderConflict(t *testing.T) {
 	svc := &fakeService{cancelErr: domain.ErrTerminalOrder}
 	body, _ := json.Marshal(map[string]any{
-		"token": "mytoken", "reason": "user request",
+		"token": "mytoken", "leavesQuantity": "10", "reason": "user request",
 	})
 	r, err := newRouter(svc)
 	if err != nil {
@@ -737,7 +811,7 @@ func TestCancelOrder_TerminalOrderConflict(t *testing.T) {
 func TestCancelOrder_ExecutionReportRequired(t *testing.T) {
 	svc := &fakeService{cancelErr: domain.ErrExecutionReportRequired}
 	body, _ := json.Marshal(map[string]any{
-		"token": "mytoken", "reason": "user request",
+		"token": "mytoken", "leavesQuantity": "10", "reason": "user request",
 	})
 	r, err := newRouter(svc)
 	if err != nil {

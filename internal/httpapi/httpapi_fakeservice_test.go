@@ -62,6 +62,7 @@ type fakeService struct {
 	adjustmentPage        *store.AdjustmentListPage
 	adjustmentFilter      store.AdjustmentListFilter
 	orders                []domain.Order
+	orderPage             *backend.OrderListPage
 	trades                []domain.Trade
 	tradePage             *store.TradeListPage
 	tradeFilter           store.TradeListFilter
@@ -78,10 +79,6 @@ type fakeService struct {
 	backupErr             error
 	csvExport             businesscsv.ExportFile
 	csvExportReq          backend.BusinessCSVExportRequest
-	csvPreview            backend.BusinessCSVImportPreview
-	csvPreviewReq         backend.BusinessCSVImportRequest
-	csvImport             backend.BusinessCSVImportResult
-	csvImportReq          backend.BusinessCSVImportRequest
 	csvErr                error
 	restoreArchive        backup.Archive
 	restoreOptions        backup.RestoreOptions
@@ -161,8 +158,10 @@ type fakeService struct {
 	// confirmErr/cancelErr inject a resolution failure (e.g. a terminal-order
 	// conflict) into ConfirmExecution/CancelOrder, kept distinct from signingErr so
 	// a test can drive the terminal-order path without touching the signing setup.
-	confirmErr error
-	cancelErr  error
+	confirmErr           error
+	cancelErr            error
+	cancelCalls          int
+	cancelLeavesQuantity string
 	// Public-key-by-id resolution. publicKeysByID maps keyId to its exported
 	// public material; a missing id reports domain.ErrNotFound so the rotation and
 	// 404 paths can be exercised. keyByIDFormat/keyByIDLast capture the last call.
@@ -235,20 +234,6 @@ func (f *fakeService) ExportBusinessCSV(
 ) (businesscsv.ExportFile, error) {
 	f.csvExportReq = req
 	return f.csvExport, f.csvErr
-}
-func (f *fakeService) PreviewBusinessCSVImport(
-	_ context.Context,
-	req backend.BusinessCSVImportRequest,
-) (backend.BusinessCSVImportPreview, error) {
-	f.csvPreviewReq = req
-	return f.csvPreview, f.csvErr
-}
-func (f *fakeService) ImportBusinessCSV(
-	_ context.Context,
-	req backend.BusinessCSVImportRequest,
-) (backend.BusinessCSVImportResult, error) {
-	f.csvImportReq = req
-	return f.csvImport, f.csvErr
 }
 func (f *fakeService) ResetDatabase(_ context.Context) error {
 	f.resetCalled = true
@@ -749,16 +734,19 @@ func (f *fakeService) ListOrders(
 
 func (f *fakeService) ListOrderRows(
 	_ context.Context, filter store.OrderListFilter,
-) (store.OrderListPage, error) {
+) (backend.OrderListPage, error) {
 	f.orderFilter = filter
 	if f.ordersErr != nil {
-		return store.OrderListPage{}, f.ordersErr
+		return backend.OrderListPage{}, f.ordersErr
 	}
-	rows := make([]store.OrderListRow, 0, len(f.orders))
+	if f.orderPage != nil {
+		return *f.orderPage, nil
+	}
+	rows := make([]backend.OrderListRow, 0, len(f.orders))
 	for _, order := range f.orders {
-		rows = append(rows, store.OrderListRow{Order: order})
+		rows = append(rows, backend.OrderListRow{Order: order})
 	}
-	return store.OrderListPage{Rows: rows, Total: len(rows)}, nil
+	return backend.OrderListPage{Rows: rows, Total: len(rows)}, nil
 }
 func (f *fakeService) ListTrades(
 	_ context.Context, _ domain.AccountID, _ domain.Source, _ int,
@@ -889,8 +877,10 @@ func (f *fakeService) ConfirmExecution(
 	return f.submitOrder, f.attestation, nil
 }
 func (f *fakeService) CancelOrder(
-	_ context.Context, orderID string, _, _ string,
+	_ context.Context, orderID string, _, leavesQuantity, _ string,
 ) (domain.Order, backend.Attestation, error) {
+	f.cancelCalls++
+	f.cancelLeavesQuantity = leavesQuantity
 	if f.cancelErr != nil {
 		return domain.Order{}, backend.Attestation{}, f.cancelErr
 	}

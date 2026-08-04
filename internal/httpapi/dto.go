@@ -24,7 +24,6 @@ import (
 	"strings"
 	"time"
 
-	"go.openpit.dev/officer/app/engine/native"
 	"go.openpit.dev/officer/framework/backend"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
@@ -1111,9 +1110,9 @@ func toAdjustmentRealizedPnlResultDTO(
 
 // orderDTO is the wire shape of one Officer-side order record. An order is a
 // machine record: its public handle is the opaque external id; no surrogate or
-// engine id is serialized. DisplayPrices are the human-readable pre-trade lock
-// prices derived from the opaque lock blob by the engine seam (settlement leg
-// last); the raw lock is never serialized. All monetary and size values are
+// engine id is serialized. DisplayPrice is the human-readable pre-trade lock
+// price derived from the opaque lock blob by the engine seam; the raw lock is
+// never serialized. All monetary and size values are
 // exact decimal strings passed through verbatim.
 type orderDTO struct {
 	At                  time.Time       `json:"at"`
@@ -1128,12 +1127,12 @@ type orderDTO struct {
 	CommissionSubtotals []commissionDTO `json:"commissionSubtotals"`
 	// LeavesQuantity is the persisted remaining open base quantity (exact decimal
 	// string). It is read from the stored order/report data as-is.
-	LeavesQuantity string   `json:"leavesQuantity"`
-	Price          string   `json:"price"`
-	Status         string   `json:"status"`
-	Source         string   `json:"source"`
-	DisplayPrices  []string `json:"displayPrices"`
-	DropCopy       bool     `json:"dropCopy"`
+	LeavesQuantity string `json:"leavesQuantity"`
+	Price          string `json:"price"`
+	Status         string `json:"status"`
+	Source         string `json:"source"`
+	DisplayPrice   string `json:"displayPrice"`
+	DropCopy       bool   `json:"dropCopy"`
 	// Signed is the order-level rollup: whether at least one of the order's events
 	// carries a persisted Ed25519-signed attestation.
 	Signed bool `json:"signed"`
@@ -1144,18 +1143,11 @@ type commissionDTO struct {
 	Currency string `json:"currency"`
 }
 
-// toOrderDTO maps a domain.Order onto the wire DTO. The display prices are
-// derived from the order's opaque lock blob via the engine seam; an undecodable
-// lock degrades gracefully to an empty list rather than failing the response,
-// since the lock is presentation-only and the order row is already authoritative.
-// signed reports whether the order's 1:1 approval envelope, when present,
-// carries a real Ed25519 signature; callers compute it from whatever approval
-// data they already have (the list query's joined alg, or a fetched detail).
-func toOrderDTO(o domain.Order, signed bool) orderDTO {
-	prices, err := native.LockDisplayPrices(o.Lock)
-	if err != nil || prices == nil {
-		prices = []string{}
-	}
+// toOrderDTO maps a backend-enriched domain order onto the wire DTO.
+// displayPrice comes from the backend's engine seam; this transport mapper
+// never decodes the opaque lock. signed reports whether the order carries at
+// least one Ed25519-signed event attestation.
+func toOrderDTO(o domain.Order, displayPrice string, signed bool) orderDTO {
 	return orderDTO{
 		At:          o.At,
 		ID:          o.ExternalID.String(),
@@ -1173,7 +1165,7 @@ func toOrderDTO(o domain.Order, signed bool) orderDTO {
 		Price:          o.Price,
 		Status:         string(o.Status),
 		Source:         string(o.Source),
-		DisplayPrices:  prices,
+		DisplayPrice:   displayPrice,
 		DropCopy:       o.DropCopy,
 		Signed:         signed,
 	}
@@ -1348,14 +1340,14 @@ type orderRejectDTO struct {
 }
 
 // checkResultDTO is the wire shape of a non-mutating order-check outcome: the
-// would-be display (lock) prices on pass, or the structured rejects and any
-// would-be account block on reject. The display prices are exact decimal
-// strings, never the opaque lock blob.
+// would-be display (lock) price on pass, or the structured rejects and any
+// would-be account block on reject. The display price is an exact decimal
+// string, never the opaque lock blob.
 type checkResultDTO struct {
-	WouldBlock         *executionBlockDTO `json:"wouldBlock"`
-	Rejects            []orderRejectDTO   `json:"rejects"`
-	WouldDisplayPrices []string           `json:"wouldDisplayPrices"`
-	Passed             bool               `json:"passed"`
+	WouldBlock        *executionBlockDTO `json:"wouldBlock"`
+	Rejects           []orderRejectDTO   `json:"rejects"`
+	WouldDisplayPrice string             `json:"wouldDisplayPrice"`
+	Passed            bool               `json:"passed"`
 }
 
 func toOrderRejectDTOs(rejects []domain.OrderReject) []orderRejectDTO {
@@ -1382,10 +1374,6 @@ func toCheckResultDTO(r domain.CheckResult) checkResultDTO {
 	if rejects == nil {
 		rejects = []orderRejectDTO{}
 	}
-	prices := r.WouldLockPrices
-	if prices == nil {
-		prices = []string{}
-	}
 	var block *executionBlockDTO
 	if r.WouldBlock != nil {
 		block = &executionBlockDTO{
@@ -1397,10 +1385,10 @@ func toCheckResultDTO(r domain.CheckResult) checkResultDTO {
 		}
 	}
 	return checkResultDTO{
-		WouldBlock:         block,
-		Rejects:            rejects,
-		WouldDisplayPrices: prices,
-		Passed:             r.Passed,
+		WouldBlock:        block,
+		Rejects:           rejects,
+		WouldDisplayPrice: r.WouldLockPrice,
+		Passed:            r.Passed,
 	}
 }
 
@@ -1774,8 +1762,9 @@ type confirmExecutionRequestDTO struct {
 
 // cancelOrderRequestDTO is the body of POST /orders/{id}/cancel.
 type cancelOrderRequestDTO struct {
-	Token  string `json:"token"`
-	Reason string `json:"reason"`
+	Token          string `json:"token"`
+	LeavesQuantity string `json:"leavesQuantity"`
+	Reason         string `json:"reason"`
 }
 
 // toSigningKeyDTO maps a domain.SigningKey onto the wire DTO. It NEVER copies

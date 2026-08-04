@@ -396,6 +396,42 @@ func TestBackupRestorePreservesAccountCurrency(t *testing.T) {
 	}
 }
 
+func TestBackupRestorePreservesEmptyHaltedAccountPnl(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	_, src := newRealmStore(t, domain.DefaultRealm)
+	if _, err := src.CreateAccount(ctx, domain.Account{Code: "halted"}); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if err := src.SetAccountPnl(
+		ctx, "halted", "", domain.PnlHaltReasonMissingFx,
+	); err != nil {
+		t.Fatalf("SetAccountPnl: %v", err)
+	}
+	archive, err := src.ExportBackup(ctx, backup.Scope{All: true})
+	if err != nil {
+		t.Fatalf("ExportBackup: %v", err)
+	}
+
+	_, dst := newRealmStore(t, domain.DefaultRealm)
+	if _, err := dst.RestoreBackup(ctx, archive, backup.RestoreOptions{
+		Scope: backup.Scope{All: true}, Mode: backup.RestoreModeReplaceAll,
+	}); err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	account, ok, err := dst.GetAccount(ctx, "halted")
+	if err != nil || !ok {
+		t.Fatalf("GetAccount: ok=%v err=%v", ok, err)
+	}
+	if account.Pnl != "" || account.PnlHaltReason != domain.PnlHaltReasonMissingFx {
+		t.Fatalf(
+			"restored account pnl = %q halt = %q, want empty missing_fx",
+			account.Pnl,
+			account.PnlHaltReason,
+		)
+	}
+}
+
 func TestBackupRestoreOverwriteClearsDefaultGroupCurrency(t *testing.T) {
 	ctx := context.Background()
 	_, src := newRealmStore(t, domain.DefaultRealm)

@@ -28,6 +28,54 @@ import (
 	"go.openpit.dev/officer/framework/store"
 )
 
+func (n *localNode) auditEntry(
+	caller domain.Caller, entry store.AuditEntry,
+) store.AuditEntry {
+	entry.Actor = caller.Principal
+	entry.Source = caller.Source
+	return entry
+}
+
+func (n *localNode) ensureAdjustmentExternalIDUnused(
+	ctx context.Context, externalID domain.ExternalID,
+) error {
+	if externalID.IsZero() {
+		return nil
+	}
+	page, err := n.realm.ListAdjustmentRows(ctx, store.AdjustmentListFilter{
+		ExternalID: externalID,
+		Page:       store.PageSpec{Limit: 1},
+	})
+	if err != nil {
+		return fmt.Errorf("check adjustment external id: %w", err)
+	}
+	if len(page.Rows) > 0 {
+		return fmt.Errorf("adjustment %q: %w", externalID, domain.ErrAlreadyExists)
+	}
+	return nil
+}
+
+func snapshotAdjustmentRequest(snapshot domain.Balance) domain.AdjustmentRequest {
+	req := domain.AdjustmentRequest{
+		Asset:                 snapshot.Asset,
+		AverageEntryPrice:     snapshot.AverageEntryPrice,
+		RealizedPnlHaltReason: snapshot.RealizedPnlHaltReason,
+		Balance: &domain.AdjustmentAmount{
+			Mode: domain.AdjustmentModeAbsolute, Value: snapshot.Available,
+		},
+		Held: &domain.AdjustmentAmount{
+			Mode: domain.AdjustmentModeAbsolute, Value: snapshot.Held,
+		},
+		Incoming: &domain.AdjustmentAmount{
+			Mode: domain.AdjustmentModeAbsolute, Value: snapshot.Incoming,
+		},
+	}
+	if snapshot.RealizedPnlHaltReason == "" {
+		req.RealizedPnl = snapshot.RealizedPnl
+	}
+	return req
+}
+
 // ApplyAdjustment applies one spot-funds adjustment through the engine, which
 // is the authority for the resulting holdings. missing decides whether an
 // adjustment naming an unknown account registers it or is rejected; an asset
@@ -162,121 +210,6 @@ func (n *localNode) SetBalanceRealizedPnl(
 		return domain.Balance{}, err
 	}
 	return n.balanceFromRealizedPnlRecord(ctx, key, rec, realizedPnl)
-}
-
-// ImportPositionSnapshot imports a persisted balance snapshot through the
-// engine adjustment path, then stores the full snapshot. The engine has no
-// setter for cumulative realized P&L, so the adjustment synchronizes
-// available/held/incoming/average-entry-price while Officer persists the
-// historical realized_pnl value from the snapshot.
-func (n *localNode) ImportPositionSnapshot(
-	ctx context.Context, key Key, externalID domain.ExternalID,
-	snapshot domain.Balance, caller domain.Caller,
-) (domain.AccountAdjustmentRecord, error) {
-	// Register the account and asset and rebuild pre-lane (see ApplyAdjustment).
-	// A CSV row carries a full account definition, so the import always creates
-	// the account rather than asking the caller for a missing-account choice.
-	if err := n.ensureAccountAndAssetsRegisteredExclusive(
-		ctx, key.Account, domain.MissingAccountCreate,
-		"position snapshot import", caller, snapshot.Asset,
-	); err != nil {
-		return domain.AccountAdjustmentRecord{}, err
-	}
-	if err := n.ensureAdjustmentExternalIDUnused(ctx, externalID); err != nil {
-		return domain.AccountAdjustmentRecord{}, err
-	}
-	accountID, err := n.accountDiagnosticID(ctx, key.Account)
-	if err != nil {
-		return domain.AccountAdjustmentRecord{}, err
-	}
-	eng, done, err := n.beginLane()
-	if err != nil {
-		return domain.AccountAdjustmentRecord{}, err
-	}
-	defer done()
-
-	var stored domain.AccountAdjustmentRecord
-	if err := eng.RunAccountSynchronized(ctx, key.Account, func(lane engine.AccountLane) error {
-		req := domain.AdjustmentRequest{
-			Asset:                 snapshot.Asset,
-			AverageEntryPrice:     snapshot.AverageEntryPrice,
-			RealizedPnlHaltReason: snapshot.RealizedPnlHaltReason,
-			Balance: &domain.AdjustmentAmount{
-				Mode: domain.AdjustmentModeAbsolute, Value: snapshot.Available,
-			},
-			Held: &domain.AdjustmentAmount{
-				Mode: domain.AdjustmentModeAbsolute, Value: snapshot.Held,
-			},
-			Incoming: &domain.AdjustmentAmount{
-				Mode: domain.AdjustmentModeAbsolute, Value: snapshot.Incoming,
-			},
-		}
-		if snapshot.RealizedPnlHaltReason == "" {
-			req.RealizedPnl = snapshot.RealizedPnl
-		}
-		result, err := lane.ApplyAccountAdjustment(ctx, key.Account, req)
-		if err != nil {
-			return fmt.Errorf("apply position snapshot adjustment: %w", err)
-		}
-		if err := n.mirrorAdjustmentAccountBlocks(ctx, result.AccountBlocks); err != nil {
-			return err
-		}
-		if adjustmentResultNoChange(result) {
-			return domain.ErrNoChange
-		}
-
-		rec := domain.AccountAdjustmentRecord{
-			ExternalID: externalID,
-			Account:    key.Account,
-			Source:     caller.Source,
-			Principal:  caller.Principal,
-			Request:    req,
-			Accepted:   result.Accepted,
-			Rejected:   result.Rejected,
-			Asset:      snapshot.Asset,
-		}
-
-		var balance *domain.Balance
-		var deleteBalance *store.BalanceKey
-		if result.Accepted != nil {
-			adjusted, adjustErr := n.adjustedBalance(
-				ctx, key, snapshot.Asset, *result.Accepted,
-			)
-			if adjustErr != nil {
-				return adjustErr
-			}
-			if snapshot.RealizedPnlHaltReason != "" {
-				adjusted.RealizedPnl = snapshot.RealizedPnl
-				adjusted.RealizedPnlHaltReason = snapshot.RealizedPnlHaltReason
-			}
-			balance, deleteBalance = balanceSnapshotCommand(adjusted)
-		}
-
-		auditSnapshot := snapshot
-		auditSnapshot.Account = key.Account
-		audit := n.auditEntry(caller, store.AuditEntry{
-			Action:  domain.AuditActionAdjustment,
-			Account: key.Account,
-			Detail:  importPositionSnapshotDetail(auditSnapshot, result.Accepted != nil),
-		})
-		stored, err = n.realm.RecordAccountAdjustment(ctx, store.AccountAdjustmentPersistence{
-			UpsertBalance: balance,
-			DeleteBalance: deleteBalance,
-			Adjustment:    rec,
-			Audit:         audit,
-		})
-		if err != nil {
-			return n.fatalPostEnginePersistence(
-				"record position snapshot adjustment",
-				accountID,
-				fmt.Errorf("record position snapshot adjustment: %w", err),
-			)
-		}
-		return nil
-	}); err != nil {
-		return domain.AccountAdjustmentRecord{}, err
-	}
-	return stored, nil
 }
 
 func adjustmentResultNoChange(result engine.AdjustmentResult) bool {
@@ -454,20 +387,6 @@ func balanceSettlementsFrom(outcomes []engine.BalanceOutcome) []domain.BalanceSe
 	return settlements
 }
 
-func accountBlockSettlementsFrom(
-	order domain.ExternalID, blocks []domain.ExecutionAccountBlock,
-) []domain.ExecutionAccountBlock {
-	if len(blocks) == 0 {
-		return nil
-	}
-	settlements := make([]domain.ExecutionAccountBlock, 0, len(blocks))
-	for _, block := range blocks {
-		block.Reason = engineBlockReason(order, block)
-		settlements = append(settlements, block)
-	}
-	return settlements
-}
-
 // fillSettlementEvent builds one lifecycle event stamped with the caller for a
 // fill/settlement tx. The store assigns the id and timestamp on append.
 func fillSettlementEvent(
@@ -511,8 +430,8 @@ func accountBlockPayload(blocks []domain.ExecutionAccountBlock) domain.OrderEven
 		return domain.OrderEventPayload{}
 	}
 	// The engine currently emits at most one account block per fill. Keep the
-	// event payload singular and raw: account state stores engineBlockReason
-	// with order context, while this event preserves the engine block contract.
+	// event payload singular and raw: it preserves the engine block contract, the
+	// same fields the account row stores verbatim.
 	block := blocks[0]
 	return domain.OrderEventPayload{
 		RejectCode:    block.Code,

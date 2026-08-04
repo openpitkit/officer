@@ -152,8 +152,7 @@ function defaultTranslate(
     execution_report_required:
       "This order already has execution-report activity. Submit a complete execution report through the order workflow.",
     precondition: "A precondition for the request was not met.",
-    too_large:
-      "The import exceeds the maximum size of 128 MiB. Split the export into smaller files or use the API for bulk loading.",
+    too_large: "The request body exceeds the allowed size limit.",
     engine_restarting:
       "The risk engine is restarting; retry after it finishes.",
     not_implemented: "The requested operation is not implemented.",

@@ -170,7 +170,7 @@ func (r *realmStore) recordAccountAdjustment(
 	defer func() { _ = tx.Rollback() }()
 
 	if in.UpsertBalance != nil {
-		if err := importBalances(ctx, tx, []domain.Balance{*in.UpsertBalance}); err != nil {
+		if err := upsertBalancesTx(ctx, tx, []domain.Balance{*in.UpsertBalance}); err != nil {
 			return domain.AccountAdjustmentRecord{}, err
 		}
 	}
@@ -190,7 +190,7 @@ func (r *realmStore) recordAccountAdjustment(
 	if err != nil {
 		return domain.AccountAdjustmentRecord{}, err
 	}
-	if err := importAudit(ctx, dictionaries, tx, []fwstore.AuditEntry{in.Audit}); err != nil {
+	if err := appendAudit(ctx, tx, dictionaries, in.Audit); err != nil {
 		return domain.AccountAdjustmentRecord{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -198,6 +198,50 @@ func (r *realmStore) recordAccountAdjustment(
 			fmt.Errorf("store: commit account adjustment tx: %w", err)
 	}
 	return stored, nil
+}
+
+func upsertBalancesTx(
+	ctx context.Context, tx *sql.Tx, balances []domain.Balance,
+) error {
+	for _, b := range balances {
+		accountID, err := resolveAccountID(ctx, tx, b.Account)
+		if err != nil {
+			return fmt.Errorf("store: balance account %q: %w", b.Account, err)
+		}
+		assetID, err := resolveAssetID(ctx, tx, b.Asset)
+		if err != nil {
+			return fmt.Errorf(
+				"store: balance asset %q for account %q: %w",
+				b.Asset, b.Account, err,
+			)
+		}
+		updatedAt := nowStr()
+		if !b.UpdatedAt.IsZero() {
+			updatedAt = b.UpdatedAt.UTC().Format(time.RFC3339Nano)
+		}
+		if _, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO balance
+			 (account_id, asset_id, available, held,
+			  incoming, realized_pnl, realized_pnl_halt_reason, average_entry_price, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(account_id, asset_id) DO UPDATE SET
+			  available = excluded.available,
+			  held = excluded.held,
+			  incoming = excluded.incoming,
+			  realized_pnl = excluded.realized_pnl,
+			  realized_pnl_halt_reason = excluded.realized_pnl_halt_reason,
+			  average_entry_price = excluded.average_entry_price,
+			  updated_at = excluded.updated_at`,
+			accountID, assetID,
+			settleOrZero(b.Available), settleOrZero(b.Held), settleOrZero(b.Incoming),
+			nullablePnl(b.RealizedPnl, b.RealizedPnlHaltReason), b.RealizedPnlHaltReason,
+			b.AverageEntryPrice, updatedAt,
+		); err != nil {
+			return fmt.Errorf("store: balance %s/%s: %w", b.Account, b.Asset, err)
+		}
+	}
+	return nil
 }
 
 // ListAdjustments returns the most recent n adjustment, newest first. A

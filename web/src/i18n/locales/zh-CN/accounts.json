@@ -261,36 +261,8 @@
     "submit": "保存"
   },
   "businessCsv": {
-    "importCsv": "导入 CSV",
     "exportGroupsCsv": "导出账户组 CSV",
     "exportAccountsCsv": "导出账户 CSV"
-  },
-  "loadAccounts": {
-    "trigger": "导入账户",
-    "title": "从 CSV 导入账户",
-    "formatHeading": "CSV 格式",
-    "formatLine1": "每行一个账户：",
-    "formatCode1": "code[,title[,group_code[,notes]]]",
-    "formatLine2prefix": "为必填项；",
-    "formatLine2middle": "和",
-    "formatLine2suffix": "为可选项。",
-    "formatLine3prefix": "允许包含表头行（",
-    "formatLine3code": "code,title,group_code,notes",
-    "formatLine3suffix": "），将自动跳过。",
-    "examplesHeading": "示例",
-    "chooseFile": "选择文件…",
-    "orPasteBelow": "或粘贴至下方",
-    "parsedRows_one": "已解析 {{count}} 行。",
-    "parsedRows_other": "已解析 {{count}} 行。",
-    "results": {
-      "summary": "结果 — 已创建 {{created}}，已跳过 {{skipped}}，错误 {{errors}}"
-    },
-    "import_one": "导入 {{count}} 行",
-    "import_other": "导入 {{count}} 行",
-    "importEmpty": "导入",
-    "close": "关闭",
-    "cancel": "取消",
-    "alreadyExists": "已存在"
   },
   "blockAccount": {
     "titlePrefix": "封锁账户",

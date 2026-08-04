@@ -9,7 +9,6 @@
     "adjust": "Adjustment",
     "adjustAriaLabel": "Adjust {{account}} {{asset}}",
     "refreshHistoryAriaLabel": "Refresh history",
-    "importCsv": "Import positions CSV",
     "exportCsv": "Export positions CSV",
     "exportHistoryCsv": "Export history CSV",
     "historyExporting": "Exporting"

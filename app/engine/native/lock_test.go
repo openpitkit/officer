@@ -121,10 +121,10 @@ func TestLockDisplayPrices_FromStoredBlob(t *testing.T) {
 	}
 }
 
-// TestLockDisplayPrices_EmptyIsNoLock checks a nil/empty stored lock means the
-// order locked nothing: the helper returns an empty slice with no error rather
-// than failing to decode.
-func TestLockDisplayPrices_EmptyIsNoLock(t *testing.T) {
+// TestLockDisplayPrices_EmptyMeansNoCapturedLock checks a nil/empty stored BLOB
+// means no lock was captured: the helper returns an empty slice with no error
+// rather than failing to decode.
+func TestLockDisplayPrices_EmptyMeansNoCapturedLock(t *testing.T) {
 	t.Parallel()
 	for _, blob := range [][]byte{nil, {}} {
 		prices, err := LockDisplayPrices(blob)

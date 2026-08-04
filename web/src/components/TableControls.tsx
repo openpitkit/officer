@@ -24,19 +24,14 @@ import {
   ChevronsRight,
   Download,
   File,
-  Upload,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import type {
   BusinessCsvEntity,
   BusinessCsvExportFilters,
-  BusinessCsvImportEntity,
 } from "@/api/types";
-import {
-  BusinessCsvExportDialog,
-  BusinessCsvImportDialog,
-} from "@/components/BusinessCsvDialogs";
+import { BusinessCsvExportDialog } from "@/components/BusinessCsvDialogs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -257,27 +252,17 @@ export function PageSizeSelect({
 
 export function CsvTransferMenu({
   exports,
-  imports,
-  onImported,
 }: {
   exports?: {
     entity: BusinessCsvEntity;
     filters?: BusinessCsvExportFilters;
     label: string;
   }[];
-  imports?: {
-    defaultEntity?: BusinessCsvImportEntity;
-    entities: BusinessCsvImportEntity[];
-    label: string;
-  }[];
-  onImported?: () => void;
 }) {
   const { t } = useTranslation("common");
   const exportItems = exports ?? [];
-  const importItems = imports ?? [];
-  const [importIndex, setImportIndex] = useState<number | null>(null);
   const [exportIndex, setExportIndex] = useState<number | null>(null);
-  if (importItems.length === 0 && exportItems.length === 0) {
+  if (exportItems.length === 0) {
     return null;
   }
   return (
@@ -295,15 +280,6 @@ export function CsvTransferMenu({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
-          {importItems.map((item, index) => (
-            <DropdownMenuItem
-              key={`${item.label}-${item.entities.join("-")}`}
-              onSelect={() => setImportIndex(index)}
-            >
-              <Upload className="h-3.5 w-3.5" />
-              {item.label}
-            </DropdownMenuItem>
-          ))}
           {exportItems.map((item, index) => (
             <DropdownMenuItem
               key={`${item.entity}-${item.label}`}
@@ -315,17 +291,6 @@ export function CsvTransferMenu({
           ))}
         </DropdownMenuContent>
       </DropdownMenu>
-      {importItems.map((item, index) => (
-        <BusinessCsvImportDialog
-          key={`${item.label}-${item.entities.join("-")}`}
-          defaultEntity={item.defaultEntity}
-          entities={item.entities}
-          onImported={onImported ?? (() => {})}
-          open={importIndex === index}
-          onOpenChange={(open) => setImportIndex(open ? index : null)}
-          trigger={() => null}
-        />
-      ))}
       {exportItems.map((item, index) => (
         <BusinessCsvExportDialog
           key={`${item.entity}-${item.label}`}

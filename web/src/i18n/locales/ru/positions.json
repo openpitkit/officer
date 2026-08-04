@@ -9,7 +9,6 @@
     "adjust": "Корректировка",
     "adjustAriaLabel": "Открыть корректировку для {{account}} {{asset}}",
     "refreshHistoryAriaLabel": "Обновить историю",
-    "importCsv": "Импорт позиций CSV",
     "exportCsv": "Экспорт позиций CSV",
     "exportHistoryCsv": "Экспорт истории CSV",
     "historyExporting": "Экспорт"

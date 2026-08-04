@@ -39,14 +39,9 @@ import type {
   BackupRestoreSummary,
   BackupScope,
   BoundsPair,
-  BusinessCsvConflict,
-  BusinessCsvConflictPolicy,
   BusinessCsvDelimiter,
   BusinessCsvEntity,
   BusinessCsvExportFilters,
-  BusinessCsvImportEntity,
-  BusinessCsvImportPreview,
-  BusinessCsvImportResult,
   CheckReject,
   CheckResult,
   CheckWouldBlock,
@@ -514,14 +509,11 @@ function normalizeAdjustment(v: unknown): Adjustment {
 
 function normalizeOrder(v: unknown): Order {
   const o = isObject(v) ? v : {};
-  const rawDisplay = pick(
+  const rawDisplayPrice = pick(
     o,
-    "displayPrices",
-    "DisplayPrices",
-    "display_prices",
-    "lockPrices",
-    "LockPrices",
-    "lock_prices",
+    "displayPrice",
+    "DisplayPrice",
+    "display_price",
   );
   const amountValue = asString(pick(o, "amountValue", "AmountValue", "amount_value"));
   const leavesQuantity = requireStringField(
@@ -549,7 +541,7 @@ function normalizeOrder(v: unknown): Order {
     leavesQuantity,
     price: asString(pick(o, "price", "Price")),
     status: asString(pick(o, "status", "Status")),
-    displayPrices: Array.isArray(rawDisplay) ? rawDisplay.map(asString) : [],
+    displayPrice: asString(rawDisplayPrice),
     dropCopy: asBool(pick(o, "dropCopy", "DropCopy", "drop_copy")),
     signed: asBool(pick(o, "signed", "Signed")),
   };
@@ -1718,39 +1710,6 @@ function businessCsvFilters(
   return out;
 }
 
-function normalizeBusinessCsvConflict(v: unknown): BusinessCsvConflict {
-  const o = isObject(v) ? v : {};
-  return {
-    row: asInt(pick(o, "row", "Row")),
-    key: asString(pick(o, "key", "Key")),
-  };
-}
-
-function normalizeBusinessCsvImport(v: unknown): BusinessCsvImportPreview {
-  const o = isObject(v) ? v : {};
-  const file = pick(o, "file", "File");
-  const fo = isObject(file) ? file : {};
-  const counts = pick(o, "counts", "Counts");
-  const co = isObject(counts) ? counts : {};
-  return {
-    file: {
-      name: asString(pick(fo, "name", "Name")),
-      type: asString(pick(fo, "type", "Type")),
-    },
-    counts: {
-      rows: asInt(pick(co, "rows", "Rows")),
-      applied: asInt(pick(co, "applied", "Applied")),
-      skipped: asInt(pick(co, "skipped", "Skipped")),
-      conflicts: asInt(pick(co, "conflicts", "Conflicts")),
-      stopped: asBool(pick(co, "stopped", "Stopped")),
-    },
-    conflicts: normalizeArray(
-      pick(o, "conflicts", "Conflicts"),
-      normalizeBusinessCsvConflict,
-    ),
-  };
-}
-
 /** POST /business-csv/export - returns a business CSV or ZIP blob. */
 async function exportBusinessCsv(client: ApiClient, input: {
   entity: BusinessCsvEntity;
@@ -1771,52 +1730,6 @@ async function exportBusinessCsv(client: ApiClient, input: {
     accept: input.zip ? "application/zip" : "text/csv",
     fallbackFilename: `pit-officer-${input.entity}.${input.zip ? "zip" : "csv"}`,
   });
-}
-
-/** POST /business-csv/import/preview - validates and reports conflicts. */
-async function previewBusinessCsvImport(client: ApiClient, input: {
-  entity: BusinessCsvImportEntity;
-  delimiter: BusinessCsvDelimiter;
-  filename: string;
-  payloadBase64: string;
-  signal?: AbortSignal;
-}): Promise<BusinessCsvImportPreview> {
-  const v = await client.request(`${client.baseUrl}/business-csv/import/preview`, {
-    method: "POST",
-    body: {
-      entity: input.entity,
-      delimiter: input.delimiter,
-      filename: input.filename,
-      payloadBase64: input.payloadBase64,
-    },
-    signal: input.signal,
-  });
-  const o = isObject(v) ? v : {};
-  return normalizeBusinessCsvImport(pick(o, "preview", "Preview"));
-}
-
-/** POST /business-csv/import - applies a validated business CSV import. */
-async function importBusinessCsv(client: ApiClient, input: {
-  entity: BusinessCsvImportEntity;
-  delimiter: BusinessCsvDelimiter;
-  filename: string;
-  payloadBase64: string;
-  conflictPolicy: BusinessCsvConflictPolicy;
-  signal?: AbortSignal;
-}): Promise<BusinessCsvImportResult> {
-  const v = await client.request(`${client.baseUrl}/business-csv/import`, {
-    method: "POST",
-    body: {
-      entity: input.entity,
-      delimiter: input.delimiter,
-      filename: input.filename,
-      payloadBase64: input.payloadBase64,
-      conflictPolicy: input.conflictPolicy,
-    },
-    signal: input.signal,
-  });
-  const o = isObject(v) ? v : {};
-  return normalizeBusinessCsvImport(pick(o, "result", "Result"));
 }
 
 /** POST /backup/export - returns a portable backup archive and filename. */
@@ -2734,7 +2647,7 @@ function minimalCreatedOrder(
     leavesQuantity: body.amountValue,
     price: body.price ?? "0",
     status: submitted.status ?? "submitted",
-    displayPrices: [],
+    displayPrice: "",
     dropCopy: body.mode === "drop_copy",
     // The submit token is signed but not yet reflected in this placeholder, so
     // it reports unsigned until a real fetch replaces it.
@@ -2837,18 +2750,12 @@ function normalizeCheckWouldBlock(v: unknown): CheckWouldBlock | null {
 
 function normalizeCheckResult(v: unknown): CheckResult {
   const o = isObject(v) ? v : {};
-  const rawDisplay = pick(
-    o,
-    "wouldDisplayPrices",
-    "WouldDisplayPrices",
-    "would_display_prices",
-    "wouldLockPrices",
-    "WouldLockPrices",
-  );
   return {
     passed: asBool(pick(o, "passed", "Passed")),
     rejects: normalizeArray(pick(o, "rejects", "Rejects"), normalizeCheckReject),
-    wouldDisplayPrices: Array.isArray(rawDisplay) ? rawDisplay.map(asString) : [],
+    wouldDisplayPrice: asString(
+      pick(o, "wouldDisplayPrice", "WouldDisplayPrice", "would_display_price"),
+    ),
     wouldBlock: normalizeCheckWouldBlock(
       pick(o, "wouldBlock", "WouldBlock", "would_block"),
     ),
@@ -3277,10 +3184,14 @@ export interface ConfirmOrderBody {
   token: string;
 }
 
-/** POST /orders/{id}/cancel body: the approval token from the workflow
- *  (`hold` wire mode) submit and an optional reason. */
+/** POST /orders/{id}/cancel body: the approval token from the workflow, the
+ *  caller-supplied leaves, and an optional reason. */
 export interface CancelOrderBody {
   token: string;
+  /** Remaining base quantity, forwarded to the engine unchanged. Required: the
+   *  cancellation is settled by the engine, which cannot reject an incomplete
+   *  report. Officer never infers it. */
+  leavesQuantity: string;
   reason?: string;
 }
 
@@ -3311,7 +3222,7 @@ async function confirmOrder(client: ApiClient,
   return orderMutationResponseOrThrow(v);
 }
 
-/** POST /orders/{id}/cancel. Verifies the approval token and applies
+/** POST /orders/{id}/cancel. Verifies the approval token and forwards
  *  the untouched-order cancellation shortcut. */
 async function cancelOrder(client: ApiClient,
   id: string,
@@ -3735,8 +3646,6 @@ export function createOfficerApi(client: ApiClient) {
     restartService: bind(restartService),
     stopService: bind(stopService),
     exportBusinessCsv: bind(exportBusinessCsv),
-    previewBusinessCsvImport: bind(previewBusinessCsvImport),
-    importBusinessCsv: bind(importBusinessCsv),
     exportBackup: bind(exportBackup),
     restoreBackup: bind(restoreBackup),
     resetDatabase: bind(resetDatabase),

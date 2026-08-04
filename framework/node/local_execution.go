@@ -28,9 +28,9 @@ import (
 )
 
 // ApplyExecutionReport serializes every report on its account pipeline.
-// Reports carrying a fill, targeting a terminal status, or carrying a
-// commission settle through the engine; all other non-terminal reports only
-// record workflow state.
+// Reports carrying a fill or commission, and reports targeting a terminal
+// status, settle through the engine; all other non-terminal reports only record
+// workflow state.
 // Engine settlement writes report events, an optional trade, per-asset
 // balances, engine-block UPDATEs, and reflected status/leaves atomically.
 func (n *localNode) ApplyExecutionReport(
@@ -57,7 +57,7 @@ func (n *localNode) applyExecutionReport(
 	attest store.EventAttestor,
 ) (engine.ExecutionReportResult, error) {
 	request := domain.ExecutionReportRequestFromInput(in)
-	status := domain.ExecutionReportTargetStatus(in)
+	status := in.OrderStatus
 	// The report is a fact from the venue; caller cancellation must not cancel it.
 	ctx = context.WithoutCancel(ctx)
 	requiresEngine, err := domain.ExecutionReportRequiresEngine(in)
@@ -146,7 +146,7 @@ func (n *localNode) applyExecutionReport(
 			Balances:             persistence.Balances,
 			Events:               persistence.Events,
 			Trade:                persistence.Trade,
-			Blocks:               accountBlockSettlementsFrom(in.Order, persistence.Blocks),
+			Blocks:               persistence.Blocks,
 		}
 		reportID, err := recordOrderSettlementWithAttestation(
 			ctx, n.realm, settlement, attest,
@@ -229,7 +229,7 @@ func (n *localNode) recordWorkflowExecutionReport(
 		}
 		forcedTerminalBypass := in.Force &&
 			domain.OrderStatusTerminal(detail.Order.Status)
-		status := domain.ExecutionReportTargetStatus(in)
+		status := in.OrderStatus
 		eventType, ok := domain.ExecutionReportStatusChangeEvent(status)
 		if !ok {
 			return fmt.Errorf(

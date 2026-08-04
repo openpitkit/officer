@@ -69,6 +69,7 @@ type confirmCall struct {
 type cancelCallRecord struct {
 	orderExternalID string
 	token           string
+	leavesQuantity  string
 	reason          string
 }
 
@@ -102,11 +103,12 @@ func (f *approvalFakeSource) ConfirmExecution(
 }
 
 func (f *approvalFakeSource) CancelOrder(
-	_ context.Context, orderExternalID string, token, reason string,
+	_ context.Context, orderExternalID string, token, leavesQuantity, reason string,
 ) (domain.Order, Attestation, error) {
 	f.cancelCalls = append(f.cancelCalls, cancelCallRecord{
 		orderExternalID: orderExternalID,
 		token:           token,
+		leavesQuantity:  leavesQuantity,
 		reason:          reason,
 	})
 	return f.cancelOrder, f.cancelAtt, f.cancelErr
@@ -712,7 +714,8 @@ func TestCancelHappyPath(t *testing.T) {
 	}
 
 	res := callCancel(t, src, cancelInput{
-		OrderExternalID: testOrderEID, Token: " tok-xyz ", Reason: "operator",
+		OrderExternalID: testOrderEID, Token: " tok-xyz ",
+		LeavesQuantity: "17.5", Reason: "operator",
 	})
 
 	if res.IsError {
@@ -736,6 +739,9 @@ func TestCancelHappyPath(t *testing.T) {
 	}
 	if c.reason != "operator" {
 		t.Errorf("reason: want operator got %q", c.reason)
+	}
+	if c.leavesQuantity != "17.5" {
+		t.Errorf("leavesQuantity: want 17.5 got %q", c.leavesQuantity)
 	}
 	if c.token != "tok-xyz" {
 		t.Errorf("token: want tok-xyz got %q", c.token)
@@ -767,13 +773,36 @@ func TestCancelMissingOrderID(t *testing.T) {
 	}
 }
 
+// TestCancelMissingLeavesQuantity: the cancellation is settled by the engine,
+// which has no reject channel, so a report without leaves must be refused
+// before it reaches the source.
+func TestCancelMissingLeavesQuantity(t *testing.T) {
+	src := &approvalFakeSource{}
+
+	res := callCancel(t, src, cancelInput{
+		OrderExternalID: testOrderEID, Token: "tok", LeavesQuantity: "  ",
+	})
+
+	if !res.IsError {
+		t.Fatalf("want IsError=true for missing leavesQuantity")
+	}
+	if got := textContent(res.Content); got != "leavesQuantity is required" {
+		t.Errorf("unexpected error text: %q", got)
+	}
+	if len(src.cancelCalls) != 0 {
+		t.Fatalf("cancel must not be called without leaves; got %d calls", len(src.cancelCalls))
+	}
+}
+
 // TestCancelBackendError: cancel returns error when backend fails.
 func TestCancelBackendError(t *testing.T) {
 	src := &approvalFakeSource{
 		cancelErr: errors.New("already rolled back"),
 	}
 
-	res := callCancel(t, src, cancelInput{OrderExternalID: testOrderEID, Token: "tok"})
+	res := callCancel(t, src, cancelInput{
+		OrderExternalID: testOrderEID, Token: "tok", LeavesQuantity: "1",
+	})
 
 	if !res.IsError {
 		t.Fatalf("want IsError=true when backend returns error")

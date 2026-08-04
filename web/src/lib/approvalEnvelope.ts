@@ -171,7 +171,6 @@ export interface ParsedApproval {
   verdict: string;
   policySummary: string;
   estimatePrice: string;
-  estimateSource: string;
   issuedAt: string;
   nonce: string;
   rejectCode: string;
@@ -294,7 +293,6 @@ export function parseApprovalFields(
     verdict: str(approval.verdict),
     policySummary: str(approval.policySummary),
     estimatePrice: str(approval.estimatePrice),
-    estimateSource: str(approval.estimateSource),
     issuedAt: str(approval.issuedAt),
     nonce: str(approval.nonce),
     rejectCode: str(approval.rejectCode),

@@ -161,7 +161,7 @@ func (f *fakeSource) ConfirmExecution(
 }
 
 func (f *fakeSource) CancelOrder(
-	_ context.Context, _ string, _, _ string,
+	_ context.Context, _ string, _, _, _ string,
 ) (domain.Order, Attestation, error) {
 	return domain.Order{}, Attestation{}, nil
 }
@@ -889,7 +889,7 @@ func (c *captureNSource) ConfirmExecution(
 	return domain.Order{}, Attestation{}, nil
 }
 func (c *captureNSource) CancelOrder(
-	context.Context, string, string, string,
+	context.Context, string, string, string, string,
 ) (domain.Order, Attestation, error) {
 	return domain.Order{}, Attestation{}, nil
 }
@@ -906,6 +906,7 @@ func TestGetOrderHappyPath(t *testing.T) {
 	eventEID := mustExternalID(t, "ZXZlbnQtZXh0ZXJuYWwtMQ")
 	src := &fakeSource{
 		orderDetail: domain.OrderDetail{
+			DisplayPrice: "50000",
 			Order: domain.Order{
 				ExternalID:  orderEID,
 				Account:     "acc-1",
@@ -914,6 +915,7 @@ func TestGetOrderHappyPath(t *testing.T) {
 				Side:        domain.OrderSideBuy,
 				AmountKind:  domain.OrderAmountKindQuantity,
 				AmountValue: "0.5",
+				Leaves:      "0",
 				Price:       "50000",
 				Status:      domain.OrderStatusFilled,
 				// Lock is the opaque pre-trade blob; it must never reach the wire.
@@ -955,6 +957,9 @@ func TestGetOrderHappyPath(t *testing.T) {
 	}
 	if out.Order.Status != string(domain.OrderStatusFilled) {
 		t.Errorf("status: want filled got %q", out.Order.Status)
+	}
+	if out.Order.LeavesQuantity != "0" || out.Order.DisplayPrice != "50000" {
+		t.Errorf("cancel inputs not surfaced: %+v", out.Order)
 	}
 	if out.Approval == nil {
 		t.Fatal("approval read-back: want non-nil approval")
@@ -1096,7 +1101,7 @@ func TestGetOrderSourceFailure(t *testing.T) {
 func TestCheckOrderPass(t *testing.T) {
 	t.Parallel()
 	src := &fakeSource{checkResult: domain.CheckResult{
-		Passed: true, WouldLockPrices: []string{"100"},
+		Passed: true, WouldLockPrice: "100",
 	}}
 	res := callCheckOrder(t, src, checkOrderInput{
 		Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
@@ -1106,8 +1111,8 @@ func TestCheckOrderPass(t *testing.T) {
 	if !res.StructuredContent.Passed {
 		t.Fatalf("want passed:true")
 	}
-	if len(res.StructuredContent.WouldDisplayPrices) != 1 {
-		t.Fatalf("want 1 display price, got %d", len(res.StructuredContent.WouldDisplayPrices))
+	if res.StructuredContent.WouldDisplayPrice != "100" {
+		t.Fatalf("want display price 100, got %q", res.StructuredContent.WouldDisplayPrice)
 	}
 	if len(src.checkProbes) != 1 || src.checkProbes[0].Side != domain.OrderSideBuy {
 		t.Fatalf("probe not forwarded with mapped fields: %+v", src.checkProbes)

@@ -29,7 +29,6 @@ import (
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pkg/optional"
-	"go.openpit.dev/openpit/pretrade"
 	"go.openpit.dev/openpit/pretrade/policies"
 	"go.openpit.dev/openpit/reject"
 
@@ -1350,11 +1349,10 @@ func orderRejectsFrom(rejects []reject.Reject) []domain.OrderReject {
 // executionReportFrom maps a domain execution-report input onto a
 // model.ExecutionReport: the operation (instrument/account/side) and the fill
 // (last trade price+quantity, leaves quantity, the terminal-status flag, and the
-// pre-trade lock - the input's own lock when it carries one, else one
-// reconstructed from the single reference price). The engine requires leaves
-// quantity and the terminal flag to settle the fill; an empty or invalid leaves
-// quantity is caller error (ErrInvalid). The account is resolved to its stored
-// engine id.
+// original engine pre-trade lock). Officer forwards fields the caller supplied
+// without inventing missing settlement data. Officer enforces leaves presence
+// before this seam; the SDK validates the supplied quantity value here. The
+// account is resolved to its stored engine id.
 func executionReportFrom(in domain.ExecutionReportInput, res idResolver) (model.ExecutionReport, error) {
 	account, err := res.account(in.Account)
 	if err != nil {
@@ -1378,17 +1376,25 @@ func executionReportFromAccount(
 	if err != nil {
 		return model.ExecutionReport{}, err
 	}
-	leaves, err := param.NewQuantityFromString(in.LeavesQuantity)
-	if err != nil {
-		return model.ExecutionReport{}, fmt.Errorf(
-			"engine: leaves quantity %q: %w: %w", in.LeavesQuantity, err, domain.ErrInvalid)
+	var leaves *param.Quantity
+	if in.LeavesQuantity != "" {
+		value, err := param.NewQuantityFromString(in.LeavesQuantity)
+		if err != nil {
+			return model.ExecutionReport{}, fmt.Errorf(
+				"engine: leaves quantity %q: %w: %w",
+				in.LeavesQuantity,
+				err,
+				domain.ErrInvalid,
+			)
+		}
+		leaves = &value
 	}
 
 	hasFill, err := executionReportHasFill(in)
 	if err != nil {
 		return model.ExecutionReport{}, err
 	}
-	targetStatus := domain.ExecutionReportTargetStatus(in)
+	targetStatus := in.OrderStatus
 	if !hasFill && (targetStatus == domain.OrderStatusFilled ||
 		targetStatus == domain.OrderStatusPartiallyFilled) {
 		return model.ExecutionReport{}, fmt.Errorf(
@@ -1431,7 +1437,9 @@ func executionReportFromAccount(
 		}
 		fill.SetFee(commission)
 	}
-	fill.SetLeavesQuantity(leaves)
+	if leaves != nil {
+		fill.SetLeavesQuantity(*leaves)
+	}
 	fill.SetIsFinal(isFinal)
 	if lockBytes != nil {
 		fill.SetLock(lockBytes)
@@ -1457,7 +1465,6 @@ func executionReportPersistenceFrom(
 	accountPnl string,
 	accountPnlHaltReason domain.PnlHaltReason,
 ) engine.ExecutionReportPersistence {
-	recordedLeaves := domain.ExecutionReportPersistedLeaves(in)
 	// The payload holds one reject slot while the engine may report several
 	// blocks, so it carries none of them: every block travels whole in Blocks.
 	// Filling the slot would mean picking one block and naming a scope the block
@@ -1509,7 +1516,7 @@ func executionReportPersistenceFrom(
 		OrderStatus:          in.OrderStatus,
 		AccountPnl:           accountPnl,
 		AccountPnlHaltReason: accountPnlHaltReason,
-		Leaves:               recordedLeaves,
+		Leaves:               in.LeavesQuantity,
 		Balances:             executionBalanceSettlementsFrom(outcomes),
 		Events:               events,
 		Blocks:               blocks,
@@ -1555,84 +1562,33 @@ func commissionFrom(c domain.Commission) (param.MonetaryAmount, error) {
 	return param.NewMonetaryAmount(amount, currency), nil
 }
 
-// immediateFillQuantity resolves the base quantity an immediate fill settles.
-// For a quantity order it is the order amount; for a volume order it is the
-// volume converted to base quantity at the settlement price (Volume divided by
-// price). An empty settlement price on a volume order is an error: a fill cannot
-// be sized without a price.
-func immediateFillQuantity(o domain.Order, settlementPrice string) (string, error) {
-	switch o.AmountKind {
-	case domain.OrderAmountKindQuantity:
+// immediateFillQuantity returns the request quantity for an immediate fill.
+// SubmitImmediate validation rejects volume orders before the engine is called.
+func immediateFillQuantity(o domain.Order) (string, error) {
+	if o.AmountKind == domain.OrderAmountKindQuantity {
 		return o.AmountValue, nil
-	case domain.OrderAmountKindVolume:
-		if settlementPrice == "" {
-			return "", fmt.Errorf(
-				"engine: cannot size volume fill without a settlement price: %w",
-				domain.ErrInvalid)
-		}
-		volume, err := param.NewVolumeFromString(o.AmountValue)
-		if err != nil {
-			return "", fmt.Errorf(
-				"engine: order volume %q: %w: %w", o.AmountValue, err, domain.ErrInvalid)
-		}
-		price, err := param.NewPriceFromString(settlementPrice)
-		if err != nil {
-			return "", fmt.Errorf(
-				"engine: settlement price %q: %w: %w", settlementPrice, err, domain.ErrInvalid)
-		}
-		quantity, err := volume.CalculateQuantity(price)
-		if err != nil {
-			return "", fmt.Errorf("engine: size volume fill: %w", err)
-		}
-		return quantity.String(), nil
-	default:
-		return "", fmt.Errorf(
-			"engine: unknown order amount kind %q: %w", o.AmountKind, domain.ErrInvalid)
 	}
+	return "", fmt.Errorf(
+		"engine: immediate fill requires a quantity order, got %q: %w",
+		o.AmountKind, domain.ErrInvalid,
+	)
 }
 
-// fillLockBytes reconstructs a default-group pre-trade lock carrying one
-// reference price and returns the in-process bytes an execution-report fill
-// hands to the binding via fill.SetLock. An empty price yields a nil slice (no
-// lock attached). This is NOT the persistence path: the fill lock is consumed by
-// the binding within the same call, so Lock.Bytes() (the in-process layout) is
-// correct here, whereas the durable order/reservation lock is serialized through
-// the lock seam (marshalLock).
-//
-// It is the last-resort fallback for reports that carry no lock of their own.
-// The reconstruction holds a single default-policy-group entry, so it cannot
-// stand in for an engine lock that recorded other policy groups: a caller that
-// has the engine's lock must pass it through instead.
-func fillLockBytes(lockPrice string) ([]byte, error) {
-	if lockPrice == "" {
-		return nil, nil
+// executionReportLockBytes resolves the engine-produced lock a report hands
+// back to the binding. The durable encoding is decoded only to recover the
+// binding's in-process bytes; its content is never reconstructed or changed.
+func executionReportLockBytes(in domain.ExecutionReportInput) ([]byte, error) {
+	if len(in.Lock) == 0 {
+		return nil, fmt.Errorf(
+			"engine: execution report carries no request or stored order lock: %w",
+			domain.ErrInvalid,
+		)
 	}
-	price, err := param.NewPriceFromString(lockPrice)
+	lock, err := unmarshalLock(in.Lock)
 	if err != nil {
-		return nil, fmt.Errorf("engine: lock price %q: %w: %w", lockPrice, err, domain.ErrInvalid)
-	}
-	lock, err := pretrade.NewLockFromEntries([]pretrade.Entry{
-		{PolicyGroupID: model.DefaultPolicyGroupID, Price: price},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("engine: build fill lock: %w", err)
+		return nil, fmt.Errorf("engine: execution report lock: %w: %w", err, domain.ErrInvalid)
 	}
 	return lock.Bytes(), nil
-}
-
-// executionReportLockBytes resolves the lock a report hands to the binding. A
-// carried lock is the engine's own artifact and is passed through verbatim
-// (decoded from the durable seam encoding into the in-process layout); only a
-// report without one falls back to the single-price reconstruction.
-func executionReportLockBytes(in domain.ExecutionReportInput) ([]byte, error) {
-	if len(in.Lock) > 0 {
-		lock, err := unmarshalLock(in.Lock)
-		if err != nil {
-			return nil, fmt.Errorf("engine: execution report lock: %w: %w", err, domain.ErrInvalid)
-		}
-		return lock.Bytes(), nil
-	}
-	return fillLockBytes(in.LockPrice)
 }
 
 // executionBlocksFrom maps the engine-recorded account blocks of a post-trade

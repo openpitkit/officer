@@ -31,8 +31,9 @@ import (
 // SetAccountCurrency sets or clears the account-level currency in the store and
 // live engine, rejecting effective-currency changes for accounts holding
 // non-zero positions or P&L, whose values are denominated in the old currency
-// and would need recomputing. A halted P&L does not reject the change; the
-// human Officer decides what to do with such an account.
+// and would need recomputing. A halted P&L does not reject the change: the halt
+// stays latched, the stale numeric value is removed from both engine and store,
+// and the human Officer decides what to do with such an account.
 func (n *localNode) SetAccountCurrency(
 	ctx context.Context, key Key, currency string, caller domain.Caller,
 ) error {
@@ -71,10 +72,6 @@ func (n *localNode) SetAccountCurrency(
 		); err != nil {
 			return err
 		}
-		resetPnl, err := n.shouldResetHaltedAccountPnl(ctx, key.Account, prev)
-		if err != nil {
-			return err
-		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -94,21 +91,40 @@ func (n *localNode) SetAccountCurrency(
 				fmt.Errorf("apply account currency: %w", applyErr),
 			)
 		}
-		if resetPnl {
-			blocks, resetErr := lane.SetAccountPnl(mutationCtx, key.Account, "0")
-			if resetErr != nil {
+		// A halted P&L means the engine could not compute a value, and changing the
+		// currency does not produce one. Restate the halt so the live accumulator
+		// carries no number denominated in the old currency: "no P&L, halted" is
+		// the engine's own answer, where a zero would be Officer's invention and
+		// would lift a halt nobody saw lifted.
+		if prev.PnlHaltReason != "" && prev.EffectiveCurrency != nextEffective {
+			blocks, haltErr := restateHaltedAccountPnl(
+				mutationCtx, lane, prev,
+			)
+			if haltErr != nil {
 				return n.revertAccountCurrency(
 					mutationCtx,
 					lane,
 					key.Account,
 					prev.Currency,
-					fmt.Errorf("reset account pnl: %w", resetErr),
+					fmt.Errorf("restate halted account pnl: %w", haltErr),
 				)
 			}
-			if err := n.persistHaltedAccountPnlReset(
-				mutationCtx, key.Account, prev, caller, blocks,
+			// A restated halt can breach its own kill-switch barrier, so the blocks
+			// the engine reports back are mirrored rather than assumed absent.
+			if err := n.mirrorPolicyConfigurationBlocks(
+				mutationCtx, domain.PolicySpotFundsPnlBoundsKillSwitch, blocks,
 			); err != nil {
 				return err
+			}
+			if err := n.persistHaltedAccountPnlRestatements(
+				mutationCtx, []domain.Account{prev},
+			); err != nil {
+				return n.fatalPostEngineAuditByCode(
+					"persist halted account pnl after currency change",
+					"account",
+					key.Account.String(),
+					fmt.Errorf("persist halted account pnl: %w", err),
+				)
 			}
 		}
 		if err := n.audit(mutationCtx, caller, store.AuditEntry{
@@ -131,19 +147,6 @@ func (n *localNode) SetAccountCurrency(
 	})
 }
 
-func (n *localNode) shouldResetHaltedAccountPnl(
-	ctx context.Context, account domain.AccountID, prev domain.Account,
-) (bool, error) {
-	if prev.PnlHaltReason == "" {
-		return false, nil
-	}
-	open, err := n.realm.ListAccountsWithOpenBalances(ctx, []domain.AccountID{account})
-	if err != nil {
-		return false, fmt.Errorf("list account balances for pnl reset: %w", err)
-	}
-	return len(open) == 0, nil
-}
-
 func (n *localNode) revertAccountCurrency(
 	ctx context.Context,
 	lane engine.AccountLane,
@@ -163,42 +166,6 @@ func (n *localNode) revertAccountCurrency(
 		)
 	}
 	return cause
-}
-
-func (n *localNode) persistHaltedAccountPnlReset(
-	ctx context.Context,
-	account domain.AccountID,
-	prev domain.Account,
-	caller domain.Caller,
-	blocks []domain.AccountBlock,
-) error {
-	if err := n.realm.SetAccountPnl(ctx, account, "0", ""); err != nil {
-		return n.fatalPostEngineAuditByCode(
-			"record account pnl reset", "account", account.String(),
-			fmt.Errorf("record account pnl reset: %w", err),
-		)
-	}
-	if err := n.mirrorPolicyConfigurationBlocks(
-		ctx, domain.PolicySpotFundsPnlBoundsKillSwitch, blocks,
-	); err != nil {
-		return err
-	}
-	if err := n.audit(ctx, caller, store.AuditEntry{
-		Action:       domain.AuditActionSetAccountCurrency,
-		Account:      account,
-		AccountTitle: prev.Title,
-		Detail: fmt.Sprintf(
-			"reset halted account pnl %s %s -> 0 on currency change",
-			account.String(),
-			prev.PnlHaltReason,
-		),
-	}); err != nil {
-		return n.fatalPostEngineAuditByCode(
-			"audit account pnl reset", "account", account.String(),
-			fmt.Errorf("audit account pnl reset: %w", err),
-		)
-	}
-	return nil
 }
 
 func applyAccountCurrency(
@@ -271,6 +238,12 @@ func (n *localNode) setGroupCurrency(
 	if prevCurrency == currency {
 		return nil
 	}
+	haltedAccounts, err := n.haltedAccountsForGroupCurrencyChange(
+		ctx, code, currency, defaultGroup,
+	)
+	if err != nil {
+		return err
+	}
 	if err := n.ensureCurrencyAsset(ctx, currency, operation, caller); err != nil {
 		return err
 	}
@@ -301,6 +274,42 @@ func (n *localNode) setGroupCurrency(
 		}
 		return fmt.Errorf("apply group currency: %w", applyErr)
 	}
+	blocks, restateErr := n.restateHaltedAccountPnlsRuntime(
+		ctx, eng, haltedAccounts,
+	)
+	if restateErr != nil {
+		mutationCtx := context.WithoutCancel(ctx)
+		revertRuntimeErr := eng.RunGroupSynchronized(
+			mutationCtx, code, func(lane engine.GroupLane) error {
+				return applyGroupCurrency(mutationCtx, lane, code, prevCurrency)
+			},
+		)
+		revertStoreErr := n.realm.SetGroupCurrency(mutationCtx, code, prevCurrency)
+		return n.reconcileEngineAfterFailure(
+			mutationCtx,
+			"reconcile engine after halted pnl restatement failure",
+			errors.Join(
+				fmt.Errorf("restate halted account pnl after group currency: %w", restateErr),
+				optionalOperationError("restore group currency runtime", revertRuntimeErr),
+				optionalOperationError("restore group currency store", revertStoreErr),
+			),
+		)
+	}
+	if err := n.mirrorPolicyConfigurationBlocks(
+		ctx, domain.PolicySpotFundsPnlBoundsKillSwitch, blocks,
+	); err != nil {
+		return err
+	}
+	if err := n.persistHaltedAccountPnlRestatements(
+		context.WithoutCancel(ctx), haltedAccounts,
+	); err != nil {
+		return n.fatalPostEngineAuditByCode(
+			"persist halted account pnl after group currency change",
+			"group",
+			code,
+			fmt.Errorf("persist halted account pnl: %w", err),
+		)
+	}
 	label := code
 	if defaultGroup {
 		label = "default"
@@ -328,6 +337,100 @@ func applyGroupCurrency(
 		return lane.ClearGroupCurrency(ctx, group)
 	}
 	return lane.SetGroupCurrency(ctx, group, currency)
+}
+
+func restateHaltedAccountPnl(
+	ctx context.Context, lane engine.AccountLane, account domain.Account,
+) ([]domain.AccountBlock, error) {
+	return lane.SetAccountPnlState(
+		ctx, account.Code, "", account.PnlHaltReason,
+	)
+}
+
+func (n *localNode) restateHaltedAccountPnlsRuntime(
+	ctx context.Context, eng engine.Engine, accounts []domain.Account,
+) ([]domain.AccountBlock, error) {
+	var blocks []domain.AccountBlock
+	for _, account := range accounts {
+		err := eng.RunAccountSynchronized(
+			ctx, account.Code, func(lane engine.AccountLane) error {
+				accountBlocks, err := restateHaltedAccountPnl(ctx, lane, account)
+				blocks = append(blocks, accountBlocks...)
+				return err
+			},
+		)
+		if err != nil {
+			return nil, fmt.Errorf("account %q: %w", account.Code, err)
+		}
+	}
+	return blocks, nil
+}
+
+func (n *localNode) persistHaltedAccountPnlRestatements(
+	ctx context.Context, accounts []domain.Account,
+) error {
+	for _, account := range accounts {
+		if err := n.realm.SetAccountPnl(
+			ctx, account.Code, "", account.PnlHaltReason,
+		); err != nil {
+			return fmt.Errorf("account %q: %w", account.Code, err)
+		}
+	}
+	return nil
+}
+
+func (n *localNode) haltedAccountsForGroupCurrencyChange(
+	ctx context.Context, code string, currency string, defaultGroup bool,
+) ([]domain.Account, error) {
+	var (
+		accounts []domain.Account
+		err      error
+	)
+	if defaultGroup {
+		accounts, err = n.realm.ListAccounts(ctx)
+	} else {
+		accounts, err = n.realm.ListGroupAccounts(ctx, code)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list accounts for halted pnl restatement: %w", err)
+	}
+	halted := make([]domain.Account, 0, len(accounts))
+	for _, account := range accounts {
+		if account.PnlHaltReason == "" || account.Currency != "" {
+			continue
+		}
+		var nextEffective string
+		if defaultGroup {
+			if account.GroupCurrency != "" {
+				continue
+			}
+			nextEffective, _ = domain.ResolveCurrencyCascade("", "", currency)
+		} else {
+			nextEffective, _ = domain.ResolveCurrencyCascade(
+				"", currency, account.DefaultCurrency,
+			)
+		}
+		if account.EffectiveCurrency != nextEffective {
+			halted = append(halted, account)
+		}
+	}
+	return halted, nil
+}
+
+func haltedAccountsForGroupDeletion(accounts []domain.Account) []domain.Account {
+	halted := make([]domain.Account, 0, len(accounts))
+	for _, account := range accounts {
+		if account.PnlHaltReason == "" || account.Currency != "" {
+			continue
+		}
+		nextEffective, _ := domain.ResolveCurrencyCascade(
+			"", "", account.DefaultCurrency,
+		)
+		if account.EffectiveCurrency != nextEffective {
+			halted = append(halted, account)
+		}
+	}
+	return halted
 }
 
 func (n *localNode) ensureCurrencyAsset(

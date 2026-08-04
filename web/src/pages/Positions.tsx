@@ -3609,10 +3609,6 @@ export function Positions() {
     resetHistoryPage();
     setTab("history");
   };
-  const reloadPositions = () => {
-    balancesLoad.reload();
-    adjustmentsLoad.reload();
-  };
   const reloadActive = () => {
     if (tab === "positions") {
       balancesLoad.reload();
@@ -4065,12 +4061,6 @@ export function Positions() {
           {tab === "positions" ? (
             <>
               <CsvTransferMenu
-                imports={[
-                  {
-                    entities: ["positions"],
-                    label: t("actions.importCsv"),
-                  },
-                ]}
                 exports={[
                   {
                     entity: "positions",
@@ -4078,7 +4068,6 @@ export function Positions() {
                     label: t("actions.exportCsv"),
                   },
                 ]}
-                onImported={reloadPositions}
               />
               <Button size="sm" onClick={openNewAdjust}>
                 <Plus className="h-3.5 w-3.5" />

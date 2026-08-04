@@ -884,14 +884,6 @@ func (n *localNode) endEngineRestart() {
 	n.laneGate.Unlock()
 }
 
-func rollbackArchiveScope(archive backup.Archive) backup.Scope {
-	return backup.Scope{
-		Sections:  append([]backup.Section(nil), archive.Manifest.Sections...),
-		Accounts:  backup.EntitySelector{All: true},
-		Positions: backup.EntitySelector{All: true},
-	}
-}
-
 func (n *localNode) rollbackStore(
 	ctx context.Context,
 	rollback backup.Archive,
@@ -906,34 +898,6 @@ func (n *localNode) rollbackStore(
 		return n.fatalReconciliation(
 			"rollback store",
 			errors.Join(err, fmt.Errorf("rollback restore backup: %w", restoreErr)),
-		)
-	}
-	return err
-}
-
-func (n *localNode) rollbackStoreAndEngine(
-	ctx context.Context,
-	rollback backup.Archive,
-	err error,
-) error {
-	_, restoreErr := n.realm.RestoreBackup(ctx, rollback, backup.RestoreOptions{
-		Scope: rollbackArchiveScope(rollback),
-		Mode:  backup.RestoreModeReplaceAll,
-	})
-	var reconcileErr error
-	if restoreErr != nil {
-		reconcileErr = fmt.Errorf("rollback restore backup: %w", restoreErr)
-	}
-	if rebuildErr := n.rebuildEngineFromStore(ctx); rebuildErr != nil {
-		reconcileErr = errors.Join(
-			reconcileErr,
-			fmt.Errorf("rollback restored engine: %w", rebuildErr),
-		)
-	}
-	if reconcileErr != nil {
-		return n.fatalReconciliation(
-			"rollback store and engine",
-			errors.Join(err, reconcileErr),
 		)
 	}
 	return err

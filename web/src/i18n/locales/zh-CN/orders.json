@@ -95,9 +95,9 @@
     "time": "时间",
     "order": "订单",
     "qty": "数量",
-    "lockPrice": "锁定价格",
+    "lockPrice": "订单锁定价格",
     "commission": "佣金",
-    "displayPrices": "显示价格",
+    "displayPrice": "锁定价格",
     "signedIndicator": "此订单至少有一个已签名的事件。",
     "columnDescriptions": {
       "externalId": "此列显示由调用方提供或由 Officer 生成的不可变标识符。",
@@ -111,9 +111,9 @@
       "time": "此列显示订单或成交被记录的时间。",
       "order": "此列将成交链接回其父订单。",
       "qty": "此列显示已执行的基础资产数量。",
-      "lockPrice": "此列显示用于资金锁定的价格，如不同于执行价格。",
+      "lockPrice": "此列显示用于资金锁定的订单锁定价格，如不同于执行价格。",
       "commission": "此列按币种显示已记录的佣金小计。",
-      "displayPrices": "此列显示风控引擎返回、供操作员查看的附加价格。"
+      "displayPrice": "此列显示从风控引擎锁定数据中还原的唯一价格。"
     }
   },
 
@@ -202,7 +202,7 @@
     "previewUnavailable": "预览不可用",
     "wouldPass": "预览：将通过",
     "wouldReject": "预览：将被拒绝",
-    "displayPrices": "显示价格：{{prices}}",
+    "displayPrice": "锁定价格：{{price}}",
     "wouldBlock": "将封锁账户 {{account}}",
     "wouldBlockReason": "将封锁账户 {{account}} - {{reason}}",
     "accountBlocked": "账户 {{account}} 已被封锁",
@@ -284,7 +284,7 @@
       "fieldStatus": "状态",
       "fieldSource": "来源",
       "fieldSubmitted": "提交时间",
-      "fieldDisplayPrices": "显示价格",
+      "fieldDisplayPrice": "锁定价格",
       "fieldCommission": "佣金",
       "workflow": {
         "title": "工作流快捷操作",
@@ -407,7 +407,6 @@
     "priceCurrency": "计价货币",
     "timeInForce": "有效期类型",
     "estimatePrice": "估算价",
-    "estimateSource": "估算来源",
     "instrument": "工具",
     "account": "账户",
     "accountGroup": "账户组",

@@ -78,7 +78,7 @@ type Service struct {
 	registry       *marketdata.Registry
 	signer         fwsigning.Service
 	commands       catalog.Provider
-	lockSettlement LockSettlementEstimator
+	lockSettlement LockSettlementPrice
 	marketDataMu   sync.Mutex
 }
 
@@ -94,9 +94,9 @@ type auditRowNode interface {
 	ListAuditRows(context.Context, store.AuditListFilter) (store.AuditListPage, error)
 }
 
-// LockSettlementEstimator derives display settlement prices from an opaque
-// engine lock blob.
-type LockSettlementEstimator func([]byte, domain.Order) (string, string, error)
+// LockSettlementPrice derives a display settlement price from an opaque engine
+// lock blob.
+type LockSettlementPrice func([]byte, domain.Order) (string, error)
 
 // Option configures Service composition seams.
 type Option func(*Service)
@@ -135,8 +135,8 @@ func WithMCPCatalogProvider(commands catalog.Provider) Option {
 	}
 }
 
-// WithLockSettlementEstimator sets the engine-specific lock display seam.
-func WithLockSettlementEstimator(estimator LockSettlementEstimator) Option {
+// WithLockSettlementPrice sets the engine-specific lock display seam.
+func WithLockSettlementPrice(estimator LockSettlementPrice) Option {
 	return func(s *Service) {
 		s.lockSettlement = estimator
 	}

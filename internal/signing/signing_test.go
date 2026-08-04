@@ -116,7 +116,6 @@ func samplePayload() domain.ApprovalPayload {
 		Verdict:         "accept",
 		PolicySummary:   "ok",
 		EstimatePrice:   "150.25",
-		EstimateSource:  "limit",
 		IssuedAt:        now.Format(time.RFC3339Nano),
 		Nonce:           "Zm9vYmFyYmF6cXV4MTIzNA",
 	}
@@ -181,7 +180,6 @@ func TestSignVerifyRejectRoundTrip(t *testing.T) {
 	p.Verdict = "reject"
 	p.PolicySummary = "rejected"
 	p.EstimatePrice = ""
-	p.EstimateSource = ""
 	p.RejectCode = "insufficient_funds"
 	p.RejectScope = "account"
 	p.RejectPolicy = "spot_funds"
