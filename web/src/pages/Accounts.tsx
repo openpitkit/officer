@@ -2979,6 +2979,8 @@ function pnlHaltText(t: TFunction, reason: string): string | null {
       return t("accounts.pnlHalt.missingCostBasis");
     case "arithmetic_overflow":
       return t("accounts.pnlHalt.arithmeticOverflow");
+    case "stale_denomination":
+      return t("accounts.pnlHalt.staleDenomination");
     default:
       return t("accounts.pnlHalt.unknown");
   }

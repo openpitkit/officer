@@ -141,14 +141,14 @@ CREATE INDEX idx_account_groups_blocked ON account_group (blocked, code);
 CREATE INDEX idx_account_groups_title ON account_group (title, code);
 
 -- Accounts dictionary. The engine runs the account on its surrogate id, so there
--- is no separate engine id column. group_id links to a group and is cleared (SET
--- NULL), not cascaded, when the group is deleted so an account survives its
--- group's removal.
+-- is no separate engine id column. A group owns its member accounts: deleting
+-- the group cascades through the account foreign key, and each account then
+-- cascades its operational rows through their own foreign keys.
 CREATE TABLE account (
     id           {{PK}},
     code         TEXT    NOT NULL UNIQUE,
     title        TEXT    NOT NULL DEFAULT '',
-    group_id     INTEGER REFERENCES account_group(id) ON DELETE SET NULL,
+    group_id     INTEGER REFERENCES account_group(id) ON DELETE CASCADE,
     currency_asset_id INTEGER REFERENCES asset(id) ON DELETE RESTRICT,
     -- NULL means the account has no P&L value: either the accumulator is halted
     -- (pnl_halt_reason non-empty) or the engine has not reported on the account
@@ -277,7 +277,8 @@ CREATE INDEX idx_adjustments_status ON adjustment (status_id, at DESC, id DESC);
 -- Orders recorded by Officer (including rejected ones). amount_value and price
 -- are exact {{DECIMAL}} values; their indexes order numerically. leaves_quantity
 -- stores request-provided remaining quantity and later follows only the LeavesQty
--- value accepted from an execution report.
+-- value accepted from an execution report. reserved_quantity stores the base
+-- quantity actually reserved by the engine and becomes zero on terminal release.
 -- lock is the SDK-serialized pretrade.Lock blob, persisted verbatim; the store
 -- never decodes it. price is empty for market orders. Signed attestations, when
 -- present, live per-event in the event_attestation companion, not inline here.
@@ -293,8 +294,9 @@ CREATE TABLE order_record (
     side_id         INTEGER NOT NULL REFERENCES order_side(id),
     amount_kind_id  INTEGER NOT NULL REFERENCES order_amount_kind(id),
     amount_value    {{DECIMAL}} NOT NULL,
-    leaves_quantity {{DECIMAL}} NOT NULL DEFAULT '',
-    price           {{DECIMAL}} NOT NULL DEFAULT '',
+    leaves_quantity   {{DECIMAL}} NOT NULL DEFAULT '',
+    reserved_quantity {{DECIMAL}} NOT NULL DEFAULT '',
+    price             {{DECIMAL}} NOT NULL DEFAULT '',
     status_id       INTEGER NOT NULL REFERENCES order_status(id),
     drop_copy       INTEGER NOT NULL DEFAULT 0,
     lock            BLOB
@@ -404,8 +406,8 @@ CREATE INDEX idx_trades_lock_price ON trade (lock_price COLLATE DECIMAL, id DESC
 
 -- Append-only audit trail. Account and actor codes/titles are immutable
 -- snapshots, so compliance history survives dictionary deletes unchanged.
--- account_id is only a nullable identity link used for current-code filtering
--- after account renames; deleting the account clears the link, not the row.
+-- account_id is only a nullable referential link; filters use the immutable
+-- account_code snapshot. Deleting the account clears the link, not the row.
 -- group_code is the structured handle of a group action. Group actions target
 -- no account, so without it a group's rows could only be selected by matching
 -- the free-form detail text, which a crafted group code can spoof.

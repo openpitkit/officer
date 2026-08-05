@@ -202,6 +202,25 @@ func ExtraMounts() []httpx.ExtraMount {
 	}
 }
 
+// ServiceLifecycleRoutes returns the process lifecycle routes with handlers
+// supplied by the consuming Officer distribution.
+func ServiceLifecycleRoutes(restart, stop http.Handler) []httpx.Route {
+	return []httpx.Route{
+		{
+			ID:      "service.restart.post",
+			Method:  http.MethodPost,
+			Pattern: "/service/restart",
+			Handler: restart,
+		},
+		{
+			ID:      "service.stop.post",
+			Method:  http.MethodPost,
+			Pattern: "/service/stop",
+			Handler: stop,
+		},
+	}
+}
+
 func register(
 	registry *httpx.RouteRegistry,
 	id string,

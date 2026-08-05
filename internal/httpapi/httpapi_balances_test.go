@@ -19,14 +19,12 @@ package httpapi
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"testing"
 
-	"github.com/go-chi/chi/v5"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/store"
 )
@@ -128,8 +126,8 @@ func TestListBalances_RejectsDenominatedFilterWithoutCurrency(t *testing.T) {
 			r.ServeHTTP(rec, httptest.NewRequest(
 				http.MethodGet, "/api/v1/balances?"+query, nil,
 			))
-			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("want 400, got %d", rec.Code)
+			if rec.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("want 422, got %d", rec.Code)
 			}
 			if !svc.balanceFilter.RealizedPnl.Empty() ||
 				!svc.balanceFilter.AverageEntryPrice.Empty() {
@@ -139,22 +137,72 @@ func TestListBalances_RejectsDenominatedFilterWithoutCurrency(t *testing.T) {
 	}
 }
 
-func TestListBalances_RejectsDenominatedSort(t *testing.T) {
-	for _, column := range []string{"averageEntryPrice", "realizedPnl"} {
-		t.Run(column, func(t *testing.T) {
-			svc := &fakeService{}
-			r, err := newRouter(svc)
-			if err != nil {
-				t.Fatal(err)
-			}
-			rec := httptest.NewRecorder()
-			r.ServeHTTP(rec, httptest.NewRequest(
-				http.MethodGet, "/api/v1/balances?sort="+column, nil,
-			))
-			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("want 400, got %d", rec.Code)
-			}
-		})
+func TestListBalances_RejectsAverageEntryPriceSort(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet, "/api/v1/balances?sort=averageEntryPrice", nil,
+	))
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("want 422, got %d", rec.Code)
+	}
+}
+
+func TestListBalances_RealizedPnlSortRequiresCurrency(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet, "/api/v1/balances?sort=realizedPnl", nil,
+	))
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("want 422, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
+		t.Fatalf("Content-Type = %q", got)
+	}
+	problem := bodyMap(t, rec.Result())
+	if problem["type"] != "about:blank" || problem["title"] != "Unprocessable Content" ||
+		problem["status"] != float64(http.StatusUnprocessableEntity) {
+		t.Fatalf("problem = %+v", problem)
+	}
+	errorsExt, _ := problem["errors"].([]any)
+	if len(errorsExt) != 1 {
+		t.Fatalf("errors = %v", problem["errors"])
+	}
+	item, _ := errorsExt[0].(map[string]any)
+	if item["code"] != "validation" || item["constraint"] != "required" ||
+		item["pointer"] != "/realizedPnlCurrency" {
+		t.Fatalf("validation item = %+v", item)
+	}
+}
+
+func TestListBalances_PropagatesScopedRealizedPnlSort(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/balances?sort=realizedPnl&order=desc&realizedPnlCurrency=USD",
+		nil,
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	if svc.balanceFilter.Sort.Column != "realizedPnl" ||
+		!svc.balanceFilter.Sort.Descending ||
+		svc.balanceFilter.RealizedPnl.Currency != "USD" {
+		t.Fatalf("filter = %+v", svc.balanceFilter)
 	}
 }
 
@@ -239,27 +287,26 @@ func TestSetBalanceRealizedPnl_BadJSON(t *testing.T) {
 	}
 }
 
-func TestSetBalanceRealizedPnl_BadAccountID(t *testing.T) {
+func TestSetBalanceRealizedPnl_LiteralPercentAccountID(t *testing.T) {
+	svc := &fakeService{}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
 	body := bytes.NewBufferString(`{"asset":"USD","realizedPnl":"-12.50"}`)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(
+	r.ServeHTTP(rec, httptest.NewRequest(
 		http.MethodPut,
-		"/api/v1/accounts/bad/balances/realized-pnl?missingAccount=create",
+		"/api/v1/accounts/acc%25ZZ/balances/realized-pnl?missingAccount=create",
 		body,
-	)
-	routeCtx := chi.NewRouteContext()
-	routeCtx.URLParams.Add("code", "%ZZ")
-	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, routeCtx))
-	handleSetBalanceRealizedPnl(&fakeService{}).ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("want 400, got %d", rec.Code)
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
 	}
-	errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
-	if errObj["code"] != "validation" {
-		t.Fatalf("want code=validation, got %v", errObj["code"])
-	}
-	if errObj["message"] != "invalid URL encoding in account code" {
-		t.Fatalf("want account-id message, got %v", errObj["message"])
+	response := bodyMap(t, rec.Result())
+	balance, ok := response["balance"].(map[string]any)
+	if !ok || balance["account"] != "acc%ZZ" {
+		t.Fatalf("balance = %v, want literal account acc%%ZZ", response["balance"])
 	}
 }
 
@@ -277,7 +324,7 @@ func TestSetBalanceRealizedPnl_ServiceError(t *testing.T) {
 		"/api/v1/accounts/acc-1/balances/realized-pnl?missingAccount=create",
 		body,
 	))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 	errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)

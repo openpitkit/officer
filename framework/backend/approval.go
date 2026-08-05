@@ -466,7 +466,7 @@ func (s *Service) submitOrderToken(
 						}
 						return buildRejectApprovalPayload(
 							eventOrder, SubmitModeHold, submitApprovalID,
-							firstReject(submitted.Rejects), time.Now().UTC(), nonce,
+							submitted.Rejects, time.Now().UTC(), nonce,
 						), true, nil
 					case domain.OrderEventCommitted:
 						committed := eventOrder
@@ -538,7 +538,7 @@ func (s *Service) submitOrderToken(
 						}
 						return buildRejectApprovalPayload(
 							eventOrder, SubmitModeImmediate, submitApprovalID,
-							firstReject(immediate.Rejects), time.Now().UTC(), nonce), true, nil
+							immediate.Rejects, time.Now().UTC(), nonce), true, nil
 					case domain.OrderEventCommitted:
 						committed := eventOrder
 						committed.Status = domain.OrderStatusCommitted
@@ -551,25 +551,17 @@ func (s *Service) submitOrderToken(
 						p.Mode = SubmitModeImmediate
 						return p, true, nil
 					case domain.OrderEventFill:
+						if immediate.Persistence == nil {
+							return domain.ApprovalPayload{}, false, fmt.Errorf(
+								"backend: immediate execution report persistence missing: %w",
+								domain.ErrInvalid,
+							)
+						}
 						filled := eventOrder
 						filled.Status = domain.OrderStatusFilled
-						persistence := engine.ExecutionReportPersistence{
-							OrderStatus: domain.OrderStatusFilled,
-							Trade: &domain.Trade{
-								Order:      eventOrder.ExternalID,
-								Account:    key.Account,
-								Source:     caller.Source,
-								Principal:  caller.Principal,
-								BaseAsset:  eventOrder.BaseAsset,
-								QuoteAsset: eventOrder.QuoteAsset,
-								Side:       eventOrder.Side,
-								Quantity:   immediate.FillQuantity,
-								Price:      immediate.TradePrice,
-								LockPrice:  immediate.SettlementLockPrice,
-							},
-							Blocks: immediate.Blocks,
-						}
-						p, err := s.buildExecutionReportPayload(filled, persistence)
+						p, err := s.buildExecutionReportEventPayload(
+							filled, event, *immediate.Persistence,
+						)
 						if err != nil {
 							return domain.ApprovalPayload{}, false, err
 						}
@@ -764,7 +756,8 @@ func (s *Service) ConfirmExecution(
 
 // CancelOrder verifies the submit token, then forwards a caller-supplied
 // terminal cancellation report for the untouched stored order. Officer requires
-// leaves before settlement; the engine validates the supplied quantity value.
+// leaves and stores it verbatim; a cancel is always terminal, so the engine
+// never sees that value - it releases what the order's reserve ledger records.
 // If any execution report was already recorded, the shortcut fails and the
 // caller must provide an explicit report instead.
 func (s *Service) CancelOrder(
@@ -965,6 +958,7 @@ func buildApprovalPayload(
 		EstimatePrice:   settlement,
 		IssuedAt:        issuedAt.Format(time.RFC3339Nano),
 		Nonce:           nonce,
+		Principal:       order.Principal,
 	}
 }
 
@@ -994,11 +988,14 @@ func orderForEvent(
 // buildRejectApprovalPayload assembles the canonical approval payload for a
 // rejected pre-trade verdict. It binds the same order params as the accept path
 // (so the envelope re-binds against the order it records), carries an empty
-// estimate, and stamps the first engine reject onto the Reject* fields.
+// estimate, binds the complete ordered engine reject list, and mirrors its first
+// entry onto the legacy Reject* fields.
 func buildRejectApprovalPayload(
-	order domain.Order, mode, approvalID string, reject domain.OrderReject,
+	order domain.Order, mode, approvalID string, rejects []domain.OrderReject,
 	issuedAt time.Time, nonce string,
 ) domain.ApprovalPayload {
+	reject := firstReject(rejects)
+	boundRejects := append([]domain.OrderReject(nil), rejects...)
 	orderType := "market"
 	if order.Price != "" {
 		orderType = "limit"
@@ -1025,6 +1022,9 @@ func buildRejectApprovalPayload(
 		RejectScope:     reject.Scope,
 		RejectPolicy:    reject.Policy,
 		RejectReason:    reject.Reason,
+		RejectDetails:   reject.Details,
+		Principal:       order.Principal,
+		Rejects:         boundRejects,
 	}
 }
 
@@ -1242,11 +1242,17 @@ func rejectReasons(
 		copy(out, rejects)
 		return out
 	}
+	if len(payload.Rejects) > 0 {
+		out := make([]domain.OrderReject, len(payload.Rejects))
+		copy(out, payload.Rejects)
+		return out
+	}
 	return []domain.OrderReject{{
-		Code:   payload.RejectCode,
-		Scope:  payload.RejectScope,
-		Policy: payload.RejectPolicy,
-		Reason: payload.RejectReason,
+		Code:    payload.RejectCode,
+		Scope:   payload.RejectScope,
+		Policy:  payload.RejectPolicy,
+		Reason:  payload.RejectReason,
+		Details: payload.RejectDetails,
 	}}
 }
 

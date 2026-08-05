@@ -15,7 +15,11 @@
 //
 // Please see https://openpit.dev and the OWNERS file for details.
 
-import { render, type RenderOptions } from "@testing-library/react";
+import {
+  render,
+  type RenderOptions,
+  type RenderResult,
+} from "@testing-library/react";
 import type { ReactElement } from "react";
 
 import i18n from "@/i18n";
@@ -37,7 +41,7 @@ type RenderWithApiOptions = Omit<RenderOptions, "wrapper"> & {
 export function renderWithApi(
   ui: ReactElement,
   options: RenderWithApiOptions = {},
-) {
+): RenderResult {
   const { api, fetch, config, ...renderOptions } = options;
   const apiConfig: ApiClientConfig = {
     baseUrl: "/app/api/v1",

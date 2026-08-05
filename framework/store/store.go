@@ -339,7 +339,13 @@ func (f BalanceListFilter) Validate() error {
 	if err := f.AverageEntryPrice.Validate("averageEntryPrice"); err != nil {
 		return err
 	}
-	return f.RealizedPnl.Validate("realizedPnl")
+	if err := f.RealizedPnl.Validate("realizedPnl"); err != nil {
+		return err
+	}
+	if f.Sort.Column == "realizedPnl" && f.RealizedPnl.Currency == "" {
+		return fmt.Errorf("realizedPnl: %w", ErrCurrencyRequired)
+	}
+	return nil
 }
 
 // BalanceListRow is a balance row plus list-only data.
@@ -416,11 +422,12 @@ const (
 )
 
 // PolicyListFilter narrows the unified policy-list read. Account mirrors the
-// Limits UI account filter; Kind, when set, restricts to one barrier kind.
+// Limits UI account filter; Scope and Kind restrict the barrier identity.
 type PolicyListFilter struct {
 	Account      TextMatcher
 	AccountGroup TextMatcher
 	Asset        TextMatcher
+	Scope        domain.LimitScope
 	Kind         *PolicyKind
 	Sort         SortSpec
 	Page         PageSpec
@@ -687,8 +694,10 @@ type RealmStore interface {
 	// group. Returns domain.ErrNotFound when absent.
 	SetGroupBlocked(ctx context.Context, code string, blocked bool, reason string) error
 
-	// DeleteGroup removes the group; member accounts have their group link cleared
-	// (SET NULL). Returns domain.ErrNotFound when absent.
+	// DeleteGroup removes the group. The group foreign key cascades every member
+	// account and each account-owned operational row; durable audit snapshots
+	// survive with their nullable account links cleared. Returns
+	// domain.ErrNotFound when absent.
 	DeleteGroup(ctx context.Context, code string) error
 
 	// ListGroupAccounts returns every account whose group is code, ordered by
@@ -780,12 +789,11 @@ type RealmStore interface {
 		ctx context.Context, account domain.AccountID, asset string,
 	) ([]domain.Balance, error)
 
-	// ListAccountsWithOpenBalances returns account codes carrying a non-zero
-	// balance field, cost basis or account P&L. A halted P&L holds no trustworthy
-	// number and never counts an account as open - neither the halt itself nor
-	// any value retained behind it. Balance fields and cost basis are not P&L and
-	// count whether or not a P&L is halted. Empty accounts means all accounts.
-	ListAccountsWithOpenBalances(
+	// ListAccountsBlockingCurrencyChange returns candidate account codes whose
+	// economic state, halt reason, active order or account-currency-denominated
+	// limit prevents changing the effective currency. Unset and numeric-zero
+	// amounts do not count. Empty accounts means all accounts.
+	ListAccountsBlockingCurrencyChange(
 		ctx context.Context, accounts []domain.AccountID,
 	) ([]domain.AccountID, error)
 

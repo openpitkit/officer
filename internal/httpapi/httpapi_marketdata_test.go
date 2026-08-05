@@ -331,7 +331,7 @@ func TestMarketDataMutationsRequireExplicitValues(t *testing.T) {
 			r.ServeHTTP(rec, httptest.NewRequest(
 				tc.method, tc.path, bytes.NewBufferString(tc.body),
 			))
-			if rec.Code != http.StatusBadRequest {
+			if rec.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("want 400, got %d body=%s", rec.Code, rec.Body.String())
 			}
 			if len(svc.mdCalls) != 0 {
@@ -352,7 +352,7 @@ func TestCreateMarketDataInstance_ServiceError(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/market-data/instances", body))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 	errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
@@ -735,7 +735,7 @@ func TestUpsertMarketDataInstrument_ServiceError(t *testing.T) {
 	// returns drives the 400, not the path-parse guard.
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut,
 		"/api/v1/market-data/instances/"+extID("bn-1").String()+"/instruments", body))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 	errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
@@ -1137,7 +1137,7 @@ func TestSearchMarketDataSymbols_EmptyQuery(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/market-data/instances/bn-1/search-symbols", body))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 	errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
@@ -1204,7 +1204,7 @@ func TestSearchMarketDataSymbols_InvalidStrike(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/market-data/instances/bn-1/search-symbols", body))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 	errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
@@ -1234,7 +1234,7 @@ func TestSearchMarketDataSymbols_NonFiniteStrike(t *testing.T) {
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 			"/api/v1/market-data/instances/bn-1/search-symbols", body))
-		if rec.Code != http.StatusBadRequest {
+		if rec.Code != http.StatusUnprocessableEntity {
 			t.Fatalf("strike %q: want 400, got %d", strike, rec.Code)
 		}
 		errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)

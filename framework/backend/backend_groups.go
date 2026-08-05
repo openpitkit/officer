@@ -199,7 +199,7 @@ func (s *Service) SetGroupBlocked(
 	return n.SetGroupBlocked(ctx, code, blocked, reason, auth.CallerFromContext(ctx))
 }
 
-// DeleteGroup validates the code and removes the group.
+// DeleteGroup validates the code and removes the group and its member accounts.
 func (s *Service) DeleteGroup(ctx context.Context, code string) error {
 	if err := domain.ValidateGroupID(code); err != nil {
 		return err

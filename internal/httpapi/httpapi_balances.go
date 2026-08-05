@@ -22,6 +22,7 @@ import (
 	"net/http"
 
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/store"
 	httpx "go.openpit.dev/officer/framework/web/httpapi"
 )
 
@@ -29,7 +30,13 @@ func handleListBalances(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		filter, err := balanceListFilterFromQuery(r.URL.Query())
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			pointer := ""
+			constraint := ""
+			if errors.Is(err, store.ErrCurrencyRequired) {
+				pointer = "/realizedPnlCurrency"
+				constraint = "required"
+			}
+			httpx.WriteValidationProblem(w, err.Error(), pointer, constraint)
 			return
 		}
 		balances, err := svc.ListBalanceRows(r.Context(), filter)

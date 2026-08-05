@@ -581,6 +581,8 @@ function pnlHaltText(t: TFunction, reason: string): string | null {
       return t("balances.pnlHalt.missingCostBasis");
     case "arithmetic_overflow":
       return t("balances.pnlHalt.arithmeticOverflow");
+    case "stale_denomination":
+      return t("balances.pnlHalt.staleDenomination");
     default:
       return t("balances.pnlHalt.unknown");
   }
@@ -1635,6 +1637,19 @@ function AdjustmentPanel({
       role="region"
       aria-label={t("panel.title")}
       className="space-y-4 border-l-2 border-l-accent bg-surface-2 px-4 py-4"
+      onKeyDown={(event) => {
+        if (event.key !== "Escape") {
+          return;
+        }
+        const target = event.target;
+        if (
+          target instanceof HTMLElement &&
+          target.getAttribute("aria-expanded") === "true"
+        ) {
+          return;
+        }
+        onClose();
+      }}
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>

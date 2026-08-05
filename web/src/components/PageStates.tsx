@@ -26,7 +26,12 @@ import { cn } from "@/lib/utils";
 /** A skeleton table body shown while the first page load is in flight. */
 export function TableSkeleton({ rows = 5, cols = 4 }: { rows?: number; cols?: number }) {
   return (
-    <Card className="animate-pulse">
+    <Card
+      role="status"
+      aria-busy="true"
+      aria-label="Loading"
+      className="animate-pulse"
+    >
       <CardContent className="space-y-3 py-5">
         {Array.from({ length: rows }).map((_, r) => (
           <div key={r} className="flex gap-4">

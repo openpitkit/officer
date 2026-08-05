@@ -25,51 +25,34 @@ import (
 	"reflect"
 	"testing"
 
+	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
 )
 
-func TestServiceLifecycleRouteSources(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		path   string
-		action lifecycleAction
-		source domain.Source
-		ok     bool
-	}{
-		{"/api/v1/service/restart", lifecycleRestart, domain.SourceAPI, true},
-		{"/app/api/v1/service/restart", lifecycleRestart, domain.SourcePanel, true},
-		{"/api/v1/service/stop", lifecycleStop, domain.SourceAPI, true},
-		{"/app/api/v1/service/stop", lifecycleStop, domain.SourcePanel, true},
-		{"/api/v1/service", "", "", false},
-	}
-
-	for _, tt := range tests {
-		action, source, ok := serviceLifecycleRoute(tt.path)
-		if action != tt.action || source != tt.source || ok != tt.ok {
-			t.Fatalf(
-				"serviceLifecycleRoute(%q) = (%q, %q, %v), want (%q, %q, %v)",
-				tt.path, action, source, ok, tt.action, tt.source, tt.ok,
-			)
-		}
-	}
-}
-
-func TestWithServiceLifecycleAuditsBeforeAccepting(t *testing.T) {
+func TestServiceLifecycleHandlerAuditsBeforeAccepting(t *testing.T) {
 	t.Parallel()
 	requests := make(chan lifecycleAction, 1)
 	var recordedAction lifecycleAction
 	var recordedSource domain.Source
-	handler := withServiceLifecycle(
-		http.NotFoundHandler(),
-		requests,
-		func(_ context.Context, action lifecycleAction, source domain.Source) error {
+	controller := &serviceLifecycleController{
+		requests: requests,
+		record: func(
+			_ context.Context,
+			action lifecycleAction,
+			source domain.Source,
+		) error {
 			recordedAction = action
 			recordedSource = source
 			return nil
 		},
-	)
+	}
+	handler := controller.handler(lifecycleRestart)
 
 	req := httptest.NewRequest(http.MethodPost, "/app/api/v1/service/restart", nil)
+	req = req.WithContext(auth.ContextWithCaller(req.Context(), domain.Caller{
+		Source:    domain.SourcePanel,
+		Principal: domain.PrincipalOperator,
+	}))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -90,16 +73,16 @@ func TestWithServiceLifecycleAuditsBeforeAccepting(t *testing.T) {
 	}
 }
 
-func TestWithServiceLifecycleRejectsWhenAuditFails(t *testing.T) {
+func TestServiceLifecycleHandlerRejectsWhenAuditFails(t *testing.T) {
 	t.Parallel()
 	requests := make(chan lifecycleAction, 1)
-	handler := withServiceLifecycle(
-		http.NotFoundHandler(),
-		requests,
-		func(context.Context, lifecycleAction, domain.Source) error {
+	controller := &serviceLifecycleController{
+		requests: requests,
+		record: func(context.Context, lifecycleAction, domain.Source) error {
 			return errors.New("audit failed")
 		},
-	)
+	}
+	handler := controller.handler(lifecycleRestart)
 
 	req := httptest.NewRequest(http.MethodPost, "/app/api/v1/service/restart", nil)
 	rec := httptest.NewRecorder()

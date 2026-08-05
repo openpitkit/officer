@@ -74,6 +74,7 @@
       "missingInitialPnl": "PnL calculation stopped: an authoritative initial PnL value is unavailable.",
       "missingCostBasis": "PnL calculation stopped: the position cost basis is unavailable.",
       "arithmeticOverflow": "PnL calculation stopped: exact arithmetic exceeded the supported numeric range.",
+      "staleDenomination": "PnL calculation stopped: stored PnL or cost basis uses a previous effective account currency.",
       "unknown": "PnL calculation stopped by the engine."
     },
     "empty": {

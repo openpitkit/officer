@@ -816,7 +816,7 @@ func (n *fakeNode) SubmitImmediate(
 		order.Lock = n.immediateResult.Lock
 		n.orders[order.ExternalID] = order
 		n.appendEvent(order.ExternalID, domain.OrderEventPreTradeAccepted, domain.OrderEventPayload{})
-		return order, *n.immediateResult, nil
+		return order, completeFakeImmediateResult(order, *n.immediateResult), nil
 	}
 	order.Status = domain.OrderStatusFilled
 	n.orders[order.ExternalID] = order
@@ -825,12 +825,67 @@ func (n *fakeNode) SubmitImmediate(
 	if tradePrice == "" {
 		tradePrice = "100"
 	}
-	return order, engine.ImmediateResult{
+	return order, completeFakeImmediateResult(order, engine.ImmediateResult{
 		Accepted:            true,
 		SettlementLockPrice: "100",
 		TradePrice:          tradePrice,
 		FillQuantity:        o.AmountValue,
-	}, nil
+	}), nil
+}
+
+func completeFakeImmediateResult(
+	order domain.Order, result engine.ImmediateResult,
+) engine.ImmediateResult {
+	if !result.Accepted {
+		return result
+	}
+	if result.FillQuantity == "" {
+		result.FillQuantity = order.AmountValue
+	}
+	if result.TradePrice == "" {
+		result.TradePrice = order.Price
+		if result.TradePrice == "" {
+			result.TradePrice = result.SettlementLockPrice
+		}
+	}
+	if result.LeavesQuantity == "" {
+		result.LeavesQuantity = "0"
+	}
+	if result.ExecutionReport == nil {
+		result.ExecutionReport = domain.ExecutionReportRequestFromInput(
+			domain.ExecutionReportInput{
+				ExternalID:     mdID("immediate-report-" + order.ExternalID.String()),
+				BaseAsset:      order.BaseAsset,
+				QuoteAsset:     order.QuoteAsset,
+				FillQuantity:   result.FillQuantity,
+				FillPrice:      result.TradePrice,
+				LeavesQuantity: result.LeavesQuantity,
+				LockPrice:      result.SettlementLockPrice,
+				Order:          order.ExternalID,
+				Account:        order.Account,
+				Side:           order.Side,
+				OrderStatus:    domain.OrderStatusFilled,
+			},
+		)
+	}
+	if result.Persistence == nil {
+		result.Persistence = &engine.ExecutionReportPersistence{
+			Trade: &domain.Trade{
+				Order:      order.ExternalID,
+				Account:    order.Account,
+				BaseAsset:  order.BaseAsset,
+				QuoteAsset: order.QuoteAsset,
+				Side:       order.Side,
+				Quantity:   result.FillQuantity,
+				Price:      result.TradePrice,
+				LockPrice:  result.SettlementLockPrice,
+			},
+			OrderStatus: domain.OrderStatusFilled,
+			Leaves:      result.LeavesQuantity,
+			Blocks:      result.Blocks,
+		}
+	}
+	return result
 }
 
 func (n *fakeNode) SubmitImmediateWithAttestation(
@@ -850,10 +905,12 @@ func (n *fakeNode) SubmitImmediateWithAttestation(
 	if result.Accepted {
 		n.appendEvent(order.ExternalID, domain.OrderEventCommitted, domain.OrderEventPayload{})
 		n.appendEvent(order.ExternalID, domain.OrderEventFill, domain.OrderEventPayload{
-			FillQuantity:  result.FillQuantity,
-			FillPrice:     result.TradePrice,
-			FillLockPrice: result.SettlementLockPrice,
-			OrderStatus:   string(domain.OrderStatusFilled),
+			FillQuantity:    result.FillQuantity,
+			FillPrice:       result.TradePrice,
+			FillLockPrice:   result.SettlementLockPrice,
+			LeavesQuantity:  result.LeavesQuantity,
+			OrderStatus:     string(domain.OrderStatusFilled),
+			ExecutionReport: result.ExecutionReport,
 		})
 	}
 	if o.ExternalID.IsZero() {

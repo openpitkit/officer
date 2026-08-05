@@ -18,7 +18,7 @@
 import { AlertTriangle, ExternalLink, Info } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 
 import { useMarketData } from "@/api/useMarketData";
 import { useService } from "@/api/useService";
@@ -35,6 +35,14 @@ import {
 } from "@/components/ui/dialog";
 
 export function RestartRequiredNavEntry() {
+  const { pathname } = useLocation();
+  if (pathname === "/market-data") {
+    return null;
+  }
+  return <RestartRequiredNavIndicator />;
+}
+
+function RestartRequiredNavIndicator() {
   const { t } = useTranslation();
   const { close } = useSidebar();
   const { load } = useMarketData();
@@ -58,6 +66,14 @@ export function RestartRequiredNavEntry() {
 }
 
 export function NonReleaseNavEntry() {
+  const { pathname } = useLocation();
+  if (pathname === "/service") {
+    return null;
+  }
+  return <NonReleaseNavIndicator />;
+}
+
+function NonReleaseNavIndicator() {
   const { t } = useTranslation();
   const { close } = useSidebar();
   const { load } = useService();
@@ -162,4 +178,3 @@ export function AboutNavEntry() {
     </>
   );
 }
-

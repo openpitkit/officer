@@ -133,6 +133,7 @@ func TestListAudit(t *testing.T) {
 				Actor:      "operator",
 				Action:     domain.AuditActionSetLimit,
 				Account:    "acc-1",
+				Asset:      "AAPL",
 				Detail:     "set limit rate_limit account=acc-1",
 			},
 		},
@@ -152,7 +153,9 @@ func TestListAudit(t *testing.T) {
 		t.Fatalf("want 1 entry, got %v", m["entries"])
 	}
 	e := entries[0].(map[string]any)
-	for _, field := range []string{"id", "at", "actor", "action", "account", "detail"} {
+	for _, field := range []string{
+		"id", "at", "actor", "action", "account", "asset", "group", "detail",
+	} {
 		if _, ok := e[field]; !ok {
 			t.Fatalf("audit entry missing field %q", field)
 		}
@@ -167,6 +170,9 @@ func TestListAudit(t *testing.T) {
 	assertNoSurrogateID(t, e)
 	if e["actor"] != "operator" {
 		t.Fatalf("want actor=operator, got %v", e["actor"])
+	}
+	if e["asset"] != "AAPL" {
+		t.Fatalf("want asset=AAPL, got %v", e["asset"])
 	}
 }
 
@@ -215,7 +221,7 @@ func TestListAudit_UnknownActionRejected(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/audit?actions=bogus", nil))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400 for unknown action, got %d", rec.Code)
 	}
 }
@@ -239,7 +245,7 @@ func TestListAudit_BadQueryParams(t *testing.T) {
 			rec := httptest.NewRecorder()
 			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
 				"/api/v1/audit"+tc.query, nil))
-			if rec.Code != http.StatusBadRequest {
+			if rec.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("want 400, got %d", rec.Code)
 			}
 			m := bodyMap(t, rec.Result())
@@ -273,7 +279,7 @@ func TestListAudit_InvalidLimit(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
 		"/api/v1/audit?limit=abc", nil))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 }

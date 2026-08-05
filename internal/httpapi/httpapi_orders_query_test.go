@@ -126,7 +126,7 @@ func TestListOrders_BadPage(t *testing.T) {
 	r.ServeHTTP(rec, httptest.NewRequest(
 		http.MethodGet, "/api/v1/orders?page=0", nil,
 	))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 	m := bodyMap(t, rec.Result())

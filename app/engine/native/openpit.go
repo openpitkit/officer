@@ -439,27 +439,33 @@ func (e *openPitEngine) configureOrderSizeLocked(limits []domain.LimitOrderSize)
 func (e *openPitEngine) configureSpotFundsPnlBoundsLocked(
 	limits []domain.LimitSpotFundsPnlBounds,
 ) (PolicyConfigurationResult, error) {
-	if err := configureSpotFundsPnlBounds(e.eng, e.res, limits); err != nil {
-		return PolicyConfigurationResult{}, err
-	}
-	return PolicyConfigurationResult{}, nil
+	return configureSpotFundsPnlBounds(e.eng, e.res, limits)
 }
 
 func configureSpotFundsPnlBounds(
 	eng *openpit.Engine,
 	res idResolver,
 	limits []domain.LimitSpotFundsPnlBounds,
-) error {
+) (PolicyConfigurationResult, error) {
 	global, groups, accounts, err := spotFundsPnlBoundsAxes(limits, res)
 	if err != nil {
-		return err
+		return PolicyConfigurationResult{}, err
 	}
-	if err := eng.Configure().SpotFundsPnlBoundsKillSwitch(
+	outcomes, err := eng.Configure().SpotFundsPnlBoundsKillSwitch(
 		policies.SpotFundsPolicyName, global, groups, accounts,
-	); err != nil {
-		return fmt.Errorf("engine: configure spot_funds_pnl_bounds_kill_switch: %w", err)
+	)
+	if err != nil {
+		return PolicyConfigurationResult{}, fmt.Errorf(
+			"engine: configure spot_funds_pnl_bounds_kill_switch: %w", err,
+		)
 	}
-	return nil
+	blocks, err := policyConfigurationBlockOutcomesFrom(
+		outcomes.AccountBlocks, res, domain.PolicySpotFundsPnlBoundsKillSwitch,
+	)
+	if err != nil {
+		return PolicyConfigurationResult{}, err
+	}
+	return PolicyConfigurationResult{AccountBlocks: blocks}, nil
 }
 
 // BlockAccount kill-switches the account in the live engine. Block keeps the
@@ -1006,6 +1012,10 @@ func (l accountLane) ApplyExecutionReport(
 	if err != nil {
 		return ExecutionReportResult{}, err
 	}
+	reservedQuantity, err := executionReservedQuantityFrom(in, outcomes)
+	if err != nil {
+		return ExecutionReportResult{}, err
+	}
 	accountPnl, accountPnlHaltReason, err := spotFundsAccountPnlFromList(
 		accountID,
 		result.AccountPnls,
@@ -1020,6 +1030,7 @@ func (l accountLane) ApplyExecutionReport(
 		accountPnl,
 		accountPnlHaltReason,
 	)
+	persistence.ReservedQuantity = reservedQuantity
 	return ExecutionReportResult{
 		Persistence: &persistence,
 		Blocks:      blocks,
@@ -1373,6 +1384,7 @@ func buildEngine(
 		service.Close()
 		return nil, nil, nil, nil, fmt.Errorf("engine: build openpit engine: %w", err)
 	}
+	var buildBlocks []domain.AccountBlock
 	if len(snap.SpotFundsPnlBoundsLimits) > 0 {
 		releaseOnErr := func(
 			err error,
@@ -1381,13 +1393,15 @@ func buildEngine(
 			service.Close()
 			return nil, nil, nil, nil, err
 		}
-		if err := configureSpotFundsPnlBounds(
+		configuration, err := configureSpotFundsPnlBounds(
 			eng, res, snap.SpotFundsPnlBoundsLimits,
-		); err != nil {
+		)
+		if err != nil {
 			return releaseOnErr(err)
 		}
+		buildBlocks = configuration.AccountBlocks
 	}
-	return eng, service, registered, nil, nil
+	return eng, service, registered, buildBlocks, nil
 }
 
 // applyBlocks blocks every blocked account in accounts on the engine with its

@@ -154,6 +154,7 @@ func TestValidatePnlHaltReason(t *testing.T) {
 		{"missing initial pnl", domain.PnlHaltReasonMissingInitialPnl},
 		{"missing cost basis", domain.PnlHaltReasonMissingCostBasis},
 		{"arithmetic overflow", domain.PnlHaltReasonArithmeticOverflow},
+		{"stale denomination", domain.PnlHaltReasonStaleDenomination},
 	}
 	for _, tc := range ok {
 		t.Run("ok/"+tc.name, func(t *testing.T) {
@@ -728,6 +729,18 @@ func TestExecutionReportRequiresEngine(t *testing.T) {
 			requiresEngine: true,
 		},
 		{
+			name: "fee-only fill status routes through engine",
+			in: domain.ExecutionReportInput{
+				LeavesQuantity: "1",
+				Commission: &domain.Commission{
+					Amount:   "1",
+					Currency: "USD",
+				},
+				OrderStatus: domain.OrderStatusPartiallyFilled,
+			},
+			requiresEngine: true,
+		},
+		{
 			name: "terminal without fill",
 			in: domain.ExecutionReportInput{
 				LeavesQuantity: "2",
@@ -1220,26 +1233,5 @@ func TestValidateMarketDataMark(t *testing.T) {
 				t.Fatalf("mark %q: expected ErrInvalid, got %v", mark, err)
 			}
 		})
-	}
-}
-
-func TestValidateImmediateOrderAmountKind(t *testing.T) {
-	t.Parallel()
-
-	if err := domain.ValidateImmediateOrderAmountKind(
-		domain.OrderAmountKindQuantity,
-	); err != nil {
-		t.Fatalf("quantity order: %v", err)
-	}
-	err := domain.ValidateImmediateOrderAmountKind(
-		domain.OrderAmountKindVolume,
-	)
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("volume order error = %v, want ErrInvalid", err)
-	}
-	want := "executed quantity of a cash-denominated order is not derived by " +
-		"Officer and was not supplied in the request"
-	if !strings.Contains(err.Error(), want) {
-		t.Fatalf("volume order error = %q, want %q", err, want)
 	}
 }

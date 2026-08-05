@@ -25,6 +25,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -34,9 +35,9 @@ import (
 )
 
 // DecodeBody decodes exactly one non-null JSON value into dst, rejecting any
-// member the target does not declare, and writes the standard typed 400
-// "validation" envelope when it cannot. It reports whether the handler may
-// continue.
+// member the target does not declare. Malformed JSON is a 400 problem; a valid
+// JSON value that does not satisfy the request schema is a 422 problem. It
+// reports whether the handler may continue.
 //
 // Strictness is the point: a control-plane mutation that silently drops an
 // unknown member acknowledges an intent it did not carry out - "blocked": true
@@ -137,19 +138,19 @@ func decodeBody(
 	decoder := json.NewDecoder(r.Body)
 	var raw json.RawMessage
 	if err := decoder.Decode(&raw); err != nil {
-		WriteErrMsg(w, http.StatusBadRequest, "validation", decodeBodyMessage(err))
+		WriteBadRequestProblem(w, decodeBodyMessage(err), "malformed_json")
 		return false
 	}
 	if !ValidJSONUnicode(raw) {
-		WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		WriteBadRequestProblem(w, "invalid JSON", "malformed_json")
 		return false
 	}
 	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		WriteValidationProblem(w, "request body must not be null", "", "non_null")
 		return false
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		WriteErrMsg(w, http.StatusBadRequest, "validation", "invalid JSON")
+		WriteBadRequestProblem(w, "invalid JSON", "malformed_json")
 		return false
 	}
 	valueDecoder := json.NewDecoder(bytes.NewReader(raw))
@@ -157,10 +158,151 @@ func decodeBody(
 		valueDecoder.DisallowUnknownFields()
 	}
 	if err := valueDecoder.Decode(dst); err != nil {
-		WriteErrMsg(w, http.StatusBadRequest, "validation", decodeBodyMessage(err))
+		detail, pointer, constraint := decodeBodyValidation(err, raw, dst)
+		WriteValidationProblem(w, detail, pointer, constraint)
 		return false
 	}
 	return true
+}
+
+func decodeBodyValidation(err error, raw []byte, dst any) (string, string, string) {
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) {
+		return "request member has an invalid type", jsonPointer(typeErr.Field), "type"
+	}
+	const unknownFieldPrefix = "json: unknown field "
+	msg := err.Error()
+	if strings.HasPrefix(msg, unknownFieldPrefix) {
+		field := strings.Trim(strings.TrimPrefix(msg, unknownFieldPrefix), `"`)
+		if utf8.RuneCountInString(field) <= 64 {
+			return "unknown field in request body",
+				unknownJSONPointer(raw, dst, field), "unknown_field"
+		}
+		return "unknown field in request body", "", "unknown_field"
+	}
+	return "request body does not match the schema", "", "schema"
+}
+
+func unknownJSONPointer(raw []byte, dst any, field string) string {
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return jsonPointer(field)
+	}
+	segments, ok := findUnknownJSONField(
+		value, reflect.TypeOf(dst), field, nil,
+	)
+	if !ok {
+		return jsonPointer(field)
+	}
+	return jsonPointerSegments(segments)
+}
+
+func findUnknownJSONField(
+	value any, target reflect.Type, field string, path []string,
+) ([]string, bool) {
+	for target.Kind() == reflect.Pointer {
+		target = target.Elem()
+	}
+	switch target.Kind() {
+	case reflect.Struct:
+		object, ok := value.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		fields := jsonStructFields(target)
+		for name, child := range object {
+			fieldType, exists := fields[name]
+			if !exists {
+				if name == field {
+					return appendPath(path, name), true
+				}
+				continue
+			}
+			if found, ok := findUnknownJSONField(
+				child, fieldType, field, appendPath(path, name),
+			); ok {
+				return found, true
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		array, ok := value.([]any)
+		if !ok {
+			return nil, false
+		}
+		for index, child := range array {
+			if found, ok := findUnknownJSONField(
+				child, target.Elem(), field,
+				appendPath(path, strconv.Itoa(index)),
+			); ok {
+				return found, true
+			}
+		}
+	case reflect.Map:
+		object, ok := value.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		for name, child := range object {
+			if found, ok := findUnknownJSONField(
+				child, target.Elem(), field, appendPath(path, name),
+			); ok {
+				return found, true
+			}
+		}
+	}
+	return nil, false
+}
+
+func jsonStructFields(target reflect.Type) map[string]reflect.Type {
+	fields := make(map[string]reflect.Type)
+	for index := 0; index < target.NumField(); index++ {
+		field := target.Field(index)
+		if field.PkgPath != "" {
+			continue
+		}
+		tag := strings.Split(field.Tag.Get("json"), ",")[0]
+		if tag == "-" {
+			continue
+		}
+		if field.Anonymous && tag == "" {
+			embedded := field.Type
+			for embedded.Kind() == reflect.Pointer {
+				embedded = embedded.Elem()
+			}
+			if embedded.Kind() == reflect.Struct {
+				for name, fieldType := range jsonStructFields(embedded) {
+					fields[name] = fieldType
+				}
+				continue
+			}
+		}
+		if tag == "" {
+			tag = field.Name
+		}
+		fields[tag] = field.Type
+	}
+	return fields
+}
+
+func appendPath(path []string, segment string) []string {
+	result := make([]string, len(path), len(path)+1)
+	copy(result, path)
+	return append(result, segment)
+}
+
+func jsonPointer(field string) string {
+	if field == "" {
+		return ""
+	}
+	return jsonPointerSegments(strings.Split(field, "."))
+}
+
+func jsonPointerSegments(parts []string) string {
+	for index, part := range parts {
+		part = strings.ReplaceAll(part, "~", "~0")
+		parts[index] = strings.ReplaceAll(part, "/", "~1")
+	}
+	return "/" + strings.Join(parts, "/")
 }
 
 // decodeBodyMessage names the offending member for an unknown-field rejection,
@@ -198,37 +340,37 @@ func LimitParam(r *http.Request, def, capN int) (int, error) {
 	return n, nil
 }
 
-// PathID reads and URL-decodes the {id} chi path parameter.
+// PathID reads the decoded {id} chi path parameter.
 func PathID(r *http.Request) (string, error) {
 	return pathString(r, "id", "invalid URL encoding in id")
 }
 
-// PathGroupCode reads and URL-decodes the {code} chi path parameter.
+// PathGroupCode reads the decoded {code} chi path parameter.
 func PathGroupCode(r *http.Request) (string, error) {
 	return pathString(r, "code", "invalid URL encoding in code")
 }
 
-// PathCommand reads and URL-decodes the {command} chi path parameter.
+// PathCommand reads the decoded {command} chi path parameter.
 func PathCommand(r *http.Request) (string, error) {
 	return pathString(r, "command", "invalid URL encoding in command")
 }
 
-// PathOrderExternalID reads and URL-decodes the order {id} path parameter.
+// PathOrderExternalID reads the decoded order {id} path parameter.
 func PathOrderExternalID(r *http.Request) (string, error) {
 	return pathString(r, "id", "invalid URL encoding in order id")
 }
 
-// PathOrderEventID reads and URL-decodes the {eventId} chi path parameter.
+// PathOrderEventID reads the decoded {eventId} chi path parameter.
 func PathOrderEventID(r *http.Request) (string, error) {
 	return pathString(r, "eventId", "invalid URL encoding in order event id")
 }
 
-// PathSigningKeyID reads and URL-decodes the {keyId} chi path parameter.
+// PathSigningKeyID reads the decoded {keyId} chi path parameter.
 func PathSigningKeyID(r *http.Request) (string, error) {
 	return pathString(r, "keyId", "invalid URL encoding in signing key id")
 }
 
-// PathAccountID reads and URL-decodes the {code} chi path parameter.
+// PathAccountID reads the decoded {code} chi path parameter.
 func PathAccountID(r *http.Request) (domain.AccountID, error) {
 	decoded, err := pathString(r, "code", "invalid URL encoding in account code")
 	return domain.AccountID(decoded), err
@@ -236,6 +378,10 @@ func PathAccountID(r *http.Request) (domain.AccountID, error) {
 
 func pathString(r *http.Request, key, msg string) (string, error) {
 	raw := chi.URLParam(r, key)
+	// Chi reads Path directly unless RawPath preserves a non-canonical escape.
+	if r.URL.RawPath == "" {
+		return raw, nil
+	}
 	decoded, err := url.PathUnescape(raw)
 	if err != nil {
 		return "", errors.New(msg)
@@ -250,7 +396,7 @@ func WriteErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, domain.ErrTooLarge):
 		WriteErrMsg(w, http.StatusRequestEntityTooLarge, "too_large", err.Error())
 	case errors.Is(err, domain.ErrInvalid):
-		WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+		WriteValidationProblem(w, err.Error(), "", "")
 	case errors.Is(err, domain.ErrForbidden):
 		WriteErrMsg(w, http.StatusForbidden, "forbidden", domain.ErrForbidden.Error())
 	// A rejected missing account is matched before the generic not-found case so
@@ -267,6 +413,8 @@ func WriteErr(w http.ResponseWriter, err error) {
 		WriteErrMsg(w, http.StatusConflict, "terminal_order", domain.ErrTerminalOrder.Error())
 	case errors.Is(err, domain.ErrExecutionReportRequired):
 		WriteErrMsg(w, http.StatusConflict, "execution_report_required", err.Error())
+	case isCurrencyChangeBlocked(err):
+		writeCurrencyChangeBlockedErr(w, err)
 	case errors.Is(err, domain.ErrConflict):
 		WriteErrMsg(w, http.StatusConflict, "conflict", err.Error())
 	case errors.Is(err, domain.ErrEngineRestarting):
@@ -282,6 +430,59 @@ func WriteErr(w http.ResponseWriter, err error) {
 		slog.Error("unhandled internal error serving request", "error", err)
 		WriteErrMsg(w, http.StatusInternalServerError, "internal", "internal error")
 	}
+}
+
+// ProblemError identifies one invalid request member. Pointer is a JSON
+// Pointer; the empty string addresses the request as a whole.
+type ProblemError struct {
+	Code       string `json:"code"`
+	Constraint string `json:"constraint,omitempty"`
+	Pointer    string `json:"pointer"`
+}
+
+// ProblemDetails is the RFC 9457 error representation used for request
+// validation failures.
+type ProblemDetails struct {
+	Type   string         `json:"type"`
+	Title  string         `json:"title"`
+	Status int            `json:"status"`
+	Detail string         `json:"detail"`
+	Errors []ProblemError `json:"errors"`
+}
+
+// WriteBadRequestProblem reports malformed HTTP or JSON syntax.
+func WriteBadRequestProblem(w http.ResponseWriter, detail, constraint string) {
+	writeProblem(w, http.StatusBadRequest, detail, ProblemError{
+		Code:       "bad_request",
+		Constraint: constraint,
+		Pointer:    "",
+	})
+}
+
+// WriteValidationProblem reports a syntactically valid request that violates
+// the request schema or a parameter constraint.
+func WriteValidationProblem(w http.ResponseWriter, detail, pointer, constraint string) {
+	writeProblem(w, http.StatusUnprocessableEntity, detail, ProblemError{
+		Code:       "validation",
+		Constraint: constraint,
+		Pointer:    pointer,
+	})
+}
+
+func writeProblem(w http.ResponseWriter, status int, detail string, item ProblemError) {
+	title := http.StatusText(status)
+	if status == http.StatusUnprocessableEntity {
+		title = "Unprocessable Content"
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(ProblemDetails{
+		Type:   "about:blank",
+		Title:  title,
+		Status: status,
+		Detail: detail,
+		Errors: []ProblemError{item},
+	})
 }
 
 func writeHasDependentsErr(w http.ResponseWriter, err error) {
@@ -322,9 +523,45 @@ func writeAccountMissingErr(w http.ResponseWriter, err error) {
 	})
 }
 
-// WriteErrMsg writes a JSON error body with the given HTTP status, code and
-// message.
+func isCurrencyChangeBlocked(err error) bool {
+	var typed domain.CurrencyChangeBlockedError
+	return errors.As(err, &typed)
+}
+
+func writeCurrencyChangeBlockedErr(w http.ResponseWriter, err error) {
+	var typed domain.CurrencyChangeBlockedError
+	if !errors.As(err, &typed) {
+		WriteErrMsg(w, http.StatusConflict, "conflict", err.Error())
+		return
+	}
+	errorBody := map[string]any{
+		"code":       "currency_change_blocked",
+		"message":    err.Error(),
+		"field":      "currency",
+		"path":       "groups." + typed.TargetID + ".currency",
+		"constraint": "all_members_economically_empty",
+	}
+	if typed.Scope == domain.ScopeAccount {
+		errorBody["account"] = typed.TargetID
+		errorBody["path"] = "accounts." + typed.TargetID + ".currency"
+		errorBody["constraint"] = "economically_empty"
+	}
+	WriteJSON(w, http.StatusConflict, map[string]any{"error": errorBody})
+}
+
+// WriteErrMsg writes the legacy error envelope for non-validation errors.
+// Existing validation call sites are normalized onto RFC 9457: malformed URL
+// encoding remains 400, while every syntactically valid constraint failure is
+// 422.
 func WriteErrMsg(w http.ResponseWriter, status int, code, message string) {
+	if status == http.StatusBadRequest && code == "validation" {
+		if strings.HasPrefix(message, "invalid URL encoding") {
+			WriteBadRequestProblem(w, message, "url_encoding")
+			return
+		}
+		WriteValidationProblem(w, message, "", "")
+		return
+	}
 	WriteJSON(w, status, map[string]any{
 		"error": map[string]string{
 			"code":    code,

@@ -1843,7 +1843,7 @@ describe("Execution report status-driven fields", () => {
     expect(screen.getByLabelText("Fill price")).toHaveValue("12");
     expect(screen.getByLabelText("Leaves quantity")).toHaveValue("1");
     expect(screen.getByLabelText("Commission amount")).toHaveValue("0.50");
-    expect(screen.getByRole("button", { name: "Fee" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Rebate" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -2046,7 +2046,7 @@ describe("Execution report status-driven fields", () => {
         {
           status: "cancelled",
           leavesQuantity: "2",
-          commission: { amount: "-0.25", currency: "USD" },
+          commission: { amount: "0.25", currency: "USD" },
           force: true,
         },
       ),
@@ -2232,7 +2232,7 @@ describe("Execution report status-driven fields", () => {
           price: "12",
           leavesQuantity: "0",
           lockPrice: "12",
-          commission: { amount: "-0.50", currency: "USD" },
+          commission: { amount: "0.50", currency: "USD" },
         },
       ),
     );
@@ -2517,7 +2517,7 @@ describe("Execution report status-driven fields", () => {
         {
           status: "accepted",
           leavesQuantity: "2",
-          commission: { amount: "-0.50", currency: "USD" },
+          commission: { amount: "0.50", currency: "USD" },
         },
       ),
     );

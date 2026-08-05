@@ -209,6 +209,7 @@ type auditDTO struct {
 	Action       string    `json:"action"`
 	Account      string    `json:"account"`
 	AccountTitle string    `json:"accountTitle"`
+	Asset        string    `json:"asset"`
 	// Group is the structured group handle of a group action, so a reader
 	// selects a group's rows by identity instead of matching the free-form
 	// detail text, which a crafted group code can spoof.
@@ -405,6 +406,7 @@ func toAuditDTO(row domain.AuditRow) auditDTO {
 		Action:       string(row.Action),
 		Account:      string(row.Account),
 		AccountTitle: row.AccountTitle,
+		Asset:        row.Asset,
 		Group:        row.Group,
 		Detail:       row.Detail,
 		Source:       string(row.Source),
@@ -1240,6 +1242,7 @@ type eventReproductionRequestDTO struct {
 	PriceCurrency   string                     `json:"priceCurrency"`
 	AccountID       string                     `json:"accountId"`
 	Verdict         string                     `json:"verdict"`
+	Rejects         []orderRejectDTO           `json:"rejects,omitempty"`
 	ExecutionReport *executionReportRequestDTO `json:"executionReport,omitempty"`
 	Result          *attestationResultDTO      `json:"result"`
 }
@@ -1414,6 +1417,7 @@ type orderEventDTO struct {
 	RejectPolicy    string                     `json:"rejectPolicy,omitempty"`
 	RejectReason    string                     `json:"rejectReason,omitempty"`
 	RejectDetails   string                     `json:"rejectDetails,omitempty"`
+	Rejects         []orderRejectDTO           `json:"rejects,omitempty"`
 	FillQuantity    string                     `json:"fillQuantity,omitempty"`
 	FillPrice       string                     `json:"fillPrice,omitempty"`
 	FillLockPrice   string                     `json:"fillLockPrice,omitempty"`
@@ -1460,6 +1464,7 @@ func toOrderEventDTO(e domain.OrderEvent) orderEventDTO {
 		RejectPolicy:    e.Payload.RejectPolicy,
 		RejectReason:    e.Payload.RejectReason,
 		RejectDetails:   e.Payload.RejectDetails,
+		Rejects:         toOrderRejectDTOs(e.Payload.Rejects),
 		FillQuantity:    e.Payload.FillQuantity,
 		FillPrice:       e.Payload.FillPrice,
 		FillLockPrice:   e.Payload.FillLockPrice,

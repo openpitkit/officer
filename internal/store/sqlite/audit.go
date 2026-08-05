@@ -18,11 +18,11 @@
 // Audit group of the SQLite store: the append-only compliance trail. An audit
 // row is a machine record addressed by its opaque external id; the surrogate id
 // never crosses the interface boundary. Account and actor strings are immutable
-// snapshots, so dictionary deletes do not rewrite history. A nullable account
-// identity link supports current-code filtering after account renames. The
-// asset code is an immutable snapshot of the asset an action targeted. Listings
-// honor the (at DESC, id DESC) index and apply the account, asset, source, and
-// action filters in the query so the limit bounds the filtered set.
+// snapshots, so dictionary deletes do not rewrite history. Account, asset, and
+// group filters use those captured strings rather than following a mutable
+// identity link. Listings honor the (at DESC, id DESC) index and apply the
+// account, asset, source, and action filters in the query so the limit bounds
+// the filtered set.
 
 package sqlite
 
@@ -164,10 +164,8 @@ func (r *realmStore) ListAuditFiltered(
 	q := auditSelect + ` WHERE 1 = 1`
 	args := make([]any, 0, 4)
 	if filter.Account != "" {
-		q += ` AND (au.account_code = ? OR au.account_id = (
-			SELECT id FROM account WHERE code = ?
-		))`
-		args = append(args, filter.Account.String(), filter.Account.String())
+		q += ` AND au.account_code = ?`
+		args = append(args, filter.Account.String())
 	}
 	if filter.Source != "" {
 		dictionaries, err := r.dictionaries()
@@ -371,22 +369,7 @@ func appendAuditCategoryFilter(
 func appendAuditAccountMatcher(
 	clauses *[]string, args *[]any, matcher fwstore.TextMatcher,
 ) {
-	if exact, ok := exactMatcherValue(matcher); ok {
-		*clauses = append(*clauses, `(au.account_code = ? OR au.account_id = (
-			SELECT id FROM account WHERE code = ?
-		))`)
-		*args = append(*args, exact, exact)
-		return
-	}
 	appendMatcher(clauses, args, "au.account_code", matcher)
-}
-
-func exactMatcherValue(matcher fwstore.TextMatcher) (string, bool) {
-	if !matcher.AnchorStart || !matcher.AnchorEnd || len(matcher.Fragments) != 1 {
-		return "", false
-	}
-	value := matcher.Fragments[0]
-	return value, value != ""
 }
 
 func scanAuditListRow(

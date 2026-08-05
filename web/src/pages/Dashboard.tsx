@@ -31,7 +31,7 @@ const READY_WIDGET_IDS = [
   "market-data-card",
   "activity-columns",
 ];
-const ALWAYS_WIDGET_IDS = ["audit-strip"];
+const AUDIT_WIDGET_IDS = ["audit-strip"];
 
 export function Dashboard() {
   const { t } = useTranslation("dashboard");
@@ -64,15 +64,17 @@ export function Dashboard() {
         <ErrorState message={load.error} onRetry={reload} />
       )}
       {load.state === "ready" && (
-        <DashboardWidgets<DashboardReadyWidgetProps>
-          ids={READY_WIDGET_IDS}
-          props={{
-            counts: load.data.counts,
-            activity: load.data.activity,
-          }}
-        />
+        <>
+          <DashboardWidgets<DashboardReadyWidgetProps>
+            ids={READY_WIDGET_IDS}
+            props={{
+              counts: load.data.counts,
+              activity: load.data.activity,
+            }}
+          />
+          <DashboardWidgets ids={AUDIT_WIDGET_IDS} />
+        </>
       )}
-      <DashboardWidgets ids={ALWAYS_WIDGET_IDS} />
     </Page>
   );
 }

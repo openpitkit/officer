@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	bindmd "go.openpit.dev/openpit/marketdata"
 	"go.openpit.dev/openpit/param"
@@ -42,15 +43,18 @@ type instrumentKey struct {
 // guarded by mu.
 type marketDataSink struct {
 	service *bindmd.Service
+	now     func() time.Time
 
-	mu  sync.Mutex
-	ids map[instrumentKey]bindmd.InstrumentID
+	mu        sync.Mutex
+	ids       map[instrumentKey]bindmd.InstrumentID
+	publishMu sync.Mutex
 }
 
 // newMarketDataSink wraps service into a Sink with an empty id cache.
 func newMarketDataSink(service *bindmd.Service) *marketDataSink {
 	return &marketDataSink{
 		service: service,
+		now:     time.Now,
 		ids:     make(map[instrumentKey]bindmd.InstrumentID),
 	}
 }
@@ -61,6 +65,9 @@ func newMarketDataSink(service *bindmd.Service) *marketDataSink {
 // are wrapped as officer errors. The SDK market-data service is FullSync for a
 // non-NoSync engine, so connector goroutines may push off the account lanes.
 func (s *marketDataSink) Push(update marketdata.QuoteUpdate) error {
+	s.publishMu.Lock()
+	defer s.publishMu.Unlock()
+
 	instrument, err := instrumentFrom(update.Base, update.Quote)
 	if err != nil {
 		return err
@@ -75,15 +82,49 @@ func (s *marketDataSink) Push(update marketdata.QuoteUpdate) error {
 	if err != nil {
 		return err
 	}
+	if ttl, sourced := quoteSourceTTL(update.AsOf, s.now()); sourced {
+		if err := s.service.SetInstrumentTTL(id, bindmd.WithinTTL(ttl)); err != nil {
+			return fmt.Errorf(
+				"engine: set source quote ttl %s/%s: %w",
+				update.Base,
+				update.Quote,
+				err,
+			)
+		}
+	} else {
+		if err := s.service.ClearInstrumentTTL(id); err != nil {
+			return fmt.Errorf(
+				"engine: restore quote ttl %s/%s: %w", update.Base, update.Quote, err,
+			)
+		}
+	}
 	if err := s.service.Push(id, quote); err != nil {
 		return fmt.Errorf("engine: push quote %s/%s: %w", update.Base, update.Quote, err)
 	}
 	return nil
 }
 
+// quoteSourceTTL maps the connector's source timestamp onto the remaining SDK
+// lifetime. The SDK retains an expired quote in ErrQuoteExpired, which lets
+// SpotFunds accounting use the last-known FX while market-order pricing treats
+// the same quote as unavailable. A zero timestamp keeps the service default.
+func quoteSourceTTL(asOf, now time.Time) (time.Duration, bool) {
+	if asOf.IsZero() || asOf.After(now) {
+		return 0, false
+	}
+	age := now.Sub(asOf)
+	if age >= MarketDataFreshnessTTL {
+		return 0, true
+	}
+	return MarketDataFreshnessTTL - age, true
+}
+
 // Clear removes the live quote for one instrument without unregistering its
 // stable service id. An instrument this sink has never observed is a no-op.
 func (s *marketDataSink) Clear(base, quote string) error {
+	s.publishMu.Lock()
+	defer s.publishMu.Unlock()
+
 	instrument, err := instrumentFrom(base, quote)
 	if err != nil {
 		return err

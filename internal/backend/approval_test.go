@@ -28,6 +28,7 @@ import (
 	"strings"
 	"testing"
 
+	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
 	fwsigning "go.openpit.dev/officer/framework/signing"
@@ -176,8 +177,13 @@ func TestService_SubmitOrderTokenWorkflowIssuesSignedToken(t *testing.T) {
 	t.Parallel()
 	signer := &fakeSigner{}
 	svc, fn := newTestServiceWithSigner(signer)
+	ctx := auth.ContextWithCaller(context.Background(), domain.Caller{
+		Source: domain.SourceAPI, Principal: "trader-accept",
+	})
 
-	tok, err := svc.SubmitOrderToken(context.Background(), sampleOrder(), backend.SubmitModeHold, domain.MissingAccountCreate)
+	tok, err := svc.SubmitOrderToken(
+		ctx, sampleOrder(), backend.SubmitModeHold, domain.MissingAccountCreate,
+	)
 	if err != nil {
 		t.Fatalf("SubmitOrderToken workflow: %v", err)
 	}
@@ -208,6 +214,9 @@ func TestService_SubmitOrderTokenWorkflowIssuesSignedToken(t *testing.T) {
 	}
 	if p.Nonce == "" || p.IssuedAt == "" {
 		t.Fatalf("payload lifecycle fields missing: %+v", p)
+	}
+	if p.Principal != "trader-accept" {
+		t.Fatalf("payload principal = %q, want trader-accept", p.Principal)
 	}
 	if orderByToken(t, fn, tok).Status != domain.OrderStatusCommitted {
 		t.Fatalf("workflow submit must leave the order committed, got %q",
@@ -252,6 +261,9 @@ func TestService_SubmitOrderTokenImmediateSettles(t *testing.T) {
 	if p.Verdict != "accept" {
 		t.Fatalf("immediate payload verdict = %q, want accept", p.Verdict)
 	}
+	if p.Principal != "" {
+		t.Fatalf("unstamped submit invented principal %q", p.Principal)
+	}
 	if !hasAudit(fn.auditCalls, domain.AuditActionApprovalIssued) {
 		t.Fatalf("immediate must audit approval_issued")
 	}
@@ -269,6 +281,35 @@ func TestService_SubmitOrderTokenImmediateSettles(t *testing.T) {
 	}
 	if att := verdictAttestation(t, getOrderByToken(t, svc, tok)); att == nil {
 		t.Fatalf("immediate order must surface a signed verdict attestation")
+	}
+	detail := getOrderByToken(t, svc, tok)
+	var fill domain.OrderEvent
+	for _, event := range detail.Events {
+		if event.Type == domain.OrderEventFill {
+			fill = event
+			break
+		}
+	}
+	if fill.Payload.ExecutionReport == nil ||
+		fill.Payload.ExecutionReport.ExternalID.IsZero() ||
+		fill.Payload.LeavesQuantity != "0" ||
+		fill.Payload.OrderStatus != string(domain.OrderStatusFilled) {
+		t.Fatalf("immediate fill event = %+v, want complete execution report", fill)
+	}
+	var reportPayload *domain.ApprovalPayload
+	for i := range signer.signed {
+		p := &signer.signed[i]
+		if p.RequestType == string(domain.AttestationRequestExecutionReport) {
+			reportPayload = p
+		}
+	}
+	if reportPayload == nil || reportPayload.ExecutionReport == nil ||
+		reportPayload.ExecutionReport.ExternalID !=
+			fill.Payload.ExecutionReport.ExternalID ||
+		reportPayload.Result == nil ||
+		reportPayload.Result.LeavesQuantity != "0" ||
+		reportPayload.Result.OrderStatus != string(domain.OrderStatusFilled) {
+		t.Fatalf("immediate signed report payload = %+v", reportPayload)
 	}
 }
 
@@ -1182,9 +1223,12 @@ func TestService_SubmitOrderRiskRejectReturnsSignedDecision(t *testing.T) {
 		},
 	}
 	fn.submitResult = &engine.OrderResult{Accepted: false, Rejects: rejects}
+	ctx := auth.ContextWithCaller(context.Background(), domain.Caller{
+		Source: domain.SourceAPI, Principal: "trader-reject",
+	})
 
 	token, err := svc.SubmitOrderToken(
-		context.Background(), sampleOrder(), backend.SubmitModeHold, domain.MissingAccountCreate,
+		ctx, sampleOrder(), backend.SubmitModeHold, domain.MissingAccountCreate,
 	)
 	if err != nil {
 		t.Fatalf("SubmitOrderToken: %v", err)
@@ -1208,6 +1252,17 @@ func TestService_SubmitOrderRiskRejectReturnsSignedDecision(t *testing.T) {
 	}
 	if len(signer.signed) != 2 || signer.signed[1].Verdict != "reject" {
 		t.Fatalf("signed payloads = %+v, want one reject verdict", signer.signed)
+	}
+	payload := signer.signed[1]
+	first := rejects[0]
+	if payload.Principal != "trader-reject" ||
+		payload.RejectCode != first.Code ||
+		payload.RejectScope != first.Scope ||
+		payload.RejectPolicy != first.Policy ||
+		payload.RejectReason != first.Reason ||
+		payload.RejectDetails != first.Details ||
+		!reflect.DeepEqual(payload.Rejects, rejects) {
+		t.Fatalf("signed reject payload = %+v, want principal and exact first reject %+v", payload, first)
 	}
 	wantEvents := eventIDsByType(t, svc, detail.Order.ExternalID.String(),
 		domain.OrderEventSubmitted,

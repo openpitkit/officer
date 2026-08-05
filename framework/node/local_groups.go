@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/framework/engine"
@@ -401,19 +402,19 @@ func (n *localNode) applyGroupBlock(
 	return lane.UnblockGroup(ctx, code)
 }
 
-// DeleteGroup detaches the group's members, clears its reachable runtime state,
-// removes the store row, and finally removes the resolver alias. The operation
-// keeps the live engine on its normal success path; rebuild is reserved for a
-// failed compensation after a partial mutation.
+// DeleteGroup removes the group and its member accounts from the store, rebuilds
+// the engine from the surviving rows, and audits the action. SQLite owns the
+// durable cascade; the prepared snapshot makes the engine transition atomic
+// with that single database delete.
 func (n *localNode) DeleteGroup(
 	ctx context.Context, code string, caller domain.Caller,
 ) error {
-	if err := n.beginLiveIdentityPublication(); err != nil {
+	if err := n.beginEngineRestart(); err != nil {
 		return err
 	}
-	defer n.endLiveIdentityPublication()
+	defer n.endEngineRestart()
 
-	group, ok, err := n.realm.GetGroup(ctx, code)
+	_, ok, err := n.realm.GetGroup(ctx, code)
 	if err != nil {
 		return fmt.Errorf("read group for delete: %w", err)
 	}
@@ -424,193 +425,56 @@ func (n *localNode) DeleteGroup(
 	if err != nil {
 		return fmt.Errorf("list group accounts for delete: %w", err)
 	}
-	if err := n.guardGroupDeleteCurrencyChange(ctx, code); err != nil {
-		return err
-	}
-	haltedAccounts := haltedAccountsForGroupDeletion(members)
-	eng := n.currentEngine()
-	resolver, err := requireDictionaryResolver(eng)
+
+	snapshot, _, err := n.loadSnapshot(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("load snapshot for group delete: %w", err)
 	}
-	spotFundsLimits, err := n.realm.ListSpotFundsPnlBoundsLimits(ctx, "")
+	snapshot = snapshotWithoutGroup(snapshot, code, members)
+	previousEngine := n.currentEngine()
+	next, err := n.build(snapshot)
 	if err != nil {
-		return fmt.Errorf("list group policies for delete: %w", err)
+		return fmt.Errorf("build engine for group delete: %w", err)
 	}
-	hasGroupSpotFundsBarrier := false
-	for _, limit := range spotFundsLimits {
-		if limit.Scope == domain.ScopeAccountGroup && limit.AccountGroup == code {
-			hasGroupSpotFundsBarrier = true
-			break
-		}
+	if next == nil {
+		return fmt.Errorf("build engine for group delete returned nil")
 	}
-
-	memberIDs := make([]domain.AccountID, 0, len(members))
-	for _, account := range members {
-		memberIDs = append(memberIDs, account.Code)
+	if next == previousEngine {
+		return fmt.Errorf("build engine for group delete returned current engine")
 	}
-
-	revertRuntime := func(
-		mutationCtx context.Context,
-		currencyTouched bool,
-		membershipTouched bool,
-		blockTouched bool,
-	) error {
-		var revertErr error
-		if currencyTouched {
-			err := eng.RunGroupSynchronized(
-				mutationCtx, code, func(lane engine.GroupLane) error {
-					return applyGroupCurrency(mutationCtx, lane, code, group.Currency)
-				},
-			)
-			revertErr = errors.Join(
-				revertErr, optionalOperationError("restore group currency", err),
-			)
-		}
-		if membershipTouched && len(memberIDs) != 0 {
-			err := eng.RunGroupSynchronized(
-				mutationCtx, code, func(lane engine.GroupLane) error {
-					return lane.RegisterGroup(mutationCtx, memberIDs, code)
-				},
-			)
-			revertErr = errors.Join(revertErr, optionalOperationError("restore group members", err))
-		}
-		if blockTouched {
-			err := eng.RunGroupSynchronized(
-				mutationCtx, code, func(lane engine.GroupLane) error {
-					return lane.BlockGroup(mutationCtx, code, group.BlockReason)
-				},
-			)
-			revertErr = errors.Join(revertErr, optionalOperationError("restore group block", err))
-		}
-		return revertErr
+	transition, err := n.beginMarketDataTransition(next)
+	if err != nil {
+		next.Stop()
+		return fmt.Errorf("prepare group delete market data: %w", err)
 	}
-	failRuntime := func(
-		cause error,
-		currencyTouched bool,
-		membershipTouched bool,
-		blockTouched bool,
-	) error {
-		mutationCtx := context.WithoutCancel(ctx)
-		revertErr := revertRuntime(
-			mutationCtx, currencyTouched, membershipTouched, blockTouched,
-		)
-		if revertErr == nil {
-			return cause
-		}
-		return n.reconcileEngineAfterFailure(
-			mutationCtx,
-			"reconcile engine after group delete failure",
-			errors.Join(cause, revertErr),
-		)
+	if err := n.replayMarketDataInto(ctx, next); err != nil {
+		n.cancelMarketDataTransition(transition)
+		next.Stop()
+		return fmt.Errorf("replay market data for group delete: %w", err)
 	}
 
-	currencyTouched := true
-	err = eng.RunGroupSynchronized(ctx, code, func(lane engine.GroupLane) error {
-		return lane.ClearGroupCurrency(ctx, code)
+	durableCtx := context.WithoutCancel(ctx)
+	prev, err := n.commitMarketDataTransitionWithHook(transition, next, func() error {
+		if err := n.realm.DeleteGroup(durableCtx, code); err != nil {
+			return fmt.Errorf("delete group: %w", err)
+		}
+		return nil
 	})
 	if err != nil {
-		return failRuntime(
-			fmt.Errorf("clear deleted group currency: %w", err), true, false, false,
-		)
+		n.cancelMarketDataTransition(transition)
+		next.Stop()
+		return fmt.Errorf("commit group delete engine transition: %w", err)
 	}
-
-	membershipRemoved := false
-	if len(memberIDs) != 0 {
-		err = eng.RunGroupSynchronized(ctx, code, func(lane engine.GroupLane) error {
-			return lane.UnregisterGroup(ctx, memberIDs, code)
-		})
-		if err != nil {
-			return failRuntime(
-				fmt.Errorf("unregister deleted group members: %w", err),
-				currencyTouched, true, false,
-			)
-		}
-		membershipRemoved = true
+	if prev != nil && prev != next {
+		prev.Stop()
 	}
-
-	restateBlocks, restateErr := n.restateHaltedAccountPnlsRuntime(
-		ctx, eng, haltedAccounts,
-	)
-	if restateErr != nil {
-		mutationCtx := context.WithoutCancel(ctx)
-		revertErr := revertRuntime(
-			mutationCtx, currencyTouched, membershipRemoved, false,
-		)
-		return n.reconcileEngineAfterFailure(
-			mutationCtx,
-			"reconcile engine after group delete pnl restatement failure",
-			errors.Join(
-				fmt.Errorf("restate halted account pnl after group delete: %w", restateErr),
-				revertErr,
-			),
-		)
-	}
-	if err := n.mirrorPolicyConfigurationBlocks(
-		ctx, domain.PolicySpotFundsPnlBoundsKillSwitch, restateBlocks,
-	); err != nil {
-		return err
-	}
-	if err := n.persistHaltedAccountPnlRestatements(
-		context.WithoutCancel(ctx), haltedAccounts,
-	); err != nil {
+	if err := n.mirrorSeedAccountBlocks(durableCtx, next); err != nil {
 		return n.fatalPostEngineAuditByCode(
-			"persist halted account pnl after group delete",
-			"group",
-			code,
-			fmt.Errorf("persist halted account pnl: %w", err),
+			"mirror group delete seed blocks", "group", code,
+			fmt.Errorf("mirror group delete seed blocks: %w", err),
 		)
 	}
-
-	unblocked := false
-	if group.Blocked {
-		err = eng.RunGroupSynchronized(ctx, code, func(lane engine.GroupLane) error {
-			return lane.UnblockGroup(ctx, code)
-		})
-		if err != nil {
-			return failRuntime(
-				fmt.Errorf("unblock deleted group: %w", err),
-				currencyTouched, membershipRemoved, true,
-			)
-		}
-		unblocked = true
-	}
-
-	if err := n.realm.DeleteGroup(ctx, code); err != nil {
-		return failRuntime(
-			fmt.Errorf("delete group: %w", err),
-			currencyTouched, membershipRemoved, unblocked,
-		)
-	}
-	if err := resolver.RemoveGroupResolverEntry(group); err != nil {
-		mutationCtx := context.WithoutCancel(ctx)
-		return n.reconcileEngineAfterFailure(
-			mutationCtx,
-			"reconcile engine after group resolver removal failure",
-			fmt.Errorf("remove group resolver entry: %w", err),
-		)
-	}
-	if hasGroupSpotFundsBarrier {
-		result, configureErr := n.reconfigurePolicy(
-			ctx, domain.PolicySpotFundsPnlBoundsKillSwitch,
-		)
-		if configureErr != nil {
-			mutationCtx := context.WithoutCancel(ctx)
-			return n.reconcileEngineAfterFailure(
-				mutationCtx,
-				"reconcile engine after group policy delete failure",
-				fmt.Errorf("configure policies after group delete: %w", configureErr),
-			)
-		}
-		if err := n.mirrorPolicyConfigurationBlocks(
-			context.WithoutCancel(ctx),
-			domain.PolicySpotFundsPnlBoundsKillSwitch,
-			result.AccountBlocks,
-		); err != nil {
-			return err
-		}
-	}
-	if err := n.audit(context.WithoutCancel(ctx), caller, store.AuditEntry{
+	if err := n.audit(durableCtx, caller, store.AuditEntry{
 		Action: domain.AuditActionDeleteGroup,
 		Group:  code,
 		Detail: fmt.Sprintf("delete group %s", code),
@@ -621,4 +485,25 @@ func (n *localNode) DeleteGroup(
 		)
 	}
 	return nil
+}
+
+func snapshotWithoutGroup(
+	snapshot engine.Snapshot,
+	group string,
+	members []domain.Account,
+) engine.Snapshot {
+	for _, account := range members {
+		snapshot = snapshotWithoutAccount(snapshot, account.Code)
+	}
+	snapshot.Groups = slices.DeleteFunc(
+		snapshot.Groups,
+		func(row domain.AccountGroup) bool { return row.Code == group },
+	)
+	snapshot.SpotFundsPnlBoundsLimits = slices.DeleteFunc(
+		snapshot.SpotFundsPnlBoundsLimits,
+		func(row domain.LimitSpotFundsPnlBounds) bool {
+			return row.AccountGroup == group
+		},
+	)
+	return snapshot
 }

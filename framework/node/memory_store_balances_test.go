@@ -20,6 +20,7 @@ package node
 import (
 	"context"
 	"errors"
+	"slices"
 	"sort"
 	"testing"
 	"time"
@@ -83,7 +84,7 @@ func (r *memoryRealm) balanceWithAccountCurrency(
 	return balance
 }
 
-func (r *memoryRealm) ListAccountsWithOpenBalances(
+func (r *memoryRealm) ListAccountsBlockingCurrencyChange(
 	_ context.Context, accounts []domain.AccountID,
 ) ([]domain.AccountID, error) {
 	r.mu.RLock()
@@ -92,27 +93,59 @@ func (r *memoryRealm) ListAccountsWithOpenBalances(
 	for _, account := range accounts {
 		allow[account] = struct{}{}
 	}
+	allowed := func(account domain.AccountID) bool {
+		if len(allow) == 0 {
+			return true
+		}
+		_, ok := allow[account]
+		return ok
+	}
 	seen := make(map[domain.AccountID]struct{})
 	for accountID, account := range r.accounts {
-		if len(allow) > 0 {
-			if _, ok := allow[accountID]; !ok {
-				continue
-			}
+		if !allowed(accountID) {
+			continue
 		}
-		if account.PnlHaltReason == "" && !decimalZeroOrEmpty(account.Pnl) {
+		if account.PnlHaltReason != "" || !decimalZeroOrEmpty(account.Pnl) {
 			seen[accountID] = struct{}{}
 		}
 	}
 	for _, balance := range r.balances {
-		if len(allow) > 0 {
-			if _, ok := allow[balance.Account]; !ok {
-				continue
-			}
+		if allowed(balance.Account) && balanceHoldsValue(balance) {
+			seen[balance.Account] = struct{}{}
 		}
-		if !balanceHoldsValue(balance) {
+	}
+	for _, order := range r.orders {
+		if !allowed(order.Account) {
 			continue
 		}
-		seen[balance.Account] = struct{}{}
+		if slices.Contains(
+			domain.OrderStatusesEligibleForFill(), order.Status,
+		) {
+			seen[order.Account] = struct{}{}
+		}
+	}
+	for _, limit := range r.spotFundsPnlBoundsLimits {
+		if limit.LowerBound == "" && limit.UpperBound == "" {
+			continue
+		}
+		switch limit.Scope {
+		case domain.ScopeGlobal:
+			for accountID := range r.accounts {
+				if allowed(accountID) {
+					seen[accountID] = struct{}{}
+				}
+			}
+		case domain.ScopeAccount:
+			if allowed(limit.Account) {
+				seen[limit.Account] = struct{}{}
+			}
+		case domain.ScopeAccountGroup:
+			for accountID, account := range r.accounts {
+				if allowed(accountID) && account.GroupCode == limit.AccountGroup {
+					seen[accountID] = struct{}{}
+				}
+			}
+		}
 	}
 	out := make([]domain.AccountID, 0, len(seen))
 	for account := range seen {
@@ -122,21 +155,18 @@ func (r *memoryRealm) ListAccountsWithOpenBalances(
 	return out, nil
 }
 
-// balanceHoldsValue mirrors the SQLite open-balance predicate: a non-zero
-// amount or cost basis, or a realized P&L that is not behind a halt. A halted
-// realized P&L is historical, not authoritative, so the number behind the halt
-// does not count. It is deliberately not balanceIsEmpty, which additionally
-// keeps a halted row alive so the halt stays persisted.
+// balanceHoldsValue mirrors the SQLite currency-guard predicate: a non-zero
+// amount or cost basis, or a retained realized-P&L halt.
 func balanceHoldsValue(balance domain.Balance) bool {
 	return !decimalZeroOrEmpty(balance.Available) ||
 		!decimalZeroOrEmpty(balance.Held) ||
 		!decimalZeroOrEmpty(balance.Incoming) ||
 		!decimalZeroOrEmpty(balance.AverageEntryPrice) ||
-		(balance.RealizedPnlHaltReason == "" &&
-			!decimalZeroOrEmpty(balance.RealizedPnl))
+		balance.RealizedPnlHaltReason != "" ||
+		!decimalZeroOrEmpty(balance.RealizedPnl)
 }
 
-func TestMemoryRealmListAccountsWithOpenBalancesIncludesAccountPnl(t *testing.T) {
+func TestMemoryRealmListAccountsBlockingCurrencyChangeIncludesAccountPnl(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	realm := newMemoryStore("node.db").realm
@@ -162,35 +192,90 @@ func TestMemoryRealmListAccountsWithOpenBalancesIncludesAccountPnl(t *testing.T)
 		t.Fatalf("UpsertBalance(halted-pnl): %v", err)
 	}
 
-	got, err := realm.ListAccountsWithOpenBalances(ctx, nil)
+	got, err := realm.ListAccountsBlockingCurrencyChange(ctx, nil)
 	if err != nil {
-		t.Fatalf("ListAccountsWithOpenBalances(all): %v", err)
+		t.Fatalf("ListAccountsBlockingCurrencyChange(all): %v", err)
 	}
-	if len(got) != 1 || got[0] != "account-pnl" {
-		t.Fatalf("ListAccountsWithOpenBalances(all) = %v, want account-pnl", got)
+	if len(got) != 3 || got[0] != "account-pnl" || got[1] != "halted-pnl" ||
+		got[2] != "halted-stale-pnl" {
+		t.Fatalf("ListAccountsBlockingCurrencyChange(all) = %v, want all non-empty P&L states", got)
 	}
 
-	got, err = realm.ListAccountsWithOpenBalances(
+	got, err = realm.ListAccountsBlockingCurrencyChange(
 		ctx, []domain.AccountID{"zero-pnl"},
 	)
 	if err != nil {
-		t.Fatalf("ListAccountsWithOpenBalances(zero-pnl): %v", err)
+		t.Fatalf("ListAccountsBlockingCurrencyChange(zero-pnl): %v", err)
 	}
 	if len(got) != 0 {
-		t.Fatalf("ListAccountsWithOpenBalances(zero-pnl) = %v, want empty", got)
+		t.Fatalf("ListAccountsBlockingCurrencyChange(zero-pnl) = %v, want empty", got)
 	}
 
-	// Neither a halt flag nor the stale number the engine left behind it carries
-	// a recomputable value, so neither counts.
-	got, err = realm.ListAccountsWithOpenBalances(
+	got, err = realm.ListAccountsBlockingCurrencyChange(
 		ctx, []domain.AccountID{"halted-pnl", "halted-stale-pnl"},
 	)
 	if err != nil {
-		t.Fatalf("ListAccountsWithOpenBalances(halted-pnl): %v", err)
+		t.Fatalf("ListAccountsBlockingCurrencyChange(halted-pnl): %v", err)
 	}
-	if len(got) != 0 {
-		t.Fatalf("ListAccountsWithOpenBalances(halted-pnl) = %v, want empty", got)
+	if len(got) != 2 || got[0] != "halted-pnl" || got[1] != "halted-stale-pnl" {
+		t.Fatalf("ListAccountsBlockingCurrencyChange(halted-pnl) = %v, want both halted accounts", got)
 	}
+}
+
+func TestMemoryRealmListAccountsBlockingCurrencyChangeOrderStatuses(t *testing.T) {
+	t.Parallel()
+
+	for _, status := range domain.OrderStatusesEligibleForFill() {
+		t.Run(string(status), func(t *testing.T) {
+			ctx := context.Background()
+			realm := newMemoryStore(string(status) + ".db").realm
+			const account domain.AccountID = "acc-1"
+			if _, err := realm.CreateAccount(ctx, domain.Account{Code: account}); err != nil {
+				t.Fatalf("CreateAccount: %v", err)
+			}
+			if _, err := realm.CreateOrder(ctx, domain.Order{
+				Account: account,
+				Status:  status,
+			}); err != nil {
+				t.Fatalf("CreateOrder(%s): %v", status, err)
+			}
+
+			got, err := realm.ListAccountsBlockingCurrencyChange(
+				ctx, []domain.AccountID{account},
+			)
+			if err != nil {
+				t.Fatalf("ListAccountsBlockingCurrencyChange(%s): %v", status, err)
+			}
+			if len(got) != 1 || got[0] != account {
+				t.Fatalf("active order %s blockers = %v, want %s", status, got, account)
+			}
+		})
+	}
+
+	t.Run("filled", func(t *testing.T) {
+		ctx := context.Background()
+		realm := newMemoryStore("filled.db").realm
+		const account domain.AccountID = "acc-1"
+		if _, err := realm.CreateAccount(ctx, domain.Account{Code: account}); err != nil {
+			t.Fatalf("CreateAccount: %v", err)
+		}
+		if _, err := realm.CreateOrder(ctx, domain.Order{
+			Account: account,
+			Status:  domain.OrderStatusFilled,
+		}); err != nil {
+			t.Fatalf("CreateOrder(filled): %v", err)
+		}
+
+		got, err := realm.ListAccountsBlockingCurrencyChange(
+			ctx, []domain.AccountID{account},
+		)
+		if err != nil {
+			t.Fatalf("ListAccountsBlockingCurrencyChange(filled): %v", err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("filled order blockers = %v, want empty", got)
+		}
+	})
 }
 
 func TestMemoryRealmListBalanceRowsValidatesAndDerivesCurrency(t *testing.T) {

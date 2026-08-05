@@ -20,6 +20,7 @@ package node
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"go.openpit.dev/officer/framework/domain"
@@ -122,6 +123,7 @@ func (n *localNode) applyExecutionReport(
 		if len(in.Lock) == 0 && len(detail.Order.Lock) > 0 {
 			in.Lock = detail.Order.Lock
 		}
+		reserveFromLeaves := attachExecutionReservation(&in, detail)
 
 		applied, err := lane.ApplyExecutionReport(ctx, in)
 		if err != nil {
@@ -143,6 +145,7 @@ func (n *localNode) applyExecutionReport(
 			AccountPnl:           persistence.AccountPnl,
 			AccountPnlHaltReason: persistence.AccountPnlHaltReason,
 			Leaves:               persistence.Leaves,
+			ReservedQuantity:     persistence.ReservedQuantity,
 			Balances:             persistence.Balances,
 			Events:               persistence.Events,
 			Trade:                persistence.Trade,
@@ -170,6 +173,9 @@ func (n *localNode) applyExecutionReport(
 		if forcedTerminalBypass {
 			detailText += " forced=true"
 		}
+		if reserveFromLeaves {
+			detailText += " reserveFromLeaves=true"
+		}
 		if err := n.audit(ctx, caller, store.AuditEntry{
 			Action:  domain.AuditActionExecutionReport,
 			Account: in.Account,
@@ -186,6 +192,33 @@ func (n *localNode) applyExecutionReport(
 		return engine.ExecutionReportResult{}, err
 	}
 	return result, nil
+}
+
+// attachExecutionReservation copies Officer's own reserve remainder for the
+// order onto the report and reports whether a terminal report had to substitute
+// the venue leaves for an unrecorded reserve. Only terminal reports substitute:
+// a non-terminal report releases nothing, so an unknown reserve stays unknown
+// rather than being seeded from a venue value Officer never reserved.
+func attachExecutionReservation(
+	in *domain.ExecutionReportInput, detail domain.OrderDetail,
+) bool {
+	in.ReservedQuantity = detail.Order.ReservedQuantity
+	if !domain.OrderStatusTerminal(in.OrderStatus) {
+		return false
+	}
+	quantity, substituted := domain.ResolveTerminalReserveQuantity(
+		in.ReservedQuantity, in.LeavesQuantity,
+	)
+	in.ReservedQuantity = quantity
+	if substituted {
+		slog.Warn(
+			"release terminal reserve from venue leaves qty",
+			"order", in.Order,
+			"leaves", in.LeavesQuantity,
+			"reason", "order carries no recorded reserve",
+		)
+	}
+	return substituted
 }
 
 func (n *localNode) recordWorkflowExecutionReport(

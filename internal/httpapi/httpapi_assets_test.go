@@ -113,7 +113,7 @@ func TestListAssets_BadSort(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/assets?sort=bogus", nil))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 }
@@ -152,7 +152,7 @@ func TestCreateAsset_ValidationError(t *testing.T) {
 	body := bytes.NewBufferString(`{"code":""}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/assets", body))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 	m := bodyMap(t, rec.Result())
@@ -254,7 +254,7 @@ func TestUpdateAsset_ValidationError(t *testing.T) {
 	body := bytes.NewBufferString(`{"title":"Apple"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/assets/AAPL", body))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 	m := bodyMap(t, rec.Result())
@@ -307,7 +307,7 @@ func TestDeleteAsset_ValidationError(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/v1/assets/AAPL", nil))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 	m := bodyMap(t, rec.Result())

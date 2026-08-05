@@ -135,7 +135,7 @@ func TestListLimits_FilterAndPaging(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
 		"/api/v1/limits?account=acc-1&accountGroup=desk-a&asset=AAPL"+
-			"&policy=rate&sort=scope&order=desc&limit=20&offset=40",
+			"&scope=broker&policy=rate&sort=scope&order=desc&limit=20&offset=40",
 		nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", rec.Code)
@@ -163,6 +163,9 @@ func TestListLimits_FilterAndPaging(t *testing.T) {
 	if svc.policyFilter.Kind == nil || *svc.policyFilter.Kind != store.PolicyKindRate {
 		t.Fatalf("kind filter = %v", svc.policyFilter.Kind)
 	}
+	if svc.policyFilter.Scope != domain.ScopeBroker {
+		t.Fatalf("scope filter = %q", svc.policyFilter.Scope)
+	}
 	if svc.policyFilter.Sort.Column != "scope" || !svc.policyFilter.Sort.Descending {
 		t.Fatalf("sort spec = %+v", svc.policyFilter.Sort)
 	}
@@ -179,7 +182,7 @@ func TestListLimits_BadSort(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
 		"/api/v1/limits?sort=unknown", nil))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 }
@@ -192,8 +195,21 @@ func TestListLimits_BadPolicy(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
 		"/api/v1/limits?policy=invalid", nil))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
+	}
+}
+
+func TestListLimits_BadScope(t *testing.T) {
+	r, err := newRouter(&fakeService{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/api/v1/limits?scope=invalid", nil))
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("want 422, got %d", rec.Code)
 	}
 }
 
@@ -205,7 +221,7 @@ func TestListLimits_BadLimit(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
 		"/api/v1/limits?limit=-1", nil))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 }
@@ -418,7 +434,7 @@ func TestPutSpotFundsPnlBoundsLimit_ValidationError(t *testing.T) {
 		"/api/v1/limits/spot-funds-pnl-bounds?missingAccount=create",
 		body,
 	))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 }
@@ -490,7 +506,7 @@ func TestPutRateLimit_ValidationError(t *testing.T) {
 	body := bytes.NewBufferString(`{"scope":"broker","windowMs":1000,"maxOrders":100}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/limits/rate?missingAccount=create", body))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 }

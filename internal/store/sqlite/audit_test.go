@@ -392,7 +392,7 @@ func TestAuditAssetFilter(t *testing.T) {
 	}
 }
 
-func TestAuditAccountFilterMatchesRenamedAccountByIdentity(t *testing.T) {
+func TestAuditAccountFilterUsesImmutableCodeSnapshot(t *testing.T) {
 	ctx, rs := seedAuditFixtures(t)
 	if err := rs.AppendAudit(ctx, AuditEntry{
 		Action:  domain.AuditActionBlock,
@@ -409,23 +409,30 @@ func TestAuditAccountFilterMatchesRenamedAccountByIdentity(t *testing.T) {
 		t.Fatalf("UpdateAccount: %v", err)
 	}
 
-	rows, err := rs.ListAuditFiltered(ctx, domain.AuditFilter{
-		Account: "acc-renamed",
+	page, err := rs.ListAuditRows(ctx, fwstore.AuditListFilter{
+		Account: fwstore.ExactTextMatcher("acc-renamed"),
 		Actions: []domain.AuditAction{
 			domain.AuditActionBlock,
 		},
-	}, 10)
+	})
 	if err != nil {
-		t.Fatalf("ListAuditFiltered(renamed account): %v", err)
+		t.Fatalf("ListAuditRows(renamed account): %v", err)
 	}
-	if len(rows) != 1 {
-		t.Fatalf("renamed account filter len = %d, want 1: %+v", len(rows), rows)
+	if len(page.Rows) != 0 {
+		t.Fatalf("new-code filter pulled old snapshot rows: %+v", page.Rows)
 	}
-	if rows[0].Action != domain.AuditActionBlock {
-		t.Fatalf("action = %q, want block", rows[0].Action)
+
+	page, err = rs.ListAuditRows(ctx, fwstore.AuditListFilter{
+		Account: fwstore.ExactTextMatcher("acc-1"),
+		Actions: []domain.AuditAction{
+			domain.AuditActionBlock,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ListAuditRows(old account): %v", err)
 	}
-	if rows[0].Account != "acc-1" {
-		t.Fatalf("snapshot account = %q, want old code acc-1", rows[0].Account)
+	if len(page.Rows) != 1 || page.Rows[0].Account != "acc-1" {
+		t.Fatalf("old-code snapshot rows = %+v, want original block", page.Rows)
 	}
 }
 

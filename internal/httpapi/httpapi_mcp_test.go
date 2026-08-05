@@ -139,7 +139,7 @@ func TestSetMcpAccess_RejectsUnknownAndMissingEnabled(t *testing.T) {
 				http.MethodPut, "/api/v1/mcp-access/health",
 				bytes.NewBufferString(tc.body),
 			))
-			if rec.Code != http.StatusBadRequest {
+			if rec.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("want 400, got %d", rec.Code)
 			}
 			if len(svc.setMcpCalls) != 0 {

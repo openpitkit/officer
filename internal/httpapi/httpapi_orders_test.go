@@ -139,7 +139,7 @@ func TestListOrders_BadLimit(t *testing.T) {
 			rec := httptest.NewRecorder()
 			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
 				"/api/v1/orders?limit="+tc.limit, nil))
-			if rec.Code != http.StatusBadRequest {
+			if rec.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("want 400, got %d", rec.Code)
 			}
 			m := bodyMap(t, rec.Result())
@@ -173,7 +173,7 @@ func TestListOrders_BadQueryParams(t *testing.T) {
 			rec := httptest.NewRecorder()
 			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
 				"/api/v1/orders"+tc.query, nil))
-			if rec.Code != http.StatusBadRequest {
+			if rec.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("want 400, got %d", rec.Code)
 			}
 			m := bodyMap(t, rec.Result())
@@ -651,7 +651,7 @@ func TestListTrades_BadLimit(t *testing.T) {
 			rec := httptest.NewRecorder()
 			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
 				"/api/v1/trades?limit="+tc.limit, nil))
-			if rec.Code != http.StatusBadRequest {
+			if rec.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("want 400, got %d", rec.Code)
 			}
 		})
@@ -680,7 +680,7 @@ func TestListTrades_BadQueryParams(t *testing.T) {
 			rec := httptest.NewRecorder()
 			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
 				"/api/v1/trades"+tc.query, nil))
-			if rec.Code != http.StatusBadRequest {
+			if rec.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("want 400, got %d", rec.Code)
 			}
 			m := bodyMap(t, rec.Result())
@@ -882,7 +882,7 @@ func TestListAdjustments_BadLimit(t *testing.T) {
 			rec := httptest.NewRecorder()
 			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
 				"/api/v1/adjustments?limit="+tc.limit, nil))
-			if rec.Code != http.StatusBadRequest {
+			if rec.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("want 400, got %d", rec.Code)
 			}
 		})
@@ -907,7 +907,7 @@ func TestListAdjustments_BadQueryParams(t *testing.T) {
 			rec := httptest.NewRecorder()
 			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
 				"/api/v1/adjustments"+tc.query, nil))
-			if rec.Code != http.StatusBadRequest {
+			if rec.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("want 400, got %d", rec.Code)
 			}
 			m := bodyMap(t, rec.Result())
@@ -1028,7 +1028,7 @@ func TestListAccountAdjustments_BadLimit(t *testing.T) {
 			rec := httptest.NewRecorder()
 			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
 				"/api/v1/accounts/acc-1/adjustments?limit="+tc.limit, nil))
-			if rec.Code != http.StatusBadRequest {
+			if rec.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("want 400, got %d", rec.Code)
 			}
 		})
@@ -1088,7 +1088,7 @@ func TestApplyAdjustment_ValidationError(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/accounts/acc-1/adjustments?missingAccount=create", body))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 	m := bodyMap(t, rec.Result())
@@ -1277,7 +1277,7 @@ func TestApplyExecutionReport_QuantityWithoutPrice(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports", body))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
 	}
 	m := bodyMap(t, rec.Result())
@@ -1301,7 +1301,7 @@ func TestApplyExecutionReport_PartialCommission(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports", body))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
 	}
 	m := bodyMap(t, rec.Result())
@@ -1317,6 +1317,7 @@ func TestApplyExecutionReport_PartialCommission(t *testing.T) {
 func TestApplyExecutionReport_CommissionWithoutFill(t *testing.T) {
 	for _, status := range []domain.OrderStatus{
 		domain.OrderStatusAccepted,
+		domain.OrderStatusPartiallyFilled,
 		domain.OrderStatusCancelled,
 	} {
 		t.Run(string(status), func(t *testing.T) {
@@ -1347,6 +1348,29 @@ func TestApplyExecutionReport_CommissionWithoutFill(t *testing.T) {
 				t.Fatalf("commission not forwarded: %+v", svc.execReportIn.Commission)
 			}
 		})
+	}
+}
+
+func TestOrderEventDTOCarriesOrderedRejects(t *testing.T) {
+	t.Parallel()
+	rejects := []domain.OrderReject{
+		{Code: "rate", Scope: "account", Policy: "rate", Details: "first"},
+		{Code: "size", Scope: "order", Policy: "size", Details: "second"},
+	}
+	dto := toOrderEventDTO(domain.OrderEvent{
+		Payload: domain.OrderEventPayload{Rejects: rejects},
+	})
+	if len(dto.Rejects) != len(rejects) {
+		t.Fatalf("rejects = %+v, want %+v", dto.Rejects, rejects)
+	}
+	for i := range rejects {
+		if dto.Rejects[i].Code != rejects[i].Code ||
+			dto.Rejects[i].Scope != rejects[i].Scope ||
+			dto.Rejects[i].Policy != rejects[i].Policy ||
+			dto.Rejects[i].Reason != rejects[i].Reason ||
+			dto.Rejects[i].Details != rejects[i].Details {
+			t.Fatalf("reject %d = %+v, want %+v", i, dto.Rejects[i], rejects[i])
+		}
 	}
 }
 

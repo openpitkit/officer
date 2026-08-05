@@ -70,8 +70,25 @@ func NewRouter(cfg RouterConfig) (http.Handler, error) {
 	router.Use(middleware.RequestID)
 	router.Use(middleware.Recoverer)
 
-	mountV1(router, "/api/v1", cfg.Routes, cfg.Authorizer, domain.SourceAPI, cfg.BodyLimit)
-	mountV1(router, "/app/api/v1", cfg.Routes, cfg.Authorizer, domain.SourcePanel, cfg.BodyLimit)
+	routes := cfg.Routes.Routes()
+	mountV1(
+		router,
+		"/api/v1",
+		routes,
+		cfg.Authorizer,
+		domain.SourceAPI,
+		cfg.BodyLimit,
+		newRuntimeRouteManifestHandler(routes),
+	)
+	mountV1(
+		router,
+		"/app/api/v1",
+		routes,
+		cfg.Authorizer,
+		domain.SourcePanel,
+		cfg.BodyLimit,
+		nil,
+	)
 
 	if cfg.MCP != nil {
 		mcpPath := cfg.MCPPath
@@ -96,14 +113,23 @@ func NewRouter(cfg RouterConfig) (http.Handler, error) {
 func mountV1(
 	router chi.Router,
 	prefix string,
-	registry *RouteRegistry,
+	routes []Route,
 	authorizer Authorizer,
 	source domain.Source,
 	bodyLimit func(*http.Request) int64,
+	manifest http.Handler,
 ) {
 	router.Route(prefix, func(v1 chi.Router) {
 		base := Chain{LimitBody(bodyLimit), StampSource(source)}
-		for _, route := range registry.Routes() {
+		if manifest != nil {
+			register(
+				v1,
+				http.MethodGet,
+				runtimeRouteManifestPath,
+				base.Then(manifest),
+			)
+		}
+		for _, route := range routes {
 			chain := make(Chain, 0, len(base)+1)
 			chain = append(chain, base...)
 			chain = append(chain, AuthorizeMiddleware(authorizer, route.Permission))

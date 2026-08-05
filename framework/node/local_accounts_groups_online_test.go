@@ -20,6 +20,7 @@ package node
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"go.openpit.dev/officer/framework/domain"
@@ -117,7 +118,7 @@ func TestLocalNode_GroupCurrencyFailureCompensatesWithoutRebuild(t *testing.T) {
 	}
 }
 
-func TestLocalNode_AccountGroupCurrencyCRUDStaysOnline(t *testing.T) {
+func TestLocalNode_AccountGroupCRUDRebuildsForCascadeDelete(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
 	eng.enforceResolver = true
@@ -195,28 +196,111 @@ func TestLocalNode_AccountGroupCurrencyCRUDStaysOnline(t *testing.T) {
 	if err := n.SetDefaultGroupCurrency(ctx, "USD", testCaller); err != nil {
 		t.Fatalf("SetDefaultGroupCurrency: %v", err)
 	}
+	next := newFakeEngine()
+	next.enforceResolver = true
+	next.sink = &identityGateSink{}
+	prepareGroupDeleteRebuild(n, probe, next)
 	if err := n.DeleteGroup(ctx, updatedGroup.Code, testCaller); err != nil {
 		t.Fatalf("DeleteGroup: %v", err)
 	}
 
-	account, ok, err := n.realm.GetAccount(ctx, updatedAccount.Code)
-	if err != nil || !ok {
-		t.Fatalf("GetAccount after group delete: ok=%v err=%v", ok, err)
+	if _, ok, err := n.realm.GetAccount(ctx, updatedAccount.Code); err != nil || ok {
+		t.Fatalf("GetAccount after group delete: ok=%v err=%v, want absent", ok, err)
 	}
-	if account.GroupCode != "" || account.EffectiveCurrency != "USD" {
-		t.Fatalf("account after group delete = %+v, want ungrouped USD", account)
+	if len(probe.last.Accounts) != 0 || slices.ContainsFunc(
+		probe.last.Groups,
+		func(group domain.AccountGroup) bool { return group.Code == updatedGroup.Code },
+	) {
+		t.Fatalf("cascade rebuild snapshot = %+v, want no deleted group or member", probe.last)
 	}
-	if _, ok := eng.accountCurrencies[updatedAccount.Code]; ok {
-		t.Fatal("group deletion materialized default currency as an account override")
+	if probe.builds != 2 {
+		t.Fatalf("engine builds = %d, want initial plus cascade rebuild", probe.builds)
 	}
-	if got := eng.effectiveAccountCurrency(updatedAccount.Code); got != "USD" {
-		t.Fatalf("live effective currency = %q, want inherited USD", got)
+	if eng.running || n.currentEngine() != next || n.CurrentMarketDataSink() != sink {
+		t.Fatalf(
+			"cascade transition: old-running=%v current-next=%v sink-stable=%v",
+			eng.running,
+			n.currentEngine() == next,
+			n.CurrentMarketDataSink() == sink,
+		)
 	}
-	if probe.builds != 1 {
-		t.Fatalf("engine builds = %d, want initial build only", probe.builds)
+}
+
+func TestLocalNode_AccountRenameKeepsDependentsOnStableEngineIdentity(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.enforceResolver = true
+	n, _ := newTestNode(t, eng)
+	ctx := context.Background()
+	created, err := n.CreateAccount(
+		ctx,
+		domain.Account{Code: "account-old", Title: "Before"},
+		testCaller,
+	)
+	if err != nil {
+		t.Fatalf("CreateAccount: %v", err)
 	}
-	if got := n.CurrentMarketDataSink(); got != sink {
-		t.Fatal("online account/group CRUD replaced market-data sink")
+	if err := n.realm.UpsertBalance(ctx, domain.Balance{
+		Account:           created.Code,
+		Asset:             "AAPL",
+		Available:         "2",
+		RealizedPnl:       "3",
+		AverageEntryPrice: "10",
+	}); err != nil {
+		t.Fatalf("UpsertBalance: %v", err)
+	}
+	order, err := n.realm.CreateOrder(ctx, domain.Order{
+		Account:     created.Code,
+		BaseAsset:   "AAPL",
+		QuoteAsset:  "USD",
+		Principal:   testCaller.Principal,
+		Source:      testCaller.Source,
+		Side:        domain.OrderSideBuy,
+		AmountKind:  domain.OrderAmountKindQuantity,
+		AmountValue: "1",
+		Price:       "10",
+		Status:      domain.OrderStatusSubmitted,
+	})
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+
+	updated, err := n.UpdateAccount(
+		ctx,
+		testKey(created.Code),
+		domain.Account{Code: "account-new", Title: "After"},
+		testCaller,
+	)
+	if err != nil {
+		t.Fatalf("UpdateAccount with dependents: %v", err)
+	}
+	if updated.EngineAccountID != created.EngineAccountID {
+		t.Fatalf(
+			"engine account id changed: %d -> %d",
+			created.EngineAccountID,
+			updated.EngineAccountID,
+		)
+	}
+	if err := n.SetAccountBlocked(
+		ctx,
+		testKey(updated.Code),
+		true,
+		"renamed identity",
+		domain.MissingAccountReject,
+		testCaller,
+	); err != nil {
+		t.Fatalf("SetAccountBlocked through renamed alias: %v", err)
+	}
+	balance, ok, err := n.realm.GetBalance(ctx, updated.Code, "AAPL")
+	if err != nil || !ok || balance.Available != "2" {
+		t.Fatalf("renamed balance = %+v ok %v err %v", balance, ok, err)
+	}
+	detail, err := n.realm.GetOrder(ctx, order.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder after rename: %v", err)
+	}
+	if detail.Order.Account != updated.Code {
+		t.Fatalf("order account = %q, want %q", detail.Order.Account, updated.Code)
 	}
 }
 
@@ -304,17 +388,15 @@ func TestLocalNode_DeleteGroupClearsCascadedSpotFundsBarrierOnline(t *testing.T)
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 	}
 	eng.configureCalls = nil
+	next := newFakeEngine()
+	next.enforceResolver = true
+	prepareGroupDeleteRebuild(n, probe, next)
 
 	if err := n.DeleteGroup(ctx, "desk", testCaller); err != nil {
 		t.Fatalf("DeleteGroup: %v", err)
 	}
-	if len(eng.configureCalls) != 1 {
-		t.Fatalf("policy configure calls = %+v, want one post-delete refresh", eng.configureCalls)
-	}
-	call := eng.configureCalls[0]
-	if call.policy != domain.PolicySpotFundsPnlBoundsKillSwitch ||
-		len(call.limits.SpotFundsPnlBoundsLimits) != 0 {
-		t.Fatalf("post-delete policy configure = %+v, want empty SpotFunds barriers", call)
+	if len(probe.last.SpotFundsPnlBoundsLimits) != 0 {
+		t.Fatalf("cascade rebuild barriers = %+v, want none", probe.last.SpotFundsPnlBoundsLimits)
 	}
 	limits, err := n.realm.ListSpotFundsPnlBoundsLimits(ctx, "")
 	if err != nil {
@@ -323,12 +405,15 @@ func TestLocalNode_DeleteGroupClearsCascadedSpotFundsBarrierOnline(t *testing.T)
 	if len(limits) != 0 {
 		t.Fatalf("stored SpotFunds barriers after delete = %+v, want none", limits)
 	}
-	if probe.builds != 1 {
-		t.Fatalf("engine builds = %d, want initial build only", probe.builds)
+	if probe.builds != 2 || eng.running || n.currentEngine() != next {
+		t.Fatalf(
+			"cascade engine transition: builds=%d old-running=%v current-next=%v",
+			probe.builds, eng.running, n.currentEngine() == next,
+		)
 	}
 }
 
-func TestLocalNode_DeleteGroupPolicyFailureRebuildsPostDeleteStore(t *testing.T) {
+func TestLocalNode_DeleteGroupBuildFailureLeavesStoreAndEngineUntouched(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
 	eng.enforceResolver = true
@@ -343,25 +428,43 @@ func TestLocalNode_DeleteGroupPolicyFailureRebuildsPostDeleteStore(t *testing.T)
 	}, domain.MissingAccountCreate, testCaller); err != nil {
 		t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
 	}
-	configureErr := errors.New("partial configure failure")
-	eng.configureErr = configureErr
+	buildErr := errors.New("group cascade build failure")
+	n.build = func(engine.Snapshot) (engine.Engine, error) {
+		probe.builds++
+		return nil, buildErr
+	}
 
 	err := n.DeleteGroup(ctx, "desk", testCaller)
-	if !errors.Is(err, configureErr) {
-		t.Fatalf("DeleteGroup error = %v, want configure failure", err)
+	if !errors.Is(err, buildErr) {
+		t.Fatalf("DeleteGroup error = %v, want build failure", err)
 	}
 	if probe.builds != 2 {
-		t.Fatalf("engine builds = %d, want initial plus reconciliation", probe.builds)
+		t.Fatalf("engine builds = %d, want initial plus failed preparation", probe.builds)
 	}
-	if _, ok, getErr := n.realm.GetGroup(ctx, "desk"); getErr != nil || ok {
-		t.Fatalf("GetGroup after reconciled delete: ok=%v err=%v, want absent", ok, getErr)
+	if _, ok, getErr := n.realm.GetGroup(ctx, "desk"); getErr != nil || !ok {
+		t.Fatalf("GetGroup after failed delete: ok=%v err=%v, want preserved", ok, getErr)
 	}
 	limits, listErr := n.realm.ListSpotFundsPnlBoundsLimits(ctx, "")
 	if listErr != nil {
 		t.Fatalf("ListSpotFundsPnlBoundsLimits: %v", listErr)
 	}
-	if len(limits) != 0 {
-		t.Fatalf("stored SpotFunds barriers after reconciled delete = %+v, want none", limits)
+	if len(limits) != 1 {
+		t.Fatalf("stored SpotFunds barriers after failed delete = %+v, want preserved", limits)
+	}
+	if !eng.running || n.currentEngine() != eng {
+		t.Fatal("failed cascade preparation replaced or stopped the live engine")
+	}
+}
+
+func prepareGroupDeleteRebuild(
+	n *localNode,
+	probe *rebuildProbe,
+	next *fakeEngine,
+) {
+	n.build = func(snapshot engine.Snapshot) (engine.Engine, error) {
+		probe.builds++
+		probe.last = snapshot
+		return fakeBuild(next, &probe.last)(snapshot)
 	}
 }
 

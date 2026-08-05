@@ -84,6 +84,9 @@ const (
 	// PnlHaltReasonArithmeticOverflow means exact P&L arithmetic exceeded the
 	// supported numeric range.
 	PnlHaltReasonArithmeticOverflow PnlHaltReason = "arithmetic_overflow"
+	// PnlHaltReasonStaleDenomination means stored P&L or cost basis uses a
+	// previous effective account currency.
+	PnlHaltReasonStaleDenomination PnlHaltReason = "stale_denomination"
 )
 
 // ValidatePnlHaltReason returns ErrInvalid unless r is empty (the engine
@@ -100,7 +103,8 @@ func ValidatePnlHaltReason(r PnlHaltReason) error {
 		PnlHaltReasonMissingAccountCurrency,
 		PnlHaltReasonMissingInitialPnl,
 		PnlHaltReasonMissingCostBasis,
-		PnlHaltReasonArithmeticOverflow:
+		PnlHaltReasonArithmeticOverflow,
+		PnlHaltReasonStaleDenomination:
 		return nil
 	default:
 		return fmt.Errorf("unknown pnl halt reason %q: %w", r, ErrInvalid)
@@ -666,19 +670,6 @@ const (
 	OrderAmountKindVolume   OrderAmountKind = "volume"
 )
 
-// ValidateImmediateOrderAmountKind rejects sizing modes Officer cannot settle
-// without deriving execution data that the caller did not supply.
-func ValidateImmediateOrderAmountKind(kind OrderAmountKind) error {
-	if kind != OrderAmountKindVolume {
-		return nil
-	}
-	return fmt.Errorf(
-		"executed quantity of a cash-denominated order is not derived by "+
-			"Officer and was not supplied in the request: %w",
-		ErrInvalid,
-	)
-}
-
 // OrderStatus is the lifecycle state of an order recorded by Officer.
 type OrderStatus string
 
@@ -789,7 +780,7 @@ func ExecutionReportRequiresEngine(in ExecutionReportInput) (bool, error) {
 			"quantity and price must be provided together",
 		)
 	}
-	if !hasQuantity && (status == OrderStatusFilled ||
+	if !hasQuantity && in.Commission == nil && (status == OrderStatusFilled ||
 		status == OrderStatusPartiallyFilled) {
 		return false, invalidExecutionReport(
 			"quantity and price are required for fill statuses",
@@ -816,10 +807,14 @@ func ExecutionReportRequiresEngine(in ExecutionReportInput) (bool, error) {
 			)
 		}
 	}
-	// The engine's post-trade path has no reject channel: a report that reaches
-	// settlement without leaves is not refused, it latches an account block and
-	// applies nothing. Presence must therefore be enforced before the engine call.
-	// Value and range checks stay engine-owned on that path.
+	// A non-terminal fill hands the caller's leaves to the engine, whose
+	// post-trade path has no reject channel: a report that reaches settlement
+	// without leaves is not refused, it latches an account block and applies
+	// nothing. Presence must therefore be enforced before the engine call. Value
+	// and range checks stay engine-owned on that path. A terminal report never
+	// reaches the engine with this value - Officer supplies the release quantity
+	// from its own reserve ledger - so requiring it there is Officer's own policy:
+	// the venue's account of the order is the record's only account of it.
 	if requiresEngine && in.LeavesQuantity == "" {
 		return false, invalidExecutionReport(
 			"leavesQuantity is required for reports settled by the engine",
@@ -884,6 +879,12 @@ type Order struct {
 	// Leaves is the exact decimal string carried by the last accepted execution
 	// report. Officer stores it unchanged and never substitutes it.
 	Leaves string
+	// ReservedQuantity is the base quantity the engine reserved at submit.
+	// Archives always serialize it: a legacy missing field decodes as empty,
+	// while an explicit "0" remains distinguishable. The two are not equivalent
+	// on a terminal report: "0" releases nothing, while empty is an unknown
+	// reserve that ResolveTerminalReserveQuantity fills from the venue leaves.
+	ReservedQuantity string
 	// Price is the limit price (exact decimal string); empty for market orders.
 	Price string
 	// Principal is the code of the principal who submitted the order; empty when
@@ -918,8 +919,8 @@ type Order struct {
 
 // Commission is a fee or rebate amount paired with its currency.
 type Commission struct {
-	// Amount is the exact decimal commission amount. Negative values are fees;
-	// positive values are rebates.
+	// Amount is the exact decimal commission amount. Positive values are fees;
+	// negative values are rebates.
 	Amount string `json:"amount"`
 	// Currency is the commission currency code.
 	Currency string `json:"currency"`
@@ -987,6 +988,9 @@ type OrderEventPayload struct {
 	RejectPolicy  string `json:"reject_policy,omitempty"`
 	RejectReason  string `json:"reject_reason,omitempty"`
 	RejectDetails string `json:"reject_details,omitempty"`
+	// Rejects preserves the complete ordered engine reject list. The singular
+	// fields above mirror its first entry for legacy event readers.
+	Rejects []OrderReject `json:"rejects,omitempty"`
 
 	// Fill fields - populated for fill events.
 	FillQuantity  string `json:"fill_quantity,omitempty"`
@@ -1123,13 +1127,15 @@ type ExecutionReportInput struct {
 	FillQuantity string
 	// FillPrice is the fill price (exact decimal string).
 	FillPrice string
-	// LeavesQuantity is an exact base-quantity decimal string. For a fill it is
-	// the open quantity after the fill. For a terminal report it is the remaining
-	// quantity the engine must release; Officer records it as reported, without
-	// substituting a value of its own. It is required whenever the report is
-	// settled by the engine - a fill, a commission, or a terminal status - and
-	// optional only for pure workflow status updates.
+	// LeavesQuantity is the venue-reported open base quantity. Officer stores it
+	// unchanged, including on terminal reports; the engine release quantity comes
+	// from the order's persisted reservation state. It is required whenever the
+	// report is settled by the engine - a fill, a commission, or a terminal status
+	// - and optional only for pure workflow status updates.
 	LeavesQuantity string
+	// ReservedQuantity is internal settlement context. It never enters the
+	// persisted venue request or its public representations.
+	ReservedQuantity string `json:"-"`
 	// LockPrice is the reference price for the fill's PnL lock; empty when the
 	// originating order carried no lock.
 	LockPrice string
@@ -1154,6 +1160,24 @@ type ExecutionReportInput struct {
 	// Force bypasses Officer's finalized-order safety check; when omitted or
 	// false, an execution report on a terminal order returns 409 terminal_order.
 	Force bool
+}
+
+// ResolveTerminalReserveQuantity returns the reserve a terminal report releases
+// and whether the venue-reported leaves stood in for an unrecorded one. An empty
+// stored reserve means "unknown" - an order archived before Officer tracked the
+// field - and not "nothing reserved": the engine skips the release entirely for a
+// zero quantity, so reading unknown as zero would strand the reservation with no
+// way left to free it. The venue's own open quantity is then the only remaining
+// account of what the engine still holds. An explicit "0" is a recorded fact and
+// takes no substitute. Callers must record a substitution; it is a guess, not a
+// ledger entry.
+func ResolveTerminalReserveQuantity(
+	reserved, leaves string,
+) (quantity string, substituted bool) {
+	if reserved != "" {
+		return reserved, false
+	}
+	return leaves, true
 }
 
 // ExecutionReportRequest is the immutable, audit-safe snapshot of the public
@@ -1266,9 +1290,12 @@ type OrderSettlement struct {
 	// former decimal-array lock: display prices are derived from the deserialized
 	// SDK lock, not stored as an array.
 	Lock []byte
-	// Leaves is the order's remaining open base quantity to persist (exact decimal
-	// string); empty leaves the stored value unchanged.
+	// Leaves is the order's venue-reported open base quantity to persist (exact
+	// decimal string); empty leaves the stored value unchanged.
 	Leaves string
+	// ReservedQuantity replaces the stored per-order reserve quantity when
+	// non-empty. Terminal settlements write zero in the same transaction.
+	ReservedQuantity string
 	// Order is the opaque public handle of the order being settled.
 	Order ExternalID
 	// AllowedFrom is an optional status WHERE-guard: when non-empty the order
@@ -1407,10 +1434,11 @@ type ApprovalPayload struct {
 	// Reject verdict — appended with omitempty so an accept envelope
 	// (Verdict="accept", these empty) stays byte-identical to the pre-reject
 	// canonical wire shape. Populated only when Verdict="reject".
-	RejectCode   string `json:"rejectCode,omitempty"`
-	RejectScope  string `json:"rejectScope,omitempty"`
-	RejectPolicy string `json:"rejectPolicy,omitempty"`
-	RejectReason string `json:"rejectReason,omitempty"`
+	RejectCode    string `json:"rejectCode,omitempty"`
+	RejectScope   string `json:"rejectScope,omitempty"`
+	RejectPolicy  string `json:"rejectPolicy,omitempty"`
+	RejectReason  string `json:"rejectReason,omitempty"`
+	RejectDetails string `json:"rejectDetails,omitempty"`
 
 	// Caller who triggered the request; empty when none was recorded. Appended
 	// with omitempty so a submit token with no principal stays deterministic.
@@ -1424,4 +1452,7 @@ type ApprovalPayload struct {
 	// execution reports and recorded order lifecycle events beyond the submit
 	// verdict/estimate above; nil for a plain submit decision.
 	Result *AttestationResult `json:"result,omitempty"`
+	// Rejects is the complete ordered engine reject list for a rejected submit.
+	// The flat Reject* fields above mirror its first entry for legacy readers.
+	Rejects []OrderReject `json:"rejects,omitempty"`
 }

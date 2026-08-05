@@ -37,7 +37,14 @@ export default defineConfig({
       fileName: "index",
     },
     rollupOptions: {
-      external: ["react", "react-dom", "react/jsx-runtime"],
+      external: [
+        "i18next",
+        "i18next-browser-languagedetector",
+        "react",
+        "react-dom",
+        "react-i18next",
+        "react/jsx-runtime",
+      ],
     },
   },
 });

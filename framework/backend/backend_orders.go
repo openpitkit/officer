@@ -188,12 +188,10 @@ func (s *Service) ApplyExecutionReport(
 			order.Status = persistence.OrderStatus
 			order.Source = caller.Source
 			order.Principal = caller.Principal
-			p, err := s.buildExecutionReportPayload(order, persistence)
-			if err != nil {
-				return domain.ApprovalPayload{}, false, err
-			}
-			p.ExecutionReport = event.Payload.ExecutionReport
-			return p, true, nil
+			p, err := s.buildExecutionReportEventPayload(
+				order, event, persistence,
+			)
+			return p, err == nil, err
 		},
 		func(got Attestation, p domain.ApprovalPayload) {
 			priority := 1
@@ -216,6 +214,25 @@ func (s *Service) ApplyExecutionReport(
 			missingAttestationError(domain.AttestationRequestExecutionReport)
 	}
 	return result, att, nil
+}
+
+func (s *Service) buildExecutionReportEventPayload(
+	order domain.Order,
+	event domain.OrderEvent,
+	persistence engine.ExecutionReportPersistence,
+) (domain.ApprovalPayload, error) {
+	if event.Payload.ExecutionReport == nil {
+		return domain.ApprovalPayload{}, fmt.Errorf(
+			"backend: execution-report event has no request snapshot: %w",
+			domain.ErrInvalid,
+		)
+	}
+	payload, err := s.buildExecutionReportPayload(order, persistence)
+	if err != nil {
+		return domain.ApprovalPayload{}, err
+	}
+	payload.ExecutionReport = event.Payload.ExecutionReport
+	return payload, nil
 }
 
 // GetOrder returns the order with its events and trades, addressed by the

@@ -16,15 +16,48 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 import { fileURLToPath, URL } from "node:url";
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
+
+import { createAppRouteManifest } from "./src/openRoutes";
+
+const appRouteManifestFile = "app-route-manifest.json";
+
+function appRouteManifestPlugin(): Plugin {
+  const source = `${JSON.stringify(createAppRouteManifest(), null, 2)}\n`;
+
+  return {
+    name: "app-route-manifest",
+    configureServer(server) {
+      server.middlewares.use((request, response, next) => {
+        if (
+          request.method !== "GET" ||
+          request.url?.split("?", 1)[0] !== `/${appRouteManifestFile}`
+        ) {
+          next();
+          return;
+        }
+        response.statusCode = 200;
+        response.setHeader("Content-Type", "application/json; charset=utf-8");
+        response.end(source);
+      });
+    },
+    generateBundle() {
+      this.emitFile({
+        type: "asset",
+        fileName: appRouteManifestFile,
+        source,
+      });
+    },
+  };
+}
 
 // The dashboard is embedded into the Go binary (go:embed web/dist) and
 // served from the site root by the Pit Officer HTTP layer, so base must
 // be "/" and the build output must land in web/dist.
 export default defineConfig({
   base: "/",
-  plugins: [react()],
+  plugins: [react(), appRouteManifestPlugin()],
   resolve: {
     alias: {
       "@openpit/officer-web": fileURLToPath(

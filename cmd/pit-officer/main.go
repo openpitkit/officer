@@ -50,8 +50,10 @@ import (
 	"time"
 
 	frameworkapp "go.openpit.dev/officer/framework/app"
+	"go.openpit.dev/officer/framework/auth"
 	"go.openpit.dev/officer/framework/domain"
 	"go.openpit.dev/officer/internal/config"
+	officerhttp "go.openpit.dev/officer/internal/httpapi"
 	"go.openpit.dev/officer/internal/logtail"
 	officerruntime "go.openpit.dev/officer/internal/runtime"
 	"go.openpit.dev/officer/openapp"
@@ -348,10 +350,6 @@ func buildServeHandler(
 	buf *logtail.Buffer,
 	lifecycleRequests chan<- lifecycleAction,
 ) (http.Handler, error) {
-	handler, err := app.BuildServeHandler(buf, mcpPath)
-	if err != nil {
-		return nil, err
-	}
 	recordLifecycle := func(
 		ctx context.Context,
 		action lifecycleAction,
@@ -360,63 +358,50 @@ func buildServeHandler(
 		auditAction, detail := lifecycleAudit(action)
 		return app.RecordServiceLifecycle(ctx, auditAction, detail, source)
 	}
-	return withServiceLifecycle(handler, lifecycleRequests, recordLifecycle), nil
+	controller := &serviceLifecycleController{
+		requests: lifecycleRequests,
+		record:   recordLifecycle,
+	}
+	return app.BuildServeHandler(
+		buf,
+		mcpPath,
+		officerhttp.ServiceLifecycleRoutes(
+			controller.handler(lifecycleRestart),
+			controller.handler(lifecycleStop),
+		)...,
+	)
 }
 
 type lifecycleRecorder func(context.Context, lifecycleAction, domain.Source) error
 
-func withServiceLifecycle(
-	next http.Handler,
-	lifecycleRequests chan<- lifecycleAction,
-	recordLifecycle lifecycleRecorder,
-) http.Handler {
-	var lifecycleMu sync.Mutex
-	lifecyclePending := false
+type serviceLifecycleController struct {
+	requests chan<- lifecycleAction
+	record   lifecycleRecorder
+	mu       sync.Mutex
+	pending  bool
+}
 
+func (c *serviceLifecycleController) handler(action lifecycleAction) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		action, source, ok := serviceLifecycleRoute(r.URL.Path)
-		if !ok {
-			next.ServeHTTP(w, r)
-			return
-		}
-		if r.Method != http.MethodPost {
-			w.Header().Set("Allow", http.MethodPost)
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		lifecycleMu.Lock()
-		defer lifecycleMu.Unlock()
-		if lifecyclePending {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.pending {
 			http.Error(w, "lifecycle request already pending", http.StatusConflict)
 			return
 		}
-		if recordLifecycle != nil {
-			if err := recordLifecycle(r.Context(), action, source); err != nil {
+		if c.record != nil {
+			source := auth.CallerFromContext(r.Context()).Source
+			if err := c.record(r.Context(), action, source); err != nil {
 				http.Error(w, "audit lifecycle request", http.StatusInternalServerError)
 				return
 			}
 		}
-		lifecyclePending = true
+		c.pending = true
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		_, _ = w.Write([]byte(`{"accepted":true}` + "\n"))
-		lifecycleRequests <- action
+		c.requests <- action
 	})
-}
-
-func serviceLifecycleRoute(path string) (lifecycleAction, domain.Source, bool) {
-	switch path {
-	case "/api/v1/service/stop":
-		return lifecycleStop, domain.SourceAPI, true
-	case "/app/api/v1/service/stop":
-		return lifecycleStop, domain.SourcePanel, true
-	case "/api/v1/service/restart":
-		return lifecycleRestart, domain.SourceAPI, true
-	case "/app/api/v1/service/restart":
-		return lifecycleRestart, domain.SourcePanel, true
-	default:
-		return "", "", false
-	}
 }
 
 func lifecycleAudit(action lifecycleAction) (domain.AuditAction, string) {

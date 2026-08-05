@@ -81,14 +81,15 @@ func TestSetAccountPnl(t *testing.T) {
 		t.Fatalf("stored halted pnl = %#v, want NULL", storedPnl)
 	}
 
-	// A halted account holds no trustworthy number, so it never counts as open
-	// and cannot block the currency change the reset rides on.
-	open, err := rs.ListAccountsWithOpenBalances(ctx, []domain.AccountID{"acc-1"})
+	// The halt itself is account-currency state and blocks a denomination change.
+	blockers, err := rs.ListAccountsBlockingCurrencyChange(
+		ctx, []domain.AccountID{"acc-1"},
+	)
 	if err != nil {
-		t.Fatalf("ListAccountsWithOpenBalances: %v", err)
+		t.Fatalf("ListAccountsBlockingCurrencyChange: %v", err)
 	}
-	if len(open) != 0 {
-		t.Fatalf("open accounts = %v, want none after the reset", open)
+	if len(blockers) != 1 || blockers[0] != "acc-1" {
+		t.Fatalf("currency blockers = %v, want acc-1", blockers)
 	}
 }
 
@@ -113,5 +114,72 @@ func TestSetAccountPnlRejectsInvalidInput(t *testing.T) {
 		err, domain.ErrNotFound,
 	) {
 		t.Fatalf("SetAccountPnl(missing account) = %v, want ErrNotFound", err)
+	}
+}
+
+func TestUpdateAccountPreservesStableIdentityAndDependents(t *testing.T) {
+	ctx := context.Background()
+	_, rs := newTestStore(t)
+	for _, asset := range []string{"AAPL", "USD"} {
+		if err := rs.CreateAsset(ctx, domain.Asset{Code: asset}); err != nil {
+			t.Fatalf("CreateAsset(%s): %v", asset, err)
+		}
+	}
+	if err := rs.CreatePrincipal(ctx, domain.Principal{Code: "operator"}); err != nil {
+		t.Fatalf("CreatePrincipal: %v", err)
+	}
+	created, err := rs.CreateAccount(ctx, domain.Account{
+		Code: "acc-1", Title: "Before",
+	})
+	if err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if err := rs.UpsertBalance(ctx, domain.Balance{
+		Account:           created.Code,
+		Asset:             "AAPL",
+		Available:         "2",
+		RealizedPnl:       "3",
+		AverageEntryPrice: "10",
+	}); err != nil {
+		t.Fatalf("UpsertBalance: %v", err)
+	}
+	order, err := rs.CreateOrder(ctx, sampleOrder())
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+
+	updated, err := rs.UpdateAccount(ctx, created.Code, domain.Account{
+		Code: "acc-renamed", Title: "After",
+	})
+	if err != nil {
+		t.Fatalf("UpdateAccount with dependents: %v", err)
+	}
+	if updated.EngineAccountID != created.EngineAccountID {
+		t.Fatalf(
+			"engine account id changed: %d -> %d",
+			created.EngineAccountID,
+			updated.EngineAccountID,
+		)
+	}
+	if updated.Title != "After" {
+		t.Fatalf("updated title = %q, want After", updated.Title)
+	}
+	if _, ok, err := rs.GetBalance(ctx, created.Code, "AAPL"); err != nil || ok {
+		t.Fatalf("GetBalance(old code) = ok %v err %v, want no row", ok, err)
+	}
+	balance, ok, err := rs.GetBalance(ctx, updated.Code, "AAPL")
+	if err != nil || !ok {
+		t.Fatalf("GetBalance(new code) = %+v ok %v err %v", balance, ok, err)
+	}
+	if balance.Available != "2" || balance.RealizedPnl != "3" ||
+		balance.AverageEntryPrice != "10" {
+		t.Fatalf("renamed balance = %+v, want original economic state", balance)
+	}
+	detail, err := rs.GetOrder(ctx, order.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder after rename: %v", err)
+	}
+	if detail.Order.Account != updated.Code {
+		t.Fatalf("order account = %q, want %q", detail.Order.Account, updated.Code)
 	}
 }

@@ -25,6 +25,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -184,6 +185,19 @@ func TestSignVerifyRejectRoundTrip(t *testing.T) {
 	p.RejectScope = "account"
 	p.RejectPolicy = "spot_funds"
 	p.RejectReason = "available funds below required amount"
+	p.RejectDetails = "available=5,required=10"
+	p.Rejects = []domain.OrderReject{
+		{
+			Code: "insufficient_funds", Scope: "account",
+			Policy: "spot_funds", Reason: p.RejectReason,
+			Details: p.RejectDetails,
+		},
+		{
+			Code: "rate_limit", Scope: "account",
+			Policy: "rate_limit", Reason: "too many orders",
+			Details: "count=11,limit=10",
+		},
+	}
 
 	token, err := svc.Sign(p)
 	if err != nil {
@@ -194,7 +208,8 @@ func TestSignVerifyRejectRoundTrip(t *testing.T) {
 		t.Fatalf("Verify reject: %v", err)
 	}
 	if !res.Signed || res.Payload.Verdict != "reject" ||
-		res.Payload.RejectCode != "insufficient_funds" {
+		res.Payload.RejectCode != "insufficient_funds" ||
+		!reflect.DeepEqual(res.Payload.Rejects, p.Rejects) {
 		t.Fatalf("reject verify result = %+v", res)
 	}
 }
@@ -432,6 +447,41 @@ func TestCanonicalBytesNoSurrogateAndCarriesHandle(t *testing.T) {
 	}
 	if strings.Contains(string(canonEmpty), `"orderId"`) {
 		t.Fatalf("empty order handle should be omitted: %s", canonEmpty)
+	}
+}
+
+func TestCanonicalBytesLegacyPayloadWithoutPrincipalRemainStable(t *testing.T) {
+	payload := domain.ApprovalPayload{
+		Version:       1,
+		ApprovalID:    "legacy-approval",
+		Mode:          "hold",
+		Instrument:    "AAPL/USD",
+		Side:          "buy",
+		Quantity:      "1",
+		AmountKind:    "quantity",
+		OrderType:     "limit",
+		LimitPrice:    "10",
+		PriceCurrency: "USD",
+		AccountID:     "acc-1",
+		Verdict:       "accept",
+		PolicySummary: "accepted",
+		EstimatePrice: "10",
+		IssuedAt:      "2026-01-02T03:04:05Z",
+		Nonce:         "legacy-nonce",
+	}
+	got, err := CanonicalBytes(payload)
+	if err != nil {
+		t.Fatalf("CanonicalBytes: %v", err)
+	}
+	const want = `{"version":1,"approvalId":"legacy-approval","mode":"hold",` +
+		`"instrument":"AAPL/USD","side":"buy","quantity":"1",` +
+		`"amountKind":"quantity","orderType":"limit","limitPrice":"10",` +
+		`"priceCurrency":"USD","timeInForce":"","accountId":"acc-1",` +
+		`"verdict":"accept","policySummary":"accepted",` +
+		`"estimatePrice":"10","issuedAt":"2026-01-02T03:04:05Z",` +
+		`"nonce":"legacy-nonce","keyId":"","alg":""}`
+	if string(got) != want {
+		t.Fatalf("legacy canonical bytes changed:\n got %s\nwant %s", got, want)
 	}
 }
 

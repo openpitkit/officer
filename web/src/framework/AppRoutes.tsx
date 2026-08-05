@@ -16,6 +16,7 @@
 // Please see https://openpit.dev and the OWNERS file for details.
 
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 
 import { useHasPermission } from "./auth/auth-context";
 import { getPage } from "./registries/pages";
@@ -26,7 +27,19 @@ export function RedirectPreservingQuery({ to }: { to: string }) {
   return <Navigate to={{ pathname: to, search, hash }} replace />;
 }
 
-export function AppRoutes({ home = "/" }: { home?: string }) {
+function NotFoundRoute() {
+  const { t } = useTranslation("errors");
+
+  return (
+    <main className="flex min-h-0 flex-1 items-center justify-center p-6">
+      <h1 className="text-lg font-semibold text-text-muted">
+        {t("code.not_found")}
+      </h1>
+    </main>
+  );
+}
+
+export function AppRoutes() {
   const hasPermission = useHasPermission();
 
   return (
@@ -50,7 +63,7 @@ export function AppRoutes({ home = "/" }: { home?: string }) {
         }
         return <Route key={entry.id} path={entry.path} element={element} />;
       })}
-      <Route path="*" element={<Navigate to={home} replace />} />
+      <Route path="*" element={<NotFoundRoute />} />
     </Routes>
   );
 }

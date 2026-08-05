@@ -329,7 +329,8 @@ func TestGroupBlockMapsEngineReservedGroupError(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("want 403, got %d (%s)", rec.Code, rec.Body.String())
 	}
-	errObj, ok := bodyMap(t, rec.Result())["error"].(map[string]any)
+	body := bodyMap(t, rec.Result())
+	errObj, ok := body["error"].(map[string]any)
 	if !ok || errObj["code"] != "reserved_group" {
 		t.Fatalf("error envelope = %v", errObj)
 	}
@@ -415,16 +416,18 @@ func assertUnknownFieldRejected(
 	t *testing.T, rec *httptest.ResponseRecorder, field string,
 ) {
 	t.Helper()
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d (%s)", rec.Code, rec.Body.String())
 	}
-	errObj, ok := bodyMap(t, rec.Result())["error"].(map[string]any)
+	body := bodyMap(t, rec.Result())
+	errObj, ok := body["error"].(map[string]any)
 	if !ok || errObj["code"] != "validation" {
 		t.Fatalf("error envelope = %v", errObj)
 	}
-	message, _ := errObj["message"].(string)
-	if !strings.Contains(message, field) {
-		t.Fatalf("message %q must name the rejected field %q", message, field)
+	errorsExt, _ := body["errors"].([]any)
+	item, _ := errorsExt[0].(map[string]any)
+	if item["pointer"] != "/"+field {
+		t.Fatalf("problem pointer = %v, want /%s", item["pointer"], field)
 	}
 }
 
@@ -454,7 +457,7 @@ func TestReservedGroupCodeIsRejected(t *testing.T) {
 			}
 			rec := httptest.NewRecorder()
 			r.ServeHTTP(rec, newBlockTestRequest(tc.method, tc.path, tc.body))
-			if rec.Code != http.StatusBadRequest {
+			if rec.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("want 400, got %d (%s)", rec.Code, rec.Body.String())
 			}
 			errObj, ok := bodyMap(t, rec.Result())["error"].(map[string]any)

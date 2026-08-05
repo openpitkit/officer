@@ -324,6 +324,112 @@ func TestOrderReproduction_ByteExactSignedToken(t *testing.T) {
 	assertNoPrivateKeyBytes(t, rawBody, st)
 }
 
+func TestOrderReproduction_PreservesOrderedRejectsAndDetails(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := newReproSigningStore()
+	signer, err := appsigning.New(st)
+	if err != nil {
+		t.Fatalf("new signer: %v", err)
+	}
+	key, err := signer.GenerateKey(ctx)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	publicKey, err := signer.PublicKeyByID(ctx, key.KeyID, "pem-pkcs8")
+	if err != nil {
+		t.Fatalf("public key: %v", err)
+	}
+
+	id := extID("repro-rejects")
+	payload := reproPayload(id)
+	payload.Verdict = "reject"
+	payload.PolicySummary = "rejected"
+	payload.EstimatePrice = ""
+	payload.Rejects = []domain.OrderReject{
+		{
+			Code: "max_order_size", Scope: "order", Policy: "order-size",
+			Reason: "order too large", Details: "qty=100,limit=10",
+		},
+		{
+			Code: "rate_limit", Scope: "account", Policy: "rate-limit",
+			Reason: "too many orders", Details: "count=11,limit=10",
+		},
+	}
+	first := payload.Rejects[0]
+	payload.RejectCode = first.Code
+	payload.RejectScope = first.Scope
+	payload.RejectPolicy = first.Policy
+	payload.RejectReason = first.Reason
+	payload.RejectDetails = first.Details
+	token, err := signer.Sign(payload)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	detail := reproDetail(id, attestationFromToken(t, token))
+	detail.Events[0].Type = domain.OrderEventPreTradeRejected
+	svc := &fakeService{
+		orderDetail: detail,
+		publicKeysByID: map[string]string{
+			key.KeyID: publicKey,
+		},
+	}
+	router, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(
+		rec,
+		httptest.NewRequest(http.MethodGet, reproURL(id), nil),
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := bodyMap(t, rec.Result())
+	request, ok := body["request"].(map[string]any)
+	if !ok {
+		t.Fatalf("request = %T, want object", body["request"])
+	}
+	assertReproducedRejects(t, request["rejects"], payload.Rejects)
+	response, ok := body["response"].(map[string]any)
+	if !ok {
+		t.Fatalf("response = %T, want object", body["response"])
+	}
+	submit, ok := response["submitResponse"].(map[string]any)
+	if !ok {
+		t.Fatalf("submitResponse = %T, want object", response["submitResponse"])
+	}
+	assertReproducedRejects(t, submit["reasons"], payload.Rejects)
+	canonical, _ := body["canonicalApproval"].(string)
+	if !strings.Contains(canonical, `"details":"count=11,limit=10"`) {
+		t.Fatalf("canonical approval lost second reject details: %s", canonical)
+	}
+}
+
+func assertReproducedRejects(
+	t *testing.T, raw any, want []domain.OrderReject,
+) {
+	t.Helper()
+	got, ok := raw.([]any)
+	if !ok || len(got) != len(want) {
+		t.Fatalf("rejects = %#v, want %d entries", raw, len(want))
+	}
+	for i, expected := range want {
+		reject, ok := got[i].(map[string]any)
+		if !ok {
+			t.Fatalf("reject[%d] = %T, want object", i, got[i])
+		}
+		if reject["code"] != expected.Code ||
+			reject["scope"] != expected.Scope ||
+			reject["policy"] != expected.Policy ||
+			reject["reason"] != expected.Reason ||
+			reject["details"] != expected.Details {
+			t.Fatalf("reject[%d] = %#v, want %+v", i, reject, expected)
+		}
+	}
+}
+
 // TestOrderReproduction_RotatedKeyResolvesNonActive verifies that after the
 // signing key rotates, an order signed under the earlier (now inactive) key
 // resolves that earlier key's public material, not the active key.

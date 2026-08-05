@@ -184,7 +184,7 @@ func TestMissingAccountParameterRequired(t *testing.T) {
 			rec := callMissingAccountRoute(
 				t, newMissingAccountService(), route, "",
 			)
-			if rec.Code != http.StatusBadRequest {
+			if rec.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body)
 			}
 			assertValidationCode(t, rec, "missingAccount is required")
@@ -200,7 +200,7 @@ func TestMissingAccountParameterUnknownValue(t *testing.T) {
 			rec := callMissingAccountRoute(
 				t, newMissingAccountService(), route, "?missingAccount=maybe",
 			)
-			if rec.Code != http.StatusBadRequest {
+			if rec.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body)
 			}
 			assertValidationCode(t, rec, "maybe")
@@ -221,7 +221,7 @@ func TestOrderSubmitRejectsEmptyAccountBeforeMissingAccountPolicy(t *testing.T) 
 			rec := callMissingAccountRoute(
 				t, newMissingAccountService(), route, "?missingAccount=reject",
 			)
-			if rec.Code != http.StatusBadRequest {
+			if rec.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body)
 			}
 			assertValidationCode(t, rec, "account id is empty")
@@ -315,7 +315,7 @@ func TestMissingAccountDropCopyRejectsRejectPolicy(t *testing.T) {
 
 	rec := callMissingAccountRoute(t, svc, route, "?missingAccount=reject")
 
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body)
 	}
 	assertValidationCode(t, rec, "already happened")

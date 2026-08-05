@@ -23,7 +23,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
-	"strings"
 	"testing"
 
 	"go.openpit.dev/officer/framework/domain"
@@ -102,7 +101,7 @@ func TestListAssetClasses_BadSort(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/asset-classes?sort=bogus", nil))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 }
@@ -181,7 +180,7 @@ func TestCreateAssetClass_UnknownField(t *testing.T) {
 	body := bytes.NewBufferString(`{"code":"equity","blocked":true}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/asset-classes", body))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 	m := bodyMap(t, rec.Result())
@@ -189,9 +188,10 @@ func TestCreateAssetClass_UnknownField(t *testing.T) {
 	if errObj["code"] != "validation" {
 		t.Fatalf("want code=validation, got %v", errObj["code"])
 	}
-	message, _ := errObj["message"].(string)
-	if !strings.Contains(message, "blocked") {
-		t.Fatalf("message %q must name the rejected field", message)
+	errorsExt, _ := m["errors"].([]any)
+	item, _ := errorsExt[0].(map[string]any)
+	if item["pointer"] != "/blocked" {
+		t.Fatalf("problem pointer = %v", item["pointer"])
 	}
 	if len(svc.assetClasses) != 0 {
 		t.Fatalf("rejected request must not create the class, got %v", svc.assetClasses)
@@ -240,7 +240,7 @@ func TestCreateAssetClass_ValidationError(t *testing.T) {
 	body := bytes.NewBufferString(`{"code":""}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/asset-classes", body))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 	m := bodyMap(t, rec.Result())

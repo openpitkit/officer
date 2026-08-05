@@ -19,9 +19,11 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -1236,5 +1238,154 @@ func TestLocalNode_MissingAccountAdminRejectsWithResolver(t *testing.T) {
 	}
 	if !errors.Is(err, domain.ErrAccountMissing) {
 		t.Fatalf("SetAccountGroup: want ErrAccountMissing, got %v", err)
+	}
+}
+
+// legacyArchivedOrder decodes one order record from archive JSON that predates
+// the reserved-quantity field, so the restored order carries the unknown reserve
+// a real legacy archive produces rather than one the test typed in.
+func legacyArchivedOrder(
+	t *testing.T, id domain.ExternalID, account domain.AccountID,
+) domain.Order {
+	t.Helper()
+	raw := fmt.Sprintf(`{"order":{
+		"ExternalID": %q,
+		"Account": %q,
+		"BaseAsset": "AAPL",
+		"QuoteAsset": "USD",
+		"Side": "buy",
+		"AmountKind": "quantity",
+		"AmountValue": "2",
+		"Price": "400",
+		"Leaves": "2",
+		"Source": "api",
+		"Status": "committed"
+	}}`, id, account)
+	var record backup.OrderRecord
+	if err := json.Unmarshal([]byte(raw), &record); err != nil {
+		t.Fatalf("decode legacy order record: %v", err)
+	}
+	if record.Order.ReservedQuantity != "" {
+		t.Fatalf(
+			"legacy fixture reserve = %q, want the field absent",
+			record.Order.ReservedQuantity,
+		)
+	}
+	return record.Order
+}
+
+// TestLocalNode_TerminalReportReleasesReserveRestoredWithoutTheField drives an
+// order restored from a pre-reserve archive to a terminal report. The stored
+// reserve is unknown, not zero, so the release must fall back to the
+// venue-reported leaves - a zero release makes the engine skip the release
+// entirely and the reservation could never be freed - and the substitution must
+// be visible in the audit trail, not only in the log.
+func TestLocalNode_TerminalReportReleasesReserveRestoredWithoutTheField(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+
+	const account domain.AccountID = "acc-legacy"
+	orderID := externalID(t, "0123456789abcdefghjkmnpqrs")
+	order := legacyArchivedOrder(t, orderID, account)
+	if _, _, err := n.RestoreBackup(ctx, testArchive(backup.Scope{All: true}, backup.Data{
+		Accounts: []backup.Account{{Code: string(account), Currency: "USD"}},
+		Orders:   []backup.OrderRecord{{Order: order}},
+	}), backup.RestoreOptions{
+		Scope: backup.Scope{All: true},
+		Mode:  backup.RestoreModeOverwrite,
+	}, testCaller); err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	restored, err := st.GetOrder(ctx, orderID)
+	if err != nil {
+		t.Fatalf("GetOrder after restore: %v", err)
+	}
+	if restored.Order.ReservedQuantity != "" {
+		t.Fatalf(
+			"restored reserve = %q, want the archive's unknown reserve",
+			restored.Order.ReservedQuantity,
+		)
+	}
+
+	const leaves = "2"
+	if _, err := n.ApplyExecutionReport(ctx, testKey(account), domain.ExecutionReportInput{
+		Order:          orderID,
+		LeavesQuantity: leaves,
+		OrderStatus:    domain.OrderStatusCancelled,
+	}, testCaller); err != nil {
+		t.Fatalf("ApplyExecutionReport: %v", err)
+	}
+
+	if len(eng.execReportCalls) != 1 {
+		t.Fatalf("engine calls = %+v, want one", eng.execReportCalls)
+	}
+	if got := eng.execReportCalls[0].ReservedQuantity; got != leaves {
+		t.Fatalf("released reserve = %q, want the venue leaves %q", got, leaves)
+	}
+	if got := eng.execReportCalls[0].LeavesQuantity; got != leaves {
+		t.Fatalf("stored leaves = %q, want the venue value %q unchanged", got, leaves)
+	}
+	rows, err := st.ListAuditFiltered(ctx, domain.AuditFilter{
+		Actions: []domain.AuditAction{domain.AuditActionExecutionReport},
+	}, 10)
+	if err != nil {
+		t.Fatalf("ListAuditFiltered: %v", err)
+	}
+	if len(rows) != 1 || !strings.Contains(rows[0].Detail, "reserveFromLeaves=true") {
+		t.Fatalf("audit rows = %+v, want a recorded reserve substitution", rows)
+	}
+}
+
+// TestLocalNode_TerminalReportKeepsExplicitZeroReserve pins the other half of
+// the distinction: a recorded zero reserve is a fact, so it releases nothing and
+// nothing is substituted or audited.
+func TestLocalNode_TerminalReportKeepsExplicitZeroReserve(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	eng := newFakeEngine()
+	n, st := newTestNode(t, eng)
+
+	const account domain.AccountID = "acc-1"
+	seedTestAccount(t, st, account)
+	order, err := st.CreateOrder(ctx, domain.Order{
+		Account:          account,
+		Source:           domain.SourceAPI,
+		BaseAsset:        "AAPL",
+		QuoteAsset:       "USD",
+		Side:             domain.OrderSideBuy,
+		AmountKind:       domain.OrderAmountKindQuantity,
+		AmountValue:      "2",
+		Price:            "400",
+		ReservedQuantity: "0",
+		Status:           domain.OrderStatusCommitted,
+	})
+	if err != nil {
+		t.Fatalf("CreateOrder: %v", err)
+	}
+
+	if _, err := n.ApplyExecutionReport(ctx, testKey(account), domain.ExecutionReportInput{
+		Order:          order.ExternalID,
+		LeavesQuantity: "2",
+		OrderStatus:    domain.OrderStatusCancelled,
+	}, testCaller); err != nil {
+		t.Fatalf("ApplyExecutionReport: %v", err)
+	}
+
+	if len(eng.execReportCalls) != 1 {
+		t.Fatalf("engine calls = %+v, want one", eng.execReportCalls)
+	}
+	if got := eng.execReportCalls[0].ReservedQuantity; got != "0" {
+		t.Fatalf("released reserve = %q, want the recorded zero", got)
+	}
+	rows, err := st.ListAuditFiltered(ctx, domain.AuditFilter{
+		Actions: []domain.AuditAction{domain.AuditActionExecutionReport},
+	}, 10)
+	if err != nil {
+		t.Fatalf("ListAuditFiltered: %v", err)
+	}
+	if len(rows) != 1 || strings.Contains(rows[0].Detail, "reserveFromLeaves") {
+		t.Fatalf("audit rows = %+v, want no reserve substitution", rows)
 	}
 }

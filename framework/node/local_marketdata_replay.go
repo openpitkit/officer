@@ -296,7 +296,6 @@ func (n *localNode) replayMarketDataInto(
 	}
 
 	candidates := make([]marketDataReplayCandidate, 0, len(active))
-	now := time.Now()
 	for key, applied := range active {
 		quote, ok := latest[key]
 		instrument := applied.instrument
@@ -318,10 +317,10 @@ func (n *localNode) replayMarketDataInto(
 			})
 			continue
 		}
-		// The native SDK starts its own freshness window at Push and currently
-		// ignores QuoteUpdate.AsOf. Never turn an already stale persisted streaming
-		// snapshot into a fresh engine quote during a rebuild.
-		if !ok || now.Sub(quote.AsOf) > marketdata.FreshnessTTL {
+		// Replay the last-known snapshot even when its source time is stale. The
+		// native sink publishes that state as QuoteExpired, so market pricing
+		// rejects it while SpotFunds accounting can still use it for FX.
+		if !ok {
 			continue
 		}
 		candidates = append(candidates, marketDataReplayCandidate{

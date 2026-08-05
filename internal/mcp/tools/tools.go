@@ -91,11 +91,10 @@ const confirmExecutionToolDescription = "Record confirmation history for a " +
 
 const cancelToolName = "cancel"
 const cancelToolDescription = "Cancel an untouched workflow order by presenting " +
-	"its approval token and a caller-supplied current leavesQuantity. get_order " +
-	"leaves it empty until an execution report is accepted, so obtain the value " +
-	"from venue state. Officer forwards it in the terminal report that releases " +
-	"the pre-trade lock; after execution-report activity, submit an explicit " +
-	"report. Protected and disabled by default."
+	"its approval token and the venue-reported open base leavesQuantity. Officer " +
+	"stores it verbatim and never derives or substitutes it; reserve release " +
+	"comes from the persisted reserve ledger. After execution-" +
+	"report activity, submit an explicit report. Protected and disabled by default."
 
 // RegisterTools registers the open Pit Officer MCP tools and catalog entries.
 func RegisterTools(reg *frameworkmcp.ToolRegistry, src frameworkmcp.Source) {
@@ -429,7 +428,7 @@ type confirmExecutionOutput struct {
 type cancelInput struct {
 	OrderExternalID string `json:"id" jsonschema:"Order id returned by submit_order"`
 	Token           string `json:"token" jsonschema:"Approval token returned by submit_order"`
-	LeavesQuantity  string `json:"leavesQuantity" jsonschema:"Required current leaves quantity supplied by the caller and forwarded to the engine"`
+	LeavesQuantity  string `json:"leavesQuantity" jsonschema:"Required venue-reported open base quantity; Officer stores it verbatim while reserve release comes from the persisted reserve ledger"`
 	Reason          string `json:"reason,omitempty" jsonschema:"Human-readable cancellation reason"`
 }
 

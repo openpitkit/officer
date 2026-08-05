@@ -440,12 +440,13 @@ var policySortKeys = map[string]struct{}{
 }
 
 var balanceSortKeys = map[string]struct{}{
-	"account":   {},
-	"asset":     {},
-	"available": {},
-	"held":      {},
-	"incoming":  {},
-	"updatedAt": {},
+	"account":     {},
+	"asset":       {},
+	"available":   {},
+	"held":        {},
+	"incoming":    {},
+	"realizedPnl": {},
+	"updatedAt":   {},
 }
 
 var adjustmentSortKeys = map[string]struct{}{
@@ -814,10 +815,25 @@ func policyKindFromQuery(q url.Values) (*store.PolicyKind, error) {
 	}
 }
 
+func policyScopeFromQuery(q url.Values) (domain.LimitScope, error) {
+	scope := q.Get("scope")
+	switch scope {
+	case "", domain.ScopeBroker, domain.ScopeGlobal, domain.ScopeAccount,
+		domain.ScopeAsset, domain.ScopeAccountGroup, domain.ScopeAccountAsset:
+		return scope, nil
+	default:
+		return "", fmt.Errorf("invalid scope")
+	}
+}
+
 func policyListFilterFromQuery(q url.Values) (store.PolicyListFilter, error) {
 	account := store.ExactTextMatcher(q.Get("account"))
 	accountGroup := store.ExactTextMatcher(q.Get("accountGroup"))
 	asset := store.ExactTextMatcher(q.Get("asset"))
+	scope, err := policyScopeFromQuery(q)
+	if err != nil {
+		return store.PolicyListFilter{}, err
+	}
 	kind, err := policyKindFromQuery(q)
 	if err != nil {
 		return store.PolicyListFilter{}, err
@@ -834,6 +850,7 @@ func policyListFilterFromQuery(q url.Values) (store.PolicyListFilter, error) {
 		Account:      account,
 		AccountGroup: accountGroup,
 		Asset:        asset,
+		Scope:        scope,
 		Kind:         kind,
 		Sort:         sortSpec,
 		Page:         page,

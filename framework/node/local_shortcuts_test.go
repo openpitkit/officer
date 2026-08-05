@@ -62,13 +62,20 @@ func submitShortcutOrder(
 		t.Fatalf("UpsertBalance: %v", err)
 	}
 	eng.submitLock = []byte("stored-lock")
-	eng.submitOutcomes = []engine.BalanceOutcome{{
-		Asset: "USD",
-		Outcome: domain.AdjustmentOutcomeAccepted{
-			BalanceResult: "8000",
-			HeldResult:    "2000",
+	eng.submitOutcomes = []engine.BalanceOutcome{
+		{
+			Asset: "USD",
+			Outcome: domain.AdjustmentOutcomeAccepted{
+				BalanceResult: "8000",
+				HeldDelta:     "2000",
+				HeldResult:    "2000",
+			},
 		},
-	}}
+		{
+			Asset:   "AAPL",
+			Outcome: domain.AdjustmentOutcomeAccepted{IncomingDelta: "20"},
+		},
+	}
 	order, err := n.SubmitOrder(ctx, testKey("acc-1"), domain.Order{
 		BaseAsset:   "AAPL",
 		QuoteAsset:  "USD",
@@ -139,6 +146,7 @@ func TestLocalNode_CancelOrderUsesStoredLockAndCallerLeaves(t *testing.T) {
 			HeldResult:    "0",
 		},
 	}}
+	eng.execReportReservedQuantity = "0"
 	ctx := context.Background()
 
 	if _, err := n.ConfirmOrder(ctx, order.ExternalID, testCaller); err != nil {
@@ -161,7 +169,8 @@ func TestLocalNode_CancelOrderUsesStoredLockAndCallerLeaves(t *testing.T) {
 	}
 	input := eng.execReportCalls[0]
 	if input.Order != order.ExternalID || input.OrderStatus != domain.OrderStatusCancelled ||
-		input.LeavesQuantity != "7.5" || !bytes.Equal(input.Lock, []byte("stored-lock")) ||
+		input.LeavesQuantity != "7.5" || input.ReservedQuantity != "20" ||
+		!bytes.Equal(input.Lock, []byte("stored-lock")) ||
 		input.FillQuantity != "" || input.FillPrice != "" {
 		t.Fatalf("synthetic cancellation input = %+v", input)
 	}
@@ -169,6 +178,9 @@ func TestLocalNode_CancelOrderUsesStoredLockAndCallerLeaves(t *testing.T) {
 	detail, err := realm.GetOrder(ctx, order.ExternalID)
 	if err != nil {
 		t.Fatalf("GetOrder: %v", err)
+	}
+	if detail.Order.ReservedQuantity != "0" {
+		t.Fatalf("stored reserve = %q, want zero", detail.Order.ReservedQuantity)
 	}
 	foundReport := false
 	for _, event := range detail.Events {

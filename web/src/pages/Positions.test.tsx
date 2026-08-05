@@ -271,6 +271,45 @@ beforeEach(async () => {
 });
 
 describe("Positions adjustment panel", () => {
+  it("cancels after closing an open identity autocomplete", async () => {
+    const user = userEvent.setup();
+    renderPositions();
+
+    const draftRow = screen
+      .getAllByRole("row")
+      .find((row) => row.textContent?.includes("New position"));
+    const openPanel = () =>
+      user.click(
+        within(draftRow!).getByRole("button", {
+          name: /open new adjustment panel/i,
+        }),
+      );
+
+    await openPanel();
+    let panel = screen.getByRole("region", { name: "Adjustment" });
+    const accountInput = within(panel).getByLabelText("Account");
+    await user.type(accountInput, "B");
+    await screen.findByRole("option", { name: "Bucks McMoneyface" });
+    expect(accountInput).toHaveAttribute("aria-expanded", "true");
+
+    await user.keyboard("{Escape}");
+    expect(panel).toBeInTheDocument();
+    expect(accountInput).toHaveAttribute("aria-expanded", "false");
+
+    await user.keyboard("{Escape}");
+    expect(
+      screen.queryByRole("region", { name: "Adjustment" }),
+    ).not.toBeInTheDocument();
+
+    await openPanel();
+    panel = screen.getByRole("region", { name: "Adjustment" });
+    await user.click(within(panel).getByRole("button", { name: "Cancel" }));
+    expect(
+      screen.queryByRole("region", { name: "Adjustment" }),
+    ).not.toBeInTheDocument();
+    expect(createAdjustmentMock).not.toHaveBeenCalled();
+  });
+
   it("opens from a balance row and submits the intended payload", async () => {
     const user = userEvent.setup();
     renderPositions();
@@ -1175,7 +1214,7 @@ describe("Positions balance row asset cell", () => {
       readyPage([
         {
           ...balance,
-          realizedPnlHaltReason: "arithmetic_overflow",
+          realizedPnlHaltReason: "stale_denomination",
         },
       ]),
     );
@@ -1183,7 +1222,7 @@ describe("Positions balance row asset cell", () => {
     renderPositions();
 
     const warning = within(balanceRow()).getByRole("note", {
-      name: /exact arithmetic exceeded the supported numeric range/i,
+      name: /uses a previous effective account currency/i,
     });
     expect(warning).toHaveAttribute("tabindex", "0");
   });

@@ -1348,7 +1348,12 @@ export function Service() {
       }
     >
       {load.state === "loading" && (
-        <div className="space-y-4">
+        <div
+          role="status"
+          aria-busy="true"
+          aria-label="Loading"
+          className="space-y-4"
+        >
           {[0, 1, 2].map((i) => (
             <Card key={i} className="animate-pulse">
               <CardHeader>

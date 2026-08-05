@@ -1214,7 +1214,7 @@ function commissionModeFor(amount: string | undefined): CommissionMode {
   if (amount === undefined || amount.trim() === "") {
     return "none";
   }
-  return amount.trim().startsWith("-") ? "fee" : "rebate";
+  return amount.trim().startsWith("-") ? "rebate" : "fee";
 }
 
 function commissionMagnitude(amount: string | undefined): string {
@@ -1547,8 +1547,8 @@ function ExecReportDialog({
         body.commission = {
           amount:
             commissionMode === "fee"
-              ? `-${commissionAmountValue}`
-              : commissionAmountValue,
+              ? commissionAmountValue
+              : `-${commissionAmountValue}`,
           currency: commissionCurrencyValue,
         };
       }

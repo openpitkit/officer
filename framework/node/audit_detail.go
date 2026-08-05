@@ -97,6 +97,16 @@ func setAccountGroupDetail(id domain.AccountID, prevGroupCode, groupCode string)
 	)
 }
 
+// updateAccountDetail renders an account update. A renamed account is filed
+// under both codes, so the line names both; a title-only update has no
+// transition to state.
+func updateAccountDetail(prevCode, code domain.AccountID) string {
+	if prevCode == code {
+		return fmt.Sprintf("update account %s", code)
+	}
+	return fmt.Sprintf("update account %s -> %s", prevCode, code)
+}
+
 // updateGroupDetail renders a group update. A renamed group is filed under both
 // codes, so the line names both; a title-only update has no transition to state.
 func updateGroupDetail(prevCode, code string) string {

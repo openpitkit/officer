@@ -21,7 +21,11 @@ import { useTranslation } from "react-i18next";
 import type { SigningKey, SigningKeyFormat } from "@/api/types";
 import { useSigningKeys } from "@/api/useSigningKeys";
 import { CopyableSnippet } from "@/components/CopyableSnippet";
-import { ErrorBanner, ErrorState } from "@/components/PageStates";
+import {
+  ErrorBanner,
+  ErrorState,
+  TableSkeleton,
+} from "@/components/PageStates";
 import { Page } from "@/components/Page";
 import { RefreshButton } from "@/components/RefreshButton";
 import { StatRow } from "@/components/StatRow";
@@ -473,7 +477,9 @@ export function SigningKeys() {
         />
       )}
 
-      {(load.state === "ready" || load.state === "loading") && (
+      {load.state === "loading" && <TableSkeleton rows={3} cols={1} />}
+
+      {load.state === "ready" && (
         <div className="space-y-4">
           <ActiveKeyCard activeKey={activeKey} />
 

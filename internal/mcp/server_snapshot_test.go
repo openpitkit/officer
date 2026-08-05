@@ -132,11 +132,10 @@ func TestServerToolSnapshot(t *testing.T) {
 		{
 			name: "cancel",
 			description: "Cancel an untouched workflow order by presenting its " +
-				"approval token and a caller-supplied current leavesQuantity. get_order " +
-				"leaves it empty until an execution report is accepted, so obtain the value " +
-				"from venue state. Officer forwards it in the terminal report that releases " +
-				"the pre-trade lock; after execution-report activity, submit an explicit " +
-				"report. Protected and disabled by default.",
+				"approval token and the venue-reported open base leavesQuantity. Officer " +
+				"stores it verbatim and never derives or substitutes it; reserve release " +
+				"comes from the persisted reserve ledger. After execution-" +
+				"report activity, submit an explicit report. Protected and disabled by default.",
 		},
 	}
 	if len(list.Tools) != len(want) {

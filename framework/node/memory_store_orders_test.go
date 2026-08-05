@@ -244,6 +244,9 @@ func (r *memoryRealm) RecordOrderSettlement(
 		if st.Leaves != "" {
 			order.Leaves = st.Leaves
 		}
+		if st.ReservedQuantity != "" {
+			order.ReservedQuantity = st.ReservedQuantity
+		}
 		r.orders[st.Order] = order
 	}
 	if st.AccountPnl != "" || st.AccountPnlHaltReason != "" {
@@ -287,9 +290,6 @@ func (r *memoryRealm) RecordOrderSettlement(
 			current.RealizedPnlHaltReason = ""
 		} else if balance.Outcome.RealizedPnlHaltReason != "" {
 			current.RealizedPnlHaltReason = balance.Outcome.RealizedPnlHaltReason
-		}
-		if current.RealizedPnl == "" {
-			current.RealizedPnl = "0"
 		}
 		if balance.Outcome.AverageEntryPrice != "" {
 			current.AverageEntryPrice = balance.Outcome.AverageEntryPrice
@@ -391,6 +391,9 @@ func (r *memoryRealm) RecordOrderSubmission(
 	}
 	if settlement.Leaves != "" {
 		order.Leaves = settlement.Leaves
+	}
+	if settlement.ReservedQuantity != "" {
+		order.ReservedQuantity = settlement.ReservedQuantity
 	}
 	return order, nil
 }

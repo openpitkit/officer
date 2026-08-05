@@ -258,9 +258,6 @@ func (n *localNode) adjustedBalance(
 		return domain.Balance{}, fmt.Errorf("read balance for adjustment: %w", err)
 	}
 	realizedPnl := pick(outcome.RealizedPnlResult, prev.RealizedPnl)
-	if realizedPnl == "" {
-		realizedPnl = "0"
-	}
 	balance := domain.Balance{
 		Account:     key.Account,
 		Asset:       asset,

@@ -335,7 +335,8 @@ type Node interface {
 		ctx context.Context, code string, blocked bool, reason string, caller domain.Caller,
 	) error
 
-	// DeleteGroup removes the group (store-only) and audits the action.
+	// DeleteGroup removes the group and its member accounts, rebuilds the live
+	// engine from the surviving rows, and audits the action.
 	DeleteGroup(ctx context.Context, code string, caller domain.Caller) error
 
 	// ApplyAdjustment applies one spot-funds adjustment through the engine,
@@ -412,9 +413,10 @@ type Node interface {
 	) (domain.Order, error)
 
 	// CancelOrder forwards a caller-supplied terminal cancellation report for an
-	// untouched workflow order using its stored lock. Leaves are never inferred
-	// from stored order state. Once any execution report has been recorded it
-	// returns domain.ErrExecutionReportRequired.
+	// untouched workflow order using its stored lock. The caller's leaves is
+	// stored verbatim and never derived; the quantity the engine releases comes
+	// from the order's own reserve ledger instead. Once any execution report has
+	// been recorded it returns domain.ErrExecutionReportRequired.
 	CancelOrder(
 		ctx context.Context,
 		order domain.ExternalID,

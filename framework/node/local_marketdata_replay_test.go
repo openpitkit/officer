@@ -58,6 +58,22 @@ func (s *marketDataReplaySink) Clear(base, quote string) error {
 	return nil
 }
 
+func assertStaleLastKnownReplay(
+	t *testing.T, updates []marketdata.QuoteUpdate, asOf time.Time,
+) {
+	t.Helper()
+	if len(updates) != 2 ||
+		updates[0].Base != "EUR" || updates[0].Quote != "USD" ||
+		updates[0].Mark != "2" || !updates[0].AsOf.Equal(asOf) ||
+		updates[1].Base != "USD" || updates[1].Quote != "EUR" ||
+		updates[1].Mark != "0.5" || !updates[1].AsOf.Equal(asOf) {
+		t.Fatalf(
+			"replayed updates = %+v, want stale direct and inverse last-known quotes at %v",
+			updates, asOf,
+		)
+	}
+}
+
 func seedReplayInstrument(
 	t *testing.T,
 	realm store.RealmStore,
@@ -271,7 +287,7 @@ func TestRebuildDoesNotReplayClearedBYOMark(t *testing.T) {
 	}
 }
 
-func TestRebuildSkipsStaleStreamingSnapshot(t *testing.T) {
+func TestRebuildReplaysStaleStreamingSnapshotAsLastKnown(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	old := newFakeEngine()
@@ -299,9 +315,7 @@ func TestRebuildSkipsStaleStreamingSnapshot(t *testing.T) {
 	if err := n.rebuildEngineFromStore(ctx); err != nil {
 		t.Fatalf("rebuildEngineFromStore: %v", err)
 	}
-	if len(sink.updates) != 0 {
-		t.Fatalf("replayed updates = %+v, want stale streaming quote omitted", sink.updates)
-	}
+	assertStaleLastKnownReplay(t, sink.updates, staleAt)
 }
 
 func TestRebuildReplaysFreshStreamingSnapshot(t *testing.T) {

@@ -173,7 +173,7 @@ func (n *localNode) submitOrder(
 					attest = attestFor(persisted, result)
 				}
 				if result.Accepted {
-					return orderAcceptedSettlement(key, persisted, result, caller), nil
+					return orderAcceptedSettlement(key, persisted, result, caller)
 				}
 				return orderRejectedSettlement(key, persisted, result.Rejects, caller), nil
 			},
@@ -221,7 +221,11 @@ func (n *localNode) submitOrder(
 
 func orderAcceptedSettlement(
 	key Key, order domain.Order, result engine.OrderResult, caller domain.Caller,
-) domain.OrderSettlement {
+) (domain.OrderSettlement, error) {
+	reservedQuantity, err := reservedQuantityFromOutcomes(order, result.Outcomes)
+	if err != nil {
+		return domain.OrderSettlement{}, err
+	}
 	return domain.OrderSettlement{
 		Account:     key.Account,
 		Order:       order.ExternalID,
@@ -232,15 +236,57 @@ func orderAcceptedSettlement(
 			fillSettlementEvent(order.ExternalID, domain.OrderEventPreTradeAccepted, caller, domain.OrderEventPayload{}),
 			fillSettlementEvent(order.ExternalID, domain.OrderEventCommitted, caller, domain.OrderEventPayload{}),
 		},
-		Lock:    result.Lock,
-		SetLock: true,
+		Lock:             result.Lock,
+		ReservedQuantity: reservedQuantity,
+		SetLock:          true,
+	}, nil
+}
+
+func reservedQuantityFromOutcomes(
+	order domain.Order, outcomes []engine.BalanceOutcome,
+) (string, error) {
+	reservedQuantity := ""
+	for _, outcome := range outcomes {
+		if outcome.Asset != order.BaseAsset {
+			continue
+		}
+		var candidate string
+		switch order.Side {
+		case domain.OrderSideBuy:
+			candidate = outcome.Outcome.IncomingDelta
+		case domain.OrderSideSell:
+			candidate = outcome.Outcome.HeldDelta
+		default:
+			return "", fmt.Errorf(
+				"reservation quantity for side %q: %w",
+				order.Side,
+				domain.ErrInvalid,
+			)
+		}
+		if candidate == "" {
+			continue
+		}
+		if reservedQuantity != "" {
+			return "", fmt.Errorf(
+				"reservation returned several quantity deltas for asset %q: %w",
+				order.BaseAsset,
+				domain.ErrInvalid,
+			)
+		}
+		reservedQuantity = candidate
 	}
+	if reservedQuantity == "" {
+		return "0", nil
+	}
+	return reservedQuantity, nil
 }
 
 func orderRejectedSettlement(
 	key Key, order domain.Order, rejects []domain.OrderReject, caller domain.Caller,
 ) domain.OrderSettlement {
-	payload := domain.OrderEventPayload{}
+	payload := domain.OrderEventPayload{
+		Rejects: append([]domain.OrderReject(nil), rejects...),
+	}
 	if len(rejects) > 0 {
 		r := rejects[0]
 		payload.RejectCode = r.Code
@@ -250,9 +296,10 @@ func orderRejectedSettlement(
 		payload.RejectDetails = r.Details
 	}
 	return domain.OrderSettlement{
-		Account:     key.Account,
-		Order:       order.ExternalID,
-		OrderStatus: domain.OrderStatusRejected,
+		Account:          key.Account,
+		Order:            order.ExternalID,
+		OrderStatus:      domain.OrderStatusRejected,
+		ReservedQuantity: "0",
 		Events: []domain.OrderEvent{
 			fillSettlementEvent(order.ExternalID, domain.OrderEventPreTradeRejected, caller, payload),
 		},
@@ -290,13 +337,10 @@ func (n *localNode) submitImmediate(
 	caller domain.Caller,
 	attestFor func(domain.Order, engine.ImmediateResult) store.EventAttestor,
 ) (domain.Order, engine.ImmediateResult, error) {
-	if err := domain.ValidateImmediateOrderAmountKind(o.AmountKind); err != nil {
-		return domain.Order{}, engine.ImmediateResult{}, err
-	}
 	// Resolve the account and register both order assets pre-lane (see
 	// SubmitOrder).
 	if err := n.ensureAccountAndAssetsRegisteredExclusive(
-		ctx, key.Account, missing, "submit immediate", caller,
+		ctx, key.Account, missing, "submit order", caller,
 		o.BaseAsset, o.QuoteAsset,
 	); err != nil {
 		return domain.Order{}, engine.ImmediateResult{}, err
@@ -353,7 +397,7 @@ func (n *localNode) submitImmediate(
 					persisted,
 					result,
 					caller,
-				), nil
+				)
 			},
 			attestSubmitted,
 		)
@@ -369,6 +413,28 @@ func (n *localNode) submitImmediate(
 			if err := n.mirrorEngineBlocksAudit(ctx, order.ExternalID, result.Blocks); err != nil {
 				return n.fatalPostEnginePersistence(
 					"audit immediate engine blocks", accountID, err,
+				)
+			}
+			if result.ExecutionReport == nil {
+				return n.fatalPostEnginePersistence(
+					"audit immediate execution report",
+					accountID,
+					fmt.Errorf("immediate execution report missing: %w", domain.ErrInvalid),
+				)
+			}
+			if err := n.audit(ctx, caller, store.AuditEntry{
+				Action:  domain.AuditActionExecutionReport,
+				Account: key.Account,
+				Detail: executionReportDetail(
+					executionReportInputFromRequest(*result.ExecutionReport),
+					domain.OrderStatusFilled,
+					len(result.Blocks),
+				),
+			}); err != nil {
+				return n.fatalPostEnginePersistence(
+					"audit immediate execution report",
+					accountID,
+					fmt.Errorf("audit immediate execution report: %w", err),
 				)
 			}
 		}
@@ -539,6 +605,7 @@ func (n *localNode) cancelOrder(
 				Lock:           append([]byte(nil), detail.Order.Lock...),
 				OrderStatus:    domain.OrderStatusCancelled,
 			}
+			reserveFromLeaves := attachExecutionReservation(&in, detail)
 			if _, err := domain.ExecutionReportRequiresEngine(in); err != nil {
 				return fmt.Errorf("build cancellation execution report: %w", err)
 			}
@@ -557,14 +624,15 @@ func (n *localNode) cancelOrder(
 				*result.Persistence, caller, request,
 			)
 			settlement := domain.OrderSettlement{
-				Account:     in.Account,
-				Order:       order,
-				OrderStatus: persistence.OrderStatus,
-				Leaves:      persistence.Leaves,
-				Balances:    persistence.Balances,
-				Events:      persistence.Events,
-				Trade:       persistence.Trade,
-				Blocks:      persistence.Blocks,
+				Account:          in.Account,
+				Order:            order,
+				OrderStatus:      persistence.OrderStatus,
+				Leaves:           persistence.Leaves,
+				ReservedQuantity: persistence.ReservedQuantity,
+				Balances:         persistence.Balances,
+				Events:           persistence.Events,
+				Trade:            persistence.Trade,
+				Blocks:           persistence.Blocks,
 			}
 			if _, err := recordOrderSettlementWithAttestation(
 				ctx, n.realm, settlement, attest,
@@ -582,12 +650,16 @@ func (n *localNode) cancelOrder(
 					err,
 				)
 			}
+			detailText := executionReportDetail(
+				in, domain.OrderStatusCancelled, len(result.Blocks),
+			)
+			if reserveFromLeaves {
+				detailText += " reserveFromLeaves=true"
+			}
 			if err := n.audit(ctx, caller, store.AuditEntry{
 				Action:  domain.AuditActionExecutionReport,
 				Account: in.Account,
-				Detail: executionReportDetail(
-					in, domain.OrderStatusCancelled, len(result.Blocks),
-				),
+				Detail:  detailText,
 			}); err != nil {
 				return n.fatalPostEnginePersistence(
 					"audit cancellation execution report",
@@ -599,6 +671,9 @@ func (n *localNode) cancelOrder(
 			cancelled.Status = persistence.OrderStatus
 			if persistence.Leaves != "" {
 				cancelled.Leaves = persistence.Leaves
+			}
+			if persistence.ReservedQuantity != "" {
+				cancelled.ReservedQuantity = persistence.ReservedQuantity
 			}
 			return nil
 		},
@@ -650,39 +725,68 @@ func immediateAcceptedSettlement(
 	order domain.Order,
 	result engine.ImmediateResult,
 	caller domain.Caller,
-) domain.OrderSettlement {
-	fillPayload := accountBlockPayload(result.Blocks)
-	fillPayload.FillQuantity = result.FillQuantity
-	fillPayload.FillPrice = result.TradePrice
-	fillPayload.FillLockPrice = result.SettlementLockPrice
+) (domain.OrderSettlement, error) {
+	if result.Persistence == nil || result.ExecutionReport == nil {
+		return domain.OrderSettlement{}, fmt.Errorf(
+			"immediate execution report persistence is incomplete: %w",
+			domain.ErrInvalid,
+		)
+	}
+	persistence := stampExecutionReportPersistence(
+		*result.Persistence, caller, result.ExecutionReport,
+	)
+	events := make([]domain.OrderEvent, 0, len(persistence.Events)+2)
+	events = append(events,
+		fillSettlementEvent(
+			order.ExternalID,
+			domain.OrderEventPreTradeAccepted,
+			caller,
+			domain.OrderEventPayload{},
+		),
+		fillSettlementEvent(
+			order.ExternalID,
+			domain.OrderEventCommitted,
+			caller,
+			domain.OrderEventPayload{},
+		),
+	)
+	events = append(events, persistence.Events...)
 	return domain.OrderSettlement{
 		Account:              key.Account,
 		Order:                order.ExternalID,
-		OrderStatus:          domain.OrderStatusFilled,
-		AccountPnl:           result.AccountPnl,
-		AccountPnlHaltReason: result.AccountPnlHaltReason,
+		ReportID:             &result.ExecutionReport.ExternalID,
+		OrderStatus:          persistence.OrderStatus,
+		Leaves:               persistence.Leaves,
+		ReservedQuantity:     persistence.ReservedQuantity,
+		AccountPnl:           persistence.AccountPnl,
+		AccountPnlHaltReason: persistence.AccountPnlHaltReason,
 		AllowedFrom:          domain.OrderStatusesEligibleForFill(),
-		Balances:             balanceSettlementsFrom(result.Outcomes),
-		Events: []domain.OrderEvent{
-			fillSettlementEvent(order.ExternalID, domain.OrderEventPreTradeAccepted, caller, domain.OrderEventPayload{}),
-			fillSettlementEvent(order.ExternalID, domain.OrderEventCommitted, caller, domain.OrderEventPayload{}),
-			fillSettlementEvent(order.ExternalID, domain.OrderEventFill, caller, fillPayload),
-		},
-		Trade: &domain.Trade{
-			Order:      order.ExternalID,
-			Account:    key.Account,
-			Source:     caller.Source,
-			Principal:  caller.Principal,
-			BaseAsset:  order.BaseAsset,
-			QuoteAsset: order.QuoteAsset,
-			Side:       order.Side,
-			Quantity:   result.FillQuantity,
-			Price:      result.TradePrice,
-			LockPrice:  result.SettlementLockPrice,
-		},
-		Blocks:  result.Blocks,
-		Lock:    result.Lock,
-		SetLock: true,
+		Balances:             persistence.Balances,
+		Events:               events,
+		Trade:                persistence.Trade,
+		Blocks:               persistence.Blocks,
+		Lock:                 result.Lock,
+		SetLock:              true,
+	}, nil
+}
+
+func executionReportInputFromRequest(
+	request domain.ExecutionReportRequest,
+) domain.ExecutionReportInput {
+	return domain.ExecutionReportInput{
+		ExternalID:     request.ExternalID,
+		BaseAsset:      request.BaseAsset,
+		QuoteAsset:     request.QuoteAsset,
+		FillQuantity:   request.FillQuantity,
+		FillPrice:      request.FillPrice,
+		LeavesQuantity: request.LeavesQuantity,
+		LockPrice:      request.LockPrice,
+		Commission:     request.Commission,
+		Order:          request.Order,
+		Account:        request.Account,
+		Side:           request.Side,
+		OrderStatus:    request.OrderStatus,
+		Force:          request.Force,
 	}
 }
 

@@ -100,6 +100,44 @@ func TestCheckOrder_Reject(t *testing.T) {
 	}
 }
 
+func TestCheckOrder_PreservesEveryEngineRejectInOrder(t *testing.T) {
+	want := []domain.OrderReject{
+		{Code: "first", Scope: "order", Policy: "size", Reason: "r1", Details: "d1"},
+		{Code: "second", Scope: "account", Policy: "funds", Reason: "r2", Details: "d2"},
+		{Code: "third", Scope: "group", Policy: "block", Reason: "r3", Details: "d3"},
+	}
+	svc := &fakeService{checkResult: domain.CheckResult{Rejects: want}}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(
+		`{"account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD",` +
+			`"side":"buy","amountKind":"quantity","amountValue":"1"}`,
+	)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost, "/api/v1/orders/check", body,
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	response := bodyMap(t, rec.Result())
+	check, _ := response["check"].(map[string]any)
+	got, _ := check["rejects"].([]any)
+	if len(got) != len(want) {
+		t.Fatalf("rejects = %+v", got)
+	}
+	for index, reject := range want {
+		item, _ := got[index].(map[string]any)
+		if item["code"] != reject.Code || item["scope"] != reject.Scope ||
+			item["policy"] != reject.Policy || item["reason"] != reject.Reason ||
+			item["details"] != reject.Details {
+			t.Fatalf("reject[%d] = %+v, want %+v", index, item, reject)
+		}
+	}
+}
+
 func TestCheckOrder_InvalidJSON(t *testing.T) {
 	r, err := newRouter(&fakeService{})
 	if err != nil {
@@ -125,7 +163,7 @@ func TestCheckOrder_ValidationError(t *testing.T) {
 		`{"account":"acc-1","baseAsset":"bad asset","quoteAsset":"USD","side":"buy","amountKind":"quantity","amountValue":"1"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders/check", body))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 	m := bodyMap(t, rec.Result())
@@ -259,7 +297,7 @@ func TestSubmitDropCopyOrder_ValidationErrorPreservesEngineMessage(t *testing.T)
 	r.ServeHTTP(rec, httptest.NewRequest(
 		http.MethodPost, "/api/v1/orders/drop-copy/submit?missingAccount=create", body,
 	))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d body=%s", rec.Code, rec.Body.String())
 	}
 	m := bodyMap(t, rec.Result())
@@ -367,7 +405,7 @@ func TestSubmitOrderToken_ValidationError(t *testing.T) {
 		`{"account":"acc-1","baseAsset":"AAPL","quoteAsset":"USD","side":"buy","amountKind":"base","amountValue":"1"}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit?missingAccount=create", body))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 	m := bodyMap(t, rec.Result())
@@ -496,6 +534,72 @@ func TestApplyExecutionReport_Created(t *testing.T) {
 	}
 }
 
+func TestApplyExecutionReport_CommissionOnlyForwardsCallerFieldsAndEngineResult(
+	t *testing.T,
+) {
+	svc := &fakeService{execReportResult: engine.ExecutionReportResult{
+		ReportID: extID("commission-report"),
+		Blocks: []domain.ExecutionAccountBlock{
+			{Account: "acc-1", Code: "first"},
+			{Account: "acc-1", Code: "second"},
+		},
+		Outcomes: []engine.BalanceOutcome{
+			{Asset: "EUR", Outcome: domain.AdjustmentOutcomeAccepted{
+				BalanceDelta: "1", BalanceResult: "2",
+			}},
+			{Asset: "USD", Outcome: domain.AdjustmentOutcomeAccepted{
+				BalanceDelta: "-3", BalanceResult: "4",
+			}},
+		},
+	}}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.NewBufferString(
+		`{"status":"accepted","leavesQuantity":"7.5",` +
+			`"commission":{"amount":"-0.12","currency":"EUR"}}`,
+	)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports",
+		body,
+	))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	in := svc.execReportIn
+	if in.FillQuantity != "" || in.FillPrice != "" || in.LockPrice != "" ||
+		len(in.Lock) != 0 {
+		t.Fatalf("Officer invented trade fields: %+v", in)
+	}
+	if in.LeavesQuantity != "7.5" || in.OrderStatus != domain.OrderStatusAccepted ||
+		in.Commission == nil || in.Commission.Amount != "-0.12" ||
+		in.Commission.Currency != "EUR" {
+		t.Fatalf("caller fields were not forwarded exactly: %+v", in)
+	}
+
+	response := bodyMap(t, rec.Result())
+	if response["id"] != extID("commission-report").String() {
+		t.Fatalf("id = %v", response["id"])
+	}
+	result, _ := response["result"].(map[string]any)
+	blocks, _ := result["blocks"].([]any)
+	outcomes, _ := result["outcomes"].([]any)
+	if len(blocks) != 2 || len(outcomes) != 2 {
+		t.Fatalf("result = %+v", result)
+	}
+	firstBlock, _ := blocks[0].(map[string]any)
+	secondBlock, _ := blocks[1].(map[string]any)
+	firstOutcome, _ := outcomes[0].(map[string]any)
+	secondOutcome, _ := outcomes[1].(map[string]any)
+	if firstBlock["code"] != "first" || secondBlock["code"] != "second" ||
+		firstOutcome["asset"] != "EUR" || secondOutcome["asset"] != "USD" {
+		t.Fatalf("Engine result order changed: %+v", result)
+	}
+}
+
 func TestApplyExecutionReport_GeneratesIDWhenOmitted(t *testing.T) {
 	svc := &fakeService{
 		execReportResult: engine.ExecutionReportResult{ReportID: extID("generated-report")},
@@ -564,7 +668,7 @@ func TestApplyExecutionReport_MissingLeavesQuantity(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports", body))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 	m := bodyMap(t, rec.Result())
@@ -656,7 +760,7 @@ func TestApplyExecutionReport_WorkflowRejectsInvalidSettlementFields(t *testing.
 				"/api/v1/orders/"+extID("order-1").String()+"/execution-reports",
 				bytes.NewBufferString(tc.body),
 			))
-			if rec.Code != http.StatusBadRequest {
+			if rec.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("want 400, got %d; body=%s", rec.Code, rec.Body.String())
 			}
 			if !svc.execReportIn.Order.IsZero() {
@@ -694,7 +798,7 @@ func TestApplyExecutionReport_RejectsInvalidWorkflowLeaves(t *testing.T) {
 				"/api/v1/orders/"+extID("order-1").String()+"/execution-reports",
 				bytes.NewBufferString(tc.body),
 			))
-			if rec.Code != http.StatusBadRequest {
+			if rec.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
 			}
 			if !svc.execReportIn.Order.IsZero() {
@@ -730,7 +834,7 @@ func TestApplyExecutionReport_EngineSettledMissingLeavesRejected(t *testing.T) {
 				"/api/v1/orders/"+extID("order-1").String()+"/execution-reports",
 				bytes.NewBufferString(tc.body),
 			))
-			if rec.Code != http.StatusBadRequest {
+			if rec.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
 			}
 			if !svc.execReportIn.Order.IsZero() {
@@ -787,7 +891,7 @@ func TestApplyExecutionReport_RejectsFillWithNonTerminalWorkflowStatus(t *testin
 			rec := httptest.NewRecorder()
 			r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 				"/api/v1/orders/"+extID("order-1").String()+"/execution-reports", body))
-			if rec.Code != http.StatusBadRequest {
+			if rec.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("want 400, got %d", rec.Code)
 			}
 			m := bodyMap(t, rec.Result())
@@ -819,7 +923,7 @@ func TestApplyExecutionReport_InvalidStatus(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports", body))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 	m := bodyMap(t, rec.Result())
@@ -848,7 +952,7 @@ func TestApplyExecutionReport_MissingStatus(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
 		"/api/v1/orders/"+extID("order-1").String()+"/execution-reports", body))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 	m := bodyMap(t, rec.Result())

@@ -37,11 +37,14 @@ import (
 	"unicode/utf8"
 
 	"go.openpit.dev/openpit/accountadjustment"
+	"go.openpit.dev/openpit/configure"
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
+	"go.openpit.dev/openpit/pkg/optional"
 	"go.openpit.dev/openpit/reject"
 
 	"go.openpit.dev/officer/framework/domain"
+	"go.openpit.dev/officer/framework/marketdata"
 )
 
 func TestMergeBalanceOutcomes_PreservesOrderedPhaseEffects(t *testing.T) {
@@ -1247,6 +1250,61 @@ func TestPolicyConfigurationBlocksFromCarriesAccountAndFallbackPolicy(t *testing
 	}
 }
 
+func TestPolicyConfigurationBlockOutcomesFromResolvesAccount(t *testing.T) {
+	t.Parallel()
+	resolver, err := newIDResolver([]domain.Account{account("acc-1")}, nil)
+	if err != nil {
+		t.Fatalf("newIDResolver: %v", err)
+	}
+	accountID, err := resolver.account("acc-1")
+	if err != nil {
+		t.Fatalf("resolver account: %v", err)
+	}
+	block := reject.NewAccountBlock(
+		reject.CodePnlKillSwitchTriggered,
+		"",
+		"P&L bound breached",
+		"lower=-100",
+	)
+	got, err := policyConfigurationBlockOutcomesFrom(
+		[]configure.AccountBlockOutcome{{AccountID: accountID, Block: block}},
+		resolver,
+		domain.PolicySpotFundsPnlBoundsKillSwitch,
+	)
+	if err != nil {
+		t.Fatalf("map configuration outcomes: %v", err)
+	}
+	if len(got) != 1 || got[0].Account != "acc-1" ||
+		got[0].Policy != domain.PolicySpotFundsPnlBoundsKillSwitch {
+		t.Fatalf("mapped blocks = %+v, want account acc-1 with fallback policy", got)
+	}
+}
+
+func TestPolicyConfigurationBlockOutcomesFromRejectsUnknownAccount(t *testing.T) {
+	t.Parallel()
+	resolver, err := newIDResolver([]domain.Account{account("acc-1")}, nil)
+	if err != nil {
+		t.Fatalf("newIDResolver: %v", err)
+	}
+	block := reject.NewAccountBlock(
+		reject.CodePnlKillSwitchTriggered,
+		"spot_funds",
+		"P&L bound breached",
+		"lower=-100",
+	)
+	_, err = policyConfigurationBlockOutcomesFrom(
+		[]configure.AccountBlockOutcome{{
+			AccountID: param.NewAccountIDFromUint64(999),
+			Block:     block,
+		}},
+		resolver,
+		domain.PolicySpotFundsPnlBoundsKillSwitch,
+	)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("map unknown account outcome = %v, want ErrInvalid", err)
+	}
+}
+
 // TestSpotFundsPnlBoundsAxes_UnsupportedScope checks a scope the SpotFunds P&L
 // bounds axes cannot express is rejected rather than silently dropped.
 func TestSpotFundsPnlBoundsAxes_UnsupportedScope(t *testing.T) {
@@ -1356,6 +1414,58 @@ func TestEngine_CheckOrderPassCapturesLock(t *testing.T) {
 	}
 	if len(out.Rejects) != 0 || out.WouldBlock != nil {
 		t.Fatalf("pass must carry no rejects/block: %+v %+v", out.Rejects, out.WouldBlock)
+	}
+}
+
+func TestEngine_MarketOrderRejectsStaleSourceQuoteAtBoundary(t *testing.T) {
+	t.Parallel()
+	snap := Snapshot{
+		Accounts: []domain.Account{account("acc-1")},
+		Balances: []domain.Balance{
+			fundedBalance("acc-1", "USD", "1000000"),
+			fundedBalance("acc-1", "AAPL", "1000000"),
+		},
+	}
+	eng, err := BuildOpenPitEngine("", snap)
+	if err != nil {
+		t.Fatalf("BuildOpenPitEngine: %v", err)
+	}
+	defer eng.Stop()
+	adapter := eng.(*openPitEngine)
+	now := time.Date(2026, time.August, 2, 12, 0, 0, 0, time.UTC)
+	adapter.sink.now = func() time.Time { return now }
+
+	if err := adapter.sink.Push(marketdata.QuoteUpdate{
+		AsOf: now.Add(-MarketDataFreshnessTTL),
+		Base: "AAPL", Quote: "USD", Mark: "100",
+	}); err != nil {
+		t.Fatalf("Push stale boundary quote: %v", err)
+	}
+	marketOrder := domain.Order{
+		Account: "acc-1", BaseAsset: "AAPL", QuoteAsset: "USD",
+		Side: domain.OrderSideBuy, AmountKind: domain.OrderAmountKindQuantity,
+		AmountValue: "1",
+	}
+	stale, err := submitOrderOnLane(context.Background(), eng, marketOrder)
+	if err != nil {
+		t.Fatalf("SubmitOrder with stale quote: %v", err)
+	}
+	if stale.Accepted || !hasRejectCode(stale.Rejects, "mark_price_unavailable") {
+		t.Fatalf("stale market order = %+v, want mark_price_unavailable reject", stale)
+	}
+
+	if err := adapter.sink.Push(marketdata.QuoteUpdate{
+		AsOf: now.Add(-MarketDataFreshnessTTL + time.Second),
+		Base: "AAPL", Quote: "USD", Mark: "100",
+	}); err != nil {
+		t.Fatalf("Push aged fresh quote: %v", err)
+	}
+	fresh, err := submitOrderOnLane(context.Background(), eng, marketOrder)
+	if err != nil {
+		t.Fatalf("SubmitOrder with fresh quote: %v", err)
+	}
+	if !fresh.Accepted {
+		t.Fatalf("aged fresh market order rejected: %+v", fresh.Rejects)
 	}
 }
 
@@ -1570,6 +1680,79 @@ func TestEngine_CheckOrderIsNonMutating(t *testing.T) {
 	}
 }
 
+func TestEngine_CheckOrderMatchesSubmitOrderSizeVerdict(t *testing.T) {
+	t.Parallel()
+	snap := Snapshot{
+		Accounts: []domain.Account{account("acc-1")},
+		Balances: []domain.Balance{
+			fundedBalance("acc-1", "USD", "1000000"),
+			fundedBalance("acc-1", "AAPL", "1000000"),
+		},
+		OrderSizeLimits: []domain.LimitOrderSize{{
+			Scope:       domain.ScopeAccountAsset,
+			Account:     "acc-1",
+			Asset:       "USD",
+			MaxQuantity: "1",
+		}},
+	}
+	eng, err := BuildOpenPitEngine("", snap)
+	if err != nil {
+		t.Fatalf("BuildOpenPitEngine: %v", err)
+	}
+	defer eng.Stop()
+
+	ctx := context.Background()
+	for _, tc := range []struct {
+		quantity string
+		accepted bool
+	}{{quantity: "1", accepted: true}, {quantity: "2", accepted: false}} {
+		quantity := tc.quantity
+		probe := checkProbe("acc-1", domain.OrderSideBuy, quantity, "10")
+		dryRun, err := checkOrderOnLane(ctx, eng, probe)
+		if err != nil {
+			t.Fatalf("CheckOrder quantity %s: %v", quantity, err)
+		}
+		real, err := submitOrderOnLane(ctx, eng, domain.Order{
+			Account:     probe.Account,
+			BaseAsset:   probe.BaseAsset,
+			QuoteAsset:  probe.QuoteAsset,
+			Side:        probe.Side,
+			AmountKind:  probe.AmountKind,
+			AmountValue: probe.AmountValue,
+			Price:       probe.Price,
+		})
+		if err != nil {
+			t.Fatalf("SubmitOrder quantity %s: %v", quantity, err)
+		}
+		if dryRun.Passed != real.Accepted {
+			t.Fatalf(
+				"quantity %s verdict mismatch: dry-run=%t real=%t dry rejects=%+v real rejects=%+v",
+				quantity, dryRun.Passed, real.Accepted, dryRun.Rejects, real.Rejects,
+			)
+		}
+		if dryRun.Passed != tc.accepted {
+			t.Fatalf(
+				"quantity %s verdict = %t, want %t; dry rejects=%+v real rejects=%+v",
+				quantity, dryRun.Passed, tc.accepted, dryRun.Rejects, real.Rejects,
+			)
+		}
+		if len(dryRun.Rejects) != len(real.Rejects) {
+			t.Fatalf(
+				"quantity %s reject count mismatch: dry=%+v real=%+v",
+				quantity, dryRun.Rejects, real.Rejects,
+			)
+		}
+		for i := range dryRun.Rejects {
+			if dryRun.Rejects[i] != real.Rejects[i] {
+				t.Fatalf(
+					"quantity %s reject %d mismatch: dry=%+v real=%+v",
+					quantity, i, dryRun.Rejects[i], real.Rejects[i],
+				)
+			}
+		}
+	}
+}
+
 // hasRejectCode reports whether rejects carry a reject with the given code.
 func hasRejectCode(rejects []domain.OrderReject, code string) bool {
 	for _, r := range rejects {
@@ -1682,6 +1865,253 @@ func TestExecutionReportFrom_MissingLockDoesNotRebuildFromLockPrice(t *testing.T
 	}
 }
 
+func TestTerminalReleaseQuantityUsesPersistedReservationAndCurrentFill(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		reserved string
+		current  string
+		want     string
+	}{
+		{name: "full reserve", reserved: "2", want: "2"},
+		{name: "current fill", reserved: "2", current: "0.5", want: "1.5"},
+		{name: "fill reaches reserve", reserved: "2", current: "2", want: "0"},
+		{name: "fill exceeds reserve", reserved: "2", current: "3", want: "0"},
+		{name: "released reservation", reserved: "0", want: "0"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := terminalReleaseQuantity(domain.ExecutionReportInput{
+				ReservedQuantity: tt.reserved,
+				FillQuantity:     tt.current,
+			})
+			if err != nil {
+				t.Fatalf("terminalReleaseQuantity: %v", err)
+			}
+			if got.String() != tt.want {
+				t.Fatalf("release = %q, want %q", got.String(), tt.want)
+			}
+		})
+	}
+}
+
+// TestTerminalReleaseQuantityFallsBackToVenueLeaves pins the unrecorded-reserve
+// case: an empty reserve is unknown, not zero, and a zero release makes the
+// engine skip the release entirely, so the venue-reported leaves stands in
+// rather than stranding the reservation. An explicit "0" is a recorded fact and
+// keeps releasing nothing.
+func TestTerminalReleaseQuantityFallsBackToVenueLeaves(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name     string
+		reserved string
+		leaves   string
+		filled   string
+		want     string
+	}{
+		{name: "unknown reserve releases venue leaves", leaves: "2", want: "2"},
+		{
+			name:   "unknown reserve less the fill this report carries",
+			leaves: "2", filled: "0.5", want: "1.5",
+		},
+		{name: "recorded zero releases nothing", reserved: "0", leaves: "2", want: "0"},
+		{
+			name:     "recorded reserve ignores venue leaves",
+			reserved: "3", leaves: "2", want: "3",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := terminalReleaseQuantity(domain.ExecutionReportInput{
+				ReservedQuantity: test.reserved,
+				LeavesQuantity:   test.leaves,
+				FillQuantity:     test.filled,
+			})
+			if err != nil {
+				t.Fatalf("terminalReleaseQuantity: %v", err)
+			}
+			if got.String() != test.want {
+				t.Fatalf("release = %q, want %q", got.String(), test.want)
+			}
+		})
+	}
+}
+
+func TestExecutionReportFromTerminalIgnoresRawLeavesForRelease(t *testing.T) {
+	t.Parallel()
+	report, err := executionReportFrom(domain.ExecutionReportInput{
+		BaseAsset:        "AAPL",
+		QuoteAsset:       "USD",
+		Account:          "acc-1",
+		Side:             domain.OrderSideBuy,
+		FillQuantity:     "0.5",
+		FillPrice:        "100",
+		LeavesQuantity:   "9.00",
+		ReservedQuantity: "2",
+		Lock:             storedExecutionReportLock(t),
+		OrderStatus:      domain.OrderStatusCancelled,
+	}, testResolver("acc-1"))
+	if err != nil {
+		t.Fatalf("executionReportFrom: %v", err)
+	}
+	fill, ok := report.Fill().Get()
+	if !ok {
+		t.Fatal("Fill unset")
+	}
+	leaves, ok := fill.LeavesQuantity().Get()
+	if !ok {
+		t.Fatal("Fill.LeavesQuantity unset")
+	}
+	want, err := param.NewQuantityFromString("1.5")
+	if err != nil {
+		t.Fatalf("build wanted quantity: %v", err)
+	}
+	if !leaves.Equal(want) {
+		t.Fatalf("engine release leaves = %q, want 1.5", leaves.String())
+	}
+}
+
+func TestExecutionReservedQuantityFromAppliedBaseDelta(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		input    domain.ExecutionReportInput
+		outcomes []BalanceOutcome
+		want     string
+	}{
+		{
+			name: "buy incoming consumption",
+			input: domain.ExecutionReportInput{
+				BaseAsset: "AAPL", Side: domain.OrderSideBuy, ReservedQuantity: "10",
+			},
+			outcomes: []BalanceOutcome{{
+				Asset:   "AAPL",
+				Outcome: domain.AdjustmentOutcomeAccepted{IncomingDelta: "-3"},
+			}},
+			want: "7",
+		},
+		{
+			name: "sell held consumption",
+			input: domain.ExecutionReportInput{
+				BaseAsset: "AAPL", Side: domain.OrderSideSell, ReservedQuantity: "10",
+			},
+			outcomes: []BalanceOutcome{{
+				Asset:   "AAPL",
+				Outcome: domain.AdjustmentOutcomeAccepted{HeldDelta: "-3"},
+			}},
+			want: "7",
+		},
+		{
+			name: "blocked result has no applied delta",
+			input: domain.ExecutionReportInput{
+				BaseAsset: "AAPL", Side: domain.OrderSideBuy, ReservedQuantity: "10",
+			},
+		},
+		{
+			name: "unrelated asset does not change reserve",
+			input: domain.ExecutionReportInput{
+				BaseAsset: "AAPL", Side: domain.OrderSideBuy, ReservedQuantity: "10",
+			},
+			outcomes: []BalanceOutcome{{
+				Asset:   "USD",
+				Outcome: domain.AdjustmentOutcomeAccepted{IncomingDelta: "-3"},
+			}},
+		},
+		{
+			name: "over-release clamps at zero",
+			input: domain.ExecutionReportInput{
+				BaseAsset: "AAPL", Side: domain.OrderSideSell, ReservedQuantity: "2",
+			},
+			outcomes: []BalanceOutcome{{
+				Asset:   "AAPL",
+				Outcome: domain.AdjustmentOutcomeAccepted{HeldDelta: "-3"},
+			}},
+			want: "0",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := executionReservedQuantityFrom(test.input, test.outcomes)
+			if err != nil {
+				t.Fatalf("executionReservedQuantityFrom: %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("remaining reserve = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestImmediateReservedQuantityFromMergedOutcomes(t *testing.T) {
+	t.Parallel()
+	in := domain.ExecutionReportInput{
+		BaseAsset: "AAPL",
+		Side:      domain.OrderSideBuy,
+	}
+	for _, test := range []struct {
+		name     string
+		outcomes []BalanceOutcome
+		want     string
+	}{
+		{
+			name: "successful settlement consumes reserve",
+			outcomes: []BalanceOutcome{{
+				Asset: "AAPL",
+				Outcome: domain.AdjustmentOutcomeAccepted{
+					IncomingDelta: "0",
+				},
+			}},
+			want: "0",
+		},
+		{
+			name: "blocked settlement retains pretrade reserve",
+			outcomes: []BalanceOutcome{{
+				Asset: "AAPL",
+				Outcome: domain.AdjustmentOutcomeAccepted{
+					IncomingDelta: "5",
+				},
+			}},
+			want: "5",
+		},
+		{
+			name: "missing applied delta preserves reserve",
+			want: "5",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := immediateReservedQuantityFrom("5", in, test.outcomes)
+			if err != nil {
+				t.Fatalf("immediateReservedQuantityFrom: %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("remaining reserve = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+// TestImmediateReservedQuantityFromRefusesPostTradeOnlyOutcomes pins the
+// wrong-caller case the zero base makes possible: outcomes carrying the
+// settlement leg without the reservation leg sum to a negative reserve, which
+// would clamp to zero and record a released reserve the engine still holds.
+func TestImmediateReservedQuantityFromRefusesPostTradeOnlyOutcomes(t *testing.T) {
+	t.Parallel()
+	_, err := immediateReservedQuantityFrom(
+		"5",
+		domain.ExecutionReportInput{BaseAsset: "AAPL", Side: domain.OrderSideBuy},
+		[]BalanceOutcome{{
+			Asset:   "AAPL",
+			Outcome: domain.AdjustmentOutcomeAccepted{IncomingDelta: "-5"},
+		}},
+	)
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("post-trade-only outcomes error = %v, want ErrInvalid", err)
+	}
+}
+
 // TestExecutionReportFrom_InvalidInputs checks the execution-report mapper wraps
 // domain.ErrInvalid for malformed fill, leaves, commission, and lock inputs.
 func TestExecutionReportFrom_InvalidInputs(t *testing.T) {
@@ -1710,6 +2140,12 @@ func TestExecutionReportFrom_InvalidInputs(t *testing.T) {
 	badLeaves.LeavesQuantity = "not-a-number"
 	if _, err := executionReportFrom(badLeaves, res); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("want ErrInvalid for bad leaves quantity, got %v", err)
+	}
+
+	badReserved := base
+	badReserved.ReservedQuantity = "not-a-number"
+	if _, err := executionReportFrom(badReserved, res); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("want ErrInvalid for bad reserved quantity, got %v", err)
 	}
 
 	badCommissionAmount := base
@@ -1746,20 +2182,19 @@ func TestExecutionReportFrom_InvalidInputs(t *testing.T) {
 	}
 }
 
-// TestExecutionReportFrom_EmptyLeavesIsNotSet documents where the presence rule
-// lives: the mapper leaves the fill's leaves quantity unset instead of refusing
-// the report. Requiring leaves for an engine-settled report is the intake's job
-// (domain.ExecutionReportRequiresEngine), because the engine's post-trade path
-// has no reject channel and would latch an account block instead.
-func TestExecutionReportFrom_EmptyLeavesIsNotSet(t *testing.T) {
+// TestExecutionReportFrom_TerminalEmptyRawLeavesUsesReservation documents that
+// intake owns raw leaves presence validation while the mapper derives a terminal
+// release from persisted reservation state.
+func TestExecutionReportFrom_TerminalEmptyRawLeavesUsesReservation(t *testing.T) {
 	t.Parallel()
 	res := testResolver("acc-1")
 	report, err := executionReportFrom(domain.ExecutionReportInput{
 		BaseAsset: "AAPL", QuoteAsset: "USD", Account: "acc-1",
 		Side:         domain.OrderSideBuy,
 		FillQuantity: "1", FillPrice: "100",
-		Lock:        storedExecutionReportLock(t),
-		OrderStatus: domain.OrderStatusFilled,
+		ReservedQuantity: "2",
+		Lock:             storedExecutionReportLock(t),
+		OrderStatus:      domain.OrderStatusFilled,
 	}, res)
 	if err != nil {
 		t.Fatalf("executionReportFrom: %v", err)
@@ -1768,8 +2203,9 @@ func TestExecutionReportFrom_EmptyLeavesIsNotSet(t *testing.T) {
 	if !ok {
 		t.Fatal("Fill unset")
 	}
-	if _, ok := fill.LeavesQuantity().Get(); ok {
-		t.Fatal("Fill.LeavesQuantity must stay unset for an empty leaves input")
+	leaves, ok := fill.LeavesQuantity().Get()
+	if !ok || leaves.String() != "1" {
+		t.Fatalf("Fill.LeavesQuantity = %v ok=%v, want 1", leaves, ok)
 	}
 }
 
@@ -1782,7 +2218,7 @@ func storedExecutionReportLock(t *testing.T) []byte {
 	return lock
 }
 
-func TestExecutionReportFrom_CommissionUsesStructuredFee(t *testing.T) {
+func TestExecutionReportFrom_CommissionPreservesPositiveFeeSign(t *testing.T) {
 	t.Parallel()
 	res := testResolver("acc-1")
 	report, err := executionReportFrom(domain.ExecutionReportInput{
@@ -1793,8 +2229,8 @@ func TestExecutionReportFrom_CommissionUsesStructuredFee(t *testing.T) {
 		LeavesQuantity: "0",
 		Lock:           storedExecutionReportLock(t),
 		Commission: &domain.Commission{
-			Amount:   "-0.50",
-			Currency: "USD",
+			Amount:   "2",
+			Currency: "GBP",
 		},
 		Account:     "acc-1",
 		Side:        domain.OrderSideBuy,
@@ -1814,15 +2250,15 @@ func TestExecutionReportFrom_CommissionUsesStructuredFee(t *testing.T) {
 	if !ok {
 		t.Fatal("Fill.Fee unset")
 	}
-	if commission.Amount.String() != "0.50" {
-		t.Fatalf("commission amount = %q, want SDK fee 0.50", commission.Amount.String())
+	if commission.Amount.String() != "2" {
+		t.Fatalf("commission amount = %q, want SDK fee 2", commission.Amount.String())
 	}
-	if commission.Currency.String() != "USD" {
-		t.Fatalf("commission currency = %q, want USD", commission.Currency.String())
+	if commission.Currency.String() != "GBP" {
+		t.Fatalf("commission currency = %q, want GBP", commission.Currency.String())
 	}
 }
 
-func TestExecutionReportFrom_NoTradeCommissionUsesStructuredFee(t *testing.T) {
+func TestExecutionReportFrom_NoTradeCommissionPreservesNegativeRebateSign(t *testing.T) {
 	t.Parallel()
 	res := testResolver("acc-1")
 	report, err := executionReportFrom(domain.ExecutionReportInput{
@@ -1852,11 +2288,45 @@ func TestExecutionReportFrom_NoTradeCommissionUsesStructuredFee(t *testing.T) {
 	if !ok {
 		t.Fatal("Fill.Fee unset")
 	}
-	if commission.Amount.String() != "0.50" {
-		t.Fatalf("commission amount = %q, want SDK fee 0.50", commission.Amount.String())
+	if commission.Amount.String() != "-0.50" {
+		t.Fatalf("commission amount = %q, want SDK fee -0.50", commission.Amount.String())
 	}
 	if commission.Currency.String() != "USD" {
 		t.Fatalf("commission currency = %q, want USD", commission.Currency.String())
+	}
+}
+
+func TestExecutionReportFrom_FeeOnlyPartialFill(t *testing.T) {
+	t.Parallel()
+	report, err := executionReportFrom(domain.ExecutionReportInput{
+		BaseAsset:      "AAPL",
+		QuoteAsset:     "USD",
+		LeavesQuantity: "1",
+		Lock:           storedExecutionReportLock(t),
+		Commission: &domain.Commission{
+			Amount:   "1",
+			Currency: "USD",
+		},
+		Account:     "acc-1",
+		Side:        domain.OrderSideBuy,
+		OrderStatus: domain.OrderStatusPartiallyFilled,
+	}, testResolver("acc-1"))
+	if err != nil {
+		t.Fatalf("executionReportFrom: %v", err)
+	}
+	fill, ok := report.Fill().Get()
+	if !ok {
+		t.Fatal("Fill unset")
+	}
+	if _, ok := fill.LastTrade().Get(); ok {
+		t.Fatal("LastTrade set for a fee-only report")
+	}
+	commission, ok := fill.Fee().Get()
+	if !ok {
+		t.Fatal("Fill.Fee unset")
+	}
+	if commission.Amount.String() != "1" || commission.Currency.String() != "USD" {
+		t.Fatalf("commission = %+v, want USD 1", commission)
 	}
 }
 
@@ -1940,6 +2410,47 @@ func TestExecutionBalanceSettlementsFrom_KeepsPositionPnl(t *testing.T) {
 	}
 }
 
+func TestOutcomeAcceptedFromEntry_PreservesComputedZeroAndAbsence(t *testing.T) {
+	t.Parallel()
+	asset, err := param.NewAsset("AAPL")
+	if err != nil {
+		t.Fatalf("NewAsset: %v", err)
+	}
+	zero, err := param.NewPnlFromString("0")
+	if err != nil {
+		t.Fatalf("NewPnlFromString: %v", err)
+	}
+	computed, err := outcomeAcceptedFromEntry(
+		accountadjustment.AccountOutcomeEntry{
+			Asset: asset,
+			RealizedPnl: optional.Some(accountadjustment.NewPnlOutcome(
+				accountadjustment.PnlOutcomeAmount{
+					Delta:    zero,
+					Absolute: zero,
+				},
+			)),
+		},
+	)
+	if err != nil {
+		t.Fatalf("outcomeAcceptedFromEntry(computed): %v", err)
+	}
+	if computed.RealizedPnlDelta != "0" || computed.RealizedPnlResult != "0" {
+		t.Fatalf("computed realized PnL outcome = %+v, want zero", computed)
+	}
+
+	absent, err := outcomeAcceptedFromEntry(
+		accountadjustment.AccountOutcomeEntry{Asset: asset},
+	)
+	if err != nil {
+		t.Fatalf("outcomeAcceptedFromEntry(absent): %v", err)
+	}
+	if absent.RealizedPnlDelta != "" ||
+		absent.RealizedPnlResult != "" ||
+		absent.RealizedPnlHaltReason != "" {
+		t.Fatalf("absent realized PnL outcome = %+v", absent)
+	}
+}
+
 func TestAccountAdjustmentFromRequest_ForwardsRealizedPnl(t *testing.T) {
 	t.Parallel()
 	adjustment, err := accountAdjustmentFromRequest(domain.AdjustmentRequest{
@@ -2018,6 +2529,11 @@ func TestPnlHaltReasonFromSDKMapsEveryReason(t *testing.T) {
 			name: "arithmetic overflow",
 			in:   model.PnlHaltReasonArithmeticOverflow,
 			want: domain.PnlHaltReasonArithmeticOverflow,
+		},
+		{
+			name: "stale denomination",
+			in:   model.PnlHaltReasonStaleDenomination,
+			want: domain.PnlHaltReasonStaleDenomination,
 		},
 	}
 	for _, test := range tests {
@@ -2110,9 +2626,57 @@ func TestSpotFundsAccountPnlFromListSelectsAuthoritativeOutcome(t *testing.T) {
 			wantPnl: "42.500",
 		},
 		{
-			name: "computed zero delta",
+			name: "zero delta does not preempt later halt",
 			outcomes: []accountadjustment.AccountPnlOutcome{
 				computed(accountID, "0", "7.250"),
+				halted(accountID, model.PnlHaltReasonMissingCostBasis),
+			},
+			wantReason: domain.PnlHaltReasonMissingCostBasis,
+		},
+		{
+			// A halt already selected is the account's answer: a later outcome
+			// reporting no change may not restate a number over it.
+			name: "zero delta does not restate an earlier halt",
+			outcomes: []accountadjustment.AccountPnlOutcome{
+				halted(accountID, model.PnlHaltReasonMissingFx),
+				computed(accountID, "0", "7.250"),
+			},
+			wantReason: domain.PnlHaltReasonMissingFx,
+		},
+		{
+			// The first realization against a zero cost basis lands on zero: the
+			// engine computed it, so it must reach storage as the authoritative
+			// "0" rather than as the absence that leaves the account unset.
+			name: "first realization at zero publishes the absolute",
+			outcomes: []accountadjustment.AccountPnlOutcome{
+				computed(accountID, "0", "0"),
+			},
+			wantPnl: "0",
+		},
+		{
+			// A fill realizing as much as its commission costs nets to no change,
+			// yet the absolute is still the engine's number and Officer may not
+			// hold it yet.
+			name: "cancelled fill and commission publish the absolute",
+			outcomes: []accountadjustment.AccountPnlOutcome{
+				computed(accountID, "0", "50.000"),
+			},
+			wantPnl: "50.000",
+		},
+		{
+			// Repeating an event with no effect restates the same absolute, so
+			// the stored value is written back as it stands, never dropped.
+			name: "repeated no-effect event restates the same absolute",
+			outcomes: []accountadjustment.AccountPnlOutcome{
+				computed(accountID, "0", "50.000"),
+				computed(accountID, "0", "50.000"),
+			},
+			wantPnl: "50.000",
+		},
+		{
+			name: "zero delta for another account is not published",
+			outcomes: []accountadjustment.AccountPnlOutcome{
+				computed(otherAccountID, "0", "9"),
 			},
 		},
 		{
@@ -2279,6 +2843,33 @@ func TestExecutionReportPersistenceFrom_NoTradeCarriesCommission(t *testing.T) {
 	if len(persistence.Events) != 1 ||
 		persistence.Events[0].Payload.Commission == nil {
 		t.Fatalf("events lost report commission: %+v", persistence.Events)
+	}
+}
+
+func TestExecutionReportPersistenceFrom_FeeOnlyPartialHasEventWithoutTrade(t *testing.T) {
+	t.Parallel()
+	in := domain.ExecutionReportInput{
+		Account:        domain.AccountID(testAccount),
+		Order:          testOrderXID(0x14),
+		BaseAsset:      testBase,
+		QuoteAsset:     testQuote,
+		Side:           domain.OrderSideBuy,
+		LeavesQuantity: "1",
+		OrderStatus:    domain.OrderStatusPartiallyFilled,
+		Commission:     &domain.Commission{Amount: "1", Currency: testQuote},
+	}
+	persistence := executionReportPersistenceFrom(in, nil, nil, "", "")
+
+	if persistence.Trade != nil {
+		t.Fatalf("persistence.Trade = %+v, want nil", persistence.Trade)
+	}
+	if len(persistence.Events) != 1 ||
+		persistence.Events[0].Type != domain.OrderEventFill {
+		t.Fatalf("fee-only events = %+v, want one fill-status event", persistence.Events)
+	}
+	if persistence.Events[0].Payload.Commission != in.Commission {
+		t.Fatalf("event commission = %+v, want %+v",
+			persistence.Events[0].Payload.Commission, in.Commission)
 	}
 }
 

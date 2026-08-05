@@ -219,7 +219,7 @@ func TestBackupExport_RequiresScope(t *testing.T) {
 		http.MethodPost, "/api/v1/backup/export",
 		bytes.NewBufferString(`{"scope":{}}`),
 	))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 }
@@ -234,7 +234,7 @@ func TestBackupExportRejectsUnknownSection(t *testing.T) {
 		http.MethodPost, "/api/v1/backup/export",
 		bytes.NewBufferString(`{"scope":{"sections":["unknown"]}}`),
 	))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 }
@@ -255,7 +255,7 @@ func TestBackupExportRejectsUnknownNestedScopeField(t *testing.T) {
 			}
 		}`),
 	))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
@@ -293,7 +293,7 @@ func TestBackupRestoreRequiresMode(t *testing.T) {
 	r.ServeHTTP(rec, httptest.NewRequest(
 		http.MethodPost, "/api/v1/backup/restore", bytes.NewReader(body),
 	))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 }
@@ -315,7 +315,7 @@ func TestBackupRestoreRejectsUnknownMode(t *testing.T) {
 	r.ServeHTTP(rec, httptest.NewRequest(
 		http.MethodPost, "/api/v1/backup/restore", bytes.NewReader(body),
 	))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 }
@@ -628,7 +628,7 @@ func TestBackupRestoreFileValidation(t *testing.T) {
 			r.ServeHTTP(rec, httptest.NewRequest(
 				http.MethodPost, "/api/v1/backup/restore", bytes.NewReader(body),
 			))
-			if rec.Code != http.StatusBadRequest {
+			if rec.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("want 400, got %d", rec.Code)
 			}
 			errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
@@ -668,7 +668,7 @@ func TestBackupRestoreInvalidArchiveReturnsBadRequest(t *testing.T) {
 	r.ServeHTTP(rec, httptest.NewRequest(
 		http.MethodPost, "/api/v1/backup/restore", bytes.NewReader(body),
 	))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 }
@@ -690,7 +690,7 @@ func TestBackupRestoreRequiresArchive(t *testing.T) {
 	r.ServeHTTP(rec, httptest.NewRequest(
 		http.MethodPost, "/api/v1/backup/restore", bytes.NewReader(body),
 	))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 	errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
@@ -728,7 +728,7 @@ func TestBackupRestoreRejectsEmptyScope(t *testing.T) {
 	r.ServeHTTP(rec, httptest.NewRequest(
 		http.MethodPost, "/api/v1/backup/restore", bytes.NewReader(body),
 	))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 	errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
@@ -881,7 +881,7 @@ func TestResetDatabaseRequiresConfirmation(t *testing.T) {
 	r.ServeHTTP(rec, httptest.NewRequest(
 		http.MethodPost, "/api/v1/database/reset", bytes.NewReader(body),
 	))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 	errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)
@@ -1247,7 +1247,7 @@ func TestListBalances_CurrencyRequiredIsValidation(t *testing.T) {
 	r, _ := newRouter(&fakeService{balancesErr: store.ErrCurrencyRequired})
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/balances", nil))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 	errObj, _ := bodyMap(t, rec.Result())["error"].(map[string]any)

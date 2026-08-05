@@ -55,10 +55,6 @@ func (l accountLane) SubmitImmediate(
 	if err := ctx.Err(); err != nil {
 		return ImmediateResult{}, fmt.Errorf("engine: submit immediate cancelled: %w", err)
 	}
-	if err := domain.ValidateImmediateOrderAmountKind(o.AmountKind); err != nil {
-		return ImmediateResult{}, err
-	}
-
 	accountID, err := l.routedAccountID(o.Account)
 	if err != nil {
 		return ImmediateResult{}, err
@@ -94,7 +90,7 @@ func (l accountLane) SubmitImmediate(
 		reservation.RollbackAndClose()
 		return ImmediateResult{}, err
 	}
-	fillQuantity, err := immediateFillQuantity(o)
+	fillQuantity, err := immediateFillQuantity(o, tradePrice)
 	if err != nil {
 		reservation.RollbackAndClose()
 		return ImmediateResult{}, err
@@ -103,7 +99,7 @@ func (l accountLane) SubmitImmediate(
 	// engine produced for this very reservation. A lock is an opaque engine
 	// artifact; the LockPrice fallback would rebuild a single-entry
 	// default-policy-group lock and drop every other group's leg.
-	report, err := executionReportFromAccount(domain.ExecutionReportInput{
+	reportInput := domain.ExecutionReportInput{
 		BaseAsset:      o.BaseAsset,
 		QuoteAsset:     o.QuoteAsset,
 		FillQuantity:   fillQuantity,
@@ -115,10 +111,6 @@ func (l accountLane) SubmitImmediate(
 		Side:           o.Side,
 		Order:          o.ExternalID,
 		OrderStatus:    domain.OrderStatusFilled,
-	}, accountID)
-	if err != nil {
-		reservation.RollbackAndClose()
-		return ImmediateResult{}, err
 	}
 
 	// Persist the reservation outcomes before the post-trade outcomes. A final
@@ -131,6 +123,19 @@ func (l accountLane) SubmitImmediate(
 		return ImmediateResult{}, err
 	}
 	reservationOutcomes, err := balanceOutcomesFromList(adjustments)
+	if err != nil {
+		reservation.RollbackAndClose()
+		return ImmediateResult{}, err
+	}
+	reservedQuantity, err := immediateReservedQuantityFrom(
+		"0", reportInput, reservationOutcomes,
+	)
+	if err != nil {
+		reservation.RollbackAndClose()
+		return ImmediateResult{}, err
+	}
+	reportInput.ReservedQuantity = reservedQuantity
+	report, err := executionReportFromAccount(reportInput, accountID)
 	if err != nil {
 		reservation.RollbackAndClose()
 		return ImmediateResult{}, err
@@ -148,22 +153,16 @@ func (l accountLane) SubmitImmediate(
 		report,
 		reservationOutcomes,
 		nil,
-		lockBytes,
-		settlement,
-		fillQuantity,
-		tradePrice,
+		reportInput,
 		"reservation committed",
 	)
 }
 
 type preparedImmediateDropCopy struct {
-	report       model.ExecutionReport
-	outcomes     []BalanceOutcome
-	blocks       []reject.AccountBlock
-	lockBytes    []byte
-	settlement   string
-	fillQuantity string
-	tradePrice   string
+	report      model.ExecutionReport
+	reportInput domain.ExecutionReportInput
+	outcomes    []BalanceOutcome
+	blocks      []reject.AccountBlock
 }
 
 // submitImmediateDropCopy mirrors the regular branch on the drop-copy rollback
@@ -210,13 +209,13 @@ func (l accountLane) submitImmediateDropCopy(
 			if err != nil {
 				return preparedImmediateDropCopy{}, err
 			}
-			fillQuantity, err := immediateFillQuantity(o)
+			fillQuantity, err := immediateFillQuantity(o, tradePrice)
 			if err != nil {
 				return preparedImmediateDropCopy{}, err
 			}
 			// Hand back the lock this operation produced, not a reconstruction
 			// from one display price.
-			report, err := executionReportFromAccount(domain.ExecutionReportInput{
+			reportInput := domain.ExecutionReportInput{
 				BaseAsset:      o.BaseAsset,
 				QuoteAsset:     o.QuoteAsset,
 				FillQuantity:   fillQuantity,
@@ -228,15 +227,23 @@ func (l accountLane) submitImmediateDropCopy(
 				Side:           o.Side,
 				Order:          o.ExternalID,
 				OrderStatus:    domain.OrderStatusFilled,
-			}, accountID)
-			if err != nil {
-				return preparedImmediateDropCopy{}, err
 			}
 			adjustments, err := operation.AccountAdjustments()
 			if err != nil {
 				return preparedImmediateDropCopy{}, err
 			}
 			outcomes, err := balanceOutcomesFromList(adjustments)
+			if err != nil {
+				return preparedImmediateDropCopy{}, err
+			}
+			reservedQuantity, err := immediateReservedQuantityFrom(
+				"0", reportInput, outcomes,
+			)
+			if err != nil {
+				return preparedImmediateDropCopy{}, err
+			}
+			reportInput.ReservedQuantity = reservedQuantity
+			report, err := executionReportFromAccount(reportInput, accountID)
 			if err != nil {
 				return preparedImmediateDropCopy{}, err
 			}
@@ -249,13 +256,10 @@ func (l accountLane) submitImmediateDropCopy(
 				blocks = append(blocks, *block)
 			}
 			return preparedImmediateDropCopy{
-				report:       report,
-				outcomes:     outcomes,
-				blocks:       blocks,
-				lockBytes:    lockBytes,
-				settlement:   settlement,
-				fillQuantity: fillQuantity,
-				tradePrice:   tradePrice,
+				report:      report,
+				reportInput: reportInput,
+				outcomes:    outcomes,
+				blocks:      blocks,
 			}, nil
 		},
 	)
@@ -268,10 +272,7 @@ func (l accountLane) submitImmediateDropCopy(
 		prepared.report,
 		prepared.outcomes,
 		prepared.blocks,
-		prepared.lockBytes,
-		prepared.settlement,
-		prepared.fillQuantity,
-		prepared.tradePrice,
+		prepared.reportInput,
 		"drop-copy committed",
 	)
 }
@@ -282,10 +283,7 @@ func (l accountLane) settleImmediateApplied(
 	report model.ExecutionReport,
 	preTradeOutcomes []BalanceOutcome,
 	preTradeBlocks []reject.AccountBlock,
-	lockBytes []byte,
-	settlement string,
-	fillQuantity string,
-	tradePrice string,
+	reportInput domain.ExecutionReportInput,
 	state string,
 ) (ImmediateResult, error) {
 	postTrade, err := l.eng.ApplyExecutionReport(report)
@@ -306,6 +304,16 @@ func (l accountLane) settleImmediateApplied(
 			o, state, "the ordered outcomes cannot be combined", err,
 		)
 	}
+	reservedQuantity, err := immediateReservedQuantityFrom(
+		reportInput.ReservedQuantity,
+		reportInput,
+		finalOutcomes,
+	)
+	if err != nil {
+		return ImmediateResult{}, immediateReconciliationError(
+			o, state, "the remaining reservation is unmappable", err,
+		)
+	}
 	accountPnl, accountPnlHaltReason, err := spotFundsAccountPnlFromList(
 		accountID,
 		postTrade.AccountPnls,
@@ -322,16 +330,28 @@ func (l accountLane) settleImmediateApplied(
 	)
 	blocks = append(blocks, preTradeBlocks...)
 	blocks = append(blocks, postTrade.AccountBlocks...)
+	executionBlocks := executionBlocksFrom(blocks, reportInput.Account)
+	persistence := executionReportPersistenceFrom(
+		reportInput,
+		executionBlocks,
+		finalOutcomes,
+		accountPnl,
+		accountPnlHaltReason,
+	)
+	persistence.ReservedQuantity = reservedQuantity
 	return ImmediateResult{
 		Accepted:             true,
-		Lock:                 lockBytes,
-		Blocks:               executionBlocksFrom(blocks, o.Account),
+		Persistence:          &persistence,
+		ExecutionReport:      domain.ExecutionReportRequestFromInput(reportInput),
+		Lock:                 append([]byte(nil), reportInput.Lock...),
+		Blocks:               executionBlocks,
 		Outcomes:             finalOutcomes,
 		AccountPnl:           accountPnl,
 		AccountPnlHaltReason: accountPnlHaltReason,
-		SettlementLockPrice:  settlement,
-		FillQuantity:         fillQuantity,
-		TradePrice:           tradePrice,
+		SettlementLockPrice:  reportInput.LockPrice,
+		FillQuantity:         reportInput.FillQuantity,
+		LeavesQuantity:       reportInput.LeavesQuantity,
+		TradePrice:           reportInput.FillPrice,
 	}, nil
 }
 

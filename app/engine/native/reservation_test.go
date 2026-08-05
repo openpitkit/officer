@@ -139,6 +139,34 @@ func newUnpricedTestEngine(t *testing.T) *openPitEngine {
 	return adapter
 }
 
+// newMarketLockTestEngine builds the adapter with validation and a policy-supplied
+// lock price, without SpotFunds rejecting the market order before sizing.
+func newMarketLockTestEngine(t *testing.T, price param.Price) *openPitEngine {
+	t.Helper()
+	snap := Snapshot{Accounts: []domain.Account{account(testAccount)}}
+	res, err := newIDResolver(snap.Accounts, snap.Groups)
+	if err != nil {
+		t.Fatalf("newIDResolver: %v", err)
+	}
+	eng, err := openpit.NewEngineBuilder().AccountSync().
+		Builtin(policies.BuildOrderValidation()).
+		PreTrade(&executionLockSpy{price: price}).
+		Build()
+	if err != nil {
+		t.Fatalf("build market lock engine: %v", err)
+	}
+	adapter := newOpenPitEngine(
+		eng,
+		testAsyncEngine(t, eng),
+		nil,
+		map[string]struct{}{},
+		nil,
+		res,
+	).(*openPitEngine)
+	t.Cleanup(adapter.Stop)
+	return adapter
+}
+
 func TestOpenPitEngineDictionaryResolverMutationsKeepHandleAndSink(t *testing.T) {
 	e := newTestEngine(t)
 	var resolver engine.DictionaryResolver = e
@@ -575,6 +603,12 @@ func TestSubmitImmediate_NetsHeldToZero(t *testing.T) {
 	}
 	if !res.Accepted {
 		t.Fatalf("SubmitImmediate rejected: %+v", res.Rejects)
+	}
+	if res.Persistence == nil || res.Persistence.ReservedQuantity != "0" {
+		t.Fatalf("immediate reserve persistence = %+v, want zero", res.Persistence)
+	}
+	if res.LeavesQuantity != "0" {
+		t.Fatalf("SubmitImmediate leaves = %q, want 0", res.LeavesQuantity)
 	}
 	if res.SettlementLockPrice == "" {
 		t.Fatal("SubmitImmediate: empty settlement lock price")
@@ -1199,13 +1233,14 @@ func TestApplyExecutionReport_NoTradeFinalReleasesReservation(t *testing.T) {
 	}
 
 	result, err := e.ApplyExecutionReport(ctx, domain.ExecutionReportInput{
-		BaseAsset:      testBase,
-		QuoteAsset:     testQuote,
-		LeavesQuantity: testQty,
-		Lock:           submitted.Lock,
-		Account:        domain.AccountID(testAccount),
-		Side:           domain.OrderSideBuy,
-		OrderStatus:    domain.OrderStatusCancelled,
+		BaseAsset:        testBase,
+		QuoteAsset:       testQuote,
+		LeavesQuantity:   "0",
+		ReservedQuantity: testQty,
+		Lock:             submitted.Lock,
+		Account:          domain.AccountID(testAccount),
+		Side:             domain.OrderSideBuy,
+		OrderStatus:      domain.OrderStatusCancelled,
 	})
 	if err != nil {
 		t.Fatalf("ApplyExecutionReport: %v", err)
@@ -1228,11 +1263,8 @@ func TestApplyExecutionReport_NoTradeFinalReleasesReservation(t *testing.T) {
 	}
 }
 
-// An execution report that reaches the adapter without leaves is no longer
-// refused here: the presence rule belongs to the intake boundary
-// (domain.ExecutionReportRequiresEngine, covered by the domain and node tests),
-// because the engine's post-trade path cannot reject an incomplete report.
-// TestExecutionReportFrom_EmptyLeavesIsNotSet covers what the mapper does now.
+// Raw leaves presence remains an intake rule. Native mapping derives terminal
+// release leaves from the persisted reservation state supplied by the node.
 
 func newTestEngineWithSpotFundsPnlBounds(t *testing.T) *openPitEngine {
 	t.Helper()
@@ -1322,7 +1354,7 @@ func TestSpotFundsPnlBoundsBuildConfiguresBasePolicyAndAccountPnl(t *testing.T) 
 		LeavesQuantity: "0",
 		LockPrice:      submitted.SettlementLockPrice,
 		Lock:           submitted.Lock,
-		Commission:     &domain.Commission{Amount: "-2", Currency: testQuote},
+		Commission:     &domain.Commission{Amount: "2", Currency: testQuote},
 		Account:        domain.AccountID(testAccount),
 		Side:           domain.OrderSideBuy,
 		OrderStatus:    domain.OrderStatusFilled,
@@ -1372,7 +1404,7 @@ func TestConfigurePolicy_SpotFundsPnlBoundsClearsLastBarrierOnline(t *testing.T)
 		LeavesQuantity: "0",
 		LockPrice:      submitted.SettlementLockPrice,
 		Lock:           submitted.Lock,
-		Commission:     &domain.Commission{Amount: "-2", Currency: testQuote},
+		Commission:     &domain.Commission{Amount: "2", Currency: testQuote},
 		Account:        domain.AccountID(testAccount),
 		Side:           domain.OrderSideBuy,
 		OrderStatus:    domain.OrderStatusFilled,
@@ -1435,7 +1467,7 @@ func newTestEngineGlobalSpotFundsPnlBounds(t *testing.T) *openPitEngine {
 	return adapter
 }
 
-// commitSpotFundsFeeFill runs one buy fill of the base asset carrying a -2 quote
+// commitSpotFundsFeeFill runs one buy fill of the base asset carrying a 2 quote
 // commission, so the SpotFunds policy accrues -2 of realized account-currency
 // P&L. It returns the execution result so a caller can assert the kill-switch
 // block state.
@@ -1459,7 +1491,7 @@ func commitSpotFundsFeeFill(t *testing.T, e *openPitEngine) ExecutionReportResul
 		LeavesQuantity: "0",
 		LockPrice:      submitted.SettlementLockPrice,
 		Lock:           submitted.Lock,
-		Commission:     &domain.Commission{Amount: "-2", Currency: testQuote},
+		Commission:     &domain.Commission{Amount: "2", Currency: testQuote},
 		Account:        domain.AccountID(testAccount),
 		Side:           domain.OrderSideBuy,
 		OrderStatus:    domain.OrderStatusFilled,
@@ -1470,11 +1502,10 @@ func commitSpotFundsFeeFill(t *testing.T, e *openPitEngine) ExecutionReportResul
 	return result
 }
 
-// TestConfigurePolicy_SpotFundsPnlBoundsNewAccountBarrierPreservesLivePnl proves
-// that adding an account-scope barrier at runtime does not reset the account's
-// live accumulated P&L: the barrier arms against P&L already accrued rather
-// than starting from zero.
-func TestConfigurePolicy_SpotFundsPnlBoundsNewAccountBarrierPreservesLivePnl(t *testing.T) {
+// TestConfigurePolicy_SpotFundsPnlBoundsNewAccountBarrierReportsLivePnlBlock
+// proves an account barrier added at runtime observes the account's accumulated
+// P&L and returns its newly inserted block rather than silently discarding it.
+func TestConfigurePolicy_SpotFundsPnlBoundsNewAccountBarrierReportsLivePnlBlock(t *testing.T) {
 	e := newTestEngineGlobalSpotFundsPnlBounds(t)
 	ctx := context.Background()
 
@@ -1484,8 +1515,8 @@ func TestConfigurePolicy_SpotFundsPnlBoundsNewAccountBarrierPreservesLivePnl(t *
 		t.Fatalf("first fill blocked unexpectedly: %+v", first.Blocks)
 	}
 
-	// Introduce an account-scope barrier. It must not reset the -2 already
-	// accrued, so its -3 lower bound stays armed against live P&L.
+	// Introduce an account-scope barrier. It must observe the -2 already
+	// accrued and return the newly inserted block with its account identity.
 	limits := LimitSet{SpotFundsPnlBoundsLimits: []domain.LimitSpotFundsPnlBounds{
 		{
 			Scope:      domain.ScopeGlobal,
@@ -1499,24 +1530,20 @@ func TestConfigurePolicy_SpotFundsPnlBoundsNewAccountBarrierPreservesLivePnl(t *
 		{
 			Scope:      domain.ScopeAccount,
 			Account:    domain.AccountID(testAccount),
-			LowerBound: "-3",
+			LowerBound: "-1",
 		},
 	}}
-	if _, err := e.ConfigurePolicy(
+	result, err := e.ConfigurePolicy(
 		ctx, domain.PolicySpotFundsPnlBoundsKillSwitch, limits,
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatalf("ConfigurePolicy add account barrier: %v", err)
 	}
-
-	// The second fill drives accrued P&L to -4, breaching the -3 bound. A reset to
-	// zero would leave it at -2 and pass, so a block proves the live P&L survived.
-	second := commitSpotFundsFeeFill(t, e)
-	if len(second.Blocks) == 0 {
-		t.Fatal("account barrier did not block on preserved live P&L; " +
-			"ConfigurePolicy reset the accumulator")
+	if len(result.AccountBlocks) != 1 {
+		t.Fatalf("configuration blocks = %+v, want one", result.AccountBlocks)
 	}
-	if second.Blocks[0].Account != domain.AccountID(testAccount) {
-		t.Fatalf("block account = %q, want %q", second.Blocks[0].Account, testAccount)
+	if result.AccountBlocks[0].Account != domain.AccountID(testAccount) {
+		t.Fatalf("block account = %q, want %q", result.AccountBlocks[0].Account, testAccount)
 	}
 }
 
@@ -1750,7 +1777,7 @@ func TestSubmitOrder_UnpricedVolumeDoesNotInventReject(t *testing.T) {
 	}
 }
 
-func TestSubmitImmediate_UnpricedVolumeIsInvalid(t *testing.T) {
+func TestSubmitImmediate_UnpricedVolumeWithoutLockIsInvalid(t *testing.T) {
 	e := newUnpricedTestEngine(t)
 	order := testOrder()
 	order.AmountKind = domain.OrderAmountKindVolume
@@ -1759,28 +1786,159 @@ func TestSubmitImmediate_UnpricedVolumeIsInvalid(t *testing.T) {
 
 	_, err := e.SubmitImmediate(context.Background(), order)
 	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("SubmitImmediate(volume) = %v, want ErrInvalid", err)
+		t.Fatalf("SubmitImmediate(volume without price) = %v, want ErrInvalid", err)
 	}
 }
 
-func TestImmediateFillQuantity_RequiresQuantity(t *testing.T) {
-	quantity, err := immediateFillQuantity(domain.Order{
-		AmountKind:  domain.OrderAmountKindQuantity,
-		AmountValue: "5.00",
-	})
-	if err != nil {
-		t.Fatalf("immediateFillQuantity(quantity): %v", err)
-	}
-	if quantity != "5.00" {
-		t.Fatalf("immediateFillQuantity(quantity) = %q, want 5.00", quantity)
-	}
+func TestSubmitImmediate_VolumeUsesResolvedTradePrice(t *testing.T) {
+	t.Run("limit", func(t *testing.T) {
+		e := newTestEngine(t)
+		order := testOrder()
+		order.AmountKind = domain.OrderAmountKindVolume
+		order.AmountValue = "500"
 
-	_, err = immediateFillQuantity(domain.Order{
-		AmountKind:  domain.OrderAmountKindVolume,
-		AmountValue: "500",
+		result, err := e.SubmitImmediate(context.Background(), order)
+		if err != nil {
+			t.Fatalf("SubmitImmediate(volume limit): %v", err)
+		}
+		if !result.Accepted {
+			t.Fatalf("SubmitImmediate(volume limit) rejected: %+v", result.Rejects)
+		}
+		if result.TradePrice != testLimit || result.FillQuantity != testQty {
+			t.Fatalf(
+				"volume limit fill = (%q, %q), want price %q and quantity %q",
+				result.TradePrice,
+				result.FillQuantity,
+				testLimit,
+				testQty,
+			)
+		}
 	})
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("immediateFillQuantity(volume) = %v, want ErrInvalid", err)
+
+	t.Run("zero limit price", func(t *testing.T) {
+		e := newTestEngine(t)
+		order := testOrder()
+		order.AmountKind = domain.OrderAmountKindVolume
+		order.AmountValue = "500"
+		order.Price = "0"
+
+		result, err := e.SubmitImmediate(context.Background(), order)
+		if err != nil {
+			t.Fatalf("SubmitImmediate(volume at zero price): %v", err)
+		}
+		if !result.Accepted {
+			t.Fatalf(
+				"SubmitImmediate(volume at zero price) rejected: %+v",
+				result.Rejects,
+			)
+		}
+		if result.TradePrice != "0" || result.FillQuantity != "0" {
+			t.Fatalf(
+				"zero-price volume fill = (%q, %q), want price 0 and quantity 0",
+				result.TradePrice,
+				result.FillQuantity,
+			)
+		}
+		for _, outcome := range result.Outcomes {
+			if outcome.Asset != testBase && outcome.Asset != testQuote {
+				continue
+			}
+			delta := outcome.Outcome
+			if (delta.BalanceDelta != "" && delta.BalanceDelta != "0") ||
+				(delta.HeldDelta != "" && delta.HeldDelta != "0") ||
+				(delta.IncomingDelta != "" && delta.IncomingDelta != "0") ||
+				(delta.RealizedPnlDelta != "" && delta.RealizedPnlDelta != "0") {
+				t.Fatalf(
+					"zero-price volume changed %s: %+v",
+					outcome.Asset,
+					delta,
+				)
+			}
+		}
+	})
+
+	t.Run("market lock", func(t *testing.T) {
+		price, err := param.NewPriceFromString(testLimit)
+		if err != nil {
+			t.Fatalf("lock spy price: %v", err)
+		}
+		e := newMarketLockTestEngine(t, price)
+		order := testOrder()
+		order.AmountKind = domain.OrderAmountKindVolume
+		order.AmountValue = "500"
+		order.Price = ""
+
+		result, err := e.SubmitImmediate(context.Background(), order)
+		if err != nil {
+			t.Fatalf("SubmitImmediate(volume market): %v", err)
+		}
+		if !result.Accepted {
+			t.Fatalf("SubmitImmediate(volume market) rejected: %+v", result.Rejects)
+		}
+		if result.TradePrice != testLimit || result.FillQuantity != testQty {
+			t.Fatalf(
+				"volume market fill = (%q, %q), want lock price %q and quantity %q",
+				result.TradePrice,
+				result.FillQuantity,
+				testLimit,
+				testQty,
+			)
+		}
+	})
+}
+
+func TestImmediateFillQuantity_UsesSDKVolumeSizing(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		order      domain.Order
+		tradePrice string
+		want       string
+	}{
+		{
+			name: "quantity remains unchanged",
+			order: domain.Order{
+				AmountKind:  domain.OrderAmountKindQuantity,
+				AmountValue: "5.00",
+			},
+			want: "5.00",
+		},
+		{
+			name: "volume uses positive price",
+			order: domain.Order{
+				AmountKind:  domain.OrderAmountKindVolume,
+				AmountValue: "500",
+			},
+			tradePrice: "100",
+			want:       "5",
+		},
+		{
+			name: "volume uses absolute negative price",
+			order: domain.Order{
+				AmountKind:  domain.OrderAmountKindVolume,
+				AmountValue: "500",
+			},
+			tradePrice: "-100",
+			want:       "5",
+		},
+		{
+			name: "nonzero volume at zero price becomes zero quantity",
+			order: domain.Order{
+				AmountKind:  domain.OrderAmountKindVolume,
+				AmountValue: "500",
+			},
+			tradePrice: "0",
+			want:       "0",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := immediateFillQuantity(test.order, test.tradePrice)
+			if err != nil {
+				t.Fatalf("immediateFillQuantity: %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("immediateFillQuantity = %q, want %q", got, test.want)
+			}
+		})
 	}
 }
 

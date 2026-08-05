@@ -215,6 +215,32 @@ func upsertBalancesTx(
 				b.Asset, b.Account, err,
 			)
 		}
+		available := settleOrZero(b.Available)
+		held := settleOrZero(b.Held)
+		incoming := settleOrZero(b.Incoming)
+		if balanceAmountsEmpty(
+			available,
+			held,
+			incoming,
+			b.RealizedPnl,
+			string(b.RealizedPnlHaltReason),
+			b.AverageEntryPrice,
+		) {
+			if _, err := tx.ExecContext(
+				ctx,
+				`DELETE FROM balance WHERE account_id = ? AND asset_id = ?`,
+				accountID,
+				assetID,
+			); err != nil {
+				return fmt.Errorf(
+					"store: prune empty adjustment balance %s/%s: %w",
+					b.Account,
+					b.Asset,
+					err,
+				)
+			}
+			continue
+		}
 		updatedAt := nowStr()
 		if !b.UpdatedAt.IsZero() {
 			updatedAt = b.UpdatedAt.UTC().Format(time.RFC3339Nano)
@@ -234,7 +260,7 @@ func upsertBalancesTx(
 			  average_entry_price = excluded.average_entry_price,
 			  updated_at = excluded.updated_at`,
 			accountID, assetID,
-			settleOrZero(b.Available), settleOrZero(b.Held), settleOrZero(b.Incoming),
+			available, held, incoming,
 			nullablePnl(b.RealizedPnl, b.RealizedPnlHaltReason), b.RealizedPnlHaltReason,
 			b.AverageEntryPrice, updatedAt,
 		); err != nil {

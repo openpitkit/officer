@@ -130,6 +130,7 @@
       "missingInitialPnl": "PnL 计算已停止：缺少权威初始 PnL 值。",
       "missingCostBasis": "PnL 计算已停止：缺少持仓成本基础。",
       "arithmeticOverflow": "PnL 计算已停止：精确运算超出支持的数值范围。",
+      "staleDenomination": "PnL 计算已停止：存储的 PnL 或成本基础使用先前的有效账户货币。",
       "unknown": "引擎已停止 PnL 计算。"
     },
     "filteredTo": "— 筛选至",

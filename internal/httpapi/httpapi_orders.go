@@ -123,7 +123,7 @@ func handleGetOrder(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := httpx.PathOrderExternalID(r)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteBadRequestProblem(w, err.Error(), "url_encoding")
 			return
 		}
 		detail, err := svc.GetOrder(r.Context(), id)
@@ -306,6 +306,7 @@ func toEventReproductionRequestDTO(p domain.ApprovalPayload) *eventReproductionR
 		PriceCurrency:   p.PriceCurrency,
 		AccountID:       p.AccountID,
 		Verdict:         p.Verdict,
+		Rejects:         toOrderRejectDTOs(p.Rejects),
 		ExecutionReport: toExecutionReportRequestDTO(p.ExecutionReport),
 	}
 	if p.Result != nil {
@@ -374,15 +375,20 @@ func submitPayloadRejectReasons(p domain.ApprovalPayload) []orderRejectDTO {
 	if p.Verdict != "reject" {
 		return nil
 	}
+	if len(p.Rejects) > 0 {
+		return toOrderRejectDTOs(p.Rejects)
+	}
 	if p.RejectCode == "" && p.RejectScope == "" &&
-		p.RejectPolicy == "" && p.RejectReason == "" {
+		p.RejectPolicy == "" && p.RejectReason == "" &&
+		p.RejectDetails == "" {
 		return nil
 	}
 	return []orderRejectDTO{{
-		Code:   p.RejectCode,
-		Scope:  p.RejectScope,
-		Policy: p.RejectPolicy,
-		Reason: p.RejectReason,
+		Code:    p.RejectCode,
+		Scope:   p.RejectScope,
+		Policy:  p.RejectPolicy,
+		Reason:  p.RejectReason,
+		Details: p.RejectDetails,
 	}}
 }
 
@@ -458,7 +464,9 @@ func handleApplyExecutionReport(svc Service) http.HandlerFunc {
 			return
 		}
 		if req.Status == "" {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", "status is required")
+			httpx.WriteValidationProblem(
+				w, "status is required", "/status", "required",
+			)
 			return
 		}
 		status := domain.OrderStatus(req.Status)
@@ -467,8 +475,12 @@ func handleApplyExecutionReport(svc Service) http.HandlerFunc {
 			hasAmount := req.Commission.Amount != ""
 			hasCurrency := req.Commission.Currency != ""
 			if hasAmount != hasCurrency {
-				httpx.WriteErrMsg(w, http.StatusBadRequest, "validation",
-					"commission amount and currency must be provided together")
+				httpx.WriteValidationProblem(
+					w,
+					"commission amount and currency must be provided together",
+					"/commission",
+					"paired_fields",
+				)
 				return
 			}
 			if hasAmount {
@@ -490,18 +502,18 @@ func handleApplyExecutionReport(svc Service) http.HandlerFunc {
 		if req.ID != "" {
 			reportID, err := domain.ParseExternalID(req.ID)
 			if err != nil {
-				httpx.WriteErr(w, err)
+				httpx.WriteValidationProblem(w, err.Error(), "/id", "format")
 				return
 			}
 			in.ExternalID = reportID
 		}
 		if _, err := domain.ExecutionReportRequiresEngine(in); err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteValidationProblem(w, err.Error(), "", "execution_report")
 			return
 		}
 		orderID, err := domain.ParseExternalID(id)
 		if err != nil {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "validation", err.Error())
+			httpx.WriteValidationProblem(w, err.Error(), "/id", "format")
 			return
 		}
 		in.Order = orderID

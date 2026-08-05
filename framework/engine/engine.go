@@ -160,6 +160,12 @@ type BalanceOutcome struct {
 // for a market order), and the original engine lock. On reject Rejects holds
 // the engine rejects and nothing settles.
 type ImmediateResult struct {
+	// Persistence is the authoritative execution-report write set produced by
+	// the same adapter path as a caller-driven execution report.
+	Persistence *ExecutionReportPersistence
+	// ExecutionReport is the audit-safe immutable report request accepted by the
+	// engine. Its external ID is assigned by the store with the settlement.
+	ExecutionReport *domain.ExecutionReportRequest
 	// Lock is the non-empty SDK-serialized reservation lock captured before
 	// commit, ready to persist verbatim on an accepted order. Display prices are
 	// derived later via LockDisplayPrices.
@@ -182,6 +188,9 @@ type ImmediateResult struct {
 	SettlementLockPrice string
 	// FillQuantity is the request's base quantity settled by the immediate fill.
 	FillQuantity string
+	// LeavesQuantity is the authoritative terminal leaves quantity carried by
+	// the execution report the engine accepted for this immediate fill.
+	LeavesQuantity string
 	// TradePrice is the fill price recorded for the immediate order. It is the
 	// request limit price, or the engine lock price for a market order.
 	TradePrice string
@@ -212,6 +221,9 @@ type ExecutionReportPersistence struct {
 	// Leaves is the report's remaining open quantity, copied verbatim. Empty
 	// leaves the stored value unchanged.
 	Leaves string
+	// ReservedQuantity is the absolute reserve remaining after the engine-applied
+	// base-asset delta. Empty leaves the stored reserve unchanged.
+	ReservedQuantity string
 	// Balances are the per-asset balance outcomes returned by the engine.
 	Balances []domain.BalanceSettlement
 	// Events are the order lifecycle events to append.

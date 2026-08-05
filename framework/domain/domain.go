@@ -117,6 +117,29 @@ type HasDependentsError struct {
 	Dependents []DependentCount
 }
 
+// CurrencyChangeBlockedError carries the target whose currency cannot change
+// while its current economic state is non-empty.
+type CurrencyChangeBlockedError struct {
+	Scope    string
+	TargetID string
+	Cause    error
+}
+
+// Error returns the guard's human-readable explanation.
+func (e CurrencyChangeBlockedError) Error() string { return e.Cause.Error() }
+
+// Unwrap preserves the generic conflict contract for non-HTTP callers.
+func (e CurrencyChangeBlockedError) Unwrap() error { return e.Cause }
+
+// NewCurrencyChangeBlockedError creates a structured currency guard error.
+func NewCurrencyChangeBlockedError(scope, targetID string, cause error) error {
+	return CurrencyChangeBlockedError{
+		Scope:    scope,
+		TargetID: targetID,
+		Cause:    cause,
+	}
+}
+
 // Error returns the stable delete-policy error text.
 func (e HasDependentsError) Error() string { return ErrHasDependents.Error() }
 

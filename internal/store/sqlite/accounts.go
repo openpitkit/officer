@@ -20,8 +20,8 @@
 // addressed by their public code; the surrogate key never crosses the
 // interface boundary. Accounts and groups carry a connector-assigned engine id,
 // returned (populated) on the create path so the engine layer can build its
-// tree, and an account's group link is cleared (SET NULL), not cascaded, when its
-// group is deleted.
+// tree. A group owns its member accounts, so its foreign key cascades them and
+// their operational rows when the group is deleted.
 
 package sqlite
 
@@ -425,7 +425,7 @@ func (r *realmStore) UpdateAssetClass(
 
 // DeleteAssetClass removes the class. Assets link to it by the class_id foreign
 // key: without force, referencing assets are reported as dependents; either way
-// the delete clears the link via ON DELETE SET NULL, mirroring DeleteGroup.
+// the delete clears the link via ON DELETE SET NULL.
 func (r *realmStore) DeleteAssetClass(
 	ctx context.Context, code string, force bool,
 ) error {
@@ -962,7 +962,9 @@ func (r *realmStore) SetGroupBlocked(
 	return notFoundIfNoRows(res, "group", code)
 }
 
-// DeleteGroup removes the group; member accounts have their link cleared.
+// DeleteGroup removes the group. SQLite cascades member accounts and every
+// account-owned operational row through the schema foreign keys while durable
+// audit rows survive with their nullable account links cleared.
 func (r *realmStore) DeleteGroup(ctx context.Context, code string) error {
 	db, err := r.db()
 	if err != nil {

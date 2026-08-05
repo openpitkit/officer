@@ -78,9 +78,11 @@ type fakeEngine struct {
 	submitBlocks               []domain.ExecutionAccountBlock
 	submitAccountPnl           string
 	submitAccountPnlHaltReason domain.PnlHaltReason
+	submitReservedQuantity     string
 	submitReject               *domain.OrderReject
 	execReportBlocks           []domain.ExecutionAccountBlock
 	execReportOutcomes         []engine.BalanceOutcome
+	execReportReservedQuantity string
 	emptyExecReportPersistence bool
 	stateMu                    sync.Mutex
 	accountLanesMu             sync.Mutex
@@ -877,14 +879,60 @@ func (e *fakeEngine) SubmitImmediate(
 			tradePrice = settlementPrice
 		}
 	}
+	reportInput := domain.ExecutionReportInput{
+		BaseAsset:      o.BaseAsset,
+		QuoteAsset:     o.QuoteAsset,
+		FillQuantity:   o.AmountValue,
+		FillPrice:      tradePrice,
+		LeavesQuantity: "0",
+		LockPrice:      settlementPrice,
+		Lock:           append([]byte(nil), e.submitLock...),
+		Order:          o.ExternalID,
+		Account:        o.Account,
+		Side:           o.Side,
+		OrderStatus:    domain.OrderStatusFilled,
+	}
+	request := domain.ExecutionReportRequestFromInput(reportInput)
+	persistence := engine.ExecutionReportPersistence{
+		Trade: &domain.Trade{
+			Order:      o.ExternalID,
+			Account:    o.Account,
+			BaseAsset:  o.BaseAsset,
+			QuoteAsset: o.QuoteAsset,
+			Side:       o.Side,
+			Quantity:   reportInput.FillQuantity,
+			Price:      reportInput.FillPrice,
+			LockPrice:  reportInput.LockPrice,
+		},
+		OrderStatus:          domain.OrderStatusFilled,
+		AccountPnl:           e.submitAccountPnl,
+		AccountPnlHaltReason: e.submitAccountPnlHaltReason,
+		Leaves:               reportInput.LeavesQuantity,
+		ReservedQuantity:     e.submitReservedQuantity,
+		Balances:             balanceSettlementsFrom(e.submitOutcomes),
+		Events: []domain.OrderEvent{{
+			Order: o.ExternalID,
+			Type:  domain.OrderEventFill,
+			Payload: domain.OrderEventPayload{
+				FillQuantity:   reportInput.FillQuantity,
+				FillPrice:      reportInput.FillPrice,
+				FillLockPrice:  reportInput.LockPrice,
+				LeavesQuantity: reportInput.LeavesQuantity,
+				OrderStatus:    string(reportInput.OrderStatus),
+			},
+		}},
+	}
 	return engine.ImmediateResult{
 		Accepted:             true,
+		Persistence:          &persistence,
+		ExecutionReport:      request,
 		Lock:                 e.submitLock,
 		Outcomes:             e.submitOutcomes,
 		AccountPnl:           e.submitAccountPnl,
 		AccountPnlHaltReason: e.submitAccountPnlHaltReason,
 		SettlementLockPrice:  settlementPrice,
 		FillQuantity:         o.AmountValue,
+		LeavesQuantity:       "0",
 		TradePrice:           tradePrice,
 	}, nil
 }
@@ -997,13 +1045,14 @@ func (e *fakeEngine) ApplyExecutionReport(
 		}
 	}
 	persistence := engine.ExecutionReportPersistence{
-		Trade:       trade,
-		Commission:  in.Commission,
-		OrderStatus: in.OrderStatus,
-		Leaves:      in.LeavesQuantity,
-		Balances:    balanceSettlementsFrom(e.execReportOutcomes),
-		Events:      events,
-		Blocks:      e.execReportBlocks,
+		Trade:            trade,
+		Commission:       in.Commission,
+		OrderStatus:      in.OrderStatus,
+		Leaves:           in.LeavesQuantity,
+		ReservedQuantity: e.execReportReservedQuantity,
+		Balances:         balanceSettlementsFrom(e.execReportOutcomes),
+		Events:           events,
+		Blocks:           e.execReportBlocks,
 	}
 	return engine.ExecutionReportResult{
 		Persistence: &persistence,

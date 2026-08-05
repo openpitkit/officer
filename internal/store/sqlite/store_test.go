@@ -1019,7 +1019,7 @@ func TestAccountRoundTripEngineIDAndGroupLink(t *testing.T) {
 	}
 }
 
-func TestDeleteGroupClearsAccountLink(t *testing.T) {
+func TestDeleteGroupCascadesMemberAccount(t *testing.T) {
 	ctx := context.Background()
 	_, rs := newTestStore(t)
 
@@ -1030,17 +1030,11 @@ func TestDeleteGroupClearsAccountLink(t *testing.T) {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 
-	// Deleting the group must clear the member's link (ON DELETE SET NULL), not
-	// cascade-delete the account.
 	if err := rs.DeleteGroup(ctx, "alpha"); err != nil {
 		t.Fatalf("DeleteGroup: %v", err)
 	}
-	got, ok, err := rs.GetAccount(ctx, "acc-1")
-	if err != nil || !ok {
-		t.Fatalf("account should survive group delete: ok=%v err=%v", ok, err)
-	}
-	if got.GroupCode != "" {
-		t.Fatalf("account group code after group delete = %q, want empty", got.GroupCode)
+	if _, ok, err := rs.GetAccount(ctx, "acc-1"); err != nil || ok {
+		t.Fatalf("account after group delete: ok=%v err=%v, want absent", ok, err)
 	}
 
 	if err := rs.DeleteGroup(ctx, "alpha"); !errors.Is(err, domain.ErrNotFound) {

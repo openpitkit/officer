@@ -396,13 +396,23 @@ func (a *App) RunMCPStdio(ctx context.Context) error {
 	)
 }
 
-// BuildServeHandler builds the HTTP route tree for serve mode.
-func (a *App) BuildServeHandler(logs httpx.LogSource, mcpPath string) (http.Handler, error) {
+// BuildServeHandler builds the HTTP route tree for serve mode. Extra routes
+// are registered before the runtime route manifest and router are built.
+func (a *App) BuildServeHandler(
+	logs httpx.LogSource,
+	mcpPath string,
+	extraRoutes ...httpx.Route,
+) (http.Handler, error) {
 	spa, err := a.spaFactory()
 	if err != nil {
 		return nil, fmt.Errorf("load embedded dashboard: %w", err)
 	}
 	routes := a.routeConfig(a.service, logs)
+	if routes.Routes != nil {
+		for _, route := range extraRoutes {
+			routes.Routes.Register(route)
+		}
+	}
 	authorizer := a.resolveAuthorizerFromConfig(routes)
 	mcpHandler, err := frameworkmcp.Handler(
 		a.mcpRegistry,

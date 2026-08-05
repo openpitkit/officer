@@ -186,7 +186,7 @@ func TestListGroups_BadSort(t *testing.T) {
 	r.ServeHTTP(rec, httptest.NewRequest(
 		http.MethodGet, "/api/v1/groups?sort=unknown", nil,
 	))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 }
@@ -200,7 +200,7 @@ func TestListGroups_BadLimit(t *testing.T) {
 	r.ServeHTTP(rec, httptest.NewRequest(
 		http.MethodGet, "/api/v1/groups?limit=-1", nil,
 	))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 }
@@ -333,7 +333,7 @@ func TestCreateGroup_ValidationError(t *testing.T) {
 	body := bytes.NewBufferString(`{"code":""}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/groups", body))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 	m := bodyMap(t, rec.Result())
@@ -493,13 +493,45 @@ func TestSetGroupCurrency_ServiceInvalid(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut,
 		"/api/v1/groups/grp-1/currency", body))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 	m := bodyMap(t, rec.Result())
 	errObj, _ := m["error"].(map[string]any)
 	if errObj["code"] != "validation" {
 		t.Fatalf("want code=validation, got %v", errObj["code"])
+	}
+}
+
+func TestSetGroupCurrency_EconomicStateConflict(t *testing.T) {
+	svc := &fakeService{
+		groups: []domain.AccountGroup{{Code: "grp-1"}},
+		groupErr: domain.NewCurrencyChangeBlockedError(
+			domain.ScopeAccountGroup,
+			"grp-1",
+			fmt.Errorf("account(s) acc-1 hold non-zero positions: %w", domain.ErrConflict),
+		),
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/groups/grp-1/currency",
+		bytes.NewBufferString(`{"currency":"EUR"}`),
+	))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+	m := bodyMap(t, rec.Result())
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "currency_change_blocked" ||
+		errObj["field"] != "currency" ||
+		errObj["path"] != "groups.grp-1.currency" ||
+		errObj["constraint"] != "all_members_economically_empty" {
+		t.Fatalf("unexpected currency guard error: %v", errObj)
 	}
 }
 
@@ -535,13 +567,41 @@ func TestSetDefaultGroupCurrency_ServiceInvalid(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut,
 		"/api/v1/groups/-/default/currency", body))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 	m := bodyMap(t, rec.Result())
 	errObj, _ := m["error"].(map[string]any)
 	if errObj["code"] != "validation" {
 		t.Fatalf("want code=validation, got %v", errObj["code"])
+	}
+}
+
+func TestSetDefaultGroupCurrency_EconomicStateConflict(t *testing.T) {
+	svc := &fakeService{groupErr: domain.NewCurrencyChangeBlockedError(
+		domain.ScopeAccountGroup,
+		"-",
+		fmt.Errorf("account(s) acc-1 hold non-zero P&L: %w", domain.ErrConflict),
+	)}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/groups/-/default/currency",
+		bytes.NewBufferString(`{"currency":"EUR"}`),
+	))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+	m := bodyMap(t, rec.Result())
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "currency_change_blocked" ||
+		errObj["path"] != "groups.-.currency" ||
+		errObj["constraint"] != "all_members_economically_empty" {
+		t.Fatalf("unexpected currency guard error: %v", errObj)
 	}
 }
 

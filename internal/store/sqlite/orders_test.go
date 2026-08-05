@@ -1099,6 +1099,13 @@ func TestOrderCommissionSubtotalsFeeOnlyReportAgreesAcrossReads(t *testing.T) {
 			Order:       feeOnlyID,
 			OrderStatus: domain.OrderStatusAccepted,
 		})
+	addReportEvent(feeOnlyID, domain.OrderEventFill,
+		&domain.ExecutionReportRequest{
+			Commission:     &domain.Commission{Amount: "-0.20", Currency: "BNB"},
+			Order:          feeOnlyID,
+			OrderStatus:    domain.OrderStatusPartiallyFilled,
+			LeavesQuantity: "1",
+		})
 
 	page, err := rs.ListOrderRows(ctx, fwstore.OrderListFilter{
 		Page: fwstore.PageSpec{Limit: 10},
@@ -1127,7 +1134,10 @@ func TestOrderCommissionSubtotalsFeeOnlyReportAgreesAcrossReads(t *testing.T) {
 		{
 			name:  "fee-only report alone",
 			order: feeOnlyID,
-			want:  []domain.Commission{{Amount: "-0.3", Currency: "USD"}},
+			want: []domain.Commission{
+				{Amount: "-0.2", Currency: "BNB"},
+				{Amount: "-0.3", Currency: "USD"},
+			},
 		},
 	} {
 		detail, err := rs.GetOrder(ctx, testCase.order)
@@ -1318,16 +1328,13 @@ func TestCountOrders(t *testing.T) {
 func TestCountActiveOrders(t *testing.T) {
 	ctx, rs := seedOrderFixtures(t)
 
-	statuses := []domain.OrderStatus{
-		domain.OrderStatusSubmitted,
-		domain.OrderStatusAccepted,
-		domain.OrderStatusPartiallyFilled,
-		domain.OrderStatusCommitted,
+	activeStatuses := domain.OrderStatusesEligibleForFill()
+	statuses := append(activeStatuses,
 		domain.OrderStatusFilled,
 		domain.OrderStatusRejected,
 		domain.OrderStatusCancelled,
 		domain.OrderStatusRolledBack,
-	}
+	)
 	for _, status := range statuses {
 		order := sampleOrder()
 		order.Status = status
@@ -1337,8 +1344,13 @@ func TestCountActiveOrders(t *testing.T) {
 	}
 
 	n, err := rs.CountActiveOrders(ctx)
-	if err != nil || n != 4 {
-		t.Fatalf("CountActiveOrders = %d, err=%v, want 4", n, err)
+	if err != nil || n != len(activeStatuses) {
+		t.Fatalf(
+			"CountActiveOrders = %d, err=%v, want %d",
+			n,
+			err,
+			len(activeStatuses),
+		)
 	}
 }
 
@@ -1529,6 +1541,70 @@ func TestRecordOrderSettlementPersistsExecutionReportIdentityAndEventLinks(t *te
 			event.Payload.ExecutionReport.ExternalID != supplied {
 			t.Fatalf("event report snapshot = %+v, want id %q", event.Payload.ExecutionReport, supplied)
 		}
+	}
+}
+
+func TestRecordOrderSubmissionPersistsExecutionReportIdentityAndEventLink(
+	t *testing.T,
+) {
+	ctx, rs := seedOrderFixtures(t)
+	reportID := domain.ExternalID("")
+	request := &domain.ExecutionReportRequest{
+		FillQuantity: "1", FillPrice: "100", LeavesQuantity: "0",
+		OrderStatus: domain.OrderStatusFilled,
+	}
+	created, err := rs.(*realmStore).RecordOrderSubmission(
+		ctx,
+		sampleOrder(),
+		domain.OrderEvent{Type: domain.OrderEventSubmitted},
+		func(order domain.Order) (domain.OrderSettlement, error) {
+			request.Order = order.ExternalID
+			return domain.OrderSettlement{
+				ReportID:    &reportID,
+				Account:     order.Account,
+				Order:       order.ExternalID,
+				OrderStatus: domain.OrderStatusFilled,
+				Leaves:      "0",
+				Events: []domain.OrderEvent{{
+					Order: order.ExternalID,
+					Type:  domain.OrderEventFill,
+					Payload: domain.OrderEventPayload{
+						FillQuantity:    "1",
+						FillPrice:       "100",
+						LeavesQuantity:  "0",
+						OrderStatus:     string(domain.OrderStatusFilled),
+						ExecutionReport: request,
+					},
+				}},
+			}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("RecordOrderSubmission: %v", err)
+	}
+	if reportID.IsZero() {
+		t.Fatal("nested settlement did not return generated report id")
+	}
+	detail, err := rs.GetOrder(ctx, created.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	var fill *domain.OrderEvent
+	for i := range detail.Events {
+		if detail.Events[i].Type == domain.OrderEventFill {
+			fill = &detail.Events[i]
+			break
+		}
+	}
+	if fill == nil || fill.Payload.ExecutionReport == nil ||
+		fill.Payload.ExecutionReport.ExternalID != reportID {
+		t.Fatalf("fill event = %+v, want linked report %q", fill, reportID)
+	}
+	if got := countRows(t, ctx, rs.(*realmStore), "execution_report"); got != 1 {
+		t.Fatalf("execution reports = %d, want 1", got)
+	}
+	if got := countRows(t, ctx, rs.(*realmStore), "execution_report_event"); got != 1 {
+		t.Fatalf("execution report links = %d, want 1", got)
 	}
 }
 
@@ -1780,6 +1856,51 @@ func TestRecordOrderSettlementSpotFillPersistsEngineRealizedPnlAsset(t *testing.
 	}
 }
 
+func TestRecordOrderSettlementRealizedPnlZeroAndAbsent(t *testing.T) {
+	ctx, rs := seedOrderFixtures(t)
+	seedBalance(t, ctx, rs, "acc-1", "AAPL", "1", "0", "0", "0")
+
+	settle := func(realizedPnlResult string) {
+		t.Helper()
+		order := sampleOrder()
+		order.Side = domain.OrderSideSell
+		order.Status = domain.OrderStatusAccepted
+		created, err := rs.CreateOrder(ctx, order)
+		if err != nil {
+			t.Fatalf("CreateOrder: %v", err)
+		}
+		if _, err := rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
+			Order:       created.ExternalID,
+			Account:     "acc-1",
+			OrderStatus: domain.OrderStatusCommitted,
+			Balances: []domain.BalanceSettlement{{
+				Asset: "AAPL",
+				Outcome: domain.AdjustmentOutcomeAccepted{
+					RealizedPnlResult: realizedPnlResult,
+				},
+			}},
+		}); err != nil {
+			t.Fatalf("RecordOrderSettlement: %v", err)
+		}
+	}
+
+	assertRealizedPnl := func(want string) {
+		t.Helper()
+		balance, ok := getBalanceRow(t, ctx, rs, "acc-1", "AAPL")
+		if !ok {
+			t.Fatal("balance row missing after settlement")
+		}
+		if balance.realized != want {
+			t.Fatalf("realized_pnl = %q, want %q", balance.realized, want)
+		}
+	}
+
+	settle("0")
+	assertRealizedPnl("0")
+	settle("")
+	assertRealizedPnl("0")
+}
+
 func TestRecordOrderSettlementRacesRealizedPnlAdjustmentNoDeadlock(t *testing.T) {
 	ctx, rs := seedOrderFixtures(t)
 
@@ -1997,19 +2118,20 @@ func TestRecordOrderSettlementLeaves(t *testing.T) {
 
 	order := sampleOrder()
 	order.Leaves = "7"
+	order.ReservedQuantity = "8"
 	created, err := rs.CreateOrder(ctx, order)
 	if err != nil {
 		t.Fatalf("CreateOrder: %v", err)
 	}
-	if created.Leaves != "7" {
-		t.Fatalf("created leaves = %q, want request value 7", created.Leaves)
+	if created.Leaves != "7" || created.ReservedQuantity != "8" {
+		t.Fatalf("created quantities = %+v, want leaves 7 and reserve 8", created)
 	}
 	detail, err := rs.GetOrder(ctx, created.ExternalID)
 	if err != nil {
 		t.Fatalf("GetOrder: %v", err)
 	}
-	if detail.Order.Leaves != "7" {
-		t.Fatalf("stored leaves = %q, want 7", detail.Order.Leaves)
+	if detail.Order.Leaves != "7" || detail.Order.ReservedQuantity != "8" {
+		t.Fatalf("stored quantities = %+v, want leaves 7 and reserve 8", detail.Order)
 	}
 
 	// An empty Leaves leaves the column unchanged; the status advance still
@@ -2023,8 +2145,8 @@ func TestRecordOrderSettlementLeaves(t *testing.T) {
 		t.Fatalf("RecordOrderSettlement(no leaves): %v", err)
 	}
 	detail, _ = rs.GetOrder(ctx, created.ExternalID)
-	if detail.Order.Leaves != "7" {
-		t.Fatalf("leaves after empty settlement = %q, want unchanged 7", detail.Order.Leaves)
+	if detail.Order.Leaves != "7" || detail.Order.ReservedQuantity != "8" {
+		t.Fatalf("quantities after empty settlement = %+v, want unchanged", detail.Order)
 	}
 
 	// A non-empty Leaves rewrites the column.
@@ -2038,8 +2160,45 @@ func TestRecordOrderSettlementLeaves(t *testing.T) {
 		t.Fatalf("RecordOrderSettlement(leaves): %v", err)
 	}
 	detail, _ = rs.GetOrder(ctx, created.ExternalID)
-	if detail.Order.Leaves != "4" {
-		t.Fatalf("leaves after settlement = %q, want 4", detail.Order.Leaves)
+	if detail.Order.Leaves != "4" || detail.Order.ReservedQuantity != "8" {
+		t.Fatalf("partial quantities = %+v, want leaves 4 and reserve 8", detail.Order)
+	}
+
+	if _, err := rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		Order:            created.ExternalID,
+		Account:          "acc-1",
+		OrderStatus:      domain.OrderStatusFilled,
+		AllowedFrom:      []domain.OrderStatus{domain.OrderStatusSubmitted},
+		Leaves:           "99",
+		ReservedQuantity: "0",
+		Trade: &domain.Trade{
+			Order: created.ExternalID, Account: "acc-1",
+			BaseAsset: order.BaseAsset, QuoteAsset: order.QuoteAsset,
+			Side: order.Side, Quantity: "1", Price: "10",
+		},
+	}); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("RecordOrderSettlement(conflict) = %v, want ErrConflict", err)
+	}
+	detail, _ = rs.GetOrder(ctx, created.ExternalID)
+	if detail.Order.Status != domain.OrderStatusPartiallyFilled ||
+		detail.Order.Leaves != "4" || detail.Order.ReservedQuantity != "8" ||
+		len(detail.Trades) != 0 {
+		t.Fatalf("conflicting settlement did not roll back atomically: %+v", detail)
+	}
+
+	if _, err := rs.RecordOrderSettlement(ctx, domain.OrderSettlement{
+		Order:            created.ExternalID,
+		Account:          "acc-1",
+		OrderStatus:      domain.OrderStatusCancelled,
+		AllowedFrom:      []domain.OrderStatus{domain.OrderStatusPartiallyFilled},
+		Leaves:           "1.00",
+		ReservedQuantity: "0",
+	}); err != nil {
+		t.Fatalf("RecordOrderSettlement(terminal): %v", err)
+	}
+	detail, _ = rs.GetOrder(ctx, created.ExternalID)
+	if detail.Order.Leaves != "1.00" || detail.Order.ReservedQuantity != "0" {
+		t.Fatalf("terminal quantities = %+v, want raw leaves 1.00 and zero reserve", detail.Order)
 	}
 }
 
@@ -2164,36 +2323,141 @@ func TestRecordOrderSettlementRejectsMissingOrderHandle(t *testing.T) {
 	}
 }
 
-func TestRecordOrderSettlementPrunesEmptyBalance(t *testing.T) {
-	ctx, rs := seedOrderFixtures(t)
-	created, err := rs.CreateOrder(ctx, sampleOrder())
-	if err != nil {
-		t.Fatalf("CreateOrder: %v", err)
-	}
+func TestRecordOrderSettlementPrunesEconomicallyEmptyBalance(t *testing.T) {
+	settle := func(
+		t *testing.T, realizedPnl string, haltReason domain.PnlHaltReason,
+	) (domain.Balance, bool) {
+		t.Helper()
+		ctx, rs := seedOrderFixtures(t)
+		created, err := rs.CreateOrder(ctx, sampleOrder())
+		if err != nil {
+			t.Fatalf("CreateOrder: %v", err)
+		}
+		if realizedPnl != "" || haltReason != "" {
+			seedBalance(t, ctx, rs, "acc-1", "USD", "0", "0", "0", realizedPnl)
+		}
+		if haltReason != "" {
+			if _, err := rs.(*realmStore).rawDB().ExecContext(
+				ctx,
+				`UPDATE balance
+				 SET realized_pnl = NULL, realized_pnl_halt_reason = ?
+				 WHERE account_id = (SELECT id FROM account WHERE code = ?)
+				   AND asset_id = (SELECT id FROM asset WHERE code = ?)`,
+				haltReason, "acc-1", "USD",
+			); err != nil {
+				t.Fatalf("seed halted balance: %v", err)
+			}
+		}
 
-	seedBalance(t, ctx, rs, "acc-1", "USD", "10", "0", "0", "0")
-
-	st := domain.OrderSettlement{
-		Order:       created.ExternalID,
-		Account:     "acc-1",
-		OrderStatus: domain.OrderStatusCommitted,
-		Balances: []domain.BalanceSettlement{
-			{
-				Asset: "USD",
-				Outcome: domain.AdjustmentOutcomeAccepted{
-					BalanceResult:    "0",
-					HeldResult:       "0",
-					IncomingResult:   "0",
-					RealizedPnlDelta: "0",
+		st := domain.OrderSettlement{
+			Order:       created.ExternalID,
+			Account:     "acc-1",
+			OrderStatus: domain.OrderStatusCommitted,
+			Balances: []domain.BalanceSettlement{
+				{
+					Asset: "USD",
+					Outcome: domain.AdjustmentOutcomeAccepted{
+						BalanceResult:  "0",
+						HeldResult:     "0",
+						IncomingResult: "0",
+					},
 				},
 			},
+		}
+		if _, err := rs.RecordOrderSettlement(ctx, st); err != nil {
+			t.Fatalf("RecordOrderSettlement: %v", err)
+		}
+		balance, ok, err := rs.GetBalance(ctx, "acc-1", "USD")
+		if err != nil {
+			t.Fatalf("GetBalance: %v", err)
+		}
+		return balance, ok
+	}
+
+	type balanceCase struct {
+		name        string
+		realized    string
+		haltReason  domain.PnlHaltReason
+		wantPresent bool
+	}
+	tests := []balanceCase{
+		{name: "unset realized PnL"},
+		{name: "exact zero realized PnL", realized: "0"},
+	}
+	for _, halt := range []domain.PnlHaltReason{
+		domain.PnlHaltReasonMissingFx,
+		domain.PnlHaltReasonMissingAccountCurrency,
+		domain.PnlHaltReasonMissingInitialPnl,
+		domain.PnlHaltReasonMissingCostBasis,
+		domain.PnlHaltReasonArithmeticOverflow,
+	} {
+		tests = append(tests, balanceCase{
+			name: string(halt), haltReason: halt, wantPresent: true,
+		})
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			balance, ok := settle(t, test.realized, test.haltReason)
+			if ok != test.wantPresent {
+				t.Fatalf("balance = %+v ok=%v, want present %v", balance, ok, test.wantPresent)
+			}
+			if ok && (balance.RealizedPnl != test.realized ||
+				balance.RealizedPnlHaltReason != test.haltReason) {
+				t.Fatalf(
+					"balance = %+v, want realized PnL %q and halt %q",
+					balance,
+					test.realized,
+					test.haltReason,
+				)
+			}
+		})
+	}
+}
+
+func TestBalanceAmountsEmptyRejectsEveryNonzeroEconomicValue(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name              string
+		available         string
+		held              string
+		incoming          string
+		realized          string
+		pnlHaltReason     string
+		averageEntryPrice string
+		want              bool
+	}{
+		{name: "unset", want: true},
+		{name: "exact zero pnl", realized: "0", want: true},
+		{name: "missing fx halt", pnlHaltReason: "missing_fx"},
+		{name: "missing account currency halt", pnlHaltReason: "missing_account_currency"},
+		{name: "missing initial pnl halt", pnlHaltReason: "missing_initial_pnl"},
+		{name: "missing cost basis halt", pnlHaltReason: "missing_cost_basis"},
+		{name: "arithmetic overflow halt", pnlHaltReason: "arithmetic_overflow"},
+		{name: "available", available: "1"},
+		{name: "held", held: "-1"},
+		{name: "incoming", incoming: "0.1"},
+		{name: "realized pnl", realized: "-0.1"},
+		{
+			name:      "halt does not hide available",
+			available: "1", pnlHaltReason: "missing_fx",
 		},
+		{name: "average entry price", averageEntryPrice: "10"},
 	}
-	if _, err := rs.RecordOrderSettlement(ctx, st); err != nil {
-		t.Fatalf("RecordOrderSettlement: %v", err)
-	}
-	if _, ok := getBalanceRow(t, ctx, rs, "acc-1", "USD"); ok {
-		t.Fatal("balance row still exists, want empty settlement balance pruned")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			got := balanceAmountsEmpty(
+				test.available,
+				test.held,
+				test.incoming,
+				test.realized,
+				test.pnlHaltReason,
+				test.averageEntryPrice,
+			)
+			if got != test.want {
+				t.Fatalf("balanceAmountsEmpty() = %v, want %v", got, test.want)
+			}
+		})
 	}
 }
 
@@ -2218,12 +2482,17 @@ func TestRecordOrderSettlementAccountPnlHaltLifecycle(t *testing.T) {
 			t.Fatalf("RecordOrderSettlement: %v", err)
 		}
 	}
+	getAccount := func() domain.Account {
+		t.Helper()
+		account, ok, err := rs.GetAccount(ctx, "acc-1")
+		if err != nil || !ok {
+			t.Fatalf("GetAccount: ok=%v err=%v", ok, err)
+		}
+		return account
+	}
 
 	settle(createOrder(), "", domain.PnlHaltReasonMissingFx)
-	account, ok, err := rs.GetAccount(ctx, "acc-1")
-	if err != nil || !ok {
-		t.Fatalf("GetAccount after halt: ok=%v err=%v", ok, err)
-	}
+	account := getAccount()
 	if account.PnlHaltReason != domain.PnlHaltReasonMissingFx {
 		t.Fatalf("account halt reason = %q", account.PnlHaltReason)
 	}
@@ -2241,19 +2510,35 @@ func TestRecordOrderSettlementAccountPnlHaltLifecycle(t *testing.T) {
 	}
 
 	settle(createOrder(), "", "")
-	account, _, _ = rs.GetAccount(ctx, "acc-1")
+	account = getAccount()
 	if account.PnlHaltReason != domain.PnlHaltReasonMissingFx {
 		t.Fatalf("unrelated settlement cleared account halt: %q", account.PnlHaltReason)
 	}
 
+	settle(createOrder(), "0", "")
+	account = getAccount()
+	if account.Pnl != "0" || account.PnlHaltReason != "" {
+		t.Fatalf("computed zero account PnL did not clear halt: %+v", account)
+	}
+	settle(createOrder(), "", "")
+	account = getAccount()
+	if account.Pnl != "0" || account.PnlHaltReason != "" {
+		t.Fatalf("unrelated settlement overwrote zero account PnL: %+v", account)
+	}
+
 	settle(createOrder(), "7.250", "")
-	account, _, _ = rs.GetAccount(ctx, "acc-1")
+	account = getAccount()
 	if account.Pnl != "7.250" || account.PnlHaltReason != "" {
-		t.Fatalf("authoritative account PnL did not clear halt: %+v", account)
+		t.Fatalf("authoritative account PnL was not persisted: %+v", account)
+	}
+	settle(createOrder(), "", "")
+	account = getAccount()
+	if account.Pnl != "7.250" || account.PnlHaltReason != "" {
+		t.Fatalf("unrelated settlement overwrote account PnL: %+v", account)
 	}
 }
 
-func TestRecordOrderSettlementPreservesAndPrunesHaltOnlyBalance(t *testing.T) {
+func TestRecordOrderSettlementPreservesHaltOnlyAndPrunesZeroBalance(t *testing.T) {
 	ctx, rs := seedOrderFixtures(t)
 	if err := rs.UpsertBalance(ctx, domain.Balance{
 		Account: "acc-1", Asset: "USD",
@@ -2290,15 +2575,25 @@ func TestRecordOrderSettlementPreservesAndPrunesHaltOnlyBalance(t *testing.T) {
 	settle(createOrder(), "")
 	balance, ok, err := rs.GetBalance(ctx, "acc-1", "USD")
 	if err != nil || !ok {
-		t.Fatalf("GetBalance preserved halt-only row: ok=%v err=%v", ok, err)
+		t.Fatalf("GetBalance(halted): ok=%v err=%v", ok, err)
 	}
-	if balance.RealizedPnlHaltReason != domain.PnlHaltReasonMissingCostBasis {
-		t.Fatalf("balance halt reason = %q", balance.RealizedPnlHaltReason)
+	if balance.RealizedPnl != "" ||
+		balance.RealizedPnlHaltReason != domain.PnlHaltReasonMissingCostBasis {
+		t.Fatalf("halted balance = %+v, want missing_cost_basis without value", balance)
 	}
 
 	settle(createOrder(), "0")
-	if _, ok, err := rs.GetBalance(ctx, "acc-1", "USD"); err != nil || ok {
-		t.Fatalf("successful realized PnL did not clear and prune halt-only row: ok=%v err=%v", ok, err)
+	if balance, ok, err := rs.GetBalance(ctx, "acc-1", "USD"); err != nil || ok {
+		t.Fatalf("GetBalance(zero) = %+v ok=%v err=%v, want no row", balance, ok, err)
+	}
+
+	settle(createOrder(), "1")
+	balance, ok, err = rs.GetBalance(ctx, "acc-1", "USD")
+	if err != nil || !ok {
+		t.Fatalf("GetBalance(nonzero): ok=%v err=%v", ok, err)
+	}
+	if balance.RealizedPnl != "1" || balance.RealizedPnlHaltReason != "" {
+		t.Fatalf("balance = %+v, want authoritative realized_pnl 1", balance)
 	}
 }
 

@@ -25,6 +25,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"go.openpit.dev/officer/framework/domain"
 )
 
@@ -32,13 +33,14 @@ func TestDecodeBodyRequiresOneNonNullValue(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name string
-		body string
+		name   string
+		body   string
+		status int
 	}{
-		{"empty", ""},
-		{"null", "null"},
-		{"trailing value", `{"enabled":true}{"ignored":true}`},
-		{"trailing garbage", `{"enabled":true}garbage`},
+		{"empty", "", http.StatusBadRequest},
+		{"null", "null", http.StatusUnprocessableEntity},
+		{"trailing value", `{"enabled":true}{"ignored":true}`, http.StatusBadRequest},
+		{"trailing garbage", `{"enabled":true}garbage`, http.StatusBadRequest},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -53,8 +55,11 @@ func TestDecodeBodyRequiresOneNonNullValue(t *testing.T) {
 			if DecodeBody(rec, req, &dst) {
 				t.Fatal("DecodeBody accepted an invalid mutation body")
 			}
-			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+			if rec.Code != tc.status {
+				t.Fatalf("status = %d, want %d", rec.Code, tc.status)
+			}
+			if got := rec.Header().Get("Content-Type"); got != "application/problem+json" {
+				t.Fatalf("Content-Type = %q", got)
 			}
 		})
 	}
@@ -74,8 +79,72 @@ func TestDecodeBodyRejectsUnknownField(t *testing.T) {
 	if DecodeBody(rec, req, &dst) {
 		t.Fatal("DecodeBody accepted an unknown field")
 	}
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+	var problem ProblemDetails
+	if err := json.NewDecoder(rec.Body).Decode(&problem); err != nil {
+		t.Fatalf("decode problem: %v", err)
+	}
+	if problem.Type != "about:blank" || problem.Title != "Unprocessable Content" ||
+		problem.Status != http.StatusUnprocessableEntity || len(problem.Errors) != 1 {
+		t.Fatalf("problem = %+v", problem)
+	}
+	if item := problem.Errors[0]; item.Code != "validation" ||
+		item.Constraint != "unknown_field" || item.Pointer != "/ignored" {
+		t.Fatalf("problem error = %+v", item)
+	}
+}
+
+func TestDecodeBodyRejectsNestedUnknownFieldWithFullPointer(t *testing.T) {
+	t.Parallel()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPut, "/",
+		bytes.NewBufferString(`{"scope":{"account":{"enabled":true,"ignored":1}}}`),
+	)
+	var dst struct {
+		Scope struct {
+			Account struct {
+				Enabled bool `json:"enabled"`
+			} `json:"account"`
+		} `json:"scope"`
+	}
+	if DecodeBody(rec, req, &dst) {
+		t.Fatal("DecodeBody accepted a nested unknown field")
+	}
+	var problem ProblemDetails
+	if err := json.NewDecoder(rec.Body).Decode(&problem); err != nil {
+		t.Fatalf("decode problem: %v", err)
+	}
+	if rec.Code != http.StatusUnprocessableEntity || len(problem.Errors) != 1 ||
+		problem.Errors[0].Pointer != "/scope/account/ignored" {
+		t.Fatalf("problem = %+v", problem)
+	}
+}
+
+func TestDecodeBodyRejectsMemberTypeWithPointer(t *testing.T) {
+	t.Parallel()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPut, "/", bytes.NewBufferString(`{"enabled":"yes"}`),
+	)
+	var dst struct {
+		Enabled bool `json:"enabled"`
+	}
+	if DecodeBody(rec, req, &dst) {
+		t.Fatal("DecodeBody accepted an invalid member type")
+	}
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var problem ProblemDetails
+	if err := json.NewDecoder(rec.Body).Decode(&problem); err != nil {
+		t.Fatalf("decode problem: %v", err)
+	}
+	if len(problem.Errors) != 1 || problem.Errors[0].Pointer != "/enabled" ||
+		problem.Errors[0].Constraint != "type" {
+		t.Fatalf("problem = %+v", problem)
 	}
 }
 
@@ -179,6 +248,33 @@ func TestDecodeBodyAllowUnknownFieldsRejectsInvalidUnicode(t *testing.T) {
 	}
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestPathAccountIDDoesNotDecodeChiParamTwice(t *testing.T) {
+	t.Parallel()
+
+	router := chi.NewRouter()
+	router.Get("/accounts/{code}", func(w http.ResponseWriter, r *http.Request) {
+		accountID, err := PathAccountID(r)
+		if err != nil {
+			t.Fatalf("PathAccountID: %v", err)
+		}
+		_, _ = w.Write([]byte(accountID))
+	})
+	tests := []struct {
+		path string
+		want string
+	}{
+		{path: "/accounts/acc%25401", want: "acc%401"},
+		{path: "/accounts/acc%401", want: "acc@1"},
+	}
+	for _, tc := range tests {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tc.path, nil))
+		if got := rec.Body.String(); got != tc.want {
+			t.Fatalf("PathAccountID(%q) = %q, want %q", tc.path, got, tc.want)
+		}
 	}
 }
 

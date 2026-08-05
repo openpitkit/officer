@@ -870,6 +870,17 @@ describe("Accounts business CSV", () => {
           pnl: "",
           pnlHaltReason: "future_reason",
         },
+        {
+          code: "pnl-halted-stale-denomination",
+          title: "Stale denomination",
+          blocked: false,
+          blockReason: "",
+          group: "",
+          effectiveCurrency: "USD",
+          notes: "",
+          pnl: "",
+          pnlHaltReason: "stale_denomination",
+        },
       ].map(accountFixture)),
     );
     renderAccounts();
@@ -897,6 +908,11 @@ describe("Accounts business CSV", () => {
       name: /position cost basis is unavailable/i,
     });
     expect(knownWarning).toHaveAttribute("tabindex", "0");
+    expect(
+      within(row("Stale denomination")).getByRole("note", {
+        name: /uses a previous effective account currency/i,
+      }),
+    ).toBeInTheDocument();
     expect(
       within(row("Unknown halt")).getByRole("note", {
         name: /stopped by the engine/i,

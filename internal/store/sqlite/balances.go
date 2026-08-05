@@ -157,25 +157,26 @@ func (r *realmStore) ListBalances(
 	return result, nil
 }
 
-// ListAccountsWithOpenBalances returns accounts carrying a non-zero balance,
-// cost-basis or P&L value. An account P&L of NULL is the absence of a value -
-// a halted accumulator, or an account the engine has not reported on - and
-// never counts as open, which is why the predicate tests it explicitly rather
-// than relying on a comparison against NULL being falsy.
-// A halted P&L holds no trustworthy number, so neither its NULL value nor the
-// halt flag counts an account as open. Quantities and cost basis are not P&L and
-// keep counting regardless: a halted position still holds real units at a real
-// cost basis, applied from the report's own inputs.
-// The account outer join keeps accounts whose only value is the account-level
-// P&L, which survives the deletion of every balance row.
-func (r *realmStore) ListAccountsWithOpenBalances(
+// ListAccountsBlockingCurrencyChange returns candidates carrying state that
+// prevents an effective account-currency change. Numeric-zero amounts do not
+// count, while halt reasons, active orders and applicable P&L bounds do.
+func (r *realmStore) ListAccountsBlockingCurrencyChange(
 	ctx context.Context, accounts []domain.AccountID,
 ) ([]domain.AccountID, error) {
 	db, err := r.db()
 	if err != nil {
 		return nil, err
 	}
-	args := make([]any, 0, len(accounts))
+	activeStatusIDs, err := r.activeOrderStatusIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	activeStatusPlaceholders := strings.TrimRight(
+		strings.Repeat("?,", len(activeStatusIDs)),
+		",",
+	)
+	args := make([]any, 0, len(activeStatusIDs)+len(accounts))
+	args = append(args, activeStatusIDs...)
 	accountWhere := ""
 	if len(accounts) > 0 {
 		placeholders := make([]string, 0, len(accounts))
@@ -192,28 +193,47 @@ WHERE (
     (b.available <> '' AND b.available COLLATE DECIMAL <> '0') OR
     (b.held <> '' AND b.held COLLATE DECIMAL <> '0') OR
     (b.incoming <> '' AND b.incoming COLLATE DECIMAL <> '0') OR
-    (b.average_entry_price <> '' AND b.average_entry_price COLLATE DECIMAL <> '0') OR
-    (b.realized_pnl_halt_reason = '' AND b.realized_pnl IS NOT NULL AND
-     b.realized_pnl <> '' AND b.realized_pnl COLLATE DECIMAL <> '0') OR
-    (a.pnl_halt_reason = '' AND a.pnl IS NOT NULL AND a.pnl <> '' AND
-     a.pnl COLLATE DECIMAL <> '0')
+    (b.average_entry_price <> '' AND
+     b.average_entry_price COLLATE DECIMAL <> '0') OR
+    b.realized_pnl_halt_reason <> '' OR
+    (b.realized_pnl IS NOT NULL AND b.realized_pnl <> '' AND
+     b.realized_pnl COLLATE DECIMAL <> '0') OR
+    a.pnl_halt_reason <> '' OR
+    (a.pnl IS NOT NULL AND a.pnl <> '' AND
+     a.pnl COLLATE DECIMAL <> '0') OR
+    EXISTS (
+        SELECT 1
+        FROM order_record o
+        WHERE o.account_id = a.id
+          AND o.status_id IN (` + activeStatusPlaceholders + `)
+    ) OR
+    EXISTS (
+        SELECT 1
+        FROM limit_spot_funds_pnl_bound l
+        WHERE (l.lower_bound <> '' OR l.upper_bound <> '')
+          AND (
+              l.account_id = a.id OR
+              l.account_group_id = a.group_id OR
+              (l.account_id IS NULL AND l.account_group_id IS NULL)
+          )
+    )
 )` + accountWhere + `
 ORDER BY a.code`
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("store: list open balance accounts: %w", err)
+		return nil, fmt.Errorf("store: list currency change blockers: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	result := make([]domain.AccountID, 0)
 	for rows.Next() {
 		var account domain.AccountID
 		if err := rows.Scan(&account); err != nil {
-			return nil, fmt.Errorf("store: scan open balance account: %w", err)
+			return nil, fmt.Errorf("store: scan currency change blocker: %w", err)
 		}
 		result = append(result, account)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: iterate open balance accounts: %w", err)
+		return nil, fmt.Errorf("store: iterate currency change blockers: %w", err)
 	}
 	return result, nil
 }
@@ -287,6 +307,10 @@ func balanceListWhere(filter fwstore.BalanceListFilter) (string, []any) {
 		&clauses, &args, "b.realized_pnl", balanceAccountCurrency,
 		filter.RealizedPnl,
 	)
+	if filter.Sort.Column == "realizedPnl" {
+		clauses = append(clauses, balanceAccountCurrency+" = ?")
+		args = append(args, filter.RealizedPnl.Currency)
+	}
 	appendTimeRangeFilter(&clauses, &args, "b.updated_at", filter.UpdatedAt)
 	if len(clauses) == 0 {
 		return "", args
@@ -296,12 +320,13 @@ func balanceListWhere(filter fwstore.BalanceListFilter) (string, []any) {
 
 func balanceListOrderBy(sort fwstore.SortSpec) string {
 	columns := map[string]string{
-		"account":   "a.code",
-		"asset":     "ast.code",
-		"available": "b.available",
-		"held":      "b.held",
-		"incoming":  "b.incoming",
-		"updatedAt": "b.updated_at",
+		"account":     "a.code",
+		"asset":       "ast.code",
+		"available":   "b.available",
+		"held":        "b.held",
+		"incoming":    "b.incoming",
+		"realizedPnl": "b.realized_pnl COLLATE DECIMAL",
+		"updatedAt":   "b.updated_at",
 	}
 	column := columns[sort.Column]
 	if column == "" {
@@ -313,7 +338,12 @@ func balanceListOrderBy(sort fwstore.SortSpec) string {
 		direction = "DESC"
 		tieDirection = "DESC"
 	}
-	return "\nORDER BY " + column + " " + direction +
+	prefix := ""
+	if sort.Column == "realizedPnl" {
+		prefix = "CASE WHEN b.realized_pnl IS NULL OR b.realized_pnl = '' " +
+			"THEN 0 ELSE 1 END ASC, "
+	}
+	return "\nORDER BY " + prefix + column + " " + direction +
 		", a.code " + tieDirection + ", ast.code " + tieDirection
 }
 

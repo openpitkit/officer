@@ -45,11 +45,11 @@ func handleImportSigningKey(svc Service) http.HandlerFunc {
 			return
 		}
 		if req.Key == "" {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "signing", "key material is required")
+			httpx.WriteValidationProblem(w, "key material is required", "/key", "required")
 			return
 		}
 		if req.Format == "" {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "signing", "format is required")
+			httpx.WriteValidationProblem(w, "format is required", "/format", "required")
 			return
 		}
 		key, err := svc.ImportSigningKey(r.Context(), req.Key, req.Format)
@@ -86,8 +86,9 @@ func handleGetActivePublicKey(svc Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		format := signingKeyFormatOrDefault(r)
 		if !validSigningKeyFormat(format) {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "signing",
-				"format must be pem-pkcs8, openssh, or raw-base64")
+			httpx.WriteValidationProblem(
+				w, "format must be pem-pkcs8, openssh, or raw-base64", "/format", "enum",
+			)
 			return
 		}
 		pub, err := svc.ActivePublicKey(format)
@@ -115,8 +116,9 @@ func handleGetSigningKeyPublic(svc Service) http.HandlerFunc {
 		}
 		format := signingKeyFormatOrDefault(r)
 		if !validSigningKeyFormat(format) {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "signing",
-				"format must be pem-pkcs8, openssh, or raw-base64")
+			httpx.WriteValidationProblem(
+				w, "format must be pem-pkcs8, openssh, or raw-base64", "/format", "enum",
+			)
 			return
 		}
 		pub, err := svc.PublicKeyByID(r.Context(), keyID, format)
@@ -212,7 +214,9 @@ func handleSubmitOrderToken(svc Service) http.HandlerFunc {
 			mode = "immediate"
 		}
 		if mode != "hold" && mode != "immediate" {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "signing", "mode must be hold or immediate")
+			httpx.WriteValidationProblem(
+				w, "mode must be hold or immediate", "/mode", "enum",
+			)
 			return
 		}
 		order, err := submitOrderFromDTO(req.orderFields())
@@ -314,7 +318,7 @@ func handleConfirmExecution(svc Service) http.HandlerFunc {
 			return
 		}
 		if req.Token == "" {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "signing", "token is required")
+			httpx.WriteValidationProblem(w, "token is required", "/token", "required")
 			return
 		}
 		order, att, err := svc.ConfirmExecution(r.Context(), orderID, req.Token)
@@ -351,7 +355,7 @@ func handleCancelOrder(svc Service) http.HandlerFunc {
 			return
 		}
 		if req.Token == "" {
-			httpx.WriteErrMsg(w, http.StatusBadRequest, "signing", "token is required")
+			httpx.WriteValidationProblem(w, "token is required", "/token", "required")
 			return
 		}
 		leavesQuantity := strings.TrimSpace(req.LeavesQuantity)

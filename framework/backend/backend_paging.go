@@ -162,6 +162,14 @@ func sortBalanceRows(rows []store.BalanceListRow, spec store.SortSpec) {
 			cmp = decimalStringCompare(left.Held, right.Held)
 		case "incoming":
 			cmp = decimalStringCompare(left.Incoming, right.Incoming)
+		case "realizedPnl":
+			leftEmpty, rightEmpty := left.RealizedPnl == "", right.RealizedPnl == ""
+			if leftEmpty != rightEmpty {
+				// The connector keeps the unset sentinel first in both
+				// directions, so the cross-node merge must not reverse it.
+				return leftEmpty
+			}
+			cmp = decimalStringCompare(left.RealizedPnl, right.RealizedPnl)
 		case "updatedAt":
 			cmp = timeCompare(left.UpdatedAt, right.UpdatedAt)
 		case "account":

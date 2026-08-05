@@ -35,16 +35,17 @@ func testOrder(t *testing.T, st store.RealmStore, id domain.AccountID) domain.Or
 	t.Helper()
 	seedTestAccount(t, st, id)
 	order, err := st.CreateOrder(context.Background(), domain.Order{
-		Account:     id,
-		Source:      domain.SourceAPI,
-		Principal:   "operator",
-		BaseAsset:   "AAPL",
-		QuoteAsset:  "USD",
-		Side:        domain.OrderSideBuy,
-		AmountKind:  domain.OrderAmountKindQuantity,
-		AmountValue: "2",
-		Price:       "400",
-		Status:      domain.OrderStatusCommitted,
+		Account:          id,
+		Source:           domain.SourceAPI,
+		Principal:        "operator",
+		BaseAsset:        "AAPL",
+		QuoteAsset:       "USD",
+		Side:             domain.OrderSideBuy,
+		AmountKind:       domain.OrderAmountKindQuantity,
+		AmountValue:      "2",
+		Price:            "400",
+		ReservedQuantity: "2",
+		Status:           domain.OrderStatusCommitted,
 	})
 	if err != nil {
 		t.Fatalf("CreateOrder: %v", err)
@@ -333,6 +334,50 @@ func TestLocalNode_ApplyExecutionReportWorkflowAuditFailureFatalsAfterCommit(
 	}
 }
 
+func TestLocalNode_ApplyExecutionReportDeletesComputedZeroSettledPosition(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.execReportOutcomes = []engine.BalanceOutcome{{
+		Asset: "USD",
+		Outcome: domain.AdjustmentOutcomeAccepted{
+			BalanceDelta:      "-100.00",
+			BalanceResult:     "0",
+			RealizedPnlDelta:  "0",
+			RealizedPnlResult: "0",
+		},
+	}}
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	order := testOrder(t, st, "acc-1")
+	if err := st.UpsertBalance(ctx, domain.Balance{
+		Account: "acc-1", Asset: "USD",
+		Available: "100",
+	}); err != nil {
+		t.Fatalf("UpsertBalance: %v", err)
+	}
+
+	_, err := n.ApplyExecutionReport(ctx, testKey("acc-1"), domain.ExecutionReportInput{
+		Order:          order.ExternalID,
+		BaseAsset:      "AAPL",
+		QuoteAsset:     "USD",
+		Side:           domain.OrderSideBuy,
+		FillQuantity:   "1",
+		FillPrice:      "100",
+		LeavesQuantity: "0",
+		OrderStatus:    domain.OrderStatusFilled,
+	}, testCaller)
+	if err != nil {
+		t.Fatalf("ApplyExecutionReport: %v", err)
+	}
+	if _, ok, err := st.GetBalance(ctx, "acc-1", "USD"); err != nil || ok {
+		t.Fatalf(
+			"GetBalance after computed zero settlement: ok=%v err=%v, want missing",
+			ok,
+			err,
+		)
+	}
+}
+
 func TestLocalNode_ApplyExecutionReportDeletesEmptySettledPosition(t *testing.T) {
 	t.Parallel()
 	eng := newFakeEngine()
@@ -499,6 +544,12 @@ func TestLocalNode_ApplyExecutionReportAuditsEngineBlock(t *testing.T) {
 	if len(detail.Events) != 1 {
 		t.Fatalf("events = %d, want 1 fill event", len(detail.Events))
 	}
+	if detail.Order.ReservedQuantity != "2" || len(detail.Trades) != 1 {
+		t.Fatalf(
+			"blocked non-mutating settlement = %+v, want trade with reserve 2",
+			detail,
+		)
+	}
 	payload := detail.Events[0].Payload
 	if payload.RejectCode != "test_block" ||
 		payload.RejectScope != "account" ||
@@ -582,6 +633,46 @@ func TestLocalNode_ApplyExecutionReportForce(t *testing.T) {
 	}
 	if len(rows) != 1 || !strings.Contains(rows[0].Detail, "forced=true") {
 		t.Fatalf("audit rows = %+v, want forced=true execution report", rows)
+	}
+}
+
+func TestLocalNode_RepeatedForcedTerminalUsesZeroReservation(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine()
+	eng.execReportReservedQuantity = "0"
+	n, st := newTestNode(t, eng)
+	ctx := context.Background()
+	order := testOrder(t, st, "acc-1")
+
+	report := domain.ExecutionReportInput{
+		Order:          order.ExternalID,
+		LeavesQuantity: "3",
+		OrderStatus:    domain.OrderStatusCancelled,
+	}
+	if _, err := n.ApplyExecutionReport(
+		ctx, testKey("acc-1"), report, testCaller,
+	); err != nil {
+		t.Fatalf("first terminal report: %v", err)
+	}
+	report.Force = true
+	if _, err := n.ApplyExecutionReport(
+		ctx, testKey("acc-1"), report, testCaller,
+	); err != nil {
+		t.Fatalf("repeated forced terminal report: %v", err)
+	}
+	if len(eng.execReportCalls) != 2 {
+		t.Fatalf("engine calls = %+v, want two", eng.execReportCalls)
+	}
+	if eng.execReportCalls[0].ReservedQuantity != "2" ||
+		eng.execReportCalls[1].ReservedQuantity != "0" {
+		t.Fatalf("reservation contexts = %+v, want 2 then 0", eng.execReportCalls)
+	}
+	detail, err := st.GetOrder(ctx, order.ExternalID)
+	if err != nil {
+		t.Fatalf("GetOrder: %v", err)
+	}
+	if detail.Order.Leaves != "3" || detail.Order.ReservedQuantity != "0" {
+		t.Fatalf("terminal order = %+v, want raw leaves 3 and zero reserve", detail.Order)
 	}
 }
 
@@ -900,6 +991,7 @@ func TestLocalNode_ApplyExecutionReportRejectsFillWithNonTerminalWorkflowStatus(
 		t.Run(string(status), func(t *testing.T) {
 			t.Parallel()
 			eng := newFakeEngine()
+			eng.execReportReservedQuantity = "0"
 			n, st := newTestNode(t, eng)
 			ctx := context.Background()
 
@@ -951,14 +1043,19 @@ func TestLocalNode_ApplyExecutionReportRoutesTerminalReportsThroughEngine(t *tes
 			if len(eng.execReportCalls) != 1 {
 				t.Fatalf("engine calls = %+v, want one", eng.execReportCalls)
 			}
+			input := eng.execReportCalls[0]
+			if input.LeavesQuantity != "2" || input.ReservedQuantity != "2" {
+				t.Fatalf("engine reservation context = %+v", input)
+			}
 			detail, err := st.GetOrder(ctx, order.ExternalID)
 			if err != nil {
 				t.Fatalf("GetOrder: %v", err)
 			}
-			// A terminal report carrying a non-zero release quantity records that
-			// quantity: Officer stores the report, not a status-derived value.
-			if detail.Order.Status != status || detail.Order.Leaves != "2" {
-				t.Fatalf("order = %+v, want %s with reported leaves 2", detail.Order, status)
+			// The fake reports no applied base delta, so terminal status alone does
+			// not consume the persisted reserve. Leaves still stays venue-reported.
+			if detail.Order.Status != status || detail.Order.Leaves != "2" ||
+				detail.Order.ReservedQuantity != "2" {
+				t.Fatalf("order = %+v, want %s with reported leaves and reserve 2", detail.Order, status)
 			}
 			if len(detail.Events) != 1 {
 				t.Fatalf("events = %+v, want one terminal event", detail.Events)
@@ -1373,6 +1470,7 @@ func TestLocalNode_ApplyExecutionReportLeavesFollowsFills(t *testing.T) {
 		t.Fatalf("initial leaves = %q, want request value", order.Leaves)
 	}
 
+	eng.execReportReservedQuantity = "1"
 	if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
 		Order:          order.ExternalID,
 		BaseAsset:      "AAPL",
@@ -1395,7 +1493,11 @@ func TestLocalNode_ApplyExecutionReportLeavesFollowsFills(t *testing.T) {
 	if partial.Order.Leaves != "1" {
 		t.Fatalf("leaves after partial = %q, want 1", partial.Order.Leaves)
 	}
+	if partial.Order.ReservedQuantity != "1" {
+		t.Fatalf("reserve after partial = %q, want applied remainder 1", partial.Order.ReservedQuantity)
+	}
 
+	eng.execReportReservedQuantity = "0"
 	if _, err := n.ApplyExecutionReport(ctx, testKey(id), domain.ExecutionReportInput{
 		Order:          order.ExternalID,
 		BaseAsset:      "AAPL",
@@ -1417,6 +1519,16 @@ func TestLocalNode_ApplyExecutionReportLeavesFollowsFills(t *testing.T) {
 	}
 	if filled.Order.Leaves != "0" {
 		t.Fatalf("leaves after final = %q, want 0", filled.Order.Leaves)
+	}
+	if filled.Order.ReservedQuantity != "0" {
+		t.Fatalf("reserve after final = %q, want 0", filled.Order.ReservedQuantity)
+	}
+	if len(eng.execReportCalls) != 2 {
+		t.Fatalf("engine calls = %+v, want two", eng.execReportCalls)
+	}
+	terminal := eng.execReportCalls[1]
+	if terminal.ReservedQuantity != "1" {
+		t.Fatalf("terminal reservation context = %+v", terminal)
 	}
 }
 

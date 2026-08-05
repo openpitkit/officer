@@ -138,13 +138,13 @@ func TestImportSigningKey_MissingFields(t *testing.T) {
 			r.ServeHTTP(rec,
 				httptest.NewRequest(http.MethodPost, "/api/v1/signing/keys/import",
 					bytes.NewReader(b)))
-			if rec.Code != http.StatusBadRequest {
+			if rec.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("want 400, got %d", rec.Code)
 			}
 			m := bodyMap(t, rec.Result())
 			errObj, _ := m["error"].(map[string]any)
-			if errObj["code"] != "signing" {
-				t.Errorf("want code=signing, got %v", errObj["code"])
+			if errObj["code"] != "validation" {
+				t.Errorf("want code=validation, got %v", errObj["code"])
 			}
 		})
 	}
@@ -225,13 +225,13 @@ func TestGetActivePublicKey_BadFormat(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
 		"/api/v1/signing/keys/active/public?format=bad-format", nil))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 	m := bodyMap(t, rec.Result())
 	errObj, _ := m["error"].(map[string]any)
-	if errObj["code"] != "signing" {
-		t.Errorf("want code=signing, got %v", errObj["code"])
+	if errObj["code"] != "validation" {
+		t.Errorf("want code=validation, got %v", errObj["code"])
 	}
 }
 
@@ -319,7 +319,7 @@ func TestSetSigningConfig_RequiresNoESign(t *testing.T) {
 				http.MethodPut, "/api/v1/signing/config",
 				bytes.NewBufferString(body),
 			))
-			if rec.Code != http.StatusBadRequest {
+			if rec.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("want 400, got %d body=%s", rec.Code, rec.Body.String())
 			}
 			if svc.noESignCalls != 0 {
@@ -554,13 +554,13 @@ func TestSubmitOrderToken_BadMode(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec,
 		httptest.NewRequest(http.MethodPost, "/api/v1/orders/submit?missingAccount=create", bytes.NewReader(body)))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 	m := bodyMap(t, rec.Result())
 	errObj, _ := m["error"].(map[string]any)
-	if errObj["code"] != "signing" {
-		t.Errorf("want code=signing, got %v", errObj["code"])
+	if errObj["code"] != "validation" {
+		t.Errorf("want code=validation, got %v", errObj["code"])
 	}
 }
 
@@ -604,7 +604,7 @@ func TestConfirmExecution_MissingToken(t *testing.T) {
 	r.ServeHTTP(rec,
 		httptest.NewRequest(http.MethodPost, "/api/v1/orders/"+extID("order-1").String()+"/confirm",
 			bytes.NewReader(body)))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 }
@@ -654,7 +654,7 @@ func TestCancelOrder_MissingToken(t *testing.T) {
 	r.ServeHTTP(rec,
 		httptest.NewRequest(http.MethodPost, "/api/v1/orders/"+extID("order-1").String()+"/cancel",
 			bytes.NewReader(body)))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 }
@@ -672,7 +672,7 @@ func TestCancelOrder_MissingLeavesQuantity(t *testing.T) {
 	r.ServeHTTP(rec,
 		httptest.NewRequest(http.MethodPost, "/api/v1/orders/"+extID("order-1").String()+"/cancel",
 			bytes.NewReader(body)))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
 	}
 	if svc.cancelCalls != 0 {
@@ -722,7 +722,7 @@ func TestCancelOrder_BlankLeavesQuantity(t *testing.T) {
 	r.ServeHTTP(rec,
 		httptest.NewRequest(http.MethodPost, "/api/v1/orders/"+extID("order-1").String()+"/cancel",
 			bytes.NewReader(body)))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
 	}
 	if svc.cancelCalls != 0 {
@@ -904,7 +904,7 @@ func TestGetSigningKeyPublic_BadFormat(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
 		"/api/v1/signing/keys/k/public?format=bad", nil))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 }

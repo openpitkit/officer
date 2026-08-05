@@ -60,7 +60,7 @@ func restoreMarketDataArchive(
 	})
 }
 
-func TestRestoreMarketDataFreshToStaleClearsOnline(t *testing.T) {
+func TestRestoreMarketDataFreshToStalePublishesLastKnownOnline(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	sink := &marketDataReplaySink{}
@@ -108,9 +108,7 @@ func TestRestoreMarketDataFreshToStaleClearsOnline(t *testing.T) {
 	if !equalReplayPairs(sink.cleared, wantCleared) {
 		t.Fatalf("cleared pairs = %+v, want %+v", sink.cleared, wantCleared)
 	}
-	if len(sink.updates) != 0 {
-		t.Fatalf("stale quote replayed after clear: %+v", sink.updates)
-	}
+	assertStaleLastKnownReplay(t, sink.updates, stale.AsOf)
 }
 
 func TestRestoreMarketDataQuoteRemovalClearsOnline(t *testing.T) {

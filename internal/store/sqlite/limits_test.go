@@ -492,6 +492,25 @@ func TestListPolicyRowsAccountAndKindFilter(t *testing.T) {
 	}
 }
 
+func TestListPolicyRowsScopeFilter(t *testing.T) {
+	ctx, rs := seedPolicyFixtures(t)
+
+	page, err := rs.ListPolicyRows(ctx, PolicyListFilter{
+		Scope: domain.ScopeAccountAsset,
+	})
+	if err != nil {
+		t.Fatalf("ListPolicyRows scope: %v", err)
+	}
+	if got := policyKeys(page.Rows); !equalStrings(
+		got, []string{"order_size_limit|acc-1"},
+	) {
+		t.Fatalf("account-asset rows = %v", got)
+	}
+	if page.Total != 1 {
+		t.Fatalf("account-asset total = %d, want 1", page.Total)
+	}
+}
+
 func TestListPolicyRowsSpotFundsAxesFilter(t *testing.T) {
 	ctx := context.Background()
 	_, rs := newTestStore(t)

@@ -26,6 +26,7 @@ import (
 	"unicode"
 
 	"go.openpit.dev/openpit/accountadjustment"
+	"go.openpit.dev/openpit/configure"
 	"go.openpit.dev/openpit/model"
 	"go.openpit.dev/openpit/param"
 	"go.openpit.dev/openpit/pkg/optional"
@@ -107,6 +108,19 @@ func (r idResolver) account(code domain.AccountID) (param.AccountID, error) {
 	return id, nil
 }
 
+func (r idResolver) accountAlias(id param.AccountID) (domain.AccountID, error) {
+	if r.shared == nil {
+		return "", unknownAccountIDError(id)
+	}
+	r.shared.mu.RLock()
+	code, ok := r.shared.accountAliases[uint64(id.Handle())]
+	r.shared.mu.RUnlock()
+	if !ok {
+		return "", unknownAccountIDError(id)
+	}
+	return code, nil
+}
+
 func (r idResolver) accountIDSnapshot() map[domain.AccountID]param.AccountID {
 	if r.shared == nil {
 		return map[domain.AccountID]param.AccountID{}
@@ -138,6 +152,10 @@ func (r idResolver) group(code string) (param.AccountGroupID, error) {
 
 func unknownAccountAliasError(code domain.AccountID) error {
 	return fmt.Errorf("engine: unknown account resolver alias %q: %w", code, domain.ErrInvalid)
+}
+
+func unknownAccountIDError(id param.AccountID) error {
+	return fmt.Errorf("engine: unknown account engine id %d: %w", id.Handle(), domain.ErrInvalid)
 }
 
 func unknownGroupAliasError(code string) error {
@@ -875,6 +893,8 @@ func pnlHaltReasonToSDK(reason domain.PnlHaltReason) (model.PnlHaltReason, error
 		return model.PnlHaltReasonMissingCostBasis, nil
 	case domain.PnlHaltReasonArithmeticOverflow:
 		return model.PnlHaltReasonArithmeticOverflow, nil
+	case domain.PnlHaltReasonStaleDenomination:
+		return model.PnlHaltReasonStaleDenomination, nil
 	default:
 		return 0, fmt.Errorf("engine: unsupported realized_pnl halt %q: %w", reason, domain.ErrInvalid)
 	}
@@ -1149,12 +1169,22 @@ func outcomeAcceptedFromEntry(
 	return result, nil
 }
 
+// spotFundsAccountPnlFromList picks the authoritative account P&L the engine
+// published for the settling account, as a value and its halt reason.
+//
+// Precedence and publication are two jobs. An outcome reporting no change ranks
+// below one that does, so it never preempts a halt the engine reports for the
+// same account afterwards. Its absolute is still the engine's own number: when
+// nothing outranks it, it is published, so a realization landing on zero reaches
+// storage as "0" instead of absence. An empty value keeps the stored one, which
+// is what an unchanged number restates anyway.
 func spotFundsAccountPnlFromList(
 	account param.AccountID,
 	outcomes []accountadjustment.AccountPnlOutcome,
 ) (string, domain.PnlHaltReason, error) {
 	selected := false
 	var pnl string
+	var unchangedPnl string
 	var haltReason domain.PnlHaltReason
 	for _, outcome := range outcomes {
 		if outcome.AccountID != account {
@@ -1165,7 +1195,11 @@ func spotFundsAccountPnlFromList(
 			)
 			continue
 		}
-		if amount, computed := outcome.Amount(); computed && amount.Delta.IsZero() {
+		amount, computed := outcome.Amount()
+		if computed && amount.Delta.IsZero() {
+			if unchangedPnl == "" {
+				unchangedPnl = amount.Absolute.String()
+			}
 			continue
 		}
 		if selected {
@@ -1183,9 +1217,12 @@ func spotFundsAccountPnlFromList(
 				return "", "", fmt.Errorf("engine: account pnl outcome: %w", err)
 			}
 			haltReason = reason
-		} else if amount, computed := outcome.Amount(); computed {
+		} else if computed {
 			pnl = amount.Absolute.String()
 		}
+	}
+	if !selected {
+		return unchangedPnl, "", nil
 	}
 	return pnl, haltReason, nil
 }
@@ -1210,6 +1247,8 @@ func pnlHaltReasonFromSDK(
 		return domain.PnlHaltReasonMissingCostBasis, nil
 	case model.PnlHaltReasonArithmeticOverflow:
 		return domain.PnlHaltReasonArithmeticOverflow, nil
+	case model.PnlHaltReasonStaleDenomination:
+		return domain.PnlHaltReasonStaleDenomination, nil
 	default:
 		return "", fmt.Errorf("engine: unrecognized realized_pnl halt reason %d", reason)
 	}
@@ -1349,10 +1388,11 @@ func orderRejectsFrom(rejects []reject.Reject) []domain.OrderReject {
 // executionReportFrom maps a domain execution-report input onto a
 // model.ExecutionReport: the operation (instrument/account/side) and the fill
 // (last trade price+quantity, leaves quantity, the terminal-status flag, and the
-// original engine pre-trade lock). Officer forwards fields the caller supplied
-// without inventing missing settlement data. Officer enforces leaves presence
-// before this seam; the SDK validates the supplied quantity value here. The
-// account is resolved to its stored engine id.
+// original engine pre-trade lock). The venue-reported leaves is stored verbatim
+// and never derived; on a terminal report the quantity handed to the engine is
+// not that value but the release computed from Officer's own reserve ledger, so
+// the engine frees exactly what it still holds. The SDK validates the resulting
+// quantity value. The account is resolved to its stored engine id.
 func executionReportFrom(in domain.ExecutionReportInput, res idResolver) (model.ExecutionReport, error) {
 	account, err := res.account(in.Account)
 	if err != nil {
@@ -1395,18 +1435,25 @@ func executionReportFromAccount(
 		return model.ExecutionReport{}, err
 	}
 	targetStatus := in.OrderStatus
-	if !hasFill && (targetStatus == domain.OrderStatusFilled ||
+	if !hasFill && in.Commission == nil && (targetStatus == domain.OrderStatusFilled ||
 		targetStatus == domain.OrderStatusPartiallyFilled) {
 		return model.ExecutionReport{}, fmt.Errorf(
 			"engine: fill status %q requires fill price and quantity: %w",
 			targetStatus, domain.ErrInvalid)
+	}
+	isFinal := domain.OrderStatusTerminal(targetStatus)
+	if isFinal {
+		value, err := terminalReleaseQuantity(in)
+		if err != nil {
+			return model.ExecutionReport{}, err
+		}
+		leaves = &value
 	}
 
 	lockBytes, err := executionReportLockBytes(in)
 	if err != nil {
 		return model.ExecutionReport{}, err
 	}
-	isFinal := domain.OrderStatusTerminal(targetStatus)
 
 	report := model.NewExecutionReport()
 	op := report.EnsureOperationView()
@@ -1447,6 +1494,216 @@ func executionReportFromAccount(
 	return report, nil
 }
 
+// terminalReleaseQuantity returns the quantity the engine must release when the
+// report finalizes the order: the recorded reserve less what this report fills.
+// A zero release makes the engine skip apply_cancel_release altogether, so an
+// unrecorded reserve falls back to the venue leaves instead of freeing nothing.
+// The node resolves and audits that substitution before this seam; the fallback
+// repeats here so no direct adapter caller can strand a reservation silently.
+func terminalReleaseQuantity(in domain.ExecutionReportInput) (param.Quantity, error) {
+	quantity, substituted := domain.ResolveTerminalReserveQuantity(
+		in.ReservedQuantity, in.LeavesQuantity,
+	)
+	if substituted {
+		slog.Warn(
+			"release terminal reserve from venue leaves qty",
+			"order", in.Order,
+			"leaves", in.LeavesQuantity,
+			"reason", "report carries no recorded reserve",
+		)
+	}
+
+	reserved := param.NewQuantityZero()
+	if quantity != "" {
+		value, err := param.NewQuantityFromString(quantity)
+		if err != nil {
+			return param.Quantity{}, fmt.Errorf(
+				"engine: reserved quantity %q: %w: %w",
+				quantity,
+				err,
+				domain.ErrInvalid,
+			)
+		}
+		reserved = value
+	}
+
+	if in.FillQuantity == "" {
+		return reserved, nil
+	}
+	filled, err := param.NewQuantityFromString(in.FillQuantity)
+	if err != nil {
+		return param.Quantity{}, fmt.Errorf(
+			"engine: fill quantity %q for terminal release: %w: %w",
+			in.FillQuantity,
+			err,
+			domain.ErrInvalid,
+		)
+	}
+	if filled.Compare(reserved) >= 0 {
+		return param.NewQuantityZero(), nil
+	}
+	release, err := reserved.CheckedSub(filled)
+	if err != nil {
+		return param.Quantity{}, fmt.Errorf(
+			"engine: terminal release quantity: %w: %w",
+			err,
+			domain.ErrInvalid,
+		)
+	}
+	return release, nil
+}
+
+func executionReservedQuantityFrom(
+	in domain.ExecutionReportInput,
+	outcomes []BalanceOutcome,
+) (string, error) {
+	if in.ReservedQuantity == "" {
+		return "", nil
+	}
+	remaining, applied, err := reservedQuantityFromAppliedBaseDelta(
+		in.ReservedQuantity, in.BaseAsset, in.Side, outcomes,
+	)
+	if err != nil || !applied {
+		return "", err
+	}
+	return remaining, nil
+}
+
+// immediateReservedQuantityFrom returns the base reserve an immediate order
+// still holds. The value is the engine's own applied base delta counted from
+// zero, so outcomes must span every leg that moved the reserve since then: the
+// reservation on its own before settlement, and the reservation merged with the
+// settlement afterwards. Post-trade outcomes alone sum to a negative delta,
+// which would silently clamp to a released reserve the engine still holds, so
+// they are refused instead. unapplied is returned only when the engine reported
+// no base delta at all - a blocked settlement moves nothing and keeps the
+// reserve the pre-trade leg already produced.
+func immediateReservedQuantityFrom(
+	unapplied string,
+	in domain.ExecutionReportInput,
+	outcomes []BalanceOutcome,
+) (string, error) {
+	delta, applied, err := appliedBaseDelta(in.BaseAsset, in.Side, outcomes)
+	if err != nil {
+		return "", err
+	}
+	if !applied {
+		return unapplied, nil
+	}
+	remaining, err := param.NewPositionSizeFromString(delta)
+	if err != nil {
+		return "", fmt.Errorf(
+			"engine: applied reserve delta %q: %w: %w",
+			delta,
+			err,
+			domain.ErrInvalid,
+		)
+	}
+	if remaining.Compare(param.NewPositionSizeZero()) < 0 {
+		return "", fmt.Errorf(
+			"engine: immediate reserve delta %q is negative, the outcomes omit the"+
+				" reservation leg: %w",
+			delta,
+			domain.ErrInvalid,
+		)
+	}
+	return remaining.String(), nil
+}
+
+// appliedBaseDelta returns the single reserve delta the engine applied to the
+// order's base asset, and whether it reported one at all.
+func appliedBaseDelta(
+	baseAsset string,
+	side domain.OrderSide,
+	outcomes []BalanceOutcome,
+) (string, bool, error) {
+	var appliedDelta string
+	for _, outcome := range outcomes {
+		if outcome.Asset != baseAsset {
+			continue
+		}
+		var delta string
+		switch side {
+		case domain.OrderSideBuy:
+			delta = outcome.Outcome.IncomingDelta
+		case domain.OrderSideSell:
+			delta = outcome.Outcome.HeldDelta
+		default:
+			return "", false, fmt.Errorf(
+				"engine: reserve delta for unsupported side %q: %w",
+				side,
+				domain.ErrInvalid,
+			)
+		}
+		if delta == "" {
+			continue
+		}
+		if appliedDelta != "" {
+			return "", false, fmt.Errorf(
+				"engine: multiple reserve deltas for base asset %q: %w",
+				baseAsset,
+				domain.ErrInvalid,
+			)
+		}
+		appliedDelta = delta
+	}
+	if appliedDelta == "" {
+		return "", false, nil
+	}
+	return appliedDelta, true, nil
+}
+
+// reservedQuantityFromAppliedBaseDelta moves an already recorded reserve by the
+// delta the engine applied. Here a negative result is a fact, not a caller
+// mistake - a venue can report more filled than Officer reserved - so it clamps
+// to zero rather than failing.
+func reservedQuantityFromAppliedBaseDelta(
+	reserved string,
+	baseAsset string,
+	side domain.OrderSide,
+	outcomes []BalanceOutcome,
+) (string, bool, error) {
+	appliedDelta, applied, err := appliedBaseDelta(baseAsset, side, outcomes)
+	if err != nil || !applied {
+		return "", false, err
+	}
+
+	reservedValue, err := param.NewPositionSizeFromString(reserved)
+	if err != nil {
+		return "", false, fmt.Errorf(
+			"engine: reserved quantity %q: %w: %w",
+			reserved,
+			err,
+			domain.ErrInvalid,
+		)
+	}
+	zero := param.NewPositionSizeZero()
+	if reservedValue.Compare(zero) < 0 {
+		return "", false, fmt.Errorf(
+			"engine: reserved quantity %q is negative: %w",
+			reserved,
+			domain.ErrInvalid,
+		)
+	}
+	delta, err := param.NewPositionSizeFromString(appliedDelta)
+	if err != nil {
+		return "", false, fmt.Errorf(
+			"engine: applied reserve delta %q: %w: %w",
+			appliedDelta,
+			err,
+			domain.ErrInvalid,
+		)
+	}
+	remaining, err := reservedValue.CheckedAdd(delta)
+	if err != nil {
+		return "", false, fmt.Errorf("engine: remaining reserve: %w", err)
+	}
+	if remaining.Compare(zero) < 0 {
+		return zero.String(), true, nil
+	}
+	return remaining.String(), true, nil
+}
+
 func executionReportHasFill(in domain.ExecutionReportInput) (bool, error) {
 	hasQuantity := in.FillQuantity != ""
 	hasPrice := in.FillPrice != ""
@@ -1480,7 +1737,9 @@ func executionReportPersistenceFrom(
 
 	events := make([]domain.OrderEvent, 0, 2)
 	hasFill := in.FillQuantity != "" && in.FillPrice != ""
-	if hasFill {
+	isFillStatus := in.OrderStatus == domain.OrderStatusFilled ||
+		in.OrderStatus == domain.OrderStatusPartiallyFilled
+	if hasFill || isFillStatus {
 		events = append(events, domain.OrderEvent{
 			Order:   in.Order,
 			Type:    domain.OrderEventFill,
@@ -1542,10 +1801,6 @@ func sdkFeeFromContractAmount(field, s string) (param.Fee, error) {
 	if err != nil {
 		return param.Fee{}, fmt.Errorf("engine: %s %q: %w: %w", field, s, err, domain.ErrInvalid)
 	}
-	fee, err = fee.CheckedNeg()
-	if err != nil {
-		return param.Fee{}, fmt.Errorf("engine: %s %q: %w: %w", field, s, err, domain.ErrInvalid)
-	}
 	return fee, nil
 }
 
@@ -1562,16 +1817,32 @@ func commissionFrom(c domain.Commission) (param.MonetaryAmount, error) {
 	return param.NewMonetaryAmount(amount, currency), nil
 }
 
-// immediateFillQuantity returns the request quantity for an immediate fill.
-// SubmitImmediate validation rejects volume orders before the engine is called.
-func immediateFillQuantity(o domain.Order) (string, error) {
-	if o.AmountKind == domain.OrderAmountKindQuantity {
+// immediateFillQuantity returns the immediate fill's base-asset quantity.
+func immediateFillQuantity(o domain.Order, tradePrice string) (string, error) {
+	switch o.AmountKind {
+	case domain.OrderAmountKindQuantity:
 		return o.AmountValue, nil
+	case domain.OrderAmountKindVolume:
+		volume, err := param.NewVolumeFromString(o.AmountValue)
+		if err != nil {
+			return "", fmt.Errorf("engine: parse immediate order volume: %w", err)
+		}
+		price, err := param.NewPriceFromString(tradePrice)
+		if err != nil {
+			return "", fmt.Errorf("engine: parse immediate trade price: %w", err)
+		}
+		quantity, err := volume.CalculateQuantity(price)
+		if err != nil {
+			return "", fmt.Errorf("engine: calculate immediate fill quantity: %w", err)
+		}
+		return quantity.String(), nil
+	default:
+		return "", fmt.Errorf(
+			"engine: unsupported immediate order amount kind %q: %w",
+			o.AmountKind,
+			domain.ErrInvalid,
+		)
 	}
-	return "", fmt.Errorf(
-		"engine: immediate fill requires a quantity order, got %q: %w",
-		o.AmountKind, domain.ErrInvalid,
-	)
 }
 
 // executionReportLockBytes resolves the engine-produced lock a report hands
@@ -1632,6 +1903,22 @@ func policyConfigurationBlocksFrom(
 		})
 	}
 	return out
+}
+
+func policyConfigurationBlockOutcomesFrom(
+	outcomes []configure.AccountBlockOutcome, res idResolver, policy string,
+) ([]domain.AccountBlock, error) {
+	blocks := make([]domain.AccountBlock, 0, len(outcomes))
+	for _, outcome := range outcomes {
+		account, err := res.accountAlias(outcome.AccountID)
+		if err != nil {
+			return nil, err
+		}
+		blocks = append(blocks, policyConfigurationBlocksFrom(
+			[]reject.AccountBlock{outcome.Block}, account, policy,
+		)...)
+	}
+	return blocks, nil
 }
 
 // accountBlockFrom maps a dry-run report's would-be account block onto a domain

@@ -24,6 +24,7 @@ package sqlite
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -244,7 +245,7 @@ func TestBalanceListFilters(t *testing.T) {
 	}
 }
 
-func TestListAccountsWithOpenBalancesIncludesBalanceRowsAndAccountPnl(t *testing.T) {
+func TestListAccountsBlockingCurrencyChangeIncludesBalanceRowsAndAccountPnl(t *testing.T) {
 	ctx, rs := seedBalanceFixtures(t)
 
 	if _, err := rs.CreateAccount(ctx, domain.Account{Code: "acc-2"}); err != nil {
@@ -287,46 +288,41 @@ func TestListAccountsWithOpenBalancesIncludesBalanceRowsAndAccountPnl(t *testing
 		t.Fatalf("UpsertBalance halt-only: %v", err)
 	}
 
-	got, err := rs.ListAccountsWithOpenBalances(ctx, nil)
+	got, err := rs.ListAccountsBlockingCurrencyChange(ctx, nil)
 	if err != nil {
-		t.Fatalf("ListAccountsWithOpenBalances(all): %v", err)
+		t.Fatalf("ListAccountsBlockingCurrencyChange(all): %v", err)
 	}
-	if strings.Join(accountIDsToStrings(got), ",") != "acc-1,acc-2,acc-3" {
-		t.Fatalf("ListAccountsWithOpenBalances(all) = %v, want halt-only accounts excluded", got)
+	if strings.Join(accountIDsToStrings(got), ",") != "acc-1,acc-2,acc-3,acc-5,acc-6" {
+		t.Fatalf("ListAccountsBlockingCurrencyChange(all) = %v, want both halt levels included", got)
 	}
 
-	filtered, err := rs.ListAccountsWithOpenBalances(ctx, []domain.AccountID{"acc-2"})
+	filtered, err := rs.ListAccountsBlockingCurrencyChange(ctx, []domain.AccountID{"acc-2"})
 	if err != nil {
-		t.Fatalf("ListAccountsWithOpenBalances(filtered): %v", err)
+		t.Fatalf("ListAccountsBlockingCurrencyChange(filtered): %v", err)
 	}
 	if len(filtered) != 1 || filtered[0] != "acc-2" {
-		t.Fatalf("ListAccountsWithOpenBalances(filtered) = %v, want acc-2", filtered)
+		t.Fatalf("ListAccountsBlockingCurrencyChange(filtered) = %v, want acc-2", filtered)
 	}
 
-	filtered, err = rs.ListAccountsWithOpenBalances(ctx, []domain.AccountID{"acc-3"})
+	filtered, err = rs.ListAccountsBlockingCurrencyChange(ctx, []domain.AccountID{"acc-3"})
 	if err != nil {
-		t.Fatalf("ListAccountsWithOpenBalances(account P&L): %v", err)
+		t.Fatalf("ListAccountsBlockingCurrencyChange(account P&L): %v", err)
 	}
 	if len(filtered) != 1 || filtered[0] != "acc-3" {
-		t.Fatalf("ListAccountsWithOpenBalances(account P&L) = %v, want acc-3", filtered)
+		t.Fatalf("ListAccountsBlockingCurrencyChange(account P&L) = %v, want acc-3", filtered)
 	}
 
-	// acc-5 (account halt) and acc-6 (position halt) carry a halt flag and no
-	// number. A halted P&L is not a value that could need recomputing in a new
-	// currency, so neither account is open and neither blocks a currency change.
-	filtered, err = rs.ListAccountsWithOpenBalances(ctx, []domain.AccountID{"acc-5", "acc-6"})
+	// Both account-level and per-asset halt state block a currency change.
+	filtered, err = rs.ListAccountsBlockingCurrencyChange(ctx, []domain.AccountID{"acc-5", "acc-6"})
 	if err != nil {
-		t.Fatalf("ListAccountsWithOpenBalances(halt-only): %v", err)
+		t.Fatalf("ListAccountsBlockingCurrencyChange(halt-only): %v", err)
 	}
-	if len(filtered) != 0 {
-		t.Fatalf("ListAccountsWithOpenBalances(halt-only) = %v, want empty", filtered)
+	if len(filtered) != 2 || filtered[0] != "acc-5" || filtered[1] != "acc-6" {
+		t.Fatalf("ListAccountsBlockingCurrencyChange(halt-only) = %v, want acc-5 and acc-6", filtered)
 	}
 }
 
-// A number behind a halt is historical, not authoritative: the engine retains
-// the prior P&L when it reports a halt with no value. Quantities and cost basis
-// are not P&L and keep counting behind a halt.
-func TestListAccountsWithOpenBalancesExcludesValuesBehindPnlHalt(t *testing.T) {
+func TestListAccountsBlockingCurrencyChangeIncludesRetainedBalanceHalt(t *testing.T) {
 	ctx, rs := seedBalanceFixtures(t)
 
 	for _, account := range []domain.Account{
@@ -373,17 +369,149 @@ func TestListAccountsWithOpenBalancesExcludesValuesBehindPnlHalt(t *testing.T) {
 		}
 	}
 
-	got, err := rs.ListAccountsWithOpenBalances(ctx, []domain.AccountID{
+	got, err := rs.ListAccountsBlockingCurrencyChange(ctx, []domain.AccountID{
 		"acc-halted-pnl", "acc-healthy-pnl", "acc-halted-realized",
 		"acc-halted-quantity", "acc-halted-cost-basis",
 	})
 	if err != nil {
-		t.Fatalf("ListAccountsWithOpenBalances: %v", err)
+		t.Fatalf("ListAccountsBlockingCurrencyChange: %v", err)
 	}
-	want := "acc-halted-cost-basis,acc-halted-quantity,acc-healthy-pnl"
+	want := "acc-halted-cost-basis,acc-halted-pnl,acc-halted-quantity,acc-halted-realized,acc-healthy-pnl"
 	if strings.Join(accountIDsToStrings(got), ",") != want {
-		t.Fatalf("ListAccountsWithOpenBalances = %v, want %s", got, want)
+		t.Fatalf("ListAccountsBlockingCurrencyChange = %v, want %s", got, want)
 	}
+}
+
+func TestListAccountsBlockingCurrencyChangeStateKinds(t *testing.T) {
+	t.Run("active orders block and terminal orders do not", func(t *testing.T) {
+		ctx, rs := seedOrderFixtures(t)
+		for _, status := range domain.OrderStatusesEligibleForFill() {
+			order := sampleOrder()
+			order.Status = status
+			if _, err := rs.CreateOrder(ctx, order); err != nil {
+				t.Fatalf("CreateOrder(%s): %v", status, err)
+			}
+		}
+		got, err := rs.ListAccountsBlockingCurrencyChange(
+			ctx, []domain.AccountID{"acc-1"},
+		)
+		if err != nil || len(got) != 1 || got[0] != "acc-1" {
+			t.Fatalf("active order blockers = %v, err=%v", got, err)
+		}
+
+		for _, status := range []domain.OrderStatus{
+			domain.OrderStatusFilled,
+			domain.OrderStatusRejected,
+			domain.OrderStatusCancelled,
+			domain.OrderStatusRolledBack,
+		} {
+			terminalCtx, terminalStore := seedOrderFixtures(t)
+			order := sampleOrder()
+			order.Status = status
+			if _, err := terminalStore.CreateOrder(terminalCtx, order); err != nil {
+				t.Fatalf("CreateOrder(%s): %v", status, err)
+			}
+			got, err := terminalStore.ListAccountsBlockingCurrencyChange(
+				terminalCtx, []domain.AccountID{"acc-1"},
+			)
+			if err != nil || len(got) != 0 {
+				t.Fatalf("terminal order %s blockers = %v, err=%v", status, got, err)
+			}
+		}
+	})
+
+	for _, tc := range []struct {
+		name  string
+		limit domain.LimitSpotFundsPnlBounds
+		seed  func(context.Context, RealmStore)
+	}{
+		{
+			name: "account PnL bounds",
+			limit: domain.LimitSpotFundsPnlBounds{
+				Scope: domain.ScopeAccount, Account: "acc-1", LowerBound: "-10",
+			},
+		},
+		{
+			name: "group PnL bounds",
+			limit: domain.LimitSpotFundsPnlBounds{
+				Scope: domain.ScopeAccountGroup, AccountGroup: "desk",
+				UpperBound: "10",
+			},
+			seed: func(ctx context.Context, rs RealmStore) {
+				if _, err := rs.CreateGroup(ctx, domain.AccountGroup{Code: "desk"}); err != nil {
+					t.Fatalf("CreateGroup: %v", err)
+				}
+				if err := rs.SetAccountGroup(ctx, "acc-1", "desk"); err != nil {
+					t.Fatalf("SetAccountGroup: %v", err)
+				}
+			},
+		},
+		{
+			name: "global PnL bounds",
+			limit: domain.LimitSpotFundsPnlBounds{
+				Scope: domain.ScopeGlobal, LowerBound: "-100",
+			},
+		},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, rs := seedBalanceFixtures(t)
+			if tc.seed != nil {
+				tc.seed(ctx, rs)
+			}
+			if err := rs.PutSpotFundsPnlBoundsLimit(ctx, tc.limit); err != nil {
+				t.Fatalf("PutSpotFundsPnlBoundsLimit: %v", err)
+			}
+			got, err := rs.ListAccountsBlockingCurrencyChange(
+				ctx, []domain.AccountID{"acc-1"},
+			)
+			if err != nil || len(got) != 1 || got[0] != "acc-1" {
+				t.Fatalf("PnL bound blockers = %v, err=%v", got, err)
+			}
+		})
+	}
+
+	t.Run("rate and order size limits are not denominated", func(t *testing.T) {
+		ctx, rs := seedBalanceFixtures(t)
+		if err := rs.PutRateLimit(ctx, domain.LimitRate{
+			Scope: domain.ScopeAccount, Account: "acc-1",
+			MaxOrders: 2, Window: time.Second,
+		}); err != nil {
+			t.Fatalf("PutRateLimit: %v", err)
+		}
+		if err := rs.PutOrderSizeLimit(ctx, domain.LimitOrderSize{
+			Scope: domain.ScopeAccountAsset, Account: "acc-1", Asset: "AAPL",
+			MaxQuantity: "2", MaxNotional: "100",
+		}); err != nil {
+			t.Fatalf("PutOrderSizeLimit: %v", err)
+		}
+		got, err := rs.ListAccountsBlockingCurrencyChange(
+			ctx, []domain.AccountID{"acc-1"},
+		)
+		if err != nil || len(got) != 0 {
+			t.Fatalf("non-denominated limit blockers = %v, err=%v", got, err)
+		}
+	})
+
+	t.Run("absent and exact zero values do not block", func(t *testing.T) {
+		ctx, rs := seedBalanceFixtures(t)
+		if err := rs.SetAccountPnl(ctx, "acc-1", "-0.000", ""); err != nil {
+			t.Fatalf("SetAccountPnl: %v", err)
+		}
+		if err := rs.UpsertBalance(ctx, domain.Balance{
+			Account: "acc-1", Asset: "AAPL",
+			Available: "0", Held: "-0", Incoming: "0.000",
+			AverageEntryPrice: "-0.000", RealizedPnl: "0",
+		}); err != nil {
+			t.Fatalf("UpsertBalance: %v", err)
+		}
+		got, err := rs.ListAccountsBlockingCurrencyChange(
+			ctx, []domain.AccountID{"acc-1"},
+		)
+		if err != nil || len(got) != 0 {
+			t.Fatalf("zero-value blockers = %v, err=%v", got, err)
+		}
+	})
 }
 
 func accountIDsToStrings(ids []domain.AccountID) []string {
@@ -717,6 +845,68 @@ func TestBalanceListRowsRejectsDenominatedRangeWithoutCurrency(t *testing.T) {
 	})
 	if !errors.Is(err, fwstore.ErrCurrencyRequired) {
 		t.Fatalf("ListBalanceRows invalid filter = %v, want ErrCurrencyRequired", err)
+	}
+}
+
+func TestBalanceListRowsSortsRealizedPnlWithinCurrency(t *testing.T) {
+	ctx, rs := seedBalanceFixtures(t)
+	if err := rs.CreateAsset(ctx, domain.Asset{Code: "EUR"}); err != nil {
+		t.Fatalf("CreateAsset(EUR): %v", err)
+	}
+	seeds := []struct {
+		account  domain.AccountID
+		currency string
+		pnl      string
+	}{
+		{account: "acc-empty", currency: "USD"},
+		{account: "acc-negative", currency: "USD", pnl: "-2.5"},
+		{account: "acc-nine", currency: "USD", pnl: "9"},
+		{account: "acc-large", currency: "USD", pnl: "100000000000000000000.1"},
+		{account: "acc-eur", currency: "EUR", pnl: "1000000000000000000000"},
+	}
+	for _, seed := range seeds {
+		if _, err := rs.CreateAccount(ctx, domain.Account{
+			Code: seed.account, Currency: seed.currency,
+		}); err != nil {
+			t.Fatalf("CreateAccount(%s): %v", seed.account, err)
+		}
+		if err := rs.UpsertBalance(ctx, domain.Balance{
+			Account: seed.account, Asset: "AAPL", RealizedPnl: seed.pnl,
+		}); err != nil {
+			t.Fatalf("UpsertBalance(%s): %v", seed.account, err)
+		}
+	}
+
+	list := func(descending bool) []domain.AccountID {
+		t.Helper()
+		page, err := rs.ListBalanceRows(ctx, fwstore.BalanceListFilter{
+			RealizedPnl: fwstore.DenominatedDecimalRangeFilter{Currency: "USD"},
+			Sort: fwstore.SortSpec{
+				Column: "realizedPnl", Descending: descending,
+			},
+		})
+		if err != nil {
+			t.Fatalf("ListBalanceRows: %v", err)
+		}
+		got := make([]domain.AccountID, 0, len(page.Rows))
+		for _, row := range page.Rows {
+			got = append(got, row.Balance.Account)
+			if row.Balance.AccountCurrency != "USD" {
+				t.Fatalf("row %s currency = %q", row.Balance.Account, row.Balance.AccountCurrency)
+			}
+		}
+		return got
+	}
+
+	if got := list(false); !slices.Equal(got, []domain.AccountID{
+		"acc-empty", "acc-negative", "acc-nine", "acc-large",
+	}) {
+		t.Fatalf("ascending rows = %v", got)
+	}
+	if got := list(true); !slices.Equal(got, []domain.AccountID{
+		"acc-empty", "acc-large", "acc-nine", "acc-negative",
+	}) {
+		t.Fatalf("descending rows = %v", got)
 	}
 }
 

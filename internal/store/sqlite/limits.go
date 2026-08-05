@@ -135,6 +135,10 @@ func policyListWhere(filter fwstore.PolicyListFilter) (string, []any) {
 	appendMatcher(&clauses, &args, "account_code", filter.Account)
 	appendMatcher(&clauses, &args, "account_group_code", filter.AccountGroup)
 	appendMatcher(&clauses, &args, "asset_code", filter.Asset)
+	if filter.Scope != "" {
+		clauses = append(clauses, "scope = ?")
+		args = append(args, filter.Scope)
+	}
 	if filter.Kind != nil {
 		clauses = append(clauses, "kind = ?")
 		args = append(args, string(*filter.Kind))

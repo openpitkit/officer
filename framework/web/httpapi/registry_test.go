@@ -90,6 +90,73 @@ func TestRouteRegistryReplaceAndUnregister(t *testing.T) {
 	}
 }
 
+func TestRuntimeRouteManifestSnapshotsMountedRoutes(t *testing.T) {
+	var registry RouteRegistry
+	registry.Register(Route{
+		ID:      "first",
+		Method:  http.MethodGet,
+		Pattern: "/first",
+		Handler: http.NotFoundHandler(),
+	})
+	registry.Register(Route{
+		ID:      "second",
+		Method:  http.MethodPost,
+		Pattern: "/second/{id}",
+		Handler: http.NotFoundHandler(),
+	})
+	router, err := NewRouter(RouterConfig{
+		Routes:     &registry,
+		Authorizer: AllowAll{},
+		SPA: fstest.MapFS{
+			"index.html": {Data: []byte("<html></html>")},
+		},
+		BodyLimit: BodyLimitPolicy(1024, nil),
+	})
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+
+	registry.Register(Route{
+		ID:      "late",
+		Method:  http.MethodDelete,
+		Pattern: "/late",
+		Handler: http.NotFoundHandler(),
+	})
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(
+		rec,
+		httptest.NewRequest(
+			http.MethodGet,
+			"/api/v1/route-manifest.json",
+			nil,
+		),
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("manifest status = %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
+		t.Fatalf("manifest content type = %q", got)
+	}
+	want := "{\"routes\":[{\"method\":\"GET\",\"path\":\"/first\"}," +
+		"{\"method\":\"POST\",\"path\":\"/second/{id}\"}]}\n"
+	if rec.Body.String() != want {
+		t.Fatalf("manifest = %q, want %q", rec.Body.String(), want)
+	}
+
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(
+		rec,
+		httptest.NewRequest(
+			http.MethodPost,
+			"/api/v1/route-manifest.json",
+			nil,
+		),
+	)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST manifest status = %d, want 405", rec.Code)
+	}
+}
+
 func TestNewRouterCustomAuthorizer(t *testing.T) {
 	var registry RouteRegistry
 	registry.Register(Route{

@@ -160,6 +160,81 @@ func TestLocalNode_ApplyAdjustmentDoesNotInventRealizedPnl(t *testing.T) {
 	if stored.RealizedPnlHaltReason != domain.PnlHaltReasonMissingInitialPnl {
 		t.Fatalf("stored halt = %q, want missing_initial_pnl", stored.RealizedPnlHaltReason)
 	}
+	if stored.RealizedPnl != "" {
+		t.Fatalf("stored realized pnl = %q, want unset", stored.RealizedPnl)
+	}
+}
+
+func TestLocalNode_AdjustedBalanceKeepsRealizedPnlState(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		previous   *domain.Balance
+		outcome    domain.AdjustmentOutcomeAccepted
+		wantPnl    string
+		wantReason domain.PnlHaltReason
+	}{
+		{
+			name:    "new balance keeps pnl unset",
+			outcome: domain.AdjustmentOutcomeAccepted{BalanceResult: "1"},
+		},
+		{
+			name: "explicit zero is authoritative",
+			outcome: domain.AdjustmentOutcomeAccepted{
+				BalanceResult: "1", RealizedPnlResult: "0",
+			},
+			wantPnl: "0",
+		},
+		{
+			name: "omission preserves numeric pnl",
+			previous: &domain.Balance{
+				Available: "1", RealizedPnl: "7.5",
+			},
+			outcome: domain.AdjustmentOutcomeAccepted{BalanceResult: "2"},
+			wantPnl: "7.5",
+		},
+		{
+			name: "omission preserves pnl halt",
+			previous: &domain.Balance{
+				Available:             "1",
+				RealizedPnlHaltReason: domain.PnlHaltReasonMissingFx,
+			},
+			outcome:    domain.AdjustmentOutcomeAccepted{BalanceResult: "2"},
+			wantReason: domain.PnlHaltReasonMissingFx,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			eng := newFakeEngine()
+			n, st := newTestNode(t, eng)
+			ctx := context.Background()
+			seedTestAccount(t, st, "acc-1")
+			if test.previous != nil {
+				previous := *test.previous
+				previous.Account = "acc-1"
+				previous.Asset = "USD"
+				if err := st.UpsertBalance(ctx, previous); err != nil {
+					t.Fatalf("UpsertBalance: %v", err)
+				}
+			}
+
+			balance, err := n.adjustedBalance(ctx, testKey("acc-1"), "USD", test.outcome)
+			if err != nil {
+				t.Fatalf("adjustedBalance: %v", err)
+			}
+			if balance.RealizedPnl != test.wantPnl ||
+				balance.RealizedPnlHaltReason != test.wantReason {
+				t.Fatalf(
+					"realized pnl state = %q/%q, want %q/%q",
+					balance.RealizedPnl,
+					balance.RealizedPnlHaltReason,
+					test.wantPnl,
+					test.wantReason,
+				)
+			}
+		})
+	}
 }
 
 // balanceReadLaneProbeRealm records whether balance reads happen inside the
@@ -340,8 +415,8 @@ func TestLocalNode_SetBalanceRealizedPnlKeepsAccountCurrencyAfterDeletingFinalRo
 	if err != nil {
 		t.Fatalf("SetBalanceRealizedPnl: %v", err)
 	}
-	if balance.AccountCurrency != "USD" {
-		t.Fatalf("account currency = %q, want USD", balance.AccountCurrency)
+	if balance.RealizedPnl != "0" || balance.AccountCurrency != "USD" {
+		t.Fatalf("balance = %+v, want zero realized PnL in USD", balance)
 	}
 	if _, ok, err := st.GetBalance(ctx, "acc-1", "USD"); err != nil || ok {
 		t.Fatalf("GetBalance(deleted) = ok %v err %v, want no balance row", ok, err)
@@ -477,9 +552,12 @@ func TestLocalNode_RealizedPnlPersistenceUsesOneWriterPerRequest(t *testing.T) {
 		RealizedPnlDelta:  "-5.25",
 		RealizedPnlResult: "0",
 	}
-	_, err = n.SetBalanceRealizedPnl(ctx, testKey("acc-1"), "JPY", "0", domain.MissingAccountCreate, testCaller)
+	balance, err = n.SetBalanceRealizedPnl(ctx, testKey("acc-1"), "JPY", "0", domain.MissingAccountCreate, testCaller)
 	if err != nil {
-		t.Fatalf("SetBalanceRealizedPnl(delete): %v", err)
+		t.Fatalf("SetBalanceRealizedPnl(zero): %v", err)
+	}
+	if balance.RealizedPnl != "0" {
+		t.Fatalf("zero realized pnl = %q, want 0", balance.RealizedPnl)
 	}
 	if _, ok, err := n.realm.GetBalance(ctx, "acc-1", "JPY"); err != nil || ok {
 		t.Fatalf("GetBalance(deleted) = ok %v err %v, want no balance row", ok, err)
@@ -495,6 +573,56 @@ func TestLocalNode_RealizedPnlPersistenceUsesOneWriterPerRequest(t *testing.T) {
 	}
 	if probe.records[2].DeleteBalance == nil || probe.records[2].UpsertBalance != nil {
 		t.Fatalf("realized-only delete persistence = %+v, want engine-driven delete", probe.records[2])
+	}
+}
+
+func TestBalanceIsEmptyRequiresEveryEconomicValueToBeZero(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		balance domain.Balance
+		want    bool
+	}{
+		{name: "unset", balance: domain.Balance{}, want: true},
+		{name: "exact zero pnl", balance: domain.Balance{RealizedPnl: "0"}, want: true},
+		{name: "missing fx halt", balance: domain.Balance{
+			RealizedPnlHaltReason: domain.PnlHaltReasonMissingFx,
+		}},
+		{name: "missing account currency halt", balance: domain.Balance{
+			RealizedPnlHaltReason: domain.PnlHaltReasonMissingAccountCurrency,
+		}},
+		{name: "missing initial pnl halt", balance: domain.Balance{
+			RealizedPnlHaltReason: domain.PnlHaltReasonMissingInitialPnl,
+		}},
+		{name: "missing cost basis halt", balance: domain.Balance{
+			RealizedPnlHaltReason: domain.PnlHaltReasonMissingCostBasis,
+		}},
+		{name: "arithmetic overflow halt", balance: domain.Balance{
+			RealizedPnlHaltReason: domain.PnlHaltReasonArithmeticOverflow,
+		}},
+		{name: "available", balance: domain.Balance{Available: "1"}},
+		{name: "held", balance: domain.Balance{Held: "-1"}},
+		{name: "incoming", balance: domain.Balance{Incoming: "0.1"}},
+		{name: "realized pnl", balance: domain.Balance{RealizedPnl: "-0.1"}},
+		{
+			name: "halt does not hide available",
+			balance: domain.Balance{
+				Available:             "1",
+				RealizedPnlHaltReason: domain.PnlHaltReasonMissingFx,
+			},
+		},
+		{
+			name:    "average entry price",
+			balance: domain.Balance{AverageEntryPrice: "10"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := balanceIsEmpty(test.balance); got != test.want {
+				t.Fatalf("balanceIsEmpty(%+v) = %v, want %v", test.balance, got, test.want)
+			}
+		})
 	}
 }
 

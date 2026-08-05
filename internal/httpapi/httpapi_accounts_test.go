@@ -134,7 +134,7 @@ func TestListAccounts_RejectsNotesSort(t *testing.T) {
 		"/api/v1/accounts?sort=notes",
 		nil,
 	))
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 400, got %d", rec.Code)
 	}
 }
@@ -179,13 +179,45 @@ func TestCreateAccount_ValidationError(t *testing.T) {
 	body := bytes.NewBufferString(`{"code":""}`)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/accounts", body))
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("want 400, got %d", rec.Code)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("want 422, got %d", rec.Code)
+	}
+	m := bodyMap(t, rec.Result())
+	errorsExt, _ := m["errors"].([]any)
+	if len(errorsExt) != 1 {
+		t.Fatalf("validation problem = %+v", m)
+	}
+}
+
+func TestSetAccountCurrency_EconomicStateConflict(t *testing.T) {
+	svc := &fakeService{
+		accounts: []domain.Account{{Code: "acc-1"}},
+		stateErr: domain.NewCurrencyChangeBlockedError(
+			domain.ScopeAccount,
+			"acc-1",
+			fmt.Errorf("account holds non-zero P&L: %w", domain.ErrConflict),
+		),
+	}
+	r, err := newRouter(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/accounts/acc-1/currency",
+		bytes.NewBufferString(`{"currency":"EUR"}`),
+	))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d: %s", rec.Code, rec.Body.String())
 	}
 	m := bodyMap(t, rec.Result())
 	errObj, _ := m["error"].(map[string]any)
-	if errObj["code"] != "validation" {
-		t.Fatalf("want code=validation, got %v", errObj["code"])
+	if errObj["code"] != "currency_change_blocked" ||
+		errObj["account"] != "acc-1" || errObj["field"] != "currency" ||
+		errObj["path"] != "accounts.acc-1.currency" ||
+		errObj["constraint"] != "economically_empty" {
+		t.Fatalf("unexpected currency guard error: %v", errObj)
 	}
 }
 
@@ -333,13 +365,13 @@ func TestSetAccountCurrency_ServiceInvalid(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut,
 		"/api/v1/accounts/acc-1/currency", body))
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("want 400, got %d", rec.Code)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("want 422, got %d", rec.Code)
 	}
 	m := bodyMap(t, rec.Result())
-	errObj, _ := m["error"].(map[string]any)
-	if errObj["code"] != "validation" {
-		t.Fatalf("want code=validation, got %v", errObj["code"])
+	errorsExt, _ := m["errors"].([]any)
+	if len(errorsExt) != 1 {
+		t.Fatalf("validation problem = %+v", m)
 	}
 }
 

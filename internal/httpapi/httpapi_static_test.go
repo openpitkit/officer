@@ -56,6 +56,20 @@ func TestServeOpenAPISpec(t *testing.T) {
 		!strings.Contains(body, "required: [delta, result]") {
 		t.Fatal("AdjustmentAccepted realizedPnlResult is not documented as an object")
 	}
+	if !strings.Contains(body, "application/problem+json:") ||
+		!strings.Contains(body, "required: [type, title, status, detail, errors]") ||
+		strings.Contains(
+			body,
+			"\"400\":\n          $ref: \"#/components/responses/ValidationError\"",
+		) {
+		t.Fatal("validation responses do not document the RFC 9457 400/422 split")
+	}
+	if !strings.Contains(
+		body,
+		"enum: [account, asset, available, held, incoming, realizedPnl, updatedAt]",
+	) {
+		t.Fatal("balance realizedPnl sort is missing from OpenAPI")
+	}
 }
 
 // TestServeOpenAPISpec_WrongMethod covers the route's method restriction: only

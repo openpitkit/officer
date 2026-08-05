@@ -864,7 +864,7 @@ func marketDataInstrumentStale(
 	if quote == nil {
 		return true
 	}
-	return now.Sub(quote.AsOf) > MarketDataFreshnessTTL
+	return now.Sub(quote.AsOf) >= MarketDataFreshnessTTL
 }
 
 func marketDataKey(instanceID, externalSymbol string) string {

@@ -144,12 +144,47 @@ func TestRouteRegistrySurfaceBaseline(t *testing.T) {
 	}
 }
 
-// bodyMap decodes a JSON response body into a map.
+func TestServiceLifecycleRoutes(t *testing.T) {
+	t.Parallel()
+	routes := ServiceLifecycleRoutes(
+		http.NotFoundHandler(),
+		http.NotFoundHandler(),
+	)
+	want := []struct {
+		id      string
+		method  string
+		pattern string
+	}{
+		{"service.restart.post", http.MethodPost, "/service/restart"},
+		{"service.stop.post", http.MethodPost, "/service/stop"},
+	}
+	if len(routes) != len(want) {
+		t.Fatalf("route count = %d, want %d", len(routes), len(want))
+	}
+	for i, route := range routes {
+		if route.ID != want[i].id || route.Method != want[i].method ||
+			route.Pattern != want[i].pattern {
+			t.Fatalf("route %d = (%q, %q, %q), want (%q, %q, %q)",
+				i, route.ID, route.Method, route.Pattern,
+				want[i].id, want[i].method, want[i].pattern)
+		}
+	}
+}
+
+// bodyMap decodes a JSON response body into a map. Older behavioral tests use
+// the former error-envelope view; expose that view from RFC 9457 fields while
+// dedicated problem-detail tests assert the actual wire representation.
 func bodyMap(t *testing.T, resp *http.Response) map[string]any {
 	t.Helper()
 	var m map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
 		t.Fatalf("decode body: %v", err)
+	}
+	if _, exists := m["error"]; !exists && m["type"] == "about:blank" {
+		message, _ := m["detail"].(string)
+		m["error"] = map[string]any{
+			"code": "validation", "message": message,
+		}
 	}
 	return m
 }

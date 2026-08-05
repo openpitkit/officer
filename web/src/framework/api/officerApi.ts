@@ -3102,8 +3102,9 @@ export interface ExecutionReportBody {
   /** Fill fields route the report through engine settlement. */
   quantity?: string;
   price?: string;
-  /** Required for fills, terminal statuses, and any report carrying commission.
-   *  Terminal reports use the remaining quantity the engine must release. */
+  /** Venue-reported open base quantity, stored verbatim and never derived or
+   *  substituted. Reserve release comes from the persisted reserve ledger.
+   *  Required for fills, terminal statuses, and reports carrying commission. */
   leavesQuantity?: string;
   lockPrice?: string;
   commission?: Commission;
@@ -3188,9 +3189,9 @@ export interface ConfirmOrderBody {
  *  caller-supplied leaves, and an optional reason. */
 export interface CancelOrderBody {
   token: string;
-  /** Remaining base quantity, forwarded to the engine unchanged. Required: the
-   *  cancellation is settled by the engine, which cannot reject an incomplete
-   *  report. Officer never infers it. */
+  /** Venue-reported open base quantity, stored verbatim and never derived or
+   *  substituted. Reserve release comes from the persisted reserve ledger.
+   *  Required because cancellation is engine-settled. */
   leavesQuantity: string;
   reason?: string;
 }

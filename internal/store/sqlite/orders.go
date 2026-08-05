@@ -52,7 +52,8 @@ import (
 const orderSelect = `
 SELECT o.external_id, a.code, ba.code, qa.code, p.code,
        o.at, o.source_id, o.side_id, o.amount_kind_id, o.amount_value,
-       o.leaves_quantity, o.price, o.status_id, o.drop_copy, o.lock
+       o.leaves_quantity, o.reserved_quantity, o.price,
+       o.status_id, o.drop_copy, o.lock
 FROM order_record o
 JOIN account a       ON a.id = o.account_id
 JOIN asset ba        ON ba.id = o.base_asset_id
@@ -66,7 +67,8 @@ LEFT JOIN principal p ON p.id = o.principal_id`
 const orderListSelect = `
 SELECT o.external_id, a.code, ba.code, qa.code, p.code,
        o.at, o.source_id, o.side_id, o.amount_kind_id, o.amount_value,
-       o.leaves_quantity, o.price, o.status_id, o.drop_copy, o.lock,
+       o.leaves_quantity, o.reserved_quantity, o.price,
+       o.status_id, o.drop_copy, o.lock,
        EXISTS (
            SELECT 1 FROM order_event e
            JOIN event_attestation ea ON ea.event_id = e.id
@@ -151,11 +153,11 @@ func createOrderTx(
 		`INSERT INTO order_record
 		 (external_id, account_id, base_asset_id, quote_asset_id, principal_id,
 		  at, source_id, side_id, amount_kind_id, amount_value,
-		  leaves_quantity, price, status_id, drop_copy, lock)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  leaves_quantity, reserved_quantity, price, status_id, drop_copy, lock)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		xid.Bytes(), accountID, baseID, quoteID, principalID,
 		at, sourceID, sideID, amountKindID,
-		o.AmountValue, o.Leaves, o.Price,
+		o.AmountValue, o.Leaves, o.ReservedQuantity, o.Price,
 		statusID, o.DropCopy, nullableBlob(o.Lock),
 	); err != nil {
 		if isSQLiteUnique(err) {
@@ -241,7 +243,10 @@ func (r *realmStore) recordOrderSubmission(
 	if settlement.Account == "" {
 		settlement.Account = order.Account
 	}
-	if _, err := r.recordOrderSettlementTx(ctx, dictionaries, tx, settlement, attest); err != nil {
+	reportID, err := r.recordOrderSettlementTx(
+		ctx, dictionaries, tx, settlement, attest,
+	)
+	if err != nil {
 		return domain.Order{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -252,6 +257,12 @@ func (r *realmStore) recordOrderSubmission(
 	order.Lock = settlement.Lock
 	if settlement.Leaves != "" {
 		order.Leaves = settlement.Leaves
+	}
+	if settlement.ReservedQuantity != "" {
+		order.ReservedQuantity = settlement.ReservedQuantity
+	}
+	if settlement.ReportID != nil {
+		*settlement.ReportID = reportID
 	}
 	return order, nil
 }
@@ -607,35 +618,39 @@ func (r *realmStore) CountOrders(ctx context.Context) (int, error) {
 	return n, nil
 }
 
+func (r *realmStore) activeOrderStatusIDs(ctx context.Context) ([]any, error) {
+	dictionaries, err := r.dictionaries()
+	if err != nil {
+		return nil, err
+	}
+	statuses := domain.OrderStatusesEligibleForFill()
+	statusIDs := make([]any, 0, len(statuses))
+	for _, status := range statuses {
+		id, err := dictionaries.id(orderStatusTable, "order status", string(status))
+		if err != nil {
+			return nil, err
+		}
+		statusIDs = append(statusIDs, id)
+	}
+	return statusIDs, nil
+}
+
 // CountActiveOrders returns orders in the working lifecycle set.
 func (r *realmStore) CountActiveOrders(ctx context.Context) (int, error) {
 	db, err := r.db()
 	if err != nil {
 		return 0, err
 	}
-	dictionaries, err := r.dictionaries()
+	statusIDs, err := r.activeOrderStatusIDs(ctx)
 	if err != nil {
 		return 0, err
 	}
-	statuses := []domain.OrderStatus{
-		domain.OrderStatusSubmitted,
-		domain.OrderStatusAccepted,
-		domain.OrderStatusCommitted,
-		domain.OrderStatusPartiallyFilled,
-	}
-	statusIDs := make([]any, 0, len(statuses))
-	for _, status := range statuses {
-		id, err := dictionaries.id(orderStatusTable, "order status", string(status))
-		if err != nil {
-			return 0, err
-		}
-		statusIDs = append(statusIDs, id)
-	}
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(statusIDs)), ",")
 	var n int
 	if err := db.QueryRowContext(
 		ctx,
 		`SELECT COUNT(*) FROM order_record
-		 WHERE status_id IN (?, ?, ?, ?)`,
+		 WHERE status_id IN (`+placeholders+`)`,
 		statusIDs...,
 	).Scan(&n); err != nil {
 		return 0, fmt.Errorf("store: count active orders: %w", err)
@@ -725,19 +740,19 @@ func scanOrderInto(
 	o *domain.Order,
 ) error {
 	var (
-		extID                          []byte
-		principal                      sql.NullString
-		at                             string
-		sourceID, sideID, amountKindID int64
-		statusID                       int64
-		amountValue, leaves, price     string
-		dropCopy                       bool
-		lock                           []byte
+		extID                                        []byte
+		principal                                    sql.NullString
+		at                                           string
+		sourceID, sideID, amountKindID               int64
+		statusID                                     int64
+		amountValue, leaves, reservedQuantity, price string
+		dropCopy                                     bool
+		lock                                         []byte
 	)
 	if err := scan(
 		&extID, &o.Account, &o.BaseAsset, &o.QuoteAsset, &principal,
 		&at, &sourceID, &sideID, &amountKindID, &amountValue,
-		&leaves, &price, &statusID, &dropCopy, &lock,
+		&leaves, &reservedQuantity, &price, &statusID, &dropCopy, &lock,
 	); err != nil {
 		return err
 	}
@@ -775,6 +790,7 @@ func scanOrderInto(
 	o.AmountKind = domain.OrderAmountKind(amountKind)
 	o.AmountValue = amountValue
 	o.Leaves = leaves
+	o.ReservedQuantity = reservedQuantity
 	o.Price = price
 	o.Status = domain.OrderStatus(status)
 	o.DropCopy = dropCopy
@@ -1575,6 +1591,11 @@ func feeOnlyExecutionReportCommission(
 		return nil
 	}
 	canonicalEvent, ok := domain.ExecutionReportStatusChangeEvent(report.OrderStatus)
+	if !ok && (report.OrderStatus == domain.OrderStatusFilled ||
+		report.OrderStatus == domain.OrderStatusPartiallyFilled) {
+		canonicalEvent = domain.OrderEventFill
+		ok = true
+	}
 	if !ok || eventType != canonicalEvent {
 		return nil
 	}
@@ -1942,6 +1963,16 @@ func (r *realmStore) recordOrderSettlementTx(
 			st.Leaves, orderID,
 		); err != nil {
 			return "", fmt.Errorf("store: settlement leaves: %w", err)
+		}
+	}
+
+	if st.ReservedQuantity != "" {
+		if _, err := tx.ExecContext(
+			ctx,
+			`UPDATE order_record SET reserved_quantity = ? WHERE id = ?`,
+			st.ReservedQuantity, orderID,
+		); err != nil {
+			return "", fmt.Errorf("store: settlement reserved quantity: %w", err)
 		}
 	}
 

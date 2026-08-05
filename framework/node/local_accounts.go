@@ -483,7 +483,12 @@ func (n *localNode) SetAccountGroup(
 				prev.EffectiveCurrency,
 				nextEffective,
 			); err != nil {
-				return err
+				if !errors.Is(err, domain.ErrConflict) {
+					return err
+				}
+				return domain.NewCurrencyChangeBlockedError(
+					domain.ScopeAccount, key.Account.String(), err,
+				)
 			}
 		}
 
@@ -658,16 +663,22 @@ func (n *localNode) UpdateAccount(
 		}
 		return domain.Account{}, fmt.Errorf("publish account resolver rename: %w", err)
 	}
-	if err := n.audit(context.WithoutCancel(ctx), caller, store.AuditEntry{
+	detail := updateAccountDetail(prev.Code, updated.Code)
+	entries := []store.AuditEntry{{
 		Action:       domain.AuditActionUpdateAccount,
 		Account:      updated.Code,
 		AccountTitle: updated.Title,
-		Detail: fmt.Sprintf(
-			"update account %s -> %s",
-			prev.Code,
-			updated.Code,
-		),
-	}); err != nil {
+		Detail:       detail,
+	}}
+	if prev.Code != updated.Code {
+		entries = append([]store.AuditEntry{{
+			Action:       domain.AuditActionUpdateAccount,
+			Account:      prev.Code,
+			AccountTitle: prev.Title,
+			Detail:       detail,
+		}}, entries...)
+	}
+	if err := n.auditBatch(context.WithoutCancel(ctx), caller, entries); err != nil {
 		return domain.Account{}, n.fatalPostEngineAuditByCode(
 			"audit update account", "account", updated.Code.String(),
 			fmt.Errorf("audit update account: %w", err),

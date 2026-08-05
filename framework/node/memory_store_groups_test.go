@@ -170,17 +170,75 @@ func (r *memoryRealm) DeleteGroup(_ context.Context, code string) error {
 		return domain.ErrNotFound
 	}
 	delete(r.groups, code)
+	members := make(map[domain.AccountID]struct{})
 	for id, account := range r.accounts {
 		if account.GroupCode == code {
-			account.GroupCode = ""
-			r.accounts[id] = account
+			members[id] = struct{}{}
+			delete(r.accounts, id)
+		}
+	}
+	for key, balance := range r.balances {
+		if _, ok := members[balance.Account]; ok {
+			delete(r.balances, key)
+		}
+	}
+	for key, limit := range r.rateLimits {
+		if _, ok := members[limit.Account]; ok {
+			delete(r.rateLimits, key)
+		}
+	}
+	for key, limit := range r.orderSizeLimits {
+		if _, ok := members[limit.Account]; ok {
+			delete(r.orderSizeLimits, key)
 		}
 	}
 	for key, limit := range r.spotFundsPnlBoundsLimits {
-		if limit.Scope == domain.ScopeAccountGroup && limit.AccountGroup == code {
+		_, memberLimit := members[limit.Account]
+		if memberLimit ||
+			(limit.Scope == domain.ScopeAccountGroup && limit.AccountGroup == code) {
 			delete(r.spotFundsPnlBoundsLimits, key)
 		}
 	}
+	adjustments := r.adjustments[:0]
+	for _, adjustment := range r.adjustments {
+		if _, ok := members[adjustment.Account]; !ok {
+			adjustments = append(adjustments, adjustment)
+		}
+	}
+	r.adjustments = adjustments
+
+	deletedOrders := make(map[domain.ExternalID]struct{})
+	for id, order := range r.orders {
+		if _, ok := members[order.Account]; ok {
+			deletedOrders[id] = struct{}{}
+			delete(r.orders, id)
+		}
+	}
+	for report, order := range r.reports {
+		if _, ok := deletedOrders[order]; ok {
+			delete(r.reports, report)
+		}
+	}
+	events := r.events[:0]
+	deletedEvents := make(map[domain.ExternalID]struct{})
+	for _, event := range r.events {
+		if _, ok := deletedOrders[event.Order]; ok {
+			deletedEvents[event.ExternalID] = struct{}{}
+			continue
+		}
+		events = append(events, event)
+	}
+	r.events = events
+	for event := range deletedEvents {
+		delete(r.attestations, event)
+	}
+	trades := r.trades[:0]
+	for _, trade := range r.trades {
+		if _, ok := members[trade.Account]; !ok {
+			trades = append(trades, trade)
+		}
+	}
+	r.trades = trades
 	return nil
 }
 
